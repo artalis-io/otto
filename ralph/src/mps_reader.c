@@ -69,6 +69,9 @@ typedef struct {
     /* RHS values */
     double *rhs;
 
+    /* RANGES values */
+    double *ranges;
+
     /* Bounds */
     double *lb;
     double *ub;
@@ -263,6 +266,13 @@ static int parse_rows_line(MPSParser *parser, const char *line) {
         }
         parser->rhs = new_rhs;
 
+        double *new_ranges = (double*)realloc(parser->ranges, new_cap * sizeof(double));
+        if (!new_ranges) {
+            set_error(parser, "line %d: memory allocation failed", parser->line_num);
+            return -1;
+        }
+        parser->ranges = new_ranges;
+
         parser->row_capacity = new_cap;
     }
 
@@ -271,6 +281,7 @@ static int parse_rows_line(MPSParser *parser, const char *line) {
     parser->rows[idx].type = type;
     parser->rows[idx].index = idx;
     parser->rhs[idx] = 0.0;
+    parser->ranges[idx] = 0.0;
 
     if (type == 'N') {
         parser->obj_row = idx;
@@ -419,6 +430,65 @@ static int parse_rhs_line(MPSParser *parser, const char *line) {
     return 0;
 }
 
+static int parse_ranges_line(MPSParser *parser, const char *line) {
+    /* Format is identical to RHS: [SETNAME] ROWNAME VALUE [ROWNAME VALUE] */
+    char range_name[MAX_NAME];
+    char row_name1[MAX_NAME], row_name2[MAX_NAME];
+    double val1 = 0.0, val2 = 0.0;
+
+    int n = sscanf(line, " %255s %255s %lf %255s %lf",
+                   range_name, row_name1, &val1, row_name2, &val2);
+
+    if (n < 2) {
+        set_error(parser, "line %d: invalid RANGES format", parser->line_num);
+        return -1;
+    }
+
+    /* If the first token is a known row name, there's no set name */
+    if (find_row(parser, range_name) >= 0) {
+        n = sscanf(line, " %255s %lf %255s %lf",
+                   row_name1, &val1, row_name2, &val2);
+        if (n < 2) {
+            set_error(parser, "line %d: invalid RANGES format (no set name)",
+                      parser->line_num);
+            return -1;
+        }
+
+        int row_idx = find_row(parser, row_name1);
+        if (row_idx >= 0 && row_idx != parser->obj_row) {
+            parser->ranges[row_idx] = val1;
+        }
+
+        if (n >= 4) {
+            row_idx = find_row(parser, row_name2);
+            if (row_idx >= 0 && row_idx != parser->obj_row) {
+                parser->ranges[row_idx] = val2;
+            }
+        }
+    } else {
+        /* Standard format: SETNAME ROWNAME VALUE [ROWNAME VALUE] */
+        if (n < 3) {
+            set_error(parser, "line %d: invalid RANGES format, expected 'NAME ROW VAL'",
+                      parser->line_num);
+            return -1;
+        }
+
+        int row_idx = find_row(parser, row_name1);
+        if (row_idx >= 0 && row_idx != parser->obj_row) {
+            parser->ranges[row_idx] = val1;
+        }
+
+        if (n >= 5) {
+            row_idx = find_row(parser, row_name2);
+            if (row_idx >= 0 && row_idx != parser->obj_row) {
+                parser->ranges[row_idx] = val2;
+            }
+        }
+    }
+
+    return 0;
+}
+
 static int parse_bounds_line(MPSParser *parser, const char *line) {
     /* Format: TYPE  BNDNAME  COLNAME  VALUE */
     char type[8];
@@ -513,17 +583,19 @@ static MPSParser* mps_parser_create(void) {
     parser->rows = (MPSRow*)calloc(parser->row_capacity, sizeof(MPSRow));
     parser->columns = (MPSColumn*)calloc(parser->col_capacity, sizeof(MPSColumn));
     parser->rhs = (double*)calloc(parser->row_capacity, sizeof(double));
+    parser->ranges = (double*)calloc(parser->row_capacity, sizeof(double));
     parser->lb = (double*)calloc(parser->col_capacity, sizeof(double));
     parser->ub = (double*)calloc(parser->col_capacity, sizeof(double));
     parser->obj = (double*)calloc(parser->col_capacity, sizeof(double));
     parser->matrix = triplets_create(parser->row_capacity, parser->col_capacity, 1024);
 
-    if (!parser->rows || !parser->columns || !parser->rhs ||
+    if (!parser->rows || !parser->columns || !parser->rhs || !parser->ranges ||
         !parser->lb || !parser->ub || !parser->obj || !parser->matrix) {
         /* Cleanup on failure */
         free(parser->rows);
         free(parser->columns);
         free(parser->rhs);
+        free(parser->ranges);
         free(parser->lb);
         free(parser->ub);
         free(parser->obj);
@@ -545,6 +617,7 @@ static void mps_parser_free(MPSParser *parser) {
     SAFE_FREE(parser->rows);
     SAFE_FREE(parser->columns);
     SAFE_FREE(parser->rhs);
+    SAFE_FREE(parser->ranges);
     SAFE_FREE(parser->lb);
     SAFE_FREE(parser->ub);
     SAFE_FREE(parser->obj);
@@ -641,6 +714,9 @@ int ralph_read_mps(RalphModel *model, const char *filename) {
             case SECTION_RHS:
                 result = parse_rhs_line(parser, trimmed);
                 break;
+            case SECTION_RANGES:
+                result = parse_ranges_line(parser, trimmed);
+                break;
             case SECTION_BOUNDS:
                 result = parse_bounds_line(parser, trimmed);
                 break;
@@ -735,15 +811,50 @@ int ralph_read_mps(RalphModel *model, const char *filename) {
                 }
             }
 
-            /* Determine constraint sense */
-            RalphSense sense;
             char type = parser->rows[i].type;
-            if (type == 'L') sense = RALPH_LESS_EQUAL;
-            else if (type == 'G') sense = RALPH_GREATER_EQUAL;
-            else sense = RALPH_EQUAL;
+            double b = parser->rhs[i];
+            double r = parser->ranges[i];
 
-            ralph_add_constraint(model, nnz, row_indices, row_coefs,
-                               sense, parser->rhs[i]);
+            if (fabs(r) > 1e-15) {
+                /* Ranged constraint: add two bounds on Ax.
+                 * IBM semantics:
+                 *   L row (<=): b - |r| <= Ax <= b
+                 *   G row (>=): b <= Ax <= b + |r|
+                 *   E row (=):  r >= 0: b <= Ax <= b + r
+                 *               r <  0: b + r <= Ax <= b
+                 */
+                double lo, hi;
+                if (type == 'L') {
+                    hi = b;
+                    lo = b - fabs(r);
+                } else if (type == 'G') {
+                    lo = b;
+                    hi = b + fabs(r);
+                } else { /* E */
+                    if (r >= 0.0) {
+                        lo = b;
+                        hi = b + r;
+                    } else {
+                        lo = b + r;
+                        hi = b;
+                    }
+                }
+                /* Ax >= lo */
+                ralph_add_constraint(model, nnz, row_indices, row_coefs,
+                                     RALPH_GREATER_EQUAL, lo);
+                /* Ax <= hi */
+                ralph_add_constraint(model, nnz, row_indices, row_coefs,
+                                     RALPH_LESS_EQUAL, hi);
+            } else {
+                /* Standard (non-ranged) constraint */
+                RalphSense sense;
+                if (type == 'L') sense = RALPH_LESS_EQUAL;
+                else if (type == 'G') sense = RALPH_GREATER_EQUAL;
+                else sense = RALPH_EQUAL;
+
+                ralph_add_constraint(model, nnz, row_indices, row_coefs,
+                                     sense, b);
+            }
         }
 
         free(row_coefs);

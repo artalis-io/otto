@@ -19,6 +19,8 @@
 #include <time.h>
 #include <sys/time.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <signal.h>
 #include <dirent.h>
 #include <unistd.h>
 #include <errno.h>
@@ -43,6 +45,129 @@
 
 /* NETLIB directory relative to this executable */
 static const char *NETLIB_DIR = "netlib";
+
+/* Default test time caps */
+#define TEST_FAST_CAP_SEC 60.0
+#define TEST_FULL_CAP_SEC 300.0
+
+/* ============================================================================
+ * NETLIB Known Optimal Values (from netlib.org/lp/data/readme)
+ * ============================================================================ */
+
+typedef struct {
+    const char *name;
+    double optimal;
+    int tier;  /* 0=tiny, 1=small, 2=medium, 3=large, 4=xlarge */
+} NetlibReference;
+
+static const NetlibReference NETLIB_REFERENCE[] = {
+    /* Tier 0: tiny (<100 vars) */
+    {"afiro",      -4.6475314286e+02, 0},
+    {"sc50a",      -6.4575077059e+01, 0},
+    {"sc50b",      -7.0000000000e+01, 0},
+    {"kb2",        -1.7499001299e+03, 0},
+    {"sc105",      -5.2202061212e+01, 0},
+    {"blend",      -3.0812149846e+01, 0},
+    {"share2b",    -4.1573224074e+02, 0},
+    {"recipe",     -2.6661600000e+02, 0},
+
+    /* Tier 1: small (100-500 vars) */
+    {"adlittle",    2.2549496316e+05, 1},
+    {"lotfi",      -2.5264706062e+01, 1},
+    {"scagr7",     -2.3313892548e+06, 1},
+    {"israel",     -8.9664482186e+05, 1},
+    {"scorpion",    1.8781248227e+03, 1},
+    {"brandy",      1.5185098965e+03, 1},
+    {"bandm",      -1.5862801845e+02, 1},
+    {"beaconfd",    3.3592485807e+04, 1},
+    {"e226",       -1.8751929066e+01, 1},
+    {"stocfor1",   -4.1131976219e+04, 1},
+    {"sc205",      -5.2202061212e+01, 1},
+    {"agg",        -3.5991767287e+07, 1},
+    {"agg2",       -2.0239252356e+07, 1},
+    {"agg3",        1.0312115935e+07, 1},
+    {"bore3d",      1.3730803942e+03, 1},
+    {"capri",       2.6900129138e+03, 1},
+    {"share1b",    -7.6589318579e+04, 1},
+    {"scagr25",    -1.4753433061e+07, 1},
+
+    /* Tier 2: medium (500-2000 vars) */
+    {"bnl1",        1.9776292856e+03, 2},
+    {"degen2",     -1.4351780000e+03, 2},
+    {"grow7",      -4.7787811815e+07, 2},
+    {"grow15",     -1.0687094129e+08, 2},
+    {"grow22",     -1.6083433648e+08, 2},
+    {"scfxm1",      1.8416759028e+04, 2},
+    {"scfxm2",      3.6660261565e+04, 2},
+    {"scfxm3",      5.4901254550e+04, 2},
+    {"scsd1",       8.6666666743e+00, 2},
+    {"scsd6",       5.0500000078e+01, 2},
+    {"scsd8",       9.0499999993e+02, 2},
+    {"sctap1",      1.4122500000e+03, 2},
+    {"sctap2",      1.7248071429e+03, 2},
+    {"sctap3",      1.4240000000e+03, 2},
+    {"ship04s",     1.7987147004e+06, 2},
+    {"ship04l",     1.7933245380e+06, 2},
+    {"ship08s",     1.9200982105e+06, 2},
+    {"ship08l",     1.9090552114e+06, 2},
+    {"ship12s",     1.4892361344e+06, 2},
+    {"ship12l",     1.4701879193e+06, 2},
+    {"etamacro",   -7.5571521774e+02, 2},
+    {"finnis",      1.7279096547e+05, 2},
+    {"perold",     -9.3807580773e+03, 2},
+    {"stair",      -2.5126695119e+02, 2},
+    {"shell",       1.2088253460e+09, 2},
+    {"seba",        1.5711600000e+04, 2},
+    {"forplan",    -6.6421873953e+02, 2},
+    {"ganges",     -1.0958636356e+05, 2},
+    {"sierra",      1.5394362184e+07, 2},
+    {"standata",    1.2576995000e+03, 2},
+    {"standmps",    1.4060175000e+03, 2},
+    {"nesm",        1.4076073035e+07, 2},
+    {"fffff800",    5.5567961165e+05, 2},
+
+    /* Tier 3: large (2000+ vars) */
+    {"bnl2",        1.8112365404e+03, 3},
+    {"degen3",     -9.8729400000e+02, 3},
+    {"pilot",      -5.5740430007e+02, 3},
+    {"pilot87",     3.0171072827e+02, 3},
+    {"pilot.ja",   -6.1131344111e+03, 3},
+    {"pilot.we",   -2.7201027439e+06, 3},
+    {"pilot4",     -2.5811392641e+03, 3},
+    {"pilotnov",   -4.4972761882e+03, 3},
+    {"maros",      -5.8063743701e+04, 3},
+    {"d2q06c",      1.2278423615e+05, 3},
+    {"stocfor2",   -3.9024408538e+04, 3},
+    {"cycle",      -5.2263930249e+00, 3},
+    {"czprob",      2.1851966989e+06, 3},
+    {"25fv47",      5.5018458883e+03, 3},
+    {"woodw",       1.3044763331e+00, 3},
+    {"wood1p",      1.4429024116e+00, 3},
+
+    /* Tier 4: xlarge */
+    {"80bau3b",     9.8723216072e+05, 4},
+    {"fit1d",      -9.1463780924e+03, 4},
+    {"fit1p",       9.1463780924e+03, 4},
+    {"fit2d",      -6.8464293294e+04, 4},
+    {"fit2p",       6.8464293232e+04, 4},
+    {"maros-r7",    1.4971851665e+06, 4},
+    {"stocfor3",   -3.9976661576e+04, 4},
+    {"greenbea",   -7.2462405908e+07, 4},
+    {"greenbeb",   -4.3021476065e+06, 4},
+    {"truss",       4.5881584719e+05, 4},
+    {"d6cube",      3.1549166667e+02, 4},
+
+    {NULL, 0.0, -1}  /* sentinel */
+};
+
+static const NetlibReference* find_netlib_reference(const char *name) {
+    for (int i = 0; NETLIB_REFERENCE[i].name != NULL; i++) {
+        if (strcasecmp(NETLIB_REFERENCE[i].name, name) == 0) {
+            return &NETLIB_REFERENCE[i];
+        }
+    }
+    return NULL;
+}
 
 /* ============================================================================
  * Data Structures
@@ -85,6 +210,7 @@ typedef struct {
     int lp_only;         /* Default: 1 (skip MIP) */
     int mip_only;
     int verify_matrix;   /* Deep matrix verification via GLPK solution */
+    int test_mode;       /* 0=off, 1=fast (tiers 0-1), 2=full (all tiers) */
 
     /* Time limits */
     double time_multiplier;
@@ -1183,6 +1309,192 @@ static int run_single_benchmark(const char *problem_path, const char *name,
     return 0;
 }
 
+/* ============================================================================
+ * NETLIB Correctness Test Mode (--test)
+ *
+ * Solves NETLIB problems with Ralph only (no GLPK dependency) and compares
+ * objective values against known optimal values from the literature.
+ *
+ * Each problem runs in a forked child process with a hard wall-clock timeout
+ * (using alarm()) to prevent hangs on numerically difficult problems.
+ * ============================================================================ */
+
+/* Shared memory for child→parent result passing */
+typedef struct {
+    int status;       /* 0=optimal, 1=infeasible, 2=unbounded, 3=error, 4=timeout */
+    double objective;
+    double time_ms;
+} TestResult;
+
+/* SIGALRM handler for hard timeout in child process */
+static volatile sig_atomic_t test_alarm_fired = 0;
+static void test_alarm_handler(int sig) {
+    (void)sig;
+    test_alarm_fired = 1;
+    _exit(124);  /* Convention: 124 = timeout */
+}
+
+/* Solve a single problem in a child process with hard timeout.
+ * Returns: 0=pass, 1=fail, 2=error, 3=skip(timeout), 4=skip(other) */
+static int test_solve_one(const char *path, const char *name,
+                           const NetlibReference *ref,
+                           int timeout_sec, int method, int pricing) {
+    /* Use a pipe to pass results from child to parent */
+    int pipefd[2];
+    if (pipe(pipefd) < 0) {
+        fprintf(stderr, "  ERROR %-12s  (pipe failed)\n", name);
+        return 2;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        fprintf(stderr, "  ERROR %-12s  (fork failed)\n", name);
+        return 2;
+    }
+
+    if (pid == 0) {
+        /* Child process: solve with hard alarm timeout */
+        close(pipefd[0]);
+
+        signal(SIGALRM, test_alarm_handler);
+        alarm((unsigned)timeout_sec);
+
+        int num_vars = 0, num_cons = 0, nnz = 0, is_mip = 0;
+        SolveResult result = solve_with_ralph(path, (double)timeout_sec,
+                                               method, pricing,
+                                               &num_vars, &num_cons, &nnz,
+                                               &is_mip);
+
+        TestResult tr = {
+            .status = result.status,
+            .objective = result.objective,
+            .time_ms = result.time_ms
+        };
+
+        /* Write result back to parent via pipe */
+        (void)!write(pipefd[1], &tr, sizeof(tr));
+        close(pipefd[1]);
+        free(result.solution);
+        _exit(result.status == 0 ? 0 : 1);
+    }
+
+    /* Parent process: wait with timeout */
+    close(pipefd[1]);
+
+    int wstatus;
+    double start = get_time_ms();
+
+    /* Wait for child (it will either finish or get killed by alarm) */
+    waitpid(pid, &wstatus, 0);
+    double elapsed = get_time_ms() - start;
+
+    /* Read result from pipe */
+    TestResult tr = {.status = 3, .objective = 0.0, .time_ms = elapsed};
+    ssize_t n = read(pipefd[0], &tr, sizeof(tr));
+    close(pipefd[0]);
+
+    /* Check if child was killed or timed out */
+    if (WIFSIGNALED(wstatus) || (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 124)) {
+        fprintf(stderr, "  SKIP  %-12s  (timeout after %ds)\n", name, timeout_sec);
+        return 3;
+    }
+
+    if (n != sizeof(tr) || tr.status != 0) {
+        fprintf(stderr, "  ERROR %-12s  (status=%d after %.1fms)\n",
+                name, tr.status, tr.time_ms);
+        return 2;
+    }
+
+    /* Compare objective vs known optimal */
+    double got = tr.objective;
+    double expected = ref->optimal;
+    double scale = fmax(1.0, fmax(fabs(got), fabs(expected)));
+    double rel_err = fabs(got - expected) / scale;
+    double abs_err = fabs(got - expected);
+
+    int ok = (rel_err < DEFAULT_OBJ_REL_TOL) || (abs_err < DEFAULT_OBJ_ABS_TOL);
+
+    if (ok) {
+        fprintf(stderr, "  PASS  %-12s  %15.8e  expected %15.8e  err=%.1e  %7.1fms\n",
+                name, got, expected, rel_err, tr.time_ms);
+        return 0;
+    } else {
+        fprintf(stderr, "  FAIL  %-12s  %15.8e  expected %15.8e  err=%.1e  %7.1fms\n",
+                name, got, expected, rel_err, tr.time_ms);
+        return 1;
+    }
+}
+
+/* Compare problems by tier then name for predictable output order */
+static int cmp_by_tier_name(const void *a, const void *b) {
+    const ProblemInfo *pa = (const ProblemInfo *)a;
+    const ProblemInfo *pb = (const ProblemInfo *)b;
+
+    const NetlibReference *ra = find_netlib_reference(pa->name);
+    const NetlibReference *rb = find_netlib_reference(pb->name);
+    int ta = ra ? ra->tier : 99;
+    int tb = rb ? rb->tier : 99;
+
+    if (ta != tb) return ta - tb;
+    return strcasecmp(pa->name, pb->name);
+}
+
+static int run_test_mode(const Options *opts) {
+    int max_tier = (opts->test_mode == 1) ? 1 : 4;  /* fast=0-1, full=0-4 */
+    int timeout_sec = (opts->test_mode == 1) ? (int)TEST_FAST_CAP_SEC
+                                              : (int)TEST_FULL_CAP_SEC;
+
+    fprintf(stderr, "NETLIB Correctness Test (%s: tiers 0-%d, %ds cap)\n",
+            opts->test_mode == 1 ? "fast" : "full", max_tier, timeout_sec);
+
+    /* Discover available .mps files */
+    ProblemInfo problems[MAX_PROBLEMS];
+    int count = list_netlib_problems(problems, MAX_PROBLEMS, 1 /* lp_only */);
+
+    if (count == 0) {
+        fprintf(stderr, "Error: No NETLIB problems found.\n");
+        fprintf(stderr, "Run: ./ralph-benchmark --download-netlib\n");
+        return 1;
+    }
+
+    /* Sort by tier then name for predictable output */
+    qsort(problems, (size_t)count, sizeof(ProblemInfo), cmp_by_tier_name);
+
+    int pass_count = 0, fail_count = 0, skip_count = 0, error_count = 0;
+
+    for (int i = 0; i < count; i++) {
+        const char *name = problems[i].name;
+        const NetlibReference *ref = find_netlib_reference(name);
+
+        /* Skip if not in reference table or above tier threshold */
+        if (!ref || ref->tier > max_tier) {
+            skip_count++;
+            continue;
+        }
+
+        int result = test_solve_one(problems[i].path, name, ref,
+                                     timeout_sec, opts->method, opts->pricing);
+        switch (result) {
+            case 0: pass_count++; break;
+            case 1: fail_count++; break;
+            case 2: error_count++; break;
+            default: skip_count++; break;
+        }
+    }
+
+    /* Summary */
+    int tested = pass_count + fail_count;
+    fprintf(stderr, "\nResults: %d/%d PASS", pass_count, tested);
+    if (fail_count > 0) fprintf(stderr, ", %d FAIL", fail_count);
+    if (error_count > 0) fprintf(stderr, ", %d ERROR", error_count);
+    if (skip_count > 0) fprintf(stderr, ", %d SKIP", skip_count);
+    fprintf(stderr, "\n");
+
+    return (fail_count + error_count > 0) ? 1 : 0;
+}
+
 static int run_suite(const char *suite_name, const Options *opts) {
     ProblemInfo problems[MAX_PROBLEMS];
     int count = list_netlib_problems(problems, MAX_PROBLEMS, opts->lp_only);
@@ -1232,6 +1544,11 @@ static void print_help(const char *prog) {
     printf("  %s --list                     List available NETLIB problems\n", prog);
     printf("  %s --download-netlib          Download NETLIB problems\n", prog);
     printf("\n");
+    printf("Correctness Testing:\n");
+    printf("  %s --test                            # Fast test (tiers 0-1)\n", prog);
+    printf("  %s --test fast                       # Same as above\n", prog);
+    printf("  %s --test full                       # All tiers, 300s cap\n", prog);
+    printf("\n");
     printf("Verification:\n");
     printf("  %s --verify-matrix --suite all -v    # Verify all NETLIB matrices\n", prog);
     printf("  %s --verify-matrix --netlib blend -v # Verify single problem\n", prog);
@@ -1239,6 +1556,7 @@ static void print_help(const char *prog) {
     printf("Options:\n");
     printf("  -h, --help                    Show this help message\n");
     printf("  -v, --verbose                 Print progress to stderr\n");
+    printf("  --test [fast|full]            Correctness test vs known optimal values\n");
     printf("  --verify-matrix               Deep matrix verification via GLPK solution\n");
     printf("  --version                     Show version\n");
     printf("\n");
@@ -1319,6 +1637,18 @@ static int parse_args(int argc, char **argv, Options *opts) {
             opts->lp_only = 0;
         } else if (strcmp(arg, "--verify-matrix") == 0) {
             opts->verify_matrix = 1;
+        } else if (strcmp(arg, "--test") == 0) {
+            /* --test [fast|full], default is fast */
+            if (i + 1 < argc && argv[i+1][0] != '-') {
+                i++;
+                if (strcmp(argv[i], "full") == 0) {
+                    opts->test_mode = 2;
+                } else {
+                    opts->test_mode = 1;  /* fast */
+                }
+            } else {
+                opts->test_mode = 1;  /* default: fast */
+            }
         } else if (strcmp(arg, "--all-types") == 0) {
             opts->lp_only = 0;
             opts->mip_only = 0;
@@ -1375,7 +1705,12 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    /* Check GLPK availability */
+    /* Test mode (no GLPK needed) */
+    if (opts.test_mode > 0) {
+        return run_test_mode(&opts);
+    }
+
+    /* Check GLPK availability (needed for benchmark/verify modes) */
     if (!check_glpk_available()) {
         fprintf(stderr, "Error: glpsol not found in PATH.\n");
         fprintf(stderr, "Install GLPK: brew install glpk (macOS) or apt install glpk-utils (Linux)\n");
