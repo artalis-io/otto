@@ -432,31 +432,33 @@ static void verify_solution(SimplexSolver *solver) {
     double max_dual_infeas = 0.0;
     double max_comp_slack = 0.0;
 
-    /* 1. Primal feasibility: compute Ax, check against b with sense */
-    for (int i = 0; i < m; i++) {
-        /* Compute (Ax)_i by scanning all columns */
-        double ax_i = 0.0;
+    /* 1. Primal feasibility: compute Ax via column-wise sparse matvec (O(nnz)),
+     * then check against b with sense.
+     * (B6 fix: was O(n*m) triple-nested loop, now O(nnz)) */
+    double *ax = (double*)calloc(m, sizeof(double));
+    if (ax) {
         for (int j = 0; j < n; j++) {
+            double xj = x[j];
+            if (fabs(xj) < 1e-15) continue;
             for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
-                if (A->rowidx[p] == i) {
-                    ax_i += A->values[p] * x[j];
-                    break;
-                }
+                ax[A->rowidx[p]] += A->values[p] * xj;
             }
         }
-        /* Check constraint satisfaction based on sense */
-        double violation = 0.0;
-        char sense = model->sense[i];
-        if (sense == 'L') {
-            violation = ax_i - model->b[i];  /* Ax <= b → violation if Ax > b */
-            if (violation < 0.0) violation = 0.0;
-        } else if (sense == 'G') {
-            violation = model->b[i] - ax_i;  /* Ax >= b → violation if Ax < b */
-            if (violation < 0.0) violation = 0.0;
-        } else {  /* 'E' */
-            violation = fabs(ax_i - model->b[i]);
+        for (int i = 0; i < m; i++) {
+            double violation = 0.0;
+            char sense = model->sense[i];
+            if (sense == 'L') {
+                violation = ax[i] - model->b[i];
+                if (violation < 0.0) violation = 0.0;
+            } else if (sense == 'G') {
+                violation = model->b[i] - ax[i];
+                if (violation < 0.0) violation = 0.0;
+            } else {
+                violation = fabs(ax[i] - model->b[i]);
+            }
+            if (violation > max_primal_infeas) max_primal_infeas = violation;
         }
-        if (violation > max_primal_infeas) max_primal_infeas = violation;
+        free(ax);
     }
 
     /* 2. Bound feasibility */
@@ -672,8 +674,10 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         (size_t)n * sizeof(int) +
         /* int arrays: heap, heap_pos for heap pricing (n each) */
         2 * (size_t)n * sizeof(int) +
-        /* Alignment padding (30 allocations * 8 bytes) */
-        240;
+        /* dual pivot backup: x(n dbl), rc(n dbl), basis(m int), basis_pos(n int), status(n VarStatus) */
+        2 * (size_t)n * sizeof(double) + (size_t)m * sizeof(int) + (size_t)n * sizeof(int) + (size_t)n * sizeof(VarStatus) +
+        /* Alignment padding (35 allocations * 8 bytes) */
+        280;
 
     /* Create arena */
     tab->arena = sh_arena_create(arena_size);
@@ -751,6 +755,13 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     tab->heap_size = 0;
     if (tab->heap_pos) memset(tab->heap_pos, -1, n * sizeof(int));
 
+    /* Pre-allocated backup arrays for dual_simplex_pivot rollback (B2 fix) */
+    tab->dual_x_backup = (double*)sh_arena_alloc(tab->arena, n * sizeof(double));
+    tab->dual_rc_backup = (double*)sh_arena_alloc(tab->arena, n * sizeof(double));
+    tab->dual_basis_backup = (int*)sh_arena_alloc(tab->arena, m * sizeof(int));
+    tab->dual_basis_pos_backup = (int*)sh_arena_alloc(tab->arena, n * sizeof(int));
+    tab->dual_status_backup = (VarStatus*)sh_arena_alloc(tab->arena, n * sizeof(VarStatus));
+
     /* Single check for all allocations */
     if (!tab->c_ext || !tab->lb_ext || !tab->ub_ext ||
         !tab->basis || !tab->nonbasis || !tab->var_status || !tab->basis_pos ||
@@ -761,7 +772,9 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         !tab->aux_row || !tab->aux_coef || !tab->partial_candidates || !tab->dual_candidates ||
         !tab->c_original || (num_artificial > 0 && !tab->artificial_vars) ||
         !tab->redundant_rows || !tab->dse_weights || !tab->flip_list ||
-        !tab->heap || !tab->heap_pos) {
+        !tab->heap || !tab->heap_pos ||
+        !tab->dual_x_backup || !tab->dual_rc_backup ||
+        !tab->dual_basis_backup || !tab->dual_basis_pos_backup || !tab->dual_status_backup) {
         return -1;
     }
     return 0;
@@ -1209,6 +1222,11 @@ void tableau_free(SimplexTableau *tab) {
     tab->aux_coef = NULL;
     tab->partial_candidates = NULL;
     tab->redundant_rows = NULL;
+    tab->dual_x_backup = NULL;
+    tab->dual_rc_backup = NULL;
+    tab->dual_basis_backup = NULL;
+    tab->dual_basis_pos_backup = NULL;
+    tab->dual_status_backup = NULL;
 
     /* Free perturbation backups (allocated separately during anti-cycling) */
     SAFE_FREE(tab->perturb_backup);

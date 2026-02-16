@@ -170,11 +170,7 @@ typedef struct {
     int spike_pool_capacity;    /* Total allocated size of pool */
     int spike_pool_used;        /* Currently used entries in pool */
 
-    /* Compacted spike blocks - periodically merge spikes for faster application */
-    int ft_compact_interval;    /* Compact every N spikes (0 = disabled) */
-    int ft_num_compacted;       /* Number of spikes already compacted */
-    double *ft_compact_matrix;  /* Dense m×m matrix for compacted spikes (when used) */
-    int ft_compact_valid;       /* 1 if compact_matrix is valid */
+    /* (B4: spike compaction removed — was O(m^2*N), worse than sparse application) */
 
     /* Condition number monitoring */
     double min_diag_U;      /* Minimum |U[i,i]| at factorization */
@@ -352,6 +348,13 @@ typedef struct {
     /* Pre-allocated sparse workspace for reduced cost computation */
     int *cb_sparse_idx;     /* Sparse indices for c_B (size m) */
     double *cb_sparse_val;  /* Sparse values for c_B (size m) */
+
+    /* Pre-allocated backup arrays for dual_simplex_pivot rollback (B2 fix) */
+    double *dual_x_backup;          /* size n */
+    double *dual_rc_backup;         /* size n */
+    int *dual_basis_backup;         /* size m */
+    int *dual_basis_pos_backup;     /* size n */
+    VarStatus *dual_status_backup;  /* size n */
 
     /* Arena allocator for workspace arrays (reduces 20+ mallocs to 1) */
     SHArena *arena;

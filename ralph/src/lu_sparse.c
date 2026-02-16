@@ -1369,8 +1369,6 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
         lu->ft_spike_start[i] = 0;
     }
     lu->ft_num_updates = 0;
-    lu->ft_num_compacted = 0;
-    lu->ft_compact_valid = 0;
     lu->spike_pool_used = 0;  /* Reset contiguous pool */
     for (int i = 0; i < m; i++) {
         lu->ft_col_order[i] = i;
@@ -1992,8 +1990,6 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     lu->num_updates = 0;
     lu->num_eta = 0;
     lu->ft_num_updates = 0;
-    lu->ft_num_compacted = 0;
-    lu->ft_compact_valid = 0;
     lu->spike_pool_used = 0;
     for (int i = 0; i < m; i++) {
         lu->ft_col_order[i] = i;
