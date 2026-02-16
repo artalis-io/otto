@@ -107,6 +107,7 @@ void ct_render_free(CTRenderContext *ctx)
 
 void ct_render_clear(CTRenderContext *ctx)
 {
+    if (!ctx) return;
     CTColor bg = ctx->style.background_color;
     /* Use SIMD-optimized clear from shared library.
      * CTColor now uses same format as sh_render (0xAABBGGRR). */
@@ -115,11 +116,13 @@ void ct_render_clear(CTRenderContext *ctx)
 
 void ct_render_set_style(CTRenderContext *ctx, const CTStyle *style)
 {
+    if (!ctx || !style) return;
     ctx->style = *style;
 }
 
 void ct_render_set_options(CTRenderContext *ctx, const CTRenderOptions *opts)
 {
+    if (!ctx || !opts) return;
     ctx->options = *opts;
 }
 
@@ -199,7 +202,7 @@ void ct_render_options_quality(CTRenderOptions *opts)
 
 uint8_t *ct_render_pixels(CTRenderContext *ctx)
 {
-    return ctx->pixels;
+    return ctx ? ctx->pixels : NULL;
 }
 
 /* ============================================================================
@@ -963,8 +966,10 @@ static CTTilePoint *get_scale_buffer(CTRenderContext *ctx, size_t needed)
         if (new_buf) {
             ctx->scale_buffer = new_buf;
             ctx->scale_buffer_capacity = new_capacity;
+        } else {
+            /* Realloc failed and existing buffer is too small */
+            return NULL;
         }
-        /* If realloc fails, continue with existing buffer if large enough */
     }
     return ctx->scale_buffer;
 }

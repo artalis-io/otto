@@ -566,6 +566,7 @@ static void init_carta_defaults(TileServerConfig *cfg) {
     cfg->max_zoom = 18;
     cfg->tile_size = 512;
     strncpy(cfg->name, "Carta Tile Server", sizeof(cfg->name) - 1);
+    cfg->name[sizeof(cfg->name) - 1] = '\0';
     cfg->lod_preset = LOD_DEFAULT;
     cfg->render_preset = RENDER_PRESET_DEFAULT;
     cfg->render_workers = 0;  /* Auto-detect */

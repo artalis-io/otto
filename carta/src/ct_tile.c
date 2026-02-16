@@ -322,7 +322,9 @@ void ct_tile_init(CTTile *tile, CTTileCoord coord)
 CTStatus ct_tile_add_feature(CTTile *tile, const CTFeature *feature)
 {
     if (tile->num_features >= tile->features_capacity) {
-        size_t new_cap = tile->features_capacity ? tile->features_capacity * 2 : 64;
+        size_t new_cap = tile->features_capacity ? tile->features_capacity : 64;
+        if (new_cap > SIZE_MAX / (2 * sizeof(CTFeature))) return CT_ERROR_OUT_OF_MEMORY;
+        new_cap *= 2;
         CTFeature *new_features = realloc(tile->features,
                                           new_cap * sizeof(CTFeature));
         if (!new_features) return CT_ERROR_OUT_OF_MEMORY;
