@@ -43,6 +43,7 @@
 #include "sh_trace.h"       /* For trace ID propagation */
 #include "sh_metrics.h"     /* For metrics collection */
 #include "sh_json.h"        /* For JSON building */
+#include "sh_hash.h"        /* For sh_fnv1a_64 (ETag hashing) */
 
 /* ============================================================================
  * Configuration
@@ -664,14 +665,6 @@ static void send_error_cors(struct mg_connection *c, struct mg_http_message *hm,
     sh_mg_reply_error(c, status, &s_cors, get_origin_from_request(hm), message);
 }
 
-/* FNV-1a 64-bit hash for ETag generation */
-static uint64_t fnv1a_64(const uint8_t *data, size_t len) {
-    uint64_t h = 0xcbf29ce484222325ULL;
-    for (size_t i = 0; i < len; i++)
-        h = (h ^ data[i]) * 0x100000001b3ULL;
-    return h;
-}
-
 /* send_tile_cors sends binary data with ETag support.
  * If hm is non-NULL, checks If-None-Match for conditional 304. */
 static void send_tile_cors(struct mg_connection *c, struct mg_http_message *hm,
@@ -682,7 +675,7 @@ static void send_tile_cors(struct mg_connection *c, struct mg_http_message *hm,
     /* Compute ETag from tile bytes */
     char etag[20];
     if (data && size > 0) {
-        uint64_t hash = fnv1a_64(data, size);
+        uint64_t hash = sh_fnv1a_64(data, size);
         snprintf(etag, sizeof(etag), "\"%016llx\"", (unsigned long long)hash);
     } else {
         etag[0] = '\0';

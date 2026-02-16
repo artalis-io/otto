@@ -15,10 +15,14 @@ Comprehensive development plan for the Carta map tile generator covering perform
 | **Road Labels** | ✅ Complete | Text along paths |
 | **Area Labels** | ✅ Complete | Lakes, parks |
 | **Metatile Label Cache** | ✅ Complete | Cross-tile label consistency |
+| **ETags & HTTP Caching** | ✅ Complete | `api/src/main.c` |
+| **Road Styling (OSM Carto)** | ❌ TODO | `ct_style.c`, `ct_render.c` |
+| **@2x Retina Tiles** | ❌ TODO | `api/src/main.c` |
 | **MVT Labels** | ❌ TODO | Vector tile label layer |
 | **Continental Sharding** | ❌ TODO | Multi-region tile serving |
 
 **Current Performance**: ~75ms average PNG tile latency (down from ~240ms)
+**Test Coverage**: 143 carta tests + 21 metatile tests = 164 total
 
 ---
 
@@ -388,9 +392,10 @@ done
 
 ### Current Test Coverage
 
-- 128 carta unit tests
+- 143 carta unit tests + 21 metatile tests = 164 total
 - Clipping, simplification, batch transform, render options
 - Label collision detection tests
+- Metatile coordinate, cache, and extraction tests
 
 ### Visual Comparison
 
@@ -416,18 +421,25 @@ Generate tiles at z10, z12, z14, z16 and compare with OSM for:
 9. ✅ Road labels (text along paths)
 10. ✅ Area labels (lakes, parks)
 11. ✅ Metatile label caching (cross-tile consistency)
+12. ✅ ETag support for conditional tile caching (FNV-1a hash, 304 Not Modified)
 
 ### Next Up
 
-1. MVT label layer
+1. Road styling to match OSM Carto (see Chapter 9)
+2. @2x retina tile support (see Chapter 10)
 
 ### Future
 
-1. Zoom-adaptive anti-aliasing
-2. SIMD coordinate transformation
-3. Tile pre-generation
-4. International text (CJK, RTL)
-5. Continental-scale sharding (see Chapter 8)
+1. MVT label layer
+2. Zoom-adaptive anti-aliasing
+3. SIMD coordinate transformation
+4. Tile pre-generation
+5. International text (CJK, RTL)
+6. Continental-scale sharding (see Chapter 8)
+7. POI layer (amenity icons)
+8. Data-driven styling (JSON style config)
+9. PNG optimization (adaptive filters)
+10. Config hot-reload
 
 ---
 
@@ -616,6 +628,181 @@ carta/
 │   ├── ct_simplify.c      # Douglas-Peucker
 │   └── ct_render.c        # PNG rendering
 ```
+
+---
+
+## Chapter 9: Road Styling — OSM Carto Match (❌ TODO)
+
+Current road rendering uses approximate colors and 3-point interpolated widths that don't match OSM Carto. This chapter covers what's needed to match OSM's visual quality.
+
+### 9.1 Problem
+
+The current road style has several issues:
+- **Colors are approximate** — fill and casing colors don't match OSM Carto hex values
+- **Widths use 3-point interpolation** — only z10/z14/z18 are specified, intermediate zooms interpolated. OSM Carto defines exact widths at every zoom level.
+- **No DPR scaling** — style values are baked for 512px tiles. Should store 1× reference values (256px) and scale by `tile_size / 256` at render time to support any tile size.
+- **Single casing width** — `ct_style_road_casing()` returns one value for all road types. OSM Carto has three casing categories: major, secondary, standard.
+- **Per-road casing+fill** — roads draw casing+fill per segment, causing ugly junction artifacts where one road's casing overwrites another's fill. OSM Carto draws ALL casings first, then ALL fills.
+- **No low-zoom colors** — at z5-z11 where roads have no casing, OSM uses more saturated colors.
+
+### 9.2 Required Changes
+
+#### A. Per-zoom width table (replaces 3-point interpolation)
+
+Replace `CTRoadWidth { float z10, z14, z18 }` with `CTRoadWidth { float w[19] }` for per-zoom lookup z0-z18.
+
+OSM Carto reference values (`@*-width-z*` variables, these ARE the total visual width):
+
+| Road | z6 | z7 | z8 | z9 | z10 | z11 | z12 | z13 | z14 | z15 | z16 | z17 | z18 |
+|------|----|----|----|----|-----|-----|-----|-----|-----|-----|-----|-----|-----|
+| Motorway | 0.4 | 0.8 | 1.0 | 1.4 | 1.9 | 2.0 | 3.5 | 6.0 | 6.0 | 10.0 | 10.0 | 18.0 | 21.0 |
+| Trunk | 0.4 | 0.6 | 1.0 | 1.4 | 1.9 | 1.9 | 3.5 | 6.0 | 6.0 | 10.0 | 10.0 | 18.0 | 21.0 |
+| Primary | | | 1.0 | 1.4 | 1.8 | 1.8 | 3.5 | 5.0 | 5.0 | 10.0 | 10.0 | 18.0 | 21.0 |
+| Secondary | | | | 1.0 | 1.1 | 1.1 | 3.5 | 5.0 | 5.0 | 9.0 | 10.0 | 18.0 | 21.0 |
+| Tertiary | | | | | 0.7 | 0.7 | 2.5 | 4.0 | 5.0 | 9.0 | 10.0 | 18.0 | 21.0 |
+| Residential | | | | | | | 0.5 | 2.5 | 3.0 | 5.0 | 6.0 | 12.0 | 13.0 |
+| Service | | | | | | | | | 2.0 | 2.0 | 3.5 | 7.0 | 8.5 |
+
+**Critical**: The `@*-width-z*` variable IS the total visual width. Casing is drawn INSIDE (as the outer line at total width, fill drawn on top at `total - 2*casing`). Do NOT add casing on top of these values.
+
+#### B. Exact OSM Carto colors
+
+Fill colors (from `road-colors-generated.mss`):
+```
+Motorway:    #e892a2   RGB(232, 146, 162)
+Trunk:       #f9b29c   RGB(249, 178, 156)
+Primary:     #fcd6a4   RGB(252, 214, 164)
+Secondary:   #f7fabf   RGB(247, 250, 191)
+Tertiary:    #ffffff
+Residential: #ffffff
+Service:     #ffffff
+```
+
+Casing colors:
+```
+Motorway:    #dc2a67   RGB(220, 42, 103)
+Trunk:       #c84e2f   RGB(200, 78, 47)
+Primary:     #a06b00   RGB(160, 107, 0)
+Secondary:   #707d05   RGB(112, 125, 5)
+Tertiary:    #8f8f8f   RGB(143, 143, 143)
+Residential: #bbbbbb   RGB(187, 187, 187)
+Service:     #bbbbbb   RGB(187, 187, 187)
+```
+
+Low-zoom colors (z5-z11, more saturated, no casing):
+```
+Motorway:    #e66e89   RGB(230, 110, 137)
+Trunk:       #f6967a   RGB(246, 150, 122)
+Primary:     #f4c37d   RGB(244, 195, 125)
+Secondary:   #e7ed9d   RGB(231, 237, 157)
+```
+
+#### C. Per-road-type casing
+
+Three casing categories matching OSM Carto:
+
+| Category | Road Types | z11 | z12 | z13 | z14 | z15 | z17 |
+|----------|-----------|-----|-----|-----|-----|-----|-----|
+| Major (`@major-casing-width`) | motorway, trunk, primary | 0.3 | 0.5 | 0.5 | 0.6 | 0.7 | 1.0 |
+| Secondary (`@secondary-casing-width`) | secondary | — | 0.3 | 0.35 | 0.35 | 0.7 | 1.0 |
+| Standard (`@casing-width`) | tertiary, residential, service | — | 0.3 | 0.5 | 0.55 | 0.6 | 0.8 |
+
+#### D. DPR scaling
+
+Store all style values at 256px reference. At render time, scale all line widths by `dpr = tile_size / 256.0f`. This applies to roads, waterways, railways, buildings, boundaries, bridges.
+
+#### E. Two-pass road rendering
+
+Draw ALL casings (outer lines) first, then ALL fills on top. Prevents junction artifacts.
+
+```
+Current (per-road):    road A casing → road A fill → road B casing (overwrites A fill!) → road B fill
+Correct (two-pass):    road A casing → road B casing → road A fill → road B fill
+```
+
+#### F. Low-zoom color logic
+
+At z ≤ 11 when no casing is rendered, use the saturated low-zoom colors instead of the normal fill colors.
+
+### 9.3 Lessons from Failed Attempts
+
+Multiple attempts to match OSM Carto road widths were reverted. Key mistakes to avoid:
+
+1. **Don't add casing outside the width variable** — the `@motorway-width-z14 = 6.0` IS the total. `fill = 6.0 - 2*0.6 = 4.8`. Do NOT compute `total = 6.0 + 2*0.6 = 7.2`.
+2. **0.5f minimum width breaks zoom visibility** — roads with 0 width at a given zoom should not render. The min-visibility floor causes faint ghost lines at zooms where roads shouldn't appear.
+3. **Test at 256px tile size** — use `carta-compare -s 256` to match OSM reference tiles pixel-for-pixel. 512px tiles with DPR=2 should look identical in proportion but comparing raw pixels is confusing.
+4. **Anti-aliasing adds ~1px visual width** — Xiaolin Wu AA feathers edges, making a 3px line look ~5px. This is expected and matches how OSM Carto renders (Mapnik also uses AA).
+
+### 9.4 Files to Modify
+
+| File | Changes |
+|------|---------|
+| `ct_types.h` | Add `CTRoadWidth { float w[19] }`, add `road_low_zoom_colors[]` to CTStyle |
+| `ct_style.c` | Per-zoom width table, exact colors, per-type casing function |
+| `ct_render.c` | DPR scaling, two-pass road rendering, low-zoom color logic |
+| `ct_render.h` | Declare `ct_style_road_casing_for_type()` |
+| `test_carta.c` | Update width/casing test assertions |
+
+---
+
+## Chapter 10: @2x Retina Tiles (❌ TODO)
+
+### 10.1 URL Convention
+
+```
+/tiles/{z}/{x}/{y}.png       → default tile_size (512px)
+/tiles/{z}/{x}/{y}@2x.png    → tile_size * 2 (1024px)
+```
+
+### 10.2 What Already Scales
+
+- Font sizes: `ct_label_base_font_size()` → `base * tile_size / 256.0f`
+- Road label fonts: `fsize * tile_size / 256.0f`
+- Label margins: derived from base_size
+
+### 10.3 What Needs DPR Scaling (requires Chapter 9 first)
+
+- Road widths, waterway widths, railway widths
+- Bridge outline, boundary width
+- Building outline width
+
+### 10.4 Implementation Notes
+
+- Parse `@2x` suffix in `parse_tile_uri()`
+- Create render context at retina size (don't reuse thread-local 1x cache)
+- Cache key: use bit 58 of packed key as retina flag (safe — z18 max x = 262143, 18 bits)
+- Metatile cache: skip for @2x (key doesn't include tile_size), use per-tile labels
+- MVT tiles don't need @2x (vector = resolution-independent)
+
+---
+
+## Chapter 11: ETag Support (✅ Complete)
+
+### 11.1 Implementation
+
+- FNV-1a 64-bit hash of tile bytes → 16-char hex ETag
+- `ETag: "hexhash"` header on all tile responses (PNG, MVT, ASCII)
+- `If-None-Match` header check → 304 Not Modified when client's ETag matches
+- Applied to both direct render path and work queue path
+
+### 11.2 Testing
+
+```bash
+# Get tile + capture ETag
+curl -sI http://localhost:8081/tiles/14/8529/5974.png | grep ETag
+
+# Conditional request → 304
+curl -sI -H 'If-None-Match: "<etag>"' http://localhost:8081/tiles/14/8529/5974.png
+
+# MVT also has ETag
+curl -sI http://localhost:8081/tiles/14/8529/5974.mvt | grep ETag
+```
+
+### 11.3 Key Files
+
+| File | Changes |
+|------|---------|
+| `api/src/main.c` | `fnv1a_64()`, `send_tile_cors()` ETag logic, `If-None-Match` check |
 
 ---
 
