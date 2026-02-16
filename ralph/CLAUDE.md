@@ -8,7 +8,7 @@
 
 ```bash
 make          # Build libralph.a
-make test     # Run tests (73/73 should pass)
+make test     # Run tests (378/378 should pass)
 make test-lap # Run LAP tests (358/358 should pass)
 make test-netflow # Run Network Flow tests (153/153 should pass)
 ```
