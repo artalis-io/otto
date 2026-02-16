@@ -53,17 +53,14 @@ int fw_glpk_solve(const FWRefuelProblem *problem, FWGlpkResult *result)
     memset(result, 0, sizeof(FWGlpkResult));
 
     /* Create temp files for LP and solution */
-    char lp_path[] = "/tmp/fw_bench_XXXXXX.lp";
-    char sol_path[] = "/tmp/fw_bench_XXXXXX.sol";
-
-    /* mkstemp needs a mutable template without extension.
-     * Create the base temp file, then append .lp/.sol */
     char base_path[] = "/tmp/fw_bench_XXXXXX";
     int fd = mkstemp(base_path);
     if (fd < 0) return -1;
     close(fd);
     unlink(base_path);  /* We just need the unique name */
 
+    char lp_path[64];
+    char sol_path[64];
     snprintf(lp_path, sizeof(lp_path), "%s.lp", base_path);
     snprintf(sol_path, sizeof(sol_path), "%s.sol", base_path);
 
