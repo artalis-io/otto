@@ -756,6 +756,10 @@ int make_dual_feasible(SimplexTableau *tab, int obj_sense) {
             }
             /* else: can't flip, will need Phase 1 pivots to fix */
         }
+        /* Free non-basic variables (RALPH_NONBASIC_FREE) with rc != 0 are dual
+         * infeasible but cannot be fixed by bound flipping.  They require basis
+         * pivots to enter the basis (where rc becomes irrelevant).  Dual Phase 1
+         * handles these residual infeasibilities. */
     }
 
     return changes;
@@ -1033,6 +1037,32 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                 tableau_compute_solution(tab);
             }
 
+            /* Fresh reduced cost computation + dual feasibility check.
+             * After unshift cleanup or direct termination, verify rc signs
+             * to catch suboptimal termination (stale rc from perturbed pivots). */
+            tableau_compute_reduced_costs(tab);
+            {
+                double max_dual_viol = 0.0;
+                for (int j = 0; j < tab->n; j++) {
+                    if (tab->var_status[j] == RALPH_BASIC) continue;
+                    double viol = 0.0;
+                    if (tab->var_status[j] == RALPH_NONBASIC_LOWER && tab->rc[j] < -RALPH_OPT_TOL)
+                        viol = -tab->rc[j];
+                    else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && tab->rc[j] > RALPH_OPT_TOL)
+                        viol = tab->rc[j];
+                    else if (tab->var_status[j] == RALPH_NONBASIC_FREE && fabs(tab->rc[j]) > RALPH_OPT_TOL)
+                        viol = fabs(tab->rc[j]);
+                    if (viol > max_dual_viol) max_dual_viol = viol;
+                }
+                if (max_dual_viol > 1e-4) {
+                    if (solver->verbose) {
+                        printf("[dual_v2] Suboptimal: max dual violation %.2e after unshift\n",
+                               max_dual_viol);
+                    }
+                    return -1;  /* Trigger primal fallback */
+                }
+            }
+
             solver->status = RALPH_STATUS_OPTIMAL;
             solver->obj_value = tab->obj_value * solver->model->obj_sense;
 
@@ -1244,7 +1274,7 @@ int dual_phase1(SimplexSolver *solver) {
     int use_dse = solver->use_dual_steepest_edge;
     if (use_dse) dse_init_exact(tab);
 
-    int max_phase1_iters = 10 * tab->m;
+    int max_phase1_iters = 200 * tab->m;
     int succeeded = 0;
 
     for (int iter = 0; iter < max_phase1_iters; iter++) {

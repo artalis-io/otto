@@ -59,7 +59,7 @@ Model Building (model.c)
 1. **CSC format**: Sparse matrices are column-major
 2. **LU eta-file**: Updates must modify all components
 3. **Constraint normalization**: RHS must be non-negative
-4. **Big-M method**: Artificial variable cost is 1e8
+4. **Two-phase simplex**: Artificial variables use Phase 1 (cost=1.0), no Big-M
 5. **LAP costs**: Row-major n×n matrix, use RALPH_LAP_INFINITY for forbidden
 
 ## LAP Solver Features
@@ -384,7 +384,6 @@ make bench-netflow    # Network Flow benchmarks (size, warm start, bottleneck)
 /* General */
 #define TOLERANCE 1e-9      // General numerical tolerance
 #define PIVOT_TOL 1e-10     // Minimum pivot value
-#define BIG_M 1e8           // Artificial variable cost
 
 /* Network Flow */
 #define RALPH_NETFLOW_TOLERANCE 1e-9   // Flow/cost tolerance
@@ -461,8 +460,8 @@ if (row < 0 || row >= nrows || col < 0 || col >= ncols) {
 ### Constants Over Magic Numbers
 ```c
 /* Good - use defined constants */
-tab->c_ext[j] = RALPH_BIG_M;
+if (infeas > RALPH_FEAS_TOL) { ... }
 
 /* Bad - magic numbers */
-tab->c_ext[j] = 1e8;
+if (infeas > 1e-6) { ... }
 ```

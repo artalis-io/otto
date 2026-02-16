@@ -874,15 +874,13 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
     tab->num_aux = num_aux_vars;
     tab->num_equalities = num_equalities;
 
-    /* Decide whether to use two-phase simplex based on equality count.
-     * Two-phase is more numerically stable when there are many equalities,
-     * but can have issues with stuck artificials (redundant rows).
-     * Use two-phase for problems with many equalities (>80% of constraints)
-     * where Big-M contamination is most severe.
-     *
-     * IMPORTANT: For Benders decomposition, force_two_phase=1 ensures clean
-     * duals without BigM contamination. */
-    int use_two_phase = !dual_mode && (force_two_phase || (num_equalities > (4 * model->num_cons) / 5));
+    /* Use two-phase simplex for ALL problems with artificial variables.
+     * Phase 1 minimizes sum of artificials (cost=1.0) to find a feasible basis.
+     * Phase 2 optimizes the original objective.
+     * This eliminates Big-M method entirely, avoiding objective contamination
+     * for problems where M isn't large enough relative to optimal coefficients.
+     */
+    int use_two_phase = !dual_mode && (force_two_phase || num_artificial > 0);
     tab->use_two_phase = use_two_phase;
 
     /* Allocate all tableau arrays */
@@ -959,10 +957,9 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
     }
 
     /* Add auxiliary variables and record their mapping to constraints.
-     * For two-phase simplex, artificial variable costs are 1.0 (Phase 1 objective).
-     * For Big-M method, artificial variable costs are RALPH_BIG_M.
+     * Artificial variable costs are 1.0 (Phase 1 objective).
      * For dual_mode: no artificials — one aux per constraint with zero cost. */
-    double artificial_cost = use_two_phase ? 1.0 : RALPH_BIG_M;
+    double artificial_cost = 1.0;
     int aux_idx = model->num_vars;
     int aux_map_idx = 0;  /* Index into aux_row/aux_coef arrays */
     int art_idx = 0;  /* Index into artificial_vars array */
@@ -1059,8 +1056,7 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
     free(ax_initial);
 
     /* Store original costs for auxiliary variables (for Phase 2 transition).
-     * Slack/surplus have zero cost, artificial variables have Big-M cost in
-     * the original formulation. */
+     * Slack/surplus have zero cost, artificials have cost 1.0 (Phase 1 objective). */
     for (int j = model->num_vars; j < tab->n; j++) {
         /* Check if this is an artificial variable */
         int is_artificial = 0;
@@ -1373,6 +1369,28 @@ static int repair_singular_basis(SimplexTableau *tab) {
 }
 
 int tableau_refactorize(SimplexTableau *tab) {
+    /* When Phase 2 has stuck artificials on redundant rows, move them to
+     * the FIRST basis positions so LU processes their identity columns first.
+     * This prevents partial pivoting from consuming the redundant rows
+     * for structural columns before the artificial columns need them. */
+    if (tab->phase == 2 && tab->num_redundant > 0 && tab->num_artificial > 0) {
+        int next_pos = 0;
+        for (int k = 0; k < tab->num_artificial && next_pos < tab->m; k++) {
+            int art_j = tab->artificial_vars[k];
+            if (tab->var_status[art_j] != RALPH_BASIC) continue;
+
+            int cur_pos = tab->basis_pos[art_j];
+            if (cur_pos == next_pos) { next_pos++; continue; }
+
+            int other_j = tab->basis[next_pos];
+            tab->basis[next_pos] = art_j;
+            tab->basis[cur_pos] = other_j;
+            tab->basis_pos[art_j] = next_pos;
+            tab->basis_pos[other_j] = cur_pos;
+            next_pos++;
+        }
+    }
+
     SparseMatrix *B = build_basis_matrix(tab);
     if (!B) return -1;
 
@@ -1381,9 +1399,10 @@ int tableau_refactorize(SimplexTableau *tab) {
     tab->lu->num_redundant = tab->num_redundant;
 
     /* Allow limited regularization during Phase 1 only.
-     * This helps two-phase recovery on near-singular artificial bases.
-     * Keep disabled in Phase 2 to preserve structural constraints. */
-    if (tab->phase == 1 && tab->use_two_phase) {
+     * Phase 1 has many artificial variables that create near-singular bases
+     * during early iterations.  Phase 2 redundant rows are handled by zeroing
+     * them in A_ext (simplex_transition_phase2), not by regularization. */
+    if (tab->use_two_phase && tab->phase == 1) {
         int reg_limit = RALPH_PHASE1_MAX_REGULARIZATIONS;
         if (tab->num_redundant > reg_limit) {
             reg_limit = tab->num_redundant;
@@ -1399,8 +1418,19 @@ int tableau_refactorize(SimplexTableau *tab) {
     }
     tab->lu->num_regularized = 0;
 
+    /* When Phase 2 has redundant rows, relax pivot tolerance to accept
+     * small but valid structural pivots that would fail at RALPH_PIVOT_TOL.
+     * The artificial-first reordering gives clean 1.0 pivots for the truly
+     * redundant rows; this tolerance handles residual ill-conditioning. */
+    double saved_tol = tab->lu->pivot_tol;
+    if (tab->phase == 2 && tab->num_redundant > 0) {
+        tab->lu->pivot_tol = 1e-15;
+    }
+
     int status = lu_factorize(tab->lu, B);
     sparse_free(B);
+
+    tab->lu->pivot_tol = saved_tol;
 
     if (status != 0) {
         /* Factorization failed - try to repair the basis */
@@ -2555,7 +2585,7 @@ static int simplex_pivot(SimplexTableau *tab,
     /* Weight update strategy:
      * - SE (pricing_strategy==1): always use exact tau BTRAN
      * - Devex (pricing_strategy==2): use exact tau BTRAN while artificials remain
-     *   in the basis (Big-M Phase 1), then switch to cheap Devex formula once all
+     *   in the basis (Phase 1), then switch to cheap Devex formula once all
      *   artificials are driven out. Accuracy matters in Phase 1 for feasibility;
      *   speed matters in Phase 2 for the bulk of iterations.
      */
@@ -3073,7 +3103,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     SimplexTableau *tab = solver->tableau;
 
     if (!tab->use_two_phase) {
-        /* Big-M method: check and restore feasibility via dual pivoting */
+        /* No artificials: check and restore feasibility via dual pivoting */
         tableau_compute_solution(tab);
 
         int infeasible = 0;
@@ -3227,10 +3257,13 @@ static int simplex_phase1(SimplexSolver *solver) {
     int excluded_entering_b = -1;
     int excluded_entering_ttl_b = 0;
 
-    /* Apply proactive perturbation only for extremely degenerate two-phase starts.
-     * A lower threshold can destabilize hard Phase 1 bases (e.g., beaconfd),
-     * so we keep this conservative and rely on reactive perturbation first. */
-    if (tab->num_equalities > (tab->m * 9) / 10 && tab->num_equalities < tab->m) {
+    /* Apply proactive perturbation in Phase 1 for highly-degenerate two-phase
+     * problems. Phase 1 is inherently degenerate (many bases give art_sum=0).
+     * Only apply when equality ratio is very high (>90%) — lower thresholds
+     * can destabilize hard Phase 1 bases (e.g., beaconfd). For problems with
+     * fewer equalities, reactive perturbation (cycling detection) suffices.
+     * Perturbation is removed at Phase 1 completion (primal_remove_perturbation). */
+    if (tab->use_two_phase && tab->num_equalities > (tab->m * 9) / 10) {
         primal_apply_perturbation(tab);
         if (solver->verbose) {
             fprintf(stderr, "[simplex_phase1] Proactive perturbation: %d equalities out of %d constraints (%.0f%%)\n",
@@ -3810,7 +3843,9 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
     }
 
     if (solver->verbose) {
-        fprintf(stderr, "[simplex_transition] Transitioning to Phase 2\n");
+        printf("[simplex_transition] Transitioning to Phase 2 (m=%d, num_art=%d, num_eq=%d)\n",
+               tab->m, tab->num_artificial, tab->num_equalities);
+        fflush(stdout);
     }
 
     tab->phase = 2;
@@ -3978,19 +4013,17 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
     }
 
     /* Handle stuck artificials (redundant rows):
-     * Set their costs to zero and mark them as fixed.
-     * The row is redundant, so the artificial can stay at zero without affecting feasibility. */
+     * Set their costs to zero so they don't affect the Phase 2 objective.
+     * The artificial stays in the basis at value zero — the constraint is
+     * linearly dependent on others and doesn't restrict the feasible region. */
     for (int k = 0; k < tab->num_artificial; k++) {
         int art_j = tab->artificial_vars[k];
         if (tab->var_status[art_j] == RALPH_BASIC) {
-            /* This artificial is still in basis - fix its cost at zero */
             tab->c_ext[art_j] = 0.0;
         }
     }
 
-    /* Fix all non-basic artificial variables at zero.
-     * This prevents them from re-entering the basis in Phase 2.
-     * We set their bounds to [0, 0] and mark them as FIXED. */
+    /* Fix all non-basic artificial variables at zero */
     for (int k = 0; k < tab->num_artificial; k++) {
         int art_j = tab->artificial_vars[k];
         if (tab->var_status[art_j] != RALPH_BASIC) {
@@ -3998,7 +4031,6 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
             tab->ub_ext[art_j] = 0.0;
             tab->var_status[art_j] = RALPH_FIXED;
             tab->x[art_j] = 0.0;
-            /* Also set cost to zero so they don't affect objective */
             tab->c_ext[art_j] = 0.0;
         }
     }
@@ -4008,15 +4040,11 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
         if (solver->verbose) {
             fprintf(stderr, "[simplex_transition] Refactorization failed, attempting basis repair...\n");
         }
-        /* Try to repair the singular basis by swapping columns */
         if (repair_singular_basis(tab) != 0) {
             if (solver->verbose) {
                 fprintf(stderr, "[simplex_transition] ERROR: basis repair failed during transition\n");
             }
             return -1;
-        }
-        if (solver->verbose) {
-            fprintf(stderr, "[simplex_transition] Basis repair successful\n");
         }
     }
 
@@ -4025,6 +4053,7 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
 
     /* Recompute solution */
     tableau_compute_solution(tab);
+
 
     if (solver->verbose) {
         fprintf(stderr, "[simplex_transition] Phase 2 objective value: %g\n", tab->obj_value);
@@ -4039,18 +4068,12 @@ static int simplex_phase2(SimplexSolver *solver) {
 
     tab->phase = 2;
 
-    /* For two-phase problems, force early refactorization to reset numerical state.
-     * The transition may have accumulated error from multiple pivot operations. */
+    /* For two-phase problems, force early refactorization to reset numerical
+     * state after the transition. Redundant rows were zeroed in A_ext during
+     * the transition, so the basis matrix is now well-conditioned. */
     if (tab->use_two_phase) {
-        /* Reset LU update count to force fresh factorization soon */
         tab->lu->num_updates = tab->lu->max_updates;
-
-        /* Force refactorization immediately */
         if (tableau_refactorize(tab) != 0) {
-            if (solver->verbose) {
-                fprintf(stderr, "[simplex_phase2] ERROR: initial refactorization failed\n");
-            }
-            /* Try crash basis recovery */
             if (repair_singular_basis(tab) != 0) {
                 solver->status = RALPH_STATUS_ERROR;
                 return -1;
@@ -4156,32 +4179,11 @@ static int simplex_phase2(SimplexSolver *solver) {
         }
 
         if (ratio_status != 0) {
-            /* No leaving variable found. This could mean:
-             * 1. The problem is unbounded (rare in practice)
-             * 2. Numerical issues with Big-M artificial variables
-             *
-             * If there are artificial variables (Big-M cost) that are still
-             * at non-zero values, the problem is actually INFEASIBLE, not UNBOUNDED.
-             */
+            /* No leaving variable found — problem is unbounded.
+             * (With two-phase simplex, Phase 1 already certified feasibility,
+             * so this can only happen for genuinely unbounded problems.) */
             primal_remove_perturbation(tab);
-
-            /* Check for non-zero artificial variables */
-            int num_struct = solver->model->num_vars;
-            double artificial_sum = 0.0;
-            for (int j = num_struct; j < tab->n; j++) {
-                if (tab->c_ext[j] > 1e6 && fabs(tab->x[j]) > RALPH_FEAS_TOL) {
-                    artificial_sum += fabs(tab->x[j]);
-                }
-            }
-
-            if (artificial_sum > RALPH_FEAS_TOL) {
-                /* Non-zero artificials mean the original problem is infeasible */
-                extract_farkas_ray(solver);
-                solver->status = RALPH_STATUS_INFEASIBLE;
-            } else {
-                /* No artificials - truly unbounded */
-                solver->status = RALPH_STATUS_UNBOUNDED;
-            }
+            solver->status = RALPH_STATUS_UNBOUNDED;
             solver->iterations = iter;
             return -1;
         }
@@ -4375,7 +4377,6 @@ static int crash_triangular(SimplexTableau *tab, int verbose) {
         /* Only eligible if basic var is an auxiliary (slack/surplus/artificial) */
         if (bv >= n_structural) {
             /* Check if this is a simple slack or surplus: |coeff| == 1, zero cost.
-             * Artificials have cost BIG_M (or 1.0 in two-phase Phase 1).
              * Slacks have +1 coeff, surplus have -1 coeff — both displaceable. */
             int is_slack = 0;
             for (int p = A->colptr[bv]; p < A->colptr[bv + 1]; p++) {
@@ -4633,7 +4634,7 @@ int simplex_solve(SimplexSolver *solver) {
     tableau_compute_reduced_costs(tab);
 
     /* Post-verify crash basis: if any basic variable is outside its bounds,
-     * the Big-M Phase 1 won't have artificials to fix it. Restore original. */
+     * Phase 1 may struggle to restore feasibility. Restore original basis. */
     if (solver->crash && saved_basis) {
         int crash_infeasible = 0;
         for (int i = 0; i < tab->m; i++) {
@@ -4671,7 +4672,7 @@ int simplex_solve(SimplexSolver *solver) {
     if (solver->verbose) printf("[simplex_solve] Initial factorization OK\n");
 
     /* T1.3: Method dispatch — dual simplex path.
-     * The dual simplex needs its own tableau setup (no Big-M artificials),
+     * The dual simplex needs its own tableau setup (no artificials),
      * so we delegate to the dedicated from-scratch solver. */
     if (solver->method == 1 || solver->method == 2) {
         if (solver->verbose)
@@ -4818,53 +4819,65 @@ int simplex_solve(SimplexSolver *solver) {
     if (solver->verbose) printf("[simplex_solve] Phase 1 complete\n");
 
     /* Transition to Phase 2 if using two-phase simplex */
+    int two_phase_failed = 0;
     if (tab->use_two_phase) {
         if (solver->verbose) printf("[simplex_solve] Transitioning to Phase 2...\n");
         if (simplex_transition_phase2(solver) != 0) {
-            solver->status = RALPH_STATUS_ERROR;
-            return -1;
+            two_phase_failed = 1;
+        } else {
+            if (solver->verbose) printf("[simplex_solve] Phase 2 transition complete\n");
         }
-        if (solver->verbose) printf("[simplex_solve] Phase 2 transition complete\n");
     }
 
-    /* Phase 2: Optimize */
-    int status = simplex_phase2(solver);
-    (void)status;  /* Status is set in solver->status directly */
+    /* Phase 2: Optimize (skip if transition failed) */
+    if (!two_phase_failed) {
+        int status = simplex_phase2(solver);
+        (void)status;  /* Status is set in solver->status directly */
+        if (solver->status == RALPH_STATUS_ERROR && tab->use_two_phase) {
+            two_phase_failed = 1;
+        }
+    }
+
+    /* If two-phase failed, try dual simplex as a one-shot fallback.
+     * Only for method=0 (explicit primal) to avoid circular chains with
+     * method=2 (which already tried dual before falling back to primal).
+     * The Phase 2 transition can fail on problems with redundant rows (e.g.,
+     * assignment LPs, beaconfd) where stuck artificials make the basis singular. */
+    if (two_phase_failed && solver->method == 0) {
+        if (solver->verbose) {
+            printf("[simplex_solve] Two-phase failed, trying dual simplex\n");
+        }
+        tableau_free(solver->tableau);
+        solver->tableau = NULL;
+        restore_model(solver);
+        solver->is_scaled = 0;
+        solver->status = RALPH_STATUS_UNKNOWN;
+        int dual_result = dual_simplex_solve_from_scratch_v2(solver);
+        solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+        if (solver->tableau) {
+            tableau_free(solver->tableau);
+            solver->tableau = NULL;
+        }
+        return dual_result;
+    } else if (two_phase_failed) {
+        /* method=2 already tried dual before primal — don't chain again */
+        solver->status = RALPH_STATUS_ERROR;
+        solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+        tableau_free(solver->tableau);
+        solver->tableau = NULL;
+        return -1;
+    }
 
     solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
 
-    /* Check for infeasibility: if any artificial variable (Big-M cost) is non-zero,
-     * the original problem is infeasible */
+    /* Compute true objective from structural variables only.
+     * Auxiliary variables (slacks/surplus/artificials) have zero cost in Phase 2.
+     * Phase 1 already certifies feasibility or infeasibility. */
     if (solver->status == RALPH_STATUS_OPTIMAL) {
-        int num_struct = solver->model->num_vars;
-        double artificial_contrib = 0.0;
-        int artificial_count = 0;
-
-        /* Compute true objective from original variables only.
-         * This is more reliable than subtracting artificial contributions
-         * from tab->obj_value, which can have numerical issues. */
         double true_obj = 0.0;
-        for (int j = 0; j < num_struct; j++) {
+        for (int j = 0; j < solver->model->num_vars; j++) {
             true_obj += tab->c_ext[j] * tab->x[j];
         }
-
-        /* Check if any artificial variables (Big-M cost) have significant non-zero values.
-         * This indicates the original problem is infeasible. */
-        for (int j = num_struct; j < tab->n; j++) {
-            if (tab->c_ext[j] > 1e6 && fabs(tab->x[j]) > RALPH_FEAS_TOL) {
-                artificial_contrib += tab->c_ext[j] * tab->x[j];
-                artificial_count++;
-            }
-        }
-
-        if (artificial_count > 0 && artificial_contrib > 1e-2) {
-            /* Significant positive artificial contribution means infeasible */
-            extract_farkas_ray(solver);
-            solver->status = RALPH_STATUS_INFEASIBLE;
-            return 0;
-        }
-
-        /* Use true objective computed from original variables */
         solver->obj_value = true_obj * solver->model->obj_sense;
     }
 
@@ -4896,7 +4909,7 @@ int simplex_solve(SimplexSolver *solver) {
         verify_solution(solver);
     }
 
-    return status;
+    return (solver->status == RALPH_STATUS_OPTIMAL) ? 0 : -1;
 }
 
 /* ============================================================================

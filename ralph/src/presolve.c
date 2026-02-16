@@ -1318,17 +1318,22 @@ int presolve_proportional_cols(PresolveContext *ctx) {
 
             if (dominated >= 0) {
                 /* Fix dominated variable at lower bound.
-                 * The non-dominated column can substitute more efficiently.
-                 * Only safe when the dominated var has non-negative effective
-                 * cost (fixing at lb helps or is neutral for the objective).
-                 * Skip when negative effective cost — the full textbook rule
-                 * requires expanding the non-dominated var's upper bound. */
-                double obj_coef = model->c[dominated] * model->obj_sense;
-                if (obj_coef < -RALPH_ZERO_TOL) continue;
-
+                 * The non-dominated column can substitute more efficiently. */
                 if (model->lb[dominated] <= -RALPH_INFINITY/2) continue;
-                double fixed_val = model->lb[dominated];
 
+                int non_dom = (dominated == j) ? k : j;
+                double dom_range = model->ub[dominated] - model->lb[dominated];
+
+                /* When the dominated var has range and the non-dominated var has
+                 * a finite upper bound, fixing at lb shrinks the feasible region.
+                 * The correct fix is bound expansion (ub += ratio * range) plus
+                 * a custom postsolve op.  For now, skip these cases. */
+                if (dom_range > RALPH_ZERO_TOL &&
+                    model->ub[non_dom] < RALPH_INFINITY / 2) {
+                    continue;
+                }
+
+                double fixed_val = model->lb[dominated];
                 model->lb[dominated] = fixed_val;
                 model->ub[dominated] = fixed_val;
                 count++;

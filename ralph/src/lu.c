@@ -45,6 +45,7 @@ LUFactorization* lu_create(int m) {
     if (!lu) return NULL;
 
     lu->m = m;
+    lu->pivot_tol = RALPH_PIVOT_TOL;
 
     /* Refactorization threshold based on problem size.
      * With Forrest-Tomlin updates, spike application cost is O(num_spikes * avg_nnz).
@@ -446,7 +447,7 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
         }
 
         /* Check for singular matrix */
-        if (max_val < RALPH_PIVOT_TOL) {
+        if (max_val < lu->pivot_tol) {
             /* Check if this row corresponds to a redundant constraint.
              * For two-phase simplex, redundant rows (with stuck artificials)
              * cause singularity but can be safely regularized.
