@@ -359,7 +359,7 @@ int ralph_optimize(RalphModel *model) {
         use_mask = 0x110F;  /* FIXED+EMPTY+SINGL_ROW+BOUND_TIGHT+SHIFT */
     }
 
-    if (use_presolve) {
+    if (use_presolve > 0) {
         presolved = presolve_with_mask(model->lp_model, use_mask);
         if (presolved && presolved->reduced_model) {
             solve_model = presolved->reduced_model;

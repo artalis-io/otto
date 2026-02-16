@@ -355,29 +355,69 @@ static int parse_columns_line(MPSParser *parser, const char *line) {
 }
 
 static int parse_rhs_line(MPSParser *parser, const char *line) {
-    /* Format: RHSNAME  ROWNAME  VALUE  [ROWNAME  VALUE] */
-    char rhs_name[MAX_NAME];
-    char row_name1[MAX_NAME], row_name2[MAX_NAME];
-    double val1 = 0.0, val2 = 0.0;
+    /* Format: [RHSNAME]  ROWNAME  VALUE  [ROWNAME  VALUE]
+     * Some MPS files (e.g., NETLIB blend) omit the RHS set name,
+     * placing the row name as the first token. Detect this by checking
+     * if the second token parses as a double (value) rather than a string
+     * (row name). */
+    char tok1[MAX_NAME], tok2[MAX_NAME];
+    char tok3[MAX_NAME], tok4[MAX_NAME];
+    double d2 = 0.0;
 
-    int n = sscanf(line, " %255s %255s %lf %255s %lf",
-                   rhs_name, row_name1, &val1, row_name2, &val2);
-
-    if (n < 3) {
-        set_error(parser, "line %d: invalid RHS format, expected 'NAME ROW VAL'",
-                  parser->line_num);
+    int n = sscanf(line, " %255s %255s %255s %255s",
+                   tok1, tok2, tok3, tok4);
+    if (n < 2) {
+        set_error(parser, "line %d: invalid RHS format", parser->line_num);
         return -1;
     }
 
-    int row_idx = find_row(parser, row_name1);
-    if (row_idx >= 0 && row_idx != parser->obj_row) {
-        parser->rhs[row_idx] = val1;
-    }
+    /* Detect format: if tok2 parses as a double, tok1 is the row name
+     * (no set name). Otherwise, tok1 is the set name. */
+    char *endp;
+    d2 = strtod(tok2, &endp);
+    int tok2_is_number = (endp != tok2 && *endp == '\0');
 
-    if (n >= 5) {
-        row_idx = find_row(parser, row_name2);
+    if (tok2_is_number && n >= 2) {
+        /* No set name: tok1=ROWNAME tok2=VALUE [tok3=ROWNAME tok4=VALUE] */
+        int row_idx = find_row(parser, tok1);
         if (row_idx >= 0 && row_idx != parser->obj_row) {
-            parser->rhs[row_idx] = val2;
+            parser->rhs[row_idx] = d2;
+        }
+
+        if (n >= 4) {
+            double d4;
+            d4 = strtod(tok4, &endp);
+            if (endp != tok4 && *endp == '\0') {
+                row_idx = find_row(parser, tok3);
+                if (row_idx >= 0 && row_idx != parser->obj_row) {
+                    parser->rhs[row_idx] = d4;
+                }
+            }
+        }
+    } else {
+        /* Standard format: tok1=SETNAME tok2=ROWNAME tok3=VALUE [tok4=ROWNAME tok5=VALUE] */
+        double val1 = 0.0;
+        char row_name2[MAX_NAME];
+        double val2 = 0.0;
+
+        int ns = sscanf(line, " %*s %255s %lf %255s %lf",
+                        tok2, &val1, row_name2, &val2);
+        if (ns < 2) {
+            set_error(parser, "line %d: invalid RHS format, expected 'NAME ROW VAL'",
+                      parser->line_num);
+            return -1;
+        }
+
+        int row_idx = find_row(parser, tok2);
+        if (row_idx >= 0 && row_idx != parser->obj_row) {
+            parser->rhs[row_idx] = val1;
+        }
+
+        if (ns >= 4) {
+            row_idx = find_row(parser, row_name2);
+            if (row_idx >= 0 && row_idx != parser->obj_row) {
+                parser->rhs[row_idx] = val2;
+            }
         }
     }
 
