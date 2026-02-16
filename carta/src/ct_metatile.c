@@ -500,43 +500,34 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
     size_t road_count = 0;
     size_t road_cap = 0;
 
-    /* ---- 1. Collect and deduplicate labeled points from all 4 sub-tiles ---- */
+    /* ---- 1. Query labeled points using expanded metatile bbox ---- */
     const CTLabeledPoint **all_points = NULL;
     size_t all_point_count = 0;
-    size_t point_cap = 0;
 
-    for (int sy = 0; sy < CT_METATILE_SIZE; sy++) {
-        for (int sx = 0; sx < CT_METATILE_SIZE; sx++) {
-            CTTileCoord sub = { mt.z, mt.mx + sx, mt.my + sy };
-            /* Bounds check: at z=0, only tile (0,0) exists */
-            int max_coord = 1 << mt.z;
-            if (sub.x >= max_coord || sub.y >= max_coord) continue;
+    {
+        /* Compute metatile bbox from corner sub-tiles */
+        CTTileCoord tl = { mt.z, mt.mx, mt.my };
+        CTTileCoord br = { mt.z, mt.mx + CT_METATILE_SIZE - 1,
+                           mt.my + CT_METATILE_SIZE - 1 };
+        int max_coord = 1 << mt.z;
+        if (br.x >= max_coord) br.x = max_coord - 1;
+        if (br.y >= max_coord) br.y = max_coord - 1;
+        CTBBox tl_bbox = ct_tile_bounds(tl);
+        CTBBox br_bbox = ct_tile_bounds(br);
+        CTBBox query_bbox = {
+            .min_lat = br_bbox.min_lat, .max_lat = tl_bbox.max_lat,
+            .min_lon = tl_bbox.min_lon, .max_lon = br_bbox.max_lon
+        };
 
-            const CTLabeledPoint **pts = NULL;
-            size_t cnt = 0;
-            if (ct_pbf_get_tile_labels(pbf, sub, &pts, &cnt) != CT_OK || cnt == 0)
-                continue;
+        /* Add overlap buffer: 25% of one tile width = 12.5% of metatile width */
+        double buf_lon = (query_bbox.max_lon - query_bbox.min_lon) * 0.125;
+        double buf_lat = (query_bbox.max_lat - query_bbox.min_lat) * 0.125;
+        query_bbox.min_lat -= buf_lat;
+        query_bbox.max_lat += buf_lat;
+        query_bbox.min_lon -= buf_lon;
+        query_bbox.max_lon += buf_lon;
 
-            for (size_t i = 0; i < cnt; i++) {
-                /* Deduplicate by pointer identity */
-                int dup = 0;
-                for (size_t j = 0; j < all_point_count; j++) {
-                    if (all_points[j] == pts[i]) { dup = 1; break; }
-                }
-                if (dup) continue;
-
-                if (all_point_count >= point_cap) {
-                    size_t new_cap = point_cap ? point_cap * 2 : 256;
-                    const CTLabeledPoint **grown = realloc(all_points,
-                        new_cap * sizeof(CTLabeledPoint *));
-                    if (!grown) { free(pts); goto cleanup; }
-                    all_points = grown;
-                    point_cap = new_cap;
-                }
-                all_points[all_point_count++] = pts[i];
-            }
-            free(pts);
-        }
+        ct_pbf_get_bbox_labels(pbf, query_bbox, mt.z, &all_points, &all_point_count);
     }
 
     /* Sort by priority and place point labels */
@@ -581,7 +572,7 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
 
     /* ---- 2. Place area labels ---- */
     if (mt.z >= 10 && pbf->mp_rtree && pbf->num_multipolygons > 0) {
-        /* Compute metatile bbox from the 4 sub-tile bboxes */
+        /* Compute metatile bbox with overlap buffer */
         CTTileCoord tl = { mt.z, mt.mx, mt.my };
         CTTileCoord br = { mt.z, mt.mx + 1, mt.my + 1 };
         int max_coord = 1 << mt.z;
@@ -595,6 +586,14 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
             .min_lon = tl_bbox.min_lon,
             .max_lon = br_bbox.max_lon
         };
+
+        /* Add overlap buffer: 25% of one tile = 12.5% of metatile */
+        double area_buf_lon = (mt_bbox.max_lon - mt_bbox.min_lon) * 0.125;
+        double area_buf_lat = (mt_bbox.max_lat - mt_bbox.min_lat) * 0.125;
+        mt_bbox.min_lat -= area_buf_lat;
+        mt_bbox.max_lat += area_buf_lat;
+        mt_bbox.min_lon -= area_buf_lon;
+        mt_bbox.max_lon += area_buf_lon;
 
         uint32_t *candidates = malloc(MT_AREA_MAX_CANDIDATES * sizeof(uint32_t));
         if (candidates) {
@@ -668,43 +667,34 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
         }
     }
 
-    /* ---- 3. Collect and deduplicate named ways, place road labels ---- */
+    /* ---- 3. Query named ways using expanded metatile bbox, place road labels ---- */
     {
         const CTOSMWay **all_ways = NULL;
         size_t all_way_count = 0;
-        size_t way_cap = 0;
 
-        for (int sy = 0; sy < CT_METATILE_SIZE; sy++) {
-            for (int sx = 0; sx < CT_METATILE_SIZE; sx++) {
-                CTTileCoord sub = { mt.z, mt.mx + sx, mt.my + sy };
-                int max_coord = 1 << mt.z;
-                if (sub.x >= max_coord || sub.y >= max_coord) continue;
+        {
+            /* Compute metatile bbox with overlap buffer */
+            CTTileCoord tl = { mt.z, mt.mx, mt.my };
+            CTTileCoord br = { mt.z, mt.mx + CT_METATILE_SIZE - 1,
+                               mt.my + CT_METATILE_SIZE - 1 };
+            int max_coord = 1 << mt.z;
+            if (br.x >= max_coord) br.x = max_coord - 1;
+            if (br.y >= max_coord) br.y = max_coord - 1;
+            CTBBox tl_bbox = ct_tile_bounds(tl);
+            CTBBox br_bbox = ct_tile_bounds(br);
+            CTBBox query_bbox = {
+                .min_lat = br_bbox.min_lat, .max_lat = tl_bbox.max_lat,
+                .min_lon = tl_bbox.min_lon, .max_lon = br_bbox.max_lon
+            };
 
-                const CTOSMWay **ways = NULL;
-                size_t cnt = 0;
-                if (ct_pbf_get_tile_named_ways(pbf, sub, &ways, &cnt) != CT_OK || cnt == 0)
-                    continue;
+            double buf_lon = (query_bbox.max_lon - query_bbox.min_lon) * 0.125;
+            double buf_lat = (query_bbox.max_lat - query_bbox.min_lat) * 0.125;
+            query_bbox.min_lat -= buf_lat;
+            query_bbox.max_lat += buf_lat;
+            query_bbox.min_lon -= buf_lon;
+            query_bbox.max_lon += buf_lon;
 
-                for (size_t i = 0; i < cnt; i++) {
-                    /* Deduplicate by pointer identity */
-                    int dup = 0;
-                    for (size_t j = 0; j < all_way_count; j++) {
-                        if (all_ways[j] == ways[i]) { dup = 1; break; }
-                    }
-                    if (dup) continue;
-
-                    if (all_way_count >= way_cap) {
-                        size_t new_cap = way_cap ? way_cap * 2 : 256;
-                        const CTOSMWay **grown = realloc(all_ways,
-                            new_cap * sizeof(CTOSMWay *));
-                        if (!grown) { free(ways); goto road_cleanup; }
-                        all_ways = grown;
-                        way_cap = new_cap;
-                    }
-                    all_ways[all_way_count++] = ways[i];
-                }
-                free(ways);
-            }
+            ct_pbf_get_bbox_named_ways(pbf, query_bbox, &all_ways, &all_way_count);
         }
 
         if (all_way_count > 0) {
@@ -850,7 +840,6 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
             free(scratch_glyphs);
         }
 
-road_cleanup:
         free(all_ways);
     }
 

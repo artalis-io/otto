@@ -207,6 +207,21 @@ CTStatus ct_pbf_get_tile_labels(const CTPBFContext *ctx, CTTileCoord coord,
                                 const CTLabeledPoint ***points, size_t *count);
 
 /*
+ * Get labeled points within a bounding box, filtered by zoom level.
+ * Unlike ct_pbf_get_tile_labels(), no buffer is added — the caller
+ * controls the exact bbox.
+ *
+ * @param ctx       Parsing context
+ * @param bbox      Geographic bounds to query
+ * @param zoom      Zoom level for min_zoom filtering
+ * @param points    Output: array of pointers to labeled points (caller frees array, not contents)
+ * @param count     Output: number of points
+ * @return CT_OK on success
+ */
+CTStatus ct_pbf_get_bbox_labels(const CTPBFContext *ctx, CTBBox bbox, int zoom,
+                                const CTLabeledPoint ***points, size_t *count);
+
+/*
  * Get the number of labeled points parsed.
  */
 size_t ct_pbf_get_label_count(const CTPBFContext *ctx);
@@ -229,6 +244,20 @@ size_t ct_pbf_get_label_count(const CTPBFContext *ctx);
  * CTOSMWay structures themselves, only the array.
  */
 CTStatus ct_pbf_get_tile_named_ways(const CTPBFContext *ctx, CTTileCoord coord,
+                                     const CTOSMWay ***ways, size_t *count);
+
+/*
+ * Get named highway ways within a bounding box.
+ * Unlike ct_pbf_get_tile_named_ways(), no buffer is added — the caller
+ * controls the exact bbox.
+ *
+ * @param ctx       PBF context with spatial index
+ * @param bbox      Geographic bounds to query
+ * @param ways      Output: array of pointers to named ways (caller frees array)
+ * @param count     Output: number of ways
+ * @return CT_OK on success
+ */
+CTStatus ct_pbf_get_bbox_named_ways(const CTPBFContext *ctx, CTBBox bbox,
                                      const CTOSMWay ***ways, size_t *count);
 
 /* ============================================================================
