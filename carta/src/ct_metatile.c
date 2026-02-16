@@ -500,6 +500,12 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
     size_t road_count = 0;
     size_t road_cap = 0;
 
+    /* Maximum label pixel extent: country/state labels use 1.6x base font,
+     * and long names (~20 chars at ~0.6 advance) can reach this width.
+     * Used for both the query overlap buffer and the "too far outside" check. */
+    int label_margin = (int)(base_size * 1.6f * 20.0f * 0.6f);
+    if (label_margin < 100) label_margin = 100;
+
     /* ---- 1. Query labeled points using expanded metatile bbox ---- */
     const CTLabeledPoint **all_points = NULL;
     size_t all_point_count = 0;
@@ -519,9 +525,11 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
             .min_lon = tl_bbox.min_lon, .max_lon = br_bbox.max_lon
         };
 
-        /* Add overlap buffer: 25% of one tile width = 12.5% of metatile width */
-        double buf_lon = (query_bbox.max_lon - query_bbox.min_lon) * 0.125;
-        double buf_lat = (query_bbox.max_lat - query_bbox.min_lat) * 0.125;
+        /* Overlap buffer sized to max label extent in geographic degrees */
+        double deg_per_px_lon = (query_bbox.max_lon - query_bbox.min_lon) / (double)mt_size;
+        double deg_per_px_lat = (query_bbox.max_lat - query_bbox.min_lat) / (double)mt_size;
+        double buf_lon = (double)label_margin * deg_per_px_lon;
+        double buf_lat = (double)label_margin * deg_per_px_lat;
         query_bbox.min_lat -= buf_lat;
         query_bbox.max_lat += buf_lat;
         query_bbox.min_lon -= buf_lon;
@@ -541,9 +549,9 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
             geo_to_metatile_pixel(mt, tile_size, point->coord.lat, point->coord.lon,
                                   &px, &py);
 
-            /* Skip if too far outside metatile */
-            if (px < -100 || px > mt_size + 100 ||
-                py < -100 || py > mt_size + 100)
+            /* Skip if too far outside metatile (beyond max label extent) */
+            if (px < -label_margin || px > mt_size + label_margin ||
+                py < -label_margin || py > mt_size + label_margin)
                 continue;
 
             /* Adjust font size based on place type */
@@ -587,9 +595,11 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
             .max_lon = br_bbox.max_lon
         };
 
-        /* Add overlap buffer: 25% of one tile = 12.5% of metatile */
-        double area_buf_lon = (mt_bbox.max_lon - mt_bbox.min_lon) * 0.125;
-        double area_buf_lat = (mt_bbox.max_lat - mt_bbox.min_lat) * 0.125;
+        /* Overlap buffer sized to max label extent */
+        double area_deg_per_px_lon = (mt_bbox.max_lon - mt_bbox.min_lon) / (double)mt_size;
+        double area_deg_per_px_lat = (mt_bbox.max_lat - mt_bbox.min_lat) / (double)mt_size;
+        double area_buf_lon = (double)label_margin * area_deg_per_px_lon;
+        double area_buf_lat = (double)label_margin * area_deg_per_px_lat;
         mt_bbox.min_lat -= area_buf_lat;
         mt_bbox.max_lat += area_buf_lat;
         mt_bbox.min_lon -= area_buf_lon;
@@ -687,8 +697,11 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
                 .min_lon = tl_bbox.min_lon, .max_lon = br_bbox.max_lon
             };
 
-            double buf_lon = (query_bbox.max_lon - query_bbox.min_lon) * 0.125;
-            double buf_lat = (query_bbox.max_lat - query_bbox.min_lat) * 0.125;
+            /* Overlap buffer sized to max label extent */
+            double way_deg_per_px_lon = (query_bbox.max_lon - query_bbox.min_lon) / (double)mt_size;
+            double way_deg_per_px_lat = (query_bbox.max_lat - query_bbox.min_lat) / (double)mt_size;
+            double buf_lon = (double)label_margin * way_deg_per_px_lon;
+            double buf_lat = (double)label_margin * way_deg_per_px_lat;
             query_bbox.min_lat -= buf_lat;
             query_bbox.max_lat += buf_lat;
             query_bbox.min_lon -= buf_lon;
@@ -905,6 +918,7 @@ void ct_metatile_extract_subtile(
         /* Check if label bbox intersects sub-tile */
         int lx2 = lp->x + lp->width;
         int ly2 = lp->y + lp->height;
+
         if (lx2 < ox || lp->x >= ox + tile_size ||
             ly2 < oy || lp->y >= oy + tile_size)
             continue;
