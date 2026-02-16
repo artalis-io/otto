@@ -4810,6 +4810,221 @@ void test_dual_phase1_free_vars(void) {
 }
 
 /* ============================================================================
+ * Test: Re-optimization (modify RHS/bounds, confirm dual warm-start)
+ *
+ * Tests that after modifying RHS or bounds, the solver produces correct
+ * results. With all-<= constraints and method=2, dual simplex handles
+ * the re-solve without Phase I (basis is naturally dual-feasible).
+ *
+ * Scenario 1: Tighten RHS → old solution infeasible, dual resolves
+ * Scenario 2: Loosen RHS → old solution still feasible, adjust optimum
+ * Scenario 3: Tighten variable bound → primal change only
+ * ============================================================================ */
+void test_reoptimization_rhs_bounds(void) {
+    printf("\n=== Test: Re-optimization (RHS/Bounds, Dual Warm-Start) ===\n");
+
+    /* Base LP: min -2x - 3y
+     * s.t. x + y  <= 10
+     *      x + 2y <= 14
+     *      x <= 8
+     *      x, y >= 0
+     *
+     * Optimal: x=6, y=4, obj=-24
+     */
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Model created");
+
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, -2.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(model, 0.0, RALPH_INFINITY, -3.0, RALPH_CONTINUOUS);  /* y */
+
+    int idx[] = {0, 1};
+    double v1[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx, v1, RALPH_LESS_EQUAL, 10.0);
+    double v2[] = {1.0, 2.0};
+    ralph_add_constraint(model, 2, idx, v2, RALPH_LESS_EQUAL, 14.0);
+    int idx_x[] = {0};
+    double v3[] = {1.0};
+    ralph_add_constraint(model, 1, idx_x, v3, RALPH_LESS_EQUAL, 8.0);
+
+    /* Solve with method=2 (auto: dual first, fallback to primal) */
+    ralph_set_int_param(model, "method", 2);
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Initial solve: OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), -24.0, TOLERANCE, "Initial solve: obj=-24");
+    int iters_initial = ralph_get_iterations(model);
+    printf("  INFO: Initial solve took %d iterations\n", iters_initial);
+
+    /* --- Scenario 1: Tighten RHS ---
+     * Change x + y <= 10 to x + y <= 6
+     * New optimal: x=6, y=0, obj=-12... wait let me recalculate.
+     * With x+y<=6, x+2y<=14, x<=8:
+     * x=6, y=0 → check: 6+0=6<=6 ok, 6+0=6<=14 ok, 6<=8 ok, obj=-12
+     * But y could increase: x=6,y=0 → try y=4: x+y=10>6, no.
+     * Actually: maximize 2x+3y s.t. x+y<=6, x+2y<=14, x<=8
+     * At (6,0): obj=12. At (0,6): obj=18 but x+2y=12<=14, ok.
+     * At (0,6): x+y=6, ok. obj=18.
+     * But can we do better? y=7: x+2y=14, x=0 → x+y=7>6, no.
+     * Vertex: x+y=6 and x+2y=14 → y=8, x=-2 → infeasible.
+     * Vertex: x+y=6 and y axis: x=0,y=6 → obj=-18.
+     * min -2x-3y at (0,6) = -18.
+     */
+    ralph_set_constraint_rhs(model, 0, 6.0);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Tighten RHS: OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), -18.0, TOLERANCE, "Tighten RHS: obj=-18");
+    int iters_tighten = ralph_get_iterations(model);
+    printf("  INFO: Tighten RHS re-solve took %d iterations\n", iters_tighten);
+
+    /* --- Scenario 2: Loosen RHS back ---
+     * Restore x + y <= 10, also loosen x + 2y <= 20
+     * With x+y<=10, x+2y<=20, x<=8:
+     * At (0,10): obj=-30, check x+2y=20<=20 ok, x+y=10 ok.
+     * At (8,2): obj=-22. (0,10) is better.
+     * min -2x-3y at (0,10) = -30.
+     */
+    ralph_set_constraint_rhs(model, 0, 10.0);
+    ralph_set_constraint_rhs(model, 1, 20.0);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Loosen RHS: OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), -30.0, TOLERANCE, "Loosen RHS: obj=-30");
+    int iters_loosen = ralph_get_iterations(model);
+    printf("  INFO: Loosen RHS re-solve took %d iterations\n", iters_loosen);
+
+    /* --- Scenario 3: Tighten variable bound ---
+     * Set x <= 2 (upper bound)
+     * With x+y<=10, x+2y<=20, x<=2:
+     * At (2,8): obj=-4-24=-28. At (0,10): obj=-30, but x<=2 ok.
+     * (0,10): x+y=10, x+2y=20, x=0<=2. obj=-30. Still optimal.
+     */
+    ralph_set_var_bounds(model, 0, 0.0, 2.0);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Tighten bound: OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), -30.0, TOLERANCE, "Tighten bound: obj=-30");
+
+    /* Tighten further: x <= 0 AND y <= 5
+     * With x+y<=10, x+2y<=20, x=0, y<=5:
+     * At (0,5): obj=-15.
+     */
+    ralph_set_var_bounds(model, 0, 0.0, 0.0);
+    ralph_set_var_bounds(model, 1, 0.0, 5.0);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Tight bounds: OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), -15.0, TOLERANCE, "Tight bounds: obj=-15");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: Re-optimization correctness (dual method on <= problems)
+ *
+ * All-<= LP with method=2. After solving, modify RHS to make current
+ * solution infeasible. Dual simplex should resolve without Phase I since
+ * the initial basis (all slacks) is dual-feasible for <= constraints.
+ * Verifies iteration count is bounded (no Phase I overhead).
+ * ============================================================================ */
+void test_reoptimization_dual_no_phase1(void) {
+    printf("\n=== Test: Re-optimization Dual (No Phase I) ===\n");
+
+    /* Larger LP to make iteration counts meaningful:
+     * min -x1 - 2*x2 - 3*x3
+     * s.t. x1 + x2 + x3  <= 20
+     *      x1 + 2*x2      <= 18
+     *           x2 + 2*x3  <= 16
+     *      x1              <= 10
+     *           x2         <= 10
+     *                x3    <= 10
+     *      x1, x2, x3 >= 0
+     */
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+
+    ralph_add_var(model, 0.0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, -2.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, -3.0, RALPH_CONTINUOUS);
+
+    int idx3[] = {0, 1, 2};
+    double a1[] = {1.0, 1.0, 1.0};
+    ralph_add_constraint(model, 3, idx3, a1, RALPH_LESS_EQUAL, 20.0);
+
+    int idx2a[] = {0, 1};
+    double a2[] = {1.0, 2.0};
+    ralph_add_constraint(model, 2, idx2a, a2, RALPH_LESS_EQUAL, 18.0);
+
+    int idx2b[] = {1, 2};
+    double a3[] = {1.0, 2.0};
+    ralph_add_constraint(model, 2, idx2b, a3, RALPH_LESS_EQUAL, 16.0);
+
+    int idx1a[] = {0};
+    double b1[] = {1.0};
+    ralph_add_constraint(model, 1, idx1a, b1, RALPH_LESS_EQUAL, 10.0);
+
+    int idx1b[] = {1};
+    double b2[] = {1.0};
+    ralph_add_constraint(model, 1, idx1b, b2, RALPH_LESS_EQUAL, 10.0);
+
+    int idx1c[] = {2};
+    double b3[] = {1.0};
+    ralph_add_constraint(model, 1, idx1c, b3, RALPH_LESS_EQUAL, 10.0);
+
+    ralph_set_int_param(model, "method", 2);
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_optimize(model);
+
+    RalphStatus st = ralph_get_status(model);
+    ASSERT(st == RALPH_STATUS_OPTIMAL, "All-<= LP: OPTIMAL");
+    int iters1 = ralph_get_iterations(model);
+    printf("  INFO: Initial solve: %d iterations, obj=%.4f\n",
+           iters1, ralph_get_objval(model));
+
+    /* For a 3-var, 6-constraint all-<= LP, dual simplex should solve
+     * in a small number of iterations (no Phase I needed). */
+    ASSERT(iters1 <= 20, "All-<= LP: reasonable iteration count (no Phase I)");
+
+    /* Tighten RHS significantly: x1 + x2 + x3 <= 5
+     * Forces a very different optimum, tests re-solve correctness. */
+    ralph_set_constraint_rhs(model, 0, 5.0);
+    ralph_optimize(model);
+
+    st = ralph_get_status(model);
+    ASSERT(st == RALPH_STATUS_OPTIMAL, "Tightened RHS: OPTIMAL");
+    int iters2 = ralph_get_iterations(model);
+    printf("  INFO: After tighten: %d iterations, obj=%.4f\n",
+           iters2, ralph_get_objval(model));
+    ASSERT(iters2 <= 20, "Tightened RHS: reasonable iteration count");
+
+    /* Verify solution feasibility */
+    double x[3];
+    ralph_get_solution(model, x);
+    double sum = x[0] + x[1] + x[2];
+    ASSERT(sum <= 5.0 + TOLERANCE, "Tightened: x1+x2+x3 <= 5 satisfied");
+    ASSERT(x[0] >= -TOLERANCE && x[1] >= -TOLERANCE && x[2] >= -TOLERANCE,
+           "Tightened: all vars non-negative");
+
+    /* Make infeasible: all vars >= 0, x1+x2+x3 <= 5 but also
+     * tighten individual bounds to sum > 5 */
+    ralph_set_constraint_rhs(model, 0, 2.0);  /* x1+x2+x3 <= 2 */
+    ralph_set_constraint_rhs(model, 1, 2.0);  /* x1+2*x2 <= 2 */
+    ralph_set_constraint_rhs(model, 2, 2.0);  /* x2+2*x3 <= 2 */
+    ralph_optimize(model);
+
+    st = ralph_get_status(model);
+    ASSERT(st == RALPH_STATUS_OPTIMAL, "Very tight: still OPTIMAL (feasible)");
+    int iters3 = ralph_get_iterations(model);
+    printf("  INFO: Very tight: %d iterations, obj=%.4f\n",
+           iters3, ralph_get_objval(model));
+    ASSERT(iters3 <= 20, "Very tight: reasonable iteration count");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 int main(int argc, char **argv) {
@@ -4949,6 +5164,10 @@ int main(int argc, char **argv) {
     test_dual_method_obj_limit();
     test_dual_method_no_regression();
     test_dual_phase1_free_vars();
+
+    /* Re-optimization tests (Section 5: modify RHS/bounds, confirm no Phase I) */
+    test_reoptimization_rhs_bounds();
+    test_reoptimization_dual_no_phase1();
 
     /* API Tests */
     test_api_functions();
