@@ -1061,7 +1061,10 @@ static CTStatus parse_dense_nodes(CTPBFContext *ctx, const uint8_t *data, size_t
 
     if (ctx->nodes.count + count > ctx->nodes.capacity) {
         size_t new_cap = ctx->nodes.capacity ? ctx->nodes.capacity * 2 : 100000;
-        while (new_cap < ctx->nodes.count + count) new_cap *= 2;
+        while (new_cap < ctx->nodes.count + count) {
+            if (new_cap > SIZE_MAX / 2) { goto error; }
+            new_cap *= 2;
+        }
 
         /* Realloc one at a time to avoid dangling pointer on partial failure */
         int64_t *new_ids = realloc(ctx->nodes.ids, new_cap * sizeof(int64_t));
@@ -2553,7 +2556,7 @@ CTStatus ct_pbf_get_tile_features_lod(const CTPBFContext *ctx, CTTileCoord coord
  * Labeled Points API
  * ============================================================================ */
 
-CTStatus ct_pbf_get_tile_labels(const CTPBFContext *ctx, CTTileCoord coord,
+CTStatus ct_pbf_get_bbox_labels(const CTPBFContext *ctx, CTBBox bbox, int zoom,
                                 const CTLabeledPoint ***points, size_t *count)
 {
     if (!ctx || !points || !count) {
@@ -2569,16 +2572,6 @@ CTStatus ct_pbf_get_tile_labels(const CTPBFContext *ctx, CTTileCoord coord,
         return CT_OK;
     }
 
-    /* Get tile bounding box with buffer for labels near edges */
-    CTBBox bbox = ct_tile_bounds(coord);
-
-    /* Add small buffer (~500m at equator) for labels near tile edges */
-    double buffer = 0.005;  /* ~500m at equator */
-    bbox.min_lat -= buffer;
-    bbox.max_lat += buffer;
-    bbox.min_lon -= buffer;
-    bbox.max_lon += buffer;
-
     /* Allocate result array (worst case: all points) */
     const CTLabeledPoint **result = malloc(ctx->num_labeled_points * sizeof(CTLabeledPoint *));
     if (!result) {
@@ -2592,7 +2585,7 @@ CTStatus ct_pbf_get_tile_labels(const CTPBFContext *ctx, CTTileCoord coord,
         const CTLabeledPoint *pt = &ctx->labeled_points[i];
 
         /* Filter by zoom level */
-        if (coord.z < pt->min_zoom) {
+        if (zoom < pt->min_zoom) {
             continue;
         }
 
@@ -2622,6 +2615,27 @@ CTStatus ct_pbf_get_tile_labels(const CTPBFContext *ctx, CTTileCoord coord,
     return CT_OK;
 }
 
+CTStatus ct_pbf_get_tile_labels(const CTPBFContext *ctx, CTTileCoord coord,
+                                const CTLabeledPoint ***points, size_t *count)
+{
+    if (!ctx || !points || !count) {
+        if (points) *points = NULL;
+        if (count) *count = 0;
+        return CT_ERROR_INVALID_ARGUMENT;
+    }
+
+    /* Compute tile bbox with 25% buffer */
+    CTBBox bbox = ct_tile_bounds(coord);
+    double buf_lon = (bbox.max_lon - bbox.min_lon) * 0.25;
+    double buf_lat = (bbox.max_lat - bbox.min_lat) * 0.25;
+    bbox.min_lat -= buf_lat;
+    bbox.max_lat += buf_lat;
+    bbox.min_lon -= buf_lon;
+    bbox.max_lon += buf_lon;
+
+    return ct_pbf_get_bbox_labels(ctx, bbox, coord.z, points, count);
+}
+
 size_t ct_pbf_get_label_count(const CTPBFContext *ctx)
 {
     return ctx ? ctx->num_labeled_points : 0;
@@ -2631,7 +2645,7 @@ size_t ct_pbf_get_label_count(const CTPBFContext *ctx)
  * Named Ways (for road/area labels)
  * ============================================================================ */
 
-CTStatus ct_pbf_get_tile_named_ways(const CTPBFContext *ctx, CTTileCoord coord,
+CTStatus ct_pbf_get_bbox_named_ways(const CTPBFContext *ctx, CTBBox bbox,
                                      const CTOSMWay ***ways, size_t *count)
 {
     if (!ctx || !ways || !count) {
@@ -2646,8 +2660,6 @@ CTStatus ct_pbf_get_tile_named_ways(const CTPBFContext *ctx, CTTileCoord coord,
     if (ctx->num_ways == 0) {
         return CT_OK;
     }
-
-    CTBBox bbox = ct_tile_bounds(coord);
 
     /* Allocate result array */
     size_t capacity = 256;
@@ -2736,4 +2748,25 @@ CTStatus ct_pbf_get_tile_named_ways(const CTPBFContext *ctx, CTTileCoord coord,
     *count = result_count;
 
     return CT_OK;
+}
+
+CTStatus ct_pbf_get_tile_named_ways(const CTPBFContext *ctx, CTTileCoord coord,
+                                     const CTOSMWay ***ways, size_t *count)
+{
+    if (!ctx || !ways || !count) {
+        if (ways) *ways = NULL;
+        if (count) *count = 0;
+        return CT_ERROR_INVALID_ARGUMENT;
+    }
+
+    /* Compute tile bbox with 25% buffer */
+    CTBBox bbox = ct_tile_bounds(coord);
+    double buf_lon = (bbox.max_lon - bbox.min_lon) * 0.25;
+    double buf_lat = (bbox.max_lat - bbox.min_lat) * 0.25;
+    bbox.min_lat -= buf_lat;
+    bbox.max_lat += buf_lat;
+    bbox.min_lon -= buf_lon;
+    bbox.max_lon += buf_lon;
+
+    return ct_pbf_get_bbox_named_ways(ctx, bbox, ways, count);
 }

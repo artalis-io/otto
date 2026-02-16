@@ -80,6 +80,7 @@ typedef struct {
     LODPreset lod_preset;       /* LOD filtering preset */
     RenderPreset render_preset; /* Render quality preset */
     int render_workers;         /* Number of render worker threads (0 = auto) */
+    size_t metatile_cache_size; /* Metatile label cache entries (0 = disabled) */
 } TileServerConfig;
 
 /* Default configuration */
@@ -565,9 +566,11 @@ static void init_carta_defaults(TileServerConfig *cfg) {
     cfg->max_zoom = 18;
     cfg->tile_size = 512;
     strncpy(cfg->name, "Carta Tile Server", sizeof(cfg->name) - 1);
+    cfg->name[sizeof(cfg->name) - 1] = '\0';
     cfg->lod_preset = LOD_DEFAULT;
     cfg->render_preset = RENDER_PRESET_DEFAULT;
     cfg->render_workers = 0;  /* Auto-detect */
+    cfg->metatile_cache_size = CT_METATILE_CACHE_DEFAULT;
 }
 
 /* Load Carta-specific environment variables */
@@ -604,6 +607,9 @@ static void load_carta_env(TileServerConfig *cfg) {
     }
     if ((val = getenv("CARTA_RENDER_WORKERS"))) {
         cfg->render_workers = sh_parse_int(val, cfg->render_workers, 0, 256);
+    }
+    if ((val = getenv("CARTA_METATILE_CACHE"))) {
+        cfg->metatile_cache_size = (size_t)sh_parse_int(val, (int)cfg->metatile_cache_size, 0, 100000);
     }
 
     /* CORS configuration */
@@ -1123,7 +1129,8 @@ static void handle_ascii_tile(struct mg_connection *c, struct mg_http_message *h
     }
 
     ct_render_clear(render_ctx);
-    ct_render_from_pbf(render_ctx, s_pbf_ctx, coord);
+    ct_render_from_pbf_mt(render_ctx, s_pbf_ctx, coord,
+                           ct_api_get_metatile_cache(s_api_ctx));
 
     const uint8_t *pixels = ct_render_pixels(render_ctx);
 
@@ -1239,10 +1246,12 @@ static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
     ct_render_set_options(render, &s_render_opts);
 
     ct_render_clear(render);
+    CTMetatileLabelCache *mt_cache = ct_api_get_metatile_cache(s_api_ctx);
     if (s_config.lod_preset != LOD_NONE) {
-        ct_render_from_pbf_lod(render, s_pbf_ctx, coord, &s_lod_config);
+        ct_render_from_pbf_lod_mt(render, s_pbf_ctx, coord, &s_lod_config,
+                                   mt_cache);
     } else {
-        ct_render_from_pbf(render, s_pbf_ctx, coord);
+        ct_render_from_pbf_mt(render, s_pbf_ctx, coord, mt_cache);
     }
 
     size_t capacity = ct_png_max_size(s_config.tile_size, s_config.tile_size);
@@ -1634,6 +1643,7 @@ int main(int argc, char *argv[]) {
         api_config.tile_size = s_config.tile_size;
         api_config.enable_lod = (s_config.lod_preset != LOD_NONE);
         api_config.name = s_config.name;
+        api_config.metatile_cache_size = s_config.metatile_cache_size;
 
         s_api_ctx = ct_api_create_from_pbf(s_pbf_ctx, &api_config);
         if (!s_api_ctx) {
@@ -1651,6 +1661,13 @@ int main(int argc, char *argv[]) {
 
         /* Apply render options */
         ct_api_set_render_opts(s_api_ctx, &s_render_opts);
+
+        if (ct_api_get_metatile_cache(s_api_ctx)) {
+            printf("Metatile labels: %zu-entry cache\n",
+                   s_config.metatile_cache_size);
+        } else {
+            printf("Metatile labels: disabled\n");
+        }
     }
 
     /* Initialize tile caches (256MB each by default) */

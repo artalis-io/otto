@@ -29,6 +29,7 @@ SHARED_SRC = ../../shared/src/sh_geo.c \
              ../../shared/src/sh_pool.c \
              ../../shared/src/sh_hashmap.c \
              ../../shared/src/sh_heap.c \
+             ../../shared/src/sh_pqueue.c \
              ../../shared/src/sh_spatial_grid.c \
              ../../shared/src/sh_query.c \
              ../../shared/src/sh_args.c
