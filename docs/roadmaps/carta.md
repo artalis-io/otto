@@ -12,8 +12,9 @@ Comprehensive development plan for the Carta map tile generator covering perform
 | **Memory Optimization** | ✅ Complete | Reusable buffers, context pooling |
 | **LOD Rules** | ✅ Complete | OSM-like zoom rules |
 | **Point Labels** | ✅ Complete | Cities, towns, POIs |
-| **Road Labels** | ❌ TODO | Text along paths |
-| **Area Labels** | ❌ TODO | Lakes, parks |
+| **Road Labels** | ✅ Complete | Text along paths |
+| **Area Labels** | ✅ Complete | Lakes, parks |
+| **Metatile Label Cache** | ✅ Complete | Cross-tile label consistency |
 | **MVT Labels** | ❌ TODO | Vector tile label layer |
 | **Continental Sharding** | ❌ TODO | Multi-region tile serving |
 
@@ -243,7 +244,7 @@ typedef struct {
 - Priority by place type and population
 - Font size scaled by place type
 
-### 4.4 Road Labels (❌ TODO)
+### 4.4 Road Labels (✅ Complete)
 
 **Goal**: Road names rendered along path geometry.
 
@@ -277,7 +278,7 @@ void ct_render_text_path(CTRenderContext *ctx,
                          float halo_width);
 ```
 
-### 4.5 Area Labels (❌ TODO)
+### 4.5 Area Labels (✅ Complete)
 
 **Goal**: Lake, park, and forest names centered in polygons.
 
@@ -315,6 +316,31 @@ Add `labels` layer to MVT output for client-side rendering:
 | Motorway | 50 | 8 | 10 |
 | Primary Road | 45 | 12 | 10 |
 | Residential | 20 | 16 | 8 |
+
+### 4.8 Metatile Label Caching (✅ Complete)
+
+Labels placed independently per tile can appear/disappear at tile boundaries. Metatile caching solves this by placing labels across 2x2 tile groups using a shared collision grid, then caching the result. Sub-tiles extract their portion from the cached metatile.
+
+```c
+/* Compute labels across a 2x2 metatile group */
+CTMetatileLabelResult *ct_metatile_compute_labels(
+    const CTPBFContext *pbf, CTMetatileCoord mt, int tile_size);
+
+/* Extract labels for a single sub-tile from the cached result */
+void ct_metatile_extract_subtile(
+    const CTMetatileLabelResult *result,
+    int sx, int sy,
+    CTLabelPlacer *placer,
+    CTRoadLabelPlacement **out_roads, size_t *out_road_count);
+```
+
+**Key files**: `ct_metatile.h`, `ct_metatile.c`
+
+**Design**:
+- Thread-safe cache with `pthread_rwlock` and LRU eviction
+- Default capacity: 4096 metatile entries
+- Refcounted results for safe eviction while in use
+- Covers point labels, area labels, and road labels
 
 ---
 
@@ -387,12 +413,13 @@ Generate tiles at z10, z12, z14, z16 and compare with OSM for:
 6. ✅ Point label placement
 7. ✅ Collision detection
 8. ✅ Text rendering with halo
+9. ✅ Road labels (text along paths)
+10. ✅ Area labels (lakes, parks)
+11. ✅ Metatile label caching (cross-tile consistency)
 
 ### Next Up
 
-1. Road labels (text along paths)
-2. Area labels (lakes, parks)
-3. MVT label layer
+1. MVT label layer
 
 ### Future
 
@@ -577,12 +604,14 @@ carta/
 │   ├── ct_rtree.h         # R-Tree spatial index
 │   ├── ct_cache.h         # Tile cache
 │   ├── ct_label.h         # Label placement API
-│   └── ct_collision.h     # Collision detection
+│   ├── ct_collision.h     # Collision detection
+│   └── ct_metatile.h      # Metatile label cache API
 ├── src/
 │   ├── ct_rtree.c         # R-Tree implementation
 │   ├── ct_cache.c         # LRU cache
 │   ├── ct_label.c         # Label placement
 │   ├── ct_collision.c     # Collision grid
+│   ├── ct_metatile.c      # Metatile label cache
 │   ├── ct_clip.c          # Geometry clipping
 │   ├── ct_simplify.c      # Douglas-Peucker
 │   └── ct_render.c        # PNG rendering

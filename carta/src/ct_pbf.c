@@ -2572,12 +2572,15 @@ CTStatus ct_pbf_get_tile_labels(const CTPBFContext *ctx, CTTileCoord coord,
     /* Get tile bounding box with buffer for labels near edges */
     CTBBox bbox = ct_tile_bounds(coord);
 
-    /* Add small buffer (~500m at equator) for labels near tile edges */
-    double buffer = 0.005;  /* ~500m at equator */
-    bbox.min_lat -= buffer;
-    bbox.max_lat += buffer;
-    bbox.min_lon -= buffer;
-    bbox.max_lon += buffer;
+    /* Zoom-adaptive buffer: 25% of tile width so adjacent tiles see
+     * labels near boundaries.  Replaces fixed 500m buffer that was
+     * too large at high zoom and too small at low zoom. */
+    double buf_lon = (bbox.max_lon - bbox.min_lon) * 0.25;
+    double buf_lat = (bbox.max_lat - bbox.min_lat) * 0.25;
+    bbox.min_lat -= buf_lat;
+    bbox.max_lat += buf_lat;
+    bbox.min_lon -= buf_lon;
+    bbox.max_lon += buf_lon;
 
     /* Allocate result array (worst case: all points) */
     const CTLabeledPoint **result = malloc(ctx->num_labeled_points * sizeof(CTLabeledPoint *));
@@ -2648,6 +2651,15 @@ CTStatus ct_pbf_get_tile_named_ways(const CTPBFContext *ctx, CTTileCoord coord,
     }
 
     CTBBox bbox = ct_tile_bounds(coord);
+
+    /* Zoom-adaptive buffer: 25% of tile width so adjacent tiles see
+     * roads near boundaries (matches label point buffer). */
+    double way_buf_lon = (bbox.max_lon - bbox.min_lon) * 0.25;
+    double way_buf_lat = (bbox.max_lat - bbox.min_lat) * 0.25;
+    bbox.min_lat -= way_buf_lat;
+    bbox.max_lat += way_buf_lat;
+    bbox.min_lon -= way_buf_lon;
+    bbox.max_lon += way_buf_lon;
 
     /* Allocate result array */
     size_t capacity = 256;

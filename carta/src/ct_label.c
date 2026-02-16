@@ -147,16 +147,12 @@ void ct_label_geo_to_pixel(CTTileCoord coord,
 {
     if (!px || !py) return;
 
-    /* Get tile bounds */
-    CTBBox bbox = ct_tile_bounds(coord);
-
-    /* Calculate relative position within tile [0, 1] */
-    double rel_x = (lon - bbox.min_lon) / (bbox.max_lon - bbox.min_lon);
-    double rel_y = (bbox.max_lat - lat) / (bbox.max_lat - bbox.min_lat);  /* Y is inverted */
-
-    /* Convert to pixels */
-    *px = (int)(rel_x * tile_size);
-    *py = (int)(rel_y * tile_size);
+    /* Use Mercator projection (consistent with road label placement) */
+    double n = (double)(1 << coord.z);
+    *px = (int)((lon + 180.0) / 360.0 * n * tile_size - (double)coord.x * tile_size);
+    double lat_rad = lat * M_PI / 180.0;
+    double merc_y = log(tan(lat_rad) + 1.0 / cos(lat_rad));
+    *py = (int)((1.0 - merc_y / M_PI) / 2.0 * n * tile_size - (double)coord.y * tile_size);
 }
 
 /* ============================================================================
@@ -203,6 +199,7 @@ static int add_placement(CTLabelPlacer *placer,
 
     CTLabelPlacement *p = &placer->placements[placer->num_placements++];
     p->point = point;
+    p->name = point ? point->name : NULL;
     p->x = x;
     p->y = y;
     p->width = width;
@@ -888,6 +885,12 @@ int ct_label_place_areas(CTLabelPlacer *placer,
         area_point.priority = 5;
 
         if (ct_label_place_single(placer, &area_point, px, py, font, area_size)) {
+            /* area_point is stack-allocated, so clear the point pointer
+             * and keep the name for rendering.  The name string is owned
+             * by the multipolygon and lives as long as the PBF context. */
+            CTLabelPlacement *last = &placer->placements[placer->num_placements - 1];
+            last->name = mp->name;
+            last->point = NULL;
             placed++;
         }
     }
