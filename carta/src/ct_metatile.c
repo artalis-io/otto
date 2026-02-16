@@ -724,19 +724,6 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
             double merc_lat_scale = -merc_n * tile_size / (2.0 * M_PI);
             double merc_lat_offset = merc_n * tile_size / 2.0 - (double)mt.my * tile_size;
 
-            /* Compute metatile bbox for midpoint dedup */
-            CTTileCoord tl = { mt.z, mt.mx, mt.my };
-            CTTileCoord br = { mt.z, mt.mx + 1, mt.my + 1 };
-            int max_c = 1 << mt.z;
-            if (br.x >= max_c) br.x = max_c - 1;
-            if (br.y >= max_c) br.y = max_c - 1;
-            CTBBox tl_bbox = ct_tile_bounds(tl);
-            CTBBox br_bbox = ct_tile_bounds(br);
-            CTBBox mt_bbox = {
-                .min_lat = br_bbox.min_lat, .max_lat = tl_bbox.max_lat,
-                .min_lon = tl_bbox.min_lon, .max_lon = br_bbox.max_lon
-            };
-
             float *scratch_px = NULL, *scratch_py = NULL;
             size_t scratch_cap = 0;
             CTPathGlyph *scratch_glyphs = NULL;
@@ -748,14 +735,6 @@ CTMetatileLabelResult *ct_metatile_compute_labels(
                 if (road_type < 0 || road_type >= CT_ROAD_TYPE_COUNT) road_type = CT_ROAD_OTHER;
                 if (mt.z < mt_road_label_min_zoom[road_type]) continue;
                 if (way->num_coords < 3) continue;
-
-                /* Midpoint dedup: only label if midpoint is in metatile bbox */
-                int mid = way->num_coords / 2;
-                if (way->coords[mid].lat < mt_bbox.min_lat ||
-                    way->coords[mid].lat > mt_bbox.max_lat ||
-                    way->coords[mid].lon < mt_bbox.min_lon ||
-                    way->coords[mid].lon > mt_bbox.max_lon)
-                    continue;
 
                 if ((size_t)way->num_coords > scratch_cap) {
                     scratch_cap = (size_t)way->num_coords * 2;
