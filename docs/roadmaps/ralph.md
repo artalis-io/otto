@@ -4,45 +4,38 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-16) — Week 1 LP perf: B1-B6 low-hanging fruit (`a67f09f`).
-Removed per-iteration `tableau_compute_solution` in dual (B1), pre-allocated dual pivot
-backup arrays (B2), deleted O(m²) FT spike compaction (B4), approximate DSE init at
-mid-loop refactorization (B5), fixed `verify_solution` to O(nnz) sparse matvec (B6).
-Net -138 LoC. Negligible speedup on tier 0-1 (fixes target dual path + large problems).
-All tests pass (Ralph 359, LAP 358, Netflow 153, FuelWise 123). NETLIB 21/24 fast, 84 problems.
+**Current** (2026-02-16) — Redundant row presolve + Devex robustness (`f58b421`).
+Fixed `presolve_detect_redundant_rows` (equality-only rank, relative pivoting).
+Added REDUNDANT_ROWS to PRESOLVE_SAFE mask (0x310F). Universal two-phase simplex
+(no Big-M, `num_artificial > 0` threshold). All 1169 tests pass (Ralph 359, LAP 358,
+Netflow 153, Detect 194, Presolve 105). NETLIB 20/22 fast pass (beaconfd + lotfi fail).
 
+Previous: `85a5295` — Week 2 Devex fix + Phase 1/2 pricing robustness.
+Previous: `a67f09f` — Week 1 LP perf: B1-B6 low-hanging fruit, net -138 LoC.
 Previous: `5ccab2e` — NETLIB suite extended to 84 problems, full test infrastructure.
-
 Previous: `f80487e` — Phase E perf fix: 500-iter budget + primal cold-start.
-
 Previous: `140a1f2` — Phase E: replace dual_reopt with clean dual simplex in MIP.
 Previous: `7d78375` — Phase D: dual simplex default, 90% SotA.
-
 Previous: `9315fd3` — Strong branching UAF fix + NaN safety + RC fixing + RINS.
-
 Previous: `64f6cdc` — Cut generation normalization fix + pseudocost branching + probing.
-
 Previous: `af158fa` — P5/P6 re-landed with infeasibility guards (208 tests, 60/60 MILP).
-
 Previous: `fc454a7` — c-MIR sign fixes + infeasibility guard (199 tests, 100/100 MILP).
-
 Previous: `b1d0e8c` — Objective cutoff + lightweight presolve with priority remapping.
-
 Previous: `4387869` — HYBRID + PATH B LU reuse (9x milp15, 1.9x milp30).
 
 ## Status Summary (Feb 2026)
 
 | Area | Status | Notes |
 |------|--------|-------|
-| **Revised Simplex** | ✅ Complete | Primal simplex with LU factorization |
-| **LU Factorization** | ✅ Complete | Sparse factorization, eta updates |
-| **Branch & Bound MIP** | ✅ Complete | HYBRID node, dual_simplex_solve_v2 warm-start, reliability branching, cuts, RC fixing, RINS |
-| **Dual Simplex** | ✅ Complete | Bound flipping (P5), dual steepest edge (P6), 213 tests |
+| **Revised Simplex** | ✅ Complete | Primal + dual simplex, two-phase (no Big-M), 5 pricing strategies |
+| **LU Factorization** | ✅ Complete | Sparse Markowitz + FT updates + symbolic/numeric separation (T1.4) |
+| **Branch & Bound MIP** | ✅ Complete | Reliability branching, GMI+cMIR cuts, RC fixing, RINS, pseudocosts |
+| **Dual Simplex** | ✅ Complete | Bound flipping (P5), dual steepest edge (P6), from-scratch + warm-start |
 | **LAP Solver** | ✅ Complete | JVC algorithm, 358 tests |
 | **Network Flow** | ✅ Complete | Network simplex, 153 tests |
-| **Problem Detection** | ✅ Complete | Auto-detect LAP/network structure |
-| **Presolve** | ✅ Phase 3 | 12 techniques, 20-round fixed-point, probing w/ implication propagation (P3) |
-| **NETLIB Suite** | 81% T0-1 | 21/26 fast pass, 84 problems downloaded, full suite integrated |
+| **Problem Detection** | ✅ Complete | Auto-detect LAP/network structure, 194 tests |
+| **Presolve** | ✅ Phase 3 | 14 techniques incl. redundant rows, SCP-specific, 105 tests |
+| **NETLIB Suite** | 91% T0-1 | 20/22 fast pass (beaconfd, lotfi fail), 84 problems |
 | **MIP Infrastructure** | ✅ Complete | Branching, cuts, callbacks, warm start (§6) |
 | **Benders Decomposition** | ✅ Complete | Generic solver, ~1430 LoC, 8 tests (§7) |
 
@@ -1880,17 +1873,23 @@ Based on deep analysis of `simplex.c` (4865 LoC), `dual_simplex.c` (1546 LoC), `
 
 ### 8.1 Current State
 
-**NETLIB Correctness (Tier 0-1, fast):** 21/26 PASS, 3 FAIL, 1 ERROR, 1 SKIP
-**NETLIB Correctness (Tier 2, partial):** 5+ PASS, 3 ERROR, 1 marginal FAIL
+**NETLIB Correctness (Tier 0-1, fast):** 20/22 PASS, 2 ERROR (beaconfd, lotfi)
+**NETLIB Correctness (Tier 2, partial):** 5+ PASS, several ERROR/SKIP
 
-| Problem | Issue | Cause |
-|---------|-------|-------|
-| kb2 | 19% wrong obj | Phase 1 / Big-M too small |
-| recipe | 18% wrong obj | Phase 1 / Big-M too small |
-| scorpion | 0.5% wrong obj | Numerical drift |
-| capri, etamacro, finnis | False infeasible | Phase 1 can't find feasible basis |
-| bore3d | Hangs | Cycling in Phase 1 |
-| forplan | MPS parse error | Integer markers in COLUMNS section |
+Post universal two-phase (no Big-M, `f58b421`): kb2, recipe, scorpion all FIXED.
+
+| Problem | Status | Cause |
+|---------|--------|-------|
+| beaconfd | INFEASIBLE (false) | 57/140 artificials stuck in Phase 1→2 transition; near-singular Phase 2 basis |
+| lotfi | UNBOUNDED (false) | LU instability in Phase 2 after transition; stale Devex weights |
+| bore3d | Timeout | Cycling (likely similar Phase 1→2 transition issue) |
+| capri | Timeout | Phase 1 convergence (many equalities) |
+
+**Root cause (beaconfd/lotfi):** Phase 1→2 transition can't pivot out stuck artificials
+when no non-basic variable has a non-zero tableau coefficient in the stuck row. This creates
+a near-singular Phase 2 basis. Proposed fixes: (a) improve stuck-artificial eviction with
+relaxed pivot tolerance + auxiliary pivots, (b) add refactorize+retry before declaring
+UNBOUNDED, (c) investigate dual simplex path which avoids Phase 1 entirely.
 
 **Performance:** 3-20x slower than GLPK, 30-200x slower than CLP/GLOP.
 
