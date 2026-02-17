@@ -376,8 +376,8 @@ static SolveResult solve_with_glpk(const char *problem_path, double time_limit_s
     int ret = pclose(pipe);
     double end_time = get_time_ms();
 
-    /* Use wall clock if GLPK didn't report time */
-    if (!found_time) {
+    /* Use wall clock if GLPK didn't report time, or reported 0 (0.1s resolution) */
+    if (!found_time || result.time_ms < 0.001) {
         result.time_ms = end_time - start_time;
     }
 
