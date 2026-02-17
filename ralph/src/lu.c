@@ -12,6 +12,7 @@
 #include <math.h>
 #include <limits.h>
 #include "lp.h"
+#include "lu_supernode.h"
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -269,6 +270,10 @@ LUFactorization* lu_create(int m) {
     lu->sym_valid = 0;
     lu->sym_fingerprint = 0;
 
+    /* T2.1: Supernodal LU (default off, opt-in via lu_supernode param) */
+    lu->sn_enabled = 0;
+    lu->sn_symbolic = NULL;
+
     return lu;
 }
 
@@ -313,6 +318,14 @@ void lu_free(LUFactorization *lu) {
 
     /* Free dense workspace (O(m²), not in arena) */
     SAFE_FREE(lu->dense_work);
+
+    /* T2.1: Free cached supernodal symbolic analysis */
+    if (lu->sn_symbolic) {
+        sn_symbolic_free((SNSymbolic *)lu->sn_symbolic);
+        lu->sn_symbolic = NULL;
+    }
+    SAFE_FREE(lu->sn_work);
+    lu->sn_work_capacity = 0;
 
     /* Free arena (frees all fixed-size arrays in one call:
      * perm, perm_inv, col_perm, col_perm_inv, U_diag,

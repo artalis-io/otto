@@ -231,6 +231,14 @@ typedef struct {
     uint64_t sym_fingerprint;    /* FNV-1a hash of basis sparsity pattern */
     /* sym uses ws_is_identity, ws_identity_row, ws_identity_val, ws_col_order, ws_col_order_inv */
 
+    /* Supernodal LU (T2.1) */
+    int sn_enabled;          /* 1 = use supernodal path when k >= SN_MIN_K */
+    void *sn_symbolic;       /* Cached SNSymbolic* (opaque to avoid header dependency) */
+    double *sn_work;         /* Pre-allocated workspace for GEMM blocks */
+    size_t sn_work_capacity; /* Size in doubles */
+    int sn_calls;            /* Number of times supernodal path was attempted */
+    int sn_successes;        /* Number of times supernodal path succeeded */
+
     /* Arena allocator for fixed-size arrays (reduces ~20 mallocs to 1) */
     SHArena *arena;
 } LUFactorization;
@@ -430,6 +438,9 @@ typedef struct {
     /* Dual simplex enhancements */
     int use_dual_bound_flip;    /* 0=off, 1=on (default 1) */
     int use_dual_steepest_edge; /* 0=off, 1=on (default 1) */
+
+    /* Supernodal LU (T2.1) — propagated to LU after tableau creation */
+    int lu_supernode;           /* 0=off, 1=enable */
 
 } SimplexSolver;
 

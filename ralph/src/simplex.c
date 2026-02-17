@@ -4700,6 +4700,8 @@ int simplex_solve(SimplexSolver *solver) {
     tab->use_steepest_edge = (solver->pricing_strategy == 1 || solver->pricing_strategy == 2);
     tab->pricing_strategy = solver->pricing_strategy;
     tab->trace_phase1_enabled = solver->trace_phase1;
+    if (solver->lu_supernode && tab->lu)
+        tab->lu->sn_enabled = 1;
     tab->trace_phase1_iter = -1;
     tab->trace_last_entering = -1;
     tab->trace_last_leaving_pos = -1;
@@ -4893,6 +4895,8 @@ int simplex_solve(SimplexSolver *solver) {
             tab->use_steepest_edge = (solver->pricing_strategy == 1 || solver->pricing_strategy == 2);
             tab->pricing_strategy = solver->pricing_strategy;
             tab->trace_phase1_enabled = solver->trace_phase1;
+            if (solver->lu_supernode && tab->lu)
+                tab->lu->sn_enabled = 1;
 
             if (solver->crash) {
                 crash_triangular(tab, solver->verbose);
