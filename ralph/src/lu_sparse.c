@@ -1800,7 +1800,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     if (lu->sn_enabled && k >= SN_MIN_K) {
         lu->sn_calls++;
         /* Build or reuse symbolic analysis */
-        SNSymbolic *sn_sym = (SNSymbolic *)lu->sn_symbolic;
+        SNSymbolic *sn_sym = lu->sn_symbolic;
         if (!sn_sym || sn_sym->k != k || sn_sym->m != m) {
             /* Invalidate stale cached analysis */
             if (sn_sym) {
@@ -1829,7 +1829,9 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                                   lu->allow_regularization,
                                   lu->max_regularizations, &sn_reg,
                                   L_row, L_col, L_val, &L_nnz,
+                                  lu->coo_capacity,
                                   U_row, U_col, U_val, &U_nnz,
+                                  lu->coo_capacity,
                                   lu->sn_work, lu->sn_work_capacity);
             if (rc == 0) {
                 lu->sn_successes++;
@@ -1900,6 +1902,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                     int a = row_perm[step], b = row_perm[pivot_row];
                     row_perm[step] = b; row_perm[pivot_row] = a;
                     row_pos[b] = step; row_pos[a] = pivot_row;
+                    pivot_row = step; /* Prevent double-swap below */
                 }
                 int piv_orig = row_perm[step];
                 A_struct[piv_orig * k + step] = 1.0;

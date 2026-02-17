@@ -57,11 +57,11 @@ int sn_build_etree(const double *A_struct, int m, int k,
         /* For each row that has a nonzero in column j */
         for (int i = 0; i < m; i++) {
             int orig_row = row_perm[i];
-            if (fabs(A_struct[orig_row * k + j]) <= RALPH_ZERO_TOL) continue;
+            if (fabs(A_struct[(size_t)orig_row * k + j]) <= RALPH_ZERO_TOL) continue;
 
             /* Find the first nonzero column in this row (before j) */
             for (int j2 = 0; j2 < j; j2++) {
-                if (fabs(A_struct[orig_row * k + j2]) <= RALPH_ZERO_TOL) continue;
+                if (fabs(A_struct[(size_t)orig_row * k + j2]) <= RALPH_ZERO_TOL) continue;
 
                 /* j2 has a nonzero in the same row as j, with j2 < j.
                  * Find root of j2's tree using path compression. */
@@ -150,6 +150,7 @@ int sn_etree_postorder(const int *etree_parent, int k, int *postorder) {
                  * This gives right-to-left DFS, which is fine for postorder. */
                 int c = first_child[node];
                 while (c >= 0) {
+                    if (top >= 2 * k) break; /* Safety: stack bounds check */
                     stack[top++] = c;
                     c = next_sibling[c];
                 }
@@ -200,22 +201,15 @@ int sn_detect_supernodes(const double *A_struct, int m, int k,
         return 0;
     }
 
-    /* Build inverse postorder mapping: inv_po[postorder[i]] = i */
-    int *inv_po = (int *)calloc(k, sizeof(int));
-    if (!inv_po) return -1;
-    for (int i = 0; i < k; i++) {
-        inv_po[postorder[i]] = i;
-    }
-
     /* Count nonzeros below diagonal for each column (L-pattern) */
     int *col_nnz_below = (int *)calloc(k, sizeof(int));
-    if (!col_nnz_below) { free(inv_po); return -1; }
+    if (!col_nnz_below) return -1;
 
     for (int j = 0; j < k; j++) {
         int nnz = 0;
         for (int i = j + 1; i < m; i++) {
             int orig_row = row_perm[i];
-            if (fabs(A_struct[orig_row * k + j]) > RALPH_ZERO_TOL) {
+            if (fabs(A_struct[(size_t)orig_row * k + j]) > RALPH_ZERO_TOL) {
                 nnz++;
             }
         }
@@ -224,7 +218,7 @@ int sn_detect_supernodes(const double *A_struct, int m, int k,
 
     /* Allocate maximum possible supernodes (one per column) */
     Supernode *snodes = (Supernode *)calloc(k, sizeof(Supernode));
-    if (!snodes) { free(inv_po); free(col_nnz_below); return -1; }
+    if (!snodes) { free(col_nnz_below); return -1; }
 
     int nsn = 0;
 
@@ -267,7 +261,6 @@ int sn_detect_supernodes(const double *A_struct, int m, int k,
         if (trimmed) snodes = trimmed;
     }
 
-    free(inv_po);
     free(col_nnz_below);
 
     *out = snodes;
@@ -529,16 +522,31 @@ int sn_factorize(double *A_struct, int m, int k,
                  int allow_regularization, int max_regularizations,
                  int *num_regularized,
                  int *L_row, int *L_col, double *L_val, int *L_nnz,
+                 int L_capacity,
                  int *U_row, int *U_col, double *U_val, int *U_nnz,
+                 int U_capacity,
                  double *work, size_t work_capacity) {
     if (!A_struct || !row_perm || !row_pos || !supernodes ||
         !L_row || !L_col || !L_val || !L_nnz ||
-        !U_row || !U_col || !U_val || !U_nnz)
+        !U_row || !U_col || !U_val || !U_nnz ||
+        L_capacity <= 0 || U_capacity <= 0)
         return -1;
 
     *L_nnz = 0;
     *U_nnz = 0;
     if (num_regularized) *num_regularized = 0;
+
+    /* Bounds-check macro for COO array writes */
+    #define SN_EMIT_L(r, c, v) do { \
+        if (*L_nnz >= L_capacity) { free(pivot_indices); return -1; } \
+        L_row[*L_nnz] = (r); L_col[*L_nnz] = (c); L_val[*L_nnz] = (v); \
+        (*L_nnz)++; \
+    } while(0)
+    #define SN_EMIT_U(r, c, v) do { \
+        if (*U_nnz >= U_capacity) { free(pivot_indices); return -1; } \
+        U_row[*U_nnz] = (r); U_col[*U_nnz] = (c); U_val[*U_nnz] = (v); \
+        (*U_nnz)++; \
+    } while(0)
 
     /* Temporary pivot index buffer (max supernode size) */
     int max_sn_size = 0;
@@ -587,7 +595,7 @@ int sn_factorize(double *A_struct, int m, int k,
 
             for (int i = step; i < m; i++) {
                 int orig_row = row_perm[i];
-                double val = fabs(A_struct[orig_row * k + step]);
+                double val = fabs(A_struct[(size_t)orig_row * k + step]);
                 if (val > max_val) {
                     max_val = val;
                     pivot_row = i;
@@ -621,9 +629,10 @@ int sn_factorize(double *A_struct, int m, int k,
                         int a = row_perm[step], b = row_perm[pivot_row];
                         row_perm[step] = b; row_perm[pivot_row] = a;
                         row_pos[b] = step; row_pos[a] = pivot_row;
+                        pivot_row = step; /* Prevent double-swap below */
                     }
                     int piv_orig = row_perm[step];
-                    A_struct[piv_orig * k + step] = 1.0;
+                    A_struct[(size_t)piv_orig * k + step] = 1.0;
                     max_val = 1.0;
                 } else {
                     free(pivot_indices);
@@ -639,46 +648,37 @@ int sn_factorize(double *A_struct, int m, int k,
             }
 
             int piv_orig = row_perm[step];
-            double pivot_val = A_struct[piv_orig * k + step];
+            double pivot_val = A_struct[(size_t)piv_orig * k + step];
 
             /* Store L diagonal */
-            L_row[*L_nnz] = step;
-            L_col[*L_nnz] = step;
-            L_val[*L_nnz] = 1.0;
-            (*L_nnz)++;
+            SN_EMIT_L(step, step, 1.0);
 
             /* Store U row for columns within supernode (step..sn_start+sn_size-1) */
             for (int jj = step; jj < sn_start + sn_size; jj++) {
-                double val = A_struct[piv_orig * k + jj];
+                double val = A_struct[(size_t)piv_orig * k + jj];
                 if (fabs(val) > RALPH_ZERO_TOL || jj == step) {
-                    U_row[*U_nnz] = step;
-                    U_col[*U_nnz] = jj;
-                    U_val[*U_nnz] = val;
-                    (*U_nnz)++;
+                    SN_EMIT_U(step, jj, val);
                 }
             }
 
             /* Compute multipliers and eliminate within supernode columns only */
             for (int i = step + 1; i < m; i++) {
                 int row_orig = row_perm[i];
-                double a_ik = A_struct[row_orig * k + step];
+                double a_ik = A_struct[(size_t)row_orig * k + step];
 
                 if (fabs(a_ik) < RALPH_ZERO_TOL) continue;
 
                 double mult = a_ik / pivot_val;
 
                 /* Store multiplier back in A_struct for GEMM extraction */
-                A_struct[row_orig * k + step] = mult;
+                A_struct[(size_t)row_orig * k + step] = mult;
 
                 /* Store L multiplier */
-                L_row[*L_nnz] = i;
-                L_col[*L_nnz] = step;
-                L_val[*L_nnz] = mult;
-                (*L_nnz)++;
+                SN_EMIT_L(i, step, mult);
 
                 /* Update remaining columns within supernode */
                 for (int jj = step + 1; jj < sn_start + sn_size; jj++) {
-                    A_struct[row_orig * k + jj] -= mult * A_struct[piv_orig * k + jj];
+                    A_struct[(size_t)row_orig * k + jj] -= mult * A_struct[(size_t)piv_orig * k + jj];
                 }
             }
         }
@@ -691,12 +691,9 @@ int sn_factorize(double *A_struct, int m, int k,
             int piv_orig = row_perm[step];
 
             for (int jj = sn_start + sn_size; jj < k; jj++) {
-                double val = A_struct[piv_orig * k + jj];
+                double val = A_struct[(size_t)piv_orig * k + jj];
                 if (fabs(val) > RALPH_ZERO_TOL) {
-                    U_row[*U_nnz] = step;
-                    U_col[*U_nnz] = jj;
-                    U_val[*U_nnz] = val;
-                    (*U_nnz)++;
+                    SN_EMIT_U(step, jj, val);
                 }
             }
         }
@@ -745,7 +742,7 @@ int sn_factorize(double *A_struct, int m, int k,
                 int orig_row = row_perm[sn_start + sn_size + i];
                 for (int j_local = 0; j_local < sn_size; j_local++) {
                     L_block[i * sn_size + j_local] =
-                        A_struct[orig_row * k + (sn_start + j_local)];
+                        A_struct[(size_t)orig_row * k + (sn_start + j_local)];
                 }
             }
 
@@ -754,7 +751,7 @@ int sn_factorize(double *A_struct, int m, int k,
                 int piv_orig = row_perm[sn_start + j_local];
                 for (int jj = 0; jj < trailing_cols; jj++) {
                     U_block[j_local * trailing_cols + jj] =
-                        A_struct[piv_orig * k + (sn_start + sn_size + jj)];
+                        A_struct[(size_t)piv_orig * k + (sn_start + sn_size + jj)];
                 }
             }
 
@@ -763,7 +760,7 @@ int sn_factorize(double *A_struct, int m, int k,
                 int orig_row = row_perm[sn_start + sn_size + i];
                 for (int jj = 0; jj < trailing_cols; jj++) {
                     C_block[i * trailing_cols + jj] =
-                        A_struct[orig_row * k + (sn_start + sn_size + jj)];
+                        A_struct[(size_t)orig_row * k + (sn_start + sn_size + jj)];
                 }
             }
 
@@ -777,7 +774,7 @@ int sn_factorize(double *A_struct, int m, int k,
             for (int i = 0; i < trailing_rows; i++) {
                 int orig_row = row_perm[sn_start + sn_size + i];
                 for (int jj = 0; jj < trailing_cols; jj++) {
-                    A_struct[orig_row * k + (sn_start + sn_size + jj)] =
+                    A_struct[(size_t)orig_row * k + (sn_start + sn_size + jj)] =
                         C_block[i * trailing_cols + jj];
                 }
             }
@@ -787,5 +784,7 @@ int sn_factorize(double *A_struct, int m, int k,
     }
 
     free(pivot_indices);
+    #undef SN_EMIT_L
+    #undef SN_EMIT_U
     return 0;
 }

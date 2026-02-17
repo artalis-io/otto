@@ -28,7 +28,7 @@ typedef struct {
 } Supernode;
 
 /* Symbolic analysis result for supernodal factorization */
-typedef struct {
+typedef struct SNSymbolic_tag {
     int k;                   /* Number of structural columns */
     int m;                   /* Total rows */
     int *etree_parent;       /* [k] elimination tree parent */
@@ -81,6 +81,7 @@ int sn_block_factor(int panel_rows, int block_size,
 /* --- Phase 3: Supernodal numeric factorization --- */
 
 /* Factorize using supernodal method, producing COO L/U entries.
+ * L_capacity/U_capacity: allocated size of COO arrays (bounds-checked).
  * work/work_capacity: pre-allocated workspace (doubles). If NULL or too small,
  * will allocate internally. Caller should pre-size to 3*m*max_sn_size.
  * Returns 0 on success, -1 on failure (falls back to column-by-column GE). */
@@ -91,7 +92,9 @@ int sn_factorize(double *A_struct, int m, int k,
                  int allow_regularization, int max_regularizations,
                  int *num_regularized,
                  int *L_row, int *L_col, double *L_val, int *L_nnz,
+                 int L_capacity,
                  int *U_row, int *U_col, double *U_val, int *U_nnz,
+                 int U_capacity,
                  double *work, size_t work_capacity);
 
 #endif /* RALPH_LU_SUPERNODE_H */
