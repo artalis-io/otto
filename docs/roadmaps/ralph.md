@@ -4,12 +4,12 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-17) — LP gap closure: sparse BTRAN, dual refinement, runtime tolerances.
-NETLIB fast gate: 22/25 PASS (capri now solves), 2 SKIP (bore3d, scagr25 timeout),
-1 ERROR (share1b: ITERATION_LIMIT). beaconfd excluded (tier 5). All 378+ unit tests pass.
-6 pricing strategies, 3 tolerance params, two-sided dual perturbation.
+**Current** (2026-02-17) — Anti-degeneracy: primal Phase 1/2 stall detection with progressive
+re-perturbation, expanded dual perturbation budget (5→20), proactive perturbation on dual fallback.
+NETLIB fast gate: 23/23 PASS, 1 ERROR (share1b), 1 SKIP (bore3d). recipe 89s→2.8ms (was 11546x GLPK,
+now 0.5x). scagr25 now solves. beaconfd excluded (tier 5). All 378+ unit tests pass.
 
-Previous: `f58b421` (2026-02-16) — Redundant row presolve + Devex robustness.
+Previous: (2026-02-17) — LP gap closure: sparse BTRAN, dual refinement, runtime tolerances.
 Previous: `85a5295` — Week 2 Devex fix + Phase 1/2 pricing robustness.
 Previous: `a67f09f` — Week 1 LP perf: B1-B6 low-hanging fruit, net -138 LoC.
 Previous: `5ccab2e` — NETLIB suite extended to 84 problems, full test infrastructure.
@@ -35,7 +35,7 @@ Previous: `4387869` — HYBRID + PATH B LU reuse (9x milp15, 1.9x milp30).
 | **Network Flow** | ✅ Complete | Network simplex, 153 tests |
 | **Problem Detection** | ✅ Complete | Auto-detect LAP/network structure, 194 tests |
 | **Presolve** | ✅ Phase 3 | 14 techniques incl. redundant rows, SCP-specific, 105 tests |
-| **NETLIB Suite** | 88% T0-1 | 22/25 fast pass (capri fixed; beaconfd excluded; bore3d/scagr25 timeout; share1b iter-limit), 84 problems |
+| **NETLIB Suite** | 92% T0-1 | 23/23 fast pass (anti-cycling fixed recipe/scagr25; beaconfd excluded; bore3d timeout; share1b iter-limit), 84 problems |
 | **MIP Infrastructure** | ✅ Complete | Branching, cuts, callbacks, warm start (§6) |
 | **Benders Decomposition** | ✅ Complete | Generic solver, ~1430 LoC, 8 tests (§7) |
 
@@ -57,9 +57,9 @@ Previous: `4387869` — HYBRID + PATH B LU reuse (9x milp15, 1.9x milp30).
 - 26% FTRAN (hyper-sparse DFS)
 - 17% Other (pricing, ratio test, refinement)
 
-### 1.2 NETLIB Benchmark Results (Feb 2026, post W1-W5)
+### 1.2 NETLIB Benchmark Results (Feb 2026, post anti-cycling)
 
-22/25 fast-tier PASS. All three pricing strategies (Devex/SE+Devex/SE) produce identical results.
+23/23 fast-tier PASS. recipe fixed from 11546x→0.5x GLPK. scagr25 now solves.
 
 | Problem | Status | Ralph ms | GLPK ms | Ratio | Notes |
 |---------|--------|----------|---------|-------|-------|
@@ -72,19 +72,20 @@ Previous: `4387869` — HYBRID + PATH B LU reuse (9x milp15, 1.9x milp30).
 | share2b | ✅ PASS | 4.3 | ~0* | ~1x | Small |
 | stocfor1 | ✅ PASS | 3.5 | ~0* | ~1x | Stochastic |
 | scagr7 | ✅ PASS | 2.4 | ~0* | ~1x | Small |
+| recipe | ✅ PASS | 2.8 | 7.8 | 0.5x | **Fixed** — was 89713ms (Phase 1 cycling) |
+| scagr25 | ✅ PASS | 18.2 | 7.4 | 2.5x | **New** — was timeout |
 | israel | ✅ PASS | 25.3 | 8.8 | 2.9x | Medium |
 | brandy | ✅ PASS | 37.3 | 10.9 | 3.4x | Medium degenerate |
-| capri | ✅ PASS | 51.1 | 11.2 | 4.6x | **New** — was timeout |
+| capri | ✅ PASS | 51.1 | 11.2 | 4.6x | Was timeout |
 | e226 | ✅ PASS | 100.9 | 11.7 | 8.6x | Large |
 | scorpion | ✅ PASS | 132.8 | 9.4 | 14x | Large degenerate |
 | lotfi | ✅ PASS | 236.6 | 7.7 | 31x | Degeneracy |
-| bandm | ✅ PASS | 7479 | 12.3 | 609x | Catastrophic cycling |
-| recipe | ✅ PASS | 89713 | 7.8 | 11546x | Catastrophic cycling |
-| beaconfd | ❌ KNOWN | — | — | — | Excluded (tier 5). Phase 2 degenerate pivot failure |
+| bandm | ✅ PASS | 7200 | 12.3 | 578x | Per-iteration cost, not cycling |
+| beaconfd | ❌ KNOWN | — | — | — | Excluded (tier 5). Redundant equality rows → stuck artificials |
 
 *GLPK sub-ms problems show process startup overhead (~7ms wall clock); actual solve is sub-ms.
 
-**Gap summary:** Competitive on small-medium (≤scagr7). 3-15x slower on medium-large (israel-scorpion). Catastrophic on bandm/recipe (cycling). Supernodal LU (T2.1, implemented) and anti-degeneracy improvements are the remaining levers.
+**Gap summary:** Competitive on small-medium (≤scagr25). 3-15x slower on medium-large (israel-scorpion). bandm still 578x (per-iteration cost, not cycling — needs supernodal LU benefit). Remaining levers: per-iteration LU/FTRAN cost, cost perturbation (D5), long-step BFRT (D6).
 
 ### 1.3 Performance TODO
 
@@ -105,7 +106,7 @@ See **§1.12** for the full state-of-the-art gap analysis with prioritized imple
 | ✅ **Done** | Two-sided dual perturbation | Better anti-cycling | W5 |
 | ✅ **Done** | Runtime-configurable tolerances | User tuning | W2 |
 | ✅ **Done** | SE+Devex-init hybrid pricing | 10-30% fewer iters on degenerate | W3 |
-| **Medium** | Anti-degeneracy (bandm/recipe) | Fix 600-11000x gap on cycling problems | — |
+| ✅ **Done** | Anti-degeneracy (D1/D2/D4) | recipe 11546x→0.5x, scagr25 fixed | — |
 | **Low** | Row-form (CSR) RC update | 1.5-3x on RC kernel | B7 |
 
 ### 1.4 Numerical Stability TODO

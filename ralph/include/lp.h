@@ -311,6 +311,12 @@ typedef struct {
     double *primal_saved_ub;    /* Saved upper bounds before perturbation */
     int primal_perturb_active;  /* 1 if perturbation is currently active */
 
+    /* Progressive perturbation scaling (for stall recovery re-perturbation) */
+    double perturb_scale;       /* Multiplier for PERTURB_BASE, default 1.0 */
+
+    /* Positive edge mode: skip weak entering candidates during degeneracy */
+    int positive_edge_mode;     /* 1 = active, skip candidates with |rc| < 10% of max */
+
     /* Partial pricing state */
     int partial_price_pos;  /* Starting position for next partial price scan */
 
@@ -450,6 +456,9 @@ typedef struct {
 
     /* Supernodal LU (T2.1) — propagated to LU after tableau creation */
     int lu_supernode;           /* 0=off, 1=enable */
+
+    /* D4: Flag set when primal runs after dual fallback (known degenerate) */
+    int from_dual_fallback;     /* 1 = arrived from failed dual simplex */
 
 } SimplexSolver;
 

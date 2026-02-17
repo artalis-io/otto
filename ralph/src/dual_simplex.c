@@ -796,6 +796,11 @@ static void apply_bound_perturbation(SimplexTableau *tab) {
         fresh = 1;
     }
 
+    /* Progressive scaling: scale > 1.0 for re-perturbation attempts to break
+     * different cycling patterns. Default perturb_scale = 1.0 (set in tableau_create_ex). */
+    double scale = (tab->perturb_scale > 0.0) ? tab->perturb_scale : 1.0;
+    double base = PERTURB_BASE * scale;
+
     for (int j = 0; j < tab->n; j++) {
         if (fresh) {
             tab->perturb_backup[j] = tab->ub_ext[j];
@@ -804,7 +809,7 @@ static void apply_bound_perturbation(SimplexTableau *tab) {
 
         /* Perturb finite upper bounds (widen interval) */
         if (tab->ub_ext[j] < RALPH_INFINITY / 2) {
-            double eps = PERTURB_BASE * (1.0 + fabs(tab->ub_ext[j]));
+            double eps = base * (1.0 + fabs(tab->ub_ext[j]));
             tab->ub_ext[j] += eps * (1.0 + (j * PERTURB_MULT) % 13);
         }
 
@@ -813,7 +818,7 @@ static void apply_bound_perturbation(SimplexTableau *tab) {
          * Skip for MIP LP relaxations — LB perturbation weakens the relaxation
          * and causes suboptimal branching/cuts. Only apply for pure LP solves. */
         if (!is_mip && tab->lb_ext[j] > -RALPH_INFINITY / 2) {
-            double eps = PERTURB_BASE * (1.0 + fabs(tab->lb_ext[j]));
+            double eps = base * (1.0 + fabs(tab->lb_ext[j]));
             tab->lb_ext[j] -= eps * (1.0 + (j * 11) % 17);
         }
     }
@@ -881,7 +886,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
     int stall_count = 0;
     const int STALL_THRESHOLD = 50;
     int perturb_attempts = 0;
-    const int MAX_PERTURB_ATTEMPTS = 5;
+    const int MAX_PERTURB_ATTEMPTS = 20;
 
     /* Compute primal solution once before entering the main loop.
      * After this, dual_simplex_pivot() maintains x incrementally via
@@ -1143,11 +1148,12 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                 perturb_attempts++;
                 if (perturb_attempts <= MAX_PERTURB_ATTEMPTS) {
                     remove_bound_perturbation(tab);
+                    tab->perturb_scale = 1.0 + 2.0 * perturb_attempts;
                     apply_bound_perturbation(tab);
                     stall_count = 0;
                     if (solver->verbose) {
-                        printf("[dual_v2] Iter %d: stalled, re-perturbing (attempt %d)\n",
-                               iter, perturb_attempts);
+                        printf("[dual_v2] Iter %d: stalled, re-perturbing (attempt %d, scale %.1f)\n",
+                               iter, perturb_attempts, tab->perturb_scale);
                     }
                 } else {
                     /* Exhausted perturbation attempts — FAILED */
