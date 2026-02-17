@@ -116,6 +116,11 @@ typedef struct {
     /* Build state for incremental constraint building (thread-safe) */
     LPModelBuildState *build_state;
 
+    /* W2: Runtime-configurable tolerances (defaults from RALPH_*_TOL) */
+    double feas_tol;            /* Primal/dual feasibility tolerance */
+    double opt_tol;             /* Optimality (reduced cost) tolerance */
+    double pivot_tol;           /* Minimum pivot element threshold */
+
 } LPModel;
 
 /* LU factorization of basis matrix */
@@ -239,6 +244,9 @@ typedef struct {
     int sn_calls;            /* Number of times supernodal path was attempted */
     int sn_successes;        /* Number of times supernodal path succeeded */
 
+    /* W1: Sparse BTRAN readiness flag (set after each refactorization) */
+    int csr_valid;           /* 1 if L/U CSC data is valid for sparse BTRAN reach */
+
     /* Arena allocator for fixed-size arrays (reduces ~20 mallocs to 1) */
     SHArena *arena;
 } LUFactorization;
@@ -295,7 +303,8 @@ typedef struct {
     int flip_count;          /* Number of flips this iteration */
 
     /* Bound perturbation backup (for dual simplex anti-cycling) */
-    double *perturb_backup; /* Original upper bounds before perturbation */
+    double *perturb_backup;    /* Original upper bounds before perturbation */
+    double *perturb_backup_lb; /* Original lower bounds before perturbation (W5) */
 
     /* Primal bound perturbation state (for primal simplex anti-cycling) */
     double *primal_saved_lb;    /* Saved lower bounds before perturbation */
