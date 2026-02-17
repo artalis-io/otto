@@ -357,8 +357,8 @@ static void process_search(GeoWorkItem *item) {
         return;
     }
 
-    item->response_json = sh_json_buf_take(&jb);
     item->response_len = jb.len;
+    item->response_json = sh_json_buf_take(&jb);
     item->status_code = 200;
 }
 
@@ -412,8 +412,8 @@ static void process_autocomplete(GeoWorkItem *item) {
         return;
     }
 
-    item->response_json = sh_json_buf_take(&jb);
     item->response_len = jb.len;
+    item->response_json = sh_json_buf_take(&jb);
     item->status_code = 200;
 }
 
@@ -475,8 +475,8 @@ static void process_reverse(GeoWorkItem *item) {
         return;
     }
 
-    item->response_json = sh_json_buf_take(&jb);
     item->response_len = jb.len;
+    item->response_json = sh_json_buf_take(&jb);
     item->status_code = 200;
 }
 
