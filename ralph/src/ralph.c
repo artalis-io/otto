@@ -1113,7 +1113,7 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
         /* 0=primal simplex, 1=dual simplex, 2=auto */
         model->method = value;
     } else if (STREQ(name, "pricing") || STREQ(name, "Pricing")) {
-        /* 0=Dantzig, 1=Steepest edge, 2=Devex, 3=Partial, 4=Heap */
+        /* 0=Dantzig, 1=SE, 2=Devex, 3=Partial, 4=Heap, 5=SE+Devex-init */
         model->pricing = value;
     } else if (STREQ(name, "detect_special") || STREQ(name, "DetectSpecial")) {
         /* 1=detect LAP/network structure, 0=disable */
@@ -1176,6 +1176,12 @@ int ralph_set_dbl_param(RalphModel *model, const char *name, double value) {
         model->mip_gap = value;
     } else if (STREQ(name, "obj_limit") || STREQ(name, "ObjLimit")) {
         model->objective_limit = value;
+    } else if (STREQ(name, "feas_tol")) {
+        if (value > 0.0) model->lp_model->feas_tol = value;
+    } else if (STREQ(name, "opt_tol")) {
+        if (value > 0.0) model->lp_model->opt_tol = value;
+    } else if (STREQ(name, "pivot_tol")) {
+        if (value > 0.0) model->lp_model->pivot_tol = value;
     } else {
         return -1;  /* Unknown parameter */
     }
@@ -1224,6 +1230,12 @@ int ralph_get_dbl_param(const RalphModel *model, const char *name, double *value
         *value = model->mip_gap;
     } else if (STREQ(name, "obj_limit")) {
         *value = model->objective_limit;
+    } else if (STREQ(name, "feas_tol")) {
+        *value = model->lp_model->feas_tol;
+    } else if (STREQ(name, "opt_tol")) {
+        *value = model->lp_model->opt_tol;
+    } else if (STREQ(name, "pivot_tol")) {
+        *value = model->lp_model->pivot_tol;
     } else {
         return -1;
     }

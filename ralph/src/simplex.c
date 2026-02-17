@@ -427,6 +427,10 @@ static void verify_solution(SimplexSolver *solver) {
 
     if (!x || !A || !model->b || !model->lb || !model->ub) return;
 
+    /* W2: Use runtime tolerances from model (default to compile-time constants) */
+    double feas_tol = model->feas_tol;
+    double opt_tol = model->opt_tol;
+
     double max_primal_infeas = 0.0;
     double max_bound_infeas = 0.0;
     double max_dual_infeas = 0.0;
@@ -475,8 +479,8 @@ static void verify_solution(SimplexSolver *solver) {
         for (int j = 0; j < n; j++) {
             double xj = x[j];
             double rcj = rc[j];  /* Already in user space (obj_sense applied) */
-            int at_lb = fabs(xj - model->lb[j]) < RALPH_FEAS_TOL;
-            int at_ub = fabs(xj - model->ub[j]) < RALPH_FEAS_TOL;
+            int at_lb = fabs(xj - model->lb[j]) < feas_tol;
+            int at_ub = fabs(xj - model->ub[j]) < feas_tol;
 
             /* In user space: minimize → rc >= 0 at lb, rc <= 0 at ub
              *                maximize → rc <= 0 at lb, rc >= 0 at ub
@@ -497,7 +501,7 @@ static void verify_solution(SimplexSolver *solver) {
     /* 4. Complementary slackness: for non-fixed vars, |x - lb| * |rc| should be ~ 0 */
     if (rc) {
         for (int j = 0; j < n; j++) {
-            if (fabs(model->ub[j] - model->lb[j]) < RALPH_FEAS_TOL) continue;
+            if (fabs(model->ub[j] - model->lb[j]) < feas_tol) continue;
             double dist_lb = fabs(x[j] - model->lb[j]);
             double dist_ub = fabs(x[j] - model->ub[j]);
             double min_dist = (dist_lb < dist_ub) ? dist_lb : dist_ub;
@@ -533,12 +537,57 @@ static void verify_solution(SimplexSolver *solver) {
     solver->verify_obj_error = obj_rel_error;
     solver->verify_cond_estimate = cond;
 
-    /* Downgrade to IMPRECISE if any metric exceeds threshold */
+    /* W4: Dual iterative refinement — if dual infeasibility exceeds threshold,
+     * recompute reduced costs from dual variables: rc[j] = c[j] - A^T y[j].
+     * This catches RC drift from accumulated LU update errors without
+     * requiring refactorization. Only fires when verification detects a problem. */
+    if (max_dual_infeas > opt_tol && rc && solver->dual_solution && A) {
+        /* Recompute reduced costs from duals in user space */
+        for (int j = 0; j < n; j++) {
+            double rc_refined = model->c[j];
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                rc_refined -= A->values[p] * solver->dual_solution[A->rowidx[p]];
+            }
+            solver->reduced_costs[j] = rc_refined;
+        }
+
+        /* Re-check dual feasibility with refined reduced costs */
+        max_dual_infeas = 0.0;
+        max_comp_slack = 0.0;
+        for (int j = 0; j < n; j++) {
+            double xj = x[j];
+            double rcj = solver->reduced_costs[j];
+            int at_lb = fabs(xj - model->lb[j]) < feas_tol;
+            int at_ub = fabs(xj - model->ub[j]) < feas_tol;
+
+            double viol = 0.0;
+            if (at_lb && !at_ub) {
+                viol = (model->obj_sense == 1) ? -rcj : rcj;
+            } else if (at_ub && !at_lb) {
+                viol = (model->obj_sense == 1) ? rcj : -rcj;
+            }
+            if (viol > max_dual_infeas) max_dual_infeas = viol;
+
+            if (fabs(model->ub[j] - model->lb[j]) >= feas_tol) {
+                double dist_lb = fabs(xj - model->lb[j]);
+                double dist_ub = fabs(xj - model->ub[j]);
+                double min_dist = (dist_lb < dist_ub) ? dist_lb : dist_ub;
+                double cs = min_dist * fabs(rcj);
+                if (cs > max_comp_slack) max_comp_slack = cs;
+            }
+        }
+
+        /* Update stored metrics */
+        solver->verify_dual_infeas = max_dual_infeas;
+        solver->verify_comp_slack = max_comp_slack;
+    }
+
+    /* Downgrade to IMPRECISE if any metric exceeds threshold (W2: runtime tols) */
     int imprecise = 0;
-    if (max_primal_infeas > 1e-6) imprecise = 1;
-    if (max_bound_infeas > 1e-6) imprecise = 1;
-    if (max_dual_infeas > 1e-6) imprecise = 1;
-    if (obj_rel_error > 1e-6) imprecise = 1;
+    if (max_primal_infeas > feas_tol) imprecise = 1;
+    if (max_bound_infeas > feas_tol) imprecise = 1;
+    if (max_dual_infeas > opt_tol) imprecise = 1;
+    if (obj_rel_error > opt_tol) imprecise = 1;
 
     if (imprecise) {
         solver->status = RALPH_STATUS_IMPRECISE;
@@ -1227,6 +1276,7 @@ void tableau_free(SimplexTableau *tab) {
 
     /* Free perturbation backups (allocated separately during anti-cycling) */
     SAFE_FREE(tab->perturb_backup);
+    SAFE_FREE(tab->perturb_backup_lb);
     SAFE_FREE(tab->primal_saved_lb);
     SAFE_FREE(tab->primal_saved_ub);
 
@@ -2629,7 +2679,7 @@ static int simplex_pivot(SimplexTableau *tab,
             }
         }
     }
-    int use_true_se = (tab->pricing_strategy == 1) || artificials_in_basis;
+    int use_true_se = (tab->pricing_strategy == 1 || tab->pricing_strategy == 5) || artificials_in_basis;
     if (use_true_se && fabs(pivot_sq) > RALPH_ZERO_TOL) {
         lu_solve_transpose(tab->lu, tab->work2, tau_helper);
     }
@@ -4696,8 +4746,9 @@ int simplex_solve(SimplexSolver *solver) {
 
     SimplexTableau *tab = solver->tableau;
 
-    /* Only use steepest edge weights for strategies that need them (1=SE, 2=Devex) */
-    tab->use_steepest_edge = (solver->pricing_strategy == 1 || solver->pricing_strategy == 2);
+    /* Only use steepest edge weights for strategies that need them (1=SE, 2=Devex, 5=SE+Devex-init) */
+    tab->use_steepest_edge = (solver->pricing_strategy == 1 || solver->pricing_strategy == 2
+                              || solver->pricing_strategy == 5);
     tab->pricing_strategy = solver->pricing_strategy;
     tab->trace_phase1_enabled = solver->trace_phase1;
     if (solver->lu_supernode && tab->lu)
@@ -4892,7 +4943,8 @@ int simplex_solve(SimplexSolver *solver) {
                 return -1;
             }
             tab = solver->tableau;
-            tab->use_steepest_edge = (solver->pricing_strategy == 1 || solver->pricing_strategy == 2);
+            tab->use_steepest_edge = (solver->pricing_strategy == 1 || solver->pricing_strategy == 2
+                                      || solver->pricing_strategy == 5);
             tab->pricing_strategy = solver->pricing_strategy;
             tab->trace_phase1_enabled = solver->trace_phase1;
             if (solver->lu_supernode && tab->lu)
@@ -4926,7 +4978,8 @@ int simplex_solve(SimplexSolver *solver) {
     if (solver->phase1_pricing >= 0) {
         solver->pricing_strategy = solver->phase1_pricing;
         tab->pricing_strategy = solver->phase1_pricing;
-        tab->use_steepest_edge = (solver->phase1_pricing == 1 || solver->phase1_pricing == 2);
+        tab->use_steepest_edge = (solver->phase1_pricing == 1 || solver->phase1_pricing == 2
+                                  || solver->phase1_pricing == 5);
     } else if (tab->use_two_phase && (solver->pricing_strategy == 3 || solver->pricing_strategy == 4)) {
         solver->pricing_strategy = 2;  /* Devex for Phase 1 */
         tab->pricing_strategy = 2;

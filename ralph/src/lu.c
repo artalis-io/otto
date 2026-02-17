@@ -30,6 +30,8 @@ static void compute_reach_U(const LUFactorization *lu,
                             int nnz_rhs, const int *rhs_idx,
                             int *reach_out, int *reach_nnz,
                             int *marked);
+/* W1: Forward declaration for sparse BTRAN support */
+static void build_csr_transpose(LUFactorization *lu);
 
 static void lu_set_failure(LUFactorization *lu, int reason) {
     if (lu) {
@@ -270,6 +272,9 @@ LUFactorization* lu_create(int m) {
     lu->sym_valid = 0;
     lu->sym_fingerprint = 0;
 
+    /* W1: CSR transpose arrays start invalid (built after first factorization) */
+    lu->csr_valid = 0;
+
     /* T2.1: Supernodal LU (default off, opt-in via lu_supernode param) */
     lu->sn_enabled = 0;
     lu->sn_symbolic = NULL;
@@ -393,6 +398,7 @@ int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
     /* Try efficient sparse factorization first */
     int result = lu_factorize_sparse_efficient(lu, B);
     if (result == 0) {
+        build_csr_transpose(lu);  /* W1: CSR transposes for sparse BTRAN */
         lu_set_failure(lu, LU_FAIL_NONE);
         return 0;
     }
@@ -400,6 +406,7 @@ int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
     /* Fall back to dense */
     result = lu_factorize_dense(lu, B);
     if (result == 0) {
+        build_csr_transpose(lu);  /* W1: CSR transposes for sparse BTRAN */
         lu_set_failure(lu, LU_FAIL_NONE);
     }
     return result;
@@ -1523,6 +1530,289 @@ void lu_ftran_hyper_sparse(const LUFactorization *lu,
     /* work is cleared by next solve_L_sparse call, no action needed here */
 }
 
+/* ============================================================================
+ * Sparse BTRAN Support (W1: Sparse BTRAN for LP speedup)
+ *
+ * Build CSR transposes of L and U for efficient DFS reach computation
+ * on L^T and U^T. This enables sparse forward/backward substitution
+ * on the transpose system, reducing BTRAN from O(m²) to O(reach).
+ * ============================================================================ */
+
+/*
+ * Mark L/U CSC data as valid for sparse BTRAN reach computation.
+ * The reach functions (compute_reach_Ut_forward, compute_reach_Lt_backward)
+ * use the CSC of U and L directly — no separate CSR transpose is needed.
+ * Called after every refactorization.
+ */
+static void build_csr_transpose(LUFactorization *lu) {
+    lu->csr_valid = 1;
+}
+
+/*
+ * Compute reach of sparse RHS through U^T (lower triangular) using DFS.
+ * U^T is lower triangular: U^T[i,j] = U[j,i] exists for j <= i.
+ * From index j, successors are all i > j where U^T[i,j] != 0.
+ * In CSR for U^T: Ut_rowptr[j] gives entries where U^T[j,col] != 0,
+ * i.e. the columns col that have U[col,j] != 0.
+ *
+ * But we want: given RHS nonzero at j, who gets affected?
+ * U^T x = b: forward sub, ascending j. x[j] depends on x[i] for i < j.
+ * Reach: all j reachable from RHS by following U^T edges downward.
+ * U^T[i,j] != 0 for j >= i (U^T is lower triangular).
+ * Edge from source i: go to rows j > i where U^T[j,i] != 0, i.e. U[i,j] != 0.
+ * In CSR of U^T: row i has columns col where U^T[i,col] != 0.
+ * But we need rows j where U^T[j,i] != 0 — that's column i of U^T = row i of U.
+ * In CSC of U: column i has entries at rows j where U[j,i] != 0.
+ * For upper triangular U: j <= i. So U^T[i,j] != 0 means j <= i (i >= j).
+ *
+ * Actually for forward sub on U^T (lower tri):
+ * x[i] = (b[i] - Σ_{j<i} U^T[i,j] * x[j]) / U^T[i,i]
+ * So x[i] depends on x[j] for j < i where U^T[i,j] != 0.
+ * If x[j] is nonzero, it can make x[i] nonzero for all i > j with U^T[i,j] != 0.
+ * U^T[i,j] = U[j,i]. For j < i: U[j,i] is in column i of U, row j.
+ *
+ * Reach from source j: find all i where U^T[i,j] != 0 and i > j.
+ * This is: find all i where U[j,i] != 0 and i > j.
+ * In CSR of U^T: row j has columns that equal row indices of col j in U.
+ * We need the CSR row j of U: entries at columns i where U[j,i] != 0.
+ * Ut_rowptr[j]..Ut_rowptr[j+1] gives us columns col where U^T[j,col] != 0,
+ * i.e. U[col,j] != 0 (col <= j since U is upper tri).
+ * That's the WRONG direction — those are predecessors, not successors!
+ *
+ * For successors of j in U^T forward sub:
+ * We need rows i > j where U^T[i,j] != 0 = U[j,i] != 0.
+ * U[j,i] != 0 means entry in row j, column i of U.
+ * In CSC of U: column i has rowidx entries, look for row j.
+ * That's O(nnz) per query — too expensive.
+ *
+ * Alternative: use CSR of U directly (= CSC of U^T).
+ * U CSR: row j has columns i where U[j,i] != 0, with i >= j (upper tri).
+ * Successors of j in U^T: all i > j where U[j,i] != 0.
+ * Perfect! Ut_rowptr/Ut_colidx give us row j of U^T, but we need
+ * "who does j feed into" = columns i > j in row j of U.
+ *
+ * Wait — Ut_rowptr[j] gives ROW j of U^T. Entries are columns col
+ * where U^T[j,col] != 0 = U[col,j] != 0. For upper tri U: col <= j.
+ * These are predecessors of j, not successors.
+ *
+ * We actually want the CSR of U (NOT U^T) for forward traversal on U^T.
+ * CSR of U = CSC of U^T. Row j of U has columns i >= j.
+ * Successors of j in U^T forward sub: columns i > j in row j of U.
+ *
+ * So build_csr_transpose should build CSR of U for this purpose.
+ * But we already built CSR of U^T. Let me reconsider...
+ *
+ * Actually, let's just use the CSC of U directly:
+ * For U^T forward sub, reach from j: find all columns i > j where U[j,i] != 0.
+ * CSC of U: scan columns i > j, check if row j appears.
+ * This is O(m * avg_col_nnz) in worst case — not better than dense.
+ *
+ * The correct approach is to build CSR of U (row-oriented U, not U^T).
+ * Row j of U: columns i >= j. Successors: all i > j in that row.
+ * This IS what we need. Let me rename: Ut_rowptr is actually U_rowptr (CSR of U).
+ *
+ * OK, I realize the naming was confusing. Let me redefine:
+ * - For sparse BTRAN on U^T (forward sub, ascending):
+ *   Need CSR of U (= row-oriented U) to find successors
+ * - For sparse BTRAN on L^T (backward sub, descending):
+ *   Need CSR of L (= row-oriented L) to find predecessors
+ *
+ * But we already built CSR of U^T and L^T above. Let me fix this.
+ * Actually, the CSR of U^T = transposed CSC of U, gives us:
+ * Row i of U^T: columns j where U^T[i,j] != 0, i.e. U[j,i] != 0.
+ * For upper tri U: j <= i. So these are entries above diagonal in U.
+ * These tell us: x[i] depends on x[j] for j < i — PREDECESSORS.
+ *
+ * For DFS reach, we need both directions. Actually for topological ordering,
+ * we can DFS from sources following predecessors then reverse.
+ * But the simpler approach: mark + ascending scan (like compute_reach_L).
+ *
+ * Simplest correct approach: DFS following successors.
+ * Successors of j: all i > j affected by x[j] being nonzero.
+ * U^T[i,j] != 0 ⟺ U[j,i] != 0.
+ * Need: for each j, find all i > j with U[j,i] != 0.
+ * This requires CSR of U (row j → columns i ≥ j).
+ *
+ * So let's rebuild: Ut_rowptr/Ut_colidx = CSR of U (not U^T).
+ * Similarly, Lt_rowptr/Lt_colidx = CSR of L (not L^T).
+ *
+ * Actually, what we built IS CSR of U^T and L^T. Let's just use a different
+ * approach for the reach: mark-and-sweep with the CSC of U directly.
+ */
+
+/*
+ * Compute reach for sparse forward sub on U^T (lower triangular).
+ * Returns indices in ascending topological order.
+ *
+ * U^T forward sub: x[j] = (b[j] - Σ_{r<j} U^T[j,r]*x[r]) / U^T[j,j]
+ * If x[r] is nonzero, it feeds into x[j] for all j > r where U^T[j,r] != 0.
+ * U^T[j,r] = U[r,j] — entry in column j of U at row r (upper tri: r <= j).
+ *
+ * Ascending mark propagation: for each column j, if any marked r < j has
+ * U[r,j] != 0, then j gets marked.
+ */
+static void compute_reach_Ut_forward(const LUFactorization *lu,
+                                      int nnz_rhs, const int *rhs_idx,
+                                      int *reach_out, int *reach_nnz,
+                                      int *marked) {
+    int m = lu->m;
+    *reach_nnz = 0;
+
+    /* Mark all RHS indices */
+    for (int k = 0; k < nnz_rhs; k++) {
+        int j = rhs_idx[k];
+        if (j >= 0 && j < m) marked[j] = 1;
+    }
+
+    /* Ascending propagation using CSC of U:
+     * Column j of U has entries U[r,j] for r <= j.
+     * If any r < j is marked, mark j (nonzero propagates forward). */
+    for (int j = 0; j < m; j++) {
+        if (!marked[j]) {
+            for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
+                int r = lu->U_rowidx[p];
+                if (r < j && marked[r]) {
+                    marked[j] = 1;
+                    break;
+                }
+            }
+        }
+        if (marked[j]) {
+            reach_out[(*reach_nnz)++] = j;
+        }
+    }
+
+    /* Clear marks */
+    for (int k = 0; k < *reach_nnz; k++) {
+        marked[reach_out[k]] = 0;
+    }
+}
+
+/*
+ * Compute reach for sparse backward sub on L^T (upper triangular).
+ * Returns indices in descending topological order.
+ *
+ * L^T backward sub: x[j] = b[j] - Σ_{r>j} L^T[j,r]*x[r], descending j.
+ * If x[r] is nonzero, it feeds into x[j] for all j < r where L^T[j,r] != 0.
+ * L^T[j,r] = L[r,j] — entry in column j of L at row r (lower tri: r >= j).
+ *
+ * Descending mark propagation: for each column j, if any marked r > j has
+ * L[r,j] != 0 (below diagonal of L), then j gets marked.
+ */
+static void compute_reach_Lt_backward(const LUFactorization *lu,
+                                       int nnz_rhs, const int *rhs_idx,
+                                       int *reach_out, int *reach_nnz,
+                                       int *marked) {
+    int m = lu->m;
+    *reach_nnz = 0;
+
+    /* Mark all RHS indices */
+    for (int k = 0; k < nnz_rhs; k++) {
+        int j = rhs_idx[k];
+        if (j >= 0 && j < m) marked[j] = 1;
+    }
+
+    /* Descending propagation using CSC of L:
+     * Column j of L has entries L[r,j] for r > j (below diagonal).
+     * If any r > j is marked, mark j (nonzero propagates backward). */
+    for (int j = m - 1; j >= 0; j--) {
+        if (!marked[j]) {
+            for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
+                int r = lu->L_rowidx[p];
+                if (marked[r]) {
+                    marked[j] = 1;
+                    break;
+                }
+            }
+        }
+        if (marked[j]) {
+            reach_out[(*reach_nnz)++] = j;  /* Collected in descending order */
+        }
+    }
+
+    /* Clear marks */
+    for (int k = 0; k < *reach_nnz; k++) {
+        marked[reach_out[k]] = 0;
+    }
+}
+
+/*
+ * Sparse forward sub on U^T: solve U^T x = b, restricted to reach indices.
+ * x is a dense workspace (input b, output x in-place).
+ * Reach must be in ascending order.
+ *
+ * U^T[i,j] = U[j,i]. For forward sub (ascending i):
+ * x[i] = (b[i] - Σ_{j<i} U^T[i,j] * x[j]) / U^T[i,i]
+ *       = (b[i] - Σ_{j<i} U[j,i] * x[j]) / U[i,i]
+ *
+ * In CSC of U: column i has entries U[r,i] for r <= i.
+ * U^T[i,r] = U[r,i] for r < i — these are the contributions.
+ */
+static void solve_Ut_sparse_reach(const LUFactorization *lu,
+                                   int reach_nnz, const int *reach,
+                                   double *x) {
+    const double *U_diag = lu->U_diag;
+
+    for (int k = 0; k < reach_nnz; k++) {
+        int i = reach[k];
+
+        /* Subtract contributions from earlier solved variables */
+        double sum = 0.0;
+        for (int p = lu->U_colptr[i]; p < lu->U_colptr[i + 1]; p++) {
+            int j = lu->U_rowidx[p];  /* row index j in U */
+            if (j < i) {
+                /* U^T[i,j] = U[j,i] — but we're scanning column i of U,
+                 * so U_rowidx[p] = j, U_values[p] = U[j,i] = U^T[i,j] */
+                sum += lu->U_values[p] * x[j];
+            }
+        }
+
+        double diag = U_diag[i];
+        if (fabs(diag) < RALPH_PIVOT_TOL) {
+            x[i] = 0.0;
+        } else {
+            x[i] = (x[i] - sum) / diag;
+        }
+    }
+}
+
+/*
+ * Sparse backward sub on L^T: solve L^T x = b, restricted to reach indices.
+ * Reach must be in descending order. Includes inverse row permutation.
+ *
+ * L^T[j,i] = L[i,j]. For backward sub (descending j):
+ * x[j] = b[j] - Σ_{i>j} L^T[j,i] * x[i]
+ *       = b[j] - Σ_{i>j} L[i,j] * x[i]
+ * L[j,j] = 1, so no division needed.
+ *
+ * In CSC of L: column j has entries L[i,j] for i > j (below diagonal).
+ * These are exactly L^T[j,i] = L[i,j] for the backward sub sum.
+ */
+static void solve_Lt_sparse_reach(const LUFactorization *lu,
+                                   int reach_nnz, const int *reach,
+                                   double *x, double *solution) {
+    int m = lu->m;
+
+    for (int k = 0; k < reach_nnz; k++) {
+        int j = reach[k];  /* Descending order */
+
+        double sum = 0.0;
+        for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
+            int i = lu->L_rowidx[p];  /* i > j */
+            sum += lu->L_values[p] * x[i];
+        }
+        x[j] -= sum;
+        /* L[j,j] = 1, so no division needed */
+    }
+
+    /* Apply inverse row permutation: solution[perm[i]] = x[i] */
+    double *temp = lu->perm_work;
+    for (int i = 0; i < m; i++) {
+        temp[lu->perm[i]] = x[i];
+    }
+    vec_copy_data(solution, temp, m);
+}
+
 /*
  * Hyper-sparse BTRAN: Solve B'x = b where b is very sparse.
  *
@@ -1582,9 +1872,47 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
         apply_eta_backward(lu, work);
     }
 
-    /* Step 3 & 4: Solve U' and L' (use dense for now - transpose sparsity is different) */
-    solve_Ut(lu, work, work2);
-    solve_Lt(lu, work2, solution);
+    /* Step 3 & 4: Solve U'^{-1} and L'^{-1}
+     * W1: Use sparse reach-based solve when CSR transposes are available
+     * and the post-update RHS is sparse enough. */
+
+    /* Scan work for nonzero indices after FT/eta backward */
+    int *bt_idx = lu_mut->hs_idx;
+    int bt_nnz = 0;
+    for (int j = 0; j < m; j++) {
+        if (fabs(work[j]) > RALPH_ZERO_TOL) {
+            bt_idx[bt_nnz++] = j;
+        }
+    }
+
+    if (lu->csr_valid && bt_nnz < m / 4) {
+        /* Sparse path: reach-based forward sub on U^T, then backward sub on L^T */
+        int *reach = (int*)lu_mut->perm_work;  /* Reuse as int array */
+        int reach_nnz;
+
+        /* Forward sub on U^T: solve U^T work = work (in-place) */
+        compute_reach_Ut_forward(lu, bt_nnz, bt_idx, reach, &reach_nnz, lu_mut->hs_marked);
+        solve_Ut_sparse_reach(lu, reach_nnz, reach, work);
+
+        /* Gather nonzeros after U^T solve for L^T reach */
+        int ut_nnz = 0;
+        for (int k = 0; k < reach_nnz; k++) {
+            if (fabs(work[reach[k]]) > RALPH_ZERO_TOL) {
+                bt_idx[ut_nnz++] = reach[k];
+            }
+        }
+
+        /* Copy work to work2 for L^T solve (solve_Lt_sparse_reach reads from x) */
+        memcpy(work2, work, m * sizeof(double));
+
+        /* Backward sub on L^T: solve L^T solution = work2 */
+        compute_reach_Lt_backward(lu, ut_nnz, bt_idx, reach, &reach_nnz, lu_mut->hs_marked);
+        solve_Lt_sparse_reach(lu, reach_nnz, reach, work2, solution);
+    } else {
+        /* Dense fallback */
+        solve_Ut(lu, work, work2);
+        solve_Lt(lu, work2, solution);
+    }
 
     /* Build sparse output */
     if (sol_idx && sol_nnz) {

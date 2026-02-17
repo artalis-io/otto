@@ -780,24 +780,41 @@ int make_dual_feasible(SimplexTableau *tab, int obj_sense) {
 
 static void apply_bound_perturbation(SimplexTableau *tab) {
     /* Allocate backup storage and save original bounds only on FIRST call.
-     * Re-perturbation (for cycling) adds more perturbation to ub_ext but must
+     * Re-perturbation (for cycling) adds more perturbation but must
      * NOT overwrite the backup — remove_bound_perturbation must always restore
      * to the original (unperturbed) bounds. */
+    int is_mip = (tab->model && tab->model->num_integers > 0);
     int fresh = 0;
     if (!tab->perturb_backup) {
         tab->perturb_backup = (double*)calloc(tab->n, sizeof(double));
-        if (!tab->perturb_backup) return;
+        tab->perturb_backup_lb = (double*)calloc(tab->n, sizeof(double));
+        if (!tab->perturb_backup || !tab->perturb_backup_lb) {
+            SAFE_FREE(tab->perturb_backup);
+            SAFE_FREE(tab->perturb_backup_lb);
+            return;
+        }
         fresh = 1;
     }
 
     for (int j = 0; j < tab->n; j++) {
-        if (fresh) tab->perturb_backup[j] = tab->ub_ext[j];
+        if (fresh) {
+            tab->perturb_backup[j] = tab->ub_ext[j];
+            tab->perturb_backup_lb[j] = tab->lb_ext[j];
+        }
 
-        /* Only perturb finite upper bounds */
+        /* Perturb finite upper bounds (widen interval) */
         if (tab->ub_ext[j] < RALPH_INFINITY / 2) {
-            /* Pseudo-random perturbation: eps * (1 + (j*7) mod 13) */
             double eps = PERTURB_BASE * (1.0 + fabs(tab->ub_ext[j]));
             tab->ub_ext[j] += eps * (1.0 + (j * PERTURB_MULT) % 13);
+        }
+
+        /* W5: Perturb finite lower bounds (widen interval, different prime
+         * pattern to avoid correlation with UB perturbation).
+         * Skip for MIP LP relaxations — LB perturbation weakens the relaxation
+         * and causes suboptimal branching/cuts. Only apply for pure LP solves. */
+        if (!is_mip && tab->lb_ext[j] > -RALPH_INFINITY / 2) {
+            double eps = PERTURB_BASE * (1.0 + fabs(tab->lb_ext[j]));
+            tab->lb_ext[j] -= eps * (1.0 + (j * 11) % 17);
         }
     }
 }
@@ -808,9 +825,16 @@ static void remove_bound_perturbation(SimplexTableau *tab) {
     for (int j = 0; j < tab->n; j++) {
         tab->ub_ext[j] = tab->perturb_backup[j];
 
-        /* Snap non-basic variables at upper bound to original bound */
+        /* W5: Restore lower bounds too */
+        if (tab->perturb_backup_lb) {
+            tab->lb_ext[j] = tab->perturb_backup_lb[j];
+        }
+
+        /* Snap non-basic variables to their original bounds */
         if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
             tab->x[j] = tab->perturb_backup[j];
+        } else if (tab->var_status[j] == RALPH_NONBASIC_LOWER && tab->perturb_backup_lb) {
+            tab->x[j] = tab->perturb_backup_lb[j];
         }
     }
 }
@@ -820,10 +844,9 @@ static void remove_bound_perturbation(SimplexTableau *tab) {
  * saves the FIRST bounds to backup — if bounds changed, the backup is stale.
  * Freeing it ensures the next v2 call saves the correct (updated) bounds. */
 void dual_v2_clear_perturbation(SimplexTableau *tab) {
-    if (tab && tab->perturb_backup) {
-        free(tab->perturb_backup);
-        tab->perturb_backup = NULL;
-    }
+    if (!tab) return;
+    SAFE_FREE(tab->perturb_backup);
+    SAFE_FREE(tab->perturb_backup_lb);
 }
 
 /* ============================================================================

@@ -76,6 +76,11 @@ LPModel* lp_model_create(void) {
     model->num_binary = 0;
     model->build_state = NULL;
 
+    /* W2: Initialize runtime tolerances to compile-time defaults */
+    model->feas_tol = RALPH_FEAS_TOL;
+    model->opt_tol = RALPH_OPT_TOL;
+    model->pivot_tol = RALPH_PIVOT_TOL;
+
     return model;
 }
 
