@@ -51,6 +51,7 @@ struct RalphModel {
     int dual_bound_flip;    /* -1=default(on), 0=off, 1=on */
     int dual_steepest_edge; /* -1=default(on), 0=off, 1=on */
     int var_select;         /* -1=default, 0=most_infeas, 1=pseudo_cost, 2=strong, 3=reliability */
+    int lu_supernode;       /* 0=off (default), 1=enable supernodal LU factorization (T2.1) */
 
     /* Solution */
     RalphStatus status;
@@ -532,6 +533,7 @@ int ralph_optimize(RalphModel *model) {
         model->mip_solver->max_cut_rounds = model->max_cut_rounds;
         model->mip_solver->dual_bound_flip = model->dual_bound_flip;
         model->mip_solver->dual_steepest_edge = model->dual_steepest_edge;
+        model->mip_solver->lu_supernode = model->lu_supernode;
 
         /* Set node selection strategy */
         model->mip_solver->node_select = (NodeSelectStrategy)model->node_select;
@@ -651,6 +653,7 @@ int ralph_optimize(RalphModel *model) {
             model->lp_solver->use_dual_bound_flip = model->dual_bound_flip;
         if (model->dual_steepest_edge >= 0)
             model->lp_solver->use_dual_steepest_edge = model->dual_steepest_edge;
+        model->lp_solver->lu_supernode = model->lu_supernode;
 
         /* Solve — method dispatch (primal/dual/auto) is handled inside simplex_solve */
         simplex_solve(model->lp_solver);
@@ -1154,6 +1157,9 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
         /* 0=most_infeasible, 1=pseudo_cost, 2=strong_branch, 3=reliability */
         if (value < 0 || value > 4) return -1;
         model->var_select = value;
+    } else if (STREQ(name, "lu_supernode") || STREQ(name, "LuSupernode")) {
+        /* 0=off, 1=enable supernodal LU factorization (T2.1) */
+        model->lu_supernode = value ? 1 : 0;
     } else {
         return -1;  /* Unknown parameter */
     }

@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <math.h>
 #include "lp.h"
+#include "lu_supernode.h"
 
 /* ============================================================================
  * AMD (Approximate Minimum Degree) Ordering
@@ -1795,6 +1796,64 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
 
     int L_nnz = 0, U_nnz = 0;
 
+    /* T2.1: Try supernodal factorization if enabled and k is large enough */
+    if (lu->sn_enabled && k >= SN_MIN_K) {
+        lu->sn_calls++;
+        /* Build or reuse symbolic analysis */
+        SNSymbolic *sn_sym = (SNSymbolic *)lu->sn_symbolic;
+        if (!sn_sym || sn_sym->k != k || sn_sym->m != m) {
+            /* Invalidate stale cached analysis */
+            if (sn_sym) {
+                sn_symbolic_free(sn_sym);
+                lu->sn_symbolic = NULL;
+            }
+            sn_sym = sn_analyze(A_struct, m, k, row_perm);
+            lu->sn_symbolic = sn_sym;
+        }
+
+        if (sn_sym && sn_sym->num_supernodes > 0) {
+            /* Pre-allocate workspace: 3 * m * max_sn_size covers L+U+C blocks */
+            size_t sn_need = (size_t)3 * m * (sn_sym->max_supernode_size > 0 ?
+                             sn_sym->max_supernode_size : 1);
+            if (!lu->sn_work || lu->sn_work_capacity < sn_need) {
+                free(lu->sn_work);
+                lu->sn_work = (double *)calloc(sn_need, sizeof(double));
+                lu->sn_work_capacity = lu->sn_work ? sn_need : 0;
+            }
+
+            int sn_reg = 0;
+            int rc = sn_factorize(A_struct, m, k, row_perm, row_pos,
+                                  lu->pivot_tol,
+                                  sn_sym->supernodes, sn_sym->num_supernodes,
+                                  lu->redundant_rows, lu->num_redundant,
+                                  lu->allow_regularization,
+                                  lu->max_regularizations, &sn_reg,
+                                  L_row, L_col, L_val, &L_nnz,
+                                  U_row, U_col, U_val, &U_nnz,
+                                  lu->sn_work, lu->sn_work_capacity);
+            if (rc == 0) {
+                lu->sn_successes++;
+                lu->num_regularized = sn_reg;
+                /* Skip column-by-column GE, go straight to identity placement */
+                goto identity_placement;
+            }
+            /* Supernodal failed — reset and fall through to column-by-column */
+            L_nnz = 0;
+            U_nnz = 0;
+            /* Restore row_perm/row_pos to identity (sn_factorize may have modified) */
+            for (int i = 0; i < m; i++) { row_perm[i] = i; row_pos[i] = i; }
+            /* Re-populate A_struct from B (sn_factorize modifies it in-place) */
+            memset(A_struct, 0, (size_t)m * k * sizeof(double));
+            for (int jj = 0; jj < k; jj++) {
+                int j = col_order[jj];
+                for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+                    int row = B->rowidx[p];
+                    A_struct[row * k + jj] = B->values[p];
+                }
+            }
+        }
+    }
+
     /* LU factorization of structural columns with partial pivoting */
     for (int step = 0; step < k; step++) {
         /* Find pivot in column step (rows step..m-1) */
@@ -1899,6 +1958,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
         }
     }
 
+identity_placement:
     /* Handle identity columns (steps k..m-1).
      * Use row_pos[] for O(1) lookup instead of O(n) linear scan. */
     for (int step = k; step < m; step++) {

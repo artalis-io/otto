@@ -29,6 +29,8 @@ static void mip_apply_dual_flags(MIPSolver *solver) {
      * This prevents stall-detection-fooling cycling from burning minutes. */
     if (solver->lp_solver->max_iterations > 500)
         solver->lp_solver->max_iterations = 500;
+    /* T2.1: Propagate supernodal LU flag to LP solver */
+    solver->lp_solver->lu_supernode = solver->lu_supernode;
 }
 
 /* ============================================================================
