@@ -1427,6 +1427,9 @@ int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver) {
             solver->status = RALPH_STATUS_ERROR;
             return -1;
         }
+        /* T2.1: Propagate supernodal LU flag */
+        if (solver->lu_supernode && solver->tableau->lu)
+            solver->tableau->lu->sn_enabled = 1;
     }
 
     SimplexTableau *tab = solver->tableau;

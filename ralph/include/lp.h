@@ -233,7 +233,7 @@ typedef struct {
 
     /* Supernodal LU (T2.1) */
     int sn_enabled;          /* 1 = use supernodal path when k >= SN_MIN_K */
-    void *sn_symbolic;       /* Cached SNSymbolic* (opaque to avoid header dependency) */
+    struct SNSymbolic_tag *sn_symbolic;  /* Cached symbolic analysis (forward decl) */
     double *sn_work;         /* Pre-allocated workspace for GEMM blocks */
     size_t sn_work_capacity; /* Size in doubles */
     int sn_calls;            /* Number of times supernodal path was attempted */

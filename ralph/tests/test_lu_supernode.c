@@ -408,8 +408,8 @@ static void test_sn_factorize_known_matrix(void) {
     int rc = sn_factorize(A, m, k, row_perm, row_pos, 1e-10,
                           sym->supernodes, sym->num_supernodes,
                           NULL, 0, 0, 0, NULL,
-                          Lr, Lc, Lv, &Lnnz,
-                          Ur, Uc, Uv, &Unnz,
+                          Lr, Lc, Lv, &Lnnz, cap,
+                          Ur, Uc, Uv, &Unnz, cap,
                           NULL, 0);
     ASSERT_INT_EQ(rc, 0, "sn factorize known: return code");
 
@@ -509,8 +509,8 @@ static void test_sn_factorize_random(void) {
     int rc = sn_factorize(A, m, k, row_perm, row_pos, 1e-10,
                           sym->supernodes, sym->num_supernodes,
                           NULL, 0, 0, 0, NULL,
-                          Lr, Lc, Lv, &Lnnz,
-                          Ur, Uc, Uv, &Unnz,
+                          Lr, Lc, Lv, &Lnnz, cap,
+                          Ur, Uc, Uv, &Unnz, cap,
                           NULL, 0);
     ASSERT_INT_EQ(rc, 0, "sn factorize random: return code");
 
