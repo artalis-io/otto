@@ -1128,6 +1128,7 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
 
     /* Initialize phase */
     tab->phase = use_two_phase ? 1 : 2;
+    tab->perturb_scale = 1.0;
 
     tab->A_ext = triplets_to_csc(trips);
     triplets_free(trips);
@@ -3090,6 +3091,8 @@ static int mark_basic_artificial_rows_redundant(SimplexTableau *tab, int only_in
     return marked;
 }
 
+static void primal_remove_perturbation(SimplexTableau *tab);
+
 static void primal_apply_perturbation(SimplexTableau *tab) {
     int n = tab->n;
 
@@ -3140,6 +3143,54 @@ static void primal_apply_perturbation(SimplexTableau *tab) {
         /* Perturb finite upper bounds up */
         if (tab->ub_ext[j] < RALPH_INFINITY / 2) {
             double eps = PRIMAL_PERTURB_BASE * factor * (1.0 + fabs(tab->ub_ext[j]));
+            tab->ub_ext[j] += eps;
+        }
+    }
+
+    tab->primal_perturb_active = 1;
+}
+
+/* Scaled variant for stall-recovery re-perturbation.
+ * scale > 1.0 widens the perturbation to break a different cycling pattern. */
+static void primal_apply_perturbation_scaled(SimplexTableau *tab, double scale) {
+    int n = tab->n;
+
+    /* If perturbation is already active, remove it first to start fresh */
+    if (tab->primal_perturb_active) {
+        primal_remove_perturbation(tab);
+    }
+
+    /* Allocate and save original bounds */
+    free(tab->primal_saved_lb);
+    free(tab->primal_saved_ub);
+    tab->primal_saved_lb = (double*)calloc(n, sizeof(double));
+    tab->primal_saved_ub = (double*)calloc(n, sizeof(double));
+    if (!tab->primal_saved_lb || !tab->primal_saved_ub) {
+        free(tab->primal_saved_lb);
+        free(tab->primal_saved_ub);
+        tab->primal_saved_lb = tab->primal_saved_ub = NULL;
+        tab->primal_perturb_active = 0;
+        return;
+    }
+
+    for (int j = 0; j < n; j++) {
+        tab->primal_saved_lb[j] = tab->lb_ext[j];
+        tab->primal_saved_ub[j] = tab->ub_ext[j];
+    }
+
+    double base = PRIMAL_PERTURB_BASE * scale;
+
+    for (int j = 0; j < n; j++) {
+        if (tab->phase == 1 && is_artificial_var(tab, j)) continue;
+
+        double factor = 1.0 + (j * PRIMAL_PERTURB_MULT) % 13;
+
+        if (tab->lb_ext[j] > -RALPH_INFINITY / 2) {
+            double eps = base * factor * (1.0 + fabs(tab->lb_ext[j]));
+            tab->lb_ext[j] -= eps;
+        }
+        if (tab->ub_ext[j] < RALPH_INFINITY / 2) {
+            double eps = base * factor * (1.0 + fabs(tab->ub_ext[j]));
             tab->ub_ext[j] += eps;
         }
     }
@@ -3328,6 +3379,15 @@ static int simplex_phase1(SimplexSolver *solver) {
     const int RECOMPUTE_INTERVAL = 25; /* Periodic drift correction in Phase 1 */
     int refactor_interval = tab->use_two_phase ? 24 : 0;
     int use_bland = 0;
+
+    /* Phase 1 stall detection: track objective (art_sum) progress.
+     * When Phase 1 stalls with Bland's rule, re-perturbation breaks the cycle.
+     * primal_apply_perturbation_scaled skips artificial bounds (Phase 1 safe). */
+    double last_obj_p1 = tab->obj_value;
+    int stall_count_p1 = 0;
+    const int P1_STALL_THRESHOLD = 50;
+    int perturb_attempts_p1 = 0;
+    const int P1_MAX_PERTURB_ATTEMPTS = 15;
     int fail_entering = -1;
     int fail_leaving_pos = -1;
     int fail_reason = PHASE1_PIVOT_FAIL_NONE;
@@ -3818,6 +3878,39 @@ static int simplex_phase1(SimplexSolver *solver) {
         excluded_entering_b = -1;
         excluded_entering_ttl_b = 0;
 
+        /* Phase 1 stall detection: re-perturb when objective stalls.
+         * This is critical for problems like recipe (80 artificials) where
+         * Bland's rule grinds forever without making progress. */
+        {
+        double obj_tol_p1 = 1e-4 * (1.0 + fabs(last_obj_p1));
+        double obj_change_p1 = fabs(tab->obj_value - last_obj_p1);
+        if (obj_change_p1 < obj_tol_p1) {
+            stall_count_p1++;
+            if (stall_count_p1 >= P1_STALL_THRESHOLD) {
+                perturb_attempts_p1++;
+                if (perturb_attempts_p1 <= P1_MAX_PERTURB_ATTEMPTS) {
+                    double scale = 1.0 + 2.0 * perturb_attempts_p1;
+                    primal_apply_perturbation_scaled(tab, scale);
+                    /* Reset Bland's to allow faster pricing */
+                    use_bland = 0;
+                    degenerate_count = 0;
+                    stall_count_p1 = 0;
+                    tableau_compute_solution(tab);
+                    tableau_compute_reduced_costs(tab);
+                    if (solver->pricing_strategy == 4) heap_build(tab);
+                    if (solver->verbose) {
+                        fprintf(stderr,
+                                "[simplex_phase1] Stall detected, re-perturbing (attempt %d, scale %.1f)\n",
+                                perturb_attempts_p1, scale);
+                    }
+                }
+            }
+        } else {
+            stall_count_p1 = 0;
+            last_obj_p1 = tab->obj_value;
+        }
+        }
+
         /* Periodic refactorization */
         int lu_refactor_needed = lu_needs_refactorization(tab->lu);
         int periodic_refactor = (!lu_refactor_needed &&
@@ -4215,10 +4308,15 @@ static int simplex_phase2(SimplexSolver *solver) {
         }
     }
 
-    /* Don't apply proactive perturbation in Phase 2 after transition.
-     * The transition may leave the basis in a fragile state; perturbation can
-     * cause the first pivot to fail. Rely on reactive perturbation instead. */
+    /* D4: Apply proactive perturbation when arriving from dual fallback.
+     * The dual failed on a degenerate problem, so proactive perturbation saves
+     * the ~30 wasted degenerate pivots before reactive perturbation kicks in.
+     * Do NOT apply for two-phase transitions — the post-transition basis is fragile. */
     int perturbation_active = 0;
+    if (solver->from_dual_fallback && !tab->use_two_phase) {
+        primal_apply_perturbation(tab);
+        perturbation_active = 1;
+    }
 
     /* Compute initial solution for Phase 2 */
     tableau_compute_solution(tab);
@@ -4229,6 +4327,17 @@ static int simplex_phase2(SimplexSolver *solver) {
     const int DEGEN_THRESHOLD = 50;  /* Switch to Bland's rule after this many */
     const int NON_DEGEN_THRESHOLD = 100;  /* Non-degenerate pivots to turn Bland off */
     int use_bland = 0;
+
+    /* Stall detection: track objective progress for re-perturbation.
+     * Mirrors dual_simplex.c stall detection (lines 1137-1165).
+     * When Phase 2 stalls (no objective progress for STALL_THRESHOLD iters),
+     * remove perturbation, re-apply with scaled magnitude, and reset Bland's.
+     * This is independent of the degenerate pivot counter above. */
+    double last_obj_p2 = tab->obj_value;
+    int stall_count_p2 = 0;
+    const int P2_STALL_THRESHOLD = 50;
+    int perturb_attempts_p2 = 0;
+    const int P2_MAX_PERTURB_ATTEMPTS = 15;
 
     /* For two-phase problems after transition, start with Bland's rule for the first
      * few pivots to avoid numerical issues with the post-transition basis.
@@ -4509,6 +4618,50 @@ static int simplex_phase2(SimplexSolver *solver) {
                        iter, tab->obj_value, entering, leave_var, theta, tab->rc[entering]);
             }
         }
+
+        /* Stall detection: check objective progress after each pivot.
+         * If objective hasn't improved for P2_STALL_THRESHOLD iterations,
+         * remove+re-apply perturbation with progressive scaling to break
+         * the cycling pattern. This catches cases where Bland's rule is
+         * active but making negligible progress (O(2^n) worst case).
+         * Independent of the degeneracy counter — triggered by objective stagnation. */
+        {
+        double obj_tol_p2 = 1e-4 * (1.0 + fabs(last_obj_p2));
+        double obj_change_p2 = fabs(tab->obj_value - last_obj_p2);
+        if (obj_change_p2 < obj_tol_p2) {
+            stall_count_p2++;
+            if (stall_count_p2 >= P2_STALL_THRESHOLD) {
+                perturb_attempts_p2++;
+                if (perturb_attempts_p2 <= P2_MAX_PERTURB_ATTEMPTS) {
+                    double scale = 1.0 + 2.0 * perturb_attempts_p2;
+                    primal_apply_perturbation_scaled(tab, scale);
+                    perturbation_active = 1;
+                    /* Reset Bland's rule — fresh perturbation should break the
+                     * cycle, allowing faster pricing to make progress again */
+                    use_bland = 0;
+                    degenerate_count = 0;
+                    non_degen_streak = 0;
+                    stall_count_p2 = 0;
+                    /* Recompute after perturbation change */
+                    tableau_compute_solution(tab);
+                    if (solver->pricing_strategy == 3) {
+                        tableau_compute_duals(tab);
+                    } else {
+                        tableau_compute_reduced_costs(tab);
+                        if (solver->pricing_strategy == 4) heap_build(tab);
+                    }
+                    if (solver->verbose) {
+                        printf("Iter %d: Phase 2 stall detected, re-perturbing (attempt %d, scale %.1f)\n",
+                               iter, perturb_attempts_p2, scale);
+                    }
+                }
+                /* else: exhausted attempts, fall through to iteration limit */
+            }
+        } else {
+            stall_count_p2 = 0;
+            last_obj_p2 = tab->obj_value;
+        }
+        }  /* end stall detection block */
 
     }
 
@@ -4927,6 +5080,7 @@ int simplex_solve(SimplexSolver *solver) {
 
         /* Dual failed or rejected — fall back to primal (method=2) or error (method=1) */
         if (solver->method == 2) {
+            solver->from_dual_fallback = 1;
             if (solver->verbose)
                 printf("[simplex_solve] Falling back to primal\n");
 
