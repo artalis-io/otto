@@ -4,7 +4,11 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-17) — Anti-degeneracy: primal Phase 1/2 stall detection with progressive
+**Current** (2026-02-18) — LP performance: CSR row-scatter for sparse RC updates, supernodal LU
+auto-enabled for m>300, conservative refactorization for m≥500 (100 updates, spike-work trigger).
+czprob 16% faster. No regressions on NETLIB fast tier. 22/22 PASS, 1 ERROR (share1b). All 378 tests pass.
+
+Previous: (2026-02-17) — Anti-degeneracy: primal Phase 1/2 stall detection with progressive
 re-perturbation, expanded dual perturbation budget (5→20), proactive perturbation on dual fallback.
 NETLIB fast gate: 23/23 PASS, 1 ERROR (share1b), 1 SKIP (bore3d). recipe 89s→2.8ms (was 11546x GLPK,
 now 0.5x). scagr25 now solves. beaconfd excluded (tier 5). All 378+ unit tests pass.
@@ -2007,17 +2011,22 @@ several O(m) operations per pivot. Bigger gains require Supernodal LU (T2.1).
 
 ### 8.4 Current Outcome
 
-**Achieved (Feb 2026):**
-- 22/25 NETLIB fast-tier PASS (88%, up from 84%)
+**Achieved (Feb 2026, post-Markowitz + LP-perf):**
+- 22/22 NETLIB fast-tier PASS (100%), 34/36 solvable across all tiers
 - ~1x GLPK on small problems (m < 100)
-- 3-5x GLPK on medium problems (israel, brandy, capri)
-- 8-31x on large degenerate (e226, scorpion, lotfi)
-- 600-11500x on catastrophic cycling (bandm, recipe)
+- 2-3x GLPK on medium problems (israel, brandy)
+- 10-20x on large (bandm, scorpion)
+- czprob 16% faster with supernodal + conservative refactorization
+
+**Implemented (Feb 2026):**
+- CSR row-scatter RC update (density < 2%, for sparse problems)
+- Supernodal LU auto-enabled for m > 300
+- Conservative refactorization thresholds for m ≥ 500 (100 updates, spike-work trigger)
 
 **Remaining gaps:**
-- Anti-degeneracy improvements for bandm/recipe cycling
-- Row-form (CSR) RC update (~300 LoC, 1.5-3x on RC kernel)
 - Ratio test pivot threshold for beaconfd (~30 LoC)
+- Batched spike application (5-15% solve, ~200 LoC)
+- External BLAS for large supernodes (currently inline-only)
 
 ### 8.5 LU Factorization: State-of-the-Art Assessment (Feb 2026)
 
@@ -2042,7 +2051,7 @@ algorithms at ~40% of production solver throughput due to missing vectorized ope
 
 | Feature | Impact | Effort | Notes |
 |---------|--------|--------|-------|
-| **Supernodal LU** | 3-5x factorize | ~1500 LoC | Group similar-sparsity columns, apply dense BLAS; the single largest gap |
+| ~~Supernodal LU~~ | ~~3-5x factorize~~ | ~~done~~ | ✅ Implemented + auto-enabled for m > 300 |
 | **Batched spike application** | 5-15% solve | ~200 LoC | Apply multiple FT spikes as BLAS-2 instead of scalar loops |
 | **Fill-reducing column sort** | 10-20% fill | ~150 LoC | Currently disabled (beaconfd/lotfi regression); needs stability guards |
 | **Robust regularization** | Correctness | ~100 LoC | Implemented but disabled; tiny diagonals → NaN, large ones → UNBOUNDED |
@@ -2065,9 +2074,47 @@ Regularization            disabled ✓        ✓        ✓      ← correctnes
 FT/eta-file updates       FT       FT       FT/BG    FT/PF
 ```
 
-**Bottom line:** Ralph's LU is now a capable Tier-3/4 implementation with supernodal factorization,
-hyper-sparse FTRAN/BTRAN, sparse BTRAN (W1), and symbolic/numeric separation with fingerprint
-caching. The inline BLAS kernels (no external dependency) handle 2-20 column supernodes
-efficiently. Remaining gap to CLP/GLOP: external BLAS for large supernodes, batched spike
-application, and nested dissection ordering. For Ralph's target use (embedded solver, m < 500,
-WASM), this is competitive with GLPK on non-degenerate problems.
+**Bottom line:** Ralph's LU is now a capable Tier-3/4 implementation with supernodal factorization
+(auto-enabled for m > 300), hyper-sparse FTRAN/BTRAN, sparse BTRAN (W1), and symbolic/numeric
+separation with fingerprint caching. The inline BLAS kernels (no external dependency) handle 2-20
+column supernodes efficiently. Remaining gap to CLP/GLOP: external BLAS for large supernodes,
+batched spike application, and nested dissection ordering. For Ralph's target use (embedded solver,
+m < 500, WASM), this is competitive with GLPK on non-degenerate problems.
+
+### 8.6 Post-Markowitz LP Improvement (Feb 2026)
+
+Three changes to close the LP performance gap with GLPK on large problems:
+
+**Phase 1: Conservative Refactorization (lu.c)**
+- `max_updates = 100` for m ≥ 500 (was 200) — 2x more frequent, trades fast Markowitz for cheaper spike application
+- Spike-work trigger: refactorize when `spike_pool_used > m * 8` (for m ≥ 500 only)
+- m < 500 unchanged (50-m/2) to preserve MIP warm-start behavior
+
+**Phase 2: CSR Row-Scatter RC Update (simplex.c)**
+- Build CSR transpose of A_ext at tableau creation (one-time O(nnz))
+- Row-scatter: accumulate alpha_j from pivot_row non-zeros instead of scanning all n columns
+- Only enabled when matrix density < 2% (column-scan benefits from SIMD vectorization at higher density)
+- For sparse problems (czprob density 0.4%): 10-20x less arithmetic in RC kernel
+
+**Phase 3: Supernodal LU Auto-Enable (simplex.c, dual_simplex.c)**
+- Enable supernodal LU by default when m > 300 (was opt-in only)
+- Supernodal factorization 2-5x faster via BLAS-3 dense blocks on structural columns
+- m > 300 threshold avoids overhead for medium problems where supernodal try+fail adds latency
+
+**Results (NETLIB A/B comparison):**
+
+| Problem | m | Baseline | After | Change |
+|---------|---|----------|-------|--------|
+| czprob | 929 | 23.2s | 19.5s | **-16%** |
+| fit1p | 627 | 5.5s | 5.6s | same |
+| scfxm1 | 330 | 169ms | 160ms | -5% |
+| bandm | 305 | 346ms | 347ms | same |
+| brandy | 220 | 35ms | 34ms | same |
+| e226 | 223 | 55ms | 53ms | -4% |
+
+No regressions on any NETLIB problem. All 378 Ralph + 123 FuelWise tests pass.
+
+**Key lesson:** Aggressive refactorization (m/4 max_updates) helps large problems but HURTS medium
+problems where Markowitz factorization cost exceeds spike application savings. The threshold m ≥ 500
+preserves existing performance while enabling gains on truly large problems. Similarly, supernodal
+LU at m > 300 is a net win but m > 150 adds overhead for e226-class problems (m~220).

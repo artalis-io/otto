@@ -1141,6 +1141,52 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
         return NULL;
     }
 
+    /* Build CSR (row-form) transpose of A_ext for row-scatter RC update.
+     * CSC→CSR transpose: count row nnz, prefix-sum, scatter entries. O(nnz). */
+    {
+        int csr_m = tab->m, csr_n = tab->n;
+        int csr_nnz = tab->A_ext->colptr[csr_n];
+        tab->csr_rowptr = (int*)calloc(csr_m + 1, sizeof(int));
+        tab->csr_colidx = (int*)malloc(csr_nnz * sizeof(int));
+        tab->csr_values = (double*)malloc(csr_nnz * sizeof(double));
+        tab->csr_alpha = (double*)calloc(csr_n, sizeof(double));
+        if (!tab->csr_rowptr || !tab->csr_colidx || !tab->csr_values || !tab->csr_alpha) {
+            free(norm_sense); free(norm_sign); free(basic_var_for_row);
+            tableau_free(tab);
+            return NULL;
+        }
+        /* Count nnz per row */
+        for (int j = 0; j < csr_n; j++) {
+            for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j+1]; p++) {
+                tab->csr_rowptr[tab->A_ext->rowidx[p] + 1]++;
+            }
+        }
+        /* Prefix sum */
+        for (int i = 0; i < csr_m; i++) {
+            tab->csr_rowptr[i+1] += tab->csr_rowptr[i];
+        }
+        /* Scatter entries (use csr_alpha as temp position counter — it's zeroed) */
+        int *pos = (int*)tab->csr_alpha;  /* Reuse scratch as int (same size, temp) */
+        memset(pos, 0, csr_m * sizeof(int));
+        for (int j = 0; j < csr_n; j++) {
+            for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j+1]; p++) {
+                int row = tab->A_ext->rowidx[p];
+                int dest = tab->csr_rowptr[row] + pos[row];
+                tab->csr_colidx[dest] = j;
+                tab->csr_values[dest] = tab->A_ext->values[p];
+                pos[row]++;
+            }
+        }
+        /* Re-zero csr_alpha scratch for use in RC update */
+        memset(tab->csr_alpha, 0, csr_n * sizeof(double));
+
+        /* Enable row-scatter only for sparse matrices where it beats vectorized column-scan.
+         * At density > ~2%, the column-scan benefits from auto-vectorization (SIMD) while
+         * the row-scatter's irregular access patterns prevent it. */
+        double density = (double)csr_nnz / ((double)csr_m * (double)csr_n);
+        tab->csr_use_scatter = (density < 0.02);
+    }
+
     /* Set up RHS (with sign normalization) and store row signs for Farkas mapping */
     for (int i = 0; i < model->num_cons; i++) {
         tab->rhs[i] = fabs(model->b[i]);  /* Already normalized to be non-negative */
@@ -1239,6 +1285,12 @@ void tableau_free(SimplexTableau *tab) {
     /* Free sparse matrix (not in arena) */
     sparse_free(tab->A_ext);
     tab->A_ext = NULL;
+
+    /* Free CSR arrays (not in arena) */
+    SAFE_FREE(tab->csr_rowptr);
+    SAFE_FREE(tab->csr_colidx);
+    SAFE_FREE(tab->csr_values);
+    SAFE_FREE(tab->csr_alpha);
 
     /* Free arena (frees all workspace arrays in one call) */
     sh_arena_free(tab->arena);
@@ -2839,40 +2891,91 @@ basis_update_done:
         int use_heap = (tab->pricing_strategy == 4);
         if (use_heap) heap_remove(tab, entering);  /* entering → basic */
 
-        /* For all non-basic variables, update reduced costs and optionally weights */
-        for (int j = 0; j < tab->n; j++) {
-            if (tab->var_status[j] == RALPH_BASIC) continue;
-            if (j == entering) continue;
+        /* Row-scatter RC update: accumulate alpha_j = pivot_row · A[:,j] via CSR rows.
+         * Instead of scanning ALL n columns (O(n × avg_col_nnz)), we scatter from
+         * non-zero pivot_row entries only (O(pivot_nnz × avg_row_nnz)).
+         * For sparse problems this is much faster: bandm pivot_row ~30 nnz vs n=472. */
+        double *alpha = tab->csr_alpha;  /* [n] scratch, kept zeroed between calls */
+        int *touched = NULL;  /* Track which alpha[j] were set, for cleanup */
+        int num_touched = 0;
 
-            /* Compute alpha_j = pivot_row * a_j */
-            double alpha_j = 0.0;
-            for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
-                alpha_j += pivot_row[tab->A_ext->rowidx[p]] * tab->A_ext->values[p];
+        if (tab->csr_rowptr && tab->csr_use_scatter) {
+            /* Use flip_list as scratch for touched indices (size n, not in use here) */
+            touched = tab->flip_list;
+            num_touched = 0;
+
+            for (int i = 0; i < tab->m; i++) {
+                double pi = pivot_row[i];
+                if (fabs(pi) < RALPH_ZERO_TOL) continue;
+                for (int p = tab->csr_rowptr[i]; p < tab->csr_rowptr[i+1]; p++) {
+                    int j = tab->csr_colidx[p];
+                    if (alpha[j] == 0.0) {
+                        touched[num_touched++] = j;
+                    }
+                    alpha[j] += pi * tab->csr_values[p];
+                }
             }
 
-            /* Update reduced cost */
-            tab->rc[j] -= rc_ratio * alpha_j;
-            if (use_heap) heap_update(tab, j);
+            /* Apply RC updates and Devex weights from accumulated alpha */
+            for (int t = 0; t < num_touched; t++) {
+                int j = touched[t];
+                double alpha_j = alpha[j];
+                alpha[j] = 0.0;  /* Clean up for next call */
 
-            /* Update pricing weights if enabled */
-            if (do_se_update && j != leaving) {
-                double alpha_ratio = alpha_j * pivot_inv;
-                double new_weight;
-                if (use_true_se) {
-                    /* True Steepest Edge: exact formula using tau_helper */
-                    double tau_j = sparse_dot_column(tab->A_ext, j, tau_helper);
-                    new_weight = tab->se_weights[j]
-                               - 2.0 * alpha_ratio * tau_j
-                               + alpha_ratio * alpha_ratio * gamma_e;
-                } else {
-                    /* Devex: approximate formula (Harris 1973) */
-                    double candidate = alpha_ratio * alpha_ratio * gamma_e;
-                    new_weight = tab->se_weights[j] * 0.999;
-                    if (candidate > new_weight) new_weight = candidate;
+                if (tab->var_status[j] == RALPH_BASIC || j == entering) continue;
+
+                tab->rc[j] -= rc_ratio * alpha_j;
+                if (use_heap) heap_update(tab, j);
+
+                if (do_se_update && j != leaving) {
+                    double alpha_ratio = alpha_j * pivot_inv;
+                    double new_weight;
+                    if (use_true_se) {
+                        double tau_j = sparse_dot_column(tab->A_ext, j, tau_helper);
+                        new_weight = tab->se_weights[j]
+                                   - 2.0 * alpha_ratio * tau_j
+                                   + alpha_ratio * alpha_ratio * gamma_e;
+                    } else {
+                        double candidate = alpha_ratio * alpha_ratio * gamma_e;
+                        new_weight = tab->se_weights[j] * 0.999;
+                        if (candidate > new_weight) new_weight = candidate;
+                    }
+                    if (new_weight < 1.0) new_weight = 1.0;
+                    if (new_weight > 1e8) new_weight = 1e8;
+                    tab->se_weights[j] = new_weight;
                 }
-                if (new_weight < 1.0) new_weight = 1.0;
-                if (new_weight > 1e8) new_weight = 1e8;
-                tab->se_weights[j] = new_weight;
+            }
+        } else {
+            /* Fallback: original column-scan (CSR not available) */
+            for (int j = 0; j < tab->n; j++) {
+                if (tab->var_status[j] == RALPH_BASIC) continue;
+                if (j == entering) continue;
+
+                double alpha_j = 0.0;
+                for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
+                    alpha_j += pivot_row[tab->A_ext->rowidx[p]] * tab->A_ext->values[p];
+                }
+
+                tab->rc[j] -= rc_ratio * alpha_j;
+                if (use_heap) heap_update(tab, j);
+
+                if (do_se_update && j != leaving) {
+                    double alpha_ratio = alpha_j * pivot_inv;
+                    double new_weight;
+                    if (use_true_se) {
+                        double tau_j = sparse_dot_column(tab->A_ext, j, tau_helper);
+                        new_weight = tab->se_weights[j]
+                                   - 2.0 * alpha_ratio * tau_j
+                                   + alpha_ratio * alpha_ratio * gamma_e;
+                    } else {
+                        double candidate = alpha_ratio * alpha_ratio * gamma_e;
+                        new_weight = tab->se_weights[j] * 0.999;
+                        if (candidate > new_weight) new_weight = candidate;
+                    }
+                    if (new_weight < 1.0) new_weight = 1.0;
+                    if (new_weight > 1e8) new_weight = 1e8;
+                    tab->se_weights[j] = new_weight;
+                }
             }
         }
 
@@ -4904,8 +5007,15 @@ int simplex_solve(SimplexSolver *solver) {
                               || solver->pricing_strategy == 5);
     tab->pricing_strategy = solver->pricing_strategy;
     tab->trace_phase1_enabled = solver->trace_phase1;
-    if (solver->lu_supernode && tab->lu)
-        tab->lu->sn_enabled = 1;
+    if (tab->lu) {
+        if (solver->lu_supernode)
+            tab->lu->sn_enabled = 1;
+        /* Enable supernodal LU by default for medium/large LP — Markowitz
+         * factorization is now frequent (Phase 1), so making each one 2-5x
+         * faster via BLAS-3 dense blocks is a significant win. */
+        else if (tab->m > 300)
+            tab->lu->sn_enabled = 1;
+    }
     tab->trace_phase1_iter = -1;
     tab->trace_last_entering = -1;
     tab->trace_last_leaving_pos = -1;
@@ -5101,8 +5211,12 @@ int simplex_solve(SimplexSolver *solver) {
                                       || solver->pricing_strategy == 5);
             tab->pricing_strategy = solver->pricing_strategy;
             tab->trace_phase1_enabled = solver->trace_phase1;
-            if (solver->lu_supernode && tab->lu)
-                tab->lu->sn_enabled = 1;
+            if (tab->lu) {
+                if (solver->lu_supernode)
+                    tab->lu->sn_enabled = 1;
+                else if (tab->m > 300)
+                    tab->lu->sn_enabled = 1;
+            }
 
             if (solver->crash) {
                 crash_triangular(tab, solver->verbose);
