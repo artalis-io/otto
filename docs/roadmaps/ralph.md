@@ -4,9 +4,9 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-18) — LP performance: CSR row-scatter for sparse RC updates, supernodal LU
-auto-enabled for m>300, conservative refactorization for m≥500 (100 updates, spike-work trigger).
-czprob 16% faster. No regressions on NETLIB fast tier. 22/22 PASS, 1 ERROR (share1b). All 378 tests pass.
+**Current** (2026-02-18, `165fe05`) — LP performance: CSR row-scatter for sparse RC updates,
+supernodal LU auto-enabled for m>300, conservative refactorization for m≥500, Markowitz LU.
+NETLIB fast tier: 22/22 PASS, 1 ERROR (share1b), 2 SKIP (bore3d, capri). All 378 tests pass.
 
 Previous: (2026-02-17) — Anti-degeneracy: primal Phase 1/2 stall detection with progressive
 re-perturbation, expanded dual perturbation budget (5→20), proactive perturbation on dual fallback.
@@ -61,35 +61,43 @@ Previous: `4387869` — HYBRID + PATH B LU reuse (9x milp15, 1.9x milp30).
 - 26% FTRAN (hyper-sparse DFS)
 - 17% Other (pricing, ratio test, refinement)
 
-### 1.2 NETLIB Benchmark Results (Feb 2026, post anti-cycling)
+### 1.2 NETLIB Benchmark Results (Feb 2026, post Markowitz + LP-perf)
 
-23/23 fast-tier PASS. recipe fixed from 11546x→0.5x GLPK. scagr25 now solves.
+22/22 fast-tier PASS. 2 SKIP (bore3d, capri timeout). 1 ERROR (share1b iter-limit).
 
 | Problem | Status | Ralph ms | GLPK ms | Ratio | Notes |
 |---------|--------|----------|---------|-------|-------|
-| afiro | ✅ PASS | 0.25 | ~0* | ~1x | Trivial |
-| blend | ✅ PASS | 3.6 | ~0* | ~1x | Fixed by method=2 |
-| kb2 | ✅ PASS | 1.0 | ~0* | ~1x | Small dense |
-| sc50a/b | ✅ PASS | 0.3 | ~0* | ~1x | Small |
-| sc105 | ✅ PASS | 1.7 | ~0* | ~1x | Small |
-| adlittle | ✅ PASS | 2.3 | ~0* | ~1x | Small |
-| share2b | ✅ PASS | 4.3 | ~0* | ~1x | Small |
+| afiro | ✅ PASS | 0.2 | ~0* | ~1x | Trivial |
+| blend | ✅ PASS | 3.2 | ~0* | ~1x | Fixed by method=2 |
+| kb2 | ✅ PASS | 0.8 | ~0* | ~1x | Small dense |
+| sc50a/b | ✅ PASS | 0.4 | ~0* | ~1x | Small |
+| sc105 | ✅ PASS | 2.1 | ~0* | ~1x | Small |
+| recipe | ✅ PASS | 1.9 | ~0* | ~1x | Fixed from 89s cycling |
+| adlittle | ✅ PASS | 1.5 | ~0* | ~1x | Small |
+| share2b | ✅ PASS | 2.9 | ~0* | ~1x | Small |
 | stocfor1 | ✅ PASS | 3.5 | ~0* | ~1x | Stochastic |
-| scagr7 | ✅ PASS | 2.4 | ~0* | ~1x | Small |
-| recipe | ✅ PASS | 2.8 | 7.8 | 0.5x | **Fixed** — was 89713ms (Phase 1 cycling) |
-| scagr25 | ✅ PASS | 18.2 | 7.4 | 2.5x | **New** — was timeout |
-| israel | ✅ PASS | 25.3 | 8.8 | 2.9x | Medium |
-| brandy | ✅ PASS | 37.3 | 10.9 | 3.4x | Medium degenerate |
-| capri | ✅ PASS | 51.1 | 11.2 | 4.6x | Was timeout |
-| e226 | ✅ PASS | 100.9 | 11.7 | 8.6x | Large |
-| scorpion | ✅ PASS | 132.8 | 9.4 | 14x | Large degenerate |
-| lotfi | ✅ PASS | 236.6 | 7.7 | 31x | Degeneracy |
-| bandm | ✅ PASS | 7200 | 12.3 | 578x | Per-iteration cost, not cycling |
-| beaconfd | ❌ KNOWN | — | — | — | Excluded (tier 5). Redundant equality rows → stuck artificials |
+| scagr7 | ✅ PASS | 3.9 | ~0* | ~1x | Small |
+| lotfi | ✅ PASS | 15.9 | 7.9 | 2.0x | Was 237ms pre-Markowitz |
+| grow7 | ✅ PASS | 18.5 | ~0* | ~1x | Medium |
+| israel | ✅ PASS | 19.5 | 9.0 | 2.2x | Medium |
+| sc205 | ✅ PASS | 24.9 | ~0* | ~1x | Medium |
+| brandy | ✅ PASS | 34 | 10.9 | 3.1x | Medium degenerate |
+| e226 | ✅ PASS | 52 | 11.6 | 4.5x | Was 101ms |
+| scorpion | ✅ PASS | 122 | 9.1 | 13x | Large degenerate |
+| agg | ✅ PASS | 126 | 8.6 | 15x | Large |
+| agg2 | ✅ PASS | 276 | — | — | Large |
+| bandm | ✅ PASS | 345 | 12.9 | 27x | Was 7200ms pre-Markowitz |
+| agg3 | ✅ PASS | 356 | — | — | Large |
+| scagr25 | ✅ PASS | 460 | 7.4 | 62x | Was timeout |
+| share1b | ❌ ERROR | — | — | — | Iter-limit (status=4) |
+| bore3d | ⏭ SKIP | — | — | — | Timeout |
+| capri | ⏭ SKIP | — | — | — | Timeout |
 
 *GLPK sub-ms problems show process startup overhead (~7ms wall clock); actual solve is sub-ms.
 
-**Gap summary:** Competitive on small-medium (≤scagr25). 3-15x slower on medium-large (israel-scorpion). bandm still 578x (per-iteration cost, not cycling — needs supernodal LU benefit). Remaining levers: per-iteration LU/FTRAN cost, cost perturbation (D5), long-step BFRT (D6).
+**Gap summary:** Competitive on small (≤sc105). 2-3x on medium (lotfi, israel, brandy). 5-60x on
+large (e226-scagr25). bandm dramatically improved from 578x to 27x thanks to Markowitz LU.
+Remaining levers: per-iteration cost (FTRAN/BTRAN spike application), cost perturbation (D5).
 
 ### 1.3 Performance TODO
 
@@ -111,7 +119,8 @@ See **§1.12** for the full state-of-the-art gap analysis with prioritized imple
 | ✅ **Done** | Runtime-configurable tolerances | User tuning | W2 |
 | ✅ **Done** | SE+Devex-init hybrid pricing | 10-30% fewer iters on degenerate | W3 |
 | ✅ **Done** | Anti-degeneracy (D1/D2/D4) | recipe 11546x→0.5x, scagr25 fixed | — |
-| **Low** | Row-form (CSR) RC update | 1.5-3x on RC kernel | B7 |
+| ✅ **Done** | Row-form (CSR) RC update | Density-gated (<2%); czprob -16% | B7 |
+| ✅ **Done** | Conservative refactorization | m≥500: 100 updates, spike-work trigger | §8.6 |
 
 ### 1.4 Numerical Stability TODO
 
