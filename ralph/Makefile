@@ -117,6 +117,10 @@ BLEND_TEST_EXEC = test_presolve_blend
 LOTFI_TEST_SOURCES = $(TEST_DIR)/test_presolve_lotfi.c
 LOTFI_TEST_EXEC = test_presolve_lotfi
 
+# LU Markowitz tests
+LU_MARKOWITZ_TEST_SOURCES = $(TEST_DIR)/test_lu_markowitz.c
+LU_MARKOWITZ_TEST_EXEC = test_lu_markowitz
+
 # LU supernode tests
 LU_SUPERNODE_TEST_SOURCES = $(TEST_DIR)/test_lu_supernode.c
 LU_SUPERNODE_TEST_EXEC = test_lu_supernode
@@ -301,6 +305,14 @@ $(SIMPLEX_POLICY_TEST_EXEC): $(SIMPLEX_POLICY_TEST_SOURCES) $(LIB_NAME) $(SHARED
 test-simplex-policy: $(SIMPLEX_POLICY_TEST_EXEC)
 	./$(SIMPLEX_POLICY_TEST_EXEC)
 
+# Build LU Markowitz tests
+$(LU_MARKOWITZ_TEST_EXEC): $(LU_MARKOWITZ_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LU Markowitz tests
+test-lu-markowitz: $(LU_MARKOWITZ_TEST_EXEC)
+	./$(LU_MARKOWITZ_TEST_EXEC)
+
 # Build LU supernode tests
 $(LU_SUPERNODE_TEST_EXEC): $(LU_SUPERNODE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
@@ -412,7 +424,7 @@ download-netlib:
 
 # Clean
 clean:
-	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LU_SUPERNODE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC)
+	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LU_MARKOWITZ_TEST_EXEC) $(LU_SUPERNODE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
@@ -426,7 +438,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-beaconfd test-beaconfd-trace test-simplex-policy test-lu-supernode test-netlib test-netlib-full bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-beaconfd test-beaconfd-trace test-simplex-policy test-lu-markowitz test-lu-supernode test-netlib test-netlib-full bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
 
 # MIP benchmark with specialized solvers (LAP, Network, SCP)
 bench-mip-specialized: $(BENCH_MIP_EXEC)

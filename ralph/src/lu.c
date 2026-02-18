@@ -275,6 +275,9 @@ LUFactorization* lu_create(int m) {
     /* W1: CSR transpose arrays start invalid (built after first factorization) */
     lu->csr_valid = 0;
 
+    /* Sparse Markowitz LU (default on for k >= MARKOWITZ_MIN_K) */
+    lu->mkz_enabled = 1;
+
     /* T2.1: Supernodal LU (default off, opt-in via lu_supernode param) */
     lu->sn_enabled = 0;
     lu->sn_symbolic = NULL;

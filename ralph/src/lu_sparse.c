@@ -1732,6 +1732,480 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
     return 0;
 }
 
+/* ============================================================================
+ * Sparse Markowitz LU Factorization
+ *
+ * Replaces the dense O(k³) GE inner loop with sparse Markowitz factorization.
+ * Uses the GLPK/GLOP scatter/gather pattern:
+ *   - Dual storage: both row-indexed and column-indexed SVA pools
+ *   - Dense flag[] + work[] arrays for O(1) entry lookup in elimination
+ *   - Degree-bucketed doubly-linked lists for pivot selection
+ *   - Dense phase switch when active submatrix density > 70%
+ *
+ * Total work: O(nnz × fill) instead of O(k³).
+ * ============================================================================ */
+
+#define MARKOWITZ_MIN_K       40    /* Below this, dense GE is faster */
+#define MARKOWITZ_THRESHOLD   0.1   /* Threshold pivoting ratio */
+#define MARKOWITZ_MAX_SEARCH  3     /* Candidates per degree bucket */
+#define MARKOWITZ_FILL_GAP    8     /* Extra slots per column/row for fill-in */
+#define MARKOWITZ_POOL_MULT   4     /* Pool = MULT × initial nnz */
+#define MARKOWITZ_DENSE_SWITCH 0.7  /* Switch to dense when density exceeds this */
+
+/*
+ * Sparse Markowitz factorization of the m×k structural submatrix.
+ *
+ * Uses scatter/gather pattern: pivot row scattered into dense work[]/flag[]
+ * arrays, enabling O(1) entry lookup during elimination (vs O(col_len) search).
+ * Dual SVA storage (row-indexed + column-indexed) enables walking a row's
+ * entries in O(row_len) instead of scanning all k columns.
+ *
+ * Returns 0 on success, -1 on failure (pool exhaustion, singular, or workspace).
+ * On failure, caller falls back to dense GE.
+ */
+static int lu_factorize_markowitz(
+    const SparseMatrix *B, const int *col_order, int m, int k,
+    int *row_perm, int *row_pos, double pivot_tol,
+    const int *redundant_rows, int num_redundant,
+    int allow_regularization, int max_regularizations, int *num_regularized,
+    int *L_row, int *L_col, double *L_val, int *L_nnz_out, int L_capacity,
+    int *U_row, int *U_col, double *U_val, int *U_nnz_out, int U_capacity,
+    int *mkz_col_perm, double *workspace, size_t workspace_doubles)
+{
+    /* Count initial nonzeros in structural submatrix */
+    int init_nnz = 0;
+    for (int jj = 0; jj < k; jj++) {
+        int j = col_order[jj];
+        for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+            if (fabs(B->values[p]) > RALPH_ZERO_TOL)
+                init_nnz++;
+        }
+    }
+
+    /* SVA pool sizing: MULT × initial nnz for both row and column pools */
+    int pool_cap = init_nnz * MARKOWITZ_POOL_MULT;
+    if (pool_cap < k * MARKOWITZ_FILL_GAP * 2) pool_cap = k * MARKOWITZ_FILL_GAP * 2;
+
+    /* Workspace layout (all carved from workspace buffer):
+     *
+     * DOUBLES:
+     *   cv_val[pool_cap]     — column SVA values
+     *   rv_val[pool_cap]     — row SVA values
+     *   work[k]              — dense scatter buffer for pivot row values
+     *   col_max[k]           — column maximum absolute value
+     *
+     * INTS (packed after doubles):
+     *   cv_idx[pool_cap]     — column SVA row indices
+     *   rv_idx[pool_cap]     — row SVA column indices
+     *   cv_ptr[k], cv_len[k], cv_cap[k]  — column SVA metadata
+     *   rv_ptr[m], rv_len[m], rv_cap[m]  — row SVA metadata
+     *   flag[k]              — dense flag for scatter/gather
+     *   col_deg[k]           — active column degree (for degree buckets)
+     *   row_deg[m]           — active row degree
+     *   col_alive[k]         — 1 if column not yet eliminated
+     *   row_alive[m]         — 1 if row not yet eliminated
+     *   dg_head[k+1]         — degree bucket heads
+     *   dg_next[k], dg_prev[k] — degree bucket DLL
+     */
+    size_t dbl_need = 2*(size_t)pool_cap + (size_t)k + (size_t)k;
+    size_t int_count = 2*(size_t)pool_cap + 3*(size_t)k + 3*(size_t)m
+                       + (size_t)k + (size_t)k + (size_t)m + (size_t)k + (size_t)m
+                       + (size_t)k + 1 + 2*(size_t)k;
+    size_t int_doubles = (int_count * sizeof(int) + sizeof(double) - 1) / sizeof(double);
+    size_t total_need = dbl_need + int_doubles;
+
+    if (workspace_doubles < total_need)
+        return -1;
+
+    /* Carve double arrays */
+    double *cv_val  = workspace;
+    double *rv_val  = cv_val + pool_cap;
+    double *work    = rv_val + pool_cap;
+    double *col_max = work + k;
+
+    /* Carve int arrays */
+    int *ib = (int *)(workspace + dbl_need);
+    int *cv_idx   = ib;         ib += pool_cap;
+    int *rv_idx   = ib;         ib += pool_cap;
+    int *cv_ptr   = ib;         ib += k;
+    int *cv_len   = ib;         ib += k;
+    int *cv_cap_a = ib;         ib += k;
+    int *rv_ptr   = ib;         ib += m;
+    int *rv_len   = ib;         ib += m;
+    int *rv_cap_a = ib;         ib += m;
+    int *flag     = ib;         ib += k;
+    int *col_deg  = ib;         ib += k;
+    int *row_deg  = ib;         ib += m;
+    int *col_alive = ib;        ib += k;
+    int *row_alive = ib;        ib += m;
+    int *dg_head  = ib;         ib += k + 1;
+    int *dg_next  = ib;         ib += k;
+    int *dg_prev  = ib;         /* ib += k; */
+
+    /* Initialize */
+    memset(flag, 0, k * sizeof(int));
+    memset(work, 0, k * sizeof(double));
+    memset(row_deg, 0, m * sizeof(int));
+    for (int jj = 0; jj < k; jj++) col_alive[jj] = 1;
+    memset(row_alive, 0, m * sizeof(int));
+
+    /* Build column SVA from B */
+    int cv_used = 0;
+    for (int jj = 0; jj < k; jj++) {
+        int j = col_order[jj];
+        cv_ptr[jj] = cv_used;
+        int cnt = 0;
+        for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+            if (fabs(B->values[p]) > RALPH_ZERO_TOL) {
+                if (cv_used >= pool_cap) return -1;
+                cv_idx[cv_used] = B->rowidx[p];
+                cv_val[cv_used] = B->values[p];
+                cv_used++;
+                cnt++;
+                row_deg[B->rowidx[p]]++;
+            }
+        }
+        cv_len[jj] = cnt;
+        cv_cap_a[jj] = cnt + MARKOWITZ_FILL_GAP;
+        cv_used += MARKOWITZ_FILL_GAP;
+        if (cv_used > pool_cap) cv_used = pool_cap;
+        col_deg[jj] = cnt;
+    }
+
+    /* Mark active rows (those that appear in at least one structural column) */
+    for (int jj = 0; jj < k; jj++) {
+        int s = cv_ptr[jj], n2 = cv_len[jj];
+        for (int e = 0; e < n2; e++)
+            row_alive[cv_idx[s + e]] = 1;
+    }
+
+    /* Build row SVA from column SVA (transpose) */
+    /* First pass: count entries per row (already in row_deg) */
+    int rv_used = 0;
+    for (int i = 0; i < m; i++) {
+        if (!row_alive[i]) { rv_ptr[i] = 0; rv_len[i] = 0; rv_cap_a[i] = 0; continue; }
+        rv_ptr[i] = rv_used;
+        rv_len[i] = 0;
+        rv_cap_a[i] = row_deg[i] + MARKOWITZ_FILL_GAP;
+        rv_used += rv_cap_a[i];
+        if (rv_used > pool_cap) rv_used = pool_cap;
+    }
+    /* Second pass: fill row entries */
+    for (int jj = 0; jj < k; jj++) {
+        int s = cv_ptr[jj], n2 = cv_len[jj];
+        for (int e = 0; e < n2; e++) {
+            int row = cv_idx[s + e];
+            int rp = rv_ptr[row] + rv_len[row];
+            if (rp >= pool_cap) return -1;
+            rv_idx[rp] = jj;
+            rv_val[rp] = cv_val[s + e];
+            rv_len[row]++;
+        }
+    }
+
+    /* Compute column maximums */
+    for (int jj = 0; jj < k; jj++) {
+        double mx = 0.0;
+        int s = cv_ptr[jj], n2 = cv_len[jj];
+        for (int e = 0; e < n2; e++) {
+            double av = fabs(cv_val[s + e]);
+            if (av > mx) mx = av;
+        }
+        col_max[jj] = mx;
+    }
+
+    /* Initialize degree buckets (by column degree) */
+    for (int d = 0; d <= k; d++) dg_head[d] = -1;
+    for (int jj = 0; jj < k; jj++) {
+        int d = col_deg[jj]; if (d > k) d = k;
+        dg_next[jj] = dg_head[d];
+        dg_prev[jj] = -1;
+        if (dg_head[d] >= 0) dg_prev[dg_head[d]] = jj;
+        dg_head[d] = jj;
+    }
+
+    #define DG_REMOVE(jj) do { \
+        int _d = col_deg[jj]; if (_d > k) _d = k; \
+        if (dg_prev[jj] >= 0) dg_next[dg_prev[jj]] = dg_next[jj]; \
+        else dg_head[_d] = dg_next[jj]; \
+        if (dg_next[jj] >= 0) dg_prev[dg_next[jj]] = dg_prev[jj]; \
+    } while(0)
+
+    #define DG_INSERT(jj) do { \
+        int _d = col_deg[jj]; if (_d > k) _d = k; \
+        dg_next[jj] = dg_head[_d]; dg_prev[jj] = -1; \
+        if (dg_head[_d] >= 0) dg_prev[dg_head[_d]] = jj; \
+        dg_head[_d] = jj; \
+    } while(0)
+
+    /* Helper: remove entry at position e from column jj's SVA segment */
+    #define CV_REMOVE(jj, e) do { \
+        int _s = cv_ptr[jj]; \
+        cv_len[jj]--; \
+        if ((e) < cv_len[jj]) { \
+            cv_idx[_s + (e)] = cv_idx[_s + cv_len[jj]]; \
+            cv_val[_s + (e)] = cv_val[_s + cv_len[jj]]; \
+        } \
+    } while(0)
+
+    /* Helper: remove entry at position e from row i's SVA segment */
+    #define RV_REMOVE(i, e) do { \
+        int _s = rv_ptr[i]; \
+        rv_len[i]--; \
+        if ((e) < rv_len[i]) { \
+            rv_idx[_s + (e)] = rv_idx[_s + rv_len[i]]; \
+            rv_val[_s + (e)] = rv_val[_s + rv_len[i]]; \
+        } \
+    } while(0)
+
+    int L_nnz = 0, U_nnz = 0;
+    *num_regularized = 0;
+    for (int jj = 0; jj < k; jj++) mkz_col_perm[jj] = jj;
+
+    (void)0;  /* active rows/cols tracked implicitly by degree lists */
+
+    for (int step = 0; step < k; step++) {
+        /* === 1. Pivot selection: Markowitz with threshold === */
+        int piv_col = -1, piv_row = -1;
+        long long best_cost = (long long)m * m + 1;
+        double best_piv_val = 0.0;
+
+        for (int d = 1; d <= k; d++) {
+            if ((long long)(d - 1) >= best_cost && best_cost < (long long)m * m + 1)
+                break;
+            int cand = 0;
+            for (int jj = dg_head[d]; jj >= 0 && cand < MARKOWITZ_MAX_SEARCH; jj = dg_next[jj]) {
+                double thr = MARKOWITZ_THRESHOLD * col_max[jj];
+                int s = cv_ptr[jj], n2 = cv_len[jj];
+                for (int e = 0; e < n2; e++) {
+                    int row = cv_idx[s + e];
+                    if (!row_alive[row]) continue;
+                    double av = fabs(cv_val[s + e]);
+                    if (av < thr) continue;
+                    long long cost = (long long)(row_deg[row] - 1) * (col_deg[jj] - 1);
+                    if (cost < best_cost || (cost == best_cost && av > best_piv_val)) {
+                        best_cost = cost;
+                        piv_col = jj; piv_row = row; best_piv_val = av;
+                        if (cost == 0) goto pivot_found;
+                    }
+                }
+                cand++;
+            }
+        }
+
+        /* Singular pivot handling */
+        if (piv_col < 0 || best_piv_val < pivot_tol) {
+            int can_reg = 0;
+            if (redundant_rows && num_redundant > 0) {
+                for (int jj = 0; jj < k && !can_reg; jj++) {
+                    if (!col_alive[jj]) continue;
+                    int s = cv_ptr[jj], n2 = cv_len[jj];
+                    for (int e = 0; e < n2; e++) {
+                        int row = cv_idx[s + e];
+                        if (row_alive[row] && redundant_rows[row]) {
+                            piv_col = jj; piv_row = row; can_reg = 1; break;
+                        }
+                    }
+                }
+            }
+            if (!can_reg && allow_regularization && *num_regularized < max_regularizations) {
+                for (int jj = 0; jj < k && !can_reg; jj++) {
+                    if (!col_alive[jj]) continue;
+                    int s = cv_ptr[jj], n2 = cv_len[jj];
+                    for (int e = 0; e < n2; e++) {
+                        if (row_alive[cv_idx[s + e]]) {
+                            piv_col = jj; piv_row = cv_idx[s + e]; can_reg = 1; break;
+                        }
+                    }
+                }
+            }
+            if (!can_reg) return -1;
+            (*num_regularized)++;
+            best_piv_val = 1.0;
+        }
+
+    pivot_found:;
+
+        /* === 2. Record permutations === */
+        { int t = mkz_col_perm[step]; mkz_col_perm[step] = mkz_col_perm[piv_col]; mkz_col_perm[piv_col] = t; }
+        { int pp = row_pos[piv_row];
+          if (pp != step) { int a = row_perm[step], b = row_perm[pp];
+            row_perm[step] = b; row_perm[pp] = a; row_pos[b] = step; row_pos[a] = pp; } }
+
+        /* Find pivot value from column SVA */
+        double pivot_val = 0.0;
+        { int s = cv_ptr[piv_col], n2 = cv_len[piv_col];
+          for (int e = 0; e < n2; e++)
+              if (cv_idx[s + e] == piv_row) { pivot_val = cv_val[s + e]; break; } }
+        if (fabs(pivot_val) < pivot_tol) pivot_val = 1.0;  /* regularized */
+
+        /* Mark eliminated */
+        DG_REMOVE(piv_col);
+        col_alive[piv_col] = 0;
+        row_alive[piv_row] = 0;
+
+        /* === 3. Phase A: Scatter pivot row into work[]/flag[] using row SVA === */
+        { int s = rv_ptr[piv_row], n2 = rv_len[piv_row];
+          for (int e = 0; e < n2; e++) {
+              int jj = rv_idx[s + e];
+              if (!col_alive[jj]) continue;
+              work[jj] = rv_val[s + e];
+              flag[jj] = 1;
+          } }
+
+        /* === 4. Emit L diagonal + U pivot row === */
+        if (L_nnz >= L_capacity || U_nnz >= U_capacity) return -1;
+        L_row[L_nnz] = step; L_col[L_nnz] = piv_col; L_val[L_nnz] = 1.0; L_nnz++;
+        U_row[U_nnz] = step; U_col[U_nnz] = piv_col; U_val[U_nnz] = pivot_val; U_nnz++;
+
+        { int s = rv_ptr[piv_row], n2 = rv_len[piv_row];
+          for (int e = 0; e < n2; e++) {
+              int jj = rv_idx[s + e];
+              if (!col_alive[jj]) continue;
+              if (fabs(rv_val[s + e]) > RALPH_ZERO_TOL) {
+                  if (U_nnz >= U_capacity) return -1;
+                  U_row[U_nnz] = step; U_col[U_nnz] = jj; U_val[U_nnz] = rv_val[s + e]; U_nnz++;
+              }
+          } }
+
+        /* === 5. Phase B: Eliminate — for each row with entry in pivot column === */
+        { int s = cv_ptr[piv_col], n2 = cv_len[piv_col];
+          for (int e = 0; e < n2; e++) {
+              int row = cv_idx[s + e];
+              if (!row_alive[row]) continue;
+              double a_ik = cv_val[s + e];
+              if (fabs(a_ik) < RALPH_ZERO_TOL) continue;
+              double mult = a_ik / pivot_val;
+
+              /* Emit L entry */
+              if (L_nnz >= L_capacity) return -1;
+              L_row[L_nnz] = row_pos[row]; L_col[L_nnz] = piv_col; L_val[L_nnz] = mult; L_nnz++;
+
+              /* Pass 1: Walk row's entries, update existing entries using flag[] O(1) */
+              int rs = rv_ptr[row], rn = rv_len[row];
+              for (int re = 0; re < rn; re++) {
+                  int jj = rv_idx[rs + re];
+                  if (!col_alive[jj]) continue;
+                  if (flag[jj]) {
+                      /* Existing entry — update in place */
+                      flag[jj] = 0;  /* mark handled */
+                      double new_val = rv_val[rs + re] - mult * work[jj];
+                      rv_val[rs + re] = new_val;
+                      /* Update column SVA too */
+                      int cs = cv_ptr[jj], cn = cv_len[jj];
+                      for (int ce = 0; ce < cn; ce++) {
+                          if (cv_idx[cs + ce] == row) {
+                              if (fabs(new_val) < RALPH_ZERO_TOL) {
+                                  /* Cancellation: remove from both SVAs */
+                                  CV_REMOVE(jj, ce);
+                                  RV_REMOVE(row, re); re--;
+                                  DG_REMOVE(jj); col_deg[jj]--; DG_INSERT(jj);
+                                  row_deg[row]--;
+                              } else {
+                                  cv_val[cs + ce] = new_val;
+                              }
+                              break;
+                          }
+                      }
+                  }
+              }
+
+              /* Pass 2: Fill-in — flag[jj] still set means no existing entry */
+              { int ps = rv_ptr[piv_row], pn = rv_len[piv_row];
+                for (int pe = 0; pe < pn; pe++) {
+                    int jj = rv_idx[ps + pe];
+                    if (!col_alive[jj] || !flag[jj]) continue;
+                    double fill = -mult * work[jj];
+                    if (fabs(fill) < RALPH_ZERO_TOL) continue;
+
+                    /* Insert into column SVA */
+                    int cn = cv_len[jj];
+                    if (cn >= cv_cap_a[jj]) {
+                        /* Relocate column */
+                        int new_cap = cn + MARKOWITZ_FILL_GAP + 4;
+                        if (cv_used + new_cap > pool_cap) return -1;
+                        int ns = cv_used;
+                        for (int f = 0; f < cn; f++) { cv_idx[ns+f] = cv_idx[cv_ptr[jj]+f]; cv_val[ns+f] = cv_val[cv_ptr[jj]+f]; }
+                        cv_ptr[jj] = ns; cv_cap_a[jj] = new_cap; cv_used += new_cap;
+                    }
+                    cv_idx[cv_ptr[jj] + cn] = row;
+                    cv_val[cv_ptr[jj] + cn] = fill;
+                    cv_len[jj]++;
+
+                    /* Insert into row SVA */
+                    int rn2 = rv_len[row];
+                    if (rn2 >= rv_cap_a[row]) {
+                        int new_cap = rn2 + MARKOWITZ_FILL_GAP + 4;
+                        if (rv_used + new_cap > pool_cap) return -1;
+                        int ns = rv_used;
+                        for (int f = 0; f < rn2; f++) { rv_idx[ns+f] = rv_idx[rv_ptr[row]+f]; rv_val[ns+f] = rv_val[rv_ptr[row]+f]; }
+                        rv_ptr[row] = ns; rv_cap_a[row] = new_cap; rv_used += new_cap;
+                    }
+                    rv_idx[rv_ptr[row] + rn2] = jj;
+                    rv_val[rv_ptr[row] + rn2] = fill;
+                    rv_len[row]++;
+
+                    DG_REMOVE(jj); col_deg[jj]++; DG_INSERT(jj);
+                    row_deg[row]++;
+                } }
+
+              /* Restore flags for next row */
+              { int ps = rv_ptr[piv_row], pn = rv_len[piv_row];
+                for (int pe = 0; pe < pn; pe++) {
+                    int jj = rv_idx[ps + pe];
+                    if (col_alive[jj]) flag[jj] = 1;
+                } }
+
+              /* Decrement row_deg for pivot column entry (removed) */
+              row_deg[row]--;
+          } }
+
+        /* Remove pivot row entries from column SVAs (cleanup) */
+        for (int jj = 0; jj < k; jj++) {
+            if (!col_alive[jj]) continue;
+            int s = cv_ptr[jj], n2 = cv_len[jj];
+            for (int e = 0; e < n2; e++) {
+                if (cv_idx[s + e] == piv_row) {
+                    CV_REMOVE(jj, e);
+                    DG_REMOVE(jj); col_deg[jj]--; DG_INSERT(jj);
+                    break;
+                }
+            }
+        }
+
+        /* Phase C: Clean up scatter arrays */
+        { int s = rv_ptr[piv_row], n2 = rv_len[piv_row];
+          for (int pe = 0; pe < n2; pe++) {
+              int jj = rv_idx[s + pe];
+              work[jj] = 0.0; flag[jj] = 0;
+          } }
+
+        /* Update col_max for affected columns */
+        { int ps = rv_ptr[piv_row], pn = rv_len[piv_row];
+          for (int pe = 0; pe < pn; pe++) {
+              int jj = rv_idx[ps + pe];
+              if (!col_alive[jj]) continue;
+              double mx = 0.0;
+              int s = cv_ptr[jj], n2 = cv_len[jj];
+              for (int e = 0; e < n2; e++) {
+                  if (!row_alive[cv_idx[s + e]]) continue;
+                  double av = fabs(cv_val[s + e]);
+                  if (av > mx) mx = av;
+              }
+              col_max[jj] = mx;
+          } }
+    }
+
+    #undef DG_REMOVE
+    #undef DG_INSERT
+    #undef CV_REMOVE
+    #undef RV_REMOVE
+
+    *L_nnz_out = L_nnz;
+    *U_nnz_out = U_nnz;
+    return 0;
+}
+
 /*
  * Numeric factorization: dense GE with partial pivoting on structural columns,
  * identity column placement, COO→CSC conversion, condition estimation.
@@ -1795,6 +2269,83 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     double *U_val = lu->coo_U_val;
 
     int L_nnz = 0, U_nnz = 0;
+
+    /* Try sparse Markowitz factorization if enabled and k is large enough.
+     * This exploits sparsity within structural columns, reducing O(k³) to O(nnz×fill).
+     * Uses dense_work as workspace (m² doubles available, far more than needed). */
+    if (lu->mkz_enabled && k >= MARKOWITZ_MIN_K) {
+        /* Allocate mkz_col_perm from stack-ish: use tail of dense_work past the m×k area */
+        size_t mkz_ws_offset = (size_t)m * k;
+        size_t mkz_ws_avail = (size_t)m * m - mkz_ws_offset;
+        /* mkz_col_perm needs k ints; pack into doubles at the very end */
+        int *mkz_col_perm = (int *)(A_struct + mkz_ws_offset);
+        size_t mkz_perm_doubles = ((size_t)k * sizeof(int) + sizeof(double) - 1) / sizeof(double);
+        double *mkz_workspace = A_struct + mkz_ws_offset + mkz_perm_doubles;
+        size_t mkz_ws_doubles = mkz_ws_avail - mkz_perm_doubles;
+
+        int mkz_reg = 0;
+        int rc = lu_factorize_markowitz(
+            B, col_order, m, k, row_perm, row_pos, lu->pivot_tol,
+            lu->redundant_rows, lu->num_redundant,
+            lu->allow_regularization, lu->max_regularizations, &mkz_reg,
+            L_row, L_col, L_val, &L_nnz, lu->coo_capacity,
+            U_row, U_col, U_val, &U_nnz, lu->coo_capacity,
+            mkz_col_perm, mkz_workspace, mkz_ws_doubles);
+
+        if (rc == 0) {
+            lu->num_regularized = mkz_reg;
+
+            /* Markowitz emits L_col/U_col in structural column space (0..k-1).
+             * The COO→CSC path and identity_placement expect step-indexed columns.
+             * mkz_col_perm[step] = structural index chosen at each step.
+             * Build inverse: structural_col → step, then remap all L/U col entries. */
+
+            /* Build mkz_col_perm_inv in A_struct (consumed by Markowitz) */
+            int *mkz_inv = (int *)A_struct;
+            for (int s = 0; s < k; s++)
+                mkz_inv[mkz_col_perm[s]] = s;
+
+            /* Remap L_col and U_col from structural→step space */
+            for (int i = 0; i < L_nnz; i++) {
+                int sc = L_col[i];
+                if (sc >= 0 && sc < k) L_col[i] = mkz_inv[sc];
+            }
+            for (int i = 0; i < U_nnz; i++) {
+                int sc = U_col[i];
+                if (sc >= 0 && sc < k) U_col[i] = mkz_inv[sc];
+            }
+
+            /* Reorder col_order to match Markowitz pivot ordering:
+             * new_col_order[step] = old_col_order[mkz_col_perm[step]] */
+            {
+                int *temp_order = mkz_inv + k;  /* Reuse space past inverse */
+                for (int s = 0; s < k; s++)
+                    temp_order[s] = col_order[mkz_col_perm[s]];
+                for (int s = 0; s < k; s++)
+                    col_order[s] = temp_order[s];
+                /* Rebuild col_order_inv for identity columns */
+                int *col_order_inv = lu->ws_col_order_inv;
+                for (int s = 0; s < m; s++)
+                    col_order_inv[col_order[s]] = s;
+            }
+
+            goto identity_placement;
+        }
+
+        /* Markowitz failed — reset and fall through to supernodal/dense */
+        L_nnz = 0;
+        U_nnz = 0;
+        for (int i = 0; i < m; i++) { row_perm[i] = i; row_pos[i] = i; }
+        /* Re-populate A_struct from B */
+        memset(A_struct, 0, (size_t)m * k * sizeof(double));
+        for (int jj = 0; jj < k; jj++) {
+            int j = col_order[jj];
+            for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+                int row = B->rowidx[p];
+                A_struct[row * k + jj] = B->values[p];
+            }
+        }
+    }
 
     /* T2.1: Try supernodal factorization if enabled and k is large enough */
     if (lu->sn_enabled && k >= SN_MIN_K) {
