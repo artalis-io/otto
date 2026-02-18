@@ -236,6 +236,9 @@ typedef struct {
     uint64_t sym_fingerprint;    /* FNV-1a hash of basis sparsity pattern */
     /* sym uses ws_is_identity, ws_identity_row, ws_identity_val, ws_col_order, ws_col_order_inv */
 
+    /* Sparse Markowitz LU */
+    int mkz_enabled;         /* 1 = use Markowitz path when k >= MARKOWITZ_MIN_K */
+
     /* Supernodal LU (T2.1) */
     int sn_enabled;          /* 1 = use supernodal path when k >= SN_MIN_K */
     struct SNSymbolic_tag *sn_symbolic;  /* Cached symbolic analysis (forward decl) */
