@@ -50,14 +50,13 @@ LUFactorization* lu_create(int m) {
     lu->m = m;
     lu->pivot_tol = RALPH_PIVOT_TOL;
 
-    /* Refactorization threshold based on problem size.
-     * With Forrest-Tomlin updates, spike application cost is O(num_spikes * avg_nnz).
-     * Profiling shows: too few updates = excessive refactorization (60% of time),
-     * too many updates = excessive spike application.
-     * Optimal balance: around 150-200 updates for large problems.
-     * Rule: m/2 for medium-size problems to reduce forced refactorizations on
-     * degenerate phase-1 paths, capped for large matrices. */
-    lu->max_updates = (m < 100) ? 50 : (m < 500) ? m/2 : 200;
+    /* Refactorization threshold: balance factorization cost vs spike application cost.
+     * With Forrest-Tomlin updates, each FTRAN/BTRAN pays O(total_spike_nnz).
+     * For m<500, factorization cost is still significant relative to spike cost,
+     * so keep thresholds close to original (m/2 capped at 200).
+     * For m>=500, spike application dominates and more frequent refactorization
+     * with fast Markowitz/supernodal factorization is a net win. */
+    lu->max_updates = (m < 100) ? 50 : (m < 500) ? m/2 : (m < 1000) ? 100 : 120;
     int max_upd = lu->max_updates;
 
     /* Calculate arena size for fixed-size arrays (with 8-byte alignment padding).
@@ -2211,6 +2210,12 @@ int lu_needs_refactorization(const LUFactorization *lu) {
     if (lu->use_ft_updates && lu->spike_pool_capacity > 0) {
         if (lu->spike_pool_used > lu->spike_pool_capacity * RALPH_SPIKE_POOL_WARN_PCT / 100) return 1;
     }
+
+    /* Spike-work trigger: for large problems (m>=500), refactorize when cumulative
+     * spike nnz exceeds threshold. Each FTRAN/BTRAN walks ALL accumulated spikes,
+     * and for large m the spike application cost dominates iteration time.
+     * Only for m>=500 where factorization is cheap relative to spike cost. */
+    if (lu->use_ft_updates && lu->m >= 500 && lu->spike_pool_used > lu->m * 8) return 1;
 
     return 0;
 }

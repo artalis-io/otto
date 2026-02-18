@@ -343,6 +343,14 @@ typedef struct {
     int duals_valid;            /* 1 if y[] contains valid dual values */
     int rc_all_valid;           /* 1 if rc[] contains all valid reduced costs */
 
+    /* CSR (row-form) of A_ext for row-scatter RC update.
+     * Only used when matrix density < 2% (row-scatter beats vectorized column-scan). */
+    int *csr_rowptr;        /* [m+1] row pointers */
+    int *csr_colidx;        /* [nnz] column indices */
+    double *csr_values;     /* [nnz] values */
+    double *csr_alpha;      /* [n] scratch for accumulating alpha_j in row-scatter */
+    int csr_use_scatter;    /* 1 if row-scatter is enabled (sparse enough to benefit) */
+
     /* Auxiliary variable mapping (for cut generation) */
     int *aux_row;           /* For each aux var j >= num_vars: which constraint row */
     double *aux_coef;       /* For each aux var: coefficient in that row (+1 or -1) */
