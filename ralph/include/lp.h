@@ -12,6 +12,13 @@
 #include "ralph.h"
 #include "shared.h"
 
+/* Software prefetch (no-op on non-GCC/Clang compilers) */
+#if defined(__GNUC__) || defined(__clang__)
+#define RALPH_PREFETCH(addr, rw, locality) __builtin_prefetch(addr, rw, locality)
+#else
+#define RALPH_PREFETCH(addr, rw, locality) ((void)0)
+#endif
+
 /* Tolerances */
 #define RALPH_FEAS_TOL 1e-6
 #define RALPH_OPT_TOL 1e-6

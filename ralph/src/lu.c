@@ -1962,8 +1962,8 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
  */
 static void apply_ft_spikes_forward(const LUFactorization *lu, double *x) {
     const int n = lu->ft_num_updates;
+    if (n == 0) return;
 
-    /* Apply all spikes individually using contiguous pool */
     const int *cols = lu->ft_spike_col;
     const double *diags = lu->ft_spike_diag;
     const int *starts = lu->ft_spike_start;
@@ -1972,22 +1972,28 @@ static void apply_ft_spikes_forward(const LUFactorization *lu, double *x) {
     const double *pool_val = lu->spike_pool_val;
 
     for (int k = 0; k < n; k++) {
+        /* Prefetch next spike's column value and pool data */
+        if (k + 1 < n) {
+            RALPH_PREFETCH(&x[cols[k + 1]], 0, 3);
+            RALPH_PREFETCH(pool_idx + starts[k + 1], 0, 1);
+            RALPH_PREFETCH(pool_val + starts[k + 1], 0, 1);
+        }
+
         int col = cols[k];
-        double xc = x[col];  /* Save original x[col] */
+        double xc = x[col];
 
         /* Skip if xc is zero - no update needed */
         if (fabs(xc) < RALPH_ZERO_TOL) continue;
 
-        /* Update diagonal (branchless) */
         x[col] = diags[k] * xc;
 
-        /* Update off-diagonal entries from contiguous pool
-         * Use local pointers for better cache access */
         int start = starts[k];
         int nnz = nnzs[k];
         const int *idx = pool_idx + start;
         const double *val = pool_val + start;
 
+        /* Scatter: indexed stores to potentially overlapping addresses,
+         * NOT unrolled (CPU must serialize x[idx[p]] += writes) */
         for (int p = 0; p < nnz; p++) {
             x[idx[p]] += val[p] * xc;
         }
@@ -2000,6 +2006,8 @@ static void apply_ft_spikes_forward(const LUFactorization *lu, double *x) {
  */
 static void apply_ft_spikes_backward(const LUFactorization *lu, double *x) {
     const int n = lu->ft_num_updates;
+    if (n == 0) return;
+
     const int *cols = lu->ft_spike_col;
     const double *diags = lu->ft_spike_diag;
     const int *starts = lu->ft_spike_start;
@@ -2008,16 +2016,31 @@ static void apply_ft_spikes_backward(const LUFactorization *lu, double *x) {
     const double *pool_val = lu->spike_pool_val;
 
     for (int k = n - 1; k >= 0; k--) {
+        /* Prefetch next (k-1) spike's pool data */
+        if (k > 0) {
+            RALPH_PREFETCH(pool_idx + starts[k - 1], 0, 1);
+            RALPH_PREFETCH(pool_val + starts[k - 1], 0, 1);
+        }
+
         int col = cols[k];
         int start = starts[k];
         int nnz = nnzs[k];
-
-        /* Compute new x[col] = diag * x[col] + sum(off_diag * x) */
-        double xc = diags[k] * x[col];
         const int *idx = pool_idx + start;
         const double *val = pool_val + start;
-        #pragma omp simd reduction(+:xc)
-        for (int p = 0; p < nnz; p++) {
+
+        /* Gather-accumulate with 4-way unrolling for ILP:
+         * independent accumulators let CPU issue 4 loads concurrently */
+        double xc = diags[k] * x[col];
+        double xc1 = 0.0, xc2 = 0.0, xc3 = 0.0;
+        int p = 0, nnz4 = nnz - 3;
+        for (; p < nnz4; p += 4) {
+            xc  += val[p]     * x[idx[p]];
+            xc1 += val[p + 1] * x[idx[p + 1]];
+            xc2 += val[p + 2] * x[idx[p + 2]];
+            xc3 += val[p + 3] * x[idx[p + 3]];
+        }
+        xc += xc1 + xc2 + xc3;
+        for (; p < nnz; p++) {
             xc += val[p] * x[idx[p]];
         }
         x[col] = xc;
