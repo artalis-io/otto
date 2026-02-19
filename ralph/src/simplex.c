@@ -84,12 +84,21 @@ typedef enum {
 #define PHASE2_PERIODIC_REFACTOR_MIN_INTERVAL 10
 #define PHASE2_PERIODIC_REFACTOR_MAX_INTERVAL 80
 #define PERIODIC_REFACTOR_MIN_UPDATE_AGE 8
+#define LARGE_BASIS_PERIODIC_M 500
+#define LARGE_BASIS_PHASE1_INTERVAL 24
+#define LARGE_BASIS_PHASE2_INTERVAL 10
 
 static int compute_periodic_refactor_interval(const SimplexTableau *tab,
                                               int phase,
                                               int use_bland,
                                               int degenerate_count) {
     if (!tab || !tab->lu || !tab->use_two_phase) return 0;
+
+    /* Guardrail: large two-phase bases are sensitive to stale FT updates.
+     * Keep legacy periodic cadence to avoid long update chains. */
+    if (tab->m >= LARGE_BASIS_PERIODIC_M) {
+        return (phase == 1) ? LARGE_BASIS_PHASE1_INTERVAL : LARGE_BASIS_PHASE2_INTERVAL;
+    }
 
     const int max_updates = tab->lu->max_updates;
     int interval;
@@ -124,6 +133,9 @@ static int should_run_periodic_refactor(const SimplexTableau *tab,
                                         int degenerate_count) {
     if (!tab || !tab->lu || interval <= 0 || iter <= 0) return 0;
     if (iter % interval != 0) return 0;
+
+    /* Large-basis guardrail: do not skip periodic refactor on health heuristics. */
+    if (tab->m >= LARGE_BASIS_PERIODIC_M) return 1;
 
     const LUFactorization *lu = tab->lu;
     int min_update_age = interval / 2;
