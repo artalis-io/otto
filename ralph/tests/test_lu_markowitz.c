@@ -585,6 +585,52 @@ static void test_ge_identity_lrow_regression(void) {
 }
 
 /* ============================================================================
+ * Test 9: Markowitz failure telemetry counters
+ * ============================================================================ */
+static void test_markowitz_failure_reason_counters(void) {
+    printf("  Markowitz: failure counters (singular structural block)...\n");
+
+    const int m = 60;
+    const int k = 40;
+    double *A = (double *)calloc((size_t)m * m, sizeof(double));
+
+    /* Structural block with duplicate columns -> singular but symbolically matchable.
+     * Keep structural columns non-singleton so identity detection does not consume them. */
+    for (int i = 0; i < k; i++) {
+        A[i * m + i] = 5.0;
+        A[((i + 1) % k) * m + i] = 0.25;
+    }
+    for (int r = 0; r < k; r++) {
+        A[r * m + (k - 1)] = A[r * m + (k - 2)];
+    }
+
+    /* Identity columns (k..m-1). */
+    for (int t = 0; t < m - k; t++) {
+        int row = k + t;
+        A[row * m + (k + t)] = 1.0;
+    }
+
+    SparseMatrix *B = dense_to_csc(A, m, m);
+    LUFactorization *lu = lu_create(m);
+    ASSERT(lu != NULL, "failure counters: lu_create");
+    lu->mkz_enabled = 1;
+    lu->sn_enabled = 0;
+
+    int rc = lu_factorize(lu, B);
+    ASSERT(rc != 0, "failure counters: singular matrix should fail factorization");
+
+    ASSERT(lu->mkz_calls > 0, "failure counters: Markowitz attempted");
+    ASSERT(lu->mkz_dense_fallbacks > 0, "failure counters: Markowitz fallback recorded");
+    ASSERT(lu->mkz_fail_singular > 0, "failure counters: singular reason counted");
+    ASSERT_INT_EQ(lu->mkz_fail_workspace, 0, "failure counters: no workspace failure");
+    ASSERT_INT_EQ(lu->mkz_fail_capacity, 0, "failure counters: no capacity failure");
+
+    lu_free(lu);
+    free_csc(B);
+    free(A);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -598,6 +644,7 @@ int main(void) {
     test_markowitz_tridiagonal();
     test_markowitz_reserved_row_regression();
     test_ge_identity_lrow_regression();
+    test_markowitz_failure_reason_counters();
 
     printf("\nIntegration (A/B Comparison):\n");
     test_markowitz_integration_small_lp();

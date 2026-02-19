@@ -211,6 +211,10 @@ typedef struct {
     /* Pre-allocated workspace for dense LU fallback (m×m matrix) */
     double *dense_work;     /* Reused across factorizations to avoid O(m²) alloc */
 
+    /* Dedicated Markowitz workspace (growable, avoids dense_work tail carving) */
+    double *mkz_work;       /* Scratch buffer for sparse Markowitz internals */
+    size_t mkz_work_capacity;   /* Capacity in doubles */
+
     /* Pre-allocated workspace for sparse-efficient factorization (T1.4) */
     int *ws_is_identity;     /* [m] identity column classification */
     int *ws_identity_row;    /* [m] row of identity entry */
@@ -250,6 +254,10 @@ typedef struct {
     int mkz_failures;        /* Markowitz factorization failures */
     int mkz_last_failure;    /* Internal Markowitz failure code (0 on success) */
     int mkz_dense_fallbacks; /* Markowitz failed and dense GE path was used */
+    int mkz_fail_workspace;  /* Markowitz attempt failed with MKZ_FAIL_WORKSPACE */
+    int mkz_fail_pool;       /* Markowitz attempt failed with MKZ_FAIL_POOL */
+    int mkz_fail_singular;   /* Markowitz attempt failed with MKZ_FAIL_SINGULAR */
+    int mkz_fail_capacity;   /* Markowitz attempt failed with MKZ_FAIL_CAPACITY */
 
     /* Sparse-efficient fallback telemetry */
     int sparse_dense_fallbacks;  /* lu_factorize_sparse_efficient -> lu_factorize_dense */

@@ -12,6 +12,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <limits.h>
 #include "lp.h"
 #include "lu_supernode.h"
 
@@ -1855,7 +1856,8 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
 #define MARKOWITZ_MAX_SEARCH  3     /* Candidates per degree bucket */
 #define MARKOWITZ_FILL_GAP    8     /* Extra slots per column/row for fill-in */
 #define MARKOWITZ_POOL_MULT   4     /* Pool = MULT × initial nnz */
-#define MARKOWITZ_POOL_RETRY_MULT 8 /* Retry with larger pool after overflow */
+#define MARKOWITZ_POOL_RETRY_MULT 8 /* Legacy retry multiplier (first growth target) */
+#define MARKOWITZ_POOL_MAX_MULT 64  /* Upper bound for progressive pool growth */
 #define MARKOWITZ_DENSE_SWITCH 0.7  /* Switch to dense when density exceeds this */
 
 enum {
@@ -1865,6 +1867,88 @@ enum {
     MKZ_FAIL_SINGULAR = -3,
     MKZ_FAIL_CAPACITY = -4
 };
+
+static int mkz_count_init_nnz(const SparseMatrix *B, const int *col_order, int k) {
+    int init_nnz = 0;
+    for (int jj = 0; jj < k; jj++) {
+        int j = col_order[jj];
+        for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+            if (fabs(B->values[p]) > RALPH_ZERO_TOL) {
+                init_nnz++;
+            }
+        }
+    }
+    return init_nnz;
+}
+
+static int mkz_compute_workspace_requirements(int init_nnz, int m, int k, int pool_mult,
+                                              int *pool_cap_out, size_t *need_doubles_out) {
+    if (!pool_cap_out || !need_doubles_out || m <= 0 || k < 0) {
+        return -1;
+    }
+
+    if (pool_mult < 1) pool_mult = MARKOWITZ_POOL_MULT;
+
+    size_t pool_cap = (size_t)init_nnz * (size_t)pool_mult;
+    size_t min_pool = (size_t)k * (size_t)MARKOWITZ_FILL_GAP * 2u;
+    if (pool_cap < min_pool) pool_cap = min_pool;
+    if (pool_cap > (size_t)INT_MAX) return -1;
+
+    size_t dbl_need = 2u * pool_cap + (size_t)k + (size_t)k;
+    size_t int_count = 2u * pool_cap + 3u * (size_t)k + 3u * (size_t)m
+                     + (size_t)k + (size_t)k + (size_t)m + (size_t)k + (size_t)m
+                     + (size_t)k + 1u + 2u * (size_t)k;
+
+    if (int_count > (((size_t)-1) - (sizeof(double) - 1u)) / sizeof(int)) {
+        return -1;
+    }
+    size_t int_doubles = (int_count * sizeof(int) + sizeof(double) - 1u) / sizeof(double);
+    if (dbl_need > ((size_t)-1) - int_doubles) {
+        return -1;
+    }
+
+    *pool_cap_out = (int)pool_cap;
+    *need_doubles_out = dbl_need + int_doubles;
+    return 0;
+}
+
+static int mkz_workspace_reserve(LUFactorization *lu, size_t need_doubles) {
+    if (!lu) return -1;
+    if (need_doubles <= lu->mkz_work_capacity) return 0;
+
+    size_t new_cap = lu->mkz_work_capacity ? lu->mkz_work_capacity : 1024u;
+    while (new_cap < need_doubles) {
+        if (new_cap > ((size_t)-1) / 2u) {
+            new_cap = need_doubles;
+            break;
+        }
+        new_cap *= 2u;
+    }
+
+    double *new_work = (double *)realloc(lu->mkz_work, new_cap * sizeof(double));
+    if (!new_work && new_cap != need_doubles) {
+        new_cap = need_doubles;
+        new_work = (double *)realloc(lu->mkz_work, new_cap * sizeof(double));
+    }
+    if (!new_work) return -1;
+
+    lu->mkz_work = new_work;
+    lu->mkz_work_capacity = new_cap;
+    return 0;
+}
+
+static void mkz_record_failure_reason(LUFactorization *lu, int rc) {
+    if (!lu) return;
+    if (rc == MKZ_FAIL_WORKSPACE) {
+        lu->mkz_fail_workspace++;
+    } else if (rc == MKZ_FAIL_POOL) {
+        lu->mkz_fail_pool++;
+    } else if (rc == MKZ_FAIL_SINGULAR) {
+        lu->mkz_fail_singular++;
+    } else if (rc == MKZ_FAIL_CAPACITY) {
+        lu->mkz_fail_capacity++;
+    }
+}
 
 /*
  * Sparse Markowitz factorization of the m×k structural submatrix.
@@ -1878,7 +1962,7 @@ enum {
  * Caller falls back to dense GE on failure.
  */
 static int lu_factorize_markowitz(
-    const SparseMatrix *B, const int *col_order, int m, int k,
+    const SparseMatrix *B, const int *col_order, int m, int k, int init_nnz,
     int *row_perm, int *row_pos, double pivot_tol,
     const int *row_reserved,
     const int *redundant_rows, int num_redundant,
@@ -1887,20 +1971,12 @@ static int lu_factorize_markowitz(
     int *U_row, int *U_col, double *U_val, int *U_nnz_out, int U_capacity,
     int *mkz_col_perm, int pool_mult, double *workspace, size_t workspace_doubles)
 {
-    /* Count initial nonzeros in structural submatrix */
-    int init_nnz = 0;
-    for (int jj = 0; jj < k; jj++) {
-        int j = col_order[jj];
-        for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
-            if (fabs(B->values[p]) > RALPH_ZERO_TOL)
-                init_nnz++;
-        }
-    }
-
     /* SVA pool sizing: MULT × initial nnz for both row and column pools */
-    if (pool_mult < 1) pool_mult = MARKOWITZ_POOL_MULT;
-    int pool_cap = init_nnz * pool_mult;
-    if (pool_cap < k * MARKOWITZ_FILL_GAP * 2) pool_cap = k * MARKOWITZ_FILL_GAP * 2;
+    int pool_cap = 0;
+    size_t total_need = 0;
+    if (mkz_compute_workspace_requirements(init_nnz, m, k, pool_mult, &pool_cap, &total_need) != 0) {
+        return MKZ_FAIL_WORKSPACE;
+    }
 
     /* Workspace layout (all carved from workspace buffer):
      *
@@ -1923,12 +1999,7 @@ static int lu_factorize_markowitz(
      *   dg_head[k+1]         — degree bucket heads
      *   dg_next[k], dg_prev[k] — degree bucket DLL
      */
-    size_t dbl_need = 2*(size_t)pool_cap + (size_t)k + (size_t)k;
-    size_t int_count = 2*(size_t)pool_cap + 3*(size_t)k + 3*(size_t)m
-                       + (size_t)k + (size_t)k + (size_t)m + (size_t)k + (size_t)m
-                       + (size_t)k + 1 + 2*(size_t)k;
-    size_t int_doubles = (int_count * sizeof(int) + sizeof(double) - 1) / sizeof(double);
-    size_t total_need = dbl_need + int_doubles;
+    size_t dbl_need = 2u * (size_t)pool_cap + (size_t)k + (size_t)k;
 
     if (workspace_doubles < total_need)
         return MKZ_FAIL_WORKSPACE;
@@ -2456,24 +2527,41 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
 
     /* Try sparse Markowitz factorization if enabled and k is large enough.
      * This exploits sparsity within structural columns, reducing O(k³) to O(nnz×fill).
-     * Uses dense_work as workspace (m² doubles available, far more than needed). */
+     * Uses dedicated growable mkz_work to avoid contention with dense_work layout. */
     if (lu->mkz_enabled && k >= MARKOWITZ_MIN_K) {
-        /* Allocate mkz_col_perm from stack-ish: use tail of dense_work past the m×k area */
-        size_t mkz_ws_offset = (size_t)m * k;
-        size_t mkz_ws_avail = (size_t)m * m - mkz_ws_offset;
-        /* mkz_col_perm needs k ints; pack into doubles at the very end */
-        int *mkz_col_perm = (int *)(A_struct + mkz_ws_offset);
-        size_t mkz_perm_doubles = ((size_t)k * sizeof(int) + sizeof(double) - 1) / sizeof(double);
-        double *mkz_workspace = A_struct + mkz_ws_offset + mkz_perm_doubles;
-        size_t mkz_ws_doubles = mkz_ws_avail - mkz_perm_doubles;
-
+        int mkz_init_nnz = mkz_count_init_nnz(B, col_order, k);
+        size_t mkz_perm_doubles = ((size_t)k * sizeof(int) + sizeof(double) - 1u) / sizeof(double);
+        int *mkz_col_perm = NULL;
         int mkz_reg = 0;
         int rc = MKZ_FAIL_NONE;
         int pool_mult = MARKOWITZ_POOL_MULT;
-        for (int attempt = 0; attempt < 2; attempt++) {
+
+        while (1) {
+            int pool_cap_dummy = 0;
+            size_t mkz_need = 0;
+            if (mkz_compute_workspace_requirements(mkz_init_nnz, m, k, pool_mult,
+                                                   &pool_cap_dummy, &mkz_need) != 0) {
+                rc = MKZ_FAIL_WORKSPACE;
+                lu->mkz_calls++;
+                mkz_record_failure_reason(lu, rc);
+                break;
+            }
+
+            if (mkz_need > ((size_t)-1) - mkz_perm_doubles ||
+                mkz_workspace_reserve(lu, mkz_perm_doubles + mkz_need) != 0) {
+                rc = MKZ_FAIL_WORKSPACE;
+                lu->mkz_calls++;
+                mkz_record_failure_reason(lu, rc);
+                break;
+            }
+
+            mkz_col_perm = (int *)lu->mkz_work;
+            double *mkz_workspace = lu->mkz_work + mkz_perm_doubles;
+            size_t mkz_ws_doubles = lu->mkz_work_capacity - mkz_perm_doubles;
+
             lu->mkz_calls++;
             rc = lu_factorize_markowitz(
-                B, col_order, m, k, row_perm, row_pos, lu->pivot_tol,
+                B, col_order, m, k, mkz_init_nnz, row_perm, row_pos, lu->pivot_tol,
                 row_is_identity,
                 lu->redundant_rows, lu->num_redundant,
                 lu->allow_regularization, lu->max_regularizations, &mkz_reg,
@@ -2481,9 +2569,21 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                 U_row, U_col, U_val, &U_nnz, lu->coo_capacity,
                 mkz_col_perm, pool_mult, mkz_workspace, mkz_ws_doubles);
             if (rc == 0) break;
-            if (!(rc == MKZ_FAIL_POOL && attempt == 0)) break;
+            mkz_record_failure_reason(lu, rc);
+            if (rc != MKZ_FAIL_POOL || pool_mult >= MARKOWITZ_POOL_MAX_MULT) break;
 
-            pool_mult = MARKOWITZ_POOL_RETRY_MULT;
+            int next_pool_mult = pool_mult * 2;
+            if (next_pool_mult < MARKOWITZ_POOL_RETRY_MULT) {
+                next_pool_mult = MARKOWITZ_POOL_RETRY_MULT;
+            }
+            if (next_pool_mult <= pool_mult) {
+                next_pool_mult = pool_mult + 1;
+            }
+            if (next_pool_mult > MARKOWITZ_POOL_MAX_MULT) {
+                next_pool_mult = MARKOWITZ_POOL_MAX_MULT;
+            }
+            pool_mult = next_pool_mult;
+
             L_nnz = 0;
             U_nnz = 0;
             int struct_pos = 0;
