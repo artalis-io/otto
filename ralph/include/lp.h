@@ -245,6 +245,16 @@ typedef struct {
 
     /* Sparse Markowitz LU */
     int mkz_enabled;         /* 1 = use Markowitz path when k >= MARKOWITZ_MIN_K */
+    int mkz_calls;           /* Markowitz factorization attempts */
+    int mkz_successes;       /* Markowitz factorization successes */
+    int mkz_failures;        /* Markowitz factorization failures */
+    int mkz_last_failure;    /* Internal Markowitz failure code (0 on success) */
+    int mkz_dense_fallbacks; /* Markowitz failed and dense GE path was used */
+
+    /* Sparse-efficient fallback telemetry */
+    int sparse_dense_fallbacks;  /* lu_factorize_sparse_efficient -> lu_factorize_dense */
+    int used_dense_fallback_last;/* 1 if last lu_factorize call used dense fallback */
+    int identity_sep_failures;   /* Identity-placement failures in sparse-efficient path */
 
     /* Supernodal LU (T2.1) */
     int sn_enabled;          /* 1 = use supernodal path when k >= SN_MIN_K */

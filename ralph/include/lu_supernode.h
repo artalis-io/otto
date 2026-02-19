@@ -87,6 +87,7 @@ int sn_block_factor(int panel_rows, int block_size,
  * Returns 0 on success, -1 on failure (falls back to column-by-column GE). */
 int sn_factorize(double *A_struct, int m, int k,
                  int *row_perm, int *row_pos, double pivot_tol,
+                 const int *row_reserved,
                  const Supernode *supernodes, int num_supernodes,
                  const int *redundant_rows, int num_redundant,
                  int allow_regularization, int max_regularizations,

@@ -405,7 +405,7 @@ static void test_sn_factorize_known_matrix(void) {
     double *Uv = (double *)calloc(cap, sizeof(double));
     int Lnnz = 0, Unnz = 0;
 
-    int rc = sn_factorize(A, m, k, row_perm, row_pos, 1e-10,
+    int rc = sn_factorize(A, m, k, row_perm, row_pos, 1e-10, NULL,
                           sym->supernodes, sym->num_supernodes,
                           NULL, 0, 0, 0, NULL,
                           Lr, Lc, Lv, &Lnnz, cap,
@@ -506,7 +506,7 @@ static void test_sn_factorize_random(void) {
     double *Uv = (double *)calloc(cap, sizeof(double));
     int Lnnz = 0, Unnz = 0;
 
-    int rc = sn_factorize(A, m, k, row_perm, row_pos, 1e-10,
+    int rc = sn_factorize(A, m, k, row_perm, row_pos, 1e-10, NULL,
                           sym->supernodes, sym->num_supernodes,
                           NULL, 0, 0, 0, NULL,
                           Lr, Lc, Lv, &Lnnz, cap,
