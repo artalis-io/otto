@@ -1306,3 +1306,8 @@ int ralph_set_problem_name(RalphModel *model, const char *name) {
 LPModel* ralph_get_lp_model(const RalphModel *model) {
     return model ? model->lp_model : NULL;
 }
+
+/* Internal helper for benchmark diagnostics */
+SimplexSolver* ralph_get_lp_solver(const RalphModel *model) {
+    return model ? model->lp_solver : NULL;
+}

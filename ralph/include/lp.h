@@ -279,10 +279,14 @@ typedef struct {
     SHArena *arena;
 } LUFactorization;
 
+/* Forward declaration (tableau back-pointer for timing instrumentation) */
+struct SimplexSolver;
+
 /* Simplex tableau representation */
 typedef struct {
     /* Problem data */
     LPModel *model;
+    struct SimplexSolver *owner;   /* Owning solver (NULL when detached) */
 
     /* Extended problem (with slacks) */
     int n;                  /* Total variables (structural + slack) */
@@ -422,7 +426,7 @@ typedef struct {
 } SimplexTableau;
 
 /* Simplex solver */
-typedef struct {
+typedef struct SimplexSolver {
     LPModel *model;
     SimplexTableau *tableau;
 
@@ -457,6 +461,20 @@ typedef struct {
     int iterations;
     double solve_time;
     int degenerate_pivots;
+    double perf_primal_setup_ms;   /* Tableau create + initial factorization */
+    double perf_dual_ms;           /* Dual path runtime (method 1/2 attempt) */
+    double perf_phase1_ms;         /* Primal Phase 1 runtime */
+    double perf_transition_ms;     /* Phase 1 -> 2 transition runtime */
+    double perf_phase2_ms;         /* Primal Phase 2 runtime */
+    double perf_pricing_ms;        /* Entering variable pricing time */
+    double perf_ratio_ms;          /* Ratio test time */
+    double perf_pivot_ms;          /* Pivot application time */
+    double perf_refactor_ms;       /* Refactorization time */
+    double perf_ftran_ms;          /* FTRAN solve time (B^{-1} * a) */
+    double perf_btran_ms;          /* BTRAN solve time (B^{-T} * e) */
+    double perf_lu_update_ms;      /* LU update time */
+    double perf_compute_solution_ms; /* tableau_compute_solution time */
+    double perf_compute_rc_ms;     /* tableau_compute_reduced_costs time */
 
     /* Post-solve verification metrics (T2.3 + T3.6) */
     double verify_primal_infeas;    /* ||Ax - b||_inf for satisfied constraints */

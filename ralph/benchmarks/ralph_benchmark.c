@@ -24,9 +24,14 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <errno.h>
+#include <ctype.h>
 
 #include "ralph.h"
 #include "lp.h"
+
+/* Internal helpers exposed by ralph.c for benchmark diagnostics */
+extern LPModel* ralph_get_lp_model(const RalphModel *model);
+extern SimplexSolver* ralph_get_lp_solver(const RalphModel *model);
 
 /* ============================================================================
  * Constants and Configuration
@@ -184,6 +189,20 @@ typedef struct {
     double objective;
     double time_ms;
     int iterations;
+    double primal_setup_ms;
+    double dual_ms;
+    double phase1_ms;
+    double transition_ms;
+    double phase2_ms;
+    double pricing_ms;
+    double ratio_ms;
+    double pivot_ms;
+    double refactor_ms;
+    double ftran_ms;
+    double btran_ms;
+    double lu_update_ms;
+    double compute_solution_ms;
+    double compute_rc_ms;
     double *solution;    /* Primal solution (may be NULL) */
     int solution_size;
 } SolveResult;
@@ -331,6 +350,66 @@ static int check_glpk_available(void) {
     return ret == 0;
 }
 
+/* Parse a GLPK stdout line like:
+ * "  12345 simplex iterations"
+ * Returns 1 if parsed, 0 otherwise.
+ */
+static int parse_glpk_iterations_line(const char *line, int *iters_out) {
+    if (!line || !iters_out) return 0;
+
+    const char *marker = strstr(line, "simplex iterations");
+    if (!marker) return 0;
+
+    /* Walk backward from marker to find the integer token before it */
+    const char *end = marker;
+    while (end > line && isspace((unsigned char)end[-1])) end--;
+
+    const char *start = end;
+    while (start > line && isdigit((unsigned char)start[-1])) start--;
+    if (start == end) return 0;
+
+    char buf[32];
+    size_t len = (size_t)(end - start);
+    if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+    memcpy(buf, start, len);
+    buf[len] = '\0';
+
+    int iters = atoi(buf);
+    if (iters < 0) return 0;
+
+    *iters_out = iters;
+    return 1;
+}
+
+/* Parse simplex progress lines like:
+ * "    110: obj = ..."
+ * "*   240: obj = ..."
+ */
+static int parse_glpk_progress_iteration(const char *line, int *iters_out) {
+    if (!line || !iters_out) return 0;
+
+    const char *marker = strstr(line, ": obj");
+    if (!marker) return 0;
+
+    const char *end = marker;
+    while (end > line && isspace((unsigned char)end[-1])) end--;
+
+    const char *start = end;
+    while (start > line && isdigit((unsigned char)start[-1])) start--;
+    if (start == end) return 0;
+
+    char buf[32];
+    size_t len = (size_t)(end - start);
+    if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+    memcpy(buf, start, len);
+    buf[len] = '\0';
+
+    int iters = atoi(buf);
+    if (iters < 0) return 0;
+    *iters_out = iters;
+    return 1;
+}
+
 static SolveResult solve_with_glpk(const char *problem_path, double time_limit_sec) {
     SolveResult result = {0};
     result.status = 3;  /* Error by default */
@@ -372,6 +451,19 @@ static SolveResult solve_with_glpk(const char *problem_path, double time_limit_s
                 found_time = 1;
             }
         }
+        /* Parse iteration count from stdout (not solution file). */
+        {
+            int iters = 0;
+            if (parse_glpk_iterations_line(line, &iters)) {
+                result.iterations = iters;
+            }
+        }
+        {
+            int iters = 0;
+            if (parse_glpk_progress_iteration(line, &iters) && iters > result.iterations) {
+                result.iterations = iters;
+            }
+        }
     }
     int ret = pclose(pipe);
     double end_time = get_time_ms();
@@ -402,13 +494,6 @@ static SolveResult solve_with_glpk(const char *problem_path, double time_limit_s
                 char *eq = strchr(line, '=');
                 if (eq) {
                     result.objective = atof(eq + 1);
-                }
-            }
-            /* Iterations */
-            if (strstr(line, "simplex iterations")) {
-                int iters;
-                if (sscanf(line, "%d simplex", &iters) == 1) {
-                    result.iterations = iters;
                 }
             }
         }
@@ -461,9 +546,7 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     *out_num_vars = ralph_get_num_vars(model);
     *out_num_cons = ralph_get_num_cons(model);
     *out_is_mip = ralph_is_mip(model);
-
-    /* Estimate nnz (not available via public API, so estimate from problem size) */
-    *out_nnz = (*out_num_vars) * (*out_num_cons) / 10;  /* Rough estimate */
+    *out_nnz = 0;
 
     /* Configure solver */
     ralph_set_int_param(model, "verbose", 0);
@@ -486,6 +569,35 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
 
     result.time_ms = end_time - start_time;
     result.iterations = ralph_get_iterations(model);
+    {
+        LPModel *lp = ralph_get_lp_model(model);
+        if (lp) {
+            if (lp->A && lp->A->nnz > 0) {
+                *out_nnz = lp->A->nnz;
+            } else if (lp->num_elements > 0) {
+                *out_nnz = lp->num_elements;
+            }
+        }
+    }
+    {
+        SimplexSolver *solver = ralph_get_lp_solver(model);
+        if (solver) {
+            result.primal_setup_ms = solver->perf_primal_setup_ms;
+            result.dual_ms = solver->perf_dual_ms;
+            result.phase1_ms = solver->perf_phase1_ms;
+            result.transition_ms = solver->perf_transition_ms;
+            result.phase2_ms = solver->perf_phase2_ms;
+            result.pricing_ms = solver->perf_pricing_ms;
+            result.ratio_ms = solver->perf_ratio_ms;
+            result.pivot_ms = solver->perf_pivot_ms;
+            result.refactor_ms = solver->perf_refactor_ms;
+            result.ftran_ms = solver->perf_ftran_ms;
+            result.btran_ms = solver->perf_btran_ms;
+            result.lu_update_ms = solver->perf_lu_update_ms;
+            result.compute_solution_ms = solver->perf_compute_solution_ms;
+            result.compute_rc_ms = solver->perf_compute_rc_ms;
+        }
+    }
 
     /* Map status */
     RalphStatus status = ralph_get_status(model);
@@ -602,7 +714,6 @@ static ValidationResult validate_solution(double *solution, int num_vars,
  * ============================================================================ */
 
 /* Access Ralph's internal model (defined in ralph.c) */
-extern LPModel* ralph_get_lp_model(const RalphModel *model);
 extern int lp_model_finalize(LPModel *model);
 
 /* Forward declaration (defined in Problem Discovery section below) */
@@ -1201,6 +1312,24 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"ralph_vs_glpk_iters\": %.3f,\n", iter_ratio);
     fprintf(out, "    \"ralph_ms_per_iter\": %.6f,\n", ralph_per_iter);
     fprintf(out, "    \"glpk_ms_per_iter\": %.6f\n", glpk_per_iter);
+    fprintf(out, "  },\n");
+
+    /* Ralph timing breakdown (solver-internal instrumentation) */
+    fprintf(out, "  \"timing\": {\n");
+    fprintf(out, "    \"primal_setup_ms\": %.6f,\n", ralph->primal_setup_ms);
+    fprintf(out, "    \"dual_ms\": %.6f,\n", ralph->dual_ms);
+    fprintf(out, "    \"phase1_ms\": %.6f,\n", ralph->phase1_ms);
+    fprintf(out, "    \"transition_ms\": %.6f,\n", ralph->transition_ms);
+    fprintf(out, "    \"phase2_ms\": %.6f,\n", ralph->phase2_ms);
+    fprintf(out, "    \"pricing_ms\": %.6f,\n", ralph->pricing_ms);
+    fprintf(out, "    \"ratio_ms\": %.6f,\n", ralph->ratio_ms);
+    fprintf(out, "    \"pivot_ms\": %.6f,\n", ralph->pivot_ms);
+    fprintf(out, "    \"refactor_ms\": %.6f,\n", ralph->refactor_ms);
+    fprintf(out, "    \"ftran_ms\": %.6f,\n", ralph->ftran_ms);
+    fprintf(out, "    \"btran_ms\": %.6f,\n", ralph->btran_ms);
+    fprintf(out, "    \"lu_update_ms\": %.6f,\n", ralph->lu_update_ms);
+    fprintf(out, "    \"compute_solution_ms\": %.6f,\n", ralph->compute_solution_ms);
+    fprintf(out, "    \"compute_reduced_costs_ms\": %.6f\n", ralph->compute_rc_ms);
     fprintf(out, "  },\n");
 
     /* Diagnosis */
