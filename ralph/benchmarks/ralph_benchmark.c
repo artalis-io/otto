@@ -208,6 +208,7 @@ typedef struct {
     int lu_mkz_calls;
     int lu_mkz_successes;
     int lu_mkz_failures;
+    int lu_mkz_retry_count;
     int lu_mkz_last_failure;
     int lu_mkz_dense_fallbacks;
     int lu_mkz_fail_workspace;
@@ -625,6 +626,10 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_mkz_calls = lu->mkz_calls;
                 result.lu_mkz_successes = lu->mkz_successes;
                 result.lu_mkz_failures = lu->mkz_failures;
+                {
+                    int retries = lu->mkz_calls - lu->mkz_successes - lu->mkz_failures;
+                    result.lu_mkz_retry_count = (retries > 0) ? retries : 0;
+                }
                 result.lu_mkz_last_failure = lu->mkz_last_failure;
                 result.lu_mkz_dense_fallbacks = lu->mkz_dense_fallbacks;
                 result.lu_mkz_fail_workspace = lu->mkz_fail_workspace;
@@ -1387,12 +1392,17 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "  },\n");
 
     /* LU telemetry (Markowitz/sparse fallback diagnostics) */
+    double mkz_retry_rate = (ralph->lu_mkz_calls > 0)
+                            ? (double)ralph->lu_mkz_retry_count / (double)ralph->lu_mkz_calls
+                            : 0.0;
     fprintf(out, "  \"lu\": {\n");
     fprintf(out, "    \"mkz_enabled\": %s,\n", ralph->lu_mkz_enabled ? "true" : "false");
     fprintf(out, "    \"sn_enabled\": %s,\n", ralph->lu_sn_enabled ? "true" : "false");
     fprintf(out, "    \"mkz_calls\": %d,\n", ralph->lu_mkz_calls);
     fprintf(out, "    \"mkz_successes\": %d,\n", ralph->lu_mkz_successes);
     fprintf(out, "    \"mkz_failures\": %d,\n", ralph->lu_mkz_failures);
+    fprintf(out, "    \"mkz_retry_count\": %d,\n", ralph->lu_mkz_retry_count);
+    fprintf(out, "    \"mkz_retry_rate\": %.6f,\n", mkz_retry_rate);
     fprintf(out, "    \"mkz_last_failure\": %d,\n", ralph->lu_mkz_last_failure);
     fprintf(out, "    \"mkz_dense_fallbacks\": %d,\n", ralph->lu_mkz_dense_fallbacks);
     fprintf(out, "    \"mkz_fail_workspace\": %d,\n", ralph->lu_mkz_fail_workspace);
