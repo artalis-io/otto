@@ -13,8 +13,15 @@
 #include <stdio.h>
 #include <math.h>
 #include <limits.h>
+#include <sys/time.h>
 #include "lp.h"
 #include "lu_supernode.h"
+
+static inline double perf_now_ms(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec * 1000.0 + tv.tv_usec / 1000.0;
+}
 
 /* ============================================================================
  * AMD (Approximate Minimum Degree) Ordering
@@ -2455,14 +2462,21 @@ static int lu_factorize_markowitz(
 static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                                  int num_identity, int k) {
     int m = lu->m;
+    double t_a_struct_build_ms = 0.0;
+    double t_markowitz_numeric_ms = 0.0;
+    double t_identity_placement_ms = 0.0;
+    double t_coo_to_csc_ms = 0.0;
+    double t_stage_start_ms = 0.0;
 
     int *identity_row = lu->ws_identity_row;
     double *identity_val = lu->ws_identity_val;
     int *col_order = lu->ws_col_order;
     (void)num_identity;  /* Used implicitly: k = m - num_identity */
+    lu->perf_last_k = k;
 
     /* Use dense_work for A_struct (m×k fits in m×m, row-major layout) */
     double *A_struct = lu->dense_work;
+    t_stage_start_ms = perf_now_ms();
     memset(A_struct, 0, (size_t)m * k * sizeof(double));
 
     /* Row-major layout A_struct[row * k + col] for cache-friendly GE */
@@ -2473,6 +2487,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             A_struct[row * k + jj] = B->values[p];
         }
     }
+    t_a_struct_build_ms += perf_now_ms() - t_stage_start_ms;
 
     /* Dense LU with partial pivoting on the m×k structural part */
     int *row_perm = lu->ws_row_perm;
@@ -2560,6 +2575,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             size_t mkz_ws_doubles = lu->mkz_work_capacity - mkz_perm_doubles;
 
             lu->mkz_calls++;
+            t_stage_start_ms = perf_now_ms();
             rc = lu_factorize_markowitz(
                 B, col_order, m, k, mkz_init_nnz, row_perm, row_pos, lu->pivot_tol,
                 row_is_identity,
@@ -2568,6 +2584,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                 L_row, L_col, L_val, &L_nnz, lu->coo_capacity,
                 U_row, U_col, U_val, &U_nnz, lu->coo_capacity,
                 mkz_col_perm, pool_mult, mkz_workspace, mkz_ws_doubles);
+            t_markowitz_numeric_ms += perf_now_ms() - t_stage_start_ms;
             if (rc == 0) break;
             mkz_record_failure_reason(lu, rc);
             if (rc != MKZ_FAIL_POOL || pool_mult >= MARKOWITZ_POOL_MAX_MULT) break;
@@ -2663,6 +2680,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             }
         }
         /* Re-populate A_struct from B */
+        t_stage_start_ms = perf_now_ms();
         memset(A_struct, 0, (size_t)m * k * sizeof(double));
         for (int jj = 0; jj < k; jj++) {
             int j = col_order[jj];
@@ -2671,6 +2689,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                 A_struct[row * k + jj] = B->values[p];
             }
         }
+        t_a_struct_build_ms += perf_now_ms() - t_stage_start_ms;
     }
 
     /* T2.1: Try supernodal factorization if enabled and k is large enough */
@@ -2735,6 +2754,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                 }
             }
             /* Re-populate A_struct from B (sn_factorize modifies it in-place) */
+            t_stage_start_ms = perf_now_ms();
             memset(A_struct, 0, (size_t)m * k * sizeof(double));
             for (int jj = 0; jj < k; jj++) {
                 int j = col_order[jj];
@@ -2743,6 +2763,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                     A_struct[row * k + jj] = B->values[p];
                 }
             }
+            t_a_struct_build_ms += perf_now_ms() - t_stage_start_ms;
         }
     }
 
@@ -2854,6 +2875,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
 identity_placement:
     /* Handle identity columns (steps k..m-1).
      * Use row_pos[] for O(1) lookup instead of O(n) linear scan. */
+    t_stage_start_ms = perf_now_ms();
     for (int step = k; step < m; step++) {
         int orig_col = col_order[step];  /* Original identity column */
         int orig_row = identity_row[orig_col];
@@ -2886,6 +2908,7 @@ identity_placement:
         U_val[U_nnz] = val;
         U_nnz++;
     }
+    t_identity_placement_ms += perf_now_ms() - t_stage_start_ms;
 
     /* L entries were emitted in original-row space. Convert them once after all
      * row swaps (structural pivoting + identity placement) are complete. */
@@ -2902,6 +2925,7 @@ identity_placement:
     }
 
     /* Convert L and U from COO to CSC — reuse pre-allocated arrays */
+    t_stage_start_ms = perf_now_ms();
     int needed = L_nnz > U_nnz ? L_nnz : U_nnz;
     if (needed > lu->LU_out_capacity) {
         int new_cap = needed * 2;
@@ -2954,6 +2978,7 @@ identity_placement:
         lu->U_values[pos] = U_val[i];
     }
     lu->nnz_U = U_nnz;
+    t_coo_to_csc_ms += perf_now_ms() - t_stage_start_ms;
 
     /* Extract U diagonals */
     lu->min_diag_U = RALPH_INFINITY;
@@ -2990,6 +3015,15 @@ identity_placement:
         lu->ft_col_order[i] = i;
         lu->ft_col_order_inv[i] = i;
     }
+
+    lu->perf_last_a_struct_build_ms = t_a_struct_build_ms;
+    lu->perf_last_markowitz_numeric_ms = t_markowitz_numeric_ms;
+    lu->perf_last_identity_placement_ms = t_identity_placement_ms;
+    lu->perf_last_coo_to_csc_ms = t_coo_to_csc_ms;
+    lu->perf_total_a_struct_build_ms += t_a_struct_build_ms;
+    lu->perf_total_markowitz_numeric_ms += t_markowitz_numeric_ms;
+    lu->perf_total_identity_placement_ms += t_identity_placement_ms;
+    lu->perf_total_coo_to_csc_ms += t_coo_to_csc_ms;
 
     return 0;
 }
