@@ -1,0 +1,351 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RALPH_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+BASELINE_FILE="$SCRIPT_DIR/netlib_regression_baseline.json"
+NETLIB_DIR="$SCRIPT_DIR/netlib"
+BENCH_EXEC="$RALPH_DIR/ralph-benchmark"
+
+HARD_CAP_SEC=""
+OUTER_TIMEOUT_SEC=""
+OUTDIR=""
+FILTER_REGEX=""
+NO_BUILD=0
+
+usage() {
+    cat <<'EOF'
+Usage: netlib_regression_gate.sh [options]
+
+Options:
+  --baseline <file>        Baseline manifest JSON
+  --netlib-dir <dir>       Directory containing .mps files
+  --bench <path>           ralph-benchmark executable path
+  --hard-cap <sec>         --hard-cap passed to ralph-benchmark
+  --outer-timeout <sec>    External timeout wrapper seconds
+  --outdir <dir>           Output directory for run artifacts
+  --filter <regex>         Only run files where basename matches regex
+  --no-build               Skip rebuilding ralph-benchmark
+  -h, --help               Show help
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --baseline)
+            BASELINE_FILE="$2"
+            shift 2
+            ;;
+        --netlib-dir)
+            NETLIB_DIR="$2"
+            shift 2
+            ;;
+        --bench)
+            BENCH_EXEC="$2"
+            shift 2
+            ;;
+        --hard-cap)
+            HARD_CAP_SEC="$2"
+            shift 2
+            ;;
+        --outer-timeout)
+            OUTER_TIMEOUT_SEC="$2"
+            shift 2
+            ;;
+        --outdir)
+            OUTDIR="$2"
+            shift 2
+            ;;
+        --filter)
+            FILTER_REGEX="$2"
+            shift 2
+            ;;
+        --no-build)
+            NO_BUILD=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            usage
+            exit 2
+            ;;
+    esac
+done
+
+if ! command -v jq >/dev/null 2>&1; then
+    echo "ERROR: jq is required for NETLIB regression gate." >&2
+    exit 2
+fi
+
+TIMEOUT_BIN=""
+if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT_BIN="$(command -v timeout)"
+elif command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_BIN="$(command -v gtimeout)"
+else
+    echo "ERROR: timeout (or gtimeout) is required for NETLIB regression gate." >&2
+    exit 2
+fi
+
+if [[ ! -f "$BASELINE_FILE" ]]; then
+    echo "ERROR: baseline file not found: $BASELINE_FILE" >&2
+    exit 2
+fi
+
+if [[ ! -d "$NETLIB_DIR" ]]; then
+    echo "ERROR: NETLIB directory not found: $NETLIB_DIR" >&2
+    exit 2
+fi
+
+if [[ -z "$HARD_CAP_SEC" ]]; then
+    HARD_CAP_SEC="$(jq -r '.defaults.hard_cap_sec // 20' "$BASELINE_FILE")"
+fi
+if [[ -z "$OUTER_TIMEOUT_SEC" ]]; then
+    OUTER_TIMEOUT_SEC="$(jq -r '.defaults.outer_timeout_sec // 25' "$BASELINE_FILE")"
+fi
+
+if [[ "$NO_BUILD" -eq 0 ]]; then
+    make -C "$RALPH_DIR" build-ralph-benchmark >/dev/null
+fi
+
+if [[ ! -x "$BENCH_EXEC" ]]; then
+    echo "ERROR: benchmark executable is not runnable: $BENCH_EXEC" >&2
+    exit 2
+fi
+
+if [[ -z "$OUTDIR" ]]; then
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    OUTDIR="/tmp/netlib-regression-gate-$stamp"
+fi
+mkdir -p "$OUTDIR/results"
+
+FILES_TXT="$OUTDIR/files.txt"
+STATUS_TSV="$OUTDIR/status.tsv"
+
+find "$NETLIB_DIR" -maxdepth 1 -type f -name '*.mps' | LC_ALL=C sort > "$FILES_TXT"
+if [[ -n "$FILTER_REGEX" ]]; then
+    FILTERED_TXT="$OUTDIR/files.filtered.txt"
+    : > "$FILTERED_TXT"
+    while IFS= read -r fp; do
+        bn="$(basename "$fp")"
+        if [[ "$bn" =~ $FILTER_REGEX ]]; then
+            echo "$fp" >> "$FILTERED_TXT"
+        fi
+    done < "$FILES_TXT"
+    mv "$FILTERED_TXT" "$FILES_TXT"
+fi
+
+total="$(wc -l < "$FILES_TXT" | tr -d ' ')"
+if [[ "$total" -eq 0 ]]; then
+    echo "ERROR: no NETLIB files selected for regression gate." >&2
+    exit 2
+fi
+
+echo "NETLIB regression gate"
+echo "  baseline: $BASELINE_FILE"
+echo "  netlib:   $NETLIB_DIR"
+echo "  bench:    $BENCH_EXEC"
+echo "  files:    $total"
+echo "  hard-cap: $HARD_CAP_SEC sec"
+echo "  timeout:  $OUTER_TIMEOUT_SEC sec (external)"
+echo "  outdir:   $OUTDIR"
+
+: > "$STATUS_TSV"
+i=0
+while IFS= read -r f; do
+    i=$((i + 1))
+    base="$(basename "$f" .mps)"
+    name="$base.mps"
+    json="$OUTDIR/results/$base.json"
+    stderr_file="$OUTDIR/results/$base.stderr"
+
+    echo "[$i/$total] $name"
+    set +e
+    "$TIMEOUT_BIN" -k 5 "$OUTER_TIMEOUT_SEC" \
+        "$BENCH_EXEC" --hard-cap "$HARD_CAP_SEC" "$f" \
+        > "$json" 2> "$stderr_file"
+    ec=$?
+    set -e
+    printf "%s\t%s\n" "$name" "$ec" >> "$STATUS_TSV"
+done < "$FILES_TXT"
+
+known_status="$OUTDIR/known.status_mismatch.txt"
+known_obj="$OUTDIR/known.objective_mismatch.txt"
+known_sol="$OUTDIR/known.solution_invalid.txt"
+known_timeout="$OUTDIR/known.timeouts.txt"
+
+jq -r '.known_status_mismatch[]?' "$BASELINE_FILE" | LC_ALL=C sort -u > "$known_status"
+jq -r '.known_objective_mismatch[]?' "$BASELINE_FILE" | LC_ALL=C sort -u > "$known_obj"
+jq -r '.known_solution_invalid[]?' "$BASELINE_FILE" | LC_ALL=C sort -u > "$known_sol"
+jq -r '.known_timeouts[]?' "$BASELINE_FILE" | LC_ALL=C sort -u > "$known_timeout"
+
+actual_timeout="$OUTDIR/actual.timeouts.txt"
+actual_cmd_fail="$OUTDIR/actual.command_failures.txt"
+actual_status="$OUTDIR/actual.status_mismatch.txt"
+actual_obj="$OUTDIR/actual.objective_mismatch.txt"
+actual_sol="$OUTDIR/actual.solution_invalid.txt"
+actual_dense="$OUTDIR/actual.dense_fallback.txt"
+solved_jsons="$OUTDIR/solved.jsons.txt"
+
+: > "$actual_timeout"
+: > "$actual_cmd_fail"
+: > "$actual_status"
+: > "$actual_obj"
+: > "$actual_sol"
+: > "$actual_dense"
+: > "$solved_jsons"
+
+while IFS=$'\t' read -r name ec; do
+    base="${name%.mps}"
+    json="$OUTDIR/results/$base.json"
+
+    if [[ "$ec" -eq 124 ]]; then
+        echo "$name" >> "$actual_timeout"
+        continue
+    fi
+    if [[ "$ec" -ne 0 ]]; then
+        echo "$name" >> "$actual_cmd_fail"
+        continue
+    fi
+    if [[ ! -s "$json" ]]; then
+        echo "$name" >> "$actual_cmd_fail"
+        continue
+    fi
+    echo "$json" >> "$solved_jsons"
+
+    rec="$(jq -r '
+        [
+          .problem.name,
+          .ralph.status,
+          .glpk.status,
+          (if .validation.objective_match == true then "true" else "false" end),
+          (if .validation.solution_valid == true then "true" else "false" end),
+          ((.lu.sparse_dense_fallbacks // 0) | tostring)
+        ] | @tsv' "$json" 2>/dev/null || true)"
+    if [[ -z "$rec" ]]; then
+        echo "$name" >> "$actual_cmd_fail"
+        continue
+    fi
+
+    IFS=$'\t' read -r prob_name r_status g_status obj_ok sol_ok dense_fb <<< "$rec"
+    if [[ "$r_status" != "$g_status" ]]; then
+        echo "$prob_name" >> "$actual_status"
+    fi
+    if [[ "$obj_ok" != "true" ]]; then
+        echo "$prob_name" >> "$actual_obj"
+    fi
+    if [[ "$sol_ok" != "true" ]]; then
+        echo "$prob_name" >> "$actual_sol"
+    fi
+    if [[ "$dense_fb" -gt 0 ]]; then
+        echo "$prob_name" >> "$actual_dense"
+    fi
+done < "$STATUS_TSV"
+
+LC_ALL=C sort -u "$actual_timeout" -o "$actual_timeout"
+LC_ALL=C sort -u "$actual_cmd_fail" -o "$actual_cmd_fail"
+LC_ALL=C sort -u "$actual_status" -o "$actual_status"
+LC_ALL=C sort -u "$actual_obj" -o "$actual_obj"
+LC_ALL=C sort -u "$actual_sol" -o "$actual_sol"
+LC_ALL=C sort -u "$actual_dense" -o "$actual_dense"
+
+unexpected_timeout="$OUTDIR/unexpected.timeouts.txt"
+unexpected_status="$OUTDIR/unexpected.status_mismatch.txt"
+unexpected_obj="$OUTDIR/unexpected.objective_mismatch.txt"
+unexpected_sol="$OUTDIR/unexpected.solution_invalid.txt"
+
+comm -23 "$actual_timeout" "$known_timeout" > "$unexpected_timeout"
+comm -23 "$actual_status" "$known_status" > "$unexpected_status"
+comm -23 "$actual_obj" "$known_obj" > "$unexpected_obj"
+comm -23 "$actual_sol" "$known_sol" > "$unexpected_sol"
+
+require_zero_dense="$(jq -r '.require_zero_dense_fallback // true' "$BASELINE_FILE")"
+
+timeout_count="$(wc -l < "$actual_timeout" | tr -d ' ')"
+cmd_fail_count="$(wc -l < "$actual_cmd_fail" | tr -d ' ')"
+status_count="$(wc -l < "$actual_status" | tr -d ' ')"
+obj_count="$(wc -l < "$actual_obj" | tr -d ' ')"
+sol_count="$(wc -l < "$actual_sol" | tr -d ' ')"
+dense_count="$(wc -l < "$actual_dense" | tr -d ' ')"
+
+unexpected_timeout_count="$(wc -l < "$unexpected_timeout" | tr -d ' ')"
+unexpected_status_count="$(wc -l < "$unexpected_status" | tr -d ' ')"
+unexpected_obj_count="$(wc -l < "$unexpected_obj" | tr -d ' ')"
+unexpected_sol_count="$(wc -l < "$unexpected_sol" | tr -d ' ')"
+
+echo
+echo "Summary:"
+echo "  total files:            $total"
+echo "  timeout files:          $timeout_count"
+echo "  command failures:       $cmd_fail_count"
+echo "  status mismatches:      $status_count"
+echo "  objective mismatches:   $obj_count"
+echo "  invalid solutions:      $sol_count"
+echo "  dense fallback files:   $dense_count"
+
+echo
+echo "Unexpected vs baseline:"
+echo "  new timeouts:           $unexpected_timeout_count"
+echo "  new status mismatch:    $unexpected_status_count"
+echo "  new objective mismatch: $unexpected_obj_count"
+echo "  new invalid solutions:  $unexpected_sol_count"
+
+gate_fail=0
+
+if [[ "$cmd_fail_count" -gt 0 ]]; then
+    echo
+    echo "FAIL: command failures (non-timeout):"
+    cat "$actual_cmd_fail"
+    gate_fail=1
+fi
+
+if [[ "$unexpected_timeout_count" -gt 0 ]]; then
+    echo
+    echo "FAIL: new timeout regressions:"
+    cat "$unexpected_timeout"
+    gate_fail=1
+fi
+
+if [[ "$unexpected_status_count" -gt 0 ]]; then
+    echo
+    echo "FAIL: new status mismatches:"
+    cat "$unexpected_status"
+    gate_fail=1
+fi
+
+if [[ "$unexpected_obj_count" -gt 0 ]]; then
+    echo
+    echo "FAIL: new objective mismatches:"
+    cat "$unexpected_obj"
+    gate_fail=1
+fi
+
+if [[ "$unexpected_sol_count" -gt 0 ]]; then
+    echo
+    echo "FAIL: new invalid solutions:"
+    cat "$unexpected_sol"
+    gate_fail=1
+fi
+
+if [[ "$require_zero_dense" == "true" && "$dense_count" -gt 0 ]]; then
+    echo
+    echo "FAIL: dense fallback observed in sparse LU path:"
+    cat "$actual_dense"
+    gate_fail=1
+fi
+
+if [[ "$gate_fail" -ne 0 ]]; then
+    echo
+    echo "NETLIB regression gate: FAILED"
+    echo "Artifacts: $OUTDIR"
+    exit 1
+fi
+
+echo
+echo "NETLIB regression gate: PASSED"
+echo "Artifacts: $OUTDIR"
