@@ -418,6 +418,10 @@ test-netlib: $(RALPH_BENCHMARK_EXEC)
 test-netlib-full: $(RALPH_BENCHMARK_EXEC)
 	cd $(CURDIR) && ./$(RALPH_BENCHMARK_EXEC) --test full
 
+# Deterministic NETLIB no-regression gate (baseline-locked)
+test-netlib-gate: $(RALPH_BENCHMARK_EXEC)
+	cd $(CURDIR) && bash benchmarks/netlib_regression_gate.sh --bench "$(CURDIR)/$(RALPH_BENCHMARK_EXEC)"
+
 # Download NETLIB problems
 download-netlib:
 	cd $(BENCH_DIR) && bash download_netlib.sh
@@ -438,7 +442,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-beaconfd test-beaconfd-trace test-simplex-policy test-lu-markowitz test-lu-supernode test-netlib test-netlib-full bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-beaconfd test-beaconfd-trace test-simplex-policy test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
 
 # MIP benchmark with specialized solvers (LAP, Network, SCP)
 bench-mip-specialized: $(BENCH_MIP_EXEC)
@@ -488,6 +492,7 @@ help:
 	@echo "NETLIB Correctness Tests:"
 	@echo "  test-netlib            - Fast test (tiers 0-1, ~30s)"
 	@echo "  test-netlib-full       - Full test (all tiers, ~10min)"
+	@echo "  test-netlib-gate       - Baseline-locked no-regression NETLIB gate"
 	@echo "  download-netlib        - Download all NETLIB problems"
 	@echo ""
 	@echo "NETLIB Benchmark Tool:"

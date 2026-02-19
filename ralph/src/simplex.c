@@ -79,6 +79,74 @@ typedef enum {
     BASIS_ACTION_ABORT = 3
 } BasisAction;
 
+#define PHASE1_PERIODIC_REFACTOR_MIN_INTERVAL 24
+#define PHASE1_PERIODIC_REFACTOR_MAX_INTERVAL 96
+#define PHASE2_PERIODIC_REFACTOR_MIN_INTERVAL 10
+#define PHASE2_PERIODIC_REFACTOR_MAX_INTERVAL 80
+#define PERIODIC_REFACTOR_MIN_UPDATE_AGE 8
+
+static int compute_periodic_refactor_interval(const SimplexTableau *tab,
+                                              int phase,
+                                              int use_bland,
+                                              int degenerate_count) {
+    if (!tab || !tab->lu || !tab->use_two_phase) return 0;
+
+    const int max_updates = tab->lu->max_updates;
+    int interval;
+    int min_interval;
+    int max_interval;
+
+    if (phase == 1) {
+        interval = max_updates / 3;
+        min_interval = PHASE1_PERIODIC_REFACTOR_MIN_INTERVAL;
+        max_interval = PHASE1_PERIODIC_REFACTOR_MAX_INTERVAL;
+    } else {
+        interval = max_updates / 4;
+        min_interval = PHASE2_PERIODIC_REFACTOR_MIN_INTERVAL;
+        max_interval = PHASE2_PERIODIC_REFACTOR_MAX_INTERVAL;
+    }
+
+    if (interval < min_interval) interval = min_interval;
+    if (interval > max_interval) interval = max_interval;
+
+    /* Under cycling pressure, keep conservative (more frequent) periodic refresh. */
+    if (use_bland || degenerate_count >= 20) {
+        interval = min_interval;
+    }
+
+    return interval;
+}
+
+static int should_run_periodic_refactor(const SimplexTableau *tab,
+                                        int iter,
+                                        int interval,
+                                        int use_bland,
+                                        int degenerate_count) {
+    if (!tab || !tab->lu || interval <= 0 || iter <= 0) return 0;
+    if (iter % interval != 0) return 0;
+
+    const LUFactorization *lu = tab->lu;
+    int min_update_age = interval / 2;
+    if (min_update_age < PERIODIC_REFACTOR_MIN_UPDATE_AGE) {
+        min_update_age = PERIODIC_REFACTOR_MIN_UPDATE_AGE;
+    }
+
+    /* Skip periodic refactor right after a recent factorization. */
+    if (lu->num_updates < min_update_age) return 0;
+
+    if (use_bland || degenerate_count >= 20) return 1;
+
+    /* If LU metrics remain healthy, keep updates and avoid forced rebuild. */
+    if (lu->growth_factor < (RALPH_LU_GROWTH_REFACTOR_THRESHOLD * 0.25) &&
+        lu->cond_estimate < 1e6 &&
+        (lu->spike_pool_capacity <= 0 ||
+         lu->spike_pool_used <= (lu->spike_pool_capacity * 70) / 100)) {
+        return 0;
+    }
+
+    return 1;
+}
+
 /*
  * Centralized basis-update policy used by simplex_pivot().
  * lu_update_status convention:
@@ -1291,6 +1359,8 @@ void tableau_free(SimplexTableau *tab) {
     /* Free sparse matrix (not in arena) */
     sparse_free(tab->A_ext);
     tab->A_ext = NULL;
+    sparse_free(tab->basis_work);
+    tab->basis_work = NULL;
 
     /* Free CSR arrays (not in arena) */
     SAFE_FREE(tab->csr_rowptr);
@@ -1350,9 +1420,69 @@ void tableau_free(SimplexTableau *tab) {
  * Basis Management
  * ============================================================================ */
 
-/* Build basis matrix from current basis */
+static int ensure_basis_workspace(SimplexTableau *tab, int nnz_needed) {
+    if (!tab) return -1;
+    if (nnz_needed < 1) nnz_needed = 1;
+
+    SparseMatrix *B = tab->basis_work;
+    if (!B) {
+        tab->basis_work = sparse_create(tab->m, tab->m, nnz_needed);
+        return tab->basis_work ? 0 : -1;
+    }
+
+    if (B->nrows != tab->m || B->ncols != tab->m) {
+        sparse_free(B);
+        tab->basis_work = sparse_create(tab->m, tab->m, nnz_needed);
+        return tab->basis_work ? 0 : -1;
+    }
+
+    if (B->capacity < nnz_needed) {
+        int *new_rowidx = (int*)realloc(B->rowidx, (size_t)nnz_needed * sizeof(int));
+        if (!new_rowidx) return -1;
+        B->rowidx = new_rowidx;
+
+        double *new_values = (double*)realloc(B->values, (size_t)nnz_needed * sizeof(double));
+        if (!new_values) return -1;
+        B->values = new_values;
+        B->capacity = nnz_needed;
+    }
+
+    return 0;
+}
+
+/* Build basis matrix from current basis into reusable workspace */
 static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
-    return sparse_get_columns(tab->A_ext, tab->m, tab->basis);
+    if (!tab || !tab->A_ext || !tab->basis) return NULL;
+
+    const SparseMatrix *A = tab->A_ext;
+    int nnz = 0;
+    for (int k = 0; k < tab->m; k++) {
+        int j = tab->basis[k];
+        if (j < 0 || j >= A->ncols) return NULL;
+        nnz += A->colptr[j + 1] - A->colptr[j];
+    }
+
+    if (ensure_basis_workspace(tab, nnz) != 0) return NULL;
+
+    SparseMatrix *B = tab->basis_work;
+    int idx = 0;
+    for (int k = 0; k < tab->m; k++) {
+        int j = tab->basis[k];
+        int start = A->colptr[j];
+        int end = A->colptr[j + 1];
+        int col_nnz = end - start;
+
+        B->colptr[k] = idx;
+        if (col_nnz > 0) {
+            memcpy(B->rowidx + idx, A->rowidx + start, (size_t)col_nnz * sizeof(int));
+            memcpy(B->values + idx, A->values + start, (size_t)col_nnz * sizeof(double));
+            idx += col_nnz;
+        }
+    }
+    B->colptr[tab->m] = idx;
+    B->nnz = idx;
+
+    return B;
 }
 
 /*
@@ -1379,7 +1509,6 @@ static int repair_singular_basis(SimplexTableau *tab) {
         /* Try factorization */
         int status = lu_factorize(tab->lu, B);
         if (status == 0) {
-            sparse_free(B);
             return 0;  /* Success */
         }
 
@@ -1418,14 +1547,12 @@ static int repair_singular_basis(SimplexTableau *tab) {
                 tab->basis_pos[slack_idx] = k;
 
                 /* Rebuild B and test */
-                sparse_free(B);
                 B = build_basis_matrix(tab);
                 if (!B) return -1;
 
                 /* Test if this improved things */
                 int test_status = lu_factorize(tab->lu, B);
                 if (test_status == 0) {
-                    sparse_free(B);
                     return 0;  /* Success */
                 }
 
@@ -1468,12 +1595,10 @@ static int repair_singular_basis(SimplexTableau *tab) {
     }
 
     /* Rebuild and try */
-    sparse_free(B);
     B = build_basis_matrix(tab);
     if (!B) return -1;
 
     int status = lu_factorize(tab->lu, B);
-    sparse_free(B);
 
     return status;
 }
@@ -1547,7 +1672,6 @@ int tableau_refactorize(SimplexTableau *tab) {
     }
 
     int status = lu_factorize(tab->lu, B);
-    sparse_free(B);
 
     tab->lu->pivot_tol = saved_tol;
 
@@ -3634,7 +3758,6 @@ static int simplex_phase1(SimplexSolver *solver) {
     int degenerate_count = 0;
     const int DEGEN_THRESHOLD = 50;    /* Switch to Bland's rule after this many */
     const int RECOMPUTE_INTERVAL = 25; /* Periodic drift correction in Phase 1 */
-    int refactor_interval = tab->use_two_phase ? 24 : 0;
     int use_bland = 0;
 
     /* Phase 1 stall detection: track objective (art_sum) progress.
@@ -4202,10 +4325,13 @@ static int simplex_phase1(SimplexSolver *solver) {
 
         /* Periodic refactorization */
         int lu_refactor_needed = lu_needs_refactorization(tab->lu);
+        int periodic_interval = compute_periodic_refactor_interval(tab, 1, use_bland, degenerate_count);
         int periodic_refactor = (!lu_refactor_needed &&
-                                 refactor_interval > 0 &&
-                                 iter > 0 &&
-                                 iter % refactor_interval == 0);
+                                 should_run_periodic_refactor(tab,
+                                                              iter,
+                                                              periodic_interval,
+                                                              use_bland,
+                                                              degenerate_count));
         int needs_refactor = lu_refactor_needed || periodic_refactor;
 
         if (needs_refactor) {
@@ -4639,9 +4765,6 @@ static int simplex_phase2(SimplexSolver *solver) {
      * selects entering variables that cause LU update failures. */
     int bland_start_iters = tab->use_two_phase ? 20 : 0;
 
-    /* For two-phase problems, use more frequent refactorization to maintain stability */
-    int refactor_interval = tab->use_two_phase ? 10 : 0;  /* 0 = use normal LU update count */
-
     /* Compute initial reduced costs.
      * After two-phase transition, ALWAYS compute full RCs because Bland's rule
      * (used for the first bland_start_iters) reads tab->rc[] directly.
@@ -4908,10 +5031,15 @@ static int simplex_phase2(SimplexSolver *solver) {
         }
 
         /* Refactorize if needed.
-         * For two-phase problems, use more frequent refactorization (every refactor_interval iters). */
+         * For two-phase problems, periodic refresh is adaptive (interval + LU health). */
         int needs_refactor = lu_needs_refactorization(tab->lu);
-        if (!needs_refactor && refactor_interval > 0 && iter > 0 && iter % refactor_interval == 0) {
-            needs_refactor = 1;
+        if (!needs_refactor) {
+            int periodic_interval = compute_periodic_refactor_interval(tab, 2, use_bland, degenerate_count);
+            needs_refactor = should_run_periodic_refactor(tab,
+                                                          iter,
+                                                          periodic_interval,
+                                                          use_bland,
+                                                          degenerate_count);
         }
 
         if (needs_refactor) {

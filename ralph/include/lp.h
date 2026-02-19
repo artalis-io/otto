@@ -320,6 +320,7 @@ typedef struct {
     int n;                  /* Total variables (structural + slack) */
     int m;                  /* Number of constraints */
     SparseMatrix *A_ext;    /* Extended constraint matrix */
+    SparseMatrix *basis_work; /* Reusable CSC workspace for basis extraction */
     double *c_ext;          /* Extended objective */
     double *lb_ext;         /* Extended lower bounds */
     double *ub_ext;         /* Extended upper bounds */
