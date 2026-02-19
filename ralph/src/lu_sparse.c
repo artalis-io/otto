@@ -1638,6 +1638,30 @@ static void free_lp_basis_structure(LPBasisStructure *lp) {
 #define FNV_OFFSET_BASIS 0xcbf29ce484222325ULL
 #define FNV_PRIME         0x100000001b3ULL
 
+/* Augmenting-path matcher used by symbolic identity/structural split.
+ * row_used[row] == 1 means identity row (forbidden for structural matching). */
+static int symbolic_match_col(const SparseMatrix *B,
+                              int col,
+                              const int *row_used,
+                              int *row_match_col,
+                              int *row_seen,
+                              int seen_token) {
+    for (int p = B->colptr[col]; p < B->colptr[col + 1]; p++) {
+        int row = B->rowidx[p];
+        if (row_used[row]) continue;
+        if (row_seen[row] == seen_token) continue;
+        row_seen[row] = seen_token;
+
+        int prev_col = row_match_col[row];
+        if (prev_col < 0 ||
+            symbolic_match_col(B, prev_col, row_used, row_match_col, row_seen, seen_token)) {
+            row_match_col[row] = col;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /*
  * Symbolic analysis: identity detection + fill-reducing column ordering.
  * Populates ws_is_identity, ws_identity_row, ws_identity_val, ws_row_used,
@@ -1648,9 +1672,8 @@ static void free_lp_basis_structure(LPBasisStructure *lp) {
 static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
     int m = lu->m;
 
-    /* Compute column nnz counts and FNV-1a fingerprint */
+    /* Compute column nnz counts + identity/structural split */
     int *struct_nnz = lu->ws_struct_nnz;
-    uint64_t fingerprint = FNV_OFFSET_BASIS;
 
     int *is_identity_col = lu->ws_is_identity;
     int *identity_row = lu->ws_identity_row;
@@ -1659,14 +1682,18 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
     memset(is_identity_col, 0, m * sizeof(int));
     memset(row_used, 0, m * sizeof(int));
 
+    int *row_identity_col = (int*)malloc(m * sizeof(int));
+    if (!row_identity_col) {
+        return -1;
+    }
+    for (int i = 0; i < m; i++) {
+        row_identity_col[i] = -1;
+    }
+
     int num_identity = 0;
     for (int j = 0; j < m; j++) {
         int nnz = B->colptr[j + 1] - B->colptr[j];
         struct_nnz[j] = nnz;
-
-        /* Hash: column index, nnz, and identity flag into fingerprint */
-        fingerprint ^= (uint64_t)nnz;
-        fingerprint *= FNV_PRIME;
 
         if (nnz == 1) {
             int p = B->colptr[j];
@@ -1677,18 +1704,96 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
                 identity_row[j] = row;
                 identity_val[j] = val;
                 row_used[row] = 1;
+                row_identity_col[row] = j;
                 num_identity++;
-
-                /* Include identity row in fingerprint for pattern sensitivity */
-                fingerprint ^= (uint64_t)row;
-                fingerprint *= FNV_PRIME;
             }
         }
     }
 
+    /* Ensure structural columns can be matched to non-identity rows.
+     * If matching fails, demote one conflicting identity row and retry. */
+    int *row_match_col = (int*)malloc(m * sizeof(int));
+    int *row_seen = (int*)malloc(m * sizeof(int));
+    if (!row_match_col || !row_seen) {
+        free(row_match_col);
+        free(row_seen);
+        free(row_identity_col);
+        return -1;
+    }
+
+    for (;;) {
+        for (int i = 0; i < m; i++) {
+            row_match_col[i] = -1;
+            row_seen[i] = 0;
+        }
+
+        int seen_token = 1;
+        int unmatched_col = -1;
+        for (int j = 0; j < m; j++) {
+            if (is_identity_col[j]) continue;
+            if (!symbolic_match_col(B, j, row_used, row_match_col, row_seen, seen_token++)) {
+                unmatched_col = j;
+                break;
+            }
+        }
+        if (unmatched_col < 0) {
+            break;
+        }
+
+        int candidate_identity_row = -1;
+        for (int p = B->colptr[unmatched_col]; p < B->colptr[unmatched_col + 1]; p++) {
+            int row = B->rowidx[p];
+            if (row_used[row]) {
+                candidate_identity_row = row;
+                break;
+            }
+        }
+        if (candidate_identity_row < 0) {
+            free(row_match_col);
+            free(row_seen);
+            free(row_identity_col);
+            return -1;
+        }
+
+        int id_col = row_identity_col[candidate_identity_row];
+        if (id_col < 0 || !is_identity_col[id_col]) {
+            free(row_match_col);
+            free(row_seen);
+            free(row_identity_col);
+            return -1;
+        }
+
+        is_identity_col[id_col] = 0;
+        row_used[candidate_identity_row] = 0;
+        row_identity_col[candidate_identity_row] = -1;
+        num_identity--;
+        if (num_identity < m / 4) {
+            free(row_match_col);
+            free(row_seen);
+            free(row_identity_col);
+            return -1;
+        }
+    }
+
+    free(row_match_col);
+    free(row_seen);
+
+    free(row_identity_col);
+
     /* If few identity columns, not worth the overhead */
     if (num_identity < m / 4) {
         return -1;
+    }
+
+    uint64_t fingerprint = FNV_OFFSET_BASIS;
+    for (int j = 0; j < m; j++) {
+        int nnz = struct_nnz[j];
+        fingerprint ^= (uint64_t)nnz;
+        fingerprint *= FNV_PRIME;
+        if (is_identity_col[j]) {
+            fingerprint ^= (uint64_t)identity_row[j];
+            fingerprint *= FNV_PRIME;
+        }
     }
 
     /* Check symbolic cache: if fingerprint matches, reuse previous analysis */
@@ -1750,7 +1855,16 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
 #define MARKOWITZ_MAX_SEARCH  3     /* Candidates per degree bucket */
 #define MARKOWITZ_FILL_GAP    8     /* Extra slots per column/row for fill-in */
 #define MARKOWITZ_POOL_MULT   4     /* Pool = MULT × initial nnz */
+#define MARKOWITZ_POOL_RETRY_MULT 8 /* Retry with larger pool after overflow */
 #define MARKOWITZ_DENSE_SWITCH 0.7  /* Switch to dense when density exceeds this */
+
+enum {
+    MKZ_FAIL_NONE = 0,
+    MKZ_FAIL_WORKSPACE = -1,
+    MKZ_FAIL_POOL = -2,
+    MKZ_FAIL_SINGULAR = -3,
+    MKZ_FAIL_CAPACITY = -4
+};
 
 /*
  * Sparse Markowitz factorization of the m×k structural submatrix.
@@ -1760,17 +1874,18 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
  * Dual SVA storage (row-indexed + column-indexed) enables walking a row's
  * entries in O(row_len) instead of scanning all k columns.
  *
- * Returns 0 on success, -1 on failure (pool exhaustion, singular, or workspace).
- * On failure, caller falls back to dense GE.
+ * Returns 0 on success, negative MKZ_FAIL_* on failure.
+ * Caller falls back to dense GE on failure.
  */
 static int lu_factorize_markowitz(
     const SparseMatrix *B, const int *col_order, int m, int k,
     int *row_perm, int *row_pos, double pivot_tol,
+    const int *row_reserved,
     const int *redundant_rows, int num_redundant,
     int allow_regularization, int max_regularizations, int *num_regularized,
     int *L_row, int *L_col, double *L_val, int *L_nnz_out, int L_capacity,
     int *U_row, int *U_col, double *U_val, int *U_nnz_out, int U_capacity,
-    int *mkz_col_perm, double *workspace, size_t workspace_doubles)
+    int *mkz_col_perm, int pool_mult, double *workspace, size_t workspace_doubles)
 {
     /* Count initial nonzeros in structural submatrix */
     int init_nnz = 0;
@@ -1783,7 +1898,8 @@ static int lu_factorize_markowitz(
     }
 
     /* SVA pool sizing: MULT × initial nnz for both row and column pools */
-    int pool_cap = init_nnz * MARKOWITZ_POOL_MULT;
+    if (pool_mult < 1) pool_mult = MARKOWITZ_POOL_MULT;
+    int pool_cap = init_nnz * pool_mult;
     if (pool_cap < k * MARKOWITZ_FILL_GAP * 2) pool_cap = k * MARKOWITZ_FILL_GAP * 2;
 
     /* Workspace layout (all carved from workspace buffer):
@@ -1815,7 +1931,7 @@ static int lu_factorize_markowitz(
     size_t total_need = dbl_need + int_doubles;
 
     if (workspace_doubles < total_need)
-        return -1;
+        return MKZ_FAIL_WORKSPACE;
 
     /* Carve double arrays */
     double *cv_val  = workspace;
@@ -1857,7 +1973,7 @@ static int lu_factorize_markowitz(
         int cnt = 0;
         for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
             if (fabs(B->values[p]) > RALPH_ZERO_TOL) {
-                if (cv_used >= pool_cap) return -1;
+                if (cv_used >= pool_cap) return MKZ_FAIL_POOL;
                 cv_idx[cv_used] = B->rowidx[p];
                 cv_val[cv_used] = B->values[p];
                 cv_used++;
@@ -1896,7 +2012,7 @@ static int lu_factorize_markowitz(
         for (int e = 0; e < n2; e++) {
             int row = cv_idx[s + e];
             int rp = rv_ptr[row] + rv_len[row];
-            if (rp >= pool_cap) return -1;
+            if (rp >= pool_cap) return MKZ_FAIL_POOL;
             rv_idx[rp] = jj;
             rv_val[rp] = cv_val[s + e];
             rv_len[row]++;
@@ -1960,74 +2076,124 @@ static int lu_factorize_markowitz(
 
     int L_nnz = 0, U_nnz = 0;
     *num_regularized = 0;
-    for (int jj = 0; jj < k; jj++) mkz_col_perm[jj] = jj;
+    for (int jj = 0; jj < k; jj++) mkz_col_perm[jj] = -1;
 
     (void)0;  /* active rows/cols tracked implicitly by degree lists */
 
     for (int step = 0; step < k; step++) {
-        /* === 1. Pivot selection: Markowitz with threshold === */
+        int reserve_non_reserved = (row_reserved != NULL);
         int piv_col = -1, piv_row = -1;
         long long best_cost = (long long)m * m + 1;
         double best_piv_val = 0.0;
 
-        for (int d = 1; d <= k; d++) {
-            if ((long long)(d - 1) >= best_cost && best_cost < (long long)m * m + 1)
-                break;
-            int cand = 0;
-            for (int jj = dg_head[d]; jj >= 0 && cand < MARKOWITZ_MAX_SEARCH; jj = dg_next[jj]) {
-                double thr = MARKOWITZ_THRESHOLD * col_max[jj];
-                int s = cv_ptr[jj], n2 = cv_len[jj];
-                for (int e = 0; e < n2; e++) {
-                    int row = cv_idx[s + e];
-                    if (!row_alive[row]) continue;
-                    double av = fabs(cv_val[s + e]);
-                    if (av < thr) continue;
-                    long long cost = (long long)(row_deg[row] - 1) * (col_deg[jj] - 1);
-                    if (cost < best_cost || (cost == best_cost && av > best_piv_val)) {
-                        best_cost = cost;
-                        piv_col = jj; piv_row = row; best_piv_val = av;
-                        if (cost == 0) goto pivot_found;
-                    }
-                }
-                cand++;
-            }
-        }
+        while (1) {
+            /* === 1. Pivot selection: Markowitz with threshold === */
+            piv_col = -1;
+            piv_row = -1;
+            best_cost = (long long)m * m + 1;
+            best_piv_val = 0.0;
 
-        /* Singular pivot handling */
-        if (piv_col < 0 || best_piv_val < pivot_tol) {
-            int can_reg = 0;
-            if (redundant_rows && num_redundant > 0) {
-                for (int jj = 0; jj < k && !can_reg; jj++) {
+            for (int d = 1; d <= k; d++) {
+                if ((long long)(d - 1) >= best_cost && best_cost < (long long)m * m + 1)
+                    break;
+                int cand = 0;
+                for (int jj = dg_head[d]; jj >= 0 && cand < MARKOWITZ_MAX_SEARCH; jj = dg_next[jj]) {
+                    double thr = MARKOWITZ_THRESHOLD * col_max[jj];
+                    int s = cv_ptr[jj], n2 = cv_len[jj];
+                    for (int e = 0; e < n2; e++) {
+                        int row = cv_idx[s + e];
+                        if (!row_alive[row]) continue;
+                        if (reserve_non_reserved && row_reserved && row_reserved[row]) continue;
+                        double av = fabs(cv_val[s + e]);
+                        if (av < thr) continue;
+                        long long cost = (long long)(row_deg[row] - 1) * (col_deg[jj] - 1);
+                        if (cost < best_cost || (cost == best_cost && av > best_piv_val)) {
+                            best_cost = cost;
+                            piv_col = jj; piv_row = row; best_piv_val = av;
+                            if (cost == 0) goto pivot_found;
+                        }
+                    }
+                    cand++;
+                }
+            }
+
+            if (piv_col < 0 || best_piv_val < pivot_tol) {
+                int rescue_col = -1;
+                int rescue_row = -1;
+                long long rescue_cost = (long long)m * m + 1;
+                double rescue_piv = 0.0;
+                for (int jj = 0; jj < k; jj++) {
                     if (!col_alive[jj]) continue;
                     int s = cv_ptr[jj], n2 = cv_len[jj];
                     for (int e = 0; e < n2; e++) {
                         int row = cv_idx[s + e];
-                        if (row_alive[row] && redundant_rows[row]) {
+                        if (!row_alive[row]) continue;
+                        if (reserve_non_reserved && row_reserved && row_reserved[row]) continue;
+                        double av = fabs(cv_val[s + e]);
+                        if (av <= rescue_piv && rescue_col >= 0) continue;
+                        long long cost = (long long)(row_deg[row] - 1) * (col_deg[jj] - 1);
+                        rescue_col = jj;
+                        rescue_row = row;
+                        rescue_cost = cost;
+                        rescue_piv = av;
+                    }
+                }
+                if (rescue_col >= 0 && rescue_piv >= pivot_tol) {
+                    piv_col = rescue_col;
+                    piv_row = rescue_row;
+                    best_cost = rescue_cost;
+                    best_piv_val = rescue_piv;
+                }
+            }
+
+            /* Singular pivot handling */
+            if (piv_col < 0 || best_piv_val < pivot_tol) {
+                int can_reg = 0;
+                if (redundant_rows && num_redundant > 0) {
+                    for (int jj = 0; jj < k && !can_reg; jj++) {
+                        if (!col_alive[jj]) continue;
+                        int s = cv_ptr[jj], n2 = cv_len[jj];
+                        for (int e = 0; e < n2; e++) {
+                            int row = cv_idx[s + e];
+                            if (!row_alive[row]) continue;
+                            if (reserve_non_reserved && row_reserved && row_reserved[row]) continue;
+                            if (redundant_rows[row]) {
+                                piv_col = jj; piv_row = row; can_reg = 1; break;
+                            }
+                        }
+                    }
+                }
+                if (!can_reg && allow_regularization && *num_regularized < max_regularizations) {
+                    for (int jj = 0; jj < k && !can_reg; jj++) {
+                        if (!col_alive[jj]) continue;
+                        int s = cv_ptr[jj], n2 = cv_len[jj];
+                        for (int e = 0; e < n2; e++) {
+                            int row = cv_idx[s + e];
+                            if (!row_alive[row]) continue;
+                            if (reserve_non_reserved && row_reserved && row_reserved[row]) continue;
                             piv_col = jj; piv_row = row; can_reg = 1; break;
                         }
                     }
                 }
-            }
-            if (!can_reg && allow_regularization && *num_regularized < max_regularizations) {
-                for (int jj = 0; jj < k && !can_reg; jj++) {
-                    if (!col_alive[jj]) continue;
-                    int s = cv_ptr[jj], n2 = cv_len[jj];
-                    for (int e = 0; e < n2; e++) {
-                        if (row_alive[cv_idx[s + e]]) {
-                            piv_col = jj; piv_row = cv_idx[s + e]; can_reg = 1; break;
-                        }
+                if (!can_reg) {
+                    if (reserve_non_reserved) {
+                        reserve_non_reserved = 0;
+                        continue;
                     }
+                    return MKZ_FAIL_SINGULAR;
                 }
+                (*num_regularized)++;
+                best_piv_val = 1.0;
             }
-            if (!can_reg) return -1;
-            (*num_regularized)++;
-            best_piv_val = 1.0;
+
+        pivot_found:;
+            break;
         }
 
-    pivot_found:;
-
         /* === 2. Record permutations === */
-        { int t = mkz_col_perm[step]; mkz_col_perm[step] = mkz_col_perm[piv_col]; mkz_col_perm[piv_col] = t; }
+        /* piv_col is in structural-column space (0..k-1), so record elimination
+         * order directly instead of swapping positions in a proxy permutation. */
+        mkz_col_perm[step] = piv_col;
         { int pp = row_pos[piv_row];
           if (pp != step) { int a = row_perm[step], b = row_perm[pp];
             row_perm[step] = b; row_perm[pp] = a; row_pos[b] = step; row_pos[a] = pp; } }
@@ -2054,8 +2220,8 @@ static int lu_factorize_markowitz(
           } }
 
         /* === 4. Emit L diagonal + U pivot row === */
-        if (L_nnz >= L_capacity || U_nnz >= U_capacity) return -1;
-        L_row[L_nnz] = step; L_col[L_nnz] = piv_col; L_val[L_nnz] = 1.0; L_nnz++;
+        if (L_nnz >= L_capacity || U_nnz >= U_capacity) return MKZ_FAIL_CAPACITY;
+        L_row[L_nnz] = piv_row; L_col[L_nnz] = piv_col; L_val[L_nnz] = 1.0; L_nnz++;
         U_row[U_nnz] = step; U_col[U_nnz] = piv_col; U_val[U_nnz] = pivot_val; U_nnz++;
 
         { int s = rv_ptr[piv_row], n2 = rv_len[piv_row];
@@ -2063,7 +2229,7 @@ static int lu_factorize_markowitz(
               int jj = rv_idx[s + e];
               if (!col_alive[jj]) continue;
               if (fabs(rv_val[s + e]) > RALPH_ZERO_TOL) {
-                  if (U_nnz >= U_capacity) return -1;
+                  if (U_nnz >= U_capacity) return MKZ_FAIL_CAPACITY;
                   U_row[U_nnz] = step; U_col[U_nnz] = jj; U_val[U_nnz] = rv_val[s + e]; U_nnz++;
               }
           } }
@@ -2078,8 +2244,8 @@ static int lu_factorize_markowitz(
               double mult = a_ik / pivot_val;
 
               /* Emit L entry */
-              if (L_nnz >= L_capacity) return -1;
-              L_row[L_nnz] = row_pos[row]; L_col[L_nnz] = piv_col; L_val[L_nnz] = mult; L_nnz++;
+              if (L_nnz >= L_capacity) return MKZ_FAIL_CAPACITY;
+              L_row[L_nnz] = row; L_col[L_nnz] = piv_col; L_val[L_nnz] = mult; L_nnz++;
 
               /* Pass 1: Walk row's entries, update existing entries using flag[] O(1) */
               int rs = rv_ptr[row], rn = rv_len[row];
@@ -2123,7 +2289,7 @@ static int lu_factorize_markowitz(
                     if (cn >= cv_cap_a[jj]) {
                         /* Relocate column */
                         int new_cap = cn + MARKOWITZ_FILL_GAP + 4;
-                        if (cv_used + new_cap > pool_cap) return -1;
+                        if (cv_used + new_cap > pool_cap) return MKZ_FAIL_POOL;
                         int ns = cv_used;
                         for (int f = 0; f < cn; f++) { cv_idx[ns+f] = cv_idx[cv_ptr[jj]+f]; cv_val[ns+f] = cv_val[cv_ptr[jj]+f]; }
                         cv_ptr[jj] = ns; cv_cap_a[jj] = new_cap; cv_used += new_cap;
@@ -2136,7 +2302,7 @@ static int lu_factorize_markowitz(
                     int rn2 = rv_len[row];
                     if (rn2 >= rv_cap_a[row]) {
                         int new_cap = rn2 + MARKOWITZ_FILL_GAP + 4;
-                        if (rv_used + new_cap > pool_cap) return -1;
+                        if (rv_used + new_cap > pool_cap) return MKZ_FAIL_POOL;
                         int ns = rv_used;
                         for (int f = 0; f < rn2; f++) { rv_idx[ns+f] = rv_idx[rv_ptr[row]+f]; rv_val[ns+f] = rv_val[rv_ptr[row]+f]; }
                         rv_ptr[row] = ns; rv_cap_a[row] = new_cap; rv_used += new_cap;
@@ -2240,7 +2406,24 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     /* Dense LU with partial pivoting on the m×k structural part */
     int *row_perm = lu->ws_row_perm;
     int *row_pos = lu->ws_row_pos;
-    for (int i = 0; i < m; i++) { row_perm[i] = i; row_pos[i] = i; }
+    int *row_is_identity = lu->ws_row_used;
+    {
+        int struct_pos = 0;
+        int ident_pos = k;
+        for (int i = 0; i < m; i++) {
+            if (row_is_identity[i]) {
+                row_perm[ident_pos++] = i;
+            } else {
+                row_perm[struct_pos++] = i;
+            }
+        }
+        if (struct_pos != k || ident_pos != m) {
+            return -1;
+        }
+        for (int i = 0; i < m; i++) {
+            row_pos[row_perm[i]] = i;
+        }
+    }
 
     /* Use pre-allocated COO arrays, grow if needed */
     int coo_needed = m * k + m;  /* Structural entries + identity diagonals */
@@ -2269,6 +2452,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     double *U_val = lu->coo_U_val;
 
     int L_nnz = 0, U_nnz = 0;
+    lu->mkz_last_failure = MKZ_FAIL_NONE;
 
     /* Try sparse Markowitz factorization if enabled and k is large enough.
      * This exploits sparsity within structural columns, reducing O(k³) to O(nnz×fill).
@@ -2284,15 +2468,41 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
         size_t mkz_ws_doubles = mkz_ws_avail - mkz_perm_doubles;
 
         int mkz_reg = 0;
-        int rc = lu_factorize_markowitz(
-            B, col_order, m, k, row_perm, row_pos, lu->pivot_tol,
-            lu->redundant_rows, lu->num_redundant,
-            lu->allow_regularization, lu->max_regularizations, &mkz_reg,
-            L_row, L_col, L_val, &L_nnz, lu->coo_capacity,
-            U_row, U_col, U_val, &U_nnz, lu->coo_capacity,
-            mkz_col_perm, mkz_workspace, mkz_ws_doubles);
+        int rc = MKZ_FAIL_NONE;
+        int pool_mult = MARKOWITZ_POOL_MULT;
+        for (int attempt = 0; attempt < 2; attempt++) {
+            lu->mkz_calls++;
+            rc = lu_factorize_markowitz(
+                B, col_order, m, k, row_perm, row_pos, lu->pivot_tol,
+                row_is_identity,
+                lu->redundant_rows, lu->num_redundant,
+                lu->allow_regularization, lu->max_regularizations, &mkz_reg,
+                L_row, L_col, L_val, &L_nnz, lu->coo_capacity,
+                U_row, U_col, U_val, &U_nnz, lu->coo_capacity,
+                mkz_col_perm, pool_mult, mkz_workspace, mkz_ws_doubles);
+            if (rc == 0) break;
+            if (!(rc == MKZ_FAIL_POOL && attempt == 0)) break;
+
+            pool_mult = MARKOWITZ_POOL_RETRY_MULT;
+            L_nnz = 0;
+            U_nnz = 0;
+            int struct_pos = 0;
+            int ident_pos = k;
+            for (int i = 0; i < m; i++) {
+                if (row_is_identity[i]) {
+                    row_perm[ident_pos++] = i;
+                } else {
+                    row_perm[struct_pos++] = i;
+                }
+            }
+            for (int i = 0; i < m; i++) {
+                row_pos[row_perm[i]] = i;
+            }
+        }
 
         if (rc == 0) {
+            lu->mkz_successes++;
+            lu->mkz_last_failure = MKZ_FAIL_NONE;
             lu->num_regularized = mkz_reg;
 
             /* Markowitz emits L_col/U_col in structural column space (0..k-1).
@@ -2331,11 +2541,27 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
 
             goto identity_placement;
         }
+        lu->mkz_failures++;
+        lu->mkz_last_failure = rc;
+        lu->mkz_dense_fallbacks++;
 
         /* Markowitz failed — reset and fall through to supernodal/dense */
         L_nnz = 0;
         U_nnz = 0;
-        for (int i = 0; i < m; i++) { row_perm[i] = i; row_pos[i] = i; }
+        {
+            int struct_pos = 0;
+            int ident_pos = k;
+            for (int i = 0; i < m; i++) {
+                if (row_is_identity[i]) {
+                    row_perm[ident_pos++] = i;
+                } else {
+                    row_perm[struct_pos++] = i;
+                }
+            }
+            for (int i = 0; i < m; i++) {
+                row_pos[row_perm[i]] = i;
+            }
+        }
         /* Re-populate A_struct from B */
         memset(A_struct, 0, (size_t)m * k * sizeof(double));
         for (int jj = 0; jj < k; jj++) {
@@ -2374,7 +2600,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
 
             int sn_reg = 0;
             int rc = sn_factorize(A_struct, m, k, row_perm, row_pos,
-                                  lu->pivot_tol,
+                                  lu->pivot_tol, row_is_identity,
                                   sn_sym->supernodes, sn_sym->num_supernodes,
                                   lu->redundant_rows, lu->num_redundant,
                                   lu->allow_regularization,
@@ -2393,8 +2619,21 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             /* Supernodal failed — reset and fall through to column-by-column */
             L_nnz = 0;
             U_nnz = 0;
-            /* Restore row_perm/row_pos to identity (sn_factorize may have modified) */
-            for (int i = 0; i < m; i++) { row_perm[i] = i; row_pos[i] = i; }
+            /* Restore row ordering: structural rows first, identity rows last. */
+            {
+                int struct_pos = 0;
+                int ident_pos = k;
+                for (int i = 0; i < m; i++) {
+                    if (row_is_identity[i]) {
+                        row_perm[ident_pos++] = i;
+                    } else {
+                        row_perm[struct_pos++] = i;
+                    }
+                }
+                for (int i = 0; i < m; i++) {
+                    row_pos[row_perm[i]] = i;
+                }
+            }
             /* Re-populate A_struct from B (sn_factorize modifies it in-place) */
             memset(A_struct, 0, (size_t)m * k * sizeof(double));
             for (int jj = 0; jj < k; jj++) {
@@ -2409,11 +2648,11 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
 
     /* LU factorization of structural columns with partial pivoting */
     for (int step = 0; step < k; step++) {
-        /* Find pivot in column step (rows step..m-1) */
+        /* Find pivot in column step using only structural rows (step..k-1). */
         int pivot_row = -1;
         double max_val = 0.0;
 
-        for (int i = step; i < m; i++) {
+        for (int i = step; i < k; i++) {
             int orig_row = row_perm[i];
             double val = fabs(A_struct[orig_row * k + step]);
             if (val > max_val) {
@@ -2429,7 +2668,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
 
             /* Check pre-marked redundant rows */
             if (lu->redundant_rows && lu->num_redundant > 0) {
-                for (int i = step; i < m; i++) {
+                for (int i = step; i < k; i++) {
                     int orig_row = row_perm[i];
                     if (lu->redundant_rows[orig_row]) {
                         can_regularize = 1;
@@ -2474,7 +2713,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
         double pivot_val = A_struct[piv_orig * k + step];
 
         /* Store L diagonal */
-        L_row[L_nnz] = step;
+        L_row[L_nnz] = piv_orig;
         L_col[L_nnz] = step;
         L_val[L_nnz] = 1.0;
         L_nnz++;
@@ -2500,7 +2739,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             double mult = a_ik / pivot_val;
 
             /* Store L multiplier */
-            L_row[L_nnz] = i;
+            L_row[L_nnz] = row_orig;
             L_col[L_nnz] = step;
             L_val[L_nnz] = mult;
             L_nnz++;
@@ -2525,6 +2764,7 @@ identity_placement:
 
         if (perm_pos < step) {
             /* Row already used - shouldn't happen if identity detection is correct */
+            lu->identity_sep_failures++;
             return -1;
         }
 
@@ -2536,7 +2776,7 @@ identity_placement:
         }
 
         /* L diagonal = 1, U diagonal = val (±1) */
-        L_row[L_nnz] = step;
+        L_row[L_nnz] = orig_row;
         L_col[L_nnz] = step;
         L_val[L_nnz] = 1.0;
         L_nnz++;
@@ -2545,6 +2785,12 @@ identity_placement:
         U_col[U_nnz] = step;
         U_val[U_nnz] = val;
         U_nnz++;
+    }
+
+    /* L entries were emitted in original-row space. Convert them once after all
+     * row swaps (structural pivoting + identity placement) are complete. */
+    for (int i = 0; i < L_nnz; i++) {
+        L_row[i] = row_pos[L_row[i]];
     }
 
     /* Build final permutation arrays */
@@ -2688,4 +2934,3 @@ static void lu_sparse_suppress_warnings_(void) {
     (void)analyze_lp_basis;
     (void)free_lp_basis_structure;
 }
-

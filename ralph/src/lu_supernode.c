@@ -517,6 +517,7 @@ int sn_block_factor(int panel_rows, int block_size,
 
 int sn_factorize(double *A_struct, int m, int k,
                  int *row_perm, int *row_pos, double pivot_tol,
+                 const int *row_reserved,
                  const Supernode *supernodes, int num_supernodes,
                  const int *redundant_rows, int num_redundant,
                  int allow_regularization, int max_regularizations,
@@ -589,9 +590,12 @@ int sn_factorize(double *A_struct, int m, int k,
         for (int j_local = 0; j_local < sn_size; j_local++) {
             int step = sn_start + j_local;
 
-            /* Find pivot in column step, rows step..m-1 */
+            /* Prefer non-reserved rows, but allow reserved rows when they are
+             * materially stronger pivots (numerical safety). */
             int pivot_row = -1;
             double max_val = 0.0;
+            int alt_row = -1;
+            double alt_val = 0.0;
 
             for (int i = step; i < m; i++) {
                 int orig_row = row_perm[i];
@@ -600,6 +604,15 @@ int sn_factorize(double *A_struct, int m, int k,
                     max_val = val;
                     pivot_row = i;
                 }
+                if (row_reserved && row_reserved[orig_row]) continue;
+                if (val > alt_val) {
+                    alt_val = val;
+                    alt_row = i;
+                }
+            }
+            if (alt_row >= 0 && alt_val >= 0.1 * max_val) {
+                pivot_row = alt_row;
+                max_val = alt_val;
             }
 
             if (max_val < pivot_tol) {
@@ -608,6 +621,16 @@ int sn_factorize(double *A_struct, int m, int k,
 
                 if (redundant_rows && num_redundant > 0) {
                     for (int i = step; i < m; i++) {
+                        int orig_row = row_perm[i];
+                        if (row_reserved && row_reserved[orig_row]) continue;
+                        if (redundant_rows[orig_row]) {
+                            can_regularize = 1;
+                            pivot_row = i;
+                            break;
+                        }
+                    }
+                    for (int i = step; i < m; i++) {
+                        if (can_regularize) break;
                         int orig_row = row_perm[i];
                         if (redundant_rows[orig_row]) {
                             can_regularize = 1;
@@ -621,6 +644,12 @@ int sn_factorize(double *A_struct, int m, int k,
                     num_regularized && *num_regularized < max_regularizations) {
                     can_regularize = 1;
                     pivot_row = step;
+                    for (int i = step; i < m; i++) {
+                        int orig_row = row_perm[i];
+                        if (row_reserved && row_reserved[orig_row]) continue;
+                        pivot_row = i;
+                        break;
+                    }
                 }
 
                 if (can_regularize) {
@@ -651,7 +680,7 @@ int sn_factorize(double *A_struct, int m, int k,
             double pivot_val = A_struct[(size_t)piv_orig * k + step];
 
             /* Store L diagonal */
-            SN_EMIT_L(step, step, 1.0);
+            SN_EMIT_L(piv_orig, step, 1.0);
 
             /* Store U row for columns within supernode (step..sn_start+sn_size-1) */
             for (int jj = step; jj < sn_start + sn_size; jj++) {
@@ -674,7 +703,7 @@ int sn_factorize(double *A_struct, int m, int k,
                 A_struct[(size_t)row_orig * k + step] = mult;
 
                 /* Store L multiplier */
-                SN_EMIT_L(i, step, mult);
+                SN_EMIT_L(row_orig, step, mult);
 
                 /* Update remaining columns within supernode */
                 for (int jj = step + 1; jj < sn_start + sn_size; jj++) {

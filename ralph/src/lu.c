@@ -276,6 +276,14 @@ LUFactorization* lu_create(int m) {
 
     /* Sparse Markowitz LU (default on for k >= MARKOWITZ_MIN_K) */
     lu->mkz_enabled = 1;
+    lu->mkz_calls = 0;
+    lu->mkz_successes = 0;
+    lu->mkz_failures = 0;
+    lu->mkz_last_failure = 0;
+    lu->mkz_dense_fallbacks = 0;
+    lu->sparse_dense_fallbacks = 0;
+    lu->used_dense_fallback_last = 0;
+    lu->identity_sep_failures = 0;
 
     /* T2.1: Supernodal LU (default off, opt-in via lu_supernode param) */
     lu->sn_enabled = 0;
@@ -396,6 +404,7 @@ int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
         return -1;
     }
     lu_set_failure(lu, LU_FAIL_NONE);
+    lu->used_dense_fallback_last = 0;
 
     /* Try efficient sparse factorization first */
     int result = lu_factorize_sparse_efficient(lu, B);
@@ -410,6 +419,8 @@ int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
     if (result == 0) {
         build_csr_transpose(lu);  /* W1: CSR transposes for sparse BTRAN */
         lu_set_failure(lu, LU_FAIL_NONE);
+        lu->used_dense_fallback_last = 1;
+        lu->sparse_dense_fallbacks++;
     }
     return result;
 }

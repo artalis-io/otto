@@ -424,6 +424,167 @@ static void test_markowitz_tridiagonal(void) {
 }
 
 /* ============================================================================
+ * Test 7: NETLIB-style regression — reserved identity rows must not poison
+ *         Markowitz pivoting (avoid dense fallback via identity placement fail)
+ * ============================================================================ */
+static void test_markowitz_reserved_row_regression(void) {
+    printf("  Markowitz: reserved-row regression (m=80, k=40)...\n");
+
+    const int m = 80;
+    const int k = 40;
+    const int stress_reserved = 10;
+    double *A = (double *)calloc((size_t)m * m, sizeof(double));
+
+    /* Structural block: diagonally dominant on non-reserved rows. */
+    for (int i = 0; i < k; i++) {
+        A[i * m + i] = 10.0 + 0.01 * i;
+        /* Keep structure non-trivial so Markowitz pool sizing is realistic. */
+        A[((i + 1) % k) * m + i] = 0.05;
+    }
+
+    /* A subset of identity rows has very large entries in structural columns.
+     * A buggy pivot scan that consumes reserved rows will later fail at
+     * identity placement; a correct reservation-aware path should still succeed. */
+    for (int t = 0; t < stress_reserved; t++) {
+        int row = k + t;
+        int col = t;
+        A[row * m + col] = 100.0;
+    }
+
+    /* Identity columns (40..79): exact singletons */
+    for (int t = 0; t < m - k; t++) {
+        int row = k + t;
+        A[row * m + (k + t)] = 1.0;
+    }
+
+    SparseMatrix *B = dense_to_csc(A, m, m);
+    LUFactorization *lu = lu_create(m);
+    ASSERT(lu != NULL, "reserved-row regression: lu_create");
+    lu->mkz_enabled = 1;
+    lu->sn_enabled = 0;
+
+    int rc = lu_factorize(lu, B);
+    ASSERT_INT_EQ(rc, 0, "reserved-row regression: factorize");
+    if (rc == 0) {
+        ASSERT(lu->mkz_calls > 0, "reserved-row regression: Markowitz attempted");
+        ASSERT(lu->mkz_successes > 0, "reserved-row regression: Markowitz succeeded");
+        ASSERT_INT_EQ(lu->mkz_dense_fallbacks, 0,
+                      "reserved-row regression: no Markowitz->GE fallback");
+        ASSERT_INT_EQ(lu->identity_sep_failures, 0,
+                      "reserved-row regression: no identity placement failure");
+        ASSERT_INT_EQ(lu->used_dense_fallback_last, 0,
+                      "reserved-row regression: no top-level dense fallback");
+
+        double max_err = 0.0;
+        for (int trial = 0; trial < 3; trial++) {
+            double *b = (double *)calloc(m, sizeof(double));
+            double *x = (double *)calloc(m, sizeof(double));
+            double *b_orig = (double *)calloc(m, sizeof(double));
+            for (int i = 0; i < m; i++) {
+                b[i] = (double)(trial * 17 + i * 3 + 1);
+                b_orig[i] = b[i];
+            }
+            lu_solve(lu, b, x);
+
+            for (int i = 0; i < m; i++) {
+                double ax = 0.0;
+                for (int j = 0; j < m; j++) ax += A[i * m + j] * x[j];
+                double err = fabs(ax - b_orig[i]);
+                if (err > max_err) max_err = err;
+            }
+            free(b);
+            free(x);
+            free(b_orig);
+        }
+        ASSERT(max_err < 1e-7, "reserved-row regression: solve accuracy");
+        if (max_err >= 1e-7) printf("    max_err = %.2e\n", max_err);
+    }
+
+    lu_free(lu);
+    free_csc(B);
+    free(A);
+}
+
+/* ============================================================================
+ * Test 8: GE identity-placement regression — L-row tracking across row swaps
+ * ============================================================================ */
+static void test_ge_identity_lrow_regression(void) {
+    printf("  GE: identity-placement L-row regression (m=6, k=4)...\n");
+
+    const int m = 6;
+    double A[36] = {
+        /* c0 c1 c2 c3 c4 c5 */
+           4, 0, 0, 0, 0, 0,  /* r0 */
+           0, 5, 0, 0, 0, 0,  /* r1 */
+           0, 0, 6, 0, 0, 0,  /* r2 */
+           0, 0, 0, 7, 0, 0,  /* r3 */
+           2, 0, 0, 0, 0, 1,  /* r4 -> identity col 5 */
+           0, 3, 0, 0, 1, 0   /* r5 -> identity col 4 */
+    };
+
+    SparseMatrix *B = dense_to_csc(A, m, m);
+
+    /* Sparse-efficient GE path (Markowitz disabled, k<MARKOWITZ_MIN_K). */
+    LUFactorization *lu_ge = lu_create(m);
+    ASSERT(lu_ge != NULL, "GE regression: lu_create sparse-efficient");
+    lu_ge->mkz_enabled = 0;
+    lu_ge->sn_enabled = 0;
+    int rc_ge = lu_factorize(lu_ge, B);
+    ASSERT_INT_EQ(rc_ge, 0, "GE regression: sparse-efficient factorize");
+    if (rc_ge == 0) {
+        ASSERT_INT_EQ(lu_ge->used_dense_fallback_last, 0,
+                      "GE regression: sparse-efficient path used");
+        ASSERT_INT_EQ(lu_ge->identity_sep_failures, 0,
+                      "GE regression: identity placement succeeded");
+    }
+
+    /* Dense reference factorization. */
+    LUFactorization *lu_dense = lu_create(m);
+    ASSERT(lu_dense != NULL, "GE regression: lu_create dense reference");
+    int rc_dense = lu_factorize_dense(lu_dense, B);
+    ASSERT_INT_EQ(rc_dense, 0, "GE regression: dense reference factorize");
+
+    if (rc_ge == 0 && rc_dense == 0) {
+        double max_resid = 0.0;
+        double max_xdiff = 0.0;
+
+        for (int trial = 0; trial < 4; trial++) {
+            double b1[6], b2[6], x1[6], x2[6];
+            for (int i = 0; i < m; i++) {
+                double rhs = (double)(trial * 5 + 2 * i + 1);
+                b1[i] = rhs;
+                b2[i] = rhs;
+                x1[i] = 0.0;
+                x2[i] = 0.0;
+            }
+
+            lu_solve(lu_ge, b1, x1);
+            lu_solve(lu_dense, b2, x2);
+
+            for (int i = 0; i < m; i++) {
+                double ax = 0.0;
+                for (int j = 0; j < m; j++) ax += A[i * m + j] * x1[j];
+                double rhs = (double)(trial * 5 + 2 * i + 1);
+                double resid = fabs(ax - rhs);
+                if (resid > max_resid) max_resid = resid;
+
+                double xdiff = fabs(x1[i] - x2[i]);
+                if (xdiff > max_xdiff) max_xdiff = xdiff;
+            }
+        }
+
+        ASSERT(max_resid < 1e-10, "GE regression: residual accuracy");
+        ASSERT(max_xdiff < 1e-10, "GE regression: matches dense reference");
+        if (max_resid >= 1e-10) printf("    max_resid = %.2e\n", max_resid);
+        if (max_xdiff >= 1e-10) printf("    max_xdiff = %.2e\n", max_xdiff);
+    }
+
+    lu_free(lu_ge);
+    lu_free(lu_dense);
+    free_csc(B);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -435,6 +596,8 @@ int main(void) {
     test_markowitz_lp_basis();
     test_markowitz_large_sparse();
     test_markowitz_tridiagonal();
+    test_markowitz_reserved_row_regression();
+    test_ge_identity_lrow_regression();
 
     printf("\nIntegration (A/B Comparison):\n");
     test_markowitz_integration_small_lp();
