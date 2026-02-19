@@ -39,6 +39,20 @@
 #define RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER 1e4
 #define RALPH_PHASE1_ENTERING_EXCLUDE_ITERS 8
 
+/* Refactor trigger reason telemetry codes */
+typedef enum {
+    RALPH_REFACTOR_REASON_OTHER = 0,
+    RALPH_REFACTOR_REASON_SETUP = 1,
+    RALPH_REFACTOR_REASON_PHASE_TRANSITION = 2,
+    RALPH_REFACTOR_REASON_PERIODIC = 3,
+    RALPH_REFACTOR_REASON_RATIO_RECOVERY = 4,
+    RALPH_REFACTOR_REASON_PIVOT_RECOVERY = 5,
+    RALPH_REFACTOR_REASON_FORCED_SMALL_PIVOT = 6,
+    RALPH_REFACTOR_REASON_UPDATE_RECOVERY = 7,
+    RALPH_REFACTOR_REASON_DIRECTION_STABILIZE = 8,
+    RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP = 9
+} RalphRefactorReason;
+
 /* NOTE: SAFE_FREE macro is provided by shared.h */
 
 /* ============================================================================
@@ -272,6 +286,20 @@ typedef struct {
     int sn_calls;            /* Number of times supernodal path was attempted */
     int sn_successes;        /* Number of times supernodal path succeeded */
 
+    /* Sparse factorization stage timing telemetry (aggregate + last call) */
+    int perf_factorize_calls;      /* Number of lu_factorize() calls */
+    int perf_last_basis_nnz;       /* Input basis nnz for last factorization */
+    int perf_last_m;               /* Basis dimension (m) for last factorization */
+    int perf_last_k;               /* Structural block width (k) for last factorization */
+    double perf_last_a_struct_build_ms;
+    double perf_last_markowitz_numeric_ms;
+    double perf_last_identity_placement_ms;
+    double perf_last_coo_to_csc_ms;
+    double perf_total_a_struct_build_ms;
+    double perf_total_markowitz_numeric_ms;
+    double perf_total_identity_placement_ms;
+    double perf_total_coo_to_csc_ms;
+
     /* W1: Sparse BTRAN readiness flag (set after each refactorization) */
     int csr_valid;           /* 1 if L/U CSC data is valid for sparse BTRAN reach */
 
@@ -475,6 +503,52 @@ typedef struct SimplexSolver {
     double perf_lu_update_ms;      /* LU update time */
     double perf_compute_solution_ms; /* tableau_compute_solution time */
     double perf_compute_rc_ms;     /* tableau_compute_reduced_costs time */
+    double perf_refactor_all_ms;   /* All tableau_refactorize time (fully covered) */
+    int perf_refactor_count;       /* Number of tableau_refactorize calls */
+    double perf_refactor_last_ms;  /* Last refactor duration */
+    double perf_refactor_max_ms;   /* Max single refactor duration */
+    int perf_refactor_last_reason; /* RalphRefactorReason */
+    int perf_refactor_next_reason; /* RalphRefactorReason hint consumed by tableau_refactorize */
+    int perf_refactor_reason_setup;
+    int perf_refactor_reason_transition;
+    int perf_refactor_reason_periodic;
+    int perf_refactor_reason_ratio_recovery;
+    int perf_refactor_reason_pivot_recovery;
+    int perf_refactor_reason_forced_small_pivot;
+    int perf_refactor_reason_update_recovery;
+    int perf_refactor_reason_direction_stabilize;
+    int perf_refactor_reason_infeas_cleanup;
+    int perf_refactor_reason_other;
+    int perf_refactor_last_m;
+    int perf_refactor_last_k;
+    int perf_refactor_last_nnz_B;
+
+    /* Per-phase hot-path breakdown (Phase 1 vs Phase 2) */
+    double perf_phase1_pricing_ms;
+    double perf_phase1_ratio_ms;
+    double perf_phase1_pivot_ms;
+    double perf_phase1_refactor_ms;
+    double perf_phase1_compute_solution_ms;
+    double perf_phase1_compute_rc_ms;
+    int perf_phase1_pricing_calls;
+    int perf_phase1_ratio_calls;
+    int perf_phase1_pivot_calls;
+    int perf_phase1_refactor_calls;
+    int perf_phase1_compute_solution_calls;
+    int perf_phase1_compute_rc_calls;
+
+    double perf_phase2_pricing_ms;
+    double perf_phase2_ratio_ms;
+    double perf_phase2_pivot_ms;
+    double perf_phase2_refactor_ms;
+    double perf_phase2_compute_solution_ms;
+    double perf_phase2_compute_rc_ms;
+    int perf_phase2_pricing_calls;
+    int perf_phase2_ratio_calls;
+    int perf_phase2_pivot_calls;
+    int perf_phase2_refactor_calls;
+    int perf_phase2_compute_solution_calls;
+    int perf_phase2_compute_rc_calls;
 
     /* Post-solve verification metrics (T2.3 + T3.6) */
     double verify_primal_infeas;    /* ||Ax - b||_inf for satisfied constraints */

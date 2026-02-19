@@ -203,6 +203,52 @@ typedef struct {
     double lu_update_ms;
     double compute_solution_ms;
     double compute_rc_ms;
+    double refactor_all_ms;
+    int refactor_count;
+    double refactor_last_ms;
+    double refactor_max_ms;
+    int refactor_last_reason;
+    char refactor_last_reason_str[64];
+    int refactor_reason_setup;
+    int refactor_reason_transition;
+    int refactor_reason_periodic;
+    int refactor_reason_ratio_recovery;
+    int refactor_reason_pivot_recovery;
+    int refactor_reason_forced_small_pivot;
+    int refactor_reason_update_recovery;
+    int refactor_reason_direction_stabilize;
+    int refactor_reason_infeas_cleanup;
+    int refactor_reason_other;
+    int refactor_last_m;
+    int refactor_last_k;
+    int refactor_last_nnz_b;
+
+    double phase1_pricing_ms;
+    double phase1_ratio_ms;
+    double phase1_pivot_ms;
+    double phase1_refactor_ms;
+    double phase1_compute_solution_ms;
+    double phase1_compute_rc_ms;
+    int phase1_pricing_calls;
+    int phase1_ratio_calls;
+    int phase1_pivot_calls;
+    int phase1_refactor_calls;
+    int phase1_compute_solution_calls;
+    int phase1_compute_rc_calls;
+
+    double phase2_pricing_ms;
+    double phase2_ratio_ms;
+    double phase2_pivot_ms;
+    double phase2_refactor_ms;
+    double phase2_compute_solution_ms;
+    double phase2_compute_rc_ms;
+    int phase2_pricing_calls;
+    int phase2_ratio_calls;
+    int phase2_pivot_calls;
+    int phase2_refactor_calls;
+    int phase2_compute_solution_calls;
+    int phase2_compute_rc_calls;
+
     int lu_mkz_enabled;
     int lu_sn_enabled;
     int lu_mkz_calls;
@@ -224,6 +270,18 @@ typedef struct {
     int lu_max_updates;
     int lu_last_failure_reason_code;
     char lu_last_failure_reason[64];
+    int lu_factorize_calls;
+    int lu_last_basis_nnz;
+    int lu_last_m;
+    int lu_last_k;
+    double lu_last_a_struct_build_ms;
+    double lu_last_markowitz_numeric_ms;
+    double lu_last_identity_placement_ms;
+    double lu_last_coo_to_csc_ms;
+    double lu_total_a_struct_build_ms;
+    double lu_total_markowitz_numeric_ms;
+    double lu_total_identity_placement_ms;
+    double lu_total_coo_to_csc_ms;
     double *solution;    /* Primal solution (may be NULL) */
     int solution_size;
 } SolveResult;
@@ -360,6 +418,23 @@ static void json_escape_string(char *out, size_t out_size, const char *in) {
         }
     }
     out[j] = '\0';
+}
+
+static const char* refactor_reason_string(int reason) {
+    switch ((RalphRefactorReason)reason) {
+        case RALPH_REFACTOR_REASON_SETUP: return "setup";
+        case RALPH_REFACTOR_REASON_PHASE_TRANSITION: return "phase_transition";
+        case RALPH_REFACTOR_REASON_PERIODIC: return "periodic";
+        case RALPH_REFACTOR_REASON_RATIO_RECOVERY: return "ratio_recovery";
+        case RALPH_REFACTOR_REASON_PIVOT_RECOVERY: return "pivot_recovery";
+        case RALPH_REFACTOR_REASON_FORCED_SMALL_PIVOT: return "forced_small_pivot";
+        case RALPH_REFACTOR_REASON_UPDATE_RECOVERY: return "update_recovery";
+        case RALPH_REFACTOR_REASON_DIRECTION_STABILIZE: return "direction_stabilize";
+        case RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP: return "infeasibility_cleanup";
+        case RALPH_REFACTOR_REASON_OTHER:
+        default:
+            return "other";
+    }
 }
 
 /* ============================================================================
@@ -545,6 +620,8 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     result.solution = NULL;
     strncpy(result.lu_last_failure_reason, "none",
             sizeof(result.lu_last_failure_reason) - 1);
+    strncpy(result.refactor_last_reason_str, "other",
+            sizeof(result.refactor_last_reason_str) - 1);
 
     RalphModel *model = ralph_create();
     if (!model) {
@@ -619,6 +696,57 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.lu_update_ms = solver->perf_lu_update_ms;
             result.compute_solution_ms = solver->perf_compute_solution_ms;
             result.compute_rc_ms = solver->perf_compute_rc_ms;
+            result.refactor_all_ms = solver->perf_refactor_all_ms;
+            result.refactor_count = solver->perf_refactor_count;
+            result.refactor_last_ms = solver->perf_refactor_last_ms;
+            result.refactor_max_ms = solver->perf_refactor_max_ms;
+            result.refactor_last_reason = solver->perf_refactor_last_reason;
+            {
+                const char *reason = refactor_reason_string(solver->perf_refactor_last_reason);
+                if (!reason) reason = "other";
+                strncpy(result.refactor_last_reason_str, reason,
+                        sizeof(result.refactor_last_reason_str) - 1);
+                result.refactor_last_reason_str[sizeof(result.refactor_last_reason_str) - 1] = '\0';
+            }
+            result.refactor_reason_setup = solver->perf_refactor_reason_setup;
+            result.refactor_reason_transition = solver->perf_refactor_reason_transition;
+            result.refactor_reason_periodic = solver->perf_refactor_reason_periodic;
+            result.refactor_reason_ratio_recovery = solver->perf_refactor_reason_ratio_recovery;
+            result.refactor_reason_pivot_recovery = solver->perf_refactor_reason_pivot_recovery;
+            result.refactor_reason_forced_small_pivot = solver->perf_refactor_reason_forced_small_pivot;
+            result.refactor_reason_update_recovery = solver->perf_refactor_reason_update_recovery;
+            result.refactor_reason_direction_stabilize = solver->perf_refactor_reason_direction_stabilize;
+            result.refactor_reason_infeas_cleanup = solver->perf_refactor_reason_infeas_cleanup;
+            result.refactor_reason_other = solver->perf_refactor_reason_other;
+            result.refactor_last_m = solver->perf_refactor_last_m;
+            result.refactor_last_k = solver->perf_refactor_last_k;
+            result.refactor_last_nnz_b = solver->perf_refactor_last_nnz_B;
+
+            result.phase1_pricing_ms = solver->perf_phase1_pricing_ms;
+            result.phase1_ratio_ms = solver->perf_phase1_ratio_ms;
+            result.phase1_pivot_ms = solver->perf_phase1_pivot_ms;
+            result.phase1_refactor_ms = solver->perf_phase1_refactor_ms;
+            result.phase1_compute_solution_ms = solver->perf_phase1_compute_solution_ms;
+            result.phase1_compute_rc_ms = solver->perf_phase1_compute_rc_ms;
+            result.phase1_pricing_calls = solver->perf_phase1_pricing_calls;
+            result.phase1_ratio_calls = solver->perf_phase1_ratio_calls;
+            result.phase1_pivot_calls = solver->perf_phase1_pivot_calls;
+            result.phase1_refactor_calls = solver->perf_phase1_refactor_calls;
+            result.phase1_compute_solution_calls = solver->perf_phase1_compute_solution_calls;
+            result.phase1_compute_rc_calls = solver->perf_phase1_compute_rc_calls;
+
+            result.phase2_pricing_ms = solver->perf_phase2_pricing_ms;
+            result.phase2_ratio_ms = solver->perf_phase2_ratio_ms;
+            result.phase2_pivot_ms = solver->perf_phase2_pivot_ms;
+            result.phase2_refactor_ms = solver->perf_phase2_refactor_ms;
+            result.phase2_compute_solution_ms = solver->perf_phase2_compute_solution_ms;
+            result.phase2_compute_rc_ms = solver->perf_phase2_compute_rc_ms;
+            result.phase2_pricing_calls = solver->perf_phase2_pricing_calls;
+            result.phase2_ratio_calls = solver->perf_phase2_ratio_calls;
+            result.phase2_pivot_calls = solver->perf_phase2_pivot_calls;
+            result.phase2_refactor_calls = solver->perf_phase2_refactor_calls;
+            result.phase2_compute_solution_calls = solver->perf_phase2_compute_solution_calls;
+            result.phase2_compute_rc_calls = solver->perf_phase2_compute_rc_calls;
             if (solver->tableau && solver->tableau->lu) {
                 LUFactorization *lu = solver->tableau->lu;
                 result.lu_mkz_enabled = lu->mkz_enabled;
@@ -644,6 +772,18 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_num_updates = lu->num_updates;
                 result.lu_max_updates = lu->max_updates;
                 result.lu_last_failure_reason_code = lu->last_failure_reason;
+                result.lu_factorize_calls = lu->perf_factorize_calls;
+                result.lu_last_basis_nnz = lu->perf_last_basis_nnz;
+                result.lu_last_m = lu->perf_last_m;
+                result.lu_last_k = lu->perf_last_k;
+                result.lu_last_a_struct_build_ms = lu->perf_last_a_struct_build_ms;
+                result.lu_last_markowitz_numeric_ms = lu->perf_last_markowitz_numeric_ms;
+                result.lu_last_identity_placement_ms = lu->perf_last_identity_placement_ms;
+                result.lu_last_coo_to_csc_ms = lu->perf_last_coo_to_csc_ms;
+                result.lu_total_a_struct_build_ms = lu->perf_total_a_struct_build_ms;
+                result.lu_total_markowitz_numeric_ms = lu->perf_total_markowitz_numeric_ms;
+                result.lu_total_identity_placement_ms = lu->perf_total_identity_placement_ms;
+                result.lu_total_coo_to_csc_ms = lu->perf_total_coo_to_csc_ms;
                 {
                     const char *reason = lu_failure_reason_string(lu->last_failure_reason);
                     if (!reason) reason = "unknown";
@@ -1279,6 +1419,9 @@ static void print_json_result(const char *problem_name, const char *source,
     char escaped_lu_reason[128];
     json_escape_string(escaped_lu_reason, sizeof(escaped_lu_reason),
                        ralph->lu_last_failure_reason[0] ? ralph->lu_last_failure_reason : "none");
+    char escaped_refactor_reason[128];
+    json_escape_string(escaped_refactor_reason, sizeof(escaped_refactor_reason),
+                       ralph->refactor_last_reason_str[0] ? ralph->refactor_last_reason_str : "other");
 
     double density = (num_vars > 0 && num_cons > 0)
                      ? (double)nnz / ((double)num_vars * num_cons)
@@ -1391,6 +1534,63 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"compute_reduced_costs_ms\": %.6f\n", ralph->compute_rc_ms);
     fprintf(out, "  },\n");
 
+    /* Per-phase hot-path timing/call breakdown */
+    fprintf(out, "  \"phase_hotspots\": {\n");
+    fprintf(out, "    \"phase1\": {\n");
+    fprintf(out, "      \"pricing_ms\": %.6f,\n", ralph->phase1_pricing_ms);
+    fprintf(out, "      \"ratio_ms\": %.6f,\n", ralph->phase1_ratio_ms);
+    fprintf(out, "      \"pivot_ms\": %.6f,\n", ralph->phase1_pivot_ms);
+    fprintf(out, "      \"refactor_ms\": %.6f,\n", ralph->phase1_refactor_ms);
+    fprintf(out, "      \"compute_solution_ms\": %.6f,\n", ralph->phase1_compute_solution_ms);
+    fprintf(out, "      \"compute_reduced_costs_ms\": %.6f,\n", ralph->phase1_compute_rc_ms);
+    fprintf(out, "      \"pricing_calls\": %d,\n", ralph->phase1_pricing_calls);
+    fprintf(out, "      \"ratio_calls\": %d,\n", ralph->phase1_ratio_calls);
+    fprintf(out, "      \"pivot_calls\": %d,\n", ralph->phase1_pivot_calls);
+    fprintf(out, "      \"refactor_calls\": %d,\n", ralph->phase1_refactor_calls);
+    fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase1_compute_solution_calls);
+    fprintf(out, "      \"compute_reduced_costs_calls\": %d\n", ralph->phase1_compute_rc_calls);
+    fprintf(out, "    },\n");
+    fprintf(out, "    \"phase2\": {\n");
+    fprintf(out, "      \"pricing_ms\": %.6f,\n", ralph->phase2_pricing_ms);
+    fprintf(out, "      \"ratio_ms\": %.6f,\n", ralph->phase2_ratio_ms);
+    fprintf(out, "      \"pivot_ms\": %.6f,\n", ralph->phase2_pivot_ms);
+    fprintf(out, "      \"refactor_ms\": %.6f,\n", ralph->phase2_refactor_ms);
+    fprintf(out, "      \"compute_solution_ms\": %.6f,\n", ralph->phase2_compute_solution_ms);
+    fprintf(out, "      \"compute_reduced_costs_ms\": %.6f,\n", ralph->phase2_compute_rc_ms);
+    fprintf(out, "      \"pricing_calls\": %d,\n", ralph->phase2_pricing_calls);
+    fprintf(out, "      \"ratio_calls\": %d,\n", ralph->phase2_ratio_calls);
+    fprintf(out, "      \"pivot_calls\": %d,\n", ralph->phase2_pivot_calls);
+    fprintf(out, "      \"refactor_calls\": %d,\n", ralph->phase2_refactor_calls);
+    fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase2_compute_solution_calls);
+    fprintf(out, "      \"compute_reduced_costs_calls\": %d\n", ralph->phase2_compute_rc_calls);
+    fprintf(out, "    }\n");
+    fprintf(out, "  },\n");
+
+    /* Refactor-specific trigger and per-call telemetry */
+    fprintf(out, "  \"refactor\": {\n");
+    fprintf(out, "    \"count\": %d,\n", ralph->refactor_count);
+    fprintf(out, "    \"all_ms\": %.6f,\n", ralph->refactor_all_ms);
+    fprintf(out, "    \"avg_ms\": %.6f,\n",
+            (ralph->refactor_count > 0) ? (ralph->refactor_all_ms / (double)ralph->refactor_count) : 0.0);
+    fprintf(out, "    \"max_ms\": %.6f,\n", ralph->refactor_max_ms);
+    fprintf(out, "    \"last_ms\": %.6f,\n", ralph->refactor_last_ms);
+    fprintf(out, "    \"last_reason_code\": %d,\n", ralph->refactor_last_reason);
+    fprintf(out, "    \"last_reason\": \"%s\",\n", escaped_refactor_reason);
+    fprintf(out, "    \"last_m\": %d,\n", ralph->refactor_last_m);
+    fprintf(out, "    \"last_k\": %d,\n", ralph->refactor_last_k);
+    fprintf(out, "    \"last_nnz_B\": %d,\n", ralph->refactor_last_nnz_b);
+    fprintf(out, "    \"reason_setup\": %d,\n", ralph->refactor_reason_setup);
+    fprintf(out, "    \"reason_transition\": %d,\n", ralph->refactor_reason_transition);
+    fprintf(out, "    \"reason_periodic\": %d,\n", ralph->refactor_reason_periodic);
+    fprintf(out, "    \"reason_ratio_recovery\": %d,\n", ralph->refactor_reason_ratio_recovery);
+    fprintf(out, "    \"reason_pivot_recovery\": %d,\n", ralph->refactor_reason_pivot_recovery);
+    fprintf(out, "    \"reason_forced_small_pivot\": %d,\n", ralph->refactor_reason_forced_small_pivot);
+    fprintf(out, "    \"reason_update_recovery\": %d,\n", ralph->refactor_reason_update_recovery);
+    fprintf(out, "    \"reason_direction_stabilize\": %d,\n", ralph->refactor_reason_direction_stabilize);
+    fprintf(out, "    \"reason_infeasibility_cleanup\": %d,\n", ralph->refactor_reason_infeas_cleanup);
+    fprintf(out, "    \"reason_other\": %d\n", ralph->refactor_reason_other);
+    fprintf(out, "  },\n");
+
     /* LU telemetry (Markowitz/sparse fallback diagnostics) */
     double mkz_retry_rate = (ralph->lu_mkz_calls > 0)
                             ? (double)ralph->lu_mkz_retry_count / (double)ralph->lu_mkz_calls
@@ -1417,6 +1617,18 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"sn_successes\": %d,\n", ralph->lu_sn_successes);
     fprintf(out, "    \"num_updates\": %d,\n", ralph->lu_num_updates);
     fprintf(out, "    \"max_updates\": %d,\n", ralph->lu_max_updates);
+    fprintf(out, "    \"factorize_calls\": %d,\n", ralph->lu_factorize_calls);
+    fprintf(out, "    \"last_basis_nnz\": %d,\n", ralph->lu_last_basis_nnz);
+    fprintf(out, "    \"last_m\": %d,\n", ralph->lu_last_m);
+    fprintf(out, "    \"last_k\": %d,\n", ralph->lu_last_k);
+    fprintf(out, "    \"last_a_struct_build_ms\": %.6f,\n", ralph->lu_last_a_struct_build_ms);
+    fprintf(out, "    \"last_markowitz_numeric_ms\": %.6f,\n", ralph->lu_last_markowitz_numeric_ms);
+    fprintf(out, "    \"last_identity_placement_ms\": %.6f,\n", ralph->lu_last_identity_placement_ms);
+    fprintf(out, "    \"last_coo_to_csc_ms\": %.6f,\n", ralph->lu_last_coo_to_csc_ms);
+    fprintf(out, "    \"total_a_struct_build_ms\": %.6f,\n", ralph->lu_total_a_struct_build_ms);
+    fprintf(out, "    \"total_markowitz_numeric_ms\": %.6f,\n", ralph->lu_total_markowitz_numeric_ms);
+    fprintf(out, "    \"total_identity_placement_ms\": %.6f,\n", ralph->lu_total_identity_placement_ms);
+    fprintf(out, "    \"total_coo_to_csc_ms\": %.6f,\n", ralph->lu_total_coo_to_csc_ms);
     fprintf(out, "    \"last_failure_reason_code\": %d,\n", ralph->lu_last_failure_reason_code);
     fprintf(out, "    \"last_failure_reason\": \"%s\"\n", escaped_lu_reason);
     fprintf(out, "  },\n");

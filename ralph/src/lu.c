@@ -290,6 +290,18 @@ LUFactorization* lu_create(int m) {
     lu->sparse_dense_fallbacks = 0;
     lu->used_dense_fallback_last = 0;
     lu->identity_sep_failures = 0;
+    lu->perf_factorize_calls = 0;
+    lu->perf_last_basis_nnz = 0;
+    lu->perf_last_m = 0;
+    lu->perf_last_k = 0;
+    lu->perf_last_a_struct_build_ms = 0.0;
+    lu->perf_last_markowitz_numeric_ms = 0.0;
+    lu->perf_last_identity_placement_ms = 0.0;
+    lu->perf_last_coo_to_csc_ms = 0.0;
+    lu->perf_total_a_struct_build_ms = 0.0;
+    lu->perf_total_markowitz_numeric_ms = 0.0;
+    lu->perf_total_identity_placement_ms = 0.0;
+    lu->perf_total_coo_to_csc_ms = 0.0;
 
     /* T2.1: Supernodal LU (default off, opt-in via lu_supernode param) */
     lu->sn_enabled = 0;
@@ -413,6 +425,14 @@ int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
     }
     lu_set_failure(lu, LU_FAIL_NONE);
     lu->used_dense_fallback_last = 0;
+    lu->perf_factorize_calls++;
+    lu->perf_last_basis_nnz = B->nnz;
+    lu->perf_last_m = B->nrows;
+    lu->perf_last_k = 0;
+    lu->perf_last_a_struct_build_ms = 0.0;
+    lu->perf_last_markowitz_numeric_ms = 0.0;
+    lu->perf_last_identity_placement_ms = 0.0;
+    lu->perf_last_coo_to_csc_ms = 0.0;
 
     /* Try efficient sparse factorization first */
     int result = lu_factorize_sparse_efficient(lu, B);
