@@ -203,6 +203,26 @@ typedef struct {
     double lu_update_ms;
     double compute_solution_ms;
     double compute_rc_ms;
+    int lu_mkz_enabled;
+    int lu_sn_enabled;
+    int lu_mkz_calls;
+    int lu_mkz_successes;
+    int lu_mkz_failures;
+    int lu_mkz_last_failure;
+    int lu_mkz_dense_fallbacks;
+    int lu_mkz_fail_workspace;
+    int lu_mkz_fail_pool;
+    int lu_mkz_fail_singular;
+    int lu_mkz_fail_capacity;
+    int lu_sparse_dense_fallbacks;
+    int lu_used_dense_fallback_last;
+    int lu_identity_sep_failures;
+    int lu_sn_calls;
+    int lu_sn_successes;
+    int lu_num_updates;
+    int lu_max_updates;
+    int lu_last_failure_reason_code;
+    char lu_last_failure_reason[64];
     double *solution;    /* Primal solution (may be NULL) */
     int solution_size;
 } SolveResult;
@@ -522,6 +542,8 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     SolveResult result = {0};
     result.status = 3;  /* Error by default */
     result.solution = NULL;
+    strncpy(result.lu_last_failure_reason, "none",
+            sizeof(result.lu_last_failure_reason) - 1);
 
     RalphModel *model = ralph_create();
     if (!model) {
@@ -596,6 +618,35 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.lu_update_ms = solver->perf_lu_update_ms;
             result.compute_solution_ms = solver->perf_compute_solution_ms;
             result.compute_rc_ms = solver->perf_compute_rc_ms;
+            if (solver->tableau && solver->tableau->lu) {
+                LUFactorization *lu = solver->tableau->lu;
+                result.lu_mkz_enabled = lu->mkz_enabled;
+                result.lu_sn_enabled = lu->sn_enabled;
+                result.lu_mkz_calls = lu->mkz_calls;
+                result.lu_mkz_successes = lu->mkz_successes;
+                result.lu_mkz_failures = lu->mkz_failures;
+                result.lu_mkz_last_failure = lu->mkz_last_failure;
+                result.lu_mkz_dense_fallbacks = lu->mkz_dense_fallbacks;
+                result.lu_mkz_fail_workspace = lu->mkz_fail_workspace;
+                result.lu_mkz_fail_pool = lu->mkz_fail_pool;
+                result.lu_mkz_fail_singular = lu->mkz_fail_singular;
+                result.lu_mkz_fail_capacity = lu->mkz_fail_capacity;
+                result.lu_sparse_dense_fallbacks = lu->sparse_dense_fallbacks;
+                result.lu_used_dense_fallback_last = lu->used_dense_fallback_last;
+                result.lu_identity_sep_failures = lu->identity_sep_failures;
+                result.lu_sn_calls = lu->sn_calls;
+                result.lu_sn_successes = lu->sn_successes;
+                result.lu_num_updates = lu->num_updates;
+                result.lu_max_updates = lu->max_updates;
+                result.lu_last_failure_reason_code = lu->last_failure_reason;
+                {
+                    const char *reason = lu_failure_reason_string(lu->last_failure_reason);
+                    if (!reason) reason = "unknown";
+                    strncpy(result.lu_last_failure_reason, reason,
+                            sizeof(result.lu_last_failure_reason) - 1);
+                    result.lu_last_failure_reason[sizeof(result.lu_last_failure_reason) - 1] = '\0';
+                }
+            }
         }
     }
 
@@ -1220,6 +1271,9 @@ static void print_json_result(const char *problem_name, const char *source,
     char escaped_issues[2048];
     json_escape_string(escaped_issues, sizeof(escaped_issues),
                        val ? val->issues : "");
+    char escaped_lu_reason[128];
+    json_escape_string(escaped_lu_reason, sizeof(escaped_lu_reason),
+                       ralph->lu_last_failure_reason[0] ? ralph->lu_last_failure_reason : "none");
 
     double density = (num_vars > 0 && num_cons > 0)
                      ? (double)nnz / ((double)num_vars * num_cons)
@@ -1330,6 +1384,31 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"lu_update_ms\": %.6f,\n", ralph->lu_update_ms);
     fprintf(out, "    \"compute_solution_ms\": %.6f,\n", ralph->compute_solution_ms);
     fprintf(out, "    \"compute_reduced_costs_ms\": %.6f\n", ralph->compute_rc_ms);
+    fprintf(out, "  },\n");
+
+    /* LU telemetry (Markowitz/sparse fallback diagnostics) */
+    fprintf(out, "  \"lu\": {\n");
+    fprintf(out, "    \"mkz_enabled\": %s,\n", ralph->lu_mkz_enabled ? "true" : "false");
+    fprintf(out, "    \"sn_enabled\": %s,\n", ralph->lu_sn_enabled ? "true" : "false");
+    fprintf(out, "    \"mkz_calls\": %d,\n", ralph->lu_mkz_calls);
+    fprintf(out, "    \"mkz_successes\": %d,\n", ralph->lu_mkz_successes);
+    fprintf(out, "    \"mkz_failures\": %d,\n", ralph->lu_mkz_failures);
+    fprintf(out, "    \"mkz_last_failure\": %d,\n", ralph->lu_mkz_last_failure);
+    fprintf(out, "    \"mkz_dense_fallbacks\": %d,\n", ralph->lu_mkz_dense_fallbacks);
+    fprintf(out, "    \"mkz_fail_workspace\": %d,\n", ralph->lu_mkz_fail_workspace);
+    fprintf(out, "    \"mkz_fail_pool\": %d,\n", ralph->lu_mkz_fail_pool);
+    fprintf(out, "    \"mkz_fail_singular\": %d,\n", ralph->lu_mkz_fail_singular);
+    fprintf(out, "    \"mkz_fail_capacity\": %d,\n", ralph->lu_mkz_fail_capacity);
+    fprintf(out, "    \"sparse_dense_fallbacks\": %d,\n", ralph->lu_sparse_dense_fallbacks);
+    fprintf(out, "    \"used_dense_fallback_last\": %s,\n",
+            ralph->lu_used_dense_fallback_last ? "true" : "false");
+    fprintf(out, "    \"identity_sep_failures\": %d,\n", ralph->lu_identity_sep_failures);
+    fprintf(out, "    \"sn_calls\": %d,\n", ralph->lu_sn_calls);
+    fprintf(out, "    \"sn_successes\": %d,\n", ralph->lu_sn_successes);
+    fprintf(out, "    \"num_updates\": %d,\n", ralph->lu_num_updates);
+    fprintf(out, "    \"max_updates\": %d,\n", ralph->lu_max_updates);
+    fprintf(out, "    \"last_failure_reason_code\": %d,\n", ralph->lu_last_failure_reason_code);
+    fprintf(out, "    \"last_failure_reason\": \"%s\"\n", escaped_lu_reason);
     fprintf(out, "  },\n");
 
     /* Diagnosis */
