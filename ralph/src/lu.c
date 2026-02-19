@@ -228,6 +228,8 @@ LUFactorization* lu_create(int m) {
     /* Pre-allocate dense workspace for fallback factorization (m×m matrix)
      * Allocated separately due to large size O(m²) */
     lu->dense_work = (double*)calloc((size_t)m * (size_t)m, sizeof(double));
+    lu->mkz_work = NULL;
+    lu->mkz_work_capacity = 0;
 
     if (!lu->dense_work) {
         lu_free(lu);
@@ -281,6 +283,10 @@ LUFactorization* lu_create(int m) {
     lu->mkz_failures = 0;
     lu->mkz_last_failure = 0;
     lu->mkz_dense_fallbacks = 0;
+    lu->mkz_fail_workspace = 0;
+    lu->mkz_fail_pool = 0;
+    lu->mkz_fail_singular = 0;
+    lu->mkz_fail_capacity = 0;
     lu->sparse_dense_fallbacks = 0;
     lu->used_dense_fallback_last = 0;
     lu->identity_sep_failures = 0;
@@ -333,6 +339,8 @@ void lu_free(LUFactorization *lu) {
 
     /* Free dense workspace (O(m²), not in arena) */
     SAFE_FREE(lu->dense_work);
+    SAFE_FREE(lu->mkz_work);
+    lu->mkz_work_capacity = 0;
 
     /* T2.1: Free cached supernodal symbolic analysis */
     if (lu->sn_symbolic) {
