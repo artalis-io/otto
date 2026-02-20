@@ -2194,7 +2194,7 @@ Track execution with these phases:
 3. ✅ **Periodic scheduler effectiveness feedback** (done)
    Kept LU hard safety triggers and added per-phase adaptive bias that relaxes/tightens
    periodic cadence from observed periodic-refactor outcomes.
-4. ▶ **Cheaper full refactor path** (next)
+4. ▶ **Cheaper full refactor path** (in progress)
    Move from full basis rebuild copy toward incremental basis-matrix maintenance fast-paths.
 5. **Faster long FT-chain solves**
    Batch/cache-optimize spike application in FTRAN/BTRAN without changing numerics.
@@ -2214,6 +2214,9 @@ Progress update (2026-02-20):
 - Added adaptive periodic-scheduler feedback in primal phase loops: periodic interval pressure
   now includes a bounded per-phase bias learned from prior periodic effectiveness signals,
   while all hard LU safety triggers remain authoritative.
+- Added first incremental basis-maintenance fast path in `simplex.c`: when basis-position
+  replacements preserve per-column nnz, refactor extraction patches only changed columns in
+  `basis_work` and reuses cached CSC layout; falls back to full rebuild on layout changes.
 
 ### 8.9 NETLIB Small-Canary Coverage
 
