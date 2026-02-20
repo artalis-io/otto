@@ -944,6 +944,7 @@ static SGContext *make_internal_ctx(void) {
     add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -10.0);
     add_delivery_request(ctx, 20.0, 0.0, 0, 86400, 60, -15.0);
     add_delivery_request(ctx, 30.0, 0.0, 0, 86400, 60, -20.0);
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
     return ctx;
 }
 
@@ -2286,6 +2287,183 @@ static void test_two_phase_solve_no_regression(void) {
     sg_free(ctx);
 }
 
+/* ===== Travel API Tests ===== */
+
+static void test_travel_matrix_mode(void) {
+    SGContext *ctx = make_config(50, 42);
+    uint32_t depot;
+    /* 3 locations: depot at loc 0, task A at loc 1, task B at loc 2 */
+    uint32_t loc0 = sg_add_location(ctx);
+    uint32_t loc1 = sg_add_location(ctx);
+    uint32_t loc2 = sg_add_location(ctx);
+    assert(loc0 == 0 && loc1 == 1 && loc2 == 2);
+
+    /* Set up asymmetric travel matrix (3x3) */
+    {
+        /*          to 0    to 1    to 2  */
+        double dist[] = {
+            0.0,   10.0,   20.0,   /* from 0 */
+            15.0,   0.0,   25.0,   /* from 1 */
+            30.0,   35.0,   0.0    /* from 2 */
+        };
+        double dur[] = {
+            0.0,  100.0,  200.0,   /* from 0 */
+            150.0,  0.0,  250.0,   /* from 1 */
+            300.0, 350.0,  0.0     /* from 2 */
+        };
+        assert(sg_set_travel_matrix(ctx, 3, dist, dur) == SG_STATUS_OK);
+    }
+
+    /* Build model using location_ids */
+    depot = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, depot, loc0) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location_id(ctx, task, loc1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 60) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Route: depot(loc0) -> task(loc1) -> depot(loc0)
+       Distance = dist[0][1] + dist[1][0] = 10 + 15 = 25 */
+    assert(fabs(sg_get_total_distance(ctx) - 25.0) < 1e-9);
+
+    sg_free(ctx);
+}
+
+static void test_travel_cb(uint32_t from, uint32_t to, uint32_t vid,
+                           double *d, double *t, void *ud) {
+    (void)vid; (void)ud;
+    double diff = (double)to > (double)from
+                ? (double)(to - from) : (double)(from - to);
+    *d = diff * 100.0;
+    *t = diff * 100.0;
+}
+
+static void test_travel_callback_mode(void) {
+    SGContext *ctx = make_config(50, 42);
+    uint32_t depot;
+    uint32_t loc0 = sg_add_location(ctx);
+    uint32_t loc1 = sg_add_location(ctx);
+    assert(loc0 == 0 && loc1 == 1);
+
+    assert(sg_set_travel_callback(ctx, test_travel_cb, NULL) == SG_STATUS_OK);
+
+    depot = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, depot, loc0) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location_id(ctx, task, loc1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 60) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Route: loc0 -> loc1 -> loc0 = 100 + 100 = 200 */
+    assert(fabs(sg_get_total_distance(ctx) - 200.0) < 1e-9);
+
+    sg_free(ctx);
+}
+
+static void test_travel_auto_dedup(void) {
+    /* Two tasks at the same coordinates should share a location_id */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    add_delivery_request(ctx, 5.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 5.0, 0.0, 0, 86400, 60, -10.0);  /* Same coords */
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -10.0); /* Different */
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+
+    /* Should have 3 unique locations: (0,0), (5,0), (10,0) */
+    assert(ctx->num_locations == 3);
+
+    /* Tasks at same coords should have same location_id */
+    assert(ctx->tasks[0].location_id == ctx->tasks[1].location_id);
+    assert(ctx->tasks[0].location_id != ctx->tasks[2].location_id);
+
+    sg_free(ctx);
+}
+
+static void test_travel_asymmetric_matrix(void) {
+    /* Verify that asymmetric travel works correctly */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t depot;
+    uint32_t loc0 = sg_add_location(ctx);
+    uint32_t loc1 = sg_add_location(ctx);
+    uint32_t loc2 = sg_add_location(ctx);
+
+    /* Asymmetric: A->B != B->A */
+    {
+        double dist[] = {
+            0.0,  5.0, 20.0,
+           50.0,  0.0, 10.0,
+           20.0, 10.0,  0.0
+        };
+        double dur[] = {
+            0.0,  50.0, 200.0,
+          500.0,   0.0, 100.0,
+          200.0, 100.0,   0.0
+        };
+        assert(sg_set_travel_matrix(ctx, 3, dist, dur) == SG_STATUS_OK);
+    }
+
+    depot = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, depot, loc0) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    /* Task A at loc1, Task B at loc2 */
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location_id(ctx, task, loc1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location_id(ctx, task, loc2) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* With this matrix, optimal route is 0->1->2->0 = 5 + 10 + 20 = 35
+       (versus 0->2->1->0 = 20 + 10 + 50 = 80) */
+    assert(fabs(sg_get_total_distance(ctx) - 35.0) < 1e-9);
+
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -2348,6 +2526,10 @@ int main(void) {
     RUN_TEST(test_solomon_i1_pd);
     RUN_TEST(test_vehicle_empty_destroy);
     RUN_TEST(test_two_phase_solve_no_regression);
+    RUN_TEST(test_travel_matrix_mode);
+    RUN_TEST(test_travel_callback_mode);
+    RUN_TEST(test_travel_auto_dedup);
+    RUN_TEST(test_travel_asymmetric_matrix);
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
     return tests_passed == tests_run ? 0 : 1;

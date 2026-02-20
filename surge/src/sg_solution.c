@@ -620,6 +620,15 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
         return AR_STATUS_INVALID_ARG;
     }
 
+    /* Ensure travel infrastructure is prepared (idempotent). Cast away const
+       because prepare_travel computes derived data, not changing the model. */
+    if (!((SGContext *)ctx)->travel_prepared) {
+        SGStatus prep = sg_prepare_travel((SGContext *)ctx);
+        if (prep != SG_STATUS_OK) {
+            return AR_STATUS_ERROR;
+        }
+    }
+
     memset(sol, 0, sizeof(*sol));
 
     status = sg_bootstrap_solution_init(&sol->base, ctx->num_requests);

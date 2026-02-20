@@ -7,6 +7,11 @@
 
 typedef struct SGContext SGContext;
 
+typedef void (*SGTravelCallback)(uint32_t from_location, uint32_t to_location,
+                                  uint32_t vehicle_id,
+                                  double *distance_out, double *duration_out,
+                                  void *user_data);
+
 const char *sg_version(void);
 
 SGContext *sg_create(void);
@@ -56,6 +61,15 @@ SGStatus sg_set_priority_removal_policy(SGContext *ctx, SGPriorityRemovalPolicy 
 SGStatus sg_set_zone_distance_matrix(SGContext *ctx, uint32_t zone_count,
                                      const double *matrix_row_major);
 SGStatus sg_clear_zone_distance_matrix(SGContext *ctx);
+uint32_t sg_add_location(SGContext *ctx);
+SGStatus sg_location_set_coords(SGContext *ctx, uint32_t location_id, double x, double y);
+SGStatus sg_depot_set_location_id(SGContext *ctx, uint32_t depot_id, uint32_t location_id);
+SGStatus sg_task_set_location_id(SGContext *ctx, uint32_t task_id, uint32_t location_id);
+SGStatus sg_set_travel_matrix(SGContext *ctx, uint32_t location_count,
+                               const double *distance_matrix_row_major,
+                               const double *duration_matrix_row_major);
+SGStatus sg_set_travel_callback(SGContext *ctx, SGTravelCallback callback, void *user_data);
+
 SGStatus sg_validate_model(const SGContext *ctx);
 SGStatus sg_load_solomon_vrptw(SGContext *ctx, const char *file_path);
 SGStatus sg_load_li_lim_pdptw(SGContext *ctx, const char *file_path);

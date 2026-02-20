@@ -236,6 +236,17 @@ void sg_free(SGContext *ctx) {
 
     sg_zone_matrix_clear(ctx);
 
+    free(ctx->location_coords);
+    ctx->location_coords = NULL;
+    free(ctx->travel_distance_matrix);
+    ctx->travel_distance_matrix = NULL;
+    free(ctx->travel_duration_matrix);
+    ctx->travel_duration_matrix = NULL;
+    ctx->num_locations = 0;
+    ctx->travel_callback = NULL;
+    ctx->travel_callback_data = NULL;
+    ctx->travel_prepared = 0;
+
     sh_rng_free(ctx->op_rng);
     ctx->op_rng = NULL;
     free(ctx);
@@ -322,6 +333,7 @@ uint32_t sg_add_depot(SGContext *ctx) {
 
     ctx->depots = new_depots;
     memset(&ctx->depots[id], 0, sizeof(ctx->depots[id]));
+    ctx->depots[id].location_id = UINT32_MAX;
     ctx->num_depots++;
     return id;
 }
@@ -418,6 +430,8 @@ uint32_t sg_add_vehicle(SGContext *ctx) {
 
     vehicle = &ctx->vehicles[id];
     memset(vehicle, 0, sizeof(*vehicle));
+    vehicle->start_location_id = UINT32_MAX;
+    vehicle->end_location_id = UINT32_MAX;
     vehicle->capacity = (double *)calloc((size_t)ctx->dimension_count, sizeof(double));
     if (!vehicle->capacity) {
         return UINT32_MAX;
@@ -453,6 +467,7 @@ uint32_t sg_add_task(SGContext *ctx, SGTaskType type) {
     task = &ctx->tasks[id];
     memset(task, 0, sizeof(*task));
     task->type = type;
+    task->location_id = UINT32_MAX;
     task->demand = (double *)calloc((size_t)ctx->dimension_count, sizeof(double));
     if (!task->demand) {
         return UINT32_MAX;
@@ -869,6 +884,248 @@ SGStatus sg_validate_model(const SGContext *ctx) {
         return SG_STATUS_INFEASIBLE;
     }
 
+    return SG_STATUS_OK;
+}
+
+uint32_t sg_add_location(SGContext *ctx) {
+    double *new_coords;
+    size_t next_count;
+    uint32_t id;
+
+    if (!ctx) {
+        return UINT32_MAX;
+    }
+
+    id = ctx->num_locations;
+    next_count = (size_t)ctx->num_locations + 1;
+    if (next_count > SIZE_MAX / (2 * sizeof(double))) {
+        return UINT32_MAX;
+    }
+
+    new_coords = (double *)realloc(ctx->location_coords, next_count * 2 * sizeof(double));
+    if (!new_coords) {
+        return UINT32_MAX;
+    }
+
+    ctx->location_coords = new_coords;
+    ctx->location_coords[id * 2] = 0.0;
+    ctx->location_coords[id * 2 + 1] = 0.0;
+    ctx->num_locations++;
+    return id;
+}
+
+SGStatus sg_location_set_coords(SGContext *ctx, uint32_t location_id, double x, double y) {
+    if (!ctx || location_id >= ctx->num_locations || !isfinite(x) || !isfinite(y)) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    ctx->location_coords[location_id * 2] = x;
+    ctx->location_coords[location_id * 2 + 1] = y;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_depot_set_location_id(SGContext *ctx, uint32_t depot_id, uint32_t location_id) {
+    if (!ctx || depot_id >= ctx->num_depots || location_id >= ctx->num_locations) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    ctx->depots[depot_id].location_id = location_id;
+    ctx->depots[depot_id].has_location = 1;
+    if (ctx->location_coords) {
+        ctx->depots[depot_id].x = ctx->location_coords[location_id * 2];
+        ctx->depots[depot_id].y = ctx->location_coords[location_id * 2 + 1];
+    }
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_task_set_location_id(SGContext *ctx, uint32_t task_id, uint32_t location_id) {
+    if (!ctx || task_id >= ctx->num_tasks || location_id >= ctx->num_locations) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    ctx->tasks[task_id].location_id = location_id;
+    ctx->tasks[task_id].has_location = 1;
+    if (ctx->location_coords) {
+        ctx->tasks[task_id].x = ctx->location_coords[location_id * 2];
+        ctx->tasks[task_id].y = ctx->location_coords[location_id * 2 + 1];
+    }
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_set_travel_matrix(SGContext *ctx, uint32_t location_count,
+                               const double *distance_matrix_row_major,
+                               const double *duration_matrix_row_major) {
+    double *dist_copy = NULL;
+    double *dur_copy = NULL;
+    size_t n;
+    size_t total;
+    size_t i;
+
+    if (!ctx || location_count == 0 || !distance_matrix_row_major ||
+        !duration_matrix_row_major) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    n = (size_t)location_count;
+    if (n > SIZE_MAX / n) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    total = n * n;
+    if (total > SIZE_MAX / sizeof(double)) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    dist_copy = (double *)malloc(total * sizeof(double));
+    dur_copy = (double *)malloc(total * sizeof(double));
+    if (!dist_copy || !dur_copy) {
+        free(dist_copy);
+        free(dur_copy);
+        return SG_STATUS_OUT_OF_MEMORY;
+    }
+
+    for (i = 0; i < total; i++) {
+        if (!isfinite(distance_matrix_row_major[i]) || distance_matrix_row_major[i] < 0.0 ||
+            !isfinite(duration_matrix_row_major[i]) || duration_matrix_row_major[i] < 0.0) {
+            free(dist_copy);
+            free(dur_copy);
+            return SG_STATUS_INVALID_ARG;
+        }
+        dist_copy[i] = distance_matrix_row_major[i];
+        dur_copy[i] = duration_matrix_row_major[i];
+    }
+
+    free(ctx->travel_distance_matrix);
+    free(ctx->travel_duration_matrix);
+    ctx->travel_distance_matrix = dist_copy;
+    ctx->travel_duration_matrix = dur_copy;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_set_travel_callback(SGContext *ctx, SGTravelCallback callback, void *user_data) {
+    if (!ctx) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    ctx->travel_callback = callback;
+    ctx->travel_callback_data = user_data;
+    return SG_STATUS_OK;
+}
+
+static uint32_t sg_find_or_create_location(SGContext *ctx, double x, double y) {
+    uint32_t i;
+    uint32_t loc;
+
+    /* Search existing locations for exact (x,y) match */
+    for (i = 0; i < ctx->num_locations; i++) {
+        if (ctx->location_coords[i * 2] == x && ctx->location_coords[i * 2 + 1] == y) {
+            return i;
+        }
+    }
+
+    /* Create new location */
+    loc = sg_add_location(ctx);
+    if (loc != UINT32_MAX) {
+        sg_location_set_coords(ctx, loc, x, y);
+    }
+    return loc;
+}
+
+SGStatus sg_prepare_travel(SGContext *ctx) {
+    uint32_t i;
+
+    if (!ctx) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    /* Step 1: Auto-assign location_ids to depots/tasks without one */
+    for (i = 0; i < ctx->num_depots; i++) {
+        SGDepotRecord *depot = &ctx->depots[i];
+        if (depot->location_id == UINT32_MAX && depot->has_location) {
+            depot->location_id = sg_find_or_create_location(ctx, depot->x, depot->y);
+            if (depot->location_id == UINT32_MAX) {
+                return SG_STATUS_OUT_OF_MEMORY;
+            }
+        }
+    }
+
+    for (i = 0; i < ctx->num_tasks; i++) {
+        SGTaskRecord *task = &ctx->tasks[i];
+        if (task->location_id == UINT32_MAX && task->has_location) {
+            task->location_id = sg_find_or_create_location(ctx, task->x, task->y);
+            if (task->location_id == UINT32_MAX) {
+                return SG_STATUS_OUT_OF_MEMORY;
+            }
+        }
+    }
+
+    /* Step 2: Cache start/end location_ids on vehicles */
+    for (i = 0; i < ctx->num_vehicles; i++) {
+        SGVehicleRecord *vehicle = &ctx->vehicles[i];
+        if (vehicle->has_depots) {
+            if (vehicle->start_depot_id < ctx->num_depots) {
+                vehicle->start_location_id = ctx->depots[vehicle->start_depot_id].location_id;
+            }
+            if (vehicle->end_depot_id < ctx->num_depots) {
+                vehicle->end_location_id = ctx->depots[vehicle->end_depot_id].location_id;
+            }
+        }
+    }
+
+    /* Step 3: If no matrix and no callback, compute Euclidean matrices */
+    if (!ctx->travel_distance_matrix && !ctx->travel_duration_matrix && !ctx->travel_callback) {
+        uint32_t n = ctx->num_locations;
+        if (n > 0) {
+            size_t total = (size_t)n * n;
+            uint32_t r, c;
+
+            ctx->travel_distance_matrix = (double *)malloc(total * sizeof(double));
+            ctx->travel_duration_matrix = (double *)malloc(total * sizeof(double));
+            if (!ctx->travel_distance_matrix || !ctx->travel_duration_matrix) {
+                free(ctx->travel_distance_matrix);
+                free(ctx->travel_duration_matrix);
+                ctx->travel_distance_matrix = NULL;
+                ctx->travel_duration_matrix = NULL;
+                return SG_STATUS_OUT_OF_MEMORY;
+            }
+
+            for (r = 0; r < n; r++) {
+                double rx = ctx->location_coords[r * 2];
+                double ry = ctx->location_coords[r * 2 + 1];
+                for (c = 0; c < n; c++) {
+                    double cx_val = ctx->location_coords[c * 2];
+                    double cy_val = ctx->location_coords[c * 2 + 1];
+                    double dx = rx - cx_val;
+                    double dy = ry - cy_val;
+                    double dist = sqrt(dx * dx + dy * dy);
+                    size_t idx = (size_t)r * n + c;
+                    ctx->travel_distance_matrix[idx] = dist;
+                    ctx->travel_duration_matrix[idx] = dist;
+                }
+            }
+        }
+    }
+
+    /* Step 4: Validate */
+    for (i = 0; i < ctx->num_depots; i++) {
+        if (ctx->depots[i].has_location && ctx->depots[i].location_id >= ctx->num_locations) {
+            return SG_STATUS_INFEASIBLE;
+        }
+    }
+    for (i = 0; i < ctx->num_tasks; i++) {
+        if (ctx->tasks[i].has_location && ctx->tasks[i].location_id >= ctx->num_locations) {
+            return SG_STATUS_INFEASIBLE;
+        }
+    }
+    for (i = 0; i < ctx->num_vehicles; i++) {
+        if (ctx->vehicles[i].has_depots) {
+            if (ctx->vehicles[i].start_location_id >= ctx->num_locations ||
+                ctx->vehicles[i].end_location_id >= ctx->num_locations) {
+                return SG_STATUS_INFEASIBLE;
+            }
+        }
+    }
+
+    ctx->travel_prepared = 1;
     return SG_STATUS_OK;
 }
 

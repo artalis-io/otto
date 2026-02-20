@@ -32,6 +32,7 @@
 #define SG_ROUTE_MAX_INTENSIFY_PASSES 8
 #define SG_EJECTION_MAX_DEPTH 5
 #define SG_EJECTION_BUDGET 50000
+#define SG_NO_VEHICLE UINT32_MAX
 
 /* Internal types */
 typedef struct {
@@ -98,6 +99,7 @@ typedef struct {
     double y;
     int32_t tw_early;
     int32_t tw_late;
+    uint32_t location_id;  /* UINT32_MAX if unset */
     uint8_t has_location;
     uint8_t has_time_window;
 } SGDepotRecord;
@@ -105,6 +107,8 @@ typedef struct {
 typedef struct {
     uint32_t start_depot_id;
     uint32_t end_depot_id;
+    uint32_t start_location_id;
+    uint32_t end_location_id;
     int32_t shift_early;
     int32_t shift_late;
     double *capacity;
@@ -121,6 +125,7 @@ typedef struct {
     int32_t tw_late;
     int32_t service_seconds;
     double *demand;
+    uint32_t location_id;  /* UINT32_MAX if unset */
     uint8_t has_location;
     uint8_t has_time_window;
     uint8_t has_demand;
@@ -151,8 +156,15 @@ struct SGContext {
     SGVehicleRecord *vehicles;
     SGTaskRecord *tasks;
     double *zone_distance_matrix;
+    uint32_t num_locations;
+    double *location_coords;           /* [num_locations * 2]: x,y pairs */
+    double *travel_distance_matrix;    /* [num_locations * num_locations] row-major */
+    double *travel_duration_matrix;    /* [num_locations * num_locations] row-major */
+    SGTravelCallback travel_callback;
+    void *travel_callback_data;
     SHRng *op_rng;
     void *active_solution;  /* Temporary: set during destroy ops needing route access */
+    uint8_t travel_prepared;
     uint8_t avoid_new_vehicles;  /* Phase 1: skip empty vehicles in repair */
 };
 
@@ -167,6 +179,46 @@ int sg_priority_policy_valid(SGPriorityRemovalPolicy policy);
 int sg_demand_sign_convention_valid(SGDemandSignConvention convention);
 void sg_zone_matrix_clear(SGContext *ctx);
 int sg_task_ready_for_model(const SGTaskRecord *task);
+SGStatus sg_prepare_travel(SGContext *ctx);
+int sg_request_representative_location(const SGContext *ctx, uint32_t request_id,
+                                        uint32_t *location_id_out);
+
+/* Internal travel lookup functions (static inline) */
+
+static inline void sg_travel(const SGContext *ctx, uint32_t from_loc, uint32_t to_loc,
+                              uint32_t vehicle_id, double *dist, double *dur) {
+    if (ctx->travel_callback) {
+        ctx->travel_callback(from_loc, to_loc, vehicle_id, dist, dur,
+                             ctx->travel_callback_data);
+        return;
+    }
+    {
+        size_t idx = (size_t)from_loc * ctx->num_locations + to_loc;
+        *dist = ctx->travel_distance_matrix[idx];
+        *dur  = ctx->travel_duration_matrix[idx];
+    }
+}
+
+static inline double sg_travel_dist(const SGContext *ctx, uint32_t from_loc, uint32_t to_loc) {
+    if (ctx->travel_callback) {
+        double d, t;
+        ctx->travel_callback(from_loc, to_loc, SG_NO_VEHICLE, &d, &t,
+                             ctx->travel_callback_data);
+        return d;
+    }
+    return ctx->travel_distance_matrix[(size_t)from_loc * ctx->num_locations + to_loc];
+}
+
+static inline double sg_travel_dur(const SGContext *ctx, uint32_t from_loc, uint32_t to_loc,
+                                    uint32_t vehicle_id) {
+    if (ctx->travel_callback) {
+        double d, t;
+        ctx->travel_callback(from_loc, to_loc, vehicle_id, &d, &t,
+                             ctx->travel_callback_data);
+        return t;
+    }
+    return ctx->travel_duration_matrix[(size_t)from_loc * ctx->num_locations + to_loc];
+}
 int sg_request_pd_demands_valid(const SGTaskRecord *pickup, const SGTaskRecord *delivery,
                                 uint32_t dimension_count, SGDemandSignConvention convention);
 int sg_delivery_task_demand_valid(const SGTaskRecord *delivery, uint32_t dimension_count,

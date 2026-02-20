@@ -6,9 +6,8 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
     const SGDepotRecord *end_depot;
     SGRouteStop *stops;
     uint32_t stop_len;
-    double sx = 0.0, sy = 0.0, ex = 0.0, ey = 0.0;
     double time_cursor;
-    double px, py;
+    uint32_t prev_loc;
     double distance = 0.0;
     double latest_next;
     uint32_t i;
@@ -28,8 +27,11 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
         vehicle->end_depot_id >= ctx->num_depots) {
         return 0;
     }
-    if (!sg_vehicle_start_end_locations(ctx, vehicle_id, &sx, &sy, &ex, &ey)) {
-        return 0;
+    {
+        double _sx, _sy, _ex, _ey;
+        if (!sg_vehicle_start_end_locations(ctx, vehicle_id, &_sx, &_sy, &_ex, &_ey)) {
+            return 0;
+        }
     }
 
     start_depot = &ctx->depots[vehicle->start_depot_id];
@@ -44,16 +46,17 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
         }
     }
 
-    px = sx;
-    py = sy;
+    prev_loc = vehicle->start_location_id;
     for (i = 0; i < stop_len; i++) {
         SGRouteStop *stop = &stops[i];
+        uint32_t cur_loc = ctx->tasks[stop->task_id].location_id;
         const SGTaskRecord *task = &ctx->tasks[stop->task_id];
-        double travel = sg_euclid(px, py, task->x, task->y);
+        double dist, dur;
         double start;
 
-        distance += travel;
-        time_cursor += travel;
+        sg_travel(ctx, prev_loc, cur_loc, vehicle_id, &dist, &dur);
+        distance += dist;
+        time_cursor += dur;
         stop->arrival = time_cursor;
 
         start = time_cursor;
@@ -63,14 +66,14 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
         stop->service_start = start;
         stop->depart = start + (double)task->service_seconds;
         time_cursor = stop->depart;
-        px = task->x;
-        py = task->y;
+        prev_loc = cur_loc;
     }
 
     /* Add travel to end depot */
     {
-        double travel_to_end = sg_euclid(px, py, ex, ey);
-        distance += travel_to_end;
+        double dist, dur;
+        sg_travel(ctx, prev_loc, vehicle->end_location_id, vehicle_id, &dist, &dur);
+        distance += dist;
     }
 
     /* Backward pass */
@@ -82,19 +85,17 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
         uint32_t idx = i - 1U;
         SGRouteStop *stop = &stops[idx];
         const SGTaskRecord *task = &ctx->tasks[stop->task_id];
-        double nx, ny;
+        uint32_t cur_loc = task->location_id;
+        uint32_t next_loc;
         double travel_to_next;
 
         if (idx + 1U < stop_len) {
-            const SGTaskRecord *next_task = &ctx->tasks[stops[idx + 1U].task_id];
-            nx = next_task->x;
-            ny = next_task->y;
+            next_loc = ctx->tasks[stops[idx + 1U].task_id].location_id;
         } else {
-            nx = ex;
-            ny = ey;
+            next_loc = vehicle->end_location_id;
         }
 
-        travel_to_next = sg_euclid(task->x, task->y, nx, ny);
+        travel_to_next = sg_travel_dur(ctx, cur_loc, next_loc, vehicle_id);
         stop->latest_start = latest_next - travel_to_next - (double)task->service_seconds;
         if (task->has_time_window && stop->latest_start > (double)task->tw_late) {
             stop->latest_start = (double)task->tw_late;
@@ -154,10 +155,6 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
     const SGVehicleRecord *vehicle;
     const SGDepotRecord *start_depot;
     const SGDepotRecord *end_depot;
-    double sx = 0.0;
-    double sy = 0.0;
-    double ex = 0.0;
-    double ey = 0.0;
     double *service_start = NULL;
     double *depart = NULL;
     double *latest_start = NULL;
@@ -169,8 +166,7 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
     double *max_prefix = NULL;
     double distance = 0.0;
     double time_cursor;
-    double px;
-    double py;
+    uint32_t prev_loc;
     double latest_next;
     uint32_t i;
     uint32_t d;
@@ -191,8 +187,11 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
         vehicle->end_depot_id >= ctx->num_depots) {
         return 0;
     }
-    if (!sg_vehicle_start_end_locations(ctx, vehicle_id, &sx, &sy, &ex, &ey)) {
-        return 0;
+    {
+        double _sx, _sy, _ex, _ey;
+        if (!sg_vehicle_start_end_locations(ctx, vehicle_id, &_sx, &_sy, &_ex, &_ey)) {
+            return 0;
+        }
     }
 
     start_depot = &ctx->depots[vehicle->start_depot_id];
@@ -284,16 +283,16 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
         }
     }
 
-    px = sx;
-    py = sy;
+    prev_loc = vehicle->start_location_id;
     for (i = 0; i < stop_count; i++) {
         const SGRouteStop *stop = &stops[i];
         const SGTaskRecord *task;
         const SGRequestRecord *request;
-        double travel;
+        double dist, dur;
         double start;
         double ride_time = 0.0;
         double ride_limit = INFINITY;
+        uint32_t cur_loc;
 
         if (stop->request_id >= ctx->num_requests || stop->task_id >= ctx->num_tasks) {
             goto done;
@@ -304,12 +303,13 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
             goto done;
         }
 
-        travel = sg_euclid(px, py, task->x, task->y);
-        if (!isfinite(travel) || travel < 0.0) {
+        cur_loc = task->location_id;
+        sg_travel(ctx, prev_loc, cur_loc, vehicle_id, &dist, &dur);
+        if (!isfinite(dist) || dist < 0.0) {
             goto done;
         }
-        distance += travel;
-        time_cursor += travel;
+        distance += dist;
+        time_cursor += dur;
         start = time_cursor;
         if (start < (double)task->tw_early) {
             start = (double)task->tw_early;
@@ -356,17 +356,17 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
             pickup_depart[stop->request_id] = depart[i];
         }
         time_cursor = depart[i];
-        px = task->x;
-        py = task->y;
+        prev_loc = cur_loc;
     }
 
     {
-        double travel_to_end = sg_euclid(px, py, ex, ey);
-        if (!isfinite(travel_to_end) || travel_to_end < 0.0) {
+        double dist, dur;
+        sg_travel(ctx, prev_loc, vehicle->end_location_id, vehicle_id, &dist, &dur);
+        if (!isfinite(dist) || dist < 0.0) {
             goto done;
         }
-        distance += travel_to_end;
-        time_cursor += travel_to_end;
+        distance += dist;
+        time_cursor += dur;
     }
 
     if (end_depot->has_time_window) {
@@ -388,19 +388,16 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
     for (i = stop_count; i > 0; i--) {
         uint32_t idx = i - 1U;
         const SGTaskRecord *task = &ctx->tasks[stops[idx].task_id];
-        double nx;
-        double ny;
+        uint32_t cur_loc = task->location_id;
+        uint32_t next_loc;
         double travel_to_next;
         if (idx + 1U < stop_count) {
-            const SGTaskRecord *next_task = &ctx->tasks[stops[idx + 1U].task_id];
-            nx = next_task->x;
-            ny = next_task->y;
+            next_loc = ctx->tasks[stops[idx + 1U].task_id].location_id;
         } else {
-            nx = ex;
-            ny = ey;
+            next_loc = vehicle->end_location_id;
         }
 
-        travel_to_next = sg_euclid(task->x, task->y, nx, ny);
+        travel_to_next = sg_travel_dur(ctx, cur_loc, next_loc, vehicle_id);
         if (!isfinite(travel_to_next) || travel_to_next < 0.0) {
             goto done;
         }
@@ -555,8 +552,7 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
     SGRouteStop new_stops[2];
     uint32_t new_stop_count = 0;
     double prev_depart;
-    double prev_x, prev_y;
-    double sx = 0.0, sy = 0.0, ex = 0.0, ey = 0.0;
+    uint32_t prev_loc;
     uint32_t next_stop_idx;
     uint32_t prev_stop_idx;
     double old_segment, new_segment, delta, new_route_distance;
@@ -573,8 +569,11 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
         vehicle->end_depot_id >= ctx->num_depots) {
         return 0;
     }
-    if (!sg_vehicle_start_end_locations(ctx, vehicle_id, &sx, &sy, &ex, &ey)) {
-        return 0;
+    {
+        double _sx, _sy, _ex, _ey;
+        if (!sg_vehicle_start_end_locations(ctx, vehicle_id, &_sx, &_sy, &_ex, &_ey)) {
+            return 0;
+        }
     }
     end_depot = &ctx->depots[vehicle->end_depot_id];
 
@@ -599,8 +598,7 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
         if (start_depot->has_time_window && prev_depart < (double)start_depot->tw_early) {
             prev_depart = (double)start_depot->tw_early;
         }
-        prev_x = sx;
-        prev_y = sy;
+        prev_loc = vehicle->start_location_id;
         prev_stop_idx = UINT32_MAX;
     } else {
         /* Previous request's last stop */
@@ -610,8 +608,7 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
             return 0;
         }
         prev_depart = stops[prev_stop_idx].depart;
-        prev_x = ctx->tasks[stops[prev_stop_idx].task_id].x;
-        prev_y = ctx->tasks[stops[prev_stop_idx].task_id].y;
+        prev_loc = ctx->tasks[stops[prev_stop_idx].task_id].location_id;
     }
 
     /* Determine next stop index */
@@ -633,13 +630,13 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
     /* Time check for new stop(s) */
     {
         double cursor = prev_depart;
-        double cx = prev_x;
-        double cy = prev_y;
+        uint32_t c_loc = prev_loc;
         double pickup_depart_time = 0.0;
 
         for (ns = 0; ns < new_stop_count; ns++) {
             const SGTaskRecord *task = &ctx->tasks[new_stops[ns].task_id];
-            double travel = sg_euclid(cx, cy, task->x, task->y);
+            uint32_t task_loc = task->location_id;
+            double travel = sg_travel_dur(ctx, c_loc, task_loc, vehicle_id);
             double arrival_t = cursor + travel;
             double start_t = arrival_t;
             if (start_t < (double)task->tw_early) {
@@ -673,20 +670,19 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
             }
 
             cursor = new_stops[ns].depart;
-            cx = task->x;
-            cy = task->y;
+            c_loc = task_loc;
         }
 
         /* Check push on next existing stop (O(1)) */
         if (next_stop_idx != UINT32_MAX) {
-            const SGTaskRecord *next_task = &ctx->tasks[stops[next_stop_idx].task_id];
-            double new_arrival_at_next = cursor + sg_euclid(cx, cy, next_task->x, next_task->y);
+            uint32_t next_loc = ctx->tasks[stops[next_stop_idx].task_id].location_id;
+            double new_arrival_at_next = cursor + sg_travel_dur(ctx, c_loc, next_loc, vehicle_id);
             if (new_arrival_at_next > stops[next_stop_idx].latest_start + 1e-9) {
                 return 0;
             }
         } else {
             /* At end of route: check return to end depot */
-            double arrival_at_end = cursor + sg_euclid(cx, cy, ex, ey);
+            double arrival_at_end = cursor + sg_travel_dur(ctx, c_loc, vehicle->end_location_id, vehicle_id);
             if (end_depot->has_time_window && arrival_at_end > (double)end_depot->tw_late + 1e-9) {
                 return 0;
             }
@@ -765,27 +761,24 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
 
     /* Compute distance delta */
     {
-        double last_new_x = ctx->tasks[new_stops[new_stop_count - 1].task_id].x;
-        double last_new_y = ctx->tasks[new_stops[new_stop_count - 1].task_id].y;
-        double first_new_x = ctx->tasks[new_stops[0].task_id].x;
-        double first_new_y = ctx->tasks[new_stops[0].task_id].y;
+        uint32_t last_new_loc = ctx->tasks[new_stops[new_stop_count - 1].task_id].location_id;
+        uint32_t first_new_loc = ctx->tasks[new_stops[0].task_id].location_id;
 
         if (next_stop_idx != UINT32_MAX) {
-            double next_x = ctx->tasks[stops[next_stop_idx].task_id].x;
-            double next_y = ctx->tasks[stops[next_stop_idx].task_id].y;
-            old_segment = sg_euclid(prev_x, prev_y, next_x, next_y);
-            new_segment = sg_euclid(prev_x, prev_y, first_new_x, first_new_y);
+            uint32_t next_loc = ctx->tasks[stops[next_stop_idx].task_id].location_id;
+            old_segment = sg_travel_dist(ctx, prev_loc, next_loc);
+            new_segment = sg_travel_dist(ctx, prev_loc, first_new_loc);
             if (new_stop_count == 2) {
-                new_segment += sg_euclid(first_new_x, first_new_y, last_new_x, last_new_y);
+                new_segment += sg_travel_dist(ctx, first_new_loc, last_new_loc);
             }
-            new_segment += sg_euclid(last_new_x, last_new_y, next_x, next_y);
+            new_segment += sg_travel_dist(ctx, last_new_loc, next_loc);
         } else {
-            old_segment = sg_euclid(prev_x, prev_y, ex, ey);
-            new_segment = sg_euclid(prev_x, prev_y, first_new_x, first_new_y);
+            old_segment = sg_travel_dist(ctx, prev_loc, vehicle->end_location_id);
+            new_segment = sg_travel_dist(ctx, prev_loc, first_new_loc);
             if (new_stop_count == 2) {
-                new_segment += sg_euclid(first_new_x, first_new_y, last_new_x, last_new_y);
+                new_segment += sg_travel_dist(ctx, first_new_loc, last_new_loc);
             }
-            new_segment += sg_euclid(last_new_x, last_new_y, ex, ey);
+            new_segment += sg_travel_dist(ctx, last_new_loc, vehicle->end_location_id);
         }
     }
 
@@ -813,7 +806,8 @@ int sg_route_eval_pd_best_insertion_cached(
     const SGTaskRecord *delivery_task;
     const SGRouteStop *stops;
     uint32_t stop_len;
-    double sx = 0.0, sy = 0.0, ex = 0.0, ey = 0.0;
+    uint32_t pickup_loc;
+    uint32_t delivery_loc;
     double best_score = INFINITY;
     uint32_t best_i = UINT32_MAX, best_j = UINT32_MAX;
     double best_dist = 0.0;
@@ -845,13 +839,19 @@ int sg_route_eval_pd_best_insertion_cached(
         return 0;
     }
 
+    pickup_loc = pickup_task->location_id;
+    delivery_loc = delivery_task->location_id;
+
     vehicle = &ctx->vehicles[vehicle_id];
     if (!vehicle->has_depots || vehicle->start_depot_id >= ctx->num_depots ||
         vehicle->end_depot_id >= ctx->num_depots) {
         return 0;
     }
-    if (!sg_vehicle_start_end_locations(ctx, vehicle_id, &sx, &sy, &ex, &ey)) {
-        return 0;
+    {
+        double _sx, _sy, _ex, _ey;
+        if (!sg_vehicle_start_end_locations(ctx, vehicle_id, &_sx, &_sy, &_ex, &_ey)) {
+            return 0;
+        }
     }
 
     start_depot = &ctx->depots[vehicle->start_depot_id];
@@ -869,22 +869,21 @@ int sg_route_eval_pd_best_insertion_cached(
 
     /* For each pickup position i = 0..stop_len */
     for (i = 0; i <= stop_len; i++) {
-        double prev_depart, prev_x, prev_y;
+        double prev_depart;
+        uint32_t prev_loc;
         double p_travel, p_arrival, p_start, p_depart;
         uint32_t j;
 
         /* A. Compute pickup timing */
         if (i == 0) {
             prev_depart = depot_depart;
-            prev_x = sx;
-            prev_y = sy;
+            prev_loc = vehicle->start_location_id;
         } else {
             prev_depart = stops[i - 1].depart;
-            prev_x = ctx->tasks[stops[i - 1].task_id].x;
-            prev_y = ctx->tasks[stops[i - 1].task_id].y;
+            prev_loc = ctx->tasks[stops[i - 1].task_id].location_id;
         }
 
-        p_travel = sg_euclid(prev_x, prev_y, pickup_task->x, pickup_task->y);
+        p_travel = sg_travel_dur(ctx, prev_loc, pickup_loc, vehicle_id);
         p_arrival = prev_depart + p_travel;
         p_start = p_arrival;
         if (p_start < (double)pickup_task->tw_early) {
@@ -902,7 +901,8 @@ int sg_route_eval_pd_best_insertion_cached(
             double push_k = 0.0;
 
             for (j = i + 1; j <= stop_len + 1; j++) {
-                double d_prev_depart, d_prev_x, d_prev_y;
+                double d_prev_depart;
+                uint32_t d_prev_loc;
                 double d_travel, d_arrival, d_start, d_depart;
                 double ride_time;
                 double delta;
@@ -914,17 +914,14 @@ int sg_route_eval_pd_best_insertion_cached(
                 if (j == i + 1) {
                     /* Delivery immediately after pickup */
                     d_prev_depart = p_depart;
-                    d_prev_x = pickup_task->x;
-                    d_prev_y = pickup_task->y;
+                    d_prev_loc = pickup_loc;
                 } else {
                     /* Delivery after stop[j-1] (which has been pushed) */
                     d_prev_depart = stops[j - 2].depart + push_k;
-                    d_prev_x = ctx->tasks[stops[j - 2].task_id].x;
-                    d_prev_y = ctx->tasks[stops[j - 2].task_id].y;
+                    d_prev_loc = ctx->tasks[stops[j - 2].task_id].location_id;
                 }
 
-                d_travel = sg_euclid(d_prev_x, d_prev_y,
-                                     delivery_task->x, delivery_task->y);
+                d_travel = sg_travel_dur(ctx, d_prev_loc, delivery_loc, vehicle_id);
                 d_arrival = d_prev_depart + d_travel;
                 d_start = d_arrival;
                 if (d_start < (double)delivery_task->tw_early) {
@@ -947,10 +944,9 @@ int sg_route_eval_pd_best_insertion_cached(
                     /* There is a stop[j-1] in the original array at index j-1.
                        After inserting pickup at i, original stop at index j-1
                        becomes the stop after delivery. */
-                    double next_x = ctx->tasks[stops[j - 1].task_id].x;
-                    double next_y = ctx->tasks[stops[j - 1].task_id].y;
-                    double new_arrival_next = d_depart + sg_euclid(
-                        delivery_task->x, delivery_task->y, next_x, next_y);
+                    uint32_t next_loc = ctx->tasks[stops[j - 1].task_id].location_id;
+                    double new_arrival_next = d_depart +
+                        sg_travel_dur(ctx, delivery_loc, next_loc, vehicle_id);
                     /* The pushed latest_start of stop[j-1] */
                     if (new_arrival_next > stops[j - 1].latest_start + 1e-9) {
                         /* But maybe further j could still work if this one fails
@@ -964,7 +960,7 @@ int sg_route_eval_pd_best_insertion_cached(
                 } else {
                     /* j == stop_len + 1: delivery at end of route */
                     double arrival_at_end = d_depart +
-                        sg_euclid(delivery_task->x, delivery_task->y, ex, ey);
+                        sg_travel_dur(ctx, delivery_loc, vehicle->end_location_id, vehicle_id);
                     if (end_depot->has_time_window &&
                         arrival_at_end > (double)end_depot->tw_late + 1e-9) {
                         goto next_j;
@@ -1047,60 +1043,45 @@ int sg_route_eval_pd_best_insertion_cached(
                     /* Pickup segment: prev_of_i -> stop[i] becomes prev_of_i -> pickup -> ... */
                     if (j == i + 1) {
                         /* Adjacent: prev -> pickup -> delivery -> stop[i] (or end) */
-                        double next_x, next_y;
+                        uint32_t next_loc;
                         if (i < stop_len) {
-                            next_x = ctx->tasks[stops[i].task_id].x;
-                            next_y = ctx->tasks[stops[i].task_id].y;
-                            old_seg_pickup = sg_euclid(prev_x, prev_y, next_x, next_y);
+                            next_loc = ctx->tasks[stops[i].task_id].location_id;
+                            old_seg_pickup = sg_travel_dist(ctx, prev_loc, next_loc);
                         } else {
-                            old_seg_pickup = sg_euclid(prev_x, prev_y, ex, ey);
-                            next_x = ex;
-                            next_y = ey;
+                            next_loc = vehicle->end_location_id;
+                            old_seg_pickup = sg_travel_dist(ctx, prev_loc, next_loc);
                         }
-                        new_seg_pickup = sg_euclid(prev_x, prev_y,
-                                                    pickup_task->x, pickup_task->y) +
-                                          sg_euclid(pickup_task->x, pickup_task->y,
-                                                    delivery_task->x, delivery_task->y) +
-                                          sg_euclid(delivery_task->x, delivery_task->y,
-                                                    next_x, next_y);
+                        new_seg_pickup = sg_travel_dist(ctx, prev_loc, pickup_loc) +
+                                          sg_travel_dist(ctx, pickup_loc, delivery_loc) +
+                                          sg_travel_dist(ctx, delivery_loc, next_loc);
                         delta = new_seg_pickup - old_seg_pickup;
                     } else {
                         /* Non-adjacent: two separate segment changes */
-                        double stop_i_x, stop_i_y;
-                        double stop_jm1_x, stop_jm1_y; /* stop at j-1 in original */
-                        double after_d_x, after_d_y;
+                        uint32_t stop_i_loc;
+                        uint32_t stop_jm1_loc; /* stop at j-2 in original */
+                        uint32_t after_d_loc;
 
                         /* Pickup segment: prev -> stop[i] becomes prev -> pickup -> stop[i] */
                         if (i < stop_len) {
-                            stop_i_x = ctx->tasks[stops[i].task_id].x;
-                            stop_i_y = ctx->tasks[stops[i].task_id].y;
+                            stop_i_loc = ctx->tasks[stops[i].task_id].location_id;
                         } else {
-                            stop_i_x = ex;
-                            stop_i_y = ey;
+                            stop_i_loc = vehicle->end_location_id;
                         }
-                        old_seg_pickup = sg_euclid(prev_x, prev_y, stop_i_x, stop_i_y);
-                        new_seg_pickup = sg_euclid(prev_x, prev_y,
-                                                    pickup_task->x, pickup_task->y) +
-                                          sg_euclid(pickup_task->x, pickup_task->y,
-                                                    stop_i_x, stop_i_y);
+                        old_seg_pickup = sg_travel_dist(ctx, prev_loc, stop_i_loc);
+                        new_seg_pickup = sg_travel_dist(ctx, prev_loc, pickup_loc) +
+                                          sg_travel_dist(ctx, pickup_loc, stop_i_loc);
 
                         /* Delivery segment: stop[j-2] -> stop[j-1] becomes
                            stop[j-2] -> delivery -> stop[j-1] */
-                        stop_jm1_x = ctx->tasks[stops[j - 2].task_id].x;
-                        stop_jm1_y = ctx->tasks[stops[j - 2].task_id].y;
+                        stop_jm1_loc = ctx->tasks[stops[j - 2].task_id].location_id;
                         if (j - 1 < stop_len) {
-                            after_d_x = ctx->tasks[stops[j - 1].task_id].x;
-                            after_d_y = ctx->tasks[stops[j - 1].task_id].y;
+                            after_d_loc = ctx->tasks[stops[j - 1].task_id].location_id;
                         } else {
-                            after_d_x = ex;
-                            after_d_y = ey;
+                            after_d_loc = vehicle->end_location_id;
                         }
-                        old_seg_delivery = sg_euclid(stop_jm1_x, stop_jm1_y,
-                                                      after_d_x, after_d_y);
-                        new_seg_delivery = sg_euclid(stop_jm1_x, stop_jm1_y,
-                                                      delivery_task->x, delivery_task->y) +
-                                            sg_euclid(delivery_task->x, delivery_task->y,
-                                                      after_d_x, after_d_y);
+                        old_seg_delivery = sg_travel_dist(ctx, stop_jm1_loc, after_d_loc);
+                        new_seg_delivery = sg_travel_dist(ctx, stop_jm1_loc, delivery_loc) +
+                                            sg_travel_dist(ctx, delivery_loc, after_d_loc);
                         delta = (new_seg_pickup - old_seg_pickup) +
                                 (new_seg_delivery - old_seg_delivery);
                     }
@@ -1127,10 +1108,9 @@ int sg_route_eval_pd_best_insertion_cached(
                     if (j == i + 1) {
                         /* First stop after pickup: push = how much pickup delays it */
                         double orig_arrival = stops[i].arrival;
-                        double new_arr = p_depart + sg_euclid(
-                            pickup_task->x, pickup_task->y,
-                            ctx->tasks[stops[i].task_id].x,
-                            ctx->tasks[stops[i].task_id].y);
+                        uint32_t stop_i_loc = ctx->tasks[stops[i].task_id].location_id;
+                        double new_arr = p_depart +
+                            sg_travel_dur(ctx, pickup_loc, stop_i_loc, vehicle_id);
                         push_k = new_arr - orig_arrival;
                         if (push_k < 0.0) push_k = 0.0;
                     } else {

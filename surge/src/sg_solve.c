@@ -229,38 +229,39 @@ ARStatus sg_route_construct_solomon_i1(SGContext *ctx, SGRouteSolution *sol) {
             uint32_t best_pos = UINT32_MAX;
             uint32_t best_pp = UINT32_MAX, best_dp = UINT32_MAX;
             double best_dist = 0.0;
-            double sx, sy, ex, ey;
+            uint32_t v_start_loc, v_end_loc;
             uint32_t ui;
 
             if (sol->base.num_unassigned == 0) {
                 break;
             }
 
-            (void)sg_vehicle_start_end_locations(ctx, seed_vehicle, &sx, &sy, &ex, &ey);
+            v_start_loc = ctx->vehicles[seed_vehicle].start_location_id;
+            v_end_loc = ctx->vehicles[seed_vehicle].end_location_id;
 
             for (ui = 0; ui < sol->base.num_unassigned; ui++) {
                 uint32_t rid = sol->base.unassigned_ids[ui];
                 int is_pd = (ctx->requests[rid].kind == SG_REQUEST_KIND_PICKUP_DELIVERY);
                 double old_dist = sol->route_distance[seed_vehicle];
                 double c1, depot_dist, c2;
-                double rx, ry;
 
                 if (is_pd) {
                     double score;
                     uint32_t pp = UINT32_MAX, dp = UINT32_MAX;
                     double new_dist = 0.0;
-                    double px, py, ddx, ddy;
                     if (!sg_route_eval_pd_best_insertion_cached(ctx, sol, rid,
                                                                  seed_vehicle, &score,
                                                                  &pp, &dp, &new_dist)) {
                         continue;
                     }
                     c1 = new_dist - old_dist;
-                    px = ctx->tasks[ctx->requests[rid].pickup_task_id].x;
-                    py = ctx->tasks[ctx->requests[rid].pickup_task_id].y;
-                    ddx = ctx->tasks[ctx->requests[rid].delivery_task_id].x;
-                    ddy = ctx->tasks[ctx->requests[rid].delivery_task_id].y;
-                    depot_dist = sg_euclid(sx, sy, px, py) + sg_euclid(px, py, ddx, ddy) + sg_euclid(ddx, ddy, ex, ey);
+                    {
+                        uint32_t p_loc = ctx->tasks[ctx->requests[rid].pickup_task_id].location_id;
+                        uint32_t d_loc = ctx->tasks[ctx->requests[rid].delivery_task_id].location_id;
+                        depot_dist = sg_travel_dist(ctx, v_start_loc, p_loc) +
+                                     sg_travel_dist(ctx, p_loc, d_loc) +
+                                     sg_travel_dist(ctx, d_loc, v_end_loc);
+                    }
                     c2 = lambda * depot_dist - c1;
                     if (c2 > best_c2) {
                         best_c2 = c2;
@@ -292,8 +293,15 @@ ARStatus sg_route_construct_solomon_i1(SGContext *ctx, SGRouteSolution *sol) {
                         continue;
                     }
                     c1 = best_local_dist - old_dist;
-                    (void)sg_request_centroid(ctx, rid, &rx, &ry);
-                    depot_dist = sg_euclid(sx, sy, rx, ry) + sg_euclid(rx, ry, ex, ey);
+                    {
+                        uint32_t rep_loc;
+                        if (sg_request_representative_location(ctx, rid, &rep_loc)) {
+                            depot_dist = sg_travel_dist(ctx, v_start_loc, rep_loc) +
+                                         sg_travel_dist(ctx, rep_loc, v_end_loc);
+                        } else {
+                            depot_dist = 0.0;
+                        }
+                    }
                     c2 = lambda * depot_dist - c1;
                     if (c2 > best_c2) {
                         best_c2 = c2;
@@ -615,6 +623,12 @@ SGStatus sg_solve(SGContext *ctx) {
     }
     if (ctx->num_requests > 0 && ctx->num_vehicles == 0) {
         return SG_STATUS_INFEASIBLE;
+    }
+    {
+        SGStatus prep_status = sg_prepare_travel(ctx);
+        if (prep_status != SG_STATUS_OK) {
+            return prep_status;
+        }
     }
     if (sg_route_solver_eligible(ctx)) {
         return sg_solve_route_model(ctx);
