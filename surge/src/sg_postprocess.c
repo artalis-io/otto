@@ -337,6 +337,229 @@ static int sg_route_try_2opt_star_once(const SGContext *ctx, SGRouteSolution *so
     return improved;
 }
 
+static int sg_route_try_or_opt_once(const SGContext *ctx, SGRouteSolution *sol) {
+    uint32_t *candidate_src = NULL;
+    uint32_t *candidate_dst = NULL;
+    uint32_t va;
+    int improved = 0;
+
+    if (!ctx || !sol || sol->route_stride == 0) {
+        return 0;
+    }
+
+    candidate_src = (uint32_t *)malloc((size_t)sol->route_stride * sizeof(uint32_t));
+    candidate_dst = (uint32_t *)malloc((size_t)sol->route_stride * sizeof(uint32_t));
+    if (!candidate_src || !candidate_dst) {
+        free(candidate_src);
+        free(candidate_dst);
+        return 0;
+    }
+
+    for (va = 0; va < sol->num_vehicles && !improved; va++) {
+        uint32_t len_a = sol->route_lengths[va];
+        const uint32_t *route_a;
+        int k;
+
+        if (len_a < 2) {
+            continue;
+        }
+        route_a = sg_route_vehicle_ptr_const(sol, va);
+
+        for (k = 3; k >= 2 && !improved; k--) {
+            uint32_t start;
+
+            if ((uint32_t)k > len_a) {
+                continue;
+            }
+
+            for (start = 0; start + (uint32_t)k <= len_a && !improved; start++) {
+                uint32_t src_len = len_a - (uint32_t)k;
+                double src_dist = 0.0;
+                uint32_t vb;
+
+                /* Build source route (route_a without segment) */
+                if (start > 0) {
+                    memcpy(candidate_src, route_a,
+                           (size_t)start * sizeof(uint32_t));
+                }
+                if (start + (uint32_t)k < len_a) {
+                    memcpy(&candidate_src[start], &route_a[start + k],
+                           (size_t)(len_a - start - (uint32_t)k) * sizeof(uint32_t));
+                }
+
+                /* Check source feasibility */
+                if (src_len > 0) {
+                    if (!sg_route_sequence_feasible_distance(
+                            ctx, va, candidate_src, src_len, &src_dist, NULL)) {
+                        continue;
+                    }
+                }
+
+                /* Try each target vehicle */
+                for (vb = 0; vb < sol->num_vehicles && !improved; vb++) {
+                    uint32_t len_b;
+                    const uint32_t *route_b_base;
+                    uint32_t ins;
+
+                    /* Don't create new routes on empty vehicles */
+                    if (va != vb && sol->route_lengths[vb] == 0) {
+                        continue;
+                    }
+
+                    if (va == vb) {
+                        len_b = src_len;
+                        route_b_base = candidate_src;
+                    } else {
+                        len_b = sol->route_lengths[vb];
+                        route_b_base = sg_route_vehicle_ptr_const(sol, vb);
+                    }
+
+                    for (ins = 0; ins <= len_b; ins++) {
+                        uint32_t dst_len = len_b + (uint32_t)k;
+                        double dst_dist = 0.0;
+                        double new_total;
+
+                        if (dst_len > sol->route_stride) {
+                            continue;
+                        }
+
+                        /* Skip identity move (intra-route, same position) */
+                        if (va == vb && ins == start) {
+                            continue;
+                        }
+
+                        /* Build destination route */
+                        if (ins > 0) {
+                            memcpy(candidate_dst, route_b_base,
+                                   (size_t)ins * sizeof(uint32_t));
+                        }
+                        memcpy(&candidate_dst[ins], &route_a[start],
+                               (size_t)k * sizeof(uint32_t));
+                        if (ins < len_b) {
+                            memcpy(&candidate_dst[ins + k], &route_b_base[ins],
+                                   (size_t)(len_b - ins) * sizeof(uint32_t));
+                        }
+
+                        if (!sg_route_sequence_feasible_distance(
+                                ctx, vb, candidate_dst, dst_len, &dst_dist, NULL)) {
+                            continue;
+                        }
+
+                        /* Compute improvement */
+                        if (va == vb) {
+                            new_total = sol->total_distance
+                                        - sol->route_distance[va] + dst_dist;
+                        } else {
+                            new_total = sol->total_distance
+                                        - sol->route_distance[va]
+                                        - sol->route_distance[vb]
+                                        + src_dist + dst_dist;
+                        }
+
+                        if (new_total >= sol->total_distance - 1e-9) {
+                            continue;
+                        }
+
+                        /* Apply the move */
+                        {
+                            SGRouteSolution *backup =
+                                (SGRouteSolution *)sg_route_solution_copy(sol, (void *)ctx);
+                            uint32_t r;
+
+                            if (!backup) {
+                                continue;
+                            }
+
+                            if (va == vb) {
+                                memcpy(sg_route_vehicle_ptr(sol, va), candidate_dst,
+                                       (size_t)dst_len * sizeof(uint32_t));
+                                sol->route_lengths[va] = dst_len;
+                            } else {
+                                memcpy(sg_route_vehicle_ptr(sol, va), candidate_src,
+                                       (size_t)src_len * sizeof(uint32_t));
+                                sol->route_lengths[va] = src_len;
+                                memcpy(sg_route_vehicle_ptr(sol, vb), candidate_dst,
+                                       (size_t)dst_len * sizeof(uint32_t));
+                                sol->route_lengths[vb] = dst_len;
+                            }
+
+                            /* Update request-vehicle mapping */
+                            for (r = 0; r < sol->base.total_requests; r++) {
+                                if (sol->request_vehicle[r] == va ||
+                                    (va != vb && sol->request_vehicle[r] == vb)) {
+                                    sol->request_vehicle[r] = UINT32_MAX;
+                                    sol->request_pos[r] = UINT32_MAX;
+                                    sol->request_pickup_stop_pos[r] = UINT32_MAX;
+                                    sol->request_delivery_stop_pos[r] = UINT32_MAX;
+                                }
+                            }
+
+                            if (va == vb) {
+                                for (r = 0; r < dst_len; r++) {
+                                    sol->request_vehicle[candidate_dst[r]] = va;
+                                    sol->request_pos[candidate_dst[r]] = r;
+                                }
+                            } else {
+                                for (r = 0; r < src_len; r++) {
+                                    sol->request_vehicle[candidate_src[r]] = va;
+                                    sol->request_pos[candidate_src[r]] = r;
+                                }
+                                for (r = 0; r < dst_len; r++) {
+                                    sol->request_vehicle[candidate_dst[r]] = vb;
+                                    sol->request_pos[candidate_dst[r]] = r;
+                                }
+                            }
+
+                            /* Rebuild stop state */
+                            if (!sg_route_rebuild_vehicle_stop_state(ctx, sol, va) ||
+                                (va != vb &&
+                                 !sg_route_rebuild_vehicle_stop_state(ctx, sol, vb))) {
+                                sg_route_restore_from_backup(sol, backup);
+                                continue;
+                            }
+
+                            sg_route_update_timing(ctx, sol, va);
+                            sg_route_update_load(ctx, sol, va);
+                            if (va != vb) {
+                                sg_route_update_timing(ctx, sol, vb);
+                                sg_route_update_load(ctx, sol, vb);
+                            }
+
+                            /* Update distances */
+                            if (va == vb) {
+                                sol->route_distance[va] = dst_dist;
+                            } else {
+                                sol->route_distance[va] = src_dist;
+                                sol->route_distance[vb] = dst_dist;
+                            }
+                            sol->total_distance = new_total;
+
+                            /* Update vehicles_used */
+                            {
+                                uint32_t v, used = 0;
+                                for (v = 0; v < sol->num_vehicles; v++) {
+                                    if (sol->route_lengths[v] > 0) {
+                                        used++;
+                                    }
+                                }
+                                sol->vehicles_used = used;
+                            }
+
+                            sg_route_solution_free(backup, NULL);
+                            improved = 1;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    free(candidate_src);
+    free(candidate_dst);
+    return improved;
+}
+
 void sg_route_restore_from_backup(SGRouteSolution *sol, SGRouteSolution *backup) {
     if (!sol || !backup) {
         return;
@@ -696,6 +919,9 @@ ARStatus sg_route_postprocess_intensify(const SGContext *ctx, SGRouteSolution *s
 
     for (pass = 0; pass < SG_ROUTE_MAX_INTENSIFY_PASSES; pass++) {
         int improved = 0;
+        if (sg_route_try_or_opt_once(ctx, sol)) {
+            improved = 1;
+        }
         if (sg_route_try_exchange_once(ctx, sol)) {
             improved = 1;
         }

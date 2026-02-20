@@ -1826,6 +1826,54 @@ static void test_adaptive_destroy_count(void) {
     assert(q_min <= q_max);
 }
 
+/* ===== Or-Opt / Intensify Tests ===== */
+
+static void test_or_opt_intensify(void) {
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    double dist_before, dist_after;
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+
+    /* Cluster A near (10,10), Cluster B near (90,90) */
+    add_delivery_request(ctx, 10.0, 10.0, 0, 100000, 10, 1.0);  /* r0 */
+    add_delivery_request(ctx, 90.0, 90.0, 0, 100000, 10, 1.0);  /* r1 */
+    add_delivery_request(ctx, 92.0, 90.0, 0, 100000, 10, 1.0);  /* r2 */
+    add_delivery_request(ctx, 12.0, 10.0, 0, 100000, 10, 1.0);  /* r3 */
+
+    /* Suboptimal: v0=[r0, r1, r2], v1=[r3] — clusters mixed */
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 0, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 1, 0, 1, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 2, 0, 2, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 2, 0, 2, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 3, 1, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 3, 1, 0, dist) == AR_STATUS_OK);
+    }
+
+    dist_before = sol.total_distance;
+    assert(dist_before > 0.0);
+
+    /* Intensify should rearrange to group clusters */
+    sg_route_postprocess_intensify(ctx, &sol);
+    dist_after = sol.total_distance;
+
+    /* Distance should improve since clusters get grouped */
+    assert(dist_after < dist_before - 1.0);
+    assert(sol.base.num_unassigned == 0);
+    assert(sol.vehicles_used <= 2);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -1879,6 +1927,7 @@ int main(void) {
     RUN_TEST(test_route_removal_cost);
     RUN_TEST(test_route_shaw_relatedness);
     RUN_TEST(test_adaptive_destroy_count);
+    RUN_TEST(test_or_opt_intensify);
 
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
