@@ -1188,8 +1188,8 @@ Current measured quality (deterministic seed 42, 1000 iterations / default):
 - Li & Lim (PDPTW, 56 cases): `avgVehGap=+0.77`, `avgDistGap=+5.0%`, `equalVehicles=33`, `lexiNonWorse=14`.
 
 Best measured quality (5000 iterations):
-- Solomon: `avgVehGap=+0.50`, `avgDistGap=+0.8%`, `equalVehicles=31`, `lexiNonWorse=11`.
-- Li & Lim: `avgVehGap=+0.71`, `avgDistGap=+4.2%`, `equalVehicles=34`, `lexiNonWorse=18`.
+- Solomon: `avgVehGap=+0.55`, `avgDistGap=+0.4%`, `equalVehicles=29`, `lexiNonWorse=11`.
+- Li & Lim: `avgVehGap=+0.70`, `avgDistGap=+4.3%`, `equalVehicles=36`, `lexiNonWorse=19`.
 
 Glaring architectural gaps:
 - Route-native solver is delivery-only gated (`sg_route_solver_eligible()` requires every request be `SG_REQUEST_KIND_DELIVERY_ONLY`), so PDPTW does not use the stronger route engine.
@@ -1251,13 +1251,14 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - **Phase S1 (SA acceptance)**: Enabled simulated annealing in both solver paths via `ar_alns_calibrate_sa`. Solomon improved from +9.3% to +5.9% avgDistGap at 300 iterations.
 - **Phase S2 (independent PD placement)**: O(L²) pickup/delivery evaluation with stop-level splice/excise. Li & Lim improved from +112.7% to +9.5% avgDistGap. Solomon unchanged at +5.9%.
 - **Phase S3 (route-aware worst removal)**: Replaced proxy-based removal cost with actual distance delta. Solomon +5.5% → +0.8% (at 5k iters), Li & Lim +9.5% → +4.2%.
+- **Phase S4 (route-aware Shaw relatedness)**: Replaced zone-based proxy in Shaw removal with spatial/TW/load/co-route scoring. Solomon +0.8% → +0.4% (at 5k iters). Li & Lim neutral at +4.3%.
 - Unified route state drives both delivery-only and PDPTW solves. The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time constraints.
 - Stop-level splice/excise operations preserve non-adjacent PD placement across ALNS destroy/repair cycles.
 
 ### Next step proposal
-- **Phase S4 (route-aware Shaw relatedness)**: Replace zone-based similarity with spatial distance + TW overlap + load similarity + route co-location bonus.
 - **Phase S5 (adaptive destroy count)**: Scale q_min/q_max with instance size instead of fixed [4, 20].
 - **Phase S6 (enhanced local search)**: Add or-opt and cross-exchange moves; increase intensification passes.
+- **Phase S7 (stagnation detection)**: Restart from perturbed best solution when stagnated.
 
 ### Phase 8: Verification and Benchmark Expansion
 - [ ] Keep Solomon VRPTW as regression benchmark (already wired).
@@ -1463,17 +1464,19 @@ At 5000 iterations: Solomon +0.8%, Li & Lim +4.2%.
 - Criticality-worst operator intentionally unchanged (uses proxy metrics for diversity)
 - 3 new tests: delivery-only (first/middle/last stop), PD adjacent, PD non-adjacent
 
-### Phase S4: Route-Aware Shaw Relatedness
+### Phase S4: Route-Aware Shaw Relatedness ✅
 
-**Impact**: Medium. Current Shaw relatedness uses zone similarity hints, not spatial distance
-or route co-location.
+**Result**: Solomon +0.8% → +0.4% avgDistGap (at 5k iters), avgVehGap +0.50 → +0.55. Li & Lim +4.2% → +4.3% (neutral). At 1k iters: Solomon +3.0% → +2.0%.
 
 **Changes (surge)**:
-- Add `sg_route_shaw_relatedness` using spatial distance + TW overlap + load similarity +
-  route co-location bonus
-- Wire into `sg_route_destroy_shaw`
-
-**Tests**: Verify relatedness metric orders known request pairs correctly.
+- Added `sg_route_shaw_relatedness` with 6-term scoring: spatial distance (`-euclid/40`),
+  TW overlap (Jaccard-like, `3.0 * overlap/span`), load similarity (`-|Δload|/100`),
+  co-route bonus (`+5.0` if same vehicle), PD kind bonus (`+2.0`/`-0.5`), tie-breaker
+- Added `void *active_solution` field to `SGContext` — set/cleared around `ar_remove_related` call
+  to pass route solution into relatedness callback without changing Arbor API
+- Wired into `sg_route_destroy_shaw`, replacing `sg_bootstrap_relatedness`
+- Bumped Shaw initial weight from 0.5 to 1.0 (route-aware Shaw deserves equal weight)
+- 1 new test: verifies spatial ordering, same-route bonus dominance, NULL safety
 
 ### Phase S5: Adaptive Destroy Count
 
