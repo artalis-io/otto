@@ -4,7 +4,17 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-20, `f068c66`) — LP periodic scheduler feedback baseline:
+**Current** (2026-02-20, `eefe861`) — Phase 5 FT-chain baseline + GLPK comparison refresh:
+batched FT spike micro-kernels for long update chains are now baseline, with roadmap/docs aligned.
+Latest gates: `make -C ralph test` PASS, `make -C ralph test-simplex-policy` PASS (16/16),
+`make -C ralph test-lu-markowitz` PASS (59/59), `make -C ralph test-netlib-gate-small` PASS
+(26/26, dense fallback files: 0), and full NETLIB gate baseline parity (84 files; no unexpected
+regressions; known pre-existing `bnl1` command failure remains). GLPK comparison snapshot from
+`/tmp/netlib-regression-gate-20260220-121147`: comparable both-optimal set 55 files, geometric
+mean time ratio (`Ralph/GLPK`) 1.48x, geometric mean iteration ratio ~1.00x, geometric mean
+per-iteration ratio 1.48x.
+
+Previous: (2026-02-20, `f068c66`) — LP periodic scheduler feedback baseline:
 unified pressure scheduler now includes bounded per-phase adaptive feedback from observed
 periodic refactor outcomes while preserving hard LU safety triggers and no-regression canaries.
 Latest gates: `make -C ralph test-simplex-policy` PASS (16/16),
@@ -2236,3 +2246,46 @@ performance/correctness checks focused and reproducible:
 - Dedicated target: `make -C ralph test-netlib-gate-small`
 - Full gate baseline now enforces required small-instance presence via
   `required_coverage` in `ralph/benchmarks/netlib_regression_baseline.json`
+
+### 8.10 Ranked Per-Iteration Hotspot Queue (Baseline `eefe861`)
+
+Source dataset: full NETLIB gate artifacts at
+`/tmp/netlib-regression-gate-20260220-121147` (84 files, 55 comparable optimal LPs).
+
+Observed root cause split on GLPK-faster comparable cases (37):
+- Per-iteration dominant only: 22 cases
+- Both iteration count and per-iteration: 11 cases
+- Iteration count dominant only: 4 cases
+- Dense fallback contribution: 0 cases (`sparse_dense_fallbacks = 0` across solved set)
+
+Ranked queue (per-iteration hotspots only):
+
+1. `H1` Triangular solve micro-kernel upgrade (highest per-iter skew)
+Focus set: `scfxm3`, `ganges`, `scfxm2`, `ship12l`, `ship12s`, `sctap3`, `seba`, `shell`, `etamacro`.
+Evidence: iteration ratios are often < 1 while per-iteration ratios are 9x-33x.
+Implementation: optimize sparse/dense triangular kernels (`solve_L*`, `solve_U*`, sparse FTRAN/BTRAN paths) with branch-light inner loops and cache-local batching.
+Success gate: reduce per-iteration ratio on `scfxm3` and `ganges` by at least 30% with no objective/status regressions.
+
+2. `H2` Full refactor wall-time reduction on large degenerate LPs
+Focus set: `25fv47`, `fit1p`, `80bau3b`, `nesm`, `czprob`.
+Evidence: refactor dominates core time on these cases (roughly 59%-86% of refactor+pivot+ratio+pricing).
+Implementation: extend incremental basis extraction/rebuild fast paths to reduce full CSC payload rewrites and avoid avoidable workspace clears/rebuilds.
+Success gate: reduce `refactor.all_ms` by at least 25% on `fit1p` and `80bau3b`; keep NETLIB gate parity.
+
+3. `H3` Markowitz retry pressure reduction inside sparse numeric refactor
+Focus set: `25fv47` (very high retry count), `80bau3b`, `nesm`, `fit1p`.
+Evidence: retry counts are elevated on slow-degenerate cases and correlate with high refactor wall-time.
+Implementation: improve retry policy and pivot candidate acceptance under reserved-row constraints without triggering dense fallback.
+Success gate: reduce `mkz_retry_count` by at least 50% on `25fv47` and at least 30% on `80bau3b`.
+
+4. `H4` Pivot/ratio kernel throughput improvements in simplex loop
+Focus set: `25fv47`, `scfxm3`, `nesm`, `80bau3b`.
+Evidence: pivot+ratio remains a large secondary block after refactor in top slow cases.
+Implementation: tighten sparse gather/scatter paths in pivot update and ratio test loops to reduce per-pivot scalar overhead.
+Success gate: reduce combined `pivot_ms + ratio_ms` by at least 20% on `scfxm3` and `nesm`.
+
+5. `H5` Pricing kernel cost on large-degenerate workload
+Focus set: `80bau3b`, `25fv47`, `czprob`.
+Evidence: pricing time is a meaningful tail on degenerate long runs (not the primary bottleneck but still material).
+Implementation: refine pricing scan cadence/refresh behavior for large sparse degenerate bases while preserving pivot quality.
+Success gate: reduce `pricing_ms` by at least 30% on `80bau3b` without increasing iteration count by more than 10%.
