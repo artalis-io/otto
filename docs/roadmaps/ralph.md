@@ -4,7 +4,15 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-20, `25e0b93`) — Phase-1 direction-stabilize cooldown baseline:
+**Current** (2026-02-20, `738a2fe`) — H4 simplex pivot/ratio kernel baseline:
+optimized hot simplex kernels in `simplex_pivot` and `ratio_test_harris` (pointer-hoisting and fused
+basic-variable update + direction-norm accumulation) while preserving numerical behavior. Latest gates:
+`make -C ralph test-simplex-policy` PASS (16/16), `make -C ralph test-lu-markowitz` PASS (59/59),
+`make -C ralph test-netlib-gate-small` PASS (26/26, dense fallback files: 0), and full
+`make -C ralph test-netlib-gate` PASS (84 files; 27 known timeouts; status mismatch 0; objective
+mismatch 0; invalid solution 0; dense fallback files 0; no unexpected regressions vs baseline).
+
+Previous: (2026-02-20, `25e0b93`) — Phase-1 direction-stabilize cooldown baseline:
 added a bounded cooldown gate for `RALPH_REFACTOR_REASON_DIRECTION_STABILIZE` in primal Phase 1 so
 large-direction handling does not refactor on nearly every iteration, while preserving hard LU-safety
 override conditions (`lu_needs_refactorization` and extreme-direction forcing). Latest gates:
