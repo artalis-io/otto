@@ -1674,31 +1674,43 @@ void lu_ftran_hyper_sparse(const LUFactorization *lu,
     solve_U_sparse(lu, L_nnz, L_out_idx, temp_val, work2, perm_rhs_idx, &U_nnz, marked, &U_reach_nnz);
 
     /* Step 4: Apply FT/eta updates */
+    int has_updates = 0;
     if (lu->use_ft_updates && lu->ft_num_updates > 0) {
+        has_updates = 1;
         apply_ft_spikes_forward(lu, work2);
     } else if (lu->num_eta > 0) {
+        has_updates = 1;
         apply_eta_forward(lu, work2);
     }
 
-    /* Step 5: Apply column permutation and build output */
+    /* Step 5: Apply column permutation and build output.
+     * No-update fast path avoids an O(m) scan of work2. */
     memset(solution, 0, m * sizeof(double));
     if (sol_nnz) *sol_nnz = 0;
 
-    for (int i = 0; i < m; i++) {
-        if (fabs(work2[i]) > RALPH_ZERO_TOL) {
+    if (!has_updates) {
+        for (int k = 0; k < U_nnz; k++) {
+            int i = perm_rhs_idx[k];
+            double xi = work2[i];
+            if (fabs(xi) <= RALPH_ZERO_TOL) continue;
             int out_idx = lu->col_perm[i];
-            solution[out_idx] = work2[i];
+            solution[out_idx] = xi;
             if (sol_idx && sol_nnz) {
                 sol_idx[(*sol_nnz)++] = out_idx;
             }
         }
+        return;
     }
 
-    /* Clear workspace - FT updates may touch all entries so full clear needed */
     for (int i = 0; i < m; i++) {
-        work2[i] = 0.0;
+        double xi = work2[i];
+        if (fabs(xi) <= RALPH_ZERO_TOL) continue;
+        int out_idx = lu->col_perm[i];
+        solution[out_idx] = xi;
+        if (sol_idx && sol_nnz) {
+            sol_idx[(*sol_nnz)++] = out_idx;
+        }
     }
-    /* work is cleared by next solve_L_sparse call, no action needed here */
 }
 
 /* ============================================================================
@@ -1828,17 +1840,23 @@ static void compute_reach_Ut_forward(const LUFactorization *lu,
                                       int *marked) {
     int m = lu->m;
     *reach_nnz = 0;
+    if (nnz_rhs <= 0) return;
 
     /* Mark all RHS indices */
+    int min_rhs = m;
     for (int k = 0; k < nnz_rhs; k++) {
         int j = rhs_idx[k];
-        if (j >= 0 && j < m) marked[j] = 1;
+        if (j >= 0 && j < m) {
+            marked[j] = 1;
+            if (j < min_rhs) min_rhs = j;
+        }
     }
+    if (min_rhs >= m) return;
 
     /* Ascending propagation using CSC of U:
      * Column j of U has entries U[r,j] for r <= j.
      * If any r < j is marked, mark j (nonzero propagates forward). */
-    for (int j = 0; j < m; j++) {
+    for (int j = min_rhs; j < m; j++) {
         if (!marked[j]) {
             for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
                 int r = lu->U_rowidx[p];
@@ -1876,17 +1894,23 @@ static void compute_reach_Lt_backward(const LUFactorization *lu,
                                        int *marked) {
     int m = lu->m;
     *reach_nnz = 0;
+    if (nnz_rhs <= 0) return;
 
     /* Mark all RHS indices */
+    int max_rhs = -1;
     for (int k = 0; k < nnz_rhs; k++) {
         int j = rhs_idx[k];
-        if (j >= 0 && j < m) marked[j] = 1;
+        if (j >= 0 && j < m) {
+            marked[j] = 1;
+            if (j > max_rhs) max_rhs = j;
+        }
     }
+    if (max_rhs < 0) return;
 
     /* Descending propagation using CSC of L:
      * Column j of L has entries L[r,j] for r > j (below diagonal).
      * If any r > j is marked, mark j (nonzero propagates backward). */
-    for (int j = m - 1; j >= 0; j--) {
+    for (int j = max_rhs; j >= 0; j--) {
         if (!marked[j]) {
             for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
                 int r = lu->L_rowidx[p];
@@ -1958,8 +1982,8 @@ static void solve_Ut_sparse_reach(const LUFactorization *lu,
  */
 static void solve_Lt_sparse_reach(const LUFactorization *lu,
                                    int reach_nnz, const int *reach,
-                                   double *x, double *solution) {
-    int m = lu->m;
+                                   double *x, double *solution,
+                                   int *sol_idx, int *sol_nnz) {
     const int *L_colptr = lu->L_colptr;
     const int *L_rowidx = lu->L_rowidx;
     const double *L_values = lu->L_values;
@@ -1974,12 +1998,18 @@ static void solve_Lt_sparse_reach(const LUFactorization *lu,
         /* L[j,j] = 1, so no division needed */
     }
 
-    /* Apply inverse row permutation: solution[perm[i]] = x[i] */
-    double *temp = lu->perm_work;
-    for (int i = 0; i < m; i++) {
-        temp[lu->perm[i]] = x[i];
+    /* Apply inverse row permutation on the reached subset only. */
+    int out_nnz = 0;
+    for (int k = 0; k < reach_nnz; k++) {
+        int i = reach[k];
+        double xi = x[i];
+        if (fabs(xi) <= RALPH_ZERO_TOL) continue;
+        int out = lu->perm[i];
+        solution[out] = xi;
+        if (sol_idx) sol_idx[out_nnz] = out;
+        out_nnz++;
     }
-    vec_copy_data(solution, temp, m);
+    if (sol_nnz) *sol_nnz = out_nnz;
 }
 
 /*
@@ -2024,20 +2054,29 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
     LUFactorization *lu_mut = (LUFactorization*)lu;
     double *work = lu_mut->hs_work1;
     double *work2 = lu_mut->hs_work2;
+    int *bt_idx = lu_mut->hs_idx;
 
     /* Step 1: Apply inverse column permutation */
+    int bt_nnz = 0;
     for (int k = 0; k < nnz_rhs; k++) {
         int orig_idx = rhs_idx[k];
         if (orig_idx >= 0 && orig_idx < m) {
             int step_pos = lu->col_perm_inv[orig_idx];
-            work[step_pos] = rhs_val[k];
+            double v = rhs_val[k];
+            work[step_pos] = v;
+            if (fabs(v) > RALPH_ZERO_TOL) {
+                bt_idx[bt_nnz++] = step_pos;
+            }
         }
     }
 
     /* Step 2: Apply updates in reverse */
+    int has_updates = 0;
     if (lu->use_ft_updates && lu->ft_num_updates > 0) {
+        has_updates = 1;
         apply_ft_spikes_backward(lu, work);
     } else if (lu->num_eta > 0) {
+        has_updates = 1;
         apply_eta_backward(lu, work);
     }
 
@@ -2045,19 +2084,22 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
      * W1: Use sparse reach-based solve when CSR transposes are available
      * and the post-update RHS is sparse enough. */
 
-    /* Scan work for nonzero indices after FT/eta backward */
-    int *bt_idx = lu_mut->hs_idx;
-    int bt_nnz = 0;
-    for (int j = 0; j < m; j++) {
-        if (fabs(work[j]) > RALPH_ZERO_TOL) {
-            bt_idx[bt_nnz++] = j;
+    /* If updates were applied, rebuild sparse RHS pattern (updates may densify). */
+    if (has_updates) {
+        bt_nnz = 0;
+        for (int j = 0; j < m; j++) {
+            if (fabs(work[j]) > RALPH_ZERO_TOL) {
+                bt_idx[bt_nnz++] = j;
+            }
         }
     }
 
+    int used_sparse_path = 0;
     if (lu->csr_valid && bt_nnz < m / 4) {
         /* Sparse path: reach-based forward sub on U^T, then backward sub on L^T */
         int *reach = (int*)lu_mut->perm_work;  /* Reuse as int array */
         int reach_nnz;
+        used_sparse_path = 1;
 
         /* Forward sub on U^T: solve U^T work = work (in-place) */
         compute_reach_Ut_forward(lu, bt_nnz, bt_idx, reach, &reach_nnz, lu_mut->hs_marked);
@@ -2071,12 +2113,10 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
             }
         }
 
-        /* Copy work to work2 for L^T solve (solve_Lt_sparse_reach reads from x) */
-        memcpy(work2, work, m * sizeof(double));
-
-        /* Backward sub on L^T: solve L^T solution = work2 */
+        /* Backward sub on L^T in-place on work, then permute to solution */
         compute_reach_Lt_backward(lu, ut_nnz, bt_idx, reach, &reach_nnz, lu_mut->hs_marked);
-        solve_Lt_sparse_reach(lu, reach_nnz, reach, work2, solution);
+        memset(solution, 0, m * sizeof(double));
+        solve_Lt_sparse_reach(lu, reach_nnz, reach, work, solution, sol_idx, sol_nnz);
     } else {
         /* Dense fallback */
         solve_Ut(lu, work, work2);
@@ -2084,7 +2124,7 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
     }
 
     /* Build sparse output */
-    if (sol_idx && sol_nnz) {
+    if (!used_sparse_path && sol_idx && sol_nnz) {
         *sol_nnz = 0;
         for (int j = 0; j < m; j++) {
             if (fabs(solution[j]) > RALPH_ZERO_TOL) {
