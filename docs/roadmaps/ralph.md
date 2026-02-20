@@ -4,7 +4,16 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-20, `c844cbe`) — H1c + H2 Markowitz refactor baseline:
+**Current** (2026-02-20, `eabbaa8`) — H3 adaptive Markowitz retry baseline + full NETLIB/GLPK refresh:
+adapted Markowitz pool multiplier on retries to cut retry churn while preserving sparse-LU-first behavior.
+Latest full gate: `make -C ralph test-netlib-gate` PASS (84 files, 26 known timeouts, dense fallback
+files: 0, no unexpected regressions vs baseline). Known baseline mismatches remain:
+status mismatch 2 (`forplan.mps`, `sierra.mps`), objective mismatch 3 (`e226.mps`, `forplan.mps`,
+`sierra.mps`), invalid solution 3 (same set). GLPK comparison snapshot from
+`/tmp/netlib-regression-gate-20260220-143400`: both-optimal set 56 files, geometric mean time ratio
+(`Ralph/GLPK`) 1.44x, geometric mean iteration ratio 1.03x, geometric mean per-iteration ratio 1.40x.
+
+Previous: (2026-02-20, `c844cbe`) — H1c + H2 Markowitz refactor baseline:
 added adaptive reach-mask sparse transpose solves (H1c), then reduced Markowitz numeric refactor
 work with pivot-row-scoped cleanup and cached row-to-column position hints. Latest gates:
 `make -C ralph test-simplex-policy` PASS (16/16), `make -C ralph test-lu-markowitz` PASS (59/59),
