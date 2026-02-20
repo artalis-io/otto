@@ -4,7 +4,15 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-20, `59958a4`) — LP sparse refactor baseline hardening:
+**Current** (2026-02-20, `f068c66`) — LP periodic scheduler feedback baseline:
+unified pressure scheduler now includes bounded per-phase adaptive feedback from observed
+periodic refactor outcomes while preserving hard LU safety triggers and no-regression canaries.
+Latest gates: `make -C ralph test-simplex-policy` PASS (16/16),
+`make -C ralph test-lu-markowitz` PASS (59/59),
+`make -C ralph test-netlib-gate-small` PASS (26/26, dense fallback files: 0),
+and canary gate `fit1p|nesm|bandm|scagr25` PASS (dense fallback files: 0).
+
+Previous: (2026-02-20, `59958a4`) — LP sparse refactor baseline hardening:
 persisted symbolic identity workspaces (removes per-refactor malloc churn), enabled sparse
 symbolic `k=m` fast-path to avoid avoidable dense fallback, and hardened identity-separation
 numeric flow with retry/stage telemetry coverage updates.
