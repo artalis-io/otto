@@ -4,7 +4,12 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-18, `165fe05`) — LP performance: CSR row-scatter for sparse RC updates,
+**Current** (2026-02-20, `173d430`) — Unified pressure-based periodic LU scheduler (single path),
+Markowitz sparse LU default, and NETLIB no-regression gate with required-pass canaries:
+`bandm`, `scagr25`, `fit1p`, `nesm`.
+Latest canary gate run: 4/4 PASS, no dense fallback, no timeout regressions (including `fit1p`/`nesm`).
+
+Previous: (2026-02-18, `165fe05`) — LP performance: CSR row-scatter for sparse RC updates,
 supernodal LU auto-enabled for m>300, conservative refactorization for m≥500, Markowitz LU.
 NETLIB fast tier: 22/22 PASS, 1 ERROR (share1b), 2 SKIP (bore3d, capri). All 378 tests pass.
 
