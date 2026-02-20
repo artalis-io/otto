@@ -21,6 +21,7 @@ int simplex_periodic_refactor_plan_for_test(int phase,
                                             double growth_factor,
                                             int use_bland,
                                             int degenerate_count,
+                                            double feedback_bias,
                                             int *interval_out,
                                             double *pressure_out);
 
@@ -71,6 +72,7 @@ typedef struct {
     double growth_factor;
     int use_bland;
     int degenerate_count;
+    double feedback_bias;
     int expected_run;
     int expected_interval;
     double min_pressure;
@@ -91,6 +93,7 @@ static int run_scheduler_case(const SchedulerCase *tc) {
                                                               tc->growth_factor,
                                                               tc->use_bland,
                                                               tc->degenerate_count,
+                                                              tc->feedback_bias,
                                                               &interval,
                                                               &pressure);
     if (interval != tc->expected_interval) {
@@ -210,6 +213,7 @@ int main(void) {
             .growth_factor = 1.0,
             .use_bland = 0,
             .degenerate_count = 0,
+            .feedback_bias = 0.0,
             .expected_run = 1,
             .expected_interval = 10,
             .min_pressure = 0.99,
@@ -228,6 +232,7 @@ int main(void) {
             .growth_factor = 1.0,
             .use_bland = 0,
             .degenerate_count = 0,
+            .feedback_bias = 0.0,
             .expected_run = 0,
             .expected_interval = 45,
             .min_pressure = 0.37,
@@ -246,6 +251,7 @@ int main(void) {
             .growth_factor = 1.0,
             .use_bland = 0,
             .degenerate_count = 0,
+            .feedback_bias = 0.0,
             .expected_run = 1,
             .expected_interval = 45,
             .min_pressure = 0.75,
@@ -264,6 +270,7 @@ int main(void) {
             .growth_factor = 1.0,
             .use_bland = 0,
             .degenerate_count = 10,
+            .feedback_bias = 0.0,
             .expected_run = 1,
             .expected_interval = 38,
             .min_pressure = 0.50,
@@ -282,6 +289,7 @@ int main(void) {
             .growth_factor = 1.0,
             .use_bland = 0,
             .degenerate_count = 0,
+            .feedback_bias = 0.0,
             .expected_run = 1,
             .expected_interval = 24,
             .min_pressure = 0.99,
@@ -300,10 +308,49 @@ int main(void) {
             .growth_factor = 1.0,
             .use_bland = 1,
             .degenerate_count = 0,
+            .feedback_bias = 0.0,
             .expected_run = 1,
             .expected_interval = 30,
             .min_pressure = 1.0,
             .max_pressure = 1.0
+        },
+        {
+            .name = "positive feedback tightens phase2 interval",
+            .phase = 2,
+            .iter = 12,
+            .m = 250,
+            .max_updates = 120,
+            .num_updates = 12,
+            .spike_pool_used = 0,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e3,
+            .growth_factor = 1.0,
+            .use_bland = 0,
+            .degenerate_count = 0,
+            .feedback_bias = 0.20,
+            .expected_run = 0,
+            .expected_interval = 42,
+            .min_pressure = 0.25,
+            .max_pressure = 0.26
+        },
+        {
+            .name = "negative feedback relaxes phase2 interval",
+            .phase = 2,
+            .iter = 12,
+            .m = 250,
+            .max_updates = 120,
+            .num_updates = 12,
+            .spike_pool_used = 0,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e3,
+            .growth_factor = 1.0,
+            .use_bland = 0,
+            .degenerate_count = 0,
+            .feedback_bias = -0.20,
+            .expected_run = 0,
+            .expected_interval = 46,
+            .min_pressure = 0.10,
+            .max_pressure = 0.10
         }
     };
 

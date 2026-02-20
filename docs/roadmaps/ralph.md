@@ -4,7 +4,14 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-20, `5ad46a9`) — LP refactor telemetry baseline:
+**Current** (2026-02-20, `59958a4`) — LP sparse refactor baseline hardening:
+persisted symbolic identity workspaces (removes per-refactor malloc churn), enabled sparse
+symbolic `k=m` fast-path to avoid avoidable dense fallback, and hardened identity-separation
+numeric flow with retry/stage telemetry coverage updates.
+Latest gates: `make -C ralph test` PASS, `make -C ralph test-netlib-gate-small` PASS (26/26,
+dense fallback files: 0, no unexpected regressions vs baseline).
+
+Previous: (2026-02-20, `5ad46a9`) — LP refactor telemetry baseline:
 stage-level LU timing/counters (symbolic cache, sparse numeric split, dense factorization timing),
 sparse fallback reason telemetry (`small_matrix` / `symbolic` / `numeric`), and removed symbolic
 `num_identity >= m/4` cutoff to avoid unnecessary dense fallback on low-identity bases.
@@ -2173,11 +2180,13 @@ Track execution with these phases:
 1. ✅ **Stage-level refactor telemetry** (done in `5ad46a9`)
    Add timers/counters for basis rebuild, symbolic analyze, sparse numeric, dense numeric,
    and internal sparse→dense fallback reasons.
-2. ▶ **Remove avoidable fallback/copies** (next)
-   Eliminate symbolic malloc churn and avoid dense fallback when sparse `k=m` path is viable.
-3. **Periodic scheduler effectiveness feedback**
-   Keep LU hard safety triggers; adapt periodic interval using observed refactor benefit.
-4. **Cheaper full refactor path**
+2. ✅ **Remove avoidable fallback/copies** (done in `59958a4`)
+   Eliminated symbolic malloc churn and enabled sparse symbolic `k=m` viable path, with
+   sparse numeric hardening for identity-separation edge cases.
+3. ✅ **Periodic scheduler effectiveness feedback** (done)
+   Kept LU hard safety triggers and added per-phase adaptive bias that relaxes/tightens
+   periodic cadence from observed periodic-refactor outcomes.
+4. ▶ **Cheaper full refactor path** (next)
    Move from full basis rebuild copy toward incremental basis-matrix maintenance fast-paths.
 5. **Faster long FT-chain solves**
    Batch/cache-optimize spike application in FTRAN/BTRAN without changing numerics.
@@ -2192,6 +2201,11 @@ Progress update (2026-02-20):
   (`small_matrix`, `symbolic`, `numeric`).
 - Removed the strict `num_identity >= m/4` symbolic gate so sparse LU remains eligible
   on low-identity bases (`bandm`, `scagr25` class), eliminating avoidable symbolic fallbacks.
+- Removed symbolic per-refactor malloc/free churn via persistent LU workspaces and added
+  sparse symbolic `k=m` fast-path so full-structural bases stay on sparse path when viable.
+- Added adaptive periodic-scheduler feedback in primal phase loops: periodic interval pressure
+  now includes a bounded per-phase bias learned from prior periodic effectiveness signals,
+  while all hard LU safety triggers remain authoritative.
 
 ### 8.9 NETLIB Small-Canary Coverage
 
