@@ -1,24 +1,13 @@
 {
-  "source_commit": "eabbaa8",
+  "source_commit": "ece147e",
   "description": "Known NETLIB gate baseline for no-regression checks",
   "defaults": {
     "hard_cap_sec": 20,
     "outer_timeout_sec": 25
   },
-  "known_status_mismatch": [
-    "forplan.mps",
-    "sierra.mps"
-  ],
-  "known_objective_mismatch": [
-    "e226.mps",
-    "forplan.mps",
-    "sierra.mps"
-  ],
-  "known_solution_invalid": [
-    "e226.mps",
-    "forplan.mps",
-    "sierra.mps"
-  ],
+  "known_status_mismatch": [],
+  "known_objective_mismatch": [],
+  "known_solution_invalid": [],
   "required_pass": [
     "bandm.mps",
     "fit1p.mps",
@@ -64,6 +53,7 @@
     "d6cube.mps",
     "fffff800.mps",
     "fit2p.mps",
+    "forplan.mps",
     "greenbea.mps",
     "greenbeb.mps",
     "maros-r7.mps",
