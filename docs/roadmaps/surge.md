@@ -1188,10 +1188,11 @@ Current measured quality (deterministic seed 42, 1000 iterations / default):
 - Li & Lim (PDPTW, 56 cases): `avgVehGap=+0.77`, `avgDistGap=+5.0%`, `equalVehicles=33`, `lexiNonWorse=14`.
 
 Best measured quality (5000 iterations):
-- Solomon: `avgVehGap=+0.52`, `avgDistGap=+0.2%`, `equalVehicles=30`, `lexiNonWorse=12`.
-- Li & Lim: `avgVehGap=+0.70`, `avgDistGap=+4.3%`, `equalVehicles=36`, `lexiNonWorse=19`.
+- Solomon: `avgVehGap=+0.46`, `avgDistGap=+0.2%`, `equalVehicles=33`, `lexiNonWorse=11`.
+- Li & Lim: `avgVehGap=+0.70`, `avgDistGap=+4.3%`, `equalVehicles=36`, `lexiNonWorse=18`.
 
 Phase S6 added or-opt(2,3) segment relocation and increased intensify passes 4→8.
+Phase S7 added stagnation restart from best solution in Arbor ALNS loop.
 
 Glaring architectural gaps:
 - Route-native solver is delivery-only gated (`sg_route_solver_eligible()` requires every request be `SG_REQUEST_KIND_DELIVERY_ONLY`), so PDPTW does not use the stronger route engine.
@@ -1256,11 +1257,12 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - **Phase S4 (route-aware Shaw relatedness)**: Replaced zone-based proxy in Shaw removal with spatial/TW/load/co-route scoring. Solomon +0.8% → +0.4% (at 5k iters). Li & Lim neutral at +4.3%.
 - **Phase S5 (adaptive destroy count)**: Scale q_min/q_max with instance size: `q_min=max(config,n/20)`, `q_max=max(config,n/4)`. Solomon +0.4% → +0.2% (at 5k iters). Li & Lim unchanged (instances too small to trigger).
 - **Phase S6 (enhanced local search)**: Added or-opt(2,3) segment relocation and increased intensify passes 4→8. Solomon stable at +0.2% (C104 improved). Li & Lim stable at +4.3%. No runtime overhead.
+- **Phase S7 (stagnation restart)**: Added restart-from-best mechanism in Arbor ALNS loop. When stagnation iterations reach threshold (max_iterations/4), copies best solution to current and reheats SA temperature to 50% of initial. Solomon stable at +0.2% (avgVehGap improved +0.52→+0.46). Li & Lim stable at +4.3%. Neutral at 5k iterations; infrastructure ready for longer runs.
 - Unified route state drives both delivery-only and PDPTW solves. The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time constraints.
 - Stop-level splice/excise operations preserve non-adjacent PD placement across ALNS destroy/repair cycles.
 
 ### Next step proposal
-- **Phase S7 (stagnation detection)**: Restart from perturbed best solution when stagnated.
+- **Phase S8 (construction heuristic improvement)**: Improve initial solution quality with priority-aware regret construction or savings-based seeding.
 
 ### Phase 8: Verification and Benchmark Expansion
 - [ ] Keep Solomon VRPTW as regression benchmark (already wired).
@@ -1500,15 +1502,18 @@ At 5000 iterations: Solomon +0.8%, Li & Lim +4.2%.
 - Increased `SG_ROUTE_MAX_INTENSIFY_PASSES` from 4 to 8
 - 1 new test: verifies intensify improves suboptimal clustered solution
 
-### Phase S7: Stagnation Detection
+### Phase S7: Stagnation Restart ✅
 
-**Impact**: Low-medium. When the solver stagnates, restart from perturbed best solution.
+**Result**: Solomon stable at +0.2% (avgVehGap improved +0.52→+0.46, equalVehicles 30→33). Li & Lim stable at +4.3%. Neutral at 5k iterations — infrastructure ready for longer runs where stagnation matters more.
 
 **Changes (arbor)**:
-- Add stagnation callback or hook in ALNS loop
-- Support solution perturbation (large random destroy + repair from best)
+- Added `restart_threshold` and `restart_temp_ratio` to `ARALNSParams`
+- Added `restarts` counter to `ARALNSStats`
+- Added restart logic in `ar_alns_solve`: when stagnation_iterations >= restart_threshold,
+  copy best to current, reheat SA temperature to `initial_temp * restart_temp_ratio`, reset counter
+- Added validation: `restart_threshold >= 0`, `restart_temp_ratio in [0, 1]`
 
 **Changes (surge)**:
-- Register stagnation handler that triggers large-neighborhood perturbation
+- Set `restart_threshold = max_iterations / 4` in both `sg_solve_route_model` and `sg_solve` paths
 
-**Tests**: Verify stagnation detection fires after N iterations without improvement.
+**Tests**: Arbor restart test with validation edge cases.
