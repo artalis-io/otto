@@ -21,11 +21,12 @@ static const char *api_prefixes[] = {
     [SH_API_VELO]     = "VELO",
     [SH_API_LOCUS]    = "LOCUS",
     [SH_API_FUELWISE] = "FUELWISE",
-    [SH_API_RALPH]    = "RALPH"
+    [SH_API_RALPH]    = "RALPH",
+    [SH_API_SURGE]    = "SURGE"
 };
 
 const char *sh_args_prefix(ShApiType api_type) {
-    if (api_type < 0 || api_type > SH_API_RALPH) {
+    if (api_type < 0 || api_type > SH_API_SURGE) {
         return "SH";
     }
     return api_prefixes[api_type];

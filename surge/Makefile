@@ -28,7 +28,9 @@ DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG \
                -fsanitize=address,undefined -fno-omit-frame-pointer
 DEBUG_LDFLAGS = -fsanitize=address,undefined
 
-SRCS = src/surge.c src/sg_reader.c
+SRCS = src/sg_context.c src/sg_solution.c src/sg_cost.c src/sg_feasibility.c \
+       src/sg_construct.c src/sg_destroy.c src/sg_repair.c src/sg_postprocess.c \
+       src/sg_solve.c src/sg_reader.c src/sg_api.c
 OBJS = $(SRCS:.c=.o)
 
 LIB = libsurge.a
