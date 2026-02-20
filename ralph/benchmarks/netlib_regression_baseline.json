@@ -19,6 +19,12 @@
     "forplan.mps",
     "sierra.mps"
   ],
+  "required_pass": [
+    "bandm.mps",
+    "fit1p.mps",
+    "nesm.mps",
+    "scagr25.mps"
+  ],
   "known_timeouts": [
     "25fv47.mps",
     "80bau3b.mps",
