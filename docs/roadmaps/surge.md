@@ -1183,30 +1183,30 @@ Implemented and active today:
 - Post-ALNS route elimination, exchange, 2-opt*, and distance polishing (PD-aware).
 - Solomon and Li & Lim benchmark harnesses with BKS comparison.
 
-Current measured quality (deterministic seed 42, 1000 iterations / default):
-- Solomon (VRPTW, 56 cases): `avgVehGap=+0.77`, `avgDistGap=+3.0%`, `equalVehicles=23`, `lexiNonWorse=8`.
-- Li & Lim (PDPTW, 56 cases): `avgVehGap=+0.77`, `avgDistGap=+5.0%`, `equalVehicles=33`, `lexiNonWorse=14`.
+Best measured quality (10000 iterations, deterministic seed 42):
+- Solomon (VRPTW, 56 cases): `avgVehGap=+0.36`, `avgDistGap=-0.2%`, `equalVehicles=36`, `lexiNonWorse=11`.
+- Li & Lim (PDPTW, 56 cases): `avgVehGap=+0.55`, `avgDistGap=+4.1%`, `equalVehicles=40`, `lexiNonWorse=19`.
+- All 113 solutions verified feasible (post-solve validation gate in `sg_solve_route_model`).
 
-Best measured quality (5000 iterations):
-- Solomon: `avgVehGap=+0.46`, `avgDistGap=+0.2%`, `equalVehicles=33`, `lexiNonWorse=11`.
-- Li & Lim: `avgVehGap=+0.70`, `avgDistGap=+4.3%`, `equalVehicles=36`, `lexiNonWorse=18`.
+Solver quality highlights:
+- Wide-TW instances (C2, LC2, LR2, LRC2) essentially solved — nearly all match BKS on both vehicles and distance.
+- Solomon C1xx: 8/9 match BKS distance exactly.
+- Remaining gap: tight-TW random instances (R1, LR1, RC1, LRC1) consistently use +1 vehicle; LC101/LC102 use +4-5 vehicles (identical TW widths defeat sorting heuristics).
 
-Phase S6 added or-opt(2,3) segment relocation and increased intensify passes 4→8.
-Phase S7 added stagnation restart from best solution in Arbor ALNS loop.
-
-Glaring architectural gaps:
-- Route-native solver is delivery-only gated (`sg_route_solver_eligible()` requires every request be `SG_REQUEST_KIND_DELIVERY_ONLY`), so PDPTW does not use the stronger route engine.
-- Feasibility kernel used by route-native insertion/removal is delivery-only (`sg_request_delivery_task_for_metrics()` and `sg_route_sequence_feasible_distance()`).
-- Fallback PD path optimizes assignment proxy cost (`sg_bootstrap_cost()` + `sg_vehicle_request_cost()`) rather than true route objective.
-- Non-delivery route metrics are still a heuristic fallback (`sg_compute_solution_route_metrics()`), not exact PD route reconstruction.
-- Solver currently uses Euclidean travel and does not expose/consume a proper travel-time matrix in public API.
+Solver uses Euclidean travel only — no distance/time matrix API exposed yet.
 
 Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
-- Disjunct time windows.
-- Soft TW tardiness/waiting penalties in objective.
-- Max ride-time constraints for PD requests.
-- Vehicle qualifications, commodity conflicts, exclusion groups.
-- Open routes, per-depot dispatch limits, multi-trip semantics.
+- Distance/time matrix (non-Euclidean travel costs).
+- Vehicle-request compatibility (skills/qualifications).
+- Open routes (vehicles that don't return to depot).
+- Max route duration per vehicle.
+- Explicit max ride time per PD request (currently derived from TW spans).
+- Vehicle cost model (fixed cost, per-km, per-hour).
+- Configurable objective weights.
+- Soft time windows with tardiness penalties.
+- Disjunct time windows (multiple allowed windows per task).
+- Request-vehicle assignment constraints (required/forbidden).
+- Solution route/stop export in JSON API.
 - Driver break/HoSE constraints in route feasibility.
 
 ### Actualized Plan (Unified VRPTW/PDPTW)
@@ -1258,11 +1258,10 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - **Phase S5 (adaptive destroy count)**: Scale q_min/q_max with instance size: `q_min=max(config,n/20)`, `q_max=max(config,n/4)`. Solomon +0.4% → +0.2% (at 5k iters). Li & Lim unchanged (instances too small to trigger).
 - **Phase S6 (enhanced local search)**: Added or-opt(2,3) segment relocation and increased intensify passes 4→8. Solomon stable at +0.2% (C104 improved). Li & Lim stable at +4.3%. No runtime overhead.
 - **Phase S7 (stagnation restart)**: Added restart-from-best mechanism in Arbor ALNS loop. When stagnation iterations reach threshold (max_iterations/4), copies best solution to current and reheats SA temperature to 50% of initial. Solomon stable at +0.2% (avgVehGap improved +0.52→+0.46). Li & Lim stable at +4.3%. Neutral at 5k iterations; infrastructure ready for longer runs.
+- **Phase S8 (construction + vehicle minimization)**: Multi-strategy construction (regret-3, TW-sorted greedy, Solomon I1 — keep best), two-phase ALNS (60% vehicle minimization with hot SA + 40% distance polishing), vehicle-target and vehicle-empty destroy operators, pair elimination in reduce_vehicles, depth-2 ejection chains, pairwise exchange in postprocessing. Solomon +0.2% → +0.2% at 5k iters (avgVehGap +0.46→+0.46). Li & Lim +4.3% → +4.3% at 5k iters (avgVehGap +0.70→+0.55, equalVehicles 36→38).
+- **Phase S9 (deeper ejection chains, CROSS-exchange, or-opt k=1, validation)**: Ejection depth 2→5 with 50K attempt budget, CROSS-exchange operator swapping segments of size 1-3 between routes, or-opt extended to k=1 for single-request relocate in intensify loop, post-solve feasibility validation gate in `sg_solve_route_model`, benchmark iterations 5000→10000. Solomon avgVehGap +0.46→+0.36, avgDistGap +0.2%→-0.2%, equalVehicles 33→36. Li & Lim avgVehGap +0.55→+0.55, avgDistGap +4.3%→+4.1%, equalVehicles 38→40. All 113 solutions verified feasible.
 - Unified route state drives both delivery-only and PDPTW solves. The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time constraints.
 - Stop-level splice/excise operations preserve non-adjacent PD placement across ALNS destroy/repair cycles.
-
-### Next step proposal
-- **Phase S8 (construction heuristic improvement)**: Improve initial solution quality with priority-aware regret construction or savings-based seeding.
 
 ### Phase 8: Verification and Benchmark Expansion
 - [ ] Keep Solomon VRPTW as regression benchmark (already wired).
@@ -1285,6 +1284,285 @@ having one unified route/feasibility engine before additional constraints and in
 
 ---
 
+## Usability & Rich Constraints Roadmap
+
+With solver quality at a production-usable level (Solomon -0.2% avg distance gap, Li & Lim
++4.1%), the focus shifts to modeling real-world constraints. These phases are ordered by
+dependency and business impact. Each builds on the architecture already in place — the unified
+stop-level route state, incremental feasibility kernel, and ALNS operator framework.
+
+### Phase U1: Distance/Time Matrix API
+
+**Priority**: Critical — Euclidean distance is meaningless for real road networks.
+
+**What**: Add a precomputed location-to-location travel time and distance matrix that the
+solver consumes instead of `sg_euclid()`. Falls back to Euclidean when no matrix is set.
+
+**API surface**:
+```c
+SGStatus sg_set_travel_matrix(SGContext *ctx, uint32_t location_count,
+                               const double *distance_matrix,
+                               const double *time_matrix);
+```
+
+**Architecture fit**: The solver already routes all distance queries through a small number
+of call sites (`sg_euclid` in `sg_cost.c`, `sg_route_stop_sequence_feasible` in
+`sg_feasibility.c`). Replace with a lookup function that checks `ctx->travel_matrix` first.
+Store matrices as flat `double[n*n]` arrays in `SGContext`. The JSON API gets `"travel_matrix"`
+and `"time_matrix"` fields (or an array of `{from, to, distance, time}` sparse entries).
+
+**Changes**: `sg_context.c` (storage + setter), `sg_cost.c` (replace `sg_euclid`),
+`sg_feasibility.c` (use time matrix for travel time instead of distance/speed),
+`sg_api.c` (JSON parsing), `surge.h` (public API).
+
+**Complexity**: Small. ~200 LOC. No algorithmic changes.
+
+### Phase U2: Vehicle-Request Compatibility (Skills)
+
+**Priority**: High — nearly every fleet has vehicle types (refrigerated, tail-lift, ADR).
+
+**What**: Bitmask-based qualification system. Each vehicle has capabilities (`uint64_t
+qualifications`), each request has requirements (`uint64_t required_qualifications`).
+A vehicle can serve a request only if `(vehicle.quals & request.required) == request.required`.
+
+**API surface**:
+```c
+SGStatus sg_vehicle_set_qualifications(SGContext *ctx, uint32_t vehicle_id,
+                                        uint64_t qualification_flags);
+SGStatus sg_request_set_required_qualifications(SGContext *ctx, uint32_t request_id,
+                                                 uint64_t qualification_flags);
+```
+
+**Architecture fit**: One additional check at the top of `sg_route_eval_insertion_cached` and
+`sg_route_eval_pd_best_insertion_cached` — skip vehicle entirely if quals don't match. Store
+quals in `SGVehicleRecord` and `SGRequestRecord`. No change to route state or ALNS operators.
+The destroy/repair operators automatically respect it because they call the insertion evaluator.
+
+**Changes**: `sg_internal.h` (add fields), `sg_feasibility.c` (add check), `sg_api.c`
+(JSON parsing), `surge.h` (public API).
+
+**Complexity**: Tiny. ~80 LOC. One `if` statement in the hot path.
+
+### Phase U3: Solution Route/Stop Export
+
+**Priority**: High — the JSON API currently returns only aggregate stats. Users need
+actual routes with stop sequences, arrival times, and load states to display or execute.
+
+**What**: Extend the solve response JSON to include per-route stop details:
+
+```json
+{
+  "routes": [
+    {
+      "vehicle_id": 0,
+      "stops": [
+        {
+          "type": "depot_start",
+          "depot_id": 0,
+          "arrival": 0, "departure": 28800
+        },
+        {
+          "type": "delivery",
+          "request_id": 5, "task_id": 6,
+          "arrival": 29100, "service_start": 29100,
+          "departure": 29400, "load_after": [150.0]
+        }
+      ],
+      "distance": 234.5, "duration": 3600
+    }
+  ],
+  "unassigned_request_ids": [12, 17]
+}
+```
+
+**Architecture fit**: The internal `SGRouteSolution` already stores complete stop sequences
+with timing (`arrival`, `service_start`, `depart`) and load profiles. This is pure
+serialization — walk the solution state and emit JSON.
+
+**Changes**: `sg_api.c` (response builder), `surge.h` (add `sg_get_route_count`,
+`sg_get_route_stop_count`, `sg_get_route_stop_info` accessors).
+
+**Complexity**: Medium. ~300 LOC. No solver changes.
+
+### Phase U4: Open Routes
+
+**Priority**: High — field service, one-way deliveries, and ride-hailing vehicles often
+don't return to depot.
+
+**What**: Per-vehicle flag: `open_end = true` means the vehicle's route ends at its last
+stop instead of returning to the end depot. Distance and time for the return leg are not
+counted.
+
+**API surface**:
+```c
+SGStatus sg_vehicle_set_open_end(SGContext *ctx, uint32_t vehicle_id, int open);
+```
+
+**Architecture fit**: The feasibility kernel (`sg_route_stop_sequence_feasible`) builds the
+stop sequence with depot start/end. For open-end vehicles, skip the return-to-depot leg in
+both distance computation and TW checking. The end-depot TW check is also skipped. Store
+flag in `SGVehicleRecord`.
+
+**Changes**: `sg_internal.h` (add field), `sg_feasibility.c` (conditional return leg),
+`sg_cost.c` (skip return distance), `sg_api.c` (JSON parsing).
+
+**Complexity**: Small. ~60 LOC. Localized to feasibility kernel.
+
+### Phase U5: Max Route Duration and Explicit Max Ride Time
+
+**Priority**: Medium-High — max route duration is a standard fleet constraint (8-hour shift
+minus break). Explicit max ride time is needed for DARP/passenger transport.
+
+**What (duration)**: Per-vehicle `max_duration_seconds`. If `route_end_time - route_start_time
+> max_duration`, the route is infeasible. Checked at the end of the forward timing pass.
+
+**What (ride time)**: Per-request `max_ride_time_seconds` for PD pairs. If
+`delivery_service_start - pickup_depart > max_ride_time`, infeasible. Currently derived from
+TW spans — make it an explicit user-settable field that overrides the derived limit.
+
+**API surface**:
+```c
+SGStatus sg_vehicle_set_max_duration(SGContext *ctx, uint32_t vehicle_id,
+                                      int32_t max_seconds);
+SGStatus sg_request_set_max_ride_time(SGContext *ctx, uint32_t request_id,
+                                       int32_t max_seconds);
+```
+
+**Architecture fit**: Both are single additional checks in `sg_route_stop_sequence_feasible`.
+Duration check: one comparison at the end. Ride time: already computed, just compare against
+the explicit limit instead of the derived one.
+
+**Changes**: `sg_internal.h` (add fields), `sg_feasibility.c` (two checks),
+`sg_api.c` (JSON parsing).
+
+**Complexity**: Tiny. ~50 LOC.
+
+### Phase U6: Vehicle Cost Model and Configurable Objective
+
+**Priority**: Medium — needed to model heterogeneous fleets where a 40t truck costs more
+than a van. Also needed for any customer who wants to minimize cost rather than distance.
+
+**What**: Per-vehicle costs (`fixed_cost`, `cost_per_distance_unit`, `cost_per_hour`) and
+global objective weights. The objective becomes:
+
+```
+cost = w_unassigned * unassigned_penalty
+     + sum_v(fixed_cost_v * used_v + cost_per_km_v * distance_v + cost_per_hour_v * duration_v)
+```
+
+**API surface**:
+```c
+SGStatus sg_vehicle_set_costs(SGContext *ctx, uint32_t vehicle_id,
+                               double fixed_cost, double cost_per_distance,
+                               double cost_per_hour);
+SGStatus sg_set_objective_weights(SGContext *ctx, double unassigned_weight,
+                                   double vehicle_weight);
+```
+
+**Architecture fit**: `sg_route_solution_cost` and `sg_route_objective_cost` are already
+centralized. Replace the hardcoded `1e9 * unassigned + 1e6 * vehicles + distance` with
+a weighted sum using per-vehicle costs. Duration requires tracking route duration in the
+solution state (add a `route_duration` array alongside `route_distance`).
+
+**Changes**: `sg_internal.h` (add vehicle cost fields, route_duration array),
+`sg_solution.c` (cost function), `sg_feasibility.c` (compute duration),
+`sg_api.c` (JSON parsing).
+
+**Complexity**: Medium. ~200 LOC. Touches cost function used by SA acceptance — needs care.
+
+### Phase U7: Soft Time Windows (Tardiness)
+
+**Priority**: Medium — real dispatchers accept small delays with a cost penalty rather
+than declaring a delivery unservable.
+
+**What**: Per-task optional tardiness penalty (`cost_per_second_late`). If arrival is after
+`tw_late`, the stop incurs `tardiness = (arrival - tw_late) * cost_per_second_late` added
+to the objective. The stop is still feasible (not rejected). A `max_tardiness_seconds` cap
+can make it hard-infeasible beyond a threshold.
+
+**API surface**:
+```c
+SGStatus sg_task_set_tardiness_cost(SGContext *ctx, uint32_t task_id,
+                                     double cost_per_second);
+SGStatus sg_task_set_max_tardiness(SGContext *ctx, uint32_t task_id,
+                                    int32_t max_seconds);
+```
+
+**Architecture fit**: The forward timing pass in `sg_route_stop_sequence_feasible` currently
+rejects stops arriving after `tw_late`. For soft-TW tasks, instead of rejecting, compute
+tardiness and accumulate it. The feasibility function returns both feasibility (bool) and a
+tardiness total. The cost function adds `sum(tardiness)` to the objective.
+
+This is the most invasive change in the usability series because it touches the core
+feasibility check — the boolean "feasible / not feasible" becomes "feasible with penalty."
+The insertion evaluator needs to propagate tardiness deltas.
+
+**Changes**: `sg_internal.h` (add task fields), `sg_feasibility.c` (soft TW logic),
+`sg_solution.c` (cost function), `sg_postprocess.c` (operators need penalty-aware comparison),
+`sg_api.c` (JSON parsing).
+
+**Complexity**: Medium-Large. ~400 LOC. Requires careful testing — every operator comparison
+changes from pure distance to distance + penalty.
+
+### Phase U8: Request-Vehicle Constraints
+
+**Priority**: Medium — "driver X always serves customer Y" or "vehicle Z cannot enter zone W."
+
+**What**: Per-request lists of allowed or forbidden vehicle IDs. If `allowed_vehicles` is
+non-empty, only those vehicles can serve the request. If `forbidden_vehicles` is non-empty,
+those vehicles are excluded.
+
+**API surface**:
+```c
+SGStatus sg_request_add_allowed_vehicle(SGContext *ctx, uint32_t request_id,
+                                         uint32_t vehicle_id);
+SGStatus sg_request_add_forbidden_vehicle(SGContext *ctx, uint32_t request_id,
+                                           uint32_t vehicle_id);
+```
+
+**Architecture fit**: Same as skills (U2) — one check at the top of insertion evaluation.
+Store as a bitset or small array in `SGRequestRecord`. For small vehicle counts (<64),
+a `uint64_t` bitmask is optimal. For larger fleets, a sorted array with binary search.
+
+**Changes**: `sg_internal.h` (add fields), `sg_feasibility.c` (add check),
+`sg_api.c` (JSON parsing).
+
+**Complexity**: Small. ~100 LOC.
+
+### Execution Order and Dependencies
+
+```
+U1 (travel matrix)      ──── no deps, enables realistic routing
+U2 (skills)             ──── no deps, enables fleet heterogeneity
+U3 (solution export)    ──── no deps, enables API usability
+U4 (open routes)        ──── no deps, enables field service
+U5 (duration + ride)    ──── no deps, enables shift/DARP constraints
+U6 (cost model)         ──── after U5 (needs duration tracking)
+U7 (soft TW)            ──── after U6 (needs cost model for penalty integration)
+U8 (vehicle constraints)──── after U2 (same pattern, can share infrastructure)
+```
+
+U1-U5 are independent and can be done in any order or in parallel. U6 depends on U5
+(duration tracking). U7 depends on U6 (cost model for penalties). U8 is independent but
+logically follows U2.
+
+Recommended priority order: **U1 → U2 → U3 → U4 → U5 → U6 → U7 → U8**.
+
+### Future (not planned yet)
+
+These are real-world features that require larger architectural changes:
+
+| Feature | Why deferred |
+|---------|-------------|
+| **Disjunct time windows** | Changes TW from a single interval to a union — significant feasibility kernel rework |
+| **Driver breaks / HoSE** | Requires break insertion points in routes, variable-length stop sequences, HoSE state machine |
+| **Multiple trips** | Requires multi-route-per-vehicle state, depot reload modeling, fundamentally different route representation |
+| **Commodity conflicts** | Requires tracking commodity state along the route (bitmask per stop), conflict checking at insertion |
+| **Request exclusion groups** | Requires per-route exclusion tracking, expensive to check incrementally |
+| **Depot dispatch limits** | Requires global constraint across vehicles — can't check locally per insertion |
+
+---
+
 ## Solver Profiles
 
 Three built-in iteration profiles for different use cases. The API default is 1000 (batch).
@@ -1294,7 +1572,8 @@ Users can override via `SGConfig.max_iterations` or `--iterations` in benchmarks
 |---------|-----------|-------------------|-----------------|------------------|----------|
 | **Real-time** | 300 | ~0.2 s | +5.5% | +9.0% | API responses, live dispatch |
 | **Batch** (default) | 1,000 | ~0.6 s | +3.0% | +5.0% | Daily planning, route optimization |
-| **Best quality** | 5,000 | ~2.0 s | +0.8% | +4.2% | Benchmarking, offline analysis |
+| **High quality** | 5,000 | ~2.0 s | +0.2% | +4.3% | Offline analysis |
+| **Best quality** | 10,000 | ~4.5 s | -0.2% | +4.1% | Benchmarking, maximum quality |
 
 ### Iteration Scaling Data (100-customer instances, deterministic seed 42)
 
@@ -1308,6 +1587,7 @@ Users can override via `SGConfig.max_iterations` or `--iterations` in benchmarks
 | 1,000 | 0.66 | +3.0% | +0.77 | 23 | 8 |
 | 2,000 | 0.95 | +2.0% | +0.59 | 27 | 9 |
 | 5,000 | 1.83 | +0.8% | +0.50 | 31 | 11 |
+| 10,000 | 4.58 | -0.2% | +0.36 | 36 | 11 |
 
 **Li & Lim (PDPTW, 56 cases)**:
 
@@ -1319,6 +1599,7 @@ Users can override via `SGConfig.max_iterations` or `--iterations` in benchmarks
 | 1,000 | 0.60 | +5.0% | +0.77 | 33 | 14 |
 | 2,000 | 0.99 | +5.0% | +0.73 | 33 | 17 |
 | 5,000 | 2.13 | +4.2% | +0.71 | 34 | 18 |
+| 10,000 | 3.25 | +4.1% | +0.55 | 40 | 19 |
 
 **Observations**:
 - The improvement knee is at ~1000 iterations for both benchmarks.
@@ -1517,3 +1798,29 @@ At 5000 iterations: Solomon +0.8%, Li & Lim +4.2%.
 - Set `restart_threshold = max_iterations / 4` in both `sg_solve_route_model` and `sg_solve` paths
 
 **Tests**: Arbor restart test with validation edge cases.
+
+### Phase S8: Construction + Vehicle Minimization ✅
+
+**Result**: Solomon stable at +0.2% at 5k iters (avgVehGap +0.46). Li & Lim improved avgVehGap +0.70→+0.55, equalVehicles 36→38. Major architectural overhaul introducing multi-strategy construction, two-phase ALNS, and richer local search.
+
+**Changes (surge)**:
+- Multi-strategy construction: regret-3, TW-sorted greedy, Solomon I1 heuristic — keep best
+- Two-phase ALNS: 60% vehicle minimization (hot SA, lexicographic objective) + 40% distance polishing
+- Vehicle-target and vehicle-empty destroy operators for focused vehicle elimination
+- Pair elimination in `sg_route_postprocess_reduce_vehicles`
+- Depth-2 ejection chains in `sg_route_postprocess_ejection_reduce`
+- Pairwise exchange operator in postprocessing intensify loop
+
+### Phase S9: Deeper Ejection Chains, CROSS-Exchange, and Validation ✅
+
+**Result**: Solomon avgVehGap +0.46→+0.36, avgDistGap +0.2%→-0.2%, equalVehicles 33→36. Li & Lim avgVehGap +0.55→+0.55, avgDistGap +4.3%→+4.1%, equalVehicles 38→40. All 113 solutions verified feasible. Benchmark iterations increased to 10k.
+
+**Changes (surge)**:
+- Increased `SG_EJECTION_MAX_DEPTH` from 2 to 5 with `SG_EJECTION_BUDGET` of 50000 evaluations per vehicle elimination attempt to bound pathological blowup
+- Budget threaded through `sg_try_place_with_ejection` via `int *budget` parameter
+- CROSS-exchange operator (`sg_route_try_cross_exchange_once`): swaps interior segments of size 1-3 between route pairs, accepts first improvement
+- Or-opt extended from k=2,3 to k=1,2,3 — single-request inter-route relocate now in intensify loop
+- Post-solve feasibility validation gate in `sg_solve_route_model`: calls `sg_route_solution_validate` and returns `SG_STATUS_ERROR` on failure
+- Benchmark default iterations 5000 → 10000 in both `bench_li_lim.c` and `bench_solomon.c`
+
+**Tests**: All 56 Solomon + 57 Li & Lim cases pass validation.
