@@ -4,7 +4,15 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-20, `eabbaa8`) — H3 adaptive Markowitz retry baseline + full NETLIB/GLPK refresh:
+**Current** (2026-02-20, `ece147e`) — NETLIB MPS parser + objective-offset correctness baseline:
+fixed fixed-format MPS edge cases (embedded-space names, optional BOUNDS set name), preserved imported
+variable names, and added RHS objective-row constant handling (`obj_offset`) to parser + simplex/dual
+objective reporting. Latest gates: `make -C ralph test` PASS (includes new
+`test_mps_parser_netlib`), `make -C ralph test-netlib-gate-small` PASS (26/26, dense fallback files: 0),
+and full NETLIB gate on 84 files now has status mismatch 0, objective mismatch 0, invalid solution 0,
+dense fallback files 0; `forplan.mps` is now a known timeout under the 20s hard cap (27 known timeouts).
+
+Previous: (2026-02-20, `eabbaa8`) — H3 adaptive Markowitz retry baseline + full NETLIB/GLPK refresh:
 adapted Markowitz pool multiplier on retries to cut retry churn while preserving sparse-LU-first behavior.
 Latest full gate: `make -C ralph test-netlib-gate` PASS (84 files, 26 known timeouts, dense fallback
 files: 0, no unexpected regressions vs baseline). Known baseline mismatches remain:
