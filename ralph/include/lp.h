@@ -274,6 +274,7 @@ typedef struct {
 
     /* Sparse Markowitz LU */
     int mkz_enabled;         /* 1 = use Markowitz path when k >= MARKOWITZ_MIN_K */
+    int mkz_pool_mult_hint;  /* Adaptive starting pool multiplier (reduces retry churn) */
     int mkz_calls;           /* Markowitz factorization attempts */
     int mkz_successes;       /* Markowitz factorization successes */
     int mkz_failures;        /* Markowitz factorization failures */
