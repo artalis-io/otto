@@ -263,6 +263,11 @@ typedef struct {
     int lu_mkz_fail_capacity;
     int lu_sparse_dense_fallbacks;
     int lu_used_dense_fallback_last;
+    int lu_sparse_fallback_last_reason;
+    char lu_sparse_fallback_last_reason_str[64];
+    int lu_sparse_fallback_reason_small_matrix;
+    int lu_sparse_fallback_reason_symbolic;
+    int lu_sparse_fallback_reason_numeric;
     int lu_identity_sep_failures;
     int lu_sn_calls;
     int lu_sn_successes;
@@ -274,10 +279,23 @@ typedef struct {
     int lu_last_basis_nnz;
     int lu_last_m;
     int lu_last_k;
+    int lu_symbolic_calls;
+    int lu_symbolic_cache_hits;
+    int lu_symbolic_cache_misses;
+    double lu_last_symbolic_ms;
+    double lu_last_sparse_numeric_ms;
+    double lu_last_dense_ge_numeric_ms;
+    double lu_last_supernode_numeric_ms;
+    double lu_last_dense_factorize_ms;
     double lu_last_a_struct_build_ms;
     double lu_last_markowitz_numeric_ms;
     double lu_last_identity_placement_ms;
     double lu_last_coo_to_csc_ms;
+    double lu_total_symbolic_ms;
+    double lu_total_sparse_numeric_ms;
+    double lu_total_dense_ge_numeric_ms;
+    double lu_total_supernode_numeric_ms;
+    double lu_total_dense_factorize_ms;
     double lu_total_a_struct_build_ms;
     double lu_total_markowitz_numeric_ms;
     double lu_total_identity_placement_ms;
@@ -434,6 +452,17 @@ static const char* refactor_reason_string(int reason) {
         case RALPH_REFACTOR_REASON_OTHER:
         default:
             return "other";
+    }
+}
+
+static const char* lu_sparse_fallback_reason_string(int reason) {
+    switch ((LUSparseFallbackReason)reason) {
+        case LU_SPARSE_FALLBACK_SMALL_MATRIX: return "small_matrix";
+        case LU_SPARSE_FALLBACK_SYMBOLIC: return "symbolic";
+        case LU_SPARSE_FALLBACK_NUMERIC: return "numeric";
+        case LU_SPARSE_FALLBACK_NONE:
+        default:
+            return "none";
     }
 }
 
@@ -620,6 +649,8 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     result.solution = NULL;
     strncpy(result.lu_last_failure_reason, "none",
             sizeof(result.lu_last_failure_reason) - 1);
+    strncpy(result.lu_sparse_fallback_last_reason_str, "none",
+            sizeof(result.lu_sparse_fallback_last_reason_str) - 1);
     strncpy(result.refactor_last_reason_str, "other",
             sizeof(result.refactor_last_reason_str) - 1);
 
@@ -766,6 +797,10 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_mkz_fail_capacity = lu->mkz_fail_capacity;
                 result.lu_sparse_dense_fallbacks = lu->sparse_dense_fallbacks;
                 result.lu_used_dense_fallback_last = lu->used_dense_fallback_last;
+                result.lu_sparse_fallback_last_reason = lu->sparse_fallback_last_reason;
+                result.lu_sparse_fallback_reason_small_matrix = lu->sparse_fallback_reason_small_matrix;
+                result.lu_sparse_fallback_reason_symbolic = lu->sparse_fallback_reason_symbolic;
+                result.lu_sparse_fallback_reason_numeric = lu->sparse_fallback_reason_numeric;
                 result.lu_identity_sep_failures = lu->identity_sep_failures;
                 result.lu_sn_calls = lu->sn_calls;
                 result.lu_sn_successes = lu->sn_successes;
@@ -776,10 +811,23 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_last_basis_nnz = lu->perf_last_basis_nnz;
                 result.lu_last_m = lu->perf_last_m;
                 result.lu_last_k = lu->perf_last_k;
+                result.lu_symbolic_calls = lu->perf_symbolic_calls;
+                result.lu_symbolic_cache_hits = lu->perf_symbolic_cache_hits;
+                result.lu_symbolic_cache_misses = lu->perf_symbolic_cache_misses;
+                result.lu_last_symbolic_ms = lu->perf_last_symbolic_ms;
+                result.lu_last_sparse_numeric_ms = lu->perf_last_sparse_numeric_ms;
+                result.lu_last_dense_ge_numeric_ms = lu->perf_last_dense_ge_numeric_ms;
+                result.lu_last_supernode_numeric_ms = lu->perf_last_supernode_numeric_ms;
+                result.lu_last_dense_factorize_ms = lu->perf_last_dense_factorize_ms;
                 result.lu_last_a_struct_build_ms = lu->perf_last_a_struct_build_ms;
                 result.lu_last_markowitz_numeric_ms = lu->perf_last_markowitz_numeric_ms;
                 result.lu_last_identity_placement_ms = lu->perf_last_identity_placement_ms;
                 result.lu_last_coo_to_csc_ms = lu->perf_last_coo_to_csc_ms;
+                result.lu_total_symbolic_ms = lu->perf_total_symbolic_ms;
+                result.lu_total_sparse_numeric_ms = lu->perf_total_sparse_numeric_ms;
+                result.lu_total_dense_ge_numeric_ms = lu->perf_total_dense_ge_numeric_ms;
+                result.lu_total_supernode_numeric_ms = lu->perf_total_supernode_numeric_ms;
+                result.lu_total_dense_factorize_ms = lu->perf_total_dense_factorize_ms;
                 result.lu_total_a_struct_build_ms = lu->perf_total_a_struct_build_ms;
                 result.lu_total_markowitz_numeric_ms = lu->perf_total_markowitz_numeric_ms;
                 result.lu_total_identity_placement_ms = lu->perf_total_identity_placement_ms;
@@ -790,6 +838,13 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                     strncpy(result.lu_last_failure_reason, reason,
                             sizeof(result.lu_last_failure_reason) - 1);
                     result.lu_last_failure_reason[sizeof(result.lu_last_failure_reason) - 1] = '\0';
+                }
+                {
+                    const char *reason = lu_sparse_fallback_reason_string(lu->sparse_fallback_last_reason);
+                    if (!reason) reason = "none";
+                    strncpy(result.lu_sparse_fallback_last_reason_str, reason,
+                            sizeof(result.lu_sparse_fallback_last_reason_str) - 1);
+                    result.lu_sparse_fallback_last_reason_str[sizeof(result.lu_sparse_fallback_last_reason_str) - 1] = '\0';
                 }
             }
         }
@@ -1419,6 +1474,9 @@ static void print_json_result(const char *problem_name, const char *source,
     char escaped_lu_reason[128];
     json_escape_string(escaped_lu_reason, sizeof(escaped_lu_reason),
                        ralph->lu_last_failure_reason[0] ? ralph->lu_last_failure_reason : "none");
+    char escaped_lu_sparse_fallback_reason[128];
+    json_escape_string(escaped_lu_sparse_fallback_reason, sizeof(escaped_lu_sparse_fallback_reason),
+                       ralph->lu_sparse_fallback_last_reason_str[0] ? ralph->lu_sparse_fallback_last_reason_str : "none");
     char escaped_refactor_reason[128];
     json_escape_string(escaped_refactor_reason, sizeof(escaped_refactor_reason),
                        ralph->refactor_last_reason_str[0] ? ralph->refactor_last_reason_str : "other");
@@ -1612,6 +1670,14 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"sparse_dense_fallbacks\": %d,\n", ralph->lu_sparse_dense_fallbacks);
     fprintf(out, "    \"used_dense_fallback_last\": %s,\n",
             ralph->lu_used_dense_fallback_last ? "true" : "false");
+    fprintf(out, "    \"sparse_fallback_last_reason_code\": %d,\n", ralph->lu_sparse_fallback_last_reason);
+    fprintf(out, "    \"sparse_fallback_last_reason\": \"%s\",\n", escaped_lu_sparse_fallback_reason);
+    fprintf(out, "    \"sparse_fallback_reason_small_matrix\": %d,\n",
+            ralph->lu_sparse_fallback_reason_small_matrix);
+    fprintf(out, "    \"sparse_fallback_reason_symbolic\": %d,\n",
+            ralph->lu_sparse_fallback_reason_symbolic);
+    fprintf(out, "    \"sparse_fallback_reason_numeric\": %d,\n",
+            ralph->lu_sparse_fallback_reason_numeric);
     fprintf(out, "    \"identity_sep_failures\": %d,\n", ralph->lu_identity_sep_failures);
     fprintf(out, "    \"sn_calls\": %d,\n", ralph->lu_sn_calls);
     fprintf(out, "    \"sn_successes\": %d,\n", ralph->lu_sn_successes);
@@ -1621,10 +1687,23 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"last_basis_nnz\": %d,\n", ralph->lu_last_basis_nnz);
     fprintf(out, "    \"last_m\": %d,\n", ralph->lu_last_m);
     fprintf(out, "    \"last_k\": %d,\n", ralph->lu_last_k);
+    fprintf(out, "    \"symbolic_calls\": %d,\n", ralph->lu_symbolic_calls);
+    fprintf(out, "    \"symbolic_cache_hits\": %d,\n", ralph->lu_symbolic_cache_hits);
+    fprintf(out, "    \"symbolic_cache_misses\": %d,\n", ralph->lu_symbolic_cache_misses);
+    fprintf(out, "    \"last_symbolic_ms\": %.6f,\n", ralph->lu_last_symbolic_ms);
+    fprintf(out, "    \"last_sparse_numeric_ms\": %.6f,\n", ralph->lu_last_sparse_numeric_ms);
+    fprintf(out, "    \"last_dense_ge_numeric_ms\": %.6f,\n", ralph->lu_last_dense_ge_numeric_ms);
+    fprintf(out, "    \"last_supernode_numeric_ms\": %.6f,\n", ralph->lu_last_supernode_numeric_ms);
+    fprintf(out, "    \"last_dense_factorize_ms\": %.6f,\n", ralph->lu_last_dense_factorize_ms);
     fprintf(out, "    \"last_a_struct_build_ms\": %.6f,\n", ralph->lu_last_a_struct_build_ms);
     fprintf(out, "    \"last_markowitz_numeric_ms\": %.6f,\n", ralph->lu_last_markowitz_numeric_ms);
     fprintf(out, "    \"last_identity_placement_ms\": %.6f,\n", ralph->lu_last_identity_placement_ms);
     fprintf(out, "    \"last_coo_to_csc_ms\": %.6f,\n", ralph->lu_last_coo_to_csc_ms);
+    fprintf(out, "    \"total_symbolic_ms\": %.6f,\n", ralph->lu_total_symbolic_ms);
+    fprintf(out, "    \"total_sparse_numeric_ms\": %.6f,\n", ralph->lu_total_sparse_numeric_ms);
+    fprintf(out, "    \"total_dense_ge_numeric_ms\": %.6f,\n", ralph->lu_total_dense_ge_numeric_ms);
+    fprintf(out, "    \"total_supernode_numeric_ms\": %.6f,\n", ralph->lu_total_supernode_numeric_ms);
+    fprintf(out, "    \"total_dense_factorize_ms\": %.6f,\n", ralph->lu_total_dense_factorize_ms);
     fprintf(out, "    \"total_a_struct_build_ms\": %.6f,\n", ralph->lu_total_a_struct_build_ms);
     fprintf(out, "    \"total_markowitz_numeric_ms\": %.6f,\n", ralph->lu_total_markowitz_numeric_ms);
     fprintf(out, "    \"total_identity_placement_ms\": %.6f,\n", ralph->lu_total_identity_placement_ms);
