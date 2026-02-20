@@ -2224,7 +2224,7 @@ Progress update (2026-02-20):
   rewrites only the changed basis span and shifts trailing CSC payload in-place when capacity
   allows, preserving full-rebuild fallback for safety.
 - Added batched FT spike application kernels in `lu.c` (paired spike batching plus
-  inner-loop unrolled scatter/gather with prefetch), reducing long-chain FTRAN/BTRAN
+  inner-loop unrolled scatter/gather), reducing long-chain FTRAN/BTRAN
   overhead without changing spike execution order.
 
 ### 8.9 NETLIB Small-Canary Coverage
