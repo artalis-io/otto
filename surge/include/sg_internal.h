@@ -30,6 +30,7 @@
 #define SG_ROUTE_OBJECTIVE_UNASSIGNED_WEIGHT 1000000000.0
 #define SG_ROUTE_MAX_REGRET_K 4
 #define SG_ROUTE_MAX_INTENSIFY_PASSES 8
+#define SG_EJECTION_MAX_DEPTH 2
 
 /* Internal types */
 typedef struct {
@@ -402,5 +403,6 @@ void sg_route_restore_from_backup(SGRouteSolution *sol, SGRouteSolution *backup)
 void sg_adaptive_q_bounds(int num_requests, int config_q_min, int config_q_max,
                           int *q_min_out, int *q_max_out);
 int sg_route_solver_eligible(const SGContext *ctx);
+ARStatus sg_route_construct_solomon_i1(SGContext *ctx, SGRouteSolution *sol);
 
 #endif /* SURGE_SG_INTERNAL_H */

@@ -140,6 +140,192 @@ static ARStatus sg_route_construct_tw_sorted(SGContext *ctx, SGRouteSolution *so
     return AR_STATUS_OK;
 }
 
+ARStatus sg_route_construct_solomon_i1(SGContext *ctx, SGRouteSolution *sol) {
+    uint32_t n;
+    double lambda = 1.0;
+
+    if (!ctx || !sol) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    n = sol->base.num_unassigned;
+    if (n == 0) {
+        return AR_STATUS_OK;
+    }
+
+    for (;;) {
+        uint32_t seed_vehicle = UINT32_MAX;
+        uint32_t seed_request = UINT32_MAX;
+        int32_t seed_early = INT32_MAX;
+        int32_t seed_width = INT32_MAX;
+        uint32_t i;
+
+        /* Find next empty vehicle. */
+        for (i = 0; i < sol->num_vehicles; i++) {
+            if (sol->route_lengths[i] == 0) {
+                seed_vehicle = i;
+                break;
+            }
+        }
+        if (seed_vehicle == UINT32_MAX) {
+            break;  /* No empty vehicles left. */
+        }
+        if (sol->base.num_unassigned == 0) {
+            break;  /* All requests assigned. */
+        }
+
+        /* Seed selection: unrouted request with earliest TW. */
+        for (i = 0; i < sol->base.num_unassigned; i++) {
+            uint32_t rid = sol->base.unassigned_ids[i];
+            int32_t r_early = INT32_MAX, r_late = 0;
+            int32_t r_width = INT32_MAX;
+            (void)sg_request_time_window_bounds(ctx, rid, &r_early, &r_late);
+            (void)sg_request_tw_width(ctx, rid, &r_width);
+            if (r_early < seed_early ||
+                (r_early == seed_early && r_width < seed_width) ||
+                (r_early == seed_early && r_width == seed_width && rid < seed_request)) {
+                seed_early = r_early;
+                seed_width = r_width;
+                seed_request = rid;
+            }
+        }
+        if (seed_request == UINT32_MAX) {
+            break;
+        }
+
+        /* Insert seed into vehicle. */
+        {
+            int is_pd = (ctx->requests[seed_request].kind == SG_REQUEST_KIND_PICKUP_DELIVERY);
+            if (is_pd) {
+                double score;
+                uint32_t pp = UINT32_MAX, dp = UINT32_MAX;
+                double dist = 0.0;
+                if (!sg_route_eval_pd_best_insertion_cached(ctx, sol, seed_request,
+                                                             seed_vehicle, &score,
+                                                             &pp, &dp, &dist)) {
+                    break;  /* Seed doesn't fit — can't continue. */
+                }
+                if (sg_route_apply_pd_insertion(ctx, sol, seed_request, seed_vehicle,
+                                                 pp, dp, dist) != AR_STATUS_OK) {
+                    break;
+                }
+            } else {
+                double score = 0.0, dist = 0.0;
+                if (!sg_route_eval_insertion_cached(ctx, sol, seed_request, seed_vehicle,
+                                                     0, &score, &dist)) {
+                    break;
+                }
+                if (sg_route_apply_insertion(ctx, sol, seed_request, seed_vehicle,
+                                              0, dist) != AR_STATUS_OK) {
+                    break;
+                }
+            }
+        }
+
+        /* Fill loop: repeatedly insert best c2-scoring request into current vehicle. */
+        for (;;) {
+            uint32_t best_req = UINT32_MAX;
+            double best_c2 = -INFINITY;
+            uint32_t best_pos = UINT32_MAX;
+            uint32_t best_pp = UINT32_MAX, best_dp = UINT32_MAX;
+            double best_dist = 0.0;
+            double sx, sy, ex, ey;
+            uint32_t ui;
+
+            if (sol->base.num_unassigned == 0) {
+                break;
+            }
+
+            (void)sg_vehicle_start_end_locations(ctx, seed_vehicle, &sx, &sy, &ex, &ey);
+
+            for (ui = 0; ui < sol->base.num_unassigned; ui++) {
+                uint32_t rid = sol->base.unassigned_ids[ui];
+                int is_pd = (ctx->requests[rid].kind == SG_REQUEST_KIND_PICKUP_DELIVERY);
+                double old_dist = sol->route_distance[seed_vehicle];
+                double c1, depot_dist, c2;
+                double rx, ry;
+
+                if (is_pd) {
+                    double score;
+                    uint32_t pp = UINT32_MAX, dp = UINT32_MAX;
+                    double new_dist = 0.0;
+                    if (!sg_route_eval_pd_best_insertion_cached(ctx, sol, rid,
+                                                                 seed_vehicle, &score,
+                                                                 &pp, &dp, &new_dist)) {
+                        continue;
+                    }
+                    c1 = new_dist - old_dist;
+                    (void)sg_request_centroid(ctx, rid, &rx, &ry);
+                    depot_dist = sg_euclid(sx, sy, rx, ry) + sg_euclid(rx, ry, ex, ey);
+                    c2 = lambda * depot_dist - c1;
+                    if (c2 > best_c2) {
+                        best_c2 = c2;
+                        best_req = rid;
+                        best_pos = UINT32_MAX;
+                        best_pp = pp;
+                        best_dp = dp;
+                        best_dist = new_dist;
+                    }
+                } else {
+                    uint32_t pos;
+                    uint32_t cur_len = sol->route_lengths[seed_vehicle];
+                    double best_local_score = INFINITY;
+                    uint32_t best_local_pos = UINT32_MAX;
+                    double best_local_dist = 0.0;
+
+                    for (pos = 0; pos <= cur_len; pos++) {
+                        double score = 0.0, new_dist = 0.0;
+                        if (sg_route_eval_insertion_cached(ctx, sol, rid, seed_vehicle,
+                                                            pos, &score, &new_dist)) {
+                            if (score < best_local_score) {
+                                best_local_score = score;
+                                best_local_pos = pos;
+                                best_local_dist = new_dist;
+                            }
+                        }
+                    }
+                    if (best_local_pos == UINT32_MAX) {
+                        continue;
+                    }
+                    c1 = best_local_dist - old_dist;
+                    (void)sg_request_centroid(ctx, rid, &rx, &ry);
+                    depot_dist = sg_euclid(sx, sy, rx, ry) + sg_euclid(rx, ry, ex, ey);
+                    c2 = lambda * depot_dist - c1;
+                    if (c2 > best_c2) {
+                        best_c2 = c2;
+                        best_req = rid;
+                        best_pos = best_local_pos;
+                        best_pp = UINT32_MAX;
+                        best_dp = UINT32_MAX;
+                        best_dist = best_local_dist;
+                    }
+                }
+            }
+
+            if (best_req == UINT32_MAX) {
+                break;  /* No feasible insertions — close route. */
+            }
+
+            /* Apply best insertion. */
+            {
+                ARStatus s;
+                if (best_pp != UINT32_MAX && best_dp != UINT32_MAX) {
+                    s = sg_route_apply_pd_insertion(ctx, sol, best_req, seed_vehicle,
+                                                     best_pp, best_dp, best_dist);
+                } else {
+                    s = sg_route_apply_insertion(ctx, sol, best_req, seed_vehicle,
+                                                  best_pos, best_dist);
+                }
+                if (s != AR_STATUS_OK) {
+                    break;
+                }
+            }
+        }
+    }
+
+    return AR_STATUS_OK;
+}
+
 static ARStatus sg_route_construct_initial_solution(SGContext *ctx, SGRouteSolution *sol) {
     SGRouteSolution alt;
     ARStatus status;
@@ -168,6 +354,26 @@ static ARStatus sg_route_construct_initial_solution(SGContext *ctx, SGRouteSolut
         *sol = alt;
     } else {
         sg_route_solution_reset(&alt);
+    }
+
+    /* Attempt 3: Solomon I1 */
+    {
+        SGRouteSolution i1;
+        status = sg_route_solution_init(ctx, &i1);
+        if (status == AR_STATUS_OK) {
+            status = sg_route_construct_solomon_i1(ctx, &i1);
+            if (status == AR_STATUS_OK &&
+                (i1.base.num_unassigned < sol->base.num_unassigned ||
+                 (i1.base.num_unassigned == sol->base.num_unassigned &&
+                  (i1.vehicles_used < sol->vehicles_used ||
+                   (i1.vehicles_used == sol->vehicles_used &&
+                    i1.total_distance < sol->total_distance - 1e-9))))) {
+                sg_route_solution_reset(sol);
+                *sol = i1;
+            } else {
+                sg_route_solution_reset(&i1);
+            }
+        }
     }
 
     return AR_STATUS_OK;

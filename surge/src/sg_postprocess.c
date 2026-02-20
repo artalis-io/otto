@@ -966,11 +966,170 @@ ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx,
     return AR_STATUS_OK;
 }
 
+static int sg_try_place_with_ejection(const SGContext *ctx, SGRouteSolution *sol,
+                                       uint32_t req, int depth, uint32_t target_v,
+                                       uint8_t *chain_visited) {
+    /* Step 1: Direct insertion (no new vehicle). */
+    {
+        uint32_t best_v = UINT32_MAX, best_pos = UINT32_MAX;
+        uint32_t best_pp = UINT32_MAX, best_dp = UINT32_MAX;
+        double best_dist = 0.0;
+
+        if (sg_route_find_best_insertion_no_new_vehicle(ctx, sol, req, UINT32_MAX,
+                                                        &best_v, &best_pos,
+                                                        &best_pp, &best_dp,
+                                                        &best_dist)) {
+            ARStatus s;
+            if (best_pp != UINT32_MAX && best_dp != UINT32_MAX) {
+                s = sg_route_apply_pd_insertion(ctx, sol, req, best_v,
+                                                best_pp, best_dp, best_dist);
+            } else {
+                s = sg_route_apply_insertion(ctx, sol, req, best_v,
+                                             best_pos, best_dist);
+            }
+            if (s == AR_STATUS_OK) {
+                return 1;
+            }
+        }
+    }
+
+    /* Step 2: If no depth remaining, give up. */
+    if (depth <= 0) {
+        return 0;
+    }
+
+    /* Step 3: Ejection scan — try ejecting one request from each vehicle. */
+    {
+        int32_t req_width = INT32_MAX;
+        uint32_t vp;
+        (void)sg_request_tw_width(ctx, req, &req_width);
+
+        for (vp = 0; vp < sol->num_vehicles; vp++) {
+            uint32_t vp_len = sol->route_lengths[vp];
+            uint32_t *vp_requests_snapshot = NULL;
+            uint32_t si;
+
+            if (vp_len == 0 || vp == target_v) {
+                continue;
+            }
+
+            /* Snapshot the route since unassignment modifies it. */
+            vp_requests_snapshot = (uint32_t *)malloc((size_t)vp_len * sizeof(uint32_t));
+            if (!vp_requests_snapshot) {
+                continue;
+            }
+            memcpy(vp_requests_snapshot, sg_route_vehicle_ptr_const(sol, vp),
+                   (size_t)vp_len * sizeof(uint32_t));
+
+            for (si = 0; si < vp_len; si++) {
+                uint32_t eject_req = vp_requests_snapshot[si];
+                int32_t eject_width = INT32_MAX;
+                SGRouteSolution *chain_backup;
+                ARStatus cs;
+                int r_fits = 0;
+
+                if (chain_visited[eject_req]) {
+                    continue;
+                }
+
+                /* Pruning: skip if ejected request has tighter TW (harder to reinsert). */
+                (void)sg_request_tw_width(ctx, eject_req, &eject_width);
+                if (eject_width < req_width) {
+                    continue;
+                }
+
+                chain_backup = (SGRouteSolution *)sg_route_solution_copy(sol, (void *)ctx);
+                if (!chain_backup) {
+                    continue;
+                }
+
+                /* Eject request from V'. */
+                cs = sg_route_unassign_removed_requests(ctx, sol, &eject_req, 1);
+                if (cs != AR_STATUS_OK) {
+                    sg_route_restore_from_backup(sol, chain_backup);
+                    continue;
+                }
+
+                /* Try inserting req into V'. */
+                {
+                    int is_pd = (ctx->requests[req].kind == SG_REQUEST_KIND_PICKUP_DELIVERY);
+                    if (is_pd) {
+                        double score;
+                        uint32_t ins_pp = UINT32_MAX, ins_dp = UINT32_MAX;
+                        double ins_dist = 0.0;
+                        if (sg_route_eval_pd_best_insertion_cached(
+                                ctx, sol, req, vp, &score,
+                                &ins_pp, &ins_dp, &ins_dist)) {
+                            cs = sg_route_apply_pd_insertion(
+                                ctx, sol, req, vp, ins_pp, ins_dp, ins_dist);
+                            if (cs == AR_STATUS_OK) {
+                                r_fits = 1;
+                            }
+                        }
+                    } else {
+                        uint32_t p;
+                        uint32_t cur_len = sol->route_lengths[vp];
+                        double best_sc = INFINITY;
+                        uint32_t ins_pos = UINT32_MAX;
+                        double ins_dist = 0.0;
+                        for (p = 0; p <= cur_len; p++) {
+                            double sc = 0.0, nd = 0.0;
+                            if (sg_route_eval_insertion_cached(
+                                    ctx, sol, req, vp, p, &sc, &nd)) {
+                                if (sc < best_sc) {
+                                    best_sc = sc;
+                                    ins_pos = p;
+                                    ins_dist = nd;
+                                }
+                            }
+                        }
+                        if (ins_pos != UINT32_MAX) {
+                            cs = sg_route_apply_insertion(
+                                ctx, sol, req, vp, ins_pos, ins_dist);
+                            if (cs == AR_STATUS_OK) {
+                                r_fits = 1;
+                            }
+                        }
+                    }
+                }
+
+                if (r_fits) {
+                    /* Recursively place the ejected request. */
+                    chain_visited[eject_req] = 1;
+                    if (sg_try_place_with_ejection(ctx, sol, eject_req, depth - 1,
+                                                    target_v, chain_visited)) {
+                        chain_visited[eject_req] = 0;
+                        sg_route_solution_free(chain_backup, NULL);
+                        free(vp_requests_snapshot);
+                        return 1;
+                    }
+                    chain_visited[eject_req] = 0;
+                }
+
+                /* Chain failed — restore. */
+                sg_route_restore_from_backup(sol, chain_backup);
+            }
+
+            free(vp_requests_snapshot);
+        }
+    }
+
+    return 0;
+}
+
 ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolution *sol) {
     int restarted;
+    uint8_t *chain_visited = NULL;
 
     if (!ctx || !sol) {
         return AR_STATUS_INVALID_ARG;
+    }
+
+    if (sol->base.total_requests > 0) {
+        chain_visited = (uint8_t *)malloc((size_t)sol->base.total_requests * sizeof(uint8_t));
+        if (!chain_visited) {
+            return AR_STATUS_OUT_OF_MEMORY;
+        }
     }
 
     restarted = 1;
@@ -984,6 +1143,7 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
         /* Build list of non-empty vehicles sorted by route length ascending. */
         vehicle_order = (uint32_t *)malloc((size_t)sol->num_vehicles * sizeof(uint32_t));
         if (!vehicle_order) {
+            free(chain_visited);
             return AR_STATUS_OUT_OF_MEMORY;
         }
         for (v = 0; v < sol->num_vehicles; v++) {
@@ -1025,6 +1185,7 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
             requests = (uint32_t *)malloc((size_t)route_len * sizeof(uint32_t));
             if (!requests) {
                 free(vehicle_order);
+                free(chain_visited);
                 return AR_STATUS_OUT_OF_MEMORY;
             }
             memcpy(requests, sg_route_vehicle_ptr_const(sol, target_v),
@@ -1053,6 +1214,7 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
             if (!backup) {
                 free(requests);
                 free(vehicle_order);
+                free(chain_visited);
                 return AR_STATUS_OUT_OF_MEMORY;
             }
             before_cost = sg_route_solution_cost(backup, (void *)ctx);
@@ -1071,141 +1233,21 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
             /* Try to place each request via direct insertion or ejection chain. */
             for (ri = 0; ri < route_len; ri++) {
                 uint32_t req = requests[ri];
-                uint32_t best_v = UINT32_MAX, best_pos = UINT32_MAX;
-                uint32_t best_pp = UINT32_MAX, best_dp = UINT32_MAX;
-                double best_dist = 0.0;
-                int placed = 0;
 
-                /* Direct insertion (no new vehicle). */
-                if (sg_route_find_best_insertion_no_new_vehicle(ctx, sol, req, UINT32_MAX,
-                                                                &best_v, &best_pos,
-                                                                &best_pp, &best_dp,
-                                                                &best_dist)) {
-                    ARStatus s;
-                    if (best_pp != UINT32_MAX && best_dp != UINT32_MAX) {
-                        s = sg_route_apply_pd_insertion(ctx, sol, req, best_v,
-                                                        best_pp, best_dp, best_dist);
-                    } else {
-                        s = sg_route_apply_insertion(ctx, sol, req, best_v,
-                                                     best_pos, best_dist);
-                    }
-                    if (s == AR_STATUS_OK) {
-                        placed = 1;
-                    }
+                if (chain_visited) {
+                    memset(chain_visited, 0,
+                           (size_t)sol->base.total_requests * sizeof(uint8_t));
+                    chain_visited[req] = 1;
                 }
 
-                /* Ejection chain (depth 1). */
-                if (!placed) {
-                    uint32_t vp;
-                    for (vp = 0; vp < sol->num_vehicles && !placed; vp++) {
-                        uint32_t vp_len = sol->route_lengths[vp];
-                        const uint32_t *vp_route;
-                        uint32_t si;
-
-                        if (vp_len == 0 || vp == target_v) {
-                            continue;
-                        }
-
-                        vp_route = sg_route_vehicle_ptr_const(sol, vp);
-                        for (si = 0; si < vp_len && !placed; si++) {
-                            uint32_t eject_req = vp_route[si];
-                            SGRouteSolution *chain_backup;
-                            ARStatus cs;
-
-                            chain_backup = (SGRouteSolution *)sg_route_solution_copy(
-                                sol, (void *)ctx);
-                            if (!chain_backup) {
-                                continue;
-                            }
-
-                            /* Eject request S from V'. */
-                            cs = sg_route_unassign_removed_requests(ctx, sol, &eject_req, 1);
-                            if (cs != AR_STATUS_OK) {
-                                sg_route_restore_from_backup(sol, chain_backup);
-                                continue;
-                            }
-
-                            /* Try inserting R into V'. */
-                            {
-                                uint32_t ins_pos = UINT32_MAX;
-                                uint32_t ins_pp = UINT32_MAX, ins_dp = UINT32_MAX;
-                                double ins_dist = 0.0;
-                                int is_pd = (ctx->requests[req].kind ==
-                                             SG_REQUEST_KIND_PICKUP_DELIVERY);
-                                int r_fits = 0;
-
-                                if (is_pd) {
-                                    double score;
-                                    if (sg_route_eval_pd_best_insertion_cached(
-                                            ctx, sol, req, vp, &score,
-                                            &ins_pp, &ins_dp, &ins_dist)) {
-                                        cs = sg_route_apply_pd_insertion(
-                                            ctx, sol, req, vp, ins_pp, ins_dp, ins_dist);
-                                        if (cs == AR_STATUS_OK) {
-                                            r_fits = 1;
-                                        }
-                                    }
-                                } else {
-                                    uint32_t p;
-                                    uint32_t cur_len = sol->route_lengths[vp];
-                                    double best_sc = INFINITY;
-                                    for (p = 0; p <= cur_len; p++) {
-                                        double sc = 0.0, nd = 0.0;
-                                        if (sg_route_eval_insertion_cached(
-                                                ctx, sol, req, vp, p, &sc, &nd)) {
-                                            if (sc < best_sc) {
-                                                best_sc = sc;
-                                                ins_pos = p;
-                                                ins_dist = nd;
-                                            }
-                                        }
-                                    }
-                                    if (ins_pos != UINT32_MAX) {
-                                        cs = sg_route_apply_insertion(
-                                            ctx, sol, req, vp, ins_pos, ins_dist);
-                                        if (cs == AR_STATUS_OK) {
-                                            r_fits = 1;
-                                        }
-                                    }
-                                }
-
-                                if (r_fits) {
-                                    /* Try placing ejected request S (excluding target_v). */
-                                    uint32_t s_v = UINT32_MAX, s_pos = UINT32_MAX;
-                                    uint32_t s_pp = UINT32_MAX, s_dp = UINT32_MAX;
-                                    double s_dist = 0.0;
-
-                                    if (sg_route_find_best_insertion_no_new_vehicle(
-                                            ctx, sol, eject_req, UINT32_MAX,
-                                            &s_v, &s_pos, &s_pp, &s_dp, &s_dist)) {
-                                        ARStatus ss;
-                                        if (s_pp != UINT32_MAX && s_dp != UINT32_MAX) {
-                                            ss = sg_route_apply_pd_insertion(
-                                                ctx, sol, eject_req, s_v,
-                                                s_pp, s_dp, s_dist);
-                                        } else {
-                                            ss = sg_route_apply_insertion(
-                                                ctx, sol, eject_req, s_v,
-                                                s_pos, s_dist);
-                                        }
-                                        if (ss == AR_STATUS_OK) {
-                                            sg_route_solution_free(chain_backup, NULL);
-                                            placed = 1;
-                                            continue;
-                                        }
-                                    }
-                                }
-                            }
-
-                            /* Chain failed — restore. */
-                            sg_route_restore_from_backup(sol, chain_backup);
-                        }
-                    }
-                }
-
-                if (!placed) {
+                if (!sg_try_place_with_ejection(ctx, sol, req, SG_EJECTION_MAX_DEPTH,
+                                                 target_v, chain_visited)) {
                     all_placed = 0;
                     break;
+                }
+
+                if (chain_visited) {
+                    chain_visited[req] = 0;
                 }
             }
 
@@ -1224,6 +1266,7 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
         free(vehicle_order);
     }
 
+    free(chain_visited);
     return AR_STATUS_OK;
 }
 

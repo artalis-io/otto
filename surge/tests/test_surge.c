@@ -2050,6 +2050,140 @@ static void test_ejection_chain_reduce(void) {
     sg_free(ctx);
 }
 
+static void test_ejection_chain_depth2(void) {
+    /* 3 vehicles with tight TWs where depth-1 fails but depth-2 succeeds.
+       v0 has 1 request (target), v1 has 2, v2 has 2.
+       Chain: eject S from v1 -> insert R into v1 -> eject T from v2 ->
+       insert S into v2 -> T fits elsewhere.
+       Depth-2 should reduce vehicle count. */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    uint32_t vehicles_before;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);  /* v0 */
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);  /* v1 */
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);  /* v2 */
+
+    /* r0 on v0 (target): mid TW */
+    add_delivery_request(ctx, 55.0, 50.0, 1000, 5000, 10, 1.0);  /* r0 */
+    /* r1 on v1: narrow TW near r0, blocks r0 from direct insertion */
+    add_delivery_request(ctx, 56.0, 50.0, 800, 4800, 10, 1.0);   /* r1 */
+    /* r2 on v1: wider TW */
+    add_delivery_request(ctx, 58.0, 50.0, 0, 50000, 10, 1.0);    /* r2 */
+    /* r3 on v2: narrow TW near r1 */
+    add_delivery_request(ctx, 57.0, 50.0, 700, 4700, 10, 1.0);   /* r3 */
+    /* r4 on v2: very wide TW, easy to place */
+    add_delivery_request(ctx, 60.0, 50.0, 0, 80000, 10, 1.0);    /* r4 */
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    {
+        double score, dist;
+        /* v0: r0 */
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+        /* v1: r1, r2 */
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 1, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 1, 1, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 2, 1, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 2, 1, 1, dist) == AR_STATUS_OK);
+        /* v2: r3, r4 */
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 3, 2, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 3, 2, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 4, 2, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 4, 2, 1, dist) == AR_STATUS_OK);
+    }
+    assert(sol.route_lengths[0] == 1);
+    assert(sol.route_lengths[1] == 2);
+    assert(sol.route_lengths[2] == 2);
+    vehicles_before = sol.vehicles_used;
+    assert(vehicles_before == 3);
+
+    sg_route_postprocess_ejection_reduce(ctx, &sol);
+
+    /* With wide TWs and close locations, the depth-2 chain should consolidate. */
+    assert(sol.base.num_unassigned == 0);
+    assert(sol.base.num_assigned == 5);
+    assert(sol.vehicles_used < vehicles_before);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_solomon_i1_construction(void) {
+    /* 10 vehicles, 15 delivery requests with staggered TWs.
+       Solomon I1 should build routes sequentially, filling each before
+       opening the next. */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    uint32_t i;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    for (i = 0; i < 10; i++) {
+        add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+    }
+
+    /* 15 requests with staggered tight TWs — forces sequential building. */
+    for (i = 0; i < 15; i++) {
+        double x = 50.0 + (double)(i % 5) * 3.0;
+        double y = 50.0 + (double)(i / 5) * 3.0;
+        int32_t tw_early = (int32_t)(i * 500);
+        int32_t tw_late = tw_early + 2000;
+        add_delivery_request(ctx, x, y, tw_early, tw_late, 60, 1.0);
+    }
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    assert(sg_route_construct_solomon_i1(ctx, &sol) == AR_STATUS_OK);
+
+    assert(sol.base.num_unassigned == 0);
+    assert(sol.vehicles_used > 0);
+    assert(sol.vehicles_used <= 10);
+    assert(sol.total_distance > 0.0);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_solomon_i1_pd(void) {
+    /* 5 vehicles, 8 PD requests with wide TWs.
+       Solomon I1 should handle pickup-delivery requests correctly. */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    uint32_t i;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    for (i = 0; i < 5; i++) {
+        add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+    }
+
+    /* 8 PD requests with wide TWs */
+    for (i = 0; i < 8; i++) {
+        double px = 45.0 + (double)(i % 4) * 3.0;
+        double py = 50.0 + (double)(i / 4) * 3.0;
+        double dx = px + 5.0;
+        double dy = py + 2.0;
+        int32_t tw_early = (int32_t)(i * 300);
+        int32_t tw_late = tw_early + 20000;
+        add_pd_request(ctx,
+                       px, py, tw_early, tw_late, 30,
+                       dx, dy, tw_early, tw_late + 5000, 30,
+                       1.0);
+    }
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    assert(sg_route_construct_solomon_i1(ctx, &sol) == AR_STATUS_OK);
+
+    assert(sol.base.num_unassigned == 0);
+    assert(sol.vehicles_used > 0);
+    assert(sol.total_distance > 0.0);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -2107,6 +2241,9 @@ int main(void) {
     RUN_TEST(test_tw_sorted_construction);
     RUN_TEST(test_vehicle_target_destroy);
     RUN_TEST(test_ejection_chain_reduce);
+    RUN_TEST(test_ejection_chain_depth2);
+    RUN_TEST(test_solomon_i1_construction);
+    RUN_TEST(test_solomon_i1_pd);
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
     return tests_passed == tests_run ? 0 : 1;
