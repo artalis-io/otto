@@ -5248,7 +5248,7 @@ static int simplex_phase2(SimplexSolver *solver) {
             tableau_compute_solution(tab);
             solver->status = RALPH_STATUS_OBJ_LIMIT;
             solver->iterations = iter;
-            solver->obj_value = tab->obj_value * solver->model->obj_sense;
+            solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
             return 0;
         }
 
@@ -5292,7 +5292,7 @@ static int simplex_phase2(SimplexSolver *solver) {
             solver->degenerate_pivots = degenerate_count;
             tableau_compute_solution(tab);
 
-            solver->obj_value = tab->obj_value * solver->model->obj_sense;
+            solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
             return 0;
         }
 
@@ -5358,7 +5358,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                     solver->iterations = iter;
                     solver->degenerate_pivots = degenerate_count;
                     tableau_compute_solution(tab);
-                    solver->obj_value = tab->obj_value * solver->model->obj_sense;
+                    solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
                     return 0;
                 }
 
@@ -6249,7 +6249,7 @@ int simplex_solve(SimplexSolver *solver) {
         for (int j = 0; j < solver->model->num_vars; j++) {
             true_obj += tab->c_ext[j] * tab->x[j];
         }
-        solver->obj_value = true_obj * solver->model->obj_sense;
+        solver->obj_value = true_obj * solver->model->obj_sense + solver->model->obj_offset;
     }
 
     /* Copy solution */

@@ -945,7 +945,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
             remove_bound_perturbation(tab);
             tableau_compute_solution(tab);
             solver->status = RALPH_STATUS_OBJ_LIMIT;
-            solver->obj_value = tab->obj_value * solver->model->obj_sense;
+            solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
             return 0;
         }
 
@@ -1153,7 +1153,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
             }
 
             solver->status = RALPH_STATUS_OPTIMAL;
-            solver->obj_value = tab->obj_value * solver->model->obj_sense;
+            solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
 
             if (!solver->solution)
                 solver->solution = (double*)calloc(n_orig, sizeof(double));
@@ -1625,7 +1625,7 @@ int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver) {
 
     if (!primal_infeasible) {
         solver->status = RALPH_STATUS_OPTIMAL;
-        solver->obj_value = tab->obj_value * solver->model->obj_sense;
+        solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
         solver->iterations = 0;
 
         int n_orig = solver->model->num_vars;

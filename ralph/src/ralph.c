@@ -224,6 +224,17 @@ int ralph_set_obj_coef(RalphModel *model, int var, double coef) {
     return 0;
 }
 
+int ralph_set_obj_offset(RalphModel *model, double offset) {
+    if (!model || !model->lp_model) return -1;
+    model->lp_model->obj_offset = offset;
+    return 0;
+}
+
+double ralph_get_obj_offset(const RalphModel *model) {
+    if (!model || !model->lp_model) return 0.0;
+    return model->lp_model->obj_offset;
+}
+
 /* ============================================================================
  * Model Queries
  * ============================================================================ */
@@ -665,11 +676,6 @@ int ralph_optimize(RalphModel *model) {
             model->status == RALPH_STATUS_IMPRECISE ||
             model->status == RALPH_STATUS_OBJ_LIMIT) {
             model->obj_value = model->lp_solver->obj_value;
-
-            /* Add obj_offset from presolve (e.g., doubleton elimination) */
-            if (presolved && presolved->reduced_model) {
-                model->obj_value += presolved->reduced_model->obj_offset;
-            }
 
             /* Allocate solution arrays for original problem size */
             model->solution = (double*)calloc(n_orig, sizeof(double));
