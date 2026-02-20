@@ -1011,6 +1011,24 @@ SGStatus sg_set_travel_callback(SGContext *ctx, SGTravelCallback callback, void 
     return SG_STATUS_OK;
 }
 
+SGStatus sg_vehicle_set_qualifications(SGContext *ctx, uint32_t vehicle_id,
+                                        uint64_t qualification_flags) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->vehicles[vehicle_id].qualifications = qualification_flags;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_request_set_required_qualifications(SGContext *ctx, uint32_t request_id,
+                                                 uint64_t qualification_flags) {
+    if (!ctx || request_id >= ctx->num_requests) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->requests[request_id].required_qualifications = qualification_flags;
+    return SG_STATUS_OK;
+}
+
 static uint32_t sg_find_or_create_location(SGContext *ctx, double x, double y) {
     uint32_t i;
     uint32_t loc;

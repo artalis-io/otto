@@ -112,6 +112,7 @@ typedef struct {
     int32_t shift_early;
     int32_t shift_late;
     double *capacity;
+    uint64_t qualifications;
     uint8_t has_depots;
     uint8_t has_shift_time_window;
     uint8_t has_capacity;
@@ -135,6 +136,7 @@ typedef struct {
     SGRequestKind kind;
     uint32_t pickup_task_id;
     uint32_t delivery_task_id;
+    uint64_t required_qualifications;
     uint8_t has_pickup_task;
     uint8_t has_delivery_task;
 } SGRequestRecord;
@@ -197,6 +199,14 @@ static inline void sg_travel(const SGContext *ctx, uint32_t from_loc, uint32_t t
         *dist = ctx->travel_distance_matrix[idx];
         *dur  = ctx->travel_duration_matrix[idx];
     }
+}
+
+/* Returns 1 if vehicle has all qualifications required by the request, 0 otherwise. */
+static inline int sg_vehicle_qualifies(const SGContext *ctx,
+                                        uint32_t vehicle_id, uint32_t request_id) {
+    uint64_t required = ctx->requests[request_id].required_qualifications;
+    if (required == 0) return 1;
+    return (ctx->vehicles[vehicle_id].qualifications & required) == required;
 }
 
 static inline double sg_travel_dist(const SGContext *ctx, uint32_t from_loc, uint32_t to_loc) {

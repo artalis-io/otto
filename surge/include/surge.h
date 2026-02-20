@@ -70,6 +70,11 @@ SGStatus sg_set_travel_matrix(SGContext *ctx, uint32_t location_count,
                                const double *duration_matrix_row_major);
 SGStatus sg_set_travel_callback(SGContext *ctx, SGTravelCallback callback, void *user_data);
 
+SGStatus sg_vehicle_set_qualifications(SGContext *ctx, uint32_t vehicle_id,
+                                        uint64_t qualification_flags);
+SGStatus sg_request_set_required_qualifications(SGContext *ctx, uint32_t request_id,
+                                                 uint64_t qualification_flags);
+
 SGStatus sg_validate_model(const SGContext *ctx);
 SGStatus sg_load_solomon_vrptw(SGContext *ctx, const char *file_path);
 SGStatus sg_load_li_lim_pdptw(SGContext *ctx, const char *file_path);

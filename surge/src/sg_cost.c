@@ -360,6 +360,9 @@ double sg_vehicle_request_cost(const SGContext *ctx, uint32_t vehicle_id,
     if (!ctx || vehicle_id >= ctx->num_vehicles || !ctx->vehicles) {
         return (double)request_id + 1.0;
     }
+    if (request_id < ctx->num_requests && !sg_vehicle_qualifies(ctx, vehicle_id, request_id)) {
+        return INFINITY;
+    }
     vehicle = &ctx->vehicles[vehicle_id];
 
     {

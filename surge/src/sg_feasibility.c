@@ -564,6 +564,10 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
         return 0;
     }
 
+    if (!sg_vehicle_qualifies(ctx, vehicle_id, request_id)) {
+        return 0;
+    }
+
     vehicle = &ctx->vehicles[vehicle_id];
     if (!vehicle->has_depots || vehicle->start_depot_id >= ctx->num_depots ||
         vehicle->end_depot_id >= ctx->num_depots) {
@@ -819,6 +823,10 @@ int sg_route_eval_pd_best_insertion_cached(
     if (!ctx || !sol || !best_score_out || !best_pickup_pos_out ||
         !best_delivery_pos_out || !best_route_distance_out ||
         vehicle_id >= sol->num_vehicles || request_id >= sol->base.total_requests) {
+        return 0;
+    }
+
+    if (!sg_vehicle_qualifies(ctx, vehicle_id, request_id)) {
         return 0;
     }
 

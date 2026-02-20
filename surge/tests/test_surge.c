@@ -2464,6 +2464,155 @@ static void test_travel_asymmetric_matrix(void) {
     sg_free(ctx);
 }
 
+/* ---------- qualification tests ---------- */
+
+static void test_qualification_api(void) {
+    /* Validate setters, defaults (0), invalid args */
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+    SGConfig cfg;
+    sg_config_default(&cfg);
+    cfg.max_iterations = 100;
+    cfg.seed = 42;
+    cfg.deterministic = true;
+    assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+    sg_set_dimension_count(ctx, 1);
+
+    uint32_t v0 = sg_add_vehicle(ctx);
+    uint32_t v1 = sg_add_vehicle(ctx);
+    uint32_t r0 = sg_add_request(ctx);
+
+    /* Default qualifications/requirements are 0 */
+    assert(ctx->vehicles[v0].qualifications == 0);
+    assert(ctx->vehicles[v1].qualifications == 0);
+    assert(ctx->requests[r0].required_qualifications == 0);
+
+    /* Set qualifications */
+    assert(sg_vehicle_set_qualifications(ctx, v0, 0x07) == SG_STATUS_OK);
+    assert(sg_vehicle_set_qualifications(ctx, v1, 0x01) == SG_STATUS_OK);
+    assert(ctx->vehicles[v0].qualifications == 0x07);
+    assert(ctx->vehicles[v1].qualifications == 0x01);
+
+    /* Set requirements */
+    assert(sg_request_set_required_qualifications(ctx, r0, 0x05) == SG_STATUS_OK);
+    assert(ctx->requests[r0].required_qualifications == 0x05);
+
+    /* Invalid args */
+    assert(sg_vehicle_set_qualifications(NULL, 0, 1) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_qualifications(ctx, 999, 1) == SG_STATUS_INVALID_ARG);
+    assert(sg_request_set_required_qualifications(NULL, 0, 1) == SG_STATUS_INVALID_ARG);
+    assert(sg_request_set_required_qualifications(ctx, 999, 1) == SG_STATUS_INVALID_ARG);
+
+    /* Inline helper check */
+    assert(sg_vehicle_qualifies(ctx, v0, r0) == 1);  /* 0x07 & 0x05 == 0x05 */
+    assert(sg_vehicle_qualifies(ctx, v1, r0) == 0);  /* 0x01 & 0x05 != 0x05 */
+
+    /* Zero requirement => all qualify */
+    assert(sg_request_set_required_qualifications(ctx, r0, 0) == SG_STATUS_OK);
+    assert(sg_vehicle_qualifies(ctx, v0, r0) == 1);
+    assert(sg_vehicle_qualifies(ctx, v1, r0) == 1);
+
+    sg_free(ctx);
+}
+
+static void test_qualification_filters_solve(void) {
+    /* 2 vehicles, 2 delivery requests.
+       Request 0 requires qualification bit 0x02.
+       Vehicle 0 has quals 0x03, vehicle 1 has quals 0x01.
+       => Request 0 must go to vehicle 0 (only one qualified).
+       Request 1 has no requirements => can go to either vehicle. */
+    SGContext *ctx = make_config(300, 42);
+    uint32_t depot;
+    uint32_t v0, v1;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    v0 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v0, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v0, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v0, (double[]){100.0}, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_qualifications(ctx, v0, 0x03) == SG_STATUS_OK);
+
+    v1 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v1, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v1, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v1, (double[]){100.0}, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_qualifications(ctx, v1, 0x01) == SG_STATUS_OK);
+
+    /* Request 0: requires bit 0x02 — only vehicle 0 qualifies */
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -10.0);
+    assert(sg_request_set_required_qualifications(ctx, 0, 0x02) == SG_STATUS_OK);
+
+    /* Request 1: no requirements */
+    add_delivery_request(ctx, -10.0, 0.0, 0, 86400, 60, -10.0);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    sg_free(ctx);
+}
+
+static void test_qualification_unassigned_when_none_qualify(void) {
+    /* 1 vehicle, 1 request.
+       Request requires bit 0x04, vehicle only has bit 0x02.
+       => Request must be unassigned (no qualified vehicle). */
+    SGContext *ctx = make_config(300, 42);
+    uint32_t depot;
+    uint32_t v0;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    v0 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v0, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v0, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v0, (double[]){100.0}, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_qualifications(ctx, v0, 0x02) == SG_STATUS_OK);
+
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -10.0);
+    assert(sg_request_set_required_qualifications(ctx, 0, 0x04) == SG_STATUS_OK);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 1);
+
+    sg_free(ctx);
+}
+
+static void test_qualification_pd_request(void) {
+    /* PD request with qualification requirement.
+       Vehicle 0 has quals 0x01, vehicle 1 doesn't.
+       PD request requires 0x01 => must go to vehicle 0. */
+    SGContext *ctx = make_config(300, 42);
+    uint32_t depot;
+    uint32_t v0, v1;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    v0 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v0, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v0, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v0, (double[]){100.0}, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_qualifications(ctx, v0, 0x01) == SG_STATUS_OK);
+
+    v1 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v1, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v1, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v1, (double[]){100.0}, 1) == SG_STATUS_OK);
+    /* v1 has qualifications = 0 (default) */
+
+    add_pd_request(ctx, 5.0, 0.0, 0, 86400, 60,
+                       10.0, 0.0, 0, 86400, 60, 10.0);
+    assert(sg_request_set_required_qualifications(ctx, 0, 0x01) == SG_STATUS_OK);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -2530,6 +2679,10 @@ int main(void) {
     RUN_TEST(test_travel_callback_mode);
     RUN_TEST(test_travel_auto_dedup);
     RUN_TEST(test_travel_asymmetric_matrix);
+    RUN_TEST(test_qualification_api);
+    RUN_TEST(test_qualification_filters_solve);
+    RUN_TEST(test_qualification_unassigned_when_none_qualify);
+    RUN_TEST(test_qualification_pd_request);
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
     return tests_passed == tests_run ? 0 : 1;
