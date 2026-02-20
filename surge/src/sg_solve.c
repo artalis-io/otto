@@ -53,8 +53,124 @@ int sg_route_solver_eligible(const SGContext *ctx) {
     return 1;
 }
 
+static ARStatus sg_route_construct_tw_sorted(SGContext *ctx, SGRouteSolution *sol) {
+    uint32_t *order = NULL;
+    uint32_t n, i;
+
+    if (!ctx || !sol) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    n = sol->base.num_unassigned;
+    if (n == 0) {
+        return AR_STATUS_OK;
+    }
+
+    order = (uint32_t *)malloc((size_t)n * sizeof(uint32_t));
+    if (!order) {
+        return AR_STATUS_OUT_OF_MEMORY;
+    }
+    memcpy(order, sol->base.unassigned_ids, (size_t)n * sizeof(uint32_t));
+
+    /* Insertion sort by (tw_width asc, tw_early asc, request_id asc).
+       For LC1 instances (all TWs width 55), secondary sort by tw_early
+       creates a temporal sweep building routes in natural progression. */
+    for (i = 1; i < n; i++) {
+        uint32_t key = order[i];
+        int32_t key_width = INT32_MAX;
+        int32_t key_early = INT32_MAX;
+        int32_t key_late = 0;
+        uint32_t j = i;
+        (void)sg_request_tw_width(ctx, key, &key_width);
+        (void)sg_request_time_window_bounds(ctx, key, &key_early, &key_late);
+
+        while (j > 0) {
+            uint32_t prev = order[j - 1];
+            int32_t prev_width = INT32_MAX;
+            int32_t prev_early = INT32_MAX;
+            int32_t prev_late = 0;
+            (void)sg_request_tw_width(ctx, prev, &prev_width);
+            (void)sg_request_time_window_bounds(ctx, prev, &prev_early, &prev_late);
+            if (prev_width < key_width ||
+                (prev_width == key_width && prev_early < key_early) ||
+                (prev_width == key_width && prev_early == key_early && prev <= key)) {
+                break;
+            }
+            order[j] = prev;
+            j--;
+        }
+        order[j] = key;
+    }
+
+    /* Insert in sorted order using cheapest-position greedy */
+    for (i = 0; i < n; i++) {
+        uint32_t request_id = order[i];
+        double best_score = 0.0;
+        double kth_score = 0.0;
+        uint32_t vehicle_id = UINT32_MAX;
+        uint32_t pos = UINT32_MAX;
+        uint32_t pickup_pos = UINT32_MAX;
+        uint32_t delivery_pos = UINT32_MAX;
+        double route_distance = 0.0;
+
+        if (!sg_route_rank_insertions_for_request(ctx, sol, request_id, 1, 0.0,
+                                                   &best_score, &kth_score,
+                                                   &vehicle_id, &pos,
+                                                   &pickup_pos, &delivery_pos,
+                                                   &route_distance)) {
+            continue;
+        }
+        if (pickup_pos != UINT32_MAX && delivery_pos != UINT32_MAX) {
+            if (sg_route_apply_pd_insertion(ctx, sol, request_id, vehicle_id,
+                                            pickup_pos, delivery_pos,
+                                            route_distance) != AR_STATUS_OK) {
+                free(order);
+                return AR_STATUS_ERROR;
+            }
+        } else {
+            if (sg_route_apply_insertion(ctx, sol, request_id, vehicle_id, pos,
+                                         route_distance) != AR_STATUS_OK) {
+                free(order);
+                return AR_STATUS_ERROR;
+            }
+        }
+    }
+
+    free(order);
+    return AR_STATUS_OK;
+}
+
 static ARStatus sg_route_construct_initial_solution(SGContext *ctx, SGRouteSolution *sol) {
-    return sg_route_repair_fill_regret(ctx, sol, 3, 0.0);
+    SGRouteSolution alt;
+    ARStatus status;
+
+    /* Attempt 1: regret-3 */
+    status = sg_route_repair_fill_regret(ctx, sol, 3, 0.0);
+    if (status != AR_STATUS_OK) return status;
+
+    /* Attempt 2: TW-sorted greedy */
+    status = sg_route_solution_init(ctx, &alt);
+    if (status != AR_STATUS_OK) return AR_STATUS_OK;
+
+    status = sg_route_construct_tw_sorted(ctx, &alt);
+    if (status != AR_STATUS_OK) {
+        sg_route_solution_reset(&alt);
+        return AR_STATUS_OK;
+    }
+
+    /* Keep whichever is better (lexicographic: unassigned, vehicles, distance) */
+    if (alt.base.num_unassigned < sol->base.num_unassigned ||
+        (alt.base.num_unassigned == sol->base.num_unassigned &&
+         (alt.vehicles_used < sol->vehicles_used ||
+          (alt.vehicles_used == sol->vehicles_used &&
+           alt.total_distance < sol->total_distance - 1e-9)))) {
+        sg_route_solution_reset(sol);
+        *sol = alt;
+    } else {
+        sg_route_solution_reset(&alt);
+    }
+
+    return AR_STATUS_OK;
 }
 
 static SGStatus sg_solve_route_model(SGContext *ctx) {
@@ -129,6 +245,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         ar_alns_add_destroy(alns, "route-cluster", sg_route_destroy_route_cluster, ctx, 1.0) != AR_STATUS_OK ||
         ar_alns_add_destroy(alns, "time-cluster", sg_route_destroy_time_cluster, ctx, 1.0) != AR_STATUS_OK ||
         ar_alns_add_destroy(alns, "paired-shaw", sg_route_destroy_paired_shaw, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_destroy(alns, "vehicle-target", sg_route_destroy_vehicle_target, ctx, 1.5) != AR_STATUS_OK ||
         ar_alns_add_destroy(alns, "worst", sg_route_destroy_worst, ctx, 0.5) != AR_STATUS_OK ||
         ar_alns_add_destroy(alns, "shaw", sg_route_destroy_shaw, ctx, 1.0) != AR_STATUS_OK ||
         ar_alns_add_repair(alns, "greedy-insert", sg_route_repair_greedy, ctx, 1.0) != AR_STATUS_OK ||
@@ -152,10 +269,12 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
 
     if (best) {
         (void)sg_route_postprocess_reduce_vehicles(ctx, best);
+        (void)sg_route_postprocess_ejection_reduce(ctx, best);
         (void)sg_route_postprocess_intensify(ctx, best);
         (void)sg_route_postprocess_polish_distance(ctx, best);
     } else {
         (void)sg_route_postprocess_reduce_vehicles(ctx, &initial);
+        (void)sg_route_postprocess_ejection_reduce(ctx, &initial);
         (void)sg_route_postprocess_intensify(ctx, &initial);
         (void)sg_route_postprocess_polish_distance(ctx, &initial);
     }

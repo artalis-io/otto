@@ -334,6 +334,8 @@ ARStatus sg_route_destroy_time_window(void *op_ctx, void *solution, int count,
                                       uint32_t *removed_ids, int *removed_count);
 ARStatus sg_route_destroy_paired_shaw(void *op_ctx, void *solution, int count,
                                       uint32_t *removed_ids, int *removed_count);
+ARStatus sg_route_destroy_vehicle_target(void *op_ctx, void *solution, int count,
+                                         uint32_t *removed_ids, int *removed_count);
 
 /* sg_repair.c */
 ARStatus sg_reinsert_removed_requests(SGBootstrapSolution *sol,
@@ -376,6 +378,7 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
 
 /* sg_postprocess.c */
 ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx, SGRouteSolution *sol);
+ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolution *sol);
 ARStatus sg_route_postprocess_polish_distance(const SGContext *ctx, SGRouteSolution *sol);
 ARStatus sg_route_postprocess_intensify(const SGContext *ctx, SGRouteSolution *sol);
 int sg_route_find_best_insertion_for_request(const SGContext *ctx, const SGRouteSolution *sol,
