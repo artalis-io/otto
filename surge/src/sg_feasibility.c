@@ -127,7 +127,7 @@ int sg_route_update_load(const SGContext *ctx, SGRouteSolution *sol, uint32_t ve
     }
 
     stop_len = sol->route_stop_lengths[vehicle_id];
-    base_offset = (size_t)vehicle_id * (size_t)sol->stop_stride * dim_count;
+    base_offset = (size_t)vehicle_id * ((size_t)sol->stop_stride + 1U) * dim_count;
     load = sol->route_stop_load + base_offset;
 
     /* Initialize first slot to zero */
@@ -699,7 +699,7 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
     /* Capacity check (signed-load model: max_prefix - min_prefix <= capacity) */
     if (ctx->dimension_count > 0 && sol->route_stop_load) {
         size_t dim_count = (size_t)ctx->dimension_count;
-        size_t load_base = (size_t)vehicle_id * (size_t)sol->stop_stride * dim_count;
+        size_t load_base = (size_t)vehicle_id * ((size_t)sol->stop_stride + 1U) * dim_count;
         const double *load = sol->route_stop_load + load_base;
         uint32_t insert_stop_pos;
         uint32_t d;

@@ -61,22 +61,6 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         return SG_STATUS_INVALID_ARG;
     }
 
-    ar_alns_params_default(&params);
-    params.max_iterations = ctx->config.max_iterations;
-    params.max_time_seconds = ctx->config.max_time_seconds;
-    params.segment_size = ctx->config.segment_size;
-    params.q_min = ctx->config.q_min;
-    params.q_max = ctx->config.q_max;
-    params.target_cost = 0.0;
-    params.accept_type = AR_ACCEPT_IMPROVING;
-
-    ops.copy = sg_route_solution_copy;
-    ops.free = sg_route_solution_free;
-    ops.cost = sg_route_solution_cost;
-    ops.size = sg_route_solution_size;
-    ops.validate = sg_route_solution_validate;
-    ops.user_ctx = ctx;
-
     init_status = sg_route_solution_init(ctx, &initial);
     if (init_status != AR_STATUS_OK) {
         return SG_STATUS_OUT_OF_MEMORY;
@@ -88,6 +72,30 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         return init_status == AR_STATUS_OUT_OF_MEMORY ? SG_STATUS_OUT_OF_MEMORY
                                                       : SG_STATUS_ERROR;
     }
+
+    ar_alns_params_default(&params);
+    params.max_iterations = ctx->config.max_iterations;
+    params.max_time_seconds = ctx->config.max_time_seconds;
+    params.segment_size = ctx->config.segment_size;
+    params.q_min = ctx->config.q_min;
+    params.q_max = ctx->config.q_max;
+    params.target_cost = 0.0;
+    /* Calibrate SA temperature from distance, not total cost. The cost
+       function includes large vehicle/unassigned penalties (~1e6/1e9) that
+       would make the temperature absurdly hot. Distance deltas are the
+       typical move magnitude during the improvement phase. */
+    ar_alns_calibrate_sa(&params,
+                          initial.total_distance > 0.0
+                              ? initial.total_distance
+                              : sg_route_solution_cost(&initial, ctx),
+                          params.max_iterations);
+
+    ops.copy = sg_route_solution_copy;
+    ops.free = sg_route_solution_free;
+    ops.cost = sg_route_solution_cost;
+    ops.size = sg_route_solution_size;
+    ops.validate = sg_route_solution_validate;
+    ops.user_ctx = ctx;
 
     alns = ar_alns_create(&params, &ops, ctx);
     if (!alns) {
@@ -186,6 +194,18 @@ SGStatus sg_solve(SGContext *ctx) {
         return sg_solve_route_model(ctx);
     }
 
+    init_status = sg_bootstrap_solution_init(&initial, ctx->num_requests);
+    if (init_status != AR_STATUS_OK) {
+        return SG_STATUS_OUT_OF_MEMORY;
+    }
+
+    init_status = sg_construct_initial_solution(ctx, &initial);
+    if (init_status != AR_STATUS_OK) {
+        sg_bootstrap_solution_reset(&initial);
+        return init_status == AR_STATUS_OUT_OF_MEMORY ? SG_STATUS_OUT_OF_MEMORY
+                                                      : SG_STATUS_ERROR;
+    }
+
     ar_alns_params_default(&params);
     params.max_iterations = ctx->config.max_iterations;
     params.max_time_seconds = ctx->config.max_time_seconds;
@@ -193,7 +213,8 @@ SGStatus sg_solve(SGContext *ctx) {
     params.q_min = ctx->config.q_min;
     params.q_max = ctx->config.q_max;
     params.target_cost = 0.0;
-    params.accept_type = AR_ACCEPT_IMPROVING;
+    ar_alns_calibrate_sa(&params, sg_bootstrap_cost(&initial, ctx),
+                          params.max_iterations);
 
     ops.copy = sg_bootstrap_copy;
     ops.free = sg_bootstrap_free;
@@ -204,6 +225,7 @@ SGStatus sg_solve(SGContext *ctx) {
 
     alns = ar_alns_create(&params, &ops, ctx);
     if (!alns) {
+        sg_bootstrap_solution_reset(&initial);
         return SG_STATUS_OUT_OF_MEMORY;
     }
 
@@ -216,6 +238,7 @@ SGStatus sg_solve(SGContext *ctx) {
 
     ar_status = ar_alns_add_destroy(alns, "random", sg_destroy_random, ctx, 1.0);
     if (ar_status != AR_STATUS_OK) {
+        sg_bootstrap_solution_reset(&initial);
         ar_alns_free(alns);
         return SG_STATUS_ERROR;
     }
@@ -223,6 +246,7 @@ SGStatus sg_solve(SGContext *ctx) {
     ar_status = ar_alns_add_destroy(alns, "criticality-worst",
                                     sg_destroy_criticality_worst, ctx, 1.0);
     if (ar_status != AR_STATUS_OK) {
+        sg_bootstrap_solution_reset(&initial);
         ar_alns_free(alns);
         return SG_STATUS_ERROR;
     }
@@ -230,6 +254,7 @@ SGStatus sg_solve(SGContext *ctx) {
     ar_status = ar_alns_add_destroy(alns, "route-cluster",
                                     sg_destroy_route_cluster, ctx, 1.0);
     if (ar_status != AR_STATUS_OK) {
+        sg_bootstrap_solution_reset(&initial);
         ar_alns_free(alns);
         return SG_STATUS_ERROR;
     }
@@ -237,6 +262,7 @@ SGStatus sg_solve(SGContext *ctx) {
     ar_status = ar_alns_add_destroy(alns, "time-cluster",
                                     sg_destroy_time_cluster, ctx, 1.0);
     if (ar_status != AR_STATUS_OK) {
+        sg_bootstrap_solution_reset(&initial);
         ar_alns_free(alns);
         return SG_STATUS_ERROR;
     }
@@ -244,76 +270,72 @@ SGStatus sg_solve(SGContext *ctx) {
     ar_status = ar_alns_add_destroy(alns, "paired-shaw",
                                     sg_destroy_paired_shaw, ctx, 1.0);
     if (ar_status != AR_STATUS_OK) {
+        sg_bootstrap_solution_reset(&initial);
         ar_alns_free(alns);
         return SG_STATUS_ERROR;
     }
 
     ar_status = ar_alns_add_destroy(alns, "worst", sg_destroy_worst, ctx, 0.5);
     if (ar_status != AR_STATUS_OK) {
+        sg_bootstrap_solution_reset(&initial);
         ar_alns_free(alns);
         return SG_STATUS_ERROR;
     }
 
     ar_status = ar_alns_add_destroy(alns, "shaw", sg_destroy_shaw, ctx, 0.5);
     if (ar_status != AR_STATUS_OK) {
+        sg_bootstrap_solution_reset(&initial);
         ar_alns_free(alns);
         return SG_STATUS_ERROR;
     }
 
     ar_status = ar_alns_add_repair(alns, "greedy-insert", sg_repair_greedy_insertion, ctx, 1.0);
     if (ar_status != AR_STATUS_OK) {
+        sg_bootstrap_solution_reset(&initial);
         ar_alns_free(alns);
         return SG_STATUS_ERROR;
     }
 
     ar_status = ar_alns_add_repair(alns, "regret-2", sg_repair_regret2, ctx, 1.0);
     if (ar_status != AR_STATUS_OK) {
+        sg_bootstrap_solution_reset(&initial);
         ar_alns_free(alns);
         return SG_STATUS_ERROR;
     }
 
     ar_status = ar_alns_add_repair(alns, "regret-3", sg_repair_regret3, ctx, 1.0);
     if (ar_status != AR_STATUS_OK) {
+        sg_bootstrap_solution_reset(&initial);
         ar_alns_free(alns);
         return SG_STATUS_ERROR;
     }
 
     ar_status = ar_alns_add_repair(alns, "regret-4", sg_repair_regret4, ctx, 1.0);
     if (ar_status != AR_STATUS_OK) {
+        sg_bootstrap_solution_reset(&initial);
         ar_alns_free(alns);
         return SG_STATUS_ERROR;
     }
 
     ar_status = ar_alns_add_repair(alns, "noise-regret", sg_repair_noise_regret, ctx, 1.0);
     if (ar_status != AR_STATUS_OK) {
+        sg_bootstrap_solution_reset(&initial);
         ar_alns_free(alns);
         return SG_STATUS_ERROR;
     }
 
     ar_status = ar_alns_add_repair(alns, "pair-sync", sg_repair_pair_sync, ctx, 1.0);
     if (ar_status != AR_STATUS_OK) {
+        sg_bootstrap_solution_reset(&initial);
         ar_alns_free(alns);
         return SG_STATUS_ERROR;
     }
 
     ar_status = ar_alns_add_repair(alns, "bootstrap-repair", sg_repair_greedy_insertion, ctx, 0.5);
     if (ar_status != AR_STATUS_OK) {
-        ar_alns_free(alns);
-        return SG_STATUS_ERROR;
-    }
-
-    init_status = sg_bootstrap_solution_init(&initial, ctx->num_requests);
-    if (init_status != AR_STATUS_OK) {
-        ar_alns_free(alns);
-        return SG_STATUS_OUT_OF_MEMORY;
-    }
-
-    init_status = sg_construct_initial_solution(ctx, &initial);
-    if (init_status != AR_STATUS_OK) {
         sg_bootstrap_solution_reset(&initial);
         ar_alns_free(alns);
-        return init_status == AR_STATUS_OUT_OF_MEMORY ? SG_STATUS_OUT_OF_MEMORY
-                                                      : SG_STATUS_ERROR;
+        return SG_STATUS_ERROR;
     }
 
     ar_status = ar_alns_solve(alns, &initial, (void **)&best);

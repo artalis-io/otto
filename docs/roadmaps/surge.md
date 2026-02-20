@@ -1357,3 +1357,107 @@ For rich constraint testing, generate synthetic instances with:
 - Exclusion groups (10-20% of requests have exclusions)
 
 Use these for validation against published best-known solutions.
+
+---
+
+## SoTA Performance Improvement Plan
+
+Seven ordered phases to close the gap between Surge and state-of-the-art benchmark results
+on Solomon (VRPTW) and Li & Lim (PDPTW) instances. Each phase is orthogonal and testable
+independently.
+
+### Current Gaps (baseline: 1k iterations, deterministic seed)
+
+| Benchmark | Metric | Surge | SoTA | Gap |
+|-----------|--------|-------|------|-----|
+| Solomon 100 | Avg distance | ~1,300 | ~1,230 | +5.5% |
+| Li & Lim 100 | Avg distance | ~2,100 | ~1,000 | +111% |
+
+### Phase S1: Simulated Annealing Acceptance
+
+**Impact**: Highest for Solomon. SA allows temporary cost increases, enabling the solver to
+escape local optima. Currently `AR_ACCEPT_IMPROVING` is hardcoded even though arbor already
+implements SA.
+
+**Changes (arbor)**:
+- Add `ar_alns_calibrate_sa` helper that computes adaptive `initial_temp` and `cooling_rate`
+  from initial solution cost and iteration budget
+- Formula: `T0 = 0.05 * |initial_cost| / ln(2)`, `cooling_rate = exp(ln(0.001) / max_iter)`
+
+**Changes (surge)**:
+- In `sg_solve_route_model`: compute initial cost after construction, calibrate SA params,
+  set `accept_type = AR_ACCEPT_SA`
+- Same for bootstrap solver path in `sg_solve`
+
+**Tests**: SA calibration unit test in arbor; deterministic Solomon comparison in surge.
+
+### Phase S2: Independent PD Stop Placement
+
+**Impact**: Highest for Li & Lim. SoTA evaluates all O(L^2) pickup-delivery position
+combinations; Surge currently inserts them as adjacent blocks.
+
+**Changes (surge)**:
+- Add `sg_route_eval_pd_insertion_independent` that evaluates pickup at position p and
+  delivery at position d (p < d) independently
+- Update repair operators to use the new insertion evaluation for PD requests
+- Preserve existing adjacent insertion as fallback for tight-TW instances
+
+**Tests**: Verify independent placement matches or beats adjacent for Li & Lim instances.
+
+### Phase S3: Route-Aware Worst Removal
+
+**Impact**: Medium. Current worst removal uses proxy cost from zone hints, not actual route
+distance delta.
+
+**Changes (surge)**:
+- Add `sg_route_removal_cost` that computes actual distance delta from removing a request
+  using cached timing state
+- Wire into `sg_route_destroy_worst` as the cost function
+
+**Tests**: Verify removal cost matches actual delta for known routes.
+
+### Phase S4: Route-Aware Shaw Relatedness
+
+**Impact**: Medium. Current Shaw relatedness uses zone similarity hints, not spatial distance
+or route co-location.
+
+**Changes (surge)**:
+- Add `sg_route_shaw_relatedness` using spatial distance + TW overlap + load similarity +
+  route co-location bonus
+- Wire into `sg_route_destroy_shaw`
+
+**Tests**: Verify relatedness metric orders known request pairs correctly.
+
+### Phase S5: Adaptive Destroy Count
+
+**Impact**: Low-medium. Current q_min/q_max are fixed at [4, 20] regardless of instance size.
+
+**Changes (surge)**:
+- Scale q_min/q_max with `num_requests`: `q_min = max(4, n/20)`, `q_max = max(20, n/4)`
+- Expose via `SGConfig` or compute automatically
+
+**Tests**: Verify q scaling produces valid ranges for various instance sizes.
+
+### Phase S6: Enhanced Local Search
+
+**Impact**: Medium. Current postprocess has only 3 operators with limited passes.
+
+**Changes (surge)**:
+- Add or-opt moves (relocate subsequences of 1-3 stops)
+- Add cross-exchange (swap subsequences between routes)
+- Increase `SG_ROUTE_MAX_INTENSIFY_PASSES` based on instance size
+
+**Tests**: Verify local search operators improve solution quality on known instances.
+
+### Phase S7: Stagnation Detection
+
+**Impact**: Low-medium. When the solver stagnates, restart from perturbed best solution.
+
+**Changes (arbor)**:
+- Add stagnation callback or hook in ALNS loop
+- Support solution perturbation (large random destroy + repair from best)
+
+**Changes (surge)**:
+- Register stagnation handler that triggers large-neighborhood perturbation
+
+**Tests**: Verify stagnation detection fires after N iterations without improvement.

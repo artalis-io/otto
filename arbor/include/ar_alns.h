@@ -56,4 +56,6 @@ ARStatus ar_alns_get_destroy_stats(const ARALNSContext *ctx, int index,
 ARStatus ar_alns_get_repair_stats(const ARALNSContext *ctx, int index,
                                   ARALNSOperatorStats *out_stats);
 
+void ar_alns_calibrate_sa(ARALNSParams *params, double initial_cost, int max_iterations);
+
 #endif /* ARBOR_AR_ALNS_H */

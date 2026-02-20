@@ -751,3 +751,30 @@ ARStatus ar_alns_get_repair_stats(const ARALNSContext *ctx, int index,
     *out_stats = ctx->repair_ops[index].stats;
     return AR_STATUS_OK;
 }
+
+void ar_alns_calibrate_sa(ARALNSParams *params, double initial_cost,
+                           int max_iterations) {
+    double abs_cost;
+    double t0;
+
+    if (!params || max_iterations <= 0) {
+        return;
+    }
+
+    abs_cost = fabs(initial_cost);
+    if (abs_cost < 1e-12) {
+        abs_cost = 1.0;
+    }
+
+    /* T0 set so a 5%-worse solution is accepted with ~50% probability.
+       Derivation: P(accept) = exp(-delta/T) = 0.5
+       => T = delta / ln(2) = 0.05 * cost / ln(2) */
+    t0 = 0.05 * abs_cost / 0.693147180559945;
+
+    /* cooling_rate chosen so temperature drops to 0.1% of T0 after
+       max_iterations: T0 * cr^N = 0.001 * T0
+       => cr = exp(ln(0.001) / N) = exp(-6.9078 / N) */
+    params->accept_type = AR_ACCEPT_SA;
+    params->initial_temp = t0;
+    params->cooling_rate = exp(-6.907755278982137 / (double)max_iterations);
+}

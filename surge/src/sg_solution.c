@@ -509,7 +509,9 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
     sol->route_distance = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
 
     if (ctx->dimension_count > 0) {
-        size_t load_size = (size_t)ctx->num_vehicles * (size_t)sol->stop_stride *
+        /* +1 per vehicle because load is a prefix sum: entry i holds cumulative
+           load AFTER stop i, so we need stop_stride + 1 slots per vehicle. */
+        size_t load_size = (size_t)ctx->num_vehicles * ((size_t)sol->stop_stride + 1U) *
                            (size_t)ctx->dimension_count;
         sol->route_stop_load = (double *)calloc(load_size, sizeof(double));
     }
@@ -597,7 +599,7 @@ void *sg_route_solution_copy(const void *solution, void *user_ctx) {
         memcpy(dst->route_distance, src->route_distance,
                (size_t)src->num_vehicles * sizeof(double));
         if (src->route_stop_load && dst->route_stop_load && ctx->dimension_count > 0) {
-            size_t load_size = (size_t)src->num_vehicles * (size_t)src->stop_stride *
+            size_t load_size = (size_t)src->num_vehicles * ((size_t)src->stop_stride + 1U) *
                                (size_t)ctx->dimension_count;
             memcpy(dst->route_stop_load, src->route_stop_load, load_size * sizeof(double));
         }

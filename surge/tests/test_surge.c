@@ -1170,6 +1170,35 @@ static void test_capacity_check_incremental(void) {
     sg_free(ctx);
 }
 
+static void test_sa_acceptance_produces_valid_solution(void) {
+    SGContext *ctx = make_config(300, 0xBEEF);
+    uint32_t depot;
+    int i;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    sg_depot_set_time_window(ctx, depot, 0, 86400);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 200.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 200.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 200.0);
+
+    for (i = 0; i < 12; i++) {
+        double x = 10.0 + (double)(i % 4) * 25.0;
+        double y = 10.0 + (double)(i / 4) * 25.0;
+        add_delivery_request(ctx, x, y, 0, 86400, 120, -15.0);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_total_distance(ctx) > 0.0);
+    assert(sg_get_used_vehicle_count(ctx) > 0);
+    {
+        SGStats st;
+        sg_get_stats(ctx, &st);
+        assert(st.iterations > 0);
+    }
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -1213,6 +1242,7 @@ int main(void) {
     RUN_TEST(test_cache_after_insert_remove_cycle);
     RUN_TEST(test_forward_slack_rejects_infeasible);
     RUN_TEST(test_capacity_check_incremental);
+    RUN_TEST(test_sa_acceptance_produces_valid_solution);
 
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
