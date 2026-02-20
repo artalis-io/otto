@@ -509,18 +509,34 @@ static void test_markowitz_reserved_row_regression(void) {
  * Test 8: GE identity-placement regression — L-row tracking across row swaps
  * ============================================================================ */
 static void test_ge_identity_lrow_regression(void) {
-    printf("  GE: identity-placement L-row regression (m=6, k=4)...\n");
+    printf("  GE: identity-placement L-row regression (m=24, k=16)...\n");
 
-    const int m = 6;
-    double A[36] = {
-        /* c0 c1 c2 c3 c4 c5 */
-           4, 0, 0, 0, 0, 0,  /* r0 */
-           0, 5, 0, 0, 0, 0,  /* r1 */
-           0, 0, 6, 0, 0, 0,  /* r2 */
-           0, 0, 0, 7, 0, 0,  /* r3 */
-           2, 0, 0, 0, 0, 1,  /* r4 -> identity col 5 */
-           0, 3, 0, 0, 1, 0   /* r5 -> identity col 4 */
-    };
+    const int m = 24;
+    const int k = 16;
+    double *A = (double *)calloc((size_t)m * m, sizeof(double));
+
+    /* Structural block (k=16) with stable pivots and a little coupling.
+     * Keep columns non-singleton so symbolic identity split is deterministic. */
+    for (int j = 0; j < k; j++) {
+        A[j * m + j] = 6.0 + 0.01 * j;
+        A[((j + 1) % k) * m + j] = 0.2;
+    }
+
+    /* Add stress entries from identity rows into structural columns to ensure
+     * row reservation logic remains active during GE. */
+    for (int t = 0; t < m - k; t++) {
+        int row = k + t;
+        int col = t;
+        A[row * m + col] = 2.0 + 0.1 * t;
+    }
+
+    /* Identity columns (16..23) with reversed row mapping.
+     * This forces identity_placement swaps so L_row remapping is exercised. */
+    for (int t = 0; t < m - k; t++) {
+        int col = k + t;
+        int row = (m - 1) - t;
+        A[row * m + col] = 1.0;
+    }
 
     SparseMatrix *B = dense_to_csc(A, m, m);
 
@@ -549,7 +565,7 @@ static void test_ge_identity_lrow_regression(void) {
         double max_xdiff = 0.0;
 
         for (int trial = 0; trial < 4; trial++) {
-            double b1[6], b2[6], x1[6], x2[6];
+            double b1[24], b2[24], x1[24], x2[24];
             for (int i = 0; i < m; i++) {
                 double rhs = (double)(trial * 5 + 2 * i + 1);
                 b1[i] = rhs;
@@ -582,6 +598,7 @@ static void test_ge_identity_lrow_regression(void) {
     lu_free(lu_ge);
     lu_free(lu_dense);
     free_csc(B);
+    free(A);
 }
 
 /* ============================================================================
@@ -631,6 +648,82 @@ static void test_markowitz_failure_reason_counters(void) {
 }
 
 /* ============================================================================
+ * Test 10: Sparse fallback reason + stage telemetry counters
+ * ============================================================================ */
+static void test_sparse_fallback_reason_and_stage_telemetry(void) {
+    printf("  LU telemetry: fallback reasons + stage timers...\n");
+
+    /* Case A: small matrix forces sparse->dense fallback with explicit reason. */
+    {
+        const int m = 10;
+        double *A = (double *)calloc((size_t)m * m, sizeof(double));
+        for (int i = 0; i < m; i++) {
+            A[i * m + i] = 4.0 + 0.1 * i;
+            if (i + 1 < m) A[(i + 1) * m + i] = 0.2;
+        }
+        SparseMatrix *B = dense_to_csc(A, m, m);
+        LUFactorization *lu = lu_create(m);
+
+        int rc = lu_factorize(lu, B);
+        ASSERT_INT_EQ(rc, 0, "telemetry small: factorize");
+        ASSERT_INT_EQ(lu->used_dense_fallback_last, 1, "telemetry small: dense fallback used");
+        ASSERT_INT_EQ(lu->sparse_fallback_last_reason, LU_SPARSE_FALLBACK_SMALL_MATRIX,
+                      "telemetry small: fallback reason=small_matrix");
+        ASSERT(lu->sparse_fallback_reason_small_matrix > 0,
+               "telemetry small: small-matrix counter incremented");
+        ASSERT_INT_EQ(lu->sparse_fallback_reason_symbolic, 0,
+                      "telemetry small: no symbolic fallback count");
+        ASSERT_INT_EQ(lu->sparse_fallback_reason_numeric, 0,
+                      "telemetry small: no numeric fallback count");
+        ASSERT_INT_EQ(lu->perf_symbolic_calls, 0,
+                      "telemetry small: symbolic path not called");
+        ASSERT(lu->perf_last_dense_factorize_ms >= 0.0,
+               "telemetry small: dense factorize timer captured");
+
+        lu_free(lu);
+        free_csc(B);
+        free(A);
+    }
+
+    /* Case B: sparse path succeeds and records symbolic/numeric stage timing. */
+    {
+        const int m = 60;
+        const int k = 40;
+        double *A = (double *)calloc((size_t)m * m, sizeof(double));
+
+        for (int j = 0; j < k; j++) {
+            A[j * m + j] = 8.0 + 0.01 * j;
+            A[((j + 1) % k) * m + j] = 0.1;
+        }
+        for (int t = 0; t < m - k; t++) {
+            int row = k + t;
+            A[row * m + (k + t)] = 1.0;
+        }
+
+        SparseMatrix *B = dense_to_csc(A, m, m);
+        LUFactorization *lu = lu_create(m);
+        lu->mkz_enabled = 1;
+        lu->sn_enabled = 0;
+
+        int rc = lu_factorize(lu, B);
+        ASSERT_INT_EQ(rc, 0, "telemetry sparse: factorize");
+        ASSERT_INT_EQ(lu->used_dense_fallback_last, 0, "telemetry sparse: no dense fallback");
+        ASSERT_INT_EQ(lu->sparse_fallback_last_reason, LU_SPARSE_FALLBACK_NONE,
+                      "telemetry sparse: fallback reason=none");
+        ASSERT(lu->perf_symbolic_calls > 0, "telemetry sparse: symbolic called");
+        ASSERT(lu->perf_symbolic_cache_misses > 0, "telemetry sparse: symbolic miss recorded");
+        ASSERT(lu->perf_last_symbolic_ms >= 0.0, "telemetry sparse: symbolic timer captured");
+        ASSERT(lu->perf_last_sparse_numeric_ms >= 0.0, "telemetry sparse: sparse numeric timer captured");
+        ASSERT(lu->perf_total_sparse_numeric_ms >= lu->perf_last_sparse_numeric_ms,
+               "telemetry sparse: sparse numeric total accumulates");
+
+        lu_free(lu);
+        free_csc(B);
+        free(A);
+    }
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -645,6 +738,7 @@ int main(void) {
     test_markowitz_reserved_row_regression();
     test_ge_identity_lrow_regression();
     test_markowitz_failure_reason_counters();
+    test_sparse_fallback_reason_and_stage_telemetry();
 
     printf("\nIntegration (A/B Comparison):\n");
     test_markowitz_integration_small_lp();

@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <limits.h>
+#include <sys/time.h>
 #include "lp.h"
 #include "lu_supernode.h"
 
@@ -37,6 +38,12 @@ static void lu_set_failure(LUFactorization *lu, int reason) {
     if (lu) {
         lu->last_failure_reason = reason;
     }
+}
+
+static inline double perf_now_ms(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec * 1000.0 + tv.tv_usec / 1000.0;
 }
 
 /* ============================================================================
@@ -289,15 +296,32 @@ LUFactorization* lu_create(int m) {
     lu->mkz_fail_capacity = 0;
     lu->sparse_dense_fallbacks = 0;
     lu->used_dense_fallback_last = 0;
+    lu->sparse_fallback_last_reason = LU_SPARSE_FALLBACK_NONE;
+    lu->sparse_fallback_reason_small_matrix = 0;
+    lu->sparse_fallback_reason_symbolic = 0;
+    lu->sparse_fallback_reason_numeric = 0;
     lu->identity_sep_failures = 0;
     lu->perf_factorize_calls = 0;
     lu->perf_last_basis_nnz = 0;
     lu->perf_last_m = 0;
     lu->perf_last_k = 0;
+    lu->perf_symbolic_calls = 0;
+    lu->perf_symbolic_cache_hits = 0;
+    lu->perf_symbolic_cache_misses = 0;
+    lu->perf_last_symbolic_ms = 0.0;
+    lu->perf_last_sparse_numeric_ms = 0.0;
+    lu->perf_last_dense_ge_numeric_ms = 0.0;
+    lu->perf_last_supernode_numeric_ms = 0.0;
+    lu->perf_last_dense_factorize_ms = 0.0;
     lu->perf_last_a_struct_build_ms = 0.0;
     lu->perf_last_markowitz_numeric_ms = 0.0;
     lu->perf_last_identity_placement_ms = 0.0;
     lu->perf_last_coo_to_csc_ms = 0.0;
+    lu->perf_total_symbolic_ms = 0.0;
+    lu->perf_total_sparse_numeric_ms = 0.0;
+    lu->perf_total_dense_ge_numeric_ms = 0.0;
+    lu->perf_total_supernode_numeric_ms = 0.0;
+    lu->perf_total_dense_factorize_ms = 0.0;
     lu->perf_total_a_struct_build_ms = 0.0;
     lu->perf_total_markowitz_numeric_ms = 0.0;
     lu->perf_total_identity_placement_ms = 0.0;
@@ -425,10 +449,16 @@ int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
     }
     lu_set_failure(lu, LU_FAIL_NONE);
     lu->used_dense_fallback_last = 0;
+    lu->sparse_fallback_last_reason = LU_SPARSE_FALLBACK_NONE;
     lu->perf_factorize_calls++;
     lu->perf_last_basis_nnz = B->nnz;
     lu->perf_last_m = B->nrows;
     lu->perf_last_k = 0;
+    lu->perf_last_symbolic_ms = 0.0;
+    lu->perf_last_sparse_numeric_ms = 0.0;
+    lu->perf_last_dense_ge_numeric_ms = 0.0;
+    lu->perf_last_supernode_numeric_ms = 0.0;
+    lu->perf_last_dense_factorize_ms = 0.0;
     lu->perf_last_a_struct_build_ms = 0.0;
     lu->perf_last_markowitz_numeric_ms = 0.0;
     lu->perf_last_identity_placement_ms = 0.0;
@@ -463,10 +493,17 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
         lu_set_failure(lu, LU_FAIL_BAD_INPUT);
         return -1;
     }
+    double t_dense_start_ms = perf_now_ms();
+#define DENSE_RETURN(code) do { \
+    double elapsed_ms__ = perf_now_ms() - t_dense_start_ms; \
+    lu->perf_last_dense_factorize_ms = elapsed_ms__; \
+    lu->perf_total_dense_factorize_ms += elapsed_ms__; \
+    return (code); \
+} while (0)
     lu_set_failure(lu, LU_FAIL_NONE);
     if (B->nrows != B->ncols || B->nrows != lu->m) {
         lu_set_failure(lu, LU_FAIL_BAD_INPUT);
-        return -1;
+        DENSE_RETURN(-1);
     }
 
     int m = lu->m;
@@ -475,7 +512,7 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
     double *A = lu->dense_work;
     if (!A) {
         lu_set_failure(lu, LU_FAIL_FACTOR_ALLOC);
-        return -1;
+        DENSE_RETURN(-1);
     }
 
     /* Zero the workspace */
@@ -575,7 +612,7 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
                         lu->allow_regularization, lu->max_regularizations);
 #endif
                 lu_set_failure(lu, LU_FAIL_FACTOR_SINGULAR);
-                return -1;  /* Truly singular, no redundant row to help */
+                DENSE_RETURN(-1);  /* Truly singular, no redundant row to help */
             }
         }
 
@@ -636,7 +673,7 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
         lu->LU_out_capacity = new_cap;
         if (!lu->L_rowidx || !lu->L_values || !lu->U_rowidx || !lu->U_values) {
             lu_set_failure(lu, LU_FAIL_FACTOR_ALLOC);
-            return -1;
+            DENSE_RETURN(-1);
         }
     }
     memset(lu->L_colptr, 0, (m + 1) * sizeof(int));
@@ -730,7 +767,8 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
 
     /* Note: A is pre-allocated lu->dense_work, no free needed */
     lu_set_failure(lu, LU_FAIL_NONE);
-    return 0;
+    DENSE_RETURN(0);
+#undef DENSE_RETURN
 }
 
 /* ============================================================================

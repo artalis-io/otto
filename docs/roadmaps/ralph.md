@@ -2179,6 +2179,14 @@ Track execution with these phases:
    Every step must pass `make -C ralph test`, `make -C ralph test-netlib-gate`,
    and canary subset `fit1p|nesm|bandm|scagr25`.
 
+Progress update (2026-02-20):
+- Stage-level telemetry v1 is now wired in LU internals and benchmark JSON:
+  symbolic calls/cache hit-miss, sparse numeric stage split (Markowitz/supernode/GE),
+  dense-factorization timing, and sparse→dense fallback reason counters
+  (`small_matrix`, `symbolic`, `numeric`).
+- Removed the strict `num_identity >= m/4` symbolic gate so sparse LU remains eligible
+  on low-identity bases (`bandm`, `scagr25` class), eliminating avoidable symbolic fallbacks.
+
 ### 8.9 NETLIB Small-Canary Coverage
 
 Added explicit NETLIB small-canary coverage (tiers 0-1 plus `beaconfd`) to keep recurrent

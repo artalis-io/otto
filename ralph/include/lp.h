@@ -99,6 +99,14 @@ typedef enum {
     LU_FAIL_FACTOR_ALLOC
 } LUFailureReason;
 
+/* Sparse-efficient -> dense fallback classification (per lu_factorize call). */
+typedef enum {
+    LU_SPARSE_FALLBACK_NONE = 0,
+    LU_SPARSE_FALLBACK_SMALL_MATRIX,
+    LU_SPARSE_FALLBACK_SYMBOLIC,
+    LU_SPARSE_FALLBACK_NUMERIC
+} LUSparseFallbackReason;
+
 /* LP model internal representation */
 typedef struct {
     /* Problem dimensions */
@@ -276,6 +284,10 @@ typedef struct {
     /* Sparse-efficient fallback telemetry */
     int sparse_dense_fallbacks;  /* lu_factorize_sparse_efficient -> lu_factorize_dense */
     int used_dense_fallback_last;/* 1 if last lu_factorize call used dense fallback */
+    int sparse_fallback_last_reason;      /* LUSparseFallbackReason */
+    int sparse_fallback_reason_small_matrix;
+    int sparse_fallback_reason_symbolic;
+    int sparse_fallback_reason_numeric;
     int identity_sep_failures;   /* Identity-placement failures in sparse-efficient path */
 
     /* Supernodal LU (T2.1) */
@@ -291,10 +303,23 @@ typedef struct {
     int perf_last_basis_nnz;       /* Input basis nnz for last factorization */
     int perf_last_m;               /* Basis dimension (m) for last factorization */
     int perf_last_k;               /* Structural block width (k) for last factorization */
+    int perf_symbolic_calls;
+    int perf_symbolic_cache_hits;
+    int perf_symbolic_cache_misses;
+    double perf_last_symbolic_ms;
+    double perf_last_sparse_numeric_ms;
+    double perf_last_dense_ge_numeric_ms;
+    double perf_last_supernode_numeric_ms;
+    double perf_last_dense_factorize_ms;
     double perf_last_a_struct_build_ms;
     double perf_last_markowitz_numeric_ms;
     double perf_last_identity_placement_ms;
     double perf_last_coo_to_csc_ms;
+    double perf_total_symbolic_ms;
+    double perf_total_sparse_numeric_ms;
+    double perf_total_dense_ge_numeric_ms;
+    double perf_total_supernode_numeric_ms;
+    double perf_total_dense_factorize_ms;
     double perf_total_a_struct_build_ms;
     double perf_total_markowitz_numeric_ms;
     double perf_total_identity_placement_ms;

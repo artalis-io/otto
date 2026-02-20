@@ -450,7 +450,6 @@ static int* compute_lp_column_ordering(const SparseMatrix *B) {
         return NULL;
     }
 
-    int num_identity = 0;
     for (int j = 0; j < n; j++) {
         int nnz = B->colptr[j + 1] - B->colptr[j];
         col_counts[j] = nnz;
@@ -461,7 +460,6 @@ static int* compute_lp_column_ordering(const SparseMatrix *B) {
             double val = B->values[p];
             if (fabs(fabs(val) - 1.0) < 1e-10) {
                 is_identity[j] = 1;
-                num_identity++;
             }
         }
     }
@@ -1675,7 +1673,7 @@ static int symbolic_match_col(const SparseMatrix *B,
  * Populates ws_is_identity, ws_identity_row, ws_identity_val, ws_row_used,
  * ws_col_order, ws_col_order_inv, ws_struct_nnz, sym_num_identity, sym_k.
  *
- * Returns 0 on success, -1 if too few identity columns (caller falls back to dense).
+ * Returns 0 on success, -1 on alloc/structural matching failure.
  */
 static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
     int m = lu->m;
@@ -1775,23 +1773,12 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
         row_used[candidate_identity_row] = 0;
         row_identity_col[candidate_identity_row] = -1;
         num_identity--;
-        if (num_identity < m / 4) {
-            free(row_match_col);
-            free(row_seen);
-            free(row_identity_col);
-            return -1;
-        }
     }
 
     free(row_match_col);
     free(row_seen);
 
     free(row_identity_col);
-
-    /* If few identity columns, not worth the overhead */
-    if (num_identity < m / 4) {
-        return -1;
-    }
 
     uint64_t fingerprint = FNV_OFFSET_BASIS;
     for (int j = 0; j < m; j++) {
@@ -1806,8 +1793,10 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
 
     /* Check symbolic cache: if fingerprint matches, reuse previous analysis */
     if (lu->sym_valid && lu->sym_fingerprint == fingerprint) {
+        lu->perf_symbolic_cache_hits++;
         return 0;  /* Cache hit — ws arrays still valid from last call */
     }
+    lu->perf_symbolic_cache_misses++;
 
     int k = m - num_identity;  /* Number of structural columns */
 
@@ -2464,9 +2453,32 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     int m = lu->m;
     double t_a_struct_build_ms = 0.0;
     double t_markowitz_numeric_ms = 0.0;
+    double t_supernode_numeric_ms = 0.0;
+    double t_dense_ge_numeric_ms = 0.0;
     double t_identity_placement_ms = 0.0;
     double t_coo_to_csc_ms = 0.0;
     double t_stage_start_ms = 0.0;
+#define NUMERIC_COMMIT() do { \
+    lu->perf_last_a_struct_build_ms = t_a_struct_build_ms; \
+    lu->perf_last_markowitz_numeric_ms = t_markowitz_numeric_ms; \
+    lu->perf_last_supernode_numeric_ms = t_supernode_numeric_ms; \
+    lu->perf_last_dense_ge_numeric_ms = t_dense_ge_numeric_ms; \
+    lu->perf_last_sparse_numeric_ms = \
+        t_markowitz_numeric_ms + t_supernode_numeric_ms + t_dense_ge_numeric_ms; \
+    lu->perf_last_identity_placement_ms = t_identity_placement_ms; \
+    lu->perf_last_coo_to_csc_ms = t_coo_to_csc_ms; \
+    lu->perf_total_a_struct_build_ms += t_a_struct_build_ms; \
+    lu->perf_total_markowitz_numeric_ms += t_markowitz_numeric_ms; \
+    lu->perf_total_supernode_numeric_ms += t_supernode_numeric_ms; \
+    lu->perf_total_dense_ge_numeric_ms += t_dense_ge_numeric_ms; \
+    lu->perf_total_sparse_numeric_ms += lu->perf_last_sparse_numeric_ms; \
+    lu->perf_total_identity_placement_ms += t_identity_placement_ms; \
+    lu->perf_total_coo_to_csc_ms += t_coo_to_csc_ms; \
+} while (0)
+#define NUMERIC_RETURN(code) do { \
+    NUMERIC_COMMIT(); \
+    return (code); \
+} while (0)
 
     int *identity_row = lu->ws_identity_row;
     double *identity_val = lu->ws_identity_val;
@@ -2504,7 +2516,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             }
         }
         if (struct_pos != k || ident_pos != m) {
-            return -1;
+            NUMERIC_RETURN(-1);
         }
         for (int i = 0; i < m; i++) {
             row_pos[row_perm[i]] = i;
@@ -2526,7 +2538,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
         lu->coo_capacity = new_cap;
         if (!lu->coo_L_row || !lu->coo_L_col || !lu->coo_L_val ||
             !lu->coo_U_row || !lu->coo_U_col || !lu->coo_U_val) {
-            return -1;
+            NUMERIC_RETURN(-1);
         }
     }
 
@@ -2718,6 +2730,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             }
 
             int sn_reg = 0;
+            t_stage_start_ms = perf_now_ms();
             int rc = sn_factorize(A_struct, m, k, row_perm, row_pos,
                                   lu->pivot_tol, row_is_identity,
                                   sn_sym->supernodes, sn_sym->num_supernodes,
@@ -2729,6 +2742,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                                   U_row, U_col, U_val, &U_nnz,
                                   lu->coo_capacity,
                                   lu->sn_work, lu->sn_work_capacity);
+            t_supernode_numeric_ms += perf_now_ms() - t_stage_start_ms;
             if (rc == 0) {
                 lu->sn_successes++;
                 lu->num_regularized = sn_reg;
@@ -2768,6 +2782,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     }
 
     /* LU factorization of structural columns with partial pivoting */
+    t_stage_start_ms = perf_now_ms();
     for (int step = 0; step < k; step++) {
         /* Find pivot in column step using only structural rows (step..k-1). */
         int pivot_row = -1;
@@ -2819,7 +2834,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                 A_struct[piv_orig * k + step] = 1.0;
                 max_val = 1.0;
             } else {
-                return -1;
+                NUMERIC_RETURN(-1);
             }
         }
 
@@ -2871,6 +2886,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             }
         }
     }
+    t_dense_ge_numeric_ms += perf_now_ms() - t_stage_start_ms;
 
 identity_placement:
     /* Handle identity columns (steps k..m-1).
@@ -2887,7 +2903,7 @@ identity_placement:
         if (perm_pos < step) {
             /* Row already used - shouldn't happen if identity detection is correct */
             lu->identity_sep_failures++;
-            return -1;
+            NUMERIC_RETURN(-1);
         }
 
         /* Swap to bring this row to position step + update inverse */
@@ -2937,7 +2953,7 @@ identity_placement:
         lu->U_values = (double*)calloc(new_cap, sizeof(double));
         lu->LU_out_capacity = new_cap;
         if (!lu->L_rowidx || !lu->L_values || !lu->U_rowidx || !lu->U_values) {
-            return -1;
+            NUMERIC_RETURN(-1);
         }
     }
     memset(lu->L_colptr, 0, (m + 1) * sizeof(int));
@@ -3016,16 +3032,9 @@ identity_placement:
         lu->ft_col_order_inv[i] = i;
     }
 
-    lu->perf_last_a_struct_build_ms = t_a_struct_build_ms;
-    lu->perf_last_markowitz_numeric_ms = t_markowitz_numeric_ms;
-    lu->perf_last_identity_placement_ms = t_identity_placement_ms;
-    lu->perf_last_coo_to_csc_ms = t_coo_to_csc_ms;
-    lu->perf_total_a_struct_build_ms += t_a_struct_build_ms;
-    lu->perf_total_markowitz_numeric_ms += t_markowitz_numeric_ms;
-    lu->perf_total_identity_placement_ms += t_identity_placement_ms;
-    lu->perf_total_coo_to_csc_ms += t_coo_to_csc_ms;
-
-    return 0;
+    NUMERIC_RETURN(0);
+#undef NUMERIC_RETURN
+#undef NUMERIC_COMMIT
 }
 
 /*
@@ -3033,7 +3042,7 @@ identity_placement:
  *
  * Calls lu_symbolic_analyze() for identity detection + fill-reducing column ordering,
  * then lu_numeric_factorize() for dense GE + COO→CSC conversion.
- * Falls back to lu_factorize_dense() on failure.
+ * Returns -1 when sparse-efficient path cannot proceed.
  */
 int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
     if (!lu || !B) return -1;
@@ -3043,22 +3052,33 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
 
     /* For small matrices, dense is faster due to overhead */
     if (m < 20) {
-        return lu_factorize_dense(lu, B);
+        lu->sparse_fallback_last_reason = LU_SPARSE_FALLBACK_SMALL_MATRIX;
+        lu->sparse_fallback_reason_small_matrix++;
+        return -1;
     }
 
     /* Symbolic analysis (identity detection + fill-reducing column ordering) */
+    double t_symbolic_ms = perf_now_ms();
+    lu->perf_symbolic_calls++;
     int sym_result = lu_symbolic_analyze(lu, B);
+    lu->perf_last_symbolic_ms = perf_now_ms() - t_symbolic_ms;
+    lu->perf_total_symbolic_ms += lu->perf_last_symbolic_ms;
     if (sym_result < 0) {
-        return lu_factorize_dense(lu, B);
+        lu->sparse_fallback_last_reason = LU_SPARSE_FALLBACK_SYMBOLIC;
+        lu->sparse_fallback_reason_symbolic++;
+        return -1;
     }
 
     /* Numeric factorization (dense GE + COO→CSC) */
     int num_result = lu_numeric_factorize(lu, B, lu->sym_num_identity, lu->sym_k);
     if (num_result < 0) {
         lu->sym_valid = 0;  /* Invalidate on numeric failure */
-        return lu_factorize_dense(lu, B);
+        lu->sparse_fallback_last_reason = LU_SPARSE_FALLBACK_NUMERIC;
+        lu->sparse_fallback_reason_numeric++;
+        return -1;
     }
 
+    lu->sparse_fallback_last_reason = LU_SPARSE_FALLBACK_NONE;
     return 0;
 }
 
