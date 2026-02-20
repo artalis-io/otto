@@ -4,7 +4,13 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-20, `173d430`) — Unified pressure-based periodic LU scheduler (single path),
+**Current** (2026-02-20, `5ad46a9`) — LP refactor telemetry baseline:
+stage-level LU timing/counters (symbolic cache, sparse numeric split, dense factorization timing),
+sparse fallback reason telemetry (`small_matrix` / `symbolic` / `numeric`), and removed symbolic
+`num_identity >= m/4` cutoff to avoid unnecessary dense fallback on low-identity bases.
+Latest gates: `make -C ralph test` PASS, `make -C ralph test-netlib-gate-small` PASS (26/26, dense fallback files: 0).
+
+Previous: (2026-02-20, `173d430`) — Unified pressure-based periodic LU scheduler (single path),
 Markowitz sparse LU default, and NETLIB no-regression gate with required-pass canaries:
 `bandm`, `scagr25`, `fit1p`, `nesm`.
 Latest canary gate run: 4/4 PASS, no dense fallback, no timeout regressions (including `fit1p`/`nesm`).
@@ -2164,10 +2170,10 @@ Current bottleneck on large degenerate LPs is no longer sparse→dense fallback;
 refactor wall-time plus frequent periodic reinversion (`fit1p`, `nesm`, `scagr25` class).
 Track execution with these phases:
 
-1. **Stage-level refactor telemetry**
+1. ✅ **Stage-level refactor telemetry** (done in `5ad46a9`)
    Add timers/counters for basis rebuild, symbolic analyze, sparse numeric, dense numeric,
    and internal sparse→dense fallback reasons.
-2. **Remove avoidable fallback/copies**
+2. ▶ **Remove avoidable fallback/copies** (next)
    Eliminate symbolic malloc churn and avoid dense fallback when sparse `k=m` path is viable.
 3. **Periodic scheduler effectiveness feedback**
    Keep LU hard safety triggers; adapt periodic interval using observed refactor benefit.
