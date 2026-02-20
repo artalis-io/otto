@@ -2399,18 +2399,21 @@ static int lu_factorize_markowitz(
               row_deg[row]--;
           } }
 
-        /* Remove pivot row entries from column SVAs (cleanup) */
-        for (int jj = 0; jj < k; jj++) {
-            if (!col_alive[jj]) continue;
-            int s = cv_ptr[jj], n2 = cv_len[jj];
-            for (int e = 0; e < n2; e++) {
-                if (cv_idx[s + e] == piv_row) {
-                    CV_REMOVE(jj, e);
-                    DG_REMOVE(jj); col_deg[jj]--; DG_INSERT(jj);
-                    break;
-                }
-            }
-        }
+        /* Remove pivot-row entries from column SVAs (cleanup).
+         * Use row SVA to visit only affected columns instead of scanning all k columns. */
+        { int ps = rv_ptr[piv_row], pn = rv_len[piv_row];
+          for (int pe = 0; pe < pn; pe++) {
+              int jj = rv_idx[ps + pe];
+              if (!col_alive[jj]) continue;
+              int s = cv_ptr[jj], n2 = cv_len[jj];
+              for (int e = 0; e < n2; e++) {
+                  if (cv_idx[s + e] == piv_row) {
+                      CV_REMOVE(jj, e);
+                      DG_REMOVE(jj); col_deg[jj]--; DG_INSERT(jj);
+                      break;
+                  }
+              }
+          } }
 
         /* Phase C: Clean up scatter arrays */
         { int s = rv_ptr[piv_row], n2 = rv_len[piv_row];
