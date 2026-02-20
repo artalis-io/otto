@@ -2127,3 +2127,28 @@ No regressions on any NETLIB problem. All 378 Ralph + 123 FuelWise tests pass.
 problems where Markowitz factorization cost exceeds spike application savings. The threshold m ≥ 500
 preserves existing performance while enabling gains on truly large problems. Similarly, supernodal
 LU at m > 300 is a net win but m > 150 adds overhead for e226-class problems (m~220).
+
+### 8.7 Unified Pressure-Based Periodic Refactor Scheduler (Feb 2026)
+
+Replaced the split "legacy large-basis guardrail + adaptive health skip" with a single scheduler
+in `simplex.c` that computes one pressure signal and one periodic plan for both Phase 1 and Phase 2.
+
+**Signals used:**
+- `size_pressure`: ramps from 0 to 1 between `m=350` and `m=500` (large bases stay conservative)
+- `health_pressure`: weighted LU health (`degeneracy/Bland`, spike-pool usage, condition estimate, growth)
+- `update_pressure`: `num_updates / max_updates` (forces periodic refresh as update chains age)
+
+**How interval is chosen:**
+1. Start from legacy phase base interval (`max_updates/3` in phase 1, `max_updates/4` in phase 2,
+   clamped to phase min/max).
+2. Tighten base interval toward phase minimum using `size_pressure`.
+3. Relax only a bounded portion of the remaining range (1/3 span) when pressure is low.
+4. Use `run_pressure = max(interval_pressure, update_pressure)` to gate actual execution.
+
+**When periodic refactor runs:**
+- `num_updates` must satisfy age and cadence checks (`min_update_age`, multiple of interval).
+- Under strong cycling (`use_bland` or high degeneracy), periodic refactor is always eligible.
+- Otherwise it runs when `run_pressure >= 0.40`.
+
+This keeps large two-phase NETLIB cases (`fit1p`, `nesm`) on conservative periodic cadence while
+still allowing medium/small cases to skip unnecessary refactors when LU health is stable.

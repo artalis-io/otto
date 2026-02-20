@@ -84,79 +84,200 @@ typedef enum {
 #define PHASE2_PERIODIC_REFACTOR_MIN_INTERVAL 10
 #define PHASE2_PERIODIC_REFACTOR_MAX_INTERVAL 80
 #define PERIODIC_REFACTOR_MIN_UPDATE_AGE 8
-#define LARGE_BASIS_PERIODIC_M 500
-#define LARGE_BASIS_PHASE1_INTERVAL 24
-#define LARGE_BASIS_PHASE2_INTERVAL 10
+#define PERIODIC_REFACTOR_PRESSURE_TRIGGER 0.40
+#define PERIODIC_REFACTOR_SIZE_START_M 350
+#define PERIODIC_REFACTOR_SIZE_FULL_M 500
+#define PERIODIC_REFACTOR_RELAX_NUM 1
+#define PERIODIC_REFACTOR_RELAX_DEN 3
 
-static int compute_periodic_refactor_interval(const SimplexTableau *tab,
-                                              int phase,
-                                              int use_bland,
-                                              int degenerate_count) {
-    if (!tab || !tab->lu || !tab->use_two_phase) return 0;
-
-    /* Guardrail: large two-phase bases are sensitive to stale FT updates.
-     * Keep legacy periodic cadence to avoid long update chains. */
-    if (tab->m >= LARGE_BASIS_PERIODIC_M) {
-        return (phase == 1) ? LARGE_BASIS_PHASE1_INTERVAL : LARGE_BASIS_PHASE2_INTERVAL;
-    }
-
-    const int max_updates = tab->lu->max_updates;
+typedef struct {
     int interval;
-    int min_interval;
-    int max_interval;
+    int min_update_age;
+    double interval_pressure;
+    double run_pressure;
+} PeriodicRefactorPolicy;
 
+static double clamp_unit_interval(double x) {
+    if (!(x > 0.0)) return 0.0;
+    if (x > 1.0) return 1.0;
+    return x;
+}
+
+static int periodic_interval_bounds(int phase, int *min_interval, int *max_interval) {
+    if (!min_interval || !max_interval) return 0;
     if (phase == 1) {
-        interval = max_updates / 3;
-        min_interval = PHASE1_PERIODIC_REFACTOR_MIN_INTERVAL;
-        max_interval = PHASE1_PERIODIC_REFACTOR_MAX_INTERVAL;
-    } else {
-        interval = max_updates / 4;
-        min_interval = PHASE2_PERIODIC_REFACTOR_MIN_INTERVAL;
-        max_interval = PHASE2_PERIODIC_REFACTOR_MAX_INTERVAL;
+        *min_interval = PHASE1_PERIODIC_REFACTOR_MIN_INTERVAL;
+        *max_interval = PHASE1_PERIODIC_REFACTOR_MAX_INTERVAL;
+        return 1;
+    }
+    if (phase == 2) {
+        *min_interval = PHASE2_PERIODIC_REFACTOR_MIN_INTERVAL;
+        *max_interval = PHASE2_PERIODIC_REFACTOR_MAX_INTERVAL;
+        return 1;
+    }
+    return 0;
+}
+
+static double compute_large_basis_pressure(int m) {
+    if (m <= PERIODIC_REFACTOR_SIZE_START_M) return 0.0;
+    if (m >= PERIODIC_REFACTOR_SIZE_FULL_M) return 1.0;
+    return (double)(m - PERIODIC_REFACTOR_SIZE_START_M) /
+           (double)(PERIODIC_REFACTOR_SIZE_FULL_M - PERIODIC_REFACTOR_SIZE_START_M);
+}
+
+static double compute_lu_health_pressure(int spike_pool_used,
+                                         int spike_pool_capacity,
+                                         double cond_estimate,
+                                         double growth_factor,
+                                         int use_bland,
+                                         int degenerate_count) {
+    double deg_pressure = use_bland ? 1.0 : clamp_unit_interval((double)degenerate_count / 20.0);
+    double spike_pressure = 0.0;
+    double cond_pressure = 0.0;
+    double growth_pressure = 0.0;
+    double health_pressure;
+
+    if (spike_pool_capacity > 0 && spike_pool_used > 0) {
+        spike_pressure = clamp_unit_interval((double)spike_pool_used / (double)spike_pool_capacity);
+    }
+    if (isfinite(cond_estimate) && cond_estimate > 1.0) {
+        cond_pressure = clamp_unit_interval(log10(cond_estimate) / 8.0);
+    }
+    if (isfinite(growth_factor) && growth_factor > 1.0) {
+        growth_pressure = clamp_unit_interval(growth_factor / RALPH_LU_GROWTH_REFACTOR_THRESHOLD);
     }
 
-    if (interval < min_interval) interval = min_interval;
-    if (interval > max_interval) interval = max_interval;
+    health_pressure = 0.45 * deg_pressure +
+                      0.25 * spike_pressure +
+                      0.15 * cond_pressure +
+                      0.15 * growth_pressure;
 
-    /* Under cycling pressure, keep conservative (more frequent) periodic refresh. */
-    if (use_bland || degenerate_count >= 20) {
-        interval = min_interval;
+    if (deg_pressure > health_pressure) health_pressure = deg_pressure;
+    if (growth_pressure > health_pressure) health_pressure = growth_pressure;
+    return clamp_unit_interval(health_pressure);
+}
+
+static PeriodicRefactorPolicy build_periodic_refactor_policy_from_metrics(int phase,
+                                                                           int m,
+                                                                           int max_updates,
+                                                                           int num_updates,
+                                                                           int spike_pool_used,
+                                                                           int spike_pool_capacity,
+                                                                           double cond_estimate,
+                                                                           double growth_factor,
+                                                                           int use_bland,
+                                                                           int degenerate_count) {
+    PeriodicRefactorPolicy policy = {0, 0, 0.0, 0.0};
+    int min_interval = 0;
+    int max_interval = 0;
+    int base_interval;
+    int size_interval;
+    int relax_span;
+    double size_pressure;
+    double health_pressure;
+    double update_pressure = 0.0;
+
+    if (!periodic_interval_bounds(phase, &min_interval, &max_interval)) return policy;
+
+    base_interval = (phase == 1)
+        ? ((max_updates > 0) ? (max_updates / 3) : min_interval)
+        : ((max_updates > 0) ? (max_updates / 4) : min_interval);
+    if (base_interval < min_interval) base_interval = min_interval;
+    if (base_interval > max_interval) base_interval = max_interval;
+
+    size_pressure = compute_large_basis_pressure(m);
+    size_interval = base_interval -
+                    (int)(size_pressure * (double)(base_interval - min_interval) + 0.5);
+    if (size_interval < min_interval) size_interval = min_interval;
+    if (size_interval > max_interval) size_interval = max_interval;
+
+    health_pressure = compute_lu_health_pressure(spike_pool_used,
+                                                 spike_pool_capacity,
+                                                 cond_estimate,
+                                                 growth_factor,
+                                                 use_bland,
+                                                 degenerate_count);
+    policy.interval_pressure = (health_pressure > size_pressure) ? health_pressure : size_pressure;
+
+    relax_span = max_interval - size_interval;
+    relax_span = (relax_span * PERIODIC_REFACTOR_RELAX_NUM) / PERIODIC_REFACTOR_RELAX_DEN;
+    if (relax_span < 0) relax_span = 0;
+
+    policy.interval = size_interval +
+                      (int)(((1.0 - policy.interval_pressure) * (double)relax_span) + 0.5);
+    if (policy.interval < min_interval) policy.interval = min_interval;
+    if (policy.interval > max_interval) policy.interval = max_interval;
+    if (max_updates >= min_interval && policy.interval > max_updates) {
+        policy.interval = max_updates;
     }
 
-    return interval;
+    if (max_updates > 0 && num_updates > 0) {
+        update_pressure = clamp_unit_interval((double)num_updates / (double)max_updates);
+    }
+    policy.run_pressure = policy.interval_pressure;
+    if (update_pressure > policy.run_pressure) policy.run_pressure = update_pressure;
+    if (use_bland || degenerate_count >= 20) policy.run_pressure = 1.0;
+
+    policy.min_update_age = policy.interval / 2;
+    if (policy.run_pressure >= 0.85) {
+        int early_age = policy.interval / 3;
+        if (early_age > 0 && early_age < policy.min_update_age) {
+            policy.min_update_age = early_age;
+        }
+    }
+    if (policy.min_update_age < PERIODIC_REFACTOR_MIN_UPDATE_AGE) {
+        policy.min_update_age = PERIODIC_REFACTOR_MIN_UPDATE_AGE;
+    }
+    if (policy.min_update_age > policy.interval) {
+        policy.min_update_age = policy.interval;
+    }
+
+    return policy;
+}
+
+static PeriodicRefactorPolicy compute_periodic_refactor_policy(const SimplexTableau *tab,
+                                                               int phase,
+                                                               int use_bland,
+                                                               int degenerate_count) {
+    PeriodicRefactorPolicy policy = {0, 0, 0.0, 0.0};
+
+    if (!tab || !tab->lu || !tab->use_two_phase) return policy;
+    return build_periodic_refactor_policy_from_metrics(phase,
+                                                       tab->m,
+                                                       tab->lu->max_updates,
+                                                       tab->lu->num_updates,
+                                                       tab->lu->spike_pool_used,
+                                                       tab->lu->spike_pool_capacity,
+                                                       tab->lu->cond_estimate,
+                                                       tab->lu->growth_factor,
+                                                       use_bland,
+                                                       degenerate_count);
+}
+
+static int periodic_refactor_should_run_metrics(int iter,
+                                                int num_updates,
+                                                const PeriodicRefactorPolicy *policy,
+                                                int use_bland,
+                                                int degenerate_count) {
+    if (!policy || policy->interval <= 0 || iter <= 0 || num_updates <= 0) return 0;
+    if (num_updates < policy->min_update_age) return 0;
+    if ((num_updates % policy->interval) != 0) return 0;
+
+    if (use_bland || degenerate_count >= 20) return 1;
+    return policy->run_pressure >= PERIODIC_REFACTOR_PRESSURE_TRIGGER;
 }
 
 static int should_run_periodic_refactor(const SimplexTableau *tab,
                                         int iter,
-                                        int interval,
+                                        const PeriodicRefactorPolicy *policy,
                                         int use_bland,
                                         int degenerate_count) {
-    if (!tab || !tab->lu || interval <= 0 || iter <= 0) return 0;
-    if (iter % interval != 0) return 0;
-
-    /* Large-basis guardrail: do not skip periodic refactor on health heuristics. */
-    if (tab->m >= LARGE_BASIS_PERIODIC_M) return 1;
-
-    const LUFactorization *lu = tab->lu;
-    int min_update_age = interval / 2;
-    if (min_update_age < PERIODIC_REFACTOR_MIN_UPDATE_AGE) {
-        min_update_age = PERIODIC_REFACTOR_MIN_UPDATE_AGE;
-    }
-
-    /* Skip periodic refactor right after a recent factorization. */
-    if (lu->num_updates < min_update_age) return 0;
-
-    if (use_bland || degenerate_count >= 20) return 1;
-
-    /* If LU metrics remain healthy, keep updates and avoid forced rebuild. */
-    if (lu->growth_factor < (RALPH_LU_GROWTH_REFACTOR_THRESHOLD * 0.25) &&
-        lu->cond_estimate < 1e6 &&
-        (lu->spike_pool_capacity <= 0 ||
-         lu->spike_pool_used <= (lu->spike_pool_capacity * 70) / 100)) {
-        return 0;
-    }
-
-    return 1;
+    if (!tab || !tab->lu) return 0;
+    return periodic_refactor_should_run_metrics(iter,
+                                                tab->lu->num_updates,
+                                                policy,
+                                                use_bland,
+                                                degenerate_count);
 }
 
 /*
@@ -207,6 +328,38 @@ int simplex_choose_basis_action_for_test(double pivot,
                                     lu_reason,
                                     repeat_pattern,
                                     growth_factor);
+}
+
+int simplex_periodic_refactor_plan_for_test(int phase,
+                                            int iter,
+                                            int m,
+                                            int max_updates,
+                                            int num_updates,
+                                            int spike_pool_used,
+                                            int spike_pool_capacity,
+                                            double cond_estimate,
+                                            double growth_factor,
+                                            int use_bland,
+                                            int degenerate_count,
+                                            int *interval_out,
+                                            double *pressure_out) {
+    PeriodicRefactorPolicy policy = build_periodic_refactor_policy_from_metrics(phase,
+                                                                                 m,
+                                                                                 max_updates,
+                                                                                 num_updates,
+                                                                                 spike_pool_used,
+                                                                                 spike_pool_capacity,
+                                                                                 cond_estimate,
+                                                                                 growth_factor,
+                                                                                 use_bland,
+                                                                                 degenerate_count);
+    if (interval_out) *interval_out = policy.interval;
+    if (pressure_out) *pressure_out = policy.run_pressure;
+    return periodic_refactor_should_run_metrics(iter,
+                                                num_updates,
+                                                &policy,
+                                                use_bland,
+                                                degenerate_count);
 }
 
 /* FNV-1a style mixer for deterministic trace signatures. */
@@ -4337,11 +4490,12 @@ static int simplex_phase1(SimplexSolver *solver) {
 
         /* Periodic refactorization */
         int lu_refactor_needed = lu_needs_refactorization(tab->lu);
-        int periodic_interval = compute_periodic_refactor_interval(tab, 1, use_bland, degenerate_count);
+        PeriodicRefactorPolicy periodic_policy =
+            compute_periodic_refactor_policy(tab, 1, use_bland, degenerate_count);
         int periodic_refactor = (!lu_refactor_needed &&
                                  should_run_periodic_refactor(tab,
                                                               iter,
-                                                              periodic_interval,
+                                                              &periodic_policy,
                                                               use_bland,
                                                               degenerate_count));
         int needs_refactor = lu_refactor_needed || periodic_refactor;
@@ -5046,10 +5200,11 @@ static int simplex_phase2(SimplexSolver *solver) {
          * For two-phase problems, periodic refresh is adaptive (interval + LU health). */
         int needs_refactor = lu_needs_refactorization(tab->lu);
         if (!needs_refactor) {
-            int periodic_interval = compute_periodic_refactor_interval(tab, 2, use_bland, degenerate_count);
+            PeriodicRefactorPolicy periodic_policy =
+                compute_periodic_refactor_policy(tab, 2, use_bland, degenerate_count);
             needs_refactor = should_run_periodic_refactor(tab,
                                                           iter,
-                                                          periodic_interval,
+                                                          &periodic_policy,
                                                           use_bland,
                                                           degenerate_count);
         }
