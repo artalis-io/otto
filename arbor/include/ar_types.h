@@ -51,6 +51,9 @@ typedef struct {
     double reward_better;
     double reward_accepted;
     double reward_rejected;
+
+    int restart_threshold;        /* Stagnation iters before restart from best (0=disabled) */
+    double restart_temp_ratio;    /* SA temperature ratio for reheat on restart (0..1) */
 } ARALNSParams;
 
 typedef struct {
@@ -59,6 +62,7 @@ typedef struct {
     int64_t accepted;
     int64_t rejected;
     int64_t invalid_candidates;
+    int64_t restarts;
     double best_cost;
     double elapsed_seconds;
     ARStopReason stop_reason;

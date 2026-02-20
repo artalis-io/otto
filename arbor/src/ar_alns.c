@@ -226,6 +226,12 @@ static int ar_validate_params(const ARALNSParams *params) {
     if (params->reaction_factor < 0.0 || params->reaction_factor > 1.0) {
         return 0;
     }
+    if (params->restart_threshold < 0) {
+        return 0;
+    }
+    if (params->restart_temp_ratio < 0.0 || params->restart_temp_ratio > 1.0) {
+        return 0;
+    }
 
     switch (params->accept_type) {
         case AR_ACCEPT_SA:
@@ -315,6 +321,8 @@ void ar_alns_params_default(ARALNSParams *params) {
     params->reward_better = 4.0;
     params->reward_accepted = 2.0;
     params->reward_rejected = 0.5;
+    params->restart_threshold = 0;
+    params->restart_temp_ratio = 0.5;
 }
 
 ARALNSContext *ar_alns_create(const ARALNSParams *params,
@@ -500,6 +508,24 @@ ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
                 status = AR_STATUS_LIMIT;
                 stop_reason = AR_STOP_TIME_LIMIT;
                 break;
+            }
+        }
+
+        if (ctx->params.restart_threshold > 0 &&
+            stagnation_iterations >= ctx->params.restart_threshold) {
+            /* Restart from best solution with reheated temperature */
+            void *restart_copy = ctx->ops.copy(best, ctx->ops.user_ctx);
+            if (restart_copy) {
+                ctx->ops.free(current, ctx->ops.user_ctx);
+                current = restart_copy;
+                current_cost = best_cost;
+                if (ctx->params.accept_type == AR_ACCEPT_SA &&
+                    ctx->params.restart_temp_ratio > 0.0) {
+                    temperature = ctx->params.initial_temp *
+                                  ctx->params.restart_temp_ratio;
+                }
+                stagnation_iterations = 0;
+                ctx->stats.restarts++;
             }
         }
 

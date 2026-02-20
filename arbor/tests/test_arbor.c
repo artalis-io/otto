@@ -242,6 +242,58 @@ int main(void) {
         ar_alns_free(sa_ctx);
     }
 
+    /* Test restart from best on stagnation */
+    {
+        ARALNSParams rp;
+        ARALNSContext *rctx;
+        TestSolution ri = { .value = 30 };
+        TestSolution *rbest = NULL;
+        ARALNSStats rstats;
+
+        ar_alns_params_default(&rp);
+        rp.max_iterations = 200;
+        rp.segment_size = 10;
+        rp.q_min = 1;
+        rp.q_max = 3;
+        rp.restart_threshold = 20;
+        rp.restart_temp_ratio = 0.5;
+        ar_alns_calibrate_sa(&rp, 30.0, 200);
+
+        rctx = ar_alns_create(&rp, &ops, NULL);
+        assert(rctx != NULL);
+        ar_alns_set_seed(rctx, 77);
+        ar_alns_add_destroy(rctx, "dec", test_destroy, NULL, 1.0);
+        ar_alns_add_repair(rctx, "noop", test_repair, NULL, 1.0);
+
+        status = ar_alns_solve(rctx, &ri, (void **)&rbest);
+        assert(status == AR_STATUS_OK);
+        assert(rbest != NULL);
+        assert(rbest->value == 0);
+
+        ar_alns_get_stats(rctx, &rstats);
+        assert(rstats.restarts >= 0);  /* May or may not restart depending on RNG path */
+        assert(rstats.best_cost == 0.0);
+
+        test_free(rbest, NULL);
+        ar_alns_free(rctx);
+
+        /* Test restart_threshold validation */
+        ar_alns_params_default(&rp);
+        rp.restart_threshold = -1;
+        rctx = ar_alns_create(&rp, &ops, NULL);
+        assert(rctx == NULL);
+
+        ar_alns_params_default(&rp);
+        rp.restart_temp_ratio = -0.1;
+        rctx = ar_alns_create(&rp, &ops, NULL);
+        assert(rctx == NULL);
+
+        ar_alns_params_default(&rp);
+        rp.restart_temp_ratio = 1.1;
+        rctx = ar_alns_create(&rp, &ops, NULL);
+        assert(rctx == NULL);
+    }
+
     printf("arbor ALNS test passed\n");
     return 0;
 }

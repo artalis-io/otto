@@ -91,6 +91,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
     sg_adaptive_q_bounds((int)ctx->num_requests, ctx->config.q_min, ctx->config.q_max,
                          &params.q_min, &params.q_max);
     params.target_cost = 0.0;
+    params.restart_threshold = params.max_iterations / 4;
     /* Calibrate SA temperature from distance, not total cost. The cost
        function includes large vehicle/unassigned penalties (~1e6/1e9) that
        would make the temperature absurdly hot. Distance deltas are the
@@ -224,6 +225,7 @@ SGStatus sg_solve(SGContext *ctx) {
     sg_adaptive_q_bounds((int)ctx->num_requests, ctx->config.q_min, ctx->config.q_max,
                          &params.q_min, &params.q_max);
     params.target_cost = 0.0;
+    params.restart_threshold = params.max_iterations / 4;
     ar_alns_calibrate_sa(&params, sg_bootstrap_cost(&initial, ctx),
                           params.max_iterations);
 
