@@ -89,6 +89,14 @@ typedef enum {
 #define PERIODIC_REFACTOR_SIZE_FULL_M 500
 #define PERIODIC_REFACTOR_RELAX_NUM 1
 #define PERIODIC_REFACTOR_RELAX_DEN 3
+#define PERIODIC_FEEDBACK_BIAS_LIMIT 0.25
+#define PERIODIC_FEEDBACK_DECAY 0.85
+#define PERIODIC_FEEDBACK_RELAX_STEP 0.06
+#define PERIODIC_FEEDBACK_TIGHTEN_STEP 0.08
+#define PERIODIC_FEEDBACK_LOW_PRESSURE 0.55
+#define PERIODIC_FEEDBACK_HIGH_PRESSURE 0.85
+#define PERIODIC_FEEDBACK_EARLY_RECOVERY_NUM 2
+#define PERIODIC_FEEDBACK_EARLY_RECOVERY_DEN 3
 
 typedef struct {
     int interval;
@@ -101,6 +109,126 @@ static double clamp_unit_interval(double x) {
     if (!(x > 0.0)) return 0.0;
     if (x > 1.0) return 1.0;
     return x;
+}
+
+static double clamp_feedback_bias(double x) {
+    if (!isfinite(x)) return 0.0;
+    if (x > PERIODIC_FEEDBACK_BIAS_LIMIT) return PERIODIC_FEEDBACK_BIAS_LIMIT;
+    if (x < -PERIODIC_FEEDBACK_BIAS_LIMIT) return -PERIODIC_FEEDBACK_BIAS_LIMIT;
+    return x;
+}
+
+static double periodic_feedback_bias_for_phase(const SimplexSolver *owner, int phase) {
+    if (!owner) return 0.0;
+    if (phase == 1) return owner->periodic_feedback_bias_phase1;
+    if (phase == 2) return owner->periodic_feedback_bias_phase2;
+    return 0.0;
+}
+
+static void periodic_feedback_set_hint(SimplexSolver *owner,
+                                       int phase,
+                                       int interval,
+                                       double run_pressure) {
+    if (!owner) return;
+    if (interval < 0) interval = 0;
+    run_pressure = clamp_unit_interval(run_pressure);
+    if (phase == 1) {
+        owner->periodic_feedback_hint_interval_phase1 = interval;
+        owner->periodic_feedback_hint_pressure_phase1 = run_pressure;
+    } else if (phase == 2) {
+        owner->periodic_feedback_hint_interval_phase2 = interval;
+        owner->periodic_feedback_hint_pressure_phase2 = run_pressure;
+    }
+}
+
+static void periodic_feedback_record_refactor(SimplexSolver *owner,
+                                              int phase,
+                                              int reason,
+                                              int updates_before,
+                                              int status) {
+    double *bias_ptr = NULL;
+    int *last_reason_ptr = NULL;
+    int *last_interval_ptr = NULL;
+    int *hint_interval_ptr = NULL;
+    double *hint_pressure_ptr = NULL;
+    double bias;
+    int hint_interval;
+    double hint_pressure;
+
+    if (!owner || (phase != 1 && phase != 2)) return;
+
+    if (phase == 1) {
+        bias_ptr = &owner->periodic_feedback_bias_phase1;
+        last_reason_ptr = &owner->periodic_feedback_last_reason_phase1;
+        last_interval_ptr = &owner->periodic_feedback_last_interval_phase1;
+        hint_interval_ptr = &owner->periodic_feedback_hint_interval_phase1;
+        hint_pressure_ptr = &owner->periodic_feedback_hint_pressure_phase1;
+    } else {
+        bias_ptr = &owner->periodic_feedback_bias_phase2;
+        last_reason_ptr = &owner->periodic_feedback_last_reason_phase2;
+        last_interval_ptr = &owner->periodic_feedback_last_interval_phase2;
+        hint_interval_ptr = &owner->periodic_feedback_hint_interval_phase2;
+        hint_pressure_ptr = &owner->periodic_feedback_hint_pressure_phase2;
+    }
+
+    bias = (*bias_ptr) * PERIODIC_FEEDBACK_DECAY;
+    hint_interval = *hint_interval_ptr;
+    hint_pressure = *hint_pressure_ptr;
+
+    if (status != 0) {
+        if (reason == RALPH_REFACTOR_REASON_PERIODIC) {
+            bias += PERIODIC_FEEDBACK_TIGHTEN_STEP;
+        }
+        *bias_ptr = clamp_feedback_bias(bias);
+        *last_reason_ptr = reason;
+        if (reason == RALPH_REFACTOR_REASON_PERIODIC && hint_interval > 0) {
+            *last_interval_ptr = hint_interval;
+        }
+        *hint_interval_ptr = 0;
+        *hint_pressure_ptr = 0.0;
+        return;
+    }
+
+    if (reason == RALPH_REFACTOR_REASON_PERIODIC) {
+        double update_ratio = 1.0;
+        if (hint_interval > 0 && updates_before > 0) {
+            update_ratio = (double)updates_before / (double)hint_interval;
+        }
+
+        if (hint_pressure < PERIODIC_FEEDBACK_LOW_PRESSURE && update_ratio <= 1.05) {
+            bias -= PERIODIC_FEEDBACK_RELAX_STEP;
+        } else if (hint_pressure >= PERIODIC_FEEDBACK_HIGH_PRESSURE) {
+            bias += PERIODIC_FEEDBACK_TIGHTEN_STEP;
+        }
+
+        if (hint_interval > 0) {
+            *last_interval_ptr = hint_interval;
+        } else if (updates_before > 0) {
+            *last_interval_ptr = updates_before;
+        }
+    } else if (*last_reason_ptr == RALPH_REFACTOR_REASON_PERIODIC &&
+               *last_interval_ptr > 0 &&
+               updates_before > 0) {
+        int early_threshold =
+            (*last_interval_ptr * PERIODIC_FEEDBACK_EARLY_RECOVERY_NUM) /
+            PERIODIC_FEEDBACK_EARLY_RECOVERY_DEN;
+        if (early_threshold < PERIODIC_REFACTOR_MIN_UPDATE_AGE) {
+            early_threshold = PERIODIC_REFACTOR_MIN_UPDATE_AGE;
+        }
+
+        if ((reason == RALPH_REFACTOR_REASON_UPDATE_RECOVERY ||
+             reason == RALPH_REFACTOR_REASON_RATIO_RECOVERY ||
+             reason == RALPH_REFACTOR_REASON_PIVOT_RECOVERY ||
+             reason == RALPH_REFACTOR_REASON_DIRECTION_STABILIZE) &&
+            updates_before <= early_threshold) {
+            bias += PERIODIC_FEEDBACK_TIGHTEN_STEP;
+        }
+    }
+
+    *bias_ptr = clamp_feedback_bias(bias);
+    *last_reason_ptr = reason;
+    *hint_interval_ptr = 0;
+    *hint_pressure_ptr = 0.0;
 }
 
 static int periodic_interval_bounds(int phase, int *min_interval, int *max_interval) {
@@ -166,7 +294,8 @@ static PeriodicRefactorPolicy build_periodic_refactor_policy_from_metrics(int ph
                                                                            double cond_estimate,
                                                                            double growth_factor,
                                                                            int use_bland,
-                                                                           int degenerate_count) {
+                                                                           int degenerate_count,
+                                                                           double feedback_bias) {
     PeriodicRefactorPolicy policy = {0, 0, 0.0, 0.0};
     int min_interval = 0;
     int max_interval = 0;
@@ -198,6 +327,7 @@ static PeriodicRefactorPolicy build_periodic_refactor_policy_from_metrics(int ph
                                                  use_bland,
                                                  degenerate_count);
     policy.interval_pressure = (health_pressure > size_pressure) ? health_pressure : size_pressure;
+    policy.interval_pressure = clamp_unit_interval(policy.interval_pressure + feedback_bias);
 
     relax_span = max_interval - size_interval;
     relax_span = (relax_span * PERIODIC_REFACTOR_RELAX_NUM) / PERIODIC_REFACTOR_RELAX_DEN;
@@ -240,8 +370,10 @@ static PeriodicRefactorPolicy compute_periodic_refactor_policy(const SimplexTabl
                                                                int use_bland,
                                                                int degenerate_count) {
     PeriodicRefactorPolicy policy = {0, 0, 0.0, 0.0};
+    double feedback_bias = 0.0;
 
     if (!tab || !tab->lu || !tab->use_two_phase) return policy;
+    feedback_bias = periodic_feedback_bias_for_phase(tab->owner, phase);
     return build_periodic_refactor_policy_from_metrics(phase,
                                                        tab->m,
                                                        tab->lu->max_updates,
@@ -251,7 +383,8 @@ static PeriodicRefactorPolicy compute_periodic_refactor_policy(const SimplexTabl
                                                        tab->lu->cond_estimate,
                                                        tab->lu->growth_factor,
                                                        use_bland,
-                                                       degenerate_count);
+                                                       degenerate_count,
+                                                       feedback_bias);
 }
 
 static int periodic_refactor_should_run_metrics(int iter,
@@ -341,6 +474,7 @@ int simplex_periodic_refactor_plan_for_test(int phase,
                                             double growth_factor,
                                             int use_bland,
                                             int degenerate_count,
+                                            double feedback_bias,
                                             int *interval_out,
                                             double *pressure_out) {
     PeriodicRefactorPolicy policy = build_periodic_refactor_policy_from_metrics(phase,
@@ -352,7 +486,8 @@ int simplex_periodic_refactor_plan_for_test(int phase,
                                                                                  cond_estimate,
                                                                                  growth_factor,
                                                                                  use_bland,
-                                                                                 degenerate_count);
+                                                                                 degenerate_count,
+                                                                                 feedback_bias);
     if (interval_out) *interval_out = policy.interval;
     if (pressure_out) *pressure_out = policy.run_pressure;
     return periodic_refactor_should_run_metrics(iter,
@@ -1772,6 +1907,7 @@ int tableau_refactorize(SimplexTableau *tab) {
     double t_refactor_ms = perf_now_ms();
     SimplexSolver *owner = tab ? tab->owner : NULL;
     int reason = RALPH_REFACTOR_REASON_OTHER;
+    int updates_before = (tab && tab->lu) ? tab->lu->num_updates : 0;
     if (owner) {
         reason = owner->perf_refactor_next_reason;
         owner->perf_refactor_next_reason = RALPH_REFACTOR_REASON_OTHER;
@@ -1904,6 +2040,8 @@ int tableau_refactorize(SimplexTableau *tab) {
             owner->perf_phase2_refactor_ms += elapsed_ms;
             owner->perf_phase2_refactor_calls++;
         }
+
+        periodic_feedback_record_refactor(owner, tab ? tab->phase : 0, reason, updates_before, status);
     }
 
     return status;
@@ -4499,6 +4637,9 @@ static int simplex_phase1(SimplexSolver *solver) {
                                                               use_bland,
                                                               degenerate_count));
         int needs_refactor = lu_refactor_needed || periodic_refactor;
+        if (periodic_refactor) {
+            periodic_feedback_set_hint(solver, 1, periodic_policy.interval, periodic_policy.run_pressure);
+        }
 
         if (needs_refactor) {
             if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PERIODIC) != 0) {
@@ -5199,14 +5340,19 @@ static int simplex_phase2(SimplexSolver *solver) {
         /* Refactorize if needed.
          * For two-phase problems, periodic refresh is adaptive (interval + LU health). */
         int needs_refactor = lu_needs_refactorization(tab->lu);
+        int periodic_refactor = 0;
+        PeriodicRefactorPolicy periodic_policy = {0, 0, 0.0, 0.0};
         if (!needs_refactor) {
-            PeriodicRefactorPolicy periodic_policy =
-                compute_periodic_refactor_policy(tab, 2, use_bland, degenerate_count);
-            needs_refactor = should_run_periodic_refactor(tab,
-                                                          iter,
-                                                          &periodic_policy,
-                                                          use_bland,
-                                                          degenerate_count);
+            periodic_policy = compute_periodic_refactor_policy(tab, 2, use_bland, degenerate_count);
+            periodic_refactor = should_run_periodic_refactor(tab,
+                                                             iter,
+                                                             &periodic_policy,
+                                                             use_bland,
+                                                             degenerate_count);
+            needs_refactor = periodic_refactor;
+        }
+        if (periodic_refactor) {
+            periodic_feedback_set_hint(solver, 2, periodic_policy.interval, periodic_policy.run_pressure);
         }
 
         if (needs_refactor) {
@@ -5537,6 +5683,17 @@ static void reset_solver_perf(SimplexSolver *solver) {
     solver->perf_phase2_refactor_calls = 0;
     solver->perf_phase2_compute_solution_calls = 0;
     solver->perf_phase2_compute_rc_calls = 0;
+
+    solver->periodic_feedback_bias_phase1 = 0.0;
+    solver->periodic_feedback_bias_phase2 = 0.0;
+    solver->periodic_feedback_last_reason_phase1 = RALPH_REFACTOR_REASON_OTHER;
+    solver->periodic_feedback_last_reason_phase2 = RALPH_REFACTOR_REASON_OTHER;
+    solver->periodic_feedback_last_interval_phase1 = 0;
+    solver->periodic_feedback_last_interval_phase2 = 0;
+    solver->periodic_feedback_hint_interval_phase1 = 0;
+    solver->periodic_feedback_hint_interval_phase2 = 0;
+    solver->periodic_feedback_hint_pressure_phase1 = 0.0;
+    solver->periodic_feedback_hint_pressure_phase2 = 0.0;
 }
 
 static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *tab) {

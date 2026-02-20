@@ -579,6 +579,18 @@ typedef struct SimplexSolver {
     int perf_phase2_compute_solution_calls;
     int perf_phase2_compute_rc_calls;
 
+    /* Adaptive periodic scheduler feedback (per-phase bias in [-0.25, +0.25]) */
+    double periodic_feedback_bias_phase1;
+    double periodic_feedback_bias_phase2;
+    int periodic_feedback_last_reason_phase1;
+    int periodic_feedback_last_reason_phase2;
+    int periodic_feedback_last_interval_phase1;
+    int periodic_feedback_last_interval_phase2;
+    int periodic_feedback_hint_interval_phase1;
+    int periodic_feedback_hint_interval_phase2;
+    double periodic_feedback_hint_pressure_phase1;
+    double periodic_feedback_hint_pressure_phase2;
+
     /* Post-solve verification metrics (T2.3 + T3.6) */
     double verify_primal_infeas;    /* ||Ax - b||_inf for satisfied constraints */
     double verify_bound_infeas;     /* max bound violation */
