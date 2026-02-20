@@ -77,6 +77,8 @@ int ralph_add_constraint(RalphModel *model, int nnz, const int *indices,
 int ralph_set_var_bounds(RalphModel *model, int var, double lb, double ub);
 int ralph_set_var_type(RalphModel *model, int var, RalphVarType type);
 int ralph_set_obj_coef(RalphModel *model, int var, double coef);
+int ralph_set_obj_offset(RalphModel *model, double offset);
+double ralph_get_obj_offset(const RalphModel *model);
 
 /* Model queries */
 int ralph_get_num_vars(const RalphModel *model);
