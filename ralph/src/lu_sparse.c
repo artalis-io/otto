@@ -1898,7 +1898,7 @@ static int mkz_compute_workspace_requirements(int init_nnz, int m, int k, int po
     if (pool_cap > (size_t)INT_MAX) return -1;
 
     size_t dbl_need = 2u * pool_cap + (size_t)k + (size_t)k;
-    size_t int_count = 2u * pool_cap + 3u * (size_t)k + 3u * (size_t)m
+    size_t int_count = 3u * pool_cap + 3u * (size_t)k + 3u * (size_t)m
                      + (size_t)k + (size_t)k + (size_t)m + (size_t)k + (size_t)m
                      + (size_t)k + 1u + 2u * (size_t)k;
 
@@ -1992,6 +1992,7 @@ static int lu_factorize_markowitz(
      * INTS (packed after doubles):
      *   cv_idx[pool_cap]     — column SVA row indices
      *   rv_idx[pool_cap]     — row SVA column indices
+     *   rv_hint[pool_cap]    — hint: local row position within column SVA
      *   cv_ptr[k], cv_len[k], cv_cap[k]  — column SVA metadata
      *   rv_ptr[m], rv_len[m], rv_cap[m]  — row SVA metadata
      *   flag[k]              — dense flag for scatter/gather
@@ -2017,6 +2018,7 @@ static int lu_factorize_markowitz(
     int *ib = (int *)(workspace + dbl_need);
     int *cv_idx   = ib;         ib += pool_cap;
     int *rv_idx   = ib;         ib += pool_cap;
+    int *rv_hint  = ib;         ib += pool_cap;
     int *cv_ptr   = ib;         ib += k;
     int *cv_len   = ib;         ib += k;
     int *cv_cap_a = ib;         ib += k;
@@ -2089,6 +2091,7 @@ static int lu_factorize_markowitz(
             if (rp >= pool_cap) return MKZ_FAIL_POOL;
             rv_idx[rp] = jj;
             rv_val[rp] = cv_val[s + e];
+            rv_hint[rp] = e;
             rv_len[row]++;
         }
     }
@@ -2145,6 +2148,7 @@ static int lu_factorize_markowitz(
         if ((e) < rv_len[i]) { \
             rv_idx[_s + (e)] = rv_idx[_s + rv_len[i]]; \
             rv_val[_s + (e)] = rv_val[_s + rv_len[i]]; \
+            rv_hint[_s + (e)] = rv_hint[_s + rv_len[i]]; \
         } \
     } while(0)
 
@@ -2330,21 +2334,29 @@ static int lu_factorize_markowitz(
                       flag[jj] = 0;  /* mark handled */
                       double new_val = rv_val[rs + re] - mult * work[jj];
                       rv_val[rs + re] = new_val;
-                      /* Update column SVA too */
                       int cs = cv_ptr[jj], cn = cv_len[jj];
-                      for (int ce = 0; ce < cn; ce++) {
-                          if (cv_idx[cs + ce] == row) {
-                              if (fabs(new_val) < RALPH_ZERO_TOL) {
-                                  /* Cancellation: remove from both SVAs */
-                                  CV_REMOVE(jj, ce);
-                                  RV_REMOVE(row, re); re--;
-                                  DG_REMOVE(jj); col_deg[jj]--; DG_INSERT(jj);
-                                  row_deg[row]--;
-                              } else {
-                                  cv_val[cs + ce] = new_val;
+                      int rp = rs + re;
+                      int ce = rv_hint[rp];
+                      if (ce < 0 || ce >= cn || cv_idx[cs + ce] != row) {
+                          ce = -1;
+                          for (int scan = 0; scan < cn; scan++) {
+                              if (cv_idx[cs + scan] == row) {
+                                  ce = scan;
+                                  break;
                               }
-                              break;
                           }
+                          if (ce < 0) continue;
+                          rv_hint[rp] = ce;
+                      }
+
+                      if (fabs(new_val) < RALPH_ZERO_TOL) {
+                          /* Cancellation: remove from both SVAs */
+                          CV_REMOVE(jj, ce);
+                          RV_REMOVE(row, re); re--;
+                          DG_REMOVE(jj); col_deg[jj]--; DG_INSERT(jj);
+                          row_deg[row]--;
+                      } else {
+                          cv_val[cs + ce] = new_val;
                       }
                   }
               }
@@ -2377,11 +2389,16 @@ static int lu_factorize_markowitz(
                         int new_cap = rn2 + MARKOWITZ_FILL_GAP + 4;
                         if (rv_used + new_cap > pool_cap) return MKZ_FAIL_POOL;
                         int ns = rv_used;
-                        for (int f = 0; f < rn2; f++) { rv_idx[ns+f] = rv_idx[rv_ptr[row]+f]; rv_val[ns+f] = rv_val[rv_ptr[row]+f]; }
+                        for (int f = 0; f < rn2; f++) {
+                            rv_idx[ns + f] = rv_idx[rv_ptr[row] + f];
+                            rv_val[ns + f] = rv_val[rv_ptr[row] + f];
+                            rv_hint[ns + f] = rv_hint[rv_ptr[row] + f];
+                        }
                         rv_ptr[row] = ns; rv_cap_a[row] = new_cap; rv_used += new_cap;
                     }
                     rv_idx[rv_ptr[row] + rn2] = jj;
                     rv_val[rv_ptr[row] + rn2] = fill;
+                    rv_hint[rv_ptr[row] + rn2] = cn;
                     rv_len[row]++;
 
                     DG_REMOVE(jj); col_deg[jj]++; DG_INSERT(jj);
