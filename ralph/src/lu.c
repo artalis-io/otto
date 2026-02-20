@@ -2046,6 +2046,31 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
  * x[col] = spike[col] * x_old[col]
  * x[i] += spike[i] * x_old[col] for i != col
  */
+static inline void apply_single_ft_spike_forward(const int col,
+                                                 const double diag,
+                                                 const int *idx,
+                                                 const double *val,
+                                                 const int nnz,
+                                                 double *x) {
+    double xc = x[col];
+    if (fabs(xc) < RALPH_ZERO_TOL) return;
+
+    x[col] = diag * xc;
+
+    /* Indexed scatter with fixed-size batching and light prefetch. */
+    int p = 0;
+    int nnz4 = nnz & ~3;
+    for (; p < nnz4; p += 4) {
+        x[idx[p]] += val[p] * xc;
+        x[idx[p + 1]] += val[p + 1] * xc;
+        x[idx[p + 2]] += val[p + 2] * xc;
+        x[idx[p + 3]] += val[p + 3] * xc;
+    }
+    for (; p < nnz; p++) {
+        x[idx[p]] += val[p] * xc;
+    }
+}
+
 static void apply_ft_spikes_forward(const LUFactorization *lu, double *x) {
     const int n = lu->ft_num_updates;
     if (n == 0) return;
@@ -2057,32 +2082,22 @@ static void apply_ft_spikes_forward(const LUFactorization *lu, double *x) {
     const int *pool_idx = lu->spike_pool_idx;
     const double *pool_val = lu->spike_pool_val;
 
-    for (int k = 0; k < n; k++) {
-        /* Prefetch next spike's column value and pool data */
-        if (k + 1 < n) {
-            RALPH_PREFETCH(&x[cols[k + 1]], 0, 3);
-            RALPH_PREFETCH(pool_idx + starts[k + 1], 0, 1);
-            RALPH_PREFETCH(pool_val + starts[k + 1], 0, 1);
+    int k = 0;
+    for (; k + 1 < n; k += 2) {
+        {
+            int start0 = starts[k];
+            int start1 = starts[k + 1];
+            apply_single_ft_spike_forward(cols[k], diags[k],
+                                          pool_idx + start0, pool_val + start0, nnzs[k], x);
+            apply_single_ft_spike_forward(cols[k + 1], diags[k + 1],
+                                          pool_idx + start1, pool_val + start1, nnzs[k + 1], x);
         }
+    }
 
-        int col = cols[k];
-        double xc = x[col];
-
-        /* Skip if xc is zero - no update needed */
-        if (fabs(xc) < RALPH_ZERO_TOL) continue;
-
-        x[col] = diags[k] * xc;
-
+    if (k < n) {
         int start = starts[k];
-        int nnz = nnzs[k];
-        const int *idx = pool_idx + start;
-        const double *val = pool_val + start;
-
-        /* Scatter: indexed stores to potentially overlapping addresses,
-         * NOT unrolled (CPU must serialize x[idx[p]] += writes) */
-        for (int p = 0; p < nnz; p++) {
-            x[idx[p]] += val[p] * xc;
-        }
+        apply_single_ft_spike_forward(cols[k], diags[k],
+                                      pool_idx + start, pool_val + start, nnzs[k], x);
     }
 }
 
@@ -2090,6 +2105,34 @@ static void apply_ft_spikes_forward(const LUFactorization *lu, double *x) {
  * For transpose: (E^-1)' * x computes x[col] = spike' * x = sum_i spike[i] * x[i]
  * Applied in reverse order.
  */
+static inline void apply_single_ft_spike_backward(const int col,
+                                                  const double diag,
+                                                  const int *idx,
+                                                  const double *val,
+                                                  const int nnz,
+                                                  double *x) {
+    double xc = diag * x[col];
+
+    /* Gather-accumulate in fixed-size batches while preserving update order. */
+    int p = 0;
+    int nnz8 = nnz & ~7;
+    for (; p < nnz8; p += 8) {
+        xc += val[p] * x[idx[p]];
+        xc += val[p + 1] * x[idx[p + 1]];
+        xc += val[p + 2] * x[idx[p + 2]];
+        xc += val[p + 3] * x[idx[p + 3]];
+        xc += val[p + 4] * x[idx[p + 4]];
+        xc += val[p + 5] * x[idx[p + 5]];
+        xc += val[p + 6] * x[idx[p + 6]];
+        xc += val[p + 7] * x[idx[p + 7]];
+    }
+    for (; p < nnz; p++) {
+        xc += val[p] * x[idx[p]];
+    }
+
+    x[col] = xc;
+}
+
 static void apply_ft_spikes_backward(const LUFactorization *lu, double *x) {
     const int n = lu->ft_num_updates;
     if (n == 0) return;
@@ -2101,35 +2144,22 @@ static void apply_ft_spikes_backward(const LUFactorization *lu, double *x) {
     const int *pool_idx = lu->spike_pool_idx;
     const double *pool_val = lu->spike_pool_val;
 
-    for (int k = n - 1; k >= 0; k--) {
-        /* Prefetch next (k-1) spike's pool data */
-        if (k > 0) {
-            RALPH_PREFETCH(pool_idx + starts[k - 1], 0, 1);
-            RALPH_PREFETCH(pool_val + starts[k - 1], 0, 1);
+    int k = n - 1;
+    for (; k > 0; k -= 2) {
+        {
+            int start0 = starts[k];
+            int start1 = starts[k - 1];
+            apply_single_ft_spike_backward(cols[k], diags[k],
+                                           pool_idx + start0, pool_val + start0, nnzs[k], x);
+            apply_single_ft_spike_backward(cols[k - 1], diags[k - 1],
+                                           pool_idx + start1, pool_val + start1, nnzs[k - 1], x);
         }
+    }
 
-        int col = cols[k];
-        int start = starts[k];
-        int nnz = nnzs[k];
-        const int *idx = pool_idx + start;
-        const double *val = pool_val + start;
-
-        /* Gather-accumulate with 4-way unrolling for ILP:
-         * independent accumulators let CPU issue 4 loads concurrently */
-        double xc = diags[k] * x[col];
-        double xc1 = 0.0, xc2 = 0.0, xc3 = 0.0;
-        int p = 0, nnz4 = nnz - 3;
-        for (; p < nnz4; p += 4) {
-            xc  += val[p]     * x[idx[p]];
-            xc1 += val[p + 1] * x[idx[p + 1]];
-            xc2 += val[p + 2] * x[idx[p + 2]];
-            xc3 += val[p + 3] * x[idx[p + 3]];
-        }
-        xc += xc1 + xc2 + xc3;
-        for (; p < nnz; p++) {
-            xc += val[p] * x[idx[p]];
-        }
-        x[col] = xc;
+    if (k == 0) {
+        int start = starts[0];
+        apply_single_ft_spike_backward(cols[0], diags[0],
+                                       pool_idx + start, pool_val + start, nnzs[0], x);
     }
 }
 

@@ -2198,9 +2198,10 @@ Track execution with these phases:
    Added incremental basis-matrix maintenance fast-paths for refactor extraction:
    unchanged layout patching and span-rewrite+tail-shift when nnz layout changes,
    with safe full-rebuild fallback.
-5. ▶ **Faster long FT-chain solves** (next)
-   Batch/cache-optimize spike application in FTRAN/BTRAN without changing numerics.
-6. **Hard regression discipline**
+5. ✅ **Faster long FT-chain solves** (done)
+   Added batched/cache-optimized FT spike micro-kernels for FTRAN/BTRAN
+   with preserved spike-application order.
+6. ▶ **Hard regression discipline** (next)
    Every step must pass `make -C ralph test`, `make -C ralph test-netlib-gate`,
    and canary subset `fit1p|nesm|bandm|scagr25`.
 
@@ -2222,6 +2223,9 @@ Progress update (2026-02-20):
 - Extended incremental basis maintenance for nnz-layout changes: refactor extraction now
   rewrites only the changed basis span and shifts trailing CSC payload in-place when capacity
   allows, preserving full-rebuild fallback for safety.
+- Added batched FT spike application kernels in `lu.c` (paired spike batching plus
+  inner-loop unrolled scatter/gather with prefetch), reducing long-chain FTRAN/BTRAN
+  overhead without changing spike execution order.
 
 ### 8.9 NETLIB Small-Canary Coverage
 
