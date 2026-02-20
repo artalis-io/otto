@@ -240,6 +240,7 @@ double sg_priority_removal_score(const SGContext *ctx, int32_t priority);
 double sg_zone_density_score(const SGContext *ctx, const SGBootstrapSolution *sol,
                              uint32_t request_id);
 double sg_bootstrap_removal_cost(void *ctx, void *solution, uint32_t element_id);
+double sg_route_removal_cost(void *ctx, void *solution, uint32_t element_id);
 double sg_bootstrap_relatedness(void *ctx, uint32_t a, uint32_t b);
 double sg_route_cluster_relatedness(void *ctx, uint32_t a, uint32_t b);
 double sg_time_cluster_relatedness(void *ctx, uint32_t a, uint32_t b);

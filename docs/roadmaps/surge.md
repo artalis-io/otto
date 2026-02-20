@@ -1167,22 +1167,25 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ## Implementation Plan
 
-### Current Status (as of 2026-02-11)
+### Current Status (as of 2026-02-20)
 
 Implemented and active today:
 - C domain model for depots, vehicles, tasks, requests, and multi-dimensional capacities.
 - Model validation for delivery-only and pickup-delivery demand sign consistency.
-- Arbor ALNS integration in both solver paths.
-- Route-native ALNS path for delivery-only VRPTW with explicit routes, TW/capacity feasibility checks, and lexicographic objective proxy.
-- Advanced destroy/repair operators for route-native delivery-only solve:
+- Arbor ALNS integration with simulated annealing acceptance (Phase S1).
+- Route-native ALNS path for unified VRPTW/PDPTW with stop-level representation.
+- Incremental feasibility kernel with cached forward/backward timing slack and load profiles.
+- Independent PD stop placement with O(L²) evaluation of all (pickup, delivery) position pairs (Phase S2).
+- Stop-level splice/excise operations preserving non-adjacent PD placement across ALNS iterations.
+- Advanced destroy/repair operators:
   random, worst, shaw, criticality-worst, route-cluster, time-cluster, paired-shaw,
-  route-removal, time-window-removal, greedy and regret-k repairs.
-- Post-ALNS route elimination and fixed-vehicle distance polishing for delivery-only solve.
-- Solomon benchmark harness with BKS comparison in `surge/benchmarks/bench_solomon.c`.
+  route-removal, time-window-removal, greedy and regret-k repairs (with PD-aware dispatch).
+- Post-ALNS route elimination, exchange, 2-opt*, and distance polishing (PD-aware).
+- Solomon and Li & Lim benchmark harnesses with BKS comparison.
 
-Current measured quality (Solomon 100-customer set, deterministic seed 42):
-- 300 iterations: `avgVehGap=+0.88`, `avgDistGap=+9.3%`, `equalVehicles=22`, `lexiNonWorse=4`.
-- 1000 iterations: `avgVehGap=+0.75`, `avgDistGap=+5.5%`, `equalVehicles=25`, `lexiNonWorse=7`.
+Current measured quality (deterministic seed 42, 300 iterations):
+- Solomon (VRPTW, 56 cases): `avgVehGap=+0.95`, `avgDistGap=+5.9%`, `equalVehicles=16`, `lexiNonWorse=3`.
+- Li & Lim (PDPTW, 56 cases): `avgVehGap=+0.98`, `avgDistGap=+9.5%`, `equalVehicles=25`, `lexiNonWorse=8`.
 
 Glaring architectural gaps:
 - Route-native solver is delivery-only gated (`sg_route_solver_eligible()` requires every request be `SG_REQUEST_KIND_DELIVERY_ONLY`), so PDPTW does not use the stronger route engine.
@@ -1214,9 +1217,10 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - [x] Enforce same-vehicle and precedence constraints directly via the stop sequence; route validation now relies on the unified kernel.
 
 ### Phase 3: Unified Incremental Feasibility and Cost Kernel
-- [ ] Build one incremental feasibility engine for both VRPTW and PDPTW (TW propagation, signed load tracking, route-duration checks).
-- [ ] Add PD-specific checks: precedence, maximum ride time, pickup/drop consistency.
-- [ ] Replace full route recomputation per move with cached forward/backward slack and load deltas.
+- [x] Build one incremental feasibility engine for both VRPTW and PDPTW (TW propagation, signed load tracking, route-duration checks).
+- [x] Add PD-specific checks: precedence, maximum ride time, pickup/drop consistency.
+- [x] Replace full route recomputation per move with cached forward/backward slack and load deltas.
+- [x] O(L²) pickup/delivery position pair evaluation with push propagation and forward slack pruning.
 
 ### Phase 4: Unified ALNS Operators and Intensification
 - [x] Make ALNS remover/repair steps operate on the shared route state with explicit stops.
@@ -1240,14 +1244,15 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - [ ] Keep Ralph exact mode for small instances as baseline verifier.
 
 ### Recent progress
-- Unified route state now drives both delivery-only and PDPTW solves (no longer gated to delivery-only). The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time implicitly.
-- Added Li & Lim PDPTW loader + benchmark driver with BKS gap reporting + 100-task instance download. Benchmarks show the current solver runs all 56 standard Li & Lim cases but with large vehicle/distance gaps, highlighting that more PD-focused tuning is still required.
-- Solomon regression now reports lexicographic gaps (avgVehGap=+0.84; avgDistGap=+7.1%), confirming the new kernel remains competitive for pure VRPTW.
+- **Phase S1 (SA acceptance)**: Enabled simulated annealing in both solver paths via `ar_alns_calibrate_sa`. Solomon improved from +9.3% to +5.9% avgDistGap at 300 iterations.
+- **Phase S2 (independent PD placement)**: O(L²) pickup/delivery evaluation with stop-level splice/excise. Li & Lim improved from +112.7% to +9.5% avgDistGap. Solomon unchanged at +5.9%.
+- Unified route state drives both delivery-only and PDPTW solves. The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time constraints.
+- Stop-level splice/excise operations preserve non-adjacent PD placement across ALNS destroy/repair cycles.
 
 ### Next step proposal
-- **Extend PD-aware feasibility checks**: add precise load balancing (signed flows) and precedence slack propagation so the insertion kernel rejects PD violations without rebuilding routes from scratch; targeted instrumentation should quantify ride-time slack failures on the Li & Lim 100 instances.
-- **Introduce pair-preserving local search**: implement PDPDW-specific relocation/exchange (pickup+delivery moved together) plus route-based double-bridge moves that respect pairing; measure their impact on the calibrated gaps.
-- **Tune lexicographic acceptance + destroy schedule**: expose `SGConfig` knobs for acceptance curves and adaptive removal sizes to limit vehicle use on high-gap Li & Lim cases while continuing to polish Solomon performance; capturing per-case metrics will guide reweighting of objectives.
+- **Phase S3 (route-aware worst removal)**: Replace proxy-based removal cost with actual route distance delta using cached timing state, so the worst removal operator selects truly expensive requests.
+- **Phase S4 (route-aware Shaw relatedness)**: Replace zone-based similarity with spatial distance + TW overlap + load similarity + route co-location bonus.
+- **Phase S5 (adaptive destroy count)**: Scale q_min/q_max with instance size instead of fixed [4, 20].
 
 ### Phase 8: Verification and Benchmark Expansion
 - [ ] Keep Solomon VRPTW as regression benchmark (already wired).
@@ -1366,43 +1371,39 @@ Seven ordered phases to close the gap between Surge and state-of-the-art benchma
 on Solomon (VRPTW) and Li & Lim (PDPTW) instances. Each phase is orthogonal and testable
 independently.
 
-### Current Gaps (baseline: 1k iterations, deterministic seed)
+### Current Gaps (300 iterations, deterministic seed 42)
 
-| Benchmark | Metric | Surge | SoTA | Gap |
-|-----------|--------|-------|------|-----|
-| Solomon 100 | Avg distance | ~1,300 | ~1,230 | +5.5% |
-| Li & Lim 100 | Avg distance | ~2,100 | ~1,000 | +111% |
+| Benchmark | Metric | Surge | BKS Avg | Gap |
+|-----------|--------|-------|---------|-----|
+| Solomon 100 | Avg distance | 1,074 | 1,014 | +5.9% |
+| Li & Lim 100 | Avg distance | 1,114 | 1,017 | +9.5% |
 
-### Phase S1: Simulated Annealing Acceptance
+### Phase S1: Simulated Annealing Acceptance ✅
 
-**Impact**: Highest for Solomon. SA allows temporary cost increases, enabling the solver to
-escape local optima. Currently `AR_ACCEPT_IMPROVING` is hardcoded even though arbor already
-implements SA.
+**Result**: Solomon improved from +9.3% to +5.9% avgDistGap. Li & Lim improved from +112.7% to +112.7% (no change, needed S2 first).
 
 **Changes (arbor)**:
-- Add `ar_alns_calibrate_sa` helper that computes adaptive `initial_temp` and `cooling_rate`
+- Added `ar_alns_calibrate_sa` helper that computes adaptive `initial_temp` and `cooling_rate`
   from initial solution cost and iteration budget
 - Formula: `T0 = 0.05 * |initial_cost| / ln(2)`, `cooling_rate = exp(ln(0.001) / max_iter)`
 
 **Changes (surge)**:
 - In `sg_solve_route_model`: compute initial cost after construction, calibrate SA params,
   set `accept_type = AR_ACCEPT_SA`
-- Same for bootstrap solver path in `sg_solve`
 
-**Tests**: SA calibration unit test in arbor; deterministic Solomon comparison in surge.
+### Phase S2: Independent PD Stop Placement ✅
 
-### Phase S2: Independent PD Stop Placement
-
-**Impact**: Highest for Li & Lim. SoTA evaluates all O(L^2) pickup-delivery position
-combinations; Surge currently inserts them as adjacent blocks.
+**Result**: Li & Lim improved from +112.7% to +9.5% avgDistGap. Solomon unchanged at +5.9%.
 
 **Changes (surge)**:
-- Add `sg_route_eval_pd_insertion_independent` that evaluates pickup at position p and
-  delivery at position d (p < d) independently
-- Update repair operators to use the new insertion evaluation for PD requests
-- Preserve existing adjacent insertion as fallback for tight-TW instances
-
-**Tests**: Verify independent placement matches or beats adjacent for Li & Lim instances.
+- Added `sg_route_splice_stop` / `sg_route_excise_stop` for direct stop-array manipulation
+- Added `sg_route_eval_pd_best_insertion_cached` evaluating O(L²) (pickup, delivery) pairs
+  with push propagation, forward slack pruning, ride-time checks, and capacity validation
+- Added `sg_route_apply_pd_insertion` for non-adjacent PD placement via splice
+- Switched `sg_route_apply_insertion` and `sg_route_unassign_request` to splice/excise
+  (preserves non-adjacent PD stops for other requests on same vehicle)
+- Wired PD dispatch through all repair and postprocess callers
+- 6 new tests for stop manipulation, PD placement, and correctness
 
 ### Phase S3: Route-Aware Worst Removal
 

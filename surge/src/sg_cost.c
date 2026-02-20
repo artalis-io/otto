@@ -618,6 +618,112 @@ double sg_pd_shaw_relatedness(void *ctx, uint32_t a, uint32_t b) {
     return score;
 }
 
+double sg_route_removal_cost(void *ctx, void *solution, uint32_t element_id) {
+    const SGContext *sg_ctx = (const SGContext *)ctx;
+    const SGRouteSolution *sol = (const SGRouteSolution *)solution;
+    const SGRequestRecord *request;
+    uint32_t vehicle_id;
+    const SGRouteStop *stops;
+    const uint32_t *prev_arr;
+    const uint32_t *next_arr;
+    double sx, sy, ex, ey;
+    double saving = 0.0;
+
+    if (!sg_ctx || !sol || element_id >= sg_ctx->num_requests) {
+        return 0.0;
+    }
+
+    vehicle_id = sol->request_vehicle[element_id];
+    if (vehicle_id == UINT32_MAX) {
+        return 0.0;
+    }
+
+    request = sg_get_request_record(sg_ctx, element_id);
+    if (!request) {
+        return 0.0;
+    }
+
+    if (!sg_vehicle_start_end_locations(sg_ctx, vehicle_id, &sx, &sy, &ex, &ey)) {
+        return 0.0;
+    }
+
+    stops = sg_route_vehicle_stop_ptr_const(sol, vehicle_id);
+    prev_arr = sg_route_vehicle_stop_prev_ptr_const(sol, vehicle_id);
+    next_arr = sg_route_vehicle_stop_next_ptr_const(sol, vehicle_id);
+
+    if (request->kind == SG_REQUEST_KIND_DELIVERY_ONLY) {
+        uint32_t d_pos = sol->request_delivery_stop_pos[element_id];
+        uint32_t p = prev_arr[d_pos];
+        uint32_t n = next_arr[d_pos];
+        double dx = sg_ctx->tasks[stops[d_pos].task_id].x;
+        double dy = sg_ctx->tasks[stops[d_pos].task_id].y;
+        double px, py, nx, ny;
+
+        if (p == UINT32_MAX) { px = sx; py = sy; }
+        else { px = sg_ctx->tasks[stops[p].task_id].x; py = sg_ctx->tasks[stops[p].task_id].y; }
+
+        if (n == UINT32_MAX) { nx = ex; ny = ey; }
+        else { nx = sg_ctx->tasks[stops[n].task_id].x; ny = sg_ctx->tasks[stops[n].task_id].y; }
+
+        saving = sg_euclid(px, py, dx, dy) + sg_euclid(dx, dy, nx, ny)
+               - sg_euclid(px, py, nx, ny);
+    } else if (request->kind == SG_REQUEST_KIND_PICKUP_DELIVERY) {
+        uint32_t p_pos = sol->request_pickup_stop_pos[element_id];
+        uint32_t d_pos = sol->request_delivery_stop_pos[element_id];
+        double pick_x = sg_ctx->tasks[stops[p_pos].task_id].x;
+        double pick_y = sg_ctx->tasks[stops[p_pos].task_id].y;
+        double del_x = sg_ctx->tasks[stops[d_pos].task_id].x;
+        double del_y = sg_ctx->tasks[stops[d_pos].task_id].y;
+
+        if (d_pos == p_pos + 1) {
+            /* Adjacent: remove both as one segment */
+            uint32_t pp = prev_arr[p_pos];
+            uint32_t nd = next_arr[d_pos];
+            double ppx, ppy, ndx, ndy;
+
+            if (pp == UINT32_MAX) { ppx = sx; ppy = sy; }
+            else { ppx = sg_ctx->tasks[stops[pp].task_id].x; ppy = sg_ctx->tasks[stops[pp].task_id].y; }
+
+            if (nd == UINT32_MAX) { ndx = ex; ndy = ey; }
+            else { ndx = sg_ctx->tasks[stops[nd].task_id].x; ndy = sg_ctx->tasks[stops[nd].task_id].y; }
+
+            saving = sg_euclid(ppx, ppy, pick_x, pick_y)
+                   + sg_euclid(pick_x, pick_y, del_x, del_y)
+                   + sg_euclid(del_x, del_y, ndx, ndy)
+                   - sg_euclid(ppx, ppy, ndx, ndy);
+        } else {
+            /* Non-adjacent: sum independent savings */
+            uint32_t pp = prev_arr[p_pos];
+            uint32_t np = next_arr[p_pos];
+            uint32_t pd = prev_arr[d_pos];
+            uint32_t nd = next_arr[d_pos];
+            double ppx, ppy, npx, npy, pdx, pdy, ndx, ndy;
+
+            if (pp == UINT32_MAX) { ppx = sx; ppy = sy; }
+            else { ppx = sg_ctx->tasks[stops[pp].task_id].x; ppy = sg_ctx->tasks[stops[pp].task_id].y; }
+
+            npx = sg_ctx->tasks[stops[np].task_id].x;
+            npy = sg_ctx->tasks[stops[np].task_id].y;
+
+            pdx = sg_ctx->tasks[stops[pd].task_id].x;
+            pdy = sg_ctx->tasks[stops[pd].task_id].y;
+
+            if (nd == UINT32_MAX) { ndx = ex; ndy = ey; }
+            else { ndx = sg_ctx->tasks[stops[nd].task_id].x; ndy = sg_ctx->tasks[stops[nd].task_id].y; }
+
+            saving = (sg_euclid(ppx, ppy, pick_x, pick_y)
+                    + sg_euclid(pick_x, pick_y, npx, npy)
+                    - sg_euclid(ppx, ppy, npx, npy))
+                   + (sg_euclid(pdx, pdy, del_x, del_y)
+                    + sg_euclid(del_x, del_y, ndx, ndy)
+                    - sg_euclid(pdx, pdy, ndx, ndy));
+        }
+    }
+
+    saving += ((double)element_id + 1.0) * 0.0001;
+    return saving;
+}
+
 double sg_criticality_removal_cost(void *ctx, void *solution, uint32_t element_id) {
     const SGContext *sg_ctx = (const SGContext *)ctx;
     const SGBootstrapSolution *sol = (const SGBootstrapSolution *)solution;

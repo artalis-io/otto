@@ -1549,6 +1549,172 @@ static void test_pd_ride_time_constraint(void) {
     sg_free(ctx);
 }
 
+/* ===== Route Removal Cost Tests ===== */
+
+static void test_route_removal_cost(void) {
+    /* Test 1: Delivery-only, middle stop off-axis.
+       Depot at (0,0). A=(10,0), B=(15,10), C=(20,0).
+       Route: depot -> A -> B -> C -> depot.
+       Removing B saves dist(A,B) + dist(B,C) - dist(A,C). */
+    {
+        SGContext *ctx = make_config(50, 42);
+        SGRouteSolution sol;
+        uint32_t depot;
+        double expected, actual;
+
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+        add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -10.0);   /* request 0 = A */
+        add_delivery_request(ctx, 15.0, 10.0, 0, 86400, 60, -10.0);  /* request 1 = B */
+        add_delivery_request(ctx, 20.0, 0.0, 0, 86400, 60, -10.0);   /* request 2 = C */
+
+        assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+        /* Insert A, B, C in order */
+        {
+            double score, dist;
+            assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+            assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+        }
+        {
+            double score, dist;
+            assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 0, 1, &score, &dist));
+            assert(sg_route_apply_insertion(ctx, &sol, 1, 0, 1, dist) == AR_STATUS_OK);
+        }
+        {
+            double score, dist;
+            assert(sg_route_eval_insertion_cached(ctx, &sol, 2, 0, 2, &score, &dist));
+            assert(sg_route_apply_insertion(ctx, &sol, 2, 0, 2, dist) == AR_STATUS_OK);
+        }
+
+        assert(sol.route_stop_lengths[0] == 3);
+
+        /* Removing B (element_id=1): dist(A,B) + dist(B,C) - dist(A,C) + tie-breaker */
+        expected = sg_euclid(10, 0, 15, 10) + sg_euclid(15, 10, 20, 0) - sg_euclid(10, 0, 20, 0)
+                 + 2.0 * 0.0001;
+        actual = sg_route_removal_cost((void *)ctx, (void *)&sol, 1);
+        assert(fabs(actual - expected) < 1e-6);
+
+        /* Removing A (element_id=0, first stop): dist(depot,A) + dist(A,B) - dist(depot,B) */
+        expected = sg_euclid(0, 0, 10, 0) + sg_euclid(10, 0, 15, 10) - sg_euclid(0, 0, 15, 10)
+                 + 1.0 * 0.0001;
+        actual = sg_route_removal_cost((void *)ctx, (void *)&sol, 0);
+        assert(fabs(actual - expected) < 1e-6);
+
+        /* Removing C (element_id=2, last stop): dist(B,C) + dist(C,depot) - dist(B,depot) */
+        expected = sg_euclid(15, 10, 20, 0) + sg_euclid(20, 0, 0, 0) - sg_euclid(15, 10, 0, 0)
+                 + 3.0 * 0.0001;
+        actual = sg_route_removal_cost((void *)ctx, (void *)&sol, 2);
+        assert(fabs(actual - expected) < 1e-6);
+
+        sg_route_solution_reset(&sol);
+        sg_free(ctx);
+    }
+
+    /* Test 2: PD adjacent. Single PD request: pickup (5,0), delivery (10,10), depot (0,0). */
+    {
+        SGContext *ctx = make_config(50, 42);
+        SGRouteSolution sol;
+        uint32_t depot;
+        double expected, actual;
+
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+        add_pd_request(ctx,
+                       5.0, 0.0, 0, 86400, 10,
+                       10.0, 10.0, 0, 86400, 10,
+                       10.0);
+
+        assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+        {
+            double score;
+            uint32_t p_pos, d_pos;
+            double route_dist;
+            assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 0, 0,
+                                                           &score, &p_pos, &d_pos, &route_dist));
+            assert(sg_route_apply_pd_insertion(ctx, &sol, 0, 0, p_pos, d_pos, route_dist) == AR_STATUS_OK);
+        }
+
+        assert(sol.route_stop_lengths[0] == 2);
+        assert(sol.request_pickup_stop_pos[0] == 0);
+        assert(sol.request_delivery_stop_pos[0] == 1);
+
+        /* Adjacent: dist(depot,P) + dist(P,D) + dist(D,depot) - dist(depot,depot) */
+        expected = sg_euclid(0, 0, 5, 0) + sg_euclid(5, 0, 10, 10) + sg_euclid(10, 10, 0, 0)
+                 - sg_euclid(0, 0, 0, 0)
+                 + 1.0 * 0.0001;
+        actual = sg_route_removal_cost((void *)ctx, (void *)&sol, 0);
+        assert(fabs(actual - expected) < 1e-6);
+
+        sg_route_solution_reset(&sol);
+        sg_free(ctx);
+    }
+
+    /* Test 3: PD non-adjacent. Insert delivery-only first, then PD which picks
+       non-adjacent placement due to geometry.
+       Depot (0,0). D0 at (8,0). PD: pickup (3,0), delivery (15,8).
+       Optimal route: depot -> P1(3,0) -> D0(8,0) -> D1(15,8) -> depot
+       (non-adjacent: 35.63 vs adjacent: 36.05) */
+    {
+        SGContext *ctx = make_config(50, 42);
+        SGRouteSolution sol;
+        uint32_t depot;
+        double expected, actual;
+
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+        add_delivery_request(ctx, 8.0, 0.0, 0, 86400, 60, -10.0);   /* request 0 = D0 */
+        add_pd_request(ctx,
+                       3.0, 0.0, 0, 86400, 10,
+                       15.0, 8.0, 0, 86400, 10,
+                       10.0);                                          /* request 1 = PD */
+
+        assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+        /* Insert delivery-only request 0 first */
+        {
+            double score, dist;
+            assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+            assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+        }
+        assert(sol.route_stop_lengths[0] == 1);
+
+        /* Insert PD request 1 - should choose non-adjacent: p_pos=0, d_pos=2 */
+        {
+            double score;
+            uint32_t p_pos, d_pos;
+            double route_dist;
+            assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 1, 0,
+                                                           &score, &p_pos, &d_pos, &route_dist));
+            assert(p_pos == 0);
+            assert(d_pos == 2);
+            assert(sg_route_apply_pd_insertion(ctx, &sol, 1, 0, p_pos, d_pos, route_dist) == AR_STATUS_OK);
+        }
+
+        /* Verify non-adjacent layout: P1@0, D0@1, D1@2 */
+        assert(sol.route_stop_lengths[0] == 3);
+        assert(sol.request_pickup_stop_pos[1] == 0);
+        assert(sol.request_delivery_stop_pos[0] == 1);
+        assert(sol.request_delivery_stop_pos[1] == 2);
+
+        /* Non-adjacent saving for PD request 1:
+           pickup saving:   dist(depot,P1) + dist(P1,D0) - dist(depot,D0) = 3+5-8 = 0
+           delivery saving: dist(D0,D1) + dist(D1,depot) - dist(D0,depot)
+                          = sqrt(113) + sqrt(289) - 8 */
+        expected = (sg_euclid(8, 0, 15, 8) + sg_euclid(15, 8, 0, 0) - sg_euclid(8, 0, 0, 0))
+                 + 2.0 * 0.0001;
+        actual = sg_route_removal_cost((void *)ctx, (void *)&sol, 1);
+        assert(fabs(actual - expected) < 1e-6);
+
+        /* Unassigned request should return 0.0 */
+        assert(sg_route_removal_cost((void *)ctx, (void *)&sol, 99) == 0.0);
+
+        sg_route_solution_reset(&sol);
+        sg_free(ctx);
+    }
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -1599,6 +1765,7 @@ int main(void) {
     RUN_TEST(test_pd_unassign_preserves_others);
     RUN_TEST(test_pd_delivery_only_mixed);
     RUN_TEST(test_pd_ride_time_constraint);
+    RUN_TEST(test_route_removal_cost);
 
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);

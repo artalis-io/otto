@@ -198,7 +198,7 @@ ARStatus sg_route_destroy_worst(void *op_ctx, void *solution, int count,
 
     status = ar_remove_worst(ctx->op_rng, ctx, sol, count, removed_ids,
                              sg_get_assigned_count, sg_get_assigned_element,
-                             sg_bootstrap_removal_cost, SG_WORST_RANDOMNESS,
+                             sg_route_removal_cost, SG_WORST_RANDOMNESS,
                              NULL, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
