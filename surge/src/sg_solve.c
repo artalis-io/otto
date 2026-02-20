@@ -441,6 +441,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
     int phase1_iters;
     int phase2_iters;
     int64_t total_alns_iters = 0;
+    int solution_valid = 1;
 
     if (!ctx) {
         return SG_STATUS_INVALID_ARG;
@@ -566,6 +567,11 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         }
 
         final_sol = best ? best : &initial;
+
+        if (!sg_route_solution_validate(final_sol, (void *)ctx)) {
+            solution_valid = 0;
+        }
+
         ctx->stats.iterations = total_alns_iters;
         ctx->stats.unassigned = final_sol->base.num_unassigned;
         ctx->stats.vehicles_used = final_sol->vehicles_used;
@@ -577,6 +583,9 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
     sg_route_solution_free(p1_best, NULL);
     sg_route_solution_free(p2_best, NULL);
 
+    if (!solution_valid) {
+        return SG_STATUS_ERROR;
+    }
     if (ar_status == AR_STATUS_LIMIT) {
         return SG_STATUS_LIMIT;
     }

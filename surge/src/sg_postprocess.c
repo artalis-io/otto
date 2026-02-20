@@ -365,7 +365,7 @@ static int sg_route_try_or_opt_once(const SGContext *ctx, SGRouteSolution *sol) 
         }
         route_a = sg_route_vehicle_ptr_const(sol, va);
 
-        for (k = 3; k >= 2 && !improved; k--) {
+        for (k = 3; k >= 1 && !improved; k--) {
             uint32_t start;
 
             if ((uint32_t)k > len_a) {
@@ -557,6 +557,187 @@ static int sg_route_try_or_opt_once(const SGContext *ctx, SGRouteSolution *sol) 
 
     free(candidate_src);
     free(candidate_dst);
+    return improved;
+}
+
+static int sg_route_try_cross_exchange_once(const SGContext *ctx, SGRouteSolution *sol) {
+    uint32_t *candidate_a = NULL;
+    uint32_t *candidate_b = NULL;
+    uint32_t va;
+    int improved = 0;
+
+    if (!ctx || !sol || sol->num_vehicles < 2 || sol->route_stride == 0) {
+        return 0;
+    }
+
+    candidate_a = (uint32_t *)malloc((size_t)sol->route_stride * sizeof(uint32_t));
+    candidate_b = (uint32_t *)malloc((size_t)sol->route_stride * sizeof(uint32_t));
+    if (!candidate_a || !candidate_b) {
+        free(candidate_a);
+        free(candidate_b);
+        return 0;
+    }
+
+    for (va = 0; va < sol->num_vehicles && !improved; va++) {
+        uint32_t vb;
+        uint32_t len_a = sol->route_lengths[va];
+        if (len_a == 0) {
+            continue;
+        }
+
+        for (vb = va + 1; vb < sol->num_vehicles && !improved; vb++) {
+            uint32_t len_b = sol->route_lengths[vb];
+            const uint32_t *route_a;
+            const uint32_t *route_b;
+            int sa;
+
+            if (len_b == 0) {
+                continue;
+            }
+
+            route_a = sg_route_vehicle_ptr_const(sol, va);
+            route_b = sg_route_vehicle_ptr_const(sol, vb);
+
+            for (sa = 1; sa <= 3 && !improved; sa++) {
+                int sb;
+                if ((uint32_t)sa > len_a) {
+                    break;
+                }
+
+                for (sb = 1; sb <= 3 && !improved; sb++) {
+                    uint32_t ia;
+                    if ((uint32_t)sb > len_b) {
+                        break;
+                    }
+
+                    for (ia = 0; ia + (uint32_t)sa <= len_a && !improved; ia++) {
+                        uint32_t ib;
+                        for (ib = 0; ib + (uint32_t)sb <= len_b; ib++) {
+                            uint32_t new_len_a = len_a - (uint32_t)sa + (uint32_t)sb;
+                            uint32_t new_len_b = len_b - (uint32_t)sb + (uint32_t)sa;
+                            double new_dist_a = 0.0;
+                            double new_dist_b = 0.0;
+                            double new_total;
+
+                            /* Skip identity swap (same size at same positions on same route
+                               is impossible since va < vb, but skip sa==sb same content). */
+                            if (sa == sb && ia == ib && va == vb) {
+                                continue;
+                            }
+
+                            if (new_len_a > sol->route_stride ||
+                                new_len_b > sol->route_stride) {
+                                continue;
+                            }
+
+                            /* Build candidate A: A[0..ia-1] + B[ib..ib+sb-1] + A[ia+sa..end] */
+                            if (ia > 0) {
+                                memcpy(candidate_a, route_a,
+                                       (size_t)ia * sizeof(uint32_t));
+                            }
+                            memcpy(&candidate_a[ia], &route_b[ib],
+                                   (size_t)sb * sizeof(uint32_t));
+                            if (ia + (uint32_t)sa < len_a) {
+                                memcpy(&candidate_a[ia + (uint32_t)sb],
+                                       &route_a[ia + (uint32_t)sa],
+                                       (size_t)(len_a - ia - (uint32_t)sa) * sizeof(uint32_t));
+                            }
+
+                            /* Build candidate B: B[0..ib-1] + A[ia..ia+sa-1] + B[ib+sb..end] */
+                            if (ib > 0) {
+                                memcpy(candidate_b, route_b,
+                                       (size_t)ib * sizeof(uint32_t));
+                            }
+                            memcpy(&candidate_b[ib], &route_a[ia],
+                                   (size_t)sa * sizeof(uint32_t));
+                            if (ib + (uint32_t)sb < len_b) {
+                                memcpy(&candidate_b[ib + (uint32_t)sa],
+                                       &route_b[ib + (uint32_t)sb],
+                                       (size_t)(len_b - ib - (uint32_t)sb) * sizeof(uint32_t));
+                            }
+
+                            if (!sg_route_sequence_feasible_distance(
+                                    ctx, va, candidate_a, new_len_a,
+                                    &new_dist_a, NULL) ||
+                                !sg_route_sequence_feasible_distance(
+                                    ctx, vb, candidate_b, new_len_b,
+                                    &new_dist_b, NULL)) {
+                                continue;
+                            }
+
+                            new_total = sol->total_distance
+                                        - sol->route_distance[va]
+                                        - sol->route_distance[vb]
+                                        + new_dist_a + new_dist_b;
+                            if (new_total >= sol->total_distance - 1e-9) {
+                                continue;
+                            }
+
+                            /* Apply the move */
+                            {
+                                SGRouteSolution *backup =
+                                    (SGRouteSolution *)sg_route_solution_copy(sol, (void *)ctx);
+                                uint32_t r;
+
+                                if (!backup) {
+                                    continue;
+                                }
+
+                                memcpy(sg_route_vehicle_ptr(sol, va), candidate_a,
+                                       (size_t)new_len_a * sizeof(uint32_t));
+                                memcpy(sg_route_vehicle_ptr(sol, vb), candidate_b,
+                                       (size_t)new_len_b * sizeof(uint32_t));
+                                sol->route_lengths[va] = new_len_a;
+                                sol->route_lengths[vb] = new_len_b;
+
+                                for (r = 0; r < sol->base.total_requests; r++) {
+                                    if (sol->request_vehicle[r] == va ||
+                                        sol->request_vehicle[r] == vb) {
+                                        sol->request_vehicle[r] = UINT32_MAX;
+                                        sol->request_pos[r] = UINT32_MAX;
+                                        sol->request_pickup_stop_pos[r] = UINT32_MAX;
+                                        sol->request_delivery_stop_pos[r] = UINT32_MAX;
+                                    }
+                                }
+
+                                for (r = 0; r < new_len_a; r++) {
+                                    uint32_t req = candidate_a[r];
+                                    sol->request_vehicle[req] = va;
+                                    sol->request_pos[req] = r;
+                                }
+                                for (r = 0; r < new_len_b; r++) {
+                                    uint32_t req = candidate_b[r];
+                                    sol->request_vehicle[req] = vb;
+                                    sol->request_pos[req] = r;
+                                }
+
+                                if (!sg_route_rebuild_vehicle_stop_state(ctx, sol, va) ||
+                                    !sg_route_rebuild_vehicle_stop_state(ctx, sol, vb)) {
+                                    sg_route_restore_from_backup(sol, backup);
+                                    continue;
+                                }
+
+                                sg_route_update_timing(ctx, sol, va);
+                                sg_route_update_timing(ctx, sol, vb);
+                                sg_route_update_load(ctx, sol, va);
+                                sg_route_update_load(ctx, sol, vb);
+                                sol->route_distance[va] = new_dist_a;
+                                sol->route_distance[vb] = new_dist_b;
+                                sol->total_distance = new_total;
+
+                                sg_route_solution_free(backup, NULL);
+                                improved = 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    free(candidate_a);
+    free(candidate_b);
     return improved;
 }
 
@@ -968,7 +1149,7 @@ ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx,
 
 static int sg_try_place_with_ejection(const SGContext *ctx, SGRouteSolution *sol,
                                        uint32_t req, int depth, uint32_t target_v,
-                                       uint8_t *chain_visited) {
+                                       uint8_t *chain_visited, int *budget) {
     /* Step 1: Direct insertion (no new vehicle). */
     {
         uint32_t best_v = UINT32_MAX, best_pos = UINT32_MAX;
@@ -993,8 +1174,8 @@ static int sg_try_place_with_ejection(const SGContext *ctx, SGRouteSolution *sol
         }
     }
 
-    /* Step 2: If no depth remaining, give up. */
-    if (depth <= 0) {
+    /* Step 2: If no depth remaining or budget exhausted, give up. */
+    if (depth <= 0 || (budget && *budget <= 0)) {
         return 0;
     }
 
@@ -1030,6 +1211,15 @@ static int sg_try_place_with_ejection(const SGContext *ctx, SGRouteSolution *sol
 
                 if (chain_visited[eject_req]) {
                     continue;
+                }
+
+                /* Budget accounting: decrement and bail if exhausted. */
+                if (budget) {
+                    (*budget)--;
+                    if (*budget <= 0) {
+                        free(vp_requests_snapshot);
+                        return 0;
+                    }
                 }
 
                 /* Pruning: skip if ejected request has tighter TW (harder to reinsert). */
@@ -1097,7 +1287,7 @@ static int sg_try_place_with_ejection(const SGContext *ctx, SGRouteSolution *sol
                     /* Recursively place the ejected request. */
                     chain_visited[eject_req] = 1;
                     if (sg_try_place_with_ejection(ctx, sol, eject_req, depth - 1,
-                                                    target_v, chain_visited)) {
+                                                    target_v, chain_visited, budget)) {
                         chain_visited[eject_req] = 0;
                         sg_route_solution_free(chain_backup, NULL);
                         free(vp_requests_snapshot);
@@ -1231,6 +1421,8 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
             }
 
             /* Try to place each request via direct insertion or ejection chain. */
+            {
+                int ejection_budget = SG_EJECTION_BUDGET;
             for (ri = 0; ri < route_len; ri++) {
                 uint32_t req = requests[ri];
 
@@ -1241,7 +1433,8 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
                 }
 
                 if (!sg_try_place_with_ejection(ctx, sol, req, SG_EJECTION_MAX_DEPTH,
-                                                 target_v, chain_visited)) {
+                                                 target_v, chain_visited,
+                                                 &ejection_budget)) {
                     all_placed = 0;
                     break;
                 }
@@ -1249,6 +1442,7 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
                 if (chain_visited) {
                     chain_visited[req] = 0;
                 }
+            }
             }
 
             if (all_placed && sol->route_lengths[target_v] == 0 &&
@@ -1389,6 +1583,9 @@ ARStatus sg_route_postprocess_intensify(const SGContext *ctx, SGRouteSolution *s
             improved = 1;
         }
         if (sg_route_try_2opt_star_once(ctx, sol)) {
+            improved = 1;
+        }
+        if (sg_route_try_cross_exchange_once(ctx, sol)) {
             improved = 1;
         }
         if (!improved) {

@@ -52,7 +52,7 @@ static void sg_print_usage(const char *argv0) {
     printf("\n");
     printf("Options:\n");
     printf("  --dir <path>          Directory with Solomon .txt files (default: benchmarks/solomon)\n");
-    printf("  --iterations <n>      ALNS max iterations per case (default: 5000)\n");
+    printf("  --iterations <n>      ALNS max iterations per case (default: 10000)\n");
     printf("  --time-limit <sec>    ALNS max wall time per case (default: 0 = unlimited)\n");
     printf("  --seed <n>            Deterministic seed (default: 42)\n");
     printf("  --non-deterministic   Use time-based random seed\n");
@@ -218,7 +218,7 @@ static const char *sg_lexi_vs_bks(uint32_t vehicles, double distance, const SGBK
 
 int main(int argc, char **argv) {
     const char *cases_dir = "benchmarks/solomon";
-    int max_iterations = 5000;
+    int max_iterations = 10000;
     int max_time_seconds = 0;
     uint64_t seed = 42;
     int deterministic = 1;
