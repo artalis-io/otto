@@ -2157,3 +2157,34 @@ in `simplex.c` that computes one pressure signal and one periodic plan for both 
 
 This keeps large two-phase NETLIB cases (`fit1p`, `nesm`) on conservative periodic cadence while
 still allowing medium/small cases to skip unnecessary refactors when LU health is stable.
+
+### 8.8 LP Refactor Performance Plan (Iterative, Reusable)
+
+Current bottleneck on large degenerate LPs is no longer sparse→dense fallback; it is full
+refactor wall-time plus frequent periodic reinversion (`fit1p`, `nesm`, `scagr25` class).
+Track execution with these phases:
+
+1. **Stage-level refactor telemetry**
+   Add timers/counters for basis rebuild, symbolic analyze, sparse numeric, dense numeric,
+   and internal sparse→dense fallback reasons.
+2. **Remove avoidable fallback/copies**
+   Eliminate symbolic malloc churn and avoid dense fallback when sparse `k=m` path is viable.
+3. **Periodic scheduler effectiveness feedback**
+   Keep LU hard safety triggers; adapt periodic interval using observed refactor benefit.
+4. **Cheaper full refactor path**
+   Move from full basis rebuild copy toward incremental basis-matrix maintenance fast-paths.
+5. **Faster long FT-chain solves**
+   Batch/cache-optimize spike application in FTRAN/BTRAN without changing numerics.
+6. **Hard regression discipline**
+   Every step must pass `make -C ralph test`, `make -C ralph test-netlib-gate`,
+   and canary subset `fit1p|nesm|bandm|scagr25`.
+
+### 8.9 NETLIB Small-Canary Coverage
+
+Added explicit NETLIB small-canary coverage (tiers 0-1 plus `beaconfd`) to keep recurrent
+performance/correctness checks focused and reproducible:
+
+- Canary allowlist file: `ralph/benchmarks/netlib_small_canary.txt` (26 problems)
+- Dedicated target: `make -C ralph test-netlib-gate-small`
+- Full gate baseline now enforces required small-instance presence via
+  `required_coverage` in `ralph/benchmarks/netlib_regression_baseline.json`
