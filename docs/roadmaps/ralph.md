@@ -4,7 +4,16 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-20, `eefe861`) — Phase 5 FT-chain baseline + GLPK comparison refresh:
+**Current** (2026-02-20, `c844cbe`) — H1c + H2 Markowitz refactor baseline:
+added adaptive reach-mask sparse transpose solves (H1c), then reduced Markowitz numeric refactor
+work with pivot-row-scoped cleanup and cached row-to-column position hints. Latest gates:
+`make -C ralph test-simplex-policy` PASS (16/16), `make -C ralph test-lu-markowitz` PASS (59/59),
+`make -C ralph test-netlib-gate-small` PASS (26/26, dense fallback files: 0, no unexpected
+regressions vs baseline). H2 focus snapshot (vs `/tmp/h2base_*.json`): `refactor.all_ms`
+improved on `25fv47` (-40.22%), `fit1p` (-15.00%), `80bau3b` (-74.52%), `nesm` (-72.58%),
+`czprob` (-75.13%), with status/objective validation preserved on all five.
+
+Previous: (2026-02-20, `eefe861`) — Phase 5 FT-chain baseline + GLPK comparison refresh:
 batched FT spike micro-kernels for long update chains are now baseline, with roadmap/docs aligned.
 Latest gates: `make -C ralph test` PASS, `make -C ralph test-simplex-policy` PASS (16/16),
 `make -C ralph test-lu-markowitz` PASS (59/59), `make -C ralph test-netlib-gate-small` PASS
