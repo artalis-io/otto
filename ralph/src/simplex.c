@@ -1081,8 +1081,9 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         (size_t)m * sizeof(double) + (size_t)num_aux_vars * sizeof(double) +
         /* double array: c_original for two-phase (n) */
         (size_t)n * sizeof(double) +
-        /* int arrays: basis, basis_pos (m and n) */
+        /* int arrays: basis, basis_pos (m and n), basis cache cols/nnz (m each) */
         (size_t)m * sizeof(int) + (size_t)n * sizeof(int) +
+        2 * (size_t)m * sizeof(int) +
         /* int arrays: nonbasis, var_status (n-m and n) */
         (size_t)(n - m) * sizeof(int) + (size_t)n * sizeof(VarStatus) +
         /* int arrays: cb_sparse_idx, aux_row, partial_candidates, dual_candidates */
@@ -1099,8 +1100,8 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         2 * (size_t)n * sizeof(int) +
         /* dual pivot backup: x(n dbl), rc(n dbl), basis(m int), basis_pos(n int), status(n VarStatus) */
         2 * (size_t)n * sizeof(double) + (size_t)m * sizeof(int) + (size_t)n * sizeof(int) + (size_t)n * sizeof(VarStatus) +
-        /* Alignment padding (35 allocations * 8 bytes) */
-        280;
+        /* Alignment padding (37 allocations * 8 bytes) */
+        296;
 
     /* Create arena */
     tab->arena = sh_arena_create(arena_size);
@@ -1117,6 +1118,8 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     tab->nonbasis = (int*)sh_arena_alloc(tab->arena, (n - m) * sizeof(int));
     tab->var_status = (VarStatus*)sh_arena_alloc(tab->arena, n * sizeof(VarStatus));
     tab->basis_pos = (int*)sh_arena_alloc(tab->arena, n * sizeof(int));
+    tab->basis_col_cache = (int*)sh_arena_alloc(tab->arena, m * sizeof(int));
+    tab->basis_col_nnz_cache = (int*)sh_arena_alloc(tab->arena, m * sizeof(int));
 
     tab->x = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
     tab->y = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
@@ -1189,6 +1192,7 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     /* Single check for all allocations */
     if (!tab->c_ext || !tab->lb_ext || !tab->ub_ext ||
         !tab->basis || !tab->nonbasis || !tab->var_status || !tab->basis_pos ||
+        !tab->basis_col_cache || !tab->basis_col_nnz_cache ||
         !tab->x || !tab->y || !tab->rc ||
         !tab->work1 || !tab->work2 || !tab->work3 || !tab->rhs || !tab->row_sign ||
         !tab->pivot_row || !tab->tau_work || !tab->se_weights ||
@@ -1680,6 +1684,10 @@ void tableau_free(SimplexTableau *tab) {
     tab->nonbasis = NULL;
     tab->var_status = NULL;
     tab->basis_pos = NULL;
+    tab->basis_col_cache = NULL;
+    tab->basis_col_nnz_cache = NULL;
+    tab->basis_cache_valid = 0;
+    tab->basis_cache_total_nnz = 0;
     tab->x = NULL;
     tab->y = NULL;
     tab->rc = NULL;
@@ -1727,12 +1735,16 @@ static int ensure_basis_workspace(SimplexTableau *tab, int nnz_needed) {
     SparseMatrix *B = tab->basis_work;
     if (!B) {
         tab->basis_work = sparse_create(tab->m, tab->m, nnz_needed);
+        tab->basis_cache_valid = 0;
+        tab->basis_cache_total_nnz = 0;
         return tab->basis_work ? 0 : -1;
     }
 
     if (B->nrows != tab->m || B->ncols != tab->m) {
         sparse_free(B);
         tab->basis_work = sparse_create(tab->m, tab->m, nnz_needed);
+        tab->basis_cache_valid = 0;
+        tab->basis_cache_total_nnz = 0;
         return tab->basis_work ? 0 : -1;
     }
 
@@ -1755,6 +1767,66 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
     if (!tab || !tab->A_ext || !tab->basis) return NULL;
 
     const SparseMatrix *A = tab->A_ext;
+    SparseMatrix *B = tab->basis_work;
+    int changed = 0;
+
+    /* Fast path: if all changed basis positions preserve column nnz, patch only
+     * those column payloads in-place and keep colptr layout unchanged. */
+    if (tab->basis_cache_valid &&
+        B &&
+        tab->basis_col_cache &&
+        tab->basis_col_nnz_cache &&
+        B->nrows == tab->m &&
+        B->ncols == tab->m &&
+        B->nnz == tab->basis_cache_total_nnz) {
+        int total_nnz = tab->basis_cache_total_nnz;
+        int same_layout = 1;
+
+        for (int k = 0; k < tab->m; k++) {
+            int j = tab->basis[k];
+            int prev_j;
+            int prev_nnz;
+            int next_nnz;
+            if (j < 0 || j >= A->ncols) return NULL;
+
+            prev_j = tab->basis_col_cache[k];
+            if (j == prev_j) continue;
+
+            prev_nnz = tab->basis_col_nnz_cache[k];
+            next_nnz = A->colptr[j + 1] - A->colptr[j];
+            total_nnz += next_nnz - prev_nnz;
+            changed++;
+            if (next_nnz != prev_nnz) {
+                same_layout = 0;
+            }
+        }
+
+        if (changed == 0) {
+            return B;
+        }
+
+        if (same_layout && total_nnz == tab->basis_cache_total_nnz) {
+            for (int k = 0; k < tab->m; k++) {
+                int j = tab->basis[k];
+                int prev_j = tab->basis_col_cache[k];
+                int dst;
+                int src;
+                int col_nnz;
+                if (j == prev_j) continue;
+
+                src = A->colptr[j];
+                col_nnz = tab->basis_col_nnz_cache[k];
+                dst = B->colptr[k];
+                if (col_nnz > 0) {
+                    memcpy(B->rowidx + dst, A->rowidx + src, (size_t)col_nnz * sizeof(int));
+                    memcpy(B->values + dst, A->values + src, (size_t)col_nnz * sizeof(double));
+                }
+                tab->basis_col_cache[k] = j;
+            }
+            return B;
+        }
+    }
+
     int nnz = 0;
     for (int k = 0; k < tab->m; k++) {
         int j = tab->basis[k];
@@ -1764,7 +1836,7 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
 
     if (ensure_basis_workspace(tab, nnz) != 0) return NULL;
 
-    SparseMatrix *B = tab->basis_work;
+    B = tab->basis_work;
     int idx = 0;
     for (int k = 0; k < tab->m; k++) {
         int j = tab->basis[k];
@@ -1778,9 +1850,13 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
             memcpy(B->values + idx, A->values + start, (size_t)col_nnz * sizeof(double));
             idx += col_nnz;
         }
+        tab->basis_col_cache[k] = j;
+        tab->basis_col_nnz_cache[k] = col_nnz;
     }
     B->colptr[tab->m] = idx;
     B->nnz = idx;
+    tab->basis_cache_total_nnz = idx;
+    tab->basis_cache_valid = 1;
 
     return B;
 }
@@ -4980,6 +5056,8 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
          * rows) but the CSC structure didn't, so the fingerprint would still match.
          * Without invalidation, the sparse LU reuses a stale elimination order. */
         tab->lu->sym_valid = 0;
+        tab->basis_cache_valid = 0;
+        tab->basis_cache_total_nnz = 0;
     }
 
     /* Refactorize basis for Phase 2.

@@ -349,6 +349,10 @@ typedef struct {
     int m;                  /* Number of constraints */
     SparseMatrix *A_ext;    /* Extended constraint matrix */
     SparseMatrix *basis_work; /* Reusable CSC workspace for basis extraction */
+    int *basis_col_cache;   /* Basis-position -> A_ext column id from last basis build */
+    int *basis_col_nnz_cache; /* Basis-position -> cached column nnz from last basis build */
+    int basis_cache_valid;  /* 1 if basis_work + cache arrays match current basis/A_ext values */
+    int basis_cache_total_nnz; /* Cached total nnz for basis_work */
     double *c_ext;          /* Extended objective */
     double *lb_ext;         /* Extended lower bounds */
     double *ub_ext;         /* Extended upper bounds */
