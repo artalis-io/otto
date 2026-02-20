@@ -2603,7 +2603,9 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
         int *mkz_col_perm = NULL;
         int mkz_reg = 0;
         int rc = MKZ_FAIL_NONE;
-        int pool_mult = MARKOWITZ_POOL_MULT;
+        int pool_mult = lu->mkz_pool_mult_hint;
+        if (pool_mult < MARKOWITZ_POOL_MULT) pool_mult = MARKOWITZ_POOL_MULT;
+        if (pool_mult > MARKOWITZ_POOL_MAX_MULT) pool_mult = MARKOWITZ_POOL_MAX_MULT;
 
         while (1) {
             int pool_cap_dummy = 0;
@@ -2654,6 +2656,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                 next_pool_mult = MARKOWITZ_POOL_MAX_MULT;
             }
             pool_mult = next_pool_mult;
+            lu->mkz_pool_mult_hint = pool_mult;
 
             L_nnz = 0;
             U_nnz = 0;
@@ -2675,6 +2678,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             lu->mkz_successes++;
             lu->mkz_last_failure = MKZ_FAIL_NONE;
             lu->num_regularized = mkz_reg;
+            lu->mkz_pool_mult_hint = pool_mult;
 
             /* Markowitz emits L_col/U_col in structural column space (0..k-1).
              * The COO→CSC path and identity_placement expect step-indexed columns.

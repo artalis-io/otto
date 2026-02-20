@@ -290,6 +290,7 @@ LUFactorization* lu_create(int m) {
 
     /* Sparse Markowitz LU (default on for k >= MARKOWITZ_MIN_K) */
     lu->mkz_enabled = 1;
+    lu->mkz_pool_mult_hint = 4;
     lu->mkz_calls = 0;
     lu->mkz_successes = 0;
     lu->mkz_failures = 0;
