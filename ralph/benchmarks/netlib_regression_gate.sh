@@ -12,6 +12,7 @@ HARD_CAP_SEC=""
 OUTER_TIMEOUT_SEC=""
 OUTDIR=""
 FILTER_REGEX=""
+ALLOWLIST_FILE=""
 NO_BUILD=0
 
 usage() {
@@ -26,6 +27,7 @@ Options:
   --outer-timeout <sec>    External timeout wrapper seconds
   --outdir <dir>           Output directory for run artifacts
   --filter <regex>         Only run files where basename matches regex
+  --allowlist <file>       Only run basenames listed in file (one per line)
   --no-build               Skip rebuilding ralph-benchmark
   -h, --help               Show help
 EOF
@@ -59,6 +61,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --filter)
             FILTER_REGEX="$2"
+            shift 2
+            ;;
+        --allowlist)
+            ALLOWLIST_FILE="$2"
             shift 2
             ;;
         --no-build)
@@ -102,6 +108,11 @@ if [[ ! -d "$NETLIB_DIR" ]]; then
     exit 2
 fi
 
+if [[ -n "$ALLOWLIST_FILE" && ! -f "$ALLOWLIST_FILE" ]]; then
+    echo "ERROR: allowlist file not found: $ALLOWLIST_FILE" >&2
+    exit 2
+fi
+
 if [[ -z "$HARD_CAP_SEC" ]]; then
     HARD_CAP_SEC="$(jq -r '.defaults.hard_cap_sec // 20' "$BASELINE_FILE")"
 fi
@@ -127,6 +138,7 @@ mkdir -p "$OUTDIR/results"
 FILES_TXT="$OUTDIR/files.txt"
 STATUS_TSV="$OUTDIR/status.tsv"
 SELECTED_NAMES="$OUTDIR/selected.names.txt"
+ALLOWLIST_NAMES="$OUTDIR/allowlist.names.txt"
 
 find "$NETLIB_DIR" -maxdepth 1 -type f -name '*.mps' | LC_ALL=C sort > "$FILES_TXT"
 if [[ -n "$FILTER_REGEX" ]]; then
@@ -139,6 +151,27 @@ if [[ -n "$FILTER_REGEX" ]]; then
         fi
     done < "$FILES_TXT"
     mv "$FILTERED_TXT" "$FILES_TXT"
+fi
+
+if [[ -n "$ALLOWLIST_FILE" ]]; then
+    sed -e 's/#.*$//' \
+        -e 's/[[:space:]]*$//' \
+        -e 's/^[[:space:]]*//' \
+        -e '/^$/d' "$ALLOWLIST_FILE" \
+        | awk '{name=$0; if (name !~ /\.mps$/) name=name ".mps"; print name}' \
+        | LC_ALL=C sort -u > "$ALLOWLIST_NAMES"
+
+    FILTERED_TXT="$OUTDIR/files.allowlist.txt"
+    : > "$FILTERED_TXT"
+    while IFS= read -r fp; do
+        bn="$(basename "$fp")"
+        if grep -Fqx "$bn" "$ALLOWLIST_NAMES"; then
+            echo "$fp" >> "$FILTERED_TXT"
+        fi
+    done < "$FILES_TXT"
+    mv "$FILTERED_TXT" "$FILES_TXT"
+else
+    : > "$ALLOWLIST_NAMES"
 fi
 
 total="$(wc -l < "$FILES_TXT" | tr -d ' ')"
@@ -156,6 +189,9 @@ echo "  bench:    $BENCH_EXEC"
 echo "  files:    $total"
 echo "  hard-cap: $HARD_CAP_SEC sec"
 echo "  timeout:  $OUTER_TIMEOUT_SEC sec (external)"
+if [[ -n "$ALLOWLIST_FILE" ]]; then
+    echo "  allowlist:$ALLOWLIST_FILE"
+fi
 echo "  outdir:   $OUTDIR"
 
 : > "$STATUS_TSV"
@@ -182,12 +218,14 @@ known_obj="$OUTDIR/known.objective_mismatch.txt"
 known_sol="$OUTDIR/known.solution_invalid.txt"
 known_timeout="$OUTDIR/known.timeouts.txt"
 required_pass="$OUTDIR/required.pass.txt"
+required_coverage="$OUTDIR/required.coverage.txt"
 
 jq -r '.known_status_mismatch[]?' "$BASELINE_FILE" | LC_ALL=C sort -u > "$known_status"
 jq -r '.known_objective_mismatch[]?' "$BASELINE_FILE" | LC_ALL=C sort -u > "$known_obj"
 jq -r '.known_solution_invalid[]?' "$BASELINE_FILE" | LC_ALL=C sort -u > "$known_sol"
 jq -r '.known_timeouts[]?' "$BASELINE_FILE" | LC_ALL=C sort -u > "$known_timeout"
 jq -r '.required_pass[]?' "$BASELINE_FILE" | LC_ALL=C sort -u > "$required_pass"
+jq -r '.required_coverage[]?' "$BASELINE_FILE" | LC_ALL=C sort -u > "$required_coverage"
 
 actual_timeout="$OUTDIR/actual.timeouts.txt"
 actual_cmd_fail="$OUTDIR/actual.command_failures.txt"
@@ -266,6 +304,8 @@ unexpected_sol="$OUTDIR/unexpected.solution_invalid.txt"
 missing_required="$OUTDIR/missing.required.txt"
 actual_fail_any="$OUTDIR/actual.fail_any.txt"
 required_failed="$OUTDIR/required.failed.txt"
+missing_allowlist="$OUTDIR/missing.allowlist.txt"
+missing_coverage="$OUTDIR/missing.coverage.txt"
 
 comm -23 "$actual_timeout" "$known_timeout" > "$unexpected_timeout"
 comm -23 "$actual_status" "$known_status" > "$unexpected_status"
@@ -287,10 +327,22 @@ else
     : > "$required_failed"
 fi
 
-if [[ -s "$required_pass" && -z "$FILTER_REGEX" ]]; then
+if [[ -s "$required_pass" && -z "$FILTER_REGEX" && -z "$ALLOWLIST_FILE" ]]; then
     comm -23 "$required_pass" "$SELECTED_NAMES" > "$missing_required"
 else
     : > "$missing_required"
+fi
+
+if [[ -s "$required_coverage" && -z "$FILTER_REGEX" && -z "$ALLOWLIST_FILE" ]]; then
+    comm -23 "$required_coverage" "$SELECTED_NAMES" > "$missing_coverage"
+else
+    : > "$missing_coverage"
+fi
+
+if [[ -n "$ALLOWLIST_FILE" ]]; then
+    comm -23 "$ALLOWLIST_NAMES" "$SELECTED_NAMES" > "$missing_allowlist"
+else
+    : > "$missing_allowlist"
 fi
 
 require_zero_dense="$(jq -r '.require_zero_dense_fallback // true' "$BASELINE_FILE")"
@@ -308,6 +360,8 @@ unexpected_obj_count="$(wc -l < "$unexpected_obj" | tr -d ' ')"
 unexpected_sol_count="$(wc -l < "$unexpected_sol" | tr -d ' ')"
 missing_required_count="$(wc -l < "$missing_required" | tr -d ' ')"
 required_failed_count="$(wc -l < "$required_failed" | tr -d ' ')"
+missing_allowlist_count="$(wc -l < "$missing_allowlist" | tr -d ' ')"
+missing_coverage_count="$(wc -l < "$missing_coverage" | tr -d ' ')"
 
 echo
 echo "Summary:"
@@ -327,6 +381,8 @@ echo "  new objective mismatch: $unexpected_obj_count"
 echo "  new invalid solutions:  $unexpected_sol_count"
 echo "  missing required-pass:  $missing_required_count"
 echo "  failed required-pass:   $required_failed_count"
+echo "  missing coverage:       $missing_coverage_count"
+echo "  missing allowlist:      $missing_allowlist_count"
 
 gate_fail=0
 
@@ -383,6 +439,20 @@ if [[ "$required_failed_count" -gt 0 ]]; then
     echo
     echo "FAIL: required-pass problems failed gate checks:"
     cat "$required_failed"
+    gate_fail=1
+fi
+
+if [[ "$missing_coverage_count" -gt 0 ]]; then
+    echo
+    echo "FAIL: required coverage problems missing from selected NETLIB set:"
+    cat "$missing_coverage"
+    gate_fail=1
+fi
+
+if [[ "$missing_allowlist_count" -gt 0 ]]; then
+    echo
+    echo "FAIL: allowlist problems missing from selected NETLIB set:"
+    cat "$missing_allowlist"
     gate_fail=1
 fi
 
