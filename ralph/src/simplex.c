@@ -97,6 +97,8 @@ typedef enum {
 #define PERIODIC_FEEDBACK_HIGH_PRESSURE 0.85
 #define PERIODIC_FEEDBACK_EARLY_RECOVERY_NUM 2
 #define PERIODIC_FEEDBACK_EARLY_RECOVERY_DEN 3
+#define PHASE1_DIR_STABILIZE_COOLDOWN_ITERS 8
+#define PHASE1_DIR_INF_FORCE_REFACTOR_MULT 100.0
 
 typedef struct {
     int interval;
@@ -4233,6 +4235,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     int excluded_entering_ttl_a = 0;
     int excluded_entering_b = -1;
     int excluded_entering_ttl_b = 0;
+    int dir_stabilize_cooldown = 0;
 
     /* Apply proactive perturbation in Phase 1 for highly-degenerate two-phase
      * problems. Phase 1 is inherently degenerate (many bases give art_sum=0).
@@ -4268,6 +4271,9 @@ static int simplex_phase1(SimplexSolver *solver) {
             if (excluded_entering_ttl_b == 0) {
                 excluded_entering_b = -1;
             }
+        }
+        if (dir_stabilize_cooldown > 0) {
+            dir_stabilize_cooldown--;
         }
 
         /* Pricing: select entering variable */
@@ -4475,6 +4481,28 @@ static int simplex_phase1(SimplexSolver *solver) {
          * Re-factorize and recompute ratio test from the same entering column. */
         double dir_inf = vec_abs_max(tab->work2, tab->m);
         if (dir_inf > RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
+            double force_refactor_trigger =
+                RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER * PHASE1_DIR_INF_FORCE_REFACTOR_MULT;
+            int force_dir_refactor = (dir_inf > force_refactor_trigger) ||
+                                     lu_needs_refactorization(tab->lu);
+            if (dir_stabilize_cooldown > 0 && !force_dir_refactor) {
+                if (solver->verbose >= 2) {
+                    fprintf(stderr,
+                            "[simplex_phase1] Large direction norm %.2e at iter %d (entering=%d), skipping direction-stabilize refactor (cooldown=%d)\n",
+                            dir_inf, iter, entering, dir_stabilize_cooldown);
+                }
+                phase1_exclude_entering_var(entering,
+                                            RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
+                                            &excluded_entering_a,
+                                            &excluded_entering_ttl_a,
+                                            &excluded_entering_b,
+                                            &excluded_entering_ttl_b);
+                use_bland = 1;
+                tableau_compute_solution(tab);
+                tableau_compute_reduced_costs(tab);
+                continue;
+            }
+
             if (solver->verbose >= 2) {
                 fprintf(stderr,
                         "[simplex_phase1] Large direction norm %.2e at iter %d (entering=%d), re-factorizing before pivot\n",
@@ -4486,6 +4514,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_DIRECTION_STABILIZE) != 0) {
                     break;
                 }
+                dir_stabilize_cooldown = PHASE1_DIR_STABILIZE_COOLDOWN_ITERS;
                 ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
                 if (ratio_status != 0) {
                     phase1_trace_record_no_entering(solver, iter, ratio_status);
@@ -4537,11 +4566,13 @@ static int simplex_phase1(SimplexSolver *solver) {
                                             &excluded_entering_ttl_a,
                                             &excluded_entering_b,
                                             &excluded_entering_ttl_b);
+                dir_stabilize_cooldown = PHASE1_DIR_STABILIZE_COOLDOWN_ITERS;
                 use_bland = 1;
                 tableau_compute_solution(tab);
                 tableau_compute_reduced_costs(tab);
                 continue;
             }
+            dir_stabilize_cooldown = 0;
             use_bland = 1;
         }
 
