@@ -2194,9 +2194,11 @@ Track execution with these phases:
 3. ✅ **Periodic scheduler effectiveness feedback** (done)
    Kept LU hard safety triggers and added per-phase adaptive bias that relaxes/tightens
    periodic cadence from observed periodic-refactor outcomes.
-4. ▶ **Cheaper full refactor path** (in progress)
-   Move from full basis rebuild copy toward incremental basis-matrix maintenance fast-paths.
-5. **Faster long FT-chain solves**
+4. ✅ **Cheaper full refactor path** (done)
+   Added incremental basis-matrix maintenance fast-paths for refactor extraction:
+   unchanged layout patching and span-rewrite+tail-shift when nnz layout changes,
+   with safe full-rebuild fallback.
+5. ▶ **Faster long FT-chain solves** (next)
    Batch/cache-optimize spike application in FTRAN/BTRAN without changing numerics.
 6. **Hard regression discipline**
    Every step must pass `make -C ralph test`, `make -C ralph test-netlib-gate`,
@@ -2217,6 +2219,9 @@ Progress update (2026-02-20):
 - Added first incremental basis-maintenance fast path in `simplex.c`: when basis-position
   replacements preserve per-column nnz, refactor extraction patches only changed columns in
   `basis_work` and reuses cached CSC layout; falls back to full rebuild on layout changes.
+- Extended incremental basis maintenance for nnz-layout changes: refactor extraction now
+  rewrites only the changed basis span and shifts trailing CSC payload in-place when capacity
+  allows, preserving full-rebuild fallback for safety.
 
 ### 8.9 NETLIB Small-Canary Coverage
 

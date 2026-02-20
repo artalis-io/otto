@@ -1769,6 +1769,8 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
     const SparseMatrix *A = tab->A_ext;
     SparseMatrix *B = tab->basis_work;
     int changed = 0;
+    int first_changed = tab->m;
+    int last_changed = -1;
 
     /* Fast path: if all changed basis positions preserve column nnz, patch only
      * those column payloads in-place and keep colptr layout unchanged. */
@@ -1779,6 +1781,7 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
         B->nrows == tab->m &&
         B->ncols == tab->m &&
         B->nnz == tab->basis_cache_total_nnz) {
+        int old_total_nnz = tab->basis_cache_total_nnz;
         int total_nnz = tab->basis_cache_total_nnz;
         int same_layout = 1;
 
@@ -1792,6 +1795,8 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
             prev_j = tab->basis_col_cache[k];
             if (j == prev_j) continue;
 
+            if (k < first_changed) first_changed = k;
+            if (k > last_changed) last_changed = k;
             prev_nnz = tab->basis_col_nnz_cache[k];
             next_nnz = A->colptr[j + 1] - A->colptr[j];
             total_nnz += next_nnz - prev_nnz;
@@ -1805,26 +1810,98 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
             return B;
         }
 
-        if (same_layout && total_nnz == tab->basis_cache_total_nnz) {
-            for (int k = 0; k < tab->m; k++) {
-                int j = tab->basis[k];
-                int prev_j = tab->basis_col_cache[k];
-                int dst;
-                int src;
-                int col_nnz;
-                if (j == prev_j) continue;
+        if (total_nnz < 0) {
+            tab->basis_cache_valid = 0;
+            tab->basis_cache_total_nnz = 0;
+        } else if (ensure_basis_workspace(tab, total_nnz) == 0) {
+            B = tab->basis_work;
+            if (same_layout && total_nnz == old_total_nnz) {
+                for (int k = first_changed; k <= last_changed; k++) {
+                    int j = tab->basis[k];
+                    int prev_j = tab->basis_col_cache[k];
+                    int dst;
+                    int src;
+                    int col_nnz;
+                    if (j == prev_j) continue;
 
-                src = A->colptr[j];
-                col_nnz = tab->basis_col_nnz_cache[k];
-                dst = B->colptr[k];
-                if (col_nnz > 0) {
-                    memcpy(B->rowidx + dst, A->rowidx + src, (size_t)col_nnz * sizeof(int));
-                    memcpy(B->values + dst, A->values + src, (size_t)col_nnz * sizeof(double));
+                    src = A->colptr[j];
+                    col_nnz = tab->basis_col_nnz_cache[k];
+                    dst = B->colptr[k];
+                    if (col_nnz > 0) {
+                        memcpy(B->rowidx + dst, A->rowidx + src, (size_t)col_nnz * sizeof(int));
+                        memcpy(B->values + dst, A->values + src, (size_t)col_nnz * sizeof(double));
+                    }
+                    tab->basis_col_cache[k] = j;
                 }
-                tab->basis_col_cache[k] = j;
+                return B;
             }
-            return B;
+
+            /* General incremental path: rewrite only the [first_changed, last_changed]
+             * basis span and shift the suffix tail when the span nnz changes. */
+            if (first_changed >= 0 && first_changed < tab->m &&
+                last_changed >= first_changed && last_changed < tab->m) {
+                int old_block_start = B->colptr[first_changed];
+                int old_block_end = B->colptr[last_changed + 1];
+                int old_block_nnz = old_block_end - old_block_start;
+                int new_block_nnz = 0;
+                int old_tail_start = old_block_end;
+                int old_tail_nnz = old_total_nnz - old_tail_start;
+
+                for (int k = first_changed; k <= last_changed; k++) {
+                    int j = tab->basis[k];
+                    new_block_nnz += A->colptr[j + 1] - A->colptr[j];
+                }
+
+                {
+                    int delta = new_block_nnz - old_block_nnz;
+                    if (old_tail_nnz > 0 && delta != 0) {
+                        int new_tail_start = old_tail_start + delta;
+                        memmove(B->rowidx + new_tail_start,
+                                B->rowidx + old_tail_start,
+                                (size_t)old_tail_nnz * sizeof(int));
+                        memmove(B->values + new_tail_start,
+                                B->values + old_tail_start,
+                                (size_t)old_tail_nnz * sizeof(double));
+                    }
+
+                    {
+                        int idx = old_block_start;
+                        for (int k = first_changed; k <= last_changed; k++) {
+                            int j = tab->basis[k];
+                            int start = A->colptr[j];
+                            int end = A->colptr[j + 1];
+                            int col_nnz = end - start;
+                            B->colptr[k] = idx;
+                            if (col_nnz > 0) {
+                                memcpy(B->rowidx + idx, A->rowidx + start, (size_t)col_nnz * sizeof(int));
+                                memcpy(B->values + idx, A->values + start, (size_t)col_nnz * sizeof(double));
+                            }
+                            tab->basis_col_cache[k] = j;
+                            tab->basis_col_nnz_cache[k] = col_nnz;
+                            idx += col_nnz;
+                        }
+                    }
+
+                    if (delta != 0) {
+                        for (int k = last_changed + 1; k <= tab->m; k++) {
+                            B->colptr[k] += delta;
+                        }
+                    }
+                }
+
+                B->nnz = total_nnz;
+                tab->basis_cache_total_nnz = total_nnz;
+                tab->basis_cache_valid = 1;
+                return B;
+            }
+        } else {
+            tab->basis_cache_valid = 0;
+            tab->basis_cache_total_nnz = 0;
         }
+
+        tab->basis_cache_valid = 0;
+        tab->basis_cache_total_nnz = 0;
+
     }
 
     int nnz = 0;
