@@ -1191,6 +1191,8 @@ Best measured quality (5000 iterations):
 - Solomon: `avgVehGap=+0.52`, `avgDistGap=+0.2%`, `equalVehicles=30`, `lexiNonWorse=12`.
 - Li & Lim: `avgVehGap=+0.70`, `avgDistGap=+4.3%`, `equalVehicles=36`, `lexiNonWorse=19`.
 
+Phase S6 added or-opt(2,3) segment relocation and increased intensify passes 4→8.
+
 Glaring architectural gaps:
 - Route-native solver is delivery-only gated (`sg_route_solver_eligible()` requires every request be `SG_REQUEST_KIND_DELIVERY_ONLY`), so PDPTW does not use the stronger route engine.
 - Feasibility kernel used by route-native insertion/removal is delivery-only (`sg_request_delivery_task_for_metrics()` and `sg_route_sequence_feasible_distance()`).
@@ -1253,11 +1255,11 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - **Phase S3 (route-aware worst removal)**: Replaced proxy-based removal cost with actual distance delta. Solomon +5.5% → +0.8% (at 5k iters), Li & Lim +9.5% → +4.2%.
 - **Phase S4 (route-aware Shaw relatedness)**: Replaced zone-based proxy in Shaw removal with spatial/TW/load/co-route scoring. Solomon +0.8% → +0.4% (at 5k iters). Li & Lim neutral at +4.3%.
 - **Phase S5 (adaptive destroy count)**: Scale q_min/q_max with instance size: `q_min=max(config,n/20)`, `q_max=max(config,n/4)`. Solomon +0.4% → +0.2% (at 5k iters). Li & Lim unchanged (instances too small to trigger).
+- **Phase S6 (enhanced local search)**: Added or-opt(2,3) segment relocation and increased intensify passes 4→8. Solomon stable at +0.2% (C104 improved). Li & Lim stable at +4.3%. No runtime overhead.
 - Unified route state drives both delivery-only and PDPTW solves. The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time constraints.
 - Stop-level splice/excise operations preserve non-adjacent PD placement across ALNS destroy/repair cycles.
 
 ### Next step proposal
-- **Phase S6 (enhanced local search)**: Add or-opt and cross-exchange moves; increase intensification passes.
 - **Phase S7 (stagnation detection)**: Restart from perturbed best solution when stagnated.
 
 ### Phase 8: Verification and Benchmark Expansion
@@ -1488,16 +1490,15 @@ At 5000 iterations: Solomon +0.8%, Li & Lim +4.2%.
 - Config defaults (4/20) serve as floor; adaptive scaling only increases bounds
 - 1 new test: verifies formula for small/medium/large instances, user overrides, edge cases
 
-### Phase S6: Enhanced Local Search
+### Phase S6: Enhanced Local Search ✅
 
-**Impact**: Medium. Current postprocess has only 3 operators with limited passes.
+**Result**: Solomon +0.2% → +0.2% (stable, C104 improved 853→846). Li & Lim +4.3% → +4.3% (stable). No runtime overhead.
 
 **Changes (surge)**:
-- Add or-opt moves (relocate subsequences of 1-3 stops)
-- Add cross-exchange (swap subsequences between routes)
-- Increase `SG_ROUTE_MAX_INTENSIFY_PASSES` based on instance size
-
-**Tests**: Verify local search operators improve solution quality on known instances.
+- Added `sg_route_try_or_opt_once` for segment relocation (k=2,3) both intra- and inter-route
+- Wired into `sg_route_postprocess_intensify` before exchange and 2-opt*
+- Increased `SG_ROUTE_MAX_INTENSIFY_PASSES` from 4 to 8
+- 1 new test: verifies intensify improves suboptimal clustered solution
 
 ### Phase S7: Stagnation Detection
 
