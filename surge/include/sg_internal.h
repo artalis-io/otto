@@ -152,6 +152,7 @@ struct SGContext {
     double *zone_distance_matrix;
     SHRng *op_rng;
     void *active_solution;  /* Temporary: set during destroy ops needing route access */
+    uint8_t avoid_new_vehicles;  /* Phase 1: skip empty vehicles in repair */
 };
 
 /* sg_context.c */
@@ -337,6 +338,8 @@ ARStatus sg_route_destroy_paired_shaw(void *op_ctx, void *solution, int count,
                                       uint32_t *removed_ids, int *removed_count);
 ARStatus sg_route_destroy_vehicle_target(void *op_ctx, void *solution, int count,
                                          uint32_t *removed_ids, int *removed_count);
+ARStatus sg_route_destroy_vehicle_empty(void *op_ctx, void *solution, int count,
+                                        uint32_t *removed_ids, int *removed_count);
 
 /* sg_repair.c */
 ARStatus sg_reinsert_removed_requests(SGBootstrapSolution *sol,

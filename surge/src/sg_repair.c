@@ -310,6 +310,9 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
     is_pd = (ctx->requests[request_id].kind == SG_REQUEST_KIND_PICKUP_DELIVERY);
 
     for (v = 0; v < sol->num_vehicles; v++) {
+        if (ctx->avoid_new_vehicles && sol->route_lengths[v] == 0) {
+            continue;
+        }
         if (is_pd) {
             /* O(L²) stop-level evaluation for PD requests */
             double score = 0.0;

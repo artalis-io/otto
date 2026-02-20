@@ -249,14 +249,18 @@ ARStatus sg_route_construct_solomon_i1(SGContext *ctx, SGRouteSolution *sol) {
                     double score;
                     uint32_t pp = UINT32_MAX, dp = UINT32_MAX;
                     double new_dist = 0.0;
+                    double px, py, ddx, ddy;
                     if (!sg_route_eval_pd_best_insertion_cached(ctx, sol, rid,
                                                                  seed_vehicle, &score,
                                                                  &pp, &dp, &new_dist)) {
                         continue;
                     }
                     c1 = new_dist - old_dist;
-                    (void)sg_request_centroid(ctx, rid, &rx, &ry);
-                    depot_dist = sg_euclid(sx, sy, rx, ry) + sg_euclid(rx, ry, ex, ey);
+                    px = ctx->tasks[ctx->requests[rid].pickup_task_id].x;
+                    py = ctx->tasks[ctx->requests[rid].pickup_task_id].y;
+                    ddx = ctx->tasks[ctx->requests[rid].delivery_task_id].x;
+                    ddy = ctx->tasks[ctx->requests[rid].delivery_task_id].y;
+                    depot_dist = sg_euclid(sx, sy, px, py) + sg_euclid(px, py, ddx, ddy) + sg_euclid(ddx, ddy, ex, ey);
                     c2 = lambda * depot_dist - c1;
                     if (c2 > best_c2) {
                         best_c2 = c2;
@@ -379,16 +383,64 @@ static ARStatus sg_route_construct_initial_solution(SGContext *ctx, SGRouteSolut
     return AR_STATUS_OK;
 }
 
+static ARALNSContext *sg_create_route_alns(SGContext *ctx, ARALNSParams *params,
+                                            ARSolutionOps *ops,
+                                            double vehicle_target_weight,
+                                            double vehicle_empty_weight) {
+    ARALNSContext *alns;
+
+    ops->copy = sg_route_solution_copy;
+    ops->free = sg_route_solution_free;
+    ops->cost = sg_route_solution_cost;
+    ops->size = sg_route_solution_size;
+    ops->validate = sg_route_solution_validate;
+    ops->user_ctx = ctx;
+
+    alns = ar_alns_create(params, ops, ctx);
+    if (!alns) {
+        return NULL;
+    }
+
+    if (ar_alns_add_destroy(alns, "random", sg_route_destroy_random, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_destroy(alns, "criticality-worst", sg_route_destroy_criticality_worst, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_destroy(alns, "route-removal", sg_route_destroy_route_removal, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_destroy(alns, "time-window-removal", sg_route_destroy_time_window, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_destroy(alns, "route-cluster", sg_route_destroy_route_cluster, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_destroy(alns, "time-cluster", sg_route_destroy_time_cluster, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_destroy(alns, "paired-shaw", sg_route_destroy_paired_shaw, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_destroy(alns, "vehicle-target", sg_route_destroy_vehicle_target, ctx, vehicle_target_weight) != AR_STATUS_OK ||
+        ar_alns_add_destroy(alns, "vehicle-empty", sg_route_destroy_vehicle_empty, ctx, vehicle_empty_weight) != AR_STATUS_OK ||
+        ar_alns_add_destroy(alns, "worst", sg_route_destroy_worst, ctx, 0.5) != AR_STATUS_OK ||
+        ar_alns_add_destroy(alns, "shaw", sg_route_destroy_shaw, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_repair(alns, "greedy-insert", sg_route_repair_greedy, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_repair(alns, "regret-2", sg_route_repair_regret2, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_repair(alns, "regret-3", sg_route_repair_regret3, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_repair(alns, "regret-4", sg_route_repair_regret4, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_repair(alns, "noise-regret", sg_route_repair_noise_regret, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_repair(alns, "pair-sync", sg_route_repair_pair_sync, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_repair(alns, "bootstrap-repair", sg_route_repair_greedy, ctx, 0.5) != AR_STATUS_OK) {
+        ar_alns_free(alns);
+        return NULL;
+    }
+
+    return alns;
+}
+
 static SGStatus sg_solve_route_model(SGContext *ctx) {
     ARALNSParams params;
     ARSolutionOps ops;
     ARALNSContext *alns = NULL;
     SGRouteSolution initial;
-    SGRouteSolution *best = NULL;
+    SGRouteSolution *p1_best = NULL;
+    SGRouteSolution *p2_best = NULL;
     ARStatus ar_status;
     ARALNSStats ar_stats;
     ARStatus init_status;
     const SGRouteSolution *final_sol;
+    int total_iters;
+    int phase1_iters;
+    int phase2_iters;
+    int64_t total_alns_iters = 0;
 
     if (!ctx) {
         return SG_STATUS_INVALID_ARG;
@@ -406,32 +458,27 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
                                                       : SG_STATUS_ERROR;
     }
 
+    total_iters = ctx->config.max_iterations;
+    phase1_iters = total_iters * 3 / 5;  /* 60% */
+    if (phase1_iters < 500) phase1_iters = 500;
+    if (phase1_iters > total_iters) phase1_iters = total_iters;
+    phase2_iters = total_iters - phase1_iters;
+
+    /* ---- Phase 1: Vehicle minimization ---- */
     ar_alns_params_default(&params);
-    params.max_iterations = ctx->config.max_iterations;
+    params.max_iterations = phase1_iters;
     params.max_time_seconds = ctx->config.max_time_seconds;
     params.segment_size = ctx->config.segment_size;
     sg_adaptive_q_bounds((int)ctx->num_requests, ctx->config.q_min, ctx->config.q_max,
                          &params.q_min, &params.q_max);
     params.target_cost = 0.0;
-    params.restart_threshold = params.max_iterations / 4;
-    /* Calibrate SA temperature from distance, not total cost. The cost
-       function includes large vehicle/unassigned penalties (~1e6/1e9) that
-       would make the temperature absurdly hot. Distance deltas are the
-       typical move magnitude during the improvement phase. */
-    ar_alns_calibrate_sa(&params,
-                          initial.total_distance > 0.0
-                              ? initial.total_distance
-                              : sg_route_solution_cost(&initial, ctx),
-                          params.max_iterations);
+    params.restart_threshold = phase1_iters / 4;
+    /* Calibrate from total cost (includes vehicle penalty ~1M per vehicle).
+       This makes temperature ~1000x hotter so SA accepts distance-worsening
+       moves that reduce vehicle count. */
+    ar_alns_calibrate_sa(&params, sg_route_solution_cost(&initial, ctx), phase1_iters);
 
-    ops.copy = sg_route_solution_copy;
-    ops.free = sg_route_solution_free;
-    ops.cost = sg_route_solution_cost;
-    ops.size = sg_route_solution_size;
-    ops.validate = sg_route_solution_validate;
-    ops.user_ctx = ctx;
-
-    alns = ar_alns_create(&params, &ops, ctx);
+    alns = sg_create_route_alns(ctx, &params, &ops, 3.0, 2.0);
     if (!alns) {
         sg_route_solution_reset(&initial);
         return SG_STATUS_OUT_OF_MEMORY;
@@ -444,58 +491,91 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         sh_rng_seed_time(ctx->op_rng);
     }
 
-    if (ar_alns_add_destroy(alns, "random", sg_route_destroy_random, ctx, 1.0) != AR_STATUS_OK ||
-        ar_alns_add_destroy(alns, "criticality-worst", sg_route_destroy_criticality_worst, ctx, 1.0) != AR_STATUS_OK ||
-        ar_alns_add_destroy(alns, "route-removal", sg_route_destroy_route_removal, ctx, 1.0) != AR_STATUS_OK ||
-        ar_alns_add_destroy(alns, "time-window-removal", sg_route_destroy_time_window, ctx, 1.0) != AR_STATUS_OK ||
-        ar_alns_add_destroy(alns, "route-cluster", sg_route_destroy_route_cluster, ctx, 1.0) != AR_STATUS_OK ||
-        ar_alns_add_destroy(alns, "time-cluster", sg_route_destroy_time_cluster, ctx, 1.0) != AR_STATUS_OK ||
-        ar_alns_add_destroy(alns, "paired-shaw", sg_route_destroy_paired_shaw, ctx, 1.0) != AR_STATUS_OK ||
-        ar_alns_add_destroy(alns, "vehicle-target", sg_route_destroy_vehicle_target, ctx, 1.5) != AR_STATUS_OK ||
-        ar_alns_add_destroy(alns, "worst", sg_route_destroy_worst, ctx, 0.5) != AR_STATUS_OK ||
-        ar_alns_add_destroy(alns, "shaw", sg_route_destroy_shaw, ctx, 1.0) != AR_STATUS_OK ||
-        ar_alns_add_repair(alns, "greedy-insert", sg_route_repair_greedy, ctx, 1.0) != AR_STATUS_OK ||
-        ar_alns_add_repair(alns, "regret-2", sg_route_repair_regret2, ctx, 1.0) != AR_STATUS_OK ||
-        ar_alns_add_repair(alns, "regret-3", sg_route_repair_regret3, ctx, 1.0) != AR_STATUS_OK ||
-        ar_alns_add_repair(alns, "regret-4", sg_route_repair_regret4, ctx, 1.0) != AR_STATUS_OK ||
-        ar_alns_add_repair(alns, "noise-regret", sg_route_repair_noise_regret, ctx, 1.0) != AR_STATUS_OK ||
-        ar_alns_add_repair(alns, "pair-sync", sg_route_repair_pair_sync, ctx, 1.0) != AR_STATUS_OK ||
-        ar_alns_add_repair(alns, "bootstrap-repair", sg_route_repair_greedy, ctx, 0.5) != AR_STATUS_OK) {
-        sg_route_solution_reset(&initial);
-        ar_alns_free(alns);
-        return SG_STATUS_ERROR;
-    }
-
-    ar_status = ar_alns_solve(alns, &initial, (void **)&best);
+    ctx->avoid_new_vehicles = 1;
+    ar_status = ar_alns_solve(alns, &initial, (void **)&p1_best);
+    ctx->avoid_new_vehicles = 0;
     if (ar_status != AR_STATUS_OK && ar_status != AR_STATUS_LIMIT) {
         sg_route_solution_reset(&initial);
         ar_alns_free(alns);
         return SG_STATUS_ERROR;
     }
+    ar_alns_get_stats(alns, &ar_stats);
+    total_alns_iters += ar_stats.iterations;
+    ar_alns_free(alns);
+    alns = NULL;
 
-    if (best) {
-        (void)sg_route_postprocess_reduce_vehicles(ctx, best);
-        (void)sg_route_postprocess_ejection_reduce(ctx, best);
-        (void)sg_route_postprocess_intensify(ctx, best);
-        (void)sg_route_postprocess_polish_distance(ctx, best);
-    } else {
-        (void)sg_route_postprocess_reduce_vehicles(ctx, &initial);
-        (void)sg_route_postprocess_ejection_reduce(ctx, &initial);
-        (void)sg_route_postprocess_intensify(ctx, &initial);
-        (void)sg_route_postprocess_polish_distance(ctx, &initial);
+    /* ---- Phase 2: Distance polishing ---- */
+    if (phase2_iters > 0) {
+        SGRouteSolution *p2_initial = p1_best ? p1_best : &initial;
+
+        ar_alns_params_default(&params);
+        params.max_iterations = phase2_iters;
+        params.max_time_seconds = ctx->config.max_time_seconds;
+        params.segment_size = ctx->config.segment_size;
+        sg_adaptive_q_bounds((int)ctx->num_requests, ctx->config.q_min, ctx->config.q_max,
+                             &params.q_min, &params.q_max);
+        params.target_cost = 0.0;
+        params.restart_threshold = phase2_iters / 4;
+        /* Calibrate from distance — standard behavior for polishing. */
+        ar_alns_calibrate_sa(&params,
+                              p2_initial->total_distance > 0.0
+                                  ? p2_initial->total_distance
+                                  : sg_route_solution_cost(p2_initial, ctx),
+                              phase2_iters);
+
+        alns = sg_create_route_alns(ctx, &params, &ops, 1.5, 1.0);
+        if (!alns) {
+            sg_route_solution_reset(&initial);
+            sg_route_solution_free(p1_best, NULL);
+            return SG_STATUS_OUT_OF_MEMORY;
+        }
+
+        if (ctx->config.deterministic) {
+            ar_alns_set_seed(alns, ctx->config.seed + 1);
+            sh_rng_seed(ctx->op_rng, (ctx->config.seed + 1) ^ SG_OPERATOR_SEED_XOR);
+        } else {
+            sh_rng_seed_time(ctx->op_rng);
+        }
+
+        ar_status = ar_alns_solve(alns, p2_initial, (void **)&p2_best);
+        if (ar_status != AR_STATUS_OK && ar_status != AR_STATUS_LIMIT) {
+            sg_route_solution_reset(&initial);
+            sg_route_solution_free(p1_best, NULL);
+            ar_alns_free(alns);
+            return SG_STATUS_ERROR;
+        }
+        ar_alns_get_stats(alns, &ar_stats);
+        total_alns_iters += ar_stats.iterations;
+        ar_alns_free(alns);
+        alns = NULL;
     }
 
-    final_sol = best ? best : &initial;
-    ar_alns_get_stats(alns, &ar_stats);
-    ctx->stats.iterations = ar_stats.iterations;
-    ctx->stats.unassigned = final_sol->base.num_unassigned;
-    ctx->stats.vehicles_used = final_sol->vehicles_used;
-    ctx->stats.total_distance = final_sol->total_distance;
-    ctx->stats.total_cost = sg_route_solution_cost(final_sol, ctx);
+    /* Determine best solution across phases. */
+    {
+        SGRouteSolution *best = p2_best ? p2_best : p1_best;
+        if (best) {
+            (void)sg_route_postprocess_reduce_vehicles(ctx, best);
+            (void)sg_route_postprocess_ejection_reduce(ctx, best);
+            (void)sg_route_postprocess_intensify(ctx, best);
+            (void)sg_route_postprocess_polish_distance(ctx, best);
+        } else {
+            (void)sg_route_postprocess_reduce_vehicles(ctx, &initial);
+            (void)sg_route_postprocess_ejection_reduce(ctx, &initial);
+            (void)sg_route_postprocess_intensify(ctx, &initial);
+            (void)sg_route_postprocess_polish_distance(ctx, &initial);
+        }
+
+        final_sol = best ? best : &initial;
+        ctx->stats.iterations = total_alns_iters;
+        ctx->stats.unassigned = final_sol->base.num_unassigned;
+        ctx->stats.vehicles_used = final_sol->vehicles_used;
+        ctx->stats.total_distance = final_sol->total_distance;
+        ctx->stats.total_cost = sg_route_solution_cost(final_sol, ctx);
+    }
 
     sg_route_solution_reset(&initial);
-    sg_route_solution_free(best, NULL);
-    ar_alns_free(alns);
+    sg_route_solution_free(p1_best, NULL);
+    sg_route_solution_free(p2_best, NULL);
 
     if (ar_status == AR_STATUS_LIMIT) {
         return SG_STATUS_LIMIT;

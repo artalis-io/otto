@@ -2184,6 +2184,108 @@ static void test_solomon_i1_pd(void) {
     sg_free(ctx);
 }
 
+static void test_vehicle_empty_destroy(void) {
+    /* 3 vehicles: v0 has 2 requests, v1 has 3, v2 has 4.
+       Vehicle-empty destroy should fully empty at least one vehicle. */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    uint32_t removed_ids[9];
+    int removed_count = 0;
+    ARStatus status;
+    int i;
+    int any_empty = 0;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);  /* v0 */
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);  /* v1 */
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);  /* v2 */
+
+    /* 9 delivery requests: v0 gets 2, v1 gets 3, v2 gets 4. */
+    add_delivery_request(ctx, 10.0, 10.0, 0, 100000, 10, 1.0);  /* r0 -> v0 */
+    add_delivery_request(ctx, 12.0, 10.0, 0, 100000, 10, 1.0);  /* r1 -> v0 */
+    add_delivery_request(ctx, 30.0, 30.0, 0, 100000, 10, 1.0);  /* r2 -> v1 */
+    add_delivery_request(ctx, 32.0, 30.0, 0, 100000, 10, 1.0);  /* r3 -> v1 */
+    add_delivery_request(ctx, 34.0, 30.0, 0, 100000, 10, 1.0);  /* r4 -> v1 */
+    add_delivery_request(ctx, 70.0, 70.0, 0, 100000, 10, 1.0);  /* r5 -> v2 */
+    add_delivery_request(ctx, 72.0, 70.0, 0, 100000, 10, 1.0);  /* r6 -> v2 */
+    add_delivery_request(ctx, 74.0, 70.0, 0, 100000, 10, 1.0);  /* r7 -> v2 */
+    add_delivery_request(ctx, 76.0, 70.0, 0, 100000, 10, 1.0);  /* r8 -> v2 */
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    {
+        double score, dist;
+        /* v0: r0, r1 */
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 0, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 1, 0, 1, dist) == AR_STATUS_OK);
+        /* v1: r2, r3, r4 */
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 2, 1, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 2, 1, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 3, 1, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 3, 1, 1, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 4, 1, 2, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 4, 1, 2, dist) == AR_STATUS_OK);
+        /* v2: r5, r6, r7, r8 */
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 5, 2, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 5, 2, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 6, 2, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 6, 2, 1, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 7, 2, 2, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 7, 2, 2, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 8, 2, 3, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 8, 2, 3, dist) == AR_STATUS_OK);
+    }
+    assert(sol.route_lengths[0] == 2);
+    assert(sol.route_lengths[1] == 3);
+    assert(sol.route_lengths[2] == 4);
+
+    sh_rng_seed(ctx->op_rng, 42);
+
+    status = sg_route_destroy_vehicle_empty(ctx, &sol, 9, removed_ids, &removed_count);
+    assert(status == AR_STATUS_OK);
+    assert(removed_count >= 2);  /* At least the smallest route */
+
+    /* At least one vehicle should be fully emptied. */
+    for (i = 0; i < 3; i++) {
+        if (sol.route_lengths[i] == 0) any_empty = 1;
+    }
+    assert(any_empty);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_two_phase_solve_no_regression(void) {
+    /* Full solve with 5 vehicles, 10 delivery requests, moderate TWs.
+       Verifies two-phase ALNS doesn't break basic solving. */
+    SGContext *ctx = make_config(1000, 99);
+    uint32_t depot;
+    int i;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    for (i = 0; i < 5; i++) {
+        add_vehicle_with_depot(ctx, depot, 0, 100000, 200.0);
+    }
+
+    for (i = 0; i < 10; i++) {
+        double x = 40.0 + (double)(i % 5) * 5.0;
+        double y = 40.0 + (double)(i / 5) * 5.0;
+        int32_t tw_early = (int32_t)(i * 200);
+        int32_t tw_late = tw_early + 5000;
+        add_delivery_request(ctx, x, y, tw_early, tw_late, 60, -10.0);
+    }
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) > 0);
+    assert(sg_get_total_distance(ctx) > 0.0);
+
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -2244,6 +2346,8 @@ int main(void) {
     RUN_TEST(test_ejection_chain_depth2);
     RUN_TEST(test_solomon_i1_construction);
     RUN_TEST(test_solomon_i1_pd);
+    RUN_TEST(test_vehicle_empty_destroy);
+    RUN_TEST(test_two_phase_solve_no_regression);
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
     return tests_passed == tests_run ? 0 : 1;

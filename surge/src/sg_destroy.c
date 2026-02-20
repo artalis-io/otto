@@ -522,3 +522,133 @@ ARStatus sg_route_destroy_vehicle_target(void *op_ctx, void *solution, int count
     *removed_count = total_removed;
     return sg_route_unassign_removed_requests(ctx, sol, removed_ids, *removed_count);
 }
+
+ARStatus sg_route_destroy_vehicle_empty(void *op_ctx, void *solution, int count,
+                                        uint32_t *removed_ids, int *removed_count) {
+    SGContext *ctx = (SGContext *)op_ctx;
+    SGRouteSolution *sol = (SGRouteSolution *)solution;
+    uint32_t target_vehicle = UINT32_MAX;
+    uint32_t v;
+    int total_removed = 0;
+    int target;
+    uint32_t i;
+    uint32_t num_nonempty = 0;
+    uint32_t candidates[3];
+    uint32_t cand_lens[3];
+    uint32_t k_cands;
+
+    if (!ctx || !ctx->op_rng || !sol || !removed_count || count < 0) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    *removed_count = 0;
+    if (count == 0 || sol->base.num_assigned == 0) {
+        return AR_STATUS_OK;
+    }
+    if (!removed_ids) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    target = count;
+    if ((uint32_t)target > sol->base.num_assigned) {
+        target = (int)sol->base.num_assigned;
+    }
+
+    /* Collect non-empty vehicles sorted by route length ascending (insertion sort). */
+    {
+        uint32_t sorted[256]; /* vehicle indices */
+        uint32_t sorted_len[256];
+        uint32_t n_sorted = 0;
+
+        for (v = 0; v < sol->num_vehicles && n_sorted < 256; v++) {
+            if (sol->route_lengths[v] == 0) continue;
+            /* Insert in sorted order by length ascending, then vehicle id ascending. */
+            {
+                uint32_t j = n_sorted;
+                while (j > 0 && (sol->route_lengths[v] < sorted_len[j - 1] ||
+                       (sol->route_lengths[v] == sorted_len[j - 1] && v < sorted[j - 1]))) {
+                    sorted[j] = sorted[j - 1];
+                    sorted_len[j] = sorted_len[j - 1];
+                    j--;
+                }
+                sorted[j] = v;
+                sorted_len[j] = sol->route_lengths[v];
+            }
+            n_sorted++;
+        }
+        num_nonempty = n_sorted;
+        if (num_nonempty == 0) {
+            return AR_STATUS_OK;
+        }
+
+        /* Pick from bottom K candidates. */
+        k_cands = num_nonempty < 3 ? num_nonempty : 3;
+        for (i = 0; i < k_cands; i++) {
+            candidates[i] = sorted[i];
+            cand_lens[i] = sorted_len[i];
+        }
+    }
+
+    {
+        uint32_t pick = (uint32_t)(sh_rng_next_u64(ctx->op_rng) % k_cands);
+        target_vehicle = candidates[pick];
+    }
+
+    /* Remove ALL requests from chosen vehicle. */
+    {
+        const uint32_t *route = sg_route_vehicle_ptr_const(sol, target_vehicle);
+        uint32_t route_len = sol->route_lengths[target_vehicle];
+        uint32_t take = route_len;
+        if ((int)take > target) {
+            take = (uint32_t)target;
+        }
+        for (i = 0; i < take; i++) {
+            removed_ids[total_removed++] = route[i];
+        }
+    }
+
+    /* Fill remaining quota with Shaw-related requests from other vehicles. */
+    if (total_removed < target && total_removed > 0) {
+        ctx->active_solution = sol;
+        for (i = 0; i < (uint32_t)total_removed && total_removed < target; i++) {
+            uint32_t seed_id = removed_ids[i];
+            uint32_t best_id = UINT32_MAX;
+            double best_rel = INFINITY;
+            uint32_t j;
+
+            for (j = 0; j < sol->base.num_assigned; j++) {
+                uint32_t cand = sol->base.assigned_ids[j];
+                uint32_t kk;
+                int already_removed = 0;
+                double rel;
+
+                if (sol->request_vehicle[cand] == target_vehicle) {
+                    continue;
+                }
+                for (kk = 0; kk < (uint32_t)total_removed; kk++) {
+                    if (removed_ids[kk] == cand) {
+                        already_removed = 1;
+                        break;
+                    }
+                }
+                if (already_removed) {
+                    continue;
+                }
+
+                rel = sg_route_shaw_relatedness(ctx, seed_id, cand);
+                if (rel < best_rel) {
+                    best_rel = rel;
+                    best_id = cand;
+                }
+            }
+
+            if (best_id != UINT32_MAX) {
+                removed_ids[total_removed++] = best_id;
+            }
+        }
+        ctx->active_solution = NULL;
+    }
+
+    *removed_count = total_removed;
+    return sg_route_unassign_removed_requests(ctx, sol, removed_ids, *removed_count);
+}
