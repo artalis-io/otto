@@ -1715,6 +1715,82 @@ static void test_route_removal_cost(void) {
     }
 }
 
+/* ===== Route-Aware Shaw Relatedness Tests ===== */
+
+static void test_route_shaw_relatedness(void) {
+    SGContext *ctx = make_config(50, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    double score_close, score_far, score_same_route, score_diff_route;
+    double score_null_sol;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 200.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 200.0);
+
+    /* Request 0: at (10,10), TW [0, 3600], demand 10 */
+    add_delivery_request(ctx, 10.0, 10.0, 0, 3600, 60, -10.0);
+    /* Request 1: at (12,10), TW [0, 3600], demand 12 - close to 0, overlapping TW */
+    add_delivery_request(ctx, 12.0, 10.0, 0, 3600, 60, -12.0);
+    /* Request 2: at (80,80), TW [40000, 50000], demand 40 - far from 0, non-overlapping */
+    add_delivery_request(ctx, 80.0, 80.0, 40000, 50000, 60, -40.0);
+    /* Request 3: at (11,10), TW [0, 3600], demand 10 - very close to 0, overlapping TW */
+    add_delivery_request(ctx, 11.0, 10.0, 0, 3600, 60, -10.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert requests: 0 and 3 on vehicle 0, request 2 on vehicle 1, request 1 unassigned */
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+    }
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 3, 0, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 3, 0, 1, dist) == AR_STATUS_OK);
+    }
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 2, 1, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 2, 1, 0, dist) == AR_STATUS_OK);
+    }
+
+    /* Test without active_solution: close+overlapping > far+non-overlapping */
+    ctx->active_solution = NULL;
+    score_close = sg_route_shaw_relatedness((void *)ctx, 0, 1);
+    score_far = sg_route_shaw_relatedness((void *)ctx, 0, 2);
+    assert(score_close > score_far);
+
+    /* Test with active_solution: same-route bonus dominates */
+    ctx->active_solution = &sol;
+    score_same_route = sg_route_shaw_relatedness((void *)ctx, 0, 3);  /* both on vehicle 0 */
+    score_diff_route = sg_route_shaw_relatedness((void *)ctx, 0, 2);  /* different vehicles */
+    assert(score_same_route > score_diff_route);
+
+    /* Same-route > close-but-unassigned (request 1 is unassigned) */
+    {
+        double score_unassigned;
+        score_unassigned = sg_route_shaw_relatedness((void *)ctx, 0, 1);
+        assert(score_same_route > score_unassigned);
+    }
+
+    /* NULL active_solution safety: no crash, finite result */
+    ctx->active_solution = NULL;
+    score_null_sol = sg_route_shaw_relatedness((void *)ctx, 0, 3);
+    assert(isfinite(score_null_sol));
+
+    /* Self-relatedness should be high */
+    {
+        double score_self = sg_route_shaw_relatedness((void *)ctx, 0, 0);
+        assert(score_self > score_far);
+    }
+
+    ctx->active_solution = NULL;
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -1766,6 +1842,7 @@ int main(void) {
     RUN_TEST(test_pd_delivery_only_mixed);
     RUN_TEST(test_pd_ride_time_constraint);
     RUN_TEST(test_route_removal_cost);
+    RUN_TEST(test_route_shaw_relatedness);
 
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);

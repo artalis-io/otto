@@ -217,10 +217,12 @@ ARStatus sg_route_destroy_shaw(void *op_ctx, void *solution, int count,
         return AR_STATUS_INVALID_ARG;
     }
 
+    ctx->active_solution = sol;
     status = ar_remove_related(ctx->op_rng, ctx, sol, count, removed_ids,
                                sg_get_assigned_count, sg_get_assigned_element,
-                               sg_bootstrap_relatedness, SG_SHAW_RANDOMNESS,
+                               sg_route_shaw_relatedness, SG_ROUTE_SHAW_RANDOMNESS,
                                NULL, removed_count);
+    ctx->active_solution = NULL;
     if (status != AR_STATUS_OK) {
         return status;
     }

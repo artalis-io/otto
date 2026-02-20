@@ -19,6 +19,7 @@
 #define SG_ROUTE_CLUSTER_RANDOMNESS 2.5
 #define SG_TIME_CLUSTER_RANDOMNESS 2.0
 #define SG_PD_SHAW_RANDOMNESS 3.0
+#define SG_ROUTE_SHAW_RANDOMNESS 4.0
 #define SG_OPERATOR_SEED_XOR 0x9E3779B97F4A7C15ULL
 #define SG_DEMAND_TOLERANCE 1e-9
 #define SG_NOISE_REGRET_SCALE 0.1
@@ -149,6 +150,7 @@ struct SGContext {
     SGTaskRecord *tasks;
     double *zone_distance_matrix;
     SHRng *op_rng;
+    void *active_solution;  /* Temporary: set during destroy ops needing route access */
 };
 
 /* sg_context.c */
@@ -246,6 +248,7 @@ double sg_route_cluster_relatedness(void *ctx, uint32_t a, uint32_t b);
 double sg_time_cluster_relatedness(void *ctx, uint32_t a, uint32_t b);
 double sg_time_window_relatedness(void *ctx, uint32_t a, uint32_t b);
 double sg_pd_shaw_relatedness(void *ctx, uint32_t a, uint32_t b);
+double sg_route_shaw_relatedness(void *ctx, uint32_t a, uint32_t b);
 double sg_criticality_removal_cost(void *ctx, void *solution, uint32_t element_id);
 int sg_request_time_use_for_vehicle(const SGContext *ctx, uint32_t vehicle_id,
                                     uint32_t request_id, double *time_use_seconds);

@@ -618,6 +618,63 @@ double sg_pd_shaw_relatedness(void *ctx, uint32_t a, uint32_t b) {
     return score;
 }
 
+double sg_route_shaw_relatedness(void *ctx, uint32_t a, uint32_t b) {
+    const SGContext *sg_ctx = (const SGContext *)ctx;
+    const SGRouteSolution *sol = (const SGRouteSolution *)sg_ctx->active_solution;
+    double ax, ay, bx, by;
+    int32_t early_a, late_a, early_b, late_b;
+    SGRequestKind kind_a, kind_b;
+    double score = 0.0;
+
+    /* Spatial distance term */
+    if (sg_request_centroid(sg_ctx, a, &ax, &ay) &&
+        sg_request_centroid(sg_ctx, b, &bx, &by)) {
+        score -= sg_euclid(ax, ay, bx, by) / 40.0;
+    }
+
+    /* TW overlap term */
+    if (sg_request_time_window_bounds(sg_ctx, a, &early_a, &late_a) &&
+        sg_request_time_window_bounds(sg_ctx, b, &early_b, &late_b)) {
+        int32_t overlap_start = early_a > early_b ? early_a : early_b;
+        int32_t overlap_end = late_a < late_b ? late_a : late_b;
+        int32_t span_start = early_a < early_b ? early_a : early_b;
+        int32_t span_end = late_a > late_b ? late_a : late_b;
+        double overlap = overlap_end > overlap_start
+                       ? (double)(overlap_end - overlap_start) : 0.0;
+        double span = span_end > span_start
+                    ? (double)(span_end - span_start) : 1.0;
+        score += 3.0 * (overlap / span);
+    }
+
+    /* Load similarity term */
+    score -= fabs(sg_request_load_magnitude(sg_ctx, a) -
+                  sg_request_load_magnitude(sg_ctx, b)) / 100.0;
+
+    /* Co-route bonus */
+    if (sol && sol->request_vehicle) {
+        uint32_t va = sol->request_vehicle[a];
+        uint32_t vb = sol->request_vehicle[b];
+        if (va != UINT32_MAX && vb != UINT32_MAX && va == vb) {
+            score += 5.0;
+        }
+    }
+
+    /* PD kind bonus */
+    kind_a = sg_request_kind(sg_ctx, a);
+    kind_b = sg_request_kind(sg_ctx, b);
+    if (kind_a == SG_REQUEST_KIND_PICKUP_DELIVERY &&
+        kind_b == SG_REQUEST_KIND_PICKUP_DELIVERY) {
+        score += 2.0;
+    } else if (kind_a != kind_b) {
+        score -= 0.5;
+    }
+
+    /* Deterministic tie-breaker */
+    score += 1.0 / (1.0 + (double)sg_abs_i64((int64_t)a - (int64_t)b));
+
+    return score;
+}
+
 double sg_route_removal_cost(void *ctx, void *solution, uint32_t element_id) {
     const SGContext *sg_ctx = (const SGContext *)ctx;
     const SGRouteSolution *sol = (const SGRouteSolution *)solution;
