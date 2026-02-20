@@ -788,9 +788,90 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
 static void apply_ft_spikes_forward(const LUFactorization *lu, double *x);
 static void apply_ft_spikes_backward(const LUFactorization *lu, double *x);
 
+/* Triangular-solve micro-kernels shared by dense/sparse variants.
+ * Keep these simple and branch-light so the hot inner loops stay predictable. */
+static inline void tri_scatter_sub(const int *idx, const double *val,
+                                   int nnz, double alpha, double *x) {
+    int p = 0;
+    int nnz4 = nnz & ~3;
+    for (; p < nnz4; p += 4) {
+        x[idx[p]]     -= val[p] * alpha;
+        x[idx[p + 1]] -= val[p + 1] * alpha;
+        x[idx[p + 2]] -= val[p + 2] * alpha;
+        x[idx[p + 3]] -= val[p + 3] * alpha;
+    }
+    for (; p < nnz; p++) {
+        x[idx[p]] -= val[p] * alpha;
+    }
+}
+
+static inline void tri_scatter_sub_lt(const int *idx, const double *val,
+                                      int nnz, int limit, double alpha, double *x) {
+    int p = 0;
+    int nnz4 = nnz & ~3;
+    for (; p < nnz4; p += 4) {
+        int i0 = idx[p];
+        int i1 = idx[p + 1];
+        int i2 = idx[p + 2];
+        int i3 = idx[p + 3];
+        if (i0 < limit) x[i0] -= val[p] * alpha;
+        if (i1 < limit) x[i1] -= val[p + 1] * alpha;
+        if (i2 < limit) x[i2] -= val[p + 2] * alpha;
+        if (i3 < limit) x[i3] -= val[p + 3] * alpha;
+    }
+    for (; p < nnz; p++) {
+        int i = idx[p];
+        if (i < limit) x[i] -= val[p] * alpha;
+    }
+}
+
+static inline double tri_dot(const int *idx, const double *val,
+                             int nnz, const double *x) {
+    double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+    int p = 0;
+    int nnz4 = nnz & ~3;
+    for (; p < nnz4; p += 4) {
+        s0 += val[p] * x[idx[p]];
+        s1 += val[p + 1] * x[idx[p + 1]];
+        s2 += val[p + 2] * x[idx[p + 2]];
+        s3 += val[p + 3] * x[idx[p + 3]];
+    }
+    double sum = s0 + s1 + s2 + s3;
+    for (; p < nnz; p++) {
+        sum += val[p] * x[idx[p]];
+    }
+    return sum;
+}
+
+static inline double tri_dot_lt(const int *idx, const double *val,
+                                int nnz, int limit, const double *x) {
+    double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+    int p = 0;
+    int nnz4 = nnz & ~3;
+    for (; p < nnz4; p += 4) {
+        int i0 = idx[p];
+        int i1 = idx[p + 1];
+        int i2 = idx[p + 2];
+        int i3 = idx[p + 3];
+        if (i0 < limit) s0 += val[p] * x[i0];
+        if (i1 < limit) s1 += val[p + 1] * x[i1];
+        if (i2 < limit) s2 += val[p + 2] * x[i2];
+        if (i3 < limit) s3 += val[p + 3] * x[i3];
+    }
+    double sum = s0 + s1 + s2 + s3;
+    for (; p < nnz; p++) {
+        int i = idx[p];
+        if (i < limit) sum += val[p] * x[i];
+    }
+    return sum;
+}
+
 /* Solve Lx = b (forward substitution) */
 static void solve_L(const LUFactorization *lu, const double *b, double *x) {
     int m = lu->m;
+    const int *L_colptr = lu->L_colptr;
+    const int *L_rowidx = lu->L_rowidx;
+    const double *L_values = lu->L_values;
 
     /* Apply row permutation */
     for (int i = 0; i < m; i++) {
@@ -801,18 +882,21 @@ static void solve_L(const LUFactorization *lu, const double *b, double *x) {
     for (int j = 0; j < m; j++) {
         /* x[j] already has the right value (L[j,j] = 1) */
         double xj = x[j];
+        if (fabs(xj) <= RALPH_ZERO_TOL) continue;
 
         /* Update remaining elements */
-        for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
-            int i = lu->L_rowidx[p];
-            x[i] -= lu->L_values[p] * xj;
-        }
+        int p0 = L_colptr[j] + 1;
+        int p1 = L_colptr[j + 1];
+        tri_scatter_sub(L_rowidx + p0, L_values + p0, p1 - p0, xj, x);
     }
 }
 
 /* Solve Ux = b (backward substitution) */
 static void solve_U(const LUFactorization *lu, const double *b, double *x) {
     int m = lu->m;
+    const int *U_colptr = lu->U_colptr;
+    const int *U_rowidx = lu->U_rowidx;
+    const double *U_values = lu->U_values;
     const double *U_diag = lu->U_diag;
 
     vec_copy_data(x, b, m);
@@ -828,30 +912,29 @@ static void solve_U(const LUFactorization *lu, const double *b, double *x) {
 
         x[j] /= diag;
         double xj = x[j];
+        if (fabs(xj) <= RALPH_ZERO_TOL) continue;
 
         /* Update remaining elements (off-diagonal) */
-        for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
-            int i = lu->U_rowidx[p];
-            if (i < j) {
-                x[i] -= lu->U_values[p] * xj;
-            }
-        }
+        int p0 = U_colptr[j];
+        int p1 = U_colptr[j + 1];
+        tri_scatter_sub_lt(U_rowidx + p0, U_values + p0, p1 - p0, j, xj, x);
     }
 }
 
 /* Solve L'x = b (backward substitution with L transpose) */
 static void solve_Lt(const LUFactorization *lu, const double *b, double *x) {
     int m = lu->m;
+    const int *L_colptr = lu->L_colptr;
+    const int *L_rowidx = lu->L_rowidx;
+    const double *L_values = lu->L_values;
 
     vec_copy_data(x, b, m);
 
     /* Backward substitution with L transpose */
     for (int j = m - 1; j >= 0; j--) {
-        double sum = 0.0;
-        for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
-            int i = lu->L_rowidx[p];
-            sum += lu->L_values[p] * x[i];
-        }
+        int p0 = L_colptr[j] + 1;
+        int p1 = L_colptr[j + 1];
+        double sum = tri_dot(L_rowidx + p0, L_values + p0, p1 - p0, x);
         x[j] -= sum;
         /* L[j,j] = 1, so no division needed */
     }
@@ -867,6 +950,9 @@ static void solve_Lt(const LUFactorization *lu, const double *b, double *x) {
 /* Solve U'x = b (forward substitution with U transpose) */
 static void solve_Ut(const LUFactorization *lu, const double *b, double *x) {
     int m = lu->m;
+    const int *U_colptr = lu->U_colptr;
+    const int *U_rowidx = lu->U_rowidx;
+    const double *U_values = lu->U_values;
     const double *U_diag = lu->U_diag;
 
     vec_copy_data(x, b, m);
@@ -882,14 +968,9 @@ static void solve_Ut(const LUFactorization *lu, const double *b, double *x) {
          * sum of U'[i,j] * x[j] = U[j,i] * x[j] for j < i
          * U[j,i] is in COLUMN i (not column j!) at ROW j
          */
-        double sum = 0.0;
-        for (int p = lu->U_colptr[i]; p < lu->U_colptr[i + 1]; p++) {
-            int j = lu->U_rowidx[p];  /* row index j */
-            if (j < i) {
-                /* This is U[j,i] = U'[i,j] */
-                sum += lu->U_values[p] * x[j];
-            }
-        }
+        int p0 = U_colptr[i];
+        int p1 = U_colptr[i + 1];
+        double sum = tri_dot_lt(U_rowidx + p0, U_values + p0, p1 - p0, i, x);
 
         double diag = U_diag[i];
 
@@ -1400,6 +1481,9 @@ static void solve_L_sparse(const LUFactorization *lu,
                            int *marked,
                            int *reach_nnz_out) {
     int m = lu->m;
+    const int *L_colptr = lu->L_colptr;
+    const int *L_rowidx = lu->L_rowidx;
+    const double *L_values = lu->L_values;
 
     /* Compute reach - stored in x_idx */
     int *reach = x_idx;
@@ -1424,13 +1508,12 @@ static void solve_L_sparse(const LUFactorization *lu,
         int j = reach[k];
         double xj = x[j];  /* L[j,j] = 1, so no division needed */
 
-        if (fabs(xj) > RALPH_ZERO_TOL) {
-            /* Update successors */
-            for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
-                int i = lu->L_rowidx[p];
-                x[i] -= lu->L_values[p] * xj;
-            }
-        }
+        if (fabs(xj) <= RALPH_ZERO_TOL) continue;
+
+        /* Update successors */
+        int p0 = L_colptr[j] + 1;
+        int p1 = L_colptr[j + 1];
+        tri_scatter_sub(L_rowidx + p0, L_values + p0, p1 - p0, xj, x);
     }
 
     /* Return reach size for caller to use for cleanup */
@@ -1459,6 +1542,9 @@ static void solve_U_sparse(const LUFactorization *lu,
                            int *marked,
                            int *reach_nnz_out) {
     int m = lu->m;
+    const int *U_colptr = lu->U_colptr;
+    const int *U_rowidx = lu->U_rowidx;
+    const double *U_values = lu->U_values;
 
     /* Compute reach */
     int *reach = x_idx;
@@ -1493,15 +1579,12 @@ static void solve_U_sparse(const LUFactorization *lu,
         x[j] /= diag;
         double xj = x[j];
 
-        if (fabs(xj) > RALPH_ZERO_TOL) {
-            /* Update predecessors */
-            for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
-                int i = lu->U_rowidx[p];
-                if (i < j) {
-                    x[i] -= lu->U_values[p] * xj;
-                }
-            }
-        }
+        if (fabs(xj) <= RALPH_ZERO_TOL) continue;
+
+        /* Update predecessors */
+        int p0 = U_colptr[j];
+        int p1 = U_colptr[j + 1];
+        tri_scatter_sub_lt(U_rowidx + p0, U_values + p0, p1 - p0, j, xj, x);
     }
 
     /* Return reach size for caller to use for cleanup */
@@ -1839,21 +1922,18 @@ static void compute_reach_Lt_backward(const LUFactorization *lu,
 static void solve_Ut_sparse_reach(const LUFactorization *lu,
                                    int reach_nnz, const int *reach,
                                    double *x) {
+    const int *U_colptr = lu->U_colptr;
+    const int *U_rowidx = lu->U_rowidx;
+    const double *U_values = lu->U_values;
     const double *U_diag = lu->U_diag;
 
     for (int k = 0; k < reach_nnz; k++) {
         int i = reach[k];
 
         /* Subtract contributions from earlier solved variables */
-        double sum = 0.0;
-        for (int p = lu->U_colptr[i]; p < lu->U_colptr[i + 1]; p++) {
-            int j = lu->U_rowidx[p];  /* row index j in U */
-            if (j < i) {
-                /* U^T[i,j] = U[j,i] — but we're scanning column i of U,
-                 * so U_rowidx[p] = j, U_values[p] = U[j,i] = U^T[i,j] */
-                sum += lu->U_values[p] * x[j];
-            }
-        }
+        int p0 = U_colptr[i];
+        int p1 = U_colptr[i + 1];
+        double sum = tri_dot_lt(U_rowidx + p0, U_values + p0, p1 - p0, i, x);
 
         double diag = U_diag[i];
         if (fabs(diag) < RALPH_PIVOT_TOL) {
@@ -1880,15 +1960,16 @@ static void solve_Lt_sparse_reach(const LUFactorization *lu,
                                    int reach_nnz, const int *reach,
                                    double *x, double *solution) {
     int m = lu->m;
+    const int *L_colptr = lu->L_colptr;
+    const int *L_rowidx = lu->L_rowidx;
+    const double *L_values = lu->L_values;
 
     for (int k = 0; k < reach_nnz; k++) {
         int j = reach[k];  /* Descending order */
 
-        double sum = 0.0;
-        for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
-            int i = lu->L_rowidx[p];  /* i > j */
-            sum += lu->L_values[p] * x[i];
-        }
+        int p0 = L_colptr[j] + 1;
+        int p1 = L_colptr[j + 1];
+        double sum = tri_dot(L_rowidx + p0, L_values + p0, p1 - p0, x);
         x[j] -= sum;
         /* L[j,j] = 1, so no division needed */
     }
