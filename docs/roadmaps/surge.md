@@ -1188,7 +1188,7 @@ Current measured quality (deterministic seed 42, 1000 iterations / default):
 - Li & Lim (PDPTW, 56 cases): `avgVehGap=+0.77`, `avgDistGap=+5.0%`, `equalVehicles=33`, `lexiNonWorse=14`.
 
 Best measured quality (5000 iterations):
-- Solomon: `avgVehGap=+0.55`, `avgDistGap=+0.4%`, `equalVehicles=29`, `lexiNonWorse=11`.
+- Solomon: `avgVehGap=+0.52`, `avgDistGap=+0.2%`, `equalVehicles=30`, `lexiNonWorse=12`.
 - Li & Lim: `avgVehGap=+0.70`, `avgDistGap=+4.3%`, `equalVehicles=36`, `lexiNonWorse=19`.
 
 Glaring architectural gaps:
@@ -1252,11 +1252,11 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - **Phase S2 (independent PD placement)**: O(L²) pickup/delivery evaluation with stop-level splice/excise. Li & Lim improved from +112.7% to +9.5% avgDistGap. Solomon unchanged at +5.9%.
 - **Phase S3 (route-aware worst removal)**: Replaced proxy-based removal cost with actual distance delta. Solomon +5.5% → +0.8% (at 5k iters), Li & Lim +9.5% → +4.2%.
 - **Phase S4 (route-aware Shaw relatedness)**: Replaced zone-based proxy in Shaw removal with spatial/TW/load/co-route scoring. Solomon +0.8% → +0.4% (at 5k iters). Li & Lim neutral at +4.3%.
+- **Phase S5 (adaptive destroy count)**: Scale q_min/q_max with instance size: `q_min=max(config,n/20)`, `q_max=max(config,n/4)`. Solomon +0.4% → +0.2% (at 5k iters). Li & Lim unchanged (instances too small to trigger).
 - Unified route state drives both delivery-only and PDPTW solves. The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time constraints.
 - Stop-level splice/excise operations preserve non-adjacent PD placement across ALNS destroy/repair cycles.
 
 ### Next step proposal
-- **Phase S5 (adaptive destroy count)**: Scale q_min/q_max with instance size instead of fixed [4, 20].
 - **Phase S6 (enhanced local search)**: Add or-opt and cross-exchange moves; increase intensification passes.
 - **Phase S7 (stagnation detection)**: Restart from perturbed best solution when stagnated.
 
@@ -1478,15 +1478,15 @@ At 5000 iterations: Solomon +0.8%, Li & Lim +4.2%.
 - Bumped Shaw initial weight from 0.5 to 1.0 (route-aware Shaw deserves equal weight)
 - 1 new test: verifies spatial ordering, same-route bonus dominance, NULL safety
 
-### Phase S5: Adaptive Destroy Count
+### Phase S5: Adaptive Destroy Count ✅
 
-**Impact**: Low-medium. Current q_min/q_max are fixed at [4, 20] regardless of instance size.
+**Result**: Solomon +0.4% → +0.2% avgDistGap (at 5k iters), avgVehGap +0.55 → +0.52. Li & Lim unchanged (53 requests too small to trigger adaptive scaling). Runtime +40% on Solomon due to larger neighborhoods.
 
 **Changes (surge)**:
-- Scale q_min/q_max with `num_requests`: `q_min = max(4, n/20)`, `q_max = max(20, n/4)`
-- Expose via `SGConfig` or compute automatically
-
-**Tests**: Verify q scaling produces valid ranges for various instance sizes.
+- Added `sg_adaptive_q_bounds` helper: `q_min = max(config, n/20)`, `q_max = max(config, n/4)`
+- Called from both `sg_solve_route_model` and `sg_solve` entry points
+- Config defaults (4/20) serve as floor; adaptive scaling only increases bounds
+- 1 new test: verifies formula for small/medium/large instances, user overrides, edge cases
 
 ### Phase S6: Enhanced Local Search
 
