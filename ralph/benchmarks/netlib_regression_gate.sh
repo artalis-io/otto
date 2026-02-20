@@ -126,6 +126,7 @@ mkdir -p "$OUTDIR/results"
 
 FILES_TXT="$OUTDIR/files.txt"
 STATUS_TSV="$OUTDIR/status.tsv"
+SELECTED_NAMES="$OUTDIR/selected.names.txt"
 
 find "$NETLIB_DIR" -maxdepth 1 -type f -name '*.mps' | LC_ALL=C sort > "$FILES_TXT"
 if [[ -n "$FILTER_REGEX" ]]; then
@@ -145,6 +146,8 @@ if [[ "$total" -eq 0 ]]; then
     echo "ERROR: no NETLIB files selected for regression gate." >&2
     exit 2
 fi
+
+awk -F/ '{print $NF}' "$FILES_TXT" | LC_ALL=C sort -u > "$SELECTED_NAMES"
 
 echo "NETLIB regression gate"
 echo "  baseline: $BASELINE_FILE"
@@ -178,11 +181,13 @@ known_status="$OUTDIR/known.status_mismatch.txt"
 known_obj="$OUTDIR/known.objective_mismatch.txt"
 known_sol="$OUTDIR/known.solution_invalid.txt"
 known_timeout="$OUTDIR/known.timeouts.txt"
+required_pass="$OUTDIR/required.pass.txt"
 
 jq -r '.known_status_mismatch[]?' "$BASELINE_FILE" | LC_ALL=C sort -u > "$known_status"
 jq -r '.known_objective_mismatch[]?' "$BASELINE_FILE" | LC_ALL=C sort -u > "$known_obj"
 jq -r '.known_solution_invalid[]?' "$BASELINE_FILE" | LC_ALL=C sort -u > "$known_sol"
 jq -r '.known_timeouts[]?' "$BASELINE_FILE" | LC_ALL=C sort -u > "$known_timeout"
+jq -r '.required_pass[]?' "$BASELINE_FILE" | LC_ALL=C sort -u > "$required_pass"
 
 actual_timeout="$OUTDIR/actual.timeouts.txt"
 actual_cmd_fail="$OUTDIR/actual.command_failures.txt"
@@ -258,11 +263,35 @@ unexpected_timeout="$OUTDIR/unexpected.timeouts.txt"
 unexpected_status="$OUTDIR/unexpected.status_mismatch.txt"
 unexpected_obj="$OUTDIR/unexpected.objective_mismatch.txt"
 unexpected_sol="$OUTDIR/unexpected.solution_invalid.txt"
+missing_required="$OUTDIR/missing.required.txt"
+actual_fail_any="$OUTDIR/actual.fail_any.txt"
+required_failed="$OUTDIR/required.failed.txt"
 
 comm -23 "$actual_timeout" "$known_timeout" > "$unexpected_timeout"
 comm -23 "$actual_status" "$known_status" > "$unexpected_status"
 comm -23 "$actual_obj" "$known_obj" > "$unexpected_obj"
 comm -23 "$actual_sol" "$known_sol" > "$unexpected_sol"
+
+if [[ -s "$required_pass" ]]; then
+    {
+        cat "$actual_timeout"
+        cat "$actual_cmd_fail"
+        cat "$actual_status"
+        cat "$actual_obj"
+        cat "$actual_sol"
+        cat "$actual_dense"
+    } | LC_ALL=C sort -u > "$actual_fail_any"
+    comm -12 "$required_pass" "$actual_fail_any" > "$required_failed"
+else
+    : > "$actual_fail_any"
+    : > "$required_failed"
+fi
+
+if [[ -s "$required_pass" && -z "$FILTER_REGEX" ]]; then
+    comm -23 "$required_pass" "$SELECTED_NAMES" > "$missing_required"
+else
+    : > "$missing_required"
+fi
 
 require_zero_dense="$(jq -r '.require_zero_dense_fallback // true' "$BASELINE_FILE")"
 
@@ -277,6 +306,8 @@ unexpected_timeout_count="$(wc -l < "$unexpected_timeout" | tr -d ' ')"
 unexpected_status_count="$(wc -l < "$unexpected_status" | tr -d ' ')"
 unexpected_obj_count="$(wc -l < "$unexpected_obj" | tr -d ' ')"
 unexpected_sol_count="$(wc -l < "$unexpected_sol" | tr -d ' ')"
+missing_required_count="$(wc -l < "$missing_required" | tr -d ' ')"
+required_failed_count="$(wc -l < "$required_failed" | tr -d ' ')"
 
 echo
 echo "Summary:"
@@ -294,6 +325,8 @@ echo "  new timeouts:           $unexpected_timeout_count"
 echo "  new status mismatch:    $unexpected_status_count"
 echo "  new objective mismatch: $unexpected_obj_count"
 echo "  new invalid solutions:  $unexpected_sol_count"
+echo "  missing required-pass:  $missing_required_count"
+echo "  failed required-pass:   $required_failed_count"
 
 gate_fail=0
 
@@ -336,6 +369,20 @@ if [[ "$require_zero_dense" == "true" && "$dense_count" -gt 0 ]]; then
     echo
     echo "FAIL: dense fallback observed in sparse LU path:"
     cat "$actual_dense"
+    gate_fail=1
+fi
+
+if [[ "$missing_required_count" -gt 0 ]]; then
+    echo
+    echo "FAIL: required-pass problems missing from full gate selection:"
+    cat "$missing_required"
+    gate_fail=1
+fi
+
+if [[ "$required_failed_count" -gt 0 ]]; then
+    echo
+    echo "FAIL: required-pass problems failed gate checks:"
+    cat "$required_failed"
     gate_fail=1
 fi
 
