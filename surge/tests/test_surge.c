@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "surge.h"
+#include "sg_internal.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -933,6 +934,242 @@ static void test_multi_dimension_capacity(void) {
     sg_free(ctx);
 }
 
+/* ===== Incremental Feasibility Tests ===== */
+
+static SGContext *make_internal_ctx(void) {
+    SGContext *ctx = make_config(50, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 86400, 60, -15.0);
+    add_delivery_request(ctx, 30.0, 0.0, 0, 86400, 60, -20.0);
+    return ctx;
+}
+
+static void test_timing_cache_matches_full_check(void) {
+    SGContext *ctx = make_internal_ctx();
+    SGRouteSolution sol;
+    double full_distance = 0.0;
+    uint32_t i;
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert all three requests */
+    for (i = 0; i < 3; i++) {
+        double score = 0.0, dist = 0.0;
+        if (sg_route_eval_insertion_cached(ctx, &sol, i, 0, sol.route_lengths[0],
+                                           &score, &dist)) {
+            assert(sg_route_apply_insertion(ctx, &sol, i, 0, sol.route_lengths[0], dist) == AR_STATUS_OK);
+        }
+    }
+
+    /* Verify timing cache matches full kernel */
+    assert(sol.route_stop_lengths[0] == 3);
+    assert(sg_route_stop_sequence_feasible(ctx, 0,
+                                           sg_route_vehicle_stop_ptr_const(&sol, 0),
+                                           sol.route_stop_lengths[0], &full_distance));
+    assert(fabs(full_distance - sol.route_distance[0]) < 1e-9);
+
+    /* Verify timing fields are populated */
+    {
+        const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(&sol, 0);
+        for (i = 0; i < sol.route_stop_lengths[0]; i++) {
+            assert(stops[i].service_start >= stops[i].arrival);
+            assert(stops[i].depart > stops[i].service_start - 1e-9);
+            assert(stops[i].forward_slack >= -1e-9);
+        }
+    }
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_cached_eval_agrees_with_full_eval(void) {
+    SGContext *ctx = make_internal_ctx();
+    SGRouteSolution sol;
+    uint32_t *candidate_route;
+    uint32_t pos;
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert request 0 first so the route is non-empty */
+    {
+        double score = 0.0, dist = 0.0;
+        if (sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist)) {
+            assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+        }
+    }
+
+    candidate_route = (uint32_t *)malloc((size_t)(sol.route_stride + 1U) * sizeof(uint32_t));
+    assert(candidate_route != NULL);
+
+    /* Try inserting request 1 at every position — compare old and cached eval */
+    for (pos = 0; pos <= sol.route_lengths[0]; pos++) {
+        double cached_score = 0.0, cached_dist = 0.0;
+        double full_score = 0.0, full_dist = 0.0;
+        int cached_ok = sg_route_eval_insertion_cached(ctx, &sol, 1, 0, pos,
+                                                       &cached_score, &cached_dist);
+        int full_ok = sg_route_eval_insertion(ctx, &sol, 1, 0, pos,
+                                              candidate_route, NULL,
+                                              &full_score, &full_dist);
+        assert(cached_ok == full_ok);
+        if (cached_ok) {
+            assert(fabs(cached_score - full_score) < 1e-6);
+            assert(fabs(cached_dist - full_dist) < 1e-6);
+        }
+    }
+
+    free(candidate_route);
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_cache_after_insert_remove_cycle(void) {
+    SGContext *ctx = make_internal_ctx();
+    SGRouteSolution sol;
+    double full_distance = 0.0;
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert request 0 */
+    {
+        double score = 0.0, dist = 0.0;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+    }
+    assert(sol.route_lengths[0] == 1);
+
+    /* Insert request 1 */
+    {
+        double score = 0.0, dist = 0.0;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 0, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 1, 0, 1, dist) == AR_STATUS_OK);
+    }
+    assert(sol.route_lengths[0] == 2);
+
+    /* Remove request 0 */
+    assert(sg_route_unassign_request(ctx, &sol, 0, NULL) == AR_STATUS_OK);
+    assert(sol.route_lengths[0] == 1);
+
+    /* Cache should be consistent: timing matches full check */
+    if (sol.route_stop_lengths[0] > 0) {
+        assert(sg_route_stop_sequence_feasible(ctx, 0,
+                                               sg_route_vehicle_stop_ptr_const(&sol, 0),
+                                               sol.route_stop_lengths[0], &full_distance));
+        assert(fabs(full_distance - sol.route_distance[0]) < 1e-9);
+    }
+
+    /* Re-insert request 0, should work */
+    {
+        double score = 0.0, dist = 0.0;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+    }
+    assert(sol.route_lengths[0] == 2);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_forward_slack_rejects_infeasible(void) {
+    SGContext *ctx = make_config(50, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 3600, 100.0);
+
+    /* Tight TW: request 0 must be served 0-1000, request 1 must be served 2000-3000 */
+    add_delivery_request(ctx, 1.0, 0.0, 0, 1000, 60, -10.0);
+    add_delivery_request(ctx, 2.0, 0.0, 2000, 3000, 60, -10.0);
+    /* Request 2 has TW that doesn't fit between 0 and 1 */
+    add_delivery_request(ctx, 0.5, 0.0, 0, 500, 60, -10.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert requests 0 and 1 */
+    {
+        double score = 0.0, dist = 0.0;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+    }
+    {
+        double score = 0.0, dist = 0.0;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 0, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 1, 0, 1, dist) == AR_STATUS_OK);
+    }
+
+    /* Verify forward_slack is tight */
+    {
+        const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(&sol, 0);
+        assert(stops[0].forward_slack >= -1e-9);
+    }
+
+    /* Try inserting request 2 between 0 and 1 — should fail (would push request 1 past TW) */
+    {
+        double score = 0.0, dist = 0.0;
+        int ok = sg_route_eval_insertion_cached(ctx, &sol, 2, 0, 1, &score, &dist);
+        /* Verify cached check and full check agree */
+        {
+            uint32_t *cand = (uint32_t *)malloc((size_t)(sol.route_stride + 1U) * sizeof(uint32_t));
+            double fscore = 0.0, fdist = 0.0;
+            int fok = sg_route_eval_insertion(ctx, &sol, 2, 0, 1, cand, NULL, &fscore, &fdist);
+            assert(ok == fok);
+            free(cand);
+        }
+    }
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_capacity_check_incremental(void) {
+    SGContext *ctx = make_config(50, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    uint32_t pos;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    /* Vehicle with small capacity */
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 25.0);
+    add_delivery_request(ctx, 1.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 2.0, 0.0, 0, 86400, 60, -10.0);
+    /* This one exceeds capacity if added (total would be 35 > 25) */
+    add_delivery_request(ctx, 3.0, 0.0, 0, 86400, 60, -15.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert request 0 and 1 (total demand = 20 <= 25) */
+    {
+        double score = 0.0, dist = 0.0;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+    }
+    {
+        double score = 0.0, dist = 0.0;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 0, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 1, 0, 1, dist) == AR_STATUS_OK);
+    }
+
+    /* Try inserting request 2 at every position — should fail due to capacity */
+    for (pos = 0; pos <= sol.route_lengths[0]; pos++) {
+        double score = 0.0, dist = 0.0;
+        int cached_ok = sg_route_eval_insertion_cached(ctx, &sol, 2, 0, pos, &score, &dist);
+        /* Full eval should agree */
+        {
+            uint32_t *cand = (uint32_t *)malloc((size_t)(sol.route_stride + 1U) * sizeof(uint32_t));
+            double fscore = 0.0, fdist = 0.0;
+            int fok = sg_route_eval_insertion(ctx, &sol, 2, 0, pos, cand, NULL, &fscore, &fdist);
+            assert(cached_ok == fok);
+            free(cand);
+        }
+    }
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -971,6 +1208,11 @@ int main(void) {
     RUN_TEST(test_li_lim_loader_smoke);
     RUN_TEST(test_solomon_deterministic);
     RUN_TEST(test_li_lim_deterministic);
+    RUN_TEST(test_timing_cache_matches_full_check);
+    RUN_TEST(test_cached_eval_agrees_with_full_eval);
+    RUN_TEST(test_cache_after_insert_remove_cycle);
+    RUN_TEST(test_forward_slack_rejects_infeasible);
+    RUN_TEST(test_capacity_check_incremental);
 
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);

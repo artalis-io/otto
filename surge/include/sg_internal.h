@@ -45,6 +45,12 @@ typedef struct {
     uint32_t request_id;
     uint32_t task_id;
     uint8_t is_pickup;
+    /* Cached timing (populated by sg_route_update_timing) */
+    double arrival;        /* time cursor on arrival (after travel from prev) */
+    double service_start;  /* max(arrival, tw_early) */
+    double depart;         /* service_start + service_seconds */
+    double latest_start;   /* latest feasible service start (backward pass) */
+    double forward_slack;  /* latest_start - service_start */
 } SGRouteStop;
 
 typedef struct {
@@ -67,6 +73,7 @@ typedef struct {
     uint32_t *request_pickup_stop_pos;
     uint32_t *request_delivery_stop_pos;
     double *route_distance;
+    double *route_stop_load;   /* [vehicle * stop_stride * dim_count + stop * dim_count + d] */
 } SGRouteSolution;
 
 typedef struct {
@@ -240,6 +247,12 @@ void sg_compute_solution_route_metrics(const SGContext *ctx, const SGBootstrapSo
                                        uint32_t *vehicles_used_out, double *total_distance_out);
 
 /* sg_feasibility.c */
+int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t vehicle_id);
+int sg_route_update_load(const SGContext *ctx, SGRouteSolution *sol, uint32_t vehicle_id);
+int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *sol,
+                                   uint32_t request_id, uint32_t vehicle_id,
+                                   uint32_t pos, double *score_out,
+                                   double *new_route_distance_out);
 int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
                                     const SGRouteStop *stops, uint32_t stop_count,
                                     double *distance_out);

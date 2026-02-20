@@ -243,8 +243,6 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
     double ranked_distance[SG_ROUTE_MAX_REGRET_K];
     uint32_t ranked_vehicle[SG_ROUTE_MAX_REGRET_K];
     uint32_t ranked_pos[SG_ROUTE_MAX_REGRET_K];
-    uint32_t *candidate_route = NULL;
-    double *capacity_scratch = NULL;
     int ranked_count = 0;
     uint32_t v;
     int ok = 0;
@@ -253,18 +251,6 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
         !best_pos_out || !best_route_distance_out || request_id >= sol->base.total_requests ||
         regret_k < 1 || regret_k > SG_ROUTE_MAX_REGRET_K) {
         return 0;
-    }
-
-    candidate_route = (uint32_t *)malloc((size_t)(sol->route_stride + 1U) * sizeof(uint32_t));
-    if (!candidate_route) {
-        return 0;
-    }
-    if (ctx->dimension_count > 0) {
-        capacity_scratch = (double *)malloc((size_t)ctx->dimension_count * sizeof(double));
-        if (!capacity_scratch) {
-            free(candidate_route);
-            return 0;
-        }
     }
 
     for (v = 0; v < sol->num_vehicles; v++) {
@@ -277,9 +263,8 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
             int insert_at = ranked_count;
             int j;
 
-            if (!sg_route_eval_insertion(ctx, sol, request_id, v, pos,
-                                         candidate_route, capacity_scratch,
-                                         &score, &new_route_distance)) {
+            if (!sg_route_eval_insertion_cached(ctx, sol, request_id, v, pos,
+                                                &score, &new_route_distance)) {
                 continue;
             }
 
@@ -336,8 +321,6 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
         ok = 1;
     }
 
-    free(capacity_scratch);
-    free(candidate_route);
     return ok;
 }
 

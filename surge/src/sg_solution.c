@@ -406,6 +406,11 @@ int sg_route_rebuild_vehicle_stop_state(const SGContext *ctx, SGRouteSolution *s
         stops[r].request_id = UINT32_MAX;
         stops[r].task_id = UINT32_MAX;
         stops[r].is_pickup = 0;
+        stops[r].arrival = 0.0;
+        stops[r].service_start = 0.0;
+        stops[r].depart = 0.0;
+        stops[r].latest_start = 0.0;
+        stops[r].forward_slack = 0.0;
         prev[r] = UINT32_MAX;
         next[r] = UINT32_MAX;
     }
@@ -431,6 +436,7 @@ void sg_route_solution_reset(SGRouteSolution *sol) {
     free(sol->request_pickup_stop_pos);
     free(sol->request_delivery_stop_pos);
     free(sol->route_distance);
+    free(sol->route_stop_load);
     sol->route_lengths = NULL;
     sol->route_requests = NULL;
     sol->route_stop_lengths = NULL;
@@ -442,6 +448,7 @@ void sg_route_solution_reset(SGRouteSolution *sol) {
     sol->request_pickup_stop_pos = NULL;
     sol->request_delivery_stop_pos = NULL;
     sol->route_distance = NULL;
+    sol->route_stop_load = NULL;
     sol->num_vehicles = 0;
     sol->route_stride = 0;
     sol->stop_stride = 0;
@@ -501,10 +508,17 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
     sol->request_delivery_stop_pos = (uint32_t *)malloc((size_t)ctx->num_requests * sizeof(uint32_t));
     sol->route_distance = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
 
+    if (ctx->dimension_count > 0) {
+        size_t load_size = (size_t)ctx->num_vehicles * (size_t)sol->stop_stride *
+                           (size_t)ctx->dimension_count;
+        sol->route_stop_load = (double *)calloc(load_size, sizeof(double));
+    }
+
     if (!sol->route_lengths || !sol->route_requests || !sol->route_stop_lengths ||
         !sol->route_stops || !sol->route_stop_prev || !sol->route_stop_next ||
         !sol->request_vehicle || !sol->request_pos || !sol->request_pickup_stop_pos ||
-        !sol->request_delivery_stop_pos || !sol->route_distance) {
+        !sol->request_delivery_stop_pos || !sol->route_distance ||
+        (ctx->dimension_count > 0 && !sol->route_stop_load)) {
         sg_route_solution_reset(sol);
         return AR_STATUS_OUT_OF_MEMORY;
     }
@@ -515,6 +529,11 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
         sol->route_stops[i].request_id = UINT32_MAX;
         sol->route_stops[i].task_id = UINT32_MAX;
         sol->route_stops[i].is_pickup = 0;
+        sol->route_stops[i].arrival = 0.0;
+        sol->route_stops[i].service_start = 0.0;
+        sol->route_stops[i].depart = 0.0;
+        sol->route_stops[i].latest_start = 0.0;
+        sol->route_stops[i].forward_slack = 0.0;
     }
 
     for (i = 0; i < ctx->num_requests; i++) {
@@ -577,6 +596,11 @@ void *sg_route_solution_copy(const void *solution, void *user_ctx) {
         memcpy(dst->route_stop_next, src->route_stop_next, stop_count * sizeof(uint32_t));
         memcpy(dst->route_distance, src->route_distance,
                (size_t)src->num_vehicles * sizeof(double));
+        if (src->route_stop_load && dst->route_stop_load && ctx->dimension_count > 0) {
+            size_t load_size = (size_t)src->num_vehicles * (size_t)src->stop_stride *
+                               (size_t)ctx->dimension_count;
+            memcpy(dst->route_stop_load, src->route_stop_load, load_size * sizeof(double));
+        }
     }
 
     return dst;

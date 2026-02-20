@@ -292,8 +292,10 @@ static int sg_route_try_2opt_star_once(const SGContext *ctx, SGRouteSolution *so
                             continue;
                         }
 
-                        sol->route_distance[va] = new_dist_a;
-                        sol->route_distance[vb] = new_dist_b;
+                        sg_route_update_timing(ctx, sol, va);
+                        sg_route_update_timing(ctx, sol, vb);
+                        sg_route_update_load(ctx, sol, va);
+                        sg_route_update_load(ctx, sol, vb);
                         sol->total_distance = new_total;
                         sg_route_solution_free(backup, NULL);
                         improved = 1;
@@ -325,26 +327,12 @@ int sg_route_find_best_insertion_for_request(const SGContext *ctx,
                                              uint32_t *best_vehicle_out,
                                              uint32_t *best_pos_out,
                                              double *best_route_distance_out) {
-    uint32_t *candidate_route = NULL;
-    double *capacity_scratch = NULL;
-    size_t scratch_count;
     double best_score = INFINITY;
     uint32_t v;
     int found = 0;
 
     if (!ctx || !sol || !best_vehicle_out || !best_pos_out || !best_route_distance_out ||
         request_id >= sol->base.total_requests) {
-        return 0;
-    }
-
-    candidate_route = (uint32_t *)malloc((size_t)(sol->route_stride + 1U) * sizeof(uint32_t));
-    if (!candidate_route) {
-        return 0;
-    }
-    scratch_count = ctx->dimension_count > 0 ? (size_t)ctx->dimension_count : 1U;
-    capacity_scratch = (double *)malloc(scratch_count * sizeof(double));
-    if (!capacity_scratch) {
-        free(candidate_route);
         return 0;
     }
 
@@ -359,9 +347,8 @@ int sg_route_find_best_insertion_for_request(const SGContext *ctx,
         for (pos = 0; pos <= len; pos++) {
             double score = 0.0;
             double new_route_distance = 0.0;
-            if (!sg_route_eval_insertion(ctx, sol, request_id, v, pos,
-                                         candidate_route, capacity_scratch,
-                                         &score, &new_route_distance)) {
+            if (!sg_route_eval_insertion_cached(ctx, sol, request_id, v, pos,
+                                                &score, &new_route_distance)) {
                 continue;
             }
 
@@ -378,8 +365,6 @@ int sg_route_find_best_insertion_for_request(const SGContext *ctx,
         }
     }
 
-    free(capacity_scratch);
-    free(candidate_route);
     return found;
 }
 
@@ -390,26 +375,12 @@ int sg_route_find_best_insertion_no_new_vehicle(const SGContext *ctx,
                                                 uint32_t *best_vehicle_out,
                                                 uint32_t *best_pos_out,
                                                 double *best_route_distance_out) {
-    uint32_t *candidate_route = NULL;
-    double *capacity_scratch = NULL;
-    size_t scratch_count;
     double best_score = INFINITY;
     uint32_t v;
     int found = 0;
 
     if (!ctx || !sol || !best_vehicle_out || !best_pos_out || !best_route_distance_out ||
         request_id >= sol->base.total_requests) {
-        return 0;
-    }
-
-    candidate_route = (uint32_t *)malloc((size_t)(sol->route_stride + 1U) * sizeof(uint32_t));
-    if (!candidate_route) {
-        return 0;
-    }
-    scratch_count = ctx->dimension_count > 0 ? (size_t)ctx->dimension_count : 1U;
-    capacity_scratch = (double *)malloc(scratch_count * sizeof(double));
-    if (!capacity_scratch) {
-        free(candidate_route);
         return 0;
     }
 
@@ -425,9 +396,8 @@ int sg_route_find_best_insertion_no_new_vehicle(const SGContext *ctx,
         for (pos = 0; pos <= len; pos++) {
             double score = 0.0;
             double new_route_distance = 0.0;
-            if (!sg_route_eval_insertion(ctx, sol, request_id, v, pos,
-                                         candidate_route, capacity_scratch,
-                                         &score, &new_route_distance)) {
+            if (!sg_route_eval_insertion_cached(ctx, sol, request_id, v, pos,
+                                                &score, &new_route_distance)) {
                 continue;
             }
 
@@ -444,8 +414,6 @@ int sg_route_find_best_insertion_no_new_vehicle(const SGContext *ctx,
         }
     }
 
-    free(capacity_scratch);
-    free(candidate_route);
     return found;
 }
 
