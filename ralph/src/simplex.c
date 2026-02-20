@@ -3068,10 +3068,17 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
         dir = -1.0;
     }
 
+    const int *basis = tab->basis;
+    const double *x = tab->x;
+    const double *lb = tab->lb_ext;
+    const double *ub = tab->ub_ext;
+    const double *work2 = tab->work2;
+
     /* Relative pivot filter: avoid numerically fragile leaving choices. */
     double max_abs_dk = 0.0;
     for (int k = 0; k < tab->m; k++) {
-        double abs_dk = fabs(tab->work2[k] * dir);
+        double dk = (dir > 0.0) ? work2[k] : -work2[k];
+        double abs_dk = fabs(dk);
         if (abs_dk > max_abs_dk) {
             max_abs_dk = abs_dk;
         }
@@ -3101,23 +3108,23 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
 
     /* Single pass: compute theta_max and select best leaving simultaneously */
     for (int k = 0; k < tab->m; k++) {
-        double dk = tab->work2[k] * dir;
+        double dk = (dir > 0.0) ? work2[k] : -work2[k];
         if (fabs(dk) < pivot_tol) continue;  /* Skip tiny pivots */
 
-        int j = tab->basis[k];
-        double xj = tab->x[j];
+        int j = basis[k];
+        double xj = x[j];
 
         double ratio_harris;  /* Ratio with Harris tolerance */
         double ratio_exact;   /* Exact ratio for selection */
 
         if (dk > 0) {
             /* Variable will decrease toward lower bound */
-            double slack = xj - tab->lb_ext[j];
+            double slack = xj - lb[j];
             ratio_harris = (slack + RALPH_FEAS_TOL) / dk;
             ratio_exact = slack / dk;
         } else {
             /* Variable will increase toward upper bound (dk < 0) */
-            double slack = tab->ub_ext[j] - xj;
+            double slack = ub[j] - xj;
             ratio_harris = (slack + RALPH_FEAS_TOL) / (-dk);
             ratio_exact = slack / (-dk);
         }
@@ -3161,17 +3168,17 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
         *theta = RALPH_INFINITY;
 
         for (int k = 0; k < tab->m; k++) {
-            double dk = tab->work2[k] * dir;
+            double dk = (dir > 0.0) ? work2[k] : -work2[k];
             if (fabs(dk) < pivot_tol) continue;
 
-            int j = tab->basis[k];
-            double xj = tab->x[j];
+            int j = basis[k];
+            double xj = x[j];
             double ratio_exact;
 
             if (dk > 0) {
-                ratio_exact = (xj - tab->lb_ext[j]) / dk;
+                ratio_exact = (xj - lb[j]) / dk;
             } else {
-                ratio_exact = (tab->ub_ext[j] - xj) / (-dk);
+                ratio_exact = (ub[j] - xj) / (-dk);
             }
 
             if (ratio_exact <= theta_max + RALPH_FEAS_TOL) {
@@ -3319,6 +3326,11 @@ static int simplex_pivot(SimplexTableau *tab,
                          int repeat_pattern_count) {
     double dir = (tab->var_status[entering] == RALPH_NONBASIC_UPPER) ? -1.0 : 1.0;
     double x_enter_old = tab->x[entering];
+    double *x = tab->x;
+    int *basis = tab->basis;
+    const double *work2 = tab->work2;
+    double step = theta * dir;
+    double gamma_e = 0.0;
 
     if (tab->trace_phase1_enabled) {
         tab->trace_last_entering = entering;
@@ -3337,14 +3349,16 @@ static int simplex_pivot(SimplexTableau *tab,
 
     /* Update entering variable */
     if (tab->var_status[entering] == RALPH_NONBASIC_LOWER) {
-        tab->x[entering] += theta;
+        x[entering] += theta;
     } else {
-        tab->x[entering] -= theta;
+        x[entering] -= theta;
     }
 
-    /* Update basic variables */
+    /* Update basic variables and accumulate ||d_entering||^2 in one pass. */
     for (int k = 0; k < tab->m; k++) {
-        tab->x[tab->basis[k]] -= theta * dir * tab->work2[k];
+        double dk = work2[k];
+        x[basis[k]] -= step * dk;
+        gamma_e += dk * dk;
     }
 
     if (leaving_pos == -2) {
@@ -3362,12 +3376,12 @@ static int simplex_pivot(SimplexTableau *tab,
     }
 
     /* Normal pivot: swap entering and leaving */
-    int leaving = tab->basis[leaving_pos];
-    double x_leave_old = tab->x[leaving];
+    int leaving = basis[leaving_pos];
+    double x_leave_old = x[leaving];
     VarStatus entering_old_status = tab->var_status[entering];
 
     /* Update basis */
-    tab->basis[leaving_pos] = entering;
+    basis[leaving_pos] = entering;
     tab->basis_pos[entering] = leaving_pos;
     tab->basis_pos[leaving] = -1;
 
@@ -3377,10 +3391,10 @@ static int simplex_pivot(SimplexTableau *tab,
     /* Leaving goes to appropriate bound */
     if (tab->work2[leaving_pos] * dir > 0) {
         tab->var_status[leaving] = RALPH_NONBASIC_LOWER;
-        tab->x[leaving] = tab->lb_ext[leaving];
+        x[leaving] = tab->lb_ext[leaving];
     } else {
         tab->var_status[leaving] = RALPH_NONBASIC_UPPER;
-        tab->x[leaving] = tab->ub_ext[leaving];
+        x[leaving] = tab->ub_ext[leaving];
     }
 
     /* Compute pivot row and steepest edge update data BEFORE LU update (using old basis) */
@@ -3398,11 +3412,7 @@ static int simplex_pivot(SimplexTableau *tab,
         goto pivot_fail_rollback;
     }
 
-    /* Compute exact entering column weight: gamma_e = ||d_entering||^2 = ||work2||^2 */
-    double gamma_e = 0.0;
-    for (int k = 0; k < tab->m; k++) {
-        gamma_e += tab->work2[k] * tab->work2[k];
-    }
+    /* gamma_e already computed with the basic-variable update loop above. */
     if (gamma_e < 1.0) gamma_e = 1.0;
 
     /* Always compute pivot row for incremental reduced cost updates
