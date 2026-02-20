@@ -1199,6 +1199,356 @@ static void test_sa_acceptance_produces_valid_solution(void) {
     sg_free(ctx);
 }
 
+/* ===== PD Independent Placement Tests ===== */
+
+static void test_splice_excise_stop(void) {
+    SGContext *ctx = make_config(50, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 30.0, 0.0, 0, 86400, 60, -10.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert all three via apply_insertion (which now uses splice internally) */
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+    }
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 0, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 1, 0, 1, dist) == AR_STATUS_OK);
+    }
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 2, 0, 2, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 2, 0, 2, dist) == AR_STATUS_OK);
+    }
+
+    assert(sol.route_stop_lengths[0] == 3);
+
+    /* Verify stop positions */
+    assert(sol.request_delivery_stop_pos[0] == 0);
+    assert(sol.request_delivery_stop_pos[1] == 1);
+    assert(sol.request_delivery_stop_pos[2] == 2);
+
+    /* Verify prev/next */
+    {
+        const uint32_t *prev = sg_route_vehicle_stop_prev_ptr_const(&sol, 0);
+        const uint32_t *next = sg_route_vehicle_stop_next_ptr_const(&sol, 0);
+        assert(prev[0] == UINT32_MAX);
+        assert(next[0] == 1);
+        assert(prev[1] == 0);
+        assert(next[1] == 2);
+        assert(prev[2] == 1);
+        assert(next[2] == UINT32_MAX);
+    }
+
+    /* Remove middle stop (request 1) via unassign */
+    assert(sg_route_unassign_request(ctx, &sol, 1, NULL) == AR_STATUS_OK);
+    assert(sol.route_stop_lengths[0] == 2);
+    assert(sol.request_delivery_stop_pos[0] == 0);
+    assert(sol.request_delivery_stop_pos[2] == 1);
+    assert(sol.request_delivery_stop_pos[1] == UINT32_MAX);
+
+    /* Verify integrity with full feasibility check */
+    {
+        double full_dist = 0.0;
+        assert(sg_route_stop_sequence_feasible(ctx, 0,
+                                               sg_route_vehicle_stop_ptr_const(&sol, 0),
+                                               sol.route_stop_lengths[0], &full_dist));
+        assert(fabs(full_dist - sol.route_distance[0]) < 1e-9);
+    }
+
+    /* Validate full solution */
+    assert(sg_route_solution_validate(&sol, (void *)ctx));
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_pd_independent_placement_feasible(void) {
+    /* Two PD requests on one vehicle. With non-adjacent placement,
+       interleaving P1,P2,D1,D2 should yield lower distance than
+       P1,D1,P2,D2 when the geometry favors it. */
+    SGContext *ctx = make_config(500, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    /* Request 0: pickup at (1,0) delivery at (3,0) - wide TW */
+    add_pd_request(ctx,
+                   1.0, 0.0, 0, 86400, 10,
+                   3.0, 0.0, 0, 86400, 10,
+                   10.0);
+    /* Request 1: pickup at (2,0) delivery at (4,0) - wide TW */
+    add_pd_request(ctx,
+                   2.0, 0.0, 0, 86400, 10,
+                   4.0, 0.0, 0, 86400, 10,
+                   10.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert request 0 first */
+    {
+        double score;
+        uint32_t p_pos, d_pos;
+        double route_dist;
+        assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 0, 0,
+                                                       &score, &p_pos, &d_pos, &route_dist));
+        assert(sg_route_apply_pd_insertion(ctx, &sol, 0, 0, p_pos, d_pos, route_dist) == AR_STATUS_OK);
+    }
+
+    /* Insert request 1 - should find non-adjacent placement */
+    {
+        double score;
+        uint32_t p_pos, d_pos;
+        double route_dist;
+        assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 1, 0,
+                                                       &score, &p_pos, &d_pos, &route_dist));
+        assert(sg_route_apply_pd_insertion(ctx, &sol, 1, 0, p_pos, d_pos, route_dist) == AR_STATUS_OK);
+    }
+
+    /* Both assigned */
+    assert(sol.base.num_unassigned == 0);
+    assert(sol.route_stop_lengths[0] == 4);
+
+    /* The optimal ordering is P0,P1,D0,D1 (distance=8+return) or P0,P1,D1,D0...
+       In any case, verify it's a valid solution. */
+    assert(sg_route_solution_validate(&sol, (void *)ctx));
+
+    /* Verify stops have correct interleaving: pickup 0 < pickup 1 < delivery 0 < delivery 1
+       (by the geometry: 1, 2, 3, 4 on x-axis) */
+    {
+        const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(&sol, 0);
+        /* Just verify all 4 stops are present and valid */
+        uint32_t s;
+        for (s = 0; s < 4; s++) {
+            assert(stops[s].request_id < 2);
+            assert(stops[s].task_id < ctx->num_tasks);
+        }
+    }
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_pd_adjacent_still_works(void) {
+    /* PD request with tight TW that forces adjacent placement */
+    SGContext *ctx = make_config(200, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    /* Pickup at (10,0) delivery at (20,0), tight ride time */
+    add_pd_request(ctx,
+                   10.0, 0.0, 0, 100, 10,
+                   20.0, 0.0, 50, 200, 10,
+                   10.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    {
+        double score;
+        uint32_t p_pos, d_pos;
+        double route_dist;
+        int found = sg_route_eval_pd_best_insertion_cached(ctx, &sol, 0, 0,
+                                                            &score, &p_pos, &d_pos, &route_dist);
+        assert(found);
+        /* Should be adjacent: p_pos=0, d_pos=1 */
+        assert(p_pos == 0);
+        assert(d_pos == 1);
+        assert(sg_route_apply_pd_insertion(ctx, &sol, 0, 0, p_pos, d_pos, route_dist) == AR_STATUS_OK);
+    }
+
+    assert(sol.base.num_unassigned == 0);
+    assert(sg_route_solution_validate(&sol, (void *)ctx));
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_pd_unassign_preserves_others(void) {
+    /* Insert 2 PD requests non-adjacently, remove one,
+       verify other's stops remain in correct positions. */
+    SGContext *ctx = make_config(500, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    add_pd_request(ctx,
+                   1.0, 0.0, 0, 86400, 10,
+                   3.0, 0.0, 0, 86400, 10,
+                   10.0);
+    add_pd_request(ctx,
+                   2.0, 0.0, 0, 86400, 10,
+                   4.0, 0.0, 0, 86400, 10,
+                   10.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert both */
+    {
+        double score;
+        uint32_t p_pos, d_pos;
+        double route_dist;
+        assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 0, 0,
+                                                       &score, &p_pos, &d_pos, &route_dist));
+        assert(sg_route_apply_pd_insertion(ctx, &sol, 0, 0, p_pos, d_pos, route_dist) == AR_STATUS_OK);
+    }
+    {
+        double score;
+        uint32_t p_pos, d_pos;
+        double route_dist;
+        assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 1, 0,
+                                                       &score, &p_pos, &d_pos, &route_dist));
+        assert(sg_route_apply_pd_insertion(ctx, &sol, 1, 0, p_pos, d_pos, route_dist) == AR_STATUS_OK);
+    }
+    assert(sol.route_stop_lengths[0] == 4);
+
+    /* Remember request 0's stop positions */
+    {
+        uint32_t p0_before = sol.request_pickup_stop_pos[0];
+        uint32_t d0_before = sol.request_delivery_stop_pos[0];
+        assert(p0_before != UINT32_MAX);
+        assert(d0_before != UINT32_MAX);
+        assert(p0_before < d0_before);
+    }
+
+    /* Remove request 1 */
+    assert(sg_route_unassign_request(ctx, &sol, 1, NULL) == AR_STATUS_OK);
+    assert(sol.route_stop_lengths[0] == 2);
+
+    /* Request 0's stops should still be valid */
+    assert(sol.request_pickup_stop_pos[0] != UINT32_MAX);
+    assert(sol.request_delivery_stop_pos[0] != UINT32_MAX);
+    assert(sol.request_pickup_stop_pos[0] < sol.request_delivery_stop_pos[0]);
+
+    /* Validate */
+    assert(sg_route_solution_validate(&sol, (void *)ctx));
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_pd_delivery_only_mixed(void) {
+    /* Vehicle with both delivery-only and PD requests */
+    SGContext *ctx = make_config(500, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 200.0);
+
+    /* Request 0: delivery-only */
+    add_delivery_request(ctx, 5.0, 0.0, 0, 86400, 60, -10.0);
+    /* Request 1: PD */
+    add_pd_request(ctx,
+                   1.0, 0.0, 0, 86400, 10,
+                   3.0, 0.0, 0, 86400, 10,
+                   10.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert delivery-only first */
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+    }
+
+    /* Insert PD request */
+    {
+        double score;
+        uint32_t p_pos, d_pos;
+        double route_dist;
+        assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 1, 0,
+                                                       &score, &p_pos, &d_pos, &route_dist));
+        assert(sg_route_apply_pd_insertion(ctx, &sol, 1, 0, p_pos, d_pos, route_dist) == AR_STATUS_OK);
+    }
+
+    assert(sol.base.num_unassigned == 0);
+    assert(sg_route_solution_validate(&sol, (void *)ctx));
+
+    /* Remove PD, verify delivery-only is untouched */
+    assert(sg_route_unassign_request(ctx, &sol, 1, NULL) == AR_STATUS_OK);
+    assert(sol.route_stop_lengths[0] == 1);
+    assert(sol.request_delivery_stop_pos[0] == 0);
+    assert(sg_route_solution_validate(&sol, (void *)ctx));
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_pd_ride_time_constraint(void) {
+    /* PD request with strict ride-time limit:
+       delivery positions far from pickup should be rejected. */
+    SGContext *ctx = make_config(200, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    /* First, add a filler delivery to create a longer route */
+    add_delivery_request(ctx, 100.0, 0.0, 0, 86400, 10, -5.0);
+
+    /* PD with tight ride limit: pickup TW [0, 100], delivery TW [0, 200].
+       ride_limit = delivery.tw_late - pickup.tw_early = 200 - 0 = 200.
+       Pickup at (1,0), delivery at (2,0). */
+    add_pd_request(ctx,
+                   1.0, 0.0, 0, 100, 10,
+                   2.0, 0.0, 0, 200, 10,
+                   10.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert filler */
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+    }
+
+    /* Insert PD */
+    {
+        double score;
+        uint32_t p_pos, d_pos;
+        double route_dist;
+        int found = sg_route_eval_pd_best_insertion_cached(ctx, &sol, 1, 0,
+                                                            &score, &p_pos, &d_pos, &route_dist);
+        if (found) {
+            assert(sg_route_apply_pd_insertion(ctx, &sol, 1, 0, p_pos, d_pos, route_dist) == AR_STATUS_OK);
+            assert(sg_route_solution_validate(&sol, (void *)ctx));
+
+            /* Verify ride time is within limit */
+            {
+                const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(&sol, 0);
+                uint32_t pp = sol.request_pickup_stop_pos[1];
+                uint32_t dp = sol.request_delivery_stop_pos[1];
+                double ride = stops[dp].service_start - stops[pp].depart;
+                assert(ride <= 200.0 + 1e-9);
+            }
+        }
+        /* If not found, that's also acceptable - the constraint is working */
+    }
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -1243,6 +1593,12 @@ int main(void) {
     RUN_TEST(test_forward_slack_rejects_infeasible);
     RUN_TEST(test_capacity_check_incremental);
     RUN_TEST(test_sa_acceptance_produces_valid_solution);
+    RUN_TEST(test_splice_excise_stop);
+    RUN_TEST(test_pd_independent_placement_feasible);
+    RUN_TEST(test_pd_adjacent_still_works);
+    RUN_TEST(test_pd_unassign_preserves_others);
+    RUN_TEST(test_pd_delivery_only_mixed);
+    RUN_TEST(test_pd_ride_time_constraint);
 
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);

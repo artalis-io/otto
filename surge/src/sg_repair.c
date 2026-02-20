@@ -231,40 +231,97 @@ ARStatus sg_repair_pair_sync(void *op_ctx, void *solution,
     return sg_repair_with_selector(ctx, sol, removed_ids, removed_count, sg_select_extra_pair_sync);
 }
 
+static void sg_rank_insert_candidate(
+    double ranked_noisy[], double ranked_scores[], double ranked_distance[],
+    uint32_t ranked_vehicle[], uint32_t ranked_pos[],
+    uint32_t ranked_pickup_pos[], uint32_t ranked_delivery_pos[],
+    int *ranked_count,
+    double noisy, double score, double distance,
+    uint32_t vehicle, uint32_t pos, uint32_t pickup_pos, uint32_t delivery_pos) {
+
+    int insert_at = *ranked_count;
+    int j;
+
+    if (insert_at > SG_ROUTE_MAX_REGRET_K) {
+        insert_at = SG_ROUTE_MAX_REGRET_K;
+    }
+    for (j = 0; j < *ranked_count && j < SG_ROUTE_MAX_REGRET_K; j++) {
+        if (noisy < ranked_noisy[j]) {
+            insert_at = j;
+            break;
+        }
+    }
+
+    if (insert_at < SG_ROUTE_MAX_REGRET_K) {
+        int limit = *ranked_count < SG_ROUTE_MAX_REGRET_K
+                    ? *ranked_count
+                    : SG_ROUTE_MAX_REGRET_K - 1;
+        for (j = limit; j > insert_at; j--) {
+            ranked_noisy[j] = ranked_noisy[j - 1];
+            ranked_scores[j] = ranked_scores[j - 1];
+            ranked_distance[j] = ranked_distance[j - 1];
+            ranked_vehicle[j] = ranked_vehicle[j - 1];
+            ranked_pos[j] = ranked_pos[j - 1];
+            ranked_pickup_pos[j] = ranked_pickup_pos[j - 1];
+            ranked_delivery_pos[j] = ranked_delivery_pos[j - 1];
+        }
+        ranked_noisy[insert_at] = noisy;
+        ranked_scores[insert_at] = score;
+        ranked_distance[insert_at] = distance;
+        ranked_vehicle[insert_at] = vehicle;
+        ranked_pos[insert_at] = pos;
+        ranked_pickup_pos[insert_at] = pickup_pos;
+        ranked_delivery_pos[insert_at] = delivery_pos;
+    }
+
+    if (*ranked_count < SG_ROUTE_MAX_REGRET_K) {
+        (*ranked_count)++;
+    }
+}
+
 int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *sol,
                                          uint32_t request_id, int regret_k,
                                          double noise_scale, double *best_score_out,
                                          double *kth_score_out,
                                          uint32_t *best_vehicle_out,
                                          uint32_t *best_pos_out,
+                                         uint32_t *best_pickup_stop_pos_out,
+                                         uint32_t *best_delivery_stop_pos_out,
                                          double *best_route_distance_out) {
     double ranked_scores[SG_ROUTE_MAX_REGRET_K];
     double ranked_noisy[SG_ROUTE_MAX_REGRET_K];
     double ranked_distance[SG_ROUTE_MAX_REGRET_K];
     uint32_t ranked_vehicle[SG_ROUTE_MAX_REGRET_K];
     uint32_t ranked_pos[SG_ROUTE_MAX_REGRET_K];
+    uint32_t ranked_pickup_pos[SG_ROUTE_MAX_REGRET_K];
+    uint32_t ranked_delivery_pos[SG_ROUTE_MAX_REGRET_K];
     int ranked_count = 0;
     uint32_t v;
     int ok = 0;
+    int is_pd;
 
     if (!ctx || !sol || !best_score_out || !kth_score_out || !best_vehicle_out ||
-        !best_pos_out || !best_route_distance_out || request_id >= sol->base.total_requests ||
+        !best_pos_out || !best_pickup_stop_pos_out || !best_delivery_stop_pos_out ||
+        !best_route_distance_out || request_id >= sol->base.total_requests ||
         regret_k < 1 || regret_k > SG_ROUTE_MAX_REGRET_K) {
         return 0;
     }
 
-    for (v = 0; v < sol->num_vehicles; v++) {
-        uint32_t len = sol->route_lengths[v];
-        uint32_t pos;
-        for (pos = 0; pos <= len; pos++) {
-            double score = 0.0;
-            double noisy = 0.0;
-            double new_route_distance = 0.0;
-            int insert_at = ranked_count;
-            int j;
+    is_pd = (ctx->requests[request_id].kind == SG_REQUEST_KIND_PICKUP_DELIVERY);
 
-            if (!sg_route_eval_insertion_cached(ctx, sol, request_id, v, pos,
-                                                &score, &new_route_distance)) {
+    for (v = 0; v < sol->num_vehicles; v++) {
+        if (is_pd) {
+            /* O(L²) stop-level evaluation for PD requests */
+            double score = 0.0;
+            uint32_t pickup_pos = UINT32_MAX;
+            uint32_t delivery_pos = UINT32_MAX;
+            double new_route_distance = 0.0;
+            double noisy;
+
+            if (!sg_route_eval_pd_best_insertion_cached(ctx, sol, request_id, v,
+                                                         &score, &pickup_pos,
+                                                         &delivery_pos,
+                                                         &new_route_distance)) {
                 continue;
             }
 
@@ -273,36 +330,37 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
                 noisy *= (1.0 + sh_rng_uniform_range(ctx->op_rng, -noise_scale, noise_scale));
             }
 
-            if (insert_at > SG_ROUTE_MAX_REGRET_K) {
-                insert_at = SG_ROUTE_MAX_REGRET_K;
-            }
-            for (j = 0; j < ranked_count && j < SG_ROUTE_MAX_REGRET_K; j++) {
-                if (noisy < ranked_noisy[j]) {
-                    insert_at = j;
-                    break;
-                }
-            }
+            sg_rank_insert_candidate(ranked_noisy, ranked_scores, ranked_distance,
+                                     ranked_vehicle, ranked_pos,
+                                     ranked_pickup_pos, ranked_delivery_pos,
+                                     &ranked_count,
+                                     noisy, score, new_route_distance,
+                                     v, UINT32_MAX, pickup_pos, delivery_pos);
+        } else {
+            /* O(L) request-level evaluation for delivery-only */
+            uint32_t len = sol->route_lengths[v];
+            uint32_t pos;
+            for (pos = 0; pos <= len; pos++) {
+                double score = 0.0;
+                double noisy = 0.0;
+                double new_route_distance = 0.0;
 
-            if (insert_at < SG_ROUTE_MAX_REGRET_K) {
-                int limit = ranked_count < SG_ROUTE_MAX_REGRET_K
-                            ? ranked_count
-                            : SG_ROUTE_MAX_REGRET_K - 1;
-                for (j = limit; j > insert_at; j--) {
-                    ranked_noisy[j] = ranked_noisy[j - 1];
-                    ranked_scores[j] = ranked_scores[j - 1];
-                    ranked_distance[j] = ranked_distance[j - 1];
-                    ranked_vehicle[j] = ranked_vehicle[j - 1];
-                    ranked_pos[j] = ranked_pos[j - 1];
+                if (!sg_route_eval_insertion_cached(ctx, sol, request_id, v, pos,
+                                                    &score, &new_route_distance)) {
+                    continue;
                 }
-                ranked_noisy[insert_at] = noisy;
-                ranked_scores[insert_at] = score;
-                ranked_distance[insert_at] = new_route_distance;
-                ranked_vehicle[insert_at] = v;
-                ranked_pos[insert_at] = pos;
-            }
 
-            if (ranked_count < SG_ROUTE_MAX_REGRET_K) {
-                ranked_count++;
+                noisy = score;
+                if (noise_scale > 0.0 && ctx->op_rng) {
+                    noisy *= (1.0 + sh_rng_uniform_range(ctx->op_rng, -noise_scale, noise_scale));
+                }
+
+                sg_rank_insert_candidate(ranked_noisy, ranked_scores, ranked_distance,
+                                         ranked_vehicle, ranked_pos,
+                                         ranked_pickup_pos, ranked_delivery_pos,
+                                         &ranked_count,
+                                         noisy, score, new_route_distance,
+                                         v, pos, UINT32_MAX, UINT32_MAX);
             }
         }
     }
@@ -317,6 +375,8 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
         *kth_score_out = ranked_scores[k_index];
         *best_vehicle_out = ranked_vehicle[0];
         *best_pos_out = ranked_pos[0];
+        *best_pickup_stop_pos_out = ranked_pickup_pos[0];
+        *best_delivery_stop_pos_out = ranked_delivery_pos[0];
         *best_route_distance_out = ranked_distance[0];
         ok = 1;
     }
@@ -327,6 +387,8 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
 static uint32_t sg_route_select_request_greedy(SGContext *ctx, const SGRouteSolution *sol,
                                                double noise_scale, uint32_t *best_vehicle_out,
                                                uint32_t *best_pos_out,
+                                               uint32_t *best_pickup_pos_out,
+                                               uint32_t *best_delivery_pos_out,
                                                double *best_route_distance_out) {
     uint32_t best_request = UINT32_MAX;
     double best_score = INFINITY;
@@ -342,10 +404,14 @@ static uint32_t sg_route_select_request_greedy(SGContext *ctx, const SGRouteSolu
         double kth_score = 0.0;
         uint32_t vehicle_id = UINT32_MAX;
         uint32_t pos = UINT32_MAX;
+        uint32_t pickup_pos = UINT32_MAX;
+        uint32_t delivery_pos = UINT32_MAX;
         double route_distance = 0.0;
         if (!sg_route_rank_insertions_for_request(ctx, sol, request_id, 1, noise_scale,
                                                   &first_score, &kth_score,
-                                                  &vehicle_id, &pos, &route_distance)) {
+                                                  &vehicle_id, &pos,
+                                                  &pickup_pos, &delivery_pos,
+                                                  &route_distance)) {
             continue;
         }
 
@@ -355,6 +421,8 @@ static uint32_t sg_route_select_request_greedy(SGContext *ctx, const SGRouteSolu
             best_request = request_id;
             *best_vehicle_out = vehicle_id;
             *best_pos_out = pos;
+            *best_pickup_pos_out = pickup_pos;
+            *best_delivery_pos_out = delivery_pos;
             *best_route_distance_out = route_distance;
         }
     }
@@ -366,6 +434,8 @@ static uint32_t sg_route_select_request_regret(SGContext *ctx, const SGRouteSolu
                                                int regret_k, double noise_scale,
                                                uint32_t *best_vehicle_out,
                                                uint32_t *best_pos_out,
+                                               uint32_t *best_pickup_pos_out,
+                                               uint32_t *best_delivery_pos_out,
                                                double *best_route_distance_out) {
     uint32_t best_request = UINT32_MAX;
     double best_regret = -INFINITY;
@@ -384,10 +454,14 @@ static uint32_t sg_route_select_request_regret(SGContext *ctx, const SGRouteSolu
         double regret = 0.0;
         uint32_t vehicle_id = UINT32_MAX;
         uint32_t pos = UINT32_MAX;
+        uint32_t pickup_pos = UINT32_MAX;
+        uint32_t delivery_pos = UINT32_MAX;
         double route_distance = 0.0;
         if (!sg_route_rank_insertions_for_request(ctx, sol, request_id, regret_k, noise_scale,
                                                   &first_score, &kth_score,
-                                                  &vehicle_id, &pos, &route_distance)) {
+                                                  &vehicle_id, &pos,
+                                                  &pickup_pos, &delivery_pos,
+                                                  &route_distance)) {
             continue;
         }
 
@@ -402,6 +476,8 @@ static uint32_t sg_route_select_request_regret(SGContext *ctx, const SGRouteSolu
             best_request = request_id;
             *best_vehicle_out = vehicle_id;
             *best_pos_out = pos;
+            *best_pickup_pos_out = pickup_pos;
+            *best_delivery_pos_out = delivery_pos;
             *best_route_distance_out = route_distance;
         }
     }
@@ -414,15 +490,27 @@ ARStatus sg_route_repair_fill_greedy(SGContext *ctx, SGRouteSolution *sol,
     while (sol->base.num_unassigned > 0) {
         uint32_t vehicle_id = UINT32_MAX;
         uint32_t pos = UINT32_MAX;
+        uint32_t pickup_pos = UINT32_MAX;
+        uint32_t delivery_pos = UINT32_MAX;
         double route_distance = 0.0;
         uint32_t request_id = sg_route_select_request_greedy(ctx, sol, noise_scale,
-                                                             &vehicle_id, &pos, &route_distance);
+                                                             &vehicle_id, &pos,
+                                                             &pickup_pos, &delivery_pos,
+                                                             &route_distance);
         if (request_id == UINT32_MAX) {
             break;
         }
-        if (sg_route_apply_insertion(ctx, sol, request_id, vehicle_id, pos,
-                                     route_distance) != AR_STATUS_OK) {
-            return AR_STATUS_ERROR;
+        if (pickup_pos != UINT32_MAX && delivery_pos != UINT32_MAX) {
+            if (sg_route_apply_pd_insertion(ctx, sol, request_id, vehicle_id,
+                                            pickup_pos, delivery_pos,
+                                            route_distance) != AR_STATUS_OK) {
+                return AR_STATUS_ERROR;
+            }
+        } else {
+            if (sg_route_apply_insertion(ctx, sol, request_id, vehicle_id, pos,
+                                         route_distance) != AR_STATUS_OK) {
+                return AR_STATUS_ERROR;
+            }
         }
     }
     return AR_STATUS_OK;
@@ -433,15 +521,27 @@ ARStatus sg_route_repair_fill_regret(SGContext *ctx, SGRouteSolution *sol,
     while (sol->base.num_unassigned > 0) {
         uint32_t vehicle_id = UINT32_MAX;
         uint32_t pos = UINT32_MAX;
+        uint32_t pickup_pos = UINT32_MAX;
+        uint32_t delivery_pos = UINT32_MAX;
         double route_distance = 0.0;
         uint32_t request_id = sg_route_select_request_regret(ctx, sol, regret_k, noise_scale,
-                                                             &vehicle_id, &pos, &route_distance);
+                                                             &vehicle_id, &pos,
+                                                             &pickup_pos, &delivery_pos,
+                                                             &route_distance);
         if (request_id == UINT32_MAX) {
             break;
         }
-        if (sg_route_apply_insertion(ctx, sol, request_id, vehicle_id, pos,
-                                     route_distance) != AR_STATUS_OK) {
-            return AR_STATUS_ERROR;
+        if (pickup_pos != UINT32_MAX && delivery_pos != UINT32_MAX) {
+            if (sg_route_apply_pd_insertion(ctx, sol, request_id, vehicle_id,
+                                            pickup_pos, delivery_pos,
+                                            route_distance) != AR_STATUS_OK) {
+                return AR_STATUS_ERROR;
+            }
+        } else {
+            if (sg_route_apply_insertion(ctx, sol, request_id, vehicle_id, pos,
+                                         route_distance) != AR_STATUS_OK) {
+                return AR_STATUS_ERROR;
+            }
         }
     }
     return AR_STATUS_OK;

@@ -55,15 +55,24 @@ static ARStatus sg_route_try_eliminate_vehicle(const SGContext *ctx,
         uint32_t request_id = removed_requests[i];
         uint32_t best_vehicle = UINT32_MAX;
         uint32_t best_pos = UINT32_MAX;
+        uint32_t best_pickup_pos = UINT32_MAX;
+        uint32_t best_delivery_pos = UINT32_MAX;
         double best_route_distance = 0.0;
         if (!sg_route_find_best_insertion_for_request(ctx, sol, request_id, vehicle_id,
                                                       &best_vehicle, &best_pos,
+                                                      &best_pickup_pos, &best_delivery_pos,
                                                       &best_route_distance)) {
             free(removed_requests);
             return AR_STATUS_LIMIT;
         }
-        status = sg_route_apply_insertion(ctx, sol, request_id, best_vehicle, best_pos,
-                                          best_route_distance);
+        if (best_pickup_pos != UINT32_MAX && best_delivery_pos != UINT32_MAX) {
+            status = sg_route_apply_pd_insertion(ctx, sol, request_id, best_vehicle,
+                                                  best_pickup_pos, best_delivery_pos,
+                                                  best_route_distance);
+        } else {
+            status = sg_route_apply_insertion(ctx, sol, request_id, best_vehicle, best_pos,
+                                              best_route_distance);
+        }
         if (status != AR_STATUS_OK) {
             free(removed_requests);
             return status;
@@ -140,27 +149,44 @@ static int sg_route_try_exchange_once(const SGContext *ctx, SGRouteSolution *sol
                 continue;
             }
 
-            if (!sg_route_find_best_insertion_no_new_vehicle(ctx, sol, req_a, vehicle_b,
-                                                             &best_vehicle_a, &best_pos_a,
-                                                             &best_dist_a)) {
-                sg_route_restore_from_backup(sol, backup);
-                continue;
-            }
-            status = sg_route_apply_insertion(ctx, sol, req_a, best_vehicle_a, best_pos_a,
-                                              best_dist_a);
-            if (status != AR_STATUS_OK) {
-                sg_route_restore_from_backup(sol, backup);
-                continue;
-            }
+            {
+                uint32_t pickup_pos_a = UINT32_MAX, delivery_pos_a = UINT32_MAX;
+                uint32_t pickup_pos_b = UINT32_MAX, delivery_pos_b = UINT32_MAX;
 
-            if (!sg_route_find_best_insertion_no_new_vehicle(ctx, sol, req_b, vehicle_a,
-                                                             &best_vehicle_b, &best_pos_b,
-                                                             &best_dist_b)) {
-                sg_route_restore_from_backup(sol, backup);
-                continue;
+                if (!sg_route_find_best_insertion_no_new_vehicle(ctx, sol, req_a, vehicle_b,
+                                                                 &best_vehicle_a, &best_pos_a,
+                                                                 &pickup_pos_a, &delivery_pos_a,
+                                                                 &best_dist_a)) {
+                    sg_route_restore_from_backup(sol, backup);
+                    continue;
+                }
+                if (pickup_pos_a != UINT32_MAX && delivery_pos_a != UINT32_MAX) {
+                    status = sg_route_apply_pd_insertion(ctx, sol, req_a, best_vehicle_a,
+                                                         pickup_pos_a, delivery_pos_a, best_dist_a);
+                } else {
+                    status = sg_route_apply_insertion(ctx, sol, req_a, best_vehicle_a,
+                                                      best_pos_a, best_dist_a);
+                }
+                if (status != AR_STATUS_OK) {
+                    sg_route_restore_from_backup(sol, backup);
+                    continue;
+                }
+
+                if (!sg_route_find_best_insertion_no_new_vehicle(ctx, sol, req_b, vehicle_a,
+                                                                 &best_vehicle_b, &best_pos_b,
+                                                                 &pickup_pos_b, &delivery_pos_b,
+                                                                 &best_dist_b)) {
+                    sg_route_restore_from_backup(sol, backup);
+                    continue;
+                }
+                if (pickup_pos_b != UINT32_MAX && delivery_pos_b != UINT32_MAX) {
+                    status = sg_route_apply_pd_insertion(ctx, sol, req_b, best_vehicle_b,
+                                                         pickup_pos_b, delivery_pos_b, best_dist_b);
+                } else {
+                    status = sg_route_apply_insertion(ctx, sol, req_b, best_vehicle_b,
+                                                      best_pos_b, best_dist_b);
+                }
             }
-            status = sg_route_apply_insertion(ctx, sol, req_b, best_vehicle_b, best_pos_b,
-                                              best_dist_b);
             if (status != AR_STATUS_OK) {
                 sg_route_restore_from_backup(sol, backup);
                 continue;
@@ -326,41 +352,73 @@ int sg_route_find_best_insertion_for_request(const SGContext *ctx,
                                              uint32_t forbidden_vehicle,
                                              uint32_t *best_vehicle_out,
                                              uint32_t *best_pos_out,
+                                             uint32_t *best_pickup_pos_out,
+                                             uint32_t *best_delivery_pos_out,
                                              double *best_route_distance_out) {
     double best_score = INFINITY;
     uint32_t v;
     int found = 0;
+    int is_pd;
 
-    if (!ctx || !sol || !best_vehicle_out || !best_pos_out || !best_route_distance_out ||
-        request_id >= sol->base.total_requests) {
+    if (!ctx || !sol || !best_vehicle_out || !best_pos_out ||
+        !best_pickup_pos_out || !best_delivery_pos_out ||
+        !best_route_distance_out || request_id >= sol->base.total_requests) {
         return 0;
     }
 
+    is_pd = (ctx->requests[request_id].kind == SG_REQUEST_KIND_PICKUP_DELIVERY);
+
     for (v = 0; v < sol->num_vehicles; v++) {
-        uint32_t len;
-        uint32_t pos;
         if (v == forbidden_vehicle) {
             continue;
         }
 
-        len = sol->route_lengths[v];
-        for (pos = 0; pos <= len; pos++) {
+        if (is_pd) {
             double score = 0.0;
+            uint32_t pickup_pos = UINT32_MAX;
+            uint32_t delivery_pos = UINT32_MAX;
             double new_route_distance = 0.0;
-            if (!sg_route_eval_insertion_cached(ctx, sol, request_id, v, pos,
-                                                &score, &new_route_distance)) {
+
+            if (!sg_route_eval_pd_best_insertion_cached(ctx, sol, request_id, v,
+                                                         &score, &pickup_pos,
+                                                         &delivery_pos,
+                                                         &new_route_distance)) {
                 continue;
             }
 
             if (!found || score < best_score ||
-                (fabs(score - best_score) <= 1e-9 && v < *best_vehicle_out) ||
-                (fabs(score - best_score) <= 1e-9 && v == *best_vehicle_out &&
-                 pos < *best_pos_out)) {
+                (fabs(score - best_score) <= 1e-9 && v < *best_vehicle_out)) {
                 found = 1;
                 best_score = score;
                 *best_vehicle_out = v;
-                *best_pos_out = pos;
+                *best_pos_out = UINT32_MAX;
+                *best_pickup_pos_out = pickup_pos;
+                *best_delivery_pos_out = delivery_pos;
                 *best_route_distance_out = new_route_distance;
+            }
+        } else {
+            uint32_t len = sol->route_lengths[v];
+            uint32_t pos;
+            for (pos = 0; pos <= len; pos++) {
+                double score = 0.0;
+                double new_route_distance = 0.0;
+                if (!sg_route_eval_insertion_cached(ctx, sol, request_id, v, pos,
+                                                    &score, &new_route_distance)) {
+                    continue;
+                }
+
+                if (!found || score < best_score ||
+                    (fabs(score - best_score) <= 1e-9 && v < *best_vehicle_out) ||
+                    (fabs(score - best_score) <= 1e-9 && v == *best_vehicle_out &&
+                     pos < *best_pos_out)) {
+                    found = 1;
+                    best_score = score;
+                    *best_vehicle_out = v;
+                    *best_pos_out = pos;
+                    *best_pickup_pos_out = UINT32_MAX;
+                    *best_delivery_pos_out = UINT32_MAX;
+                    *best_route_distance_out = new_route_distance;
+                }
             }
         }
     }
@@ -374,42 +432,73 @@ int sg_route_find_best_insertion_no_new_vehicle(const SGContext *ctx,
                                                 uint32_t empty_route_ok_vehicle,
                                                 uint32_t *best_vehicle_out,
                                                 uint32_t *best_pos_out,
+                                                uint32_t *best_pickup_pos_out,
+                                                uint32_t *best_delivery_pos_out,
                                                 double *best_route_distance_out) {
     double best_score = INFINITY;
     uint32_t v;
     int found = 0;
+    int is_pd;
 
-    if (!ctx || !sol || !best_vehicle_out || !best_pos_out || !best_route_distance_out ||
-        request_id >= sol->base.total_requests) {
+    if (!ctx || !sol || !best_vehicle_out || !best_pos_out ||
+        !best_pickup_pos_out || !best_delivery_pos_out ||
+        !best_route_distance_out || request_id >= sol->base.total_requests) {
         return 0;
     }
 
-    for (v = 0; v < sol->num_vehicles; v++) {
-        uint32_t len;
-        uint32_t pos;
+    is_pd = (ctx->requests[request_id].kind == SG_REQUEST_KIND_PICKUP_DELIVERY);
 
-        len = sol->route_lengths[v];
+    for (v = 0; v < sol->num_vehicles; v++) {
+        uint32_t len = sol->route_lengths[v];
         if (len == 0 && v != empty_route_ok_vehicle) {
             continue;
         }
 
-        for (pos = 0; pos <= len; pos++) {
+        if (is_pd) {
             double score = 0.0;
+            uint32_t pickup_pos = UINT32_MAX;
+            uint32_t delivery_pos = UINT32_MAX;
             double new_route_distance = 0.0;
-            if (!sg_route_eval_insertion_cached(ctx, sol, request_id, v, pos,
-                                                &score, &new_route_distance)) {
+
+            if (!sg_route_eval_pd_best_insertion_cached(ctx, sol, request_id, v,
+                                                         &score, &pickup_pos,
+                                                         &delivery_pos,
+                                                         &new_route_distance)) {
                 continue;
             }
 
             if (!found || score < best_score ||
-                (fabs(score - best_score) <= 1e-9 && v < *best_vehicle_out) ||
-                (fabs(score - best_score) <= 1e-9 && v == *best_vehicle_out &&
-                 pos < *best_pos_out)) {
+                (fabs(score - best_score) <= 1e-9 && v < *best_vehicle_out)) {
                 found = 1;
                 best_score = score;
                 *best_vehicle_out = v;
-                *best_pos_out = pos;
+                *best_pos_out = UINT32_MAX;
+                *best_pickup_pos_out = pickup_pos;
+                *best_delivery_pos_out = delivery_pos;
                 *best_route_distance_out = new_route_distance;
+            }
+        } else {
+            uint32_t pos;
+            for (pos = 0; pos <= len; pos++) {
+                double score = 0.0;
+                double new_route_distance = 0.0;
+                if (!sg_route_eval_insertion_cached(ctx, sol, request_id, v, pos,
+                                                    &score, &new_route_distance)) {
+                    continue;
+                }
+
+                if (!found || score < best_score ||
+                    (fabs(score - best_score) <= 1e-9 && v < *best_vehicle_out) ||
+                    (fabs(score - best_score) <= 1e-9 && v == *best_vehicle_out &&
+                     pos < *best_pos_out)) {
+                    found = 1;
+                    best_score = score;
+                    *best_vehicle_out = v;
+                    *best_pos_out = pos;
+                    *best_pickup_pos_out = UINT32_MAX;
+                    *best_delivery_pos_out = UINT32_MAX;
+                    *best_route_distance_out = new_route_distance;
+                }
             }
         }
     }
@@ -531,6 +620,8 @@ ARStatus sg_route_postprocess_polish_distance(const SGContext *ctx,
             ARStatus status;
             uint32_t best_vehicle = UINT32_MAX;
             uint32_t best_pos = UINT32_MAX;
+            uint32_t best_pickup_pos = UINT32_MAX;
+            uint32_t best_delivery_pos = UINT32_MAX;
             double best_route_distance = 0.0;
 
             if (request_id >= sol->base.total_requests || !sol->base.assigned_flags[request_id]) {
@@ -554,13 +645,20 @@ ARStatus sg_route_postprocess_polish_distance(const SGContext *ctx,
             if (!sg_route_find_best_insertion_no_new_vehicle(ctx, sol, request_id,
                                                              original_vehicle,
                                                              &best_vehicle, &best_pos,
+                                                             &best_pickup_pos, &best_delivery_pos,
                                                              &best_route_distance)) {
                 sg_route_restore_from_backup(sol, backup);
                 continue;
             }
 
-            status = sg_route_apply_insertion(ctx, sol, request_id, best_vehicle, best_pos,
-                                              best_route_distance);
+            if (best_pickup_pos != UINT32_MAX && best_delivery_pos != UINT32_MAX) {
+                status = sg_route_apply_pd_insertion(ctx, sol, request_id, best_vehicle,
+                                                      best_pickup_pos, best_delivery_pos,
+                                                      best_route_distance);
+            } else {
+                status = sg_route_apply_insertion(ctx, sol, request_id, best_vehicle, best_pos,
+                                                  best_route_distance);
+            }
             if (status != AR_STATUS_OK) {
                 sg_route_restore_from_backup(sol, backup);
                 continue;

@@ -419,6 +419,160 @@ int sg_route_rebuild_vehicle_stop_state(const SGContext *ctx, SGRouteSolution *s
     return 1;
 }
 
+int sg_route_splice_stop(const SGContext *ctx, SGRouteSolution *sol,
+                         uint32_t vehicle_id, uint32_t at,
+                         const SGRouteStop *stop) {
+    SGRouteStop *stops;
+    uint32_t *prev;
+    uint32_t *next;
+    uint32_t stop_len;
+    uint32_t r;
+
+    if (!ctx || !sol || !stop || vehicle_id >= sol->num_vehicles) {
+        return 0;
+    }
+
+    stops = sg_route_vehicle_stop_ptr(sol, vehicle_id);
+    prev = sg_route_vehicle_stop_prev_ptr(sol, vehicle_id);
+    next = sg_route_vehicle_stop_next_ptr(sol, vehicle_id);
+    stop_len = sol->route_stop_lengths[vehicle_id];
+
+    if (at > stop_len || stop_len + 1 > sol->stop_stride) {
+        return 0;
+    }
+
+    /* Shift stops right */
+    if (at < stop_len) {
+        memmove(&stops[at + 1], &stops[at],
+                (size_t)(stop_len - at) * sizeof(SGRouteStop));
+        memmove(&prev[at + 1], &prev[at],
+                (size_t)(stop_len - at) * sizeof(uint32_t));
+        memmove(&next[at + 1], &next[at],
+                (size_t)(stop_len - at) * sizeof(uint32_t));
+    }
+
+    /* Update position tracking for all requests on this vehicle whose
+       stop positions >= at (they shifted right by 1) */
+    for (r = 0; r < sol->base.total_requests; r++) {
+        if (sol->request_vehicle[r] != vehicle_id) {
+            continue;
+        }
+        if (sol->request_pickup_stop_pos[r] != UINT32_MAX &&
+            sol->request_pickup_stop_pos[r] >= at) {
+            sol->request_pickup_stop_pos[r]++;
+        }
+        if (sol->request_delivery_stop_pos[r] != UINT32_MAX &&
+            sol->request_delivery_stop_pos[r] >= at) {
+            sol->request_delivery_stop_pos[r]++;
+        }
+    }
+
+    /* Place the new stop */
+    stops[at] = *stop;
+
+    /* Set position tracking for the new stop */
+    if (stop->is_pickup) {
+        sol->request_pickup_stop_pos[stop->request_id] = at;
+    } else {
+        sol->request_delivery_stop_pos[stop->request_id] = at;
+    }
+
+    /* Rebuild prev/next linked list (memmove invalidates shifted entries) */
+    stop_len++;
+    {
+        uint32_t k;
+        for (k = 0; k < stop_len; k++) {
+            prev[k] = k > 0 ? k - 1U : UINT32_MAX;
+            next[k] = k + 1U < stop_len ? k + 1U : UINT32_MAX;
+        }
+    }
+
+    sol->route_stop_lengths[vehicle_id] = stop_len;
+    return 1;
+}
+
+int sg_route_excise_stop(const SGContext *ctx, SGRouteSolution *sol,
+                         uint32_t vehicle_id, uint32_t at) {
+    SGRouteStop *stops;
+    uint32_t *prev;
+    uint32_t *next;
+    uint32_t stop_len;
+    uint32_t request_id;
+    uint8_t is_pickup;
+    uint32_t r;
+
+    if (!ctx || !sol || vehicle_id >= sol->num_vehicles) {
+        return 0;
+    }
+
+    stops = sg_route_vehicle_stop_ptr(sol, vehicle_id);
+    prev = sg_route_vehicle_stop_prev_ptr(sol, vehicle_id);
+    next = sg_route_vehicle_stop_next_ptr(sol, vehicle_id);
+    stop_len = sol->route_stop_lengths[vehicle_id];
+
+    if (at >= stop_len) {
+        return 0;
+    }
+
+    /* Clear position tracking for the removed stop */
+    request_id = stops[at].request_id;
+    is_pickup = stops[at].is_pickup;
+    if (is_pickup) {
+        sol->request_pickup_stop_pos[request_id] = UINT32_MAX;
+    } else {
+        sol->request_delivery_stop_pos[request_id] = UINT32_MAX;
+    }
+
+    /* Shift stops left */
+    if (at + 1U < stop_len) {
+        memmove(&stops[at], &stops[at + 1U],
+                (size_t)(stop_len - at - 1U) * sizeof(SGRouteStop));
+        memmove(&prev[at], &prev[at + 1U],
+                (size_t)(stop_len - at - 1U) * sizeof(uint32_t));
+        memmove(&next[at], &next[at + 1U],
+                (size_t)(stop_len - at - 1U) * sizeof(uint32_t));
+    }
+
+    stop_len--;
+
+    /* Update position tracking for all requests on this vehicle whose
+       stop positions > at (they shifted left by 1) */
+    for (r = 0; r < sol->base.total_requests; r++) {
+        if (sol->request_vehicle[r] != vehicle_id) {
+            continue;
+        }
+        if (sol->request_pickup_stop_pos[r] != UINT32_MAX &&
+            sol->request_pickup_stop_pos[r] > at) {
+            sol->request_pickup_stop_pos[r]--;
+        }
+        if (sol->request_delivery_stop_pos[r] != UINT32_MAX &&
+            sol->request_delivery_stop_pos[r] > at) {
+            sol->request_delivery_stop_pos[r]--;
+        }
+    }
+
+    /* Rebuild prev/next linked list (memmove invalidates shifted entries) */
+    {
+        uint32_t k;
+        for (k = 0; k < stop_len; k++) {
+            prev[k] = k > 0 ? k - 1U : UINT32_MAX;
+            next[k] = k + 1U < stop_len ? k + 1U : UINT32_MAX;
+        }
+    }
+
+    /* Clear the now-unused last slot */
+    if (stop_len < sol->stop_stride) {
+        stops[stop_len].request_id = UINT32_MAX;
+        stops[stop_len].task_id = UINT32_MAX;
+        stops[stop_len].is_pickup = 0;
+        prev[stop_len] = UINT32_MAX;
+        next[stop_len] = UINT32_MAX;
+    }
+
+    sol->route_stop_lengths[vehicle_id] = stop_len;
+    return 1;
+}
+
 void sg_route_solution_reset(SGRouteSolution *sol) {
     if (!sol) {
         return;

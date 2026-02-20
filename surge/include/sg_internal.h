@@ -203,6 +203,11 @@ int sg_request_emit_stops(const SGContext *ctx, uint32_t request_id,
                           SGRouteStop *stops_out, uint32_t *stop_count_out);
 int sg_route_rebuild_vehicle_stop_state(const SGContext *ctx, SGRouteSolution *sol,
                                         uint32_t vehicle_id);
+int sg_route_splice_stop(const SGContext *ctx, SGRouteSolution *sol,
+                         uint32_t vehicle_id, uint32_t at,
+                         const SGRouteStop *stop);
+int sg_route_excise_stop(const SGContext *ctx, SGRouteSolution *sol,
+                         uint32_t vehicle_id, uint32_t at);
 double sg_route_objective_cost(uint32_t unassigned, uint32_t vehicles_used,
                                double total_distance);
 
@@ -253,6 +258,11 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                                    uint32_t request_id, uint32_t vehicle_id,
                                    uint32_t pos, double *score_out,
                                    double *new_route_distance_out);
+int sg_route_eval_pd_best_insertion_cached(
+    const SGContext *ctx, const SGRouteSolution *sol,
+    uint32_t request_id, uint32_t vehicle_id,
+    double *best_score_out, uint32_t *best_pickup_pos_out,
+    uint32_t *best_delivery_pos_out, double *best_route_distance_out);
 int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
                                     const SGRouteStop *stops, uint32_t stop_count,
                                     double *distance_out);
@@ -266,6 +276,10 @@ int sg_route_eval_insertion(const SGContext *ctx, const SGRouteSolution *sol,
 ARStatus sg_route_apply_insertion(const SGContext *ctx, SGRouteSolution *sol,
                                   uint32_t request_id, uint32_t vehicle_id,
                                   uint32_t pos, double new_route_distance);
+ARStatus sg_route_apply_pd_insertion(const SGContext *ctx, SGRouteSolution *sol,
+                                     uint32_t request_id, uint32_t vehicle_id,
+                                     uint32_t pickup_stop_pos, uint32_t delivery_stop_pos,
+                                     double new_route_distance);
 ARStatus sg_route_unassign_request(const SGContext *ctx, SGRouteSolution *sol,
                                    uint32_t request_id, double *capacity_scratch);
 ARStatus sg_route_unassign_removed_requests(const SGContext *ctx, SGRouteSolution *sol,
@@ -352,6 +366,8 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
                                          double noise_scale, double *best_score_out,
                                          double *kth_score_out, uint32_t *best_vehicle_out,
                                          uint32_t *best_pos_out,
+                                         uint32_t *best_pickup_stop_pos_out,
+                                         uint32_t *best_delivery_stop_pos_out,
                                          double *best_route_distance_out);
 
 /* sg_postprocess.c */
@@ -362,12 +378,16 @@ int sg_route_find_best_insertion_for_request(const SGContext *ctx, const SGRoute
                                              uint32_t request_id, uint32_t forbidden_vehicle,
                                              uint32_t *best_vehicle_out,
                                              uint32_t *best_pos_out,
+                                             uint32_t *best_pickup_pos_out,
+                                             uint32_t *best_delivery_pos_out,
                                              double *best_route_distance_out);
 int sg_route_find_best_insertion_no_new_vehicle(const SGContext *ctx, const SGRouteSolution *sol,
                                                 uint32_t request_id,
                                                 uint32_t empty_route_ok_vehicle,
                                                 uint32_t *best_vehicle_out,
                                                 uint32_t *best_pos_out,
+                                                uint32_t *best_pickup_pos_out,
+                                                uint32_t *best_delivery_pos_out,
                                                 double *best_route_distance_out);
 void sg_route_restore_from_backup(SGRouteSolution *sol, SGRouteSolution *backup);
 

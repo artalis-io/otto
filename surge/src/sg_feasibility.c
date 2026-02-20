@@ -799,6 +799,365 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
     return 1;
 }
 
+int sg_route_eval_pd_best_insertion_cached(
+    const SGContext *ctx, const SGRouteSolution *sol,
+    uint32_t request_id, uint32_t vehicle_id,
+    double *best_score_out, uint32_t *best_pickup_pos_out,
+    uint32_t *best_delivery_pos_out, double *best_route_distance_out) {
+
+    const SGVehicleRecord *vehicle;
+    const SGDepotRecord *start_depot;
+    const SGDepotRecord *end_depot;
+    const SGRequestRecord *request;
+    const SGTaskRecord *pickup_task;
+    const SGTaskRecord *delivery_task;
+    const SGRouteStop *stops;
+    uint32_t stop_len;
+    double sx = 0.0, sy = 0.0, ex = 0.0, ey = 0.0;
+    double best_score = INFINITY;
+    uint32_t best_i = UINT32_MAX, best_j = UINT32_MAX;
+    double best_dist = 0.0;
+    double depot_depart;
+    double ride_limit;
+    uint32_t i;
+    int found = 0;
+
+    if (!ctx || !sol || !best_score_out || !best_pickup_pos_out ||
+        !best_delivery_pos_out || !best_route_distance_out ||
+        vehicle_id >= sol->num_vehicles || request_id >= sol->base.total_requests) {
+        return 0;
+    }
+
+    request = &ctx->requests[request_id];
+    if (request->kind != SG_REQUEST_KIND_PICKUP_DELIVERY) {
+        return 0;
+    }
+    if (!request->has_pickup_task || !request->has_delivery_task ||
+        request->pickup_task_id >= ctx->num_tasks ||
+        request->delivery_task_id >= ctx->num_tasks) {
+        return 0;
+    }
+
+    pickup_task = &ctx->tasks[request->pickup_task_id];
+    delivery_task = &ctx->tasks[request->delivery_task_id];
+    if (!pickup_task->has_location || !pickup_task->has_time_window ||
+        !delivery_task->has_location || !delivery_task->has_time_window) {
+        return 0;
+    }
+
+    vehicle = &ctx->vehicles[vehicle_id];
+    if (!vehicle->has_depots || vehicle->start_depot_id >= ctx->num_depots ||
+        vehicle->end_depot_id >= ctx->num_depots) {
+        return 0;
+    }
+    if (!sg_vehicle_start_end_locations(ctx, vehicle_id, &sx, &sy, &ex, &ey)) {
+        return 0;
+    }
+
+    start_depot = &ctx->depots[vehicle->start_depot_id];
+    end_depot = &ctx->depots[vehicle->end_depot_id];
+    stops = sg_route_vehicle_stop_ptr_const(sol, vehicle_id);
+    stop_len = sol->route_stop_lengths[vehicle_id];
+
+    depot_depart = vehicle->has_shift_time_window ? (double)vehicle->shift_early : 0.0;
+    if (start_depot->has_time_window && depot_depart < (double)start_depot->tw_early) {
+        depot_depart = (double)start_depot->tw_early;
+    }
+
+    /* Ride time limit */
+    ride_limit = (double)(delivery_task->tw_late - pickup_task->tw_early);
+
+    /* For each pickup position i = 0..stop_len */
+    for (i = 0; i <= stop_len; i++) {
+        double prev_depart, prev_x, prev_y;
+        double p_travel, p_arrival, p_start, p_depart;
+        uint32_t j;
+
+        /* A. Compute pickup timing */
+        if (i == 0) {
+            prev_depart = depot_depart;
+            prev_x = sx;
+            prev_y = sy;
+        } else {
+            prev_depart = stops[i - 1].depart;
+            prev_x = ctx->tasks[stops[i - 1].task_id].x;
+            prev_y = ctx->tasks[stops[i - 1].task_id].y;
+        }
+
+        p_travel = sg_euclid(prev_x, prev_y, pickup_task->x, pickup_task->y);
+        p_arrival = prev_depart + p_travel;
+        p_start = p_arrival;
+        if (p_start < (double)pickup_task->tw_early) {
+            p_start = (double)pickup_task->tw_early;
+        }
+        if (p_start > (double)pickup_task->tw_late + 1e-9) {
+            break; /* Later i only arrives later at pickup */
+        }
+        p_depart = p_start + (double)pickup_task->service_seconds;
+
+        /* B. Propagate push and check delivery positions */
+        {
+            /* push[k] for k = i..stop_len-1:
+               how much stop[k] would be delayed by inserting pickup before it */
+            double push_k = 0.0;
+
+            for (j = i + 1; j <= stop_len + 1; j++) {
+                double d_prev_depart, d_prev_x, d_prev_y;
+                double d_travel, d_arrival, d_start, d_depart;
+                double ride_time;
+                double delta;
+                double new_route_distance, score;
+
+                /* -- Try delivery at position j -- */
+
+                /* Delivery arrival */
+                if (j == i + 1) {
+                    /* Delivery immediately after pickup */
+                    d_prev_depart = p_depart;
+                    d_prev_x = pickup_task->x;
+                    d_prev_y = pickup_task->y;
+                } else {
+                    /* Delivery after stop[j-1] (which has been pushed) */
+                    d_prev_depart = stops[j - 2].depart + push_k;
+                    d_prev_x = ctx->tasks[stops[j - 2].task_id].x;
+                    d_prev_y = ctx->tasks[stops[j - 2].task_id].y;
+                }
+
+                d_travel = sg_euclid(d_prev_x, d_prev_y,
+                                     delivery_task->x, delivery_task->y);
+                d_arrival = d_prev_depart + d_travel;
+                d_start = d_arrival;
+                if (d_start < (double)delivery_task->tw_early) {
+                    d_start = (double)delivery_task->tw_early;
+                }
+                if (d_start > (double)delivery_task->tw_late + 1e-9) {
+                    break; /* Later j only makes it worse */
+                }
+
+                /* Ride time check */
+                ride_time = d_start - p_depart;
+                if (isfinite(ride_limit) && ride_time > ride_limit + 1e-9) {
+                    break; /* Later j is worse */
+                }
+
+                d_depart = d_start + (double)delivery_task->service_seconds;
+
+                /* Check push on stop after delivery */
+                if (j <= stop_len) {
+                    /* There is a stop[j-1] in the original array at index j-1.
+                       After inserting pickup at i, original stop at index j-1
+                       becomes the stop after delivery. */
+                    double next_x = ctx->tasks[stops[j - 1].task_id].x;
+                    double next_y = ctx->tasks[stops[j - 1].task_id].y;
+                    double new_arrival_next = d_depart + sg_euclid(
+                        delivery_task->x, delivery_task->y, next_x, next_y);
+                    /* The pushed latest_start of stop[j-1] */
+                    if (new_arrival_next > stops[j - 1].latest_start + 1e-9) {
+                        /* But maybe further j could still work if this one fails
+                           due to delivery distance. Actually no - further j means
+                           the delivery is further away and arrival is later.
+                           However, push propagation for the stop right after delivery
+                           depends on delivery placement, not just monotonic.
+                           Be conservative: continue to try next j. */
+                        goto next_j;
+                    }
+                } else {
+                    /* j == stop_len + 1: delivery at end of route */
+                    double arrival_at_end = d_depart +
+                        sg_euclid(delivery_task->x, delivery_task->y, ex, ey);
+                    if (end_depot->has_time_window &&
+                        arrival_at_end > (double)end_depot->tw_late + 1e-9) {
+                        goto next_j;
+                    }
+                    if (vehicle->has_shift_time_window &&
+                        arrival_at_end > (double)vehicle->shift_late + 1e-9) {
+                        goto next_j;
+                    }
+                }
+
+                /* Capacity check: between pickup (at i) and delivery (at j),
+                   load increases by pickup demand. Check all stops in [i, j-1). */
+                if (ctx->dimension_count > 0 && sol->route_stop_load) {
+                    size_t dim_count = (size_t)ctx->dimension_count;
+                    size_t load_base = (size_t)vehicle_id *
+                        ((size_t)sol->stop_stride + 1U) * dim_count;
+                    const double *load = sol->route_stop_load + load_base;
+                    uint32_t d;
+                    int cap_ok = 1;
+
+                    for (d = 0; d < ctx->dimension_count && cap_ok; d++) {
+                        double cap = (vehicle->has_capacity && vehicle->capacity)
+                                     ? vehicle->capacity[d] : INFINITY;
+                        double pickup_demand = (pickup_task->has_demand && pickup_task->demand)
+                                               ? pickup_task->demand[d] : 0.0;
+                        double delivery_demand = (delivery_task->has_demand && delivery_task->demand)
+                                                 ? delivery_task->demand[d] : 0.0;
+                        /* Check prefix sums: from position i to j-1 in original stop array,
+                           load is increased by pickup_demand. After j-1, it's increased by
+                           pickup_demand + delivery_demand (which should be ~0 for PD). */
+                        uint32_t s;
+                        double hyp_min = INFINITY, hyp_max = -INFINITY;
+
+                        /* Before pickup insertion point: unchanged */
+                        for (s = 0; s <= i; s++) {
+                            double val = load[s * dim_count + d];
+                            if (val < hyp_min) hyp_min = val;
+                            if (val > hyp_max) hyp_max = val;
+                        }
+                        /* After pickup: load[i] + pickup_demand */
+                        {
+                            double val = load[i * dim_count + d] + pickup_demand;
+                            if (val < hyp_min) hyp_min = val;
+                            if (val > hyp_max) hyp_max = val;
+                        }
+                        /* Between pickup and delivery: original loads shifted by pickup_demand */
+                        for (s = i + 1; s <= j - 1 && s <= stop_len; s++) {
+                            double val = load[s * dim_count + d] + pickup_demand;
+                            if (val < hyp_min) hyp_min = val;
+                            if (val > hyp_max) hyp_max = val;
+                        }
+                        /* After delivery: load[j-1] + pickup + delivery */
+                        {
+                            uint32_t load_idx = j - 1 <= stop_len ? j - 1 : stop_len;
+                            double val = load[load_idx * dim_count + d] + pickup_demand + delivery_demand;
+                            if (val < hyp_min) hyp_min = val;
+                            if (val > hyp_max) hyp_max = val;
+                        }
+                        /* After delivery insertion: original loads shifted by pickup + delivery */
+                        for (s = j; s <= stop_len; s++) {
+                            double val = load[s * dim_count + d] + pickup_demand + delivery_demand;
+                            if (val < hyp_min) hyp_min = val;
+                            if (val > hyp_max) hyp_max = val;
+                        }
+
+                        if ((hyp_max - hyp_min) > cap + SG_DEMAND_TOLERANCE) {
+                            cap_ok = 0;
+                        }
+                    }
+                    if (!cap_ok) {
+                        goto next_j;
+                    }
+                }
+
+                /* Distance delta */
+                {
+                    double old_seg_pickup, new_seg_pickup;
+                    double old_seg_delivery, new_seg_delivery;
+
+                    /* Pickup segment: prev_of_i -> stop[i] becomes prev_of_i -> pickup -> ... */
+                    if (j == i + 1) {
+                        /* Adjacent: prev -> pickup -> delivery -> stop[i] (or end) */
+                        double next_x, next_y;
+                        if (i < stop_len) {
+                            next_x = ctx->tasks[stops[i].task_id].x;
+                            next_y = ctx->tasks[stops[i].task_id].y;
+                            old_seg_pickup = sg_euclid(prev_x, prev_y, next_x, next_y);
+                        } else {
+                            old_seg_pickup = sg_euclid(prev_x, prev_y, ex, ey);
+                            next_x = ex;
+                            next_y = ey;
+                        }
+                        new_seg_pickup = sg_euclid(prev_x, prev_y,
+                                                    pickup_task->x, pickup_task->y) +
+                                          sg_euclid(pickup_task->x, pickup_task->y,
+                                                    delivery_task->x, delivery_task->y) +
+                                          sg_euclid(delivery_task->x, delivery_task->y,
+                                                    next_x, next_y);
+                        delta = new_seg_pickup - old_seg_pickup;
+                    } else {
+                        /* Non-adjacent: two separate segment changes */
+                        double stop_i_x, stop_i_y;
+                        double stop_jm1_x, stop_jm1_y; /* stop at j-1 in original */
+                        double after_d_x, after_d_y;
+
+                        /* Pickup segment: prev -> stop[i] becomes prev -> pickup -> stop[i] */
+                        if (i < stop_len) {
+                            stop_i_x = ctx->tasks[stops[i].task_id].x;
+                            stop_i_y = ctx->tasks[stops[i].task_id].y;
+                        } else {
+                            stop_i_x = ex;
+                            stop_i_y = ey;
+                        }
+                        old_seg_pickup = sg_euclid(prev_x, prev_y, stop_i_x, stop_i_y);
+                        new_seg_pickup = sg_euclid(prev_x, prev_y,
+                                                    pickup_task->x, pickup_task->y) +
+                                          sg_euclid(pickup_task->x, pickup_task->y,
+                                                    stop_i_x, stop_i_y);
+
+                        /* Delivery segment: stop[j-2] -> stop[j-1] becomes
+                           stop[j-2] -> delivery -> stop[j-1] */
+                        stop_jm1_x = ctx->tasks[stops[j - 2].task_id].x;
+                        stop_jm1_y = ctx->tasks[stops[j - 2].task_id].y;
+                        if (j - 1 < stop_len) {
+                            after_d_x = ctx->tasks[stops[j - 1].task_id].x;
+                            after_d_y = ctx->tasks[stops[j - 1].task_id].y;
+                        } else {
+                            after_d_x = ex;
+                            after_d_y = ey;
+                        }
+                        old_seg_delivery = sg_euclid(stop_jm1_x, stop_jm1_y,
+                                                      after_d_x, after_d_y);
+                        new_seg_delivery = sg_euclid(stop_jm1_x, stop_jm1_y,
+                                                      delivery_task->x, delivery_task->y) +
+                                            sg_euclid(delivery_task->x, delivery_task->y,
+                                                      after_d_x, after_d_y);
+                        delta = (new_seg_pickup - old_seg_pickup) +
+                                (new_seg_delivery - old_seg_delivery);
+                    }
+                }
+
+                new_route_distance = sol->route_distance[vehicle_id] + delta;
+                score = (stop_len == 0 ? SG_ROUTE_OBJECTIVE_VEHICLE_WEIGHT : 0.0) + delta;
+
+                if (score < best_score) {
+                    best_score = score;
+                    best_i = i;
+                    best_j = j;
+                    best_dist = new_route_distance;
+                    found = 1;
+                }
+
+                next_j:
+
+                /* Update push propagation for next j iteration:
+                   push on stop[j-1] (original index) for the next inner loop step. */
+                if (j - 1 < stop_len) {
+                    /* When j was i+1, we haven't started tracking push yet.
+                       push_k tracks push on stop[j-1] in the original array. */
+                    if (j == i + 1) {
+                        /* First stop after pickup: push = how much pickup delays it */
+                        double orig_arrival = stops[i].arrival;
+                        double new_arr = p_depart + sg_euclid(
+                            pickup_task->x, pickup_task->y,
+                            ctx->tasks[stops[i].task_id].x,
+                            ctx->tasks[stops[i].task_id].y);
+                        push_k = new_arr - orig_arrival;
+                        if (push_k < 0.0) push_k = 0.0;
+                    } else {
+                        /* Propagate: push on stop[j-1] from push on stop[j-2] */
+                        double wait = stops[j - 1].service_start - stops[j - 1].arrival;
+                        push_k = push_k - wait;
+                        if (push_k < 0.0) push_k = 0.0;
+                    }
+                    /* Check if push exceeds forward slack - if so, no more
+                       delivery positions past here can work */
+                    if (push_k > stops[j - 1].forward_slack + 1e-9) {
+                        break;
+                    }
+                }
+            } /* end for j */
+        }
+    } /* end for i */
+
+    if (found) {
+        *best_score_out = best_score;
+        *best_pickup_pos_out = best_i;
+        *best_delivery_pos_out = best_j;
+        *best_route_distance_out = best_dist;
+    }
+    return found;
+}
+
 ARStatus sg_route_apply_insertion(const SGContext *ctx, SGRouteSolution *sol,
                                   uint32_t request_id, uint32_t vehicle_id,
                                   uint32_t pos, double new_route_distance) {
@@ -846,7 +1205,154 @@ ARStatus sg_route_apply_insertion(const SGContext *ctx, SGRouteSolution *sol,
         return status;
     }
 
-    if (!sg_route_rebuild_vehicle_stop_state(ctx, sol, vehicle_id)) {
+    /* Use direct stop splice instead of rebuild (preserves non-adjacent PD stops) */
+    {
+        SGRouteStop emitted_stops[2];
+        uint32_t emitted_count = 0;
+        uint32_t stop_insert_pos;
+
+        if (!sg_request_emit_stops(ctx, request_id, emitted_stops, &emitted_count)) {
+            return AR_STATUS_ERROR;
+        }
+
+        /* Compute stop-level insertion position from request-level position */
+        if (pos == 0) {
+            stop_insert_pos = 0;
+        } else {
+            /* Insert after the last stop of the preceding request */
+            uint32_t prev_request = route[pos - 1];
+            stop_insert_pos = sol->request_delivery_stop_pos[prev_request];
+            if (stop_insert_pos == UINT32_MAX) {
+                return AR_STATUS_ERROR;
+            }
+            stop_insert_pos++;
+        }
+
+        if (emitted_count == 1) {
+            /* Delivery-only */
+            if (!sg_route_splice_stop(ctx, sol, vehicle_id, stop_insert_pos, &emitted_stops[0])) {
+                return AR_STATUS_ERROR;
+            }
+        } else if (emitted_count == 2) {
+            /* PD: insert pickup then delivery adjacently */
+            if (!sg_route_splice_stop(ctx, sol, vehicle_id, stop_insert_pos, &emitted_stops[0])) {
+                return AR_STATUS_ERROR;
+            }
+            if (!sg_route_splice_stop(ctx, sol, vehicle_id, stop_insert_pos + 1, &emitted_stops[1])) {
+                return AR_STATUS_ERROR;
+            }
+        } else {
+            return AR_STATUS_ERROR;
+        }
+    }
+
+    sg_route_update_timing(ctx, sol, vehicle_id);
+    sg_route_update_load(ctx, sol, vehicle_id);
+    sol->total_distance += (sol->route_distance[vehicle_id] - old_distance);
+
+    return AR_STATUS_OK;
+}
+
+ARStatus sg_route_apply_pd_insertion(const SGContext *ctx, SGRouteSolution *sol,
+                                     uint32_t request_id, uint32_t vehicle_id,
+                                     uint32_t pickup_stop_pos, uint32_t delivery_stop_pos,
+                                     double new_route_distance) {
+    uint32_t *route;
+    uint32_t old_len;
+    double old_distance;
+    uint32_t insert_req_pos;
+    uint32_t r;
+    ARStatus status;
+    SGRouteStop emitted[2];
+    uint32_t emitted_count = 0;
+    uint32_t adj_delivery_pos;
+
+    (void)new_route_distance;
+
+    if (!ctx || !sol || request_id >= sol->base.total_requests ||
+        vehicle_id >= sol->num_vehicles) {
+        return AR_STATUS_INVALID_ARG;
+    }
+    if (sol->base.assigned_flags[request_id]) {
+        return AR_STATUS_INVALID_ARG;
+    }
+    if (ctx->requests[request_id].kind != SG_REQUEST_KIND_PICKUP_DELIVERY) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    if (!sg_request_emit_stops(ctx, request_id, emitted, &emitted_count)) {
+        return AR_STATUS_ERROR;
+    }
+    if (emitted_count != 2) {
+        return AR_STATUS_ERROR;
+    }
+
+    route = sg_route_vehicle_ptr(sol, vehicle_id);
+    old_len = sol->route_lengths[vehicle_id];
+    old_distance = sol->route_distance[vehicle_id];
+
+    /* Determine request-level insertion position:
+       Find which request position corresponds to pickup_stop_pos.
+       The new request goes at the position such that its pickup is at pickup_stop_pos. */
+    if (pickup_stop_pos == 0) {
+        insert_req_pos = 0;
+    } else {
+        /* Find the request whose last stop is immediately before pickup_stop_pos */
+        uint32_t stop_len = sol->route_stop_lengths[vehicle_id];
+        const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(sol, vehicle_id);
+        insert_req_pos = 0;
+        if (pickup_stop_pos <= stop_len) {
+            /* Walk through requests to find insertion point */
+            uint32_t prev_stop = pickup_stop_pos - 1;
+            if (prev_stop < stop_len) {
+                uint32_t prev_req = stops[prev_stop].request_id;
+                if (prev_req < sol->base.total_requests) {
+                    insert_req_pos = sol->request_pos[prev_req] + 1;
+                }
+            }
+        } else {
+            insert_req_pos = old_len;
+        }
+    }
+
+    if (insert_req_pos > old_len || old_len >= sol->route_stride) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    /* Insert request into route_requests */
+    if (insert_req_pos < old_len) {
+        memmove(&route[insert_req_pos + 1], &route[insert_req_pos],
+                (size_t)(old_len - insert_req_pos) * sizeof(uint32_t));
+    }
+    route[insert_req_pos] = request_id;
+    sol->route_lengths[vehicle_id] = old_len + 1;
+
+    sol->request_vehicle[request_id] = vehicle_id;
+    sol->request_pos[request_id] = insert_req_pos;
+    for (r = insert_req_pos + 1; r < sol->route_lengths[vehicle_id]; r++) {
+        sol->request_pos[route[r]] = r;
+    }
+
+    if (old_len == 0) {
+        sol->vehicles_used++;
+    }
+
+    status = sg_bootstrap_assign_request(&sol->base, request_id);
+    if (status != AR_STATUS_OK) {
+        return status;
+    }
+
+    /* Splice pickup stop */
+    if (!sg_route_splice_stop(ctx, sol, vehicle_id, pickup_stop_pos, &emitted[0])) {
+        return AR_STATUS_ERROR;
+    }
+
+    /* delivery_stop_pos is already in terms of the combined array (with pickup present),
+       so no adjustment needed — pickup splice already shifted indices. */
+    adj_delivery_pos = delivery_stop_pos;
+
+    /* Splice delivery stop */
+    if (!sg_route_splice_stop(ctx, sol, vehicle_id, adj_delivery_pos, &emitted[1])) {
         return AR_STATUS_ERROR;
     }
 
@@ -896,8 +1402,34 @@ ARStatus sg_route_unassign_request(const SGContext *ctx, SGRouteSolution *sol,
     for (r = pos; r < sol->route_lengths[vehicle_id]; r++) {
         sol->request_pos[route[r]] = r;
     }
-    if (!sg_route_rebuild_vehicle_stop_state(ctx, sol, vehicle_id)) {
-        return AR_STATUS_ERROR;
+
+    /* Remove stops directly instead of rebuilding (preserves non-adjacent PD) */
+    {
+        const SGRequestRecord *req_rec = &ctx->requests[request_id];
+        uint32_t p_pos = sol->request_pickup_stop_pos[request_id];
+        uint32_t d_pos = sol->request_delivery_stop_pos[request_id];
+
+        if (req_rec->kind == SG_REQUEST_KIND_PICKUP_DELIVERY) {
+            /* Remove higher index first to avoid shifting the other */
+            if (d_pos != UINT32_MAX && p_pos != UINT32_MAX) {
+                if (d_pos > p_pos) {
+                    sg_route_excise_stop(ctx, sol, vehicle_id, d_pos);
+                    sg_route_excise_stop(ctx, sol, vehicle_id, p_pos);
+                } else {
+                    sg_route_excise_stop(ctx, sol, vehicle_id, p_pos);
+                    sg_route_excise_stop(ctx, sol, vehicle_id, d_pos);
+                }
+            } else if (p_pos != UINT32_MAX) {
+                sg_route_excise_stop(ctx, sol, vehicle_id, p_pos);
+            } else if (d_pos != UINT32_MAX) {
+                sg_route_excise_stop(ctx, sol, vehicle_id, d_pos);
+            }
+        } else {
+            /* Delivery-only: just remove the delivery stop */
+            if (d_pos != UINT32_MAX) {
+                sg_route_excise_stop(ctx, sol, vehicle_id, d_pos);
+            }
+        }
     }
 
     sg_route_update_timing(ctx, sol, vehicle_id);
