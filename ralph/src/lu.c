@@ -84,12 +84,13 @@ LUFactorization* lu_create(int m) {
         /* T1.4: workspace for sparse-efficient factorization
          * int arrays of size m: ws_is_identity, ws_identity_row, ws_row_used,
          * ws_col_order, ws_col_order_inv, ws_row_perm, ws_L_pos, ws_U_pos,
-         * ws_row_pos, ws_struct_nnz (10 arrays) */
-        10 * (size_t)m * sizeof(int) +
+         * ws_row_pos, ws_struct_nnz, ws_row_identity_col, ws_row_match_col,
+         * ws_row_seen (13 arrays) */
+        13 * (size_t)m * sizeof(int) +
         /* double array of size m: ws_identity_val (1 array) */
         1 * (size_t)m * sizeof(double) +
-        /* Alignment padding (31 arrays total × 8 bytes) */
-        248;
+        /* Alignment padding (34 arrays total × 8 bytes) */
+        272;
 
     lu->arena = sh_arena_create(arena_size);
     if (!lu->arena) {
@@ -181,6 +182,9 @@ LUFactorization* lu_create(int m) {
     lu->ws_U_pos = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
     lu->ws_row_pos = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
     lu->ws_struct_nnz = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_row_identity_col = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_row_match_col = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_row_seen = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
 
     /* Single check for all arena allocations */
     if (!lu->perm || !lu->perm_inv || !lu->col_perm || !lu->col_perm_inv ||
@@ -192,7 +196,8 @@ LUFactorization* lu_create(int m) {
         !lu->ws_is_identity || !lu->ws_identity_row || !lu->ws_identity_val ||
         !lu->ws_row_used || !lu->ws_col_order || !lu->ws_col_order_inv ||
         !lu->ws_row_perm || !lu->ws_L_pos || !lu->ws_U_pos || !lu->ws_row_pos ||
-        !lu->ws_struct_nnz) {
+        !lu->ws_struct_nnz || !lu->ws_row_identity_col || !lu->ws_row_match_col ||
+        !lu->ws_row_seen) {
         lu_free(lu);
         return NULL;
     }
@@ -425,6 +430,10 @@ void lu_free(LUFactorization *lu) {
     lu->ws_L_pos = NULL;
     lu->ws_U_pos = NULL;
     lu->ws_row_pos = NULL;
+    lu->ws_struct_nnz = NULL;
+    lu->ws_row_identity_col = NULL;
+    lu->ws_row_match_col = NULL;
+    lu->ws_row_seen = NULL;
 
     free(lu);
 }
