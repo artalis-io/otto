@@ -1,5 +1,16 @@
 #include "sg_internal.h"
 
+void sg_adaptive_q_bounds(int num_requests, int config_q_min, int config_q_max,
+                          int *q_min_out, int *q_max_out) {
+    int adaptive_min = num_requests / 20;
+    int adaptive_max = num_requests / 4;
+    *q_min_out = config_q_min > adaptive_min ? config_q_min : adaptive_min;
+    *q_max_out = config_q_max > adaptive_max ? config_q_max : adaptive_max;
+    if (*q_min_out > *q_max_out) {
+        *q_min_out = *q_max_out;
+    }
+}
+
 int sg_route_solver_eligible(const SGContext *ctx) {
     uint32_t i;
 
@@ -77,8 +88,8 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
     params.max_iterations = ctx->config.max_iterations;
     params.max_time_seconds = ctx->config.max_time_seconds;
     params.segment_size = ctx->config.segment_size;
-    params.q_min = ctx->config.q_min;
-    params.q_max = ctx->config.q_max;
+    sg_adaptive_q_bounds((int)ctx->num_requests, ctx->config.q_min, ctx->config.q_max,
+                         &params.q_min, &params.q_max);
     params.target_cost = 0.0;
     /* Calibrate SA temperature from distance, not total cost. The cost
        function includes large vehicle/unassigned penalties (~1e6/1e9) that
@@ -210,8 +221,8 @@ SGStatus sg_solve(SGContext *ctx) {
     params.max_iterations = ctx->config.max_iterations;
     params.max_time_seconds = ctx->config.max_time_seconds;
     params.segment_size = ctx->config.segment_size;
-    params.q_min = ctx->config.q_min;
-    params.q_max = ctx->config.q_max;
+    sg_adaptive_q_bounds((int)ctx->num_requests, ctx->config.q_min, ctx->config.q_max,
+                         &params.q_min, &params.q_max);
     params.target_cost = 0.0;
     ar_alns_calibrate_sa(&params, sg_bootstrap_cost(&initial, ctx),
                           params.max_iterations);

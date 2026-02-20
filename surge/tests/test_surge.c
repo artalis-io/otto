@@ -1791,6 +1791,41 @@ static void test_route_shaw_relatedness(void) {
     sg_free(ctx);
 }
 
+/* ===== Adaptive Destroy Count Tests ===== */
+
+static void test_adaptive_destroy_count(void) {
+    int q_min, q_max;
+
+    /* Small instance (8 requests): defaults dominate */
+    sg_adaptive_q_bounds(8, 4, 20, &q_min, &q_max);
+    assert(q_min == 4);   /* max(4, 8/20=0) = 4 */
+    assert(q_max == 20);  /* max(20, 8/4=2) = 20 */
+
+    /* Medium instance (100 requests): adaptive kicks in */
+    sg_adaptive_q_bounds(100, 4, 20, &q_min, &q_max);
+    assert(q_min == 5);   /* max(4, 100/20=5) = 5 */
+    assert(q_max == 25);  /* max(20, 100/4=25) = 25 */
+
+    /* Large instance (500 requests): fully adaptive */
+    sg_adaptive_q_bounds(500, 4, 20, &q_min, &q_max);
+    assert(q_min == 25);  /* max(4, 500/20=25) = 25 */
+    assert(q_max == 125); /* max(20, 500/4=125) = 125 */
+
+    /* User override higher than adaptive: user wins */
+    sg_adaptive_q_bounds(100, 10, 50, &q_min, &q_max);
+    assert(q_min == 10);  /* max(10, 5) = 10 */
+    assert(q_max == 50);  /* max(50, 25) = 50 */
+
+    /* Zero requests: defaults preserved, no crash */
+    sg_adaptive_q_bounds(0, 4, 20, &q_min, &q_max);
+    assert(q_min == 4);
+    assert(q_max == 20);
+
+    /* q_min clamped to q_max when adaptive_min > config_max */
+    sg_adaptive_q_bounds(100, 30, 20, &q_min, &q_max);
+    assert(q_min <= q_max);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -1843,6 +1878,7 @@ int main(void) {
     RUN_TEST(test_pd_ride_time_constraint);
     RUN_TEST(test_route_removal_cost);
     RUN_TEST(test_route_shaw_relatedness);
+    RUN_TEST(test_adaptive_destroy_count);
 
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);

@@ -396,6 +396,8 @@ int sg_route_find_best_insertion_no_new_vehicle(const SGContext *ctx, const SGRo
 void sg_route_restore_from_backup(SGRouteSolution *sol, SGRouteSolution *backup);
 
 /* sg_solve.c */
+void sg_adaptive_q_bounds(int num_requests, int config_q_min, int config_q_max,
+                          int *q_min_out, int *q_max_out);
 int sg_route_solver_eligible(const SGContext *ctx);
 
 #endif /* SURGE_SG_INTERNAL_H */
