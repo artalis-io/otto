@@ -249,6 +249,9 @@ typedef struct {
     int *ws_U_pos;           /* [m] U CSC column position counters */
     int *ws_row_pos;         /* [m] inverse of row_perm (for identity O(1) lookup) */
     int *ws_struct_nnz;      /* [m] column nnz counts for sorting + fingerprint */
+    int *ws_row_identity_col;/* [m] symbolic: row -> identity column mapping */
+    int *ws_row_match_col;   /* [m] symbolic: row -> matched structural column */
+    int *ws_row_seen;        /* [m] symbolic DFS seen-token workspace */
 
     /* Capacity tracking for L/U output arrays (T1.4) */
     int LU_out_capacity;     /* Allocated nnz capacity for L/U rowidx/values arrays */

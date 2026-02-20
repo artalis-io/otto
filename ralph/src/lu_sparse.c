@@ -1685,13 +1685,16 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
     int *identity_row = lu->ws_identity_row;
     double *identity_val = lu->ws_identity_val;
     int *row_used = lu->ws_row_used;
-    memset(is_identity_col, 0, m * sizeof(int));
-    memset(row_used, 0, m * sizeof(int));
-
-    int *row_identity_col = (int*)malloc(m * sizeof(int));
-    if (!row_identity_col) {
+    int *row_identity_col = lu->ws_row_identity_col;
+    int *row_match_col = lu->ws_row_match_col;
+    int *row_seen = lu->ws_row_seen;
+    int *col_order = lu->ws_col_order;
+    int *col_order_inv = lu->ws_col_order_inv;
+    if (!row_identity_col || !row_match_col || !row_seen) {
         return -1;
     }
+    memset(is_identity_col, 0, m * sizeof(int));
+    memset(row_used, 0, m * sizeof(int));
     for (int i = 0; i < m; i++) {
         row_identity_col[i] = -1;
     }
@@ -1716,16 +1719,34 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
         }
     }
 
+    /* Full-structural basis (k=m): no identity placement needed.
+     * Keep sparse path eligible and avoid unnecessary symbolic fallback. */
+    if (num_identity == 0) {
+        uint64_t fingerprint = FNV_OFFSET_BASIS;
+        for (int j = 0; j < m; j++) {
+            fingerprint ^= (uint64_t)struct_nnz[j];
+            fingerprint *= FNV_PRIME;
+        }
+
+        if (lu->sym_valid && lu->sym_fingerprint == fingerprint) {
+            lu->perf_symbolic_cache_hits++;
+            return 0;
+        }
+        lu->perf_symbolic_cache_misses++;
+
+        for (int j = 0; j < m; j++) {
+            col_order[j] = j;
+            col_order_inv[j] = j;
+        }
+        lu->sym_valid = 1;
+        lu->sym_num_identity = 0;
+        lu->sym_k = m;
+        lu->sym_fingerprint = fingerprint;
+        return 0;
+    }
+
     /* Ensure structural columns can be matched to non-identity rows.
      * If matching fails, demote one conflicting identity row and retry. */
-    int *row_match_col = (int*)malloc(m * sizeof(int));
-    int *row_seen = (int*)malloc(m * sizeof(int));
-    if (!row_match_col || !row_seen) {
-        free(row_match_col);
-        free(row_seen);
-        free(row_identity_col);
-        return -1;
-    }
 
     for (;;) {
         for (int i = 0; i < m; i++) {
@@ -1755,17 +1776,11 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
             }
         }
         if (candidate_identity_row < 0) {
-            free(row_match_col);
-            free(row_seen);
-            free(row_identity_col);
             return -1;
         }
 
         int id_col = row_identity_col[candidate_identity_row];
         if (id_col < 0 || !is_identity_col[id_col]) {
-            free(row_match_col);
-            free(row_seen);
-            free(row_identity_col);
             return -1;
         }
 
@@ -1774,11 +1789,6 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
         row_identity_col[candidate_identity_row] = -1;
         num_identity--;
     }
-
-    free(row_match_col);
-    free(row_seen);
-
-    free(row_identity_col);
 
     uint64_t fingerprint = FNV_OFFSET_BASIS;
     for (int j = 0; j < m; j++) {
@@ -1801,9 +1811,6 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
     int k = m - num_identity;  /* Number of structural columns */
 
     /* Build column ordering: structural first (sorted by nnz), then identity */
-    int *col_order = lu->ws_col_order;
-    int *col_order_inv = lu->ws_col_order_inv;
-
     /* Collect structural columns into col_order[0..k-1] */
     int struct_idx = 0, ident_idx = k;
     for (int j = 0; j < m; j++) {
@@ -2243,10 +2250,9 @@ static int lu_factorize_markowitz(
                     }
                 }
                 if (!can_reg) {
-                    if (reserve_non_reserved) {
-                        reserve_non_reserved = 0;
-                        continue;
-                    }
+                    /* Do not consume reserved (identity) rows as a second-pass
+                     * fallback. If no viable non-reserved pivot exists, fail the
+                     * Markowitz attempt and let caller fall back to GE path. */
                     return MKZ_FAIL_SINGULAR;
                 }
                 (*num_regularized)++;
@@ -2451,6 +2457,8 @@ static int lu_factorize_markowitz(
 static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                                  int num_identity, int k) {
     int m = lu->m;
+    int dense_ge_retry_done = 0;
+    int skip_sparse_numeric = 0;
     double t_a_struct_build_ms = 0.0;
     double t_markowitz_numeric_ms = 0.0;
     double t_supernode_numeric_ms = 0.0;
@@ -2505,6 +2513,20 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     int *row_perm = lu->ws_row_perm;
     int *row_pos = lu->ws_row_pos;
     int *row_is_identity = lu->ws_row_used;
+    /* Rebuild reserved-row bitmap directly from identity columns in col_order.
+     * This keeps numeric partitioning consistent with the finalized symbolic order. */
+    memset(row_is_identity, 0, m * sizeof(int));
+    for (int step = k; step < m; step++) {
+        int orig_col = col_order[step];
+        if (orig_col < 0 || orig_col >= m) {
+            NUMERIC_RETURN(-1);
+        }
+        int r = identity_row[orig_col];
+        if (r < 0 || r >= m || row_is_identity[r]) {
+            NUMERIC_RETURN(-1);
+        }
+        row_is_identity[r] = 1;
+    }
     {
         int struct_pos = 0;
         int ident_pos = k;
@@ -2555,7 +2577,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     /* Try sparse Markowitz factorization if enabled and k is large enough.
      * This exploits sparsity within structural columns, reducing O(k³) to O(nnz×fill).
      * Uses dedicated growable mkz_work to avoid contention with dense_work layout. */
-    if (lu->mkz_enabled && k >= MARKOWITZ_MIN_K) {
+    if (!skip_sparse_numeric && lu->mkz_enabled && k >= MARKOWITZ_MIN_K) {
         int mkz_init_nnz = mkz_count_init_nnz(B, col_order, k);
         size_t mkz_perm_doubles = ((size_t)k * sizeof(int) + sizeof(double) - 1u) / sizeof(double);
         int *mkz_col_perm = NULL;
@@ -2705,7 +2727,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     }
 
     /* T2.1: Try supernodal factorization if enabled and k is large enough */
-    if (lu->sn_enabled && k >= SN_MIN_K) {
+    if (!skip_sparse_numeric && lu->sn_enabled && k >= SN_MIN_K) {
         lu->sn_calls++;
         /* Build or reuse symbolic analysis */
         SNSymbolic *sn_sym = lu->sn_symbolic;
@@ -2781,6 +2803,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
         }
     }
 
+dense_ge_factorization:
     /* LU factorization of structural columns with partial pivoting */
     t_stage_start_ms = perf_now_ms();
     for (int step = 0; step < k; step++) {
@@ -2901,8 +2924,42 @@ identity_placement:
         int perm_pos = row_pos[orig_row];
 
         if (perm_pos < step) {
-            /* Row already used - shouldn't happen if identity detection is correct */
+            /* Row already used. Retry once with dense GE only (skip sparse numeric)
+             * to preserve sparse-efficient path without top-level dense fallback. */
             lu->identity_sep_failures++;
+            if (!dense_ge_retry_done) {
+                dense_ge_retry_done = 1;
+                skip_sparse_numeric = 1;
+                L_nnz = 0;
+                U_nnz = 0;
+
+                {
+                    int struct_pos = 0;
+                    int ident_pos = k;
+                    for (int i = 0; i < m; i++) {
+                        if (row_is_identity[i]) {
+                            row_perm[ident_pos++] = i;
+                        } else {
+                            row_perm[struct_pos++] = i;
+                        }
+                    }
+                    for (int i = 0; i < m; i++) {
+                        row_pos[row_perm[i]] = i;
+                    }
+                }
+
+                t_stage_start_ms = perf_now_ms();
+                memset(A_struct, 0, (size_t)m * k * sizeof(double));
+                for (int jj = 0; jj < k; jj++) {
+                    int j = col_order[jj];
+                    for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+                        int row = B->rowidx[p];
+                        A_struct[row * k + jj] = B->values[p];
+                    }
+                }
+                t_a_struct_build_ms += perf_now_ms() - t_stage_start_ms;
+                goto dense_ge_factorization;
+            }
             NUMERIC_RETURN(-1);
         }
 

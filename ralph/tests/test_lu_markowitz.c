@@ -721,6 +721,40 @@ static void test_sparse_fallback_reason_and_stage_telemetry(void) {
         free_csc(B);
         free(A);
     }
+
+    /* Case C: full-structural basis (k=m) should stay on sparse path and avoid
+     * symbolic fallback despite having no identity columns. */
+    {
+        const int m = 60;
+        double *A = (double *)calloc((size_t)m * m, sizeof(double));
+
+        for (int j = 0; j < m; j++) {
+            A[j * m + j] = 9.0 + 0.02 * j;
+            A[((j + 1) % m) * m + j] = 0.3;
+            A[((j + 7) % m) * m + j] = -0.2;
+        }
+
+        SparseMatrix *B = dense_to_csc(A, m, m);
+        LUFactorization *lu = lu_create(m);
+        lu->mkz_enabled = 1;
+        lu->sn_enabled = 0;
+
+        int rc = lu_factorize(lu, B);
+        ASSERT_INT_EQ(rc, 0, "telemetry full-structural: factorize");
+        ASSERT_INT_EQ(lu->used_dense_fallback_last, 0,
+                      "telemetry full-structural: no dense fallback");
+        ASSERT_INT_EQ(lu->sparse_fallback_last_reason, LU_SPARSE_FALLBACK_NONE,
+                      "telemetry full-structural: fallback reason=none");
+        ASSERT_INT_EQ(lu->sym_num_identity, 0,
+                      "telemetry full-structural: no identity columns");
+        ASSERT_INT_EQ(lu->sym_k, m, "telemetry full-structural: k=m");
+        ASSERT(lu->perf_symbolic_calls > 0,
+               "telemetry full-structural: symbolic called");
+
+        lu_free(lu);
+        free_csc(B);
+        free(A);
+    }
 }
 
 /* ============================================================================
