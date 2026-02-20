@@ -866,6 +866,27 @@ static inline double tri_dot_lt(const int *idx, const double *val,
     return sum;
 }
 
+static inline double tri_dot_masked(const int *idx, const double *val,
+                                    int nnz, const double *x, const int *mask) {
+    double sum = 0.0;
+    for (int p = 0; p < nnz; p++) {
+        int i = idx[p];
+        if (mask[i]) sum += val[p] * x[i];
+    }
+    return sum;
+}
+
+static inline double tri_dot_lt_masked(const int *idx, const double *val,
+                                       int nnz, int limit,
+                                       const double *x, const int *mask) {
+    double sum = 0.0;
+    for (int p = 0; p < nnz; p++) {
+        int i = idx[p];
+        if (i < limit && mask[i]) sum += val[p] * x[i];
+    }
+    return sum;
+}
+
 /* Solve Lx = b (forward substitution) */
 static void solve_L(const LUFactorization *lu, const double *b, double *x) {
     int m = lu->m;
@@ -1945,16 +1966,33 @@ static void compute_reach_Lt_backward(const LUFactorization *lu,
  */
 static void solve_Ut_sparse_reach(const LUFactorization *lu,
                                    int reach_nnz, const int *reach,
-                                   double *x) {
+                                   double *x, const int *reach_mask,
+                                   int use_reach_mask) {
     const int *U_colptr = lu->U_colptr;
     const int *U_rowidx = lu->U_rowidx;
     const double *U_values = lu->U_values;
     const double *U_diag = lu->U_diag;
 
+    if (use_reach_mask) {
+        for (int k = 0; k < reach_nnz; k++) {
+            int i = reach[k];
+            int p0 = U_colptr[i];
+            int p1 = U_colptr[i + 1];
+            double sum = tri_dot_lt_masked(U_rowidx + p0, U_values + p0, p1 - p0,
+                                           i, x, reach_mask);
+
+            double diag = U_diag[i];
+            if (fabs(diag) < RALPH_PIVOT_TOL) {
+                x[i] = 0.0;
+            } else {
+                x[i] = (x[i] - sum) / diag;
+            }
+        }
+        return;
+    }
+
     for (int k = 0; k < reach_nnz; k++) {
         int i = reach[k];
-
-        /* Subtract contributions from earlier solved variables */
         int p0 = U_colptr[i];
         int p1 = U_colptr[i + 1];
         double sum = tri_dot_lt(U_rowidx + p0, U_values + p0, p1 - p0, i, x);
@@ -1983,19 +2021,30 @@ static void solve_Ut_sparse_reach(const LUFactorization *lu,
 static void solve_Lt_sparse_reach(const LUFactorization *lu,
                                    int reach_nnz, const int *reach,
                                    double *x, double *solution,
-                                   int *sol_idx, int *sol_nnz) {
+                                   int *sol_idx, int *sol_nnz,
+                                   const int *reach_mask,
+                                   int use_reach_mask) {
     const int *L_colptr = lu->L_colptr;
     const int *L_rowidx = lu->L_rowidx;
     const double *L_values = lu->L_values;
 
-    for (int k = 0; k < reach_nnz; k++) {
-        int j = reach[k];  /* Descending order */
-
-        int p0 = L_colptr[j] + 1;
-        int p1 = L_colptr[j + 1];
-        double sum = tri_dot(L_rowidx + p0, L_values + p0, p1 - p0, x);
-        x[j] -= sum;
-        /* L[j,j] = 1, so no division needed */
+    if (use_reach_mask) {
+        for (int k = 0; k < reach_nnz; k++) {
+            int j = reach[k];  /* Descending order */
+            int p0 = L_colptr[j] + 1;
+            int p1 = L_colptr[j + 1];
+            double sum = tri_dot_masked(L_rowidx + p0, L_values + p0, p1 - p0, x, reach_mask);
+            x[j] -= sum;
+        }
+    } else {
+        for (int k = 0; k < reach_nnz; k++) {
+            int j = reach[k];  /* Descending order */
+            int p0 = L_colptr[j] + 1;
+            int p1 = L_colptr[j + 1];
+            double sum = tri_dot(L_rowidx + p0, L_values + p0, p1 - p0, x);
+            x[j] -= sum;
+            /* L[j,j] = 1, so no division needed */
+        }
     }
 
     /* Apply inverse row permutation on the reached subset only. */
@@ -2098,12 +2147,27 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
     if (lu->csr_valid && bt_nnz < m / 4) {
         /* Sparse path: reach-based forward sub on U^T, then backward sub on L^T */
         int *reach = (int*)lu_mut->perm_work;  /* Reuse as int array */
+        int *reach_mark = lu_mut->hs_marked;
         int reach_nnz;
         used_sparse_path = 1;
 
         /* Forward sub on U^T: solve U^T work = work (in-place) */
         compute_reach_Ut_forward(lu, bt_nnz, bt_idx, reach, &reach_nnz, lu_mut->hs_marked);
-        solve_Ut_sparse_reach(lu, reach_nnz, reach, work);
+        int use_reach_mask_ut = (reach_nnz > 0 &&
+                                 bt_nnz > 0 &&
+                                 reach_nnz <= 2 * bt_nnz &&
+                                 reach_nnz < m / 2);
+        if (use_reach_mask_ut) {
+            for (int k = 0; k < reach_nnz; k++) {
+                reach_mark[reach[k]] = 1;
+            }
+        }
+        solve_Ut_sparse_reach(lu, reach_nnz, reach, work, reach_mark, use_reach_mask_ut);
+        if (use_reach_mask_ut) {
+            for (int k = 0; k < reach_nnz; k++) {
+                reach_mark[reach[k]] = 0;
+            }
+        }
 
         /* Gather nonzeros after U^T solve for L^T reach */
         int ut_nnz = 0;
@@ -2116,7 +2180,22 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
         /* Backward sub on L^T in-place on work, then permute to solution */
         compute_reach_Lt_backward(lu, ut_nnz, bt_idx, reach, &reach_nnz, lu_mut->hs_marked);
         memset(solution, 0, m * sizeof(double));
-        solve_Lt_sparse_reach(lu, reach_nnz, reach, work, solution, sol_idx, sol_nnz);
+        int use_reach_mask_lt = (reach_nnz > 0 &&
+                                 ut_nnz > 0 &&
+                                 reach_nnz <= 2 * ut_nnz &&
+                                 reach_nnz < m / 2);
+        if (use_reach_mask_lt) {
+            for (int k = 0; k < reach_nnz; k++) {
+                reach_mark[reach[k]] = 1;
+            }
+        }
+        solve_Lt_sparse_reach(lu, reach_nnz, reach, work, solution, sol_idx, sol_nnz,
+                              reach_mark, use_reach_mask_lt);
+        if (use_reach_mask_lt) {
+            for (int k = 0; k < reach_nnz; k++) {
+                reach_mark[reach[k]] = 0;
+            }
+        }
     } else {
         /* Dense fallback */
         solve_Ut(lu, work, work2);
