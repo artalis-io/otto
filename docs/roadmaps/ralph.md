@@ -4,7 +4,18 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-20, `738a2fe`) — H4 simplex pivot/ratio kernel baseline:
+**Current** (2026-02-21, `2ef9ac4`) — H5 adaptive Devex-partial pricing baseline:
+added adaptive Devex-partial pricing for large, degenerate Phase 2 workloads with periodic full
+Devex rescans to preserve robustness while reducing pricing cost on heavy NETLIB outliers. Latest gates:
+`make -C ralph test-simplex-policy` PASS (16/16), `make -C ralph test-lu-markowitz` PASS (59/59),
+`make -C ralph test-netlib-gate-small` PASS (26/26, dense fallback files: 0), and full
+`make -C ralph test-netlib-gate` PASS (84 files; 27 known timeouts; status mismatch 0; objective
+mismatch 0; invalid solution 0; dense fallback files 0; no unexpected regressions vs baseline).
+GLPK comparison snapshot from `/tmp/netlib-regression-gate-20260221-094637`: both-optimal set 57 files,
+geometric mean time ratio (`Ralph/GLPK`) 1.38x, geometric mean iteration ratio 0.98x, geometric mean
+per-iteration ratio 1.41x.
+
+Previous: (2026-02-20, `738a2fe`) — H4 simplex pivot/ratio kernel baseline:
 optimized hot simplex kernels in `simplex_pivot` and `ratio_test_harris` (pointer-hoisting and fused
 basic-variable update + direction-norm accumulation) while preserving numerical behavior. Latest gates:
 `make -C ralph test-simplex-policy` PASS (16/16), `make -C ralph test-lu-markowitz` PASS (59/59),
