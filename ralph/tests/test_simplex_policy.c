@@ -351,6 +351,44 @@ int main(void) {
             .expected_interval = 46,
             .min_pressure = 0.10,
             .max_pressure = 0.10
+        },
+        {
+            .name = "xlarge degenerate phase2 relaxes min interval when LU health is stable",
+            .phase = 2,
+            .iter = 24,
+            .m = 1503,
+            .max_updates = 120,
+            .num_updates = 24,
+            .spike_pool_used = 10,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e4,
+            .growth_factor = 10.0,
+            .use_bland = 0,
+            .degenerate_count = 40,
+            .feedback_bias = 0.0,
+            .expected_run = 1,
+            .expected_interval = 24,
+            .min_pressure = 0.99,
+            .max_pressure = 1.00
+        },
+        {
+            .name = "xlarge degenerate phase2 keeps tight min interval when LU health is poor",
+            .phase = 2,
+            .iter = 10,
+            .m = 1503,
+            .max_updates = 120,
+            .num_updates = 10,
+            .spike_pool_used = 10,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e8,
+            .growth_factor = 10.0,
+            .use_bland = 0,
+            .degenerate_count = 40,
+            .feedback_bias = 0.0,
+            .expected_run = 1,
+            .expected_interval = 10,
+            .min_pressure = 0.99,
+            .max_pressure = 1.00
         }
     };
 
