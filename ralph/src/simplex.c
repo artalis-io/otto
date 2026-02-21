@@ -89,6 +89,11 @@ typedef enum {
 #define PHASE2_PERIODIC_REFACTOR_LARGE_DEGEN_MAX_SPIKE_PCT 30
 #define PHASE2_PERIODIC_REFACTOR_LARGE_DEGEN_MAX_COND 1e6
 #define PHASE2_PERIODIC_REFACTOR_LARGE_DEGEN_MAX_GROWTH 1e4
+#define PHASE2_DEGEN_ESCAPE_MIN_M 1200
+#define PHASE2_DEGEN_ESCAPE_DEGEN_TRIGGER 120
+#define PHASE2_DEGEN_ESCAPE_POLICY_TRIGGER 200
+#define PHASE2_DEGEN_ESCAPE_MAX_ATTEMPTS 2
+#define PHASE2_DEGEN_ESCAPE_BLAND_HOLD_ITERS 16
 #define PERIODIC_REFACTOR_MIN_UPDATE_AGE 8
 #define PERIODIC_REFACTOR_PRESSURE_TRIGGER 0.40
 #define PERIODIC_REFACTOR_SIZE_START_M 350
@@ -5793,6 +5798,32 @@ static int simplex_phase2(SimplexSolver *solver) {
         double obj_change_p2 = fabs(tab->obj_value - last_obj_p2);
         if (obj_change_p2 < obj_tol_p2) {
             stall_count_p2++;
+            if (stall_count_p2 >= P2_STALL_THRESHOLD &&
+                perturb_attempts_p2 < PHASE2_DEGEN_ESCAPE_MAX_ATTEMPTS &&
+                tab->m >= PHASE2_DEGEN_ESCAPE_MIN_M &&
+                degenerate_count >= PHASE2_DEGEN_ESCAPE_DEGEN_TRIGGER &&
+                solver->perf_phase2_refactor_periodic_policy >= PHASE2_DEGEN_ESCAPE_POLICY_TRIGGER) {
+                double scale = 4.0 + 2.0 * (double)perturb_attempts_p2;
+                primal_apply_perturbation_scaled(tab, scale);
+                perturbation_active = 1;
+                use_bland = 1;
+                degenerate_count = 0;
+                /* Keep Bland active briefly before allowing fast pricing again. */
+                non_degen_streak = -PHASE2_DEGEN_ESCAPE_BLAND_HOLD_ITERS;
+                stall_count_p2 = 0;
+                perturb_attempts_p2++;
+                tableau_compute_solution(tab);
+                if (solver->pricing_strategy == 3) {
+                    tableau_compute_duals(tab);
+                } else {
+                    tableau_compute_reduced_costs(tab);
+                    if (solver->pricing_strategy == 4) heap_build(tab);
+                }
+                if (solver->verbose) {
+                    printf("Iter %d: Phase 2 degen-escape (scale %.1f)\n", iter, scale);
+                }
+                continue;
+            }
             if (stall_count_p2 >= P2_STALL_THRESHOLD) {
                 perturb_attempts_p2++;
                 if (perturb_attempts_p2 <= P2_MAX_PERTURB_ATTEMPTS) {
