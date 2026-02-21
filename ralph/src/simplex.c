@@ -2815,6 +2815,12 @@ int pricing_devex(SimplexTableau *tab, int *entering) {
 #define PARTIAL_PRICE_BLOCK 100       /* Variables per partial scan block */
 #define PARTIAL_PRICE_THRESHOLD 1e-6  /* Accept if |rc| > threshold */
 #define PARTIAL_HOT_ACCEPT 1e-4       /* Accept immediately from hot set if |rc| > this */
+#define DEVEX_PARTIAL_BLOCK 240
+#define DEVEX_PARTIAL_ENABLE_M 400
+#define DEVEX_PARTIAL_ENABLE_N 1200
+#define DEVEX_PARTIAL_DEGEN_TRIGGER 20
+#define DEVEX_PARTIAL_ITER_TRIGGER 4000
+#define DEVEX_PARTIAL_FULL_RESCAN_MASK 1
 
 /* Check if variable j is eligible for entering */
 static inline int is_entering_eligible(SimplexTableau *tab, int j, double *rc_out) {
@@ -2939,6 +2945,103 @@ int pricing_partial(SimplexTableau *tab, int *entering) {
     }
 
     return 1;  /* Optimal - no eligible variable found */
+}
+
+/* Devex-scored partial pricing.
+ * Uses the same hot-set/round-robin idea as pricing_partial(), but keeps
+ * Devex's rc^2/weight scoring to preserve pivot quality characteristics. */
+static inline int devex_entering_eligible(SimplexTableau *tab, int j, double *score_out) {
+    if (j < 0 || j >= tab->n) return 0;
+    if (tab->var_status[j] == RALPH_BASIC) return 0;
+
+    double rc = tableau_get_rc(tab, j);
+    double score = 0.0;
+
+    if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -RALPH_OPT_TOL) {
+        score = rc * rc;
+    } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > RALPH_OPT_TOL) {
+        score = rc * rc;
+    } else if (tab->var_status[j] == RALPH_NONBASIC_FREE &&
+               (rc > RALPH_OPT_TOL || rc < -RALPH_OPT_TOL)) {
+        score = rc * rc;
+    } else {
+        return 0;
+    }
+
+    double weight = tab->se_weights[j];
+    if (weight < 1.0) weight = 1.0;
+    *score_out = score / weight;
+    return *score_out > 0.0;
+}
+
+static int pricing_devex_partial(SimplexTableau *tab, int *entering) {
+    *entering = -1;
+
+    if (!tab->duals_valid) {
+        tableau_compute_duals(tab);
+    }
+
+    double best_score = RALPH_OPT_TOL * RALPH_OPT_TOL;
+    int best_var = -1;
+    int n = tab->n;
+
+    /* Phase 1: scan and compact the hot set. */
+    int write_idx = 0;
+    for (int i = 0; i < tab->partial_cand_count; i++) {
+        int j = tab->partial_candidates[i];
+        if (tab->var_status[j] == RALPH_BASIC) continue;
+        tab->partial_candidates[write_idx++] = j;
+
+        double score;
+        if (devex_entering_eligible(tab, j, &score) && score > best_score) {
+            best_score = score;
+            best_var = j;
+        }
+    }
+    tab->partial_cand_count = write_idx;
+
+    /* Phase 2: bounded round-robin scan through the full variable space. */
+    int start = tab->partial_price_pos;
+    int scanned = 0;
+    for (int i = 0; i < n && scanned < DEVEX_PARTIAL_BLOCK; i++) {
+        int j = (start + i) % n;
+        if (tab->var_status[j] == RALPH_BASIC) continue;
+
+        scanned++;
+        double score;
+        if (devex_entering_eligible(tab, j, &score) && score > best_score) {
+            best_score = score;
+            best_var = j;
+        }
+    }
+    tab->partial_price_pos = (start + DEVEX_PARTIAL_BLOCK) % n;
+
+    if (best_var >= 0) {
+        *entering = best_var;
+        add_to_hot_set(tab, best_var);
+        return 0;
+    }
+
+    /* Fallback for safety: if bounded scan missed a candidate, run full Devex. */
+    if (pricing_devex(tab, entering) == 0) {
+        add_to_hot_set(tab, *entering);
+        return 0;
+    }
+
+    return 1;
+}
+
+static int phase2_use_adaptive_devex_partial(const SimplexTableau *tab,
+                                             int iter,
+                                             int degenerate_count,
+                                             int use_bland,
+                                             int pricing_strategy) {
+    if (!tab) return 0;
+    if (use_bland) return 0;
+    if (pricing_strategy != 2) return 0;
+    if (tab->m < DEVEX_PARTIAL_ENABLE_M || tab->n < DEVEX_PARTIAL_ENABLE_N) return 0;
+    if (degenerate_count >= DEVEX_PARTIAL_DEGEN_TRIGGER) return 1;
+    return iter >= DEVEX_PARTIAL_ITER_TRIGGER;
 }
 
 /* ============================================================================
@@ -5303,6 +5406,12 @@ static int simplex_phase2(SimplexSolver *solver) {
         int entering;
         int price_status;
         double t_pricing_ms = perf_now_ms();
+        int adaptive_devex_partial =
+            phase2_use_adaptive_devex_partial(tab,
+                                              iter,
+                                              degenerate_count,
+                                              (use_bland || iter < bland_start_iters),
+                                              solver->pricing_strategy);
 
         if (use_bland || iter < bland_start_iters) {
             /* Use Bland's rule to prevent cycling or for initial stability */
@@ -5316,7 +5425,12 @@ static int simplex_phase2(SimplexSolver *solver) {
         } else if (solver->pricing_strategy == 4) {
             price_status = pricing_heap(tab, &entering);
         } else {
-            price_status = pricing_devex(tab, &entering);
+            if (adaptive_devex_partial &&
+                (iter & DEVEX_PARTIAL_FULL_RESCAN_MASK) != 0) {
+                price_status = pricing_devex_partial(tab, &entering);
+            } else {
+                price_status = pricing_devex(tab, &entering);
+            }
         }
         {
             double pricing_elapsed_ms = perf_now_ms() - t_pricing_ms;
@@ -5383,7 +5497,12 @@ static int simplex_phase2(SimplexSolver *solver) {
                 } else if (solver->pricing_strategy == 4) {
                     price_status = pricing_heap(tab, &entering);
                 } else {
-                    price_status = pricing_devex(tab, &entering);
+                    if (adaptive_devex_partial &&
+                        (iter & DEVEX_PARTIAL_FULL_RESCAN_MASK) != 0) {
+                        price_status = pricing_devex_partial(tab, &entering);
+                    } else {
+                        price_status = pricing_devex(tab, &entering);
+                    }
                 }
                 {
                     double pricing_elapsed_ms = perf_now_ms() - t_pricing_ms;
