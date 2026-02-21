@@ -1169,9 +1169,13 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ### Current Status (as of 2026-02-21)
 
-**U1-U6 + S1-S9 complete.** Solomon -0.2% avgDistGap, Li & Lim +4.1% avgDistGap at 10k iterations, all 113 benchmark solutions verified feasible. 94 unit tests passing, ASAN/UBSAN clean, benchmarks stable (56 Solomon + 57 Li & Lim).
+**Baseline**: U1-U6 + S1-S9 complete. 94 tests passing, ASAN/UBSAN clean.
 
-U4 (open routes), U5 (max duration + explicit ride time), U6 (vehicle cost model + configurable objective), and short-term API improvements (convenience constructors, solution stop load/type/duration export) are implemented and tested.
+Best measured quality (10000 iterations, deterministic seed 42):
+- Solomon (VRPTW, 56 cases): `avgVehGap=+0.38`, `avgDistGap=+0.2%`, `equalVehicles=35`, `lexiNonWorse=11`.
+- Li & Lim (PDPTW, 57 cases): `avgVehGap=+0.59`, `avgDistGap=+3.9%`, `equalVehicles=39`, `lexiNonWorse=21`.
+
+Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), convenience constructors, stop load/type/duration export.
 
 #### Previous Status (as of 2026-02-20)
 
