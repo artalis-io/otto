@@ -555,6 +555,7 @@ typedef struct SimplexSolver {
     int perf_refactor_reason_other;
     int perf_refactor_periodic_policy;    /* periodic refactors triggered by scheduler policy */
     int perf_refactor_periodic_lu_health; /* periodic refactors triggered by LU health guard */
+    int perf_refactor_safety_forced;      /* non-periodic safety-driven refactors */
     int perf_refactor_last_m;
     int perf_refactor_last_k;
     int perf_refactor_last_nnz_B;
@@ -574,6 +575,7 @@ typedef struct SimplexSolver {
     int perf_phase1_compute_rc_calls;
     int perf_phase1_refactor_periodic_policy;
     int perf_phase1_refactor_periodic_lu_health;
+    int perf_phase1_refactor_safety_forced;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -589,6 +591,7 @@ typedef struct SimplexSolver {
     int perf_phase2_compute_rc_calls;
     int perf_phase2_refactor_periodic_policy;
     int perf_phase2_refactor_periodic_lu_health;
+    int perf_phase2_refactor_safety_forced;
 
     /* Adaptive periodic scheduler feedback (per-phase bias in [-0.25, +0.25]) */
     double periodic_feedback_bias_phase1;
