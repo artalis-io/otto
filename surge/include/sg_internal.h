@@ -77,6 +77,7 @@ typedef struct {
     uint32_t *request_pickup_stop_pos;
     uint32_t *request_delivery_stop_pos;
     double *route_distance;
+    double *route_duration;
     double *route_stop_load;   /* [vehicle * stop_stride * dim_count + stop * dim_count + d] */
 } SGRouteSolution;
 
@@ -116,6 +117,11 @@ typedef struct {
     uint8_t has_depots;
     uint8_t has_shift_time_window;
     uint8_t has_capacity;
+    uint8_t open_end;
+    int32_t max_duration_seconds;
+    double fixed_cost;
+    double cost_per_distance;
+    double cost_per_duration;
 } SGVehicleRecord;
 
 typedef struct {
@@ -137,8 +143,10 @@ typedef struct {
     uint32_t pickup_task_id;
     uint32_t delivery_task_id;
     uint64_t required_qualifications;
+    int32_t max_ride_time_seconds;
     uint8_t has_pickup_task;
     uint8_t has_delivery_task;
+    uint8_t has_max_ride_time;
 } SGRequestRecord;
 
 struct SGContext {
@@ -166,6 +174,8 @@ struct SGContext {
     void *travel_callback_data;
     SHRng *op_rng;
     void *active_solution;  /* Temporary: set during destroy ops needing route access */
+    SGRouteSolution *final_solution;  /* Retained after solve for route/stop export */
+    double unassigned_weight;
     uint8_t travel_prepared;
     uint8_t avoid_new_vehicles;  /* Phase 1: skip empty vehicles in repair */
 };

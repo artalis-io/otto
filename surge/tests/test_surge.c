@@ -2613,6 +2613,994 @@ static void test_qualification_pd_request(void) {
     sg_free(ctx);
 }
 
+/* ---------- solution export tests ---------- */
+
+static void test_solution_export_delivery(void) {
+    /* 1 vehicle, 3 delivery requests. After solve, verify route/stop export. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    uint32_t route_count, stop_count, i;
+    double route_dist;
+    SGSolutionStop stop;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 10000.0);
+
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 30.0, 0.0, 0, 86400, 60, -10.0);
+
+    /* Before solve: no solution available */
+    assert(sg_solution_get_route_count(ctx) == 0);
+    assert(sg_solution_get_route_stop_count(ctx, 0) == 0);
+    assert(sg_solution_get_unassigned_request(ctx, 0) == UINT32_MAX);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* After solve: routes available */
+    route_count = sg_solution_get_route_count(ctx);
+    assert(route_count == 1);  /* 1 vehicle, 3 requests => 1 route */
+
+    stop_count = sg_solution_get_route_stop_count(ctx, 0);
+    assert(stop_count == 3);  /* 3 delivery stops */
+
+    route_dist = sg_solution_get_route_distance(ctx, 0);
+    assert(route_dist > 0.0);
+
+    /* Vehicle ID should be 0 */
+    assert(sg_solution_get_route_vehicle_id(ctx, 0) == 0);
+
+    /* Iterate stops and verify fields are populated */
+    for (i = 0; i < stop_count; i++) {
+        assert(sg_solution_get_route_stop(ctx, 0, i, &stop) == SG_STATUS_OK);
+        assert(stop.request_id < 3);
+        assert(stop.stop_type == SG_STOP_TYPE_DELIVERY);
+        assert(stop.arrival >= 0.0);
+        assert(stop.service_start >= stop.arrival);
+        assert(stop.departure >= stop.service_start);
+    }
+
+    /* Invalid indices return errors */
+    assert(sg_solution_get_route_stop(ctx, 99, 0, &stop) == SG_STATUS_INVALID_ARG);
+    assert(sg_solution_get_route_stop(ctx, 0, 99, &stop) == SG_STATUS_INVALID_ARG);
+    assert(sg_solution_get_route_stop(ctx, 0, 0, NULL) == SG_STATUS_INVALID_ARG);
+
+    sg_free(ctx);
+}
+
+static void test_solution_export_pd(void) {
+    /* 1 vehicle, 1 PD request. Verify pickup and delivery stops. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    uint32_t route_count, stop_count;
+    SGSolutionStop stop0, stop1;
+    int found_pickup, found_delivery;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 10000.0);
+
+    add_pd_request(ctx, 5.0, 0.0, 0, 86400, 60,
+                       15.0, 0.0, 0, 86400, 60, 10.0);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    route_count = sg_solution_get_route_count(ctx);
+    assert(route_count == 1);
+
+    stop_count = sg_solution_get_route_stop_count(ctx, 0);
+    assert(stop_count == 2);  /* pickup + delivery */
+
+    assert(sg_solution_get_route_stop(ctx, 0, 0, &stop0) == SG_STATUS_OK);
+    assert(sg_solution_get_route_stop(ctx, 0, 1, &stop1) == SG_STATUS_OK);
+
+    /* Both should reference request 0 */
+    assert(stop0.request_id == 0);
+    assert(stop1.request_id == 0);
+
+    /* One pickup, one delivery */
+    found_pickup = (stop0.stop_type == SG_STOP_TYPE_PICKUP) +
+                   (stop1.stop_type == SG_STOP_TYPE_PICKUP);
+    found_delivery = (stop0.stop_type == SG_STOP_TYPE_DELIVERY) +
+                     (stop1.stop_type == SG_STOP_TYPE_DELIVERY);
+    assert(found_pickup == 1);
+    assert(found_delivery == 1);
+
+    /* Pickup must depart before delivery arrives (precedence) */
+    if (stop0.stop_type == SG_STOP_TYPE_PICKUP) {
+        assert(stop0.departure <= stop1.arrival + 1e-9);
+    } else {
+        assert(stop1.departure <= stop0.arrival + 1e-9);
+    }
+
+    sg_free(ctx);
+}
+
+static void test_solution_export_unassigned(void) {
+    /* TW violation forces request unassigned. Verify unassigned export. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    uint32_t unassigned_req;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 10000.0);
+
+    /* Request 0: normal */
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -10.0);
+
+    /* Request 1: impossible TW (already past) — forces unassigned */
+    add_delivery_request(ctx, 1000.0, 0.0, 1, 2, 60, -10.0);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 1);
+
+    /* Get the unassigned request ID */
+    unassigned_req = sg_solution_get_unassigned_request(ctx, 0);
+    assert(unassigned_req != UINT32_MAX);
+
+    /* Out of range returns UINT32_MAX */
+    assert(sg_solution_get_unassigned_request(ctx, 99) == UINT32_MAX);
+
+    sg_free(ctx);
+}
+
+static void test_solution_export_multi_vehicle(void) {
+    /* 2 vehicles, requests spread across them. Verify multi-route export. */
+    SGContext *ctx = make_config(300, 42);
+    uint32_t depot;
+    uint32_t total_stops, r;
+    uint32_t route_count;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 30.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 30.0);
+
+    /* 4 requests with enough demand to force 2 vehicles */
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -15.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 86400, 60, -15.0);
+    add_delivery_request(ctx, -10.0, 0.0, 0, 86400, 60, -15.0);
+    add_delivery_request(ctx, -20.0, 0.0, 0, 86400, 60, -15.0);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    route_count = sg_solution_get_route_count(ctx);
+    assert(route_count >= 2);  /* Capacity forces at least 2 routes */
+
+    /* Total stops across all routes must equal 4 */
+    total_stops = 0;
+    for (r = 0; r < route_count; r++) {
+        uint32_t stops = sg_solution_get_route_stop_count(ctx, r);
+        assert(stops > 0);
+        assert(sg_solution_get_route_distance(ctx, r) > 0.0);
+        assert(sg_solution_get_route_vehicle_id(ctx, r) != UINT32_MAX);
+        total_stops += stops;
+    }
+    assert(total_stops == 4);
+
+    sg_free(ctx);
+}
+
+/* ===== U4: Open routes ===== */
+
+static void test_open_end_basic(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    double closed_dist, open_dist;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -1.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    closed_dist = sg_get_total_distance(ctx);
+    assert(closed_dist > 0.0);
+    sg_free(ctx);
+
+    /* Same but open-end */
+    ctx = make_config(100, 42);
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -1.0);
+    {
+        uint32_t v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+        double cap = 100.0;
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_open_end(ctx, v, 1) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    open_dist = sg_get_total_distance(ctx);
+
+    /* Open route should have roughly half the distance (no return) */
+    assert(open_dist < closed_dist - 1.0);
+    sg_free(ctx);
+}
+
+static void test_open_end_timing(void) {
+    /* Verify that open-end route doesn't require return time */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    /* Delivery at (100, 0) with travel ~100 seconds. Shift only allows 150 sec total.
+       Closed route needs ~200 sec (there and back) -> infeasible.
+       Open route needs ~100 sec -> feasible. */
+    add_delivery_request(ctx, 100.0, 0.0, 0, 200, 0, -1.0);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 150) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_open_end(ctx, v, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    sg_free(ctx);
+}
+
+static void test_open_end_solution_export(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v;
+    uint32_t route_count;
+    double route_dist, route_dur;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 60, -1.0);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_open_end(ctx, v, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    route_count = sg_solution_get_route_count(ctx);
+    assert(route_count == 1);
+    route_dist = sg_solution_get_route_distance(ctx, 0);
+    route_dur = sg_solution_get_route_duration(ctx, 0);
+    assert(route_dist > 0.0);
+    assert(route_dur > 0.0);
+    /* Duration should include travel + service but not return */
+    assert(route_dur >= 60.0);
+
+    sg_free(ctx);
+}
+
+static void test_open_end_pd(void) {
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_pd_request(ctx, 5.0, 0.0, 0, 99999, 0,
+                   10.0, 0.0, 0, 99999, 0, 1.0);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_open_end(ctx, v, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    sg_free(ctx);
+}
+
+/* ===== U5: Max duration and ride time ===== */
+
+static void test_max_duration_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_max_duration(ctx, v, 3600) == SG_STATUS_OK);
+    assert(sg_vehicle_set_max_duration(ctx, v, 0) == SG_STATUS_OK);
+    assert(sg_vehicle_set_max_duration(ctx, v, -1) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_max_duration(ctx, 999, 3600) == SG_STATUS_INVALID_ARG);
+    sg_free(ctx);
+}
+
+static void test_max_duration_infeasible(void) {
+    /* With short max_duration, far-away request can't be served */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    /* Far-away delivery: round-trip ~200 sec travel. Max duration 150 -> unassigned. */
+    add_delivery_request(ctx, 100.0, 0.0, 0, 99999, 0, -1.0);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_max_duration(ctx, v, 150) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 1);
+    sg_free(ctx);
+}
+
+static void test_max_ride_time_explicit(void) {
+    /* Explicit max ride time overrides TW-derived limit */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v;
+    uint32_t req, p_task, d_task;
+    double demand = 1.0, neg_demand = -1.0;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    /* PD request: pickup at (5,0), delivery at (50,0).
+       Wide TW: 0-99999. TW-derived limit = 99999.
+       Set explicit max ride time = 10. Travel from (5,0) to (50,0) ~ 45 sec.
+       Should be infeasible due to ride time. */
+    req = sg_add_request(ctx);
+    p_task = sg_add_task(ctx, SG_TASK_PICKUP);
+    d_task = sg_add_task(ctx, SG_TASK_DELIVERY);
+    assert(sg_task_set_location(ctx, p_task, 5.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_set_time_window(ctx, p_task, 0, 99999) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, p_task, 0) == SG_STATUS_OK);
+    assert(sg_task_set_demand(ctx, p_task, &demand, 1) == SG_STATUS_OK);
+    assert(sg_task_set_location(ctx, d_task, 50.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_set_time_window(ctx, d_task, 0, 99999) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, d_task, 0) == SG_STATUS_OK);
+    assert(sg_task_set_demand(ctx, d_task, &neg_demand, 1) == SG_STATUS_OK);
+    assert(sg_request_bind_pickup_delivery_tasks(ctx, req, p_task, d_task) == SG_STATUS_OK);
+    assert(sg_request_set_max_ride_time(ctx, req, 10) == SG_STATUS_OK);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 1);
+    sg_free(ctx);
+}
+
+static void test_max_ride_time_default(void) {
+    /* Without explicit max ride time, wide TW allows feasible */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    /* Same PD request but no explicit ride time -> wide TW-derived limit -> feasible */
+    add_pd_request(ctx, 5.0, 0.0, 0, 99999, 0,
+                   50.0, 0.0, 0, 99999, 0, 1.0);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    sg_free(ctx);
+}
+
+/* ===== U6: Vehicle cost model ===== */
+
+static void test_vehicle_costs_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_costs(ctx, v, 500.0, 2.0, 0.5) == SG_STATUS_OK);
+    assert(sg_vehicle_set_costs(ctx, v, -1.0, 1.0, 0.0) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_costs(ctx, v, 0.0, -1.0, 0.0) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_costs(ctx, v, 0.0, 1.0, -1.0) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_costs(ctx, 999, 1.0, 1.0, 0.0) == SG_STATUS_INVALID_ARG);
+    assert(sg_set_unassigned_weight(ctx, 1e6) == SG_STATUS_OK);
+    assert(sg_set_unassigned_weight(ctx, -1.0) == SG_STATUS_INVALID_ARG);
+    sg_free(ctx);
+}
+
+static void test_vehicle_costs_prefer_cheaper(void) {
+    /* Two vehicles: expensive and cheap. Request should go to cheap vehicle. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    uint32_t v0, v1;
+    double cap = 100.0;
+    uint32_t route_count, r;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -1.0);
+
+    v0 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v0, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v0, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v0, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_costs(ctx, v0, 1e8, 10.0, 0.0) == SG_STATUS_OK);
+
+    v1 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v1, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v1, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v1, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_costs(ctx, v1, 1.0, 1.0, 0.0) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    route_count = sg_solution_get_route_count(ctx);
+    assert(route_count == 1);
+    /* The single route should use v1 (the cheap vehicle) */
+    for (r = 0; r < route_count; r++) {
+        uint32_t vid = sg_solution_get_route_vehicle_id(ctx, r);
+        assert(vid == v1);
+    }
+    sg_free(ctx);
+}
+
+static void test_unassigned_weight(void) {
+    /* Very low unassigned weight: solver may prefer not assigning to save vehicle cost */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -1.0);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    /* Vehicle costs 1e9 fixed. Unassigned penalty only 1.0 -> cheaper to leave unassigned */
+    assert(sg_vehicle_set_costs(ctx, v, 1e9, 1.0, 0.0) == SG_STATUS_OK);
+    assert(sg_set_unassigned_weight(ctx, 1.0) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 1);
+    sg_free(ctx);
+}
+
+/* ===== Short-term API improvements ===== */
+
+static void test_convenience_delivery_request(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t req_id;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    req_id = sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 60, -1.0);
+    assert(req_id != UINT32_MAX);
+
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    sg_free(ctx);
+}
+
+static void test_convenience_pd_request(void) {
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    uint32_t req_id;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    req_id = sg_add_pd_request(ctx,
+                               5.0, 0.0, 0, 99999, 0,
+                               10.0, 0.0, 0, 99999, 0, 1.0);
+    assert(req_id != UINT32_MAX);
+
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    sg_free(ctx);
+}
+
+static void test_solution_stop_load(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    double load_val = 0.0;
+    uint32_t route_count;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -5.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    route_count = sg_solution_get_route_count(ctx);
+    assert(route_count == 1);
+    assert(sg_solution_get_route_stop_count(ctx, 0) == 1);
+
+    /* Read load at stop 0, dimension 0 */
+    assert(sg_solution_get_route_stop_load(ctx, 0, 0, 0, &load_val) == SG_STATUS_OK);
+    /* Invalid dimension should fail */
+    assert(sg_solution_get_route_stop_load(ctx, 0, 0, 99, &load_val) == SG_STATUS_INVALID_ARG);
+
+    sg_free(ctx);
+}
+
+static void test_solution_stop_type_service(void) {
+    /* Test that service tasks are reported as SG_STOP_TYPE_SERVICE */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t req, task;
+    double demand = 0.0;
+    double cap = 100.0;
+    uint32_t v;
+    SGSolutionStop stop;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    /* Create a service task (not pickup or delivery) bound as a delivery */
+    req = sg_add_request(ctx);
+    task = sg_add_task(ctx, SG_TASK_SERVICE);
+    assert(sg_task_set_location(ctx, task, 10.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_set_time_window(ctx, task, 0, 99999) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, task, 60) == SG_STATUS_OK);
+    assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+    assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_solution_get_route_count(ctx) == 1);
+    assert(sg_solution_get_route_stop_count(ctx, 0) == 1);
+
+    assert(sg_solution_get_route_stop(ctx, 0, 0, &stop) == SG_STATUS_OK);
+    assert(stop.stop_type == SG_STOP_TYPE_SERVICE);
+
+    sg_free(ctx);
+}
+
+static void test_route_duration_export(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    double route_dur;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 120, -1.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_solution_get_route_count(ctx) == 1);
+
+    route_dur = sg_solution_get_route_duration(ctx, 0);
+    /* Duration = travel to stop + service + travel back. Must be > service time */
+    assert(route_dur >= 120.0);
+    sg_free(ctx);
+}
+
+/* ===== Cross-feature and gap coverage tests ===== */
+
+static void test_cost_per_duration_preference(void) {
+    /* Verify cost_per_duration is reflected in total cost.
+       Same setup twice: once with cost_per_duration=0, once with cost_per_duration=10.
+       The high-duration run should have a higher total cost. */
+    double cost_no_dur, cost_with_dur;
+
+    /* Run 1: no duration cost */
+    {
+        SGContext *ctx = make_config(100, 42);
+        uint32_t depot;
+        double cap = 100.0;
+        uint32_t v;
+
+        sg_set_dimension_count(ctx, 1);
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+        add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 600, -1.0);
+
+        v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_costs(ctx, v, 0.0, 1.0, 0.0) == SG_STATUS_OK);
+
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 0);
+        cost_no_dur = sg_get_total_cost(ctx);
+        sg_free(ctx);
+    }
+
+    /* Run 2: high duration cost */
+    {
+        SGContext *ctx = make_config(100, 42);
+        uint32_t depot;
+        double cap = 100.0;
+        uint32_t v;
+
+        sg_set_dimension_count(ctx, 1);
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+        add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 600, -1.0);
+
+        v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_costs(ctx, v, 0.0, 1.0, 10.0) == SG_STATUS_OK);
+
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 0);
+        cost_with_dur = sg_get_total_cost(ctx);
+        sg_free(ctx);
+    }
+
+    /* Duration of route is ~620s (10 travel + 600 service + 10 return).
+       cost_per_duration=10 adds ~6200 to cost. */
+    assert(cost_with_dur > cost_no_dur + 1000.0);
+}
+
+static void test_open_end_max_duration_combo(void) {
+    /* Closed route + max_duration=120: round trip ~200s -> infeasible.
+       Open-end route + max_duration=120: one-way ~100s -> feasible. */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_delivery_request(ctx, 100.0, 0.0, 0, 99999, 0, -1.0);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_max_duration(ctx, v, 120) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 1); /* closed: infeasible */
+    sg_free(ctx);
+
+    /* Open-end: same but feasible */
+    ctx = make_config(100, 42);
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_delivery_request(ctx, 100.0, 0.0, 0, 99999, 0, -1.0);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_max_duration(ctx, v, 120) == SG_STATUS_OK);
+    assert(sg_vehicle_set_open_end(ctx, v, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0); /* open-end: feasible */
+    sg_free(ctx);
+}
+
+static void test_max_ride_time_with_service_time(void) {
+    /* Verify ride_time = delivery_service_start - pickup_depart excludes pickup service.
+       Pickup at (5,0) with 60s service, delivery at (15,0). Travel ~10s.
+       ride_time = 10s. max_ride_time = 15 -> feasible. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v;
+    uint32_t req, p_task, d_task;
+    double demand = 1.0, neg_demand = -1.0;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    req = sg_add_request(ctx);
+    p_task = sg_add_task(ctx, SG_TASK_PICKUP);
+    d_task = sg_add_task(ctx, SG_TASK_DELIVERY);
+    assert(sg_task_set_location(ctx, p_task, 5.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_set_time_window(ctx, p_task, 0, 99999) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, p_task, 60) == SG_STATUS_OK);
+    assert(sg_task_set_demand(ctx, p_task, &demand, 1) == SG_STATUS_OK);
+    assert(sg_task_set_location(ctx, d_task, 15.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_set_time_window(ctx, d_task, 0, 99999) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, d_task, 0) == SG_STATUS_OK);
+    assert(sg_task_set_demand(ctx, d_task, &neg_demand, 1) == SG_STATUS_OK);
+    assert(sg_request_bind_pickup_delivery_tasks(ctx, req, p_task, d_task) == SG_STATUS_OK);
+    assert(sg_request_set_max_ride_time(ctx, req, 15) == SG_STATUS_OK);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    sg_free(ctx);
+}
+
+static void test_route_duration_open_end(void) {
+    /* Open-end route_duration should be less than closed route_duration */
+    double closed_dur, open_dur;
+
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 120, -1.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_solution_get_route_count(ctx) == 1);
+    closed_dur = sg_solution_get_route_duration(ctx, 0);
+    sg_free(ctx);
+
+    ctx = make_config(100, 42);
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 120, -1.0);
+    {
+        uint32_t v = sg_add_vehicle(ctx);
+        double cap = 100.0;
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_open_end(ctx, v, 1) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_solution_get_route_count(ctx) == 1);
+    open_dur = sg_solution_get_route_duration(ctx, 0);
+    sg_free(ctx);
+
+    assert(open_dur < closed_dur);
+}
+
+static void test_open_end_cost_model(void) {
+    /* V0: closed, cost_per_distance=1. V1: open-end, cost_per_distance=1.
+       Delivery at (50,0). V0 distance ~100 (round trip). V1 ~50 (one-way).
+       Request should go to V1 (lower cost). */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v0, v1;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_delivery_request(ctx, 50.0, 0.0, 0, 99999, 0, -1.0);
+
+    v0 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v0, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v0, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v0, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_costs(ctx, v0, 0.0, 1.0, 0.0) == SG_STATUS_OK);
+
+    v1 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v1, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v1, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v1, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_costs(ctx, v1, 0.0, 1.0, 0.0) == SG_STATUS_OK);
+    assert(sg_vehicle_set_open_end(ctx, v1, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_solution_get_route_count(ctx) == 1);
+    assert(sg_solution_get_route_vehicle_id(ctx, 0) == v1);
+    sg_free(ctx);
+}
+
+static void test_max_duration_multi_stop(void) {
+    /* Two deliveries with max_duration=25. First stop ~10s travel each way = 20s.
+       Second stop adds more travel -> exceeds limit. At least 1 unassigned. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -1.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 0, -1.0);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_max_duration(ctx, v, 25) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) >= 1);
+    sg_free(ctx);
+}
+
+static void test_multi_pd_heterogeneous_ride_time(void) {
+    /* Two PD requests with different max_ride_time values.
+       A: pickup(5,0)->delivery(10,0), max_ride_time=100 (generous, travel ~5s).
+       B: pickup(5,0)->delivery(50,0), max_ride_time=10 (tight, travel ~45s -> infeasible). */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v;
+    uint32_t req_a, p_a, d_a;
+    uint32_t req_b, p_b, d_b;
+    double demand = 1.0, neg_demand = -1.0;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    req_a = sg_add_request(ctx);
+    p_a = sg_add_task(ctx, SG_TASK_PICKUP);
+    d_a = sg_add_task(ctx, SG_TASK_DELIVERY);
+    assert(sg_task_set_location(ctx, p_a, 5.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_set_time_window(ctx, p_a, 0, 99999) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, p_a, 0) == SG_STATUS_OK);
+    assert(sg_task_set_demand(ctx, p_a, &demand, 1) == SG_STATUS_OK);
+    assert(sg_task_set_location(ctx, d_a, 10.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_set_time_window(ctx, d_a, 0, 99999) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, d_a, 0) == SG_STATUS_OK);
+    assert(sg_task_set_demand(ctx, d_a, &neg_demand, 1) == SG_STATUS_OK);
+    assert(sg_request_bind_pickup_delivery_tasks(ctx, req_a, p_a, d_a) == SG_STATUS_OK);
+    assert(sg_request_set_max_ride_time(ctx, req_a, 100) == SG_STATUS_OK);
+
+    req_b = sg_add_request(ctx);
+    p_b = sg_add_task(ctx, SG_TASK_PICKUP);
+    d_b = sg_add_task(ctx, SG_TASK_DELIVERY);
+    assert(sg_task_set_location(ctx, p_b, 5.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_set_time_window(ctx, p_b, 0, 99999) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, p_b, 0) == SG_STATUS_OK);
+    assert(sg_task_set_demand(ctx, p_b, &demand, 1) == SG_STATUS_OK);
+    assert(sg_task_set_location(ctx, d_b, 50.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_set_time_window(ctx, d_b, 0, 99999) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, d_b, 0) == SG_STATUS_OK);
+    assert(sg_task_set_demand(ctx, d_b, &neg_demand, 1) == SG_STATUS_OK);
+    assert(sg_request_bind_pickup_delivery_tasks(ctx, req_b, p_b, d_b) == SG_STATUS_OK);
+    assert(sg_request_set_max_ride_time(ctx, req_b, 10) == SG_STATUS_OK);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 1); /* B unassigned due to ride time */
+    sg_free(ctx);
+}
+
+static void test_stop_load_pd_profile(void) {
+    /* PD request: load builds up at pickup and clears at delivery.
+       Load at stop_index = cumulative load arriving at that stop (before demand applied).
+       Pickup (stop 0): load = 0.0 (nothing loaded yet).
+       Delivery (stop 1): load = 5.0 (carrying cargo from pickup). */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v;
+    uint32_t stop_count;
+    double load_pickup, load_delivery;
+    SGSolutionStop stop0, stop1;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_pd_request(ctx, 5.0, 0.0, 0, 99999, 0,
+                   10.0, 0.0, 0, 99999, 0, 5.0);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_solution_get_route_count(ctx) == 1);
+
+    stop_count = sg_solution_get_route_stop_count(ctx, 0);
+    assert(stop_count == 2); /* pickup + delivery */
+
+    assert(sg_solution_get_route_stop(ctx, 0, 0, &stop0) == SG_STATUS_OK);
+    assert(sg_solution_get_route_stop(ctx, 0, 1, &stop1) == SG_STATUS_OK);
+    assert(stop0.stop_type == SG_STOP_TYPE_PICKUP);
+    assert(stop1.stop_type == SG_STOP_TYPE_DELIVERY);
+
+    assert(sg_solution_get_route_stop_load(ctx, 0, 0, 0, &load_pickup) == SG_STATUS_OK);
+    assert(sg_solution_get_route_stop_load(ctx, 0, 1, 0, &load_delivery) == SG_STATUS_OK);
+
+    /* Before pickup: empty vehicle */
+    assert(fabs(load_pickup) < 0.01);
+    /* After pickup / before delivery: carrying 5 units */
+    assert(fabs(load_delivery - 5.0) < 0.01);
+
+    sg_free(ctx);
+}
+
+static void test_max_duration_zero_unlimited(void) {
+    /* max_duration=0 means no limit: far delivery should still be feasible */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_delivery_request(ctx, 1000.0, 0.0, 0, 999999, 0, -1.0);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 999999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_max_duration(ctx, v, 0) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    sg_free(ctx);
+}
+
+static void test_max_ride_time_zero_unlimited(void) {
+    /* max_ride_time=0 means use TW-derived limit. Wide TW -> feasible. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v;
+    uint32_t req, p_task, d_task;
+    double demand = 1.0, neg_demand = -1.0;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    req = sg_add_request(ctx);
+    p_task = sg_add_task(ctx, SG_TASK_PICKUP);
+    d_task = sg_add_task(ctx, SG_TASK_DELIVERY);
+    assert(sg_task_set_location(ctx, p_task, 5.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_set_time_window(ctx, p_task, 0, 99999) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, p_task, 0) == SG_STATUS_OK);
+    assert(sg_task_set_demand(ctx, p_task, &demand, 1) == SG_STATUS_OK);
+    assert(sg_task_set_location(ctx, d_task, 50.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_set_time_window(ctx, d_task, 0, 99999) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, d_task, 0) == SG_STATUS_OK);
+    assert(sg_task_set_demand(ctx, d_task, &neg_demand, 1) == SG_STATUS_OK);
+    assert(sg_request_bind_pickup_delivery_tasks(ctx, req, p_task, d_task) == SG_STATUS_OK);
+    assert(sg_request_set_max_ride_time(ctx, req, 0) == SG_STATUS_OK);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -2683,7 +3671,43 @@ int main(void) {
     RUN_TEST(test_qualification_filters_solve);
     RUN_TEST(test_qualification_unassigned_when_none_qualify);
     RUN_TEST(test_qualification_pd_request);
+    RUN_TEST(test_solution_export_delivery);
+    RUN_TEST(test_solution_export_pd);
+    RUN_TEST(test_solution_export_unassigned);
+    RUN_TEST(test_solution_export_multi_vehicle);
+    /* U4: Open routes */
+    RUN_TEST(test_open_end_basic);
+    RUN_TEST(test_open_end_timing);
+    RUN_TEST(test_open_end_solution_export);
+    RUN_TEST(test_open_end_pd);
+    /* U5: Max duration and ride time */
+    RUN_TEST(test_max_duration_api);
+    RUN_TEST(test_max_duration_infeasible);
+    RUN_TEST(test_max_ride_time_explicit);
+    RUN_TEST(test_max_ride_time_default);
+    /* U6: Vehicle cost model */
+    RUN_TEST(test_vehicle_costs_api);
+    RUN_TEST(test_vehicle_costs_prefer_cheaper);
+    RUN_TEST(test_unassigned_weight);
+    /* Short-term API */
+    RUN_TEST(test_convenience_delivery_request);
+    RUN_TEST(test_convenience_pd_request);
+    RUN_TEST(test_solution_stop_load);
+    RUN_TEST(test_solution_stop_type_service);
+    RUN_TEST(test_route_duration_export);
+    /* Cross-feature and gap coverage */
+    RUN_TEST(test_cost_per_duration_preference);
+    RUN_TEST(test_open_end_max_duration_combo);
+    RUN_TEST(test_max_ride_time_with_service_time);
+    RUN_TEST(test_route_duration_open_end);
+    RUN_TEST(test_open_end_cost_model);
+    RUN_TEST(test_max_duration_multi_stop);
+    RUN_TEST(test_multi_pd_heterogeneous_ride_time);
+    RUN_TEST(test_stop_load_pd_profile);
+    RUN_TEST(test_max_duration_zero_unlimited);
+    RUN_TEST(test_max_ride_time_zero_unlimited);
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
+    assert(tests_run == 94);
     return tests_passed == tests_run ? 0 : 1;
 }

@@ -106,9 +106,16 @@ ARStatus sg_construct_state_init(const SGContext *ctx, SGConstructState *state) 
 
     for (v = 0; v < ctx->num_vehicles; v++) {
         const SGVehicleRecord *vehicle = &ctx->vehicles[v];
-        state->remaining_time_seconds[v] = vehicle->has_shift_time_window
-                                           ? (double)(vehicle->shift_late - vehicle->shift_early)
-                                           : INFINITY;
+        {
+            double shift_span = vehicle->has_shift_time_window
+                                ? (double)(vehicle->shift_late - vehicle->shift_early)
+                                : INFINITY;
+            if (vehicle->max_duration_seconds > 0 && (double)vehicle->max_duration_seconds < shift_span) {
+                state->remaining_time_seconds[v] = (double)vehicle->max_duration_seconds;
+            } else {
+                state->remaining_time_seconds[v] = shift_span;
+            }
+        }
 
         for (d = 0; d < ctx->dimension_count; d++) {
             double cap = (vehicle->has_capacity && vehicle->capacity)

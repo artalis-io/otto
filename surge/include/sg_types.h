@@ -66,4 +66,19 @@ typedef struct {
     uint32_t vehicles_used;
 } SGStats;
 
+typedef enum {
+    SG_STOP_TYPE_PICKUP = 0,
+    SG_STOP_TYPE_DELIVERY = 1,
+    SG_STOP_TYPE_SERVICE = 2
+} SGStopType;
+
+typedef struct {
+    uint32_t request_id;
+    uint32_t task_id;
+    SGStopType stop_type;
+    double arrival;
+    double service_start;
+    double departure;
+} SGSolutionStop;
+
 #endif /* SURGE_SG_TYPES_H */

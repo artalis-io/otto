@@ -22,7 +22,8 @@ int sg_route_solver_eligible(const SGContext *ctx) {
         const SGRequestRecord *request = &ctx->requests[i];
         if (request->kind == SG_REQUEST_KIND_DELIVERY_ONLY) {
             if (!request->has_delivery_task || request->delivery_task_id >= ctx->num_tasks ||
-                ctx->tasks[request->delivery_task_id].type != SG_TASK_DELIVERY) {
+                (ctx->tasks[request->delivery_task_id].type != SG_TASK_DELIVERY &&
+                 ctx->tasks[request->delivery_task_id].type != SG_TASK_SERVICE)) {
                 return 0;
             }
             continue;
@@ -259,8 +260,10 @@ ARStatus sg_route_construct_solomon_i1(SGContext *ctx, SGRouteSolution *sol) {
                         uint32_t p_loc = ctx->tasks[ctx->requests[rid].pickup_task_id].location_id;
                         uint32_t d_loc = ctx->tasks[ctx->requests[rid].delivery_task_id].location_id;
                         depot_dist = sg_travel_dist(ctx, v_start_loc, p_loc) +
-                                     sg_travel_dist(ctx, p_loc, d_loc) +
-                                     sg_travel_dist(ctx, d_loc, v_end_loc);
+                                     sg_travel_dist(ctx, p_loc, d_loc);
+                        if (!ctx->vehicles[seed_vehicle].open_end) {
+                            depot_dist += sg_travel_dist(ctx, d_loc, v_end_loc);
+                        }
                     }
                     c2 = lambda * depot_dist - c1;
                     if (c2 > best_c2) {
@@ -296,8 +299,10 @@ ARStatus sg_route_construct_solomon_i1(SGContext *ctx, SGRouteSolution *sol) {
                     {
                         uint32_t rep_loc;
                         if (sg_request_representative_location(ctx, rid, &rep_loc)) {
-                            depot_dist = sg_travel_dist(ctx, v_start_loc, rep_loc) +
-                                         sg_travel_dist(ctx, rep_loc, v_end_loc);
+                            depot_dist = sg_travel_dist(ctx, v_start_loc, rep_loc);
+                            if (!ctx->vehicles[seed_vehicle].open_end) {
+                                depot_dist += sg_travel_dist(ctx, rep_loc, v_end_loc);
+                            }
                         } else {
                             depot_dist = 0.0;
                         }
@@ -585,6 +590,12 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         ctx->stats.vehicles_used = final_sol->vehicles_used;
         ctx->stats.total_distance = final_sol->total_distance;
         ctx->stats.total_cost = sg_route_solution_cost(final_sol, ctx);
+
+        /* Retain final solution for route/stop export */
+        if (ctx->final_solution) {
+            sg_route_solution_free(ctx->final_solution, NULL);
+        }
+        ctx->final_solution = (SGRouteSolution *)sg_route_solution_copy(final_sol, (void *)ctx);
     }
 
     sg_route_solution_reset(&initial);

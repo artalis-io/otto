@@ -590,6 +590,7 @@ void sg_route_solution_reset(SGRouteSolution *sol) {
     free(sol->request_pickup_stop_pos);
     free(sol->request_delivery_stop_pos);
     free(sol->route_distance);
+    free(sol->route_duration);
     free(sol->route_stop_load);
     sol->route_lengths = NULL;
     sol->route_requests = NULL;
@@ -602,6 +603,7 @@ void sg_route_solution_reset(SGRouteSolution *sol) {
     sol->request_pickup_stop_pos = NULL;
     sol->request_delivery_stop_pos = NULL;
     sol->route_distance = NULL;
+    sol->route_duration = NULL;
     sol->route_stop_load = NULL;
     sol->num_vehicles = 0;
     sol->route_stride = 0;
@@ -670,6 +672,7 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
     sol->request_pickup_stop_pos = (uint32_t *)malloc((size_t)ctx->num_requests * sizeof(uint32_t));
     sol->request_delivery_stop_pos = (uint32_t *)malloc((size_t)ctx->num_requests * sizeof(uint32_t));
     sol->route_distance = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
+    sol->route_duration = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
 
     if (ctx->dimension_count > 0) {
         /* +1 per vehicle because load is a prefix sum: entry i holds cumulative
@@ -682,7 +685,7 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
     if (!sol->route_lengths || !sol->route_requests || !sol->route_stop_lengths ||
         !sol->route_stops || !sol->route_stop_prev || !sol->route_stop_next ||
         !sol->request_vehicle || !sol->request_pos || !sol->request_pickup_stop_pos ||
-        !sol->request_delivery_stop_pos || !sol->route_distance ||
+        !sol->request_delivery_stop_pos || !sol->route_distance || !sol->route_duration ||
         (ctx->dimension_count > 0 && !sol->route_stop_load)) {
         sg_route_solution_reset(sol);
         return AR_STATUS_OUT_OF_MEMORY;
@@ -761,6 +764,10 @@ void *sg_route_solution_copy(const void *solution, void *user_ctx) {
         memcpy(dst->route_stop_next, src->route_stop_next, stop_count * sizeof(uint32_t));
         memcpy(dst->route_distance, src->route_distance,
                (size_t)src->num_vehicles * sizeof(double));
+        if (src->route_duration && dst->route_duration) {
+            memcpy(dst->route_duration, src->route_duration,
+                   (size_t)src->num_vehicles * sizeof(double));
+        }
         if (src->route_stop_load && dst->route_stop_load && ctx->dimension_count > 0) {
             size_t load_size = (size_t)src->num_vehicles * ((size_t)src->stop_stride + 1U) *
                                (size_t)ctx->dimension_count;
@@ -813,7 +820,7 @@ int sg_route_solution_validate(const void *solution, void *user_ctx) {
          !sol->route_requests || !sol->route_stop_lengths || !sol->route_stops ||
          !sol->route_stop_prev || !sol->route_stop_next ||
          !sol->request_pickup_stop_pos || !sol->request_delivery_stop_pos ||
-         !sol->route_distance)) {
+         !sol->route_distance || !sol->route_duration)) {
         return 0;
     }
 
@@ -946,13 +953,26 @@ done:
 
 double sg_route_solution_cost(const void *solution, void *user_ctx) {
     const SGRouteSolution *sol = (const SGRouteSolution *)solution;
-    (void)user_ctx;
+    const SGContext *ctx = (const SGContext *)user_ctx;
+    double cost;
+    uint32_t v;
 
     if (!sol) {
         return INFINITY;
     }
-    return sg_route_objective_cost(sol->base.num_unassigned, sol->vehicles_used,
-                                   sol->total_distance);
+
+    cost = (double)sol->base.num_unassigned * ctx->unassigned_weight;
+    for (v = 0; v < sol->num_vehicles; v++) {
+        if (sol->route_stop_lengths[v] > 0) {
+            const SGVehicleRecord *vehicle = &ctx->vehicles[v];
+            cost += vehicle->fixed_cost;
+            cost += vehicle->cost_per_distance * sol->route_distance[v];
+            if (sol->route_duration) {
+                cost += vehicle->cost_per_duration * sol->route_duration[v];
+            }
+        }
+    }
+    return cost;
 }
 
 int sg_route_solution_size(const void *solution, void *user_ctx) {

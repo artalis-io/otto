@@ -1167,7 +1167,13 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ## Implementation Plan
 
-### Current Status (as of 2026-02-20)
+### Current Status (as of 2026-02-21)
+
+**U1-U6 + S1-S9 complete.** Solomon -0.2% avgDistGap, Li & Lim +4.1% avgDistGap at 10k iterations, all 113 benchmark solutions verified feasible. 94 unit tests passing, ASAN/UBSAN clean, benchmarks stable (56 Solomon + 57 Li & Lim).
+
+U4 (open routes), U5 (max duration + explicit ride time), U6 (vehicle cost model + configurable objective), and short-term API improvements (convenience constructors, solution stop load/type/duration export) are implemented and tested.
+
+#### Previous Status (as of 2026-02-20)
 
 Implemented and active today:
 - C domain model for depots, vehicles, tasks, requests, and multi-dimensional capacities.
@@ -1242,11 +1248,14 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 ### Phase 6: Rich Constraint Completion
 - [ ] Disjunct TW support.
 - [ ] Soft TW penalties and waiting-cost terms in objective.
-- [ ] Vehicle qualifications, commodity conflicts, exclusion groups.
-- [ ] Open routes and depot-level dispatch constraints.
+- [x] Vehicle qualifications (U2).
+- [ ] Commodity conflicts, exclusion groups.
+- [x] Open routes (U4).
+- [ ] Depot-level dispatch constraints.
+- [x] Max route duration (U5).
 - [ ] HoSE/break constraints (with Tempo/HoSE integration).
 
-- [ ] Add optional travel-time/distance matrix API and use it in construction + route feasibility.
+- [x] Add optional travel-time/distance matrix API and use it in construction + route feasibility (U1).
 - [ ] Integrate Velo matrices for realistic routing costs/times.
 - [ ] Keep Ralph exact mode for small instances as baseline verifier.
 
@@ -1384,7 +1393,7 @@ serialization — walk the solution state and emit JSON.
 
 **Complexity**: Medium. ~300 LOC. No solver changes.
 
-### Phase U4: Open Routes
+### Phase U4: Open Routes ✅
 
 **Priority**: High — field service, one-way deliveries, and ride-hailing vehicles often
 don't return to depot.
@@ -1408,7 +1417,9 @@ flag in `SGVehicleRecord`.
 
 **Complexity**: Small. ~60 LOC. Localized to feasibility kernel.
 
-### Phase U5: Max Route Duration and Explicit Max Ride Time
+**Completion**: Implemented with 4 tests (basic distance reduction, timing feasibility, solution export, PD pair). Open-end correctly excludes return leg from distance, duration, and shift TW checks. Benchmarks stable.
+
+### Phase U5: Max Route Duration and Explicit Max Ride Time ✅
 
 **Priority**: Medium-High — max route duration is a standard fleet constraint (8-hour shift
 minus break). Explicit max ride time is needed for DARP/passenger transport.
@@ -1437,7 +1448,9 @@ the explicit limit instead of the derived one.
 
 **Complexity**: Tiny. ~50 LOC.
 
-### Phase U6: Vehicle Cost Model and Configurable Objective
+**Completion**: Implemented with 4 tests (API validation, duration infeasibility, explicit ride time override, TW-derived default). `max_duration=0` means unlimited, `max_ride_time=0` falls back to TW-derived limit. Benchmarks stable.
+
+### Phase U6: Vehicle Cost Model and Configurable Objective ✅
 
 **Priority**: Medium — needed to model heterogeneous fleets where a 40t truck costs more
 than a van. Also needed for any customer who wants to minimize cost rather than distance.
@@ -1454,9 +1467,8 @@ cost = w_unassigned * unassigned_penalty
 ```c
 SGStatus sg_vehicle_set_costs(SGContext *ctx, uint32_t vehicle_id,
                                double fixed_cost, double cost_per_distance,
-                               double cost_per_hour);
-SGStatus sg_set_objective_weights(SGContext *ctx, double unassigned_weight,
-                                   double vehicle_weight);
+                               double cost_per_duration);
+SGStatus sg_set_unassigned_weight(SGContext *ctx, double weight);
 ```
 
 **Architecture fit**: `sg_route_solution_cost` and `sg_route_objective_cost` are already
@@ -1469,6 +1481,8 @@ solution state (add a `route_duration` array alongside `route_distance`).
 `sg_api.c` (JSON parsing).
 
 **Complexity**: Medium. ~200 LOC. Touches cost function used by SA acceptance — needs care.
+
+**Completion**: Implemented with 3 tests (API validation, prefer-cheaper vehicle selection, unassigned weight tradeoff). Cost model correctly drives vehicle selection via SA acceptance. Route duration tracked and exported. Benchmarks stable.
 
 ### Phase U7: Soft Time Windows (Tardiness)
 
@@ -1532,21 +1546,49 @@ a `uint64_t` bitmask is optimal. For larger fleets, a sorted array with binary s
 ### Execution Order and Dependencies
 
 ```
-U1 (travel matrix)      ──── no deps, enables realistic routing
-U2 (skills)             ──── no deps, enables fleet heterogeneity
-U3 (solution export)    ──── no deps, enables API usability
-U4 (open routes)        ──── no deps, enables field service
-U5 (duration + ride)    ──── no deps, enables shift/DARP constraints
-U6 (cost model)         ──── after U5 (needs duration tracking)
+U1 (travel matrix)      ──── ✅ complete
+U2 (skills)             ──── ✅ complete
+U3 (solution export)    ──── ✅ complete
+U4 (open routes)        ──── ✅ complete
+U5 (duration + ride)    ──── ✅ complete
+U6 (cost model)         ──── ✅ complete
 U7 (soft TW)            ──── after U6 (needs cost model for penalty integration)
 U8 (vehicle constraints)──── after U2 (same pattern, can share infrastructure)
 ```
 
-U1-U5 are independent and can be done in any order or in parallel. U6 depends on U5
-(duration tracking). U7 depends on U6 (cost model for penalties). U8 is independent but
-logically follows U2.
+U1-U6 are complete. U7 and U8 are the remaining planned phases.
 
-Recommended priority order: **U1 → U2 → U3 → U4 → U5 → U6 → U7 → U8**.
+### Production Gap Analysis
+
+With U1-U6 complete, the following gaps remain between Surge and a production-ready solver.
+Grouped by business impact:
+
+**Tier 1 — Blocking for production:**
+
+| Gap | Impact | Effort |
+|-----|--------|--------|
+| **Soft time windows (U7)** | Most real dispatchers accept small delays with cost penalty rather than hard rejection. Most invasive change — feasibility becomes bool+penalty. | Large |
+| **Disjunct time windows** | Customer availability often has multiple windows (e.g., 8-12 and 14-18). Reworks forward/backward pass to evaluate union of intervals. | Large |
+| **Driver breaks / HoS** | Legal requirement in EU/US trucking. Requires break insertion points in routes and HoSE state machine integration. | Large |
+
+**Tier 2 — High business value:**
+
+| Gap | Impact | Effort |
+|-----|--------|--------|
+| **Request-vehicle constraints (U8)** | "Driver X always serves customer Y" or zone restrictions. Simple bitmask check. | Small |
+| **Waiting cost** | Penalize early arrival. Objective term, no feasibility change. | Small |
+| **Overtime cost** | Penalize work beyond shift end. Objective term with soft shift boundary. | Small |
+| **Depot dispatch limits** | Max vehicles per depot. Global constraint — can't check locally per insertion. | Medium |
+| **Multiple trips per vehicle** | Depot reload between trips. Fundamentally different route representation. | Large |
+
+**Tier 3 — Niche / specialized:**
+
+| Gap | Impact | Effort |
+|-----|--------|--------|
+| **Commodity conflicts** | Hazmat ∉ same vehicle as food. Bitmask tracking per stop. | Medium |
+| **Exclusion groups** | Requests that cannot share a vehicle. Per-route tracking. | Medium |
+| **Sequence-dependent setup** | Cleanup time between incompatible cargo types. | Medium |
+| **Time-dependent travel** | Rush hour matrices. Multiple matrix sets indexed by departure time. | Large |
 
 ### Future (not planned yet)
 

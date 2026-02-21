@@ -207,6 +207,7 @@ SGContext *sg_create(void) {
     sg_config_default(&ctx->config);
     ctx->demand_sign_convention = SG_DEMAND_PICKUP_POSITIVE_DELIVERY_NEGATIVE;
     ctx->dimension_count = 1;
+    ctx->unassigned_weight = SG_ROUTE_OBJECTIVE_UNASSIGNED_WEIGHT;
     return ctx;
 }
 
@@ -246,6 +247,11 @@ void sg_free(SGContext *ctx) {
     ctx->travel_callback = NULL;
     ctx->travel_callback_data = NULL;
     ctx->travel_prepared = 0;
+
+    if (ctx->final_solution) {
+        sg_route_solution_free(ctx->final_solution, NULL);
+        ctx->final_solution = NULL;
+    }
 
     sh_rng_free(ctx->op_rng);
     ctx->op_rng = NULL;
@@ -432,6 +438,9 @@ uint32_t sg_add_vehicle(SGContext *ctx) {
     memset(vehicle, 0, sizeof(*vehicle));
     vehicle->start_location_id = UINT32_MAX;
     vehicle->end_location_id = UINT32_MAX;
+    vehicle->fixed_cost = SG_ROUTE_OBJECTIVE_VEHICLE_WEIGHT;
+    vehicle->cost_per_distance = 1.0;
+    vehicle->cost_per_duration = 0.0;
     vehicle->capacity = (double *)calloc((size_t)ctx->dimension_count, sizeof(double));
     if (!vehicle->capacity) {
         return UINT32_MAX;
@@ -602,7 +611,7 @@ SGStatus sg_request_bind_delivery_task(SGContext *ctx, uint32_t request_id,
 
     request = &ctx->requests[request_id];
     delivery = &ctx->tasks[delivery_task_id];
-    if (delivery->type != SG_TASK_DELIVERY) {
+    if (delivery->type != SG_TASK_DELIVERY && delivery->type != SG_TASK_SERVICE) {
         return SG_STATUS_INVALID_ARG;
     }
 
@@ -845,10 +854,11 @@ SGStatus sg_validate_model(const SGContext *ctx) {
                 return SG_STATUS_INFEASIBLE;
             }
             delivery = &ctx->tasks[request->delivery_task_id];
-            if (delivery->type != SG_TASK_DELIVERY) {
+            if (delivery->type != SG_TASK_DELIVERY && delivery->type != SG_TASK_SERVICE) {
                 return SG_STATUS_INFEASIBLE;
             }
-            if (!sg_delivery_task_demand_valid(delivery, ctx->dimension_count,
+            if (delivery->type == SG_TASK_DELIVERY &&
+                !sg_delivery_task_demand_valid(delivery, ctx->dimension_count,
                                                ctx->demand_sign_convention)) {
                 return SG_STATUS_INFEASIBLE;
             }
@@ -1029,6 +1039,122 @@ SGStatus sg_request_set_required_qualifications(SGContext *ctx, uint32_t request
     return SG_STATUS_OK;
 }
 
+SGStatus sg_vehicle_set_open_end(SGContext *ctx, uint32_t vehicle_id, int open) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->vehicles[vehicle_id].open_end = open ? 1 : 0;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_vehicle_set_max_duration(SGContext *ctx, uint32_t vehicle_id,
+                                      int32_t max_seconds) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles || max_seconds < 0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->vehicles[vehicle_id].max_duration_seconds = max_seconds;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_request_set_max_ride_time(SGContext *ctx, uint32_t request_id,
+                                       int32_t max_seconds) {
+    if (!ctx || request_id >= ctx->num_requests || max_seconds < 0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->requests[request_id].max_ride_time_seconds = max_seconds;
+    ctx->requests[request_id].has_max_ride_time = max_seconds > 0 ? 1 : 0;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_vehicle_set_costs(SGContext *ctx, uint32_t vehicle_id,
+                               double fixed_cost, double cost_per_distance,
+                               double cost_per_duration) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles ||
+        !isfinite(fixed_cost) || fixed_cost < 0.0 ||
+        !isfinite(cost_per_distance) || cost_per_distance < 0.0 ||
+        !isfinite(cost_per_duration) || cost_per_duration < 0.0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->vehicles[vehicle_id].fixed_cost = fixed_cost;
+    ctx->vehicles[vehicle_id].cost_per_distance = cost_per_distance;
+    ctx->vehicles[vehicle_id].cost_per_duration = cost_per_duration;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_set_unassigned_weight(SGContext *ctx, double weight) {
+    if (!ctx || !isfinite(weight) || weight < 0.0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->unassigned_weight = weight;
+    return SG_STATUS_OK;
+}
+
+uint32_t sg_add_delivery_request(SGContext *ctx, double x, double y,
+                                  int32_t tw_early, int32_t tw_late,
+                                  int32_t service_seconds, double demand) {
+    uint32_t req;
+    uint32_t task;
+
+    if (!ctx) {
+        return UINT32_MAX;
+    }
+
+    req = sg_add_request(ctx);
+    if (req == UINT32_MAX) return UINT32_MAX;
+
+    task = sg_add_task(ctx, SG_TASK_DELIVERY);
+    if (task == UINT32_MAX) return UINT32_MAX;
+
+    if (sg_task_set_location(ctx, task, x, y) != SG_STATUS_OK ||
+        sg_task_set_time_window(ctx, task, tw_early, tw_late) != SG_STATUS_OK ||
+        sg_task_set_service_seconds(ctx, task, service_seconds) != SG_STATUS_OK ||
+        sg_task_set_demand(ctx, task, &demand, 1) != SG_STATUS_OK ||
+        sg_request_bind_delivery_task(ctx, req, task) != SG_STATUS_OK) {
+        return UINT32_MAX;
+    }
+
+    return req;
+}
+
+uint32_t sg_add_pd_request(SGContext *ctx,
+                            double px, double py, int32_t p_early, int32_t p_late,
+                            int32_t p_svc,
+                            double dx, double dy, int32_t d_early, int32_t d_late,
+                            int32_t d_svc, double demand) {
+    uint32_t req;
+    uint32_t p_task;
+    uint32_t d_task;
+    double neg_demand;
+
+    if (!ctx) {
+        return UINT32_MAX;
+    }
+
+    neg_demand = -demand;
+    req = sg_add_request(ctx);
+    if (req == UINT32_MAX) return UINT32_MAX;
+
+    p_task = sg_add_task(ctx, SG_TASK_PICKUP);
+    if (p_task == UINT32_MAX) return UINT32_MAX;
+
+    d_task = sg_add_task(ctx, SG_TASK_DELIVERY);
+    if (d_task == UINT32_MAX) return UINT32_MAX;
+
+    if (sg_task_set_location(ctx, p_task, px, py) != SG_STATUS_OK ||
+        sg_task_set_time_window(ctx, p_task, p_early, p_late) != SG_STATUS_OK ||
+        sg_task_set_service_seconds(ctx, p_task, p_svc) != SG_STATUS_OK ||
+        sg_task_set_demand(ctx, p_task, &demand, 1) != SG_STATUS_OK ||
+        sg_task_set_location(ctx, d_task, dx, dy) != SG_STATUS_OK ||
+        sg_task_set_time_window(ctx, d_task, d_early, d_late) != SG_STATUS_OK ||
+        sg_task_set_service_seconds(ctx, d_task, d_svc) != SG_STATUS_OK ||
+        sg_task_set_demand(ctx, d_task, &neg_demand, 1) != SG_STATUS_OK ||
+        sg_request_bind_pickup_delivery_tasks(ctx, req, p_task, d_task) != SG_STATUS_OK) {
+        return UINT32_MAX;
+    }
+
+    return req;
+}
+
 static uint32_t sg_find_or_create_location(SGContext *ctx, double x, double y) {
     uint32_t i;
     uint32_t loc;
@@ -1187,4 +1313,162 @@ void sg_get_stats(const SGContext *ctx, SGStats *stats) {
         return;
     }
     *stats = ctx->stats;
+}
+
+/* ---------- Solution route/stop export ---------- */
+
+uint32_t sg_solution_get_route_count(const SGContext *ctx) {
+    const SGRouteSolution *sol;
+    uint32_t count;
+    uint32_t v;
+
+    if (!ctx || !ctx->final_solution) {
+        return 0;
+    }
+    sol = ctx->final_solution;
+    count = 0;
+    for (v = 0; v < sol->num_vehicles; v++) {
+        if (sol->route_stop_lengths[v] > 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+/* Map route_index (0..route_count-1) to vehicle_id (skip empty routes). */
+static uint32_t sg_route_index_to_vehicle(const SGRouteSolution *sol, uint32_t route_index) {
+    uint32_t count = 0;
+    uint32_t v;
+
+    for (v = 0; v < sol->num_vehicles; v++) {
+        if (sol->route_stop_lengths[v] > 0) {
+            if (count == route_index) {
+                return v;
+            }
+            count++;
+        }
+    }
+    return UINT32_MAX;
+}
+
+uint32_t sg_solution_get_route_vehicle_id(const SGContext *ctx, uint32_t route_index) {
+    if (!ctx || !ctx->final_solution) {
+        return UINT32_MAX;
+    }
+    return sg_route_index_to_vehicle(ctx->final_solution, route_index);
+}
+
+double sg_solution_get_route_distance(const SGContext *ctx, uint32_t route_index) {
+    uint32_t vid;
+
+    if (!ctx || !ctx->final_solution) {
+        return 0.0;
+    }
+    vid = sg_route_index_to_vehicle(ctx->final_solution, route_index);
+    if (vid == UINT32_MAX) {
+        return 0.0;
+    }
+    return ctx->final_solution->route_distance[vid];
+}
+
+uint32_t sg_solution_get_route_stop_count(const SGContext *ctx, uint32_t route_index) {
+    uint32_t vid;
+
+    if (!ctx || !ctx->final_solution) {
+        return 0;
+    }
+    vid = sg_route_index_to_vehicle(ctx->final_solution, route_index);
+    if (vid == UINT32_MAX) {
+        return 0;
+    }
+    return ctx->final_solution->route_stop_lengths[vid];
+}
+
+SGStatus sg_solution_get_route_stop(const SGContext *ctx, uint32_t route_index,
+                                     uint32_t stop_index, SGSolutionStop *stop_out) {
+    uint32_t vid;
+    const SGRouteStop *stops;
+    const SGRouteStop *s;
+
+    if (!ctx || !ctx->final_solution || !stop_out) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    vid = sg_route_index_to_vehicle(ctx->final_solution, route_index);
+    if (vid == UINT32_MAX) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (stop_index >= ctx->final_solution->route_stop_lengths[vid]) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    stops = sg_route_vehicle_stop_ptr_const(ctx->final_solution, vid);
+    s = &stops[stop_index];
+    stop_out->request_id = s->request_id;
+    stop_out->task_id = s->task_id;
+    if (s->task_id < ctx->num_tasks && ctx->tasks[s->task_id].type == SG_TASK_SERVICE) {
+        stop_out->stop_type = SG_STOP_TYPE_SERVICE;
+    } else {
+        stop_out->stop_type = s->is_pickup ? SG_STOP_TYPE_PICKUP : SG_STOP_TYPE_DELIVERY;
+    }
+    stop_out->arrival = s->arrival;
+    stop_out->service_start = s->service_start;
+    stop_out->departure = s->depart;
+    return SG_STATUS_OK;
+}
+
+uint32_t sg_solution_get_unassigned_request(const SGContext *ctx, uint32_t index) {
+    const SGRouteSolution *sol;
+
+    if (!ctx || !ctx->final_solution) {
+        return UINT32_MAX;
+    }
+    sol = ctx->final_solution;
+    if (index >= sol->base.num_unassigned) {
+        return UINT32_MAX;
+    }
+    return sol->base.unassigned_ids[index];
+}
+
+double sg_solution_get_route_duration(const SGContext *ctx, uint32_t route_index) {
+    uint32_t vid;
+
+    if (!ctx || !ctx->final_solution || !ctx->final_solution->route_duration) {
+        return 0.0;
+    }
+    vid = sg_route_index_to_vehicle(ctx->final_solution, route_index);
+    if (vid == UINT32_MAX) {
+        return 0.0;
+    }
+    return ctx->final_solution->route_duration[vid];
+}
+
+SGStatus sg_solution_get_route_stop_load(const SGContext *ctx, uint32_t route_index,
+                                          uint32_t stop_index, uint32_t dimension,
+                                          double *load_out) {
+    uint32_t vid;
+    const SGRouteSolution *sol;
+    size_t idx;
+
+    if (!ctx || !ctx->final_solution || !load_out) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    sol = ctx->final_solution;
+    if (!sol->route_stop_load || ctx->dimension_count == 0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (dimension >= ctx->dimension_count) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    vid = sg_route_index_to_vehicle(sol, route_index);
+    if (vid == UINT32_MAX) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (stop_index >= sol->route_stop_lengths[vid]) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    /* Load array layout: [vehicle * (stop_stride+1) * dim_count + stop * dim_count + d]
+       Entry at stop_index holds cumulative load AFTER that stop. */
+    idx = (size_t)vid * ((size_t)sol->stop_stride + 1U) * (size_t)ctx->dimension_count +
+          (size_t)stop_index * (size_t)ctx->dimension_count + (size_t)dimension;
+    *load_out = sol->route_stop_load[idx];
+    return SG_STATUS_OK;
 }

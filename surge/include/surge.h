@@ -75,6 +75,31 @@ SGStatus sg_vehicle_set_qualifications(SGContext *ctx, uint32_t vehicle_id,
 SGStatus sg_request_set_required_qualifications(SGContext *ctx, uint32_t request_id,
                                                  uint64_t qualification_flags);
 
+/* U4: Open routes */
+SGStatus sg_vehicle_set_open_end(SGContext *ctx, uint32_t vehicle_id, int open);
+
+/* U5: Max duration and explicit ride time */
+SGStatus sg_vehicle_set_max_duration(SGContext *ctx, uint32_t vehicle_id,
+                                      int32_t max_seconds);
+SGStatus sg_request_set_max_ride_time(SGContext *ctx, uint32_t request_id,
+                                       int32_t max_seconds);
+
+/* U6: Vehicle cost model */
+SGStatus sg_vehicle_set_costs(SGContext *ctx, uint32_t vehicle_id,
+                               double fixed_cost, double cost_per_distance,
+                               double cost_per_duration);
+SGStatus sg_set_unassigned_weight(SGContext *ctx, double weight);
+
+/* Convenience constructors (single-dim demand) */
+uint32_t sg_add_delivery_request(SGContext *ctx, double x, double y,
+                                  int32_t tw_early, int32_t tw_late,
+                                  int32_t service_seconds, double demand);
+uint32_t sg_add_pd_request(SGContext *ctx,
+                            double px, double py, int32_t p_early, int32_t p_late,
+                            int32_t p_svc,
+                            double dx, double dy, int32_t d_early, int32_t d_late,
+                            int32_t d_svc, double demand);
+
 SGStatus sg_validate_model(const SGContext *ctx);
 SGStatus sg_load_solomon_vrptw(SGContext *ctx, const char *file_path);
 SGStatus sg_load_li_lim_pdptw(SGContext *ctx, const char *file_path);
@@ -87,5 +112,18 @@ uint32_t sg_get_unassigned(const SGContext *ctx);
 uint32_t sg_get_used_vehicle_count(const SGContext *ctx);
 uint32_t sg_get_request_count(const SGContext *ctx);
 void sg_get_stats(const SGContext *ctx, SGStats *stats);
+
+/* Solution route/stop export (available after sg_solve returns SG_STATUS_OK) */
+uint32_t sg_solution_get_route_count(const SGContext *ctx);
+uint32_t sg_solution_get_route_vehicle_id(const SGContext *ctx, uint32_t route_index);
+double sg_solution_get_route_distance(const SGContext *ctx, uint32_t route_index);
+uint32_t sg_solution_get_route_stop_count(const SGContext *ctx, uint32_t route_index);
+SGStatus sg_solution_get_route_stop(const SGContext *ctx, uint32_t route_index,
+                                     uint32_t stop_index, SGSolutionStop *stop_out);
+double sg_solution_get_route_duration(const SGContext *ctx, uint32_t route_index);
+SGStatus sg_solution_get_route_stop_load(const SGContext *ctx, uint32_t route_index,
+                                          uint32_t stop_index, uint32_t dimension,
+                                          double *load_out);
+uint32_t sg_solution_get_unassigned_request(const SGContext *ctx, uint32_t index);
 
 #endif /* SURGE_H */
