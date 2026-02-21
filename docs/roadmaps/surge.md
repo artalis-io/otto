@@ -1169,13 +1169,13 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ### Current Status (as of 2026-02-21)
 
-**Baseline**: U1-U6 + S1-S9 complete. 94 tests passing, ASAN/UBSAN clean.
+**Baseline**: U1-U6 + U8 + S1-S9 complete. 99 tests passing, ASAN/UBSAN clean.
 
 Best measured quality (10000 iterations, deterministic seed 42):
 - Solomon (VRPTW, 56 cases): `avgVehGap=+0.38`, `avgDistGap=+0.2%`, `equalVehicles=35`, `lexiNonWorse=11`.
 - Li & Lim (PDPTW, 57 cases): `avgVehGap=+0.59`, `avgDistGap=+3.9%`, `equalVehicles=39`, `lexiNonWorse=21`.
 
-Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), convenience constructors, stop load/type/duration export.
+Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), request-vehicle constraints (U8), convenience constructors, stop load/type/duration export.
 
 #### Previous Status (as of 2026-02-20)
 
@@ -1522,7 +1522,7 @@ The insertion evaluator needs to propagate tardiness deltas.
 **Complexity**: Medium-Large. ~400 LOC. Requires careful testing — every operator comparison
 changes from pure distance to distance + penalty.
 
-### Phase U8: Request-Vehicle Constraints
+### Phase U8: Request-Vehicle Constraints ✅
 
 **Priority**: Medium — "driver X always serves customer Y" or "vehicle Z cannot enter zone W."
 
@@ -1547,6 +1547,8 @@ a `uint64_t` bitmask is optimal. For larger fleets, a sorted array with binary s
 
 **Complexity**: Small. ~100 LOC.
 
+**Completion**: Implemented with dynamically-sized bitsets (`uint64_t *` arrays, grows on demand) for both allowed and forbidden vehicles — no vehicle count limit. Forbidden takes precedence over allowed. Inline check `sg_vehicle_allowed_for_request` added at all 4 insertion sites (same pattern as U2 qualifications). 5 tests: API validation, allowed-vehicle filtering, forbidden-vehicle unassignment, PD pair constraint, large fleet (100 vehicles, constraint on V99). Benchmarks stable.
+
 ### Execution Order and Dependencies
 
 ```
@@ -1557,7 +1559,7 @@ U4 (open routes)        ──── ✅ complete
 U5 (duration + ride)    ──── ✅ complete
 U6 (cost model)         ──── ✅ complete
 U7 (soft TW)            ──── after U6 (needs cost model for penalty integration)
-U8 (vehicle constraints)──── after U2 (same pattern, can share infrastructure)
+U8 (vehicle constraints)──── ✅ complete
 ```
 
 U1-U6 are complete. U7 and U8 are the remaining planned phases.
@@ -1579,7 +1581,6 @@ Grouped by business impact:
 
 | Gap | Impact | Effort |
 |-----|--------|--------|
-| **Request-vehicle constraints (U8)** | "Driver X always serves customer Y" or zone restrictions. Simple bitmask check. | Small |
 | **Waiting cost** | Penalize early arrival. Objective term, no feasibility change. | Small |
 | **Overtime cost** | Penalize work beyond shift end. Objective term with soft shift boundary. | Small |
 | **Depot dispatch limits** | Max vehicles per depot. Global constraint — can't check locally per insertion. | Medium |

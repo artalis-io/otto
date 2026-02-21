@@ -3601,6 +3601,164 @@ static void test_max_ride_time_zero_unlimited(void) {
     sg_free(ctx);
 }
 
+/* ===== U8: Request-vehicle constraints ===== */
+
+static void test_vehicle_constraint_api(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t req;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 10, -1.0);
+    req = 0;
+
+    /* Valid calls — small vehicle IDs */
+    assert(sg_request_add_allowed_vehicle(ctx, req, 0) == SG_STATUS_OK);
+    assert(sg_request_add_allowed_vehicle(ctx, req, 1) == SG_STATUS_OK);
+    assert(sg_request_add_forbidden_vehicle(ctx, req, 0) == SG_STATUS_OK);
+    assert(sg_request_add_forbidden_vehicle(ctx, req, 1) == SG_STATUS_OK);
+
+    /* Large vehicle IDs (>= 64) work with dynamic bitset */
+    assert(sg_request_add_allowed_vehicle(ctx, req, 64) == SG_STATUS_OK);
+    assert(sg_request_add_forbidden_vehicle(ctx, req, 64) == SG_STATUS_OK);
+    assert(sg_request_add_allowed_vehicle(ctx, req, 200) == SG_STATUS_OK);
+    assert(sg_request_add_forbidden_vehicle(ctx, req, 500) == SG_STATUS_OK);
+
+    /* invalid request_id */
+    assert(sg_request_add_allowed_vehicle(ctx, 999, 0) == SG_STATUS_INVALID_ARG);
+    assert(sg_request_add_forbidden_vehicle(ctx, 999, 0) == SG_STATUS_INVALID_ARG);
+
+    /* NULL ctx */
+    assert(sg_request_add_allowed_vehicle(NULL, req, 0) == SG_STATUS_INVALID_ARG);
+    assert(sg_request_add_forbidden_vehicle(NULL, req, 0) == SG_STATUS_INVALID_ARG);
+
+    sg_free(ctx);
+}
+
+static void test_vehicle_constraint_allowed_filters(void) {
+    /* Two vehicles V0, V1. One delivery request allowed only on V1. */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);  /* V0 */
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);  /* V1 */
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 10, -1.0);
+
+    /* Allow only V1 for the request */
+    assert(sg_request_add_allowed_vehicle(ctx, 0, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Verify assigned to V1 */
+    {
+        uint32_t route_count = sg_solution_get_route_count(ctx);
+        uint32_t i;
+        assert(route_count >= 1);
+        for (i = 0; i < route_count; i++) {
+            uint32_t vid = sg_solution_get_route_vehicle_id(ctx, i);
+            uint32_t stop_count = sg_solution_get_route_stop_count(ctx, i);
+            if (stop_count > 0) {
+                assert(vid == 1);
+            }
+        }
+    }
+
+    sg_free(ctx);
+}
+
+static void test_vehicle_constraint_forbidden_unassigned(void) {
+    /* One vehicle V0. One delivery request. V0 is forbidden. */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);  /* V0 */
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 10, -1.0);
+
+    /* Forbid V0 */
+    assert(sg_request_add_forbidden_vehicle(ctx, 0, 0) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 1);
+
+    sg_free(ctx);
+}
+
+static void test_vehicle_constraint_pd_request(void) {
+    /* Two vehicles. PD request allowed only on V1. */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);  /* V0 */
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);  /* V1 */
+    add_pd_request(ctx,
+                   5.0, 0.0, 0, 99999, 10,
+                   15.0, 0.0, 0, 99999, 10,
+                   1.0);
+
+    /* Allow only V1 */
+    assert(sg_request_add_allowed_vehicle(ctx, 0, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Verify assigned to V1 */
+    {
+        uint32_t route_count = sg_solution_get_route_count(ctx);
+        uint32_t i;
+        assert(route_count >= 1);
+        for (i = 0; i < route_count; i++) {
+            uint32_t vid = sg_solution_get_route_vehicle_id(ctx, i);
+            uint32_t stop_count = sg_solution_get_route_stop_count(ctx, i);
+            if (stop_count > 0) {
+                assert(vid == 1);
+            }
+        }
+    }
+
+    sg_free(ctx);
+}
+
+static void test_vehicle_constraint_large_fleet(void) {
+    /* 100 vehicles. Delivery request allowed only on V99 (beyond uint64_t). */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t v;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    for (v = 0; v < 100; v++) {
+        add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+    }
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 10, -1.0);
+
+    /* Allow only V99 */
+    assert(sg_request_add_allowed_vehicle(ctx, 0, 99) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Verify assigned to V99 */
+    {
+        uint32_t route_count = sg_solution_get_route_count(ctx);
+        uint32_t i;
+        assert(route_count >= 1);
+        for (i = 0; i < route_count; i++) {
+            uint32_t vid = sg_solution_get_route_vehicle_id(ctx, i);
+            uint32_t stop_count = sg_solution_get_route_stop_count(ctx, i);
+            if (stop_count > 0) {
+                assert(vid == 99);
+            }
+        }
+    }
+
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -3706,8 +3864,14 @@ int main(void) {
     RUN_TEST(test_stop_load_pd_profile);
     RUN_TEST(test_max_duration_zero_unlimited);
     RUN_TEST(test_max_ride_time_zero_unlimited);
+    /* U8: Request-vehicle constraints */
+    RUN_TEST(test_vehicle_constraint_api);
+    RUN_TEST(test_vehicle_constraint_allowed_filters);
+    RUN_TEST(test_vehicle_constraint_forbidden_unassigned);
+    RUN_TEST(test_vehicle_constraint_pd_request);
+    RUN_TEST(test_vehicle_constraint_large_fleet);
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
-    assert(tests_run == 94);
+    assert(tests_run == 99);
     return tests_passed == tests_run ? 0 : 1;
 }

@@ -33,6 +33,21 @@ void sg_vehicle_records_free(SGVehicleRecord *vehicles, uint32_t count) {
     free(vehicles);
 }
 
+void sg_request_records_free(SGRequestRecord *requests, uint32_t count) {
+    uint32_t i;
+
+    if (!requests) {
+        return;
+    }
+    for (i = 0; i < count; i++) {
+        free(requests[i].allowed_vehicles);
+        requests[i].allowed_vehicles = NULL;
+        free(requests[i].forbidden_vehicles);
+        requests[i].forbidden_vehicles = NULL;
+    }
+    free(requests);
+}
+
 void sg_task_records_free(SGTaskRecord *tasks, uint32_t count) {
     uint32_t i;
 
@@ -220,7 +235,7 @@ void sg_free(SGContext *ctx) {
     ctx->depots = NULL;
     ctx->num_depots = 0;
 
-    free(ctx->requests);
+    sg_request_records_free(ctx->requests, ctx->num_requests);
     ctx->requests = NULL;
 
     free(ctx->request_hints);
@@ -1036,6 +1051,56 @@ SGStatus sg_request_set_required_qualifications(SGContext *ctx, uint32_t request
         return SG_STATUS_INVALID_ARG;
     }
     ctx->requests[request_id].required_qualifications = qualification_flags;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_request_add_allowed_vehicle(SGContext *ctx, uint32_t request_id,
+                                         uint32_t vehicle_id) {
+    SGRequestRecord *req;
+    uint32_t word = vehicle_id >> 6;
+    uint16_t needed = (uint16_t)(word + 1);
+
+    if (!ctx || request_id >= ctx->num_requests) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    req = &ctx->requests[request_id];
+
+    if (needed > req->allowed_vc_words) {
+        uint64_t *p = (uint64_t *)realloc(req->allowed_vehicles,
+                                           (size_t)needed * sizeof(uint64_t));
+        if (!p) return SG_STATUS_OUT_OF_MEMORY;
+        memset(p + req->allowed_vc_words, 0,
+               ((size_t)needed - req->allowed_vc_words) * sizeof(uint64_t));
+        req->allowed_vehicles = p;
+        req->allowed_vc_words = needed;
+    }
+
+    req->allowed_vehicles[word] |= (1ULL << (vehicle_id & 63));
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_request_add_forbidden_vehicle(SGContext *ctx, uint32_t request_id,
+                                           uint32_t vehicle_id) {
+    SGRequestRecord *req;
+    uint32_t word = vehicle_id >> 6;
+    uint16_t needed = (uint16_t)(word + 1);
+
+    if (!ctx || request_id >= ctx->num_requests) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    req = &ctx->requests[request_id];
+
+    if (needed > req->forbidden_vc_words) {
+        uint64_t *p = (uint64_t *)realloc(req->forbidden_vehicles,
+                                           (size_t)needed * sizeof(uint64_t));
+        if (!p) return SG_STATUS_OUT_OF_MEMORY;
+        memset(p + req->forbidden_vc_words, 0,
+               ((size_t)needed - req->forbidden_vc_words) * sizeof(uint64_t));
+        req->forbidden_vehicles = p;
+        req->forbidden_vc_words = needed;
+    }
+
+    req->forbidden_vehicles[word] |= (1ULL << (vehicle_id & 63));
     return SG_STATUS_OK;
 }
 

@@ -144,6 +144,10 @@ typedef struct {
     uint32_t delivery_task_id;
     uint64_t required_qualifications;
     int32_t max_ride_time_seconds;
+    uint64_t *allowed_vehicles;    /* NULL = all allowed; non-NULL = whitelist bitset */
+    uint64_t *forbidden_vehicles;  /* NULL = none forbidden; non-NULL = bitset */
+    uint16_t allowed_vc_words;     /* allocated uint64_t words for allowed_vehicles */
+    uint16_t forbidden_vc_words;   /* allocated uint64_t words for forbidden_vehicles */
     uint8_t has_pickup_task;
     uint8_t has_delivery_task;
     uint8_t has_max_ride_time;
@@ -185,6 +189,7 @@ SGRequestHint sg_request_hint_default(void);
 SGRequestRecord sg_request_record_default(void);
 int sg_task_type_valid(SGTaskType type);
 void sg_vehicle_records_free(SGVehicleRecord *vehicles, uint32_t count);
+void sg_request_records_free(SGRequestRecord *requests, uint32_t count);
 void sg_task_records_free(SGTaskRecord *tasks, uint32_t count);
 int sg_config_valid(const SGConfig *config);
 int sg_priority_policy_valid(SGPriorityRemovalPolicy policy);
@@ -217,6 +222,25 @@ static inline int sg_vehicle_qualifies(const SGContext *ctx,
     uint64_t required = ctx->requests[request_id].required_qualifications;
     if (required == 0) return 1;
     return (ctx->vehicles[vehicle_id].qualifications & required) == required;
+}
+
+/* Returns 1 if vehicle is allowed for the request, 0 otherwise. */
+static inline int sg_vehicle_allowed_for_request(const SGContext *ctx,
+                                                  uint32_t vehicle_id, uint32_t request_id) {
+    const SGRequestRecord *req = &ctx->requests[request_id];
+    uint32_t word = vehicle_id >> 6;
+    uint64_t bit = 1ULL << (vehicle_id & 63);
+    if (req->forbidden_vehicles &&
+        word < req->forbidden_vc_words &&
+        (req->forbidden_vehicles[word] & bit)) {
+        return 0;
+    }
+    if (req->allowed_vehicles) {
+        if (word >= req->allowed_vc_words || !(req->allowed_vehicles[word] & bit)) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static inline double sg_travel_dist(const SGContext *ctx, uint32_t from_loc, uint32_t to_loc) {

@@ -75,6 +75,10 @@ SGStatus sg_vehicle_set_qualifications(SGContext *ctx, uint32_t vehicle_id,
 SGStatus sg_request_set_required_qualifications(SGContext *ctx, uint32_t request_id,
                                                  uint64_t qualification_flags);
 
+/* U8: Request-vehicle constraints */
+SGStatus sg_request_add_allowed_vehicle(SGContext *ctx, uint32_t request_id, uint32_t vehicle_id);
+SGStatus sg_request_add_forbidden_vehicle(SGContext *ctx, uint32_t request_id, uint32_t vehicle_id);
+
 /* U4: Open routes */
 SGStatus sg_vehicle_set_open_end(SGContext *ctx, uint32_t vehicle_id, int open);
 
