@@ -2343,3 +2343,54 @@ Focus set: `80bau3b`, `25fv47`, `czprob`.
 Evidence: pricing time is a meaningful tail on degenerate long runs (not the primary bottleneck but still material).
 Implementation: refine pricing scan cadence/refresh behavior for large sparse degenerate bases while preserving pivot quality.
 Success gate: reduce `pricing_ms` by at least 30% on `80bau3b` without increasing iteration count by more than 10%.
+
+### 8.11 No-Regression Improvement Plan (Next Iterations)
+
+Goal: close the remaining GLPK gap by reducing (a) reinversion/refactor pressure and (b) per-iteration
+kernel cost, while preserving full NETLIB status/objective parity.
+
+Guardrails (must pass on every change):
+- `make -C ralph test`
+- `make -C ralph test-netlib-gate-small`
+- `make -C ralph test-netlib-gate`
+- Full NETLIB GLPK comparison (`--glpk`) with zero new status/objective/invalid-solution mismatches
+- Dense fallback files must remain `0` on solved comparable set
+
+Acceptance policy:
+- Promote only if geometric mean `Ralph/GLPK` time ratio improves or is neutral within noise,
+  and no required canary regresses by more than 10% wall time (`fit1p`, `nesm`, `bandm`, `scagr25`, `degen3`).
+- Any correctness mismatch or new timeout in previously passing canaries is a hard reject.
+- Tune one lever at a time (single-feature commits) to preserve attribution.
+
+Execution tracks (ordered):
+
+1. Refactor pressure control (frequency, not safety)
+   - Keep LU hard-safety refactor triggers authoritative.
+   - Tighten policy-only periodic reinversion with bounded cooldown and pressure decay in long degenerate runs.
+   - Separate telemetry counters: `policy_periodic`, `health_forced`, `safety_forced`.
+   - Target: lower policy-driven refactors on `degen3`/`fit1p` without increasing fallback or instability.
+
+2. Refactor wall-time reduction
+   - Extend incremental basis extraction fast paths (span rewrite + tail shift) to more layout-change patterns.
+   - Reduce avoidable clears/rebuilds in refactor staging buffers.
+   - Target: `refactor.all_ms` down >=20% on `fit1p` and `80bau3b`.
+
+3. Triangular solve kernel throughput
+   - Optimize hot sparse triangular paths (`solve_L*`, `solve_U*`, sparse FTRAN/BTRAN apply loops) with
+     branch-light inner loops and cache-local batching.
+   - Target: per-iteration time down >=20% on `scfxm3`/`ganges` class with stable iteration counts.
+
+4. Degeneracy stabilization without over-refactor
+   - Prefer bounded anti-degeneracy actions (short Bland hold + conservative perturb) before policy periodic reinvert.
+   - Keep explicit attempt caps to avoid long-tail stalls.
+   - Target: reduce periodic-policy refactor share on `degen3` while maintaining objective/status parity.
+
+5. Pricing-tail cleanup
+   - Continue adaptive pricing refresh tuning only after tracks 1-4 stabilize.
+   - Target: `pricing_ms` down >=20% on `80bau3b` with <=10% iteration drift.
+
+Operational cadence:
+- Run focused A/B first (`fit1p`, `nesm`, `degen3`, `bandm`, `scagr25`, plus one per-iter hotspot).
+- If focused pass, run `test-netlib-gate-small`.
+- If small gate pass, run full `test-netlib-gate`.
+- If full gate pass, refresh GLPK comparison and update baseline section with commit hash + artifact path.

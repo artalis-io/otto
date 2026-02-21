@@ -22,6 +22,8 @@ int simplex_periodic_refactor_plan_for_test(int phase,
                                             int use_bland,
                                             int degenerate_count,
                                             double feedback_bias,
+                                            int periodic_policy_cooldown,
+                                            double periodic_policy_pressure_decay,
                                             int *interval_out,
                                             double *pressure_out);
 
@@ -73,6 +75,8 @@ typedef struct {
     int use_bland;
     int degenerate_count;
     double feedback_bias;
+    int periodic_policy_cooldown;
+    double periodic_policy_pressure_decay;
     int expected_run;
     int expected_interval;
     double min_pressure;
@@ -94,6 +98,8 @@ static int run_scheduler_case(const SchedulerCase *tc) {
                                                               tc->use_bland,
                                                               tc->degenerate_count,
                                                               tc->feedback_bias,
+                                                              tc->periodic_policy_cooldown,
+                                                              tc->periodic_policy_pressure_decay,
                                                               &interval,
                                                               &pressure);
     if (interval != tc->expected_interval) {
@@ -389,6 +395,48 @@ int main(void) {
             .expected_interval = 10,
             .min_pressure = 0.99,
             .max_pressure = 1.00
+        },
+        {
+            .name = "phase2 policy cooldown skips one periodic cadence under long degeneracy",
+            .phase = 2,
+            .iter = 24,
+            .m = 1503,
+            .max_updates = 120,
+            .num_updates = 24,
+            .spike_pool_used = 10,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e4,
+            .growth_factor = 10.0,
+            .use_bland = 0,
+            .degenerate_count = 40,
+            .feedback_bias = 0.0,
+            .periodic_policy_cooldown = 12,
+            .periodic_policy_pressure_decay = 0.0,
+            .expected_run = 0,
+            .expected_interval = 24,
+            .min_pressure = 0.99,
+            .max_pressure = 1.00
+        },
+        {
+            .name = "phase2 pressure decay lowers effective periodic pressure",
+            .phase = 2,
+            .iter = 24,
+            .m = 1503,
+            .max_updates = 120,
+            .num_updates = 24,
+            .spike_pool_used = 10,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e4,
+            .growth_factor = 10.0,
+            .use_bland = 0,
+            .degenerate_count = 40,
+            .feedback_bias = 0.0,
+            .periodic_policy_cooldown = 0,
+            .periodic_policy_pressure_decay = 0.24,
+            .expected_run = 1,
+            .expected_interval = 24,
+            .min_pressure = 0.76,
+            .max_pressure = 0.76
         }
     };
 
