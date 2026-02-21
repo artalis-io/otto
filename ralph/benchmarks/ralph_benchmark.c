@@ -219,6 +219,8 @@ typedef struct {
     int refactor_reason_direction_stabilize;
     int refactor_reason_infeas_cleanup;
     int refactor_reason_other;
+    int refactor_periodic_policy;
+    int refactor_periodic_lu_health;
     int refactor_last_m;
     int refactor_last_k;
     int refactor_last_nnz_b;
@@ -235,6 +237,8 @@ typedef struct {
     int phase1_refactor_calls;
     int phase1_compute_solution_calls;
     int phase1_compute_rc_calls;
+    int phase1_refactor_periodic_policy;
+    int phase1_refactor_periodic_lu_health;
 
     double phase2_pricing_ms;
     double phase2_ratio_ms;
@@ -248,6 +252,8 @@ typedef struct {
     int phase2_refactor_calls;
     int phase2_compute_solution_calls;
     int phase2_compute_rc_calls;
+    int phase2_refactor_periodic_policy;
+    int phase2_refactor_periodic_lu_health;
 
     int lu_mkz_enabled;
     int lu_sn_enabled;
@@ -749,6 +755,8 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.refactor_reason_direction_stabilize = solver->perf_refactor_reason_direction_stabilize;
             result.refactor_reason_infeas_cleanup = solver->perf_refactor_reason_infeas_cleanup;
             result.refactor_reason_other = solver->perf_refactor_reason_other;
+            result.refactor_periodic_policy = solver->perf_refactor_periodic_policy;
+            result.refactor_periodic_lu_health = solver->perf_refactor_periodic_lu_health;
             result.refactor_last_m = solver->perf_refactor_last_m;
             result.refactor_last_k = solver->perf_refactor_last_k;
             result.refactor_last_nnz_b = solver->perf_refactor_last_nnz_B;
@@ -765,6 +773,8 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.phase1_refactor_calls = solver->perf_phase1_refactor_calls;
             result.phase1_compute_solution_calls = solver->perf_phase1_compute_solution_calls;
             result.phase1_compute_rc_calls = solver->perf_phase1_compute_rc_calls;
+            result.phase1_refactor_periodic_policy = solver->perf_phase1_refactor_periodic_policy;
+            result.phase1_refactor_periodic_lu_health = solver->perf_phase1_refactor_periodic_lu_health;
 
             result.phase2_pricing_ms = solver->perf_phase2_pricing_ms;
             result.phase2_ratio_ms = solver->perf_phase2_ratio_ms;
@@ -778,6 +788,8 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.phase2_refactor_calls = solver->perf_phase2_refactor_calls;
             result.phase2_compute_solution_calls = solver->perf_phase2_compute_solution_calls;
             result.phase2_compute_rc_calls = solver->perf_phase2_compute_rc_calls;
+            result.phase2_refactor_periodic_policy = solver->perf_phase2_refactor_periodic_policy;
+            result.phase2_refactor_periodic_lu_health = solver->perf_phase2_refactor_periodic_lu_health;
             if (solver->tableau && solver->tableau->lu) {
                 LUFactorization *lu = solver->tableau->lu;
                 result.lu_mkz_enabled = lu->mkz_enabled;
@@ -1605,6 +1617,8 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "      \"ratio_calls\": %d,\n", ralph->phase1_ratio_calls);
     fprintf(out, "      \"pivot_calls\": %d,\n", ralph->phase1_pivot_calls);
     fprintf(out, "      \"refactor_calls\": %d,\n", ralph->phase1_refactor_calls);
+    fprintf(out, "      \"refactor_periodic_policy_calls\": %d,\n", ralph->phase1_refactor_periodic_policy);
+    fprintf(out, "      \"refactor_lu_health_calls\": %d,\n", ralph->phase1_refactor_periodic_lu_health);
     fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase1_compute_solution_calls);
     fprintf(out, "      \"compute_reduced_costs_calls\": %d\n", ralph->phase1_compute_rc_calls);
     fprintf(out, "    },\n");
@@ -1619,6 +1633,8 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "      \"ratio_calls\": %d,\n", ralph->phase2_ratio_calls);
     fprintf(out, "      \"pivot_calls\": %d,\n", ralph->phase2_pivot_calls);
     fprintf(out, "      \"refactor_calls\": %d,\n", ralph->phase2_refactor_calls);
+    fprintf(out, "      \"refactor_periodic_policy_calls\": %d,\n", ralph->phase2_refactor_periodic_policy);
+    fprintf(out, "      \"refactor_lu_health_calls\": %d,\n", ralph->phase2_refactor_periodic_lu_health);
     fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase2_compute_solution_calls);
     fprintf(out, "      \"compute_reduced_costs_calls\": %d\n", ralph->phase2_compute_rc_calls);
     fprintf(out, "    }\n");
@@ -1646,7 +1662,9 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"reason_update_recovery\": %d,\n", ralph->refactor_reason_update_recovery);
     fprintf(out, "    \"reason_direction_stabilize\": %d,\n", ralph->refactor_reason_direction_stabilize);
     fprintf(out, "    \"reason_infeasibility_cleanup\": %d,\n", ralph->refactor_reason_infeas_cleanup);
-    fprintf(out, "    \"reason_other\": %d\n", ralph->refactor_reason_other);
+    fprintf(out, "    \"reason_other\": %d,\n", ralph->refactor_reason_other);
+    fprintf(out, "    \"periodic_policy_count\": %d,\n", ralph->refactor_periodic_policy);
+    fprintf(out, "    \"periodic_lu_health_count\": %d\n", ralph->refactor_periodic_lu_health);
     fprintf(out, "  },\n");
 
     /* LU telemetry (Markowitz/sparse fallback diagnostics) */
