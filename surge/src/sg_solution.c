@@ -425,6 +425,7 @@ int sg_route_rebuild_vehicle_stop_state(const SGContext *ctx, SGRouteSolution *s
         stops[r].depart = 0.0;
         stops[r].latest_start = 0.0;
         stops[r].forward_slack = 0.0;
+        stops[r].work_since_break = 0.0;
         prev[r] = UINT32_MAX;
         next[r] = UINT32_MAX;
     }
@@ -613,6 +614,10 @@ void sg_route_solution_reset(SGRouteSolution *sol) {
     free(sol->route_depot_return);
     free(sol->route_commodities);
     free(sol->route_exclusion_counts);
+    free(sol->route_break_time);
+    free(sol->route_break_count);
+    free(sol->route_total_work);
+    free(sol->route_breaks);
     sol->route_lengths = NULL;
     sol->route_requests = NULL;
     sol->route_stop_lengths = NULL;
@@ -633,6 +638,11 @@ void sg_route_solution_reset(SGRouteSolution *sol) {
     sol->route_depot_return = NULL;
     sol->route_commodities = NULL;
     sol->route_exclusion_counts = NULL;
+    sol->route_break_time = NULL;
+    sol->route_break_count = NULL;
+    sol->route_total_work = NULL;
+    sol->route_breaks = NULL;
+    sol->break_stride = 0;
     sol->num_vehicles = 0;
     sol->route_stride = 0;
     sol->stop_stride = 0;
@@ -723,12 +733,21 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
             (size_t)ctx->num_vehicles * (size_t)ctx->num_exclusion_groups, sizeof(uint32_t));
     }
 
+    sol->route_break_time = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
+    sol->route_break_count = (uint32_t *)calloc((size_t)ctx->num_vehicles, sizeof(uint32_t));
+    sol->route_total_work = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
+    sol->break_stride = sol->stop_stride;
+    sol->route_breaks = (SGRouteBreak *)calloc(
+        (size_t)ctx->num_vehicles * (size_t)sol->break_stride, sizeof(SGRouteBreak));
+
     if (!sol->route_lengths || !sol->route_requests || !sol->route_stop_lengths ||
         !sol->route_stops || !sol->route_stop_prev || !sol->route_stop_next ||
         !sol->request_vehicle || !sol->request_pos || !sol->request_pickup_stop_pos ||
         !sol->request_delivery_stop_pos || !sol->route_distance || !sol->route_duration ||
         !sol->route_waiting || !sol->route_overtime || !sol->route_tw_penalty ||
         !sol->route_depot_depart || !sol->route_depot_return ||
+        !sol->route_break_time || !sol->route_break_count || !sol->route_total_work ||
+        !sol->route_breaks ||
         (ctx->dimension_count > 0 && !sol->route_stop_load) ||
         (ctx->num_commodities > 0 && !sol->route_commodities) ||
         (ctx->num_exclusion_groups > 0 && !sol->route_exclusion_counts)) {
@@ -747,6 +766,7 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
         sol->route_stops[i].depart = 0.0;
         sol->route_stops[i].latest_start = 0.0;
         sol->route_stops[i].forward_slack = 0.0;
+        sol->route_stops[i].work_since_break = 0.0;
     }
 
     for (i = 0; i < ctx->num_requests; i++) {
@@ -846,6 +866,22 @@ void *sg_route_solution_copy(const void *solution, void *user_ctx) {
             ctx->num_exclusion_groups > 0) {
             memcpy(dst->route_exclusion_counts, src->route_exclusion_counts,
                    (size_t)src->num_vehicles * (size_t)ctx->num_exclusion_groups * sizeof(uint32_t));
+        }
+        if (src->route_break_time && dst->route_break_time) {
+            memcpy(dst->route_break_time, src->route_break_time,
+                   (size_t)src->num_vehicles * sizeof(double));
+        }
+        if (src->route_break_count && dst->route_break_count) {
+            memcpy(dst->route_break_count, src->route_break_count,
+                   (size_t)src->num_vehicles * sizeof(uint32_t));
+        }
+        if (src->route_total_work && dst->route_total_work) {
+            memcpy(dst->route_total_work, src->route_total_work,
+                   (size_t)src->num_vehicles * sizeof(double));
+        }
+        if (src->route_breaks && dst->route_breaks && src->break_stride > 0) {
+            memcpy(dst->route_breaks, src->route_breaks,
+                   (size_t)src->num_vehicles * (size_t)src->break_stride * sizeof(SGRouteBreak));
         }
     }
 

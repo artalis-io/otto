@@ -119,6 +119,13 @@ SGStatus sg_vehicle_set_depot_loading_seconds(SGContext *ctx, uint32_t vehicle_i
 SGStatus sg_vehicle_set_depot_unloading_seconds(SGContext *ctx, uint32_t vehicle_id,
                                                  int32_t seconds);
 
+/* Break policy */
+SGStatus sg_vehicle_set_break_policy(SGContext *ctx, uint32_t vehicle_id,
+                                      int32_t max_work_seconds,
+                                      int32_t break_duration_seconds);
+SGStatus sg_vehicle_set_max_total_work(SGContext *ctx, uint32_t vehicle_id,
+                                        int32_t max_total_work_seconds);
+
 SGStatus sg_set_unassigned_weight(SGContext *ctx, double weight);
 
 /* Per-request drop penalty */
@@ -187,6 +194,15 @@ SGStatus sg_solution_get_route_stop_load(const SGContext *ctx, uint32_t route_in
                                           uint32_t stop_index, uint32_t dimension,
                                           double *load_out);
 uint32_t sg_solution_get_unassigned_request(const SGContext *ctx, uint32_t index);
+
+/* Break solution export */
+double sg_solution_get_route_break_time(const SGContext *ctx, uint32_t route_index);
+uint32_t sg_solution_get_route_break_count(const SGContext *ctx, uint32_t route_index);
+SGStatus sg_solution_get_route_break(const SGContext *ctx, uint32_t route_index,
+                                      uint32_t break_index,
+                                      uint32_t *after_stop_index_out,
+                                      double *start_out, double *duration_out);
+double sg_solution_get_route_total_work(const SGContext *ctx, uint32_t route_index);
 
 /* Per-operator telemetry */
 typedef struct {

@@ -492,6 +492,26 @@ static int build_vehicles(SGContext *ctx, const ShJsonValue *vehicles_arr) {
                 return -1;
             }
         }
+
+        /* Break policy */
+        {
+            ShJsonValue *bmw = sh_json_get(veh, "break_max_work_seconds");
+            ShJsonValue *bds = sh_json_get(veh, "break_duration_seconds");
+            if (bmw || bds) {
+                int32_t mw = bmw ? sh_json_as_int(bmw, 0) : 0;
+                int32_t bd = bds ? sh_json_as_int(bds, 0) : 0;
+                if (sg_vehicle_set_break_policy(ctx, id, mw, bd) != SG_STATUS_OK) {
+                    return -1;
+                }
+            }
+        }
+
+        v = sh_json_get(veh, "max_total_work_seconds");
+        if (v) {
+            if (sg_vehicle_set_max_total_work(ctx, id, sh_json_as_int(v, 0)) != SG_STATUS_OK) {
+                return -1;
+            }
+        }
     }
 
     return 0;
@@ -1011,6 +1031,35 @@ SGStatus sg_api_write_solution(const SGContext *ctx, ShJsonWriter *w,
                 sg_solution_get_route_overtime(ctx, ri), 2);
             sh_json_write_kv_double_fmt(w, "tw_penalty",
                 sg_solution_get_route_tw_penalty(ctx, ri), 2);
+            sh_json_write_kv_double_fmt(w, "break_time",
+                sg_solution_get_route_break_time(ctx, ri), 2);
+            sh_json_write_kv_int(w, "break_count",
+                sg_solution_get_route_break_count(ctx, ri));
+            sh_json_write_kv_double_fmt(w, "total_work",
+                sg_solution_get_route_total_work(ctx, ri), 2);
+
+            /* Break position records */
+            {
+                uint32_t bc = sg_solution_get_route_break_count(ctx, ri);
+                if (bc > 0) {
+                    uint32_t bi;
+                    sh_json_write_key(w, "breaks");
+                    sh_json_write_array_start(w);
+                    for (bi = 0; bi < bc; bi++) {
+                        uint32_t after_stop;
+                        double bstart, bdur;
+                        if (sg_solution_get_route_break(ctx, ri, bi,
+                                &after_stop, &bstart, &bdur) == SG_STATUS_OK) {
+                            sh_json_write_object_start(w);
+                            sh_json_write_kv_int(w, "after_stop_index", after_stop);
+                            sh_json_write_kv_double_fmt(w, "start", bstart, 2);
+                            sh_json_write_kv_double_fmt(w, "duration", bdur, 2);
+                            sh_json_write_object_end(w);
+                        }
+                    }
+                    sh_json_write_array_end(w);
+                }
+            }
 
             sh_json_write_key(w, "stops");
             sh_json_write_array_start(w);

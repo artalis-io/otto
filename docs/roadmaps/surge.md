@@ -1170,9 +1170,9 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ### Current Status (as of 2026-02-22)
 
-**Baseline**: U1-U8 + S1-S9 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups complete. All usability phases done. 129 tests passing, ASAN/UBSAN clean. Benchmarks unchanged from previous baseline (commodity conflicts and exclusion groups not active in benchmark instances — zero impact on existing behavior).
+**Baseline**: U1-U8 + S1-S9 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks complete. All Tier 1 production gaps closed. 197 tests passing, ASAN/UBSAN clean. Benchmarks unchanged from previous baseline (breaks not active in benchmark instances — zero impact on existing behavior).
 
-Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), soft time windows (U7), request-vehicle constraints (U8), disjunct time windows, waiting cost (per-vehicle `cost_per_waiting`), overtime cost (per-vehicle `cost_per_overtime` with soft shift), convenience constructors, stop load/type/duration export, depot dock capacity (per-depot `max_simultaneous` with sweep-line overlap penalty), commodity conflicts (bitmask-based, up to 64 types, O(1) conflict check), exclusion groups (at most one request per group per vehicle).
+Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), soft time windows (U7), request-vehicle constraints (U8), disjunct time windows, waiting cost (per-vehicle `cost_per_waiting`), overtime cost (per-vehicle `cost_per_overtime` with soft shift), convenience constructors, stop load/type/duration export, depot dock capacity (per-depot `max_simultaneous` with sweep-line overlap penalty), commodity conflicts (bitmask-based, up to 64 types, O(1) conflict check), exclusion groups (at most one request per group per vehicle), mandatory breaks (abstract `max_continuous_work` / `break_duration` / `max_total_work` per vehicle, break injection in timing forward pass, break position export).
 
 #### Previous Status (as of 2026-02-22)
 
@@ -1278,7 +1278,7 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - [x] Open routes (U4).
 - [x] Depot dock capacity (sweep-line overlap penalty).
 - [x] Max route duration (U5).
-- [ ] HoSE/break constraints (with Tempo/HoSE integration).
+- [x] Mandatory breaks (abstract `max_continuous_work` / `break_duration` / `max_total_work` per vehicle).
 
 - [x] Add optional travel-time/distance matrix API and use it in construction + route feasibility (U1).
 - [ ] Integrate Velo matrices for realistic routing costs/times.
@@ -1601,7 +1601,7 @@ Grouped by business impact:
 | **Disjunct time windows** | ✅ Complete | Per-task multiple non-overlapping hard TWs with gap snapping. 6 tests. |
 | **JSON API completeness** | ✅ Complete | All C API features exposed via JSON. `sg_api_build_model`, `sg_api_build_model_file`, `sg_api_write_solution`. 10 tests. |
 | **Error diagnostics** | ✅ Complete | `sg_get_last_error()` with descriptive validation messages. Entity-level errors (depot, vehicle, request). 2 tests. |
-| **Driver breaks / HoS** | Not started | Legal requirement in EU/US trucking. Requires break insertion points in routes and HoSE state machine integration. |
+| **Driver breaks / HoS** | ✅ Complete | Abstract break model: per-vehicle `max_continuous_work`, `break_duration`, `max_total_work`. Breaks injected during timing forward pass (not as stops). Break position export for reporting. 14 tests. |
 
 **Tier 2 — High business value:**
 
@@ -1648,7 +1648,7 @@ The JSON API provides three tiers of access:
 | `exclusion_groups` | Group count | `sg_add_exclusion_group` |
 | `setup_times` | Class matrix | `sg_set_num_setup_classes`, `sg_set_setup_time` |
 | `depots` | Depot definitions | `sg_add_depot`, `sg_depot_set_location`, `sg_depot_set_max_simultaneous` |
-| `vehicles` | Fleet with costs | `sg_add_vehicle`, `sg_vehicle_set_*` (all cost/constraint fields) |
+| `vehicles` | Fleet with costs | `sg_add_vehicle`, `sg_vehicle_set_*` (all cost/constraint/break fields) |
 | `tasks` | Stops with TWs | `sg_add_task`, `sg_task_set_*` (soft TW, disjunct TW) |
 | `requests` | PD pairs + constraints | `sg_add_*_request`, `sg_request_set_*` (qualifications, ride time, vehicle constraints, commodity, exclusion, setup, drop penalty) |
 | `travel` | Distance/duration matrices | `sg_set_travel_matrix` |
@@ -1661,7 +1661,7 @@ These are real-world features that require larger architectural changes:
 
 | Feature | Why deferred |
 |---------|-------------|
-| **Driver breaks / HoSE** | Requires break insertion points in routes, variable-length stop sequences, HoSE state machine |
+| **Driver breaks / HoSE** | ✅ Complete. Abstract break model implemented without HoSE state machine — generic `(max_work, break_duration, max_total_work)` maps to both EU EC 561 and US FMCSA rules. |
 | **Multiple trips** | Requires multi-route-per-vehicle state, depot reload modeling, fundamentally different route representation |
 | **Time-dependent travel** | Rush hour matrices indexed by departure time. Matrix interpolation in feasibility kernel. |
 

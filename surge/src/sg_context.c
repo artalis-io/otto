@@ -1489,6 +1489,34 @@ SGStatus sg_vehicle_set_depot_unloading_seconds(SGContext *ctx, uint32_t vehicle
     return SG_STATUS_OK;
 }
 
+SGStatus sg_vehicle_set_break_policy(SGContext *ctx, uint32_t vehicle_id,
+                                      int32_t max_work_seconds,
+                                      int32_t break_duration_seconds) {
+    SGVehicleRecord *vehicle;
+
+    if (!ctx || vehicle_id >= ctx->num_vehicles) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (max_work_seconds < 0 || break_duration_seconds < 0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    vehicle = &ctx->vehicles[vehicle_id];
+    vehicle->break_max_work_seconds = max_work_seconds;
+    vehicle->break_duration_seconds = break_duration_seconds;
+    vehicle->has_break_policy = (max_work_seconds > 0 && break_duration_seconds > 0) ? 1 : 0;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_vehicle_set_max_total_work(SGContext *ctx, uint32_t vehicle_id,
+                                        int32_t max_total_work_seconds) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles || max_total_work_seconds < 0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->vehicles[vehicle_id].max_total_work_seconds = max_total_work_seconds;
+    return SG_STATUS_OK;
+}
+
 SGStatus sg_task_set_soft_time_window(SGContext *ctx, uint32_t task_id,
                                       int32_t early, int32_t late,
                                       double early_penalty, double late_penalty) {
@@ -2104,4 +2132,72 @@ SGStatus sg_solution_get_route_stop_load(const SGContext *ctx, uint32_t route_in
           (size_t)stop_index * (size_t)ctx->dimension_count + (size_t)dimension;
     *load_out = sol->route_stop_load[idx];
     return SG_STATUS_OK;
+}
+
+double sg_solution_get_route_break_time(const SGContext *ctx, uint32_t route_index) {
+    uint32_t vid;
+
+    if (!ctx || !ctx->final_solution || !ctx->final_solution->route_break_time) {
+        return 0.0;
+    }
+    vid = sg_route_index_to_vehicle(ctx->final_solution, route_index);
+    if (vid == UINT32_MAX) {
+        return 0.0;
+    }
+    return ctx->final_solution->route_break_time[vid];
+}
+
+uint32_t sg_solution_get_route_break_count(const SGContext *ctx, uint32_t route_index) {
+    uint32_t vid;
+
+    if (!ctx || !ctx->final_solution || !ctx->final_solution->route_break_count) {
+        return 0;
+    }
+    vid = sg_route_index_to_vehicle(ctx->final_solution, route_index);
+    if (vid == UINT32_MAX) {
+        return 0;
+    }
+    return ctx->final_solution->route_break_count[vid];
+}
+
+SGStatus sg_solution_get_route_break(const SGContext *ctx, uint32_t route_index,
+                                      uint32_t break_index,
+                                      uint32_t *after_stop_index_out,
+                                      double *start_out, double *duration_out) {
+    uint32_t vid;
+    const SGRouteSolution *sol;
+    const SGRouteBreak *brk;
+
+    if (!ctx || !ctx->final_solution) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    sol = ctx->final_solution;
+    if (!sol->route_breaks || !sol->route_break_count) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    vid = sg_route_index_to_vehicle(sol, route_index);
+    if (vid == UINT32_MAX) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (break_index >= sol->route_break_count[vid]) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    brk = &sol->route_breaks[(size_t)vid * sol->break_stride + break_index];
+    if (after_stop_index_out) *after_stop_index_out = brk->after_stop_index;
+    if (start_out) *start_out = brk->start_time;
+    if (duration_out) *duration_out = brk->duration;
+    return SG_STATUS_OK;
+}
+
+double sg_solution_get_route_total_work(const SGContext *ctx, uint32_t route_index) {
+    uint32_t vid;
+
+    if (!ctx || !ctx->final_solution || !ctx->final_solution->route_total_work) {
+        return 0.0;
+    }
+    vid = sg_route_index_to_vehicle(ctx->final_solution, route_index);
+    if (vid == UINT32_MAX) {
+        return 0.0;
+    }
+    return ctx->final_solution->route_total_work[vid];
 }

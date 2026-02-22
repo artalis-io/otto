@@ -56,7 +56,14 @@ typedef struct {
     double depart;         /* service_start + service_seconds */
     double latest_start;   /* latest feasible service start (backward pass) */
     double forward_slack;  /* latest_start - service_start */
+    double work_since_break;  /* accumulated work since last break, at departure */
 } SGRouteStop;
+
+typedef struct {
+    uint32_t after_stop_index;  /* UINT32_MAX = before first stop */
+    double start_time;
+    double duration;
+} SGRouteBreak;
 
 typedef struct {
     SGBootstrapSolution base;
@@ -87,6 +94,13 @@ typedef struct {
     double *route_depot_return;   /* [num_vehicles] — return time at end depot (0.0 for open-end/empty) */
     uint64_t *route_commodities;       /* [num_vehicles] bitset of commodity IDs on route */
     uint32_t *route_exclusion_counts;  /* [num_vehicles * num_exclusion_groups] count per group per route */
+
+    /* Break policy metrics */
+    double *route_break_time;       /* [num_vehicles] total break time on route */
+    uint32_t *route_break_count;    /* [num_vehicles] number of breaks on route */
+    double *route_total_work;       /* [num_vehicles] total work time on route */
+    SGRouteBreak *route_breaks;     /* [num_vehicles * break_stride] break position records */
+    uint32_t break_stride;          /* = stop_stride (safe upper bound) */
 } SGRouteSolution;
 
 typedef struct {
@@ -138,6 +152,12 @@ typedef struct {
     double cost_per_overtime;
     int32_t depot_loading_seconds;    /* 0 = instant. Time to load at start depot before departure. */
     int32_t depot_unloading_seconds;  /* 0 = instant. Time to unload at end depot after return. */
+
+    /* Break policy */
+    int32_t break_max_work_seconds;     /* 0 = disabled. Max continuous work before mandatory break. */
+    int32_t break_duration_seconds;     /* Duration of each mandatory break. */
+    int32_t max_total_work_seconds;     /* 0 = disabled. Max cumulative work (driving+service) per route. */
+    uint8_t has_break_policy;           /* 1 if break cycle is active */
 } SGVehicleRecord;
 
 typedef struct {

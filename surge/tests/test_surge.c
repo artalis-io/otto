@@ -6912,6 +6912,453 @@ static void test_json_api_validation_error(void) {
     free(resp);
 }
 
+/* ===== Break policy tests ===== */
+
+static void test_break_policy_api(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t v;
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+
+    /* Valid break policy */
+    assert(sg_vehicle_set_break_policy(ctx, v, 16200, 2700) == SG_STATUS_OK);
+
+    /* Zero max_work clears */
+    assert(sg_vehicle_set_break_policy(ctx, v, 0, 2700) == SG_STATUS_OK);
+
+    /* Zero break_dur clears */
+    assert(sg_vehicle_set_break_policy(ctx, v, 16200, 0) == SG_STATUS_OK);
+
+    /* Negative rejected */
+    assert(sg_vehicle_set_break_policy(ctx, v, -1, 2700) != SG_STATUS_OK);
+    assert(sg_vehicle_set_break_policy(ctx, v, 16200, -1) != SG_STATUS_OK);
+
+    /* Invalid vehicle */
+    assert(sg_vehicle_set_break_policy(ctx, 999, 16200, 2700) != SG_STATUS_OK);
+
+    sg_free(ctx);
+}
+
+static void test_break_no_policy_unchanged(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 100000) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 100.0);
+    add_delivery_request(ctx, 50.0, 0.0, 0, 100000, 0, -1.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* No break policy -> zero break metrics */
+    assert(sg_solution_get_route_count(ctx) > 0);
+    assert(sg_solution_get_route_break_time(ctx, 0) == 0.0);
+    assert(sg_solution_get_route_break_count(ctx, 0) == 0);
+    /* total_work should be > 0 (driving) */
+    assert(sg_solution_get_route_total_work(ctx, 0) > 0.0);
+
+    sg_free(ctx);
+}
+
+static void test_break_single_break(void) {
+    /* Open-end vehicle, delivery at (40,0), max_work=30, break_dur=10 */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t v;
+    double cap = 100.0;
+    SGSolutionStop stop;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 100000) == SG_STATUS_OK);
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 100000) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_open_end(ctx, v, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_break_policy(ctx, v, 30, 10) == SG_STATUS_OK);
+
+    add_delivery_request(ctx, 40.0, 0.0, 0, 100000, 0, -1.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* 1 break during 40-unit travel (40 > 30) */
+    assert(sg_solution_get_route_break_count(ctx, 0) == 1);
+    assert(fabs(sg_solution_get_route_break_time(ctx, 0) - 10.0) < 0.01);
+    assert(fabs(sg_solution_get_route_total_work(ctx, 0) - 40.0) < 0.01);
+
+    /* Arrival at stop should be 50 (40 travel + 10 break) */
+    assert(sg_solution_get_route_stop(ctx, 0, 0, &stop) == SG_STATUS_OK);
+    assert(fabs(stop.arrival - 50.0) < 0.01);
+
+    sg_free(ctx);
+}
+
+static void test_break_multiple_breaks(void) {
+    /* Open-end, delivery at (100,0), max_work=30, break_dur=10 */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t v;
+    double cap = 100.0;
+    SGSolutionStop stop;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 100000) == SG_STATUS_OK);
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 100000) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_open_end(ctx, v, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_break_policy(ctx, v, 30, 10) == SG_STATUS_OK);
+
+    add_delivery_request(ctx, 100.0, 0.0, 0, 100000, 0, -1.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* 100 units travel, max_work=30: 3 breaks (100/30 = 3.33, floor 3) */
+    assert(sg_solution_get_route_break_count(ctx, 0) == 3);
+    assert(fabs(sg_solution_get_route_break_time(ctx, 0) - 30.0) < 0.01);
+
+    /* Arrival = 30 + 100 = 130 */
+    assert(sg_solution_get_route_stop(ctx, 0, 0, &stop) == SG_STATUS_OK);
+    assert(fabs(stop.arrival - 130.0) < 0.01);
+
+    sg_free(ctx);
+}
+
+static void test_break_waiting_not_work(void) {
+    /* Delivery at (20,0), TW [1000, 5000] -> large wait
+       max_work=50 -> total work = 20 (travel) < 50, no breaks
+       Even though duration >> 50 due to waiting */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t v;
+    double cap = 100.0;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 100000) == SG_STATUS_OK);
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 100000) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_open_end(ctx, v, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_break_policy(ctx, v, 50, 100) == SG_STATUS_OK);
+
+    add_delivery_request(ctx, 20.0, 0.0, 1000, 5000, 0, -1.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* No breaks: work = 20 < 50 */
+    assert(sg_solution_get_route_break_count(ctx, 0) == 0);
+    assert(sg_solution_get_route_break_time(ctx, 0) == 0.0);
+    assert(fabs(sg_solution_get_route_total_work(ctx, 0) - 20.0) < 0.01);
+
+    sg_free(ctx);
+}
+
+static void test_break_infeasible(void) {
+    /* Delivery at (50,0), TW [0, 55], max_work=30, break_dur=20
+       Without breaks: arrive at 50, OK. With break: arrive at 70 > 55 -> unassigned */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    uint32_t v;
+    double cap = 100.0;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 100000) == SG_STATUS_OK);
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 100000) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_open_end(ctx, v, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_break_policy(ctx, v, 30, 20) == SG_STATUS_OK);
+
+    /* TW is tight: 50-unit travel + 20 break = 70 > 55 */
+    add_delivery_request(ctx, 50.0, 0.0, 0, 55, 0, -1.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 1);
+
+    sg_free(ctx);
+}
+
+static void test_break_slack_correct(void) {
+    /* Two stops, breaks between them. Verify solution is valid */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    uint32_t v;
+    double cap = 100.0;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 100000) == SG_STATUS_OK);
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 100000) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_break_policy(ctx, v, 25, 5) == SG_STATUS_OK);
+
+    add_delivery_request(ctx, 20.0, 0.0, 0, 100000, 10, -1.0);
+    add_delivery_request(ctx, 30.0, 0.0, 0, 100000, 10, -1.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Should have breaks (total work: 20+10+10+10+30=80, max_work=25) */
+    assert(sg_solution_get_route_break_count(ctx, 0) > 0);
+    assert(sg_solution_get_route_break_time(ctx, 0) > 0.0);
+
+    sg_free(ctx);
+}
+
+static void test_break_export(void) {
+    /* Open-end, delivery at (40,0), max_work=30, break_dur=10 -> 1 break */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t v;
+    double cap = 100.0;
+    uint32_t after_stop;
+    double bstart, bdur;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 100000) == SG_STATUS_OK);
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 100000) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_open_end(ctx, v, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_break_policy(ctx, v, 30, 10) == SG_STATUS_OK);
+
+    add_delivery_request(ctx, 40.0, 0.0, 0, 100000, 0, -1.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Check break record export */
+    assert(sg_solution_get_route_break_count(ctx, 0) == 1);
+
+    assert(sg_solution_get_route_break(ctx, 0, 0, &after_stop, &bstart, &bdur) == SG_STATUS_OK);
+
+    /* Break during travel from depot to stop -> after_stop = UINT32_MAX */
+    assert(after_stop == UINT32_MAX);
+    assert(fabs(bdur - 10.0) < 0.01);
+    /* Break starts at time 30 (after 30 units of work) */
+    assert(fabs(bstart - 30.0) < 0.01);
+
+    /* Invalid break index */
+    assert(sg_solution_get_route_break(ctx, 0, 1, &after_stop, &bstart, &bdur) != SG_STATUS_OK);
+
+    /* total_work export */
+    assert(fabs(sg_solution_get_route_total_work(ctx, 0) - 40.0) < 0.01);
+
+    sg_free(ctx);
+}
+
+static void test_max_total_work_api(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t v;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+
+    /* Valid */
+    assert(sg_vehicle_set_max_total_work(ctx, v, 32400) == SG_STATUS_OK);
+
+    /* Zero disables */
+    assert(sg_vehicle_set_max_total_work(ctx, v, 0) == SG_STATUS_OK);
+
+    /* Negative rejected */
+    assert(sg_vehicle_set_max_total_work(ctx, v, -1) != SG_STATUS_OK);
+
+    /* Invalid vehicle */
+    assert(sg_vehicle_set_max_total_work(ctx, 999, 32400) != SG_STATUS_OK);
+
+    sg_free(ctx);
+}
+
+static void test_max_total_work_rejects(void) {
+    /* Delivery at (20,0), return trip -> total_work = 20+20 = 40
+       max_total_work = 30 -> request should be unassigned */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    uint32_t v;
+    double cap = 100.0;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 100000) == SG_STATUS_OK);
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 100000) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_max_total_work(ctx, v, 30) == SG_STATUS_OK);
+
+    add_delivery_request(ctx, 20.0, 0.0, 0, 100000, 0, -1.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 1);
+
+    sg_free(ctx);
+}
+
+/* --- Integration tests --- */
+
+static void test_break_solver_basic(void) {
+    /* Multiple deliveries with break policy, solver should handle */
+    SGContext *ctx = make_config(2000, 42);
+    uint32_t depot;
+    uint32_t v;
+    double cap = 100.0;
+    uint32_t ri;
+    double total_break_time = 0.0;
+    uint32_t total_break_count = 0;
+    uint32_t rc;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 100000) == SG_STATUS_OK);
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 100000) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_break_policy(ctx, v, 100, 15) == SG_STATUS_OK);
+
+    /* 5 deliveries spread along x-axis */
+    add_delivery_request(ctx, 30.0, 0.0, 0, 100000, 20, -1.0);
+    add_delivery_request(ctx, 60.0, 0.0, 0, 100000, 20, -1.0);
+    add_delivery_request(ctx, 90.0, 0.0, 0, 100000, 20, -1.0);
+    add_delivery_request(ctx, 120.0, 0.0, 0, 100000, 20, -1.0);
+    add_delivery_request(ctx, 150.0, 0.0, 0, 100000, 20, -1.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Should have breaks (total work >> 100) */
+    rc = sg_solution_get_route_count(ctx);
+    for (ri = 0; ri < rc; ri++) {
+        total_break_time += sg_solution_get_route_break_time(ctx, ri);
+        total_break_count += sg_solution_get_route_break_count(ctx, ri);
+    }
+    assert(total_break_count > 0);
+    assert(total_break_time > 0.0);
+
+    sg_free(ctx);
+}
+
+static void test_break_needs_more_vehicles(void) {
+    /* Tight TWs + breaks -> single vehicle can't serve all, needs more */
+    SGContext *ctx = make_config(2000, 42);
+    uint32_t depot;
+    int vi;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 500) == SG_STATUS_OK);
+
+    /* Two vehicles */
+    for (vi = 0; vi < 2; vi++) {
+        uint32_t v = sg_add_vehicle(ctx);
+        double cap = 100.0;
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 500) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        /* Very short max_work -> frequent breaks */
+        assert(sg_vehicle_set_break_policy(ctx, v, 50, 100) == SG_STATUS_OK);
+    }
+
+    /* Two deliveries: TW [0,100] means the break (100s) prevents
+       serving both on one vehicle since arriving at 2nd would be ~160 > 100 */
+    add_delivery_request(ctx, 40.0, 0.0, 0, 100, 10, -1.0);
+    add_delivery_request(ctx, 40.0, 10.0, 0, 100, 10, -1.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    /* Breaks cause longer routes -> need 2 vehicles */
+    assert(sg_get_used_vehicle_count(ctx) == 2);
+
+    sg_free(ctx);
+}
+
+static void test_break_with_pd(void) {
+    /* PD request with break policy */
+    SGContext *ctx = make_config(1000, 42);
+    uint32_t depot;
+    uint32_t v;
+    double cap = 100.0;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 100000) == SG_STATUS_OK);
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 100000) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_break_policy(ctx, v, 60, 10) == SG_STATUS_OK);
+
+    /* Pickup at (50,0), delivery at (100,0) */
+    add_pd_request(ctx,
+        50.0, 0.0, 0, 100000, 10,  /* pickup */
+        100.0, 0.0, 0, 100000, 10, /* delivery */
+        1.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* With max_work=60: total work includes pickup travel, svc, delivery travel, svc, return */
+    assert(sg_solution_get_route_break_count(ctx, 0) > 0);
+    assert(sg_solution_get_route_break_time(ctx, 0) > 0.0);
+
+    sg_free(ctx);
+}
+
+static void test_break_json_roundtrip(void) {
+    const char *json =
+        "{"
+        "  \"config\": {\"max_iterations\": 200, \"deterministic\": true, \"seed\": 42},"
+        "  \"depots\": [{\"x\": 0, \"y\": 0, \"tw_early\": 0, \"tw_late\": 100000}],"
+        "  \"vehicles\": [{"
+        "    \"start_depot_id\": 0, \"end_depot_id\": 0,"
+        "    \"shift_early\": 0, \"shift_late\": 100000,"
+        "    \"capacity\": [100],"
+        "    \"open_end\": true,"
+        "    \"break_max_work_seconds\": 30,"
+        "    \"break_duration_seconds\": 10"
+        "  }],"
+        "  \"tasks\": [{\"type\": \"delivery\", \"x\": 40, \"y\": 0,"
+        "    \"tw_early\": 0, \"tw_late\": 100000, \"service_seconds\": 0,"
+        "    \"demand\": [-1]}],"
+        "  \"requests\": [{\"delivery_task_id\": 0}]"
+        "}";
+    int status_code = 0;
+    size_t out_len = 0;
+    char *resp = sg_api_solve(json, strlen(json), &status_code, &out_len);
+    assert(resp != NULL);
+    assert(status_code == 200);
+
+    /* Check response contains break fields */
+    assert(strstr(resp, "\"break_time\"") != NULL);
+    assert(strstr(resp, "\"break_count\"") != NULL);
+    assert(strstr(resp, "\"total_work\"") != NULL);
+    assert(strstr(resp, "\"breaks\"") != NULL);
+
+    /* Should have 1 break (40 > 30) */
+    assert(strstr(resp, "\"break_count\":1") != NULL);
+
+    free(resp);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -7141,8 +7588,25 @@ int main(void) {
     RUN_TEST(test_json_api_write_solution);
     RUN_TEST(test_json_api_validation_error);
 
+    /* Break policy */
+    RUN_TEST(test_break_policy_api);
+    RUN_TEST(test_break_no_policy_unchanged);
+    RUN_TEST(test_break_single_break);
+    RUN_TEST(test_break_multiple_breaks);
+    RUN_TEST(test_break_waiting_not_work);
+    RUN_TEST(test_break_infeasible);
+    RUN_TEST(test_break_slack_correct);
+    RUN_TEST(test_break_export);
+    RUN_TEST(test_max_total_work_api);
+    RUN_TEST(test_max_total_work_rejects);
+    /* Break integration tests */
+    RUN_TEST(test_break_solver_basic);
+    RUN_TEST(test_break_needs_more_vehicles);
+    RUN_TEST(test_break_with_pd);
+    RUN_TEST(test_break_json_roundtrip);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
-    assert(tests_run == 183);
+    assert(tests_run == 197);
     return tests_passed == tests_run ? 0 : 1;
 }
