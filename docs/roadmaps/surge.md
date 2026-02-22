@@ -1641,6 +1641,18 @@ Grouped by business impact:
 | **Global span balancing** | Not started | OR-Tools | Minimize max-min route duration across fleet. Route equity. |
 | **Plan/ETA validation mode** | Not started | VROOM | Validate fixed routes, report constraint violations per stop. |
 
+**Tier 5 — Infrastructure & Performance:**
+
+| Gap | Status | Impact | Notes |
+|-----|--------|--------|-------|
+| **Arena allocator** | Not started | High | `sh_arena.h` exists. Per-solve arena replaces ~23 malloc/free per solution. Scratch arena eliminates ~46 malloc/free per local search move attempt. ~95% reduction in allocation calls. |
+| **Multi-threading: independent runs** | Not started | High | `SGContext` is self-contained, no shared state. N threads × N seeds, pick best. Embarrassingly parallel. |
+| **Multi-threading: parallel move eval** | Not started | Medium | `sg_route_rank_insertions_for_request()` vehicle loop is read-only per vehicle. Thread pool or OpenMP. |
+| **REST API server** | Not started | High | Mongoose + `sh_workqueue` + `sh_ratelimit` + `sh_metrics`. Same pattern as FuelWise (`fuelwise/api/src/main.c`). ~600 LOC of boilerplate. |
+| **Language bindings** | Not started | Medium | JSON API is the binding — each language wrapper is serialize/call/deserialize. Packaging (PyPI, npm) is the real work. |
+| **Population-based search** | Not started | Medium | ALNS population wrapper at Surge level (not Arbor). Crossover + Arbor intensification per elite. See `docs/analysis/surge.md` for HGS analysis. |
+| **WASM build** | Not started | Medium | Emscripten target. `sg_api_handle()` is already transport-agnostic. |
+
 ### JSON API (`sg_api.h`)
 
 The JSON API provides three tiers of access:
@@ -1945,3 +1957,166 @@ At 5000 iterations: Solomon +0.8%, Li & Lim +4.2%.
 - Benchmark default iterations 5000 → 10000 in both `bench_li_lim.c` and `bench_solomon.c`
 
 **Tests**: All 56 Solomon + 57 Li & Lim cases pass validation.
+
+---
+
+## Infrastructure: Arena Allocator
+
+`sh_arena.h` (bump allocator with 8-byte alignment, reset, introspection) already exists in
+the shared library. Surge's allocation patterns map directly to arena semantics.
+
+### Allocation Tiers
+
+| Tier | Where | Pattern | Calls/solve | Arena benefit |
+|------|-------|---------|-------------|---------------|
+| Per-solve | `sg_route_solution_init` | ~23 malloc/calloc for flat arrays, freed together at end | ~23 | Replace with 1 arena alloc |
+| Hot-path backup | `sg_postprocess.c` | Full solution copy per move attempt (~23 malloc), restore (~23 free) | ~4600/iter | Scratch arena with reset |
+| Feasibility scratch | `sg_feasibility.c` | ~10 temp arrays per `sg_route_stop_sequence_feasible` call | ~1000/iter | Same scratch arena |
+| Setup | `sg_context.c` | Metadata, records, matrices — allocated once | ~25 | Per-context arena |
+
+### Implementation Plan
+
+**Phase 1 — Per-solve arena (low risk):**
+Add `SHArena *solve_arena` to `SGContext`. All `sg_route_solution_init()` allocations use
+`sh_arena_calloc()`. Single `sh_arena_free()` at solve end. No algorithmic changes.
+
+**Phase 2 — Per-iteration scratch arena (major win):**
+Add `SHArena *scratch_arena` to `SGContext`. Solution backup/restore in local search uses
+`sh_arena_calloc()` + `sh_arena_reset()` between move attempts. Eliminates ~46 malloc/free
+per move. Prerequisite: ensure all stop/route pointers are re-fetched after restore (existing
+use-after-free discipline already documented in MEMORY.md).
+
+**Phase 3 — Feasibility scratch:**
+Temp arrays in `sg_route_stop_sequence_feasible()` allocated from scratch arena instead of
+malloc. Arena reset after each call.
+
+### Sizing
+
+| Problem size | Solve arena | Scratch arena | Total |
+|-------------|-------------|---------------|-------|
+| 100 requests | ~2 MB | ~5 MB | ~10 MB |
+| 1000 requests | ~20 MB | ~50 MB | ~100 MB |
+| 5000 requests | ~100 MB | ~250 MB | ~500 MB |
+
+---
+
+## Infrastructure: Multi-Threading
+
+### Strategy 1 — Independent Runs (Embarrassingly Parallel)
+
+`SGContext` is fully self-contained with zero shared state. Each thread creates its own
+context, solves with a different seed, and the best result wins. Near-linear speedup.
+
+```
+Thread 0: sg_create() → sg_solve(seed=42) → cost=1027
+Thread 1: sg_create() → sg_solve(seed=43) → cost=1019  ← winner
+Thread 2: sg_create() → sg_solve(seed=44) → cost=1031
+Thread 3: sg_create() → sg_solve(seed=45) → cost=1024
+```
+
+Implementation: ~50 lines of pthread wrapper. No changes to Surge or Arbor internals.
+
+### Strategy 2 — Parallel Move Evaluation
+
+`sg_route_rank_insertions_for_request()` iterates over all vehicles, evaluating insertion
+cost independently per vehicle (read-only on solution). Parallelizing this inner loop with
+a thread pool would speed up the repair phase, which dominates solve time.
+
+Implementation: moderate — need to ensure thread-safe read access to solution state, collect
+per-vehicle results into shared array.
+
+### Strategy 3 — Population-Based Search (See HGS Analysis)
+
+Combine strategies 1 + 2 with a population manager at the Surge level. Each generation:
+crossover two elite solutions, intensify with Arbor ALNS, add to population if elite.
+
+---
+
+## HGS (Hybrid Genetic Search) Assessment
+
+### Why HGS is Not Suitable as Surge's Core Algorithm
+
+HGS (Vidal 2012-2022) is state-of-the-art on clean CVRP and VRPTW benchmarks. However,
+its architecture makes three commitments that conflict with Surge's rich constraint model:
+
+**1. Giant tour + Split decoder** — The chromosome is a customer permutation; Split uses O(n)
+DP to find optimal route boundaries. PD precedence makes Split NP-hard (pairing constraints
+create inter-route dependencies). Multi-trip explodes the state space. PyVRP explicitly does
+not support PDPTW for this reason.
+
+**2. O(1) concatenation scheme** — Route cost after a move is computed from fixed-size
+cumulative tuples per subsequence. This breaks for:
+- Sequence-dependent setup times (cost depends on adjacent node identity)
+- Max ride time (depends on positions of specific PD pairs — non-decomposable)
+- Commodity conflicts (set membership, not scalar load)
+- Breaks (driving/resting state machine — non-monotonic)
+
+Fallback is O(n) re-evaluation per move, eliminating HGS's main speed advantage.
+
+**3. Crossover destroys constraint structure** — OX/SREX operators permute individual nodes
+without awareness of PD pairs, commodity conflicts, or exclusion groups. Post-crossover
+repair weakens genetic information transmission.
+
+### Constraint Extensibility Comparison
+
+Adding a new constraint to **ALNS** requires:
+1. Feasibility check in insertion evaluator
+2. Possibly a new cost component
+
+Adding a new constraint to **HGS** requires:
+1. Extending the penalty function
+2. Modifying all 9+ local search move evaluations
+3. Extending the route update function
+4. Modifying or replacing the Split algorithm
+5. Possibly redesigning the crossover operator
+6. Adding a new self-adjusting penalty coefficient
+
+Touch-point count: 3-5x larger per constraint. With 15+ simultaneous constraint types,
+HGS would need to be rewritten from scratch.
+
+### What Would Work: Hybrid Population-ALNS
+
+Use ALNS destroy-repair as an operator within a population framework:
+
+```
+┌─────────────────────────────────────┐
+│     Population Manager (Surge)       │
+│  Tournament select, crossover,       │
+│  diversity tracking, replacement     │
+├─────────────────────────────────────┤
+│     Arbor ALNS (per-individual)      │
+│  Reuses all existing destroy/repair  │
+│  operators for local intensification │
+└─────────────────────────────────────┘
+```
+
+This preserves ALNS's constraint extensibility while gaining population-based diversity.
+Christiaens & Vanden Berghe (2020) demonstrate this hybrid for CVRP with strong results.
+
+Implementation: at Surge level, not Arbor. Arbor remains single-solution. Population
+management is ~200-400 lines of new code in `sg_solve.c`.
+
+### HGS Constraint Compatibility Matrix
+
+| Constraint | HGS support | Difficulty | Issue |
+|------------|-------------|------------|-------|
+| Capacity (single-dim) | Native | Easy | Core HGS-CVRP |
+| Hard time windows | Supported (time warp) | Easy | HGS-VRPTW |
+| Open routes | Supported | Easy | PyVRP OVRP |
+| Max distance/duration | Supported | Easy | Penalty-based |
+| Multi-depot | Supported | Moderate | UHGS 2014 |
+| Multi-dim capacity | Moderate | Moderate | Split harder, penalty extension |
+| Disjunct time windows | Supported | Moderate | PyVRP VRPMTW |
+| Vehicle qualifications | Supported in UHGS | Moderate | Assignment component |
+| PD pairing + precedence | **Problematic** | **Hard** | Breaks giant tour + Split |
+| Sequence-dependent setup | **Hard** | **Hard** | Breaks O(1) concatenation |
+| Commodity conflicts | **Hard** | **Hard** | Set membership, not scalar |
+| Exclusion groups | **Hard** | **Hard** | Inter-item constraint |
+| Max ride time (DARP) | **Very hard** | **Very hard** | Non-decomposable |
+| Break policies (HoS) | **Very hard** | **Very hard** | Non-decomposable, state-dependent |
+
+### Bottom Line
+
+ALNS+SA is the right architecture for Surge's constraint portfolio. HGS should only be
+considered for a separate, specialized clean-CVRP/VRPTW solver. The population-ALNS hybrid
+is the practical path to better solution quality within Surge's existing architecture.

@@ -39,12 +39,12 @@ Solomon benchmarks: 56/56 solved, avgDistGap +0.7% vs. BKS, 36/56 matching vehic
 For context:
 - **VROOM**: Typically 2-5% above BKS on Solomon, but much faster. Surge is comparable or slightly better on quality.
 - **OR-Tools**: With careful tuning, OR-Tools can get within 1-3% of BKS. Roughly on par with Surge.
-- **HGS-CVRP** (Vidal): State-of-the-art, often matches or sets BKS. Surge doesn't compete here — but HGS is a research solver, not a product.
+- **HGS-CVRP** (Vidal): State-of-the-art, often matches or sets BKS. Surge doesn't compete here — but HGS is a research solver, not a product. See "Why not HGS?" below.
 - **LKH-3**: Similar — academic champion, not a deployable product.
 
 Li & Lim (PDPTW): avgDistGap +5.3%, 39/56 equal vehicles. This is reasonable but weaker. PDPTW is inherently harder and the gap to BKS is larger across all solvers.
 
-**Honest weakness**: The two-phase approach (minimize vehicles, then polish distance) is pragmatic but can get stuck in local optima. A population-based approach (like HGS) or hybrid with exact methods would likely improve quality on larger instances. The single-threaded ALNS with simulated annealing is a well-understood but mid-2010s vintage approach.
+**Honest weakness**: The two-phase approach (minimize vehicles, then polish distance) is pragmatic but can get stuck in local optima. The single-threaded ALNS with simulated annealing is a well-understood but mid-2010s vintage approach. See "Paths to improvement" below for what's realistic.
 
 ---
 
@@ -59,7 +59,7 @@ Li & Lim (PDPTW): avgDistGap +5.3%, 39/56 equal vehicles. This is reasonable but
 
 The C implementation with no allocations in the hot loop, flat arrays, cached feasibility — this is genuinely fast. The ~14K lines of library code (excluding `surge.c` monolith and tests) compiles in under 2 seconds.
 
-**Weakness**: Single-threaded only. No parallelism. On a 5000-request instance, competitors that can spread across 8+ cores have a real wall-clock advantage. The roadmap mentions this but it's not implemented.
+**Current limitation**: Single-threaded only. However, the path to parallelism is straightforward — see below.
 
 ---
 
@@ -104,11 +104,13 @@ For comparison:
 
 ---
 
-## Ease of Integration — Good with caveats
+## Ease of Integration — Good, with clear path to great
 
-The C ABI means you can call Surge from literally anything: Python (ctypes/cffi), Node (ffi-napi), Go (cgo), Rust (bindgen), Java (JNI/Panama), Swift, Kotlin Native, WASM... The JSON API means you can also just send a JSON blob and get a JSON blob back — zero FFI needed.
+The C ABI means you can call Surge from literally anything: Python (ctypes/cffi), Node (ffi-napi), Go (cgo), Rust (bindgen), Java (JNI/Panama), Swift, Kotlin Native, WASM. The JSON API means you can also just send a JSON blob and get a JSON blob back — zero FFI needed.
 
-**Weakness**: No official language bindings yet. Every integrator writes their own wrapper. OR-Tools ships Python, Java, C#, and Go bindings. VROOM has a REST API via `vroom-express`. The JSON API partially addresses this, but it's not a full REST service — you'd need to wrap it.
+The transport-agnostic `sg_api_handle()` function already exists. The same handler works for HTTP, WASM, sockets, or direct function calls. A Mongoose-based REST API server following Otto's established pattern (as done for FuelWise) is ~600 lines of boilerplate using existing shared infrastructure (`sh_workqueue`, `sh_ratelimit`, `sh_metrics`, `sh_cors`, `sh_args`).
+
+Language bindings are trivial given the JSON API — each binding is just a thin wrapper around "serialize JSON, call `sg_api_handle()`, deserialize JSON." The C ABI makes FFI mechanical, not architectural.
 
 ---
 
@@ -135,9 +137,96 @@ Compare with OR-Tools where the relevant code spans across CP-SAT, routing libra
 
 **Disadvantages of C**:
 - Manual memory management. Use-after-free bugs in local search are a real class of risk. Rust would eliminate this at compile time.
-- No generics. Constraints like max_tasks, max_distance, max_duration all follow identical patterns but must be implemented as separate copy-pasted checks. In a language with traits/generics, these could be unified.
+- No generics. Constraints like max_tasks, max_distance, max_duration all follow identical patterns but must be implemented as separate copy-pasted checks.
 - Limited ecosystem for algorithm building blocks (no standard hash maps, balanced trees, etc. — relies on internal Arbor/Shared libs).
 - Contributor barrier: the pool of people comfortable writing correct C in 2026 is shrinking.
+
+**Mitigant**: `sh_arena.h` already exists in the shared library, and Surge's allocation patterns are highly arena-friendly. Converting hot-path allocations to arena-based allocation would eliminate the most dangerous class of memory bugs while also improving performance (see "Arena allocator" section below).
+
+---
+
+## Parallelism — Not done, but architecturally easy
+
+Currently single-threaded. Two practical strategies require no architectural changes:
+
+1. **Independent runs** — Trivial. `SGContext` is fully self-contained with no shared state. Spawn N threads with different seeds, pick the best. Embarrassingly parallel, near-linear speedup.
+
+2. **Parallel move evaluation** — The `sg_route_rank_insertions_for_request()` loop iterates over all vehicles independently. Each vehicle's evaluation is read-only on the solution. A thread pool or `#pragma omp parallel for` would parallelize this with minimal refactoring.
+
+---
+
+## Arena Allocator — Ready to implement
+
+`sh_arena.h` (bump allocator with reset) already exists in the shared library. Surge's allocation patterns map directly to arena semantics:
+
+**Per-solve arena (trivial win):** `sg_route_solution_init()` does ~23 individual malloc/calloc calls for flat arrays that all live for the entire solve. Replace with one arena, one free.
+
+**Per-iteration scratch arena (critical win):** Every local search move in `sg_postprocess.c` does a full solution copy (~23 mallocs) then restores (~23 frees). That's ~46 malloc/free calls per move attempt, hundreds of times per ALNS iteration. A scratch arena with `sh_arena_reset()` between attempts eliminates this entirely.
+
+**Feasibility scratch arena:** `sg_route_stop_sequence_feasible()` allocates ~10 temp arrays per call, called hundreds of times per iteration. Same arena pattern.
+
+Expected result: 95%+ reduction in malloc/free calls, better cache locality, elimination of the most dangerous use-after-free patterns.
+
+---
+
+## Why Not HGS?
+
+HGS (Hybrid Genetic Search by Vidal) is state-of-the-art on clean CVRP and VRPTW benchmarks. The question is whether it could replace or augment ALNS+SA for Surge's rich constraint portfolio.
+
+### Where HGS excels
+
+- Academic CVRP/VRPTW benchmarks (holds many BKS)
+- Medium-scale instances (100-1000 customers) with 1-2 constraint types
+- O(1) amortized move evaluation via subsequence concatenation
+- Population diversity management produces excellent convergence
+
+### Why HGS breaks down with rich constraints
+
+HGS's architecture makes three core commitments that conflict with rich VRP:
+
+**1. Giant tour + Split decoder.** The chromosome is a customer permutation; Split uses DP to find optimal route boundaries. With PD precedence, Split becomes NP-hard — pairing constraints create dependencies between route assignments. With multi-trip, the state space explodes. PyVRP explicitly does not support PDPTW for this reason.
+
+**2. O(1) concatenation scheme.** Route cost after a move is computed from fixed-size cumulative tuples per subsequence. This breaks for:
+- Sequence-dependent setup times (cost depends on adjacent node identity)
+- Max ride time (depends on positions of specific PD pairs — non-decomposable)
+- Commodity conflicts (set membership, not scalar load)
+- Breaks (state machine of driving/resting — non-monotonic)
+
+When concatenation breaks, you fall back to O(n) re-evaluation per move, which eliminates HGS's main speed advantage.
+
+**3. Crossover destroys constraint structure.** OX/SREX operators permute individual nodes without awareness of PD pairs, commodity conflicts, or exclusion groups. Repair procedures are required after nearly every crossover, which weakens genetic information transmission.
+
+### The constraint extensibility gap
+
+Adding a new constraint to **ALNS** requires:
+1. A feasibility check in the insertion evaluator
+2. Possibly a new cost component
+
+Adding a new constraint to **HGS** requires:
+1. Extending the penalty function
+2. Modifying all 9+ local search move evaluations
+3. Extending the route update function
+4. Modifying or replacing the Split algorithm
+5. Possibly redesigning the crossover operator
+6. Adding a new self-adjusting penalty coefficient
+
+The touch-point count is 3-5x larger per constraint. For Surge's 15+ simultaneous constraint types, this would mean essentially rewriting HGS from scratch.
+
+### What would work: hybrid approach
+
+The most promising direction is using ALNS destroy-repair as an operator within a population framework — Arbor handles local intensification, a thin population manager handles diversity. This can be implemented at the Surge level without modifying Arbor:
+
+```
+Population Manager (Surge-level)
+  └── for each elite solution:
+        └── Arbor ALNS (local intensification, reuses all existing operators)
+```
+
+This preserves ALNS's constraint extensibility while gaining population-based diversity. Christiaens & Vanden Berghe (2020) demonstrate this hybrid approach for CVRP with strong results.
+
+### Bottom line on HGS
+
+ALNS+SA is the right architecture for Surge's constraint portfolio. HGS is worth considering only for a separate, specialized clean-CVRP/VRPTW solver where constraint richness isn't needed. A population wrapper around ALNS is the practical path to better solution quality.
 
 ---
 
@@ -151,15 +240,20 @@ Compare with OR-Tools where the relevant code spans across CP-SAT, routing libra
 | Constraint richness | A- | C+ | A | B+ |
 | Deployability | A+ | B+ | C | C- |
 | Binary size / footprint | A+ | B | D | D |
-| Language bindings | D | B | A | B+ |
+| Language bindings | B | B | A | B+ |
+| REST API | B+ | B | B | B+ |
 | Auditability | A | B | D | C |
-| Parallelism | D | C | B | B |
+| Parallelism | C+ | C | B | B |
 | Community / ecosystem | D | B | A | B+ |
+
+Revised grades vs. initial assessment: Language bindings upgraded from D to B (JSON API *is* the binding; packaging is all that's missing). Parallelism upgraded from D to C+ (not done yet but architecturally trivial). REST API added at B+ (transport-agnostic handler exists, shared infra ready).
+
+---
 
 ## Honest Bottom Line
 
 Surge's strengths are **deployability**, **API cleanliness**, **constraint richness**, and **auditability**. These matter enormously for commercial embedding — if you're selling routing as a feature inside a larger product, Surge is easier to ship than anything else in this space.
 
-The weaknesses are **single-threaded execution**, **no official language bindings**, and **solution quality that's good but not state-of-the-art** on academic benchmarks. The community/ecosystem gap is inherent to being a proprietary solver vs. Google-backed open source.
+The remaining gaps — parallelism, arena allocation, population-based search — are execution items, not design debt. The architecture already supports them.
 
 The strategic bet is sound: a lean, embeddable, WASM-ready solver with a clean API fills a real gap that OR-Tools (bloated, hard to embed) and VROOM (limited constraints) don't serve well.
