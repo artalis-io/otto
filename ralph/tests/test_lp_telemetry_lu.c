@@ -40,16 +40,16 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     memset(&lu, 0, sizeof(lu));
     lu.telemetry_enabled = 1;
     lu.mkz_enabled = 1;
-    lu.perf_factorize_calls = 9;
-    lu.sparse_dense_fallbacks = 3;
-    lu.perf_total_sparse_numeric_ms = 99.0;
+    lu.telemetry.perf_factorize_calls = 9;
+    lu.telemetry.sparse_dense_fallbacks = 3;
+    lu.telemetry.perf_total_sparse_numeric_ms = 99.0;
 
     lp_telemetry_reset_lu(&lu);
 
     ASSERT_INT_EQ(lu.mkz_enabled, 1, "lu_reset: preserves mkz_enabled");
-    ASSERT_INT_EQ(lu.perf_factorize_calls, 0, "lu_reset: factorize calls");
-    ASSERT_INT_EQ(lu.sparse_dense_fallbacks, 0, "lu_reset: sparse dense fallbacks");
-    ASSERT_DBL_EQ(lu.perf_total_sparse_numeric_ms, 0.0, "lu_reset: sparse numeric total");
+    ASSERT_INT_EQ(lu.telemetry.perf_factorize_calls, 0, "lu_reset: factorize calls");
+    ASSERT_INT_EQ(lu.telemetry.sparse_dense_fallbacks, 0, "lu_reset: sparse dense fallbacks");
+    ASSERT_DBL_EQ(lu.telemetry.perf_total_sparse_numeric_ms, 0.0, "lu_reset: sparse numeric total");
 
     SparseMatrix B;
     memset(&B, 0, sizeof(B));
@@ -57,19 +57,19 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     B.ncols = 7;
     B.nnz = 21;
 
-    lu.perf_last_symbolic_ms = 12.0;
-    lu.sparse_fallback_last_reason = LU_SPARSE_FALLBACK_NUMERIC;
-    lu.used_dense_fallback_last = 1;
+    lu.telemetry.perf_last_symbolic_ms = 12.0;
+    lu.telemetry.sparse_fallback_last_reason = LU_SPARSE_FALLBACK_NUMERIC;
+    lu.telemetry.used_dense_fallback_last = 1;
 
     lp_telemetry_prepare_lu_factorize(&lu, &B);
 
-    ASSERT_INT_EQ(lu.perf_factorize_calls, 1, "lu_prepare: factorize calls increment");
-    ASSERT_INT_EQ(lu.perf_last_basis_nnz, 21, "lu_prepare: last basis nnz");
-    ASSERT_INT_EQ(lu.perf_last_m, 7, "lu_prepare: last m");
-    ASSERT_INT_EQ(lu.sparse_fallback_last_reason, LU_SPARSE_FALLBACK_NONE,
+    ASSERT_INT_EQ(lu.telemetry.perf_factorize_calls, 1, "lu_prepare: factorize calls increment");
+    ASSERT_INT_EQ(lu.telemetry.perf_last_basis_nnz, 21, "lu_prepare: last basis nnz");
+    ASSERT_INT_EQ(lu.telemetry.perf_last_m, 7, "lu_prepare: last m");
+    ASSERT_INT_EQ(lu.telemetry.sparse_fallback_last_reason, LU_SPARSE_FALLBACK_NONE,
                   "lu_prepare: fallback reason reset");
-    ASSERT_INT_EQ(lu.used_dense_fallback_last, 0, "lu_prepare: dense fallback flag reset");
-    ASSERT_DBL_EQ(lu.perf_last_symbolic_ms, 0.0, "lu_prepare: last symbolic ms reset");
+    ASSERT_INT_EQ(lu.telemetry.used_dense_fallback_last, 0, "lu_prepare: dense fallback flag reset");
+    ASSERT_DBL_EQ(lu.telemetry.perf_last_symbolic_ms, 0.0, "lu_prepare: last symbolic ms reset");
 
     {
         LUTelemetrySnapshot snap;

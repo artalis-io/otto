@@ -100,11 +100,11 @@ static void test_markowitz_failure_reason_counters(void) {
     int rc = lu_factorize(lu, B);
     ASSERT(rc != 0, "failure counters: singular matrix should fail factorization");
 
-    ASSERT(lu->mkz_calls > 0, "failure counters: Markowitz attempted");
-    ASSERT(lu->mkz_dense_fallbacks > 0, "failure counters: Markowitz fallback recorded");
-    ASSERT(lu->mkz_fail_singular > 0, "failure counters: singular reason counted");
-    ASSERT_INT_EQ(lu->mkz_fail_workspace, 0, "failure counters: no workspace failure");
-    ASSERT_INT_EQ(lu->mkz_fail_capacity, 0, "failure counters: no capacity failure");
+    ASSERT(lu->telemetry.mkz_calls > 0, "failure counters: Markowitz attempted");
+    ASSERT(lu->telemetry.mkz_dense_fallbacks > 0, "failure counters: Markowitz fallback recorded");
+    ASSERT(lu->telemetry.mkz_fail_singular > 0, "failure counters: singular reason counted");
+    ASSERT_INT_EQ(lu->telemetry.mkz_fail_workspace, 0, "failure counters: no workspace failure");
+    ASSERT_INT_EQ(lu->telemetry.mkz_fail_capacity, 0, "failure counters: no capacity failure");
 
     lu_free(lu);
     free_csc(B);
@@ -127,18 +127,18 @@ static void test_sparse_fallback_reason_and_stage_telemetry(void) {
 
         int rc = lu_factorize(lu, B);
         ASSERT_INT_EQ(rc, 0, "telemetry small: factorize");
-        ASSERT_INT_EQ(lu->used_dense_fallback_last, 1, "telemetry small: dense fallback used");
-        ASSERT_INT_EQ(lu->sparse_fallback_last_reason, LU_SPARSE_FALLBACK_SMALL_MATRIX,
+        ASSERT_INT_EQ(lu->telemetry.used_dense_fallback_last, 1, "telemetry small: dense fallback used");
+        ASSERT_INT_EQ(lu->telemetry.sparse_fallback_last_reason, LU_SPARSE_FALLBACK_SMALL_MATRIX,
                       "telemetry small: fallback reason=small_matrix");
-        ASSERT(lu->sparse_fallback_reason_small_matrix > 0,
+        ASSERT(lu->telemetry.sparse_fallback_reason_small_matrix > 0,
                "telemetry small: small-matrix counter incremented");
-        ASSERT_INT_EQ(lu->sparse_fallback_reason_symbolic, 0,
+        ASSERT_INT_EQ(lu->telemetry.sparse_fallback_reason_symbolic, 0,
                       "telemetry small: no symbolic fallback count");
-        ASSERT_INT_EQ(lu->sparse_fallback_reason_numeric, 0,
+        ASSERT_INT_EQ(lu->telemetry.sparse_fallback_reason_numeric, 0,
                       "telemetry small: no numeric fallback count");
-        ASSERT_INT_EQ(lu->perf_symbolic_calls, 0,
+        ASSERT_INT_EQ(lu->telemetry.perf_symbolic_calls, 0,
                       "telemetry small: symbolic path not called");
-        ASSERT(lu->perf_last_dense_factorize_ms >= 0.0,
+        ASSERT(lu->telemetry.perf_last_dense_factorize_ms >= 0.0,
                "telemetry small: dense factorize timer captured");
 
         lu_free(lu);
@@ -168,14 +168,14 @@ static void test_sparse_fallback_reason_and_stage_telemetry(void) {
 
         int rc = lu_factorize(lu, B);
         ASSERT_INT_EQ(rc, 0, "telemetry sparse: factorize");
-        ASSERT_INT_EQ(lu->used_dense_fallback_last, 0, "telemetry sparse: no dense fallback");
-        ASSERT_INT_EQ(lu->sparse_fallback_last_reason, LU_SPARSE_FALLBACK_NONE,
+        ASSERT_INT_EQ(lu->telemetry.used_dense_fallback_last, 0, "telemetry sparse: no dense fallback");
+        ASSERT_INT_EQ(lu->telemetry.sparse_fallback_last_reason, LU_SPARSE_FALLBACK_NONE,
                       "telemetry sparse: fallback reason=none");
-        ASSERT(lu->perf_symbolic_calls > 0, "telemetry sparse: symbolic called");
-        ASSERT(lu->perf_symbolic_cache_misses > 0, "telemetry sparse: symbolic miss recorded");
-        ASSERT(lu->perf_last_symbolic_ms >= 0.0, "telemetry sparse: symbolic timer captured");
-        ASSERT(lu->perf_last_sparse_numeric_ms >= 0.0, "telemetry sparse: sparse numeric timer captured");
-        ASSERT(lu->perf_total_sparse_numeric_ms >= lu->perf_last_sparse_numeric_ms,
+        ASSERT(lu->telemetry.perf_symbolic_calls > 0, "telemetry sparse: symbolic called");
+        ASSERT(lu->telemetry.perf_symbolic_cache_misses > 0, "telemetry sparse: symbolic miss recorded");
+        ASSERT(lu->telemetry.perf_last_symbolic_ms >= 0.0, "telemetry sparse: symbolic timer captured");
+        ASSERT(lu->telemetry.perf_last_sparse_numeric_ms >= 0.0, "telemetry sparse: sparse numeric timer captured");
+        ASSERT(lu->telemetry.perf_total_sparse_numeric_ms >= lu->telemetry.perf_last_sparse_numeric_ms,
                "telemetry sparse: sparse numeric total accumulates");
 
         lu_free(lu);
@@ -202,14 +202,14 @@ static void test_sparse_fallback_reason_and_stage_telemetry(void) {
 
         int rc = lu_factorize(lu, B);
         ASSERT_INT_EQ(rc, 0, "telemetry full-structural: factorize");
-        ASSERT_INT_EQ(lu->used_dense_fallback_last, 0,
+        ASSERT_INT_EQ(lu->telemetry.used_dense_fallback_last, 0,
                       "telemetry full-structural: no dense fallback");
-        ASSERT_INT_EQ(lu->sparse_fallback_last_reason, LU_SPARSE_FALLBACK_NONE,
+        ASSERT_INT_EQ(lu->telemetry.sparse_fallback_last_reason, LU_SPARSE_FALLBACK_NONE,
                       "telemetry full-structural: fallback reason=none");
         ASSERT_INT_EQ(lu->sym_num_identity, 0,
                       "telemetry full-structural: no identity columns");
         ASSERT_INT_EQ(lu->sym_k, m, "telemetry full-structural: k=m");
-        ASSERT(lu->perf_symbolic_calls > 0,
+        ASSERT(lu->telemetry.perf_symbolic_calls > 0,
                "telemetry full-structural: symbolic called");
 
         lu_free(lu);

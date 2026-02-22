@@ -161,6 +161,56 @@ typedef struct {
 
 } LPModel;
 
+/* LU telemetry state (counters + timings, no behavior/policy knobs). */
+typedef struct {
+    /* Sparse Markowitz LU telemetry */
+    int mkz_calls;           /* Markowitz factorization attempts */
+    int mkz_successes;       /* Markowitz factorization successes */
+    int mkz_failures;        /* Markowitz factorization failures */
+    int mkz_last_failure;    /* Internal Markowitz failure code (0 on success) */
+    int mkz_dense_fallbacks; /* Markowitz failed and dense GE path was used */
+    int mkz_fail_workspace;  /* Markowitz attempt failed with MKZ_FAIL_WORKSPACE */
+    int mkz_fail_pool;       /* Markowitz attempt failed with MKZ_FAIL_POOL */
+    int mkz_fail_singular;   /* Markowitz attempt failed with MKZ_FAIL_SINGULAR */
+    int mkz_fail_capacity;   /* Markowitz attempt failed with MKZ_FAIL_CAPACITY */
+
+    /* Sparse-efficient fallback telemetry */
+    int sparse_dense_fallbacks;  /* lu_factorize_sparse_efficient -> lu_factorize_dense */
+    int used_dense_fallback_last;/* 1 if last lu_factorize call used dense fallback */
+    int sparse_fallback_last_reason;      /* LUSparseFallbackReason */
+    int sparse_fallback_reason_small_matrix;
+    int sparse_fallback_reason_symbolic;
+    int sparse_fallback_reason_numeric;
+    int identity_sep_failures;   /* Identity-placement failures in sparse-efficient path */
+
+    /* Sparse factorization stage timing telemetry (aggregate + last call) */
+    int perf_factorize_calls;      /* Number of lu_factorize() calls */
+    int perf_last_basis_nnz;       /* Input basis nnz for last factorization */
+    int perf_last_m;               /* Basis dimension (m) for last factorization */
+    int perf_last_k;               /* Structural block width (k) for last factorization */
+    int perf_symbolic_calls;
+    int perf_symbolic_cache_hits;
+    int perf_symbolic_cache_misses;
+    double perf_last_symbolic_ms;
+    double perf_last_sparse_numeric_ms;
+    double perf_last_dense_ge_numeric_ms;
+    double perf_last_supernode_numeric_ms;
+    double perf_last_dense_factorize_ms;
+    double perf_last_a_struct_build_ms;
+    double perf_last_markowitz_numeric_ms;
+    double perf_last_identity_placement_ms;
+    double perf_last_coo_to_csc_ms;
+    double perf_total_symbolic_ms;
+    double perf_total_sparse_numeric_ms;
+    double perf_total_dense_ge_numeric_ms;
+    double perf_total_supernode_numeric_ms;
+    double perf_total_dense_factorize_ms;
+    double perf_total_a_struct_build_ms;
+    double perf_total_markowitz_numeric_ms;
+    double perf_total_identity_placement_ms;
+    double perf_total_coo_to_csc_ms;
+} LUTelemetryState;
+
 /* LU factorization of basis matrix */
 typedef struct {
     int m;                  /* Dimension */
@@ -285,24 +335,6 @@ typedef struct {
     /* Sparse Markowitz LU */
     int mkz_enabled;         /* 1 = use Markowitz path when k >= MARKOWITZ_MIN_K */
     int mkz_pool_mult_hint;  /* Adaptive starting pool multiplier (reduces retry churn) */
-    int mkz_calls;           /* Markowitz factorization attempts */
-    int mkz_successes;       /* Markowitz factorization successes */
-    int mkz_failures;        /* Markowitz factorization failures */
-    int mkz_last_failure;    /* Internal Markowitz failure code (0 on success) */
-    int mkz_dense_fallbacks; /* Markowitz failed and dense GE path was used */
-    int mkz_fail_workspace;  /* Markowitz attempt failed with MKZ_FAIL_WORKSPACE */
-    int mkz_fail_pool;       /* Markowitz attempt failed with MKZ_FAIL_POOL */
-    int mkz_fail_singular;   /* Markowitz attempt failed with MKZ_FAIL_SINGULAR */
-    int mkz_fail_capacity;   /* Markowitz attempt failed with MKZ_FAIL_CAPACITY */
-
-    /* Sparse-efficient fallback telemetry */
-    int sparse_dense_fallbacks;  /* lu_factorize_sparse_efficient -> lu_factorize_dense */
-    int used_dense_fallback_last;/* 1 if last lu_factorize call used dense fallback */
-    int sparse_fallback_last_reason;      /* LUSparseFallbackReason */
-    int sparse_fallback_reason_small_matrix;
-    int sparse_fallback_reason_symbolic;
-    int sparse_fallback_reason_numeric;
-    int identity_sep_failures;   /* Identity-placement failures in sparse-efficient path */
 
     /* Supernodal LU (T2.1) */
     int sn_enabled;          /* 1 = use supernodal path when k >= SN_MIN_K */
@@ -312,32 +344,8 @@ typedef struct {
     int sn_calls;            /* Number of times supernodal path was attempted */
     int sn_successes;        /* Number of times supernodal path succeeded */
 
-    /* Sparse factorization stage timing telemetry (aggregate + last call) */
-    int perf_factorize_calls;      /* Number of lu_factorize() calls */
-    int perf_last_basis_nnz;       /* Input basis nnz for last factorization */
-    int perf_last_m;               /* Basis dimension (m) for last factorization */
-    int perf_last_k;               /* Structural block width (k) for last factorization */
-    int perf_symbolic_calls;
-    int perf_symbolic_cache_hits;
-    int perf_symbolic_cache_misses;
-    double perf_last_symbolic_ms;
-    double perf_last_sparse_numeric_ms;
-    double perf_last_dense_ge_numeric_ms;
-    double perf_last_supernode_numeric_ms;
-    double perf_last_dense_factorize_ms;
-    double perf_last_a_struct_build_ms;
-    double perf_last_markowitz_numeric_ms;
-    double perf_last_identity_placement_ms;
-    double perf_last_coo_to_csc_ms;
-    double perf_total_symbolic_ms;
-    double perf_total_sparse_numeric_ms;
-    double perf_total_dense_ge_numeric_ms;
-    double perf_total_supernode_numeric_ms;
-    double perf_total_dense_factorize_ms;
-    double perf_total_a_struct_build_ms;
-    double perf_total_markowitz_numeric_ms;
-    double perf_total_identity_placement_ms;
-    double perf_total_coo_to_csc_ms;
+    /* Telemetry state */
+    LUTelemetryState telemetry;
 
     /* W1: Sparse BTRAN readiness flag (set after each refactorization) */
     int csr_valid;           /* 1 if L/U CSC data is valid for sparse BTRAN reach */
@@ -497,43 +505,8 @@ typedef struct {
 
 } SimplexTableau;
 
-/* Simplex solver */
-typedef struct SimplexSolver {
-    LPModel *model;
-    SimplexTableau *tableau;
-
-    /* Parameters */
-    int max_iterations;
-    double time_limit;
-    int presolve;
-    int scaling;
-    int pricing_strategy;   /* 0=Dantzig, 1=Steepest edge, 2=Devex, 3=Partial, 4=Heap */
-    int verbose;
-    int telemetry_enabled;  /* 1 = collect solver/LU telemetry counters/timers */
-    int force_two_phase;    /* 1 = force two-phase simplex (for Benders duals) */
-    int crash;              /* 0=off, 1=triangular crash basis */
-    int verify;             /* 0=off, 1=post-solve verification (T2.3) */
-    int method;             /* 0=primal, 1=dual, 2=auto (dual first, primal fallback) */
-    double objective_limit; /* Early-exit when obj >= limit (internal min space), default RALPH_INFINITY */
-    int phase1_pricing;     /* Override pricing for Phase 1: 0=Dantzig, -1=disabled (use solver pricing) */
-    int trace_phase1;       /* 1 = emit deterministic Phase-1 pivot-failure trace */
-
-    /* Scaling factors (used if scaling enabled) */
-    double *row_scale;      /* Row scaling factors */
-    double *col_scale;      /* Column scaling factors */
-    int is_scaled;          /* Flag indicating if problem was scaled */
-
-    /* Solution */
-    RalphStatus status;
-    double obj_value;
-    double *solution;
-    double *dual_solution;
-    double *reduced_costs;
-
-    /* Statistics */
-    int iterations;
-    double solve_time;
-    int degenerate_pivots;
+/* Solver telemetry state (timings/counters only). */
+typedef struct {
     double perf_primal_setup_ms;   /* Tableau create + initial factorization */
     double perf_dual_ms;           /* Dual path runtime (method 1/2 attempt) */
     double perf_phase1_ms;         /* Primal Phase 1 runtime */
@@ -553,7 +526,6 @@ typedef struct SimplexSolver {
     double perf_refactor_last_ms;  /* Last refactor duration */
     double perf_refactor_max_ms;   /* Max single refactor duration */
     int perf_refactor_last_reason; /* RalphRefactorReason */
-    int perf_refactor_next_reason; /* RalphRefactorReason hint consumed by tableau_refactorize */
     int perf_refactor_reason_setup;
     int perf_refactor_reason_transition;
     int perf_refactor_reason_periodic;
@@ -606,12 +578,17 @@ typedef struct SimplexSolver {
     int perf_phase2_refactor_periodic_policy;
     int perf_phase2_refactor_periodic_lu_health;
     int perf_phase2_refactor_safety_forced;
+} LPSolverTelemetryState;
 
-    /* Runtime scheduling counters (behavioral; independent from telemetry gate). */
+/* Solver policy state (behavioral scheduling/control, not telemetry). */
+typedef struct {
+    int refactor_next_reason;  /* RalphRefactorReason hint consumed by tableau_refactorize */
+
+    /* Runtime scheduling counters. */
     int periodic_policy_refactors_phase1;
     int periodic_policy_refactors_phase2;
 
-    /* Adaptive periodic scheduler feedback (per-phase bias in [-0.25, +0.25]) */
+    /* Adaptive periodic scheduler feedback (per-phase bias in [-0.25, +0.25]). */
     double periodic_feedback_bias_phase1;
     double periodic_feedback_bias_phase2;
     int periodic_feedback_last_reason_phase1;
@@ -622,6 +599,47 @@ typedef struct SimplexSolver {
     int periodic_feedback_hint_interval_phase2;
     double periodic_feedback_hint_pressure_phase1;
     double periodic_feedback_hint_pressure_phase2;
+} LPSolverPolicyState;
+
+/* Simplex solver */
+typedef struct SimplexSolver {
+    LPModel *model;
+    SimplexTableau *tableau;
+
+    /* Parameters */
+    int max_iterations;
+    double time_limit;
+    int presolve;
+    int scaling;
+    int pricing_strategy;   /* 0=Dantzig, 1=Steepest edge, 2=Devex, 3=Partial, 4=Heap */
+    int verbose;
+    int telemetry_enabled;  /* 1 = collect solver/LU telemetry counters/timers */
+    int force_two_phase;    /* 1 = force two-phase simplex (for Benders duals) */
+    int crash;              /* 0=off, 1=triangular crash basis */
+    int verify;             /* 0=off, 1=post-solve verification (T2.3) */
+    int method;             /* 0=primal, 1=dual, 2=auto (dual first, primal fallback) */
+    double objective_limit; /* Early-exit when obj >= limit (internal min space), default RALPH_INFINITY */
+    int phase1_pricing;     /* Override pricing for Phase 1: 0=Dantzig, -1=disabled (use solver pricing) */
+    int trace_phase1;       /* 1 = emit deterministic Phase-1 pivot-failure trace */
+
+    /* Scaling factors (used if scaling enabled) */
+    double *row_scale;      /* Row scaling factors */
+    double *col_scale;      /* Column scaling factors */
+    int is_scaled;          /* Flag indicating if problem was scaled */
+
+    /* Solution */
+    RalphStatus status;
+    double obj_value;
+    double *solution;
+    double *dual_solution;
+    double *reduced_costs;
+
+    /* Statistics */
+    int iterations;
+    double solve_time;
+    int degenerate_pivots;
+    LPSolverTelemetryState telemetry;
+    LPSolverPolicyState policy;
 
     /* Post-solve verification metrics (T2.3 + T3.6) */
     double verify_primal_infeas;    /* ||Ax - b||_inf for satisfied constraints */
