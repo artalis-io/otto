@@ -1265,10 +1265,10 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - [x] Added exchange + 2-opt* intensification heuristics that now respect PD pair structure.
 - [x] Pair-aware Shaw + regret insertions operate against the unified feasibility kernel.
 
-### Phase 5: Objective and Acceptance Modernization
-- [ ] Move from scalar proxy toward explicit lexicographic compare (unassigned -> vehicles -> distance -> soft penalties).
-- [ ] Expose acceptance policy in `SGConfig` (SA/RRT/Improving) and tune per problem class.
-- [ ] Add adaptive destroy size policy based on request count and stagnation.
+### Phase 5: Objective and Acceptance Modernization ✅
+- [x] Move from scalar proxy toward explicit lexicographic compare (unassigned -> vehicles -> distance -> soft penalties). `SGConfig.lexicographic_objective` gates `is_better` callback in ARSolutionOps.
+- [x] Expose acceptance policy in `SGConfig` (SA/RRT/Improving). `SGAcceptType` enum mapped to `ARAcceptType` at solve time.
+- [x] Add adaptive destroy size policy based on stagnation. `SGConfig.adaptive_q` / `ARALNSParams.adaptive_q` grows `q_max` at segment boundaries on stagnation, resets on improvement.
 
 ### Phase 6: Rich Constraint Completion
 - [x] Disjunct TW support.
@@ -1295,14 +1295,15 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - **Phase S8 (construction + vehicle minimization)**: Multi-strategy construction (regret-3, TW-sorted greedy, Solomon I1 — keep best), two-phase ALNS (60% vehicle minimization with hot SA + 40% distance polishing), vehicle-target and vehicle-empty destroy operators, pair elimination in reduce_vehicles, depth-2 ejection chains, pairwise exchange in postprocessing. Solomon +0.2% → +0.2% at 5k iters (avgVehGap +0.46→+0.46). Li & Lim +4.3% → +4.3% at 5k iters (avgVehGap +0.70→+0.55, equalVehicles 36→38).
 - **Phase S9 (deeper ejection chains, CROSS-exchange, or-opt k=1, validation)**: Ejection depth 2→5 with 50K attempt budget, CROSS-exchange operator swapping segments of size 1-3 between routes, or-opt extended to k=1 for single-request relocate in intensify loop, post-solve feasibility validation gate in `sg_solve_route_model`, benchmark iterations 5000→10000. Solomon avgVehGap +0.46→+0.36, avgDistGap +0.2%→-0.2%, equalVehicles 33→36. Li & Lim avgVehGap +0.55→+0.55, avgDistGap +4.3%→+4.1%, equalVehicles 38→40. All 113 solutions verified feasible.
 - **Phase S10 (sequence-dependent setup times + per-operator telemetry)**: Asymmetric N×N setup class matrix (1-indexed, 0 = no class). Setup time added after arrival, before service start, in forward/backward timing passes and both cached insertion evaluators. Per-operator telemetry (selected, accepted, improvements, weight, total_seconds) exposed through Surge API and `--telemetry` flag in benchmarks. Solomon +0.2% → +0.2%, Li & Lim +3.9% → +3.9% (no regression). 135 tests, ASAN clean.
+- **Phase 5+8 (objective modernization + verification)**: Lexicographic best-tracking via `is_better` callback in `ARSolutionOps` (gated by `SGConfig.lexicographic_objective`). Acceptance policy exposed via `SGAcceptType` (SA/RRT/Improving). Adaptive destroy size grows q_max on stagnation, resets on improvement (`SGConfig.adaptive_q`). Cordeau DARP loader (`sg_load_cordeau_darp`) and `bench_cordeau` harness. 20 new tests (135→155). Solomon +0.2%, Li & Lim +3.9% (no regression). DARP solve quality pending dedicated construction heuristic.
 - Unified route state drives both delivery-only and PDPTW solves. The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time constraints.
 - Stop-level splice/excise operations preserve non-adjacent PD placement across ALNS destroy/repair cycles.
 
 ### Phase 8: Verification and Benchmark Expansion
-- [ ] Keep Solomon VRPTW as regression benchmark (already wired).
-- [ ] Add Li & Lim PDPTW harness and BKS comparator.
-- [ ] Add Cordeau DARP harness (including ride-time constraints).
-- [ ] Expand unit tests from smoke coverage to operator and feasibility regression suites.
+- [x] Keep Solomon VRPTW as regression benchmark (56/56, +0.2%).
+- [x] Add Li & Lim PDPTW harness and BKS comparator (57/57, +3.9%).
+- [x] Add Cordeau DARP harness (`bench_cordeau`, `sg_load_cordeau_darp`). Loader + benchmark wired; solve quality pending DARP-specific construction heuristic.
+- [x] Expand unit tests from smoke coverage to operator and feasibility regression suites (135 → 155 tests).
 - [ ] Add profiling-driven performance work (allocation hot paths, insertion complexity, cache reuse).
 
 Execution order:
