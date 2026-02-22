@@ -4126,6 +4126,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->warm_basis_last_attempted = 0;
     solver->warm_basis_last_applied = 0;
     solver->warm_basis_last_rejected = 0;
+    solver->unbounded_valid = 0;
 
     return solver;
 }
@@ -4175,6 +4176,7 @@ void simplex_free(SimplexSolver *solver) {
     free(solver->row_scale);
     free(solver->col_scale);
     free(solver->farkas_ray);
+    free(solver->unbounded_ray);
     free(solver);
 }
 
@@ -4262,6 +4264,65 @@ static void extract_farkas_ray(SimplexSolver *solver) {
     if (solver->verbose >= 2) {
         LP_LOG_STDERR("[extract_farkas_ray] Valid certificate: ||y||_inf = %.6e\n", max_abs);
     }
+}
+
+/* Extract primal unbounded ray in original variable space.
+ *
+ * At unbounded detection, ratio test found no blocking leaving row for the
+ * entering variable direction. With d = B^{-1} a_enter and direction sign dir,
+ * the primal ray is:
+ *   delta_enter = dir
+ *   delta_basic = -(d * dir)
+ * Non-basic non-entering variables stay fixed.
+ */
+static void extract_unbounded_ray(SimplexSolver *solver, int entering, double dir) {
+    if (!solver || !solver->tableau || !solver->model) return;
+
+    SimplexTableau *tab = solver->tableau;
+    int n_orig = solver->model->num_vars;
+    if (n_orig <= 0) {
+        solver->unbounded_valid = 0;
+        return;
+    }
+
+    if (!solver->unbounded_ray) {
+        solver->unbounded_ray = (double*)calloc((size_t)n_orig, sizeof(double));
+    }
+    if (!solver->unbounded_ray) {
+        solver->unbounded_valid = 0;
+        return;
+    }
+    memset(solver->unbounded_ray, 0, (size_t)n_orig * sizeof(double));
+
+    if (!(fabs(dir) > 0.5)) dir = 1.0;
+
+    if (entering >= 0 && entering < n_orig) {
+        solver->unbounded_ray[entering] = dir;
+    }
+
+    for (int k = 0; k < tab->m; k++) {
+        int j = tab->basis[k];
+        if (j >= 0 && j < n_orig) {
+            solver->unbounded_ray[j] = -tab->work2[k] * dir;
+        }
+    }
+
+    /* Sanity-check that the direction is non-trivial and objective-improving
+     * in internal minimization space. */
+    double max_abs = 0.0;
+    double obj_dot = 0.0;
+    for (int j = 0; j < n_orig; j++) {
+        double v = solver->unbounded_ray[j];
+        if (fabs(v) > max_abs) max_abs = fabs(v);
+        obj_dot += solver->model->c[j] * solver->model->obj_sense * v;
+    }
+
+    if (max_abs <= 1e-14 || !(obj_dot < -1e-12)) {
+        solver->unbounded_valid = 0;
+        return;
+    }
+
+    solver->unbounded_valid = 1;
 }
 
 /* ============================================================================
@@ -5806,6 +5867,8 @@ static int simplex_phase2(SimplexSolver *solver) {
             }
 
             if (ratio_status != 0) {
+                double dir = (tab->var_status[entering] == RALPH_NONBASIC_UPPER) ? -1.0 : 1.0;
+                extract_unbounded_ray(solver, entering, dir);
                 primal_remove_perturbation(tab);
                 solver->status = RALPH_STATUS_UNBOUNDED;
                 solver->iterations = iter;
@@ -6521,6 +6584,7 @@ int simplex_solve(SimplexSolver *solver) {
     free(solver->reduced_costs);
     solver->reduced_costs = NULL;
     solver->farkas_valid = 0;
+    solver->unbounded_valid = 0;
 
     solver->trace_phase1_pivot_failures = 0;
     solver->trace_phase1_fail_small_pivot = 0;
@@ -6812,6 +6876,14 @@ int simplex_solve(SimplexSolver *solver) {
 
         /* Unscale solution if scaling was applied */
         unscale_solution(solver);
+    }
+
+    /* Unscale unbounded ray if scaling was applied. */
+    if (solver->is_scaled && solver->unbounded_valid &&
+        solver->unbounded_ray && solver->col_scale) {
+        for (int j = 0; j < solver->model->num_vars; j++) {
+            solver->unbounded_ray[j] *= solver->col_scale[j];
+        }
     }
 
     /* Restore original model if scaling was applied */

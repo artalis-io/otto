@@ -441,9 +441,9 @@ one by one.
 - Add explicit row/column deletion APIs with documented invalidation semantics.
 - Add batch edit APIs with all-or-nothing validation.
 
-6. LP diagnostics parity (infeasible/unbounded)
+6. LP diagnostics parity (infeasible/unbounded) ✅ (2026-02-22)
 - Add public unbounded primal ray API for LP unbounded status.
-- Add LP IIS/conflict API (initial minimal irreducible row set is acceptable as first version).
+- Add LP IIS/conflict API (initial minimal irreducible row set).
 - Add deterministic tests for infeasible/unbounded fixtures.
 
 7. Basis-status API (beyond opaque basis blob)

@@ -119,6 +119,28 @@ int ralph_get_reduced_costs(const RalphModel *model, double *rc);
  * Array must be pre-allocated with size >= ralph_get_num_cons(model) */
 int ralph_get_farkas_ray(const RalphModel *model, double *ray);
 
+/* Unboundedness certificate (primal ray)
+ * Returns 0 on success, -1 if not available (problem not unbounded or no ray).
+ * The ray d has size num_vars and points in an objective-improving direction
+ * that preserves feasibility for sufficiently large steps. */
+int ralph_get_unbounded_ray(const RalphModel *model, double *ray);
+
+/* Compute a minimal irreducible infeasible subsystem (IIS) over LP rows.
+ *
+ * Contract:
+ * - LP-only API: returns -1 for MIP models.
+ * - Requires model status == INFEASIBLE from the most recent solve.
+ * - row_flags must have size >= num_cons; row_flags[i]=1 iff row i is in IIS.
+ *
+ * This first version computes an irreducible row set by iterative deletion.
+ *
+ * @param model     The model
+ * @param row_flags Output bitmap over constraints (size=num_cons)
+ * @param iis_size  Output count of IIS rows (may be NULL)
+ * @return 0 on success, -1 on error/unavailable
+ */
+int ralph_compute_lp_iis(const RalphModel *model, int *row_flags, int *iis_size);
+
 /* Statistics */
 int ralph_get_iterations(const RalphModel *model);
 
