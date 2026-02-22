@@ -172,6 +172,18 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
         if (task->has_time_window) {
             stop->latest_start = sg_task_snap_backward(task, stop->latest_start);
         }
+        if (!stop->is_pickup) {
+            const SGRequestRecord *req = &ctx->requests[stop->request_id];
+            if (req->kind == SG_REQUEST_KIND_PICKUP_DELIVERY && req->has_max_ride_time) {
+                uint32_t pp = sol->request_pickup_stop_pos[stop->request_id];
+                if (pp < stop_len) {
+                    double rb = stops[pp].depart + (double)req->max_ride_time_seconds;
+                    if (rb < stop->latest_start) {
+                        stop->latest_start = rb;
+                    }
+                }
+            }
+        }
         stop->forward_slack = stop->latest_start - stop->service_start;
         latest_next = stop->latest_start;
     }
@@ -514,6 +526,17 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
         latest_start[idx] = latest_next - travel_to_next - setup_to_next_seq - (double)task->service_seconds;
         if (task->has_time_window) {
             latest_start[idx] = sg_task_snap_backward(task, latest_start[idx]);
+        }
+        if (!stops[idx].is_pickup) {
+            const SGRequestRecord *req = &ctx->requests[stops[idx].request_id];
+            if (req->kind == SG_REQUEST_KIND_PICKUP_DELIVERY && req->has_max_ride_time
+                && pickup_seen[stops[idx].request_id]) {
+                double rb = pickup_depart[stops[idx].request_id]
+                             + (double)req->max_ride_time_seconds;
+                if (rb < latest_start[idx]) {
+                    latest_start[idx] = rb;
+                }
+            }
         }
         if (task->has_time_window && latest_start[idx] < (double)task->tw_early - 1e-9) {
             goto done;

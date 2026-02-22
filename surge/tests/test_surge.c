@@ -6035,6 +6035,225 @@ static void test_cordeau_ride_time_enforced(void) {
     sg_free(ctx);
 }
 
+/* ===== Ride-time backward pass tests ===== */
+
+static void test_ride_time_forward_slack(void) {
+    /* Build a 2-request PD route where delivery's forward_slack should be
+       tightened by ride-time.  Verify sg_route_update_timing() produces
+       smaller forward_slack than TW-only. */
+    SGContext *ctx = make_config(50, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    const SGRouteStop *stops;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    /* Request 0: PD with pickup at (10,0), delivery at (20,0).
+       Wide TWs: pickup [0,1000], delivery [0,5000].
+       Max ride time = 100 seconds — much tighter than TW-only. */
+    add_pd_request(ctx,
+                   10.0, 0.0,  0, 1000, 10,   /* pickup */
+                   20.0, 0.0,  0, 5000, 10,   /* delivery */
+                   5.0);
+    assert(sg_request_set_max_ride_time(ctx, 0, 100) == SG_STATUS_OK);
+
+    /* Request 1: PD with pickup at (30,0), delivery at (40,0).
+       Wide TWs, no ride-time constraint. */
+    add_pd_request(ctx,
+                   30.0, 0.0,  0, 86400, 10,
+                   40.0, 0.0,  0, 86400, 10,
+                   5.0);
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert request 0 */
+    {
+        double score, dist;
+        uint32_t pp, dp;
+        assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 0, 0,
+                                                       &score, &pp, &dp, &dist));
+        assert(sg_route_apply_pd_insertion(ctx, &sol, 0, 0, pp, dp, dist) == AR_STATUS_OK);
+    }
+    /* Insert request 1 */
+    {
+        double score, dist;
+        uint32_t pp, dp;
+        assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 1, 0,
+                                                       &score, &pp, &dp, &dist));
+        assert(sg_route_apply_pd_insertion(ctx, &sol, 1, 0, pp, dp, dist) == AR_STATUS_OK);
+    }
+
+    /* The delivery stop of request 0 should have forward_slack tightened.
+       Without ride-time: latest_start would be constrained only by TW (5000).
+       With ride-time: latest_start <= pickup.depart + 100, which is much
+       tighter.  So forward_slack should be noticeably small. */
+    stops = sg_route_vehicle_stop_ptr_const(&sol, 0);
+    {
+        uint32_t dp = sol.request_delivery_stop_pos[0];
+        uint32_t pp = sol.request_pickup_stop_pos[0];
+        double ride_bound = stops[pp].depart + 100.0;
+        /* Delivery latest_start must be <= ride_bound */
+        assert(stops[dp].latest_start <= ride_bound + 1e-9);
+        /* And forward_slack should be < 5000 (the TW-only bound) */
+        assert(stops[dp].forward_slack < 4900.0);
+    }
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_ride_time_insertion_rejection(void) {
+    /* Build a route where inserting a new PD pair would push an existing
+       delivery past its ride-time limit.  Verify the evaluator rejects it
+       or finds a different position. */
+    SGContext *ctx = make_config(50, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    /* Request 0: PD with tight ride-time.
+       Pickup at (10,0) TW [0,50], delivery at (20,0) TW [0,200].
+       ride_limit = 30.  The pickup->delivery direct travel ≈ 10 sec,
+       so just barely fits.  Any push on delivery breaks it. */
+    add_pd_request(ctx,
+                   10.0, 0.0,  0, 50,  0,   /* pickup: no service time */
+                   20.0, 0.0,  0, 200, 0,   /* delivery: no service time */
+                   5.0);
+    assert(sg_request_set_max_ride_time(ctx, 0, 30) == SG_STATUS_OK);
+
+    /* Request 1: PD that would be inserted between request 0's pickup and delivery,
+       pushing delivery late.  Pickup at (12,0), delivery at (18,0). */
+    add_pd_request(ctx,
+                   12.0, 0.0,  0, 86400, 10,   /* 10 sec service at pickup */
+                   18.0, 0.0,  0, 86400, 10,   /* 10 sec service at delivery */
+                   5.0);
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert request 0 first */
+    {
+        double score, dist;
+        uint32_t pp, dp;
+        assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 0, 0,
+                                                       &score, &pp, &dp, &dist));
+        assert(sg_route_apply_pd_insertion(ctx, &sol, 0, 0, pp, dp, dist) == AR_STATUS_OK);
+    }
+
+    /* Verify request 0's ride time is tight */
+    {
+        const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(&sol, 0);
+        uint32_t pp = sol.request_pickup_stop_pos[0];
+        uint32_t dp = sol.request_delivery_stop_pos[0];
+        double ride = stops[dp].service_start - stops[pp].depart;
+        assert(ride <= 30.0 + 1e-9);
+        /* forward_slack on delivery should be tightened by ride-time */
+        assert(stops[dp].latest_start <= stops[pp].depart + 30.0 + 1e-9);
+    }
+
+    /* Try inserting request 1.  If found, it must not violate req 0's ride time. */
+    {
+        double score, dist;
+        uint32_t pp, dp;
+        int found = sg_route_eval_pd_best_insertion_cached(ctx, &sol, 1, 0,
+                                                            &score, &pp, &dp, &dist);
+        if (found) {
+            /* Apply and verify req 0's ride time is still OK */
+            assert(sg_route_apply_pd_insertion(ctx, &sol, 1, 0, pp, dp, dist) == AR_STATUS_OK);
+            {
+                const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(&sol, 0);
+                uint32_t pp0 = sol.request_pickup_stop_pos[0];
+                uint32_t dp0 = sol.request_delivery_stop_pos[0];
+                double ride = stops[dp0].service_start - stops[pp0].depart;
+                assert(ride <= 30.0 + 1e-9);
+            }
+            assert(sg_route_solution_validate(&sol, (void *)ctx));
+        }
+        /* If !found, the ride-time constraint correctly prevented insertion */
+    }
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_cordeau_solve_ok(void) {
+    /* Load Cordeau a1, solve with 5000 iterations.
+       With ride-time tightening in the backward pass the solver
+       should spread requests across vehicles and find a valid solution. */
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    SGStatus status;
+
+    assert(ctx != NULL);
+    sg_config_default(&cfg);
+    cfg.max_iterations = 5000;
+    cfg.seed = 42;
+    cfg.deterministic = true;
+    status = sg_set_config(ctx, &cfg);
+    assert(status == SG_STATUS_OK);
+
+    status = sg_load_cordeau_darp(ctx, "benchmarks/cordeau/a1.txt");
+    assert(status == SG_STATUS_OK);
+    assert(sg_get_request_count(ctx) == 8);
+
+    status = sg_solve(ctx);
+    assert(status == SG_STATUS_OK || status == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    sg_free(ctx);
+}
+
+static void test_ride_time_no_effect_without_flag(void) {
+    /* Build PD requests without has_max_ride_time.
+       Verify forward_slack is unchanged (same as TW-only behavior). */
+    SGContext *ctx = make_config(50, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    const SGRouteStop *stops;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    /* PD request: pickup at (10,0), delivery at (20,0).
+       Wide TWs: pickup [0,1000], delivery [0,5000].
+       NO max ride time set. */
+    add_pd_request(ctx,
+                   10.0, 0.0,  0, 1000, 10,
+                   20.0, 0.0,  0, 5000, 10,
+                   5.0);
+    /* Explicitly do NOT call sg_request_set_max_ride_time */
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert request 0 */
+    {
+        double score, dist;
+        uint32_t pp, dp;
+        assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 0, 0,
+                                                       &score, &pp, &dp, &dist));
+        assert(sg_route_apply_pd_insertion(ctx, &sol, 0, 0, pp, dp, dist) == AR_STATUS_OK);
+    }
+
+    /* Delivery latest_start should be governed by TW (5000), not ride-time.
+       The delivery's latest_start should be close to or equal to 5000
+       (accounting for shift/depot constraints, which are very wide here). */
+    stops = sg_route_vehicle_stop_ptr_const(&sol, 0);
+    {
+        uint32_t dp = sol.request_delivery_stop_pos[0];
+        /* Without ride-time, latest_start is derived from shift_late (86400)
+           and TW (5000).  It should be == 5000. */
+        assert(fabs(stops[dp].latest_start - 5000.0) < 1e-9);
+    }
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -6222,9 +6441,14 @@ int main(void) {
     /* Phase 8A: Cordeau DARP */
     RUN_TEST(test_cordeau_loader_smoke);
     RUN_TEST(test_cordeau_ride_time_enforced);
+    /* Ride-time backward pass */
+    RUN_TEST(test_ride_time_forward_slack);
+    RUN_TEST(test_ride_time_insertion_rejection);
+    RUN_TEST(test_cordeau_solve_ok);
+    RUN_TEST(test_ride_time_no_effect_without_flag);
 
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
-    assert(tests_run == 155);
+    assert(tests_run == 159);
     return tests_passed == tests_run ? 0 : 1;
 }
