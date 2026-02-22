@@ -8,6 +8,14 @@
 #include <string.h>
 #include "lp.h"
 
+static int solver_telemetry_enabled(const SimplexSolver *solver) {
+    return solver && solver->telemetry_enabled;
+}
+
+static int lu_telemetry_enabled(const LUFactorization *lu) {
+    return lu && lu->telemetry_enabled;
+}
+
 double lp_telemetry_now_ms(void) {
     return sh_perf_now_ms();
 }
@@ -165,6 +173,7 @@ void lp_telemetry_prepare_lu_factorize(LUFactorization *lu, const SparseMatrix *
     if (!lu) return;
     lu->used_dense_fallback_last = 0;
     lu->sparse_fallback_last_reason = LU_SPARSE_FALLBACK_NONE;
+    if (!lu_telemetry_enabled(lu)) return;
     lu->perf_factorize_calls++;
     lu->perf_last_basis_nnz = B ? B->nnz : 0;
     lu->perf_last_m = B ? B->nrows : 0;
@@ -184,7 +193,7 @@ void lp_telemetry_record_basis_build(SimplexSolver *owner,
                                      int fastpath_hit,
                                      int cols_rewritten,
                                      unsigned long long tail_shift_bytes) {
-    if (!owner) return;
+    if (!solver_telemetry_enabled(owner)) return;
     if (fastpath_hit) owner->perf_basis_fastpath_hits++;
     if (cols_rewritten > 0) owner->perf_basis_cols_rewritten += cols_rewritten;
     owner->perf_basis_tail_shift_bytes += tail_shift_bytes;
@@ -210,7 +219,7 @@ void lp_telemetry_record_refactor(SimplexSolver *owner,
                                   int m,
                                   int lu_last_k,
                                   int lu_last_basis_nnz) {
-    if (!owner) return;
+    if (!solver_telemetry_enabled(owner)) return;
 
     owner->perf_refactor_all_ms += elapsed_ms;
     owner->perf_refactor_count++;
@@ -275,6 +284,23 @@ void lp_telemetry_record_refactor(SimplexSolver *owner,
             owner->perf_phase2_refactor_safety_forced++;
         }
     }
+}
+
+void lp_telemetry_record_refactor_with_lu(SimplexSolver *owner,
+                                          int phase,
+                                          int reason,
+                                          double elapsed_ms,
+                                          int m,
+                                          const LUFactorization *lu) {
+    int lu_last_k = lu ? lu->perf_last_k : 0;
+    int lu_last_basis_nnz = lu ? lu->perf_last_basis_nnz : 0;
+    lp_telemetry_record_refactor(owner,
+                                 phase,
+                                 reason,
+                                 elapsed_ms,
+                                 m,
+                                 lu_last_k,
+                                 lu_last_basis_nnz);
 }
 
 #define COPY_SOLVER_FIELD(field) out->field = solver->field
@@ -433,7 +459,7 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
 void lp_telemetry_add_solver_stage_ms(SimplexSolver *solver,
                                       LPSolverStage stage,
                                       double elapsed_ms) {
-    if (!solver) return;
+    if (!solver_telemetry_enabled(solver)) return;
     switch (stage) {
         case LP_SOLVER_STAGE_PRIMAL_SETUP:
             solver->perf_primal_setup_ms += elapsed_ms;
@@ -457,32 +483,32 @@ void lp_telemetry_add_solver_stage_ms(SimplexSolver *solver,
 
 void lp_telemetry_add_refactor_runtime_ms(SimplexSolver *solver,
                                           double elapsed_ms) {
-    if (!solver) return;
+    if (!solver_telemetry_enabled(solver)) return;
     solver->perf_refactor_ms += elapsed_ms;
 }
 
 void lp_telemetry_add_ftran_ms(SimplexSolver *solver,
                                double elapsed_ms) {
-    if (!solver) return;
+    if (!solver_telemetry_enabled(solver)) return;
     solver->perf_ftran_ms += elapsed_ms;
 }
 
 void lp_telemetry_add_btran_ms(SimplexSolver *solver,
                                double elapsed_ms) {
-    if (!solver) return;
+    if (!solver_telemetry_enabled(solver)) return;
     solver->perf_btran_ms += elapsed_ms;
 }
 
 void lp_telemetry_add_lu_update_ms(SimplexSolver *solver,
                                    double elapsed_ms) {
-    if (!solver) return;
+    if (!solver_telemetry_enabled(solver)) return;
     solver->perf_lu_update_ms += elapsed_ms;
 }
 
 void lp_telemetry_record_compute_solution(SimplexSolver *solver,
                                           int phase,
                                           double elapsed_ms) {
-    if (!solver) return;
+    if (!solver_telemetry_enabled(solver)) return;
     solver->perf_compute_solution_ms += elapsed_ms;
     if (phase == 1) {
         solver->perf_phase1_compute_solution_ms += elapsed_ms;
@@ -496,7 +522,7 @@ void lp_telemetry_record_compute_solution(SimplexSolver *solver,
 void lp_telemetry_record_compute_reduced_costs(SimplexSolver *solver,
                                                int phase,
                                                double elapsed_ms) {
-    if (!solver) return;
+    if (!solver_telemetry_enabled(solver)) return;
     solver->perf_compute_rc_ms += elapsed_ms;
     if (phase == 1) {
         solver->perf_phase1_compute_rc_ms += elapsed_ms;
@@ -510,7 +536,7 @@ void lp_telemetry_record_compute_reduced_costs(SimplexSolver *solver,
 void lp_telemetry_record_pricing(SimplexSolver *solver,
                                  int phase,
                                  double elapsed_ms) {
-    if (!solver) return;
+    if (!solver_telemetry_enabled(solver)) return;
     solver->perf_pricing_ms += elapsed_ms;
     if (phase == 1) {
         solver->perf_phase1_pricing_ms += elapsed_ms;
@@ -524,7 +550,7 @@ void lp_telemetry_record_pricing(SimplexSolver *solver,
 void lp_telemetry_record_ratio(SimplexSolver *solver,
                                int phase,
                                double elapsed_ms) {
-    if (!solver) return;
+    if (!solver_telemetry_enabled(solver)) return;
     solver->perf_ratio_ms += elapsed_ms;
     if (phase == 1) {
         solver->perf_phase1_ratio_ms += elapsed_ms;
@@ -538,7 +564,7 @@ void lp_telemetry_record_ratio(SimplexSolver *solver,
 void lp_telemetry_record_pivot(SimplexSolver *solver,
                                int phase,
                                double elapsed_ms) {
-    if (!solver) return;
+    if (!solver_telemetry_enabled(solver)) return;
     solver->perf_pivot_ms += elapsed_ms;
     if (phase == 1) {
         solver->perf_phase1_pivot_ms += elapsed_ms;
@@ -552,7 +578,7 @@ void lp_telemetry_record_pivot(SimplexSolver *solver,
 void lp_telemetry_record_periodic_refactor_trigger(SimplexSolver *solver,
                                                    int phase,
                                                    int lu_health_triggered) {
-    if (!solver) return;
+    if (!solver_telemetry_enabled(solver)) return;
     if (lu_health_triggered) {
         solver->perf_refactor_periodic_lu_health++;
         if (phase == 1) solver->perf_phase1_refactor_periodic_lu_health++;
@@ -566,31 +592,31 @@ void lp_telemetry_record_periodic_refactor_trigger(SimplexSolver *solver,
 
 void lp_telemetry_lu_record_dense_factorize_ms(LUFactorization *lu,
                                                double elapsed_ms) {
-    if (!lu) return;
+    if (!lu_telemetry_enabled(lu)) return;
     lu->perf_last_dense_factorize_ms = elapsed_ms;
     lu->perf_total_dense_factorize_ms += elapsed_ms;
 }
 
 void lp_telemetry_lu_record_symbolic_cache_hit(LUFactorization *lu) {
-    if (!lu) return;
+    if (!lu_telemetry_enabled(lu)) return;
     lu->perf_symbolic_cache_hits++;
 }
 
 void lp_telemetry_lu_record_symbolic_cache_miss(LUFactorization *lu) {
-    if (!lu) return;
+    if (!lu_telemetry_enabled(lu)) return;
     lu->perf_symbolic_cache_misses++;
 }
 
 void lp_telemetry_lu_record_symbolic_call(LUFactorization *lu,
                                           double elapsed_ms) {
-    if (!lu) return;
+    if (!lu_telemetry_enabled(lu)) return;
     lu->perf_symbolic_calls++;
     lu->perf_last_symbolic_ms = elapsed_ms;
     lu->perf_total_symbolic_ms += elapsed_ms;
 }
 
 void lp_telemetry_lu_mark_identity_sep_failure(LUFactorization *lu) {
-    if (!lu) return;
+    if (!lu_telemetry_enabled(lu)) return;
     lu->identity_sep_failures++;
 }
 
@@ -602,7 +628,7 @@ void lp_telemetry_lu_record_numeric_stages(LUFactorization *lu,
                                            double dense_ge_numeric_ms,
                                            double identity_placement_ms,
                                            double coo_to_csc_ms) {
-    if (!lu) return;
+    if (!lu_telemetry_enabled(lu)) return;
     lu->perf_last_k = last_k;
     lu->perf_last_a_struct_build_ms = a_struct_build_ms;
     lu->perf_last_markowitz_numeric_ms = markowitz_numeric_ms;
@@ -623,7 +649,7 @@ void lp_telemetry_lu_record_numeric_stages(LUFactorization *lu,
 
 void lp_telemetry_lu_set_sparse_fallback_reason(LUFactorization *lu,
                                                 int reason) {
-    if (!lu) return;
+    if (!lu_telemetry_enabled(lu)) return;
     lu->sparse_fallback_last_reason = reason;
     switch ((LUSparseFallbackReason)reason) {
         case LU_SPARSE_FALLBACK_SMALL_MATRIX:
@@ -646,30 +672,30 @@ void lp_telemetry_lu_mark_sparse_success(LUFactorization *lu) {
 }
 
 void lp_telemetry_lu_mark_dense_fallback(LUFactorization *lu) {
-    if (!lu) return;
+    if (!lu_telemetry_enabled(lu)) return;
     lu->used_dense_fallback_last = 1;
     lu->sparse_dense_fallbacks++;
 }
 
 void lp_telemetry_lu_clear_mkz_last_failure(LUFactorization *lu) {
-    if (!lu) return;
+    if (!lu_telemetry_enabled(lu)) return;
     lu->mkz_last_failure = MKZ_FAIL_NONE;
 }
 
 void lp_telemetry_lu_mark_mkz_attempt(LUFactorization *lu) {
-    if (!lu) return;
+    if (!lu_telemetry_enabled(lu)) return;
     lu->mkz_calls++;
 }
 
 void lp_telemetry_lu_mark_mkz_success(LUFactorization *lu) {
-    if (!lu) return;
+    if (!lu_telemetry_enabled(lu)) return;
     lu->mkz_successes++;
     lu->mkz_last_failure = MKZ_FAIL_NONE;
 }
 
 void lp_telemetry_lu_mark_mkz_failure(LUFactorization *lu,
                                       int rc) {
-    if (!lu) return;
+    if (!lu_telemetry_enabled(lu)) return;
     lu->mkz_failures++;
     lu->mkz_last_failure = rc;
     lu->mkz_dense_fallbacks++;
@@ -677,7 +703,7 @@ void lp_telemetry_lu_mark_mkz_failure(LUFactorization *lu,
 
 void lp_telemetry_lu_mark_mkz_failure_reason(LUFactorization *lu,
                                              int rc) {
-    if (!lu) return;
+    if (!lu_telemetry_enabled(lu)) return;
     if (rc == MKZ_FAIL_WORKSPACE) {
         lu->mkz_fail_workspace++;
     } else if (rc == MKZ_FAIL_POOL) {
