@@ -256,6 +256,45 @@ void test_binary_knapsack(void) {
 }
 
 /* ============================================================================
+ * Test: Branching Tightening Guard
+ *
+ * Regression for stale/integral branch-variable selections that can create
+ * non-tightening children and trigger deep duplicate-node chains.
+ * ============================================================================ */
+void test_branch_tightening_guard(void) {
+    printf("\n=== Test: Branching Tightening Guard ===\n");
+
+    RalphModel *model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MAXIMIZE);
+
+    ralph_add_var(model, 0, 1, 5.0, RALPH_BINARY);
+    ralph_add_var(model, 0, 1, 4.0, RALPH_BINARY);
+    ralph_add_var(model, 0, 1, 3.0, RALPH_BINARY);
+
+    int idx[] = {0, 1, 2};
+    double val[] = {2.0, 3.0, 1.0};
+    ralph_add_constraint(model, 3, idx, val, RALPH_LESS_EQUAL, 5.0);
+
+    ralph_set_int_param(model, "verbose", 0);
+    ralph_set_int_param(model, "max_nodes", 256);
+    ralph_optimize(model);
+
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "Tightening guard: status OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), 9.0, TOLERANCE,
+                "Tightening guard: objective 9");
+
+    MIPSolver *mip = ralph_get_mip_solver(model);
+    ASSERT(mip != NULL, "Tightening guard: MIP solver available");
+    if (mip) {
+        ASSERT(mip->nodes_explored < 64,
+               "Tightening guard: avoids duplicate-node explosion");
+    }
+
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Test: Integer Programming
  *
  * min  x + y
@@ -2027,7 +2066,8 @@ void test_scp_lu_regression(void) {
 /* ============================================================================
  * Test: Constraint Modification API
  *
- * Tests ralph_set_constraint_rhs() and ralph_get_var_bounds().
+ * Tests ralph_set_constraint_rhs(), ralph_set_constraint_coef(),
+ * ralph_set_constraint_coefs(), and ralph_get_var_bounds().
  * ============================================================================ */
 void test_constraint_modification(void) {
     printf("\n=== Test: Constraint Modification API ===\n");
@@ -2063,15 +2103,59 @@ void test_constraint_modification(void) {
     /* Modify RHS: change x + y >= 2 to x + y >= 5 */
     ret = ralph_set_constraint_rhs(model, 0, 5.0);
     ASSERT(ret == 0, "ralph_set_constraint_rhs returns 0");
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_UNKNOWN,
+           "RHS edit invalidates solve status");
 
     /* Re-solve */
     ralph_optimize(model);
     ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Re-solve is OPTIMAL");
     ASSERT_NEAR(ralph_get_objval(model), 5.0, TOLERANCE, "New objective is 5.0");
 
+    /* Modify matrix coefficient: 2*x + y >= 5 */
+    ret = ralph_set_constraint_coef(model, 0, 0, 2.0);
+    ASSERT(ret == 0, "ralph_set_constraint_coef returns 0");
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_UNKNOWN,
+           "Coefficient edit invalidates solve status");
+    ralph_optimize(model);
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Coefficient edit re-solve is OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), 2.5, TOLERANCE,
+                "Coefficient edit objective is 2.5");
+
+    /* Remove x coefficient: y >= 5 */
+    ret = ralph_set_constraint_coef(model, 0, 0, 0.0);
+    ASSERT(ret == 0, "ralph_set_constraint_coef can remove entry");
+    ralph_optimize(model);
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "Entry removal re-solve is OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), 5.0, TOLERANCE,
+                "Entry removal objective is 5.0");
+
+    /* Bulk coefficient updates: x + 2*y >= 5 */
+    int up_cons[] = {0, 0};
+    int up_vars[] = {0, 1};
+    double up_vals[] = {1.0, 2.0};
+    ret = ralph_set_constraint_coefs(model, 2, up_cons, up_vars, up_vals);
+    ASSERT(ret == 0, "ralph_set_constraint_coefs returns 0");
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_UNKNOWN,
+           "Bulk coefficient edit invalidates solve status");
+    ralph_optimize(model);
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "Bulk coefficient re-solve is OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), 2.5, TOLERANCE,
+                "Bulk coefficient objective is 2.5");
+
     /* Test invalid constraint index */
     ret = ralph_set_constraint_rhs(model, 99, 1.0);
     ASSERT(ret == -1, "Invalid constraint index returns -1");
+
+    ret = ralph_set_constraint_coef(model, 99, 0, 1.0);
+    ASSERT(ret == -1, "Invalid constraint index for coef returns -1");
+    ret = ralph_set_constraint_coef(model, 0, 99, 1.0);
+    ASSERT(ret == -1, "Invalid variable index for coef returns -1");
+
+    int bad_vars[] = {0, 99};
+    ret = ralph_set_constraint_coefs(model, 2, up_cons, bad_vars, up_vals);
+    ASSERT(ret == -1, "Invalid index in bulk coef update returns -1");
 
     /* Test invalid variable index for bounds query */
     ret = ralph_get_var_bounds(model, 99, &lb, &ub);
@@ -2236,84 +2320,98 @@ void test_branching_control(void) {
     ralph_free(model);
 }
 
-/* ============================================================================
- * Test: Warm Start (Basis Save/Restore)
- *
- * Test that basis can be saved and restored for LP warm start.
- * ============================================================================ */
-void test_warm_start(void) {
-    printf("\n=== Test: Warm Start (Basis Save/Restore) ===\n");
-
-    /* Simple LP: min -x - y
-     * s.t. x + y <= 4
-     *      x, y >= 0
-     */
+static RalphModel* build_warm_start_test_lp(double rhs) {
     RalphModel *model = ralph_create();
-    ASSERT(model != NULL, "Model created");
-
+    if (!model) return NULL;
     ralph_set_obj_sense(model, RALPH_MINIMIZE);
-
     ralph_add_var(model, 0.0, 10.0, -1.0, RALPH_CONTINUOUS);  /* x */
     ralph_add_var(model, 0.0, 10.0, -1.0, RALPH_CONTINUOUS);  /* y */
-
     int idx[] = {0, 1};
     double val[] = {1.0, 1.0};
-    ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 4.0);
+    ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, rhs);
+    return model;
+}
 
-    /* Solve first time */
+/* ============================================================================
+ * Test: Warm Start (Live Solver Load Path)
+ *
+ * Load basis after optimize() while solver/tableau exists.
+ * ============================================================================ */
+void test_warm_start_live_load(void) {
+    printf("\n=== Test: Warm Start (Live Load) ===\n");
+
+    RalphModel *model = build_warm_start_test_lp(4.0);
+    ASSERT(model != NULL, "Model created");
+
     ralph_optimize(model);
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Initial solve is OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), -4.0, TOLERANCE, "Initial objective is -4.0");
 
-    RalphStatus status = ralph_get_status(model);
-    ASSERT(status == RALPH_STATUS_OPTIMAL, "First solve is OPTIMAL");
-
-    double obj1 = ralph_get_objval(model);
-    ASSERT_NEAR(obj1, -4.0, TOLERANCE, "First objective is -4.0");
-
-    /* Save basis */
     RalphBasis *basis = ralph_save_basis(model);
     ASSERT(basis != NULL, "Basis saved successfully");
 
-    /* Modify RHS and re-solve */
-    ralph_set_constraint_rhs(model, 0, 6.0);  /* x + y <= 6 */
-    ralph_optimize(model);
-
-    status = ralph_get_status(model);
-    ASSERT(status == RALPH_STATUS_OPTIMAL, "Second solve is OPTIMAL");
-
-    double obj2 = ralph_get_objval(model);
-    ASSERT_NEAR(obj2, -6.0, TOLERANCE, "Second objective is -6.0");
-
-    /* Restore original RHS and basis */
-    ralph_set_constraint_rhs(model, 0, 4.0);  /* x + y <= 4 */
-
-    /* Load basis should work if solver was recreated with same dimensions */
     int ret = ralph_load_basis(model, basis);
-    /* Note: load_basis may return -1 if solver was freed, that's expected */
-    if (ret == 0) {
-        printf("  INFO: Basis loaded successfully\n");
-    } else {
-        printf("  INFO: Basis load returned %d (solver may need to exist first)\n", ret);
-    }
+    ASSERT(ret == 0, "Live basis load returns 0");
 
-    /* Either way, re-solve should give correct answer */
     ralph_optimize(model);
-    status = ralph_get_status(model);
-    ASSERT(status == RALPH_STATUS_OPTIMAL, "Third solve is OPTIMAL");
-
-    double obj3 = ralph_get_objval(model);
-    ASSERT_NEAR(obj3, -4.0, TOLERANCE, "Third objective is -4.0");
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Re-solve after live load is OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), -4.0, TOLERANCE, "Objective unchanged after live load");
 
     ralph_free_basis(basis);
     ralph_free(model);
+}
 
-    /* Test edge case: save basis from unsolved model */
-    model = ralph_create();
+/* ============================================================================
+ * Test: Warm Start (Staged Pre-solve Load Path)
+ *
+ * Load basis before first optimize(); basis is staged and applied on optimize().
+ * ============================================================================ */
+void test_warm_start_staged_load(void) {
+    printf("\n=== Test: Warm Start (Staged Load) ===\n");
+
+    RalphModel *source = build_warm_start_test_lp(4.0);
+    ASSERT(source != NULL, "Source model created");
+    ralph_optimize(source);
+    ASSERT(ralph_get_status(source) == RALPH_STATUS_OPTIMAL, "Source solve is OPTIMAL");
+    RalphBasis *basis = ralph_save_basis(source);
+    ASSERT(basis != NULL, "Source basis saved");
+
+    RalphModel *target = build_warm_start_test_lp(4.0);
+    ASSERT(target != NULL, "Target model created");
+
+    int ret = ralph_load_basis(target, basis);
+    ASSERT(ret == 0, "Staged basis load returns 0 before optimize");
+    ASSERT(ralph_get_status(target) == RALPH_STATUS_UNKNOWN, "Status remains UNKNOWN before solve");
+
+    ralph_optimize(target);
+    ASSERT(ralph_get_status(target) == RALPH_STATUS_OPTIMAL, "Staged-load solve is OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(target), -4.0, TOLERANCE, "Staged-load objective is -4.0");
+
+    /* Dimension mismatch rejection in staged mode */
+    RalphModel *mismatch = ralph_create();
+    ASSERT(mismatch != NULL, "Mismatch model created");
+    ralph_add_var(mismatch, 0.0, 1.0, 1.0, RALPH_CONTINUOUS);
+    ret = ralph_load_basis(mismatch, basis);
+    ASSERT(ret == -1, "Staged load rejects dimension mismatch");
+
+    ralph_free(mismatch);
+    ralph_free(target);
+    ralph_free_basis(basis);
+    ralph_free(source);
+}
+
+/* ============================================================================
+ * Test: Warm Start Edge Cases
+ * ============================================================================ */
+void test_warm_start_edge_cases(void) {
+    printf("\n=== Test: Warm Start (Edge Cases) ===\n");
+
+    RalphModel *model = ralph_create();
     ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_CONTINUOUS);
-    basis = ralph_save_basis(model);
+    RalphBasis *basis = ralph_save_basis(model);
     ASSERT(basis == NULL, "Cannot save basis from unsolved model");
     ralph_free(model);
 
-    /* Test edge case: free NULL basis */
     ralph_free_basis(NULL);  /* Should not crash */
     ASSERT(1, "Free NULL basis does not crash");
 }
@@ -5154,6 +5252,7 @@ int main(int argc, char **argv) {
     /* MIP Tests */
     if (!skip_mip) {
         test_binary_knapsack();
+        test_branch_tightening_guard();
         test_integer_programming();
         test_mixed_integer();
         test_facility_location();
@@ -5182,7 +5281,9 @@ int main(int argc, char **argv) {
         test_branching_control();
 
         /* Warm start tests */
-        test_warm_start();
+        test_warm_start_live_load();
+        test_warm_start_staged_load();
+        test_warm_start_edge_cases();
 
         /* Cut callback tests */
         test_cut_callback();

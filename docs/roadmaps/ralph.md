@@ -186,6 +186,24 @@ Exit criteria:
 - MIP compiles/runs through adapter paths.
 - No LP regression on NETLIB gates.
 
+Progress (2026-02-22):
+- Implemented internal MIP/LP adapter (`ralph/src/mip_lp_adapter.h`) and rewired MIP node/refactor/probing paths in:
+  - `ralph/src/mip.c`
+  - `ralph/src/branch_bound.c`
+- Removed direct tableau lifecycle mutation from these MIP paths in favor of adapter calls (`apply bounds`, `recompute`, `dual reopt`, `warm restore`, `cold recover`).
+- Added branching safety guards to prevent duplicate non-tightening child chains:
+  - Post-probing fractional re-check fallback before branching (`mip.c`)
+  - Child-creation tightening checks (`branch_bound.c`)
+- Added targeted regression unit test:
+  - `test_branch_tightening_guard` in `ralph/tests/test_main.c`
+- Regression gates after Phase 2 changes:
+  - `make -C ralph test-netlib-gate-small` PASS
+    - Artifacts: `/tmp/netlib-regression-gate-20260222-174924`
+    - Summary: 26 files, timeout 4, status/objective/invalid mismatches 0, dense fallback files 0, unexpected regressions 0.
+  - `make -C ralph test-netlib-gate` PASS
+    - Artifacts: `/tmp/netlib-regression-gate-20260222-175112`
+    - Summary: 84 files, timeout 27, status/objective/invalid mismatches 0, dense fallback files 0, unexpected regressions 0.
+
 ### Phase 3: API-Level Separation (Non-Breaking)
 
 Scope:
