@@ -3899,6 +3899,147 @@ static void test_waiting_cost_vehicle_preference(void) {
     assert(cost_with_wait > cost_no_wait + 10000.0);
 }
 
+/* ===== Overtime cost tests ===== */
+
+static void test_overtime_cost_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_overtime_cost(ctx, v, 5.0) == SG_STATUS_OK);
+    assert(sg_vehicle_set_overtime_cost(ctx, v, 0.0) == SG_STATUS_OK);
+    assert(sg_vehicle_set_overtime_cost(ctx, v, -1.0) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_overtime_cost(ctx, 999, 1.0) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_overtime_cost(NULL, 0, 1.0) == SG_STATUS_INVALID_ARG);
+    /* Getter returns 0.0 before solve */
+    assert(sg_solution_get_route_overtime(ctx, 0) == 0.0);
+    sg_free(ctx);
+}
+
+static void test_overtime_cost_accumulation(void) {
+    /* One vehicle, shift 0-100, delivery at distance 80 (round trip ~160s).
+       With cost_per_overtime > 0, shift is soft -> overtime ~60s.
+       Two runs with different cost_per_overtime values, both > 0.
+       Higher coefficient = higher cost. */
+    double cost_low, cost_high;
+    double route_overtime;
+
+    /* Run 1: low overtime cost */
+    {
+        SGContext *ctx = make_config(100, 42);
+        uint32_t depot;
+        double cap = 100.0;
+        uint32_t v;
+
+        sg_set_dimension_count(ctx, 1);
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+        add_delivery_request(ctx, 80.0, 0.0, 0, 99999, 10, -1.0);
+
+        v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 100) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_costs(ctx, v, 0.0, 1.0, 0.0) == SG_STATUS_OK);
+        assert(sg_vehicle_set_overtime_cost(ctx, v, 1.0) == SG_STATUS_OK);
+
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 0);
+        cost_low = sg_get_total_cost(ctx);
+
+        /* Verify overtime is accumulated */
+        route_overtime = sg_solution_get_route_overtime(ctx, 0);
+        assert(route_overtime > 0.0);
+
+        sg_free(ctx);
+    }
+
+    /* Run 2: high overtime cost */
+    {
+        SGContext *ctx = make_config(100, 42);
+        uint32_t depot;
+        double cap = 100.0;
+        uint32_t v;
+
+        sg_set_dimension_count(ctx, 1);
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+        add_delivery_request(ctx, 80.0, 0.0, 0, 99999, 10, -1.0);
+
+        v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 100) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_costs(ctx, v, 0.0, 1.0, 0.0) == SG_STATUS_OK);
+        assert(sg_vehicle_set_overtime_cost(ctx, v, 100.0) == SG_STATUS_OK);
+
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 0);
+        cost_high = sg_get_total_cost(ctx);
+        sg_free(ctx);
+    }
+
+    /* Higher coefficient = higher cost */
+    assert(cost_high > cost_low + 100.0);
+}
+
+static void test_overtime_cost_soft_shift(void) {
+    /* One vehicle, tight shift that makes delivery infeasible with hard shift.
+       Delivery at distance 80 -> round trip ~170s (with 10s service).
+       Shift 0-100 is too short for round trip.
+       With cost_per_overtime=0 (hard shift) -> request unassigned.
+       With cost_per_overtime=1.0 (soft shift) -> request assigned with overtime. */
+
+    /* Run 1: hard shift (cost_per_overtime=0) -> unassigned */
+    {
+        SGContext *ctx = make_config(200, 42);
+        uint32_t depot;
+        double cap = 100.0;
+        uint32_t v;
+
+        sg_set_dimension_count(ctx, 1);
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+        add_delivery_request(ctx, 80.0, 0.0, 0, 99999, 10, -1.0);
+
+        v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 100) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_costs(ctx, v, 0.0, 1.0, 0.0) == SG_STATUS_OK);
+        /* cost_per_overtime=0 -> shift_late is hard */
+
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 1);
+        sg_free(ctx);
+    }
+
+    /* Run 2: soft shift (cost_per_overtime=1.0) -> assigned with overtime */
+    {
+        SGContext *ctx = make_config(200, 42);
+        uint32_t depot;
+        double cap = 100.0;
+        uint32_t v;
+        SGStats stats;
+
+        sg_set_dimension_count(ctx, 1);
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+        add_delivery_request(ctx, 80.0, 0.0, 0, 99999, 10, -1.0);
+
+        v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 100) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_costs(ctx, v, 0.0, 1.0, 0.0) == SG_STATUS_OK);
+        assert(sg_vehicle_set_overtime_cost(ctx, v, 1.0) == SG_STATUS_OK);
+
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 0);
+
+        /* Verify overtime was recorded */
+        assert(sg_solution_get_route_overtime(ctx, 0) > 0.0);
+        sg_get_stats(ctx, &stats);
+        assert(stats.total_overtime > 0.0);
+
+        sg_free(ctx);
+    }
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -4014,8 +4155,12 @@ int main(void) {
     RUN_TEST(test_waiting_cost_api);
     RUN_TEST(test_waiting_cost_accumulation);
     RUN_TEST(test_waiting_cost_vehicle_preference);
+    /* Overtime cost */
+    RUN_TEST(test_overtime_cost_api);
+    RUN_TEST(test_overtime_cost_accumulation);
+    RUN_TEST(test_overtime_cost_soft_shift);
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
-    assert(tests_run == 102);
+    assert(tests_run == 105);
     return tests_passed == tests_run ? 0 : 1;
 }

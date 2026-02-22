@@ -27,6 +27,9 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
         if (sol->route_waiting) {
             sol->route_waiting[vehicle_id] = 0.0;
         }
+        if (sol->route_overtime) {
+            sol->route_overtime[vehicle_id] = 0.0;
+        }
         return 1;
     }
 
@@ -94,9 +97,17 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
     if (sol->route_waiting) {
         sol->route_waiting[vehicle_id] = waiting;
     }
+    if (sol->route_overtime) {
+        double ot = 0.0;
+        if (vehicle->has_shift_time_window && time_cursor > (double)vehicle->shift_late) {
+            ot = time_cursor - (double)vehicle->shift_late;
+        }
+        sol->route_overtime[vehicle_id] = ot;
+    }
 
     /* Backward pass */
-    latest_next = vehicle->has_shift_time_window ? (double)vehicle->shift_late : INFINITY;
+    latest_next = (vehicle->has_shift_time_window && !(vehicle->cost_per_overtime > 0.0))
+        ? (double)vehicle->shift_late : INFINITY;
     if (!vehicle->open_end) {
         if (end_depot->has_time_window && latest_next > (double)end_depot->tw_late) {
             latest_next = (double)end_depot->tw_late;
@@ -407,7 +418,8 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
             }
         }
     }
-    if (vehicle->has_shift_time_window && time_cursor > (double)vehicle->shift_late + 1e-9) {
+    if (vehicle->has_shift_time_window && time_cursor > (double)vehicle->shift_late + 1e-9
+        && !(vehicle->cost_per_overtime > 0.0)) {
         goto done;
     }
 
@@ -423,7 +435,8 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
         }
     }
 
-    latest_next = vehicle->has_shift_time_window ? (double)vehicle->shift_late : INFINITY;
+    latest_next = (vehicle->has_shift_time_window && !(vehicle->cost_per_overtime > 0.0))
+        ? (double)vehicle->shift_late : INFINITY;
     if (!vehicle->open_end) {
         if (end_depot->has_time_window && latest_next > (double)end_depot->tw_late) {
             latest_next = (double)end_depot->tw_late;
@@ -747,7 +760,8 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
         } else {
             /* At end of route: check return to end depot (or shift/duration for open-end) */
             if (vehicle->open_end) {
-                if (vehicle->has_shift_time_window && cursor > (double)vehicle->shift_late + 1e-9) {
+                if (vehicle->has_shift_time_window && cursor > (double)vehicle->shift_late + 1e-9
+                    && !(vehicle->cost_per_overtime > 0.0)) {
                     return 0;
                 }
                 if (vehicle->max_duration_seconds > 0) {
@@ -765,7 +779,8 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                 if (end_depot->has_time_window && arrival_at_end > (double)end_depot->tw_late + 1e-9) {
                     return 0;
                 }
-                if (vehicle->has_shift_time_window && arrival_at_end > (double)vehicle->shift_late + 1e-9) {
+                if (vehicle->has_shift_time_window && arrival_at_end > (double)vehicle->shift_late + 1e-9
+                    && !(vehicle->cost_per_overtime > 0.0)) {
                     return 0;
                 }
                 if (vehicle->max_duration_seconds > 0) {
@@ -1070,7 +1085,8 @@ int sg_route_eval_pd_best_insertion_cached(
                     /* j == stop_len + 1: delivery at end of route */
                     if (vehicle->open_end) {
                         if (vehicle->has_shift_time_window &&
-                            d_depart > (double)vehicle->shift_late + 1e-9) {
+                            d_depart > (double)vehicle->shift_late + 1e-9
+                            && !(vehicle->cost_per_overtime > 0.0)) {
                             goto next_j;
                         }
                         if (vehicle->max_duration_seconds > 0 &&
@@ -1085,7 +1101,8 @@ int sg_route_eval_pd_best_insertion_cached(
                             goto next_j;
                         }
                         if (vehicle->has_shift_time_window &&
-                            arrival_at_end > (double)vehicle->shift_late + 1e-9) {
+                            arrival_at_end > (double)vehicle->shift_late + 1e-9
+                            && !(vehicle->cost_per_overtime > 0.0)) {
                             goto next_j;
                         }
                         if (vehicle->max_duration_seconds > 0 &&

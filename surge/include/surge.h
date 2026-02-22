@@ -93,6 +93,7 @@ SGStatus sg_vehicle_set_costs(SGContext *ctx, uint32_t vehicle_id,
                                double fixed_cost, double cost_per_distance,
                                double cost_per_duration);
 SGStatus sg_vehicle_set_waiting_cost(SGContext *ctx, uint32_t vehicle_id, double cost_per_waiting);
+SGStatus sg_vehicle_set_overtime_cost(SGContext *ctx, uint32_t vehicle_id, double cost_per_overtime);
 SGStatus sg_set_unassigned_weight(SGContext *ctx, double weight);
 
 /* Convenience constructors (single-dim demand) */
@@ -127,6 +128,7 @@ SGStatus sg_solution_get_route_stop(const SGContext *ctx, uint32_t route_index,
                                      uint32_t stop_index, SGSolutionStop *stop_out);
 double sg_solution_get_route_duration(const SGContext *ctx, uint32_t route_index);
 double sg_solution_get_route_waiting(const SGContext *ctx, uint32_t route_index);
+double sg_solution_get_route_overtime(const SGContext *ctx, uint32_t route_index);
 SGStatus sg_solution_get_route_stop_load(const SGContext *ctx, uint32_t route_index,
                                           uint32_t stop_index, uint32_t dimension,
                                           double *load_out);

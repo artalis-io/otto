@@ -600,6 +600,16 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
             }
             ctx->stats.total_waiting = tw;
         }
+        {
+            double tot = 0.0;
+            uint32_t ov;
+            if (final_sol->route_overtime) {
+                for (ov = 0; ov < final_sol->num_vehicles; ov++) {
+                    tot += final_sol->route_overtime[ov];
+                }
+            }
+            ctx->stats.total_overtime = tot;
+        }
 
         /* Retain final solution for route/stop export */
         if (ctx->final_solution) {

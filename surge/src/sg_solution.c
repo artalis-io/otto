@@ -592,6 +592,7 @@ void sg_route_solution_reset(SGRouteSolution *sol) {
     free(sol->route_distance);
     free(sol->route_duration);
     free(sol->route_waiting);
+    free(sol->route_overtime);
     free(sol->route_stop_load);
     sol->route_lengths = NULL;
     sol->route_requests = NULL;
@@ -606,6 +607,7 @@ void sg_route_solution_reset(SGRouteSolution *sol) {
     sol->route_distance = NULL;
     sol->route_duration = NULL;
     sol->route_waiting = NULL;
+    sol->route_overtime = NULL;
     sol->route_stop_load = NULL;
     sol->num_vehicles = 0;
     sol->route_stride = 0;
@@ -676,6 +678,7 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
     sol->route_distance = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
     sol->route_duration = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
     sol->route_waiting = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
+    sol->route_overtime = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
 
     if (ctx->dimension_count > 0) {
         /* +1 per vehicle because load is a prefix sum: entry i holds cumulative
@@ -689,7 +692,8 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
         !sol->route_stops || !sol->route_stop_prev || !sol->route_stop_next ||
         !sol->request_vehicle || !sol->request_pos || !sol->request_pickup_stop_pos ||
         !sol->request_delivery_stop_pos || !sol->route_distance || !sol->route_duration ||
-        !sol->route_waiting || (ctx->dimension_count > 0 && !sol->route_stop_load)) {
+        !sol->route_waiting || !sol->route_overtime ||
+        (ctx->dimension_count > 0 && !sol->route_stop_load)) {
         sg_route_solution_reset(sol);
         return AR_STATUS_OUT_OF_MEMORY;
     }
@@ -775,6 +779,10 @@ void *sg_route_solution_copy(const void *solution, void *user_ctx) {
             memcpy(dst->route_waiting, src->route_waiting,
                    (size_t)src->num_vehicles * sizeof(double));
         }
+        if (src->route_overtime && dst->route_overtime) {
+            memcpy(dst->route_overtime, src->route_overtime,
+                   (size_t)src->num_vehicles * sizeof(double));
+        }
         if (src->route_stop_load && dst->route_stop_load && ctx->dimension_count > 0) {
             size_t load_size = (size_t)src->num_vehicles * ((size_t)src->stop_stride + 1U) *
                                (size_t)ctx->dimension_count;
@@ -827,7 +835,8 @@ int sg_route_solution_validate(const void *solution, void *user_ctx) {
          !sol->route_requests || !sol->route_stop_lengths || !sol->route_stops ||
          !sol->route_stop_prev || !sol->route_stop_next ||
          !sol->request_pickup_stop_pos || !sol->request_delivery_stop_pos ||
-         !sol->route_distance || !sol->route_duration || !sol->route_waiting)) {
+         !sol->route_distance || !sol->route_duration || !sol->route_waiting ||
+         !sol->route_overtime)) {
         return 0;
     }
 
@@ -979,6 +988,9 @@ double sg_route_solution_cost(const void *solution, void *user_ctx) {
             }
             if (sol->route_waiting) {
                 cost += vehicle->cost_per_waiting * sol->route_waiting[v];
+            }
+            if (sol->route_overtime) {
+                cost += vehicle->cost_per_overtime * sol->route_overtime[v];
             }
         }
     }
