@@ -143,6 +143,7 @@ uint32_t sg_add_pd_request(SGContext *ctx,
 SGStatus sg_validate_model(const SGContext *ctx);
 SGStatus sg_load_solomon_vrptw(SGContext *ctx, const char *file_path);
 SGStatus sg_load_li_lim_pdptw(SGContext *ctx, const char *file_path);
+SGStatus sg_load_cordeau_darp(SGContext *ctx, const char *file_path);
 
 SGStatus sg_solve(SGContext *ctx);
 

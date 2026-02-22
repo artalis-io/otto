@@ -471,6 +471,8 @@ int sg_route_excise_stop(const SGContext *ctx, SGRouteSolution *sol,
                          uint32_t vehicle_id, uint32_t at);
 double sg_route_objective_cost(uint32_t unassigned, uint32_t vehicles_used,
                                double total_distance);
+int sg_route_solution_is_better(const void *candidate, const void *current_best,
+                                 void *user_ctx);
 
 /* sg_cost.c */
 double sg_euclid(double ax, double ay, double bx, double by);

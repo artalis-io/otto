@@ -46,6 +46,12 @@ typedef struct {
     int32_t late;
 } SGTimeWindow;
 
+typedef enum {
+    SG_ACCEPT_SA = 0,
+    SG_ACCEPT_RRT = 1,
+    SG_ACCEPT_IMPROVING = 2
+} SGAcceptType;
+
 typedef struct {
     int max_iterations;
     int max_time_seconds;
@@ -56,6 +62,9 @@ typedef struct {
     bool deterministic;
     bool require_bound_requests_at_solve;
     SGPriorityRemovalPolicy priority_removal_policy;
+    bool lexicographic_objective;
+    SGAcceptType accept_type;
+    bool adaptive_q;
 } SGConfig;
 
 typedef struct {

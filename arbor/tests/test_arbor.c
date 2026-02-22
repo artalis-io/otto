@@ -105,6 +105,7 @@ int main(void) {
     ops.cost = test_cost;
     ops.size = test_size;
     ops.validate = test_validate;
+    ops.is_better = NULL;
     ops.user_ctx = NULL;
 
     ctx = ar_alns_create(&params, &ops, NULL);

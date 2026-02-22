@@ -17,6 +17,8 @@ typedef void (*ARSolutionFreeFn)(void *solution, void *user_ctx);
 typedef double (*ARSolutionCostFn)(const void *solution, void *user_ctx);
 typedef int (*ARSolutionSizeFn)(const void *solution, void *user_ctx);
 typedef int (*ARSolutionValidateFn)(const void *solution, void *user_ctx);
+typedef int (*ARSolutionIsBetterFn)(const void *candidate, const void *current_best,
+                                     void *user_ctx);
 
 typedef struct {
     ARSolutionCopyFn copy;
@@ -24,6 +26,7 @@ typedef struct {
     ARSolutionCostFn cost;
     ARSolutionSizeFn size;
     ARSolutionValidateFn validate;
+    ARSolutionIsBetterFn is_better;  /* Optional: NULL = use cost < best_cost */
     void *user_ctx;
 } ARSolutionOps;
 

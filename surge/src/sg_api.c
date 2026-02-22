@@ -73,6 +73,20 @@ static SGStatus build_config(SGContext *ctx, const ShJsonValue *cfg_val) {
 
         v = sh_json_get(cfg_val, "deterministic");
         if (v) cfg.deterministic = sh_json_as_bool(v, cfg.deterministic);
+
+        v = sh_json_get(cfg_val, "accept_type");
+        if (v) {
+            const char *at = sh_json_as_string(v, "sa");
+            if (strcmp(at, "rrt") == 0) cfg.accept_type = SG_ACCEPT_RRT;
+            else if (strcmp(at, "improving") == 0) cfg.accept_type = SG_ACCEPT_IMPROVING;
+            else cfg.accept_type = SG_ACCEPT_SA;
+        }
+
+        v = sh_json_get(cfg_val, "lexicographic_objective");
+        if (v) cfg.lexicographic_objective = sh_json_as_bool(v, cfg.lexicographic_objective);
+
+        v = sh_json_get(cfg_val, "adaptive_q");
+        if (v) cfg.adaptive_q = sh_json_as_bool(v, cfg.adaptive_q);
     }
 
     return sg_set_config(ctx, &cfg);

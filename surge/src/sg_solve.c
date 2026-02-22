@@ -486,6 +486,8 @@ static ARALNSContext *sg_create_route_alns(SGContext *ctx, ARALNSParams *params,
     ops->cost = sg_route_solution_cost;
     ops->size = sg_route_solution_size;
     ops->validate = sg_route_solution_validate;
+    ops->is_better = ctx->config.lexicographic_objective
+                     ? sg_route_solution_is_better : NULL;
     ops->user_ctx = ctx;
 
     alns = ar_alns_create(params, ops, ctx);
@@ -578,6 +580,16 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
        This makes temperature ~1000x hotter so SA accepts distance-worsening
        moves that reduce vehicle count. */
     ar_alns_calibrate_sa(&params, sg_route_solution_cost(&initial, ctx), phase1_iters);
+    if (ctx->config.accept_type != SG_ACCEPT_SA) {
+        params.accept_type = (ARAcceptType)ctx->config.accept_type;
+        if (params.accept_type == AR_ACCEPT_RRT) {
+            double ic = sg_route_solution_cost(&initial, ctx);
+            params.threshold = 0.05 * fabs(ic);
+        }
+    }
+    if (ctx->config.adaptive_q) {
+        params.adaptive_q = 1;
+    }
 
     alns = sg_create_route_alns(ctx, &params, &ops, 3.0, 2.0);
     if (!alns) {
@@ -624,6 +636,18 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
                                   ? p2_initial->total_distance
                                   : sg_route_solution_cost(p2_initial, ctx),
                               phase2_iters);
+        if (ctx->config.accept_type != SG_ACCEPT_SA) {
+            params.accept_type = (ARAcceptType)ctx->config.accept_type;
+            if (params.accept_type == AR_ACCEPT_RRT) {
+                double ic = p2_initial->total_distance > 0.0
+                            ? p2_initial->total_distance
+                            : sg_route_solution_cost(p2_initial, ctx);
+                params.threshold = 0.05 * fabs(ic);
+            }
+        }
+        if (ctx->config.adaptive_q) {
+            params.adaptive_q = 1;
+        }
 
         alns = sg_create_route_alns(ctx, &params, &ops, 1.5, 1.0);
         if (!alns) {
@@ -655,7 +679,12 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
 
     /* Determine best solution across phases. */
     {
-        SGRouteSolution *best = p2_best ? p2_best : p1_best;
+        SGRouteSolution *best;
+        if (p2_best && p1_best && ctx->config.lexicographic_objective) {
+            best = sg_route_solution_is_better(p1_best, p2_best, ctx) ? p1_best : p2_best;
+        } else {
+            best = p2_best ? p2_best : p1_best;
+        }
         if (best) {
             (void)sg_route_postprocess_reduce_vehicles(ctx, best);
             (void)sg_route_postprocess_ejection_reduce(ctx, best);
@@ -800,6 +829,7 @@ SGStatus sg_solve(SGContext *ctx) {
     ops.cost = sg_bootstrap_cost;
     ops.size = sg_bootstrap_size;
     ops.validate = sg_bootstrap_validate;
+    ops.is_better = NULL;
     ops.user_ctx = ctx;
 
     alns = ar_alns_create(&params, &ops, ctx);

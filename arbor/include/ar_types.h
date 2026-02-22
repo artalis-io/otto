@@ -54,6 +54,9 @@ typedef struct {
 
     int restart_threshold;        /* Stagnation iters before restart from best (0=disabled) */
     double restart_temp_ratio;    /* SA temperature ratio for reheat on restart (0..1) */
+
+    int adaptive_q;            /* 0 = disabled */
+    double adaptive_q_growth;  /* growth per stagnation segment, default 0.1 */
 } ARALNSParams;
 
 typedef struct {

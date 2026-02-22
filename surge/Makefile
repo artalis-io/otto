@@ -37,8 +37,9 @@ LIB = libsurge.a
 TEST_BIN = test_surge
 BENCH_SOL_BIN = bench_solomon
 BENCH_PD_BIN = bench_li_lim
+BENCH_CORD_BIN = bench_cordeau
 
-.PHONY: all clean test lib debug bench bench-li-lim
+.PHONY: all clean test lib debug bench bench-li-lim bench-cordeau
 
 all: lib $(TEST_BIN)
 
@@ -59,6 +60,9 @@ $(BENCH_SOL_BIN): benchmarks/bench_solomon.c $(LIB) ../arbor/libarbor.a ../share
 $(BENCH_PD_BIN): benchmarks/bench_li_lim.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
 
+$(BENCH_CORD_BIN): benchmarks/bench_cordeau.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+
 ../arbor/libarbor.a:
 	$(MAKE) -C ../arbor lib
 
@@ -74,12 +78,15 @@ bench: $(BENCH_SOL_BIN)
 bench-li-lim: $(BENCH_PD_BIN)
 	./$(BENCH_PD_BIN) --dir benchmarks/li_lim
 
+bench-cordeau: $(BENCH_CORD_BIN)
+	./$(BENCH_CORD_BIN) --dir benchmarks/cordeau
+
 debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)
 debug: clean all
 
 clean:
-	rm -f $(OBJS) $(LIB) $(TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN)
+	rm -f $(OBJS) $(LIB) $(TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN)
 
 help:
 	@echo "Surge Build System"
@@ -90,5 +97,6 @@ help:
 	@echo "  test     - Build and run tests"
 	@echo "  bench    - Build and run Solomon benchmark suite"
 	@echo "  bench-li-lim - Build and run Li & Lim PDPTW benchmark suite"
+	@echo "  bench-cordeau - Build and run Cordeau DARP benchmark suite"
 	@echo "  debug    - Build with debug symbols"
 	@echo "  clean    - Remove build artifacts"

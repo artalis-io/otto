@@ -85,6 +85,11 @@ int sg_config_valid(const SGConfig *config) {
     if (config->segment_size <= 0 || config->q_min < 0 || config->q_max < config->q_min) {
         return 0;
     }
+    if (config->accept_type != SG_ACCEPT_SA &&
+        config->accept_type != SG_ACCEPT_RRT &&
+        config->accept_type != SG_ACCEPT_IMPROVING) {
+        return 0;
+    }
     return sg_priority_policy_valid(config->priority_removal_policy);
 }
 
@@ -209,6 +214,9 @@ void sg_config_default(SGConfig *config) {
     config->deterministic = true;
     config->require_bound_requests_at_solve = true;
     config->priority_removal_policy = SG_PRIORITY_REMOVE_LOWER_FIRST;
+    config->lexicographic_objective = false;
+    config->accept_type = SG_ACCEPT_SA;
+    config->adaptive_q = false;
 }
 
 SGContext *sg_create(void) {

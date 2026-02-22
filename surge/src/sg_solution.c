@@ -256,6 +256,20 @@ uint32_t sg_get_assigned_element(void *solution, void *user_ctx, int index) {
     return sol->assigned_ids[(uint32_t)index];
 }
 
+int sg_route_solution_is_better(const void *candidate, const void *current_best,
+                                 void *user_ctx) {
+    const SGRouteSolution *cand = (const SGRouteSolution *)candidate;
+    const SGRouteSolution *best = (const SGRouteSolution *)current_best;
+    (void)user_ctx;
+    if (!cand || !best) return 0;
+    /* Lexicographic: unassigned -> vehicles_used -> total_distance */
+    if (cand->base.num_unassigned < best->base.num_unassigned) return 1;
+    if (cand->base.num_unassigned > best->base.num_unassigned) return 0;
+    if (cand->vehicles_used < best->vehicles_used) return 1;
+    if (cand->vehicles_used > best->vehicles_used) return 0;
+    return cand->total_distance < best->total_distance - 1e-9;
+}
+
 double sg_route_objective_cost(uint32_t unassigned, uint32_t vehicles_used,
                                double total_distance) {
     return (double)unassigned * SG_ROUTE_OBJECTIVE_UNASSIGNED_WEIGHT +

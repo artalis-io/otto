@@ -325,6 +325,8 @@ void ar_alns_params_default(ARALNSParams *params) {
     params->reward_rejected = 0.5;
     params->restart_threshold = 0;
     params->restart_temp_ratio = 0.5;
+    params->adaptive_q = 0;
+    params->adaptive_q_growth = 0.1;
 }
 
 ARALNSContext *ar_alns_create(const ARALNSParams *params,
@@ -488,6 +490,12 @@ ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
     water_level = ctx->params.water_level > 0.0 ? ctx->params.water_level : current_cost;
     segment_size = ctx->params.segment_size > 0 ? ctx->params.segment_size : 1;
 
+    {
+        /* Adaptive q state */
+        int initial_q_max = ctx->params.q_max;
+        int current_q_max = ctx->params.q_max;
+        int segment_improved = 0;
+
     start_time = ar_now_seconds();
 
     for (iteration = 0; iteration < ctx->params.max_iterations; iteration++) {
@@ -565,7 +573,7 @@ ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
 
         if (solution_size > 0) {
             int q_min = ctx->params.q_min;
-            int q_max = ctx->params.q_max;
+            int q_max = ctx->params.adaptive_q ? current_q_max : ctx->params.q_max;
             if (q_min < 0) {
                 q_min = 0;
             }
@@ -647,7 +655,11 @@ ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
             candidate = NULL;
             current_cost = candidate_cost;
 
-            if (current_cost < best_cost) {
+            {
+                int is_new_best = ctx->ops.is_better
+                    ? ctx->ops.is_better(current, best, ctx->ops.user_ctx)
+                    : (current_cost < best_cost);
+            if (is_new_best) {
                 void *best_copy = ctx->ops.copy(current, ctx->ops.user_ctx);
                 if (!best_copy) {
                     status = AR_STATUS_OUT_OF_MEMORY;
@@ -663,8 +675,13 @@ ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
                 ctx->destroy_ops[d_idx].stats.improvements++;
                 ctx->repair_ops[r_idx].stats.improvements++;
                 stagnation_iterations = 0;
+                segment_improved = 1;
+                if (ctx->params.adaptive_q) {
+                    current_q_max = initial_q_max;
+                }
             } else {
                 stagnation_iterations++;
+            }
             }
         } else {
             ctx->stats.rejected++;
@@ -694,9 +711,25 @@ ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
 
         if (((iteration + 1) % segment_size) == 0) {
             ar_update_weights(ctx);
+            if (ctx->params.adaptive_q) {
+                if (!segment_improved) {
+                    int range = initial_q_max > ctx->params.q_min
+                              ? initial_q_max - ctx->params.q_min : 1;
+                    int grow = (int)(range * ctx->params.adaptive_q_growth);
+                    if (grow < 1) grow = 1;
+                    current_q_max += grow;
+                    /* Cap: solution_size is last measured, but use a safe upper bound */
+                    if (current_q_max > ctx->params.q_max * 3) {
+                        current_q_max = ctx->params.q_max * 3;
+                    }
+                }
+                segment_improved = 0;
+            }
         }
         iterations_done++;
     }
+
+    } /* end adaptive_q scope */
 
     if (!fatal_error) {
         if ((iteration % segment_size) != 0) {
