@@ -222,6 +222,9 @@ typedef struct {
     int refactor_periodic_policy;
     int refactor_periodic_lu_health;
     int refactor_safety_forced;
+    int basis_fastpath_hits;
+    int basis_cols_rewritten;
+    unsigned long long basis_tail_shift_bytes;
     int refactor_last_m;
     int refactor_last_k;
     int refactor_last_nnz_b;
@@ -761,6 +764,9 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.refactor_periodic_policy = solver->perf_refactor_periodic_policy;
             result.refactor_periodic_lu_health = solver->perf_refactor_periodic_lu_health;
             result.refactor_safety_forced = solver->perf_refactor_safety_forced;
+            result.basis_fastpath_hits = solver->perf_basis_fastpath_hits;
+            result.basis_cols_rewritten = solver->perf_basis_cols_rewritten;
+            result.basis_tail_shift_bytes = solver->perf_basis_tail_shift_bytes;
             result.refactor_last_m = solver->perf_refactor_last_m;
             result.refactor_last_k = solver->perf_refactor_last_k;
             result.refactor_last_nnz_b = solver->perf_refactor_last_nnz_B;
@@ -1673,7 +1679,10 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"reason_other\": %d,\n", ralph->refactor_reason_other);
     fprintf(out, "    \"periodic_policy_count\": %d,\n", ralph->refactor_periodic_policy);
     fprintf(out, "    \"periodic_lu_health_count\": %d,\n", ralph->refactor_periodic_lu_health);
-    fprintf(out, "    \"safety_forced_count\": %d\n", ralph->refactor_safety_forced);
+    fprintf(out, "    \"safety_forced_count\": %d,\n", ralph->refactor_safety_forced);
+    fprintf(out, "    \"basis_fastpath_hits\": %d,\n", ralph->basis_fastpath_hits);
+    fprintf(out, "    \"basis_cols_rewritten\": %d,\n", ralph->basis_cols_rewritten);
+    fprintf(out, "    \"basis_tail_shift_bytes\": %llu\n", ralph->basis_tail_shift_bytes);
     fprintf(out, "  },\n");
 
     /* LU telemetry (Markowitz/sparse fallback diagnostics) */

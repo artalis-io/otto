@@ -1896,6 +1896,17 @@ static int ensure_basis_workspace(SimplexTableau *tab, int nnz_needed) {
     return 0;
 }
 
+static void basis_build_record(SimplexTableau *tab,
+                               int fastpath_hit,
+                               int cols_rewritten,
+                               unsigned long long tail_shift_bytes) {
+    SimplexSolver *owner = tab ? tab->owner : NULL;
+    if (!owner) return;
+    if (fastpath_hit) owner->perf_basis_fastpath_hits++;
+    if (cols_rewritten > 0) owner->perf_basis_cols_rewritten += cols_rewritten;
+    owner->perf_basis_tail_shift_bytes += tail_shift_bytes;
+}
+
 /* Build basis matrix from current basis into reusable workspace */
 static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
     if (!tab || !tab->A_ext || !tab->basis) return NULL;
@@ -1905,6 +1916,7 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
     int changed = 0;
     int first_changed = tab->m;
     int last_changed = -1;
+    int nnz = 0;
 
     /* Fast path: if all changed basis positions preserve column nnz, patch only
      * those column payloads in-place and keep colptr layout unchanged. */
@@ -1941,6 +1953,7 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
         }
 
         if (changed == 0) {
+            basis_build_record(tab, 1, 0, 0);
             return B;
         }
 
@@ -1967,11 +1980,13 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
                     }
                     tab->basis_col_cache[k] = j;
                 }
+                basis_build_record(tab, 1, changed, 0);
                 return B;
             }
 
-            /* General incremental path: rewrite only the [first_changed, last_changed]
-             * basis span and shift the suffix tail when the span nnz changes. */
+            /* General incremental path: rewrite only changed columns from A_ext.
+             * Unchanged columns are copied from cached basis payload while the
+             * suffix tail is shifted in-place when span nnz changes. */
             if (first_changed >= 0 && first_changed < tab->m &&
                 last_changed >= first_changed && last_changed < tab->m) {
                 int old_block_start = B->colptr[first_changed];
@@ -1980,6 +1995,9 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
                 int new_block_nnz = 0;
                 int old_tail_start = old_block_end;
                 int old_tail_nnz = old_total_nnz - old_tail_start;
+                int use_sparse_patch = 0;
+                unsigned long long tail_shift_bytes = 0;
+                int changed_cols_rewritten = 0;
 
                 for (int k = first_changed; k <= last_changed; k++) {
                     int j = tab->basis[k];
@@ -1988,6 +2006,32 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
 
                 {
                     int delta = new_block_nnz - old_block_nnz;
+                    int scratch_start = 0;
+
+                    if (use_sparse_patch) {
+                        int scratch_end;
+
+                        scratch_start = (old_total_nnz > total_nnz) ? old_total_nnz : total_nnz;
+                        scratch_end = scratch_start + old_block_nnz;
+                        if (scratch_end > B->capacity) {
+                            if (ensure_basis_workspace(tab, scratch_end) != 0) {
+                                tab->basis_cache_valid = 0;
+                                tab->basis_cache_total_nnz = 0;
+                                goto full_rebuild_basis;
+                            }
+                            B = tab->basis_work;
+                        }
+
+                        if (old_block_nnz > 0) {
+                            memcpy(B->rowidx + scratch_start,
+                                   B->rowidx + old_block_start,
+                                   (size_t)old_block_nnz * sizeof(int));
+                            memcpy(B->values + scratch_start,
+                                   B->values + old_block_start,
+                                   (size_t)old_block_nnz * sizeof(double));
+                        }
+                    }
+
                     if (old_tail_nnz > 0 && delta != 0) {
                         int new_tail_start = old_tail_start + delta;
                         memmove(B->rowidx + new_tail_start,
@@ -1996,20 +2040,43 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
                         memmove(B->values + new_tail_start,
                                 B->values + old_tail_start,
                                 (size_t)old_tail_nnz * sizeof(double));
+                        tail_shift_bytes =
+                            (unsigned long long)old_tail_nnz *
+                            (unsigned long long)(sizeof(int) + sizeof(double));
                     }
 
                     {
                         int idx = old_block_start;
                         for (int k = first_changed; k <= last_changed; k++) {
                             int j = tab->basis[k];
+                            int prev_j = tab->basis_col_cache[k];
+                            int old_col_start = B->colptr[k];
                             int start = A->colptr[j];
                             int end = A->colptr[j + 1];
                             int col_nnz = end - start;
+                            int col_changed = (j != prev_j);
                             B->colptr[k] = idx;
                             if (col_nnz > 0) {
-                                memcpy(B->rowidx + idx, A->rowidx + start, (size_t)col_nnz * sizeof(int));
-                                memcpy(B->values + idx, A->values + start, (size_t)col_nnz * sizeof(double));
+                                if (!use_sparse_patch || col_changed) {
+                                    memcpy(B->rowidx + idx, A->rowidx + start, (size_t)col_nnz * sizeof(int));
+                                    memcpy(B->values + idx, A->values + start, (size_t)col_nnz * sizeof(double));
+                                } else {
+                                    int old_col_nnz = tab->basis_col_nnz_cache[k];
+                                    int old_offset = old_col_start - old_block_start;
+                                    if (old_col_nnz != col_nnz) {
+                                        tab->basis_cache_valid = 0;
+                                        tab->basis_cache_total_nnz = 0;
+                                        goto full_rebuild_basis;
+                                    }
+                                    memcpy(B->rowidx + idx,
+                                           B->rowidx + scratch_start + old_offset,
+                                           (size_t)col_nnz * sizeof(int));
+                                    memcpy(B->values + idx,
+                                           B->values + scratch_start + old_offset,
+                                           (size_t)col_nnz * sizeof(double));
+                                }
                             }
+                            if (col_changed) changed_cols_rewritten++;
                             tab->basis_col_cache[k] = j;
                             tab->basis_col_nnz_cache[k] = col_nnz;
                             idx += col_nnz;
@@ -2026,6 +2093,7 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
                 B->nnz = total_nnz;
                 tab->basis_cache_total_nnz = total_nnz;
                 tab->basis_cache_valid = 1;
+                basis_build_record(tab, 1, changed_cols_rewritten, tail_shift_bytes);
                 return B;
             }
         } else {
@@ -2038,7 +2106,8 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
 
     }
 
-    int nnz = 0;
+full_rebuild_basis:
+    nnz = 0;
     for (int k = 0; k < tab->m; k++) {
         int j = tab->basis[k];
         if (j < 0 || j >= A->ncols) return NULL;
@@ -2068,6 +2137,7 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
     B->nnz = idx;
     tab->basis_cache_total_nnz = idx;
     tab->basis_cache_valid = 1;
+    basis_build_record(tab, 0, tab->m, 0);
 
     return B;
 }
@@ -6204,6 +6274,9 @@ static void reset_solver_perf(SimplexSolver *solver) {
     solver->perf_refactor_periodic_policy = 0;
     solver->perf_refactor_periodic_lu_health = 0;
     solver->perf_refactor_safety_forced = 0;
+    solver->perf_basis_fastpath_hits = 0;
+    solver->perf_basis_cols_rewritten = 0;
+    solver->perf_basis_tail_shift_bytes = 0ULL;
     solver->perf_refactor_last_m = 0;
     solver->perf_refactor_last_k = 0;
     solver->perf_refactor_last_nnz_B = 0;
