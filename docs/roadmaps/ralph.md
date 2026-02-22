@@ -451,7 +451,7 @@ one by one.
 - Keep `ralph_save_basis`/`ralph_load_basis` for compatibility.
 - Add round-trip and invalid-basis-combination tests.
 
-8. Typed parameter API + metadata
+8. Typed parameter API + metadata ✅ (2026-02-22)
 - Add enum-based typed parameter APIs alongside existing string APIs.
 - Add parameter metadata/introspection API:
   `name`, `scope` (LP/MIP/shared), `type`, `default`, `min/max`.

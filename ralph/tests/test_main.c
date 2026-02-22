@@ -1017,6 +1017,119 @@ void test_phase3_optimize_backward_compatibility(void) {
     ralph_free(mip_explicit);
 }
 
+void test_param_typed_metadata_api(void) {
+    printf("\n=== Test: Typed Parameter + Metadata API ===\n");
+
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Typed param: model created");
+
+    int count = ralph_get_param_count();
+    ASSERT(count == (int)RALPH_PARAM_COUNT, "Typed param: param count matches enum");
+
+    RalphParamMeta meta;
+    memset(&meta, 0, sizeof(meta));
+    ASSERT(ralph_get_param_meta(RALPH_PARAM_METHOD, &meta) == 0,
+           "Typed param: get metadata for method");
+    ASSERT(strcmp(meta.name, "method") == 0,
+           "Typed param: metadata canonical name");
+    ASSERT(meta.scope == RALPH_PARAM_SCOPE_LP,
+           "Typed param: metadata scope");
+    ASSERT(meta.value_type == RALPH_PARAM_VALUE_INT,
+           "Typed param: metadata value type");
+    ASSERT_NEAR(meta.default_value, 0.0, TOLERANCE,
+                "Typed param: metadata default value");
+
+    ASSERT(ralph_get_param_meta(RALPH_PARAM_NODE_SELECT, &meta) == 0,
+           "Typed param: get metadata for node_select");
+    ASSERT(meta.has_min == 1 && meta.has_max == 1,
+           "Typed param: node_select has min/max");
+    ASSERT_NEAR(meta.min_value, 0.0, TOLERANCE,
+                "Typed param: node_select min=0");
+    ASSERT_NEAR(meta.max_value, 3.0, TOLERANCE,
+                "Typed param: node_select max=3");
+
+    ASSERT(ralph_get_param_meta((RalphParamId)-1, &meta) == -1,
+           "Typed param: invalid id rejected by metadata get");
+    ASSERT(ralph_get_param_meta(RALPH_PARAM_METHOD, NULL) == -1,
+           "Typed param: NULL metadata output rejected");
+
+    RalphParamId pid = RALPH_PARAM_COUNT;
+    ASSERT(ralph_find_param_by_name("method", &pid) == 0 &&
+           pid == RALPH_PARAM_METHOD,
+           "Typed param: canonical name lookup");
+    ASSERT(ralph_find_param_by_name("Method", &pid) == 0 &&
+           pid == RALPH_PARAM_METHOD,
+           "Typed param: alias lookup");
+    ASSERT(ralph_find_param_by_name("ScalingRounds", &pid) == 0 &&
+           pid == RALPH_PARAM_SCALING,
+           "Typed param: scaling alias lookup");
+    ASSERT(ralph_find_param_by_name("does_not_exist", &pid) == -1,
+           "Typed param: unknown name rejected");
+    ASSERT(ralph_find_param_by_name("method", NULL) == -1,
+           "Typed param: NULL lookup output rejected");
+
+    int i_val = 0;
+    ASSERT(ralph_set_int_param_id(model, RALPH_PARAM_VERBOSE, 1) == 0,
+           "Typed param: set int by id");
+    ASSERT(ralph_get_int_param_id(model, RALPH_PARAM_VERBOSE, &i_val) == 0 &&
+           i_val == 1,
+           "Typed param: get int by id");
+    ASSERT(ralph_get_int_param(model, "verbose", &i_val) == 0 &&
+           i_val == 1,
+           "Typed param: string get matches typed set");
+
+    double d_val = 0.0;
+    ASSERT(ralph_set_dbl_param(model, "time_limit", 12.5) == 0,
+           "Typed param: set double by string");
+    ASSERT(ralph_get_dbl_param_id(model, RALPH_PARAM_TIME_LIMIT, &d_val) == 0,
+           "Typed param: get double by id");
+    ASSERT_NEAR(d_val, 12.5, TOLERANCE,
+                "Typed param: typed getter returns string-set value");
+
+    ASSERT(ralph_set_dbl_param_id(model, RALPH_PARAM_MIP_GAP, 0.02) == 0,
+           "Typed param: set double by id");
+    ASSERT(ralph_get_dbl_param(model, "mip_gap", &d_val) == 0,
+           "Typed param: get double by string");
+    ASSERT_NEAR(d_val, 0.02, TOLERANCE,
+                "Typed param: string getter returns typed-set value");
+
+    ASSERT(ralph_set_lp_int_param_id(model, RALPH_PARAM_MAX_NODES, 32) == -1,
+           "Typed param: LP strict rejects MIP-only int");
+    ASSERT(ralph_set_mip_int_param_id(model, RALPH_PARAM_METHOD, 1) == -1,
+           "Typed param: MIP strict rejects LP-only int");
+    ASSERT(ralph_set_lp_int_param_id(model, RALPH_PARAM_VERBOSE, 0) == 0,
+           "Typed param: LP strict accepts shared int");
+    ASSERT(ralph_set_mip_dbl_param_id(model, RALPH_PARAM_TIME_LIMIT, 5.0) == 0,
+           "Typed param: MIP strict accepts shared double");
+
+    ASSERT(ralph_set_int_param_id(model, RALPH_PARAM_NODE_SELECT, 4) == -1,
+           "Typed param: node_select range rejected");
+    ASSERT(ralph_set_int_param_id(model, RALPH_PARAM_VAR_SELECT, 5) == -1,
+           "Typed param: var_select range rejected");
+    ASSERT(ralph_set_int_param_id(model, RALPH_PARAM_NODE_SELECT, 2) == 0,
+           "Typed param: node_select valid value accepted");
+    ASSERT(ralph_get_int_param_id(model, RALPH_PARAM_NODE_SELECT, &i_val) == 0 &&
+           i_val == 2,
+           "Typed param: node_select updated");
+
+    ASSERT(ralph_set_int_param_id(model, RALPH_PARAM_TIME_LIMIT, 1) == -1,
+           "Typed param: int setter rejects double param");
+    ASSERT(ralph_set_dbl_param_id(model, RALPH_PARAM_VERBOSE, 1.0) == -1,
+           "Typed param: double setter rejects int param");
+    ASSERT(ralph_get_dbl_param_id(model, RALPH_PARAM_VERBOSE, &d_val) == -1,
+           "Typed param: double getter rejects int param");
+    ASSERT(ralph_get_int_param_id(model, (RalphParamId)-1, &i_val) == -1,
+           "Typed param: invalid id rejected by int getter");
+
+    ASSERT(ralph_set_int_param(model, "ScalingRounds", 4) == 0,
+           "Typed param: string alias set still supported");
+    ASSERT(ralph_get_int_param_id(model, RALPH_PARAM_SCALING, &i_val) == 0 &&
+           i_val == 4,
+           "Typed param: alias maps to canonical scaling id");
+
+    ralph_free(model);
+}
+
 /* ============================================================================
  * Test: Larger LP (Performance)
  *
@@ -6359,6 +6472,7 @@ int main(int argc, char **argv) {
     test_phase3_optimize_entrypoints();
     test_phase3_param_partition();
     test_phase3_optimize_backward_compatibility();
+    test_param_typed_metadata_api();
 
     /* API Tests */
     test_api_functions();

@@ -2267,283 +2267,761 @@ int ralph_solve_benders(
  * Parameters
  * ============================================================================ */
 
-/* Helper macro for safe string comparison with string literals only.
- * sizeof(lit) includes the null terminator, so strncmp is bounded. */
-#define STREQ(s, lit) (strncmp((s), (lit), sizeof(lit)) == 0)
+typedef struct {
+    RalphParamId id;
+    const char *name;
+    RalphParamScope scope;
+    RalphParamValueType value_type;
+    double default_value;
+    int has_min;
+    double min_value;
+    int has_max;
+    double max_value;
+    const char *aliases[4];
+    int alias_count;
+} RalphParamSpec;
 
-static int ralph_is_shared_int_param_set(const char *name) {
-    return STREQ(name, "presolve") || STREQ(name, "Presolve") ||
-           STREQ(name, "verbose") || STREQ(name, "OutputFlag") ||
-           STREQ(name, "telemetry") || STREQ(name, "Telemetry") ||
-           STREQ(name, "detect_special") || STREQ(name, "DetectSpecial") ||
-           STREQ(name, "presolve_mask") || STREQ(name, "PresolveMask") ||
-           STREQ(name, "dual_bound_flip") || STREQ(name, "DualBoundFlip") ||
-           STREQ(name, "dual_steepest_edge") || STREQ(name, "DualSteepestEdge") ||
-           STREQ(name, "lu_supernode") || STREQ(name, "LuSupernode");
+static int ralph_param_name_eq(const char *a, const char *b) {
+    return a && b && strcmp(a, b) == 0;
 }
 
-static int ralph_is_lp_int_param_set(const char *name) {
-    return STREQ(name, "max_iterations") || STREQ(name, "IterationLimit") ||
-           STREQ(name, "method") || STREQ(name, "Method") ||
-           STREQ(name, "pricing") || STREQ(name, "Pricing") ||
-           STREQ(name, "force_two_phase") || STREQ(name, "TwoPhase") ||
-           STREQ(name, "trace_phase1") || STREQ(name, "TracePhase1") ||
-           STREQ(name, "scaling") || STREQ(name, "Scaling") ||
-           STREQ(name, "scaling_rounds") || STREQ(name, "ScalingRounds") ||
-           STREQ(name, "crash") || STREQ(name, "Crash") ||
-           STREQ(name, "verify") || STREQ(name, "Verify") ||
-           STREQ(name, "phase1_pricing") || STREQ(name, "Phase1Pricing");
+static const RalphParamSpec* ralph_param_specs(void) {
+    static const RalphParamSpec specs[RALPH_PARAM_COUNT] = {
+        [RALPH_PARAM_MAX_ITERATIONS] = {
+            .id = RALPH_PARAM_MAX_ITERATIONS,
+            .name = "max_iterations",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_DEFAULT_MAX_ITER,
+            .aliases = {"IterationLimit"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_PRESOLVE] = {
+            .id = RALPH_PARAM_PRESOLVE,
+            .name = "presolve",
+            .scope = RALPH_PARAM_SCOPE_SHARED,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 0.0,
+            .has_min = 1,
+            .min_value = 0.0,
+            .has_max = 1,
+            .max_value = 1.0,
+            .aliases = {"Presolve"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_VERBOSE] = {
+            .id = RALPH_PARAM_VERBOSE,
+            .name = "verbose",
+            .scope = RALPH_PARAM_SCOPE_SHARED,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 0.0,
+            .aliases = {"OutputFlag"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_TELEMETRY] = {
+            .id = RALPH_PARAM_TELEMETRY,
+            .name = "telemetry",
+            .scope = RALPH_PARAM_SCOPE_SHARED,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 1.0,
+            .has_min = 1,
+            .min_value = 0.0,
+            .has_max = 1,
+            .max_value = 1.0,
+            .aliases = {"Telemetry"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_MAX_NODES] = {
+            .id = RALPH_PARAM_MAX_NODES,
+            .name = "max_nodes",
+            .scope = RALPH_PARAM_SCOPE_MIP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_DEFAULT_NODE_LIMIT,
+            .aliases = {"NodeLimit"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_MAX_CUT_ROUNDS] = {
+            .id = RALPH_PARAM_MAX_CUT_ROUNDS,
+            .name = "max_cut_rounds",
+            .scope = RALPH_PARAM_SCOPE_MIP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 0.0,
+            .aliases = {"CutRounds"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_METHOD] = {
+            .id = RALPH_PARAM_METHOD,
+            .name = "method",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 0.0,
+            .has_min = 1,
+            .min_value = 0.0,
+            .has_max = 1,
+            .max_value = 2.0,
+            .aliases = {"Method"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_PRICING] = {
+            .id = RALPH_PARAM_PRICING,
+            .name = "pricing",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 2.0,
+            .has_min = 1,
+            .min_value = 0.0,
+            .has_max = 1,
+            .max_value = 5.0,
+            .aliases = {"Pricing"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_DETECT_SPECIAL] = {
+            .id = RALPH_PARAM_DETECT_SPECIAL,
+            .name = "detect_special",
+            .scope = RALPH_PARAM_SCOPE_SHARED,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 0.0,
+            .has_min = 1,
+            .min_value = 0.0,
+            .has_max = 1,
+            .max_value = 1.0,
+            .aliases = {"DetectSpecial"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_NODE_POOL_CAPACITY] = {
+            .id = RALPH_PARAM_NODE_POOL_CAPACITY,
+            .name = "node_pool_capacity",
+            .scope = RALPH_PARAM_SCOPE_MIP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 1024.0,
+            .has_min = 1,
+            .min_value = 1.0,
+            .aliases = {"PoolCapacity"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_NODE_SELECT] = {
+            .id = RALPH_PARAM_NODE_SELECT,
+            .name = "node_select",
+            .scope = RALPH_PARAM_SCOPE_MIP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 3.0,
+            .has_min = 1,
+            .min_value = 0.0,
+            .has_max = 1,
+            .max_value = 3.0,
+            .aliases = {"NodeSelect"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_FORCE_TWO_PHASE] = {
+            .id = RALPH_PARAM_FORCE_TWO_PHASE,
+            .name = "force_two_phase",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 0.0,
+            .has_min = 1,
+            .min_value = 0.0,
+            .has_max = 1,
+            .max_value = 1.0,
+            .aliases = {"TwoPhase"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_TRACE_PHASE1] = {
+            .id = RALPH_PARAM_TRACE_PHASE1,
+            .name = "trace_phase1",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 0.0,
+            .has_min = 1,
+            .min_value = 0.0,
+            .has_max = 1,
+            .max_value = 1.0,
+            .aliases = {"TracePhase1"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_PRESOLVE_MASK] = {
+            .id = RALPH_PARAM_PRESOLVE_MASK,
+            .name = "presolve_mask",
+            .scope = RALPH_PARAM_SCOPE_SHARED,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)PRESOLVE_SAFE,
+            .has_min = 1,
+            .min_value = 0.0,
+            .aliases = {"PresolveMask"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_DUAL_BOUND_FLIP] = {
+            .id = RALPH_PARAM_DUAL_BOUND_FLIP,
+            .name = "dual_bound_flip",
+            .scope = RALPH_PARAM_SCOPE_SHARED,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = -1.0,
+            .has_min = 1,
+            .min_value = -1.0,
+            .has_max = 1,
+            .max_value = 1.0,
+            .aliases = {"DualBoundFlip"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_DUAL_STEEPEST_EDGE] = {
+            .id = RALPH_PARAM_DUAL_STEEPEST_EDGE,
+            .name = "dual_steepest_edge",
+            .scope = RALPH_PARAM_SCOPE_SHARED,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = -1.0,
+            .has_min = 1,
+            .min_value = -1.0,
+            .has_max = 1,
+            .max_value = 1.0,
+            .aliases = {"DualSteepestEdge"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_SCALING] = {
+            .id = RALPH_PARAM_SCALING,
+            .name = "scaling",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 1.0,
+            .has_min = 1,
+            .min_value = 0.0,
+            .aliases = {"Scaling", "scaling_rounds", "ScalingRounds"},
+            .alias_count = 3
+        },
+        [RALPH_PARAM_CRASH] = {
+            .id = RALPH_PARAM_CRASH,
+            .name = "crash",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 0.0,
+            .has_min = 1,
+            .min_value = 0.0,
+            .has_max = 1,
+            .max_value = 1.0,
+            .aliases = {"Crash"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_VERIFY] = {
+            .id = RALPH_PARAM_VERIFY,
+            .name = "verify",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 0.0,
+            .has_min = 1,
+            .min_value = 0.0,
+            .has_max = 1,
+            .max_value = 1.0,
+            .aliases = {"Verify"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_PHASE1_PRICING] = {
+            .id = RALPH_PARAM_PHASE1_PRICING,
+            .name = "phase1_pricing",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = -1.0,
+            .has_min = 1,
+            .min_value = -1.0,
+            .aliases = {"Phase1Pricing"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_VAR_SELECT] = {
+            .id = RALPH_PARAM_VAR_SELECT,
+            .name = "var_select",
+            .scope = RALPH_PARAM_SCOPE_MIP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = -1.0,
+            .has_min = 1,
+            .min_value = -1.0,
+            .has_max = 1,
+            .max_value = 4.0,
+            .aliases = {"VarSelect"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_LU_SUPERNODE] = {
+            .id = RALPH_PARAM_LU_SUPERNODE,
+            .name = "lu_supernode",
+            .scope = RALPH_PARAM_SCOPE_SHARED,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 0.0,
+            .has_min = 1,
+            .min_value = 0.0,
+            .has_max = 1,
+            .max_value = 1.0,
+            .aliases = {"LuSupernode"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_TIME_LIMIT] = {
+            .id = RALPH_PARAM_TIME_LIMIT,
+            .name = "time_limit",
+            .scope = RALPH_PARAM_SCOPE_SHARED,
+            .value_type = RALPH_PARAM_VALUE_DOUBLE,
+            .default_value = RALPH_DEFAULT_TIME_LIMIT,
+            .has_min = 1,
+            .min_value = 0.0,
+            .aliases = {"TimeLimit"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_MIP_GAP] = {
+            .id = RALPH_PARAM_MIP_GAP,
+            .name = "mip_gap",
+            .scope = RALPH_PARAM_SCOPE_MIP,
+            .value_type = RALPH_PARAM_VALUE_DOUBLE,
+            .default_value = RALPH_DEFAULT_MIP_GAP,
+            .has_min = 1,
+            .min_value = 0.0,
+            .aliases = {"MIPGap"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_OBJ_LIMIT] = {
+            .id = RALPH_PARAM_OBJ_LIMIT,
+            .name = "obj_limit",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_DOUBLE,
+            .default_value = RALPH_INFINITY,
+            .aliases = {"ObjLimit"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_FEAS_TOL] = {
+            .id = RALPH_PARAM_FEAS_TOL,
+            .name = "feas_tol",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_DOUBLE,
+            .default_value = RALPH_FEAS_TOL,
+            .has_min = 1,
+            .min_value = 0.0
+        },
+        [RALPH_PARAM_OPT_TOL] = {
+            .id = RALPH_PARAM_OPT_TOL,
+            .name = "opt_tol",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_DOUBLE,
+            .default_value = RALPH_OPT_TOL,
+            .has_min = 1,
+            .min_value = 0.0
+        },
+        [RALPH_PARAM_PIVOT_TOL] = {
+            .id = RALPH_PARAM_PIVOT_TOL,
+            .name = "pivot_tol",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_DOUBLE,
+            .default_value = RALPH_PIVOT_TOL,
+            .has_min = 1,
+            .min_value = 0.0
+        }
+    };
+    return specs;
 }
 
-static int ralph_is_mip_int_param_set(const char *name) {
-    return STREQ(name, "max_nodes") || STREQ(name, "NodeLimit") ||
-           STREQ(name, "max_cut_rounds") || STREQ(name, "CutRounds") ||
-           STREQ(name, "node_pool_capacity") || STREQ(name, "PoolCapacity") ||
-           STREQ(name, "node_select") || STREQ(name, "NodeSelect") ||
-           STREQ(name, "var_select") || STREQ(name, "VarSelect");
+static const RalphParamSpec* ralph_param_spec_by_id(RalphParamId param) {
+    if (param < 0 || param >= RALPH_PARAM_COUNT) return NULL;
+    return &ralph_param_specs()[param];
 }
 
-static int ralph_is_shared_dbl_param_set(const char *name) {
-    return STREQ(name, "time_limit") || STREQ(name, "TimeLimit");
+static int ralph_param_scope_allows_lp(RalphParamScope scope) {
+    return scope == RALPH_PARAM_SCOPE_SHARED || scope == RALPH_PARAM_SCOPE_LP;
 }
 
-static int ralph_is_lp_dbl_param_set(const char *name) {
-    return STREQ(name, "obj_limit") || STREQ(name, "ObjLimit") ||
-           STREQ(name, "feas_tol") || STREQ(name, "opt_tol") ||
-           STREQ(name, "pivot_tol");
+static int ralph_param_scope_allows_mip(RalphParamScope scope) {
+    return scope == RALPH_PARAM_SCOPE_SHARED || scope == RALPH_PARAM_SCOPE_MIP;
 }
 
-static int ralph_is_mip_dbl_param_set(const char *name) {
-    return STREQ(name, "mip_gap") || STREQ(name, "MIPGap");
+int ralph_get_param_count(void) {
+    return RALPH_PARAM_COUNT;
 }
 
-static int ralph_is_shared_int_param_get(const char *name) {
-    return STREQ(name, "presolve") || STREQ(name, "verbose") ||
-           STREQ(name, "telemetry") || STREQ(name, "Telemetry") ||
-           STREQ(name, "presolve_mask");
+int ralph_get_param_meta(RalphParamId param, RalphParamMeta *meta) {
+    const RalphParamSpec *spec = ralph_param_spec_by_id(param);
+    if (!spec || !meta) return -1;
+
+    meta->id = spec->id;
+    meta->name = spec->name;
+    meta->scope = spec->scope;
+    meta->value_type = spec->value_type;
+    meta->default_value = spec->default_value;
+    meta->has_min = spec->has_min;
+    meta->min_value = spec->min_value;
+    meta->has_max = spec->has_max;
+    meta->max_value = spec->max_value;
+    return 0;
 }
 
-static int ralph_is_lp_int_param_get(const char *name) {
-    return STREQ(name, "max_iterations") || STREQ(name, "method") ||
-           STREQ(name, "trace_phase1");
+int ralph_find_param_by_name(const char *name, RalphParamId *param) {
+    if (!name || !param) return -1;
+
+    const RalphParamSpec *specs = ralph_param_specs();
+    for (int i = 0; i < RALPH_PARAM_COUNT; i++) {
+        const RalphParamSpec *spec = &specs[i];
+        if (ralph_param_name_eq(name, spec->name)) {
+            *param = spec->id;
+            return 0;
+        }
+        for (int k = 0; k < spec->alias_count; k++) {
+            if (ralph_param_name_eq(name, spec->aliases[k])) {
+                *param = spec->id;
+                return 0;
+            }
+        }
+    }
+    return -1;
 }
 
-static int ralph_is_mip_int_param_get(const char *name) {
-    return STREQ(name, "max_nodes") || STREQ(name, "max_cut_rounds") ||
-           STREQ(name, "node_pool_capacity") || STREQ(name, "node_select") ||
-           STREQ(name, "var_select");
+int ralph_set_int_param_id(RalphModel *model, RalphParamId param, int value) {
+    const RalphParamSpec *spec = ralph_param_spec_by_id(param);
+    if (!model || !spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
+
+    switch (param) {
+        case RALPH_PARAM_MAX_ITERATIONS:
+            model->max_iterations = value;
+            break;
+        case RALPH_PARAM_PRESOLVE:
+            model->presolve = value ? 1 : -1;  /* -1 = explicitly off */
+            break;
+        case RALPH_PARAM_VERBOSE:
+            model->verbose = value;
+            break;
+        case RALPH_PARAM_TELEMETRY:
+            model->telemetry = value ? 1 : 0;
+            break;
+        case RALPH_PARAM_MAX_NODES:
+            model->max_nodes = value;
+            break;
+        case RALPH_PARAM_MAX_CUT_ROUNDS:
+            model->max_cut_rounds = value;
+            break;
+        case RALPH_PARAM_METHOD:
+            model->method = value;
+            break;
+        case RALPH_PARAM_PRICING:
+            model->pricing = value;
+            break;
+        case RALPH_PARAM_DETECT_SPECIAL:
+            model->detect_special = value;
+            break;
+        case RALPH_PARAM_NODE_POOL_CAPACITY:
+            model->node_pool_capacity = (value > 0) ? value : 1024;
+            break;
+        case RALPH_PARAM_NODE_SELECT:
+            if (value < 0 || value > 3) return -1;
+            model->node_select = value;
+            break;
+        case RALPH_PARAM_FORCE_TWO_PHASE:
+            model->force_two_phase = value;
+            break;
+        case RALPH_PARAM_TRACE_PHASE1:
+            model->trace_phase1 = value;
+            break;
+        case RALPH_PARAM_PRESOLVE_MASK:
+            model->presolve_mask = (unsigned int)value;
+            break;
+        case RALPH_PARAM_DUAL_BOUND_FLIP:
+            model->dual_bound_flip = value ? 1 : 0;
+            break;
+        case RALPH_PARAM_DUAL_STEEPEST_EDGE:
+            model->dual_steepest_edge = value ? 1 : 0;
+            break;
+        case RALPH_PARAM_SCALING:
+            model->scaling = (value >= 0) ? value : 0;
+            break;
+        case RALPH_PARAM_CRASH:
+            model->crash = value ? 1 : 0;
+            break;
+        case RALPH_PARAM_VERIFY:
+            model->verify = value ? 1 : 0;
+            break;
+        case RALPH_PARAM_PHASE1_PRICING:
+            model->phase1_pricing = (value >= 0) ? value : -1;
+            break;
+        case RALPH_PARAM_VAR_SELECT:
+            if (value < 0 || value > 4) return -1;
+            model->var_select = value;
+            break;
+        case RALPH_PARAM_LU_SUPERNODE:
+            model->lu_supernode = value ? 1 : 0;
+            break;
+        default:
+            return -1;
+    }
+
+    return 0;
 }
 
-static int ralph_is_shared_dbl_param_get(const char *name) {
-    return STREQ(name, "time_limit");
+int ralph_set_dbl_param_id(RalphModel *model, RalphParamId param, double value) {
+    const RalphParamSpec *spec = ralph_param_spec_by_id(param);
+    if (!model || !spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
+    if (!model->lp_model) return -1;
+
+    switch (param) {
+        case RALPH_PARAM_TIME_LIMIT:
+            model->time_limit = value;
+            break;
+        case RALPH_PARAM_MIP_GAP:
+            model->mip_gap = value;
+            break;
+        case RALPH_PARAM_OBJ_LIMIT:
+            model->objective_limit = value;
+            break;
+        case RALPH_PARAM_FEAS_TOL:
+            if (value > 0.0) model->lp_model->feas_tol = value;
+            break;
+        case RALPH_PARAM_OPT_TOL:
+            if (value > 0.0) model->lp_model->opt_tol = value;
+            break;
+        case RALPH_PARAM_PIVOT_TOL:
+            if (value > 0.0) model->lp_model->pivot_tol = value;
+            break;
+        default:
+            return -1;
+    }
+
+    return 0;
 }
 
-static int ralph_is_lp_dbl_param_get(const char *name) {
-    return STREQ(name, "obj_limit") || STREQ(name, "feas_tol") ||
-           STREQ(name, "opt_tol") || STREQ(name, "pivot_tol");
+int ralph_get_int_param_id(const RalphModel *model, RalphParamId param, int *value) {
+    const RalphParamSpec *spec = ralph_param_spec_by_id(param);
+    if (!model || !value || !spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
+
+    switch (param) {
+        case RALPH_PARAM_MAX_ITERATIONS:
+            *value = model->max_iterations;
+            break;
+        case RALPH_PARAM_PRESOLVE:
+            *value = (model->presolve > 0) ? 1 : 0;
+            break;
+        case RALPH_PARAM_VERBOSE:
+            *value = model->verbose;
+            break;
+        case RALPH_PARAM_TELEMETRY:
+            *value = model->telemetry;
+            break;
+        case RALPH_PARAM_MAX_NODES:
+            *value = model->max_nodes;
+            break;
+        case RALPH_PARAM_MAX_CUT_ROUNDS:
+            *value = model->max_cut_rounds;
+            break;
+        case RALPH_PARAM_METHOD:
+            *value = model->method;
+            break;
+        case RALPH_PARAM_PRICING:
+            *value = model->pricing;
+            break;
+        case RALPH_PARAM_DETECT_SPECIAL:
+            *value = model->detect_special;
+            break;
+        case RALPH_PARAM_NODE_POOL_CAPACITY:
+            *value = model->node_pool_capacity;
+            break;
+        case RALPH_PARAM_NODE_SELECT:
+            *value = model->node_select;
+            break;
+        case RALPH_PARAM_FORCE_TWO_PHASE:
+            *value = model->force_two_phase;
+            break;
+        case RALPH_PARAM_TRACE_PHASE1:
+            *value = model->trace_phase1;
+            break;
+        case RALPH_PARAM_PRESOLVE_MASK:
+            *value = (int)model->presolve_mask;
+            break;
+        case RALPH_PARAM_DUAL_BOUND_FLIP:
+            *value = model->dual_bound_flip;
+            break;
+        case RALPH_PARAM_DUAL_STEEPEST_EDGE:
+            *value = model->dual_steepest_edge;
+            break;
+        case RALPH_PARAM_SCALING:
+            *value = model->scaling;
+            break;
+        case RALPH_PARAM_CRASH:
+            *value = model->crash;
+            break;
+        case RALPH_PARAM_VERIFY:
+            *value = model->verify;
+            break;
+        case RALPH_PARAM_PHASE1_PRICING:
+            *value = model->phase1_pricing;
+            break;
+        case RALPH_PARAM_VAR_SELECT:
+            *value = model->var_select;
+            break;
+        case RALPH_PARAM_LU_SUPERNODE:
+            *value = model->lu_supernode;
+            break;
+        default:
+            return -1;
+    }
+
+    return 0;
 }
 
-static int ralph_is_mip_dbl_param_get(const char *name) {
-    return STREQ(name, "mip_gap");
+int ralph_get_dbl_param_id(const RalphModel *model, RalphParamId param, double *value) {
+    const RalphParamSpec *spec = ralph_param_spec_by_id(param);
+    if (!model || !value || !spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
+    if (!model->lp_model) return -1;
+
+    switch (param) {
+        case RALPH_PARAM_TIME_LIMIT:
+            *value = model->time_limit;
+            break;
+        case RALPH_PARAM_MIP_GAP:
+            *value = model->mip_gap;
+            break;
+        case RALPH_PARAM_OBJ_LIMIT:
+            *value = model->objective_limit;
+            break;
+        case RALPH_PARAM_FEAS_TOL:
+            *value = model->lp_model->feas_tol;
+            break;
+        case RALPH_PARAM_OPT_TOL:
+            *value = model->lp_model->opt_tol;
+            break;
+        case RALPH_PARAM_PIVOT_TOL:
+            *value = model->lp_model->pivot_tol;
+            break;
+        default:
+            return -1;
+    }
+
+    return 0;
+}
+
+int ralph_set_lp_int_param_id(RalphModel *model, RalphParamId param, int value) {
+    const RalphParamSpec *spec = ralph_param_spec_by_id(param);
+    if (!spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
+    if (!ralph_param_scope_allows_lp(spec->scope)) return -1;
+    return ralph_set_int_param_id(model, param, value);
+}
+
+int ralph_set_lp_dbl_param_id(RalphModel *model, RalphParamId param, double value) {
+    const RalphParamSpec *spec = ralph_param_spec_by_id(param);
+    if (!spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
+    if (!ralph_param_scope_allows_lp(spec->scope)) return -1;
+    return ralph_set_dbl_param_id(model, param, value);
+}
+
+int ralph_get_lp_int_param_id(const RalphModel *model, RalphParamId param, int *value) {
+    const RalphParamSpec *spec = ralph_param_spec_by_id(param);
+    if (!spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
+    if (!ralph_param_scope_allows_lp(spec->scope)) return -1;
+    return ralph_get_int_param_id(model, param, value);
+}
+
+int ralph_get_lp_dbl_param_id(const RalphModel *model, RalphParamId param, double *value) {
+    const RalphParamSpec *spec = ralph_param_spec_by_id(param);
+    if (!spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
+    if (!ralph_param_scope_allows_lp(spec->scope)) return -1;
+    return ralph_get_dbl_param_id(model, param, value);
+}
+
+int ralph_set_mip_int_param_id(RalphModel *model, RalphParamId param, int value) {
+    const RalphParamSpec *spec = ralph_param_spec_by_id(param);
+    if (!spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
+    if (!ralph_param_scope_allows_mip(spec->scope)) return -1;
+    return ralph_set_int_param_id(model, param, value);
+}
+
+int ralph_set_mip_dbl_param_id(RalphModel *model, RalphParamId param, double value) {
+    const RalphParamSpec *spec = ralph_param_spec_by_id(param);
+    if (!spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
+    if (!ralph_param_scope_allows_mip(spec->scope)) return -1;
+    return ralph_set_dbl_param_id(model, param, value);
+}
+
+int ralph_get_mip_int_param_id(const RalphModel *model, RalphParamId param, int *value) {
+    const RalphParamSpec *spec = ralph_param_spec_by_id(param);
+    if (!spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
+    if (!ralph_param_scope_allows_mip(spec->scope)) return -1;
+    return ralph_get_int_param_id(model, param, value);
+}
+
+int ralph_get_mip_dbl_param_id(const RalphModel *model, RalphParamId param, double *value) {
+    const RalphParamSpec *spec = ralph_param_spec_by_id(param);
+    if (!spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
+    if (!ralph_param_scope_allows_mip(spec->scope)) return -1;
+    return ralph_get_dbl_param_id(model, param, value);
 }
 
 int ralph_set_int_param(RalphModel *model, const char *name, int value) {
+    RalphParamId param;
     if (!model || !name) return -1;
-
-    if (STREQ(name, "max_iterations") || STREQ(name, "IterationLimit")) {
-        model->max_iterations = value;
-    } else if (STREQ(name, "presolve") || STREQ(name, "Presolve")) {
-        model->presolve = value ? 1 : -1;  /* -1 = explicitly off (skips MIP auto-enable) */
-    } else if (STREQ(name, "verbose") || STREQ(name, "OutputFlag")) {
-        model->verbose = value;
-    } else if (STREQ(name, "telemetry") || STREQ(name, "Telemetry")) {
-        model->telemetry = value ? 1 : 0;
-    } else if (STREQ(name, "max_nodes") || STREQ(name, "NodeLimit")) {
-        model->max_nodes = value;
-    } else if (STREQ(name, "max_cut_rounds") || STREQ(name, "CutRounds")) {
-        model->max_cut_rounds = value;
-    } else if (STREQ(name, "method") || STREQ(name, "Method")) {
-        /* 0=primal simplex, 1=dual simplex, 2=auto */
-        model->method = value;
-    } else if (STREQ(name, "pricing") || STREQ(name, "Pricing")) {
-        /* 0=Dantzig, 1=SE, 2=Devex, 3=Partial, 4=Heap, 5=SE+Devex-init */
-        model->pricing = value;
-    } else if (STREQ(name, "detect_special") || STREQ(name, "DetectSpecial")) {
-        /* 1=detect LAP/network structure, 0=disable */
-        model->detect_special = value;
-    } else if (STREQ(name, "node_pool_capacity") || STREQ(name, "PoolCapacity")) {
-        /* Pre-allocated B&B node pool size (0 = use default 1024) */
-        model->node_pool_capacity = value > 0 ? value : 1024;
-    } else if (STREQ(name, "node_select") || STREQ(name, "NodeSelect")) {
-        /* 0=best-first, 1=DFS, 2=best-estimate, 3=hybrid */
-        if (value < 0 || value > 3) return -1;
-        model->node_select = value;
-    } else if (STREQ(name, "force_two_phase") || STREQ(name, "TwoPhase")) {
-        /* 1=force two-phase simplex for clean Farkas duals, 0=default (Big-M) */
-        model->force_two_phase = value;
-    } else if (STREQ(name, "trace_phase1") || STREQ(name, "TracePhase1")) {
-        /* 1=emit deterministic phase-1 pivot-failure trace to stderr */
-        model->trace_phase1 = value;
-    } else if (STREQ(name, "presolve_mask") || STREQ(name, "PresolveMask")) {
-        /* Bitmask controlling individual presolve techniques (see presolve.h) */
-        model->presolve_mask = (unsigned int)value;
-    } else if (STREQ(name, "dual_bound_flip") || STREQ(name, "DualBoundFlip")) {
-        /* 0=off, 1=on for P5 bound flipping in dual ratio test */
-        model->dual_bound_flip = value ? 1 : 0;
-    } else if (STREQ(name, "dual_steepest_edge") || STREQ(name, "DualSteepestEdge")) {
-        /* 0=off, 1=on for P6 DSE leaving selection */
-        model->dual_steepest_edge = value ? 1 : 0;
-    } else if (STREQ(name, "scaling") || STREQ(name, "Scaling") ||
-               STREQ(name, "scaling_rounds") || STREQ(name, "ScalingRounds")) {
-        /* 0=off, 1=single-round geometric mean (default), N=N geo rounds + equilibrium */
-        model->scaling = value >= 0 ? value : 0;
-    } else if (STREQ(name, "crash") || STREQ(name, "Crash")) {
-        /* 0=off, 1=triangular crash basis */
-        model->crash = value ? 1 : 0;
-    } else if (STREQ(name, "verify") || STREQ(name, "Verify")) {
-        /* 0=off, 1=post-solve verification (primal/dual/complementary slackness) */
-        model->verify = value ? 1 : 0;
-    } else if (STREQ(name, "phase1_pricing") || STREQ(name, "Phase1Pricing")) {
-        /* Override pricing strategy for Phase 1: 0=Dantzig, -1=disabled (use solver pricing) */
-        model->phase1_pricing = (value >= 0) ? value : -1;
-    } else if (STREQ(name, "var_select") || STREQ(name, "VarSelect")) {
-        /* 0=most_infeasible, 1=pseudo_cost, 2=strong_branch, 3=reliability */
-        if (value < 0 || value > 4) return -1;
-        model->var_select = value;
-    } else if (STREQ(name, "lu_supernode") || STREQ(name, "LuSupernode")) {
-        /* 0=off, 1=enable supernodal LU factorization (T2.1) */
-        model->lu_supernode = value ? 1 : 0;
-    } else {
-        return -1;  /* Unknown parameter */
-    }
-
-    return 0;
+    if (ralph_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_set_int_param_id(model, param, value);
 }
 
 int ralph_set_dbl_param(RalphModel *model, const char *name, double value) {
+    RalphParamId param;
     if (!model || !name) return -1;
-
-    if (STREQ(name, "time_limit") || STREQ(name, "TimeLimit")) {
-        model->time_limit = value;
-    } else if (STREQ(name, "mip_gap") || STREQ(name, "MIPGap")) {
-        model->mip_gap = value;
-    } else if (STREQ(name, "obj_limit") || STREQ(name, "ObjLimit")) {
-        model->objective_limit = value;
-    } else if (STREQ(name, "feas_tol")) {
-        if (value > 0.0) model->lp_model->feas_tol = value;
-    } else if (STREQ(name, "opt_tol")) {
-        if (value > 0.0) model->lp_model->opt_tol = value;
-    } else if (STREQ(name, "pivot_tol")) {
-        if (value > 0.0) model->lp_model->pivot_tol = value;
-    } else {
-        return -1;  /* Unknown parameter */
-    }
-
-    return 0;
+    if (ralph_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_set_dbl_param_id(model, param, value);
 }
 
 int ralph_get_int_param(const RalphModel *model, const char *name, int *value) {
+    RalphParamId param;
     if (!model || !name || !value) return -1;
-
-    if (STREQ(name, "max_iterations")) {
-        *value = model->max_iterations;
-    } else if (STREQ(name, "presolve")) {
-        *value = (model->presolve > 0) ? 1 : 0;
-    } else if (STREQ(name, "verbose")) {
-        *value = model->verbose;
-    } else if (STREQ(name, "telemetry") || STREQ(name, "Telemetry")) {
-        *value = model->telemetry;
-    } else if (STREQ(name, "max_nodes")) {
-        *value = model->max_nodes;
-    } else if (STREQ(name, "max_cut_rounds")) {
-        *value = model->max_cut_rounds;
-    } else if (STREQ(name, "method")) {
-        *value = model->method;
-    } else if (STREQ(name, "node_pool_capacity")) {
-        *value = model->node_pool_capacity;
-    } else if (STREQ(name, "node_select")) {
-        *value = model->node_select;
-    } else if (STREQ(name, "trace_phase1")) {
-        *value = model->trace_phase1;
-    } else if (STREQ(name, "presolve_mask")) {
-        *value = (int)model->presolve_mask;
-    } else if (STREQ(name, "var_select")) {
-        *value = model->var_select;
-    } else {
-        return -1;
-    }
-
-    return 0;
+    if (ralph_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_get_int_param_id(model, param, value);
 }
 
 int ralph_get_dbl_param(const RalphModel *model, const char *name, double *value) {
+    RalphParamId param;
     if (!model || !name || !value) return -1;
-
-    if (STREQ(name, "time_limit")) {
-        *value = model->time_limit;
-    } else if (STREQ(name, "mip_gap")) {
-        *value = model->mip_gap;
-    } else if (STREQ(name, "obj_limit")) {
-        *value = model->objective_limit;
-    } else if (STREQ(name, "feas_tol")) {
-        *value = model->lp_model->feas_tol;
-    } else if (STREQ(name, "opt_tol")) {
-        *value = model->lp_model->opt_tol;
-    } else if (STREQ(name, "pivot_tol")) {
-        *value = model->lp_model->pivot_tol;
-    } else {
-        return -1;
-    }
-
-    return 0;
+    if (ralph_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_get_dbl_param_id(model, param, value);
 }
 
 int ralph_set_lp_int_param(RalphModel *model, const char *name, int value) {
+    RalphParamId param;
     if (!name) return -1;
-    if (!ralph_is_shared_int_param_set(name) && !ralph_is_lp_int_param_set(name)) return -1;
-    return ralph_set_int_param(model, name, value);
+    if (ralph_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_set_lp_int_param_id(model, param, value);
 }
 
 int ralph_set_lp_dbl_param(RalphModel *model, const char *name, double value) {
+    RalphParamId param;
     if (!name) return -1;
-    if (!ralph_is_shared_dbl_param_set(name) && !ralph_is_lp_dbl_param_set(name)) return -1;
-    return ralph_set_dbl_param(model, name, value);
+    if (ralph_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_set_lp_dbl_param_id(model, param, value);
 }
 
 int ralph_get_lp_int_param(const RalphModel *model, const char *name, int *value) {
+    RalphParamId param;
     if (!name) return -1;
-    if (!ralph_is_shared_int_param_get(name) && !ralph_is_lp_int_param_get(name)) return -1;
-    return ralph_get_int_param(model, name, value);
+    if (ralph_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_get_lp_int_param_id(model, param, value);
 }
 
 int ralph_get_lp_dbl_param(const RalphModel *model, const char *name, double *value) {
+    RalphParamId param;
     if (!name) return -1;
-    if (!ralph_is_shared_dbl_param_get(name) && !ralph_is_lp_dbl_param_get(name)) return -1;
-    return ralph_get_dbl_param(model, name, value);
+    if (ralph_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_get_lp_dbl_param_id(model, param, value);
 }
 
 int ralph_set_mip_int_param(RalphModel *model, const char *name, int value) {
+    RalphParamId param;
     if (!name) return -1;
-    if (!ralph_is_shared_int_param_set(name) && !ralph_is_mip_int_param_set(name)) return -1;
-    return ralph_set_int_param(model, name, value);
+    if (ralph_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_set_mip_int_param_id(model, param, value);
 }
 
 int ralph_set_mip_dbl_param(RalphModel *model, const char *name, double value) {
+    RalphParamId param;
     if (!name) return -1;
-    if (!ralph_is_shared_dbl_param_set(name) && !ralph_is_mip_dbl_param_set(name)) return -1;
-    return ralph_set_dbl_param(model, name, value);
+    if (ralph_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_set_mip_dbl_param_id(model, param, value);
 }
 
 int ralph_get_mip_int_param(const RalphModel *model, const char *name, int *value) {
+    RalphParamId param;
     if (!name) return -1;
-    if (!ralph_is_shared_int_param_get(name) && !ralph_is_mip_int_param_get(name)) return -1;
-    return ralph_get_int_param(model, name, value);
+    if (ralph_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_get_mip_int_param_id(model, param, value);
 }
 
 int ralph_get_mip_dbl_param(const RalphModel *model, const char *name, double *value) {
+    RalphParamId param;
     if (!name) return -1;
-    if (!ralph_is_shared_dbl_param_get(name) && !ralph_is_mip_dbl_param_get(name)) return -1;
-    return ralph_get_dbl_param(model, name, value);
+    if (ralph_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_get_mip_dbl_param_id(model, param, value);
 }
 
 /* ============================================================================

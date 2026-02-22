@@ -881,6 +881,62 @@ int ralph_solve_benders(
     RalphBendersResult *result
 );
 
+/* Typed parameter metadata/introspection */
+typedef enum {
+    RALPH_PARAM_SCOPE_SHARED = 0,
+    RALPH_PARAM_SCOPE_LP = 1,
+    RALPH_PARAM_SCOPE_MIP = 2
+} RalphParamScope;
+
+typedef enum {
+    RALPH_PARAM_VALUE_INT = 0,
+    RALPH_PARAM_VALUE_DOUBLE = 1
+} RalphParamValueType;
+
+typedef enum {
+    RALPH_PARAM_MAX_ITERATIONS = 0,
+    RALPH_PARAM_PRESOLVE,
+    RALPH_PARAM_VERBOSE,
+    RALPH_PARAM_TELEMETRY,
+    RALPH_PARAM_MAX_NODES,
+    RALPH_PARAM_MAX_CUT_ROUNDS,
+    RALPH_PARAM_METHOD,
+    RALPH_PARAM_PRICING,
+    RALPH_PARAM_DETECT_SPECIAL,
+    RALPH_PARAM_NODE_POOL_CAPACITY,
+    RALPH_PARAM_NODE_SELECT,
+    RALPH_PARAM_FORCE_TWO_PHASE,
+    RALPH_PARAM_TRACE_PHASE1,
+    RALPH_PARAM_PRESOLVE_MASK,
+    RALPH_PARAM_DUAL_BOUND_FLIP,
+    RALPH_PARAM_DUAL_STEEPEST_EDGE,
+    RALPH_PARAM_SCALING,
+    RALPH_PARAM_CRASH,
+    RALPH_PARAM_VERIFY,
+    RALPH_PARAM_PHASE1_PRICING,
+    RALPH_PARAM_VAR_SELECT,
+    RALPH_PARAM_LU_SUPERNODE,
+    RALPH_PARAM_TIME_LIMIT,
+    RALPH_PARAM_MIP_GAP,
+    RALPH_PARAM_OBJ_LIMIT,
+    RALPH_PARAM_FEAS_TOL,
+    RALPH_PARAM_OPT_TOL,
+    RALPH_PARAM_PIVOT_TOL,
+    RALPH_PARAM_COUNT
+} RalphParamId;
+
+typedef struct {
+    RalphParamId id;
+    const char *name;              /* Canonical string name */
+    RalphParamScope scope;         /* SHARED / LP / MIP */
+    RalphParamValueType value_type;/* INT / DOUBLE */
+    double default_value;          /* Numeric default (int values represented exactly) */
+    int has_min;
+    double min_value;
+    int has_max;
+    double max_value;
+} RalphParamMeta;
+
 /* Parameters */
 int ralph_set_int_param(RalphModel *model, const char *name, int value);
 int ralph_set_dbl_param(RalphModel *model, const char *name, double value);
@@ -899,6 +955,28 @@ int ralph_set_mip_int_param(RalphModel *model, const char *name, int value);
 int ralph_set_mip_dbl_param(RalphModel *model, const char *name, double value);
 int ralph_get_mip_int_param(const RalphModel *model, const char *name, int *value);
 int ralph_get_mip_dbl_param(const RalphModel *model, const char *name, double *value);
+
+/* Typed parameter APIs (ID-based). */
+int ralph_set_int_param_id(RalphModel *model, RalphParamId param, int value);
+int ralph_set_dbl_param_id(RalphModel *model, RalphParamId param, double value);
+int ralph_get_int_param_id(const RalphModel *model, RalphParamId param, int *value);
+int ralph_get_dbl_param_id(const RalphModel *model, RalphParamId param, double *value);
+
+/* Typed strict parameter APIs (ID-based scope enforcement). */
+int ralph_set_lp_int_param_id(RalphModel *model, RalphParamId param, int value);
+int ralph_set_lp_dbl_param_id(RalphModel *model, RalphParamId param, double value);
+int ralph_get_lp_int_param_id(const RalphModel *model, RalphParamId param, int *value);
+int ralph_get_lp_dbl_param_id(const RalphModel *model, RalphParamId param, double *value);
+
+int ralph_set_mip_int_param_id(RalphModel *model, RalphParamId param, int value);
+int ralph_set_mip_dbl_param_id(RalphModel *model, RalphParamId param, double value);
+int ralph_get_mip_int_param_id(const RalphModel *model, RalphParamId param, int *value);
+int ralph_get_mip_dbl_param_id(const RalphModel *model, RalphParamId param, double *value);
+
+/* Parameter metadata/introspection APIs. */
+int ralph_get_param_count(void);
+int ralph_get_param_meta(RalphParamId param, RalphParamMeta *meta);
+int ralph_find_param_by_name(const char *name, RalphParamId *param);
 
 /* File I/O */
 int ralph_read_mps(RalphModel *model, const char *filename);
