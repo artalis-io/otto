@@ -1325,3 +1325,8 @@ LPModel* ralph_get_lp_model(const RalphModel *model) {
 SimplexSolver* ralph_get_lp_solver(const RalphModel *model) {
     return model ? model->lp_solver : NULL;
 }
+
+/* Internal helper for integration tests and benchmark diagnostics */
+MIPSolver* ralph_get_mip_solver(const RalphModel *model) {
+    return model ? model->mip_solver : NULL;
+}

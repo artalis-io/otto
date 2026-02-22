@@ -9,12 +9,18 @@
 #include <string.h>
 #include <math.h>
 #include "ralph.h"
+#include "lp.h"
+#include "mip.h"
 
 #define TOLERANCE 1e-4
 
 /* Test result tracking */
 static int tests_run = 0;
 static int tests_passed = 0;
+
+/* Internal diagnostics helpers (non-public API used by integration tests). */
+SimplexSolver* ralph_get_lp_solver(const RalphModel *model);
+MIPSolver* ralph_get_mip_solver(const RalphModel *model);
 
 #define ASSERT(cond, msg) do { \
     tests_run++; \
@@ -5036,6 +5042,91 @@ void test_reoptimization_dual_no_phase1(void) {
     ralph_free(model);
 }
 
+static void build_telemetry_lp_case(RalphModel *model) {
+    int idx1[] = {0, 1};
+    double val1[] = {1.0, 1.0};
+    int idx2[] = {0, 1};
+    double val2[] = {2.0, 1.0};
+
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+    ralph_add_constraint(model, 2, idx1, val1, RALPH_LESS_EQUAL, 4.0);
+    ralph_add_constraint(model, 2, idx2, val2, RALPH_LESS_EQUAL, 6.0);
+}
+
+static void build_telemetry_mip_case(RalphModel *model) {
+    int idx[] = {0, 1};
+    double val[] = {1.0, 1.0};
+
+    ralph_set_obj_sense(model, RALPH_MAXIMIZE);
+    ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);
+    ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);
+    ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 1.0);
+}
+
+void test_runtime_telemetry_param_propagation(void) {
+    printf("\n=== Test: Runtime Telemetry Parameter Propagation ===\n");
+
+    RalphModel *lp_off = ralph_create();
+    build_telemetry_lp_case(lp_off);
+    ASSERT(ralph_set_int_param(lp_off, "telemetry", 0) == 0, "LP telemetry=0 accepted");
+    ralph_optimize(lp_off);
+    ASSERT(ralph_get_status(lp_off) == RALPH_STATUS_OPTIMAL, "LP telemetry=0 solve OPTIMAL");
+    SimplexSolver *lp_solver_off = ralph_get_lp_solver(lp_off);
+    ASSERT(lp_solver_off != NULL, "LP solver available (telemetry=0)");
+    ASSERT(lp_solver_off && lp_solver_off->telemetry_enabled == 0,
+           "LP solver telemetry_enabled=0 propagated");
+    ASSERT(lp_solver_off && lp_solver_off->tableau && lp_solver_off->tableau->lu &&
+           lp_solver_off->tableau->lu->telemetry_enabled == 0,
+           "LP LU telemetry_enabled=0 propagated");
+    ralph_free(lp_off);
+
+    RalphModel *lp_on = ralph_create();
+    build_telemetry_lp_case(lp_on);
+    ASSERT(ralph_set_int_param(lp_on, "telemetry", 1) == 0, "LP telemetry=1 accepted");
+    ralph_optimize(lp_on);
+    ASSERT(ralph_get_status(lp_on) == RALPH_STATUS_OPTIMAL, "LP telemetry=1 solve OPTIMAL");
+    SimplexSolver *lp_solver_on = ralph_get_lp_solver(lp_on);
+    ASSERT(lp_solver_on != NULL, "LP solver available (telemetry=1)");
+    ASSERT(lp_solver_on && lp_solver_on->telemetry_enabled == 1,
+           "LP solver telemetry_enabled=1 propagated");
+    ASSERT(lp_solver_on && lp_solver_on->tableau && lp_solver_on->tableau->lu &&
+           lp_solver_on->tableau->lu->telemetry_enabled == 1,
+           "LP LU telemetry_enabled=1 propagated");
+    ralph_free(lp_on);
+
+    RalphModel *mip_off = ralph_create();
+    build_telemetry_mip_case(mip_off);
+    ralph_set_int_param(mip_off, "detect_special", 0);
+    ASSERT(ralph_set_int_param(mip_off, "telemetry", 0) == 0, "MIP telemetry=0 accepted");
+    ralph_optimize(mip_off);
+    ASSERT(ralph_get_status(mip_off) == RALPH_STATUS_OPTIMAL, "MIP telemetry=0 solve OPTIMAL");
+    MIPSolver *mip_solver_off = ralph_get_mip_solver(mip_off);
+    ASSERT(mip_solver_off != NULL, "MIP solver available (telemetry=0)");
+    ASSERT(mip_solver_off && mip_solver_off->telemetry == 0,
+           "MIP solver telemetry=0 propagated");
+    ASSERT(mip_solver_off && mip_solver_off->lp_solver &&
+           mip_solver_off->lp_solver->telemetry_enabled == 0,
+           "MIP node LP telemetry_enabled=0 propagated");
+    ralph_free(mip_off);
+
+    RalphModel *mip_on = ralph_create();
+    build_telemetry_mip_case(mip_on);
+    ralph_set_int_param(mip_on, "detect_special", 0);
+    ASSERT(ralph_set_int_param(mip_on, "telemetry", 1) == 0, "MIP telemetry=1 accepted");
+    ralph_optimize(mip_on);
+    ASSERT(ralph_get_status(mip_on) == RALPH_STATUS_OPTIMAL, "MIP telemetry=1 solve OPTIMAL");
+    MIPSolver *mip_solver_on = ralph_get_mip_solver(mip_on);
+    ASSERT(mip_solver_on != NULL, "MIP solver available (telemetry=1)");
+    ASSERT(mip_solver_on && mip_solver_on->telemetry == 1,
+           "MIP solver telemetry=1 propagated");
+    ASSERT(mip_solver_on && mip_solver_on->lp_solver &&
+           mip_solver_on->lp_solver->telemetry_enabled == 1,
+           "MIP node LP telemetry_enabled=1 propagated");
+    ralph_free(mip_on);
+}
+
 /* ============================================================================
  * Main
  * ============================================================================ */
@@ -5180,6 +5271,9 @@ int main(int argc, char **argv) {
     /* Re-optimization tests (Section 5: modify RHS/bounds, confirm no Phase I) */
     test_reoptimization_rhs_bounds();
     test_reoptimization_dual_no_phase1();
+
+    /* Runtime telemetry parameter propagation (LP + MIP paths) */
+    test_runtime_telemetry_param_propagation();
 
     /* API Tests */
     test_api_functions();

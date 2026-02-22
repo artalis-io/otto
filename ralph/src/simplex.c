@@ -14,10 +14,10 @@
 #include <math.h>
 #include <time.h>
 #include "lp.h"
+#include "lp_log.h"
 
 /* Forward declarations */
 int lp_model_finalize(LPModel *model);
-#define perf_now_ms sh_perf_now_ms
 
 /* Phase-1 pivot-failure reasons used by deterministic tracing. */
 enum {
@@ -624,8 +624,7 @@ static void phase1_trace_record_no_entering(SimplexSolver *solver, int iter, int
         ((unsigned long long)(iter & 0xFFFFF) << 20) ^
         (unsigned long long)(status_code & 0xFFFFF));
 
-    fprintf(stderr,
-            "[phase1_trace] event=no_entering iter=%d code=%d\n",
+    LP_LOG_STDERR("[phase1_trace] event=no_entering iter=%d code=%d\n",
             iter, status_code);
 }
 
@@ -672,8 +671,7 @@ static void phase1_trace_record_pivot_failure(SimplexSolver *solver,
         solver->trace_phase1_signature,
         (unsigned long long)(reason & 0xFFFF));
 
-    fprintf(stderr,
-            "[phase1_trace] event=pivot_fail iter=%d repeat=%d entering=%d leaving=%d theta=%.12e reason=%s pivot=%.12e dir_inf=%.12e\n",
+    LP_LOG_STDERR("[phase1_trace] event=pivot_fail iter=%d repeat=%d entering=%d leaving=%d theta=%.12e reason=%s pivot=%.12e dir_inf=%.12e\n",
             iter,
             repeat_count,
             tab->trace_last_entering,
@@ -687,8 +685,7 @@ static void phase1_trace_record_pivot_failure(SimplexSolver *solver,
 static void phase1_trace_emit_summary(SimplexSolver *solver, RalphStatus phase1_status) {
     if (!solver || !solver->trace_phase1) return;
 
-    fprintf(stderr,
-            "[phase1_trace] summary status=%s piv_fail=%d small_pivot=%d invalid_col=%d lu_max_updates=%d lu_spike_pool_full=%d lu_update_pivot_small=%d lu_singular_update=%d factor_singular=%d refactor_forced_other=%d refactor_after_update_other=%d no_entering=%d first_iter=%d last_iter=%d sig=0x%016llx\n",
+    LP_LOG_STDERR("[phase1_trace] summary status=%s piv_fail=%d small_pivot=%d invalid_col=%d lu_max_updates=%d lu_spike_pool_full=%d lu_update_pivot_small=%d lu_singular_update=%d factor_singular=%d refactor_forced_other=%d refactor_after_update_other=%d no_entering=%d first_iter=%d last_iter=%d sig=0x%016llx\n",
             ralph_status_string(phase1_status),
             solver->trace_phase1_pivot_failures,
             solver->trace_phase1_fail_small_pivot,
@@ -1077,12 +1074,12 @@ static void verify_solution(SimplexSolver *solver) {
     if (imprecise) {
         solver->status = RALPH_STATUS_IMPRECISE;
         if (solver->verbose) {
-            printf("[verify] IMPRECISE: primal=%.2e bound=%.2e dual=%.2e cs=%.2e obj=%.2e cond=%.2e\n",
+            LP_LOG_STDOUT("[verify] IMPRECISE: primal=%.2e bound=%.2e dual=%.2e cs=%.2e obj=%.2e cond=%.2e\n",
                    max_primal_infeas, max_bound_infeas, max_dual_infeas,
                    max_comp_slack, obj_rel_error, cond);
         }
     } else if (solver->verbose) {
-        printf("[verify] OK: primal=%.2e bound=%.2e dual=%.2e cs=%.2e obj=%.2e cond=%.2e\n",
+        LP_LOG_STDOUT("[verify] OK: primal=%.2e bound=%.2e dual=%.2e cs=%.2e obj=%.2e cond=%.2e\n",
                max_primal_infeas, max_bound_infeas, max_dual_infeas,
                max_comp_slack, obj_rel_error, cond);
     }
@@ -2249,7 +2246,7 @@ static int repair_singular_basis(SimplexTableau *tab) {
 }
 
 int tableau_refactorize(SimplexTableau *tab) {
-    double t_refactor_ms = perf_now_ms();
+    double t_refactor_ms = lp_telemetry_timer_start();
     SimplexSolver *owner = tab ? tab->owner : NULL;
     int reason = RALPH_REFACTOR_REASON_OTHER;
     int updates_before = (tab && tab->lu) ? tab->lu->num_updates : 0;
@@ -2324,13 +2321,12 @@ int tableau_refactorize(SimplexTableau *tab) {
     }
 
     if (owner) {
-        double elapsed_ms = perf_now_ms() - t_refactor_ms;
-        lp_telemetry_record_refactor_with_lu(owner,
-                                             tab ? tab->phase : 0,
-                                             reason,
-                                             elapsed_ms,
-                                             tab ? tab->m : 0,
-                                             tab ? tab->lu : NULL);
+        lp_telemetry_record_refactor_with_lu_timed(owner,
+                                                   tab ? tab->phase : 0,
+                                                   reason,
+                                                   t_refactor_ms,
+                                                   tab ? tab->m : 0,
+                                                   tab ? tab->lu : NULL);
         periodic_feedback_record_refactor(owner, tab ? tab->phase : 0, reason, updates_before, status);
     }
 
@@ -2347,7 +2343,7 @@ static inline int tableau_refactorize_with_reason(SimplexTableau *tab, int reaso
  * ============================================================================ */
 
 int tableau_compute_solution(SimplexTableau *tab) {
-    double t0_ms = perf_now_ms();
+    double t0_ms = lp_telemetry_timer_start();
 
     /* Compute x_B = B^{-1} * (b - N*x_N) */
 
@@ -2435,14 +2431,13 @@ int tableau_compute_solution(SimplexTableau *tab) {
     tab->obj_value = obj;
 
     if (tab->owner) {
-        double elapsed_ms = perf_now_ms() - t0_ms;
-        lp_telemetry_record_compute_solution(tab->owner, tab->phase, elapsed_ms);
+        lp_telemetry_record_compute_solution_timed(tab->owner, tab->phase, t0_ms);
     }
     return 0;
 }
 
 int tableau_compute_reduced_costs(SimplexTableau *tab) {
-    double t0_ms = perf_now_ms();
+    double t0_ms = lp_telemetry_timer_start();
 
     /* Compute dual values: y = B^{-T} * c_B
      * If c_B is sparse (many slacks with 0 cost), use sparse BTRAN
@@ -2513,8 +2508,7 @@ int tableau_compute_reduced_costs(SimplexTableau *tab) {
     tab->heap_size = 0;
 
     if (tab->owner) {
-        double elapsed_ms = perf_now_ms() - t0_ms;
-        lp_telemetry_record_compute_reduced_costs(tab->owner, tab->phase, elapsed_ms);
+        lp_telemetry_record_compute_reduced_costs_timed(tab->owner, tab->phase, t0_ms);
     }
     return 0;
 }
@@ -3177,10 +3171,10 @@ int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *th
 
     /* Use hyper-sparse FTRAN for better performance on sparse columns */
     {
-        double t_ftran_ms = perf_now_ms();
+        double t_ftran_ms = lp_telemetry_timer_start();
         lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2, NULL, NULL);
         if (tab->owner) {
-            lp_telemetry_add_ftran_ms(tab->owner, perf_now_ms() - t_ftran_ms);
+            lp_telemetry_add_ftran_timed(tab->owner, t_ftran_ms);
         }
     }
 
@@ -3265,10 +3259,10 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
 
     /* Use hyper-sparse FTRAN for better performance on sparse columns */
     {
-        double t_ftran_ms = perf_now_ms();
+        double t_ftran_ms = lp_telemetry_timer_start();
         lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2, NULL, NULL);
         if (tab->owner) {
-            lp_telemetry_add_ftran_ms(tab->owner, perf_now_ms() - t_ftran_ms);
+            lp_telemetry_add_ftran_timed(tab->owner, t_ftran_ms);
         }
     }
 
@@ -3649,10 +3643,10 @@ static int simplex_pivot(SimplexTableau *tab,
     int rhs_idx = leaving_pos;
     double rhs_val = 1.0;
     {
-        double t_btran_ms = perf_now_ms();
+        double t_btran_ms = lp_telemetry_timer_start();
         lu_solve_transpose_sparse(tab->lu, 1, &rhs_idx, &rhs_val, pivot_row);
         if (tab->owner) {
-            lp_telemetry_add_btran_ms(tab->owner, perf_now_ms() - t_btran_ms);
+            lp_telemetry_add_btran_timed(tab->owner, t_btran_ms);
         }
     }
 
@@ -3674,10 +3668,10 @@ static int simplex_pivot(SimplexTableau *tab,
     }
     int use_true_se = (tab->pricing_strategy == 1 || tab->pricing_strategy == 5) || artificials_in_basis;
     if (use_true_se && fabs(pivot_sq) > RALPH_ZERO_TOL) {
-        double t_btran_ms = perf_now_ms();
+        double t_btran_ms = lp_telemetry_timer_start();
         lu_solve_transpose(tab->lu, tab->work2, tau_helper);
         if (tab->owner) {
-            lp_telemetry_add_btran_ms(tab->owner, perf_now_ms() - t_btran_ms);
+            lp_telemetry_add_btran_timed(tab->owner, t_btran_ms);
         }
     }
 
@@ -3710,10 +3704,10 @@ static int simplex_pivot(SimplexTableau *tab,
             case BASIS_ACTION_UPDATE:
                 sparse_get_column(tab->A_ext, entering, tab->work1);
                 {
-                    double t_lu_update_ms = perf_now_ms();
+                    double t_lu_update_ms = lp_telemetry_timer_start();
                     lu_update_status = lu_update(tab->lu, leaving_pos, tab->work1);
                     if (tab->owner) {
-                        lp_telemetry_add_lu_update_ms(tab->owner, perf_now_ms() - t_lu_update_ms);
+                        lp_telemetry_add_lu_update_timed(tab->owner, t_lu_update_ms);
                     }
                 }
                 if (lu_update_status == 0) {
@@ -3737,10 +3731,10 @@ static int simplex_pivot(SimplexTableau *tab,
                     int ref_reason = force_refactor
                                      ? RALPH_REFACTOR_REASON_FORCED_SMALL_PIVOT
                                      : RALPH_REFACTOR_REASON_UPDATE_RECOVERY;
-                    double t_refactor_ms = perf_now_ms();
+                    double t_refactor_ms = lp_telemetry_timer_start();
                     lu_update_status = tableau_refactorize_with_reason(tab, ref_reason);
                     if (tab->owner) {
-                        lp_telemetry_add_refactor_runtime_ms(tab->owner, perf_now_ms() - t_refactor_ms);
+                        lp_telemetry_add_refactor_runtime_timed(tab->owner, t_refactor_ms);
                     }
                 }
                 if (lu_update_status == 0) {
@@ -4066,7 +4060,7 @@ static void extract_farkas_ray(SimplexSolver *solver) {
     if (max_abs < 1e-9) {
         solver->farkas_valid = 0;
         if (solver->verbose) {
-            fprintf(stderr, "[extract_farkas_ray] WARNING: Farkas ray is all zeros\n");
+            LP_LOG_STDERR("[extract_farkas_ray] WARNING: Farkas ray is all zeros\n");
         }
         return;
     }
@@ -4082,19 +4076,19 @@ static void extract_farkas_ray(SimplexSolver *solver) {
     if (y_tab_dot_rhs >= -1e-6) {
         /* This shouldn't happen if the Farkas extraction is correct */
         if (solver->verbose) {
-            fprintf(stderr, "[extract_farkas_ray] WARNING: y'b_tab = %.6e (expected < 0)\n",
+            LP_LOG_STDERR("[extract_farkas_ray] WARNING: y'b_tab = %.6e (expected < 0)\n",
                     y_tab_dot_rhs);
         }
         /* Don't invalidate - this might be a borderline numerical case.
          * The ray can still be used, but user should be aware. */
     } else if (solver->verbose >= 2) {
-        fprintf(stderr, "[extract_farkas_ray] y'b_tab = %.6e < 0 (valid)\n", y_tab_dot_rhs);
+        LP_LOG_STDERR("[extract_farkas_ray] y'b_tab = %.6e < 0 (valid)\n", y_tab_dot_rhs);
     }
 
     solver->farkas_valid = 1;
 
     if (solver->verbose >= 2) {
-        fprintf(stderr, "[extract_farkas_ray] Valid certificate: ||y||_inf = %.6e\n", max_abs);
+        LP_LOG_STDERR("[extract_farkas_ray] Valid certificate: ||y||_inf = %.6e\n", max_abs);
     }
 }
 
@@ -4401,10 +4395,9 @@ static int simplex_phase1(SimplexSolver *solver) {
 
             double theta = max_infeas / fabs(tab->work2[leaving]);
             {
-                double t_pivot_ms = perf_now_ms();
+                double t_pivot_ms = lp_telemetry_timer_start();
                 simplex_pivot(tab, entering, leaving, theta, 0);
-                double pivot_elapsed_ms = perf_now_ms() - t_pivot_ms;
-                lp_telemetry_record_pivot(solver, 1, pivot_elapsed_ms);
+                lp_telemetry_record_pivot_timed(solver, 1, t_pivot_ms);
             }
 
             if (lu_needs_refactorization(tab->lu)) {
@@ -4421,7 +4414,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     tab->phase = 1;
 
     if (solver->verbose) {
-        fprintf(stderr, "[simplex_phase1] Starting Phase 1 with %d artificial variables, %d equalities\n",
+        LP_LOG_STDERR("[simplex_phase1] Starting Phase 1 with %d artificial variables, %d equalities\n",
                 tab->num_artificial, tab->num_equalities);
     }
 
@@ -4437,7 +4430,7 @@ static int simplex_phase1(SimplexSolver *solver) {
 
     if (art_sum < RALPH_FEAS_TOL) {
         if (solver->verbose) {
-            fprintf(stderr, "[simplex_phase1] Already feasible, skipping Phase 1\n");
+            LP_LOG_STDERR("[simplex_phase1] Already feasible, skipping Phase 1\n");
         }
         phase1_trace_emit_summary(solver, RALPH_STATUS_OPTIMAL);
         return 0;
@@ -4478,7 +4471,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     if (tab->use_two_phase && tab->num_equalities > (tab->m * 9) / 10) {
         primal_apply_perturbation(tab);
         if (solver->verbose) {
-            fprintf(stderr, "[simplex_phase1] Proactive perturbation: %d equalities out of %d constraints (%.0f%%)\n",
+            LP_LOG_STDERR("[simplex_phase1] Proactive perturbation: %d equalities out of %d constraints (%.0f%%)\n",
                     tab->num_equalities, tab->m, 100.0 * tab->num_equalities / tab->m);
         }
         tableau_compute_solution(tab);
@@ -4510,7 +4503,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         /* Pricing: select entering variable */
         int entering;
         int price_status;
-        double t_pricing_ms = perf_now_ms();
+        double t_pricing_ms = lp_telemetry_timer_start();
 
         if (use_bland) {
             price_status = pricing_bland(tab, &entering);
@@ -4534,16 +4527,14 @@ static int simplex_phase1(SimplexSolver *solver) {
             int exclude_b = (excluded_entering_ttl_b > 0) ? excluded_entering_b : -1;
             if (pricing_bland_excluding_two(tab, exclude_a, exclude_b, &alt_entering) == 0) {
                 if (solver->verbose >= 2) {
-                    fprintf(stderr,
-                            "[simplex_phase1] Excluding unstable entering (%d,%d), using %d instead\n",
+                    LP_LOG_STDERR("[simplex_phase1] Excluding unstable entering (%d,%d), using %d instead\n",
                             exclude_a, exclude_b, alt_entering);
                 }
                 entering = alt_entering;
             }
         }
         {
-            double pricing_elapsed_ms = perf_now_ms() - t_pricing_ms;
-            lp_telemetry_record_pricing(solver, 1, pricing_elapsed_ms);
+            lp_telemetry_record_pricing_timed(solver, 1, t_pricing_ms);
         }
 
         if (price_status != 0) {
@@ -4581,7 +4572,7 @@ static int simplex_phase1(SimplexSolver *solver) {
 
                         if (refined_art_sum <= 1e-4) {
                             if (solver->verbose) {
-                                fprintf(stderr, "[simplex_phase1] Refactorized cleanup: art_sum %g -> %g\n",
+                                LP_LOG_STDERR("[simplex_phase1] Refactorized cleanup: art_sum %g -> %g\n",
                                         art_sum, refined_art_sum);
                             }
                             continue;
@@ -4592,7 +4583,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                     /* Truly infeasible - extract Farkas ray from Phase 1 duals.
                      * The Phase 1 duals y = c_B^T * B^{-1} provide the certificate. */
                     if (solver->verbose) {
-                        fprintf(stderr, "[simplex_phase1] INFEASIBLE: artificial sum = %g after %d iterations\n",
+                        LP_LOG_STDERR("[simplex_phase1] INFEASIBLE: artificial sum = %g after %d iterations\n",
                                 art_sum, iter);
                     }
                     extract_farkas_ray(solver);
@@ -4604,7 +4595,7 @@ static int simplex_phase1(SimplexSolver *solver) {
 
                 /* Small residual - try to clean up with a few more iterations */
                 if (solver->verbose) {
-                    fprintf(stderr, "[simplex_phase1] Cleanup phase: art_sum=%g, continuing...\n", art_sum);
+                    LP_LOG_STDERR("[simplex_phase1] Cleanup phase: art_sum=%g, continuing...\n", art_sum);
                 }
                 tableau_compute_reduced_costs(tab);
                 continue;  /* Try more iterations to drive artificials to zero */
@@ -4612,7 +4603,7 @@ static int simplex_phase1(SimplexSolver *solver) {
 
             /* Success */
             if (solver->verbose) {
-                fprintf(stderr, "[simplex_phase1] Phase 1 complete: feasible in %d iterations\n", iter);
+                LP_LOG_STDERR("[simplex_phase1] Phase 1 complete: feasible in %d iterations\n", iter);
             }
             solver->iterations = iter;
             phase1_trace_emit_summary(solver, RALPH_STATUS_OPTIMAL);
@@ -4622,11 +4613,10 @@ static int simplex_phase1(SimplexSolver *solver) {
         /* Ratio test: select leaving variable */
         int leaving;
         double theta;
-        double t_ratio_ms = perf_now_ms();
+        double t_ratio_ms = lp_telemetry_timer_start();
         int ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
         {
-            double ratio_elapsed_ms = perf_now_ms() - t_ratio_ms;
-            lp_telemetry_record_ratio(solver, 1, ratio_elapsed_ms);
+            lp_telemetry_record_ratio_timed(solver, 1, t_ratio_ms);
         }
 
         if (ratio_status != 0) {
@@ -4651,8 +4641,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             int marked = mark_basic_artificial_rows_redundant(tab, 1);
             if (marked > 0) {
                 if (solver->verbose >= 2) {
-                    fprintf(stderr,
-                            "[simplex_phase1] Marked %d infeasible artificial rows as redundant after ratio-test breakdown\n",
+                    LP_LOG_STDERR("[simplex_phase1] Marked %d infeasible artificial rows as redundant after ratio-test breakdown\n",
                             marked);
                 }
                 if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP) == 0) {
@@ -4666,7 +4655,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 solver, tab->m * RALPH_PHASE1_DUAL_RESCUE_MULT);
             if (rescue_status == 0) {
                 if (solver->verbose) {
-                    fprintf(stderr, "[simplex_phase1] Dual rescue recovered after ratio-test breakdown at iter %d\n", iter);
+                    LP_LOG_STDERR("[simplex_phase1] Dual rescue recovered after ratio-test breakdown at iter %d\n", iter);
                 }
                 tableau_compute_solution(tab);
                 tableau_compute_reduced_costs(tab);
@@ -4683,8 +4672,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                                         &excluded_entering_ttl_b);
             if (ratio_breakdown_count < RALPH_PHASE1_RATIO_BREAKDOWN_LIMIT) {
                 if (solver->verbose >= 2) {
-                    fprintf(stderr,
-                            "[simplex_phase1] Continuing after ratio-test breakdown (count=%d), excluding entering %d for %d iterations\n",
+                    LP_LOG_STDERR("[simplex_phase1] Continuing after ratio-test breakdown (count=%d), excluding entering %d for %d iterations\n",
                             ratio_breakdown_count, entering, RALPH_PHASE1_ENTERING_EXCLUDE_ITERS);
                 }
                 use_bland = 1;
@@ -4694,7 +4682,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             }
 
             if (solver->verbose) {
-                fprintf(stderr, "[simplex_phase1] ERROR: unbounded in Phase 1 at iter %d (after recovery)\n", iter);
+                LP_LOG_STDERR("[simplex_phase1] ERROR: unbounded in Phase 1 at iter %d (after recovery)\n", iter);
             }
             primal_remove_perturbation(tab);
             /* Treat unrecoverable Phase 1 "unbounded" as numerical breakdown. */
@@ -4714,8 +4702,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                                      lu_needs_refactorization(tab->lu);
             if (dir_stabilize_cooldown > 0 && !force_dir_refactor) {
                 if (solver->verbose >= 2) {
-                    fprintf(stderr,
-                            "[simplex_phase1] Large direction norm %.2e at iter %d (entering=%d), skipping direction-stabilize refactor (cooldown=%d)\n",
+                    LP_LOG_STDERR("[simplex_phase1] Large direction norm %.2e at iter %d (entering=%d), skipping direction-stabilize refactor (cooldown=%d)\n",
                             dir_inf, iter, entering, dir_stabilize_cooldown);
                 }
                 phase1_exclude_entering_var(entering,
@@ -4731,8 +4718,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             }
 
             if (solver->verbose >= 2) {
-                fprintf(stderr,
-                        "[simplex_phase1] Large direction norm %.2e at iter %d (entering=%d), re-factorizing before pivot\n",
+                LP_LOG_STDERR("[simplex_phase1] Large direction norm %.2e at iter %d (entering=%d), re-factorizing before pivot\n",
                         dir_inf, iter, entering);
             }
             int stabilized = 0;
@@ -4753,8 +4739,7 @@ static int simplex_phase1(SimplexSolver *solver) {
 
                 dir_inf = vec_abs_max(tab->work2, tab->m);
                 if (solver->verbose >= 2) {
-                    fprintf(stderr,
-                            "[simplex_phase1] Direction norm after re-factorization: %.2e\n",
+                    LP_LOG_STDERR("[simplex_phase1] Direction norm after re-factorization: %.2e\n",
                             dir_inf);
                 }
                 if (dir_inf <= RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
@@ -4771,8 +4756,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 }
                 dir_inf = vec_abs_max(tab->work2, tab->m);
                 if (solver->verbose >= 2) {
-                    fprintf(stderr,
-                            "[simplex_phase1] Alternate entering %d direction norm: %.2e\n",
+                    LP_LOG_STDERR("[simplex_phase1] Alternate entering %d direction norm: %.2e\n",
                             entering, dir_inf);
                 }
                 if (dir_inf <= RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
@@ -4783,8 +4767,7 @@ static int simplex_phase1(SimplexSolver *solver) {
 
             if (!stabilized) {
                 if (solver->verbose >= 2) {
-                    fprintf(stderr,
-                            "[simplex_phase1] Skipping unstable entering column after stabilization attempts (iter=%d, entering=%d, dir_inf=%.2e)\n",
+                    LP_LOG_STDERR("[simplex_phase1] Skipping unstable entering column after stabilization attempts (iter=%d, entering=%d, dir_inf=%.2e)\n",
                             iter, entering, dir_inf);
                 }
                 phase1_exclude_entering_var(entering,
@@ -4815,8 +4798,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                                                     &alt_leaving, &alt_theta) == 0 &&
                 alt_leaving >= 0) {
                 if (solver->verbose >= 2) {
-                    fprintf(stderr,
-                            "[simplex_phase1] Using alternate leaving row %d instead of repeatedly failing row %d\n",
+                    LP_LOG_STDERR("[simplex_phase1] Using alternate leaving row %d instead of repeatedly failing row %d\n",
                             alt_leaving, leaving);
                 }
                 leaving = alt_leaving;
@@ -4833,7 +4815,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             if (degenerate_count > DEGEN_THRESHOLD && !use_bland) {
                 use_bland = 1;
                 if (solver->verbose) {
-                    fprintf(stderr, "[simplex_phase1] Switching to Bland's rule after %d degenerate pivots\n",
+                    LP_LOG_STDERR("[simplex_phase1] Switching to Bland's rule after %d degenerate pivots\n",
                             degenerate_count);
                 }
             }
@@ -4842,10 +4824,9 @@ static int simplex_phase1(SimplexSolver *solver) {
         /* Perform pivot */
         int pivot_status;
         {
-            double t_pivot_ms = perf_now_ms();
+            double t_pivot_ms = lp_telemetry_timer_start();
             pivot_status = simplex_pivot(tab, entering, leaving, theta, fail_repeat_count);
-            double pivot_elapsed_ms = perf_now_ms() - t_pivot_ms;
-            lp_telemetry_record_pivot(solver, 1, pivot_elapsed_ms);
+            lp_telemetry_record_pivot_timed(solver, 1, t_pivot_ms);
         }
         if (pivot_status != 0) {
             int pivot_fail_reason = tab->trace_last_fail_reason;
@@ -4865,8 +4846,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             if (solver->verbose) {
                 if (fail_repeat_count <= RALPH_PHASE1_REPEAT_REFACTOR_TRIGGER ||
                     fail_repeat_count % 10 == 0) {
-                    fprintf(stderr,
-                            "[simplex_phase1] Pivot failed at iter %d (repeat %d), attempting recovery\n",
+                    LP_LOG_STDERR("[simplex_phase1] Pivot failed at iter %d (repeat %d), attempting recovery\n",
                             iter, fail_repeat_count);
                 }
             }
@@ -4881,16 +4861,14 @@ static int simplex_phase1(SimplexSolver *solver) {
                     alt_leaving >= 0 &&
                     alt_leaving != leaving) {
                     if (solver->verbose >= 2) {
-                        fprintf(stderr,
-                                "[simplex_phase1] Retrying with alternate leaving row %d (failed row %d)\n",
+                        LP_LOG_STDERR("[simplex_phase1] Retrying with alternate leaving row %d (failed row %d)\n",
                                 alt_leaving, leaving);
                     }
                     int alt_pivot_status;
                     {
-                        double t_pivot_ms = perf_now_ms();
+                        double t_pivot_ms = lp_telemetry_timer_start();
                         alt_pivot_status = simplex_pivot(tab, entering, alt_leaving, alt_theta, fail_repeat_count);
-                        double pivot_elapsed_ms = perf_now_ms() - t_pivot_ms;
-                        lp_telemetry_record_pivot(solver, 1, pivot_elapsed_ms);
+                        lp_telemetry_record_pivot_timed(solver, 1, t_pivot_ms);
                     }
                     if (alt_pivot_status == 0) {
                         fail_reason = PHASE1_PIVOT_FAIL_NONE;
@@ -4904,8 +4882,7 @@ static int simplex_phase1(SimplexSolver *solver) {
 
             if (fail_repeat_count >= RALPH_PHASE1_FAIL_REPEAT_LIMIT) {
                 if (solver->verbose) {
-                    fprintf(stderr,
-                            "[simplex_phase1] Repeated pivot failure (%d) for entering=%d leaving_pos=%d, terminating as ITERATION_LIMIT\n",
+                    LP_LOG_STDERR("[simplex_phase1] Repeated pivot failure (%d) for entering=%d leaving_pos=%d, terminating as ITERATION_LIMIT\n",
                             fail_repeat_count, entering, leaving);
                 }
                 primal_remove_perturbation(tab);
@@ -4939,8 +4916,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                     tab->redundant_rows[leaving] = 1;
                     tab->num_redundant++;
                     if (solver->verbose >= 2) {
-                        fprintf(stderr,
-                                "[simplex_phase1] Marking row %d as redundant due to stuck artificial %d\n",
+                        LP_LOG_STDERR("[simplex_phase1] Marking row %d as redundant due to stuck artificial %d\n",
                                 leaving, leave_var);
                     }
                     if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY) == 0) {
@@ -4957,8 +4933,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             int marked = mark_basic_artificial_rows_redundant(tab, 0);
             if (marked > 0) {
                 if (solver->verbose >= 2) {
-                    fprintf(stderr,
-                            "[simplex_phase1] Marked %d additional artificial rows as redundant for recovery\n",
+                    LP_LOG_STDERR("[simplex_phase1] Marked %d additional artificial rows as redundant for recovery\n",
                             marked);
                 }
                 if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY) == 0) {
@@ -4973,7 +4948,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             int rescue_status = dual_simplex_phase1_rescue(solver, tab->m * RALPH_PHASE1_DUAL_RESCUE_MULT);
             if (rescue_status == 0) {
                 if (solver->verbose) {
-                    fprintf(stderr, "[simplex_phase1] Dual rescue restored feasibility progress at iter %d\n", iter);
+                    LP_LOG_STDERR("[simplex_phase1] Dual rescue restored feasibility progress at iter %d\n", iter);
                 }
                 tableau_compute_solution(tab);
                 tableau_compute_reduced_costs(tab);
@@ -4983,7 +4958,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             }
 
             if (solver->verbose) {
-                fprintf(stderr, "[simplex_phase1] ERROR: all pivot recovery attempts failed at iter %d\n", iter);
+                LP_LOG_STDERR("[simplex_phase1] ERROR: all pivot recovery attempts failed at iter %d\n", iter);
             }
             primal_remove_perturbation(tab);
             /* Treat unrecoverable Phase 1 pivot breakdown as numerical breakdown. */
@@ -5021,8 +4996,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                     tableau_compute_reduced_costs(tab);
                     if (solver->pricing_strategy == 4) heap_build(tab);
                     if (solver->verbose) {
-                        fprintf(stderr,
-                                "[simplex_phase1] Stall detected, re-perturbing (attempt %d, scale %.1f)\n",
+                        LP_LOG_STDERR("[simplex_phase1] Stall detected, re-perturbing (attempt %d, scale %.1f)\n",
                                 perturb_attempts_p1, scale);
                     }
                 }
@@ -5053,8 +5027,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PERIODIC) != 0) {
                 if (periodic_refactor) {
                     if (solver->verbose) {
-                        fprintf(stderr,
-                                "[simplex_phase1] Periodic refactorization failed at iter %d, continuing with existing LU\n",
+                        LP_LOG_STDERR("[simplex_phase1] Periodic refactorization failed at iter %d, continuing with existing LU\n",
                                 iter);
                     }
                     tableau_compute_solution(tab);
@@ -5063,14 +5036,13 @@ static int simplex_phase1(SimplexSolver *solver) {
                 }
 
                 if (solver->verbose) {
-                    fprintf(stderr, "[simplex_phase1] Refactorization failed at iter %d, trying dual rescue\n", iter);
+                    LP_LOG_STDERR("[simplex_phase1] Refactorization failed at iter %d, trying dual rescue\n", iter);
                 }
 
                 int marked = mark_basic_artificial_rows_redundant(tab, 1);
                 if (marked > 0) {
                     if (solver->verbose >= 2) {
-                        fprintf(stderr,
-                                "[simplex_phase1] Marked %d infeasible artificial rows as redundant after refactorization failure\n",
+                        LP_LOG_STDERR("[simplex_phase1] Marked %d infeasible artificial rows as redundant after refactorization failure\n",
                                 marked);
                     }
                     if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP) == 0) {
@@ -5083,7 +5055,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 int rescue_status = dual_simplex_phase1_rescue(solver, tab->m * RALPH_PHASE1_DUAL_RESCUE_MULT);
                 if (rescue_status == 0) {
                     if (solver->verbose) {
-                        fprintf(stderr, "[simplex_phase1] Dual rescue recovered after refactorization failure at iter %d\n", iter);
+                        LP_LOG_STDERR("[simplex_phase1] Dual rescue recovered after refactorization failure at iter %d\n", iter);
                     }
                     tableau_compute_solution(tab);
                     tableau_compute_reduced_costs(tab);
@@ -5094,7 +5066,7 @@ static int simplex_phase1(SimplexSolver *solver) {
 
                 if (repair_singular_basis(tab) == 0) {
                     if (solver->verbose) {
-                        fprintf(stderr, "[simplex_phase1] Basis repair recovered after refactorization failure at iter %d\n", iter);
+                        LP_LOG_STDERR("[simplex_phase1] Basis repair recovered after refactorization failure at iter %d\n", iter);
                     }
                     tableau_compute_solution(tab);
                     tableau_compute_reduced_costs(tab);
@@ -5102,7 +5074,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 }
 
                 if (solver->verbose) {
-                    fprintf(stderr, "[simplex_phase1] ERROR: all refactorization recoveries failed at iter %d\n", iter);
+                    LP_LOG_STDERR("[simplex_phase1] ERROR: all refactorization recoveries failed at iter %d\n", iter);
                 }
                 primal_remove_perturbation(tab);
                 /* Treat unrecoverable Phase 1 refactorization failure as numerical breakdown. */
@@ -5126,7 +5098,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     /* Iteration limit exceeded */
     primal_remove_perturbation(tab);
     if (solver->verbose) {
-        fprintf(stderr, "[simplex_phase1] Iteration limit (%d) reached\n", solver->max_iterations);
+        LP_LOG_STDERR("[simplex_phase1] Iteration limit (%d) reached\n", solver->max_iterations);
     }
     solver->status = RALPH_STATUS_ITERATION_LIMIT;
     solver->iterations = solver->max_iterations;
@@ -5148,7 +5120,7 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
     }
 
     if (solver->verbose) {
-        printf("[simplex_transition] Transitioning to Phase 2 (m=%d, num_art=%d, num_eq=%d)\n",
+        LP_LOG_STDOUT("[simplex_transition] Transitioning to Phase 2 (m=%d, num_art=%d, num_eq=%d)\n",
                tab->m, tab->num_artificial, tab->num_equalities);
         fflush(stdout);
     }
@@ -5279,7 +5251,7 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
                 if (simplex_pivot(tab, best_j, basis_pos, 0.0, 0) == 0) {
                     found_replacement = 1;
                     if (solver->verbose) {
-                        fprintf(stderr, "[simplex_transition] Pivoted out artificial %d with var %d (coef=%.2e)\n",
+                        LP_LOG_STDERR("[simplex_transition] Pivoted out artificial %d with var %d (coef=%.2e)\n",
                                 art_j, best_j, best_coef);
                     }
                 } else {
@@ -5301,7 +5273,7 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
                 }
 
                 if (solver->verbose) {
-                    fprintf(stderr, "[simplex_transition] Warning: artificial var %d stuck in basis row %d "
+                    LP_LOG_STDERR("[simplex_transition] Warning: artificial var %d stuck in basis row %d "
                             "(orig constraint row %d, best_coef=%.2e, redundant row)\n",
                             art_j, basis_pos, orig_row, best_coef);
                 }
@@ -5313,7 +5285,7 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
     artificial_to_row = NULL;
 
     if (solver->verbose) {
-        fprintf(stderr, "[simplex_transition] %d artificial variables were in basis, %d stuck (%d redundant rows)\n",
+        LP_LOG_STDERR("[simplex_transition] %d artificial variables were in basis, %d stuck (%d redundant rows)\n",
                 art_in_basis, art_stuck, tab->num_redundant);
     }
 
@@ -5373,7 +5345,7 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
         }
 
         if (solver->verbose) {
-            fprintf(stderr, "[simplex_transition] Zeroed %d redundant rows in A_ext and RHS\n",
+            LP_LOG_STDERR("[simplex_transition] Zeroed %d redundant rows in A_ext and RHS\n",
                     tab->num_redundant);
         }
 
@@ -5397,11 +5369,11 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
      * identity-like structure that makes the basis well-conditioned. */
     if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PHASE_TRANSITION) != 0) {
         if (solver->verbose) {
-            fprintf(stderr, "[simplex_transition] Refactorization failed, attempting basis repair...\n");
+            LP_LOG_STDERR("[simplex_transition] Refactorization failed, attempting basis repair...\n");
         }
         if (repair_singular_basis(tab) != 0) {
             if (solver->verbose) {
-                fprintf(stderr, "[simplex_transition] ERROR: basis repair failed during transition\n");
+                LP_LOG_STDERR("[simplex_transition] ERROR: basis repair failed during transition\n");
             }
             return -1;
         }
@@ -5415,7 +5387,7 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
 
 
     if (solver->verbose) {
-        fprintf(stderr, "[simplex_transition] Phase 2 objective value: %g\n", tab->obj_value);
+        LP_LOG_STDERR("[simplex_transition] Phase 2 objective value: %g\n", tab->obj_value);
     }
 
     return 0;
@@ -5433,9 +5405,9 @@ static int simplex_phase2(SimplexSolver *solver) {
     if (tab->use_two_phase) {
         tab->lu->num_updates = tab->lu->max_updates;
         {
-            double t_refactor_ms = perf_now_ms();
+            double t_refactor_ms = lp_telemetry_timer_start();
             int rc = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PHASE_TRANSITION);
-            lp_telemetry_add_refactor_runtime_ms(solver, perf_now_ms() - t_refactor_ms);
+            lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
             if (rc != 0) {
                 if (repair_singular_basis(tab) != 0) {
                     solver->status = RALPH_STATUS_ERROR;
@@ -5528,7 +5500,7 @@ static int simplex_phase2(SimplexSolver *solver) {
         /* Pricing: select entering variable */
         int entering;
         int price_status;
-        double t_pricing_ms = perf_now_ms();
+        double t_pricing_ms = lp_telemetry_timer_start();
         int adaptive_devex_partial =
             phase2_use_adaptive_devex_partial(tab,
                                               iter,
@@ -5556,8 +5528,7 @@ static int simplex_phase2(SimplexSolver *solver) {
             }
         }
         {
-            double pricing_elapsed_ms = perf_now_ms() - t_pricing_ms;
-            lp_telemetry_record_pricing(solver, 2, pricing_elapsed_ms);
+            lp_telemetry_record_pricing_timed(solver, 2, t_pricing_ms);
         }
 
         if (price_status != 0) {
@@ -5576,7 +5547,7 @@ static int simplex_phase2(SimplexSolver *solver) {
         int leaving;
         double theta;
         int ratio_status;
-        double t_ratio_ms = perf_now_ms();
+        double t_ratio_ms = lp_telemetry_timer_start();
 
         if (use_bland) {
             ratio_status = ratio_test_bland(tab, entering, &leaving, &theta);
@@ -5584,8 +5555,7 @@ static int simplex_phase2(SimplexSolver *solver) {
             ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
         }
         {
-            double ratio_elapsed_ms = perf_now_ms() - t_ratio_ms;
-            lp_telemetry_record_ratio(solver, 2, ratio_elapsed_ms);
+            lp_telemetry_record_ratio_timed(solver, 2, t_ratio_ms);
         }
 
         if (ratio_status != 0) {
@@ -5594,9 +5564,9 @@ static int simplex_phase2(SimplexSolver *solver) {
              * Refactorize and retry once before declaring UNBOUNDED. */
             int refactor_rc;
             {
-                double t_refactor_ms = perf_now_ms();
+                double t_refactor_ms = lp_telemetry_timer_start();
                 refactor_rc = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_RATIO_RECOVERY);
-                lp_telemetry_add_refactor_runtime_ms(solver, perf_now_ms() - t_refactor_ms);
+                lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
             }
             if (refactor_rc == 0) {
                 tableau_compute_solution(tab);
@@ -5604,7 +5574,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                 if (solver->pricing_strategy == 4) heap_build(tab);
 
                 /* Re-price: the entering variable may no longer be eligible */
-                t_pricing_ms = perf_now_ms();
+                t_pricing_ms = lp_telemetry_timer_start();
                 if (use_bland || iter < bland_start_iters) {
                     price_status = pricing_bland(tab, &entering);
                 } else if (solver->pricing_strategy == 0) {
@@ -5624,8 +5594,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                     }
                 }
                 {
-                    double pricing_elapsed_ms = perf_now_ms() - t_pricing_ms;
-                    lp_telemetry_record_pricing(solver, 2, pricing_elapsed_ms);
+                    lp_telemetry_record_pricing_timed(solver, 2, t_pricing_ms);
                 }
 
                 if (price_status != 0) {
@@ -5640,15 +5609,14 @@ static int simplex_phase2(SimplexSolver *solver) {
                 }
 
                 /* Retry ratio test with fresh LU */
-                t_ratio_ms = perf_now_ms();
+                t_ratio_ms = lp_telemetry_timer_start();
                 if (use_bland) {
                     ratio_status = ratio_test_bland(tab, entering, &leaving, &theta);
                 } else {
                     ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
                 }
                 {
-                    double ratio_elapsed_ms = perf_now_ms() - t_ratio_ms;
-                    lp_telemetry_record_ratio(solver, 2, ratio_elapsed_ms);
+                    lp_telemetry_record_ratio_timed(solver, 2, t_ratio_ms);
                 }
             }
 
@@ -5681,7 +5649,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                 primal_apply_perturbation(tab);
                 perturbation_active = 1;
                 if (solver->verbose) {
-                    printf("Iter %d: Applying perturbation due to degeneracy\n", iter);
+                    LP_LOG_STDOUT("Iter %d: Applying perturbation due to degeneracy\n", iter);
                 }
             }
 
@@ -5689,7 +5657,7 @@ static int simplex_phase2(SimplexSolver *solver) {
             if (degenerate_count >= DEGEN_THRESHOLD && !use_bland) {
                 use_bland = 1;
                 if (solver->verbose) {
-                    printf("Iter %d: Switching to Bland's rule due to potential cycling\n", iter);
+                    LP_LOG_STDOUT("Iter %d: Switching to Bland's rule due to potential cycling\n", iter);
                 }
             }
         } else {
@@ -5700,7 +5668,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                 use_bland = 0;
                 non_degen_streak = 0;
                 if (solver->verbose) {
-                    printf("Iter %d: Turning off Bland's rule after %d non-degenerate pivots\n",
+                    LP_LOG_STDOUT("Iter %d: Turning off Bland's rule after %d non-degenerate pivots\n",
                            iter, NON_DEGEN_THRESHOLD);
                 }
             }
@@ -5710,23 +5678,22 @@ static int simplex_phase2(SimplexSolver *solver) {
         /* Perform pivot */
         int pivot_rc;
         {
-            double t_pivot_ms = perf_now_ms();
+            double t_pivot_ms = lp_telemetry_timer_start();
             pivot_rc = simplex_pivot(tab, entering, leaving, theta, 0);
-            double pivot_elapsed_ms = perf_now_ms() - t_pivot_ms;
-            lp_telemetry_record_pivot(solver, 2, pivot_elapsed_ms);
+            lp_telemetry_record_pivot_timed(solver, 2, t_pivot_ms);
         }
         if (pivot_rc != 0) {
             if (solver->verbose) {
-                fprintf(stderr, "[primal_simplex] Pivot failed at iter %d (entering=%d, leaving=%d, theta=%e), attempting recovery\n",
+                LP_LOG_STDERR("[primal_simplex] Pivot failed at iter %d (entering=%d, leaving=%d, theta=%e), attempting recovery\n",
                         iter, entering, leaving, theta);
             }
             /* Pivot failed - the basis was partially updated in simplex_pivot.
              * Try to recover by refactorizing the current (post-pivot) basis. */
             int rc_refactor;
             {
-                double t_refactor_ms = perf_now_ms();
+                double t_refactor_ms = lp_telemetry_timer_start();
                 rc_refactor = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY);
-                lp_telemetry_add_refactor_runtime_ms(solver, perf_now_ms() - t_refactor_ms);
+                lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
             }
             if (rc_refactor == 0) {
                 /* Refactorization succeeded - recompute and continue */
@@ -5738,7 +5705,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                     if (solver->pricing_strategy == 4) heap_build(tab);
                 }
                 if (solver->verbose) {
-                    fprintf(stderr, "[primal_simplex] Recovery via refactorization at iter %d\n", iter);
+                    LP_LOG_STDERR("[primal_simplex] Recovery via refactorization at iter %d\n", iter);
                 }
                 continue;
             }
@@ -5752,13 +5719,13 @@ static int simplex_phase2(SimplexSolver *solver) {
                     if (solver->pricing_strategy == 4) heap_build(tab);
                 }
                 if (solver->verbose) {
-                    fprintf(stderr, "[primal_simplex] Recovery via basis repair at iter %d\n", iter);
+                    LP_LOG_STDERR("[primal_simplex] Recovery via basis repair at iter %d\n", iter);
                 }
                 continue;
             }
             /* All recovery attempts failed */
             if (solver->verbose) {
-                fprintf(stderr, "[primal_simplex] ERROR: all recovery attempts failed at iter %d\n", iter);
+                LP_LOG_STDERR("[primal_simplex] ERROR: all recovery attempts failed at iter %d\n", iter);
             }
             primal_remove_perturbation(tab);
             solver->status = RALPH_STATUS_ERROR;
@@ -5811,9 +5778,9 @@ static int simplex_phase2(SimplexSolver *solver) {
             runtime_record_periodic_refactor_trigger(solver, 2, lu_refactor_needed);
             int rc_refactor;
             {
-                double t_refactor_ms = perf_now_ms();
+                double t_refactor_ms = lp_telemetry_timer_start();
                 rc_refactor = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PERIODIC);
-                lp_telemetry_add_refactor_runtime_ms(solver, perf_now_ms() - t_refactor_ms);
+                lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
             }
             if (!lu_refactor_needed && periodic_refactor) {
                 if (rc_refactor == 0 && cooldown_eligible) {
@@ -5832,12 +5799,12 @@ static int simplex_phase2(SimplexSolver *solver) {
             }
             if (rc_refactor != 0) {
                 if (solver->verbose) {
-                    fprintf(stderr, "[primal_simplex] ERROR: refactorization failed at iter %d, attempting repair\n", iter);
+                    LP_LOG_STDERR("[primal_simplex] ERROR: refactorization failed at iter %d, attempting repair\n", iter);
                 }
                 /* Try to repair the singular basis */
                 if (repair_singular_basis(tab) != 0) {
                     if (solver->verbose) {
-                        fprintf(stderr, "[primal_simplex] ERROR: basis repair failed at iter %d\n", iter);
+                        LP_LOG_STDERR("[primal_simplex] ERROR: basis repair failed at iter %d\n", iter);
                     }
                     primal_remove_perturbation(tab);
                     solver->status = RALPH_STATUS_ERROR;
@@ -5845,7 +5812,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                     return -1;
                 }
                 if (solver->verbose) {
-                    fprintf(stderr, "[primal_simplex] Basis repaired at iter %d\n", iter);
+                    LP_LOG_STDERR("[primal_simplex] Basis repaired at iter %d\n", iter);
                 }
             }
             /* After refactorization, recompute solution to eliminate drift */
@@ -5872,7 +5839,7 @@ static int simplex_phase2(SimplexSolver *solver) {
             }
             if (solver->verbose) {
                 int leave_var = (leaving >= 0) ? tab->basis[leaving] : leaving;
-                printf("Iter %d: obj = %.6f, enter=%d, leave=%d, theta=%.2e, rc=%.2e\n",
+                LP_LOG_STDOUT("Iter %d: obj = %.6f, enter=%d, leave=%d, theta=%.2e, rc=%.2e\n",
                        iter, tab->obj_value, entering, leave_var, theta, tab->rc[entering]);
             }
         }
@@ -5910,7 +5877,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                     if (solver->pricing_strategy == 4) heap_build(tab);
                 }
                 if (solver->verbose) {
-                    printf("Iter %d: Phase 2 degen-escape (scale %.1f)\n", iter, scale);
+                    LP_LOG_STDOUT("Iter %d: Phase 2 degen-escape (scale %.1f)\n", iter, scale);
                 }
                 continue;
             }
@@ -5935,7 +5902,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                         if (solver->pricing_strategy == 4) heap_build(tab);
                     }
                     if (solver->verbose) {
-                        printf("Iter %d: Phase 2 stall detected, re-perturbing (attempt %d, scale %.1f)\n",
+                        LP_LOG_STDOUT("Iter %d: Phase 2 stall detected, re-perturbing (attempt %d, scale %.1f)\n",
                                iter, perturb_attempts_p2, scale);
                     }
                 }
@@ -6109,7 +6076,7 @@ static int crash_triangular(SimplexTableau *tab, int verbose) {
     free(col_used);
 
     if (verbose && placed > 0) {
-        printf("[crash] Placed %d structural columns in basis (of %d rows)\n",
+        LP_LOG_STDOUT("[crash] Placed %d structural columns in basis (of %d rows)\n",
                placed, m);
     }
 
@@ -6151,7 +6118,7 @@ static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *
 static int setup_primal_tableau(SimplexSolver *solver, int allow_crash) {
     if (!solver) return -1;
 
-    if (solver->verbose) printf("[simplex_solve] Creating tableau...\n");
+    if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Creating tableau...\n");
     solver->tableau = tableau_create_ex(solver->model, solver->force_two_phase, 0);
     if (!solver->tableau) {
         solver->status = RALPH_STATUS_ERROR;
@@ -6162,7 +6129,7 @@ static int setup_primal_tableau(SimplexSolver *solver, int allow_crash) {
     configure_tableau_for_solver(solver, tab);
 
     if (solver->verbose) {
-        printf("[simplex_solve] Tableau: n=%d (extended), m=%d\n", tab->n, tab->m);
+        LP_LOG_STDOUT("[simplex_solve] Tableau: n=%d (extended), m=%d\n", tab->n, tab->m);
     }
 
     int *saved_basis = NULL;
@@ -6181,22 +6148,22 @@ static int setup_primal_tableau(SimplexSolver *solver, int allow_crash) {
         crash_triangular(tab, solver->verbose);
     }
 
-    if (solver->verbose) printf("[simplex_solve] Factorizing initial basis...\n");
-    double t_refactor_ms = perf_now_ms();
+    if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Factorizing initial basis...\n");
+    double t_refactor_ms = lp_telemetry_timer_start();
     int factorize_ok = (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_SETUP) == 0);
-    lp_telemetry_add_refactor_runtime_ms(solver, perf_now_ms() - t_refactor_ms);
+    lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
 
     if (!factorize_ok && allow_crash && saved_basis) {
         if (solver->verbose)
-            printf("[simplex_solve] Crash basis singular, restoring original basis\n");
+            LP_LOG_STDOUT("[simplex_solve] Crash basis singular, restoring original basis\n");
         memcpy(tab->basis, saved_basis, tab->m * sizeof(int));
         memcpy(tab->basis_pos, saved_basis_pos, tab->n * sizeof(int));
         memcpy(tab->var_status, saved_var_status, tab->n * sizeof(VarStatus));
         for (int j = 0; j < tab->n; j++)
             tab->x[j] = tab->lb_ext[j];
-        t_refactor_ms = perf_now_ms();
+        t_refactor_ms = lp_telemetry_timer_start();
         factorize_ok = (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_SETUP) == 0);
-        lp_telemetry_add_refactor_runtime_ms(solver, perf_now_ms() - t_refactor_ms);
+        lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
     }
 
     if (!factorize_ok) {
@@ -6219,29 +6186,29 @@ static int setup_primal_tableau(SimplexSolver *solver, int allow_crash) {
                 val > tab->ub_ext[bv] + RALPH_FEAS_TOL) {
                 crash_infeasible = 1;
                 if (solver->verbose)
-                    printf("[crash] Basic var %d in row %d: x=%.6e outside [%.6e, %.6e], reverting\n",
+                    LP_LOG_STDOUT("[crash] Basic var %d in row %d: x=%.6e outside [%.6e, %.6e], reverting\n",
                            bv, i, val, tab->lb_ext[bv], tab->ub_ext[bv]);
                 break;
             }
         }
         if (crash_infeasible) {
             if (solver->verbose)
-                printf("[crash] Post-verify failed, restoring original basis\n");
+                LP_LOG_STDOUT("[crash] Post-verify failed, restoring original basis\n");
             memcpy(tab->basis, saved_basis, tab->m * sizeof(int));
             memcpy(tab->basis_pos, saved_basis_pos, tab->n * sizeof(int));
             memcpy(tab->var_status, saved_var_status, tab->n * sizeof(VarStatus));
             for (int j = 0; j < tab->n; j++)
                 tab->x[j] = tab->lb_ext[j];
-            t_refactor_ms = perf_now_ms();
+            t_refactor_ms = lp_telemetry_timer_start();
             if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_SETUP) != 0) {
-                lp_telemetry_add_refactor_runtime_ms(solver, perf_now_ms() - t_refactor_ms);
+                lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
                 free(saved_basis);
                 free(saved_basis_pos);
                 free(saved_var_status);
                 solver->status = RALPH_STATUS_ERROR;
                 return -1;
             }
-            lp_telemetry_add_refactor_runtime_ms(solver, perf_now_ms() - t_refactor_ms);
+            lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
         }
@@ -6251,7 +6218,7 @@ static int setup_primal_tableau(SimplexSolver *solver, int allow_crash) {
     free(saved_basis_pos);
     free(saved_var_status);
 
-    if (solver->verbose) printf("[simplex_solve] Initial factorization OK\n");
+    if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Initial factorization OK\n");
     return 0;
 }
 
@@ -6286,20 +6253,20 @@ int simplex_solve(SimplexSolver *solver) {
     solver->trace_phase1_last_fail_iter = -1;
     solver->trace_phase1_signature = solver->trace_phase1 ? 1469598103934665603ULL : 0ULL;
 
-    if (solver->verbose) printf("[simplex_solve] Starting...\n");
+    if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Starting...\n");
 
     /* Finalize model if needed (required before scaling) */
     if (!solver->model->A) {
-        if (solver->verbose) printf("[simplex_solve] Finalizing model...\n");
+        if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Finalizing model...\n");
         if (lp_model_finalize(solver->model) != 0) {
-            if (solver->verbose) printf("[simplex_solve] ERROR: lp_model_finalize failed\n");
+            if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] ERROR: lp_model_finalize failed\n");
             solver->status = RALPH_STATUS_ERROR;
             return -1;
         }
     }
 
     if (solver->verbose) {
-        printf("[simplex_solve] Model: %d vars, %d cons, %d nnz\n",
+        LP_LOG_STDOUT("[simplex_solve] Model: %d vars, %d cons, %d nnz\n",
                solver->model->num_vars, solver->model->num_cons,
                solver->model->A ? solver->model->A->nnz : 0);
     }
@@ -6320,11 +6287,11 @@ int simplex_solve(SimplexSolver *solver) {
      * For methods 1/2, avoid creating/factorizing a primal tableau up front. */
     if (solver->method == 1 || solver->method == 2) {
         if (solver->verbose)
-            printf("[simplex_solve] Trying dual simplex path (method=%d)\n", solver->method);
+            LP_LOG_STDOUT("[simplex_solve] Trying dual simplex path (method=%d)\n", solver->method);
 
-        double t_dual_ms = perf_now_ms();
+        double t_dual_ms = lp_telemetry_timer_start();
         int drc = dual_simplex_solve_from_scratch_v2(solver);
-        lp_telemetry_add_solver_stage_ms(solver, LP_SOLVER_STAGE_DUAL, perf_now_ms() - t_dual_ms);
+        lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_DUAL, t_dual_ms);
 
         if (drc == 0 && solver->method == 2) {
             if (solver->status == RALPH_STATUS_OPTIMAL) {
@@ -6347,14 +6314,14 @@ int simplex_solve(SimplexSolver *solver) {
                 }
                 if (bad) {
                     if (solver->verbose)
-                        printf("[simplex_solve] Dual solution failed Ax=b check, falling back to primal\n");
+                        LP_LOG_STDOUT("[simplex_solve] Dual solution failed Ax=b check, falling back to primal\n");
                     drc = -1;
                 }
             } else {
                 /* Auto mode: don't trust dual INFEASIBLE/OBJ_LIMIT — fall back.
                  * Dual infeasibility detection is unreliable; primal Phase 1 is robust. */
                 if (solver->verbose)
-                    printf("[simplex_solve] Dual returned non-optimal status %d, falling back to primal\n",
+                    LP_LOG_STDOUT("[simplex_solve] Dual returned non-optimal status %d, falling back to primal\n",
                            solver->status);
                 drc = -1;
             }
@@ -6376,7 +6343,7 @@ int simplex_solve(SimplexSolver *solver) {
              * rather than returning a bad dual solution. */
             if (solver->method == 2 && solver->status == RALPH_STATUS_IMPRECISE) {
                 if (solver->verbose)
-                    printf("[simplex_solve] Dual solution imprecise, falling back to primal\n");
+                    LP_LOG_STDOUT("[simplex_solve] Dual solution imprecise, falling back to primal\n");
                 solver->status = RALPH_STATUS_UNKNOWN;
                 drc = -1;  /* Trigger primal fallback below */
             } else {
@@ -6388,18 +6355,18 @@ int simplex_solve(SimplexSolver *solver) {
         if (solver->method == 2) {
             solver->from_dual_fallback = 1;
             if (solver->verbose)
-                printf("[simplex_solve] Falling back to primal\n");
+                LP_LOG_STDOUT("[simplex_solve] Falling back to primal\n");
 
             if (solver->tableau) {
                 tableau_free(solver->tableau);
                 solver->tableau = NULL;
             }
 
-            double t_setup_ms = perf_now_ms();
+            double t_setup_ms = lp_telemetry_timer_start();
             if (setup_primal_tableau(solver, solver->crash) != 0) {
                 return -1;
             }
-            lp_telemetry_add_solver_stage_ms(solver, LP_SOLVER_STAGE_PRIMAL_SETUP, perf_now_ms() - t_setup_ms);
+            lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PRIMAL_SETUP, t_setup_ms);
             tab = solver->tableau;
         } else {
             solver->status = RALPH_STATUS_ERROR;
@@ -6407,11 +6374,11 @@ int simplex_solve(SimplexSolver *solver) {
             return -1;
         }
     } else {
-        double t_setup_ms = perf_now_ms();
+        double t_setup_ms = lp_telemetry_timer_start();
         if (setup_primal_tableau(solver, solver->crash && solver->method == 0) != 0) {
             return -1;
         }
-        lp_telemetry_add_solver_stage_ms(solver, LP_SOLVER_STAGE_PRIMAL_SETUP, perf_now_ms() - t_setup_ms);
+        lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PRIMAL_SETUP, t_setup_ms);
         tab = solver->tableau;
     }
 
@@ -6434,46 +6401,46 @@ int simplex_solve(SimplexSolver *solver) {
     }
 
     /* Phase 1: Find feasible solution */
-    if (solver->verbose) printf("[simplex_solve] Starting Phase 1...\n");
+    if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Starting Phase 1...\n");
     {
-        double t_phase1_ms = perf_now_ms();
+        double t_phase1_ms = lp_telemetry_timer_start();
         if (simplex_phase1(solver) != 0) {
-            lp_telemetry_add_solver_stage_ms(solver, LP_SOLVER_STAGE_PHASE1, perf_now_ms() - t_phase1_ms);
+            lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PHASE1, t_phase1_ms);
             solver->pricing_strategy = saved_pricing;  /* T3.4: restore pricing */
             tab->pricing_strategy = saved_tab_pricing;
             tab->use_steepest_edge = saved_tab_se;
             if (solver->status == RALPH_STATUS_INFEASIBLE) {
-                if (solver->verbose) printf("[simplex_solve] Phase 1: INFEASIBLE\n");
+                if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Phase 1: INFEASIBLE\n");
                 return 0;  /* Infeasible is a valid result */
             }
             return -1;
         }
-        lp_telemetry_add_solver_stage_ms(solver, LP_SOLVER_STAGE_PHASE1, perf_now_ms() - t_phase1_ms);
+        lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PHASE1, t_phase1_ms);
     }
     solver->pricing_strategy = saved_pricing;  /* T3.4: restore pricing for Phase 2 */
     tab->pricing_strategy = saved_tab_pricing;
     tab->use_steepest_edge = saved_tab_se;
-    if (solver->verbose) printf("[simplex_solve] Phase 1 complete\n");
+    if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Phase 1 complete\n");
 
     /* Transition to Phase 2 if using two-phase simplex */
     int two_phase_failed = 0;
     if (tab->use_two_phase) {
-        if (solver->verbose) printf("[simplex_solve] Transitioning to Phase 2...\n");
-        double t_transition_ms = perf_now_ms();
+        if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Transitioning to Phase 2...\n");
+        double t_transition_ms = lp_telemetry_timer_start();
         if (simplex_transition_phase2(solver) != 0) {
-            lp_telemetry_add_solver_stage_ms(solver, LP_SOLVER_STAGE_TRANSITION, perf_now_ms() - t_transition_ms);
+            lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_TRANSITION, t_transition_ms);
             two_phase_failed = 1;
         } else {
-            lp_telemetry_add_solver_stage_ms(solver, LP_SOLVER_STAGE_TRANSITION, perf_now_ms() - t_transition_ms);
-            if (solver->verbose) printf("[simplex_solve] Phase 2 transition complete\n");
+            lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_TRANSITION, t_transition_ms);
+            if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Phase 2 transition complete\n");
         }
     }
 
     /* Phase 2: Optimize (skip if transition failed) */
     if (!two_phase_failed) {
-        double t_phase2_ms = perf_now_ms();
+        double t_phase2_ms = lp_telemetry_timer_start();
         int status = simplex_phase2(solver);
-        lp_telemetry_add_solver_stage_ms(solver, LP_SOLVER_STAGE_PHASE2, perf_now_ms() - t_phase2_ms);
+        lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PHASE2, t_phase2_ms);
         (void)status;  /* Status is set in solver->status directly */
         if (solver->status == RALPH_STATUS_ERROR && tab->use_two_phase) {
             two_phase_failed = 1;
@@ -6487,16 +6454,16 @@ int simplex_solve(SimplexSolver *solver) {
      * assignment LPs, beaconfd) where stuck artificials make the basis singular. */
     if (two_phase_failed && solver->method == 0) {
         if (solver->verbose) {
-            printf("[simplex_solve] Two-phase failed, trying dual simplex\n");
+            LP_LOG_STDOUT("[simplex_solve] Two-phase failed, trying dual simplex\n");
         }
         tableau_free(solver->tableau);
         solver->tableau = NULL;
         restore_model(solver);
         solver->is_scaled = 0;
         solver->status = RALPH_STATUS_UNKNOWN;
-        double t_dual_ms = perf_now_ms();
+        double t_dual_ms = lp_telemetry_timer_start();
         int dual_result = dual_simplex_solve_from_scratch_v2(solver);
-        lp_telemetry_add_solver_stage_ms(solver, LP_SOLVER_STAGE_DUAL, perf_now_ms() - t_dual_ms);
+        lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_DUAL, t_dual_ms);
         solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
         if (solver->tableau) {
             tableau_free(solver->tableau);
@@ -6563,12 +6530,12 @@ int simplex_solve(SimplexSolver *solver) {
 void lp_print_stats(const SimplexSolver *solver) {
     if (!solver) return;
 
-    printf("\n=== Simplex Statistics ===\n");
-    printf("Status: %d\n", solver->status);
-    printf("Iterations: %d\n", solver->iterations);
-    printf("Solve time: %.3f seconds\n", solver->solve_time);
+    LP_LOG_STDOUT("\n=== Simplex Statistics ===\n");
+    LP_LOG_STDOUT("Status: %d\n", solver->status);
+    LP_LOG_STDOUT("Iterations: %d\n", solver->iterations);
+    LP_LOG_STDOUT("Solve time: %.3f seconds\n", solver->solve_time);
 
     if (solver->status == RALPH_STATUS_OPTIMAL) {
-        printf("Objective: %.10f\n", solver->obj_value);
+        LP_LOG_STDOUT("Objective: %.10f\n", solver->obj_value);
     }
 }

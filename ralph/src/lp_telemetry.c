@@ -20,6 +20,14 @@ double lp_telemetry_now_ms(void) {
     return sh_perf_now_ms();
 }
 
+double lp_telemetry_timer_start(void) {
+    return sh_perf_now_ms();
+}
+
+double lp_telemetry_timer_elapsed_ms(double start_ms) {
+    return sh_perf_now_ms() - start_ms;
+}
+
 int lp_telemetry_refactor_reason_is_safety_forced(int reason) {
     switch ((RalphRefactorReason)reason) {
         case RALPH_REFACTOR_REASON_RATIO_RECOVERY:
@@ -303,6 +311,20 @@ void lp_telemetry_record_refactor_with_lu(SimplexSolver *owner,
                                  lu_last_basis_nnz);
 }
 
+void lp_telemetry_record_refactor_with_lu_timed(SimplexSolver *owner,
+                                                int phase,
+                                                int reason,
+                                                double start_ms,
+                                                int m,
+                                                const LUFactorization *lu) {
+    lp_telemetry_record_refactor_with_lu(owner,
+                                         phase,
+                                         reason,
+                                         lp_telemetry_timer_elapsed_ms(start_ms),
+                                         m,
+                                         lu);
+}
+
 #define COPY_SOLVER_FIELD(field) out->field = solver->field
 void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
                                   LPSolverTelemetrySnapshot *out) {
@@ -481,10 +503,24 @@ void lp_telemetry_add_solver_stage_ms(SimplexSolver *solver,
     }
 }
 
+void lp_telemetry_add_solver_stage_timed(SimplexSolver *solver,
+                                         LPSolverStage stage,
+                                         double start_ms) {
+    lp_telemetry_add_solver_stage_ms(solver,
+                                     stage,
+                                     lp_telemetry_timer_elapsed_ms(start_ms));
+}
+
 void lp_telemetry_add_refactor_runtime_ms(SimplexSolver *solver,
                                           double elapsed_ms) {
     if (!solver_telemetry_enabled(solver)) return;
     solver->perf_refactor_ms += elapsed_ms;
+}
+
+void lp_telemetry_add_refactor_runtime_timed(SimplexSolver *solver,
+                                             double start_ms) {
+    lp_telemetry_add_refactor_runtime_ms(solver,
+                                         lp_telemetry_timer_elapsed_ms(start_ms));
 }
 
 void lp_telemetry_add_ftran_ms(SimplexSolver *solver,
@@ -493,16 +529,34 @@ void lp_telemetry_add_ftran_ms(SimplexSolver *solver,
     solver->perf_ftran_ms += elapsed_ms;
 }
 
+void lp_telemetry_add_ftran_timed(SimplexSolver *solver,
+                                  double start_ms) {
+    lp_telemetry_add_ftran_ms(solver,
+                              lp_telemetry_timer_elapsed_ms(start_ms));
+}
+
 void lp_telemetry_add_btran_ms(SimplexSolver *solver,
                                double elapsed_ms) {
     if (!solver_telemetry_enabled(solver)) return;
     solver->perf_btran_ms += elapsed_ms;
 }
 
+void lp_telemetry_add_btran_timed(SimplexSolver *solver,
+                                  double start_ms) {
+    lp_telemetry_add_btran_ms(solver,
+                              lp_telemetry_timer_elapsed_ms(start_ms));
+}
+
 void lp_telemetry_add_lu_update_ms(SimplexSolver *solver,
                                    double elapsed_ms) {
     if (!solver_telemetry_enabled(solver)) return;
     solver->perf_lu_update_ms += elapsed_ms;
+}
+
+void lp_telemetry_add_lu_update_timed(SimplexSolver *solver,
+                                      double start_ms) {
+    lp_telemetry_add_lu_update_ms(solver,
+                                  lp_telemetry_timer_elapsed_ms(start_ms));
 }
 
 void lp_telemetry_record_compute_solution(SimplexSolver *solver,
@@ -519,6 +573,14 @@ void lp_telemetry_record_compute_solution(SimplexSolver *solver,
     }
 }
 
+void lp_telemetry_record_compute_solution_timed(SimplexSolver *solver,
+                                                int phase,
+                                                double start_ms) {
+    lp_telemetry_record_compute_solution(solver,
+                                         phase,
+                                         lp_telemetry_timer_elapsed_ms(start_ms));
+}
+
 void lp_telemetry_record_compute_reduced_costs(SimplexSolver *solver,
                                                int phase,
                                                double elapsed_ms) {
@@ -531,6 +593,14 @@ void lp_telemetry_record_compute_reduced_costs(SimplexSolver *solver,
         solver->perf_phase2_compute_rc_ms += elapsed_ms;
         solver->perf_phase2_compute_rc_calls++;
     }
+}
+
+void lp_telemetry_record_compute_reduced_costs_timed(SimplexSolver *solver,
+                                                     int phase,
+                                                     double start_ms) {
+    lp_telemetry_record_compute_reduced_costs(solver,
+                                              phase,
+                                              lp_telemetry_timer_elapsed_ms(start_ms));
 }
 
 void lp_telemetry_record_pricing(SimplexSolver *solver,
@@ -547,6 +617,14 @@ void lp_telemetry_record_pricing(SimplexSolver *solver,
     }
 }
 
+void lp_telemetry_record_pricing_timed(SimplexSolver *solver,
+                                       int phase,
+                                       double start_ms) {
+    lp_telemetry_record_pricing(solver,
+                                phase,
+                                lp_telemetry_timer_elapsed_ms(start_ms));
+}
+
 void lp_telemetry_record_ratio(SimplexSolver *solver,
                                int phase,
                                double elapsed_ms) {
@@ -561,6 +639,14 @@ void lp_telemetry_record_ratio(SimplexSolver *solver,
     }
 }
 
+void lp_telemetry_record_ratio_timed(SimplexSolver *solver,
+                                     int phase,
+                                     double start_ms) {
+    lp_telemetry_record_ratio(solver,
+                              phase,
+                              lp_telemetry_timer_elapsed_ms(start_ms));
+}
+
 void lp_telemetry_record_pivot(SimplexSolver *solver,
                                int phase,
                                double elapsed_ms) {
@@ -573,6 +659,14 @@ void lp_telemetry_record_pivot(SimplexSolver *solver,
         solver->perf_phase2_pivot_ms += elapsed_ms;
         solver->perf_phase2_pivot_calls++;
     }
+}
+
+void lp_telemetry_record_pivot_timed(SimplexSolver *solver,
+                                     int phase,
+                                     double start_ms) {
+    lp_telemetry_record_pivot(solver,
+                              phase,
+                              lp_telemetry_timer_elapsed_ms(start_ms));
 }
 
 void lp_telemetry_record_periodic_refactor_trigger(SimplexSolver *solver,
@@ -597,6 +691,12 @@ void lp_telemetry_lu_record_dense_factorize_ms(LUFactorization *lu,
     lu->perf_total_dense_factorize_ms += elapsed_ms;
 }
 
+void lp_telemetry_lu_record_dense_factorize_timed(LUFactorization *lu,
+                                                  double start_ms) {
+    lp_telemetry_lu_record_dense_factorize_ms(lu,
+                                              lp_telemetry_timer_elapsed_ms(start_ms));
+}
+
 void lp_telemetry_lu_record_symbolic_cache_hit(LUFactorization *lu) {
     if (!lu_telemetry_enabled(lu)) return;
     lu->perf_symbolic_cache_hits++;
@@ -613,6 +713,12 @@ void lp_telemetry_lu_record_symbolic_call(LUFactorization *lu,
     lu->perf_symbolic_calls++;
     lu->perf_last_symbolic_ms = elapsed_ms;
     lu->perf_total_symbolic_ms += elapsed_ms;
+}
+
+void lp_telemetry_lu_record_symbolic_call_timed(LUFactorization *lu,
+                                                double start_ms) {
+    lp_telemetry_lu_record_symbolic_call(lu,
+                                         lp_telemetry_timer_elapsed_ms(start_ms));
 }
 
 void lp_telemetry_lu_mark_identity_sep_failure(LUFactorization *lu) {

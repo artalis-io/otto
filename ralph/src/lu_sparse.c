@@ -15,7 +15,6 @@
 #include <limits.h>
 #include "lp.h"
 #include "lu_supernode.h"
-#define perf_now_ms sh_perf_now_ms
 
 /* ============================================================================
  * AMD (Approximate Minimum Degree) Ordering
@@ -2485,7 +2484,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
 
     /* Use dense_work for A_struct (m×k fits in m×m, row-major layout) */
     double *A_struct = lu->dense_work;
-    t_stage_start_ms = perf_now_ms();
+    t_stage_start_ms = lp_telemetry_timer_start();
     memset(A_struct, 0, (size_t)m * k * sizeof(double));
 
     /* Row-major layout A_struct[row * k + col] for cache-friendly GE */
@@ -2496,7 +2495,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             A_struct[row * k + jj] = B->values[p];
         }
     }
-    t_a_struct_build_ms += perf_now_ms() - t_stage_start_ms;
+    t_a_struct_build_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
 
     /* Dense LU with partial pivoting on the m×k structural part */
     int *row_perm = lu->ws_row_perm;
@@ -2600,7 +2599,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             size_t mkz_ws_doubles = lu->mkz_work_capacity - mkz_perm_doubles;
 
             lp_telemetry_lu_mark_mkz_attempt(lu);
-            t_stage_start_ms = perf_now_ms();
+            t_stage_start_ms = lp_telemetry_timer_start();
             rc = lu_factorize_markowitz(
                 B, col_order, m, k, mkz_init_nnz, row_perm, row_pos, lu->pivot_tol,
                 row_is_identity,
@@ -2609,7 +2608,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                 L_row, L_col, L_val, &L_nnz, lu->coo_capacity,
                 U_row, U_col, U_val, &U_nnz, lu->coo_capacity,
                 mkz_col_perm, pool_mult, mkz_workspace, mkz_ws_doubles);
-            t_markowitz_numeric_ms += perf_now_ms() - t_stage_start_ms;
+            t_markowitz_numeric_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
             if (rc == 0) break;
             mkz_record_failure_reason(lu, rc);
             if (rc != MKZ_FAIL_POOL || pool_mult >= MARKOWITZ_POOL_MAX_MULT) break;
@@ -2704,7 +2703,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             }
         }
         /* Re-populate A_struct from B */
-        t_stage_start_ms = perf_now_ms();
+        t_stage_start_ms = lp_telemetry_timer_start();
         memset(A_struct, 0, (size_t)m * k * sizeof(double));
         for (int jj = 0; jj < k; jj++) {
             int j = col_order[jj];
@@ -2713,7 +2712,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                 A_struct[row * k + jj] = B->values[p];
             }
         }
-        t_a_struct_build_ms += perf_now_ms() - t_stage_start_ms;
+        t_a_struct_build_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
     }
 
     /* T2.1: Try supernodal factorization if enabled and k is large enough */
@@ -2742,7 +2741,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             }
 
             int sn_reg = 0;
-            t_stage_start_ms = perf_now_ms();
+            t_stage_start_ms = lp_telemetry_timer_start();
             int rc = sn_factorize(A_struct, m, k, row_perm, row_pos,
                                   lu->pivot_tol, row_is_identity,
                                   sn_sym->supernodes, sn_sym->num_supernodes,
@@ -2754,7 +2753,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                                   U_row, U_col, U_val, &U_nnz,
                                   lu->coo_capacity,
                                   lu->sn_work, lu->sn_work_capacity);
-            t_supernode_numeric_ms += perf_now_ms() - t_stage_start_ms;
+            t_supernode_numeric_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
             if (rc == 0) {
                 lu->sn_successes++;
                 lu->num_regularized = sn_reg;
@@ -2780,7 +2779,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                 }
             }
             /* Re-populate A_struct from B (sn_factorize modifies it in-place) */
-            t_stage_start_ms = perf_now_ms();
+            t_stage_start_ms = lp_telemetry_timer_start();
             memset(A_struct, 0, (size_t)m * k * sizeof(double));
             for (int jj = 0; jj < k; jj++) {
                 int j = col_order[jj];
@@ -2789,13 +2788,13 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                     A_struct[row * k + jj] = B->values[p];
                 }
             }
-            t_a_struct_build_ms += perf_now_ms() - t_stage_start_ms;
+            t_a_struct_build_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
         }
     }
 
 dense_ge_factorization:
     /* LU factorization of structural columns with partial pivoting */
-    t_stage_start_ms = perf_now_ms();
+    t_stage_start_ms = lp_telemetry_timer_start();
     for (int step = 0; step < k; step++) {
         /* Find pivot in column step using only structural rows (step..k-1). */
         int pivot_row = -1;
@@ -2899,12 +2898,12 @@ dense_ge_factorization:
             }
         }
     }
-    t_dense_ge_numeric_ms += perf_now_ms() - t_stage_start_ms;
+    t_dense_ge_numeric_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
 
 identity_placement:
     /* Handle identity columns (steps k..m-1).
      * Use row_pos[] for O(1) lookup instead of O(n) linear scan. */
-    t_stage_start_ms = perf_now_ms();
+    t_stage_start_ms = lp_telemetry_timer_start();
     for (int step = k; step < m; step++) {
         int orig_col = col_order[step];  /* Original identity column */
         int orig_row = identity_row[orig_col];
@@ -2938,7 +2937,7 @@ identity_placement:
                     }
                 }
 
-                t_stage_start_ms = perf_now_ms();
+                t_stage_start_ms = lp_telemetry_timer_start();
                 memset(A_struct, 0, (size_t)m * k * sizeof(double));
                 for (int jj = 0; jj < k; jj++) {
                     int j = col_order[jj];
@@ -2947,7 +2946,7 @@ identity_placement:
                         A_struct[row * k + jj] = B->values[p];
                     }
                 }
-                t_a_struct_build_ms += perf_now_ms() - t_stage_start_ms;
+                t_a_struct_build_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
                 goto dense_ge_factorization;
             }
             NUMERIC_RETURN(-1);
@@ -2971,7 +2970,7 @@ identity_placement:
         U_val[U_nnz] = val;
         U_nnz++;
     }
-    t_identity_placement_ms += perf_now_ms() - t_stage_start_ms;
+    t_identity_placement_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
 
     /* L entries were emitted in original-row space. Convert them once after all
      * row swaps (structural pivoting + identity placement) are complete. */
@@ -2988,7 +2987,7 @@ identity_placement:
     }
 
     /* Convert L and U from COO to CSC — reuse pre-allocated arrays */
-    t_stage_start_ms = perf_now_ms();
+    t_stage_start_ms = lp_telemetry_timer_start();
     int needed = L_nnz > U_nnz ? L_nnz : U_nnz;
     if (needed > lu->LU_out_capacity) {
         int new_cap = needed * 2;
@@ -3041,7 +3040,7 @@ identity_placement:
         lu->U_values[pos] = U_val[i];
     }
     lu->nnz_U = U_nnz;
-    t_coo_to_csc_ms += perf_now_ms() - t_stage_start_ms;
+    t_coo_to_csc_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
 
     /* Extract U diagonals */
     lu->min_diag_U = RALPH_INFINITY;
@@ -3104,9 +3103,9 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
     }
 
     /* Symbolic analysis (identity detection + fill-reducing column ordering) */
-    double t_symbolic_ms = perf_now_ms();
+    double t_symbolic_ms = lp_telemetry_timer_start();
     int sym_result = lu_symbolic_analyze(lu, B);
-    lp_telemetry_lu_record_symbolic_call(lu, perf_now_ms() - t_symbolic_ms);
+    lp_telemetry_lu_record_symbolic_call_timed(lu, t_symbolic_ms);
     if (sym_result < 0) {
         lp_telemetry_lu_set_sparse_fallback_reason(lu, LU_SPARSE_FALLBACK_SYMBOLIC);
         return -1;
