@@ -599,6 +599,8 @@ static int select_pseudo_cost(MIPSolver *solver, const double *solution) {
  */
 int strong_branch(MIPSolver *solver, int var, double val,
                   double *down_obj, double *up_obj, int max_iter) {
+    int recovered = 0;
+
     *down_obj = RALPH_INFINITY;
     *up_obj = RALPH_INFINITY;
 
@@ -611,6 +613,7 @@ int strong_branch(MIPSolver *solver, int var, double val,
     int num_struct = solver->working_model->num_vars;
     if (var < 0 || var >= num_struct || num_struct <= 0) return -1;
     if (!tab->lb_ext || !tab->ub_ext || !tab->basis || !tab->var_status) return -1;
+    solver->strong_branch_probes++;
 
     int m = tab->m;
     int n = tab->n;
@@ -638,13 +641,13 @@ int strong_branch(MIPSolver *solver, int var, double val,
     if (mip_lp_apply_structural_bounds(tab, num_struct, probe_lb, probe_ub) != 0 ||
         mip_lp_recompute(tab) != 0 ||
         mip_lp_dual_reopt(lp, max_iter, NULL) != 0 ||
-        !lp->tableau || lp->tableau != tab) {
+        !lp->tableau || !lp->solution || lp->tableau != tab) {
         goto strong_fail;
     }
     *down_obj = (lp->status == RALPH_STATUS_OPTIMAL) ? lp->obj_value : RALPH_INFINITY;
 
     if (mip_lp_restore_warm_basis(lp, m, n, save_basis, save_var_status) != 0 ||
-        !lp->tableau || lp->tableau != tab) {
+        !lp->tableau || !lp->solution || lp->tableau != tab) {
         goto strong_fail;
     }
 
@@ -654,15 +657,17 @@ int strong_branch(MIPSolver *solver, int var, double val,
     if (mip_lp_apply_structural_bounds(tab, num_struct, probe_lb, probe_ub) != 0 ||
         mip_lp_recompute(tab) != 0 ||
         mip_lp_dual_reopt(lp, max_iter, NULL) != 0 ||
-        !lp->tableau || lp->tableau != tab) {
+        !lp->tableau || !lp->solution || lp->tableau != tab) {
         goto strong_fail;
     }
     *up_obj = (lp->status == RALPH_STATUS_OPTIMAL) ? lp->obj_value : RALPH_INFINITY;
 
     /* Restore original bounds and basis */
     probe_lb[var] = orig_lb;
+    probe_ub[var] = orig_ub;
     if (mip_lp_apply_structural_bounds(tab, num_struct, probe_lb, probe_ub) != 0 ||
-        mip_lp_restore_warm_basis(lp, m, n, save_basis, save_var_status) != 0) {
+        mip_lp_restore_warm_basis(lp, m, n, save_basis, save_var_status) != 0 ||
+        !lp->tableau || !lp->solution || lp->tableau != tab) {
         goto strong_fail;
     }
     lp->status = RALPH_STATUS_OPTIMAL;
@@ -674,15 +679,23 @@ int strong_branch(MIPSolver *solver, int var, double val,
     return 0;
 
 strong_fail:
-    /* Best-effort LP recovery for subsequent branching decisions. */
+    /* Explicit LP-state recovery contract for probing:
+     * leave the caller with a usable (tableau+solution) LP state. */
+    solver->strong_branch_failures++;
     if (lp->tableau) {
         probe_lb[var] = orig_lb;
         probe_ub[var] = orig_ub;
-        (void)mip_lp_apply_structural_bounds(lp->tableau, num_struct, probe_lb, probe_ub);
-        (void)mip_lp_restore_warm_basis(lp, m, n, save_basis, save_var_status);
-    } else {
-        (void)mip_lp_recover_state(lp);
+        if (mip_lp_apply_structural_bounds(lp->tableau, num_struct, probe_lb, probe_ub) == 0 &&
+            mip_lp_restore_warm_basis(lp, m, n, save_basis, save_var_status) == 0 &&
+            lp->tableau && lp->solution) {
+            recovered = 1;
+        }
     }
+    if (!recovered && mip_lp_recover_state(lp) == 0 && lp->tableau && lp->solution) {
+        recovered = 1;
+    }
+    if (recovered) solver->strong_branch_recoveries++;
+
     free(save_basis);
     free(save_var_status);
     free(probe_lb);

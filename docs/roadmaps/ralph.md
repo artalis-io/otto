@@ -296,6 +296,42 @@ Exit criteria:
 - New targeted tests for probe safety, warm-start acceptance/rejection, and LP-state recovery.
 - No regressions on NETLIB gates and focused FuelWise MILP seeds.
 
+Progress (2026-02-22):
+- Added explicit LP recovery contract for root-cut fallback:
+  - `mip_recover_root_relaxation()` in `ralph/src/mip.c`
+  - contract: rebuild working LP from original model, recreate LP solver, re-solve root relaxation,
+    and return success only with usable OPTIMAL LP state.
+- Cut-loop fallback now uses the explicit recovery contract (instead of ad-hoc inline rebuild logic).
+- Strong-branch probing now enforces an explicit post-probe LP-state contract:
+  - restores original structural bounds + warm basis on failure paths,
+  - falls back to adapter-based LP recovery (`mip_lp_recover_state`) if restore fails,
+  - tracks probe/recovery telemetry counters.
+- Added Phase 4 focused regression test:
+  - `ralph/tests/test_mip_lp_recovery.c`
+  - coverage:
+    - strong-branch probe safety (basis/bounds restored, LP state usable after probing),
+    - root LP recovery contract behavior after working-model corruption.
+- Added telemetry counters in `MIPSolver` for probe/cut recovery paths:
+  - `strong_branch_probes`, `strong_branch_failures`, `strong_branch_recoveries`
+  - `cut_recovery_attempts`, `cut_recovery_success`, `cut_recovery_failures`
+- Make/test integration:
+  - new target `test-mip-lp-recovery`
+  - included in `make -C ralph test` dependency list.
+
+Validation (2026-02-22):
+- `make -C ralph test-mip-lp-recovery` PASS (32/32).
+- Warm-start acceptance/rejection coverage still passes:
+  - `make -C ralph test-mip-warmstart` PASS (22/22)
+  - `make -C ralph test-mip-start-repair` PASS (24/24)
+  - `make -C ralph test-mip-start-sparse` PASS (12/12)
+- NETLIB regression gates:
+  - `make -C ralph test-netlib-gate-small` PASS
+    - Artifacts: `/tmp/netlib-regression-gate-20260222-191305`
+    - Summary: 26 files, timeout 4, status/objective/invalid mismatches 0, dense fallback files 0, unexpected regressions 0.
+  - `make -C ralph test-netlib-gate` PASS
+    - Artifacts: `/tmp/netlib-regression-gate-20260222-191452`
+    - Summary: 84 files, timeout 27, status/objective/invalid mismatches 0, dense fallback files 0, unexpected regressions 0.
+
 ### Regression rule for every phase
 
 - `make -C ralph test`

@@ -50,6 +50,7 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/dual_simplex.c \
           $(SRC_DIR)/presolve.c \
           $(SRC_DIR)/branch_bound.c \
+          $(SRC_DIR)/mip_lp_adapter.c \
           $(SRC_DIR)/cuts.c \
           $(SRC_DIR)/mip.c \
           $(SRC_DIR)/mps_reader.c \
@@ -110,6 +111,20 @@ API_TEST_EXEC = test_api
 # Benders tests
 BENDERS_TEST_SOURCES = $(TEST_DIR)/test_benders.c
 BENDERS_TEST_EXEC = test_benders
+BENDERS_WARMSTART_TEST_SOURCES = $(TEST_DIR)/test_benders_warmstart.c
+BENDERS_WARMSTART_TEST_EXEC = test_benders_warmstart
+MIP_WARMSTART_TEST_SOURCES = $(TEST_DIR)/test_mip_warmstart.c
+MIP_WARMSTART_TEST_EXEC = test_mip_warmstart
+MIP_LP_RECOVERY_TEST_SOURCES = $(TEST_DIR)/test_mip_lp_recovery.c
+MIP_LP_RECOVERY_TEST_EXEC = test_mip_lp_recovery
+MIP_START_SPARSE_TEST_SOURCES = $(TEST_DIR)/test_mip_start_sparse.c
+MIP_START_SPARSE_TEST_EXEC = test_mip_start_sparse
+MIP_START_REPAIR_TEST_SOURCES = $(TEST_DIR)/test_mip_start_repair.c
+MIP_START_REPAIR_TEST_EXEC = test_mip_start_repair
+BENDERS_MASTER_START_TEST_SOURCES = $(TEST_DIR)/test_benders_master_start.c
+BENDERS_MASTER_START_TEST_EXEC = test_benders_master_start
+WARMSTART_SERDE_TEST_SOURCES = $(TEST_DIR)/test_warmstart_serde.c
+WARMSTART_SERDE_TEST_EXEC = test_warmstart_serde
 
 # Presolve unit tests
 PRESOLVE_TEST_SOURCES = $(TEST_DIR)/test_presolve.c
@@ -206,7 +221,7 @@ debug: LDFLAGS += $(DEBUG_LDFLAGS)
 debug: clean all
 
 # Run tests
-test: $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BANDM_TEST_EXEC) $(BLEND_TEST_EXEC) $(LOTFI_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(MPS_PARSER_TEST_EXEC)
+test: $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BANDM_TEST_EXEC) $(BLEND_TEST_EXEC) $(LOTFI_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_WARMSTART_TEST_EXEC) $(MIP_WARMSTART_TEST_EXEC) $(MIP_LP_RECOVERY_TEST_EXEC) $(MIP_START_SPARSE_TEST_EXEC) $(MIP_START_REPAIR_TEST_EXEC) $(BENDERS_MASTER_START_TEST_EXEC) $(WARMSTART_SERDE_TEST_EXEC)
 	./$(TEST_EXEC)
 	./$(PRESOLVE_TEST_EXEC)
 	./$(BANDM_TEST_EXEC)
@@ -218,6 +233,14 @@ test: $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BANDM_TEST_EXEC) $(BLEND_TEST_EXEC) $
 	./$(LP_TELEMETRY_GATE_TEST_EXEC)
 	./$(LP_TELEMETRY_LU_SPARSE_TEST_EXEC)
 	./$(MPS_PARSER_TEST_EXEC)
+	./$(API_TEST_EXEC)
+	./$(BENDERS_WARMSTART_TEST_EXEC)
+	./$(MIP_WARMSTART_TEST_EXEC)
+	./$(MIP_LP_RECOVERY_TEST_EXEC)
+	./$(MIP_START_SPARSE_TEST_EXEC)
+	./$(MIP_START_REPAIR_TEST_EXEC)
+	./$(BENDERS_MASTER_START_TEST_EXEC)
+	./$(WARMSTART_SERDE_TEST_EXEC)
 
 # Known regression tests (beaconfd — Phase 2 pivot failure, degenerate theta=0)
 # Run separately; not in the main test gate until ratio test pivot threshold is fixed.
@@ -292,6 +315,62 @@ $(BENDERS_TEST_EXEC): $(BENDERS_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
 # Run Benders tests
 test-benders: $(BENDERS_TEST_EXEC)
 	./$(BENDERS_TEST_EXEC)
+
+# Build focused Benders warm-start tests
+$(BENDERS_WARMSTART_TEST_EXEC): $(BENDERS_WARMSTART_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run focused Benders warm-start tests
+test-benders-warmstart: $(BENDERS_WARMSTART_TEST_EXEC)
+	./$(BENDERS_WARMSTART_TEST_EXEC)
+
+# Build focused MIP warm-start tests
+$(MIP_WARMSTART_TEST_EXEC): $(MIP_WARMSTART_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run focused MIP warm-start tests
+test-mip-warmstart: $(MIP_WARMSTART_TEST_EXEC)
+	./$(MIP_WARMSTART_TEST_EXEC)
+
+# Build focused MIP/LP recovery-contract tests
+$(MIP_LP_RECOVERY_TEST_EXEC): $(MIP_LP_RECOVERY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run focused MIP/LP recovery-contract tests
+test-mip-lp-recovery: $(MIP_LP_RECOVERY_TEST_EXEC)
+	./$(MIP_LP_RECOVERY_TEST_EXEC)
+
+# Build sparse/partial MIP-start tests
+$(MIP_START_SPARSE_TEST_EXEC): $(MIP_START_SPARSE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run sparse/partial MIP-start tests
+test-mip-start-sparse: $(MIP_START_SPARSE_TEST_EXEC)
+	./$(MIP_START_SPARSE_TEST_EXEC)
+
+# Build MIP-start repair-mode tests
+$(MIP_START_REPAIR_TEST_EXEC): $(MIP_START_REPAIR_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run MIP-start repair-mode tests
+test-mip-start-repair: $(MIP_START_REPAIR_TEST_EXEC)
+	./$(MIP_START_REPAIR_TEST_EXEC)
+
+# Build Benders initial master-start tests
+$(BENDERS_MASTER_START_TEST_EXEC): $(BENDERS_MASTER_START_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run Benders initial master-start tests
+test-benders-master-start: $(BENDERS_MASTER_START_TEST_EXEC)
+	./$(BENDERS_MASTER_START_TEST_EXEC)
+
+# Build warm-start serialization tests
+$(WARMSTART_SERDE_TEST_EXEC): $(WARMSTART_SERDE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run warm-start serialization tests
+test-warmstart-serde: $(WARMSTART_SERDE_TEST_EXEC)
+	./$(WARMSTART_SERDE_TEST_EXEC)
 
 # Build presolve unit tests
 $(PRESOLVE_TEST_EXEC): $(PRESOLVE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
@@ -509,7 +588,7 @@ download-netlib:
 
 # Clean
 clean:
-	rm -f $(OBJECTS) $(SRC_DIR)/lp_telemetry.o $(LIB_NAME) $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(LU_MARKOWITZ_TEST_EXEC) $(LU_SUPERNODE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC)
+	rm -f $(OBJECTS) $(SRC_DIR)/lp_telemetry.o $(LIB_NAME) $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_TEST_EXEC) $(BENDERS_WARMSTART_TEST_EXEC) $(MIP_WARMSTART_TEST_EXEC) $(MIP_LP_RECOVERY_TEST_EXEC) $(MIP_START_SPARSE_TEST_EXEC) $(MIP_START_REPAIR_TEST_EXEC) $(BENDERS_MASTER_START_TEST_EXEC) $(WARMSTART_SERDE_TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(LU_MARKOWITZ_TEST_EXEC) $(LU_SUPERNODE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
@@ -523,7 +602,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-beaconfd test-beaconfd-trace test-simplex-policy test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-benders-warmstart test-mip-warmstart test-mip-start-sparse test-mip-start-repair test-benders-master-start test-warmstart-serde test-beaconfd test-beaconfd-trace test-simplex-policy test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
 
 # MIP benchmark with specialized solvers (LAP, Network, SCP)
 bench-mip-specialized: $(BENCH_MIP_EXEC)
