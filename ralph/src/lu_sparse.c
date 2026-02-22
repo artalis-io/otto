@@ -15,7 +15,7 @@
 #include <limits.h>
 #include "lp.h"
 #include "lu_supernode.h"
-#define perf_now_ms lp_telemetry_now_ms
+#define perf_now_ms sh_perf_now_ms
 
 /* ============================================================================
  * AMD (Approximate Minimum Degree) Ordering
@@ -1723,10 +1723,10 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
         }
 
         if (lu->sym_valid && lu->sym_fingerprint == fingerprint) {
-            lu->perf_symbolic_cache_hits++;
+            lp_telemetry_lu_record_symbolic_cache_hit(lu);
             return 0;
         }
-        lu->perf_symbolic_cache_misses++;
+        lp_telemetry_lu_record_symbolic_cache_miss(lu);
 
         for (int j = 0; j < m; j++) {
             col_order[j] = j;
@@ -1797,10 +1797,10 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
 
     /* Check symbolic cache: if fingerprint matches, reuse previous analysis */
     if (lu->sym_valid && lu->sym_fingerprint == fingerprint) {
-        lu->perf_symbolic_cache_hits++;
+        lp_telemetry_lu_record_symbolic_cache_hit(lu);
         return 0;  /* Cache hit — ws arrays still valid from last call */
     }
-    lu->perf_symbolic_cache_misses++;
+    lp_telemetry_lu_record_symbolic_cache_miss(lu);
 
     int k = m - num_identity;  /* Number of structural columns */
 
@@ -1856,14 +1856,6 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
 #define MARKOWITZ_POOL_RETRY_MULT 8 /* Legacy retry multiplier (first growth target) */
 #define MARKOWITZ_POOL_MAX_MULT 64  /* Upper bound for progressive pool growth */
 #define MARKOWITZ_DENSE_SWITCH 0.7  /* Switch to dense when density exceeds this */
-
-enum {
-    MKZ_FAIL_NONE = 0,
-    MKZ_FAIL_WORKSPACE = -1,
-    MKZ_FAIL_POOL = -2,
-    MKZ_FAIL_SINGULAR = -3,
-    MKZ_FAIL_CAPACITY = -4
-};
 
 static int mkz_count_init_nnz(const SparseMatrix *B, const int *col_order, int k) {
     int init_nnz = 0;
@@ -1935,16 +1927,7 @@ static int mkz_workspace_reserve(LUFactorization *lu, size_t need_doubles) {
 }
 
 static void mkz_record_failure_reason(LUFactorization *lu, int rc) {
-    if (!lu) return;
-    if (rc == MKZ_FAIL_WORKSPACE) {
-        lu->mkz_fail_workspace++;
-    } else if (rc == MKZ_FAIL_POOL) {
-        lu->mkz_fail_pool++;
-    } else if (rc == MKZ_FAIL_SINGULAR) {
-        lu->mkz_fail_singular++;
-    } else if (rc == MKZ_FAIL_CAPACITY) {
-        lu->mkz_fail_capacity++;
-    }
+    lp_telemetry_lu_mark_mkz_failure_reason(lu, rc);
 }
 
 /*
@@ -2481,21 +2464,14 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     double t_coo_to_csc_ms = 0.0;
     double t_stage_start_ms = 0.0;
 #define NUMERIC_COMMIT() do { \
-    lu->perf_last_a_struct_build_ms = t_a_struct_build_ms; \
-    lu->perf_last_markowitz_numeric_ms = t_markowitz_numeric_ms; \
-    lu->perf_last_supernode_numeric_ms = t_supernode_numeric_ms; \
-    lu->perf_last_dense_ge_numeric_ms = t_dense_ge_numeric_ms; \
-    lu->perf_last_sparse_numeric_ms = \
-        t_markowitz_numeric_ms + t_supernode_numeric_ms + t_dense_ge_numeric_ms; \
-    lu->perf_last_identity_placement_ms = t_identity_placement_ms; \
-    lu->perf_last_coo_to_csc_ms = t_coo_to_csc_ms; \
-    lu->perf_total_a_struct_build_ms += t_a_struct_build_ms; \
-    lu->perf_total_markowitz_numeric_ms += t_markowitz_numeric_ms; \
-    lu->perf_total_supernode_numeric_ms += t_supernode_numeric_ms; \
-    lu->perf_total_dense_ge_numeric_ms += t_dense_ge_numeric_ms; \
-    lu->perf_total_sparse_numeric_ms += lu->perf_last_sparse_numeric_ms; \
-    lu->perf_total_identity_placement_ms += t_identity_placement_ms; \
-    lu->perf_total_coo_to_csc_ms += t_coo_to_csc_ms; \
+    lp_telemetry_lu_record_numeric_stages(lu, \
+        k, \
+        t_a_struct_build_ms, \
+        t_markowitz_numeric_ms, \
+        t_supernode_numeric_ms, \
+        t_dense_ge_numeric_ms, \
+        t_identity_placement_ms, \
+        t_coo_to_csc_ms); \
 } while (0)
 #define NUMERIC_RETURN(code) do { \
     NUMERIC_COMMIT(); \
@@ -2506,7 +2482,6 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     double *identity_val = lu->ws_identity_val;
     int *col_order = lu->ws_col_order;
     (void)num_identity;  /* Used implicitly: k = m - num_identity */
-    lu->perf_last_k = k;
 
     /* Use dense_work for A_struct (m×k fits in m×m, row-major layout) */
     double *A_struct = lu->dense_work;
@@ -2586,7 +2561,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     double *U_val = lu->coo_U_val;
 
     int L_nnz = 0, U_nnz = 0;
-    lu->mkz_last_failure = MKZ_FAIL_NONE;
+    lp_telemetry_lu_clear_mkz_last_failure(lu);
 
     /* Try sparse Markowitz factorization if enabled and k is large enough.
      * This exploits sparsity within structural columns, reducing O(k³) to O(nnz×fill).
@@ -2607,7 +2582,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             if (mkz_compute_workspace_requirements(mkz_init_nnz, m, k, pool_mult,
                                                    &pool_cap_dummy, &mkz_need) != 0) {
                 rc = MKZ_FAIL_WORKSPACE;
-                lu->mkz_calls++;
+                lp_telemetry_lu_mark_mkz_attempt(lu);
                 mkz_record_failure_reason(lu, rc);
                 break;
             }
@@ -2615,7 +2590,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             if (mkz_need > ((size_t)-1) - mkz_perm_doubles ||
                 mkz_workspace_reserve(lu, mkz_perm_doubles + mkz_need) != 0) {
                 rc = MKZ_FAIL_WORKSPACE;
-                lu->mkz_calls++;
+                lp_telemetry_lu_mark_mkz_attempt(lu);
                 mkz_record_failure_reason(lu, rc);
                 break;
             }
@@ -2624,7 +2599,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             double *mkz_workspace = lu->mkz_work + mkz_perm_doubles;
             size_t mkz_ws_doubles = lu->mkz_work_capacity - mkz_perm_doubles;
 
-            lu->mkz_calls++;
+            lp_telemetry_lu_mark_mkz_attempt(lu);
             t_stage_start_ms = perf_now_ms();
             rc = lu_factorize_markowitz(
                 B, col_order, m, k, mkz_init_nnz, row_perm, row_pos, lu->pivot_tol,
@@ -2669,8 +2644,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
         }
 
         if (rc == 0) {
-            lu->mkz_successes++;
-            lu->mkz_last_failure = MKZ_FAIL_NONE;
+            lp_telemetry_lu_mark_mkz_success(lu);
             lu->num_regularized = mkz_reg;
             lu->mkz_pool_mult_hint = pool_mult;
 
@@ -2710,9 +2684,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
 
             goto identity_placement;
         }
-        lu->mkz_failures++;
-        lu->mkz_last_failure = rc;
-        lu->mkz_dense_fallbacks++;
+        lp_telemetry_lu_mark_mkz_failure(lu, rc);
 
         /* Markowitz failed — reset and fall through to supernodal/dense */
         L_nnz = 0;
@@ -2944,7 +2916,7 @@ identity_placement:
         if (perm_pos < step) {
             /* Row already used. Retry once with dense GE only (skip sparse numeric)
              * to preserve sparse-efficient path without top-level dense fallback. */
-            lu->identity_sep_failures++;
+            lp_telemetry_lu_mark_identity_sep_failure(lu);
             if (!dense_ge_retry_done) {
                 dense_ge_retry_done = 1;
                 skip_sparse_numeric = 1;
@@ -3127,20 +3099,16 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
 
     /* For small matrices, dense is faster due to overhead */
     if (m < 20) {
-        lu->sparse_fallback_last_reason = LU_SPARSE_FALLBACK_SMALL_MATRIX;
-        lu->sparse_fallback_reason_small_matrix++;
+        lp_telemetry_lu_set_sparse_fallback_reason(lu, LU_SPARSE_FALLBACK_SMALL_MATRIX);
         return -1;
     }
 
     /* Symbolic analysis (identity detection + fill-reducing column ordering) */
     double t_symbolic_ms = perf_now_ms();
-    lu->perf_symbolic_calls++;
     int sym_result = lu_symbolic_analyze(lu, B);
-    lu->perf_last_symbolic_ms = perf_now_ms() - t_symbolic_ms;
-    lu->perf_total_symbolic_ms += lu->perf_last_symbolic_ms;
+    lp_telemetry_lu_record_symbolic_call(lu, perf_now_ms() - t_symbolic_ms);
     if (sym_result < 0) {
-        lu->sparse_fallback_last_reason = LU_SPARSE_FALLBACK_SYMBOLIC;
-        lu->sparse_fallback_reason_symbolic++;
+        lp_telemetry_lu_set_sparse_fallback_reason(lu, LU_SPARSE_FALLBACK_SYMBOLIC);
         return -1;
     }
 
@@ -3148,12 +3116,11 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
     int num_result = lu_numeric_factorize(lu, B, lu->sym_num_identity, lu->sym_k);
     if (num_result < 0) {
         lu->sym_valid = 0;  /* Invalidate on numeric failure */
-        lu->sparse_fallback_last_reason = LU_SPARSE_FALLBACK_NUMERIC;
-        lu->sparse_fallback_reason_numeric++;
+        lp_telemetry_lu_set_sparse_fallback_reason(lu, LU_SPARSE_FALLBACK_NUMERIC);
         return -1;
     }
 
-    lu->sparse_fallback_last_reason = LU_SPARSE_FALLBACK_NONE;
+    lp_telemetry_lu_mark_sparse_success(lu);
     return 0;
 }
 

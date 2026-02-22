@@ -24,7 +24,7 @@ int tableau_compute_solution(SimplexTableau *tab);
 int tableau_compute_reduced_costs(SimplexTableau *tab);
 void tableau_free(SimplexTableau *tab);
 
-#define perf_now_ms lp_telemetry_now_ms
+#define perf_now_ms sh_perf_now_ms
 
 /* Dual candidate-list pricing constants (T2.2) */
 #define DUAL_CAND_CAPACITY    200    /* Max candidates in dual hot set */
@@ -279,7 +279,7 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
         double t_ftran_ms = perf_now_ms();
         lu_solve_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work3);  /* d = B^{-1} * a_entering */
         if (tab->owner) {
-            tab->owner->perf_ftran_ms += perf_now_ms() - t_ftran_ms;
+            lp_telemetry_add_ftran_ms(tab->owner, perf_now_ms() - t_ftran_ms);
         }
     }
 
@@ -301,7 +301,7 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
         double t_btran_ms = perf_now_ms();
         lu_solve_transpose(tab->lu, tab->work1, tab->work2);  /* work2 = pivot_row */
         if (tab->owner) {
-            tab->owner->perf_btran_ms += perf_now_ms() - t_btran_ms;
+            lp_telemetry_add_btran_ms(tab->owner, perf_now_ms() - t_btran_ms);
         }
     }
 
@@ -393,7 +393,7 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
             double t_ftran_ms = perf_now_ms();
             lu_solve(tab->lu, tab->pivot_row, tab->tau_work);
             if (tab->owner) {
-                tab->owner->perf_ftran_ms += perf_now_ms() - t_ftran_ms;
+                lp_telemetry_add_ftran_ms(tab->owner, perf_now_ms() - t_ftran_ms);
             }
         }
 
@@ -417,7 +417,7 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
         double t_refactor_ms = perf_now_ms();
         int rc_ref = tableau_refactorize(tab);
         if (tab->owner) {
-            tab->owner->perf_refactor_ms += perf_now_ms() - t_refactor_ms;
+            lp_telemetry_add_refactor_runtime_ms(tab->owner, perf_now_ms() - t_refactor_ms);
         }
         if (rc_ref != 0) {
             goto pivot_fail_rollback;
@@ -428,13 +428,13 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
             double t_lu_update_ms = perf_now_ms();
             int rc_upd = lu_update(tab->lu, leaving, tab->work1);
             if (tab->owner) {
-                tab->owner->perf_lu_update_ms += perf_now_ms() - t_lu_update_ms;
+                lp_telemetry_add_lu_update_ms(tab->owner, perf_now_ms() - t_lu_update_ms);
             }
             if (rc_upd != 0) {
                 double t_refactor_ms = perf_now_ms();
                 int rc_ref = tableau_refactorize(tab);
                 if (tab->owner) {
-                    tab->owner->perf_refactor_ms += perf_now_ms() - t_refactor_ms;
+                    lp_telemetry_add_refactor_runtime_ms(tab->owner, perf_now_ms() - t_refactor_ms);
                 }
                 if (rc_ref != 0) {
                     goto pivot_fail_rollback;
@@ -1007,7 +1007,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                 {
                     double t_refactor_ms = perf_now_ms();
                     tableau_refactorize(tab);
-                    solver->perf_refactor_ms += perf_now_ms() - t_refactor_ms;
+                    lp_telemetry_add_refactor_runtime_ms(solver, perf_now_ms() - t_refactor_ms);
                 }
                 tab->dse_initialized = 0;
                 if (use_dse) dse_init_approx(tab);
@@ -1078,7 +1078,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                     {
                         double t_ratio_ms = perf_now_ms();
                         int rc_ratio = dual_ratio_test(tab, cl_leaving, &cl_entering, &cl_theta);
-                        solver->perf_ratio_ms += perf_now_ms() - t_ratio_ms;
+                        lp_telemetry_record_ratio(solver, 0, perf_now_ms() - t_ratio_ms);
                         if (rc_ratio != 0) {
                             /* Infeasible after unshift — should not happen, bail */
                             break;
@@ -1087,11 +1087,11 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                     {
                         double t_pivot_ms = perf_now_ms();
                         int rc_pivot = dual_simplex_pivot(tab, cl_entering, cl_leaving, cl_theta);
-                        solver->perf_pivot_ms += perf_now_ms() - t_pivot_ms;
+                        lp_telemetry_record_pivot(solver, 0, perf_now_ms() - t_pivot_ms);
                         if (rc_pivot != 0) {
                             double t_refactor_ms = perf_now_ms();
                             int rc_ref = tableau_refactorize(tab);
-                            solver->perf_refactor_ms += perf_now_ms() - t_refactor_ms;
+                            lp_telemetry_add_refactor_runtime_ms(solver, perf_now_ms() - t_refactor_ms);
                             if (rc_ref != 0) break;
                             tab->dse_initialized = 0;
                             if (use_dse) dse_init_approx(tab);
@@ -1106,7 +1106,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                     if (cleanup_iters % 50 == 0) {
                         double t_refactor_ms = perf_now_ms();
                         tableau_refactorize(tab);
-                        solver->perf_refactor_ms += perf_now_ms() - t_refactor_ms;
+                        lp_telemetry_add_refactor_runtime_ms(solver, perf_now_ms() - t_refactor_ms);
                         tab->dse_initialized = 0;
                         if (use_dse) dse_init_approx(tab);
                         tableau_compute_solution(tab);
@@ -1167,7 +1167,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
         {
             double t_ratio_ms = perf_now_ms();
             int rc_ratio = dual_ratio_test(tab, leaving, &entering, &theta);
-            solver->perf_ratio_ms += perf_now_ms() - t_ratio_ms;
+            lp_telemetry_record_ratio(solver, 0, perf_now_ms() - t_ratio_ms);
             if (rc_ratio != 0) {
                 /* No entering variable — problem is infeasible */
                 remove_bound_perturbation(tab);
@@ -1181,11 +1181,11 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
         {
             double t_pivot_ms = perf_now_ms();
             int rc_pivot = dual_simplex_pivot(tab, entering, leaving, theta);
-            solver->perf_pivot_ms += perf_now_ms() - t_pivot_ms;
+            lp_telemetry_record_pivot(solver, 0, perf_now_ms() - t_pivot_ms);
             if (rc_pivot != 0) {
                 double t_refactor_ms = perf_now_ms();
                 int rc_ref = tableau_refactorize(tab);
-                solver->perf_refactor_ms += perf_now_ms() - t_refactor_ms;
+                lp_telemetry_add_refactor_runtime_ms(solver, perf_now_ms() - t_refactor_ms);
                 if (rc_ref != 0) {
                     remove_bound_perturbation(tab);
                     return -1;  /* FAILED */
@@ -1246,7 +1246,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
         if (need_refactor) {
             double t_refactor_ms = perf_now_ms();
             int rc_ref = tableau_refactorize(tab);
-            solver->perf_refactor_ms += perf_now_ms() - t_refactor_ms;
+            lp_telemetry_add_refactor_runtime_ms(solver, perf_now_ms() - t_refactor_ms);
             if (rc_ref != 0) {
                 remove_bound_perturbation(tab);
                 return -1;
@@ -1548,7 +1548,7 @@ int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver) {
     {
         double t_refactor_ms = perf_now_ms();
         int rc_ref = tableau_refactorize(tab);
-        solver->perf_refactor_ms += perf_now_ms() - t_refactor_ms;
+        lp_telemetry_add_refactor_runtime_ms(solver, perf_now_ms() - t_refactor_ms);
         if (rc_ref != 0) {
             solver->status = RALPH_STATUS_ERROR;
             return -1;
