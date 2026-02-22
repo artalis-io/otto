@@ -4,7 +4,20 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-22, `d093284`) — logging + telemetry architecture baseline:
+**Current** (2026-02-22, `beac5bb`) — Phase 2 LP/MIP boundary extraction baseline:
+introduced a dedicated MIP/LP adapter surface (`mip_lp_adapter`) and moved MIP node/probing LP
+state transitions behind adapter operations (`apply bounds`, `recompute`, `dual reopt`,
+`warm restore`, `cold recover`) to reduce direct tableau lifecycle mutation in `mip.c` and
+`branch_bound.c`. Added branching tightening safety guards to prevent duplicate non-tightening
+child chains after probing state drift, plus a targeted regression test
+(`test_branch_tightening_guard`). Latest gates:
+`make -C ralph test-netlib-gate-small` PASS (26 files, dense fallback files: 0, no unexpected
+regressions, artifacts: `/tmp/netlib-regression-gate-20260222-174924`) and
+`make -C ralph test-netlib-gate` PASS (84 files, 27 known timeouts, status/objective/invalid
+mismatches 0, dense fallback files: 0, no unexpected regressions, artifacts:
+`/tmp/netlib-regression-gate-20260222-175112`).
+
+Previous: (2026-02-22, `d093284`) — logging + telemetry architecture baseline:
 introduced a shared LP logging shim (`lp_log`) backed by `sh_log`, migrated verbose solver output
 paths in `simplex.c`, `dual_simplex.c`, and `mip.c` off direct `printf`/`fprintf`, and added
 timed telemetry wrappers in `lp_telemetry` so solver/LU timing callsites use a single coherent
@@ -213,6 +226,34 @@ Scope:
 Exit criteria:
 - Existing callers remain source-compatible.
 - New tests verify LP-only APIs do not instantiate MIP paths and vice versa.
+
+Plan (start, 2026-02-22):
+1. API entry-point split (P3.1)
+- Add explicit optimize entry points in public API:
+  - `ralph_optimize_lp()`
+  - `ralph_optimize_mip()`
+- Keep `ralph_optimize()` as compatibility dispatcher with current behavior.
+- Gate: compile + `make -C ralph test`.
+
+2. Solver creation path split (P3.2)
+- Ensure LP optimize path cannot instantiate or mutate MIP solver state.
+- Ensure MIP optimize path owns MIP solver lifecycle explicitly.
+- Add focused tests:
+  - LP path leaves `ralph_get_mip_solver(model)` null/unchanged.
+  - MIP path builds MIP solver only for integer models.
+- Gate: `make -C ralph test`, `make -C ralph test-netlib-gate-small`.
+
+3. Parameter surface partition (P3.3)
+- Add explicit LP param setters/getters and MIP param setters/getters (non-breaking additions).
+- Keep string param APIs as compatibility wrappers with clear routing.
+- Add validation tests for parameter routing and rejection of wrong-domain params in strict APIs.
+- Gate: `make -C ralph test`.
+
+4. Backward-compatibility verification (P3.4)
+- Keep all existing callers/source signatures valid.
+- Add regression test that old `ralph_optimize()` + string params produce unchanged statuses/objectives
+  on representative LP/MIP fixtures.
+- Gate: `make -C ralph test-netlib-gate`, then refresh baseline entry.
 
 ### Phase 4: MIP Best-Practice Alignment with Current LP Warm-Start Infrastructure
 
