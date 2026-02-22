@@ -4,7 +4,17 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-21, `2ef9ac4`) — H5 adaptive Devex-partial pricing baseline:
+**Current** (2026-02-22, `d093284`) — logging + telemetry architecture baseline:
+introduced a shared LP logging shim (`lp_log`) backed by `sh_log`, migrated verbose solver output
+paths in `simplex.c`, `dual_simplex.c`, and `mip.c` off direct `printf`/`fprintf`, and added
+timed telemetry wrappers in `lp_telemetry` so solver/LU timing callsites use a single coherent
+timer/recording interface. Also added LP+MIP integration coverage for runtime telemetry parameter
+propagation (`telemetry=0/1`) including LU/node-LP propagation checks. Latest gates:
+`make -C ralph test-simplex-policy` PASS (20/20), `make -C ralph test-lu-markowitz` PASS (59/59),
+`make -C ralph test-lp-telemetry` PASS (58/58), and full `make -C ralph test` PASS
+(`test_ralph` 398/398, presolve/netlib parser gates PASS).
+
+Previous: (2026-02-21, `2ef9ac4`) — H5 adaptive Devex-partial pricing baseline:
 added adaptive Devex-partial pricing for large, degenerate Phase 2 workloads with periodic full
 Devex rescans to preserve robustness while reducing pricing cost on heavy NETLIB outliers. Latest gates:
 `make -C ralph test-simplex-policy` PASS (16/16), `make -C ralph test-lu-markowitz` PASS (59/59),
