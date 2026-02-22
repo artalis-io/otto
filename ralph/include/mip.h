@@ -197,6 +197,7 @@ typedef struct {
     int max_cuts_per_round;
     int max_cut_rounds;
     int verbose;
+    int telemetry;          /* 1 = collect LP/LU telemetry in node relaxations */
     int dual_bound_flip;    /* -1=default(on), 0=off, 1=on */
     int dual_steepest_edge; /* -1=default(on), 0=off, 1=on */
     int lu_supernode;       /* 0=off, 1=enable supernodal LU (T2.1) */

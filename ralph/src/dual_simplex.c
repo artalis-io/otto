@@ -1531,6 +1531,7 @@ int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver) {
         }
         /* T2.1: Propagate supernodal LU flag (auto-enable for m > 300) */
         if (solver->tableau->lu) {
+            solver->tableau->lu->telemetry_enabled = solver->telemetry_enabled;
             if (solver->lu_supernode)
                 solver->tableau->lu->sn_enabled = 1;
             else if (solver->tableau->m > 300)

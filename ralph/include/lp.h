@@ -229,6 +229,7 @@ typedef struct {
     int num_regularized;        /* Count of rows regularized in current factorization */
     double pivot_tol;           /* Dynamic pivot tolerance (default RALPH_PIVOT_TOL) */
     int last_failure_reason;    /* LUFailureReason (last failed lu_factorize/lu_update reason) */
+    int telemetry_enabled;      /* 1 = collect LU telemetry counters/timers */
 
     /* Pre-allocated workspace for hyper-sparse operations */
     double *hs_work1;       /* Dense workspace 1 */
@@ -508,6 +509,7 @@ typedef struct SimplexSolver {
     int scaling;
     int pricing_strategy;   /* 0=Dantzig, 1=Steepest edge, 2=Devex, 3=Partial, 4=Heap */
     int verbose;
+    int telemetry_enabled;  /* 1 = collect solver/LU telemetry counters/timers */
     int force_two_phase;    /* 1 = force two-phase simplex (for Benders duals) */
     int crash;              /* 0=off, 1=triangular crash basis */
     int verify;             /* 0=off, 1=post-solve verification (T2.3) */
@@ -604,6 +606,10 @@ typedef struct SimplexSolver {
     int perf_phase2_refactor_periodic_policy;
     int perf_phase2_refactor_periodic_lu_health;
     int perf_phase2_refactor_safety_forced;
+
+    /* Runtime scheduling counters (behavioral; independent from telemetry gate). */
+    int periodic_policy_refactors_phase1;
+    int periodic_policy_refactors_phase2;
 
     /* Adaptive periodic scheduler feedback (per-phase bias in [-0.25, +0.25]) */
     double periodic_feedback_bias_phase1;
@@ -906,6 +912,12 @@ void lp_telemetry_record_refactor(SimplexSolver *owner,
                                   int m,
                                   int lu_last_k,
                                   int lu_last_basis_nnz);
+void lp_telemetry_record_refactor_with_lu(SimplexSolver *owner,
+                                          int phase,
+                                          int reason,
+                                          double elapsed_ms,
+                                          int m,
+                                          const LUFactorization *lu);
 void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
                                   LPSolverTelemetrySnapshot *out);
 void lp_telemetry_snapshot_lu(const LUFactorization *lu,

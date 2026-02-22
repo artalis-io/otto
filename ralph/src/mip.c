@@ -20,6 +20,7 @@
  * iterations on a node LP, something is wrong and cold-start fallback handles it. */
 static void mip_apply_dual_flags(MIPSolver *solver) {
     if (!solver->lp_solver) return;
+    solver->lp_solver->telemetry_enabled = solver->telemetry ? 1 : 0;
     if (solver->dual_bound_flip >= 0)
         solver->lp_solver->use_dual_bound_flip = solver->dual_bound_flip;
     if (solver->dual_steepest_edge >= 0)
@@ -114,6 +115,7 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     solver->max_cuts_per_round = 50;
     solver->max_cut_rounds = 5;  /* Enable cuts with conservative limit */
     solver->verbose = 0;
+    solver->telemetry = 1;
     solver->dual_bound_flip = -1;    /* use default */
     solver->dual_steepest_edge = -1; /* use default */
 

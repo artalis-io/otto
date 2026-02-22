@@ -51,6 +51,7 @@ LUFactorization* lu_create(int m) {
 
     lu->m = m;
     lu->pivot_tol = RALPH_PIVOT_TOL;
+    lu->telemetry_enabled = 1;
 
     /* Refactorization threshold: balance factorization cost vs spike application cost.
      * With Forrest-Tomlin updates, each FTRAN/BTRAN pays O(total_spike_nnz).

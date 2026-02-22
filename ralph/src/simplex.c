@@ -1883,6 +1883,18 @@ static void basis_build_record(SimplexTableau *tab,
                                     tail_shift_bytes);
 }
 
+/* Behavioral counter for periodic policy triggers; kept separate from telemetry. */
+static void runtime_record_periodic_refactor_trigger(SimplexSolver *solver,
+                                                     int phase,
+                                                     int lu_health_triggered) {
+    if (!solver) return;
+    if (!lu_health_triggered) {
+        if (phase == 1) solver->periodic_policy_refactors_phase1++;
+        else if (phase == 2) solver->periodic_policy_refactors_phase2++;
+    }
+    lp_telemetry_record_periodic_refactor_trigger(solver, phase, lu_health_triggered);
+}
+
 /* Build basis matrix from current basis into reusable workspace */
 static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
     if (!tab || !tab->A_ext || !tab->basis) return NULL;
@@ -2313,15 +2325,12 @@ int tableau_refactorize(SimplexTableau *tab) {
 
     if (owner) {
         double elapsed_ms = perf_now_ms() - t_refactor_ms;
-        int lu_last_k = (tab && tab->lu) ? tab->lu->perf_last_k : 0;
-        int lu_last_nnz_b = (tab && tab->lu) ? tab->lu->perf_last_basis_nnz : 0;
-        lp_telemetry_record_refactor(owner,
-                                     tab ? tab->phase : 0,
-                                     reason,
-                                     elapsed_ms,
-                                     tab ? tab->m : 0,
-                                     lu_last_k,
-                                     lu_last_nnz_b);
+        lp_telemetry_record_refactor_with_lu(owner,
+                                             tab ? tab->phase : 0,
+                                             reason,
+                                             elapsed_ms,
+                                             tab ? tab->m : 0,
+                                             tab ? tab->lu : NULL);
         periodic_feedback_record_refactor(owner, tab ? tab->phase : 0, reason, updates_before, status);
     }
 
@@ -3976,6 +3985,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->scaling = 1;   /* Enable scaling for numerical stability */
     solver->pricing_strategy = 2;  /* Devex pricing (better than Dantzig) */
     solver->verbose = 0;
+    solver->telemetry_enabled = 1;
     solver->trace_phase1 = 0;
     solver->is_scaled = 0;
     solver->trace_phase1_first_fail_iter = -1;
@@ -5039,7 +5049,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         }
 
         if (needs_refactor) {
-            lp_telemetry_record_periodic_refactor_trigger(solver, 1, lu_refactor_needed);
+            runtime_record_periodic_refactor_trigger(solver, 1, lu_refactor_needed);
             if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PERIODIC) != 0) {
                 if (periodic_refactor) {
                     if (solver->verbose) {
@@ -5798,7 +5808,7 @@ static int simplex_phase2(SimplexSolver *solver) {
         }
 
         if (needs_refactor) {
-            lp_telemetry_record_periodic_refactor_trigger(solver, 2, lu_refactor_needed);
+            runtime_record_periodic_refactor_trigger(solver, 2, lu_refactor_needed);
             int rc_refactor;
             {
                 double t_refactor_ms = perf_now_ms();
@@ -5882,7 +5892,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                 perturb_attempts_p2 < PHASE2_DEGEN_ESCAPE_MAX_ATTEMPTS &&
                 tab->m >= PHASE2_DEGEN_ESCAPE_MIN_M &&
                 degenerate_count >= PHASE2_DEGEN_ESCAPE_DEGEN_TRIGGER &&
-                solver->perf_phase2_refactor_periodic_policy >= PHASE2_DEGEN_ESCAPE_POLICY_TRIGGER) {
+                solver->periodic_policy_refactors_phase2 >= PHASE2_DEGEN_ESCAPE_POLICY_TRIGGER) {
                 double scale = 4.0 + 2.0 * (double)perturb_attempts_p2;
                 primal_apply_perturbation_scaled(tab, scale);
                 perturbation_active = 1;
@@ -6108,6 +6118,9 @@ static int crash_triangular(SimplexTableau *tab, int verbose) {
 
 static void reset_solver_perf(SimplexSolver *solver) {
     lp_telemetry_reset_solver(solver);
+    if (!solver) return;
+    solver->periodic_policy_refactors_phase1 = 0;
+    solver->periodic_policy_refactors_phase2 = 0;
 }
 
 static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *tab) {
@@ -6119,6 +6132,7 @@ static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *
     tab->pricing_strategy = solver->pricing_strategy;
     tab->trace_phase1_enabled = solver->trace_phase1;
     if (tab->lu) {
+        tab->lu->telemetry_enabled = solver->telemetry_enabled;
         if (solver->lu_supernode)
             tab->lu->sn_enabled = 1;
         else if (tab->m > 300)

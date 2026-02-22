@@ -32,6 +32,7 @@ struct RalphModel {
     double time_limit;
     int presolve;
     int verbose;
+    int telemetry;  /* 1=collect LP/LU telemetry counters/timers */
     double mip_gap;
     int max_nodes;
     int max_cut_rounds;
@@ -108,6 +109,7 @@ RalphModel* ralph_create(void) {
     model->presolve = 0;  /* Disabled by default - adds overhead on random LPs */
     model->presolve_mask = PRESOLVE_SAFE;
     model->verbose = 0;
+    model->telemetry = 1;
     model->mip_gap = RALPH_DEFAULT_MIP_GAP;
     model->max_nodes = RALPH_DEFAULT_NODE_LIMIT;
     model->max_cut_rounds = 0;  /* Disabled by default */
@@ -541,6 +543,7 @@ int ralph_optimize(RalphModel *model) {
         model->mip_solver->time_limit = model->time_limit;
         model->mip_solver->mip_gap = model->mip_gap;
         model->mip_solver->verbose = model->verbose;
+        model->mip_solver->telemetry = model->telemetry ? 1 : 0;
         model->mip_solver->max_cut_rounds = model->max_cut_rounds;
         model->mip_solver->dual_bound_flip = model->dual_bound_flip;
         model->mip_solver->dual_steepest_edge = model->dual_steepest_edge;
@@ -645,6 +648,7 @@ int ralph_optimize(RalphModel *model) {
         model->lp_solver->max_iterations = model->max_iterations;
         model->lp_solver->time_limit = model->time_limit;
         model->lp_solver->verbose = model->verbose;
+        model->lp_solver->telemetry_enabled = model->telemetry ? 1 : 0;
         model->lp_solver->presolve = 0;  /* Already done */
         model->lp_solver->pricing_strategy = model->pricing;
         model->lp_solver->scaling = model->scaling;
@@ -1111,6 +1115,8 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value) {
         model->presolve = value ? 1 : -1;  /* -1 = explicitly off (skips MIP auto-enable) */
     } else if (STREQ(name, "verbose") || STREQ(name, "OutputFlag")) {
         model->verbose = value;
+    } else if (STREQ(name, "telemetry") || STREQ(name, "Telemetry")) {
+        model->telemetry = value ? 1 : 0;
     } else if (STREQ(name, "max_nodes") || STREQ(name, "NodeLimit")) {
         model->max_nodes = value;
     } else if (STREQ(name, "max_cut_rounds") || STREQ(name, "CutRounds")) {
@@ -1204,6 +1210,8 @@ int ralph_get_int_param(const RalphModel *model, const char *name, int *value) {
         *value = (model->presolve > 0) ? 1 : 0;
     } else if (STREQ(name, "verbose")) {
         *value = model->verbose;
+    } else if (STREQ(name, "telemetry") || STREQ(name, "Telemetry")) {
+        *value = model->telemetry;
     } else if (STREQ(name, "max_nodes")) {
         *value = model->max_nodes;
     } else if (STREQ(name, "max_cut_rounds")) {
