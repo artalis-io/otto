@@ -99,6 +99,15 @@ typedef enum {
     LU_FAIL_FACTOR_ALLOC
 } LUFailureReason;
 
+/* Markowitz sparse numeric failure codes (internal telemetry + fallback routing). */
+typedef enum {
+    MKZ_FAIL_NONE = 0,
+    MKZ_FAIL_WORKSPACE = -1,
+    MKZ_FAIL_POOL = -2,
+    MKZ_FAIL_SINGULAR = -3,
+    MKZ_FAIL_CAPACITY = -4
+} MKZFailureReason;
+
 /* Sparse-efficient -> dense fallback classification (per lu_factorize call). */
 typedef enum {
     LU_SPARSE_FALLBACK_NONE = 0,
@@ -789,6 +798,14 @@ typedef struct {
     double perf_total_coo_to_csc_ms;
 } LUTelemetrySnapshot;
 
+typedef enum {
+    LP_SOLVER_STAGE_PRIMAL_SETUP = 0,
+    LP_SOLVER_STAGE_DUAL = 1,
+    LP_SOLVER_STAGE_PHASE1 = 2,
+    LP_SOLVER_STAGE_TRANSITION = 3,
+    LP_SOLVER_STAGE_PHASE2 = 4
+} LPSolverStage;
+
 /* LP model functions */
 LPModel* lp_model_create(void);
 void lp_model_free(LPModel *model);
@@ -893,5 +910,60 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
                                   LPSolverTelemetrySnapshot *out);
 void lp_telemetry_snapshot_lu(const LUFactorization *lu,
                               LUTelemetrySnapshot *out);
+void lp_telemetry_add_solver_stage_ms(SimplexSolver *solver,
+                                      LPSolverStage stage,
+                                      double elapsed_ms);
+void lp_telemetry_add_refactor_runtime_ms(SimplexSolver *solver,
+                                          double elapsed_ms);
+void lp_telemetry_add_ftran_ms(SimplexSolver *solver,
+                               double elapsed_ms);
+void lp_telemetry_add_btran_ms(SimplexSolver *solver,
+                               double elapsed_ms);
+void lp_telemetry_add_lu_update_ms(SimplexSolver *solver,
+                                   double elapsed_ms);
+void lp_telemetry_record_compute_solution(SimplexSolver *solver,
+                                          int phase,
+                                          double elapsed_ms);
+void lp_telemetry_record_compute_reduced_costs(SimplexSolver *solver,
+                                               int phase,
+                                               double elapsed_ms);
+void lp_telemetry_record_pricing(SimplexSolver *solver,
+                                 int phase,
+                                 double elapsed_ms);
+void lp_telemetry_record_ratio(SimplexSolver *solver,
+                               int phase,
+                               double elapsed_ms);
+void lp_telemetry_record_pivot(SimplexSolver *solver,
+                               int phase,
+                               double elapsed_ms);
+void lp_telemetry_record_periodic_refactor_trigger(SimplexSolver *solver,
+                                                   int phase,
+                                                   int lu_health_triggered);
+void lp_telemetry_lu_record_dense_factorize_ms(LUFactorization *lu,
+                                               double elapsed_ms);
+void lp_telemetry_lu_record_symbolic_cache_hit(LUFactorization *lu);
+void lp_telemetry_lu_record_symbolic_cache_miss(LUFactorization *lu);
+void lp_telemetry_lu_record_symbolic_call(LUFactorization *lu,
+                                          double elapsed_ms);
+void lp_telemetry_lu_mark_identity_sep_failure(LUFactorization *lu);
+void lp_telemetry_lu_record_numeric_stages(LUFactorization *lu,
+                                           int last_k,
+                                           double a_struct_build_ms,
+                                           double markowitz_numeric_ms,
+                                           double supernode_numeric_ms,
+                                           double dense_ge_numeric_ms,
+                                           double identity_placement_ms,
+                                           double coo_to_csc_ms);
+void lp_telemetry_lu_set_sparse_fallback_reason(LUFactorization *lu,
+                                                int reason);
+void lp_telemetry_lu_mark_sparse_success(LUFactorization *lu);
+void lp_telemetry_lu_mark_dense_fallback(LUFactorization *lu);
+void lp_telemetry_lu_clear_mkz_last_failure(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_attempt(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_success(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_failure_reason(LUFactorization *lu,
+                                             int rc);
+void lp_telemetry_lu_mark_mkz_failure(LUFactorization *lu,
+                                      int rc);
 
 #endif /* RALPH_LP_H */

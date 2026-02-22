@@ -6,13 +6,10 @@
  */
 
 #include <string.h>
-#include <time.h>
 #include "lp.h"
 
 double lp_telemetry_now_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1.0e6;
+    return sh_perf_now_ms();
 }
 
 int lp_telemetry_refactor_reason_is_safety_forced(int reason) {
@@ -433,3 +430,261 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
 }
 #undef COPY_LU_FIELD
 
+void lp_telemetry_add_solver_stage_ms(SimplexSolver *solver,
+                                      LPSolverStage stage,
+                                      double elapsed_ms) {
+    if (!solver) return;
+    switch (stage) {
+        case LP_SOLVER_STAGE_PRIMAL_SETUP:
+            solver->perf_primal_setup_ms += elapsed_ms;
+            break;
+        case LP_SOLVER_STAGE_DUAL:
+            solver->perf_dual_ms += elapsed_ms;
+            break;
+        case LP_SOLVER_STAGE_PHASE1:
+            solver->perf_phase1_ms += elapsed_ms;
+            break;
+        case LP_SOLVER_STAGE_TRANSITION:
+            solver->perf_transition_ms += elapsed_ms;
+            break;
+        case LP_SOLVER_STAGE_PHASE2:
+            solver->perf_phase2_ms += elapsed_ms;
+            break;
+        default:
+            break;
+    }
+}
+
+void lp_telemetry_add_refactor_runtime_ms(SimplexSolver *solver,
+                                          double elapsed_ms) {
+    if (!solver) return;
+    solver->perf_refactor_ms += elapsed_ms;
+}
+
+void lp_telemetry_add_ftran_ms(SimplexSolver *solver,
+                               double elapsed_ms) {
+    if (!solver) return;
+    solver->perf_ftran_ms += elapsed_ms;
+}
+
+void lp_telemetry_add_btran_ms(SimplexSolver *solver,
+                               double elapsed_ms) {
+    if (!solver) return;
+    solver->perf_btran_ms += elapsed_ms;
+}
+
+void lp_telemetry_add_lu_update_ms(SimplexSolver *solver,
+                                   double elapsed_ms) {
+    if (!solver) return;
+    solver->perf_lu_update_ms += elapsed_ms;
+}
+
+void lp_telemetry_record_compute_solution(SimplexSolver *solver,
+                                          int phase,
+                                          double elapsed_ms) {
+    if (!solver) return;
+    solver->perf_compute_solution_ms += elapsed_ms;
+    if (phase == 1) {
+        solver->perf_phase1_compute_solution_ms += elapsed_ms;
+        solver->perf_phase1_compute_solution_calls++;
+    } else if (phase == 2) {
+        solver->perf_phase2_compute_solution_ms += elapsed_ms;
+        solver->perf_phase2_compute_solution_calls++;
+    }
+}
+
+void lp_telemetry_record_compute_reduced_costs(SimplexSolver *solver,
+                                               int phase,
+                                               double elapsed_ms) {
+    if (!solver) return;
+    solver->perf_compute_rc_ms += elapsed_ms;
+    if (phase == 1) {
+        solver->perf_phase1_compute_rc_ms += elapsed_ms;
+        solver->perf_phase1_compute_rc_calls++;
+    } else if (phase == 2) {
+        solver->perf_phase2_compute_rc_ms += elapsed_ms;
+        solver->perf_phase2_compute_rc_calls++;
+    }
+}
+
+void lp_telemetry_record_pricing(SimplexSolver *solver,
+                                 int phase,
+                                 double elapsed_ms) {
+    if (!solver) return;
+    solver->perf_pricing_ms += elapsed_ms;
+    if (phase == 1) {
+        solver->perf_phase1_pricing_ms += elapsed_ms;
+        solver->perf_phase1_pricing_calls++;
+    } else if (phase == 2) {
+        solver->perf_phase2_pricing_ms += elapsed_ms;
+        solver->perf_phase2_pricing_calls++;
+    }
+}
+
+void lp_telemetry_record_ratio(SimplexSolver *solver,
+                               int phase,
+                               double elapsed_ms) {
+    if (!solver) return;
+    solver->perf_ratio_ms += elapsed_ms;
+    if (phase == 1) {
+        solver->perf_phase1_ratio_ms += elapsed_ms;
+        solver->perf_phase1_ratio_calls++;
+    } else if (phase == 2) {
+        solver->perf_phase2_ratio_ms += elapsed_ms;
+        solver->perf_phase2_ratio_calls++;
+    }
+}
+
+void lp_telemetry_record_pivot(SimplexSolver *solver,
+                               int phase,
+                               double elapsed_ms) {
+    if (!solver) return;
+    solver->perf_pivot_ms += elapsed_ms;
+    if (phase == 1) {
+        solver->perf_phase1_pivot_ms += elapsed_ms;
+        solver->perf_phase1_pivot_calls++;
+    } else if (phase == 2) {
+        solver->perf_phase2_pivot_ms += elapsed_ms;
+        solver->perf_phase2_pivot_calls++;
+    }
+}
+
+void lp_telemetry_record_periodic_refactor_trigger(SimplexSolver *solver,
+                                                   int phase,
+                                                   int lu_health_triggered) {
+    if (!solver) return;
+    if (lu_health_triggered) {
+        solver->perf_refactor_periodic_lu_health++;
+        if (phase == 1) solver->perf_phase1_refactor_periodic_lu_health++;
+        else if (phase == 2) solver->perf_phase2_refactor_periodic_lu_health++;
+    } else {
+        solver->perf_refactor_periodic_policy++;
+        if (phase == 1) solver->perf_phase1_refactor_periodic_policy++;
+        else if (phase == 2) solver->perf_phase2_refactor_periodic_policy++;
+    }
+}
+
+void lp_telemetry_lu_record_dense_factorize_ms(LUFactorization *lu,
+                                               double elapsed_ms) {
+    if (!lu) return;
+    lu->perf_last_dense_factorize_ms = elapsed_ms;
+    lu->perf_total_dense_factorize_ms += elapsed_ms;
+}
+
+void lp_telemetry_lu_record_symbolic_cache_hit(LUFactorization *lu) {
+    if (!lu) return;
+    lu->perf_symbolic_cache_hits++;
+}
+
+void lp_telemetry_lu_record_symbolic_cache_miss(LUFactorization *lu) {
+    if (!lu) return;
+    lu->perf_symbolic_cache_misses++;
+}
+
+void lp_telemetry_lu_record_symbolic_call(LUFactorization *lu,
+                                          double elapsed_ms) {
+    if (!lu) return;
+    lu->perf_symbolic_calls++;
+    lu->perf_last_symbolic_ms = elapsed_ms;
+    lu->perf_total_symbolic_ms += elapsed_ms;
+}
+
+void lp_telemetry_lu_mark_identity_sep_failure(LUFactorization *lu) {
+    if (!lu) return;
+    lu->identity_sep_failures++;
+}
+
+void lp_telemetry_lu_record_numeric_stages(LUFactorization *lu,
+                                           int last_k,
+                                           double a_struct_build_ms,
+                                           double markowitz_numeric_ms,
+                                           double supernode_numeric_ms,
+                                           double dense_ge_numeric_ms,
+                                           double identity_placement_ms,
+                                           double coo_to_csc_ms) {
+    if (!lu) return;
+    lu->perf_last_k = last_k;
+    lu->perf_last_a_struct_build_ms = a_struct_build_ms;
+    lu->perf_last_markowitz_numeric_ms = markowitz_numeric_ms;
+    lu->perf_last_supernode_numeric_ms = supernode_numeric_ms;
+    lu->perf_last_dense_ge_numeric_ms = dense_ge_numeric_ms;
+    lu->perf_last_sparse_numeric_ms =
+        markowitz_numeric_ms + supernode_numeric_ms + dense_ge_numeric_ms;
+    lu->perf_last_identity_placement_ms = identity_placement_ms;
+    lu->perf_last_coo_to_csc_ms = coo_to_csc_ms;
+    lu->perf_total_a_struct_build_ms += a_struct_build_ms;
+    lu->perf_total_markowitz_numeric_ms += markowitz_numeric_ms;
+    lu->perf_total_supernode_numeric_ms += supernode_numeric_ms;
+    lu->perf_total_dense_ge_numeric_ms += dense_ge_numeric_ms;
+    lu->perf_total_sparse_numeric_ms += lu->perf_last_sparse_numeric_ms;
+    lu->perf_total_identity_placement_ms += identity_placement_ms;
+    lu->perf_total_coo_to_csc_ms += coo_to_csc_ms;
+}
+
+void lp_telemetry_lu_set_sparse_fallback_reason(LUFactorization *lu,
+                                                int reason) {
+    if (!lu) return;
+    lu->sparse_fallback_last_reason = reason;
+    switch ((LUSparseFallbackReason)reason) {
+        case LU_SPARSE_FALLBACK_SMALL_MATRIX:
+            lu->sparse_fallback_reason_small_matrix++;
+            break;
+        case LU_SPARSE_FALLBACK_SYMBOLIC:
+            lu->sparse_fallback_reason_symbolic++;
+            break;
+        case LU_SPARSE_FALLBACK_NUMERIC:
+            lu->sparse_fallback_reason_numeric++;
+            break;
+        case LU_SPARSE_FALLBACK_NONE:
+        default:
+            break;
+    }
+}
+
+void lp_telemetry_lu_mark_sparse_success(LUFactorization *lu) {
+    lp_telemetry_lu_set_sparse_fallback_reason(lu, LU_SPARSE_FALLBACK_NONE);
+}
+
+void lp_telemetry_lu_mark_dense_fallback(LUFactorization *lu) {
+    if (!lu) return;
+    lu->used_dense_fallback_last = 1;
+    lu->sparse_dense_fallbacks++;
+}
+
+void lp_telemetry_lu_clear_mkz_last_failure(LUFactorization *lu) {
+    if (!lu) return;
+    lu->mkz_last_failure = MKZ_FAIL_NONE;
+}
+
+void lp_telemetry_lu_mark_mkz_attempt(LUFactorization *lu) {
+    if (!lu) return;
+    lu->mkz_calls++;
+}
+
+void lp_telemetry_lu_mark_mkz_success(LUFactorization *lu) {
+    if (!lu) return;
+    lu->mkz_successes++;
+    lu->mkz_last_failure = MKZ_FAIL_NONE;
+}
+
+void lp_telemetry_lu_mark_mkz_failure(LUFactorization *lu,
+                                      int rc) {
+    if (!lu) return;
+    lu->mkz_failures++;
+    lu->mkz_last_failure = rc;
+    lu->mkz_dense_fallbacks++;
+}
+
+void lp_telemetry_lu_mark_mkz_failure_reason(LUFactorization *lu,
+                                             int rc) {
+    if (!lu) return;
+    if (rc == MKZ_FAIL_WORKSPACE) {
+        lu->mkz_fail_workspace++;
+    } else if (rc == MKZ_FAIL_POOL) {
+        lu->mkz_fail_pool++;
+    } else if (rc == MKZ_FAIL_SINGULAR) {
+        lu->mkz_fail_singular++;
+    } else if (rc == MKZ_FAIL_CAPACITY) {
+        lu->mkz_fail_capacity++;
+    }
+}
