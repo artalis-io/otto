@@ -10,6 +10,7 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
     double depot_depart;
     uint32_t prev_loc;
     double distance = 0.0;
+    double waiting = 0.0;
     double latest_next;
     uint32_t i;
 
@@ -22,6 +23,9 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
         sol->route_distance[vehicle_id] = 0.0;
         if (sol->route_duration) {
             sol->route_duration[vehicle_id] = 0.0;
+        }
+        if (sol->route_waiting) {
+            sol->route_waiting[vehicle_id] = 0.0;
         }
         return 1;
     }
@@ -70,6 +74,7 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
         }
         stop->service_start = start;
         stop->depart = start + (double)task->service_seconds;
+        waiting += start - stop->arrival;
         time_cursor = stop->depart;
         prev_loc = cur_loc;
     }
@@ -85,6 +90,9 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
     /* Compute route duration */
     if (sol->route_duration) {
         sol->route_duration[vehicle_id] = time_cursor - depot_depart;
+    }
+    if (sol->route_waiting) {
+        sol->route_waiting[vehicle_id] = waiting;
     }
 
     /* Backward pass */

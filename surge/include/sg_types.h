@@ -64,6 +64,7 @@ typedef struct {
     double total_distance;
     uint32_t unassigned;
     uint32_t vehicles_used;
+    double total_waiting;
 } SGStats;
 
 typedef enum {

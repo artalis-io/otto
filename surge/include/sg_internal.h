@@ -78,6 +78,7 @@ typedef struct {
     uint32_t *request_delivery_stop_pos;
     double *route_distance;
     double *route_duration;
+    double *route_waiting;
     double *route_stop_load;   /* [vehicle * stop_stride * dim_count + stop * dim_count + d] */
 } SGRouteSolution;
 
@@ -122,6 +123,7 @@ typedef struct {
     double fixed_cost;
     double cost_per_distance;
     double cost_per_duration;
+    double cost_per_waiting;
 } SGVehicleRecord;
 
 typedef struct {

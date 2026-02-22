@@ -590,6 +590,16 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         ctx->stats.vehicles_used = final_sol->vehicles_used;
         ctx->stats.total_distance = final_sol->total_distance;
         ctx->stats.total_cost = sg_route_solution_cost(final_sol, ctx);
+        {
+            double tw = 0.0;
+            uint32_t wv;
+            if (final_sol->route_waiting) {
+                for (wv = 0; wv < final_sol->num_vehicles; wv++) {
+                    tw += final_sol->route_waiting[wv];
+                }
+            }
+            ctx->stats.total_waiting = tw;
+        }
 
         /* Retain final solution for route/stop export */
         if (ctx->final_solution) {

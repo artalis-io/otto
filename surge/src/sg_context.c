@@ -1146,6 +1146,16 @@ SGStatus sg_vehicle_set_costs(SGContext *ctx, uint32_t vehicle_id,
     return SG_STATUS_OK;
 }
 
+SGStatus sg_vehicle_set_waiting_cost(SGContext *ctx, uint32_t vehicle_id,
+                                      double cost_per_waiting) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles ||
+        !isfinite(cost_per_waiting) || cost_per_waiting < 0.0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->vehicles[vehicle_id].cost_per_waiting = cost_per_waiting;
+    return SG_STATUS_OK;
+}
+
 SGStatus sg_set_unassigned_weight(SGContext *ctx, double weight) {
     if (!ctx || !isfinite(weight) || weight < 0.0) {
         return SG_STATUS_INVALID_ARG;
@@ -1504,6 +1514,19 @@ double sg_solution_get_route_duration(const SGContext *ctx, uint32_t route_index
         return 0.0;
     }
     return ctx->final_solution->route_duration[vid];
+}
+
+double sg_solution_get_route_waiting(const SGContext *ctx, uint32_t route_index) {
+    uint32_t vid;
+
+    if (!ctx || !ctx->final_solution || !ctx->final_solution->route_waiting) {
+        return 0.0;
+    }
+    vid = sg_route_index_to_vehicle(ctx->final_solution, route_index);
+    if (vid == UINT32_MAX) {
+        return 0.0;
+    }
+    return ctx->final_solution->route_waiting[vid];
 }
 
 SGStatus sg_solution_get_route_stop_load(const SGContext *ctx, uint32_t route_index,

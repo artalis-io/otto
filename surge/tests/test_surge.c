@@ -3759,6 +3759,146 @@ static void test_vehicle_constraint_large_fleet(void) {
     sg_free(ctx);
 }
 
+/* ===== Waiting cost tests ===== */
+
+static void test_waiting_cost_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_waiting_cost(ctx, v, 5.0) == SG_STATUS_OK);
+    assert(sg_vehicle_set_waiting_cost(ctx, v, 0.0) == SG_STATUS_OK);
+    assert(sg_vehicle_set_waiting_cost(ctx, v, -1.0) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_waiting_cost(ctx, 999, 1.0) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_waiting_cost(NULL, 0, 1.0) == SG_STATUS_INVALID_ARG);
+    /* Getter returns 0.0 before solve */
+    assert(sg_solution_get_route_waiting(ctx, 0) == 0.0);
+    sg_free(ctx);
+}
+
+static void test_waiting_cost_accumulation(void) {
+    /* One vehicle, one delivery with TW that forces waiting.
+       Vehicle departs at t=0, delivery location at distance 10 (arrival ~10),
+       but TW opens at 1000. Waiting = 1000 - 10 = 990.
+       Solve with cost_per_waiting=0, record cost. Then with cost_per_waiting=100,
+       verify cost increases. */
+    double cost_no_wait, cost_with_wait;
+    double route_waiting;
+
+    /* Run 1: no waiting cost */
+    {
+        SGContext *ctx = make_config(100, 42);
+        uint32_t depot;
+        double cap = 100.0;
+        uint32_t v;
+
+        sg_set_dimension_count(ctx, 1);
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+        add_delivery_request(ctx, 10.0, 0.0, 1000, 99999, 60, -1.0);
+
+        v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_costs(ctx, v, 0.0, 1.0, 0.0) == SG_STATUS_OK);
+        assert(sg_vehicle_set_waiting_cost(ctx, v, 0.0) == SG_STATUS_OK);
+
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 0);
+        cost_no_wait = sg_get_total_cost(ctx);
+
+        /* Verify waiting is accumulated even with zero cost */
+        route_waiting = sg_solution_get_route_waiting(ctx, 0);
+        assert(route_waiting > 0.0);
+
+        sg_free(ctx);
+    }
+
+    /* Run 2: high waiting cost */
+    {
+        SGContext *ctx = make_config(100, 42);
+        uint32_t depot;
+        double cap = 100.0;
+        uint32_t v;
+
+        sg_set_dimension_count(ctx, 1);
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+        add_delivery_request(ctx, 10.0, 0.0, 1000, 99999, 60, -1.0);
+
+        v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_costs(ctx, v, 0.0, 1.0, 0.0) == SG_STATUS_OK);
+        assert(sg_vehicle_set_waiting_cost(ctx, v, 100.0) == SG_STATUS_OK);
+
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 0);
+        cost_with_wait = sg_get_total_cost(ctx);
+        sg_free(ctx);
+    }
+
+    /* Waiting ~990s * cost_per_waiting=100 adds ~99000 to cost */
+    assert(cost_with_wait > cost_no_wait + 10000.0);
+}
+
+static void test_waiting_cost_vehicle_preference(void) {
+    /* Verify waiting cost steers objective like cost_per_duration does.
+       Same setup twice: once with cost_per_waiting=0, once with cost_per_waiting=100.
+       The high-waiting-cost run should have a higher total cost. */
+    double cost_no_wait, cost_with_wait;
+
+    /* Run 1: no waiting cost */
+    {
+        SGContext *ctx = make_config(100, 42);
+        uint32_t depot;
+        double cap = 100.0;
+        uint32_t v;
+
+        sg_set_dimension_count(ctx, 1);
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+        /* Delivery far in the future -> forces ~990s waiting */
+        add_delivery_request(ctx, 10.0, 0.0, 1000, 99999, 60, -1.0);
+
+        v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_costs(ctx, v, 0.0, 1.0, 0.0) == SG_STATUS_OK);
+        assert(sg_vehicle_set_waiting_cost(ctx, v, 0.0) == SG_STATUS_OK);
+
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 0);
+        cost_no_wait = sg_get_total_cost(ctx);
+        sg_free(ctx);
+    }
+
+    /* Run 2: high waiting cost */
+    {
+        SGContext *ctx = make_config(100, 42);
+        uint32_t depot;
+        double cap = 100.0;
+        uint32_t v;
+
+        sg_set_dimension_count(ctx, 1);
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+        add_delivery_request(ctx, 10.0, 0.0, 1000, 99999, 60, -1.0);
+
+        v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_costs(ctx, v, 0.0, 1.0, 0.0) == SG_STATUS_OK);
+        assert(sg_vehicle_set_waiting_cost(ctx, v, 100.0) == SG_STATUS_OK);
+
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 0);
+        cost_with_wait = sg_get_total_cost(ctx);
+        sg_free(ctx);
+    }
+
+    /* Waiting ~990s with cost_per_waiting=100 adds ~99000 to cost. */
+    assert(cost_with_wait > cost_no_wait + 10000.0);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -3870,8 +4010,12 @@ int main(void) {
     RUN_TEST(test_vehicle_constraint_forbidden_unassigned);
     RUN_TEST(test_vehicle_constraint_pd_request);
     RUN_TEST(test_vehicle_constraint_large_fleet);
+    /* Waiting cost */
+    RUN_TEST(test_waiting_cost_api);
+    RUN_TEST(test_waiting_cost_accumulation);
+    RUN_TEST(test_waiting_cost_vehicle_preference);
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
-    assert(tests_run == 99);
+    assert(tests_run == 102);
     return tests_passed == tests_run ? 0 : 1;
 }

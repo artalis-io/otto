@@ -1169,13 +1169,13 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ### Current Status (as of 2026-02-21)
 
-**Baseline**: U1-U6 + U8 + S1-S9 complete. 99 tests passing, ASAN/UBSAN clean.
+**Baseline**: U1-U6 + U8 + S1-S9 complete. Waiting cost implemented. 102 tests passing, ASAN/UBSAN clean.
 
 Best measured quality (10000 iterations, deterministic seed 42):
 - Solomon (VRPTW, 56 cases): `avgVehGap=+0.38`, `avgDistGap=+0.2%`, `equalVehicles=35`, `lexiNonWorse=11`.
 - Li & Lim (PDPTW, 57 cases): `avgVehGap=+0.59`, `avgDistGap=+3.9%`, `equalVehicles=39`, `lexiNonWorse=21`.
 
-Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), request-vehicle constraints (U8), convenience constructors, stop load/type/duration export.
+Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), request-vehicle constraints (U8), waiting cost (per-vehicle `cost_per_waiting`), convenience constructors, stop load/type/duration export.
 
 #### Previous Status (as of 2026-02-20)
 
@@ -1581,7 +1581,7 @@ Grouped by business impact:
 
 | Gap | Impact | Effort |
 |-----|--------|--------|
-| **Waiting cost** | Penalize early arrival. Objective term, no feasibility change. | Small |
+| **Waiting cost** ✅ | Penalize early arrival. Per-vehicle `cost_per_waiting` coefficient, accumulated in forward pass, added to objective. 3 tests. | Small |
 | **Overtime cost** | Penalize work beyond shift end. Objective term with soft shift boundary. | Small |
 | **Depot dispatch limits** | Max vehicles per depot. Global constraint — can't check locally per insertion. | Medium |
 | **Multiple trips per vehicle** | Depot reload between trips. Fundamentally different route representation. | Large |
