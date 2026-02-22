@@ -62,6 +62,8 @@ struct RalphModel {
     double *solution;
     double *dual_solution;
     double *reduced_costs;
+    double *unbounded_ray;
+    int unbounded_ray_valid;
 
     /* MIP-specific */
     double best_bound;
@@ -138,6 +140,35 @@ static void ralph_reset_presolve_report(RalphModel *model) {
 
 static int ralph_is_valid_sense(RalphSense sense) {
     return sense == RALPH_LESS_EQUAL || sense == RALPH_EQUAL || sense == RALPH_GREATER_EQUAL;
+}
+
+static int ralph_probe_lp_status(const RalphModel *model,
+                                 LPModel *probe_model,
+                                 RalphStatus *status_out) {
+    if (!model || !probe_model || !status_out) return -1;
+
+    SimplexSolver *probe = simplex_create(probe_model);
+    if (!probe) return -1;
+
+    probe->max_iterations = (model->max_iterations > 0) ? model->max_iterations : RALPH_DEFAULT_MAX_ITER;
+    probe->time_limit = (model->time_limit > 0.0) ? model->time_limit : RALPH_DEFAULT_TIME_LIMIT;
+    probe->verbose = 0;
+    probe->telemetry_enabled = 0;
+    probe->presolve = 0;
+    probe->pricing_strategy = model->pricing;
+    probe->scaling = 0;
+    probe->crash = model->crash;
+    probe->verify = 0;
+    probe->phase1_pricing = model->phase1_pricing;
+    probe->objective_limit = RALPH_INFINITY;
+    probe->force_two_phase = model->force_two_phase;
+    probe->trace_phase1 = 0;
+    probe->method = 0;  /* Use primal for robust infeasibility checks */
+
+    (void)simplex_solve(probe);
+    *status_out = probe->status;
+    simplex_free(probe);
+    return 0;
 }
 
 static int ralph_set_mip_start_copy(RalphModel *model, const double *x,
@@ -219,6 +250,9 @@ static void ralph_invalidate_solve_state(RalphModel *model) {
     model->dual_solution = NULL;
     free(model->reduced_costs);
     model->reduced_costs = NULL;
+    free(model->unbounded_ray);
+    model->unbounded_ray = NULL;
+    model->unbounded_ray_valid = 0;
     ralph_clear_staged_basis(model);
     if (model->mip_start) {
         if (model->lp_model && model->mip_start_n == model->lp_model->num_vars) {
@@ -296,6 +330,7 @@ void ralph_free(RalphModel *model) {
     free(model->solution);
     free(model->dual_solution);
     free(model->reduced_costs);
+    free(model->unbounded_ray);
     ralph_clear_staged_basis(model);
     ralph_clear_mip_start_internal(model);
     free(model->branch_priorities);
@@ -462,9 +497,12 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     free(model->solution);
     free(model->dual_solution);
     free(model->reduced_costs);
+    free(model->unbounded_ray);
     model->solution = NULL;
     model->dual_solution = NULL;
     model->reduced_costs = NULL;
+    model->unbounded_ray = NULL;
+    model->unbounded_ray_valid = 0;
     ralph_reset_presolve_report(model);
 
     int n_orig = model->lp_model->num_vars;
@@ -952,6 +990,7 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
 
         model->status = model->lp_solver->status;
         model->iteration_count = model->lp_solver->iterations;
+        model->unbounded_ray_valid = 0;
 
         if (model->status == RALPH_STATUS_OPTIMAL ||
             model->status == RALPH_STATUS_IMPRECISE ||
@@ -997,6 +1036,33 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                 }
                 if (model->reduced_costs && model->lp_solver->reduced_costs) {
                     memcpy(model->reduced_costs, model->lp_solver->reduced_costs, n_orig * sizeof(double));
+                }
+            }
+        } else if (model->status == RALPH_STATUS_UNBOUNDED &&
+                   model->lp_solver->unbounded_valid &&
+                   model->lp_solver->unbounded_ray) {
+            model->unbounded_ray = (double*)calloc((size_t)n_orig, sizeof(double));
+            if (model->unbounded_ray) {
+                int mapped = 0;
+                if (presolved && presolved->reduced_model && presolved->var_map) {
+                    int n_reduced = solve_model->num_vars;
+                    for (int j = 0; j < n_reduced; j++) {
+                        int orig = presolved->var_map[j];
+                        if (orig >= 0 && orig < n_orig) {
+                            model->unbounded_ray[orig] = model->lp_solver->unbounded_ray[j];
+                        }
+                    }
+                    mapped = 1;
+                } else if (solve_model->num_vars == n_orig) {
+                    memcpy(model->unbounded_ray, model->lp_solver->unbounded_ray,
+                           (size_t)n_orig * sizeof(double));
+                    mapped = 1;
+                }
+                if (mapped) {
+                    model->unbounded_ray_valid = 1;
+                } else {
+                    free(model->unbounded_ray);
+                    model->unbounded_ray = NULL;
                 }
             }
         }
@@ -1073,6 +1139,117 @@ int ralph_get_farkas_ray(const RalphModel *model, double *ray) {
 
     /* No valid Farkas ray available */
     return -1;
+}
+
+int ralph_get_unbounded_ray(const RalphModel *model, double *ray) {
+    if (!model || !ray) return -1;
+    if (model->status != RALPH_STATUS_UNBOUNDED) return -1;
+
+    int n = ralph_get_num_vars(model);
+    if (n <= 0) return -1;
+
+    if (model->unbounded_ray_valid && model->unbounded_ray) {
+        memcpy(ray, model->unbounded_ray, (size_t)n * sizeof(double));
+        return 0;
+    }
+
+    if (model->lp_solver &&
+        model->lp_solver->unbounded_valid &&
+        model->lp_solver->unbounded_ray &&
+        model->lp_solver->model &&
+        model->lp_solver->model->num_vars == n) {
+        memcpy(ray, model->lp_solver->unbounded_ray, (size_t)n * sizeof(double));
+        return 0;
+    }
+
+    return -1;
+}
+
+int ralph_compute_lp_iis(const RalphModel *model, int *row_flags, int *iis_size) {
+    if (!model || !model->lp_model || !row_flags) return -1;
+    if (iis_size) *iis_size = 0;
+    if (ralph_is_mip(model)) return -1;
+    if (model->status != RALPH_STATUS_INFEASIBLE) return -1;
+
+    int m = model->lp_model->num_cons;
+    if (m <= 0) return -1;
+    memset(row_flags, 0, (size_t)m * sizeof(int));
+
+    LPModel *work = lp_model_copy(model->lp_model);
+    if (!work) return -1;
+
+    int *active_rows = (int*)malloc((size_t)m * sizeof(int));
+    if (!active_rows) {
+        lp_model_free(work);
+        return -1;
+    }
+    for (int i = 0; i < m; i++) active_rows[i] = i;
+    int active_count = m;
+
+    int pos = 0;
+    while (pos < active_count) {
+        LPModel *test = lp_model_copy(work);
+        if (!test) {
+            free(active_rows);
+            lp_model_free(work);
+            return -1;
+        }
+
+        if (lp_model_delete_constraint(test, pos) != 0) {
+            lp_model_free(test);
+            free(active_rows);
+            lp_model_free(work);
+            return -1;
+        }
+
+        RalphStatus probe_status = RALPH_STATUS_ERROR;
+        if (ralph_probe_lp_status(model, test, &probe_status) != 0) {
+            lp_model_free(test);
+            free(active_rows);
+            lp_model_free(work);
+            return -1;
+        }
+        lp_model_free(test);
+
+        if (probe_status == RALPH_STATUS_INFEASIBLE) {
+            /* Row at this position is redundant for infeasibility; drop it. */
+            if (lp_model_delete_constraint(work, pos) != 0) {
+                free(active_rows);
+                lp_model_free(work);
+                return -1;
+            }
+            if (lp_model_finalize(work) != 0) {
+                free(active_rows);
+                lp_model_free(work);
+                return -1;
+            }
+            for (int k = pos + 1; k < active_count; k++) {
+                active_rows[k - 1] = active_rows[k];
+            }
+            active_count--;
+            continue;
+        }
+
+        if (probe_status == RALPH_STATUS_ERROR ||
+            probe_status == RALPH_STATUS_TIME_LIMIT ||
+            probe_status == RALPH_STATUS_ITERATION_LIMIT) {
+            free(active_rows);
+            lp_model_free(work);
+            return -1;
+        }
+
+        pos++;
+    }
+
+    for (int i = 0; i < active_count; i++) {
+        int row = active_rows[i];
+        if (row >= 0 && row < m) row_flags[row] = 1;
+    }
+    if (iis_size) *iis_size = active_count;
+
+    free(active_rows);
+    lp_model_free(work);
+    return 0;
 }
 
 /* ============================================================================

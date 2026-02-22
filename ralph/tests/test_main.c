@@ -795,6 +795,53 @@ void test_farkas_negative_rhs_gsense(void) {
 }
 
 /* ============================================================================
+ * Test: Unbounded Ray API
+ * ============================================================================ */
+void test_unbounded_ray_api(void) {
+    printf("\n=== Test: Unbounded Ray API ===\n");
+
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Unbounded ray: model created");
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "method", 0);   /* Primal path */
+    ralph_set_int_param(model, "presolve", 0); /* Keep direct mapping */
+
+    /* min -x, s.t. x >= 0  => unbounded */
+    ralph_add_var(model, 0.0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+    int idx[] = {0};
+    double val[] = {1.0};
+    ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 0.0);
+
+    ralph_optimize_lp(model);
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_UNBOUNDED,
+           "Unbounded ray: status is UNBOUNDED");
+
+    double ray[1] = {0.0};
+    ASSERT(ralph_get_unbounded_ray(model, ray) == 0,
+           "Unbounded ray: retrieved successfully");
+    ASSERT(ray[0] > 1e-8, "Unbounded ray: positive improving direction");
+    ASSERT((-1.0 * ray[0]) < -1e-8, "Unbounded ray: improves objective for minimization");
+
+    ASSERT(ralph_get_unbounded_ray(NULL, ray) == -1,
+           "Unbounded ray: NULL model rejected");
+    ASSERT(ralph_get_unbounded_ray(model, NULL) == -1,
+           "Unbounded ray: NULL output rejected");
+
+    ralph_free(model);
+
+    /* Non-unbounded model should reject ray query. */
+    model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    ralph_optimize_lp(model);
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "Unbounded ray: control model optimal");
+    ASSERT(ralph_get_unbounded_ray(model, ray) == -1,
+           "Unbounded ray: unavailable for non-unbounded status");
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Test: API Functions
  * ============================================================================ */
 void test_api_functions(void) {
@@ -2488,6 +2535,95 @@ void test_row_col_deletion_api(void) {
     ASSERT(ralph_delete_constraint(model, 99) == -1, "Delete API: invalid row delete rejected");
     ASSERT(ralph_delete_var(model, 99) == -1, "Delete API: invalid var delete rejected");
 
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: LP IIS/Conflict API
+ * ============================================================================ */
+void test_lp_iis_api(void) {
+    printf("\n=== Test: LP IIS API ===\n");
+
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "IIS API: model created");
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "method", 0);
+    ralph_set_int_param(model, "presolve", 0);
+
+    /* Variables x, y >= 0 */
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 0.0, RALPH_CONTINUOUS); /* x */
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 0.0, RALPH_CONTINUOUS); /* y */
+
+    /* Infeasible core: x >= 2 and x <= 1 */
+    int r0_idx[] = {0}; double r0_val[] = {1.0};
+    int r1_idx[] = {0}; double r1_val[] = {1.0};
+    /* Redundant rows (not needed for infeasibility) */
+    int r2_idx[] = {1}; double r2_val[] = {1.0};
+    int r3_idx[] = {0, 1}; double r3_val[] = {1.0, 1.0};
+    ralph_add_constraint(model, 1, r0_idx, r0_val, RALPH_GREATER_EQUAL, 2.0); /* row 0 */
+    ralph_add_constraint(model, 1, r1_idx, r1_val, RALPH_LESS_EQUAL, 1.0);    /* row 1 */
+    ralph_add_constraint(model, 1, r2_idx, r2_val, RALPH_GREATER_EQUAL, 0.0); /* row 2 */
+    ralph_add_constraint(model, 2, r3_idx, r3_val, RALPH_GREATER_EQUAL, 0.0); /* row 3 */
+
+    ralph_optimize_lp(model);
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_INFEASIBLE,
+           "IIS API: base model is infeasible");
+
+    int flags[4] = {0, 0, 0, 0};
+    int iis_size = 0;
+    ASSERT(ralph_compute_lp_iis(model, flags, &iis_size) == 0,
+           "IIS API: extraction succeeds");
+    ASSERT(iis_size == 2, "IIS API: expected IIS size is 2");
+    ASSERT(flags[0] == 1, "IIS API: row 0 is in IIS");
+    ASSERT(flags[1] == 1, "IIS API: row 1 is in IIS");
+    ASSERT(flags[2] == 0, "IIS API: row 2 excluded from IIS");
+    ASSERT(flags[3] == 0, "IIS API: row 3 excluded from IIS");
+
+    /* Irreducibility check: removing any IIS row makes subsystem feasible. */
+    for (int drop = 0; drop < 4; drop++) {
+        if (!flags[drop]) continue;
+        RalphModel *sub = ralph_create();
+        ASSERT(sub != NULL, "IIS API: subsystem model created");
+        ralph_set_obj_sense(sub, RALPH_MINIMIZE);
+        ralph_set_int_param(sub, "method", 0);
+        ralph_set_int_param(sub, "presolve", 0);
+        ralph_add_var(sub, 0.0, RALPH_INFINITY, 0.0, RALPH_CONTINUOUS);
+        ralph_add_var(sub, 0.0, RALPH_INFINITY, 0.0, RALPH_CONTINUOUS);
+        ralph_add_constraint(sub, 1, r0_idx, r0_val, RALPH_GREATER_EQUAL, 2.0); /* row 0 */
+        ralph_add_constraint(sub, 1, r1_idx, r1_val, RALPH_LESS_EQUAL, 1.0);    /* row 1 */
+        ralph_add_constraint(sub, 1, r2_idx, r2_val, RALPH_GREATER_EQUAL, 0.0); /* row 2 */
+        ralph_add_constraint(sub, 2, r3_idx, r3_val, RALPH_GREATER_EQUAL, 0.0); /* row 3 */
+
+        /* Keep only IIS rows except the dropped one (delete in reverse index order). */
+        for (int row = 3; row >= 0; row--) {
+            int keep = flags[row] && row != drop;
+            if (!keep) {
+                ASSERT(ralph_delete_constraint(sub, row) == 0,
+                       "IIS API: row deletion succeeds for irreducibility check");
+            }
+        }
+
+        ralph_optimize_lp(sub);
+        ASSERT(ralph_get_status(sub) != RALPH_STATUS_INFEASIBLE,
+               "IIS API: dropping any IIS row removes infeasibility");
+        ralph_free(sub);
+    }
+
+    ASSERT(ralph_compute_lp_iis(NULL, flags, &iis_size) == -1,
+           "IIS API: NULL model rejected");
+    ASSERT(ralph_compute_lp_iis(model, NULL, &iis_size) == -1,
+           "IIS API: NULL flags rejected");
+
+    ralph_free(model);
+
+    model = ralph_create();
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    ralph_optimize_lp(model);
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "IIS API: control model optimal");
+    ASSERT(ralph_compute_lp_iis(model, flags, &iis_size) == -1,
+           "IIS API: rejects non-infeasible status");
     ralph_free(model);
 }
 
@@ -5979,6 +6115,7 @@ int main(int argc, char **argv) {
     test_farkas_sum_conflict();
     test_farkas_equality();
     test_farkas_negative_rhs_gsense();
+    test_unbounded_ray_api();
     test_larger_lp();
     test_network_flow();  /* Regression test for objective computation bug */
 
@@ -6011,6 +6148,7 @@ int main(int argc, char **argv) {
         test_constraint_query_api();
         test_constraint_batch_edit_api();
         test_row_col_deletion_api();
+        test_lp_iis_api();
         test_lazy_constraints();
 
         /* Branching control tests */
