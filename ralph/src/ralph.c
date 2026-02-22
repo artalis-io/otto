@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <stdint.h>
+#include <time.h>
 #include "ralph.h"
 #include "lp.h"
 #include "mip.h"
@@ -84,8 +85,15 @@ struct RalphModel {
     RalphBranchCallback branch_callback;
     int has_branch_callback;
 
+    /* LP-only progress/cancel callbacks (never propagated to MIP callbacks) */
+    RalphLPProgressCallback lp_progress_callback;
+    int has_lp_progress_callback;
+    RalphLPCancelCallback lp_cancel_callback;
+    int has_lp_cancel_callback;
+
     /* Statistics */
     int iteration_count;
+    RalphPresolveReport last_presolve_report;
 
     /* Basis staged before first optimize() (applied when simplex tableau is created) */
     int staged_basis_m;
@@ -121,6 +129,11 @@ static void ralph_clear_mip_start_internal(RalphModel *model) {
     model->mip_start_n = 0;
     model->mip_start_nnz = 0;
     model->mip_start_status = RALPH_MIP_START_NONE;
+}
+
+static void ralph_reset_presolve_report(RalphModel *model) {
+    if (!model) return;
+    memset(&model->last_presolve_report, 0, sizeof(model->last_presolve_report));
 }
 
 static int ralph_set_mip_start_copy(RalphModel *model, const double *x,
@@ -216,6 +229,7 @@ static void ralph_invalidate_solve_state(RalphModel *model) {
     model->best_bound = 0.0;
     model->node_count = 0;
     model->iteration_count = 0;
+    ralph_reset_presolve_report(model);
 }
 
 /* ============================================================================
@@ -264,6 +278,7 @@ RalphModel* ralph_create(void) {
     model->mip_start_nnz = 0;
     model->mip_start_status = RALPH_MIP_START_NONE;
     model->mip_start_repair_mode = RALPH_MIP_START_REPAIR_STRICT;
+    ralph_reset_presolve_report(model);
 
     return model;
 }
@@ -446,6 +461,7 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     model->solution = NULL;
     model->dual_solution = NULL;
     model->reduced_costs = NULL;
+    ralph_reset_presolve_report(model);
 
     int n_orig = model->lp_model->num_vars;
     int m_orig = model->lp_model->num_cons;
@@ -541,7 +557,21 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     }
 
     if (use_presolve > 0) {
+        clock_t presolve_start = clock();
         presolved = presolve_with_mask(model->lp_model, use_mask);
+        clock_t presolve_end = clock();
+        model->last_presolve_report.used = 1;
+        model->last_presolve_report.mask = use_mask;
+        model->last_presolve_report.presolve_time_ms =
+            1000.0 * (double)(presolve_end - presolve_start) / CLOCKS_PER_SEC;
+        if (presolved) {
+            model->last_presolve_report.rounds = presolved->rounds;
+            model->last_presolve_report.vars_removed = presolved->vars_removed;
+            model->last_presolve_report.cons_removed = presolved->cons_removed;
+            model->last_presolve_report.bounds_tightened = presolved->bounds_tightened;
+            model->last_presolve_report.matrix_rank = presolved->matrix_rank;
+            model->last_presolve_report.redundant_rows_found = presolved->redundant_rows_found;
+        }
         if (presolved && presolved->reduced_model) {
             solve_model = presolved->reduced_model;
             if (model->verbose) {
@@ -890,6 +920,10 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         model->lp_solver->force_two_phase = model->force_two_phase;
         model->lp_solver->trace_phase1 = model->trace_phase1;
         model->lp_solver->method = model->method;
+        model->lp_solver->lp_progress_callback = model->lp_progress_callback;
+        model->lp_solver->has_lp_progress_callback = model->has_lp_progress_callback;
+        model->lp_solver->lp_cancel_callback = model->lp_cancel_callback;
+        model->lp_solver->has_lp_cancel_callback = model->has_lp_cancel_callback;
         if (model->dual_bound_flip >= 0)
             model->lp_solver->use_dual_bound_flip = model->dual_bound_flip;
         if (model->dual_steepest_edge >= 0)
@@ -1058,6 +1092,84 @@ int ralph_get_node_count(const RalphModel *model) {
 
 int ralph_get_iterations(const RalphModel *model) {
     return model ? model->iteration_count : 0;
+}
+
+static const SimplexSolver* ralph_get_last_lp_solver_for_reports(const RalphModel *model) {
+    if (!model) return NULL;
+    if (model->lp_solver) return model->lp_solver;
+    if (model->mip_solver && model->mip_solver->lp_solver) {
+        return model->mip_solver->lp_solver;
+    }
+    return NULL;
+}
+
+int ralph_get_last_presolve_report(const RalphModel *model, RalphPresolveReport *report) {
+    if (!model || !report) return -1;
+    *report = model->last_presolve_report;
+    return 0;
+}
+
+int ralph_get_last_lp_telemetry(const RalphModel *model, RalphLPSolverTelemetry *telemetry) {
+    if (!model || !telemetry) return -1;
+
+    memset(telemetry, 0, sizeof(*telemetry));
+    const SimplexSolver *lp = ralph_get_last_lp_solver_for_reports(model);
+    if (!lp) return 0;
+
+    LPSolverTelemetrySnapshot snapshot;
+    memset(&snapshot, 0, sizeof(snapshot));
+    lp_telemetry_snapshot_solver(lp, &snapshot);
+
+    if (sizeof(*telemetry) != sizeof(snapshot)) return -1;
+    memcpy(telemetry, &snapshot, sizeof(*telemetry));
+    return 0;
+}
+
+int ralph_get_last_lu_telemetry(const RalphModel *model, RalphLUTelemetry *telemetry) {
+    if (!model || !telemetry) return -1;
+
+    memset(telemetry, 0, sizeof(*telemetry));
+    const SimplexSolver *lp = ralph_get_last_lp_solver_for_reports(model);
+    if (!lp || !lp->tableau || !lp->tableau->lu) return 0;
+
+    LUTelemetrySnapshot snapshot;
+    memset(&snapshot, 0, sizeof(snapshot));
+    lp_telemetry_snapshot_lu(lp->tableau->lu, &snapshot);
+
+    if (sizeof(*telemetry) != sizeof(snapshot)) return -1;
+    memcpy(telemetry, &snapshot, sizeof(*telemetry));
+    return 0;
+}
+
+int ralph_get_solution_quality(const RalphModel *model, RalphSolutionQuality *quality) {
+    if (!model || !quality) return -1;
+
+    memset(quality, 0, sizeof(*quality));
+    quality->status = model->status;
+
+    const SimplexSolver *lp = ralph_get_last_lp_solver_for_reports(model);
+    if (!lp) {
+        quality->verify_enabled = model->verify ? 1 : 0;
+        return 0;
+    }
+
+    quality->verify_enabled = lp->verify ? 1 : 0;
+    if (!quality->verify_enabled) return 0;
+
+    if (model->status != RALPH_STATUS_OPTIMAL &&
+        model->status != RALPH_STATUS_IMPRECISE &&
+        model->status != RALPH_STATUS_OBJ_LIMIT) {
+        return 0;
+    }
+
+    quality->available = 1;
+    quality->primal_infeas = lp->verify_primal_infeas;
+    quality->bound_infeas = lp->verify_bound_infeas;
+    quality->dual_infeas = lp->verify_dual_infeas;
+    quality->comp_slack = lp->verify_comp_slack;
+    quality->obj_error = lp->verify_obj_error;
+    quality->cond_estimate = lp->verify_cond_estimate;
+    return 0;
 }
 
 /* ============================================================================
@@ -1604,6 +1716,32 @@ void ralph_set_branch_callback(RalphModel *model, const RalphBranchCallback *cal
     } else {
         memset(&model->branch_callback, 0, sizeof(RalphBranchCallback));
         model->has_branch_callback = 0;
+    }
+}
+
+void ralph_set_lp_progress_callback(RalphModel *model,
+                                    const RalphLPProgressCallback *callback) {
+    if (!model) return;
+
+    if (callback) {
+        model->lp_progress_callback = *callback;
+        model->has_lp_progress_callback = (callback->on_progress != NULL) ? 1 : 0;
+    } else {
+        memset(&model->lp_progress_callback, 0, sizeof(RalphLPProgressCallback));
+        model->has_lp_progress_callback = 0;
+    }
+}
+
+void ralph_set_lp_cancel_callback(RalphModel *model,
+                                  const RalphLPCancelCallback *callback) {
+    if (!model) return;
+
+    if (callback) {
+        model->lp_cancel_callback = *callback;
+        model->has_lp_cancel_callback = (callback->should_cancel != NULL) ? 1 : 0;
+    } else {
+        memset(&model->lp_cancel_callback, 0, sizeof(RalphLPCancelCallback));
+        model->has_lp_cancel_callback = 0;
     }
 }
 

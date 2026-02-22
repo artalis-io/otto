@@ -621,6 +621,18 @@ typedef struct SimplexSolver {
     double objective_limit; /* Early-exit when obj >= limit (internal min space), default RALPH_INFINITY */
     int phase1_pricing;     /* Override pricing for Phase 1: 0=Dantzig, -1=disabled (use solver pricing) */
     int trace_phase1;       /* 1 = emit deterministic Phase-1 pivot-failure trace */
+    RalphLPProgressCallback lp_progress_callback; /* LP-only progress callback */
+    int has_lp_progress_callback; /* 1 if lp_progress_callback is active */
+    RalphLPCancelCallback lp_cancel_callback; /* LP-only cancellation poll callback */
+    int has_lp_cancel_callback; /* 1 if lp_cancel_callback is active */
+    double progress_start_ms; /* Solve start wall-clock in ms for callback elapsed time */
+    int warm_basis_m;       /* Staged warm-start basis rows (constraints) */
+    int warm_basis_n;       /* Staged warm-start basis cols (extended vars) */
+    int *warm_basis;        /* Staged basic variable indices (size warm_basis_m) */
+    VarStatus *warm_var_status; /* Staged variable statuses (size warm_basis_n) */
+    int warm_basis_last_attempted; /* 1 if last simplex_solve attempted warm basis apply */
+    int warm_basis_last_applied;   /* 1 if last simplex_solve accepted staged warm basis */
+    int warm_basis_last_rejected;  /* 1 if last simplex_solve rejected staged warm basis */
 
     /* Scaling factors (used if scaling enabled) */
     double *row_scale;      /* Row scaling factors */
@@ -836,6 +848,9 @@ void lp_model_free(LPModel *model);
 int lp_model_add_var(LPModel *model, double lb, double ub, double obj, char type);
 int lp_model_add_constraint(LPModel *model, int nnz, const int *indices,
                             const double *values, char sense, double rhs);
+int lp_model_set_coefficient(LPModel *model, int constraint, int var, double value);
+int lp_model_set_coefficients(LPModel *model, int count, const int *constraints,
+                              const int *vars, const double *values);
 int lp_model_finalize(LPModel *model);
 LPModel* lp_model_copy(const LPModel *model);
 
@@ -883,10 +898,16 @@ void tableau_free(SimplexTableau *tableau);
 int tableau_compute_solution(SimplexTableau *tableau);
 int tableau_compute_reduced_costs(SimplexTableau *tableau);
 int tableau_refactorize(SimplexTableau *tableau);
+int tableau_apply_warm_basis(SimplexTableau *tableau, int m, int n,
+                             const int *basis, const VarStatus *var_status);
+int tableau_apply_structural_bounds(SimplexTableau *tableau, int num_struct_vars,
+                                    const double *lb, const double *ub);
 
 /* Simplex solver functions */
 SimplexSolver* simplex_create(LPModel *model);
 void simplex_free(SimplexSolver *solver);
+int simplex_set_warm_basis(SimplexSolver *solver, int m, int n,
+                           const int *basis, const VarStatus *var_status);
 int simplex_solve(SimplexSolver *solver);
 
 /* Dual simplex */

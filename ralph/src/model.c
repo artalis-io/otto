@@ -331,6 +331,127 @@ int lp_model_add_constraint(LPModel *model, int nnz, const int *indices,
     return idx;
 }
 
+/* Set/update/remove one coefficient within a row-oriented constraint entry.
+ * Returns delta nnz via delta_nnz: +1 insert, -1 remove, 0 replace/no-op. */
+static int set_constraint_entry_coef(ConstraintEntry *entry, int var, double value,
+                                     int *delta_nnz) {
+    if (!entry) return -1;
+    if (delta_nnz) *delta_nnz = 0;
+
+    int pos = -1;
+    for (int k = 0; k < entry->nnz; k++) {
+        if (entry->indices[k] == var) {
+            pos = k;
+            break;
+        }
+    }
+
+    /* Near-zero means remove from sparsity pattern. */
+    if (fabs(value) <= 1e-15) {
+        if (pos >= 0) {
+            int last = entry->nnz - 1;
+            if (pos != last) {
+                entry->indices[pos] = entry->indices[last];
+                entry->values[pos] = entry->values[last];
+            }
+            entry->nnz--;
+            if (delta_nnz) *delta_nnz = -1;
+        }
+        return 0;
+    }
+
+    if (pos >= 0) {
+        entry->values[pos] = value;
+        return 0;
+    }
+
+    /* Insert new non-zero. */
+    if (entry->nnz >= entry->capacity) {
+        int new_cap = entry->capacity > 0 ? entry->capacity * 2 : 4;
+        int *new_indices = (int*)realloc(entry->indices, new_cap * sizeof(int));
+        double *new_values = (double*)realloc(entry->values, new_cap * sizeof(double));
+
+        if (!new_indices || !new_values) {
+            /* Preserve any successful realloc to avoid leaks. */
+            if (new_indices) entry->indices = new_indices;
+            if (new_values) entry->values = new_values;
+            return -1;
+        }
+
+        entry->indices = new_indices;
+        entry->values = new_values;
+        entry->capacity = new_cap;
+    }
+
+    entry->indices[entry->nnz] = var;
+    entry->values[entry->nnz] = value;
+    entry->nnz++;
+    if (delta_nnz) *delta_nnz = 1;
+    return 0;
+}
+
+int lp_model_set_coefficient(LPModel *model, int constraint, int var, double value) {
+    if (!model) return -1;
+    if (constraint < 0 || constraint >= model->num_cons) return -1;
+    if (var < 0 || var >= model->num_vars) return -1;
+
+    /* If finalized, switch back to editable row build-state first. */
+    if (model->A != NULL) {
+        if (rebuild_build_state(model) != 0) {
+            return -1;
+        }
+    }
+    if (!model->build_state) return -1;
+    if (constraint >= model->build_state->con_count) return -1;
+
+    ConstraintEntry *entry = model->build_state->constraints[constraint];
+    int delta_nnz = 0;
+    if (set_constraint_entry_coef(entry, var, value, &delta_nnz) != 0) {
+        return -1;
+    }
+
+    model->num_elements += delta_nnz;
+    if (model->num_elements < 0) model->num_elements = 0;
+    return 0;
+}
+
+int lp_model_set_coefficients(LPModel *model, int count, const int *constraints,
+                              const int *vars, const double *values) {
+    if (!model || count < 0) return -1;
+    if (count == 0) return 0;
+    if (!constraints || !vars || !values) return -1;
+
+    /* Validate indices first to avoid partial edits on bad input. */
+    for (int i = 0; i < count; i++) {
+        if (constraints[i] < 0 || constraints[i] >= model->num_cons) return -1;
+        if (vars[i] < 0 || vars[i] >= model->num_vars) return -1;
+    }
+
+    if (model->A != NULL) {
+        if (rebuild_build_state(model) != 0) {
+            return -1;
+        }
+    }
+    if (!model->build_state) return -1;
+
+    int delta_total = 0;
+    for (int i = 0; i < count; i++) {
+        int row = constraints[i];
+        if (row < 0 || row >= model->build_state->con_count) return -1;
+
+        int delta_nnz = 0;
+        if (set_constraint_entry_coef(model->build_state->constraints[row],
+                                      vars[i], values[i], &delta_nnz) != 0) {
+            return -1;
+        }
+        delta_total += delta_nnz;
+    }
+
+    model->num_elements += delta_total;
+    if (model->num_elements < 0) model->num_elements = 0;
+    return 0;
+}
+
 /* Finalize model: build sparse matrix from constraints */
 int lp_model_finalize(LPModel *model) {
     if (!model || model->A) return 0;  /* Already finalized or error */

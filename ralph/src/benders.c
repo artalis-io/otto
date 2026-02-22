@@ -45,6 +45,15 @@ static double benders_farkas_rhs_dot(const LPModel *sub, const double *ray) {
     return dot;
 }
 
+/* Explicitly drop the current subproblem tableau to force a cold start on
+ * the next simplex_solve() call. Used when warm_start_subproblems=0. */
+static void benders_force_cold_subproblem(SimplexSolver *solver) {
+    if (!solver || !solver->tableau) return;
+    tableau_free(solver->tableau);
+    solver->tableau = NULL;
+    solver->farkas_valid = 0;
+}
+
 /* ============================================================================
  * Context Creation/Destruction
  * ============================================================================ */
@@ -63,6 +72,8 @@ BendersContext* benders_create(LPModel *model, const RalphBendersConfig *config)
     if (ctx->config.gap_tolerance <= 0) ctx->config.gap_tolerance = 1e-6;
     if (ctx->config.max_iterations <= 0) ctx->config.max_iterations = 1000;
     if (ctx->config.num_scenarios <= 0) ctx->config.num_scenarios = 1;
+    ctx->config.warm_start_master = ctx->config.warm_start_master ? 1 : 0;
+    ctx->config.warm_start_subproblems = ctx->config.warm_start_subproblems ? 1 : 0;
 
     int n = model->num_vars;
     int m = model->num_cons;
@@ -166,6 +177,7 @@ void benders_free(BendersContext *ctx) {
     }
 
     free(ctx->master_solution);
+    free(ctx->master_start);
     free(ctx->full_solution);
 
     free(ctx);
@@ -582,9 +594,16 @@ int benders_solve_subproblem(BendersContext *ctx, int scenario,
 
     SimplexSolver *solver = ctx->sub_solvers[scenario];
 
-    /* Load warm start basis if available */
-    if (ctx->config.warm_start_subproblems && ctx->sub_bases[scenario]) {
-        /* Basis loading would go here - for now just re-solve */
+    if (!ctx->config.warm_start_subproblems) {
+        /* Orthogonal cold-start mode: explicitly drop tableau state so this
+         * solve does not reuse prior basis/tableau information. */
+        benders_force_cold_subproblem(solver);
+    }
+
+    if (solver->tableau && ctx->config.warm_start_subproblems) {
+        ctx->subproblem_warm_starts++;
+    } else {
+        ctx->subproblem_cold_starts++;
     }
 
     /* Solve */
@@ -604,11 +623,6 @@ int benders_solve_subproblem(BendersContext *ctx, int scenario,
                 }
                 duals[k] = solver->dual_solution[lc->sub_row_idx];
             }
-        }
-
-        /* Save basis for warm start */
-        if (ctx->config.warm_start_subproblems) {
-            /* Basis saving would go here */
         }
 
     } else if (solver->status == RALPH_STATUS_INFEASIBLE) {
@@ -1151,6 +1165,36 @@ int benders_solve_classic(BendersContext *ctx) {
         }
     }
 
+    if (ctx->config.warm_start_master &&
+        ctx->config.initial_master_solution &&
+        !ctx->master_start) {
+        int n_master = ctx->master_model->num_vars;
+        ctx->master_start = (double*)calloc((size_t)n_master, sizeof(double));
+        if (!ctx->master_start) {
+            free(duals);
+            free(farkas);
+            return RALPH_STATUS_ERROR;
+        }
+
+        for (int j = 0; j < ctx->num_master_vars; j++) {
+            int orig_j = ctx->master_to_orig[j];
+            ctx->master_start[j] = ctx->config.initial_master_solution[orig_j];
+        }
+
+        if (ctx->theta_auto_created &&
+            ctx->theta_in_master >= 0 &&
+            ctx->theta_in_master < n_master) {
+            ctx->master_start[ctx->theta_in_master] =
+                ctx->master_model->lb[ctx->theta_in_master];
+        }
+    }
+
+    if (ctx->config.warm_start_master && ctx->master_start) {
+        (void)mip_set_start(ctx->master_solver,
+                            ctx->master_start,
+                            ctx->master_model->num_vars);
+    }
+
     for (int iter = 0; iter < ctx->config.max_iterations; iter++) {
         ctx->iterations = iter + 1;
 
@@ -1160,6 +1204,8 @@ int benders_solve_classic(BendersContext *ctx) {
 
         /* Solve master problem */
         int ret = mip_solve(ctx->master_solver);
+        ctx->master_warm_starts_attempted += ctx->master_solver->mip_start_attempted;
+        ctx->master_warm_starts_accepted += ctx->master_solver->mip_start_accepted;
         RalphStatus master_status = ctx->master_solver->status;
 
         if (ret != 0 || master_status != RALPH_STATUS_OPTIMAL) {
@@ -1181,6 +1227,17 @@ int benders_solve_classic(BendersContext *ctx) {
         double master_obj = ctx->master_solver->best_obj;
         memcpy(ctx->master_solution, ctx->master_solver->best_solution,
                ctx->master_model->num_vars * sizeof(double));
+
+        if (ctx->config.warm_start_master) {
+            int n_master = ctx->master_model->num_vars;
+            if (!ctx->master_start) {
+                ctx->master_start = (double*)malloc((size_t)n_master * sizeof(double));
+            }
+            if (ctx->master_start) {
+                memcpy(ctx->master_start, ctx->master_solution,
+                       (size_t)n_master * sizeof(double));
+            }
+        }
 
         double theta_val = ctx->master_solution[ctx->theta_in_master];
 
@@ -1363,6 +1420,12 @@ int benders_solve_classic(BendersContext *ctx) {
                 ctx->master_solver->branch_directions = md;
             }
         }
+
+        if (ctx->config.warm_start_master && ctx->master_start) {
+            (void)mip_set_start(ctx->master_solver,
+                                ctx->master_start,
+                                ctx->master_model->num_vars);
+        }
     }
 
     if (final_status == RALPH_STATUS_UNKNOWN) {
@@ -1474,6 +1537,11 @@ int benders_solve(
         result->optimality_cuts = ctx->optimality_cuts_added;
         result->feasibility_cuts = ctx->feasibility_cuts_added;
         result->nodes_explored = 0;
+        result->subproblems_solved = ctx->subproblems_solved;
+        result->master_warm_starts_attempted = ctx->master_warm_starts_attempted;
+        result->master_warm_starts_accepted = ctx->master_warm_starts_accepted;
+        result->subproblem_warm_starts = ctx->subproblem_warm_starts;
+        result->subproblem_cold_starts = ctx->subproblem_cold_starts;
         result->solve_time = ctx->total_time;
     }
 

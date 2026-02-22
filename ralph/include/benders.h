@@ -97,6 +97,7 @@ typedef struct {
 
     /* Solution */
     double *master_solution;    /* Master variable values */
+    double *master_start;       /* Staged master incumbent warm start */
     double *full_solution;      /* Full solution in original space */
     double best_ub;             /* Best upper bound (primal) */
     double best_lb;             /* Best lower bound (dual) */
@@ -106,6 +107,10 @@ typedef struct {
     int optimality_cuts_added;
     int feasibility_cuts_added;
     int subproblems_solved;
+    int master_warm_starts_attempted;
+    int master_warm_starts_accepted;
+    int subproblem_warm_starts;
+    int subproblem_cold_starts;
     double total_time;
 
 } BendersContext;

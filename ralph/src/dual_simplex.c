@@ -102,6 +102,71 @@ static void extract_farkas_ray_dual(SimplexSolver *solver) {
     }
 }
 
+static int dual_run_user_callbacks(SimplexSolver *solver,
+                                   const SimplexTableau *tab,
+                                   int iter,
+                                   int force_emit,
+                                   int honor_progress_cancel) {
+    if (!solver) return 0;
+
+    if (solver->has_lp_cancel_callback && solver->lp_cancel_callback.should_cancel) {
+        if (solver->lp_cancel_callback.should_cancel(solver->lp_cancel_callback.user_data) != 0) {
+            solver->status = RALPH_STATUS_TIME_LIMIT;
+            solver->iterations = iter;
+            return 1;
+        }
+    }
+
+    if (!solver->has_lp_progress_callback || !solver->lp_progress_callback.on_progress) {
+        return 0;
+    }
+
+    int stride = solver->lp_progress_callback.every_n_iterations;
+    if (stride <= 0) stride = 1;
+    if (!force_emit && iter > 0 && (iter % stride) != 0) {
+        return 0;
+    }
+
+    RalphLPProgressInfo info;
+    memset(&info, 0, sizeof(info));
+    info.phase = RALPH_LP_PROGRESS_PHASE_DUAL;
+    info.iteration = iter;
+    info.status = solver->status;
+    if (solver->progress_start_ms > 0.0) {
+        double elapsed_ms = lp_telemetry_now_ms() - solver->progress_start_ms;
+        if (elapsed_ms > 0.0) info.elapsed_time_sec = elapsed_ms / 1000.0;
+    }
+    if (solver->model) {
+        if (tab) {
+            info.objective = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
+        } else {
+            info.objective = solver->obj_value;
+        }
+    }
+
+    if (solver->verify &&
+        (solver->status == RALPH_STATUS_OPTIMAL ||
+         solver->status == RALPH_STATUS_IMPRECISE ||
+         solver->status == RALPH_STATUS_OBJ_LIMIT)) {
+        info.quality_available = 1;
+        info.primal_infeas = solver->verify_primal_infeas;
+        info.bound_infeas = solver->verify_bound_infeas;
+        info.dual_infeas = solver->verify_dual_infeas;
+        info.comp_slack = solver->verify_comp_slack;
+        info.obj_error = solver->verify_obj_error;
+        info.cond_estimate = solver->verify_cond_estimate;
+    }
+
+    int rc = solver->lp_progress_callback.on_progress(
+        solver->lp_progress_callback.user_data, &info);
+    if (honor_progress_cancel && rc != 0) {
+        solver->status = RALPH_STATUS_TIME_LIMIT;
+        solver->iterations = iter;
+        return 1;
+    }
+    return 0;
+}
+
 /* ============================================================================
  * Dual Ratio Test
  * ============================================================================ */
@@ -933,6 +998,12 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
 
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         solver->iterations = iter;
+        if (dual_run_user_callbacks(solver, tab, iter, 0, 1) != 0) {
+            remove_bound_perturbation(tab);
+            solver->status = RALPH_STATUS_TIME_LIMIT;
+            solver->iterations = iter;
+            return -1;
+        }
 
         /* T3.1: Objective limit early-exit (internal minimization space) */
         if (solver->objective_limit < RALPH_INFINITY &&
@@ -941,6 +1012,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
             tableau_compute_solution(tab);
             solver->status = RALPH_STATUS_OBJ_LIMIT;
             solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
+            dual_run_user_callbacks(solver, tab, iter, 1, 0);
             return 0;
         }
 
@@ -1156,6 +1228,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                 for (int j = 0; j < n_orig; j++)
                     solver->solution[j] = tab->x[j];
             }
+            dual_run_user_callbacks(solver, tab, iter, 1, 0);
             return 0;
         }
 
@@ -1172,6 +1245,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                 remove_bound_perturbation(tab);
                 extract_farkas_ray_dual(solver);
                 solver->status = RALPH_STATUS_INFEASIBLE;
+                dual_run_user_callbacks(solver, tab, iter, 1, 0);
                 return 1;
             }
         }
@@ -1265,6 +1339,9 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
 
     /* Exceeded max iterations — FAILED */
     remove_bound_perturbation(tab);
+    solver->status = RALPH_STATUS_ITERATION_LIMIT;
+    solver->iterations = solver->max_iterations;
+    dual_run_user_callbacks(solver, tab, solver->iterations, 1, 0);
     return -1;
 }
 

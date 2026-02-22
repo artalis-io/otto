@@ -398,6 +398,80 @@ Progress (2026-02-22): P1.1 (coefficient-edit APIs + explicit invalidation seman
 
 Execution rule: each sub-phase lands behind deterministic regression gates before moving forward.
 
+### Consolidated LP API Parity Plan (execute in order)
+
+Goal: close LP-only API gaps versus production-grade solver APIs while preserving current
+LP/MIP correctness and performance baselines. This is the execution order to address items
+one by one.
+
+0. Baseline lock + gate discipline
+- Keep the current NETLIB/API baseline as the reference.
+- Required gate after every item:
+  - `make -C ralph test`
+  - `make -C ralph test-netlib-gate-small`
+- Additional gate every 2 items (or when API contracts change):
+  - `make -C ralph test-netlib-gate`
+
+1. Presolve report API (highest impact, low risk) ✅ (2026-02-22)
+- Add public `RalphPresolveReport` to `ralph.h`.
+- Add `ralph_get_last_presolve_report()` for last solve.
+- Expose at minimum: `used`, `mask`, `rounds`, `vars_removed`, `cons_removed`,
+  `bounds_tightened`, `matrix_rank`, `redundant_rows_found`, `presolve_time_ms`.
+- Add unit tests for LP and MIP solve paths with presolve on/off.
+
+2. Public LP/LU telemetry snapshot API ✅ (2026-02-22)
+- Add public API-safe snapshot structs and getters in `ralph.h`.
+- Wrap existing internal telemetry snapshots so callers do not include `lp.h`.
+- Add tests for `telemetry=1` and `telemetry=0` behavior.
+
+3. Public solution-quality/KKT API ✅ (2026-02-22)
+- Add `ralph_get_solution_quality()` to expose verification metrics:
+  `primal_infeas`, `bound_infeas`, `dual_infeas`, `comp_slack`, `obj_error`,
+  `cond_estimate`.
+- Define clear availability contract by status and test it.
+
+4. LP progress + cancellation callbacks
+- Add LP progress callback (iteration/time/objective/quality summary).
+- Add cancellation callback/poll hook for long LP solves.
+- Ensure LP callback path is orthogonal to MIP callback path.
+
+5. LP model query/edit ergonomics completion
+- Add missing constraint/coef query APIs:
+  `get_constraint_rhs`, `get_constraint_sense`, `get_constraint_coef` (or sparse row read).
+- Add explicit row/column deletion APIs with documented invalidation semantics.
+- Add batch edit APIs with all-or-nothing validation.
+
+6. LP diagnostics parity (infeasible/unbounded)
+- Add public unbounded primal ray API for LP unbounded status.
+- Add LP IIS/conflict API (initial minimal irreducible row set is acceptable as first version).
+- Add deterministic tests for infeasible/unbounded fixtures.
+
+7. Basis-status API (beyond opaque basis blob)
+- Add explicit basis status getters/setters (row/column/basic/nonbasic states).
+- Keep `ralph_save_basis`/`ralph_load_basis` for compatibility.
+- Add round-trip and dimension-mismatch tests.
+
+8. Typed parameter API + metadata
+- Add enum-based typed parameter APIs alongside existing string APIs.
+- Add parameter metadata/introspection API:
+  `name`, `scope` (LP/MIP/shared), `type`, `default`, `min/max`.
+- Keep string APIs as compatibility wrappers; add parity tests.
+
+9. Determinism/reproducibility contract (LP)
+- Add explicit reproducibility controls in public API (seed/deterministic mode/thread policy).
+- Document guarantees and known non-deterministic cases.
+- Add deterministic regression tests.
+
+10. Advanced parity backlog (separate track)
+- Sensitivity/ranging API (objective, RHS, bounds ranges).
+- Stronger IIS/conflict refinement.
+- Optional barrier/crossover API surface (if adopted in solver core).
+
+Exit criteria for this consolidated plan:
+- No regressions against NETLIB gates or existing API suites.
+- New APIs are LP/MIP-orthogonal by design, with focused unit tests per feature.
+- Existing callers using current API remain source-compatible.
+
 ---
 
 ## Chapter 1: LP Solver Performance

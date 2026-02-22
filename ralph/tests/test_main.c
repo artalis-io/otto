@@ -5297,6 +5297,67 @@ static void build_telemetry_mip_case(RalphModel *model) {
     ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 1.0);
 }
 
+void test_presolve_report_api(void) {
+    printf("\n=== Test: Presolve Report API ===\n");
+
+    /* API argument validation. */
+    ASSERT(ralph_get_last_presolve_report(NULL, NULL) == -1,
+           "Presolve report getter rejects NULL args");
+
+    RalphPresolveReport report;
+
+    /* LP with presolve explicitly disabled. */
+    RalphModel *lp_off = ralph_create();
+    build_telemetry_lp_case(lp_off);
+    ASSERT(ralph_set_int_param(lp_off, "presolve", 0) == 0,
+           "LP presolve=0 accepted");
+    ASSERT(ralph_optimize(lp_off) == 0, "LP presolve=0 solve call succeeds");
+    ASSERT(ralph_get_status(lp_off) == RALPH_STATUS_OPTIMAL,
+           "LP presolve=0 solve OPTIMAL");
+    ASSERT(ralph_get_last_presolve_report(lp_off, &report) == 0,
+           "LP presolve=0 report retrieved");
+    ASSERT(report.used == 0, "LP presolve=0 report marks presolve unused");
+    ASSERT(report.mask == 0u, "LP presolve=0 report mask is zero");
+    ASSERT(report.rounds == 0, "LP presolve=0 report rounds are zero");
+    ralph_free(lp_off);
+
+    /* LP with presolve enabled and explicit mask. */
+    RalphModel *lp_on = ralph_create();
+    build_telemetry_lp_case(lp_on);
+    ASSERT(ralph_set_int_param(lp_on, "presolve", 1) == 0,
+           "LP presolve=1 accepted");
+    ASSERT(ralph_set_int_param(lp_on, "presolve_mask", 0x310F) == 0,
+           "LP presolve mask set");
+    ASSERT(ralph_optimize(lp_on) == 0, "LP presolve=1 solve call succeeds");
+    ASSERT(ralph_get_status(lp_on) == RALPH_STATUS_OPTIMAL,
+           "LP presolve=1 solve OPTIMAL");
+    ASSERT(ralph_get_last_presolve_report(lp_on, &report) == 0,
+           "LP presolve=1 report retrieved");
+    ASSERT(report.used == 1, "LP presolve=1 report marks presolve used");
+    ASSERT(report.mask == 0x310Fu, "LP presolve report preserves configured mask");
+    ASSERT(report.rounds >= 1, "LP presolve report rounds >= 1");
+    ASSERT(report.presolve_time_ms >= 0.0, "LP presolve report has non-negative time");
+    ASSERT(report.vars_removed >= 0 && report.cons_removed >= 0 &&
+           report.bounds_tightened >= 0,
+           "LP presolve report has non-negative reduction stats");
+    ralph_free(lp_on);
+
+    /* MIP path auto-enables lightweight presolve when not explicitly disabled. */
+    RalphModel *mip_auto = ralph_create();
+    build_telemetry_mip_case(mip_auto);
+    ASSERT(ralph_set_int_param(mip_auto, "detect_special", 0) == 0,
+           "MIP detect_special disabled");
+    ASSERT(ralph_optimize_mip(mip_auto) == 0, "MIP auto-presolve solve call succeeds");
+    ASSERT(ralph_get_status(mip_auto) == RALPH_STATUS_OPTIMAL,
+           "MIP auto-presolve solve OPTIMAL");
+    ASSERT(ralph_get_last_presolve_report(mip_auto, &report) == 0,
+           "MIP auto-presolve report retrieved");
+    ASSERT(report.used == 1, "MIP auto-presolve report marks presolve used");
+    ASSERT(report.mask == 0x110Fu, "MIP auto-presolve uses lightweight mask 0x110F");
+    ASSERT(report.rounds >= 1, "MIP auto-presolve report rounds >= 1");
+    ralph_free(mip_auto);
+}
+
 void test_runtime_telemetry_param_propagation(void) {
     printf("\n=== Test: Runtime Telemetry Parameter Propagation ===\n");
 
@@ -5357,6 +5418,351 @@ void test_runtime_telemetry_param_propagation(void) {
            mip_solver_on->lp_solver->telemetry_enabled == 1,
            "MIP node LP telemetry_enabled=1 propagated");
     ralph_free(mip_on);
+}
+
+void test_public_telemetry_snapshot_api(void) {
+    printf("\n=== Test: Public LP/LU Telemetry Snapshot API ===\n");
+
+    RalphLPSolverTelemetry lp_tel;
+    RalphLUTelemetry lu_tel;
+
+    ASSERT(ralph_get_last_lp_telemetry(NULL, &lp_tel) == -1,
+           "LP telemetry getter rejects NULL model");
+    ASSERT(ralph_get_last_lu_telemetry(NULL, &lu_tel) == -1,
+           "LU telemetry getter rejects NULL model");
+
+    RalphModel *arg_model = ralph_create();
+    build_telemetry_lp_case(arg_model);
+    ASSERT(ralph_get_last_lp_telemetry(arg_model, NULL) == -1,
+           "LP telemetry getter rejects NULL output");
+    ASSERT(ralph_get_last_lu_telemetry(arg_model, NULL) == -1,
+           "LU telemetry getter rejects NULL output");
+    ralph_free(arg_model);
+
+    RalphModel *unsolved = ralph_create();
+    build_telemetry_lp_case(unsolved);
+    ASSERT(ralph_get_last_lp_telemetry(unsolved, &lp_tel) == 0,
+           "Unsolved model returns LP telemetry snapshot");
+    ASSERT(ralph_get_last_lu_telemetry(unsolved, &lu_tel) == 0,
+           "Unsolved model returns LU telemetry snapshot");
+    ASSERT(lp_tel.perf_refactor_count == 0,
+           "Unsolved model LP telemetry is zeroed");
+    ASSERT(lu_tel.perf_factorize_calls == 0,
+           "Unsolved model LU telemetry is zeroed");
+    ralph_free(unsolved);
+
+    RalphModel *lp_off = ralph_create();
+    build_telemetry_lp_case(lp_off);
+    ASSERT(ralph_set_int_param(lp_off, "telemetry", 0) == 0,
+           "LP telemetry=0 accepted");
+    ASSERT(ralph_optimize_lp(lp_off) == 0, "LP telemetry=0 solve succeeds");
+    ASSERT(ralph_get_status(lp_off) == RALPH_STATUS_OPTIMAL,
+           "LP telemetry=0 solve OPTIMAL");
+    ASSERT(ralph_get_last_lp_telemetry(lp_off, &lp_tel) == 0,
+           "LP telemetry=0 snapshot retrieved");
+    ASSERT(ralph_get_last_lu_telemetry(lp_off, &lu_tel) == 0,
+           "LP telemetry=0 LU snapshot retrieved");
+    ASSERT(lp_tel.perf_refactor_count == 0,
+           "LP telemetry=0 keeps refactor count at zero");
+    ASSERT(lu_tel.perf_factorize_calls == 0,
+           "LP telemetry=0 keeps LU factorize count at zero");
+    ralph_free(lp_off);
+
+    RalphModel *lp_on = ralph_create();
+    build_telemetry_lp_case(lp_on);
+    ASSERT(ralph_set_int_param(lp_on, "telemetry", 1) == 0,
+           "LP telemetry=1 accepted");
+    ASSERT(ralph_optimize_lp(lp_on) == 0, "LP telemetry=1 solve succeeds");
+    ASSERT(ralph_get_status(lp_on) == RALPH_STATUS_OPTIMAL,
+           "LP telemetry=1 solve OPTIMAL");
+    ASSERT(ralph_get_last_lp_telemetry(lp_on, &lp_tel) == 0,
+           "LP telemetry=1 snapshot retrieved");
+    ASSERT(ralph_get_last_lu_telemetry(lp_on, &lu_tel) == 0,
+           "LP telemetry=1 LU snapshot retrieved");
+    ASSERT(lp_tel.perf_refactor_count >= 1,
+           "LP telemetry=1 records at least one refactor");
+    ASSERT(lu_tel.perf_factorize_calls >= 1,
+           "LP telemetry=1 records LU factorization");
+    ralph_free(lp_on);
+
+    RalphModel *mip_off = ralph_create();
+    build_telemetry_mip_case(mip_off);
+    ASSERT(ralph_set_int_param(mip_off, "detect_special", 0) == 0,
+           "MIP telemetry=0 detect_special disabled");
+    ASSERT(ralph_set_int_param(mip_off, "telemetry", 0) == 0,
+           "MIP telemetry=0 accepted");
+    ASSERT(ralph_optimize_mip(mip_off) == 0, "MIP telemetry=0 solve succeeds");
+    ASSERT(ralph_get_status(mip_off) == RALPH_STATUS_OPTIMAL,
+           "MIP telemetry=0 solve OPTIMAL");
+    ASSERT(ralph_get_last_lp_telemetry(mip_off, &lp_tel) == 0,
+           "MIP telemetry=0 LP snapshot retrieved");
+    ASSERT(ralph_get_last_lu_telemetry(mip_off, &lu_tel) == 0,
+           "MIP telemetry=0 LU snapshot retrieved");
+    ASSERT(lp_tel.perf_refactor_count == 0,
+           "MIP telemetry=0 keeps node LP refactor count at zero");
+    ASSERT(lu_tel.perf_factorize_calls == 0,
+           "MIP telemetry=0 keeps node LU factorize count at zero");
+    ralph_free(mip_off);
+
+    RalphModel *mip_on = ralph_create();
+    build_telemetry_mip_case(mip_on);
+    ASSERT(ralph_set_int_param(mip_on, "detect_special", 0) == 0,
+           "MIP telemetry=1 detect_special disabled");
+    ASSERT(ralph_set_int_param(mip_on, "telemetry", 1) == 0,
+           "MIP telemetry=1 accepted");
+    ASSERT(ralph_optimize_mip(mip_on) == 0, "MIP telemetry=1 solve succeeds");
+    ASSERT(ralph_get_status(mip_on) == RALPH_STATUS_OPTIMAL,
+           "MIP telemetry=1 solve OPTIMAL");
+    ASSERT(ralph_get_last_lp_telemetry(mip_on, &lp_tel) == 0,
+           "MIP telemetry=1 LP snapshot retrieved");
+    ASSERT(ralph_get_last_lu_telemetry(mip_on, &lu_tel) == 0,
+           "MIP telemetry=1 LU snapshot retrieved");
+    ASSERT(lu_tel.perf_factorize_calls >= 1,
+           "MIP telemetry=1 records node LU factorization");
+    ralph_free(mip_on);
+}
+
+void test_solution_quality_api(void) {
+    printf("\n=== Test: Solution Quality API ===\n");
+
+    RalphSolutionQuality quality;
+
+    ASSERT(ralph_get_solution_quality(NULL, &quality) == -1,
+           "Solution quality getter rejects NULL model");
+
+    RalphModel *arg_model = ralph_create();
+    build_telemetry_lp_case(arg_model);
+    ASSERT(ralph_get_solution_quality(arg_model, NULL) == -1,
+           "Solution quality getter rejects NULL output");
+    ralph_free(arg_model);
+
+    RalphModel *verify_off = ralph_create();
+    build_telemetry_lp_case(verify_off);
+    ASSERT(ralph_set_int_param(verify_off, "verify", 0) == 0,
+           "verify=0 accepted");
+    ASSERT(ralph_optimize_lp(verify_off) == 0, "verify=0 solve succeeds");
+    ASSERT(ralph_get_status(verify_off) == RALPH_STATUS_OPTIMAL,
+           "verify=0 solve OPTIMAL");
+    ASSERT(ralph_get_solution_quality(verify_off, &quality) == 0,
+           "verify=0 quality snapshot retrieved");
+    ASSERT(quality.status == RALPH_STATUS_OPTIMAL,
+           "verify=0 quality status reflects solve status");
+    ASSERT(quality.verify_enabled == 0, "verify=0 quality marks verification disabled");
+    ASSERT(quality.available == 0, "verify=0 quality metrics are unavailable");
+    ralph_free(verify_off);
+
+    RalphModel *verify_on = ralph_create();
+    build_telemetry_lp_case(verify_on);
+    ASSERT(ralph_set_int_param(verify_on, "verify", 1) == 0,
+           "verify=1 accepted");
+    ASSERT(ralph_optimize_lp(verify_on) == 0, "verify=1 solve succeeds");
+    ASSERT(ralph_get_status(verify_on) == RALPH_STATUS_OPTIMAL ||
+           ralph_get_status(verify_on) == RALPH_STATUS_IMPRECISE,
+           "verify=1 solve status is OPTIMAL/IMPRECISE");
+    ASSERT(ralph_get_solution_quality(verify_on, &quality) == 0,
+           "verify=1 quality snapshot retrieved");
+    ASSERT(quality.verify_enabled == 1, "verify=1 quality marks verification enabled");
+    ASSERT(quality.available == 1, "verify=1 quality metrics are available");
+    ASSERT(quality.status == ralph_get_status(verify_on),
+           "verify=1 quality status matches solve status");
+    ASSERT(quality.primal_infeas >= 0.0 &&
+           quality.bound_infeas >= 0.0 &&
+           quality.dual_infeas >= 0.0 &&
+           quality.comp_slack >= 0.0 &&
+           quality.obj_error >= 0.0 &&
+           quality.cond_estimate >= 0.0,
+           "verify=1 quality metrics are non-negative");
+    ralph_free(verify_on);
+
+    RalphModel *infeas = ralph_create();
+    ralph_set_obj_sense(infeas, RALPH_MINIMIZE);
+    ralph_add_var(infeas, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    int idx[] = {0};
+    double v1[] = {1.0};
+    double v2[] = {1.0};
+    ralph_add_constraint(infeas, 1, idx, v1, RALPH_LESS_EQUAL, 1.0);
+    ralph_add_constraint(infeas, 1, idx, v2, RALPH_GREATER_EQUAL, 2.0);
+    ASSERT(ralph_set_int_param(infeas, "verify", 1) == 0,
+           "infeasible verify=1 accepted");
+    ASSERT(ralph_optimize_lp(infeas) == 0, "infeasible solve call succeeds");
+    ASSERT(ralph_get_status(infeas) == RALPH_STATUS_INFEASIBLE,
+           "infeasible model returns INFEASIBLE");
+    ASSERT(ralph_get_solution_quality(infeas, &quality) == 0,
+           "infeasible quality snapshot retrieved");
+    ASSERT(quality.status == RALPH_STATUS_INFEASIBLE,
+           "infeasible quality status reflects INFEASIBLE");
+    ASSERT(quality.available == 0,
+           "infeasible quality metrics are unavailable");
+    ralph_free(infeas);
+}
+
+typedef struct {
+    int calls;
+    int cancel_on_iter;
+    int saw_phase2;
+    int saw_quality;
+    double last_elapsed_sec;
+} LPProgressProbe;
+
+static int test_lp_progress_probe_cb(void *user_data, const RalphLPProgressInfo *info) {
+    LPProgressProbe *probe = (LPProgressProbe*)user_data;
+    if (!probe || !info) return 0;
+    probe->calls++;
+    probe->last_elapsed_sec = info->elapsed_time_sec;
+    if (info->phase == RALPH_LP_PROGRESS_PHASE_2) {
+        probe->saw_phase2 = 1;
+    }
+    if (info->quality_available) {
+        probe->saw_quality = 1;
+    }
+    if (probe->cancel_on_iter >= 0 && info->iteration >= probe->cancel_on_iter) {
+        return 1;
+    }
+    return 0;
+}
+
+typedef struct {
+    int polls;
+    int cancel_after_polls;
+} LPCancelProbe;
+
+static int test_lp_cancel_probe_cb(void *user_data) {
+    LPCancelProbe *probe = (LPCancelProbe*)user_data;
+    if (!probe) return 0;
+    probe->polls++;
+    if (probe->cancel_after_polls > 0 && probe->polls >= probe->cancel_after_polls) {
+        return 1;
+    }
+    return 0;
+}
+
+void test_lp_progress_callback_api(void) {
+    printf("\n=== Test: LP Progress Callback API ===\n");
+
+    RalphModel *model = ralph_create();
+    build_telemetry_lp_case(model);
+    ASSERT(ralph_set_int_param(model, "method", 0) == 0, "LP progress: method=0 accepted");
+    ASSERT(ralph_set_int_param(model, "verify", 1) == 0, "LP progress: verify=1 accepted");
+
+    LPProgressProbe probe;
+    memset(&probe, 0, sizeof(probe));
+    probe.cancel_on_iter = -1;
+
+    RalphLPProgressCallback cb;
+    memset(&cb, 0, sizeof(cb));
+    cb.on_progress = test_lp_progress_probe_cb;
+    cb.user_data = &probe;
+    cb.every_n_iterations = 1;
+    ralph_set_lp_progress_callback(model, &cb);
+
+    ASSERT(ralph_optimize_lp(model) == 0, "LP progress: solve call succeeds");
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL ||
+           ralph_get_status(model) == RALPH_STATUS_IMPRECISE,
+           "LP progress: solve status is OPTIMAL/IMPRECISE");
+    ASSERT(probe.calls > 0, "LP progress callback invoked");
+    ASSERT(probe.last_elapsed_sec >= 0.0, "LP progress elapsed time is non-negative");
+
+    ralph_set_lp_progress_callback(model, NULL);
+    probe.calls = 0;
+    ASSERT(ralph_optimize_lp(model) == 0, "LP progress: solve succeeds after clear");
+    ASSERT(probe.calls == 0, "LP progress callback cleared");
+
+    ralph_free(model);
+}
+
+void test_lp_progress_cancel_callback_api(void) {
+    printf("\n=== Test: LP Progress Cancellation Callback API ===\n");
+
+    RalphModel *model = ralph_create();
+    build_telemetry_lp_case(model);
+    ASSERT(ralph_set_int_param(model, "method", 0) == 0, "LP progress-cancel: method=0 accepted");
+
+    LPProgressProbe probe;
+    memset(&probe, 0, sizeof(probe));
+    probe.cancel_on_iter = 0;
+
+    RalphLPProgressCallback cb;
+    memset(&cb, 0, sizeof(cb));
+    cb.on_progress = test_lp_progress_probe_cb;
+    cb.user_data = &probe;
+    cb.every_n_iterations = 1;
+    ralph_set_lp_progress_callback(model, &cb);
+
+    ASSERT(ralph_optimize_lp(model) == 0, "LP progress-cancel: solve call succeeds");
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_TIME_LIMIT,
+           "LP progress-cancel: status is TIME_LIMIT");
+    ASSERT(probe.calls >= 1, "LP progress-cancel callback invoked before termination");
+
+    ralph_free(model);
+}
+
+void test_lp_cancel_poll_callback_api(void) {
+    printf("\n=== Test: LP Cancel Poll Callback API ===\n");
+
+    RalphModel *model = ralph_create();
+    build_telemetry_lp_case(model);
+    ASSERT(ralph_set_int_param(model, "method", 0) == 0, "LP cancel-poll: method=0 accepted");
+
+    LPCancelProbe probe;
+    memset(&probe, 0, sizeof(probe));
+    probe.cancel_after_polls = 1;
+
+    RalphLPCancelCallback cb;
+    memset(&cb, 0, sizeof(cb));
+    cb.should_cancel = test_lp_cancel_probe_cb;
+    cb.user_data = &probe;
+    ralph_set_lp_cancel_callback(model, &cb);
+
+    ASSERT(ralph_optimize_lp(model) == 0, "LP cancel-poll: solve call succeeds");
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_TIME_LIMIT,
+           "LP cancel-poll: status is TIME_LIMIT");
+    ASSERT(probe.polls >= 1, "LP cancel-poll callback invoked");
+
+    ralph_set_lp_cancel_callback(model, NULL);
+    ASSERT(ralph_optimize_lp(model) == 0, "LP cancel-poll: solve succeeds after clear");
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL ||
+           ralph_get_status(model) == RALPH_STATUS_IMPRECISE,
+           "LP cancel-poll: status OPTIMAL/IMPRECISE after clear");
+
+    ralph_free(model);
+}
+
+void test_lp_callbacks_are_orthogonal_to_mip(void) {
+    printf("\n=== Test: LP Callbacks Orthogonal To MIP ===\n");
+
+    RalphModel *model = ralph_create();
+    build_telemetry_mip_case(model);
+    ASSERT(ralph_set_int_param(model, "detect_special", 0) == 0,
+           "LP/MIP callback orthogonality: detect_special disabled");
+
+    LPProgressProbe progress_probe;
+    memset(&progress_probe, 0, sizeof(progress_probe));
+    progress_probe.cancel_on_iter = 0;
+    RalphLPProgressCallback progress_cb;
+    memset(&progress_cb, 0, sizeof(progress_cb));
+    progress_cb.on_progress = test_lp_progress_probe_cb;
+    progress_cb.user_data = &progress_probe;
+    progress_cb.every_n_iterations = 1;
+    ralph_set_lp_progress_callback(model, &progress_cb);
+
+    LPCancelProbe cancel_probe;
+    memset(&cancel_probe, 0, sizeof(cancel_probe));
+    cancel_probe.cancel_after_polls = 1;
+    RalphLPCancelCallback cancel_cb;
+    memset(&cancel_cb, 0, sizeof(cancel_cb));
+    cancel_cb.should_cancel = test_lp_cancel_probe_cb;
+    cancel_cb.user_data = &cancel_probe;
+    ralph_set_lp_cancel_callback(model, &cancel_cb);
+
+    ASSERT(ralph_optimize_mip(model) == 0, "LP/MIP callback orthogonality: MIP solve call succeeds");
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "LP/MIP callback orthogonality: MIP status remains OPTIMAL");
+    ASSERT(progress_probe.calls == 0,
+           "LP/MIP callback orthogonality: LP progress callback not invoked by MIP");
+    ASSERT(cancel_probe.polls == 0,
+           "LP/MIP callback orthogonality: LP cancel callback not polled by MIP");
+
+    ralph_free(model);
 }
 
 /* ============================================================================
@@ -5424,6 +5830,9 @@ int main(int argc, char **argv) {
 
         /* Branch callback tests */
         test_branch_callback();
+
+        /* LP callback orthogonality vs MIP path */
+        test_lp_callbacks_are_orthogonal_to_mip();
 
         /* Node selection strategy tests */
         test_node_selection_strategies();
@@ -5508,7 +5917,13 @@ int main(int argc, char **argv) {
     test_reoptimization_dual_no_phase1();
 
     /* Runtime telemetry parameter propagation (LP + MIP paths) */
+    test_presolve_report_api();
     test_runtime_telemetry_param_propagation();
+    test_public_telemetry_snapshot_api();
+    test_solution_quality_api();
+    test_lp_progress_callback_api();
+    test_lp_progress_cancel_callback_api();
+    test_lp_cancel_poll_callback_api();
     test_phase3_optimize_entrypoints();
     test_phase3_param_partition();
     test_phase3_optimize_backward_compatibility();

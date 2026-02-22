@@ -81,6 +81,7 @@ typedef struct {
     PostsolveOp *postsolve_stack;
 
     /* Statistics */
+    int rounds;                 /* Number of presolve rounds executed */
     int vars_removed;
     int cons_removed;
     int bounds_tightened;

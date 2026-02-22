@@ -2562,6 +2562,7 @@ PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) 
             result->vars_removed += n;
         }
     }
+    result->rounds = ctx->current_round;
 
     /* Shift variable bounds (one-time, after main loop stabilizes) */
     if (status >= 0 && (mask & PRESOLVE_SHIFT_BOUNDS)) {
