@@ -58,6 +58,21 @@ typedef enum {
     RALPH_BRANCH_UP = 1      /* Prefer branching up (x >= ceil(val)) */
 } RalphBranchDir;
 
+/* MIP-start status for incumbent warm-start hints */
+typedef enum {
+    RALPH_MIP_START_NONE = 0,      /* No MIP start is staged */
+    RALPH_MIP_START_PENDING = 1,   /* Start is staged and will be tried on next MIP solve */
+    RALPH_MIP_START_ACCEPTED = 2,  /* Last attempted start was feasible and accepted */
+    RALPH_MIP_START_REJECTED = 3   /* Last attempted start was infeasible or incompatible */
+} RalphMIPStartStatus;
+
+/* MIP-start repair policy */
+typedef enum {
+    RALPH_MIP_START_REPAIR_STRICT = 0,            /* Reject if out-of-bounds/non-integral */
+    RALPH_MIP_START_REPAIR_PROJECT_BOUNDS = 1,    /* Clamp to [lb, ub] then validate */
+    RALPH_MIP_START_REPAIR_PROJECT_AND_ROUND = 2  /* Clamp + round integer vars then validate */
+} RalphMIPStartRepairMode;
+
 /* Opaque model handle */
 typedef struct RalphModel RalphModel;
 
@@ -88,6 +103,8 @@ int ralph_is_mip(const RalphModel *model);
 
 /* Solving */
 int ralph_optimize(RalphModel *model);
+int ralph_optimize_lp(RalphModel *model);
+int ralph_optimize_mip(RalphModel *model);
 
 /* Solution retrieval */
 RalphStatus ralph_get_status(const RalphModel *model);
@@ -131,10 +148,59 @@ int ralph_set_branch_priorities(RalphModel *model, const int *priorities);
  */
 int ralph_set_branch_directions(RalphModel *model, const int *directions);
 
+/* MIP incumbent warm start (MIP start).
+ *
+ * A staged MIP start is checked for bounds, integrality, and constraint
+ * feasibility at solve time. If valid, it seeds the incumbent and can improve
+ * pruning without affecting correctness.
+ */
+
+/* Set full-length MIP start vector (size = num_vars).
+ * The vector is copied internally and remains active across solves until cleared.
+ * @param model The model
+ * @param x     Candidate incumbent values in original variable space
+ * @return 0 on success, -1 on error
+ */
+int ralph_set_mip_start(RalphModel *model, const double *x);
+
+/* Set sparse/partial MIP start entries.
+ *
+ * If no start is staged yet, unspecified variables are initialized to their
+ * lower bounds. Subsequent sparse calls update only listed variables.
+ *
+ * @param model   The model
+ * @param count   Number of sparse entries
+ * @param indices Variable indices (size=count)
+ * @param values  Entry values (size=count)
+ * @return 0 on success, -1 on error
+ */
+int ralph_set_mip_start_sparse(RalphModel *model, int count,
+                               const int *indices, const double *values);
+
+/* Clear staged MIP start.
+ * @param model The model
+ */
+void ralph_clear_mip_start(RalphModel *model);
+
+/* Get staged/last-attempted MIP-start status.
+ * @param model The model
+ * @return RalphMIPStartStatus
+ */
+RalphMIPStartStatus ralph_get_mip_start_status(const RalphModel *model);
+
+/* Set/get MIP-start repair mode. */
+int ralph_set_mip_start_repair_mode(RalphModel *model, RalphMIPStartRepairMode mode);
+RalphMIPStartRepairMode ralph_get_mip_start_repair_mode(const RalphModel *model);
+
 /* Constraint modification (for Benders decomposition, cut loops)
  *
- * These functions allow modifying the model between solves. After modification,
- * call ralph_optimize() to re-solve. The solver will attempt warm start.
+ * These functions allow modifying the model between solves.
+ * After modification, call ralph_optimize() to re-solve.
+ *
+ * Modification semantics:
+ * - Current solve status/solution is invalidated immediately
+ * - Existing LP/MIP solver state is discarded
+ * - A subsequent ralph_optimize() rebuilds solver state from the modified model
  */
 
 /* Modify RHS of existing constraint.
@@ -144,6 +210,32 @@ int ralph_set_branch_directions(RalphModel *model, const int *directions);
  * @return 0 on success, -1 on error (invalid constraint index)
  */
 int ralph_set_constraint_rhs(RalphModel *model, int constraint, double rhs);
+
+/* Modify one matrix coefficient A[constraint, var].
+ * Setting coef to 0 removes the entry from the sparse matrix pattern.
+ *
+ * @param model      The model
+ * @param constraint Constraint index (0 to num_cons-1)
+ * @param var        Variable index (0 to num_vars-1)
+ * @param coef       New coefficient value
+ * @return 0 on success, -1 on error
+ */
+int ralph_set_constraint_coef(RalphModel *model, int constraint, int var, double coef);
+
+/* Modify multiple matrix coefficients in one call.
+ * Each update sets A[constraints[i], vars[i]] = coefs[i].
+ * Setting coefs[i] to 0 removes that entry.
+ *
+ * @param model       The model
+ * @param count       Number of updates
+ * @param constraints Constraint indices (size=count)
+ * @param vars        Variable indices (size=count)
+ * @param coefs       Coefficients (size=count)
+ * @return 0 on success, -1 on error
+ */
+int ralph_set_constraint_coefs(RalphModel *model, int count,
+                               const int *constraints, const int *vars,
+                               const double *coefs);
 
 /* Query variable bounds.
  * @param model The model
@@ -200,6 +292,13 @@ RalphBasis* ralph_save_basis(const RalphModel *model);
 /* Load a previously saved basis for warm start.
  * @param model The model
  * @param basis The basis to load
+ *
+ * Behavior:
+ * - If an LP solver/tableau already exists, applies immediately.
+ * - If called before the first ralph_optimize() (or after solver invalidation),
+ *   the basis is staged and applied on the next LP optimize() call.
+ * - Basis must be dimension-compatible with the model/solver state.
+ *
  * @return 0 on success, -1 on error (e.g., dimensions mismatch)
  */
 int ralph_load_basis(RalphModel *model, const RalphBasis *basis);
@@ -208,6 +307,12 @@ int ralph_load_basis(RalphModel *model, const RalphBasis *basis);
  * @param basis The basis to free (may be NULL)
  */
 void ralph_free_basis(RalphBasis *basis);
+
+/* Serialize/deserialize warm-start artifacts for checkpoint/restart. */
+int ralph_write_basis_file(const RalphBasis *basis, const char *filename);
+RalphBasis* ralph_read_basis_file(const char *filename);
+int ralph_write_mip_start_file(const RalphModel *model, const char *filename);
+int ralph_read_mip_start_file(RalphModel *model, const char *filename);
 
 /* Cut callback (for automatic cut generation during MIP solving)
  *
@@ -311,7 +416,9 @@ typedef struct {
     double gap_tolerance;           /* Convergence gap (default 1e-6) */
     int max_iterations;             /* Iteration limit (default 1000) */
     int cuts_at_lp_nodes;           /* 1 = modern branch-and-Benders-cut */
-    int warm_start_subproblems;     /* 1 = reuse subproblem basis */
+    int warm_start_master;          /* 1 = seed master MIP from previous master incumbent */
+    int warm_start_subproblems;     /* 1 = reuse subproblem basis/tableau, 0 = cold-start each sub solve */
+    const double *initial_master_solution; /* Optional initial master start in original variable space (size=num_vars) */
     int strict_farkas;              /* 1 = require strict Farkas validation */
     int verbose;                    /* Verbosity level (0-2) */
 
@@ -330,7 +437,9 @@ typedef struct {
     .gap_tolerance = 1e-6,             \
     .max_iterations = 1000,            \
     .cuts_at_lp_nodes = 1,             \
+    .warm_start_master = 1,            \
     .warm_start_subproblems = 1,       \
+    .initial_master_solution = NULL,   \
     .strict_farkas = 0,                \
     .verbose = 0,                      \
     .branch_priorities = NULL,         \
@@ -348,6 +457,11 @@ typedef struct {
     int optimality_cuts;        /* Number of optimality cuts added */
     int feasibility_cuts;       /* Number of feasibility cuts added */
     int nodes_explored;         /* B&B nodes (if cuts_at_lp_nodes) */
+    int subproblems_solved;     /* Total subproblem solves across all scenarios */
+    int master_warm_starts_attempted; /* Master MIP start attempts */
+    int master_warm_starts_accepted;  /* Master MIP starts accepted */
+    int subproblem_warm_starts; /* Subproblem solves that reused an existing tableau */
+    int subproblem_cold_starts; /* Subproblem solves that started from a fresh tableau */
     double solve_time;          /* Total solve time in seconds */
 } RalphBendersResult;
 
@@ -381,6 +495,19 @@ int ralph_set_int_param(RalphModel *model, const char *name, int value);
 int ralph_set_dbl_param(RalphModel *model, const char *name, double value);
 int ralph_get_int_param(const RalphModel *model, const char *name, int *value);
 int ralph_get_dbl_param(const RalphModel *model, const char *name, double *value);
+
+/* Strict parameter APIs.
+ * LP strict APIs reject MIP-only knobs.
+ * MIP strict APIs reject LP-only knobs. */
+int ralph_set_lp_int_param(RalphModel *model, const char *name, int value);
+int ralph_set_lp_dbl_param(RalphModel *model, const char *name, double value);
+int ralph_get_lp_int_param(const RalphModel *model, const char *name, int *value);
+int ralph_get_lp_dbl_param(const RalphModel *model, const char *name, double *value);
+
+int ralph_set_mip_int_param(RalphModel *model, const char *name, int value);
+int ralph_set_mip_dbl_param(RalphModel *model, const char *name, double value);
+int ralph_get_mip_int_param(const RalphModel *model, const char *name, int *value);
+int ralph_get_mip_dbl_param(const RalphModel *model, const char *name, double *value);
 
 /* File I/O */
 int ralph_read_mps(RalphModel *model, const char *filename);

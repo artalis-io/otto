@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <stdint.h>
 #include "ralph.h"
 #include "lp.h"
 #include "mip.h"
@@ -64,6 +65,12 @@ struct RalphModel {
     /* MIP-specific */
     double best_bound;
     int node_count;
+    double *mip_start;
+    int *mip_start_mask;
+    int mip_start_n;
+    int mip_start_nnz;
+    RalphMIPStartStatus mip_start_status;
+    RalphMIPStartRepairMode mip_start_repair_mode;
 
     /* Branching control (stored until MIP solver is created) */
     int *branch_priorities;
@@ -79,6 +86,12 @@ struct RalphModel {
 
     /* Statistics */
     int iteration_count;
+
+    /* Basis staged before first optimize() (applied when simplex tableau is created) */
+    int staged_basis_m;
+    int staged_basis_n;
+    int *staged_basis;
+    VarStatus *staged_var_status;
 };
 
 /* Basis representation for warm start */
@@ -88,6 +101,122 @@ struct RalphBasis {
     int *basis;         /* Basic variable indices (size m) */
     VarStatus *var_status;  /* Variable status array (size n) */
 };
+
+static void ralph_clear_staged_basis(RalphModel *model) {
+    if (!model) return;
+    free(model->staged_basis);
+    free(model->staged_var_status);
+    model->staged_basis = NULL;
+    model->staged_var_status = NULL;
+    model->staged_basis_m = 0;
+    model->staged_basis_n = 0;
+}
+
+static void ralph_clear_mip_start_internal(RalphModel *model) {
+    if (!model) return;
+    free(model->mip_start);
+    free(model->mip_start_mask);
+    model->mip_start = NULL;
+    model->mip_start_mask = NULL;
+    model->mip_start_n = 0;
+    model->mip_start_nnz = 0;
+    model->mip_start_status = RALPH_MIP_START_NONE;
+}
+
+static int ralph_set_mip_start_copy(RalphModel *model, const double *x,
+                                    const int *mask, int n) {
+    if (!model || !x || n <= 0) return -1;
+    if ((size_t)n > SIZE_MAX / sizeof(double)) return -1;
+
+    double *copy = (double*)malloc((size_t)n * sizeof(double));
+    int *mask_copy = (int*)calloc((size_t)n, sizeof(int));
+    if (!copy) return -1;
+    if (!mask_copy) {
+        free(copy);
+        return -1;
+    }
+    memcpy(copy, x, (size_t)n * sizeof(double));
+
+    int nnz = 0;
+    if (mask) {
+        for (int j = 0; j < n; j++) {
+            mask_copy[j] = mask[j] ? 1 : 0;
+            nnz += mask_copy[j];
+        }
+    } else {
+        for (int j = 0; j < n; j++) mask_copy[j] = 1;
+        nnz = n;
+    }
+
+    free(model->mip_start);
+    free(model->mip_start_mask);
+    model->mip_start = copy;
+    model->mip_start_mask = mask_copy;
+    model->mip_start_n = n;
+    model->mip_start_nnz = nnz;
+    model->mip_start_status = RALPH_MIP_START_PENDING;
+    return 0;
+}
+
+static int ralph_stage_basis_copy(RalphModel *model, const RalphBasis *basis) {
+    if (!model || !basis || !basis->basis || !basis->var_status) return -1;
+
+    int *basis_copy = NULL;
+    VarStatus *status_copy = NULL;
+
+    if (basis->m > 0) {
+        basis_copy = (int*)malloc((size_t)basis->m * sizeof(int));
+        if (!basis_copy) return -1;
+        memcpy(basis_copy, basis->basis, (size_t)basis->m * sizeof(int));
+    }
+
+    if (basis->n > 0) {
+        status_copy = (VarStatus*)malloc((size_t)basis->n * sizeof(VarStatus));
+        if (!status_copy) {
+            free(basis_copy);
+            return -1;
+        }
+        memcpy(status_copy, basis->var_status, (size_t)basis->n * sizeof(VarStatus));
+    }
+
+    ralph_clear_staged_basis(model);
+    model->staged_basis = basis_copy;
+    model->staged_var_status = status_copy;
+    model->staged_basis_m = basis->m;
+    model->staged_basis_n = basis->n;
+    return 0;
+}
+
+/* Invalidate any cached solve state after model edits. */
+static void ralph_invalidate_solve_state(RalphModel *model) {
+    if (!model) return;
+
+    simplex_free(model->lp_solver);
+    model->lp_solver = NULL;
+    mip_free(model->mip_solver);
+    model->mip_solver = NULL;
+
+    free(model->solution);
+    model->solution = NULL;
+    free(model->dual_solution);
+    model->dual_solution = NULL;
+    free(model->reduced_costs);
+    model->reduced_costs = NULL;
+    ralph_clear_staged_basis(model);
+    if (model->mip_start) {
+        if (model->lp_model && model->mip_start_n == model->lp_model->num_vars) {
+            model->mip_start_status = RALPH_MIP_START_PENDING;
+        } else {
+            ralph_clear_mip_start_internal(model);
+        }
+    }
+
+    model->status = RALPH_STATUS_UNKNOWN;
+    model->obj_value = 0.0;
+    model->best_bound = 0.0;
+    model->node_count = 0;
+    model->iteration_count = 0;
+}
 
 /* ============================================================================
  * Model Creation/Destruction
@@ -129,6 +258,12 @@ RalphModel* ralph_create(void) {
     model->var_select = -1;         /* -1 = use MIP solver default */
 
     model->status = RALPH_STATUS_UNKNOWN;
+    model->mip_start = NULL;
+    model->mip_start_mask = NULL;
+    model->mip_start_n = 0;
+    model->mip_start_nnz = 0;
+    model->mip_start_status = RALPH_MIP_START_NONE;
+    model->mip_start_repair_mode = RALPH_MIP_START_REPAIR_STRICT;
 
     return model;
 }
@@ -142,6 +277,8 @@ void ralph_free(RalphModel *model) {
     free(model->solution);
     free(model->dual_solution);
     free(model->reduced_costs);
+    ralph_clear_staged_basis(model);
+    ralph_clear_mip_start_internal(model);
     free(model->branch_priorities);
     free(model->branch_directions);
     free(model);
@@ -154,12 +291,16 @@ void ralph_free(RalphModel *model) {
 int ralph_set_obj_sense(RalphModel *model, RalphObjSense sense) {
     if (!model || !model->lp_model) return -1;
     model->lp_model->obj_sense = (int)sense;
+    ralph_invalidate_solve_state(model);
     return 0;
 }
 
 int ralph_add_var(RalphModel *model, double lb, double ub, double obj, RalphVarType type) {
     if (!model || !model->lp_model) return -1;
-    return lp_model_add_var(model->lp_model, lb, ub, obj, (char)type);
+    int rc = lp_model_add_var(model->lp_model, lb, ub, obj, (char)type);
+    if (rc < 0) return rc;
+    ralph_invalidate_solve_state(model);
+    return rc;
 }
 
 int ralph_add_vars(RalphModel *model, int count, const double *lb, const double *ub,
@@ -177,13 +318,17 @@ int ralph_add_vars(RalphModel *model, int count, const double *lb, const double 
         }
     }
 
+    ralph_invalidate_solve_state(model);
     return 0;
 }
 
 int ralph_add_constraint(RalphModel *model, int nnz, const int *indices,
                          const double *values, RalphSense sense, double rhs) {
     if (!model || !model->lp_model) return -1;
-    return lp_model_add_constraint(model->lp_model, nnz, indices, values, (char)sense, rhs);
+    int rc = lp_model_add_constraint(model->lp_model, nnz, indices, values, (char)sense, rhs);
+    if (rc < 0) return -1;
+    ralph_invalidate_solve_state(model);
+    return rc;
 }
 
 /* ============================================================================
@@ -196,6 +341,7 @@ int ralph_set_var_bounds(RalphModel *model, int var, double lb, double ub) {
 
     model->lp_model->lb[var] = lb;
     model->lp_model->ub[var] = ub;
+    ralph_invalidate_solve_state(model);
     return 0;
 }
 
@@ -215,6 +361,7 @@ int ralph_set_var_type(RalphModel *model, int var, RalphVarType type) {
         if (type == RALPH_BINARY) model->lp_model->num_binary++;
     }
 
+    ralph_invalidate_solve_state(model);
     return 0;
 }
 
@@ -223,12 +370,14 @@ int ralph_set_obj_coef(RalphModel *model, int var, double coef) {
     if (var < 0 || var >= model->lp_model->num_vars) return -1;
 
     model->lp_model->c[var] = coef;
+    ralph_invalidate_solve_state(model);
     return 0;
 }
 
 int ralph_set_obj_offset(RalphModel *model, double offset) {
     if (!model || !model->lp_model) return -1;
     model->lp_model->obj_offset = offset;
+    ralph_invalidate_solve_state(model);
     return 0;
 }
 
@@ -261,8 +410,26 @@ int ralph_is_mip(const RalphModel *model) {
  * Solving
  * ============================================================================ */
 
-int ralph_optimize(RalphModel *model) {
+typedef enum {
+    RALPH_SOLVE_AUTO = 0,
+    RALPH_SOLVE_LP_ONLY = 1,
+    RALPH_SOLVE_MIP_ONLY = 2
+} RalphSolveMode;
+
+static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     if (!model || !model->lp_model) return -1;
+
+    int model_is_mip = ralph_is_mip(model);
+    if (mode == RALPH_SOLVE_LP_ONLY && model_is_mip) {
+        model->status = RALPH_STATUS_ERROR;
+        return -1;
+    }
+    if (mode == RALPH_SOLVE_MIP_ONLY && !model_is_mip) {
+        model->status = RALPH_STATUS_ERROR;
+        return -1;
+    }
+    int solve_as_mip = (mode == RALPH_SOLVE_MIP_ONLY) ? 1 :
+                       (mode == RALPH_SOLVE_LP_ONLY) ? 0 : model_is_mip;
 
     /* Finalize model if needed */
     if (!model->lp_model->A) {
@@ -368,7 +535,7 @@ int ralph_optimize(RalphModel *model) {
     int use_presolve = model->presolve;
     unsigned int use_mask = model->presolve_mask;
 
-    if (!use_presolve && ralph_is_mip(model) && model->presolve != -1) {
+    if (!use_presolve && solve_as_mip && model->presolve != -1) {
         use_presolve = 1;
         use_mask = 0x110F;  /* FIXED+EMPTY+SINGL_ROW+BOUND_TIGHT+SHIFT */
     }
@@ -445,7 +612,7 @@ int ralph_optimize(RalphModel *model) {
     /* Try LAP detection for pure LP (not MIP) - post-presolve fallback.
      * This is a backup in case presolve reveals LAP structure that wasn't
      * detected in the original model (rare but possible). */
-    if (!ralph_is_mip(model) && model->detect_special && ralph_get_detect_lap()) {
+    if (!solve_as_mip && model->detect_special && ralph_get_detect_lap()) {
         LAPSignature lap_sig;
         if (detect_lap(solve_model, &lap_sig)) {
             if (model->verbose) {
@@ -486,7 +653,7 @@ int ralph_optimize(RalphModel *model) {
     /* Try network detection for pure LP (not MIP) - post-presolve fallback.
      * This is a backup in case presolve reveals network structure that wasn't
      * detected in the original model (rare but possible). */
-    if (!ralph_is_mip(model) && model->detect_special && ralph_get_detect_network()) {
+    if (!solve_as_mip && model->detect_special && ralph_get_detect_network()) {
         NetworkSignature net_sig;
         if (detect_network(solve_model, &net_sig)) {
             if (model->verbose) {
@@ -529,7 +696,7 @@ int ralph_optimize(RalphModel *model) {
         }
     }
 
-    if (ralph_is_mip(model)) {
+    if (solve_as_mip) {
         /* MIP solve - LAP and network problems were already handled above before presolve */
         model->mip_solver = mip_create(solve_model, model->detect_special, model->node_pool_capacity);
         if (!model->mip_solver) {
@@ -548,6 +715,7 @@ int ralph_optimize(RalphModel *model) {
         model->mip_solver->dual_bound_flip = model->dual_bound_flip;
         model->mip_solver->dual_steepest_edge = model->dual_steepest_edge;
         model->mip_solver->lu_supernode = model->lu_supernode;
+        model->mip_solver->mip_start_repair_mode = (int)model->mip_start_repair_mode;
 
         /* Set node selection strategy */
         model->mip_solver->node_select = (NodeSelectStrategy)model->node_select;
@@ -608,10 +776,68 @@ int ralph_optimize(RalphModel *model) {
             model->mip_solver->has_branch_callback = 1;
         }
 
+        /* Pass staged MIP start to the (possibly presolved) MIP model. */
+        if (model->mip_start) {
+            int n_solve = solve_model->num_vars;
+            int mapped_ok = (model->mip_start_n == n_orig && n_solve > 0);
+            double *solve_start = NULL;
+            int *solve_mask = NULL;
+
+            if (mapped_ok) {
+                solve_start = (double*)malloc((size_t)n_solve * sizeof(double));
+                solve_mask = (int*)calloc((size_t)n_solve, sizeof(int));
+                if (!solve_start) {
+                    if (presolved) presolve_free(presolved);
+                    model->status = RALPH_STATUS_ERROR;
+                    return -1;
+                }
+                if (!solve_mask) {
+                    free(solve_start);
+                    if (presolved) presolve_free(presolved);
+                    model->status = RALPH_STATUS_ERROR;
+                    return -1;
+                }
+
+                if (presolved && presolved->var_map) {
+                    for (int j = 0; j < n_solve; j++) {
+                        int orig = presolved->var_map[j];
+                        if (orig < 0 || orig >= model->mip_start_n) {
+                            mapped_ok = 0;
+                            break;
+                        }
+                        solve_start[j] = model->mip_start[orig];
+                        solve_mask[j] = (model->mip_start_mask && model->mip_start_mask[orig]) ? 1 : 0;
+                    }
+                } else {
+                    memcpy(solve_start, model->mip_start, (size_t)n_solve * sizeof(double));
+                    if (model->mip_start_mask) {
+                        memcpy(solve_mask, model->mip_start_mask, (size_t)n_solve * sizeof(int));
+                    } else {
+                        for (int j = 0; j < n_solve; j++) solve_mask[j] = 1;
+                    }
+                }
+            }
+
+            if (mapped_ok &&
+                mip_set_start_ex(model->mip_solver, solve_start, solve_mask,
+                                 n_solve, (int)model->mip_start_repair_mode) == 0) {
+                model->mip_start_status = RALPH_MIP_START_PENDING;
+            } else {
+                model->mip_start_status = RALPH_MIP_START_REJECTED;
+            }
+            free(solve_start);
+            free(solve_mask);
+        }
+
         /* Solve */
         mip_solve(model->mip_solver);
 
         model->status = model->mip_solver->status;
+        if (model->mip_start && model->mip_solver->mip_start_attempted > 0) {
+            model->mip_start_status = (model->mip_solver->mip_start_accepted > 0) ?
+                                      RALPH_MIP_START_ACCEPTED :
+                                      RALPH_MIP_START_REJECTED;
+        }
 
         if (model->mip_solver->has_incumbent) {
             model->obj_value = model->mip_solver->best_obj;
@@ -669,6 +895,19 @@ int ralph_optimize(RalphModel *model) {
         if (model->dual_steepest_edge >= 0)
             model->lp_solver->use_dual_steepest_edge = model->dual_steepest_edge;
         model->lp_solver->lu_supernode = model->lu_supernode;
+
+        if (model->staged_basis && model->staged_var_status) {
+            if (simplex_set_warm_basis(model->lp_solver,
+                                       model->staged_basis_m,
+                                       model->staged_basis_n,
+                                       model->staged_basis,
+                                       model->staged_var_status) != 0) {
+                if (presolved) presolve_free(presolved);
+                model->status = RALPH_STATUS_ERROR;
+                return -1;
+            }
+            ralph_clear_staged_basis(model);
+        }
 
         /* Solve — method dispatch (primal/dual/auto) is handled inside simplex_solve */
         simplex_solve(model->lp_solver);
@@ -731,6 +970,18 @@ int ralph_optimize(RalphModel *model) {
     }
 
     return 0;
+}
+
+int ralph_optimize(RalphModel *model) {
+    return ralph_optimize_with_mode(model, RALPH_SOLVE_AUTO);
+}
+
+int ralph_optimize_lp(RalphModel *model) {
+    return ralph_optimize_with_mode(model, RALPH_SOLVE_LP_ONLY);
+}
+
+int ralph_optimize_mip(RalphModel *model) {
+    return ralph_optimize_with_mode(model, RALPH_SOLVE_MIP_ONLY);
 }
 
 /* ============================================================================
@@ -851,6 +1102,80 @@ int ralph_set_branch_directions(RalphModel *model, const int *directions) {
     return 0;
 }
 
+int ralph_set_mip_start(RalphModel *model, const double *x) {
+    if (!model || !model->lp_model || !x) return -1;
+
+    int n = model->lp_model->num_vars;
+    if (n <= 0) return -1;
+    if (ralph_set_mip_start_copy(model, x, NULL, n) != 0) return -1;
+    return 0;
+}
+
+int ralph_set_mip_start_sparse(RalphModel *model, int count,
+                               const int *indices, const double *values) {
+    if (!model || !model->lp_model) return -1;
+    if (count < 0) return -1;
+    if (count > 0 && (!indices || !values)) return -1;
+
+    int n = model->lp_model->num_vars;
+    if (n <= 0) return -1;
+
+    if (!model->mip_start || model->mip_start_n != n || !model->mip_start_mask) {
+        double *dense = (double*)malloc((size_t)n * sizeof(double));
+        int *mask = (int*)calloc((size_t)n, sizeof(int));
+        if (!dense || !mask) {
+            free(dense);
+            free(mask);
+            return -1;
+        }
+        for (int j = 0; j < n; j++) dense[j] = model->lp_model->lb[j];
+        free(model->mip_start);
+        free(model->mip_start_mask);
+        model->mip_start = dense;
+        model->mip_start_mask = mask;
+        model->mip_start_n = n;
+        model->mip_start_nnz = 0;
+    }
+
+    for (int k = 0; k < count; k++) {
+        int j = indices[k];
+        if (j < 0 || j >= n) return -1;
+        model->mip_start[j] = values[k];
+        if (!model->mip_start_mask[j]) {
+            model->mip_start_mask[j] = 1;
+            model->mip_start_nnz++;
+        }
+    }
+
+    model->mip_start_status = RALPH_MIP_START_PENDING;
+    return 0;
+}
+
+void ralph_clear_mip_start(RalphModel *model) {
+    if (!model) return;
+    ralph_clear_mip_start_internal(model);
+}
+
+RalphMIPStartStatus ralph_get_mip_start_status(const RalphModel *model) {
+    if (!model) return RALPH_MIP_START_NONE;
+    return model->mip_start_status;
+}
+
+int ralph_set_mip_start_repair_mode(RalphModel *model, RalphMIPStartRepairMode mode) {
+    if (!model) return -1;
+    if (mode < RALPH_MIP_START_REPAIR_STRICT ||
+        mode > RALPH_MIP_START_REPAIR_PROJECT_AND_ROUND) {
+        return -1;
+    }
+    model->mip_start_repair_mode = mode;
+    return 0;
+}
+
+RalphMIPStartRepairMode ralph_get_mip_start_repair_mode(const RalphModel *model) {
+    if (!model) return RALPH_MIP_START_REPAIR_STRICT;
+    return model->mip_start_repair_mode;
+}
+
 /* ============================================================================
  * Constraint Modification
  * ============================================================================ */
@@ -860,13 +1185,23 @@ int ralph_set_constraint_rhs(RalphModel *model, int constraint, double rhs) {
     if (constraint < 0 || constraint >= model->lp_model->num_cons) return -1;
 
     model->lp_model->b[constraint] = rhs;
+    ralph_invalidate_solve_state(model);
+    return 0;
+}
 
-    /* Invalidate any existing solver state to force re-solve */
-    simplex_free(model->lp_solver);
-    model->lp_solver = NULL;
-    mip_free(model->mip_solver);
-    model->mip_solver = NULL;
+int ralph_set_constraint_coef(RalphModel *model, int constraint, int var, double coef) {
+    if (!model || !model->lp_model) return -1;
+    if (lp_model_set_coefficient(model->lp_model, constraint, var, coef) != 0) return -1;
+    ralph_invalidate_solve_state(model);
+    return 0;
+}
 
+int ralph_set_constraint_coefs(RalphModel *model, int count,
+                               const int *constraints, const int *vars,
+                               const double *coefs) {
+    if (!model || !model->lp_model) return -1;
+    if (lp_model_set_coefficients(model->lp_model, count, constraints, vars, coefs) != 0) return -1;
+    ralph_invalidate_solve_state(model);
     return 0;
 }
 
@@ -900,6 +1235,9 @@ int ralph_add_lazy_constraint(RalphModel *model, const RalphCut *cut) {
     /* Keep LP solver for potential warm start, but invalidate cached solution */
     if (model->lp_solver) {
         model->lp_solver->status = RALPH_STATUS_UNKNOWN;
+    }
+    if (model->mip_start && model->mip_start_n == model->lp_model->num_vars) {
+        model->mip_start_status = RALPH_MIP_START_PENDING;
     }
 
     return 0;
@@ -960,23 +1298,15 @@ RalphBasis* ralph_save_basis(const RalphModel *model) {
 
 int ralph_load_basis(RalphModel *model, const RalphBasis *basis) {
     if (!model || !basis) return -1;
+    if (!basis->basis || !basis->var_status) return -1;
 
-    /* We can't load basis directly into the simplex solver since it might not exist yet.
-     * Instead, we need to store the basis in the model and apply it when we create the solver.
-     *
-     * For now, if the solver already exists and has matching dimensions, we can load directly.
-     */
+    /* Load directly into an existing live simplex tableau when available. */
     if (model->lp_solver && model->lp_solver->tableau) {
         SimplexTableau *tab = model->lp_solver->tableau;
 
         /* Check dimension compatibility */
         if (tab->m != basis->m || tab->n != basis->n) {
             return -1;  /* Dimensions don't match */
-        }
-
-        /* Validate basis structure is complete */
-        if (!basis->basis || !basis->var_status) {
-            return -1;
         }
 
         /* Save backup before modification so we can restore on refactorize failure */
@@ -990,35 +1320,11 @@ int ralph_load_basis(RalphModel *model, const RalphBasis *basis) {
         memcpy(orig_basis, tab->basis, (size_t)tab->m * sizeof(int));
         memcpy(orig_status, tab->var_status, (size_t)tab->n * sizeof(VarStatus));
 
-        /* Copy basis data */
-        memcpy(tab->basis, basis->basis, (size_t)tab->m * sizeof(int));
-        memcpy(tab->var_status, basis->var_status, (size_t)tab->n * sizeof(VarStatus));
-
-        /* Rebuild basis_pos from basis */
-        for (int j = 0; j < tab->n; j++) {
-            tab->basis_pos[j] = -1;  /* Mark as non-basic */
-        }
-        for (int i = 0; i < tab->m; i++) {
-            int basic_var = tab->basis[i];
-            if (basic_var >= 0 && basic_var < tab->n) {
-                tab->basis_pos[basic_var] = i;
-            }
-        }
-
-        /* Invalidate current solution to force recomputation */
-        tab->duals_valid = 0;
-        tab->rc_all_valid = 0;
-
-        /* Force refactorization with new basis */
-        if (tableau_refactorize(tab) != 0) {
+        if (tableau_apply_warm_basis(tab, basis->m, basis->n, basis->basis, basis->var_status) != 0 ||
+            tableau_refactorize(tab) != 0) {
             /* Restore original basis to avoid corrupted state */
-            memcpy(tab->basis, orig_basis, (size_t)tab->m * sizeof(int));
-            memcpy(tab->var_status, orig_status, (size_t)tab->n * sizeof(VarStatus));
-            for (int j2 = 0; j2 < tab->n; j2++) tab->basis_pos[j2] = -1;
-            for (int i2 = 0; i2 < tab->m; i2++) {
-                int bv = tab->basis[i2];
-                if (bv >= 0 && bv < tab->n) tab->basis_pos[bv] = i2;
-            }
+            (void)tableau_apply_warm_basis(tab, tab->m, tab->n, orig_basis, orig_status);
+            (void)tableau_refactorize(tab);
             free(orig_basis);
             free(orig_status);
             return -1;
@@ -1030,9 +1336,11 @@ int ralph_load_basis(RalphModel *model, const RalphBasis *basis) {
         return 0;
     }
 
-    /* If no solver exists yet, we'd need to store the basis and apply it later.
-     * For now, return error - caller should load basis after first solve. */
-    return -1;
+    /* No live solver yet: stage basis and apply on next optimize() call. */
+    if (model->lp_model && basis->m != model->lp_model->num_cons) {
+        return -1;
+    }
+    return ralph_stage_basis_copy(model, basis);
 }
 
 void ralph_free_basis(RalphBasis *basis) {
@@ -1040,6 +1348,231 @@ void ralph_free_basis(RalphBasis *basis) {
     free(basis->basis);
     free(basis->var_status);
     free(basis);
+}
+
+int ralph_write_basis_file(const RalphBasis *basis, const char *filename) {
+    if (!basis || !filename || !basis->basis || !basis->var_status) return -1;
+    if (basis->m < 0 || basis->n < 0) return -1;
+
+    FILE *fp = fopen(filename, "w");
+    if (!fp) return -1;
+
+    if (fprintf(fp, "RALPH_BASIS_V1 %d %d\n", basis->m, basis->n) < 0) {
+        fclose(fp);
+        return -1;
+    }
+
+    for (int i = 0; i < basis->m; i++) {
+        if (fprintf(fp, "%d%c", basis->basis[i], (i + 1 == basis->m) ? '\n' : ' ') < 0) {
+            fclose(fp);
+            return -1;
+        }
+    }
+    if (basis->m == 0 && fprintf(fp, "\n") < 0) {
+        fclose(fp);
+        return -1;
+    }
+
+    for (int j = 0; j < basis->n; j++) {
+        if (fprintf(fp, "%d%c", (int)basis->var_status[j], (j + 1 == basis->n) ? '\n' : ' ') < 0) {
+            fclose(fp);
+            return -1;
+        }
+    }
+    if (basis->n == 0 && fprintf(fp, "\n") < 0) {
+        fclose(fp);
+        return -1;
+    }
+
+    if (fclose(fp) != 0) return -1;
+    return 0;
+}
+
+RalphBasis* ralph_read_basis_file(const char *filename) {
+    if (!filename) return NULL;
+
+    FILE *fp = fopen(filename, "r");
+    if (!fp) return NULL;
+
+    char magic[32] = {0};
+    int m = 0, n = 0;
+    if (fscanf(fp, "%31s %d %d", magic, &m, &n) != 3) {
+        fclose(fp);
+        return NULL;
+    }
+    if (strcmp(magic, "RALPH_BASIS_V1") != 0 || m < 0 || n < 0) {
+        fclose(fp);
+        return NULL;
+    }
+
+    RalphBasis *basis = (RalphBasis*)calloc(1, sizeof(RalphBasis));
+    if (!basis) {
+        fclose(fp);
+        return NULL;
+    }
+    basis->m = m;
+    basis->n = n;
+
+    if (m > 0) {
+        basis->basis = (int*)calloc((size_t)m, sizeof(int));
+        if (!basis->basis) {
+            ralph_free_basis(basis);
+            fclose(fp);
+            return NULL;
+        }
+    }
+    if (n > 0) {
+        basis->var_status = (VarStatus*)calloc((size_t)n, sizeof(VarStatus));
+        if (!basis->var_status) {
+            ralph_free_basis(basis);
+            fclose(fp);
+            return NULL;
+        }
+    }
+
+    for (int i = 0; i < m; i++) {
+        if (fscanf(fp, "%d", &basis->basis[i]) != 1) {
+            ralph_free_basis(basis);
+            fclose(fp);
+            return NULL;
+        }
+    }
+    for (int j = 0; j < n; j++) {
+        int v = 0;
+        if (fscanf(fp, "%d", &v) != 1) {
+            ralph_free_basis(basis);
+            fclose(fp);
+            return NULL;
+        }
+        if (v < (int)RALPH_BASIC || v > (int)RALPH_FIXED) {
+            ralph_free_basis(basis);
+            fclose(fp);
+            return NULL;
+        }
+        basis->var_status[j] = (VarStatus)v;
+    }
+
+    fclose(fp);
+    return basis;
+}
+
+int ralph_write_mip_start_file(const RalphModel *model, const char *filename) {
+    if (!model || !model->lp_model || !filename) return -1;
+
+    int n = model->lp_model->num_vars;
+    if (n <= 0) return -1;
+
+    const double *start = NULL;
+    const int *mask = NULL;
+    int nnz = 0;
+
+    if (model->mip_start && model->mip_start_n == n) {
+        start = model->mip_start;
+        mask = model->mip_start_mask;
+        nnz = model->mip_start_nnz;
+    } else if (model->solution && ralph_is_mip(model)) {
+        start = model->solution;
+    }
+
+    if (!start) return -1;
+
+    FILE *fp = fopen(filename, "w");
+    if (!fp) return -1;
+
+    if (fprintf(fp, "RALPH_MIPSTART_V1 %d %d %d\n", n,
+                (int)model->mip_start_repair_mode, nnz) < 0) {
+        fclose(fp);
+        return -1;
+    }
+
+    for (int j = 0; j < n; j++) {
+        if (fprintf(fp, "%.17g%c", start[j], (j + 1 == n) ? '\n' : ' ') < 0) {
+            fclose(fp);
+            return -1;
+        }
+    }
+
+    for (int j = 0; j < n; j++) {
+        int bit = mask ? (mask[j] ? 1 : 0) : 1;
+        if (fprintf(fp, "%d%c", bit, (j + 1 == n) ? '\n' : ' ') < 0) {
+            fclose(fp);
+            return -1;
+        }
+    }
+
+    if (fclose(fp) != 0) return -1;
+    return 0;
+}
+
+int ralph_read_mip_start_file(RalphModel *model, const char *filename) {
+    if (!model || !model->lp_model || !filename) return -1;
+
+    FILE *fp = fopen(filename, "r");
+    if (!fp) return -1;
+
+    char magic[32] = {0};
+    int n = 0;
+    int repair = 0;
+    int nnz = 0;
+    if (fscanf(fp, "%31s %d %d %d", magic, &n, &repair, &nnz) != 4) {
+        fclose(fp);
+        return -1;
+    }
+    if (strcmp(magic, "RALPH_MIPSTART_V1") != 0 || n <= 0 ||
+        n != model->lp_model->num_vars) {
+        fclose(fp);
+        return -1;
+    }
+
+    double *start = (double*)malloc((size_t)n * sizeof(double));
+    int *mask = (int*)calloc((size_t)n, sizeof(int));
+    if (!start || !mask) {
+        free(start);
+        free(mask);
+        fclose(fp);
+        return -1;
+    }
+
+    for (int j = 0; j < n; j++) {
+        if (fscanf(fp, "%lf", &start[j]) != 1) {
+            free(start);
+            free(mask);
+            fclose(fp);
+            return -1;
+        }
+    }
+    int counted = 0;
+    for (int j = 0; j < n; j++) {
+        int bit = 0;
+        if (fscanf(fp, "%d", &bit) != 1) {
+            free(start);
+            free(mask);
+            fclose(fp);
+            return -1;
+        }
+        mask[j] = bit ? 1 : 0;
+        counted += mask[j];
+    }
+
+    fclose(fp);
+
+    if (ralph_set_mip_start_copy(model, start, mask, n) != 0) {
+        free(start);
+        free(mask);
+        return -1;
+    }
+    model->mip_start_nnz = counted;
+
+    if (repair >= (int)RALPH_MIP_START_REPAIR_STRICT &&
+        repair <= (int)RALPH_MIP_START_REPAIR_PROJECT_AND_ROUND) {
+        model->mip_start_repair_mode = (RalphMIPStartRepairMode)repair;
+    } else {
+        model->mip_start_repair_mode = RALPH_MIP_START_REPAIR_STRICT;
+    }
+
+    free(start);
+    free(mask);
+    return 0;
 }
 
 /* ============================================================================
@@ -1105,6 +1638,82 @@ int ralph_solve_benders(
 /* Helper macro for safe string comparison with string literals only.
  * sizeof(lit) includes the null terminator, so strncmp is bounded. */
 #define STREQ(s, lit) (strncmp((s), (lit), sizeof(lit)) == 0)
+
+static int ralph_is_shared_int_param_set(const char *name) {
+    return STREQ(name, "presolve") || STREQ(name, "Presolve") ||
+           STREQ(name, "verbose") || STREQ(name, "OutputFlag") ||
+           STREQ(name, "telemetry") || STREQ(name, "Telemetry") ||
+           STREQ(name, "detect_special") || STREQ(name, "DetectSpecial") ||
+           STREQ(name, "presolve_mask") || STREQ(name, "PresolveMask") ||
+           STREQ(name, "dual_bound_flip") || STREQ(name, "DualBoundFlip") ||
+           STREQ(name, "dual_steepest_edge") || STREQ(name, "DualSteepestEdge") ||
+           STREQ(name, "lu_supernode") || STREQ(name, "LuSupernode");
+}
+
+static int ralph_is_lp_int_param_set(const char *name) {
+    return STREQ(name, "max_iterations") || STREQ(name, "IterationLimit") ||
+           STREQ(name, "method") || STREQ(name, "Method") ||
+           STREQ(name, "pricing") || STREQ(name, "Pricing") ||
+           STREQ(name, "force_two_phase") || STREQ(name, "TwoPhase") ||
+           STREQ(name, "trace_phase1") || STREQ(name, "TracePhase1") ||
+           STREQ(name, "scaling") || STREQ(name, "Scaling") ||
+           STREQ(name, "scaling_rounds") || STREQ(name, "ScalingRounds") ||
+           STREQ(name, "crash") || STREQ(name, "Crash") ||
+           STREQ(name, "verify") || STREQ(name, "Verify") ||
+           STREQ(name, "phase1_pricing") || STREQ(name, "Phase1Pricing");
+}
+
+static int ralph_is_mip_int_param_set(const char *name) {
+    return STREQ(name, "max_nodes") || STREQ(name, "NodeLimit") ||
+           STREQ(name, "max_cut_rounds") || STREQ(name, "CutRounds") ||
+           STREQ(name, "node_pool_capacity") || STREQ(name, "PoolCapacity") ||
+           STREQ(name, "node_select") || STREQ(name, "NodeSelect") ||
+           STREQ(name, "var_select") || STREQ(name, "VarSelect");
+}
+
+static int ralph_is_shared_dbl_param_set(const char *name) {
+    return STREQ(name, "time_limit") || STREQ(name, "TimeLimit");
+}
+
+static int ralph_is_lp_dbl_param_set(const char *name) {
+    return STREQ(name, "obj_limit") || STREQ(name, "ObjLimit") ||
+           STREQ(name, "feas_tol") || STREQ(name, "opt_tol") ||
+           STREQ(name, "pivot_tol");
+}
+
+static int ralph_is_mip_dbl_param_set(const char *name) {
+    return STREQ(name, "mip_gap") || STREQ(name, "MIPGap");
+}
+
+static int ralph_is_shared_int_param_get(const char *name) {
+    return STREQ(name, "presolve") || STREQ(name, "verbose") ||
+           STREQ(name, "telemetry") || STREQ(name, "Telemetry") ||
+           STREQ(name, "presolve_mask");
+}
+
+static int ralph_is_lp_int_param_get(const char *name) {
+    return STREQ(name, "max_iterations") || STREQ(name, "method") ||
+           STREQ(name, "trace_phase1");
+}
+
+static int ralph_is_mip_int_param_get(const char *name) {
+    return STREQ(name, "max_nodes") || STREQ(name, "max_cut_rounds") ||
+           STREQ(name, "node_pool_capacity") || STREQ(name, "node_select") ||
+           STREQ(name, "var_select");
+}
+
+static int ralph_is_shared_dbl_param_get(const char *name) {
+    return STREQ(name, "time_limit");
+}
+
+static int ralph_is_lp_dbl_param_get(const char *name) {
+    return STREQ(name, "obj_limit") || STREQ(name, "feas_tol") ||
+           STREQ(name, "opt_tol") || STREQ(name, "pivot_tol");
+}
+
+static int ralph_is_mip_dbl_param_get(const char *name) {
+    return STREQ(name, "mip_gap");
+}
 
 int ralph_set_int_param(RalphModel *model, const char *name, int value) {
     if (!model || !name) return -1;
@@ -1255,6 +1864,54 @@ int ralph_get_dbl_param(const RalphModel *model, const char *name, double *value
     }
 
     return 0;
+}
+
+int ralph_set_lp_int_param(RalphModel *model, const char *name, int value) {
+    if (!name) return -1;
+    if (!ralph_is_shared_int_param_set(name) && !ralph_is_lp_int_param_set(name)) return -1;
+    return ralph_set_int_param(model, name, value);
+}
+
+int ralph_set_lp_dbl_param(RalphModel *model, const char *name, double value) {
+    if (!name) return -1;
+    if (!ralph_is_shared_dbl_param_set(name) && !ralph_is_lp_dbl_param_set(name)) return -1;
+    return ralph_set_dbl_param(model, name, value);
+}
+
+int ralph_get_lp_int_param(const RalphModel *model, const char *name, int *value) {
+    if (!name) return -1;
+    if (!ralph_is_shared_int_param_get(name) && !ralph_is_lp_int_param_get(name)) return -1;
+    return ralph_get_int_param(model, name, value);
+}
+
+int ralph_get_lp_dbl_param(const RalphModel *model, const char *name, double *value) {
+    if (!name) return -1;
+    if (!ralph_is_shared_dbl_param_get(name) && !ralph_is_lp_dbl_param_get(name)) return -1;
+    return ralph_get_dbl_param(model, name, value);
+}
+
+int ralph_set_mip_int_param(RalphModel *model, const char *name, int value) {
+    if (!name) return -1;
+    if (!ralph_is_shared_int_param_set(name) && !ralph_is_mip_int_param_set(name)) return -1;
+    return ralph_set_int_param(model, name, value);
+}
+
+int ralph_set_mip_dbl_param(RalphModel *model, const char *name, double value) {
+    if (!name) return -1;
+    if (!ralph_is_shared_dbl_param_set(name) && !ralph_is_mip_dbl_param_set(name)) return -1;
+    return ralph_set_dbl_param(model, name, value);
+}
+
+int ralph_get_mip_int_param(const RalphModel *model, const char *name, int *value) {
+    if (!name) return -1;
+    if (!ralph_is_shared_int_param_get(name) && !ralph_is_mip_int_param_get(name)) return -1;
+    return ralph_get_int_param(model, name, value);
+}
+
+int ralph_get_mip_dbl_param(const RalphModel *model, const char *name, double *value) {
+    if (!name) return -1;
+    if (!ralph_is_shared_dbl_param_get(name) && !ralph_is_mip_dbl_param_get(name)) return -1;
+    return ralph_get_dbl_param(model, name, value);
 }
 
 /* ============================================================================

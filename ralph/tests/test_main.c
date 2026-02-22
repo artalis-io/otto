@@ -836,6 +836,140 @@ void test_api_functions(void) {
     ralph_free(model);
 }
 
+static void build_phase3_lp_fixture(RalphModel *model) {
+    int idx1[] = {0, 1};
+    int idx2[] = {0, 1};
+    double val1[] = {1.0, 1.0};
+    double val2[] = {2.0, 1.0};
+
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+    ralph_add_constraint(model, 2, idx1, val1, RALPH_LESS_EQUAL, 4.0);
+    ralph_add_constraint(model, 2, idx2, val2, RALPH_LESS_EQUAL, 6.0);
+}
+
+static void build_phase3_mip_fixture(RalphModel *model) {
+    int idx[] = {0, 1};
+    double val[] = {2.0, 3.0};
+
+    ralph_set_obj_sense(model, RALPH_MAXIMIZE);
+    ralph_add_var(model, 0.0, 1.0, 5.0, RALPH_BINARY);
+    ralph_add_var(model, 0.0, 1.0, 4.0, RALPH_BINARY);
+    ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 3.0);
+}
+
+void test_phase3_optimize_entrypoints(void) {
+    printf("\n=== Test: Phase 3 Optimize Entry Points ===\n");
+
+    RalphModel *lp_model = ralph_create();
+    build_phase3_lp_fixture(lp_model);
+    ASSERT(ralph_optimize_lp(lp_model) == 0, "LP optimize entrypoint succeeds on LP model");
+    ASSERT(ralph_get_status(lp_model) == RALPH_STATUS_OPTIMAL, "LP optimize entrypoint returns OPTIMAL");
+    ASSERT(ralph_get_lp_solver(lp_model) != NULL, "LP optimize entrypoint creates LP solver");
+    ASSERT(ralph_get_mip_solver(lp_model) == NULL, "LP optimize entrypoint does not create MIP solver");
+    ralph_free(lp_model);
+
+    RalphModel *lp_for_mip = ralph_create();
+    build_phase3_lp_fixture(lp_for_mip);
+    ASSERT(ralph_optimize_mip(lp_for_mip) == -1, "MIP optimize entrypoint rejects pure LP model");
+    ASSERT(ralph_get_status(lp_for_mip) == RALPH_STATUS_ERROR, "MIP optimize entrypoint sets ERROR for pure LP model");
+    ASSERT(ralph_get_mip_solver(lp_for_mip) == NULL, "Rejected MIP optimize does not create MIP solver");
+    ralph_free(lp_for_mip);
+
+    RalphModel *mip_model = ralph_create();
+    build_phase3_mip_fixture(mip_model);
+    ralph_set_int_param(mip_model, "detect_special", 0);
+    ASSERT(ralph_optimize_mip(mip_model) == 0, "MIP optimize entrypoint succeeds on integer model");
+    ASSERT(ralph_get_status(mip_model) == RALPH_STATUS_OPTIMAL, "MIP optimize entrypoint returns OPTIMAL");
+    ASSERT(ralph_get_mip_solver(mip_model) != NULL, "MIP optimize entrypoint creates MIP solver");
+    ralph_free(mip_model);
+
+    RalphModel *mip_for_lp = ralph_create();
+    build_phase3_mip_fixture(mip_for_lp);
+    ASSERT(ralph_optimize_lp(mip_for_lp) == -1, "LP optimize entrypoint rejects integer model");
+    ASSERT(ralph_get_status(mip_for_lp) == RALPH_STATUS_ERROR, "LP optimize entrypoint sets ERROR for integer model");
+    ASSERT(ralph_get_mip_solver(mip_for_lp) == NULL, "Rejected LP optimize does not create MIP solver");
+    ralph_free(mip_for_lp);
+}
+
+void test_phase3_param_partition(void) {
+    printf("\n=== Test: Phase 3 Strict Parameter Partition ===\n");
+
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Model created for strict parameter partition");
+
+    ASSERT(ralph_set_lp_int_param(model, "method", 1) == 0, "LP strict int accepts LP-only param");
+    ASSERT(ralph_set_lp_int_param(model, "max_nodes", 128) == -1, "LP strict int rejects MIP-only param");
+    ASSERT(ralph_set_mip_int_param(model, "max_nodes", 128) == 0, "MIP strict int accepts MIP-only param");
+    ASSERT(ralph_set_mip_int_param(model, "method", 1) == -1, "MIP strict int rejects LP-only param");
+    ASSERT(ralph_set_lp_int_param(model, "verbose", 1) == 0, "LP strict int accepts shared param");
+    ASSERT(ralph_set_mip_int_param(model, "verbose", 0) == 0, "MIP strict int accepts shared param");
+
+    ASSERT(ralph_set_lp_dbl_param(model, "obj_limit", 7.5) == 0, "LP strict dbl accepts LP-only param");
+    ASSERT(ralph_set_lp_dbl_param(model, "mip_gap", 1e-2) == -1, "LP strict dbl rejects MIP-only param");
+    ASSERT(ralph_set_mip_dbl_param(model, "mip_gap", 1e-2) == 0, "MIP strict dbl accepts MIP-only param");
+    ASSERT(ralph_set_mip_dbl_param(model, "obj_limit", 7.5) == -1, "MIP strict dbl rejects LP-only param");
+    ASSERT(ralph_set_lp_dbl_param(model, "time_limit", 10.0) == 0, "LP strict dbl accepts shared param");
+    ASSERT(ralph_set_mip_dbl_param(model, "time_limit", 20.0) == 0, "MIP strict dbl accepts shared param");
+
+    int i_val = 0;
+    ASSERT(ralph_get_lp_int_param(model, "method", &i_val) == 0, "LP strict get int reads LP-only param");
+    ASSERT(i_val == 1, "LP strict get int returns set method");
+    ASSERT(ralph_get_mip_int_param(model, "max_nodes", &i_val) == 0, "MIP strict get int reads MIP-only param");
+    ASSERT(i_val == 128, "MIP strict get int returns set max_nodes");
+    ASSERT(ralph_get_lp_int_param(model, "max_nodes", &i_val) == -1, "LP strict get int rejects MIP-only param");
+    ASSERT(ralph_get_mip_int_param(model, "method", &i_val) == -1, "MIP strict get int rejects LP-only param");
+
+    double d_val = 0.0;
+    ASSERT(ralph_get_lp_dbl_param(model, "obj_limit", &d_val) == 0, "LP strict get dbl reads LP-only param");
+    ASSERT_NEAR(d_val, 7.5, TOLERANCE, "LP strict get dbl returns set obj_limit");
+    ASSERT(ralph_get_mip_dbl_param(model, "mip_gap", &d_val) == 0, "MIP strict get dbl reads MIP-only param");
+    ASSERT_NEAR(d_val, 1e-2, TOLERANCE, "MIP strict get dbl returns set mip_gap");
+    ASSERT(ralph_get_lp_dbl_param(model, "mip_gap", &d_val) == -1, "LP strict get dbl rejects MIP-only param");
+    ASSERT(ralph_get_mip_dbl_param(model, "obj_limit", &d_val) == -1, "MIP strict get dbl rejects LP-only param");
+
+    ralph_free(model);
+}
+
+void test_phase3_optimize_backward_compatibility(void) {
+    printf("\n=== Test: Phase 3 Backward Compatibility ===\n");
+
+    RalphModel *lp_legacy = ralph_create();
+    RalphModel *lp_explicit = ralph_create();
+    build_phase3_lp_fixture(lp_legacy);
+    build_phase3_lp_fixture(lp_explicit);
+    ASSERT(ralph_set_int_param(lp_legacy, "verbose", 0) == 0, "Legacy LP set_int_param works");
+    ASSERT(ralph_set_dbl_param(lp_legacy, "time_limit", 5.0) == 0, "Legacy LP set_dbl_param works");
+    ASSERT(ralph_set_int_param(lp_explicit, "verbose", 0) == 0, "Explicit LP set_int_param works");
+    ASSERT(ralph_set_dbl_param(lp_explicit, "time_limit", 5.0) == 0, "Explicit LP set_dbl_param works");
+    ASSERT(ralph_optimize(lp_legacy) == 0, "Legacy ralph_optimize solves LP");
+    ASSERT(ralph_optimize_lp(lp_explicit) == 0, "Explicit LP entrypoint solves LP");
+    ASSERT(ralph_get_status(lp_legacy) == ralph_get_status(lp_explicit), "Legacy vs explicit LP status match");
+    ASSERT_NEAR(ralph_get_objval(lp_legacy), ralph_get_objval(lp_explicit), TOLERANCE,
+                "Legacy vs explicit LP objective match");
+    ralph_free(lp_legacy);
+    ralph_free(lp_explicit);
+
+    RalphModel *mip_legacy = ralph_create();
+    RalphModel *mip_explicit = ralph_create();
+    build_phase3_mip_fixture(mip_legacy);
+    build_phase3_mip_fixture(mip_explicit);
+    ASSERT(ralph_set_int_param(mip_legacy, "detect_special", 0) == 0, "Legacy MIP detect_special set");
+    ASSERT(ralph_set_int_param(mip_explicit, "detect_special", 0) == 0, "Explicit MIP detect_special set");
+    ASSERT(ralph_set_int_param(mip_legacy, "max_nodes", 128) == 0, "Legacy MIP max_nodes set");
+    ASSERT(ralph_set_int_param(mip_explicit, "max_nodes", 128) == 0, "Explicit MIP max_nodes set");
+    ASSERT(ralph_set_dbl_param(mip_legacy, "mip_gap", 0.0) == 0, "Legacy MIP mip_gap set");
+    ASSERT(ralph_set_dbl_param(mip_explicit, "mip_gap", 0.0) == 0, "Explicit MIP mip_gap set");
+    ASSERT(ralph_optimize(mip_legacy) == 0, "Legacy ralph_optimize solves MIP");
+    ASSERT(ralph_optimize_mip(mip_explicit) == 0, "Explicit MIP entrypoint solves MIP");
+    ASSERT(ralph_get_status(mip_legacy) == ralph_get_status(mip_explicit), "Legacy vs explicit MIP status match");
+    ASSERT_NEAR(ralph_get_objval(mip_legacy), ralph_get_objval(mip_explicit), TOLERANCE,
+                "Legacy vs explicit MIP objective match");
+    ralph_free(mip_legacy);
+    ralph_free(mip_explicit);
+}
+
 /* ============================================================================
  * Test: Larger LP (Performance)
  *
@@ -5375,6 +5509,9 @@ int main(int argc, char **argv) {
 
     /* Runtime telemetry parameter propagation (LP + MIP paths) */
     test_runtime_telemetry_param_propagation();
+    test_phase3_optimize_entrypoints();
+    test_phase3_param_partition();
+    test_phase3_optimize_backward_compatibility();
 
     /* API Tests */
     test_api_functions();

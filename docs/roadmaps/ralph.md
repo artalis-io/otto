@@ -227,6 +227,37 @@ Exit criteria:
 - Existing callers remain source-compatible.
 - New tests verify LP-only APIs do not instantiate MIP paths and vice versa.
 
+Progress (2026-02-22):
+- P3.1/P3.2 implemented:
+  - Added explicit optimize entry points in public API:
+    - `ralph_optimize_lp()`
+    - `ralph_optimize_mip()`
+  - Kept `ralph_optimize()` as compatibility dispatcher.
+  - Added strict mode behavior:
+    - `ralph_optimize_lp()` rejects integer models (`RALPH_STATUS_ERROR`).
+    - `ralph_optimize_mip()` rejects pure LP models (`RALPH_STATUS_ERROR`).
+  - Added tests in `ralph/tests/test_main.c`:
+    - `test_phase3_optimize_entrypoints` verifies LP path does not create MIP solver
+      and explicit MIP path creates MIP solver only for integer models.
+- P3.3 implemented:
+  - Added strict LP/MIP parameter APIs (non-breaking additions):
+    - LP strict: `ralph_set/get_lp_{int,dbl}_param()`
+    - MIP strict: `ralph_set/get_mip_{int,dbl}_param()`
+  - Added routing/rejection tests:
+    - `test_phase3_param_partition`
+- P3.4 implemented:
+  - Added backward-compatibility regression test:
+    - `test_phase3_optimize_backward_compatibility`
+  - Confirms legacy `ralph_optimize()` + string params match explicit LP/MIP entry-point
+    status/objective on representative LP and MIP fixtures.
+- Regression gates after Phase 3 changes:
+  - `make -C ralph test-netlib-gate-small` PASS
+    - Artifacts: `/tmp/netlib-regression-gate-20260222-183622`
+    - Summary: 26 files, timeout 4, status/objective/invalid mismatches 0, dense fallback files 0, unexpected regressions 0.
+  - `make -C ralph test-netlib-gate` PASS
+    - Artifacts: `/tmp/netlib-regression-gate-20260222-183809`
+    - Summary: 84 files, timeout 27, status/objective/invalid mismatches 0, dense fallback files 0, unexpected regressions 0.
+
 Plan (start, 2026-02-22):
 1. API entry-point split (P3.1)
 - Add explicit optimize entry points in public API:
