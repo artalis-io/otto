@@ -73,6 +73,15 @@ typedef enum {
     RALPH_MIP_START_REPAIR_PROJECT_AND_ROUND = 2  /* Clamp + round integer vars then validate */
 } RalphMIPStartRepairMode;
 
+/* Explicit LP basis status (row/column) for warm-start interoperability. */
+typedef enum {
+    RALPH_BASIS_STATUS_BASIC = 0,
+    RALPH_BASIS_STATUS_AT_LOWER = 1,
+    RALPH_BASIS_STATUS_AT_UPPER = 2,
+    RALPH_BASIS_STATUS_FREE = 3,
+    RALPH_BASIS_STATUS_FIXED = 4
+} RalphBasisStatus;
+
 /* Opaque model handle */
 typedef struct RalphModel RalphModel;
 
@@ -655,6 +664,35 @@ RalphBasis* ralph_save_basis(const RalphModel *model);
  * @return 0 on success, -1 on error (e.g., dimensions mismatch)
  */
 int ralph_load_basis(RalphModel *model, const RalphBasis *basis);
+
+/* Query explicit LP basis statuses for structural columns and logical rows.
+ *
+ * Contract:
+ * - Requires a live LP tableau (model must have been LP-optimized successfully).
+ * - `col_status` has size >= num_vars when non-NULL.
+ * - `row_status` has size >= num_cons when non-NULL.
+ * - At least one of `col_status` or `row_status` must be non-NULL.
+ *
+ * @return 0 on success, -1 on error/unavailable.
+ */
+int ralph_get_basis_status(const RalphModel *model,
+                           RalphBasisStatus *col_status,
+                           RalphBasisStatus *row_status);
+
+/* Apply explicit LP basis statuses for structural columns and logical rows.
+ *
+ * Contract:
+ * - Requires a live LP tableau (model must have been LP-optimized successfully).
+ * - `col_status` has size >= num_vars when non-NULL.
+ * - `row_status` has size >= num_cons when non-NULL.
+ * - At least one of `col_status` or `row_status` must be non-NULL.
+ * - Statuses must define a valid basis; invalid/singular combinations return -1.
+ *
+ * @return 0 on success, -1 on error.
+ */
+int ralph_set_basis_status(RalphModel *model,
+                           const RalphBasisStatus *col_status,
+                           const RalphBasisStatus *row_status);
 
 /* Free a saved basis.
  * @param basis The basis to free (may be NULL)
