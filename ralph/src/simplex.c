@@ -135,8 +135,8 @@ static double clamp_feedback_bias(double x) {
 
 static double periodic_feedback_bias_for_phase(const SimplexSolver *owner, int phase) {
     if (!owner) return 0.0;
-    if (phase == 1) return owner->periodic_feedback_bias_phase1;
-    if (phase == 2) return owner->periodic_feedback_bias_phase2;
+    if (phase == 1) return owner->policy.periodic_feedback_bias_phase1;
+    if (phase == 2) return owner->policy.periodic_feedback_bias_phase2;
     return 0.0;
 }
 
@@ -148,11 +148,11 @@ static void periodic_feedback_set_hint(SimplexSolver *owner,
     if (interval < 0) interval = 0;
     run_pressure = clamp_unit_interval(run_pressure);
     if (phase == 1) {
-        owner->periodic_feedback_hint_interval_phase1 = interval;
-        owner->periodic_feedback_hint_pressure_phase1 = run_pressure;
+        owner->policy.periodic_feedback_hint_interval_phase1 = interval;
+        owner->policy.periodic_feedback_hint_pressure_phase1 = run_pressure;
     } else if (phase == 2) {
-        owner->periodic_feedback_hint_interval_phase2 = interval;
-        owner->periodic_feedback_hint_pressure_phase2 = run_pressure;
+        owner->policy.periodic_feedback_hint_interval_phase2 = interval;
+        owner->policy.periodic_feedback_hint_pressure_phase2 = run_pressure;
     }
 }
 
@@ -173,17 +173,17 @@ static void periodic_feedback_record_refactor(SimplexSolver *owner,
     if (!owner || (phase != 1 && phase != 2)) return;
 
     if (phase == 1) {
-        bias_ptr = &owner->periodic_feedback_bias_phase1;
-        last_reason_ptr = &owner->periodic_feedback_last_reason_phase1;
-        last_interval_ptr = &owner->periodic_feedback_last_interval_phase1;
-        hint_interval_ptr = &owner->periodic_feedback_hint_interval_phase1;
-        hint_pressure_ptr = &owner->periodic_feedback_hint_pressure_phase1;
+        bias_ptr = &owner->policy.periodic_feedback_bias_phase1;
+        last_reason_ptr = &owner->policy.periodic_feedback_last_reason_phase1;
+        last_interval_ptr = &owner->policy.periodic_feedback_last_interval_phase1;
+        hint_interval_ptr = &owner->policy.periodic_feedback_hint_interval_phase1;
+        hint_pressure_ptr = &owner->policy.periodic_feedback_hint_pressure_phase1;
     } else {
-        bias_ptr = &owner->periodic_feedback_bias_phase2;
-        last_reason_ptr = &owner->periodic_feedback_last_reason_phase2;
-        last_interval_ptr = &owner->periodic_feedback_last_interval_phase2;
-        hint_interval_ptr = &owner->periodic_feedback_hint_interval_phase2;
-        hint_pressure_ptr = &owner->periodic_feedback_hint_pressure_phase2;
+        bias_ptr = &owner->policy.periodic_feedback_bias_phase2;
+        last_reason_ptr = &owner->policy.periodic_feedback_last_reason_phase2;
+        last_interval_ptr = &owner->policy.periodic_feedback_last_interval_phase2;
+        hint_interval_ptr = &owner->policy.periodic_feedback_hint_interval_phase2;
+        hint_pressure_ptr = &owner->policy.periodic_feedback_hint_pressure_phase2;
     }
 
     bias = (*bias_ptr) * PERIODIC_FEEDBACK_DECAY;
@@ -1886,8 +1886,8 @@ static void runtime_record_periodic_refactor_trigger(SimplexSolver *solver,
                                                      int lu_health_triggered) {
     if (!solver) return;
     if (!lu_health_triggered) {
-        if (phase == 1) solver->periodic_policy_refactors_phase1++;
-        else if (phase == 2) solver->periodic_policy_refactors_phase2++;
+        if (phase == 1) solver->policy.periodic_policy_refactors_phase1++;
+        else if (phase == 2) solver->policy.periodic_policy_refactors_phase2++;
     }
     lp_telemetry_record_periodic_refactor_trigger(solver, phase, lu_health_triggered);
 }
@@ -5859,7 +5859,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                 perturb_attempts_p2 < PHASE2_DEGEN_ESCAPE_MAX_ATTEMPTS &&
                 tab->m >= PHASE2_DEGEN_ESCAPE_MIN_M &&
                 degenerate_count >= PHASE2_DEGEN_ESCAPE_DEGEN_TRIGGER &&
-                solver->periodic_policy_refactors_phase2 >= PHASE2_DEGEN_ESCAPE_POLICY_TRIGGER) {
+                solver->policy.periodic_policy_refactors_phase2 >= PHASE2_DEGEN_ESCAPE_POLICY_TRIGGER) {
                 double scale = 4.0 + 2.0 * (double)perturb_attempts_p2;
                 primal_apply_perturbation_scaled(tab, scale);
                 perturbation_active = 1;
@@ -6086,8 +6086,8 @@ static int crash_triangular(SimplexTableau *tab, int verbose) {
 static void reset_solver_perf(SimplexSolver *solver) {
     lp_telemetry_reset_solver(solver);
     if (!solver) return;
-    solver->periodic_policy_refactors_phase1 = 0;
-    solver->periodic_policy_refactors_phase2 = 0;
+    solver->policy.periodic_policy_refactors_phase1 = 0;
+    solver->policy.periodic_policy_refactors_phase2 = 0;
 }
 
 static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *tab) {

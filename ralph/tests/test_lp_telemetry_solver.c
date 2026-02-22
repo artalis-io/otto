@@ -60,26 +60,26 @@ static void test_solver_reset_and_refactor_accounting(void) {
     memset(&solver, 0, sizeof(solver));
     solver.telemetry_enabled = 1;
 
-    solver.perf_pricing_ms = 12.0;
-    solver.perf_refactor_count = 3;
-    solver.perf_refactor_next_reason = RALPH_REFACTOR_REASON_SETUP;
-    solver.perf_basis_fastpath_hits = 7;
-    solver.periodic_feedback_bias_phase2 = 0.2;
+    solver.telemetry.perf_pricing_ms = 12.0;
+    solver.telemetry.perf_refactor_count = 3;
+    solver.policy.refactor_next_reason = RALPH_REFACTOR_REASON_SETUP;
+    solver.telemetry.perf_basis_fastpath_hits = 7;
+    solver.policy.periodic_feedback_bias_phase2 = 0.2;
 
     lp_telemetry_reset_solver(&solver);
 
-    ASSERT_DBL_EQ(solver.perf_pricing_ms, 0.0, "reset: perf_pricing_ms");
-    ASSERT_INT_EQ(solver.perf_refactor_count, 0, "reset: refactor_count");
-    ASSERT_INT_EQ(solver.perf_refactor_next_reason, RALPH_REFACTOR_REASON_OTHER,
+    ASSERT_DBL_EQ(solver.telemetry.perf_pricing_ms, 0.0, "reset: perf_pricing_ms");
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_count, 0, "reset: refactor_count");
+    ASSERT_INT_EQ(solver.policy.refactor_next_reason, RALPH_REFACTOR_REASON_OTHER,
                   "reset: next reason");
-    ASSERT_INT_EQ(solver.perf_basis_fastpath_hits, 0, "reset: basis_fastpath_hits");
-    ASSERT_DBL_EQ(solver.periodic_feedback_bias_phase2, 0.0,
+    ASSERT_INT_EQ(solver.telemetry.perf_basis_fastpath_hits, 0, "reset: basis_fastpath_hits");
+    ASSERT_DBL_EQ(solver.policy.periodic_feedback_bias_phase2, 0.0,
                   "reset: periodic feedback phase2");
 
     lp_telemetry_record_basis_build(&solver, 1, 2, 128ULL);
-    ASSERT_INT_EQ(solver.perf_basis_fastpath_hits, 1, "basis: fastpath hit");
-    ASSERT_INT_EQ(solver.perf_basis_cols_rewritten, 2, "basis: cols rewritten");
-    ASSERT_ULL_EQ(solver.perf_basis_tail_shift_bytes, 128ULL, "basis: tail shift bytes");
+    ASSERT_INT_EQ(solver.telemetry.perf_basis_fastpath_hits, 1, "basis: fastpath hit");
+    ASSERT_INT_EQ(solver.telemetry.perf_basis_cols_rewritten, 2, "basis: cols rewritten");
+    ASSERT_ULL_EQ(solver.telemetry.perf_basis_tail_shift_bytes, 128ULL, "basis: tail shift bytes");
 
     lp_telemetry_set_refactor_next_reason(&solver, RALPH_REFACTOR_REASON_RATIO_RECOVERY);
     {
@@ -87,32 +87,32 @@ static void test_solver_reset_and_refactor_accounting(void) {
         lp_telemetry_begin_refactor(&solver, &reason);
         ASSERT_INT_EQ(reason, RALPH_REFACTOR_REASON_RATIO_RECOVERY,
                       "begin_refactor returns staged reason");
-        ASSERT_INT_EQ(solver.perf_refactor_next_reason, RALPH_REFACTOR_REASON_OTHER,
+        ASSERT_INT_EQ(solver.policy.refactor_next_reason, RALPH_REFACTOR_REASON_OTHER,
                       "begin_refactor clears staged reason");
 
         lp_telemetry_record_refactor(&solver, 2, reason, 5.5, 100, 80, 1234);
     }
 
-    ASSERT_INT_EQ(solver.perf_refactor_count, 1, "record: refactor count");
-    ASSERT_DBL_EQ(solver.perf_refactor_all_ms, 5.5, "record: refactor all ms");
-    ASSERT_DBL_EQ(solver.perf_refactor_last_ms, 5.5, "record: refactor last ms");
-    ASSERT_DBL_EQ(solver.perf_refactor_max_ms, 5.5, "record: refactor max ms");
-    ASSERT_INT_EQ(solver.perf_refactor_reason_ratio_recovery, 1,
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_count, 1, "record: refactor count");
+    ASSERT_DBL_EQ(solver.telemetry.perf_refactor_all_ms, 5.5, "record: refactor all ms");
+    ASSERT_DBL_EQ(solver.telemetry.perf_refactor_last_ms, 5.5, "record: refactor last ms");
+    ASSERT_DBL_EQ(solver.telemetry.perf_refactor_max_ms, 5.5, "record: refactor max ms");
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_reason_ratio_recovery, 1,
                   "record: ratio recovery reason");
-    ASSERT_INT_EQ(solver.perf_refactor_safety_forced, 1, "record: safety forced global");
-    ASSERT_INT_EQ(solver.perf_phase2_refactor_calls, 1, "record: phase2 refactor calls");
-    ASSERT_DBL_EQ(solver.perf_phase2_refactor_ms, 5.5, "record: phase2 refactor ms");
-    ASSERT_INT_EQ(solver.perf_phase2_refactor_safety_forced, 1,
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_safety_forced, 1, "record: safety forced global");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase2_refactor_calls, 1, "record: phase2 refactor calls");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase2_refactor_ms, 5.5, "record: phase2 refactor ms");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase2_refactor_safety_forced, 1,
                   "record: phase2 safety forced");
-    ASSERT_INT_EQ(solver.perf_refactor_last_m, 100, "record: last m");
-    ASSERT_INT_EQ(solver.perf_refactor_last_k, 80, "record: last k");
-    ASSERT_INT_EQ(solver.perf_refactor_last_nnz_B, 1234, "record: last nnz_B");
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_last_m, 100, "record: last m");
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_last_k, 80, "record: last k");
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_last_nnz_B, 1234, "record: last nnz_B");
 
     lp_telemetry_record_refactor(&solver, 1, RALPH_REFACTOR_REASON_SETUP, 2.0, 40, 20, 300);
-    ASSERT_INT_EQ(solver.perf_refactor_reason_setup, 1, "record: setup reason");
-    ASSERT_INT_EQ(solver.perf_phase1_refactor_calls, 1, "record: phase1 refactor calls");
-    ASSERT_DBL_EQ(solver.perf_phase1_refactor_ms, 2.0, "record: phase1 refactor ms");
-    ASSERT_INT_EQ(solver.perf_phase1_refactor_safety_forced, 0,
+    ASSERT_INT_EQ(solver.telemetry.perf_refactor_reason_setup, 1, "record: setup reason");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_refactor_calls, 1, "record: phase1 refactor calls");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_refactor_ms, 2.0, "record: phase1 refactor ms");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_refactor_safety_forced, 0,
                   "record: phase1 safety remains 0 for setup");
 }
 
@@ -136,11 +136,11 @@ static void test_solver_snapshot(void) {
     LPSolverTelemetrySnapshot snap;
     memset(&solver, 0, sizeof(solver));
 
-    solver.perf_phase2_ms = 42.25;
-    solver.perf_refactor_reason_periodic = 11;
-    solver.perf_basis_tail_shift_bytes = 4096ULL;
-    solver.perf_phase1_pricing_calls = 17;
-    solver.periodic_feedback_hint_pressure_phase2 = 0.55;
+    solver.telemetry.perf_phase2_ms = 42.25;
+    solver.telemetry.perf_refactor_reason_periodic = 11;
+    solver.telemetry.perf_basis_tail_shift_bytes = 4096ULL;
+    solver.telemetry.perf_phase1_pricing_calls = 17;
+    solver.policy.periodic_feedback_hint_pressure_phase2 = 0.55;
 
     lp_telemetry_snapshot_solver(&solver, &snap);
 

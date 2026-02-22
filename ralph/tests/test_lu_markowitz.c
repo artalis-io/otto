@@ -466,13 +466,13 @@ static void test_markowitz_reserved_row_regression(void) {
     int rc = lu_factorize(lu, B);
     ASSERT_INT_EQ(rc, 0, "reserved-row regression: factorize");
     if (rc == 0) {
-        ASSERT(lu->mkz_calls > 0, "reserved-row regression: Markowitz attempted");
-        ASSERT(lu->mkz_successes > 0, "reserved-row regression: Markowitz succeeded");
-        ASSERT_INT_EQ(lu->mkz_dense_fallbacks, 0,
+        ASSERT(lu->telemetry.mkz_calls > 0, "reserved-row regression: Markowitz attempted");
+        ASSERT(lu->telemetry.mkz_successes > 0, "reserved-row regression: Markowitz succeeded");
+        ASSERT_INT_EQ(lu->telemetry.mkz_dense_fallbacks, 0,
                       "reserved-row regression: no Markowitz->GE fallback");
-        ASSERT_INT_EQ(lu->identity_sep_failures, 0,
+        ASSERT_INT_EQ(lu->telemetry.identity_sep_failures, 0,
                       "reserved-row regression: no identity placement failure");
-        ASSERT_INT_EQ(lu->used_dense_fallback_last, 0,
+        ASSERT_INT_EQ(lu->telemetry.used_dense_fallback_last, 0,
                       "reserved-row regression: no top-level dense fallback");
 
         double max_err = 0.0;
@@ -548,9 +548,9 @@ static void test_ge_identity_lrow_regression(void) {
     int rc_ge = lu_factorize(lu_ge, B);
     ASSERT_INT_EQ(rc_ge, 0, "GE regression: sparse-efficient factorize");
     if (rc_ge == 0) {
-        ASSERT_INT_EQ(lu_ge->used_dense_fallback_last, 0,
+        ASSERT_INT_EQ(lu_ge->telemetry.used_dense_fallback_last, 0,
                       "GE regression: sparse-efficient path used");
-        ASSERT_INT_EQ(lu_ge->identity_sep_failures, 0,
+        ASSERT_INT_EQ(lu_ge->telemetry.identity_sep_failures, 0,
                       "GE regression: identity placement succeeded");
     }
 
