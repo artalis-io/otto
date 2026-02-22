@@ -4112,6 +4112,10 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->verbose = 0;
     solver->telemetry_enabled = 1;
     solver->trace_phase1 = 0;
+    solver->deterministic = 0;
+    solver->random_seed = 0U;
+    solver->lp_threads = 0;
+    solver->determinism_effective_threads = 0;
     solver->is_scaled = 0;
     solver->trace_phase1_first_fail_iter = -1;
     solver->trace_phase1_last_fail_iter = -1;
@@ -4423,8 +4427,9 @@ static void primal_apply_perturbation(SimplexTableau *tab) {
             continue;
         }
 
-        /* Pseudo-random perturbation factor */
-        double factor = 1.0 + (j * PRIMAL_PERTURB_MULT) % 13;
+        unsigned int offset = lp_determinism_seed_offset(tab->owner, j, 13U);
+        unsigned int pattern = (unsigned int)((j * PRIMAL_PERTURB_MULT) % 13);
+        double factor = 1.0 + (double)((pattern + offset) % 13U);
 
         /* Perturb finite lower bounds down */
         if (tab->lb_ext[j] > -RALPH_INFINITY / 2) {
@@ -4475,7 +4480,9 @@ static void primal_apply_perturbation_scaled(SimplexTableau *tab, double scale) 
     for (int j = 0; j < n; j++) {
         if (tab->phase == 1 && is_artificial_var(tab, j)) continue;
 
-        double factor = 1.0 + (j * PRIMAL_PERTURB_MULT) % 13;
+        unsigned int offset = lp_determinism_seed_offset(tab->owner, j, 13U);
+        unsigned int pattern = (unsigned int)((j * PRIMAL_PERTURB_MULT) % 13);
+        double factor = 1.0 + (double)((pattern + offset) % 13U);
 
         if (tab->lb_ext[j] > -RALPH_INFINITY / 2) {
             double eps = base * factor * (1.0 + fabs(tab->lb_ext[j]));
@@ -6573,6 +6580,7 @@ int simplex_solve(SimplexSolver *solver) {
 
     clock_t start = clock();
     solver->progress_start_ms = lp_telemetry_now_ms();
+    lp_determinism_apply_runtime(solver);
 
     /* Invalidate cached outputs from any previous solve.
      * This prevents stale primal/dual data from being reused when the current
