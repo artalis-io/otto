@@ -648,6 +648,147 @@ typedef struct SimplexSolver {
 
 } SimplexSolver;
 
+/* Solver-level telemetry snapshot used by benchmarks and diagnostics. */
+typedef struct {
+    double perf_primal_setup_ms;
+    double perf_dual_ms;
+    double perf_phase1_ms;
+    double perf_transition_ms;
+    double perf_phase2_ms;
+    double perf_pricing_ms;
+    double perf_ratio_ms;
+    double perf_pivot_ms;
+    double perf_refactor_ms;
+    double perf_ftran_ms;
+    double perf_btran_ms;
+    double perf_lu_update_ms;
+    double perf_compute_solution_ms;
+    double perf_compute_rc_ms;
+    double perf_refactor_all_ms;
+    int perf_refactor_count;
+    double perf_refactor_last_ms;
+    double perf_refactor_max_ms;
+    int perf_refactor_last_reason;
+    int perf_refactor_next_reason;
+    int perf_refactor_reason_setup;
+    int perf_refactor_reason_transition;
+    int perf_refactor_reason_periodic;
+    int perf_refactor_reason_ratio_recovery;
+    int perf_refactor_reason_pivot_recovery;
+    int perf_refactor_reason_forced_small_pivot;
+    int perf_refactor_reason_update_recovery;
+    int perf_refactor_reason_direction_stabilize;
+    int perf_refactor_reason_infeas_cleanup;
+    int perf_refactor_reason_other;
+    int perf_refactor_periodic_policy;
+    int perf_refactor_periodic_lu_health;
+    int perf_refactor_safety_forced;
+    int perf_basis_fastpath_hits;
+    int perf_basis_cols_rewritten;
+    unsigned long long perf_basis_tail_shift_bytes;
+    int perf_refactor_last_m;
+    int perf_refactor_last_k;
+    int perf_refactor_last_nnz_B;
+
+    double perf_phase1_pricing_ms;
+    double perf_phase1_ratio_ms;
+    double perf_phase1_pivot_ms;
+    double perf_phase1_refactor_ms;
+    double perf_phase1_compute_solution_ms;
+    double perf_phase1_compute_rc_ms;
+    int perf_phase1_pricing_calls;
+    int perf_phase1_ratio_calls;
+    int perf_phase1_pivot_calls;
+    int perf_phase1_refactor_calls;
+    int perf_phase1_compute_solution_calls;
+    int perf_phase1_compute_rc_calls;
+    int perf_phase1_refactor_periodic_policy;
+    int perf_phase1_refactor_periodic_lu_health;
+    int perf_phase1_refactor_safety_forced;
+
+    double perf_phase2_pricing_ms;
+    double perf_phase2_ratio_ms;
+    double perf_phase2_pivot_ms;
+    double perf_phase2_refactor_ms;
+    double perf_phase2_compute_solution_ms;
+    double perf_phase2_compute_rc_ms;
+    int perf_phase2_pricing_calls;
+    int perf_phase2_ratio_calls;
+    int perf_phase2_pivot_calls;
+    int perf_phase2_refactor_calls;
+    int perf_phase2_compute_solution_calls;
+    int perf_phase2_compute_rc_calls;
+    int perf_phase2_refactor_periodic_policy;
+    int perf_phase2_refactor_periodic_lu_health;
+    int perf_phase2_refactor_safety_forced;
+
+    double periodic_feedback_bias_phase1;
+    double periodic_feedback_bias_phase2;
+    int periodic_feedback_last_reason_phase1;
+    int periodic_feedback_last_reason_phase2;
+    int periodic_feedback_last_interval_phase1;
+    int periodic_feedback_last_interval_phase2;
+    int periodic_feedback_hint_interval_phase1;
+    int periodic_feedback_hint_interval_phase2;
+    double periodic_feedback_hint_pressure_phase1;
+    double periodic_feedback_hint_pressure_phase2;
+} LPSolverTelemetrySnapshot;
+
+/* LU telemetry snapshot used by benchmarks and diagnostics. */
+typedef struct {
+    int mkz_enabled;
+    int sn_enabled;
+    int mkz_calls;
+    int mkz_successes;
+    int mkz_failures;
+    int mkz_last_failure;
+    int mkz_dense_fallbacks;
+    int mkz_fail_workspace;
+    int mkz_fail_pool;
+    int mkz_fail_singular;
+    int mkz_fail_capacity;
+
+    int sparse_dense_fallbacks;
+    int used_dense_fallback_last;
+    int sparse_fallback_last_reason;
+    int sparse_fallback_reason_small_matrix;
+    int sparse_fallback_reason_symbolic;
+    int sparse_fallback_reason_numeric;
+    int identity_sep_failures;
+
+    int sn_calls;
+    int sn_successes;
+    int num_updates;
+    int max_updates;
+    int last_failure_reason;
+
+    int perf_factorize_calls;
+    int perf_last_basis_nnz;
+    int perf_last_m;
+    int perf_last_k;
+    int perf_symbolic_calls;
+    int perf_symbolic_cache_hits;
+    int perf_symbolic_cache_misses;
+    double perf_last_symbolic_ms;
+    double perf_last_sparse_numeric_ms;
+    double perf_last_dense_ge_numeric_ms;
+    double perf_last_supernode_numeric_ms;
+    double perf_last_dense_factorize_ms;
+    double perf_last_a_struct_build_ms;
+    double perf_last_markowitz_numeric_ms;
+    double perf_last_identity_placement_ms;
+    double perf_last_coo_to_csc_ms;
+    double perf_total_symbolic_ms;
+    double perf_total_sparse_numeric_ms;
+    double perf_total_dense_ge_numeric_ms;
+    double perf_total_supernode_numeric_ms;
+    double perf_total_dense_factorize_ms;
+    double perf_total_a_struct_build_ms;
+    double perf_total_markowitz_numeric_ms;
+    double perf_total_identity_placement_ms;
+    double perf_total_coo_to_csc_ms;
+} LUTelemetrySnapshot;
+
 /* LP model functions */
 LPModel* lp_model_create(void);
 void lp_model_free(LPModel *model);
@@ -728,5 +869,29 @@ int dual_ratio_test(SimplexTableau *tableau, int leaving, int *entering, double 
 
 /* Utility */
 void lp_print_stats(const SimplexSolver *solver);
+
+/* Telemetry helpers */
+double lp_telemetry_now_ms(void);
+int lp_telemetry_refactor_reason_is_safety_forced(int reason);
+void lp_telemetry_reset_solver(SimplexSolver *solver);
+void lp_telemetry_reset_lu(LUFactorization *lu);
+void lp_telemetry_prepare_lu_factorize(LUFactorization *lu, const SparseMatrix *B);
+void lp_telemetry_record_basis_build(SimplexSolver *owner,
+                                     int fastpath_hit,
+                                     int cols_rewritten,
+                                     unsigned long long tail_shift_bytes);
+void lp_telemetry_begin_refactor(SimplexSolver *owner, int *reason_out);
+void lp_telemetry_set_refactor_next_reason(SimplexSolver *owner, int reason);
+void lp_telemetry_record_refactor(SimplexSolver *owner,
+                                  int phase,
+                                  int reason,
+                                  double elapsed_ms,
+                                  int m,
+                                  int lu_last_k,
+                                  int lu_last_basis_nnz);
+void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
+                                  LPSolverTelemetrySnapshot *out);
+void lp_telemetry_snapshot_lu(const LUFactorization *lu,
+                              LUTelemetrySnapshot *out);
 
 #endif /* RALPH_LP_H */

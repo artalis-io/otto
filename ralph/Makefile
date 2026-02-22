@@ -41,6 +41,7 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/lu_sparse.c \
           $(SRC_DIR)/lu_supernode.c \
           $(SRC_DIR)/simplex.c \
+          $(SRC_DIR)/lp_telemetry.c \
           $(SRC_DIR)/dual_simplex.c \
           $(SRC_DIR)/presolve.c \
           $(SRC_DIR)/branch_bound.c \
@@ -137,6 +138,10 @@ BEACONFD_TRACE_TEST_EXEC = test_beaconfd_phase1_trace
 SIMPLEX_POLICY_TEST_SOURCES = $(TEST_DIR)/test_simplex_policy.c
 SIMPLEX_POLICY_TEST_EXEC = test_simplex_policy
 
+# LP telemetry module tests
+LP_TELEMETRY_TEST_SOURCES = $(TEST_DIR)/test_lp_telemetry.c
+LP_TELEMETRY_TEST_EXEC = test_lp_telemetry
+
 # Benchmarks
 BENCH_DIR = benchmarks
 BENCH_SIZES_EXEC = bench_sizes
@@ -185,13 +190,14 @@ debug: LDFLAGS += $(DEBUG_LDFLAGS)
 debug: clean all
 
 # Run tests
-test: $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BANDM_TEST_EXEC) $(BLEND_TEST_EXEC) $(LOTFI_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(MPS_PARSER_TEST_EXEC)
+test: $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BANDM_TEST_EXEC) $(BLEND_TEST_EXEC) $(LOTFI_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LP_TELEMETRY_TEST_EXEC) $(MPS_PARSER_TEST_EXEC)
 	./$(TEST_EXEC)
 	./$(PRESOLVE_TEST_EXEC)
 	./$(BANDM_TEST_EXEC)
 	./$(BLEND_TEST_EXEC)
 	./$(LOTFI_TEST_EXEC)
 	./$(SIMPLEX_POLICY_TEST_EXEC)
+	./$(LP_TELEMETRY_TEST_EXEC)
 	./$(MPS_PARSER_TEST_EXEC)
 
 # Known regression tests (beaconfd — Phase 2 pivot failure, degenerate theta=0)
@@ -317,6 +323,14 @@ $(SIMPLEX_POLICY_TEST_EXEC): $(SIMPLEX_POLICY_TEST_SOURCES) $(LIB_NAME) $(SHARED
 # Run simplex basis-action policy test
 test-simplex-policy: $(SIMPLEX_POLICY_TEST_EXEC)
 	./$(SIMPLEX_POLICY_TEST_EXEC)
+
+# Build LP telemetry tests
+$(LP_TELEMETRY_TEST_EXEC): $(LP_TELEMETRY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP telemetry tests
+test-lp-telemetry: $(LP_TELEMETRY_TEST_EXEC)
+	./$(LP_TELEMETRY_TEST_EXEC)
 
 # Build LU Markowitz tests
 $(LU_MARKOWITZ_TEST_EXEC): $(LU_MARKOWITZ_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
@@ -459,7 +473,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-beaconfd test-beaconfd-trace test-simplex-policy test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-beaconfd test-beaconfd-trace test-simplex-policy test-lp-telemetry test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
 
 # MIP benchmark with specialized solvers (LAP, Network, SCP)
 bench-mip-specialized: $(BENCH_MIP_EXEC)
@@ -491,6 +505,7 @@ help:
 	@echo "  test-optim  - Run optimization module tests"
 	@echo "  test-beaconfd - Run beaconfd numerical-regression test"
 	@echo "  test-simplex-policy - Run simplex basis-action policy tests"
+	@echo "  test-lp-telemetry - Run LP telemetry module tests"
 	@echo "  bench      - Run size scaling benchmark"
 	@echo "  bench-lap  - Run LAP benchmark (JVC vs LP)"
 	@echo "  bench-netflow - Run network flow benchmark"
