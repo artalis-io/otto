@@ -55,6 +55,9 @@ struct RalphModel {
     int dual_steepest_edge; /* -1=default(on), 0=off, 1=on */
     int var_select;         /* -1=default, 0=most_infeas, 1=pseudo_cost, 2=strong, 3=reliability */
     int lu_supernode;       /* 0=off (default), 1=enable supernodal LU factorization (T2.1) */
+    int deterministic;      /* 1=enforce deterministic LP runtime policy */
+    int random_seed;        /* deterministic LP seed for anti-cycling perturbation offsets */
+    int lp_threads;         /* LP thread policy (0=auto; deterministic mode defaults to 1) */
 
     /* Solution */
     RalphStatus status;
@@ -238,6 +241,9 @@ static int ralph_probe_lp_status(const RalphModel *model,
     probe->objective_limit = RALPH_INFINITY;
     probe->force_two_phase = model->force_two_phase;
     probe->trace_phase1 = 0;
+    probe->deterministic = model->deterministic ? 1 : 0;
+    probe->random_seed = (model->random_seed >= 0) ? (unsigned int)model->random_seed : 0U;
+    probe->lp_threads = (model->lp_threads >= 0) ? model->lp_threads : 0;
     probe->method = 0;  /* Use primal for robust infeasibility checks */
 
     (void)simplex_solve(probe);
@@ -383,6 +389,9 @@ RalphModel* ralph_create(void) {
     model->dual_bound_flip = -1;    /* -1 = use default (on) */
     model->dual_steepest_edge = -1; /* -1 = use default (on) */
     model->var_select = -1;         /* -1 = use MIP solver default */
+    model->deterministic = 0;
+    model->random_seed = 0;
+    model->lp_threads = 0;
 
     model->status = RALPH_STATUS_UNKNOWN;
     model->mip_start = NULL;
@@ -1046,6 +1055,9 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         if (model->dual_steepest_edge >= 0)
             model->lp_solver->use_dual_steepest_edge = model->dual_steepest_edge;
         model->lp_solver->lu_supernode = model->lu_supernode;
+        model->lp_solver->deterministic = model->deterministic ? 1 : 0;
+        model->lp_solver->random_seed = (model->random_seed >= 0) ? (unsigned int)model->random_seed : 0U;
+        model->lp_solver->lp_threads = (model->lp_threads >= 0) ? model->lp_threads : 0;
 
         if (model->staged_basis && model->staged_var_status) {
             if (simplex_set_warm_basis(model->lp_solver,
@@ -2549,6 +2561,41 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .aliases = {"LuSupernode"},
             .alias_count = 1
         },
+        [RALPH_PARAM_DETERMINISTIC] = {
+            .id = RALPH_PARAM_DETERMINISTIC,
+            .name = "deterministic",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 0.0,
+            .has_min = 1,
+            .min_value = 0.0,
+            .has_max = 1,
+            .max_value = 1.0,
+            .aliases = {"Deterministic"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_RANDOM_SEED] = {
+            .id = RALPH_PARAM_RANDOM_SEED,
+            .name = "random_seed",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 0.0,
+            .has_min = 1,
+            .min_value = 0.0,
+            .aliases = {"RandomSeed"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_LP_THREADS] = {
+            .id = RALPH_PARAM_LP_THREADS,
+            .name = "lp_threads",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 0.0,
+            .has_min = 1,
+            .min_value = 0.0,
+            .aliases = {"LPThreads"},
+            .alias_count = 1
+        },
         [RALPH_PARAM_TIME_LIMIT] = {
             .id = RALPH_PARAM_TIME_LIMIT,
             .name = "time_limit",
@@ -2737,6 +2784,17 @@ int ralph_set_int_param_id(RalphModel *model, RalphParamId param, int value) {
         case RALPH_PARAM_LU_SUPERNODE:
             model->lu_supernode = value ? 1 : 0;
             break;
+        case RALPH_PARAM_DETERMINISTIC:
+            model->deterministic = value ? 1 : 0;
+            break;
+        case RALPH_PARAM_RANDOM_SEED:
+            if (value < 0) return -1;
+            model->random_seed = value;
+            break;
+        case RALPH_PARAM_LP_THREADS:
+            if (value < 0) return -1;
+            model->lp_threads = value;
+            break;
         default:
             return -1;
     }
@@ -2845,6 +2903,15 @@ int ralph_get_int_param_id(const RalphModel *model, RalphParamId param, int *val
             break;
         case RALPH_PARAM_LU_SUPERNODE:
             *value = model->lu_supernode;
+            break;
+        case RALPH_PARAM_DETERMINISTIC:
+            *value = model->deterministic;
+            break;
+        case RALPH_PARAM_RANDOM_SEED:
+            *value = model->random_seed;
+            break;
+        case RALPH_PARAM_LP_THREADS:
+            *value = model->lp_threads;
             break;
         default:
             return -1;

@@ -621,6 +621,10 @@ typedef struct SimplexSolver {
     double objective_limit; /* Early-exit when obj >= limit (internal min space), default RALPH_INFINITY */
     int phase1_pricing;     /* Override pricing for Phase 1: 0=Dantzig, -1=disabled (use solver pricing) */
     int trace_phase1;       /* 1 = emit deterministic Phase-1 pivot-failure trace */
+    int deterministic;      /* 1 = enforce deterministic LP runtime policy */
+    unsigned int random_seed; /* Seed used by deterministic anti-cycling perturbation offsets */
+    int lp_threads;         /* LP thread policy (0 = auto; deterministic mode defaults to 1) */
+    int determinism_effective_threads; /* Runtime-applied LP thread count (0 = runtime default) */
     RalphLPProgressCallback lp_progress_callback; /* LP-only progress callback */
     int has_lp_progress_callback; /* 1 if lp_progress_callback is active */
     RalphLPCancelCallback lp_cancel_callback; /* LP-only cancellation poll callback */
@@ -936,6 +940,13 @@ int dual_ratio_test(SimplexTableau *tableau, int leaving, int *entering, double 
 
 /* Utility */
 void lp_print_stats(const SimplexSolver *solver);
+
+/* Determinism helpers (behavioral policy; orthogonal to telemetry/logging). */
+int lp_determinism_effective_threads(const SimplexSolver *solver);
+void lp_determinism_apply_runtime(SimplexSolver *solver);
+unsigned int lp_determinism_seed_offset(const SimplexSolver *solver,
+                                        int key,
+                                        unsigned int modulus);
 
 /* Telemetry helpers */
 double lp_telemetry_now_ms(void);

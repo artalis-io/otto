@@ -473,20 +473,26 @@ one by one.
   `name`, `scope` (LP/MIP/shared), `type`, `default`, `min/max`.
 - Keep string APIs as compatibility wrappers; add parity tests.
 
-9. Determinism/reproducibility contract (LP)
-- Add explicit reproducibility controls in public API (seed/deterministic mode/thread policy).
-- Document guarantees and known non-deterministic cases.
-- Add deterministic regression tests.
-- Execution plan A: add typed+string parameters for `deterministic`, `random_seed`,
-  and `lp_threads` (LP-only scope for deterministic knobs).
-- Execution plan B: define contract precisely:
-  same model + params + seed + platform/build settings => identical status/objective and stable
-  iteration count on deterministic mode.
-- Execution plan C: enforce deterministic behavior in solver paths that use randomness/tie-breaks
-  and pin thread policy under deterministic mode.
-- Execution plan D: add repeatability tests (N repeated solves on NETLIB canaries and synthetic
-  degenerate LPs) checking status/objective/iteration equality and solution tolerance.
-- Execution plan E: add metadata/introspection entries for all determinism controls and update API docs.
+9. Determinism/reproducibility contract (LP) ✅ (2026-02-22)
+- Added LP-only reproducibility controls in typed+string parameter APIs:
+  `deterministic`, `random_seed`, `lp_threads`.
+- Added metadata/introspection coverage for all determinism controls (scope/type/default/ranges).
+- Added dedicated LP determinism module (`ralph/src/lp_determinism.c`) to keep behavior policy
+  orthogonal from telemetry/logging modules.
+- Enforced deterministic runtime policy:
+  - effective LP threads = `lp_threads` when set, otherwise `1` in deterministic mode.
+  - deterministic seeded perturbation offsets for anti-cycling bound perturbations.
+- Added standalone unit suite `test-lp-determinism` with:
+  - parameter metadata/lookup checks,
+  - helper behavior checks (thread policy + seeded offsets),
+  - runtime propagation checks (orthogonal with telemetry gate),
+  - repeatability checks (status/objective/iterations/solution stability across repeated solves).
+- Contract note:
+  same model + params + seed + build/platform + runtime thread policy ⇒ stable LP outcomes
+  (status/objective, and stable iteration count in deterministic mode).
+- Known limits:
+  cross-platform/compiler FP differences and non-LP components (e.g., MIP tree order) remain
+  outside this LP determinism contract.
 
 10. Advanced parity backlog (separate track)
 - Sensitivity/ranging API (objective, RHS, bounds ranges).
