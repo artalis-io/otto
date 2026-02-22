@@ -42,7 +42,11 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/lu_supernode.c \
           $(SRC_DIR)/lp_log.c \
           $(SRC_DIR)/simplex.c \
-          $(SRC_DIR)/lp_telemetry.c \
+          $(SRC_DIR)/lp_telemetry_core.c \
+          $(SRC_DIR)/lp_telemetry_solver.c \
+          $(SRC_DIR)/lp_telemetry_simplex.c \
+          $(SRC_DIR)/lp_telemetry_lu.c \
+          $(SRC_DIR)/lp_telemetry_lu_sparse.c \
           $(SRC_DIR)/dual_simplex.c \
           $(SRC_DIR)/presolve.c \
           $(SRC_DIR)/branch_bound.c \
@@ -139,9 +143,19 @@ BEACONFD_TRACE_TEST_EXEC = test_beaconfd_phase1_trace
 SIMPLEX_POLICY_TEST_SOURCES = $(TEST_DIR)/test_simplex_policy.c
 SIMPLEX_POLICY_TEST_EXEC = test_simplex_policy
 
-# LP telemetry module tests
-LP_TELEMETRY_TEST_SOURCES = $(TEST_DIR)/test_lp_telemetry.c
-LP_TELEMETRY_TEST_EXEC = test_lp_telemetry
+# LP telemetry module tests (split by telemetry domain)
+LP_TELEMETRY_SOLVER_TEST_SOURCES = $(TEST_DIR)/test_lp_telemetry_solver.c
+LP_TELEMETRY_SOLVER_TEST_EXEC = test_lp_telemetry_solver
+LP_TELEMETRY_LU_TEST_SOURCES = $(TEST_DIR)/test_lp_telemetry_lu.c
+LP_TELEMETRY_LU_TEST_EXEC = test_lp_telemetry_lu
+LP_TELEMETRY_GATE_TEST_SOURCES = $(TEST_DIR)/test_lp_telemetry_runtime_gate.c
+LP_TELEMETRY_GATE_TEST_EXEC = test_lp_telemetry_runtime_gate
+LP_TELEMETRY_LU_SPARSE_TEST_SOURCES = $(TEST_DIR)/test_lp_telemetry_lu_sparse.c
+LP_TELEMETRY_LU_SPARSE_TEST_EXEC = test_lp_telemetry_lu_sparse
+LP_TELEMETRY_TEST_EXECS = $(LP_TELEMETRY_SOLVER_TEST_EXEC) \
+                          $(LP_TELEMETRY_LU_TEST_EXEC) \
+                          $(LP_TELEMETRY_GATE_TEST_EXEC) \
+                          $(LP_TELEMETRY_LU_SPARSE_TEST_EXEC)
 
 # Benchmarks
 BENCH_DIR = benchmarks
@@ -191,14 +205,17 @@ debug: LDFLAGS += $(DEBUG_LDFLAGS)
 debug: clean all
 
 # Run tests
-test: $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BANDM_TEST_EXEC) $(BLEND_TEST_EXEC) $(LOTFI_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LP_TELEMETRY_TEST_EXEC) $(MPS_PARSER_TEST_EXEC)
+test: $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BANDM_TEST_EXEC) $(BLEND_TEST_EXEC) $(LOTFI_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(MPS_PARSER_TEST_EXEC)
 	./$(TEST_EXEC)
 	./$(PRESOLVE_TEST_EXEC)
 	./$(BANDM_TEST_EXEC)
 	./$(BLEND_TEST_EXEC)
 	./$(LOTFI_TEST_EXEC)
 	./$(SIMPLEX_POLICY_TEST_EXEC)
-	./$(LP_TELEMETRY_TEST_EXEC)
+	./$(LP_TELEMETRY_SOLVER_TEST_EXEC)
+	./$(LP_TELEMETRY_LU_TEST_EXEC)
+	./$(LP_TELEMETRY_GATE_TEST_EXEC)
+	./$(LP_TELEMETRY_LU_SPARSE_TEST_EXEC)
 	./$(MPS_PARSER_TEST_EXEC)
 
 # Known regression tests (beaconfd — Phase 2 pivot failure, degenerate theta=0)
@@ -325,13 +342,44 @@ $(SIMPLEX_POLICY_TEST_EXEC): $(SIMPLEX_POLICY_TEST_SOURCES) $(LIB_NAME) $(SHARED
 test-simplex-policy: $(SIMPLEX_POLICY_TEST_EXEC)
 	./$(SIMPLEX_POLICY_TEST_EXEC)
 
-# Build LP telemetry tests
-$(LP_TELEMETRY_TEST_EXEC): $(LP_TELEMETRY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+# Build LP telemetry solver tests
+$(LP_TELEMETRY_SOLVER_TEST_EXEC): $(LP_TELEMETRY_SOLVER_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
-# Run LP telemetry tests
-test-lp-telemetry: $(LP_TELEMETRY_TEST_EXEC)
-	./$(LP_TELEMETRY_TEST_EXEC)
+# Build LP telemetry LU tests
+$(LP_TELEMETRY_LU_TEST_EXEC): $(LP_TELEMETRY_LU_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Build LP telemetry runtime gate tests
+$(LP_TELEMETRY_GATE_TEST_EXEC): $(LP_TELEMETRY_GATE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Build LP telemetry sparse-LU tests
+$(LP_TELEMETRY_LU_SPARSE_TEST_EXEC): $(LP_TELEMETRY_LU_SPARSE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP telemetry solver tests
+test-lp-telemetry-solver: $(LP_TELEMETRY_SOLVER_TEST_EXEC)
+	./$(LP_TELEMETRY_SOLVER_TEST_EXEC)
+
+# Run LP telemetry LU tests
+test-lp-telemetry-lu: $(LP_TELEMETRY_LU_TEST_EXEC)
+	./$(LP_TELEMETRY_LU_TEST_EXEC)
+
+# Run LP telemetry runtime gate tests
+test-lp-telemetry-gate: $(LP_TELEMETRY_GATE_TEST_EXEC)
+	./$(LP_TELEMETRY_GATE_TEST_EXEC)
+
+# Run LP telemetry sparse-LU tests
+test-lp-telemetry-lu-sparse: $(LP_TELEMETRY_LU_SPARSE_TEST_EXEC)
+	./$(LP_TELEMETRY_LU_SPARSE_TEST_EXEC)
+
+# Run all LP telemetry tests
+test-lp-telemetry: $(LP_TELEMETRY_TEST_EXECS)
+	./$(LP_TELEMETRY_SOLVER_TEST_EXEC)
+	./$(LP_TELEMETRY_LU_TEST_EXEC)
+	./$(LP_TELEMETRY_GATE_TEST_EXEC)
+	./$(LP_TELEMETRY_LU_SPARSE_TEST_EXEC)
 
 # Build LU Markowitz tests
 $(LU_MARKOWITZ_TEST_EXEC): $(LU_MARKOWITZ_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
@@ -460,7 +508,7 @@ download-netlib:
 
 # Clean
 clean:
-	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LU_MARKOWITZ_TEST_EXEC) $(LU_SUPERNODE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC)
+	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(LU_MARKOWITZ_TEST_EXEC) $(LU_SUPERNODE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
@@ -474,7 +522,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-beaconfd test-beaconfd-trace test-simplex-policy test-lp-telemetry test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-beaconfd test-beaconfd-trace test-simplex-policy test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
 
 # MIP benchmark with specialized solvers (LAP, Network, SCP)
 bench-mip-specialized: $(BENCH_MIP_EXEC)
