@@ -193,8 +193,11 @@ static int rebuild_build_state(LPModel *model) {
     bs->con_capacity = m + 64;
 
     /* Count non-zeros per row */
-    int *row_nnz = (int*)calloc(m, sizeof(int));
-    if (!row_nnz) {
+    int *row_nnz = NULL;
+    if (m > 0) {
+        row_nnz = (int*)calloc((size_t)m, sizeof(int));
+    }
+    if (m > 0 && !row_nnz) {
         build_state_free(bs);
         return -1;
     }
@@ -252,6 +255,18 @@ static int rebuild_build_state(LPModel *model) {
     model->A = NULL;
 
     model->build_state = bs;
+    return 0;
+}
+
+/* Ensure model is in editable row-oriented form (build_state, no CSC matrix). */
+static int ensure_build_state(LPModel *model) {
+    if (!model) return -1;
+    if (model->A != NULL) {
+        if (rebuild_build_state(model) != 0) {
+            return -1;
+        }
+    }
+    if (!model->build_state) return -1;
     return 0;
 }
 
@@ -395,13 +410,7 @@ int lp_model_set_coefficient(LPModel *model, int constraint, int var, double val
     if (constraint < 0 || constraint >= model->num_cons) return -1;
     if (var < 0 || var >= model->num_vars) return -1;
 
-    /* If finalized, switch back to editable row build-state first. */
-    if (model->A != NULL) {
-        if (rebuild_build_state(model) != 0) {
-            return -1;
-        }
-    }
-    if (!model->build_state) return -1;
+    if (ensure_build_state(model) != 0) return -1;
     if (constraint >= model->build_state->con_count) return -1;
 
     ConstraintEntry *entry = model->build_state->constraints[constraint];
@@ -427,12 +436,7 @@ int lp_model_set_coefficients(LPModel *model, int count, const int *constraints,
         if (vars[i] < 0 || vars[i] >= model->num_vars) return -1;
     }
 
-    if (model->A != NULL) {
-        if (rebuild_build_state(model) != 0) {
-            return -1;
-        }
-    }
-    if (!model->build_state) return -1;
+    if (ensure_build_state(model) != 0) return -1;
 
     int delta_total = 0;
     for (int i = 0; i < count; i++) {
@@ -449,6 +453,154 @@ int lp_model_set_coefficients(LPModel *model, int count, const int *constraints,
 
     model->num_elements += delta_total;
     if (model->num_elements < 0) model->num_elements = 0;
+    return 0;
+}
+
+int lp_model_get_coefficient(const LPModel *model, int constraint, int var, double *value) {
+    if (!model || !value) return -1;
+    if (constraint < 0 || constraint >= model->num_cons) return -1;
+    if (var < 0 || var >= model->num_vars) return -1;
+
+    *value = 0.0;
+
+    if (model->A) {
+        const SparseMatrix *A = model->A;
+        for (int p = A->colptr[var]; p < A->colptr[var + 1]; p++) {
+            if (A->rowidx[p] == constraint) {
+                *value = A->values[p];
+                return 0;
+            }
+        }
+        return 0;
+    }
+
+    if (!model->build_state || constraint >= model->build_state->con_count) {
+        return -1;
+    }
+
+    ConstraintEntry *entry = model->build_state->constraints[constraint];
+    if (!entry) return -1;
+
+    for (int k = 0; k < entry->nnz; k++) {
+        if (entry->indices[k] == var) {
+            *value = entry->values[k];
+            break;
+        }
+    }
+
+    return 0;
+}
+
+int lp_model_delete_constraint(LPModel *model, int constraint) {
+    if (!model) return -1;
+    if (constraint < 0 || constraint >= model->num_cons) return -1;
+    if (ensure_build_state(model) != 0) return -1;
+    if (constraint >= model->build_state->con_count) return -1;
+
+    LPModelBuildState *bs = model->build_state;
+    ConstraintEntry *entry = bs->constraints[constraint];
+    int removed_nnz = entry ? entry->nnz : 0;
+
+    if (entry) {
+        free(entry->indices);
+        free(entry->values);
+        free(entry);
+    }
+
+    for (int i = constraint + 1; i < bs->con_count; i++) {
+        bs->constraints[i - 1] = bs->constraints[i];
+    }
+    bs->con_count--;
+    bs->constraints[bs->con_count] = NULL;
+
+    int tail = model->num_cons - constraint - 1;
+    if (tail > 0) {
+        memmove(&model->b[constraint], &model->b[constraint + 1], (size_t)tail * sizeof(double));
+        memmove(&model->sense[constraint], &model->sense[constraint + 1], (size_t)tail * sizeof(char));
+    }
+
+    if (model->con_names && constraint < model->con_names_capacity) {
+        SAFE_FREE(model->con_names[constraint]);
+        if (tail > 0 && constraint + 1 < model->con_names_capacity) {
+            memmove(&model->con_names[constraint], &model->con_names[constraint + 1],
+                    (size_t)tail * sizeof(char*));
+        }
+        if (model->num_cons - 1 >= 0 && model->num_cons - 1 < model->con_names_capacity) {
+            model->con_names[model->num_cons - 1] = NULL;
+        }
+    }
+
+    model->num_cons--;
+    model->num_elements -= removed_nnz;
+    if (model->num_elements < 0) model->num_elements = 0;
+    return 0;
+}
+
+int lp_model_delete_var(LPModel *model, int var) {
+    if (!model) return -1;
+    if (var < 0 || var >= model->num_vars) return -1;
+
+    char removed_type = model->var_type[var];
+
+    if (model->num_cons > 0) {
+        if (ensure_build_state(model) != 0) return -1;
+    } else if (model->A != NULL) {
+        sparse_free(model->A);
+        model->A = NULL;
+    }
+
+    int removed_nnz = 0;
+    if (model->build_state) {
+        LPModelBuildState *bs = model->build_state;
+        for (int i = 0; i < bs->con_count; i++) {
+            ConstraintEntry *entry = bs->constraints[i];
+            if (!entry) continue;
+
+            int write = 0;
+            for (int k = 0; k < entry->nnz; k++) {
+                int idx = entry->indices[k];
+                double val = entry->values[k];
+                if (idx == var) {
+                    removed_nnz++;
+                    continue;
+                }
+                if (idx > var) idx--;
+                entry->indices[write] = idx;
+                entry->values[write] = val;
+                write++;
+            }
+            entry->nnz = write;
+        }
+    }
+
+    int tail = model->num_vars - var - 1;
+    if (tail > 0) {
+        memmove(&model->c[var], &model->c[var + 1], (size_t)tail * sizeof(double));
+        memmove(&model->lb[var], &model->lb[var + 1], (size_t)tail * sizeof(double));
+        memmove(&model->ub[var], &model->ub[var + 1], (size_t)tail * sizeof(double));
+        memmove(&model->var_type[var], &model->var_type[var + 1], (size_t)tail * sizeof(char));
+    }
+
+    if (model->var_names && var < model->var_names_capacity) {
+        SAFE_FREE(model->var_names[var]);
+        if (tail > 0 && var + 1 < model->var_names_capacity) {
+            memmove(&model->var_names[var], &model->var_names[var + 1],
+                    (size_t)tail * sizeof(char*));
+        }
+        if (model->num_vars - 1 >= 0 && model->num_vars - 1 < model->var_names_capacity) {
+            model->var_names[model->num_vars - 1] = NULL;
+        }
+    }
+
+    model->num_vars--;
+    model->num_elements -= removed_nnz;
+    if (model->num_elements < 0) model->num_elements = 0;
+
+    if (removed_type == 'I' || removed_type == 'B') model->num_integers--;
+    if (removed_type == 'B') model->num_binary--;
+    if (model->num_integers < 0) model->num_integers = 0;
+    if (model->num_binary < 0) model->num_binary = 0;
+
     return 0;
 }
 

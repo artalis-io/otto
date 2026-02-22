@@ -430,12 +430,12 @@ one by one.
   `cond_estimate`.
 - Define clear availability contract by status and test it.
 
-4. LP progress + cancellation callbacks
+4. LP progress + cancellation callbacks ✅ (2026-02-22)
 - Add LP progress callback (iteration/time/objective/quality summary).
 - Add cancellation callback/poll hook for long LP solves.
 - Ensure LP callback path is orthogonal to MIP callback path.
 
-5. LP model query/edit ergonomics completion
+5. LP model query/edit ergonomics completion ✅ (2026-02-22)
 - Add missing constraint/coef query APIs:
   `get_constraint_rhs`, `get_constraint_sense`, `get_constraint_coef` (or sparse row read).
 - Add explicit row/column deletion APIs with documented invalidation semantics.

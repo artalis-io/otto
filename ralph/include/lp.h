@@ -848,9 +848,12 @@ void lp_model_free(LPModel *model);
 int lp_model_add_var(LPModel *model, double lb, double ub, double obj, char type);
 int lp_model_add_constraint(LPModel *model, int nnz, const int *indices,
                             const double *values, char sense, double rhs);
+int lp_model_get_coefficient(const LPModel *model, int constraint, int var, double *value);
 int lp_model_set_coefficient(LPModel *model, int constraint, int var, double value);
 int lp_model_set_coefficients(LPModel *model, int count, const int *constraints,
                               const int *vars, const double *values);
+int lp_model_delete_constraint(LPModel *model, int constraint);
+int lp_model_delete_var(LPModel *model, int var);
 int lp_model_finalize(LPModel *model);
 LPModel* lp_model_copy(const LPModel *model);
 
