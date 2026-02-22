@@ -40,6 +40,7 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/lu.c \
           $(SRC_DIR)/lu_sparse.c \
           $(SRC_DIR)/lu_supernode.c \
+          $(SRC_DIR)/lp_log.c \
           $(SRC_DIR)/simplex.c \
           $(SRC_DIR)/lp_telemetry.c \
           $(SRC_DIR)/dual_simplex.c \

@@ -39,8 +39,6 @@ static void lu_set_failure(LUFactorization *lu, int reason) {
     }
 }
 
-#define perf_now_ms sh_perf_now_ms
-
 /* ============================================================================
  * LU Factorization Creation/Destruction
  * ============================================================================ */
@@ -444,10 +442,9 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
         lu_set_failure(lu, LU_FAIL_BAD_INPUT);
         return -1;
     }
-    double t_dense_start_ms = perf_now_ms();
+    double t_dense_start_ms = lp_telemetry_timer_start();
 #define DENSE_RETURN(code) do { \
-    double elapsed_ms__ = perf_now_ms() - t_dense_start_ms; \
-    lp_telemetry_lu_record_dense_factorize_ms(lu, elapsed_ms__); \
+    lp_telemetry_lu_record_dense_factorize_timed(lu, t_dense_start_ms); \
     return (code); \
 } while (0)
     lu_set_failure(lu, LU_FAIL_NONE);

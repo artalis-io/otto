@@ -14,6 +14,7 @@
 #include <math.h>
 #include <time.h>
 #include "mip.h"
+#include "lp_log.h"
 
 /* Apply P5/P6 feature flags and iteration budget from MIP solver to LP sub-solver.
  * MIP LP solves should NEVER run for 1M+ iterations — if v2 cycles for >2000
@@ -155,7 +156,7 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
             solver->lap_sig = lap_sig;
             solver->use_lap_solver = 1;
             if (solver->verbose) {
-                printf("LAP structure detected: %dx%d assignment\n",
+                LP_LOG_STDOUT("LAP structure detected: %dx%d assignment\n",
                        lap_sig->base.n, lap_sig->base.n);
             }
         } else {
@@ -171,7 +172,7 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     if (detect_special && is_scp_model(model)) {
         solver->use_scp_solver = 1;
         if (solver->verbose) {
-            printf("SCP structure detected: %d elements, %d sets\n",
+            LP_LOG_STDOUT("SCP structure detected: %d elements, %d sets\n",
                    model->num_cons, model->num_vars);
         }
         /* Initialize pseudo-costs using SCP cost/coverage ratio */
@@ -238,7 +239,7 @@ static void update_incumbent(MIPSolver *solver, const double *solution, double o
                 if (violated) {
                     free(ax);
                     if (solver->verbose >= 2) {
-                        printf("  [update_incumbent] Rejected infeasible solution (constraint %d violated)\n", i);
+                        LP_LOG_STDOUT("  [update_incumbent] Rejected infeasible solution (constraint %d violated)\n", i);
                     }
                     return;  /* Reject infeasible solution */
                 }
@@ -264,7 +265,7 @@ static void update_incumbent(MIPSolver *solver, const double *solution, double o
         solver->cutoff = obj;
 
         if (solver->verbose) {
-            printf("*** New incumbent: %.6f\n", obj);
+            LP_LOG_STDOUT("*** New incumbent: %.6f\n", obj);
         }
     }
 }
@@ -760,7 +761,7 @@ static int rins_heuristic(MIPSolver *solver) {
                     found_incumbent = 1;
                     solver->rins_found++;
                     if (solver->verbose) {
-                        printf("  [rins] Found incumbent: %.6f\n", obj);
+                        LP_LOG_STDOUT("  [rins] Found incumbent: %.6f\n", obj);
                     }
                 }
             }
@@ -1026,7 +1027,7 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
         int rc = dual_simplex_solve_v2(lp);
         lp->max_iterations = save_max_iter;
         if (solver->verbose >= 2) {
-            printf("  [solve_node_lp] warm v2: rc=%d status=%d iters=%d obj=%.4f\n",
+            LP_LOG_STDOUT("  [solve_node_lp] warm v2: rc=%d status=%d iters=%d obj=%.4f\n",
                    rc, lp->status, lp->iterations, lp->obj_value);
         }
         if (rc == 0 && lp->status == RALPH_STATUS_OPTIMAL) {
@@ -1039,10 +1040,10 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
         }
         /* v2 failed — fall through to cold start */
         if (solver->verbose >= 2) {
-            printf("  [solve_node_lp] warm v2 FAILED, cold starting\n");
+            LP_LOG_STDOUT("  [solve_node_lp] warm v2 FAILED, cold starting\n");
         }
     } else if (solver->verbose >= 2) {
-        printf("  [solve_node_lp] no warm start (tab=%p, nart=%d)\n",
+        LP_LOG_STDOUT("  [solve_node_lp] no warm start (tab=%p, nart=%d)\n",
                (void*)tab, tab ? tab->num_artificial : -1);
     }
 
@@ -1055,7 +1056,7 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     simplex_solve(lp);
     lp->method = 2;
     if (solver->verbose >= 2) {
-        printf("  [solve_node_lp] cold: status=%d iters=%d obj=%.4f\n",
+        LP_LOG_STDOUT("  [solve_node_lp] cold: status=%d iters=%d obj=%.4f\n",
                lp->status, lp->iterations, lp->obj_value);
     }
 
@@ -1065,7 +1066,7 @@ node_lp_done:
     node->lp_iterations = lp->iterations;
 
     if (solver->verbose && lp->status != RALPH_STATUS_OPTIMAL) {
-        printf("  solve_node_lp: status=%d, obj=%.4f\n", lp->status, lp->obj_value);
+        LP_LOG_STDOUT("  solve_node_lp: status=%d, obj=%.4f\n", lp->status, lp->obj_value);
     }
 
     return (lp->status == RALPH_STATUS_OPTIMAL) ? 0 : -1;
@@ -1085,7 +1086,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     if (solve_node_lp(solver, node) != 0) {
         /* LP infeasible or error - prune node */
         if (solver->verbose) {
-            printf("  [process_node] Pruned: LP infeasible/error\n");
+            LP_LOG_STDOUT("  [process_node] Pruned: LP infeasible/error\n");
         }
         return 0;
     }
@@ -1131,7 +1132,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
             }
 
             if (solver->verbose) {
-                printf("  [cut_callback] Added %d user cuts at node %d\n", num_cuts, node->id);
+                LP_LOG_STDOUT("  [cut_callback] Added %d user cuts at node %d\n", num_cuts, node->id);
             }
         }
     }
@@ -1141,7 +1142,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
         if (model->obj_sense == 1) {  /* Minimize */
             if (lp_obj >= solver->best_obj - RALPH_OPT_TOL) {
                 if (solver->verbose) {
-                    printf("  [process_node] Pruned by bound: lp_obj=%.4f >= incumbent=%.4f\n",
+                    LP_LOG_STDOUT("  [process_node] Pruned by bound: lp_obj=%.4f >= incumbent=%.4f\n",
                            lp_obj, solver->best_obj);
                 }
                 return 0;  /* Prune */
@@ -1149,7 +1150,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
         } else {  /* Maximize */
             if (lp_obj <= solver->best_obj + RALPH_OPT_TOL) {
                 if (solver->verbose) {
-                    printf("  [process_node] Pruned by bound: lp_obj=%.4f <= incumbent=%.4f\n",
+                    LP_LOG_STDOUT("  [process_node] Pruned by bound: lp_obj=%.4f <= incumbent=%.4f\n",
                            lp_obj, solver->best_obj);
                 }
                 return 0;  /* Prune */
@@ -1157,7 +1158,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
         }
     }
     if (solver->verbose) {
-        printf("  [process_node] LP solved: obj=%.4f (incumbent=%.4f)\n",
+        LP_LOG_STDOUT("  [process_node] LP solved: obj=%.4f (incumbent=%.4f)\n",
                lp_obj, solver->has_incumbent ? solver->best_obj : -1.0);
     }
 
@@ -1175,7 +1176,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     if (check_integer_feasibility(solver, lp_sol)) {
         /* Found integer solution */
         if (solver->verbose) {
-            printf("  [process_node] Integer feasible! obj=%.4f\n", lp_obj);
+            LP_LOG_STDOUT("  [process_node] Integer feasible! obj=%.4f\n", lp_obj);
         }
         update_incumbent(solver, lp_sol, lp_obj);
         return 0;  /* Node solved */
@@ -1223,7 +1224,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
             }
             update_incumbent(solver, greedy_sol, greedy_obj);
             if (solver->verbose) {
-                printf("  [greedy] Round-up incumbent: %.4f\n", greedy_obj);
+                LP_LOG_STDOUT("  [greedy] Round-up incumbent: %.4f\n", greedy_obj);
             }
             free(greedy_sol);
         }
@@ -1233,7 +1234,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     if (solver->has_incumbent && solver->lp_solver && solver->lp_solver->tableau) {
         int rc_fixed = rc_fix_node(solver, node);
         if (solver->verbose && rc_fixed > 0) {
-            printf("  [rc_fix] Fixed %d variables by reduced cost\n", rc_fixed);
+            LP_LOG_STDOUT("  [rc_fix] Fixed %d variables by reduced cost\n", rc_fixed);
         }
     }
 
@@ -1242,7 +1243,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     if (select_branch_variable(solver, lp_sol, &branch_var) != 0) {
         /* No fractional integer variable - should be integer feasible */
         if (solver->verbose) {
-            printf("  [process_node] No fractional var found - declaring integer feasible\n");
+            LP_LOG_STDOUT("  [process_node] No fractional var found - declaring integer feasible\n");
         }
         return 0;
     }
@@ -1264,7 +1265,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     }
 
     if (solver->verbose) {
-        printf("  [process_node] Branching on var %d (val=%.4f)\n", branch_var,
+        LP_LOG_STDOUT("  [process_node] Branching on var %d (val=%.4f)\n", branch_var,
                lp_sol ? lp_sol[branch_var] : -999.0);
     }
 
@@ -1277,14 +1278,14 @@ static int process_node(MIPSolver *solver, BBNode *node) {
         child_down->id = solver->node_count++;
         node_queue_push(solver->node_queue, child_down);
         if (solver->verbose) {
-            printf("  [process_node] Added child_down (id=%d)\n", child_down->id);
+            LP_LOG_STDOUT("  [process_node] Added child_down (id=%d)\n", child_down->id);
         }
     }
     if (child_up) {
         child_up->id = solver->node_count++;
         node_queue_push(solver->node_queue, child_up);
         if (solver->verbose) {
-            printf("  [process_node] Added child_up (id=%d)\n", child_up->id);
+            LP_LOG_STDOUT("  [process_node] Added child_up (id=%d)\n", child_up->id);
         }
     }
 
@@ -1321,7 +1322,7 @@ static int solve_root_node(MIPSolver *solver) {
         if (solve_node_lp_as_lap(solver, root) == 0) {
             root_lp_solved = 1;
             if (solver->verbose) {
-                printf("Root LP solved with LAP solver\n");
+                LP_LOG_STDOUT("Root LP solved with LAP solver\n");
             }
         }
         /* If LAP fails, fall through to simplex */
@@ -1357,7 +1358,7 @@ static int solve_root_node(MIPSolver *solver) {
     root->lp_status = RALPH_STATUS_OPTIMAL;
 
     if (solver->verbose) {
-        printf("Root LP: obj = %.6f, iter = %d\n",
+        LP_LOG_STDOUT("Root LP: obj = %.6f, iter = %d\n",
                solver->root_bound, solver->root_iterations);
     }
 
@@ -1372,11 +1373,11 @@ static int solve_root_node(MIPSolver *solver) {
     /* Try diving heuristic to find an incumbent early.
      * This enables bound-based pruning in the B&B search. */
     if (solver->verbose) {
-        printf("Running diving heuristic...\n");
+        LP_LOG_STDOUT("Running diving heuristic...\n");
     }
     if (diving_heuristic(solver) == 0) {
         if (solver->verbose) {
-            printf("Diving found incumbent: %.6f\n", solver->best_obj);
+            LP_LOG_STDOUT("Diving found incumbent: %.6f\n", solver->best_obj);
         }
         /* Check if diving found optimal (gap closed) */
         double gap = fabs(solver->best_obj - solver->root_bound);
@@ -1392,7 +1393,7 @@ static int solve_root_node(MIPSolver *solver) {
         double *scp_solution = (double *)calloc(model->num_vars, sizeof(double));
         if (scp_solution) {
             if (solver->verbose) {
-                printf("Running SCP heuristics...\n");
+                LP_LOG_STDOUT("Running SCP heuristics...\n");
             }
             /* Run LP-guided greedy + local search */
             if (heuristic_scp(solver, solver->lp_solver->solution, scp_solution) == 0) {
@@ -1407,7 +1408,7 @@ static int solve_root_node(MIPSolver *solver) {
                 if (!solver->has_incumbent || is_better) {
                     update_incumbent(solver, scp_solution, scp_obj);
                     if (solver->verbose) {
-                        printf("SCP heuristic found incumbent: %.6f\n", scp_obj);
+                        LP_LOG_STDOUT("SCP heuristic found incumbent: %.6f\n", scp_obj);
                     }
                 }
             }
@@ -1469,7 +1470,7 @@ static int solve_root_node(MIPSolver *solver) {
         solver->cuts_generated += cuts_added;
 
         if (solver->verbose) {
-            printf("Cut round %d: %d cuts generated (pool size: %d)\n",
+            LP_LOG_STDOUT("Cut round %d: %d cuts generated (pool size: %d)\n",
                    cut_rounds + 1, cuts_added, solver->cut_pool->count);
         }
 
@@ -1479,7 +1480,7 @@ static int solve_root_node(MIPSolver *solver) {
 
         if (cuts_applied > 0) {
             if (solver->verbose) {
-                printf("Cut round %d: %d cuts applied (total: %d)\n",
+                LP_LOG_STDOUT("Cut round %d: %d cuts applied (total: %d)\n",
                        cut_rounds + 1, cuts_applied, total_cuts_applied);
             }
 
@@ -1498,7 +1499,7 @@ static int solve_root_node(MIPSolver *solver) {
             mip_apply_dual_flags(solver);
 
             if (solver->verbose) {
-                printf("  Re-solving LP with %d constraints...\n",
+                LP_LOG_STDOUT("  Re-solving LP with %d constraints...\n",
                        solver->working_model->num_cons);
             }
 
@@ -1506,7 +1507,7 @@ static int solve_root_node(MIPSolver *solver) {
             simplex_solve(solver->lp_solver);
 
             if (solver->verbose) {
-                printf("  LP after cuts: status=%d, obj=%.6f\n",
+                LP_LOG_STDOUT("  LP after cuts: status=%d, obj=%.6f\n",
                        solver->lp_solver->status, solver->lp_solver->obj_value);
             }
 
@@ -1514,7 +1515,7 @@ static int solve_root_node(MIPSolver *solver) {
                 /* LP became infeasible with cuts - discard all cuts and continue.
                  * Safety: rebuild working model from original, re-solve. */
                 if (solver->verbose) {
-                    printf("  WARNING: LP non-optimal after cuts (status=%d), discarding cuts\n",
+                    LP_LOG_STDOUT("  WARNING: LP non-optimal after cuts (status=%d), discarding cuts\n",
                            solver->lp_solver->status);
                 }
                 simplex_free(solver->lp_solver);
@@ -1546,7 +1547,7 @@ static int solve_root_node(MIPSolver *solver) {
                                                    solver->lp_solver->solution,
                                                    solver->original_model->num_vars);
             if (solver->verbose >= 2) {
-                printf("Cut round %d: %d binding cuts\n", cut_rounds + 1, binding);
+                LP_LOG_STDOUT("Cut round %d: %d binding cuts\n", cut_rounds + 1, binding);
             }
 
             /* Check if bound improved significantly */
@@ -1560,7 +1561,7 @@ static int solve_root_node(MIPSolver *solver) {
             }
 
             if (solver->verbose) {
-                printf("LP bound improved: %.6f -> %.6f (stall count: %d)\n",
+                LP_LOG_STDOUT("LP bound improved: %.6f -> %.6f (stall count: %d)\n",
                        root->lp_bound, new_bound, no_improvement_rounds);
             }
             root->lp_bound = new_bound;
@@ -1579,7 +1580,7 @@ static int solve_root_node(MIPSolver *solver) {
                 int before = solver->cut_pool->count;
                 cut_pool_cleanup(solver->cut_pool, 5);  /* Remove cuts older than 5 rounds */
                 if (solver->verbose >= 2 && solver->cut_pool->count < before) {
-                    printf("Cut cleanup: removed %d old cuts\n", before - solver->cut_pool->count);
+                    LP_LOG_STDOUT("Cut cleanup: removed %d old cuts\n", before - solver->cut_pool->count);
                 }
             }
         }
@@ -1605,7 +1606,7 @@ static int solve_root_node(MIPSolver *solver) {
 
         if (lagr_solution) {
             if (solver->verbose) {
-                printf("Computing Lagrangian bound...\n");
+                LP_LOG_STDOUT("Computing Lagrangian bound...\n");
             }
             if (lagrangian_solve_scp(solver, lagr_solution, &lagr_lower) == 0) {
                 solver->lagrangian_bound = lagr_lower;
@@ -1616,7 +1617,7 @@ static int solve_root_node(MIPSolver *solver) {
                                    (lagr_lower < solver->best_bound);
                 if (lagr_tighter) {
                     if (solver->verbose) {
-                        printf("Lagrangian bound (%.6f) tighter than LP (%.6f)\n",
+                        LP_LOG_STDOUT("Lagrangian bound (%.6f) tighter than LP (%.6f)\n",
                                lagr_lower, solver->best_bound);
                     }
                     solver->best_bound = lagr_lower;
@@ -1633,7 +1634,7 @@ static int solve_root_node(MIPSolver *solver) {
                 if (is_better) {
                     update_incumbent(solver, lagr_solution, lagr_obj);
                     if (solver->verbose) {
-                        printf("Lagrangian found better incumbent: %.6f\n", lagr_obj);
+                        LP_LOG_STDOUT("Lagrangian found better incumbent: %.6f\n", lagr_obj);
                     }
                 }
 
@@ -1668,9 +1669,9 @@ int mip_solve(MIPSolver *solver) {
     LPModel *model = solver->original_model;
 
     if (solver->verbose) {
-        printf("\n=== Ralph MIP Solver ===\n");
-        printf("Variables: %d (%d integer)\n", model->num_vars, solver->num_integers);
-        printf("Constraints: %d\n", model->num_cons);
+        LP_LOG_STDOUT("\n=== Ralph MIP Solver ===\n");
+        LP_LOG_STDOUT("Variables: %d (%d integer)\n", model->num_vars, solver->num_integers);
+        LP_LOG_STDOUT("Constraints: %d\n", model->num_cons);
     }
 
     /* Solve root node */
@@ -1715,13 +1716,13 @@ int mip_solve(MIPSolver *solver) {
         BBNode *node = node_queue_pop(solver->node_queue);
         if (!node) {
             if (solver->verbose) {
-                printf("[mip_solve] Queue empty, exiting loop\n");
+                LP_LOG_STDOUT("[mip_solve] Queue empty, exiting loop\n");
             }
             break;
         }
 
         if (solver->verbose) {
-            printf("[mip_solve] Processing node %d (depth=%d)\n", node->id, node->depth);
+            LP_LOG_STDOUT("[mip_solve] Processing node %d (depth=%d)\n", node->id, node->depth);
         }
 
         /* Process node */
@@ -1746,19 +1747,19 @@ int mip_solve(MIPSolver *solver) {
             int queue_size_before = solver->node_queue->size;
             node_queue_update_bound_with_pool(solver->node_queue, solver->cutoff, solver->node_pool);
             if (solver->verbose && solver->node_queue->size < queue_size_before) {
-                printf("[mip_solve] Pruned %d nodes by bound (cutoff=%.4f)\n",
+                LP_LOG_STDOUT("[mip_solve] Pruned %d nodes by bound (cutoff=%.4f)\n",
                        queue_size_before - solver->node_queue->size, solver->cutoff);
             }
         }
         solver->best_bound = node_queue_best_bound(solver->node_queue);
         if (solver->verbose) {
-            printf("[mip_solve] Queue size=%d, best_bound=%.4f\n",
+            LP_LOG_STDOUT("[mip_solve] Queue size=%d, best_bound=%.4f\n",
                    solver->node_queue->size, solver->best_bound);
         }
 
         /* Print progress */
         if (solver->verbose && solver->nodes_explored % 100 == 0) {
-            printf("Nodes: %d, Best: %.4f, Bound: %.4f, Gap: %.2f%%\n",
+            LP_LOG_STDOUT("Nodes: %d, Best: %.4f, Bound: %.4f, Gap: %.2f%%\n",
                    solver->nodes_explored, solver->best_obj, solver->best_bound,
                    100.0 * fabs(solver->best_obj - solver->best_bound) /
                    (fabs(solver->best_obj) + 1e-10));
@@ -1788,42 +1789,42 @@ int mip_solve(MIPSolver *solver) {
 void mip_print_stats(const MIPSolver *solver) {
     if (!solver) return;
 
-    printf("\n=== MIP Statistics ===\n");
-    printf("Status: %d\n", solver->status);
-    printf("Nodes explored: %d\n", solver->nodes_explored);
-    printf("Max depth: %d\n", solver->max_depth);
-    printf("Cuts generated: %d\n", solver->cuts_generated);
-    printf("RC fixings: %d\n", solver->rc_fixings);
-    printf("RINS calls: %d (found %d incumbents)\n", solver->rins_calls, solver->rins_found);
-    printf("Solve time: %.3f seconds\n", solver->solve_time);
+    LP_LOG_STDOUT("\n=== MIP Statistics ===\n");
+    LP_LOG_STDOUT("Status: %d\n", solver->status);
+    LP_LOG_STDOUT("Nodes explored: %d\n", solver->nodes_explored);
+    LP_LOG_STDOUT("Max depth: %d\n", solver->max_depth);
+    LP_LOG_STDOUT("Cuts generated: %d\n", solver->cuts_generated);
+    LP_LOG_STDOUT("RC fixings: %d\n", solver->rc_fixings);
+    LP_LOG_STDOUT("RINS calls: %d (found %d incumbents)\n", solver->rins_calls, solver->rins_found);
+    LP_LOG_STDOUT("Solve time: %.3f seconds\n", solver->solve_time);
 
     /* Node pool statistics */
     if (solver->node_pool) {
         BBNodePool *pool = solver->node_pool;
         int in_use = pool->capacity - pool->free_count;
-        printf("Node pool: %d/%d capacity, peak %d (%.1f%% utilized)\n",
+        LP_LOG_STDOUT("Node pool: %d/%d capacity, peak %d (%.1f%% utilized)\n",
                in_use, pool->capacity, pool->nodes_allocated,
                100.0 * pool->nodes_allocated / pool->capacity);
         if (pool->nodes_allocated >= pool->capacity) {
-            printf("  WARNING: Pool exhausted - fell back to malloc\n");
+            LP_LOG_STDOUT("  WARNING: Pool exhausted - fell back to malloc\n");
         }
     }
 
     if (solver->use_lap_solver) {
-        printf("LAP solver: enabled (%dx%d assignment)\n",
+        LP_LOG_STDOUT("LAP solver: enabled (%dx%d assignment)\n",
                solver->lap_sig ? solver->lap_sig->base.n : 0,
                solver->lap_sig ? solver->lap_sig->base.n : 0);
-        printf("Nodes solved with LAP: %d\n", solver->lap_nodes_solved);
-        printf("Nodes solved with simplex: %d\n", solver->simplex_nodes_solved);
+        LP_LOG_STDOUT("Nodes solved with LAP: %d\n", solver->lap_nodes_solved);
+        LP_LOG_STDOUT("Nodes solved with simplex: %d\n", solver->simplex_nodes_solved);
     }
 
     if (solver->has_incumbent) {
-        printf("Best objective: %.10f\n", solver->best_obj);
-        printf("Best bound: %.10f\n", solver->best_bound);
-        printf("Gap: %.4f%%\n",
+        LP_LOG_STDOUT("Best objective: %.10f\n", solver->best_obj);
+        LP_LOG_STDOUT("Best bound: %.10f\n", solver->best_bound);
+        LP_LOG_STDOUT("Gap: %.4f%%\n",
                100.0 * fabs(solver->best_obj - solver->best_bound) /
                (fabs(solver->best_obj) + 1e-10));
     } else {
-        printf("No feasible solution found\n");
+        LP_LOG_STDOUT("No feasible solution found\n");
     }
 }
