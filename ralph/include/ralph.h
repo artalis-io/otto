@@ -483,6 +483,91 @@ int ralph_set_constraint_coefs(RalphModel *model, int count,
                                const int *constraints, const int *vars,
                                const double *coefs);
 
+/* Modify constraint sense of an existing row.
+ * @param model      The model
+ * @param constraint Constraint index (0 to num_cons-1)
+ * @param sense      New constraint sense (L/E/G)
+ * @return 0 on success, -1 on error
+ */
+int ralph_set_constraint_sense(RalphModel *model, int constraint, RalphSense sense);
+
+/* Batch modify RHS values (all-or-nothing validation).
+ * Applies rhs_values[i] to constraints[i] when all indices are valid.
+ *
+ * @param model       The model
+ * @param count       Number of updates
+ * @param constraints Constraint indices (size=count)
+ * @param rhs_values  RHS values (size=count)
+ * @return 0 on success, -1 on error
+ */
+int ralph_set_constraint_rhs_batch(RalphModel *model, int count,
+                                   const int *constraints, const double *rhs_values);
+
+/* Batch modify constraint senses (all-or-nothing validation).
+ * Applies senses[i] to constraints[i] when all indices/senses are valid.
+ *
+ * @param model       The model
+ * @param count       Number of updates
+ * @param constraints Constraint indices (size=count)
+ * @param senses      New row senses (size=count)
+ * @return 0 on success, -1 on error
+ */
+int ralph_set_constraint_sense_batch(RalphModel *model, int count,
+                                     const int *constraints, const RalphSense *senses);
+
+/* Query RHS of a constraint row.
+ * @param model      The model
+ * @param constraint Constraint index (0 to num_cons-1)
+ * @param rhs        Output RHS (non-NULL)
+ * @return 0 on success, -1 on error
+ */
+int ralph_get_constraint_rhs(const RalphModel *model, int constraint, double *rhs);
+
+/* Query sense of a constraint row.
+ * @param model      The model
+ * @param constraint Constraint index (0 to num_cons-1)
+ * @param sense      Output row sense (non-NULL)
+ * @return 0 on success, -1 on error
+ */
+int ralph_get_constraint_sense(const RalphModel *model, int constraint, RalphSense *sense);
+
+/* Query matrix coefficient A[constraint, var].
+ * Returns 0 for structurally absent coefficients.
+ *
+ * @param model      The model
+ * @param constraint Constraint index (0 to num_cons-1)
+ * @param var        Variable index (0 to num_vars-1)
+ * @param coef       Output coefficient value (non-NULL)
+ * @return 0 on success, -1 on error
+ */
+int ralph_get_constraint_coef(const RalphModel *model, int constraint, int var, double *coef);
+
+/* Delete one constraint row.
+ *
+ * Invalidation semantics:
+ * - Current solve status/solution is invalidated.
+ * - Existing LP/MIP solver state is discarded.
+ * - MIP starts are kept only when still dimension-compatible.
+ *
+ * @param model      The model
+ * @param constraint Constraint index (0 to num_cons-1)
+ * @return 0 on success, -1 on error
+ */
+int ralph_delete_constraint(RalphModel *model, int constraint);
+
+/* Delete one structural variable column.
+ *
+ * Invalidation semantics:
+ * - Current solve status/solution is invalidated.
+ * - Existing LP/MIP solver state is discarded.
+ * - MIP starts are dropped when dimension no longer matches.
+ *
+ * @param model The model
+ * @param var   Variable index (0 to num_vars-1)
+ * @return 0 on success, -1 on error
+ */
+int ralph_delete_var(RalphModel *model, int var);
+
 /* Query variable bounds.
  * @param model The model
  * @param var   Variable index (0 to num_vars-1)

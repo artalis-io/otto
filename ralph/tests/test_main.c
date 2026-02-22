@@ -2299,6 +2299,199 @@ void test_constraint_modification(void) {
 }
 
 /* ============================================================================
+ * Test: Constraint Query API
+ *
+ * Tests ralph_get_constraint_rhs(), ralph_get_constraint_sense(), and
+ * ralph_get_constraint_coef() in both finalized and editable states.
+ * ============================================================================ */
+void test_constraint_query_api(void) {
+    printf("\n=== Test: Constraint Query API ===\n");
+
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Query API: model created");
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);  /* y */
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);  /* z */
+
+    int c0_idx[] = {0, 1};
+    double c0_val[] = {2.0, 1.0};
+    int c1_idx[] = {1, 2};
+    double c1_val[] = {1.0, -1.0};
+    ralph_add_constraint(model, 2, c0_idx, c0_val, RALPH_LESS_EQUAL, 7.0);
+    ralph_add_constraint(model, 2, c1_idx, c1_val, RALPH_EQUAL, 1.0);
+
+    /* Finalized path: solve first so A is in CSC form. */
+    ASSERT(ralph_optimize_lp(model) == 0, "Query API: solve call succeeds");
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Query API: status OPTIMAL");
+
+    double rhs = 0.0;
+    RalphSense sense = RALPH_EQUAL;
+    double coef = 0.0;
+
+    ASSERT(ralph_get_constraint_rhs(model, 0, &rhs) == 0, "Query API: get RHS c0");
+    ASSERT_NEAR(rhs, 7.0, TOLERANCE, "Query API: c0 RHS is 7");
+    ASSERT(ralph_get_constraint_sense(model, 0, &sense) == 0, "Query API: get sense c0");
+    ASSERT(sense == RALPH_LESS_EQUAL, "Query API: c0 sense is <=");
+
+    ASSERT(ralph_get_constraint_coef(model, 0, 0, &coef) == 0, "Query API: get A[0,0]");
+    ASSERT_NEAR(coef, 2.0, TOLERANCE, "Query API: A[0,0]=2");
+    ASSERT(ralph_get_constraint_coef(model, 0, 2, &coef) == 0, "Query API: get structural zero");
+    ASSERT_NEAR(coef, 0.0, TOLERANCE, "Query API: structural zero returns 0");
+
+    ASSERT(ralph_get_constraint_rhs(model, 1, &rhs) == 0, "Query API: get RHS c1");
+    ASSERT_NEAR(rhs, 1.0, TOLERANCE, "Query API: c1 RHS is 1");
+    ASSERT(ralph_get_constraint_sense(model, 1, &sense) == 0, "Query API: get sense c1");
+    ASSERT(sense == RALPH_EQUAL, "Query API: c1 sense is =");
+    ASSERT(ralph_get_constraint_coef(model, 1, 1, &coef) == 0, "Query API: get A[1,1]");
+    ASSERT_NEAR(coef, 1.0, TOLERANCE, "Query API: A[1,1]=1");
+    ASSERT(ralph_get_constraint_coef(model, 1, 2, &coef) == 0, "Query API: get A[1,2]");
+    ASSERT_NEAR(coef, -1.0, TOLERANCE, "Query API: A[1,2]=-1");
+
+    /* Editable path: any coefficient edit rebuilds build_state. */
+    ASSERT(ralph_set_constraint_coef(model, 0, 2, 4.0) == 0, "Query API: set A[0,2]=4");
+    ASSERT(ralph_get_constraint_coef(model, 0, 2, &coef) == 0, "Query API: read edited A[0,2]");
+    ASSERT_NEAR(coef, 4.0, TOLERANCE, "Query API: edited A[0,2]=4");
+
+    ASSERT(ralph_set_constraint_rhs(model, 1, 2.0) == 0, "Query API: set c1 RHS=2");
+    ASSERT(ralph_get_constraint_rhs(model, 1, &rhs) == 0, "Query API: read edited RHS");
+    ASSERT_NEAR(rhs, 2.0, TOLERANCE, "Query API: edited RHS is 2");
+
+    ASSERT(ralph_get_constraint_rhs(model, 99, &rhs) == -1, "Query API: invalid RHS row rejected");
+    ASSERT(ralph_get_constraint_sense(model, 99, &sense) == -1, "Query API: invalid sense row rejected");
+    ASSERT(ralph_get_constraint_coef(model, 0, 99, &coef) == -1, "Query API: invalid coef col rejected");
+    ASSERT(ralph_get_constraint_coef(model, 99, 0, &coef) == -1, "Query API: invalid coef row rejected");
+    ASSERT(ralph_get_constraint_rhs(model, 0, NULL) == -1, "Query API: NULL RHS output rejected");
+    ASSERT(ralph_get_constraint_sense(model, 0, NULL) == -1, "Query API: NULL sense output rejected");
+    ASSERT(ralph_get_constraint_coef(model, 0, 0, NULL) == -1, "Query API: NULL coef output rejected");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: Constraint Batch Edit API (Atomic Validation)
+ *
+ * Tests batch RHS/sense updates and verifies failed batches do not partially
+ * mutate model data.
+ * ============================================================================ */
+void test_constraint_batch_edit_api(void) {
+    printf("\n=== Test: Constraint Batch Edit API ===\n");
+
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Batch API: model created");
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);  /* y */
+
+    int c0_idx[] = {0, 1};
+    double c0_val[] = {1.0, 1.0};
+    int c1_idx[] = {0, 1};
+    double c1_val[] = {1.0, 2.0};
+    ralph_add_constraint(model, 2, c0_idx, c0_val, RALPH_GREATER_EQUAL, 2.0);
+    ralph_add_constraint(model, 2, c1_idx, c1_val, RALPH_LESS_EQUAL, 10.0);
+
+    int rows[] = {0, 1};
+    double rhs_vals[] = {5.0, 8.0};
+    ASSERT(ralph_set_constraint_rhs_batch(model, 2, rows, rhs_vals) == 0,
+           "Batch API: RHS batch accepted");
+
+    double rhs0 = 0.0, rhs1 = 0.0;
+    ASSERT(ralph_get_constraint_rhs(model, 0, &rhs0) == 0, "Batch API: read RHS c0");
+    ASSERT(ralph_get_constraint_rhs(model, 1, &rhs1) == 0, "Batch API: read RHS c1");
+    ASSERT_NEAR(rhs0, 5.0, TOLERANCE, "Batch API: c0 RHS updated");
+    ASSERT_NEAR(rhs1, 8.0, TOLERANCE, "Batch API: c1 RHS updated");
+
+    int bad_rows[] = {0, 99};
+    double bad_rhs_vals[] = {1.0, 1.0};
+    ASSERT(ralph_set_constraint_rhs_batch(model, 2, bad_rows, bad_rhs_vals) == -1,
+           "Batch API: invalid RHS batch rejected");
+    ASSERT(ralph_get_constraint_rhs(model, 0, &rhs0) == 0, "Batch API: read RHS after rejection");
+    ASSERT_NEAR(rhs0, 5.0, TOLERANCE, "Batch API: rejected RHS batch made no partial edits");
+
+    RalphSense senses[] = {RALPH_LESS_EQUAL, RALPH_EQUAL};
+    ASSERT(ralph_set_constraint_sense_batch(model, 2, rows, senses) == 0,
+           "Batch API: sense batch accepted");
+    RalphSense s0 = RALPH_EQUAL;
+    ASSERT(ralph_get_constraint_sense(model, 0, &s0) == 0, "Batch API: read c0 sense");
+    ASSERT(s0 == RALPH_LESS_EQUAL, "Batch API: c0 sense updated");
+
+    RalphSense bad_senses[] = {RALPH_GREATER_EQUAL, (RalphSense)'X'};
+    ASSERT(ralph_set_constraint_sense_batch(model, 2, rows, bad_senses) == -1,
+           "Batch API: invalid sense batch rejected");
+    ASSERT(ralph_get_constraint_sense(model, 0, &s0) == 0, "Batch API: read c0 sense after reject");
+    ASSERT(s0 == RALPH_LESS_EQUAL, "Batch API: rejected sense batch made no partial edits");
+
+    ASSERT(ralph_set_constraint_rhs_batch(model, 2, NULL, rhs_vals) == -1,
+           "Batch API: NULL row array rejected");
+    ASSERT(ralph_set_constraint_rhs_batch(model, 2, rows, NULL) == -1,
+           "Batch API: NULL RHS array rejected");
+    ASSERT(ralph_set_constraint_sense_batch(model, 2, NULL, senses) == -1,
+           "Batch API: NULL sense row array rejected");
+    ASSERT(ralph_set_constraint_sense_batch(model, 2, rows, NULL) == -1,
+           "Batch API: NULL sense array rejected");
+
+    ASSERT(ralph_optimize_lp(model) == 0, "Batch API: solve call succeeds");
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL ||
+           ralph_get_status(model) == RALPH_STATUS_INFEASIBLE,
+           "Batch API: model remains numerically valid after edits");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
+ * Test: Row/Column Deletion API
+ *
+ * Tests ralph_delete_constraint() and ralph_delete_var() semantics.
+ * ============================================================================ */
+void test_row_col_deletion_api(void) {
+    printf("\n=== Test: Row/Column Deletion API ===\n");
+
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Delete API: model created");
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);    /* x */
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 10.0, RALPH_CONTINUOUS);   /* y */
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 100.0, RALPH_CONTINUOUS);  /* z */
+
+    int c0_idx[] = {0, 1};
+    double c0_val[] = {1.0, 1.0};   /* x + y >= 5 */
+    int c1_idx[] = {1};
+    double c1_val[] = {1.0};        /* y >= 1 */
+    ralph_add_constraint(model, 2, c0_idx, c0_val, RALPH_GREATER_EQUAL, 5.0);
+    ralph_add_constraint(model, 1, c1_idx, c1_val, RALPH_GREATER_EQUAL, 1.0);
+
+    ASSERT(ralph_optimize_lp(model) == 0, "Delete API: initial solve succeeds");
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Delete API: initial status OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), 14.0, TOLERANCE, "Delete API: initial objective is 14");
+
+    ASSERT(ralph_delete_constraint(model, 1) == 0, "Delete API: delete row 1");
+    ASSERT(ralph_get_num_cons(model) == 1, "Delete API: row count decreased");
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_UNKNOWN, "Delete API: row delete invalidates status");
+    ASSERT(ralph_optimize_lp(model) == 0, "Delete API: solve after row delete succeeds");
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Delete API: row-delete solve OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), 5.0, TOLERANCE, "Delete API: objective after row delete is 5");
+
+    ASSERT(ralph_delete_var(model, 0) == 0, "Delete API: delete var 0");
+    ASSERT(ralph_get_num_vars(model) == 2, "Delete API: var count decreased");
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_UNKNOWN, "Delete API: var delete invalidates status");
+
+    double coef = 0.0;
+    ASSERT(ralph_get_constraint_coef(model, 0, 0, &coef) == 0, "Delete API: read shifted A[0,0]");
+    ASSERT_NEAR(coef, 1.0, TOLERANCE, "Delete API: shifted A[0,0]=1");
+    ASSERT(ralph_get_constraint_coef(model, 0, 1, &coef) == 0, "Delete API: read shifted A[0,1]");
+    ASSERT_NEAR(coef, 0.0, TOLERANCE, "Delete API: shifted A[0,1]=0");
+
+    ASSERT(ralph_optimize_lp(model) == 0, "Delete API: solve after var delete succeeds");
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "Delete API: var-delete solve OPTIMAL");
+    ASSERT_NEAR(ralph_get_objval(model), 50.0, TOLERANCE, "Delete API: objective after var delete is 50");
+
+    ASSERT(ralph_delete_constraint(model, 99) == -1, "Delete API: invalid row delete rejected");
+    ASSERT(ralph_delete_var(model, 99) == -1, "Delete API: invalid var delete rejected");
+
+    ralph_free(model);
+}
+
+/* ============================================================================
  * Test: Lazy Constraints API
  *
  * Tests ralph_add_lazy_constraint() and ralph_add_lazy_constraints().
@@ -5815,6 +6008,9 @@ int main(int argc, char **argv) {
 
         /* Constraint modification and lazy constraint tests */
         test_constraint_modification();
+        test_constraint_query_api();
+        test_constraint_batch_edit_api();
+        test_row_col_deletion_api();
         test_lazy_constraints();
 
         /* Branching control tests */

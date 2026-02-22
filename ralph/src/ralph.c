@@ -136,6 +136,10 @@ static void ralph_reset_presolve_report(RalphModel *model) {
     memset(&model->last_presolve_report, 0, sizeof(model->last_presolve_report));
 }
 
+static int ralph_is_valid_sense(RalphSense sense) {
+    return sense == RALPH_LESS_EQUAL || sense == RALPH_EQUAL || sense == RALPH_GREATER_EQUAL;
+}
+
 static int ralph_set_mip_start_copy(RalphModel *model, const double *x,
                                     const int *mask, int n) {
     if (!model || !x || n <= 0) return -1;
@@ -1301,6 +1305,16 @@ int ralph_set_constraint_rhs(RalphModel *model, int constraint, double rhs) {
     return 0;
 }
 
+int ralph_set_constraint_sense(RalphModel *model, int constraint, RalphSense sense) {
+    if (!model || !model->lp_model) return -1;
+    if (constraint < 0 || constraint >= model->lp_model->num_cons) return -1;
+    if (!ralph_is_valid_sense(sense)) return -1;
+
+    model->lp_model->sense[constraint] = (char)sense;
+    ralph_invalidate_solve_state(model);
+    return 0;
+}
+
 int ralph_set_constraint_coef(RalphModel *model, int constraint, int var, double coef) {
     if (!model || !model->lp_model) return -1;
     if (lp_model_set_coefficient(model->lp_model, constraint, var, coef) != 0) return -1;
@@ -1313,6 +1327,78 @@ int ralph_set_constraint_coefs(RalphModel *model, int count,
                                const double *coefs) {
     if (!model || !model->lp_model) return -1;
     if (lp_model_set_coefficients(model->lp_model, count, constraints, vars, coefs) != 0) return -1;
+    ralph_invalidate_solve_state(model);
+    return 0;
+}
+
+int ralph_set_constraint_rhs_batch(RalphModel *model, int count,
+                                   const int *constraints, const double *rhs_values) {
+    if (!model || !model->lp_model || count < 0) return -1;
+    if (count == 0) return 0;
+    if (!constraints || !rhs_values) return -1;
+
+    int m = model->lp_model->num_cons;
+    for (int i = 0; i < count; i++) {
+        if (constraints[i] < 0 || constraints[i] >= m) return -1;
+    }
+
+    for (int i = 0; i < count; i++) {
+        model->lp_model->b[constraints[i]] = rhs_values[i];
+    }
+    ralph_invalidate_solve_state(model);
+    return 0;
+}
+
+int ralph_set_constraint_sense_batch(RalphModel *model, int count,
+                                     const int *constraints, const RalphSense *senses) {
+    if (!model || !model->lp_model || count < 0) return -1;
+    if (count == 0) return 0;
+    if (!constraints || !senses) return -1;
+
+    int m = model->lp_model->num_cons;
+    for (int i = 0; i < count; i++) {
+        if (constraints[i] < 0 || constraints[i] >= m) return -1;
+        if (!ralph_is_valid_sense(senses[i])) return -1;
+    }
+
+    for (int i = 0; i < count; i++) {
+        model->lp_model->sense[constraints[i]] = (char)senses[i];
+    }
+    ralph_invalidate_solve_state(model);
+    return 0;
+}
+
+int ralph_get_constraint_rhs(const RalphModel *model, int constraint, double *rhs) {
+    if (!model || !model->lp_model || !rhs) return -1;
+    if (constraint < 0 || constraint >= model->lp_model->num_cons) return -1;
+    *rhs = model->lp_model->b[constraint];
+    return 0;
+}
+
+int ralph_get_constraint_sense(const RalphModel *model, int constraint, RalphSense *sense) {
+    if (!model || !model->lp_model || !sense) return -1;
+    if (constraint < 0 || constraint >= model->lp_model->num_cons) return -1;
+    char s = model->lp_model->sense[constraint];
+    if (s != 'L' && s != 'E' && s != 'G') return -1;
+    *sense = (RalphSense)s;
+    return 0;
+}
+
+int ralph_get_constraint_coef(const RalphModel *model, int constraint, int var, double *coef) {
+    if (!model || !model->lp_model) return -1;
+    return lp_model_get_coefficient(model->lp_model, constraint, var, coef);
+}
+
+int ralph_delete_constraint(RalphModel *model, int constraint) {
+    if (!model || !model->lp_model) return -1;
+    if (lp_model_delete_constraint(model->lp_model, constraint) != 0) return -1;
+    ralph_invalidate_solve_state(model);
+    return 0;
+}
+
+int ralph_delete_var(RalphModel *model, int var) {
+    if (!model || !model->lp_model) return -1;
+    if (lp_model_delete_var(model->lp_model, var) != 0) return -1;
     ralph_invalidate_solve_state(model);
     return 0;
 }
