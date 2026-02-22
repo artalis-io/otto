@@ -38,6 +38,23 @@ static int sg_construct_eval_vehicle_request(const SGContext *ctx, const SGConst
 
     score = sg_vehicle_request_cost(ctx, vehicle_id, request_id, 0.0);
     score += time_use / 3600.0;
+
+    /* Soft penalty for vehicles at constrained depots */
+    if (ctx->has_depot_capacity && state->depot_vehicle_count) {
+        const SGVehicleRecord *vehicle = &ctx->vehicles[vehicle_id];
+        if (vehicle->has_depots) {
+            uint32_t start_depot = vehicle->start_depot_id;
+            if (start_depot < ctx->num_depots &&
+                ctx->depots[start_depot].max_simultaneous > 0) {
+                uint32_t count = state->depot_vehicle_count[start_depot];
+                uint32_t cap = ctx->depots[start_depot].max_simultaneous;
+                if (count >= cap) {
+                    score += SG_DEPOT_CAPACITY_PENALTY * (double)(count - cap + 1);
+                }
+            }
+        }
+    }
+
     *score_out = score;
     if (time_use_out) {
         *time_use_out = time_use;
@@ -75,6 +92,14 @@ static ARStatus sg_construct_assign_request(SGContext *ctx, SGConstructState *st
         state->remaining_time_seconds[vehicle_id] = 0.0;
     }
 
+    /* Track depot vehicle counts for capacity awareness */
+    if (state->depot_vehicle_count) {
+        const SGVehicleRecord *vehicle = &ctx->vehicles[vehicle_id];
+        if (vehicle->has_depots && vehicle->start_depot_id < ctx->num_depots) {
+            state->depot_vehicle_count[vehicle->start_depot_id]++;
+        }
+    }
+
     status = sg_bootstrap_assign_request(sol, request_id);
     return status;
 }
@@ -100,9 +125,14 @@ ARStatus sg_construct_state_init(const SGContext *ctx, SGConstructState *state) 
 
     state->remaining_capacity = (double *)malloc(total_caps * sizeof(double));
     state->remaining_time_seconds = (double *)malloc((size_t)ctx->num_vehicles * sizeof(double));
-    if (!state->remaining_capacity || !state->remaining_time_seconds) {
+    if (ctx->has_depot_capacity && ctx->num_depots > 0) {
+        state->depot_vehicle_count = (uint32_t *)calloc((size_t)ctx->num_depots, sizeof(uint32_t));
+    }
+    if (!state->remaining_capacity || !state->remaining_time_seconds ||
+        (ctx->has_depot_capacity && ctx->num_depots > 0 && !state->depot_vehicle_count)) {
         free(state->remaining_capacity);
         free(state->remaining_time_seconds);
+        free(state->depot_vehicle_count);
         memset(state, 0, sizeof(*state));
         return AR_STATUS_OUT_OF_MEMORY;
     }
@@ -137,6 +167,7 @@ void sg_construct_state_reset(SGConstructState *state) {
     }
     free(state->remaining_capacity);
     free(state->remaining_time_seconds);
+    free(state->depot_vehicle_count);
     memset(state, 0, sizeof(*state));
 }
 

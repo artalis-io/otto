@@ -34,6 +34,12 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
         if (sol->route_tw_penalty) {
             sol->route_tw_penalty[vehicle_id] = 0.0;
         }
+        if (sol->route_depot_depart) {
+            sol->route_depot_depart[vehicle_id] = 0.0;
+        }
+        if (sol->route_depot_return) {
+            sol->route_depot_return[vehicle_id] = 0.0;
+        }
         return 1;
     }
 
@@ -61,6 +67,9 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
         }
     }
     depot_depart = time_cursor;
+    if (sol->route_depot_depart) {
+        sol->route_depot_depart[vehicle_id] = depot_depart;
+    }
 
     prev_loc = vehicle->start_location_id;
     for (i = 0; i < stop_len; i++) {
@@ -96,6 +105,9 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
         sg_travel(ctx, prev_loc, vehicle->end_location_id, vehicle_id, &dist, &dur);
         distance += dist;
         time_cursor += dur;
+    }
+    if (sol->route_depot_return) {
+        sol->route_depot_return[vehicle_id] = vehicle->open_end ? 0.0 : time_cursor;
     }
 
     /* Compute route duration */

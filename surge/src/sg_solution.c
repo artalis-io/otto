@@ -595,6 +595,8 @@ void sg_route_solution_reset(SGRouteSolution *sol) {
     free(sol->route_overtime);
     free(sol->route_tw_penalty);
     free(sol->route_stop_load);
+    free(sol->route_depot_depart);
+    free(sol->route_depot_return);
     sol->route_lengths = NULL;
     sol->route_requests = NULL;
     sol->route_stop_lengths = NULL;
@@ -611,6 +613,8 @@ void sg_route_solution_reset(SGRouteSolution *sol) {
     sol->route_overtime = NULL;
     sol->route_tw_penalty = NULL;
     sol->route_stop_load = NULL;
+    sol->route_depot_depart = NULL;
+    sol->route_depot_return = NULL;
     sol->num_vehicles = 0;
     sol->route_stride = 0;
     sol->stop_stride = 0;
@@ -682,6 +686,8 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
     sol->route_waiting = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
     sol->route_overtime = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
     sol->route_tw_penalty = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
+    sol->route_depot_depart = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
+    sol->route_depot_return = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
 
     if (ctx->dimension_count > 0) {
         /* +1 per vehicle because load is a prefix sum: entry i holds cumulative
@@ -696,6 +702,7 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
         !sol->request_vehicle || !sol->request_pos || !sol->request_pickup_stop_pos ||
         !sol->request_delivery_stop_pos || !sol->route_distance || !sol->route_duration ||
         !sol->route_waiting || !sol->route_overtime || !sol->route_tw_penalty ||
+        !sol->route_depot_depart || !sol->route_depot_return ||
         (ctx->dimension_count > 0 && !sol->route_stop_load)) {
         sg_route_solution_reset(sol);
         return AR_STATUS_OUT_OF_MEMORY;
@@ -790,6 +797,14 @@ void *sg_route_solution_copy(const void *solution, void *user_ctx) {
             memcpy(dst->route_tw_penalty, src->route_tw_penalty,
                    (size_t)src->num_vehicles * sizeof(double));
         }
+        if (src->route_depot_depart && dst->route_depot_depart) {
+            memcpy(dst->route_depot_depart, src->route_depot_depart,
+                   (size_t)src->num_vehicles * sizeof(double));
+        }
+        if (src->route_depot_return && dst->route_depot_return) {
+            memcpy(dst->route_depot_return, src->route_depot_return,
+                   (size_t)src->num_vehicles * sizeof(double));
+        }
         if (src->route_stop_load && dst->route_stop_load && ctx->dimension_count > 0) {
             size_t load_size = (size_t)src->num_vehicles * ((size_t)src->stop_stride + 1U) *
                                (size_t)ctx->dimension_count;
@@ -843,7 +858,8 @@ int sg_route_solution_validate(const void *solution, void *user_ctx) {
          !sol->route_stop_prev || !sol->route_stop_next ||
          !sol->request_pickup_stop_pos || !sol->request_delivery_stop_pos ||
          !sol->route_distance || !sol->route_duration || !sol->route_waiting ||
-         !sol->route_overtime || !sol->route_tw_penalty)) {
+         !sol->route_overtime || !sol->route_tw_penalty ||
+         !sol->route_depot_depart || !sol->route_depot_return)) {
         return 0;
     }
 
@@ -974,6 +990,127 @@ done:
     return ok;
 }
 
+/* Depot dock capacity: sweep-line overlap penalty */
+static double sg_compute_depot_overlap_penalty(const SGContext *ctx,
+                                                const SGRouteSolution *sol) {
+    typedef struct { double time; int delta; } DepotEvent;
+    double total_penalty = 0.0;
+    uint32_t depot_id;
+    DepotEvent *events = NULL;
+    uint32_t events_cap = 0;
+
+    for (depot_id = 0; depot_id < ctx->num_depots; depot_id++) {
+        uint32_t max_sim = ctx->depots[depot_id].max_simultaneous;
+        uint32_t event_count = 0;
+        uint32_t v;
+        uint32_t i, j;
+        int running, max_running;
+
+        if (max_sim == 0) {
+            continue;
+        }
+
+        /* Count events needed for this depot */
+        for (v = 0; v < sol->num_vehicles; v++) {
+            const SGVehicleRecord *vehicle = &ctx->vehicles[v];
+            if (!vehicle->has_depots) continue;
+            if (sol->route_stop_lengths[v] == 0) continue;
+
+            if (vehicle->start_depot_id == depot_id && vehicle->depot_loading_seconds > 0) {
+                event_count += 2;
+            }
+            if (!vehicle->open_end && vehicle->end_depot_id == depot_id &&
+                vehicle->depot_unloading_seconds > 0) {
+                event_count += 2;
+            }
+        }
+
+        if (event_count == 0) {
+            continue;
+        }
+
+        /* Ensure events array is large enough */
+        if (event_count > events_cap) {
+            DepotEvent *new_events = (DepotEvent *)realloc(events,
+                (size_t)event_count * sizeof(DepotEvent));
+            if (!new_events) {
+                continue;  /* Skip this depot on OOM */
+            }
+            events = new_events;
+            events_cap = event_count;
+        }
+
+        /* Build events */
+        event_count = 0;
+        for (v = 0; v < sol->num_vehicles; v++) {
+            const SGVehicleRecord *vehicle = &ctx->vehicles[v];
+            if (!vehicle->has_depots) continue;
+            if (sol->route_stop_lengths[v] == 0) continue;
+
+            /* Start depot: occupancy [depart - loading_seconds, depart) */
+            if (vehicle->start_depot_id == depot_id && vehicle->depot_loading_seconds > 0) {
+                double depart = sol->route_depot_depart[v];
+                double occupy_start = depart - (double)vehicle->depot_loading_seconds;
+                events[event_count].time = occupy_start;
+                events[event_count].delta = +1;
+                event_count++;
+                events[event_count].time = depart;
+                events[event_count].delta = -1;
+                event_count++;
+            }
+
+            /* End depot: occupancy [return, return + unloading_seconds) */
+            if (!vehicle->open_end && vehicle->end_depot_id == depot_id &&
+                vehicle->depot_unloading_seconds > 0) {
+                double ret = sol->route_depot_return[v];
+                if (ret > 0.0) {
+                    events[event_count].time = ret;
+                    events[event_count].delta = +1;
+                    event_count++;
+                    events[event_count].time = ret + (double)vehicle->depot_unloading_seconds;
+                    events[event_count].delta = -1;
+                    event_count++;
+                }
+            }
+        }
+
+        if (event_count == 0) {
+            continue;
+        }
+
+        /* Sort events by time. Ties: departures (-1) before arrivals (+1)
+           so that a vehicle leaving a dock before another arrives doesn't count as overlap. */
+        for (i = 1; i < event_count; i++) {
+            DepotEvent key = events[i];
+            j = i;
+            while (j > 0 && (events[j - 1].time > key.time ||
+                              (events[j - 1].time == key.time &&
+                               events[j - 1].delta > key.delta))) {
+                events[j] = events[j - 1];
+                j--;
+            }
+            events[j] = key;
+        }
+
+        /* Sweep to find max concurrent occupancy */
+        running = 0;
+        max_running = 0;
+        for (i = 0; i < event_count; i++) {
+            running += events[i].delta;
+            if (running > max_running) {
+                max_running = running;
+            }
+        }
+
+        if ((uint32_t)max_running > max_sim) {
+            total_penalty += (double)((uint32_t)max_running - max_sim) * SG_DEPOT_CAPACITY_PENALTY;
+        }
+    }
+
+    free(events);
+    return total_penalty;
+}
+
 double sg_route_solution_cost(const void *solution, void *user_ctx) {
     const SGRouteSolution *sol = (const SGRouteSolution *)solution;
     const SGContext *ctx = (const SGContext *)user_ctx;
@@ -1003,6 +1140,9 @@ double sg_route_solution_cost(const void *solution, void *user_ctx) {
                 cost += sol->route_tw_penalty[v];
             }
         }
+    }
+    if (ctx->has_depot_capacity) {
+        cost += sg_compute_depot_overlap_penalty(ctx, sol);
     }
     return cost;
 }

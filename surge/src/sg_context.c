@@ -390,6 +390,19 @@ SGStatus sg_depot_set_time_window(SGContext *ctx, uint32_t depot_id, int32_t ear
     return SG_STATUS_OK;
 }
 
+SGStatus sg_depot_set_max_simultaneous(SGContext *ctx, uint32_t depot_id,
+                                        uint32_t max_simultaneous) {
+    if (!ctx || depot_id >= ctx->num_depots) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    ctx->depots[depot_id].max_simultaneous = max_simultaneous;
+    if (max_simultaneous > 0) {
+        ctx->has_depot_capacity = 1;
+    }
+    return SG_STATUS_OK;
+}
+
 uint32_t sg_add_request(SGContext *ctx) {
     SGRequestHint *new_hints;
     SGRequestRecord *new_requests;
@@ -828,6 +841,9 @@ SGStatus sg_validate_model(const SGContext *ctx) {
         if (vehicle->has_shift_time_window && vehicle->shift_late < vehicle->shift_early) {
             return SG_STATUS_INFEASIBLE;
         }
+        if (vehicle->depot_loading_seconds < 0 || vehicle->depot_unloading_seconds < 0) {
+            return SG_STATUS_INFEASIBLE;
+        }
 
         for (d = 0; d < ctx->dimension_count; d++) {
             double cap = vehicle->capacity[d];
@@ -1191,6 +1207,24 @@ SGStatus sg_vehicle_set_overtime_cost(SGContext *ctx, uint32_t vehicle_id,
         return SG_STATUS_INVALID_ARG;
     }
     ctx->vehicles[vehicle_id].cost_per_overtime = cost_per_overtime;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_vehicle_set_depot_loading_seconds(SGContext *ctx, uint32_t vehicle_id,
+                                               int32_t seconds) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles || seconds < 0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->vehicles[vehicle_id].depot_loading_seconds = seconds;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_vehicle_set_depot_unloading_seconds(SGContext *ctx, uint32_t vehicle_id,
+                                                 int32_t seconds) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles || seconds < 0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->vehicles[vehicle_id].depot_unloading_seconds = seconds;
     return SG_STATUS_OK;
 }
 

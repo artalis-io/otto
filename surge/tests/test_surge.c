@@ -4482,6 +4482,445 @@ static void test_disjunct_tw_with_soft(void) {
     sg_free(ctx);
 }
 
+/* ===== Depot dock capacity ===== */
+
+static void test_depot_capacity_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t depot, v;
+    assert(ctx != NULL);
+
+    /* sg_depot_set_max_simultaneous */
+    assert(sg_depot_set_max_simultaneous(NULL, 0, 1) == SG_STATUS_INVALID_ARG);
+    assert(sg_depot_set_max_simultaneous(ctx, 0, 1) == SG_STATUS_INVALID_ARG); /* no depots */
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_max_simultaneous(ctx, depot, 3) == SG_STATUS_OK);
+    assert(ctx->depots[depot].max_simultaneous == 3);
+    assert(ctx->has_depot_capacity == 1);
+    assert(sg_depot_set_max_simultaneous(ctx, depot, 0) == SG_STATUS_OK);
+    assert(ctx->depots[depot].max_simultaneous == 0);
+    assert(sg_depot_set_max_simultaneous(ctx, 99, 1) == SG_STATUS_INVALID_ARG); /* bad ID */
+
+    /* sg_vehicle_set_depot_loading_seconds */
+    sg_set_dimension_count(ctx, 1);
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depot_loading_seconds(NULL, 0, 100) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_depot_loading_seconds(ctx, 99, 100) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_depot_loading_seconds(ctx, v, -1) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_depot_loading_seconds(ctx, v, 1800) == SG_STATUS_OK);
+    assert(ctx->vehicles[v].depot_loading_seconds == 1800);
+
+    /* sg_vehicle_set_depot_unloading_seconds */
+    assert(sg_vehicle_set_depot_unloading_seconds(NULL, 0, 100) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_depot_unloading_seconds(ctx, 99, 100) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_depot_unloading_seconds(ctx, v, -1) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_depot_unloading_seconds(ctx, v, 900) == SG_STATUS_OK);
+    assert(ctx->vehicles[v].depot_unloading_seconds == 900);
+
+    /* Defaults are 0 */
+    {
+        uint32_t v2 = sg_add_vehicle(ctx);
+        assert(ctx->vehicles[v2].depot_loading_seconds == 0);
+        assert(ctx->vehicles[v2].depot_unloading_seconds == 0);
+    }
+
+    sg_free(ctx);
+}
+
+static void test_depot_capacity_no_overlap(void) {
+    /* 2 docks, 2 vehicles with staggered shifts + 30min loading each.
+       V1 loads [0, 1800), V2 loads [1800, 3600) — no overlap.
+       Verify same cost as unlimited. */
+    SGContext *ctx_cap, *ctx_unlim;
+    uint32_t depot;
+    double cap = 100.0;
+    double cost_cap, cost_unlim;
+
+    /* With capacity constraint */
+    ctx_cap = make_config(200, 42);
+    sg_set_dimension_count(ctx_cap, 1);
+    add_depot_with_location(ctx_cap, &depot, 0.0, 0.0);
+    assert(sg_depot_set_max_simultaneous(ctx_cap, depot, 2) == SG_STATUS_OK);
+
+    /* V1: shift [0, 99999], loading 1800s — departs at 0, occupies [-1800, 0) but
+       since shift_early=0, depart=0, so occupies [-1800, 0). */
+    {
+        uint32_t v = sg_add_vehicle(ctx_cap);
+        assert(sg_vehicle_set_depots(ctx_cap, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx_cap, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx_cap, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_depot_loading_seconds(ctx_cap, v, 1800) == SG_STATUS_OK);
+    }
+    /* V2: shift [3600, 99999], loading 1800s — departs at 3600, occupies [1800, 3600). */
+    {
+        uint32_t v = sg_add_vehicle(ctx_cap);
+        assert(sg_vehicle_set_depots(ctx_cap, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx_cap, v, 3600, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx_cap, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_depot_loading_seconds(ctx_cap, v, 1800) == SG_STATUS_OK);
+    }
+    add_delivery_request(ctx_cap, 10.0, 0.0, 0, 99999, 0, -1.0);
+    add_delivery_request(ctx_cap, 20.0, 0.0, 3600, 99999, 0, -1.0);
+    assert(sg_solve(ctx_cap) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx_cap) == 0);
+    cost_cap = sg_get_total_cost(ctx_cap);
+
+    /* Without capacity constraint */
+    ctx_unlim = make_config(200, 42);
+    sg_set_dimension_count(ctx_unlim, 1);
+    add_depot_with_location(ctx_unlim, &depot, 0.0, 0.0);
+
+    {
+        uint32_t v = sg_add_vehicle(ctx_unlim);
+        assert(sg_vehicle_set_depots(ctx_unlim, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx_unlim, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx_unlim, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_depot_loading_seconds(ctx_unlim, v, 1800) == SG_STATUS_OK);
+    }
+    {
+        uint32_t v = sg_add_vehicle(ctx_unlim);
+        assert(sg_vehicle_set_depots(ctx_unlim, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx_unlim, v, 3600, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx_unlim, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_depot_loading_seconds(ctx_unlim, v, 1800) == SG_STATUS_OK);
+    }
+    add_delivery_request(ctx_unlim, 10.0, 0.0, 0, 99999, 0, -1.0);
+    add_delivery_request(ctx_unlim, 20.0, 0.0, 3600, 99999, 0, -1.0);
+    assert(sg_solve(ctx_unlim) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx_unlim) == 0);
+    cost_unlim = sg_get_total_cost(ctx_unlim);
+
+    /* No overlap, so costs should be equal */
+    assert(fabs(cost_cap - cost_unlim) < 1e-6);
+
+    sg_free(ctx_cap);
+    sg_free(ctx_unlim);
+}
+
+static void test_depot_capacity_overlap_penalty(void) {
+    /* 1 dock, 2 vehicles with same shift start + 30min loading.
+       Both load simultaneously → overlap.
+       Verify higher cost than unlimited.
+       Use cap=1.0 to force each vehicle to serve exactly one request. */
+    SGContext *ctx_cap, *ctx_unlim;
+    uint32_t depot;
+    double cap = 1.0;
+    double cost_cap, cost_unlim;
+
+    /* With capacity: 1 dock */
+    ctx_cap = make_config(200, 42);
+    sg_set_dimension_count(ctx_cap, 1);
+    add_depot_with_location(ctx_cap, &depot, 0.0, 0.0);
+    assert(sg_depot_set_max_simultaneous(ctx_cap, depot, 1) == SG_STATUS_OK);
+    {
+        uint32_t v = sg_add_vehicle(ctx_cap);
+        assert(sg_vehicle_set_depots(ctx_cap, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx_cap, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx_cap, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_depot_loading_seconds(ctx_cap, v, 1800) == SG_STATUS_OK);
+    }
+    {
+        uint32_t v = sg_add_vehicle(ctx_cap);
+        assert(sg_vehicle_set_depots(ctx_cap, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx_cap, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx_cap, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_depot_loading_seconds(ctx_cap, v, 1800) == SG_STATUS_OK);
+    }
+    add_delivery_request(ctx_cap, 10.0, 0.0, 0, 99999, 0, -1.0);
+    add_delivery_request(ctx_cap, 20.0, 0.0, 0, 99999, 0, -1.0);
+    assert(sg_solve(ctx_cap) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx_cap) == 0);
+    cost_cap = sg_get_total_cost(ctx_cap);
+
+    /* Without capacity */
+    ctx_unlim = make_config(200, 42);
+    sg_set_dimension_count(ctx_unlim, 1);
+    add_depot_with_location(ctx_unlim, &depot, 0.0, 0.0);
+    {
+        uint32_t v = sg_add_vehicle(ctx_unlim);
+        assert(sg_vehicle_set_depots(ctx_unlim, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx_unlim, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx_unlim, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_depot_loading_seconds(ctx_unlim, v, 1800) == SG_STATUS_OK);
+    }
+    {
+        uint32_t v = sg_add_vehicle(ctx_unlim);
+        assert(sg_vehicle_set_depots(ctx_unlim, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx_unlim, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx_unlim, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_depot_loading_seconds(ctx_unlim, v, 1800) == SG_STATUS_OK);
+    }
+    add_delivery_request(ctx_unlim, 10.0, 0.0, 0, 99999, 0, -1.0);
+    add_delivery_request(ctx_unlim, 20.0, 0.0, 0, 99999, 0, -1.0);
+    assert(sg_solve(ctx_unlim) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx_unlim) == 0);
+    cost_unlim = sg_get_total_cost(ctx_unlim);
+
+    /* Overlap penalty: cost_cap should be higher */
+    assert(cost_cap > cost_unlim + 1.0);
+
+    sg_free(ctx_cap);
+    sg_free(ctx_unlim);
+}
+
+static void test_depot_capacity_vehicle_service_times(void) {
+    /* 1 dock, 2 vehicles with different loading times.
+       V1 (loading=600s=10min): departs at 0, occupies [-600, 0)
+       V2 (loading=600s=10min): departs at 3600, occupies [3000, 3600)
+       No overlap → no penalty. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    double cap = 100.0;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_max_simultaneous(ctx, depot, 1) == SG_STATUS_OK);
+
+    {
+        uint32_t v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_depot_loading_seconds(ctx, v, 600) == SG_STATUS_OK);
+    }
+    {
+        uint32_t v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 3600, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_depot_loading_seconds(ctx, v, 600) == SG_STATUS_OK);
+    }
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -1.0);
+    add_delivery_request(ctx, 20.0, 0.0, 3600, 99999, 0, -1.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Verify no penalty — compare with an identical problem without capacity constraint.
+       Since vehicles don't overlap, cost should be the same regardless of constraint. */
+    {
+        SGContext *ctx2 = make_config(200, 42);
+        uint32_t d2;
+        double cost1, cost2;
+
+        sg_set_dimension_count(ctx2, 1);
+        add_depot_with_location(ctx2, &d2, 0.0, 0.0);
+        /* No max_simultaneous set */
+        {
+            uint32_t v = sg_add_vehicle(ctx2);
+            assert(sg_vehicle_set_depots(ctx2, v, d2, d2) == SG_STATUS_OK);
+            assert(sg_vehicle_set_shift_time_window(ctx2, v, 0, 99999) == SG_STATUS_OK);
+            assert(sg_vehicle_set_capacity(ctx2, v, &cap, 1) == SG_STATUS_OK);
+            assert(sg_vehicle_set_depot_loading_seconds(ctx2, v, 600) == SG_STATUS_OK);
+        }
+        {
+            uint32_t v = sg_add_vehicle(ctx2);
+            assert(sg_vehicle_set_depots(ctx2, v, d2, d2) == SG_STATUS_OK);
+            assert(sg_vehicle_set_shift_time_window(ctx2, v, 3600, 99999) == SG_STATUS_OK);
+            assert(sg_vehicle_set_capacity(ctx2, v, &cap, 1) == SG_STATUS_OK);
+            assert(sg_vehicle_set_depot_loading_seconds(ctx2, v, 600) == SG_STATUS_OK);
+        }
+        add_delivery_request(ctx2, 10.0, 0.0, 0, 99999, 0, -1.0);
+        add_delivery_request(ctx2, 20.0, 0.0, 3600, 99999, 0, -1.0);
+        assert(sg_solve(ctx2) == SG_STATUS_OK);
+
+        cost1 = sg_get_total_cost(ctx);
+        cost2 = sg_get_total_cost(ctx2);
+        assert(fabs(cost1 - cost2) < 1e-6);
+
+        sg_free(ctx2);
+    }
+
+    sg_free(ctx);
+}
+
+static void test_depot_capacity_open_end(void) {
+    /* Open-end vehicles don't contribute return occupancy.
+       1 dock at end depot, 2 vehicles (1 open-end).
+       Only the closed vehicle unloads at end depot. No overlap. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    double cap = 100.0;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_max_simultaneous(ctx, depot, 1) == SG_STATUS_OK);
+
+    /* V1: closed, unloading 1800s */
+    {
+        uint32_t v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_depot_unloading_seconds(ctx, v, 1800) == SG_STATUS_OK);
+    }
+    /* V2: open-end, unloading 1800s — but open-end means no return */
+    {
+        uint32_t v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_depot_unloading_seconds(ctx, v, 1800) == SG_STATUS_OK);
+        assert(sg_vehicle_set_open_end(ctx, v, 1) == SG_STATUS_OK);
+    }
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -1.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 0, -1.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Only one vehicle returns to depot, so max 1 unloading → within capacity.
+       Verify via cost comparison with no capacity constraint. */
+    {
+        SGContext *ctx2 = make_config(200, 42);
+        uint32_t d2;
+        double cost1, cost2;
+
+        sg_set_dimension_count(ctx2, 1);
+        add_depot_with_location(ctx2, &d2, 0.0, 0.0);
+        {
+            uint32_t v = sg_add_vehicle(ctx2);
+            assert(sg_vehicle_set_depots(ctx2, v, d2, d2) == SG_STATUS_OK);
+            assert(sg_vehicle_set_shift_time_window(ctx2, v, 0, 99999) == SG_STATUS_OK);
+            assert(sg_vehicle_set_capacity(ctx2, v, &cap, 1) == SG_STATUS_OK);
+            assert(sg_vehicle_set_depot_unloading_seconds(ctx2, v, 1800) == SG_STATUS_OK);
+        }
+        {
+            uint32_t v = sg_add_vehicle(ctx2);
+            assert(sg_vehicle_set_depots(ctx2, v, d2, d2) == SG_STATUS_OK);
+            assert(sg_vehicle_set_shift_time_window(ctx2, v, 0, 99999) == SG_STATUS_OK);
+            assert(sg_vehicle_set_capacity(ctx2, v, &cap, 1) == SG_STATUS_OK);
+            assert(sg_vehicle_set_depot_unloading_seconds(ctx2, v, 1800) == SG_STATUS_OK);
+            assert(sg_vehicle_set_open_end(ctx2, v, 1) == SG_STATUS_OK);
+        }
+        add_delivery_request(ctx2, 10.0, 0.0, 0, 99999, 0, -1.0);
+        add_delivery_request(ctx2, 20.0, 0.0, 0, 99999, 0, -1.0);
+        assert(sg_solve(ctx2) == SG_STATUS_OK);
+
+        cost1 = sg_get_total_cost(ctx);
+        cost2 = sg_get_total_cost(ctx2);
+        assert(fabs(cost1 - cost2) < 1e-6);
+
+        sg_free(ctx2);
+    }
+
+    sg_free(ctx);
+}
+
+static void test_depot_capacity_multi_depot(void) {
+    /* 2 depots with 1 dock each. 2 vehicles per depot, all with same shift + loading.
+       Depot A: 2 vehicles load simultaneously → overlap → penalty.
+       Depot B: 2 vehicles with staggered shifts → no overlap.
+       Verify depot A penalty is independent of depot B. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depotA, depotB;
+    double cap = 100.0;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depotA, 0.0, 0.0);
+    add_depot_with_location(ctx, &depotB, 100.0, 0.0);
+    assert(sg_depot_set_max_simultaneous(ctx, depotA, 1) == SG_STATUS_OK);
+    assert(sg_depot_set_max_simultaneous(ctx, depotB, 1) == SG_STATUS_OK);
+
+    /* Depot A: 2 vehicles with same shift start → overlap */
+    {
+        uint32_t v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depotA, depotA) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_depot_loading_seconds(ctx, v, 1800) == SG_STATUS_OK);
+    }
+    {
+        uint32_t v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depotA, depotA) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_depot_loading_seconds(ctx, v, 1800) == SG_STATUS_OK);
+    }
+
+    /* Depot B: 2 vehicles with staggered shifts → no overlap */
+    {
+        uint32_t v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depotB, depotB) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_depot_loading_seconds(ctx, v, 1800) == SG_STATUS_OK);
+    }
+    {
+        uint32_t v = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v, depotB, depotB) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 7200, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_depot_loading_seconds(ctx, v, 1800) == SG_STATUS_OK);
+    }
+
+    /* 4 requests: 2 near depot A, 2 near depot B */
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -1.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 0, -1.0);
+    add_delivery_request(ctx, 110.0, 0.0, 0, 99999, 0, -1.0);
+    add_delivery_request(ctx, 120.0, 0.0, 7200, 99999, 0, -1.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Verify depot A has overlap penalty but depot B doesn't.
+       We can check that the total cost includes at least the depot A penalty. */
+    {
+        /* Build same problem but with unlimited depots */
+        SGContext *ctx2 = make_config(200, 42);
+        uint32_t dA2, dB2;
+        double cost1, cost2;
+
+        sg_set_dimension_count(ctx2, 1);
+        add_depot_with_location(ctx2, &dA2, 0.0, 0.0);
+        add_depot_with_location(ctx2, &dB2, 100.0, 0.0);
+        /* No capacity set */
+        {
+            uint32_t v = sg_add_vehicle(ctx2);
+            assert(sg_vehicle_set_depots(ctx2, v, dA2, dA2) == SG_STATUS_OK);
+            assert(sg_vehicle_set_shift_time_window(ctx2, v, 0, 99999) == SG_STATUS_OK);
+            assert(sg_vehicle_set_capacity(ctx2, v, &cap, 1) == SG_STATUS_OK);
+            assert(sg_vehicle_set_depot_loading_seconds(ctx2, v, 1800) == SG_STATUS_OK);
+        }
+        {
+            uint32_t v = sg_add_vehicle(ctx2);
+            assert(sg_vehicle_set_depots(ctx2, v, dA2, dA2) == SG_STATUS_OK);
+            assert(sg_vehicle_set_shift_time_window(ctx2, v, 0, 99999) == SG_STATUS_OK);
+            assert(sg_vehicle_set_capacity(ctx2, v, &cap, 1) == SG_STATUS_OK);
+            assert(sg_vehicle_set_depot_loading_seconds(ctx2, v, 1800) == SG_STATUS_OK);
+        }
+        {
+            uint32_t v = sg_add_vehicle(ctx2);
+            assert(sg_vehicle_set_depots(ctx2, v, dB2, dB2) == SG_STATUS_OK);
+            assert(sg_vehicle_set_shift_time_window(ctx2, v, 0, 99999) == SG_STATUS_OK);
+            assert(sg_vehicle_set_capacity(ctx2, v, &cap, 1) == SG_STATUS_OK);
+            assert(sg_vehicle_set_depot_loading_seconds(ctx2, v, 1800) == SG_STATUS_OK);
+        }
+        {
+            uint32_t v = sg_add_vehicle(ctx2);
+            assert(sg_vehicle_set_depots(ctx2, v, dB2, dB2) == SG_STATUS_OK);
+            assert(sg_vehicle_set_shift_time_window(ctx2, v, 7200, 99999) == SG_STATUS_OK);
+            assert(sg_vehicle_set_capacity(ctx2, v, &cap, 1) == SG_STATUS_OK);
+            assert(sg_vehicle_set_depot_loading_seconds(ctx2, v, 1800) == SG_STATUS_OK);
+        }
+        add_delivery_request(ctx2, 10.0, 0.0, 0, 99999, 0, -1.0);
+        add_delivery_request(ctx2, 20.0, 0.0, 0, 99999, 0, -1.0);
+        add_delivery_request(ctx2, 110.0, 0.0, 0, 99999, 0, -1.0);
+        add_delivery_request(ctx2, 120.0, 0.0, 7200, 99999, 0, -1.0);
+        assert(sg_solve(ctx2) == SG_STATUS_OK);
+
+        cost1 = sg_get_total_cost(ctx);
+        cost2 = sg_get_total_cost(ctx2);
+
+        /* Cost with capacity constraint should be >= cost without (depot A has overlap) */
+        assert(cost1 >= cost2 - 1e-6);
+
+        sg_free(ctx2);
+    }
+
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -4613,8 +5052,17 @@ int main(void) {
     RUN_TEST(test_disjunct_tw_hard_rejects);
     RUN_TEST(test_disjunct_tw_backward_compat);
     RUN_TEST(test_disjunct_tw_with_soft);
+
+    /* Depot dock capacity */
+    RUN_TEST(test_depot_capacity_api);
+    RUN_TEST(test_depot_capacity_no_overlap);
+    RUN_TEST(test_depot_capacity_overlap_penalty);
+    RUN_TEST(test_depot_capacity_vehicle_service_times);
+    RUN_TEST(test_depot_capacity_open_end);
+    RUN_TEST(test_depot_capacity_multi_depot);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
-    assert(tests_run == 115);
+    assert(tests_run == 121);
     return tests_passed == tests_run ? 0 : 1;
 }

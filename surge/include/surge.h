@@ -31,6 +31,10 @@ SGStatus sg_depot_set_location(SGContext *ctx, uint32_t depot_id, double x, doub
 SGStatus sg_depot_set_time_window(SGContext *ctx, uint32_t depot_id, int32_t early,
                                   int32_t late);
 
+/* Depot dock capacity */
+SGStatus sg_depot_set_max_simultaneous(SGContext *ctx, uint32_t depot_id,
+                                        uint32_t max_simultaneous);
+
 uint32_t sg_add_request(SGContext *ctx);
 uint32_t sg_add_vehicle(SGContext *ctx);
 uint32_t sg_add_task(SGContext *ctx, SGTaskType type);
@@ -94,6 +98,13 @@ SGStatus sg_vehicle_set_costs(SGContext *ctx, uint32_t vehicle_id,
                                double cost_per_duration);
 SGStatus sg_vehicle_set_waiting_cost(SGContext *ctx, uint32_t vehicle_id, double cost_per_waiting);
 SGStatus sg_vehicle_set_overtime_cost(SGContext *ctx, uint32_t vehicle_id, double cost_per_overtime);
+
+/* Vehicle depot service times */
+SGStatus sg_vehicle_set_depot_loading_seconds(SGContext *ctx, uint32_t vehicle_id,
+                                               int32_t seconds);
+SGStatus sg_vehicle_set_depot_unloading_seconds(SGContext *ctx, uint32_t vehicle_id,
+                                                 int32_t seconds);
+
 SGStatus sg_set_unassigned_weight(SGContext *ctx, double weight);
 
 /* U7: Soft time windows */

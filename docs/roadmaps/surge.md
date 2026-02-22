@@ -1169,6 +1169,12 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ### Current Status (as of 2026-02-22)
 
+**Baseline**: U1-U8 + S1-S9 + Disjunct TW + Depot Dock Capacity complete. All usability phases done. 121 tests passing, ASAN/UBSAN clean. Benchmarks unchanged from previous baseline (depot capacity not active in benchmark instances — zero impact on existing behavior).
+
+Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), soft time windows (U7), request-vehicle constraints (U8), disjunct time windows, waiting cost (per-vehicle `cost_per_waiting`), overtime cost (per-vehicle `cost_per_overtime` with soft shift), convenience constructors, stop load/type/duration export, depot dock capacity (per-depot `max_simultaneous` with sweep-line overlap penalty).
+
+#### Previous Status (as of 2026-02-22)
+
 **Baseline**: U1-U8 + S1-S9 + Disjunct TW complete. All usability phases done. 115 tests passing, ASAN/UBSAN clean. Benchmarks unchanged from previous baseline (disjunct TWs not active in benchmark instances — zero impact on existing behavior).
 
 Best measured quality (10000 iterations, deterministic seed 42):
@@ -1269,7 +1275,7 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - [x] Vehicle qualifications (U2).
 - [ ] Commodity conflicts, exclusion groups.
 - [x] Open routes (U4).
-- [ ] Depot-level dispatch constraints.
+- [x] Depot dock capacity (sweep-line overlap penalty).
 - [x] Max route duration (U5).
 - [ ] HoSE/break constraints (with Tempo/HoSE integration).
 
@@ -1598,7 +1604,7 @@ Grouped by business impact:
 |-----|--------|--------|
 | **Waiting cost** ✅ | Penalize early arrival. Per-vehicle `cost_per_waiting` coefficient, accumulated in forward pass, added to objective. 3 tests. | Small |
 | **Overtime cost** ✅ | Penalize work beyond shift end. Per-vehicle `cost_per_overtime` coefficient with soft shift boundary. 3 tests. | Small |
-| **Depot dispatch limits** | Max vehicles per depot. Global constraint — can't check locally per insertion. | Medium |
+| **Depot dock capacity** ✅ | Per-depot `max_simultaneous` with per-vehicle `depot_loading_seconds`/`depot_unloading_seconds`. Sweep-line overlap penalty in objective. Construction heuristic depot-aware. 6 tests. | Medium |
 | **Multiple trips per vehicle** | Depot reload between trips. Fundamentally different route representation. | Large |
 
 **Tier 3 — Niche / specialized:**
@@ -1621,7 +1627,7 @@ These are real-world features that require larger architectural changes:
 | **Multiple trips** | Requires multi-route-per-vehicle state, depot reload modeling, fundamentally different route representation |
 | **Commodity conflicts** | Requires tracking commodity state along the route (bitmask per stop), conflict checking at insertion |
 | **Request exclusion groups** | Requires per-route exclusion tracking, expensive to check incrementally |
-| **Depot dispatch limits** | Requires global constraint across vehicles — can't check locally per insertion |
+| **Depot dock capacity** ✅ | Implemented as sweep-line overlap penalty in objective function |
 
 ---
 

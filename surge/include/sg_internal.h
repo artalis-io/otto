@@ -28,6 +28,7 @@
 #define SG_CONSTRUCT_FALLBACK_SECONDS 600.0
 #define SG_ROUTE_OBJECTIVE_VEHICLE_WEIGHT 1000000.0
 #define SG_ROUTE_OBJECTIVE_UNASSIGNED_WEIGHT 1000000000.0
+#define SG_DEPOT_CAPACITY_PENALTY 50000.0
 #define SG_ROUTE_MAX_REGRET_K 4
 #define SG_ROUTE_MAX_INTENSIFY_PASSES 8
 #define SG_EJECTION_MAX_DEPTH 5
@@ -82,11 +83,14 @@ typedef struct {
     double *route_overtime;
     double *route_tw_penalty;
     double *route_stop_load;   /* [vehicle * stop_stride * dim_count + stop * dim_count + d] */
+    double *route_depot_depart;   /* [num_vehicles] — departure time from start depot */
+    double *route_depot_return;   /* [num_vehicles] — return time at end depot (0.0 for open-end/empty) */
 } SGRouteSolution;
 
 typedef struct {
     double *remaining_capacity;
     double *remaining_time_seconds;
+    uint32_t *depot_vehicle_count;  /* [num_depots] — vehicles assigned to each depot during construction */
 } SGConstructState;
 
 typedef struct {
@@ -106,6 +110,7 @@ typedef struct {
     uint32_t location_id;  /* UINT32_MAX if unset */
     uint8_t has_location;
     uint8_t has_time_window;
+    uint32_t max_simultaneous;        /* 0 = unlimited (default). Max vehicles at depot at once. */
 } SGDepotRecord;
 
 typedef struct {
@@ -127,6 +132,8 @@ typedef struct {
     double cost_per_duration;
     double cost_per_waiting;
     double cost_per_overtime;
+    int32_t depot_loading_seconds;    /* 0 = instant. Time to load at start depot before departure. */
+    int32_t depot_unloading_seconds;  /* 0 = instant. Time to unload at end depot after return. */
 } SGVehicleRecord;
 
 typedef struct {
@@ -194,6 +201,7 @@ struct SGContext {
     double unassigned_weight;
     uint8_t travel_prepared;
     uint8_t avoid_new_vehicles;  /* Phase 1: skip empty vehicles in repair */
+    uint8_t has_depot_capacity;  /* 1 if any depot has max_simultaneous > 0 */
 };
 
 /* sg_context.c */
