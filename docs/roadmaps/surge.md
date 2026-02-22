@@ -1590,34 +1590,70 @@ All usability phases (U1-U8) are complete.
 
 ### Production Gap Analysis
 
-With U1-U6 complete, the following gaps remain between Surge and a production-ready solver.
+With U1-U8 complete, the following gaps remain between Surge and a production-ready solver.
 Grouped by business impact:
 
 **Tier 1 — Blocking for production:**
 
-| Gap | Impact | Effort |
-|-----|--------|--------|
-| **Soft time windows (U7)** ✅ | Per-task soft TW with linear penalty within hard bounds. No feasibility kernel changes needed — penalty layer only. 4 tests. | Medium |
-| **Disjunct time windows** ✅ | Per-task multiple non-overlapping hard TWs with gap snapping in forward/backward passes. Two-tier design: outer bounds for fast rejection, sorted window array for snap. 6 tests. | Large |
-| **Driver breaks / HoS** | Legal requirement in EU/US trucking. Requires break insertion points in routes and HoSE state machine integration. | Large |
+| Gap | Status | Notes |
+|-----|--------|-------|
+| **Soft time windows** | ✅ Complete | Per-task soft TW with linear penalty within hard bounds. 4 tests. |
+| **Disjunct time windows** | ✅ Complete | Per-task multiple non-overlapping hard TWs with gap snapping. 6 tests. |
+| **JSON API completeness** | ✅ Complete | All C API features exposed via JSON. `sg_api_build_model`, `sg_api_build_model_file`, `sg_api_write_solution`. 10 tests. |
+| **Error diagnostics** | ✅ Complete | `sg_get_last_error()` with descriptive validation messages. Entity-level errors (depot, vehicle, request). 2 tests. |
+| **Driver breaks / HoS** | Not started | Legal requirement in EU/US trucking. Requires break insertion points in routes and HoSE state machine integration. |
 
 **Tier 2 — High business value:**
 
-| Gap | Impact | Effort |
-|-----|--------|--------|
-| **Waiting cost** ✅ | Penalize early arrival. Per-vehicle `cost_per_waiting` coefficient, accumulated in forward pass, added to objective. 3 tests. | Small |
-| **Overtime cost** ✅ | Penalize work beyond shift end. Per-vehicle `cost_per_overtime` coefficient with soft shift boundary. 3 tests. | Small |
-| **Depot dock capacity** ✅ | Per-depot `max_simultaneous` with per-vehicle `depot_loading_seconds`/`depot_unloading_seconds`. Sweep-line overlap penalty in objective. Construction heuristic depot-aware. 6 tests. | Medium |
-| **Multiple trips per vehicle** | Depot reload between trips. Fundamentally different route representation. | Large |
+| Gap | Status | Notes |
+|-----|--------|-------|
+| **Waiting cost** | ✅ Complete | Per-vehicle `cost_per_waiting`, accumulated in forward pass. 3 tests. |
+| **Overtime cost** | ✅ Complete | Per-vehicle `cost_per_overtime` with soft shift boundary. 3 tests. |
+| **Depot dock capacity** | ✅ Complete | Per-depot `max_simultaneous` with sweep-line overlap penalty. 6 tests. |
+| **Per-request drop penalty** | ✅ Complete | `sg_request_set_unassigned_penalty()` overrides global weight per request. 2 tests. |
+| **Warm start** | ✅ Complete | `sg_set_initial_routes()` injects initial solution. Partial warm start supported. 2 tests. |
+| **Progress callback + cancel** | ✅ Complete | `sg_set_progress_callback()` at segment boundaries, `sg_cancel()` for early termination. Arbor-level `ARProgressCallback`. 3 tests. |
+| **Multiple trips per vehicle** | Not started | Depot reload between trips. Fundamentally different route representation. |
 
 **Tier 3 — Niche / specialized:**
 
-| Gap | Impact | Effort |
-|-----|--------|--------|
-| **Commodity conflicts** ✅ | Hazmat ∉ same vehicle as food. Bitmask-based (up to 64 types), O(1) conflict check. Per-route bitset tracking. Symmetric conflict API. 4 tests. | Medium |
-| **Exclusion groups** ✅ | At most one request per group per vehicle. Per-route count tracking. 4 tests. | Medium |
-| **Sequence-dependent setup** ✅ | Cleanup time between incompatible cargo types. Asymmetric N×N setup class matrix. Setup added after arrival, before service. 4 tests. | Medium |
-| **Time-dependent travel** | Rush hour matrices. Multiple matrix sets indexed by departure time. | Large |
+| Gap | Status | Notes |
+|-----|--------|-------|
+| **Commodity conflicts** | ✅ Complete | Bitmask-based (up to 64 types), O(1) conflict check. 4 tests. |
+| **Exclusion groups** | ✅ Complete | At most one request per group per vehicle. 4 tests. |
+| **Sequence-dependent setup** | ✅ Complete | Asymmetric N×N setup class matrix. 4 tests. |
+| **Time-dependent travel** | Not started | Rush hour matrices. Multiple matrix sets indexed by departure time. |
+
+### JSON API (`sg_api.h`)
+
+The JSON API provides three tiers of access:
+
+**Entry points:**
+- `sg_api_solve()` — parse JSON, build model, validate, solve, return JSON response
+- `sg_api_build_model()` — build model from parsed `ShJsonValue` DOM
+- `sg_api_build_model_file()` — read JSON file, parse, build model
+- `sg_api_write_solution()` — stream solution to `ShJsonWriter`
+- `sg_api_handle()` — HTTP-style request routing (`/api/v1/solve`, `/health`, `/version`)
+
+**JSON schema sections** (processed in dependency order):
+
+| Section | Description | C API calls |
+|---------|-------------|-------------|
+| `config` | Solver parameters | `sg_set_config` |
+| `dimension_count` | Capacity dimensions | `sg_set_dimension_count` |
+| `demand_sign_convention` | 0=pickup+/delivery- | `sg_set_demand_sign_convention` |
+| `unassigned_weight` | Global drop penalty | `sg_set_unassigned_weight` |
+| `locations` | Coordinate array | `sg_add_location`, `sg_location_set_coords` |
+| `commodities` | Types + conflicts | `sg_add_commodity`, `sg_commodity_set_conflict` |
+| `exclusion_groups` | Group count | `sg_add_exclusion_group` |
+| `setup_times` | Class matrix | `sg_set_num_setup_classes`, `sg_set_setup_time` |
+| `depots` | Depot definitions | `sg_add_depot`, `sg_depot_set_location`, `sg_depot_set_max_simultaneous` |
+| `vehicles` | Fleet with costs | `sg_add_vehicle`, `sg_vehicle_set_*` (all cost/constraint fields) |
+| `tasks` | Stops with TWs | `sg_add_task`, `sg_task_set_*` (soft TW, disjunct TW) |
+| `requests` | PD pairs + constraints | `sg_add_*_request`, `sg_request_set_*` (qualifications, ride time, vehicle constraints, commodity, exclusion, setup, drop penalty) |
+| `travel` | Distance/duration matrices | `sg_set_travel_matrix` |
+| `zones` | Zone distance matrix | `sg_set_zone_distance_matrix` |
+| `initial_routes` | Warm start | `sg_set_initial_routes` |
 
 ### Future (not planned yet)
 
@@ -1625,12 +1661,9 @@ These are real-world features that require larger architectural changes:
 
 | Feature | Why deferred |
 |---------|-------------|
-| **Disjunct time windows** | Changes TW from a single interval to a union — significant feasibility kernel rework |
 | **Driver breaks / HoSE** | Requires break insertion points in routes, variable-length stop sequences, HoSE state machine |
 | **Multiple trips** | Requires multi-route-per-vehicle state, depot reload modeling, fundamentally different route representation |
-| **Commodity conflicts** ✅ | Bitmask-based (up to 64 types), O(1) conflict check, per-route bitset tracking |
-| **Request exclusion groups** ✅ | Per-route count tracking, at most one request per group per vehicle |
-| **Depot dock capacity** ✅ | Implemented as sweep-line overlap penalty in objective function |
+| **Time-dependent travel** | Rush hour matrices indexed by departure time. Matrix interpolation in feasibility kernel. |
 
 ---
 

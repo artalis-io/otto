@@ -121,6 +121,9 @@ SGStatus sg_vehicle_set_depot_unloading_seconds(SGContext *ctx, uint32_t vehicle
 
 SGStatus sg_set_unassigned_weight(SGContext *ctx, double weight);
 
+/* Per-request drop penalty */
+SGStatus sg_request_set_unassigned_penalty(SGContext *ctx, uint32_t request_id, double penalty);
+
 /* U7: Soft time windows */
 SGStatus sg_task_set_soft_time_window(SGContext *ctx, uint32_t task_id,
                                       int32_t early, int32_t late,
@@ -140,7 +143,22 @@ uint32_t sg_add_pd_request(SGContext *ctx,
                             double dx, double dy, int32_t d_early, int32_t d_late,
                             int32_t d_svc, double demand);
 
-SGStatus sg_validate_model(const SGContext *ctx);
+/* Warm start / initial solution */
+SGStatus sg_set_initial_routes(SGContext *ctx,
+                                uint32_t num_routes,
+                                const uint32_t *vehicle_ids,
+                                const uint32_t *route_lengths,
+                                const uint32_t *request_ids);
+
+/* Progress callback + cancel */
+typedef int (*SGProgressCallback)(const SGStats *stats, void *user_data);
+SGStatus sg_set_progress_callback(SGContext *ctx, SGProgressCallback cb, void *user_data);
+SGStatus sg_cancel(SGContext *ctx);
+
+/* Error diagnostics */
+const char *sg_get_last_error(const SGContext *ctx);
+
+SGStatus sg_validate_model(SGContext *ctx);
 SGStatus sg_load_solomon_vrptw(SGContext *ctx, const char *file_path);
 SGStatus sg_load_li_lim_pdptw(SGContext *ctx, const char *file_path);
 SGStatus sg_load_cordeau_darp(SGContext *ctx, const char *file_path);

@@ -26,7 +26,8 @@ typedef enum {
     AR_STOP_TIME_LIMIT,
     AR_STOP_STAGNATION,
     AR_STOP_TARGET_COST,
-    AR_STOP_ERROR
+    AR_STOP_ERROR,
+    AR_STOP_CANCELLED
 } ARStopReason;
 
 typedef struct {

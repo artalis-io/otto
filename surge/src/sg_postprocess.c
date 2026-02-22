@@ -1104,6 +1104,22 @@ ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx,
         return AR_STATUS_INVALID_ARG;
     }
 
+    /* Skip vehicle reduction when no vehicle has positive fixed cost —
+       there is no cost incentive to consolidate routes. */
+    {
+        int has_fixed = 0;
+        uint32_t vi;
+        for (vi = 0; vi < ctx->num_vehicles; vi++) {
+            if (ctx->vehicles[vi].fixed_cost > 1e-9) {
+                has_fixed = 1;
+                break;
+            }
+        }
+        if (!has_fixed) {
+            return AR_STATUS_OK;
+        }
+    }
+
     if (sol->num_vehicles > 0) {
         tried = (uint8_t *)malloc((size_t)sol->num_vehicles * sizeof(uint8_t));
         if (!tried) {
@@ -1403,6 +1419,21 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
         return AR_STATUS_INVALID_ARG;
     }
 
+    /* Skip ejection-based reduction when no vehicle has positive fixed cost. */
+    {
+        int has_fixed = 0;
+        uint32_t vi;
+        for (vi = 0; vi < ctx->num_vehicles; vi++) {
+            if (ctx->vehicles[vi].fixed_cost > 1e-9) {
+                has_fixed = 1;
+                break;
+            }
+        }
+        if (!has_fixed) {
+            return AR_STATUS_OK;
+        }
+    }
+
     if (sol->base.total_requests > 0) {
         chain_visited = (uint8_t *)malloc((size_t)sol->base.total_requests * sizeof(uint8_t));
         if (!chain_visited) {
@@ -1655,6 +1686,86 @@ ARStatus sg_route_postprocess_polish_distance(const SGContext *ctx,
     return AR_STATUS_OK;
 }
 
+int sg_route_try_pd_reorder_once(const SGContext *ctx, SGRouteSolution *sol) {
+    uint32_t v;
+    int improved = 0;
+
+    if (!ctx || !sol) {
+        return 0;
+    }
+
+    for (v = 0; v < sol->num_vehicles && !improved; v++) {
+        uint32_t stop_len = sol->route_stop_lengths[v];
+        uint32_t i;
+
+        if (stop_len < 4) {
+            continue;
+        }
+
+        for (i = 0; i + 1 < stop_len && !improved; i++) {
+            SGRouteStop *stops = sg_route_vehicle_stop_ptr(sol, v);
+            SGRouteStop tmp;
+            uint32_t req_i, req_i1;
+            uint32_t pickup_pos_i, pickup_pos_i1;
+            SGRouteSolution *backup;
+            double before_cost;
+            double new_dist = 0.0;
+
+            /* Only swap adjacent deliveries from different requests */
+            if (stops[i].is_pickup || stops[i + 1].is_pickup) {
+                continue;
+            }
+            req_i = stops[i].request_id;
+            req_i1 = stops[i + 1].request_id;
+            if (req_i == req_i1) {
+                continue;
+            }
+
+            /* Check PD precedence: both pickups must be before position i */
+            pickup_pos_i = sol->request_pickup_stop_pos[req_i];
+            pickup_pos_i1 = sol->request_pickup_stop_pos[req_i1];
+            if (pickup_pos_i >= i || pickup_pos_i1 >= i) {
+                continue;
+            }
+
+            backup = (SGRouteSolution *)sg_route_solution_copy(sol, (void *)ctx);
+            if (!backup) {
+                continue;
+            }
+            before_cost = sg_route_solution_cost(backup, (void *)ctx);
+
+            /* Swap the two delivery stops */
+            tmp = stops[i];
+            stops[i] = stops[i + 1];
+            stops[i + 1] = tmp;
+
+            /* Check feasibility of swapped sequence */
+            if (!sg_route_stop_sequence_feasible(ctx, v, stops, stop_len, &new_dist)) {
+                sg_route_restore_from_backup(sol, backup);
+                continue;
+            }
+
+            /* Apply: update indices, timing, and distances */
+            sol->request_delivery_stop_pos[req_i] = i + 1;
+            sol->request_delivery_stop_pos[req_i1] = i;
+            {
+                double old_dist_v = sol->route_distance[v];
+                sg_route_update_timing(ctx, sol, v);
+                sol->total_distance = sol->total_distance - old_dist_v + sol->route_distance[v];
+            }
+
+            if (sg_route_solution_cost(sol, (void *)ctx) < before_cost - 1e-9) {
+                sg_route_solution_free(backup, NULL);
+                improved = 1;
+            } else {
+                sg_route_restore_from_backup(sol, backup);
+            }
+        }
+    }
+
+    return improved;
+}
+
 ARStatus sg_route_postprocess_intensify(const SGContext *ctx, SGRouteSolution *sol) {
     uint32_t pass;
 
@@ -1674,6 +1785,9 @@ ARStatus sg_route_postprocess_intensify(const SGContext *ctx, SGRouteSolution *s
             improved = 1;
         }
         if (sg_route_try_cross_exchange_once(ctx, sol)) {
+            improved = 1;
+        }
+        if (sg_route_try_pd_reorder_once(ctx, sol)) {
             improved = 1;
         }
         if (!improved) {

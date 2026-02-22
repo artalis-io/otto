@@ -17,6 +17,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "sg_types.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -142,6 +144,40 @@ char *sg_api_health(size_t *out_len);
  * Caller must free the returned buffer.
  */
 char *sg_api_version(size_t *out_len);
+
+/* ============================================================================
+ * Model Building (programmatic JSON DOM access)
+ * ============================================================================ */
+
+typedef struct SGContext SGContext;
+typedef struct ShJsonValue ShJsonValue;
+
+/*
+ * Build a model from a parsed JSON DOM.
+ *
+ * Processes top-level sections (config, locations, depots, vehicles, tasks,
+ * requests, travel, zones, commodities, exclusion_groups, setup_times,
+ * initial_routes) in dependency order.
+ */
+SGStatus sg_api_build_model(SGContext *ctx, const ShJsonValue *root);
+
+/*
+ * Build a model from a JSON file on disk.
+ *
+ * Reads file, parses JSON, then calls sg_api_build_model.
+ */
+SGStatus sg_api_build_model_file(SGContext *ctx, const char *path);
+
+/*
+ * Write solution output to a streaming JSON writer.
+ *
+ * Writes: status, stats, routes (with stops), unassigned, error.
+ * Requires sh_json.h to be included for ShJsonWriter definition.
+ */
+#ifdef SH_JSON_H
+SGStatus sg_api_write_solution(const SGContext *ctx, ShJsonWriter *w,
+                                SGStatus solve_status);
+#endif
 
 #ifdef __cplusplus
 }

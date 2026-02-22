@@ -51,6 +51,9 @@ struct ARALNSContext {
 
     ARALNSStats stats;
     void *best_solution;
+
+    ARProgressCallback progress_callback;
+    void *progress_data;
 };
 
 static double ar_now_seconds(void) {
@@ -436,6 +439,15 @@ ARStatus ar_alns_set_seed(ARALNSContext *ctx, uint64_t seed) {
     return AR_STATUS_OK;
 }
 
+ARStatus ar_alns_set_progress_callback(ARALNSContext *ctx,
+                                        ARProgressCallback callback,
+                                        void *user_data) {
+    if (!ctx) return AR_STATUS_INVALID_ARG;
+    ctx->progress_callback = callback;
+    ctx->progress_data = user_data;
+    return AR_STATUS_OK;
+}
+
 ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
                        void **best_solution_out) {
     ARStatus status = AR_STATUS_OK;
@@ -724,6 +736,17 @@ ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
                     }
                 }
                 segment_improved = 0;
+            }
+            /* Progress callback at segment boundaries */
+            if (ctx->progress_callback) {
+                double elapsed = ar_now_seconds() - start_time;
+                if (ctx->progress_callback((int64_t)(iteration + 1), best_cost,
+                                            elapsed, ctx->progress_data)) {
+                    status = AR_STATUS_LIMIT;
+                    stop_reason = AR_STOP_CANCELLED;
+                    iterations_done++;
+                    break;
+                }
             }
         }
         iterations_done++;

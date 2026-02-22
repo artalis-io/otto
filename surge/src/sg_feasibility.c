@@ -971,6 +971,23 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
 
     score = (route_len == 0 ? vehicle->fixed_cost : 0.0) +
             vehicle->cost_per_distance * (new_route_distance - sol->route_distance[vehicle_id]);
+
+    /* Duration-aware scoring: add duration delta when cost_per_duration > 0 */
+    if (vehicle->cost_per_duration > 0.0 && sol->route_duration) {
+        double duration_delta;
+        if (next_stop_idx != UINT32_MAX) {
+            uint32_t next_loc = ctx->tasks[stops[next_stop_idx].task_id].location_id;
+            double new_start_next = new_stops[new_stop_count - 1].depart +
+                sg_travel_dur(ctx, ctx->tasks[new_stops[new_stop_count - 1].task_id].location_id,
+                              next_loc, vehicle_id);
+            duration_delta = new_start_next - stops[next_stop_idx].arrival;
+            if (duration_delta < 0.0) duration_delta = 0.0;
+        } else {
+            duration_delta = new_stops[new_stop_count - 1].depart - prev_depart;
+        }
+        score += vehicle->cost_per_duration * duration_delta;
+    }
+
     *score_out = score;
     *new_route_distance_out = new_route_distance;
     return 1;
@@ -1317,6 +1334,44 @@ int sg_route_eval_pd_best_insertion_cached(
                 new_route_distance = sol->route_distance[vehicle_id] + delta;
                 score = (stop_len == 0 ? vehicle->fixed_cost : 0.0) +
                         vehicle->cost_per_distance * delta;
+
+                /* Duration-aware scoring for PD insertion */
+                if (vehicle->cost_per_duration > 0.0 && sol->route_duration) {
+                    double dur_delta;
+                    if (j <= stop_len) {
+                        double push_at_j = d_depart +
+                            sg_travel_dur(ctx, delivery_loc,
+                                          ctx->tasks[stops[j - 1].task_id].location_id,
+                                          vehicle_id)
+                            - stops[j - 1].arrival;
+                        dur_delta = push_at_j > 0.0 ? push_at_j : 0.0;
+                    } else {
+                        dur_delta = d_depart - (stop_len > 0 ? stops[stop_len - 1].depart : depot_depart);
+                        if (!vehicle->open_end) {
+                            dur_delta += sg_travel_dur(ctx, delivery_loc,
+                                                       vehicle->end_location_id, vehicle_id);
+                            if (stop_len > 0) {
+                                dur_delta -= sg_travel_dur(ctx,
+                                    ctx->tasks[stops[stop_len - 1].task_id].location_id,
+                                    vehicle->end_location_id, vehicle_id);
+                            }
+                        }
+                    }
+                    score += vehicle->cost_per_duration * dur_delta;
+                }
+
+                /* Ride-time penalty: penalize excess ride time above direct travel.
+                   Use the larger of distance/duration cost as weight so the penalty
+                   is meaningful under any cost model. */
+                if (request->has_max_ride_time) {
+                    double direct_travel = sg_travel_dur(ctx, pickup_loc, delivery_loc, vehicle_id);
+                    double excess = ride_time - direct_travel;
+                    if (excess > 0.0) {
+                        double w = vehicle->cost_per_distance > vehicle->cost_per_duration
+                                   ? vehicle->cost_per_distance : vehicle->cost_per_duration;
+                        score += w * excess;
+                    }
+                }
 
                 if (score < best_score) {
                     best_score = score;

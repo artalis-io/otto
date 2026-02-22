@@ -178,6 +178,8 @@ typedef struct {
     uint32_t *exclusion_group_ids;     /* NULL = no groups. Heap array. */
     uint16_t num_exclusion_groups;     /* count of groups this request belongs to */
     uint32_t setup_class_id;           /* 0 = none, 1..num_setup_classes */
+    double unassigned_penalty;         /* Per-request drop penalty (0.0 = use global) */
+    uint8_t has_unassigned_penalty;    /* 1 if per-request penalty is set */
 } SGRequestRecord;
 
 struct SGContext {
@@ -223,9 +225,26 @@ struct SGContext {
     SGOperatorStats *repair_op_stats;
     uint32_t num_destroy_ops;
     uint32_t num_repair_ops;
+
+    /* Error diagnostics */
+    char last_error[256];
+
+    /* Progress callback */
+    SGProgressCallback progress_callback;
+    void *progress_callback_data;
+    volatile uint8_t cancel_requested;
+
+    /* Warm start */
+    uint32_t *initial_route_vehicle_ids;
+    uint32_t *initial_route_request_ids;
+    uint32_t *initial_route_lengths;
+    uint32_t num_initial_routes;
+    uint32_t total_initial_requests;
 };
 
 /* sg_context.c */
+void sg_set_error(SGContext *ctx, const char *fmt, ...);
+void sg_clear_error(SGContext *ctx);
 SGRequestHint sg_request_hint_default(void);
 SGRequestRecord sg_request_record_default(void);
 int sg_task_type_valid(SGTaskType type);
@@ -643,6 +662,7 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
 ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx, SGRouteSolution *sol);
 ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolution *sol);
 ARStatus sg_route_postprocess_polish_distance(const SGContext *ctx, SGRouteSolution *sol);
+int sg_route_try_pd_reorder_once(const SGContext *ctx, SGRouteSolution *sol);
 ARStatus sg_route_postprocess_intensify(const SGContext *ctx, SGRouteSolution *sol);
 int sg_route_find_best_insertion_for_request(const SGContext *ctx, const SGRouteSolution *sol,
                                              uint32_t request_id, uint32_t forbidden_vehicle,

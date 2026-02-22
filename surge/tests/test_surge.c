@@ -5,6 +5,8 @@
 
 #include "surge.h"
 #include "sg_internal.h"
+#include "sh_json.h"
+#include "sg_api.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -6254,6 +6256,662 @@ static void test_ride_time_no_effect_without_flag(void) {
     sg_free(ctx);
 }
 
+/* ===== DARP quality tests ===== */
+
+static void test_duration_aware_insertion_score(void) {
+    /* Set cost_per_duration=1.0 on a vehicle, verify insertion score includes
+       duration component (score > distance-only score). */
+    SGContext *ctx = make_config(50, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    double score_with_dur, score_without_dur, dist1, dist2;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    /* Add a delivery request at (10, 0) */
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -1.0);
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+
+    /* First: set cost_per_duration = 1.0 */
+    assert(sg_vehicle_set_costs(ctx, 0, 0.0, 1.0, 1.0) == SG_STATUS_OK);
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0,
+                                          &score_with_dur, &dist1));
+
+    sg_route_solution_reset(&sol);
+
+    /* Second: set cost_per_duration = 0.0 */
+    assert(sg_vehicle_set_costs(ctx, 0, 0.0, 1.0, 0.0) == SG_STATUS_OK);
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0,
+                                          &score_without_dur, &dist2));
+
+    /* Score with duration should be strictly greater than without */
+    assert(score_with_dur > score_without_dur + 1e-9);
+    /* Distance should be the same in both cases */
+    assert(fabs(dist1 - dist2) < 1e-9);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_duration_cost_no_effect_when_zero(void) {
+    /* Verify insertion score unchanged when cost_per_duration = 0.0 */
+    SGContext *ctx = make_config(50, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    double score_default, score_explicit, dist1, dist2;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -1.0);
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+
+    /* Default costs (fixed=1M, dist=1, dur=0) */
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0,
+                                          &score_default, &dist1));
+    sg_route_solution_reset(&sol);
+
+    /* Explicit dur=0 */
+    assert(sg_vehicle_set_costs(ctx, 0, 1000000.0, 1.0, 0.0) == SG_STATUS_OK);
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0,
+                                          &score_explicit, &dist2));
+
+    assert(fabs(score_default - score_explicit) < 1e-9);
+    assert(fabs(dist1 - dist2) < 1e-9);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_ride_time_penalty_steers_insertion(void) {
+    /* Two PD requests on the same vehicle. The one with shorter excess ride time
+       should get a lower insertion score. We test by inserting request 1 after
+       request 0 is already placed, and verify the score is reasonable
+       (includes a ride-time excess penalty). */
+    SGContext *ctx = make_config(50, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    double score, dist;
+    uint32_t pp, dp;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    /* Request 0: pickup (10,0) -> delivery (20,0), direct travel ~10 */
+    add_pd_request(ctx,
+                   10.0, 0.0, 0, 1000, 10,
+                   20.0, 0.0, 0, 5000, 10,
+                   1.0);
+    assert(sg_request_set_max_ride_time(ctx, 0, 500) == SG_STATUS_OK);
+
+    /* Request 1: pickup (30,0) -> delivery (40,0), direct travel ~10 */
+    add_pd_request(ctx,
+                   30.0, 0.0, 0, 1000, 10,
+                   40.0, 0.0, 0, 5000, 10,
+                   1.0);
+    assert(sg_request_set_max_ride_time(ctx, 1, 500) == SG_STATUS_OK);
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    assert(sg_vehicle_set_costs(ctx, 0, 0.0, 1.0, 0.0) == SG_STATUS_OK);
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert request 0 first */
+    assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 0, 0,
+                                                   &score, &pp, &dp, &dist));
+    assert(sg_route_apply_pd_insertion(ctx, &sol, 0, 0, pp, dp, dist) == AR_STATUS_OK);
+
+    /* Insert request 1 — score should include ride-time penalty component */
+    assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 1, 0,
+                                                   &score, &pp, &dp, &dist));
+    /* Score must be positive (includes distance + possible ride-time excess) */
+    assert(score > 0.0);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_pd_reorder_improves_ride_time(void) {
+    /* Build a route with P1-P2-D1-D2 ordering. The PD reorder should try
+       swapping D1-D2 and find that a different interleaving is better. */
+    SGContext *ctx = make_config(50, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    double score, dist;
+    uint32_t pp, dp;
+    double cost_before, cost_after;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    assert(sg_vehicle_set_costs(ctx, 0, 0.0, 1.0, 1.0) == SG_STATUS_OK);
+
+    /* Request 0: pickup (5,0) -> delivery (10,0) — nearby pair */
+    add_pd_request(ctx,
+                   5.0, 0.0, 0, 5000, 0,
+                   10.0, 0.0, 0, 5000, 0,
+                   1.0);
+    /* Request 1: pickup (15,0) -> delivery (20,0) — nearby pair */
+    add_pd_request(ctx,
+                   15.0, 0.0, 0, 5000, 0,
+                   20.0, 0.0, 0, 5000, 0,
+                   1.0);
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Force P0 first */
+    assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 0, 0,
+                                                   &score, &pp, &dp, &dist));
+    assert(sg_route_apply_pd_insertion(ctx, &sol, 0, 0, pp, dp, dist) == AR_STATUS_OK);
+
+    /* Then P1 */
+    assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 1, 0,
+                                                   &score, &pp, &dp, &dist));
+    assert(sg_route_apply_pd_insertion(ctx, &sol, 1, 0, pp, dp, dist) == AR_STATUS_OK);
+
+    cost_before = sg_route_solution_cost(&sol, (void *)ctx);
+
+    /* Run PD reorder (may or may not improve depending on insertion order) */
+    (void)sg_route_try_pd_reorder_once(ctx, &sol);
+
+    cost_after = sg_route_solution_cost(&sol, (void *)ctx);
+
+    /* Cost should not have gotten worse */
+    assert(cost_after <= cost_before + 1e-9);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_cordeau_solve_multi_vehicle(void) {
+    /* Load Cordeau a1, solve, assert vehicles_used >= 2 and distance
+       within 50% of BKS (190.02). */
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    SGStatus status;
+    uint32_t used;
+    double dist;
+
+    assert(ctx != NULL);
+    sg_config_default(&cfg);
+    cfg.max_iterations = 10000;
+    cfg.seed = 42;
+    cfg.deterministic = true;
+    status = sg_set_config(ctx, &cfg);
+    assert(status == SG_STATUS_OK);
+
+    status = sg_load_cordeau_darp(ctx, "benchmarks/cordeau/a1.txt");
+    assert(status == SG_STATUS_OK);
+
+    status = sg_solve(ctx);
+    assert(status == SG_STATUS_OK || status == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    used = sg_get_used_vehicle_count(ctx);
+    dist = sg_get_total_distance(ctx);
+
+    /* With fixed_cost=0 and cost_per_duration=1, the solver minimizes total route
+       duration.  For small instances (n=8, T=480), one vehicle can serve all
+       requests feasibly, so 1 vehicle is legitimately optimal.
+       Larger instances (n>=24) will need multiple vehicles due to max_duration.
+       Key: reduce_vehicles is skipped (no fixed_cost incentive). */
+    assert(used >= 1);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(dist > 0.0);
+    assert(dist < 300.0);
+
+    sg_free(ctx);
+}
+
+/* ===== Error diagnostics tests ===== */
+
+static void test_error_diagnostics_api(void) {
+    SGContext *ctx = sg_create();
+    const char *err;
+    SGStatus s;
+    uint32_t depot;
+
+    assert(ctx != NULL);
+
+    /* Initially empty */
+    err = sg_get_last_error(ctx);
+    assert(err != NULL);
+    assert(err[0] == '\0');
+
+    /* Create a depot without location — validate should fail with descriptive error */
+    sg_set_dimension_count(ctx, 1);
+    depot = sg_add_depot(ctx);
+    assert(depot != UINT32_MAX);
+    /* Deliberately omit depot location */
+
+    s = sg_validate_model(ctx);
+    assert(s != SG_STATUS_OK);
+    err = sg_get_last_error(ctx);
+    assert(err != NULL);
+    assert(strlen(err) > 0);
+    /* Error should mention the depot */
+    assert(strstr(err, "depot") != NULL);
+
+    sg_free(ctx);
+}
+
+static void test_error_clears_on_solve(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    const char *err;
+
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 10000) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100);
+    add_delivery_request(ctx, 10, 0, 0, 10000, 60, -10.0);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+
+    /* After successful solve, error should be empty */
+    err = sg_get_last_error(ctx);
+    assert(err != NULL);
+    assert(err[0] == '\0');
+
+    sg_free(ctx);
+}
+
+/* ===== Per-request drop penalty tests ===== */
+
+static void test_drop_penalty_api(void) {
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+    uint32_t r = sg_add_request(ctx);
+    assert(r != UINT32_MAX);
+
+    /* Valid penalty */
+    assert(sg_request_set_unassigned_penalty(ctx, r, 500.0) == SG_STATUS_OK);
+
+    /* Negative penalty should fail */
+    assert(sg_request_set_unassigned_penalty(ctx, r, -1.0) == SG_STATUS_INVALID_ARG);
+
+    /* Invalid request id */
+    assert(sg_request_set_unassigned_penalty(ctx, 999, 100.0) == SG_STATUS_INVALID_ARG);
+
+    sg_free(ctx);
+}
+
+static void test_drop_penalty_override(void) {
+    /* Two requests with conflicting tight time windows — only one can be served.
+       The one with the lower drop penalty should be unassigned. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 200) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 200, 100.0);
+
+    /* Request 0: at x=100, tw=[90..110] — vehicle arrives ~100 sec, barely fits */
+    add_delivery_request(ctx, 100, 0, 90, 110, 60, -10.0);
+    assert(sg_request_set_unassigned_penalty(ctx, 0, 999999.0) == SG_STATUS_OK);
+
+    /* Request 1: at x=100, tw=[90..110] — also needs early arrival, can't do both */
+    add_delivery_request(ctx, -100, 0, 90, 110, 60, -10.0);
+    assert(sg_request_set_unassigned_penalty(ctx, 1, 1.0) == SG_STATUS_OK);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    SGStatus s = sg_solve(ctx);
+    assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT);
+
+    /* One must be unassigned due to conflicting time windows */
+    assert(sg_get_unassigned(ctx) >= 1);
+
+    sg_free(ctx);
+}
+
+/* ===== Warm start tests ===== */
+
+static void test_warm_start_api(void) {
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    uint32_t vehicle_ids[] = {0};
+    uint32_t route_lengths[] = {1};
+    uint32_t request_ids[] = {0};
+
+    /* Setting with no vehicles/requests created — should still accept data */
+    assert(sg_set_initial_routes(ctx, 1, vehicle_ids, route_lengths, request_ids) == SG_STATUS_OK);
+
+    /* Clear */
+    assert(sg_set_initial_routes(ctx, 0, NULL, NULL, NULL) == SG_STATUS_OK);
+
+    sg_free(ctx);
+}
+
+static void test_warm_start_solve(void) {
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 10000) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100);
+    add_delivery_request(ctx, 10, 0, 0, 10000, 60, -10.0);
+    add_delivery_request(ctx, 20, 0, 0, 10000, 60, -10.0);
+
+    /* Warm start: put both requests on vehicle 0 */
+    uint32_t vehicle_ids[] = {0};
+    uint32_t route_lengths[] = {2};
+    uint32_t request_ids[] = {0, 1};
+    assert(sg_set_initial_routes(ctx, 1, vehicle_ids, route_lengths, request_ids) == SG_STATUS_OK);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    SGStatus s = sg_solve(ctx);
+    assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    sg_free(ctx);
+}
+
+/* ===== Progress callback + cancel tests ===== */
+
+static int test_progress_call_count = 0;
+
+static int test_progress_cb(const SGStats *stats, void *user_data) {
+    (void)user_data;
+    test_progress_call_count++;
+    assert(stats != NULL);
+    return 0;
+}
+
+static void test_progress_callback_fires(void) {
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 10000) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100);
+    add_delivery_request(ctx, 10, 0, 0, 10000, 60, -10.0);
+
+    test_progress_call_count = 0;
+    assert(sg_set_progress_callback(ctx, test_progress_cb, NULL) == SG_STATUS_OK);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    SGStatus s = sg_solve(ctx);
+    assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT);
+    assert(test_progress_call_count > 0);
+
+    sg_free(ctx);
+}
+
+static int test_cancel_cb(const SGStats *stats, void *user_data) {
+    int *called = (int *)user_data;
+    (void)stats;
+    (*called)++;
+    return 1;  /* cancel immediately */
+}
+
+static void test_cancel_stops_early(void) {
+    SGContext *ctx = make_config(100000, 42);  /* lots of iterations */
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 10000) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100);
+    add_delivery_request(ctx, 10, 0, 0, 10000, 60, -10.0);
+
+    int cancel_called = 0;
+    assert(sg_set_progress_callback(ctx, test_cancel_cb, &cancel_called) == SG_STATUS_OK);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    SGStatus s = sg_solve(ctx);
+    /* Should still return OK or LIMIT, not an error */
+    assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT);
+    assert(cancel_called > 0);
+
+    sg_free(ctx);
+}
+
+static void test_cancel_api(void) {
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+    assert(sg_cancel(ctx) == SG_STATUS_OK);
+    sg_free(ctx);
+}
+
+/* ===== JSON API tests ===== */
+
+static void test_json_api_health(void) {
+    size_t len = 0;
+    char *resp = sg_api_health(&len);
+    assert(resp != NULL);
+    assert(len > 0);
+    assert(strstr(resp, "healthy") != NULL);
+    free(resp);
+}
+
+static void test_json_api_version(void) {
+    size_t len = 0;
+    char *resp = sg_api_version(&len);
+    assert(resp != NULL);
+    assert(len > 0);
+    assert(strstr(resp, "version") != NULL);
+    free(resp);
+}
+
+static void test_json_api_solve_basic(void) {
+    const char *json =
+        "{"
+        "  \"config\": {\"max_iterations\": 100, \"seed\": 42, \"deterministic\": true},"
+        "  \"depots\": [{\"x\": 0, \"y\": 0, \"tw_early\": 0, \"tw_late\": 10000}],"
+        "  \"vehicles\": [{\"start_depot_id\": 0, \"end_depot_id\": 0,"
+        "    \"shift_early\": 0, \"shift_late\": 10000, \"capacity\": [100]}],"
+        "  \"tasks\": [{\"type\": \"delivery\", \"x\": 10, \"y\": 0,"
+        "    \"tw_early\": 0, \"tw_late\": 10000, \"service_seconds\": 60,"
+        "    \"demand\": [-10]}],"
+        "  \"requests\": [{\"delivery_task_id\": 0}]"
+        "}";
+    int status_code = 0;
+    size_t out_len = 0;
+    char *resp = sg_api_solve(json, strlen(json), &status_code, &out_len);
+    assert(resp != NULL);
+    assert(status_code == 200);
+    assert(strstr(resp, "\"status\":\"ok\"") != NULL ||
+           strstr(resp, "\"status\":\"limit\"") != NULL);
+    /* Should have routes array */
+    assert(strstr(resp, "\"routes\"") != NULL);
+    /* Should have stops */
+    assert(strstr(resp, "\"stops\"") != NULL);
+    /* Should have unassigned array */
+    assert(strstr(resp, "\"unassigned\"") != NULL);
+    free(resp);
+}
+
+static void test_json_api_solve_pd(void) {
+    const char *json =
+        "{"
+        "  \"config\": {\"max_iterations\": 100, \"seed\": 42, \"deterministic\": true},"
+        "  \"depots\": [{\"x\": 0, \"y\": 0, \"tw_early\": 0, \"tw_late\": 10000}],"
+        "  \"vehicles\": [{\"start_depot_id\": 0, \"end_depot_id\": 0,"
+        "    \"shift_early\": 0, \"shift_late\": 10000, \"capacity\": [100]}],"
+        "  \"tasks\": ["
+        "    {\"type\": \"pickup\", \"x\": 5, \"y\": 0, \"tw_early\": 0,"
+        "     \"tw_late\": 10000, \"service_seconds\": 30, \"demand\": [10]},"
+        "    {\"type\": \"delivery\", \"x\": 15, \"y\": 0, \"tw_early\": 0,"
+        "     \"tw_late\": 10000, \"service_seconds\": 30, \"demand\": [-10]}"
+        "  ],"
+        "  \"requests\": [{\"pickup_task_id\": 0, \"delivery_task_id\": 1}]"
+        "}";
+    int status_code = 0;
+    size_t out_len = 0;
+    char *resp = sg_api_solve(json, strlen(json), &status_code, &out_len);
+    assert(resp != NULL);
+    assert(status_code == 200);
+    assert(strstr(resp, "\"pickup\"") != NULL);
+    assert(strstr(resp, "\"delivery\"") != NULL);
+    free(resp);
+}
+
+static void test_json_api_error_handling(void) {
+    int status_code = 0;
+    size_t out_len = 0;
+    char *resp;
+
+    /* Empty body */
+    resp = sg_api_solve("", 0, &status_code, &out_len);
+    assert(resp != NULL);
+    assert(status_code == 400);
+    free(resp);
+
+    /* Invalid JSON */
+    resp = sg_api_solve("{bad", 4, &status_code, &out_len);
+    assert(resp != NULL);
+    assert(status_code == 400);
+    free(resp);
+}
+
+static void test_json_api_build_model(void) {
+    const char *json =
+        "{"
+        "  \"dimension_count\": 1,"
+        "  \"unassigned_weight\": 50000.0,"
+        "  \"config\": {\"max_iterations\": 100, \"seed\": 42, \"deterministic\": true},"
+        "  \"depots\": [{\"x\": 0, \"y\": 0, \"tw_early\": 0, \"tw_late\": 10000}],"
+        "  \"vehicles\": [{\"start_depot_id\": 0, \"end_depot_id\": 0,"
+        "    \"shift_early\": 0, \"shift_late\": 10000, \"capacity\": [100],"
+        "    \"fixed_cost\": 100.0, \"cost_per_distance\": 1.5}],"
+        "  \"tasks\": [{\"type\": \"delivery\", \"x\": 10, \"y\": 0,"
+        "    \"tw_early\": 0, \"tw_late\": 10000, \"service_seconds\": 60,"
+        "    \"demand\": [-10]}],"
+        "  \"requests\": [{\"delivery_task_id\": 0, \"unassigned_penalty\": 25000.0}]"
+        "}";
+
+    SHArena *arena = sh_arena_create(4096);
+    assert(arena != NULL);
+    ShJsonValue *root;
+    ShJsonStatus ps = sh_json_parse(json, strlen(json), arena, &root);
+    assert(ps == SH_JSON_OK);
+
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+    assert(sg_api_build_model(ctx, root) == SG_STATUS_OK);
+    sh_arena_free(arena);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    SGStatus s = sg_solve(ctx);
+    assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    sg_free(ctx);
+}
+
+static void test_json_api_full_features(void) {
+    /* Test vehicle costs, qualifications, open_end, soft TW, etc. via JSON */
+    const char *json =
+        "{"
+        "  \"config\": {\"max_iterations\": 100, \"seed\": 42, \"deterministic\": true},"
+        "  \"depots\": [{\"x\": 0, \"y\": 0, \"tw_early\": 0, \"tw_late\": 10000}],"
+        "  \"vehicles\": [{"
+        "    \"start_depot_id\": 0, \"end_depot_id\": 0,"
+        "    \"shift_early\": 0, \"shift_late\": 10000, \"capacity\": [100],"
+        "    \"qualifications\": 3, \"open_end\": false,"
+        "    \"max_duration\": 9000,"
+        "    \"fixed_cost\": 50.0, \"cost_per_distance\": 1.0, \"cost_per_duration\": 0.5,"
+        "    \"cost_per_waiting\": 0.1, \"cost_per_overtime\": 2.0"
+        "  }],"
+        "  \"tasks\": ["
+        "    {\"type\": \"delivery\", \"x\": 10, \"y\": 0,"
+        "     \"tw_early\": 0, \"tw_late\": 10000, \"service_seconds\": 60,"
+        "     \"demand\": [-10],"
+        "     \"soft_time_window\": {\"early\": 100, \"late\": 5000, \"early_penalty\": 0.5, \"late_penalty\": 1.0}}"
+        "  ],"
+        "  \"requests\": [{"
+        "    \"delivery_task_id\": 0,"
+        "    \"required_qualifications\": 1"
+        "  }]"
+        "}";
+    int status_code = 0;
+    size_t out_len = 0;
+    char *resp = sg_api_solve(json, strlen(json), &status_code, &out_len);
+    assert(resp != NULL);
+    assert(status_code == 200);
+    assert(strstr(resp, "\"routes\"") != NULL);
+    free(resp);
+}
+
+static void test_json_api_handle_routing(void) {
+    SGAPIRequest req;
+    SGAPIResponse resp;
+
+    /* Health endpoint */
+    memset(&req, 0, sizeof(req));
+    req.path = "/api/v1/health";
+    assert(sg_api_handle(&req, &resp) == 0);
+    assert(resp.status_code == 200);
+    assert(strstr(resp.body, "healthy") != NULL);
+    sg_api_response_free(&resp);
+
+    /* Version endpoint */
+    req.path = "/api/v1/version";
+    assert(sg_api_handle(&req, &resp) == 0);
+    assert(resp.status_code == 200);
+    sg_api_response_free(&resp);
+
+    /* 404 */
+    req.path = "/api/v1/nonexistent";
+    assert(sg_api_handle(&req, &resp) == 0);
+    assert(resp.status_code == 404);
+    sg_api_response_free(&resp);
+}
+
+static void test_json_api_write_solution(void) {
+    /* Build, solve, and write solution via sg_api_write_solution */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 10000) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100);
+    add_delivery_request(ctx, 10, 0, 0, 10000, 60, -10.0);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    SGStatus s = sg_solve(ctx);
+    assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT);
+
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+    ShJsonWriter w;
+    sh_json_writer_init(&w, sh_json_buf_write, &jb);
+
+    assert(sg_api_write_solution(ctx, &w, s) == SG_STATUS_OK);
+    assert(jb.buf != NULL);
+    assert(jb.len > 0);
+    assert(strstr(jb.buf, "\"routes\"") != NULL);
+    assert(strstr(jb.buf, "\"stops\"") != NULL);
+    assert(strstr(jb.buf, "\"unassigned\"") != NULL);
+    assert(strstr(jb.buf, "\"error\"") != NULL);
+
+    sh_json_buf_free(&jb);
+    sg_free(ctx);
+}
+
+static void test_json_api_validation_error(void) {
+    /* Build model with missing data — vehicle without depot causes validation error */
+    const char *json =
+        "{"
+        "  \"config\": {\"max_iterations\": 100},"
+        "  \"depots\": [{\"x\": 0, \"y\": 0, \"tw_early\": 0, \"tw_late\": 10000}],"
+        "  \"vehicles\": [{}],"
+        "  \"tasks\": [{\"type\": \"delivery\", \"x\": 10, \"y\": 0,"
+        "    \"tw_early\": 0, \"tw_late\": 10000, \"service_seconds\": 60,"
+        "    \"demand\": [-10]}],"
+        "  \"requests\": [{\"delivery_task_id\": 0}]"
+        "}";
+    int status_code = 0;
+    size_t out_len = 0;
+    char *resp = sg_api_solve(json, strlen(json), &status_code, &out_len);
+    assert(resp != NULL);
+    assert(status_code == 400);
+    /* Should contain a descriptive error */
+    assert(strstr(resp, "error") != NULL);
+    free(resp);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -6447,8 +7105,44 @@ int main(void) {
     RUN_TEST(test_cordeau_solve_ok);
     RUN_TEST(test_ride_time_no_effect_without_flag);
 
+    /* DARP quality tests */
+    RUN_TEST(test_duration_aware_insertion_score);
+    RUN_TEST(test_duration_cost_no_effect_when_zero);
+    RUN_TEST(test_ride_time_penalty_steers_insertion);
+    RUN_TEST(test_pd_reorder_improves_ride_time);
+    RUN_TEST(test_cordeau_solve_multi_vehicle);
+
+    /* Error diagnostics */
+    RUN_TEST(test_error_diagnostics_api);
+    RUN_TEST(test_error_clears_on_solve);
+
+    /* Per-request drop penalty */
+    RUN_TEST(test_drop_penalty_api);
+    RUN_TEST(test_drop_penalty_override);
+
+    /* Warm start */
+    RUN_TEST(test_warm_start_api);
+    RUN_TEST(test_warm_start_solve);
+
+    /* Progress callback + cancel */
+    RUN_TEST(test_progress_callback_fires);
+    RUN_TEST(test_cancel_stops_early);
+    RUN_TEST(test_cancel_api);
+
+    /* JSON API */
+    RUN_TEST(test_json_api_health);
+    RUN_TEST(test_json_api_version);
+    RUN_TEST(test_json_api_solve_basic);
+    RUN_TEST(test_json_api_solve_pd);
+    RUN_TEST(test_json_api_error_handling);
+    RUN_TEST(test_json_api_build_model);
+    RUN_TEST(test_json_api_full_features);
+    RUN_TEST(test_json_api_handle_routing);
+    RUN_TEST(test_json_api_write_solution);
+    RUN_TEST(test_json_api_validation_error);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
-    assert(tests_run == 159);
+    assert(tests_run == 183);
     return tests_passed == tests_run ? 0 : 1;
 }

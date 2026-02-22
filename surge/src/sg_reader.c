@@ -735,6 +735,12 @@ SGStatus sg_load_cordeau_darp(SGContext *ctx, const char *file_path) {
                 status = sg_vehicle_set_max_duration(ctx, v, T);
                 if (status != SG_STATUS_OK) goto cdone;
             }
+            /* DARP objective: minimize total route duration across the fleet.
+               fixed_cost=0 (fleet size is given, not minimized),
+               cost_per_distance=0 (distance is part of duration),
+               cost_per_duration=1 (the actual DARP objective). */
+            status = sg_vehicle_set_costs(ctx, v, 0.0, 0.0, 1.0);
+            if (status != SG_STATUS_OK) goto cdone;
         }
     }
 

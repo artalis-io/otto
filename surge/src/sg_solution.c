@@ -1202,14 +1202,25 @@ static double sg_compute_depot_overlap_penalty(const SGContext *ctx,
 double sg_route_solution_cost(const void *solution, void *user_ctx) {
     const SGRouteSolution *sol = (const SGRouteSolution *)solution;
     const SGContext *ctx = (const SGContext *)user_ctx;
-    double cost;
+    double cost = 0.0;
     uint32_t v;
 
     if (!sol) {
         return INFINITY;
     }
 
-    cost = (double)sol->base.num_unassigned * ctx->unassigned_weight;
+    /* Per-request unassigned penalty */
+    {
+        uint32_t u;
+        for (u = 0; u < sol->base.num_unassigned; u++) {
+            uint32_t rid = sol->base.unassigned_ids[u];
+            if (rid < ctx->num_requests && ctx->requests[rid].has_unassigned_penalty) {
+                cost += ctx->requests[rid].unassigned_penalty;
+            } else {
+                cost += ctx->unassigned_weight;
+            }
+        }
+    }
     for (v = 0; v < sol->num_vehicles; v++) {
         if (sol->route_stop_lengths[v] > 0) {
             const SGVehicleRecord *vehicle = &ctx->vehicles[v];

@@ -1,5 +1,25 @@
 #include "sg_internal.h"
 
+#include <stdarg.h>
+#include <stdio.h>
+
+void sg_set_error(SGContext *ctx, const char *fmt, ...) {
+    va_list ap;
+    if (!ctx || !fmt) return;
+    va_start(ap, fmt);
+    vsnprintf(ctx->last_error, sizeof(ctx->last_error), fmt, ap);
+    va_end(ap);
+}
+
+void sg_clear_error(SGContext *ctx) {
+    if (ctx) ctx->last_error[0] = '\0';
+}
+
+const char *sg_get_last_error(const SGContext *ctx) {
+    if (!ctx) return "";
+    return ctx->last_error;
+}
+
 SGRequestHint sg_request_hint_default(void) {
     SGRequestHint hint;
 
@@ -295,6 +315,15 @@ void sg_free(SGContext *ctx) {
         sg_route_solution_free(ctx->final_solution, NULL);
         ctx->final_solution = NULL;
     }
+
+    free(ctx->initial_route_vehicle_ids);
+    ctx->initial_route_vehicle_ids = NULL;
+    free(ctx->initial_route_request_ids);
+    ctx->initial_route_request_ids = NULL;
+    free(ctx->initial_route_lengths);
+    ctx->initial_route_lengths = NULL;
+    ctx->num_initial_routes = 0;
+    ctx->total_initial_requests = 0;
 
     sh_rng_free(ctx->op_rng);
     ctx->op_rng = NULL;
@@ -826,7 +855,7 @@ SGStatus sg_clear_zone_distance_matrix(SGContext *ctx) {
     return SG_STATUS_OK;
 }
 
-SGStatus sg_validate_model(const SGContext *ctx) {
+SGStatus sg_validate_model(SGContext *ctx) {
     uint32_t i;
     uint32_t d;
 
@@ -834,19 +863,24 @@ SGStatus sg_validate_model(const SGContext *ctx) {
         return SG_STATUS_INVALID_ARG;
     }
 
+    sg_clear_error(ctx);
+
     if ((ctx->num_depots > 0 && !ctx->depots) ||
         (ctx->num_vehicles > 0 && !ctx->vehicles) ||
         (ctx->num_tasks > 0 && !ctx->tasks) ||
         (ctx->num_requests > 0 && (!ctx->requests || !ctx->request_hints))) {
+        sg_set_error(ctx, "internal data arrays not allocated");
         return SG_STATUS_INFEASIBLE;
     }
 
     for (i = 0; i < ctx->num_depots; i++) {
         const SGDepotRecord *depot = &ctx->depots[i];
         if (!depot->has_location) {
+            sg_set_error(ctx, "depot %u: location not set", i);
             return SG_STATUS_INFEASIBLE;
         }
         if (depot->has_time_window && depot->tw_late < depot->tw_early) {
+            sg_set_error(ctx, "depot %u: tw_late < tw_early", i);
             return SG_STATUS_INFEASIBLE;
         }
     }
@@ -855,25 +889,31 @@ SGStatus sg_validate_model(const SGContext *ctx) {
         const SGVehicleRecord *vehicle = &ctx->vehicles[i];
 
         if (!vehicle->capacity) {
+            sg_set_error(ctx, "vehicle %u: no capacity array", i);
             return SG_STATUS_INFEASIBLE;
         }
         if (ctx->num_depots > 0 && !vehicle->has_depots) {
+            sg_set_error(ctx, "vehicle %u: depots not set (have %u depots)", i, ctx->num_depots);
             return SG_STATUS_INFEASIBLE;
         }
         if (vehicle->has_depots &&
             (vehicle->start_depot_id >= ctx->num_depots || vehicle->end_depot_id >= ctx->num_depots)) {
+            sg_set_error(ctx, "vehicle %u: depot id out of range", i);
             return SG_STATUS_INFEASIBLE;
         }
         if (vehicle->has_shift_time_window && vehicle->shift_late < vehicle->shift_early) {
+            sg_set_error(ctx, "vehicle %u: shift_late < shift_early", i);
             return SG_STATUS_INFEASIBLE;
         }
         if (vehicle->depot_loading_seconds < 0 || vehicle->depot_unloading_seconds < 0) {
+            sg_set_error(ctx, "vehicle %u: negative depot service time", i);
             return SG_STATUS_INFEASIBLE;
         }
 
         for (d = 0; d < ctx->dimension_count; d++) {
             double cap = vehicle->capacity[d];
             if (!isfinite(cap) || cap < 0.0) {
+                sg_set_error(ctx, "vehicle %u: invalid capacity[%u]", i, d);
                 return SG_STATUS_INFEASIBLE;
             }
         }
@@ -883,44 +923,61 @@ SGStatus sg_validate_model(const SGContext *ctx) {
         const SGTaskRecord *task = &ctx->tasks[i];
 
         if (!sg_task_ready_for_model(task)) {
+            sg_set_error(ctx, "task %u: not ready (location=%d tw=%d svc=%d)",
+                         i, task->has_location, task->has_time_window, task->service_seconds);
             return SG_STATUS_INFEASIBLE;
         }
         if (task->tw_late < task->tw_early) {
+            sg_set_error(ctx, "task %u: tw_late < tw_early", i);
             return SG_STATUS_INFEASIBLE;
         }
         if (task->num_time_windows >= 2) {
             uint32_t w;
-            if (!task->time_windows) return SG_STATUS_INFEASIBLE;
+            if (!task->time_windows) {
+                sg_set_error(ctx, "task %u: disjunct tw array null", i);
+                return SG_STATUS_INFEASIBLE;
+            }
             for (w = 0; w < task->num_time_windows; w++) {
-                if (task->time_windows[w].late < task->time_windows[w].early)
+                if (task->time_windows[w].late < task->time_windows[w].early) {
+                    sg_set_error(ctx, "task %u: disjunct tw[%u] late < early", i, w);
                     return SG_STATUS_INFEASIBLE;
-                if (w > 0 && task->time_windows[w].early <= task->time_windows[w - 1].late)
+                }
+                if (w > 0 && task->time_windows[w].early <= task->time_windows[w - 1].late) {
+                    sg_set_error(ctx, "task %u: disjunct tw[%u] overlaps tw[%u]", i, w, w - 1);
                     return SG_STATUS_INFEASIBLE;
+                }
             }
             if (task->tw_early != task->time_windows[0].early ||
-                task->tw_late != task->time_windows[task->num_time_windows - 1].late)
+                task->tw_late != task->time_windows[task->num_time_windows - 1].late) {
+                sg_set_error(ctx, "task %u: disjunct tw outer bounds mismatch", i);
                 return SG_STATUS_INFEASIBLE;
+            }
         }
         if (!task->demand) {
+            sg_set_error(ctx, "task %u: demand array null", i);
             return SG_STATUS_INFEASIBLE;
         }
         if (task->type != SG_TASK_SERVICE && !task->has_demand) {
+            sg_set_error(ctx, "task %u: demand not set", i);
             return SG_STATUS_INFEASIBLE;
         }
         if (task->has_demand) {
             for (d = 0; d < ctx->dimension_count; d++) {
                 if (!isfinite(task->demand[d])) {
+                    sg_set_error(ctx, "task %u: demand[%u] not finite", i, d);
                     return SG_STATUS_INFEASIBLE;
                 }
             }
         }
         if (task->has_soft_time_window) {
             if (!task->has_time_window) {
+                sg_set_error(ctx, "task %u: soft tw without hard tw", i);
                 return SG_STATUS_INFEASIBLE;
             }
             if (task->soft_tw_early < task->tw_early ||
                 task->soft_tw_late > task->tw_late ||
                 task->soft_tw_late < task->soft_tw_early) {
+                sg_set_error(ctx, "task %u: soft tw outside hard tw bounds", i);
                 return SG_STATUS_INFEASIBLE;
             }
         }
@@ -936,15 +993,20 @@ SGStatus sg_validate_model(const SGContext *ctx) {
         if (request->kind == SG_REQUEST_KIND_DELIVERY_ONLY) {
             const SGTaskRecord *delivery;
             if (!request->has_delivery_task || request->delivery_task_id >= ctx->num_tasks) {
+                sg_set_error(ctx, "request %u: delivery task not set or out of range", i);
                 return SG_STATUS_INFEASIBLE;
             }
             delivery = &ctx->tasks[request->delivery_task_id];
             if (delivery->type != SG_TASK_DELIVERY && delivery->type != SG_TASK_SERVICE) {
+                sg_set_error(ctx, "request %u: delivery task %u is not delivery/service type",
+                             i, request->delivery_task_id);
                 return SG_STATUS_INFEASIBLE;
             }
             if (delivery->type == SG_TASK_DELIVERY &&
                 !sg_delivery_task_demand_valid(delivery, ctx->dimension_count,
                                                ctx->demand_sign_convention)) {
+                sg_set_error(ctx, "request %u: delivery task %u has invalid demand",
+                             i, request->delivery_task_id);
                 return SG_STATUS_INFEASIBLE;
             }
             continue;
@@ -958,24 +1020,30 @@ SGStatus sg_validate_model(const SGContext *ctx) {
                 request->pickup_task_id >= ctx->num_tasks ||
                 request->delivery_task_id >= ctx->num_tasks ||
                 request->pickup_task_id == request->delivery_task_id) {
+                sg_set_error(ctx, "request %u: pickup/delivery task ids invalid", i);
                 return SG_STATUS_INFEASIBLE;
             }
 
             pickup = &ctx->tasks[request->pickup_task_id];
             delivery = &ctx->tasks[request->delivery_task_id];
             if (pickup->type != SG_TASK_PICKUP || delivery->type != SG_TASK_DELIVERY) {
+                sg_set_error(ctx, "request %u: wrong task types (pickup=%d delivery=%d)",
+                             i, pickup->type, delivery->type);
                 return SG_STATUS_INFEASIBLE;
             }
             if (pickup->tw_early > delivery->tw_late) {
+                sg_set_error(ctx, "request %u: pickup tw_early > delivery tw_late", i);
                 return SG_STATUS_INFEASIBLE;
             }
             if (!sg_request_pd_demands_valid(pickup, delivery, ctx->dimension_count,
                                              ctx->demand_sign_convention)) {
+                sg_set_error(ctx, "request %u: pickup/delivery demands don't balance", i);
                 return SG_STATUS_INFEASIBLE;
             }
             continue;
         }
 
+        sg_set_error(ctx, "request %u: unknown kind %d", i, request->kind);
         return SG_STATUS_INFEASIBLE;
     }
 
@@ -1722,6 +1790,80 @@ SGStatus sg_prepare_travel(SGContext *ctx) {
     }
 
     ctx->travel_prepared = 1;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_request_set_unassigned_penalty(SGContext *ctx, uint32_t request_id, double penalty) {
+    if (!ctx || request_id >= ctx->num_requests ||
+        !isfinite(penalty) || penalty < 0.0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->requests[request_id].unassigned_penalty = penalty;
+    ctx->requests[request_id].has_unassigned_penalty = 1;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_set_initial_routes(SGContext *ctx,
+                                uint32_t num_routes,
+                                const uint32_t *vehicle_ids,
+                                const uint32_t *route_lengths,
+                                const uint32_t *request_ids) {
+    uint32_t total = 0;
+    uint32_t i;
+    if (!ctx) return SG_STATUS_INVALID_ARG;
+    if (num_routes == 0) {
+        free(ctx->initial_route_vehicle_ids);
+        free(ctx->initial_route_request_ids);
+        free(ctx->initial_route_lengths);
+        ctx->initial_route_vehicle_ids = NULL;
+        ctx->initial_route_request_ids = NULL;
+        ctx->initial_route_lengths = NULL;
+        ctx->num_initial_routes = 0;
+        ctx->total_initial_requests = 0;
+        return SG_STATUS_OK;
+    }
+    if (!vehicle_ids || !route_lengths || !request_ids) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    for (i = 0; i < num_routes; i++) {
+        total += route_lengths[i];
+    }
+
+    {
+        uint32_t *vids = (uint32_t *)malloc((size_t)num_routes * sizeof(uint32_t));
+        uint32_t *rlens = (uint32_t *)malloc((size_t)num_routes * sizeof(uint32_t));
+        uint32_t *rids = total > 0 ? (uint32_t *)malloc((size_t)total * sizeof(uint32_t)) : NULL;
+        if (!vids || !rlens || (total > 0 && !rids)) {
+            free(vids); free(rlens); free(rids);
+            return SG_STATUS_OUT_OF_MEMORY;
+        }
+        memcpy(vids, vehicle_ids, (size_t)num_routes * sizeof(uint32_t));
+        memcpy(rlens, route_lengths, (size_t)num_routes * sizeof(uint32_t));
+        if (total > 0) {
+            memcpy(rids, request_ids, (size_t)total * sizeof(uint32_t));
+        }
+        free(ctx->initial_route_vehicle_ids);
+        free(ctx->initial_route_request_ids);
+        free(ctx->initial_route_lengths);
+        ctx->initial_route_vehicle_ids = vids;
+        ctx->initial_route_request_ids = rids;
+        ctx->initial_route_lengths = rlens;
+        ctx->num_initial_routes = num_routes;
+        ctx->total_initial_requests = total;
+    }
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_set_progress_callback(SGContext *ctx, SGProgressCallback cb, void *user_data) {
+    if (!ctx) return SG_STATUS_INVALID_ARG;
+    ctx->progress_callback = cb;
+    ctx->progress_callback_data = user_data;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_cancel(SGContext *ctx) {
+    if (!ctx) return SG_STATUS_INVALID_ARG;
+    ctx->cancel_requested = 1;
     return SG_STATUS_OK;
 }
 
