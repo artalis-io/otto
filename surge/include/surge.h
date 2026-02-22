@@ -106,6 +106,10 @@ SGStatus sg_vehicle_set_max_duration(SGContext *ctx, uint32_t vehicle_id,
 SGStatus sg_request_set_max_ride_time(SGContext *ctx, uint32_t request_id,
                                        int32_t max_seconds);
 
+/* Per-vehicle task and distance limits */
+SGStatus sg_vehicle_set_max_tasks(SGContext *ctx, uint32_t vehicle_id, uint32_t max_tasks);
+SGStatus sg_vehicle_set_max_distance(SGContext *ctx, uint32_t vehicle_id, double max_distance);
+
 /* U6: Vehicle cost model */
 SGStatus sg_vehicle_set_costs(SGContext *ctx, uint32_t vehicle_id,
                                double fixed_cost, double cost_per_distance,

@@ -349,6 +349,9 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
         if (ctx->avoid_new_vehicles && sol->route_lengths[v] == 0) {
             continue;
         }
+        if (ctx->vehicles[v].max_tasks > 0 && sol->route_lengths[v] >= ctx->vehicles[v].max_tasks) {
+            continue;
+        }
         if (is_pd) {
             /* O(L²) stop-level evaluation for PD requests */
             double score = 0.0;

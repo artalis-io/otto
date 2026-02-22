@@ -153,6 +153,8 @@ typedef struct {
     uint8_t has_capacity;
     uint8_t open_end;
     int32_t max_duration_seconds;
+    uint32_t max_tasks;              /* 0 = unlimited (default) */
+    double   max_distance;           /* 0.0 = unlimited (default) */
     double fixed_cost;
     double cost_per_distance;
     double cost_per_duration;

@@ -893,6 +893,16 @@ int sg_route_sequence_feasible_distance(const SGContext *ctx, uint32_t vehicle_i
 
     ok = sg_route_stop_sequence_feasible(ctx, vehicle_id, stops, stop_count, distance_out);
 
+    if (ok) {
+        const SGVehicleRecord *vehicle = &ctx->vehicles[vehicle_id];
+        if (vehicle->max_tasks > 0 && request_count > vehicle->max_tasks) {
+            ok = 0;
+        }
+        if (ok && vehicle->max_distance > 0.0 && *distance_out > vehicle->max_distance + 1e-9) {
+            ok = 0;
+        }
+    }
+
 done:
     free(stops);
     return ok;
@@ -997,6 +1007,12 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
     }
 
     vehicle = &ctx->vehicles[vehicle_id];
+
+    /* Max tasks: route_lengths counts requests = tasks */
+    if (vehicle->max_tasks > 0 && sol->route_lengths[vehicle_id] >= vehicle->max_tasks) {
+        return 0;
+    }
+
     if (!vehicle->has_depots || vehicle->start_depot_id >= ctx->num_depots ||
         vehicle->end_depot_id >= ctx->num_depots) {
         return 0;
@@ -1410,6 +1426,10 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
     delta = new_segment - old_segment;
     new_route_distance = sol->route_distance[vehicle_id] + delta;
 
+    if (vehicle->max_distance > 0.0 && new_route_distance > vehicle->max_distance + 1e-9) {
+        return 0;
+    }
+
     score = (route_len == 0 ? vehicle->fixed_cost : 0.0) +
             vehicle->cost_per_distance * (new_route_distance - sol->route_distance[vehicle_id]);
 
@@ -1474,6 +1494,12 @@ int sg_route_eval_pd_best_insertion_cached(
         return 0;
     }
     if (!sg_exclusion_compatible(ctx, sol, vehicle_id, request_id)) {
+        return 0;
+    }
+
+    /* Max tasks: route_lengths counts requests = tasks */
+    if (ctx->vehicles[vehicle_id].max_tasks > 0 &&
+        sol->route_lengths[vehicle_id] >= ctx->vehicles[vehicle_id].max_tasks) {
         return 0;
     }
 
@@ -1891,6 +1917,11 @@ int sg_route_eval_pd_best_insertion_cached(
                 }
 
                 new_route_distance = sol->route_distance[vehicle_id] + delta;
+
+                if (vehicle->max_distance > 0.0 && new_route_distance > vehicle->max_distance + 1e-9) {
+                    goto next_j;
+                }
+
                 score = (stop_len == 0 ? vehicle->fixed_cost : 0.0) +
                         vehicle->cost_per_distance * delta;
 

@@ -7628,6 +7628,131 @@ static void test_multi_trip_json_roundtrip(void) {
     free(resp);
 }
 
+/* ---------- Max tasks / max distance ---------- */
+
+static void test_max_tasks_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t v;
+    assert(ctx != NULL);
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+
+    /* 0 = unlimited (default via calloc) */
+    assert(ctx->vehicles[v].max_tasks == 0);
+
+    /* Set and verify */
+    assert(sg_vehicle_set_max_tasks(ctx, v, 5) == SG_STATUS_OK);
+    assert(ctx->vehicles[v].max_tasks == 5);
+
+    /* Reset to unlimited */
+    assert(sg_vehicle_set_max_tasks(ctx, v, 0) == SG_STATUS_OK);
+    assert(ctx->vehicles[v].max_tasks == 0);
+
+    /* Invalid vehicle id */
+    assert(sg_vehicle_set_max_tasks(ctx, 999, 1) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_max_tasks(NULL, 0, 1) == SG_STATUS_INVALID_ARG);
+
+    sg_free(ctx);
+}
+
+static void test_max_tasks_enforced(void) {
+    /* 2 vehicles, each with max_tasks=1, 2 requests.
+       Each vehicle should get exactly 1 request. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    assert(sg_vehicle_set_max_tasks(ctx, 0, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_max_tasks(ctx, 1, 1) == SG_STATUS_OK);
+
+    add_delivery_request(ctx, 10, 0, 0, 86400, 0, -1);
+    add_delivery_request(ctx, 20, 0, 0, 86400, 0, -1);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 2);
+
+    /* Each route should have exactly 1 stop */
+    {
+        uint32_t rc = sg_solution_get_route_count(ctx);
+        uint32_t i;
+        assert(rc == 2);
+        for (i = 0; i < rc; i++) {
+            assert(sg_solution_get_route_stop_count(ctx, i) == 1);
+        }
+    }
+
+    sg_free(ctx);
+}
+
+static void test_max_distance_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t v;
+    assert(ctx != NULL);
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+
+    /* 0.0 = unlimited (default via calloc) */
+    assert(ctx->vehicles[v].max_distance == 0.0);
+
+    /* Set and verify */
+    assert(sg_vehicle_set_max_distance(ctx, v, 100.0) == SG_STATUS_OK);
+    assert(ctx->vehicles[v].max_distance == 100.0);
+
+    /* Reset to unlimited */
+    assert(sg_vehicle_set_max_distance(ctx, v, 0.0) == SG_STATUS_OK);
+    assert(ctx->vehicles[v].max_distance == 0.0);
+
+    /* Negative rejected */
+    assert(sg_vehicle_set_max_distance(ctx, v, -1.0) == SG_STATUS_INVALID_ARG);
+
+    /* Infinity rejected */
+    assert(sg_vehicle_set_max_distance(ctx, v, INFINITY) == SG_STATUS_INVALID_ARG);
+
+    /* Invalid vehicle id */
+    assert(sg_vehicle_set_max_distance(ctx, 999, 50.0) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_max_distance(NULL, 0, 50.0) == SG_STATUS_INVALID_ARG);
+
+    sg_free(ctx);
+}
+
+static void test_max_distance_enforced(void) {
+    /* Vehicle 0: max_distance=15 (can reach 10,0 and back = 20, too far)
+       Vehicle 1: unlimited distance
+       Requests at (10,0) and (5,0).
+       With max_distance=15, vehicle 0 can only serve the closer request (5,0 → round trip 10).
+       Vehicle 1 should get the far one. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    assert(sg_vehicle_set_max_distance(ctx, 0, 15.0) == SG_STATUS_OK);
+    /* Vehicle 1: unlimited (default 0.0) */
+
+    add_delivery_request(ctx, 5, 0, 0, 86400, 0, -1);
+    add_delivery_request(ctx, 10, 0, 0, 86400, 0, -1);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Vehicle 0's route distance must be <= 15 */
+    {
+        uint32_t rc = sg_solution_get_route_count(ctx);
+        uint32_t i;
+        for (i = 0; i < rc; i++) {
+            uint32_t vid = sg_solution_get_route_vehicle_id(ctx, i);
+            double dist = sg_solution_get_route_distance(ctx, i);
+            if (vid == 0) {
+                assert(dist <= 15.0 + 1e-6);
+            }
+        }
+    }
+
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -7886,8 +8011,14 @@ int main(void) {
     RUN_TEST(test_multi_trip_solver_basic);
     RUN_TEST(test_multi_trip_json_roundtrip);
 
+    /* Max tasks / max distance */
+    RUN_TEST(test_max_tasks_api);
+    RUN_TEST(test_max_tasks_enforced);
+    RUN_TEST(test_max_distance_api);
+    RUN_TEST(test_max_distance_enforced);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
-    assert(tests_run == 207);
+    assert(tests_run == 211);
     return tests_passed == tests_run ? 0 : 1;
 }

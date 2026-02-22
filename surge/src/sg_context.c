@@ -1427,6 +1427,19 @@ SGStatus sg_vehicle_set_max_duration(SGContext *ctx, uint32_t vehicle_id,
     return SG_STATUS_OK;
 }
 
+SGStatus sg_vehicle_set_max_tasks(SGContext *ctx, uint32_t vehicle_id, uint32_t max_tasks) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles) return SG_STATUS_INVALID_ARG;
+    ctx->vehicles[vehicle_id].max_tasks = max_tasks;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_vehicle_set_max_distance(SGContext *ctx, uint32_t vehicle_id, double max_distance) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles || max_distance < 0.0 || !isfinite(max_distance))
+        return SG_STATUS_INVALID_ARG;
+    ctx->vehicles[vehicle_id].max_distance = max_distance;
+    return SG_STATUS_OK;
+}
+
 SGStatus sg_request_set_max_ride_time(SGContext *ctx, uint32_t request_id,
                                        int32_t max_seconds) {
     if (!ctx || request_id >= ctx->num_requests || max_seconds < 0) {

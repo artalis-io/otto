@@ -1633,8 +1633,8 @@ Grouped by business impact:
 | Gap | Status | Competitors | Notes |
 |-----|--------|-------------|-------|
 | **Time-dependent travel** | Not started | OR-Tools | Rush hour modeling. State-dependent transit callback. High value. |
-| **Max tasks per vehicle** | Not started | VROOM | Trivial: reject insertion when `route_length >= max_tasks`. |
-| **Max distance per vehicle** | Not started | VROOM | Similar to max_duration but for cumulative distance. |
+| **Max tasks per vehicle** | Done | VROOM | Per-vehicle cap on request count. 0 = unlimited. |
+| **Max distance per vehicle** | Done | VROOM | Per-vehicle cap on route distance. 0.0 = unlimited. |
 | **Open start (no depot)** | Not started | OR-Tools | Vehicle starts at first stop, no depot assignment required. |
 | **Per-vehicle travel matrix** | Partial | OR-Tools, VROOM | Callback already supports it; matrix API is single-matrix only. |
 | **Initial vehicle loads** | Not started | jsprit | Vehicle starts shift with pre-loaded cargo. Useful for return trips. |

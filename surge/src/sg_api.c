@@ -527,6 +527,20 @@ static int build_vehicles(SGContext *ctx, const ShJsonValue *vehicles_arr) {
                 return -1;
             }
         }
+
+        v = sh_json_get(veh, "max_tasks");
+        if (v) {
+            if (sg_vehicle_set_max_tasks(ctx, id, (uint32_t)sh_json_as_int(v, 0)) != SG_STATUS_OK) {
+                return -1;
+            }
+        }
+
+        v = sh_json_get(veh, "max_distance");
+        if (v) {
+            if (sg_vehicle_set_max_distance(ctx, id, sh_json_as_double(v, 0.0)) != SG_STATUS_OK) {
+                return -1;
+            }
+        }
     }
 
     return 0;
