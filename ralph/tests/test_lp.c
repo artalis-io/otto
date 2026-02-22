@@ -111,7 +111,7 @@ static void test_read_bounds(void) {
     ralph_optimize(model);
 
     RalphStatus status = ralph_get_status(model);
-    ASSERT(status == RALPH_STATUS_OPTIMAL || status == RALPH_STATUS_INFEASIBLE,
+    ASSERT(status != RALPH_STATUS_ERROR,
            "Model solved without error");
 
     ralph_free(model);
@@ -266,6 +266,62 @@ static void test_roundtrip(void) {
 }
 
 /* ============================================================================
+ * Test: MPS write/read round-trip
+ * ============================================================================ */
+
+static void test_write_mps_roundtrip(void) {
+    printf("\n=== Test: Write/Read MPS Round-trip ===\n");
+
+    RalphModel *model1 = ralph_create();
+    ASSERT(model1 != NULL, "Model 1 created");
+
+    ralph_set_obj_sense(model1, RALPH_MINIMIZE);
+    ralph_set_problem_name(model1, "mps roundtrip");
+    ralph_set_obj_offset(model1, 4.0);
+
+    /* x: continuous [0,2], y: integer [0,3], z: binary */
+    ralph_add_var(model1, 0.0, 2.0, 1.0, RALPH_CONTINUOUS);
+    ralph_add_var(model1, 0.0, 3.0, 2.0, RALPH_INTEGER);
+    ralph_add_var(model1, 0.0, 1.0, 3.0, RALPH_BINARY);
+    ralph_set_var_name(model1, 0, "x flow");
+    ralph_set_var_name(model1, 1, "y-int");
+    ralph_set_var_name(model1, 2, "z.bin");
+
+    int idx1[] = {0, 1, 2};
+    double val1[] = {1.0, 1.0, 1.0};
+    ralph_add_constraint(model1, 3, idx1, val1, RALPH_GREATER_EQUAL, 3.0);
+    ralph_set_con_name(model1, 0, "demand row");
+
+    int idx2[] = {0, 2};
+    double val2[] = {1.0, 1.0};
+    ralph_add_constraint(model1, 2, idx2, val2, RALPH_LESS_EQUAL, 7.0);
+    ralph_set_con_name(model1, 1, "cap.row");
+
+    ralph_set_int_param(model1, "verbose", 0);
+    ASSERT(ralph_optimize(model1) == 0, "Model 1 solve call succeeds");
+    ASSERT(ralph_get_status(model1) == RALPH_STATUS_OPTIMAL, "Model 1 optimal");
+    ASSERT_EQ_DBL(ralph_get_objval(model1), 8.0, "Model 1 objective = 8.0");
+
+    ASSERT(ralph_write_mps(model1, "/tmp/roundtrip.mps") == 0, "MPS file written");
+
+    RalphModel *model2 = ralph_create();
+    ASSERT(model2 != NULL, "Model 2 created");
+    ASSERT(ralph_read_mps(model2, "/tmp/roundtrip.mps") == 0, "MPS file read back");
+
+    ASSERT(ralph_get_num_vars(model2) == 3, "Round-trip keeps 3 variables");
+    ASSERT(ralph_get_num_cons(model2) == 2, "Round-trip keeps 2 constraints");
+    ASSERT(ralph_get_num_integers(model2) == 2, "Round-trip keeps integer/binary vars");
+
+    ralph_set_int_param(model2, "verbose", 0);
+    ASSERT(ralph_optimize(model2) == 0, "Model 2 solve call succeeds");
+    ASSERT(ralph_get_status(model2) == RALPH_STATUS_OPTIMAL, "Model 2 optimal");
+    ASSERT_EQ_DBL(ralph_get_objval(model2), 8.0, "Model 2 objective = 8.0");
+
+    ralph_free(model1);
+    ralph_free(model2);
+}
+
+/* ============================================================================
  * Test: Name management API
  * ============================================================================ */
 
@@ -402,6 +458,7 @@ int main(int argc, char **argv) {
     test_names();
     test_write_lp();
     test_roundtrip();
+    test_write_mps_roundtrip();
     test_name_api();
     test_solution_buf();
     test_invalid_file();

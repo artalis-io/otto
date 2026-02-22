@@ -18,6 +18,12 @@
 
 /* Forward declarations */
 int lp_model_finalize(LPModel *model);
+static int lp_run_user_callbacks(SimplexSolver *solver,
+                                 const SimplexTableau *tab,
+                                 RalphLPProgressPhase phase,
+                                 int iter,
+                                 int force_emit,
+                                 int honor_progress_cancel);
 
 /* Phase-1 pivot-failure reasons used by deterministic tracing. */
 enum {
@@ -1763,6 +1769,131 @@ SimplexTableau* tableau_create(LPModel *model) {
 /* Dual mode wrapper: no artificials, one auxiliary per constraint */
 SimplexTableau* tableau_create_dual(LPModel *model) {
     return tableau_create_ex(model, 0, 1);
+}
+
+/* Apply a saved basis/status snapshot into an existing tableau.
+ * This updates basis, basis_pos, var_status, and nonbasic x-values.
+ * Basic x-values are recomputed by tableau_compute_solution after refactorization. */
+int tableau_apply_warm_basis(SimplexTableau *tab, int m, int n,
+                             const int *basis, const VarStatus *var_status) {
+    if (!tab || !basis || !var_status) return -1;
+    if (m != tab->m || n != tab->n) return -1;
+
+    unsigned char *seen = (unsigned char*)calloc((size_t)n, sizeof(unsigned char));
+    if (!seen) return -1;
+
+    /* Validate status values first. */
+    for (int j = 0; j < n; j++) {
+        int st = (int)var_status[j];
+        if (st < (int)RALPH_BASIC || st > (int)RALPH_FIXED) {
+            free(seen);
+            return -1;
+        }
+    }
+
+    /* Validate basis indices and uniqueness. */
+    for (int i = 0; i < m; i++) {
+        int bj = basis[i];
+        if (bj < 0 || bj >= n || seen[bj]) {
+            free(seen);
+            return -1;
+        }
+        seen[bj] = 1;
+    }
+
+    /* Apply variable statuses and initialize nonbasic values accordingly. */
+    for (int j = 0; j < n; j++) {
+        VarStatus st = var_status[j];
+        tab->var_status[j] = st;
+        switch (st) {
+            case RALPH_NONBASIC_UPPER:
+                tab->x[j] = tab->ub_ext[j];
+                break;
+            case RALPH_NONBASIC_FREE:
+                if (tab->lb_ext[j] > -RALPH_INFINITY/2 && tab->lb_ext[j] > 0.0) {
+                    tab->x[j] = tab->lb_ext[j];
+                } else if (tab->ub_ext[j] < RALPH_INFINITY/2 && tab->ub_ext[j] < 0.0) {
+                    tab->x[j] = tab->ub_ext[j];
+                } else {
+                    tab->x[j] = 0.0;
+                }
+                break;
+            case RALPH_FIXED:
+            case RALPH_NONBASIC_LOWER:
+                tab->x[j] = tab->lb_ext[j];
+                break;
+            case RALPH_BASIC:
+            default:
+                tab->x[j] = 0.0;
+                break;
+        }
+        tab->basis_pos[j] = -1;
+    }
+
+    /* Apply basis and force listed basics to BASIC status. */
+    for (int i = 0; i < m; i++) {
+        int bj = basis[i];
+        tab->basis[i] = bj;
+        tab->basis_pos[bj] = i;
+        tab->var_status[bj] = RALPH_BASIC;
+    }
+
+    /* Repair invalid status/basis mismatches in saved state. */
+    for (int j = 0; j < n; j++) {
+        if (tab->basis_pos[j] < 0 && tab->var_status[j] == RALPH_BASIC) {
+            tab->var_status[j] = RALPH_NONBASIC_LOWER;
+            tab->x[j] = tab->lb_ext[j];
+        }
+    }
+
+    tab->duals_valid = 0;
+    tab->rc_all_valid = 0;
+    tab->basis_cache_valid = 0;
+    tab->basis_cache_total_nnz = 0;
+
+    free(seen);
+    return 0;
+}
+
+int tableau_apply_structural_bounds(SimplexTableau *tab, int num_struct_vars,
+                                    const double *lb, const double *ub) {
+    if (!tab) return -1;
+    if (num_struct_vars < 0 || num_struct_vars > tab->n) return -1;
+    if (num_struct_vars > 0 && (!lb || !ub)) return -1;
+
+    for (int j = 0; j < num_struct_vars; j++) {
+        tab->lb_ext[j] = lb[j];
+        tab->ub_ext[j] = ub[j];
+    }
+
+    /* Keep non-basics pinned to their status-implied bounds after bound changes. */
+    for (int j = 0; j < tab->n; j++) {
+        switch (tab->var_status[j]) {
+            case RALPH_NONBASIC_LOWER:
+            case RALPH_FIXED:
+                tab->x[j] = tab->lb_ext[j];
+                break;
+            case RALPH_NONBASIC_UPPER:
+                tab->x[j] = tab->ub_ext[j];
+                break;
+            case RALPH_NONBASIC_FREE:
+                if (tab->lb_ext[j] > -RALPH_INFINITY / 2 && tab->lb_ext[j] > 0.0) {
+                    tab->x[j] = tab->lb_ext[j];
+                } else if (tab->ub_ext[j] < RALPH_INFINITY / 2 && tab->ub_ext[j] < 0.0) {
+                    tab->x[j] = tab->ub_ext[j];
+                } else {
+                    tab->x[j] = 0.0;
+                }
+                break;
+            case RALPH_BASIC:
+            default:
+                break;
+        }
+    }
+
+    tab->duals_valid = 0;
+    tab->rc_all_valid = 0;
+    return 0;
 }
 
 void tableau_free(SimplexTableau *tab) {
@@ -3989,14 +4120,55 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->use_dual_bound_flip = 1;
     solver->use_dual_steepest_edge = 1;
     solver->method = 2;  /* Default: auto (dual first, primal fallback) */
+    solver->has_lp_progress_callback = 0;
+    solver->has_lp_cancel_callback = 0;
+    solver->progress_start_ms = 0.0;
+    solver->warm_basis_last_attempted = 0;
+    solver->warm_basis_last_applied = 0;
+    solver->warm_basis_last_rejected = 0;
 
     return solver;
+}
+
+int simplex_set_warm_basis(SimplexSolver *solver, int m, int n,
+                           const int *basis, const VarStatus *var_status) {
+    if (!solver) return -1;
+    if (m < 0 || n < 0) return -1;
+    if ((m > 0 && !basis) || (n > 0 && !var_status)) return -1;
+
+    int *basis_copy = NULL;
+    VarStatus *status_copy = NULL;
+
+    if (m > 0) {
+        basis_copy = (int*)malloc((size_t)m * sizeof(int));
+        if (!basis_copy) return -1;
+        memcpy(basis_copy, basis, (size_t)m * sizeof(int));
+    }
+
+    if (n > 0) {
+        status_copy = (VarStatus*)malloc((size_t)n * sizeof(VarStatus));
+        if (!status_copy) {
+            free(basis_copy);
+            return -1;
+        }
+        memcpy(status_copy, var_status, (size_t)n * sizeof(VarStatus));
+    }
+
+    free(solver->warm_basis);
+    free(solver->warm_var_status);
+    solver->warm_basis = basis_copy;
+    solver->warm_var_status = status_copy;
+    solver->warm_basis_m = m;
+    solver->warm_basis_n = n;
+    return 0;
 }
 
 void simplex_free(SimplexSolver *solver) {
     if (!solver) return;
 
     tableau_free(solver->tableau);
+    free(solver->warm_basis);
+    free(solver->warm_var_status);
     free(solver->solution);
     free(solver->dual_solution);
     free(solver->reduced_costs);
@@ -4484,6 +4656,13 @@ static int simplex_phase1(SimplexSolver *solver) {
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         tab->iterations = iter;
         tab->trace_phase1_iter = iter;
+        if (lp_run_user_callbacks(solver, tab, RALPH_LP_PROGRESS_PHASE_1, iter, 0, 1) != 0) {
+            primal_remove_perturbation(tab);
+            solver->status = RALPH_STATUS_TIME_LIMIT;
+            solver->iterations = iter;
+            phase1_trace_emit_summary(solver, RALPH_STATUS_TIME_LIMIT);
+            return -1;
+        }
         if (excluded_entering_ttl_a > 0) {
             excluded_entering_ttl_a--;
             if (excluded_entering_ttl_a == 0) {
@@ -5469,6 +5648,12 @@ static int simplex_phase2(SimplexSolver *solver) {
 
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         tab->iterations = iter;
+        if (lp_run_user_callbacks(solver, tab, RALPH_LP_PROGRESS_PHASE_2, iter, 0, 1) != 0) {
+            primal_remove_perturbation(tab);
+            solver->status = RALPH_STATUS_TIME_LIMIT;
+            solver->iterations = iter;
+            return -1;
+        }
 
         if (periodic_policy_cooldown > 0) {
             periodic_policy_cooldown--;
@@ -6090,6 +6275,72 @@ static void reset_solver_perf(SimplexSolver *solver) {
     solver->policy.periodic_policy_refactors_phase2 = 0;
 }
 
+static int lp_run_user_callbacks(SimplexSolver *solver,
+                                 const SimplexTableau *tab,
+                                 RalphLPProgressPhase phase,
+                                 int iter,
+                                 int force_emit,
+                                 int honor_progress_cancel) {
+    if (!solver) return 0;
+
+    if (solver->has_lp_cancel_callback && solver->lp_cancel_callback.should_cancel) {
+        if (solver->lp_cancel_callback.should_cancel(solver->lp_cancel_callback.user_data) != 0) {
+            solver->status = RALPH_STATUS_TIME_LIMIT;
+            solver->iterations = iter;
+            return 1;
+        }
+    }
+
+    if (!solver->has_lp_progress_callback || !solver->lp_progress_callback.on_progress) {
+        return 0;
+    }
+
+    int stride = solver->lp_progress_callback.every_n_iterations;
+    if (stride <= 0) stride = 1;
+    if (!force_emit && iter > 0 && (iter % stride) != 0) {
+        return 0;
+    }
+
+    RalphLPProgressInfo info;
+    memset(&info, 0, sizeof(info));
+    info.phase = phase;
+    info.iteration = iter;
+    info.status = solver->status;
+    if (solver->progress_start_ms > 0.0) {
+        double elapsed_ms = lp_telemetry_now_ms() - solver->progress_start_ms;
+        if (elapsed_ms > 0.0) info.elapsed_time_sec = elapsed_ms / 1000.0;
+    }
+    if (solver->model) {
+        if (tab) {
+            info.objective = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
+        } else {
+            info.objective = solver->obj_value;
+        }
+    }
+
+    if (solver->verify &&
+        (solver->status == RALPH_STATUS_OPTIMAL ||
+         solver->status == RALPH_STATUS_IMPRECISE ||
+         solver->status == RALPH_STATUS_OBJ_LIMIT)) {
+        info.quality_available = 1;
+        info.primal_infeas = solver->verify_primal_infeas;
+        info.bound_infeas = solver->verify_bound_infeas;
+        info.dual_infeas = solver->verify_dual_infeas;
+        info.comp_slack = solver->verify_comp_slack;
+        info.obj_error = solver->verify_obj_error;
+        info.cond_estimate = solver->verify_cond_estimate;
+    }
+
+    int rc = solver->lp_progress_callback.on_progress(
+        solver->lp_progress_callback.user_data, &info);
+    if (honor_progress_cancel && rc != 0) {
+        solver->status = RALPH_STATUS_TIME_LIMIT;
+        solver->iterations = iter;
+        return 1;
+    }
+    return 0;
+}
+
 static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *tab) {
     if (!solver || !tab) return;
 
@@ -6132,11 +6383,43 @@ static int setup_primal_tableau(SimplexSolver *solver, int allow_crash) {
         LP_LOG_STDOUT("[simplex_solve] Tableau: n=%d (extended), m=%d\n", tab->n, tab->m);
     }
 
+    int warm_basis_applied = 0;
+    solver->warm_basis_last_attempted = 0;
+    solver->warm_basis_last_applied = 0;
+    solver->warm_basis_last_rejected = 0;
+    if (solver->warm_basis && solver->warm_var_status) {
+        solver->warm_basis_last_attempted = 1;
+        int warm_rc = tableau_apply_warm_basis(tab,
+                                               solver->warm_basis_m,
+                                               solver->warm_basis_n,
+                                               solver->warm_basis,
+                                               solver->warm_var_status);
+        if (warm_rc != 0 && solver->verbose) {
+            LP_LOG_STDOUT("[simplex_solve] Warm basis rejected; using cold-start basis\n");
+        } else if (warm_rc == 0 && solver->verbose) {
+            LP_LOG_STDOUT("[simplex_solve] Warm basis accepted\n");
+        }
+        if (warm_rc == 0) {
+            warm_basis_applied = 1;
+            solver->warm_basis_last_applied = 1;
+        } else {
+            solver->warm_basis_last_rejected = 1;
+        }
+
+        /* Consume staged warm basis once per solve attempt. */
+        free(solver->warm_basis);
+        solver->warm_basis = NULL;
+        free(solver->warm_var_status);
+        solver->warm_var_status = NULL;
+        solver->warm_basis_m = 0;
+        solver->warm_basis_n = 0;
+    }
+
     int *saved_basis = NULL;
     int *saved_basis_pos = NULL;
     VarStatus *saved_var_status = NULL;
 
-    if (allow_crash) {
+    if (allow_crash && !warm_basis_applied) {
         saved_basis = (int *)malloc(tab->m * sizeof(int));
         saved_basis_pos = (int *)malloc(tab->n * sizeof(int));
         saved_var_status = (VarStatus *)malloc(tab->n * sizeof(VarStatus));
@@ -6226,6 +6509,7 @@ int simplex_solve(SimplexSolver *solver) {
     if (!solver || !solver->model) return -1;
 
     clock_t start = clock();
+    solver->progress_start_ms = lp_telemetry_now_ms();
 
     /* Invalidate cached outputs from any previous solve.
      * This prevents stale primal/dual data from being reused when the current
@@ -6252,6 +6536,12 @@ int simplex_solve(SimplexSolver *solver) {
     solver->trace_phase1_first_fail_iter = -1;
     solver->trace_phase1_last_fail_iter = -1;
     solver->trace_phase1_signature = solver->trace_phase1 ? 1469598103934665603ULL : 0ULL;
+    solver->verify_primal_infeas = 0.0;
+    solver->verify_bound_infeas = 0.0;
+    solver->verify_dual_infeas = 0.0;
+    solver->verify_comp_slack = 0.0;
+    solver->verify_obj_error = 0.0;
+    solver->verify_cond_estimate = 0.0;
 
     if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Starting...\n");
 
@@ -6347,6 +6637,12 @@ int simplex_solve(SimplexSolver *solver) {
                 solver->status = RALPH_STATUS_UNKNOWN;
                 drc = -1;  /* Trigger primal fallback below */
             } else {
+                lp_run_user_callbacks(solver,
+                                      solver->tableau,
+                                      RALPH_LP_PROGRESS_PHASE_DUAL,
+                                      solver->iterations,
+                                      1,
+                                      0);
                 return 0;
             }
         }
@@ -6411,6 +6707,12 @@ int simplex_solve(SimplexSolver *solver) {
             tab->use_steepest_edge = saved_tab_se;
             if (solver->status == RALPH_STATUS_INFEASIBLE) {
                 if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Phase 1: INFEASIBLE\n");
+                lp_run_user_callbacks(solver,
+                                      tab,
+                                      RALPH_LP_PROGRESS_PHASE_1,
+                                      solver->iterations,
+                                      1,
+                                      0);
                 return 0;  /* Infeasible is a valid result */
             }
             return -1;
@@ -6519,6 +6821,15 @@ int simplex_solve(SimplexSolver *solver) {
     if (solver->verify && solver->status == RALPH_STATUS_OPTIMAL) {
         verify_solution(solver);
     }
+
+    lp_run_user_callbacks(solver,
+                          tab,
+                          (tab && tab->phase == 1) ?
+                              RALPH_LP_PROGRESS_PHASE_1 :
+                              RALPH_LP_PROGRESS_PHASE_2,
+                          solver->iterations,
+                          1,
+                          0);
 
     return (solver->status == RALPH_STATUS_OPTIMAL) ? 0 : -1;
 }

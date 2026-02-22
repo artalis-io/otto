@@ -122,6 +122,252 @@ int ralph_get_farkas_ray(const RalphModel *model, double *ray);
 /* Statistics */
 int ralph_get_iterations(const RalphModel *model);
 
+/* Presolve report (from the most recent solve call) */
+typedef struct {
+    int used;                   /* 1 if presolve executed, 0 otherwise */
+    unsigned int mask;          /* Presolve mask used for the solve */
+    int rounds;                 /* Presolve rounds executed */
+    int vars_removed;           /* Variables removed by presolve */
+    int cons_removed;           /* Constraints removed by presolve */
+    int bounds_tightened;       /* Bound tightenings applied */
+    int matrix_rank;            /* Computed matrix rank (0 if not computed) */
+    int redundant_rows_found;   /* Redundant rows removed */
+    double presolve_time_ms;    /* Wall-clock time spent in presolve */
+} RalphPresolveReport;
+
+/* Get presolve report from the most recent solve.
+ * Returns 0 on success, -1 on invalid arguments. */
+int ralph_get_last_presolve_report(const RalphModel *model, RalphPresolveReport *report);
+
+/* LP solver telemetry snapshot (from the most recent solve call). */
+typedef struct {
+    double perf_primal_setup_ms;
+    double perf_dual_ms;
+    double perf_phase1_ms;
+    double perf_transition_ms;
+    double perf_phase2_ms;
+    double perf_pricing_ms;
+    double perf_ratio_ms;
+    double perf_pivot_ms;
+    double perf_refactor_ms;
+    double perf_ftran_ms;
+    double perf_btran_ms;
+    double perf_lu_update_ms;
+    double perf_compute_solution_ms;
+    double perf_compute_rc_ms;
+    double perf_refactor_all_ms;
+    int perf_refactor_count;
+    double perf_refactor_last_ms;
+    double perf_refactor_max_ms;
+    int perf_refactor_last_reason;
+    int perf_refactor_next_reason;
+    int perf_refactor_reason_setup;
+    int perf_refactor_reason_transition;
+    int perf_refactor_reason_periodic;
+    int perf_refactor_reason_ratio_recovery;
+    int perf_refactor_reason_pivot_recovery;
+    int perf_refactor_reason_forced_small_pivot;
+    int perf_refactor_reason_update_recovery;
+    int perf_refactor_reason_direction_stabilize;
+    int perf_refactor_reason_infeas_cleanup;
+    int perf_refactor_reason_other;
+    int perf_refactor_periodic_policy;
+    int perf_refactor_periodic_lu_health;
+    int perf_refactor_safety_forced;
+    int perf_basis_fastpath_hits;
+    int perf_basis_cols_rewritten;
+    unsigned long long perf_basis_tail_shift_bytes;
+    int perf_refactor_last_m;
+    int perf_refactor_last_k;
+    int perf_refactor_last_nnz_B;
+
+    double perf_phase1_pricing_ms;
+    double perf_phase1_ratio_ms;
+    double perf_phase1_pivot_ms;
+    double perf_phase1_refactor_ms;
+    double perf_phase1_compute_solution_ms;
+    double perf_phase1_compute_rc_ms;
+    int perf_phase1_pricing_calls;
+    int perf_phase1_ratio_calls;
+    int perf_phase1_pivot_calls;
+    int perf_phase1_refactor_calls;
+    int perf_phase1_compute_solution_calls;
+    int perf_phase1_compute_rc_calls;
+    int perf_phase1_refactor_periodic_policy;
+    int perf_phase1_refactor_periodic_lu_health;
+    int perf_phase1_refactor_safety_forced;
+
+    double perf_phase2_pricing_ms;
+    double perf_phase2_ratio_ms;
+    double perf_phase2_pivot_ms;
+    double perf_phase2_refactor_ms;
+    double perf_phase2_compute_solution_ms;
+    double perf_phase2_compute_rc_ms;
+    int perf_phase2_pricing_calls;
+    int perf_phase2_ratio_calls;
+    int perf_phase2_pivot_calls;
+    int perf_phase2_refactor_calls;
+    int perf_phase2_compute_solution_calls;
+    int perf_phase2_compute_rc_calls;
+    int perf_phase2_refactor_periodic_policy;
+    int perf_phase2_refactor_periodic_lu_health;
+    int perf_phase2_refactor_safety_forced;
+
+    double periodic_feedback_bias_phase1;
+    double periodic_feedback_bias_phase2;
+    int periodic_feedback_last_reason_phase1;
+    int periodic_feedback_last_reason_phase2;
+    int periodic_feedback_last_interval_phase1;
+    int periodic_feedback_last_interval_phase2;
+    int periodic_feedback_hint_interval_phase1;
+    int periodic_feedback_hint_interval_phase2;
+    double periodic_feedback_hint_pressure_phase1;
+    double periodic_feedback_hint_pressure_phase2;
+} RalphLPSolverTelemetry;
+
+/* LU telemetry snapshot (from the most recent solve call). */
+typedef struct {
+    int mkz_enabled;
+    int sn_enabled;
+    int mkz_calls;
+    int mkz_successes;
+    int mkz_failures;
+    int mkz_last_failure;
+    int mkz_dense_fallbacks;
+    int mkz_fail_workspace;
+    int mkz_fail_pool;
+    int mkz_fail_singular;
+    int mkz_fail_capacity;
+
+    int sparse_dense_fallbacks;
+    int used_dense_fallback_last;
+    int sparse_fallback_last_reason;
+    int sparse_fallback_reason_small_matrix;
+    int sparse_fallback_reason_symbolic;
+    int sparse_fallback_reason_numeric;
+    int identity_sep_failures;
+
+    int sn_calls;
+    int sn_successes;
+    int num_updates;
+    int max_updates;
+    int last_failure_reason;
+
+    int perf_factorize_calls;
+    int perf_last_basis_nnz;
+    int perf_last_m;
+    int perf_last_k;
+    int perf_symbolic_calls;
+    int perf_symbolic_cache_hits;
+    int perf_symbolic_cache_misses;
+    double perf_last_symbolic_ms;
+    double perf_last_sparse_numeric_ms;
+    double perf_last_dense_ge_numeric_ms;
+    double perf_last_supernode_numeric_ms;
+    double perf_last_dense_factorize_ms;
+    double perf_last_a_struct_build_ms;
+    double perf_last_markowitz_numeric_ms;
+    double perf_last_identity_placement_ms;
+    double perf_last_coo_to_csc_ms;
+    double perf_total_symbolic_ms;
+    double perf_total_sparse_numeric_ms;
+    double perf_total_dense_ge_numeric_ms;
+    double perf_total_supernode_numeric_ms;
+    double perf_total_dense_factorize_ms;
+    double perf_total_a_struct_build_ms;
+    double perf_total_markowitz_numeric_ms;
+    double perf_total_identity_placement_ms;
+    double perf_total_coo_to_csc_ms;
+} RalphLUTelemetry;
+
+/* Get LP solver telemetry snapshot from the most recent solve.
+ * Returns 0 on success, -1 on invalid arguments. */
+int ralph_get_last_lp_telemetry(const RalphModel *model, RalphLPSolverTelemetry *telemetry);
+
+/* Get LU telemetry snapshot from the most recent solve.
+ * Returns 0 on success, -1 on invalid arguments. */
+int ralph_get_last_lu_telemetry(const RalphModel *model, RalphLUTelemetry *telemetry);
+
+/* Solution-quality snapshot (KKT/verification metrics).
+ *
+ * Availability contract:
+ * - available=1 only when LP verification was enabled for the solve and the
+ *   resulting status is OPTIMAL, IMPRECISE, or OBJ_LIMIT.
+ * - available=0 otherwise (metrics are left as 0).
+ */
+typedef struct {
+    int available;              /* 1 if metrics are available for this solve */
+    int verify_enabled;         /* 1 if LP verification was enabled in solver path */
+    RalphStatus status;         /* Solve status corresponding to this snapshot */
+    double primal_infeas;       /* ||Ax - b||_inf feasibility violation */
+    double bound_infeas;        /* Max bound violation */
+    double dual_infeas;         /* Max dual-feasibility violation */
+    double comp_slack;          /* Max complementary slackness residual */
+    double obj_error;           /* Relative objective recomputation error */
+    double cond_estimate;       /* Basis condition estimate from LU */
+} RalphSolutionQuality;
+
+/* Get solution-quality metrics from the most recent solve.
+ * Returns 0 on success, -1 on invalid arguments. */
+int ralph_get_solution_quality(const RalphModel *model, RalphSolutionQuality *quality);
+
+/* LP progress callback phase code. */
+typedef enum {
+    RALPH_LP_PROGRESS_PHASE_DUAL = 0,
+    RALPH_LP_PROGRESS_PHASE_1 = 1,
+    RALPH_LP_PROGRESS_PHASE_2 = 2
+} RalphLPProgressPhase;
+
+/* LP progress snapshot emitted during simplex iterations.
+ *
+ * Notes:
+ * - `objective` is the current tableau objective mapped to user-space sense.
+ * - `quality_*` fields are populated only when `quality_available=1`.
+ */
+typedef struct {
+    RalphLPProgressPhase phase;  /* Current LP phase (dual/phase1/phase2) */
+    int iteration;               /* Current LP iteration index */
+    double elapsed_time_sec;     /* Elapsed solve time in seconds */
+    RalphStatus status;          /* Current solver status */
+    double objective;            /* Current objective estimate (user space) */
+    int quality_available;       /* 1 if quality metrics are available */
+    double primal_infeas;        /* Verification primal infeasibility */
+    double bound_infeas;         /* Verification bound infeasibility */
+    double dual_infeas;          /* Verification dual infeasibility */
+    double comp_slack;           /* Verification complementary slackness */
+    double obj_error;            /* Verification relative objective error */
+    double cond_estimate;        /* Basis condition estimate */
+} RalphLPProgressInfo;
+
+/* LP progress callback configuration.
+ *
+ * Return non-zero from `on_progress` to request early termination. This maps to
+ * `RALPH_STATUS_TIME_LIMIT` and causes solve to stop safely.
+ */
+typedef struct {
+    int (*on_progress)(void *user_data, const RalphLPProgressInfo *info);
+    void *user_data;
+    int every_n_iterations;      /* Callback cadence; <=0 defaults to 1 */
+} RalphLPProgressCallback;
+
+/* LP cancellation poll callback.
+ *
+ * If `should_cancel` returns non-zero, solve terminates early with
+ * `RALPH_STATUS_TIME_LIMIT`.
+ */
+typedef struct {
+    int (*should_cancel)(void *user_data);
+    void *user_data;
+} RalphLPCancelCallback;
+
+/* Set LP progress callback (LP solve path only). Pass NULL to disable. */
+void ralph_set_lp_progress_callback(RalphModel *model,
+                                    const RalphLPProgressCallback *callback);
+
+/* Set LP cancellation poll callback (LP solve path only). Pass NULL to disable. */
+void ralph_set_lp_cancel_callback(RalphModel *model,
+                                  const RalphLPCancelCallback *callback);
+
 /* MIP-specific */
 double ralph_get_best_bound(const RalphModel *model);
 double ralph_get_mip_gap(const RalphModel *model);

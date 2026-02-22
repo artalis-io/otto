@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <ctype.h>
 #include "lp.h"
 #include "ralph.h"
 
@@ -341,6 +342,56 @@ static int write_binaries(FILE *f, const LPModel *model) {
     return 0;
 }
 
+/* Sanitize names for token-based MPS output (free format). */
+static void mps_make_name(const char *src, const char *prefix, int idx,
+                          char *buf, size_t buf_size) {
+    if (!buf || buf_size == 0) return;
+
+    if (!src || src[0] == '\0') {
+        snprintf(buf, buf_size, "%s%d", prefix, idx + 1);
+        return;
+    }
+
+    size_t out = 0;
+    for (size_t i = 0; src[i] != '\0' && out + 1 < buf_size; i++) {
+        unsigned char c = (unsigned char)src[i];
+        if (isalnum(c) || c == '_' || c == '.' || c == '$') {
+            buf[out++] = (char)c;
+        } else {
+            buf[out++] = '_';
+        }
+    }
+    buf[out] = '\0';
+
+    if (buf[0] == '\0') {
+        snprintf(buf, buf_size, "%s%d", prefix, idx + 1);
+    }
+}
+
+static void mps_get_var_name(const LPModel *model, int var, char *buf, size_t buf_size) {
+    const char *name = NULL;
+    if (model->var_names && var < model->num_vars) {
+        name = model->var_names[var];
+    }
+    mps_make_name(name, "X", var, buf, buf_size);
+}
+
+static void mps_get_con_name(const LPModel *model, int con, char *buf, size_t buf_size) {
+    const char *name = NULL;
+    if (model->con_names && con < model->num_cons) {
+        name = model->con_names[con];
+    }
+    mps_make_name(name, "R", con, buf, buf_size);
+}
+
+static int mps_is_neg_inf(double x) {
+    return x <= -RALPH_INFINITY / 2.0;
+}
+
+static int mps_is_pos_inf(double x) {
+    return x >= RALPH_INFINITY / 2.0;
+}
+
 /* ============================================================================
  * Public Interface
  * ============================================================================ */
@@ -389,6 +440,144 @@ int ralph_write_lp(const RalphModel *model, const char *filename) {
 error:
     fclose(f);
     return -1;
+}
+
+int ralph_write_mps(const RalphModel *model, const char *filename) {
+    if (!model || !filename) return -1;
+
+    extern LPModel* ralph_get_lp_model(const RalphModel *model);
+    LPModel *lp = ralph_get_lp_model(model);
+    if (!lp) return -1;
+
+    if (!lp->A) {
+        if (lp_model_finalize(lp) != 0) {
+            return -1;
+        }
+    }
+
+    FILE *f = fopen(filename, "w");
+    if (!f) return -1;
+
+    const char *obj_row = "OBJ";
+    const char *rhs_name = "RHS1";
+    const char *bnd_name = "BND1";
+    char prob_name[LP_MAX_NAME];
+    mps_make_name(lp->name, "PROB", 0, prob_name, sizeof(prob_name));
+
+    fprintf(f, "NAME          %s\n", prob_name);
+    fprintf(f, "OBJSENSE\n");
+    fprintf(f, " %s\n", lp->obj_sense == -1 ? "MAX" : "MIN");
+
+    fprintf(f, "ROWS\n");
+    fprintf(f, "N %s\n", obj_row);
+    for (int i = 0; i < lp->num_cons; i++) {
+        char row_name[LP_MAX_NAME];
+        char sense = 'E';
+        if (lp->sense && (lp->sense[i] == 'L' || lp->sense[i] == 'G' || lp->sense[i] == 'E')) {
+            sense = lp->sense[i];
+        }
+        mps_get_con_name(lp, i, row_name, sizeof(row_name));
+        fprintf(f, "%c %s\n", sense, row_name);
+    }
+
+    fprintf(f, "COLUMNS\n");
+    int in_integer = 0;
+    int marker_count = 0;
+    for (int j = 0; j < lp->num_vars; j++) {
+        char col_name[LP_MAX_NAME];
+        char var_type = lp->var_type ? lp->var_type[j] : 'C';
+        int is_integer = (var_type == 'I' || var_type == 'B');
+
+        if (is_integer && !in_integer) {
+            fprintf(f, "MARK%04d 'MARKER' 'INTORG'\n", marker_count++);
+            in_integer = 1;
+        } else if (!is_integer && in_integer) {
+            fprintf(f, "MARK%04d 'MARKER' 'INTEND'\n", marker_count++);
+            in_integer = 0;
+        }
+
+        mps_get_var_name(lp, j, col_name, sizeof(col_name));
+
+        if (lp->c && fabs(lp->c[j]) > 1e-15) {
+            fprintf(f, "%s %s %.17g\n", col_name, obj_row, lp->c[j]);
+        }
+
+        for (int p = lp->A->colptr[j]; p < lp->A->colptr[j + 1]; p++) {
+            int i = lp->A->rowidx[p];
+            double val = lp->A->values[p];
+            if (fabs(val) <= 1e-15) continue;
+
+            char row_name[LP_MAX_NAME];
+            mps_get_con_name(lp, i, row_name, sizeof(row_name));
+            fprintf(f, "%s %s %.17g\n", col_name, row_name, val);
+        }
+    }
+    if (in_integer) {
+        fprintf(f, "MARK%04d 'MARKER' 'INTEND'\n", marker_count++);
+    }
+
+    fprintf(f, "RHS\n");
+    if (fabs(lp->obj_offset) > 1e-15) {
+        fprintf(f, "%s %s %.17g\n", rhs_name, obj_row, lp->obj_offset);
+    }
+    for (int i = 0; i < lp->num_cons; i++) {
+        if (!lp->b || fabs(lp->b[i]) <= 1e-15) continue;
+        char row_name[LP_MAX_NAME];
+        mps_get_con_name(lp, i, row_name, sizeof(row_name));
+        fprintf(f, "%s %s %.17g\n", rhs_name, row_name, lp->b[i]);
+    }
+
+    int write_bounds = 0;
+    for (int j = 0; j < lp->num_vars; j++) {
+        char var_type = lp->var_type ? lp->var_type[j] : 'C';
+        double lb = lp->lb ? lp->lb[j] : 0.0;
+        double ub = lp->ub ? lp->ub[j] : RALPH_INFINITY;
+        if (var_type == 'B' || fabs(lb) > 1e-15 || !mps_is_pos_inf(ub) || mps_is_neg_inf(lb)) {
+            write_bounds = 1;
+            break;
+        }
+    }
+
+    if (write_bounds) {
+        fprintf(f, "BOUNDS\n");
+        for (int j = 0; j < lp->num_vars; j++) {
+            char col_name[LP_MAX_NAME];
+            char var_type = lp->var_type ? lp->var_type[j] : 'C';
+            double lb = lp->lb ? lp->lb[j] : 0.0;
+            double ub = lp->ub ? lp->ub[j] : RALPH_INFINITY;
+
+            mps_get_var_name(lp, j, col_name, sizeof(col_name));
+
+            if (var_type == 'B') {
+                fprintf(f, "BV %s %s\n", bnd_name, col_name);
+                continue;
+            }
+
+            if (mps_is_neg_inf(lb) && mps_is_pos_inf(ub)) {
+                fprintf(f, "FR %s %s\n", bnd_name, col_name);
+                continue;
+            }
+
+            if (!mps_is_neg_inf(lb) && !mps_is_pos_inf(ub) && fabs(lb - ub) <= 1e-15) {
+                fprintf(f, "FX %s %s %.17g\n", bnd_name, col_name, lb);
+                continue;
+            }
+
+            if (mps_is_neg_inf(lb)) {
+                fprintf(f, "MI %s %s\n", bnd_name, col_name);
+            } else if (fabs(lb) > 1e-15) {
+                fprintf(f, "LO %s %s %.17g\n", bnd_name, col_name, lb);
+            }
+
+            if (!mps_is_pos_inf(ub)) {
+                fprintf(f, "UP %s %s %.17g\n", bnd_name, col_name, ub);
+            }
+        }
+    }
+
+    fprintf(f, "ENDATA\n");
+    fclose(f);
+    return 0;
 }
 
 /* ============================================================================
