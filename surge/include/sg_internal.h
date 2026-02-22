@@ -146,6 +146,8 @@ typedef struct {
     double tw_early_penalty;
     double tw_late_penalty;
     uint8_t has_soft_time_window;
+    uint8_t num_time_windows;       /* 0 = single TW via tw_early/tw_late; >=2 = disjunct */
+    SGTimeWindow *time_windows;     /* NULL when num_time_windows <= 1; sorted array when >=2 */
 } SGTaskRecord;
 
 typedef struct {
@@ -273,6 +275,46 @@ static inline double sg_travel_dur(const SGContext *ctx, uint32_t from_loc, uint
     }
     return ctx->travel_duration_matrix[(size_t)from_loc * ctx->num_locations + to_loc];
 }
+
+/* Disjunct TW helpers.
+   n <= 1 fast path compiles to identical operations as current inline code. */
+
+static inline double sg_task_snap_forward(const SGTaskRecord *task, double arrival) {
+    uint8_t n = task->num_time_windows;
+    if (n <= 1) {
+        return arrival < (double)task->tw_early ? (double)task->tw_early : arrival;
+    }
+    {
+        uint8_t i;
+        const SGTimeWindow *w = task->time_windows;
+        for (i = 0; i < n; i++) {
+            if (arrival <= (double)w[i].late + 1e-9) {
+                return arrival < (double)w[i].early ? (double)w[i].early : arrival;
+            }
+        }
+        /* Past all windows — return arrival; caller's outer-bound check will reject. */
+        return arrival;
+    }
+}
+
+static inline double sg_task_snap_backward(const SGTaskRecord *task, double latest) {
+    uint8_t n = task->num_time_windows;
+    if (n <= 1) {
+        return latest > (double)task->tw_late ? (double)task->tw_late : latest;
+    }
+    {
+        uint8_t i;
+        const SGTimeWindow *w = task->time_windows;
+        for (i = n; i > 0; i--) {
+            if (latest >= (double)w[i - 1].early - 1e-9) {
+                return latest > (double)w[i - 1].late ? (double)w[i - 1].late : latest;
+            }
+        }
+        /* Before all windows — return latest; caller's outer-bound check will reject. */
+        return latest;
+    }
+}
+
 int sg_request_pd_demands_valid(const SGTaskRecord *pickup, const SGTaskRecord *delivery,
                                 uint32_t dimension_count, SGDemandSignConvention convention);
 int sg_delivery_task_demand_valid(const SGTaskRecord *delivery, uint32_t dimension_count,

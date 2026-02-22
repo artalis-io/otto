@@ -885,10 +885,9 @@ int sg_request_time_use_for_vehicle(const SGContext *ctx, uint32_t vehicle_id,
         service_start = arrival;
 
         if (delivery->has_time_window) {
-            if (service_start < (double)delivery->tw_early) {
-                wait = (double)delivery->tw_early - service_start;
-                service_start = (double)delivery->tw_early;
-            }
+            double snapped = sg_task_snap_forward(delivery, service_start);
+            wait = snapped - service_start;
+            service_start = snapped;
             if (service_start > (double)delivery->tw_late) {
                 return 0;
             }
@@ -940,10 +939,9 @@ int sg_request_time_use_for_vehicle(const SGContext *ctx, uint32_t vehicle_id,
         arrive_pick = shift_early + dur_start_pick;
         start_pick = arrive_pick;
         if (pickup->has_time_window) {
-            if (start_pick < (double)pickup->tw_early) {
-                wait_pick = (double)pickup->tw_early - start_pick;
-                start_pick = (double)pickup->tw_early;
-            }
+            double snapped = sg_task_snap_forward(pickup, start_pick);
+            wait_pick = snapped - start_pick;
+            start_pick = snapped;
             if (start_pick > (double)pickup->tw_late) {
                 return 0;
             }
@@ -952,10 +950,9 @@ int sg_request_time_use_for_vehicle(const SGContext *ctx, uint32_t vehicle_id,
         arrive_drop = leave_pick + dur_pick_drop;
         start_drop = arrive_drop;
         if (delivery->has_time_window) {
-            if (start_drop < (double)delivery->tw_early) {
-                wait_drop = (double)delivery->tw_early - start_drop;
-                start_drop = (double)delivery->tw_early;
-            }
+            double snapped = sg_task_snap_forward(delivery, start_drop);
+            wait_drop = snapped - start_drop;
+            start_drop = snapped;
             if (start_drop > (double)delivery->tw_late) {
                 return 0;
             }

@@ -1169,11 +1169,17 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ### Current Status (as of 2026-02-22)
 
-**Baseline**: U1-U8 + S1-S9 complete. All usability phases done. 109 tests passing, ASAN/UBSAN clean. Benchmarks unchanged from previous baseline (soft TWs not active in benchmark instances — zero impact on existing behavior).
+**Baseline**: U1-U8 + S1-S9 + Disjunct TW complete. All usability phases done. 115 tests passing, ASAN/UBSAN clean. Benchmarks unchanged from previous baseline (disjunct TWs not active in benchmark instances — zero impact on existing behavior).
 
 Best measured quality (10000 iterations, deterministic seed 42):
 - Solomon (VRPTW, 56 cases): `solved=56/56`, `avgVehGap=+0.38`, `avgDistGap=+0.2%`, `equalVehicles=35`, `lexiNonWorse=11`.
 - Li & Lim (PDPTW, 57 cases): `solved=57/57`, `avgVehGap=+0.59`, `avgDistGap=+3.9%`, `equalVehicles=39`, `lexiNonWorse=21`.
+
+Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), soft time windows (U7), request-vehicle constraints (U8), disjunct time windows, waiting cost (per-vehicle `cost_per_waiting`), overtime cost (per-vehicle `cost_per_overtime` with soft shift), convenience constructors, stop load/type/duration export.
+
+#### Previous Status (as of 2026-02-22)
+
+**Baseline**: U1-U8 + S1-S9 complete. All usability phases done. 109 tests passing, ASAN/UBSAN clean. Benchmarks unchanged from previous baseline (soft TWs not active in benchmark instances — zero impact on existing behavior).
 
 Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), soft time windows (U7), request-vehicle constraints (U8), waiting cost (per-vehicle `cost_per_waiting`), overtime cost (per-vehicle `cost_per_overtime` with soft shift), convenience constructors, stop load/type/duration export.
 
@@ -1258,7 +1264,7 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - [ ] Add adaptive destroy size policy based on request count and stagnation.
 
 ### Phase 6: Rich Constraint Completion
-- [ ] Disjunct TW support.
+- [x] Disjunct TW support.
 - [x] Soft TW penalties and waiting-cost terms in objective.
 - [x] Vehicle qualifications (U2).
 - [ ] Commodity conflicts, exclusion groups.
@@ -1583,7 +1589,7 @@ Grouped by business impact:
 | Gap | Impact | Effort |
 |-----|--------|--------|
 | **Soft time windows (U7)** ✅ | Per-task soft TW with linear penalty within hard bounds. No feasibility kernel changes needed — penalty layer only. 4 tests. | Medium |
-| **Disjunct time windows** | Customer availability often has multiple windows (e.g., 8-12 and 14-18). Reworks forward/backward pass to evaluate union of intervals. | Large |
+| **Disjunct time windows** ✅ | Per-task multiple non-overlapping hard TWs with gap snapping in forward/backward passes. Two-tier design: outer bounds for fast rejection, sorted window array for snap. 6 tests. | Large |
 | **Driver breaks / HoS** | Legal requirement in EU/US trucking. Requires break insertion points in routes and HoSE state machine integration. | Large |
 
 **Tier 2 — High business value:**

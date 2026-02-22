@@ -4230,6 +4230,258 @@ static void test_soft_tw_early_penalty(void) {
     sg_free(ctx);
 }
 
+/* ===== Disjunct Time Windows ===== */
+
+static void test_disjunct_tw_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t t;
+    SGTaskRecord *task;
+
+    assert(ctx != NULL);
+    sg_set_dimension_count(ctx, 1);
+
+    t = sg_add_task(ctx, SG_TASK_DELIVERY);
+    assert(t != UINT32_MAX);
+
+    /* NULL ctx */
+    assert(sg_task_add_time_window(NULL, t, 0, 100) == SG_STATUS_INVALID_ARG);
+    /* Bad task id */
+    assert(sg_task_add_time_window(ctx, 999, 0, 100) == SG_STATUS_INVALID_ARG);
+    /* late < early */
+    assert(sg_task_add_time_window(ctx, t, 100, 50) == SG_STATUS_INVALID_ARG);
+
+    /* First window */
+    assert(sg_task_add_time_window(ctx, t, 0, 100) == SG_STATUS_OK);
+    task = &ctx->tasks[t];
+    assert(task->num_time_windows == 1);
+    assert(task->tw_early == 0);
+    assert(task->tw_late == 100);
+
+    /* Second window (sorted, non-overlapping) */
+    assert(sg_task_add_time_window(ctx, t, 200, 500) == SG_STATUS_OK);
+    assert(task->num_time_windows == 2);
+    assert(task->tw_early == 0);
+    assert(task->tw_late == 500);
+
+    /* Third window inserted in sorted order */
+    assert(sg_task_add_time_window(ctx, t, 600, 900) == SG_STATUS_OK);
+    assert(task->num_time_windows == 3);
+    assert(task->time_windows[0].early == 0);
+    assert(task->time_windows[1].early == 200);
+    assert(task->time_windows[2].early == 600);
+
+    /* Reject overlapping */
+    assert(sg_task_add_time_window(ctx, t, 50, 250) == SG_STATUS_INVALID_ARG);
+    assert(sg_task_add_time_window(ctx, t, 150, 250) == SG_STATUS_INVALID_ARG);
+
+    /* set_time_window clears disjunct state */
+    assert(sg_task_set_time_window(ctx, t, 0, 9999) == SG_STATUS_OK);
+    assert(task->num_time_windows == 0);
+    assert(task->time_windows == NULL);
+
+    /* Promote existing set_time_window TW via add_time_window */
+    assert(sg_task_set_time_window(ctx, t, 0, 100) == SG_STATUS_OK);
+    assert(sg_task_add_time_window(ctx, t, 200, 500) == SG_STATUS_OK);
+    assert(task->num_time_windows == 2);
+    assert(task->tw_early == 0);
+    assert(task->tw_late == 500);
+
+    sg_free(ctx);
+}
+
+static void test_disjunct_tw_gap_snapping(void) {
+    /* TWs [0,500]+[1000,2000]. Arrival at 700 (in gap) → waits until 1000.
+       Verify service_start = 1000 via stop export. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v, req, task;
+    SGSolutionStop stop_out;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    req = sg_add_request(ctx);
+    task = sg_add_task(ctx, SG_TASK_DELIVERY);
+    assert(sg_task_set_location(ctx, task, 700.0, 0.0) == SG_STATUS_OK);
+    /* Use add_time_window to set disjunct windows */
+    assert(sg_task_add_time_window(ctx, task, 0, 500) == SG_STATUS_OK);
+    assert(sg_task_add_time_window(ctx, task, 1000, 2000) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+    {
+        double demand = -1.0;
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+    }
+    assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Check service_start — arrival ~700 in gap → snapped to 1000 */
+    assert(sg_solution_get_route_stop(ctx, 0, 0, &stop_out) == SG_STATUS_OK);
+    assert(fabs(stop_out.arrival - 700.0) < 1.0);
+    assert(fabs(stop_out.service_start - 1000.0) < 1.0);
+
+    sg_free(ctx);
+}
+
+static void test_disjunct_tw_second_window(void) {
+    /* TWs [0,100]+[800,2000]. Arrival at 600 → first window closed, waits for second. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v, req, task;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    req = sg_add_request(ctx);
+    task = sg_add_task(ctx, SG_TASK_DELIVERY);
+    assert(sg_task_set_location(ctx, task, 600.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_add_time_window(ctx, task, 0, 100) == SG_STATUS_OK);
+    assert(sg_task_add_time_window(ctx, task, 800, 2000) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+    {
+        double demand = -1.0;
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+    }
+    assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    sg_free(ctx);
+}
+
+static void test_disjunct_tw_hard_rejects(void) {
+    /* TWs [0,100]+[200,500]. Arrival at 600 > outer bound 500. Must be unassigned. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v, req, task;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    req = sg_add_request(ctx);
+    task = sg_add_task(ctx, SG_TASK_DELIVERY);
+    assert(sg_task_set_location(ctx, task, 600.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_add_time_window(ctx, task, 0, 100) == SG_STATUS_OK);
+    assert(sg_task_add_time_window(ctx, task, 200, 500) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+    {
+        double demand = -1.0;
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+    }
+    assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 1);
+
+    sg_free(ctx);
+}
+
+static void test_disjunct_tw_backward_compat(void) {
+    /* Two identical problems — one via set_time_window, one via add_time_window
+       (single window). Verify identical cost. */
+    SGContext *ctx1, *ctx2;
+    uint32_t depot, req, task;
+    double cap = 100.0;
+    double cost1, cost2;
+
+    /* Problem 1: via set_time_window */
+    ctx1 = make_config(200, 42);
+    sg_set_dimension_count(ctx1, 1);
+    add_depot_with_location(ctx1, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx1, depot, 0, 99999, cap);
+    req = sg_add_request(ctx1);
+    task = sg_add_task(ctx1, SG_TASK_DELIVERY);
+    assert(sg_task_set_location(ctx1, task, 10.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_set_time_window(ctx1, task, 0, 99999) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx1, task, 10) == SG_STATUS_OK);
+    {
+        double demand = -1.0;
+        assert(sg_task_set_demand(ctx1, task, &demand, 1) == SG_STATUS_OK);
+    }
+    assert(sg_request_bind_delivery_task(ctx1, req, task) == SG_STATUS_OK);
+    assert(sg_solve(ctx1) == SG_STATUS_OK);
+    cost1 = sg_get_total_cost(ctx1);
+
+    /* Problem 2: via add_time_window (single window) */
+    ctx2 = make_config(200, 42);
+    sg_set_dimension_count(ctx2, 1);
+    add_depot_with_location(ctx2, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx2, depot, 0, 99999, cap);
+    req = sg_add_request(ctx2);
+    task = sg_add_task(ctx2, SG_TASK_DELIVERY);
+    assert(sg_task_set_location(ctx2, task, 10.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_add_time_window(ctx2, task, 0, 99999) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx2, task, 10) == SG_STATUS_OK);
+    {
+        double demand = -1.0;
+        assert(sg_task_set_demand(ctx2, task, &demand, 1) == SG_STATUS_OK);
+    }
+    assert(sg_request_bind_delivery_task(ctx2, req, task) == SG_STATUS_OK);
+    assert(sg_solve(ctx2) == SG_STATUS_OK);
+    cost2 = sg_get_total_cost(ctx2);
+
+    assert(fabs(cost1 - cost2) < 1e-6);
+
+    sg_free(ctx1);
+    sg_free(ctx2);
+}
+
+static void test_disjunct_tw_with_soft(void) {
+    /* Disjunct hard TW [0,500]+[1000,2000] with soft TW [0,2000] (full outer range).
+       Verify solve succeeds. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v, req, task;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    req = sg_add_request(ctx);
+    task = sg_add_task(ctx, SG_TASK_DELIVERY);
+    assert(sg_task_set_location(ctx, task, 10.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_add_time_window(ctx, task, 0, 500) == SG_STATUS_OK);
+    assert(sg_task_add_time_window(ctx, task, 1000, 2000) == SG_STATUS_OK);
+    /* Soft TW within outer bounds [0, 2000] */
+    assert(sg_task_set_soft_time_window(ctx, task, 0, 2000, 1.0, 1.0) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+    {
+        double demand = -1.0;
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+    }
+    assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -4354,8 +4606,15 @@ int main(void) {
     RUN_TEST(test_soft_tw_late_penalty);
     RUN_TEST(test_soft_tw_hard_still_rejects);
     RUN_TEST(test_soft_tw_early_penalty);
+    /* Disjunct time windows */
+    RUN_TEST(test_disjunct_tw_api);
+    RUN_TEST(test_disjunct_tw_gap_snapping);
+    RUN_TEST(test_disjunct_tw_second_window);
+    RUN_TEST(test_disjunct_tw_hard_rejects);
+    RUN_TEST(test_disjunct_tw_backward_compat);
+    RUN_TEST(test_disjunct_tw_with_soft);
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
-    assert(tests_run == 109);
+    assert(tests_run == 115);
     return tests_passed == tests_run ? 0 : 1;
 }

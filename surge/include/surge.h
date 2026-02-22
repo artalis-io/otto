@@ -101,6 +101,10 @@ SGStatus sg_task_set_soft_time_window(SGContext *ctx, uint32_t task_id,
                                       int32_t early, int32_t late,
                                       double early_penalty, double late_penalty);
 
+/* Disjunct time windows */
+SGStatus sg_task_add_time_window(SGContext *ctx, uint32_t task_id,
+                                 int32_t early, int32_t late);
+
 /* Convenience constructors (single-dim demand) */
 uint32_t sg_add_delivery_request(SGContext *ctx, double x, double y,
                                   int32_t tw_early, int32_t tw_late,

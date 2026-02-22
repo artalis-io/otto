@@ -57,6 +57,8 @@ void sg_task_records_free(SGTaskRecord *tasks, uint32_t count) {
     for (i = 0; i < count; i++) {
         free(tasks[i].demand);
         tasks[i].demand = NULL;
+        free(tasks[i].time_windows);
+        tasks[i].time_windows = NULL;
     }
     free(tasks);
 }
@@ -578,6 +580,9 @@ SGStatus sg_task_set_time_window(SGContext *ctx, uint32_t task_id, int32_t early
     task->tw_early = early;
     task->tw_late = late;
     task->has_time_window = 1;
+    free(task->time_windows);
+    task->time_windows = NULL;
+    task->num_time_windows = 0;
     return SG_STATUS_OK;
 }
 
@@ -840,6 +845,19 @@ SGStatus sg_validate_model(const SGContext *ctx) {
         }
         if (task->tw_late < task->tw_early) {
             return SG_STATUS_INFEASIBLE;
+        }
+        if (task->num_time_windows >= 2) {
+            uint32_t w;
+            if (!task->time_windows) return SG_STATUS_INFEASIBLE;
+            for (w = 0; w < task->num_time_windows; w++) {
+                if (task->time_windows[w].late < task->time_windows[w].early)
+                    return SG_STATUS_INFEASIBLE;
+                if (w > 0 && task->time_windows[w].early <= task->time_windows[w - 1].late)
+                    return SG_STATUS_INFEASIBLE;
+            }
+            if (task->tw_early != task->time_windows[0].early ||
+                task->tw_late != task->time_windows[task->num_time_windows - 1].late)
+                return SG_STATUS_INFEASIBLE;
         }
         if (!task->demand) {
             return SG_STATUS_INFEASIBLE;
@@ -1200,6 +1218,91 @@ SGStatus sg_task_set_soft_time_window(SGContext *ctx, uint32_t task_id,
     task->tw_early_penalty = early_penalty;
     task->tw_late_penalty = late_penalty;
     task->has_soft_time_window = 1;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_task_add_time_window(SGContext *ctx, uint32_t task_id,
+                                 int32_t early, int32_t late) {
+    SGTaskRecord *task;
+    SGTimeWindow *new_arr;
+    uint8_t n;
+    uint8_t insert_pos;
+    uint8_t i;
+
+    if (!ctx || task_id >= ctx->num_tasks || late < early) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    task = &ctx->tasks[task_id];
+
+    /* First call when no TW set at all: initialize single window */
+    if (!task->has_time_window) {
+        task->tw_early = early;
+        task->tw_late = late;
+        task->has_time_window = 1;
+        new_arr = (SGTimeWindow *)malloc(sizeof(SGTimeWindow));
+        if (!new_arr) return SG_STATUS_OUT_OF_MEMORY;
+        new_arr[0].early = early;
+        new_arr[0].late = late;
+        task->time_windows = new_arr;
+        task->num_time_windows = 1;
+        return SG_STATUS_OK;
+    }
+
+    /* Promote existing single TW (set via set_time_window) into array */
+    if (task->num_time_windows == 0) {
+        new_arr = (SGTimeWindow *)malloc(sizeof(SGTimeWindow));
+        if (!new_arr) return SG_STATUS_OUT_OF_MEMORY;
+        new_arr[0].early = task->tw_early;
+        new_arr[0].late = task->tw_late;
+        task->time_windows = new_arr;
+        task->num_time_windows = 1;
+    }
+
+    n = task->num_time_windows;
+    if (n >= 254) {
+        return SG_STATUS_INVALID_ARG; /* uint8_t overflow guard */
+    }
+
+    /* Find sorted insertion position */
+    insert_pos = n;
+    for (i = 0; i < n; i++) {
+        if (early < task->time_windows[i].early) {
+            insert_pos = i;
+            break;
+        }
+    }
+
+    /* Reject overlapping windows: early <= existing.late && late >= existing.early */
+    if (insert_pos > 0) {
+        if (early <= task->time_windows[insert_pos - 1].late) {
+            return SG_STATUS_INVALID_ARG;
+        }
+    }
+    if (insert_pos < n) {
+        if (late >= task->time_windows[insert_pos].early) {
+            return SG_STATUS_INVALID_ARG;
+        }
+    }
+
+    new_arr = (SGTimeWindow *)realloc(task->time_windows,
+                                       (size_t)(n + 1) * sizeof(SGTimeWindow));
+    if (!new_arr) return SG_STATUS_OUT_OF_MEMORY;
+    task->time_windows = new_arr;
+
+    /* Shift elements right to make room */
+    if (insert_pos < n) {
+        memmove(&new_arr[insert_pos + 1], &new_arr[insert_pos],
+                (size_t)(n - insert_pos) * sizeof(SGTimeWindow));
+    }
+    new_arr[insert_pos].early = early;
+    new_arr[insert_pos].late = late;
+    task->num_time_windows = n + 1;
+
+    /* Update outer bounds */
+    task->tw_early = task->time_windows[0].early;
+    task->tw_late = task->time_windows[task->num_time_windows - 1].late;
+
     return SG_STATUS_OK;
 }
 
