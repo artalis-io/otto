@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include <limits.h>
 #include "mip.h"
+#include "mip_lp_adapter.h"
 
 /* ============================================================================
  * Node Priority Queue
@@ -594,102 +595,99 @@ static int select_pseudo_cost(MIPSolver *solver, const double *solution) {
 }
 
 /* Strong branching - solve LP relaxations to evaluate branching choices.
- * Uses dual_simplex_solve_v2 which never replaces the tableau.
+ * Uses the MIP/LP adapter so probing/recovery flows through one LP-state API.
  */
 int strong_branch(MIPSolver *solver, int var, double val,
                   double *down_obj, double *up_obj, int max_iter) {
+    *down_obj = RALPH_INFINITY;
+    *up_obj = RALPH_INFINITY;
+
+    if (!solver || !solver->working_model || !solver->lp_solver || !solver->lp_solver->tableau) {
+        return -1;
+    }
+
     SimplexSolver *lp = solver->lp_solver;
-    if (!lp || !lp->tableau) {
-        *down_obj = RALPH_INFINITY;
-        *up_obj = RALPH_INFINITY;
-        return -1;
-    }
     SimplexTableau *tab = lp->tableau;
+    int num_struct = solver->working_model->num_vars;
+    if (var < 0 || var >= num_struct || num_struct <= 0) return -1;
+    if (!tab->lb_ext || !tab->ub_ext || !tab->basis || !tab->var_status) return -1;
 
-    if (!tab->lb_ext || !tab->ub_ext || !tab->basis || !tab->var_status || !tab->basis_pos) {
-        *down_obj = RALPH_INFINITY;
-        *up_obj = RALPH_INFINITY;
-        return -1;
-    }
-
-    double orig_lb = tab->lb_ext[var];
-    double orig_ub = tab->ub_ext[var];
-    int save_max_iter = lp->max_iterations;
-    lp->max_iterations = max_iter;
-
-    /* Save original basis for restoration */
     int m = tab->m;
     int n = tab->n;
-    int *save_basis = (int*)calloc(m, sizeof(int));
-    int *save_var_status = (int*)calloc(n, sizeof(int));
-    if (!save_basis || !save_var_status) {
+    int *save_basis = (int*)calloc((size_t)m, sizeof(int));
+    VarStatus *save_var_status = (VarStatus*)calloc((size_t)n, sizeof(VarStatus));
+    double *probe_lb = (double*)calloc((size_t)num_struct, sizeof(double));
+    double *probe_ub = (double*)calloc((size_t)num_struct, sizeof(double));
+    if (!save_basis || !save_var_status || !probe_lb || !probe_ub) {
         free(save_basis);
         free(save_var_status);
-        *down_obj = RALPH_INFINITY;
-        *up_obj = RALPH_INFINITY;
-        lp->max_iterations = save_max_iter;
+        free(probe_lb);
+        free(probe_ub);
         return -1;
     }
-    memcpy(save_basis, tab->basis, m * sizeof(int));
-    memcpy(save_var_status, tab->var_status, n * sizeof(int));
+
+    memcpy(save_basis, tab->basis, (size_t)m * sizeof(int));
+    memcpy(save_var_status, tab->var_status, (size_t)n * sizeof(VarStatus));
+    memcpy(probe_lb, tab->lb_ext, (size_t)num_struct * sizeof(double));
+    memcpy(probe_ub, tab->ub_ext, (size_t)num_struct * sizeof(double));
+    double orig_lb = probe_lb[var];
+    double orig_ub = probe_ub[var];
 
     /* Try branching down */
-    tab->ub_ext[var] = floor(val);
-    dual_v2_clear_perturbation(tab);
-    tab->dse_initialized = 0;  /* Force reinit — probing changes basis */
-    tableau_compute_solution(tab);
-    tableau_compute_reduced_costs(tab);
-    dual_simplex_solve_v2(lp);
+    probe_ub[var] = floor(val);
+    if (mip_lp_apply_structural_bounds(tab, num_struct, probe_lb, probe_ub) != 0 ||
+        mip_lp_recompute(tab) != 0 ||
+        mip_lp_dual_reopt(lp, max_iter, NULL) != 0 ||
+        !lp->tableau || lp->tableau != tab) {
+        goto strong_fail;
+    }
     *down_obj = (lp->status == RALPH_STATUS_OPTIMAL) ? lp->obj_value : RALPH_INFINITY;
 
-    /* Restore basis before trying up branch */
-    memcpy(tab->basis, save_basis, m * sizeof(int));
-    memcpy(tab->var_status, save_var_status, n * sizeof(int));
-    for (int i = 0; i < m; i++) {
-        tab->basis_pos[tab->basis[i]] = i;
-    }
-    for (int j = 0; j < n; j++) {
-        if (tab->var_status[j] != RALPH_BASIC) {
-            tab->basis_pos[j] = -1;
-        }
+    if (mip_lp_restore_warm_basis(lp, m, n, save_basis, save_var_status) != 0 ||
+        !lp->tableau || lp->tableau != tab) {
+        goto strong_fail;
     }
 
     /* Try branching up */
-    tab->ub_ext[var] = orig_ub;
-    tab->lb_ext[var] = ceil(val);
-    dual_v2_clear_perturbation(tab);
-    tab->dse_initialized = 0;  /* Force reinit — probing changes basis */
-    tableau_compute_solution(tab);
-    tableau_compute_reduced_costs(tab);
-    dual_simplex_solve_v2(lp);
+    probe_ub[var] = orig_ub;
+    probe_lb[var] = ceil(val);
+    if (mip_lp_apply_structural_bounds(tab, num_struct, probe_lb, probe_ub) != 0 ||
+        mip_lp_recompute(tab) != 0 ||
+        mip_lp_dual_reopt(lp, max_iter, NULL) != 0 ||
+        !lp->tableau || lp->tableau != tab) {
+        goto strong_fail;
+    }
     *up_obj = (lp->status == RALPH_STATUS_OPTIMAL) ? lp->obj_value : RALPH_INFINITY;
 
     /* Restore original bounds and basis */
-    tab->lb_ext[var] = orig_lb;
-    tab->ub_ext[var] = orig_ub;
-    memcpy(tab->basis, save_basis, m * sizeof(int));
-    memcpy(tab->var_status, save_var_status, n * sizeof(int));
-    for (int i = 0; i < m; i++) {
-        tab->basis_pos[tab->basis[i]] = i;
+    probe_lb[var] = orig_lb;
+    if (mip_lp_apply_structural_bounds(tab, num_struct, probe_lb, probe_ub) != 0 ||
+        mip_lp_restore_warm_basis(lp, m, n, save_basis, save_var_status) != 0) {
+        goto strong_fail;
     }
-    for (int j = 0; j < n; j++) {
-        if (tab->var_status[j] != RALPH_BASIC) {
-            tab->basis_pos[j] = -1;
-        }
-    }
-
-    /* Recompute solution with restored basis */
-    if (tableau_refactorize(tab) == 0) {
-        tableau_compute_solution(tab);
-        tableau_compute_reduced_costs(tab);
-        lp->status = RALPH_STATUS_OPTIMAL;
-    }
+    lp->status = RALPH_STATUS_OPTIMAL;
 
     free(save_basis);
     free(save_var_status);
-    lp->max_iterations = save_max_iter;
-
+    free(probe_lb);
+    free(probe_ub);
     return 0;
+
+strong_fail:
+    /* Best-effort LP recovery for subsequent branching decisions. */
+    if (lp->tableau) {
+        probe_lb[var] = orig_lb;
+        probe_ub[var] = orig_ub;
+        (void)mip_lp_apply_structural_bounds(lp->tableau, num_struct, probe_lb, probe_ub);
+        (void)mip_lp_restore_warm_basis(lp, m, n, save_basis, save_var_status);
+    } else {
+        (void)mip_lp_recover_state(lp);
+    }
+    free(save_basis);
+    free(save_var_status);
+    free(probe_lb);
+    free(probe_ub);
+    return -1;
 }
 
 /*
@@ -711,6 +709,11 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
     const int num_int = solver->num_integers;
 
     for (int k = 0; k < num_int; k++) {
+        if (solver->lp_solver && solver->lp_solver->solution) {
+            solution = solver->lp_solver->solution;
+        }
+        if (!solution) break;
+
         int j = int_vars[k];
 
         /* Priority filter: skip if not at max priority */
@@ -734,8 +737,7 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
             int sb_result = strong_branch(solver, j, val, &down_obj, &up_obj,
                                           MIP_RELIABILITY_PIVOT_BUDGET);
 
-            /* Re-read solution pointer: strong_branch() may trigger
-             * simplex_solve() fallback which frees/reallocates it */
+            /* Re-read solution pointer: strong_branch() may recover LP state. */
             if (solver->lp_solver) {
                 solution = solver->lp_solver->solution;
             }
@@ -774,14 +776,8 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
     /* If strong branching corrupted the LP state, re-solve to restore it.
      * This ensures the solution array is valid for compute_branch_children. */
     if (strong_failed && solver->lp_solver) {
-        if (!solver->lp_solver->solution || !solver->lp_solver->tableau) {
-            /* Cold-start re-solve to restore LP state */
-            if (solver->lp_solver->tableau) {
-                tableau_free(solver->lp_solver->tableau);
-                solver->lp_solver->tableau = NULL;
-            }
-            simplex_solve(solver->lp_solver);
-        }
+        if (!solver->lp_solver->solution || !solver->lp_solver->tableau)
+            (void)mip_lp_recover_state(solver->lp_solver);
         /* Refresh solution pointer after recovery */
         solution = solver->lp_solver->solution;
     }
@@ -1037,29 +1033,47 @@ void compute_branch_children(MIPSolver *solver, BBNode *parent, int branch_var,
         *child_up = NULL;
         return;
     }
+
+    if (branch_var < 0 || branch_var >= num_vars) {
+        *child_down = NULL;
+        *child_up = NULL;
+        return;
+    }
+
     double val = solver->lp_solver->solution[branch_var];
+    double down_ub = floor(val);
+    double up_lb = ceil(val);
+
+    int can_down = (down_ub < parent->ub[branch_var] - RALPH_INT_TOL) &&
+                   (down_ub >= parent->lb[branch_var] - RALPH_INT_TOL);
+    int can_up = (up_lb > parent->lb[branch_var] + RALPH_INT_TOL) &&
+                 (up_lb <= parent->ub[branch_var] + RALPH_INT_TOL);
+
+    *child_down = NULL;
+    *child_up = NULL;
+    if (!can_down && !can_up) return;
 
     /* Create down child (x <= floor(val)) using pool if available */
-    *child_down = bb_node_pool_copy(solver->node_pool, parent, num_vars);
-    if (*child_down) {
+    if (can_down) *child_down = bb_node_pool_copy(solver->node_pool, parent, num_vars);
+    if (can_down && *child_down) {
         (*child_down)->depth = parent->depth + 1;
         (*child_down)->parent_id = parent->id;
         (*child_down)->branch_var = branch_var;
         (*child_down)->branch_val = val;
         (*child_down)->branch_dir = BRANCH_DOWN;
-        (*child_down)->ub[branch_var] = floor(val);
+        (*child_down)->ub[branch_var] = down_ub;
         (*child_down)->estimate = estimate_branch_obj(solver, branch_var, val, BRANCH_DOWN);
     }
 
     /* Create up child (x >= ceil(val)) using pool if available */
-    *child_up = bb_node_pool_copy(solver->node_pool, parent, num_vars);
-    if (*child_up) {
+    if (can_up) *child_up = bb_node_pool_copy(solver->node_pool, parent, num_vars);
+    if (can_up && *child_up) {
         (*child_up)->depth = parent->depth + 1;
         (*child_up)->parent_id = parent->id;
         (*child_up)->branch_var = branch_var;
         (*child_up)->branch_val = val;
         (*child_up)->branch_dir = BRANCH_UP;
-        (*child_up)->lb[branch_var] = ceil(val);
+        (*child_up)->lb[branch_var] = up_lb;
         (*child_up)->estimate = estimate_branch_obj(solver, branch_var, val, BRANCH_UP);
     }
 
