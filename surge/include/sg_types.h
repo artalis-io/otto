@@ -66,6 +66,7 @@ typedef struct {
     uint32_t vehicles_used;
     double total_waiting;
     double total_overtime;
+    double total_tw_penalty;
 } SGStats;
 
 typedef enum {

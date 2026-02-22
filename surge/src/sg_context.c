@@ -854,6 +854,16 @@ SGStatus sg_validate_model(const SGContext *ctx) {
                 }
             }
         }
+        if (task->has_soft_time_window) {
+            if (!task->has_time_window) {
+                return SG_STATUS_INFEASIBLE;
+            }
+            if (task->soft_tw_early < task->tw_early ||
+                task->soft_tw_late > task->tw_late ||
+                task->soft_tw_late < task->soft_tw_early) {
+                return SG_STATUS_INFEASIBLE;
+            }
+        }
     }
 
     for (i = 0; i < ctx->num_requests; i++) {
@@ -1163,6 +1173,33 @@ SGStatus sg_vehicle_set_overtime_cost(SGContext *ctx, uint32_t vehicle_id,
         return SG_STATUS_INVALID_ARG;
     }
     ctx->vehicles[vehicle_id].cost_per_overtime = cost_per_overtime;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_task_set_soft_time_window(SGContext *ctx, uint32_t task_id,
+                                      int32_t early, int32_t late,
+                                      double early_penalty, double late_penalty) {
+    SGTaskRecord *task;
+
+    if (!ctx || task_id >= ctx->num_tasks || late < early ||
+        !isfinite(early_penalty) || early_penalty < 0.0 ||
+        !isfinite(late_penalty) || late_penalty < 0.0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    task = &ctx->tasks[task_id];
+    if (!task->has_time_window) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (early < task->tw_early || late > task->tw_late) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    task->soft_tw_early = early;
+    task->soft_tw_late = late;
+    task->tw_early_penalty = early_penalty;
+    task->tw_late_penalty = late_penalty;
+    task->has_soft_time_window = 1;
     return SG_STATUS_OK;
 }
 
@@ -1550,6 +1587,19 @@ double sg_solution_get_route_overtime(const SGContext *ctx, uint32_t route_index
         return 0.0;
     }
     return ctx->final_solution->route_overtime[vid];
+}
+
+double sg_solution_get_route_tw_penalty(const SGContext *ctx, uint32_t route_index) {
+    uint32_t vid;
+
+    if (!ctx || !ctx->final_solution || !ctx->final_solution->route_tw_penalty) {
+        return 0.0;
+    }
+    vid = sg_route_index_to_vehicle(ctx->final_solution, route_index);
+    if (vid == UINT32_MAX) {
+        return 0.0;
+    }
+    return ctx->final_solution->route_tw_penalty[vid];
 }
 
 SGStatus sg_solution_get_route_stop_load(const SGContext *ctx, uint32_t route_index,

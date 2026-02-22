@@ -96,6 +96,11 @@ SGStatus sg_vehicle_set_waiting_cost(SGContext *ctx, uint32_t vehicle_id, double
 SGStatus sg_vehicle_set_overtime_cost(SGContext *ctx, uint32_t vehicle_id, double cost_per_overtime);
 SGStatus sg_set_unassigned_weight(SGContext *ctx, double weight);
 
+/* U7: Soft time windows */
+SGStatus sg_task_set_soft_time_window(SGContext *ctx, uint32_t task_id,
+                                      int32_t early, int32_t late,
+                                      double early_penalty, double late_penalty);
+
 /* Convenience constructors (single-dim demand) */
 uint32_t sg_add_delivery_request(SGContext *ctx, double x, double y,
                                   int32_t tw_early, int32_t tw_late,
@@ -129,6 +134,7 @@ SGStatus sg_solution_get_route_stop(const SGContext *ctx, uint32_t route_index,
 double sg_solution_get_route_duration(const SGContext *ctx, uint32_t route_index);
 double sg_solution_get_route_waiting(const SGContext *ctx, uint32_t route_index);
 double sg_solution_get_route_overtime(const SGContext *ctx, uint32_t route_index);
+double sg_solution_get_route_tw_penalty(const SGContext *ctx, uint32_t route_index);
 SGStatus sg_solution_get_route_stop_load(const SGContext *ctx, uint32_t route_index,
                                           uint32_t stop_index, uint32_t dimension,
                                           double *load_out);

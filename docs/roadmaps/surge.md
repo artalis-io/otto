@@ -1169,13 +1169,17 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ### Current Status (as of 2026-02-22)
 
-**Baseline**: U1-U6 + U8 + S1-S9 complete. Waiting cost and overtime cost implemented. 105 tests passing, ASAN/UBSAN clean. Benchmarks unchanged from previous baseline (default `cost_per_overtime=0.0` keeps shift hard — zero impact on existing behavior).
+**Baseline**: U1-U8 + S1-S9 complete. All usability phases done. 109 tests passing, ASAN/UBSAN clean. Benchmarks unchanged from previous baseline (soft TWs not active in benchmark instances — zero impact on existing behavior).
 
 Best measured quality (10000 iterations, deterministic seed 42):
 - Solomon (VRPTW, 56 cases): `solved=56/56`, `avgVehGap=+0.38`, `avgDistGap=+0.2%`, `equalVehicles=35`, `lexiNonWorse=11`.
 - Li & Lim (PDPTW, 57 cases): `solved=57/57`, `avgVehGap=+0.59`, `avgDistGap=+3.9%`, `equalVehicles=39`, `lexiNonWorse=21`.
 
-Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), request-vehicle constraints (U8), waiting cost (per-vehicle `cost_per_waiting`), overtime cost (per-vehicle `cost_per_overtime` with soft shift), convenience constructors, stop load/type/duration export.
+Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), soft time windows (U7), request-vehicle constraints (U8), waiting cost (per-vehicle `cost_per_waiting`), overtime cost (per-vehicle `cost_per_overtime` with soft shift), convenience constructors, stop load/type/duration export.
+
+#### Previous Status (as of 2026-02-22)
+
+**Baseline**: U1-U6 + U8 + S1-S9 complete. Waiting cost and overtime cost implemented. 105 tests passing, ASAN/UBSAN clean.
 
 #### Previous Status (as of 2026-02-21)
 
@@ -1255,7 +1259,7 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 
 ### Phase 6: Rich Constraint Completion
 - [ ] Disjunct TW support.
-- [ ] Soft TW penalties and waiting-cost terms in objective.
+- [x] Soft TW penalties and waiting-cost terms in objective.
 - [x] Vehicle qualifications (U2).
 - [ ] Commodity conflicts, exclusion groups.
 - [x] Open routes (U4).
@@ -1492,39 +1496,40 @@ solution state (add a `route_duration` array alongside `route_distance`).
 
 **Completion**: Implemented with 3 tests (API validation, prefer-cheaper vehicle selection, unassigned weight tradeoff). Cost model correctly drives vehicle selection via SA acceptance. Route duration tracked and exported. Benchmarks stable.
 
-### Phase U7: Soft Time Windows (Tardiness)
+### Phase U7: Soft Time Windows ✅
 
 **Priority**: Medium — real dispatchers accept small delays with a cost penalty rather
 than declaring a delivery unservable.
 
-**What**: Per-task optional tardiness penalty (`cost_per_second_late`). If arrival is after
-`tw_late`, the stop incurs `tardiness = (arrival - tw_late) * cost_per_second_late` added
-to the objective. The stop is still feasible (not rejected). A `max_tardiness_seconds` cap
-can make it hard-infeasible beyond a threshold.
+**What**: Per-task optional soft time window nested within the hard TW. Linear per-second
+penalty for service outside the preferred window. Hard TW `[tw_early, tw_late]` remains
+as absolute bounds (infeasible outside). Soft TW `[soft_tw_early, soft_tw_late]` adds a
+penalty layer within hard bounds.
 
 **API surface**:
 ```c
-SGStatus sg_task_set_tardiness_cost(SGContext *ctx, uint32_t task_id,
-                                     double cost_per_second);
-SGStatus sg_task_set_max_tardiness(SGContext *ctx, uint32_t task_id,
-                                    int32_t max_seconds);
+SGStatus sg_task_set_soft_time_window(SGContext *ctx, uint32_t task_id,
+                                      int32_t early, int32_t late,
+                                      double early_penalty, double late_penalty);
+double sg_solution_get_route_tw_penalty(const SGContext *ctx, uint32_t route_index);
 ```
 
-**Architecture fit**: The forward timing pass in `sg_route_stop_sequence_feasible` currently
-rejects stops arriving after `tw_late`. For soft-TW tasks, instead of rejecting, compute
-tardiness and accumulate it. The feasibility function returns both feasibility (bool) and a
-tardiness total. The cost function adds `sum(tardiness)` to the objective.
+**Penalty formula**: `tw_early_penalty * max(0, soft_tw_early - start) + tw_late_penalty * max(0, start - soft_tw_late)`.
 
-This is the most invasive change in the usability series because it touches the core
-feasibility check — the boolean "feasible / not feasible" becomes "feasible with penalty."
-The insertion evaluator needs to propagate tardiness deltas.
+**Architecture fit**: Key insight — no feasibility kernel changes needed. Soft TWs are an
+additional penalty layer WITHIN the existing hard bounds. Hard TW checks remain unchanged
+at all ~13 sites in `sg_feasibility.c`. Penalty accumulated in the forward timing pass
+(`sg_route_update_timing`) and added directly to route cost (pre-multiplied by per-task
+coefficients, no vehicle-level multiplier).
 
-**Changes**: `sg_internal.h` (add task fields), `sg_feasibility.c` (soft TW logic),
-`sg_solution.c` (cost function), `sg_postprocess.c` (operators need penalty-aware comparison),
-`sg_api.c` (JSON parsing).
+**Changes**: `sg_internal.h` (add task fields + route_tw_penalty array), `sg_types.h`
+(total_tw_penalty in SGStats), `surge.h` (public API), `sg_context.c` (setter + getter +
+validation), `sg_feasibility.c` (penalty accumulation in forward pass), `sg_solution.c`
+(lifecycle: reset/init/copy/validate/cost), `sg_solve.c` (stats accumulation).
 
-**Complexity**: Medium-Large. ~400 LOC. Requires careful testing — every operator comparison
-changes from pure distance to distance + penalty.
+**Complexity**: Medium. ~250 LOC. No feasibility kernel changes — cleaner than originally anticipated.
+
+**Completion**: Implemented with 4 tests (API validation, late penalty accumulation, hard TW still rejects, early penalty + stats). Forward-compatible with future disjunct time windows (single soft window per task = N=1 case). Benchmarks stable — default settings (no soft TWs) have zero impact on existing behavior.
 
 ### Phase U8: Request-Vehicle Constraints ✅
 
@@ -1562,11 +1567,11 @@ U3 (solution export)    ──── ✅ complete
 U4 (open routes)        ──── ✅ complete
 U5 (duration + ride)    ──── ✅ complete
 U6 (cost model)         ──── ✅ complete
-U7 (soft TW)            ──── after U6 (needs cost model for penalty integration)
+U7 (soft TW)            ──── ✅ complete
 U8 (vehicle constraints)──── ✅ complete
 ```
 
-U1-U6 are complete. U7 and U8 are the remaining planned phases.
+All usability phases (U1-U8) are complete.
 
 ### Production Gap Analysis
 
@@ -1577,7 +1582,7 @@ Grouped by business impact:
 
 | Gap | Impact | Effort |
 |-----|--------|--------|
-| **Soft time windows (U7)** | Most real dispatchers accept small delays with cost penalty rather than hard rejection. Most invasive change — feasibility becomes bool+penalty. | Large |
+| **Soft time windows (U7)** ✅ | Per-task soft TW with linear penalty within hard bounds. No feasibility kernel changes needed — penalty layer only. 4 tests. | Medium |
 | **Disjunct time windows** | Customer availability often has multiple windows (e.g., 8-12 and 14-18). Reworks forward/backward pass to evaluate union of intervals. | Large |
 | **Driver breaks / HoS** | Legal requirement in EU/US trucking. Requires break insertion points in routes and HoSE state machine integration. | Large |
 

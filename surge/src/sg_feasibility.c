@@ -11,6 +11,7 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
     uint32_t prev_loc;
     double distance = 0.0;
     double waiting = 0.0;
+    double tw_penalty = 0.0;
     double latest_next;
     uint32_t i;
 
@@ -29,6 +30,9 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
         }
         if (sol->route_overtime) {
             sol->route_overtime[vehicle_id] = 0.0;
+        }
+        if (sol->route_tw_penalty) {
+            sol->route_tw_penalty[vehicle_id] = 0.0;
         }
         return 1;
     }
@@ -78,6 +82,13 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
         stop->service_start = start;
         stop->depart = start + (double)task->service_seconds;
         waiting += start - stop->arrival;
+        if (task->has_soft_time_window) {
+            if (start < (double)task->soft_tw_early) {
+                tw_penalty += task->tw_early_penalty * ((double)task->soft_tw_early - start);
+            } else if (start > (double)task->soft_tw_late) {
+                tw_penalty += task->tw_late_penalty * (start - (double)task->soft_tw_late);
+            }
+        }
         time_cursor = stop->depart;
         prev_loc = cur_loc;
     }
@@ -103,6 +114,9 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
             ot = time_cursor - (double)vehicle->shift_late;
         }
         sol->route_overtime[vehicle_id] = ot;
+    }
+    if (sol->route_tw_penalty) {
+        sol->route_tw_penalty[vehicle_id] = tw_penalty;
     }
 
     /* Backward pass */

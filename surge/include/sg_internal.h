@@ -80,6 +80,7 @@ typedef struct {
     double *route_duration;
     double *route_waiting;
     double *route_overtime;
+    double *route_tw_penalty;
     double *route_stop_load;   /* [vehicle * stop_stride * dim_count + stop * dim_count + d] */
 } SGRouteSolution;
 
@@ -140,6 +141,11 @@ typedef struct {
     uint8_t has_location;
     uint8_t has_time_window;
     uint8_t has_demand;
+    int32_t soft_tw_early;
+    int32_t soft_tw_late;
+    double tw_early_penalty;
+    double tw_late_penalty;
+    uint8_t has_soft_time_window;
 } SGTaskRecord;
 
 typedef struct {

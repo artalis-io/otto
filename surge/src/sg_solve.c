@@ -610,6 +610,16 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
             }
             ctx->stats.total_overtime = tot;
         }
+        {
+            double ttp = 0.0;
+            uint32_t tv;
+            if (final_sol->route_tw_penalty) {
+                for (tv = 0; tv < final_sol->num_vehicles; tv++) {
+                    ttp += final_sol->route_tw_penalty[tv];
+                }
+            }
+            ctx->stats.total_tw_penalty = ttp;
+        }
 
         /* Retain final solution for route/stop export */
         if (ctx->final_solution) {
