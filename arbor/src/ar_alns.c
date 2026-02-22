@@ -19,6 +19,7 @@ typedef struct {
     double weight;
     double segment_score;
     int segment_uses;
+    double total_seconds;
     ARALNSOperatorStats stats;
 } ARDestroyEntry;
 
@@ -29,6 +30,7 @@ typedef struct {
     double weight;
     double segment_score;
     int segment_uses;
+    double total_seconds;
     ARALNSOperatorStats stats;
 } ARRepairEntry;
 
@@ -590,17 +592,24 @@ ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
             }
         }
 
-        op_status = ctx->destroy_ops[d_idx].op(
-            ctx->destroy_ops[d_idx].op_ctx, candidate, q, removed_ids, &removed_count);
+        {
+            double t0 = ar_now_seconds();
+            op_status = ctx->destroy_ops[d_idx].op(
+                ctx->destroy_ops[d_idx].op_ctx, candidate, q, removed_ids, &removed_count);
+            ctx->destroy_ops[d_idx].total_seconds += ar_now_seconds() - t0;
+        }
         if (op_status == AR_STATUS_OK) {
+            double t0;
             if (removed_count < 0) {
                 removed_count = 0;
             }
             if (removed_count > q) {
                 removed_count = q;
             }
+            t0 = ar_now_seconds();
             op_status = ctx->repair_ops[r_idx].op(
                 ctx->repair_ops[r_idx].op_ctx, candidate, removed_ids, removed_count);
+            ctx->repair_ops[r_idx].total_seconds += ar_now_seconds() - t0;
         }
 
         free(removed_ids);
@@ -766,6 +775,7 @@ ARStatus ar_alns_get_destroy_stats(const ARALNSContext *ctx, int index,
         return AR_STATUS_INVALID_ARG;
     }
     *out_stats = ctx->destroy_ops[index].stats;
+    out_stats->total_seconds = ctx->destroy_ops[index].total_seconds;
     return AR_STATUS_OK;
 }
 
@@ -775,6 +785,7 @@ ARStatus ar_alns_get_repair_stats(const ARALNSContext *ctx, int index,
         return AR_STATUS_INVALID_ARG;
     }
     *out_stats = ctx->repair_ops[index].stats;
+    out_stats->total_seconds = ctx->repair_ops[index].total_seconds;
     return AR_STATUS_OK;
 }
 

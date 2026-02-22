@@ -261,6 +261,17 @@ void sg_free(SGContext *ctx) {
     ctx->num_commodities = 0;
     ctx->num_exclusion_groups = 0;
 
+    free(ctx->setup_time_matrix);
+    ctx->setup_time_matrix = NULL;
+    ctx->num_setup_classes = 0;
+
+    free(ctx->destroy_op_stats);
+    ctx->destroy_op_stats = NULL;
+    ctx->num_destroy_ops = 0;
+    free(ctx->repair_op_stats);
+    ctx->repair_op_stats = NULL;
+    ctx->num_repair_ops = 0;
+
     free(ctx->location_coords);
     ctx->location_coords = NULL;
     free(ctx->travel_distance_matrix);
@@ -1235,6 +1246,90 @@ SGStatus sg_request_add_exclusion_group(SGContext *ctx, uint32_t request_id, uin
     req->exclusion_group_ids = new_ids;
     req->exclusion_group_ids[req->num_exclusion_groups] = group_id;
     req->num_exclusion_groups++;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_set_num_setup_classes(SGContext *ctx, uint32_t count) {
+    double *matrix;
+    size_t total;
+
+    if (!ctx) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (count == 0) {
+        free(ctx->setup_time_matrix);
+        ctx->setup_time_matrix = NULL;
+        ctx->num_setup_classes = 0;
+        return SG_STATUS_OK;
+    }
+
+    total = (size_t)count * (size_t)count;
+    if (total / count != count) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    matrix = (double *)calloc(total, sizeof(double));
+    if (!matrix) {
+        return SG_STATUS_OUT_OF_MEMORY;
+    }
+
+    free(ctx->setup_time_matrix);
+    ctx->setup_time_matrix = matrix;
+    ctx->num_setup_classes = count;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_set_setup_time(SGContext *ctx, uint32_t from_class, uint32_t to_class,
+                            double seconds) {
+    if (!ctx || from_class == 0 || to_class == 0 ||
+        from_class > ctx->num_setup_classes || to_class > ctx->num_setup_classes ||
+        !isfinite(seconds) || seconds < 0.0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (!ctx->setup_time_matrix) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->setup_time_matrix[(size_t)(from_class - 1) * ctx->num_setup_classes + (to_class - 1)] = seconds;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_request_set_setup_class(SGContext *ctx, uint32_t request_id, uint32_t class_id) {
+    if (!ctx || request_id >= ctx->num_requests) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (class_id > ctx->num_setup_classes) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->requests[request_id].setup_class_id = class_id;
+    return SG_STATUS_OK;
+}
+
+/* Per-operator telemetry getters */
+
+uint32_t sg_get_destroy_operator_count(const SGContext *ctx) {
+    if (!ctx) return 0;
+    return ctx->num_destroy_ops;
+}
+
+uint32_t sg_get_repair_operator_count(const SGContext *ctx) {
+    if (!ctx) return 0;
+    return ctx->num_repair_ops;
+}
+
+SGStatus sg_get_destroy_operator_stats(const SGContext *ctx, uint32_t index,
+                                        SGOperatorStats *out) {
+    if (!ctx || !out || index >= ctx->num_destroy_ops || !ctx->destroy_op_stats) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    *out = ctx->destroy_op_stats[index];
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_get_repair_operator_stats(const SGContext *ctx, uint32_t index,
+                                       SGOperatorStats *out) {
+    if (!ctx || !out || index >= ctx->num_repair_ops || !ctx->repair_op_stats) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    *out = ctx->repair_op_stats[index];
     return SG_STATUS_OK;
 }
 

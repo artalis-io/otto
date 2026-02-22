@@ -92,6 +92,11 @@ SGStatus sg_request_set_commodity(SGContext *ctx, uint32_t request_id, uint32_t 
 SGStatus sg_add_exclusion_group(SGContext *ctx, uint32_t *group_id_out);
 SGStatus sg_request_add_exclusion_group(SGContext *ctx, uint32_t request_id, uint32_t group_id);
 
+/* Sequence-dependent setup times */
+SGStatus sg_set_num_setup_classes(SGContext *ctx, uint32_t count);
+SGStatus sg_set_setup_time(SGContext *ctx, uint32_t from_class, uint32_t to_class, double seconds);
+SGStatus sg_request_set_setup_class(SGContext *ctx, uint32_t request_id, uint32_t class_id);
+
 /* U4: Open routes */
 SGStatus sg_vehicle_set_open_end(SGContext *ctx, uint32_t vehicle_id, int open);
 
@@ -163,5 +168,20 @@ SGStatus sg_solution_get_route_stop_load(const SGContext *ctx, uint32_t route_in
                                           uint32_t stop_index, uint32_t dimension,
                                           double *load_out);
 uint32_t sg_solution_get_unassigned_request(const SGContext *ctx, uint32_t index);
+
+/* Per-operator telemetry */
+typedef struct {
+    char name[32];
+    double weight;
+    int64_t selected;
+    int64_t accepted;
+    int64_t improvements;
+    double total_seconds;
+} SGOperatorStats;
+
+uint32_t sg_get_destroy_operator_count(const SGContext *ctx);
+uint32_t sg_get_repair_operator_count(const SGContext *ctx);
+SGStatus sg_get_destroy_operator_stats(const SGContext *ctx, uint32_t index, SGOperatorStats *out);
+SGStatus sg_get_repair_operator_stats(const SGContext *ctx, uint32_t index, SGOperatorStats *out);
 
 #endif /* SURGE_H */

@@ -74,6 +74,7 @@ typedef struct {
     int64_t selected;
     int64_t accepted;
     int64_t improvements;
+    double total_seconds;
 } ARALNSOperatorStats;
 
 #endif /* ARBOR_AR_TYPES_H */

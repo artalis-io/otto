@@ -58,6 +58,7 @@ Surge supports orthogonal constraint dimensions that can be combined freely:
 | **Commodity conflicts** | Hazmat ∉ same vehicle as food |
 | **Vehicle qualifications** | Request requires refrigerated/ADR/tail-lift |
 | **Customer preferences** | Soft: prefer driver X for customer Y |
+| **Sequence-dependent setup** | Cleanup/preparation time between incompatible cargo types |
 
 ### Depot Constraints
 
@@ -1246,7 +1247,7 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - [x] Delivery-only TW/capacity route feasibility checks and insertion/removal.
 - [x] Expanded destroy/repair operator portfolio (including route/time-window removals).
 - [x] Postprocess route elimination and distance polish.
-- [ ] Add per-operator telemetry reporting in benchmark output for focused tuning.
+- [x] Add per-operator telemetry reporting in benchmark output for focused tuning.
 
 ### Phase 2: Unified Route State for VRPTW + PDPTW (now active)
 - [x] Replace delivery-only route sequence assumptions with stop-level representation supporting both stop types.
@@ -1293,6 +1294,7 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - **Phase S7 (stagnation restart)**: Added restart-from-best mechanism in Arbor ALNS loop. When stagnation iterations reach threshold (max_iterations/4), copies best solution to current and reheats SA temperature to 50% of initial. Solomon stable at +0.2% (avgVehGap improved +0.52→+0.46). Li & Lim stable at +4.3%. Neutral at 5k iterations; infrastructure ready for longer runs.
 - **Phase S8 (construction + vehicle minimization)**: Multi-strategy construction (regret-3, TW-sorted greedy, Solomon I1 — keep best), two-phase ALNS (60% vehicle minimization with hot SA + 40% distance polishing), vehicle-target and vehicle-empty destroy operators, pair elimination in reduce_vehicles, depth-2 ejection chains, pairwise exchange in postprocessing. Solomon +0.2% → +0.2% at 5k iters (avgVehGap +0.46→+0.46). Li & Lim +4.3% → +4.3% at 5k iters (avgVehGap +0.70→+0.55, equalVehicles 36→38).
 - **Phase S9 (deeper ejection chains, CROSS-exchange, or-opt k=1, validation)**: Ejection depth 2→5 with 50K attempt budget, CROSS-exchange operator swapping segments of size 1-3 between routes, or-opt extended to k=1 for single-request relocate in intensify loop, post-solve feasibility validation gate in `sg_solve_route_model`, benchmark iterations 5000→10000. Solomon avgVehGap +0.46→+0.36, avgDistGap +0.2%→-0.2%, equalVehicles 33→36. Li & Lim avgVehGap +0.55→+0.55, avgDistGap +4.3%→+4.1%, equalVehicles 38→40. All 113 solutions verified feasible.
+- **Phase S10 (sequence-dependent setup times + per-operator telemetry)**: Asymmetric N×N setup class matrix (1-indexed, 0 = no class). Setup time added after arrival, before service start, in forward/backward timing passes and both cached insertion evaluators. Per-operator telemetry (selected, accepted, improvements, weight, total_seconds) exposed through Surge API and `--telemetry` flag in benchmarks. Solomon +0.2% → +0.2%, Li & Lim +3.9% → +3.9% (no regression). 135 tests, ASAN clean.
 - Unified route state drives both delivery-only and PDPTW solves. The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time constraints.
 - Stop-level splice/excise operations preserve non-adjacent PD placement across ALNS destroy/repair cycles.
 
@@ -1319,8 +1321,8 @@ having one unified route/feasibility engine before additional constraints and in
 
 ## Usability & Rich Constraints Roadmap
 
-With solver quality at a production-usable level (Solomon -0.2% avg distance gap, Li & Lim
-+4.1%), the focus shifts to modeling real-world constraints. These phases are ordered by
+With solver quality at a production-usable level (Solomon +0.2% avg distance gap, Li & Lim
++3.9%), the focus shifts to modeling real-world constraints. These phases are ordered by
 dependency and business impact. Each builds on the architecture already in place — the unified
 stop-level route state, incremental feasibility kernel, and ALNS operator framework.
 
@@ -1613,7 +1615,7 @@ Grouped by business impact:
 |-----|--------|--------|
 | **Commodity conflicts** ✅ | Hazmat ∉ same vehicle as food. Bitmask-based (up to 64 types), O(1) conflict check. Per-route bitset tracking. Symmetric conflict API. 4 tests. | Medium |
 | **Exclusion groups** ✅ | At most one request per group per vehicle. Per-route count tracking. 4 tests. | Medium |
-| **Sequence-dependent setup** | Cleanup time between incompatible cargo types. | Medium |
+| **Sequence-dependent setup** ✅ | Cleanup time between incompatible cargo types. Asymmetric N×N setup class matrix. Setup added after arrival, before service. 4 tests. | Medium |
 | **Time-dependent travel** | Rush hour matrices. Multiple matrix sets indexed by departure time. | Large |
 
 ### Future (not planned yet)
@@ -1641,7 +1643,7 @@ Users can override via `SGConfig.max_iterations` or `--iterations` in benchmarks
 | **Real-time** | 300 | ~0.2 s | +5.5% | +9.0% | API responses, live dispatch |
 | **Batch** (default) | 1,000 | ~0.6 s | +3.0% | +5.0% | Daily planning, route optimization |
 | **High quality** | 5,000 | ~2.0 s | +0.2% | +4.3% | Offline analysis |
-| **Best quality** | 10,000 | ~4.5 s | -0.2% | +4.1% | Benchmarking, maximum quality |
+| **Best quality** | 10,000 | ~4.5 s | +0.2% | +3.9% | Benchmarking, maximum quality |
 
 ### Iteration Scaling Data (100-customer instances, deterministic seed 42)
 
@@ -1655,7 +1657,7 @@ Users can override via `SGConfig.max_iterations` or `--iterations` in benchmarks
 | 1,000 | 0.66 | +3.0% | +0.77 | 23 | 8 |
 | 2,000 | 0.95 | +2.0% | +0.59 | 27 | 9 |
 | 5,000 | 1.83 | +0.8% | +0.50 | 31 | 11 |
-| 10,000 | 4.58 | -0.2% | +0.36 | 36 | 11 |
+| 10,000 | 4.90 | +0.2% | +0.38 | 35 | 11 |
 
 **Li & Lim (PDPTW, 56 cases)**:
 
@@ -1667,7 +1669,7 @@ Users can override via `SGConfig.max_iterations` or `--iterations` in benchmarks
 | 1,000 | 0.60 | +5.0% | +0.77 | 33 | 14 |
 | 2,000 | 0.99 | +5.0% | +0.73 | 33 | 17 |
 | 5,000 | 2.13 | +4.2% | +0.71 | 34 | 18 |
-| 10,000 | 3.25 | +4.1% | +0.55 | 40 | 19 |
+| 10,000 | 3.59 | +3.9% | +0.59 | 39 | 21 |
 
 **Observations**:
 - The improvement knee is at ~1000 iterations for both benchmarks.

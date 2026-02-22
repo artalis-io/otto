@@ -1,5 +1,84 @@
 #include "sg_internal.h"
 
+static void sg_copy_operator_stats(SGContext *ctx, const ARALNSContext *alns) {
+    int nd = ar_alns_destroy_count(alns);
+    int nr = ar_alns_repair_count(alns);
+    int i;
+
+    if (nd > 0) {
+        /* Aggregate: find matching name or append */
+        for (i = 0; i < nd; i++) {
+            ARALNSOperatorStats as;
+            uint32_t j;
+            int found = 0;
+            if (ar_alns_get_destroy_stats(alns, i, &as) != AR_STATUS_OK) continue;
+            for (j = 0; j < ctx->num_destroy_ops; j++) {
+                if (strcmp(ctx->destroy_op_stats[j].name, as.name) == 0) {
+                    ctx->destroy_op_stats[j].selected += as.selected;
+                    ctx->destroy_op_stats[j].accepted += as.accepted;
+                    ctx->destroy_op_stats[j].improvements += as.improvements;
+                    ctx->destroy_op_stats[j].total_seconds += as.total_seconds;
+                    ctx->destroy_op_stats[j].weight = as.weight;
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) {
+                SGOperatorStats *new_arr = (SGOperatorStats *)realloc(
+                    ctx->destroy_op_stats,
+                    (size_t)(ctx->num_destroy_ops + 1) * sizeof(SGOperatorStats));
+                if (new_arr) {
+                    SGOperatorStats *s = &new_arr[ctx->num_destroy_ops];
+                    memcpy(s->name, as.name, 32);
+                    s->weight = as.weight;
+                    s->selected = as.selected;
+                    s->accepted = as.accepted;
+                    s->improvements = as.improvements;
+                    s->total_seconds = as.total_seconds;
+                    ctx->destroy_op_stats = new_arr;
+                    ctx->num_destroy_ops++;
+                }
+            }
+        }
+    }
+
+    if (nr > 0) {
+        for (i = 0; i < nr; i++) {
+            ARALNSOperatorStats as;
+            uint32_t j;
+            int found = 0;
+            if (ar_alns_get_repair_stats(alns, i, &as) != AR_STATUS_OK) continue;
+            for (j = 0; j < ctx->num_repair_ops; j++) {
+                if (strcmp(ctx->repair_op_stats[j].name, as.name) == 0) {
+                    ctx->repair_op_stats[j].selected += as.selected;
+                    ctx->repair_op_stats[j].accepted += as.accepted;
+                    ctx->repair_op_stats[j].improvements += as.improvements;
+                    ctx->repair_op_stats[j].total_seconds += as.total_seconds;
+                    ctx->repair_op_stats[j].weight = as.weight;
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) {
+                SGOperatorStats *new_arr = (SGOperatorStats *)realloc(
+                    ctx->repair_op_stats,
+                    (size_t)(ctx->num_repair_ops + 1) * sizeof(SGOperatorStats));
+                if (new_arr) {
+                    SGOperatorStats *s = &new_arr[ctx->num_repair_ops];
+                    memcpy(s->name, as.name, 32);
+                    s->weight = as.weight;
+                    s->selected = as.selected;
+                    s->accepted = as.accepted;
+                    s->improvements = as.improvements;
+                    s->total_seconds = as.total_seconds;
+                    ctx->repair_op_stats = new_arr;
+                    ctx->num_repair_ops++;
+                }
+            }
+        }
+    }
+}
+
 void sg_adaptive_q_bounds(int num_requests, int config_q_min, int config_q_max,
                           int *q_min_out, int *q_max_out) {
     int adaptive_min = num_requests / 20;
@@ -460,6 +539,14 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         return SG_STATUS_INVALID_ARG;
     }
 
+    /* Reset operator telemetry for this solve */
+    free(ctx->destroy_op_stats);
+    ctx->destroy_op_stats = NULL;
+    ctx->num_destroy_ops = 0;
+    free(ctx->repair_op_stats);
+    ctx->repair_op_stats = NULL;
+    ctx->num_repair_ops = 0;
+
     init_status = sg_route_solution_init(ctx, &initial);
     if (init_status != AR_STATUS_OK) {
         return SG_STATUS_OUT_OF_MEMORY;
@@ -515,6 +602,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
     }
     ar_alns_get_stats(alns, &ar_stats);
     total_alns_iters += ar_stats.iterations;
+    sg_copy_operator_stats(ctx, alns);
     ar_alns_free(alns);
     alns = NULL;
 
@@ -560,6 +648,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         }
         ar_alns_get_stats(alns, &ar_stats);
         total_alns_iters += ar_stats.iterations;
+        sg_copy_operator_stats(ctx, alns);
         ar_alns_free(alns);
         alns = NULL;
     }
@@ -674,6 +763,14 @@ SGStatus sg_solve(SGContext *ctx) {
     if (sg_route_solver_eligible(ctx)) {
         return sg_solve_route_model(ctx);
     }
+
+    /* Reset operator telemetry for this solve */
+    free(ctx->destroy_op_stats);
+    ctx->destroy_op_stats = NULL;
+    ctx->num_destroy_ops = 0;
+    free(ctx->repair_op_stats);
+    ctx->repair_op_stats = NULL;
+    ctx->num_repair_ops = 0;
 
     init_status = sg_bootstrap_solution_init(&initial, ctx->num_requests);
     if (init_status != AR_STATUS_OK) {
@@ -828,6 +925,7 @@ SGStatus sg_solve(SGContext *ctx) {
     }
 
     ar_alns_get_stats(alns, &ar_stats);
+    sg_copy_operator_stats(ctx, alns);
     ctx->stats.iterations = ar_stats.iterations;
     ctx->stats.unassigned = best ? best->num_unassigned : initial.num_unassigned;
     ctx->stats.total_cost = best ? sg_bootstrap_cost(best, ctx)

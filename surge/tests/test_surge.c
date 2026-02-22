@@ -5227,6 +5227,254 @@ static void test_commodity_exclusion_combined(void) {
     sg_free(ctx);
 }
 
+/* ===== Sequence-dependent setup times ===== */
+
+static void test_setup_time_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t r0;
+    assert(ctx != NULL);
+
+    /* Error: set time before setting count */
+    assert(sg_set_setup_time(ctx, 0, 1, 60.0) == SG_STATUS_INVALID_ARG);
+
+    /* Set num_setup_classes */
+    assert(sg_set_num_setup_classes(NULL, 2) == SG_STATUS_INVALID_ARG);
+    /* count=0 disables setup times (valid) */
+    assert(sg_set_num_setup_classes(ctx, 0) == SG_STATUS_OK);
+    assert(ctx->num_setup_classes == 0);
+    assert(sg_set_num_setup_classes(ctx, 2) == SG_STATUS_OK);
+    assert(ctx->num_setup_classes == 2);
+    assert(ctx->setup_time_matrix != NULL);
+
+    /* Set setup time (1-indexed class IDs) */
+    assert(sg_set_setup_time(ctx, 1, 2, 1800.0) == SG_STATUS_OK);
+    assert(sg_set_setup_time(ctx, 2, 1, 600.0) == SG_STATUS_OK);
+    assert(sg_set_setup_time(ctx, 1, 1, 0.0) == SG_STATUS_OK);
+
+    /* Error: class 0 is invalid for setup time API */
+    assert(sg_set_setup_time(ctx, 0, 1, 1.0) == SG_STATUS_INVALID_ARG);
+    assert(sg_set_setup_time(ctx, 1, 0, 1.0) == SG_STATUS_INVALID_ARG);
+
+    /* Error: out of range */
+    assert(sg_set_setup_time(ctx, 3, 1, 1.0) == SG_STATUS_INVALID_ARG);
+    assert(sg_set_setup_time(ctx, 1, 3, 1.0) == SG_STATUS_INVALID_ARG);
+
+    /* Error: negative seconds */
+    assert(sg_set_setup_time(ctx, 0, 1, -1.0) == SG_STATUS_INVALID_ARG);
+
+    /* Assign to request */
+    r0 = sg_add_request(ctx);
+    assert(r0 != UINT32_MAX);
+    assert(sg_request_set_setup_class(ctx, r0, 1) == SG_STATUS_OK);
+    assert(ctx->requests[r0].setup_class_id == 1);
+
+    /* Error: class out of range */
+    assert(sg_request_set_setup_class(ctx, r0, 3) == SG_STATUS_INVALID_ARG);
+    assert(sg_request_set_setup_class(ctx, 99, 1) == SG_STATUS_INVALID_ARG);
+    assert(sg_request_set_setup_class(NULL, 0, 1) == SG_STATUS_INVALID_ARG);
+
+    /* class 0 means "no class" */
+    assert(sg_request_set_setup_class(ctx, r0, 0) == SG_STATUS_OK);
+    assert(ctx->requests[r0].setup_class_id == 0);
+
+    /* Resize: setting a new count reallocates */
+    assert(sg_set_num_setup_classes(ctx, 3) == SG_STATUS_OK);
+    assert(ctx->num_setup_classes == 3);
+
+    sg_free(ctx);
+}
+
+static void test_setup_time_same_class(void) {
+    /* 1 vehicle, 2 requests same class, s[1][1] = 0. Both on same vehicle. */
+    SGContext *ctx = make_config(300, 42);
+    uint32_t depot;
+    uint32_t r0, r1;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+
+    assert(sg_set_num_setup_classes(ctx, 1) == SG_STATUS_OK);
+    assert(sg_set_setup_time(ctx, 1, 1, 0.0) == SG_STATUS_OK);
+
+    r0 = sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 10, -1.0);
+    r1 = sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 10, -1.0);
+    assert(r0 != UINT32_MAX && r1 != UINT32_MAX);
+    assert(sg_request_set_setup_class(ctx, r0, 1) == SG_STATUS_OK);
+    assert(sg_request_set_setup_class(ctx, r1, 1) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+
+    sg_free(ctx);
+}
+
+static void test_setup_time_different_class(void) {
+    /* 1 vehicle with tight shift, 2 requests with different classes, s[A][B] = 1800.
+       The setup time makes it impossible to serve both on one vehicle.
+       Without setup, 1 vehicle suffices. */
+    uint32_t vehicles_with_setup, vehicles_without_setup;
+
+    /* With setup time */
+    {
+        SGContext *ctx = make_config(500, 42);
+        uint32_t depot;
+        uint32_t r0, r1;
+
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+        add_vehicle_with_depot(ctx, depot, 0, 200, 10.0);
+        add_vehicle_with_depot(ctx, depot, 0, 200, 10.0);
+
+        assert(sg_set_num_setup_classes(ctx, 2) == SG_STATUS_OK);
+        assert(sg_set_setup_time(ctx, 1, 2, 1800.0) == SG_STATUS_OK);
+        assert(sg_set_setup_time(ctx, 2, 1, 1800.0) == SG_STATUS_OK);
+
+        r0 = sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 10, -1.0);
+        r1 = sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 10, -1.0);
+        assert(r0 != UINT32_MAX && r1 != UINT32_MAX);
+        assert(sg_request_set_setup_class(ctx, r0, 1) == SG_STATUS_OK);
+        assert(sg_request_set_setup_class(ctx, r1, 2) == SG_STATUS_OK);
+
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 0);
+        vehicles_with_setup = sg_get_used_vehicle_count(ctx);
+        sg_free(ctx);
+    }
+
+    /* Without setup time */
+    {
+        SGContext *ctx = make_config(500, 42);
+        uint32_t depot;
+
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+        add_vehicle_with_depot(ctx, depot, 0, 200, 10.0);
+        add_vehicle_with_depot(ctx, depot, 0, 200, 10.0);
+
+        sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 10, -1.0);
+        sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 10, -1.0);
+
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 0);
+        vehicles_without_setup = sg_get_used_vehicle_count(ctx);
+        sg_free(ctx);
+    }
+
+    assert(vehicles_with_setup == 2);
+    assert(vehicles_without_setup == 1);
+}
+
+static void test_setup_time_asymmetric(void) {
+    /* s[A][B] = 3600, s[B][A] = 0.
+       If ordered A→B, setup = 3600 (infeasible with tight shift).
+       If ordered B→A, setup = 0 (feasible).
+       Verify solver finds the B→A order and uses 1 vehicle. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    uint32_t r0, r1;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 200, 10.0);
+
+    assert(sg_set_num_setup_classes(ctx, 2) == SG_STATUS_OK);
+    assert(sg_set_setup_time(ctx, 1, 2, 3600.0) == SG_STATUS_OK); /* A→B: huge */
+    assert(sg_set_setup_time(ctx, 2, 1, 0.0) == SG_STATUS_OK);    /* B→A: zero */
+
+    r0 = sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 10, -1.0);
+    r1 = sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 10, -1.0);
+    assert(r0 != UINT32_MAX && r1 != UINT32_MAX);
+    assert(sg_request_set_setup_class(ctx, r0, 1) == SG_STATUS_OK); /* class A */
+    assert(sg_request_set_setup_class(ctx, r1, 2) == SG_STATUS_OK); /* class B */
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+
+    /* Verify order is B→A (r1 first, then r0) via stop export */
+    {
+        SGSolutionStop stop0, stop1;
+        assert(sg_solution_get_route_stop(ctx, 0, 0, &stop0) == SG_STATUS_OK);
+        assert(sg_solution_get_route_stop(ctx, 0, 1, &stop1) == SG_STATUS_OK);
+        /* r1 (class B) should be served first, r0 (class A) second */
+        assert(stop0.request_id == r1);
+        assert(stop1.request_id == r0);
+    }
+
+    sg_free(ctx);
+}
+
+/* ===== Per-operator telemetry ===== */
+
+static void test_operator_telemetry_basic(void) {
+    /* Small solve, verify operator count > 0 and stats have non-empty name. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    uint32_t nd, nr;
+    SGOperatorStats stats;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 10, -1.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 10, -1.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+
+    nd = sg_get_destroy_operator_count(ctx);
+    nr = sg_get_repair_operator_count(ctx);
+    assert(nd > 0);
+    assert(nr > 0);
+
+    /* Check first destroy operator */
+    assert(sg_get_destroy_operator_stats(ctx, 0, &stats) == SG_STATUS_OK);
+    assert(strlen(stats.name) > 0);
+    assert(stats.selected > 0);
+
+    /* Check first repair operator */
+    assert(sg_get_repair_operator_stats(ctx, 0, &stats) == SG_STATUS_OK);
+    assert(strlen(stats.name) > 0);
+    assert(stats.selected > 0);
+
+    /* Error: out of bounds */
+    assert(sg_get_destroy_operator_stats(ctx, nd, &stats) == SG_STATUS_INVALID_ARG);
+    assert(sg_get_repair_operator_stats(ctx, nr, &stats) == SG_STATUS_INVALID_ARG);
+
+    /* Error: NULL */
+    assert(sg_get_destroy_operator_stats(ctx, 0, NULL) == SG_STATUS_INVALID_ARG);
+    assert(sg_get_destroy_operator_stats(NULL, 0, &stats) == SG_STATUS_INVALID_ARG);
+
+    sg_free(ctx);
+}
+
+static void test_operator_telemetry_timing(void) {
+    /* Solve with enough iterations. Verify total_seconds > 0 for at least one operator. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    uint32_t nd, i;
+    int found_nonzero = 0;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 10, -1.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 10, -1.0);
+    add_delivery_request(ctx, 30.0, 0.0, 0, 99999, 10, -1.0);
+    add_delivery_request(ctx, 40.0, 0.0, 0, 99999, 10, -1.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+
+    nd = sg_get_destroy_operator_count(ctx);
+    for (i = 0; i < nd; i++) {
+        SGOperatorStats stats;
+        assert(sg_get_destroy_operator_stats(ctx, i, &stats) == SG_STATUS_OK);
+        if (stats.total_seconds > 0.0) {
+            found_nonzero = 1;
+            break;
+        }
+    }
+    assert(found_nonzero);
+
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -5377,8 +5625,18 @@ int main(void) {
     RUN_TEST(test_exclusion_group_multi);
     RUN_TEST(test_commodity_exclusion_combined);
 
+    /* Sequence-dependent setup times */
+    RUN_TEST(test_setup_time_api);
+    RUN_TEST(test_setup_time_same_class);
+    RUN_TEST(test_setup_time_different_class);
+    RUN_TEST(test_setup_time_asymmetric);
+
+    /* Per-operator telemetry */
+    RUN_TEST(test_operator_telemetry_basic);
+    RUN_TEST(test_operator_telemetry_timing);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
-    assert(tests_run == 129);
+    assert(tests_run == 135);
     return tests_passed == tests_run ? 0 : 1;
 }

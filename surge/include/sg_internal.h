@@ -177,6 +177,7 @@ typedef struct {
     uint32_t commodity_id;             /* 0 = none, 1..num_commodities = type */
     uint32_t *exclusion_group_ids;     /* NULL = no groups. Heap array. */
     uint16_t num_exclusion_groups;     /* count of groups this request belongs to */
+    uint32_t setup_class_id;           /* 0 = none, 1..num_setup_classes */
 } SGRequestRecord;
 
 struct SGContext {
@@ -212,6 +213,16 @@ struct SGContext {
     uint32_t num_commodities;          /* 0 = disabled */
     uint64_t *commodity_conflicts;     /* [num_commodities] bitmask per commodity */
     uint32_t num_exclusion_groups;     /* 0 = disabled */
+
+    /* Sequence-dependent setup times */
+    uint32_t num_setup_classes;         /* 0 = disabled */
+    double *setup_time_matrix;          /* [num_setup_classes * num_setup_classes], seconds */
+
+    /* Per-operator telemetry (populated after solve) */
+    SGOperatorStats *destroy_op_stats;
+    SGOperatorStats *repair_op_stats;
+    uint32_t num_destroy_ops;
+    uint32_t num_repair_ops;
 };
 
 /* sg_context.c */
@@ -395,6 +406,21 @@ static inline double sg_task_snap_backward(const SGTaskRecord *task, double late
         /* Before all windows — return latest; caller's outer-bound check will reject. */
         return latest;
     }
+}
+
+/* Returns setup time (seconds) for transition between two consecutive stops.
+   prev_request_id = UINT32_MAX means depot → no setup class → 0. */
+static inline double sg_setup_time_between(const SGContext *ctx,
+                                            uint32_t prev_request_id,
+                                            uint32_t cur_request_id) {
+    uint32_t pc, cc;
+    if (ctx->num_setup_classes == 0) return 0.0;
+    pc = (prev_request_id < ctx->num_requests)
+         ? ctx->requests[prev_request_id].setup_class_id : 0;
+    cc = (cur_request_id < ctx->num_requests)
+         ? ctx->requests[cur_request_id].setup_class_id : 0;
+    if (pc == 0 || cc == 0) return 0.0;
+    return ctx->setup_time_matrix[(size_t)(pc - 1) * ctx->num_setup_classes + (cc - 1)];
 }
 
 int sg_request_pd_demands_valid(const SGTaskRecord *pickup, const SGTaskRecord *delivery,
