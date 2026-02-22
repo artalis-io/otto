@@ -2880,6 +2880,103 @@ void test_warm_start_edge_cases(void) {
 }
 
 /* ============================================================================
+ * Test: Basis Status API
+ * ============================================================================ */
+void test_basis_status_api(void) {
+    printf("\n=== Test: Basis Status API ===\n");
+
+    RalphModel *model = ralph_create();
+    ASSERT(model != NULL, "Basis status: model created");
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "presolve", 0);  /* Keep tableau dimensions stable */
+
+    /* min x + y
+     * s.t. x + y >= 2
+     *      x + 2y <= 4
+     *      x,y >= 0
+     */
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+
+    int idx1[] = {0, 1};
+    double val1[] = {1.0, 1.0};
+    ralph_add_constraint(model, 2, idx1, val1, RALPH_GREATER_EQUAL, 2.0);
+
+    int idx2[] = {0, 1};
+    double val2[] = {1.0, 2.0};
+    ralph_add_constraint(model, 2, idx2, val2, RALPH_LESS_EQUAL, 4.0);
+
+    ralph_optimize_lp(model);
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "Basis status: control model optimal");
+
+    const int n = ralph_get_num_vars(model);
+    const int m = ralph_get_num_cons(model);
+    RalphBasisStatus *col_status = (RalphBasisStatus*)calloc((size_t)n, sizeof(RalphBasisStatus));
+    RalphBasisStatus *row_status = (RalphBasisStatus*)calloc((size_t)m, sizeof(RalphBasisStatus));
+    ASSERT(col_status != NULL && row_status != NULL,
+           "Basis status: status buffers allocated");
+    if (!col_status || !row_status) {
+        free(col_status);
+        free(row_status);
+        ralph_free(model);
+        return;
+    }
+
+    ASSERT(ralph_get_basis_status(model, col_status, row_status) == 0,
+           "Basis status: get succeeds");
+    ASSERT(ralph_get_basis_status(model, col_status, NULL) == 0,
+           "Basis status: get columns-only succeeds");
+    ASSERT(ralph_get_basis_status(model, NULL, row_status) == 0,
+           "Basis status: get rows-only succeeds");
+
+    double obj_before = ralph_get_objval(model);
+    ASSERT(ralph_set_basis_status(model, col_status, row_status) == 0,
+           "Basis status: set round-trip succeeds");
+
+    ralph_optimize_lp(model);
+    ASSERT(ralph_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "Basis status: optimal after round-trip set");
+    ASSERT_NEAR(ralph_get_objval(model), obj_before, TOLERANCE,
+                "Basis status: objective preserved after round-trip");
+
+    RalphBasisStatus bad_col[2] = {
+        RALPH_BASIS_STATUS_BASIC,
+        RALPH_BASIS_STATUS_BASIC
+    };
+    RalphBasisStatus bad_row[2] = {
+        RALPH_BASIS_STATUS_BASIC,
+        RALPH_BASIS_STATUS_BASIC
+    };
+    ASSERT(ralph_set_basis_status(model, bad_col, bad_row) == -1,
+           "Basis status: rejects invalid basic count");
+
+    ASSERT(ralph_get_basis_status(model, NULL, NULL) == -1,
+           "Basis status: get rejects both outputs NULL");
+    ASSERT(ralph_set_basis_status(model, NULL, NULL) == -1,
+           "Basis status: set rejects both inputs NULL");
+    ASSERT(ralph_get_basis_status(NULL, col_status, row_status) == -1,
+           "Basis status: get rejects NULL model");
+    ASSERT(ralph_set_basis_status(NULL, col_status, row_status) == -1,
+           "Basis status: set rejects NULL model");
+
+    free(col_status);
+    free(row_status);
+    ralph_free(model);
+
+    RalphModel *unsolved = ralph_create();
+    ASSERT(unsolved != NULL, "Basis status: unsolved model created");
+    if (unsolved) {
+        ralph_add_var(unsolved, 0.0, 1.0, 1.0, RALPH_CONTINUOUS);
+        ASSERT(ralph_get_basis_status(unsolved, bad_col, bad_row) == -1,
+               "Basis status: get unavailable before solve");
+        ASSERT(ralph_set_basis_status(unsolved, bad_col, bad_row) == -1,
+               "Basis status: set unavailable before solve");
+        ralph_free(unsolved);
+    }
+}
+
+/* ============================================================================
  * Test: Cut Callback
  *
  * Test that user-provided cut callback is invoked during MIP solving.
@@ -6158,6 +6255,7 @@ int main(int argc, char **argv) {
         test_warm_start_live_load();
         test_warm_start_staged_load();
         test_warm_start_edge_cases();
+        test_basis_status_api();
 
         /* Cut callback tests */
         test_cut_callback();

@@ -446,10 +446,10 @@ one by one.
 - Add LP IIS/conflict API (initial minimal irreducible row set).
 - Add deterministic tests for infeasible/unbounded fixtures.
 
-7. Basis-status API (beyond opaque basis blob)
+7. Basis-status API (beyond opaque basis blob) ✅ (2026-02-22)
 - Add explicit basis status getters/setters (row/column/basic/nonbasic states).
 - Keep `ralph_save_basis`/`ralph_load_basis` for compatibility.
-- Add round-trip and dimension-mismatch tests.
+- Add round-trip and invalid-basis-combination tests.
 
 8. Typed parameter API + metadata
 - Add enum-based typed parameter APIs alongside existing string APIs.

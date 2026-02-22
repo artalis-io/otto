@@ -142,6 +142,81 @@ static int ralph_is_valid_sense(RalphSense sense) {
     return sense == RALPH_LESS_EQUAL || sense == RALPH_EQUAL || sense == RALPH_GREATER_EQUAL;
 }
 
+static int ralph_basis_status_from_internal(VarStatus st, RalphBasisStatus *out) {
+    if (!out) return -1;
+    switch (st) {
+        case RALPH_BASIC:
+            *out = RALPH_BASIS_STATUS_BASIC;
+            return 0;
+        case RALPH_NONBASIC_LOWER:
+            *out = RALPH_BASIS_STATUS_AT_LOWER;
+            return 0;
+        case RALPH_NONBASIC_UPPER:
+            *out = RALPH_BASIS_STATUS_AT_UPPER;
+            return 0;
+        case RALPH_NONBASIC_FREE:
+            *out = RALPH_BASIS_STATUS_FREE;
+            return 0;
+        case RALPH_FIXED:
+            *out = RALPH_BASIS_STATUS_FIXED;
+            return 0;
+        default:
+            return -1;
+    }
+}
+
+static int ralph_basis_status_to_internal(RalphBasisStatus in, VarStatus *out) {
+    if (!out) return -1;
+    switch (in) {
+        case RALPH_BASIS_STATUS_BASIC:
+            *out = RALPH_BASIC;
+            return 0;
+        case RALPH_BASIS_STATUS_AT_LOWER:
+            *out = RALPH_NONBASIC_LOWER;
+            return 0;
+        case RALPH_BASIS_STATUS_AT_UPPER:
+            *out = RALPH_NONBASIC_UPPER;
+            return 0;
+        case RALPH_BASIS_STATUS_FREE:
+            *out = RALPH_NONBASIC_FREE;
+            return 0;
+        case RALPH_BASIS_STATUS_FIXED:
+            *out = RALPH_FIXED;
+            return 0;
+        default:
+            return -1;
+    }
+}
+
+static int ralph_build_row_primary_aux_map(const SimplexTableau *tab, int *row_aux) {
+    if (!tab || !row_aux || !tab->model) return -1;
+
+    int m = tab->m;
+    int num_struct = tab->model->num_vars;
+    if (num_struct < 0 || num_struct > tab->n) return -1;
+
+    for (int i = 0; i < m; i++) row_aux[i] = -1;
+    if (m == 0) return 0;
+
+    if (!tab->aux_row || tab->num_aux < m) return -1;
+
+    for (int k = 0; k < tab->num_aux; k++) {
+        int row = tab->aux_row[k];
+        if (row < 0 || row >= m) continue;
+        if (row_aux[row] >= 0) continue;
+
+        int var = num_struct + k;
+        if (var < 0 || var >= tab->n) continue;
+        row_aux[row] = var;
+    }
+
+    for (int i = 0; i < m; i++) {
+        if (row_aux[i] < 0 || row_aux[i] >= tab->n) return -1;
+    }
+
+    return 0;
+}
+
 static int ralph_probe_lp_status(const RalphModel *model,
                                  LPModel *probe_model,
                                  RalphStatus *status_out) {
@@ -1716,6 +1791,162 @@ int ralph_load_basis(RalphModel *model, const RalphBasis *basis) {
         return -1;
     }
     return ralph_stage_basis_copy(model, basis);
+}
+
+int ralph_get_basis_status(const RalphModel *model,
+                           RalphBasisStatus *col_status,
+                           RalphBasisStatus *row_status) {
+    if (!model || !model->lp_model) return -1;
+    if (!col_status && !row_status) return -1;
+    if (!model->lp_solver || !model->lp_solver->tableau) return -1;
+
+    const SimplexTableau *tab = model->lp_solver->tableau;
+    if (!tab || !tab->basis || !tab->var_status) return -1;
+
+    int num_vars = model->lp_model->num_vars;
+    int num_cons = model->lp_model->num_cons;
+    if (num_vars < 0 || num_cons < 0) return -1;
+    if (tab->m != num_cons || num_vars > tab->n) return -1;
+
+    if (col_status) {
+        for (int j = 0; j < num_vars; j++) {
+            if (ralph_basis_status_from_internal(tab->var_status[j], &col_status[j]) != 0) {
+                return -1;
+            }
+        }
+    }
+
+    if (row_status && num_cons > 0) {
+        int *row_aux = (int*)calloc((size_t)num_cons, sizeof(int));
+        if (!row_aux) return -1;
+
+        if (ralph_build_row_primary_aux_map(tab, row_aux) != 0) {
+            free(row_aux);
+            return -1;
+        }
+
+        for (int i = 0; i < num_cons; i++) {
+            int row_var = row_aux[i];
+            if (ralph_basis_status_from_internal(tab->var_status[row_var], &row_status[i]) != 0) {
+                free(row_aux);
+                return -1;
+            }
+        }
+        free(row_aux);
+    }
+
+    return 0;
+}
+
+int ralph_set_basis_status(RalphModel *model,
+                           const RalphBasisStatus *col_status,
+                           const RalphBasisStatus *row_status) {
+    if (!model || !model->lp_model) return -1;
+    if (!col_status && !row_status) return -1;
+    if (!model->lp_solver || !model->lp_solver->tableau) return -1;
+
+    SimplexTableau *tab = model->lp_solver->tableau;
+    if (!tab || !tab->basis || !tab->var_status) return -1;
+
+    int num_vars = model->lp_model->num_vars;
+    int num_cons = model->lp_model->num_cons;
+    int n = tab->n;
+    if (num_vars < 0 || num_cons < 0 || n < 0) return -1;
+    if (tab->m != num_cons || num_vars > n) return -1;
+
+    int *row_aux = NULL;
+    if (row_status && num_cons > 0) {
+        row_aux = (int*)calloc((size_t)num_cons, sizeof(int));
+        if (!row_aux) return -1;
+        if (ralph_build_row_primary_aux_map(tab, row_aux) != 0) {
+            free(row_aux);
+            return -1;
+        }
+    }
+
+    int *basis_copy = NULL;
+    VarStatus *status_copy = NULL;
+    char *used = NULL;
+    int ret = -1;
+
+    if (num_cons > 0) {
+        basis_copy = (int*)calloc((size_t)num_cons, sizeof(int));
+        if (!basis_copy) goto cleanup;
+    }
+    if (n > 0) {
+        status_copy = (VarStatus*)calloc((size_t)n, sizeof(VarStatus));
+        if (!status_copy) goto cleanup;
+        used = (char*)calloc((size_t)n, sizeof(char));
+        if (!used) goto cleanup;
+    }
+
+    if (num_cons > 0) memcpy(basis_copy, tab->basis, (size_t)num_cons * sizeof(int));
+    if (n > 0) memcpy(status_copy, tab->var_status, (size_t)n * sizeof(VarStatus));
+
+    if (col_status) {
+        for (int j = 0; j < num_vars; j++) {
+            if (ralph_basis_status_to_internal(col_status[j], &status_copy[j]) != 0) {
+                goto cleanup;
+            }
+        }
+    }
+
+    if (row_status) {
+        for (int i = 0; i < num_cons; i++) {
+            int row_var = row_aux[i];
+            if (row_var < 0 || row_var >= n) goto cleanup;
+            if (ralph_basis_status_to_internal(row_status[i], &status_copy[row_var]) != 0) {
+                goto cleanup;
+            }
+        }
+    }
+
+    int basic_count = 0;
+    for (int j = 0; j < n; j++) {
+        if (status_copy[j] == RALPH_BASIC) basic_count++;
+    }
+    if (basic_count != num_cons) goto cleanup;
+
+    for (int i = 0; i < num_cons; i++) {
+        int old_var = tab->basis[i];
+        if (old_var >= 0 && old_var < n &&
+            status_copy[old_var] == RALPH_BASIC &&
+            !used[old_var]) {
+            basis_copy[i] = old_var;
+            used[old_var] = 1;
+        } else {
+            basis_copy[i] = -1;
+        }
+    }
+
+    int fill = 0;
+    for (int j = 0; j < n; j++) {
+        if (status_copy[j] != RALPH_BASIC || used[j]) continue;
+        while (fill < num_cons && basis_copy[fill] >= 0) fill++;
+        if (fill >= num_cons) goto cleanup;
+        basis_copy[fill] = j;
+        used[j] = 1;
+    }
+
+    for (int i = 0; i < num_cons; i++) {
+        if (basis_copy[i] < 0) goto cleanup;
+    }
+
+    RalphBasis staged;
+    memset(&staged, 0, sizeof(staged));
+    staged.m = num_cons;
+    staged.n = n;
+    staged.basis = basis_copy;
+    staged.var_status = status_copy;
+
+    ret = ralph_load_basis(model, &staged);
+
+cleanup:
+    free(row_aux);
+    free(basis_copy);
+    free(status_copy);
+    free(used);
+    return ret;
 }
 
 void ralph_free_basis(RalphBasis *basis) {
