@@ -2394,3 +2394,15 @@ Operational cadence:
 - If focused pass, run `test-netlib-gate-small`.
 - If small gate pass, run full `test-netlib-gate`.
 - If full gate pass, refresh GLPK comparison and update baseline section with commit hash + artifact path.
+
+Progress update (2026-02-22):
+- Track 2 instrumentation landed for basis extraction in refactor path:
+  `basis_fastpath_hits`, `basis_cols_rewritten`, `basis_tail_shift_bytes`
+  (exported in benchmark JSON under `refactor`).
+- Added guarded incremental hook in `build_basis_matrix` for layout-change
+  handling; currently kept conservative (`use_sparse_patch = 0`) to preserve
+  no-regression behavior while telemetry informs the next tuning pass.
+- Gates on this state: `test-simplex-policy` PASS (20/20),
+  `test-lu-markowitz` PASS (59/59),
+  `test-netlib-gate-small` PASS (`/tmp/netlib-regression-gate-20260222-090821`),
+  full `test-netlib-gate` PASS (`/tmp/netlib-regression-gate-20260222-091008`).

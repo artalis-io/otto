@@ -556,6 +556,9 @@ typedef struct SimplexSolver {
     int perf_refactor_periodic_policy;    /* periodic refactors triggered by scheduler policy */
     int perf_refactor_periodic_lu_health; /* periodic refactors triggered by LU health guard */
     int perf_refactor_safety_forced;      /* non-periodic safety-driven refactors */
+    int perf_basis_fastpath_hits;         /* basis extraction fast-path hits */
+    int perf_basis_cols_rewritten;        /* changed basis columns rewritten from A_ext */
+    unsigned long long perf_basis_tail_shift_bytes; /* bytes moved by basis tail shifts */
     int perf_refactor_last_m;
     int perf_refactor_last_k;
     int perf_refactor_last_nnz_B;
