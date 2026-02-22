@@ -17,12 +17,7 @@
 
 /* Forward declarations */
 int lp_model_finalize(LPModel *model);
-
-static inline double perf_now_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1.0e6;
-}
+#define perf_now_ms lp_telemetry_now_ms
 
 /* Phase-1 pivot-failure reasons used by deterministic tracing. */
 enum {
@@ -501,24 +496,6 @@ static int phase2_policy_cooldown_window_updates(int interval) {
         cooldown = PHASE2_POLICY_COOLDOWN_MAX_UPDATES;
     }
     return cooldown;
-}
-
-static int refactor_reason_is_safety_forced(int reason) {
-    switch ((RalphRefactorReason)reason) {
-        case RALPH_REFACTOR_REASON_RATIO_RECOVERY:
-        case RALPH_REFACTOR_REASON_PIVOT_RECOVERY:
-        case RALPH_REFACTOR_REASON_FORCED_SMALL_PIVOT:
-        case RALPH_REFACTOR_REASON_UPDATE_RECOVERY:
-        case RALPH_REFACTOR_REASON_DIRECTION_STABILIZE:
-        case RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP:
-            return 1;
-        case RALPH_REFACTOR_REASON_OTHER:
-        case RALPH_REFACTOR_REASON_SETUP:
-        case RALPH_REFACTOR_REASON_PHASE_TRANSITION:
-        case RALPH_REFACTOR_REASON_PERIODIC:
-        default:
-            return 0;
-    }
 }
 
 /*
@@ -1900,11 +1877,10 @@ static void basis_build_record(SimplexTableau *tab,
                                int fastpath_hit,
                                int cols_rewritten,
                                unsigned long long tail_shift_bytes) {
-    SimplexSolver *owner = tab ? tab->owner : NULL;
-    if (!owner) return;
-    if (fastpath_hit) owner->perf_basis_fastpath_hits++;
-    if (cols_rewritten > 0) owner->perf_basis_cols_rewritten += cols_rewritten;
-    owner->perf_basis_tail_shift_bytes += tail_shift_bytes;
+    lp_telemetry_record_basis_build(tab ? tab->owner : NULL,
+                                    fastpath_hit,
+                                    cols_rewritten,
+                                    tail_shift_bytes);
 }
 
 /* Build basis matrix from current basis into reusable workspace */
@@ -2265,10 +2241,7 @@ int tableau_refactorize(SimplexTableau *tab) {
     SimplexSolver *owner = tab ? tab->owner : NULL;
     int reason = RALPH_REFACTOR_REASON_OTHER;
     int updates_before = (tab && tab->lu) ? tab->lu->num_updates : 0;
-    if (owner) {
-        reason = owner->perf_refactor_next_reason;
-        owner->perf_refactor_next_reason = RALPH_REFACTOR_REASON_OTHER;
-    }
+    lp_telemetry_begin_refactor(owner, &reason);
 
     /* When Phase 2 has stuck artificials on redundant rows, move them to
      * the FIRST basis positions so LU processes their identity columns first.
@@ -2340,73 +2313,15 @@ int tableau_refactorize(SimplexTableau *tab) {
 
     if (owner) {
         double elapsed_ms = perf_now_ms() - t_refactor_ms;
-        owner->perf_refactor_all_ms += elapsed_ms;
-        owner->perf_refactor_count++;
-        owner->perf_refactor_last_ms = elapsed_ms;
-        if (elapsed_ms > owner->perf_refactor_max_ms) {
-            owner->perf_refactor_max_ms = elapsed_ms;
-        }
-        owner->perf_refactor_last_reason = reason;
-        switch ((RalphRefactorReason)reason) {
-            case RALPH_REFACTOR_REASON_SETUP:
-                owner->perf_refactor_reason_setup++;
-                break;
-            case RALPH_REFACTOR_REASON_PHASE_TRANSITION:
-                owner->perf_refactor_reason_transition++;
-                break;
-            case RALPH_REFACTOR_REASON_PERIODIC:
-                owner->perf_refactor_reason_periodic++;
-                break;
-            case RALPH_REFACTOR_REASON_RATIO_RECOVERY:
-                owner->perf_refactor_reason_ratio_recovery++;
-                break;
-            case RALPH_REFACTOR_REASON_PIVOT_RECOVERY:
-                owner->perf_refactor_reason_pivot_recovery++;
-                break;
-            case RALPH_REFACTOR_REASON_FORCED_SMALL_PIVOT:
-                owner->perf_refactor_reason_forced_small_pivot++;
-                break;
-            case RALPH_REFACTOR_REASON_UPDATE_RECOVERY:
-                owner->perf_refactor_reason_update_recovery++;
-                break;
-            case RALPH_REFACTOR_REASON_DIRECTION_STABILIZE:
-                owner->perf_refactor_reason_direction_stabilize++;
-                break;
-            case RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP:
-                owner->perf_refactor_reason_infeas_cleanup++;
-                break;
-            case RALPH_REFACTOR_REASON_OTHER:
-            default:
-                owner->perf_refactor_reason_other++;
-                break;
-        }
-        if (refactor_reason_is_safety_forced(reason)) {
-            owner->perf_refactor_safety_forced++;
-        }
-
-        owner->perf_refactor_last_m = tab->m;
-        if (tab->lu) {
-            owner->perf_refactor_last_k = tab->lu->perf_last_k;
-            owner->perf_refactor_last_nnz_B = tab->lu->perf_last_basis_nnz;
-        } else {
-            owner->perf_refactor_last_k = 0;
-            owner->perf_refactor_last_nnz_B = 0;
-        }
-
-        if (tab->phase == 1) {
-            owner->perf_phase1_refactor_ms += elapsed_ms;
-            owner->perf_phase1_refactor_calls++;
-            if (refactor_reason_is_safety_forced(reason)) {
-                owner->perf_phase1_refactor_safety_forced++;
-            }
-        } else if (tab->phase == 2) {
-            owner->perf_phase2_refactor_ms += elapsed_ms;
-            owner->perf_phase2_refactor_calls++;
-            if (refactor_reason_is_safety_forced(reason)) {
-                owner->perf_phase2_refactor_safety_forced++;
-            }
-        }
-
+        int lu_last_k = (tab && tab->lu) ? tab->lu->perf_last_k : 0;
+        int lu_last_nnz_b = (tab && tab->lu) ? tab->lu->perf_last_basis_nnz : 0;
+        lp_telemetry_record_refactor(owner,
+                                     tab ? tab->phase : 0,
+                                     reason,
+                                     elapsed_ms,
+                                     tab ? tab->m : 0,
+                                     lu_last_k,
+                                     lu_last_nnz_b);
         periodic_feedback_record_refactor(owner, tab ? tab->phase : 0, reason, updates_before, status);
     }
 
@@ -2414,9 +2329,7 @@ int tableau_refactorize(SimplexTableau *tab) {
 }
 
 static inline int tableau_refactorize_with_reason(SimplexTableau *tab, int reason) {
-    if (tab && tab->owner) {
-        tab->owner->perf_refactor_next_reason = reason;
-    }
+    lp_telemetry_set_refactor_next_reason(tab ? tab->owner : NULL, reason);
     return tableau_refactorize(tab);
 }
 
@@ -6240,89 +6153,7 @@ static int crash_triangular(SimplexTableau *tab, int verbose) {
 }
 
 static void reset_solver_perf(SimplexSolver *solver) {
-    if (!solver) return;
-    solver->perf_primal_setup_ms = 0.0;
-    solver->perf_dual_ms = 0.0;
-    solver->perf_phase1_ms = 0.0;
-    solver->perf_transition_ms = 0.0;
-    solver->perf_phase2_ms = 0.0;
-    solver->perf_pricing_ms = 0.0;
-    solver->perf_ratio_ms = 0.0;
-    solver->perf_pivot_ms = 0.0;
-    solver->perf_refactor_ms = 0.0;
-    solver->perf_ftran_ms = 0.0;
-    solver->perf_btran_ms = 0.0;
-    solver->perf_lu_update_ms = 0.0;
-    solver->perf_compute_solution_ms = 0.0;
-    solver->perf_compute_rc_ms = 0.0;
-    solver->perf_refactor_all_ms = 0.0;
-    solver->perf_refactor_count = 0;
-    solver->perf_refactor_last_ms = 0.0;
-    solver->perf_refactor_max_ms = 0.0;
-    solver->perf_refactor_last_reason = RALPH_REFACTOR_REASON_OTHER;
-    solver->perf_refactor_next_reason = RALPH_REFACTOR_REASON_OTHER;
-    solver->perf_refactor_reason_setup = 0;
-    solver->perf_refactor_reason_transition = 0;
-    solver->perf_refactor_reason_periodic = 0;
-    solver->perf_refactor_reason_ratio_recovery = 0;
-    solver->perf_refactor_reason_pivot_recovery = 0;
-    solver->perf_refactor_reason_forced_small_pivot = 0;
-    solver->perf_refactor_reason_update_recovery = 0;
-    solver->perf_refactor_reason_direction_stabilize = 0;
-    solver->perf_refactor_reason_infeas_cleanup = 0;
-    solver->perf_refactor_reason_other = 0;
-    solver->perf_refactor_periodic_policy = 0;
-    solver->perf_refactor_periodic_lu_health = 0;
-    solver->perf_refactor_safety_forced = 0;
-    solver->perf_basis_fastpath_hits = 0;
-    solver->perf_basis_cols_rewritten = 0;
-    solver->perf_basis_tail_shift_bytes = 0ULL;
-    solver->perf_refactor_last_m = 0;
-    solver->perf_refactor_last_k = 0;
-    solver->perf_refactor_last_nnz_B = 0;
-
-    solver->perf_phase1_pricing_ms = 0.0;
-    solver->perf_phase1_ratio_ms = 0.0;
-    solver->perf_phase1_pivot_ms = 0.0;
-    solver->perf_phase1_refactor_ms = 0.0;
-    solver->perf_phase1_compute_solution_ms = 0.0;
-    solver->perf_phase1_compute_rc_ms = 0.0;
-    solver->perf_phase1_pricing_calls = 0;
-    solver->perf_phase1_ratio_calls = 0;
-    solver->perf_phase1_pivot_calls = 0;
-    solver->perf_phase1_refactor_calls = 0;
-    solver->perf_phase1_compute_solution_calls = 0;
-    solver->perf_phase1_compute_rc_calls = 0;
-    solver->perf_phase1_refactor_periodic_policy = 0;
-    solver->perf_phase1_refactor_periodic_lu_health = 0;
-    solver->perf_phase1_refactor_safety_forced = 0;
-
-    solver->perf_phase2_pricing_ms = 0.0;
-    solver->perf_phase2_ratio_ms = 0.0;
-    solver->perf_phase2_pivot_ms = 0.0;
-    solver->perf_phase2_refactor_ms = 0.0;
-    solver->perf_phase2_compute_solution_ms = 0.0;
-    solver->perf_phase2_compute_rc_ms = 0.0;
-    solver->perf_phase2_pricing_calls = 0;
-    solver->perf_phase2_ratio_calls = 0;
-    solver->perf_phase2_pivot_calls = 0;
-    solver->perf_phase2_refactor_calls = 0;
-    solver->perf_phase2_compute_solution_calls = 0;
-    solver->perf_phase2_compute_rc_calls = 0;
-    solver->perf_phase2_refactor_periodic_policy = 0;
-    solver->perf_phase2_refactor_periodic_lu_health = 0;
-    solver->perf_phase2_refactor_safety_forced = 0;
-
-    solver->periodic_feedback_bias_phase1 = 0.0;
-    solver->periodic_feedback_bias_phase2 = 0.0;
-    solver->periodic_feedback_last_reason_phase1 = RALPH_REFACTOR_REASON_OTHER;
-    solver->periodic_feedback_last_reason_phase2 = RALPH_REFACTOR_REASON_OTHER;
-    solver->periodic_feedback_last_interval_phase1 = 0;
-    solver->periodic_feedback_last_interval_phase2 = 0;
-    solver->periodic_feedback_hint_interval_phase1 = 0;
-    solver->periodic_feedback_hint_interval_phase2 = 0;
-    solver->periodic_feedback_hint_pressure_phase1 = 0.0;
-    solver->periodic_feedback_hint_pressure_phase2 = 0.0;
+    lp_telemetry_reset_solver(solver);
 }
 
 static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *tab) {

@@ -13,15 +13,9 @@
 #include <stdio.h>
 #include <math.h>
 #include <limits.h>
-#include <sys/time.h>
 #include "lp.h"
 #include "lu_supernode.h"
-
-static inline double perf_now_ms(void) {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return tv.tv_sec * 1000.0 + tv.tv_usec / 1000.0;
-}
+#define perf_now_ms lp_telemetry_now_ms
 
 /* ============================================================================
  * AMD (Approximate Minimum Degree) Ordering

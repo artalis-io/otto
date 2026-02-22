@@ -11,7 +11,6 @@
 #include <stdio.h>
 #include <math.h>
 #include <limits.h>
-#include <sys/time.h>
 #include "lp.h"
 #include "lu_supernode.h"
 
@@ -40,11 +39,7 @@ static void lu_set_failure(LUFactorization *lu, int reason) {
     }
 }
 
-static inline double perf_now_ms(void) {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return tv.tv_sec * 1000.0 + tv.tv_usec / 1000.0;
-}
+#define perf_now_ms lp_telemetry_now_ms
 
 /* ============================================================================
  * LU Factorization Creation/Destruction
@@ -291,47 +286,7 @@ LUFactorization* lu_create(int m) {
     /* Sparse Markowitz LU (default on for k >= MARKOWITZ_MIN_K) */
     lu->mkz_enabled = 1;
     lu->mkz_pool_mult_hint = 4;
-    lu->mkz_calls = 0;
-    lu->mkz_successes = 0;
-    lu->mkz_failures = 0;
-    lu->mkz_last_failure = 0;
-    lu->mkz_dense_fallbacks = 0;
-    lu->mkz_fail_workspace = 0;
-    lu->mkz_fail_pool = 0;
-    lu->mkz_fail_singular = 0;
-    lu->mkz_fail_capacity = 0;
-    lu->sparse_dense_fallbacks = 0;
-    lu->used_dense_fallback_last = 0;
-    lu->sparse_fallback_last_reason = LU_SPARSE_FALLBACK_NONE;
-    lu->sparse_fallback_reason_small_matrix = 0;
-    lu->sparse_fallback_reason_symbolic = 0;
-    lu->sparse_fallback_reason_numeric = 0;
-    lu->identity_sep_failures = 0;
-    lu->perf_factorize_calls = 0;
-    lu->perf_last_basis_nnz = 0;
-    lu->perf_last_m = 0;
-    lu->perf_last_k = 0;
-    lu->perf_symbolic_calls = 0;
-    lu->perf_symbolic_cache_hits = 0;
-    lu->perf_symbolic_cache_misses = 0;
-    lu->perf_last_symbolic_ms = 0.0;
-    lu->perf_last_sparse_numeric_ms = 0.0;
-    lu->perf_last_dense_ge_numeric_ms = 0.0;
-    lu->perf_last_supernode_numeric_ms = 0.0;
-    lu->perf_last_dense_factorize_ms = 0.0;
-    lu->perf_last_a_struct_build_ms = 0.0;
-    lu->perf_last_markowitz_numeric_ms = 0.0;
-    lu->perf_last_identity_placement_ms = 0.0;
-    lu->perf_last_coo_to_csc_ms = 0.0;
-    lu->perf_total_symbolic_ms = 0.0;
-    lu->perf_total_sparse_numeric_ms = 0.0;
-    lu->perf_total_dense_ge_numeric_ms = 0.0;
-    lu->perf_total_supernode_numeric_ms = 0.0;
-    lu->perf_total_dense_factorize_ms = 0.0;
-    lu->perf_total_a_struct_build_ms = 0.0;
-    lu->perf_total_markowitz_numeric_ms = 0.0;
-    lu->perf_total_identity_placement_ms = 0.0;
-    lu->perf_total_coo_to_csc_ms = 0.0;
+    lp_telemetry_reset_lu(lu);
 
     /* T2.1: Supernodal LU (default off, opt-in via lu_supernode param) */
     lu->sn_enabled = 0;
@@ -458,21 +413,7 @@ int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
         return -1;
     }
     lu_set_failure(lu, LU_FAIL_NONE);
-    lu->used_dense_fallback_last = 0;
-    lu->sparse_fallback_last_reason = LU_SPARSE_FALLBACK_NONE;
-    lu->perf_factorize_calls++;
-    lu->perf_last_basis_nnz = B->nnz;
-    lu->perf_last_m = B->nrows;
-    lu->perf_last_k = 0;
-    lu->perf_last_symbolic_ms = 0.0;
-    lu->perf_last_sparse_numeric_ms = 0.0;
-    lu->perf_last_dense_ge_numeric_ms = 0.0;
-    lu->perf_last_supernode_numeric_ms = 0.0;
-    lu->perf_last_dense_factorize_ms = 0.0;
-    lu->perf_last_a_struct_build_ms = 0.0;
-    lu->perf_last_markowitz_numeric_ms = 0.0;
-    lu->perf_last_identity_placement_ms = 0.0;
-    lu->perf_last_coo_to_csc_ms = 0.0;
+    lp_telemetry_prepare_lu_factorize(lu, B);
 
     /* Try efficient sparse factorization first */
     int result = lu_factorize_sparse_efficient(lu, B);

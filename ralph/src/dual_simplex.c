@@ -24,11 +24,7 @@ int tableau_compute_solution(SimplexTableau *tab);
 int tableau_compute_reduced_costs(SimplexTableau *tab);
 void tableau_free(SimplexTableau *tab);
 
-static inline double perf_now_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1.0e6;
-}
+#define perf_now_ms lp_telemetry_now_ms
 
 /* Dual candidate-list pricing constants (T2.2) */
 #define DUAL_CAND_CAPACITY    200    /* Max candidates in dual hot set */
