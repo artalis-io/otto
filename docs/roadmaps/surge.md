@@ -1624,6 +1624,22 @@ Grouped by business impact:
 | **Exclusion groups** | ✅ Complete | At most one request per group per vehicle. 4 tests. |
 | **Sequence-dependent setup** | ✅ Complete | Asymmetric N×N setup class matrix. 4 tests. |
 | **Time-dependent travel** | Not started | Rush hour matrices. Multiple matrix sets indexed by departure time. |
+| **LIFO/FIFO PD policy** | Not started | OR-Tools has per-vehicle pickup/delivery stacking order. Niche. |
+| **Backhaul constraint** | Not started | All deliveries before pickups on a route. jsprit has this. Niche. |
+| **Energy cost model** | Not started | EV-specific path energy cost. OR-Tools only. |
+
+**Tier 4 — Competitive gaps (vs OR-Tools / VROOM):**
+
+| Gap | Status | Competitors | Notes |
+|-----|--------|-------------|-------|
+| **Time-dependent travel** | Not started | OR-Tools | Rush hour modeling. State-dependent transit callback. High value. |
+| **Max tasks per vehicle** | Not started | VROOM | Trivial: reject insertion when `route_length >= max_tasks`. |
+| **Max distance per vehicle** | Not started | VROOM | Similar to max_duration but for cumulative distance. |
+| **Open start (no depot)** | Not started | OR-Tools | Vehicle starts at first stop, no depot assignment required. |
+| **Per-vehicle travel matrix** | Partial | OR-Tools, VROOM | Callback already supports it; matrix API is single-matrix only. |
+| **Initial vehicle loads** | Not started | jsprit | Vehicle starts shift with pre-loaded cargo. Useful for return trips. |
+| **Global span balancing** | Not started | OR-Tools | Minimize max-min route duration across fleet. Route equity. |
+| **Plan/ETA validation mode** | Not started | VROOM | Validate fixed routes, report constraint violations per stop. |
 
 ### JSON API (`sg_api.h`)
 
