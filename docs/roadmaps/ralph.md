@@ -145,6 +145,135 @@ Previous: `4387869` — HYBRID + PATH B LU reuse (9x milp15, 1.9x milp30).
 
 ---
 
+## LP-First Robustness and Separation Plan (2026-02-22)
+
+Goal: harden LP correctness/performance first, then enforce a clean LP/MIP architectural boundary so MIP cannot destabilize LP internals.
+
+Design principles:
+- LP robustness is the primary gate; MIP changes do not bypass LP NETLIB regression gates.
+- LP and MIP stay orthogonal at API and implementation boundaries.
+- MIP must consume LP through stable warm-start/relaxation interfaces, not direct tableau mutation.
+
+### Phase 1 (Start Here): LP Regression Hardening Gate
+
+Scope:
+- Re-run deterministic LP NETLIB gates as first-class CI barriers before any MIP refactor.
+- Baseline lock requirements: no new status/objective/invalid-solution regressions, no new timeout regressions, zero dense sparse-LU fallback regressions.
+
+Execution:
+- `make -C ralph test-netlib-gate-small`
+- `make -C ralph test-netlib-gate`
+
+Exit criteria:
+- Gate scripts pass against `benchmarks/netlib_regression_baseline.json`.
+- Artifacts captured and referenced in this roadmap.
+
+Progress (2026-02-22):
+- `make -C ralph test-netlib-gate-small` PASS
+  - Artifacts: `/tmp/netlib-regression-gate-20260222-171201`
+  - Summary: 26 files, timeout 4, command failures 0, status/objective/invalid mismatches 0, dense fallback files 0, unexpected regressions 0.
+- `make -C ralph test-netlib-gate` PASS
+  - Artifacts: `/tmp/netlib-regression-gate-20260222-171349`
+  - Summary: 84 files, timeout 27, command failures 0, status/objective/invalid mismatches 0, dense fallback files 0, unexpected regressions 0.
+
+### Phase 2: LP/MIP Implementation Boundary Extraction
+
+Scope:
+- Introduce an internal LP-relaxation adapter for MIP node operations (solve/reopt/probe/warm-start).
+- Remove direct `tableau_*` mutation from MIP/branching codepaths where practical; centralize LP state transitions in one module.
+
+Exit criteria:
+- MIP compiles/runs through adapter paths.
+- No LP regression on NETLIB gates.
+
+### Phase 3: API-Level Separation (Non-Breaking)
+
+Scope:
+- Keep `ralph_optimize()` compatibility while adding explicit LP and MIP optimize entry points.
+- Separate LP-only and MIP-only parameter surfaces while preserving existing string-parameter compatibility.
+
+Exit criteria:
+- Existing callers remain source-compatible.
+- New tests verify LP-only APIs do not instantiate MIP paths and vice versa.
+
+### Phase 4: MIP Best-Practice Alignment with Current LP Warm-Start Infrastructure
+
+Scope:
+- Align node warm basis/MIP start behavior with shared LP warm-start lifecycle.
+- Ensure strong-branch probing and cut loops are side-effect safe with explicit LP state recovery contracts.
+
+Exit criteria:
+- New targeted tests for probe safety, warm-start acceptance/rejection, and LP-state recovery.
+- No regressions on NETLIB gates and focused FuelWise MILP seeds.
+
+### Regression rule for every phase
+
+- `make -C ralph test`
+- `make -C ralph test-netlib-gate-small`
+- At phase completion: `make -C ralph test-netlib-gate`
+
+## API Production Hardening Track (Feb 2026)
+
+Goal: close API-contract and operability gaps against production-grade LP/MIP APIs
+(CPLEX/HiGHS/GLPK-class expectations) without destabilizing current solver baselines.
+
+### Phase P0 (highest impact / lowest effort)
+
+Progress (2026-02-22): P0.1-P0.3 implemented and regression-gated.
+
+1. Contract hardening ✅
+- Align JSON API status contract with tests (status string casing/shape).
+- Close declared-but-missing symbols (`ralph_write_mps`).
+- Run gates: `make -C ralph test-api`.
+
+2. Regression gate coverage ✅
+- Include API tests in default Ralph test gate.
+- Run gates: `make -C ralph test`.
+
+3. I/O contract coverage ✅
+- Add explicit write/read MPS round-trip tests in LP format suite.
+- Run gates: `make -C ralph test-lp`, then `make -C ralph test`.
+
+### Phase P1
+
+Progress (2026-02-22): P1.1 (coefficient-edit APIs + explicit invalidation semantics) and P1.2 (staged basis load lifecycle) implemented and regression-gated.
+
+1. Incremental reoptimization API ✅ P1.1 done
+- Add coefficient-edit APIs (`set_aij`, bulk sparse updates). ✅
+- Add explicit row/column removal and mutation-state invalidation semantics. ✅
+- Document modify->resolve lifecycle guarantees. ✅
+
+2. Warm-start lifecycle completion ✅ P1.2 done
+- Support staged basis loading before first optimize call. ✅
+- Add behavior tests for pre-solve and post-solve basis load paths. ✅
+
+### Phase P2
+
+1. Callback/event model expansion
+- Add progress callback (iterations/nodes/time), incumbent callback, and cancellation callback.
+- Add log callback routing (shared logging backend) for embedding contexts.
+
+2. MIP advanced starts
+- Add MIP start API (full and partial hints) with acceptance diagnostics.
+
+### Phase P3
+
+1. Diagnostics parity
+- Add IIS/conflict API for infeasible models.
+- Add unbounded primal ray API.
+- Expose solution-quality/KKT residual metrics.
+
+### Phase P4
+
+1. Parameter system modernization
+- Add typed parameter enum API alongside current string API.
+- Add parameter metadata/introspection (name/type/default/range/description).
+- Add deterministic/reproducibility controls in public API contract.
+
+Execution rule: each sub-phase lands behind deterministic regression gates before moving forward.
+
+---
+
 ## Chapter 1: LP Solver Performance
 
 ### 1.1 Current Benchmarks
