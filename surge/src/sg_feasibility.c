@@ -660,6 +660,12 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
     if (!sg_vehicle_allowed_for_request(ctx, vehicle_id, request_id)) {
         return 0;
     }
+    if (!sg_commodity_compatible(ctx, sol, vehicle_id, request_id)) {
+        return 0;
+    }
+    if (!sg_exclusion_compatible(ctx, sol, vehicle_id, request_id)) {
+        return 0;
+    }
 
     vehicle = &ctx->vehicles[vehicle_id];
     if (!vehicle->has_depots || vehicle->start_depot_id >= ctx->num_depots ||
@@ -956,6 +962,12 @@ int sg_route_eval_pd_best_insertion_cached(
         return 0;
     }
     if (!sg_vehicle_allowed_for_request(ctx, vehicle_id, request_id)) {
+        return 0;
+    }
+    if (!sg_commodity_compatible(ctx, sol, vehicle_id, request_id)) {
+        return 0;
+    }
+    if (!sg_exclusion_compatible(ctx, sol, vehicle_id, request_id)) {
         return 0;
     }
 
@@ -1390,6 +1402,23 @@ ARStatus sg_route_apply_insertion(const SGContext *ctx, SGRouteSolution *sol,
     sg_route_update_load(ctx, sol, vehicle_id);
     sol->total_distance += (sol->route_distance[vehicle_id] - old_distance);
 
+    /* Update commodity tracking */
+    if (sol->route_commodities) {
+        uint32_t cid = ctx->requests[request_id].commodity_id;
+        if (cid > 0) {
+            sol->route_commodities[vehicle_id] |= (1ULL << (cid - 1));
+        }
+    }
+    /* Update exclusion tracking */
+    if (sol->route_exclusion_counts) {
+        const SGRequestRecord *req = &ctx->requests[request_id];
+        uint16_t g;
+        for (g = 0; g < req->num_exclusion_groups; g++) {
+            uint32_t gid = req->exclusion_group_ids[g];
+            sol->route_exclusion_counts[(size_t)vehicle_id * ctx->num_exclusion_groups + gid]++;
+        }
+    }
+
     return AR_STATUS_OK;
 }
 
@@ -1500,6 +1529,23 @@ ARStatus sg_route_apply_pd_insertion(const SGContext *ctx, SGRouteSolution *sol,
     sg_route_update_load(ctx, sol, vehicle_id);
     sol->total_distance += (sol->route_distance[vehicle_id] - old_distance);
 
+    /* Update commodity tracking */
+    if (sol->route_commodities) {
+        uint32_t cid = ctx->requests[request_id].commodity_id;
+        if (cid > 0) {
+            sol->route_commodities[vehicle_id] |= (1ULL << (cid - 1));
+        }
+    }
+    /* Update exclusion tracking */
+    if (sol->route_exclusion_counts) {
+        const SGRequestRecord *req = &ctx->requests[request_id];
+        uint16_t g;
+        for (g = 0; g < req->num_exclusion_groups; g++) {
+            uint32_t gid = req->exclusion_group_ids[g];
+            sol->route_exclusion_counts[(size_t)vehicle_id * ctx->num_exclusion_groups + gid]++;
+        }
+    }
+
     return AR_STATUS_OK;
 }
 
@@ -1577,6 +1623,33 @@ ARStatus sg_route_unassign_request(const SGContext *ctx, SGRouteSolution *sol,
     sol->total_distance += (sol->route_distance[vehicle_id] - old_distance);
     if (old_len > 0 && sol->route_lengths[vehicle_id] == 0) {
         sol->vehicles_used--;
+    }
+
+    /* Recompute commodity tracking from scratch for this vehicle */
+    if (sol->route_commodities) {
+        uint64_t bits = 0;
+        const uint32_t *cur_route = sg_route_vehicle_ptr_const(sol, vehicle_id);
+        uint32_t cur_len = sol->route_lengths[vehicle_id];
+        uint32_t ri;
+        for (ri = 0; ri < cur_len; ri++) {
+            uint32_t cid = ctx->requests[cur_route[ri]].commodity_id;
+            if (cid > 0) {
+                bits |= (1ULL << (cid - 1));
+            }
+        }
+        sol->route_commodities[vehicle_id] = bits;
+    }
+    /* Decrement exclusion counts */
+    if (sol->route_exclusion_counts) {
+        const SGRequestRecord *req = &ctx->requests[request_id];
+        uint16_t g;
+        for (g = 0; g < req->num_exclusion_groups; g++) {
+            uint32_t gid = req->exclusion_group_ids[g];
+            size_t idx = (size_t)vehicle_id * ctx->num_exclusion_groups + gid;
+            if (sol->route_exclusion_counts[idx] > 0) {
+                sol->route_exclusion_counts[idx]--;
+            }
+        }
     }
 
     sol->request_vehicle[request_id] = UINT32_MAX;

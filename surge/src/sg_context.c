@@ -44,6 +44,8 @@ void sg_request_records_free(SGRequestRecord *requests, uint32_t count) {
         requests[i].allowed_vehicles = NULL;
         free(requests[i].forbidden_vehicles);
         requests[i].forbidden_vehicles = NULL;
+        free(requests[i].exclusion_group_ids);
+        requests[i].exclusion_group_ids = NULL;
     }
     free(requests);
 }
@@ -253,6 +255,11 @@ void sg_free(SGContext *ctx) {
     ctx->num_tasks = 0;
 
     sg_zone_matrix_clear(ctx);
+
+    free(ctx->commodity_conflicts);
+    ctx->commodity_conflicts = NULL;
+    ctx->num_commodities = 0;
+    ctx->num_exclusion_groups = 0;
 
     free(ctx->location_coords);
     ctx->location_coords = NULL;
@@ -1145,6 +1152,89 @@ SGStatus sg_request_add_forbidden_vehicle(SGContext *ctx, uint32_t request_id,
     }
 
     req->forbidden_vehicles[word] |= (1ULL << (vehicle_id & 63));
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_add_commodity(SGContext *ctx, uint32_t *commodity_id_out) {
+    uint64_t *new_conflicts;
+    uint32_t id;
+
+    if (!ctx || !commodity_id_out) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (ctx->num_commodities >= 64) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    id = ctx->num_commodities;
+    new_conflicts = (uint64_t *)realloc(ctx->commodity_conflicts,
+                                         (size_t)(id + 1) * sizeof(uint64_t));
+    if (!new_conflicts) {
+        return SG_STATUS_OUT_OF_MEMORY;
+    }
+    ctx->commodity_conflicts = new_conflicts;
+    ctx->commodity_conflicts[id] = 0;
+    ctx->num_commodities = id + 1;
+    *commodity_id_out = id + 1;  /* 1-indexed */
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_commodity_set_conflict(SGContext *ctx, uint32_t commodity_a, uint32_t commodity_b) {
+    if (!ctx || commodity_a == 0 || commodity_b == 0 ||
+        commodity_a > ctx->num_commodities || commodity_b > ctx->num_commodities ||
+        commodity_a == commodity_b) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->commodity_conflicts[commodity_a - 1] |= (1ULL << (commodity_b - 1));
+    ctx->commodity_conflicts[commodity_b - 1] |= (1ULL << (commodity_a - 1));
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_request_set_commodity(SGContext *ctx, uint32_t request_id, uint32_t commodity_id) {
+    if (!ctx || request_id >= ctx->num_requests) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (commodity_id > ctx->num_commodities) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->requests[request_id].commodity_id = commodity_id;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_add_exclusion_group(SGContext *ctx, uint32_t *group_id_out) {
+    if (!ctx || !group_id_out) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    *group_id_out = ctx->num_exclusion_groups;
+    ctx->num_exclusion_groups++;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_request_add_exclusion_group(SGContext *ctx, uint32_t request_id, uint32_t group_id) {
+    SGRequestRecord *req;
+    uint32_t *new_ids;
+    uint16_t i;
+
+    if (!ctx || request_id >= ctx->num_requests || group_id >= ctx->num_exclusion_groups) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    req = &ctx->requests[request_id];
+
+    /* Check for duplicate */
+    for (i = 0; i < req->num_exclusion_groups; i++) {
+        if (req->exclusion_group_ids[i] == group_id) {
+            return SG_STATUS_OK;
+        }
+    }
+
+    new_ids = (uint32_t *)realloc(req->exclusion_group_ids,
+                                   (size_t)(req->num_exclusion_groups + 1) * sizeof(uint32_t));
+    if (!new_ids) {
+        return SG_STATUS_OUT_OF_MEMORY;
+    }
+    req->exclusion_group_ids = new_ids;
+    req->exclusion_group_ids[req->num_exclusion_groups] = group_id;
+    req->num_exclusion_groups++;
     return SG_STATUS_OK;
 }
 

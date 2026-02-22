@@ -4921,6 +4921,312 @@ static void test_depot_capacity_multi_depot(void) {
     sg_free(ctx);
 }
 
+/* ===== Commodity conflicts & exclusion groups ===== */
+
+static void test_commodity_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t c1, c2, c3;
+    uint32_t r0;
+
+    assert(ctx != NULL);
+
+    /* Add commodities */
+    assert(sg_add_commodity(ctx, &c1) == SG_STATUS_OK);
+    assert(c1 == 1);
+    assert(sg_add_commodity(ctx, &c2) == SG_STATUS_OK);
+    assert(c2 == 2);
+    assert(sg_add_commodity(ctx, &c3) == SG_STATUS_OK);
+    assert(c3 == 3);
+
+    /* Set conflict */
+    assert(sg_commodity_set_conflict(ctx, c1, c2) == SG_STATUS_OK);
+
+    /* Error: NULL ctx */
+    assert(sg_add_commodity(NULL, &c1) == SG_STATUS_INVALID_ARG);
+
+    /* Error: NULL out pointer */
+    assert(sg_add_commodity(ctx, NULL) == SG_STATUS_INVALID_ARG);
+
+    /* Error: self-conflict */
+    assert(sg_commodity_set_conflict(ctx, c1, c1) == SG_STATUS_INVALID_ARG);
+
+    /* Error: bad IDs */
+    assert(sg_commodity_set_conflict(ctx, 0, c1) == SG_STATUS_INVALID_ARG);
+    assert(sg_commodity_set_conflict(ctx, c1, 99) == SG_STATUS_INVALID_ARG);
+
+    /* Set commodity on request */
+    r0 = sg_add_request(ctx);
+    assert(r0 != UINT32_MAX);
+    assert(sg_request_set_commodity(ctx, r0, c1) == SG_STATUS_OK);
+
+    /* Error: bad commodity id */
+    assert(sg_request_set_commodity(ctx, r0, 99) == SG_STATUS_INVALID_ARG);
+
+    /* Error: bad request id */
+    assert(sg_request_set_commodity(ctx, 999, c1) == SG_STATUS_INVALID_ARG);
+
+    /* Exceed 64 limit */
+    {
+        uint32_t i;
+        uint32_t dummy;
+        for (i = ctx->num_commodities; i < 64; i++) {
+            assert(sg_add_commodity(ctx, &dummy) == SG_STATUS_OK);
+        }
+        assert(sg_add_commodity(ctx, &dummy) == SG_STATUS_INVALID_ARG);
+    }
+
+    sg_free(ctx);
+}
+
+static void test_commodity_conflict_filters(void) {
+    /* 2 vehicles (cap=1 each), 2 requests with conflicting commodities.
+       Verify they end up on different vehicles. */
+    SGContext *ctx = make_config(300, 42);
+    uint32_t depot;
+    uint32_t c1, c2;
+    uint32_t r0, r1;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+
+    assert(sg_add_commodity(ctx, &c1) == SG_STATUS_OK);
+    assert(sg_add_commodity(ctx, &c2) == SG_STATUS_OK);
+    assert(sg_commodity_set_conflict(ctx, c1, c2) == SG_STATUS_OK);
+
+    /* Request 0: commodity c1 */
+    r0 = sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -1.0);
+    assert(r0 != UINT32_MAX);
+    assert(sg_request_set_commodity(ctx, r0, c1) == SG_STATUS_OK);
+
+    /* Request 1: commodity c2 (conflicts with c1) */
+    r1 = sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 0, -1.0);
+    assert(r1 != UINT32_MAX);
+    assert(sg_request_set_commodity(ctx, r1, c2) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 2);
+
+    sg_free(ctx);
+}
+
+static void test_commodity_no_conflict(void) {
+    /* 2 requests with non-conflicting commodities — both may share a vehicle. */
+    SGContext *ctx = make_config(300, 42);
+    uint32_t depot;
+    uint32_t c1, c2;
+    uint32_t r0, r1;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+
+    assert(sg_add_commodity(ctx, &c1) == SG_STATUS_OK);
+    assert(sg_add_commodity(ctx, &c2) == SG_STATUS_OK);
+    /* No conflict set between c1 and c2 */
+
+    r0 = sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -1.0);
+    assert(r0 != UINT32_MAX);
+    assert(sg_request_set_commodity(ctx, r0, c1) == SG_STATUS_OK);
+
+    r1 = sg_add_delivery_request(ctx, 11.0, 0.0, 0, 99999, 0, -1.0);
+    assert(r1 != UINT32_MAX);
+    assert(sg_request_set_commodity(ctx, r1, c2) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    /* Without conflict, solver may use 1 vehicle */
+    assert(sg_get_used_vehicle_count(ctx) <= 2);
+
+    sg_free(ctx);
+}
+
+static void test_commodity_pd_request(void) {
+    /* 2 PD requests with conflicting commodities, 2 vehicles. Verify different vehicles. */
+    SGContext *ctx = make_config(300, 42);
+    uint32_t depot;
+    uint32_t c1, c2;
+    uint32_t r0, r1;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+
+    assert(sg_add_commodity(ctx, &c1) == SG_STATUS_OK);
+    assert(sg_add_commodity(ctx, &c2) == SG_STATUS_OK);
+    assert(sg_commodity_set_conflict(ctx, c1, c2) == SG_STATUS_OK);
+
+    r0 = sg_add_pd_request(ctx, 10.0, 0.0, 0, 99999, 0,
+                             20.0, 0.0, 0, 99999, 0, 1.0);
+    assert(r0 != UINT32_MAX);
+    assert(sg_request_set_commodity(ctx, r0, c1) == SG_STATUS_OK);
+
+    r1 = sg_add_pd_request(ctx, 30.0, 0.0, 0, 99999, 0,
+                             40.0, 0.0, 0, 99999, 0, 1.0);
+    assert(r1 != UINT32_MAX);
+    assert(sg_request_set_commodity(ctx, r1, c2) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 2);
+
+    sg_free(ctx);
+}
+
+static void test_exclusion_group_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t g0, g1;
+    uint32_t r0;
+
+    assert(ctx != NULL);
+
+    /* Add groups */
+    assert(sg_add_exclusion_group(ctx, &g0) == SG_STATUS_OK);
+    assert(g0 == 0);
+    assert(sg_add_exclusion_group(ctx, &g1) == SG_STATUS_OK);
+    assert(g1 == 1);
+
+    /* Assign request to group */
+    r0 = sg_add_request(ctx);
+    assert(r0 != UINT32_MAX);
+    assert(sg_request_add_exclusion_group(ctx, r0, g0) == SG_STATUS_OK);
+
+    /* Duplicate assignment is OK (idempotent) */
+    assert(sg_request_add_exclusion_group(ctx, r0, g0) == SG_STATUS_OK);
+
+    /* Error: NULL ctx */
+    assert(sg_add_exclusion_group(NULL, &g0) == SG_STATUS_INVALID_ARG);
+
+    /* Error: bad group id */
+    assert(sg_request_add_exclusion_group(ctx, r0, 99) == SG_STATUS_INVALID_ARG);
+
+    /* Error: bad request id */
+    assert(sg_request_add_exclusion_group(ctx, 999, g0) == SG_STATUS_INVALID_ARG);
+
+    sg_free(ctx);
+}
+
+static void test_exclusion_group_filters(void) {
+    /* 3 vehicles (cap=1), 3 requests in same group. Verify all on different vehicles. */
+    SGContext *ctx = make_config(300, 42);
+    uint32_t depot;
+    uint32_t g0;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+
+    assert(sg_add_exclusion_group(ctx, &g0) == SG_STATUS_OK);
+
+    {
+        uint32_t r0 = sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -1.0);
+        uint32_t r1 = sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 0, -1.0);
+        uint32_t r2 = sg_add_delivery_request(ctx, 30.0, 0.0, 0, 99999, 0, -1.0);
+        assert(r0 != UINT32_MAX && r1 != UINT32_MAX && r2 != UINT32_MAX);
+        assert(sg_request_add_exclusion_group(ctx, r0, g0) == SG_STATUS_OK);
+        assert(sg_request_add_exclusion_group(ctx, r1, g0) == SG_STATUS_OK);
+        assert(sg_request_add_exclusion_group(ctx, r2, g0) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 3);
+
+    sg_free(ctx);
+}
+
+static void test_exclusion_group_multi(void) {
+    /* Request in 2 groups. 4 requests total: r0 and r1 in group A, r0 and r2 in group B.
+       r3 has no groups. r0 can't share with r1 (group A) or r2 (group B).
+       r1 and r2 have no mutual exclusion so they CAN share a vehicle.
+       Post-solve validation verifies no exclusion violations. */
+    SGContext *ctx = make_config(300, 42);
+    uint32_t depot;
+    uint32_t gA, gB;
+    uint32_t r0, r1, r2, r3;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+
+    assert(sg_add_exclusion_group(ctx, &gA) == SG_STATUS_OK);
+    assert(sg_add_exclusion_group(ctx, &gB) == SG_STATUS_OK);
+
+    r0 = sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -1.0);
+    r1 = sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 0, -1.0);
+    r2 = sg_add_delivery_request(ctx, 30.0, 0.0, 0, 99999, 0, -1.0);
+    r3 = sg_add_delivery_request(ctx, 11.0, 0.0, 0, 99999, 0, -1.0);
+    assert(r0 != UINT32_MAX && r1 != UINT32_MAX && r2 != UINT32_MAX && r3 != UINT32_MAX);
+
+    /* r0 in both groups */
+    assert(sg_request_add_exclusion_group(ctx, r0, gA) == SG_STATUS_OK);
+    assert(sg_request_add_exclusion_group(ctx, r0, gB) == SG_STATUS_OK);
+    /* r1 in group A */
+    assert(sg_request_add_exclusion_group(ctx, r1, gA) == SG_STATUS_OK);
+    /* r2 in group B */
+    assert(sg_request_add_exclusion_group(ctx, r2, gB) == SG_STATUS_OK);
+    /* r3 has no groups — can go anywhere */
+
+    /* sg_solve includes post-solve validation that checks exclusion constraints */
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    /* Solver uses >= 2 vehicles: r0 must be separate from r1 and r2. */
+    assert(sg_get_used_vehicle_count(ctx) >= 2);
+
+    sg_free(ctx);
+}
+
+static void test_commodity_exclusion_combined(void) {
+    /* Both features active: 2 commodity types conflicting, 2 exclusion group members.
+       4 requests, 4 vehicles. r0(c1, g0) and r1(c2, g0) must be on separate vehicles
+       (both commodity conflict AND exclusion group). r2(c1) and r3(c2) must be separate
+       (commodity conflict). Total: need >= 3 vehicles. */
+    SGContext *ctx = make_config(300, 42);
+    uint32_t depot;
+    uint32_t c1, c2;
+    uint32_t g0;
+    uint32_t r0, r1, r2, r3;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 10.0);
+
+    assert(sg_add_commodity(ctx, &c1) == SG_STATUS_OK);
+    assert(sg_add_commodity(ctx, &c2) == SG_STATUS_OK);
+    assert(sg_commodity_set_conflict(ctx, c1, c2) == SG_STATUS_OK);
+    assert(sg_add_exclusion_group(ctx, &g0) == SG_STATUS_OK);
+
+    r0 = sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -1.0);
+    r1 = sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 0, -1.0);
+    r2 = sg_add_delivery_request(ctx, 30.0, 0.0, 0, 99999, 0, -1.0);
+    r3 = sg_add_delivery_request(ctx, 40.0, 0.0, 0, 99999, 0, -1.0);
+    assert(r0 != UINT32_MAX && r1 != UINT32_MAX && r2 != UINT32_MAX && r3 != UINT32_MAX);
+
+    assert(sg_request_set_commodity(ctx, r0, c1) == SG_STATUS_OK);
+    assert(sg_request_set_commodity(ctx, r1, c2) == SG_STATUS_OK);
+    assert(sg_request_set_commodity(ctx, r2, c1) == SG_STATUS_OK);
+    assert(sg_request_set_commodity(ctx, r3, c2) == SG_STATUS_OK);
+
+    assert(sg_request_add_exclusion_group(ctx, r0, g0) == SG_STATUS_OK);
+    assert(sg_request_add_exclusion_group(ctx, r1, g0) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* r0(c1) and r2(c1) can share (same commodity, no conflict, no shared group).
+       r1(c2) and r3(c2) can share (same commodity, no conflict, r3 not in group).
+       But r0 and r1 can't share (both commodity conflict and same group).
+       So minimum 2 vehicles. With all constraints: r0+r2 on one, r1+r3 on another works. */
+    assert(sg_get_used_vehicle_count(ctx) >= 2);
+
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -5061,8 +5367,18 @@ int main(void) {
     RUN_TEST(test_depot_capacity_open_end);
     RUN_TEST(test_depot_capacity_multi_depot);
 
+    /* Commodity conflicts & exclusion groups */
+    RUN_TEST(test_commodity_api);
+    RUN_TEST(test_commodity_conflict_filters);
+    RUN_TEST(test_commodity_no_conflict);
+    RUN_TEST(test_commodity_pd_request);
+    RUN_TEST(test_exclusion_group_api);
+    RUN_TEST(test_exclusion_group_filters);
+    RUN_TEST(test_exclusion_group_multi);
+    RUN_TEST(test_commodity_exclusion_combined);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
-    assert(tests_run == 121);
+    assert(tests_run == 129);
     return tests_passed == tests_run ? 0 : 1;
 }

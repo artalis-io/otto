@@ -19,6 +19,12 @@ static int sg_construct_eval_vehicle_request(const SGContext *ctx, const SGConst
     if (request_id < ctx->num_requests && !sg_vehicle_allowed_for_request(ctx, vehicle_id, request_id)) {
         return 0;
     }
+    if (request_id < ctx->num_requests && !sg_construct_commodity_compatible(ctx, state, vehicle_id, request_id)) {
+        return 0;
+    }
+    if (request_id < ctx->num_requests && !sg_construct_exclusion_compatible(ctx, state, vehicle_id, request_id)) {
+        return 0;
+    }
 
     if (!sg_request_time_use_for_vehicle(ctx, vehicle_id, request_id, &time_use)) {
         return 0;
@@ -100,6 +106,23 @@ static ARStatus sg_construct_assign_request(SGContext *ctx, SGConstructState *st
         }
     }
 
+    /* Update commodity tracking */
+    if (state->construct_commodities) {
+        uint32_t cid = ctx->requests[request_id].commodity_id;
+        if (cid > 0) {
+            state->construct_commodities[vehicle_id] |= (1ULL << (cid - 1));
+        }
+    }
+    /* Update exclusion tracking */
+    if (state->construct_exclusion_counts) {
+        const SGRequestRecord *req = &ctx->requests[request_id];
+        uint16_t g;
+        for (g = 0; g < req->num_exclusion_groups; g++) {
+            uint32_t gid = req->exclusion_group_ids[g];
+            state->construct_exclusion_counts[(size_t)vehicle_id * ctx->num_exclusion_groups + gid]++;
+        }
+    }
+
     status = sg_bootstrap_assign_request(sol, request_id);
     return status;
 }
@@ -128,11 +151,23 @@ ARStatus sg_construct_state_init(const SGContext *ctx, SGConstructState *state) 
     if (ctx->has_depot_capacity && ctx->num_depots > 0) {
         state->depot_vehicle_count = (uint32_t *)calloc((size_t)ctx->num_depots, sizeof(uint32_t));
     }
+    if (ctx->num_commodities > 0) {
+        state->construct_commodities = (uint64_t *)calloc((size_t)ctx->num_vehicles, sizeof(uint64_t));
+    }
+    if (ctx->num_exclusion_groups > 0) {
+        state->construct_exclusion_counts = (uint32_t *)calloc(
+            (size_t)ctx->num_vehicles * (size_t)ctx->num_exclusion_groups, sizeof(uint32_t));
+    }
+
     if (!state->remaining_capacity || !state->remaining_time_seconds ||
-        (ctx->has_depot_capacity && ctx->num_depots > 0 && !state->depot_vehicle_count)) {
+        (ctx->has_depot_capacity && ctx->num_depots > 0 && !state->depot_vehicle_count) ||
+        (ctx->num_commodities > 0 && !state->construct_commodities) ||
+        (ctx->num_exclusion_groups > 0 && !state->construct_exclusion_counts)) {
         free(state->remaining_capacity);
         free(state->remaining_time_seconds);
         free(state->depot_vehicle_count);
+        free(state->construct_commodities);
+        free(state->construct_exclusion_counts);
         memset(state, 0, sizeof(*state));
         return AR_STATUS_OUT_OF_MEMORY;
     }
@@ -168,6 +203,8 @@ void sg_construct_state_reset(SGConstructState *state) {
     free(state->remaining_capacity);
     free(state->remaining_time_seconds);
     free(state->depot_vehicle_count);
+    free(state->construct_commodities);
+    free(state->construct_exclusion_counts);
     memset(state, 0, sizeof(*state));
 }
 

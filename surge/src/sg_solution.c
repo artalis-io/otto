@@ -597,6 +597,8 @@ void sg_route_solution_reset(SGRouteSolution *sol) {
     free(sol->route_stop_load);
     free(sol->route_depot_depart);
     free(sol->route_depot_return);
+    free(sol->route_commodities);
+    free(sol->route_exclusion_counts);
     sol->route_lengths = NULL;
     sol->route_requests = NULL;
     sol->route_stop_lengths = NULL;
@@ -615,6 +617,8 @@ void sg_route_solution_reset(SGRouteSolution *sol) {
     sol->route_stop_load = NULL;
     sol->route_depot_depart = NULL;
     sol->route_depot_return = NULL;
+    sol->route_commodities = NULL;
+    sol->route_exclusion_counts = NULL;
     sol->num_vehicles = 0;
     sol->route_stride = 0;
     sol->stop_stride = 0;
@@ -697,13 +701,23 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
         sol->route_stop_load = (double *)calloc(load_size, sizeof(double));
     }
 
+    if (ctx->num_commodities > 0) {
+        sol->route_commodities = (uint64_t *)calloc((size_t)ctx->num_vehicles, sizeof(uint64_t));
+    }
+    if (ctx->num_exclusion_groups > 0) {
+        sol->route_exclusion_counts = (uint32_t *)calloc(
+            (size_t)ctx->num_vehicles * (size_t)ctx->num_exclusion_groups, sizeof(uint32_t));
+    }
+
     if (!sol->route_lengths || !sol->route_requests || !sol->route_stop_lengths ||
         !sol->route_stops || !sol->route_stop_prev || !sol->route_stop_next ||
         !sol->request_vehicle || !sol->request_pos || !sol->request_pickup_stop_pos ||
         !sol->request_delivery_stop_pos || !sol->route_distance || !sol->route_duration ||
         !sol->route_waiting || !sol->route_overtime || !sol->route_tw_penalty ||
         !sol->route_depot_depart || !sol->route_depot_return ||
-        (ctx->dimension_count > 0 && !sol->route_stop_load)) {
+        (ctx->dimension_count > 0 && !sol->route_stop_load) ||
+        (ctx->num_commodities > 0 && !sol->route_commodities) ||
+        (ctx->num_exclusion_groups > 0 && !sol->route_exclusion_counts)) {
         sg_route_solution_reset(sol);
         return AR_STATUS_OUT_OF_MEMORY;
     }
@@ -809,6 +823,15 @@ void *sg_route_solution_copy(const void *solution, void *user_ctx) {
             size_t load_size = (size_t)src->num_vehicles * ((size_t)src->stop_stride + 1U) *
                                (size_t)ctx->dimension_count;
             memcpy(dst->route_stop_load, src->route_stop_load, load_size * sizeof(double));
+        }
+        if (src->route_commodities && dst->route_commodities) {
+            memcpy(dst->route_commodities, src->route_commodities,
+                   (size_t)src->num_vehicles * sizeof(uint64_t));
+        }
+        if (src->route_exclusion_counts && dst->route_exclusion_counts &&
+            ctx->num_exclusion_groups > 0) {
+            memcpy(dst->route_exclusion_counts, src->route_exclusion_counts,
+                   (size_t)src->num_vehicles * (size_t)ctx->num_exclusion_groups * sizeof(uint32_t));
         }
     }
 
@@ -979,6 +1002,57 @@ int sg_route_solution_validate(const void *solution, void *user_ctx) {
                 sol->request_pickup_stop_pos[r] != UINT32_MAX ||
                 sol->request_delivery_stop_pos[r] != UINT32_MAX) {
                 goto done;
+            }
+        }
+    }
+
+    /* Validate commodity and exclusion tracking */
+    if (ctx->num_commodities > 0 && sol->route_commodities) {
+        for (v = 0; v < sol->num_vehicles; v++) {
+            const uint32_t *route = sg_route_vehicle_ptr_const(sol, v);
+            uint32_t len = sol->route_lengths[v];
+            uint64_t recomputed = 0;
+            for (r = 0; r < len; r++) {
+                uint32_t cid = ctx->requests[route[r]].commodity_id;
+                if (cid > 0) {
+                    recomputed |= (1ULL << (cid - 1));
+                }
+            }
+            if (sol->route_commodities[v] != recomputed) {
+                goto done;
+            }
+            /* Check for actual conflicts */
+            for (r = 0; r < len; r++) {
+                uint32_t cid = ctx->requests[route[r]].commodity_id;
+                if (cid > 0 && (ctx->commodity_conflicts[cid - 1] & recomputed & ~(1ULL << (cid - 1)))) {
+                    goto done;
+                }
+            }
+        }
+    }
+
+    if (ctx->num_exclusion_groups > 0 && sol->route_exclusion_counts) {
+        for (v = 0; v < sol->num_vehicles; v++) {
+            const uint32_t *route = sg_route_vehicle_ptr_const(sol, v);
+            uint32_t len = sol->route_lengths[v];
+            uint32_t g;
+            for (g = 0; g < ctx->num_exclusion_groups; g++) {
+                uint32_t recount = 0;
+                for (r = 0; r < len; r++) {
+                    const SGRequestRecord *req = &ctx->requests[route[r]];
+                    uint16_t gi;
+                    for (gi = 0; gi < req->num_exclusion_groups; gi++) {
+                        if (req->exclusion_group_ids[gi] == g) {
+                            recount++;
+                        }
+                    }
+                }
+                if (sol->route_exclusion_counts[(size_t)v * ctx->num_exclusion_groups + g] != recount) {
+                    goto done;
+                }
+                if (recount > 1) {
+                    goto done;
+                }
             }
         }
     }

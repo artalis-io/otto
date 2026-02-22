@@ -85,12 +85,16 @@ typedef struct {
     double *route_stop_load;   /* [vehicle * stop_stride * dim_count + stop * dim_count + d] */
     double *route_depot_depart;   /* [num_vehicles] — departure time from start depot */
     double *route_depot_return;   /* [num_vehicles] — return time at end depot (0.0 for open-end/empty) */
+    uint64_t *route_commodities;       /* [num_vehicles] bitset of commodity IDs on route */
+    uint32_t *route_exclusion_counts;  /* [num_vehicles * num_exclusion_groups] count per group per route */
 } SGRouteSolution;
 
 typedef struct {
     double *remaining_capacity;
     double *remaining_time_seconds;
     uint32_t *depot_vehicle_count;  /* [num_depots] — vehicles assigned to each depot during construction */
+    uint64_t *construct_commodities;      /* [num_vehicles] */
+    uint32_t *construct_exclusion_counts; /* [num_vehicles * num_exclusion_groups] */
 } SGConstructState;
 
 typedef struct {
@@ -170,6 +174,9 @@ typedef struct {
     uint8_t has_pickup_task;
     uint8_t has_delivery_task;
     uint8_t has_max_ride_time;
+    uint32_t commodity_id;             /* 0 = none, 1..num_commodities = type */
+    uint32_t *exclusion_group_ids;     /* NULL = no groups. Heap array. */
+    uint16_t num_exclusion_groups;     /* count of groups this request belongs to */
 } SGRequestRecord;
 
 struct SGContext {
@@ -202,6 +209,9 @@ struct SGContext {
     uint8_t travel_prepared;
     uint8_t avoid_new_vehicles;  /* Phase 1: skip empty vehicles in repair */
     uint8_t has_depot_capacity;  /* 1 if any depot has max_simultaneous > 0 */
+    uint32_t num_commodities;          /* 0 = disabled */
+    uint64_t *commodity_conflicts;     /* [num_commodities] bitmask per commodity */
+    uint32_t num_exclusion_groups;     /* 0 = disabled */
 };
 
 /* sg_context.c */
@@ -257,6 +267,70 @@ static inline int sg_vehicle_allowed_for_request(const SGContext *ctx,
     }
     if (req->allowed_vehicles) {
         if (word >= req->allowed_vc_words || !(req->allowed_vehicles[word] & bit)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Returns 1 if request's commodity doesn't conflict with any commodity on the vehicle's route. */
+static inline int sg_commodity_compatible(const SGContext *ctx, const SGRouteSolution *sol,
+                                           uint32_t vehicle_id, uint32_t request_id) {
+    uint32_t cid;
+    uint64_t route_bits;
+    if (ctx->num_commodities == 0) return 1;
+    cid = ctx->requests[request_id].commodity_id;
+    if (cid == 0) return 1;
+    route_bits = sol->route_commodities[vehicle_id];
+    if (route_bits == 0) return 1;
+    return (ctx->commodity_conflicts[cid - 1] & route_bits) == 0;
+}
+
+/* Returns 1 if no exclusion group the request belongs to already has a member on the vehicle. */
+static inline int sg_exclusion_compatible(const SGContext *ctx, const SGRouteSolution *sol,
+                                           uint32_t vehicle_id, uint32_t request_id) {
+    const SGRequestRecord *req;
+    uint16_t g;
+    if (ctx->num_exclusion_groups == 0) return 1;
+    req = &ctx->requests[request_id];
+    if (req->num_exclusion_groups == 0) return 1;
+    for (g = 0; g < req->num_exclusion_groups; g++) {
+        uint32_t gid = req->exclusion_group_ids[g];
+        if (sol->route_exclusion_counts[(size_t)vehicle_id * ctx->num_exclusion_groups + gid] > 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Construction-phase commodity compatibility using SGConstructState. */
+static inline int sg_construct_commodity_compatible(const SGContext *ctx,
+                                                     const SGConstructState *state,
+                                                     uint32_t vehicle_id, uint32_t request_id) {
+    uint32_t cid;
+    uint64_t route_bits;
+    if (ctx->num_commodities == 0) return 1;
+    cid = ctx->requests[request_id].commodity_id;
+    if (cid == 0) return 1;
+    if (!state->construct_commodities) return 1;
+    route_bits = state->construct_commodities[vehicle_id];
+    if (route_bits == 0) return 1;
+    return (ctx->commodity_conflicts[cid - 1] & route_bits) == 0;
+}
+
+/* Construction-phase exclusion compatibility using SGConstructState. */
+static inline int sg_construct_exclusion_compatible(const SGContext *ctx,
+                                                     const SGConstructState *state,
+                                                     uint32_t vehicle_id, uint32_t request_id) {
+    const SGRequestRecord *req;
+    uint16_t g;
+    if (ctx->num_exclusion_groups == 0) return 1;
+    req = &ctx->requests[request_id];
+    if (req->num_exclusion_groups == 0) return 1;
+    if (!state->construct_exclusion_counts) return 1;
+    for (g = 0; g < req->num_exclusion_groups; g++) {
+        uint32_t gid = req->exclusion_group_ids[g];
+        if (state->construct_exclusion_counts[(size_t)vehicle_id * ctx->num_exclusion_groups + gid] > 0) {
             return 0;
         }
     }

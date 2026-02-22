@@ -1,5 +1,73 @@
 #include "sg_internal.h"
 
+/* Check that a candidate request array has no commodity conflicts or exclusion violations. */
+static int sg_route_candidate_compat_ok(const SGContext *ctx,
+                                         const uint32_t *requests, uint32_t len) {
+    if (ctx->num_commodities > 0) {
+        uint64_t bits = 0;
+        uint32_t i;
+        for (i = 0; i < len; i++) {
+            uint32_t cid = ctx->requests[requests[i]].commodity_id;
+            if (cid > 0) {
+                if (ctx->commodity_conflicts[cid - 1] & bits) {
+                    return 0;
+                }
+                bits |= (1ULL << (cid - 1));
+            }
+        }
+    }
+    if (ctx->num_exclusion_groups > 0) {
+        uint32_t *counts = (uint32_t *)calloc(ctx->num_exclusion_groups, sizeof(uint32_t));
+        uint32_t i;
+        int ok = 1;
+        if (!counts) return 1; /* conservative: assume OK if OOM */
+        for (i = 0; i < len && ok; i++) {
+            const SGRequestRecord *req = &ctx->requests[requests[i]];
+            uint16_t g;
+            for (g = 0; g < req->num_exclusion_groups && ok; g++) {
+                uint32_t gid = req->exclusion_group_ids[g];
+                counts[gid]++;
+                if (counts[gid] > 1) {
+                    ok = 0;
+                }
+            }
+        }
+        free(counts);
+        return ok;
+    }
+    return 1;
+}
+
+/* Recompute route_commodities and route_exclusion_counts for a vehicle from its request list. */
+static void sg_route_recompute_compat_tracking(const SGContext *ctx,
+                                                SGRouteSolution *sol, uint32_t v) {
+    const uint32_t *route = sg_route_vehicle_ptr_const(sol, v);
+    uint32_t len = sol->route_lengths[v];
+    uint32_t i;
+    if (sol->route_commodities) {
+        uint64_t bits = 0;
+        for (i = 0; i < len; i++) {
+            uint32_t cid = ctx->requests[route[i]].commodity_id;
+            if (cid > 0) {
+                bits |= (1ULL << (cid - 1));
+            }
+        }
+        sol->route_commodities[v] = bits;
+    }
+    if (sol->route_exclusion_counts && ctx->num_exclusion_groups > 0) {
+        memset(&sol->route_exclusion_counts[(size_t)v * ctx->num_exclusion_groups], 0,
+               (size_t)ctx->num_exclusion_groups * sizeof(uint32_t));
+        for (i = 0; i < len; i++) {
+            const SGRequestRecord *req = &ctx->requests[route[i]];
+            uint16_t g;
+            for (g = 0; g < req->num_exclusion_groups; g++) {
+                uint32_t gid = req->exclusion_group_ids[g];
+                sol->route_exclusion_counts[(size_t)v * ctx->num_exclusion_groups + gid]++;
+            }
+        }
+    }
+}
+
 static ARStatus sg_route_try_eliminate_vehicle(const SGContext *ctx,
                                                SGRouteSolution *sol,
                                                uint32_t vehicle_id) {
@@ -265,6 +333,10 @@ static int sg_route_try_2opt_star_once(const SGContext *ctx, SGRouteSolution *so
                     memcpy(&candidate_b[cut_b], &route_a[cut_a],
                            (size_t)(len_a - cut_a) * sizeof(uint32_t));
 
+                    if (!sg_route_candidate_compat_ok(ctx, candidate_a, new_len_a) ||
+                        !sg_route_candidate_compat_ok(ctx, candidate_b, new_len_b)) {
+                        continue;
+                    }
                     if (!sg_route_sequence_feasible_distance(ctx, va, candidate_a, new_len_a,
                                                              &new_dist_a, NULL) ||
                         !sg_route_sequence_feasible_distance(ctx, vb, candidate_b, new_len_b,
@@ -322,6 +394,8 @@ static int sg_route_try_2opt_star_once(const SGContext *ctx, SGRouteSolution *so
                         sg_route_update_timing(ctx, sol, vb);
                         sg_route_update_load(ctx, sol, va);
                         sg_route_update_load(ctx, sol, vb);
+                        sg_route_recompute_compat_tracking(ctx, sol, va);
+                        sg_route_recompute_compat_tracking(ctx, sol, vb);
                         sol->total_distance = new_total;
                         sg_route_solution_free(backup, NULL);
                         improved = 1;
@@ -440,6 +514,10 @@ static int sg_route_try_or_opt_once(const SGContext *ctx, SGRouteSolution *sol) 
                                    (size_t)(len_b - ins) * sizeof(uint32_t));
                         }
 
+                        if (va != vb &&
+                            !sg_route_candidate_compat_ok(ctx, candidate_dst, dst_len)) {
+                            continue;
+                        }
                         if (!sg_route_sequence_feasible_distance(
                                 ctx, vb, candidate_dst, dst_len, &dst_dist, NULL)) {
                             continue;
@@ -523,6 +601,10 @@ static int sg_route_try_or_opt_once(const SGContext *ctx, SGRouteSolution *sol) 
                             if (va != vb) {
                                 sg_route_update_timing(ctx, sol, vb);
                                 sg_route_update_load(ctx, sol, vb);
+                            }
+                            sg_route_recompute_compat_tracking(ctx, sol, va);
+                            if (va != vb) {
+                                sg_route_recompute_compat_tracking(ctx, sol, vb);
                             }
 
                             /* Update distances */
@@ -656,6 +738,10 @@ static int sg_route_try_cross_exchange_once(const SGContext *ctx, SGRouteSolutio
                                        (size_t)(len_b - ib - (uint32_t)sb) * sizeof(uint32_t));
                             }
 
+                            if (!sg_route_candidate_compat_ok(ctx, candidate_a, new_len_a) ||
+                                !sg_route_candidate_compat_ok(ctx, candidate_b, new_len_b)) {
+                                continue;
+                            }
                             if (!sg_route_sequence_feasible_distance(
                                     ctx, va, candidate_a, new_len_a,
                                     &new_dist_a, NULL) ||
@@ -721,6 +807,8 @@ static int sg_route_try_cross_exchange_once(const SGContext *ctx, SGRouteSolutio
                                 sg_route_update_timing(ctx, sol, vb);
                                 sg_route_update_load(ctx, sol, va);
                                 sg_route_update_load(ctx, sol, vb);
+                                sg_route_recompute_compat_tracking(ctx, sol, va);
+                                sg_route_recompute_compat_tracking(ctx, sol, vb);
                                 sol->route_distance[va] = new_dist_a;
                                 sol->route_distance[vb] = new_dist_b;
                                 sol->total_distance = new_total;

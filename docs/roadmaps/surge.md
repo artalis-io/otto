@@ -1169,9 +1169,9 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ### Current Status (as of 2026-02-22)
 
-**Baseline**: U1-U8 + S1-S9 + Disjunct TW + Depot Dock Capacity complete. All usability phases done. 121 tests passing, ASAN/UBSAN clean. Benchmarks unchanged from previous baseline (depot capacity not active in benchmark instances — zero impact on existing behavior).
+**Baseline**: U1-U8 + S1-S9 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups complete. All usability phases done. 129 tests passing, ASAN/UBSAN clean. Benchmarks unchanged from previous baseline (commodity conflicts and exclusion groups not active in benchmark instances — zero impact on existing behavior).
 
-Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), soft time windows (U7), request-vehicle constraints (U8), disjunct time windows, waiting cost (per-vehicle `cost_per_waiting`), overtime cost (per-vehicle `cost_per_overtime` with soft shift), convenience constructors, stop load/type/duration export, depot dock capacity (per-depot `max_simultaneous` with sweep-line overlap penalty).
+Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), soft time windows (U7), request-vehicle constraints (U8), disjunct time windows, waiting cost (per-vehicle `cost_per_waiting`), overtime cost (per-vehicle `cost_per_overtime` with soft shift), convenience constructors, stop load/type/duration export, depot dock capacity (per-depot `max_simultaneous` with sweep-line overlap penalty), commodity conflicts (bitmask-based, up to 64 types, O(1) conflict check), exclusion groups (at most one request per group per vehicle).
 
 #### Previous Status (as of 2026-02-22)
 
@@ -1273,7 +1273,7 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - [x] Disjunct TW support.
 - [x] Soft TW penalties and waiting-cost terms in objective.
 - [x] Vehicle qualifications (U2).
-- [ ] Commodity conflicts, exclusion groups.
+- [x] Commodity conflicts, exclusion groups.
 - [x] Open routes (U4).
 - [x] Depot dock capacity (sweep-line overlap penalty).
 - [x] Max route duration (U5).
@@ -1611,8 +1611,8 @@ Grouped by business impact:
 
 | Gap | Impact | Effort |
 |-----|--------|--------|
-| **Commodity conflicts** | Hazmat ∉ same vehicle as food. Bitmask tracking per stop. | Medium |
-| **Exclusion groups** | Requests that cannot share a vehicle. Per-route tracking. | Medium |
+| **Commodity conflicts** ✅ | Hazmat ∉ same vehicle as food. Bitmask-based (up to 64 types), O(1) conflict check. Per-route bitset tracking. Symmetric conflict API. 4 tests. | Medium |
+| **Exclusion groups** ✅ | At most one request per group per vehicle. Per-route count tracking. 4 tests. | Medium |
 | **Sequence-dependent setup** | Cleanup time between incompatible cargo types. | Medium |
 | **Time-dependent travel** | Rush hour matrices. Multiple matrix sets indexed by departure time. | Large |
 
@@ -1625,8 +1625,8 @@ These are real-world features that require larger architectural changes:
 | **Disjunct time windows** | Changes TW from a single interval to a union — significant feasibility kernel rework |
 | **Driver breaks / HoSE** | Requires break insertion points in routes, variable-length stop sequences, HoSE state machine |
 | **Multiple trips** | Requires multi-route-per-vehicle state, depot reload modeling, fundamentally different route representation |
-| **Commodity conflicts** | Requires tracking commodity state along the route (bitmask per stop), conflict checking at insertion |
-| **Request exclusion groups** | Requires per-route exclusion tracking, expensive to check incrementally |
+| **Commodity conflicts** ✅ | Bitmask-based (up to 64 types), O(1) conflict check, per-route bitset tracking |
+| **Request exclusion groups** ✅ | Per-route count tracking, at most one request per group per vehicle |
 | **Depot dock capacity** ✅ | Implemented as sweep-line overlap penalty in objective function |
 
 ---
