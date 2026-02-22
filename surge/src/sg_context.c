@@ -526,6 +526,7 @@ uint32_t sg_add_vehicle(SGContext *ctx) {
     vehicle->fixed_cost = SG_ROUTE_OBJECTIVE_VEHICLE_WEIGHT;
     vehicle->cost_per_distance = 1.0;
     vehicle->cost_per_duration = 0.0;
+    vehicle->max_trips = 1;  /* Default: single trip */
     vehicle->capacity = (double *)calloc((size_t)ctx->dimension_count, sizeof(double));
     if (!vehicle->capacity) {
         return UINT32_MAX;
@@ -1517,6 +1518,23 @@ SGStatus sg_vehicle_set_max_total_work(SGContext *ctx, uint32_t vehicle_id,
     return SG_STATUS_OK;
 }
 
+SGStatus sg_vehicle_set_max_trips(SGContext *ctx, uint32_t vehicle_id, uint32_t max_trips) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->vehicles[vehicle_id].max_trips = max_trips;
+    ctx->vehicles[vehicle_id].has_multi_trip = (max_trips != 1) ? 1 : 0;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_vehicle_set_trip_reload_seconds(SGContext *ctx, uint32_t vehicle_id, int32_t seconds) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles || seconds < 0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->vehicles[vehicle_id].trip_reload_seconds = seconds;
+    return SG_STATUS_OK;
+}
+
 SGStatus sg_task_set_soft_time_window(SGContext *ctx, uint32_t task_id,
                                       int32_t early, int32_t late,
                                       double early_penalty, double late_penalty) {
@@ -1993,6 +2011,22 @@ double sg_solution_get_route_distance(const SGContext *ctx, uint32_t route_index
     return ctx->final_solution->route_distance[vid];
 }
 
+uint32_t sg_solution_get_route_trip_count(const SGContext *ctx, uint32_t route_index) {
+    uint32_t vid;
+
+    if (!ctx || !ctx->final_solution) {
+        return 0;
+    }
+    vid = sg_route_index_to_vehicle(ctx->final_solution, route_index);
+    if (vid == UINT32_MAX) {
+        return 0;
+    }
+    if (ctx->final_solution->route_trip_count) {
+        return ctx->final_solution->route_trip_count[vid];
+    }
+    return ctx->final_solution->route_stop_lengths[vid] > 0 ? 1 : 0;
+}
+
 uint32_t sg_solution_get_route_stop_count(const SGContext *ctx, uint32_t route_index) {
     uint32_t vid;
 
@@ -2034,6 +2068,17 @@ SGStatus sg_solution_get_route_stop(const SGContext *ctx, uint32_t route_index,
     stop_out->arrival = s->arrival;
     stop_out->service_start = s->service_start;
     stop_out->departure = s->depart;
+    /* Compute trip_index by counting trip_start flags up to this stop */
+    {
+        uint32_t trip_idx = 0;
+        uint32_t si;
+        for (si = 1; si <= stop_index; si++) {
+            if (stops[si].trip_start) {
+                trip_idx++;
+            }
+        }
+        stop_out->trip_index = trip_idx;
+    }
     return SG_STATUS_OK;
 }
 

@@ -91,6 +91,7 @@ typedef struct {
     double arrival;
     double service_start;
     double departure;
+    uint32_t trip_index;    /* 0-based trip number within the vehicle's shift */
 } SGSolutionStop;
 
 #endif /* SURGE_SG_TYPES_H */

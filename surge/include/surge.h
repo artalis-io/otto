@@ -126,6 +126,11 @@ SGStatus sg_vehicle_set_break_policy(SGContext *ctx, uint32_t vehicle_id,
 SGStatus sg_vehicle_set_max_total_work(SGContext *ctx, uint32_t vehicle_id,
                                         int32_t max_total_work_seconds);
 
+/* Multi-trip */
+SGStatus sg_vehicle_set_max_trips(SGContext *ctx, uint32_t vehicle_id, uint32_t max_trips);
+SGStatus sg_vehicle_set_trip_reload_seconds(SGContext *ctx, uint32_t vehicle_id, int32_t seconds);
+uint32_t sg_solution_get_route_trip_count(const SGContext *ctx, uint32_t route_index);
+
 SGStatus sg_set_unassigned_weight(SGContext *ctx, double weight);
 
 /* Per-request drop penalty */

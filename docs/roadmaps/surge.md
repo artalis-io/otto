@@ -68,6 +68,7 @@ Surge supports orthogonal constraint dimensions that can be combined freely:
 | **Open routes** | End anywhere (not return to depot) |
 | **Depot capacity** | Max vehicles dispatched per depot |
 | **Depot time windows** | Loading dock availability |
+| **Multi-trip** | Vehicle returns to depot, reloads, serves another route |
 
 ### Objective Components
 
@@ -1170,9 +1171,9 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ### Current Status (as of 2026-02-22)
 
-**Baseline**: U1-U8 + S1-S9 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks complete. All Tier 1 production gaps closed. 197 tests passing, ASAN/UBSAN clean. Benchmarks unchanged from previous baseline (breaks not active in benchmark instances — zero impact on existing behavior).
+**Baseline**: U1-U8 + S1-S9 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks + Multi-Trip complete. All Tier 1 and Tier 2 production gaps closed. 207 tests passing, ASAN/UBSAN clean. Benchmarks unchanged from previous baseline (multi-trip not active in benchmark instances — zero impact on existing behavior).
 
-Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), soft time windows (U7), request-vehicle constraints (U8), disjunct time windows, waiting cost (per-vehicle `cost_per_waiting`), overtime cost (per-vehicle `cost_per_overtime` with soft shift), convenience constructors, stop load/type/duration export, depot dock capacity (per-depot `max_simultaneous` with sweep-line overlap penalty), commodity conflicts (bitmask-based, up to 64 types, O(1) conflict check), exclusion groups (at most one request per group per vehicle), mandatory breaks (abstract `max_continuous_work` / `break_duration` / `max_total_work` per vehicle, break injection in timing forward pass, break position export).
+Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), soft time windows (U7), request-vehicle constraints (U8), disjunct time windows, waiting cost (per-vehicle `cost_per_waiting`), overtime cost (per-vehicle `cost_per_overtime` with soft shift), convenience constructors, stop load/type/duration export, depot dock capacity (per-depot `max_simultaneous` with sweep-line overlap penalty), commodity conflicts (bitmask-based, up to 64 types, O(1) conflict check), exclusion groups (at most one request per group per vehicle), mandatory breaks (abstract `max_continuous_work` / `break_duration` / `max_total_work` per vehicle, break injection in timing forward pass, break position export), multi-trip (per-vehicle `max_trips` / `trip_reload_seconds`, capacity reset at depot, trip boundary metadata on stop sequence, new-trip insertion in repair operators, trip_count/trip_index in solution export).
 
 #### Previous Status (as of 2026-02-22)
 
@@ -1613,7 +1614,7 @@ Grouped by business impact:
 | **Per-request drop penalty** | ✅ Complete | `sg_request_set_unassigned_penalty()` overrides global weight per request. 2 tests. |
 | **Warm start** | ✅ Complete | `sg_set_initial_routes()` injects initial solution. Partial warm start supported. 2 tests. |
 | **Progress callback + cancel** | ✅ Complete | `sg_set_progress_callback()` at segment boundaries, `sg_cancel()` for early termination. Arbor-level `ARProgressCallback`. 3 tests. |
-| **Multiple trips per vehicle** | Not started | Depot reload between trips. Fundamentally different route representation. |
+| **Multiple trips per vehicle** | ✅ Complete | Per-vehicle `max_trips` / `trip_reload_seconds`. Capacity resets at depot, shift/break constraints span entire shift. Trip boundary metadata on stop sequence. New-trip insertion in ALNS repair. 10 tests. |
 
 **Tier 3 — Niche / specialized:**
 

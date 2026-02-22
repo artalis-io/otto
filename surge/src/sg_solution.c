@@ -329,6 +329,7 @@ int sg_request_emit_stops(const SGContext *ctx, uint32_t request_id,
         if (!request->has_delivery_task || request->delivery_task_id >= ctx->num_tasks) {
             return 0;
         }
+        memset(&stops_out[0], 0, sizeof(SGRouteStop));
         stops_out[0].request_id = request_id;
         stops_out[0].task_id = request->delivery_task_id;
         stops_out[0].is_pickup = 0;
@@ -342,6 +343,7 @@ int sg_request_emit_stops(const SGContext *ctx, uint32_t request_id,
             request->delivery_task_id >= ctx->num_tasks) {
             return 0;
         }
+        memset(&stops_out[0], 0, 2 * sizeof(SGRouteStop));
         stops_out[0].request_id = request_id;
         stops_out[0].task_id = request->pickup_task_id;
         stops_out[0].is_pickup = 1;
@@ -392,6 +394,7 @@ int sg_route_rebuild_vehicle_stop_state(const SGContext *ctx, SGRouteSolution *s
         uint32_t emitted_count = 0;
         uint32_t e;
         uint32_t request_id = route[r];
+        uint8_t req_trip_start = 0;
 
         if (!sg_request_emit_stops(ctx, request_id, emitted, &emitted_count)) {
             return 0;
@@ -400,8 +403,18 @@ int sg_route_rebuild_vehicle_stop_state(const SGContext *ctx, SGRouteSolution *s
             return 0;
         }
 
+        /* Check if this request starts a new trip */
+        if (sol->route_request_trip_start) {
+            req_trip_start = sol->route_request_trip_start[
+                (size_t)vehicle_id * sol->route_stride + r];
+        }
+
         for (e = 0; e < emitted_count; e++) {
             stops[stop_len] = emitted[e];
+            /* Set trip_start on the first stop of the request */
+            stops[stop_len].trip_start = (e == 0) ? req_trip_start : 0;
+            stops[stop_len].trip_depot_return = 0.0;
+            stops[stop_len].trip_depot_depart = 0.0;
             prev[stop_len] = stop_len > 0 ? stop_len - 1U : UINT32_MAX;
             next[stop_len] = UINT32_MAX;
             if (stop_len > 0) {
@@ -426,6 +439,9 @@ int sg_route_rebuild_vehicle_stop_state(const SGContext *ctx, SGRouteSolution *s
         stops[r].latest_start = 0.0;
         stops[r].forward_slack = 0.0;
         stops[r].work_since_break = 0.0;
+        stops[r].trip_start = 0;
+        stops[r].trip_depot_return = 0.0;
+        stops[r].trip_depot_depart = 0.0;
         prev[r] = UINT32_MAX;
         next[r] = UINT32_MAX;
     }
@@ -538,6 +554,11 @@ int sg_route_excise_stop(const SGContext *ctx, SGRouteSolution *sol,
         sol->request_delivery_stop_pos[request_id] = UINT32_MAX;
     }
 
+    /* Transfer trip_start flag to next stop if needed */
+    if (stops[at].trip_start && at + 1U < stop_len && !stops[at + 1U].trip_start) {
+        stops[at + 1U].trip_start = 1;
+    }
+
     /* Shift stops left */
     if (at + 1U < stop_len) {
         memmove(&stops[at], &stops[at + 1U],
@@ -580,6 +601,9 @@ int sg_route_excise_stop(const SGContext *ctx, SGRouteSolution *sol,
         stops[stop_len].request_id = UINT32_MAX;
         stops[stop_len].task_id = UINT32_MAX;
         stops[stop_len].is_pickup = 0;
+        stops[stop_len].trip_start = 0;
+        stops[stop_len].trip_depot_return = 0.0;
+        stops[stop_len].trip_depot_depart = 0.0;
         prev[stop_len] = UINT32_MAX;
         next[stop_len] = UINT32_MAX;
     }
@@ -618,6 +642,8 @@ void sg_route_solution_reset(SGRouteSolution *sol) {
     free(sol->route_break_count);
     free(sol->route_total_work);
     free(sol->route_breaks);
+    free(sol->route_trip_count);
+    free(sol->route_request_trip_start);
     sol->route_lengths = NULL;
     sol->route_requests = NULL;
     sol->route_stop_lengths = NULL;
@@ -642,6 +668,8 @@ void sg_route_solution_reset(SGRouteSolution *sol) {
     sol->route_break_count = NULL;
     sol->route_total_work = NULL;
     sol->route_breaks = NULL;
+    sol->route_trip_count = NULL;
+    sol->route_request_trip_start = NULL;
     sol->break_stride = 0;
     sol->num_vehicles = 0;
     sol->route_stride = 0;
@@ -739,6 +767,8 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
     sol->break_stride = sol->stop_stride;
     sol->route_breaks = (SGRouteBreak *)calloc(
         (size_t)ctx->num_vehicles * (size_t)sol->break_stride, sizeof(SGRouteBreak));
+    sol->route_trip_count = (uint32_t *)calloc((size_t)ctx->num_vehicles, sizeof(uint32_t));
+    sol->route_request_trip_start = (uint8_t *)calloc(route_capacity, sizeof(uint8_t));
 
     if (!sol->route_lengths || !sol->route_requests || !sol->route_stop_lengths ||
         !sol->route_stops || !sol->route_stop_prev || !sol->route_stop_next ||
@@ -747,7 +777,7 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
         !sol->route_waiting || !sol->route_overtime || !sol->route_tw_penalty ||
         !sol->route_depot_depart || !sol->route_depot_return ||
         !sol->route_break_time || !sol->route_break_count || !sol->route_total_work ||
-        !sol->route_breaks ||
+        !sol->route_breaks || !sol->route_trip_count || !sol->route_request_trip_start ||
         (ctx->dimension_count > 0 && !sol->route_stop_load) ||
         (ctx->num_commodities > 0 && !sol->route_commodities) ||
         (ctx->num_exclusion_groups > 0 && !sol->route_exclusion_counts)) {
@@ -767,6 +797,9 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
         sol->route_stops[i].latest_start = 0.0;
         sol->route_stops[i].forward_slack = 0.0;
         sol->route_stops[i].work_since_break = 0.0;
+        sol->route_stops[i].trip_start = 0;
+        sol->route_stops[i].trip_depot_return = 0.0;
+        sol->route_stops[i].trip_depot_depart = 0.0;
     }
 
     for (i = 0; i < ctx->num_requests; i++) {
@@ -882,6 +915,14 @@ void *sg_route_solution_copy(const void *solution, void *user_ctx) {
         if (src->route_breaks && dst->route_breaks && src->break_stride > 0) {
             memcpy(dst->route_breaks, src->route_breaks,
                    (size_t)src->num_vehicles * (size_t)src->break_stride * sizeof(SGRouteBreak));
+        }
+        if (src->route_trip_count && dst->route_trip_count) {
+            memcpy(dst->route_trip_count, src->route_trip_count,
+                   (size_t)src->num_vehicles * sizeof(uint32_t));
+        }
+        if (src->route_request_trip_start && dst->route_request_trip_start) {
+            memcpy(dst->route_request_trip_start, src->route_request_trip_start,
+                   (size_t)src->num_vehicles * (size_t)src->route_stride * sizeof(uint8_t));
         }
     }
 
@@ -1147,6 +1188,22 @@ static double sg_compute_depot_overlap_penalty(const SGContext *ctx,
                 vehicle->depot_unloading_seconds > 0) {
                 event_count += 2;
             }
+
+            /* Inter-trip reload events */
+            if (vehicle->has_multi_trip) {
+                const SGRouteStop *stops = &sol->route_stops[(size_t)v * sol->stop_stride];
+                uint32_t slen = sol->route_stop_lengths[v];
+                uint32_t s;
+                for (s = 1; s < slen; s++) {
+                    if (!stops[s].trip_start) continue;
+                    if (vehicle->end_depot_id == depot_id && vehicle->depot_unloading_seconds > 0) {
+                        event_count += 2;
+                    }
+                    if (vehicle->start_depot_id == depot_id && vehicle->depot_loading_seconds > 0) {
+                        event_count += 2;
+                    }
+                }
+            }
         }
 
         if (event_count == 0) {
@@ -1194,6 +1251,37 @@ static double sg_compute_depot_overlap_penalty(const SGContext *ctx,
                     events[event_count].time = ret + (double)vehicle->depot_unloading_seconds;
                     events[event_count].delta = -1;
                     event_count++;
+                }
+            }
+
+            /* Inter-trip reload events */
+            if (vehicle->has_multi_trip) {
+                const SGRouteStop *stops = &sol->route_stops[(size_t)v * sol->stop_stride];
+                uint32_t slen = sol->route_stop_lengths[v];
+                uint32_t s;
+                for (s = 1; s < slen; s++) {
+                    if (!stops[s].trip_start) continue;
+                    double ret = stops[s].trip_depot_return;
+                    double dep = stops[s].trip_depot_depart;
+
+                    /* Unloading at end depot: [return, return + unloading_seconds) */
+                    if (vehicle->end_depot_id == depot_id && vehicle->depot_unloading_seconds > 0) {
+                        events[event_count].time = ret;
+                        events[event_count].delta = +1;
+                        event_count++;
+                        events[event_count].time = ret + (double)vehicle->depot_unloading_seconds;
+                        events[event_count].delta = -1;
+                        event_count++;
+                    }
+                    /* Loading at start depot: [depart - loading_seconds, depart) */
+                    if (vehicle->start_depot_id == depot_id && vehicle->depot_loading_seconds > 0) {
+                        events[event_count].time = dep - (double)vehicle->depot_loading_seconds;
+                        events[event_count].delta = +1;
+                        event_count++;
+                        events[event_count].time = dep;
+                        events[event_count].delta = -1;
+                        event_count++;
+                    }
                 }
             }
         }

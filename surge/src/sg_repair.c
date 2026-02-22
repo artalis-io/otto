@@ -1,5 +1,41 @@
 #include "sg_internal.h"
 
+/* Flag bit to distinguish new-trip insertions from normal end-of-route insertions.
+   OR'd into pos/pickup_pos/delivery_pos by rank_insertions, stripped by fill functions. */
+#define SG_NEW_TRIP_BIT (1U << 31)
+
+/* After a normal apply (which inserts with trip_start=0), mark the request as
+   starting a new trip: set route_request_trip_start, set stop trip_start flag,
+   and re-run timing/load to account for the depot return+reload+depart. */
+static void sg_route_mark_new_trip(const SGContext *ctx, SGRouteSolution *sol,
+                                    uint32_t request_id, uint32_t vehicle_id) {
+    uint32_t req_pos;
+    uint32_t stop_pos;
+    double old_dist;
+
+    if (!sol->route_request_trip_start) return;
+
+    req_pos = sol->request_pos[request_id];
+    sol->route_request_trip_start[(size_t)vehicle_id * sol->route_stride + req_pos] = 1;
+
+    /* Set trip_start on the first stop of this request */
+    if (ctx->requests[request_id].kind == SG_REQUEST_KIND_PICKUP_DELIVERY) {
+        stop_pos = sol->request_pickup_stop_pos[request_id];
+    } else {
+        stop_pos = sol->request_delivery_stop_pos[request_id];
+    }
+    if (stop_pos < sol->route_stop_lengths[vehicle_id]) {
+        SGRouteStop *stops = sg_route_vehicle_stop_ptr(sol, vehicle_id);
+        stops[stop_pos].trip_start = 1;
+    }
+
+    /* Re-run timing and load to account for trip boundary */
+    old_dist = sol->route_distance[vehicle_id];
+    sg_route_update_timing(ctx, sol, vehicle_id);
+    sg_route_update_load(ctx, sol, vehicle_id);
+    sol->total_distance += (sol->route_distance[vehicle_id] - old_dist);
+}
+
 ARStatus sg_reinsert_removed_requests(SGBootstrapSolution *sol,
                                       const uint32_t *removed_ids,
                                       int removed_count) {
@@ -366,6 +402,120 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
                                          v, pos, UINT32_MAX, UINT32_MAX);
             }
         }
+
+        /* New-trip evaluation: try inserting as a new trip at end of route */
+        if (ctx->vehicles[v].has_multi_trip && sol->route_lengths[v] > 0) {
+            const SGVehicleRecord *vehicle = &ctx->vehicles[v];
+            uint32_t tc = sol->route_trip_count ? sol->route_trip_count[v] : 1;
+            if (vehicle->max_trips == 0 || tc < vehicle->max_trips) {
+                /* Evaluate new trip: depot → new_stop(s) → depot */
+                SGRouteStop new_stops[2];
+                uint32_t new_stop_count = 0;
+                if (sg_request_emit_stops(ctx, request_id, new_stops, &new_stop_count)) {
+                    const SGDepotRecord *sd = &ctx->depots[vehicle->start_depot_id];
+                    const SGDepotRecord *ed = &ctx->depots[vehicle->end_depot_id];
+                    double dist_delta = 0.0;
+                    double trip_time;
+                    double depot_dep;
+                    double cursor;
+                    int time_ok = 1;
+                    uint32_t ns;
+
+                    /* Distance: start_depot → stops → end_depot */
+                    {
+                        uint32_t ploc = vehicle->start_location_id;
+                        for (ns = 0; ns < new_stop_count; ns++) {
+                            uint32_t sloc = ctx->tasks[new_stops[ns].task_id].location_id;
+                            dist_delta += sg_travel_dist(ctx, ploc, sloc);
+                            ploc = sloc;
+                        }
+                        if (!vehicle->open_end) {
+                            dist_delta += sg_travel_dist(ctx, ploc, vehicle->end_location_id);
+                        }
+                    }
+
+                    /* Timing: last stop → depot return + reload → depot TW snap → stops */
+                    {
+                        uint32_t slen = sol->route_stop_lengths[v];
+                        const SGRouteStop *stops_v = sg_route_vehicle_stop_ptr_const(sol, v);
+                        double last_depart = (slen > 0) ? stops_v[slen - 1].depart : 0.0;
+                        uint32_t last_loc = (slen > 0)
+                            ? ctx->tasks[stops_v[slen - 1].task_id].location_id
+                            : vehicle->start_location_id;
+                        double ret_dur = sg_travel_dur(ctx, last_loc, vehicle->end_location_id, v);
+                        double arr_depot = last_depart + ret_dur;
+                        depot_dep = arr_depot + (double)vehicle->trip_reload_seconds;
+                        if (sd->has_time_window && depot_dep < (double)sd->tw_early) {
+                            depot_dep = (double)sd->tw_early;
+                        }
+                    }
+
+                    cursor = depot_dep;
+                    {
+                        uint32_t ploc = vehicle->start_location_id;
+                        for (ns = 0; ns < new_stop_count; ns++) {
+                            const SGTaskRecord *task = &ctx->tasks[new_stops[ns].task_id];
+                            uint32_t sloc = task->location_id;
+                            double dur = sg_travel_dur(ctx, ploc, sloc, v);
+                            double arr = cursor + dur;
+                            double start = sg_task_snap_forward(task, arr);
+                            if (start > (double)task->tw_late + 1e-9) {
+                                time_ok = 0;
+                                break;
+                            }
+                            cursor = start + (double)task->service_seconds;
+                            ploc = sloc;
+                        }
+                    }
+
+                    /* Check depot return and shift TW */
+                    if (time_ok && !vehicle->open_end) {
+                        double ret_dur = sg_travel_dur(ctx,
+                            ctx->tasks[new_stops[new_stop_count - 1].task_id].location_id,
+                            vehicle->end_location_id, v);
+                        trip_time = cursor + ret_dur;
+                        if (ed->has_time_window && trip_time > (double)ed->tw_late + 1e-9) {
+                            time_ok = 0;
+                        }
+                        if (vehicle->has_shift_time_window &&
+                            trip_time > (double)vehicle->shift_late + 1e-9 &&
+                            !(vehicle->cost_per_overtime > 0.0)) {
+                            time_ok = 0;
+                        }
+                    }
+
+                    if (time_ok) {
+                        double score = vehicle->cost_per_distance * dist_delta;
+                        double noisy = score;
+                        double new_route_dist = sol->route_distance[v] + dist_delta;
+                        uint32_t req_pos = sol->route_lengths[v];
+                        if (noise_scale > 0.0 && ctx->op_rng) {
+                            noisy *= (1.0 + sh_rng_uniform_range(ctx->op_rng, -noise_scale, noise_scale));
+                        }
+                        if (is_pd) {
+                            /* PD uses stop-level positions; SG_NEW_TRIP_BIT marks new trip */
+                            uint32_t spos = sol->route_stop_lengths[v];
+                            sg_rank_insert_candidate(ranked_noisy, ranked_scores, ranked_distance,
+                                                     ranked_vehicle, ranked_pos,
+                                                     ranked_pickup_pos, ranked_delivery_pos,
+                                                     &ranked_count,
+                                                     noisy, score, new_route_dist,
+                                                     v, UINT32_MAX,
+                                                     spos | SG_NEW_TRIP_BIT,
+                                                     (spos + 1) | SG_NEW_TRIP_BIT);
+                        } else {
+                            sg_rank_insert_candidate(ranked_noisy, ranked_scores, ranked_distance,
+                                                     ranked_vehicle, ranked_pos,
+                                                     ranked_pickup_pos, ranked_delivery_pos,
+                                                     &ranked_count,
+                                                     noisy, score, new_route_dist,
+                                                     v, req_pos | SG_NEW_TRIP_BIT,
+                                                     UINT32_MAX, UINT32_MAX);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     if (ranked_count > 0) {
@@ -496,6 +646,7 @@ ARStatus sg_route_repair_fill_greedy(SGContext *ctx, SGRouteSolution *sol,
         uint32_t pickup_pos = UINT32_MAX;
         uint32_t delivery_pos = UINT32_MAX;
         double route_distance = 0.0;
+        int is_new_trip = 0;
         uint32_t request_id = sg_route_select_request_greedy(ctx, sol, noise_scale,
                                                              &vehicle_id, &pos,
                                                              &pickup_pos, &delivery_pos,
@@ -504,16 +655,28 @@ ARStatus sg_route_repair_fill_greedy(SGContext *ctx, SGRouteSolution *sol,
             break;
         }
         if (pickup_pos != UINT32_MAX && delivery_pos != UINT32_MAX) {
+            if (pickup_pos & SG_NEW_TRIP_BIT) {
+                is_new_trip = 1;
+                pickup_pos &= ~SG_NEW_TRIP_BIT;
+                delivery_pos &= ~SG_NEW_TRIP_BIT;
+            }
             if (sg_route_apply_pd_insertion(ctx, sol, request_id, vehicle_id,
                                             pickup_pos, delivery_pos,
                                             route_distance) != AR_STATUS_OK) {
                 return AR_STATUS_ERROR;
             }
         } else {
+            if (pos & SG_NEW_TRIP_BIT) {
+                is_new_trip = 1;
+                pos &= ~SG_NEW_TRIP_BIT;
+            }
             if (sg_route_apply_insertion(ctx, sol, request_id, vehicle_id, pos,
                                          route_distance) != AR_STATUS_OK) {
                 return AR_STATUS_ERROR;
             }
+        }
+        if (is_new_trip) {
+            sg_route_mark_new_trip(ctx, sol, request_id, vehicle_id);
         }
     }
     return AR_STATUS_OK;
@@ -527,6 +690,7 @@ ARStatus sg_route_repair_fill_regret(SGContext *ctx, SGRouteSolution *sol,
         uint32_t pickup_pos = UINT32_MAX;
         uint32_t delivery_pos = UINT32_MAX;
         double route_distance = 0.0;
+        int is_new_trip = 0;
         uint32_t request_id = sg_route_select_request_regret(ctx, sol, regret_k, noise_scale,
                                                              &vehicle_id, &pos,
                                                              &pickup_pos, &delivery_pos,
@@ -535,16 +699,28 @@ ARStatus sg_route_repair_fill_regret(SGContext *ctx, SGRouteSolution *sol,
             break;
         }
         if (pickup_pos != UINT32_MAX && delivery_pos != UINT32_MAX) {
+            if (pickup_pos & SG_NEW_TRIP_BIT) {
+                is_new_trip = 1;
+                pickup_pos &= ~SG_NEW_TRIP_BIT;
+                delivery_pos &= ~SG_NEW_TRIP_BIT;
+            }
             if (sg_route_apply_pd_insertion(ctx, sol, request_id, vehicle_id,
                                             pickup_pos, delivery_pos,
                                             route_distance) != AR_STATUS_OK) {
                 return AR_STATUS_ERROR;
             }
         } else {
+            if (pos & SG_NEW_TRIP_BIT) {
+                is_new_trip = 1;
+                pos &= ~SG_NEW_TRIP_BIT;
+            }
             if (sg_route_apply_insertion(ctx, sol, request_id, vehicle_id, pos,
                                          route_distance) != AR_STATUS_OK) {
                 return AR_STATUS_ERROR;
             }
+        }
+        if (is_new_trip) {
+            sg_route_mark_new_trip(ctx, sol, request_id, vehicle_id);
         }
     }
     return AR_STATUS_OK;

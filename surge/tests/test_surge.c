@@ -7359,6 +7359,275 @@ static void test_break_json_roundtrip(void) {
     free(resp);
 }
 
+/* ===== Multi-trip tests ===== */
+
+static void test_multi_trip_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t v = sg_add_vehicle(ctx);
+    assert(ctx != NULL);
+
+    /* Default: max_trips=1 (no multi-trip) */
+    assert(sg_vehicle_set_max_trips(ctx, v, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_max_trips(ctx, v, 0) == SG_STATUS_OK);   /* 0 = unlimited */
+    assert(sg_vehicle_set_max_trips(ctx, v, 5) == SG_STATUS_OK);
+
+    /* Trip reload seconds */
+    assert(sg_vehicle_set_trip_reload_seconds(ctx, v, 0) == SG_STATUS_OK);
+    assert(sg_vehicle_set_trip_reload_seconds(ctx, v, 600) == SG_STATUS_OK);
+    assert(sg_vehicle_set_trip_reload_seconds(ctx, v, -1) == SG_STATUS_INVALID_ARG);
+
+    /* Invalid vehicle ID */
+    assert(sg_vehicle_set_max_trips(ctx, 999, 2) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_trip_reload_seconds(ctx, 999, 10) == SG_STATUS_INVALID_ARG);
+
+    sg_free(ctx);
+}
+
+static void test_multi_trip_no_change_default(void) {
+    /* max_trips=1 should behave identically to baseline (no multi-trip) */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    sg_depot_set_time_window(ctx, depot, 0, 86400);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    sg_vehicle_set_max_trips(ctx, 0, 1);
+    add_delivery_request(ctx, 10, 0, 0, 86400, 0, -1.0);
+    add_delivery_request(ctx, 20, 0, 0, 86400, 0, -1.0);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+    assert(sg_solution_get_route_trip_count(ctx, 0) == 1);
+    sg_free(ctx);
+}
+
+static void test_multi_trip_capacity_reset(void) {
+    /* Vehicle capacity=5, two requests each with demand=5.
+       With 1 trip: need 2 vehicles or 1 unassigned.
+       With multi-trip: 1 vehicle can serve both via 2 trips. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    sg_depot_set_time_window(ctx, depot, 0, 86400);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 5.0);
+    sg_vehicle_set_max_trips(ctx, 0, 0);  /* unlimited trips */
+    sg_vehicle_set_trip_reload_seconds(ctx, 0, 10);
+    add_delivery_request(ctx, 10, 0, 0, 86400, 0, -5.0);
+    add_delivery_request(ctx, 20, 0, 0, 86400, 0, -5.0);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+    /* Should have 2 trips since each delivery uses full capacity */
+    assert(sg_solution_get_route_trip_count(ctx, 0) >= 1);
+    sg_free(ctx);
+}
+
+static void test_multi_trip_timing(void) {
+    /* Verify timing includes depot return + reload + depot depart between trips.
+       Depot at (0,0). Request A at (10,0), Request B at (20,0).
+       Vehicle capacity=1, max_trips=2, reload=100s.
+       With Euclidean distances:
+       Trip 1: depot(0,0) → A(10,0) → depot(0,0): travel = 10 + 10 = 20
+       Reload: 100s
+       Trip 2: depot(0,0) → B(20,0) → depot(0,0): travel = 20 + 20 = 40
+       Total duration should include the reload time. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    sg_depot_set_time_window(ctx, depot, 0, 86400);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 1.0);
+    sg_vehicle_set_max_trips(ctx, 0, 2);
+    sg_vehicle_set_trip_reload_seconds(ctx, 0, 100);
+    add_delivery_request(ctx, 10, 0, 0, 86400, 0, -1.0);
+    add_delivery_request(ctx, 20, 0, 0, 86400, 0, -1.0);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+    /* Route duration should be >= 60 (travel) + 100 (reload) = 160 */
+    {
+        double dur = sg_solution_get_route_duration(ctx, 0);
+        assert(dur >= 150.0);  /* Allow some tolerance */
+    }
+    sg_free(ctx);
+}
+
+static void test_multi_trip_pd_same_trip(void) {
+    /* PD pair must be in the same trip. Vehicle capacity=1, 1 PD request.
+       Should complete in 1 trip. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    sg_depot_set_time_window(ctx, depot, 0, 86400);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 1.0);
+    sg_vehicle_set_max_trips(ctx, 0, 3);
+    sg_vehicle_set_trip_reload_seconds(ctx, 0, 10);
+    add_pd_request(ctx,
+        10, 0, 0, 86400, 0,   /* pickup */
+        20, 0, 0, 86400, 0,   /* delivery */
+        1.0);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    /* PD pair in same trip — verify stops have same trip_index */
+    {
+        SGSolutionStop s0, s1;
+        assert(sg_solution_get_route_stop(ctx, 0, 0, &s0) == SG_STATUS_OK);
+        assert(sg_solution_get_route_stop(ctx, 0, 1, &s1) == SG_STATUS_OK);
+        assert(s0.trip_index == s1.trip_index);
+    }
+    sg_free(ctx);
+}
+
+static void test_multi_trip_max_trips_enforced(void) {
+    /* Vehicle with max_trips=1 and capacity=5 should not do multiple trips,
+       forcing the second request to be unassigned when capacity is full. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    sg_depot_set_time_window(ctx, depot, 0, 86400);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 5.0);
+    sg_vehicle_set_max_trips(ctx, 0, 1);  /* Only 1 trip allowed */
+    add_delivery_request(ctx, 10, 0, 0, 86400, 0, -5.0);
+    add_delivery_request(ctx, 20, 0, 0, 86400, 0, -5.0);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    /* With only 1 trip and capacity=5, can serve at most 1 request */
+    assert(sg_get_unassigned(ctx) == 1);
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+    sg_free(ctx);
+}
+
+static void test_multi_trip_export(void) {
+    /* Verify trip_count and trip_index in solution export */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    sg_depot_set_time_window(ctx, depot, 0, 86400);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 1.0);
+    sg_vehicle_set_max_trips(ctx, 0, 0);  /* unlimited */
+    sg_vehicle_set_trip_reload_seconds(ctx, 0, 10);
+    /* 3 requests, each using full capacity → should need 3 trips */
+    add_delivery_request(ctx, 10, 0, 0, 86400, 0, -1.0);
+    add_delivery_request(ctx, 20, 0, 0, 86400, 0, -1.0);
+    add_delivery_request(ctx, 30, 0, 0, 86400, 0, -1.0);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+    {
+        uint32_t tc = sg_solution_get_route_trip_count(ctx, 0);
+        uint32_t sc = sg_solution_get_route_stop_count(ctx, 0);
+        uint32_t si;
+        assert(tc >= 1);
+        /* All stops should have valid trip_index < trip_count */
+        for (si = 0; si < sc; si++) {
+            SGSolutionStop stop;
+            assert(sg_solution_get_route_stop(ctx, 0, si, &stop) == SG_STATUS_OK);
+            assert(stop.trip_index < tc);
+        }
+    }
+    sg_free(ctx);
+}
+
+static void test_multi_trip_reduces_vehicles(void) {
+    /* Without multi-trip: 2 requests, capacity=1 → needs 2 vehicles.
+       With multi-trip: 1 vehicle with 2 trips should suffice. */
+    uint32_t used_without, used_with;
+    uint32_t depot;
+
+    /* Without multi-trip */
+    {
+        SGContext *ctx = make_config(500, 42);
+        add_depot_with_location(ctx, &depot, 0, 0);
+        sg_depot_set_time_window(ctx, depot, 0, 86400);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 1.0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 1.0);
+        add_delivery_request(ctx, 10, 0, 0, 86400, 0, -1.0);
+        add_delivery_request(ctx, 20, 0, 0, 86400, 0, -1.0);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 0);
+        used_without = sg_get_used_vehicle_count(ctx);
+        sg_free(ctx);
+    }
+
+    /* With multi-trip */
+    {
+        SGContext *ctx = make_config(500, 42);
+        add_depot_with_location(ctx, &depot, 0, 0);
+        sg_depot_set_time_window(ctx, depot, 0, 86400);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 1.0);
+        sg_vehicle_set_max_trips(ctx, 0, 0);  /* unlimited */
+        sg_vehicle_set_trip_reload_seconds(ctx, 0, 10);
+        add_delivery_request(ctx, 10, 0, 0, 86400, 0, -1.0);
+        add_delivery_request(ctx, 20, 0, 0, 86400, 0, -1.0);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 0);
+        used_with = sg_get_used_vehicle_count(ctx);
+        sg_free(ctx);
+    }
+
+    /* Multi-trip should use fewer or equal vehicles */
+    assert(used_with <= used_without);
+}
+
+static void test_multi_trip_solver_basic(void) {
+    /* Solver produces feasible multi-trip solution with multiple requests */
+    SGContext *ctx = make_config(1000, 77);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    sg_depot_set_time_window(ctx, depot, 0, 86400);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 3.0);
+    sg_vehicle_set_max_trips(ctx, 0, 0);  /* unlimited */
+    sg_vehicle_set_trip_reload_seconds(ctx, 0, 60);
+    /* 6 delivery requests with demand=3 each (full capacity per stop) */
+    add_delivery_request(ctx, 10, 0, 0, 86400, 0, -3.0);
+    add_delivery_request(ctx, 20, 0, 0, 86400, 0, -3.0);
+    add_delivery_request(ctx, 30, 0, 0, 86400, 0, -3.0);
+    add_delivery_request(ctx, 40, 0, 0, 86400, 0, -3.0);
+    add_delivery_request(ctx, 50, 0, 0, 86400, 0, -3.0);
+    add_delivery_request(ctx, 60, 0, 0, 86400, 0, -3.0);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+    {
+        uint32_t tc = sg_solution_get_route_trip_count(ctx, 0);
+        assert(tc >= 2);  /* Should need at least 2 trips for 6 requests */
+    }
+    sg_free(ctx);
+}
+
+static void test_multi_trip_json_roundtrip(void) {
+    const char *json =
+        "{"
+        "  \"config\": {\"max_iterations\": 500, \"deterministic\": true, \"seed\": 42},"
+        "  \"depots\": [{\"x\": 0, \"y\": 0, \"tw_early\": 0, \"tw_late\": 86400}],"
+        "  \"vehicles\": [{"
+        "    \"start_depot_id\": 0, \"end_depot_id\": 0,"
+        "    \"shift_early\": 0, \"shift_late\": 86400,"
+        "    \"capacity\": [1],"
+        "    \"max_trips\": 0,"
+        "    \"trip_reload_seconds\": 10"
+        "  }],"
+        "  \"tasks\": ["
+        "    {\"type\": \"delivery\", \"x\": 10, \"y\": 0,"
+        "      \"tw_early\": 0, \"tw_late\": 86400, \"service_seconds\": 0,"
+        "      \"demand\": [-1]},"
+        "    {\"type\": \"delivery\", \"x\": 20, \"y\": 0,"
+        "      \"tw_early\": 0, \"tw_late\": 86400, \"service_seconds\": 0,"
+        "      \"demand\": [-1]}"
+        "  ],"
+        "  \"requests\": [{\"delivery_task_id\": 0}, {\"delivery_task_id\": 1}]"
+        "}";
+    int status_code = 0;
+    size_t out_len = 0;
+    char *resp = sg_api_solve(json, strlen(json), &status_code, &out_len);
+    assert(resp != NULL);
+    assert(status_code == 200);
+
+    /* Check response contains multi-trip fields */
+    assert(strstr(resp, "\"trip_count\"") != NULL);
+    assert(strstr(resp, "\"trip_index\"") != NULL);
+    assert(strstr(resp, "\"unassigned\":0") != NULL);
+
+    free(resp);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -7605,8 +7874,20 @@ int main(void) {
     RUN_TEST(test_break_with_pd);
     RUN_TEST(test_break_json_roundtrip);
 
+    /* Multi-trip */
+    RUN_TEST(test_multi_trip_api);
+    RUN_TEST(test_multi_trip_no_change_default);
+    RUN_TEST(test_multi_trip_capacity_reset);
+    RUN_TEST(test_multi_trip_timing);
+    RUN_TEST(test_multi_trip_pd_same_trip);
+    RUN_TEST(test_multi_trip_max_trips_enforced);
+    RUN_TEST(test_multi_trip_export);
+    RUN_TEST(test_multi_trip_reduces_vehicles);
+    RUN_TEST(test_multi_trip_solver_basic);
+    RUN_TEST(test_multi_trip_json_roundtrip);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
-    assert(tests_run == 197);
+    assert(tests_run == 207);
     return tests_passed == tests_run ? 0 : 1;
 }

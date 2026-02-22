@@ -57,6 +57,10 @@ typedef struct {
     double latest_start;   /* latest feasible service start (backward pass) */
     double forward_slack;  /* latest_start - service_start */
     double work_since_break;  /* accumulated work since last break, at departure */
+    /* Multi-trip */
+    uint8_t trip_start;            /* 1 = vehicle returned to depot before this stop (new trip) */
+    double  trip_depot_return;     /* Time vehicle arrived back at depot (only valid when trip_start=1) */
+    double  trip_depot_depart;     /* Time vehicle departed depot for this trip (only valid when trip_start=1) */
 } SGRouteStop;
 
 typedef struct {
@@ -101,6 +105,10 @@ typedef struct {
     double *route_total_work;       /* [num_vehicles] total work time on route */
     SGRouteBreak *route_breaks;     /* [num_vehicles * break_stride] break position records */
     uint32_t break_stride;          /* = stop_stride (safe upper bound) */
+
+    /* Multi-trip */
+    uint32_t *route_trip_count;          /* [num_vehicles] */
+    uint8_t  *route_request_trip_start;  /* [num_vehicles * route_stride] — parallels route_requests */
 } SGRouteSolution;
 
 typedef struct {
@@ -158,6 +166,11 @@ typedef struct {
     int32_t break_duration_seconds;     /* Duration of each mandatory break. */
     int32_t max_total_work_seconds;     /* 0 = disabled. Max cumulative work (driving+service) per route. */
     uint8_t has_break_policy;           /* 1 if break cycle is active */
+
+    /* Multi-trip */
+    uint32_t max_trips;            /* 0 = unlimited, 1 = default (no multi-trip) */
+    int32_t  trip_reload_seconds;  /* Depot service time between trips */
+    uint8_t  has_multi_trip;       /* 1 if max_trips != 1 */
 } SGVehicleRecord;
 
 typedef struct {

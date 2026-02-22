@@ -512,6 +512,21 @@ static int build_vehicles(SGContext *ctx, const ShJsonValue *vehicles_arr) {
                 return -1;
             }
         }
+
+        /* Multi-trip */
+        v = sh_json_get(veh, "max_trips");
+        if (v) {
+            if (sg_vehicle_set_max_trips(ctx, id, (uint32_t)sh_json_as_int(v, 1)) != SG_STATUS_OK) {
+                return -1;
+            }
+        }
+
+        v = sh_json_get(veh, "trip_reload_seconds");
+        if (v) {
+            if (sg_vehicle_set_trip_reload_seconds(ctx, id, sh_json_as_int(v, 0)) != SG_STATUS_OK) {
+                return -1;
+            }
+        }
     }
 
     return 0;
@@ -1037,6 +1052,8 @@ SGStatus sg_api_write_solution(const SGContext *ctx, ShJsonWriter *w,
                 sg_solution_get_route_break_count(ctx, ri));
             sh_json_write_kv_double_fmt(w, "total_work",
                 sg_solution_get_route_total_work(ctx, ri), 2);
+            sh_json_write_kv_int(w, "trip_count",
+                sg_solution_get_route_trip_count(ctx, ri));
 
             /* Break position records */
             {
@@ -1081,6 +1098,7 @@ SGStatus sg_api_write_solution(const SGContext *ctx, ShJsonWriter *w,
                     sh_json_write_kv_double_fmt(w, "arrival", stop.arrival, 2);
                     sh_json_write_kv_double_fmt(w, "service_start", stop.service_start, 2);
                     sh_json_write_kv_double_fmt(w, "departure", stop.departure, 2);
+                    sh_json_write_kv_int(w, "trip_index", stop.trip_index);
                     sh_json_write_object_end(w);
                 }
             }
