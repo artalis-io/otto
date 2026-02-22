@@ -4,7 +4,23 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-22, `beac5bb`) — Phase 2 LP/MIP boundary extraction baseline:
+**Current** (2026-02-22, `4b5620c`) — typed parameter API + metadata baseline:
+added enum-based typed parameter IDs, strict LP/MIP typed parameter setters/getters, and
+parameter metadata/introspection APIs (`count`, `meta`, `find-by-name`) with a single
+table-driven parameter registry in `ralph.c` (canonical name + aliases, scope, type, defaults,
+min/max). Legacy string-parameter APIs are now compatibility wrappers over the same registry.
+Added focused parity tests (`test_param_typed_metadata_api`) and preserved NETLIB behavior.
+Latest gates:
+`./ralph/test_ralph --skip-mip` PASS (387/387, includes typed metadata test),
+`make -C ralph test_api` PASS (13/13),
+`make -C ralph test_warmstart_serde` PASS (23/23),
+`make -C ralph test-netlib-gate-small` PASS (26 files, dense fallback files: 0, no unexpected
+regressions, artifacts: `/tmp/netlib-regression-gate-20260222-232802`), and
+`make -C ralph test-netlib-gate` PASS (84 files, 27 known timeouts, status/objective/invalid
+mismatches 0, dense fallback files: 0, no unexpected regressions, artifacts:
+`/tmp/netlib-regression-gate-20260222-232948`).
+
+Previous: (2026-02-22, `beac5bb`) — Phase 2 LP/MIP boundary extraction baseline:
 introduced a dedicated MIP/LP adapter surface (`mip_lp_adapter`) and moved MIP node/probing LP
 state transitions behind adapter operations (`apply bounds`, `recompute`, `dual reopt`,
 `warm restore`, `cold recover`) to reduce direct tableau lifecycle mutation in `mip.c` and
@@ -461,6 +477,16 @@ one by one.
 - Add explicit reproducibility controls in public API (seed/deterministic mode/thread policy).
 - Document guarantees and known non-deterministic cases.
 - Add deterministic regression tests.
+- Execution plan A: add typed+string parameters for `deterministic`, `random_seed`,
+  and `lp_threads` (LP-only scope for deterministic knobs).
+- Execution plan B: define contract precisely:
+  same model + params + seed + platform/build settings => identical status/objective and stable
+  iteration count on deterministic mode.
+- Execution plan C: enforce deterministic behavior in solver paths that use randomness/tie-breaks
+  and pin thread policy under deterministic mode.
+- Execution plan D: add repeatability tests (N repeated solves on NETLIB canaries and synthetic
+  degenerate LPs) checking status/objective/iteration equality and solution tolerance.
+- Execution plan E: add metadata/introspection entries for all determinism controls and update API docs.
 
 10. Advanced parity backlog (separate track)
 - Sensitivity/ranging API (objective, RHS, bounds ranges).
