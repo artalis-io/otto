@@ -156,6 +156,15 @@ typedef struct {
     double *best_solution;  /* Best integer solution found */
     int has_incumbent;
 
+    /* User-provided MIP incumbent start (full vector, original model space) */
+    double *mip_start;
+    int *mip_start_mask;     /* 1=specified by user, 0=imputed/default */
+    int mip_start_n;
+    int mip_start_nnz;
+    int mip_start_repair_mode; /* RalphMIPStartRepairMode */
+    int mip_start_attempted;
+    int mip_start_accepted;
+
     /* Node management */
     NodeQueue *node_queue;
     BBNodePool *node_pool;  /* Memory pool for node allocation */
@@ -214,6 +223,17 @@ typedef struct {
     int lap_nodes_solved;        /* Number of nodes solved with LAP */
     int simplex_nodes_solved;    /* Number of nodes solved with simplex */
     int last_solved_node_id;     /* ID of last node whose LP was solved (for child detection) */
+    int node_basis_warm_attempts; /* Live node-basis warm restore attempts */
+    int node_basis_warm_applied;  /* Live node-basis warm restores applied */
+    int node_basis_warm_rejected; /* Live node-basis restores rejected/fallback */
+    int node_basis_staged;        /* Cold starts that staged node basis via LP warm API */
+    int node_basis_stage_cooldown; /* Nodes to skip staged warm-basis after repeated rejection */
+    int strong_branch_probes;      /* Strong-branch probe calls */
+    int strong_branch_failures;    /* Strong-branch probe calls that failed */
+    int strong_branch_recoveries;  /* Failed probes that recovered LP state */
+    int cut_recovery_attempts;     /* Root cut-loop LP recovery attempts */
+    int cut_recovery_success;      /* Root cut-loop recoveries that succeeded */
+    int cut_recovery_failures;     /* Root cut-loop recoveries that failed */
 
     /* Reduced-cost fixing + RINS statistics */
     int rc_fixings;              /* Total variables fixed by reduced-cost fixing */
@@ -231,6 +251,16 @@ typedef struct {
 MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity);
 void mip_free(MIPSolver *solver);
 int mip_solve(MIPSolver *solver);
+int mip_set_start(MIPSolver *solver, const double *x, int n);
+int mip_set_start_ex(MIPSolver *solver, const double *x, const int *mask,
+                     int n, int repair_mode);
+
+/* Recover root LP relaxation state from the original model.
+ * Contract:
+ * - Rebuilds working model from original model copy.
+ * - Recreates and resolves LP solver on rebuilt working model.
+ * - Returns 0 only if rebuilt root LP is OPTIMAL and LP state is usable. */
+int mip_recover_root_relaxation(MIPSolver *solver);
 
 /* Node management */
 NodeQueue* node_queue_create(int capacity, NodeSelectStrategy strategy, int obj_sense);

@@ -36,6 +36,51 @@ static void mip_apply_dual_flags(MIPSolver *solver) {
     solver->lp_solver->lu_supernode = solver->lu_supernode;
 }
 
+static int mip_create_lp_solver_for_working_model(MIPSolver *solver) {
+    if (!solver || !solver->working_model) return -1;
+
+    simplex_free(solver->lp_solver);
+    solver->lp_solver = simplex_create(solver->working_model);
+    if (!solver->lp_solver) return -1;
+
+    solver->lp_solver->method = 2;  /* Phase E: clean dual simplex */
+    solver->lp_solver->scaling = 0; /* Keep cuts in unscaled space */
+    solver->lp_solver->verbose = solver->verbose;
+    mip_apply_dual_flags(solver);
+    return 0;
+}
+
+int mip_recover_root_relaxation(MIPSolver *solver) {
+    if (!solver || !solver->original_model) return -1;
+
+    solver->cut_recovery_attempts++;
+
+    simplex_free(solver->lp_solver);
+    solver->lp_solver = NULL;
+
+    lp_model_free(solver->working_model);
+    solver->working_model = lp_model_copy(solver->original_model);
+    if (!solver->working_model) {
+        solver->cut_recovery_failures++;
+        return -1;
+    }
+
+    if (mip_create_lp_solver_for_working_model(solver) != 0) {
+        solver->cut_recovery_failures++;
+        return -1;
+    }
+
+    simplex_solve(solver->lp_solver);
+    if (solver->lp_solver->status != RALPH_STATUS_OPTIMAL ||
+        !solver->lp_solver->tableau || !solver->lp_solver->solution) {
+        solver->cut_recovery_failures++;
+        return -1;
+    }
+
+    solver->cut_recovery_success++;
+    return 0;
+}
+
 /* ============================================================================
  * MIP Solver Creation/Destruction
  * ============================================================================ */
@@ -155,6 +200,12 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     solver->node_basis_warm_rejected = 0;
     solver->node_basis_staged = 0;
     solver->node_basis_stage_cooldown = 0;
+    solver->strong_branch_probes = 0;
+    solver->strong_branch_failures = 0;
+    solver->strong_branch_recoveries = 0;
+    solver->cut_recovery_attempts = 0;
+    solver->cut_recovery_success = 0;
+    solver->cut_recovery_failures = 0;
 
     /* Try to detect LAP structure for specialized solving */
     solver->use_lap_solver = 0;
@@ -1064,11 +1115,7 @@ static int solve_node_lp_as_lap(MIPSolver *solver, BBNode *node) {
 
     /* Allocate solution array if needed */
     if (!solver->lp_solver) {
-        solver->lp_solver = simplex_create(solver->working_model);
-        if (!solver->lp_solver) return -1;
-        solver->lp_solver->method = 2;  /* Phase E: clean dual simplex */
-        solver->lp_solver->scaling = 0;
-        mip_apply_dual_flags(solver);
+        if (mip_create_lp_solver_for_working_model(solver) != 0) return -1;
     }
 
     SimplexSolver *lp = solver->lp_solver;
@@ -1115,11 +1162,7 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
 
     /* Create LP solver if needed — method=2 (auto: dual first, primal fallback) */
     if (!solver->lp_solver) {
-        solver->lp_solver = simplex_create(model);
-        if (!solver->lp_solver) return -1;
-        solver->lp_solver->method = 2;  /* Phase E: clean dual simplex */
-        solver->lp_solver->scaling = 0;
-        mip_apply_dual_flags(solver);
+        if (mip_create_lp_solver_for_working_model(solver) != 0) return -1;
     }
 
     SimplexSolver *lp = solver->lp_solver;
@@ -1503,17 +1546,10 @@ static int solve_root_node(MIPSolver *solver) {
 
     if (!root_lp_solved) {
         /* Use standard simplex for root LP */
-        solver->lp_solver = simplex_create(solver->working_model);
-        if (!solver->lp_solver) {
+        if (mip_create_lp_solver_for_working_model(solver) != 0) {
             bb_node_pool_return(solver->node_pool, root);
             return -1;
         }
-
-        solver->lp_solver->method = 2;  /* Phase E: clean dual simplex */
-        /* Disable scaling for MIP - cuts are generated from tableau which would need unscaling */
-        solver->lp_solver->scaling = 0;
-        solver->lp_solver->verbose = solver->verbose;
-        mip_apply_dual_flags(solver);
 
         simplex_solve(solver->lp_solver);
     }
@@ -1658,18 +1694,10 @@ static int solve_root_node(MIPSolver *solver) {
             }
 
             /* Rebuild simplex solver with new constraints */
-            simplex_free(solver->lp_solver);
-            solver->lp_solver = simplex_create(solver->working_model);
-            if (!solver->lp_solver) {
+            if (mip_create_lp_solver_for_working_model(solver) != 0) {
                 bb_node_pool_return(solver->node_pool, root);
                 return -1;
             }
-
-            solver->lp_solver->method = 2;  /* Phase E: clean dual simplex */
-            /* Disable scaling for MIP and propagate verbose flag */
-            solver->lp_solver->scaling = 0;
-            solver->lp_solver->verbose = solver->verbose;
-            mip_apply_dual_flags(solver);
 
             if (solver->verbose) {
                 LP_LOG_STDOUT("  Re-solving LP with %d constraints...\n",
@@ -1691,23 +1719,10 @@ static int solve_root_node(MIPSolver *solver) {
                     LP_LOG_STDOUT("  WARNING: LP non-optimal after cuts (status=%d), discarding cuts\n",
                            solver->lp_solver->status);
                 }
-                simplex_free(solver->lp_solver);
-                lp_model_free(solver->working_model);
-                solver->working_model = lp_model_copy(solver->original_model);
-                if (!solver->working_model) {
+                if (mip_recover_root_relaxation(solver) != 0) {
                     bb_node_pool_return(solver->node_pool, root);
                     return -1;
                 }
-                solver->lp_solver = simplex_create(solver->working_model);
-                if (!solver->lp_solver) {
-                    bb_node_pool_return(solver->node_pool, root);
-                    return -1;
-                }
-                solver->lp_solver->method = 2;  /* Phase E: clean dual simplex */
-                solver->lp_solver->scaling = 0;
-                solver->lp_solver->verbose = solver->verbose;
-                mip_apply_dual_flags(solver);
-                simplex_solve(solver->lp_solver);
                 root->lp_bound = solver->lp_solver->obj_value;
                 solver->cuts_applied = 0;
                 break;
@@ -1985,6 +2000,12 @@ void mip_print_stats(const MIPSolver *solver) {
     LP_LOG_STDOUT("Cuts generated: %d\n", solver->cuts_generated);
     LP_LOG_STDOUT("RC fixings: %d\n", solver->rc_fixings);
     LP_LOG_STDOUT("RINS calls: %d (found %d incumbents)\n", solver->rins_calls, solver->rins_found);
+    LP_LOG_STDOUT("Strong probes: %d (failures=%d, recovered=%d)\n",
+           solver->strong_branch_probes, solver->strong_branch_failures,
+           solver->strong_branch_recoveries);
+    LP_LOG_STDOUT("Cut-loop recovery: attempts=%d success=%d failures=%d\n",
+           solver->cut_recovery_attempts, solver->cut_recovery_success,
+           solver->cut_recovery_failures);
     LP_LOG_STDOUT("Solve time: %.3f seconds\n", solver->solve_time);
 
     /* Node pool statistics */
