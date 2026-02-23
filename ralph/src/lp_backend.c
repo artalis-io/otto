@@ -1,5 +1,6 @@
+#include <string.h>
+
 #include "lp_backend.h"
-#include "lp_external_adapter.h"
 
 static int lp_backend_capability_from_external(int supports_backend,
                                                int supports_crossover,
@@ -11,8 +12,33 @@ static int lp_backend_capability_from_external(int supports_backend,
     return 0;
 }
 
-int lp_backend_get_capability(LPDispatchBackend backend, LPBackendCapability *capability) {
+static int lp_backend_get_external_capabilities_any(LPExternalCapabilities *caps_any) {
+    LPExternalCapabilities caps;
+    int has_any = 0;
+
+    if (!caps_any) return -1;
+    memset(caps_any, 0, sizeof(*caps_any));
+
+    for (int p = (int)LP_EXTERNAL_PROVIDER_GLPK;
+         p <= (int)LP_EXTERNAL_PROVIDER_GLOP;
+         p++) {
+        LPExternalProvider provider = (LPExternalProvider)p;
+        if (lp_external_adapter_get_capabilities(provider, &caps) != 0) continue;
+        has_any = 1;
+        if (caps.supports_simplex) caps_any->supports_simplex = 1;
+        if (caps.supports_dual_simplex) caps_any->supports_dual_simplex = 1;
+        if (caps.supports_barrier) caps_any->supports_barrier = 1;
+        if (caps.supports_crossover) caps_any->supports_crossover = 1;
+    }
+
+    return has_any ? 0 : -1;
+}
+
+int lp_backend_get_capability(LPDispatchBackend backend,
+                              LPExternalProvider provider,
+                              LPBackendCapability *capability) {
     LPExternalCapabilities external_caps;
+    int caps_rc = -1;
 
     if (!capability) return -1;
 
@@ -25,12 +51,22 @@ int lp_backend_get_capability(LPDispatchBackend backend, LPBackendCapability *ca
             capability->supports_crossover = 0;
             return 0;
         case LP_DISPATCH_BACKEND_SIMPLEX_EXTERNAL:
-            if (lp_external_adapter_get_capabilities(&external_caps) != 0) return 0;
+            if (provider == LP_EXTERNAL_PROVIDER_NONE) {
+                caps_rc = lp_backend_get_external_capabilities_any(&external_caps);
+            } else {
+                caps_rc = lp_external_adapter_get_capabilities(provider, &external_caps);
+            }
+            if (caps_rc != 0) return 0;
             return lp_backend_capability_from_external(external_caps.supports_simplex,
                                                        external_caps.supports_crossover,
                                                        capability);
         case LP_DISPATCH_BACKEND_DUAL_SIMPLEX_EXTERNAL:
-            if (lp_external_adapter_get_capabilities(&external_caps) != 0) return 0;
+            if (provider == LP_EXTERNAL_PROVIDER_NONE) {
+                caps_rc = lp_backend_get_external_capabilities_any(&external_caps);
+            } else {
+                caps_rc = lp_external_adapter_get_capabilities(provider, &external_caps);
+            }
+            if (caps_rc != 0) return 0;
             return lp_backend_capability_from_external(external_caps.supports_dual_simplex,
                                                        external_caps.supports_crossover,
                                                        capability);
@@ -40,7 +76,12 @@ int lp_backend_get_capability(LPDispatchBackend backend, LPBackendCapability *ca
             capability->supports_crossover = 0;
             return 0;
         case LP_DISPATCH_BACKEND_BARRIER_EXTERNAL:
-            if (lp_external_adapter_get_capabilities(&external_caps) != 0) return 0;
+            if (provider == LP_EXTERNAL_PROVIDER_NONE) {
+                caps_rc = lp_backend_get_external_capabilities_any(&external_caps);
+            } else {
+                caps_rc = lp_external_adapter_get_capabilities(provider, &external_caps);
+            }
+            if (caps_rc != 0) return 0;
             return lp_backend_capability_from_external(external_caps.supports_barrier,
                                                        external_caps.supports_crossover,
                                                        capability);
@@ -49,7 +90,9 @@ int lp_backend_get_capability(LPDispatchBackend backend, LPBackendCapability *ca
     }
 }
 
-int lp_backend_run(LPDispatchBackend backend, SimplexSolver *solver) {
+int lp_backend_run(LPDispatchBackend backend,
+                   LPExternalProvider provider,
+                   SimplexSolver *solver) {
     if (!solver) return -1;
 
     switch (backend) {
@@ -57,13 +100,13 @@ int lp_backend_run(LPDispatchBackend backend, SimplexSolver *solver) {
             simplex_solve(solver);
             return 0;
         case LP_DISPATCH_BACKEND_SIMPLEX_EXTERNAL:
-            return lp_external_adapter_solve(LP_EXTERNAL_BACKEND_SIMPLEX, solver);
+            return lp_external_adapter_solve(provider, LP_EXTERNAL_BACKEND_SIMPLEX, solver);
         case LP_DISPATCH_BACKEND_DUAL_SIMPLEX_EXTERNAL:
-            return lp_external_adapter_solve(LP_EXTERNAL_BACKEND_DUAL_SIMPLEX, solver);
+            return lp_external_adapter_solve(provider, LP_EXTERNAL_BACKEND_DUAL_SIMPLEX, solver);
         case LP_DISPATCH_BACKEND_BARRIER_NATIVE:
             return -1;
         case LP_DISPATCH_BACKEND_BARRIER_EXTERNAL:
-            return lp_external_adapter_solve(LP_EXTERNAL_BACKEND_BARRIER, solver);
+            return lp_external_adapter_solve(provider, LP_EXTERNAL_BACKEND_BARRIER, solver);
         default:
             return -1;
     }

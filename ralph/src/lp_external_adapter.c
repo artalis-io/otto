@@ -5,6 +5,10 @@
 typedef struct {
     int registered;
     LPExternalAdapter adapter;
+} LPExternalAdapterEntry;
+
+typedef struct {
+    LPExternalAdapterEntry entries[LP_EXTERNAL_PROVIDER_GLOP + 1];
 } LPExternalAdapterRegistry;
 
 static LPExternalAdapterRegistry g_lp_external_registry = {0};
@@ -12,6 +16,11 @@ static LPExternalAdapterRegistry g_lp_external_registry = {0};
 static int lp_external_provider_valid(LPExternalProvider provider) {
     return provider >= LP_EXTERNAL_PROVIDER_GLPK &&
            provider <= LP_EXTERNAL_PROVIDER_GLOP;
+}
+
+static LPExternalAdapterEntry* lp_external_registry_entry(LPExternalProvider provider) {
+    if (!lp_external_provider_valid(provider)) return NULL;
+    return &g_lp_external_registry.entries[(int)provider];
 }
 
 const char* lp_external_provider_name(LPExternalProvider provider) {
@@ -48,6 +57,7 @@ static int lp_external_capabilities_valid(const LPExternalCapabilities *caps) {
 
 int lp_external_adapter_register(const LPExternalAdapter *adapter) {
     LPExternalCapabilities caps;
+    LPExternalAdapterEntry *entry;
 
     if (!adapter) return -1;
     if (adapter->abi_version != LP_EXTERNAL_ADAPTER_ABI_VERSION) return -1;
@@ -58,39 +68,58 @@ int lp_external_adapter_register(const LPExternalAdapter *adapter) {
     if (adapter->get_capabilities(&caps, adapter->user_data) != 0) return -1;
     if (!lp_external_capabilities_valid(&caps)) return -1;
 
-    g_lp_external_registry.adapter = *adapter;
-    g_lp_external_registry.registered = 1;
+    entry = lp_external_registry_entry(adapter->provider);
+    if (!entry) return -1;
+    entry->adapter = *adapter;
+    entry->registered = 1;
     return 0;
 }
 
-void lp_external_adapter_unregister(void) {
+int lp_external_adapter_unregister(LPExternalProvider provider) {
+    LPExternalAdapterEntry *entry = lp_external_registry_entry(provider);
+    if (!entry) return -1;
+    memset(entry, 0, sizeof(*entry));
+    return 0;
+}
+
+void lp_external_adapter_unregister_all(void) {
     memset(&g_lp_external_registry, 0, sizeof(g_lp_external_registry));
 }
 
-int lp_external_adapter_is_registered(void) {
-    return g_lp_external_registry.registered ? 1 : 0;
-}
-
-LPExternalProvider lp_external_adapter_provider(void) {
-    if (!g_lp_external_registry.registered) return LP_EXTERNAL_PROVIDER_NONE;
-    return g_lp_external_registry.adapter.provider;
-}
-
-const char* lp_external_adapter_provider_name(void) {
-    if (!g_lp_external_registry.registered) return lp_external_provider_name(LP_EXTERNAL_PROVIDER_NONE);
-    if (g_lp_external_registry.adapter.provider_name) {
-        return g_lp_external_registry.adapter.provider_name;
+int lp_external_adapter_is_registered(LPExternalProvider provider) {
+    if (provider == LP_EXTERNAL_PROVIDER_NONE) {
+        for (int p = (int)LP_EXTERNAL_PROVIDER_GLPK;
+             p <= (int)LP_EXTERNAL_PROVIDER_GLOP;
+             p++) {
+            if (g_lp_external_registry.entries[p].registered) return 1;
+        }
+        return 0;
     }
-    return lp_external_provider_name(g_lp_external_registry.adapter.provider);
+
+    LPExternalAdapterEntry *entry = lp_external_registry_entry(provider);
+    if (!entry) return 0;
+    return entry->registered ? 1 : 0;
 }
 
-int lp_external_adapter_get_capabilities(LPExternalCapabilities *caps) {
+const char* lp_external_adapter_registered_name(LPExternalProvider provider) {
+    LPExternalAdapterEntry *entry = lp_external_registry_entry(provider);
+    if (!entry || !entry->registered) return lp_external_provider_name(LP_EXTERNAL_PROVIDER_NONE);
+    if (entry->adapter.provider_name) return entry->adapter.provider_name;
+    return lp_external_provider_name(provider);
+}
+
+int lp_external_adapter_get_capabilities(LPExternalProvider provider,
+                                         LPExternalCapabilities *caps) {
+    LPExternalAdapterEntry *entry;
+
     if (!caps) return -1;
-    if (!g_lp_external_registry.registered) return -1;
+    if (!lp_external_provider_valid(provider)) return -1;
+
+    entry = lp_external_registry_entry(provider);
+    if (!entry || !entry->registered) return -1;
 
     memset(caps, 0, sizeof(*caps));
-    if (g_lp_external_registry.adapter.get_capabilities(caps,
-                                                        g_lp_external_registry.adapter.user_data) != 0) {
+    if (entry->adapter.get_capabilities(caps, entry->adapter.user_data) != 0) {
         memset(caps, 0, sizeof(*caps));
         return -1;
     }
@@ -101,12 +130,16 @@ int lp_external_adapter_get_capabilities(LPExternalCapabilities *caps) {
     return 0;
 }
 
-int lp_external_adapter_solve(LPExternalBackendKind backend, SimplexSolver *solver) {
-    if (!g_lp_external_registry.registered) return -1;
+int lp_external_adapter_solve(LPExternalProvider provider,
+                              LPExternalBackendKind backend,
+                              SimplexSolver *solver) {
+    LPExternalAdapterEntry *entry;
+
+    if (!lp_external_provider_valid(provider)) return -1;
+    entry = lp_external_registry_entry(provider);
+    if (!entry || !entry->registered) return -1;
     if (!solver) return -1;
     if (backend < LP_EXTERNAL_BACKEND_SIMPLEX || backend > LP_EXTERNAL_BACKEND_BARRIER) return -1;
 
-    return g_lp_external_registry.adapter.solve(backend,
-                                                solver,
-                                                g_lp_external_registry.adapter.user_data);
+    return entry->adapter.solve(backend, solver, entry->adapter.user_data);
 }

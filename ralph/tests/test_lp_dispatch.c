@@ -86,6 +86,10 @@ static void test_dispatch_validation(void) {
                   "validation: barrier external valid");
     ASSERT_INT_EQ(lp_dispatch_algorithm_value_valid(7), 0,
                   "validation: algorithm 7 invalid");
+    ASSERT_INT_EQ(lp_dispatch_algorithm_is_external((int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX), 0,
+                  "validation: primal is internal algorithm");
+    ASSERT_INT_EQ(lp_dispatch_algorithm_is_external((int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX_EXTERNAL), 1,
+                  "validation: dual external is external algorithm");
 
     ASSERT_INT_EQ(lp_dispatch_crossover_value_valid(-1), 0,
                   "validation: crossover -1 invalid");
@@ -170,7 +174,7 @@ static void test_dispatch_setters(void) {
 static void test_dispatch_capabilities_default(void) {
     RalphLPCapabilities caps;
 
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
     memset(&caps, 0, sizeof(caps));
     lp_dispatch_get_capabilities(&caps);
 
@@ -195,7 +199,7 @@ static void test_dispatch_capabilities_external(void) {
     fake_caps.supports_barrier = 1;
     fake_caps.supports_crossover = 1;
 
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
     ASSERT_INT_EQ(register_fake_adapter(&state,
                                         LP_EXTERNAL_PROVIDER_HIGHS,
                                         &fake_caps,
@@ -214,14 +218,14 @@ static void test_dispatch_capabilities_external(void) {
     ASSERT_INT_EQ(caps.supports_crossover, 1,
                   "capabilities/external: crossover supported");
 
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
 }
 
 static void test_dispatch_plan_simplex_path(void) {
     LPDispatchPlan plan;
     RalphLPSolveAlgorithmReport report;
 
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
     ASSERT_INT_EQ(lp_dispatch_build_plan((int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX,
                                          (int)RALPH_LP_EXTERNAL_PROVIDER_NONE,
                                          (int)RALPH_LP_CROSSOVER_AUTO,
@@ -235,6 +239,9 @@ static void test_dispatch_plan_simplex_path(void) {
     ASSERT_INT_EQ((int)plan.effective_algorithm,
                   (int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX,
                   "plan/simplex: effective algorithm dual");
+    ASSERT_INT_EQ((int)plan.effective_external_provider,
+                  (int)RALPH_LP_EXTERNAL_PROVIDER_NONE,
+                  "plan/simplex: no effective external provider");
     ASSERT_INT_EQ(plan.simplex_method, 1,
                   "plan/simplex: simplex method dual");
     ASSERT_INT_EQ(plan.fallback_applied, 0,
@@ -260,7 +267,7 @@ static void test_dispatch_plan_internal_preferred_even_with_external(void) {
     fake_caps.supports_barrier = 1;
     fake_caps.supports_crossover = 1;
 
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
     ASSERT_INT_EQ(register_fake_adapter(&state,
                                         LP_EXTERNAL_PROVIDER_GLPK,
                                         &fake_caps,
@@ -286,7 +293,7 @@ static void test_dispatch_plan_internal_preferred_even_with_external(void) {
     ASSERT_INT_EQ(plan.fallback_applied, 0,
                   "plan/internal-pref: no fallback applied");
 
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
 }
 
 static void test_dispatch_plan_external_simplex(void) {
@@ -300,7 +307,7 @@ static void test_dispatch_plan_external_simplex(void) {
     fake_caps.supports_barrier = 0;
     fake_caps.supports_crossover = 0;
 
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
     ASSERT_INT_EQ(register_fake_adapter(&state,
                                         LP_EXTERNAL_PROVIDER_GLPK,
                                         &fake_caps,
@@ -323,10 +330,13 @@ static void test_dispatch_plan_external_simplex(void) {
     ASSERT_INT_EQ((int)plan.effective_algorithm,
                   (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL,
                   "plan/external-simplex: effective algorithm external primal");
+    ASSERT_INT_EQ((int)plan.effective_external_provider,
+                  (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK,
+                  "plan/external-simplex: effective provider GLPK");
     ASSERT_INT_EQ(plan.fallback_applied, 0,
                   "plan/external-simplex: no fallback applied");
 
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
 }
 
 static void test_dispatch_plan_external_dual_simplex(void) {
@@ -340,7 +350,7 @@ static void test_dispatch_plan_external_dual_simplex(void) {
     fake_caps.supports_barrier = 0;
     fake_caps.supports_crossover = 0;
 
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
     ASSERT_INT_EQ(register_fake_adapter(&state,
                                         LP_EXTERNAL_PROVIDER_CLP,
                                         &fake_caps,
@@ -363,6 +373,9 @@ static void test_dispatch_plan_external_dual_simplex(void) {
     ASSERT_INT_EQ((int)plan.effective_algorithm,
                   (int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX_EXTERNAL,
                   "plan/external-dual: effective algorithm external dual");
+    ASSERT_INT_EQ((int)plan.effective_external_provider,
+                  (int)RALPH_LP_EXTERNAL_PROVIDER_CLP,
+                  "plan/external-dual: effective provider CLP");
     ASSERT_INT_EQ(plan.fallback_applied, 0,
                   "plan/external-dual: no fallback applied");
 
@@ -376,7 +389,7 @@ static void test_dispatch_plan_external_dual_simplex(void) {
                   (int)LP_DISPATCH_BACKEND_SIMPLEX,
                   "plan/external-dual: auto uses internal simplex backend");
 
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
 }
 
 static void test_dispatch_plan_external_requires_matching_provider(void) {
@@ -390,7 +403,7 @@ static void test_dispatch_plan_external_requires_matching_provider(void) {
     fake_caps.supports_barrier = 0;
     fake_caps.supports_crossover = 0;
 
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
     ASSERT_INT_EQ(register_fake_adapter(&state,
                                         LP_EXTERNAL_PROVIDER_CLP,
                                         &fake_caps,
@@ -410,6 +423,9 @@ static void test_dispatch_plan_external_requires_matching_provider(void) {
     ASSERT_INT_EQ((int)plan.effective_algorithm,
                   (int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX,
                   "plan/external-provider-gate: fallback algorithm dual");
+    ASSERT_INT_EQ((int)plan.effective_external_provider,
+                  (int)RALPH_LP_EXTERNAL_PROVIDER_NONE,
+                  "plan/external-provider-gate: fallback clears effective provider");
     ASSERT_INT_EQ(plan.fallback_applied, 1,
                   "plan/external-provider-gate: fallback applied");
     ASSERT_INT_EQ((int)plan.fallback_reason,
@@ -432,13 +448,13 @@ static void test_dispatch_plan_external_requires_matching_provider(void) {
                   (int)RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE,
                   "plan/external-provider-gate: mismatched reason external unavailable");
 
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
 }
 
 static void test_dispatch_plan_barrier_stub_fallback(void) {
     LPDispatchPlan plan;
 
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
     ASSERT_INT_EQ(lp_dispatch_build_plan((int)RALPH_LP_ALGORITHM_BARRIER,
                                          (int)RALPH_LP_EXTERNAL_PROVIDER_NONE,
                                          (int)RALPH_LP_CROSSOVER_ON,
@@ -478,7 +494,7 @@ static void test_dispatch_plan_barrier_external(void) {
     fake_caps.supports_barrier = 1;
     fake_caps.supports_crossover = 1;
 
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
     ASSERT_INT_EQ(register_fake_adapter(&state,
                                         LP_EXTERNAL_PROVIDER_CPLEX,
                                         &fake_caps,
@@ -501,19 +517,22 @@ static void test_dispatch_plan_barrier_external(void) {
     ASSERT_INT_EQ((int)plan.effective_algorithm,
                   (int)RALPH_LP_ALGORITHM_BARRIER_EXTERNAL,
                   "plan/barrier-external: effective algorithm external barrier");
+    ASSERT_INT_EQ((int)plan.effective_external_provider,
+                  (int)RALPH_LP_EXTERNAL_PROVIDER_CPLEX,
+                  "plan/barrier-external: effective provider CPLEX");
     ASSERT_INT_EQ((int)plan.effective_crossover,
                   (int)RALPH_LP_CROSSOVER_ON,
                   "plan/barrier-external: crossover retained");
     ASSERT_INT_EQ(plan.fallback_applied, 0,
                   "plan/barrier-external: no fallback applied");
 
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
 }
 
 static void test_dispatch_plan_crossover_only_fallback(void) {
     LPDispatchPlan plan;
 
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
     ASSERT_INT_EQ(lp_dispatch_build_plan((int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
                                          (int)RALPH_LP_EXTERNAL_PROVIDER_NONE,
                                          (int)RALPH_LP_CROSSOVER_ON,
@@ -540,7 +559,7 @@ static void test_dispatch_plan_crossover_only_fallback(void) {
 int main(void) {
     printf("=== LP Dispatch Module Tests ===\n");
 
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
     test_dispatch_validation();
     test_dispatch_setters();
     test_dispatch_capabilities_default();
@@ -553,7 +572,7 @@ int main(void) {
     test_dispatch_plan_barrier_stub_fallback();
     test_dispatch_plan_barrier_external();
     test_dispatch_plan_crossover_only_fallback();
-    lp_external_adapter_unregister();
+    lp_external_adapter_unregister_all();
 
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

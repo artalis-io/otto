@@ -177,6 +177,30 @@ typedef struct {
     RalphLPFallbackReason fallback_reason;
 } RalphLPSolveAlgorithmReport;
 
+typedef enum {
+    RALPH_LP_EXTERNAL_BACKEND_SIMPLEX = 0,
+    RALPH_LP_EXTERNAL_BACKEND_DUAL_SIMPLEX = 1,
+    RALPH_LP_EXTERNAL_BACKEND_BARRIER = 2
+} RalphLPExternalBackendKind;
+
+typedef struct {
+    int supports_simplex;
+    int supports_dual_simplex;
+    int supports_barrier;
+    int supports_crossover;
+} RalphLPExternalCapabilities;
+
+#define RALPH_LP_EXTERNAL_ADAPTER_ABI_VERSION 1
+
+typedef struct {
+    int abi_version;
+    RalphLPExternalProvider provider;
+    const char *provider_name;  /* Optional override; may be NULL. */
+    int (*get_capabilities)(RalphLPExternalCapabilities *caps, void *user_data);
+    int (*solve)(RalphLPExternalBackendKind backend, void *solver_handle, void *user_data);
+    void *user_data;
+} RalphLPExternalAdapter;
+
 /* LP capabilities are compile/runtime feature flags independent of model instance.
  * Returns 0 on success, -1 on invalid args. */
 int ralph_get_lp_capabilities(RalphLPCapabilities *caps);
@@ -188,6 +212,18 @@ int ralph_get_lp_capabilities(RalphLPCapabilities *caps);
  */
 int ralph_get_last_lp_algorithm_report(const RalphModel *model,
                                        RalphLPSolveAlgorithmReport *report);
+
+/* External adapter registration/query API.
+ * Contract:
+ * - Multiple providers may be registered concurrently.
+ * - External LP dispatch still requires explicit external algorithm request +
+ *   matching lp_external_provider parameter.
+ */
+const char* ralph_get_lp_external_provider_name(RalphLPExternalProvider provider);
+int ralph_register_lp_external_adapter(const RalphLPExternalAdapter *adapter);
+int ralph_unregister_lp_external_adapter(RalphLPExternalProvider provider);
+void ralph_unregister_all_lp_external_adapters(void);
+int ralph_is_lp_external_adapter_registered(RalphLPExternalProvider provider);
 
 /* Infeasibility certificate (Farkas ray)
  * Returns 0 on success, -1 if not available (problem not infeasible or no certificate)
@@ -1076,6 +1112,7 @@ typedef enum {
     RALPH_PARAM_LP_ALGORITHM,
     RALPH_PARAM_BARRIER_CROSSOVER,
     RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+    RALPH_PARAM_LP_EXTERNAL_STRICT,
     RALPH_PARAM_COUNT
 } RalphParamId;
 

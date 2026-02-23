@@ -119,6 +119,20 @@ static void test_param_metadata_and_scope(void) {
     ASSERT_INT_EQ((int)meta.max_value, (int)RALPH_LP_EXTERNAL_PROVIDER_GLOP,
                   "params: lp_external_provider max");
 
+    memset(&meta, 0, sizeof(meta));
+    ASSERT_INT_EQ(ralph_get_param_meta(RALPH_PARAM_LP_EXTERNAL_STRICT, &meta), 0,
+                  "params: metadata for lp_external_strict");
+    ASSERT_TRUE(strcmp(meta.name, "lp_external_strict") == 0,
+                "params: lp_external_strict canonical name");
+    ASSERT_INT_EQ((int)meta.scope, (int)RALPH_PARAM_SCOPE_LP,
+                  "params: lp_external_strict LP scope");
+    ASSERT_INT_EQ(meta.has_min, 1, "params: lp_external_strict has min");
+    ASSERT_INT_EQ(meta.has_max, 1, "params: lp_external_strict has max");
+    ASSERT_INT_EQ((int)meta.min_value, 0,
+                  "params: lp_external_strict min");
+    ASSERT_INT_EQ((int)meta.max_value, 1,
+                  "params: lp_external_strict max");
+
     ASSERT_INT_EQ(ralph_find_param_by_name("lp_algorithm", &pid), 0,
                   "params: find lp_algorithm canonical");
     ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_ALGORITHM,
@@ -135,6 +149,14 @@ static void test_param_metadata_and_scope(void) {
                   "params: find lp_external_provider alias");
     ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_EXTERNAL_PROVIDER,
                   "params: lp_external_provider alias id");
+    ASSERT_INT_EQ(ralph_find_param_by_name("lp_external_strict", &pid), 0,
+                  "params: find lp_external_strict canonical");
+    ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_EXTERNAL_STRICT,
+                  "params: lp_external_strict canonical id");
+    ASSERT_INT_EQ(ralph_find_param_by_name("LPExternalStrict", &pid), 0,
+                  "params: find lp_external_strict alias");
+    ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_EXTERNAL_STRICT,
+                  "params: lp_external_strict alias id");
 
     ASSERT_INT_EQ(ralph_set_mip_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                                              (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX),
@@ -148,6 +170,9 @@ static void test_param_metadata_and_scope(void) {
                                              (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
                   -1,
                   "params: MIP strict rejects lp_external_provider id");
+    ASSERT_INT_EQ(ralph_set_mip_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 1),
+                  -1,
+                  "params: MIP strict rejects lp_external_strict id");
 
     ASSERT_INT_EQ(ralph_set_lp_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                                             (int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX),
@@ -207,6 +232,8 @@ static void test_param_metadata_and_scope(void) {
                   "params: reject barrier_crossover out of range");
     ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER, 7), -1,
                   "params: reject lp_external_provider out of range");
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 2), -1,
+                  "params: reject lp_external_strict out of range");
 
     ASSERT_INT_EQ(ralph_set_int_param(model, "barrier_crossover",
                                       (int)RALPH_LP_CROSSOVER_ON),
@@ -390,6 +417,31 @@ static void test_external_fallback_report(void) {
     ralph_free(model);
 }
 
+static void test_external_strict_mode_error(void) {
+    RalphModel *model = build_small_lp();
+
+    ASSERT_TRUE(model != NULL, "external-strict: model created");
+    if (!model) return;
+
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+                                         (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL),
+                  0,
+                  "external-strict: request external primal algorithm");
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+                                         (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
+                  0,
+                  "external-strict: request external provider GLPK");
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 1),
+                  0,
+                  "external-strict: enable strict mode");
+    ASSERT_INT_EQ(ralph_optimize_lp(model), -1,
+                  "external-strict: optimize fails when external backend unavailable");
+    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_ERROR,
+                  "external-strict: status is ERROR");
+
+    ralph_free(model);
+}
+
 static void test_legacy_method_dispatch_report(void) {
     RalphModel *model = build_small_lp();
     RalphLPSolveAlgorithmReport report;
@@ -459,6 +511,7 @@ int main(void) {
     test_barrier_fallback_report();
     test_crossover_only_fallback_report();
     test_external_fallback_report();
+    test_external_strict_mode_error();
     test_legacy_method_dispatch_report();
     test_lp_report_rejects_mip_models();
 

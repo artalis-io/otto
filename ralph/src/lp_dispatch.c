@@ -2,7 +2,6 @@
 
 #include "lp_dispatch.h"
 #include "lp_backend.h"
-#include "lp_external_adapter.h"
 
 #define LP_DISPATCH_EXTERNAL_PROVIDER_ANY (-1)
 
@@ -40,49 +39,34 @@ static int lp_dispatch_backend_is_external(LPDispatchBackend backend) {
            backend == LP_DISPATCH_BACKEND_BARRIER_EXTERNAL;
 }
 
-static void lp_dispatch_apply_external_provider_gate(
-    int requested_external_provider,
-    LPDispatchBackendSpec *spec) {
-    LPExternalProvider expected_provider;
-    LPExternalProvider registered_provider;
-
-    if (!spec) return;
-    if (!lp_dispatch_backend_is_external(spec->backend)) return;
-    if (requested_external_provider == LP_DISPATCH_EXTERNAL_PROVIDER_ANY) return;
-
-    if (!lp_dispatch_external_provider_value_valid(requested_external_provider) ||
-        requested_external_provider == (int)RALPH_LP_EXTERNAL_PROVIDER_NONE) {
-        spec->available = 0;
-        return;
+static LPExternalProvider lp_dispatch_provider_for_query(int requested_external_provider) {
+    if (requested_external_provider == LP_DISPATCH_EXTERNAL_PROVIDER_ANY) {
+        return LP_EXTERNAL_PROVIDER_NONE;
     }
-    if (!lp_external_adapter_is_registered()) {
-        spec->available = 0;
-        return;
-    }
-
-    expected_provider = lp_dispatch_to_internal_provider(requested_external_provider);
-    if (expected_provider == LP_EXTERNAL_PROVIDER_NONE) {
-        spec->available = 0;
-        return;
-    }
-    registered_provider = lp_external_adapter_provider();
-    if (registered_provider != expected_provider) {
-        spec->available = 0;
-    }
+    return lp_dispatch_to_internal_provider(requested_external_provider);
 }
 
 static int lp_dispatch_get_backend_spec(LPDispatchBackend backend,
                                         int requested_external_provider,
                                         LPDispatchBackendSpec *spec) {
-    LPBackendCapability capability;
+    LPBackendCapability capability = {0, 0};
+    LPExternalProvider provider_hint = lp_dispatch_provider_for_query(requested_external_provider);
+    int explicit_none_external =
+        (lp_dispatch_backend_is_external(backend) &&
+         requested_external_provider != LP_DISPATCH_EXTERNAL_PROVIDER_ANY &&
+         requested_external_provider == (int)RALPH_LP_EXTERNAL_PROVIDER_NONE);
 
     if (!spec) return -1;
-    if (lp_backend_get_capability(backend, &capability) != 0) return -1;
+    if (!explicit_none_external &&
+        lp_backend_get_capability(backend, provider_hint, &capability) != 0) {
+        return -1;
+    }
 
     memset(spec, 0, sizeof(*spec));
     spec->backend = backend;
-    spec->available = capability.available ? 1 : 0;
-    spec->supports_crossover = capability.supports_crossover ? 1 : 0;
+    spec->available = explicit_none_external ? 0 : (capability.available ? 1 : 0);
+    spec->supports_crossover =
+        explicit_none_external ? 0 : (capability.supports_crossover ? 1 : 0);
 
     switch (backend) {
         case LP_DISPATCH_BACKEND_SIMPLEX:
@@ -92,12 +76,10 @@ static int lp_dispatch_get_backend_spec(LPDispatchBackend backend,
         case LP_DISPATCH_BACKEND_SIMPLEX_EXTERNAL:
             spec->fallback_algorithm = RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
             spec->unavailable_reason = RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE;
-            lp_dispatch_apply_external_provider_gate(requested_external_provider, spec);
             return 0;
         case LP_DISPATCH_BACKEND_DUAL_SIMPLEX_EXTERNAL:
             spec->fallback_algorithm = RALPH_LP_ALGORITHM_DUAL_SIMPLEX;
             spec->unavailable_reason = RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE;
-            lp_dispatch_apply_external_provider_gate(requested_external_provider, spec);
             return 0;
         case LP_DISPATCH_BACKEND_BARRIER_NATIVE:
             spec->fallback_algorithm = RALPH_LP_ALGORITHM_AUTO;
@@ -106,7 +88,6 @@ static int lp_dispatch_get_backend_spec(LPDispatchBackend backend,
         case LP_DISPATCH_BACKEND_BARRIER_EXTERNAL:
             spec->fallback_algorithm = RALPH_LP_ALGORITHM_AUTO;
             spec->unavailable_reason = RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE;
-            lp_dispatch_apply_external_provider_gate(requested_external_provider, spec);
             return 0;
         default:
             return -1;
@@ -149,6 +130,13 @@ static int lp_dispatch_simplex_method_for_algorithm(RalphLPAlgorithm algorithm) 
 int lp_dispatch_algorithm_value_valid(int value) {
     return value >= (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX &&
            value <= (int)RALPH_LP_ALGORITHM_BARRIER_EXTERNAL;
+}
+
+int lp_dispatch_algorithm_is_external(int value) {
+    if (!lp_dispatch_algorithm_value_valid(value)) return 0;
+    return value == (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL ||
+           value == (int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX_EXTERNAL ||
+           value == (int)RALPH_LP_ALGORITHM_BARRIER_EXTERNAL;
 }
 
 int lp_dispatch_crossover_value_valid(int value) {
@@ -263,6 +251,7 @@ int lp_dispatch_build_plan(int requested_algorithm,
     LPDispatchBackendSpec requested_spec;
     LPDispatchBackendSpec effective_spec;
     LPDispatchBackendSpec simplex_spec;
+    int effective_provider_for_query = LP_DISPATCH_EXTERNAL_PROVIDER_ANY;
 
     if (!plan) return -1;
     if (!lp_dispatch_algorithm_value_valid(requested_algorithm)) return -1;
@@ -272,6 +261,8 @@ int lp_dispatch_build_plan(int requested_algorithm,
     memset(plan, 0, sizeof(*plan));
     plan->requested_algorithm = (RalphLPAlgorithm)requested_algorithm;
     plan->effective_algorithm = plan->requested_algorithm;
+    plan->requested_external_provider = (RalphLPExternalProvider)requested_external_provider;
+    plan->effective_external_provider = RALPH_LP_EXTERNAL_PROVIDER_NONE;
     plan->requested_crossover = (RalphLPCrossoverMode)requested_crossover;
     plan->effective_crossover = plan->requested_crossover;
     plan->requested_backend = lp_dispatch_backend_for_algorithm(plan->requested_algorithm);
@@ -294,12 +285,18 @@ int lp_dispatch_build_plan(int requested_algorithm,
     if (!requested_spec.available) {
         plan->effective_backend = LP_DISPATCH_BACKEND_SIMPLEX;
         plan->effective_algorithm = requested_spec.fallback_algorithm;
+        plan->effective_external_provider = RALPH_LP_EXTERNAL_PROVIDER_NONE;
         plan->fallback_applied = 1;
         plan->fallback_reason = requested_spec.unavailable_reason;
+    } else if (lp_dispatch_backend_is_external(plan->effective_backend)) {
+        plan->effective_external_provider = plan->requested_external_provider;
     }
 
+    if (lp_dispatch_backend_is_external(plan->effective_backend)) {
+        effective_provider_for_query = (int)plan->effective_external_provider;
+    }
     if (lp_dispatch_get_backend_spec(plan->effective_backend,
-                                     requested_external_provider,
+                                     effective_provider_for_query,
                                      &effective_spec) != 0) {
         return -1;
     }

@@ -3,6 +3,7 @@
 
 #include "lp.h"
 #include "lp_dispatch.h"
+#include "lp_external_adapter.h"
 
 typedef struct {
     int available;
@@ -10,9 +11,13 @@ typedef struct {
 } LPBackendCapability;
 
 /* Query runtime-executable capability for one backend. */
-int lp_backend_get_capability(LPDispatchBackend backend, LPBackendCapability *capability);
+int lp_backend_get_capability(LPDispatchBackend backend,
+                              LPExternalProvider provider,
+                              LPBackendCapability *capability);
 
 /* Execute the LP solve using the selected backend implementation. */
-int lp_backend_run(LPDispatchBackend backend, SimplexSolver *solver);
+int lp_backend_run(LPDispatchBackend backend,
+                   LPExternalProvider provider,
+                   SimplexSolver *solver);
 
 #endif

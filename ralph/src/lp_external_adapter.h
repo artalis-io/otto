@@ -40,12 +40,15 @@ typedef struct {
 const char* lp_external_provider_name(LPExternalProvider provider);
 
 int lp_external_adapter_register(const LPExternalAdapter *adapter);
-void lp_external_adapter_unregister(void);
-int lp_external_adapter_is_registered(void);
-LPExternalProvider lp_external_adapter_provider(void);
-const char* lp_external_adapter_provider_name(void);
+int lp_external_adapter_unregister(LPExternalProvider provider);
+void lp_external_adapter_unregister_all(void);
+int lp_external_adapter_is_registered(LPExternalProvider provider);
+const char* lp_external_adapter_registered_name(LPExternalProvider provider);
 
-int lp_external_adapter_get_capabilities(LPExternalCapabilities *caps);
-int lp_external_adapter_solve(LPExternalBackendKind backend, SimplexSolver *solver);
+int lp_external_adapter_get_capabilities(LPExternalProvider provider,
+                                         LPExternalCapabilities *caps);
+int lp_external_adapter_solve(LPExternalProvider provider,
+                              LPExternalBackendKind backend,
+                              SimplexSolver *solver);
 
 #endif
