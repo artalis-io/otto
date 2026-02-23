@@ -1675,7 +1675,7 @@ Grouped by business impact:
 | **Commodity conflicts** | ✅ Complete | Bitmask-based (up to 64 types), O(1) conflict check. 4 tests. |
 | **Exclusion groups** | ✅ Complete | At most one request per group per vehicle. 4 tests. |
 | **Sequence-dependent setup** | ✅ Complete | Asymmetric N×N setup class matrix. 4 tests. |
-| **Time-dependent travel** | Not started | Rush hour matrices. Multiple matrix sets indexed by departure time. |
+| **Time-dependent travel** | Partial | Speed profiles (step-function duration multipliers by departure time) done. Rush hour *indexed matrices* (multiple full matrix sets by time-of-day) not started. |
 | **LIFO/FIFO PD policy** | Not started | OR-Tools has per-vehicle pickup/delivery stacking order. Niche. |
 | **Backhaul constraint** | Not started | All deliveries before pickups on a route. jsprit has this. Niche. |
 | **Energy cost model** | Not started | EV-specific path energy cost. OR-Tools only. |
@@ -1684,14 +1684,14 @@ Grouped by business impact:
 
 | Gap | Status | Competitors | Notes |
 |-----|--------|-------------|-------|
-| **Time-dependent travel** | Not started | OR-Tools | Rush hour modeling. State-dependent transit callback. High value. |
-| **Max tasks per vehicle** | Done | VROOM | Per-vehicle cap on request count. 0 = unlimited. |
-| **Max distance per vehicle** | Done | VROOM | Per-vehicle cap on route distance. 0.0 = unlimited. |
-| **Open start (no depot)** | Not started | OR-Tools | Vehicle starts at first stop, no depot assignment required. |
-| **Per-vehicle travel matrix** | Partial | OR-Tools, VROOM | Callback already supports it; matrix API is single-matrix only. |
+| **Time-dependent travel** | Partial | OR-Tools | Speed profiles done (`sg_vehicle_set_speed_profile`). Rush hour indexed matrices not started. |
+| **Max tasks per vehicle** | ✅ Done | VROOM | Per-vehicle cap on request count. 0 = unlimited. |
+| **Max distance per vehicle** | ✅ Done | VROOM | Per-vehicle cap on route distance. 0.0 = unlimited. |
+| **Open start (no depot)** | ✅ Done | OR-Tools | `sg_vehicle_set_open_start()`. Skips first depot-to-stop leg. 3 tests. |
+| **Per-vehicle travel matrix** | ✅ Done | OR-Tools, VROOM | `sg_vehicle_set_travel_profile()` — independent distance/duration matrices + speed profile per vehicle type. 6 tests. |
 | **Initial vehicle loads** | Not started | jsprit | Vehicle starts shift with pre-loaded cargo. Useful for return trips. |
-| ~~**Global span balancing**~~ | ✅ Done | OR-Tools | **Done.** `sg_set_span_cost_duration()` / `sg_set_span_cost_distance()`. Adds `span_cost × (max - min)` penalty to cost function. Stats always report `duration_span` / `distance_span`. 5 tests. |
-| **Plan/ETA validation mode** | Not started | VROOM | Validate fixed routes, report constraint violations per stop. |
+| **Global span balancing** | ✅ Done | OR-Tools | `sg_set_span_cost_duration()` / `sg_set_span_cost_distance()`. Adds `span_cost × (max - min)` penalty to cost function. 5 tests. |
+| **Plan/ETA validation mode** | ✅ Done | VROOM | `sg_validate_plan()` — validate fixed routes, compute ETAs, report violations per stop. JSON API `"plan"` key. 8 tests. |
 
 **Tier 5 — Infrastructure & Performance:**
 
@@ -1700,10 +1700,10 @@ Grouped by business impact:
 | **Arena allocator** | Phases 1-3 done | High | Phase 1 (per-solution arena): ~29 malloc → 1, ~26 free → 1. Phase 2 (optimized copy): `init_for_copy()` + single `memcpy` of arena buffer. Phase 3 (scratch buffers): `SGScratchBuffers` on `SGContext` eliminates per-call malloc/free in feasibility and local search. Cumulative: Solomon -14.8%, Li&Lim -5.0%, Cordeau -3.4% vs Phase 1. |
 | **Multi-threading: independent runs** | ✅ Done | High | `sg_solve_parallel()`: N threads × N seeds, pick best. 15 wins vs 0 losses on Li & Lim vs single-threaded. |
 | **Multi-threading: parallel move eval** | Not started | Medium | `sg_route_rank_insertions_for_request()` vehicle loop is read-only per vehicle. Thread pool or OpenMP. |
-| **REST API server** | Not started | High | Mongoose + `sh_workqueue` + `sh_ratelimit` + `sh_metrics`. Same pattern as FuelWise (`fuelwise/api/src/main.c`). ~600 LOC of boilerplate. |
-| **Language bindings** | Not started | Medium | JSON API is the binding — each language wrapper is serialize/call/deserialize. Packaging (PyPI, npm) is the real work. |
+| **REST API server** | ✅ Done | High | `surge/api/surge-solver` — Mongoose + `sh_workqueue`. `sg_api_handle()` routes `/api/v1/solve`, `/health`, `/version`. E2e test suite (`test_api.sh`). |
+| **Language bindings** | ✅ Done | Medium | Python (`surge/bindings/python/`) and Node.js (`surge/bindings/node/`) wrappers around JSON API. Test suites for both. |
 | **Population-based search** | ✅ Done | Medium | `sg_solve_population()`: generational ALNS with elite pool warm-starting. 10 wins vs 6 losses on Li & Lim vs independent parallel runs, avg distance -0.6%. |
-| **WASM build** | Not started | Medium | Emscripten target. `sg_api_handle()` is already transport-agnostic. |
+| **WASM build** | ✅ Done | Medium | `surge/wasm/` — Emscripten target. `sg_wasm_api.c` wraps `sg_api_handle()`. Transport-agnostic by design. |
 
 ### JSON API (`sg_api.h`)
 
@@ -1740,11 +1740,11 @@ The JSON API provides three tiers of access:
 
 These are real-world features that require larger architectural changes:
 
-| Feature | Why deferred |
-|---------|-------------|
-| **Driver breaks / HoSE** | ✅ Complete. Abstract break model implemented without HoSE state machine — generic `(max_work, break_duration, max_total_work)` maps to both EU EC 561 and US FMCSA rules. |
-| **Multiple trips** | Requires multi-route-per-vehicle state, depot reload modeling, fundamentally different route representation |
-| **Time-dependent travel** | Rush hour matrices indexed by departure time. Matrix interpolation in feasibility kernel. |
+| Feature | Status |
+|---------|--------|
+| **Driver breaks / HoSE** | ✅ Complete. Abstract break model — generic `(max_work, break_duration, max_total_work)` maps to both EU EC 561 and US FMCSA rules. |
+| **Multiple trips** | ✅ Complete. Multi-route-per-vehicle state with depot reload modeling. `sg_vehicle_set_max_trips()`. |
+| **Time-dependent travel** | Partial. Speed profiles and per-vehicle travel profiles done (`sg_vehicle_set_travel_profile()`). Rush hour matrices indexed by departure time not yet implemented. |
 
 ---
 
@@ -1755,41 +1755,41 @@ Users can override via `SGConfig.max_iterations` or `--iterations` in benchmarks
 
 | Profile | Iterations | Runtime (100-req) | Solomon distGap | Li & Lim distGap | Use case |
 |---------|-----------|-------------------|-----------------|------------------|----------|
-| **Real-time** | 300 | ~0.2 s | +5.5% | +9.0% | API responses, live dispatch |
-| **Batch** (default) | 1,000 | ~0.6 s | +3.0% | +5.0% | Daily planning, route optimization |
-| **High quality** | 5,000 | ~2.0 s | +0.2% | +4.3% | Offline analysis |
-| **Best quality** | 10,000 | ~4.5 s | +0.2% | +3.9% | Benchmarking, maximum quality |
+| **Real-time** | 300 | ~0.2 s | ~+3% | ~+7% | API responses, live dispatch |
+| **Batch** (default) | 1,000 | ~0.6 s | ~+1.5% | ~+5% | Daily planning, route optimization |
+| **High quality** | 5,000 | ~2.0 s | ~+0.5% | ~+4.5% | Offline analysis |
+| **Best quality** | 10,000 | ~4.5 s | +0.2% | +4.2% | Benchmarking, maximum quality |
 
 ### Iteration Scaling Data (100-customer instances, deterministic seed 42)
 
-**Solomon (VRPTW, 56 cases)**:
+**Solomon (VRPTW, 56 cases)** — single-thread with infeasible-space exploration:
 
 | Iters | Sec/case | avgDistGap | avgVehGap | equalVeh | lexiNonWorse |
 |------:|--------:|-----------:|----------:|---------:|-------------:|
-| 100 | 0.10 | +10.9% | +1.11 | 16 | 4 |
-| 300 | 0.22 | +5.5% | +0.86 | 21 | 6 |
-| 500 | 0.51 | +4.0% | +0.84 | 20 | 7 |
-| 1,000 | 0.66 | +3.0% | +0.77 | 23 | 8 |
-| 2,000 | 0.95 | +2.0% | +0.59 | 27 | 9 |
-| 5,000 | 1.83 | +0.8% | +0.50 | 31 | 11 |
-| 10,000 | 4.90 | +0.2% | +0.38 | 35 | 11 |
+| 10,000 | 9.2 | +0.2% | +0.30 | 39/56 | 23 |
 
-**Li & Lim (PDPTW, 56 cases)**:
+**Solomon — population (4 threads, 8 generations)**:
 
 | Iters | Sec/case | avgDistGap | avgVehGap | equalVeh | lexiNonWorse |
 |------:|--------:|-----------:|----------:|---------:|-------------:|
-| 100 | 0.09 | +12.8% | +1.32 | 16 | 5 |
-| 300 | 0.13 | +9.0% | +1.02 | 27 | 10 |
-| 500 | 0.35 | +6.5% | +0.93 | 29 | 12 |
-| 1,000 | 0.60 | +5.0% | +0.77 | 33 | 14 |
-| 2,000 | 0.99 | +5.0% | +0.73 | 33 | 17 |
-| 5,000 | 2.13 | +4.2% | +0.71 | 34 | 18 |
-| 10,000 | 3.59 | +3.9% | +0.59 | 39 | 21 |
+| 10,000 | 31.0 | -0.2% | +0.20 | 45/56 | 35 |
+
+**Li & Lim (PDPTW, 56 cases)** — single-thread with infeasible-space exploration:
+
+| Iters | Sec/case | avgDistGap | avgVehGap | equalVeh | lexiNonWorse |
+|------:|--------:|-----------:|----------:|---------:|-------------:|
+| 10,000 | 10.5 | +4.2% | +0.48 | 44/56 | 24 |
+
+**Li & Lim — population (4 threads, 8 generations)**:
+
+| Iters | Sec/case | avgDistGap | avgVehGap | equalVeh | lexiNonWorse |
+|------:|--------:|-----------:|----------:|---------:|-------------:|
+| 10,000 | 31.0 | +3.5% | +0.38 | 48/56 | 30 |
 
 **Observations**:
-- The improvement knee is at ~1000 iterations for both benchmarks.
-- Solomon continues to improve log-linearly through 5000; Li & Lim plateaus at ~1000, indicating structural gaps (operators, not search time) are the bottleneck for PDPTW.
-- Runtime scales sub-linearly: 5000 iters costs ~18x of 100 iters (not 50x) due to fixed construction/postprocess costs.
+- Infeasible-space exploration (Phase S12) closed the +1 vehicle gap on most tight-TW instances. Solomon equalVehicles improved from 35 to 39 (single-thread) and 45 (population).
+- Population search adds ~3x wall-clock time but improves both vehicle count and distance quality. Solomon distance gap goes slightly negative (beating some BKS).
+- Li & Lim distance gap remains at +3.5-4.2% — closing this requires operator improvements (ejection chains, route-level crossover), not more search time.
 
 ## Performance Targets
 
