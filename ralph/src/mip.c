@@ -485,8 +485,12 @@ static int mip_select_most_infeasible(const MIPSolver *solver, const double *sol
 
     int best_var = -1;
     double best_infeas = RALPH_INT_TOL;
+    const LPModel *wm = solver->working_model;
+    const double *lb = wm ? wm->lb : NULL;
+    const double *ub = wm ? wm->ub : NULL;
     for (int k = 0; k < solver->num_integers; k++) {
         int j = solver->integer_vars[k];
+        if (lb && ub && ub[j] - lb[j] <= RALPH_INT_TOL) continue;
         double val = solution[j];
         double frac = val - floor(val);
         if (frac < 0.0) frac += 1.0;
@@ -499,6 +503,21 @@ static int mip_select_most_infeasible(const MIPSolver *solver, const double *sol
         }
     }
     return best_var;
+}
+
+/* Verify that the current LP solution is consistent with the node bounds.
+ * Warm dual re-optimization can occasionally report OPTIMAL without moving if
+ * the inherited basis/solution pair is stale for the new branch bounds. */
+static int mip_solution_within_node_bounds(const LPModel *model,
+                                           const double *x,
+                                           const double *lb,
+                                           const double *ub) {
+    if (!model || !x || !lb || !ub) return 0;
+    for (int j = 0; j < model->num_vars; j++) {
+        if (x[j] < lb[j] - RALPH_FEAS_TOL) return 0;
+        if (x[j] > ub[j] + RALPH_FEAS_TOL) return 0;
+    }
+    return 1;
 }
 
 /* ============================================================================
@@ -1184,13 +1203,13 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
 
     solver->simplex_nodes_solved++;
 
-    /* Set objective limit for early pruning in dual_simplex_solve_v2.
-     * obj_sense converts to internal minimization space (1=min, -1=max). */
-    if (solver->has_incumbent) {
-        lp->objective_limit = solver->best_obj * model->obj_sense;
-    } else {
-        lp->objective_limit = RALPH_INFINITY;
-    }
+    /* Keep node LP solves uncapped.
+     *
+     * The simplex/dual-simplex objective-limit status is a solve cutoff, not a
+     * certified branch-and-bound bound. Feeding incumbent-derived limits here
+     * can terminate node LP solves before a valid relaxation bound is obtained,
+     * which may incorrectly prune improving nodes. */
+    lp->objective_limit = RALPH_INFINITY;
 
     /* Warm reuse is only allowed when this node carries a saved LP basis.
      * This removes the old ad-hoc "reuse whatever tableau is lying around" path. */
@@ -1217,7 +1236,12 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
                               rc, lp->status, lp->iterations, lp->obj_value);
             }
             if (rc == 0 && lp->status == RALPH_STATUS_OPTIMAL) {
-                goto node_lp_done;
+                if (mip_solution_within_node_bounds(model, lp->solution, node->lb, node->ub)) {
+                    goto node_lp_done;
+                }
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDOUT("  [solve_node_lp] warm solution violates node bounds; forcing cold start\n");
+                }
             }
             /* v2 detected infeasible or hit objective limit — valid result */
             if (lp->status == RALPH_STATUS_INFEASIBLE ||
@@ -1464,6 +1488,23 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     if (branch_frac < 0.0) branch_frac += 1.0;
     if (branch_frac <= RALPH_INT_TOL || branch_frac >= 1.0 - RALPH_INT_TOL) {
         int fallback = mip_select_most_infeasible(solver, lp_sol);
+        if (fallback < 0) {
+            /* Strong/reliability probing can leave the LP state stale even
+             * when recovery paths report success. Rebuild once and retry
+             * fractional-variable detection before pruning the node. */
+            if (solver->lp_solver && solver->working_model) {
+                if (mip_lp_cold_start_primal(solver->lp_solver, 2) == 0 &&
+                    solver->lp_solver->status == RALPH_STATUS_OPTIMAL &&
+                    solver->lp_solver->tableau &&
+                    mip_lp_apply_structural_bounds(solver->lp_solver->tableau,
+                                                   solver->working_model->num_vars,
+                                                   node->lb, node->ub) == 0 &&
+                    mip_lp_recompute(solver->lp_solver->tableau) == 0) {
+                    lp_sol = solver->lp_solver->solution;
+                    fallback = mip_select_most_infeasible(solver, lp_sol);
+                }
+            }
+        }
         if (fallback < 0) {
             if (solver->verbose >= 2) {
                 LP_LOG_STDOUT("  [process_node] No fractional var after probing; pruning node\n");
