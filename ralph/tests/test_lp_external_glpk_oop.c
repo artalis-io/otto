@@ -1,7 +1,7 @@
 /*
  * Tests for GLPK out-of-process external adapter registration + execution.
  *
- * Uses mock shell scripts (no GLPK dependency in test gate).
+ * Uses mock shell scripts (no GLPK dependency in unit test gate).
  */
 
 #include <stdio.h>
@@ -126,29 +126,31 @@ static void test_register_caps_and_unregister(void) {
     unlink(script_path);
 }
 
-static void test_primal_simplex_oop_success(void) {
+static void test_primal_simplex_oop_success_with_duals(void) {
     char script_path[256];
     const char *script =
         "#!/bin/sh\n"
-        "out=\"\"\n"
-        "next_out=0\n"
+        "wri=\"\"\n"
+        "next_wri=0\n"
         "for arg in \"$@\"; do\n"
-        "  if [ \"$next_out\" = \"1\" ]; then out=\"$arg\"; next_out=0; continue; fi\n"
-        "  if [ \"$arg\" = \"-o\" ]; then next_out=1; continue; fi\n"
+        "  if [ \"$next_wri\" = \"1\" ]; then wri=\"$arg\"; next_wri=0; continue; fi\n"
+        "  if [ \"$arg\" = \"--write\" ]; then next_wri=1; continue; fi\n"
         "done\n"
-        "if [ -z \"$out\" ]; then exit 2; fi\n"
-        "cat > \"$out\" <<'EOF'\n"
-        "Status:     OPTIMAL\n"
-        "Objective:  obj = 1\n"
-        "\n"
-        "   No. Column name  St   Activity   Lower bound   Upper bound    Marginal\n"
-        "------ ------------ -- ------------- ------------- ------------- -------------\n"
-        "     1 X1           B              1             0\n"
-        "EOF\n"
+        "if [ -z \"$wri\" ]; then exit 2; fi\n"
+        "cat > \"$wri\" <<'EOF_WR'\n"
+        "c Status:     OPTIMAL\n"
+        "c Objective:  obj = 1 (MINimum)\n"
+        "s bas 1 1 f f 1\n"
+        "i 1 l 1 1\n"
+        "j 1 b 1 0\n"
+        "e o f\n"
+        "EOF_WR\n"
         "echo \"  11 simplex iterations\"\n"
         "exit 0\n";
     RalphModel *model = NULL;
     double x = 0.0;
+    double y = 0.0;
+    double rc = 0.0;
     int rc_script;
 
     ralph_unregister_all_lp_external_adapters();
@@ -187,6 +189,14 @@ static void test_primal_simplex_oop_success(void) {
                   "primal/success: solution available");
     ASSERT_DBL_CLOSE(x, 1.0, 1e-9,
                      "primal/success: solution propagated");
+    ASSERT_INT_EQ(ralph_get_dual_solution(model, &y), 0,
+                  "primal/success: dual solution available");
+    ASSERT_DBL_CLOSE(y, 1.0, 1e-9,
+                     "primal/success: dual propagated");
+    ASSERT_INT_EQ(ralph_get_reduced_costs(model, &rc), 0,
+                  "primal/success: reduced costs available");
+    ASSERT_DBL_CLOSE(rc, 0.0, 1e-9,
+                     "primal/success: reduced costs propagated");
 
     ralph_free(model);
     ralph_unregister_all_lp_external_adapters();
@@ -197,24 +207,24 @@ static void test_dual_simplex_routes_dual_flag(void) {
     char script_path[256];
     const char *script =
         "#!/bin/sh\n"
-        "out=\"\"\n"
+        "wri=\"\"\n"
         "mode=\"primal\"\n"
-        "next_out=0\n"
+        "next_wri=0\n"
         "for arg in \"$@\"; do\n"
-        "  if [ \"$next_out\" = \"1\" ]; then out=\"$arg\"; next_out=0; continue; fi\n"
-        "  if [ \"$arg\" = \"-o\" ]; then next_out=1; continue; fi\n"
+        "  if [ \"$next_wri\" = \"1\" ]; then wri=\"$arg\"; next_wri=0; continue; fi\n"
+        "  if [ \"$arg\" = \"--write\" ]; then next_wri=1; continue; fi\n"
         "  if [ \"$arg\" = \"--dual\" ]; then mode=\"dual\"; fi\n"
         "done\n"
-        "if [ -z \"$out\" ]; then exit 2; fi\n"
+        "if [ -z \"$wri\" ]; then exit 2; fi\n"
         "if [ \"$mode\" != \"dual\" ]; then exit 9; fi\n"
-        "cat > \"$out\" <<'EOF'\n"
-        "Status:     OPTIMAL\n"
-        "Objective:  obj = 2\n"
-        "\n"
-        "   No. Column name  St   Activity   Lower bound   Upper bound    Marginal\n"
-        "------ ------------ -- ------------- ------------- ------------- -------------\n"
-        "     1 X1           B              2             0\n"
-        "EOF\n"
+        "cat > \"$wri\" <<'EOF_WR'\n"
+        "c Status:     OPTIMAL\n"
+        "c Objective:  obj = 2 (MINimum)\n"
+        "s bas 1 1 f f 2\n"
+        "i 1 l 2 2\n"
+        "j 1 b 2 0\n"
+        "e o f\n"
+        "EOF_WR\n"
         "echo \"  17 simplex iterations\"\n"
         "exit 0\n";
     RalphModel *model = NULL;
@@ -261,21 +271,118 @@ static void test_dual_simplex_routes_dual_flag(void) {
     unlink(script_path);
 }
 
+static void test_status_hints_for_infeasible_and_unbounded(void) {
+    char inf_script[256];
+    char unb_script[256];
+    const char *inf_body =
+        "#!/bin/sh\n"
+        "wri=\"\"\n"
+        "next_wri=0\n"
+        "for arg in \"$@\"; do\n"
+        "  if [ \"$next_wri\" = \"1\" ]; then wri=\"$arg\"; next_wri=0; continue; fi\n"
+        "  if [ \"$arg\" = \"--write\" ]; then next_wri=1; continue; fi\n"
+        "done\n"
+        "if [ -z \"$wri\" ]; then exit 2; fi\n"
+        "cat > \"$wri\" <<'EOF_WR'\n"
+        "c Status:     UNDEFINED\n"
+        "s bas 1 1 u u 0\n"
+        "i 1 b 0 0\n"
+        "j 1 l 0 0\n"
+        "e o f\n"
+        "EOF_WR\n"
+        "echo \"PROBLEM HAS NO PRIMAL FEASIBLE SOLUTION\"\n"
+        "exit 0\n";
+    const char *unb_body =
+        "#!/bin/sh\n"
+        "wri=\"\"\n"
+        "next_wri=0\n"
+        "for arg in \"$@\"; do\n"
+        "  if [ \"$next_wri\" = \"1\" ]; then wri=\"$arg\"; next_wri=0; continue; fi\n"
+        "  if [ \"$arg\" = \"--write\" ]; then next_wri=1; continue; fi\n"
+        "done\n"
+        "if [ -z \"$wri\" ]; then exit 2; fi\n"
+        "cat > \"$wri\" <<'EOF_WR'\n"
+        "c Status:     UNDEFINED\n"
+        "s bas 1 1 u u 0\n"
+        "i 1 b 0 0\n"
+        "j 1 l 0 0\n"
+        "e o f\n"
+        "EOF_WR\n"
+        "echo \"PROBLEM HAS NO DUAL FEASIBLE SOLUTION\"\n"
+        "exit 0\n";
+    RalphModel *model = NULL;
+
+    ralph_unregister_all_lp_external_adapters();
+    ASSERT_INT_EQ(write_mock_script(inf_body, inf_script, sizeof(inf_script)), 0,
+                  "status-hints: create infeasible script");
+    ASSERT_INT_EQ(ralph_register_lp_external_glpk_oop(inf_script), 0,
+                  "status-hints: register infeasible script");
+
+    model = build_small_lp();
+    ASSERT_TRUE(model != NULL, "status-hints: infeasible model created");
+    if (model) {
+        ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+                                             (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL),
+                      0,
+                      "status-hints: set ext primal (inf)");
+        ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+                                             (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
+                      0,
+                      "status-hints: set provider (inf)");
+        ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+                      "status-hints: infeasible solve returns success rc");
+        ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_INFEASIBLE,
+                      "status-hints: mapped infeasible");
+        ralph_free(model);
+    }
+    ralph_unregister_all_lp_external_adapters();
+
+    ASSERT_INT_EQ(write_mock_script(unb_body, unb_script, sizeof(unb_script)), 0,
+                  "status-hints: create unbounded script");
+    ASSERT_INT_EQ(ralph_register_lp_external_glpk_oop(unb_script), 0,
+                  "status-hints: register unbounded script");
+
+    model = build_small_lp();
+    ASSERT_TRUE(model != NULL, "status-hints: unbounded model created");
+    if (model) {
+        ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+                                             (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL),
+                      0,
+                      "status-hints: set ext primal (unb)");
+        ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+                                             (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
+                      0,
+                      "status-hints: set provider (unb)");
+        ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+                      "status-hints: unbounded solve returns success rc");
+        ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_UNBOUNDED,
+                      "status-hints: mapped unbounded");
+        ralph_free(model);
+    }
+
+    ralph_unregister_all_lp_external_adapters();
+    unlink(inf_script);
+    unlink(unb_script);
+}
+
 static void test_time_limit_maps_to_external_failure_report(void) {
     char script_path[256];
     const char *script =
         "#!/bin/sh\n"
-        "out=\"\"\n"
-        "next_out=0\n"
+        "wri=\"\"\n"
+        "next_wri=0\n"
         "for arg in \"$@\"; do\n"
-        "  if [ \"$next_out\" = \"1\" ]; then out=\"$arg\"; next_out=0; continue; fi\n"
-        "  if [ \"$arg\" = \"-o\" ]; then next_out=1; continue; fi\n"
+        "  if [ \"$next_wri\" = \"1\" ]; then wri=\"$arg\"; next_wri=0; continue; fi\n"
+        "  if [ \"$arg\" = \"--write\" ]; then next_wri=1; continue; fi\n"
         "done\n"
-        "if [ -z \"$out\" ]; then exit 2; fi\n"
-        "cat > \"$out\" <<'EOF'\n"
-        "Status:     TIME LIMIT EXCEEDED\n"
-        "Objective:  obj = 0\n"
-        "EOF\n"
+        "if [ -z \"$wri\" ]; then exit 2; fi\n"
+        "cat > \"$wri\" <<'EOF_WR'\n"
+        "c Status:     TIME LIMIT EXCEEDED\n"
+        "s bas 1 1 u u 0\n"
+        "i 1 b 0 0\n"
+        "j 1 l 0 0\n"
+        "e o f\n"
+        "EOF_WR\n"
         "echo \"TIME LIMIT EXCEEDED\"\n"
         "exit 0\n";
     RalphModel *model = NULL;
@@ -329,8 +436,9 @@ int main(void) {
     printf("=== LP External GLPK OOP Adapter Tests ===\n");
 
     test_register_caps_and_unregister();
-    test_primal_simplex_oop_success();
+    test_primal_simplex_oop_success_with_duals();
     test_dual_simplex_routes_dual_flag();
+    test_status_hints_for_infeasible_and_unbounded();
     test_time_limit_maps_to_external_failure_report();
 
     printf("Passed %d/%d tests\n", tests_passed, tests_run);

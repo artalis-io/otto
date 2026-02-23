@@ -24,7 +24,9 @@
 /* Ralph headers */
 #include "ralph.h"
 
-/* GLPK header */
+/* GLPK header
+ * TODO(lp-external-mip): migrate benchmark GLPK side to the external OOP adapter
+ * once the MIP external backend contract is available (LP OOP path already exists). */
 #include <glpk.h>
 
 /* ============================================================================
@@ -826,6 +828,7 @@ static void print_header(void) {
     printf("\n");
     printf("Comparing Ralph %s against GLPK %d.%d on classic MIP problems\n",
            ralph_version(), GLP_MAJOR_VERSION, GLP_MINOR_VERSION);
+    printf("Note: MIP GLPK path is still in-process libglpk; TODO migrate to external OOP MIP adapter.\n");
 }
 
 static void print_usage(const char *prog) {
