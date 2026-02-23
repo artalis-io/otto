@@ -5,8 +5,7 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 ## Stable Baseline
 
 **Current** (2026-02-23) — monolithic API surface removed; modular LP/MIP headers only:
-- Removed monolithic public header surface (`ralph/include/ralph.h`) from active use.
-  `ralph.h` is now an explicit compile-time removal shim directing callers to modular APIs.
+- Removed monolithic public header surface (`ralph/include/ralph.h`) entirely.
 - Introduced `ralph/include/ralph_core.h` as internal-only core API for Ralph internals/tests.
 - Migrated Ralph internal code/tests/benchmarks from `#include "ralph.h"` to
   `#include "ralph_core.h"`.
@@ -633,8 +632,8 @@ Intentional compatibility usage to keep:
 - Internal-first semantics for `primal`/`dual`/`auto` are enforced.
 
 Next increment:
-- 10.5 expose a first-class public adapter registration API (currently internal contract),
-  keeping provider gating/fallback semantics unchanged.
+- 10.6 add structured API error reporting (typed error domain/code + message accessors)
+  while preserving return-code compatibility and LP/MIP module orthogonality.
 
 ---
 

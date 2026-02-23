@@ -96,7 +96,7 @@ Progress lines are parsed by Forge and:
 ```c
 #include <stdio.h>
 #include <stdlib.h>
-#include "ralph.h"
+#include "ralph_lp.h"
 #include "fg_consumer.h"  // Optional helper library
 
 int main(int argc, char **argv) {

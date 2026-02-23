@@ -23,7 +23,7 @@ This document describes the high-level architecture and current API/dispatch bou
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                          Public API (ralph.h)                        │
+│             Public API (ralph_lp.h + ralph_mip.h)                    │
 │  Model build/edit/query + solve APIs + params + diagnostics         │
 │  ralph_optimize_lp / ralph_optimize_mip / ralph_optimize (compat)   │
 └─────────────────────────────────────────────────────────────────────┘
