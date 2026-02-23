@@ -4,7 +4,19 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-22, `4b5620c`) — typed parameter API + metadata baseline:
+**Current** (2026-02-23, `8e5e8bf`) — fixed-basis LP sensitivity/ranging API baseline:
+added LP-only fixed-basis sensitivity APIs for constraint RHS, objective coefficients, and
+variable bounds (`ralph_get_constraint_rhs_range`, `ralph_get_obj_coef_range`,
+`ralph_get_var_bound_range`) with explicit availability guards (optimal LP state, live tableau,
+and no reduced-dimension presolve mapping in v1). Implemented a dedicated internal module
+(`lp_sensitivity.c`) for basis-local interval computations and added orthogonal unit coverage in
+`test_lp_sensitivity`.
+Latest gates:
+`make -C ralph test-lp-sensitivity` PASS (52/52),
+`make -C ralph test_api` PASS, and
+`./ralph/test_ralph --skip-mip` PASS (387/387).
+
+Previous: (2026-02-22, `4b5620c`) — typed parameter API + metadata baseline:
 added enum-based typed parameter IDs, strict LP/MIP typed parameter setters/getters, and
 parameter metadata/introspection APIs (`count`, `meta`, `find-by-name`) with a single
 table-driven parameter registry in `ralph.c` (canonical name + aliases, scope, type, defaults,
