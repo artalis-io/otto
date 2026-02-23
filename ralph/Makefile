@@ -65,6 +65,9 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/lp_reader.c \
           $(SRC_DIR)/lp_writer.c \
           $(SRC_DIR)/ralph.c \
+          $(SRC_DIR)/ralph_test_mod_api.c \
+          $(SRC_DIR)/ralph_lp_public.c \
+          $(SRC_DIR)/ralph_mip_public.c \
           $(SRC_DIR)/lap.c \
           $(SRC_DIR)/detect.c \
           $(SRC_DIR)/netflow.c \
@@ -216,6 +219,12 @@ LP_TELEMETRY_TEST_EXECS = $(LP_TELEMETRY_SOLVER_TEST_EXEC) \
                           $(LP_TELEMETRY_GATE_TEST_EXEC) \
                           $(LP_TELEMETRY_LU_SPARSE_TEST_EXEC)
 
+# Modular public API split tests (LP/MIP orthogonal headers)
+LP_PUBLIC_API_SPLIT_TEST_SOURCES = $(TEST_DIR)/test_lp_public_api_split.c
+LP_PUBLIC_API_SPLIT_TEST_EXEC = test_lp_public_api_split
+MIP_PUBLIC_API_SPLIT_TEST_SOURCES = $(TEST_DIR)/test_mip_public_api_split.c
+MIP_PUBLIC_API_SPLIT_TEST_EXEC = test_mip_public_api_split
+
 # Benchmarks
 BENCH_DIR = benchmarks
 BENCH_SIZES_EXEC = bench_sizes
@@ -232,6 +241,9 @@ RALPH_BENCHMARK_EXEC = ralph-benchmark
 GLPK_PREFIX = $(shell brew --prefix glpk 2>/dev/null || echo "/opt/homebrew/opt/glpk")
 GLPK_INCLUDES = -I$(GLPK_PREFIX)/include
 GLPK_LIBS = -L$(GLPK_PREFIX)/lib -lglpk
+
+# Test/benchmark mechanical modular remap (legacy->lp/mip wrapper layer).
+TEST_MOD_FLAGS = -include ./include/ralph_test_mod_api.h
 
 # Default target
 all: $(SHARED_LIB) lib $(TEST_EXEC)
@@ -257,7 +269,7 @@ $(SRC_DIR)/optim/%.o: $(SRC_DIR)/optim/%.c
 
 # Build test executable
 $(TEST_EXEC): $(TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Debug build (with sanitizers)
 debug: CFLAGS = $(CFLAGS_DEBUG)
@@ -265,7 +277,7 @@ debug: LDFLAGS += $(DEBUG_LDFLAGS)
 debug: clean all
 
 # Run tests
-test: $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BANDM_TEST_EXEC) $(BLEND_TEST_EXEC) $(LOTFI_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LP_DETERMINISM_TEST_EXEC) $(LP_SENSITIVITY_TEST_EXEC) $(LP_CONFLICT_TEST_EXEC) $(LP_ALGORITHM_API_TEST_EXEC) $(LP_DISPATCH_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC) $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC) $(LP_EXTERNAL_FAILURE_API_TEST_EXEC) $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_WARMSTART_TEST_EXEC) $(MIP_WARMSTART_TEST_EXEC) $(MIP_LP_RECOVERY_TEST_EXEC) $(MIP_START_SPARSE_TEST_EXEC) $(MIP_START_REPAIR_TEST_EXEC) $(BENDERS_MASTER_START_TEST_EXEC) $(WARMSTART_SERDE_TEST_EXEC)
+test: $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BANDM_TEST_EXEC) $(BLEND_TEST_EXEC) $(LOTFI_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LP_DETERMINISM_TEST_EXEC) $(LP_SENSITIVITY_TEST_EXEC) $(LP_CONFLICT_TEST_EXEC) $(LP_ALGORITHM_API_TEST_EXEC) $(LP_DISPATCH_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC) $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC) $(LP_EXTERNAL_FAILURE_API_TEST_EXEC) $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(LP_PUBLIC_API_SPLIT_TEST_EXEC) $(MIP_PUBLIC_API_SPLIT_TEST_EXEC) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_WARMSTART_TEST_EXEC) $(MIP_WARMSTART_TEST_EXEC) $(MIP_LP_RECOVERY_TEST_EXEC) $(MIP_START_SPARSE_TEST_EXEC) $(MIP_START_REPAIR_TEST_EXEC) $(BENDERS_MASTER_START_TEST_EXEC) $(WARMSTART_SERDE_TEST_EXEC)
 	./$(TEST_EXEC)
 	./$(PRESOLVE_TEST_EXEC)
 	./$(BANDM_TEST_EXEC)
@@ -287,6 +299,8 @@ test: $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BANDM_TEST_EXEC) $(BLEND_TEST_EXEC) $
 	./$(LP_TELEMETRY_LU_TEST_EXEC)
 	./$(LP_TELEMETRY_GATE_TEST_EXEC)
 	./$(LP_TELEMETRY_LU_SPARSE_TEST_EXEC)
+	./$(LP_PUBLIC_API_SPLIT_TEST_EXEC)
+	./$(MIP_PUBLIC_API_SPLIT_TEST_EXEC)
 	./$(MPS_PARSER_TEST_EXEC)
 	./$(API_TEST_EXEC)
 	./$(BENDERS_WARMSTART_TEST_EXEC)
@@ -305,7 +319,7 @@ test-beaconfd: $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC)
 
 # Build edge case tests
 $(EDGE_TEST_EXEC): $(EDGE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run edge case tests
 test-edge: $(EDGE_TEST_EXEC)
@@ -313,7 +327,7 @@ test-edge: $(EDGE_TEST_EXEC)
 
 # Build LAP tests
 $(LAP_TEST_EXEC): $(LAP_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LAP tests
 test-lap: $(LAP_TEST_EXEC)
@@ -321,7 +335,7 @@ test-lap: $(LAP_TEST_EXEC)
 
 # Build network flow tests
 $(NETFLOW_TEST_EXEC): $(NETFLOW_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run network flow tests
 test-netflow: $(NETFLOW_TEST_EXEC)
@@ -329,7 +343,7 @@ test-netflow: $(NETFLOW_TEST_EXEC)
 
 # Build network detection tests
 $(DETECT_TEST_EXEC): $(DETECT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run network detection tests
 test-detect: $(DETECT_TEST_EXEC)
@@ -337,11 +351,11 @@ test-detect: $(DETECT_TEST_EXEC)
 
 # Build optimization module tests
 $(OPTIM_TEST_EXEC): $(OPTIM_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Build LP format tests
 $(LP_TEST_EXEC): $(LP_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LP format tests
 test-lp: $(LP_TEST_EXEC)
@@ -349,7 +363,7 @@ test-lp: $(LP_TEST_EXEC)
 
 # Build NETLIB MPS parser regression tests
 $(MPS_PARSER_TEST_EXEC): $(MPS_PARSER_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run NETLIB MPS parser regression tests
 test-mps-parser: $(MPS_PARSER_TEST_EXEC)
@@ -357,7 +371,7 @@ test-mps-parser: $(MPS_PARSER_TEST_EXEC)
 
 # Build API tests
 $(API_TEST_EXEC): $(API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run API tests
 test-api: $(API_TEST_EXEC)
@@ -365,7 +379,7 @@ test-api: $(API_TEST_EXEC)
 
 # Build Benders tests
 $(BENDERS_TEST_EXEC): $(BENDERS_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run Benders tests
 test-benders: $(BENDERS_TEST_EXEC)
@@ -373,7 +387,7 @@ test-benders: $(BENDERS_TEST_EXEC)
 
 # Build focused Benders warm-start tests
 $(BENDERS_WARMSTART_TEST_EXEC): $(BENDERS_WARMSTART_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run focused Benders warm-start tests
 test-benders-warmstart: $(BENDERS_WARMSTART_TEST_EXEC)
@@ -381,7 +395,7 @@ test-benders-warmstart: $(BENDERS_WARMSTART_TEST_EXEC)
 
 # Build focused MIP warm-start tests
 $(MIP_WARMSTART_TEST_EXEC): $(MIP_WARMSTART_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run focused MIP warm-start tests
 test-mip-warmstart: $(MIP_WARMSTART_TEST_EXEC)
@@ -389,7 +403,7 @@ test-mip-warmstart: $(MIP_WARMSTART_TEST_EXEC)
 
 # Build focused MIP/LP recovery-contract tests
 $(MIP_LP_RECOVERY_TEST_EXEC): $(MIP_LP_RECOVERY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run focused MIP/LP recovery-contract tests
 test-mip-lp-recovery: $(MIP_LP_RECOVERY_TEST_EXEC)
@@ -397,7 +411,7 @@ test-mip-lp-recovery: $(MIP_LP_RECOVERY_TEST_EXEC)
 
 # Build sparse/partial MIP-start tests
 $(MIP_START_SPARSE_TEST_EXEC): $(MIP_START_SPARSE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run sparse/partial MIP-start tests
 test-mip-start-sparse: $(MIP_START_SPARSE_TEST_EXEC)
@@ -405,7 +419,7 @@ test-mip-start-sparse: $(MIP_START_SPARSE_TEST_EXEC)
 
 # Build MIP-start repair-mode tests
 $(MIP_START_REPAIR_TEST_EXEC): $(MIP_START_REPAIR_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run MIP-start repair-mode tests
 test-mip-start-repair: $(MIP_START_REPAIR_TEST_EXEC)
@@ -413,7 +427,7 @@ test-mip-start-repair: $(MIP_START_REPAIR_TEST_EXEC)
 
 # Build Benders initial master-start tests
 $(BENDERS_MASTER_START_TEST_EXEC): $(BENDERS_MASTER_START_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run Benders initial master-start tests
 test-benders-master-start: $(BENDERS_MASTER_START_TEST_EXEC)
@@ -421,7 +435,7 @@ test-benders-master-start: $(BENDERS_MASTER_START_TEST_EXEC)
 
 # Build warm-start serialization tests
 $(WARMSTART_SERDE_TEST_EXEC): $(WARMSTART_SERDE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run warm-start serialization tests
 test-warmstart-serde: $(WARMSTART_SERDE_TEST_EXEC)
@@ -429,7 +443,7 @@ test-warmstart-serde: $(WARMSTART_SERDE_TEST_EXEC)
 
 # Build presolve unit tests
 $(PRESOLVE_TEST_EXEC): $(PRESOLVE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run presolve unit tests
 test-presolve: $(PRESOLVE_TEST_EXEC)
@@ -437,19 +451,19 @@ test-presolve: $(PRESOLVE_TEST_EXEC)
 
 # Build beaconfd numerical-regression test
 $(BEACONFD_TEST_EXEC): $(BEACONFD_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # test-beaconfd target is defined above (known regression, not in main gate)
 
 # Build NETLIB regression tests (bandm, blend, lotfi)
 $(BANDM_TEST_EXEC): $(BANDM_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 $(BLEND_TEST_EXEC): $(BLEND_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 $(LOTFI_TEST_EXEC): $(LOTFI_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run NETLIB regression tests individually
 test-bandm: $(BANDM_TEST_EXEC)
@@ -463,7 +477,7 @@ test-lotfi: $(LOTFI_TEST_EXEC)
 
 # Build beaconfd phase-1 trace regression test
 $(BEACONFD_TRACE_TEST_EXEC): $(BEACONFD_TRACE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run beaconfd phase-1 trace regression test
 test-beaconfd-trace: $(BEACONFD_TRACE_TEST_EXEC)
@@ -471,7 +485,7 @@ test-beaconfd-trace: $(BEACONFD_TRACE_TEST_EXEC)
 
 # Build simplex basis-action policy test
 $(SIMPLEX_POLICY_TEST_EXEC): $(SIMPLEX_POLICY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run simplex basis-action policy test
 test-simplex-policy: $(SIMPLEX_POLICY_TEST_EXEC)
@@ -479,7 +493,7 @@ test-simplex-policy: $(SIMPLEX_POLICY_TEST_EXEC)
 
 # Build LP determinism tests
 $(LP_DETERMINISM_TEST_EXEC): $(LP_DETERMINISM_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LP determinism tests
 test-lp-determinism: $(LP_DETERMINISM_TEST_EXEC)
@@ -487,7 +501,7 @@ test-lp-determinism: $(LP_DETERMINISM_TEST_EXEC)
 
 # Build LP sensitivity tests
 $(LP_SENSITIVITY_TEST_EXEC): $(LP_SENSITIVITY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LP sensitivity tests
 test-lp-sensitivity: $(LP_SENSITIVITY_TEST_EXEC)
@@ -495,7 +509,7 @@ test-lp-sensitivity: $(LP_SENSITIVITY_TEST_EXEC)
 
 # Build LP conflict tests
 $(LP_CONFLICT_TEST_EXEC): $(LP_CONFLICT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LP conflict tests
 test-lp-conflict: $(LP_CONFLICT_TEST_EXEC)
@@ -503,7 +517,7 @@ test-lp-conflict: $(LP_CONFLICT_TEST_EXEC)
 
 # Build LP algorithm API tests
 $(LP_ALGORITHM_API_TEST_EXEC): $(LP_ALGORITHM_API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LP algorithm API tests
 test-lp-algorithm-api: $(LP_ALGORITHM_API_TEST_EXEC)
@@ -511,7 +525,7 @@ test-lp-algorithm-api: $(LP_ALGORITHM_API_TEST_EXEC)
 
 # Build LP dispatch module tests
 $(LP_DISPATCH_TEST_EXEC): $(LP_DISPATCH_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LP dispatch module tests
 test-lp-dispatch: $(LP_DISPATCH_TEST_EXEC)
@@ -519,7 +533,7 @@ test-lp-dispatch: $(LP_DISPATCH_TEST_EXEC)
 
 # Build LP external adapter module tests
 $(LP_EXTERNAL_ADAPTER_TEST_EXEC): $(LP_EXTERNAL_ADAPTER_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LP external adapter module tests
 test-lp-external-adapter: $(LP_EXTERNAL_ADAPTER_TEST_EXEC)
@@ -527,7 +541,7 @@ test-lp-external-adapter: $(LP_EXTERNAL_ADAPTER_TEST_EXEC)
 
 # Build public LP external adapter API tests
 $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC): $(LP_EXTERNAL_ADAPTER_API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run public LP external adapter API tests
 test-lp-external-adapter-api: $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC)
@@ -535,7 +549,7 @@ test-lp-external-adapter-api: $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC)
 
 # Build LP external introspection API tests
 $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC): $(LP_EXTERNAL_INTROSPECTION_API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LP external introspection API tests
 test-lp-external-introspection-api: $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC)
@@ -543,7 +557,7 @@ test-lp-external-introspection-api: $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC)
 
 # Build LP external failure mapping API tests
 $(LP_EXTERNAL_FAILURE_API_TEST_EXEC): $(LP_EXTERNAL_FAILURE_API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LP external failure mapping API tests
 test-lp-external-failure-api: $(LP_EXTERNAL_FAILURE_API_TEST_EXEC)
@@ -551,7 +565,7 @@ test-lp-external-failure-api: $(LP_EXTERNAL_FAILURE_API_TEST_EXEC)
 
 # Build LP external generic OOP runner tests
 $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC): $(LP_EXTERNAL_OOP_RUNNER_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LP external generic OOP runner tests
 test-lp-external-oop-runner: $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC)
@@ -559,7 +573,7 @@ test-lp-external-oop-runner: $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC)
 
 # Build LP external GLPK out-of-process adapter tests
 $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC): $(LP_EXTERNAL_GLPK_OOP_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LP external GLPK out-of-process adapter tests
 test-lp-external-glpk-oop: $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC)
@@ -567,7 +581,7 @@ test-lp-external-glpk-oop: $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC)
 
 # Build optional real-GLPK integration test (self-skips when glpsol absent)
 $(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_EXEC): $(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run optional real-GLPK integration test
 test-lp-external-glpk-oop-integration: $(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_EXEC)
@@ -575,19 +589,19 @@ test-lp-external-glpk-oop-integration: $(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_E
 
 # Build LP telemetry solver tests
 $(LP_TELEMETRY_SOLVER_TEST_EXEC): $(LP_TELEMETRY_SOLVER_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Build LP telemetry LU tests
 $(LP_TELEMETRY_LU_TEST_EXEC): $(LP_TELEMETRY_LU_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Build LP telemetry runtime gate tests
 $(LP_TELEMETRY_GATE_TEST_EXEC): $(LP_TELEMETRY_GATE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Build LP telemetry sparse-LU tests
 $(LP_TELEMETRY_LU_SPARSE_TEST_EXEC): $(LP_TELEMETRY_LU_SPARSE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LP telemetry solver tests
 test-lp-telemetry-solver: $(LP_TELEMETRY_SOLVER_TEST_EXEC)
@@ -612,9 +626,25 @@ test-lp-telemetry: $(LP_TELEMETRY_TEST_EXECS)
 	./$(LP_TELEMETRY_GATE_TEST_EXEC)
 	./$(LP_TELEMETRY_LU_SPARSE_TEST_EXEC)
 
+# Build modular LP public API split tests
+$(LP_PUBLIC_API_SPLIT_TEST_EXEC): $(LP_PUBLIC_API_SPLIT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run modular LP public API split tests
+test-lp-public-api-split: $(LP_PUBLIC_API_SPLIT_TEST_EXEC)
+	./$(LP_PUBLIC_API_SPLIT_TEST_EXEC)
+
+# Build modular MIP public API split tests
+$(MIP_PUBLIC_API_SPLIT_TEST_EXEC): $(MIP_PUBLIC_API_SPLIT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run modular MIP public API split tests
+test-mip-public-api-split: $(MIP_PUBLIC_API_SPLIT_TEST_EXEC)
+	./$(MIP_PUBLIC_API_SPLIT_TEST_EXEC)
+
 # Build LU Markowitz tests
 $(LU_MARKOWITZ_TEST_EXEC): $(LU_MARKOWITZ_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LU Markowitz tests
 test-lu-markowitz: $(LU_MARKOWITZ_TEST_EXEC)
@@ -622,7 +652,7 @@ test-lu-markowitz: $(LU_MARKOWITZ_TEST_EXEC)
 
 # Build LU supernode tests
 $(LU_SUPERNODE_TEST_EXEC): $(LU_SUPERNODE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LU supernode tests
 test-lu-supernode: $(LU_SUPERNODE_TEST_EXEC)
@@ -634,7 +664,7 @@ test-optim: $(OPTIM_TEST_EXEC)
 
 # Build size scaling benchmark
 $(BENCH_SIZES_EXEC): $(BENCH_DIR)/bench_sizes.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run size scaling benchmark
 bench: $(BENCH_SIZES_EXEC)
@@ -642,7 +672,7 @@ bench: $(BENCH_SIZES_EXEC)
 
 # Build GLPK comparison benchmark (old version)
 $(COMPARE_GLPK_EXEC): $(BENCH_DIR)/compare_glpk.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run GLPK comparison (requires glpsol to be installed)
 compare-glpk: $(COMPARE_GLPK_EXEC)
@@ -650,7 +680,7 @@ compare-glpk: $(COMPARE_GLPK_EXEC)
 
 # Build Ralph vs GLPK benchmark (GLPK routed through external OOP adapter)
 $(BENCH_VS_GLPK_EXEC): $(BENCH_DIR)/bench_vs_glpk.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run Ralph vs GLPK benchmark
 bench-glpk: $(BENCH_VS_GLPK_EXEC)
@@ -662,7 +692,7 @@ bench-glpk-quick: $(BENCH_VS_GLPK_EXEC)
 
 # Build MIP benchmark
 $(BENCH_MIP_EXEC): $(BENCH_DIR)/bench_mip.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $(GLPK_INCLUDES) $< -L. -lralph -L../shared -lshared $(GLPK_LIBS) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $(GLPK_INCLUDES) $< -L. -lralph -L../shared -lshared $(GLPK_LIBS) $(LDFLAGS) -o $@
 
 # Run MIP benchmark
 bench-mip: $(BENCH_MIP_EXEC)
@@ -674,7 +704,7 @@ bench-mip-quick: $(BENCH_MIP_EXEC)
 
 # Build profile benchmark
 $(PROFILE_BENCH_EXEC): $(BENCH_DIR)/profile_bench.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run profile benchmark
 profile-bench: $(PROFILE_BENCH_EXEC)
@@ -682,7 +712,7 @@ profile-bench: $(PROFILE_BENCH_EXEC)
 
 # Build LAP benchmark
 $(BENCH_LAP_EXEC): $(BENCH_DIR)/bench_lap.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LAP benchmark
 bench-lap: $(BENCH_LAP_EXEC)
@@ -690,7 +720,7 @@ bench-lap: $(BENCH_LAP_EXEC)
 
 # Build LAP performance benchmark
 $(BENCH_LAP_PERF_EXEC): $(BENCH_DIR)/bench_lap_perf.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run LAP performance benchmark
 bench-lap-perf: $(BENCH_LAP_PERF_EXEC)
@@ -702,7 +732,7 @@ bench-lap-perf-quick: $(BENCH_LAP_PERF_EXEC)
 
 # Build network flow benchmark
 $(BENCH_NETFLOW_EXEC): $(BENCH_DIR)/bench_netflow.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run network flow benchmark
 bench-netflow: $(BENCH_NETFLOW_EXEC)
@@ -710,7 +740,7 @@ bench-netflow: $(BENCH_NETFLOW_EXEC)
 
 # Build ralph-benchmark (NETLIB benchmark tool)
 $(RALPH_BENCHMARK_EXEC): $(BENCH_DIR)/ralph_benchmark.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(TEST_MOD_FLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Build target alias for ralph-benchmark
 build-ralph-benchmark: $(RALPH_BENCHMARK_EXEC)
@@ -739,13 +769,14 @@ download-netlib:
 
 # Clean
 clean:
-	rm -f $(OBJECTS) $(SRC_DIR)/lp_telemetry.o $(LIB_NAME) $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_TEST_EXEC) $(BENDERS_WARMSTART_TEST_EXEC) $(MIP_WARMSTART_TEST_EXEC) $(MIP_LP_RECOVERY_TEST_EXEC) $(MIP_START_SPARSE_TEST_EXEC) $(MIP_START_REPAIR_TEST_EXEC) $(BENDERS_MASTER_START_TEST_EXEC) $(WARMSTART_SERDE_TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LP_DETERMINISM_TEST_EXEC) $(LP_SENSITIVITY_TEST_EXEC) $(LP_CONFLICT_TEST_EXEC) $(LP_ALGORITHM_API_TEST_EXEC) $(LP_DISPATCH_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC) $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC) $(LP_EXTERNAL_FAILURE_API_TEST_EXEC) $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(LU_MARKOWITZ_TEST_EXEC) $(LU_SUPERNODE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC)
+	rm -f $(OBJECTS) $(SRC_DIR)/lp_telemetry.o $(LIB_NAME) $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_TEST_EXEC) $(BENDERS_WARMSTART_TEST_EXEC) $(MIP_WARMSTART_TEST_EXEC) $(MIP_LP_RECOVERY_TEST_EXEC) $(MIP_START_SPARSE_TEST_EXEC) $(MIP_START_REPAIR_TEST_EXEC) $(BENDERS_MASTER_START_TEST_EXEC) $(WARMSTART_SERDE_TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LP_DETERMINISM_TEST_EXEC) $(LP_SENSITIVITY_TEST_EXEC) $(LP_CONFLICT_TEST_EXEC) $(LP_ALGORITHM_API_TEST_EXEC) $(LP_DISPATCH_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC) $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC) $(LP_EXTERNAL_FAILURE_API_TEST_EXEC) $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(LP_PUBLIC_API_SPLIT_TEST_EXEC) $(MIP_PUBLIC_API_SPLIT_TEST_EXEC) $(LU_MARKOWITZ_TEST_EXEC) $(LU_SUPERNODE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
 	mkdir -p /usr/local/include/ralph
 	mkdir -p /usr/local/lib
-	cp $(INCLUDE_DIR)/ralph.h /usr/local/include/ralph/
+	cp $(INCLUDE_DIR)/ralph_lp.h /usr/local/include/ralph/
+	cp $(INCLUDE_DIR)/ralph_mip.h /usr/local/include/ralph/
 	cp $(LIB_NAME) /usr/local/lib/
 
 # Uninstall
@@ -753,7 +784,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-benders-warmstart test-mip-warmstart test-mip-start-sparse test-mip-start-repair test-benders-master-start test-warmstart-serde test-beaconfd test-beaconfd-trace test-simplex-policy test-lp-determinism test-lp-sensitivity test-lp-conflict test-lp-algorithm-api test-lp-dispatch test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-benders-warmstart test-mip-warmstart test-mip-start-sparse test-mip-start-repair test-benders-master-start test-warmstart-serde test-beaconfd test-beaconfd-trace test-simplex-policy test-lp-determinism test-lp-sensitivity test-lp-conflict test-lp-algorithm-api test-lp-dispatch test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lp-public-api-split test-mip-public-api-split test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
 
 # MIP benchmark with specialized solvers (LAP, Network, SCP)
 bench-mip-specialized: $(BENCH_MIP_EXEC)
@@ -791,6 +822,8 @@ help:
 	@echo "  test-lp-algorithm-api - Run LP algorithm/capability API tests"
 	@echo "  test-lp-dispatch - Run internal LP backend dispatch module tests"
 	@echo "  test-lp-telemetry - Run LP telemetry module tests"
+	@echo "  test-lp-public-api-split - Run modular LP public API split tests"
+	@echo "  test-mip-public-api-split - Run modular MIP public API split tests"
 	@echo "  bench      - Run size scaling benchmark"
 	@echo "  bench-lap  - Run LAP benchmark (JVC vs LP)"
 	@echo "  bench-netflow - Run network flow benchmark"
