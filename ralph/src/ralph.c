@@ -15,6 +15,7 @@
 #include "detect.h"
 #include "benders.h"
 #include "lp_conflict.h"
+#include "lp_backend.h"
 #include "lp_dispatch.h"
 
 #define RALPH_VERSION "0.1.0"
@@ -43,6 +44,7 @@ struct RalphModel {
     int method;  /* 0=primal simplex, 1=dual simplex, 2=auto */
     int lp_algorithm;      /* Requested LP algorithm (extends method with barrier value). */
     int barrier_crossover; /* Requested barrier crossover mode (API-level capability gate). */
+    int lp_external_provider; /* Requested external LP provider for explicit external algorithms. */
     int pricing; /* 0=Dantzig, 1=Steepest edge, 2=Devex (default), 3=Partial */
     int detect_special; /* 1=detect LAP/network structure, 0=disable */
     int node_pool_capacity; /* Pre-allocated B&B node pool size (default 1024) */
@@ -168,6 +170,17 @@ static int ralph_set_requested_barrier_crossover_internal(RalphModel *model, int
         return -1;
     }
     model->barrier_crossover = normalized_crossover;
+    return 0;
+}
+
+static int ralph_set_requested_lp_external_provider_internal(RalphModel *model, int value) {
+    int normalized_external_provider = 0;
+    if (!model) return -1;
+    if (lp_dispatch_set_requested_external_provider(value,
+                                                    &normalized_external_provider) != 0) {
+        return -1;
+    }
+    model->lp_external_provider = normalized_external_provider;
     return 0;
 }
 
@@ -433,6 +446,7 @@ RalphModel* ralph_create(void) {
     model->method = 0;  /* Default: primal simplex */
     model->lp_algorithm = (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
     model->barrier_crossover = (int)RALPH_LP_CROSSOVER_AUTO;
+    model->lp_external_provider = (int)RALPH_LP_EXTERNAL_PROVIDER_NONE;
     model->pricing = 2; /* Default: Devex */
     model->scaling = 1;    /* Default: single-round geometric mean */
     model->crash = 0;      /* Default: off (all-slack basis) */
@@ -630,10 +644,12 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     RalphLPSolveAlgorithmReport lp_algorithm_report;
     int lp_algorithm_report_ready = 0;
     int lp_simplex_method = model->method;
+    LPDispatchBackend lp_effective_backend = LP_DISPATCH_BACKEND_SIMPLEX;
 
     ralph_reset_lp_algorithm_report(model);
     if (!solve_as_mip) {
         if (lp_dispatch_build_plan(model->lp_algorithm,
+                                   model->lp_external_provider,
                                    model->barrier_crossover,
                                    &lp_dispatch_plan) != 0) {
             model->status = RALPH_STATUS_ERROR;
@@ -641,6 +657,7 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         }
         lp_dispatch_plan_to_report(&lp_dispatch_plan, &lp_algorithm_report);
         lp_simplex_method = lp_dispatch_plan.simplex_method;
+        lp_effective_backend = lp_dispatch_plan.effective_backend;
         lp_algorithm_report_ready = 1;
     }
 
@@ -1165,8 +1182,12 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
             ralph_clear_staged_basis(model);
         }
 
-        /* Solve — method dispatch (primal/dual/auto) is handled inside simplex_solve */
-        simplex_solve(model->lp_solver);
+        /* Solve through backend runtime (simplex today, barrier/external later). */
+        if (lp_backend_run(lp_effective_backend, model->lp_solver) != 0) {
+            if (presolved) presolve_free(presolved);
+            model->status = RALPH_STATUS_ERROR;
+            return -1;
+        }
 
         model->status = model->lp_solver->status;
         model->iteration_count = model->lp_solver->iterations;
@@ -2865,7 +2886,7 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .has_min = 1,
             .min_value = (double)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
             .has_max = 1,
-            .max_value = (double)RALPH_LP_ALGORITHM_BARRIER,
+            .max_value = (double)RALPH_LP_ALGORITHM_BARRIER_EXTERNAL,
             .aliases = {"LPAlgorithm"},
             .alias_count = 1
         },
@@ -2880,6 +2901,19 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .has_max = 1,
             .max_value = (double)RALPH_LP_CROSSOVER_ON,
             .aliases = {"BarrierCrossover"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_LP_EXTERNAL_PROVIDER] = {
+            .id = RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+            .name = "lp_external_provider",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_LP_EXTERNAL_PROVIDER_NONE,
+            .has_min = 1,
+            .min_value = (double)RALPH_LP_EXTERNAL_PROVIDER_NONE,
+            .has_max = 1,
+            .max_value = (double)RALPH_LP_EXTERNAL_PROVIDER_GLOP,
+            .aliases = {"LPExternalProvider"},
             .alias_count = 1
         },
         [RALPH_PARAM_TIME_LIMIT] = {
@@ -3091,6 +3125,9 @@ int ralph_set_int_param_id(RalphModel *model, RalphParamId param, int value) {
         case RALPH_PARAM_BARRIER_CROSSOVER:
             if (ralph_set_requested_barrier_crossover_internal(model, value) != 0) return -1;
             break;
+        case RALPH_PARAM_LP_EXTERNAL_PROVIDER:
+            if (ralph_set_requested_lp_external_provider_internal(model, value) != 0) return -1;
+            break;
         default:
             return -1;
     }
@@ -3214,6 +3251,9 @@ int ralph_get_int_param_id(const RalphModel *model, RalphParamId param, int *val
             break;
         case RALPH_PARAM_BARRIER_CROSSOVER:
             *value = model->barrier_crossover;
+            break;
+        case RALPH_PARAM_LP_EXTERNAL_PROVIDER:
+            *value = model->lp_external_provider;
             break;
         default:
             return -1;

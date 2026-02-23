@@ -1,6 +1,10 @@
 #include <string.h>
 
 #include "lp_dispatch.h"
+#include "lp_backend.h"
+#include "lp_external_adapter.h"
+
+#define LP_DISPATCH_EXTERNAL_PROVIDER_ANY (-1)
 
 typedef struct {
     LPDispatchBackend backend;
@@ -10,45 +14,133 @@ typedef struct {
     RalphLPFallbackReason unavailable_reason;
 } LPDispatchBackendSpec;
 
-static const LPDispatchBackendSpec LP_DISPATCH_BACKENDS[] = {
-    {
-        .backend = LP_DISPATCH_BACKEND_SIMPLEX,
-        .available = 1,
-        .supports_crossover = 0,
-        .fallback_algorithm = RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
-        .unavailable_reason = RALPH_LP_FALLBACK_NONE
-    },
-    {
-        .backend = LP_DISPATCH_BACKEND_BARRIER,
-        .available = 0,
-        .supports_crossover = 0,
-        .fallback_algorithm = RALPH_LP_ALGORITHM_AUTO,
-        .unavailable_reason = RALPH_LP_FALLBACK_BARRIER_UNAVAILABLE
+static LPExternalProvider lp_dispatch_to_internal_provider(int provider) {
+    switch ((RalphLPExternalProvider)provider) {
+        case RALPH_LP_EXTERNAL_PROVIDER_GLPK:
+            return LP_EXTERNAL_PROVIDER_GLPK;
+        case RALPH_LP_EXTERNAL_PROVIDER_HIGHS:
+            return LP_EXTERNAL_PROVIDER_HIGHS;
+        case RALPH_LP_EXTERNAL_PROVIDER_CLP:
+            return LP_EXTERNAL_PROVIDER_CLP;
+        case RALPH_LP_EXTERNAL_PROVIDER_CPLEX:
+            return LP_EXTERNAL_PROVIDER_CPLEX;
+        case RALPH_LP_EXTERNAL_PROVIDER_GUROBI:
+            return LP_EXTERNAL_PROVIDER_GUROBI;
+        case RALPH_LP_EXTERNAL_PROVIDER_GLOP:
+            return LP_EXTERNAL_PROVIDER_GLOP;
+        case RALPH_LP_EXTERNAL_PROVIDER_NONE:
+        default:
+            return LP_EXTERNAL_PROVIDER_NONE;
     }
-};
+}
 
-static const LPDispatchBackendSpec* lp_dispatch_find_backend(LPDispatchBackend backend) {
-    size_t n = sizeof(LP_DISPATCH_BACKENDS) / sizeof(LP_DISPATCH_BACKENDS[0]);
-    for (size_t i = 0; i < n; i++) {
-        if (LP_DISPATCH_BACKENDS[i].backend == backend) return &LP_DISPATCH_BACKENDS[i];
+static int lp_dispatch_backend_is_external(LPDispatchBackend backend) {
+    return backend == LP_DISPATCH_BACKEND_SIMPLEX_EXTERNAL ||
+           backend == LP_DISPATCH_BACKEND_DUAL_SIMPLEX_EXTERNAL ||
+           backend == LP_DISPATCH_BACKEND_BARRIER_EXTERNAL;
+}
+
+static void lp_dispatch_apply_external_provider_gate(
+    int requested_external_provider,
+    LPDispatchBackendSpec *spec) {
+    LPExternalProvider expected_provider;
+    LPExternalProvider registered_provider;
+
+    if (!spec) return;
+    if (!lp_dispatch_backend_is_external(spec->backend)) return;
+    if (requested_external_provider == LP_DISPATCH_EXTERNAL_PROVIDER_ANY) return;
+
+    if (!lp_dispatch_external_provider_value_valid(requested_external_provider) ||
+        requested_external_provider == (int)RALPH_LP_EXTERNAL_PROVIDER_NONE) {
+        spec->available = 0;
+        return;
     }
-    return NULL;
+    if (!lp_external_adapter_is_registered()) {
+        spec->available = 0;
+        return;
+    }
+
+    expected_provider = lp_dispatch_to_internal_provider(requested_external_provider);
+    if (expected_provider == LP_EXTERNAL_PROVIDER_NONE) {
+        spec->available = 0;
+        return;
+    }
+    registered_provider = lp_external_adapter_provider();
+    if (registered_provider != expected_provider) {
+        spec->available = 0;
+    }
+}
+
+static int lp_dispatch_get_backend_spec(LPDispatchBackend backend,
+                                        int requested_external_provider,
+                                        LPDispatchBackendSpec *spec) {
+    LPBackendCapability capability;
+
+    if (!spec) return -1;
+    if (lp_backend_get_capability(backend, &capability) != 0) return -1;
+
+    memset(spec, 0, sizeof(*spec));
+    spec->backend = backend;
+    spec->available = capability.available ? 1 : 0;
+    spec->supports_crossover = capability.supports_crossover ? 1 : 0;
+
+    switch (backend) {
+        case LP_DISPATCH_BACKEND_SIMPLEX:
+            spec->fallback_algorithm = RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
+            spec->unavailable_reason = RALPH_LP_FALLBACK_NONE;
+            return 0;
+        case LP_DISPATCH_BACKEND_SIMPLEX_EXTERNAL:
+            spec->fallback_algorithm = RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
+            spec->unavailable_reason = RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE;
+            lp_dispatch_apply_external_provider_gate(requested_external_provider, spec);
+            return 0;
+        case LP_DISPATCH_BACKEND_DUAL_SIMPLEX_EXTERNAL:
+            spec->fallback_algorithm = RALPH_LP_ALGORITHM_DUAL_SIMPLEX;
+            spec->unavailable_reason = RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE;
+            lp_dispatch_apply_external_provider_gate(requested_external_provider, spec);
+            return 0;
+        case LP_DISPATCH_BACKEND_BARRIER_NATIVE:
+            spec->fallback_algorithm = RALPH_LP_ALGORITHM_AUTO;
+            spec->unavailable_reason = RALPH_LP_FALLBACK_BARRIER_UNAVAILABLE;
+            return 0;
+        case LP_DISPATCH_BACKEND_BARRIER_EXTERNAL:
+            spec->fallback_algorithm = RALPH_LP_ALGORITHM_AUTO;
+            spec->unavailable_reason = RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE;
+            lp_dispatch_apply_external_provider_gate(requested_external_provider, spec);
+            return 0;
+        default:
+            return -1;
+    }
 }
 
 static LPDispatchBackend lp_dispatch_backend_for_algorithm(RalphLPAlgorithm algorithm) {
-    if (algorithm == RALPH_LP_ALGORITHM_BARRIER) {
-        return LP_DISPATCH_BACKEND_BARRIER;
+    switch (algorithm) {
+        case RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX:
+        case RALPH_LP_ALGORITHM_DUAL_SIMPLEX:
+        case RALPH_LP_ALGORITHM_AUTO:
+            return LP_DISPATCH_BACKEND_SIMPLEX;
+        case RALPH_LP_ALGORITHM_BARRIER:
+            return LP_DISPATCH_BACKEND_BARRIER_NATIVE;
+        case RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL:
+            return LP_DISPATCH_BACKEND_SIMPLEX_EXTERNAL;
+        case RALPH_LP_ALGORITHM_DUAL_SIMPLEX_EXTERNAL:
+            return LP_DISPATCH_BACKEND_DUAL_SIMPLEX_EXTERNAL;
+        case RALPH_LP_ALGORITHM_BARRIER_EXTERNAL:
+            return LP_DISPATCH_BACKEND_BARRIER_EXTERNAL;
+        default:
+            return LP_DISPATCH_BACKEND_SIMPLEX;
     }
-    return LP_DISPATCH_BACKEND_SIMPLEX;
 }
 
 static int lp_dispatch_simplex_method_for_algorithm(RalphLPAlgorithm algorithm) {
     switch (algorithm) {
         case RALPH_LP_ALGORITHM_DUAL_SIMPLEX:
+        case RALPH_LP_ALGORITHM_DUAL_SIMPLEX_EXTERNAL:
             return 1;
         case RALPH_LP_ALGORITHM_AUTO:
             return 2;
         case RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX:
+        case RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL:
         default:
             return 0;
     }
@@ -56,12 +148,17 @@ static int lp_dispatch_simplex_method_for_algorithm(RalphLPAlgorithm algorithm) 
 
 int lp_dispatch_algorithm_value_valid(int value) {
     return value >= (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX &&
-           value <= (int)RALPH_LP_ALGORITHM_BARRIER;
+           value <= (int)RALPH_LP_ALGORITHM_BARRIER_EXTERNAL;
 }
 
 int lp_dispatch_crossover_value_valid(int value) {
     return value >= (int)RALPH_LP_CROSSOVER_AUTO &&
            value <= (int)RALPH_LP_CROSSOVER_ON;
+}
+
+int lp_dispatch_external_provider_value_valid(int value) {
+    return value >= (int)RALPH_LP_EXTERNAL_PROVIDER_NONE &&
+           value <= (int)RALPH_LP_EXTERNAL_PROVIDER_GLOP;
 }
 
 int lp_dispatch_set_requested_algorithm(int requested_algorithm,
@@ -71,11 +168,22 @@ int lp_dispatch_set_requested_algorithm(int requested_algorithm,
     if (!lp_dispatch_algorithm_value_valid(requested_algorithm)) return -1;
 
     *normalized_algorithm = requested_algorithm;
-    if (requested_algorithm <= (int)RALPH_LP_ALGORITHM_AUTO) {
-        *legacy_method = requested_algorithm;
-    } else {
-        /* Barrier maps to AUTO for backward-compatible legacy method semantics. */
-        *legacy_method = (int)RALPH_LP_ALGORITHM_AUTO;
+    switch ((RalphLPAlgorithm)requested_algorithm) {
+        case RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX:
+        case RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL:
+            *legacy_method = (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
+            break;
+        case RALPH_LP_ALGORITHM_DUAL_SIMPLEX:
+        case RALPH_LP_ALGORITHM_DUAL_SIMPLEX_EXTERNAL:
+            *legacy_method = (int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX;
+            break;
+        case RALPH_LP_ALGORITHM_AUTO:
+        case RALPH_LP_ALGORITHM_BARRIER:
+        case RALPH_LP_ALGORITHM_BARRIER_EXTERNAL:
+            *legacy_method = (int)RALPH_LP_ALGORITHM_AUTO;
+            break;
+        default:
+            return -1;
     }
     return 0;
 }
@@ -89,35 +197,76 @@ int lp_dispatch_set_requested_crossover(int requested_crossover,
     return 0;
 }
 
+int lp_dispatch_set_requested_external_provider(int requested_external_provider,
+                                                int *normalized_external_provider) {
+    if (!normalized_external_provider) return -1;
+    if (!lp_dispatch_external_provider_value_valid(requested_external_provider)) return -1;
+
+    *normalized_external_provider = requested_external_provider;
+    return 0;
+}
+
 void lp_dispatch_get_capabilities(RalphLPCapabilities *caps) {
-    const LPDispatchBackendSpec *simplex = lp_dispatch_find_backend(LP_DISPATCH_BACKEND_SIMPLEX);
-    const LPDispatchBackendSpec *barrier = lp_dispatch_find_backend(LP_DISPATCH_BACKEND_BARRIER);
+    LPDispatchBackendSpec simplex;
+    LPDispatchBackendSpec simplex_external;
+    LPDispatchBackendSpec dual_simplex_external;
+    LPDispatchBackendSpec barrier_native;
+    LPDispatchBackendSpec barrier_external;
+    int has_simplex = 0;
+    int has_simplex_external = 0;
+    int has_dual_simplex_external = 0;
+    int has_native = 0;
+    int has_external = 0;
 
     if (!caps) return;
 
-    caps->supports_primal_simplex = (simplex && simplex->available) ? 1 : 0;
-    caps->supports_dual_simplex = (simplex && simplex->available) ? 1 : 0;
-    caps->supports_barrier = (barrier && barrier->available) ? 1 : 0;
-    caps->supports_crossover = 0;
+    has_simplex = (lp_dispatch_get_backend_spec(LP_DISPATCH_BACKEND_SIMPLEX,
+                                                LP_DISPATCH_EXTERNAL_PROVIDER_ANY,
+                                                &simplex) == 0);
+    has_simplex_external =
+        (lp_dispatch_get_backend_spec(LP_DISPATCH_BACKEND_SIMPLEX_EXTERNAL,
+                                      LP_DISPATCH_EXTERNAL_PROVIDER_ANY,
+                                      &simplex_external) == 0);
+    has_dual_simplex_external =
+        (lp_dispatch_get_backend_spec(LP_DISPATCH_BACKEND_DUAL_SIMPLEX_EXTERNAL,
+                                      LP_DISPATCH_EXTERNAL_PROVIDER_ANY,
+                                      &dual_simplex_external) == 0);
+    has_native = (lp_dispatch_get_backend_spec(LP_DISPATCH_BACKEND_BARRIER_NATIVE,
+                                               LP_DISPATCH_EXTERNAL_PROVIDER_ANY,
+                                               &barrier_native) == 0);
+    has_external = (lp_dispatch_get_backend_spec(LP_DISPATCH_BACKEND_BARRIER_EXTERNAL,
+                                                 LP_DISPATCH_EXTERNAL_PROVIDER_ANY,
+                                                 &barrier_external) == 0);
 
-    size_t n = sizeof(LP_DISPATCH_BACKENDS) / sizeof(LP_DISPATCH_BACKENDS[0]);
-    for (size_t i = 0; i < n; i++) {
-        if (LP_DISPATCH_BACKENDS[i].available && LP_DISPATCH_BACKENDS[i].supports_crossover) {
-            caps->supports_crossover = 1;
-            break;
-        }
-    }
+    caps->supports_primal_simplex =
+        ((has_simplex && simplex.available) ||
+         (has_simplex_external && simplex_external.available)) ? 1 : 0;
+    caps->supports_dual_simplex =
+        ((has_simplex && simplex.available) ||
+         (has_dual_simplex_external && dual_simplex_external.available)) ? 1 : 0;
+    caps->supports_barrier =
+        ((has_native && barrier_native.available) ||
+         (has_external && barrier_external.available)) ? 1 : 0;
+    caps->supports_crossover =
+        ((has_simplex && simplex.available && simplex.supports_crossover) ||
+         (has_simplex_external && simplex_external.available && simplex_external.supports_crossover) ||
+         (has_dual_simplex_external && dual_simplex_external.available &&
+          dual_simplex_external.supports_crossover) ||
+         (has_native && barrier_native.available && barrier_native.supports_crossover) ||
+         (has_external && barrier_external.available && barrier_external.supports_crossover)) ? 1 : 0;
 }
 
 int lp_dispatch_build_plan(int requested_algorithm,
+                           int requested_external_provider,
                            int requested_crossover,
                            LPDispatchPlan *plan) {
-    const LPDispatchBackendSpec *requested_spec = NULL;
-    const LPDispatchBackendSpec *effective_spec = NULL;
-    const LPDispatchBackendSpec *simplex_spec = NULL;
+    LPDispatchBackendSpec requested_spec;
+    LPDispatchBackendSpec effective_spec;
+    LPDispatchBackendSpec simplex_spec;
 
     if (!plan) return -1;
     if (!lp_dispatch_algorithm_value_valid(requested_algorithm)) return -1;
+    if (!lp_dispatch_external_provider_value_valid(requested_external_provider)) return -1;
     if (!lp_dispatch_crossover_value_valid(requested_crossover)) return -1;
 
     memset(plan, 0, sizeof(*plan));
@@ -130,23 +279,33 @@ int lp_dispatch_build_plan(int requested_algorithm,
     plan->fallback_applied = 0;
     plan->fallback_reason = RALPH_LP_FALLBACK_NONE;
 
-    requested_spec = lp_dispatch_find_backend(plan->requested_backend);
-    simplex_spec = lp_dispatch_find_backend(LP_DISPATCH_BACKEND_SIMPLEX);
+    if (lp_dispatch_get_backend_spec(plan->requested_backend,
+                                     requested_external_provider,
+                                     &requested_spec) != 0) {
+        return -1;
+    }
+    if (lp_dispatch_get_backend_spec(LP_DISPATCH_BACKEND_SIMPLEX,
+                                     LP_DISPATCH_EXTERNAL_PROVIDER_ANY,
+                                     &simplex_spec) != 0) {
+        return -1;
+    }
+    if (!simplex_spec.available) return -1;
 
-    if (!requested_spec) return -1;
-    if (!simplex_spec || !simplex_spec->available) return -1;
-
-    if (!requested_spec->available) {
+    if (!requested_spec.available) {
         plan->effective_backend = LP_DISPATCH_BACKEND_SIMPLEX;
-        plan->effective_algorithm = requested_spec->fallback_algorithm;
+        plan->effective_algorithm = requested_spec.fallback_algorithm;
         plan->fallback_applied = 1;
-        plan->fallback_reason = requested_spec->unavailable_reason;
+        plan->fallback_reason = requested_spec.unavailable_reason;
     }
 
-    effective_spec = lp_dispatch_find_backend(plan->effective_backend);
-    if (!effective_spec) return -1;
+    if (lp_dispatch_get_backend_spec(plan->effective_backend,
+                                     requested_external_provider,
+                                     &effective_spec) != 0) {
+        return -1;
+    }
+    if (!effective_spec.available) return -1;
 
-    if (!effective_spec->supports_crossover &&
+    if (!effective_spec.supports_crossover &&
         plan->requested_crossover != RALPH_LP_CROSSOVER_AUTO) {
         plan->effective_crossover = RALPH_LP_CROSSOVER_AUTO;
         if (!plan->fallback_applied) {

@@ -13,6 +13,9 @@ This document describes the high-level architecture and current API/dispatch bou
   with string-name APIs preserved as wrappers.
 - LP algorithm routing (requested vs effective algorithm/crossover and fallback reason)
   is explicit and reportable.
+- LP external backend selection is explicit-only: internal `primal`/`dual`/`auto` remain
+  internal by default; external routing requires an explicit external algorithm request plus
+  matching `lp_external_provider` ID for a registered adapter.
 - Internal modules are kept orthogonal: API facade, LP dispatch, MIP↔LP adapter,
   diagnostics/telemetry, and solver kernels.
 
@@ -37,6 +40,11 @@ This document describes the high-level architecture and current API/dispatch bou
 │ LP algorithm/backend plan/fallback│   │ Node/probe/recovery boundaries │
 └───────────────────────────────────┘   └────────────────────────────────┘
                      │                               │
+                     │             ┌────────────────────────────────────┐
+                     ├────────────►│ LP External Adapter Registry       │
+                     │             │ (lp_external_adapter.c/.h, internal│
+                     │             │  contract, provider-scoped)        │
+                     │             └────────────────────────────────────┘
                      └───────────────┬───────────────┘
                                      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -58,6 +66,19 @@ This document describes the high-level architecture and current API/dispatch bou
 ```
 
 ## Core Components
+
+### External LP Backend Dispatch Contract (Feb 2026)
+
+- `lp_algorithm` supports explicit external modes:
+  `PRIMAL_SIMPLEX_EXTERNAL`, `DUAL_SIMPLEX_EXTERNAL`, `BARRIER_EXTERNAL`.
+- `lp_external_provider` selects the required provider ID
+  (`NONE`, `GLPK`, `HiGHS`, `CLP`, `CPLEX`, `Gurobi`, `GLOP`).
+- Dispatch rules:
+  - `PRIMAL_SIMPLEX`, `DUAL_SIMPLEX`, `AUTO` always select internal simplex backends.
+  - External backends are selected only for explicit external algorithms and only when
+    provider ID matches the registered external adapter.
+  - On mismatch/unavailability, dispatch falls back to internal simplex and reports
+    `RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE`.
 
 ### 1. Sparse Matrix Layer (`sparse.c`, `sparse.h`)
 

@@ -27,6 +27,18 @@ Current gap framing vs GLOP/HiGHS should now be split into:
 Historical benchmark discussion below is retained as context, but API conclusions should be read
 through the updated architecture above and the baseline in `docs/roadmaps/ralph.md`.
 
+## 2026-02-23 Addendum (External Adapter Contract Baseline)
+
+LP backend selection policy is now explicit and stricter:
+- `primal`, `dual`, and `auto` algorithms are internal-first and do not auto-upgrade to external.
+- External backends require explicit external algorithm selection
+  (`*_EXTERNAL`) plus a matching `lp_external_provider` ID.
+- Missing/mismatched/unavailable external provider now reports
+  `RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE` and falls back to internal simplex.
+
+This removes implicit external routing from the default LP path and makes external execution a
+deliberate opt-in behavior.
+
 **Date:** 2026-02-16
 **Ralph version:** `f58b421` (universal two-phase + redundant row presolve)
 

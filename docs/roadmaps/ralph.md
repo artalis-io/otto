@@ -4,7 +4,27 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-23, `abd62fa`) — LP dispatch module extraction baseline:
+**Current** (2026-02-23) — external-adapter-contract explicit-dispatch baseline:
+expanded LP algorithm routing with explicit external algorithm modes and provider-id gating:
+`PRIMAL_SIMPLEX_EXTERNAL`, `DUAL_SIMPLEX_EXTERNAL`, `BARRIER_EXTERNAL`, plus
+`lp_external_provider` (`RALPH_PARAM_LP_EXTERNAL_PROVIDER`).
+Dispatch policy is now strict:
+- `primal`, `dual`, and `auto` always route to internal simplex backends.
+- External backends are selected only when an explicit external algorithm is requested and the
+  requested provider matches the registered external adapter ID.
+- If external criteria are not met, fallback is explicit and reportable via
+  `RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE`.
+This preserves compatibility for legacy/internal paths while making external selection explicit,
+auditable, and orthogonal.
+Latest gates:
+`make -C ralph test-lp-external-adapter` PASS (34/34),
+`make -C ralph test-lp-dispatch` PASS (98/98),
+`make -C ralph test-lp-algorithm-api` PASS (128/128),
+`make -C ralph test-api` PASS (13/13), and
+`make -C ralph test-netlib-gate-small` PASS (26 files, dense fallback files: 0, no unexpected
+regressions, artifacts: `/tmp/netlib-regression-gate-20260223-120131`).
+
+Previous: (2026-02-23, `abd62fa`) — LP dispatch module extraction baseline:
 extracted LP algorithm/backend routing and fallback planning from `ralph.c` into a dedicated
 internal module (`ralph/src/lp_dispatch.c`, `ralph/src/lp_dispatch.h`) so LP solve selection,
 normalization, and capability logic are centralized and unit-testable in isolation.
@@ -592,11 +612,15 @@ Intentional compatibility usage to keep:
 
 ### Next API Feature Item
 
-10.4 LP backend expansion behind `lp_dispatch`:
-- Keep current fallback semantics and compatibility behavior.
-- Add a real non-simplex backend slot (barrier implementation or external backend adapter),
-  then enable capability gating via `ralph_get_lp_capabilities`.
-- Add orthogonal tests for: capability-on path, crossover behavior, and fallback parity.
+10.4 LP backend expansion behind `lp_dispatch` is now baseline:
+- External adapter contract is live as an orthogonal internal module
+  (`lp_external_adapter`) with provider IDs.
+- LP dispatch supports explicit external backend requests with provider-id matching.
+- Internal-first semantics for `primal`/`dual`/`auto` are enforced.
+
+Next increment:
+- 10.5 expose a first-class public adapter registration API (currently internal contract),
+  keeping provider gating/fallback semantics unchanged.
 
 ---
 
