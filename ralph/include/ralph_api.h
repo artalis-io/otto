@@ -16,7 +16,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include "ralph.h"
+#include "ralph_lp.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -256,7 +256,7 @@ size_t ralph_api_response_body_len(const RalphAPIResponse *resp);
  * On error, error_msg (if not NULL) points to a static error description.
  */
 int ralph_api_parse_lp(const char *lp_string, size_t len,
-                       RalphModel *model,
+                       RalphLPModel *model,
                        const char **error_msg);
 
 /*
@@ -266,7 +266,7 @@ int ralph_api_parse_lp(const char *lp_string, size_t len,
  * On error, error_msg (if not NULL) points to a static error description.
  */
 int ralph_api_parse_mps(const char *mps_string, size_t len,
-                        RalphModel *model,
+                        RalphLPModel *model,
                         const char **error_msg);
 
 /* ============================================================================
