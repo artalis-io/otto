@@ -15,6 +15,7 @@
 #include <time.h>
 #include "lp.h"
 #include "lp_log.h"
+#include "ralph_lp.h"
 
 /* Forward declarations */
 int lp_model_finalize(LPModel *model);
@@ -692,7 +693,7 @@ static void phase1_trace_emit_summary(SimplexSolver *solver, RalphStatus phase1_
     if (!solver || !solver->trace_phase1) return;
 
     LP_LOG_STDERR("[phase1_trace] summary status=%s piv_fail=%d small_pivot=%d invalid_col=%d lu_max_updates=%d lu_spike_pool_full=%d lu_update_pivot_small=%d lu_singular_update=%d factor_singular=%d refactor_forced_other=%d refactor_after_update_other=%d no_entering=%d first_iter=%d last_iter=%d sig=0x%016llx\n",
-            ralph_status_string(phase1_status),
+            ralph_lp_status_string((RalphLPStatus)phase1_status),
             solver->trace_phase1_pivot_failures,
             solver->trace_phase1_fail_small_pivot,
             solver->trace_phase1_fail_invalid_column,
