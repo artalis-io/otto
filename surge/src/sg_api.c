@@ -1043,6 +1043,15 @@ SGStatus sg_api_build_model(SGContext *ctx, const ShJsonValue *root) {
         sg_set_unassigned_weight(ctx, sh_json_as_double(v, 1000000.0));
     }
 
+    v = sh_json_get(root, "span_cost_duration");
+    if (v) {
+        sg_set_span_cost_duration(ctx, sh_json_as_double(v, 0.0));
+    }
+    v = sh_json_get(root, "span_cost_distance");
+    if (v) {
+        sg_set_span_cost_distance(ctx, sh_json_as_double(v, 0.0));
+    }
+
     /* 2. Config */
     if (build_config(ctx, sh_json_get(root, "config")) != SG_STATUS_OK) {
         return SG_STATUS_ERROR;
@@ -1317,6 +1326,8 @@ SGStatus sg_api_write_solution(const SGContext *ctx, ShJsonWriter *w,
         sh_json_write_kv_double_fmt(w, "total_waiting", stats.total_waiting, 2);
         sh_json_write_kv_double_fmt(w, "total_overtime", stats.total_overtime, 2);
         sh_json_write_kv_double_fmt(w, "total_tw_penalty", stats.total_tw_penalty, 2);
+        sh_json_write_kv_double_fmt(w, "duration_span", stats.duration_span, 2);
+        sh_json_write_kv_double_fmt(w, "distance_span", stats.distance_span, 2);
         sh_json_write_object_end(w);
 
         /* Routes */
@@ -1547,6 +1558,8 @@ char *sg_api_solve(const char *json_body, size_t body_len,
                 sh_json_write_kv_double_fmt(&w, "total_waiting", stats.total_waiting, 2);
                 sh_json_write_kv_double_fmt(&w, "total_overtime", stats.total_overtime, 2);
                 sh_json_write_kv_double_fmt(&w, "total_tw_penalty", stats.total_tw_penalty, 2);
+                sh_json_write_kv_double_fmt(&w, "duration_span", stats.duration_span, 2);
+                sh_json_write_kv_double_fmt(&w, "distance_span", stats.distance_span, 2);
                 sh_json_write_object_end(&w);
 
                 route_count = sg_solution_get_route_count(ctx);

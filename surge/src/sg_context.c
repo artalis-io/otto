@@ -1901,6 +1901,22 @@ SGStatus sg_set_unassigned_weight(SGContext *ctx, double weight) {
     return SG_STATUS_OK;
 }
 
+SGStatus sg_set_span_cost_duration(SGContext *ctx, double cost) {
+    if (!ctx || !isfinite(cost) || cost < 0.0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->span_cost_duration = cost;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_set_span_cost_distance(SGContext *ctx, double cost) {
+    if (!ctx || !isfinite(cost) || cost < 0.0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->span_cost_distance = cost;
+    return SG_STATUS_OK;
+}
+
 uint32_t sg_add_delivery_request(SGContext *ctx, double x, double y,
                                   int32_t tw_early, int32_t tw_late,
                                   int32_t service_seconds, double demand) {

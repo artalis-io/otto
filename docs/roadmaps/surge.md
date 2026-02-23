@@ -1671,7 +1671,7 @@ Grouped by business impact:
 | **Open start (no depot)** | Not started | OR-Tools | Vehicle starts at first stop, no depot assignment required. |
 | **Per-vehicle travel matrix** | Partial | OR-Tools, VROOM | Callback already supports it; matrix API is single-matrix only. |
 | **Initial vehicle loads** | Not started | jsprit | Vehicle starts shift with pre-loaded cargo. Useful for return trips. |
-| **Global span balancing** | Not started | OR-Tools | Minimize max-min route duration across fleet. Route equity. |
+| ~~**Global span balancing**~~ | ✅ Done | OR-Tools | **Done.** `sg_set_span_cost_duration()` / `sg_set_span_cost_distance()`. Adds `span_cost × (max - min)` penalty to cost function. Stats always report `duration_span` / `distance_span`. 5 tests. |
 | **Plan/ETA validation mode** | Not started | VROOM | Validate fixed routes, report constraint violations per stop. |
 
 **Tier 5 — Infrastructure & Performance:**

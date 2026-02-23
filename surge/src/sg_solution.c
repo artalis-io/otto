@@ -1504,6 +1504,33 @@ double sg_route_solution_cost(const void *solution, void *user_ctx) {
     if (ctx->has_depot_capacity) {
         cost += sg_compute_depot_overlap_penalty(ctx, sol);
     }
+    /* Span balancing penalty */
+    if (ctx->span_cost_duration != 0.0 || ctx->span_cost_distance != 0.0) {
+        double min_dur = INFINITY, max_dur = -INFINITY;
+        double min_dist = INFINITY, max_dist = -INFINITY;
+        uint32_t active = 0;
+        for (v = 0; v < sol->num_vehicles; v++) {
+            if (sol->route_stop_lengths[v] > 0) {
+                active++;
+                if (ctx->span_cost_duration != 0.0 && sol->route_duration) {
+                    double d = sol->route_duration[v];
+                    if (d < min_dur) min_dur = d;
+                    if (d > max_dur) max_dur = d;
+                }
+                if (ctx->span_cost_distance != 0.0) {
+                    double d = sol->route_distance[v];
+                    if (d < min_dist) min_dist = d;
+                    if (d > max_dist) max_dist = d;
+                }
+            }
+        }
+        if (active >= 2) {
+            if (ctx->span_cost_duration != 0.0 && max_dur > min_dur)
+                cost += ctx->span_cost_duration * (max_dur - min_dur);
+            if (ctx->span_cost_distance != 0.0 && max_dist > min_dist)
+                cost += ctx->span_cost_distance * (max_dist - min_dist);
+        }
+    }
     return cost;
 }
 

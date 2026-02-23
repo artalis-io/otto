@@ -9466,6 +9466,170 @@ static void test_validate_plan_json(void) {
     free(resp);
 }
 
+/* ===== Span Balancing Tests ===== */
+
+static void test_span_cost_api(void) {
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    /* NULL context */
+    assert(sg_set_span_cost_duration(NULL, 1.0) == SG_STATUS_INVALID_ARG);
+    assert(sg_set_span_cost_distance(NULL, 1.0) == SG_STATUS_INVALID_ARG);
+
+    /* Negative */
+    assert(sg_set_span_cost_duration(ctx, -1.0) == SG_STATUS_INVALID_ARG);
+    assert(sg_set_span_cost_distance(ctx, -0.5) == SG_STATUS_INVALID_ARG);
+
+    /* Infinity */
+    assert(sg_set_span_cost_duration(ctx, INFINITY) == SG_STATUS_INVALID_ARG);
+    assert(sg_set_span_cost_distance(ctx, INFINITY) == SG_STATUS_INVALID_ARG);
+
+    /* NaN */
+    assert(sg_set_span_cost_duration(ctx, NAN) == SG_STATUS_INVALID_ARG);
+    assert(sg_set_span_cost_distance(ctx, NAN) == SG_STATUS_INVALID_ARG);
+
+    /* Valid: zero and positive */
+    assert(sg_set_span_cost_duration(ctx, 0.0) == SG_STATUS_OK);
+    assert(sg_set_span_cost_distance(ctx, 0.0) == SG_STATUS_OK);
+    assert(sg_set_span_cost_duration(ctx, 5.0) == SG_STATUS_OK);
+    assert(sg_set_span_cost_distance(ctx, 0.1) == SG_STATUS_OK);
+
+    sg_free(ctx);
+}
+
+static void test_span_cost_zero_when_single_vehicle(void) {
+    /* Single active vehicle → span stats must be 0 */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    SGStats stats;
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -5.0);
+    add_delivery_request(ctx, 0.0, 10.0, 0, 86400, 60, -5.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    sg_get_stats(ctx, &stats);
+
+    /* Only 1 vehicle used → span = 0 */
+    assert(stats.vehicles_used == 1);
+    assert(stats.duration_span == 0.0);
+    assert(stats.distance_span == 0.0);
+
+    sg_free(ctx);
+}
+
+static void test_span_stats_populated_without_cost(void) {
+    /* Span stats computed even when cost weights are 0 */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    SGStats stats;
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 10.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 10.0);
+
+    /* Two requests that need separate vehicles due to capacity */
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -8.0);
+    add_delivery_request(ctx, 50.0, 0.0, 0, 86400, 60, -8.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    sg_get_stats(ctx, &stats);
+
+    /* Two vehicles used → span stats should be populated */
+    assert(stats.vehicles_used == 2);
+    assert(stats.distance_span >= 0.0);
+    assert(stats.duration_span >= 0.0);
+
+    sg_free(ctx);
+}
+
+static void test_span_cost_affects_total_cost(void) {
+    /* Enabling span cost should increase total_cost vs without */
+    SGContext *ctx_base = make_config(200, 42);
+    SGContext *ctx_span = make_config(200, 42);
+    uint32_t depot;
+    SGStats stats_base, stats_span;
+
+    /* Build identical models */
+    add_depot_with_location(ctx_base, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx_base, depot, 0, 86400, 10.0);
+    add_vehicle_with_depot(ctx_base, depot, 0, 86400, 10.0);
+    add_delivery_request(ctx_base, 10.0, 0.0, 0, 86400, 60, -8.0);
+    add_delivery_request(ctx_base, 50.0, 0.0, 0, 86400, 60, -8.0);
+
+    add_depot_with_location(ctx_span, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx_span, depot, 0, 86400, 10.0);
+    add_vehicle_with_depot(ctx_span, depot, 0, 86400, 10.0);
+    add_delivery_request(ctx_span, 10.0, 0.0, 0, 86400, 60, -8.0);
+    add_delivery_request(ctx_span, 50.0, 0.0, 0, 86400, 60, -8.0);
+
+    /* Set span cost on second context */
+    assert(sg_set_span_cost_distance(ctx_span, 100.0) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx_base) == SG_STATUS_OK);
+    assert(sg_solve(ctx_span) == SG_STATUS_OK);
+
+    sg_get_stats(ctx_base, &stats_base);
+    sg_get_stats(ctx_span, &stats_span);
+
+    /* Both should use 2 vehicles */
+    assert(stats_base.vehicles_used == 2);
+    assert(stats_span.vehicles_used == 2);
+
+    /* Span cost adds to total cost when routes are unbalanced */
+    assert(stats_span.total_cost > stats_base.total_cost);
+
+    sg_free(ctx_base);
+    sg_free(ctx_span);
+}
+
+static void test_span_cost_balances_routes(void) {
+    /* High span cost → distance_span should be lower than without.
+       We create a scenario where 4 deliveries at different distances
+       can be distributed among 2 vehicles more or less evenly. */
+    SGContext *ctx_base = make_config(500, 77);
+    SGContext *ctx_span = make_config(500, 77);
+    uint32_t depot;
+    SGStats stats_base, stats_span;
+
+    /* 4 deliveries at 10, 20, 30, 40 distance from depot, capacity forces 2 vehicles */
+    add_depot_with_location(ctx_base, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx_base, depot, 0, 86400, 25.0);
+    add_vehicle_with_depot(ctx_base, depot, 0, 86400, 25.0);
+    add_delivery_request(ctx_base, 10.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx_base, 20.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx_base, 30.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx_base, 40.0, 0.0, 0, 86400, 60, -10.0);
+
+    add_depot_with_location(ctx_span, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx_span, depot, 0, 86400, 25.0);
+    add_vehicle_with_depot(ctx_span, depot, 0, 86400, 25.0);
+    add_delivery_request(ctx_span, 10.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx_span, 20.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx_span, 30.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx_span, 40.0, 0.0, 0, 86400, 60, -10.0);
+
+    /* Large span cost on distance to encourage balancing */
+    assert(sg_set_span_cost_distance(ctx_span, 1000.0) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx_base) == SG_STATUS_OK);
+    assert(sg_solve(ctx_span) == SG_STATUS_OK);
+
+    sg_get_stats(ctx_base, &stats_base);
+    sg_get_stats(ctx_span, &stats_span);
+
+    /* Both should assign all and use 2 vehicles */
+    assert(stats_base.unassigned == 0);
+    assert(stats_span.unassigned == 0);
+    assert(stats_base.vehicles_used == 2);
+    assert(stats_span.vehicles_used == 2);
+
+    /* With span cost, distance_span should be <= base (ideally much less) */
+    assert(stats_span.distance_span <= stats_base.distance_span + 1e-9);
+
+    sg_free(ctx_base);
+    sg_free(ctx_span);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -9782,12 +9946,19 @@ int main(void) {
     RUN_TEST(test_validate_plan_multiple_violations);
     RUN_TEST(test_validate_plan_json);
 
+    /* Span balancing */
+    RUN_TEST(test_span_cost_api);
+    RUN_TEST(test_span_cost_zero_when_single_vehicle);
+    RUN_TEST(test_span_stats_populated_without_cost);
+    RUN_TEST(test_span_cost_affects_total_cost);
+    RUN_TEST(test_span_cost_balances_routes);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 252);
+    assert(tests_run == 257);
 #else
-    assert(tests_run == 243);
+    assert(tests_run == 248);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

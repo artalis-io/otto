@@ -76,6 +76,8 @@ typedef struct {
     double total_waiting;
     double total_overtime;
     double total_tw_penalty;
+    double duration_span;   /* max_duration - min_duration across active routes */
+    double distance_span;   /* max_distance - min_distance across active routes */
 } SGStats;
 
 typedef enum {

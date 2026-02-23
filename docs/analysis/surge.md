@@ -290,7 +290,7 @@ Revised grades vs. initial assessment: Language bindings A- (Python + Node.js bi
 |---------|-----------|--------|
 | ~~**Time-dependent travel**~~ | ~~OR-Tools, PTV, HERE~~ | **Done.** Speed profiles (time-dependent duration multipliers) + per-vehicle travel profiles shipped. |
 | ~~**Open start (no depot)**~~ | ~~OR-Tools, VROOM~~ | **Done.** Vehicle can skip first depot-to-stop leg (open_start flag, symmetric to open_end). |
-| **Global span balancing** | OR-Tools, Ortec, PTV | "Fairness" — minimize longest route or balance workload. Fleet unions/labor contracts care about this. |
+| ~~**Global span balancing**~~ | ~~OR-Tools, Ortec, PTV~~ | **Done.** `sg_set_span_cost_duration()` / `sg_set_span_cost_distance()` add `span_cost × (max_metric - min_metric)` penalty across active routes. Stats always report `duration_span` / `distance_span`. 5 tests. |
 | ~~**Plan/ETA validation mode**~~ | ~~VROOM, HERE~~ | **Done.** `sg_validate_plan()` validates fixed routes, computes ETAs, reports constraint violations (hard TW, capacity, PD order, ride time, max duration/distance/tasks, forbidden vehicle, qualifications). JSON API `"plan"` key. |
 
 **Medium Value (niche but differentiating):**
@@ -341,9 +341,9 @@ Most of these are **application-layer** concerns, not solver-core. Surge's clean
 4. ~~**Open start**~~ — **Done.**
 5. ~~**Validation mode**~~ — **Done.** Dispatching integration use case closed.
 6. **Infeasible-space exploration** — the algorithmic lever most likely to close the vehicle gap on tight instances.
-7. **Global span balancing** — table stakes for enterprise fleet contracts.
+7. ~~**Global span balancing**~~ — **Done.** `sg_set_span_cost_duration()` / `sg_set_span_cost_distance()`.
 
-The constraint richness is ahead of OR-Tools/VROOM. The quality is competitive. The deployability is unmatched. Distribution is solved (REST API, WASM, Python, Node.js). Open start routes complete the field-service use case. Plan/ETA validation closes the dispatching integration gap. The remaining gap to GOAT is **modelling features** (global span balancing) and **algorithmic quality** (infeasible-space exploration).
+The constraint richness is ahead of OR-Tools/VROOM. The quality is competitive. The deployability is unmatched. Distribution is solved (REST API, WASM, Python, Node.js). Open start routes complete the field-service use case. Plan/ETA validation closes the dispatching integration gap. Global span balancing closes the enterprise fleet fairness gap. The remaining gap to GOAT is **algorithmic quality** (infeasible-space exploration) — not infrastructure or modelling.
 
 ---
 
@@ -353,4 +353,4 @@ Surge's strengths are **deployability**, **API cleanliness**, **constraint richn
 
 Distribution is now solved: REST API server (with rate limiting, work queue, Prometheus metrics), WASM build, Python and Node.js bindings all exist and work. Time-dependent travel (speed profiles) and per-vehicle travel profiles close the two biggest modelling gaps vs competitors. Plan/ETA validation mode closes the dispatching integration gap vs VROOM and HERE. Parallelism, population-based search, and arena allocation are complete. The remaining quality gap is algorithmic — infeasible-space exploration and operator tuning.
 
-The strategic bet has paid off: a lean, embeddable, WASM-ready solver with a clean API, rich constraints, and full distribution infrastructure. The gap to GOAT is now mostly **algorithmic quality** on tight-TW instances and **global span balancing** for enterprise fleet contracts — not infrastructure or modelling.
+The strategic bet has paid off: a lean, embeddable, WASM-ready solver with a clean API, rich constraints, and full distribution infrastructure. The gap to GOAT is now mostly **algorithmic quality** on tight-TW instances — not infrastructure or modelling.

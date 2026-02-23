@@ -281,6 +281,8 @@ struct SGContext {
     void *active_solution;  /* Temporary: set during destroy ops needing route access */
     SGRouteSolution *final_solution;  /* Retained after solve for route/stop export */
     double unassigned_weight;
+    double span_cost_duration;
+    double span_cost_distance;
     _Atomic uint8_t travel_prepared;
     uint8_t avoid_new_vehicles;  /* Phase 1: skip empty vehicles in repair */
     uint8_t has_depot_capacity;  /* 1 if any depot has max_simultaneous > 0 */

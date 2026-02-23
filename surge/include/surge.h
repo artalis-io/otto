@@ -155,6 +155,10 @@ uint32_t sg_solution_get_route_trip_count(const SGContext *ctx, uint32_t route_i
 
 SGStatus sg_set_unassigned_weight(SGContext *ctx, double weight);
 
+/* Fleet-level span balancing cost weights */
+SGStatus sg_set_span_cost_duration(SGContext *ctx, double cost);
+SGStatus sg_set_span_cost_distance(SGContext *ctx, double cost);
+
 /* Per-request drop penalty */
 SGStatus sg_request_set_unassigned_penalty(SGContext *ctx, uint32_t request_id, double penalty);
 

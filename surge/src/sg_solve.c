@@ -887,6 +887,29 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
             }
             ctx->stats.total_tw_penalty = ttp;
         }
+        /* Span stats (unconditional) */
+        {
+            double min_dur = INFINITY, max_dur = -INFINITY;
+            double min_dist = INFINITY, max_dist = -INFINITY;
+            uint32_t sv, s_active = 0;
+            for (sv = 0; sv < final_sol->num_vehicles; sv++) {
+                if (final_sol->route_stop_lengths[sv] > 0) {
+                    s_active++;
+                    if (final_sol->route_duration) {
+                        double d = final_sol->route_duration[sv];
+                        if (d < min_dur) min_dur = d;
+                        if (d > max_dur) max_dur = d;
+                    }
+                    {
+                        double dd = final_sol->route_distance[sv];
+                        if (dd < min_dist) min_dist = dd;
+                        if (dd > max_dist) max_dist = dd;
+                    }
+                }
+            }
+            ctx->stats.duration_span = (s_active >= 2 && max_dur > min_dur) ? (max_dur - min_dur) : 0.0;
+            ctx->stats.distance_span = (s_active >= 2 && max_dist > min_dist) ? (max_dist - min_dist) : 0.0;
+        }
 
         /* Retain final solution for route/stop export */
         if (ctx->final_solution) {
