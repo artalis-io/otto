@@ -6,6 +6,8 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
+#include <stdatomic.h>
 
 #include "ralph.h"
 
@@ -83,6 +85,73 @@ static RalphModel* build_small_lp(void) {
         ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 1.0);
     }
     return model;
+}
+
+typedef struct {
+    RalphLPExternalAdapter adapter;
+    int iterations;
+    atomic_int failed;
+} PublicThreadHarness;
+
+static int public_thread_get_capabilities(RalphLPExternalCapabilities *caps, void *user_data) {
+    (void)user_data;
+    if (!caps) return -1;
+    memset(caps, 0, sizeof(*caps));
+    caps->supports_simplex = 1;
+    return 0;
+}
+
+static int public_thread_solve(RalphLPExternalBackendKind backend,
+                               void *solver_handle,
+                               void *user_data) {
+    (void)backend;
+    (void)solver_handle;
+    (void)user_data;
+    return -1;
+}
+
+static void* public_thread_writer(void *arg) {
+    PublicThreadHarness *harness = (PublicThreadHarness*)arg;
+    for (int i = 0; i < harness->iterations; i++) {
+        if (ralph_register_lp_external_adapter(&harness->adapter) != 0) {
+            atomic_store(&harness->failed, 1);
+            break;
+        }
+        if ((i & 1) == 0) {
+            if (ralph_unregister_lp_external_adapter(RALPH_LP_EXTERNAL_PROVIDER_GLPK) != 0) {
+                atomic_store(&harness->failed, 1);
+                break;
+            }
+        }
+    }
+    (void)ralph_unregister_lp_external_adapter(RALPH_LP_EXTERNAL_PROVIDER_GLPK);
+    return NULL;
+}
+
+static void* public_thread_reader(void *arg) {
+    PublicThreadHarness *harness = (PublicThreadHarness*)arg;
+    for (int i = 0; i < harness->iterations; i++) {
+        RalphLPCapabilities caps;
+        int registered;
+        const char *provider_name;
+
+        memset(&caps, 0, sizeof(caps));
+        if (ralph_get_lp_capabilities(&caps) != 0) {
+            atomic_store(&harness->failed, 1);
+            break;
+        }
+        registered = ralph_is_lp_external_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_GLPK);
+        if (registered != 0 && registered != 1) {
+            atomic_store(&harness->failed, 1);
+            break;
+        }
+        provider_name = ralph_get_lp_external_provider_name(RALPH_LP_EXTERNAL_PROVIDER_GLPK);
+        if (!provider_name) {
+            atomic_store(&harness->failed, 1);
+            break;
+        }
+    }
+    return NULL;
 }
 
 static void test_public_adapter_validation_and_lifecycle(void) {
@@ -212,11 +281,46 @@ static void test_public_adapter_provider_dispatch(void) {
     ralph_unregister_all_lp_external_adapters();
 }
 
+static void test_public_adapter_thread_safety(void) {
+    PublicThreadHarness harness;
+    pthread_t writer_thread;
+    pthread_t reader_thread;
+
+    memset(&harness, 0, sizeof(harness));
+    harness.iterations = 2000;
+    atomic_init(&harness.failed, 0);
+
+    memset(&harness.adapter, 0, sizeof(harness.adapter));
+    harness.adapter.abi_version = RALPH_LP_EXTERNAL_ADAPTER_ABI_VERSION;
+    harness.adapter.provider = RALPH_LP_EXTERNAL_PROVIDER_GLPK;
+    harness.adapter.provider_name = "PublicThreadSafeGLPK";
+    harness.adapter.get_capabilities = public_thread_get_capabilities;
+    harness.adapter.solve = public_thread_solve;
+
+    ralph_unregister_all_lp_external_adapters();
+    ASSERT_INT_EQ(pthread_create(&writer_thread, NULL, public_thread_writer, &harness),
+                  0,
+                  "public thread-safety: create writer thread");
+    ASSERT_INT_EQ(pthread_create(&reader_thread, NULL, public_thread_reader, &harness),
+                  0,
+                  "public thread-safety: create reader thread");
+
+    ASSERT_INT_EQ(pthread_join(writer_thread, NULL), 0,
+                  "public thread-safety: join writer thread");
+    ASSERT_INT_EQ(pthread_join(reader_thread, NULL), 0,
+                  "public thread-safety: join reader thread");
+    ASSERT_INT_EQ(atomic_load(&harness.failed), 0,
+                  "public thread-safety: registry/capability queries stable");
+
+    ralph_unregister_all_lp_external_adapters();
+}
+
 int main(void) {
     printf("=== LP External Adapter Public API Tests ===\n");
 
     test_public_adapter_validation_and_lifecycle();
     test_public_adapter_provider_dispatch();
+    test_public_adapter_thread_safety();
 
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

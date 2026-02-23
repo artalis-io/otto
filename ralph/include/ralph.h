@@ -183,6 +183,37 @@ typedef enum {
     RALPH_LP_EXTERNAL_BACKEND_BARRIER = 2
 } RalphLPExternalBackendKind;
 
+/* Recommended external adapter solve return codes.
+ * Contract:
+ * - `RALPH_LP_EXTERNAL_ADAPTER_RC_OK` means success.
+ * - Any non-zero value means solve failure; unmapped values are treated as generic failures.
+ */
+typedef enum {
+    RALPH_LP_EXTERNAL_ADAPTER_RC_OK = 0,
+    RALPH_LP_EXTERNAL_ADAPTER_RC_ERROR = -1,
+    RALPH_LP_EXTERNAL_ADAPTER_RC_NUMERICAL_FAILURE = -2,
+    RALPH_LP_EXTERNAL_ADAPTER_RC_TIME_LIMIT = -3,
+    RALPH_LP_EXTERNAL_ADAPTER_RC_ITERATION_LIMIT = -4
+} RalphLPExternalAdapterResult;
+
+typedef enum {
+    RALPH_LP_EXTERNAL_FAILURE_STAGE_NONE = 0,
+    RALPH_LP_EXTERNAL_FAILURE_STAGE_DISPATCH = 1,
+    RALPH_LP_EXTERNAL_FAILURE_STAGE_EXECUTION = 2
+} RalphLPExternalFailureStage;
+
+typedef enum {
+    RALPH_LP_EXTERNAL_FAILURE_NONE = 0,
+    RALPH_LP_EXTERNAL_FAILURE_PROVIDER_REQUIRED = 1,
+    RALPH_LP_EXTERNAL_FAILURE_PROVIDER_UNREGISTERED = 2,
+    RALPH_LP_EXTERNAL_FAILURE_BACKEND_UNSUPPORTED = 3,
+    RALPH_LP_EXTERNAL_FAILURE_CAPABILITY_QUERY_FAILED = 4,
+    RALPH_LP_EXTERNAL_FAILURE_ADAPTER_FAILED = 5,
+    RALPH_LP_EXTERNAL_FAILURE_ADAPTER_NUMERICAL_FAILURE = 6,
+    RALPH_LP_EXTERNAL_FAILURE_ADAPTER_TIME_LIMIT = 7,
+    RALPH_LP_EXTERNAL_FAILURE_ADAPTER_ITERATION_LIMIT = 8
+} RalphLPExternalFailureReason;
+
 typedef struct {
     int supports_simplex;
     int supports_dual_simplex;
@@ -201,6 +232,20 @@ typedef struct {
     void *user_data;
 } RalphLPExternalAdapter;
 
+typedef struct {
+    RalphLPExternalFailureStage stage;
+    RalphLPExternalFailureReason reason;
+    RalphLPAlgorithm requested_algorithm;
+    RalphLPAlgorithm effective_algorithm;
+    RalphLPExternalProvider requested_provider;
+    RalphLPExternalProvider effective_provider;
+    RalphLPExternalBackendKind backend;
+    RalphLPFallbackReason fallback_reason;
+    int adapter_return_code;
+    RalphStatus mapped_status;
+    int fatal;
+} RalphLPExternalFailureReport;
+
 /* LP capabilities are compile/runtime feature flags independent of model instance.
  * Returns 0 on success, -1 on invalid args. */
 int ralph_get_lp_capabilities(RalphLPCapabilities *caps);
@@ -212,6 +257,12 @@ int ralph_get_lp_capabilities(RalphLPCapabilities *caps);
  */
 int ralph_get_last_lp_algorithm_report(const RalphModel *model,
                                        RalphLPSolveAlgorithmReport *report);
+
+/* Last external LP failure report for the most recent LP solve.
+ * Returns 0 when an external-dispatch or external-execution failure was recorded,
+ * and -1 when unavailable (no failure report, invalid args, or MIP model). */
+int ralph_get_last_lp_external_failure_report(const RalphModel *model,
+                                              RalphLPExternalFailureReport *report);
 
 /* External adapter registration/query API.
  * Contract:

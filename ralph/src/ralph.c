@@ -109,6 +109,8 @@ struct RalphModel {
     RalphPresolveReport last_presolve_report;
     RalphLPSolveAlgorithmReport last_lp_algorithm_report;
     int last_lp_algorithm_report_valid;
+    RalphLPExternalFailureReport last_lp_external_failure_report;
+    int last_lp_external_failure_report_valid;
 
     /* Basis staged before first optimize() (applied when simplex tableau is created) */
     int staged_basis_m;
@@ -126,12 +128,8 @@ struct RalphBasis {
 };
 
 typedef struct {
-    int in_use;
     RalphLPExternalAdapter adapter;
 } RalphLPExternalAdapterBridgeEntry;
-
-static RalphLPExternalAdapterBridgeEntry
-    g_lp_external_bridge[(int)RALPH_LP_EXTERNAL_PROVIDER_GLOP + 1];
 
 static int ralph_lp_external_provider_valid_public(RalphLPExternalProvider provider) {
     return provider >= RALPH_LP_EXTERNAL_PROVIDER_GLPK &&
@@ -172,13 +170,56 @@ static RalphLPExternalBackendKind ralph_lp_external_backend_from_internal(
     }
 }
 
+static int ralph_lp_external_backend_from_algorithm(RalphLPAlgorithm algorithm,
+                                                    RalphLPExternalBackendKind *backend_out) {
+    if (!backend_out) return -1;
+    switch (algorithm) {
+        case RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL:
+            *backend_out = RALPH_LP_EXTERNAL_BACKEND_SIMPLEX;
+            return 0;
+        case RALPH_LP_ALGORITHM_DUAL_SIMPLEX_EXTERNAL:
+            *backend_out = RALPH_LP_EXTERNAL_BACKEND_DUAL_SIMPLEX;
+            return 0;
+        case RALPH_LP_ALGORITHM_BARRIER_EXTERNAL:
+            *backend_out = RALPH_LP_EXTERNAL_BACKEND_BARRIER;
+            return 0;
+        default:
+            return -1;
+    }
+}
+
+static int ralph_lp_dispatch_backend_is_external(LPDispatchBackend backend) {
+    return backend == LP_DISPATCH_BACKEND_SIMPLEX_EXTERNAL ||
+           backend == LP_DISPATCH_BACKEND_DUAL_SIMPLEX_EXTERNAL ||
+           backend == LP_DISPATCH_BACKEND_BARRIER_EXTERNAL;
+}
+
+static int ralph_lp_external_backend_from_dispatch_backend(
+    LPDispatchBackend backend,
+    RalphLPExternalBackendKind *backend_out) {
+    if (!backend_out) return -1;
+    switch (backend) {
+        case LP_DISPATCH_BACKEND_SIMPLEX_EXTERNAL:
+            *backend_out = RALPH_LP_EXTERNAL_BACKEND_SIMPLEX;
+            return 0;
+        case LP_DISPATCH_BACKEND_DUAL_SIMPLEX_EXTERNAL:
+            *backend_out = RALPH_LP_EXTERNAL_BACKEND_DUAL_SIMPLEX;
+            return 0;
+        case LP_DISPATCH_BACKEND_BARRIER_EXTERNAL:
+            *backend_out = RALPH_LP_EXTERNAL_BACKEND_BARRIER;
+            return 0;
+        default:
+            return -1;
+    }
+}
+
 static int ralph_lp_external_bridge_get_capabilities(LPExternalCapabilities *caps,
                                                       void *user_data) {
     RalphLPExternalAdapterBridgeEntry *entry =
         (RalphLPExternalAdapterBridgeEntry*)user_data;
     RalphLPExternalCapabilities public_caps;
 
-    if (!entry || !entry->in_use || !entry->adapter.get_capabilities || !caps) return -1;
+    if (!entry || !entry->adapter.get_capabilities || !caps) return -1;
     memset(&public_caps, 0, sizeof(public_caps));
     if (entry->adapter.get_capabilities(&public_caps, entry->adapter.user_data) != 0) return -1;
 
@@ -197,8 +238,12 @@ static int ralph_lp_external_bridge_solve(LPExternalBackendKind backend,
     RalphLPExternalBackendKind public_backend =
         ralph_lp_external_backend_from_internal(backend);
 
-    if (!entry || !entry->in_use || !entry->adapter.solve) return -1;
+    if (!entry || !entry->adapter.solve) return -1;
     return entry->adapter.solve(public_backend, (void*)solver, entry->adapter.user_data);
+}
+
+static void ralph_lp_external_bridge_entry_destroy(void *user_data) {
+    free(user_data);
 }
 
 static void ralph_clear_staged_basis(RalphModel *model) {
@@ -279,6 +324,169 @@ static void ralph_store_lp_algorithm_report(RalphModel *model,
     if (!model || !report) return;
     model->last_lp_algorithm_report = *report;
     model->last_lp_algorithm_report_valid = 1;
+}
+
+static void ralph_reset_lp_external_failure_report(RalphModel *model) {
+    if (!model) return;
+    memset(&model->last_lp_external_failure_report, 0,
+           sizeof(model->last_lp_external_failure_report));
+    model->last_lp_external_failure_report.stage = RALPH_LP_EXTERNAL_FAILURE_STAGE_NONE;
+    model->last_lp_external_failure_report.reason = RALPH_LP_EXTERNAL_FAILURE_NONE;
+    model->last_lp_external_failure_report.requested_algorithm = RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
+    model->last_lp_external_failure_report.effective_algorithm = RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
+    model->last_lp_external_failure_report.requested_provider = RALPH_LP_EXTERNAL_PROVIDER_NONE;
+    model->last_lp_external_failure_report.effective_provider = RALPH_LP_EXTERNAL_PROVIDER_NONE;
+    model->last_lp_external_failure_report.backend = RALPH_LP_EXTERNAL_BACKEND_SIMPLEX;
+    model->last_lp_external_failure_report.fallback_reason = RALPH_LP_FALLBACK_NONE;
+    model->last_lp_external_failure_report.adapter_return_code = 0;
+    model->last_lp_external_failure_report.mapped_status = RALPH_STATUS_UNKNOWN;
+    model->last_lp_external_failure_report.fatal = 0;
+    model->last_lp_external_failure_report_valid = 0;
+}
+
+static void ralph_store_lp_external_failure_report(
+    RalphModel *model,
+    const RalphLPExternalFailureReport *report) {
+    if (!model || !report) return;
+    model->last_lp_external_failure_report = *report;
+    model->last_lp_external_failure_report_valid = 1;
+}
+
+static int ralph_lp_external_caps_support_backend(
+    const LPExternalCapabilities *caps,
+    RalphLPExternalBackendKind backend) {
+    if (!caps) return 0;
+    switch (backend) {
+        case RALPH_LP_EXTERNAL_BACKEND_SIMPLEX:
+            return caps->supports_simplex ? 1 : 0;
+        case RALPH_LP_EXTERNAL_BACKEND_DUAL_SIMPLEX:
+            return caps->supports_dual_simplex ? 1 : 0;
+        case RALPH_LP_EXTERNAL_BACKEND_BARRIER:
+            return caps->supports_barrier ? 1 : 0;
+        default:
+            return 0;
+    }
+}
+
+static RalphLPExternalFailureReason ralph_classify_external_dispatch_unavailable(
+    RalphLPAlgorithm requested_algorithm,
+    RalphLPExternalProvider requested_provider,
+    RalphLPExternalBackendKind backend) {
+    LPExternalProvider provider_internal;
+    LPExternalCapabilities caps;
+
+    if (requested_provider == RALPH_LP_EXTERNAL_PROVIDER_NONE) {
+        return RALPH_LP_EXTERNAL_FAILURE_PROVIDER_REQUIRED;
+    }
+    if (!ralph_lp_external_provider_valid_public(requested_provider)) {
+        return RALPH_LP_EXTERNAL_FAILURE_PROVIDER_UNREGISTERED;
+    }
+
+    provider_internal = ralph_lp_external_provider_to_internal(requested_provider);
+    if (provider_internal == LP_EXTERNAL_PROVIDER_NONE) {
+        return RALPH_LP_EXTERNAL_FAILURE_PROVIDER_UNREGISTERED;
+    }
+    if (lp_external_adapter_is_registered(provider_internal) != 1) {
+        return RALPH_LP_EXTERNAL_FAILURE_PROVIDER_UNREGISTERED;
+    }
+
+    memset(&caps, 0, sizeof(caps));
+    if (lp_external_adapter_get_capabilities(provider_internal, &caps) != 0) {
+        return RALPH_LP_EXTERNAL_FAILURE_CAPABILITY_QUERY_FAILED;
+    }
+    if (!ralph_lp_external_caps_support_backend(&caps, backend)) {
+        return RALPH_LP_EXTERNAL_FAILURE_BACKEND_UNSUPPORTED;
+    }
+
+    (void)requested_algorithm;
+    return RALPH_LP_EXTERNAL_FAILURE_CAPABILITY_QUERY_FAILED;
+}
+
+static void ralph_map_external_adapter_rc(int adapter_rc,
+                                          RalphLPExternalFailureReason *reason_out,
+                                          RalphStatus *status_out) {
+    RalphLPExternalFailureReason reason = RALPH_LP_EXTERNAL_FAILURE_ADAPTER_FAILED;
+    RalphStatus status = RALPH_STATUS_ERROR;
+
+    switch ((RalphLPExternalAdapterResult)adapter_rc) {
+        case RALPH_LP_EXTERNAL_ADAPTER_RC_NUMERICAL_FAILURE:
+            reason = RALPH_LP_EXTERNAL_FAILURE_ADAPTER_NUMERICAL_FAILURE;
+            status = RALPH_STATUS_ERROR;
+            break;
+        case RALPH_LP_EXTERNAL_ADAPTER_RC_TIME_LIMIT:
+            reason = RALPH_LP_EXTERNAL_FAILURE_ADAPTER_TIME_LIMIT;
+            status = RALPH_STATUS_TIME_LIMIT;
+            break;
+        case RALPH_LP_EXTERNAL_ADAPTER_RC_ITERATION_LIMIT:
+            reason = RALPH_LP_EXTERNAL_FAILURE_ADAPTER_ITERATION_LIMIT;
+            status = RALPH_STATUS_ITERATION_LIMIT;
+            break;
+        case RALPH_LP_EXTERNAL_ADAPTER_RC_ERROR:
+        default:
+            reason = RALPH_LP_EXTERNAL_FAILURE_ADAPTER_FAILED;
+            status = RALPH_STATUS_ERROR;
+            break;
+    }
+
+    if (reason_out) *reason_out = reason;
+    if (status_out) *status_out = status;
+}
+
+static void ralph_record_external_dispatch_failure(RalphModel *model,
+                                                   const LPDispatchPlan *plan,
+                                                   int fatal) {
+    RalphLPExternalFailureReport report;
+    RalphLPExternalBackendKind backend = RALPH_LP_EXTERNAL_BACKEND_SIMPLEX;
+
+    if (!model || !plan) return;
+    if (ralph_lp_external_backend_from_algorithm(plan->requested_algorithm, &backend) != 0) return;
+
+    memset(&report, 0, sizeof(report));
+    report.stage = RALPH_LP_EXTERNAL_FAILURE_STAGE_DISPATCH;
+    report.reason = ralph_classify_external_dispatch_unavailable(
+        plan->requested_algorithm,
+        plan->requested_external_provider,
+        backend);
+    report.requested_algorithm = plan->requested_algorithm;
+    report.effective_algorithm = plan->effective_algorithm;
+    report.requested_provider = plan->requested_external_provider;
+    report.effective_provider = plan->effective_external_provider;
+    report.backend = backend;
+    report.fallback_reason = plan->fallback_reason;
+    report.adapter_return_code = 0;
+    report.mapped_status = fatal ? RALPH_STATUS_ERROR : RALPH_STATUS_UNKNOWN;
+    report.fatal = fatal ? 1 : 0;
+    ralph_store_lp_external_failure_report(model, &report);
+}
+
+static void ralph_record_external_execution_failure(RalphModel *model,
+                                                    const LPDispatchPlan *plan,
+                                                    int adapter_rc) {
+    RalphLPExternalFailureReport report;
+    RalphLPExternalFailureReason reason = RALPH_LP_EXTERNAL_FAILURE_ADAPTER_FAILED;
+    RalphStatus mapped_status = RALPH_STATUS_ERROR;
+    RalphLPExternalBackendKind backend = RALPH_LP_EXTERNAL_BACKEND_SIMPLEX;
+
+    if (!model || !plan) return;
+    if (ralph_lp_external_backend_from_dispatch_backend(plan->effective_backend, &backend) != 0) {
+        return;
+    }
+
+    ralph_map_external_adapter_rc(adapter_rc, &reason, &mapped_status);
+
+    memset(&report, 0, sizeof(report));
+    report.stage = RALPH_LP_EXTERNAL_FAILURE_STAGE_EXECUTION;
+    report.reason = reason;
+    report.requested_algorithm = plan->requested_algorithm;
+    report.effective_algorithm = plan->effective_algorithm;
+    report.requested_provider = plan->requested_external_provider;
+    report.effective_provider = plan->effective_external_provider;
+    report.backend = backend;
+    report.fallback_reason = plan->fallback_reason;
+    report.adapter_return_code = adapter_rc;
+    report.mapped_status = mapped_status;
+    report.fatal = 1;
+    ralph_store_lp_external_failure_report(model, &report);
 }
 
 static int ralph_is_valid_sense(RalphSense sense) {
@@ -495,6 +703,7 @@ static void ralph_invalidate_solve_state(RalphModel *model) {
     model->iteration_count = 0;
     ralph_reset_presolve_report(model);
     ralph_reset_lp_algorithm_report(model);
+    ralph_reset_lp_external_failure_report(model);
 }
 
 /* ============================================================================
@@ -552,6 +761,7 @@ RalphModel* ralph_create(void) {
     model->mip_start_repair_mode = RALPH_MIP_START_REPAIR_STRICT;
     ralph_reset_presolve_report(model);
     ralph_reset_lp_algorithm_report(model);
+    ralph_reset_lp_external_failure_report(model);
 
     return model;
 }
@@ -727,6 +937,7 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     LPExternalProvider lp_effective_provider = LP_EXTERNAL_PROVIDER_NONE;
 
     ralph_reset_lp_algorithm_report(model);
+    ralph_reset_lp_external_failure_report(model);
     if (!solve_as_mip) {
         if (lp_dispatch_build_plan(model->lp_algorithm,
                                    model->lp_external_provider,
@@ -740,6 +951,13 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         lp_effective_backend = lp_dispatch_plan.effective_backend;
         lp_effective_provider = ralph_lp_external_provider_to_internal(
             lp_dispatch_plan.effective_external_provider);
+        if (lp_dispatch_algorithm_is_external(model->lp_algorithm) &&
+            lp_dispatch_plan.fallback_applied &&
+            lp_dispatch_plan.fallback_reason == RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE) {
+            ralph_record_external_dispatch_failure(model,
+                                                  &lp_dispatch_plan,
+                                                  model->lp_external_strict ? 1 : 0);
+        }
         if (model->lp_external_strict &&
             lp_dispatch_algorithm_is_external(model->lp_algorithm) &&
             lp_dispatch_plan.fallback_applied &&
@@ -1272,10 +1490,26 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         }
 
         /* Solve through backend runtime (simplex today, barrier/external later). */
-        if (lp_backend_run(lp_effective_backend, lp_effective_provider, model->lp_solver) != 0) {
-            if (presolved) presolve_free(presolved);
-            model->status = RALPH_STATUS_ERROR;
-            return -1;
+        {
+            int backend_rc = lp_backend_run(lp_effective_backend,
+                                            lp_effective_provider,
+                                            model->lp_solver);
+            if (backend_rc != 0) {
+                if (ralph_lp_dispatch_backend_is_external(lp_effective_backend)) {
+                    RalphStatus mapped_status = RALPH_STATUS_ERROR;
+                    ralph_record_external_execution_failure(model,
+                                                           &lp_dispatch_plan,
+                                                           backend_rc);
+                    if (model->last_lp_external_failure_report_valid) {
+                        mapped_status = model->last_lp_external_failure_report.mapped_status;
+                    }
+                    model->status = mapped_status;
+                } else {
+                    model->status = RALPH_STATUS_ERROR;
+                }
+                if (presolved) presolve_free(presolved);
+                return -1;
+            }
         }
 
         model->status = model->lp_solver->status;
@@ -1433,6 +1667,15 @@ int ralph_get_last_lp_algorithm_report(const RalphModel *model,
     return 0;
 }
 
+int ralph_get_last_lp_external_failure_report(const RalphModel *model,
+                                              RalphLPExternalFailureReport *report) {
+    if (!model || !report) return -1;
+    if (ralph_is_mip(model)) return -1;
+    if (!model->last_lp_external_failure_report_valid) return -1;
+    *report = model->last_lp_external_failure_report;
+    return 0;
+}
+
 const char* ralph_get_lp_external_provider_name(RalphLPExternalProvider provider) {
     if (provider == RALPH_LP_EXTERNAL_PROVIDER_NONE) {
         return lp_external_provider_name(LP_EXTERNAL_PROVIDER_NONE);
@@ -1442,7 +1685,7 @@ const char* ralph_get_lp_external_provider_name(RalphLPExternalProvider provider
 }
 
 int ralph_register_lp_external_adapter(const RalphLPExternalAdapter *adapter) {
-    RalphLPExternalAdapterBridgeEntry *entry;
+    RalphLPExternalAdapterBridgeEntry *entry = NULL;
     LPExternalAdapter internal_adapter;
     LPExternalProvider provider;
 
@@ -1454,10 +1697,9 @@ int ralph_register_lp_external_adapter(const RalphLPExternalAdapter *adapter) {
     provider = ralph_lp_external_provider_to_internal(adapter->provider);
     if (provider == LP_EXTERNAL_PROVIDER_NONE) return -1;
 
-    entry = &g_lp_external_bridge[(int)adapter->provider];
-    memset(entry, 0, sizeof(*entry));
+    entry = (RalphLPExternalAdapterBridgeEntry*)calloc(1, sizeof(*entry));
+    if (!entry) return -1;
     entry->adapter = *adapter;
-    entry->in_use = 1;
 
     memset(&internal_adapter, 0, sizeof(internal_adapter));
     internal_adapter.abi_version = LP_EXTERNAL_ADAPTER_ABI_VERSION;
@@ -1466,9 +1708,10 @@ int ralph_register_lp_external_adapter(const RalphLPExternalAdapter *adapter) {
     internal_adapter.get_capabilities = ralph_lp_external_bridge_get_capabilities;
     internal_adapter.solve = ralph_lp_external_bridge_solve;
     internal_adapter.user_data = entry;
+    internal_adapter.destroy_user_data = ralph_lp_external_bridge_entry_destroy;
 
     if (lp_external_adapter_register(&internal_adapter) != 0) {
-        memset(entry, 0, sizeof(*entry));
+        free(entry);
         return -1;
     }
     return 0;
@@ -1479,13 +1722,11 @@ int ralph_unregister_lp_external_adapter(RalphLPExternalProvider provider) {
     if (lp_external_adapter_unregister(ralph_lp_external_provider_to_internal(provider)) != 0) {
         return -1;
     }
-    memset(&g_lp_external_bridge[(int)provider], 0, sizeof(g_lp_external_bridge[(int)provider]));
     return 0;
 }
 
 void ralph_unregister_all_lp_external_adapters(void) {
     lp_external_adapter_unregister_all();
-    memset(g_lp_external_bridge, 0, sizeof(g_lp_external_bridge));
 }
 
 int ralph_is_lp_external_adapter_registered(RalphLPExternalProvider provider) {
