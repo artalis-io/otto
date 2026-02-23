@@ -7910,6 +7910,197 @@ static void test_parallel_single_thread_fallback(void) {
     assert(fabs(dist_single - dist_fallback) < 1e-6);
 }
 
+/* ===== population tests ===== */
+
+static void test_population_basic(void) {
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_pd_request(ctx, 1, 2, 0, 86400, 10, 3, 4, 0, 86400, 10, 1);
+    add_pd_request(ctx, 5, 6, 0, 86400, 10, 7, 8, 0, 86400, 10, 1);
+    add_pd_request(ctx, 2, 1, 0, 86400, 10, 4, 3, 0, 86400, 10, 1);
+    add_pd_request(ctx, 6, 5, 0, 86400, 10, 8, 7, 0, 86400, 10, 1);
+    add_pd_request(ctx, 3, 3, 0, 86400, 10, 6, 6, 0, 86400, 10, 1);
+
+    assert(sg_solve_population(ctx, NULL) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_solution_get_route_count(ctx) > 0);
+    sg_free(ctx);
+}
+
+static void test_population_deterministic(void) {
+    double dist_a, dist_b;
+    uint32_t veh_a, veh_b;
+    int run;
+    SGPopulationConfig cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.num_threads = 4;
+    cfg.population_size = 4;
+    cfg.num_generations = 2;
+
+    for (run = 0; run < 2; run++) {
+        SGContext *ctx = make_config(200, 42);
+        uint32_t depot;
+        add_depot_with_location(ctx, &depot, 0, 0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_pd_request(ctx, 1, 2, 0, 86400, 10, 3, 4, 0, 86400, 10, 1);
+        add_pd_request(ctx, 5, 6, 0, 86400, 10, 7, 8, 0, 86400, 10, 1);
+        add_pd_request(ctx, 2, 1, 0, 86400, 10, 4, 3, 0, 86400, 10, 1);
+        add_pd_request(ctx, 6, 5, 0, 86400, 10, 8, 7, 0, 86400, 10, 1);
+        add_pd_request(ctx, 3, 3, 0, 86400, 10, 6, 6, 0, 86400, 10, 1);
+
+        ctx->config.deterministic = 1;
+        assert(sg_solve_population(ctx, &cfg) == SG_STATUS_OK);
+
+        if (run == 0) {
+            dist_a = sg_get_total_distance(ctx);
+            veh_a = sg_get_used_vehicle_count(ctx);
+        } else {
+            dist_b = sg_get_total_distance(ctx);
+            veh_b = sg_get_used_vehicle_count(ctx);
+        }
+        sg_free(ctx);
+    }
+    assert(veh_a == veh_b);
+    assert(fabs(dist_a - dist_b) < 1e-6);
+}
+
+static void test_population_null_config_defaults(void) {
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_pd_request(ctx, 1, 2, 0, 86400, 10, 3, 4, 0, 86400, 10, 1);
+    add_pd_request(ctx, 5, 6, 0, 86400, 10, 7, 8, 0, 86400, 10, 1);
+
+    /* NULL config exercises default path */
+    assert(sg_solve_population(ctx, NULL) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    sg_free(ctx);
+}
+
+static void test_population_single_gen_matches_parallel(void) {
+    double dist_pop, dist_par;
+    uint32_t veh_pop, veh_par;
+    SGPopulationConfig cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.num_threads = 4;
+    cfg.num_generations = 1;
+
+    {
+        SGContext *ctx = make_config(200, 42);
+        uint32_t depot;
+        add_depot_with_location(ctx, &depot, 0, 0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_pd_request(ctx, 1, 2, 0, 86400, 10, 3, 4, 0, 86400, 10, 1);
+        add_pd_request(ctx, 5, 6, 0, 86400, 10, 7, 8, 0, 86400, 10, 1);
+        add_pd_request(ctx, 2, 1, 0, 86400, 10, 4, 3, 0, 86400, 10, 1);
+
+        assert(sg_solve_population(ctx, &cfg) == SG_STATUS_OK);
+        dist_pop = sg_get_total_distance(ctx);
+        veh_pop = sg_get_used_vehicle_count(ctx);
+        sg_free(ctx);
+    }
+
+    {
+        SGContext *ctx = make_config(200, 42);
+        uint32_t depot;
+        add_depot_with_location(ctx, &depot, 0, 0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_pd_request(ctx, 1, 2, 0, 86400, 10, 3, 4, 0, 86400, 10, 1);
+        add_pd_request(ctx, 5, 6, 0, 86400, 10, 7, 8, 0, 86400, 10, 1);
+        add_pd_request(ctx, 2, 1, 0, 86400, 10, 4, 3, 0, 86400, 10, 1);
+
+        assert(sg_solve_parallel(ctx, 4) == SG_STATUS_OK);
+        dist_par = sg_get_total_distance(ctx);
+        veh_par = sg_get_used_vehicle_count(ctx);
+        sg_free(ctx);
+    }
+
+    /* Single-generation population delegates to sg_solve_parallel, so results match */
+    assert(veh_pop == veh_par);
+    assert(fabs(dist_pop - dist_par) < 1e-6);
+}
+
+static void test_population_quality(void) {
+    double dist_parallel, dist_population;
+    uint32_t veh_parallel, veh_population;
+    uint32_t unassigned_parallel, unassigned_population;
+    SGPopulationConfig cfg;
+
+    /* Parallel solve (baseline) */
+    {
+        SGContext *ctx = make_config(200, 42);
+        uint32_t depot;
+        add_depot_with_location(ctx, &depot, 0, 0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 50);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 50);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 50);
+        add_pd_request(ctx, 10, 20, 0, 86400, 60, 30, 40, 0, 86400, 60, 5);
+        add_pd_request(ctx, 50, 60, 0, 86400, 60, 70, 80, 0, 86400, 60, 5);
+        add_pd_request(ctx, 20, 10, 0, 86400, 60, 40, 30, 0, 86400, 60, 5);
+        add_pd_request(ctx, 60, 50, 0, 86400, 60, 80, 70, 0, 86400, 60, 5);
+        add_pd_request(ctx, 15, 25, 0, 86400, 60, 35, 45, 0, 86400, 60, 5);
+        add_pd_request(ctx, 25, 15, 0, 86400, 60, 45, 35, 0, 86400, 60, 5);
+        add_pd_request(ctx, 55, 65, 0, 86400, 60, 75, 85, 0, 86400, 60, 5);
+        add_pd_request(ctx, 65, 55, 0, 86400, 60, 85, 75, 0, 86400, 60, 5);
+        add_pd_request(ctx, 5, 5, 0, 86400, 60, 90, 90, 0, 86400, 60, 5);
+        add_pd_request(ctx, 45, 45, 0, 86400, 60, 55, 55, 0, 86400, 60, 5);
+
+        assert(sg_solve_parallel(ctx, 4) == SG_STATUS_OK);
+        unassigned_parallel = sg_get_unassigned(ctx);
+        veh_parallel = sg_get_used_vehicle_count(ctx);
+        dist_parallel = sg_get_total_distance(ctx);
+        sg_free(ctx);
+    }
+
+    /* Population solve */
+    {
+        SGContext *ctx = make_config(200, 42);
+        uint32_t depot;
+        add_depot_with_location(ctx, &depot, 0, 0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 50);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 50);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 50);
+        add_pd_request(ctx, 10, 20, 0, 86400, 60, 30, 40, 0, 86400, 60, 5);
+        add_pd_request(ctx, 50, 60, 0, 86400, 60, 70, 80, 0, 86400, 60, 5);
+        add_pd_request(ctx, 20, 10, 0, 86400, 60, 40, 30, 0, 86400, 60, 5);
+        add_pd_request(ctx, 60, 50, 0, 86400, 60, 80, 70, 0, 86400, 60, 5);
+        add_pd_request(ctx, 15, 25, 0, 86400, 60, 35, 45, 0, 86400, 60, 5);
+        add_pd_request(ctx, 25, 15, 0, 86400, 60, 45, 35, 0, 86400, 60, 5);
+        add_pd_request(ctx, 55, 65, 0, 86400, 60, 75, 85, 0, 86400, 60, 5);
+        add_pd_request(ctx, 65, 55, 0, 86400, 60, 85, 75, 0, 86400, 60, 5);
+        add_pd_request(ctx, 5, 5, 0, 86400, 60, 90, 90, 0, 86400, 60, 5);
+        add_pd_request(ctx, 45, 45, 0, 86400, 60, 55, 55, 0, 86400, 60, 5);
+
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.num_threads = 4;
+        cfg.population_size = 6;
+        cfg.num_generations = 3;
+        assert(sg_solve_population(ctx, &cfg) == SG_STATUS_OK);
+        unassigned_population = sg_get_unassigned(ctx);
+        veh_population = sg_get_used_vehicle_count(ctx);
+        dist_population = sg_get_total_distance(ctx);
+        sg_free(ctx);
+    }
+
+    /* Population should be at least as good (not worse) */
+    assert(unassigned_population <= unassigned_parallel);
+    if (unassigned_population == unassigned_parallel) {
+        assert(veh_population <= veh_parallel);
+        if (veh_population == veh_parallel) {
+            /* Allow small tolerance — population may not always win on tiny instances */
+            assert(dist_population <= dist_parallel + 1e-6);
+        }
+    }
+}
+
 #endif /* SG_HAS_THREADS */
 
 /* ===== main ===== */
@@ -8182,12 +8373,19 @@ int main(void) {
     RUN_TEST(test_parallel_deterministic);
     RUN_TEST(test_parallel_improves_over_single);
     RUN_TEST(test_parallel_single_thread_fallback);
+
+    /* Population-based search */
+    RUN_TEST(test_population_basic);
+    RUN_TEST(test_population_deterministic);
+    RUN_TEST(test_population_null_config_defaults);
+    RUN_TEST(test_population_single_gen_matches_parallel);
+    RUN_TEST(test_population_quality);
 #endif
 
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 215);
+    assert(tests_run == 220);
 #else
     assert(tests_run == 211);
 #endif

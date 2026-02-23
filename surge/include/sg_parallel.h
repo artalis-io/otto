@@ -27,6 +27,26 @@ extern "C" {
  */
 SGStatus sg_solve_parallel(SGContext *ctx, uint32_t num_threads);
 
+typedef struct {
+    uint32_t num_threads;       /* 0 = auto-detect */
+    uint32_t population_size;   /* elite pool capacity (0 = default 6) */
+    uint32_t num_generations;   /* 0 = default 3 */
+} SGPopulationConfig;
+
+/*
+ * Population-based search: runs multiple generations of parallel ALNS.
+ * Each generation warm-starts from elite solutions found in prior generations.
+ * Same total compute budget as sg_solve_parallel (iterations/time split across
+ * generations), but guided search typically finds better solutions.
+ *
+ * @param ctx  Fully built model context
+ * @param cfg  Population config (NULL = all defaults: auto threads, pool=6, gen=3)
+ * @return SG_STATUS_OK, SG_STATUS_LIMIT, or error
+ *
+ * Thread safety / cancel / progress: same as sg_solve_parallel.
+ */
+SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg);
+
 #ifdef __cplusplus
 }
 #endif
