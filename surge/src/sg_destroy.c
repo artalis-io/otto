@@ -652,3 +652,166 @@ ARStatus sg_route_destroy_vehicle_empty(void *op_ctx, void *solution, int count,
     *removed_count = total_removed;
     return sg_route_unassign_removed_requests(ctx, sol, removed_ids, *removed_count);
 }
+
+ARStatus sg_route_destroy_string(void *op_ctx, void *solution, int count,
+                                 uint32_t *removed_ids, int *removed_count) {
+    SGContext *ctx = (SGContext *)op_ctx;
+    SGRouteSolution *sol = (SGRouteSolution *)solution;
+    int target;
+    int total_removed = 0;
+    uint8_t visited_stack[256];
+    uint8_t *visited;
+    int visited_heap = 0;
+
+    if (!ctx || !ctx->op_rng || !sol || !removed_count || count < 0) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    *removed_count = 0;
+    if (count == 0 || sol->base.num_assigned == 0) {
+        return AR_STATUS_OK;
+    }
+    if (!removed_ids) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    target = count;
+    if ((uint32_t)target > sol->base.num_assigned) {
+        target = (int)sol->base.num_assigned;
+    }
+
+    /* Vehicle visited tracking */
+    if (sol->num_vehicles <= 256) {
+        visited = visited_stack;
+    } else {
+        visited = (uint8_t *)calloc(sol->num_vehicles, 1);
+        if (!visited) {
+            return AR_STATUS_OUT_OF_MEMORY;
+        }
+        visited_heap = 1;
+    }
+    if (!visited_heap) {
+        memset(visited, 0, sol->num_vehicles);
+    }
+
+    /* Step 1: Pick random seed request */
+    {
+        uint32_t seed_idx = (uint32_t)sh_rng_int_range(ctx->op_rng, 0,
+                                (int)sol->base.num_assigned - 1);
+        uint32_t seed_id = sol->base.assigned_ids[seed_idx];
+        uint32_t seed_vehicle = sol->request_vehicle[seed_id];
+        uint32_t route_len = sol->route_lengths[seed_vehicle];
+        uint32_t center_pos = sol->request_pos[seed_id];
+        int L = sh_rng_int_range(ctx->op_rng, 1, SG_STRING_L_MAX);
+        int take;
+        uint32_t start, end;
+        const uint32_t *route;
+        int i;
+
+        if (L > target) L = target;
+        if ((uint32_t)L > route_len) L = (int)route_len;
+        take = L;
+
+        start = (center_pos >= (uint32_t)(take / 2))
+                ? center_pos - (uint32_t)(take / 2) : 0;
+        end = start + (uint32_t)take;
+        if (end > route_len) {
+            end = route_len;
+            start = end - (uint32_t)take;
+        }
+
+        /* Snapshot substring before unassign */
+        route = sg_route_vehicle_ptr_const(sol, seed_vehicle);
+        for (i = 0; i < take; i++) {
+            removed_ids[total_removed + i] = route[start + (uint32_t)i];
+        }
+        {
+            ARStatus status = sg_route_unassign_removed_requests(
+                ctx, sol, &removed_ids[total_removed], take);
+            if (status != AR_STATUS_OK) {
+                if (visited_heap) free(visited);
+                return status;
+            }
+        }
+        total_removed += take;
+        visited[seed_vehicle] = 1;
+    }
+
+    /* Step 2: Cross-route loop */
+    while (total_removed < target) {
+        uint32_t best_id = UINT32_MAX;
+        uint32_t best_vehicle = UINT32_MAX;
+        double best_dist = INFINITY;
+        uint32_t j;
+
+        /* Find nearest unremoved request on a non-visited vehicle */
+        for (j = 0; j < sol->base.num_assigned; j++) {
+            uint32_t cand = sol->base.assigned_ids[j];
+            uint32_t cand_v = sol->request_vehicle[cand];
+            double cx, cy;
+            double min_d = INFINITY;
+            int r;
+
+            if (visited[cand_v]) continue;
+
+            sg_request_centroid(ctx, cand, &cx, &cy);
+            for (r = 0; r < total_removed; r++) {
+                double rx, ry, d;
+                sg_request_centroid(ctx, removed_ids[r], &rx, &ry);
+                d = sg_euclid(rx, ry, cx, cy);
+                if (d < min_d) min_d = d;
+            }
+
+            if (min_d < best_dist) {
+                best_dist = min_d;
+                best_id = cand;
+                best_vehicle = cand_v;
+            }
+        }
+
+        if (best_id == UINT32_MAX) break;
+
+        /* Extract string from best_vehicle centered on best_id */
+        {
+            uint32_t route_len = sol->route_lengths[best_vehicle];
+            uint32_t center_pos = sol->request_pos[best_id];
+            int remaining = target - total_removed;
+            int L = sh_rng_int_range(ctx->op_rng, 1, SG_STRING_L_MAX);
+            int take;
+            uint32_t start, end;
+            const uint32_t *route;
+            int i;
+            ARStatus status;
+
+            if (L > remaining) L = remaining;
+            if ((uint32_t)L > route_len) L = (int)route_len;
+            take = L;
+
+            start = (center_pos >= (uint32_t)(take / 2))
+                    ? center_pos - (uint32_t)(take / 2) : 0;
+            end = start + (uint32_t)take;
+            if (end > route_len) {
+                end = route_len;
+                start = end - (uint32_t)take;
+            }
+
+            route = sg_route_vehicle_ptr_const(sol, best_vehicle);
+            for (i = 0; i < take; i++) {
+                removed_ids[total_removed + i] = route[start + (uint32_t)i];
+            }
+
+            status = sg_route_unassign_removed_requests(
+                ctx, sol, &removed_ids[total_removed], take);
+            if (status != AR_STATUS_OK) {
+                if (visited_heap) free(visited);
+                return status;
+            }
+            total_removed += take;
+            visited[best_vehicle] = 1;
+        }
+    }
+
+    if (visited_heap) free(visited);
+    *removed_count = total_removed;
+    return AR_STATUS_OK;
+}
