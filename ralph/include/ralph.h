@@ -342,6 +342,44 @@ typedef struct {
  * Returns 0 on success, -1 on invalid arguments. */
 int ralph_get_solution_quality(const RalphModel *model, RalphSolutionQuality *quality);
 
+/* Fixed-basis sensitivity/ranging interval. */
+typedef struct {
+    double current;  /* Current coefficient/RHS value */
+    double lower;    /* Smallest value preserving current basis optimality/feasibility */
+    double upper;    /* Largest value preserving current basis optimality/feasibility */
+} RalphSensitivityRange;
+
+/* Fixed-basis bound ranging intervals for one variable. */
+typedef struct {
+    double lower_current;  /* Current lower bound */
+    double lower_min;      /* Minimum lower bound preserving current basis */
+    double lower_max;      /* Maximum lower bound preserving current basis */
+    double upper_current;  /* Current upper bound */
+    double upper_min;      /* Minimum upper bound preserving current basis */
+    double upper_max;      /* Maximum upper bound preserving current basis */
+} RalphBoundSensitivityRange;
+
+/* LP fixed-basis sensitivity APIs.
+ *
+ * Contract:
+ * - LP-only (returns -1 for MIP models).
+ * - Requires most recent LP solve status == OPTIMAL.
+ * - Requires a live LP tableau matching original model dimensions
+ *   (v1 returns -1 when presolve reduced dimensions).
+ * - Ranges are fixed-basis intervals in current simplex basis.
+ *
+ * Returns 0 on success, -1 on invalid args/unavailable state.
+ */
+int ralph_get_constraint_rhs_range(const RalphModel *model,
+                                   int constraint,
+                                   RalphSensitivityRange *range);
+int ralph_get_obj_coef_range(const RalphModel *model,
+                             int var,
+                             RalphSensitivityRange *range);
+int ralph_get_var_bound_range(const RalphModel *model,
+                              int var,
+                              RalphBoundSensitivityRange *range);
+
 /* LP progress callback phase code. */
 typedef enum {
     RALPH_LP_PROGRESS_PHASE_DUAL = 0,
