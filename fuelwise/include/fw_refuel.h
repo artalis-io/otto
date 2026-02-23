@@ -90,7 +90,7 @@ int fw_solve_refuel_milp(
  *   - Subproblem: continuous x[i], y[i] given fixed z
  *
  * When the subproblem is infeasible for a given z, a Farkas feasibility
- * cut is added to the master problem using ralph_get_farkas_ray().
+ * cut is added to the master problem.
  *
  * This approach can be faster than full MILP for problems with many
  * integer variables but relatively simple continuous structure.

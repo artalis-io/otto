@@ -9,7 +9,9 @@
 ```
 ralph/
 ├── include/
-│   ├── ralph.h       # Public API - main entry point
+│   ├── ralph_lp.h    # LP public API
+│   ├── ralph_mip.h   # MIP public API
+│   ├── ralph_core.h  # Internal API (not for external consumers)
 │   ├── sparse.h      # Sparse matrix structures (CSC format)
 │   ├── lp.h          # Internal LP structures
 │   ├── mip.h         # Internal MIP structures
@@ -92,27 +94,27 @@ Most sensitive code - bugs cause wrong solutions.
 After optimization, checks if artificial variables remain positive.
 If objective > 1e6, problem is infeasible.
 
-## Public API (`include/ralph.h`)
+## Public API (`include/ralph_lp.h`, `include/ralph_mip.h`)
 
 ```c
-// Model creation
-RalphModel *ralph_create(void);
-void ralph_free(RalphModel *model);
+// LP model creation
+RalphLPModel *ralph_lp_create(void);
+void ralph_lp_free(RalphLPModel *model);
 
 // Variables
-int ralph_add_var(RalphModel *model, double lb, double ub,
-                  double obj_coef, RalphVarType type);
+int ralph_lp_add_var(RalphLPModel *model, double lb, double ub,
+                     double obj_coef, RalphLPVarType type);
 
 // Constraints
-int ralph_add_constraint(RalphModel *model, int nnz,
-                        const int *indices, const double *values,
-                        RalphConstraintType type, double rhs);
+int ralph_lp_add_constraint(RalphLPModel *model, int nnz,
+                            const int *indices, const double *values,
+                            RalphLPSense sense, double rhs);
 
-// Solving
-int ralph_optimize(RalphModel *model);
-RalphStatus ralph_get_status(RalphModel *model);
-double ralph_get_objval(RalphModel *model);
-void ralph_get_solution(RalphModel *model, double *x);
+// Solving/query
+int ralph_lp_optimize(RalphLPModel *model);
+RalphLPStatus ralph_lp_get_status(const RalphLPModel *model);
+double ralph_lp_get_objval(const RalphLPModel *model);
+int ralph_lp_get_solution(const RalphLPModel *model, double *x);
 ```
 
 ## Common Pitfalls

@@ -2177,8 +2177,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Install GLPK: brew install glpk (macOS) or apt install glpk-utils (Linux)\n");
         return 1;
     }
-    ralph_core_unregister_all_lp_external_adapters();
-    if (ralph_core_register_lp_external_glpk_oop(NULL) != 0) {
+    ralph_lp_external_unregister_all_adapters();
+    if (ralph_lp_external_register_glpk_oop(NULL) != 0) {
         fprintf(stderr, "Error: failed to register GLPK out-of-process adapter.\n");
         return 1;
     }

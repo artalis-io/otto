@@ -52,6 +52,7 @@ typedef enum {
     RALPH_MAXIMIZE = -1
 } RalphObjSense;
 
+#ifndef RALPH_LP_ALGO_BASE_TYPES_DEFINED
 /* LP algorithm selection API surface.
  * Internal-first policy:
  * - PRIMAL/DUAL/AUTO route to internal simplex backends.
@@ -90,6 +91,8 @@ typedef enum {
     RALPH_LP_FALLBACK_CROSSOVER_UNAVAILABLE = 2,
     RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE = 3
 } RalphLPFallbackReason;
+#define RALPH_LP_ALGO_BASE_TYPES_DEFINED
+#endif /* RALPH_LP_ALGO_BASE_TYPES_DEFINED */
 
 /* Constants */
 #define RALPH_INFINITY 1e30
@@ -165,6 +168,7 @@ int ralph_core_get_solution(const RalphModel *model, double *x);
 int ralph_core_get_dual_solution(const RalphModel *model, double *y);
 int ralph_core_get_reduced_costs(const RalphModel *model, double *rc);
 
+#ifndef RALPH_LP_EXT_REPORT_TYPES_DEFINED
 typedef struct {
     int supports_primal_simplex;
     int supports_dual_simplex;
@@ -249,6 +253,8 @@ typedef struct {
     RalphStatus mapped_status;
     int fatal;
 } RalphLPExternalFailureReport;
+#define RALPH_LP_EXT_REPORT_TYPES_DEFINED
+#endif /* RALPH_LP_EXT_REPORT_TYPES_DEFINED */
 
 /* LP capabilities are compile/runtime feature flags independent of model instance.
  * Returns 0 on success, -1 on invalid args. */

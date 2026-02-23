@@ -4,7 +4,20 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-23) — external-adapter public API + multi-provider + strict-mode baseline:
+**Current** (2026-02-23) — monolithic API surface removed; modular LP/MIP headers only:
+- Removed monolithic public header surface (`ralph/include/ralph.h`) from active use.
+  `ralph.h` is now an explicit compile-time removal shim directing callers to modular APIs.
+- Introduced `ralph/include/ralph_core.h` as internal-only core API for Ralph internals/tests.
+- Migrated Ralph internal code/tests/benchmarks from `#include "ralph.h"` to
+  `#include "ralph_core.h"`.
+- FuelWise integration now uses only `ralph_lp.h` / `ralph_mip.h` (no monolithic calls).
+- Updated install flow to publish only modular public headers:
+  `ralph_lp.h`, `ralph_mip.h`.
+Latest gates:
+`make -C ralph test-lp-public-api-split` PASS (22/22),
+`make -C ralph test-mip-public-api-split` PASS (26/26).
+
+Previous: (2026-02-23) — external-adapter public API + multi-provider + strict-mode baseline:
 completed LP API gap items 1/2/4 as one orthogonal patch:
 - Added public external adapter registration/query APIs in `ralph.h` and bridge wiring in
   `ralph.c` (`ralph_register_lp_external_adapter`, unregister, unregister-all, registered check,

@@ -135,8 +135,8 @@ int main() {
         printf("Error: glpsol not found. Install GLPK to run this comparison.\n");
         return 1;
     }
-    ralph_core_unregister_all_lp_external_adapters();
-    if (ralph_core_register_lp_external_glpk_oop(NULL) != 0) {
+    ralph_lp_external_unregister_all_adapters();
+    if (ralph_lp_external_register_glpk_oop(NULL) != 0) {
         printf("Error: failed to register GLPK out-of-process adapter.\n");
         return 1;
     }
@@ -148,6 +148,6 @@ int main() {
     run_comparison(500, 200, 0.1);
 
     printf("\n");
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
     return 0;
 }

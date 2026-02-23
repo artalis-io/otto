@@ -2,7 +2,7 @@
 #define LP_EXTERNAL_OOP_H
 
 #include <stddef.h>
-#include "ralph.h"
+#include "ralph_core.h"
 
 typedef int (*LPExternalOOPLineFn)(const char *line, void *user_data);
 

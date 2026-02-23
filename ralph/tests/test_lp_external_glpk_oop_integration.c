@@ -184,8 +184,8 @@ int main(void) {
         return 0;
     }
 
-    ralph_core_unregister_all_lp_external_adapters();
-    ASSERT_INT_EQ(ralph_core_register_lp_external_glpk_oop(NULL), 0,
+    ralph_lp_external_unregister_all_adapters();
+    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(NULL), 0,
                   "integration: register GLPK OOP with PATH lookup");
 
     test_optimal_duals_and_rc();
@@ -193,7 +193,7 @@ int main(void) {
     test_infeasible_mapping();
     test_unbounded_mapping();
 
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_run == tests_passed) ? 0 : 1;
 }
