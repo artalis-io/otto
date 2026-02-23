@@ -711,6 +711,26 @@ strong_fail:
     return -1;
 }
 
+/* Adaptive reliability probing for deep no-incumbent trees.
+ * Early search keeps full probing quality; late no-incumbent search
+ * downshifts probe cost to avoid spending most wall time on probing. */
+static int reliability_strong_probe_limit(const MIPSolver *solver) {
+    if (!solver) return MIP_RELIABILITY_MAX_STRONG;
+    if (solver->has_incumbent) return MIP_RELIABILITY_MAX_STRONG;
+    if (solver->nodes_explored >= MIP_RELIABILITY_NO_INCUMBENT_DISABLE_AFTER) return 0;
+    if (solver->nodes_explored >= MIP_RELIABILITY_NO_INCUMBENT_TAPER_AFTER) return 1;
+    return MIP_RELIABILITY_MAX_STRONG;
+}
+
+static int reliability_probe_pivot_budget(const MIPSolver *solver) {
+    if (!solver) return MIP_RELIABILITY_PIVOT_BUDGET;
+    if (solver->has_incumbent) return MIP_RELIABILITY_PIVOT_BUDGET;
+    if (solver->nodes_explored >= MIP_RELIABILITY_NO_INCUMBENT_TAPER_AFTER) {
+        return MIP_RELIABILITY_NO_INCUMBENT_PIVOT_BUDGET;
+    }
+    return MIP_RELIABILITY_PIVOT_BUDGET;
+}
+
 /*
  * Reliability branching core - hybrid of pseudo-cost and strong branching.
  *
@@ -723,6 +743,8 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
     int best_var = -1;
     double best_score = -1.0;
     int strong_count = 0;
+    int strong_limit = reliability_strong_probe_limit(solver);
+    int strong_pivot_budget = reliability_probe_pivot_budget(solver);
     int strong_failed = 0;  /* Stop strong branching if LP state corrupted */
 
     const int * restrict int_vars = solver->integer_vars;
@@ -756,11 +778,12 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
                           (solver->pseudo_count_down[j] < MIP_RELIABILITY_THRESHOLD ||
                            solver->pseudo_count_up[j] < MIP_RELIABILITY_THRESHOLD);
 
-        if (need_strong && strong_count < MIP_RELIABILITY_MAX_STRONG &&
+        if (need_strong && strong_limit > 0 &&
+            strong_count < strong_limit &&
             solver->lp_solver && solver->lp_solver->tableau) {
             double down_obj, up_obj;
             int sb_result = strong_branch(solver, j, val, &down_obj, &up_obj,
-                                          MIP_RELIABILITY_PIVOT_BUDGET);
+                                          strong_pivot_budget);
 
             /* Re-read solution pointer: strong_branch() may recover LP state. */
             if (solver->lp_solver) {
