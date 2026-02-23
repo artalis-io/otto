@@ -8,7 +8,7 @@
 typedef struct SGContext SGContext;
 
 typedef void (*SGTravelCallback)(uint32_t from_location, uint32_t to_location,
-                                  uint32_t vehicle_id,
+                                  uint32_t vehicle_id, double departure_time,
                                   double *distance_out, double *duration_out,
                                   void *user_data);
 
@@ -73,6 +73,23 @@ SGStatus sg_set_travel_matrix(SGContext *ctx, uint32_t location_count,
                                const double *distance_matrix_row_major,
                                const double *duration_matrix_row_major);
 SGStatus sg_set_travel_callback(SGContext *ctx, SGTravelCallback callback, void *user_data);
+
+/* Speed profiles (time-dependent travel duration multipliers) */
+uint32_t sg_add_speed_profile(SGContext *ctx);
+SGStatus sg_speed_profile_add_entry(SGContext *ctx, uint32_t profile_id,
+                                     double start_time, double multiplier);
+SGStatus sg_set_global_speed_profile(SGContext *ctx, uint32_t speed_profile_id);
+
+/* Travel profiles (per-vehicle-type distance/duration matrices) */
+uint32_t sg_add_travel_profile(SGContext *ctx);
+SGStatus sg_travel_profile_set_matrices(SGContext *ctx, uint32_t profile_id,
+                                         uint32_t location_count,
+                                         const double *distance_matrix,
+                                         const double *duration_matrix);
+SGStatus sg_travel_profile_set_speed_profile(SGContext *ctx, uint32_t profile_id,
+                                              uint32_t speed_profile_id);
+SGStatus sg_vehicle_set_travel_profile(SGContext *ctx, uint32_t vehicle_id,
+                                        uint32_t profile_id);
 
 SGStatus sg_vehicle_set_qualifications(SGContext *ctx, uint32_t vehicle_id,
                                         uint64_t qualification_flags);

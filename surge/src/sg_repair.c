@@ -429,11 +429,11 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
                         uint32_t ploc = vehicle->start_location_id;
                         for (ns = 0; ns < new_stop_count; ns++) {
                             uint32_t sloc = ctx->tasks[new_stops[ns].task_id].location_id;
-                            dist_delta += sg_travel_dist(ctx, ploc, sloc);
+                            dist_delta += sg_travel_dist(ctx, ploc, sloc, v);
                             ploc = sloc;
                         }
                         if (!vehicle->open_end) {
-                            dist_delta += sg_travel_dist(ctx, ploc, vehicle->end_location_id);
+                            dist_delta += sg_travel_dist(ctx, ploc, vehicle->end_location_id, v);
                         }
                     }
 
@@ -445,7 +445,7 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
                         uint32_t last_loc = (slen > 0)
                             ? ctx->tasks[stops_v[slen - 1].task_id].location_id
                             : vehicle->start_location_id;
-                        double ret_dur = sg_travel_dur(ctx, last_loc, vehicle->end_location_id, v);
+                        double ret_dur = sg_travel_dur(ctx, last_loc, vehicle->end_location_id, v, 0.0);
                         double arr_depot = last_depart + ret_dur;
                         depot_dep = arr_depot + (double)vehicle->trip_reload_seconds;
                         if (sd->has_time_window && depot_dep < (double)sd->tw_early) {
@@ -459,7 +459,7 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
                         for (ns = 0; ns < new_stop_count; ns++) {
                             const SGTaskRecord *task = &ctx->tasks[new_stops[ns].task_id];
                             uint32_t sloc = task->location_id;
-                            double dur = sg_travel_dur(ctx, ploc, sloc, v);
+                            double dur = sg_travel_dur(ctx, ploc, sloc, v, 0.0);
                             double arr = cursor + dur;
                             double start = sg_task_snap_forward(task, arr);
                             if (start > (double)task->tw_late + 1e-9) {
@@ -475,7 +475,7 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
                     if (time_ok && !vehicle->open_end) {
                         double ret_dur = sg_travel_dur(ctx,
                             ctx->tasks[new_stops[new_stop_count - 1].task_id].location_id,
-                            vehicle->end_location_id, v);
+                            vehicle->end_location_id, v, 0.0);
                         trip_time = cursor + ret_dur;
                         if (ed->has_time_window && trip_time > (double)ed->tw_late + 1e-9) {
                             time_ok = 0;

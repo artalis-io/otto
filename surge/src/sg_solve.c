@@ -357,10 +357,10 @@ ARStatus sg_route_construct_solomon_i1(SGContext *ctx, SGRouteSolution *sol) {
                     {
                         uint32_t p_loc = ctx->tasks[ctx->requests[rid].pickup_task_id].location_id;
                         uint32_t d_loc = ctx->tasks[ctx->requests[rid].delivery_task_id].location_id;
-                        depot_dist = sg_travel_dist(ctx, v_start_loc, p_loc) +
-                                     sg_travel_dist(ctx, p_loc, d_loc);
+                        depot_dist = sg_travel_dist(ctx, v_start_loc, p_loc, seed_vehicle) +
+                                     sg_travel_dist(ctx, p_loc, d_loc, seed_vehicle);
                         if (!ctx->vehicles[seed_vehicle].open_end) {
-                            depot_dist += sg_travel_dist(ctx, d_loc, v_end_loc);
+                            depot_dist += sg_travel_dist(ctx, d_loc, v_end_loc, seed_vehicle);
                         }
                     }
                     c2 = lambda * depot_dist - c1;
@@ -397,9 +397,9 @@ ARStatus sg_route_construct_solomon_i1(SGContext *ctx, SGRouteSolution *sol) {
                     {
                         uint32_t rep_loc;
                         if (sg_request_representative_location(ctx, rid, &rep_loc)) {
-                            depot_dist = sg_travel_dist(ctx, v_start_loc, rep_loc);
+                            depot_dist = sg_travel_dist(ctx, v_start_loc, rep_loc, seed_vehicle);
                             if (!ctx->vehicles[seed_vehicle].open_end) {
-                                depot_dist += sg_travel_dist(ctx, rep_loc, v_end_loc);
+                                depot_dist += sg_travel_dist(ctx, rep_loc, v_end_loc, seed_vehicle);
                             }
                         } else {
                             depot_dist = 0.0;

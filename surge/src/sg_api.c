@@ -124,6 +124,134 @@ static int build_locations(SGContext *ctx, const ShJsonValue *locs_arr) {
     return 0;
 }
 
+static int build_speed_profiles(SGContext *ctx, const ShJsonValue *arr) {
+    size_t i, count;
+
+    if (!arr || sh_json_type(arr) != SH_JSON_ARRAY) {
+        return 0;
+    }
+
+    count = sh_json_array_len(arr);
+    for (i = 0; i < count; i++) {
+        ShJsonValue *prof = sh_json_array_get(arr, i);
+        ShJsonValue *entries;
+        uint32_t pid;
+        size_t j, entry_count;
+
+        if (!prof || sh_json_type(prof) != SH_JSON_OBJECT) {
+            return -1;
+        }
+
+        pid = sg_add_speed_profile(ctx);
+        if (pid == UINT32_MAX) return -1;
+
+        entries = sh_json_get(prof, "entries");
+        if (!entries || sh_json_type(entries) != SH_JSON_ARRAY) {
+            return -1;
+        }
+
+        entry_count = sh_json_array_len(entries);
+        for (j = 0; j < entry_count; j++) {
+            ShJsonValue *entry = sh_json_array_get(entries, j);
+            double start_time, multiplier;
+            if (!entry || sh_json_type(entry) != SH_JSON_OBJECT) {
+                return -1;
+            }
+            start_time = sh_json_as_double(sh_json_get(entry, "start_time"), 0.0);
+            multiplier = sh_json_as_double(sh_json_get(entry, "multiplier"), 1.0);
+            if (sg_speed_profile_add_entry(ctx, pid, start_time, multiplier) != SG_STATUS_OK) {
+                return -1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+static int build_travel_profiles(SGContext *ctx, const ShJsonValue *arr) {
+    size_t i, count;
+
+    if (!arr || sh_json_type(arr) != SH_JSON_ARRAY) {
+        return 0;
+    }
+
+    count = sh_json_array_len(arr);
+    for (i = 0; i < count; i++) {
+        ShJsonValue *prof = sh_json_array_get(arr, i);
+        ShJsonValue *dist_arr, *dur_arr, *sp_v;
+        uint32_t pid;
+        double *distances = NULL;
+        double *durations = NULL;
+        size_t n, j;
+        int location_count;
+
+        if (!prof || sh_json_type(prof) != SH_JSON_OBJECT) {
+            return -1;
+        }
+
+        pid = sg_add_travel_profile(ctx);
+        if (pid == UINT32_MAX) return -1;
+
+        dist_arr = sh_json_get(prof, "distance_matrix");
+        dur_arr = sh_json_get(prof, "duration_matrix");
+        if (dist_arr || dur_arr) {
+            /* Determine location_count from whichever matrix is present */
+            ShJsonValue *mat = dist_arr ? dist_arr : dur_arr;
+            if (sh_json_type(mat) != SH_JSON_ARRAY) return -1;
+            n = sh_json_array_len(mat);
+            location_count = (int)sqrt((double)n);
+            if ((size_t)location_count * (size_t)location_count != n || location_count <= 0) {
+                return -1;
+            }
+
+            if (dist_arr) {
+                if (sh_json_type(dist_arr) != SH_JSON_ARRAY || sh_json_array_len(dist_arr) != n) {
+                    return -1;
+                }
+                distances = (double *)malloc(n * sizeof(double));
+                if (!distances) return -1;
+                for (j = 0; j < n; j++) {
+                    distances[j] = sh_json_as_double(sh_json_array_get(dist_arr, j), 0.0);
+                }
+            }
+
+            if (dur_arr) {
+                if (sh_json_type(dur_arr) != SH_JSON_ARRAY || sh_json_array_len(dur_arr) != n) {
+                    free(distances);
+                    return -1;
+                }
+                durations = (double *)malloc(n * sizeof(double));
+                if (!durations) {
+                    free(distances);
+                    return -1;
+                }
+                for (j = 0; j < n; j++) {
+                    durations[j] = sh_json_as_double(sh_json_array_get(dur_arr, j), 0.0);
+                }
+            }
+
+            if (sg_travel_profile_set_matrices(ctx, pid, (uint32_t)location_count,
+                                                distances, durations) != SG_STATUS_OK) {
+                free(distances);
+                free(durations);
+                return -1;
+            }
+            free(distances);
+            free(durations);
+        }
+
+        sp_v = sh_json_get(prof, "speed_profile_id");
+        if (sp_v) {
+            uint32_t sp_id = (uint32_t)sh_json_as_int(sp_v, 0);
+            if (sg_travel_profile_set_speed_profile(ctx, pid, sp_id) != SG_STATUS_OK) {
+                return -1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 static int build_travel(SGContext *ctx, const ShJsonValue *travel_val) {
     ShJsonValue *v;
     int location_count;
@@ -170,7 +298,18 @@ static int build_travel(SGContext *ctx, const ShJsonValue *travel_val) {
     status = sg_set_travel_matrix(ctx, (uint32_t)location_count, distances, durations);
     free(distances);
     free(durations);
-    return (status == SG_STATUS_OK) ? 0 : -1;
+    if (status != SG_STATUS_OK) return -1;
+
+    /* Optional global speed profile */
+    v = sh_json_get(travel_val, "speed_profile_id");
+    if (v) {
+        uint32_t sp_id = (uint32_t)sh_json_as_int(v, 0);
+        if (sg_set_global_speed_profile(ctx, sp_id) != SG_STATUS_OK) {
+            return -1;
+        }
+    }
+
+    return 0;
 }
 
 static int build_zones(SGContext *ctx, const ShJsonValue *zones_val) {
@@ -538,6 +677,14 @@ static int build_vehicles(SGContext *ctx, const ShJsonValue *vehicles_arr) {
         v = sh_json_get(veh, "max_distance");
         if (v) {
             if (sg_vehicle_set_max_distance(ctx, id, sh_json_as_double(v, 0.0)) != SG_STATUS_OK) {
+                return -1;
+            }
+        }
+
+        v = sh_json_get(veh, "travel_profile_id");
+        if (v) {
+            uint32_t tp_id = (uint32_t)sh_json_as_int(v, 0);
+            if (sg_vehicle_set_travel_profile(ctx, id, tp_id) != SG_STATUS_OK) {
                 return -1;
             }
         }
@@ -911,6 +1058,14 @@ SGStatus sg_api_build_model(SGContext *ctx, const ShJsonValue *root) {
 
     /* 5. Depots (before vehicles) */
     if (build_depots(ctx, sh_json_get(root, "depots")) != 0) {
+        return SG_STATUS_ERROR;
+    }
+
+    /* 5b. Speed profiles, then travel profiles (before vehicles) */
+    if (build_speed_profiles(ctx, sh_json_get(root, "speed_profiles")) != 0) {
+        return SG_STATUS_ERROR;
+    }
+    if (build_travel_profiles(ctx, sh_json_get(root, "travel_profiles")) != 0) {
         return SG_STATUS_ERROR;
     }
 

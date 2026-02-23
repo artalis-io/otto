@@ -373,9 +373,9 @@ double sg_vehicle_request_cost(const SGContext *ctx, uint32_t vehicle_id,
         if (sg_request_representative_location(ctx, request_id, &rep_loc) &&
             vehicle->start_location_id != UINT32_MAX &&
             vehicle->end_location_id != UINT32_MAX) {
-            double dist = sg_travel_dist(ctx, vehicle->start_location_id, rep_loc);
+            double dist = sg_travel_dist(ctx, vehicle->start_location_id, rep_loc, vehicle_id);
             if (!vehicle->open_end) {
-                dist += sg_travel_dist(ctx, rep_loc, vehicle->end_location_id);
+                dist += sg_travel_dist(ctx, rep_loc, vehicle->end_location_id, vehicle_id);
             }
             cost += vehicle->cost_per_distance * dist;
         } else {
@@ -546,7 +546,7 @@ double sg_route_cluster_relatedness(void *ctx, uint32_t a, uint32_t b) {
         uint32_t loc_a, loc_b;
         if (sg_request_representative_location(sg_ctx, a, &loc_a) &&
             sg_request_representative_location(sg_ctx, b, &loc_b)) {
-            score -= sg_travel_dist(sg_ctx, loc_a, loc_b);
+            score -= sg_travel_dist(sg_ctx, loc_a, loc_b, SG_NO_VEHICLE);
         }
     }
 
@@ -662,7 +662,7 @@ double sg_route_shaw_relatedness(void *ctx, uint32_t a, uint32_t b) {
         uint32_t loc_a, loc_b;
         if (sg_request_representative_location(sg_ctx, a, &loc_a) &&
             sg_request_representative_location(sg_ctx, b, &loc_b)) {
-            score -= sg_travel_dist(sg_ctx, loc_a, loc_b) / 40.0;
+            score -= sg_travel_dist(sg_ctx, loc_a, loc_b, SG_NO_VEHICLE) / 40.0;
         }
     }
 
@@ -757,11 +757,11 @@ double sg_route_removal_cost(void *ctx, void *solution, uint32_t element_id) {
 
         if (n == UINT32_MAX && vehicle->open_end) {
             /* Last stop on open-end route: saving is just the leg to this stop */
-            saving = sg_travel_dist(sg_ctx, p_loc, d_loc);
+            saving = sg_travel_dist(sg_ctx, p_loc, d_loc, vehicle_id);
         } else {
             uint32_t n_loc = (n == UINT32_MAX) ? end_loc : sg_ctx->tasks[stops[n].task_id].location_id;
-            saving = sg_travel_dist(sg_ctx, p_loc, d_loc) + sg_travel_dist(sg_ctx, d_loc, n_loc)
-                   - sg_travel_dist(sg_ctx, p_loc, n_loc);
+            saving = sg_travel_dist(sg_ctx, p_loc, d_loc, vehicle_id) + sg_travel_dist(sg_ctx, d_loc, n_loc, vehicle_id)
+                   - sg_travel_dist(sg_ctx, p_loc, n_loc, vehicle_id);
         }
     } else if (request->kind == SG_REQUEST_KIND_PICKUP_DELIVERY) {
         uint32_t p_pos = sol->request_pickup_stop_pos[element_id];
@@ -778,14 +778,14 @@ double sg_route_removal_cost(void *ctx, void *solution, uint32_t element_id) {
             pp_loc = (pp == UINT32_MAX) ? start_loc : sg_ctx->tasks[stops[pp].task_id].location_id;
 
             if (nd == UINT32_MAX && vehicle->open_end) {
-                saving = sg_travel_dist(sg_ctx, pp_loc, pick_loc)
-                       + sg_travel_dist(sg_ctx, pick_loc, del_loc);
+                saving = sg_travel_dist(sg_ctx, pp_loc, pick_loc, vehicle_id)
+                       + sg_travel_dist(sg_ctx, pick_loc, del_loc, vehicle_id);
             } else {
                 uint32_t nd_loc = (nd == UINT32_MAX) ? end_loc : sg_ctx->tasks[stops[nd].task_id].location_id;
-                saving = sg_travel_dist(sg_ctx, pp_loc, pick_loc)
-                       + sg_travel_dist(sg_ctx, pick_loc, del_loc)
-                       + sg_travel_dist(sg_ctx, del_loc, nd_loc)
-                       - sg_travel_dist(sg_ctx, pp_loc, nd_loc);
+                saving = sg_travel_dist(sg_ctx, pp_loc, pick_loc, vehicle_id)
+                       + sg_travel_dist(sg_ctx, pick_loc, del_loc, vehicle_id)
+                       + sg_travel_dist(sg_ctx, del_loc, nd_loc, vehicle_id)
+                       - sg_travel_dist(sg_ctx, pp_loc, nd_loc, vehicle_id);
             }
         } else {
             /* Non-adjacent: sum independent savings */
@@ -799,17 +799,17 @@ double sg_route_removal_cost(void *ctx, void *solution, uint32_t element_id) {
             np_loc = sg_ctx->tasks[stops[np].task_id].location_id;
             pd_loc = sg_ctx->tasks[stops[pd].task_id].location_id;
 
-            saving = sg_travel_dist(sg_ctx, pp_loc, pick_loc)
-                   + sg_travel_dist(sg_ctx, pick_loc, np_loc)
-                   - sg_travel_dist(sg_ctx, pp_loc, np_loc);
+            saving = sg_travel_dist(sg_ctx, pp_loc, pick_loc, vehicle_id)
+                   + sg_travel_dist(sg_ctx, pick_loc, np_loc, vehicle_id)
+                   - sg_travel_dist(sg_ctx, pp_loc, np_loc, vehicle_id);
 
             if (nd == UINT32_MAX && vehicle->open_end) {
-                saving += sg_travel_dist(sg_ctx, pd_loc, del_loc);
+                saving += sg_travel_dist(sg_ctx, pd_loc, del_loc, vehicle_id);
             } else {
                 uint32_t nd_loc = (nd == UINT32_MAX) ? end_loc : sg_ctx->tasks[stops[nd].task_id].location_id;
-                saving += sg_travel_dist(sg_ctx, pd_loc, del_loc)
-                        + sg_travel_dist(sg_ctx, del_loc, nd_loc)
-                        - sg_travel_dist(sg_ctx, pd_loc, nd_loc);
+                saving += sg_travel_dist(sg_ctx, pd_loc, del_loc, vehicle_id)
+                        + sg_travel_dist(sg_ctx, del_loc, nd_loc, vehicle_id)
+                        - sg_travel_dist(sg_ctx, pd_loc, nd_loc, vehicle_id);
             }
         }
     }
@@ -878,8 +878,8 @@ int sg_request_time_use_for_vehicle(const SGContext *ctx, uint32_t vehicle_id,
             return 1;
         }
 
-        dur1 = has_locations ? sg_travel_dur(ctx, v_start_loc, delivery->location_id, vehicle_id) : 1.0;
-        dur2 = (has_locations && !vehicle->open_end) ? sg_travel_dur(ctx, delivery->location_id, v_end_loc, vehicle_id) : 0.0;
+        dur1 = has_locations ? sg_travel_dur(ctx, v_start_loc, delivery->location_id, vehicle_id, 0.0) : 1.0;
+        dur2 = (has_locations && !vehicle->open_end) ? sg_travel_dur(ctx, delivery->location_id, v_end_loc, vehicle_id, 0.0) : 0.0;
         if (!has_locations && !vehicle->open_end) dur2 = 1.0;
         arrival = shift_early + dur1;
         service_start = arrival;
@@ -931,9 +931,9 @@ int sg_request_time_use_for_vehicle(const SGContext *ctx, uint32_t vehicle_id,
             return 1;
         }
 
-        dur_start_pick = has_locations ? sg_travel_dur(ctx, v_start_loc, pickup->location_id, vehicle_id) : 1.0;
-        dur_pick_drop = sg_travel_dur(ctx, pickup->location_id, delivery->location_id, vehicle_id);
-        dur_drop_end = (has_locations && !vehicle->open_end) ? sg_travel_dur(ctx, delivery->location_id, v_end_loc, vehicle_id) : 0.0;
+        dur_start_pick = has_locations ? sg_travel_dur(ctx, v_start_loc, pickup->location_id, vehicle_id, 0.0) : 1.0;
+        dur_pick_drop = sg_travel_dur(ctx, pickup->location_id, delivery->location_id, vehicle_id, 0.0);
+        dur_drop_end = (has_locations && !vehicle->open_end) ? sg_travel_dur(ctx, delivery->location_id, v_end_loc, vehicle_id, 0.0) : 0.0;
         if (!has_locations && !vehicle->open_end) dur_drop_end = 1.0;
 
         arrive_pick = shift_early + dur_start_pick;
@@ -1184,8 +1184,8 @@ void sg_compute_solution_route_metrics(const SGContext *ctx, const SGBootstrapSo
                 vehicle->end_location_id == UINT32_MAX) {
                 continue;
             }
-            leg = sg_travel_dist(ctx, vehicle->start_location_id, rep_loc) +
-                  sg_travel_dist(ctx, rep_loc, vehicle->end_location_id);
+            leg = sg_travel_dist(ctx, vehicle->start_location_id, rep_loc, v) +
+                  sg_travel_dist(ctx, rep_loc, vehicle->end_location_id, v);
             if (leg < best_leg) {
                 best_leg = leg;
             }

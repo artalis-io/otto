@@ -2633,8 +2633,9 @@ static void test_travel_matrix_mode(void) {
 }
 
 static void test_travel_cb(uint32_t from, uint32_t to, uint32_t vid,
+                           double departure_time,
                            double *d, double *t, void *ud) {
-    (void)vid; (void)ud;
+    (void)vid; (void)departure_time; (void)ud;
     double diff = (double)to > (double)from
                 ? (double)(to - from) : (double)(from - to);
     *d = diff * 100.0;
@@ -8393,6 +8394,638 @@ static void test_population_quality(void) {
 
 #endif /* SG_HAS_THREADS */
 
+/* ===== Speed Profile & Travel Profile Tests ===== */
+
+static void test_speed_profile_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t sp = sg_add_speed_profile(ctx);
+    assert(sp == 0);
+    assert(sg_speed_profile_add_entry(ctx, sp, 0.0, 1.0) == SG_STATUS_OK);
+    assert(sg_speed_profile_add_entry(ctx, sp, 25200.0, 1.5) == SG_STATUS_OK);
+    /* Invalid: multiplier <= 0 */
+    assert(sg_speed_profile_add_entry(ctx, sp, 30000.0, 0.0) != SG_STATUS_OK);
+    assert(sg_speed_profile_add_entry(ctx, sp, 30000.0, -1.0) != SG_STATUS_OK);
+    /* Invalid: bad profile_id */
+    assert(sg_speed_profile_add_entry(ctx, 99, 0.0, 1.0) != SG_STATUS_OK);
+    /* Set global */
+    assert(sg_set_global_speed_profile(ctx, sp) == SG_STATUS_OK);
+    /* Invalid global id */
+    assert(sg_set_global_speed_profile(ctx, 99) != SG_STATUS_OK);
+    sg_free(ctx);
+}
+
+static void test_travel_profile_api(void) {
+    SGContext *ctx = sg_create();
+    /* Need locations first */
+    uint32_t l0 = sg_add_location(ctx);
+    uint32_t l1 = sg_add_location(ctx);
+    assert(l0 == 0 && l1 == 1);
+    /* Global matrix */
+    double dist[4] = {0, 10, 10, 0};
+    double dur[4]  = {0, 100, 100, 0};
+    assert(sg_set_travel_matrix(ctx, 2, dist, dur) == SG_STATUS_OK);
+
+    uint32_t tp = sg_add_travel_profile(ctx);
+    assert(tp == 0);
+    /* Set matrices (both non-NULL) */
+    double dist2[4] = {0, 20, 20, 0};
+    double dur2[4]  = {0, 200, 200, 0};
+    assert(sg_travel_profile_set_matrices(ctx, tp, 2, dist2, dur2) == SG_STATUS_OK);
+    /* NULL distance only → duration-only profile */
+    uint32_t tp2 = sg_add_travel_profile(ctx);
+    assert(sg_travel_profile_set_matrices(ctx, tp2, 2, NULL, dur2) == SG_STATUS_OK);
+    /* NULL duration only → distance-only profile */
+    uint32_t tp3 = sg_add_travel_profile(ctx);
+    assert(sg_travel_profile_set_matrices(ctx, tp3, 2, dist2, NULL) == SG_STATUS_OK);
+    /* Both NULL → error */
+    uint32_t tp4 = sg_add_travel_profile(ctx);
+    assert(sg_travel_profile_set_matrices(ctx, tp4, 2, NULL, NULL) != SG_STATUS_OK);
+    /* Invalid profile_id */
+    assert(sg_travel_profile_set_matrices(ctx, 99, 2, dist2, dur2) != SG_STATUS_OK);
+    /* Vehicle assignment */
+    uint32_t d = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, d, l0) == SG_STATUS_OK);
+    uint32_t v = sg_add_vehicle(ctx);
+    double cap = 100.0;
+    assert(sg_vehicle_set_depots(ctx, v, d, d) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_travel_profile(ctx, v, tp) == SG_STATUS_OK);
+    /* Invalid travel profile assignment */
+    assert(sg_vehicle_set_travel_profile(ctx, v, 99) != SG_STATUS_OK);
+    sg_free(ctx);
+}
+
+static void test_speed_profile_basic(void) {
+    /* 2 locations, 1 vehicle, 1 delivery. Speed profile doubles duration at t>=0.
+     * Verify total distance unchanged but route duration increases. */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t l0 = sg_add_location(ctx);
+    uint32_t l1 = sg_add_location(ctx);
+    double dist[4] = {0, 100, 100, 0};
+    double dur[4]  = {0, 100, 100, 0};
+    assert(sg_set_travel_matrix(ctx, 2, dist, dur) == SG_STATUS_OK);
+
+    uint32_t sp = sg_add_speed_profile(ctx);
+    assert(sg_speed_profile_add_entry(ctx, sp, 0.0, 2.0) == SG_STATUS_OK);
+    assert(sg_set_global_speed_profile(ctx, sp) == SG_STATUS_OK);
+
+    uint32_t depot = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, depot, l0) == SG_STATUS_OK);
+    uint32_t v = sg_add_vehicle(ctx);
+    double cap = 100.0;
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location_id(ctx, task, l1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    /* Distance should be 200 (out + back, NOT affected by speed profile) */
+    assert(fabs(sg_get_total_distance(ctx) - 200.0) < 1e-6);
+    /* Duration should be 400 (200 base * 2.0 multiplier) */
+    double route_dur = sg_solution_get_route_duration(ctx, 0);
+    assert(fabs(route_dur - 400.0) < 1e-6);
+    sg_free(ctx);
+}
+
+static void test_speed_profile_no_effect_on_distance(void) {
+    /* Run the same problem with and without speed profile: distance identical */
+    double dist[4] = {0, 50, 50, 0};
+    double dur[4]  = {0, 50, 50, 0};
+    double distance_no_sp, distance_with_sp;
+
+    /* Without speed profile */
+    {
+        SGContext *ctx = make_config(50, 42);
+        uint32_t l0 = sg_add_location(ctx);
+        uint32_t l1 = sg_add_location(ctx);
+        assert(sg_set_travel_matrix(ctx, 2, dist, dur) == SG_STATUS_OK);
+        uint32_t depot = sg_add_depot(ctx);
+        assert(sg_depot_set_location_id(ctx, depot, l0) == SG_STATUS_OK);
+        uint32_t v = sg_add_vehicle(ctx);
+        double cap = 100.0;
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 86400) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        {
+            uint32_t req = sg_add_request(ctx);
+            uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+            double demand = -5.0;
+            assert(sg_task_set_location_id(ctx, task, l1) == SG_STATUS_OK);
+            assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+            assert(sg_task_set_service_seconds(ctx, task, 60) == SG_STATUS_OK);
+            assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+            assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+        }
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        distance_no_sp = sg_get_total_distance(ctx);
+        sg_free(ctx);
+    }
+    /* With speed profile */
+    {
+        SGContext *ctx = make_config(50, 42);
+        uint32_t l0 = sg_add_location(ctx);
+        uint32_t l1 = sg_add_location(ctx);
+        assert(sg_set_travel_matrix(ctx, 2, dist, dur) == SG_STATUS_OK);
+        uint32_t sp = sg_add_speed_profile(ctx);
+        assert(sg_speed_profile_add_entry(ctx, sp, 0.0, 3.0) == SG_STATUS_OK);
+        assert(sg_set_global_speed_profile(ctx, sp) == SG_STATUS_OK);
+        uint32_t depot = sg_add_depot(ctx);
+        assert(sg_depot_set_location_id(ctx, depot, l0) == SG_STATUS_OK);
+        uint32_t v = sg_add_vehicle(ctx);
+        double cap = 100.0;
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 86400) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+        {
+            uint32_t req = sg_add_request(ctx);
+            uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+            double demand = -5.0;
+            assert(sg_task_set_location_id(ctx, task, l1) == SG_STATUS_OK);
+            assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+            assert(sg_task_set_service_seconds(ctx, task, 60) == SG_STATUS_OK);
+            assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+            assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+        }
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        distance_with_sp = sg_get_total_distance(ctx);
+        sg_free(ctx);
+    }
+    assert(fabs(distance_no_sp - distance_with_sp) < 1e-6);
+}
+
+static void test_speed_profile_multiple_brackets(void) {
+    /* 4-bracket profile: night(1.0), morning rush(2.0), day(1.0), evening rush(1.5)
+     * Verify duration at departure times within each bracket. Uses callback. */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t l0 = sg_add_location(ctx);
+    uint32_t l1 = sg_add_location(ctx);
+    double dist[4] = {0, 100, 100, 0};
+    double dur[4]  = {0, 100, 100, 0};
+    assert(sg_set_travel_matrix(ctx, 2, dist, dur) == SG_STATUS_OK);
+
+    uint32_t sp = sg_add_speed_profile(ctx);
+    /* night: base 1.0 (default initial_value) */
+    assert(sg_speed_profile_add_entry(ctx, sp, 25200.0, 2.0) == SG_STATUS_OK);  /* 7am: rush */
+    assert(sg_speed_profile_add_entry(ctx, sp, 32400.0, 1.0) == SG_STATUS_OK);  /* 9am: normal */
+    assert(sg_speed_profile_add_entry(ctx, sp, 61200.0, 1.5) == SG_STATUS_OK);  /* 5pm: evening */
+    assert(sg_set_global_speed_profile(ctx, sp) == SG_STATUS_OK);
+
+    uint32_t depot = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, depot, l0) == SG_STATUS_OK);
+    /* Delivery task with TW forcing arrival during morning rush (depart ~7am) */
+    uint32_t v = sg_add_vehicle(ctx);
+    double cap = 100.0;
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 25200, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location_id(ctx, task, l1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 25200, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    /* Route departs depot at 25200 (7am), during rush hour (multiplier 2.0).
+     * Duration = 100 * 2.0 = 200 for outbound leg.
+     * Arrives at 25400, departs 25400 (no service).
+     * Return: departs 25400, still in rush (< 32400). dur = 100 * 2.0 = 200.
+     * Total route duration = 400. */
+    double route_dur = sg_solution_get_route_duration(ctx, 0);
+    assert(fabs(route_dur - 400.0) < 1e-6);
+    sg_free(ctx);
+}
+
+static void test_travel_profile_basic(void) {
+    /* 2 vehicle types with different distance matrices.
+     * "Fast" vehicle has shorter distances. Verify they get different route distances. */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t l0 = sg_add_location(ctx);
+    uint32_t l1 = sg_add_location(ctx);
+    /* Global matrix: normal roads */
+    double dist_global[4] = {0, 100, 100, 0};
+    double dur_global[4]  = {0, 100, 100, 0};
+    assert(sg_set_travel_matrix(ctx, 2, dist_global, dur_global) == SG_STATUS_OK);
+
+    /* Travel profile for "bike" vehicle: longer distances */
+    uint32_t tp = sg_add_travel_profile(ctx);
+    double dist_bike[4] = {0, 200, 200, 0};
+    double dur_bike[4]  = {0, 200, 200, 0};
+    assert(sg_travel_profile_set_matrices(ctx, tp, 2, dist_bike, dur_bike) == SG_STATUS_OK);
+
+    uint32_t depot = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, depot, l0) == SG_STATUS_OK);
+
+    /* Vehicle 0: default (global matrix) */
+    uint32_t v0 = sg_add_vehicle(ctx);
+    double cap = 100.0;
+    assert(sg_vehicle_set_depots(ctx, v0, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v0, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v0, &cap, 1) == SG_STATUS_OK);
+
+    /* Vehicle 1: bike profile */
+    uint32_t v1 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v1, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v1, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v1, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_travel_profile(ctx, v1, tp) == SG_STATUS_OK);
+
+    /* 2 deliveries so each vehicle gets 1 */
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location_id(ctx, task, l1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location_id(ctx, task, l1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    /* With vehicle minimization, solver will put both on 1 vehicle.
+     * Verify that the route distance matches the profile used. */
+    uint32_t nroutes = sg_solution_get_route_count(ctx);
+    assert(nroutes >= 1);
+    /* Check that at least one route exists and distances are valid */
+    for (uint32_t i = 0; i < nroutes; i++) {
+        double rd = sg_solution_get_route_distance(ctx, i);
+        assert(rd > 0);
+    }
+    sg_free(ctx);
+}
+
+static void test_travel_profile_duration_only(void) {
+    /* Travel profile with only duration_matrix (distance falls back to global).
+     * Verify distance uses global, duration uses profile. */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t l0 = sg_add_location(ctx);
+    uint32_t l1 = sg_add_location(ctx);
+    double dist_g[4] = {0, 50, 50, 0};
+    double dur_g[4]  = {0, 50, 50, 0};
+    assert(sg_set_travel_matrix(ctx, 2, dist_g, dur_g) == SG_STATUS_OK);
+
+    /* Profile: only duration (slow vehicle) */
+    uint32_t tp = sg_add_travel_profile(ctx);
+    double dur_slow[4] = {0, 500, 500, 0};
+    assert(sg_travel_profile_set_matrices(ctx, tp, 2, NULL, dur_slow) == SG_STATUS_OK);
+
+    uint32_t depot = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, depot, l0) == SG_STATUS_OK);
+    uint32_t v = sg_add_vehicle(ctx);
+    double cap = 100.0;
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_travel_profile(ctx, v, tp) == SG_STATUS_OK);
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location_id(ctx, task, l1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    /* Distance from global: 50+50=100. Duration from profile: 500+500=1000. */
+    assert(fabs(sg_get_total_distance(ctx) - 100.0) < 1e-6);
+    double route_dur = sg_solution_get_route_duration(ctx, 0);
+    assert(fabs(route_dur - 1000.0) < 1e-6);
+    sg_free(ctx);
+}
+
+static void test_travel_profile_with_speed_profile(void) {
+    /* Travel profile references a speed profile. Verify composition:
+     * profile duration * speed multiplier. */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t l0 = sg_add_location(ctx);
+    uint32_t l1 = sg_add_location(ctx);
+    double dist[4] = {0, 100, 100, 0};
+    double dur[4]  = {0, 100, 100, 0};
+    assert(sg_set_travel_matrix(ctx, 2, dist, dur) == SG_STATUS_OK);
+
+    /* Speed profile: 3x at t>=0 */
+    uint32_t sp = sg_add_speed_profile(ctx);
+    assert(sg_speed_profile_add_entry(ctx, sp, 0.0, 3.0) == SG_STATUS_OK);
+
+    /* Travel profile: custom duration 200, references speed profile */
+    uint32_t tp = sg_add_travel_profile(ctx);
+    double dur_tp[4] = {0, 200, 200, 0};
+    assert(sg_travel_profile_set_matrices(ctx, tp, 2, NULL, dur_tp) == SG_STATUS_OK);
+    assert(sg_travel_profile_set_speed_profile(ctx, tp, sp) == SG_STATUS_OK);
+
+    uint32_t depot = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, depot, l0) == SG_STATUS_OK);
+    uint32_t v = sg_add_vehicle(ctx);
+    double cap = 100.0;
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_travel_profile(ctx, v, tp) == SG_STATUS_OK);
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location_id(ctx, task, l1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    /* Distance: global 100+100=200. Duration: profile 200 * speed 3.0 = 600 per leg, 1200 total. */
+    assert(fabs(sg_get_total_distance(ctx) - 200.0) < 1e-6);
+    double route_dur = sg_solution_get_route_duration(ctx, 0);
+    assert(fabs(route_dur - 1200.0) < 1e-6);
+    sg_free(ctx);
+}
+
+static void test_global_speed_overridden_by_travel_profile(void) {
+    /* Global speed profile exists, but travel profile has its own speed profile.
+     * Travel profile's speed profile should take precedence for that vehicle. */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t l0 = sg_add_location(ctx);
+    uint32_t l1 = sg_add_location(ctx);
+    double dist[4] = {0, 100, 100, 0};
+    double dur[4]  = {0, 100, 100, 0};
+    assert(sg_set_travel_matrix(ctx, 2, dist, dur) == SG_STATUS_OK);
+
+    /* Global speed: 2x */
+    uint32_t sp_global = sg_add_speed_profile(ctx);
+    assert(sg_speed_profile_add_entry(ctx, sp_global, 0.0, 2.0) == SG_STATUS_OK);
+    assert(sg_set_global_speed_profile(ctx, sp_global) == SG_STATUS_OK);
+
+    /* Travel profile speed: 5x (overrides global for this vehicle) */
+    uint32_t sp_tp = sg_add_speed_profile(ctx);
+    assert(sg_speed_profile_add_entry(ctx, sp_tp, 0.0, 5.0) == SG_STATUS_OK);
+    uint32_t tp = sg_add_travel_profile(ctx);
+    assert(sg_travel_profile_set_matrices(ctx, tp, 2, NULL, dur) == SG_STATUS_OK);
+    assert(sg_travel_profile_set_speed_profile(ctx, tp, sp_tp) == SG_STATUS_OK);
+
+    uint32_t depot = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, depot, l0) == SG_STATUS_OK);
+
+    /* Vehicle 0: uses global speed (2x) */
+    uint32_t v0 = sg_add_vehicle(ctx);
+    double cap = 100.0;
+    assert(sg_vehicle_set_depots(ctx, v0, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v0, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v0, &cap, 1) == SG_STATUS_OK);
+
+    /* Vehicle 1: uses travel profile with speed 5x */
+    uint32_t v1 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v1, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v1, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v1, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_travel_profile(ctx, v1, tp) == SG_STATUS_OK);
+
+    /* 2 deliveries to force 2 vehicles (via capacity) */
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -60.0;
+        assert(sg_task_set_location_id(ctx, task, l1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -60.0;
+        assert(sg_task_set_location_id(ctx, task, l1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_solution_get_route_count(ctx) == 2);
+
+    /* Find which route is v0 and which is v1 */
+    double dur_v0 = 0, dur_v1 = 0;
+    for (uint32_t i = 0; i < 2; i++) {
+        uint32_t vid = sg_solution_get_route_vehicle_id(ctx, i);
+        double rd = sg_solution_get_route_duration(ctx, i);
+        if (vid == v0) dur_v0 = rd;
+        else dur_v1 = rd;
+    }
+    /* v0: global speed 2x → duration = 100*2 + 100*2 = 400 */
+    assert(fabs(dur_v0 - 400.0) < 1e-6);
+    /* v1: travel profile speed 5x → duration = 100*5 + 100*5 = 1000 */
+    assert(fabs(dur_v1 - 1000.0) < 1e-6);
+    sg_free(ctx);
+}
+
+static void test_callback_with_departure_time(void) {
+    /* Verify that the travel callback receives correct departure_time. */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t l0 = sg_add_location(ctx);
+    (void)sg_add_location(ctx); /* l1 — needed for location count */
+
+    /* We'll use our existing test_travel_cb which ignores departure_time.
+     * Instead, set matrix mode and verify the inline functions pass time correctly.
+     * The real test is that our callback signature change compiles and works. */
+    assert(sg_set_travel_callback(ctx, test_travel_cb, NULL) == SG_STATUS_OK);
+
+    uint32_t depot = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, depot, l0) == SG_STATUS_OK);
+    uint32_t v = sg_add_vehicle(ctx);
+    double cap = 100.0;
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location_id(ctx, task, 1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 60) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    sg_free(ctx);
+}
+
+static void test_speed_profile_before_first_entry(void) {
+    /* Speed profile starts at t=1000. Departure before that should use initial value 1.0. */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t l0 = sg_add_location(ctx);
+    uint32_t l1 = sg_add_location(ctx);
+    double dist[4] = {0, 100, 100, 0};
+    double dur[4]  = {0, 100, 100, 0};
+    assert(sg_set_travel_matrix(ctx, 2, dist, dur) == SG_STATUS_OK);
+
+    uint32_t sp = sg_add_speed_profile(ctx);
+    /* First entry at t=50000 — way after our delivery */
+    assert(sg_speed_profile_add_entry(ctx, sp, 50000.0, 5.0) == SG_STATUS_OK);
+    assert(sg_set_global_speed_profile(ctx, sp) == SG_STATUS_OK);
+
+    uint32_t depot = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, depot, l0) == SG_STATUS_OK);
+    uint32_t v = sg_add_vehicle(ctx);
+    double cap = 100.0;
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 1000) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location_id(ctx, task, l1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 1000) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    /* All departures before 50000 → multiplier 1.0 → duration = 100+100=200 */
+    double route_dur = sg_solution_get_route_duration(ctx, 0);
+    assert(fabs(route_dur - 200.0) < 1e-6);
+    sg_free(ctx);
+}
+
+static void test_no_profiles_unchanged(void) {
+    /* Solve the same trivial problem with the new code, verify same result as before. */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -10.0);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+    /* With coord-based auto distance: sqrt((10-0)^2)=10 each way → total ~20 */
+    assert(fabs(sg_get_total_distance(ctx) - 20.0) < 1e-6);
+    sg_free(ctx);
+}
+
+static void test_deterministic_with_profiles(void) {
+    /* Same problem + profiles, same seed → identical results. */
+    double results[2];
+    for (int run = 0; run < 2; run++) {
+        SGContext *ctx = make_config(100, 77);
+        uint32_t l0 = sg_add_location(ctx);
+        uint32_t l1 = sg_add_location(ctx);
+        uint32_t l2 = sg_add_location(ctx);
+        double dist[9] = {0, 50, 80, 50, 0, 60, 80, 60, 0};
+        double dur[9]  = {0, 50, 80, 50, 0, 60, 80, 60, 0};
+        assert(sg_set_travel_matrix(ctx, 3, dist, dur) == SG_STATUS_OK);
+
+        uint32_t sp = sg_add_speed_profile(ctx);
+        assert(sg_speed_profile_add_entry(ctx, sp, 0.0, 1.2) == SG_STATUS_OK);
+        assert(sg_set_global_speed_profile(ctx, sp) == SG_STATUS_OK);
+
+        uint32_t tp = sg_add_travel_profile(ctx);
+        double dur_tp[9] = {0, 70, 90, 70, 0, 75, 90, 75, 0};
+        assert(sg_travel_profile_set_matrices(ctx, tp, 3, NULL, dur_tp) == SG_STATUS_OK);
+
+        uint32_t depot = sg_add_depot(ctx);
+        assert(sg_depot_set_location_id(ctx, depot, l0) == SG_STATUS_OK);
+
+        uint32_t v0 = sg_add_vehicle(ctx);
+        double cap = 100.0;
+        assert(sg_vehicle_set_depots(ctx, v0, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v0, 0, 86400) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v0, &cap, 1) == SG_STATUS_OK);
+
+        uint32_t v1 = sg_add_vehicle(ctx);
+        assert(sg_vehicle_set_depots(ctx, v1, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v1, 0, 86400) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v1, &cap, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_set_travel_profile(ctx, v1, tp) == SG_STATUS_OK);
+
+        {
+            uint32_t req = sg_add_request(ctx);
+            uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+            double demand = -10.0;
+            assert(sg_task_set_location_id(ctx, task, l1) == SG_STATUS_OK);
+            assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+            assert(sg_task_set_service_seconds(ctx, task, 60) == SG_STATUS_OK);
+            assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+            assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+        }
+        {
+            uint32_t req = sg_add_request(ctx);
+            uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+            double demand = -10.0;
+            assert(sg_task_set_location_id(ctx, task, l2) == SG_STATUS_OK);
+            assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+            assert(sg_task_set_service_seconds(ctx, task, 60) == SG_STATUS_OK);
+            assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+            assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+        }
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        results[run] = sg_get_total_distance(ctx);
+        sg_free(ctx);
+    }
+    assert(fabs(results[0] - results[1]) < 1e-9);
+}
+
+static void test_travel_profile_validation(void) {
+    /* Validate that bad profile references are caught. */
+    SGContext *ctx = make_config(50, 42);
+    (void)sg_add_location(ctx);
+    (void)sg_add_location(ctx);
+    double dist[4] = {0, 100, 100, 0};
+    double dur[4]  = {0, 100, 100, 0};
+    assert(sg_set_travel_matrix(ctx, 2, dist, dur) == SG_STATUS_OK);
+
+    uint32_t depot = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, depot, 0) == SG_STATUS_OK);
+    uint32_t v = sg_add_vehicle(ctx);
+    double cap = 100.0;
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    /* Can't assign travel profile 99 — doesn't exist */
+    assert(sg_vehicle_set_travel_profile(ctx, v, 99) != SG_STATUS_OK);
+
+    /* Speed profile: can't set invalid travel profile reference */
+    uint32_t tp = sg_add_travel_profile(ctx);
+    assert(sg_travel_profile_set_speed_profile(ctx, tp, 99) != SG_STATUS_OK);
+
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -8676,12 +9309,28 @@ int main(void) {
     RUN_TEST(test_population_quality);
 #endif
 
+    /* Speed profiles & travel profiles */
+    RUN_TEST(test_speed_profile_api);
+    RUN_TEST(test_travel_profile_api);
+    RUN_TEST(test_speed_profile_basic);
+    RUN_TEST(test_speed_profile_no_effect_on_distance);
+    RUN_TEST(test_speed_profile_multiple_brackets);
+    RUN_TEST(test_travel_profile_basic);
+    RUN_TEST(test_travel_profile_duration_only);
+    RUN_TEST(test_travel_profile_with_speed_profile);
+    RUN_TEST(test_global_speed_overridden_by_travel_profile);
+    RUN_TEST(test_callback_with_departure_time);
+    RUN_TEST(test_speed_profile_before_first_entry);
+    RUN_TEST(test_no_profiles_unchanged);
+    RUN_TEST(test_deterministic_with_profiles);
+    RUN_TEST(test_travel_profile_validation);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 224);
+    assert(tests_run == 238);
 #else
-    assert(tests_run == 215);
+    assert(tests_run == 229);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

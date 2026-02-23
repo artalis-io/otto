@@ -259,6 +259,8 @@ SGContext *sg_create(void) {
 }
 
 void sg_free(SGContext *ctx) {
+    uint32_t i;
+
     if (!ctx) {
         return;
     }
@@ -324,6 +326,30 @@ void sg_free(SGContext *ctx) {
     ctx->initial_route_lengths = NULL;
     ctx->num_initial_routes = 0;
     ctx->total_initial_requests = 0;
+
+    /* Free speed profiles */
+    if (ctx->speed_profiles) {
+        for (i = 0; i < ctx->num_speed_profiles; i++) {
+            sh_step_free(ctx->speed_profiles[i]);
+        }
+        free(ctx->speed_profiles);
+        ctx->speed_profiles = NULL;
+    }
+    ctx->num_speed_profiles = 0;
+    ctx->global_speed_profile_id = 0;
+    ctx->has_speed_profiles = 0;
+
+    /* Free travel profiles */
+    if (ctx->travel_profiles) {
+        for (i = 0; i < ctx->num_travel_profiles; i++) {
+            free(ctx->travel_profiles[i].distance_matrix);
+            free(ctx->travel_profiles[i].duration_matrix);
+        }
+        free(ctx->travel_profiles);
+        ctx->travel_profiles = NULL;
+    }
+    ctx->num_travel_profiles = 0;
+    ctx->has_travel_profiles = 0;
 
     sh_rng_free(ctx->op_rng);
     ctx->op_rng = NULL;
@@ -918,6 +944,40 @@ SGStatus sg_validate_model(SGContext *ctx) {
                 return SG_STATUS_INFEASIBLE;
             }
         }
+        if (vehicle->has_travel_profile) {
+            if (vehicle->travel_profile_id == 0 ||
+                vehicle->travel_profile_id > ctx->num_travel_profiles) {
+                sg_set_error(ctx, "vehicle %u: travel_profile_id out of range", i);
+                return SG_STATUS_INFEASIBLE;
+            }
+        }
+    }
+
+    /* Validate travel profiles */
+    for (i = 0; i < ctx->num_travel_profiles; i++) {
+        const SGTravelProfile *tp = &ctx->travel_profiles[i];
+        if (tp->has_speed_profile) {
+            if (tp->speed_profile_id == 0 ||
+                tp->speed_profile_id > ctx->num_speed_profiles) {
+                sg_set_error(ctx, "travel_profile %u: speed_profile_id out of range", i);
+                return SG_STATUS_INFEASIBLE;
+            }
+        }
+        if (tp->has_distance_matrix && !tp->distance_matrix) {
+            sg_set_error(ctx, "travel_profile %u: distance matrix flag set but NULL", i);
+            return SG_STATUS_INFEASIBLE;
+        }
+        if (tp->has_duration_matrix && !tp->duration_matrix) {
+            sg_set_error(ctx, "travel_profile %u: duration matrix flag set but NULL", i);
+            return SG_STATUS_INFEASIBLE;
+        }
+    }
+
+    /* Validate global speed profile reference */
+    if (ctx->global_speed_profile_id > 0 &&
+        ctx->global_speed_profile_id > ctx->num_speed_profiles) {
+        sg_set_error(ctx, "global speed_profile_id out of range");
+        return SG_STATUS_INFEASIBLE;
     }
 
     for (i = 0; i < ctx->num_tasks; i++) {
@@ -1172,6 +1232,166 @@ SGStatus sg_set_travel_callback(SGContext *ctx, SGTravelCallback callback, void 
 
     ctx->travel_callback = callback;
     ctx->travel_callback_data = user_data;
+    return SG_STATUS_OK;
+}
+
+/* ---- Speed profiles ---- */
+
+uint32_t sg_add_speed_profile(SGContext *ctx) {
+    SHStepFunc **new_arr;
+    SHStepFunc *sf;
+    uint32_t id;
+
+    if (!ctx) {
+        return UINT32_MAX;
+    }
+
+    sf = sh_step_create(1.0, 4);
+    if (!sf) {
+        return UINT32_MAX;
+    }
+
+    new_arr = (SHStepFunc **)realloc(ctx->speed_profiles,
+                                      ((size_t)ctx->num_speed_profiles + 1) * sizeof(SHStepFunc *));
+    if (!new_arr) {
+        sh_step_free(sf);
+        return UINT32_MAX;
+    }
+
+    id = ctx->num_speed_profiles;
+    ctx->speed_profiles = new_arr;
+    ctx->speed_profiles[id] = sf;
+    ctx->num_speed_profiles++;
+    ctx->has_speed_profiles = 1;
+    return id;
+}
+
+SGStatus sg_speed_profile_add_entry(SGContext *ctx, uint32_t profile_id,
+                                     double start_time, double multiplier) {
+    if (!ctx || profile_id >= ctx->num_speed_profiles) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (multiplier <= 0.0 || !isfinite(multiplier) || !isfinite(start_time)) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (sh_step_set(ctx->speed_profiles[profile_id], start_time, multiplier) != 0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_set_global_speed_profile(SGContext *ctx, uint32_t speed_profile_id) {
+    if (!ctx) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (speed_profile_id >= ctx->num_speed_profiles) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->global_speed_profile_id = speed_profile_id + 1;  /* 1-based internally */
+    return SG_STATUS_OK;
+}
+
+/* ---- Travel profiles ---- */
+
+uint32_t sg_add_travel_profile(SGContext *ctx) {
+    SGTravelProfile *new_arr;
+    uint32_t id;
+
+    if (!ctx) {
+        return UINT32_MAX;
+    }
+
+    new_arr = (SGTravelProfile *)realloc(ctx->travel_profiles,
+                                          ((size_t)ctx->num_travel_profiles + 1) * sizeof(SGTravelProfile));
+    if (!new_arr) {
+        return UINT32_MAX;
+    }
+
+    id = ctx->num_travel_profiles;
+    ctx->travel_profiles = new_arr;
+    memset(&ctx->travel_profiles[id], 0, sizeof(SGTravelProfile));
+    ctx->num_travel_profiles++;
+    ctx->has_travel_profiles = 1;
+    return id;
+}
+
+SGStatus sg_travel_profile_set_matrices(SGContext *ctx, uint32_t profile_id,
+                                         uint32_t location_count,
+                                         const double *distance_matrix,
+                                         const double *duration_matrix) {
+    SGTravelProfile *tp;
+    size_t total;
+    size_t i;
+
+    if (!ctx || profile_id >= ctx->num_travel_profiles) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (location_count == 0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (!distance_matrix && !duration_matrix) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    total = (size_t)location_count * location_count;
+    tp = &ctx->travel_profiles[profile_id];
+
+    if (distance_matrix) {
+        double *copy = (double *)malloc(total * sizeof(double));
+        if (!copy) return SG_STATUS_OUT_OF_MEMORY;
+        for (i = 0; i < total; i++) {
+            if (!isfinite(distance_matrix[i]) || distance_matrix[i] < 0.0) {
+                free(copy);
+                return SG_STATUS_INVALID_ARG;
+            }
+            copy[i] = distance_matrix[i];
+        }
+        free(tp->distance_matrix);
+        tp->distance_matrix = copy;
+        tp->has_distance_matrix = 1;
+    }
+
+    if (duration_matrix) {
+        double *copy = (double *)malloc(total * sizeof(double));
+        if (!copy) return SG_STATUS_OUT_OF_MEMORY;
+        for (i = 0; i < total; i++) {
+            if (!isfinite(duration_matrix[i]) || duration_matrix[i] < 0.0) {
+                free(copy);
+                return SG_STATUS_INVALID_ARG;
+            }
+            copy[i] = duration_matrix[i];
+        }
+        free(tp->duration_matrix);
+        tp->duration_matrix = copy;
+        tp->has_duration_matrix = 1;
+    }
+
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_travel_profile_set_speed_profile(SGContext *ctx, uint32_t profile_id,
+                                              uint32_t speed_profile_id) {
+    if (!ctx || profile_id >= ctx->num_travel_profiles) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (speed_profile_id >= ctx->num_speed_profiles) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->travel_profiles[profile_id].speed_profile_id = speed_profile_id + 1;  /* 1-based */
+    ctx->travel_profiles[profile_id].has_speed_profile = 1;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_vehicle_set_travel_profile(SGContext *ctx, uint32_t vehicle_id,
+                                        uint32_t profile_id) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (profile_id >= ctx->num_travel_profiles) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->vehicles[vehicle_id].travel_profile_id = profile_id + 1;  /* 1-based */
+    ctx->vehicles[vehicle_id].has_travel_profile = 1;
     return SG_STATUS_OK;
 }
 

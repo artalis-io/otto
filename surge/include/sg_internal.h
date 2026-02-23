@@ -13,6 +13,7 @@
 #include "arbor.h"
 #include "sh_arena.h"
 #include "sh_dist.h"
+#include "sh_stepfunc.h"
 
 /* Constants */
 #define SG_UNASSIGNED_PENALTY 10000.0
@@ -162,6 +163,15 @@ typedef struct {
 } SGDepotRecord;
 
 typedef struct {
+    double *distance_matrix;     /* [num_locations^2] or NULL (= use global) */
+    double *duration_matrix;     /* [num_locations^2] or NULL (= use global) */
+    uint32_t speed_profile_id;   /* 0 = none, 1..N = ctx->speed_profiles[id-1] */
+    uint8_t has_distance_matrix;
+    uint8_t has_duration_matrix;
+    uint8_t has_speed_profile;
+} SGTravelProfile;
+
+typedef struct {
     uint32_t start_depot_id;
     uint32_t end_depot_id;
     uint32_t start_location_id;
@@ -195,6 +205,10 @@ typedef struct {
     uint32_t max_trips;            /* 0 = unlimited, 1 = default (no multi-trip) */
     int32_t  trip_reload_seconds;  /* Depot service time between trips */
     uint8_t  has_multi_trip;       /* 1 if max_trips != 1 */
+
+    /* Travel profile */
+    uint32_t travel_profile_id;    /* 0 = use global, 1..N = ctx->travel_profiles[id-1] */
+    uint8_t  has_travel_profile;
 } SGVehicleRecord;
 
 typedef struct {
@@ -303,6 +317,17 @@ struct SGContext {
     uint32_t *initial_route_lengths;
     uint32_t num_initial_routes;
     uint32_t total_initial_requests;
+
+    /* Speed profiles (time-dependent duration multipliers) */
+    SHStepFunc **speed_profiles;         /* [num_speed_profiles] array of pointers */
+    uint32_t num_speed_profiles;
+    uint32_t global_speed_profile_id;    /* 0 = none, 1..N */
+    uint8_t has_speed_profiles;          /* fast-path flag */
+
+    /* Travel profiles (per-vehicle-type matrices) */
+    SGTravelProfile *travel_profiles;    /* [num_travel_profiles] */
+    uint32_t num_travel_profiles;
+    uint8_t has_travel_profiles;         /* fast-path flag */
 };
 
 /* sg_context.c */
@@ -325,17 +350,39 @@ int sg_request_representative_location(const SGContext *ctx, uint32_t request_id
 
 /* Internal travel lookup functions (static inline) */
 
+static inline void sg_resolve_matrices(const SGContext *ctx, uint32_t vehicle_id,
+                                        const double **dist_out, const double **dur_out,
+                                        uint32_t *sp_id_out) {
+    *dist_out = ctx->travel_distance_matrix;
+    *dur_out = ctx->travel_duration_matrix;
+    *sp_id_out = ctx->global_speed_profile_id;
+    if (ctx->has_travel_profiles && vehicle_id != SG_NO_VEHICLE) {
+        uint32_t tp_id = ctx->vehicles[vehicle_id].travel_profile_id;
+        if (tp_id > 0) {
+            const SGTravelProfile *tp = &ctx->travel_profiles[tp_id - 1];
+            if (tp->has_distance_matrix) *dist_out = tp->distance_matrix;
+            if (tp->has_duration_matrix) *dur_out = tp->duration_matrix;
+            if (tp->has_speed_profile) *sp_id_out = tp->speed_profile_id;
+        }
+    }
+}
+
 static inline void sg_travel(const SGContext *ctx, uint32_t from_loc, uint32_t to_loc,
-                              uint32_t vehicle_id, double *dist, double *dur) {
+                              uint32_t vehicle_id, double departure_time,
+                              double *dist, double *dur) {
     if (ctx->travel_callback) {
-        ctx->travel_callback(from_loc, to_loc, vehicle_id, dist, dur,
-                             ctx->travel_callback_data);
+        ctx->travel_callback(from_loc, to_loc, vehicle_id, departure_time,
+                             dist, dur, ctx->travel_callback_data);
         return;
     }
     {
+        const double *dm, *tm; uint32_t sp_id;
+        sg_resolve_matrices(ctx, vehicle_id, &dm, &tm, &sp_id);
         size_t idx = (size_t)from_loc * ctx->num_locations + to_loc;
-        *dist = ctx->travel_distance_matrix[idx];
-        *dur  = ctx->travel_duration_matrix[idx];
+        *dist = dm[idx];
+        *dur  = tm[idx];
+        if (sp_id > 0)
+            *dur *= sh_step_eval(ctx->speed_profiles[sp_id - 1], departure_time);
     }
 }
 
@@ -430,25 +477,49 @@ static inline int sg_construct_exclusion_compatible(const SGContext *ctx,
     return 1;
 }
 
-static inline double sg_travel_dist(const SGContext *ctx, uint32_t from_loc, uint32_t to_loc) {
+static inline double sg_travel_dist(const SGContext *ctx, uint32_t from_loc, uint32_t to_loc,
+                                     uint32_t vehicle_id) {
     if (ctx->travel_callback) {
         double d, t;
-        ctx->travel_callback(from_loc, to_loc, SG_NO_VEHICLE, &d, &t,
+        ctx->travel_callback(from_loc, to_loc, vehicle_id, 0.0, &d, &t,
                              ctx->travel_callback_data);
         return d;
     }
-    return ctx->travel_distance_matrix[(size_t)from_loc * ctx->num_locations + to_loc];
+    {
+        const double *dist_matrix = ctx->travel_distance_matrix;
+        if (ctx->has_travel_profiles && vehicle_id != SG_NO_VEHICLE) {
+            uint32_t tp_id = ctx->vehicles[vehicle_id].travel_profile_id;
+            if (tp_id > 0 && ctx->travel_profiles[tp_id - 1].has_distance_matrix)
+                dist_matrix = ctx->travel_profiles[tp_id - 1].distance_matrix;
+        }
+        return dist_matrix[(size_t)from_loc * ctx->num_locations + to_loc];
+    }
 }
 
 static inline double sg_travel_dur(const SGContext *ctx, uint32_t from_loc, uint32_t to_loc,
-                                    uint32_t vehicle_id) {
+                                    uint32_t vehicle_id, double departure_time) {
     if (ctx->travel_callback) {
         double d, t;
-        ctx->travel_callback(from_loc, to_loc, vehicle_id, &d, &t,
+        ctx->travel_callback(from_loc, to_loc, vehicle_id, departure_time, &d, &t,
                              ctx->travel_callback_data);
         return t;
     }
-    return ctx->travel_duration_matrix[(size_t)from_loc * ctx->num_locations + to_loc];
+    {
+        const double *dur_matrix = ctx->travel_duration_matrix;
+        uint32_t sp_id = ctx->global_speed_profile_id;
+        if (ctx->has_travel_profiles && vehicle_id != SG_NO_VEHICLE) {
+            uint32_t tp_id = ctx->vehicles[vehicle_id].travel_profile_id;
+            if (tp_id > 0) {
+                const SGTravelProfile *tp = &ctx->travel_profiles[tp_id - 1];
+                if (tp->has_duration_matrix) dur_matrix = tp->duration_matrix;
+                if (tp->has_speed_profile) sp_id = tp->speed_profile_id;
+            }
+        }
+        double dur = dur_matrix[(size_t)from_loc * ctx->num_locations + to_loc];
+        if (sp_id > 0)
+            dur *= sh_step_eval(ctx->speed_profiles[sp_id - 1], departure_time);
+        return dur;
+    }
 }
 
 /* Disjunct TW helpers.
