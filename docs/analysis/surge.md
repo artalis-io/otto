@@ -119,7 +119,7 @@ Language bindings are trivial given the JSON API — each binding is just a thin
 ## Auditability — Strong advantage
 
 - 21K lines of straightforward C. No metaprogramming, no templates, no macros beyond the basics. A competent C developer can read the entire solver in a day.
-- 220 tests covering every constraint individually. Each test is self-contained and readable.
+- 252 tests covering every constraint individually. Each test is self-contained and readable.
 - Operator telemetry: you can see exactly which destroy/repair operators were used, how often, and how effective they were.
 - Deterministic: reproducible bugs.
 - ASAN/UBSan clean: no undefined behavior.
@@ -291,7 +291,7 @@ Revised grades vs. initial assessment: Language bindings A- (Python + Node.js bi
 | ~~**Time-dependent travel**~~ | ~~OR-Tools, PTV, HERE~~ | **Done.** Speed profiles (time-dependent duration multipliers) + per-vehicle travel profiles shipped. |
 | ~~**Open start (no depot)**~~ | ~~OR-Tools, VROOM~~ | **Done.** Vehicle can skip first depot-to-stop leg (open_start flag, symmetric to open_end). |
 | **Global span balancing** | OR-Tools, Ortec, PTV | "Fairness" — minimize longest route or balance workload. Fleet unions/labor contracts care about this. |
-| **Plan/ETA validation mode** | VROOM, HERE | Given a fixed route, validate constraints and report violations. Essential for dispatching integration. |
+| ~~**Plan/ETA validation mode**~~ | ~~VROOM, HERE~~ | **Done.** `sg_validate_plan()` validates fixed routes, computes ETAs, reports constraint violations (hard TW, capacity, PD order, ride time, max duration/distance/tasks, forbidden vehicle, qualifications). JSON API `"plan"` key. |
 
 **Medium Value (niche but differentiating):**
 
@@ -338,11 +338,12 @@ Most of these are **application-layer** concerns, not solver-core. Surge's clean
 1. ~~**REST API + WASM + Python binding**~~ — **Done.** Distribution unlocked.
 2. ~~**Time-dependent travel**~~ — **Done.** Speed profiles + per-vehicle travel profiles shipped.
 3. ~~**Per-vehicle travel matrix**~~ — **Done.** Travel profiles.
-4. ~~**Open start**~~ — **Done.** **Validation mode** remains — close the dispatching integration use case.
-5. **Infeasible-space exploration** — the algorithmic lever most likely to close the vehicle gap on tight instances.
-6. **Global span balancing** — table stakes for enterprise fleet contracts.
+4. ~~**Open start**~~ — **Done.**
+5. ~~**Validation mode**~~ — **Done.** Dispatching integration use case closed.
+6. **Infeasible-space exploration** — the algorithmic lever most likely to close the vehicle gap on tight instances.
+7. **Global span balancing** — table stakes for enterprise fleet contracts.
 
-The constraint richness is ahead of OR-Tools/VROOM. The quality is competitive. The deployability is unmatched. Distribution is solved (REST API, WASM, Python, Node.js). Open start routes now complete the field-service use case. The remaining gap to GOAT is **modelling features** (validation mode, global span balancing) and **algorithmic quality** (infeasible-space exploration).
+The constraint richness is ahead of OR-Tools/VROOM. The quality is competitive. The deployability is unmatched. Distribution is solved (REST API, WASM, Python, Node.js). Open start routes complete the field-service use case. Plan/ETA validation closes the dispatching integration gap. The remaining gap to GOAT is **modelling features** (global span balancing) and **algorithmic quality** (infeasible-space exploration).
 
 ---
 
@@ -350,6 +351,6 @@ The constraint richness is ahead of OR-Tools/VROOM. The quality is competitive. 
 
 Surge's strengths are **deployability**, **API cleanliness**, **constraint richness**, and **auditability**. These matter enormously for commercial embedding — if you're selling routing as a feature inside a larger product, Surge is easier to ship than anything else in this space.
 
-Distribution is now solved: REST API server (with rate limiting, work queue, Prometheus metrics), WASM build, Python and Node.js bindings all exist and work. Time-dependent travel (speed profiles) and per-vehicle travel profiles close the two biggest modelling gaps vs competitors. Parallelism, population-based search, and arena allocation are complete. The remaining quality gap is algorithmic — infeasible-space exploration and operator tuning.
+Distribution is now solved: REST API server (with rate limiting, work queue, Prometheus metrics), WASM build, Python and Node.js bindings all exist and work. Time-dependent travel (speed profiles) and per-vehicle travel profiles close the two biggest modelling gaps vs competitors. Plan/ETA validation mode closes the dispatching integration gap vs VROOM and HERE. Parallelism, population-based search, and arena allocation are complete. The remaining quality gap is algorithmic — infeasible-space exploration and operator tuning.
 
-The strategic bet has paid off: a lean, embeddable, WASM-ready solver with a clean API, rich constraints, and full distribution infrastructure. The gap to GOAT is now mostly **algorithmic quality** on tight-TW instances, not infrastructure or modelling.
+The strategic bet has paid off: a lean, embeddable, WASM-ready solver with a clean API, rich constraints, and full distribution infrastructure. The gap to GOAT is now mostly **algorithmic quality** on tight-TW instances and **global span balancing** for enterprise fleet contracts — not infrastructure or modelling.
