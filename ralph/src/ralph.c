@@ -15,6 +15,7 @@
 #include "detect.h"
 #include "benders.h"
 #include "lp_conflict.h"
+#include "lp_error.h"
 #include "lp_backend.h"
 #include "lp_dispatch.h"
 #include "lp_external_adapter.h"
@@ -118,6 +119,9 @@ struct RalphModel {
     int staged_basis_n;
     int *staged_basis;
     VarStatus *staged_var_status;
+
+    /* Structured API error state (per-model). */
+    LPAPIErrorState error_state;
 };
 
 /* Basis representation for warm start */
@@ -734,10 +738,28 @@ static void ralph_invalidate_solve_state(RalphModel *model) {
 
 RalphModel* ralph_core_create(void) {
     RalphModel *model = (RalphModel*)calloc(1, sizeof(RalphModel));
-    if (!model) return NULL;
+    if (!model) {
+        lp_error_tls_set(RALPH_ERROR_DOMAIN_MEMORY,
+                         RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                         RALPH_STATUS_ERROR,
+                         RALPH_ERROR_API_LIFECYCLE,
+                         0,
+                         0,
+                         "failed to allocate model");
+        return NULL;
+    }
+
+    lp_error_state_init(&model->error_state);
 
     model->lp_model = lp_model_create();
     if (!model->lp_model) {
+        lp_error_tls_set(RALPH_ERROR_DOMAIN_MEMORY,
+                         RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                         RALPH_STATUS_ERROR,
+                         RALPH_ERROR_API_LIFECYCLE,
+                         0,
+                         0,
+                         "failed to allocate lp model");
         free(model);
         return NULL;
     }
@@ -784,6 +806,7 @@ RalphModel* ralph_core_create(void) {
     ralph_reset_presolve_report(model);
     ralph_reset_lp_algorithm_report(model);
     ralph_reset_lp_external_failure_report(model);
+    lp_error_tls_clear();
 
     return model;
 }
@@ -1636,6 +1659,37 @@ int ralph_core_optimize_lp(RalphModel *model) {
 
 int ralph_core_optimize_mip(RalphModel *model) {
     return ralph_optimize_with_mode(model, RALPH_SOLVE_MIP_ONLY);
+}
+
+int ralph_core_get_last_error(const RalphModel *model, RalphAPIError *out) {
+    if (!out) return -1;
+    if (model) return lp_error_state_get(&model->error_state, out);
+    return lp_error_tls_get(out);
+}
+
+int ralph_core_clear_error(RalphModel *model) {
+    if (model) {
+        lp_error_state_clear(&model->error_state);
+    } else {
+        lp_error_tls_clear();
+    }
+    return 0;
+}
+
+const char* ralph_core_error_domain_string(RalphErrorDomain domain) {
+    return lp_error_domain_string(domain);
+}
+
+const char* ralph_core_error_code_string(RalphErrorCode code) {
+    return lp_error_code_string(code);
+}
+
+const char* ralph_core_error_api_string(RalphErrorAPIId api_id) {
+    return lp_error_api_string(api_id);
+}
+
+const char* ralph_core_error_message(const RalphAPIError *error) {
+    return lp_error_message(error);
 }
 
 /* ============================================================================

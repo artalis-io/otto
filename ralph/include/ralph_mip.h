@@ -136,6 +136,10 @@ void ralph_mip_free(RalphMIPModel *model);
 /* Solve */
 int ralph_mip_optimize(RalphMIPModel *model);
 
+/* Structured API error diagnostics (same contract as LP API). */
+int ralph_mip_get_last_error(const RalphMIPModel *model, RalphAPIError *out);
+int ralph_mip_clear_error(RalphMIPModel *model);
+
 /* Solution and MIP search metrics */
 RalphLPStatus ralph_mip_get_status(const RalphMIPModel *model);
 double ralph_mip_get_objval(const RalphMIPModel *model);

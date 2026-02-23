@@ -119,6 +119,30 @@ int ralph_lp_optimize(RalphLPModel *model) {
     return ralph_core_optimize_lp((RalphModel *)model);
 }
 
+int ralph_lp_get_last_error(const RalphLPModel *model, RalphAPIError *out) {
+    return ralph_core_get_last_error((const RalphModel *)model, out);
+}
+
+int ralph_lp_clear_error(RalphLPModel *model) {
+    return ralph_core_clear_error((RalphModel *)model);
+}
+
+const char* ralph_lp_error_domain_string(RalphErrorDomain domain) {
+    return ralph_core_error_domain_string(domain);
+}
+
+const char* ralph_lp_error_code_string(RalphErrorCode code) {
+    return ralph_core_error_code_string(code);
+}
+
+const char* ralph_lp_error_api_string(RalphErrorAPIId api_id) {
+    return ralph_core_error_api_string(api_id);
+}
+
+const char* ralph_lp_error_message(const RalphAPIError *error) {
+    return ralph_core_error_message(error);
+}
+
 int ralph_lp_get_capabilities(RalphLPCapabilities *caps) {
     return ralph_core_get_lp_capabilities(caps);
 }
