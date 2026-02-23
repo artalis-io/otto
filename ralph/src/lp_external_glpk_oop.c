@@ -146,7 +146,13 @@ static int glpk_oop_write_lp(const LPModel *lp, const char *filename) {
             fprintf(f, "%sx%d", coef_buf, j + 1);
             first = 0;
         }
-        if (first) fprintf(f, " 0");
+        if (first) {
+            if (lp->num_vars > 0) {
+                fprintf(f, " 0 x1");
+            } else {
+                fprintf(f, " 0");
+            }
+        }
     }
     fprintf(f, "\n");
 
@@ -162,7 +168,13 @@ static int glpk_oop_write_lp(const LPModel *lp, const char *filename) {
             fprintf(f, "%sx%d", coef_buf, j + 1);
             first = 0;
         }
-        if (first) fprintf(f, " 0");
+        if (first) {
+            if (lp->num_vars > 0) {
+                fprintf(f, " 0 x1");
+            } else {
+                fprintf(f, " 0");
+            }
+        }
 
         if (lp->sense && lp->sense[i] == 'G') {
             fprintf(f, " >= %.17g", lp->b ? lp->b[i] : 0.0);
@@ -688,7 +700,9 @@ static int glpk_oop_solve(LPExternalBackendKind backend,
     }
 
     solver->iterations = hints.iterations;
-    solver->obj_value = objective;
+    /* Keep objective semantics aligned with internal simplex/dual paths:
+     * user-space objective includes the model constant term. */
+    solver->obj_value = objective + (model ? model->obj_offset : 0.0);
 
     switch (merged_status) {
         case GLPK_OOP_STATUS_OPTIMAL:

@@ -204,7 +204,12 @@ static int write_constraints(FILE *f, const LPModel *model) {
         }
 
         if (first) {
-            fprintf(f, " 0");
+            if (model->num_vars > 0) {
+                get_var_name(model, 0, var_buf, sizeof(var_buf));
+                fprintf(f, " 0 %s", var_buf);
+            } else {
+                fprintf(f, " 0");
+            }
         }
 
         /* Sense and RHS */

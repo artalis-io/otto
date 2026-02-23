@@ -271,6 +271,68 @@ static void test_dual_simplex_routes_dual_flag(void) {
     unlink(script_path);
 }
 
+static void test_external_objective_includes_model_offset(void) {
+    char script_path[256];
+    const char *script =
+        "#!/bin/sh\n"
+        "wri=\"\"\n"
+        "next_wri=0\n"
+        "for arg in \"$@\"; do\n"
+        "  if [ \"$next_wri\" = \"1\" ]; then wri=\"$arg\"; next_wri=0; continue; fi\n"
+        "  if [ \"$arg\" = \"--write\" ]; then next_wri=1; continue; fi\n"
+        "done\n"
+        "if [ -z \"$wri\" ]; then exit 2; fi\n"
+        "cat > \"$wri\" <<'EOF_WR'\n"
+        "c Status:     OPTIMAL\n"
+        "c Objective:  obj = 1 (MINimum)\n"
+        "s bas 1 1 f f 1\n"
+        "i 1 l 1 1\n"
+        "j 1 b 1 0\n"
+        "e o f\n"
+        "EOF_WR\n"
+        "echo \"  9 simplex iterations\"\n"
+        "exit 0\n";
+    RalphModel *model = NULL;
+    int rc_script;
+
+    ralph_lp_external_unregister_all_adapters();
+    rc_script = write_mock_script(script, script_path, sizeof(script_path));
+    ASSERT_INT_EQ(rc_script, 0,
+                  "objective-offset: create mock script");
+    if (rc_script != 0) return;
+    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(script_path), 0,
+                  "objective-offset: register GLPK OOP");
+
+    model = build_small_lp();
+    ASSERT_TRUE(model != NULL, "objective-offset: model created");
+    if (!model) {
+        ralph_lp_external_unregister_all_adapters();
+        unlink(script_path);
+        return;
+    }
+
+    ASSERT_INT_EQ(ralph_test_set_obj_offset(model, 7.25), 0,
+                  "objective-offset: set model objective offset");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+                                         (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL),
+                  0,
+                  "objective-offset: set external primal");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+                                         (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
+                  0,
+                  "objective-offset: set provider GLPK");
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
+                  "objective-offset: solve succeeds");
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+                  "objective-offset: status optimal");
+    ASSERT_DBL_CLOSE(ralph_test_get_objval(model), 8.25, 1e-9,
+                     "objective-offset: external objective includes model offset");
+
+    ralph_test_free(model);
+    ralph_lp_external_unregister_all_adapters();
+    unlink(script_path);
+}
+
 static void test_status_hints_for_infeasible_and_unbounded(void) {
     char inf_script[256];
     char unb_script[256];
@@ -438,6 +500,7 @@ int main(void) {
     test_register_caps_and_unregister();
     test_primal_simplex_oop_success_with_duals();
     test_dual_simplex_routes_dual_flag();
+    test_external_objective_includes_model_offset();
     test_status_hints_for_infeasible_and_unbounded();
     test_time_limit_maps_to_external_failure_report();
 
