@@ -7753,6 +7753,165 @@ static void test_max_distance_enforced(void) {
     sg_free(ctx);
 }
 
+/* ===== parallel tests ===== */
+#ifdef SG_HAS_THREADS
+#include "sg_parallel.h"
+
+static void test_parallel_basic(void) {
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_pd_request(ctx, 1, 2, 0, 86400, 10, 3, 4, 0, 86400, 10, 1);
+    add_pd_request(ctx, 5, 6, 0, 86400, 10, 7, 8, 0, 86400, 10, 1);
+    add_pd_request(ctx, 2, 1, 0, 86400, 10, 4, 3, 0, 86400, 10, 1);
+    add_pd_request(ctx, 6, 5, 0, 86400, 10, 8, 7, 0, 86400, 10, 1);
+    add_pd_request(ctx, 3, 3, 0, 86400, 10, 6, 6, 0, 86400, 10, 1);
+
+    assert(sg_solve_parallel(ctx, 2) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_solution_get_route_count(ctx) > 0);
+    sg_free(ctx);
+}
+
+static void test_parallel_deterministic(void) {
+    double dist_a, dist_b;
+    uint32_t veh_a, veh_b;
+    int run;
+
+    for (run = 0; run < 2; run++) {
+        SGContext *ctx = make_config(200, 42);
+        uint32_t depot;
+        add_depot_with_location(ctx, &depot, 0, 0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_pd_request(ctx, 1, 2, 0, 86400, 10, 3, 4, 0, 86400, 10, 1);
+        add_pd_request(ctx, 5, 6, 0, 86400, 10, 7, 8, 0, 86400, 10, 1);
+        add_pd_request(ctx, 2, 1, 0, 86400, 10, 4, 3, 0, 86400, 10, 1);
+        add_pd_request(ctx, 6, 5, 0, 86400, 10, 8, 7, 0, 86400, 10, 1);
+        add_pd_request(ctx, 3, 3, 0, 86400, 10, 6, 6, 0, 86400, 10, 1);
+
+        assert(sg_solve_parallel(ctx, 4) == SG_STATUS_OK);
+
+        if (run == 0) {
+            dist_a = sg_get_total_distance(ctx);
+            veh_a = sg_get_used_vehicle_count(ctx);
+        } else {
+            dist_b = sg_get_total_distance(ctx);
+            veh_b = sg_get_used_vehicle_count(ctx);
+        }
+        sg_free(ctx);
+    }
+    assert(veh_a == veh_b);
+    assert(fabs(dist_a - dist_b) < 1e-6);
+}
+
+static void test_parallel_improves_over_single(void) {
+    double dist_single, dist_parallel;
+    uint32_t veh_single, veh_parallel, unassigned_single, unassigned_parallel;
+
+    /* Single-threaded solve */
+    {
+        SGContext *ctx = make_config(200, 42);
+        uint32_t depot;
+        add_depot_with_location(ctx, &depot, 0, 0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 50);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 50);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 50);
+        add_pd_request(ctx, 10, 20, 0, 86400, 60, 30, 40, 0, 86400, 60, 5);
+        add_pd_request(ctx, 50, 60, 0, 86400, 60, 70, 80, 0, 86400, 60, 5);
+        add_pd_request(ctx, 20, 10, 0, 86400, 60, 40, 30, 0, 86400, 60, 5);
+        add_pd_request(ctx, 60, 50, 0, 86400, 60, 80, 70, 0, 86400, 60, 5);
+        add_pd_request(ctx, 15, 25, 0, 86400, 60, 35, 45, 0, 86400, 60, 5);
+        add_pd_request(ctx, 25, 15, 0, 86400, 60, 45, 35, 0, 86400, 60, 5);
+        add_pd_request(ctx, 55, 65, 0, 86400, 60, 75, 85, 0, 86400, 60, 5);
+        add_pd_request(ctx, 65, 55, 0, 86400, 60, 85, 75, 0, 86400, 60, 5);
+        add_pd_request(ctx, 5, 5, 0, 86400, 60, 90, 90, 0, 86400, 60, 5);
+        add_pd_request(ctx, 45, 45, 0, 86400, 60, 55, 55, 0, 86400, 60, 5);
+
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        unassigned_single = sg_get_unassigned(ctx);
+        veh_single = sg_get_used_vehicle_count(ctx);
+        dist_single = sg_get_total_distance(ctx);
+        sg_free(ctx);
+    }
+
+    /* Parallel solve (explores 4 seeds) */
+    {
+        SGContext *ctx = make_config(200, 42);
+        uint32_t depot;
+        add_depot_with_location(ctx, &depot, 0, 0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 50);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 50);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 50);
+        add_pd_request(ctx, 10, 20, 0, 86400, 60, 30, 40, 0, 86400, 60, 5);
+        add_pd_request(ctx, 50, 60, 0, 86400, 60, 70, 80, 0, 86400, 60, 5);
+        add_pd_request(ctx, 20, 10, 0, 86400, 60, 40, 30, 0, 86400, 60, 5);
+        add_pd_request(ctx, 60, 50, 0, 86400, 60, 80, 70, 0, 86400, 60, 5);
+        add_pd_request(ctx, 15, 25, 0, 86400, 60, 35, 45, 0, 86400, 60, 5);
+        add_pd_request(ctx, 25, 15, 0, 86400, 60, 45, 35, 0, 86400, 60, 5);
+        add_pd_request(ctx, 55, 65, 0, 86400, 60, 75, 85, 0, 86400, 60, 5);
+        add_pd_request(ctx, 65, 55, 0, 86400, 60, 85, 75, 0, 86400, 60, 5);
+        add_pd_request(ctx, 5, 5, 0, 86400, 60, 90, 90, 0, 86400, 60, 5);
+        add_pd_request(ctx, 45, 45, 0, 86400, 60, 55, 55, 0, 86400, 60, 5);
+
+        assert(sg_solve_parallel(ctx, 4) == SG_STATUS_OK);
+        unassigned_parallel = sg_get_unassigned(ctx);
+        veh_parallel = sg_get_used_vehicle_count(ctx);
+        dist_parallel = sg_get_total_distance(ctx);
+        sg_free(ctx);
+    }
+
+    /* Parallel should be at least as good (lexicographic: unassigned, vehicles, distance) */
+    assert(unassigned_parallel <= unassigned_single);
+    if (unassigned_parallel == unassigned_single) {
+        assert(veh_parallel <= veh_single);
+        if (veh_parallel == veh_single) {
+            assert(dist_parallel <= dist_single + 1e-6);
+        }
+    }
+}
+
+static void test_parallel_single_thread_fallback(void) {
+    double dist_single, dist_fallback;
+    uint32_t veh_single, veh_fallback;
+
+    {
+        SGContext *ctx = make_config(200, 42);
+        uint32_t depot;
+        add_depot_with_location(ctx, &depot, 0, 0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_pd_request(ctx, 1, 2, 0, 86400, 10, 3, 4, 0, 86400, 10, 1);
+        add_pd_request(ctx, 5, 6, 0, 86400, 10, 7, 8, 0, 86400, 10, 1);
+
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        dist_single = sg_get_total_distance(ctx);
+        veh_single = sg_get_used_vehicle_count(ctx);
+        sg_free(ctx);
+    }
+
+    {
+        SGContext *ctx = make_config(200, 42);
+        uint32_t depot;
+        add_depot_with_location(ctx, &depot, 0, 0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_pd_request(ctx, 1, 2, 0, 86400, 10, 3, 4, 0, 86400, 10, 1);
+        add_pd_request(ctx, 5, 6, 0, 86400, 10, 7, 8, 0, 86400, 10, 1);
+
+        assert(sg_solve_parallel(ctx, 1) == SG_STATUS_OK);
+        dist_fallback = sg_get_total_distance(ctx);
+        veh_fallback = sg_get_used_vehicle_count(ctx);
+        sg_free(ctx);
+    }
+
+    assert(veh_single == veh_fallback);
+    assert(fabs(dist_single - dist_fallback) < 1e-6);
+}
+
+#endif /* SG_HAS_THREADS */
+
 /* ===== main ===== */
 
 int main(void) {
@@ -8017,8 +8176,20 @@ int main(void) {
     RUN_TEST(test_max_distance_api);
     RUN_TEST(test_max_distance_enforced);
 
+    /* Parallel solving */
+#ifdef SG_HAS_THREADS
+    RUN_TEST(test_parallel_basic);
+    RUN_TEST(test_parallel_deterministic);
+    RUN_TEST(test_parallel_improves_over_single);
+    RUN_TEST(test_parallel_single_thread_fallback);
+#endif
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
+#ifdef SG_HAS_THREADS
+    assert(tests_run == 215);
+#else
     assert(tests_run == 211);
+#endif
     return tests_passed == tests_run ? 0 : 1;
 }

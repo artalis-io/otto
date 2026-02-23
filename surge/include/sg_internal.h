@@ -5,6 +5,7 @@
 
 #include <math.h>
 #include <stddef.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -264,7 +265,7 @@ struct SGContext {
     void *active_solution;  /* Temporary: set during destroy ops needing route access */
     SGRouteSolution *final_solution;  /* Retained after solve for route/stop export */
     double unassigned_weight;
-    uint8_t travel_prepared;
+    _Atomic uint8_t travel_prepared;
     uint8_t avoid_new_vehicles;  /* Phase 1: skip empty vehicles in repair */
     uint8_t has_depot_capacity;  /* 1 if any depot has max_simultaneous > 0 */
     uint32_t num_commodities;          /* 0 = disabled */
@@ -287,7 +288,7 @@ struct SGContext {
     /* Progress callback */
     SGProgressCallback progress_callback;
     void *progress_callback_data;
-    volatile uint8_t cancel_requested;
+    _Atomic uint8_t cancel_requested;
 
     /* Pre-computed arena size for fast solution copy */
     size_t solution_arena_size;

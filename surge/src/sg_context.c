@@ -309,7 +309,7 @@ void sg_free(SGContext *ctx) {
     ctx->num_locations = 0;
     ctx->travel_callback = NULL;
     ctx->travel_callback_data = NULL;
-    ctx->travel_prepared = 0;
+    atomic_store(&ctx->travel_prepared, 0);
 
     if (ctx->final_solution) {
         sg_route_solution_free(ctx->final_solution, NULL);
@@ -1759,6 +1759,7 @@ SGStatus sg_prepare_travel(SGContext *ctx) {
     if (!ctx) {
         return SG_STATUS_INVALID_ARG;
     }
+    if (atomic_load(&ctx->travel_prepared)) return SG_STATUS_OK;
 
     /* Step 1: Auto-assign location_ids to depots/tasks without one */
     for (i = 0; i < ctx->num_depots; i++) {
@@ -1848,7 +1849,7 @@ SGStatus sg_prepare_travel(SGContext *ctx) {
         }
     }
 
-    ctx->travel_prepared = 1;
+    atomic_store(&ctx->travel_prepared, 1);
     return SG_STATUS_OK;
 }
 

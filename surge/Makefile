@@ -13,24 +13,24 @@ endif
 
 # Production build (with hardening)
 # Note: -pie is implicit on macOS, only add on Linux
-CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE \
+CFLAGS = -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE -DSG_HAS_THREADS \
          -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
 ifeq ($(UNAME_S),Linux)
-    LDFLAGS = -lm -pie $(RELRO_FLAGS)
+    LDFLAGS = -lm -lpthread -pie $(RELRO_FLAGS)
 else
-    LDFLAGS = -lm
+    LDFLAGS = -lm -lpthread
 endif
 
 INCLUDES = -Iinclude -I../arbor/include -I../shared/include
 
 # Debug build (with sanitizers)
-DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DDEBUG \
+DEBUG_CFLAGS = -Wall -Wextra -g -O0 -std=c11 -D_GNU_SOURCE -DSG_HAS_THREADS -DDEBUG \
                -fsanitize=address,undefined -fno-omit-frame-pointer
 DEBUG_LDFLAGS = -fsanitize=address,undefined
 
 SRCS = src/sg_context.c src/sg_solution.c src/sg_cost.c src/sg_feasibility.c \
        src/sg_construct.c src/sg_destroy.c src/sg_repair.c src/sg_postprocess.c \
-       src/sg_solve.c src/sg_reader.c src/sg_api.c
+       src/sg_solve.c src/sg_reader.c src/sg_api.c src/sg_parallel.c
 OBJS = $(SRCS:.c=.o)
 
 LIB = libsurge.a
