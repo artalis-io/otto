@@ -116,6 +116,7 @@ SGStatus sg_request_set_setup_class(SGContext *ctx, uint32_t request_id, uint32_
 
 /* U4: Open routes */
 SGStatus sg_vehicle_set_open_end(SGContext *ctx, uint32_t vehicle_id, int open);
+SGStatus sg_vehicle_set_open_start(SGContext *ctx, uint32_t vehicle_id, int open);
 
 /* U5: Max duration and explicit ride time */
 SGStatus sg_vehicle_set_max_duration(SGContext *ctx, uint32_t vehicle_id,

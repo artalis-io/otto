@@ -1318,7 +1318,7 @@ static double sg_compute_depot_overlap_penalty(const SGContext *ctx,
             if (!vehicle->has_depots) continue;
             if (sol->route_stop_lengths[v] == 0) continue;
 
-            if (vehicle->start_depot_id == depot_id && vehicle->depot_loading_seconds > 0) {
+            if (!vehicle->open_start && vehicle->start_depot_id == depot_id && vehicle->depot_loading_seconds > 0) {
                 event_count += 2;
             }
             if (!vehicle->open_end && vehicle->end_depot_id == depot_id &&
@@ -1366,7 +1366,7 @@ static double sg_compute_depot_overlap_penalty(const SGContext *ctx,
             if (sol->route_stop_lengths[v] == 0) continue;
 
             /* Start depot: occupancy [depart - loading_seconds, depart) */
-            if (vehicle->start_depot_id == depot_id && vehicle->depot_loading_seconds > 0) {
+            if (!vehicle->open_start && vehicle->start_depot_id == depot_id && vehicle->depot_loading_seconds > 0) {
                 double depart = sol->route_depot_depart[v];
                 double occupy_start = depart - (double)vehicle->depot_loading_seconds;
                 events[event_count].time = occupy_start;

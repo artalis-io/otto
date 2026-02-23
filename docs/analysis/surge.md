@@ -74,11 +74,13 @@ Current constraint coverage is genuinely rich:
 - Sequence-dependent setup times
 - Commodity conflicts, exclusion groups, qualifications
 - Request-vehicle constraints (allowed/forbidden)
-- Open routes
+- Open routes (open start + open end)
 - Max duration, max tasks, max distance per vehicle
 - Depot capacity (dock limits)
 - Waiting/overtime costs
 - Warm start
+- Time-dependent travel (speed profiles)
+- Per-vehicle travel profiles
 
 This is broader than VROOM (which lacks soft TW, DARP, breaks, multi-trip, setup times). It's comparable to OR-Tools in constraint breadth, though OR-Tools has more flexibility via its CP-SAT backend.
 
@@ -253,13 +255,94 @@ ALNS+SA is the right architecture for Surge's constraint portfolio. HGS is worth
 | Constraint richness | A- | C+ | A | B+ |
 | Deployability | A+ | B+ | C | C- |
 | Binary size / footprint | A+ | B | D | D |
-| Language bindings | B | B | A | B+ |
-| REST API | B+ | B | B | B+ |
+| Language bindings | A- | B | A | B+ |
+| REST API | A | B | B | B+ |
 | Auditability | A | B | D | C |
 | Parallelism | B+ | C | B | B |
 | Community / ecosystem | D | B | A | B+ |
 
-Revised grades vs. initial assessment: Language bindings upgraded from D to B (JSON API *is* the binding; packaging is all that's missing). Parallelism upgraded from D to B+ (independent runs + population-based search implemented). REST API added at B+ (transport-agnostic handler exists, shared infra ready).
+Revised grades vs. initial assessment: Language bindings A- (Python + Node.js bindings exist and work; packaging/distribution remaining). REST API A (Mongoose-based server with rate limiting, work queue, Prometheus metrics, CORS). Parallelism B+ (independent runs + population-based search implemented).
+
+---
+
+## Competitive Gap Analysis: What's Missing to Be GOAT
+
+### Current Benchmark Quality (2026-02-23)
+
+- Solomon (VRPTW, 56 cases): avgVehGap +0.36, avgDistGap +0.4%, 37/56 equal vehicles, lexiNonWorse 11
+- Li & Lim (PDPTW, 57 cases): avgVehGap +0.52, avgDistGap +4.8%, 41/56 equal vehicles, lexiNonWorse 22
+
+### Missing Features — Grouped by Impact
+
+#### Infrastructure (High Impact, Straightforward)
+
+| Gap | Status | Notes |
+|-----|--------|-------|
+| ~~REST API server~~ | **Done** | Mongoose-based, rate limiting, work queue, Prometheus metrics, CORS. E2e test suite added. |
+| ~~WASM build~~ | **Done** | Emscripten target compiles and runs. |
+| ~~Language bindings~~ | **Done** | Python (ctypes) + Node.js (ffi-napi) exist and work. PyPI/npm packaging remaining. |
+
+#### Modelling Gaps vs Competitors
+
+**High Value (would close real deals):**
+
+| Feature | Who Has It | Impact |
+|---------|-----------|--------|
+| ~~**Time-dependent travel**~~ | ~~OR-Tools, PTV, HERE~~ | **Done.** Speed profiles (time-dependent duration multipliers) + per-vehicle travel profiles shipped. |
+| ~~**Open start (no depot)**~~ | ~~OR-Tools, VROOM~~ | **Done.** Vehicle can skip first depot-to-stop leg (open_start flag, symmetric to open_end). |
+| **Global span balancing** | OR-Tools, Ortec, PTV | "Fairness" — minimize longest route or balance workload. Fleet unions/labor contracts care about this. |
+| **Plan/ETA validation mode** | VROOM, HERE | Given a fixed route, validate constraints and report violations. Essential for dispatching integration. |
+
+**Medium Value (niche but differentiating):**
+
+| Feature | Who Has It | Impact |
+|---------|-----------|--------|
+| ~~**Per-vehicle travel matrix**~~ | ~~OR-Tools, VROOM~~ | **Done.** Travel profiles give each vehicle its own distance/duration matrix + speed profile. |
+| **Initial vehicle loads** | jsprit | Vehicle starts pre-loaded (continuation of previous shift). Useful for multi-day planning. |
+| **LIFO/FIFO PD stacking** | OR-Tools | Physical loading constraints — last loaded = first unloaded. Matters for palletized freight. |
+| **Backhaul constraint** | jsprit | All deliveries before pickups on a route. Classic LTL trucking pattern. |
+| **Energy/EV cost model** | OR-Tools (experimental) | Battery constraints, charging stops. Growing fast but still niche. |
+
+#### Solution Quality
+
+The persistent +1 vehicle gap on tight-TW instances (R1, RC1, LR1, LRC1) is the main quality weakness. Phase 1 SA cooling fix and mid-solve ejection pulse helped (equalVehicles up on both benchmarks), but tight-TW instances still consistently overshoot by 1 vehicle.
+
+**What top solvers do differently:**
+- **HGS/PyVRP**: Population diversity + education (local search on infeasible solutions with penalty). Surge's population search is a step toward this but doesn't do infeasible-space exploration.
+- **LKH-3**: Giant-tour with Lin-Kernighan moves. Not applicable to rich VRP but devastating on clean VRPTW.
+- **OR-Tools + CP-SAT**: Can throw exact methods at small neighborhoods. Surge has no exact component (Ralph exists but isn't integrated).
+
+**Realistic next quality moves:**
+1. **Infeasible-space exploration** — accept TW/capacity violations with self-adjusting penalty, letting ALNS explore across feasibility boundaries. This is what makes HGS work on tight instances.
+2. **Parallel move evaluation** — the vehicle loop in insertion ranking is embarrassingly parallel. Would double iteration throughput on multi-core.
+3. **Larger ALNS neighborhoods** — SISR (string removal) is implemented but could be tuned more aggressively.
+
+#### What Commercial Solvers Have That Open-Source Doesn't
+
+This is where PTV, HERE, Ortec, and OptimoRoute play:
+
+| Feature | Notes |
+|---------|-------|
+| **Multi-period/strategic planning** | Plan a week of routes at once. Different beast entirely. |
+| **Vehicle compartments** | Physically divided cargo areas (frozen/chilled/ambient). |
+| **Precedence between requests** | "Deliver A before B" (beyond PD pairing). |
+| **Driver skill calendars** | Driver X available Mon-Wed, certified for hazmat. |
+| **Live re-optimization** | New orders mid-shift, lock committed stops, re-plan remainder. |
+| **Territory/zone assignment** | Assign geographic zones to vehicles before routing. |
+| **Regulatory compliance** | Country-specific HoS rules (EU vs US vs AU), ADR routing restrictions. |
+
+Most of these are **application-layer** concerns, not solver-core. Surge's clean API makes them integrable without changing the solver.
+
+### Priority Stack to GOAT
+
+1. ~~**REST API + WASM + Python binding**~~ — **Done.** Distribution unlocked.
+2. ~~**Time-dependent travel**~~ — **Done.** Speed profiles + per-vehicle travel profiles shipped.
+3. ~~**Per-vehicle travel matrix**~~ — **Done.** Travel profiles.
+4. ~~**Open start**~~ — **Done.** **Validation mode** remains — close the dispatching integration use case.
+5. **Infeasible-space exploration** — the algorithmic lever most likely to close the vehicle gap on tight instances.
+6. **Global span balancing** — table stakes for enterprise fleet contracts.
+
+The constraint richness is ahead of OR-Tools/VROOM. The quality is competitive. The deployability is unmatched. Distribution is solved (REST API, WASM, Python, Node.js). Open start routes now complete the field-service use case. The remaining gap to GOAT is **modelling features** (validation mode, global span balancing) and **algorithmic quality** (infeasible-space exploration).
 
 ---
 
@@ -267,6 +350,6 @@ Revised grades vs. initial assessment: Language bindings upgraded from D to B (J
 
 Surge's strengths are **deployability**, **API cleanliness**, **constraint richness**, and **auditability**. These matter enormously for commercial embedding — if you're selling routing as a feature inside a larger product, Surge is easier to ship than anything else in this space.
 
-Parallelism and population-based search are now implemented. Arena allocation is complete and delivering measurable gains. The remaining quality gap is algorithmic — operator tuning, neighborhood structures, and longer-horizon search strategies.
+Distribution is now solved: REST API server (with rate limiting, work queue, Prometheus metrics), WASM build, Python and Node.js bindings all exist and work. Time-dependent travel (speed profiles) and per-vehicle travel profiles close the two biggest modelling gaps vs competitors. Parallelism, population-based search, and arena allocation are complete. The remaining quality gap is algorithmic — infeasible-space exploration and operator tuning.
 
-The strategic bet is sound: a lean, embeddable, WASM-ready solver with a clean API fills a real gap that OR-Tools (bloated, hard to embed) and VROOM (limited constraints) don't serve well.
+The strategic bet has paid off: a lean, embeddable, WASM-ready solver with a clean API, rich constraints, and full distribution infrastructure. The gap to GOAT is now mostly **algorithmic quality** on tight-TW instances, not infrastructure or modelling.

@@ -184,6 +184,7 @@ typedef struct {
     uint8_t has_shift_time_window;
     uint8_t has_capacity;
     uint8_t open_end;
+    uint8_t open_start;
     int32_t max_duration_seconds;
     uint32_t max_tasks;              /* 0 = unlimited (default) */
     double   max_distance;           /* 0.0 = unlimited (default) */

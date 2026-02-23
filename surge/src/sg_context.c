@@ -1638,6 +1638,14 @@ SGStatus sg_vehicle_set_open_end(SGContext *ctx, uint32_t vehicle_id, int open) 
     return SG_STATUS_OK;
 }
 
+SGStatus sg_vehicle_set_open_start(SGContext *ctx, uint32_t vehicle_id, int open) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->vehicles[vehicle_id].open_start = open ? 1 : 0;
+    return SG_STATUS_OK;
+}
+
 SGStatus sg_vehicle_set_max_duration(SGContext *ctx, uint32_t vehicle_id,
                                       int32_t max_seconds) {
     if (!ctx || vehicle_id >= ctx->num_vehicles || max_seconds < 0) {

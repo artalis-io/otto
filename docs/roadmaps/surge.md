@@ -65,10 +65,17 @@ Surge supports orthogonal constraint dimensions that can be combined freely:
 | Constraint | Description |
 |------------|-------------|
 | **Multiple depots** | Vehicles assigned to different depots |
-| **Open routes** | End anywhere (not return to depot) |
+| **Open routes** | Start/end anywhere (open start + open end) |
 | **Depot capacity** | Max vehicles dispatched per depot |
 | **Depot time windows** | Loading dock availability |
 | **Multi-trip** | Vehicle returns to depot, reloads, serves another route |
+
+### Travel Constraints
+
+| Constraint | Description |
+|------------|-------------|
+| **Time-dependent travel** | Speed profiles: step-function duration multipliers by departure time |
+| **Per-vehicle travel profiles** | Independent distance/duration matrices + speed profile per vehicle type |
 
 ### Objective Components
 
@@ -1171,6 +1178,18 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ### Current Status (as of 2026-02-23)
 
+**Baseline**: U1-U8 + S1-S11 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks + Multi-Trip + Multi-Threading (parallel + population) + SA cooling fix + mid-solve ejection pulse + Speed Profiles + Travel Profiles + Open Start complete. All Tier 1 and Tier 2 production gaps closed. REST API server, WASM build, Python and Node.js bindings exist. 244 tests passing, ASAN/UBSAN clean.
+
+Best measured quality (10000 iterations, deterministic seed 42):
+- Solomon (VRPTW, 56 cases): `solved=56/56`, `avgVehGap=+0.36`, `avgDistGap=+0.4%`, `equalVehicles=37`, `lexiNonWorse=11`.
+- Li & Lim (PDPTW, 57 cases): `solved=57/57`, `avgVehGap=+0.52`, `avgDistGap=+4.8%`, `equalVehicles=41`, `lexiNonWorse=22`.
+
+Implemented features: Everything in previous status plus: time-dependent travel via speed profiles (step-function duration multipliers), per-vehicle travel profiles (independent distance/duration matrices + speed profile per vehicle type), open start routes (skip first depot-to-stop leg, symmetric counterpart to open_end).
+
+Infrastructure: REST API server (Mongoose, rate limiting, work queue, Prometheus metrics, CORS), WASM build (Emscripten), Python bindings (ctypes), Node.js bindings (ffi-napi). REST API e2e test suite.
+
+#### Previous Status (as of 2026-02-23)
+
 **Baseline**: U1-U8 + S1-S11 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks + Multi-Trip + Multi-Threading (parallel + population) + SA cooling fix + mid-solve ejection pulse complete. All Tier 1 and Tier 2 production gaps closed. 224 tests passing, ASAN/UBSAN clean.
 
 Best measured quality (10000 iterations, deterministic seed 42):
@@ -1290,6 +1309,9 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - [x] Mandatory breaks (abstract `max_continuous_work` / `break_duration` / `max_total_work` per vehicle).
 
 - [x] Add optional travel-time/distance matrix API and use it in construction + route feasibility (U1).
+- [x] Speed profiles (time-dependent duration multipliers).
+- [x] Per-vehicle travel profiles (independent distance/duration matrices + speed profile).
+- [x] Open start routes (skip first depot-to-stop leg).
 - [ ] Integrate Velo matrices for realistic routing costs/times.
 - [ ] Keep Ralph exact mode for small instances as baseline verifier.
 

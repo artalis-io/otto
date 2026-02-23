@@ -581,6 +581,14 @@ static int build_vehicles(SGContext *ctx, const ShJsonValue *vehicles_arr) {
             }
         }
 
+        v = sh_json_get(veh, "open_start");
+        if (v) {
+            int os = sh_json_as_bool(v, false) ? 1 : 0;
+            if (sg_vehicle_set_open_start(ctx, id, os) != SG_STATUS_OK) {
+                return -1;
+            }
+        }
+
         v = sh_json_get(veh, "max_duration");
         if (v) {
             int32_t md = sh_json_as_int(v, 0);
