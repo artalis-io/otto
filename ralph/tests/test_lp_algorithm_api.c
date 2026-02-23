@@ -88,7 +88,7 @@ static void test_param_metadata_and_scope(void) {
     ASSERT_INT_EQ(meta.has_max, 1, "params: lp_algorithm has max");
     ASSERT_INT_EQ((int)meta.min_value, (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
                   "params: lp_algorithm min");
-    ASSERT_INT_EQ((int)meta.max_value, (int)RALPH_LP_ALGORITHM_BARRIER,
+    ASSERT_INT_EQ((int)meta.max_value, (int)RALPH_LP_ALGORITHM_BARRIER_EXTERNAL,
                   "params: lp_algorithm max");
 
     memset(&meta, 0, sizeof(meta));
@@ -105,6 +105,20 @@ static void test_param_metadata_and_scope(void) {
     ASSERT_INT_EQ((int)meta.max_value, (int)RALPH_LP_CROSSOVER_ON,
                   "params: barrier_crossover max");
 
+    memset(&meta, 0, sizeof(meta));
+    ASSERT_INT_EQ(ralph_get_param_meta(RALPH_PARAM_LP_EXTERNAL_PROVIDER, &meta), 0,
+                  "params: metadata for lp_external_provider");
+    ASSERT_TRUE(strcmp(meta.name, "lp_external_provider") == 0,
+                "params: lp_external_provider canonical name");
+    ASSERT_INT_EQ((int)meta.scope, (int)RALPH_PARAM_SCOPE_LP,
+                  "params: lp_external_provider LP scope");
+    ASSERT_INT_EQ(meta.has_min, 1, "params: lp_external_provider has min");
+    ASSERT_INT_EQ(meta.has_max, 1, "params: lp_external_provider has max");
+    ASSERT_INT_EQ((int)meta.min_value, (int)RALPH_LP_EXTERNAL_PROVIDER_NONE,
+                  "params: lp_external_provider min");
+    ASSERT_INT_EQ((int)meta.max_value, (int)RALPH_LP_EXTERNAL_PROVIDER_GLOP,
+                  "params: lp_external_provider max");
+
     ASSERT_INT_EQ(ralph_find_param_by_name("lp_algorithm", &pid), 0,
                   "params: find lp_algorithm canonical");
     ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_ALGORITHM,
@@ -113,6 +127,14 @@ static void test_param_metadata_and_scope(void) {
                   "params: find lp_algorithm alias");
     ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_ALGORITHM,
                   "params: lp_algorithm alias id");
+    ASSERT_INT_EQ(ralph_find_param_by_name("lp_external_provider", &pid), 0,
+                  "params: find lp_external_provider canonical");
+    ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+                  "params: lp_external_provider canonical id");
+    ASSERT_INT_EQ(ralph_find_param_by_name("LPExternalProvider", &pid), 0,
+                  "params: find lp_external_provider alias");
+    ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+                  "params: lp_external_provider alias id");
 
     ASSERT_INT_EQ(ralph_set_mip_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                                              (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX),
@@ -122,6 +144,10 @@ static void test_param_metadata_and_scope(void) {
                                              (int)RALPH_LP_CROSSOVER_AUTO),
                   -1,
                   "params: MIP strict rejects barrier crossover id");
+    ASSERT_INT_EQ(ralph_set_mip_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+                                             (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
+                  -1,
+                  "params: MIP strict rejects lp_external_provider id");
 
     ASSERT_INT_EQ(ralph_set_lp_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                                             (int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX),
@@ -148,10 +174,39 @@ static void test_param_metadata_and_scope(void) {
     ASSERT_INT_EQ(value, (int)RALPH_LP_ALGORITHM_AUTO,
                   "params: method remains auto when barrier requested");
 
-    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM, 4), -1,
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+                                         (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL),
+                  0,
+                  "params: external primal algorithm request accepted");
+    ASSERT_INT_EQ(ralph_get_int_param_id(model, RALPH_PARAM_METHOD, &value), 0,
+                  "params: read method after external primal request");
+    ASSERT_INT_EQ(value, (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
+                  "params: method maps to primal for external primal");
+
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+                                         (int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX_EXTERNAL),
+                  0,
+                  "params: external dual algorithm request accepted");
+    ASSERT_INT_EQ(ralph_get_int_param_id(model, RALPH_PARAM_METHOD, &value), 0,
+                  "params: read method after external dual request");
+    ASSERT_INT_EQ(value, (int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX,
+                  "params: method maps to dual for external dual");
+
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+                                         (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
+                  0,
+                  "params: set lp_external_provider by id");
+    ASSERT_INT_EQ(ralph_get_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER, &value), 0,
+                  "params: get lp_external_provider by id");
+    ASSERT_INT_EQ(value, (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK,
+                  "params: lp_external_provider set/get consistent");
+
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM, 7), -1,
                   "params: reject lp_algorithm out of range");
     ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_BARRIER_CROSSOVER, 3), -1,
                   "params: reject barrier_crossover out of range");
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER, 7), -1,
+                  "params: reject lp_external_provider out of range");
 
     ASSERT_INT_EQ(ralph_set_int_param(model, "barrier_crossover",
                                       (int)RALPH_LP_CROSSOVER_ON),
@@ -287,6 +342,54 @@ static void test_crossover_only_fallback_report(void) {
     ralph_free(model);
 }
 
+static void test_external_fallback_report(void) {
+    RalphModel *model = build_small_lp();
+    RalphLPSolveAlgorithmReport report;
+
+    ASSERT_TRUE(model != NULL, "external-fallback: model created");
+    if (!model) return;
+
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+                                         (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL),
+                  0,
+                  "external-fallback: request external primal algorithm");
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+                                         (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
+                  0,
+                  "external-fallback: request external provider GLPK");
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_BARRIER_CROSSOVER,
+                                         (int)RALPH_LP_CROSSOVER_ON),
+                  0,
+                  "external-fallback: request crossover ON");
+
+    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+                  "external-fallback: LP optimize succeeds");
+    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+                  "external-fallback: LP status optimal");
+    ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(model, &report), 0,
+                  "external-fallback: report available");
+
+    ASSERT_INT_EQ((int)report.requested_algorithm,
+                  (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL,
+                  "external-fallback: requested algorithm captured");
+    ASSERT_INT_EQ((int)report.effective_algorithm,
+                  (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
+                  "external-fallback: effective algorithm fallback to internal primal");
+    ASSERT_INT_EQ((int)report.requested_crossover,
+                  (int)RALPH_LP_CROSSOVER_ON,
+                  "external-fallback: requested crossover captured");
+    ASSERT_INT_EQ((int)report.effective_crossover,
+                  (int)RALPH_LP_CROSSOVER_AUTO,
+                  "external-fallback: effective crossover fallback to auto");
+    ASSERT_INT_EQ(report.fallback_applied, 1,
+                  "external-fallback: fallback applied");
+    ASSERT_INT_EQ((int)report.fallback_reason,
+                  (int)RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE,
+                  "external-fallback: fallback reason external unavailable");
+
+    ralph_free(model);
+}
+
 static void test_legacy_method_dispatch_report(void) {
     RalphModel *model = build_small_lp();
     RalphLPSolveAlgorithmReport report;
@@ -355,6 +458,7 @@ int main(void) {
     test_algorithm_report_guards_and_invalidation();
     test_barrier_fallback_report();
     test_crossover_only_fallback_report();
+    test_external_fallback_report();
     test_legacy_method_dispatch_report();
     test_lp_report_rejects_mip_models();
 

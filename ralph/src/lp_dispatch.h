@@ -5,7 +5,10 @@
 
 typedef enum {
     LP_DISPATCH_BACKEND_SIMPLEX = 0,
-    LP_DISPATCH_BACKEND_BARRIER = 1
+    LP_DISPATCH_BACKEND_SIMPLEX_EXTERNAL = 1,
+    LP_DISPATCH_BACKEND_DUAL_SIMPLEX_EXTERNAL = 2,
+    LP_DISPATCH_BACKEND_BARRIER_NATIVE = 3,
+    LP_DISPATCH_BACKEND_BARRIER_EXTERNAL = 4
 } LPDispatchBackend;
 
 typedef struct {
@@ -22,6 +25,7 @@ typedef struct {
 
 int lp_dispatch_algorithm_value_valid(int value);
 int lp_dispatch_crossover_value_valid(int value);
+int lp_dispatch_external_provider_value_valid(int value);
 
 int lp_dispatch_set_requested_algorithm(int requested_algorithm,
                                         int *normalized_algorithm,
@@ -30,9 +34,13 @@ int lp_dispatch_set_requested_algorithm(int requested_algorithm,
 int lp_dispatch_set_requested_crossover(int requested_crossover,
                                         int *normalized_crossover);
 
+int lp_dispatch_set_requested_external_provider(int requested_external_provider,
+                                                int *normalized_external_provider);
+
 void lp_dispatch_get_capabilities(RalphLPCapabilities *caps);
 
 int lp_dispatch_build_plan(int requested_algorithm,
+                           int requested_external_provider,
                            int requested_crossover,
                            LPDispatchPlan *plan);
 

@@ -48,13 +48,31 @@ typedef enum {
     RALPH_MAXIMIZE = -1
 } RalphObjSense;
 
-/* LP algorithm selection API surface (barrier currently capability-gated). */
+/* LP algorithm selection API surface.
+ * Internal-first policy:
+ * - PRIMAL/DUAL/AUTO route to internal simplex backends.
+ * - *_EXTERNAL modes require lp_external_provider + registered adapter match.
+ * Barrier backends are capability-gated. */
 typedef enum {
     RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX = 0,
     RALPH_LP_ALGORITHM_DUAL_SIMPLEX = 1,
     RALPH_LP_ALGORITHM_AUTO = 2,
-    RALPH_LP_ALGORITHM_BARRIER = 3
+    RALPH_LP_ALGORITHM_BARRIER = 3,
+    RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL = 4,
+    RALPH_LP_ALGORITHM_DUAL_SIMPLEX_EXTERNAL = 5,
+    RALPH_LP_ALGORITHM_BARRIER_EXTERNAL = 6
 } RalphLPAlgorithm;
+
+/* External LP backend provider IDs (used by lp_external_provider parameter). */
+typedef enum {
+    RALPH_LP_EXTERNAL_PROVIDER_NONE = 0,
+    RALPH_LP_EXTERNAL_PROVIDER_GLPK = 1,
+    RALPH_LP_EXTERNAL_PROVIDER_HIGHS = 2,
+    RALPH_LP_EXTERNAL_PROVIDER_CLP = 3,
+    RALPH_LP_EXTERNAL_PROVIDER_CPLEX = 4,
+    RALPH_LP_EXTERNAL_PROVIDER_GUROBI = 5,
+    RALPH_LP_EXTERNAL_PROVIDER_GLOP = 6
+} RalphLPExternalProvider;
 
 typedef enum {
     RALPH_LP_CROSSOVER_AUTO = 0,
@@ -65,7 +83,8 @@ typedef enum {
 typedef enum {
     RALPH_LP_FALLBACK_NONE = 0,
     RALPH_LP_FALLBACK_BARRIER_UNAVAILABLE = 1,
-    RALPH_LP_FALLBACK_CROSSOVER_UNAVAILABLE = 2
+    RALPH_LP_FALLBACK_CROSSOVER_UNAVAILABLE = 2,
+    RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE = 3
 } RalphLPFallbackReason;
 
 /* Constants */
@@ -1056,6 +1075,7 @@ typedef enum {
     RALPH_PARAM_PIVOT_TOL,
     RALPH_PARAM_LP_ALGORITHM,
     RALPH_PARAM_BARRIER_CROSSOVER,
+    RALPH_PARAM_LP_EXTERNAL_PROVIDER,
     RALPH_PARAM_COUNT
 } RalphParamId;
 

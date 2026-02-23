@@ -15,6 +15,15 @@ This means current parity discussion vs GLOP should treat API contract maturity 
 remaining runtime/backend gaps. The major open LP backend gap remains real barrier/crossover
 execution (API surface exists; capability is currently gated off with explicit fallback reporting).
 
+## 2026-02-23 Addendum (External Adapter Contract Baseline)
+
+LP external backend routing is now explicit-only:
+- `primal`, `dual`, and `auto` stay on internal simplex by default.
+- External routing requires an explicit external algorithm request and a matching
+  `lp_external_provider` ID.
+- If provider/backend is unavailable or mismatched, solver falls back to internal simplex with
+  `RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE`.
+
 **Date:** 2026-02-11
 **Reference:** [Google OR-Tools GLOP](https://github.com/google/or-tools/tree/stable/ortools/glop)
 
