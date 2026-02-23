@@ -61,6 +61,135 @@ typedef enum {
     RALPH_LP_BASIS_FIXED = 4
 } RalphLPBasisStatus;
 
+/* LP algorithm selection API surface.
+ * Internal-first policy:
+ * - PRIMAL/DUAL/AUTO route to internal simplex backends.
+ * - *_EXTERNAL modes require lp_external_provider + registered adapter match.
+ * Barrier backends are capability-gated. */
+#ifndef RALPH_LP_ALGO_BASE_TYPES_DEFINED
+#define RALPH_LP_ALGO_BASE_TYPES_DEFINED
+typedef enum {
+    RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX = 0,
+    RALPH_LP_ALGORITHM_DUAL_SIMPLEX = 1,
+    RALPH_LP_ALGORITHM_AUTO = 2,
+    RALPH_LP_ALGORITHM_BARRIER = 3,
+    RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL = 4,
+    RALPH_LP_ALGORITHM_DUAL_SIMPLEX_EXTERNAL = 5,
+    RALPH_LP_ALGORITHM_BARRIER_EXTERNAL = 6
+} RalphLPAlgorithm;
+
+/* External LP backend provider IDs (used by lp_external_provider parameter). */
+typedef enum {
+    RALPH_LP_EXTERNAL_PROVIDER_NONE = 0,
+    RALPH_LP_EXTERNAL_PROVIDER_GLPK = 1,
+    RALPH_LP_EXTERNAL_PROVIDER_HIGHS = 2,
+    RALPH_LP_EXTERNAL_PROVIDER_CLP = 3,
+    RALPH_LP_EXTERNAL_PROVIDER_CPLEX = 4,
+    RALPH_LP_EXTERNAL_PROVIDER_GUROBI = 5,
+    RALPH_LP_EXTERNAL_PROVIDER_GLOP = 6
+} RalphLPExternalProvider;
+
+typedef enum {
+    RALPH_LP_CROSSOVER_AUTO = 0,
+    RALPH_LP_CROSSOVER_OFF = 1,
+    RALPH_LP_CROSSOVER_ON = 2
+} RalphLPCrossoverMode;
+
+typedef enum {
+    RALPH_LP_FALLBACK_NONE = 0,
+    RALPH_LP_FALLBACK_BARRIER_UNAVAILABLE = 1,
+    RALPH_LP_FALLBACK_CROSSOVER_UNAVAILABLE = 2,
+    RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE = 3
+} RalphLPFallbackReason;
+#endif /* RALPH_LP_ALGO_BASE_TYPES_DEFINED */
+
+#ifndef RALPH_LP_EXT_REPORT_TYPES_DEFINED
+#define RALPH_LP_EXT_REPORT_TYPES_DEFINED
+typedef struct {
+    int supports_primal_simplex;
+    int supports_dual_simplex;
+    int supports_barrier;
+    int supports_crossover;
+} RalphLPCapabilities;
+
+typedef struct {
+    RalphLPAlgorithm requested_algorithm;
+    RalphLPAlgorithm effective_algorithm;
+    RalphLPCrossoverMode requested_crossover;
+    RalphLPCrossoverMode effective_crossover;
+    int fallback_applied;
+    RalphLPFallbackReason fallback_reason;
+} RalphLPSolveAlgorithmReport;
+
+typedef enum {
+    RALPH_LP_EXTERNAL_BACKEND_SIMPLEX = 0,
+    RALPH_LP_EXTERNAL_BACKEND_DUAL_SIMPLEX = 1,
+    RALPH_LP_EXTERNAL_BACKEND_BARRIER = 2
+} RalphLPExternalBackendKind;
+
+/* Recommended external adapter solve return codes.
+ * Contract:
+ * - `RALPH_LP_EXTERNAL_ADAPTER_RC_OK` means success.
+ * - Any non-zero value means solve failure; unmapped values are treated as generic failures. */
+typedef enum {
+    RALPH_LP_EXTERNAL_ADAPTER_RC_OK = 0,
+    RALPH_LP_EXTERNAL_ADAPTER_RC_ERROR = -1,
+    RALPH_LP_EXTERNAL_ADAPTER_RC_NUMERICAL_FAILURE = -2,
+    RALPH_LP_EXTERNAL_ADAPTER_RC_TIME_LIMIT = -3,
+    RALPH_LP_EXTERNAL_ADAPTER_RC_ITERATION_LIMIT = -4
+} RalphLPExternalAdapterResult;
+
+typedef enum {
+    RALPH_LP_EXTERNAL_FAILURE_STAGE_NONE = 0,
+    RALPH_LP_EXTERNAL_FAILURE_STAGE_DISPATCH = 1,
+    RALPH_LP_EXTERNAL_FAILURE_STAGE_EXECUTION = 2
+} RalphLPExternalFailureStage;
+
+typedef enum {
+    RALPH_LP_EXTERNAL_FAILURE_NONE = 0,
+    RALPH_LP_EXTERNAL_FAILURE_PROVIDER_REQUIRED = 1,
+    RALPH_LP_EXTERNAL_FAILURE_PROVIDER_UNREGISTERED = 2,
+    RALPH_LP_EXTERNAL_FAILURE_BACKEND_UNSUPPORTED = 3,
+    RALPH_LP_EXTERNAL_FAILURE_CAPABILITY_QUERY_FAILED = 4,
+    RALPH_LP_EXTERNAL_FAILURE_ADAPTER_FAILED = 5,
+    RALPH_LP_EXTERNAL_FAILURE_ADAPTER_NUMERICAL_FAILURE = 6,
+    RALPH_LP_EXTERNAL_FAILURE_ADAPTER_TIME_LIMIT = 7,
+    RALPH_LP_EXTERNAL_FAILURE_ADAPTER_ITERATION_LIMIT = 8
+} RalphLPExternalFailureReason;
+
+typedef struct {
+    int supports_simplex;
+    int supports_dual_simplex;
+    int supports_barrier;
+    int supports_crossover;
+} RalphLPExternalCapabilities;
+
+#define RALPH_LP_EXTERNAL_ADAPTER_ABI_VERSION 1
+
+typedef struct {
+    int abi_version;
+    RalphLPExternalProvider provider;
+    const char *provider_name;  /* Optional override; may be NULL. */
+    int (*get_capabilities)(RalphLPExternalCapabilities *caps, void *user_data);
+    int (*solve)(RalphLPExternalBackendKind backend, void *solver_handle, void *user_data);
+    void *user_data;
+} RalphLPExternalAdapter;
+
+typedef struct {
+    RalphLPExternalFailureStage stage;
+    RalphLPExternalFailureReason reason;
+    RalphLPAlgorithm requested_algorithm;
+    RalphLPAlgorithm effective_algorithm;
+    RalphLPExternalProvider requested_provider;
+    RalphLPExternalProvider effective_provider;
+    RalphLPExternalBackendKind backend;
+    RalphLPFallbackReason fallback_reason;
+    int adapter_return_code;
+    RalphLPStatus mapped_status;
+    int fatal;
+} RalphLPExternalFailureReport;
+#endif /* RALPH_LP_EXT_REPORT_TYPES_DEFINED */
+
 /* Opaque LP model/basis handles (same underlying engine types). */
 typedef struct RalphModel RalphLPModel;
 typedef struct RalphBasis RalphLPBasis;
@@ -96,6 +225,33 @@ int ralph_lp_get_var_bounds(const RalphLPModel *model, int var, double *lb, doub
 
 /* Solve */
 int ralph_lp_optimize(RalphLPModel *model);
+
+/* LP algorithm/capability and external-adapter reports. */
+int ralph_lp_get_capabilities(RalphLPCapabilities *caps);
+int ralph_lp_get_last_algorithm_report(const RalphLPModel *model,
+                                       RalphLPSolveAlgorithmReport *report);
+int ralph_lp_get_last_external_failure_report(const RalphLPModel *model,
+                                              RalphLPExternalFailureReport *report);
+
+/* External adapter registration/query API.
+ * Contract:
+ * - Multiple providers may be registered concurrently.
+ * - External LP dispatch still requires explicit external algorithm request +
+ *   matching lp_external_provider parameter. */
+const char* ralph_lp_external_provider_name(RalphLPExternalProvider provider);
+int ralph_lp_external_provider_capabilities(RalphLPExternalProvider provider,
+                                            RalphLPExternalCapabilities *caps);
+int ralph_lp_external_registered_providers(RalphLPExternalProvider *providers,
+                                           int capacity,
+                                           int *count_out);
+int ralph_lp_external_register_adapter(const RalphLPExternalAdapter *adapter);
+/* Register GLPK as an out-of-process adapter via `glpsol` (no in-process libglpk link).
+ * `glpsol_path == NULL` means PATH lookup. */
+int ralph_lp_external_register_glpk_oop(const char *glpsol_path);
+int ralph_lp_external_unregister_adapter(RalphLPExternalProvider provider);
+int ralph_lp_external_unregister_glpk_oop(void);
+void ralph_lp_external_unregister_all_adapters(void);
+int ralph_lp_external_is_adapter_registered(RalphLPExternalProvider provider);
 
 /* Solution queries */
 RalphLPStatus ralph_lp_get_status(const RalphLPModel *model);

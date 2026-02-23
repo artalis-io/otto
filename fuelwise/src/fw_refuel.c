@@ -10,7 +10,8 @@
 #include <stdio.h>
 #include <stdint.h>
 #include "fw_refuel.h"
-#include "ralph.h"
+#include "ralph_lp.h"
+#include "ralph_mip.h"
 
 /* Maximum stations to prevent integer overflow in allocations */
 #define FW_MAX_STATIONS 100000
@@ -103,13 +104,13 @@ int fw_solve_refuel_lp(
 
     int num_vars = 2 * k;
 
-    RalphModel *model = ralph_create();
+    RalphLPModel *model = ralph_lp_create();
     if (!model) {
         solution->status = FW_STATUS_ERROR;
         return -1;
     }
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_lp_set_obj_sense(model, RALPH_LP_OBJ_MINIMIZE);
 
     int x_start = 0;
     int y_start = k;
@@ -122,13 +123,13 @@ int fw_solve_refuel_lp(
     double est_price = problem->remaining_fuel_value;
     for (int i = 0; i < k; i++) {
         double obj_coeff = problem->stations[i].price - est_price;
-        ralph_add_var(model, 0.0, problem->tank_capacity, obj_coeff, RALPH_CONTINUOUS);
+        ralph_lp_add_var(model, 0.0, problem->tank_capacity, obj_coeff, RALPH_LP_VAR_CONTINUOUS);
     }
 
     /* Add y[i] variables - cumulative fuel before arriving */
     double y_upper = problem->current_fuel + k * problem->tank_capacity;
     for (int i = 0; i < k; i++) {
-        ralph_add_var(model, 0.0, y_upper, 0.0, RALPH_CONTINUOUS);
+        ralph_lp_add_var(model, 0.0, y_upper, 0.0, RALPH_LP_VAR_CONTINUOUS);
     }
 
     /* Constraint: Fuel balance - y[i] = fuel_current + sum(x[j] for j < i) */
@@ -139,7 +140,7 @@ int fw_solve_refuel_lp(
         if (!indices || !values) {
             free(indices);
             free(values);
-            ralph_free(model);
+            ralph_lp_free(model);
             solution->status = FW_STATUS_ERROR;
             return -1;
         }
@@ -152,7 +153,7 @@ int fw_solve_refuel_lp(
             values[1 + j] = -1.0;
         }
 
-        ralph_add_constraint(model, nnz, indices, values, RALPH_EQUAL, problem->current_fuel);
+        ralph_lp_add_constraint(model, nnz, indices, values, RALPH_LP_SENSE_EQUAL, problem->current_fuel);
         free(indices);
         free(values);
     }
@@ -165,7 +166,7 @@ int fw_solve_refuel_lp(
             problem->stations[i].distance_from_start);
         double rhs = problem->minimum_fuel + fuel_consumed;
 
-        ralph_add_constraint(model, 1, indices, values, RALPH_GREATER_EQUAL, rhs);
+        ralph_lp_add_constraint(model, 1, indices, values, RALPH_LP_SENSE_GREATER_EQUAL, rhs);
     }
 
     /* Constraint: Tank capacity after refueling */
@@ -176,7 +177,7 @@ int fw_solve_refuel_lp(
             problem->stations[i].distance_from_start);
         double rhs = problem->tank_capacity + fuel_consumed;
 
-        ralph_add_constraint(model, 2, indices, values, RALPH_LESS_EQUAL, rhs);
+        ralph_lp_add_constraint(model, 2, indices, values, RALPH_LP_SENSE_LESS_EQUAL, rhs);
     }
 
     /* Constraint: Must reach destination with minimum fuel at end */
@@ -186,7 +187,7 @@ int fw_solve_refuel_lp(
         if (!indices || !values) {
             free(indices);
             free(values);
-            ralph_free(model);
+            ralph_lp_free(model);
             solution->status = FW_STATUS_ERROR;
             return -1;
         }
@@ -202,7 +203,7 @@ int fw_solve_refuel_lp(
         double rhs = min_end + total_fuel_needed - problem->current_fuel;
 
         if (rhs > 0) {
-            ralph_add_constraint(model, k, indices, values, RALPH_GREATER_EQUAL, rhs);
+            ralph_lp_add_constraint(model, k, indices, values, RALPH_LP_SENSE_GREATER_EQUAL, rhs);
         }
 
         free(indices);
@@ -210,18 +211,18 @@ int fw_solve_refuel_lp(
     }
 
     /* Solve */
-    ralph_set_int_param(model, "verbose", 0);
-    int ret = ralph_optimize(model);
-    RalphStatus status = ralph_get_status(model);
+    ralph_lp_set_int_param(model, "verbose", 0);
+    int ret = ralph_lp_optimize(model);
+    RalphLPStatus status = ralph_lp_get_status(model);
 
-    if (ret == 0 && status == RALPH_STATUS_OPTIMAL) {
+    if (ret == 0 && status == RALPH_LP_STATUS_OPTIMAL) {
         double *x = malloc(num_vars * sizeof(double));
         if (!x) {
-            ralph_free(model);
+            ralph_lp_free(model);
             solution->status = FW_STATUS_ERROR;
             return -1;
         }
-        ralph_get_solution(model, x);
+        ralph_lp_get_solution(model, x);
 
         /* Allocate solution arrays */
         solution->purchases = malloc(k * sizeof(double));
@@ -230,7 +231,7 @@ int fw_solve_refuel_lp(
             free(x);
             free(solution->purchases);
             free(solution->stop_flags);
-            ralph_free(model);
+            ralph_lp_free(model);
             solution->status = FW_STATUS_ERROR;
             return -1;
         }
@@ -265,18 +266,18 @@ int fw_solve_refuel_lp(
         solution->status = FW_STATUS_OPTIMAL;
 
         free(x);
-        ralph_free(model);
+        ralph_lp_free(model);
         return 0;
     }
 
     /* Handle failure */
-    if (status == RALPH_STATUS_INFEASIBLE) {
+    if (status == RALPH_LP_STATUS_INFEASIBLE) {
         solution->status = FW_STATUS_INFEASIBLE;
     } else {
         solution->status = FW_STATUS_ERROR;
     }
 
-    ralph_free(model);
+    ralph_lp_free(model);
     return -1;
 }
 
@@ -385,7 +386,7 @@ static void fw_compute_reach_intervals(FWReachCutContext *ctx,
 }
 
 /*
- * Cut callback matching RalphCutCallback signature.
+ * Cut callback matching RalphMIPCutCallback signature.
  * Checks each precomputed interval; if sum(z[j]) < 1 - eps in the LP
  * relaxation, adds cut sum(z[j]) >= 1.
  */
@@ -393,7 +394,7 @@ static int fw_reach_cut_generate(
     void *user_data,
     const double *x_relaxation,
     int num_vars,
-    RalphCut *cuts,
+    RalphMIPCut *cuts,
     int max_cuts)
 {
     FWReachCutContext *ctx = (FWReachCutContext*)user_data;
@@ -427,7 +428,7 @@ static int fw_reach_cut_generate(
             cuts[num_cuts].indices = ctx->scratch_indices;
             cuts[num_cuts].coeffs = ctx->scratch_coeffs;
             cuts[num_cuts].num_vars = nnz;
-            cuts[num_cuts].sense = RALPH_GREATER_EQUAL;
+            cuts[num_cuts].sense = RALPH_LP_SENSE_GREATER_EQUAL;
             cuts[num_cuts].rhs = 1.0;
             num_cuts++;
 
@@ -441,7 +442,7 @@ static int fw_reach_cut_generate(
 }
 
 /*
- * Configure MIP hints on a RalphModel: priorities, directions, cut callback,
+ * Configure MIP hints on a RalphLPModel: priorities, directions, cut callback,
  * presolve (mandatory station fixing, dominated station elimination),
  * and symmetry-breaking constraints.
  *
@@ -452,18 +453,19 @@ static int fw_reach_cut_generate(
  *           fix z[i]=0 for dominated expensive stations.
  * Symmetry: z[i] >= z[i+1] for equal-price adjacent pairs.
  */
-static void fw_setup_mip_hints(RalphModel *model,
+static void fw_setup_mip_hints(RalphMIPModel *model,
                                 const FWRefuelProblem *problem,
                                 int k, int z_start,
                                 FWReachCutContext *cut_ctx)
 {
     int flags = fw_mip_hint_flags;
-    int num_vars = ralph_get_num_vars(model);
+    int num_vars = ralph_lp_get_num_vars(model);
 
     /* Compute median price for direction threshold */
     double *prices = (double*)malloc(k * sizeof(double));
     int *priorities = (int*)calloc(num_vars, sizeof(int));
-    int *directions = (int*)calloc(num_vars, sizeof(int));
+    RalphMIPBranchDirection *directions =
+        (RalphMIPBranchDirection*)calloc(num_vars, sizeof(RalphMIPBranchDirection));
 
     if (!prices || !priorities || !directions) {
         free(prices);
@@ -499,16 +501,16 @@ static void fw_setup_mip_hints(RalphModel *model,
 
             /* Cheap stations: try z=1 first; expensive: try z=0 first */
             if (price <= median_price) {
-                directions[z_start + i] = RALPH_BRANCH_UP;
+                directions[z_start + i] = RALPH_MIP_BRANCH_UP;
             } else {
-                directions[z_start + i] = RALPH_BRANCH_DOWN;
+                directions[z_start + i] = RALPH_MIP_BRANCH_DOWN;
             }
         }
 
         if (!(flags & FW_HINT_NO_PRIORITIES))
-            ralph_set_branch_priorities(model, priorities);
+            ralph_mip_set_branch_priorities(model, priorities);
         if (!(flags & FW_HINT_NO_DIRECTIONS))
-            ralph_set_branch_directions(model, directions);
+            ralph_mip_set_branch_directions(model, directions);
     }
 
     free(priorities);
@@ -523,10 +525,10 @@ static void fw_setup_mip_hints(RalphModel *model,
     fw_compute_reach_intervals(cut_ctx, problem, k);
 
     if (!(flags & FW_HINT_NO_REACH_CUTS) && cut_ctx->num_intervals > 0) {
-        RalphCutCallback cb;
+        RalphMIPCutCallback cb;
         cb.generate_cuts = fw_reach_cut_generate;
         cb.user_data = cut_ctx;
-        ralph_set_cut_callback(model, &cb);
+        ralph_mip_set_cut_callback(model, &cb);
     }
 
     /* ================================================================
@@ -554,7 +556,7 @@ static void fw_setup_mip_hints(RalphModel *model,
                 int end = cut_ctx->interval_end[iv];
                 if (end - start == 1) {
                     is_mandatory[start] = 1;
-                    ralph_set_var_bounds(model, z_start + start, 1.0, 1.0);
+                    ralph_lp_set_var_bounds(model, z_start + start, 1.0, 1.0);
                 }
             }
         }
@@ -601,7 +603,7 @@ static void fw_setup_mip_hints(RalphModel *model,
 
                 if (safe) {
                     is_fixed_zero[i] = 1;
-                    ralph_set_var_bounds(model, z_start + i, 0.0, 0.0);
+                    ralph_lp_set_var_bounds(model, z_start + i, 0.0, 0.0);
                 }
             }
         }
@@ -629,7 +631,7 @@ static void fw_setup_mip_hints(RalphModel *model,
                 /* z[i] - z[i+1] >= 0: prefer earlier station */
                 int indices[2] = {z_start + i, z_start + i + 1};
                 double values[2] = {1.0, -1.0};
-                ralph_add_constraint(model, 2, indices, values, RALPH_GREATER_EQUAL, 0.0);
+                ralph_lp_add_constraint(model, 2, indices, values, RALPH_LP_SENSE_GREATER_EQUAL, 0.0);
             }
         }
     }
@@ -655,17 +657,17 @@ static void fw_free_cut_context(FWReachCutContext *ctx)
  * Used by both fw_solve_refuel_milp() and fw_export_milp_lp().
  *
  * Variable layout: x[0..k-1] purchases, y[k..2k-1] cumulative, z[2k..3k-1] binary
- * Returns RalphModel* on success, NULL on error.
+ * Returns RalphLPModel* on success, NULL on error.
  * ============================================================================ */
 
-static RalphModel *fw_build_milp_model(const FWRefuelProblem *problem)
+static RalphMIPModel *fw_build_milp_model(const FWRefuelProblem *problem)
 {
     int k = problem->num_stations;
 
-    RalphModel *model = ralph_create();
+    RalphMIPModel *model = ralph_mip_create();
     if (!model) return NULL;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_lp_set_obj_sense(model, RALPH_LP_OBJ_MINIMIZE);
 
     int x_start = 0;
     int y_start = k;
@@ -675,18 +677,18 @@ static RalphModel *fw_build_milp_model(const FWRefuelProblem *problem)
     double est_price = problem->remaining_fuel_value;
     for (int i = 0; i < k; i++) {
         double obj_coeff = problem->stations[i].price - est_price;
-        ralph_add_var(model, 0.0, problem->tank_capacity, obj_coeff, RALPH_CONTINUOUS);
+        ralph_lp_add_var(model, 0.0, problem->tank_capacity, obj_coeff, RALPH_LP_VAR_CONTINUOUS);
     }
 
     /* Add y[i] variables - cumulative fuel before arriving */
     double y_upper = problem->current_fuel + k * problem->tank_capacity;
     for (int i = 0; i < k; i++) {
-        ralph_add_var(model, 0.0, y_upper, 0.0, RALPH_CONTINUOUS);
+        ralph_lp_add_var(model, 0.0, y_upper, 0.0, RALPH_LP_VAR_CONTINUOUS);
     }
 
     /* Add z[i] variables - binary stop indicators with stop_cost in objective */
     for (int i = 0; i < k; i++) {
-        ralph_add_var(model, 0.0, 1.0, problem->stop_cost, RALPH_BINARY);
+        ralph_lp_add_var(model, 0.0, 1.0, problem->stop_cost, RALPH_LP_VAR_BINARY);
     }
 
     /* Constraint: Fuel balance */
@@ -697,7 +699,7 @@ static RalphModel *fw_build_milp_model(const FWRefuelProblem *problem)
         if (!indices || !values) {
             free(indices);
             free(values);
-            ralph_free(model);
+            ralph_mip_free(model);
             return NULL;
         }
 
@@ -709,7 +711,7 @@ static RalphModel *fw_build_milp_model(const FWRefuelProblem *problem)
             values[1 + j] = -1.0;
         }
 
-        ralph_add_constraint(model, nnz, indices, values, RALPH_EQUAL, problem->current_fuel);
+        ralph_lp_add_constraint(model, nnz, indices, values, RALPH_LP_SENSE_EQUAL, problem->current_fuel);
         free(indices);
         free(values);
     }
@@ -722,7 +724,7 @@ static RalphModel *fw_build_milp_model(const FWRefuelProblem *problem)
             problem->stations[i].distance_from_start);
         double rhs = problem->minimum_fuel + fuel_consumed;
 
-        ralph_add_constraint(model, 1, indices, values, RALPH_GREATER_EQUAL, rhs);
+        ralph_lp_add_constraint(model, 1, indices, values, RALPH_LP_SENSE_GREATER_EQUAL, rhs);
     }
 
     /* Constraint: Tank capacity after refueling */
@@ -733,7 +735,7 @@ static RalphModel *fw_build_milp_model(const FWRefuelProblem *problem)
             problem->stations[i].distance_from_start);
         double rhs = problem->tank_capacity + fuel_consumed;
 
-        ralph_add_constraint(model, 2, indices, values, RALPH_LESS_EQUAL, rhs);
+        ralph_lp_add_constraint(model, 2, indices, values, RALPH_LP_SENSE_LESS_EQUAL, rhs);
     }
 
     /* Constraint: Link x[i] to z[i] - x[i] <= max * z[i] */
@@ -741,7 +743,7 @@ static RalphModel *fw_build_milp_model(const FWRefuelProblem *problem)
         int indices[2] = {x_start + i, z_start + i};
         double values[2] = {1.0, -problem->tank_capacity};
 
-        ralph_add_constraint(model, 2, indices, values, RALPH_LESS_EQUAL, 0.0);
+        ralph_lp_add_constraint(model, 2, indices, values, RALPH_LP_SENSE_LESS_EQUAL, 0.0);
     }
 
     /* Constraint: Minimum purchase if stopping - x[i] >= min_purchase * z[i] */
@@ -750,7 +752,7 @@ static RalphModel *fw_build_milp_model(const FWRefuelProblem *problem)
             int indices[2] = {x_start + i, z_start + i};
             double values[2] = {1.0, -problem->min_purchase};
 
-            ralph_add_constraint(model, 2, indices, values, RALPH_GREATER_EQUAL, 0.0);
+            ralph_lp_add_constraint(model, 2, indices, values, RALPH_LP_SENSE_GREATER_EQUAL, 0.0);
         }
     }
 
@@ -761,7 +763,7 @@ static RalphModel *fw_build_milp_model(const FWRefuelProblem *problem)
         if (!indices || !values) {
             free(indices);
             free(values);
-            ralph_free(model);
+            ralph_mip_free(model);
             return NULL;
         }
 
@@ -776,7 +778,7 @@ static RalphModel *fw_build_milp_model(const FWRefuelProblem *problem)
         double rhs = min_end + total_fuel_needed - problem->current_fuel;
 
         if (rhs > 0) {
-            ralph_add_constraint(model, k, indices, values, RALPH_GREATER_EQUAL, rhs);
+            ralph_lp_add_constraint(model, k, indices, values, RALPH_LP_SENSE_GREATER_EQUAL, rhs);
         }
 
         free(indices);
@@ -797,11 +799,11 @@ int fw_export_milp_lp(const FWRefuelProblem *problem, const char *path)
     int k = problem->num_stations;
     if (k <= 0 || k > FW_MAX_STATIONS) return -1;
 
-    RalphModel *model = fw_build_milp_model(problem);
+    RalphMIPModel *model = fw_build_milp_model(problem);
     if (!model) return -1;
 
-    int rc = ralph_write_lp(model, path);
-    ralph_free(model);
+    int rc = ralph_lp_write_lp(model, path);
+    ralph_mip_free(model);
     return rc;
 }
 
@@ -839,7 +841,7 @@ int fw_solve_refuel_milp(
     double est_price = problem->remaining_fuel_value;
 
     /* Build the raw MILP model */
-    RalphModel *model = fw_build_milp_model(problem);
+    RalphMIPModel *model = fw_build_milp_model(problem);
     if (!model) {
         solution->status = FW_STATUS_ERROR;
         return -1;
@@ -852,29 +854,29 @@ int fw_solve_refuel_milp(
     /* Solve */
     int fw_verbose = (getenv("FW_VERBOSE") != NULL);
     int fw_debug = (getenv("FW_DEBUG") != NULL);
-    ralph_set_int_param(model, "verbose", fw_debug ? 2 : (fw_verbose ? 1 : 0));
-    ralph_set_int_param(model, "max_cut_rounds", 3);
+    ralph_mip_set_int_param(model, "verbose", fw_debug ? 2 : (fw_verbose ? 1 : 0));
+    ralph_mip_set_int_param(model, "max_cut_rounds", 3);
     if (fw_presolve) {
-        ralph_set_int_param(model, "presolve", 1);
-        ralph_set_int_param(model, "presolve_mask", (int)fw_presolve_mask);
+        ralph_mip_set_int_param(model, "presolve", 1);
+        ralph_mip_set_int_param(model, "presolve_mask", (int)fw_presolve_mask);
     }
-    int ret = ralph_optimize(model);
-    RalphStatus status = ralph_get_status(model);
+    int ret = ralph_mip_optimize(model);
+    RalphLPStatus status = ralph_mip_get_status(model);
     if (fw_verbose) {
         printf("  [fw] k=%d vars=%d nodes=%d status=%d\n",
-               k, num_vars, ralph_get_node_count(model), (int)status);
+               k, num_vars, ralph_mip_get_node_count(model), (int)status);
     }
 
     fw_free_cut_context(&cut_ctx);
 
-    if (ret == 0 && status == RALPH_STATUS_OPTIMAL) {
+    if (ret == 0 && status == RALPH_LP_STATUS_OPTIMAL) {
         double *x = malloc(num_vars * sizeof(double));
         if (!x) {
-            ralph_free(model);
+            ralph_mip_free(model);
             solution->status = FW_STATUS_ERROR;
             return -1;
         }
-        ralph_get_solution(model, x);
+        ralph_mip_get_solution(model, x);
 
         /* Allocate solution arrays */
         solution->purchases = malloc(k * sizeof(double));
@@ -883,7 +885,7 @@ int fw_solve_refuel_milp(
             free(x);
             free(solution->purchases);
             free(solution->stop_flags);
-            ralph_free(model);
+            ralph_mip_free(model);
             solution->status = FW_STATUS_ERROR;
             return -1;
         }
@@ -922,25 +924,25 @@ int fw_solve_refuel_milp(
         solution->status = FW_STATUS_OPTIMAL;
 
         free(x);
-        ralph_free(model);
+        ralph_mip_free(model);
         return 0;
     }
 
     /* Handle failure */
-    if (status == RALPH_STATUS_INFEASIBLE) {
+    if (status == RALPH_LP_STATUS_INFEASIBLE) {
         solution->status = FW_STATUS_INFEASIBLE;
     } else {
         solution->status = FW_STATUS_ERROR;
     }
 
-    ralph_free(model);
+    ralph_mip_free(model);
     return -1;
 }
 
 /* ============================================================================
  * Refueling Problem Solving - Benders Decomposition
  *
- * True Benders decomposition using ralph_solve_benders():
+ * True Benders decomposition using ralph_mip_solve_benders():
  * - Master problem: binary z[i] variables (stop decisions) + θ (recourse cost)
  * - Subproblem: continuous x[i] (purchases), y[i] (cumulative fuel)
  * - Linking constraints: x[i] <= tank_capacity * z[i], x[i] >= min_purchase * z[i]
@@ -1023,30 +1025,30 @@ int fw_solve_refuel_benders(
     int theta_idx = 3 * k;
     int num_vars = 3 * k + 1;
 
-    RalphModel *model = ralph_create();
+    RalphMIPModel *model = ralph_mip_create();
     if (!model) {
         solution->status = FW_STATUS_ERROR;
         return -1;
     }
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_lp_set_obj_sense(model, RALPH_LP_OBJ_MINIMIZE);
 
     /* Add x[i] variables - fuel purchased (subproblem) */
     double est_price = problem->remaining_fuel_value;
     for (int i = 0; i < k; i++) {
         double obj_coeff = problem->stations[i].price - est_price;
-        ralph_add_var(model, 0.0, problem->tank_capacity, obj_coeff, RALPH_CONTINUOUS);
+        ralph_lp_add_var(model, 0.0, problem->tank_capacity, obj_coeff, RALPH_LP_VAR_CONTINUOUS);
     }
 
     /* Add y[i] variables - cumulative fuel (subproblem) */
     double y_upper = problem->current_fuel + k * problem->tank_capacity;
     for (int i = 0; i < k; i++) {
-        ralph_add_var(model, 0.0, y_upper, 0.0, RALPH_CONTINUOUS);
+        ralph_lp_add_var(model, 0.0, y_upper, 0.0, RALPH_LP_VAR_CONTINUOUS);
     }
 
     /* Add z[i] variables - stop decisions (master) with stop_cost in objective */
     for (int i = 0; i < k; i++) {
-        ralph_add_var(model, 0.0, 1.0, problem->stop_cost, RALPH_BINARY);
+        ralph_lp_add_var(model, 0.0, 1.0, problem->stop_cost, RALPH_LP_VAR_BINARY);
     }
 
     /* Add θ variable - recourse cost (master) */
@@ -1066,7 +1068,7 @@ int fw_solve_refuel_benders(
     double theta_bound = 100.0 * (max_fuel_value + 1.0);  /* Safety margin */
     double theta_lb = -theta_bound;
     double theta_ub = theta_bound;
-    ralph_add_var(model, theta_lb, theta_ub, 1.0, RALPH_CONTINUOUS);
+    ralph_lp_add_var(model, theta_lb, theta_ub, 1.0, RALPH_LP_VAR_CONTINUOUS);
 
     /* Constraint: Fuel balance - y[i] = current_fuel + sum(x[j] for j < i) */
     for (int i = 0; i < k; i++) {
@@ -1076,7 +1078,7 @@ int fw_solve_refuel_benders(
         if (!indices || !values) {
             free(indices);
             free(values);
-            ralph_free(model);
+            ralph_mip_free(model);
             solution->status = FW_STATUS_ERROR;
             return -1;
         }
@@ -1089,7 +1091,7 @@ int fw_solve_refuel_benders(
             values[1 + j] = -1.0;
         }
 
-        ralph_add_constraint(model, nnz, indices, values, RALPH_EQUAL, problem->current_fuel);
+        ralph_lp_add_constraint(model, nnz, indices, values, RALPH_LP_SENSE_EQUAL, problem->current_fuel);
         free(indices);
         free(values);
     }
@@ -1102,7 +1104,7 @@ int fw_solve_refuel_benders(
             problem->stations[i].distance_from_start);
         double rhs = problem->minimum_fuel + fuel_consumed;
 
-        ralph_add_constraint(model, 1, indices, values, RALPH_GREATER_EQUAL, rhs);
+        ralph_lp_add_constraint(model, 1, indices, values, RALPH_LP_SENSE_GREATER_EQUAL, rhs);
     }
 
     /* Constraint: Tank capacity after refuel */
@@ -1113,7 +1115,7 @@ int fw_solve_refuel_benders(
             problem->stations[i].distance_from_start);
         double rhs = problem->tank_capacity + fuel_consumed;
 
-        ralph_add_constraint(model, 2, indices, values, RALPH_LESS_EQUAL, rhs);
+        ralph_lp_add_constraint(model, 2, indices, values, RALPH_LP_SENSE_LESS_EQUAL, rhs);
     }
 
     /* Linking constraint: x[i] <= tank_capacity * z[i]
@@ -1122,7 +1124,7 @@ int fw_solve_refuel_benders(
         int indices[2] = {x_start + i, z_start + i};
         double values[2] = {1.0, -problem->tank_capacity};
 
-        ralph_add_constraint(model, 2, indices, values, RALPH_LESS_EQUAL, 0.0);
+        ralph_lp_add_constraint(model, 2, indices, values, RALPH_LP_SENSE_LESS_EQUAL, 0.0);
     }
 
     /* Linking constraint: x[i] >= min_purchase * z[i] (if min_purchase > 0)
@@ -1132,7 +1134,7 @@ int fw_solve_refuel_benders(
             int indices[2] = {x_start + i, z_start + i};
             double values[2] = {1.0, -problem->min_purchase};
 
-            ralph_add_constraint(model, 2, indices, values, RALPH_GREATER_EQUAL, 0.0);
+            ralph_lp_add_constraint(model, 2, indices, values, RALPH_LP_SENSE_GREATER_EQUAL, 0.0);
         }
     }
 
@@ -1143,7 +1145,7 @@ int fw_solve_refuel_benders(
         if (!indices || !values) {
             free(indices);
             free(values);
-            ralph_free(model);
+            ralph_mip_free(model);
             solution->status = FW_STATUS_ERROR;
             return -1;
         }
@@ -1159,7 +1161,7 @@ int fw_solve_refuel_benders(
         double rhs = min_end + total_fuel_needed - problem->current_fuel;
 
         if (rhs > 0) {
-            ralph_add_constraint(model, k, indices, values, RALPH_GREATER_EQUAL, rhs);
+            ralph_lp_add_constraint(model, k, indices, values, RALPH_LP_SENSE_GREATER_EQUAL, rhs);
         }
 
         free(indices);
@@ -1177,7 +1179,7 @@ int fw_solve_refuel_benders(
         if (!indices || !values) {
             free(indices);
             free(values);
-            ralph_free(model);
+            ralph_mip_free(model);
             solution->status = FW_STATUS_ERROR;
             return -1;
         }
@@ -1187,7 +1189,7 @@ int fw_solve_refuel_benders(
             values[i] = 1.0;
         }
 
-        ralph_add_constraint(model, k, indices, values, RALPH_GREATER_EQUAL, 0.0);
+        ralph_lp_add_constraint(model, k, indices, values, RALPH_LP_SENSE_GREATER_EQUAL, 0.0);
         free(indices);
         free(values);
     }
@@ -1216,7 +1218,7 @@ int fw_solve_refuel_benders(
             if (!indices || !values) {
                 free(indices);
                 free(values);
-                ralph_free(model);
+                ralph_mip_free(model);
                 solution->status = FW_STATUS_ERROR;
                 return -1;
             }
@@ -1226,7 +1228,7 @@ int fw_solve_refuel_benders(
                 values[j] = 1.0;
             }
 
-            ralph_add_constraint(model, i, indices, values, RALPH_GREATER_EQUAL, 1.0);
+            ralph_lp_add_constraint(model, i, indices, values, RALPH_LP_SENSE_GREATER_EQUAL, 1.0);
             free(indices);
             free(values);
         }
@@ -1252,7 +1254,7 @@ int fw_solve_refuel_benders(
                     if (!indices || !values) {
                         free(indices);
                         free(values);
-                        ralph_free(model);
+                        ralph_mip_free(model);
                         solution->status = FW_STATUS_ERROR;
                         return -1;
                     }
@@ -1262,8 +1264,8 @@ int fw_solve_refuel_benders(
                         values[l] = 1.0;
                     }
 
-                    ralph_add_constraint(model, span, indices, values,
-                                         RALPH_GREATER_EQUAL, 1.0);
+                    ralph_lp_add_constraint(model, span, indices, values,
+                                         RALPH_LP_SENSE_GREATER_EQUAL, 1.0);
                     free(indices);
                     free(values);
                 }
@@ -1275,7 +1277,7 @@ int fw_solve_refuel_benders(
     /* Configure Benders decomposition */
     int *master_vars = malloc(k * sizeof(int));
     if (!master_vars) {
-        ralph_free(model);
+        ralph_mip_free(model);
         solution->status = FW_STATUS_ERROR;
         return -1;
     }
@@ -1285,7 +1287,7 @@ int fw_solve_refuel_benders(
         master_vars[i] = z_start + i;
     }
 
-    RalphBendersConfig config = RALPH_BENDERS_CONFIG_DEFAULT;
+    RalphMIPBendersConfig config = RALPH_MIP_BENDERS_CONFIG_DEFAULT;
     config.master_var_indices = master_vars;
     config.num_master_vars = k;
     config.theta_var = theta_idx;
@@ -1293,7 +1295,8 @@ int fw_solve_refuel_benders(
 
     /* Compute priorities and directions for Benders master (original var space) */
     int *benders_priorities = (int*)calloc(num_vars, sizeof(int));
-    int *benders_directions = (int*)calloc(num_vars, sizeof(int));
+    RalphMIPBranchDirection *benders_directions =
+        (RalphMIPBranchDirection*)calloc(num_vars, sizeof(RalphMIPBranchDirection));
     if (benders_priorities && benders_directions) {
         /* Compute median price */
         double *prices = (double*)malloc(k * sizeof(double));
@@ -1316,7 +1319,7 @@ int fw_solve_refuel_benders(
             benders_priorities[z_start + i] =
                 (price > 0.001) ? (int)(1000.0 / price) : 1000;
             benders_directions[z_start + i] =
-                (price <= median_price) ? RALPH_BRANCH_UP : RALPH_BRANCH_DOWN;
+                (price <= median_price) ? RALPH_MIP_BRANCH_UP : RALPH_MIP_BRANCH_DOWN;
         }
 
         config.branch_priorities = benders_priorities;
@@ -1325,24 +1328,24 @@ int fw_solve_refuel_benders(
 
     /* Solve with Benders */
     double *x = malloc(num_vars * sizeof(double));
-    RalphBendersResult result;
+    RalphMIPBendersResult result;
 
     if (!x) {
         free(benders_priorities);
         free(benders_directions);
         free(master_vars);
-        ralph_free(model);
+        ralph_mip_free(model);
         solution->status = FW_STATUS_ERROR;
         return -1;
     }
 
-    int ret = ralph_solve_benders(model, &config, x, &result);
+    int ret = ralph_mip_solve_benders(model, &config, x, &result);
 
     free(benders_priorities);
     free(benders_directions);
     free(master_vars);
 
-    if (ret == 0 && result.status == RALPH_STATUS_OPTIMAL) {
+    if (ret == 0 && result.status == RALPH_LP_STATUS_OPTIMAL) {
         /* Allocate solution arrays */
         solution->purchases = malloc(k * sizeof(double));
         solution->stop_flags = malloc(k * sizeof(int));
@@ -1350,7 +1353,7 @@ int fw_solve_refuel_benders(
             free(x);
             free(solution->purchases);
             free(solution->stop_flags);
-            ralph_free(model);
+            ralph_mip_free(model);
             solution->status = FW_STATUS_ERROR;
             return -1;
         }
@@ -1388,15 +1391,15 @@ int fw_solve_refuel_benders(
         solution->status = FW_STATUS_OPTIMAL;
 
         free(x);
-        ralph_free(model);
+        ralph_mip_free(model);
         return 0;
     }
 
     /* Handle failure */
     free(x);
-    ralph_free(model);
+    ralph_mip_free(model);
 
-    if (result.status == RALPH_STATUS_INFEASIBLE) {
+    if (result.status == RALPH_LP_STATUS_INFEASIBLE) {
         solution->status = FW_STATUS_INFEASIBLE;
     } else {
         solution->status = FW_STATUS_ERROR;

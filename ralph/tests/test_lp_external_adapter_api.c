@@ -113,18 +113,18 @@ static int public_thread_solve(RalphLPExternalBackendKind backend,
 static void* public_thread_writer(void *arg) {
     PublicThreadHarness *harness = (PublicThreadHarness*)arg;
     for (int i = 0; i < harness->iterations; i++) {
-        if (ralph_core_register_lp_external_adapter(&harness->adapter) != 0) {
+        if (ralph_lp_external_register_adapter(&harness->adapter) != 0) {
             atomic_store(&harness->failed, 1);
             break;
         }
         if ((i & 1) == 0) {
-            if (ralph_core_unregister_lp_external_adapter(RALPH_LP_EXTERNAL_PROVIDER_GLPK) != 0) {
+            if (ralph_lp_external_unregister_adapter(RALPH_LP_EXTERNAL_PROVIDER_GLPK) != 0) {
                 atomic_store(&harness->failed, 1);
                 break;
             }
         }
     }
-    (void)ralph_core_unregister_lp_external_adapter(RALPH_LP_EXTERNAL_PROVIDER_GLPK);
+    (void)ralph_lp_external_unregister_adapter(RALPH_LP_EXTERNAL_PROVIDER_GLPK);
     return NULL;
 }
 
@@ -136,16 +136,16 @@ static void* public_thread_reader(void *arg) {
         const char *provider_name;
 
         memset(&caps, 0, sizeof(caps));
-        if (ralph_core_get_lp_capabilities(&caps) != 0) {
+        if (ralph_lp_get_capabilities(&caps) != 0) {
             atomic_store(&harness->failed, 1);
             break;
         }
-        registered = ralph_core_is_lp_external_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_GLPK);
+        registered = ralph_lp_external_is_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_GLPK);
         if (registered != 0 && registered != 1) {
             atomic_store(&harness->failed, 1);
             break;
         }
-        provider_name = ralph_core_get_lp_external_provider_name(RALPH_LP_EXTERNAL_PROVIDER_GLPK);
+        provider_name = ralph_lp_external_provider_name(RALPH_LP_EXTERNAL_PROVIDER_GLPK);
         if (!provider_name) {
             atomic_store(&harness->failed, 1);
             break;
@@ -172,38 +172,38 @@ static void test_public_adapter_validation_and_lifecycle(void) {
     clp_fx.caps.supports_barrier = 1;
     clp_fx.caps.supports_crossover = 1;
 
-    ralph_core_unregister_all_lp_external_adapters();
-    ASSERT_INT_EQ(ralph_core_register_lp_external_adapter(NULL), -1,
+    ralph_lp_external_unregister_all_adapters();
+    ASSERT_INT_EQ(ralph_lp_external_register_adapter(NULL), -1,
                   "public adapter: reject NULL adapter");
-    ASSERT_INT_EQ(ralph_core_is_lp_external_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_NONE), 0,
+    ASSERT_INT_EQ(ralph_lp_external_is_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_NONE), 0,
                   "public adapter: starts unregistered");
 
     glpk_adapter = build_public_adapter(&glpk_fx, RALPH_LP_EXTERNAL_PROVIDER_GLPK, "PublicGLPK");
     clp_adapter = build_public_adapter(&clp_fx, RALPH_LP_EXTERNAL_PROVIDER_CLP, "PublicCLP");
-    ASSERT_INT_EQ(ralph_core_register_lp_external_adapter(&glpk_adapter), 0,
+    ASSERT_INT_EQ(ralph_lp_external_register_adapter(&glpk_adapter), 0,
                   "public adapter: register GLPK");
-    ASSERT_INT_EQ(ralph_core_register_lp_external_adapter(&clp_adapter), 0,
+    ASSERT_INT_EQ(ralph_lp_external_register_adapter(&clp_adapter), 0,
                   "public adapter: register CLP");
-    ASSERT_INT_EQ(ralph_core_is_lp_external_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_NONE), 1,
+    ASSERT_INT_EQ(ralph_lp_external_is_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_NONE), 1,
                   "public adapter: any registered");
-    ASSERT_INT_EQ(ralph_core_is_lp_external_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_GLPK), 1,
+    ASSERT_INT_EQ(ralph_lp_external_is_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_GLPK), 1,
                   "public adapter: GLPK registered");
-    ASSERT_INT_EQ(ralph_core_is_lp_external_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_CLP), 1,
+    ASSERT_INT_EQ(ralph_lp_external_is_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_CLP), 1,
                   "public adapter: CLP registered");
-    ASSERT_TRUE(strcmp(ralph_core_get_lp_external_provider_name(RALPH_LP_EXTERNAL_PROVIDER_GLPK), "GLPK") == 0,
+    ASSERT_TRUE(strcmp(ralph_lp_external_provider_name(RALPH_LP_EXTERNAL_PROVIDER_GLPK), "GLPK") == 0,
                 "public adapter: provider name GLPK");
-    ASSERT_TRUE(strcmp(ralph_core_get_lp_external_provider_name(RALPH_LP_EXTERNAL_PROVIDER_CLP), "CLP") == 0,
+    ASSERT_TRUE(strcmp(ralph_lp_external_provider_name(RALPH_LP_EXTERNAL_PROVIDER_CLP), "CLP") == 0,
                 "public adapter: provider name CLP");
 
-    ASSERT_INT_EQ(ralph_core_unregister_lp_external_adapter(RALPH_LP_EXTERNAL_PROVIDER_GLPK), 0,
+    ASSERT_INT_EQ(ralph_lp_external_unregister_adapter(RALPH_LP_EXTERNAL_PROVIDER_GLPK), 0,
                   "public adapter: unregister GLPK");
-    ASSERT_INT_EQ(ralph_core_is_lp_external_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_GLPK), 0,
+    ASSERT_INT_EQ(ralph_lp_external_is_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_GLPK), 0,
                   "public adapter: GLPK removed");
-    ASSERT_INT_EQ(ralph_core_is_lp_external_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_CLP), 1,
+    ASSERT_INT_EQ(ralph_lp_external_is_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_CLP), 1,
                   "public adapter: CLP remains");
 
-    ralph_core_unregister_all_lp_external_adapters();
-    ASSERT_INT_EQ(ralph_core_is_lp_external_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_NONE), 0,
+    ralph_lp_external_unregister_all_adapters();
+    ASSERT_INT_EQ(ralph_lp_external_is_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_NONE), 0,
                   "public adapter: unregister all clears registry");
 }
 
@@ -230,10 +230,10 @@ static void test_public_adapter_provider_dispatch(void) {
 
     glpk_adapter = build_public_adapter(&glpk_fx, RALPH_LP_EXTERNAL_PROVIDER_GLPK, "PublicGLPK");
     clp_adapter = build_public_adapter(&clp_fx, RALPH_LP_EXTERNAL_PROVIDER_CLP, "PublicCLP");
-    ralph_core_unregister_all_lp_external_adapters();
-    ASSERT_INT_EQ(ralph_core_register_lp_external_adapter(&glpk_adapter), 0,
+    ralph_lp_external_unregister_all_adapters();
+    ASSERT_INT_EQ(ralph_lp_external_register_adapter(&glpk_adapter), 0,
                   "public dispatch: register GLPK");
-    ASSERT_INT_EQ(ralph_core_register_lp_external_adapter(&clp_adapter), 0,
+    ASSERT_INT_EQ(ralph_lp_external_register_adapter(&clp_adapter), 0,
                   "public dispatch: register CLP");
 
     model = build_small_lp();
@@ -278,7 +278,7 @@ static void test_public_adapter_provider_dispatch(void) {
         ralph_test_free(model);
     }
 
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
 }
 
 static void test_public_adapter_thread_safety(void) {
@@ -297,7 +297,7 @@ static void test_public_adapter_thread_safety(void) {
     harness.adapter.get_capabilities = public_thread_get_capabilities;
     harness.adapter.solve = public_thread_solve;
 
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
     ASSERT_INT_EQ(pthread_create(&writer_thread, NULL, public_thread_writer, &harness),
                   0,
                   "public thread-safety: create writer thread");
@@ -312,7 +312,7 @@ static void test_public_adapter_thread_safety(void) {
     ASSERT_INT_EQ(atomic_load(&harness.failed), 0,
                   "public thread-safety: registry/capability queries stable");
 
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
 }
 
 int main(void) {

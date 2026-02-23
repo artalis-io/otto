@@ -27,7 +27,7 @@ FuelWise is a truck fleet optimization platform that combines route planning, fu
 ```
 fuelwise-platform/
 ├── ralph/                      # LP/MIP Solver
-│   ├── include/                # Public headers (ralph.h)
+│   ├── include/                # Public headers (ralph_lp.h, ralph_mip.h)
 │   ├── src/                    # Implementation (simplex.c, lu.c, branch_bound.c)
 │   ├── tests/                  # Solver tests + debug utilities
 │   ├── benchmarks/             # Performance benchmarks
@@ -135,7 +135,8 @@ make run-velo-api     # Show Velo route server usage
 ## Key Files by Component
 
 ### Ralph (LP/MIP Solver)
-- `ralph/include/ralph.h` - Public API entry point
+- `ralph/include/ralph_lp.h` - LP public API entry point
+- `ralph/include/ralph_mip.h` - MIP public API entry point
 - `ralph/src/simplex.c` - Primal simplex algorithm
 - `ralph/src/dual_simplex.c` - Dual simplex for re-optimization
 - `ralph/src/lu.c` - LU factorization (CRITICAL for correctness)

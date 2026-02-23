@@ -2,7 +2,7 @@
  * Ralph - Benders Decomposition Internal Header
  *
  * Generic Benders decomposition for MIP problems with complicating variables.
- * This is an internal header; use ralph.h for the public API.
+ * This is an internal header; use ralph_mip.h for the public API.
  */
 
 #ifndef RALPH_BENDERS_H
@@ -10,7 +10,7 @@
 
 #include "lp.h"
 #include "mip.h"
-#include "ralph.h"
+#include "ralph_core.h"
 
 /* ============================================================================
  * Data Structures
@@ -173,7 +173,7 @@ int benders_extract_solution(BendersContext *ctx, double *x);
 
 /*
  * Solve an LP model using Benders decomposition.
- * This is the internal entry point; use ralph_solve_benders() from ralph.h
+ * This is the internal entry point; use ralph_mip_solve_benders() from ralph_mip.h
  * for the public API.
  *
  * @param lp_model The LP model (will not be modified)

@@ -1,7 +1,7 @@
 #ifndef LP_DISPATCH_H
 #define LP_DISPATCH_H
 
-#include "ralph.h"
+#include "ralph_core.h"
 
 typedef enum {
     LP_DISPATCH_BACKEND_SIMPLEX = 0,

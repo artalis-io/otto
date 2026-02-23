@@ -10,7 +10,7 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include "ralph.h"
+#include "ralph_core.h"
 #include "ralph_api.h"
 
 #ifdef __EMSCRIPTEN__

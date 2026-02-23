@@ -11,6 +11,8 @@
 #define RALPH_TEST_MOD_API_H
 
 #include "ralph_core.h"
+#include "ralph_lp.h"
+#include "ralph_mip.h"
 
 #ifdef __cplusplus
 extern "C" {

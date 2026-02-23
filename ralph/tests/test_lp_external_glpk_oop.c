@@ -97,19 +97,19 @@ static void test_register_caps_and_unregister(void) {
     RalphLPExternalCapabilities caps;
     int rc_script;
 
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
     rc_script = write_mock_script(script, script_path, sizeof(script_path));
     ASSERT_INT_EQ(rc_script, 0,
                   "register/caps: create mock script");
     if (rc_script != 0) return;
 
-    ASSERT_INT_EQ(ralph_core_register_lp_external_glpk_oop(script_path), 0,
+    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(script_path), 0,
                   "register/caps: register GLPK OOP");
-    ASSERT_INT_EQ(ralph_core_is_lp_external_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_GLPK), 1,
+    ASSERT_INT_EQ(ralph_lp_external_is_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_GLPK), 1,
                   "register/caps: GLPK registered");
 
     memset(&caps, 0, sizeof(caps));
-    ASSERT_INT_EQ(ralph_core_get_lp_external_provider_capabilities(RALPH_LP_EXTERNAL_PROVIDER_GLPK, &caps),
+    ASSERT_INT_EQ(ralph_lp_external_provider_capabilities(RALPH_LP_EXTERNAL_PROVIDER_GLPK, &caps),
                   0,
                   "register/caps: query capabilities");
     ASSERT_INT_EQ(caps.supports_simplex, 1,
@@ -119,9 +119,9 @@ static void test_register_caps_and_unregister(void) {
     ASSERT_INT_EQ(caps.supports_barrier, 0,
                   "register/caps: barrier disabled");
 
-    ASSERT_INT_EQ(ralph_core_unregister_lp_external_glpk_oop(), 0,
+    ASSERT_INT_EQ(ralph_lp_external_unregister_glpk_oop(), 0,
                   "register/caps: unregister helper");
-    ASSERT_INT_EQ(ralph_core_is_lp_external_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_GLPK), 0,
+    ASSERT_INT_EQ(ralph_lp_external_is_adapter_registered(RALPH_LP_EXTERNAL_PROVIDER_GLPK), 0,
                   "register/caps: GLPK removed");
     unlink(script_path);
 }
@@ -153,18 +153,18 @@ static void test_primal_simplex_oop_success_with_duals(void) {
     double rc = 0.0;
     int rc_script;
 
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
     rc_script = write_mock_script(script, script_path, sizeof(script_path));
     ASSERT_INT_EQ(rc_script, 0,
                   "primal/success: create mock script");
     if (rc_script != 0) return;
-    ASSERT_INT_EQ(ralph_core_register_lp_external_glpk_oop(script_path), 0,
+    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(script_path), 0,
                   "primal/success: register GLPK OOP");
 
     model = build_small_lp();
     ASSERT_TRUE(model != NULL, "primal/success: model created");
     if (!model) {
-        ralph_core_unregister_all_lp_external_adapters();
+        ralph_lp_external_unregister_all_adapters();
         unlink(script_path);
         return;
     }
@@ -199,7 +199,7 @@ static void test_primal_simplex_oop_success_with_duals(void) {
                      "primal/success: reduced costs propagated");
 
     ralph_test_free(model);
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
     unlink(script_path);
 }
 
@@ -231,18 +231,18 @@ static void test_dual_simplex_routes_dual_flag(void) {
     double x = 0.0;
     int rc_script;
 
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
     rc_script = write_mock_script(script, script_path, sizeof(script_path));
     ASSERT_INT_EQ(rc_script, 0,
                   "dual/route: create mock script");
     if (rc_script != 0) return;
-    ASSERT_INT_EQ(ralph_core_register_lp_external_glpk_oop(script_path), 0,
+    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(script_path), 0,
                   "dual/route: register GLPK OOP");
 
     model = build_small_lp();
     ASSERT_TRUE(model != NULL, "dual/route: model created");
     if (!model) {
-        ralph_core_unregister_all_lp_external_adapters();
+        ralph_lp_external_unregister_all_adapters();
         unlink(script_path);
         return;
     }
@@ -267,7 +267,7 @@ static void test_dual_simplex_routes_dual_flag(void) {
                   "dual/route: iterations propagated");
 
     ralph_test_free(model);
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
     unlink(script_path);
 }
 
@@ -312,10 +312,10 @@ static void test_status_hints_for_infeasible_and_unbounded(void) {
         "exit 0\n";
     RalphModel *model = NULL;
 
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
     ASSERT_INT_EQ(write_mock_script(inf_body, inf_script, sizeof(inf_script)), 0,
                   "status-hints: create infeasible script");
-    ASSERT_INT_EQ(ralph_core_register_lp_external_glpk_oop(inf_script), 0,
+    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(inf_script), 0,
                   "status-hints: register infeasible script");
 
     model = build_small_lp();
@@ -335,11 +335,11 @@ static void test_status_hints_for_infeasible_and_unbounded(void) {
                       "status-hints: mapped infeasible");
         ralph_test_free(model);
     }
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
 
     ASSERT_INT_EQ(write_mock_script(unb_body, unb_script, sizeof(unb_script)), 0,
                   "status-hints: create unbounded script");
-    ASSERT_INT_EQ(ralph_core_register_lp_external_glpk_oop(unb_script), 0,
+    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(unb_script), 0,
                   "status-hints: register unbounded script");
 
     model = build_small_lp();
@@ -360,7 +360,7 @@ static void test_status_hints_for_infeasible_and_unbounded(void) {
         ralph_test_free(model);
     }
 
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
     unlink(inf_script);
     unlink(unb_script);
 }
@@ -389,18 +389,18 @@ static void test_time_limit_maps_to_external_failure_report(void) {
     RalphLPExternalFailureReport report;
     int rc_script;
 
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
     rc_script = write_mock_script(script, script_path, sizeof(script_path));
     ASSERT_INT_EQ(rc_script, 0,
                   "time-limit: create mock script");
     if (rc_script != 0) return;
-    ASSERT_INT_EQ(ralph_core_register_lp_external_glpk_oop(script_path), 0,
+    ASSERT_INT_EQ(ralph_lp_external_register_glpk_oop(script_path), 0,
                   "time-limit: register GLPK OOP");
 
     model = build_small_lp();
     ASSERT_TRUE(model != NULL, "time-limit: model created");
     if (!model) {
-        ralph_core_unregister_all_lp_external_adapters();
+        ralph_lp_external_unregister_all_adapters();
         unlink(script_path);
         return;
     }
@@ -418,7 +418,7 @@ static void test_time_limit_maps_to_external_failure_report(void) {
     ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_TIME_LIMIT,
                   "time-limit: status mapped");
 
-    ASSERT_INT_EQ(ralph_core_get_last_lp_external_failure_report(model, &report), 0,
+    ASSERT_INT_EQ(ralph_lp_get_last_external_failure_report(model, &report), 0,
                   "time-limit: failure report available");
     ASSERT_INT_EQ((int)report.stage, (int)RALPH_LP_EXTERNAL_FAILURE_STAGE_EXECUTION,
                   "time-limit: stage execution");
@@ -428,7 +428,7 @@ static void test_time_limit_maps_to_external_failure_report(void) {
                   "time-limit: adapter rc tracked");
 
     ralph_test_free(model);
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
     unlink(script_path);
 }
 

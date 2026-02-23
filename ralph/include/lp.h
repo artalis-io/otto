@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "sparse.h"
-#include "ralph.h"
+#include "ralph_core.h"
 #include "shared.h"
 
 /* Software prefetch (no-op on non-GCC/Clang compilers) */

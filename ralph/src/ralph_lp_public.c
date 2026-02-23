@@ -119,6 +119,59 @@ int ralph_lp_optimize(RalphLPModel *model) {
     return ralph_core_optimize_lp((RalphModel *)model);
 }
 
+int ralph_lp_get_capabilities(RalphLPCapabilities *caps) {
+    return ralph_core_get_lp_capabilities(caps);
+}
+
+int ralph_lp_get_last_algorithm_report(const RalphLPModel *model,
+                                       RalphLPSolveAlgorithmReport *report) {
+    return ralph_core_get_last_lp_algorithm_report((const RalphModel *)model, report);
+}
+
+int ralph_lp_get_last_external_failure_report(const RalphLPModel *model,
+                                              RalphLPExternalFailureReport *report) {
+    return ralph_core_get_last_lp_external_failure_report((const RalphModel *)model, report);
+}
+
+const char* ralph_lp_external_provider_name(RalphLPExternalProvider provider) {
+    return ralph_core_get_lp_external_provider_name(provider);
+}
+
+int ralph_lp_external_provider_capabilities(RalphLPExternalProvider provider,
+                                            RalphLPExternalCapabilities *caps) {
+    return ralph_core_get_lp_external_provider_capabilities(provider, caps);
+}
+
+int ralph_lp_external_registered_providers(RalphLPExternalProvider *providers,
+                                           int capacity,
+                                           int *count_out) {
+    return ralph_core_get_lp_external_registered_providers(providers, capacity, count_out);
+}
+
+int ralph_lp_external_register_adapter(const RalphLPExternalAdapter *adapter) {
+    return ralph_core_register_lp_external_adapter(adapter);
+}
+
+int ralph_lp_external_register_glpk_oop(const char *glpsol_path) {
+    return ralph_core_register_lp_external_glpk_oop(glpsol_path);
+}
+
+int ralph_lp_external_unregister_adapter(RalphLPExternalProvider provider) {
+    return ralph_core_unregister_lp_external_adapter(provider);
+}
+
+int ralph_lp_external_unregister_glpk_oop(void) {
+    return ralph_core_unregister_lp_external_glpk_oop();
+}
+
+void ralph_lp_external_unregister_all_adapters(void) {
+    ralph_core_unregister_all_lp_external_adapters();
+}
+
+int ralph_lp_external_is_adapter_registered(RalphLPExternalProvider provider) {
+    return ralph_core_is_lp_external_adapter_registered(provider);
+}
+
 RalphLPStatus ralph_lp_get_status(const RalphLPModel *model) {
     return (RalphLPStatus)ralph_core_get_status((const RalphModel *)model);
 }

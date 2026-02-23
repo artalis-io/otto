@@ -17,7 +17,9 @@ make test-netflow # Run Network Flow tests (153/153 should pass)
 
 | File | Purpose |
 |------|---------|
-| `include/ralph.h` | Public API - start here |
+| `include/ralph_lp.h` | LP public API - start here |
+| `include/ralph_mip.h` | MIP public API |
+| `include/ralph_core.h` | Internal core API (non-public) |
 | `include/lap.h` | LAP solver API |
 | `include/netflow.h` | Network Flow solver API |
 | `include/detect.h` | Problem structure detection |

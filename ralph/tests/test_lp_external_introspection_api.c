@@ -83,37 +83,37 @@ static void test_introspection_guards_and_empty(void) {
     RalphLPExternalProvider providers[8];
     int count = -1;
 
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
 
-    ASSERT_INT_EQ(ralph_core_get_lp_external_provider_capabilities(
+    ASSERT_INT_EQ(ralph_lp_external_provider_capabilities(
                       RALPH_LP_EXTERNAL_PROVIDER_GLPK, NULL),
                   -1,
                   "guards: NULL caps rejected");
-    ASSERT_INT_EQ(ralph_core_get_lp_external_provider_capabilities(
+    ASSERT_INT_EQ(ralph_lp_external_provider_capabilities(
                       RALPH_LP_EXTERNAL_PROVIDER_NONE, &caps),
                   -1,
                   "guards: provider none rejected");
-    ASSERT_INT_EQ(ralph_core_get_lp_external_provider_capabilities(
+    ASSERT_INT_EQ(ralph_lp_external_provider_capabilities(
                       (RalphLPExternalProvider)99, &caps),
                   -1,
                   "guards: invalid provider rejected");
-    ASSERT_INT_EQ(ralph_core_get_lp_external_provider_capabilities(
+    ASSERT_INT_EQ(ralph_lp_external_provider_capabilities(
                       RALPH_LP_EXTERNAL_PROVIDER_GLPK, &caps),
                   -1,
                   "guards: unregistered provider unavailable");
 
-    ASSERT_INT_EQ(ralph_core_get_lp_external_registered_providers(NULL, 0, NULL),
+    ASSERT_INT_EQ(ralph_lp_external_registered_providers(NULL, 0, NULL),
                   -1,
                   "guards: NULL count rejected");
-    ASSERT_INT_EQ(ralph_core_get_lp_external_registered_providers(NULL, -1, &count),
+    ASSERT_INT_EQ(ralph_lp_external_registered_providers(NULL, -1, &count),
                   -1,
                   "guards: negative capacity rejected");
-    ASSERT_INT_EQ(ralph_core_get_lp_external_registered_providers(NULL, 2, &count),
+    ASSERT_INT_EQ(ralph_lp_external_registered_providers(NULL, 2, &count),
                   -1,
                   "guards: NULL providers with nonzero capacity rejected");
 
     count = -1;
-    ASSERT_INT_EQ(ralph_core_get_lp_external_registered_providers(NULL, 0, &count),
+    ASSERT_INT_EQ(ralph_lp_external_registered_providers(NULL, 0, &count),
                   0,
                   "guards: empty query succeeds");
     ASSERT_INT_EQ(count, 0,
@@ -121,7 +121,7 @@ static void test_introspection_guards_and_empty(void) {
 
     memset(providers, 0, sizeof(providers));
     count = -1;
-    ASSERT_INT_EQ(ralph_core_get_lp_external_registered_providers(providers, 8, &count),
+    ASSERT_INT_EQ(ralph_lp_external_registered_providers(providers, 8, &count),
                   0,
                   "guards: empty list request succeeds");
     ASSERT_INT_EQ(count, 0,
@@ -152,14 +152,14 @@ static void test_introspection_capabilities_and_list(void) {
     glpk_adapter = build_adapter(&glpk_fx, RALPH_LP_EXTERNAL_PROVIDER_GLPK, "IntroGLPK");
     clp_adapter = build_adapter(&clp_fx, RALPH_LP_EXTERNAL_PROVIDER_CLP, "IntroCLP");
 
-    ralph_core_unregister_all_lp_external_adapters();
-    ASSERT_INT_EQ(ralph_core_register_lp_external_adapter(&glpk_adapter), 0,
+    ralph_lp_external_unregister_all_adapters();
+    ASSERT_INT_EQ(ralph_lp_external_register_adapter(&glpk_adapter), 0,
                   "introspection: register GLPK");
-    ASSERT_INT_EQ(ralph_core_register_lp_external_adapter(&clp_adapter), 0,
+    ASSERT_INT_EQ(ralph_lp_external_register_adapter(&clp_adapter), 0,
                   "introspection: register CLP");
 
     memset(&caps, 0, sizeof(caps));
-    ASSERT_INT_EQ(ralph_core_get_lp_external_provider_capabilities(
+    ASSERT_INT_EQ(ralph_lp_external_provider_capabilities(
                       RALPH_LP_EXTERNAL_PROVIDER_GLPK, &caps),
                   0,
                   "introspection: GLPK caps available");
@@ -171,7 +171,7 @@ static void test_introspection_capabilities_and_list(void) {
                   "introspection: GLPK barrier unsupported");
 
     memset(&caps, 0, sizeof(caps));
-    ASSERT_INT_EQ(ralph_core_get_lp_external_provider_capabilities(
+    ASSERT_INT_EQ(ralph_lp_external_provider_capabilities(
                       RALPH_LP_EXTERNAL_PROVIDER_CLP, &caps),
                   0,
                   "introspection: CLP caps available");
@@ -183,7 +183,7 @@ static void test_introspection_capabilities_and_list(void) {
                   "introspection: CLP crossover supported");
 
     count = -1;
-    ASSERT_INT_EQ(ralph_core_get_lp_external_registered_providers(NULL, 0, &count),
+    ASSERT_INT_EQ(ralph_lp_external_registered_providers(NULL, 0, &count),
                   0,
                   "introspection: count-only query succeeds");
     ASSERT_INT_EQ(count, 2,
@@ -191,7 +191,7 @@ static void test_introspection_capabilities_and_list(void) {
 
     memset(providers, 0, sizeof(providers));
     count = -1;
-    ASSERT_INT_EQ(ralph_core_get_lp_external_registered_providers(providers, 1, &count),
+    ASSERT_INT_EQ(ralph_lp_external_registered_providers(providers, 1, &count),
                   -1,
                   "introspection: insufficient capacity rejected");
     ASSERT_INT_EQ(count, 2,
@@ -199,7 +199,7 @@ static void test_introspection_capabilities_and_list(void) {
 
     memset(providers, 0, sizeof(providers));
     count = -1;
-    ASSERT_INT_EQ(ralph_core_get_lp_external_registered_providers(providers, 8, &count),
+    ASSERT_INT_EQ(ralph_lp_external_registered_providers(providers, 8, &count),
                   0,
                   "introspection: list query succeeds");
     ASSERT_INT_EQ(count, 2,
@@ -209,16 +209,16 @@ static void test_introspection_capabilities_and_list(void) {
     ASSERT_INT_EQ(provider_in_list(providers, count, RALPH_LP_EXTERNAL_PROVIDER_CLP), 1,
                   "introspection: CLP present in provider list");
 
-    ASSERT_INT_EQ(ralph_core_unregister_lp_external_adapter(RALPH_LP_EXTERNAL_PROVIDER_GLPK), 0,
+    ASSERT_INT_EQ(ralph_lp_external_unregister_adapter(RALPH_LP_EXTERNAL_PROVIDER_GLPK), 0,
                   "introspection: unregister GLPK");
     count = -1;
-    ASSERT_INT_EQ(ralph_core_get_lp_external_registered_providers(NULL, 0, &count),
+    ASSERT_INT_EQ(ralph_lp_external_registered_providers(NULL, 0, &count),
                   0,
                   "introspection: count query after unregister succeeds");
     ASSERT_INT_EQ(count, 1,
                   "introspection: one provider remains");
 
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
 }
 
 typedef struct {
@@ -234,32 +234,32 @@ static void* intro_writer_thread(void *arg) {
     IntroThreadHarness *h = (IntroThreadHarness*)arg;
     for (int i = 0; i < h->iterations; i++) {
         if ((i & 1) == 0) {
-            if (ralph_core_register_lp_external_adapter(&h->glpk_adapter) != 0) {
+            if (ralph_lp_external_register_adapter(&h->glpk_adapter) != 0) {
                 atomic_store(&h->failed, 1);
                 break;
             }
         } else {
-            if (ralph_core_unregister_lp_external_adapter(RALPH_LP_EXTERNAL_PROVIDER_GLPK) != 0) {
+            if (ralph_lp_external_unregister_adapter(RALPH_LP_EXTERNAL_PROVIDER_GLPK) != 0) {
                 atomic_store(&h->failed, 1);
                 break;
             }
         }
 
         if ((i % 3) == 0) {
-            if (ralph_core_register_lp_external_adapter(&h->clp_adapter) != 0) {
+            if (ralph_lp_external_register_adapter(&h->clp_adapter) != 0) {
                 atomic_store(&h->failed, 1);
                 break;
             }
         } else if ((i % 5) == 0) {
-            if (ralph_core_unregister_lp_external_adapter(RALPH_LP_EXTERNAL_PROVIDER_CLP) != 0) {
+            if (ralph_lp_external_unregister_adapter(RALPH_LP_EXTERNAL_PROVIDER_CLP) != 0) {
                 atomic_store(&h->failed, 1);
                 break;
             }
         }
     }
 
-    (void)ralph_core_unregister_lp_external_adapter(RALPH_LP_EXTERNAL_PROVIDER_GLPK);
-    (void)ralph_core_unregister_lp_external_adapter(RALPH_LP_EXTERNAL_PROVIDER_CLP);
+    (void)ralph_lp_external_unregister_adapter(RALPH_LP_EXTERNAL_PROVIDER_GLPK);
+    (void)ralph_lp_external_unregister_adapter(RALPH_LP_EXTERNAL_PROVIDER_CLP);
     return NULL;
 }
 
@@ -272,7 +272,7 @@ static void* intro_reader_thread(void *arg) {
         int rc;
 
         memset(providers, 0, sizeof(providers));
-        rc = ralph_core_get_lp_external_registered_providers(providers, 8, &count);
+        rc = ralph_lp_external_registered_providers(providers, 8, &count);
         if (rc != 0) {
             atomic_store(&h->failed, 1);
             break;
@@ -291,7 +291,7 @@ static void* intro_reader_thread(void *arg) {
                 break;
             }
             memset(&caps, 0, sizeof(caps));
-            caps_rc = ralph_core_get_lp_external_provider_capabilities(provider, &caps);
+            caps_rc = ralph_lp_external_provider_capabilities(provider, &caps);
             if (caps_rc != 0 && caps_rc != -1) {
                 atomic_store(&h->failed, 1);
                 break;
@@ -331,7 +331,7 @@ static void test_introspection_thread_safety(void) {
     harness.clp_adapter =
         build_adapter(&harness.clp_fx, RALPH_LP_EXTERNAL_PROVIDER_CLP, "ThreadCLP");
 
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
     ASSERT_INT_EQ(pthread_create(&writer, NULL, intro_writer_thread, &harness), 0,
                   "thread-safety: create writer");
     ASSERT_INT_EQ(pthread_create(&reader, NULL, intro_reader_thread, &harness), 0,
@@ -343,7 +343,7 @@ static void test_introspection_thread_safety(void) {
     ASSERT_INT_EQ(atomic_load(&harness.failed), 0,
                   "thread-safety: introspection APIs stable under churn");
 
-    ralph_core_unregister_all_lp_external_adapters();
+    ralph_lp_external_unregister_all_adapters();
 }
 
 int main(void) {

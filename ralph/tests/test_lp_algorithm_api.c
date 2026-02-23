@@ -50,11 +50,11 @@ static RalphModel* build_small_lp(void) {
 static void test_lp_capabilities(void) {
     RalphLPCapabilities caps;
 
-    ASSERT_INT_EQ(ralph_core_get_lp_capabilities(NULL), -1,
+    ASSERT_INT_EQ(ralph_lp_get_capabilities(NULL), -1,
                   "capabilities: NULL output rejected");
 
     memset(&caps, 0, sizeof(caps));
-    ASSERT_INT_EQ(ralph_core_get_lp_capabilities(&caps), 0,
+    ASSERT_INT_EQ(ralph_lp_get_capabilities(&caps), 0,
                   "capabilities: getter succeeds");
     ASSERT_INT_EQ(caps.supports_primal_simplex, 1,
                   "capabilities: primal supported");
@@ -254,7 +254,7 @@ static void test_algorithm_report_guards_and_invalidation(void) {
     ASSERT_TRUE(model != NULL, "report: model created");
     if (!model) return;
 
-    ASSERT_INT_EQ(ralph_core_get_last_lp_algorithm_report(model, &report), -1,
+    ASSERT_INT_EQ(ralph_lp_get_last_algorithm_report(model, &report), -1,
                   "report: unavailable before solve");
 
     ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
@@ -262,7 +262,7 @@ static void test_algorithm_report_guards_and_invalidation(void) {
     ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "report: LP status optimal");
 
-    ASSERT_INT_EQ(ralph_core_get_last_lp_algorithm_report(model, &report), 0,
+    ASSERT_INT_EQ(ralph_lp_get_last_algorithm_report(model, &report), 0,
                   "report: available after LP solve");
     ASSERT_INT_EQ((int)report.requested_algorithm,
                   (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
@@ -275,7 +275,7 @@ static void test_algorithm_report_guards_and_invalidation(void) {
 
     ASSERT_INT_EQ(ralph_test_set_obj_coef(model, 0, 2.0), 0,
                   "report: mutate model invalidates state");
-    ASSERT_INT_EQ(ralph_core_get_last_lp_algorithm_report(model, &report), -1,
+    ASSERT_INT_EQ(ralph_lp_get_last_algorithm_report(model, &report), -1,
                   "report: unavailable after invalidation");
 
     ralph_test_free(model);
@@ -301,7 +301,7 @@ static void test_barrier_fallback_report(void) {
                   "barrier: LP optimize succeeds");
     ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "barrier: LP status optimal");
-    ASSERT_INT_EQ(ralph_core_get_last_lp_algorithm_report(model, &report), 0,
+    ASSERT_INT_EQ(ralph_lp_get_last_algorithm_report(model, &report), 0,
                   "barrier: report available");
 
     ASSERT_INT_EQ((int)report.requested_algorithm,
@@ -345,7 +345,7 @@ static void test_crossover_only_fallback_report(void) {
                   "crossover: LP optimize succeeds");
     ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "crossover: LP status optimal");
-    ASSERT_INT_EQ(ralph_core_get_last_lp_algorithm_report(model, &report), 0,
+    ASSERT_INT_EQ(ralph_lp_get_last_algorithm_report(model, &report), 0,
                   "crossover: report available");
 
     ASSERT_INT_EQ((int)report.requested_algorithm,
@@ -393,7 +393,7 @@ static void test_external_fallback_report(void) {
                   "external-fallback: LP optimize succeeds");
     ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "external-fallback: LP status optimal");
-    ASSERT_INT_EQ(ralph_core_get_last_lp_algorithm_report(model, &report), 0,
+    ASSERT_INT_EQ(ralph_lp_get_last_algorithm_report(model, &report), 0,
                   "external-fallback: report available");
 
     ASSERT_INT_EQ((int)report.requested_algorithm,
@@ -453,7 +453,7 @@ static void test_legacy_method_dispatch_report(void) {
                   "legacy-dispatch: set method=dual");
     ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "legacy-dispatch: solve with dual method succeeds");
-    ASSERT_INT_EQ(ralph_core_get_last_lp_algorithm_report(model, &report), 0,
+    ASSERT_INT_EQ(ralph_lp_get_last_algorithm_report(model, &report), 0,
                   "legacy-dispatch: report available for dual method");
     ASSERT_INT_EQ((int)report.requested_algorithm,
                   (int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX,
@@ -468,7 +468,7 @@ static void test_legacy_method_dispatch_report(void) {
                   "legacy-dispatch: set method=auto");
     ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "legacy-dispatch: solve with auto method succeeds");
-    ASSERT_INT_EQ(ralph_core_get_last_lp_algorithm_report(model, &report), 0,
+    ASSERT_INT_EQ(ralph_lp_get_last_algorithm_report(model, &report), 0,
                   "legacy-dispatch: report available for auto method");
     ASSERT_INT_EQ((int)report.requested_algorithm,
                   (int)RALPH_LP_ALGORITHM_AUTO,
@@ -492,11 +492,11 @@ static void test_lp_report_rejects_mip_models(void) {
     ralph_test_set_obj_sense(mip, RALPH_MAXIMIZE);
     ralph_test_add_var(mip, 0.0, 1.0, 1.0, RALPH_BINARY);
 
-    ASSERT_INT_EQ(ralph_core_get_last_lp_algorithm_report(mip, &report), -1,
+    ASSERT_INT_EQ(ralph_lp_get_last_algorithm_report(mip, &report), -1,
                   "mip-guard: report rejected for MIP model before solve");
     ASSERT_INT_EQ(ralph_test_optimize_mip(mip), 0,
                   "mip-guard: optimize_mip succeeds");
-    ASSERT_INT_EQ(ralph_core_get_last_lp_algorithm_report(mip, &report), -1,
+    ASSERT_INT_EQ(ralph_lp_get_last_algorithm_report(mip, &report), -1,
                   "mip-guard: report rejected for MIP model after solve");
 
     ralph_test_free(mip);
