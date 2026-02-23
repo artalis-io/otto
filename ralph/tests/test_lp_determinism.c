@@ -69,30 +69,30 @@ static void test_determinism_metadata_and_lookup(void) {
     RalphParamMeta meta;
     RalphParamId id = RALPH_PARAM_COUNT;
 
-    ASSERT_TRUE(ralph_find_param_by_name("deterministic", &id) == 0 &&
+    ASSERT_TRUE(ralph_core_find_param_by_name("deterministic", &id) == 0 &&
                 id == RALPH_PARAM_DETERMINISTIC,
                 "deterministic canonical name lookup");
-    ASSERT_TRUE(ralph_find_param_by_name("RandomSeed", &id) == 0 &&
+    ASSERT_TRUE(ralph_core_find_param_by_name("RandomSeed", &id) == 0 &&
                 id == RALPH_PARAM_RANDOM_SEED,
                 "random_seed alias lookup");
-    ASSERT_TRUE(ralph_find_param_by_name("LPThreads", &id) == 0 &&
+    ASSERT_TRUE(ralph_core_find_param_by_name("LPThreads", &id) == 0 &&
                 id == RALPH_PARAM_LP_THREADS,
                 "lp_threads alias lookup");
 
-    ASSERT_TRUE(ralph_get_param_meta(RALPH_PARAM_DETERMINISTIC, &meta) == 0,
+    ASSERT_TRUE(ralph_core_get_param_meta(RALPH_PARAM_DETERMINISTIC, &meta) == 0,
                 "deterministic metadata available");
     ASSERT_TRUE(meta.scope == RALPH_PARAM_SCOPE_LP, "deterministic scope is LP");
     ASSERT_TRUE(meta.value_type == RALPH_PARAM_VALUE_INT, "deterministic type is int");
     ASSERT_TRUE(meta.has_min == 1 && meta.min_value == 0.0, "deterministic min=0");
     ASSERT_TRUE(meta.has_max == 1 && meta.max_value == 1.0, "deterministic max=1");
 
-    ASSERT_TRUE(ralph_get_param_meta(RALPH_PARAM_RANDOM_SEED, &meta) == 0,
+    ASSERT_TRUE(ralph_core_get_param_meta(RALPH_PARAM_RANDOM_SEED, &meta) == 0,
                 "random_seed metadata available");
     ASSERT_TRUE(meta.scope == RALPH_PARAM_SCOPE_LP, "random_seed scope is LP");
     ASSERT_TRUE(meta.value_type == RALPH_PARAM_VALUE_INT, "random_seed type is int");
     ASSERT_TRUE(meta.has_min == 1 && meta.min_value == 0.0, "random_seed min=0");
 
-    ASSERT_TRUE(ralph_get_param_meta(RALPH_PARAM_LP_THREADS, &meta) == 0,
+    ASSERT_TRUE(ralph_core_get_param_meta(RALPH_PARAM_LP_THREADS, &meta) == 0,
                 "lp_threads metadata available");
     ASSERT_TRUE(meta.scope == RALPH_PARAM_SCOPE_LP, "lp_threads scope is LP");
     ASSERT_TRUE(meta.value_type == RALPH_PARAM_VALUE_INT, "lp_threads type is int");

@@ -100,20 +100,20 @@ static void test_lp_conflict_guards(void) {
 
     opts.include_bounds = 1;
     opts.use_farkas_seed = 0;
-    ASSERT_INT_EQ(ralph_compute_lp_conflict(lp, &opts, members, 8, &count, &report), -1,
+    ASSERT_INT_EQ(ralph_core_compute_lp_conflict(lp, &opts, members, 8, &count, &report), -1,
                   "guard: conflict API unavailable before solve");
 
     ASSERT_INT_EQ(ralph_test_optimize_lp(lp), 0, "guard: LP solve succeeds");
     ASSERT_INT_EQ((int)ralph_test_get_status(lp), (int)RALPH_STATUS_INFEASIBLE,
                   "guard: LP infeasible");
 
-    ASSERT_INT_EQ(ralph_compute_lp_conflict(NULL, &opts, members, 8, &count, &report), -1,
+    ASSERT_INT_EQ(ralph_core_compute_lp_conflict(NULL, &opts, members, 8, &count, &report), -1,
                   "guard: NULL model rejected");
-    ASSERT_INT_EQ(ralph_compute_lp_conflict(lp, &opts, members, 8, NULL, &report), -1,
+    ASSERT_INT_EQ(ralph_core_compute_lp_conflict(lp, &opts, members, 8, NULL, &report), -1,
                   "guard: NULL count rejected");
-    ASSERT_INT_EQ(ralph_compute_lp_conflict(lp, &opts, NULL, 8, &count, &report), -1,
+    ASSERT_INT_EQ(ralph_core_compute_lp_conflict(lp, &opts, NULL, 8, &count, &report), -1,
                   "guard: NULL members rejected when capacity>0");
-    ASSERT_INT_EQ(ralph_compute_lp_conflict(lp, &opts, members, -1, &count, &report), -1,
+    ASSERT_INT_EQ(ralph_core_compute_lp_conflict(lp, &opts, members, -1, &count, &report), -1,
                   "guard: negative capacity rejected");
 
     mip = ralph_test_create();
@@ -122,7 +122,7 @@ static void test_lp_conflict_guards(void) {
         ralph_test_set_obj_sense(mip, RALPH_MAXIMIZE);
         ralph_test_add_var(mip, 0.0, 1.0, 1.0, RALPH_BINARY);
         ASSERT_INT_EQ(ralph_test_optimize_mip(mip), 0, "guard: MIP optimize succeeds");
-        ASSERT_INT_EQ(ralph_compute_lp_conflict(mip, &opts, members, 8, &count, &report), -1,
+        ASSERT_INT_EQ(ralph_core_compute_lp_conflict(mip, &opts, members, 8, &count, &report), -1,
                       "guard: conflict API is LP-only");
     }
 
@@ -148,7 +148,7 @@ static void test_lp_conflict_row_only_and_iis_compat(void) {
 
     opts.include_bounds = 0;
     opts.use_farkas_seed = 0;
-    ASSERT_INT_EQ(ralph_compute_lp_conflict(model, &opts, members, 8, &count, &report), 0,
+    ASSERT_INT_EQ(ralph_core_compute_lp_conflict(model, &opts, members, 8, &count, &report), 0,
                   "row-only: conflict extraction succeeds");
     ASSERT_INT_EQ(count, 2, "row-only: expected conflict size");
     ASSERT_INT_EQ((int)members[0].type, (int)RALPH_CONFLICT_MEMBER_ROW, "row-only: member 0 type");
@@ -157,7 +157,7 @@ static void test_lp_conflict_row_only_and_iis_compat(void) {
     ASSERT_INT_EQ((int)members[1].index, 1, "row-only: member 1 row");
     ASSERT_INT_EQ(report.final_size, 2, "row-only: report final size");
 
-    ASSERT_INT_EQ(ralph_compute_lp_iis(model, flags, &iis_size), 0,
+    ASSERT_INT_EQ(ralph_core_compute_lp_iis(model, flags, &iis_size), 0,
                   "row-only: IIS compatibility succeeds");
     ASSERT_INT_EQ(iis_size, 2, "row-only: IIS size");
     ASSERT_INT_EQ(flags[0], 1, "row-only: IIS includes row 0");
@@ -166,7 +166,7 @@ static void test_lp_conflict_row_only_and_iis_compat(void) {
     ASSERT_INT_EQ(flags[3], 0, "row-only: IIS excludes row 3");
 
     count = 0;
-    ASSERT_INT_EQ(ralph_compute_lp_conflict(model, &opts, NULL, 0, &count, NULL), -1,
+    ASSERT_INT_EQ(ralph_core_compute_lp_conflict(model, &opts, NULL, 0, &count, NULL), -1,
                   "row-only: size query reports insufficient capacity");
     ASSERT_INT_EQ(count, 2, "row-only: size query returns required count");
 
@@ -188,7 +188,7 @@ static void test_lp_conflict_include_bounds_stability(void) {
 
     opts.include_bounds = 1;
     opts.use_farkas_seed = 0;
-    ASSERT_INT_EQ(ralph_compute_lp_conflict(model, &opts, members, 8, &count, NULL), 0,
+    ASSERT_INT_EQ(ralph_core_compute_lp_conflict(model, &opts, members, 8, &count, NULL), 0,
                   "include-bounds: conflict extraction succeeds");
     ASSERT_TRUE(count >= 2, "include-bounds: conflict size >= row core");
     ASSERT_INT_EQ((int)members[0].type, (int)RALPH_CONFLICT_MEMBER_ROW,
@@ -216,12 +216,12 @@ static void test_lp_conflict_bound_members(void) {
 
     opts.include_bounds = 0;
     opts.use_farkas_seed = 0;
-    ASSERT_INT_EQ(ralph_compute_lp_conflict(model, &opts, members, 8, &count, NULL), -1,
+    ASSERT_INT_EQ(ralph_core_compute_lp_conflict(model, &opts, members, 8, &count, NULL), -1,
                   "bound-members: row-only extraction unavailable when bounds alone are infeasible");
 
     opts.include_bounds = 1;
     opts.use_farkas_seed = 0;
-    ASSERT_INT_EQ(ralph_compute_lp_conflict(model, &opts, members, 8, &count, NULL), 0,
+    ASSERT_INT_EQ(ralph_core_compute_lp_conflict(model, &opts, members, 8, &count, NULL), 0,
                   "bound-members: bound-aware extraction succeeds");
     ASSERT_INT_EQ(count, 2, "bound-members: expected conflict size");
     ASSERT_INT_EQ((int)members[0].type, (int)RALPH_CONFLICT_MEMBER_VAR_LB,
@@ -256,9 +256,9 @@ static void test_lp_conflict_farkas_seed_stability(void) {
     opts_seed.include_bounds = 0;
     opts_seed.use_farkas_seed = 1;
 
-    ASSERT_INT_EQ(ralph_compute_lp_conflict(model, &opts_no_seed, a, 8, &count_a, NULL), 0,
+    ASSERT_INT_EQ(ralph_core_compute_lp_conflict(model, &opts_no_seed, a, 8, &count_a, NULL), 0,
                   "seed: no-seed extraction succeeds");
-    ASSERT_INT_EQ(ralph_compute_lp_conflict(model, &opts_seed, b, 8, &count_b, &report), 0,
+    ASSERT_INT_EQ(ralph_core_compute_lp_conflict(model, &opts_seed, b, 8, &count_b, &report), 0,
                   "seed: seeded extraction succeeds");
     ASSERT_INT_EQ(count_a, count_b, "seed: sizes match no-seed path");
 

@@ -90,35 +90,35 @@ static void test_guards_and_no_external_failure(void) {
     RalphModel *mip = ralph_test_create();
     RalphLPExternalFailureReport report;
 
-    ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(NULL, &report), -1,
+    ASSERT_INT_EQ(ralph_core_get_last_lp_external_failure_report(NULL, &report), -1,
                   "guards: NULL model rejected");
     ASSERT_TRUE(model != NULL, "guards: LP model created");
     if (!model) {
         if (mip) ralph_test_free(mip);
         return;
     }
-    ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, NULL), -1,
+    ASSERT_INT_EQ(ralph_core_get_last_lp_external_failure_report(model, NULL), -1,
                   "guards: NULL output rejected");
-    ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, &report), -1,
+    ASSERT_INT_EQ(ralph_core_get_last_lp_external_failure_report(model, &report), -1,
                   "guards: report unavailable before solve");
 
     ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "guards: default LP solve succeeds");
     ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "guards: default LP status optimal");
-    ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, &report), -1,
+    ASSERT_INT_EQ(ralph_core_get_last_lp_external_failure_report(model, &report), -1,
                   "guards: no external failure report on internal solve");
 
     ASSERT_INT_EQ(ralph_test_set_obj_coef(model, 0, 2.0), 0,
                   "guards: model edit succeeds");
-    ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, &report), -1,
+    ASSERT_INT_EQ(ralph_core_get_last_lp_external_failure_report(model, &report), -1,
                   "guards: report unavailable after invalidation");
 
     ASSERT_TRUE(mip != NULL, "guards: MIP model created");
     if (mip) {
         ralph_test_set_obj_sense(mip, RALPH_MAXIMIZE);
         ralph_test_add_var(mip, 0.0, 1.0, 1.0, RALPH_BINARY);
-        ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(mip, &report), -1,
+        ASSERT_INT_EQ(ralph_core_get_last_lp_external_failure_report(mip, &report), -1,
                       "guards: report rejected for MIP model");
         ralph_test_free(mip);
     }
@@ -130,11 +130,11 @@ static void test_dispatch_failure_provider_required_nonfatal(void) {
     RalphModel *model = build_small_lp();
     RalphLPExternalFailureReport report;
 
-    ralph_unregister_all_lp_external_adapters();
+    ralph_core_unregister_all_lp_external_adapters();
     ASSERT_TRUE(model != NULL, "dispatch/provider-required: model created");
     if (!model) return;
 
-    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                                          (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL),
                   0,
                   "dispatch/provider-required: request external primal");
@@ -143,7 +143,7 @@ static void test_dispatch_failure_provider_required_nonfatal(void) {
     ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "dispatch/provider-required: status optimal");
 
-    ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, &report), 0,
+    ASSERT_INT_EQ(ralph_core_get_last_lp_external_failure_report(model, &report), 0,
                   "dispatch/provider-required: report available");
     ASSERT_INT_EQ((int)report.stage, (int)RALPH_LP_EXTERNAL_FAILURE_STAGE_DISPATCH,
                   "dispatch/provider-required: stage dispatch");
@@ -178,19 +178,19 @@ static void test_dispatch_failure_provider_unregistered_strict(void) {
     RalphModel *model = build_small_lp();
     RalphLPExternalFailureReport report;
 
-    ralph_unregister_all_lp_external_adapters();
+    ralph_core_unregister_all_lp_external_adapters();
     ASSERT_TRUE(model != NULL, "dispatch/provider-unregistered: model created");
     if (!model) return;
 
-    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                                          (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL),
                   0,
                   "dispatch/provider-unregistered: request external primal");
-    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
                                          (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
                   0,
                   "dispatch/provider-unregistered: set provider GLPK");
-    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 1),
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 1),
                   0,
                   "dispatch/provider-unregistered: enable strict mode");
     ASSERT_INT_EQ(ralph_test_optimize_lp(model), -1,
@@ -198,7 +198,7 @@ static void test_dispatch_failure_provider_unregistered_strict(void) {
     ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_ERROR,
                   "dispatch/provider-unregistered: status error");
 
-    ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, &report), 0,
+    ASSERT_INT_EQ(ralph_core_get_last_lp_external_failure_report(model, &report), 0,
                   "dispatch/provider-unregistered: report available");
     ASSERT_INT_EQ((int)report.stage, (int)RALPH_LP_EXTERNAL_FAILURE_STAGE_DISPATCH,
                   "dispatch/provider-unregistered: stage dispatch");
@@ -228,20 +228,20 @@ static void test_dispatch_failure_backend_unsupported(void) {
     fx.solve_rc = RALPH_LP_EXTERNAL_ADAPTER_RC_OK;
     adapter = build_failure_adapter(&fx, RALPH_LP_EXTERNAL_PROVIDER_GLPK, "FailureGLPK");
 
-    ralph_unregister_all_lp_external_adapters();
-    ASSERT_INT_EQ(ralph_register_lp_external_adapter(&adapter), 0,
+    ralph_core_unregister_all_lp_external_adapters();
+    ASSERT_INT_EQ(ralph_core_register_lp_external_adapter(&adapter), 0,
                   "dispatch/backend-unsupported: register GLPK fixture");
     ASSERT_TRUE(model != NULL, "dispatch/backend-unsupported: model created");
     if (!model) {
-        ralph_unregister_all_lp_external_adapters();
+        ralph_core_unregister_all_lp_external_adapters();
         return;
     }
 
-    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                                          (int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX_EXTERNAL),
                   0,
                   "dispatch/backend-unsupported: request external dual");
-    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
                                          (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
                   0,
                   "dispatch/backend-unsupported: set provider GLPK");
@@ -250,7 +250,7 @@ static void test_dispatch_failure_backend_unsupported(void) {
     ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "dispatch/backend-unsupported: status optimal");
 
-    ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, &report), 0,
+    ASSERT_INT_EQ(ralph_core_get_last_lp_external_failure_report(model, &report), 0,
                   "dispatch/backend-unsupported: report available");
     ASSERT_INT_EQ((int)report.stage, (int)RALPH_LP_EXTERNAL_FAILURE_STAGE_DISPATCH,
                   "dispatch/backend-unsupported: stage dispatch");
@@ -263,7 +263,7 @@ static void test_dispatch_failure_backend_unsupported(void) {
                   "dispatch/backend-unsupported: fallback non-fatal");
 
     ralph_test_free(model);
-    ralph_unregister_all_lp_external_adapters();
+    ralph_core_unregister_all_lp_external_adapters();
 }
 
 static void test_execution_failure_time_limit_mapping(void) {
@@ -281,20 +281,20 @@ static void test_execution_failure_time_limit_mapping(void) {
     fx.solve_rc = RALPH_LP_EXTERNAL_ADAPTER_RC_TIME_LIMIT;
     adapter = build_failure_adapter(&fx, RALPH_LP_EXTERNAL_PROVIDER_GLPK, "FailureGLPK");
 
-    ralph_unregister_all_lp_external_adapters();
-    ASSERT_INT_EQ(ralph_register_lp_external_adapter(&adapter), 0,
+    ralph_core_unregister_all_lp_external_adapters();
+    ASSERT_INT_EQ(ralph_core_register_lp_external_adapter(&adapter), 0,
                   "execution/time-limit: register GLPK fixture");
     ASSERT_TRUE(model != NULL, "execution/time-limit: model created");
     if (!model) {
-        ralph_unregister_all_lp_external_adapters();
+        ralph_core_unregister_all_lp_external_adapters();
         return;
     }
 
-    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                                          (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL),
                   0,
                   "execution/time-limit: request external primal");
-    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
                                          (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
                   0,
                   "execution/time-limit: set provider GLPK");
@@ -303,7 +303,7 @@ static void test_execution_failure_time_limit_mapping(void) {
     ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_TIME_LIMIT,
                   "execution/time-limit: status mapped to time limit");
 
-    ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, &report), 0,
+    ASSERT_INT_EQ(ralph_core_get_last_lp_external_failure_report(model, &report), 0,
                   "execution/time-limit: report available");
     ASSERT_INT_EQ((int)report.stage, (int)RALPH_LP_EXTERNAL_FAILURE_STAGE_EXECUTION,
                   "execution/time-limit: stage execution");
@@ -322,7 +322,7 @@ static void test_execution_failure_time_limit_mapping(void) {
                   "execution/time-limit: backend tracked");
 
     ralph_test_free(model);
-    ralph_unregister_all_lp_external_adapters();
+    ralph_core_unregister_all_lp_external_adapters();
 }
 
 static void test_execution_failure_generic_mapping(void) {
@@ -340,20 +340,20 @@ static void test_execution_failure_generic_mapping(void) {
     fx.solve_rc = -77;
     adapter = build_failure_adapter(&fx, RALPH_LP_EXTERNAL_PROVIDER_GLPK, "FailureGLPK");
 
-    ralph_unregister_all_lp_external_adapters();
-    ASSERT_INT_EQ(ralph_register_lp_external_adapter(&adapter), 0,
+    ralph_core_unregister_all_lp_external_adapters();
+    ASSERT_INT_EQ(ralph_core_register_lp_external_adapter(&adapter), 0,
                   "execution/generic: register GLPK fixture");
     ASSERT_TRUE(model != NULL, "execution/generic: model created");
     if (!model) {
-        ralph_unregister_all_lp_external_adapters();
+        ralph_core_unregister_all_lp_external_adapters();
         return;
     }
 
-    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                                          (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL),
                   0,
                   "execution/generic: request external primal");
-    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
                                          (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
                   0,
                   "execution/generic: set provider GLPK");
@@ -362,7 +362,7 @@ static void test_execution_failure_generic_mapping(void) {
     ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_ERROR,
                   "execution/generic: status mapped to error");
 
-    ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, &report), 0,
+    ASSERT_INT_EQ(ralph_core_get_last_lp_external_failure_report(model, &report), 0,
                   "execution/generic: report available");
     ASSERT_INT_EQ((int)report.stage, (int)RALPH_LP_EXTERNAL_FAILURE_STAGE_EXECUTION,
                   "execution/generic: stage execution");
@@ -377,7 +377,7 @@ static void test_execution_failure_generic_mapping(void) {
                   "execution/generic: execution failure fatal");
 
     ralph_test_free(model);
-    ralph_unregister_all_lp_external_adapters();
+    ralph_core_unregister_all_lp_external_adapters();
 }
 
 int main(void) {

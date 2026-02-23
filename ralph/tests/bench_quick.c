@@ -30,8 +30,8 @@ static int glpsol_available(void) {
 static RalphModel* generate_lp(int n, int m, double density) {
     RalphModel *model = ralph_test_create();
     if (!model) return NULL;
-    ralph_set_int_param_id(model, RALPH_PARAM_VERBOSE, 0);
-    ralph_set_int_param_id(model, RALPH_PARAM_MAX_ITERATIONS, 100000);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_VERBOSE, 0);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_MAX_ITERATIONS, 100000);
 
     double *c = malloc(n * sizeof(double));
     int *idx = malloc(n * sizeof(int));
@@ -80,7 +80,7 @@ static void benchmark(int n, int m, double density) {
         printf("  Build error (internal)\n");
         return;
     }
-    ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                            (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX);
 
     double t0 = get_time();
@@ -96,10 +96,10 @@ static void benchmark(int n, int m, double density) {
         printf("  Build error (external)\n");
         return;
     }
-    ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
                            (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK);
-    ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 1);
-    ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 1);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                            (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL);
     t0 = get_time();
     (void)ralph_test_optimize_lp(model);
@@ -134,8 +134,8 @@ int main() {
         printf("Error: glpsol not found. Install GLPK to run this benchmark.\n");
         return 1;
     }
-    ralph_unregister_all_lp_external_adapters();
-    if (ralph_register_lp_external_glpk_oop(NULL) != 0) {
+    ralph_core_unregister_all_lp_external_adapters();
+    if (ralph_core_register_lp_external_glpk_oop(NULL) != 0) {
         printf("Error: failed to register GLPK out-of-process adapter.\n");
         return 1;
     }
@@ -146,6 +146,6 @@ int main() {
     benchmark(200, 100, 0.15);
 
     printf("\n");
-    ralph_unregister_all_lp_external_adapters();
+    ralph_core_unregister_all_lp_external_adapters();
     return 0;
 }

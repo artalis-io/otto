@@ -266,9 +266,9 @@ static SolveResult solve_with_ralph(TestProblem *prob) {
         return result;
     }
 
-    ralph_set_int_param_id(model, RALPH_PARAM_VERBOSE, 0);
-    ralph_set_int_param_id(model, RALPH_PARAM_MAX_ITERATIONS, 100000);
-    ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+    ralph_core_set_int_param_id(model, RALPH_PARAM_VERBOSE, 0);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_MAX_ITERATIONS, 100000);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                            (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX);
 
     /* Solve and time */
@@ -297,12 +297,12 @@ static SolveResult solve_with_glpk(TestProblem *prob) {
         return result;
     }
 
-    ralph_set_int_param_id(model, RALPH_PARAM_VERBOSE, 0);
-    ralph_set_int_param_id(model, RALPH_PARAM_MAX_ITERATIONS, 100000);
-    ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+    ralph_core_set_int_param_id(model, RALPH_PARAM_VERBOSE, 0);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_MAX_ITERATIONS, 100000);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
                            (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK);
-    ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 1);
-    ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 1);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                            (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL);
 
     /* Solve and time */
@@ -466,8 +466,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Error: glpsol not found in PATH\n");
         return 1;
     }
-    ralph_unregister_all_lp_external_adapters();
-    if (ralph_register_lp_external_glpk_oop(NULL) != 0) {
+    ralph_core_unregister_all_lp_external_adapters();
+    if (ralph_core_register_lp_external_glpk_oop(NULL) != 0) {
         fprintf(stderr, "Error: failed to register GLPK out-of-process adapter\n");
         return 1;
     }
@@ -530,6 +530,6 @@ int main(int argc, char **argv) {
     printf("  Benchmark Complete\n");
     printf("================================================================================\n\n");
 
-    ralph_unregister_all_lp_external_adapters();
+    ralph_core_unregister_all_lp_external_adapters();
     return 0;
 }

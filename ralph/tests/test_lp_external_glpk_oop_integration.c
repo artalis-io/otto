@@ -65,8 +65,8 @@ static RalphModel* build_small_lp(void) {
 
 static int configure_external_glpk(RalphModel *model, int algorithm) {
     if (!model) return -1;
-    if (ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM, algorithm) != 0) return -1;
-    if (ralph_set_int_param_id(model,
+    if (ralph_core_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM, algorithm) != 0) return -1;
+    if (ralph_core_set_int_param_id(model,
                                RALPH_PARAM_LP_EXTERNAL_PROVIDER,
                                (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK) != 0) return -1;
     return 0;
@@ -184,8 +184,8 @@ int main(void) {
         return 0;
     }
 
-    ralph_unregister_all_lp_external_adapters();
-    ASSERT_INT_EQ(ralph_register_lp_external_glpk_oop(NULL), 0,
+    ralph_core_unregister_all_lp_external_adapters();
+    ASSERT_INT_EQ(ralph_core_register_lp_external_glpk_oop(NULL), 0,
                   "integration: register GLPK OOP with PATH lookup");
 
     test_optimal_duals_and_rc();
@@ -193,7 +193,7 @@ int main(void) {
     test_infeasible_mapping();
     test_unbounded_mapping();
 
-    ralph_unregister_all_lp_external_adapters();
+    ralph_core_unregister_all_lp_external_adapters();
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_run == tests_passed) ? 0 : 1;
 }
