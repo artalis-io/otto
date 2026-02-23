@@ -42,9 +42,9 @@ For context:
 - **HGS-CVRP** (Vidal): State-of-the-art, often matches or sets BKS. Surge doesn't compete here — but HGS is a research solver, not a product. See "Why not HGS?" below.
 - **LKH-3**: Similar — academic champion, not a deployable product.
 
-Li & Lim (PDPTW): avgDistGap +5.3%, 39/56 equal vehicles. This is reasonable but weaker. PDPTW is inherently harder and the gap to BKS is larger across all solvers.
+Li & Lim (PDPTW): avgDistGap +5.3% single-threaded, improved to ~+4.7% with population-based parallel search (4 threads, 3 generations). 39/56 equal vehicles. PDPTW is inherently harder and the gap to BKS is larger across all solvers.
 
-**Honest weakness**: The two-phase approach (minimize vehicles, then polish distance) is pragmatic but can get stuck in local optima. The single-threaded ALNS with simulated annealing is a well-understood but mid-2010s vintage approach. See "Paths to improvement" below for what's realistic.
+**Honest weakness**: The two-phase approach (minimize vehicles, then polish distance) is pragmatic but can get stuck in local optima. Population-based search mitigates this by warm-starting from elite solutions across generations, but the core ALNS with simulated annealing is a well-understood mid-2010s vintage approach.
 
 ---
 
@@ -59,7 +59,7 @@ Li & Lim (PDPTW): avgDistGap +5.3%, 39/56 equal vehicles. This is reasonable but
 
 The C implementation with arena-allocated solutions, pre-allocated scratch buffers, flat arrays, and cached feasibility — this is genuinely fast. Zero malloc/free in the hot loop. The ~14K lines of library code (excluding `surge.c` monolith and tests) compiles in under 2 seconds.
 
-**Current limitation**: Single-threaded only. However, the path to parallelism is straightforward — see below.
+**Multi-threaded**: `sg_solve_parallel()` runs N independent ALNS solves with different seeds, picking the best. `sg_solve_population()` adds generational warm-starting — same compute budget, but guided search typically finds better solutions (~0.6% distance improvement on Li & Lim vs independent runs).
 
 ---
 
@@ -117,7 +117,7 @@ Language bindings are trivial given the JSON API — each binding is just a thin
 ## Auditability — Strong advantage
 
 - 21K lines of straightforward C. No metaprogramming, no templates, no macros beyond the basics. A competent C developer can read the entire solver in a day.
-- 211 tests covering every constraint individually. Each test is self-contained and readable.
+- 220 tests covering every constraint individually. Each test is self-contained and readable.
 - Operator telemetry: you can see exactly which destroy/repair operators were used, how often, and how effective they were.
 - Deterministic: reproducible bugs.
 - ASAN/UBSan clean: no undefined behavior.
@@ -145,13 +145,15 @@ Compare with OR-Tools where the relevant code spans across CP-SAT, routing libra
 
 ---
 
-## Parallelism — Not done, but architecturally easy
+## Parallelism — Done
 
-Currently single-threaded. Two practical strategies require no architectural changes:
+Two strategies implemented in `sg_parallel.c`:
 
-1. **Independent runs** — Trivial. `SGContext` is fully self-contained with no shared state. Spawn N threads with different seeds, pick the best. Embarrassingly parallel, near-linear speedup.
+1. **Independent runs** (`sg_solve_parallel`) — N threads with different seeds, pick the best. `SGContext` is fully self-contained with zero shared state. Embarrassingly parallel. On Li & Lim 100-customer instances (4 threads, 10K iterations): 15 wins vs 0 losses compared to single-threaded.
 
-2. **Parallel move evaluation** — The `sg_route_rank_insertions_for_request()` loop iterates over all vehicles independently. Each vehicle's evaluation is read-only on the solution. A thread pool or `#pragma omp parallel for` would parallelize this with minimal refactoring.
+2. **Population-based search** (`sg_solve_population`) — Multi-generational ALNS with elite pool warm-starting. Each generation runs N parallel threads, harvests best solutions into a sorted pool, and subsequent generations warm-start from elite parents via tournament selection. Same total compute budget as independent runs. On Li & Lim (4 threads, 10K iterations, 3 generations, pool size 6): 10 wins vs 6 losses compared to independent runs, avg distance -0.6%.
+
+Remaining opportunity: **Parallel move evaluation** — the `sg_route_rank_insertions_for_request()` vehicle loop is read-only per vehicle and could be parallelized with a thread pool for additional intra-solve speedup.
 
 ---
 
@@ -233,9 +235,11 @@ Population Manager (Surge-level)
 
 This preserves ALNS's constraint extensibility while gaining population-based diversity. Christiaens & Vanden Berghe (2020) demonstrate this hybrid approach for CVRP with strong results.
 
+**Status**: Implemented as `sg_solve_population()`. Elite pool with tournament selection, generational warm-starting via the existing `sg_set_initial_routes()` mechanism. Benchmark results on Li & Lim (4 threads, 10K iterations, 3 generations): 10 wins vs 6 losses compared to independent parallel runs, avg distance improvement ~0.6%.
+
 ### Bottom line on HGS
 
-ALNS+SA is the right architecture for Surge's constraint portfolio. HGS is worth considering only for a separate, specialized clean-CVRP/VRPTW solver where constraint richness isn't needed. A population wrapper around ALNS is the practical path to better solution quality.
+ALNS+SA is the right architecture for Surge's constraint portfolio. HGS is worth considering only for a separate, specialized clean-CVRP/VRPTW solver where constraint richness isn't needed. The population-ALNS hybrid is now implemented and delivering measurable quality gains.
 
 ---
 
@@ -252,10 +256,10 @@ ALNS+SA is the right architecture for Surge's constraint portfolio. HGS is worth
 | Language bindings | B | B | A | B+ |
 | REST API | B+ | B | B | B+ |
 | Auditability | A | B | D | C |
-| Parallelism | C+ | C | B | B |
+| Parallelism | B+ | C | B | B |
 | Community / ecosystem | D | B | A | B+ |
 
-Revised grades vs. initial assessment: Language bindings upgraded from D to B (JSON API *is* the binding; packaging is all that's missing). Parallelism upgraded from D to C+ (not done yet but architecturally trivial). REST API added at B+ (transport-agnostic handler exists, shared infra ready).
+Revised grades vs. initial assessment: Language bindings upgraded from D to B (JSON API *is* the binding; packaging is all that's missing). Parallelism upgraded from D to B+ (independent runs + population-based search implemented). REST API added at B+ (transport-agnostic handler exists, shared infra ready).
 
 ---
 
@@ -263,6 +267,6 @@ Revised grades vs. initial assessment: Language bindings upgraded from D to B (J
 
 Surge's strengths are **deployability**, **API cleanliness**, **constraint richness**, and **auditability**. These matter enormously for commercial embedding — if you're selling routing as a feature inside a larger product, Surge is easier to ship than anything else in this space.
 
-The remaining gaps — parallelism and population-based search — are execution items, not design debt. The architecture already supports them. Arena allocation is complete and delivering measurable gains.
+Parallelism and population-based search are now implemented. Arena allocation is complete and delivering measurable gains. The remaining quality gap is algorithmic — operator tuning, neighborhood structures, and longer-horizon search strategies.
 
 The strategic bet is sound: a lean, embeddable, WASM-ready solver with a clean API fills a real gap that OR-Tools (bloated, hard to embed) and VROOM (limited constraints) don't serve well.

@@ -1169,11 +1169,11 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ## Implementation Plan
 
-### Current Status (as of 2026-02-22)
+### Current Status (as of 2026-02-23)
 
-**Baseline**: U1-U8 + S1-S9 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks + Multi-Trip complete. All Tier 1 and Tier 2 production gaps closed. 207 tests passing, ASAN/UBSAN clean. Benchmarks unchanged from previous baseline (multi-trip not active in benchmark instances — zero impact on existing behavior).
+**Baseline**: U1-U8 + S1-S10 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks + Multi-Trip + Multi-Threading (parallel + population) complete. All Tier 1 and Tier 2 production gaps closed. 220 tests passing, ASAN/UBSAN clean.
 
-Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), soft time windows (U7), request-vehicle constraints (U8), disjunct time windows, waiting cost (per-vehicle `cost_per_waiting`), overtime cost (per-vehicle `cost_per_overtime` with soft shift), convenience constructors, stop load/type/duration export, depot dock capacity (per-depot `max_simultaneous` with sweep-line overlap penalty), commodity conflicts (bitmask-based, up to 64 types, O(1) conflict check), exclusion groups (at most one request per group per vehicle), mandatory breaks (abstract `max_continuous_work` / `break_duration` / `max_total_work` per vehicle, break injection in timing forward pass, break position export), multi-trip (per-vehicle `max_trips` / `trip_reload_seconds`, capacity reset at depot, trip boundary metadata on stop sequence, new-trip insertion in repair operators, trip_count/trip_index in solution export).
+Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), soft time windows (U7), request-vehicle constraints (U8), disjunct time windows, waiting cost (per-vehicle `cost_per_waiting`), overtime cost (per-vehicle `cost_per_overtime` with soft shift), convenience constructors, stop load/type/duration export, depot dock capacity (per-depot `max_simultaneous` with sweep-line overlap penalty), commodity conflicts (bitmask-based, up to 64 types, O(1) conflict check), exclusion groups (at most one request per group per vehicle), mandatory breaks (abstract `max_continuous_work` / `break_duration` / `max_total_work` per vehicle, break injection in timing forward pass, break position export), multi-trip (per-vehicle `max_trips` / `trip_reload_seconds`, capacity reset at depot, trip boundary metadata on stop sequence, new-trip insertion in repair operators, trip_count/trip_index in solution export), multi-threaded parallel solve (`sg_solve_parallel` — independent runs with different seeds), population-based search (`sg_solve_population` — generational ALNS with elite pool warm-starting, tournament selection).
 
 #### Previous Status (as of 2026-02-22)
 
@@ -1297,6 +1297,7 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - **Phase S9 (deeper ejection chains, CROSS-exchange, or-opt k=1, validation)**: Ejection depth 2→5 with 50K attempt budget, CROSS-exchange operator swapping segments of size 1-3 between routes, or-opt extended to k=1 for single-request relocate in intensify loop, post-solve feasibility validation gate in `sg_solve_route_model`, benchmark iterations 5000→10000. Solomon avgVehGap +0.46→+0.36, avgDistGap +0.2%→-0.2%, equalVehicles 33→36. Li & Lim avgVehGap +0.55→+0.55, avgDistGap +4.3%→+4.1%, equalVehicles 38→40. All 113 solutions verified feasible.
 - **Phase S10 (sequence-dependent setup times + per-operator telemetry)**: Asymmetric N×N setup class matrix (1-indexed, 0 = no class). Setup time added after arrival, before service start, in forward/backward timing passes and both cached insertion evaluators. Per-operator telemetry (selected, accepted, improvements, weight, total_seconds) exposed through Surge API and `--telemetry` flag in benchmarks. Solomon +0.2% → +0.2%, Li & Lim +3.9% → +3.9% (no regression). 135 tests, ASAN clean.
 - **Phase 5+8 (objective modernization + verification)**: Lexicographic best-tracking via `is_better` callback in `ARSolutionOps` (gated by `SGConfig.lexicographic_objective`). Acceptance policy exposed via `SGAcceptType` (SA/RRT/Improving). Adaptive destroy size grows q_max on stagnation, resets on improvement (`SGConfig.adaptive_q`). Cordeau DARP loader (`sg_load_cordeau_darp`) and `bench_cordeau` harness. 20 new tests (135→155). Solomon +0.2%, Li & Lim +3.9% (no regression). DARP solve quality pending dedicated construction heuristic.
+- **Phase S11 (multi-threaded parallel + population search)**: `sg_solve_parallel()` runs N independent ALNS solves with different seeds, picks best (15 wins vs 0 losses on Li & Lim vs single-threaded). `sg_solve_population()` adds generational warm-starting — elite pool with tournament selection, same compute budget but guided search. Li & Lim population vs parallel: 10 wins, 6 losses, 40 ties, avg distance -0.6%. Includes `solution_arena_size` transfer fix ensuring fast arena-memcpy path in result harvesting. 5 new tests (215→220). ASAN clean.
 - Unified route state drives both delivery-only and PDPTW solves. The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time constraints.
 - Stop-level splice/excise operations preserve non-adjacent PD placement across ALNS destroy/repair cycles.
 
@@ -1304,7 +1305,9 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - [x] Keep Solomon VRPTW as regression benchmark (56/56, +0.2%).
 - [x] Add Li & Lim PDPTW harness and BKS comparator (57/57, +3.9%).
 - [x] Add Cordeau DARP harness (`bench_cordeau`, `sg_load_cordeau_darp`). Loader + benchmark wired; solve quality pending DARP-specific construction heuristic.
-- [x] Expand unit tests from smoke coverage to operator and feasibility regression suites (135 → 155 tests).
+- [x] Expand unit tests from smoke coverage to operator and feasibility regression suites (135 → 155 → 220 tests).
+- [x] Multi-threaded parallel solve (`sg_solve_parallel`): independent runs with different seeds.
+- [x] Population-based search (`sg_solve_population`): generational ALNS with elite pool warm-starting.
 - [ ] Add profiling-driven performance work (allocation hot paths, insertion complexity, cache reuse).
 
 Execution order:
@@ -1646,11 +1649,11 @@ Grouped by business impact:
 | Gap | Status | Impact | Notes |
 |-----|--------|--------|-------|
 | **Arena allocator** | Phases 1-3 done | High | Phase 1 (per-solution arena): ~29 malloc → 1, ~26 free → 1. Phase 2 (optimized copy): `init_for_copy()` + single `memcpy` of arena buffer. Phase 3 (scratch buffers): `SGScratchBuffers` on `SGContext` eliminates per-call malloc/free in feasibility and local search. Cumulative: Solomon -14.8%, Li&Lim -5.0%, Cordeau -3.4% vs Phase 1. |
-| **Multi-threading: independent runs** | Not started | High | `SGContext` is self-contained, no shared state. N threads × N seeds, pick best. Embarrassingly parallel. |
+| **Multi-threading: independent runs** | ✅ Done | High | `sg_solve_parallel()`: N threads × N seeds, pick best. 15 wins vs 0 losses on Li & Lim vs single-threaded. |
 | **Multi-threading: parallel move eval** | Not started | Medium | `sg_route_rank_insertions_for_request()` vehicle loop is read-only per vehicle. Thread pool or OpenMP. |
 | **REST API server** | Not started | High | Mongoose + `sh_workqueue` + `sh_ratelimit` + `sh_metrics`. Same pattern as FuelWise (`fuelwise/api/src/main.c`). ~600 LOC of boilerplate. |
 | **Language bindings** | Not started | Medium | JSON API is the binding — each language wrapper is serialize/call/deserialize. Packaging (PyPI, npm) is the real work. |
-| **Population-based search** | Not started | Medium | ALNS population wrapper at Surge level (not Arbor). Crossover + Arbor intensification per elite. See `docs/analysis/surge.md` for HGS analysis. |
+| **Population-based search** | ✅ Done | Medium | `sg_solve_population()`: generational ALNS with elite pool warm-starting. 10 wins vs 6 losses on Li & Lim vs independent parallel runs, avg distance -0.6%. |
 | **WASM build** | Not started | Medium | Emscripten target. `sg_api_handle()` is already transport-agnostic. |
 
 ### JSON API (`sg_api.h`)
