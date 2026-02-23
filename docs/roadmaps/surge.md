@@ -1178,6 +1178,24 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ### Current Status (as of 2026-02-23)
 
+**Baseline**: U1-U8 + S1-S12 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks + Multi-Trip + Multi-Threading (parallel + population) + SA cooling fix + mid-solve ejection pulse + Speed Profiles + Travel Profiles + Open Start + Plan/ETA Validation + Infeasible-Space Exploration + Aggressive SISR complete. All Tier 1 and Tier 2 production gaps closed. REST API server, WASM build, Python and Node.js bindings exist. 257 tests passing, ASAN/UBSAN clean.
+
+Best measured quality (10000 iterations, deterministic seed 42):
+
+Single-threaded:
+- Solomon (VRPTW, 56 cases): `solved=56/56`, `avgVehGap=+0.30`, `avgDistGap=+0.2%`, `equalVehicles=39`, `lexiNonWorse=12`.
+- Li & Lim (PDPTW, 57 cases): `solved=57/57`, `avgVehGap=+0.48`, `avgDistGap=+4.2%`, `equalVehicles=44`, `lexiNonWorse=24`.
+
+Population-based (3 generations, auto threads):
+- Solomon (VRPTW, 56 cases): `solved=56/56`, `avgVehGap=+0.20`, `avgDistGap=-0.2%`, `equalVehicles=45`, `lexiNonWorse=13`.
+- Li & Lim (PDPTW, 57 cases): `solved=57/57`, `avgVehGap=+0.38`, `avgDistGap=+3.5%`, `equalVehicles=48`, `lexiNonWorse=26`.
+
+Implemented features: Everything in previous status plus: HGS-style infeasible-space exploration with adaptive penalty manager (6 constraint types — time warp, capacity, duration, ride time, distance, total work — with independent per-constraint self-adjustment), time warping (violation accumulated, start warped to tw_late for downstream propagation), feasible-beats-infeasible best-tracking, cost-proportional penalty scaling (bounds and initial weights adapt to problem cost structure), instance-adaptive SISR L_max (Christiaens & Vanden Berghe 2020). `--population` flag added to Solomon and Li & Lim benchmarks.
+
+Infrastructure: REST API server (Mongoose, rate limiting, work queue, Prometheus metrics, CORS), WASM build (Emscripten), Python bindings (ctypes), Node.js bindings (ffi-napi). REST API e2e test suite.
+
+#### Previous Status (as of 2026-02-23)
+
 **Baseline**: U1-U8 + S1-S11 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks + Multi-Trip + Multi-Threading (parallel + population) + SA cooling fix + mid-solve ejection pulse + Speed Profiles + Travel Profiles + Open Start + Plan/ETA Validation complete. All Tier 1 and Tier 2 production gaps closed. REST API server, WASM build, Python and Node.js bindings exist. 252 tests passing, ASAN/UBSAN clean.
 
 Best measured quality (10000 iterations, deterministic seed 42):
@@ -1328,6 +1346,7 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - **Phase S10 (sequence-dependent setup times + per-operator telemetry)**: Asymmetric N×N setup class matrix (1-indexed, 0 = no class). Setup time added after arrival, before service start, in forward/backward timing passes and both cached insertion evaluators. Per-operator telemetry (selected, accepted, improvements, weight, total_seconds) exposed through Surge API and `--telemetry` flag in benchmarks. Solomon +0.2% → +0.2%, Li & Lim +3.9% → +3.9% (no regression). 135 tests, ASAN clean.
 - **Phase 5+8 (objective modernization + verification)**: Lexicographic best-tracking via `is_better` callback in `ARSolutionOps` (gated by `SGConfig.lexicographic_objective`). Acceptance policy exposed via `SGAcceptType` (SA/RRT/Improving). Adaptive destroy size grows q_max on stagnation, resets on improvement (`SGConfig.adaptive_q`). Cordeau DARP loader (`sg_load_cordeau_darp`) and `bench_cordeau` harness. 20 new tests (135→155). Solomon +0.2%, Li & Lim +3.9% (no regression). DARP solve quality pending dedicated construction heuristic.
 - **Phase S11 (multi-threaded parallel + population search)**: `sg_solve_parallel()` runs N independent ALNS solves with different seeds, picks best (15 wins vs 0 losses on Li & Lim vs single-threaded). `sg_solve_population()` adds generational warm-starting — elite pool with tournament selection, same compute budget but guided search. Li & Lim population vs parallel: 10 wins, 6 losses, 40 ties, avg distance -0.6%. Includes `solution_arena_size` transfer fix ensuring fast arena-memcpy path in result harvesting. 5 new tests (215→220). ASAN clean.
+- **Phase S12 (infeasible-space exploration + aggressive SISR)**: HGS-style infeasible-space search with modular penalty manager (`SGPenaltyManager` in `sg_penalty.c`). 6 constraint types (time warp, capacity, duration, ride time, distance, total work) with independent per-constraint self-adjustment. Time warping accumulates violation and warps start to `tw_late` for downstream propagation. Feasible-beats-infeasible best-tracking in `sg_route_solution_is_better`. Penalty bounds and initial weights scale proportionally with problem cost structure via `cost_scale` parameter — no hardcoded constants. Instance-adaptive SISR `L_max` based on avg route length (Christiaens & Vanden Berghe 2020), initial string destroy weight 2.0. Phase 1 (vehicle min) uses aggressive 15% feasible target; Phase 2 (distance) runs strict (penalty disabled). Solomon single-thread: avgVehGap +0.36→+0.30, equalVehicles 37→39. Solomon population: avgVehGap +0.20, equalVehicles 45, avgDistGap -0.2%. Li & Lim single-thread: avgVehGap +0.52→+0.48, equalVehicles 41→44. Li & Lim population: avgVehGap +0.38, equalVehicles 48, avgDistGap +3.5%. 5 new tests (252→257). ASAN/UBSAN clean.
 - Unified route state drives both delivery-only and PDPTW solves. The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time constraints.
 - Stop-level splice/excise operations preserve non-adjacent PD placement across ALNS destroy/repair cycles.
 
@@ -1990,6 +2009,42 @@ At 5000 iterations: Solomon +0.8%, Li & Lim +4.2%.
 - Benchmark default iterations 5000 → 10000 in both `bench_li_lim.c` and `bench_solomon.c`
 
 **Tests**: All 56 Solomon + 57 Li & Lim cases pass validation.
+
+### Phase S12: Infeasible-Space Exploration + Aggressive SISR ✅
+
+**Result**: Solomon single-thread: avgVehGap +0.36→+0.30, avgDistGap +0.4%→+0.2%, equalVehicles 37→39. Solomon population (3 gen): avgVehGap +0.20, avgDistGap -0.2%, equalVehicles 45. Li & Lim single-thread: avgVehGap +0.52→+0.48, avgDistGap +4.8%→+4.2%, equalVehicles 41→44. Li & Lim population (3 gen): avgVehGap +0.38, avgDistGap +3.5%, equalVehicles 48.
+
+**Changes (surge — sg_penalty.c, new file):**
+- `SGPenaltyType` enum with 6 constraint types: TIME_WARP, CAPACITY, DURATION, RIDE_TIME, DISTANCE, TOTAL_WORK
+- `SGPenaltyManager` struct with per-constraint weights, strategy callbacks (update/record/reset), and opaque state
+- Adaptive strategy (HGS-style): per-constraint self-adjustment based on fraction of recent feasible solutions
+- `cost_scale` parameter drives penalty_min (`cost_scale * 1e-4`), penalty_max (`cost_scale * 100`), and initial weights (`cost_scale / 100`) — fully proportional to problem cost structure
+- `sg_solution_is_feasible()` and `sg_solution_total_violation()` helpers
+
+**Changes (surge — sg_feasibility.c):**
+- `sg_route_eval_insertion_cached`: continue past TW/capacity/duration/ride-time/distance/total-work violations when `penalty.enabled`, accumulating into `ins_violations[]` and adding penalty cost to insertion score
+- `sg_route_eval_pd_best_insertion_cached`: same pattern for PD insertions
+- `sg_route_update_timing`: compute per-route per-constraint violations, store in `route_violations[]`, sum into `sol->violations[]`
+- `sg_route_update_load`: capacity violations computed and stored
+- Time warping: `start = tw_late` for downstream propagation after accumulating warp
+- Hard rejects (qualifications, blacklist, commodity conflicts, exclusion groups) remain strict
+
+**Changes (surge — sg_solution.c):**
+- `sg_route_solution_is_better`: feasible beats infeasible regardless of cost; both-infeasible prefers less total violation
+- `sg_route_solution_cost_record` wrapper for ALNS `ops.cost` that calls `penalty.record()` (keeps `sg_route_solution_cost` pure)
+- `violations[SG_PENALTY_COUNT]` and `route_violations` allocated in arena, copied in `sg_route_solution_copy`
+
+**Changes (surge — sg_solve.c):**
+- Phase 1 penalty: `sg_penalty_init_adaptive(..., cost_scale)` with target_feasible=0.15 (aggressive)
+- Phase 2 penalty: disabled (strict distance polishing)
+- `ops->is_better = sg_route_solution_is_better` always set (was conditional)
+- `penalty.update()` wired into progress forwarder
+
+**Changes (surge — sg_destroy.c):**
+- Instance-adaptive SISR `L_max = max(SG_STRING_L_MAX, avg_route_length)` at both string extraction points
+- Initial string destroy operator weight 2.0 (was 1.0)
+
+**Tests**: 5 new tests (252→257). ASAN/UBSAN clean.
 
 ---
 

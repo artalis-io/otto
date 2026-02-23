@@ -32,25 +32,31 @@ The JSON API (`sg_api.c`) is a thin veneer over the same C API — no separate "
 
 ---
 
-## Solution Quality — Competitive but not top-tier
+## Solution Quality — Competitive, approaching top-tier
 
-Solomon benchmarks: 56/56 solved, avgDistGap +0.4% vs. BKS, 37/56 matching vehicle count. That's solidly in "good metaheuristic" territory.
+**Single-threaded** (10k iters, seed 42):
+- Solomon benchmarks: 56/56 solved, avgDistGap +0.2% vs. BKS, 39/56 matching vehicle count (avgVehGap +0.30). Solidly in "good metaheuristic" territory.
+- Li & Lim (PDPTW): avgDistGap +4.2%, 44/56 equal vehicles (avgVehGap +0.48).
+
+**Population-based** (10k iters, 3 generations, auto threads):
+- Solomon: avgDistGap **-0.2%** vs. BKS (beating BKS average on distance), **45/56** matching vehicle count (avgVehGap +0.20).
+- Li & Lim: avgDistGap +3.5%, **48/56** equal vehicles (avgVehGap +0.38).
 
 For context:
-- **VROOM**: Typically 2-5% above BKS on Solomon, but much faster. Surge is comparable or slightly better on quality.
-- **OR-Tools**: With careful tuning, OR-Tools can get within 1-3% of BKS. Roughly on par with Surge.
-- **HGS-CVRP** (Vidal): State-of-the-art, often matches or sets BKS. Surge doesn't compete here — but HGS is a research solver, not a product. See "Why not HGS?" below.
+- **VROOM**: Typically 2-5% above BKS on Solomon, but much faster. Surge is significantly better on quality.
+- **OR-Tools**: With careful tuning, OR-Tools can get within 1-3% of BKS. Surge is now better on Solomon, comparable on PDPTW.
+- **HGS-CVRP** (Vidal): State-of-the-art, often matches or sets BKS. Surge is closing the gap — particularly on vehicle count (45/56 vs HGS's ~54/56 on Solomon). The remaining gap is concentrated on tight-TW R1/RC1 instances. See "Why not HGS?" below.
 - **LKH-3**: Similar — academic champion, not a deployable product.
 
-Li & Lim (PDPTW): avgDistGap +4.8% single-threaded, improved with population-based parallel search (4 threads, 3 generations). 41/56 equal vehicles. PDPTW is inherently harder and the gap to BKS is larger across all solvers.
+The key algorithmic advancement is **HGS-style infeasible-space exploration**: the solver temporarily accepts constraint-violating solutions during search, with adaptive penalty weights that self-adjust per constraint type. This allows vehicle-reducing moves that require deep infeasible traversal (redistributing requests across fewer vehicles temporarily violates time windows). Combined with population-based parallel search, this is the single biggest quality lever — Solomon vehicle matches jumped from 37/56 (pre-infeasible) to 45/56 (population + infeasible).
 
-**Honest weakness**: The two-phase approach (minimize vehicles, then polish distance) is pragmatic but can get stuck in local optima. Population-based search mitigates this by warm-starting from elite solutions across generations, but the core ALNS with simulated annealing is a well-understood mid-2010s vintage approach.
+**Honest weakness**: The remaining +1 vehicle gap on R1/RC1 tight-TW instances (R104, R109-R112, RC101, RC105-RC108) likely requires either deeper infeasible traversal (higher iteration budgets), population diversity mechanisms (biased fitness), or specialized operators (SISRs/LNS targeting these specific structural patterns). The core ALNS + SA framework is well-understood; the infeasible-space exploration brings it closer to modern HGS-level techniques.
 
 ---
 
 ## Performance (Speed) — Very strong
 
-~4.8 seconds per 100-customer Solomon instance (optimized build). This is fast for the quality level.
+~9.2 seconds per 100-customer Solomon instance single-threaded, ~31 seconds with population mode (optimized build, 10k iterations). This is fast for the quality level.
 
 - **VROOM**: Faster (sub-second on 100-node), but sacrifices quality. Uses construction + basic local search, no metaheuristic.
 - **OR-Tools**: Comparable speed at default settings; slower when you tune for quality.
@@ -59,7 +65,7 @@ Li & Lim (PDPTW): avgDistGap +4.8% single-threaded, improved with population-bas
 
 The C implementation with arena-allocated solutions, pre-allocated scratch buffers, flat arrays, and cached feasibility — this is genuinely fast. Zero malloc/free in the hot loop. The ~14K lines of library code (excluding `surge.c` monolith and tests) compiles in under 2 seconds.
 
-**Multi-threaded**: `sg_solve_parallel()` runs N independent ALNS solves with different seeds, picking the best. `sg_solve_population()` adds generational warm-starting — same compute budget, but guided search typically finds better solutions (~0.6% distance improvement on Li & Lim vs independent runs).
+**Multi-threaded**: `sg_solve_parallel()` runs N independent ALNS solves with different seeds, picking the best. `sg_solve_population()` adds generational warm-starting — same compute budget, but guided search finds significantly better solutions. Population mode with infeasible-space exploration is the strongest configuration: Solomon 45/56 equal vehicles (avgDistGap -0.2%), Li & Lim 48/56 equal vehicles (avgDistGap +3.5%).
 
 ---
 
@@ -119,7 +125,7 @@ Language bindings are trivial given the JSON API — each binding is just a thin
 ## Auditability — Strong advantage
 
 - 21K lines of straightforward C. No metaprogramming, no templates, no macros beyond the basics. A competent C developer can read the entire solver in a day.
-- 252 tests covering every constraint individually. Each test is self-contained and readable.
+- 257 tests covering every constraint individually. Each test is self-contained and readable.
 - Operator telemetry: you can see exactly which destroy/repair operators were used, how often, and how effective they were.
 - Deterministic: reproducible bugs.
 - ASAN/UBSan clean: no undefined behavior.
@@ -153,7 +159,16 @@ Two strategies implemented in `sg_parallel.c`:
 
 1. **Independent runs** (`sg_solve_parallel`) — N threads with different seeds, pick the best. `SGContext` is fully self-contained with zero shared state. Embarrassingly parallel. On Li & Lim 100-customer instances (4 threads, 10K iterations): 15 wins vs 0 losses compared to single-threaded.
 
-2. **Population-based search** (`sg_solve_population`) — Multi-generational ALNS with elite pool warm-starting. Each generation runs N parallel threads, harvests best solutions into a sorted pool, and subsequent generations warm-start from elite parents via tournament selection. Same total compute budget as independent runs. On Li & Lim (4 threads, 10K iterations, 3 generations, pool size 6): 10 wins vs 6 losses compared to independent runs, avg distance -0.6%.
+2. **Population-based search** (`sg_solve_population`) — Multi-generational ALNS with elite pool warm-starting. Each generation runs N parallel threads, harvests best solutions into a sorted pool, and subsequent generations warm-start from elite parents via tournament selection. Same total compute budget as independent runs. Combined with infeasible-space exploration (Phase S12), this is the strongest configuration:
+
+| Benchmark | Metric | Single-thread | Population (3 gen) |
+|-----------|--------|---------------|--------------------|
+| Solomon | equalVehicles | 39/56 | **45/56** |
+| Solomon | avgVehGap | +0.30 | **+0.20** |
+| Solomon | avgDistGap | +0.2% | **-0.2%** |
+| Li & Lim | equalVehicles | 44/56 | **48/56** |
+| Li & Lim | avgVehGap | +0.48 | **+0.38** |
+| Li & Lim | avgDistGap | +4.2% | **+3.5%** |
 
 Remaining opportunity: **Parallel move evaluation** — the `sg_route_rank_insertions_for_request()` vehicle loop is read-only per vehicle and could be parallelized with a thread pool for additional intra-solve speedup.
 
