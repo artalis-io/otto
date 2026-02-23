@@ -39,6 +39,33 @@
 #define SG_STRING_L_MAX 10
 #define SG_NO_VEHICLE UINT32_MAX
 
+/* Penalty manager: constraint types for infeasible-space exploration */
+typedef enum {
+    SG_PENALTY_TIME_WARP,        /* TW violation: service past tw_late */
+    SG_PENALTY_CAPACITY,         /* load exceeds vehicle capacity */
+    SG_PENALTY_DURATION,         /* route duration exceeds max_duration */
+    SG_PENALTY_RIDE_TIME,        /* PD ride time exceeds max_ride_time */
+    SG_PENALTY_DISTANCE,         /* route distance exceeds max_distance */
+    SG_PENALTY_TOTAL_WORK,       /* cumulative work exceeds max_total_work */
+    SG_PENALTY_COUNT             /* sentinel — number of constraint types */
+} SGPenaltyType;
+
+typedef struct SGPenaltyManager SGPenaltyManager;
+
+struct SGPenaltyManager {
+    double weight[SG_PENALTY_COUNT];  /* current penalty weight per constraint */
+    uint8_t enabled;                  /* 1 = infeasible search active */
+
+    /* Strategy callbacks */
+    void (*update)(SGPenaltyManager *mgr);     /* called at segment boundary */
+    void (*record)(SGPenaltyManager *mgr,      /* called per evaluated solution */
+                   const double violations[SG_PENALTY_COUNT]);
+    void (*reset)(SGPenaltyManager *mgr);      /* reset counters between phases */
+
+    /* Strategy-specific state (opaque to core solver) */
+    void *state;
+};
+
 /* Internal types */
 typedef struct {
     uint32_t total_requests;
@@ -132,6 +159,10 @@ typedef struct {
     /* Multi-trip */
     uint32_t *route_trip_count;          /* [num_vehicles] */
     uint8_t  *route_request_trip_start;  /* [num_vehicles * route_stride] — parallels route_requests */
+
+    /* Infeasible-space exploration: constraint violations */
+    double violations[SG_PENALTY_COUNT];            /* per-type totals across all routes */
+    double *route_violations;                        /* [num_vehicles * SG_PENALTY_COUNT] per-route */
 } SGRouteSolution;
 
 typedef struct {
@@ -336,6 +367,9 @@ struct SGContext {
     SGTravelProfile *travel_profiles;    /* [num_travel_profiles] */
     uint32_t num_travel_profiles;
     uint8_t has_travel_profiles;         /* fast-path flag */
+
+    /* Infeasible-space exploration penalty manager */
+    SGPenaltyManager penalty;
 };
 
 /* sg_context.c */
@@ -829,6 +863,14 @@ void sg_route_restore_from_backup(SGRouteSolution *sol, SGRouteSolution *backup)
 
 /* sg_validate.c */
 SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes, const SGPlanRoute *routes);
+
+/* sg_penalty.c */
+void sg_penalty_init_adaptive(SGPenaltyManager *mgr, double target_feasible,
+                              double tolerance, double increase_factor,
+                              double decrease_factor, double cost_scale);
+void sg_penalty_free(SGPenaltyManager *mgr);
+int sg_solution_is_feasible(const SGRouteSolution *sol);
+double sg_solution_total_violation(const SGRouteSolution *sol);
 
 /* sg_solve.c */
 void sg_adaptive_q_bounds(int num_requests, int config_q_min, int config_q_max,

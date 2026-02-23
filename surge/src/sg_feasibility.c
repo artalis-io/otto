@@ -49,6 +49,10 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
         if (sol->route_break_time) sol->route_break_time[vehicle_id] = 0.0;
         if (sol->route_break_count) sol->route_break_count[vehicle_id] = 0;
         if (sol->route_total_work) sol->route_total_work[vehicle_id] = 0.0;
+        if (sol->route_violations) {
+            memset(sol->route_violations + (size_t)vehicle_id * SG_PENALTY_COUNT,
+                   0, SG_PENALTY_COUNT * sizeof(double));
+        }
         return 1;
     }
 
@@ -333,6 +337,88 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
     }
 
     sol->route_distance[vehicle_id] = distance;
+
+    /* Compute per-route constraint violations for infeasible-space exploration */
+    if (sol->route_violations) {
+        double *rv = sol->route_violations + (size_t)vehicle_id * SG_PENALTY_COUNT;
+        int vk;
+        for (vk = 0; vk < SG_PENALTY_COUNT; vk++) rv[vk] = 0.0;
+
+        /* Time warp: per-stop TW violation */
+        for (i = 0; i < stop_len; i++) {
+            const SGTaskRecord *task = &ctx->tasks[stops[i].task_id];
+            if (task->has_time_window && stops[i].service_start > (double)task->tw_late + 1e-9) {
+                rv[SG_PENALTY_TIME_WARP] += stops[i].service_start - (double)task->tw_late;
+            }
+        }
+        /* End depot TW violation */
+        if (!vehicle->open_end && end_depot->has_time_window && stop_len > 0) {
+            double ret = sol->route_depot_return ? sol->route_depot_return[vehicle_id] : time_cursor;
+            if (ret > (double)end_depot->tw_late + 1e-9) {
+                rv[SG_PENALTY_TIME_WARP] += ret - (double)end_depot->tw_late;
+            }
+        }
+        /* Shift TW violation (hard shift only — soft shifts use overtime cost) */
+        if (vehicle->has_shift_time_window && !(vehicle->cost_per_overtime > 0.0) && stop_len > 0) {
+            if (time_cursor > (double)vehicle->shift_late + 1e-9) {
+                rv[SG_PENALTY_TIME_WARP] += time_cursor - (double)vehicle->shift_late;
+            }
+        }
+        /* Duration violation */
+        if (vehicle->max_duration_seconds > 0 && sol->route_duration) {
+            double dur = sol->route_duration[vehicle_id];
+            if (dur > (double)vehicle->max_duration_seconds + 1e-9) {
+                rv[SG_PENALTY_DURATION] += dur - (double)vehicle->max_duration_seconds;
+            }
+        }
+        /* Ride time violation (PD pairs) */
+        for (i = 0; i < stop_len; i++) {
+            if (!stops[i].is_pickup) {
+                const SGRequestRecord *req = &ctx->requests[stops[i].request_id];
+                if (req->kind == SG_REQUEST_KIND_PICKUP_DELIVERY) {
+                    uint32_t pp = sol->request_pickup_stop_pos[stops[i].request_id];
+                    if (pp < stop_len) {
+                        double ride = stops[i].service_start - stops[pp].depart;
+                        double limit = INFINITY;
+                        if (req->has_max_ride_time) {
+                            limit = (double)req->max_ride_time_seconds;
+                        } else {
+                            const SGTaskRecord *pt = &ctx->tasks[req->pickup_task_id];
+                            const SGTaskRecord *dt = &ctx->tasks[req->delivery_task_id];
+                            if (pt->has_time_window && dt->has_time_window) {
+                                limit = (double)(dt->tw_late - pt->tw_early);
+                            }
+                        }
+                        if (isfinite(limit) && ride > limit + 1e-9) {
+                            rv[SG_PENALTY_RIDE_TIME] += ride - limit;
+                        }
+                    }
+                }
+            }
+        }
+        /* Total work violation */
+        if (vehicle->max_total_work_seconds > 0 && sol->route_total_work) {
+            double tw = sol->route_total_work[vehicle_id];
+            if (tw > (double)vehicle->max_total_work_seconds + 1e-9) {
+                rv[SG_PENALTY_TOTAL_WORK] += tw - (double)vehicle->max_total_work_seconds;
+            }
+        }
+        /* Distance violation */
+        if (vehicle->max_distance > 0.0 && distance > vehicle->max_distance + 1e-9) {
+            rv[SG_PENALTY_DISTANCE] += distance - vehicle->max_distance;
+        }
+
+        /* Recompute solution-level violation sums */
+        {
+            int sk;
+            for (sk = 0; sk < SG_PENALTY_COUNT; sk++) sol->violations[sk] = 0.0;
+            for (i = 0; i < sol->num_vehicles; i++) {
+                const double *vrv = sol->route_violations + (size_t)i * SG_PENALTY_COUNT;
+                for (sk = 0; sk < SG_PENALTY_COUNT; sk++) sol->violations[sk] += vrv[sk];
+            }
+        }
+    }
+
     return 1;
 }
 
@@ -373,6 +459,55 @@ int sg_route_update_load(const SGContext *ctx, SGRouteSolution *sol, uint32_t ve
                 : load[(size_t)i * dim_count + d];
             double demand = (task->has_demand && task->demand) ? task->demand[d] : 0.0;
             load[((size_t)i + 1U) * dim_count + d] = prev_load + demand;
+        }
+    }
+
+    /* Compute capacity violation for infeasible-space exploration */
+    if (sol->route_violations) {
+        const SGVehicleRecord *vehicle = &ctx->vehicles[vehicle_id];
+        double cap_excess = 0.0;
+
+        /* Per-trip: compute min/max prefix sums, check against capacity */
+        {
+            uint32_t trip_start = 0;
+            uint32_t s;
+            for (s = 0; s <= stop_len; s++) {
+                int trip_end = (s == stop_len) || (s > 0 && stops[s].trip_start);
+                if (trip_end && s > trip_start) {
+                    /* Evaluate trip [trip_start, s) */
+                    uint32_t scan_start = (trip_start > 0) ? trip_start + 1 : 1;
+                    for (d = 0; d < (uint32_t)dim_count; d++) {
+                        double cap = (vehicle->has_capacity && vehicle->capacity)
+                                     ? vehicle->capacity[d] : INFINITY;
+                        double pmin = 0.0, pmax = 0.0;
+                        uint32_t ps;
+                        if (!isfinite(cap)) continue;
+                        for (ps = scan_start; ps <= s; ps++) {
+                            double val = load[(size_t)ps * dim_count + d];
+                            if (val < pmin) pmin = val;
+                            if (val > pmax) pmax = val;
+                        }
+                        if ((pmax - pmin) > cap + SG_DEMAND_TOLERANCE) {
+                            cap_excess += (pmax - pmin) - cap;
+                        }
+                    }
+                }
+                if (s < stop_len && stops[s].trip_start && s > 0) {
+                    trip_start = s;
+                }
+            }
+        }
+
+        sol->route_violations[(size_t)vehicle_id * SG_PENALTY_COUNT + SG_PENALTY_CAPACITY] = cap_excess;
+
+        /* Recompute solution-level capacity violation sum */
+        {
+            double total_cap = 0.0;
+            uint32_t v;
+            for (v = 0; v < sol->num_vehicles; v++) {
+                total_cap += sol->route_violations[(size_t)v * SG_PENALTY_COUNT + SG_PENALTY_CAPACITY];
+            }
+            sol->violations[SG_PENALTY_CAPACITY] = total_cap;
         }
     }
 
@@ -1033,6 +1168,8 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
     double old_segment, new_segment, delta, new_route_distance;
     double score;
     uint32_t ns;
+    double ins_violations[SG_PENALTY_COUNT];
+    uint8_t pen_enabled;
 
     if (!ctx || !sol || !score_out || !new_route_distance_out ||
         vehicle_id >= sol->num_vehicles || request_id >= sol->base.total_requests) {
@@ -1051,6 +1188,9 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
     if (!sg_exclusion_compatible(ctx, sol, vehicle_id, request_id)) {
         return 0;
     }
+
+    pen_enabled = ctx->penalty.enabled;
+    memset(ins_violations, 0, sizeof(ins_violations));
 
     vehicle = &ctx->vehicles[vehicle_id];
 
@@ -1159,7 +1299,9 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
             ins_work_since_break += setup;
             start_t = sg_task_snap_forward(task, arrival_t + setup);
             if (start_t > (double)task->tw_late + 1e-9) {
-                return 0;
+                if (!pen_enabled) return 0;
+                ins_violations[SG_PENALTY_TIME_WARP] += start_t - (double)task->tw_late;
+                start_t = (double)task->tw_late; /* warp: pretend on-time for downstream */
             }
 
             new_stops[ns].arrival = arrival_t;
@@ -1181,7 +1323,8 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                         ride_limit = (double)(drop_task->tw_late - pickup_task->tw_early);
                     }
                     if (isfinite(ride_limit) && ride_time > ride_limit + 1e-9) {
-                        return 0;
+                        if (!pen_enabled) return 0;
+                        ins_violations[SG_PENALTY_RIDE_TIME] += ride_time - ride_limit;
                     }
                 }
             }
@@ -1223,7 +1366,10 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
             }
             if (sol->route_total_work[vehicle_id] + new_work_delta >
                 (double)vehicle->max_total_work_seconds + 1e-9) {
-                return 0;
+                if (!pen_enabled) return 0;
+                ins_violations[SG_PENALTY_TOTAL_WORK] +=
+                    (sol->route_total_work[vehicle_id] + new_work_delta) -
+                    (double)vehicle->max_total_work_seconds;
             }
         }
 
@@ -1251,7 +1397,8 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                 }
                 arr_depot = cursor + ret_brk + ret_travel;
                 if (end_depot->has_time_window && arr_depot > (double)end_depot->tw_late + 1e-9) {
-                    return 0;
+                    if (!pen_enabled) return 0;
+                    ins_violations[SG_PENALTY_TIME_WARP] += arr_depot - (double)end_depot->tw_late;
                 }
                 reload_depart = arr_depot + (double)vehicle->trip_reload_seconds;
                 if (sd->has_time_window && reload_depart < (double)sd->tw_early) {
@@ -1260,7 +1407,8 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                 arr_next = reload_depart + sg_travel_dur(ctx, vehicle->start_location_id, next_loc, vehicle_id, reload_depart);
                 /* No setup across trip boundary */
                 if (arr_next > stops[next_stop_idx].latest_start + 1e-9) {
-                    return 0;
+                    if (!pen_enabled) return 0;
+                    ins_violations[SG_PENALTY_TIME_WARP] += arr_next - stops[next_stop_idx].latest_start;
                 }
             } else {
                 uint32_t next_loc = ctx->tasks[stops[next_stop_idx].task_id].location_id;
@@ -1282,7 +1430,9 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                 {
                 double new_arrival_at_next = cursor + next_break_time + travel_to_next_stop;
                 if (new_arrival_at_next + setup_at_next > stops[next_stop_idx].latest_start + 1e-9) {
-                    return 0;
+                    if (!pen_enabled) return 0;
+                    ins_violations[SG_PENALTY_TIME_WARP] +=
+                        (new_arrival_at_next + setup_at_next) - stops[next_stop_idx].latest_start;
                 }
                 }
             }
@@ -1291,7 +1441,8 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
             if (vehicle->open_end) {
                 if (vehicle->has_shift_time_window && cursor > (double)vehicle->shift_late + 1e-9
                     && !(vehicle->cost_per_overtime > 0.0)) {
-                    return 0;
+                    if (!pen_enabled) return 0;
+                    ins_violations[SG_PENALTY_TIME_WARP] += cursor - (double)vehicle->shift_late;
                 }
                 if (vehicle->max_duration_seconds > 0) {
                     const SGDepotRecord *sd = &ctx->depots[vehicle->start_depot_id];
@@ -1300,7 +1451,8 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                         dd = (double)sd->tw_early;
                     }
                     if ((cursor - dd) > (double)vehicle->max_duration_seconds + 1e-9) {
-                        return 0;
+                        if (!pen_enabled) return 0;
+                        ins_violations[SG_PENALTY_DURATION] += (cursor - dd) - (double)vehicle->max_duration_seconds;
                     }
                 }
             } else {
@@ -1318,11 +1470,13 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                 }
                 arrival_at_end = cursor + return_brk + return_travel;
                 if (end_depot->has_time_window && arrival_at_end > (double)end_depot->tw_late + 1e-9) {
-                    return 0;
+                    if (!pen_enabled) return 0;
+                    ins_violations[SG_PENALTY_TIME_WARP] += arrival_at_end - (double)end_depot->tw_late;
                 }
                 if (vehicle->has_shift_time_window && arrival_at_end > (double)vehicle->shift_late + 1e-9
                     && !(vehicle->cost_per_overtime > 0.0)) {
-                    return 0;
+                    if (!pen_enabled) return 0;
+                    ins_violations[SG_PENALTY_TIME_WARP] += arrival_at_end - (double)vehicle->shift_late;
                 }
                 if (vehicle->max_duration_seconds > 0) {
                     const SGDepotRecord *sd = &ctx->depots[vehicle->start_depot_id];
@@ -1331,7 +1485,8 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                         dd = (double)sd->tw_early;
                     }
                     if ((arrival_at_end - dd) > (double)vehicle->max_duration_seconds + 1e-9) {
-                        return 0;
+                        if (!pen_enabled) return 0;
+                        ins_violations[SG_PENALTY_DURATION] += (arrival_at_end - dd) - (double)vehicle->max_duration_seconds;
                     }
                 }
             }
@@ -1428,7 +1583,8 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
             }
 
             if ((hyp_max - hyp_min) > cap + SG_DEMAND_TOLERANCE) {
-                return 0;
+                if (!pen_enabled) return 0;
+                ins_violations[SG_PENALTY_CAPACITY] += (hyp_max - hyp_min) - cap;
             }
         }
     }
@@ -1488,7 +1644,8 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
     new_route_distance = sol->route_distance[vehicle_id] + delta;
 
     if (vehicle->max_distance > 0.0 && new_route_distance > vehicle->max_distance + 1e-9) {
-        return 0;
+        if (!pen_enabled) return 0;
+        ins_violations[SG_PENALTY_DISTANCE] += new_route_distance - vehicle->max_distance;
     }
 
     score = (route_len == 0 ? vehicle->fixed_cost : 0.0) +
@@ -1508,6 +1665,13 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
             duration_delta = new_stops[new_stop_count - 1].depart - prev_depart;
         }
         score += vehicle->cost_per_duration * duration_delta;
+    }
+
+    /* Add penalty cost for infeasible insertion */
+    if (pen_enabled) {
+        int k;
+        for (k = 0; k < SG_PENALTY_COUNT; k++)
+            score += ctx->penalty.weight[k] * ins_violations[k];
     }
 
     *score_out = score;
@@ -1538,6 +1702,7 @@ int sg_route_eval_pd_best_insertion_cached(
     double ride_limit;
     uint32_t i;
     int found = 0;
+    uint8_t pen_enabled;
 
     if (!ctx || !sol || !best_score_out || !best_pickup_pos_out ||
         !best_delivery_pos_out || !best_route_distance_out ||
@@ -1606,6 +1771,8 @@ int sg_route_eval_pd_best_insertion_cached(
         depot_depart = (double)start_depot->tw_early;
     }
 
+    pen_enabled = ctx->penalty.enabled;
+
     /* Ride time limit */
     if (request->has_max_ride_time) {
         ride_limit = (double)request->max_ride_time_seconds;
@@ -1633,6 +1800,8 @@ int sg_route_eval_pd_best_insertion_cached(
         {
         uint32_t prev_req_pd = (i > 0) ? stops[i - 1].request_id : UINT32_MAX;
         double p_setup = sg_setup_time_between(ctx, prev_req_pd, request_id);
+        double p_tw_penalty = 0.0;
+        int break_after_j_loop = 0;
         p_travel = (vehicle->open_start && i == 0)
             ? 0.0
             : sg_travel_dur(ctx, prev_loc, pickup_loc, vehicle_id, prev_depart);
@@ -1651,7 +1820,10 @@ int sg_route_eval_pd_best_insertion_cached(
         p_wsb += p_setup;
         p_start = sg_task_snap_forward(pickup_task, p_arrival + p_setup);
         if (p_start > (double)pickup_task->tw_late + 1e-9) {
-            break; /* Later i only arrives later at pickup */
+            if (!pen_enabled) break; /* Later i only arrives later at pickup */
+            p_tw_penalty = p_start - (double)pickup_task->tw_late;
+            p_start = (double)pickup_task->tw_late; /* warp */
+            break_after_j_loop = 1;
         }
         p_depart = p_start + (double)pickup_task->service_seconds;
         p_wsb += (double)pickup_task->service_seconds;
@@ -1670,6 +1842,10 @@ int sg_route_eval_pd_best_insertion_cached(
                 double ride_time;
                 double delta;
                 double new_route_distance, score;
+                double pd_viol[SG_PENALTY_COUNT];
+                int break_j = 0;
+
+                memset(pd_viol, 0, sizeof(pd_viol));
 
                 /* PD must be in same trip: break if a trip boundary crossed */
                 if (vehicle->has_multi_trip && j >= i + 2 && j - 2 < stop_len &&
@@ -1711,13 +1887,18 @@ int sg_route_eval_pd_best_insertion_cached(
                 d_wsb += d_setup;
                 d_start = sg_task_snap_forward(delivery_task, d_arrival + d_setup);
                 if (d_start > (double)delivery_task->tw_late + 1e-9) {
-                    break; /* Later j only makes it worse */
+                    if (!pen_enabled) break; /* Later j only makes it worse */
+                    pd_viol[SG_PENALTY_TIME_WARP] += d_start - (double)delivery_task->tw_late;
+                    d_start = (double)delivery_task->tw_late; /* warp */
+                    break_j = 1;
                 }
 
                 /* Ride time check */
                 ride_time = d_start - p_depart;
                 if (isfinite(ride_limit) && ride_time > ride_limit + 1e-9) {
-                    break; /* Later j is worse */
+                    if (!pen_enabled) break; /* Later j is worse */
+                    pd_viol[SG_PENALTY_RIDE_TIME] += ride_time - ride_limit;
+                    break_j = 1;
                 }
 
                 d_depart = d_start + (double)delivery_task->service_seconds;
@@ -1745,7 +1926,8 @@ int sg_route_eval_pd_best_insertion_cached(
                         }
                         arr_depot_d = d_depart + ret_brk_d + ret_travel_d;
                         if (end_depot->has_time_window && arr_depot_d > (double)end_depot->tw_late + 1e-9) {
-                            goto next_j;
+                            if (!pen_enabled) goto next_j;
+                            pd_viol[SG_PENALTY_TIME_WARP] += arr_depot_d - (double)end_depot->tw_late;
                         }
                         reload_dep_d = arr_depot_d + (double)vehicle->trip_reload_seconds;
                         if (start_depot->has_time_window && reload_dep_d < (double)start_depot->tw_early) {
@@ -1753,7 +1935,8 @@ int sg_route_eval_pd_best_insertion_cached(
                         }
                         arr_next_d = reload_dep_d + sg_travel_dur(ctx, vehicle->start_location_id, next_loc_d, vehicle_id, reload_dep_d);
                         if (arr_next_d > stops[j - 1].latest_start + 1e-9) {
-                            goto next_j;
+                            if (!pen_enabled) goto next_j;
+                            pd_viol[SG_PENALTY_TIME_WARP] += arr_next_d - stops[j - 1].latest_start;
                         }
                     } else {
                     /* There is a stop[j-1] in the original array at index j-1.
@@ -1776,13 +1959,8 @@ int sg_route_eval_pd_best_insertion_cached(
                     new_arrival_next = d_depart + next_brk_d + travel_d_to_next;
                     /* The pushed latest_start of stop[j-1] */
                     if (new_arrival_next + setup_after_d > stops[j - 1].latest_start + 1e-9) {
-                        /* But maybe further j could still work if this one fails
-                           due to delivery distance. Actually no - further j means
-                           the delivery is further away and arrival is later.
-                           However, push propagation for the stop right after delivery
-                           depends on delivery placement, not just monotonic.
-                           Be conservative: continue to try next j. */
-                        goto next_j;
+                        if (!pen_enabled) goto next_j;
+                        pd_viol[SG_PENALTY_TIME_WARP] += (new_arrival_next + setup_after_d) - stops[j - 1].latest_start;
                     }
                     } /* end else (non-trip-boundary push check) */
                 } else {
@@ -1791,11 +1969,13 @@ int sg_route_eval_pd_best_insertion_cached(
                         if (vehicle->has_shift_time_window &&
                             d_depart > (double)vehicle->shift_late + 1e-9
                             && !(vehicle->cost_per_overtime > 0.0)) {
-                            goto next_j;
+                            if (!pen_enabled) goto next_j;
+                            pd_viol[SG_PENALTY_TIME_WARP] += d_depart - (double)vehicle->shift_late;
                         }
                         if (vehicle->max_duration_seconds > 0 &&
                             (d_depart - depot_depart) > (double)vehicle->max_duration_seconds + 1e-9) {
-                            goto next_j;
+                            if (!pen_enabled) goto next_j;
+                            pd_viol[SG_PENALTY_DURATION] += (d_depart - depot_depart) - (double)vehicle->max_duration_seconds;
                         }
                     } else {
                         double ret_travel_pd = sg_travel_dur(ctx, delivery_loc, vehicle->end_location_id, vehicle_id, d_depart);
@@ -1813,16 +1993,19 @@ int sg_route_eval_pd_best_insertion_cached(
                         arrival_at_end = d_depart + ret_brk_pd + ret_travel_pd;
                         if (end_depot->has_time_window &&
                             arrival_at_end > (double)end_depot->tw_late + 1e-9) {
-                            goto next_j;
+                            if (!pen_enabled) goto next_j;
+                            pd_viol[SG_PENALTY_TIME_WARP] += arrival_at_end - (double)end_depot->tw_late;
                         }
                         if (vehicle->has_shift_time_window &&
                             arrival_at_end > (double)vehicle->shift_late + 1e-9
                             && !(vehicle->cost_per_overtime > 0.0)) {
-                            goto next_j;
+                            if (!pen_enabled) goto next_j;
+                            pd_viol[SG_PENALTY_TIME_WARP] += arrival_at_end - (double)vehicle->shift_late;
                         }
                         if (vehicle->max_duration_seconds > 0 &&
                             (arrival_at_end - depot_depart) > (double)vehicle->max_duration_seconds + 1e-9) {
-                            goto next_j;
+                            if (!pen_enabled) goto next_j;
+                            pd_viol[SG_PENALTY_DURATION] += (arrival_at_end - depot_depart) - (double)vehicle->max_duration_seconds;
                         }
                     }
                 }
@@ -1896,10 +2079,12 @@ int sg_route_eval_pd_best_insertion_cached(
 
                         if ((hyp_max - hyp_min) > cap + SG_DEMAND_TOLERANCE) {
                             cap_ok = 0;
+                            if (pen_enabled)
+                                pd_viol[SG_PENALTY_CAPACITY] += (hyp_max - hyp_min) - cap;
                         }
                     }
                     if (!cap_ok) {
-                        goto next_j;
+                        if (!pen_enabled) goto next_j;
                     }
                 }
 
@@ -1997,7 +2182,8 @@ int sg_route_eval_pd_best_insertion_cached(
                 new_route_distance = sol->route_distance[vehicle_id] + delta;
 
                 if (vehicle->max_distance > 0.0 && new_route_distance > vehicle->max_distance + 1e-9) {
-                    goto next_j;
+                    if (!pen_enabled) goto next_j;
+                    pd_viol[SG_PENALTY_DISTANCE] += new_route_distance - vehicle->max_distance;
                 }
 
                 score = (stop_len == 0 ? vehicle->fixed_cost : 0.0) +
@@ -2041,6 +2227,14 @@ int sg_route_eval_pd_best_insertion_cached(
                     }
                 }
 
+                /* Add penalty cost for infeasible PD insertion */
+                if (pen_enabled) {
+                    int k;
+                    score += ctx->penalty.weight[SG_PENALTY_TIME_WARP] * p_tw_penalty;
+                    for (k = 0; k < SG_PENALTY_COUNT; k++)
+                        score += ctx->penalty.weight[k] * pd_viol[k];
+                }
+
                 if (score < best_score) {
                     best_score = score;
                     best_i = i;
@@ -2048,6 +2242,7 @@ int sg_route_eval_pd_best_insertion_cached(
                     best_dist = new_route_distance;
                     found = 1;
                 }
+                if (break_j) break;
                 } /* end d_setup scope */
 
                 next_j:
@@ -2090,6 +2285,7 @@ int sg_route_eval_pd_best_insertion_cached(
                 }
             } /* end for j */
         }
+        if (break_after_j_loop) break;
         } /* end prev_req_pd scope */
     } /* end for i */
 

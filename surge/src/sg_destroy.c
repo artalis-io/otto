@@ -702,12 +702,18 @@ ARStatus sg_route_destroy_string(void *op_ctx, void *solution, int count,
         uint32_t seed_vehicle = sol->request_vehicle[seed_id];
         uint32_t route_len = sol->route_lengths[seed_vehicle];
         uint32_t center_pos = sol->request_pos[seed_id];
-        int L = sh_rng_int_range(ctx->op_rng, 1, SG_STRING_L_MAX);
-        int take;
+        int l_max = SG_STRING_L_MAX;
+        int L, take;
         uint32_t start, end;
         const uint32_t *route;
         int i;
 
+        /* Instance-adaptive L_max (Christiaens & Vanden Berghe 2020) */
+        if (sol->vehicles_used > 0) {
+            int avg_len = (int)((sol->base.num_assigned + sol->vehicles_used - 1) / sol->vehicles_used);
+            if (avg_len > l_max) l_max = avg_len;
+        }
+        L = sh_rng_int_range(ctx->op_rng, 1, l_max);
         if (L > target) L = target;
         if ((uint32_t)L > route_len) L = (int)route_len;
         take = L;
@@ -776,13 +782,19 @@ ARStatus sg_route_destroy_string(void *op_ctx, void *solution, int count,
             uint32_t route_len = sol->route_lengths[best_vehicle];
             uint32_t center_pos = sol->request_pos[best_id];
             int remaining = target - total_removed;
-            int L = sh_rng_int_range(ctx->op_rng, 1, SG_STRING_L_MAX);
-            int take;
+            int l_max = SG_STRING_L_MAX;
+            int L, take;
             uint32_t start, end;
             const uint32_t *route;
             int i;
             ARStatus status;
 
+            /* Instance-adaptive L_max (Christiaens & Vanden Berghe 2020) */
+            if (sol->vehicles_used > 0) {
+                int avg_len = (int)((sol->base.num_assigned + sol->vehicles_used - 1) / sol->vehicles_used);
+                if (avg_len > l_max) l_max = avg_len;
+            }
+            L = sh_rng_int_range(ctx->op_rng, 1, l_max);
             if (L > remaining) L = remaining;
             if ((uint32_t)L > route_len) L = (int)route_len;
             take = L;

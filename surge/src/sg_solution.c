@@ -260,14 +260,39 @@ int sg_route_solution_is_better(const void *candidate, const void *current_best,
                                  void *user_ctx) {
     const SGRouteSolution *cand = (const SGRouteSolution *)candidate;
     const SGRouteSolution *best = (const SGRouteSolution *)current_best;
-    (void)user_ctx;
+    const SGContext *ctx = (const SGContext *)user_ctx;
     if (!cand || !best) return 0;
+
+    /* Feasible beats infeasible, regardless of cost or mode */
+    {
+        int cf = sg_solution_is_feasible(cand);
+        int bf = sg_solution_is_feasible(best);
+        if (cf && !bf) return 1;
+        if (!cf && bf) return 0;
+        if (!cf && !bf) {
+            /* Both infeasible: prefer less total violation */
+            double cv = sg_solution_total_violation(cand);
+            double bv = sg_solution_total_violation(best);
+            if (cv < bv - 1e-9) return 1;
+            if (cv > bv + 1e-9) return 0;
+        }
+    }
+
     /* Lexicographic: unassigned -> vehicles_used -> total_distance */
-    if (cand->base.num_unassigned < best->base.num_unassigned) return 1;
-    if (cand->base.num_unassigned > best->base.num_unassigned) return 0;
-    if (cand->vehicles_used < best->vehicles_used) return 1;
-    if (cand->vehicles_used > best->vehicles_used) return 0;
-    return cand->total_distance < best->total_distance - 1e-9;
+    if (!ctx || ctx->config.lexicographic_objective) {
+        if (cand->base.num_unassigned < best->base.num_unassigned) return 1;
+        if (cand->base.num_unassigned > best->base.num_unassigned) return 0;
+        if (cand->vehicles_used < best->vehicles_used) return 1;
+        if (cand->vehicles_used > best->vehicles_used) return 0;
+        return cand->total_distance < best->total_distance - 1e-9;
+    }
+
+    /* Non-lexicographic: use cost comparison */
+    {
+        double cc = sg_route_solution_cost(cand, user_ctx);
+        double bc = sg_route_solution_cost(best, user_ctx);
+        return cc < bc - 1e-9;
+    }
 }
 
 double sg_route_objective_cost(uint32_t unassigned, uint32_t vehicles_used,
@@ -741,6 +766,8 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
     }
     /* Breaks */
     total += ALIGN8((size_t)num_veh * (size_t)sol->break_stride * sizeof(SGRouteBreak));
+    /* Penalty violations (per-route per-constraint-type) */
+    total += ALIGN8((size_t)num_veh * SG_PENALTY_COUNT * sizeof(double));
     #undef ALIGN8
 
     /* Cache arena size for fast copy path */
@@ -810,6 +837,10 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
     sol->route_breaks = (SGRouteBreak *)sh_arena_calloc(sol->arena,
         (size_t)num_veh * (size_t)sol->break_stride, sizeof(SGRouteBreak));
 
+    /* Penalty violations */
+    sol->route_violations = (double *)sh_arena_calloc(sol->arena,
+        (size_t)num_veh * SG_PENALTY_COUNT, sizeof(double));
+
     /* Verify all allocations succeeded */
     if (!sol->base.assigned_ids || !sol->base.unassigned_ids || !sol->base.assigned_flags ||
         !sol->route_lengths || !sol->route_stop_lengths || !sol->route_break_count ||
@@ -821,6 +852,7 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
         !sol->route_overtime || !sol->route_tw_penalty ||
         !sol->route_depot_depart || !sol->route_depot_return ||
         !sol->route_break_time || !sol->route_total_work || !sol->route_breaks ||
+        !sol->route_violations ||
         (ctx->dimension_count > 0 && !sol->route_stop_load) ||
         (ctx->num_commodities > 0 && !sol->route_commodities) ||
         (ctx->num_exclusion_groups > 0 && !sol->route_exclusion_counts)) {
@@ -932,6 +964,10 @@ static ARStatus sg_route_solution_init_for_copy(const SGContext *ctx, SGRouteSol
     sol->route_breaks = (SGRouteBreak *)sh_arena_alloc(sol->arena,
         (size_t)num_veh * (size_t)sol->break_stride * sizeof(SGRouteBreak));
 
+    /* Penalty violations */
+    sol->route_violations = (double *)sh_arena_alloc(sol->arena,
+        (size_t)num_veh * SG_PENALTY_COUNT * sizeof(double));
+
     return AR_STATUS_OK;
 }
 
@@ -960,6 +996,7 @@ void *sg_route_solution_copy(const void *solution, void *user_ctx) {
         dst->base.num_unassigned = src->base.num_unassigned;
         dst->vehicles_used = src->vehicles_used;
         dst->total_distance = src->total_distance;
+        memcpy(dst->violations, src->violations, sizeof(dst->violations));
     } else {
         /* Legacy path (non-arena solutions) */
         if (sg_route_solution_init(ctx, dst) != AR_STATUS_OK) {
@@ -971,6 +1008,7 @@ void *sg_route_solution_copy(const void *solution, void *user_ctx) {
         dst->base.num_unassigned = src->base.num_unassigned;
         dst->vehicles_used = src->vehicles_used;
         dst->total_distance = src->total_distance;
+        memcpy(dst->violations, src->violations, sizeof(dst->violations));
 
         if (src->base.total_requests > 0) {
             size_t req_count = (size_t)src->base.total_requests;
@@ -1059,6 +1097,10 @@ void *sg_route_solution_copy(const void *solution, void *user_ctx) {
             if (src->route_request_trip_start && dst->route_request_trip_start) {
                 memcpy(dst->route_request_trip_start, src->route_request_trip_start,
                        (size_t)src->num_vehicles * (size_t)src->route_stride * sizeof(uint8_t));
+            }
+            if (src->route_violations && dst->route_violations) {
+                memcpy(dst->route_violations, src->route_violations,
+                       (size_t)src->num_vehicles * SG_PENALTY_COUNT * sizeof(double));
             }
         }
     }
@@ -1170,8 +1212,23 @@ int sg_route_solution_validate(const void *solution, void *user_ctx) {
         }
 
         if (stop_len > 0) {
-            if (!sg_route_stop_sequence_feasible(ctx, v, stops, stop_len, &recomputed_distance)) {
-                goto done;
+            if (!ctx->penalty.enabled) {
+                if (!sg_route_stop_sequence_feasible(ctx, v, stops, stop_len, &recomputed_distance)) {
+                    goto done;
+                }
+            } else {
+                /* When penalty is enabled, recompute distance only (skip feasibility) */
+                uint32_t ss;
+                uint32_t rloc = ctx->vehicles[v].start_location_id;
+                recomputed_distance = 0.0;
+                for (ss = 0; ss < stop_len; ss++) {
+                    uint32_t cloc = ctx->tasks[stops[ss].task_id].location_id;
+                    recomputed_distance += sg_travel_dist(ctx, rloc, cloc, v);
+                    rloc = cloc;
+                }
+                if (!ctx->vehicles[v].open_end) {
+                    recomputed_distance += sg_travel_dist(ctx, rloc, ctx->vehicles[v].end_location_id, v);
+                }
             }
             computed_vehicles++;
             computed_distance += recomputed_distance;
@@ -1184,9 +1241,13 @@ int sg_route_solution_validate(const void *solution, void *user_ctx) {
         }
     }
 
-    if (route_assigned != sol->base.num_assigned ||
-        computed_vehicles != sol->vehicles_used ||
-        fabs(computed_distance - sol->total_distance) > 1e-6) {
+    if (route_assigned != sol->base.num_assigned) {
+        goto done;
+    }
+    if (computed_vehicles != sol->vehicles_used) {
+        goto done;
+    }
+    if (fabs(computed_distance - sol->total_distance) > 1e-6) {
         goto done;
     }
 
@@ -1503,6 +1564,12 @@ double sg_route_solution_cost(const void *solution, void *user_ctx) {
     }
     if (ctx->has_depot_capacity) {
         cost += sg_compute_depot_overlap_penalty(ctx, sol);
+    }
+    /* Infeasible-space penalty terms */
+    if (ctx->penalty.enabled) {
+        int k;
+        for (k = 0; k < SG_PENALTY_COUNT; k++)
+            cost += ctx->penalty.weight[k] * sol->violations[k];
     }
     /* Span balancing penalty */
     if (ctx->span_cost_duration != 0.0 || ctx->span_cost_distance != 0.0) {

@@ -31,7 +31,7 @@ DEBUG_LDFLAGS = -fsanitize=address,undefined
 SRCS = src/sg_context.c src/sg_solution.c src/sg_cost.c src/sg_feasibility.c \
        src/sg_construct.c src/sg_destroy.c src/sg_repair.c src/sg_postprocess.c \
        src/sg_solve.c src/sg_reader.c src/sg_api.c src/sg_parallel.c \
-       src/sg_validate.c
+       src/sg_validate.c src/sg_penalty.c
 OBJS = $(SRCS:.c=.o)
 
 LIB = libsurge.a

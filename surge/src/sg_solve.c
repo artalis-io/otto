@@ -6,6 +6,9 @@ static int sg_progress_forwarder(int64_t iteration, double best_cost,
     SGContext *ctx = (SGContext *)user_data;
     (void)elapsed_seconds;
     if (ctx->cancel_requested) return 1;
+    /* Adaptive penalty self-adjustment at segment boundaries */
+    if (ctx->penalty.enabled && ctx->penalty.update)
+        ctx->penalty.update(&ctx->penalty);
     if (ctx->progress_callback) {
         SGStats snap;
         memset(&snap, 0, sizeof(snap));
@@ -564,6 +567,18 @@ static ARStatus sg_route_construct_initial_solution(SGContext *ctx, SGRouteSolut
     return AR_STATUS_OK;
 }
 
+/* Cost wrapper that records violations for adaptive penalty adjustment.
+   Used as ALNS ops.cost so recording happens exactly once per candidate. */
+static double sg_route_solution_cost_record(const void *solution, void *user_ctx) {
+    SGContext *ctx = (SGContext *)user_ctx;
+    double cost = sg_route_solution_cost(solution, user_ctx);
+    if (ctx->penalty.enabled && ctx->penalty.record) {
+        const SGRouteSolution *sol = (const SGRouteSolution *)solution;
+        ctx->penalty.record(&ctx->penalty, sol->violations);
+    }
+    return cost;
+}
+
 static ARALNSContext *sg_create_route_alns(SGContext *ctx, ARALNSParams *params,
                                             ARSolutionOps *ops,
                                             double vehicle_target_weight,
@@ -572,11 +587,10 @@ static ARALNSContext *sg_create_route_alns(SGContext *ctx, ARALNSParams *params,
 
     ops->copy = sg_route_solution_copy;
     ops->free = sg_route_solution_free;
-    ops->cost = sg_route_solution_cost;
+    ops->cost = sg_route_solution_cost_record;
     ops->size = sg_route_solution_size;
     ops->validate = sg_route_solution_validate;
-    ops->is_better = ctx->config.lexicographic_objective
-                     ? sg_route_solution_is_better : NULL;
+    ops->is_better = sg_route_solution_is_better;
     ops->user_ctx = ctx;
 
     alns = ar_alns_create(params, ops, ctx);
@@ -595,7 +609,7 @@ static ARALNSContext *sg_create_route_alns(SGContext *ctx, ARALNSParams *params,
         ar_alns_add_destroy(alns, "vehicle-empty", sg_route_destroy_vehicle_empty, ctx, vehicle_empty_weight) != AR_STATUS_OK ||
         ar_alns_add_destroy(alns, "worst", sg_route_destroy_worst, ctx, 0.5) != AR_STATUS_OK ||
         ar_alns_add_destroy(alns, "shaw", sg_route_destroy_shaw, ctx, 1.0) != AR_STATUS_OK ||
-        ar_alns_add_destroy(alns, "string", sg_route_destroy_string, ctx, 1.0) != AR_STATUS_OK ||
+        ar_alns_add_destroy(alns, "string", sg_route_destroy_string, ctx, 2.0) != AR_STATUS_OK ||
         ar_alns_add_repair(alns, "greedy-insert", sg_route_repair_greedy, ctx, 1.0) != AR_STATUS_OK ||
         ar_alns_add_repair(alns, "regret-2", sg_route_repair_regret2, ctx, 1.0) != AR_STATUS_OK ||
         ar_alns_add_repair(alns, "regret-3", sg_route_repair_regret3, ctx, 1.0) != AR_STATUS_OK ||
@@ -713,8 +727,21 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
             params.adaptive_q = 1;
         }
 
+        /* Enable infeasible-space exploration: aggressive for vehicle minimization.
+           cost_scale derived from vehicle costs so penalty bounds, initial weights,
+           and adaptive ranges are proportional to the problem's cost structure. */
+        {
+            double cost_scale = 0.0;
+            uint32_t vi;
+            for (vi = 0; vi < ctx->num_vehicles; vi++)
+                cost_scale += ctx->vehicles[vi].fixed_cost;
+            if (ctx->num_vehicles > 0) cost_scale /= (double)ctx->num_vehicles;
+            sg_penalty_init_adaptive(&ctx->penalty, 0.15, 0.05, 1.2, 0.85, cost_scale);
+        }
+
         alns = sg_create_route_alns(ctx, &params, &ops, 3.0, 2.0);
         if (!alns) {
+            sg_penalty_free(&ctx->penalty);
             sg_scratch_free(ctx);
             sg_route_solution_reset(&initial);
             return SG_STATUS_OUT_OF_MEMORY;
@@ -734,6 +761,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         ar_status = ar_alns_solve(alns, &initial, (void **)&p1_best);
         ctx->avoid_new_vehicles = 0;
         if (ar_status != AR_STATUS_OK && ar_status != AR_STATUS_LIMIT) {
+            sg_penalty_free(&ctx->penalty);
             sg_scratch_free(ctx);
             sg_route_solution_reset(&initial);
             ar_alns_free(alns);
@@ -746,6 +774,9 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         alns = NULL;
     }
 
+    /* Disable penalty for postprocessing between phases (must be strict) */
+    ctx->penalty.enabled = 0;
+
     /* ---- Ejection pulse: exploit Phase 1's loose routes to eliminate vehicles ---- */
     if (p1_best) {
         (void)sg_route_postprocess_ejection_reduce(ctx, p1_best);
@@ -755,6 +786,10 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
     /* ---- Phase 2: Distance polishing ---- */
     if (phase2_iters > 0) {
         SGRouteSolution *p2_initial = p1_best ? p1_best : &initial;
+
+        /* Phase 2 runs strict (no infeasible exploration) — penalty hurts distance
+           quality without meaningful vehicle reduction at this stage. */
+        ctx->penalty.enabled = 0;
 
         ar_alns_params_default(&params);
         params.max_iterations = phase2_iters;
@@ -795,6 +830,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
 
         alns = sg_create_route_alns(ctx, &params, &ops, 1.5, 1.0);
         if (!alns) {
+            sg_penalty_free(&ctx->penalty);
             sg_scratch_free(ctx);
             sg_route_solution_reset(&initial);
             sg_route_solution_free(p1_best, NULL);
@@ -813,6 +849,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
 
         ar_status = ar_alns_solve(alns, p2_initial, (void **)&p2_best);
         if (ar_status != AR_STATUS_OK && ar_status != AR_STATUS_LIMIT) {
+            sg_penalty_free(&ctx->penalty);
             sg_scratch_free(ctx);
             sg_route_solution_reset(&initial);
             sg_route_solution_free(p1_best, NULL);
@@ -826,10 +863,13 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         alns = NULL;
     }
 
+    /* Disable infeasible-space exploration for postprocessing (must be strict) */
+    ctx->penalty.enabled = 0;
+
     /* Determine best solution across phases. */
     {
         SGRouteSolution *best;
-        if (p2_best && p1_best && ctx->config.lexicographic_objective) {
+        if (p2_best && p1_best) {
             best = sg_route_solution_is_better(p1_best, p2_best, ctx) ? p1_best : p2_best;
         } else {
             best = p2_best ? p2_best : p1_best;
@@ -918,6 +958,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         ctx->final_solution = (SGRouteSolution *)sg_route_solution_copy(final_sol, (void *)ctx);
     }
 
+    sg_penalty_free(&ctx->penalty);
     sg_scratch_free(ctx);
     sg_route_solution_reset(&initial);
     sg_route_solution_free(p1_best, NULL);
