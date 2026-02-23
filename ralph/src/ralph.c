@@ -120,6 +120,25 @@ struct RalphBasis {
     VarStatus *var_status;  /* Variable status array (size n) */
 };
 
+/* Internal LP backend dispatch layer.
+ * Keeps backend routing orthogonal to backend-specific knobs such as simplex method. */
+typedef enum {
+    RALPH_LP_BACKEND_SIMPLEX = 0,
+    RALPH_LP_BACKEND_BARRIER = 1
+} RalphLPBackend;
+
+typedef struct {
+    RalphLPBackend requested_backend;
+    RalphLPBackend effective_backend;
+    RalphLPAlgorithm requested_algorithm;
+    RalphLPAlgorithm effective_algorithm;
+    RalphLPCrossoverMode requested_crossover;
+    RalphLPCrossoverMode effective_crossover;
+    int simplex_method; /* Backend-specific execution detail for simplex backend only. */
+    int fallback_applied;
+    RalphLPFallbackReason fallback_reason;
+} RalphLPDispatchPlan;
+
 static void ralph_clear_staged_basis(RalphModel *model) {
     if (!model) return;
     free(model->staged_basis);
@@ -144,6 +163,14 @@ static void ralph_clear_mip_start_internal(RalphModel *model) {
 static void ralph_reset_presolve_report(RalphModel *model) {
     if (!model) return;
     memset(&model->last_presolve_report, 0, sizeof(model->last_presolve_report));
+}
+
+static void ralph_fill_lp_capabilities(RalphLPCapabilities *caps) {
+    if (!caps) return;
+    caps->supports_primal_simplex = 1;
+    caps->supports_dual_simplex = 1;
+    caps->supports_barrier = 0;
+    caps->supports_crossover = 0;
 }
 
 static int ralph_lp_algorithm_value_valid(int value) {
@@ -175,65 +202,80 @@ static int ralph_set_requested_barrier_crossover_internal(RalphModel *model, int
     return 0;
 }
 
-static void ralph_prepare_lp_algorithm_report(const RalphModel *model,
-                                              RalphLPSolveAlgorithmReport *report,
-                                              int *simplex_method) {
-    RalphLPAlgorithm requested_algorithm = RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
-    RalphLPAlgorithm effective_algorithm = RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
-    RalphLPCrossoverMode requested_crossover = RALPH_LP_CROSSOVER_AUTO;
-    RalphLPCrossoverMode effective_crossover = RALPH_LP_CROSSOVER_AUTO;
-    int fallback_applied = 0;
-    RalphLPFallbackReason fallback_reason = RALPH_LP_FALLBACK_NONE;
-    int effective_method = (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
+static RalphLPBackend ralph_lp_backend_for_algorithm(RalphLPAlgorithm algorithm) {
+    if (algorithm == RALPH_LP_ALGORITHM_BARRIER) {
+        return RALPH_LP_BACKEND_BARRIER;
+    }
+    return RALPH_LP_BACKEND_SIMPLEX;
+}
 
-    if (model && ralph_lp_algorithm_value_valid(model->lp_algorithm)) {
+static int ralph_simplex_method_from_algorithm(RalphLPAlgorithm algorithm) {
+    switch (algorithm) {
+        case RALPH_LP_ALGORITHM_DUAL_SIMPLEX:
+            return 1;
+        case RALPH_LP_ALGORITHM_AUTO:
+            return 2;
+        case RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX:
+        default:
+            return 0;
+    }
+}
+
+static int ralph_build_lp_dispatch_plan(const RalphModel *model, RalphLPDispatchPlan *plan) {
+    RalphLPCapabilities caps;
+    RalphLPAlgorithm requested_algorithm = RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
+    RalphLPCrossoverMode requested_crossover = RALPH_LP_CROSSOVER_AUTO;
+
+    if (!model || !plan) return -1;
+
+    memset(plan, 0, sizeof(*plan));
+    ralph_fill_lp_capabilities(&caps);
+
+    if (ralph_lp_algorithm_value_valid(model->lp_algorithm)) {
         requested_algorithm = (RalphLPAlgorithm)model->lp_algorithm;
     }
-    if (model && ralph_lp_crossover_value_valid(model->barrier_crossover)) {
+    if (ralph_lp_crossover_value_valid(model->barrier_crossover)) {
         requested_crossover = (RalphLPCrossoverMode)model->barrier_crossover;
     }
 
-    effective_algorithm = requested_algorithm;
-    effective_crossover = requested_crossover;
+    plan->requested_algorithm = requested_algorithm;
+    plan->effective_algorithm = requested_algorithm;
+    plan->requested_crossover = requested_crossover;
+    plan->effective_crossover = requested_crossover;
+    plan->requested_backend = ralph_lp_backend_for_algorithm(requested_algorithm);
+    plan->effective_backend = plan->requested_backend;
+    plan->fallback_applied = 0;
+    plan->fallback_reason = RALPH_LP_FALLBACK_NONE;
 
-    if (requested_algorithm == RALPH_LP_ALGORITHM_BARRIER) {
-        effective_algorithm = RALPH_LP_ALGORITHM_AUTO;
-        fallback_applied = 1;
-        fallback_reason = RALPH_LP_FALLBACK_BARRIER_UNAVAILABLE;
+    if (plan->requested_backend == RALPH_LP_BACKEND_BARRIER && !caps.supports_barrier) {
+        plan->effective_backend = RALPH_LP_BACKEND_SIMPLEX;
+        plan->effective_algorithm = RALPH_LP_ALGORITHM_AUTO;
+        plan->fallback_applied = 1;
+        plan->fallback_reason = RALPH_LP_FALLBACK_BARRIER_UNAVAILABLE;
     }
-    if (effective_algorithm != RALPH_LP_ALGORITHM_BARRIER &&
-        requested_crossover != RALPH_LP_CROSSOVER_AUTO) {
-        effective_crossover = RALPH_LP_CROSSOVER_AUTO;
-        if (!fallback_applied) {
-            fallback_applied = 1;
-            fallback_reason = RALPH_LP_FALLBACK_CROSSOVER_UNAVAILABLE;
+
+    if (plan->effective_backend != RALPH_LP_BACKEND_BARRIER &&
+        plan->requested_crossover != RALPH_LP_CROSSOVER_AUTO) {
+        plan->effective_crossover = RALPH_LP_CROSSOVER_AUTO;
+        if (!plan->fallback_applied) {
+            plan->fallback_applied = 1;
+            plan->fallback_reason = RALPH_LP_FALLBACK_CROSSOVER_UNAVAILABLE;
         }
     }
 
-    switch (effective_algorithm) {
-        case RALPH_LP_ALGORITHM_DUAL_SIMPLEX:
-            effective_method = 1;
-            break;
-        case RALPH_LP_ALGORITHM_AUTO:
-            effective_method = 2;
-            break;
-        case RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX:
-        default:
-            effective_method = 0;
-            break;
-    }
+    plan->simplex_method = ralph_simplex_method_from_algorithm(plan->effective_algorithm);
+    return 0;
+}
 
-    if (report) {
-        report->requested_algorithm = requested_algorithm;
-        report->effective_algorithm = effective_algorithm;
-        report->requested_crossover = requested_crossover;
-        report->effective_crossover = effective_crossover;
-        report->fallback_applied = fallback_applied;
-        report->fallback_reason = fallback_reason;
-    }
-    if (simplex_method) {
-        *simplex_method = effective_method;
-    }
+static void ralph_dispatch_plan_to_algorithm_report(const RalphLPDispatchPlan *plan,
+                                                    RalphLPSolveAlgorithmReport *report) {
+    if (!plan || !report) return;
+    report->requested_algorithm = plan->requested_algorithm;
+    report->effective_algorithm = plan->effective_algorithm;
+    report->requested_crossover = plan->requested_crossover;
+    report->effective_crossover = plan->effective_crossover;
+    report->fallback_applied = plan->fallback_applied;
+    report->fallback_reason = plan->fallback_reason;
 }
 
 static void ralph_reset_lp_algorithm_report(RalphModel *model) {
@@ -691,13 +733,19 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     }
     int solve_as_mip = (mode == RALPH_SOLVE_MIP_ONLY) ? 1 :
                        (mode == RALPH_SOLVE_LP_ONLY) ? 0 : model_is_mip;
+    RalphLPDispatchPlan lp_dispatch_plan;
     RalphLPSolveAlgorithmReport lp_algorithm_report;
     int lp_algorithm_report_ready = 0;
     int lp_simplex_method = model->method;
 
     ralph_reset_lp_algorithm_report(model);
     if (!solve_as_mip) {
-        ralph_prepare_lp_algorithm_report(model, &lp_algorithm_report, &lp_simplex_method);
+        if (ralph_build_lp_dispatch_plan(model, &lp_dispatch_plan) != 0) {
+            model->status = RALPH_STATUS_ERROR;
+            return -1;
+        }
+        ralph_dispatch_plan_to_algorithm_report(&lp_dispatch_plan, &lp_algorithm_report);
+        lp_simplex_method = lp_dispatch_plan.simplex_method;
         lp_algorithm_report_ready = 1;
     }
 
@@ -1367,10 +1415,7 @@ int ralph_get_reduced_costs(const RalphModel *model, double *rc) {
 
 int ralph_get_lp_capabilities(RalphLPCapabilities *caps) {
     if (!caps) return -1;
-    caps->supports_primal_simplex = 1;
-    caps->supports_dual_simplex = 1;
-    caps->supports_barrier = 0;
-    caps->supports_crossover = 0;
+    ralph_fill_lp_capabilities(caps);
     return 0;
 }
 

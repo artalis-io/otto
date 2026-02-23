@@ -287,6 +287,46 @@ static void test_crossover_only_fallback_report(void) {
     ralph_free(model);
 }
 
+static void test_legacy_method_dispatch_report(void) {
+    RalphModel *model = build_small_lp();
+    RalphLPSolveAlgorithmReport report;
+
+    ASSERT_TRUE(model != NULL, "legacy-dispatch: model created");
+    if (!model) return;
+
+    ASSERT_INT_EQ(ralph_set_int_param(model, "method", 1), 0,
+                  "legacy-dispatch: set method=dual");
+    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+                  "legacy-dispatch: solve with dual method succeeds");
+    ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(model, &report), 0,
+                  "legacy-dispatch: report available for dual method");
+    ASSERT_INT_EQ((int)report.requested_algorithm,
+                  (int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX,
+                  "legacy-dispatch: requested algorithm reflects dual method");
+    ASSERT_INT_EQ((int)report.effective_algorithm,
+                  (int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX,
+                  "legacy-dispatch: effective algorithm remains dual");
+    ASSERT_INT_EQ(report.fallback_applied, 0,
+                  "legacy-dispatch: no fallback for dual method");
+
+    ASSERT_INT_EQ(ralph_set_int_param(model, "method", 2), 0,
+                  "legacy-dispatch: set method=auto");
+    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+                  "legacy-dispatch: solve with auto method succeeds");
+    ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(model, &report), 0,
+                  "legacy-dispatch: report available for auto method");
+    ASSERT_INT_EQ((int)report.requested_algorithm,
+                  (int)RALPH_LP_ALGORITHM_AUTO,
+                  "legacy-dispatch: requested algorithm reflects auto method");
+    ASSERT_INT_EQ((int)report.effective_algorithm,
+                  (int)RALPH_LP_ALGORITHM_AUTO,
+                  "legacy-dispatch: effective algorithm remains auto");
+    ASSERT_INT_EQ(report.fallback_applied, 0,
+                  "legacy-dispatch: no fallback for auto method");
+
+    ralph_free(model);
+}
+
 static void test_lp_report_rejects_mip_models(void) {
     RalphModel *mip = ralph_create();
     RalphLPSolveAlgorithmReport report;
@@ -315,6 +355,7 @@ int main(void) {
     test_algorithm_report_guards_and_invalidation();
     test_barrier_fallback_report();
     test_crossover_only_fallback_report();
+    test_legacy_method_dispatch_report();
     test_lp_report_rejects_mip_models();
 
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
