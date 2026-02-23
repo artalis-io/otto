@@ -271,6 +271,11 @@ int ralph_get_last_lp_external_failure_report(const RalphModel *model,
  *   matching lp_external_provider parameter.
  */
 const char* ralph_get_lp_external_provider_name(RalphLPExternalProvider provider);
+int ralph_get_lp_external_provider_capabilities(RalphLPExternalProvider provider,
+                                                RalphLPExternalCapabilities *caps);
+int ralph_get_lp_external_registered_providers(RalphLPExternalProvider *providers,
+                                               int capacity,
+                                               int *count);
 int ralph_register_lp_external_adapter(const RalphLPExternalAdapter *adapter);
 int ralph_unregister_lp_external_adapter(RalphLPExternalProvider provider);
 void ralph_unregister_all_lp_external_adapters(void);

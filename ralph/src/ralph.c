@@ -157,6 +157,27 @@ static LPExternalProvider ralph_lp_external_provider_to_internal(
     }
 }
 
+static RalphLPExternalProvider ralph_lp_external_provider_from_internal(
+    LPExternalProvider provider) {
+    switch (provider) {
+        case LP_EXTERNAL_PROVIDER_GLPK:
+            return RALPH_LP_EXTERNAL_PROVIDER_GLPK;
+        case LP_EXTERNAL_PROVIDER_HIGHS:
+            return RALPH_LP_EXTERNAL_PROVIDER_HIGHS;
+        case LP_EXTERNAL_PROVIDER_CLP:
+            return RALPH_LP_EXTERNAL_PROVIDER_CLP;
+        case LP_EXTERNAL_PROVIDER_CPLEX:
+            return RALPH_LP_EXTERNAL_PROVIDER_CPLEX;
+        case LP_EXTERNAL_PROVIDER_GUROBI:
+            return RALPH_LP_EXTERNAL_PROVIDER_GUROBI;
+        case LP_EXTERNAL_PROVIDER_GLOP:
+            return RALPH_LP_EXTERNAL_PROVIDER_GLOP;
+        case LP_EXTERNAL_PROVIDER_NONE:
+        default:
+            return RALPH_LP_EXTERNAL_PROVIDER_NONE;
+    }
+}
+
 static RalphLPExternalBackendKind ralph_lp_external_backend_from_internal(
     LPExternalBackendKind backend) {
     switch (backend) {
@@ -1682,6 +1703,59 @@ const char* ralph_get_lp_external_provider_name(RalphLPExternalProvider provider
     }
     if (!ralph_lp_external_provider_valid_public(provider)) return NULL;
     return lp_external_provider_name(ralph_lp_external_provider_to_internal(provider));
+}
+
+int ralph_get_lp_external_provider_capabilities(RalphLPExternalProvider provider,
+                                                RalphLPExternalCapabilities *caps) {
+    LPExternalCapabilities internal_caps;
+    LPExternalProvider internal_provider;
+
+    if (!caps) return -1;
+    memset(caps, 0, sizeof(*caps));
+    if (!ralph_lp_external_provider_valid_public(provider)) return -1;
+
+    internal_provider = ralph_lp_external_provider_to_internal(provider);
+    if (internal_provider == LP_EXTERNAL_PROVIDER_NONE) return -1;
+    if (lp_external_adapter_get_capabilities(internal_provider, &internal_caps) != 0) return -1;
+
+    caps->supports_simplex = internal_caps.supports_simplex ? 1 : 0;
+    caps->supports_dual_simplex = internal_caps.supports_dual_simplex ? 1 : 0;
+    caps->supports_barrier = internal_caps.supports_barrier ? 1 : 0;
+    caps->supports_crossover = internal_caps.supports_crossover ? 1 : 0;
+    return 0;
+}
+
+int ralph_get_lp_external_registered_providers(RalphLPExternalProvider *providers,
+                                               int capacity,
+                                               int *count) {
+    LPExternalProvider internal_list[(int)LP_EXTERNAL_PROVIDER_GLOP + 1];
+    int internal_capacity = capacity;
+    int needed = 0;
+    int rc;
+
+    if (!count) return -1;
+    if (capacity < 0) return -1;
+    if (!providers && capacity > 0) return -1;
+    if (internal_capacity > (int)LP_EXTERNAL_PROVIDER_GLOP) {
+        internal_capacity = (int)LP_EXTERNAL_PROVIDER_GLOP;
+    }
+    if (internal_capacity < 0) internal_capacity = 0;
+
+    rc = lp_external_adapter_list_registered(
+        (internal_capacity > 0) ? internal_list : NULL,
+        internal_capacity,
+        &needed);
+    if (count) *count = needed;
+    if (rc != 0) return -1;
+
+    if (providers && capacity > 0) {
+        int to_copy = needed;
+        if (to_copy > capacity) to_copy = capacity;
+        for (int i = 0; i < to_copy; i++) {
+            providers[i] = ralph_lp_external_provider_from_internal(internal_list[i]);
+        }
+    }
+    return 0;
 }
 
 int ralph_register_lp_external_adapter(const RalphLPExternalAdapter *adapter) {
