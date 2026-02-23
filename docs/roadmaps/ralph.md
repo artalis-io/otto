@@ -4,7 +4,26 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-23, `8e5e8bf`) — fixed-basis LP sensitivity/ranging API baseline:
+**Current** (2026-02-23, `c65fe09`) — LP algorithm/capability API baseline:
+added LP algorithm API surface with explicit capability and fallback reporting:
+`ralph_get_lp_capabilities`, `ralph_get_last_lp_algorithm_report`,
+`RalphLPAlgorithm`, `RalphLPCrossoverMode`, and `RalphLPFallbackReason`.
+Integrated typed params `lp_algorithm` and `barrier_crossover` (metadata + strict scope
+enforcement), with backward-compatible sync to legacy `method` for simplex modes.
+Implemented explicit runtime fallback semantics for unsupported paths:
+barrier requests fallback to AUTO (`BARRIER_UNAVAILABLE`), and non-auto crossover requests on
+non-barrier paths fallback to AUTO (`CROSSOVER_UNAVAILABLE`). Added orthogonal module tests in
+`test_lp_algorithm_api` and wired into `make -C ralph test`.
+Latest gates:
+`make -C ralph test-lp-algorithm-api` PASS (80/80),
+`make -C ralph test-lp-conflict` PASS (60/60),
+`make -C ralph test-api` PASS (13/13), and
+`make -C ralph test-netlib-gate-small` PASS (26 files, dense fallback files: 0, no unexpected
+regressions, artifacts: `/tmp/netlib-regression-gate-20260223-102818`).
+Known existing aggregate issue remains unchanged: `make -C ralph test` still fails on pre-existing
+P5/P6 objective assertions in `test_main` (750/754).
+
+Previous: (2026-02-23, `8e5e8bf`) — fixed-basis LP sensitivity/ranging API baseline:
 added LP-only fixed-basis sensitivity APIs for constraint RHS, objective coefficients, and
 variable bounds (`ralph_get_constraint_rhs_range`, `ralph_get_obj_coef_range`,
 `ralph_get_var_bound_range`) with explicit availability guards (optimal LP state, live tableau,
