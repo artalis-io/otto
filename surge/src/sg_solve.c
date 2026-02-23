@@ -101,6 +101,58 @@ static void sg_copy_operator_stats(SGContext *ctx, const ARALNSContext *alns) {
     }
 }
 
+/* Compute representative route-level cost scale from initial solution.
+ * Uses median of per-route objective costs (fixed + variable components)
+ * for robustness against skewed vehicle cost distributions.
+ *
+ * Invariant: penalties must remain on the same order of magnitude as the
+ * instance's objective scale. If penalty magnitudes are too small, infeasible
+ * solutions dominate. If too large, search dynamics freeze and selection
+ * pressure becomes numerically distorted. */
+static double sg_compute_cost_scale(const SGContext *ctx,
+                                    const SGRouteSolution *sol)
+{
+    double *costs = (double *)alloca(sol->num_vehicles * sizeof(double));
+    uint32_t n = 0, v;
+
+    for (v = 0; v < sol->num_vehicles; v++) {
+        if (sol->route_stop_lengths[v] == 0) continue;
+        const SGVehicleRecord *veh = &ctx->vehicles[v];
+        double rc = veh->fixed_cost;
+        rc += veh->cost_per_distance * sol->route_distance[v];
+        if (sol->route_duration)
+            rc += veh->cost_per_duration * sol->route_duration[v];
+        if (sol->route_waiting)
+            rc += veh->cost_per_waiting * sol->route_waiting[v];
+        if (sol->route_overtime)
+            rc += veh->cost_per_overtime * sol->route_overtime[v];
+        if (rc > 1e-9)
+            costs[n++] = rc;
+    }
+
+    if (n == 0) return 1.0;  /* all-zero costs — safe fallback */
+
+    /* Insertion sort for median (n is small, typically < 100) */
+    for (uint32_t i = 1; i < n; i++) {
+        double key = costs[i];
+        uint32_t j = i;
+        while (j > 0 && costs[j - 1] > key) {
+            costs[j] = costs[j - 1];
+            j--;
+        }
+        costs[j] = key;
+    }
+
+    double median = (n % 2 == 1) ? costs[n / 2]
+                                  : (costs[n / 2 - 1] + costs[n / 2]) / 2.0;
+
+    /* Clamp to safe numeric range */
+    if (median != median || median <= 0.0) return 1.0;  /* NaN or non-positive */
+    if (median < 1.0) median = 1.0;
+    if (median > 1e12) median = 1e12;
+    return median;
+}
+
 void sg_adaptive_q_bounds(int num_requests, int config_q_min, int config_q_max,
                           int *q_min_out, int *q_max_out) {
     int adaptive_min = num_requests / 20;
@@ -728,14 +780,11 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         }
 
         /* Enable infeasible-space exploration: aggressive for vehicle minimization.
-           cost_scale derived from vehicle costs so penalty bounds, initial weights,
-           and adaptive ranges are proportional to the problem's cost structure. */
+           cost_scale derived from median per-route cost of initial solution so
+           penalty bounds, initial weights, and adaptive ranges are proportional
+           to the instance's actual objective scale. */
         {
-            double cost_scale = 0.0;
-            uint32_t vi;
-            for (vi = 0; vi < ctx->num_vehicles; vi++)
-                cost_scale += ctx->vehicles[vi].fixed_cost;
-            if (ctx->num_vehicles > 0) cost_scale /= (double)ctx->num_vehicles;
+            double cost_scale = sg_compute_cost_scale(ctx, &initial);
             sg_penalty_init_adaptive(&ctx->penalty, 0.15, 0.05, 1.2, 0.85, cost_scale);
         }
 

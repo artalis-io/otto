@@ -85,7 +85,16 @@ void sg_penalty_init_adaptive(SGPenaltyManager *mgr, double target_feasible,
     st = (SGAdaptivePenaltyState *)calloc(1, sizeof(*st));
     if (!st) return;
 
-    if (cost_scale < 1.0) cost_scale = 1.0;
+    /* Guard: clamp cost_scale to safe numeric range.
+     * cost_scale approximates the typical per-route objective magnitude.
+     * Penalty bounds are derived proportionally:
+     *   penalty_min  = cost_scale * 1e-4  (below this, penalty has no steering effect)
+     *   penalty_max  = cost_scale * 100   (above this, search freezes numerically)
+     *   initial_w    = cost_scale / 100    (starts small, adapts up/down)
+     * These ratios assume objective magnitude is comparable to cost_scale. */
+    if (cost_scale != cost_scale) cost_scale = 1.0;       /* NaN guard */
+    if (cost_scale < 1.0) cost_scale = 1.0;               /* floor */
+    if (cost_scale > 1e12) cost_scale = 1e12;              /* ceiling */
 
     st->target_feasible = target_feasible;
     st->tolerance = tolerance;
