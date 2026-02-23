@@ -17,6 +17,7 @@
 #include "lp_conflict.h"
 #include "lp_backend.h"
 #include "lp_dispatch.h"
+#include "lp_external_adapter.h"
 
 #define RALPH_VERSION "0.1.0"
 
@@ -45,6 +46,7 @@ struct RalphModel {
     int lp_algorithm;      /* Requested LP algorithm (extends method with barrier value). */
     int barrier_crossover; /* Requested barrier crossover mode (API-level capability gate). */
     int lp_external_provider; /* Requested external LP provider for explicit external algorithms. */
+    int lp_external_strict;   /* 1=error on explicit external request when provider/backend unavailable */
     int pricing; /* 0=Dantzig, 1=Steepest edge, 2=Devex (default), 3=Partial */
     int detect_special; /* 1=detect LAP/network structure, 0=disable */
     int node_pool_capacity; /* Pre-allocated B&B node pool size (default 1024) */
@@ -122,6 +124,82 @@ struct RalphBasis {
     int *basis;         /* Basic variable indices (size m) */
     VarStatus *var_status;  /* Variable status array (size n) */
 };
+
+typedef struct {
+    int in_use;
+    RalphLPExternalAdapter adapter;
+} RalphLPExternalAdapterBridgeEntry;
+
+static RalphLPExternalAdapterBridgeEntry
+    g_lp_external_bridge[(int)RALPH_LP_EXTERNAL_PROVIDER_GLOP + 1];
+
+static int ralph_lp_external_provider_valid_public(RalphLPExternalProvider provider) {
+    return provider >= RALPH_LP_EXTERNAL_PROVIDER_GLPK &&
+           provider <= RALPH_LP_EXTERNAL_PROVIDER_GLOP;
+}
+
+static LPExternalProvider ralph_lp_external_provider_to_internal(
+    RalphLPExternalProvider provider) {
+    switch (provider) {
+        case RALPH_LP_EXTERNAL_PROVIDER_GLPK:
+            return LP_EXTERNAL_PROVIDER_GLPK;
+        case RALPH_LP_EXTERNAL_PROVIDER_HIGHS:
+            return LP_EXTERNAL_PROVIDER_HIGHS;
+        case RALPH_LP_EXTERNAL_PROVIDER_CLP:
+            return LP_EXTERNAL_PROVIDER_CLP;
+        case RALPH_LP_EXTERNAL_PROVIDER_CPLEX:
+            return LP_EXTERNAL_PROVIDER_CPLEX;
+        case RALPH_LP_EXTERNAL_PROVIDER_GUROBI:
+            return LP_EXTERNAL_PROVIDER_GUROBI;
+        case RALPH_LP_EXTERNAL_PROVIDER_GLOP:
+            return LP_EXTERNAL_PROVIDER_GLOP;
+        case RALPH_LP_EXTERNAL_PROVIDER_NONE:
+        default:
+            return LP_EXTERNAL_PROVIDER_NONE;
+    }
+}
+
+static RalphLPExternalBackendKind ralph_lp_external_backend_from_internal(
+    LPExternalBackendKind backend) {
+    switch (backend) {
+        case LP_EXTERNAL_BACKEND_DUAL_SIMPLEX:
+            return RALPH_LP_EXTERNAL_BACKEND_DUAL_SIMPLEX;
+        case LP_EXTERNAL_BACKEND_BARRIER:
+            return RALPH_LP_EXTERNAL_BACKEND_BARRIER;
+        case LP_EXTERNAL_BACKEND_SIMPLEX:
+        default:
+            return RALPH_LP_EXTERNAL_BACKEND_SIMPLEX;
+    }
+}
+
+static int ralph_lp_external_bridge_get_capabilities(LPExternalCapabilities *caps,
+                                                      void *user_data) {
+    RalphLPExternalAdapterBridgeEntry *entry =
+        (RalphLPExternalAdapterBridgeEntry*)user_data;
+    RalphLPExternalCapabilities public_caps;
+
+    if (!entry || !entry->in_use || !entry->adapter.get_capabilities || !caps) return -1;
+    memset(&public_caps, 0, sizeof(public_caps));
+    if (entry->adapter.get_capabilities(&public_caps, entry->adapter.user_data) != 0) return -1;
+
+    caps->supports_simplex = public_caps.supports_simplex ? 1 : 0;
+    caps->supports_dual_simplex = public_caps.supports_dual_simplex ? 1 : 0;
+    caps->supports_barrier = public_caps.supports_barrier ? 1 : 0;
+    caps->supports_crossover = public_caps.supports_crossover ? 1 : 0;
+    return 0;
+}
+
+static int ralph_lp_external_bridge_solve(LPExternalBackendKind backend,
+                                          SimplexSolver *solver,
+                                          void *user_data) {
+    RalphLPExternalAdapterBridgeEntry *entry =
+        (RalphLPExternalAdapterBridgeEntry*)user_data;
+    RalphLPExternalBackendKind public_backend =
+        ralph_lp_external_backend_from_internal(backend);
+
+    if (!entry || !entry->in_use || !entry->adapter.solve) return -1;
+    return entry->adapter.solve(public_backend, (void*)solver, entry->adapter.user_data);
+}
 
 static void ralph_clear_staged_basis(RalphModel *model) {
     if (!model) return;
@@ -447,6 +525,7 @@ RalphModel* ralph_create(void) {
     model->lp_algorithm = (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
     model->barrier_crossover = (int)RALPH_LP_CROSSOVER_AUTO;
     model->lp_external_provider = (int)RALPH_LP_EXTERNAL_PROVIDER_NONE;
+    model->lp_external_strict = 0;
     model->pricing = 2; /* Default: Devex */
     model->scaling = 1;    /* Default: single-round geometric mean */
     model->crash = 0;      /* Default: off (all-slack basis) */
@@ -645,6 +724,7 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     int lp_algorithm_report_ready = 0;
     int lp_simplex_method = model->method;
     LPDispatchBackend lp_effective_backend = LP_DISPATCH_BACKEND_SIMPLEX;
+    LPExternalProvider lp_effective_provider = LP_EXTERNAL_PROVIDER_NONE;
 
     ralph_reset_lp_algorithm_report(model);
     if (!solve_as_mip) {
@@ -658,6 +738,15 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         lp_dispatch_plan_to_report(&lp_dispatch_plan, &lp_algorithm_report);
         lp_simplex_method = lp_dispatch_plan.simplex_method;
         lp_effective_backend = lp_dispatch_plan.effective_backend;
+        lp_effective_provider = ralph_lp_external_provider_to_internal(
+            lp_dispatch_plan.effective_external_provider);
+        if (model->lp_external_strict &&
+            lp_dispatch_algorithm_is_external(model->lp_algorithm) &&
+            lp_dispatch_plan.fallback_applied &&
+            lp_dispatch_plan.fallback_reason == RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE) {
+            model->status = RALPH_STATUS_ERROR;
+            return -1;
+        }
         lp_algorithm_report_ready = 1;
     }
 
@@ -1183,7 +1272,7 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         }
 
         /* Solve through backend runtime (simplex today, barrier/external later). */
-        if (lp_backend_run(lp_effective_backend, model->lp_solver) != 0) {
+        if (lp_backend_run(lp_effective_backend, lp_effective_provider, model->lp_solver) != 0) {
             if (presolved) presolve_free(presolved);
             model->status = RALPH_STATUS_ERROR;
             return -1;
@@ -1342,6 +1431,69 @@ int ralph_get_last_lp_algorithm_report(const RalphModel *model,
     if (!model->last_lp_algorithm_report_valid) return -1;
     *report = model->last_lp_algorithm_report;
     return 0;
+}
+
+const char* ralph_get_lp_external_provider_name(RalphLPExternalProvider provider) {
+    if (provider == RALPH_LP_EXTERNAL_PROVIDER_NONE) {
+        return lp_external_provider_name(LP_EXTERNAL_PROVIDER_NONE);
+    }
+    if (!ralph_lp_external_provider_valid_public(provider)) return NULL;
+    return lp_external_provider_name(ralph_lp_external_provider_to_internal(provider));
+}
+
+int ralph_register_lp_external_adapter(const RalphLPExternalAdapter *adapter) {
+    RalphLPExternalAdapterBridgeEntry *entry;
+    LPExternalAdapter internal_adapter;
+    LPExternalProvider provider;
+
+    if (!adapter) return -1;
+    if (adapter->abi_version != RALPH_LP_EXTERNAL_ADAPTER_ABI_VERSION) return -1;
+    if (!ralph_lp_external_provider_valid_public(adapter->provider)) return -1;
+    if (!adapter->get_capabilities || !adapter->solve) return -1;
+
+    provider = ralph_lp_external_provider_to_internal(adapter->provider);
+    if (provider == LP_EXTERNAL_PROVIDER_NONE) return -1;
+
+    entry = &g_lp_external_bridge[(int)adapter->provider];
+    memset(entry, 0, sizeof(*entry));
+    entry->adapter = *adapter;
+    entry->in_use = 1;
+
+    memset(&internal_adapter, 0, sizeof(internal_adapter));
+    internal_adapter.abi_version = LP_EXTERNAL_ADAPTER_ABI_VERSION;
+    internal_adapter.provider = provider;
+    internal_adapter.provider_name = adapter->provider_name;
+    internal_adapter.get_capabilities = ralph_lp_external_bridge_get_capabilities;
+    internal_adapter.solve = ralph_lp_external_bridge_solve;
+    internal_adapter.user_data = entry;
+
+    if (lp_external_adapter_register(&internal_adapter) != 0) {
+        memset(entry, 0, sizeof(*entry));
+        return -1;
+    }
+    return 0;
+}
+
+int ralph_unregister_lp_external_adapter(RalphLPExternalProvider provider) {
+    if (!ralph_lp_external_provider_valid_public(provider)) return -1;
+    if (lp_external_adapter_unregister(ralph_lp_external_provider_to_internal(provider)) != 0) {
+        return -1;
+    }
+    memset(&g_lp_external_bridge[(int)provider], 0, sizeof(g_lp_external_bridge[(int)provider]));
+    return 0;
+}
+
+void ralph_unregister_all_lp_external_adapters(void) {
+    lp_external_adapter_unregister_all();
+    memset(g_lp_external_bridge, 0, sizeof(g_lp_external_bridge));
+}
+
+int ralph_is_lp_external_adapter_registered(RalphLPExternalProvider provider) {
+    if (provider == RALPH_LP_EXTERNAL_PROVIDER_NONE) {
+        return lp_external_adapter_is_registered(LP_EXTERNAL_PROVIDER_NONE);
+    }
+    if (!ralph_lp_external_provider_valid_public(provider)) return -1;
+    return lp_external_adapter_is_registered(ralph_lp_external_provider_to_internal(provider));
 }
 
 int ralph_get_farkas_ray(const RalphModel *model, double *ray) {
@@ -2916,6 +3068,19 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .aliases = {"LPExternalProvider"},
             .alias_count = 1
         },
+        [RALPH_PARAM_LP_EXTERNAL_STRICT] = {
+            .id = RALPH_PARAM_LP_EXTERNAL_STRICT,
+            .name = "lp_external_strict",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = 0.0,
+            .has_min = 1,
+            .min_value = 0.0,
+            .has_max = 1,
+            .max_value = 1.0,
+            .aliases = {"LPExternalStrict"},
+            .alias_count = 1
+        },
         [RALPH_PARAM_TIME_LIMIT] = {
             .id = RALPH_PARAM_TIME_LIMIT,
             .name = "time_limit",
@@ -3128,6 +3293,10 @@ int ralph_set_int_param_id(RalphModel *model, RalphParamId param, int value) {
         case RALPH_PARAM_LP_EXTERNAL_PROVIDER:
             if (ralph_set_requested_lp_external_provider_internal(model, value) != 0) return -1;
             break;
+        case RALPH_PARAM_LP_EXTERNAL_STRICT:
+            if (value < 0 || value > 1) return -1;
+            model->lp_external_strict = value;
+            break;
         default:
             return -1;
     }
@@ -3254,6 +3423,9 @@ int ralph_get_int_param_id(const RalphModel *model, RalphParamId param, int *val
             break;
         case RALPH_PARAM_LP_EXTERNAL_PROVIDER:
             *value = model->lp_external_provider;
+            break;
+        case RALPH_PARAM_LP_EXTERNAL_STRICT:
+            *value = model->lp_external_strict;
             break;
         default:
             return -1;

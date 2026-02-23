@@ -14,6 +14,8 @@ typedef enum {
 typedef struct {
     LPDispatchBackend requested_backend;
     LPDispatchBackend effective_backend;
+    RalphLPExternalProvider requested_external_provider;
+    RalphLPExternalProvider effective_external_provider;
     RalphLPAlgorithm requested_algorithm;
     RalphLPAlgorithm effective_algorithm;
     RalphLPCrossoverMode requested_crossover;
@@ -24,6 +26,7 @@ typedef struct {
 } LPDispatchPlan;
 
 int lp_dispatch_algorithm_value_valid(int value);
+int lp_dispatch_algorithm_is_external(int value);
 int lp_dispatch_crossover_value_valid(int value);
 int lp_dispatch_external_provider_value_valid(int value);
 

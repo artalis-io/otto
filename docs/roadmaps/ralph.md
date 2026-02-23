@@ -4,25 +4,26 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-23) — external-adapter-contract explicit-dispatch baseline:
-expanded LP algorithm routing with explicit external algorithm modes and provider-id gating:
-`PRIMAL_SIMPLEX_EXTERNAL`, `DUAL_SIMPLEX_EXTERNAL`, `BARRIER_EXTERNAL`, plus
-`lp_external_provider` (`RALPH_PARAM_LP_EXTERNAL_PROVIDER`).
-Dispatch policy is now strict:
-- `primal`, `dual`, and `auto` always route to internal simplex backends.
-- External backends are selected only when an explicit external algorithm is requested and the
-  requested provider matches the registered external adapter ID.
-- If external criteria are not met, fallback is explicit and reportable via
-  `RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE`.
-This preserves compatibility for legacy/internal paths while making external selection explicit,
-auditable, and orthogonal.
+**Current** (2026-02-23) — external-adapter public API + multi-provider + strict-mode baseline:
+completed LP API gap items 1/2/4 as one orthogonal patch:
+- Added public external adapter registration/query APIs in `ralph.h` and bridge wiring in
+  `ralph.c` (`ralph_register_lp_external_adapter`, unregister, unregister-all, registered check,
+  provider name lookup).
+- Replaced single global external adapter slot with a provider-scoped internal registry so
+  adapters can be registered/routed independently per provider.
+- Added LP-only strict external mode parameter `lp_external_strict`
+  (`RALPH_PARAM_LP_EXTERNAL_STRICT`): explicit external algorithm requests now fail fast instead
+  of silently falling back when external backend/provider is unavailable.
+- Extended dispatch/backend planning with requested/effective external provider tracking for
+  auditable fallback and deterministic provider routing.
 Latest gates:
-`make -C ralph test-lp-external-adapter` PASS (34/34),
-`make -C ralph test-lp-dispatch` PASS (98/98),
-`make -C ralph test-lp-algorithm-api` PASS (128/128),
+`make -C ralph test-lp-external-adapter` PASS (44/44),
+`make -C ralph test-lp-dispatch` PASS (105/105),
+`make -C ralph test-lp-external-adapter-api` PASS (28/28),
+`make -C ralph test-lp-algorithm-api` PASS (147/147),
 `make -C ralph test-api` PASS (13/13), and
 `make -C ralph test-netlib-gate-small` PASS (26 files, dense fallback files: 0, no unexpected
-regressions, artifacts: `/tmp/netlib-regression-gate-20260223-120131`).
+regressions, artifacts: `/tmp/netlib-regression-gate-20260223-122939`).
 
 Previous: (2026-02-23, `abd62fa`) — LP dispatch module extraction baseline:
 extracted LP algorithm/backend routing and fallback planning from `ralph.c` into a dedicated
