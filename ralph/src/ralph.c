@@ -239,6 +239,71 @@ static int ralph_lp_external_backend_from_dispatch_backend(
     }
 }
 
+static void ralph_set_api_error(const RalphModel *model,
+                                RalphErrorDomain domain,
+                                RalphErrorCode code,
+                                RalphStatus status_hint,
+                                RalphErrorAPIId api_id,
+                                int detail_i0,
+                                int detail_i1,
+                                const char *message) {
+    if (model) {
+        lp_error_state_set(&((RalphModel*)model)->error_state,
+                           domain,
+                           code,
+                           status_hint,
+                           api_id,
+                           detail_i0,
+                           detail_i1,
+                           message);
+    } else {
+        lp_error_tls_set(domain,
+                         code,
+                         status_hint,
+                         api_id,
+                         detail_i0,
+                         detail_i1,
+                         message);
+    }
+}
+
+static void ralph_clear_api_error(const RalphModel *model) {
+    if (model) {
+        lp_error_state_clear(&((RalphModel*)model)->error_state);
+    } else {
+        lp_error_tls_clear();
+    }
+}
+
+#define RALPH_CLEAR_API_ERROR(model_ptr) \
+    ralph_clear_api_error((const RalphModel*)(model_ptr))
+
+#define RALPH_FAIL_API(model_ptr, domain, code, status_hint, api_id, detail0, detail1, msg) \
+    do { \
+        ralph_set_api_error((const RalphModel*)(model_ptr), \
+                            (domain), \
+                            (code), \
+                            (status_hint), \
+                            (api_id), \
+                            (detail0), \
+                            (detail1), \
+                            (msg)); \
+        return -1; \
+    } while (0)
+
+#define RALPH_FAIL_API_PTR(model_ptr, domain, code, status_hint, api_id, detail0, detail1, msg) \
+    do { \
+        ralph_set_api_error((const RalphModel*)(model_ptr), \
+                            (domain), \
+                            (code), \
+                            (status_hint), \
+                            (api_id), \
+                            (detail0), \
+                            (detail1), \
+                            (msg)); \
+        return NULL; \
+    } while (0)
+
 static int ralph_lp_external_bridge_get_capabilities(LPExternalCapabilities *caps,
                                                       void *user_data) {
     RalphLPExternalAdapterBridgeEntry *entry =
@@ -833,23 +898,72 @@ void ralph_core_free(RalphModel *model) {
  * ============================================================================ */
 
 int ralph_core_set_obj_sense(RalphModel *model, RalphObjSense sense) {
-    if (!model || !model->lp_model) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_BUILD,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
     model->lp_model->obj_sense = (int)sense;
     ralph_invalidate_solve_state(model);
     return 0;
 }
 
 int ralph_core_add_var(RalphModel *model, double lb, double ub, double obj, RalphVarType type) {
-    if (!model || !model->lp_model) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_BUILD,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
     int rc = lp_model_add_var(model->lp_model, lb, ub, obj, (char)type);
-    if (rc < 0) return rc;
+    if (rc < 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_SOLVER,
+                       RALPH_ERROR_CODE_INVALID_ARGUMENT,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_BUILD,
+                       rc,
+                       0,
+                       "failed to add variable");
+    }
     ralph_invalidate_solve_state(model);
     return rc;
 }
 
 int ralph_core_add_vars(RalphModel *model, int count, const double *lb, const double *ub,
                    const double *obj, const RalphVarType *types) {
-    if (!model || !model->lp_model || count <= 0) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_BUILD,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (count <= 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_BUILD,
+                       count,
+                       0,
+                       "count must be positive");
+    }
 
     for (int i = 0; i < count; i++) {
         double l = lb ? lb[i] : 0.0;
@@ -858,7 +972,14 @@ int ralph_core_add_vars(RalphModel *model, int count, const double *lb, const do
         RalphVarType t = types ? types[i] : RALPH_CONTINUOUS;
 
         if (lp_model_add_var(model->lp_model, l, u, o, (char)t) < 0) {
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_SOLVER,
+                           RALPH_ERROR_CODE_INVALID_ARGUMENT,
+                           RALPH_STATUS_ERROR,
+                           RALPH_ERROR_API_MODEL_BUILD,
+                           i,
+                           count,
+                           "failed to add variable in batch");
         }
     }
 
@@ -868,9 +989,28 @@ int ralph_core_add_vars(RalphModel *model, int count, const double *lb, const do
 
 int ralph_core_add_constraint(RalphModel *model, int nnz, const int *indices,
                          const double *values, RalphSense sense, double rhs) {
-    if (!model || !model->lp_model) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_BUILD,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
     int rc = lp_model_add_constraint(model->lp_model, nnz, indices, values, (char)sense, rhs);
-    if (rc < 0) return -1;
+    if (rc < 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_SOLVER,
+                       RALPH_ERROR_CODE_INVALID_ARGUMENT,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_BUILD,
+                       rc,
+                       nnz,
+                       "failed to add constraint");
+    }
     ralph_invalidate_solve_state(model);
     return rc;
 }
@@ -880,8 +1020,27 @@ int ralph_core_add_constraint(RalphModel *model, int nnz, const int *indices,
  * ============================================================================ */
 
 int ralph_core_set_var_bounds(RalphModel *model, int var, double lb, double ub) {
-    if (!model || !model->lp_model) return -1;
-    if (var < 0 || var >= model->lp_model->num_vars) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (var < 0 || var >= model->lp_model->num_vars) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       var,
+                       model->lp_model->num_vars,
+                       "variable index out of range");
+    }
 
     model->lp_model->lb[var] = lb;
     model->lp_model->ub[var] = ub;
@@ -890,8 +1049,27 @@ int ralph_core_set_var_bounds(RalphModel *model, int var, double lb, double ub) 
 }
 
 int ralph_core_set_var_type(RalphModel *model, int var, RalphVarType type) {
-    if (!model || !model->lp_model) return -1;
-    if (var < 0 || var >= model->lp_model->num_vars) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (var < 0 || var >= model->lp_model->num_vars) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       var,
+                       model->lp_model->num_vars,
+                       "variable index out of range");
+    }
 
     char old_type = model->lp_model->var_type[var];
     model->lp_model->var_type[var] = (char)type;
@@ -910,8 +1088,27 @@ int ralph_core_set_var_type(RalphModel *model, int var, RalphVarType type) {
 }
 
 int ralph_core_set_obj_coef(RalphModel *model, int var, double coef) {
-    if (!model || !model->lp_model) return -1;
-    if (var < 0 || var >= model->lp_model->num_vars) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (var < 0 || var >= model->lp_model->num_vars) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       var,
+                       model->lp_model->num_vars,
+                       "variable index out of range");
+    }
 
     model->lp_model->c[var] = coef;
     ralph_invalidate_solve_state(model);
@@ -919,7 +1116,17 @@ int ralph_core_set_obj_coef(RalphModel *model, int var, double coef) {
 }
 
 int ralph_core_set_obj_offset(RalphModel *model, double offset) {
-    if (!model || !model->lp_model) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
     model->lp_model->obj_offset = offset;
     ralph_invalidate_solve_state(model);
     return 0;
@@ -961,16 +1168,40 @@ typedef enum {
 } RalphSolveMode;
 
 static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
-    if (!model || !model->lp_model) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_SOLVE,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
 
     int model_is_mip = ralph_core_is_mip(model);
     if (mode == RALPH_SOLVE_LP_ONLY && model_is_mip) {
         model->status = RALPH_STATUS_ERROR;
-        return -1;
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       model->status,
+                       RALPH_ERROR_API_SOLVE,
+                       (int)mode,
+                       1,
+                       "LP-only solve requested for MIP model");
     }
     if (mode == RALPH_SOLVE_MIP_ONLY && !model_is_mip) {
         model->status = RALPH_STATUS_ERROR;
-        return -1;
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       model->status,
+                       RALPH_ERROR_API_SOLVE,
+                       (int)mode,
+                       0,
+                       "MIP-only solve requested for LP model");
     }
     int solve_as_mip = (mode == RALPH_SOLVE_MIP_ONLY) ? 1 :
                        (mode == RALPH_SOLVE_LP_ONLY) ? 0 : model_is_mip;
@@ -989,7 +1220,14 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                                    model->barrier_crossover,
                                    &lp_dispatch_plan) != 0) {
             model->status = RALPH_STATUS_ERROR;
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_EXTERNAL,
+                           RALPH_ERROR_CODE_EXTERNAL_DISPATCH_FAILED,
+                           model->status,
+                           RALPH_ERROR_API_SOLVE,
+                           model->lp_algorithm,
+                           model->lp_external_provider,
+                           "failed to build LP dispatch plan");
         }
         lp_dispatch_plan_to_report(&lp_dispatch_plan, &lp_algorithm_report);
         lp_simplex_method = lp_dispatch_plan.simplex_method;
@@ -1008,7 +1246,14 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
             lp_dispatch_plan.fallback_applied &&
             lp_dispatch_plan.fallback_reason == RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE) {
             model->status = RALPH_STATUS_ERROR;
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_EXTERNAL,
+                           RALPH_ERROR_CODE_EXTERNAL_DISPATCH_FAILED,
+                           model->status,
+                           RALPH_ERROR_API_SOLVE,
+                           lp_dispatch_plan.requested_external_provider,
+                           lp_dispatch_plan.fallback_reason,
+                           "strict external dispatch failed");
         }
         lp_algorithm_report_ready = 1;
     }
@@ -1017,7 +1262,14 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     if (!model->lp_model->A) {
         if (lp_model_finalize(model->lp_model) != 0) {
             model->status = RALPH_STATUS_ERROR;
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_SOLVER,
+                           RALPH_ERROR_CODE_SOLVE_FAILED,
+                           model->status,
+                           RALPH_ERROR_API_SOLVE,
+                           0,
+                           0,
+                           "failed to finalize model");
         }
     }
 
@@ -1320,7 +1572,14 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         if (!model->mip_solver) {
             if (presolved) presolve_free(presolved);
             model->status = RALPH_STATUS_ERROR;
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_MEMORY,
+                           RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                           model->status,
+                           RALPH_ERROR_API_SOLVE,
+                           0,
+                           0,
+                           "failed to allocate MIP solver");
         }
 
         /* Set parameters */
@@ -1407,13 +1666,27 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                 if (!solve_start) {
                     if (presolved) presolve_free(presolved);
                     model->status = RALPH_STATUS_ERROR;
-                    return -1;
+                    RALPH_FAIL_API(model,
+                                   RALPH_ERROR_DOMAIN_MEMORY,
+                                   RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                                   model->status,
+                                   RALPH_ERROR_API_SOLVE,
+                                   0,
+                                   n_solve,
+                                   "failed to allocate mapped MIP start values");
                 }
                 if (!solve_mask) {
                     free(solve_start);
                     if (presolved) presolve_free(presolved);
                     model->status = RALPH_STATUS_ERROR;
-                    return -1;
+                    RALPH_FAIL_API(model,
+                                   RALPH_ERROR_DOMAIN_MEMORY,
+                                   RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                                   model->status,
+                                   RALPH_ERROR_API_SOLVE,
+                                   1,
+                                   n_solve,
+                                   "failed to allocate mapped MIP start mask");
                 }
 
                 if (presolved && presolved->var_map) {
@@ -1485,7 +1758,14 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         if (!model->lp_solver) {
             if (presolved) presolve_free(presolved);
             model->status = RALPH_STATUS_ERROR;
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_MEMORY,
+                           RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                           model->status,
+                           RALPH_ERROR_API_SOLVE,
+                           0,
+                           0,
+                           "failed to allocate LP solver");
         }
 
         /* Set parameters */
@@ -1529,7 +1809,14 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                                        model->staged_var_status) != 0) {
                 if (presolved) presolve_free(presolved);
                 model->status = RALPH_STATUS_ERROR;
-                return -1;
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_STATE,
+                               RALPH_ERROR_CODE_NOT_AVAILABLE,
+                               model->status,
+                               RALPH_ERROR_API_SOLVE,
+                               model->staged_basis_m,
+                               model->staged_basis_n,
+                               "failed to apply staged basis");
             }
             ralph_clear_staged_basis(model);
         }
@@ -1553,7 +1840,24 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                     model->status = RALPH_STATUS_ERROR;
                 }
                 if (presolved) presolve_free(presolved);
-                return -1;
+                if (ralph_lp_dispatch_backend_is_external(lp_effective_backend)) {
+                    RALPH_FAIL_API(model,
+                                   RALPH_ERROR_DOMAIN_EXTERNAL,
+                                   RALPH_ERROR_CODE_EXTERNAL_EXECUTION_FAILED,
+                                   model->status,
+                                   RALPH_ERROR_API_SOLVE,
+                                   backend_rc,
+                                   (int)lp_effective_backend,
+                                   "external LP backend execution failed");
+                }
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_SOLVER,
+                               RALPH_ERROR_CODE_SOLVE_FAILED,
+                               model->status,
+                               RALPH_ERROR_API_SOLVE,
+                               backend_rc,
+                               (int)lp_effective_backend,
+                               "internal LP backend execution failed");
             }
         }
 
@@ -1577,7 +1881,14 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                 free(model->reduced_costs); model->reduced_costs = NULL;
                 if (presolved) presolve_free(presolved);
                 model->status = RALPH_STATUS_ERROR;
-                return -1;
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_MEMORY,
+                               RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                               model->status,
+                               RALPH_ERROR_API_SOLVE,
+                               n_orig,
+                               m_orig,
+                               "failed to allocate solution vectors");
             }
 
             if (presolved && presolved->reduced_model) {
@@ -1705,7 +2016,27 @@ double ralph_core_get_objval(const RalphModel *model) {
 }
 
 int ralph_core_get_solution(const RalphModel *model, double *x) {
-    if (!model || !x || !model->solution) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !x) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_SOLUTION_QUERY,
+                       0,
+                       0,
+                       "model or output buffer is null");
+    }
+    if (!model->solution) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       model->status,
+                       RALPH_ERROR_API_SOLUTION_QUERY,
+                       0,
+                       0,
+                       "primal solution is unavailable");
+    }
 
     int n = ralph_core_get_num_vars(model);
     memcpy(x, model->solution, n * sizeof(double));
@@ -1713,7 +2044,27 @@ int ralph_core_get_solution(const RalphModel *model, double *x) {
 }
 
 int ralph_core_get_dual_solution(const RalphModel *model, double *y) {
-    if (!model || !y || !model->dual_solution) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !y) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_SOLUTION_QUERY,
+                       0,
+                       0,
+                       "model or output buffer is null");
+    }
+    if (!model->dual_solution) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       model->status,
+                       RALPH_ERROR_API_SOLUTION_QUERY,
+                       1,
+                       0,
+                       "dual solution is unavailable");
+    }
 
     int m = ralph_core_get_num_cons(model);
     memcpy(y, model->dual_solution, m * sizeof(double));
@@ -1721,7 +2072,27 @@ int ralph_core_get_dual_solution(const RalphModel *model, double *y) {
 }
 
 int ralph_core_get_reduced_costs(const RalphModel *model, double *rc) {
-    if (!model || !rc || !model->reduced_costs) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !rc) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_SOLUTION_QUERY,
+                       0,
+                       0,
+                       "model or output buffer is null");
+    }
+    if (!model->reduced_costs) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       model->status,
+                       RALPH_ERROR_API_SOLUTION_QUERY,
+                       2,
+                       0,
+                       "reduced costs are unavailable");
+    }
 
     int n = ralph_core_get_num_vars(model);
     memcpy(rc, model->reduced_costs, n * sizeof(double));
@@ -1729,34 +2100,110 @@ int ralph_core_get_reduced_costs(const RalphModel *model, double *rc) {
 }
 
 int ralph_core_get_lp_capabilities(RalphLPCapabilities *caps) {
-    if (!caps) return -1;
+    if (!caps) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       0,
+                       0,
+                       "output pointer is null");
+    }
+    RALPH_CLEAR_API_ERROR(NULL);
     lp_dispatch_get_capabilities(caps);
     return 0;
 }
 
 int ralph_core_get_last_lp_algorithm_report(const RalphModel *model,
                                        RalphLPSolveAlgorithmReport *report) {
-    if (!model || !report) return -1;
-    if (ralph_core_is_mip(model)) return -1;
-    if (!model->last_lp_algorithm_report_valid) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !report) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_SOLVE,
+                       0,
+                       0,
+                       "model or report output is null");
+    }
+    if (ralph_core_is_mip(model)) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       model->status,
+                       RALPH_ERROR_API_SOLVE,
+                       0,
+                       0,
+                       "LP algorithm report is unavailable for MIP models");
+    }
+    if (!model->last_lp_algorithm_report_valid) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       model->status,
+                       RALPH_ERROR_API_SOLVE,
+                       0,
+                       0,
+                       "LP algorithm report is unavailable");
+    }
     *report = model->last_lp_algorithm_report;
     return 0;
 }
 
 int ralph_core_get_last_lp_external_failure_report(const RalphModel *model,
                                               RalphLPExternalFailureReport *report) {
-    if (!model || !report) return -1;
-    if (ralph_core_is_mip(model)) return -1;
-    if (!model->last_lp_external_failure_report_valid) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !report) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       0,
+                       0,
+                       "model or report output is null");
+    }
+    if (ralph_core_is_mip(model)) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       model->status,
+                       RALPH_ERROR_API_EXTERNAL,
+                       0,
+                       0,
+                       "external failure report is unavailable for MIP models");
+    }
+    if (!model->last_lp_external_failure_report_valid) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       model->status,
+                       RALPH_ERROR_API_EXTERNAL,
+                       0,
+                       0,
+                       "external failure report is unavailable");
+    }
     *report = model->last_lp_external_failure_report;
     return 0;
 }
 
 const char* ralph_core_get_lp_external_provider_name(RalphLPExternalProvider provider) {
+    RALPH_CLEAR_API_ERROR(NULL);
     if (provider == RALPH_LP_EXTERNAL_PROVIDER_NONE) {
         return lp_external_provider_name(LP_EXTERNAL_PROVIDER_NONE);
     }
-    if (!ralph_lp_external_provider_valid_public(provider)) return NULL;
+    if (!ralph_lp_external_provider_valid_public(provider)) {
+        RALPH_FAIL_API_PTR(NULL,
+                           RALPH_ERROR_DOMAIN_RANGE,
+                           RALPH_ERROR_CODE_OUT_OF_RANGE,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_EXTERNAL,
+                           provider,
+                           0,
+                           "external provider id is out of range");
+    }
     return lp_external_provider_name(ralph_lp_external_provider_to_internal(provider));
 }
 
@@ -1765,13 +2212,50 @@ int ralph_core_get_lp_external_provider_capabilities(RalphLPExternalProvider pro
     LPExternalCapabilities internal_caps;
     LPExternalProvider internal_provider;
 
-    if (!caps) return -1;
+    if (!caps) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       0,
+                       0,
+                       "output pointer is null");
+    }
+    RALPH_CLEAR_API_ERROR(NULL);
     memset(caps, 0, sizeof(*caps));
-    if (!ralph_lp_external_provider_valid_public(provider)) return -1;
+    if (!ralph_lp_external_provider_valid_public(provider)) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       (int)provider,
+                       0,
+                       "external provider id is out of range");
+    }
 
     internal_provider = ralph_lp_external_provider_to_internal(provider);
-    if (internal_provider == LP_EXTERNAL_PROVIDER_NONE) return -1;
-    if (lp_external_adapter_get_capabilities(internal_provider, &internal_caps) != 0) return -1;
+    if (internal_provider == LP_EXTERNAL_PROVIDER_NONE) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_EXTERNAL,
+                       RALPH_ERROR_CODE_EXTERNAL_DISPATCH_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       (int)provider,
+                       0,
+                       "provider NONE has no capabilities");
+    }
+    if (lp_external_adapter_get_capabilities(internal_provider, &internal_caps) != 0) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_EXTERNAL,
+                       RALPH_ERROR_CODE_EXTERNAL_EXECUTION_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       (int)provider,
+                       0,
+                       "failed to query external provider capabilities");
+    }
 
     caps->supports_simplex = internal_caps.supports_simplex ? 1 : 0;
     caps->supports_dual_simplex = internal_caps.supports_dual_simplex ? 1 : 0;
@@ -1788,9 +2272,37 @@ int ralph_core_get_lp_external_registered_providers(RalphLPExternalProvider *pro
     int needed = 0;
     int rc;
 
-    if (!count) return -1;
-    if (capacity < 0) return -1;
-    if (!providers && capacity > 0) return -1;
+    if (!count) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       0,
+                       0,
+                       "count output is null");
+    }
+    RALPH_CLEAR_API_ERROR(NULL);
+    if (capacity < 0) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       capacity,
+                       0,
+                       "capacity must be non-negative");
+    }
+    if (!providers && capacity > 0) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       capacity,
+                       0,
+                       "providers buffer is null");
+    }
     if (internal_capacity > (int)LP_EXTERNAL_PROVIDER_GLOP) {
         internal_capacity = (int)LP_EXTERNAL_PROVIDER_GLOP;
     }
@@ -1801,7 +2313,16 @@ int ralph_core_get_lp_external_registered_providers(RalphLPExternalProvider *pro
         internal_capacity,
         &needed);
     if (count) *count = needed;
-    if (rc != 0) return -1;
+    if (rc != 0) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_EXTERNAL,
+                       RALPH_ERROR_CODE_EXTERNAL_EXECUTION_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       rc,
+                       0,
+                       "failed to list registered external providers");
+    }
 
     if (providers && capacity > 0) {
         int to_copy = needed;
@@ -1818,16 +2339,71 @@ int ralph_core_register_lp_external_adapter(const RalphLPExternalAdapter *adapte
     LPExternalAdapter internal_adapter;
     LPExternalProvider provider;
 
-    if (!adapter) return -1;
-    if (adapter->abi_version != RALPH_LP_EXTERNAL_ADAPTER_ABI_VERSION) return -1;
-    if (!ralph_lp_external_provider_valid_public(adapter->provider)) return -1;
-    if (!adapter->get_capabilities || !adapter->solve) return -1;
+    if (!adapter) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       0,
+                       0,
+                       "adapter pointer is null");
+    }
+    RALPH_CLEAR_API_ERROR(NULL);
+    if (adapter->abi_version != RALPH_LP_EXTERNAL_ADAPTER_ABI_VERSION) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_EXTERNAL,
+                       RALPH_ERROR_CODE_INVALID_ARGUMENT,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       adapter->abi_version,
+                       RALPH_LP_EXTERNAL_ADAPTER_ABI_VERSION,
+                       "external adapter ABI version mismatch");
+    }
+    if (!ralph_lp_external_provider_valid_public(adapter->provider)) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       adapter->provider,
+                       0,
+                       "external provider id is out of range");
+    }
+    if (!adapter->get_capabilities || !adapter->solve) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       0,
+                       0,
+                       "adapter callbacks are required");
+    }
 
     provider = ralph_lp_external_provider_to_internal(adapter->provider);
-    if (provider == LP_EXTERNAL_PROVIDER_NONE) return -1;
+    if (provider == LP_EXTERNAL_PROVIDER_NONE) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_EXTERNAL,
+                       RALPH_ERROR_CODE_EXTERNAL_DISPATCH_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       adapter->provider,
+                       0,
+                       "external provider NONE cannot be registered");
+    }
 
     entry = (RalphLPExternalAdapterBridgeEntry*)calloc(1, sizeof(*entry));
-    if (!entry) return -1;
+    if (!entry) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_MEMORY,
+                       RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       0,
+                       0,
+                       "failed to allocate adapter bridge entry");
+    }
     entry->adapter = *adapter;
 
     memset(&internal_adapter, 0, sizeof(internal_adapter));
@@ -1841,25 +2417,71 @@ int ralph_core_register_lp_external_adapter(const RalphLPExternalAdapter *adapte
 
     if (lp_external_adapter_register(&internal_adapter) != 0) {
         free(entry);
-        return -1;
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_EXTERNAL,
+                       RALPH_ERROR_CODE_EXTERNAL_EXECUTION_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       adapter->provider,
+                       0,
+                       "failed to register external adapter");
     }
     return 0;
 }
 
 int ralph_core_register_lp_external_glpk_oop(const char *glpsol_path) {
-    return lp_external_glpk_oop_register(glpsol_path);
+    RALPH_CLEAR_API_ERROR(NULL);
+    if (lp_external_glpk_oop_register(glpsol_path) != 0) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_EXTERNAL,
+                       RALPH_ERROR_CODE_EXTERNAL_EXECUTION_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       0,
+                       0,
+                       "failed to register GLPK OOP adapter");
+    }
+    return 0;
 }
 
 int ralph_core_unregister_lp_external_adapter(RalphLPExternalProvider provider) {
-    if (!ralph_lp_external_provider_valid_public(provider)) return -1;
+    RALPH_CLEAR_API_ERROR(NULL);
+    if (!ralph_lp_external_provider_valid_public(provider)) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       provider,
+                       0,
+                       "external provider id is out of range");
+    }
     if (lp_external_adapter_unregister(ralph_lp_external_provider_to_internal(provider)) != 0) {
-        return -1;
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_EXTERNAL,
+                       RALPH_ERROR_CODE_EXTERNAL_EXECUTION_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       provider,
+                       0,
+                       "failed to unregister external adapter");
     }
     return 0;
 }
 
 int ralph_core_unregister_lp_external_glpk_oop(void) {
-    return lp_external_glpk_oop_unregister();
+    RALPH_CLEAR_API_ERROR(NULL);
+    if (lp_external_glpk_oop_unregister() != 0) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_EXTERNAL,
+                       RALPH_ERROR_CODE_EXTERNAL_EXECUTION_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       0,
+                       0,
+                       "failed to unregister GLPK OOP adapter");
+    }
+    return 0;
 }
 
 void ralph_core_unregister_all_lp_external_adapters(void) {
@@ -1867,18 +2489,47 @@ void ralph_core_unregister_all_lp_external_adapters(void) {
 }
 
 int ralph_core_is_lp_external_adapter_registered(RalphLPExternalProvider provider) {
+    RALPH_CLEAR_API_ERROR(NULL);
     if (provider == RALPH_LP_EXTERNAL_PROVIDER_NONE) {
         return lp_external_adapter_is_registered(LP_EXTERNAL_PROVIDER_NONE);
     }
-    if (!ralph_lp_external_provider_valid_public(provider)) return -1;
+    if (!ralph_lp_external_provider_valid_public(provider)) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_EXTERNAL,
+                       provider,
+                       0,
+                       "external provider id is out of range");
+    }
     return lp_external_adapter_is_registered(ralph_lp_external_provider_to_internal(provider));
 }
 
 int ralph_core_get_farkas_ray(const RalphModel *model, double *ray) {
-    if (!model || !ray) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !ray) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_SOLUTION_QUERY,
+                       0,
+                       0,
+                       "model or output buffer is null");
+    }
 
     /* Check if status is infeasible and we have a valid Farkas ray */
-    if (model->status != RALPH_STATUS_INFEASIBLE) return -1;
+    if (model->status != RALPH_STATUS_INFEASIBLE) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       model->status,
+                       RALPH_ERROR_API_SOLUTION_QUERY,
+                       model->status,
+                       RALPH_STATUS_INFEASIBLE,
+                       "Farkas ray only available for infeasible status");
+    }
 
     /* For LP problems, get the ray from the simplex solver */
     if (model->lp_solver && model->lp_solver->farkas_valid && model->lp_solver->farkas_ray) {
@@ -1888,15 +2539,50 @@ int ralph_core_get_farkas_ray(const RalphModel *model, double *ray) {
     }
 
     /* No valid Farkas ray available */
-    return -1;
+    RALPH_FAIL_API(model,
+                   RALPH_ERROR_DOMAIN_STATE,
+                   RALPH_ERROR_CODE_NOT_AVAILABLE,
+                   model->status,
+                   RALPH_ERROR_API_SOLUTION_QUERY,
+                   0,
+                   0,
+                   "Farkas ray is unavailable");
 }
 
 int ralph_core_get_unbounded_ray(const RalphModel *model, double *ray) {
-    if (!model || !ray) return -1;
-    if (model->status != RALPH_STATUS_UNBOUNDED) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !ray) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_SOLUTION_QUERY,
+                       0,
+                       0,
+                       "model or output buffer is null");
+    }
+    if (model->status != RALPH_STATUS_UNBOUNDED) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       model->status,
+                       RALPH_ERROR_API_SOLUTION_QUERY,
+                       model->status,
+                       RALPH_STATUS_UNBOUNDED,
+                       "unbounded ray only available for unbounded status");
+    }
 
     int n = ralph_core_get_num_vars(model);
-    if (n <= 0) return -1;
+    if (n <= 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       model->status,
+                       RALPH_ERROR_API_SOLUTION_QUERY,
+                       n,
+                       0,
+                       "unbounded ray unavailable for empty model");
+    }
 
     if (model->unbounded_ray_valid && model->unbounded_ray) {
         memcpy(ray, model->unbounded_ray, (size_t)n * sizeof(double));
@@ -1912,7 +2598,14 @@ int ralph_core_get_unbounded_ray(const RalphModel *model, double *ray) {
         return 0;
     }
 
-    return -1;
+    RALPH_FAIL_API(model,
+                   RALPH_ERROR_DOMAIN_STATE,
+                   RALPH_ERROR_CODE_NOT_AVAILABLE,
+                   model->status,
+                   RALPH_ERROR_API_SOLUTION_QUERY,
+                   0,
+                   0,
+                   "unbounded ray is unavailable");
 }
 
 int ralph_core_compute_lp_conflict(const RalphModel *model,
@@ -2256,7 +2949,17 @@ int ralph_core_get_var_bound_range(const RalphModel *model,
  * ============================================================================ */
 
 int ralph_core_set_branch_priorities(RalphModel *model, const int *priorities) {
-    if (!model) return -1;
+    if (!model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
 
     /* Free existing priorities */
     free(model->branch_priorities);
@@ -2265,17 +2968,45 @@ int ralph_core_set_branch_priorities(RalphModel *model, const int *priorities) {
     if (!priorities) return 0;  /* Clear priorities */
 
     int n = ralph_core_get_num_vars(model);
-    if (n <= 0) return -1;
+    if (n <= 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       n,
+                       0,
+                       "no variables available for branch priorities");
+    }
 
     model->branch_priorities = (int*)malloc(n * sizeof(int));
-    if (!model->branch_priorities) return -1;
+    if (!model->branch_priorities) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_MEMORY,
+                       RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       n,
+                       0,
+                       "failed to allocate branch priorities");
+    }
 
     memcpy(model->branch_priorities, priorities, n * sizeof(int));
     return 0;
 }
 
 int ralph_core_set_branch_directions(RalphModel *model, const int *directions) {
-    if (!model) return -1;
+    if (!model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
 
     /* Free existing directions */
     free(model->branch_directions);
@@ -2284,32 +3015,115 @@ int ralph_core_set_branch_directions(RalphModel *model, const int *directions) {
     if (!directions) return 0;  /* Clear directions */
 
     int n = ralph_core_get_num_vars(model);
-    if (n <= 0) return -1;
+    if (n <= 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       n,
+                       0,
+                       "no variables available for branch directions");
+    }
 
     model->branch_directions = (int*)malloc(n * sizeof(int));
-    if (!model->branch_directions) return -1;
+    if (!model->branch_directions) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_MEMORY,
+                       RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       n,
+                       0,
+                       "failed to allocate branch directions");
+    }
 
     memcpy(model->branch_directions, directions, n * sizeof(int));
     return 0;
 }
 
 int ralph_core_set_mip_start(RalphModel *model, const double *x) {
-    if (!model || !model->lp_model || !x) return -1;
+    if (!model || !model->lp_model || !x) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model or start vector is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
 
     int n = model->lp_model->num_vars;
-    if (n <= 0) return -1;
-    if (ralph_set_mip_start_copy(model, x, NULL, n) != 0) return -1;
+    if (n <= 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       n,
+                       0,
+                       "no variables available for MIP start");
+    }
+    if (ralph_set_mip_start_copy(model, x, NULL, n) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_MEMORY,
+                       RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       n,
+                       0,
+                       "failed to copy MIP start");
+    }
     return 0;
 }
 
 int ralph_core_set_mip_start_sparse(RalphModel *model, int count,
                                const int *indices, const double *values) {
-    if (!model || !model->lp_model) return -1;
-    if (count < 0) return -1;
-    if (count > 0 && (!indices || !values)) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (count < 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       count,
+                       0,
+                       "count must be non-negative");
+    }
+    if (count > 0 && (!indices || !values)) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       count,
+                       0,
+                       "sparse start arrays are null");
+    }
 
     int n = model->lp_model->num_vars;
-    if (n <= 0) return -1;
+    if (n <= 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       n,
+                       0,
+                       "no variables available for sparse MIP start");
+    }
 
     if (!model->mip_start || model->mip_start_n != n || !model->mip_start_mask) {
         double *dense = (double*)malloc((size_t)n * sizeof(double));
@@ -2317,7 +3131,14 @@ int ralph_core_set_mip_start_sparse(RalphModel *model, int count,
         if (!dense || !mask) {
             free(dense);
             free(mask);
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_MEMORY,
+                           RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_MODEL_EDIT,
+                           n,
+                           0,
+                           "failed to allocate sparse MIP start buffers");
         }
         for (int j = 0; j < n; j++) dense[j] = model->lp_model->lb[j];
         free(model->mip_start);
@@ -2330,7 +3151,16 @@ int ralph_core_set_mip_start_sparse(RalphModel *model, int count,
 
     for (int k = 0; k < count; k++) {
         int j = indices[k];
-        if (j < 0 || j >= n) return -1;
+        if (j < 0 || j >= n) {
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_RANGE,
+                           RALPH_ERROR_CODE_OUT_OF_RANGE,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_MODEL_EDIT,
+                           j,
+                           n,
+                           "MIP start index out of range");
+        }
         model->mip_start[j] = values[k];
         if (!model->mip_start_mask[j]) {
             model->mip_start_mask[j] = 1;
@@ -2353,10 +3183,27 @@ RalphMIPStartStatus ralph_core_get_mip_start_status(const RalphModel *model) {
 }
 
 int ralph_core_set_mip_start_repair_mode(RalphModel *model, RalphMIPStartRepairMode mode) {
-    if (!model) return -1;
+    if (!model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
     if (mode < RALPH_MIP_START_REPAIR_STRICT ||
         mode > RALPH_MIP_START_REPAIR_PROJECT_AND_ROUND) {
-        return -1;
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       mode,
+                       0,
+                       "repair mode is out of range");
     }
     model->mip_start_repair_mode = mode;
     return 0;
@@ -2372,8 +3219,27 @@ RalphMIPStartRepairMode ralph_core_get_mip_start_repair_mode(const RalphModel *m
  * ============================================================================ */
 
 int ralph_core_set_constraint_rhs(RalphModel *model, int constraint, double rhs) {
-    if (!model || !model->lp_model) return -1;
-    if (constraint < 0 || constraint >= model->lp_model->num_cons) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (constraint < 0 || constraint >= model->lp_model->num_cons) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       constraint,
+                       model->lp_model->num_cons,
+                       "constraint index out of range");
+    }
 
     model->lp_model->b[constraint] = rhs;
     ralph_invalidate_solve_state(model);
@@ -2381,9 +3247,37 @@ int ralph_core_set_constraint_rhs(RalphModel *model, int constraint, double rhs)
 }
 
 int ralph_core_set_constraint_sense(RalphModel *model, int constraint, RalphSense sense) {
-    if (!model || !model->lp_model) return -1;
-    if (constraint < 0 || constraint >= model->lp_model->num_cons) return -1;
-    if (!ralph_is_valid_sense(sense)) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (constraint < 0 || constraint >= model->lp_model->num_cons) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       constraint,
+                       model->lp_model->num_cons,
+                       "constraint index out of range");
+    }
+    if (!ralph_is_valid_sense(sense)) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_INVALID_ARGUMENT,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       sense,
+                       0,
+                       "invalid constraint sense");
+    }
 
     model->lp_model->sense[constraint] = (char)sense;
     ralph_invalidate_solve_state(model);
@@ -2391,8 +3285,27 @@ int ralph_core_set_constraint_sense(RalphModel *model, int constraint, RalphSens
 }
 
 int ralph_core_set_constraint_coef(RalphModel *model, int constraint, int var, double coef) {
-    if (!model || !model->lp_model) return -1;
-    if (lp_model_set_coefficient(model->lp_model, constraint, var, coef) != 0) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (lp_model_set_coefficient(model->lp_model, constraint, var, coef) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       constraint,
+                       var,
+                       "constraint/variable index out of range");
+    }
     ralph_invalidate_solve_state(model);
     return 0;
 }
@@ -2400,21 +3313,78 @@ int ralph_core_set_constraint_coef(RalphModel *model, int constraint, int var, d
 int ralph_core_set_constraint_coefs(RalphModel *model, int count,
                                const int *constraints, const int *vars,
                                const double *coefs) {
-    if (!model || !model->lp_model) return -1;
-    if (lp_model_set_coefficients(model->lp_model, count, constraints, vars, coefs) != 0) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (lp_model_set_coefficients(model->lp_model, count, constraints, vars, coefs) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_INVALID_ARGUMENT,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       count,
+                       0,
+                       "invalid batch coefficients");
+    }
     ralph_invalidate_solve_state(model);
     return 0;
 }
 
 int ralph_core_set_constraint_rhs_batch(RalphModel *model, int count,
                                    const int *constraints, const double *rhs_values) {
-    if (!model || !model->lp_model || count < 0) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (count < 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       count,
+                       0,
+                       "count must be non-negative");
+    }
     if (count == 0) return 0;
-    if (!constraints || !rhs_values) return -1;
+    if (!constraints || !rhs_values) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       count,
+                       0,
+                       "batch arrays are null");
+    }
 
     int m = model->lp_model->num_cons;
     for (int i = 0; i < count; i++) {
-        if (constraints[i] < 0 || constraints[i] >= m) return -1;
+        if (constraints[i] < 0 || constraints[i] >= m) {
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_RANGE,
+                           RALPH_ERROR_CODE_OUT_OF_RANGE,
+                           RALPH_STATUS_ERROR,
+                           RALPH_ERROR_API_MODEL_EDIT,
+                           constraints[i],
+                           m,
+                           "constraint index out of range");
+        }
     }
 
     for (int i = 0; i < count; i++) {
@@ -2426,14 +3396,61 @@ int ralph_core_set_constraint_rhs_batch(RalphModel *model, int count,
 
 int ralph_core_set_constraint_sense_batch(RalphModel *model, int count,
                                      const int *constraints, const RalphSense *senses) {
-    if (!model || !model->lp_model || count < 0) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (count < 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       count,
+                       0,
+                       "count must be non-negative");
+    }
     if (count == 0) return 0;
-    if (!constraints || !senses) return -1;
+    if (!constraints || !senses) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       count,
+                       0,
+                       "batch arrays are null");
+    }
 
     int m = model->lp_model->num_cons;
     for (int i = 0; i < count; i++) {
-        if (constraints[i] < 0 || constraints[i] >= m) return -1;
-        if (!ralph_is_valid_sense(senses[i])) return -1;
+        if (constraints[i] < 0 || constraints[i] >= m) {
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_RANGE,
+                           RALPH_ERROR_CODE_OUT_OF_RANGE,
+                           RALPH_STATUS_ERROR,
+                           RALPH_ERROR_API_MODEL_EDIT,
+                           constraints[i],
+                           m,
+                           "constraint index out of range");
+        }
+        if (!ralph_is_valid_sense(senses[i])) {
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_ARGUMENT,
+                           RALPH_ERROR_CODE_INVALID_ARGUMENT,
+                           RALPH_STATUS_ERROR,
+                           RALPH_ERROR_API_MODEL_EDIT,
+                           senses[i],
+                           i,
+                           "invalid constraint sense");
+        }
     }
 
     for (int i = 0; i < count; i++) {
@@ -2444,43 +3461,167 @@ int ralph_core_set_constraint_sense_batch(RalphModel *model, int count,
 }
 
 int ralph_core_get_constraint_rhs(const RalphModel *model, int constraint, double *rhs) {
-    if (!model || !model->lp_model || !rhs) return -1;
-    if (constraint < 0 || constraint >= model->lp_model->num_cons) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !model->lp_model || !rhs) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model or rhs output is null");
+    }
+    if (constraint < 0 || constraint >= model->lp_model->num_cons) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       constraint,
+                       model->lp_model->num_cons,
+                       "constraint index out of range");
+    }
     *rhs = model->lp_model->b[constraint];
     return 0;
 }
 
 int ralph_core_get_constraint_sense(const RalphModel *model, int constraint, RalphSense *sense) {
-    if (!model || !model->lp_model || !sense) return -1;
-    if (constraint < 0 || constraint >= model->lp_model->num_cons) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !model->lp_model || !sense) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model or sense output is null");
+    }
+    if (constraint < 0 || constraint >= model->lp_model->num_cons) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       constraint,
+                       model->lp_model->num_cons,
+                       "constraint index out of range");
+    }
     char s = model->lp_model->sense[constraint];
-    if (s != 'L' && s != 'E' && s != 'G') return -1;
+    if (s != 'L' && s != 'E' && s != 'G') {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       s,
+                       constraint,
+                       "constraint sense is invalid");
+    }
     *sense = (RalphSense)s;
     return 0;
 }
 
 int ralph_core_get_constraint_coef(const RalphModel *model, int constraint, int var, double *coef) {
-    if (!model || !model->lp_model) return -1;
-    return lp_model_get_coefficient(model->lp_model, constraint, var, coef);
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !model->lp_model || !coef) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model or output is null");
+    }
+    if (lp_model_get_coefficient(model->lp_model, constraint, var, coef) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       constraint,
+                       var,
+                       "constraint/variable index out of range");
+    }
+    return 0;
 }
 
 int ralph_core_delete_constraint(RalphModel *model, int constraint) {
-    if (!model || !model->lp_model) return -1;
-    if (lp_model_delete_constraint(model->lp_model, constraint) != 0) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (lp_model_delete_constraint(model->lp_model, constraint) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       constraint,
+                       model->lp_model->num_cons,
+                       "constraint index out of range");
+    }
     ralph_invalidate_solve_state(model);
     return 0;
 }
 
 int ralph_core_delete_var(RalphModel *model, int var) {
-    if (!model || !model->lp_model) return -1;
-    if (lp_model_delete_var(model->lp_model, var) != 0) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (lp_model_delete_var(model->lp_model, var) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       var,
+                       model->lp_model->num_vars,
+                       "variable index out of range");
+    }
     ralph_invalidate_solve_state(model);
     return 0;
 }
 
 int ralph_core_get_var_bounds(const RalphModel *model, int var, double *lb, double *ub) {
-    if (!model || !model->lp_model) return -1;
-    if (var < 0 || var >= model->lp_model->num_vars) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    if (var < 0 || var >= model->lp_model->num_vars) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       var,
+                       model->lp_model->num_vars,
+                       "variable index out of range");
+    }
 
     if (lb) *lb = model->lp_model->lb[var];
     if (ub) *ub = model->lp_model->ub[var];
@@ -2489,7 +3630,17 @@ int ralph_core_get_var_bounds(const RalphModel *model, int var, double *lb, doub
 }
 
 int ralph_core_add_lazy_constraint(RalphModel *model, const RalphCut *cut) {
-    if (!model || !model->lp_model || !cut) return -1;
+    if (!model || !model->lp_model || !cut) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model or cut is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
 
     /* Add the constraint to the model */
     int result = lp_model_add_constraint(model->lp_model,
@@ -2498,7 +3649,16 @@ int ralph_core_add_lazy_constraint(RalphModel *model, const RalphCut *cut) {
                                           cut->coeffs,
                                           (char)cut->sense,
                                           cut->rhs);
-    if (result < 0) return -1;
+    if (result < 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_INVALID_ARGUMENT,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       result,
+                       cut->num_vars,
+                       "failed to add lazy constraint");
+    }
 
     /* Invalidate solver state to force re-solve (will use warm start if available) */
     /* Note: For true warm start, we keep the LP solver but invalidate MIP solver */
@@ -2517,7 +3677,17 @@ int ralph_core_add_lazy_constraint(RalphModel *model, const RalphCut *cut) {
 }
 
 int ralph_core_add_lazy_constraints(RalphModel *model, const RalphCut *cuts, int count) {
-    if (!model || !cuts) return -1;
+    if (!model || !cuts) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model or cuts is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
     if (count <= 0) return 0;
 
     for (int i = 0; i < count; i++) {
@@ -2534,17 +3704,41 @@ int ralph_core_add_lazy_constraints(RalphModel *model, const RalphCut *cuts, int
  * ============================================================================ */
 
 RalphBasis* ralph_core_save_basis(const RalphModel *model) {
+    if (model) RALPH_CLEAR_API_ERROR(model);
     if (!model || !model->lp_solver || !model->lp_solver->tableau) {
-        return NULL;
+        RALPH_FAIL_API_PTR(model,
+                           RALPH_ERROR_DOMAIN_STATE,
+                           RALPH_ERROR_CODE_NOT_AVAILABLE,
+                           model ? model->status : RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_BASIS,
+                           0,
+                           0,
+                           "basis is unavailable (no active tableau)");
     }
 
     SimplexTableau *tab = model->lp_solver->tableau;
     if (!tab->basis || !tab->var_status) {
-        return NULL;
+        RALPH_FAIL_API_PTR(model,
+                           RALPH_ERROR_DOMAIN_STATE,
+                           RALPH_ERROR_CODE_NOT_AVAILABLE,
+                           model->status,
+                           RALPH_ERROR_API_BASIS,
+                           1,
+                           0,
+                           "basis vectors are unavailable");
     }
 
     RalphBasis *basis = (RalphBasis*)calloc(1, sizeof(RalphBasis));
-    if (!basis) return NULL;
+    if (!basis) {
+        RALPH_FAIL_API_PTR(model,
+                           RALPH_ERROR_DOMAIN_MEMORY,
+                           RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                           model->status,
+                           RALPH_ERROR_API_BASIS,
+                           0,
+                           0,
+                           "failed to allocate basis object");
+    }
 
     basis->m = tab->m;
     basis->n = tab->n;
@@ -2553,7 +3747,14 @@ RalphBasis* ralph_core_save_basis(const RalphModel *model) {
     basis->basis = (int*)calloc(tab->m, sizeof(int));
     if (!basis->basis) {
         free(basis);
-        return NULL;
+        RALPH_FAIL_API_PTR(model,
+                           RALPH_ERROR_DOMAIN_MEMORY,
+                           RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                           model->status,
+                           RALPH_ERROR_API_BASIS,
+                           tab->m,
+                           0,
+                           "failed to allocate basis indices");
     }
     memcpy(basis->basis, tab->basis, (size_t)tab->m * sizeof(int));
 
@@ -2562,7 +3763,14 @@ RalphBasis* ralph_core_save_basis(const RalphModel *model) {
     if (!basis->var_status) {
         free(basis->basis);
         free(basis);
-        return NULL;
+        RALPH_FAIL_API_PTR(model,
+                           RALPH_ERROR_DOMAIN_MEMORY,
+                           RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                           model->status,
+                           RALPH_ERROR_API_BASIS,
+                           tab->n,
+                           0,
+                           "failed to allocate basis status array");
     }
     memcpy(basis->var_status, tab->var_status, (size_t)tab->n * sizeof(VarStatus));
 
@@ -2570,8 +3778,27 @@ RalphBasis* ralph_core_save_basis(const RalphModel *model) {
 }
 
 int ralph_core_load_basis(RalphModel *model, const RalphBasis *basis) {
-    if (!model || !basis) return -1;
-    if (!basis->basis || !basis->var_status) return -1;
+    if (!model || !basis) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_BASIS,
+                       0,
+                       0,
+                       "model or basis is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (!basis->basis || !basis->var_status) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_BASIS,
+                       1,
+                       0,
+                       "basis arrays are null");
+    }
 
     /* Load directly into an existing live simplex tableau when available. */
     if (model->lp_solver && model->lp_solver->tableau) {
@@ -2579,7 +3806,14 @@ int ralph_core_load_basis(RalphModel *model, const RalphBasis *basis) {
 
         /* Check dimension compatibility */
         if (tab->m != basis->m || tab->n != basis->n) {
-            return -1;  /* Dimensions don't match */
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_RANGE,
+                           RALPH_ERROR_CODE_OUT_OF_RANGE,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_BASIS,
+                           basis->m,
+                           basis->n,
+                           "basis dimensions do not match live tableau");
         }
 
         /* Save backup before modification so we can restore on refactorize failure */
@@ -2588,7 +3822,14 @@ int ralph_core_load_basis(RalphModel *model, const RalphBasis *basis) {
         if (!orig_basis || !orig_status) {
             free(orig_basis);
             free(orig_status);
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_MEMORY,
+                           RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_BASIS,
+                           tab->m,
+                           tab->n,
+                           "failed to allocate basis backup");
         }
         memcpy(orig_basis, tab->basis, (size_t)tab->m * sizeof(int));
         memcpy(orig_status, tab->var_status, (size_t)tab->n * sizeof(VarStatus));
@@ -2600,7 +3841,14 @@ int ralph_core_load_basis(RalphModel *model, const RalphBasis *basis) {
             (void)tableau_refactorize(tab);
             free(orig_basis);
             free(orig_status);
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_SOLVER,
+                           RALPH_ERROR_CODE_NUMERICAL_FAILURE,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_BASIS,
+                           basis->m,
+                           basis->n,
+                           "basis application/refactorization failed");
         }
 
         free(orig_basis);
@@ -2611,9 +3859,26 @@ int ralph_core_load_basis(RalphModel *model, const RalphBasis *basis) {
 
     /* No live solver yet: stage basis and apply on next optimize() call. */
     if (model->lp_model && basis->m != model->lp_model->num_cons) {
-        return -1;
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_BASIS,
+                       basis->m,
+                       model->lp_model->num_cons,
+                       "staged basis row count does not match model");
     }
-    return ralph_stage_basis_copy(model, basis);
+    if (ralph_stage_basis_copy(model, basis) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_MEMORY,
+                       RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_BASIS,
+                       basis->m,
+                       basis->n,
+                       "failed to stage basis copy");
+    }
+    return 0;
 }
 
 int ralph_core_get_basis_status(const RalphModel *model,
@@ -2780,64 +4045,176 @@ void ralph_core_free_basis(RalphBasis *basis) {
 }
 
 int ralph_core_write_basis_file(const RalphBasis *basis, const char *filename) {
-    if (!basis || !filename || !basis->basis || !basis->var_status) return -1;
-    if (basis->m < 0 || basis->n < 0) return -1;
+    if (!basis || !filename || !basis->basis || !basis->var_status) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_IO,
+                       0,
+                       0,
+                       "basis or filename is null");
+    }
+    RALPH_CLEAR_API_ERROR(NULL);
+    if (basis->m < 0 || basis->n < 0) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_IO,
+                       basis->m,
+                       basis->n,
+                       "basis dimensions are invalid");
+    }
 
     FILE *fp = fopen(filename, "w");
-    if (!fp) return -1;
+    if (!fp) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_IO,
+                       RALPH_ERROR_CODE_IO_OPEN_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_IO,
+                       0,
+                       0,
+                       "failed to open basis file for write");
+    }
 
     if (fprintf(fp, "RALPH_BASIS_V1 %d %d\n", basis->m, basis->n) < 0) {
         fclose(fp);
-        return -1;
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_IO,
+                       RALPH_ERROR_CODE_IO_WRITE_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_IO,
+                       0,
+                       0,
+                       "failed to write basis header");
     }
 
     for (int i = 0; i < basis->m; i++) {
         if (fprintf(fp, "%d%c", basis->basis[i], (i + 1 == basis->m) ? '\n' : ' ') < 0) {
             fclose(fp);
-            return -1;
+            RALPH_FAIL_API(NULL,
+                           RALPH_ERROR_DOMAIN_IO,
+                           RALPH_ERROR_CODE_IO_WRITE_FAILED,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_IO,
+                           i,
+                           basis->m,
+                           "failed to write basis indices");
         }
     }
     if (basis->m == 0 && fprintf(fp, "\n") < 0) {
         fclose(fp);
-        return -1;
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_IO,
+                       RALPH_ERROR_CODE_IO_WRITE_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_IO,
+                       0,
+                       0,
+                       "failed to write empty basis row");
     }
 
     for (int j = 0; j < basis->n; j++) {
         if (fprintf(fp, "%d%c", (int)basis->var_status[j], (j + 1 == basis->n) ? '\n' : ' ') < 0) {
             fclose(fp);
-            return -1;
+            RALPH_FAIL_API(NULL,
+                           RALPH_ERROR_DOMAIN_IO,
+                           RALPH_ERROR_CODE_IO_WRITE_FAILED,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_IO,
+                           j,
+                           basis->n,
+                           "failed to write basis status");
         }
     }
     if (basis->n == 0 && fprintf(fp, "\n") < 0) {
         fclose(fp);
-        return -1;
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_IO,
+                       RALPH_ERROR_CODE_IO_WRITE_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_IO,
+                       0,
+                       0,
+                       "failed to write empty basis status row");
     }
 
-    if (fclose(fp) != 0) return -1;
+    if (fclose(fp) != 0) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_IO,
+                       RALPH_ERROR_CODE_IO_WRITE_FAILED,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_IO,
+                       0,
+                       0,
+                       "failed to close basis file");
+    }
     return 0;
 }
 
 RalphBasis* ralph_core_read_basis_file(const char *filename) {
-    if (!filename) return NULL;
+    if (!filename) {
+        RALPH_FAIL_API_PTR(NULL,
+                           RALPH_ERROR_DOMAIN_ARGUMENT,
+                           RALPH_ERROR_CODE_NULL_POINTER,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_IO,
+                           0,
+                           0,
+                           "filename is null");
+    }
+    RALPH_CLEAR_API_ERROR(NULL);
 
     FILE *fp = fopen(filename, "r");
-    if (!fp) return NULL;
+    if (!fp) {
+        RALPH_FAIL_API_PTR(NULL,
+                           RALPH_ERROR_DOMAIN_IO,
+                           RALPH_ERROR_CODE_IO_OPEN_FAILED,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_IO,
+                           0,
+                           0,
+                           "failed to open basis file for read");
+    }
 
     char magic[32] = {0};
     int m = 0, n = 0;
     if (fscanf(fp, "%31s %d %d", magic, &m, &n) != 3) {
         fclose(fp);
-        return NULL;
+        RALPH_FAIL_API_PTR(NULL,
+                           RALPH_ERROR_DOMAIN_PARSE,
+                           RALPH_ERROR_CODE_PARSE_FAILED,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_IO,
+                           0,
+                           0,
+                           "failed to parse basis header");
     }
     if (strcmp(magic, "RALPH_BASIS_V1") != 0 || m < 0 || n < 0) {
         fclose(fp);
-        return NULL;
+        RALPH_FAIL_API_PTR(NULL,
+                           RALPH_ERROR_DOMAIN_PARSE,
+                           RALPH_ERROR_CODE_PARSE_FAILED,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_IO,
+                           m,
+                           n,
+                           "invalid basis header");
     }
 
     RalphBasis *basis = (RalphBasis*)calloc(1, sizeof(RalphBasis));
     if (!basis) {
         fclose(fp);
-        return NULL;
+        RALPH_FAIL_API_PTR(NULL,
+                           RALPH_ERROR_DOMAIN_MEMORY,
+                           RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_IO,
+                           0,
+                           0,
+                           "failed to allocate basis object");
     }
     basis->m = m;
     basis->n = n;
@@ -2847,7 +4224,14 @@ RalphBasis* ralph_core_read_basis_file(const char *filename) {
         if (!basis->basis) {
             ralph_core_free_basis(basis);
             fclose(fp);
-            return NULL;
+            RALPH_FAIL_API_PTR(NULL,
+                               RALPH_ERROR_DOMAIN_MEMORY,
+                               RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_IO,
+                               m,
+                               0,
+                               "failed to allocate basis indices");
         }
     }
     if (n > 0) {
@@ -2855,7 +4239,14 @@ RalphBasis* ralph_core_read_basis_file(const char *filename) {
         if (!basis->var_status) {
             ralph_core_free_basis(basis);
             fclose(fp);
-            return NULL;
+            RALPH_FAIL_API_PTR(NULL,
+                               RALPH_ERROR_DOMAIN_MEMORY,
+                               RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_IO,
+                               n,
+                               0,
+                               "failed to allocate basis status");
         }
     }
 
@@ -2863,7 +4254,14 @@ RalphBasis* ralph_core_read_basis_file(const char *filename) {
         if (fscanf(fp, "%d", &basis->basis[i]) != 1) {
             ralph_core_free_basis(basis);
             fclose(fp);
-            return NULL;
+            RALPH_FAIL_API_PTR(NULL,
+                               RALPH_ERROR_DOMAIN_PARSE,
+                               RALPH_ERROR_CODE_PARSE_FAILED,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_IO,
+                               i,
+                               m,
+                               "failed to parse basis index");
         }
     }
     for (int j = 0; j < n; j++) {
@@ -2871,12 +4269,26 @@ RalphBasis* ralph_core_read_basis_file(const char *filename) {
         if (fscanf(fp, "%d", &v) != 1) {
             ralph_core_free_basis(basis);
             fclose(fp);
-            return NULL;
+            RALPH_FAIL_API_PTR(NULL,
+                               RALPH_ERROR_DOMAIN_PARSE,
+                               RALPH_ERROR_CODE_PARSE_FAILED,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_IO,
+                               j,
+                               n,
+                               "failed to parse basis status");
         }
         if (v < (int)RALPH_BASIC || v > (int)RALPH_FIXED) {
             ralph_core_free_basis(basis);
             fclose(fp);
-            return NULL;
+            RALPH_FAIL_API_PTR(NULL,
+                               RALPH_ERROR_DOMAIN_PARSE,
+                               RALPH_ERROR_CODE_PARSE_FAILED,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_IO,
+                               v,
+                               j,
+                               "basis status value out of range");
         }
         basis->var_status[j] = (VarStatus)v;
     }
@@ -2886,10 +4298,29 @@ RalphBasis* ralph_core_read_basis_file(const char *filename) {
 }
 
 int ralph_core_write_mip_start_file(const RalphModel *model, const char *filename) {
-    if (!model || !model->lp_model || !filename) return -1;
+    if (!model || !model->lp_model || !filename) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_IO,
+                       0,
+                       0,
+                       "model or filename is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
 
     int n = model->lp_model->num_vars;
-    if (n <= 0) return -1;
+    if (n <= 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       model->status,
+                       RALPH_ERROR_API_IO,
+                       n,
+                       0,
+                       "no variables available for MIP start serialization");
+    }
 
     const double *start = NULL;
     const int *mask = NULL;
@@ -2903,21 +4334,53 @@ int ralph_core_write_mip_start_file(const RalphModel *model, const char *filenam
         start = model->solution;
     }
 
-    if (!start) return -1;
+    if (!start) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_STATE,
+                       RALPH_ERROR_CODE_NOT_AVAILABLE,
+                       model->status,
+                       RALPH_ERROR_API_IO,
+                       0,
+                       0,
+                       "no MIP start or incumbent solution available");
+    }
 
     FILE *fp = fopen(filename, "w");
-    if (!fp) return -1;
+    if (!fp) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_IO,
+                       RALPH_ERROR_CODE_IO_OPEN_FAILED,
+                       model->status,
+                       RALPH_ERROR_API_IO,
+                       0,
+                       0,
+                       "failed to open MIP start file for write");
+    }
 
     if (fprintf(fp, "RALPH_MIPSTART_V1 %d %d %d\n", n,
                 (int)model->mip_start_repair_mode, nnz) < 0) {
         fclose(fp);
-        return -1;
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_IO,
+                       RALPH_ERROR_CODE_IO_WRITE_FAILED,
+                       model->status,
+                       RALPH_ERROR_API_IO,
+                       0,
+                       0,
+                       "failed to write MIP start header");
     }
 
     for (int j = 0; j < n; j++) {
         if (fprintf(fp, "%.17g%c", start[j], (j + 1 == n) ? '\n' : ' ') < 0) {
             fclose(fp);
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_IO,
+                           RALPH_ERROR_CODE_IO_WRITE_FAILED,
+                           model->status,
+                           RALPH_ERROR_API_IO,
+                           j,
+                           n,
+                           "failed to write MIP start values");
         }
     }
 
@@ -2925,19 +4388,54 @@ int ralph_core_write_mip_start_file(const RalphModel *model, const char *filenam
         int bit = mask ? (mask[j] ? 1 : 0) : 1;
         if (fprintf(fp, "%d%c", bit, (j + 1 == n) ? '\n' : ' ') < 0) {
             fclose(fp);
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_IO,
+                           RALPH_ERROR_CODE_IO_WRITE_FAILED,
+                           model->status,
+                           RALPH_ERROR_API_IO,
+                           j,
+                           n,
+                           "failed to write MIP start mask");
         }
     }
 
-    if (fclose(fp) != 0) return -1;
+    if (fclose(fp) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_IO,
+                       RALPH_ERROR_CODE_IO_WRITE_FAILED,
+                       model->status,
+                       RALPH_ERROR_API_IO,
+                       0,
+                       0,
+                       "failed to close MIP start file");
+    }
     return 0;
 }
 
 int ralph_core_read_mip_start_file(RalphModel *model, const char *filename) {
-    if (!model || !model->lp_model || !filename) return -1;
+    if (!model || !model->lp_model || !filename) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_IO,
+                       0,
+                       0,
+                       "model or filename is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
 
     FILE *fp = fopen(filename, "r");
-    if (!fp) return -1;
+    if (!fp) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_IO,
+                       RALPH_ERROR_CODE_IO_OPEN_FAILED,
+                       model->status,
+                       RALPH_ERROR_API_IO,
+                       0,
+                       0,
+                       "failed to open MIP start file for read");
+    }
 
     char magic[32] = {0};
     int n = 0;
@@ -2945,12 +4443,26 @@ int ralph_core_read_mip_start_file(RalphModel *model, const char *filename) {
     int nnz = 0;
     if (fscanf(fp, "%31s %d %d %d", magic, &n, &repair, &nnz) != 4) {
         fclose(fp);
-        return -1;
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARSE,
+                       RALPH_ERROR_CODE_PARSE_FAILED,
+                       model->status,
+                       RALPH_ERROR_API_IO,
+                       0,
+                       0,
+                       "failed to parse MIP start header");
     }
     if (strcmp(magic, "RALPH_MIPSTART_V1") != 0 || n <= 0 ||
         n != model->lp_model->num_vars) {
         fclose(fp);
-        return -1;
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARSE,
+                       RALPH_ERROR_CODE_PARSE_FAILED,
+                       model->status,
+                       RALPH_ERROR_API_IO,
+                       n,
+                       model->lp_model->num_vars,
+                       "invalid MIP start header");
     }
 
     double *start = (double*)malloc((size_t)n * sizeof(double));
@@ -2959,7 +4471,14 @@ int ralph_core_read_mip_start_file(RalphModel *model, const char *filename) {
         free(start);
         free(mask);
         fclose(fp);
-        return -1;
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_MEMORY,
+                       RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                       model->status,
+                       RALPH_ERROR_API_IO,
+                       n,
+                       0,
+                       "failed to allocate MIP start buffers");
     }
 
     for (int j = 0; j < n; j++) {
@@ -2967,7 +4486,14 @@ int ralph_core_read_mip_start_file(RalphModel *model, const char *filename) {
             free(start);
             free(mask);
             fclose(fp);
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_PARSE,
+                           RALPH_ERROR_CODE_PARSE_FAILED,
+                           model->status,
+                           RALPH_ERROR_API_IO,
+                           j,
+                           n,
+                           "failed to parse MIP start value");
         }
     }
     int counted = 0;
@@ -2977,7 +4503,14 @@ int ralph_core_read_mip_start_file(RalphModel *model, const char *filename) {
             free(start);
             free(mask);
             fclose(fp);
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_PARSE,
+                           RALPH_ERROR_CODE_PARSE_FAILED,
+                           model->status,
+                           RALPH_ERROR_API_IO,
+                           j,
+                           n,
+                           "failed to parse MIP start mask");
         }
         mask[j] = bit ? 1 : 0;
         counted += mask[j];
@@ -2988,7 +4521,14 @@ int ralph_core_read_mip_start_file(RalphModel *model, const char *filename) {
     if (ralph_set_mip_start_copy(model, start, mask, n) != 0) {
         free(start);
         free(mask);
-        return -1;
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_MEMORY,
+                       RALPH_ERROR_CODE_ALLOCATION_FAILED,
+                       model->status,
+                       RALPH_ERROR_API_IO,
+                       n,
+                       0,
+                       "failed to stage MIP start");
     }
     model->mip_start_nnz = counted;
 
@@ -3072,18 +4612,44 @@ int ralph_core_solve_benders(
     double *x,
     RalphBendersResult *result)
 {
-    if (!model || !config) return -1;
-    if (!model->lp_model) return -1;
+    if (!model || !config || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_BENDERS,
+                       0,
+                       0,
+                       "model or benders config is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
 
     /* Finalize model if needed (builds sparse matrix A) */
     if (!model->lp_model->A) {
         if (lp_model_finalize(model->lp_model) != 0) {
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_SOLVER,
+                           RALPH_ERROR_CODE_SOLVE_FAILED,
+                           RALPH_STATUS_ERROR,
+                           RALPH_ERROR_API_BENDERS,
+                           0,
+                           0,
+                           "failed to finalize model before Benders solve");
         }
     }
 
     /* Delegate to internal Benders solver */
-    return benders_solve(model->lp_model, config, x, result);
+    if (benders_solve(model->lp_model, config, x, result) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_SOLVER,
+                       RALPH_ERROR_CODE_SOLVE_FAILED,
+                       RALPH_STATUS_ERROR,
+                       RALPH_ERROR_API_BENDERS,
+                       0,
+                       0,
+                       "Benders solve failed");
+    }
+    return 0;
 }
 
 /* ============================================================================
@@ -3540,7 +5106,27 @@ int ralph_core_get_param_count(void) {
 
 int ralph_core_get_param_meta(RalphParamId param, RalphParamMeta *meta) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
-    if (!spec || !meta) return -1;
+    if (!meta) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "metadata output pointer is null");
+    }
+    RALPH_CLEAR_API_ERROR(NULL);
+    if (!spec) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       RALPH_PARAM_COUNT,
+                       "unknown parameter id");
+    }
 
     meta->id = spec->id;
     meta->name = spec->name;
@@ -3555,7 +5141,17 @@ int ralph_core_get_param_meta(RalphParamId param, RalphParamMeta *meta) {
 }
 
 int ralph_core_find_param_by_name(const char *name, RalphParamId *param) {
-    if (!name || !param) return -1;
+    if (!name || !param) {
+        RALPH_FAIL_API(NULL,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "name or output pointer is null");
+    }
+    RALPH_CLEAR_API_ERROR(NULL);
 
     const RalphParamSpec *specs = ralph_param_specs();
     for (int i = 0; i < RALPH_PARAM_COUNT; i++) {
@@ -3571,12 +5167,49 @@ int ralph_core_find_param_by_name(const char *name, RalphParamId *param) {
             }
         }
     }
-    return -1;
+    RALPH_FAIL_API(NULL,
+                   RALPH_ERROR_DOMAIN_PARAMETER,
+                   RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                   RALPH_STATUS_UNKNOWN,
+                   RALPH_ERROR_API_PARAMETER,
+                   0,
+                   0,
+                   "unknown parameter name");
 }
 
 int ralph_core_set_int_param_id(RalphModel *model, RalphParamId param, int value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
-    if (!model || !spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
+    if (!model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (!spec) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       RALPH_PARAM_COUNT,
+                       "unknown parameter id");
+    }
+    if (spec->value_type != RALPH_PARAM_VALUE_INT) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->value_type,
+                       "parameter is not integer-valued");
+    }
 
     switch (param) {
         case RALPH_PARAM_MAX_ITERATIONS:
@@ -3600,9 +5233,25 @@ int ralph_core_set_int_param_id(RalphModel *model, RalphParamId param, int value
         case RALPH_PARAM_METHOD:
             if (value < (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX ||
                 value > (int)RALPH_LP_ALGORITHM_AUTO) {
-                return -1;
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               value,
+                               "method value is out of range");
             }
-            if (ralph_set_requested_lp_algorithm_internal(model, value) != 0) return -1;
+            if (ralph_set_requested_lp_algorithm_internal(model, value) != 0) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               value,
+                               "invalid LP algorithm value");
+            }
             break;
         case RALPH_PARAM_PRICING:
             model->pricing = value;
@@ -3614,7 +5263,16 @@ int ralph_core_set_int_param_id(RalphModel *model, RalphParamId param, int value
             model->node_pool_capacity = (value > 0) ? value : 1024;
             break;
         case RALPH_PARAM_NODE_SELECT:
-            if (value < 0 || value > 3) return -1;
+            if (value < 0 || value > 3) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               value,
+                               "node_select is out of range");
+            }
             model->node_select = value;
             break;
         case RALPH_PARAM_FORCE_TWO_PHASE:
@@ -3645,7 +5303,16 @@ int ralph_core_set_int_param_id(RalphModel *model, RalphParamId param, int value
             model->phase1_pricing = (value >= 0) ? value : -1;
             break;
         case RALPH_PARAM_VAR_SELECT:
-            if (value < 0 || value > 4) return -1;
+            if (value < 0 || value > 4) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               value,
+                               "var_select is out of range");
+            }
             model->var_select = value;
             break;
         case RALPH_PARAM_LU_SUPERNODE:
@@ -3655,28 +5322,89 @@ int ralph_core_set_int_param_id(RalphModel *model, RalphParamId param, int value
             model->deterministic = value ? 1 : 0;
             break;
         case RALPH_PARAM_RANDOM_SEED:
-            if (value < 0) return -1;
+            if (value < 0) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               value,
+                               "random_seed must be non-negative");
+            }
             model->random_seed = value;
             break;
         case RALPH_PARAM_LP_THREADS:
-            if (value < 0) return -1;
+            if (value < 0) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               value,
+                               "lp_threads must be non-negative");
+            }
             model->lp_threads = value;
             break;
         case RALPH_PARAM_LP_ALGORITHM:
-            if (ralph_set_requested_lp_algorithm_internal(model, value) != 0) return -1;
+            if (ralph_set_requested_lp_algorithm_internal(model, value) != 0) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               value,
+                               "invalid lp_algorithm value");
+            }
             break;
         case RALPH_PARAM_BARRIER_CROSSOVER:
-            if (ralph_set_requested_barrier_crossover_internal(model, value) != 0) return -1;
+            if (ralph_set_requested_barrier_crossover_internal(model, value) != 0) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               value,
+                               "invalid barrier_crossover value");
+            }
             break;
         case RALPH_PARAM_LP_EXTERNAL_PROVIDER:
-            if (ralph_set_requested_lp_external_provider_internal(model, value) != 0) return -1;
+            if (ralph_set_requested_lp_external_provider_internal(model, value) != 0) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               value,
+                               "invalid lp_external_provider value");
+            }
             break;
         case RALPH_PARAM_LP_EXTERNAL_STRICT:
-            if (value < 0 || value > 1) return -1;
+            if (value < 0 || value > 1) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               value,
+                               "lp_external_strict must be 0 or 1");
+            }
             model->lp_external_strict = value;
             break;
         default:
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_PARAMETER,
+                           RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_PARAMETER,
+                           param,
+                           0,
+                           "unsupported parameter id");
     }
 
     return 0;
@@ -3684,8 +5412,37 @@ int ralph_core_set_int_param_id(RalphModel *model, RalphParamId param, int value
 
 int ralph_core_set_dbl_param_id(RalphModel *model, RalphParamId param, double value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
-    if (!model || !spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
-    if (!model->lp_model) return -1;
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (!spec) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       RALPH_PARAM_COUNT,
+                       "unknown parameter id");
+    }
+    if (spec->value_type != RALPH_PARAM_VALUE_DOUBLE) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->value_type,
+                       "parameter is not double-valued");
+    }
 
     switch (param) {
         case RALPH_PARAM_TIME_LIMIT:
@@ -3698,16 +5455,53 @@ int ralph_core_set_dbl_param_id(RalphModel *model, RalphParamId param, double va
             model->objective_limit = value;
             break;
         case RALPH_PARAM_FEAS_TOL:
-            if (value > 0.0) model->lp_model->feas_tol = value;
+            if (value <= 0.0) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               0,
+                               "feas_tol must be positive");
+            }
+            model->lp_model->feas_tol = value;
             break;
         case RALPH_PARAM_OPT_TOL:
-            if (value > 0.0) model->lp_model->opt_tol = value;
+            if (value <= 0.0) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               0,
+                               "opt_tol must be positive");
+            }
+            model->lp_model->opt_tol = value;
             break;
         case RALPH_PARAM_PIVOT_TOL:
-            if (value > 0.0) model->lp_model->pivot_tol = value;
+            if (value <= 0.0) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               0,
+                               "pivot_tol must be positive");
+            }
+            model->lp_model->pivot_tol = value;
             break;
         default:
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_PARAMETER,
+                           RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_PARAMETER,
+                           param,
+                           0,
+                           "unsupported parameter id");
     }
 
     return 0;
@@ -3715,7 +5509,37 @@ int ralph_core_set_dbl_param_id(RalphModel *model, RalphParamId param, double va
 
 int ralph_core_get_int_param_id(const RalphModel *model, RalphParamId param, int *value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
-    if (!model || !value || !spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !value) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "model or output pointer is null");
+    }
+    if (!spec) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       RALPH_PARAM_COUNT,
+                       "unknown parameter id");
+    }
+    if (spec->value_type != RALPH_PARAM_VALUE_INT) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->value_type,
+                       "parameter is not integer-valued");
+    }
 
     switch (param) {
         case RALPH_PARAM_MAX_ITERATIONS:
@@ -3806,7 +5630,14 @@ int ralph_core_get_int_param_id(const RalphModel *model, RalphParamId param, int
             *value = model->lp_external_strict;
             break;
         default:
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_PARAMETER,
+                           RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_PARAMETER,
+                           param,
+                           0,
+                           "unsupported parameter id");
     }
 
     return 0;
@@ -3814,8 +5645,37 @@ int ralph_core_get_int_param_id(const RalphModel *model, RalphParamId param, int
 
 int ralph_core_get_dbl_param_id(const RalphModel *model, RalphParamId param, double *value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
-    if (!model || !value || !spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
-    if (!model->lp_model) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !value || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "model or output pointer is null");
+    }
+    if (!spec) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       RALPH_PARAM_COUNT,
+                       "unknown parameter id");
+    }
+    if (spec->value_type != RALPH_PARAM_VALUE_DOUBLE) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->value_type,
+                       "parameter is not double-valued");
+    }
 
     switch (param) {
         case RALPH_PARAM_TIME_LIMIT:
@@ -3837,7 +5697,14 @@ int ralph_core_get_dbl_param_id(const RalphModel *model, RalphParamId param, dou
             *value = model->lp_model->pivot_tol;
             break;
         default:
-            return -1;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_PARAMETER,
+                           RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_PARAMETER,
+                           param,
+                           0,
+                           "unsupported parameter id");
     }
 
     return 0;
@@ -3845,141 +5712,601 @@ int ralph_core_get_dbl_param_id(const RalphModel *model, RalphParamId param, dou
 
 int ralph_core_set_lp_int_param_id(RalphModel *model, RalphParamId param, int value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
-    if (!spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
-    if (!ralph_param_scope_allows_lp(spec->scope)) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!spec) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       RALPH_PARAM_COUNT,
+                       "unknown parameter id");
+    }
+    if (spec->value_type != RALPH_PARAM_VALUE_INT) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->value_type,
+                       "parameter is not integer-valued");
+    }
+    if (!ralph_param_scope_allows_lp(spec->scope)) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_SCOPE_MISMATCH,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->scope,
+                       "parameter is not in LP scope");
+    }
     return ralph_core_set_int_param_id(model, param, value);
 }
 
 int ralph_core_set_lp_dbl_param_id(RalphModel *model, RalphParamId param, double value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
-    if (!spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
-    if (!ralph_param_scope_allows_lp(spec->scope)) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!spec) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       RALPH_PARAM_COUNT,
+                       "unknown parameter id");
+    }
+    if (spec->value_type != RALPH_PARAM_VALUE_DOUBLE) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->value_type,
+                       "parameter is not double-valued");
+    }
+    if (!ralph_param_scope_allows_lp(spec->scope)) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_SCOPE_MISMATCH,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->scope,
+                       "parameter is not in LP scope");
+    }
     return ralph_core_set_dbl_param_id(model, param, value);
 }
 
 int ralph_core_get_lp_int_param_id(const RalphModel *model, RalphParamId param, int *value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
-    if (!spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
-    if (!ralph_param_scope_allows_lp(spec->scope)) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!spec) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       RALPH_PARAM_COUNT,
+                       "unknown parameter id");
+    }
+    if (spec->value_type != RALPH_PARAM_VALUE_INT) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->value_type,
+                       "parameter is not integer-valued");
+    }
+    if (!ralph_param_scope_allows_lp(spec->scope)) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_SCOPE_MISMATCH,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->scope,
+                       "parameter is not in LP scope");
+    }
     return ralph_core_get_int_param_id(model, param, value);
 }
 
 int ralph_core_get_lp_dbl_param_id(const RalphModel *model, RalphParamId param, double *value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
-    if (!spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
-    if (!ralph_param_scope_allows_lp(spec->scope)) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!spec) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       RALPH_PARAM_COUNT,
+                       "unknown parameter id");
+    }
+    if (spec->value_type != RALPH_PARAM_VALUE_DOUBLE) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->value_type,
+                       "parameter is not double-valued");
+    }
+    if (!ralph_param_scope_allows_lp(spec->scope)) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_SCOPE_MISMATCH,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->scope,
+                       "parameter is not in LP scope");
+    }
     return ralph_core_get_dbl_param_id(model, param, value);
 }
 
 int ralph_core_set_mip_int_param_id(RalphModel *model, RalphParamId param, int value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
-    if (!spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
-    if (!ralph_param_scope_allows_mip(spec->scope)) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!spec) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       RALPH_PARAM_COUNT,
+                       "unknown parameter id");
+    }
+    if (spec->value_type != RALPH_PARAM_VALUE_INT) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->value_type,
+                       "parameter is not integer-valued");
+    }
+    if (!ralph_param_scope_allows_mip(spec->scope)) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_SCOPE_MISMATCH,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->scope,
+                       "parameter is not in MIP scope");
+    }
     return ralph_core_set_int_param_id(model, param, value);
 }
 
 int ralph_core_set_mip_dbl_param_id(RalphModel *model, RalphParamId param, double value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
-    if (!spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
-    if (!ralph_param_scope_allows_mip(spec->scope)) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!spec) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       RALPH_PARAM_COUNT,
+                       "unknown parameter id");
+    }
+    if (spec->value_type != RALPH_PARAM_VALUE_DOUBLE) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->value_type,
+                       "parameter is not double-valued");
+    }
+    if (!ralph_param_scope_allows_mip(spec->scope)) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_SCOPE_MISMATCH,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->scope,
+                       "parameter is not in MIP scope");
+    }
     return ralph_core_set_dbl_param_id(model, param, value);
 }
 
 int ralph_core_get_mip_int_param_id(const RalphModel *model, RalphParamId param, int *value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
-    if (!spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
-    if (!ralph_param_scope_allows_mip(spec->scope)) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!spec) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       RALPH_PARAM_COUNT,
+                       "unknown parameter id");
+    }
+    if (spec->value_type != RALPH_PARAM_VALUE_INT) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->value_type,
+                       "parameter is not integer-valued");
+    }
+    if (!ralph_param_scope_allows_mip(spec->scope)) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_SCOPE_MISMATCH,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->scope,
+                       "parameter is not in MIP scope");
+    }
     return ralph_core_get_int_param_id(model, param, value);
 }
 
 int ralph_core_get_mip_dbl_param_id(const RalphModel *model, RalphParamId param, double *value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
-    if (!spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
-    if (!ralph_param_scope_allows_mip(spec->scope)) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!spec) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       RALPH_PARAM_COUNT,
+                       "unknown parameter id");
+    }
+    if (spec->value_type != RALPH_PARAM_VALUE_DOUBLE) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->value_type,
+                       "parameter is not double-valued");
+    }
+    if (!ralph_param_scope_allows_mip(spec->scope)) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_SCOPE_MISMATCH,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       param,
+                       spec->scope,
+                       "parameter is not in MIP scope");
+    }
     return ralph_core_get_dbl_param_id(model, param, value);
 }
 
 int ralph_core_set_int_param(RalphModel *model, const char *name, int value) {
     RalphParamId param;
-    if (!model || !name) return -1;
-    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !name) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "model or name is null");
+    }
+    if (ralph_core_find_param_by_name(name, &param) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "unknown parameter name");
+    }
     return ralph_core_set_int_param_id(model, param, value);
 }
 
 int ralph_core_set_dbl_param(RalphModel *model, const char *name, double value) {
     RalphParamId param;
-    if (!model || !name) return -1;
-    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !name) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "model or name is null");
+    }
+    if (ralph_core_find_param_by_name(name, &param) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "unknown parameter name");
+    }
     return ralph_core_set_dbl_param_id(model, param, value);
 }
 
 int ralph_core_get_int_param(const RalphModel *model, const char *name, int *value) {
     RalphParamId param;
-    if (!model || !name || !value) return -1;
-    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !name || !value) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "model, name, or output pointer is null");
+    }
+    if (ralph_core_find_param_by_name(name, &param) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "unknown parameter name");
+    }
     return ralph_core_get_int_param_id(model, param, value);
 }
 
 int ralph_core_get_dbl_param(const RalphModel *model, const char *name, double *value) {
     RalphParamId param;
-    if (!model || !name || !value) return -1;
-    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !name || !value) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "model, name, or output pointer is null");
+    }
+    if (ralph_core_find_param_by_name(name, &param) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "unknown parameter name");
+    }
     return ralph_core_get_dbl_param_id(model, param, value);
 }
 
 int ralph_core_set_lp_int_param(RalphModel *model, const char *name, int value) {
     RalphParamId param;
-    if (!name) return -1;
-    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!name) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "name is null");
+    }
+    if (ralph_core_find_param_by_name(name, &param) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "unknown parameter name");
+    }
     return ralph_core_set_lp_int_param_id(model, param, value);
 }
 
 int ralph_core_set_lp_dbl_param(RalphModel *model, const char *name, double value) {
     RalphParamId param;
-    if (!name) return -1;
-    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!name) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "name is null");
+    }
+    if (ralph_core_find_param_by_name(name, &param) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "unknown parameter name");
+    }
     return ralph_core_set_lp_dbl_param_id(model, param, value);
 }
 
 int ralph_core_get_lp_int_param(const RalphModel *model, const char *name, int *value) {
     RalphParamId param;
-    if (!name) return -1;
-    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!name || !value) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "name or output pointer is null");
+    }
+    if (ralph_core_find_param_by_name(name, &param) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "unknown parameter name");
+    }
     return ralph_core_get_lp_int_param_id(model, param, value);
 }
 
 int ralph_core_get_lp_dbl_param(const RalphModel *model, const char *name, double *value) {
     RalphParamId param;
-    if (!name) return -1;
-    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!name || !value) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "name or output pointer is null");
+    }
+    if (ralph_core_find_param_by_name(name, &param) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "unknown parameter name");
+    }
     return ralph_core_get_lp_dbl_param_id(model, param, value);
 }
 
 int ralph_core_set_mip_int_param(RalphModel *model, const char *name, int value) {
     RalphParamId param;
-    if (!name) return -1;
-    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!name) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "name is null");
+    }
+    if (ralph_core_find_param_by_name(name, &param) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "unknown parameter name");
+    }
     return ralph_core_set_mip_int_param_id(model, param, value);
 }
 
 int ralph_core_set_mip_dbl_param(RalphModel *model, const char *name, double value) {
     RalphParamId param;
-    if (!name) return -1;
-    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!name) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "name is null");
+    }
+    if (ralph_core_find_param_by_name(name, &param) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "unknown parameter name");
+    }
     return ralph_core_set_mip_dbl_param_id(model, param, value);
 }
 
 int ralph_core_get_mip_int_param(const RalphModel *model, const char *name, int *value) {
     RalphParamId param;
-    if (!name) return -1;
-    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!name || !value) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "name or output pointer is null");
+    }
+    if (ralph_core_find_param_by_name(name, &param) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "unknown parameter name");
+    }
     return ralph_core_get_mip_int_param_id(model, param, value);
 }
 
 int ralph_core_get_mip_dbl_param(const RalphModel *model, const char *name, double *value) {
     RalphParamId param;
-    if (!name) return -1;
-    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!name || !value) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "name or output pointer is null");
+    }
+    if (ralph_core_find_param_by_name(name, &param) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_UNKNOWN_PARAMETER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_PARAMETER,
+                       0,
+                       0,
+                       "unknown parameter name");
+    }
     return ralph_core_get_mip_dbl_param_id(model, param, value);
 }
 
@@ -4013,33 +6340,123 @@ const char* ralph_core_version(void) {
  * ============================================================================ */
 
 const char* ralph_core_get_var_name(const RalphModel *model, int var) {
-    if (!model || !model->lp_model) return NULL;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API_PTR(model,
+                           RALPH_ERROR_DOMAIN_ARGUMENT,
+                           RALPH_ERROR_CODE_NULL_POINTER,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_MODEL_EDIT,
+                           0,
+                           0,
+                           "model is null");
+    }
     return lp_model_get_var_name(model->lp_model, var);
 }
 
 const char* ralph_core_get_con_name(const RalphModel *model, int con) {
-    if (!model || !model->lp_model) return NULL;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API_PTR(model,
+                           RALPH_ERROR_DOMAIN_ARGUMENT,
+                           RALPH_ERROR_CODE_NULL_POINTER,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_MODEL_EDIT,
+                           0,
+                           0,
+                           "model is null");
+    }
     return lp_model_get_con_name(model->lp_model, con);
 }
 
 int ralph_core_set_var_name(RalphModel *model, int var, const char *name) {
-    if (!model || !model->lp_model) return -1;
-    return lp_model_set_var_name(model->lp_model, var, name);
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (lp_model_set_var_name(model->lp_model, var, name) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       var,
+                       model->lp_model->num_vars,
+                       "failed to set variable name");
+    }
+    return 0;
 }
 
 int ralph_core_set_con_name(RalphModel *model, int con, const char *name) {
-    if (!model || !model->lp_model) return -1;
-    return lp_model_set_con_name(model->lp_model, con, name);
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (lp_model_set_con_name(model->lp_model, con, name) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_RANGE,
+                       RALPH_ERROR_CODE_OUT_OF_RANGE,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       con,
+                       model->lp_model->num_cons,
+                       "failed to set constraint name");
+    }
+    return 0;
 }
 
 const char* ralph_core_get_problem_name(const RalphModel *model) {
-    if (!model || !model->lp_model) return NULL;
+    if (model) RALPH_CLEAR_API_ERROR(model);
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API_PTR(model,
+                           RALPH_ERROR_DOMAIN_ARGUMENT,
+                           RALPH_ERROR_CODE_NULL_POINTER,
+                           RALPH_STATUS_UNKNOWN,
+                           RALPH_ERROR_API_MODEL_EDIT,
+                           0,
+                           0,
+                           "model is null");
+    }
     return lp_model_get_name(model->lp_model);
 }
 
 int ralph_core_set_problem_name(RalphModel *model, const char *name) {
-    if (!model || !model->lp_model) return -1;
-    return lp_model_set_name(model->lp_model, name);
+    if (!model || !model->lp_model) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_NULL_POINTER,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "model is null");
+    }
+    RALPH_CLEAR_API_ERROR(model);
+    if (lp_model_set_name(model->lp_model, name) != 0) {
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_ARGUMENT,
+                       RALPH_ERROR_CODE_INVALID_ARGUMENT,
+                       RALPH_STATUS_UNKNOWN,
+                       RALPH_ERROR_API_MODEL_EDIT,
+                       0,
+                       0,
+                       "failed to set problem name");
+    }
+    return 0;
 }
 
 /* Internal helper for LP writer - provides access to LPModel */
