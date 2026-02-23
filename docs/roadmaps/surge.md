@@ -2046,6 +2046,18 @@ At 5000 iterations: Solomon +0.8%, Li & Lim +4.2%.
 
 **Tests**: 5 new tests (252→257). ASAN/UBSAN clean.
 
+### Phase S13: Robust Penalty Scaling (planned)
+
+Redefine `cost_scale` to reflect representative objective magnitude (median typical route cost across vehicles), not just average fixed cost. Add clamp/NaN guards. All scaling proportional to instance cost structure — no hardcoded absolute constants.
+
+### Phase S14: Infeasible-Aware Ejection Chains (planned)
+
+Keep `penalty.enabled = 1` during the mid-solve ejection pulse between Phase 1 and Phase 2. Currently the ejection pulse in `sg_solve_route_model` runs with strict feasibility, which prevents it from finding vehicle-reducing moves that temporarily violate constraints. ~20 LOC change. Expected impact: close remaining +1 vehicle gap on tight-TW R1/RC1 instances.
+
+### Phase S15: Biased Fitness in Population Manager (planned)
+
+Replace pure cost ranking in `sg_solve_population` with biased fitness: `fitness = cost_rank + diversity_rank`. Diversity measured via broken pairs distance (fraction of request adjacency pairs not shared between two solutions). Prevents population convergence and maintains exploration pressure across generations. ~100-150 LOC. Expected impact: improve Li & Lim distGap from +3.5% toward +2%.
+
 ---
 
 ## Infrastructure: Arena Allocator
