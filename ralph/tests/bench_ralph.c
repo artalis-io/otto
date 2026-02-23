@@ -9,7 +9,7 @@
 #include <string.h>
 #include <time.h>
 #include <math.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 #include "lp.h"
 
 /* Simple random number generator */
@@ -35,13 +35,13 @@ static int rand_int(int min, int max) {
  * Matrix A has approximately 'density' fraction of non-zeros.
  */
 static RalphModel* generate_random_lp(int num_vars, int num_cons, double density) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return NULL;
 
     /* Add variables with random objective coefficients */
     for (int j = 0; j < num_vars; j++) {
         double obj = rand_double(-10.0, 10.0);
-        ralph_add_var(model, 0.0, RALPH_INFINITY, obj, 'C');
+        ralph_test_add_var(model, 0.0, RALPH_INFINITY, obj, 'C');
     }
 
     /* Add constraints with random coefficients */
@@ -69,7 +69,7 @@ static RalphModel* generate_random_lp(int num_vars, int num_cons, double density
 
         /* RHS chosen to make problem likely feasible */
         double rhs = rand_double(0, 50.0);
-        ralph_add_constraint(model, nnz, indices, values, 'L', rhs);
+        ralph_test_add_constraint(model, nnz, indices, values, 'L', rhs);
     }
 
     free(indices);
@@ -82,7 +82,7 @@ static RalphModel* generate_random_lp(int num_vars, int num_cons, double density
  * Generate a random MIP (mixed-integer) problem
  */
 static RalphModel* generate_random_mip(int num_vars, int num_cons, double density, double int_frac) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return NULL;
 
     /* Add variables - some integer, some continuous */
@@ -90,7 +90,7 @@ static RalphModel* generate_random_mip(int num_vars, int num_cons, double densit
         double obj = rand_double(-10.0, 10.0);
         char type = (rand_double(0, 1) < int_frac) ? 'I' : 'C';
         double ub = (type == 'I') ? 10.0 : RALPH_INFINITY;
-        ralph_add_var(model, 0.0, ub, obj, type);
+        ralph_test_add_var(model, 0.0, ub, obj, type);
     }
 
     /* Add constraints */
@@ -115,7 +115,7 @@ static RalphModel* generate_random_mip(int num_vars, int num_cons, double densit
         }
 
         double rhs = rand_double(0, 50.0);
-        ralph_add_constraint(model, nnz, indices, values, 'L', rhs);
+        ralph_test_add_constraint(model, nnz, indices, values, 'L', rhs);
     }
 
     free(indices);
@@ -148,14 +148,14 @@ static void benchmark_lp(int num_vars, int num_cons, double density, int num_tri
         }
 
         clock_t start = clock();
-        int status = ralph_optimize(model);
+        int status = ralph_test_optimize(model);
         clock_t end = clock();
 
         double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
         total_time += elapsed;
 
         int iters = 0;
-        ralph_get_int_param(model, "iterations", &iters);
+        ralph_test_get_int_param(model, "iterations", &iters);
         total_iters += iters;
 
         solved++;
@@ -163,7 +163,7 @@ static void benchmark_lp(int num_vars, int num_cons, double density, int num_tri
             optimal++;
         }
 
-        ralph_free(model);
+        ralph_test_free(model);
     }
 
     if (solved > 0) {
@@ -197,10 +197,10 @@ static void benchmark_mip(int num_vars, int num_cons, double density, double int
         }
 
         /* Set time limit for MIP */
-        ralph_set_dbl_param(model, "time_limit", 30.0);
+        ralph_test_set_dbl_param(model, "time_limit", 30.0);
 
         clock_t start = clock();
-        int status = ralph_optimize(model);
+        int status = ralph_test_optimize(model);
         clock_t end = clock();
 
         double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
@@ -211,7 +211,7 @@ static void benchmark_mip(int num_vars, int num_cons, double density, double int
             optimal++;
         }
 
-        ralph_free(model);
+        ralph_test_free(model);
     }
 
     if (solved > 0) {
@@ -229,7 +229,7 @@ static void benchmark_diet_scaled(int scale) {
     printf("│ Diet Problem (scaled %dx)                                \n", scale);
     printf("└─────────────────────────────────────────────────────────┘\n");
 
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
 
     /* Foods: bread, milk, cheese, potato, fish, yogurt (repeated) */
     int num_foods = 6 * scale;
@@ -242,7 +242,7 @@ static void benchmark_diet_scaled(int scale) {
     for (int i = 0; i < num_foods; i++) {
         int base = i % 6;
         double cost = base_costs[base] * (1.0 + 0.1 * (i / 6));
-        ralph_add_var(model, 0.0, RALPH_INFINITY, cost, 'C');
+        ralph_test_add_var(model, 0.0, RALPH_INFINITY, cost, 'C');
     }
 
     /* Nutrient constraints */
@@ -254,51 +254,51 @@ static void benchmark_diet_scaled(int scale) {
         indices[i] = i;
         values[i] = base_protein[i % 6];
     }
-    ralph_add_constraint(model, num_foods, indices, values, 'G', 50.0 * scale);
+    ralph_test_add_constraint(model, num_foods, indices, values, 'G', 50.0 * scale);
 
     /* Fat <= 60 * scale */
     for (int i = 0; i < num_foods; i++) {
         values[i] = base_fat[i % 6];
     }
-    ralph_add_constraint(model, num_foods, indices, values, 'L', 60.0 * scale);
+    ralph_test_add_constraint(model, num_foods, indices, values, 'L', 60.0 * scale);
 
     /* Carbs >= 200 * scale */
     for (int i = 0; i < num_foods; i++) {
         values[i] = base_carbs[i % 6];
     }
-    ralph_add_constraint(model, num_foods, indices, values, 'G', 200.0 * scale);
+    ralph_test_add_constraint(model, num_foods, indices, values, 'G', 200.0 * scale);
 
     /* Calories in range */
     for (int i = 0; i < num_foods; i++) {
         values[i] = base_calories[i % 6];
     }
-    ralph_add_constraint(model, num_foods, indices, values, 'G', 1800.0 * scale);
-    ralph_add_constraint(model, num_foods, indices, values, 'L', 2500.0 * scale);
+    ralph_test_add_constraint(model, num_foods, indices, values, 'G', 1800.0 * scale);
+    ralph_test_add_constraint(model, num_foods, indices, values, 'L', 2500.0 * scale);
 
     free(indices);
     free(values);
 
     clock_t start = clock();
-    int status = ralph_optimize(model);
+    int status = ralph_test_optimize(model);
     clock_t end = clock();
 
     double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
 
     int iters = 0;
-    ralph_get_int_param(model, "iterations", &iters);
+    ralph_test_get_int_param(model, "iterations", &iters);
 
     printf("  Variables:  %d\n", num_foods);
     printf("  Constraints: 5\n");
-    printf("  Status:     %s\n", ralph_status_string(status));
+    printf("  Status:     %s\n", ralph_test_status_string(status));
     if (status == RALPH_STATUS_OPTIMAL) {
         double obj = 0;
-        obj = ralph_get_objval(model);
+        obj = ralph_test_get_objval(model);
         printf("  Objective:  %.2f\n", obj);
     }
     printf("  Iterations: %d\n", iters);
     printf("  Time:       %.4f sec\n", elapsed);
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 /*
@@ -309,7 +309,7 @@ int main(int argc, char **argv) {
     printf("║       Ralph LP/MIP Solver - Performance Benchmark        ║\n");
     printf("╚══════════════════════════════════════════════════════════╝\n");
 
-    printf("\nRalph version: %s\n", ralph_version());
+    printf("\nRalph version: %s\n", ralph_test_version());
 
     int quick_mode = (argc > 1 && strcmp(argv[1], "--quick") == 0);
 

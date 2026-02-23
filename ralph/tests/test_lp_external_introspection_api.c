@@ -9,7 +9,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;

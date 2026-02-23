@@ -26,7 +26,7 @@
 #include <errno.h>
 #include <ctype.h>
 
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 #include "lp.h"
 
 /* Internal helpers exposed by ralph.c for benchmark diagnostics */
@@ -492,9 +492,9 @@ static int load_problem_into_model(RalphModel *model, const char *problem_path) 
     if (!model || !problem_path) return -1;
     ext = strrchr(problem_path, '.');
     if (ext && strcasecmp(ext, ".lp") == 0) {
-        return ralph_read_lp(model, problem_path);
+        return ralph_test_read_lp(model, problem_path);
     }
-    return ralph_read_mps(model, problem_path);
+    return ralph_test_read_mps(model, problem_path);
 }
 
 static SolveResult solve_with_glpk(const char *problem_path, double time_limit_sec) {
@@ -505,14 +505,14 @@ static SolveResult solve_with_glpk(const char *problem_path, double time_limit_s
 
     result.status = 3;  /* Error by default */
     result.solution = NULL;
-    model = ralph_create();
+    model = ralph_test_create();
     if (!model) return result;
     if (load_problem_into_model(model, problem_path) != 0) {
-        ralph_free(model);
+        ralph_test_free(model);
         return result;
     }
 
-    num_vars = ralph_get_num_vars(model);
+    num_vars = ralph_test_get_num_vars(model);
     ralph_set_int_param_id(model, RALPH_PARAM_VERBOSE, 0);
     ralph_set_int_param_id(model, RALPH_PARAM_PRESOLVE, 0);
     ralph_set_int_param_id(model, RALPH_PARAM_DETECT_SPECIAL, 0);
@@ -526,17 +526,17 @@ static SolveResult solve_with_glpk(const char *problem_path, double time_limit_s
 
     {
         double start_time = get_time_ms();
-        (void)ralph_optimize_lp(model);
+        (void)ralph_test_optimize_lp(model);
         result.time_ms = get_time_ms() - start_time;
     }
-    result.iterations = ralph_get_iterations(model);
-    status = ralph_get_status(model);
+    result.iterations = ralph_test_get_iterations(model);
+    status = ralph_test_get_status(model);
     switch (status) {
         case RALPH_STATUS_OPTIMAL:
         case RALPH_STATUS_IMPRECISE:
         case RALPH_STATUS_OBJ_LIMIT:
             result.status = 0;
-            result.objective = ralph_get_objval(model);
+            result.objective = ralph_test_get_objval(model);
             if (num_vars > 0) {
                 SimplexSolver *solver = ralph_get_lp_solver(model);
                 result.solution = (double*)malloc((size_t)num_vars * sizeof(double));
@@ -545,7 +545,7 @@ static SolveResult solve_with_glpk(const char *problem_path, double time_limit_s
                         memcpy(result.solution, solver->solution,
                                (size_t)num_vars * sizeof(double));
                     } else {
-                        (void)ralph_get_solution(model, result.solution);
+                        (void)ralph_test_get_solution(model, result.solution);
                     }
                     result.solution_size = num_vars;
                 }
@@ -566,7 +566,7 @@ static SolveResult solve_with_glpk(const char *problem_path, double time_limit_s
             result.status = 3;
             break;
     }
-    ralph_free(model);
+    ralph_test_free(model);
 
     return result;
 }
@@ -589,7 +589,7 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     strncpy(result.refactor_last_reason_str, "other",
             sizeof(result.refactor_last_reason_str) - 1);
 
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) {
         return result;
     }
@@ -598,43 +598,43 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     const char *ext = strrchr(problem_path, '.');
     int load_ret;
     if (ext && strcasecmp(ext, ".lp") == 0) {
-        load_ret = ralph_read_lp(model, problem_path);
+        load_ret = ralph_test_read_lp(model, problem_path);
     } else {
-        load_ret = ralph_read_mps(model, problem_path);
+        load_ret = ralph_test_read_mps(model, problem_path);
     }
 
     if (load_ret != 0) {
-        ralph_free(model);
+        ralph_test_free(model);
         return result;
     }
 
     /* Get problem info via public API */
-    *out_num_vars = ralph_get_num_vars(model);
-    *out_num_cons = ralph_get_num_cons(model);
-    *out_is_mip = ralph_is_mip(model);
+    *out_num_vars = ralph_test_get_num_vars(model);
+    *out_num_cons = ralph_test_get_num_cons(model);
+    *out_is_mip = ralph_test_is_mip(model);
     *out_nnz = 0;
 
     /* Configure solver */
-    ralph_set_int_param(model, "verbose", 0);
-    ralph_set_dbl_param(model, "time_limit", time_limit_sec);
-    ralph_set_int_param(model, "max_iterations", 10000000);
-    ralph_set_int_param(model, "presolve", 1);
-    ralph_set_int_param(model, "verify", 1);
-    ralph_set_int_param(model, "method", method);
+    ralph_test_set_int_param(model, "verbose", 0);
+    ralph_test_set_dbl_param(model, "time_limit", time_limit_sec);
+    ralph_test_set_int_param(model, "max_iterations", 10000000);
+    ralph_test_set_int_param(model, "presolve", 1);
+    ralph_test_set_int_param(model, "verify", 1);
+    ralph_test_set_int_param(model, "method", method);
     if (pricing >= 0) {
-        ralph_set_int_param(model, "pricing", pricing);
+        ralph_test_set_int_param(model, "pricing", pricing);
     }
     if (lu_supernode) {
-        ralph_set_int_param(model, "lu_supernode", 1);
+        ralph_test_set_int_param(model, "lu_supernode", 1);
     }
 
     /* Solve */
     double start_time = get_time_ms();
-    ralph_optimize(model);
+    ralph_test_optimize(model);
     double end_time = get_time_ms();
 
     result.time_ms = end_time - start_time;
-    result.iterations = ralph_get_iterations(model);
+    result.iterations = ralph_test_get_iterations(model);
     {
         LPModel *lp = ralph_get_lp_model(model);
         if (lp) {
@@ -803,13 +803,13 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     }
 
     /* Map status */
-    RalphStatus status = ralph_get_status(model);
+    RalphStatus status = ralph_test_get_status(model);
     switch (status) {
         case RALPH_STATUS_OPTIMAL:
         case RALPH_STATUS_IMPRECISE:
         case RALPH_STATUS_OBJ_LIMIT:
             result.status = 0;
-            result.objective = ralph_get_objval(model);
+            result.objective = ralph_test_get_objval(model);
             break;
         case RALPH_STATUS_INFEASIBLE:
             result.status = 1;
@@ -829,15 +829,15 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
 
     /* Get solution vector if optimal */
     if (result.status == 0) {
-        int n = ralph_get_num_vars(model);
+        int n = ralph_test_get_num_vars(model);
         result.solution = (double*)malloc(n * sizeof(double));
         if (result.solution) {
-            ralph_get_solution(model, result.solution);
+            ralph_test_get_solution(model, result.solution);
             result.solution_size = n;
         }
     }
 
-    ralph_free(model);
+    ralph_test_free(model);
     return result;
 }
 
@@ -1005,7 +1005,7 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
     MatrixVerifyResult r = {0};
 
     /* 1. Load model in Ralph (parse only, no solve) */
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) {
         snprintf(r.detail, sizeof(r.detail), "Failed to create Ralph model");
         return r;
@@ -1013,7 +1013,7 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
 
     if (load_problem_into_model(model, problem_path) != 0) {
         snprintf(r.detail, sizeof(r.detail), "Failed to load %s", problem_path);
-        ralph_free(model);
+        ralph_test_free(model);
         return r;
     }
 
@@ -1021,7 +1021,7 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
     LPModel *lp = ralph_get_lp_model(model);
     if (!lp) {
         snprintf(r.detail, sizeof(r.detail), "No internal LPModel");
-        ralph_free(model);
+        ralph_test_free(model);
         return r;
     }
     if (!lp->A) {
@@ -1029,7 +1029,7 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
     }
     if (!lp->A) {
         snprintf(r.detail, sizeof(r.detail), "No constraint matrix after finalize");
-        ralph_free(model);
+        ralph_test_free(model);
         return r;
     }
 
@@ -1058,7 +1058,7 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
     ret = system(cmd);
     if (ret != 0) {
         snprintf(r.detail, sizeof(r.detail), "GLPK failed to solve");
-        ralph_free(model);
+        ralph_test_free(model);
         unlink(sol_file);
         return r;
     }
@@ -1066,7 +1066,7 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
     x = (double*)calloc((size_t)n, sizeof(double));
     if (!x) {
         snprintf(r.detail, sizeof(r.detail), "Memory allocation failed");
-        ralph_free(model);
+        ralph_test_free(model);
         unlink(sol_file);
         return r;
     }
@@ -1077,7 +1077,7 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
         snprintf(r.detail, sizeof(r.detail),
                  "Failed to parse GLPK solution (0 columns parsed)");
         free(x);
-        ralph_free(model);
+        ralph_test_free(model);
         return r;
     }
 
@@ -1087,7 +1087,7 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
                  n, m, r.nnz);
         r.pass = 1;  /* Not a Ralph bug — skip */
         free(x);
-        ralph_free(model);
+        ralph_test_free(model);
         return r;
     }
 
@@ -1097,7 +1097,7 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
     double *ax = (double*)calloc(m, sizeof(double));
     if (!ax) {
         free(x);
-        ralph_free(model);
+        ralph_test_free(model);
         return r;
     }
 
@@ -1189,7 +1189,7 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
 
     free(ax);
     free(x);
-    ralph_free(model);
+    ralph_test_free(model);
     return r;
 }
 
@@ -2061,7 +2061,7 @@ static void print_help(const char *prog) {
 
 static void print_version(void) {
     printf("ralph-benchmark 1.0.0\n");
-    printf("Ralph %s\n", ralph_version());
+    printf("Ralph %s\n", ralph_test_version());
 }
 
 static int parse_args(int argc, char **argv, Options *opts) {

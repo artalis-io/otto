@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 #include "lp.h"
 #include "lu_supernode.h"
 
@@ -579,39 +579,39 @@ static void test_integration_small_lp(void) {
      *      x, y >= 0
      * Optimal: x=4, y=6, obj=24
      */
-    RalphModel *model1 = ralph_create();
-    ralph_add_var(model1, 0, RALPH_INFINITY, -3.0, 'C');  /* x (min => negate) */
-    ralph_add_var(model1, 0, RALPH_INFINITY, -2.0, 'C');  /* y */
+    RalphModel *model1 = ralph_test_create();
+    ralph_test_add_var(model1, 0, RALPH_INFINITY, -3.0, 'C');  /* x (min => negate) */
+    ralph_test_add_var(model1, 0, RALPH_INFINITY, -2.0, 'C');  /* y */
     int idx1[] = {0, 1};
     double val1[] = {1.0, 1.0};
-    ralph_add_constraint(model1, 2, idx1, val1, 'L', 10.0);
+    ralph_test_add_constraint(model1, 2, idx1, val1, 'L', 10.0);
     int idx2[] = {0, 1};
     double val2[] = {2.0, 1.0};
-    ralph_add_constraint(model1, 2, idx2, val2, 'L', 14.0);
+    ralph_test_add_constraint(model1, 2, idx2, val2, 'L', 14.0);
 
     /* Solve without supernodal */
-    ralph_optimize(model1);
-    double obj1 = ralph_get_objval(model1);
-    int status1 = ralph_get_status(model1);
+    ralph_test_optimize(model1);
+    double obj1 = ralph_test_get_objval(model1);
+    int status1 = ralph_test_get_status(model1);
 
     /* Solve with supernodal */
-    RalphModel *model2 = ralph_create();
-    ralph_add_var(model2, 0, RALPH_INFINITY, -3.0, 'C');
-    ralph_add_var(model2, 0, RALPH_INFINITY, -2.0, 'C');
-    ralph_add_constraint(model2, 2, idx1, val1, 'L', 10.0);
-    ralph_add_constraint(model2, 2, idx2, val2, 'L', 14.0);
-    ralph_set_int_param(model2, "lu_supernode", 1);
-    ralph_optimize(model2);
-    double obj2 = ralph_get_objval(model2);
-    int status2 = ralph_get_status(model2);
+    RalphModel *model2 = ralph_test_create();
+    ralph_test_add_var(model2, 0, RALPH_INFINITY, -3.0, 'C');
+    ralph_test_add_var(model2, 0, RALPH_INFINITY, -2.0, 'C');
+    ralph_test_add_constraint(model2, 2, idx1, val1, 'L', 10.0);
+    ralph_test_add_constraint(model2, 2, idx2, val2, 'L', 14.0);
+    ralph_test_set_int_param(model2, "lu_supernode", 1);
+    ralph_test_optimize(model2);
+    double obj2 = ralph_test_get_objval(model2);
+    int status2 = ralph_test_get_status(model2);
 
     ASSERT_INT_EQ(status1, RALPH_STATUS_OPTIMAL, "integration LP: status1 optimal");
     ASSERT_INT_EQ(status2, RALPH_STATUS_OPTIMAL, "integration LP: status2 optimal");
     ASSERT_NEAR(obj1, obj2, 1e-6, "integration LP: obj values match");
     ASSERT_NEAR(obj1, -24.0, 1e-6, "integration LP: obj = -24 (minimization)");
 
-    ralph_free(model1);
-    ralph_free(model2);
+    ralph_test_free(model1);
+    ralph_test_free(model2);
 }
 
 /* Solve a medium LP with both paths and compare */
@@ -621,16 +621,16 @@ static void test_integration_medium_lp(void) {
     /* Build a larger LP: 20 vars, 15 constraints */
     int nvars = 20, ncons = 15;
 
-    RalphModel *model1 = ralph_create();
-    RalphModel *model2 = ralph_create();
+    RalphModel *model1 = ralph_test_create();
+    RalphModel *model2 = ralph_test_create();
 
     /* Add variables with random costs and bounds */
     unsigned int seed = 123;
     for (int j = 0; j < nvars; j++) {
         seed = seed * 1103515245 + 12345;
         double cost = ((double)((seed >> 16) & 0x7fff) / 32768.0) * 10.0 - 5.0;
-        ralph_add_var(model1, 0, 100.0, cost, 'C');
-        ralph_add_var(model2, 0, 100.0, cost, 'C');
+        ralph_test_add_var(model1, 0, 100.0, cost, 'C');
+        ralph_test_add_var(model2, 0, 100.0, cost, 'C');
     }
 
     /* Add constraints with random coefficients */
@@ -649,29 +649,29 @@ static void test_integration_medium_lp(void) {
         seed = seed * 1103515245 + 12345;
         double rhs = ((double)((seed >> 16) & 0x7fff) / 32768.0) * 50.0 + 10.0;
 
-        ralph_add_constraint(model1, nnz, idx, val, 'L', rhs);
-        ralph_add_constraint(model2, nnz, idx, val, 'L', rhs);
+        ralph_test_add_constraint(model1, nnz, idx, val, 'L', rhs);
+        ralph_test_add_constraint(model2, nnz, idx, val, 'L', rhs);
 
         free(idx);
         free(val);
     }
 
-    ralph_optimize(model1);
-    double obj1 = ralph_get_objval(model1);
-    int status1 = ralph_get_status(model1);
+    ralph_test_optimize(model1);
+    double obj1 = ralph_test_get_objval(model1);
+    int status1 = ralph_test_get_status(model1);
 
-    ralph_set_int_param(model2, "lu_supernode", 1);
-    ralph_optimize(model2);
-    double obj2 = ralph_get_objval(model2);
-    int status2 = ralph_get_status(model2);
+    ralph_test_set_int_param(model2, "lu_supernode", 1);
+    ralph_test_optimize(model2);
+    double obj2 = ralph_test_get_objval(model2);
+    int status2 = ralph_test_get_status(model2);
 
     ASSERT_INT_EQ(status1, status2, "integration medium: same status");
     if (status1 == RALPH_STATUS_OPTIMAL && status2 == RALPH_STATUS_OPTIMAL) {
         ASSERT_NEAR(obj1, obj2, 1e-4, "integration medium: obj values match");
     }
 
-    ralph_free(model1);
-    ralph_free(model2);
+    ralph_test_free(model1);
+    ralph_test_free(model2);
 }
 
 /* ============================================================================

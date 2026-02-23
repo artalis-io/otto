@@ -1,4 +1,3 @@
-#define RALPH_TEST_MOD_API_IMPL
 #include "ralph_test_mod_api.h"
 
 #include "ralph_lp.h"

@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 #include "lp.h"
 #include "mip.h"
 
@@ -33,25 +33,25 @@ static int tests_passed = 0;
     ASSERT(fabs((a) - (b)) <= (tol), msg)
 
 static RalphModel* build_fractional_probe_model(void) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return NULL;
-    ralph_set_obj_sense(model, RALPH_MAXIMIZE);
+    ralph_test_set_obj_sense(model, RALPH_MAXIMIZE);
 
     /* max x + y
      * s.t. x + y <= 1.5
      *      x, y binary
      * Root LP has a fractional optimum. */
-    int x = ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);
-    int y = ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);
+    int x = ralph_test_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);
+    int y = ralph_test_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);
     if (x != 0 || y != 1) {
-        ralph_free(model);
+        ralph_test_free(model);
         return NULL;
     }
     {
         int idx[] = {x, y};
         double val[] = {1.0, 1.0};
-        if (ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 1.5) != 0) {
-            ralph_free(model);
+        if (ralph_test_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 1.5) != 0) {
+            ralph_test_free(model);
             return NULL;
         }
     }
@@ -59,21 +59,21 @@ static RalphModel* build_fractional_probe_model(void) {
 }
 
 static RalphModel* build_root_recovery_model(void) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return NULL;
-    ralph_set_obj_sense(model, RALPH_MAXIMIZE);
+    ralph_test_set_obj_sense(model, RALPH_MAXIMIZE);
 
-    int x = ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);
-    int y = ralph_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);
+    int x = ralph_test_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);
+    int y = ralph_test_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);
     if (x != 0 || y != 1) {
-        ralph_free(model);
+        ralph_test_free(model);
         return NULL;
     }
     {
         int idx[] = {x, y};
         double val[] = {1.0, 1.0};
-        if (ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 1.0) != 0) {
-            ralph_free(model);
+        if (ralph_test_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 1.0) != 0) {
+            ralph_test_free(model);
             return NULL;
         }
     }
@@ -88,14 +88,14 @@ static void test_strong_branch_probe_contract(void) {
     LPModel *lp_model = ralph_get_lp_model(model);
     ASSERT(lp_model != NULL, "Internal LP model handle available");
     if (!lp_model) {
-        ralph_free(model);
+        ralph_test_free(model);
         return;
     }
 
     MIPSolver *mip = mip_create(lp_model, 0, 128);
     ASSERT(mip != NULL, "MIP solver created");
     if (!mip) {
-        ralph_free(model);
+        ralph_test_free(model);
         return;
     }
     mip->verbose = 0;
@@ -105,7 +105,7 @@ static void test_strong_branch_probe_contract(void) {
            "LP tableau+solution available for probing");
     if (!mip->lp_solver || !mip->lp_solver->tableau || !mip->lp_solver->solution) {
         mip_free(mip);
-        ralph_free(model);
+        ralph_test_free(model);
         return;
     }
 
@@ -134,7 +134,7 @@ static void test_strong_branch_probe_contract(void) {
     ASSERT(probe_var >= 0, "Found probing variable for strong-branch contract test");
     if (probe_var < 0) {
         mip_free(mip);
-        ralph_free(model);
+        ralph_test_free(model);
         return;
     }
 
@@ -150,7 +150,7 @@ static void test_strong_branch_probe_contract(void) {
         free(lb_before);
         free(ub_before);
         mip_free(mip);
-        ralph_free(model);
+        ralph_test_free(model);
         return;
     }
 
@@ -187,7 +187,7 @@ static void test_strong_branch_probe_contract(void) {
     free(lb_before);
     free(ub_before);
     mip_free(mip);
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_root_lp_recovery_contract(void) {
@@ -198,14 +198,14 @@ static void test_root_lp_recovery_contract(void) {
     LPModel *lp_model = ralph_get_lp_model(model);
     ASSERT(lp_model != NULL, "Internal LP model handle available");
     if (!lp_model) {
-        ralph_free(model);
+        ralph_test_free(model);
         return;
     }
 
     MIPSolver *mip = mip_create(lp_model, 0, 128);
     ASSERT(mip != NULL, "MIP solver created");
     if (!mip) {
-        ralph_free(model);
+        ralph_test_free(model);
         return;
     }
     mip->verbose = 0;
@@ -235,7 +235,7 @@ static void test_root_lp_recovery_contract(void) {
     ASSERT(mip->cut_recovery_failures == 0, "No cut-loop recovery failures");
 
     mip_free(mip);
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 int main(void) {

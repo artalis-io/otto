@@ -22,7 +22,7 @@
 #include <math.h>
 
 /* Ralph headers */
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 static int glpsol_available(void) {
     int rc = system("which glpsol >/dev/null 2>&1");
@@ -181,7 +181,7 @@ typedef struct {
 } SolveResult;
 
 static RalphModel* build_ralph_model_from_problem(const TestProblem *prob) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     int *row_start = NULL;
     int *row_idx = NULL;
     double *row_val = NULL;
@@ -190,7 +190,7 @@ static RalphModel* build_ralph_model_from_problem(const TestProblem *prob) {
 
     /* Add variables */
     for (int j = 0; j < prob->num_vars; j++) {
-        ralph_add_var(model, prob->lb[j], prob->ub[j], prob->obj[j], 'C');
+        ralph_test_add_var(model, prob->lb[j], prob->ub[j], prob->obj[j], 'C');
     }
 
     /* Build constraint arrays per row */
@@ -203,7 +203,7 @@ static RalphModel* build_ralph_model_from_problem(const TestProblem *prob) {
         free(row_idx);
         free(row_val);
         free(row_pos);
-        ralph_free(model);
+        ralph_test_free(model);
         return NULL;
     }
 
@@ -226,7 +226,7 @@ static RalphModel* build_ralph_model_from_problem(const TestProblem *prob) {
     /* Add constraints */
     for (int i = 0; i < prob->num_cons; i++) {
         int nnz = row_start[i + 1] - row_start[i];
-        ralph_add_constraint(model, nnz, &row_idx[row_start[i]],
+        ralph_test_add_constraint(model, nnz, &row_idx[row_start[i]],
                             &row_val[row_start[i]], prob->sense[i], prob->rhs[i]);
     }
 
@@ -273,15 +273,15 @@ static SolveResult solve_with_ralph(TestProblem *prob) {
 
     /* Solve and time */
     clock_t start = clock();
-    (void)ralph_optimize_lp(model);
+    (void)ralph_test_optimize_lp(model);
     clock_t end = clock();
 
     result.solve_time = (double)(end - start) / CLOCKS_PER_SEC;
-    result.iterations = ralph_get_iterations(model);
-    result.objective = ralph_get_objval(model);
-    map_ralph_status(&result, ralph_get_status(model));
+    result.iterations = ralph_test_get_iterations(model);
+    result.objective = ralph_test_get_objval(model);
+    map_ralph_status(&result, ralph_test_get_status(model));
 
-    ralph_free(model);
+    ralph_test_free(model);
     return result;
 }
 
@@ -307,14 +307,14 @@ static SolveResult solve_with_glpk(TestProblem *prob) {
 
     /* Solve and time */
     clock_t start = clock();
-    (void)ralph_optimize_lp(model);
+    (void)ralph_test_optimize_lp(model);
     clock_t end = clock();
 
     result.solve_time = (double)(end - start) / CLOCKS_PER_SEC;
-    result.iterations = ralph_get_iterations(model);
-    result.objective = ralph_get_objval(model);
-    map_ralph_status(&result, ralph_get_status(model));
-    ralph_free(model);
+    result.iterations = ralph_test_get_iterations(model);
+    result.objective = ralph_test_get_objval(model);
+    map_ralph_status(&result, ralph_test_get_status(model));
+    ralph_test_free(model);
     return result;
 }
 
@@ -446,7 +446,7 @@ static void print_header(void) {
     printf("╚══════════════════════════════════════════════════════════════════════════════╝\n");
     printf("\n");
     printf("Comparing Ralph %s against GLPK (out-of-process adapter via glpsol)\n",
-           ralph_version());
+           ralph_test_version());
     printf("\n");
 }
 

@@ -10,7 +10,7 @@
 #include <string.h>
 #include <time.h>
 #include <math.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 static unsigned int seed;
 static double randf(double lo, double hi) {
@@ -25,14 +25,14 @@ static int glpsol_available(void) {
 
 static RalphModel* build_model(int n, int m, const double *costs, const double *rhs,
                                int **con_idx, double **con_val, const int *con_nnz) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return NULL;
-    ralph_set_obj_sense(model, RALPH_MAXIMIZE);
+    ralph_test_set_obj_sense(model, RALPH_MAXIMIZE);
     ralph_set_int_param_id(model, RALPH_PARAM_VERBOSE, 0);
     ralph_set_int_param_id(model, RALPH_PARAM_MAX_ITERATIONS, 100000);
-    for (int j = 0; j < n; j++) ralph_add_var(model, 0.0, 100.0, costs[j], 'C');
+    for (int j = 0; j < n; j++) ralph_test_add_var(model, 0.0, 100.0, costs[j], 'C');
     for (int i = 0; i < m; i++) {
-        ralph_add_constraint(model, con_nnz[i], con_idx[i], con_val[i], 'L', rhs[i]);
+        ralph_test_add_constraint(model, con_nnz[i], con_idx[i], con_val[i], 'L', rhs[i]);
     }
     return model;
 }
@@ -74,11 +74,11 @@ void run_comparison(int n, int m, double density, unsigned int s) {
                            (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX);
 
     clock_t start = clock();
-    (void)ralph_optimize_lp(model);
+    (void)ralph_test_optimize_lp(model);
     double ralph_time = (double)(clock() - start) / CLOCKS_PER_SEC;
-    double ralph_obj = ralph_get_objval(model);
-    const char *ralph_status = ralph_status_string(ralph_get_status(model));
-    ralph_free(model);
+    double ralph_obj = ralph_test_get_objval(model);
+    const char *ralph_status = ralph_test_status_string(ralph_test_get_status(model));
+    ralph_test_free(model);
 
     /* Solve with GLPK via Ralph out-of-process external adapter */
     model = build_model(n, m, costs, rhs, con_idx, con_val, con_nnz);
@@ -92,11 +92,11 @@ void run_comparison(int n, int m, double density, unsigned int s) {
     ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                            (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL);
     start = clock();
-    (void)ralph_optimize_lp(model);
+    (void)ralph_test_optimize_lp(model);
     double glpk_time = (double)(clock() - start) / CLOCKS_PER_SEC;
-    double glpk_obj = ralph_get_objval(model);
-    const char *glpk_status = ralph_status_string(ralph_get_status(model));
-    ralph_free(model);
+    double glpk_obj = ralph_test_get_objval(model);
+    const char *glpk_status = ralph_test_status_string(ralph_test_get_status(model));
+    ralph_test_free(model);
 
     /* Report results */
     double diff_pct = (glpk_obj != 0) ? 100.0 * (ralph_obj - glpk_obj) / glpk_obj : 0;

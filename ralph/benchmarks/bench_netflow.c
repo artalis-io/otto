@@ -11,7 +11,7 @@
 #include <math.h>
 #include <time.h>
 #include "netflow.h"
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 /* ============================================================================
  * Timing utilities
@@ -789,13 +789,13 @@ static void bench_vs_lp(void) {
         double lp_obj = 0;
 
         for (int t = 0; t < trials; t++) {
-            RalphModel *model = ralph_create();
-            ralph_set_obj_sense(model, RALPH_MINIMIZE);
+            RalphModel *model = ralph_test_create();
+            ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
 
             /* Add arc flow variables */
             for (int a = 0; a < np.num_arcs; a++) {
                 double cap = np.capacity ? np.capacity[a] : 1e15;
-                ralph_add_var(model, 0.0, cap, np.cost[a], RALPH_CONTINUOUS);
+                ralph_test_add_var(model, 0.0, cap, np.cost[a], RALPH_CONTINUOUS);
             }
 
             /* Flow conservation constraints */
@@ -815,19 +815,19 @@ static void bench_vs_lp(void) {
                         len++;
                     }
                 }
-                ralph_add_constraint(model, len, idx, val, RALPH_EQUAL, np.supply[i]);
+                ralph_test_add_constraint(model, len, idx, val, RALPH_EQUAL, np.supply[i]);
             }
 
             free(idx);
             free(val);
 
             timer_start(&timer);
-            ralph_optimize(model);
+            ralph_test_optimize(model);
             timer_stop(&timer);
             lp_total += timer.elapsed_ms;
-            lp_obj = ralph_get_objval(model);
+            lp_obj = ralph_test_get_objval(model);
 
-            ralph_free(model);
+            ralph_test_free(model);
         }
 
         double speedup = lp_total / netsim_total;

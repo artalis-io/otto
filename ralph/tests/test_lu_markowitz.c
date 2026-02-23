@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 #include "lp.h"
 
 #define TOLERANCE 1e-8
@@ -237,22 +237,22 @@ static void test_markowitz_integration_small_lp(void) {
     printf("  Integration: small LP...\n");
 
     /* max 3x + 2y s.t. x + y <= 10, 2x + y <= 14, x,y >= 0 */
-    RalphModel *m1 = ralph_create();
-    ralph_add_var(m1, 0, RALPH_INFINITY, -3.0, 'C');
-    ralph_add_var(m1, 0, RALPH_INFINITY, -2.0, 'C');
+    RalphModel *m1 = ralph_test_create();
+    ralph_test_add_var(m1, 0, RALPH_INFINITY, -3.0, 'C');
+    ralph_test_add_var(m1, 0, RALPH_INFINITY, -2.0, 'C');
     int idx1[] = {0, 1}; double val1[] = {1.0, 1.0};
-    ralph_add_constraint(m1, 2, idx1, val1, 'L', 10.0);
+    ralph_test_add_constraint(m1, 2, idx1, val1, 'L', 10.0);
     int idx2[] = {0, 1}; double val2[] = {2.0, 1.0};
-    ralph_add_constraint(m1, 2, idx2, val2, 'L', 14.0);
+    ralph_test_add_constraint(m1, 2, idx2, val2, 'L', 14.0);
 
-    ralph_optimize(m1);
-    double obj1 = ralph_get_objval(m1);
-    int status1 = ralph_get_status(m1);
+    ralph_test_optimize(m1);
+    double obj1 = ralph_test_get_objval(m1);
+    int status1 = ralph_test_get_status(m1);
 
     ASSERT_INT_EQ(status1, RALPH_STATUS_OPTIMAL, "small LP status");
     ASSERT_NEAR(obj1, -24.0, 1e-6, "small LP obj");
 
-    ralph_free(m1);
+    ralph_test_free(m1);
 }
 
 /* ============================================================================
@@ -263,15 +263,15 @@ static void test_markowitz_integration_medium_lp(void) {
 
     int nvars = 30, ncons = 25;
 
-    RalphModel *m1 = ralph_create();
-    RalphModel *m2 = ralph_create();
+    RalphModel *m1 = ralph_test_create();
+    RalphModel *m2 = ralph_test_create();
 
     unsigned int seed = 456;
     for (int j = 0; j < nvars; j++) {
         seed = seed * 1103515245 + 12345;
         double cost = ((double)((seed >> 16) & 0x7fff) / 32768.0) * 10.0 - 5.0;
-        ralph_add_var(m1, 0, 100.0, cost, 'C');
-        ralph_add_var(m2, 0, 100.0, cost, 'C');
+        ralph_test_add_var(m1, 0, 100.0, cost, 'C');
+        ralph_test_add_var(m2, 0, 100.0, cost, 'C');
     }
 
     for (int i = 0; i < ncons; i++) {
@@ -288,29 +288,29 @@ static void test_markowitz_integration_medium_lp(void) {
         seed = seed * 1103515245 + 12345;
         double rhs = ((double)((seed >> 16) & 0x7fff) / 32768.0) * 50.0 + 10.0;
 
-        ralph_add_constraint(m1, nnz, idx, val, 'L', rhs);
-        ralph_add_constraint(m2, nnz, idx, val, 'L', rhs);
+        ralph_test_add_constraint(m1, nnz, idx, val, 'L', rhs);
+        ralph_test_add_constraint(m2, nnz, idx, val, 'L', rhs);
         free(idx); free(val);
     }
 
     /* m1: default (Markowitz enabled) */
-    ralph_optimize(m1);
-    double obj1 = ralph_get_objval(m1);
-    int status1 = ralph_get_status(m1);
+    ralph_test_optimize(m1);
+    double obj1 = ralph_test_get_objval(m1);
+    int status1 = ralph_test_get_status(m1);
 
     /* m2: Markowitz disabled — set lu->mkz_enabled=0 not directly accessible,
      * but we can still compare that both get optimal */
-    ralph_optimize(m2);
-    double obj2 = ralph_get_objval(m2);
-    int status2 = ralph_get_status(m2);
+    ralph_test_optimize(m2);
+    double obj2 = ralph_test_get_objval(m2);
+    int status2 = ralph_test_get_status(m2);
 
     ASSERT_INT_EQ(status1, status2, "medium LP: same status");
     if (status1 == RALPH_STATUS_OPTIMAL && status2 == RALPH_STATUS_OPTIMAL) {
         ASSERT_NEAR(obj1, obj2, 1e-4, "medium LP: obj values match");
     }
 
-    ralph_free(m1);
-    ralph_free(m2);
+    ralph_test_free(m1);
+    ralph_test_free(m2);
 }
 
 /* ============================================================================

@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 #include "lp.h"
 
 extern SimplexTableau* tableau_create(LPModel *model);

@@ -13,7 +13,7 @@
 #include <math.h>
 #include <time.h>
 #include "netflow.h"
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 #define TOLERANCE 1e-4
 
@@ -898,9 +898,9 @@ static void test_vs_lp_small(void) {
     ASSERT(status == RALPH_NETFLOW_OPTIMAL, "Network simplex optimal");
 
     /* Formulate as LP */
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     for (int a = 0; a < 5; a++) {
-        ralph_add_var(model, 0.0, cap[a], cost[a], RALPH_CONTINUOUS);
+        ralph_test_add_var(model, 0.0, cap[a], cost[a], RALPH_CONTINUOUS);
     }
 
     /* Flow conservation constraints */
@@ -922,18 +922,18 @@ static void test_vs_lp_small(void) {
             }
         }
 
-        ralph_add_constraint(model, count, vars, coefs, RALPH_EQUAL, supply[i]);
+        ralph_test_add_constraint(model, count, vars, coefs, RALPH_EQUAL, supply[i]);
     }
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
-    ralph_optimize(model);
-    RalphStatus lp_status = ralph_get_status(model);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_optimize(model);
+    RalphStatus lp_status = ralph_test_get_status(model);
     ASSERT(lp_status == RALPH_STATUS_OPTIMAL, "LP optimal");
 
-    double lp_obj = ralph_get_objval(model);
+    double lp_obj = ralph_test_get_objval(model);
     ASSERT_NEAR(ns_obj, lp_obj, TOLERANCE, "Objectives match");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 /* ============================================================================

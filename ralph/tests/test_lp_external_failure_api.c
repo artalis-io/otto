@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -70,31 +70,31 @@ static RalphLPExternalAdapter build_failure_adapter(FailureFixture *fx,
 }
 
 static RalphModel* build_small_lp(void) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return NULL;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
-    ralph_set_int_param(model, "detect_special", 0);
-    ralph_set_int_param(model, "presolve", 0);
-    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_int_param(model, "detect_special", 0);
+    ralph_test_set_int_param(model, "presolve", 0);
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
     {
         int idx[] = {0};
         double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 1.0);
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 1.0);
     }
     return model;
 }
 
 static void test_guards_and_no_external_failure(void) {
     RalphModel *model = build_small_lp();
-    RalphModel *mip = ralph_create();
+    RalphModel *mip = ralph_test_create();
     RalphLPExternalFailureReport report;
 
     ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(NULL, &report), -1,
                   "guards: NULL model rejected");
     ASSERT_TRUE(model != NULL, "guards: LP model created");
     if (!model) {
-        if (mip) ralph_free(mip);
+        if (mip) ralph_test_free(mip);
         return;
     }
     ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, NULL), -1,
@@ -102,28 +102,28 @@ static void test_guards_and_no_external_failure(void) {
     ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, &report), -1,
                   "guards: report unavailable before solve");
 
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "guards: default LP solve succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "guards: default LP status optimal");
     ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, &report), -1,
                   "guards: no external failure report on internal solve");
 
-    ASSERT_INT_EQ(ralph_set_obj_coef(model, 0, 2.0), 0,
+    ASSERT_INT_EQ(ralph_test_set_obj_coef(model, 0, 2.0), 0,
                   "guards: model edit succeeds");
     ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, &report), -1,
                   "guards: report unavailable after invalidation");
 
     ASSERT_TRUE(mip != NULL, "guards: MIP model created");
     if (mip) {
-        ralph_set_obj_sense(mip, RALPH_MAXIMIZE);
-        ralph_add_var(mip, 0.0, 1.0, 1.0, RALPH_BINARY);
+        ralph_test_set_obj_sense(mip, RALPH_MAXIMIZE);
+        ralph_test_add_var(mip, 0.0, 1.0, 1.0, RALPH_BINARY);
         ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(mip, &report), -1,
                       "guards: report rejected for MIP model");
-        ralph_free(mip);
+        ralph_test_free(mip);
     }
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_dispatch_failure_provider_required_nonfatal(void) {
@@ -138,9 +138,9 @@ static void test_dispatch_failure_provider_required_nonfatal(void) {
                                          (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL),
                   0,
                   "dispatch/provider-required: request external primal");
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "dispatch/provider-required: falls back and solves");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "dispatch/provider-required: status optimal");
 
     ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, &report), 0,
@@ -171,7 +171,7 @@ static void test_dispatch_failure_provider_required_nonfatal(void) {
     ASSERT_INT_EQ(report.fatal, 0,
                   "dispatch/provider-required: fallback is non-fatal");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_dispatch_failure_provider_unregistered_strict(void) {
@@ -193,9 +193,9 @@ static void test_dispatch_failure_provider_unregistered_strict(void) {
     ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 1),
                   0,
                   "dispatch/provider-unregistered: enable strict mode");
-    ASSERT_INT_EQ(ralph_optimize_lp(model), -1,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), -1,
                   "dispatch/provider-unregistered: strict mode fails solve");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_ERROR,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_ERROR,
                   "dispatch/provider-unregistered: status error");
 
     ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, &report), 0,
@@ -210,7 +210,7 @@ static void test_dispatch_failure_provider_unregistered_strict(void) {
     ASSERT_INT_EQ((int)report.mapped_status, (int)RALPH_STATUS_ERROR,
                   "dispatch/provider-unregistered: mapped status error");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_dispatch_failure_backend_unsupported(void) {
@@ -245,9 +245,9 @@ static void test_dispatch_failure_backend_unsupported(void) {
                                          (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
                   0,
                   "dispatch/backend-unsupported: set provider GLPK");
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "dispatch/backend-unsupported: fallback solve succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "dispatch/backend-unsupported: status optimal");
 
     ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, &report), 0,
@@ -262,7 +262,7 @@ static void test_dispatch_failure_backend_unsupported(void) {
     ASSERT_INT_EQ(report.fatal, 0,
                   "dispatch/backend-unsupported: fallback non-fatal");
 
-    ralph_free(model);
+    ralph_test_free(model);
     ralph_unregister_all_lp_external_adapters();
 }
 
@@ -298,9 +298,9 @@ static void test_execution_failure_time_limit_mapping(void) {
                                          (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
                   0,
                   "execution/time-limit: set provider GLPK");
-    ASSERT_INT_EQ(ralph_optimize_lp(model), -1,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), -1,
                   "execution/time-limit: external solve failure propagated");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_TIME_LIMIT,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_TIME_LIMIT,
                   "execution/time-limit: status mapped to time limit");
 
     ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, &report), 0,
@@ -321,7 +321,7 @@ static void test_execution_failure_time_limit_mapping(void) {
     ASSERT_INT_EQ((int)report.backend, (int)RALPH_LP_EXTERNAL_BACKEND_SIMPLEX,
                   "execution/time-limit: backend tracked");
 
-    ralph_free(model);
+    ralph_test_free(model);
     ralph_unregister_all_lp_external_adapters();
 }
 
@@ -357,9 +357,9 @@ static void test_execution_failure_generic_mapping(void) {
                                          (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
                   0,
                   "execution/generic: set provider GLPK");
-    ASSERT_INT_EQ(ralph_optimize_lp(model), -1,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), -1,
                   "execution/generic: external solve failure propagated");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_ERROR,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_ERROR,
                   "execution/generic: status mapped to error");
 
     ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, &report), 0,
@@ -376,7 +376,7 @@ static void test_execution_failure_generic_mapping(void) {
     ASSERT_INT_EQ(report.fatal, 1,
                   "execution/generic: execution failure fatal");
 
-    ralph_free(model);
+    ralph_test_free(model);
     ralph_unregister_all_lp_external_adapters();
 }
 

@@ -11,7 +11,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -74,17 +74,17 @@ static int write_mock_script(const char *script_body, char *path, size_t path_si
 }
 
 static RalphModel* build_small_lp(void) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return NULL;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
-    ralph_set_int_param(model, "detect_special", 0);
-    ralph_set_int_param(model, "presolve", 0);
-    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_int_param(model, "detect_special", 0);
+    ralph_test_set_int_param(model, "presolve", 0);
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
     {
         int idx[] = {0};
         double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 1.0);
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 1.0);
     }
     return model;
 }
@@ -177,28 +177,28 @@ static void test_primal_simplex_oop_success_with_duals(void) {
                                          (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
                   0,
                   "primal/success: set provider GLPK");
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "primal/success: solve succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "primal/success: status optimal");
-    ASSERT_DBL_CLOSE(ralph_get_objval(model), 1.0, 1e-9,
+    ASSERT_DBL_CLOSE(ralph_test_get_objval(model), 1.0, 1e-9,
                      "primal/success: objective propagated");
-    ASSERT_INT_EQ(ralph_get_iterations(model), 11,
+    ASSERT_INT_EQ(ralph_test_get_iterations(model), 11,
                   "primal/success: iterations propagated");
-    ASSERT_INT_EQ(ralph_get_solution(model, &x), 0,
+    ASSERT_INT_EQ(ralph_test_get_solution(model, &x), 0,
                   "primal/success: solution available");
     ASSERT_DBL_CLOSE(x, 1.0, 1e-9,
                      "primal/success: solution propagated");
-    ASSERT_INT_EQ(ralph_get_dual_solution(model, &y), 0,
+    ASSERT_INT_EQ(ralph_test_get_dual_solution(model, &y), 0,
                   "primal/success: dual solution available");
     ASSERT_DBL_CLOSE(y, 1.0, 1e-9,
                      "primal/success: dual propagated");
-    ASSERT_INT_EQ(ralph_get_reduced_costs(model, &rc), 0,
+    ASSERT_INT_EQ(ralph_test_get_reduced_costs(model, &rc), 0,
                   "primal/success: reduced costs available");
     ASSERT_DBL_CLOSE(rc, 0.0, 1e-9,
                      "primal/success: reduced costs propagated");
 
-    ralph_free(model);
+    ralph_test_free(model);
     ralph_unregister_all_lp_external_adapters();
     unlink(script_path);
 }
@@ -255,18 +255,18 @@ static void test_dual_simplex_routes_dual_flag(void) {
                                          (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
                   0,
                   "dual/route: set provider GLPK");
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "dual/route: solve succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "dual/route: status optimal");
-    ASSERT_INT_EQ(ralph_get_solution(model, &x), 0,
+    ASSERT_INT_EQ(ralph_test_get_solution(model, &x), 0,
                   "dual/route: solution available");
     ASSERT_DBL_CLOSE(x, 2.0, 1e-9,
                      "dual/route: dual flag script output used");
-    ASSERT_INT_EQ(ralph_get_iterations(model), 17,
+    ASSERT_INT_EQ(ralph_test_get_iterations(model), 17,
                   "dual/route: iterations propagated");
 
-    ralph_free(model);
+    ralph_test_free(model);
     ralph_unregister_all_lp_external_adapters();
     unlink(script_path);
 }
@@ -329,11 +329,11 @@ static void test_status_hints_for_infeasible_and_unbounded(void) {
                                              (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
                       0,
                       "status-hints: set provider (inf)");
-        ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+        ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                       "status-hints: infeasible solve returns success rc");
-        ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_INFEASIBLE,
+        ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_INFEASIBLE,
                       "status-hints: mapped infeasible");
-        ralph_free(model);
+        ralph_test_free(model);
     }
     ralph_unregister_all_lp_external_adapters();
 
@@ -353,11 +353,11 @@ static void test_status_hints_for_infeasible_and_unbounded(void) {
                                              (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
                       0,
                       "status-hints: set provider (unb)");
-        ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+        ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                       "status-hints: unbounded solve returns success rc");
-        ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_UNBOUNDED,
+        ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_UNBOUNDED,
                       "status-hints: mapped unbounded");
-        ralph_free(model);
+        ralph_test_free(model);
     }
 
     ralph_unregister_all_lp_external_adapters();
@@ -413,9 +413,9 @@ static void test_time_limit_maps_to_external_failure_report(void) {
                                          (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
                   0,
                   "time-limit: set provider GLPK");
-    ASSERT_INT_EQ(ralph_optimize_lp(model), -1,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), -1,
                   "time-limit: solve returns failure");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_TIME_LIMIT,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_TIME_LIMIT,
                   "time-limit: status mapped");
 
     ASSERT_INT_EQ(ralph_get_last_lp_external_failure_report(model, &report), 0,
@@ -427,7 +427,7 @@ static void test_time_limit_maps_to_external_failure_report(void) {
     ASSERT_INT_EQ(report.adapter_return_code, (int)RALPH_LP_EXTERNAL_ADAPTER_RC_TIME_LIMIT,
                   "time-limit: adapter rc tracked");
 
-    ralph_free(model);
+    ralph_test_free(model);
     ralph_unregister_all_lp_external_adapters();
     unlink(script_path);
 }

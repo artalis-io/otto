@@ -5,7 +5,7 @@
  */
 
 #include <stdio.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -29,59 +29,59 @@ static int tests_passed = 0;
 } while (0)
 
 static RalphModel* build_row_core_infeasible(int force_two_phase) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return NULL;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
-    ralph_set_int_param(model, "method", 0);
-    ralph_set_int_param(model, "presolve", 0);
-    ralph_set_int_param(model, "force_two_phase", force_two_phase ? 1 : 0);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_int_param(model, "method", 0);
+    ralph_test_set_int_param(model, "presolve", 0);
+    ralph_test_set_int_param(model, "force_two_phase", force_two_phase ? 1 : 0);
 
-    ralph_add_var(model, 0.0, RALPH_INFINITY, 0.0, RALPH_CONTINUOUS); /* x */
-    ralph_add_var(model, 0.0, RALPH_INFINITY, 0.0, RALPH_CONTINUOUS); /* y */
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, 0.0, RALPH_CONTINUOUS); /* x */
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, 0.0, RALPH_CONTINUOUS); /* y */
 
     /* Infeasible core: x >= 2 and x <= 1 */
     {
         int idx[] = {0}; double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 2.0); /* row 0 */
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 2.0); /* row 0 */
     }
     {
         int idx[] = {0}; double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_LESS_EQUAL, 1.0);    /* row 1 */
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_LESS_EQUAL, 1.0);    /* row 1 */
     }
     /* Redundant rows */
     {
         int idx[] = {1}; double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 0.0); /* row 2 */
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 0.0); /* row 2 */
     }
     {
         int idx[] = {0, 1}; double val[] = {1.0, 1.0};
-        ralph_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 0.0); /* row 3 */
+        ralph_test_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 0.0); /* row 3 */
     }
 
     return model;
 }
 
 static RalphModel* build_rows_plus_bound_conflict(void) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return NULL;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
-    ralph_set_int_param(model, "method", 0);
-    ralph_set_int_param(model, "presolve", 0);
-    ralph_set_int_param(model, "force_two_phase", 1);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_int_param(model, "method", 0);
+    ralph_test_set_int_param(model, "presolve", 0);
+    ralph_test_set_int_param(model, "force_two_phase", 1);
 
     /* Keep a bound conflict in-model. */
-    ralph_add_var(model, 2.0, 1.0, 0.0, RALPH_CONTINUOUS); /* 2 <= x <= 1 */
+    ralph_test_add_var(model, 2.0, 1.0, 0.0, RALPH_CONTINUOUS); /* 2 <= x <= 1 */
 
     /* Also add row conflict so current LP status is INFEASIBLE robustly. */
     {
         int idx[] = {0}; double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 10.0);
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 10.0);
     }
     {
         int idx[] = {0}; double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_LESS_EQUAL, 5.0);
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_LESS_EQUAL, 5.0);
     }
 
     return model;
@@ -103,8 +103,8 @@ static void test_lp_conflict_guards(void) {
     ASSERT_INT_EQ(ralph_compute_lp_conflict(lp, &opts, members, 8, &count, &report), -1,
                   "guard: conflict API unavailable before solve");
 
-    ASSERT_INT_EQ(ralph_optimize_lp(lp), 0, "guard: LP solve succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(lp), (int)RALPH_STATUS_INFEASIBLE,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(lp), 0, "guard: LP solve succeeds");
+    ASSERT_INT_EQ((int)ralph_test_get_status(lp), (int)RALPH_STATUS_INFEASIBLE,
                   "guard: LP infeasible");
 
     ASSERT_INT_EQ(ralph_compute_lp_conflict(NULL, &opts, members, 8, &count, &report), -1,
@@ -116,18 +116,18 @@ static void test_lp_conflict_guards(void) {
     ASSERT_INT_EQ(ralph_compute_lp_conflict(lp, &opts, members, -1, &count, &report), -1,
                   "guard: negative capacity rejected");
 
-    mip = ralph_create();
+    mip = ralph_test_create();
     ASSERT_TRUE(mip != NULL, "guard: MIP model created");
     if (mip) {
-        ralph_set_obj_sense(mip, RALPH_MAXIMIZE);
-        ralph_add_var(mip, 0.0, 1.0, 1.0, RALPH_BINARY);
-        ASSERT_INT_EQ(ralph_optimize_mip(mip), 0, "guard: MIP optimize succeeds");
+        ralph_test_set_obj_sense(mip, RALPH_MAXIMIZE);
+        ralph_test_add_var(mip, 0.0, 1.0, 1.0, RALPH_BINARY);
+        ASSERT_INT_EQ(ralph_test_optimize_mip(mip), 0, "guard: MIP optimize succeeds");
         ASSERT_INT_EQ(ralph_compute_lp_conflict(mip, &opts, members, 8, &count, &report), -1,
                       "guard: conflict API is LP-only");
     }
 
-    ralph_free(lp);
-    ralph_free(mip);
+    ralph_test_free(lp);
+    ralph_test_free(mip);
 }
 
 static void test_lp_conflict_row_only_and_iis_compat(void) {
@@ -142,8 +142,8 @@ static void test_lp_conflict_row_only_and_iis_compat(void) {
     ASSERT_TRUE(model != NULL, "row-only: model created");
     if (!model) return;
 
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0, "row-only: optimize succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_INFEASIBLE,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0, "row-only: optimize succeeds");
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_INFEASIBLE,
                   "row-only: model infeasible");
 
     opts.include_bounds = 0;
@@ -170,7 +170,7 @@ static void test_lp_conflict_row_only_and_iis_compat(void) {
                   "row-only: size query reports insufficient capacity");
     ASSERT_INT_EQ(count, 2, "row-only: size query returns required count");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_lp_conflict_include_bounds_stability(void) {
@@ -182,8 +182,8 @@ static void test_lp_conflict_include_bounds_stability(void) {
     ASSERT_TRUE(model != NULL, "include-bounds: model created");
     if (!model) return;
 
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0, "include-bounds: optimize succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_INFEASIBLE,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0, "include-bounds: optimize succeeds");
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_INFEASIBLE,
                   "include-bounds: model infeasible");
 
     opts.include_bounds = 1;
@@ -198,7 +198,7 @@ static void test_lp_conflict_include_bounds_stability(void) {
                   "include-bounds: member 1 row");
     ASSERT_INT_EQ((int)members[1].index, 1, "include-bounds: member 1 row idx");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_lp_conflict_bound_members(void) {
@@ -210,8 +210,8 @@ static void test_lp_conflict_bound_members(void) {
     ASSERT_TRUE(model != NULL, "bound-members: model created");
     if (!model) return;
 
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0, "bound-members: optimize succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_INFEASIBLE,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0, "bound-members: optimize succeeds");
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_INFEASIBLE,
                   "bound-members: model infeasible");
 
     opts.include_bounds = 0;
@@ -231,7 +231,7 @@ static void test_lp_conflict_bound_members(void) {
                   "bound-members: member 1 is upper bound");
     ASSERT_INT_EQ((int)members[1].index, 0, "bound-members: member 1 var index");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_lp_conflict_farkas_seed_stability(void) {
@@ -247,8 +247,8 @@ static void test_lp_conflict_farkas_seed_stability(void) {
     ASSERT_TRUE(model != NULL, "seed: model created");
     if (!model) return;
 
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0, "seed: optimize succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_INFEASIBLE,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0, "seed: optimize succeeds");
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_INFEASIBLE,
                   "seed: model infeasible");
 
     opts_no_seed.include_bounds = 0;
@@ -270,7 +270,7 @@ static void test_lp_conflict_farkas_seed_stability(void) {
                 "seed: report flag is boolean");
     ASSERT_TRUE(report.seeded_rows >= 0, "seed: seeded rows non-negative");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 int main(void) {

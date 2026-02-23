@@ -16,7 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 #define LOTFI_OPT -25.2647060619
 
@@ -37,72 +37,72 @@ int main(void) {
     /* Test WITHOUT presolve - expected to fail */
     printf("--- Test 1: Solve WITHOUT presolve (expect failure) ---\n");
     {
-        RalphModel *model = ralph_create();
+        RalphModel *model = ralph_test_create();
         if (!model) { printf("Failed to create model\n"); return 1; }
 
-        int load_ret = ralph_read_mps(model, mps_path);
+        int load_ret = ralph_test_read_mps(model, mps_path);
         if (load_ret != 0) {
             printf("Failed to load %s (error %d)\n", mps_path, load_ret);
-            ralph_free(model);
+            ralph_test_free(model);
             return 1;
         }
         TEST(load_ret == 0, "Loaded lotfi.mps successfully");
 
-        int orig_vars = ralph_get_num_vars(model);
-        int orig_cons = ralph_get_num_cons(model);
+        int orig_vars = ralph_test_get_num_vars(model);
+        int orig_cons = ralph_test_get_num_cons(model);
         printf("  Original problem: %d vars, %d cons\n", orig_vars, orig_cons);
 
         TEST(orig_vars == 308, "Original variables = 308");
         TEST(orig_cons == 153, "Original constraints = 153");
 
-        ralph_set_int_param(model, "presolve", 0);
-        ralph_set_int_param(model, "verbose", 0);
+        ralph_test_set_int_param(model, "presolve", 0);
+        ralph_test_set_int_param(model, "verbose", 0);
 
-        ralph_optimize(model);
-        RalphStatus status = ralph_get_status(model);
-        int iters = ralph_get_iterations(model);
-        printf("  Status: %s, Iterations: %d\n", ralph_status_string(status), iters);
+        ralph_test_optimize(model);
+        RalphStatus status = ralph_test_get_status(model);
+        int iters = ralph_test_get_iterations(model);
+        printf("  Status: %s, Iterations: %d\n", ralph_test_status_string(status), iters);
 
         /* lotfi was originally numerically challenging without presolve,
          * but solver improvements now allow it to solve. Accept either. */
         TEST(status == RALPH_STATUS_OPTIMAL || status != RALPH_STATUS_OPTIMAL,
              "Without presolve, lotfi either solves or fails (both acceptable)");
 
-        ralph_free(model);
+        ralph_test_free(model);
     }
 
     /* Test WITH presolve - should solve */
     printf("\n--- Test 2: Solve WITH presolve ---\n");
     {
-        RalphModel *model = ralph_create();
+        RalphModel *model = ralph_test_create();
         if (!model) { printf("Failed to create model\n"); return 1; }
 
-        int load_ret = ralph_read_mps(model, mps_path);
+        int load_ret = ralph_test_read_mps(model, mps_path);
         if (load_ret != 0) {
             printf("Failed to reload %s\n", mps_path);
-            ralph_free(model);
+            ralph_test_free(model);
             return 1;
         }
 
-        ralph_set_int_param(model, "presolve", 1);
-        ralph_set_int_param(model, "verbose", 0);
+        ralph_test_set_int_param(model, "presolve", 1);
+        ralph_test_set_int_param(model, "verbose", 0);
 
-        ralph_optimize(model);
-        RalphStatus status = ralph_get_status(model);
-        int iters = ralph_get_iterations(model);
-        printf("  Status: %s, Iterations: %d\n", ralph_status_string(status), iters);
+        ralph_test_optimize(model);
+        RalphStatus status = ralph_test_get_status(model);
+        int iters = ralph_test_get_iterations(model);
+        printf("  Status: %s, Iterations: %d\n", ralph_test_status_string(status), iters);
 
         TEST(status == RALPH_STATUS_OPTIMAL, "lotfi solves OPTIMAL with presolve");
 
         if (status == RALPH_STATUS_OPTIMAL) {
-            double obj = ralph_get_objval(model);
+            double obj = ralph_test_get_objval(model);
             double rel_err = fabs(obj - LOTFI_OPT) / (fabs(LOTFI_OPT) + 1e-10);
             printf("  Objective: %.10f (expected: %.10f, rel_err: %.2e)\n",
                    obj, LOTFI_OPT, rel_err);
             TEST(rel_err < 0.01, "Objective within 1% of NETLIB reference");
         }
 
-        ralph_free(model);
+        ralph_test_free(model);
     }
 
     printf("\n══════════════════════════════════════════════════════════\n");

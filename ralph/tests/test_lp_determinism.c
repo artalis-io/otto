@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 #include "lp.h"
 
 static int tests_run = 0;
@@ -44,22 +44,22 @@ SimplexSolver* ralph_get_lp_solver(const RalphModel *model);
 } while (0)
 
 static RalphModel* build_repeatable_lp(void) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return NULL;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
-    ralph_add_var(model, 0.0, RALPH_INFINITY, -3.0, RALPH_CONTINUOUS);
-    ralph_add_var(model, 0.0, RALPH_INFINITY, -2.0, RALPH_CONTINUOUS);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, -3.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, -2.0, RALPH_CONTINUOUS);
 
     {
         int idx[] = {0, 1};
         double val[] = {1.0, 1.0};
-        ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 4.0);
+        ralph_test_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 4.0);
     }
     {
         int idx[] = {0, 1};
         double val[] = {2.0, 1.0};
-        ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 5.0);
+        ralph_test_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 5.0);
     }
 
     return model;
@@ -141,16 +141,16 @@ static void test_runtime_determinism_param_propagation(void) {
     ASSERT_TRUE(model != NULL, "model created for runtime propagation");
     if (!model) return;
 
-    ASSERT_TRUE(ralph_set_int_param(model, "telemetry", 0) == 0,
+    ASSERT_TRUE(ralph_test_set_int_param(model, "telemetry", 0) == 0,
                 "telemetry=0 accepted");
-    ASSERT_TRUE(ralph_set_int_param(model, "deterministic", 1) == 0,
+    ASSERT_TRUE(ralph_test_set_int_param(model, "deterministic", 1) == 0,
                 "deterministic=1 accepted");
-    ASSERT_TRUE(ralph_set_int_param(model, "random_seed", 42) == 0,
+    ASSERT_TRUE(ralph_test_set_int_param(model, "random_seed", 42) == 0,
                 "random_seed accepted");
-    ASSERT_TRUE(ralph_set_int_param(model, "lp_threads", 2) == 0,
+    ASSERT_TRUE(ralph_test_set_int_param(model, "lp_threads", 2) == 0,
                 "lp_threads accepted");
-    ASSERT_TRUE(ralph_optimize_lp(model) == 0, "LP solve succeeds with determinism params");
-    ASSERT_TRUE(ralph_get_status(model) == RALPH_STATUS_OPTIMAL, "LP solve is optimal");
+    ASSERT_TRUE(ralph_test_optimize_lp(model) == 0, "LP solve succeeds with determinism params");
+    ASSERT_TRUE(ralph_test_get_status(model) == RALPH_STATUS_OPTIMAL, "LP solve is optimal");
 
     {
         SimplexSolver *solver = ralph_get_lp_solver(model);
@@ -167,7 +167,7 @@ static void test_runtime_determinism_param_propagation(void) {
                     "runtime effective LP threads captured");
     }
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_repeatability_contract(void) {
@@ -182,23 +182,23 @@ static void test_repeatability_contract(void) {
         ASSERT_TRUE(model != NULL, "repeatability: model created");
         if (!model) continue;
 
-        ASSERT_TRUE(ralph_set_int_param(model, "presolve", 0) == 0,
+        ASSERT_TRUE(ralph_test_set_int_param(model, "presolve", 0) == 0,
                     "repeatability: presolve=0 accepted");
-        ASSERT_TRUE(ralph_set_int_param(model, "method", 0) == 0,
+        ASSERT_TRUE(ralph_test_set_int_param(model, "method", 0) == 0,
                     "repeatability: method=0 accepted");
-        ASSERT_TRUE(ralph_set_int_param(model, "deterministic", 1) == 0,
+        ASSERT_TRUE(ralph_test_set_int_param(model, "deterministic", 1) == 0,
                     "repeatability: deterministic=1 accepted");
-        ASSERT_TRUE(ralph_set_int_param(model, "random_seed", 123) == 0,
+        ASSERT_TRUE(ralph_test_set_int_param(model, "random_seed", 123) == 0,
                     "repeatability: random_seed accepted");
-        ASSERT_TRUE(ralph_set_int_param(model, "lp_threads", 1) == 0,
+        ASSERT_TRUE(ralph_test_set_int_param(model, "lp_threads", 1) == 0,
                     "repeatability: lp_threads=1 accepted");
-        ASSERT_TRUE(ralph_optimize_lp(model) == 0, "repeatability: LP solve succeeds");
+        ASSERT_TRUE(ralph_test_optimize_lp(model) == 0, "repeatability: LP solve succeeds");
 
-        RalphStatus st = ralph_get_status(model);
-        double obj = ralph_get_objval(model);
-        int iter = ralph_get_iterations(model);
+        RalphStatus st = ralph_test_get_status(model);
+        double obj = ralph_test_get_objval(model);
+        int iter = ralph_test_get_iterations(model);
         double x[2] = {0.0, 0.0};
-        (void)ralph_get_solution(model, x);
+        (void)ralph_test_get_solution(model, x);
 
         if (r == 0) {
             status_ref = st;
@@ -214,7 +214,7 @@ static void test_repeatability_contract(void) {
             ASSERT_DBL_NEAR(x[1], x_ref[1], 1e-10, "repeatability: x[1] stable");
         }
 
-        ralph_free(model);
+        ralph_test_free(model);
     }
 }
 

@@ -26,7 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 /* Expected optimal objective for beaconfd (for when we fix numerical issues) */
 #define BEACONFD_OPT 33592.4858072
@@ -45,24 +45,24 @@ int main(void) {
 
     /* Create model and load beaconfd from MPS file */
     const char *mps_path = "benchmarks/netlib/beaconfd.mps";
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
 
     if (!model) {
         printf("Failed to create model\n");
         return 1;
     }
 
-    int load_ret = ralph_read_mps(model, mps_path);
+    int load_ret = ralph_test_read_mps(model, mps_path);
     if (load_ret != 0) {
         printf("Failed to load %s (error %d)\n", mps_path, load_ret);
-        ralph_free(model);
+        ralph_test_free(model);
         return 1;
     }
 
     TEST(load_ret == 0, "Loaded beaconfd.mps successfully");
 
-    int orig_vars = ralph_get_num_vars(model);
-    int orig_cons = ralph_get_num_cons(model);
+    int orig_vars = ralph_test_get_num_vars(model);
+    int orig_cons = ralph_test_get_num_cons(model);
     printf("\nOriginal problem:\n");
     printf("  Variables: %d\n", orig_vars);
     printf("  Constraints: %d\n", orig_cons);
@@ -72,13 +72,13 @@ int main(void) {
 
     /* Test WITHOUT presolve - expected to fail */
     printf("\n--- Test 1: Solve WITHOUT presolve (expect failure) ---\n");
-    ralph_set_int_param(model, "presolve", 0);
-    ralph_set_int_param(model, "verbose", 0);
+    ralph_test_set_int_param(model, "presolve", 0);
+    ralph_test_set_int_param(model, "verbose", 0);
 
-    ralph_optimize(model);
-    RalphStatus status_no_presolve = ralph_get_status(model);
-    int iters_no_presolve = ralph_get_iterations(model);
-    printf("Status without presolve: %s\n", ralph_status_string(status_no_presolve));
+    ralph_test_optimize(model);
+    RalphStatus status_no_presolve = ralph_test_get_status(model);
+    int iters_no_presolve = ralph_test_get_iterations(model);
+    printf("Status without presolve: %s\n", ralph_test_status_string(status_no_presolve));
     printf("Iterations without presolve: %d\n", iters_no_presolve);
 
     /* beaconfd was originally numerically challenging without presolve,
@@ -91,20 +91,20 @@ int main(void) {
     printf("\n--- Test 2: Solve WITH presolve ---\n");
 
     /* Need to reload the model since solve may have modified state */
-    ralph_free(model);
-    model = ralph_create();
-    if (!model || ralph_read_mps(model, mps_path) != 0) {
+    ralph_test_free(model);
+    model = ralph_test_create();
+    if (!model || ralph_test_read_mps(model, mps_path) != 0) {
         printf("Failed to reload model\n");
         return 1;
     }
 
-    ralph_set_int_param(model, "presolve", 1);
-    ralph_set_int_param(model, "verbose", 0);
+    ralph_test_set_int_param(model, "presolve", 1);
+    ralph_test_set_int_param(model, "verbose", 0);
 
-    ralph_optimize(model);
-    RalphStatus status_presolve = ralph_get_status(model);
-    int iters_presolve = ralph_get_iterations(model);
-    printf("Status with presolve: %s\n", ralph_status_string(status_presolve));
+    ralph_test_optimize(model);
+    RalphStatus status_presolve = ralph_test_get_status(model);
+    int iters_presolve = ralph_test_get_iterations(model);
+    printf("Status with presolve: %s\n", ralph_test_status_string(status_presolve));
     printf("Iterations with presolve: %d\n", iters_presolve);
 
     TEST(status_presolve != RALPH_STATUS_ERROR,
@@ -114,14 +114,14 @@ int main(void) {
 
     /* Currently presolve improves robustness but may still miss OPTIMAL due to numerics. */
     if (status_presolve == RALPH_STATUS_OPTIMAL) {
-        double obj = ralph_get_objval(model);
+        double obj = ralph_test_get_objval(model);
         printf("Objective: %.6f (expected: %.6f)\n", obj, BEACONFD_OPT);
 
         /* Debug: check for NaN/Inf in solution */
-        int n = ralph_get_num_vars(model);
+        int n = ralph_test_get_num_vars(model);
         double *sol = (double*)malloc(n * sizeof(double));
         if (sol) {
-            ralph_get_solution(model, sol);
+            ralph_test_get_solution(model, sol);
             int nan_count = 0, inf_count = 0;
             for (int j = 0; j < n; j++) {
                 if (isnan(sol[j])) nan_count++;
@@ -144,7 +144,7 @@ int main(void) {
     }
 
     /* Cleanup */
-    ralph_free(model);
+    ralph_test_free(model);
 
     printf("\n══════════════════════════════════════════════════════════\n");
     printf("Test Summary: %d/%d passed (%.1f%%)\n", pass_count, test_count,

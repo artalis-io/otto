@@ -22,7 +22,7 @@
 #include <math.h>
 
 /* Ralph headers */
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 /* GLPK header
  * TODO(lp-external-mip): migrate benchmark GLPK side to the external OOP adapter
@@ -522,27 +522,27 @@ typedef struct {
 static SolveResult solve_with_ralph(MIPProblem *prob, double time_limit, int use_specialized) {
     SolveResult result = {0};
 
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) {
         result.status = 2;
         return result;
     }
 
-    ralph_set_int_param(model, "verbose", 0);
-    ralph_set_dbl_param(model, "time_limit", time_limit);
-    ralph_set_int_param(model, "max_nodes", 100000);
-    ralph_set_int_param(model, "presolve", 1);  /* Enable presolve for MIP */
+    ralph_test_set_int_param(model, "verbose", 0);
+    ralph_test_set_dbl_param(model, "time_limit", time_limit);
+    ralph_test_set_int_param(model, "max_nodes", 100000);
+    ralph_test_set_int_param(model, "presolve", 1);  /* Enable presolve for MIP */
 
     /* Enable specialized solvers (LAP, Network Simplex, SCP Lagrangian) */
     if (use_specialized) {
-        ralph_set_int_param(model, "detect_special", 1);
+        ralph_test_set_int_param(model, "detect_special", 1);
     }
 
-    ralph_set_obj_sense(model, prob->sense);
+    ralph_test_set_obj_sense(model, prob->sense);
 
     /* Add variables */
     for (int j = 0; j < prob->num_vars; j++) {
-        ralph_add_var(model, prob->lb[j], prob->ub[j], prob->obj[j], prob->vtype[j]);
+        ralph_test_add_var(model, prob->lb[j], prob->ub[j], prob->obj[j], prob->vtype[j]);
     }
 
     /* Build constraint arrays per row */
@@ -569,7 +569,7 @@ static SolveResult solve_with_ralph(MIPProblem *prob, double time_limit, int use
     /* Add constraints */
     for (int i = 0; i < prob->num_cons; i++) {
         int nnz = row_start[i + 1] - row_start[i];
-        ralph_add_constraint(model, nnz, &row_idx[row_start[i]],
+        ralph_test_add_constraint(model, nnz, &row_idx[row_start[i]],
                             &row_val[row_start[i]], prob->sense_con[i], prob->rhs[i]);
     }
 
@@ -580,16 +580,16 @@ static SolveResult solve_with_ralph(MIPProblem *prob, double time_limit, int use
 
     /* Solve and time */
     clock_t start = clock();
-    ralph_optimize(model);
+    ralph_test_optimize(model);
     clock_t end = clock();
 
     result.solve_time = (double)(end - start) / CLOCKS_PER_SEC;
-    result.objective = ralph_get_objval(model);
-    result.nodes = ralph_get_node_count(model);
-    result.iterations = ralph_get_iterations(model);
+    result.objective = ralph_test_get_objval(model);
+    result.nodes = ralph_test_get_node_count(model);
+    result.iterations = ralph_test_get_iterations(model);
 
-    /* Get status via ralph_get_status, not return value of ralph_optimize */
-    RalphStatus status = ralph_get_status(model);
+    /* Get status via ralph_test_get_status, not return value of ralph_test_optimize */
+    RalphStatus status = ralph_test_get_status(model);
     if (status == RALPH_STATUS_OPTIMAL) {
         result.status = 0;
     } else if (status == RALPH_STATUS_INFEASIBLE) {
@@ -598,7 +598,7 @@ static SolveResult solve_with_ralph(MIPProblem *prob, double time_limit, int use
         result.status = 2;
     }
 
-    ralph_free(model);
+    ralph_test_free(model);
     return result;
 }
 
@@ -827,7 +827,7 @@ static void print_header(void) {
     printf("================================================================================\n");
     printf("\n");
     printf("Comparing Ralph %s against GLPK %d.%d on classic MIP problems\n",
-           ralph_version(), GLP_MAJOR_VERSION, GLP_MINOR_VERSION);
+           ralph_test_version(), GLP_MAJOR_VERSION, GLP_MINOR_VERSION);
     printf("Note: MIP GLPK path is still in-process libglpk; TODO migrate to external OOP MIP adapter.\n");
 }
 
