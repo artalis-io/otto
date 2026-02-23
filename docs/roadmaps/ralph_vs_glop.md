@@ -1,5 +1,20 @@
 # Ralph LP Solver: GLOP Comparison & Improvement Plan
 
+## 2026-02-23 Addendum (API/Architecture Baseline `abd62fa`)
+
+The original comparison focused on LP/MIP runtime behavior. Ralph now also has a significantly
+improved API/architecture baseline:
+- explicit LP/MIP solve entry points (`ralph_optimize_lp`, `ralph_optimize_mip`) with
+  compatibility-only `ralph_optimize` dispatch,
+- typed/scoped parameters with metadata/introspection,
+- public LP algorithm capability/report contracts,
+- dedicated LP backend dispatch module (`ralph/src/lp_dispatch.c`) with orthogonal tests,
+- expanded LP diagnostics (presolve report, telemetry snapshots, solution quality, progress/cancel).
+
+This means current parity discussion vs GLOP should treat API contract maturity separately from
+remaining runtime/backend gaps. The major open LP backend gap remains real barrier/crossover
+execution (API surface exists; capability is currently gated off with explicit fallback reporting).
+
 **Date:** 2026-02-11
 **Reference:** [Google OR-Tools GLOP](https://github.com/google/or-tools/tree/stable/ortools/glop)
 
