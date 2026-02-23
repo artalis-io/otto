@@ -1440,6 +1440,121 @@ int ralph_get_solution_quality(const RalphModel *model, RalphSolutionQuality *qu
     return 0;
 }
 
+static int ralph_get_lp_tableau_for_sensitivity(const RalphModel *model,
+                                                const SimplexTableau **tab_out) {
+    const SimplexTableau *tab = NULL;
+    if (!model || !tab_out || !model->lp_model) return -1;
+    if (ralph_is_mip(model)) return -1;
+    if (model->status != RALPH_STATUS_OPTIMAL) return -1;
+    if (!model->lp_solver || !model->lp_solver->tableau) return -1;
+
+    tab = model->lp_solver->tableau;
+    if (!tab || tab->phase != 2) return -1;
+    if (!tab->lu || !tab->basis || !tab->basis_pos || !tab->var_status) return -1;
+
+    /* v1 contract: unavailable when presolve solved a reduced-dimension model. */
+    if (tab->model != model->lp_model) return -1;
+    if (tab->m != model->lp_model->num_cons) return -1;
+    if (model->lp_model->num_vars > tab->n) return -1;
+
+    *tab_out = tab;
+    return 0;
+}
+
+int ralph_get_constraint_rhs_range(const RalphModel *model,
+                                   int constraint,
+                                   RalphSensitivityRange *range) {
+    const SimplexTableau *tab = NULL;
+    double rhs_min_internal = 0.0;
+    double rhs_max_internal = 0.0;
+    double sign = 1.0;
+    double a = 0.0;
+    double b = 0.0;
+    double lo = 0.0;
+    double hi = 0.0;
+
+    if (!model || !range || !model->lp_model) return -1;
+    if (ralph_get_lp_tableau_for_sensitivity(model, &tab) != 0) return -1;
+    if (constraint < 0 || constraint >= model->lp_model->num_cons) return -1;
+
+    if (lp_sensitivity_rhs_range_internal(tab, constraint,
+                                          &rhs_min_internal,
+                                          &rhs_max_internal) != 0) {
+        return -1;
+    }
+
+    if (tab->row_sign && tab->m > constraint) {
+        sign = (tab->row_sign[constraint] < 0.0) ? -1.0 : 1.0;
+    }
+
+    a = rhs_min_internal * sign;
+    b = rhs_max_internal * sign;
+    lo = fmin(a, b);
+    hi = fmax(a, b);
+
+    /* Keep row-sign normalization unchanged in v1 fixed-basis contract. */
+    if (sign > 0.0 && lo < 0.0) lo = 0.0;
+    if (sign < 0.0 && hi > 0.0) hi = 0.0;
+    if (lo > hi + 10.0 * RALPH_FEAS_TOL) return -1;
+
+    range->current = model->lp_model->b[constraint];
+    range->lower = lo;
+    range->upper = hi;
+    return 0;
+}
+
+int ralph_get_obj_coef_range(const RalphModel *model,
+                             int var,
+                             RalphSensitivityRange *range) {
+    const SimplexTableau *tab = NULL;
+    double min_internal = 0.0;
+    double max_internal = 0.0;
+    double sense = 1.0;
+    double a = 0.0;
+    double b = 0.0;
+
+    if (!model || !range || !model->lp_model) return -1;
+    if (ralph_get_lp_tableau_for_sensitivity(model, &tab) != 0) return -1;
+    if (var < 0 || var >= model->lp_model->num_vars) return -1;
+
+    if (lp_sensitivity_obj_coef_range_internal(tab, var,
+                                               &min_internal,
+                                               &max_internal) != 0) {
+        return -1;
+    }
+
+    sense = (double)model->lp_model->obj_sense;  /* user_coef = internal_coef * sense */
+    a = min_internal * sense;
+    b = max_internal * sense;
+
+    range->current = model->lp_model->c[var];
+    range->lower = fmin(a, b);
+    range->upper = fmax(a, b);
+    return 0;
+}
+
+int ralph_get_var_bound_range(const RalphModel *model,
+                              int var,
+                              RalphBoundSensitivityRange *range) {
+    const SimplexTableau *tab = NULL;
+    LPBoundRangeInternal internal;
+    if (!model || !range || !model->lp_model) return -1;
+    if (ralph_get_lp_tableau_for_sensitivity(model, &tab) != 0) return -1;
+    if (var < 0 || var >= model->lp_model->num_vars) return -1;
+
+    if (lp_sensitivity_var_bound_range_internal(tab, var, &internal) != 0) {
+        return -1;
+    }
+
+    range->lower_current = model->lp_model->lb[var];
+    range->lower_min = internal.lower_min;
+    range->lower_max = internal.lower_max;
+    range->upper_current = model->lp_model->ub[var];
+    range->upper_min = internal.upper_min;
+    range->upper_max = internal.upper_max;
+    return 0;
+}
+
 /* ============================================================================
  * Branching Control
  * ============================================================================ */

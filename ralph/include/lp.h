@@ -941,6 +941,26 @@ int dual_ratio_test(SimplexTableau *tableau, int leaving, int *entering, double 
 /* Utility */
 void lp_print_stats(const SimplexSolver *solver);
 
+/* Fixed-basis LP sensitivity helpers (internal minimization space). */
+typedef struct {
+    double lower_min;
+    double lower_max;
+    double upper_min;
+    double upper_max;
+} LPBoundRangeInternal;
+
+int lp_sensitivity_rhs_range_internal(const SimplexTableau *tab,
+                                      int row,
+                                      double *rhs_min,
+                                      double *rhs_max);
+int lp_sensitivity_obj_coef_range_internal(const SimplexTableau *tab,
+                                           int var,
+                                           double *coef_min,
+                                           double *coef_max);
+int lp_sensitivity_var_bound_range_internal(const SimplexTableau *tab,
+                                            int var,
+                                            LPBoundRangeInternal *range);
+
 /* Determinism helpers (behavioral policy; orthogonal to telemetry/logging). */
 int lp_determinism_effective_threads(const SimplexSolver *solver);
 void lp_determinism_apply_runtime(SimplexSolver *solver);
