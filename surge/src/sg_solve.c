@@ -639,6 +639,8 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         return SG_STATUS_OUT_OF_MEMORY;
     }
 
+    sg_scratch_init(ctx);
+
     if (ctx->num_initial_routes > 0) {
         init_status = sg_route_construct_from_warm_start(ctx, &initial);
         /* Fill any remaining unassigned requests via standard construction */
@@ -649,6 +651,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         init_status = sg_route_construct_initial_solution(ctx, &initial);
     }
     if (init_status != AR_STATUS_OK) {
+        sg_scratch_free(ctx);
         sg_route_solution_reset(&initial);
         return init_status == AR_STATUS_OUT_OF_MEMORY ? SG_STATUS_OUT_OF_MEMORY
                                                       : SG_STATUS_ERROR;
@@ -704,6 +707,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
 
         alns = sg_create_route_alns(ctx, &params, &ops, 3.0, 2.0);
         if (!alns) {
+            sg_scratch_free(ctx);
             sg_route_solution_reset(&initial);
             return SG_STATUS_OUT_OF_MEMORY;
         }
@@ -722,6 +726,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         ar_status = ar_alns_solve(alns, &initial, (void **)&p1_best);
         ctx->avoid_new_vehicles = 0;
         if (ar_status != AR_STATUS_OK && ar_status != AR_STATUS_LIMIT) {
+            sg_scratch_free(ctx);
             sg_route_solution_reset(&initial);
             ar_alns_free(alns);
             return SG_STATUS_ERROR;
@@ -776,6 +781,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
 
         alns = sg_create_route_alns(ctx, &params, &ops, 1.5, 1.0);
         if (!alns) {
+            sg_scratch_free(ctx);
             sg_route_solution_reset(&initial);
             sg_route_solution_free(p1_best, NULL);
             return SG_STATUS_OUT_OF_MEMORY;
@@ -793,6 +799,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
 
         ar_status = ar_alns_solve(alns, p2_initial, (void **)&p2_best);
         if (ar_status != AR_STATUS_OK && ar_status != AR_STATUS_LIMIT) {
+            sg_scratch_free(ctx);
             sg_route_solution_reset(&initial);
             sg_route_solution_free(p1_best, NULL);
             ar_alns_free(alns);
@@ -874,6 +881,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         ctx->final_solution = (SGRouteSolution *)sg_route_solution_copy(final_sol, (void *)ctx);
     }
 
+    sg_scratch_free(ctx);
     sg_route_solution_reset(&initial);
     sg_route_solution_free(p1_best, NULL);
     sg_route_solution_free(p2_best, NULL);

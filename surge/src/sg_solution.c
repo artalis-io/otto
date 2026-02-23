@@ -617,71 +617,48 @@ void sg_route_solution_reset(SGRouteSolution *sol) {
         return;
     }
 
-    sg_bootstrap_solution_reset(&sol->base);
-    free(sol->route_lengths);
-    free(sol->route_requests);
-    free(sol->route_stop_lengths);
-    free(sol->route_stops);
-    free(sol->route_stop_prev);
-    free(sol->route_stop_next);
-    free(sol->request_vehicle);
-    free(sol->request_pos);
-    free(sol->request_pickup_stop_pos);
-    free(sol->request_delivery_stop_pos);
-    free(sol->route_distance);
-    free(sol->route_duration);
-    free(sol->route_waiting);
-    free(sol->route_overtime);
-    free(sol->route_tw_penalty);
-    free(sol->route_stop_load);
-    free(sol->route_depot_depart);
-    free(sol->route_depot_return);
-    free(sol->route_commodities);
-    free(sol->route_exclusion_counts);
-    free(sol->route_break_time);
-    free(sol->route_break_count);
-    free(sol->route_total_work);
-    free(sol->route_breaks);
-    free(sol->route_trip_count);
-    free(sol->route_request_trip_start);
-    sol->route_lengths = NULL;
-    sol->route_requests = NULL;
-    sol->route_stop_lengths = NULL;
-    sol->route_stops = NULL;
-    sol->route_stop_prev = NULL;
-    sol->route_stop_next = NULL;
-    sol->request_vehicle = NULL;
-    sol->request_pos = NULL;
-    sol->request_pickup_stop_pos = NULL;
-    sol->request_delivery_stop_pos = NULL;
-    sol->route_distance = NULL;
-    sol->route_duration = NULL;
-    sol->route_waiting = NULL;
-    sol->route_overtime = NULL;
-    sol->route_tw_penalty = NULL;
-    sol->route_stop_load = NULL;
-    sol->route_depot_depart = NULL;
-    sol->route_depot_return = NULL;
-    sol->route_commodities = NULL;
-    sol->route_exclusion_counts = NULL;
-    sol->route_break_time = NULL;
-    sol->route_break_count = NULL;
-    sol->route_total_work = NULL;
-    sol->route_breaks = NULL;
-    sol->route_trip_count = NULL;
-    sol->route_request_trip_start = NULL;
-    sol->break_stride = 0;
-    sol->num_vehicles = 0;
-    sol->route_stride = 0;
-    sol->stop_stride = 0;
-    sol->vehicles_used = 0;
-    sol->total_distance = 0.0;
+    if (sol->arena) {
+        /* All arrays (including bootstrap) are in the arena — single free */
+        sh_arena_free(sol->arena);
+    } else {
+        /* Legacy path: standalone bootstrap or partially-initialized solution */
+        sg_bootstrap_solution_reset(&sol->base);
+        free(sol->route_lengths);
+        free(sol->route_requests);
+        free(sol->route_stop_lengths);
+        free(sol->route_stops);
+        free(sol->route_stop_prev);
+        free(sol->route_stop_next);
+        free(sol->request_vehicle);
+        free(sol->request_pos);
+        free(sol->request_pickup_stop_pos);
+        free(sol->request_delivery_stop_pos);
+        free(sol->route_distance);
+        free(sol->route_duration);
+        free(sol->route_waiting);
+        free(sol->route_overtime);
+        free(sol->route_tw_penalty);
+        free(sol->route_stop_load);
+        free(sol->route_depot_depart);
+        free(sol->route_depot_return);
+        free(sol->route_commodities);
+        free(sol->route_exclusion_counts);
+        free(sol->route_break_time);
+        free(sol->route_break_count);
+        free(sol->route_total_work);
+        free(sol->route_breaks);
+        free(sol->route_trip_count);
+        free(sol->route_request_trip_start);
+    }
+    memset(sol, 0, sizeof(*sol));
 }
 
 ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
-    ARStatus status;
     size_t route_capacity;
     size_t stop_capacity;
+    size_t total;
+    uint32_t num_req;
+    uint32_t num_veh;
     uint32_t i;
 
     if (!ctx || !sol) {
@@ -699,115 +676,261 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
 
     memset(sol, 0, sizeof(*sol));
 
-    status = sg_bootstrap_solution_init(&sol->base, ctx->num_requests);
-    if (status != AR_STATUS_OK) {
+    num_req = ctx->num_requests;
+    num_veh = ctx->num_vehicles;
+
+    sol->num_vehicles = num_veh;
+    sol->route_stride = num_req > 0 ? num_req : 1;
+    if (num_req > UINT32_MAX / 2U) {
+        return AR_STATUS_OUT_OF_MEMORY;
+    }
+    sol->stop_stride = num_req > 0 ? num_req * 2U : 1U;
+
+    if (num_req == 0 || num_veh == 0) {
+        /* No route data needed. Bootstrap-only (malloc) or empty. */
+        ARStatus status = sg_bootstrap_solution_init(&sol->base, num_req);
+        if (status != AR_STATUS_OK) {
+            memset(sol, 0, sizeof(*sol));
+        }
         return status;
     }
 
-    sol->num_vehicles = ctx->num_vehicles;
-    sol->route_stride = ctx->num_requests > 0 ? ctx->num_requests : 1;
-    if (ctx->num_requests > UINT32_MAX / 2U) {
-        sg_route_solution_reset(sol);
+    /* --- Arena path: num_req > 0 && num_veh > 0 --- */
+
+    if ((size_t)num_veh > SIZE_MAX / (size_t)sol->route_stride) {
+        memset(sol, 0, sizeof(*sol));
         return AR_STATUS_OUT_OF_MEMORY;
     }
-    sol->stop_stride = ctx->num_requests > 0 ? ctx->num_requests * 2U : 1U;
-
-    if (ctx->num_requests == 0 || ctx->num_vehicles == 0) {
-        return AR_STATUS_OK;
-    }
-
-    if ((size_t)ctx->num_vehicles > SIZE_MAX / (size_t)sol->route_stride) {
-        sg_route_solution_reset(sol);
+    route_capacity = (size_t)num_veh * (size_t)sol->route_stride;
+    if ((size_t)num_veh > SIZE_MAX / (size_t)sol->stop_stride) {
+        memset(sol, 0, sizeof(*sol));
         return AR_STATUS_OUT_OF_MEMORY;
     }
-    route_capacity = (size_t)ctx->num_vehicles * (size_t)sol->route_stride;
-    if ((size_t)ctx->num_vehicles > SIZE_MAX / (size_t)sol->stop_stride) {
-        sg_route_solution_reset(sol);
-        return AR_STATUS_OUT_OF_MEMORY;
-    }
-    stop_capacity = (size_t)ctx->num_vehicles * (size_t)sol->stop_stride;
+    stop_capacity = (size_t)num_veh * (size_t)sol->stop_stride;
+    sol->break_stride = sol->stop_stride;
 
-    sol->route_lengths = (uint32_t *)calloc((size_t)ctx->num_vehicles, sizeof(uint32_t));
-    sol->route_requests = (uint32_t *)calloc(route_capacity, sizeof(uint32_t));
-    sol->route_stop_lengths = (uint32_t *)calloc((size_t)ctx->num_vehicles, sizeof(uint32_t));
-    sol->route_stops = (SGRouteStop *)calloc(stop_capacity, sizeof(SGRouteStop));
-    sol->route_stop_prev = (uint32_t *)malloc(stop_capacity * sizeof(uint32_t));
-    sol->route_stop_next = (uint32_t *)malloc(stop_capacity * sizeof(uint32_t));
-    sol->request_vehicle = (uint32_t *)malloc((size_t)ctx->num_requests * sizeof(uint32_t));
-    sol->request_pos = (uint32_t *)malloc((size_t)ctx->num_requests * sizeof(uint32_t));
-    sol->request_pickup_stop_pos = (uint32_t *)malloc((size_t)ctx->num_requests * sizeof(uint32_t));
-    sol->request_delivery_stop_pos = (uint32_t *)malloc((size_t)ctx->num_requests * sizeof(uint32_t));
-    sol->route_distance = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
-    sol->route_duration = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
-    sol->route_waiting = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
-    sol->route_overtime = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
-    sol->route_tw_penalty = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
-    sol->route_depot_depart = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
-    sol->route_depot_return = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
-
+    /* Compute total arena size (each allocation aligned to 8 bytes) */
+    #define ALIGN8(x) (((x) + 7U) & ~(size_t)7U)
+    total = 0;
+    /* Bootstrap arrays */
+    total += ALIGN8((size_t)num_req * sizeof(uint32_t));   /* assigned_ids */
+    total += ALIGN8((size_t)num_req * sizeof(uint32_t));   /* unassigned_ids */
+    total += ALIGN8((size_t)num_req * sizeof(uint8_t));    /* assigned_flags */
+    /* Per-vehicle uint32_t arrays (4) */
+    total += 4 * ALIGN8((size_t)num_veh * sizeof(uint32_t));
+    /* Route requests + trip start */
+    total += ALIGN8(route_capacity * sizeof(uint32_t));
+    total += ALIGN8(route_capacity * sizeof(uint8_t));
+    /* Stops + prev/next */
+    total += ALIGN8(stop_capacity * sizeof(SGRouteStop));
+    total += 2 * ALIGN8(stop_capacity * sizeof(uint32_t));
+    /* Per-request arrays (4) */
+    total += 4 * ALIGN8((size_t)num_req * sizeof(uint32_t));
+    /* Per-vehicle doubles (9) */
+    total += 9 * ALIGN8((size_t)num_veh * sizeof(double));
+    /* Conditional arrays */
     if (ctx->dimension_count > 0) {
-        /* +1 per vehicle because load is a prefix sum: entry i holds cumulative
-           load AFTER stop i, so we need stop_stride + 1 slots per vehicle. */
-        size_t load_size = (size_t)ctx->num_vehicles * ((size_t)sol->stop_stride + 1U) *
-                           (size_t)ctx->dimension_count;
-        sol->route_stop_load = (double *)calloc(load_size, sizeof(double));
+        total += ALIGN8((size_t)num_veh * ((size_t)sol->stop_stride + 1U) *
+                         (size_t)ctx->dimension_count * sizeof(double));
     }
-
     if (ctx->num_commodities > 0) {
-        sol->route_commodities = (uint64_t *)calloc((size_t)ctx->num_vehicles, sizeof(uint64_t));
+        total += ALIGN8((size_t)num_veh * sizeof(uint64_t));
     }
     if (ctx->num_exclusion_groups > 0) {
-        sol->route_exclusion_counts = (uint32_t *)calloc(
-            (size_t)ctx->num_vehicles * (size_t)ctx->num_exclusion_groups, sizeof(uint32_t));
+        total += ALIGN8((size_t)num_veh * (size_t)ctx->num_exclusion_groups * sizeof(uint32_t));
+    }
+    /* Breaks */
+    total += ALIGN8((size_t)num_veh * (size_t)sol->break_stride * sizeof(SGRouteBreak));
+    #undef ALIGN8
+
+    /* Cache arena size for fast copy path */
+    ((SGContext *)ctx)->solution_arena_size = total;
+
+    /* Create arena — single malloc for all arrays */
+    sol->arena = sh_arena_create(total);
+    if (!sol->arena) {
+        memset(sol, 0, sizeof(*sol));
+        return AR_STATUS_OUT_OF_MEMORY;
     }
 
-    sol->route_break_time = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
-    sol->route_break_count = (uint32_t *)calloc((size_t)ctx->num_vehicles, sizeof(uint32_t));
-    sol->route_total_work = (double *)calloc((size_t)ctx->num_vehicles, sizeof(double));
-    sol->break_stride = sol->stop_stride;
-    sol->route_breaks = (SGRouteBreak *)calloc(
-        (size_t)ctx->num_vehicles * (size_t)sol->break_stride, sizeof(SGRouteBreak));
-    sol->route_trip_count = (uint32_t *)calloc((size_t)ctx->num_vehicles, sizeof(uint32_t));
-    sol->route_request_trip_start = (uint8_t *)calloc(route_capacity, sizeof(uint8_t));
+    /* Bootstrap arrays (from arena, not standalone init) */
+    sol->base.total_requests = num_req;
+    sol->base.num_unassigned = num_req;
+    sol->base.assigned_ids = (uint32_t *)sh_arena_calloc(sol->arena, (size_t)num_req, sizeof(uint32_t));
+    sol->base.unassigned_ids = (uint32_t *)sh_arena_calloc(sol->arena, (size_t)num_req, sizeof(uint32_t));
+    sol->base.assigned_flags = (uint8_t *)sh_arena_calloc(sol->arena, (size_t)num_req, sizeof(uint8_t));
 
-    if (!sol->route_lengths || !sol->route_requests || !sol->route_stop_lengths ||
+    /* Per-vehicle uint32_t arrays */
+    sol->route_lengths = (uint32_t *)sh_arena_calloc(sol->arena, (size_t)num_veh, sizeof(uint32_t));
+    sol->route_stop_lengths = (uint32_t *)sh_arena_calloc(sol->arena, (size_t)num_veh, sizeof(uint32_t));
+    sol->route_break_count = (uint32_t *)sh_arena_calloc(sol->arena, (size_t)num_veh, sizeof(uint32_t));
+    sol->route_trip_count = (uint32_t *)sh_arena_calloc(sol->arena, (size_t)num_veh, sizeof(uint32_t));
+
+    /* Route-level arrays */
+    sol->route_requests = (uint32_t *)sh_arena_calloc(sol->arena, route_capacity, sizeof(uint32_t));
+    sol->route_request_trip_start = (uint8_t *)sh_arena_calloc(sol->arena, route_capacity, sizeof(uint8_t));
+
+    /* Stop-level arrays */
+    sol->route_stops = (SGRouteStop *)sh_arena_calloc(sol->arena, stop_capacity, sizeof(SGRouteStop));
+    sol->route_stop_prev = (uint32_t *)sh_arena_alloc(sol->arena, stop_capacity * sizeof(uint32_t));
+    sol->route_stop_next = (uint32_t *)sh_arena_alloc(sol->arena, stop_capacity * sizeof(uint32_t));
+
+    /* Per-request arrays */
+    sol->request_vehicle = (uint32_t *)sh_arena_alloc(sol->arena, (size_t)num_req * sizeof(uint32_t));
+    sol->request_pos = (uint32_t *)sh_arena_alloc(sol->arena, (size_t)num_req * sizeof(uint32_t));
+    sol->request_pickup_stop_pos = (uint32_t *)sh_arena_alloc(sol->arena, (size_t)num_req * sizeof(uint32_t));
+    sol->request_delivery_stop_pos = (uint32_t *)sh_arena_alloc(sol->arena, (size_t)num_req * sizeof(uint32_t));
+
+    /* Per-vehicle doubles */
+    sol->route_distance = (double *)sh_arena_calloc(sol->arena, (size_t)num_veh, sizeof(double));
+    sol->route_duration = (double *)sh_arena_calloc(sol->arena, (size_t)num_veh, sizeof(double));
+    sol->route_waiting = (double *)sh_arena_calloc(sol->arena, (size_t)num_veh, sizeof(double));
+    sol->route_overtime = (double *)sh_arena_calloc(sol->arena, (size_t)num_veh, sizeof(double));
+    sol->route_tw_penalty = (double *)sh_arena_calloc(sol->arena, (size_t)num_veh, sizeof(double));
+    sol->route_depot_depart = (double *)sh_arena_calloc(sol->arena, (size_t)num_veh, sizeof(double));
+    sol->route_depot_return = (double *)sh_arena_calloc(sol->arena, (size_t)num_veh, sizeof(double));
+    sol->route_break_time = (double *)sh_arena_calloc(sol->arena, (size_t)num_veh, sizeof(double));
+    sol->route_total_work = (double *)sh_arena_calloc(sol->arena, (size_t)num_veh, sizeof(double));
+
+    /* Conditional arrays */
+    if (ctx->dimension_count > 0) {
+        size_t load_size = (size_t)num_veh * ((size_t)sol->stop_stride + 1U) *
+                           (size_t)ctx->dimension_count;
+        sol->route_stop_load = (double *)sh_arena_calloc(sol->arena, load_size, sizeof(double));
+    }
+    if (ctx->num_commodities > 0) {
+        sol->route_commodities = (uint64_t *)sh_arena_calloc(sol->arena, (size_t)num_veh, sizeof(uint64_t));
+    }
+    if (ctx->num_exclusion_groups > 0) {
+        sol->route_exclusion_counts = (uint32_t *)sh_arena_calloc(sol->arena,
+            (size_t)num_veh * (size_t)ctx->num_exclusion_groups, sizeof(uint32_t));
+    }
+
+    /* Breaks */
+    sol->route_breaks = (SGRouteBreak *)sh_arena_calloc(sol->arena,
+        (size_t)num_veh * (size_t)sol->break_stride, sizeof(SGRouteBreak));
+
+    /* Verify all allocations succeeded */
+    if (!sol->base.assigned_ids || !sol->base.unassigned_ids || !sol->base.assigned_flags ||
+        !sol->route_lengths || !sol->route_stop_lengths || !sol->route_break_count ||
+        !sol->route_trip_count || !sol->route_requests || !sol->route_request_trip_start ||
         !sol->route_stops || !sol->route_stop_prev || !sol->route_stop_next ||
-        !sol->request_vehicle || !sol->request_pos || !sol->request_pickup_stop_pos ||
-        !sol->request_delivery_stop_pos || !sol->route_distance || !sol->route_duration ||
-        !sol->route_waiting || !sol->route_overtime || !sol->route_tw_penalty ||
+        !sol->request_vehicle || !sol->request_pos ||
+        !sol->request_pickup_stop_pos || !sol->request_delivery_stop_pos ||
+        !sol->route_distance || !sol->route_duration || !sol->route_waiting ||
+        !sol->route_overtime || !sol->route_tw_penalty ||
         !sol->route_depot_depart || !sol->route_depot_return ||
-        !sol->route_break_time || !sol->route_break_count || !sol->route_total_work ||
-        !sol->route_breaks || !sol->route_trip_count || !sol->route_request_trip_start ||
+        !sol->route_break_time || !sol->route_total_work || !sol->route_breaks ||
         (ctx->dimension_count > 0 && !sol->route_stop_load) ||
         (ctx->num_commodities > 0 && !sol->route_commodities) ||
         (ctx->num_exclusion_groups > 0 && !sol->route_exclusion_counts)) {
-        sg_route_solution_reset(sol);
+        sh_arena_free(sol->arena);
+        memset(sol, 0, sizeof(*sol));
         return AR_STATUS_OUT_OF_MEMORY;
     }
 
+    /* Initialize bootstrap unassigned_ids */
+    for (i = 0; i < num_req; i++) {
+        sol->base.unassigned_ids[i] = i;
+    }
+
+    /* Initialize stop state (non-zero fields only; rest is zero from calloc) */
     for (i = 0; i < stop_capacity; i++) {
         sol->route_stop_prev[i] = UINT32_MAX;
         sol->route_stop_next[i] = UINT32_MAX;
         sol->route_stops[i].request_id = UINT32_MAX;
         sol->route_stops[i].task_id = UINT32_MAX;
-        sol->route_stops[i].is_pickup = 0;
-        sol->route_stops[i].arrival = 0.0;
-        sol->route_stops[i].service_start = 0.0;
-        sol->route_stops[i].depart = 0.0;
-        sol->route_stops[i].latest_start = 0.0;
-        sol->route_stops[i].forward_slack = 0.0;
-        sol->route_stops[i].work_since_break = 0.0;
-        sol->route_stops[i].trip_start = 0;
-        sol->route_stops[i].trip_depot_return = 0.0;
-        sol->route_stops[i].trip_depot_depart = 0.0;
     }
 
-    for (i = 0; i < ctx->num_requests; i++) {
+    /* Initialize per-request tracking */
+    for (i = 0; i < num_req; i++) {
         sol->request_vehicle[i] = UINT32_MAX;
         sol->request_pos[i] = UINT32_MAX;
         sol->request_pickup_stop_pos[i] = UINT32_MAX;
         sol->request_delivery_stop_pos[i] = UINT32_MAX;
     }
+
+    return AR_STATUS_OK;
+}
+
+static ARStatus sg_route_solution_init_for_copy(const SGContext *ctx, SGRouteSolution *sol) {
+    uint32_t num_req = ctx->num_requests;
+    uint32_t num_veh = ctx->num_vehicles;
+    size_t route_capacity, stop_capacity;
+
+    memset(sol, 0, sizeof(*sol));
+    sol->num_vehicles = num_veh;
+    sol->route_stride = num_req > 0 ? num_req : 1;
+    sol->stop_stride = num_req > 0 ? num_req * 2U : 1U;
+    sol->break_stride = sol->stop_stride;
+    sol->base.total_requests = num_req;
+    route_capacity = (size_t)num_veh * (size_t)sol->route_stride;
+    stop_capacity = (size_t)num_veh * (size_t)sol->stop_stride;
+
+    sol->arena = sh_arena_create(ctx->solution_arena_size);
+    if (!sol->arena) {
+        memset(sol, 0, sizeof(*sol));
+        return AR_STATUS_OUT_OF_MEMORY;
+    }
+
+    /* Allocate all arrays in EXACT same order as init (layout must match).
+       Uses sh_arena_alloc — no zeroing, no init loops.
+       Content will be overwritten by memcpy of source arena buffer. */
+
+    /* Bootstrap arrays */
+    sol->base.assigned_ids = (uint32_t *)sh_arena_alloc(sol->arena, (size_t)num_req * sizeof(uint32_t));
+    sol->base.unassigned_ids = (uint32_t *)sh_arena_alloc(sol->arena, (size_t)num_req * sizeof(uint32_t));
+    sol->base.assigned_flags = (uint8_t *)sh_arena_alloc(sol->arena, (size_t)num_req * sizeof(uint8_t));
+
+    /* Per-vehicle uint32_t arrays */
+    sol->route_lengths = (uint32_t *)sh_arena_alloc(sol->arena, (size_t)num_veh * sizeof(uint32_t));
+    sol->route_stop_lengths = (uint32_t *)sh_arena_alloc(sol->arena, (size_t)num_veh * sizeof(uint32_t));
+    sol->route_break_count = (uint32_t *)sh_arena_alloc(sol->arena, (size_t)num_veh * sizeof(uint32_t));
+    sol->route_trip_count = (uint32_t *)sh_arena_alloc(sol->arena, (size_t)num_veh * sizeof(uint32_t));
+
+    /* Route-level arrays */
+    sol->route_requests = (uint32_t *)sh_arena_alloc(sol->arena, route_capacity * sizeof(uint32_t));
+    sol->route_request_trip_start = (uint8_t *)sh_arena_alloc(sol->arena, route_capacity * sizeof(uint8_t));
+
+    /* Stop-level arrays */
+    sol->route_stops = (SGRouteStop *)sh_arena_alloc(sol->arena, stop_capacity * sizeof(SGRouteStop));
+    sol->route_stop_prev = (uint32_t *)sh_arena_alloc(sol->arena, stop_capacity * sizeof(uint32_t));
+    sol->route_stop_next = (uint32_t *)sh_arena_alloc(sol->arena, stop_capacity * sizeof(uint32_t));
+
+    /* Per-request arrays */
+    sol->request_vehicle = (uint32_t *)sh_arena_alloc(sol->arena, (size_t)num_req * sizeof(uint32_t));
+    sol->request_pos = (uint32_t *)sh_arena_alloc(sol->arena, (size_t)num_req * sizeof(uint32_t));
+    sol->request_pickup_stop_pos = (uint32_t *)sh_arena_alloc(sol->arena, (size_t)num_req * sizeof(uint32_t));
+    sol->request_delivery_stop_pos = (uint32_t *)sh_arena_alloc(sol->arena, (size_t)num_req * sizeof(uint32_t));
+
+    /* Per-vehicle doubles */
+    sol->route_distance = (double *)sh_arena_alloc(sol->arena, (size_t)num_veh * sizeof(double));
+    sol->route_duration = (double *)sh_arena_alloc(sol->arena, (size_t)num_veh * sizeof(double));
+    sol->route_waiting = (double *)sh_arena_alloc(sol->arena, (size_t)num_veh * sizeof(double));
+    sol->route_overtime = (double *)sh_arena_alloc(sol->arena, (size_t)num_veh * sizeof(double));
+    sol->route_tw_penalty = (double *)sh_arena_alloc(sol->arena, (size_t)num_veh * sizeof(double));
+    sol->route_depot_depart = (double *)sh_arena_alloc(sol->arena, (size_t)num_veh * sizeof(double));
+    sol->route_depot_return = (double *)sh_arena_alloc(sol->arena, (size_t)num_veh * sizeof(double));
+    sol->route_break_time = (double *)sh_arena_alloc(sol->arena, (size_t)num_veh * sizeof(double));
+    sol->route_total_work = (double *)sh_arena_alloc(sol->arena, (size_t)num_veh * sizeof(double));
+
+    /* Conditional arrays */
+    if (ctx->dimension_count > 0) {
+        size_t load_size = (size_t)num_veh * ((size_t)sol->stop_stride + 1U) *
+                           (size_t)ctx->dimension_count;
+        sol->route_stop_load = (double *)sh_arena_alloc(sol->arena, load_size * sizeof(double));
+    }
+    if (ctx->num_commodities > 0) {
+        sol->route_commodities = (uint64_t *)sh_arena_alloc(sol->arena, (size_t)num_veh * sizeof(uint64_t));
+    }
+    if (ctx->num_exclusion_groups > 0) {
+        sol->route_exclusion_counts = (uint32_t *)sh_arena_alloc(sol->arena,
+            (size_t)num_veh * (size_t)ctx->num_exclusion_groups * sizeof(uint32_t));
+    }
+
+    /* Breaks */
+    sol->route_breaks = (SGRouteBreak *)sh_arena_alloc(sol->arena,
+        (size_t)num_veh * (size_t)sol->break_stride * sizeof(SGRouteBreak));
 
     return AR_STATUS_OK;
 }
@@ -826,103 +949,117 @@ void *sg_route_solution_copy(const void *solution, void *user_ctx) {
         return NULL;
     }
 
-    if (sg_route_solution_init(ctx, dst) != AR_STATUS_OK) {
-        free(dst);
-        return NULL;
-    }
+    if (src->arena && ctx->solution_arena_size > 0) {
+        /* Fast path: single arena alloc + single memcpy */
+        if (sg_route_solution_init_for_copy(ctx, dst) != AR_STATUS_OK) {
+            free(dst);
+            return NULL;
+        }
+        memcpy(dst->arena->buffer, src->arena->buffer, sh_arena_used(src->arena));
+        dst->base.num_assigned = src->base.num_assigned;
+        dst->base.num_unassigned = src->base.num_unassigned;
+        dst->vehicles_used = src->vehicles_used;
+        dst->total_distance = src->total_distance;
+    } else {
+        /* Legacy path (non-arena solutions) */
+        if (sg_route_solution_init(ctx, dst) != AR_STATUS_OK) {
+            free(dst);
+            return NULL;
+        }
 
-    dst->base.num_assigned = src->base.num_assigned;
-    dst->base.num_unassigned = src->base.num_unassigned;
-    dst->vehicles_used = src->vehicles_used;
-    dst->total_distance = src->total_distance;
+        dst->base.num_assigned = src->base.num_assigned;
+        dst->base.num_unassigned = src->base.num_unassigned;
+        dst->vehicles_used = src->vehicles_used;
+        dst->total_distance = src->total_distance;
 
-    if (src->base.total_requests > 0) {
-        size_t req_count = (size_t)src->base.total_requests;
-        memcpy(dst->base.assigned_ids, src->base.assigned_ids, req_count * sizeof(uint32_t));
-        memcpy(dst->base.unassigned_ids, src->base.unassigned_ids, req_count * sizeof(uint32_t));
-        memcpy(dst->base.assigned_flags, src->base.assigned_flags, req_count * sizeof(uint8_t));
-        memcpy(dst->request_vehicle, src->request_vehicle, req_count * sizeof(uint32_t));
-        memcpy(dst->request_pos, src->request_pos, req_count * sizeof(uint32_t));
-        memcpy(dst->request_pickup_stop_pos, src->request_pickup_stop_pos,
-               req_count * sizeof(uint32_t));
-        memcpy(dst->request_delivery_stop_pos, src->request_delivery_stop_pos,
-               req_count * sizeof(uint32_t));
-    }
+        if (src->base.total_requests > 0) {
+            size_t req_count = (size_t)src->base.total_requests;
+            memcpy(dst->base.assigned_ids, src->base.assigned_ids, req_count * sizeof(uint32_t));
+            memcpy(dst->base.unassigned_ids, src->base.unassigned_ids, req_count * sizeof(uint32_t));
+            memcpy(dst->base.assigned_flags, src->base.assigned_flags, req_count * sizeof(uint8_t));
+            memcpy(dst->request_vehicle, src->request_vehicle, req_count * sizeof(uint32_t));
+            memcpy(dst->request_pos, src->request_pos, req_count * sizeof(uint32_t));
+            memcpy(dst->request_pickup_stop_pos, src->request_pickup_stop_pos,
+                   req_count * sizeof(uint32_t));
+            memcpy(dst->request_delivery_stop_pos, src->request_delivery_stop_pos,
+                   req_count * sizeof(uint32_t));
+        }
 
-    if (src->num_vehicles > 0) {
-        size_t route_count = (size_t)src->num_vehicles * (size_t)src->route_stride;
-        size_t stop_count = (size_t)src->num_vehicles * (size_t)src->stop_stride;
-        memcpy(dst->route_lengths, src->route_lengths,
-               (size_t)src->num_vehicles * sizeof(uint32_t));
-        memcpy(dst->route_requests, src->route_requests, route_count * sizeof(uint32_t));
-        memcpy(dst->route_stop_lengths, src->route_stop_lengths,
-               (size_t)src->num_vehicles * sizeof(uint32_t));
-        memcpy(dst->route_stops, src->route_stops, stop_count * sizeof(SGRouteStop));
-        memcpy(dst->route_stop_prev, src->route_stop_prev, stop_count * sizeof(uint32_t));
-        memcpy(dst->route_stop_next, src->route_stop_next, stop_count * sizeof(uint32_t));
-        memcpy(dst->route_distance, src->route_distance,
-               (size_t)src->num_vehicles * sizeof(double));
-        if (src->route_duration && dst->route_duration) {
-            memcpy(dst->route_duration, src->route_duration,
-                   (size_t)src->num_vehicles * sizeof(double));
-        }
-        if (src->route_waiting && dst->route_waiting) {
-            memcpy(dst->route_waiting, src->route_waiting,
-                   (size_t)src->num_vehicles * sizeof(double));
-        }
-        if (src->route_overtime && dst->route_overtime) {
-            memcpy(dst->route_overtime, src->route_overtime,
-                   (size_t)src->num_vehicles * sizeof(double));
-        }
-        if (src->route_tw_penalty && dst->route_tw_penalty) {
-            memcpy(dst->route_tw_penalty, src->route_tw_penalty,
-                   (size_t)src->num_vehicles * sizeof(double));
-        }
-        if (src->route_depot_depart && dst->route_depot_depart) {
-            memcpy(dst->route_depot_depart, src->route_depot_depart,
-                   (size_t)src->num_vehicles * sizeof(double));
-        }
-        if (src->route_depot_return && dst->route_depot_return) {
-            memcpy(dst->route_depot_return, src->route_depot_return,
-                   (size_t)src->num_vehicles * sizeof(double));
-        }
-        if (src->route_stop_load && dst->route_stop_load && ctx->dimension_count > 0) {
-            size_t load_size = (size_t)src->num_vehicles * ((size_t)src->stop_stride + 1U) *
-                               (size_t)ctx->dimension_count;
-            memcpy(dst->route_stop_load, src->route_stop_load, load_size * sizeof(double));
-        }
-        if (src->route_commodities && dst->route_commodities) {
-            memcpy(dst->route_commodities, src->route_commodities,
-                   (size_t)src->num_vehicles * sizeof(uint64_t));
-        }
-        if (src->route_exclusion_counts && dst->route_exclusion_counts &&
-            ctx->num_exclusion_groups > 0) {
-            memcpy(dst->route_exclusion_counts, src->route_exclusion_counts,
-                   (size_t)src->num_vehicles * (size_t)ctx->num_exclusion_groups * sizeof(uint32_t));
-        }
-        if (src->route_break_time && dst->route_break_time) {
-            memcpy(dst->route_break_time, src->route_break_time,
-                   (size_t)src->num_vehicles * sizeof(double));
-        }
-        if (src->route_break_count && dst->route_break_count) {
-            memcpy(dst->route_break_count, src->route_break_count,
+        if (src->num_vehicles > 0) {
+            size_t route_count = (size_t)src->num_vehicles * (size_t)src->route_stride;
+            size_t stop_count = (size_t)src->num_vehicles * (size_t)src->stop_stride;
+            memcpy(dst->route_lengths, src->route_lengths,
                    (size_t)src->num_vehicles * sizeof(uint32_t));
-        }
-        if (src->route_total_work && dst->route_total_work) {
-            memcpy(dst->route_total_work, src->route_total_work,
-                   (size_t)src->num_vehicles * sizeof(double));
-        }
-        if (src->route_breaks && dst->route_breaks && src->break_stride > 0) {
-            memcpy(dst->route_breaks, src->route_breaks,
-                   (size_t)src->num_vehicles * (size_t)src->break_stride * sizeof(SGRouteBreak));
-        }
-        if (src->route_trip_count && dst->route_trip_count) {
-            memcpy(dst->route_trip_count, src->route_trip_count,
+            memcpy(dst->route_requests, src->route_requests, route_count * sizeof(uint32_t));
+            memcpy(dst->route_stop_lengths, src->route_stop_lengths,
                    (size_t)src->num_vehicles * sizeof(uint32_t));
-        }
-        if (src->route_request_trip_start && dst->route_request_trip_start) {
-            memcpy(dst->route_request_trip_start, src->route_request_trip_start,
-                   (size_t)src->num_vehicles * (size_t)src->route_stride * sizeof(uint8_t));
+            memcpy(dst->route_stops, src->route_stops, stop_count * sizeof(SGRouteStop));
+            memcpy(dst->route_stop_prev, src->route_stop_prev, stop_count * sizeof(uint32_t));
+            memcpy(dst->route_stop_next, src->route_stop_next, stop_count * sizeof(uint32_t));
+            memcpy(dst->route_distance, src->route_distance,
+                   (size_t)src->num_vehicles * sizeof(double));
+            if (src->route_duration && dst->route_duration) {
+                memcpy(dst->route_duration, src->route_duration,
+                       (size_t)src->num_vehicles * sizeof(double));
+            }
+            if (src->route_waiting && dst->route_waiting) {
+                memcpy(dst->route_waiting, src->route_waiting,
+                       (size_t)src->num_vehicles * sizeof(double));
+            }
+            if (src->route_overtime && dst->route_overtime) {
+                memcpy(dst->route_overtime, src->route_overtime,
+                       (size_t)src->num_vehicles * sizeof(double));
+            }
+            if (src->route_tw_penalty && dst->route_tw_penalty) {
+                memcpy(dst->route_tw_penalty, src->route_tw_penalty,
+                       (size_t)src->num_vehicles * sizeof(double));
+            }
+            if (src->route_depot_depart && dst->route_depot_depart) {
+                memcpy(dst->route_depot_depart, src->route_depot_depart,
+                       (size_t)src->num_vehicles * sizeof(double));
+            }
+            if (src->route_depot_return && dst->route_depot_return) {
+                memcpy(dst->route_depot_return, src->route_depot_return,
+                       (size_t)src->num_vehicles * sizeof(double));
+            }
+            if (src->route_stop_load && dst->route_stop_load && ctx->dimension_count > 0) {
+                size_t load_size = (size_t)src->num_vehicles * ((size_t)src->stop_stride + 1U) *
+                                   (size_t)ctx->dimension_count;
+                memcpy(dst->route_stop_load, src->route_stop_load, load_size * sizeof(double));
+            }
+            if (src->route_commodities && dst->route_commodities) {
+                memcpy(dst->route_commodities, src->route_commodities,
+                       (size_t)src->num_vehicles * sizeof(uint64_t));
+            }
+            if (src->route_exclusion_counts && dst->route_exclusion_counts &&
+                ctx->num_exclusion_groups > 0) {
+                memcpy(dst->route_exclusion_counts, src->route_exclusion_counts,
+                       (size_t)src->num_vehicles * (size_t)ctx->num_exclusion_groups * sizeof(uint32_t));
+            }
+            if (src->route_break_time && dst->route_break_time) {
+                memcpy(dst->route_break_time, src->route_break_time,
+                       (size_t)src->num_vehicles * sizeof(double));
+            }
+            if (src->route_break_count && dst->route_break_count) {
+                memcpy(dst->route_break_count, src->route_break_count,
+                       (size_t)src->num_vehicles * sizeof(uint32_t));
+            }
+            if (src->route_total_work && dst->route_total_work) {
+                memcpy(dst->route_total_work, src->route_total_work,
+                       (size_t)src->num_vehicles * sizeof(double));
+            }
+            if (src->route_breaks && dst->route_breaks && src->break_stride > 0) {
+                memcpy(dst->route_breaks, src->route_breaks,
+                       (size_t)src->num_vehicles * (size_t)src->break_stride * sizeof(SGRouteBreak));
+            }
+            if (src->route_trip_count && dst->route_trip_count) {
+                memcpy(dst->route_trip_count, src->route_trip_count,
+                       (size_t)src->num_vehicles * sizeof(uint32_t));
+            }
+            if (src->route_request_trip_start && dst->route_request_trip_start) {
+                memcpy(dst->route_request_trip_start, src->route_request_trip_start,
+                       (size_t)src->num_vehicles * (size_t)src->route_stride * sizeof(uint8_t));
+            }
         }
     }
 
@@ -1374,4 +1511,78 @@ int sg_route_solution_size(const void *solution, void *user_ctx) {
     const SGRouteSolution *sol = (const SGRouteSolution *)solution;
     (void)user_ctx;
     return sol ? (int)sol->base.num_assigned : 0;
+}
+
+void sg_scratch_init(SGContext *ctx) {
+    SGScratchBuffers *s;
+    uint32_t num_req, num_veh, stop_cap, route_stride;
+    size_t total;
+    SHArena *arena;
+
+    if (!ctx) return;
+    s = &ctx->scratch;
+    memset(s, 0, sizeof(*s));
+
+    num_req = ctx->num_requests;
+    num_veh = ctx->num_vehicles;
+    if (num_req == 0 || num_veh == 0) return;
+
+    stop_cap = num_req * 2U;
+    route_stride = num_req;
+    s->stop_capacity = stop_cap;
+
+    #define ALIGN8(x) (((x) + 7U) & ~(size_t)7U)
+    total = 0;
+    /* timing: 5 arrays of stop_cap doubles */
+    total += ALIGN8((size_t)stop_cap * 5U * sizeof(double));
+    /* load_profile */
+    if (ctx->dimension_count > 0) {
+        total += ALIGN8(((size_t)stop_cap + 1U) * (size_t)ctx->dimension_count * sizeof(double));
+        /* dim_scratch: 2 * dim_count doubles */
+        total += ALIGN8((size_t)ctx->dimension_count * 2U * sizeof(double));
+    }
+    /* pickup_depart + pickup_seen */
+    total += ALIGN8((size_t)num_req * sizeof(double));
+    total += ALIGN8((size_t)num_req * sizeof(uint8_t));
+    /* feas_stops */
+    total += ALIGN8((size_t)stop_cap * sizeof(SGRouteStop));
+    /* candidate_a, candidate_b */
+    total += 2U * ALIGN8((size_t)route_stride * sizeof(uint32_t));
+    /* exclusion_counts */
+    if (ctx->num_exclusion_groups > 0) {
+        total += ALIGN8((size_t)ctx->num_exclusion_groups * sizeof(uint32_t));
+    }
+    #undef ALIGN8
+
+    arena = sh_arena_create(total);
+    if (!arena) {
+        memset(s, 0, sizeof(*s));
+        return;
+    }
+    s->arena = arena;
+
+    s->timing = (double *)sh_arena_alloc(arena, (size_t)stop_cap * 5U * sizeof(double));
+    if (ctx->dimension_count > 0) {
+        s->load_profile = (double *)sh_arena_alloc(arena,
+            ((size_t)stop_cap + 1U) * (size_t)ctx->dimension_count * sizeof(double));
+        s->dim_scratch = (double *)sh_arena_alloc(arena,
+            (size_t)ctx->dimension_count * 2U * sizeof(double));
+    }
+    s->pickup_depart = (double *)sh_arena_alloc(arena, (size_t)num_req * sizeof(double));
+    s->pickup_seen = (uint8_t *)sh_arena_alloc(arena, (size_t)num_req * sizeof(uint8_t));
+    s->feas_stops = (SGRouteStop *)sh_arena_alloc(arena, (size_t)stop_cap * sizeof(SGRouteStop));
+    s->candidate_a = (uint32_t *)sh_arena_alloc(arena, (size_t)route_stride * sizeof(uint32_t));
+    s->candidate_b = (uint32_t *)sh_arena_alloc(arena, (size_t)route_stride * sizeof(uint32_t));
+    if (ctx->num_exclusion_groups > 0) {
+        s->exclusion_counts = (uint32_t *)sh_arena_alloc(arena,
+            (size_t)ctx->num_exclusion_groups * sizeof(uint32_t));
+    }
+}
+
+void sg_scratch_free(SGContext *ctx) {
+    if (!ctx) return;
+    if (ctx->scratch.arena) {
+        sh_arena_free(ctx->scratch.arena);
+    }
+    memset(&ctx->scratch, 0, sizeof(ctx->scratch));
 }

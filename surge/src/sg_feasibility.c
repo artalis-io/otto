@@ -397,6 +397,7 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
     uint32_t i;
     uint32_t d;
     int feasible = 0;
+    int use_scratch = 0;
 
     if (!ctx || !distance_out || vehicle_id >= ctx->num_vehicles ||
         (stop_count > 0 && !stops)) {
@@ -423,22 +424,46 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
     start_depot = &ctx->depots[vehicle->start_depot_id];
     end_depot = &ctx->depots[vehicle->end_depot_id];
 
-    service_start = (double *)malloc((size_t)stop_count * sizeof(double));
-    depart = (double *)malloc((size_t)stop_count * sizeof(double));
-    latest_start = (double *)malloc((size_t)stop_count * sizeof(double));
-    forward_slack = (double *)malloc((size_t)stop_count * sizeof(double));
-    seq_arrival = (double *)malloc((size_t)stop_count * sizeof(double));
-    if (!service_start || !depart || !latest_start || !forward_slack || !seq_arrival) {
-        goto done;
+    if (ctx->scratch.timing && stop_count <= ctx->scratch.stop_capacity) {
+        uint32_t scap = ctx->scratch.stop_capacity;
+        use_scratch = 1;
+        service_start = ctx->scratch.timing;
+        depart = service_start + scap;
+        latest_start = depart + scap;
+        forward_slack = latest_start + scap;
+        seq_arrival = forward_slack + scap;
+        if (ctx->dimension_count > 0) {
+            load_profile = ctx->scratch.load_profile;
+            min_prefix = ctx->scratch.dim_scratch;
+            max_prefix = min_prefix + ctx->dimension_count;
+        }
+        if (ctx->num_requests > 0) {
+            pickup_depart = ctx->scratch.pickup_depart;
+            pickup_seen = ctx->scratch.pickup_seen;
+            memset(pickup_seen, 0, (size_t)ctx->num_requests);
+        }
+    }
+
+    if (!use_scratch) {
+        service_start = (double *)malloc((size_t)stop_count * sizeof(double));
+        depart = (double *)malloc((size_t)stop_count * sizeof(double));
+        latest_start = (double *)malloc((size_t)stop_count * sizeof(double));
+        forward_slack = (double *)malloc((size_t)stop_count * sizeof(double));
+        seq_arrival = (double *)malloc((size_t)stop_count * sizeof(double));
+        if (!service_start || !depart || !latest_start || !forward_slack || !seq_arrival) {
+            goto done;
+        }
     }
 
     if (ctx->dimension_count > 0) {
-        size_t load_count = ((size_t)stop_count + 1U) * (size_t)ctx->dimension_count;
-        load_profile = (double *)malloc(load_count * sizeof(double));
-        min_prefix = (double *)malloc((size_t)ctx->dimension_count * sizeof(double));
-        max_prefix = (double *)malloc((size_t)ctx->dimension_count * sizeof(double));
-        if (!load_profile || !min_prefix || !max_prefix) {
-            goto done;
+        if (!use_scratch) {
+            size_t load_count = ((size_t)stop_count + 1U) * (size_t)ctx->dimension_count;
+            load_profile = (double *)malloc(load_count * sizeof(double));
+            min_prefix = (double *)malloc((size_t)ctx->dimension_count * sizeof(double));
+            max_prefix = (double *)malloc((size_t)ctx->dimension_count * sizeof(double));
+            if (!load_profile || !min_prefix || !max_prefix) {
+                goto done;
+            }
         }
 
         /* Check capacity per trip segment (capacity resets at trip boundaries) */
@@ -520,7 +545,7 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
         }
     }
 
-    if (ctx->num_requests > 0) {
+    if (ctx->num_requests > 0 && !use_scratch) {
         pickup_depart = (double *)malloc((size_t)ctx->num_requests * sizeof(double));
         pickup_seen = (uint8_t *)calloc((size_t)ctx->num_requests, sizeof(uint8_t));
         if (!pickup_depart || !pickup_seen) {
@@ -838,16 +863,18 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
     } /* end seq_work_since_break scope */
 
 done:
-    free(service_start);
-    free(depart);
-    free(latest_start);
-    free(forward_slack);
-    free(load_profile);
-    free(pickup_depart);
-    free(pickup_seen);
-    free(min_prefix);
-    free(max_prefix);
-    free(seq_arrival);
+    if (!use_scratch) {
+        free(service_start);
+        free(depart);
+        free(latest_start);
+        free(forward_slack);
+        free(load_profile);
+        free(pickup_depart);
+        free(pickup_seen);
+        free(min_prefix);
+        free(max_prefix);
+        free(seq_arrival);
+    }
     return feasible;
 }
 
@@ -858,6 +885,7 @@ int sg_route_sequence_feasible_distance(const SGContext *ctx, uint32_t vehicle_i
     uint32_t stop_count = 0;
     uint32_t i;
     int ok = 0;
+    int use_scratch = 0;
 
     (void)capacity_scratch;
 
@@ -874,9 +902,15 @@ int sg_route_sequence_feasible_distance(const SGContext *ctx, uint32_t vehicle_i
     if (ctx->num_requests > UINT32_MAX / 2U || request_count > UINT32_MAX / 2U) {
         return 0;
     }
-    stops = (SGRouteStop *)malloc((size_t)request_count * 2U * sizeof(SGRouteStop));
-    if (!stops) {
-        return 0;
+
+    if (ctx->scratch.feas_stops && request_count * 2U <= ctx->scratch.stop_capacity) {
+        use_scratch = 1;
+        stops = ctx->scratch.feas_stops;
+    } else {
+        stops = (SGRouteStop *)malloc((size_t)request_count * 2U * sizeof(SGRouteStop));
+        if (!stops) {
+            return 0;
+        }
     }
 
     for (i = 0; i < request_count; i++) {
@@ -904,7 +938,7 @@ int sg_route_sequence_feasible_distance(const SGContext *ctx, uint32_t vehicle_i
     }
 
 done:
-    free(stops);
+    if (!use_scratch) free(stops);
     return ok;
 }
 

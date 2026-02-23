@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "arbor.h"
+#include "sh_arena.h"
 #include "sh_dist.h"
 
 /* Constants */
@@ -70,7 +71,26 @@ typedef struct {
 } SGRouteBreak;
 
 typedef struct {
+    /* sg_route_stop_sequence_feasible */
+    double *timing;            /* 5 * stop_cap: service_start|depart|latest_start|forward_slack|seq_arrival */
+    double *load_profile;      /* (stop_cap + 1) * dim_count, NULL if dim_count==0 */
+    double *dim_scratch;       /* 2 * dim_count: [min_prefix|max_prefix], NULL if dim_count==0 */
+    double *pickup_depart;     /* num_requests */
+    uint8_t *pickup_seen;      /* num_requests */
+    /* sg_route_sequence_feasible_distance */
+    SGRouteStop *feas_stops;   /* stop_cap */
+    /* Local search (2opt*, cross-exchange, or-opt) */
+    uint32_t *candidate_a;     /* route_stride */
+    uint32_t *candidate_b;     /* route_stride */
+    /* sg_route_candidate_compat_ok */
+    uint32_t *exclusion_counts; /* num_exclusion_groups, NULL if 0 */
+    uint32_t stop_capacity;     /* = num_requests * 2 */
+    SHArena *arena;
+} SGScratchBuffers;
+
+typedef struct {
     SGBootstrapSolution base;
+    SHArena *arena;  /* NULL = legacy malloc, non-NULL = all arrays allocated from this arena */
 
     uint32_t num_vehicles;
     uint32_t route_stride;
@@ -268,6 +288,12 @@ struct SGContext {
     SGProgressCallback progress_callback;
     void *progress_callback_data;
     volatile uint8_t cancel_requested;
+
+    /* Pre-computed arena size for fast solution copy */
+    size_t solution_arena_size;
+
+    /* Pre-allocated scratch buffers (valid between sg_scratch_init/free) */
+    SGScratchBuffers scratch;
 
     /* Warm start */
     uint32_t *initial_route_vehicle_ids;
@@ -527,6 +553,8 @@ double sg_route_objective_cost(uint32_t unassigned, uint32_t vehicles_used,
                                double total_distance);
 int sg_route_solution_is_better(const void *candidate, const void *current_best,
                                  void *user_ctx);
+void sg_scratch_init(SGContext *ctx);
+void sg_scratch_free(SGContext *ctx);
 
 /* sg_cost.c */
 double sg_euclid(double ax, double ay, double bx, double by);

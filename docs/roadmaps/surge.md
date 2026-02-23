@@ -1645,7 +1645,7 @@ Grouped by business impact:
 
 | Gap | Status | Impact | Notes |
 |-----|--------|--------|-------|
-| **Arena allocator** | Not started | High | `sh_arena.h` exists. Per-solve arena replaces ~23 malloc/free per solution. Scratch arena eliminates ~46 malloc/free per local search move attempt. ~95% reduction in allocation calls. |
+| **Arena allocator** | Phases 1-3 done | High | Phase 1 (per-solution arena): ~29 malloc → 1, ~26 free → 1. Phase 2 (optimized copy): `init_for_copy()` + single `memcpy` of arena buffer. Phase 3 (scratch buffers): `SGScratchBuffers` on `SGContext` eliminates per-call malloc/free in feasibility and local search. Cumulative: Solomon -14.8%, Li&Lim -5.0%, Cordeau -3.4% vs Phase 1. |
 | **Multi-threading: independent runs** | Not started | High | `SGContext` is self-contained, no shared state. N threads × N seeds, pick best. Embarrassingly parallel. |
 | **Multi-threading: parallel move eval** | Not started | Medium | `sg_route_rank_insertions_for_request()` vehicle loop is read-only per vehicle. Thread pool or OpenMP. |
 | **REST API server** | Not started | High | Mongoose + `sh_workqueue` + `sh_ratelimit` + `sh_metrics`. Same pattern as FuelWise (`fuelwise/api/src/main.c`). ~600 LOC of boilerplate. |
@@ -1976,19 +1976,28 @@ the shared library. Surge's allocation patterns map directly to arena semantics.
 
 ### Implementation Plan
 
-**Phase 1 — Per-solve arena (low risk):**
-Add `SHArena *solve_arena` to `SGContext`. All `sg_route_solution_init()` allocations use
-`sh_arena_calloc()`. Single `sh_arena_free()` at solve end. No algorithmic changes.
+**Phase 1 — Per-solution arena (DONE):**
+Added `SHArena *arena` to `SGRouteSolution`. All arrays (including bootstrap) allocated from
+a single arena in `sg_route_solution_init()`. Single `sh_arena_free()` in `reset()`. ~29 malloc/calloc → 1
+`sh_arena_create`, ~26 free → 1 `sh_arena_free`. Benchmark results: Solomon -7.3%, Li&Lim -2.2%, Cordeau -2.9%.
 
-**Phase 2 — Per-iteration scratch arena (major win):**
-Add `SHArena *scratch_arena` to `SGContext`. Solution backup/restore in local search uses
-`sh_arena_calloc()` + `sh_arena_reset()` between move attempts. Eliminates ~46 malloc/free
-per move. Prerequisite: ensure all stop/route pointers are re-fetched after restore (existing
-use-after-free discipline already documented in MEMORY.md).
+**Phase 2 — Optimized solution copy (DONE):**
+Added `solution_arena_size` cache to `SGContext` and `sg_route_solution_init_for_copy()` which
+creates an uninitialized arena (no calloc-zeroing, no init loops). `sg_route_solution_copy()` fast
+path: single `sh_arena_alloc` + single `memcpy` of source arena buffer. Identical allocation order
+guarantees identical memory layout. Eliminates ~50KB of wasted zeroing + ~20K UINT32_MAX init
+writes per copy.
 
-**Phase 3 — Feasibility scratch:**
-Temp arrays in `sg_route_stop_sequence_feasible()` allocated from scratch arena instead of
-malloc. Arena reset after each call.
+**Phase 3 — Pre-allocated scratch buffers (DONE):**
+Added `SGScratchBuffers` to `SGContext` with pre-allocated arrays for feasibility checking
+(timing, load_profile, dim_scratch, pickup_depart, pickup_seen, feas_stops) and local search
+(candidate_a, candidate_b, exclusion_counts). Single arena created in `sg_scratch_init()`,
+freed in `sg_scratch_free()`. All callers use `use_scratch` flag with graceful malloc fallback.
+Eliminates 5-10 malloc/free per `sg_route_stop_sequence_feasible()` call and per-function
+candidate array allocations in 2-opt*, or-opt, and cross-exchange.
+
+Cumulative Phase 2+3 benchmark results vs Phase 1 baseline:
+Solomon -14.8% (5.616s → 4.786s), Li&Lim -5.0% (3.920s → 3.724s), Cordeau -3.4% (0.264s → 0.255s).
 
 ### Sizing
 

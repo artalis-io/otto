@@ -17,10 +17,18 @@ static int sg_route_candidate_compat_ok(const SGContext *ctx,
         }
     }
     if (ctx->num_exclusion_groups > 0) {
-        uint32_t *counts = (uint32_t *)calloc(ctx->num_exclusion_groups, sizeof(uint32_t));
+        uint32_t *counts;
         uint32_t i;
         int ok = 1;
-        if (!counts) return 1; /* conservative: assume OK if OOM */
+        int use_scratch = 0;
+        if (ctx->scratch.exclusion_counts) {
+            use_scratch = 1;
+            counts = ctx->scratch.exclusion_counts;
+            memset(counts, 0, (size_t)ctx->num_exclusion_groups * sizeof(uint32_t));
+        } else {
+            counts = (uint32_t *)calloc(ctx->num_exclusion_groups, sizeof(uint32_t));
+            if (!counts) return 1; /* conservative: assume OK if OOM */
+        }
         for (i = 0; i < len && ok; i++) {
             const SGRequestRecord *req = &ctx->requests[requests[i]];
             uint16_t g;
@@ -32,7 +40,7 @@ static int sg_route_candidate_compat_ok(const SGContext *ctx,
                 }
             }
         }
-        free(counts);
+        if (!use_scratch) free(counts);
         return ok;
     }
     return 1;
@@ -280,17 +288,24 @@ static int sg_route_try_2opt_star_once(const SGContext *ctx, SGRouteSolution *so
     uint32_t *candidate_b = NULL;
     uint32_t va;
     int improved = 0;
+    int use_scratch = 0;
 
     if (!ctx || !sol || sol->num_vehicles < 2 || sol->route_stride == 0) {
         return 0;
     }
 
-    candidate_a = (uint32_t *)malloc((size_t)sol->route_stride * sizeof(uint32_t));
-    candidate_b = (uint32_t *)malloc((size_t)sol->route_stride * sizeof(uint32_t));
-    if (!candidate_a || !candidate_b) {
-        free(candidate_a);
-        free(candidate_b);
-        return 0;
+    if (ctx->scratch.candidate_a) {
+        use_scratch = 1;
+        candidate_a = ctx->scratch.candidate_a;
+        candidate_b = ctx->scratch.candidate_b;
+    } else {
+        candidate_a = (uint32_t *)malloc((size_t)sol->route_stride * sizeof(uint32_t));
+        candidate_b = (uint32_t *)malloc((size_t)sol->route_stride * sizeof(uint32_t));
+        if (!candidate_a || !candidate_b) {
+            free(candidate_a);
+            free(candidate_b);
+            return 0;
+        }
     }
 
     for (va = 0; va < sol->num_vehicles && !improved; va++) {
@@ -406,8 +421,7 @@ static int sg_route_try_2opt_star_once(const SGContext *ctx, SGRouteSolution *so
         }
     }
 
-    free(candidate_a);
-    free(candidate_b);
+    if (!use_scratch) { free(candidate_a); free(candidate_b); }
     return improved;
 }
 
@@ -416,17 +430,24 @@ static int sg_route_try_or_opt_once(const SGContext *ctx, SGRouteSolution *sol) 
     uint32_t *candidate_dst = NULL;
     uint32_t va;
     int improved = 0;
+    int use_scratch = 0;
 
     if (!ctx || !sol || sol->route_stride == 0) {
         return 0;
     }
 
-    candidate_src = (uint32_t *)malloc((size_t)sol->route_stride * sizeof(uint32_t));
-    candidate_dst = (uint32_t *)malloc((size_t)sol->route_stride * sizeof(uint32_t));
-    if (!candidate_src || !candidate_dst) {
-        free(candidate_src);
-        free(candidate_dst);
-        return 0;
+    if (ctx->scratch.candidate_a) {
+        use_scratch = 1;
+        candidate_src = ctx->scratch.candidate_a;
+        candidate_dst = ctx->scratch.candidate_b;
+    } else {
+        candidate_src = (uint32_t *)malloc((size_t)sol->route_stride * sizeof(uint32_t));
+        candidate_dst = (uint32_t *)malloc((size_t)sol->route_stride * sizeof(uint32_t));
+        if (!candidate_src || !candidate_dst) {
+            free(candidate_src);
+            free(candidate_dst);
+            return 0;
+        }
     }
 
     for (va = 0; va < sol->num_vehicles && !improved; va++) {
@@ -637,8 +658,7 @@ static int sg_route_try_or_opt_once(const SGContext *ctx, SGRouteSolution *sol) 
         }
     }
 
-    free(candidate_src);
-    free(candidate_dst);
+    if (!use_scratch) { free(candidate_src); free(candidate_dst); }
     return improved;
 }
 
@@ -647,17 +667,24 @@ static int sg_route_try_cross_exchange_once(const SGContext *ctx, SGRouteSolutio
     uint32_t *candidate_b = NULL;
     uint32_t va;
     int improved = 0;
+    int use_scratch = 0;
 
     if (!ctx || !sol || sol->num_vehicles < 2 || sol->route_stride == 0) {
         return 0;
     }
 
-    candidate_a = (uint32_t *)malloc((size_t)sol->route_stride * sizeof(uint32_t));
-    candidate_b = (uint32_t *)malloc((size_t)sol->route_stride * sizeof(uint32_t));
-    if (!candidate_a || !candidate_b) {
-        free(candidate_a);
-        free(candidate_b);
-        return 0;
+    if (ctx->scratch.candidate_a) {
+        use_scratch = 1;
+        candidate_a = ctx->scratch.candidate_a;
+        candidate_b = ctx->scratch.candidate_b;
+    } else {
+        candidate_a = (uint32_t *)malloc((size_t)sol->route_stride * sizeof(uint32_t));
+        candidate_b = (uint32_t *)malloc((size_t)sol->route_stride * sizeof(uint32_t));
+        if (!candidate_a || !candidate_b) {
+            free(candidate_a);
+            free(candidate_b);
+            return 0;
+        }
     }
 
     for (va = 0; va < sol->num_vehicles && !improved; va++) {
@@ -824,8 +851,7 @@ static int sg_route_try_cross_exchange_once(const SGContext *ctx, SGRouteSolutio
         }
     }
 
-    free(candidate_a);
-    free(candidate_b);
+    if (!use_scratch) { free(candidate_a); free(candidate_b); }
     return improved;
 }
 
