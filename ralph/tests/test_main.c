@@ -2284,23 +2284,33 @@ void test_mip_incumbent_feasibility_regression(void) {
 
     int status = ralph_test_get_status(model);
 
-    /* If OPTIMAL, verify solution feasibility */
-    if (status == RALPH_STATUS_OPTIMAL) {
+    /* If a solution is returned, verify constraint feasibility.
+     * This is the core regression check: never accept infeasible incumbents. */
+    if (status == RALPH_STATUS_OPTIMAL ||
+        status == RALPH_STATUS_NODE_LIMIT ||
+        status == RALPH_STATUS_TIME_LIMIT) {
         double *x = malloc(num_subsets * sizeof(double));
-        ralph_test_get_solution(model, x);
+        int has_solution = (x && ralph_test_get_solution(model, x) == 0);
 
-        int feasible = 1;
-        for (int i = 0; i < num_elements && feasible; i++) {
-            double sum = 0.0;
-            for (int k = 0; k < cover_count[i]; k++) {
-                sum += x[covers[i][k]];
-            }
-            if (sum < 0.999 || sum > 1.001) {
-                feasible = 0;
-            }
+        if (status == RALPH_STATUS_OPTIMAL) {
+            ASSERT(has_solution, "OPTIMAL status must provide a solution");
         }
 
-        ASSERT(feasible, "OPTIMAL solution must satisfy all constraints");
+        if (has_solution) {
+            int feasible = 1;
+            for (int i = 0; i < num_elements && feasible; i++) {
+                double sum = 0.0;
+                for (int k = 0; k < cover_count[i]; k++) {
+                    sum += x[covers[i][k]];
+                }
+                if (sum < 0.999 || sum > 1.001) {
+                    feasible = 0;
+                }
+            }
+            ASSERT(feasible, "Returned incumbent must satisfy all constraints");
+        } else if (status == RALPH_STATUS_NODE_LIMIT || status == RALPH_STATUS_TIME_LIMIT) {
+            ASSERT(1, "Node/time limit reached without incumbent is acceptable");
+        }
         free(x);
     } else if (status == RALPH_STATUS_INFEASIBLE) {
         /* Problem may genuinely be infeasible - that's OK */

@@ -532,9 +532,13 @@ static int select_most_infeasible(MIPSolver *solver, const double *solution) {
 
     const int * restrict int_vars = solver->integer_vars;
     const int num_int = solver->num_integers;
+    const LPModel *wm = solver->working_model;
+    const double *lb = wm ? wm->lb : NULL;
+    const double *ub = wm ? wm->ub : NULL;
 
     for (int k = 0; k < num_int; k++) {
         int j = int_vars[k];
+        if (lb && ub && ub[j] - lb[j] <= RALPH_INT_TOL) continue;
         double val = solution[j];
         /* Use subtraction from truncated value - faster than floor() on some systems */
         double frac = val - (double)(long)val;
@@ -564,9 +568,13 @@ static int select_pseudo_cost(MIPSolver *solver, const double *solution) {
     const double * restrict pc_down = solver->pseudo_cost_down;
     const double * restrict pc_up = solver->pseudo_cost_up;
     const int num_int = solver->num_integers;
+    const LPModel *wm = solver->working_model;
+    const double *lb = wm ? wm->lb : NULL;
+    const double *ub = wm ? wm->ub : NULL;
 
     for (int k = 0; k < num_int; k++) {
         int j = int_vars[k];
+        if (lb && ub && ub[j] - lb[j] <= RALPH_INT_TOL) continue;
         double val = solution[j];
         double frac = val - (double)(long)val;
         if (frac < 0.0) frac += 1.0;
@@ -720,6 +728,9 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
     const int * restrict int_vars = solver->integer_vars;
     const int * restrict prios = solver->branch_priorities;
     const int num_int = solver->num_integers;
+    const LPModel *wm = solver->working_model;
+    const double *lb = wm ? wm->lb : NULL;
+    const double *ub = wm ? wm->ub : NULL;
 
     for (int k = 0; k < num_int; k++) {
         if (solver->lp_solver && solver->lp_solver->solution) {
@@ -728,6 +739,7 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
         if (!solution) break;
 
         int j = int_vars[k];
+        if (lb && ub && ub[j] - lb[j] <= RALPH_INT_TOL) continue;
 
         /* Priority filter: skip if not at max priority */
         if (use_priorities && prios && prios[j] < max_prio) continue;
@@ -829,10 +841,14 @@ static int find_max_priority(MIPSolver *solver, const double *solution) {
     const int num_int = solver->num_integers;
     const int * restrict prios = solver->branch_priorities;
     const int num_vars = solver->original_model->num_vars;
+    const LPModel *wm = solver->working_model;
+    const double *lb = wm ? wm->lb : NULL;
+    const double *ub = wm ? wm->ub : NULL;
 
     for (int k = 0; k < num_int; k++) {
         int j = int_vars[k];
         if (j < 0 || j >= num_vars) continue;
+        if (lb && ub && ub[j] - lb[j] <= RALPH_INT_TOL) continue;
         double val = solution[j];
         double frac = val - (double)(long)val;
         if (frac < 0.0) frac += 1.0;
@@ -857,12 +873,16 @@ static int select_most_infeasible_with_priority(MIPSolver *solver, const double 
     const int * restrict int_vars = solver->integer_vars;
     const int num_int = solver->num_integers;
     const int * restrict prios = solver->branch_priorities;
+    const LPModel *wm = solver->working_model;
+    const double *lb = wm ? wm->lb : NULL;
+    const double *ub = wm ? wm->ub : NULL;
 
     for (int k = 0; k < num_int; k++) {
         int j = int_vars[k];
 
         /* Skip if not at max priority */
         if (prios && prios[j] < max_prio) continue;
+        if (lb && ub && ub[j] - lb[j] <= RALPH_INT_TOL) continue;
 
         double val = solution[j];
         double frac = val - (double)(long)val;
@@ -891,10 +911,14 @@ static int select_pseudo_cost_with_priority(MIPSolver *solver, const double *sol
     const int num_int = solver->num_integers;
     const int * restrict prios = solver->branch_priorities;
     const int num_vars = solver->original_model->num_vars;
+    const LPModel *wm = solver->working_model;
+    const double *lb = wm ? wm->lb : NULL;
+    const double *ub = wm ? wm->ub : NULL;
 
     for (int k = 0; k < num_int; k++) {
         int j = int_vars[k];
         if (j < 0 || j >= num_vars) continue;
+        if (lb && ub && ub[j] - lb[j] <= RALPH_INT_TOL) continue;
 
         /* Skip if not at max priority */
         if (prios && prios[j] < max_prio) continue;
@@ -937,8 +961,10 @@ int select_branch_variable(MIPSolver *solver, const double *solution, int *branc
 
         /* If user returns valid variable index, use it */
         if (user_var >= 0 && user_var < model->num_vars) {
-            /* Verify it's actually fractional */
-            if (solver->is_integer[user_var]) {
+            LPModel *wm = solver->working_model ? solver->working_model : model;
+            /* Verify it's actually fractional and branchable at current node */
+            if (solver->is_integer[user_var] &&
+                wm->ub[user_var] - wm->lb[user_var] > RALPH_INT_TOL) {
                 double val = solution[user_var];
                 double frac = val - floor(val);
                 if (frac > RALPH_INT_TOL && frac < 1.0 - RALPH_INT_TOL) {
