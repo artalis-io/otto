@@ -13,6 +13,10 @@
 #include <stdint.h>
 #include <string.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* FNV-1a constants */
 #define SH_FNV1A_64_OFFSET 14695981039346656037ULL
 #define SH_FNV1A_64_PRIME  1099511628211ULL
@@ -54,5 +58,9 @@ static inline uint32_t sh_fnv1a_32_str(const char *s)
 {
     return sh_fnv1a_32(s, strlen(s));
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SHARED_SH_HASH_H */

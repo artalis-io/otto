@@ -5,6 +5,10 @@
 
 #include "ar_types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct ARALNSContext ARALNSContext;
 
 typedef ARStatus (*ARDestroyOp)(void *op_ctx, void *solution, int count,
@@ -67,5 +71,9 @@ typedef int (*ARProgressCallback)(int64_t iteration, double best_cost,
 ARStatus ar_alns_set_progress_callback(ARALNSContext *ctx,
                                         ARProgressCallback callback,
                                         void *user_data);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* ARBOR_AR_ALNS_H */

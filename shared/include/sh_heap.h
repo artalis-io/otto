@@ -18,6 +18,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ============================================================================
  * Status Codes
  * ============================================================================ */
@@ -130,5 +134,9 @@ SHHeapStatus sh_heap_push_or_decrease(SHHeap *heap, uint32_t node, double priori
 
 /* Very large priority value (effectively infinite) */
 #define SH_HEAP_INF 1e308
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SH_HEAP_H */

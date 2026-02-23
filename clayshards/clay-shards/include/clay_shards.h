@@ -14,4 +14,12 @@
 /* Immediate mode API */
 #include "cs_immediate.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif /* CLAY_SHARDS_H */

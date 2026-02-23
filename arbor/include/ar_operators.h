@@ -6,6 +6,10 @@
 #include "ar_types.h"
 #include "sh_dist.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef int (*ARGetCountFn)(void *solution, void *user_ctx);
 typedef uint32_t (*ARGetElementFn)(void *solution, void *user_ctx, int index);
 typedef double (*ARRemovalCostFn)(void *ctx, void *solution, uint32_t element_id);
@@ -25,5 +29,9 @@ ARStatus ar_remove_related(SHRng *rng, void *ctx, void *solution, int q,
                            ARGetElementFn get_element,
                            ARRelatednessFn relatedness, double randomness,
                            void *user_ctx, int *removed_count);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* ARBOR_AR_OPERATORS_H */

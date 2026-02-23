@@ -4,6 +4,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef enum {
     AR_STATUS_OK = 0,
     AR_STATUS_INVALID_ARG,
@@ -80,5 +84,9 @@ typedef struct {
     int64_t improvements;
     double total_seconds;
 } ARALNSOperatorStats;
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* ARBOR_AR_TYPES_H */

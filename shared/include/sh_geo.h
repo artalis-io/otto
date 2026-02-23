@@ -10,6 +10,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ============================================================================
  * Constants
  * ============================================================================ */
@@ -221,5 +225,9 @@ void sh_latlon_to_local(SHCoord coord, SHCoord ref, double *x, double *y);
  * @param coord Output: geographic coordinate
  */
 void sh_local_to_latlon(double x, double y, SHCoord ref, SHCoord *coord);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SH_GEO_H */

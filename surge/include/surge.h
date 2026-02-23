@@ -5,6 +5,10 @@
 
 #include "sg_types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct SGContext SGContext;
 
 typedef void (*SGTravelCallback)(uint32_t from_location, uint32_t to_location,
@@ -254,5 +258,9 @@ uint32_t sg_get_destroy_operator_count(const SGContext *ctx);
 uint32_t sg_get_repair_operator_count(const SGContext *ctx);
 SGStatus sg_get_destroy_operator_stats(const SGContext *ctx, uint32_t index, SGOperatorStats *out);
 SGStatus sg_get_repair_operator_stats(const SGContext *ctx, uint32_t index, SGOperatorStats *out);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SURGE_H */

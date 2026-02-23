@@ -4,6 +4,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef enum {
     SG_STATUS_OK = 0,
     SG_STATUS_INVALID_ARG,
@@ -126,5 +130,9 @@ typedef struct {
     const uint32_t *task_ids;
     uint32_t task_count;
 } SGPlanRoute;
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SURGE_SG_TYPES_H */
