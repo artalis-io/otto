@@ -47,6 +47,9 @@ int lp_external_adapter_unregister(LPExternalProvider provider);
 void lp_external_adapter_unregister_all(void);
 int lp_external_adapter_is_registered(LPExternalProvider provider);
 const char* lp_external_adapter_registered_name(LPExternalProvider provider);
+int lp_external_adapter_list_registered(LPExternalProvider *providers,
+                                        int capacity,
+                                        int *count);
 
 int lp_external_adapter_get_capabilities(LPExternalProvider provider,
                                          LPExternalCapabilities *caps);

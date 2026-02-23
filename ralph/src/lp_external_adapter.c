@@ -168,6 +168,36 @@ int lp_external_adapter_is_registered(LPExternalProvider provider) {
     return is_registered;
 }
 
+int lp_external_adapter_list_registered(LPExternalProvider *providers,
+                                        int capacity,
+                                        int *count) {
+    int needed = 0;
+    int out_idx = 0;
+    int query_only = 0;
+
+    if (!count) return -1;
+    if (capacity < 0) return -1;
+    if (!providers && capacity > 0) return -1;
+    query_only = (!providers && capacity == 0) ? 1 : 0;
+    if (lp_external_registry_lock() != 0) return -1;
+
+    for (int p = (int)LP_EXTERNAL_PROVIDER_GLPK;
+         p <= (int)LP_EXTERNAL_PROVIDER_GLOP;
+         p++) {
+        if (!g_lp_external_registry.entries[p].registered) continue;
+        needed++;
+        if (providers && out_idx < capacity) {
+            providers[out_idx++] = (LPExternalProvider)p;
+        }
+    }
+
+    *count = needed;
+    lp_external_registry_unlock();
+    if (query_only) return 0;
+    if (needed > capacity) return -1;
+    return 0;
+}
+
 const char* lp_external_adapter_registered_name(LPExternalProvider provider) {
     const char *name = lp_external_provider_name(LP_EXTERNAL_PROVIDER_NONE);
     if (lp_external_registry_lock() != 0) return name;
