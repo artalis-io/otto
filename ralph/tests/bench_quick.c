@@ -7,7 +7,7 @@
 #include <string.h>
 #include <math.h>
 #include <sys/time.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 static double get_time(void) {
     struct timeval tv;
@@ -28,7 +28,7 @@ static int glpsol_available(void) {
 
 /* Generate bounded LP model */
 static RalphModel* generate_lp(int n, int m, double density) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return NULL;
     ralph_set_int_param_id(model, RALPH_PARAM_VERBOSE, 0);
     ralph_set_int_param_id(model, RALPH_PARAM_MAX_ITERATIONS, 100000);
@@ -40,12 +40,12 @@ static RalphModel* generate_lp(int n, int m, double density) {
         free(c);
         free(idx);
         free(val);
-        ralph_free(model);
+        ralph_test_free(model);
         return NULL;
     }
     for (int j = 0; j < n; j++) {
         c[j] = randf(1, 10);  /* Positive costs for bounded optimum */
-        ralph_add_var(model, 0.0, 100.0, c[j], 'C');
+        ralph_test_add_var(model, 0.0, 100.0, c[j], 'C');
     }
 
     for (int i = 0; i < m; i++) {
@@ -64,7 +64,7 @@ static RalphModel* generate_lp(int n, int m, double density) {
             nnz = 1;
         }
         double rhs = randf(50, 200);
-        ralph_add_constraint(model, nnz, idx, val, 'G', rhs);
+        ralph_test_add_constraint(model, nnz, idx, val, 'G', rhs);
     }
 
     free(c); free(idx); free(val);
@@ -84,11 +84,11 @@ static void benchmark(int n, int m, double density) {
                            (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX);
 
     double t0 = get_time();
-    (void)ralph_optimize_lp(model);
+    (void)ralph_test_optimize_lp(model);
     double ralph_time = get_time() - t0;
-    int status = ralph_get_status(model);
-    double ralph_obj = ralph_get_objval(model);
-    ralph_free(model);
+    int status = ralph_test_get_status(model);
+    double ralph_obj = ralph_test_get_objval(model);
+    ralph_test_free(model);
 
     seed = 42;
     model = generate_lp(n, m, density);
@@ -102,14 +102,14 @@ static void benchmark(int n, int m, double density) {
     ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                            (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL);
     t0 = get_time();
-    (void)ralph_optimize_lp(model);
+    (void)ralph_test_optimize_lp(model);
     double glpk_time = get_time() - t0;
-    double glpk_obj = ralph_get_objval(model);
-    const char *glpk_status = ralph_status_string(ralph_get_status(model));
-    ralph_free(model);
+    double glpk_obj = ralph_test_get_objval(model);
+    const char *glpk_status = ralph_test_status_string(ralph_test_get_status(model));
+    ralph_test_free(model);
 
     printf("  Ralph: %.4fs, obj=%.2f, status=%s\n",
-           ralph_time, ralph_obj, ralph_status_string(status));
+           ralph_time, ralph_obj, ralph_test_status_string(status));
     printf("  GLPK* (oop): %.4fs, obj=%.2f, status=%s\n",
            glpk_time, glpk_obj, glpk_status);
 
@@ -120,7 +120,7 @@ static void benchmark(int n, int m, double density) {
     } else if (status == RALPH_STATUS_OPTIMAL) {
         printf("  ✗ Objectives differ by %.2f\n", fabs(ralph_obj - glpk_obj));
     } else {
-        printf("  ✗ Ralph failed: %s\n", ralph_status_string(status));
+        printf("  ✗ Ralph failed: %s\n", ralph_test_status_string(status));
     }
 
 }

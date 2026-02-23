@@ -9,7 +9,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -72,17 +72,17 @@ static RalphLPExternalAdapter build_public_adapter(PublicAdapterFixture *fx,
 }
 
 static RalphModel* build_small_lp(void) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return NULL;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
-    ralph_set_int_param(model, "detect_special", 0);
-    ralph_set_int_param(model, "presolve", 0);
-    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_int_param(model, "detect_special", 0);
+    ralph_test_set_int_param(model, "presolve", 0);
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
     {
         int idx[] = {0};
         double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 1.0);
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 1.0);
     }
     return model;
 }
@@ -247,7 +247,7 @@ static void test_public_adapter_provider_dispatch(void) {
                                              (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK),
                       0,
                       "public dispatch: set provider GLPK");
-        ASSERT_INT_EQ(ralph_optimize_lp(model), -1,
+        ASSERT_INT_EQ(ralph_test_optimize_lp(model), -1,
                       "public dispatch: GLPK adapter solve rc propagates");
         ASSERT_INT_EQ(glpk_fx.solve_calls, 1,
                       "public dispatch: GLPK solve called");
@@ -255,7 +255,7 @@ static void test_public_adapter_provider_dispatch(void) {
                       "public dispatch: CLP not called for GLPK request");
         ASSERT_INT_EQ((int)glpk_fx.last_backend, (int)RALPH_LP_EXTERNAL_BACKEND_SIMPLEX,
                       "public dispatch: GLPK simplex backend selected");
-        ralph_free(model);
+        ralph_test_free(model);
     }
 
     model = build_small_lp();
@@ -269,13 +269,13 @@ static void test_public_adapter_provider_dispatch(void) {
                                              (int)RALPH_LP_EXTERNAL_PROVIDER_CLP),
                       0,
                       "public dispatch: set provider CLP");
-        ASSERT_INT_EQ(ralph_optimize_lp(model), -1,
+        ASSERT_INT_EQ(ralph_test_optimize_lp(model), -1,
                       "public dispatch: CLP adapter solve rc propagates");
         ASSERT_INT_EQ(clp_fx.solve_calls, 1,
                       "public dispatch: CLP solve called");
         ASSERT_INT_EQ((int)clp_fx.last_backend, (int)RALPH_LP_EXTERNAL_BACKEND_DUAL_SIMPLEX,
                       "public dispatch: CLP dual backend selected");
-        ralph_free(model);
+        ralph_test_free(model);
     }
 
     ralph_unregister_all_lp_external_adapters();

@@ -7,7 +7,7 @@
 #include <string.h>
 #include <time.h>
 #include <sys/time.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 static double get_time(void) {
     struct timeval tv;
@@ -28,7 +28,7 @@ static int glpsol_available(void) {
 
 /* Generate LP model */
 static RalphModel* generate_lp(int n, int m, double density) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return NULL;
     ralph_set_int_param_id(model, RALPH_PARAM_VERBOSE, 0);
     ralph_set_int_param_id(model, RALPH_PARAM_MAX_ITERATIONS, 100000);
@@ -37,7 +37,7 @@ static RalphModel* generate_lp(int n, int m, double density) {
     double *c = malloc(n * sizeof(double));
     for (int j = 0; j < n; j++) {
         c[j] = randf(-10, 10);
-        ralph_add_var(model, 0.0, 100.0, c[j], 'C');
+        ralph_test_add_var(model, 0.0, 100.0, c[j], 'C');
     }
 
     /* Constraints */
@@ -47,7 +47,7 @@ static RalphModel* generate_lp(int n, int m, double density) {
         free(c);
         free(idx);
         free(val);
-        ralph_free(model);
+        ralph_test_free(model);
         return NULL;
     }
 
@@ -70,7 +70,7 @@ static RalphModel* generate_lp(int n, int m, double density) {
         }
 
         double rhs = randf(0, 50);
-        ralph_add_constraint(model, nnz, idx, val, 'L', rhs);
+        ralph_test_add_constraint(model, nnz, idx, val, 'L', rhs);
     }
 
     free(c); free(idx); free(val);
@@ -92,12 +92,12 @@ static void run_comparison(int n, int m, double density) {
                            (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX);
 
     double t0 = get_time();
-    (void)ralph_optimize_lp(model);
+    (void)ralph_test_optimize_lp(model);
     double ralph_time = get_time() - t0;
-    int status = ralph_get_status(model);
-    double ralph_obj = ralph_get_objval(model);
-    int ralph_iters = ralph_get_iterations(model);
-    ralph_free(model);
+    int status = ralph_test_get_status(model);
+    double ralph_obj = ralph_test_get_objval(model);
+    int ralph_iters = ralph_test_get_iterations(model);
+    ralph_test_free(model);
 
     /* GLPK solve routed via Ralph external adapter */
     seed = 12345;
@@ -112,11 +112,11 @@ static void run_comparison(int n, int m, double density) {
     ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                            (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL);
     t0 = get_time();
-    (void)ralph_optimize_lp(model);
+    (void)ralph_test_optimize_lp(model);
     double glpk_time = get_time() - t0;
-    double glpk_obj = ralph_get_objval(model);
-    const char *glpk_status = ralph_status_string(ralph_get_status(model));
-    ralph_free(model);
+    double glpk_obj = ralph_test_get_objval(model);
+    const char *glpk_status = ralph_test_status_string(ralph_test_get_status(model));
+    ralph_test_free(model);
 
     printf("  Ralph: %.4fs, obj=%.4f, iters=%d, status=%d\n",
            ralph_time, ralph_obj, ralph_iters, status);

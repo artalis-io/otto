@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 #include "presolve.h"
 #include "lp.h"
 
@@ -162,29 +162,29 @@ static void test_singleton_row_inequality(void) {
     lp_model_free(m);
 
     /* Solve via ralph API to verify end-to-end */
-    RalphModel *rm = ralph_create();
-    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
-    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
-    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    RalphModel *rm = ralph_test_create();
+    ralph_test_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_test_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
 
     int idx0[] = {0}; double v0[] = {3.0};
-    ralph_add_constraint(rm, 1, idx0, v0, RALPH_LESS_EQUAL, 12.0);
+    ralph_test_add_constraint(rm, 1, idx0, v0, RALPH_LESS_EQUAL, 12.0);
     int idx1[] = {1}; double v1[] = {-2.0};
-    ralph_add_constraint(rm, 1, idx1, v1, RALPH_LESS_EQUAL, -6.0);
+    ralph_test_add_constraint(rm, 1, idx1, v1, RALPH_LESS_EQUAL, -6.0);
     int idx2[] = {0, 1}; double v2[] = {1.0, 1.0};
-    ralph_add_constraint(rm, 2, idx2, v2, RALPH_LESS_EQUAL, 10.0);
+    ralph_test_add_constraint(rm, 2, idx2, v2, RALPH_LESS_EQUAL, 10.0);
 
-    ralph_set_int_param(rm, "presolve", 1);
-    ralph_optimize(rm);
+    ralph_test_set_int_param(rm, "presolve", 1);
+    ralph_test_optimize(rm);
 
-    RalphStatus status = ralph_get_status(rm);
+    RalphStatus status = ralph_test_get_status(rm);
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Optimal with presolve");
 
     /* min x+y: x>=0, y>=3, x<=4, x+y<=10 => x=0, y=3, obj=3 */
-    double obj_val = ralph_get_objval(rm);
+    double obj_val = ralph_test_get_objval(rm);
     ASSERT_NEAR(obj_val, 3.0, TOLERANCE, "Objective = 3.0 (x=0, y=3)");
 
-    ralph_free(rm);
+    ralph_test_free(rm);
 }
 
 /* ============================================================================
@@ -204,41 +204,41 @@ static void test_singleton_row_inequality(void) {
 static void test_doubleton_equality(void) {
     printf("\n=== Test: Doubleton equality elimination ===\n");
 
-    RalphModel *rm = ralph_create();
-    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
-    ralph_add_var(rm, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);  /* x */
-    ralph_add_var(rm, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);  /* y */
-    ralph_add_var(rm, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);  /* z */
+    RalphModel *rm = ralph_test_create();
+    ralph_test_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_test_add_var(rm, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_test_add_var(rm, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);  /* y */
+    ralph_test_add_var(rm, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);  /* z */
 
     /* x + y = 10 */
     int idx0[] = {0, 1}; double v0[] = {1.0, 1.0};
-    ralph_add_constraint(rm, 2, idx0, v0, RALPH_EQUAL, 10.0);
+    ralph_test_add_constraint(rm, 2, idx0, v0, RALPH_EQUAL, 10.0);
 
     /* x + 2z <= 15 */
     int idx1[] = {0, 2}; double v1[] = {1.0, 2.0};
-    ralph_add_constraint(rm, 2, idx1, v1, RALPH_LESS_EQUAL, 15.0);
+    ralph_test_add_constraint(rm, 2, idx1, v1, RALPH_LESS_EQUAL, 15.0);
 
     /* y + z <= 12 */
     int idx2[] = {1, 2}; double v2[] = {1.0, 1.0};
-    ralph_add_constraint(rm, 2, idx2, v2, RALPH_LESS_EQUAL, 12.0);
+    ralph_test_add_constraint(rm, 2, idx2, v2, RALPH_LESS_EQUAL, 12.0);
 
-    ralph_set_int_param(rm, "presolve", 1);
-    ralph_optimize(rm);
+    ralph_test_set_int_param(rm, "presolve", 1);
+    ralph_test_optimize(rm);
 
-    RalphStatus status = ralph_get_status(rm);
+    RalphStatus status = ralph_test_get_status(rm);
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Optimal with doubleton presolve");
 
-    double obj_val = ralph_get_objval(rm);
+    double obj_val = ralph_test_get_objval(rm);
     /* obj = x + y + z = 10 + z, min z=0 => obj=10 */
     ASSERT_NEAR(obj_val, 10.0, TOLERANCE, "Objective = 10.0");
 
     /* Verify solution: x + y = 10, z = 0 */
     double sol[3];
-    ralph_get_solution(rm, sol);
+    ralph_test_get_solution(rm, sol);
     ASSERT_NEAR(sol[0] + sol[1], 10.0, TOLERANCE, "x + y = 10 (equality satisfied)");
     ASSERT_NEAR(sol[2], 0.0, TOLERANCE, "z = 0");
 
-    ralph_free(rm);
+    ralph_test_free(rm);
 }
 
 /* ============================================================================
@@ -257,31 +257,31 @@ static void test_doubleton_equality(void) {
 static void test_doubleton_postsolve(void) {
     printf("\n=== Test: Doubleton equality postsolve ===\n");
 
-    RalphModel *rm = ralph_create();
-    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
-    ralph_add_var(rm, 0.0, 1e30, -1.0, RALPH_CONTINUOUS);  /* x */
-    ralph_add_var(rm, 0.0, 1e30, -2.0, RALPH_CONTINUOUS);  /* y */
-    ralph_add_var(rm, 0.0, 1e30, -1.0, RALPH_CONTINUOUS);  /* z */
+    RalphModel *rm = ralph_test_create();
+    ralph_test_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_test_add_var(rm, 0.0, 1e30, -1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_test_add_var(rm, 0.0, 1e30, -2.0, RALPH_CONTINUOUS);  /* y */
+    ralph_test_add_var(rm, 0.0, 1e30, -1.0, RALPH_CONTINUOUS);  /* z */
 
     /* 2x + 3y = 12 */
     int idx0[] = {0, 1}; double v0[] = {2.0, 3.0};
-    ralph_add_constraint(rm, 2, idx0, v0, RALPH_EQUAL, 12.0);
+    ralph_test_add_constraint(rm, 2, idx0, v0, RALPH_EQUAL, 12.0);
 
     /* x + z <= 10 */
     int idx1[] = {0, 2}; double v1[] = {1.0, 1.0};
-    ralph_add_constraint(rm, 2, idx1, v1, RALPH_LESS_EQUAL, 10.0);
+    ralph_test_add_constraint(rm, 2, idx1, v1, RALPH_LESS_EQUAL, 10.0);
 
-    ralph_set_int_param(rm, "presolve", 1);
-    ralph_optimize(rm);
+    ralph_test_set_int_param(rm, "presolve", 1);
+    ralph_test_optimize(rm);
 
-    RalphStatus status = ralph_get_status(rm);
+    RalphStatus status = ralph_test_get_status(rm);
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Optimal");
 
-    double obj_val = ralph_get_objval(rm);
+    double obj_val = ralph_test_get_objval(rm);
     ASSERT_NEAR(obj_val, -18.0, TOLERANCE, "Objective = -18.0");
 
     double sol[3];
-    ralph_get_solution(rm, sol);
+    ralph_test_get_solution(rm, sol);
     printf("  INFO: x=%.4f, y=%.4f, z=%.4f\n", sol[0], sol[1], sol[2]);
 
     /* Verify equality constraint holds in recovered solution */
@@ -289,7 +289,7 @@ static void test_doubleton_postsolve(void) {
     ASSERT_NEAR(lhs, 12.0, TOLERANCE, "2x + 3y = 12 (postsolve correct)");
     ASSERT_NEAR(sol[2], 10.0, 0.1, "z ≈ 10 (at bound)");
 
-    ralph_free(rm);
+    ralph_test_free(rm);
 }
 
 /* ============================================================================
@@ -328,36 +328,36 @@ static void test_implied_free(void) {
      * x is implied free: equality + y bounds => x in [0, 10], wider than [-5, 100]
      * After implied free: x has no bounds, enabling more doubleton elimination.
      */
-    RalphModel *rm_pre = ralph_create();
-    ralph_set_obj_sense(rm_pre, RALPH_MINIMIZE);
-    ralph_add_var(rm_pre, -5.0, 100.0, -1.0, RALPH_CONTINUOUS);  /* x */
-    ralph_add_var(rm_pre,  0.0,  10.0, -1.0, RALPH_CONTINUOUS);  /* y */
-    ralph_add_var(rm_pre,  0.0, 100.0, -1.0, RALPH_CONTINUOUS);  /* z */
+    RalphModel *rm_pre = ralph_test_create();
+    ralph_test_set_obj_sense(rm_pre, RALPH_MINIMIZE);
+    ralph_test_add_var(rm_pre, -5.0, 100.0, -1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_test_add_var(rm_pre,  0.0,  10.0, -1.0, RALPH_CONTINUOUS);  /* y */
+    ralph_test_add_var(rm_pre,  0.0, 100.0, -1.0, RALPH_CONTINUOUS);  /* z */
 
     int idx0[] = {0, 1}; double v0[] = {1.0, 1.0};
-    ralph_add_constraint(rm_pre, 2, idx0, v0, RALPH_EQUAL, 10.0);
+    ralph_test_add_constraint(rm_pre, 2, idx0, v0, RALPH_EQUAL, 10.0);
     int idx1[] = {0, 2}; double v1[] = {1.0, 1.0};
-    ralph_add_constraint(rm_pre, 2, idx1, v1, RALPH_LESS_EQUAL, 15.0);
+    ralph_test_add_constraint(rm_pre, 2, idx1, v1, RALPH_LESS_EQUAL, 15.0);
 
-    ralph_set_int_param(rm_pre, "presolve", 1);
-    ralph_optimize(rm_pre);
-    RalphStatus status_pre = ralph_get_status(rm_pre);
-    double obj_pre = ralph_get_objval(rm_pre);
+    ralph_test_set_int_param(rm_pre, "presolve", 1);
+    ralph_test_optimize(rm_pre);
+    RalphStatus status_pre = ralph_test_get_status(rm_pre);
+    double obj_pre = ralph_test_get_objval(rm_pre);
 
     /* Solve without presolve for reference */
-    RalphModel *rm_nopre = ralph_create();
-    ralph_set_obj_sense(rm_nopre, RALPH_MINIMIZE);
-    ralph_add_var(rm_nopre, -5.0, 100.0, -1.0, RALPH_CONTINUOUS);
-    ralph_add_var(rm_nopre,  0.0,  10.0, -1.0, RALPH_CONTINUOUS);
-    ralph_add_var(rm_nopre,  0.0, 100.0, -1.0, RALPH_CONTINUOUS);
+    RalphModel *rm_nopre = ralph_test_create();
+    ralph_test_set_obj_sense(rm_nopre, RALPH_MINIMIZE);
+    ralph_test_add_var(rm_nopre, -5.0, 100.0, -1.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(rm_nopre,  0.0,  10.0, -1.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(rm_nopre,  0.0, 100.0, -1.0, RALPH_CONTINUOUS);
 
-    ralph_add_constraint(rm_nopre, 2, idx0, v0, RALPH_EQUAL, 10.0);
-    ralph_add_constraint(rm_nopre, 2, idx1, v1, RALPH_LESS_EQUAL, 15.0);
+    ralph_test_add_constraint(rm_nopre, 2, idx0, v0, RALPH_EQUAL, 10.0);
+    ralph_test_add_constraint(rm_nopre, 2, idx1, v1, RALPH_LESS_EQUAL, 15.0);
 
-    ralph_set_int_param(rm_nopre, "presolve", 0);
-    ralph_optimize(rm_nopre);
-    RalphStatus status_nopre = ralph_get_status(rm_nopre);
-    double obj_nopre = ralph_get_objval(rm_nopre);
+    ralph_test_set_int_param(rm_nopre, "presolve", 0);
+    ralph_test_optimize(rm_nopre);
+    RalphStatus status_nopre = ralph_test_get_status(rm_nopre);
+    double obj_nopre = ralph_test_get_objval(rm_nopre);
 
     ASSERT(status_pre == RALPH_STATUS_OPTIMAL, "Optimal with presolve");
     ASSERT(status_nopre == RALPH_STATUS_OPTIMAL, "Optimal without presolve");
@@ -372,8 +372,8 @@ static void test_implied_free(void) {
      * x=0, y=10, z=15. obj = -0-10-15 = -25 */
     ASSERT_NEAR(obj_pre, -25.0, TOLERANCE, "Objective = -25.0");
 
-    ralph_free(rm_pre);
-    ralph_free(rm_nopre);
+    ralph_test_free(rm_pre);
+    ralph_test_free(rm_nopre);
 }
 
 /* ============================================================================
@@ -386,28 +386,28 @@ static void test_implied_free(void) {
 static void test_doubleton_integer_guard(void) {
     printf("\n=== Test: Doubleton equality respects integer variables ===\n");
 
-    RalphModel *rm = ralph_create();
-    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
-    ralph_add_var(rm, 0.0, 10.0, 1.0, RALPH_INTEGER);     /* x (integer) */
-    ralph_add_var(rm, 0.0, 10.0, 2.0, RALPH_CONTINUOUS);   /* y */
-    ralph_add_var(rm, 0.0, 10.0, 1.0, RALPH_CONTINUOUS);   /* z */
+    RalphModel *rm = ralph_test_create();
+    ralph_test_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_test_add_var(rm, 0.0, 10.0, 1.0, RALPH_INTEGER);     /* x (integer) */
+    ralph_test_add_var(rm, 0.0, 10.0, 2.0, RALPH_CONTINUOUS);   /* y */
+    ralph_test_add_var(rm, 0.0, 10.0, 1.0, RALPH_CONTINUOUS);   /* z */
 
     /* x + y = 5 */
     int idx0[] = {0, 1}; double v0[] = {1.0, 1.0};
-    ralph_add_constraint(rm, 2, idx0, v0, RALPH_EQUAL, 5.0);
+    ralph_test_add_constraint(rm, 2, idx0, v0, RALPH_EQUAL, 5.0);
 
     /* y + z <= 8 */
     int idx1[] = {1, 2}; double v1[] = {1.0, 1.0};
-    ralph_add_constraint(rm, 2, idx1, v1, RALPH_LESS_EQUAL, 8.0);
+    ralph_test_add_constraint(rm, 2, idx1, v1, RALPH_LESS_EQUAL, 8.0);
 
-    ralph_set_int_param(rm, "presolve", 1);
-    ralph_optimize(rm);
+    ralph_test_set_int_param(rm, "presolve", 1);
+    ralph_test_optimize(rm);
 
-    RalphStatus status = ralph_get_status(rm);
+    RalphStatus status = ralph_test_get_status(rm);
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Optimal (integer var preserved)");
 
     double sol[3];
-    ralph_get_solution(rm, sol);
+    ralph_test_get_solution(rm, sol);
 
     /* Verify x is integer-valued */
     double x_frac = sol[0] - floor(sol[0] + 0.5);
@@ -416,7 +416,7 @@ static void test_doubleton_integer_guard(void) {
     /* Verify equality holds */
     ASSERT_NEAR(sol[0] + sol[1], 5.0, TOLERANCE, "x + y = 5");
 
-    ralph_free(rm);
+    ralph_test_free(rm);
 }
 
 /* ============================================================================
@@ -430,38 +430,38 @@ static void test_doubleton_integer_guard(void) {
 static void test_all_fixed(void) {
     printf("\n=== Test: Presolve fixes all variables ===\n");
 
-    RalphModel *rm = ralph_create();
-    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
-    ralph_add_var(rm, 0.0, 100.0, 2.0, RALPH_CONTINUOUS);  /* x */
-    ralph_add_var(rm, 0.0, 100.0, 3.0, RALPH_CONTINUOUS);  /* y */
+    RalphModel *rm = ralph_test_create();
+    ralph_test_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_test_add_var(rm, 0.0, 100.0, 2.0, RALPH_CONTINUOUS);  /* x */
+    ralph_test_add_var(rm, 0.0, 100.0, 3.0, RALPH_CONTINUOUS);  /* y */
 
     /* x = 3 */
     int idx0[] = {0}; double v0[] = {1.0};
-    ralph_add_constraint(rm, 1, idx0, v0, RALPH_EQUAL, 3.0);
+    ralph_test_add_constraint(rm, 1, idx0, v0, RALPH_EQUAL, 3.0);
 
     /* y = 7 */
     int idx1[] = {1}; double v1[] = {1.0};
-    ralph_add_constraint(rm, 1, idx1, v1, RALPH_EQUAL, 7.0);
+    ralph_test_add_constraint(rm, 1, idx1, v1, RALPH_EQUAL, 7.0);
 
     /* x + y <= 15 */
     int idx2[] = {0, 1}; double v2[] = {1.0, 1.0};
-    ralph_add_constraint(rm, 2, idx2, v2, RALPH_LESS_EQUAL, 15.0);
+    ralph_test_add_constraint(rm, 2, idx2, v2, RALPH_LESS_EQUAL, 15.0);
 
-    ralph_set_int_param(rm, "presolve", 1);
-    ralph_optimize(rm);
+    ralph_test_set_int_param(rm, "presolve", 1);
+    ralph_test_optimize(rm);
 
-    RalphStatus status = ralph_get_status(rm);
+    RalphStatus status = ralph_test_get_status(rm);
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Optimal (all fixed)");
 
-    double obj_val = ralph_get_objval(rm);
+    double obj_val = ralph_test_get_objval(rm);
     ASSERT_NEAR(obj_val, 27.0, TOLERANCE, "Objective = 27.0 (2*3 + 3*7)");
 
     double sol[2];
-    ralph_get_solution(rm, sol);
+    ralph_test_get_solution(rm, sol);
     ASSERT_NEAR(sol[0], 3.0, TOLERANCE, "x = 3");
     ASSERT_NEAR(sol[1], 7.0, TOLERANCE, "y = 7");
 
-    ralph_free(rm);
+    ralph_test_free(rm);
 }
 
 /* ============================================================================
@@ -480,36 +480,36 @@ static void test_all_fixed(void) {
 static void test_doubleton_chain(void) {
     printf("\n=== Test: Doubleton equality chain ===\n");
 
-    RalphModel *rm = ralph_create();
-    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
-    ralph_add_var(rm, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);  /* x */
-    ralph_add_var(rm, 0.0, 1e30, 0.0, RALPH_CONTINUOUS);  /* y */
-    ralph_add_var(rm, 0.0, 1e30, 0.0, RALPH_CONTINUOUS);  /* z */
-    ralph_add_var(rm, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);  /* w */
+    RalphModel *rm = ralph_test_create();
+    ralph_test_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_test_add_var(rm, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_test_add_var(rm, 0.0, 1e30, 0.0, RALPH_CONTINUOUS);  /* y */
+    ralph_test_add_var(rm, 0.0, 1e30, 0.0, RALPH_CONTINUOUS);  /* z */
+    ralph_test_add_var(rm, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);  /* w */
 
     /* x + y = 10 */
     int idx0[] = {0, 1}; double v0[] = {1.0, 1.0};
-    ralph_add_constraint(rm, 2, idx0, v0, RALPH_EQUAL, 10.0);
+    ralph_test_add_constraint(rm, 2, idx0, v0, RALPH_EQUAL, 10.0);
 
     /* y + z = 15 */
     int idx1[] = {1, 2}; double v1[] = {1.0, 1.0};
-    ralph_add_constraint(rm, 2, idx1, v1, RALPH_EQUAL, 15.0);
+    ralph_test_add_constraint(rm, 2, idx1, v1, RALPH_EQUAL, 15.0);
 
     /* z + w <= 20 */
     int idx2[] = {2, 3}; double v2[] = {1.0, 1.0};
-    ralph_add_constraint(rm, 2, idx2, v2, RALPH_LESS_EQUAL, 20.0);
+    ralph_test_add_constraint(rm, 2, idx2, v2, RALPH_LESS_EQUAL, 20.0);
 
-    ralph_set_int_param(rm, "presolve", 1);
-    ralph_optimize(rm);
+    ralph_test_set_int_param(rm, "presolve", 1);
+    ralph_test_optimize(rm);
 
-    RalphStatus status = ralph_get_status(rm);
+    RalphStatus status = ralph_test_get_status(rm);
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Optimal");
 
-    double obj_val = ralph_get_objval(rm);
+    double obj_val = ralph_test_get_objval(rm);
     ASSERT_NEAR(obj_val, 0.0, TOLERANCE, "Objective = 0.0 (x=0, w=0)");
 
     double sol[4];
-    ralph_get_solution(rm, sol);
+    ralph_test_get_solution(rm, sol);
     printf("  INFO: x=%.4f, y=%.4f, z=%.4f, w=%.4f\n",
            sol[0], sol[1], sol[2], sol[3]);
 
@@ -518,7 +518,7 @@ static void test_doubleton_chain(void) {
     ASSERT_NEAR(sol[1] + sol[2], 15.0, TOLERANCE, "y + z = 15");
     ASSERT(sol[2] + sol[3] <= 20.0 + TOLERANCE, "z + w <= 20");
 
-    ralph_free(rm);
+    ralph_test_free(rm);
 }
 
 /* ============================================================================
@@ -531,34 +531,34 @@ static void test_doubleton_chain(void) {
 static void test_singleton_row_ge(void) {
     printf("\n=== Test: Singleton row with >= sense ===\n");
 
-    RalphModel *rm = ralph_create();
-    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
-    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
-    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
+    RalphModel *rm = ralph_test_create();
+    ralph_test_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_test_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_test_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
 
     /* -4*x >= -20 => x <= 5 */
     int idx0[] = {0}; double v0[] = {-4.0};
-    ralph_add_constraint(rm, 1, idx0, v0, RALPH_GREATER_EQUAL, -20.0);
+    ralph_test_add_constraint(rm, 1, idx0, v0, RALPH_GREATER_EQUAL, -20.0);
 
     /* 2*y >= 6 => y >= 3 */
     int idx1[] = {1}; double v1[] = {2.0};
-    ralph_add_constraint(rm, 1, idx1, v1, RALPH_GREATER_EQUAL, 6.0);
+    ralph_test_add_constraint(rm, 1, idx1, v1, RALPH_GREATER_EQUAL, 6.0);
 
     /* x + y <= 20 (extra constraint to keep model non-trivial) */
     int idx2[] = {0, 1}; double v2[] = {1.0, 1.0};
-    ralph_add_constraint(rm, 2, idx2, v2, RALPH_LESS_EQUAL, 20.0);
+    ralph_test_add_constraint(rm, 2, idx2, v2, RALPH_LESS_EQUAL, 20.0);
 
-    ralph_set_int_param(rm, "presolve", 1);
-    ralph_optimize(rm);
+    ralph_test_set_int_param(rm, "presolve", 1);
+    ralph_test_optimize(rm);
 
-    RalphStatus status = ralph_get_status(rm);
+    RalphStatus status = ralph_test_get_status(rm);
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Optimal");
 
-    double obj_val = ralph_get_objval(rm);
+    double obj_val = ralph_test_get_objval(rm);
     /* min x + y: x=0, y=3 => obj=3 */
     ASSERT_NEAR(obj_val, 3.0, TOLERANCE, "Objective = 3.0 (x=0, y=3)");
 
-    ralph_free(rm);
+    ralph_test_free(rm);
 }
 
 /* ============================================================================
@@ -569,27 +569,27 @@ static void test_singleton_row_ge(void) {
 static void test_singleton_infeasible(void) {
     printf("\n=== Test: Presolve detects infeasibility ===\n");
 
-    RalphModel *rm = ralph_create();
-    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
-    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
-    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
+    RalphModel *rm = ralph_test_create();
+    ralph_test_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_test_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_test_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
 
     /* 5*x <= -1 (infeasible with x >= 0) */
     int idx0[] = {0}; double v0[] = {5.0};
-    ralph_add_constraint(rm, 1, idx0, v0, RALPH_LESS_EQUAL, -1.0);
+    ralph_test_add_constraint(rm, 1, idx0, v0, RALPH_LESS_EQUAL, -1.0);
 
     /* x + y <= 10 */
     int idx1[] = {0, 1}; double v1[] = {1.0, 1.0};
-    ralph_add_constraint(rm, 2, idx1, v1, RALPH_LESS_EQUAL, 10.0);
+    ralph_test_add_constraint(rm, 2, idx1, v1, RALPH_LESS_EQUAL, 10.0);
 
-    ralph_set_int_param(rm, "presolve", 1);
-    ralph_optimize(rm);
+    ralph_test_set_int_param(rm, "presolve", 1);
+    ralph_test_optimize(rm);
 
-    RalphStatus status = ralph_get_status(rm);
+    RalphStatus status = ralph_test_get_status(rm);
     ASSERT(status == RALPH_STATUS_INFEASIBLE || status == RALPH_STATUS_ERROR,
            "Infeasibility detected");
 
-    ralph_free(rm);
+    ralph_test_free(rm);
 }
 
 /* ============================================================================
@@ -601,34 +601,34 @@ static void test_singleton_infeasible(void) {
 static void test_doubleton_large_ratio(void) {
     printf("\n=== Test: Doubleton equality with large coefficient ratio ===\n");
 
-    RalphModel *rm = ralph_create();
-    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
-    ralph_add_var(rm, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);   /* x */
-    ralph_add_var(rm, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);   /* y */
-    ralph_add_var(rm, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);   /* z */
+    RalphModel *rm = ralph_test_create();
+    ralph_test_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_test_add_var(rm, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);   /* x */
+    ralph_test_add_var(rm, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);   /* y */
+    ralph_test_add_var(rm, 0.0, 1e30, 1.0, RALPH_CONTINUOUS);   /* z */
 
     /* 1000*x + 0.001*y = 5 */
     int idx0[] = {0, 1}; double v0[] = {1000.0, 0.001};
-    ralph_add_constraint(rm, 2, idx0, v0, RALPH_EQUAL, 5.0);
+    ralph_test_add_constraint(rm, 2, idx0, v0, RALPH_EQUAL, 5.0);
 
     /* y + z <= 100 */
     int idx1[] = {1, 2}; double v1[] = {1.0, 1.0};
-    ralph_add_constraint(rm, 2, idx1, v1, RALPH_LESS_EQUAL, 100.0);
+    ralph_test_add_constraint(rm, 2, idx1, v1, RALPH_LESS_EQUAL, 100.0);
 
-    ralph_set_int_param(rm, "presolve", 1);
-    ralph_optimize(rm);
+    ralph_test_set_int_param(rm, "presolve", 1);
+    ralph_test_optimize(rm);
 
-    RalphStatus status = ralph_get_status(rm);
+    RalphStatus status = ralph_test_get_status(rm);
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Optimal (large ratio)");
 
     double sol[3];
-    ralph_get_solution(rm, sol);
+    ralph_test_get_solution(rm, sol);
 
     /* Verify equality constraint */
     double lhs = 1000.0 * sol[0] + 0.001 * sol[1];
     ASSERT_NEAR(lhs, 5.0, 0.01, "1000*x + 0.001*y = 5 satisfied");
 
-    ralph_free(rm);
+    ralph_test_free(rm);
 }
 
 /* ============================================================================
@@ -649,52 +649,52 @@ static void test_presolve_diet(void) {
     int nvars = 6;
 
     /* Solve with presolve */
-    RalphModel *rm_pre = ralph_create();
-    ralph_set_obj_sense(rm_pre, RALPH_MINIMIZE);
+    RalphModel *rm_pre = ralph_test_create();
+    ralph_test_set_obj_sense(rm_pre, RALPH_MINIMIZE);
     for (int j = 0; j < nvars; j++)
-        ralph_add_var(rm_pre, lb6[j], ub6[j], cost[j], RALPH_CONTINUOUS);
+        ralph_test_add_var(rm_pre, lb6[j], ub6[j], cost[j], RALPH_CONTINUOUS);
 
     /* Protein >= 55 */
     int ip[] = {0,1,2,3,4,5}; double vp[] = {3.7,8.0,34.0,0.5,15.0,4.0};
-    ralph_add_constraint(rm_pre, 6, ip, vp, RALPH_GREATER_EQUAL, 55.0);
+    ralph_test_add_constraint(rm_pre, 6, ip, vp, RALPH_GREATER_EQUAL, 55.0);
     /* Fat >= 33 */
     double vf[] = {2.2,6.0,15.0,0.3,11.0,2.5};
-    ralph_add_constraint(rm_pre, 6, ip, vf, RALPH_GREATER_EQUAL, 33.0);
+    ralph_test_add_constraint(rm_pre, 6, ip, vf, RALPH_GREATER_EQUAL, 33.0);
     /* Carbs >= 70 */
     double vc[] = {15.0,12.0,1.0,22.0,0.0,18.0};
-    ralph_add_constraint(rm_pre, 6, ip, vc, RALPH_GREATER_EQUAL, 70.0);
+    ralph_test_add_constraint(rm_pre, 6, ip, vc, RALPH_GREATER_EQUAL, 70.0);
     /* Calories <= 2400 */
     double vk[] = {90.0,120.0,106.0,97.0,130.0,100.0};
-    ralph_add_constraint(rm_pre, 6, ip, vk, RALPH_LESS_EQUAL, 2400.0);
+    ralph_test_add_constraint(rm_pre, 6, ip, vk, RALPH_LESS_EQUAL, 2400.0);
 
-    ralph_set_int_param(rm_pre, "presolve", 1);
-    ralph_optimize(rm_pre);
+    ralph_test_set_int_param(rm_pre, "presolve", 1);
+    ralph_test_optimize(rm_pre);
 
     /* Solve without presolve */
-    RalphModel *rm_nopre = ralph_create();
-    ralph_set_obj_sense(rm_nopre, RALPH_MINIMIZE);
+    RalphModel *rm_nopre = ralph_test_create();
+    ralph_test_set_obj_sense(rm_nopre, RALPH_MINIMIZE);
     for (int j = 0; j < nvars; j++)
-        ralph_add_var(rm_nopre, lb6[j], ub6[j], cost[j], RALPH_CONTINUOUS);
+        ralph_test_add_var(rm_nopre, lb6[j], ub6[j], cost[j], RALPH_CONTINUOUS);
 
-    ralph_add_constraint(rm_nopre, 6, ip, vp, RALPH_GREATER_EQUAL, 55.0);
-    ralph_add_constraint(rm_nopre, 6, ip, vf, RALPH_GREATER_EQUAL, 33.0);
-    ralph_add_constraint(rm_nopre, 6, ip, vc, RALPH_GREATER_EQUAL, 70.0);
-    ralph_add_constraint(rm_nopre, 6, ip, vk, RALPH_LESS_EQUAL, 2400.0);
+    ralph_test_add_constraint(rm_nopre, 6, ip, vp, RALPH_GREATER_EQUAL, 55.0);
+    ralph_test_add_constraint(rm_nopre, 6, ip, vf, RALPH_GREATER_EQUAL, 33.0);
+    ralph_test_add_constraint(rm_nopre, 6, ip, vc, RALPH_GREATER_EQUAL, 70.0);
+    ralph_test_add_constraint(rm_nopre, 6, ip, vk, RALPH_LESS_EQUAL, 2400.0);
 
-    ralph_set_int_param(rm_nopre, "presolve", 0);
-    ralph_optimize(rm_nopre);
+    ralph_test_set_int_param(rm_nopre, "presolve", 0);
+    ralph_test_optimize(rm_nopre);
 
-    RalphStatus s1 = ralph_get_status(rm_pre);
-    RalphStatus s2 = ralph_get_status(rm_nopre);
+    RalphStatus s1 = ralph_test_get_status(rm_pre);
+    RalphStatus s2 = ralph_test_get_status(rm_nopre);
     ASSERT(s1 == RALPH_STATUS_OPTIMAL, "Diet with presolve: OPTIMAL");
     ASSERT(s2 == RALPH_STATUS_OPTIMAL, "Diet without presolve: OPTIMAL");
 
-    double obj1 = ralph_get_objval(rm_pre);
-    double obj2 = ralph_get_objval(rm_nopre);
+    double obj1 = ralph_test_get_objval(rm_pre);
+    double obj2 = ralph_test_get_objval(rm_nopre);
     ASSERT_NEAR(obj1, obj2, 0.01, "Same objective with and without presolve");
 
-    ralph_free(rm_pre);
-    ralph_free(rm_nopre);
+    ralph_test_free(rm_pre);
+    ralph_test_free(rm_nopre);
 }
 
 /* ============================================================================
@@ -708,35 +708,35 @@ static void test_presolve_diet(void) {
 static void test_proportional_rows(void) {
     printf("\n=== Test: Proportional rows (keep tighter) ===\n");
 
-    RalphModel *rm = ralph_create();
-    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
-    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
-    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
+    RalphModel *rm = ralph_test_create();
+    ralph_test_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_test_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_test_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
 
     /* 2x + 4y <= 20  (equivalent to x + 2y <= 10) */
     int idx0[] = {0, 1}; double v0[] = {2.0, 4.0};
-    ralph_add_constraint(rm, 2, idx0, v0, RALPH_LESS_EQUAL, 20.0);
+    ralph_test_add_constraint(rm, 2, idx0, v0, RALPH_LESS_EQUAL, 20.0);
 
     /* x + 2y <= 8  (tighter) */
     int idx1[] = {0, 1}; double v1[] = {1.0, 2.0};
-    ralph_add_constraint(rm, 2, idx1, v1, RALPH_LESS_EQUAL, 8.0);
+    ralph_test_add_constraint(rm, 2, idx1, v1, RALPH_LESS_EQUAL, 8.0);
 
     /* x + y >= 1  (extra constraint) */
     int idx2[] = {0, 1}; double v2[] = {1.0, 1.0};
-    ralph_add_constraint(rm, 2, idx2, v2, RALPH_GREATER_EQUAL, 1.0);
+    ralph_test_add_constraint(rm, 2, idx2, v2, RALPH_GREATER_EQUAL, 1.0);
 
-    ralph_set_int_param(rm, "presolve", 1);
-    ralph_optimize(rm);
+    ralph_test_set_int_param(rm, "presolve", 1);
+    ralph_test_optimize(rm);
 
-    RalphStatus status = ralph_get_status(rm);
+    RalphStatus status = ralph_test_get_status(rm);
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Optimal with proportional rows");
 
     /* min x + y, x + 2y <= 8, x + y >= 1, x,y >= 0
      * Optimal: x=1, y=0 => obj=1 */
-    double obj_val = ralph_get_objval(rm);
+    double obj_val = ralph_test_get_objval(rm);
     ASSERT_NEAR(obj_val, 1.0, TOLERANCE, "Objective = 1.0");
 
-    ralph_free(rm);
+    ralph_test_free(rm);
 }
 
 /* ============================================================================
@@ -749,27 +749,27 @@ static void test_proportional_rows(void) {
 static void test_proportional_rows_infeasible(void) {
     printf("\n=== Test: Proportional rows detect infeasibility ===\n");
 
-    RalphModel *rm = ralph_create();
-    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
-    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
-    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
+    RalphModel *rm = ralph_test_create();
+    ralph_test_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_test_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_test_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
 
     /* x + y = 5 */
     int idx0[] = {0, 1}; double v0[] = {1.0, 1.0};
-    ralph_add_constraint(rm, 2, idx0, v0, RALPH_EQUAL, 5.0);
+    ralph_test_add_constraint(rm, 2, idx0, v0, RALPH_EQUAL, 5.0);
 
     /* 2x + 2y = 12 (inconsistent: implies x + y = 6) */
     int idx1[] = {0, 1}; double v1[] = {2.0, 2.0};
-    ralph_add_constraint(rm, 2, idx1, v1, RALPH_EQUAL, 12.0);
+    ralph_test_add_constraint(rm, 2, idx1, v1, RALPH_EQUAL, 12.0);
 
-    ralph_set_int_param(rm, "presolve", 1);
-    ralph_optimize(rm);
+    ralph_test_set_int_param(rm, "presolve", 1);
+    ralph_test_optimize(rm);
 
-    RalphStatus status = ralph_get_status(rm);
+    RalphStatus status = ralph_test_get_status(rm);
     ASSERT(status == RALPH_STATUS_INFEASIBLE || status == RALPH_STATUS_ERROR,
            "Infeasibility detected from inconsistent proportional equalities");
 
-    ralph_free(rm);
+    ralph_test_free(rm);
 }
 
 /* ============================================================================
@@ -788,48 +788,48 @@ static void test_proportional_cols(void) {
     printf("\n=== Test: Proportional columns (dominated variable) ===\n");
 
     /* Solve with presolve */
-    RalphModel *rm_pre = ralph_create();
-    ralph_set_obj_sense(rm_pre, RALPH_MINIMIZE);
-    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
-    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
-    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* z */
+    RalphModel *rm_pre = ralph_test_create();
+    ralph_test_set_obj_sense(rm_pre, RALPH_MINIMIZE);
+    ralph_test_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_test_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
+    ralph_test_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* z */
 
     int idx0[] = {0, 1, 2}; double v0[] = {1.0, 1.0, 2.0};
-    ralph_add_constraint(rm_pre, 3, idx0, v0, RALPH_LESS_EQUAL, 10.0);
+    ralph_test_add_constraint(rm_pre, 3, idx0, v0, RALPH_LESS_EQUAL, 10.0);
     int idx1[] = {0, 1, 2}; double v1[] = {1.0, 1.0, 1.0};
-    ralph_add_constraint(rm_pre, 3, idx1, v1, RALPH_LESS_EQUAL, 8.0);
+    ralph_test_add_constraint(rm_pre, 3, idx1, v1, RALPH_LESS_EQUAL, 8.0);
 
-    ralph_set_int_param(rm_pre, "presolve", 1);
-    ralph_optimize(rm_pre);
+    ralph_test_set_int_param(rm_pre, "presolve", 1);
+    ralph_test_optimize(rm_pre);
 
     /* Solve without presolve for reference */
-    RalphModel *rm_nopre = ralph_create();
-    ralph_set_obj_sense(rm_nopre, RALPH_MINIMIZE);
-    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
-    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
-    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    RalphModel *rm_nopre = ralph_test_create();
+    ralph_test_set_obj_sense(rm_nopre, RALPH_MINIMIZE);
+    ralph_test_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
 
-    ralph_add_constraint(rm_nopre, 3, idx0, v0, RALPH_LESS_EQUAL, 10.0);
-    ralph_add_constraint(rm_nopre, 3, idx1, v1, RALPH_LESS_EQUAL, 8.0);
+    ralph_test_add_constraint(rm_nopre, 3, idx0, v0, RALPH_LESS_EQUAL, 10.0);
+    ralph_test_add_constraint(rm_nopre, 3, idx1, v1, RALPH_LESS_EQUAL, 8.0);
 
-    ralph_set_int_param(rm_nopre, "presolve", 0);
-    ralph_optimize(rm_nopre);
+    ralph_test_set_int_param(rm_nopre, "presolve", 0);
+    ralph_test_optimize(rm_nopre);
 
-    RalphStatus s1 = ralph_get_status(rm_pre);
-    RalphStatus s2 = ralph_get_status(rm_nopre);
+    RalphStatus s1 = ralph_test_get_status(rm_pre);
+    RalphStatus s2 = ralph_test_get_status(rm_nopre);
     ASSERT(s1 == RALPH_STATUS_OPTIMAL, "Optimal with presolve");
     ASSERT(s2 == RALPH_STATUS_OPTIMAL, "Optimal without presolve");
 
-    double obj1 = ralph_get_objval(rm_pre);
-    double obj2 = ralph_get_objval(rm_nopre);
+    double obj1 = ralph_test_get_objval(rm_pre);
+    double obj2 = ralph_test_get_objval(rm_nopre);
     ASSERT_NEAR(obj1, obj2, TOLERANCE,
                 "Same objective with and without presolve");
 
     /* min x+y+z, all >= 0 and constraints are satisfied by x=y=z=0 => obj=0 */
     ASSERT_NEAR(obj1, 0.0, TOLERANCE, "Objective = 0.0");
 
-    ralph_free(rm_pre);
-    ralph_free(rm_nopre);
+    ralph_test_free(rm_pre);
+    ralph_test_free(rm_nopre);
 }
 
 /* ============================================================================
@@ -848,50 +848,50 @@ static void test_proportional_cols_cost(void) {
     printf("\n=== Test: Proportional columns with cost dominance ===\n");
 
     /* Solve with presolve */
-    RalphModel *rm_pre = ralph_create();
-    ralph_set_obj_sense(rm_pre, RALPH_MINIMIZE);
-    ralph_add_var(rm_pre, 0.0, 100.0, 2.0, RALPH_CONTINUOUS);  /* x (more expensive) */
-    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y (cheaper) */
-    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* z */
+    RalphModel *rm_pre = ralph_test_create();
+    ralph_test_set_obj_sense(rm_pre, RALPH_MINIMIZE);
+    ralph_test_add_var(rm_pre, 0.0, 100.0, 2.0, RALPH_CONTINUOUS);  /* x (more expensive) */
+    ralph_test_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y (cheaper) */
+    ralph_test_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* z */
 
     int idx0[] = {0, 1, 2}; double v0[] = {1.0, 1.0, 1.0};
-    ralph_add_constraint(rm_pre, 3, idx0, v0, RALPH_LESS_EQUAL, 10.0);
+    ralph_test_add_constraint(rm_pre, 3, idx0, v0, RALPH_LESS_EQUAL, 10.0);
     int idx1[] = {0, 1, 2}; double v1[] = {1.0, 1.0, 2.0};
-    ralph_add_constraint(rm_pre, 3, idx1, v1, RALPH_LESS_EQUAL, 15.0);
+    ralph_test_add_constraint(rm_pre, 3, idx1, v1, RALPH_LESS_EQUAL, 15.0);
 
-    ralph_set_int_param(rm_pre, "presolve", 1);
-    ralph_optimize(rm_pre);
+    ralph_test_set_int_param(rm_pre, "presolve", 1);
+    ralph_test_optimize(rm_pre);
 
     /* Solve without presolve */
-    RalphModel *rm_nopre = ralph_create();
-    ralph_set_obj_sense(rm_nopre, RALPH_MINIMIZE);
-    ralph_add_var(rm_nopre, 0.0, 100.0, 2.0, RALPH_CONTINUOUS);
-    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
-    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    RalphModel *rm_nopre = ralph_test_create();
+    ralph_test_set_obj_sense(rm_nopre, RALPH_MINIMIZE);
+    ralph_test_add_var(rm_nopre, 0.0, 100.0, 2.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
 
-    ralph_add_constraint(rm_nopre, 3, idx0, v0, RALPH_LESS_EQUAL, 10.0);
-    ralph_add_constraint(rm_nopre, 3, idx1, v1, RALPH_LESS_EQUAL, 15.0);
+    ralph_test_add_constraint(rm_nopre, 3, idx0, v0, RALPH_LESS_EQUAL, 10.0);
+    ralph_test_add_constraint(rm_nopre, 3, idx1, v1, RALPH_LESS_EQUAL, 15.0);
 
-    ralph_set_int_param(rm_nopre, "presolve", 0);
-    ralph_optimize(rm_nopre);
+    ralph_test_set_int_param(rm_nopre, "presolve", 0);
+    ralph_test_optimize(rm_nopre);
 
-    RalphStatus s1 = ralph_get_status(rm_pre);
-    RalphStatus s2 = ralph_get_status(rm_nopre);
+    RalphStatus s1 = ralph_test_get_status(rm_pre);
+    RalphStatus s2 = ralph_test_get_status(rm_nopre);
     ASSERT(s1 == RALPH_STATUS_OPTIMAL, "Optimal with presolve");
     ASSERT(s2 == RALPH_STATUS_OPTIMAL, "Optimal without presolve");
 
-    double obj1 = ralph_get_objval(rm_pre);
-    double obj2 = ralph_get_objval(rm_nopre);
+    double obj1 = ralph_test_get_objval(rm_pre);
+    double obj2 = ralph_test_get_objval(rm_nopre);
     ASSERT_NEAR(obj1, obj2, TOLERANCE,
                 "Same objective with and without presolve");
 
     /* x should be 0 (dominated), so solution uses y and z instead */
     double sol[3];
-    ralph_get_solution(rm_pre, sol);
+    ralph_test_get_solution(rm_pre, sol);
     ASSERT_NEAR(sol[0], 0.0, TOLERANCE, "x = 0 (dominated, fixed at lb)");
 
-    ralph_free(rm_pre);
-    ralph_free(rm_nopre);
+    ralph_test_free(rm_pre);
+    ralph_test_free(rm_nopre);
 }
 
 /* ============================================================================
@@ -915,43 +915,43 @@ static void test_proportional_cols_maximize(void) {
     printf("\n=== Test: Proportional columns with maximization (regression) ===\n");
 
     /* Solve with presolve */
-    RalphModel *rm_pre = ralph_create();
-    ralph_set_obj_sense(rm_pre, RALPH_MAXIMIZE);
-    ralph_add_var(rm_pre, 0.0, 7.0, 2.0, RALPH_CONTINUOUS);  /* x */
-    ralph_add_var(rm_pre, 0.0, 7.0, 3.0, RALPH_CONTINUOUS);  /* y */
+    RalphModel *rm_pre = ralph_test_create();
+    ralph_test_set_obj_sense(rm_pre, RALPH_MAXIMIZE);
+    ralph_test_add_var(rm_pre, 0.0, 7.0, 2.0, RALPH_CONTINUOUS);  /* x */
+    ralph_test_add_var(rm_pre, 0.0, 7.0, 3.0, RALPH_CONTINUOUS);  /* y */
 
     int idx0[] = {0, 1}; double v0[] = {1.0, 1.0};
-    ralph_add_constraint(rm_pre, 2, idx0, v0, RALPH_LESS_EQUAL, 10.0);
+    ralph_test_add_constraint(rm_pre, 2, idx0, v0, RALPH_LESS_EQUAL, 10.0);
 
-    ralph_set_int_param(rm_pre, "presolve", 1);
-    ralph_optimize(rm_pre);
+    ralph_test_set_int_param(rm_pre, "presolve", 1);
+    ralph_test_optimize(rm_pre);
 
     /* Solve without presolve for reference */
-    RalphModel *rm_nopre = ralph_create();
-    ralph_set_obj_sense(rm_nopre, RALPH_MAXIMIZE);
-    ralph_add_var(rm_nopre, 0.0, 7.0, 2.0, RALPH_CONTINUOUS);
-    ralph_add_var(rm_nopre, 0.0, 7.0, 3.0, RALPH_CONTINUOUS);
+    RalphModel *rm_nopre = ralph_test_create();
+    ralph_test_set_obj_sense(rm_nopre, RALPH_MAXIMIZE);
+    ralph_test_add_var(rm_nopre, 0.0, 7.0, 2.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(rm_nopre, 0.0, 7.0, 3.0, RALPH_CONTINUOUS);
 
-    ralph_add_constraint(rm_nopre, 2, idx0, v0, RALPH_LESS_EQUAL, 10.0);
+    ralph_test_add_constraint(rm_nopre, 2, idx0, v0, RALPH_LESS_EQUAL, 10.0);
 
-    ralph_set_int_param(rm_nopre, "presolve", 0);
-    ralph_optimize(rm_nopre);
+    ralph_test_set_int_param(rm_nopre, "presolve", 0);
+    ralph_test_optimize(rm_nopre);
 
-    RalphStatus s1 = ralph_get_status(rm_pre);
-    RalphStatus s2 = ralph_get_status(rm_nopre);
+    RalphStatus s1 = ralph_test_get_status(rm_pre);
+    RalphStatus s2 = ralph_test_get_status(rm_nopre);
     ASSERT(s1 == RALPH_STATUS_OPTIMAL, "Optimal with presolve");
     ASSERT(s2 == RALPH_STATUS_OPTIMAL, "Optimal without presolve");
 
-    double obj1 = ralph_get_objval(rm_pre);
-    double obj2 = ralph_get_objval(rm_nopre);
+    double obj1 = ralph_test_get_objval(rm_pre);
+    double obj2 = ralph_test_get_objval(rm_nopre);
     ASSERT_NEAR(obj1, obj2, TOLERANCE,
                 "Same objective with and without presolve");
 
     /* max 2x + 3y, x+y<=10, x,y in [0,7] => y=7, x=3, obj=27 */
     ASSERT_NEAR(obj1, 27.0, TOLERANCE, "Objective = 27.0 (not 23)");
 
-    ralph_free(rm_pre);
-    ralph_free(rm_nopre);
+    ralph_test_free(rm_pre);
+    ralph_test_free(rm_nopre);
 }
 
 /* ============================================================================
@@ -972,30 +972,30 @@ static void test_proportional_cols_maximize(void) {
 static void test_shift_bounds(void) {
     printf("\n=== Test: Shift-variable-bounds postsolve ===\n");
 
-    RalphModel *rm = ralph_create();
-    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
-    ralph_add_var(rm, 5.0, 15.0, 1.0, RALPH_CONTINUOUS);  /* x: lb=5, ub=15 */
-    ralph_add_var(rm, 3.0, 10.0, 1.0, RALPH_CONTINUOUS);  /* y: lb=3, ub=10 */
+    RalphModel *rm = ralph_test_create();
+    ralph_test_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_test_add_var(rm, 5.0, 15.0, 1.0, RALPH_CONTINUOUS);  /* x: lb=5, ub=15 */
+    ralph_test_add_var(rm, 3.0, 10.0, 1.0, RALPH_CONTINUOUS);  /* y: lb=3, ub=10 */
 
     /* x + y <= 20 */
     int idx0[] = {0, 1}; double v0[] = {1.0, 1.0};
-    ralph_add_constraint(rm, 2, idx0, v0, RALPH_LESS_EQUAL, 20.0);
+    ralph_test_add_constraint(rm, 2, idx0, v0, RALPH_LESS_EQUAL, 20.0);
 
-    ralph_set_int_param(rm, "presolve", 1);
-    ralph_optimize(rm);
+    ralph_test_set_int_param(rm, "presolve", 1);
+    ralph_test_optimize(rm);
 
-    RalphStatus status = ralph_get_status(rm);
+    RalphStatus status = ralph_test_get_status(rm);
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Optimal");
 
-    double obj_val = ralph_get_objval(rm);
+    double obj_val = ralph_test_get_objval(rm);
     ASSERT_NEAR(obj_val, 8.0, TOLERANCE, "Objective = 8.0 (x=5, y=3)");
 
     double sol[2];
-    ralph_get_solution(rm, sol);
+    ralph_test_get_solution(rm, sol);
     ASSERT_NEAR(sol[0], 5.0, TOLERANCE, "x = 5.0 (shifted back from lb)");
     ASSERT_NEAR(sol[1], 3.0, TOLERANCE, "y = 3.0 (shifted back from lb)");
 
-    ralph_free(rm);
+    ralph_test_free(rm);
 }
 
 /* ============================================================================
@@ -1016,38 +1016,38 @@ static void test_shift_bounds_maximize(void) {
     printf("\n=== Test: Shift-variable-bounds with maximization ===\n");
 
     /* Solve with presolve */
-    RalphModel *rm_pre = ralph_create();
-    ralph_set_obj_sense(rm_pre, RALPH_MAXIMIZE);
-    ralph_add_var(rm_pre, 2.0, 8.0, 2.0, RALPH_CONTINUOUS);  /* x */
-    ralph_add_var(rm_pre, 1.0, 7.0, 3.0, RALPH_CONTINUOUS);  /* y */
+    RalphModel *rm_pre = ralph_test_create();
+    ralph_test_set_obj_sense(rm_pre, RALPH_MAXIMIZE);
+    ralph_test_add_var(rm_pre, 2.0, 8.0, 2.0, RALPH_CONTINUOUS);  /* x */
+    ralph_test_add_var(rm_pre, 1.0, 7.0, 3.0, RALPH_CONTINUOUS);  /* y */
 
     int idx0[] = {0, 1}; double v0[] = {1.0, 2.0};
-    ralph_add_constraint(rm_pre, 2, idx0, v0, RALPH_LESS_EQUAL, 18.0);
+    ralph_test_add_constraint(rm_pre, 2, idx0, v0, RALPH_LESS_EQUAL, 18.0);
     int idx1[] = {0, 1}; double v1[] = {1.0, 1.0};
-    ralph_add_constraint(rm_pre, 2, idx1, v1, RALPH_LESS_EQUAL, 10.0);
+    ralph_test_add_constraint(rm_pre, 2, idx1, v1, RALPH_LESS_EQUAL, 10.0);
 
-    ralph_set_int_param(rm_pre, "presolve", 1);
-    ralph_optimize(rm_pre);
+    ralph_test_set_int_param(rm_pre, "presolve", 1);
+    ralph_test_optimize(rm_pre);
 
     /* Solve without presolve */
-    RalphModel *rm_nopre = ralph_create();
-    ralph_set_obj_sense(rm_nopre, RALPH_MAXIMIZE);
-    ralph_add_var(rm_nopre, 2.0, 8.0, 2.0, RALPH_CONTINUOUS);
-    ralph_add_var(rm_nopre, 1.0, 7.0, 3.0, RALPH_CONTINUOUS);
+    RalphModel *rm_nopre = ralph_test_create();
+    ralph_test_set_obj_sense(rm_nopre, RALPH_MAXIMIZE);
+    ralph_test_add_var(rm_nopre, 2.0, 8.0, 2.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(rm_nopre, 1.0, 7.0, 3.0, RALPH_CONTINUOUS);
 
-    ralph_add_constraint(rm_nopre, 2, idx0, v0, RALPH_LESS_EQUAL, 18.0);
-    ralph_add_constraint(rm_nopre, 2, idx1, v1, RALPH_LESS_EQUAL, 10.0);
+    ralph_test_add_constraint(rm_nopre, 2, idx0, v0, RALPH_LESS_EQUAL, 18.0);
+    ralph_test_add_constraint(rm_nopre, 2, idx1, v1, RALPH_LESS_EQUAL, 10.0);
 
-    ralph_set_int_param(rm_nopre, "presolve", 0);
-    ralph_optimize(rm_nopre);
+    ralph_test_set_int_param(rm_nopre, "presolve", 0);
+    ralph_test_optimize(rm_nopre);
 
-    RalphStatus s1 = ralph_get_status(rm_pre);
-    RalphStatus s2 = ralph_get_status(rm_nopre);
+    RalphStatus s1 = ralph_test_get_status(rm_pre);
+    RalphStatus s2 = ralph_test_get_status(rm_nopre);
     ASSERT(s1 == RALPH_STATUS_OPTIMAL, "Optimal with presolve");
     ASSERT(s2 == RALPH_STATUS_OPTIMAL, "Optimal without presolve");
 
-    double obj1 = ralph_get_objval(rm_pre);
-    double obj2 = ralph_get_objval(rm_nopre);
+    double obj1 = ralph_test_get_objval(rm_pre);
+    double obj2 = ralph_test_get_objval(rm_nopre);
     ASSERT_NEAR(obj1, obj2, TOLERANCE,
                 "Same objective with and without presolve");
 
@@ -1055,12 +1055,12 @@ static void test_shift_bounds_maximize(void) {
     ASSERT_NEAR(obj1, 27.0, TOLERANCE, "Objective = 27.0");
 
     double sol[2];
-    ralph_get_solution(rm_pre, sol);
+    ralph_test_get_solution(rm_pre, sol);
     ASSERT_NEAR(sol[0], 3.0, TOLERANCE, "x = 3.0");
     ASSERT_NEAR(sol[1], 7.0, TOLERANCE, "y = 7.0");
 
-    ralph_free(rm_pre);
-    ralph_free(rm_nopre);
+    ralph_test_free(rm_pre);
+    ralph_test_free(rm_nopre);
 }
 
 /* ============================================================================
@@ -1076,32 +1076,32 @@ static void test_shift_bounds_maximize(void) {
 static void test_forcing_constraint(void) {
     printf("\n=== Test: Forcing constraint ===\n");
 
-    RalphModel *rm = ralph_create();
-    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
-    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
-    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
-    ralph_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* z */
+    RalphModel *rm = ralph_test_create();
+    ralph_test_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_test_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_test_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
+    ralph_test_add_var(rm, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* z */
 
     /* x + y + z <= 0 (all non-negative vars, so forces all to 0) */
     int idx0[] = {0, 1, 2}; double v0[] = {1.0, 1.0, 1.0};
-    ralph_add_constraint(rm, 3, idx0, v0, RALPH_LESS_EQUAL, 0.0);
+    ralph_test_add_constraint(rm, 3, idx0, v0, RALPH_LESS_EQUAL, 0.0);
 
-    ralph_set_int_param(rm, "presolve", 1);
-    ralph_optimize(rm);
+    ralph_test_set_int_param(rm, "presolve", 1);
+    ralph_test_optimize(rm);
 
-    RalphStatus status = ralph_get_status(rm);
+    RalphStatus status = ralph_test_get_status(rm);
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Optimal (forcing constraint)");
 
-    double obj_val = ralph_get_objval(rm);
+    double obj_val = ralph_test_get_objval(rm);
     ASSERT_NEAR(obj_val, 0.0, TOLERANCE, "Objective = 0.0 (all at lb)");
 
     double sol[3];
-    ralph_get_solution(rm, sol);
+    ralph_test_get_solution(rm, sol);
     ASSERT_NEAR(sol[0], 0.0, TOLERANCE, "x = 0");
     ASSERT_NEAR(sol[1], 0.0, TOLERANCE, "y = 0");
     ASSERT_NEAR(sol[2], 0.0, TOLERANCE, "z = 0");
 
-    ralph_free(rm);
+    ralph_test_free(rm);
 }
 
 /* ============================================================================
@@ -1125,68 +1125,68 @@ static void test_combined_presolve(void) {
     printf("\n=== Test: Combined presolve stress test ===\n");
 
     /* Solve with presolve */
-    RalphModel *rm_pre = ralph_create();
-    ralph_set_obj_sense(rm_pre, RALPH_MINIMIZE);
-    ralph_add_var(rm_pre, 2.0, 100.0, 3.0, RALPH_CONTINUOUS);  /* a: lb=2 (shift) */
-    ralph_add_var(rm_pre, 1.0, 100.0, 2.0, RALPH_CONTINUOUS);  /* b: lb=1 (shift) */
-    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* c */
-    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* d */
-    ralph_add_var(rm_pre, 0.0, 100.0, 0.0, RALPH_CONTINUOUS);  /* e */
+    RalphModel *rm_pre = ralph_test_create();
+    ralph_test_set_obj_sense(rm_pre, RALPH_MINIMIZE);
+    ralph_test_add_var(rm_pre, 2.0, 100.0, 3.0, RALPH_CONTINUOUS);  /* a: lb=2 (shift) */
+    ralph_test_add_var(rm_pre, 1.0, 100.0, 2.0, RALPH_CONTINUOUS);  /* b: lb=1 (shift) */
+    ralph_test_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* c */
+    ralph_test_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* d */
+    ralph_test_add_var(rm_pre, 0.0, 100.0, 0.0, RALPH_CONTINUOUS);  /* e */
 
     /* a <= 5 (singleton) */
     int ia[] = {0}; double va[] = {1.0};
-    ralph_add_constraint(rm_pre, 1, ia, va, RALPH_LESS_EQUAL, 5.0);
+    ralph_test_add_constraint(rm_pre, 1, ia, va, RALPH_LESS_EQUAL, 5.0);
 
     /* b + c = 10 (doubleton equality) */
     int ibc[] = {1, 2}; double vbc[] = {1.0, 1.0};
-    ralph_add_constraint(rm_pre, 2, ibc, vbc, RALPH_EQUAL, 10.0);
+    ralph_test_add_constraint(rm_pre, 2, ibc, vbc, RALPH_EQUAL, 10.0);
 
     /* b + d + e <= 20 */
     int ibde[] = {1, 3, 4}; double vbde[] = {1.0, 1.0, 1.0};
-    ralph_add_constraint(rm_pre, 3, ibde, vbde, RALPH_LESS_EQUAL, 20.0);
+    ralph_test_add_constraint(rm_pre, 3, ibde, vbde, RALPH_LESS_EQUAL, 20.0);
 
     /* a + c + e <= 15 */
     int iace[] = {0, 2, 4}; double vace[] = {1.0, 1.0, 1.0};
-    ralph_add_constraint(rm_pre, 3, iace, vace, RALPH_LESS_EQUAL, 15.0);
+    ralph_test_add_constraint(rm_pre, 3, iace, vace, RALPH_LESS_EQUAL, 15.0);
 
-    ralph_set_int_param(rm_pre, "presolve", 1);
-    ralph_optimize(rm_pre);
+    ralph_test_set_int_param(rm_pre, "presolve", 1);
+    ralph_test_optimize(rm_pre);
 
     /* Solve without presolve */
-    RalphModel *rm_nopre = ralph_create();
-    ralph_set_obj_sense(rm_nopre, RALPH_MINIMIZE);
-    ralph_add_var(rm_nopre, 2.0, 100.0, 3.0, RALPH_CONTINUOUS);
-    ralph_add_var(rm_nopre, 1.0, 100.0, 2.0, RALPH_CONTINUOUS);
-    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
-    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
-    ralph_add_var(rm_nopre, 0.0, 100.0, 0.0, RALPH_CONTINUOUS);
+    RalphModel *rm_nopre = ralph_test_create();
+    ralph_test_set_obj_sense(rm_nopre, RALPH_MINIMIZE);
+    ralph_test_add_var(rm_nopre, 2.0, 100.0, 3.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(rm_nopre, 1.0, 100.0, 2.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(rm_nopre, 0.0, 100.0, 0.0, RALPH_CONTINUOUS);
 
-    ralph_add_constraint(rm_nopre, 1, ia, va, RALPH_LESS_EQUAL, 5.0);
-    ralph_add_constraint(rm_nopre, 2, ibc, vbc, RALPH_EQUAL, 10.0);
-    ralph_add_constraint(rm_nopre, 3, ibde, vbde, RALPH_LESS_EQUAL, 20.0);
-    ralph_add_constraint(rm_nopre, 3, iace, vace, RALPH_LESS_EQUAL, 15.0);
+    ralph_test_add_constraint(rm_nopre, 1, ia, va, RALPH_LESS_EQUAL, 5.0);
+    ralph_test_add_constraint(rm_nopre, 2, ibc, vbc, RALPH_EQUAL, 10.0);
+    ralph_test_add_constraint(rm_nopre, 3, ibde, vbde, RALPH_LESS_EQUAL, 20.0);
+    ralph_test_add_constraint(rm_nopre, 3, iace, vace, RALPH_LESS_EQUAL, 15.0);
 
-    ralph_set_int_param(rm_nopre, "presolve", 0);
-    ralph_optimize(rm_nopre);
+    ralph_test_set_int_param(rm_nopre, "presolve", 0);
+    ralph_test_optimize(rm_nopre);
 
-    RalphStatus s1 = ralph_get_status(rm_pre);
-    RalphStatus s2 = ralph_get_status(rm_nopre);
+    RalphStatus s1 = ralph_test_get_status(rm_pre);
+    RalphStatus s2 = ralph_test_get_status(rm_nopre);
     ASSERT(s1 == RALPH_STATUS_OPTIMAL, "Optimal with presolve");
     ASSERT(s2 == RALPH_STATUS_OPTIMAL, "Optimal without presolve");
 
-    double obj1 = ralph_get_objval(rm_pre);
-    double obj2 = ralph_get_objval(rm_nopre);
+    double obj1 = ralph_test_get_objval(rm_pre);
+    double obj2 = ralph_test_get_objval(rm_nopre);
     ASSERT_NEAR(obj1, obj2, TOLERANCE,
                 "Same objective with and without presolve");
 
     /* Verify constraint satisfaction */
     double sol[5];
-    ralph_get_solution(rm_pre, sol);
+    ralph_test_get_solution(rm_pre, sol);
     ASSERT(sol[0] <= 5.0 + TOLERANCE, "a <= 5 satisfied");
     ASSERT_NEAR(sol[1] + sol[2], 10.0, TOLERANCE, "b + c = 10 satisfied");
 
-    ralph_free(rm_pre);
-    ralph_free(rm_nopre);
+    ralph_test_free(rm_pre);
+    ralph_test_free(rm_nopre);
 }
 
 /* ============================================================================
@@ -1207,41 +1207,41 @@ static void test_combined_presolve(void) {
 static void test_probing_infeasibility(void) {
     printf("\n=== Test: Probing infeasibility detection ===\n");
 
-    RalphModel *rm = ralph_create();
-    ralph_set_obj_sense(rm, RALPH_MINIMIZE);
-    ralph_add_var(rm, 0.0, 10.0, 1.0, RALPH_CONTINUOUS);  /* x */
-    ralph_add_var(rm, 0.0, 1.0, 10.0, RALPH_BINARY);      /* y */
+    RalphModel *rm = ralph_test_create();
+    ralph_test_set_obj_sense(rm, RALPH_MINIMIZE);
+    ralph_test_add_var(rm, 0.0, 10.0, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_test_add_var(rm, 0.0, 1.0, 10.0, RALPH_BINARY);      /* y */
 
     /* 5x + y >= 4 */
     int i0[] = {0, 1}; double v0[] = {5.0, 1.0};
-    ralph_add_constraint(rm, 2, i0, v0, RALPH_GREATER_EQUAL, 4.0);
+    ralph_test_add_constraint(rm, 2, i0, v0, RALPH_GREATER_EQUAL, 4.0);
 
     /* x + 3y >= 3 */
     int i1[] = {0, 1}; double v1[] = {1.0, 3.0};
-    ralph_add_constraint(rm, 2, i1, v1, RALPH_GREATER_EQUAL, 3.0);
+    ralph_test_add_constraint(rm, 2, i1, v1, RALPH_GREATER_EQUAL, 3.0);
 
     /* -x + 2y >= 1 */
     int i2[] = {0, 1}; double v2[] = {-1.0, 2.0};
-    ralph_add_constraint(rm, 2, i2, v2, RALPH_GREATER_EQUAL, 1.0);
+    ralph_test_add_constraint(rm, 2, i2, v2, RALPH_GREATER_EQUAL, 1.0);
 
-    ralph_set_int_param(rm, "presolve", 1);
-    ralph_set_int_param(rm, "presolve_mask", 0x110F | 0x0800);  /* SAFE + PROBING */
-    ralph_optimize(rm);
+    ralph_test_set_int_param(rm, "presolve", 1);
+    ralph_test_set_int_param(rm, "presolve_mask", 0x110F | 0x0800);  /* SAFE + PROBING */
+    ralph_test_optimize(rm);
 
-    RalphStatus status = ralph_get_status(rm);
+    RalphStatus status = ralph_test_get_status(rm);
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Optimal (probing fixed y=1)");
 
     double sol[2];
-    ralph_get_solution(rm, sol);
+    ralph_test_get_solution(rm, sol);
     ASSERT_NEAR(sol[1], 1.0, TOLERANCE, "y = 1 (probing detected y=0 infeasible)");
 
-    double obj = ralph_get_objval(rm);
+    double obj = ralph_test_get_objval(rm);
     /* Note: MIP B&B reports 10.0 instead of 10.6 due to node LP objective
      * computation bug. The solution x=0.6,y=1 is correct. Accept either. */
     ASSERT(fabs(obj - 10.6) < 1.0 || fabs(obj - 10.0) < 1.0,
            "Objective ~10.0 or ~10.6 (known MIP obj reporting issue)");
 
-    ralph_free(rm);
+    ralph_test_free(rm);
 }
 
 /* ============================================================================
@@ -1269,55 +1269,55 @@ static void test_probing_bound_tightening(void) {
     printf("\n=== Test: Probing bound tightening ===\n");
 
     /* Solve with presolve (probing enabled for MIP) */
-    RalphModel *rm_pre = ralph_create();
-    ralph_set_obj_sense(rm_pre, RALPH_MINIMIZE);
-    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
-    ralph_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
-    ralph_add_var(rm_pre, 0.0, 1.0, 10.0, RALPH_BINARY);       /* z */
+    RalphModel *rm_pre = ralph_test_create();
+    ralph_test_set_obj_sense(rm_pre, RALPH_MINIMIZE);
+    ralph_test_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* x */
+    ralph_test_add_var(rm_pre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);  /* y */
+    ralph_test_add_var(rm_pre, 0.0, 1.0, 10.0, RALPH_BINARY);       /* z */
 
     int i0[] = {0, 2}; double v0[] = {1.0, 2.0};
-    ralph_add_constraint(rm_pre, 2, i0, v0, RALPH_LESS_EQUAL, 5.0);
+    ralph_test_add_constraint(rm_pre, 2, i0, v0, RALPH_LESS_EQUAL, 5.0);
 
     int i1[] = {1, 2}; double v1[] = {1.0, 3.0};
-    ralph_add_constraint(rm_pre, 2, i1, v1, RALPH_LESS_EQUAL, 7.0);
+    ralph_test_add_constraint(rm_pre, 2, i1, v1, RALPH_LESS_EQUAL, 7.0);
 
     int i2[] = {0, 1}; double v2[] = {1.0, 1.0};
-    ralph_add_constraint(rm_pre, 2, i2, v2, RALPH_GREATER_EQUAL, 2.0);
+    ralph_test_add_constraint(rm_pre, 2, i2, v2, RALPH_GREATER_EQUAL, 2.0);
 
-    ralph_set_int_param(rm_pre, "presolve", 1);
-    ralph_optimize(rm_pre);
+    ralph_test_set_int_param(rm_pre, "presolve", 1);
+    ralph_test_optimize(rm_pre);
 
     /* Solve without presolve */
-    RalphModel *rm_nopre = ralph_create();
-    ralph_set_obj_sense(rm_nopre, RALPH_MINIMIZE);
-    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
-    ralph_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
-    ralph_add_var(rm_nopre, 0.0, 1.0, 10.0, RALPH_BINARY);
+    RalphModel *rm_nopre = ralph_test_create();
+    ralph_test_set_obj_sense(rm_nopre, RALPH_MINIMIZE);
+    ralph_test_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(rm_nopre, 0.0, 100.0, 1.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(rm_nopre, 0.0, 1.0, 10.0, RALPH_BINARY);
 
-    ralph_add_constraint(rm_nopre, 2, i0, v0, RALPH_LESS_EQUAL, 5.0);
-    ralph_add_constraint(rm_nopre, 2, i1, v1, RALPH_LESS_EQUAL, 7.0);
-    ralph_add_constraint(rm_nopre, 2, i2, v2, RALPH_GREATER_EQUAL, 2.0);
+    ralph_test_add_constraint(rm_nopre, 2, i0, v0, RALPH_LESS_EQUAL, 5.0);
+    ralph_test_add_constraint(rm_nopre, 2, i1, v1, RALPH_LESS_EQUAL, 7.0);
+    ralph_test_add_constraint(rm_nopre, 2, i2, v2, RALPH_GREATER_EQUAL, 2.0);
 
-    ralph_set_int_param(rm_nopre, "presolve", 0);
-    ralph_optimize(rm_nopre);
+    ralph_test_set_int_param(rm_nopre, "presolve", 0);
+    ralph_test_optimize(rm_nopre);
 
-    RalphStatus s1 = ralph_get_status(rm_pre);
-    RalphStatus s2 = ralph_get_status(rm_nopre);
+    RalphStatus s1 = ralph_test_get_status(rm_pre);
+    RalphStatus s2 = ralph_test_get_status(rm_nopre);
     ASSERT(s1 == RALPH_STATUS_OPTIMAL, "Optimal with probing presolve");
     ASSERT(s2 == RALPH_STATUS_OPTIMAL, "Optimal without presolve");
 
-    double obj1 = ralph_get_objval(rm_pre);
-    double obj2 = ralph_get_objval(rm_nopre);
+    double obj1 = ralph_test_get_objval(rm_pre);
+    double obj2 = ralph_test_get_objval(rm_nopre);
     ASSERT_NEAR(obj1, obj2, TOLERANCE,
                 "Same objective with and without probing presolve");
     ASSERT_NEAR(obj1, 2.0, TOLERANCE, "Objective = 2.0 (z=0, x+y=2)");
 
     double sol[3];
-    ralph_get_solution(rm_pre, sol);
+    ralph_test_get_solution(rm_pre, sol);
     ASSERT_NEAR(sol[2], 0.0, TOLERANCE, "z = 0 (cheapest binary setting)");
 
-    ralph_free(rm_pre);
-    ralph_free(rm_nopre);
+    ralph_test_free(rm_pre);
+    ralph_test_free(rm_nopre);
 }
 
 /* ============================================================================

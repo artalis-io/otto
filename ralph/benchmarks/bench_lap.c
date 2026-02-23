@@ -11,7 +11,7 @@
 #include <math.h>
 #include <time.h>
 #include "lap.h"
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 /* ============================================================================
  * Timing utilities
@@ -909,12 +909,12 @@ static void bench_callback(void) {
 
 /* Create an assignment MIP: min sum c[i,j]*x[i,j] s.t. assignment constraints */
 static RalphModel *create_assignment_mip(int n, const double *cost) {
-    RalphModel *model = ralph_create();
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    RalphModel *model = ralph_test_create();
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
 
     /* Add n*n binary variables with costs */
     for (int i = 0; i < n * n; i++) {
-        ralph_add_var(model, 0.0, 1.0, cost[i], RALPH_BINARY);
+        ralph_test_add_var(model, 0.0, 1.0, cost[i], RALPH_BINARY);
     }
 
     /* Row constraints: sum_j x[i,j] = 1 for each row i */
@@ -924,13 +924,13 @@ static RalphModel *create_assignment_mip(int n, const double *cost) {
 
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) idx[j] = i * n + j;
-        ralph_add_constraint(model, n, idx, val, RALPH_EQUAL, 1.0);
+        ralph_test_add_constraint(model, n, idx, val, RALPH_EQUAL, 1.0);
     }
 
     /* Column constraints: sum_i x[i,j] = 1 for each column j */
     for (int j = 0; j < n; j++) {
         for (int i = 0; i < n; i++) idx[i] = i * n + j;
-        ralph_add_constraint(model, n, idx, val, RALPH_EQUAL, 1.0);
+        ralph_test_add_constraint(model, n, idx, val, RALPH_EQUAL, 1.0);
     }
 
     free(idx);
@@ -971,31 +971,31 @@ static void bench_mip_lap(void) {
         /* Benchmark with LAP-based LP relaxation */
         for (int t = 0; t < trials; t++) {
             RalphModel *model = create_assignment_mip(n, cost);
-            ralph_set_int_param(model, "detect_special", 1);
-            ralph_set_int_param(model, "verbose", 0);
+            ralph_test_set_int_param(model, "detect_special", 1);
+            ralph_test_set_int_param(model, "verbose", 0);
 
             timer_start(&timer);
-            ralph_optimize(model);
+            ralph_test_optimize(model);
             timer_stop(&timer);
 
             lap_total += timer.elapsed_ms;
-            lap_obj = ralph_get_objval(model);
-            ralph_free(model);
+            lap_obj = ralph_test_get_objval(model);
+            ralph_test_free(model);
         }
 
         /* Benchmark with simplex-based LP relaxation */
         for (int t = 0; t < trials; t++) {
             RalphModel *model = create_assignment_mip(n, cost);
-            ralph_set_int_param(model, "detect_special", 0);
-            ralph_set_int_param(model, "verbose", 0);
+            ralph_test_set_int_param(model, "detect_special", 0);
+            ralph_test_set_int_param(model, "verbose", 0);
 
             timer_start(&timer);
-            ralph_optimize(model);
+            ralph_test_optimize(model);
             timer_stop(&timer);
 
             simplex_total += timer.elapsed_ms;
-            simplex_obj = ralph_get_objval(model);
-            ralph_free(model);
+            simplex_obj = ralph_test_get_objval(model);
+            ralph_test_free(model);
         }
 
         double lap_avg = lap_total / trials;

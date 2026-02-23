@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 int main(void) {
     printf("Quick test: Equality constraint\n");
@@ -9,28 +9,28 @@ int main(void) {
     printf("  x, y >= 0\n");
     printf("Expected: x=0, y=3, obj=6\n\n");
 
-    RalphModel *model = ralph_create();
-    ralph_set_obj_sense(model, -1);  /* maximize */
+    RalphModel *model = ralph_test_create();
+    ralph_test_set_obj_sense(model, -1);  /* maximize */
 
-    ralph_add_var(model, 0.0, 1e30, 1.0, 'C');  /* x */
-    ralph_add_var(model, 0.0, 1e30, 2.0, 'C');  /* y */
+    ralph_test_add_var(model, 0.0, 1e30, 1.0, 'C');  /* x */
+    ralph_test_add_var(model, 0.0, 1e30, 2.0, 'C');  /* y */
 
     int idx[] = {0, 1};
     double val[] = {1.0, 1.0};
-    ralph_add_constraint(model, 2, idx, val, 'E', 3.0);  /* x + y = 3 */
+    ralph_test_add_constraint(model, 2, idx, val, 'E', 3.0);  /* x + y = 3 */
 
     printf("Calling optimize...\n");
-    int status = ralph_optimize(model);
+    int status = ralph_test_optimize(model);
     printf("Optimize returned %d\n", status);
 
-    printf("Status: %d (1=optimal)\n", ralph_get_status(model));
-    printf("Objective: %f (expected 6)\n", ralph_get_objval(model));
+    printf("Status: %d (1=optimal)\n", ralph_test_get_status(model));
+    printf("Objective: %f (expected 6)\n", ralph_test_get_objval(model));
 
     double x[2];
-    ralph_get_solution(model, x);
+    ralph_test_get_solution(model, x);
     printf("Solution: x=%f (expected 0), y=%f (expected 3)\n", x[0], x[1]);
 
-    ralph_free(model);
+    ralph_test_free(model);
     printf("Done\n");
     return 0;
 }

@@ -272,7 +272,7 @@ TEST(raw_lp_sol_output) {
     ASSERT_EQ(result, 0);
     ASSERT_EQ(resp.status_code, 200);
 
-    /* SOL format output (uses UPPERCASE from ralph_status_string) */
+    /* SOL format output (uses UPPERCASE from ralph_test_status_string) */
     ASSERT(strstr((char*)resp.body, "solution status: OPTIMAL") != NULL);
     ASSERT(strstr((char*)resp.body, "objective value:") != NULL);
     ASSERT(strstr((char*)resp.body, "x ") != NULL);

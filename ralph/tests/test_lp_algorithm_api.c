@@ -6,7 +6,7 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -30,19 +30,19 @@ static int tests_passed = 0;
 } while (0)
 
 static RalphModel* build_small_lp(void) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return NULL;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
-    ralph_set_int_param(model, "detect_special", 0);
-    ralph_set_int_param(model, "presolve", 0);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_int_param(model, "detect_special", 0);
+    ralph_test_set_int_param(model, "presolve", 0);
 
     /* min x, s.t. x >= 1, x >= 0 */
-    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
     {
         int idx[] = {0};
         double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 1.0);
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 1.0);
     }
     return model;
 }
@@ -235,7 +235,7 @@ static void test_param_metadata_and_scope(void) {
     ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 2), -1,
                   "params: reject lp_external_strict out of range");
 
-    ASSERT_INT_EQ(ralph_set_int_param(model, "barrier_crossover",
+    ASSERT_INT_EQ(ralph_test_set_int_param(model, "barrier_crossover",
                                       (int)RALPH_LP_CROSSOVER_ON),
                   0,
                   "params: set barrier_crossover by string");
@@ -244,7 +244,7 @@ static void test_param_metadata_and_scope(void) {
     ASSERT_INT_EQ(value, (int)RALPH_LP_CROSSOVER_ON,
                   "params: barrier_crossover set/get consistent");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_algorithm_report_guards_and_invalidation(void) {
@@ -257,9 +257,9 @@ static void test_algorithm_report_guards_and_invalidation(void) {
     ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(model, &report), -1,
                   "report: unavailable before solve");
 
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "report: LP optimize succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "report: LP status optimal");
 
     ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(model, &report), 0,
@@ -273,12 +273,12 @@ static void test_algorithm_report_guards_and_invalidation(void) {
     ASSERT_INT_EQ(report.fallback_applied, 0,
                   "report: no fallback for default algorithm");
 
-    ASSERT_INT_EQ(ralph_set_obj_coef(model, 0, 2.0), 0,
+    ASSERT_INT_EQ(ralph_test_set_obj_coef(model, 0, 2.0), 0,
                   "report: mutate model invalidates state");
     ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(model, &report), -1,
                   "report: unavailable after invalidation");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_barrier_fallback_report(void) {
@@ -297,9 +297,9 @@ static void test_barrier_fallback_report(void) {
                   0,
                   "barrier: request crossover ON");
 
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "barrier: LP optimize succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "barrier: LP status optimal");
     ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(model, &report), 0,
                   "barrier: report available");
@@ -322,7 +322,7 @@ static void test_barrier_fallback_report(void) {
                   (int)RALPH_LP_FALLBACK_BARRIER_UNAVAILABLE,
                   "barrier: fallback reason is barrier unavailable");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_crossover_only_fallback_report(void) {
@@ -341,9 +341,9 @@ static void test_crossover_only_fallback_report(void) {
                   0,
                   "crossover: request crossover ON");
 
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "crossover: LP optimize succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "crossover: LP status optimal");
     ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(model, &report), 0,
                   "crossover: report available");
@@ -366,7 +366,7 @@ static void test_crossover_only_fallback_report(void) {
                   (int)RALPH_LP_FALLBACK_CROSSOVER_UNAVAILABLE,
                   "crossover: fallback reason is crossover unavailable");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_external_fallback_report(void) {
@@ -389,9 +389,9 @@ static void test_external_fallback_report(void) {
                   0,
                   "external-fallback: request crossover ON");
 
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "external-fallback: LP optimize succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "external-fallback: LP status optimal");
     ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(model, &report), 0,
                   "external-fallback: report available");
@@ -414,7 +414,7 @@ static void test_external_fallback_report(void) {
                   (int)RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE,
                   "external-fallback: fallback reason external unavailable");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_external_strict_mode_error(void) {
@@ -434,12 +434,12 @@ static void test_external_strict_mode_error(void) {
     ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 1),
                   0,
                   "external-strict: enable strict mode");
-    ASSERT_INT_EQ(ralph_optimize_lp(model), -1,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), -1,
                   "external-strict: optimize fails when external backend unavailable");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_ERROR,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_ERROR,
                   "external-strict: status is ERROR");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_legacy_method_dispatch_report(void) {
@@ -449,9 +449,9 @@ static void test_legacy_method_dispatch_report(void) {
     ASSERT_TRUE(model != NULL, "legacy-dispatch: model created");
     if (!model) return;
 
-    ASSERT_INT_EQ(ralph_set_int_param(model, "method", 1), 0,
+    ASSERT_INT_EQ(ralph_test_set_int_param(model, "method", 1), 0,
                   "legacy-dispatch: set method=dual");
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "legacy-dispatch: solve with dual method succeeds");
     ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(model, &report), 0,
                   "legacy-dispatch: report available for dual method");
@@ -464,9 +464,9 @@ static void test_legacy_method_dispatch_report(void) {
     ASSERT_INT_EQ(report.fallback_applied, 0,
                   "legacy-dispatch: no fallback for dual method");
 
-    ASSERT_INT_EQ(ralph_set_int_param(model, "method", 2), 0,
+    ASSERT_INT_EQ(ralph_test_set_int_param(model, "method", 2), 0,
                   "legacy-dispatch: set method=auto");
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "legacy-dispatch: solve with auto method succeeds");
     ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(model, &report), 0,
                   "legacy-dispatch: report available for auto method");
@@ -479,27 +479,27 @@ static void test_legacy_method_dispatch_report(void) {
     ASSERT_INT_EQ(report.fallback_applied, 0,
                   "legacy-dispatch: no fallback for auto method");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_lp_report_rejects_mip_models(void) {
-    RalphModel *mip = ralph_create();
+    RalphModel *mip = ralph_test_create();
     RalphLPSolveAlgorithmReport report;
 
     ASSERT_TRUE(mip != NULL, "mip-guard: model created");
     if (!mip) return;
 
-    ralph_set_obj_sense(mip, RALPH_MAXIMIZE);
-    ralph_add_var(mip, 0.0, 1.0, 1.0, RALPH_BINARY);
+    ralph_test_set_obj_sense(mip, RALPH_MAXIMIZE);
+    ralph_test_add_var(mip, 0.0, 1.0, 1.0, RALPH_BINARY);
 
     ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(mip, &report), -1,
                   "mip-guard: report rejected for MIP model before solve");
-    ASSERT_INT_EQ(ralph_optimize_mip(mip), 0,
+    ASSERT_INT_EQ(ralph_test_optimize_mip(mip), 0,
                   "mip-guard: optimize_mip succeeds");
     ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(mip, &report), -1,
                   "mip-guard: report rejected for MIP model after solve");
 
-    ralph_free(mip);
+    ralph_test_free(mip);
 }
 
 int main(void) {

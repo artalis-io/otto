@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 /* Test tracking */
 static int tests_passed = 0;
@@ -56,23 +56,23 @@ static int tests_failed = 0;
 void test_simple_two_stage(void) {
     printf("\n=== Test: Simple Two-Stage Problem ===\n");
 
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     ASSERT(model != NULL, "Model created");
     if (!model) return;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
 
     /* Variables: x1, x2 (master), y1, y2 (sub), theta (recourse) */
     /* x1: master, integer - use large but not infinite bounds */
-    int x1 = ralph_add_var(model, 0, 1e9, 1.0, RALPH_INTEGER);
+    int x1 = ralph_test_add_var(model, 0, 1e9, 1.0, RALPH_INTEGER);
     /* x2: master, integer */
-    int x2 = ralph_add_var(model, 0, 1e9, 2.0, RALPH_INTEGER);
+    int x2 = ralph_test_add_var(model, 0, 1e9, 2.0, RALPH_INTEGER);
     /* y1: subproblem, continuous */
-    int y1 = ralph_add_var(model, 0, 1e9, 3.0, RALPH_CONTINUOUS);
+    int y1 = ralph_test_add_var(model, 0, 1e9, 3.0, RALPH_CONTINUOUS);
     /* y2: subproblem, continuous */
-    int y2 = ralph_add_var(model, 0, 1e9, 4.0, RALPH_CONTINUOUS);
+    int y2 = ralph_test_add_var(model, 0, 1e9, 4.0, RALPH_CONTINUOUS);
     /* theta: recourse cost - large bounds for general problems */
-    int theta = ralph_add_var(model, -1e9, 1e9, 1.0, RALPH_CONTINUOUS);
+    int theta = ralph_test_add_var(model, -1e9, 1e9, 1.0, RALPH_CONTINUOUS);
 
     ASSERT(x1 == 0 && x2 == 1 && y1 == 2 && y2 == 3 && theta == 4,
            "Variables added correctly");
@@ -81,28 +81,28 @@ void test_simple_two_stage(void) {
     {
         int idx[] = {x1, x2};
         double val[] = {1.0, 1.0};
-        ralph_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 5.0);
+        ralph_test_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 5.0);
     }
 
     /* Linking constraint 1: y1 - x1 <= 0  (y1 <= x1) */
     {
         int idx[] = {y1, x1};
         double val[] = {1.0, -1.0};
-        ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
+        ralph_test_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
     }
 
     /* Linking constraint 2: y2 - x2 <= 0  (y2 <= x2) */
     {
         int idx[] = {y2, x2};
         double val[] = {1.0, -1.0};
-        ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
+        ralph_test_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
     }
 
     /* Subproblem constraint: y1 + y2 >= 4 */
     {
         int idx[] = {y1, y2};
         double val[] = {1.0, 1.0};
-        ralph_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 4.0);
+        ralph_test_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 4.0);
     }
 
     /* Configure Benders */
@@ -117,7 +117,7 @@ void test_simple_two_stage(void) {
     double solution[5];
     RalphBendersResult result;
 
-    int ret = ralph_solve_benders(model, &config, solution, &result);
+    int ret = ralph_test_solve_benders(model, &config, solution, &result);
 
     printf("Benders returned: %d\n", ret);
     printf("Status: %d\n", result.status);
@@ -150,7 +150,7 @@ void test_simple_two_stage(void) {
     ASSERT(result.iterations >= 1, "At least one iteration");
     ASSERT(result.iterations <= 50, "Terminated within iteration limit");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 /* ============================================================================
@@ -163,36 +163,36 @@ void test_simple_two_stage(void) {
 void test_continuous_master(void) {
     printf("\n=== Test: Continuous Master (LP) ===\n");
 
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     ASSERT(model != NULL, "Model created");
     if (!model) return;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
 
     /* Variables: x (master), y1, y2 (sub) - use large bounds */
-    int x = ralph_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
-    int y1 = ralph_add_var(model, 0, 1e9, 2.0, RALPH_CONTINUOUS);
-    int y2 = ralph_add_var(model, 0, 1e9, 3.0, RALPH_CONTINUOUS);
+    int x = ralph_test_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
+    int y1 = ralph_test_add_var(model, 0, 1e9, 2.0, RALPH_CONTINUOUS);
+    int y2 = ralph_test_add_var(model, 0, 1e9, 3.0, RALPH_CONTINUOUS);
 
     /* Master: x >= 2 */
     {
         int idx[] = {x};
         double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 2.0);
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 2.0);
     }
 
     /* Linking: y1 + y2 <= x */
     {
         int idx[] = {y1, y2, x};
         double val[] = {1.0, 1.0, -1.0};
-        ralph_add_constraint(model, 3, idx, val, RALPH_LESS_EQUAL, 0.0);
+        ralph_test_add_constraint(model, 3, idx, val, RALPH_LESS_EQUAL, 0.0);
     }
 
     /* Sub: y1 + y2 >= 1 */
     {
         int idx[] = {y1, y2};
         double val[] = {1.0, 1.0};
-        ralph_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 1.0);
+        ralph_test_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 1.0);
     }
 
     int master_vars[] = {x};
@@ -205,7 +205,7 @@ void test_continuous_master(void) {
     RalphBendersResult result;
     double solution[3];
 
-    int ret = ralph_solve_benders(model, &config, solution, &result);
+    int ret = ralph_test_solve_benders(model, &config, solution, &result);
 
     printf("Result: ret=%d, obj=%.4f, iters=%d\n", ret, result.objective, result.iterations);
 
@@ -214,7 +214,7 @@ void test_continuous_master(void) {
         ASSERT(result.objective <= 5.0, "Objective is optimal or near-optimal");
     }
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 /* ============================================================================
@@ -227,44 +227,44 @@ void test_continuous_master(void) {
 void test_infeasible_subproblem(void) {
     printf("\n=== Test: Infeasible Subproblem -> Feasibility Cut ===\n");
 
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     ASSERT(model != NULL, "Model created");
     if (!model) return;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
 
     /* Master var x controls subproblem capacity - use large bounds */
-    int x = ralph_add_var(model, 0, 1e9, 1.0, RALPH_INTEGER);
+    int x = ralph_test_add_var(model, 0, 1e9, 1.0, RALPH_INTEGER);
     /* Sub vars y1, y2 */
-    int y1 = ralph_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
-    int y2 = ralph_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
+    int y1 = ralph_test_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
+    int y2 = ralph_test_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
 
     /* Linking: y1 <= 2*x */
     {
         int idx[] = {y1, x};
         double val[] = {1.0, -2.0};
-        ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
+        ralph_test_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
     }
 
     /* Linking: y2 <= x */
     {
         int idx[] = {y2, x};
         double val[] = {1.0, -1.0};
-        ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
+        ralph_test_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
     }
 
     /* Sub: y1 + y2 >= 10 (requires x >= 4 to be feasible) */
     {
         int idx[] = {y1, y2};
         double val[] = {1.0, 1.0};
-        ralph_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 10.0);
+        ralph_test_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 10.0);
     }
 
     /* Pure-master constraint required by current Benders implementation. */
     {
         int idx[] = {x};
         double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 0.0);
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 0.0);
     }
 
     int master_vars[] = {x};
@@ -276,7 +276,7 @@ void test_infeasible_subproblem(void) {
 
     RalphBendersResult result;
 
-    int ret = ralph_solve_benders(model, &config, NULL, &result);
+    int ret = ralph_test_solve_benders(model, &config, NULL, &result);
 
     printf("Result: ret=%d, iters=%d, feas_cuts=%d\n",
            ret, result.iterations, result.feasibility_cuts);
@@ -286,7 +286,7 @@ void test_infeasible_subproblem(void) {
     ASSERT(result.feasibility_cuts > 0, "Feasibility cuts are generated");
     ASSERT(result.iterations >= 1, "At least one iteration executed");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 /* ============================================================================
@@ -296,35 +296,35 @@ void test_infeasible_subproblem(void) {
 void test_infeasible_subproblem_strict_farkas(void) {
     printf("\n=== Test: Infeasible Subproblem + strict_farkas ===\n");
 
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     ASSERT(model != NULL, "Model created");
     if (!model) return;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
 
-    int x = ralph_add_var(model, 0, 1e9, 1.0, RALPH_INTEGER);
-    int y1 = ralph_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
-    int y2 = ralph_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
+    int x = ralph_test_add_var(model, 0, 1e9, 1.0, RALPH_INTEGER);
+    int y1 = ralph_test_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
+    int y2 = ralph_test_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
 
     {
         int idx[] = {y1, x};
         double val[] = {1.0, -2.0};
-        ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
+        ralph_test_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
     }
     {
         int idx[] = {y2, x};
         double val[] = {1.0, -1.0};
-        ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
+        ralph_test_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
     }
     {
         int idx[] = {y1, y2};
         double val[] = {1.0, 1.0};
-        ralph_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 10.0);
+        ralph_test_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 10.0);
     }
     {
         int idx[] = {x};
         double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 0.0);
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 0.0);
     }
 
     int master_vars[] = {x};
@@ -336,14 +336,14 @@ void test_infeasible_subproblem_strict_farkas(void) {
     config.verbose = 1;
 
     RalphBendersResult result;
-    int ret = ralph_solve_benders(model, &config, NULL, &result);
+    int ret = ralph_test_solve_benders(model, &config, NULL, &result);
 
     ASSERT(ret == 0, "strict_farkas infeasible-subproblem test returns success");
     ASSERT(result.status == RALPH_STATUS_OPTIMAL, "strict_farkas converges to optimal");
     ASSERT(result.feasibility_cuts > 0, "strict_farkas generates feasibility cuts");
     ASSERT(result.iterations >= 1, "strict_farkas executes at least one iteration");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 /* ============================================================================
@@ -353,37 +353,37 @@ void test_infeasible_subproblem_strict_farkas(void) {
 void test_stochastic_benders(void) {
     printf("\n=== Test: Stochastic Benders (2 Scenarios) ===\n");
 
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     ASSERT(model != NULL, "Model created");
     if (!model) return;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
 
     /* First-stage: x (investment decision) - use large bounds */
-    int x = ralph_add_var(model, 0, 1e9, 2.0, RALPH_INTEGER);
+    int x = ralph_test_add_var(model, 0, 1e9, 2.0, RALPH_INTEGER);
 
     /* Second-stage: y (recourse for both scenarios) */
-    int y = ralph_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
+    int y = ralph_test_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
 
     /* Linking: y <= x (can't use more than invested) */
     {
         int idx[] = {y, x};
         double val[] = {1.0, -1.0};
-        ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
+        ralph_test_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
     }
 
     /* Sub: y >= 3 (demand) */
     {
         int idx[] = {y};
         double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 3.0);
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 3.0);
     }
 
     /* Pure-master constraint required by current Benders implementation. */
     {
         int idx[] = {x};
         double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 0.0);
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 0.0);
     }
 
     int master_vars[] = {x};
@@ -399,7 +399,7 @@ void test_stochastic_benders(void) {
 
     RalphBendersResult result;
 
-    int ret = ralph_solve_benders(model, &config, NULL, &result);
+    int ret = ralph_test_solve_benders(model, &config, NULL, &result);
 
     printf("Result: ret=%d, obj=%.4f, iters=%d\n", ret, result.objective, result.iterations);
 
@@ -408,7 +408,7 @@ void test_stochastic_benders(void) {
     ASSERT(result.iterations >= 1, "Stochastic Benders runs at least one iteration");
     ASSERT(result.objective < 1e8, "Stochastic Benders objective is finite");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 /* ============================================================================
@@ -418,26 +418,26 @@ void test_stochastic_benders(void) {
 void test_zero_master_constraints_error(void) {
     printf("\n=== Test: Zero Master Constraints -> Error ===\n");
 
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     ASSERT(model != NULL, "Model created");
     if (!model) return;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
 
     /* x is master, y is sub. No pure-master constraints are added. */
-    int x = ralph_add_var(model, 0, 1e9, 1.0, RALPH_INTEGER);
-    int y = ralph_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
+    int x = ralph_test_add_var(model, 0, 1e9, 1.0, RALPH_INTEGER);
+    int y = ralph_test_add_var(model, 0, 1e9, 1.0, RALPH_CONTINUOUS);
 
     /* Linking and sub-only constraints */
     {
         int idx[] = {y, x};
         double val[] = {1.0, -1.0};
-        ralph_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
+        ralph_test_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 0.0);
     }
     {
         int idx[] = {y};
         double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 1.0);
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 1.0);
     }
 
     int master_vars[] = {x};
@@ -450,14 +450,14 @@ void test_zero_master_constraints_error(void) {
     RalphBendersResult result;
     double solution[2] = {-1234.0, -1234.0};
 
-    int ret = ralph_solve_benders(model, &config, solution, &result);
+    int ret = ralph_test_solve_benders(model, &config, solution, &result);
 
     ASSERT(ret == -1, "Zero-master-constraint model returns error");
     ASSERT(result.status == RALPH_STATUS_ERROR, "Result status is ERROR");
     ASSERT(solution[0] == -1234.0 && solution[1] == -1234.0,
            "Solution buffer is untouched on failure");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 /* ============================================================================
@@ -493,26 +493,26 @@ void test_error_handling(void) {
     config.master_var_indices = master_vars;
     config.num_master_vars = 1;
 
-    int ret = ralph_solve_benders(NULL, &config, NULL, NULL);
+    int ret = ralph_test_solve_benders(NULL, &config, NULL, NULL);
     ASSERT(ret == -1, "NULL model returns error");
 
     /* NULL config */
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (model) {
-        ret = ralph_solve_benders(model, NULL, NULL, NULL);
+        ret = ralph_test_solve_benders(model, NULL, NULL, NULL);
         ASSERT(ret == -1, "NULL config returns error");
-        ralph_free(model);
+        ralph_test_free(model);
     }
 
     /* Empty master vars */
-    model = ralph_create();
+    model = ralph_test_create();
     if (model) {
-        ralph_add_var(model, 0, 1, 1.0, RALPH_CONTINUOUS);
+        ralph_test_add_var(model, 0, 1, 1.0, RALPH_CONTINUOUS);
         config.num_master_vars = 0;
         config.master_var_indices = NULL;
-        ret = ralph_solve_benders(model, &config, NULL, NULL);
+        ret = ralph_test_solve_benders(model, &config, NULL, NULL);
         ASSERT(ret == -1, "Empty master vars returns error");
-        ralph_free(model);
+        ralph_test_free(model);
     }
 }
 

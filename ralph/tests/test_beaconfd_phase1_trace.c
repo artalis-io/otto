@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 #define EXPECTED_TRACE_SIG 0x2629fb3048395f1cULL
 
@@ -62,28 +62,28 @@ static int parse_summary(const char *line, TraceSummary *s) {
 int main(void) {
     printf("\n=== Test: beaconfd Phase-1 trace signature ===\n\n");
 
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     TEST(model != NULL, "Created model");
     if (!model) return 1;
 
-    int rc = ralph_read_mps(model, "benchmarks/netlib/beaconfd.mps");
+    int rc = ralph_test_read_mps(model, "benchmarks/netlib/beaconfd.mps");
     TEST(rc == 0, "Loaded beaconfd.mps");
     if (rc != 0) {
-        ralph_free(model);
+        ralph_test_free(model);
         return 1;
     }
 
-    ralph_set_int_param(model, "presolve", 0);
-    ralph_set_int_param(model, "verbose", 0);
-    ralph_set_int_param(model, "detect_special", 0);
-    ralph_set_int_param(model, "max_iterations", 4000);
-    ralph_set_int_param(model, "trace_phase1", 1);
+    ralph_test_set_int_param(model, "presolve", 0);
+    ralph_test_set_int_param(model, "verbose", 0);
+    ralph_test_set_int_param(model, "detect_special", 0);
+    ralph_test_set_int_param(model, "max_iterations", 4000);
+    ralph_test_set_int_param(model, "trace_phase1", 1);
 
     char trace_path[] = "/tmp/ralph_phase1_trace_XXXXXX";
     int trace_fd = mkstemp(trace_path);
     TEST(trace_fd >= 0, "Created trace temp file");
     if (trace_fd < 0) {
-        ralph_free(model);
+        ralph_test_free(model);
         return 1;
     }
 
@@ -92,7 +92,7 @@ int main(void) {
     if (old_stderr < 0) {
         close(trace_fd);
         unlink(trace_path);
-        ralph_free(model);
+        ralph_test_free(model);
         return 1;
     }
 
@@ -103,11 +103,11 @@ int main(void) {
         close(old_stderr);
         close(trace_fd);
         unlink(trace_path);
-        ralph_free(model);
+        ralph_test_free(model);
         return 1;
     }
 
-    ralph_optimize(model);
+    ralph_test_optimize(model);
 
     fflush(stderr);
     dup2(old_stderr, STDERR_FILENO);
@@ -119,7 +119,7 @@ int main(void) {
     if (!trace) {
         close(trace_fd);
         unlink(trace_path);
-        ralph_free(model);
+        ralph_test_free(model);
         return 1;
     }
 
@@ -197,10 +197,10 @@ int main(void) {
     fclose(trace);
     unlink(trace_path);
 
-    RalphStatus status = ralph_get_status(model);
-    int iters = ralph_get_iterations(model);
+    RalphStatus status = ralph_test_get_status(model);
+    int iters = ralph_test_get_iterations(model);
 
-    printf("Solver status: %s\n", ralph_status_string(status));
+    printf("Solver status: %s\n", ralph_test_status_string(status));
     printf("Iterations: %d\n", iters);
 
     /* beaconfd now solves optimally thanks to solver improvements.
@@ -258,7 +258,7 @@ int main(void) {
         }
     }
 
-    ralph_free(model);
+    ralph_test_free(model);
 
     printf("\n══════════════════════════════════════════════════════════\n");
     printf("Test Summary: %d/%d passed (%.1f%%)\n", pass_count, test_count,

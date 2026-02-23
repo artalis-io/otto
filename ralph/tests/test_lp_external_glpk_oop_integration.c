@@ -9,7 +9,7 @@
 #include <string.h>
 #include <math.h>
 
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -48,17 +48,17 @@ static int glpsol_available(void) {
 }
 
 static RalphModel* build_small_lp(void) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return NULL;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
-    ralph_set_int_param(model, "detect_special", 0);
-    ralph_set_int_param(model, "presolve", 0);
-    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_int_param(model, "detect_special", 0);
+    ralph_test_set_int_param(model, "presolve", 0);
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
     {
         int idx[] = {0};
         double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 1.0);
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 1.0);
     }
     return model;
 }
@@ -84,26 +84,26 @@ static void test_optimal_duals_and_rc(void) {
     ASSERT_INT_EQ(configure_external_glpk(model, (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL),
                   0,
                   "integration/optimal: configure external primal");
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "integration/optimal: solve succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "integration/optimal: status optimal");
-    ASSERT_DBL_CLOSE(ralph_get_objval(model), 1.0, 1e-9,
+    ASSERT_DBL_CLOSE(ralph_test_get_objval(model), 1.0, 1e-9,
                      "integration/optimal: objective");
-    ASSERT_INT_EQ(ralph_get_solution(model, &x), 0,
+    ASSERT_INT_EQ(ralph_test_get_solution(model, &x), 0,
                   "integration/optimal: primal solution available");
     ASSERT_DBL_CLOSE(x, 1.0, 1e-9,
                      "integration/optimal: x value");
-    ASSERT_INT_EQ(ralph_get_dual_solution(model, &y), 0,
+    ASSERT_INT_EQ(ralph_test_get_dual_solution(model, &y), 0,
                   "integration/optimal: dual solution available");
     ASSERT_DBL_CLOSE(y, 1.0, 1e-7,
                      "integration/optimal: dual value");
-    ASSERT_INT_EQ(ralph_get_reduced_costs(model, &rc), 0,
+    ASSERT_INT_EQ(ralph_test_get_reduced_costs(model, &rc), 0,
                   "integration/optimal: reduced costs available");
     ASSERT_DBL_CLOSE(rc, 0.0, 1e-7,
                      "integration/optimal: reduced cost value");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_dual_external_route(void) {
@@ -114,65 +114,65 @@ static void test_dual_external_route(void) {
     ASSERT_INT_EQ(configure_external_glpk(model, (int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX_EXTERNAL),
                   0,
                   "integration/dual-route: configure external dual");
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "integration/dual-route: solve succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
                   "integration/dual-route: status optimal");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_infeasible_mapping(void) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     ASSERT_TRUE(model != NULL, "integration/infeasible: model created");
     if (!model) return;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
-    ralph_set_int_param(model, "detect_special", 0);
-    ralph_set_int_param(model, "presolve", 0);
-    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_int_param(model, "detect_special", 0);
+    ralph_test_set_int_param(model, "presolve", 0);
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
     {
         int idx[] = {0};
         double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 2.0);
-        ralph_add_constraint(model, 1, idx, val, RALPH_LESS_EQUAL, 1.0);
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 2.0);
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_LESS_EQUAL, 1.0);
     }
 
     ASSERT_INT_EQ(configure_external_glpk(model, (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL),
                   0,
                   "integration/infeasible: configure external primal");
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "integration/infeasible: solve returns status");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_INFEASIBLE,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_INFEASIBLE,
                   "integration/infeasible: mapped status");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_unbounded_mapping(void) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     ASSERT_TRUE(model != NULL, "integration/unbounded: model created");
     if (!model) return;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
-    ralph_set_int_param(model, "detect_special", 0);
-    ralph_set_int_param(model, "presolve", 0);
-    ralph_add_var(model, 0.0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_int_param(model, "detect_special", 0);
+    ralph_test_set_int_param(model, "presolve", 0);
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, -1.0, RALPH_CONTINUOUS);
     {
         int idx[] = {0};
         double val[] = {1.0};
-        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 0.0);
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 0.0);
     }
 
     ASSERT_INT_EQ(configure_external_glpk(model, (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL),
                   0,
                   "integration/unbounded: configure external primal");
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
                   "integration/unbounded: solve returns status");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_UNBOUNDED,
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_UNBOUNDED,
                   "integration/unbounded: mapped status");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 int main(void) {

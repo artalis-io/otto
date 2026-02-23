@@ -6,7 +6,7 @@
 
 #include <stdio.h>
 #include <math.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -57,17 +57,17 @@ static int tests_passed = 0;
 } while (0)
 
 static RalphModel* build_nonbasic_case(int maximize_mode) {
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return NULL;
 
-    ralph_set_obj_sense(model, maximize_mode ? RALPH_MAXIMIZE : RALPH_MINIMIZE);
-    ralph_add_var(model, 0.0, RALPH_INFINITY, maximize_mode ? -1.0 : 1.0, RALPH_CONTINUOUS); /* x1 */
-    ralph_add_var(model, 0.0, 3.0, 0.0, RALPH_CONTINUOUS);                                     /* x2 */
+    ralph_test_set_obj_sense(model, maximize_mode ? RALPH_MAXIMIZE : RALPH_MINIMIZE);
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, maximize_mode ? -1.0 : 1.0, RALPH_CONTINUOUS); /* x1 */
+    ralph_test_add_var(model, 0.0, 3.0, 0.0, RALPH_CONTINUOUS);                                     /* x2 */
 
     {
         int idx[] = {0, 1};
         double val[] = {1.0, 1.0};
-        ralph_add_constraint(model, 2, idx, val, RALPH_EQUAL, 2.0);
+        ralph_test_add_constraint(model, 2, idx, val, RALPH_EQUAL, 2.0);
     }
     return model;
 }
@@ -88,8 +88,8 @@ static void test_sensitivity_guards(void) {
     ASSERT_INT_EQ(ralph_get_var_bound_range(lp, 0, &brange), -1,
                   "guard: bound range unavailable before solve");
 
-    ASSERT_INT_EQ(ralph_optimize_lp(lp), 0, "guard: LP solve succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(lp), (int)RALPH_STATUS_OPTIMAL, "guard: LP optimal");
+    ASSERT_INT_EQ(ralph_test_optimize_lp(lp), 0, "guard: LP solve succeeds");
+    ASSERT_INT_EQ((int)ralph_test_get_status(lp), (int)RALPH_STATUS_OPTIMAL, "guard: LP optimal");
 
     ASSERT_INT_EQ(ralph_get_constraint_rhs_range(NULL, 0, &range), -1,
                   "guard: rhs rejects NULL model");
@@ -98,12 +98,12 @@ static void test_sensitivity_guards(void) {
     ASSERT_INT_EQ(ralph_get_var_bound_range(lp, -1, &brange), -1,
                   "guard: bound rejects invalid var");
 
-    mip = ralph_create();
+    mip = ralph_test_create();
     ASSERT_TRUE(mip != NULL, "guard: MIP model created");
     if (mip) {
-        ralph_set_obj_sense(mip, RALPH_MAXIMIZE);
-        ralph_add_var(mip, 0.0, 1.0, 1.0, RALPH_BINARY);
-        ASSERT_INT_EQ(ralph_optimize_mip(mip), 0, "guard: MIP solve succeeds");
+        ralph_test_set_obj_sense(mip, RALPH_MAXIMIZE);
+        ralph_test_add_var(mip, 0.0, 1.0, 1.0, RALPH_BINARY);
+        ASSERT_INT_EQ(ralph_test_optimize_mip(mip), 0, "guard: MIP solve succeeds");
         ASSERT_INT_EQ(ralph_get_constraint_rhs_range(mip, 0, &range), -1,
                       "guard: rhs range is LP-only");
         ASSERT_INT_EQ(ralph_get_obj_coef_range(mip, 0, &range), -1,
@@ -112,8 +112,8 @@ static void test_sensitivity_guards(void) {
                       "guard: bound range is LP-only");
     }
 
-    ralph_free(lp);
-    ralph_free(mip);
+    ralph_test_free(lp);
+    ralph_test_free(mip);
 }
 
 static void test_nonbasic_ranges_min(void) {
@@ -128,10 +128,10 @@ static void test_nonbasic_ranges_min(void) {
     ASSERT_TRUE(model != NULL, "nonbasic/min: model created");
     if (!model) return;
 
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0, "nonbasic/min: solve succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_OPTIMAL, "nonbasic/min: optimal");
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0, "nonbasic/min: solve succeeds");
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL, "nonbasic/min: optimal");
 
-    ASSERT_INT_EQ(ralph_get_basis_status(model, col_status, NULL), 0,
+    ASSERT_INT_EQ(ralph_test_get_basis_status(model, col_status, NULL), 0,
                   "nonbasic/min: basis status available");
     ASSERT_INT_EQ((int)col_status[0], (int)RALPH_BASIS_STATUS_AT_LOWER,
                   "nonbasic/min: x1 at lower");
@@ -173,7 +173,7 @@ static void test_nonbasic_ranges_min(void) {
     ASSERT_DBL_NEAR(bound_x2.upper_min, 2.0, 1e-6, "nonbasic/min: x2 ub min");
     ASSERT_INF_POS(bound_x2.upper_max, "nonbasic/min: x2 ub max = +inf");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 static void test_nonbasic_ranges_max_obj_mapping(void) {
@@ -183,8 +183,8 @@ static void test_nonbasic_ranges_max_obj_mapping(void) {
     ASSERT_TRUE(model != NULL, "nonbasic/max: model created");
     if (!model) return;
 
-    ASSERT_INT_EQ(ralph_optimize_lp(model), 0, "nonbasic/max: solve succeeds");
-    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_OPTIMAL, "nonbasic/max: optimal");
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0, "nonbasic/max: solve succeeds");
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL, "nonbasic/max: optimal");
 
     ASSERT_INT_EQ(ralph_get_obj_coef_range(model, 0, &obj_x1), 0,
                   "nonbasic/max: obj range x1 available");
@@ -192,7 +192,7 @@ static void test_nonbasic_ranges_max_obj_mapping(void) {
     ASSERT_INF_NEG(obj_x1.lower, "nonbasic/max: obj lower = -inf");
     ASSERT_DBL_NEAR(obj_x1.upper, 0.0, 1e-7, "nonbasic/max: obj upper");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 int main(void) {
