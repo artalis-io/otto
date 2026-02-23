@@ -18,6 +18,7 @@
 #include "lp_backend.h"
 #include "lp_dispatch.h"
 #include "lp_external_adapter.h"
+#include "lp_external_glpk_oop.h"
 
 #define RALPH_VERSION "0.1.0"
 
@@ -1791,12 +1792,20 @@ int ralph_register_lp_external_adapter(const RalphLPExternalAdapter *adapter) {
     return 0;
 }
 
+int ralph_register_lp_external_glpk_oop(const char *glpsol_path) {
+    return lp_external_glpk_oop_register(glpsol_path);
+}
+
 int ralph_unregister_lp_external_adapter(RalphLPExternalProvider provider) {
     if (!ralph_lp_external_provider_valid_public(provider)) return -1;
     if (lp_external_adapter_unregister(ralph_lp_external_provider_to_internal(provider)) != 0) {
         return -1;
     }
     return 0;
+}
+
+int ralph_unregister_lp_external_glpk_oop(void) {
+    return lp_external_glpk_oop_unregister();
 }
 
 void ralph_unregister_all_lp_external_adapters(void) {

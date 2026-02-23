@@ -277,7 +277,11 @@ int ralph_get_lp_external_registered_providers(RalphLPExternalProvider *provider
                                                int capacity,
                                                int *count);
 int ralph_register_lp_external_adapter(const RalphLPExternalAdapter *adapter);
+/* Register GLPK as an out-of-process adapter via `glpsol` (no in-process libglpk link).
+ * Pass NULL to use `glpsol` from PATH, or an absolute/relative executable path. */
+int ralph_register_lp_external_glpk_oop(const char *glpsol_path);
 int ralph_unregister_lp_external_adapter(RalphLPExternalProvider provider);
+int ralph_unregister_lp_external_glpk_oop(void);
 void ralph_unregister_all_lp_external_adapters(void);
 int ralph_is_lp_external_adapter_registered(RalphLPExternalProvider provider);
 
