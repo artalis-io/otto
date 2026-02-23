@@ -48,6 +48,26 @@ typedef enum {
     RALPH_MAXIMIZE = -1
 } RalphObjSense;
 
+/* LP algorithm selection API surface (barrier currently capability-gated). */
+typedef enum {
+    RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX = 0,
+    RALPH_LP_ALGORITHM_DUAL_SIMPLEX = 1,
+    RALPH_LP_ALGORITHM_AUTO = 2,
+    RALPH_LP_ALGORITHM_BARRIER = 3
+} RalphLPAlgorithm;
+
+typedef enum {
+    RALPH_LP_CROSSOVER_AUTO = 0,
+    RALPH_LP_CROSSOVER_OFF = 1,
+    RALPH_LP_CROSSOVER_ON = 2
+} RalphLPCrossoverMode;
+
+typedef enum {
+    RALPH_LP_FALLBACK_NONE = 0,
+    RALPH_LP_FALLBACK_BARRIER_UNAVAILABLE = 1,
+    RALPH_LP_FALLBACK_CROSSOVER_UNAVAILABLE = 2
+} RalphLPFallbackReason;
+
 /* Constants */
 #define RALPH_INFINITY 1e30
 
@@ -121,6 +141,34 @@ double ralph_get_objval(const RalphModel *model);
 int ralph_get_solution(const RalphModel *model, double *x);
 int ralph_get_dual_solution(const RalphModel *model, double *y);
 int ralph_get_reduced_costs(const RalphModel *model, double *rc);
+
+typedef struct {
+    int supports_primal_simplex;
+    int supports_dual_simplex;
+    int supports_barrier;
+    int supports_crossover;
+} RalphLPCapabilities;
+
+typedef struct {
+    RalphLPAlgorithm requested_algorithm;
+    RalphLPAlgorithm effective_algorithm;
+    RalphLPCrossoverMode requested_crossover;
+    RalphLPCrossoverMode effective_crossover;
+    int fallback_applied;
+    RalphLPFallbackReason fallback_reason;
+} RalphLPSolveAlgorithmReport;
+
+/* LP capabilities are compile/runtime feature flags independent of model instance.
+ * Returns 0 on success, -1 on invalid args. */
+int ralph_get_lp_capabilities(RalphLPCapabilities *caps);
+
+/* Last LP algorithm execution report (LP-only).
+ * Contract:
+ * - returns -1 for MIP models or if no LP solve has been run since invalidation.
+ * - report describes requested vs effective algorithm/crossover and fallback reason.
+ */
+int ralph_get_last_lp_algorithm_report(const RalphModel *model,
+                                       RalphLPSolveAlgorithmReport *report);
 
 /* Infeasibility certificate (Farkas ray)
  * Returns 0 on success, -1 if not available (problem not infeasible or no certificate)
@@ -1006,6 +1054,8 @@ typedef enum {
     RALPH_PARAM_FEAS_TOL,
     RALPH_PARAM_OPT_TOL,
     RALPH_PARAM_PIVOT_TOL,
+    RALPH_PARAM_LP_ALGORITHM,
+    RALPH_PARAM_BARRIER_CROSSOVER,
     RALPH_PARAM_COUNT
 } RalphParamId;
 

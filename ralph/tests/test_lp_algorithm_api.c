@@ -1,0 +1,322 @@
+/*
+ * Tests for LP algorithm capability/fallback API surface.
+ *
+ * This module is intentionally separate from telemetry/logging tests.
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include "ralph.h"
+
+static int tests_run = 0;
+static int tests_passed = 0;
+
+#define ASSERT_TRUE(cond, msg) do { \
+    tests_run++; \
+    if (cond) { \
+        tests_passed++; \
+    } else { \
+        printf("  FAIL: %s\n", msg); \
+    } \
+} while (0)
+
+#define ASSERT_INT_EQ(a, b, msg) do { \
+    tests_run++; \
+    if ((a) == (b)) { \
+        tests_passed++; \
+    } else { \
+        printf("  FAIL: %s (%d != %d)\n", msg, (int)(a), (int)(b)); \
+    } \
+} while (0)
+
+static RalphModel* build_small_lp(void) {
+    RalphModel *model = ralph_create();
+    if (!model) return NULL;
+
+    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_set_int_param(model, "detect_special", 0);
+    ralph_set_int_param(model, "presolve", 0);
+
+    /* min x, s.t. x >= 1, x >= 0 */
+    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    {
+        int idx[] = {0};
+        double val[] = {1.0};
+        ralph_add_constraint(model, 1, idx, val, RALPH_GREATER_EQUAL, 1.0);
+    }
+    return model;
+}
+
+static void test_lp_capabilities(void) {
+    RalphLPCapabilities caps;
+
+    ASSERT_INT_EQ(ralph_get_lp_capabilities(NULL), -1,
+                  "capabilities: NULL output rejected");
+
+    memset(&caps, 0, sizeof(caps));
+    ASSERT_INT_EQ(ralph_get_lp_capabilities(&caps), 0,
+                  "capabilities: getter succeeds");
+    ASSERT_INT_EQ(caps.supports_primal_simplex, 1,
+                  "capabilities: primal supported");
+    ASSERT_INT_EQ(caps.supports_dual_simplex, 1,
+                  "capabilities: dual supported");
+    ASSERT_INT_EQ(caps.supports_barrier, 0,
+                  "capabilities: barrier unsupported");
+    ASSERT_INT_EQ(caps.supports_crossover, 0,
+                  "capabilities: crossover unsupported");
+}
+
+static void test_param_metadata_and_scope(void) {
+    RalphModel *model = build_small_lp();
+    RalphParamMeta meta;
+    RalphParamId pid = RALPH_PARAM_COUNT;
+    int value = -999;
+
+    ASSERT_TRUE(model != NULL, "params: model created");
+    if (!model) return;
+
+    memset(&meta, 0, sizeof(meta));
+    ASSERT_INT_EQ(ralph_get_param_meta(RALPH_PARAM_LP_ALGORITHM, &meta), 0,
+                  "params: metadata for lp_algorithm");
+    ASSERT_TRUE(strcmp(meta.name, "lp_algorithm") == 0,
+                "params: lp_algorithm canonical name");
+    ASSERT_INT_EQ((int)meta.scope, (int)RALPH_PARAM_SCOPE_LP,
+                  "params: lp_algorithm LP scope");
+    ASSERT_INT_EQ((int)meta.value_type, (int)RALPH_PARAM_VALUE_INT,
+                  "params: lp_algorithm int type");
+    ASSERT_INT_EQ(meta.has_min, 1, "params: lp_algorithm has min");
+    ASSERT_INT_EQ(meta.has_max, 1, "params: lp_algorithm has max");
+    ASSERT_INT_EQ((int)meta.min_value, (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
+                  "params: lp_algorithm min");
+    ASSERT_INT_EQ((int)meta.max_value, (int)RALPH_LP_ALGORITHM_BARRIER,
+                  "params: lp_algorithm max");
+
+    memset(&meta, 0, sizeof(meta));
+    ASSERT_INT_EQ(ralph_get_param_meta(RALPH_PARAM_BARRIER_CROSSOVER, &meta), 0,
+                  "params: metadata for barrier_crossover");
+    ASSERT_TRUE(strcmp(meta.name, "barrier_crossover") == 0,
+                "params: barrier_crossover canonical name");
+    ASSERT_INT_EQ((int)meta.scope, (int)RALPH_PARAM_SCOPE_LP,
+                  "params: barrier_crossover LP scope");
+    ASSERT_INT_EQ(meta.has_min, 1, "params: barrier_crossover has min");
+    ASSERT_INT_EQ(meta.has_max, 1, "params: barrier_crossover has max");
+    ASSERT_INT_EQ((int)meta.min_value, (int)RALPH_LP_CROSSOVER_AUTO,
+                  "params: barrier_crossover min");
+    ASSERT_INT_EQ((int)meta.max_value, (int)RALPH_LP_CROSSOVER_ON,
+                  "params: barrier_crossover max");
+
+    ASSERT_INT_EQ(ralph_find_param_by_name("lp_algorithm", &pid), 0,
+                  "params: find lp_algorithm canonical");
+    ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_ALGORITHM,
+                  "params: lp_algorithm canonical id");
+    ASSERT_INT_EQ(ralph_find_param_by_name("LPAlgorithm", &pid), 0,
+                  "params: find lp_algorithm alias");
+    ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_ALGORITHM,
+                  "params: lp_algorithm alias id");
+
+    ASSERT_INT_EQ(ralph_set_mip_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+                                             (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX),
+                  -1,
+                  "params: MIP strict rejects LP algorithm id");
+    ASSERT_INT_EQ(ralph_set_mip_int_param_id(model, RALPH_PARAM_BARRIER_CROSSOVER,
+                                             (int)RALPH_LP_CROSSOVER_AUTO),
+                  -1,
+                  "params: MIP strict rejects barrier crossover id");
+
+    ASSERT_INT_EQ(ralph_set_lp_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+                                            (int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX),
+                  0,
+                  "params: LP strict accepts lp_algorithm");
+    ASSERT_INT_EQ(ralph_get_int_param_id(model, RALPH_PARAM_METHOD, &value), 0,
+                  "params: read legacy method after lp_algorithm");
+    ASSERT_INT_EQ(value, 1,
+                  "params: method syncs with lp_algorithm<=auto");
+
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_METHOD, 0), 0,
+                  "params: set legacy method");
+    ASSERT_INT_EQ(ralph_get_int_param_id(model, RALPH_PARAM_LP_ALGORITHM, &value), 0,
+                  "params: read lp_algorithm after method");
+    ASSERT_INT_EQ(value, (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
+                  "params: lp_algorithm syncs from method");
+
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+                                         (int)RALPH_LP_ALGORITHM_BARRIER),
+                  0,
+                  "params: barrier algorithm request accepted");
+    ASSERT_INT_EQ(ralph_get_int_param_id(model, RALPH_PARAM_METHOD, &value), 0,
+                  "params: read method after barrier request");
+    ASSERT_INT_EQ(value, (int)RALPH_LP_ALGORITHM_AUTO,
+                  "params: method remains auto when barrier requested");
+
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM, 4), -1,
+                  "params: reject lp_algorithm out of range");
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_BARRIER_CROSSOVER, 3), -1,
+                  "params: reject barrier_crossover out of range");
+
+    ASSERT_INT_EQ(ralph_set_int_param(model, "barrier_crossover",
+                                      (int)RALPH_LP_CROSSOVER_ON),
+                  0,
+                  "params: set barrier_crossover by string");
+    ASSERT_INT_EQ(ralph_get_int_param_id(model, RALPH_PARAM_BARRIER_CROSSOVER, &value), 0,
+                  "params: get barrier_crossover by id");
+    ASSERT_INT_EQ(value, (int)RALPH_LP_CROSSOVER_ON,
+                  "params: barrier_crossover set/get consistent");
+
+    ralph_free(model);
+}
+
+static void test_algorithm_report_guards_and_invalidation(void) {
+    RalphModel *model = build_small_lp();
+    RalphLPSolveAlgorithmReport report;
+
+    ASSERT_TRUE(model != NULL, "report: model created");
+    if (!model) return;
+
+    ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(model, &report), -1,
+                  "report: unavailable before solve");
+
+    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+                  "report: LP optimize succeeds");
+    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+                  "report: LP status optimal");
+
+    ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(model, &report), 0,
+                  "report: available after LP solve");
+    ASSERT_INT_EQ((int)report.requested_algorithm,
+                  (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
+                  "report: default requested algorithm");
+    ASSERT_INT_EQ((int)report.effective_algorithm,
+                  (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
+                  "report: default effective algorithm");
+    ASSERT_INT_EQ(report.fallback_applied, 0,
+                  "report: no fallback for default algorithm");
+
+    ASSERT_INT_EQ(ralph_set_obj_coef(model, 0, 2.0), 0,
+                  "report: mutate model invalidates state");
+    ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(model, &report), -1,
+                  "report: unavailable after invalidation");
+
+    ralph_free(model);
+}
+
+static void test_barrier_fallback_report(void) {
+    RalphModel *model = build_small_lp();
+    RalphLPSolveAlgorithmReport report;
+
+    ASSERT_TRUE(model != NULL, "barrier: model created");
+    if (!model) return;
+
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+                                         (int)RALPH_LP_ALGORITHM_BARRIER),
+                  0,
+                  "barrier: request barrier algorithm");
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_BARRIER_CROSSOVER,
+                                         (int)RALPH_LP_CROSSOVER_ON),
+                  0,
+                  "barrier: request crossover ON");
+
+    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+                  "barrier: LP optimize succeeds");
+    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+                  "barrier: LP status optimal");
+    ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(model, &report), 0,
+                  "barrier: report available");
+
+    ASSERT_INT_EQ((int)report.requested_algorithm,
+                  (int)RALPH_LP_ALGORITHM_BARRIER,
+                  "barrier: requested algorithm captured");
+    ASSERT_INT_EQ((int)report.effective_algorithm,
+                  (int)RALPH_LP_ALGORITHM_AUTO,
+                  "barrier: effective algorithm fallback to auto");
+    ASSERT_INT_EQ((int)report.requested_crossover,
+                  (int)RALPH_LP_CROSSOVER_ON,
+                  "barrier: requested crossover captured");
+    ASSERT_INT_EQ((int)report.effective_crossover,
+                  (int)RALPH_LP_CROSSOVER_AUTO,
+                  "barrier: effective crossover fallback to auto");
+    ASSERT_INT_EQ(report.fallback_applied, 1,
+                  "barrier: fallback marked as applied");
+    ASSERT_INT_EQ((int)report.fallback_reason,
+                  (int)RALPH_LP_FALLBACK_BARRIER_UNAVAILABLE,
+                  "barrier: fallback reason is barrier unavailable");
+
+    ralph_free(model);
+}
+
+static void test_crossover_only_fallback_report(void) {
+    RalphModel *model = build_small_lp();
+    RalphLPSolveAlgorithmReport report;
+
+    ASSERT_TRUE(model != NULL, "crossover: model created");
+    if (!model) return;
+
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+                                         (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX),
+                  0,
+                  "crossover: primal algorithm requested");
+    ASSERT_INT_EQ(ralph_set_int_param_id(model, RALPH_PARAM_BARRIER_CROSSOVER,
+                                         (int)RALPH_LP_CROSSOVER_ON),
+                  0,
+                  "crossover: request crossover ON");
+
+    ASSERT_INT_EQ(ralph_optimize_lp(model), 0,
+                  "crossover: LP optimize succeeds");
+    ASSERT_INT_EQ((int)ralph_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+                  "crossover: LP status optimal");
+    ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(model, &report), 0,
+                  "crossover: report available");
+
+    ASSERT_INT_EQ((int)report.requested_algorithm,
+                  (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
+                  "crossover: requested algorithm captured");
+    ASSERT_INT_EQ((int)report.effective_algorithm,
+                  (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
+                  "crossover: effective algorithm unchanged");
+    ASSERT_INT_EQ((int)report.requested_crossover,
+                  (int)RALPH_LP_CROSSOVER_ON,
+                  "crossover: requested crossover captured");
+    ASSERT_INT_EQ((int)report.effective_crossover,
+                  (int)RALPH_LP_CROSSOVER_AUTO,
+                  "crossover: effective crossover fallback to auto");
+    ASSERT_INT_EQ(report.fallback_applied, 1,
+                  "crossover: fallback marked as applied");
+    ASSERT_INT_EQ((int)report.fallback_reason,
+                  (int)RALPH_LP_FALLBACK_CROSSOVER_UNAVAILABLE,
+                  "crossover: fallback reason is crossover unavailable");
+
+    ralph_free(model);
+}
+
+static void test_lp_report_rejects_mip_models(void) {
+    RalphModel *mip = ralph_create();
+    RalphLPSolveAlgorithmReport report;
+
+    ASSERT_TRUE(mip != NULL, "mip-guard: model created");
+    if (!mip) return;
+
+    ralph_set_obj_sense(mip, RALPH_MAXIMIZE);
+    ralph_add_var(mip, 0.0, 1.0, 1.0, RALPH_BINARY);
+
+    ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(mip, &report), -1,
+                  "mip-guard: report rejected for MIP model before solve");
+    ASSERT_INT_EQ(ralph_optimize_mip(mip), 0,
+                  "mip-guard: optimize_mip succeeds");
+    ASSERT_INT_EQ(ralph_get_last_lp_algorithm_report(mip, &report), -1,
+                  "mip-guard: report rejected for MIP model after solve");
+
+    ralph_free(mip);
+}
+
+int main(void) {
+    printf("=== LP Algorithm API Tests ===\n");
+
+    test_lp_capabilities();
+    test_param_metadata_and_scope();
+    test_algorithm_report_guards_and_invalidation();
+    test_barrier_fallback_report();
+    test_crossover_only_fallback_report();
+    test_lp_report_rejects_mip_models();
+
+    printf("Passed %d/%d tests\n", tests_passed, tests_run);
+    return (tests_passed == tests_run) ? 0 : 1;
+}
