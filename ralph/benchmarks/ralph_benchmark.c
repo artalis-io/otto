@@ -479,7 +479,7 @@ static const char* lu_sparse_fallback_reason_string(int reason) {
 }
 
 /* ============================================================================
- * GLPK Wrapper (via glpsol CLI)
+ * GLPK Wrapper (via Ralph external OOP adapter)
  * ============================================================================ */
 
 static int check_glpk_available(void) {
@@ -487,163 +487,86 @@ static int check_glpk_available(void) {
     return ret == 0;
 }
 
-/* Parse a GLPK stdout line like:
- * "  12345 simplex iterations"
- * Returns 1 if parsed, 0 otherwise.
- */
-static int parse_glpk_iterations_line(const char *line, int *iters_out) {
-    if (!line || !iters_out) return 0;
-
-    const char *marker = strstr(line, "simplex iterations");
-    if (!marker) return 0;
-
-    /* Walk backward from marker to find the integer token before it */
-    const char *end = marker;
-    while (end > line && isspace((unsigned char)end[-1])) end--;
-
-    const char *start = end;
-    while (start > line && isdigit((unsigned char)start[-1])) start--;
-    if (start == end) return 0;
-
-    char buf[32];
-    size_t len = (size_t)(end - start);
-    if (len >= sizeof(buf)) len = sizeof(buf) - 1;
-    memcpy(buf, start, len);
-    buf[len] = '\0';
-
-    int iters = atoi(buf);
-    if (iters < 0) return 0;
-
-    *iters_out = iters;
-    return 1;
-}
-
-/* Parse simplex progress lines like:
- * "    110: obj = ..."
- * "*   240: obj = ..."
- */
-static int parse_glpk_progress_iteration(const char *line, int *iters_out) {
-    if (!line || !iters_out) return 0;
-
-    const char *marker = strstr(line, ": obj");
-    if (!marker) return 0;
-
-    const char *end = marker;
-    while (end > line && isspace((unsigned char)end[-1])) end--;
-
-    const char *start = end;
-    while (start > line && isdigit((unsigned char)start[-1])) start--;
-    if (start == end) return 0;
-
-    char buf[32];
-    size_t len = (size_t)(end - start);
-    if (len >= sizeof(buf)) len = sizeof(buf) - 1;
-    memcpy(buf, start, len);
-    buf[len] = '\0';
-
-    int iters = atoi(buf);
-    if (iters < 0) return 0;
-    *iters_out = iters;
-    return 1;
+static int load_problem_into_model(RalphModel *model, const char *problem_path) {
+    const char *ext;
+    if (!model || !problem_path) return -1;
+    ext = strrchr(problem_path, '.');
+    if (ext && strcasecmp(ext, ".lp") == 0) {
+        return ralph_read_lp(model, problem_path);
+    }
+    return ralph_read_mps(model, problem_path);
 }
 
 static SolveResult solve_with_glpk(const char *problem_path, double time_limit_sec) {
     SolveResult result = {0};
+    RalphModel *model;
+    RalphStatus status;
+    int num_vars;
+
     result.status = 3;  /* Error by default */
     result.solution = NULL;
-
-    /* Create temp files for solution output */
-    char sol_file[MAX_PATH];
-    snprintf(sol_file, sizeof(sol_file), "/tmp/glpk_sol_%d.txt", getpid());
-
-    /* Build command */
-    char cmd[MAX_PATH * 2];
-
-    /* Detect file type */
-    const char *ext = strrchr(problem_path, '.');
-    const char *format_flag = "--mps";
-    if (ext && (strcasecmp(ext, ".lp") == 0)) {
-        format_flag = "--lp";
-    }
-
-    snprintf(cmd, sizeof(cmd),
-             "glpsol %s '%s' --tmlim %.0f -o '%s' 2>&1",
-             format_flag, problem_path, time_limit_sec, sol_file);
-
-    /* Run GLPK and capture output */
-    double start_time = get_time_ms();
-    FILE *pipe = popen(cmd, "r");
-    if (!pipe) {
+    model = ralph_create();
+    if (!model) return result;
+    if (load_problem_into_model(model, problem_path) != 0) {
+        ralph_free(model);
         return result;
     }
 
-    char line[MAX_LINE];
-    int found_time = 0;
-    while (fgets(line, sizeof(line), pipe)) {
-        /* Parse timing from GLPK output */
-        if (strstr(line, "Time used:")) {
-            double t;
-            if (sscanf(line, "Time used: %lf", &t) == 1) {
-                result.time_ms = t * 1000.0;
-                found_time = 1;
-            }
-        }
-        /* Parse iteration count from stdout (not solution file). */
-        {
-            int iters = 0;
-            if (parse_glpk_iterations_line(line, &iters)) {
-                result.iterations = iters;
-            }
-        }
-        {
-            int iters = 0;
-            if (parse_glpk_progress_iteration(line, &iters) && iters > result.iterations) {
-                result.iterations = iters;
-            }
-        }
-    }
-    int ret = pclose(pipe);
-    double end_time = get_time_ms();
+    num_vars = ralph_get_num_vars(model);
+    ralph_set_int_param_id(model, RALPH_PARAM_VERBOSE, 0);
+    ralph_set_int_param_id(model, RALPH_PARAM_PRESOLVE, 0);
+    ralph_set_int_param_id(model, RALPH_PARAM_DETECT_SPECIAL, 0);
+    ralph_set_dbl_param_id(model, RALPH_PARAM_TIME_LIMIT, time_limit_sec);
+    ralph_set_int_param_id(model, RALPH_PARAM_MAX_ITERATIONS, 10000000);
+    ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+                           (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK);
+    ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 1);
+    ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+                           (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL);
 
-    /* Use wall clock if GLPK didn't report time, or reported 0 (0.1s resolution) */
-    if (!found_time || result.time_ms < 0.001) {
-        result.time_ms = end_time - start_time;
+    {
+        double start_time = get_time_ms();
+        (void)ralph_optimize_lp(model);
+        result.time_ms = get_time_ms() - start_time;
     }
-
-    /* Parse solution file */
-    FILE *sol = fopen(sol_file, "r");
-    if (sol) {
-        while (fgets(line, sizeof(line), sol)) {
-            /* Status line */
-            if (strstr(line, "Status:")) {
-                if (strstr(line, "OPTIMAL") || strstr(line, "INTEGER OPTIMAL")) {
-                    result.status = 0;
-                } else if (strstr(line, "INFEASIBLE") || strstr(line, "NO FEASIBLE")) {
-                    result.status = 1;
-                } else if (strstr(line, "UNBOUNDED")) {
-                    result.status = 2;
-                } else if (strstr(line, "TIME LIMIT")) {
-                    result.status = 4;
+    result.iterations = ralph_get_iterations(model);
+    status = ralph_get_status(model);
+    switch (status) {
+        case RALPH_STATUS_OPTIMAL:
+        case RALPH_STATUS_IMPRECISE:
+        case RALPH_STATUS_OBJ_LIMIT:
+            result.status = 0;
+            result.objective = ralph_get_objval(model);
+            if (num_vars > 0) {
+                SimplexSolver *solver = ralph_get_lp_solver(model);
+                result.solution = (double*)malloc((size_t)num_vars * sizeof(double));
+                if (result.solution) {
+                    if (solver && solver->solution) {
+                        memcpy(result.solution, solver->solution,
+                               (size_t)num_vars * sizeof(double));
+                    } else {
+                        (void)ralph_get_solution(model, result.solution);
+                    }
+                    result.solution_size = num_vars;
                 }
             }
-            /* Objective line */
-            if (strstr(line, "Objective:")) {
-                char *eq = strchr(line, '=');
-                if (eq) {
-                    result.objective = atof(eq + 1);
-                }
-            }
-        }
-        fclose(sol);
+            break;
+        case RALPH_STATUS_INFEASIBLE:
+            result.status = 1;
+            break;
+        case RALPH_STATUS_UNBOUNDED:
+        case RALPH_STATUS_INF_OR_UNBD:
+            result.status = 2;
+            break;
+        case RALPH_STATUS_TIME_LIMIT:
+        case RALPH_STATUS_ITERATION_LIMIT:
+            result.status = 4;
+            break;
+        default:
+            result.status = 3;
+            break;
     }
-
-    /* Cleanup */
-    unlink(sol_file);
-
-    /* Check for timeout based on exit status */
-    if (ret != 0 && result.status == 3) {
-        result.status = 4;  /* Assume timeout */
-    }
+    ralph_free(model);
 
     return result;
 }
@@ -988,7 +911,8 @@ static ValidationResult validate_solution(double *solution, int num_vars,
  * Matrix Verification via GLPK Reference Solution
  *
  * Loads an MPS/LP file into Ralph (no solve), runs GLPK to get a reference
- * solution, then verifies Ralph's internal constraint matrix by computing
+ * solution, then verifies Ralph's internal
+ * constraint matrix by computing
  * Ax and checking against b/sense/bounds. Catches matrix construction bugs
  * (MPS parsing, triplet-to-CSC conversion) that objective-only checks miss.
  * ============================================================================ */
@@ -1025,7 +949,10 @@ typedef struct {
 
 /* Parse GLPK --output file to extract column activity values.
  * Returns number of columns parsed, or -1 on error.
- * Sets *status_ok to 1 if solution status is OPTIMAL, 0 otherwise. */
+ * Sets *status_ok to 1 if solution status is OPTIMAL, 0 otherwise.
+ *
+ * TODO(lp-external-mapping): switch verify-matrix to the external adapter once
+ * external LP solution vectors are guaranteed in original-model variable space. */
 static int parse_glpk_solution_vector(const char *sol_file, double *x, int max_vars,
                                        double *obj_out, int *status_ok) {
     FILE *f = fopen(sol_file, "r");
@@ -1037,52 +964,30 @@ static int parse_glpk_solution_vector(const char *sol_file, double *x, int max_v
     if (status_ok) *status_ok = 0;
 
     while (fgets(line, sizeof(line), f)) {
-        /* Parse solution status */
         if (strncmp(line, "Status:", 7) == 0) {
-            if (status_ok && strstr(line, "OPTIMAL"))
-                *status_ok = 1;
+            if (status_ok && strstr(line, "OPTIMAL")) *status_ok = 1;
         }
-
-        /* Parse objective */
         if (strstr(line, "Objective:")) {
             char *eq = strchr(line, '=');
-            if (eq && obj_out) {
-                *obj_out = atof(eq + 1);
-            }
+            if (eq && obj_out) *obj_out = atof(eq + 1);
         }
-
-        /* Detect column section header */
         if (strstr(line, "Column name") && strstr(line, "Activity")) {
-            /* Skip the dashed separator line */
             if (fgets(line, sizeof(line), f)) { /* separator */ }
             in_columns = 1;
             continue;
         }
-
-        /* End of column section */
-        if (in_columns && (line[0] == '\n' || line[0] == '\r' || line[0] == '\0')) {
-            break;
-        }
-        /* KKT section also ends columns */
-        if (in_columns && strstr(line, "Karush-Kuhn-Tucker")) {
-            break;
-        }
-
+        if (in_columns && (line[0] == '\n' || line[0] == '\r' || line[0] == '\0')) break;
+        if (in_columns && strstr(line, "Karush-Kuhn-Tucker")) break;
         if (in_columns) {
-            /* Format: "     1 colname    St   Activity     LB    UB    Marginal"
-             * Column number is 1-based */
             int col_num;
-            char col_name[256], status[8];
+            char col_name[256];
+            char status[8];
             double activity;
-
-            /* Try parsing with activity value */
-            int n = sscanf(line, " %d %255s %7s %lf",
-                           &col_num, col_name, status, &activity);
+            int n = sscanf(line, " %d %255s %7s %lf", &col_num, col_name, status, &activity);
             if (n >= 4 && col_num >= 1 && col_num <= max_vars) {
                 x[col_num - 1] = activity;
                 parsed++;
             } else if (n >= 3 && col_num >= 1 && col_num <= max_vars) {
-                /* Activity might be empty (value = 0) */
                 x[col_num - 1] = 0.0;
                 parsed++;
             }
@@ -1106,14 +1011,7 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
         return r;
     }
 
-    const char *ext = strrchr(problem_path, '.');
-    int load_ret;
-    if (ext && strcasecmp(ext, ".lp") == 0) {
-        load_ret = ralph_read_lp(model, problem_path);
-    } else {
-        load_ret = ralph_read_mps(model, problem_path);
-    }
-    if (load_ret != 0) {
+    if (load_problem_into_model(model, problem_path) != 0) {
         snprintf(r.detail, sizeof(r.detail), "Failed to load %s", problem_path);
         ralph_free(model);
         return r;
@@ -1143,16 +1041,21 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
 
     /* 2. Solve with GLPK to get reference solution */
     char sol_file[MAX_PATH];
-    snprintf(sol_file, sizeof(sol_file), "/tmp/ralph_verify_%d.txt", getpid());
-
+    const char *ext = strrchr(problem_path, '.');
     const char *fmt_flag = "--mps";
-    if (ext && strcasecmp(ext, ".lp") == 0) fmt_flag = "--lp";
-
     char cmd[MAX_PATH * 2];
-    snprintf(cmd, sizeof(cmd), "glpsol %s '%s' -o '%s' 2>/dev/null",
+    int ret;
+    double *x;
+    double glpk_obj = 0.0;
+    int glpk_optimal = 0;
+    int parsed;
+
+    snprintf(sol_file, sizeof(sol_file), "/tmp/ralph_verify_%d.txt", getpid());
+    if (ext && strcasecmp(ext, ".lp") == 0) fmt_flag = "--lp";
+    snprintf(cmd, sizeof(cmd), "glpsol %s '%s' -o '%s' >/dev/null 2>&1",
              fmt_flag, problem_path, sol_file);
 
-    int ret = system(cmd);
+    ret = system(cmd);
     if (ret != 0) {
         snprintf(r.detail, sizeof(r.detail), "GLPK failed to solve");
         ralph_free(model);
@@ -1160,8 +1063,7 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
         return r;
     }
 
-    /* Parse GLPK's solution vector */
-    double *x = (double*)calloc(n, sizeof(double));
+    x = (double*)calloc((size_t)n, sizeof(double));
     if (!x) {
         snprintf(r.detail, sizeof(r.detail), "Memory allocation failed");
         ralph_free(model);
@@ -1169,11 +1071,8 @@ static MatrixVerifyResult verify_matrix_single(const char *problem_path,
         return r;
     }
 
-    double glpk_obj = 0.0;
-    int glpk_optimal = 0;
-    int parsed = parse_glpk_solution_vector(sol_file, x, n, &glpk_obj, &glpk_optimal);
+    parsed = parse_glpk_solution_vector(sol_file, x, n, &glpk_obj, &glpk_optimal);
     unlink(sol_file);
-
     if (parsed == 0) {
         snprintf(r.detail, sizeof(r.detail),
                  "Failed to parse GLPK solution (0 columns parsed)");
@@ -1810,6 +1709,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
 
     if (glpk.status == 3) {
         fprintf(stderr, "  GLPK failed to solve %s\n", name);
+        free(glpk.solution);
         return -1;
     }
 
@@ -1859,6 +1759,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
     }
 
     /* Cleanup */
+    free(glpk.solution);
     free(ralph.solution);
 
     return 0;
@@ -2274,6 +2175,11 @@ int main(int argc, char **argv) {
     if (!check_glpk_available()) {
         fprintf(stderr, "Error: glpsol not found in PATH.\n");
         fprintf(stderr, "Install GLPK: brew install glpk (macOS) or apt install glpk-utils (Linux)\n");
+        return 1;
+    }
+    ralph_unregister_all_lp_external_adapters();
+    if (ralph_register_lp_external_glpk_oop(NULL) != 0) {
+        fprintf(stderr, "Error: failed to register GLPK out-of-process adapter.\n");
         return 1;
     }
 
