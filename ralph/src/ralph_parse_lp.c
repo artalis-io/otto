@@ -12,7 +12,7 @@
 #include <math.h>
 
 #include "ralph_api.h"
-#include "ralph.h"
+#include "ralph_lp.h"
 
 #define LP_MAX_NAME 256
 #define LP_MAX_TERMS 1000
@@ -408,7 +408,7 @@ static int find_or_add_var(LPStringParser *p, const char *name) {
     memset(&p->vars[idx], 0, sizeof(LPVariable));
     strncpy(p->vars[idx].name, name, LP_MAX_NAME - 1);
     p->vars[idx].lb = 0.0;
-    p->vars[idx].ub = RALPH_INFINITY;
+    p->vars[idx].ub = RALPH_LP_INFINITY;
     p->vars[idx].type = 'C';
     p->num_vars++;
 
@@ -686,7 +686,7 @@ static int parse_bounds_section(LPStringParser *p) {
             break;
         }
 
-        double lb = 0.0, ub = RALPH_INFINITY;
+        double lb = 0.0, ub = RALPH_LP_INFINITY;
         const char *var_name = NULL;
         int has_lb = 0, has_ub = 0;
         int is_free = 0;
@@ -699,7 +699,7 @@ static int parse_bounds_section(LPStringParser *p) {
             if (tok.type == TOK_NAME &&
                 (strcasecmp(tok.text, "INFINITY") == 0 ||
                  strcasecmp(tok.text, "INF") == 0)) {
-                lb = -RALPH_INFINITY;
+                lb = -RALPH_LP_INFINITY;
                 has_lb = 1;
 
                 ret = next_token(p, &tok);
@@ -794,7 +794,7 @@ static int parse_bounds_section(LPStringParser *p) {
             if (tok.type == TOK_NAME &&
                 (strcasecmp(tok.text, "INFINITY") == 0 ||
                  strcasecmp(tok.text, "INF") == 0)) {
-                ub = ub_sign * RALPH_INFINITY;
+                ub = ub_sign * RALPH_LP_INFINITY;
             } else if (tok.type == TOK_NUMBER) {
                 ub = ub_sign * tok.value;
             } else {
@@ -845,8 +845,8 @@ static int parse_bounds_section(LPStringParser *p) {
         }
 
         if (is_free) {
-            p->vars[var_idx].lb = -RALPH_INFINITY;
-            p->vars[var_idx].ub = RALPH_INFINITY;
+            p->vars[var_idx].lb = -RALPH_LP_INFINITY;
+            p->vars[var_idx].ub = RALPH_LP_INFINITY;
         } else {
             if (has_lb) p->vars[var_idx].lb = lb;
             if (has_ub) p->vars[var_idx].ub = ub;
@@ -967,7 +967,7 @@ static void lp_string_parser_free(LPStringParser *p) {
  * ============================================================================ */
 
 int ralph_api_parse_lp(const char *lp_string, size_t len,
-                       RalphModel *model,
+                       RalphLPModel *model,
                        const char **error_msg) {
     if (!lp_string || len == 0) {
         if (error_msg) *error_msg = err_empty;
@@ -1046,34 +1046,34 @@ int ralph_api_parse_lp(const char *lp_string, size_t len,
     }
 
     /* Build model */
-    ralph_set_obj_sense(model, p->obj_sense == 1 ? RALPH_MINIMIZE : RALPH_MAXIMIZE);
+    ralph_lp_set_obj_sense(model, p->obj_sense == 1 ? RALPH_LP_OBJ_MINIMIZE : RALPH_LP_OBJ_MAXIMIZE);
 
     for (int j = 0; j < p->num_vars; j++) {
-        RalphVarType type = RALPH_CONTINUOUS;
-        if (p->vars[j].type == 'I') type = RALPH_INTEGER;
-        if (p->vars[j].type == 'B') type = RALPH_BINARY;
+        RalphLPVarType type = RALPH_LP_VAR_CONTINUOUS;
+        if (p->vars[j].type == 'I') type = RALPH_LP_VAR_INTEGER;
+        if (p->vars[j].type == 'B') type = RALPH_LP_VAR_BINARY;
 
-        ralph_add_var(model, p->vars[j].lb, p->vars[j].ub, p->vars[j].obj, type);
+        ralph_lp_add_var(model, p->vars[j].lb, p->vars[j].ub, p->vars[j].obj, type);
     }
 
     for (int j = 0; j < p->num_vars; j++) {
-        ralph_set_var_name(model, j, p->vars[j].name);
+        ralph_lp_set_var_name(model, j, p->vars[j].name);
     }
 
     for (int i = 0; i < p->num_cons; i++) {
         LPConstraint *con = &p->cons[i];
-        RalphSense sense;
-        if (con->sense == 'L') sense = RALPH_LESS_EQUAL;
-        else if (con->sense == 'G') sense = RALPH_GREATER_EQUAL;
-        else sense = RALPH_EQUAL;
+        RalphLPSense sense;
+        if (con->sense == 'L') sense = RALPH_LP_SENSE_LESS_EQUAL;
+        else if (con->sense == 'G') sense = RALPH_LP_SENSE_GREATER_EQUAL;
+        else sense = RALPH_LP_SENSE_EQUAL;
 
-        ralph_add_constraint(model, con->nnz, con->indices, con->coeffs,
-                            sense, con->rhs);
+        ralph_lp_add_constraint(model, con->nnz, con->indices, con->coeffs,
+                                sense, con->rhs);
     }
 
     for (int i = 0; i < p->num_cons; i++) {
         if (p->cons[i].name[0] != '\0') {
-            ralph_set_con_name(model, i, p->cons[i].name);
+            ralph_lp_set_con_name(model, i, p->cons[i].name);
         }
     }
 
@@ -1082,7 +1082,7 @@ int ralph_api_parse_lp(const char *lp_string, size_t len,
 }
 
 int ralph_api_parse_mps(const char *mps_string, size_t len,
-                        RalphModel *model,
+                        RalphLPModel *model,
                         const char **error_msg) {
     /* MPS parsing is more complex - for now, return unsupported */
     /* TODO: Implement MPS string parser */

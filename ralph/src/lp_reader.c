@@ -12,7 +12,7 @@
 #include <ctype.h>
 #include <math.h>
 #include "lp.h"
-#include "ralph.h"
+#include "ralph_lp.h"
 
 #define LP_MAX_LINE 560
 #define LP_MAX_NAME 256
@@ -401,7 +401,7 @@ static int find_or_add_var(LPParser *p, const char *name) {
     strncpy(p->vars[idx].name, name, LP_MAX_NAME - 1);
     p->vars[idx].name[LP_MAX_NAME - 1] = '\0';
     p->vars[idx].lb = 0.0;
-    p->vars[idx].ub = RALPH_INFINITY;
+    p->vars[idx].ub = RALPH_LP_INFINITY;
     p->vars[idx].type = 'C';
     p->vars[idx].obj = 0.0;
     p->num_vars++;
@@ -739,7 +739,7 @@ static int parse_bounds_section(LPParser *p) {
          * lb <= var
          */
 
-        double lb = 0.0, ub = RALPH_INFINITY;
+        double lb = 0.0, ub = RALPH_LP_INFINITY;
         const char *var_name = NULL;
         int has_lb = 0, has_ub = 0;
         int is_free = 0;
@@ -752,7 +752,7 @@ static int parse_bounds_section(LPParser *p) {
             if (tok.type == TOK_NAME &&
                 (strncasecmp(tok.text, "INFINITY", 8) == 0 ||
                  strncasecmp(tok.text, "INF", 3) == 0)) {
-                lb = -RALPH_INFINITY;
+                lb = -RALPH_LP_INFINITY;
                 has_lb = 1;
 
                 /* Expect <= */
@@ -861,7 +861,7 @@ static int parse_bounds_section(LPParser *p) {
             if (tok.type == TOK_NAME &&
                 (strncasecmp(tok.text, "INFINITY", 8) == 0 ||
                  strncasecmp(tok.text, "INF", 3) == 0)) {
-                ub = ub_sign * RALPH_INFINITY;
+                ub = ub_sign * RALPH_LP_INFINITY;
             } else if (tok.type == TOK_NUMBER) {
                 ub = ub_sign * tok.value;
             } else {
@@ -916,8 +916,8 @@ static int parse_bounds_section(LPParser *p) {
 
         /* Apply bounds */
         if (is_free) {
-            p->vars[var_idx].lb = -RALPH_INFINITY;
-            p->vars[var_idx].ub = RALPH_INFINITY;
+            p->vars[var_idx].lb = -RALPH_LP_INFINITY;
+            p->vars[var_idx].ub = RALPH_LP_INFINITY;
         } else {
             if (has_lb) p->vars[var_idx].lb = lb;
             if (has_ub) p->vars[var_idx].ub = ub;
@@ -1038,7 +1038,7 @@ static void lp_parser_free(LPParser *p) {
  * Public Interface
  * ============================================================================ */
 
-int ralph_read_lp(RalphModel *model, const char *filename) {
+int ralph_read_lp(RalphLPModel *model, const char *filename) {
     if (!model || !filename) return -1;
 
     LPParser *p = lp_parser_create();
@@ -1127,38 +1127,38 @@ int ralph_read_lp(RalphModel *model, const char *filename) {
     }
 
     /* Build model */
-    ralph_set_obj_sense(model, p->obj_sense == 1 ? RALPH_MINIMIZE : RALPH_MAXIMIZE);
+    ralph_lp_set_obj_sense(model, p->obj_sense == 1 ? RALPH_LP_OBJ_MINIMIZE : RALPH_LP_OBJ_MAXIMIZE);
 
     /* Add variables first (before setting names, since name array size depends on num_vars) */
     for (int j = 0; j < p->num_vars; j++) {
-        RalphVarType type = RALPH_CONTINUOUS;
-        if (p->vars[j].type == 'I') type = RALPH_INTEGER;
-        if (p->vars[j].type == 'B') type = RALPH_BINARY;
+        RalphLPVarType type = RALPH_LP_VAR_CONTINUOUS;
+        if (p->vars[j].type == 'I') type = RALPH_LP_VAR_INTEGER;
+        if (p->vars[j].type == 'B') type = RALPH_LP_VAR_BINARY;
 
-        ralph_add_var(model, p->vars[j].lb, p->vars[j].ub, p->vars[j].obj, type);
+        ralph_lp_add_var(model, p->vars[j].lb, p->vars[j].ub, p->vars[j].obj, type);
     }
 
     /* Now set variable names (after all variables are added) */
     for (int j = 0; j < p->num_vars; j++) {
-        ralph_set_var_name(model, j, p->vars[j].name);
+        ralph_lp_set_var_name(model, j, p->vars[j].name);
     }
 
     /* Add constraints first (before setting names) */
     for (int i = 0; i < p->num_cons; i++) {
         LPConstraint *con = &p->cons[i];
-        RalphSense sense;
-        if (con->sense == 'L') sense = RALPH_LESS_EQUAL;
-        else if (con->sense == 'G') sense = RALPH_GREATER_EQUAL;
-        else sense = RALPH_EQUAL;
+        RalphLPSense sense;
+        if (con->sense == 'L') sense = RALPH_LP_SENSE_LESS_EQUAL;
+        else if (con->sense == 'G') sense = RALPH_LP_SENSE_GREATER_EQUAL;
+        else sense = RALPH_LP_SENSE_EQUAL;
 
-        ralph_add_constraint(model, con->nnz, con->indices, con->coeffs,
-                            sense, con->rhs);
+        ralph_lp_add_constraint(model, con->nnz, con->indices, con->coeffs,
+                                sense, con->rhs);
     }
 
     /* Now set constraint names */
     for (int i = 0; i < p->num_cons; i++) {
         if (p->cons[i].name[0] != '\0') {
-            ralph_set_con_name(model, i, p->cons[i].name);
+            ralph_lp_set_con_name(model, i, p->cons[i].name);
         }
     }
 

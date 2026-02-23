@@ -12,7 +12,7 @@
 #include <time.h>
 
 #include "ralph_api.h"
-#include "ralph.h"
+#include "ralph_mip.h"
 #include "sh_query.h"
 #include "sh_json.h"
 #include "sh_arena.h"
@@ -135,16 +135,16 @@ static void set_error_response(RalphAPIResponse *resp, int status,
  * Status String Helper (lowercase for JSON)
  * ============================================================================ */
 
-static const char *status_to_json(RalphStatus status) {
+static const char *status_to_json(RalphLPStatus status) {
     switch (status) {
-        case RALPH_STATUS_OPTIMAL:         return "optimal";
-        case RALPH_STATUS_INFEASIBLE:      return "infeasible";
-        case RALPH_STATUS_UNBOUNDED:       return "unbounded";
-        case RALPH_STATUS_INF_OR_UNBD:     return "infeasible_or_unbounded";
-        case RALPH_STATUS_ITERATION_LIMIT: return "iteration_limit";
-        case RALPH_STATUS_TIME_LIMIT:      return "time_limit";
-        case RALPH_STATUS_NODE_LIMIT:      return "node_limit";
-        case RALPH_STATUS_ERROR:           return "error";
+        case RALPH_LP_STATUS_OPTIMAL:         return "optimal";
+        case RALPH_LP_STATUS_INFEASIBLE:      return "infeasible";
+        case RALPH_LP_STATUS_UNBOUNDED:       return "unbounded";
+        case RALPH_LP_STATUS_INF_OR_UNBD:     return "infeasible_or_unbounded";
+        case RALPH_LP_STATUS_ITERATION_LIMIT: return "iteration_limit";
+        case RALPH_LP_STATUS_TIME_LIMIT:      return "time_limit";
+        case RALPH_LP_STATUS_NODE_LIMIT:      return "node_limit";
+        case RALPH_LP_STATUS_ERROR:           return "error";
         default:                           return "unknown";
     }
 }
@@ -177,27 +177,26 @@ static int handle_formats(RalphAPIContext *ctx, RalphAPIResponse *resp) {
 }
 
 /* Build JSON response from solution */
-static void build_json_response(RalphModel *model, RalphStatus status,
+static void build_json_response(RalphLPModel *model, int is_mip, RalphLPStatus status,
                                 double solve_time_ms, JsonBuilder *jb) {
-    int num_vars = ralph_get_num_vars(model);
-    int is_mip = ralph_is_mip(model);
+    int num_vars = ralph_lp_get_num_vars(model);
 
     json_append(jb, "{");
     json_append(jb, "\"status\":\"%s\"", status_to_json(status));
 
-    if (status == RALPH_STATUS_OPTIMAL ||
-        status == RALPH_STATUS_TIME_LIMIT ||
-        status == RALPH_STATUS_ITERATION_LIMIT) {
-        double objval = ralph_get_objval(model);
+    if (status == RALPH_LP_STATUS_OPTIMAL ||
+        status == RALPH_LP_STATUS_TIME_LIMIT ||
+        status == RALPH_LP_STATUS_ITERATION_LIMIT) {
+        double objval = ralph_lp_get_objval(model);
         json_append(jb, ",\"objective\":%.10g", objval);
 
         /* Get solution values */
         double *x = (double *)malloc(num_vars * sizeof(double));
-        if (x && ralph_get_solution(model, x) == 0) {
+        if (x && ralph_lp_get_solution(model, x) == 0) {
             json_append(jb, ",\"variables\":{");
             int first = 1;
             for (int j = 0; j < num_vars; j++) {
-                const char *name = ralph_get_var_name(model, j);
+                const char *name = ralph_lp_get_var_name(model, j);
                 if (!first) json_append(jb, ",");
                 first = 0;
                 if (name && name[0]) {
@@ -212,21 +211,21 @@ static void build_json_response(RalphModel *model, RalphStatus status,
         free(x);
     }
 
-    if (status == RALPH_STATUS_INFEASIBLE) {
+    if (status == RALPH_LP_STATUS_INFEASIBLE) {
         json_append(jb, ",\"message\":\"Problem is infeasible\"");
-    } else if (status == RALPH_STATUS_UNBOUNDED) {
+    } else if (status == RALPH_LP_STATUS_UNBOUNDED) {
         json_append(jb, ",\"message\":\"Problem is unbounded\"");
-    } else if (status == RALPH_STATUS_TIME_LIMIT) {
+    } else if (status == RALPH_LP_STATUS_TIME_LIMIT) {
         json_append(jb, ",\"message\":\"Timeout exceeded\"");
     }
 
     json_append(jb, ",\"solve_time_ms\":%.1f", solve_time_ms);
-    json_append(jb, ",\"iterations\":%d", ralph_get_iterations(model));
+    json_append(jb, ",\"iterations\":%d", ralph_lp_get_iterations(model));
     json_append(jb, ",\"num_vars\":%d", num_vars);
-    json_append(jb, ",\"num_cons\":%d", ralph_get_num_cons(model));
+    json_append(jb, ",\"num_cons\":%d", ralph_lp_get_num_cons(model));
     if (is_mip) {
         json_append(jb, ",\"is_mip\":true");
-        json_append(jb, ",\"nodes\":%d", ralph_get_node_count(model));
+        json_append(jb, ",\"nodes\":%d", ralph_mip_get_node_count((const RalphMIPModel *)model));
     }
     json_append(jb, "}");
 }
@@ -344,7 +343,7 @@ static int handle_solve(RalphAPIContext *ctx, const RalphAPIRequest *req,
     }
 
     /* Create model and parse */
-    RalphModel *model = ralph_create();
+    RalphLPModel *model = ralph_lp_create();
     if (!model) {
         free(problem);
         set_error_response(resp, 500, "Failed to create model");
@@ -364,7 +363,7 @@ static int handle_solve(RalphAPIContext *ctx, const RalphAPIRequest *req,
     problem = NULL;
 
     if (parse_result != 0) {
-        ralph_free(model);
+        ralph_lp_free(model);
         char err_buf[256];
         snprintf(err_buf, sizeof(err_buf), "Parse error: %s",
                  parse_error ? parse_error : "unknown error");
@@ -373,15 +372,15 @@ static int handle_solve(RalphAPIContext *ctx, const RalphAPIRequest *req,
     }
 
     /* Check size limits */
-    int num_vars = ralph_get_num_vars(model);
-    int num_cons = ralph_get_num_cons(model);
-    int is_mip = ralph_is_mip(model);
+    int num_vars = ralph_lp_get_num_vars(model);
+    int num_cons = ralph_lp_get_num_cons(model);
+    int is_mip = ralph_lp_get_num_integer_vars(model) > 0;
 
     int max_vars = is_mip ? RALPH_API_MAX_VARS_MIP : RALPH_API_MAX_VARS_LP;
     int max_cons = is_mip ? RALPH_API_MAX_CONS_MIP : RALPH_API_MAX_CONS_LP;
 
     if (num_vars > max_vars || num_cons > max_cons) {
-        ralph_free(model);
+        ralph_lp_free(model);
         char err_buf[256];
         snprintf(err_buf, sizeof(err_buf),
                  "Problem too large: %d vars, %d constraints (max: %d vars, %d cons for %s)",
@@ -391,22 +390,30 @@ static int handle_solve(RalphAPIContext *ctx, const RalphAPIRequest *req,
     }
 
     /* Set timeout */
-    ralph_set_dbl_param(model, "time_limit", timeout_ms / 1000.0);
+    if (is_mip) {
+        ralph_mip_set_dbl_param((RalphMIPModel *)model, "time_limit", timeout_ms / 1000.0);
+    } else {
+        ralph_lp_set_dbl_param(model, "time_limit", timeout_ms / 1000.0);
+    }
 
     /* Solve */
     clock_t start = clock();
-    int solve_result = ralph_optimize(model);
+    int solve_result = is_mip
+        ? ralph_mip_optimize((RalphMIPModel *)model)
+        : ralph_lp_optimize(model);
     clock_t end = clock();
     double solve_time_ms = (double)(end - start) / CLOCKS_PER_SEC * 1000.0;
 
     (void)solve_result;
 
-    RalphStatus status = ralph_get_status(model);
+    RalphLPStatus status = is_mip
+        ? ralph_mip_get_status((const RalphMIPModel *)model)
+        : ralph_lp_get_status(model);
 
     /* Build response in appropriate format */
     char *buf = (char *)malloc(MAX_JSON_RESPONSE);
     if (!buf) {
-        ralph_free(model);
+        ralph_lp_free(model);
         set_error_response(resp, 500, "Memory allocation failed");
         return 0;
     }
@@ -418,21 +425,21 @@ static int handle_solve(RalphAPIContext *ctx, const RalphAPIRequest *req,
         /* JSON output */
         JsonBuilder jb;
         json_init(&jb, buf, MAX_JSON_RESPONSE);
-        build_json_response(model, status, solve_time_ms, &jb);
+        build_json_response(model, is_mip, status, solve_time_ms, &jb);
         body_len = jb.pos;
         content_type = CT_JSON;
     } else {
         /* SOL format output (using core ralph function) */
-        int len = ralph_write_solution_buf(model, buf, MAX_JSON_RESPONSE);
+        int len = ralph_lp_write_solution_buf(model, buf, MAX_JSON_RESPONSE);
         body_len = len > 0 ? (size_t)len : 0;
         content_type = CT_TEXT;
     }
 
-    ralph_free(model);
+    ralph_lp_free(model);
 
     /* Set response */
     int http_status = 200;
-    if (status == RALPH_STATUS_TIME_LIMIT) {
+    if (status == RALPH_LP_STATUS_TIME_LIMIT) {
         http_status = 408;
     }
 

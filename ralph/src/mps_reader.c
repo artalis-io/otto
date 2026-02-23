@@ -13,7 +13,7 @@
 #include <math.h>
 #include <errno.h>
 #include "lp.h"
-#include "ralph.h"
+#include "ralph_lp.h"
 
 #define MAX_LINE 4096
 #define MAX_NAME 256
@@ -266,7 +266,7 @@ static int find_or_add_column(MPSParser *parser, const char *name) {
 
     /* Default bounds */
     parser->lb[idx] = 0.0;
-    parser->ub[idx] = RALPH_INFINITY;
+    parser->ub[idx] = RALPH_LP_INFINITY;
     parser->obj[idx] = 0.0;
 
     parser->num_cols++;
@@ -736,12 +736,12 @@ static int parse_bounds_line(MPSParser *parser, const char *line) {
         parser->lb[col_idx] = val;
         parser->ub[col_idx] = val;
     } else if (strncmp(type, "FR", 3) == 0) {
-        parser->lb[col_idx] = -RALPH_INFINITY;
-        parser->ub[col_idx] = RALPH_INFINITY;
+        parser->lb[col_idx] = -RALPH_LP_INFINITY;
+        parser->ub[col_idx] = RALPH_LP_INFINITY;
     } else if (strncmp(type, "MI", 3) == 0) {
-        parser->lb[col_idx] = -RALPH_INFINITY;
+        parser->lb[col_idx] = -RALPH_LP_INFINITY;
     } else if (strncmp(type, "PL", 3) == 0) {
-        parser->ub[col_idx] = RALPH_INFINITY;
+        parser->ub[col_idx] = RALPH_LP_INFINITY;
     } else if (strncmp(type, "BV", 3) == 0) {
         /* Binary variable */
         parser->lb[col_idx] = 0.0;
@@ -835,7 +835,7 @@ static void mps_parser_free(MPSParser *parser) {
  * Public Interface
  * ============================================================================ */
 
-int ralph_read_mps(RalphModel *model, const char *filename) {
+int ralph_read_mps(RalphLPModel *model, const char *filename) {
     if (!model || !filename) return -1;
 
     MPSParser *parser = mps_parser_create();
@@ -971,17 +971,17 @@ int ralph_read_mps(RalphModel *model, const char *filename) {
 
     /* Build model using public API */
     /* Set objective sense */
-    ralph_set_obj_sense(model, parser->obj_sense == 1 ? RALPH_MINIMIZE : RALPH_MAXIMIZE);
-    ralph_set_obj_offset(model, parser->obj_offset);
+    ralph_lp_set_obj_sense(model, parser->obj_sense == 1 ? RALPH_LP_OBJ_MINIMIZE : RALPH_LP_OBJ_MAXIMIZE);
+    ralph_lp_set_obj_offset(model, parser->obj_offset);
 
     /* Add variables */
     for (int j = 0; j < parser->num_cols; j++) {
-        RalphVarType type = RALPH_CONTINUOUS;
-        if (parser->columns[j].type == 'I') type = RALPH_INTEGER;
-        if (parser->columns[j].type == 'B') type = RALPH_BINARY;
+        RalphLPVarType type = RALPH_LP_VAR_CONTINUOUS;
+        if (parser->columns[j].type == 'I') type = RALPH_LP_VAR_INTEGER;
+        if (parser->columns[j].type == 'B') type = RALPH_LP_VAR_BINARY;
 
-        ralph_add_var(model, parser->lb[j], parser->ub[j], parser->obj[j], type);
-        ralph_set_var_name(model, j, parser->columns[j].name);
+        ralph_lp_add_var(model, parser->lb[j], parser->ub[j], parser->obj[j], type);
+        ralph_lp_set_var_name(model, j, parser->columns[j].name);
     }
 
     /* Build constraint matrix and add constraints */
@@ -1049,20 +1049,20 @@ int ralph_read_mps(RalphModel *model, const char *filename) {
                     }
                 }
                 /* Ax >= lo */
-                ralph_add_constraint(model, nnz, row_indices, row_coefs,
-                                     RALPH_GREATER_EQUAL, lo);
+                ralph_lp_add_constraint(model, nnz, row_indices, row_coefs,
+                                        RALPH_LP_SENSE_GREATER_EQUAL, lo);
                 /* Ax <= hi */
-                ralph_add_constraint(model, nnz, row_indices, row_coefs,
-                                     RALPH_LESS_EQUAL, hi);
+                ralph_lp_add_constraint(model, nnz, row_indices, row_coefs,
+                                        RALPH_LP_SENSE_LESS_EQUAL, hi);
             } else {
                 /* Standard (non-ranged) constraint */
-                RalphSense sense;
-                if (type == 'L') sense = RALPH_LESS_EQUAL;
-                else if (type == 'G') sense = RALPH_GREATER_EQUAL;
-                else sense = RALPH_EQUAL;
+                RalphLPSense sense;
+                if (type == 'L') sense = RALPH_LP_SENSE_LESS_EQUAL;
+                else if (type == 'G') sense = RALPH_LP_SENSE_GREATER_EQUAL;
+                else sense = RALPH_LP_SENSE_EQUAL;
 
-                ralph_add_constraint(model, nnz, row_indices, row_coefs,
-                                     sense, b);
+                ralph_lp_add_constraint(model, nnz, row_indices, row_coefs,
+                                        sense, b);
             }
         }
 
