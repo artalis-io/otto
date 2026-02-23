@@ -695,6 +695,9 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
            This makes temperature ~1000x hotter so SA accepts distance-worsening
            moves that reduce vehicle count. */
         ar_alns_calibrate_sa(&params, sg_route_solution_cost(&initial, ctx), phase1_iters);
+        /* Slower cooling for vehicle minimization: decay to 5% of T0 (not 0.1%).
+           Vehicle-reducing moves need high temperature; Phase 2 handles distance. */
+        params.cooling_rate = exp(log(0.05) / (double)phase1_iters);
         if (ctx->config.accept_type != SG_ACCEPT_SA) {
             params.accept_type = (ARAcceptType)ctx->config.accept_type;
             if (params.accept_type == AR_ACCEPT_RRT) {
@@ -737,6 +740,12 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         sg_copy_operator_stats(ctx, alns);
         ar_alns_free(alns);
         alns = NULL;
+    }
+
+    /* ---- Ejection pulse: exploit Phase 1's loose routes to eliminate vehicles ---- */
+    if (p1_best) {
+        (void)sg_route_postprocess_ejection_reduce(ctx, p1_best);
+        (void)sg_route_postprocess_intensify(ctx, p1_best);
     }
 
     /* ---- Phase 2: Distance polishing ---- */

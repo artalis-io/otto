@@ -34,7 +34,7 @@ The JSON API (`sg_api.c`) is a thin veneer over the same C API — no separate "
 
 ## Solution Quality — Competitive but not top-tier
 
-Solomon benchmarks: 56/56 solved, avgDistGap +0.7% vs. BKS, 36/56 matching vehicle count. That's solidly in "good metaheuristic" territory.
+Solomon benchmarks: 56/56 solved, avgDistGap +0.4% vs. BKS, 37/56 matching vehicle count. That's solidly in "good metaheuristic" territory.
 
 For context:
 - **VROOM**: Typically 2-5% above BKS on Solomon, but much faster. Surge is comparable or slightly better on quality.
@@ -42,7 +42,7 @@ For context:
 - **HGS-CVRP** (Vidal): State-of-the-art, often matches or sets BKS. Surge doesn't compete here — but HGS is a research solver, not a product. See "Why not HGS?" below.
 - **LKH-3**: Similar — academic champion, not a deployable product.
 
-Li & Lim (PDPTW): avgDistGap +5.3% single-threaded, improved to ~+4.7% with population-based parallel search (4 threads, 3 generations). 39/56 equal vehicles. PDPTW is inherently harder and the gap to BKS is larger across all solvers.
+Li & Lim (PDPTW): avgDistGap +4.8% single-threaded, improved with population-based parallel search (4 threads, 3 generations). 41/56 equal vehicles. PDPTW is inherently harder and the gap to BKS is larger across all solvers.
 
 **Honest weakness**: The two-phase approach (minimize vehicles, then polish distance) is pragmatic but can get stuck in local optima. Population-based search mitigates this by warm-starting from elite solutions across generations, but the core ALNS with simulated annealing is a well-understood mid-2010s vintage approach.
 
