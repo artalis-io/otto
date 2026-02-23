@@ -6,6 +6,8 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
+#include <stdatomic.h>
 
 #include "../src/lp_external_adapter.h"
 
@@ -67,6 +69,77 @@ static LPExternalAdapter build_fixture_adapter(AdapterFixture *fx,
     adapter.solve = fixture_solve;
     adapter.user_data = fx;
     return adapter;
+}
+
+typedef struct {
+    LPExternalAdapter adapter;
+    SimplexSolver dummy_solver;
+    int iterations;
+    atomic_int failed;
+} AdapterThreadHarness;
+
+static int thread_safe_get_capabilities(LPExternalCapabilities *caps, void *user_data) {
+    (void)user_data;
+    if (!caps) return -1;
+    memset(caps, 0, sizeof(*caps));
+    caps->supports_simplex = 1;
+    return 0;
+}
+
+static int thread_safe_solve(LPExternalBackendKind backend,
+                             SimplexSolver *solver,
+                             void *user_data) {
+    (void)backend;
+    (void)user_data;
+    if (!solver) return -1;
+    return 0;
+}
+
+static void* adapter_thread_writer(void *arg) {
+    AdapterThreadHarness *harness = (AdapterThreadHarness*)arg;
+    for (int i = 0; i < harness->iterations; i++) {
+        if (lp_external_adapter_register(&harness->adapter) != 0) {
+            atomic_store(&harness->failed, 1);
+            break;
+        }
+        if ((i & 1) == 0) {
+            if (lp_external_adapter_unregister(LP_EXTERNAL_PROVIDER_GLPK) != 0) {
+                atomic_store(&harness->failed, 1);
+                break;
+            }
+        }
+    }
+    (void)lp_external_adapter_unregister(LP_EXTERNAL_PROVIDER_GLPK);
+    return NULL;
+}
+
+static void* adapter_thread_reader(void *arg) {
+    AdapterThreadHarness *harness = (AdapterThreadHarness*)arg;
+    for (int i = 0; i < harness->iterations; i++) {
+        LPExternalCapabilities caps;
+        int rc_caps;
+        int rc_solve;
+
+        memset(&caps, 0, sizeof(caps));
+        rc_caps = lp_external_adapter_get_capabilities(LP_EXTERNAL_PROVIDER_GLPK, &caps);
+        if (rc_caps != 0 && rc_caps != -1) {
+            atomic_store(&harness->failed, 1);
+            break;
+        }
+        if (rc_caps == 0 && caps.supports_simplex != 1) {
+            atomic_store(&harness->failed, 1);
+            break;
+        }
+
+        rc_solve = lp_external_adapter_solve(LP_EXTERNAL_PROVIDER_GLPK,
+                                             LP_EXTERNAL_BACKEND_SIMPLEX,
+                                             &harness->dummy_solver);
+        if (rc_solve != 0 && rc_solve != -1) {
+            atomic_store(&harness->failed, 1);
+            break;
+        }
+    }
+    return NULL;
 }
 
 static void test_provider_names(void) {
@@ -248,6 +321,41 @@ static void test_multi_provider_lifecycle_and_solve(void) {
                   "lifecycle: unregister all clears registry");
 }
 
+static void test_thread_safety_registry_churn(void) {
+    AdapterThreadHarness harness;
+    pthread_t writer_thread;
+    pthread_t reader_thread;
+
+    memset(&harness, 0, sizeof(harness));
+    memset(&harness.dummy_solver, 0, sizeof(harness.dummy_solver));
+    harness.iterations = 2000;
+    atomic_init(&harness.failed, 0);
+
+    memset(&harness.adapter, 0, sizeof(harness.adapter));
+    harness.adapter.abi_version = LP_EXTERNAL_ADAPTER_ABI_VERSION;
+    harness.adapter.provider = LP_EXTERNAL_PROVIDER_GLPK;
+    harness.adapter.provider_name = "ThreadSafeGLPK";
+    harness.adapter.get_capabilities = thread_safe_get_capabilities;
+    harness.adapter.solve = thread_safe_solve;
+
+    lp_external_adapter_unregister_all();
+    ASSERT_INT_EQ(pthread_create(&writer_thread, NULL, adapter_thread_writer, &harness),
+                  0,
+                  "thread-safety: create writer thread");
+    ASSERT_INT_EQ(pthread_create(&reader_thread, NULL, adapter_thread_reader, &harness),
+                  0,
+                  "thread-safety: create reader thread");
+
+    ASSERT_INT_EQ(pthread_join(writer_thread, NULL), 0,
+                  "thread-safety: join writer thread");
+    ASSERT_INT_EQ(pthread_join(reader_thread, NULL), 0,
+                  "thread-safety: join reader thread");
+    ASSERT_INT_EQ(atomic_load(&harness.failed), 0,
+                  "thread-safety: concurrent registry churn stable");
+
+    lp_external_adapter_unregister_all();
+}
+
 int main(void) {
     printf("=== LP External Adapter Module Tests ===\n");
 
@@ -255,6 +363,7 @@ int main(void) {
     test_provider_names();
     test_register_validation();
     test_multi_provider_lifecycle_and_solve();
+    test_thread_safety_registry_churn();
     lp_external_adapter_unregister_all();
 
     printf("Passed %d/%d tests\n", tests_passed, tests_run);

@@ -28,6 +28,8 @@ typedef struct {
     int supports_crossover;
 } LPExternalCapabilities;
 
+typedef void (*LPExternalUserDataDestroyFn)(void *user_data);
+
 typedef struct {
     int abi_version;
     LPExternalProvider provider;
@@ -35,6 +37,7 @@ typedef struct {
     int (*get_capabilities)(LPExternalCapabilities *caps, void *user_data);
     int (*solve)(LPExternalBackendKind backend, SimplexSolver *solver, void *user_data);
     void *user_data;
+    LPExternalUserDataDestroyFn destroy_user_data;  /* Optional lifecycle hook on unregister/replace. */
 } LPExternalAdapter;
 
 const char* lp_external_provider_name(LPExternalProvider provider);
