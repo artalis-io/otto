@@ -14,7 +14,8 @@
 #include <limits.h>
 
 #include "benders.h"
-#include "ralph.h"
+#include "ralph_core.h"
+#include "ralph_lp.h"
 
 /* ============================================================================
  * Constants
@@ -171,7 +172,9 @@ void benders_free(BendersContext *ctx) {
     }
     if (ctx->sub_bases) {
         for (int s = 0; s < ctx->config.num_scenarios; s++) {
-            if (ctx->sub_bases[s]) ralph_free_basis(ctx->sub_bases[s]);
+            if (ctx->sub_bases[s]) {
+                ralph_lp_free_basis((RalphLPBasis *)ctx->sub_bases[s]);
+            }
         }
         free(ctx->sub_bases);
     }
