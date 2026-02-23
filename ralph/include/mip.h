@@ -18,6 +18,9 @@
 #define MIP_RELIABILITY_THRESHOLD   8    /* Strong-branch until this many observations */
 #define MIP_RELIABILITY_MAX_STRONG  5    /* Max strong-branch evaluations per node */
 #define MIP_RELIABILITY_PIVOT_BUDGET 100 /* Dual pivots per strong-branch probe */
+#define MIP_RELIABILITY_NO_INCUMBENT_TAPER_AFTER 1024   /* Explored nodes before pre-incumbent taper */
+#define MIP_RELIABILITY_NO_INCUMBENT_DISABLE_AFTER 4096 /* Explored nodes before pre-incumbent strong-branch off */
+#define MIP_RELIABILITY_NO_INCUMBENT_PIVOT_BUDGET 48    /* Reduced pivot budget in tapered pre-incumbent mode */
 
 /* Cut quality filter parameters */
 #define MIP_CUT_MIN_VIOLATION  1e-4   /* Minimum violation to apply a cut */
