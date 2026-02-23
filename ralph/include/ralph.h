@@ -134,6 +134,49 @@ int ralph_get_farkas_ray(const RalphModel *model, double *ray);
  * that preserves feasibility for sufficiently large steps. */
 int ralph_get_unbounded_ray(const RalphModel *model, double *ray);
 
+typedef enum {
+    RALPH_CONFLICT_MEMBER_ROW = 0,
+    RALPH_CONFLICT_MEMBER_VAR_LB = 1,
+    RALPH_CONFLICT_MEMBER_VAR_UB = 2
+} RalphConflictMemberType;
+
+typedef struct {
+    RalphConflictMemberType type;  /* row, variable lower bound, or variable upper bound */
+    int index;                     /* constraint or variable index depending on type */
+} RalphConflictMember;
+
+typedef struct {
+    int include_bounds;   /* 1 = include finite var bounds in conflict candidates */
+    int use_farkas_seed;  /* 1 = prune row candidates using Farkas support before shrink */
+} RalphConflictOptions;
+
+typedef struct {
+    int probes;            /* Number of LP probes executed */
+    int dropped;           /* Candidates removed by deletion filter */
+    int initial_size;      /* Candidate count before optional seed pruning */
+    int final_size;        /* Final conflict size */
+    int used_farkas_seed;  /* 1 if seed pruning was accepted */
+    int seeded_rows;       /* Number of rows removed by accepted seed pruning */
+} RalphConflictReport;
+
+/* Compute a minimal LP conflict set over rows and optional variable bounds.
+ *
+ * Contract:
+ * - LP-only API: returns -1 for MIP models.
+ * - Requires model status == INFEASIBLE from the most recent solve.
+ * - Set `options->include_bounds=0` for row-only IIS behavior.
+ * - `members` may be NULL only when `capacity==0` (size query).
+ * - `count` receives required/returned member count.
+ *
+ * Returns 0 on success, -1 on invalid args/unavailable/insufficient capacity.
+ */
+int ralph_compute_lp_conflict(const RalphModel *model,
+                              const RalphConflictOptions *options,
+                              RalphConflictMember *members,
+                              int capacity,
+                              int *count,
+                              RalphConflictReport *report);
+
 /* Compute a minimal irreducible infeasible subsystem (IIS) over LP rows.
  *
  * Contract:

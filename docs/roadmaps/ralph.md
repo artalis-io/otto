@@ -507,8 +507,14 @@ one by one.
   outside this LP determinism contract.
 
 10. Advanced parity backlog (separate track)
-- Sensitivity/ranging API (objective, RHS, bounds ranges).
-- Stronger IIS/conflict refinement.
+- Sensitivity/ranging API (objective, RHS, bounds ranges). ✅ (2026-02-23)
+- Stronger IIS/conflict refinement. ✅ (2026-02-23)
+  - Added typed LP conflict API:
+    `ralph_compute_lp_conflict()` with row/lower-bound/upper-bound members.
+  - Added deterministic deletion-filter conflict module (`lp_conflict`) and kept
+    `ralph_compute_lp_iis()` as row-only compatibility wrapper.
+  - Added optional Farkas-seeded row pruning (`use_farkas_seed`) with safe fallback.
+  - Added standalone tests `test-lp-conflict` (orthogonal to telemetry/logging).
 - Optional barrier/crossover API surface (if adopted in solver core).
 
 Exit criteria for this consolidated plan:

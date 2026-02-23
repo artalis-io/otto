@@ -14,6 +14,7 @@
 #include "presolve.h"
 #include "detect.h"
 #include "benders.h"
+#include "lp_conflict.h"
 
 #define RALPH_VERSION "0.1.0"
 
@@ -239,7 +240,8 @@ static int ralph_probe_lp_status(const RalphModel *model,
     probe->verify = 0;
     probe->phase1_pricing = model->phase1_pricing;
     probe->objective_limit = RALPH_INFINITY;
-    probe->force_two_phase = model->force_two_phase;
+    /* Probe solves prioritize robust infeasibility checks over caller mode. */
+    probe->force_two_phase = 1;
     probe->trace_phase1 = 0;
     probe->deterministic = model->deterministic ? 1 : 0;
     probe->random_seed = (model->random_seed >= 0) ? (unsigned int)model->random_seed : 0U;
@@ -250,6 +252,10 @@ static int ralph_probe_lp_status(const RalphModel *model,
     *status_out = probe->status;
     simplex_free(probe);
     return 0;
+}
+
+static int ralph_probe_lp_status_cb(void *ctx, LPModel *probe_model, RalphStatus *status_out) {
+    return ralph_probe_lp_status((const RalphModel*)ctx, probe_model, status_out);
 }
 
 static int ralph_set_mip_start_copy(RalphModel *model, const double *x,
@@ -1252,7 +1258,87 @@ int ralph_get_unbounded_ray(const RalphModel *model, double *ray) {
     return -1;
 }
 
+int ralph_compute_lp_conflict(const RalphModel *model,
+                              const RalphConflictOptions *options,
+                              RalphConflictMember *members,
+                              int capacity,
+                              int *count,
+                              RalphConflictReport *report) {
+    LPConflictOptionsInternal internal_opts;
+    LPConflictMemberInternal *internal_members = NULL;
+    LPConflictReportInternal internal_report;
+    int internal_count = 0;
+
+    if (!model || !model->lp_model || !count) return -1;
+    if (capacity < 0) return -1;
+    if (!members && capacity > 0) return -1;
+    *count = 0;
+    if (report) memset(report, 0, sizeof(*report));
+
+    if (ralph_is_mip(model)) return -1;
+    if (model->status != RALPH_STATUS_INFEASIBLE) return -1;
+
+    internal_opts.include_bounds = 1;
+    internal_opts.use_farkas_seed = 0;
+    internal_opts.farkas_ray = NULL;
+    internal_opts.farkas_valid = 0;
+    if (options) {
+        internal_opts.include_bounds = options->include_bounds ? 1 : 0;
+        internal_opts.use_farkas_seed = options->use_farkas_seed ? 1 : 0;
+    }
+    if (model->lp_solver && model->lp_solver->farkas_valid && model->lp_solver->farkas_ray) {
+        internal_opts.farkas_valid = 1;
+        internal_opts.farkas_ray = model->lp_solver->farkas_ray;
+    }
+
+    memset(&internal_report, 0, sizeof(internal_report));
+    if (lp_conflict_compute(model->lp_model, &internal_opts,
+                            ralph_probe_lp_status_cb, (void*)model,
+                            &internal_members, &internal_count,
+                            &internal_report) != 0) {
+        return -1;
+    }
+
+    *count = internal_count;
+    if (capacity < internal_count) {
+        lp_conflict_free_members(internal_members);
+        return -1;
+    }
+
+    for (int i = 0; i < internal_count; i++) {
+        if (internal_members[i].type == LP_CONFLICT_MEMBER_ROW) {
+            members[i].type = RALPH_CONFLICT_MEMBER_ROW;
+        } else if (internal_members[i].type == LP_CONFLICT_MEMBER_VAR_LB) {
+            members[i].type = RALPH_CONFLICT_MEMBER_VAR_LB;
+        } else if (internal_members[i].type == LP_CONFLICT_MEMBER_VAR_UB) {
+            members[i].type = RALPH_CONFLICT_MEMBER_VAR_UB;
+        } else {
+            lp_conflict_free_members(internal_members);
+            return -1;
+        }
+        members[i].index = internal_members[i].index;
+    }
+
+    if (report) {
+        report->probes = internal_report.probes;
+        report->dropped = internal_report.dropped;
+        report->initial_size = internal_report.initial_size;
+        report->final_size = internal_report.final_size;
+        report->used_farkas_seed = internal_report.used_farkas_seed;
+        report->seeded_rows = internal_report.seeded_rows;
+    }
+
+    lp_conflict_free_members(internal_members);
+    return 0;
+}
+
 int ralph_compute_lp_iis(const RalphModel *model, int *row_flags, int *iis_size) {
+    LPConflictOptionsInternal opts;
+    LPConflictMemberInternal *members = NULL;
+    LPConflictReportInternal report;
+    int count = 0;
+    int rows = 0;
+
     if (!model || !model->lp_model || !row_flags) return -1;
     if (iis_size) *iis_size = 0;
     if (ralph_is_mip(model)) return -1;
@@ -1262,80 +1348,33 @@ int ralph_compute_lp_iis(const RalphModel *model, int *row_flags, int *iis_size)
     if (m <= 0) return -1;
     memset(row_flags, 0, (size_t)m * sizeof(int));
 
-    LPModel *work = lp_model_copy(model->lp_model);
-    if (!work) return -1;
+    opts.include_bounds = 0;
+    opts.use_farkas_seed = 0;
+    opts.farkas_ray = NULL;
+    opts.farkas_valid = 0;
 
-    int *active_rows = (int*)malloc((size_t)m * sizeof(int));
-    if (!active_rows) {
-        lp_model_free(work);
+    memset(&report, 0, sizeof(report));
+    if (lp_conflict_compute(model->lp_model, &opts,
+                            ralph_probe_lp_status_cb, (void*)model,
+                            &members, &count, &report) != 0) {
         return -1;
     }
-    for (int i = 0; i < m; i++) active_rows[i] = i;
-    int active_count = m;
 
-    int pos = 0;
-    while (pos < active_count) {
-        LPModel *test = lp_model_copy(work);
-        if (!test) {
-            free(active_rows);
-            lp_model_free(work);
+    for (int i = 0; i < count; i++) {
+        if (members[i].type != LP_CONFLICT_MEMBER_ROW) {
+            lp_conflict_free_members(members);
             return -1;
         }
-
-        if (lp_model_delete_constraint(test, pos) != 0) {
-            lp_model_free(test);
-            free(active_rows);
-            lp_model_free(work);
+        if (members[i].index < 0 || members[i].index >= m) {
+            lp_conflict_free_members(members);
             return -1;
         }
-
-        RalphStatus probe_status = RALPH_STATUS_ERROR;
-        if (ralph_probe_lp_status(model, test, &probe_status) != 0) {
-            lp_model_free(test);
-            free(active_rows);
-            lp_model_free(work);
-            return -1;
-        }
-        lp_model_free(test);
-
-        if (probe_status == RALPH_STATUS_INFEASIBLE) {
-            /* Row at this position is redundant for infeasibility; drop it. */
-            if (lp_model_delete_constraint(work, pos) != 0) {
-                free(active_rows);
-                lp_model_free(work);
-                return -1;
-            }
-            if (lp_model_finalize(work) != 0) {
-                free(active_rows);
-                lp_model_free(work);
-                return -1;
-            }
-            for (int k = pos + 1; k < active_count; k++) {
-                active_rows[k - 1] = active_rows[k];
-            }
-            active_count--;
-            continue;
-        }
-
-        if (probe_status == RALPH_STATUS_ERROR ||
-            probe_status == RALPH_STATUS_TIME_LIMIT ||
-            probe_status == RALPH_STATUS_ITERATION_LIMIT) {
-            free(active_rows);
-            lp_model_free(work);
-            return -1;
-        }
-
-        pos++;
+        row_flags[members[i].index] = 1;
+        rows++;
     }
+    if (iis_size) *iis_size = rows;
 
-    for (int i = 0; i < active_count; i++) {
-        int row = active_rows[i];
-        if (row >= 0 && row < m) row_flags[row] = 1;
-    }
-    if (iis_size) *iis_size = active_count;
-
-    free(active_rows);
-    lp_model_free(work);
+    lp_conflict_free_members(members);
     return 0;
 }
 
