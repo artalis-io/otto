@@ -1,0 +1,22 @@
+{
+  "name": "@artalis/surge",
+  "version": "0.1.0",
+  "description": "Node.js bindings for the Surge vehicle routing solver (WASM)",
+  "type": "module",
+  "main": "src/index.js",
+  "types": "src/types.d.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.js",
+      "types": "./src/types.d.ts"
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "build-wasm": "make -C ../../wasm api-demo && mkdir -p build && cp ../../wasm/build/surge-api-demo.js build/"
+  },
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=18"
+  }
+}
