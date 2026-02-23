@@ -835,7 +835,7 @@ static void mps_parser_free(MPSParser *parser) {
  * Public Interface
  * ============================================================================ */
 
-int ralph_read_mps(RalphLPModel *model, const char *filename) {
+int ralph_core_read_mps(RalphLPModel *model, const char *filename) {
     if (!model || !filename) return -1;
 
     MPSParser *parser = mps_parser_create();

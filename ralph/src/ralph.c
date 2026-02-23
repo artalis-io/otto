@@ -8,7 +8,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <time.h>
-#include "ralph.h"
+#include "ralph_core.h"
 #include "lp.h"
 #include "mip.h"
 #include "presolve.h"
@@ -732,7 +732,7 @@ static void ralph_invalidate_solve_state(RalphModel *model) {
  * Model Creation/Destruction
  * ============================================================================ */
 
-RalphModel* ralph_create(void) {
+RalphModel* ralph_core_create(void) {
     RalphModel *model = (RalphModel*)calloc(1, sizeof(RalphModel));
     if (!model) return NULL;
 
@@ -788,7 +788,7 @@ RalphModel* ralph_create(void) {
     return model;
 }
 
-void ralph_free(RalphModel *model) {
+void ralph_core_free(RalphModel *model) {
     if (!model) return;
 
     lp_model_free(model->lp_model);
@@ -809,14 +809,14 @@ void ralph_free(RalphModel *model) {
  * Model Building
  * ============================================================================ */
 
-int ralph_set_obj_sense(RalphModel *model, RalphObjSense sense) {
+int ralph_core_set_obj_sense(RalphModel *model, RalphObjSense sense) {
     if (!model || !model->lp_model) return -1;
     model->lp_model->obj_sense = (int)sense;
     ralph_invalidate_solve_state(model);
     return 0;
 }
 
-int ralph_add_var(RalphModel *model, double lb, double ub, double obj, RalphVarType type) {
+int ralph_core_add_var(RalphModel *model, double lb, double ub, double obj, RalphVarType type) {
     if (!model || !model->lp_model) return -1;
     int rc = lp_model_add_var(model->lp_model, lb, ub, obj, (char)type);
     if (rc < 0) return rc;
@@ -824,7 +824,7 @@ int ralph_add_var(RalphModel *model, double lb, double ub, double obj, RalphVarT
     return rc;
 }
 
-int ralph_add_vars(RalphModel *model, int count, const double *lb, const double *ub,
+int ralph_core_add_vars(RalphModel *model, int count, const double *lb, const double *ub,
                    const double *obj, const RalphVarType *types) {
     if (!model || !model->lp_model || count <= 0) return -1;
 
@@ -843,7 +843,7 @@ int ralph_add_vars(RalphModel *model, int count, const double *lb, const double 
     return 0;
 }
 
-int ralph_add_constraint(RalphModel *model, int nnz, const int *indices,
+int ralph_core_add_constraint(RalphModel *model, int nnz, const int *indices,
                          const double *values, RalphSense sense, double rhs) {
     if (!model || !model->lp_model) return -1;
     int rc = lp_model_add_constraint(model->lp_model, nnz, indices, values, (char)sense, rhs);
@@ -856,7 +856,7 @@ int ralph_add_constraint(RalphModel *model, int nnz, const int *indices,
  * Model Modification
  * ============================================================================ */
 
-int ralph_set_var_bounds(RalphModel *model, int var, double lb, double ub) {
+int ralph_core_set_var_bounds(RalphModel *model, int var, double lb, double ub) {
     if (!model || !model->lp_model) return -1;
     if (var < 0 || var >= model->lp_model->num_vars) return -1;
 
@@ -866,7 +866,7 @@ int ralph_set_var_bounds(RalphModel *model, int var, double lb, double ub) {
     return 0;
 }
 
-int ralph_set_var_type(RalphModel *model, int var, RalphVarType type) {
+int ralph_core_set_var_type(RalphModel *model, int var, RalphVarType type) {
     if (!model || !model->lp_model) return -1;
     if (var < 0 || var >= model->lp_model->num_vars) return -1;
 
@@ -886,7 +886,7 @@ int ralph_set_var_type(RalphModel *model, int var, RalphVarType type) {
     return 0;
 }
 
-int ralph_set_obj_coef(RalphModel *model, int var, double coef) {
+int ralph_core_set_obj_coef(RalphModel *model, int var, double coef) {
     if (!model || !model->lp_model) return -1;
     if (var < 0 || var >= model->lp_model->num_vars) return -1;
 
@@ -895,14 +895,14 @@ int ralph_set_obj_coef(RalphModel *model, int var, double coef) {
     return 0;
 }
 
-int ralph_set_obj_offset(RalphModel *model, double offset) {
+int ralph_core_set_obj_offset(RalphModel *model, double offset) {
     if (!model || !model->lp_model) return -1;
     model->lp_model->obj_offset = offset;
     ralph_invalidate_solve_state(model);
     return 0;
 }
 
-double ralph_get_obj_offset(const RalphModel *model) {
+double ralph_core_get_obj_offset(const RalphModel *model) {
     if (!model || !model->lp_model) return 0.0;
     return model->lp_model->obj_offset;
 }
@@ -911,19 +911,19 @@ double ralph_get_obj_offset(const RalphModel *model) {
  * Model Queries
  * ============================================================================ */
 
-int ralph_get_num_vars(const RalphModel *model) {
+int ralph_core_get_num_vars(const RalphModel *model) {
     return model && model->lp_model ? model->lp_model->num_vars : 0;
 }
 
-int ralph_get_num_cons(const RalphModel *model) {
+int ralph_core_get_num_cons(const RalphModel *model) {
     return model && model->lp_model ? model->lp_model->num_cons : 0;
 }
 
-int ralph_get_num_integers(const RalphModel *model) {
+int ralph_core_get_num_integers(const RalphModel *model) {
     return model && model->lp_model ? model->lp_model->num_integers : 0;
 }
 
-int ralph_is_mip(const RalphModel *model) {
+int ralph_core_is_mip(const RalphModel *model) {
     return model && model->lp_model && model->lp_model->num_integers > 0;
 }
 
@@ -940,7 +940,7 @@ typedef enum {
 static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     if (!model || !model->lp_model) return -1;
 
-    int model_is_mip = ralph_is_mip(model);
+    int model_is_mip = ralph_core_is_mip(model);
     if (mode == RALPH_SOLVE_LP_ONLY && model_is_mip) {
         model->status = RALPH_STATUS_ERROR;
         return -1;
@@ -1626,15 +1626,15 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     return 0;
 }
 
-int ralph_optimize(RalphModel *model) {
+int ralph_core_optimize(RalphModel *model) {
     return ralph_optimize_with_mode(model, RALPH_SOLVE_AUTO);
 }
 
-int ralph_optimize_lp(RalphModel *model) {
+int ralph_core_optimize_lp(RalphModel *model) {
     return ralph_optimize_with_mode(model, RALPH_SOLVE_LP_ONLY);
 }
 
-int ralph_optimize_mip(RalphModel *model) {
+int ralph_core_optimize_mip(RalphModel *model) {
     return ralph_optimize_with_mode(model, RALPH_SOLVE_MIP_ONLY);
 }
 
@@ -1642,63 +1642,63 @@ int ralph_optimize_mip(RalphModel *model) {
  * Solution Retrieval
  * ============================================================================ */
 
-RalphStatus ralph_get_status(const RalphModel *model) {
+RalphStatus ralph_core_get_status(const RalphModel *model) {
     return model ? model->status : RALPH_STATUS_UNKNOWN;
 }
 
-double ralph_get_objval(const RalphModel *model) {
+double ralph_core_get_objval(const RalphModel *model) {
     return model ? model->obj_value : 0.0;
 }
 
-int ralph_get_solution(const RalphModel *model, double *x) {
+int ralph_core_get_solution(const RalphModel *model, double *x) {
     if (!model || !x || !model->solution) return -1;
 
-    int n = ralph_get_num_vars(model);
+    int n = ralph_core_get_num_vars(model);
     memcpy(x, model->solution, n * sizeof(double));
     return 0;
 }
 
-int ralph_get_dual_solution(const RalphModel *model, double *y) {
+int ralph_core_get_dual_solution(const RalphModel *model, double *y) {
     if (!model || !y || !model->dual_solution) return -1;
 
-    int m = ralph_get_num_cons(model);
+    int m = ralph_core_get_num_cons(model);
     memcpy(y, model->dual_solution, m * sizeof(double));
     return 0;
 }
 
-int ralph_get_reduced_costs(const RalphModel *model, double *rc) {
+int ralph_core_get_reduced_costs(const RalphModel *model, double *rc) {
     if (!model || !rc || !model->reduced_costs) return -1;
 
-    int n = ralph_get_num_vars(model);
+    int n = ralph_core_get_num_vars(model);
     memcpy(rc, model->reduced_costs, n * sizeof(double));
     return 0;
 }
 
-int ralph_get_lp_capabilities(RalphLPCapabilities *caps) {
+int ralph_core_get_lp_capabilities(RalphLPCapabilities *caps) {
     if (!caps) return -1;
     lp_dispatch_get_capabilities(caps);
     return 0;
 }
 
-int ralph_get_last_lp_algorithm_report(const RalphModel *model,
+int ralph_core_get_last_lp_algorithm_report(const RalphModel *model,
                                        RalphLPSolveAlgorithmReport *report) {
     if (!model || !report) return -1;
-    if (ralph_is_mip(model)) return -1;
+    if (ralph_core_is_mip(model)) return -1;
     if (!model->last_lp_algorithm_report_valid) return -1;
     *report = model->last_lp_algorithm_report;
     return 0;
 }
 
-int ralph_get_last_lp_external_failure_report(const RalphModel *model,
+int ralph_core_get_last_lp_external_failure_report(const RalphModel *model,
                                               RalphLPExternalFailureReport *report) {
     if (!model || !report) return -1;
-    if (ralph_is_mip(model)) return -1;
+    if (ralph_core_is_mip(model)) return -1;
     if (!model->last_lp_external_failure_report_valid) return -1;
     *report = model->last_lp_external_failure_report;
     return 0;
 }
 
-const char* ralph_get_lp_external_provider_name(RalphLPExternalProvider provider) {
+const char* ralph_core_get_lp_external_provider_name(RalphLPExternalProvider provider) {
     if (provider == RALPH_LP_EXTERNAL_PROVIDER_NONE) {
         return lp_external_provider_name(LP_EXTERNAL_PROVIDER_NONE);
     }
@@ -1706,7 +1706,7 @@ const char* ralph_get_lp_external_provider_name(RalphLPExternalProvider provider
     return lp_external_provider_name(ralph_lp_external_provider_to_internal(provider));
 }
 
-int ralph_get_lp_external_provider_capabilities(RalphLPExternalProvider provider,
+int ralph_core_get_lp_external_provider_capabilities(RalphLPExternalProvider provider,
                                                 RalphLPExternalCapabilities *caps) {
     LPExternalCapabilities internal_caps;
     LPExternalProvider internal_provider;
@@ -1726,7 +1726,7 @@ int ralph_get_lp_external_provider_capabilities(RalphLPExternalProvider provider
     return 0;
 }
 
-int ralph_get_lp_external_registered_providers(RalphLPExternalProvider *providers,
+int ralph_core_get_lp_external_registered_providers(RalphLPExternalProvider *providers,
                                                int capacity,
                                                int *count) {
     LPExternalProvider internal_list[(int)LP_EXTERNAL_PROVIDER_GLOP + 1];
@@ -1759,7 +1759,7 @@ int ralph_get_lp_external_registered_providers(RalphLPExternalProvider *provider
     return 0;
 }
 
-int ralph_register_lp_external_adapter(const RalphLPExternalAdapter *adapter) {
+int ralph_core_register_lp_external_adapter(const RalphLPExternalAdapter *adapter) {
     RalphLPExternalAdapterBridgeEntry *entry = NULL;
     LPExternalAdapter internal_adapter;
     LPExternalProvider provider;
@@ -1792,11 +1792,11 @@ int ralph_register_lp_external_adapter(const RalphLPExternalAdapter *adapter) {
     return 0;
 }
 
-int ralph_register_lp_external_glpk_oop(const char *glpsol_path) {
+int ralph_core_register_lp_external_glpk_oop(const char *glpsol_path) {
     return lp_external_glpk_oop_register(glpsol_path);
 }
 
-int ralph_unregister_lp_external_adapter(RalphLPExternalProvider provider) {
+int ralph_core_unregister_lp_external_adapter(RalphLPExternalProvider provider) {
     if (!ralph_lp_external_provider_valid_public(provider)) return -1;
     if (lp_external_adapter_unregister(ralph_lp_external_provider_to_internal(provider)) != 0) {
         return -1;
@@ -1804,15 +1804,15 @@ int ralph_unregister_lp_external_adapter(RalphLPExternalProvider provider) {
     return 0;
 }
 
-int ralph_unregister_lp_external_glpk_oop(void) {
+int ralph_core_unregister_lp_external_glpk_oop(void) {
     return lp_external_glpk_oop_unregister();
 }
 
-void ralph_unregister_all_lp_external_adapters(void) {
+void ralph_core_unregister_all_lp_external_adapters(void) {
     lp_external_adapter_unregister_all();
 }
 
-int ralph_is_lp_external_adapter_registered(RalphLPExternalProvider provider) {
+int ralph_core_is_lp_external_adapter_registered(RalphLPExternalProvider provider) {
     if (provider == RALPH_LP_EXTERNAL_PROVIDER_NONE) {
         return lp_external_adapter_is_registered(LP_EXTERNAL_PROVIDER_NONE);
     }
@@ -1820,7 +1820,7 @@ int ralph_is_lp_external_adapter_registered(RalphLPExternalProvider provider) {
     return lp_external_adapter_is_registered(ralph_lp_external_provider_to_internal(provider));
 }
 
-int ralph_get_farkas_ray(const RalphModel *model, double *ray) {
+int ralph_core_get_farkas_ray(const RalphModel *model, double *ray) {
     if (!model || !ray) return -1;
 
     /* Check if status is infeasible and we have a valid Farkas ray */
@@ -1828,7 +1828,7 @@ int ralph_get_farkas_ray(const RalphModel *model, double *ray) {
 
     /* For LP problems, get the ray from the simplex solver */
     if (model->lp_solver && model->lp_solver->farkas_valid && model->lp_solver->farkas_ray) {
-        int m = ralph_get_num_cons(model);
+        int m = ralph_core_get_num_cons(model);
         memcpy(ray, model->lp_solver->farkas_ray, m * sizeof(double));
         return 0;
     }
@@ -1837,11 +1837,11 @@ int ralph_get_farkas_ray(const RalphModel *model, double *ray) {
     return -1;
 }
 
-int ralph_get_unbounded_ray(const RalphModel *model, double *ray) {
+int ralph_core_get_unbounded_ray(const RalphModel *model, double *ray) {
     if (!model || !ray) return -1;
     if (model->status != RALPH_STATUS_UNBOUNDED) return -1;
 
-    int n = ralph_get_num_vars(model);
+    int n = ralph_core_get_num_vars(model);
     if (n <= 0) return -1;
 
     if (model->unbounded_ray_valid && model->unbounded_ray) {
@@ -1861,7 +1861,7 @@ int ralph_get_unbounded_ray(const RalphModel *model, double *ray) {
     return -1;
 }
 
-int ralph_compute_lp_conflict(const RalphModel *model,
+int ralph_core_compute_lp_conflict(const RalphModel *model,
                               const RalphConflictOptions *options,
                               RalphConflictMember *members,
                               int capacity,
@@ -1878,7 +1878,7 @@ int ralph_compute_lp_conflict(const RalphModel *model,
     *count = 0;
     if (report) memset(report, 0, sizeof(*report));
 
-    if (ralph_is_mip(model)) return -1;
+    if (ralph_core_is_mip(model)) return -1;
     if (model->status != RALPH_STATUS_INFEASIBLE) return -1;
 
     internal_opts.include_bounds = 1;
@@ -1935,7 +1935,7 @@ int ralph_compute_lp_conflict(const RalphModel *model,
     return 0;
 }
 
-int ralph_compute_lp_iis(const RalphModel *model, int *row_flags, int *iis_size) {
+int ralph_core_compute_lp_iis(const RalphModel *model, int *row_flags, int *iis_size) {
     LPConflictOptionsInternal opts;
     LPConflictMemberInternal *members = NULL;
     LPConflictReportInternal report;
@@ -1944,7 +1944,7 @@ int ralph_compute_lp_iis(const RalphModel *model, int *row_flags, int *iis_size)
 
     if (!model || !model->lp_model || !row_flags) return -1;
     if (iis_size) *iis_size = 0;
-    if (ralph_is_mip(model)) return -1;
+    if (ralph_core_is_mip(model)) return -1;
     if (model->status != RALPH_STATUS_INFEASIBLE) return -1;
 
     int m = model->lp_model->num_cons;
@@ -1985,22 +1985,22 @@ int ralph_compute_lp_iis(const RalphModel *model, int *row_flags, int *iis_size)
  * MIP-Specific
  * ============================================================================ */
 
-double ralph_get_best_bound(const RalphModel *model) {
+double ralph_core_get_best_bound(const RalphModel *model) {
     return model ? model->best_bound : 0.0;
 }
 
-double ralph_get_mip_gap(const RalphModel *model) {
-    if (!model || !ralph_is_mip(model)) return 0.0;
+double ralph_core_get_mip_gap(const RalphModel *model) {
+    if (!model || !ralph_core_is_mip(model)) return 0.0;
 
     double gap = fabs(model->obj_value - model->best_bound);
     return gap / (fabs(model->obj_value) + 1e-10);
 }
 
-int ralph_get_node_count(const RalphModel *model) {
+int ralph_core_get_node_count(const RalphModel *model) {
     return model ? model->node_count : 0;
 }
 
-int ralph_get_iterations(const RalphModel *model) {
+int ralph_core_get_iterations(const RalphModel *model) {
     return model ? model->iteration_count : 0;
 }
 
@@ -2013,13 +2013,13 @@ static const SimplexSolver* ralph_get_last_lp_solver_for_reports(const RalphMode
     return NULL;
 }
 
-int ralph_get_last_presolve_report(const RalphModel *model, RalphPresolveReport *report) {
+int ralph_core_get_last_presolve_report(const RalphModel *model, RalphPresolveReport *report) {
     if (!model || !report) return -1;
     *report = model->last_presolve_report;
     return 0;
 }
 
-int ralph_get_last_lp_telemetry(const RalphModel *model, RalphLPSolverTelemetry *telemetry) {
+int ralph_core_get_last_lp_telemetry(const RalphModel *model, RalphLPSolverTelemetry *telemetry) {
     if (!model || !telemetry) return -1;
 
     memset(telemetry, 0, sizeof(*telemetry));
@@ -2035,7 +2035,7 @@ int ralph_get_last_lp_telemetry(const RalphModel *model, RalphLPSolverTelemetry 
     return 0;
 }
 
-int ralph_get_last_lu_telemetry(const RalphModel *model, RalphLUTelemetry *telemetry) {
+int ralph_core_get_last_lu_telemetry(const RalphModel *model, RalphLUTelemetry *telemetry) {
     if (!model || !telemetry) return -1;
 
     memset(telemetry, 0, sizeof(*telemetry));
@@ -2051,7 +2051,7 @@ int ralph_get_last_lu_telemetry(const RalphModel *model, RalphLUTelemetry *telem
     return 0;
 }
 
-int ralph_get_solution_quality(const RalphModel *model, RalphSolutionQuality *quality) {
+int ralph_core_get_solution_quality(const RalphModel *model, RalphSolutionQuality *quality) {
     if (!model || !quality) return -1;
 
     memset(quality, 0, sizeof(*quality));
@@ -2086,7 +2086,7 @@ static int ralph_get_lp_tableau_for_sensitivity(const RalphModel *model,
                                                 const SimplexTableau **tab_out) {
     const SimplexTableau *tab = NULL;
     if (!model || !tab_out || !model->lp_model) return -1;
-    if (ralph_is_mip(model)) return -1;
+    if (ralph_core_is_mip(model)) return -1;
     if (model->status != RALPH_STATUS_OPTIMAL) return -1;
     if (!model->lp_solver || !model->lp_solver->tableau) return -1;
 
@@ -2103,7 +2103,7 @@ static int ralph_get_lp_tableau_for_sensitivity(const RalphModel *model,
     return 0;
 }
 
-int ralph_get_constraint_rhs_range(const RalphModel *model,
+int ralph_core_get_constraint_rhs_range(const RalphModel *model,
                                    int constraint,
                                    RalphSensitivityRange *range) {
     const SimplexTableau *tab = NULL;
@@ -2145,7 +2145,7 @@ int ralph_get_constraint_rhs_range(const RalphModel *model,
     return 0;
 }
 
-int ralph_get_obj_coef_range(const RalphModel *model,
+int ralph_core_get_obj_coef_range(const RalphModel *model,
                              int var,
                              RalphSensitivityRange *range) {
     const SimplexTableau *tab = NULL;
@@ -2175,7 +2175,7 @@ int ralph_get_obj_coef_range(const RalphModel *model,
     return 0;
 }
 
-int ralph_get_var_bound_range(const RalphModel *model,
+int ralph_core_get_var_bound_range(const RalphModel *model,
                               int var,
                               RalphBoundSensitivityRange *range) {
     const SimplexTableau *tab = NULL;
@@ -2201,7 +2201,7 @@ int ralph_get_var_bound_range(const RalphModel *model,
  * Branching Control
  * ============================================================================ */
 
-int ralph_set_branch_priorities(RalphModel *model, const int *priorities) {
+int ralph_core_set_branch_priorities(RalphModel *model, const int *priorities) {
     if (!model) return -1;
 
     /* Free existing priorities */
@@ -2210,7 +2210,7 @@ int ralph_set_branch_priorities(RalphModel *model, const int *priorities) {
 
     if (!priorities) return 0;  /* Clear priorities */
 
-    int n = ralph_get_num_vars(model);
+    int n = ralph_core_get_num_vars(model);
     if (n <= 0) return -1;
 
     model->branch_priorities = (int*)malloc(n * sizeof(int));
@@ -2220,7 +2220,7 @@ int ralph_set_branch_priorities(RalphModel *model, const int *priorities) {
     return 0;
 }
 
-int ralph_set_branch_directions(RalphModel *model, const int *directions) {
+int ralph_core_set_branch_directions(RalphModel *model, const int *directions) {
     if (!model) return -1;
 
     /* Free existing directions */
@@ -2229,7 +2229,7 @@ int ralph_set_branch_directions(RalphModel *model, const int *directions) {
 
     if (!directions) return 0;  /* Clear directions */
 
-    int n = ralph_get_num_vars(model);
+    int n = ralph_core_get_num_vars(model);
     if (n <= 0) return -1;
 
     model->branch_directions = (int*)malloc(n * sizeof(int));
@@ -2239,7 +2239,7 @@ int ralph_set_branch_directions(RalphModel *model, const int *directions) {
     return 0;
 }
 
-int ralph_set_mip_start(RalphModel *model, const double *x) {
+int ralph_core_set_mip_start(RalphModel *model, const double *x) {
     if (!model || !model->lp_model || !x) return -1;
 
     int n = model->lp_model->num_vars;
@@ -2248,7 +2248,7 @@ int ralph_set_mip_start(RalphModel *model, const double *x) {
     return 0;
 }
 
-int ralph_set_mip_start_sparse(RalphModel *model, int count,
+int ralph_core_set_mip_start_sparse(RalphModel *model, int count,
                                const int *indices, const double *values) {
     if (!model || !model->lp_model) return -1;
     if (count < 0) return -1;
@@ -2288,17 +2288,17 @@ int ralph_set_mip_start_sparse(RalphModel *model, int count,
     return 0;
 }
 
-void ralph_clear_mip_start(RalphModel *model) {
+void ralph_core_clear_mip_start(RalphModel *model) {
     if (!model) return;
     ralph_clear_mip_start_internal(model);
 }
 
-RalphMIPStartStatus ralph_get_mip_start_status(const RalphModel *model) {
+RalphMIPStartStatus ralph_core_get_mip_start_status(const RalphModel *model) {
     if (!model) return RALPH_MIP_START_NONE;
     return model->mip_start_status;
 }
 
-int ralph_set_mip_start_repair_mode(RalphModel *model, RalphMIPStartRepairMode mode) {
+int ralph_core_set_mip_start_repair_mode(RalphModel *model, RalphMIPStartRepairMode mode) {
     if (!model) return -1;
     if (mode < RALPH_MIP_START_REPAIR_STRICT ||
         mode > RALPH_MIP_START_REPAIR_PROJECT_AND_ROUND) {
@@ -2308,7 +2308,7 @@ int ralph_set_mip_start_repair_mode(RalphModel *model, RalphMIPStartRepairMode m
     return 0;
 }
 
-RalphMIPStartRepairMode ralph_get_mip_start_repair_mode(const RalphModel *model) {
+RalphMIPStartRepairMode ralph_core_get_mip_start_repair_mode(const RalphModel *model) {
     if (!model) return RALPH_MIP_START_REPAIR_STRICT;
     return model->mip_start_repair_mode;
 }
@@ -2317,7 +2317,7 @@ RalphMIPStartRepairMode ralph_get_mip_start_repair_mode(const RalphModel *model)
  * Constraint Modification
  * ============================================================================ */
 
-int ralph_set_constraint_rhs(RalphModel *model, int constraint, double rhs) {
+int ralph_core_set_constraint_rhs(RalphModel *model, int constraint, double rhs) {
     if (!model || !model->lp_model) return -1;
     if (constraint < 0 || constraint >= model->lp_model->num_cons) return -1;
 
@@ -2326,7 +2326,7 @@ int ralph_set_constraint_rhs(RalphModel *model, int constraint, double rhs) {
     return 0;
 }
 
-int ralph_set_constraint_sense(RalphModel *model, int constraint, RalphSense sense) {
+int ralph_core_set_constraint_sense(RalphModel *model, int constraint, RalphSense sense) {
     if (!model || !model->lp_model) return -1;
     if (constraint < 0 || constraint >= model->lp_model->num_cons) return -1;
     if (!ralph_is_valid_sense(sense)) return -1;
@@ -2336,14 +2336,14 @@ int ralph_set_constraint_sense(RalphModel *model, int constraint, RalphSense sen
     return 0;
 }
 
-int ralph_set_constraint_coef(RalphModel *model, int constraint, int var, double coef) {
+int ralph_core_set_constraint_coef(RalphModel *model, int constraint, int var, double coef) {
     if (!model || !model->lp_model) return -1;
     if (lp_model_set_coefficient(model->lp_model, constraint, var, coef) != 0) return -1;
     ralph_invalidate_solve_state(model);
     return 0;
 }
 
-int ralph_set_constraint_coefs(RalphModel *model, int count,
+int ralph_core_set_constraint_coefs(RalphModel *model, int count,
                                const int *constraints, const int *vars,
                                const double *coefs) {
     if (!model || !model->lp_model) return -1;
@@ -2352,7 +2352,7 @@ int ralph_set_constraint_coefs(RalphModel *model, int count,
     return 0;
 }
 
-int ralph_set_constraint_rhs_batch(RalphModel *model, int count,
+int ralph_core_set_constraint_rhs_batch(RalphModel *model, int count,
                                    const int *constraints, const double *rhs_values) {
     if (!model || !model->lp_model || count < 0) return -1;
     if (count == 0) return 0;
@@ -2370,7 +2370,7 @@ int ralph_set_constraint_rhs_batch(RalphModel *model, int count,
     return 0;
 }
 
-int ralph_set_constraint_sense_batch(RalphModel *model, int count,
+int ralph_core_set_constraint_sense_batch(RalphModel *model, int count,
                                      const int *constraints, const RalphSense *senses) {
     if (!model || !model->lp_model || count < 0) return -1;
     if (count == 0) return 0;
@@ -2389,14 +2389,14 @@ int ralph_set_constraint_sense_batch(RalphModel *model, int count,
     return 0;
 }
 
-int ralph_get_constraint_rhs(const RalphModel *model, int constraint, double *rhs) {
+int ralph_core_get_constraint_rhs(const RalphModel *model, int constraint, double *rhs) {
     if (!model || !model->lp_model || !rhs) return -1;
     if (constraint < 0 || constraint >= model->lp_model->num_cons) return -1;
     *rhs = model->lp_model->b[constraint];
     return 0;
 }
 
-int ralph_get_constraint_sense(const RalphModel *model, int constraint, RalphSense *sense) {
+int ralph_core_get_constraint_sense(const RalphModel *model, int constraint, RalphSense *sense) {
     if (!model || !model->lp_model || !sense) return -1;
     if (constraint < 0 || constraint >= model->lp_model->num_cons) return -1;
     char s = model->lp_model->sense[constraint];
@@ -2405,26 +2405,26 @@ int ralph_get_constraint_sense(const RalphModel *model, int constraint, RalphSen
     return 0;
 }
 
-int ralph_get_constraint_coef(const RalphModel *model, int constraint, int var, double *coef) {
+int ralph_core_get_constraint_coef(const RalphModel *model, int constraint, int var, double *coef) {
     if (!model || !model->lp_model) return -1;
     return lp_model_get_coefficient(model->lp_model, constraint, var, coef);
 }
 
-int ralph_delete_constraint(RalphModel *model, int constraint) {
+int ralph_core_delete_constraint(RalphModel *model, int constraint) {
     if (!model || !model->lp_model) return -1;
     if (lp_model_delete_constraint(model->lp_model, constraint) != 0) return -1;
     ralph_invalidate_solve_state(model);
     return 0;
 }
 
-int ralph_delete_var(RalphModel *model, int var) {
+int ralph_core_delete_var(RalphModel *model, int var) {
     if (!model || !model->lp_model) return -1;
     if (lp_model_delete_var(model->lp_model, var) != 0) return -1;
     ralph_invalidate_solve_state(model);
     return 0;
 }
 
-int ralph_get_var_bounds(const RalphModel *model, int var, double *lb, double *ub) {
+int ralph_core_get_var_bounds(const RalphModel *model, int var, double *lb, double *ub) {
     if (!model || !model->lp_model) return -1;
     if (var < 0 || var >= model->lp_model->num_vars) return -1;
 
@@ -2434,7 +2434,7 @@ int ralph_get_var_bounds(const RalphModel *model, int var, double *lb, double *u
     return 0;
 }
 
-int ralph_add_lazy_constraint(RalphModel *model, const RalphCut *cut) {
+int ralph_core_add_lazy_constraint(RalphModel *model, const RalphCut *cut) {
     if (!model || !model->lp_model || !cut) return -1;
 
     /* Add the constraint to the model */
@@ -2462,12 +2462,12 @@ int ralph_add_lazy_constraint(RalphModel *model, const RalphCut *cut) {
     return 0;
 }
 
-int ralph_add_lazy_constraints(RalphModel *model, const RalphCut *cuts, int count) {
+int ralph_core_add_lazy_constraints(RalphModel *model, const RalphCut *cuts, int count) {
     if (!model || !cuts) return -1;
     if (count <= 0) return 0;
 
     for (int i = 0; i < count; i++) {
-        if (ralph_add_lazy_constraint(model, &cuts[i]) < 0) {
+        if (ralph_core_add_lazy_constraint(model, &cuts[i]) < 0) {
             return -1;
         }
     }
@@ -2479,7 +2479,7 @@ int ralph_add_lazy_constraints(RalphModel *model, const RalphCut *cuts, int coun
  * Warm Start (Basis Save/Restore)
  * ============================================================================ */
 
-RalphBasis* ralph_save_basis(const RalphModel *model) {
+RalphBasis* ralph_core_save_basis(const RalphModel *model) {
     if (!model || !model->lp_solver || !model->lp_solver->tableau) {
         return NULL;
     }
@@ -2515,7 +2515,7 @@ RalphBasis* ralph_save_basis(const RalphModel *model) {
     return basis;
 }
 
-int ralph_load_basis(RalphModel *model, const RalphBasis *basis) {
+int ralph_core_load_basis(RalphModel *model, const RalphBasis *basis) {
     if (!model || !basis) return -1;
     if (!basis->basis || !basis->var_status) return -1;
 
@@ -2562,7 +2562,7 @@ int ralph_load_basis(RalphModel *model, const RalphBasis *basis) {
     return ralph_stage_basis_copy(model, basis);
 }
 
-int ralph_get_basis_status(const RalphModel *model,
+int ralph_core_get_basis_status(const RalphModel *model,
                            RalphBasisStatus *col_status,
                            RalphBasisStatus *row_status) {
     if (!model || !model->lp_model) return -1;
@@ -2607,7 +2607,7 @@ int ralph_get_basis_status(const RalphModel *model,
     return 0;
 }
 
-int ralph_set_basis_status(RalphModel *model,
+int ralph_core_set_basis_status(RalphModel *model,
                            const RalphBasisStatus *col_status,
                            const RalphBasisStatus *row_status) {
     if (!model || !model->lp_model) return -1;
@@ -2708,7 +2708,7 @@ int ralph_set_basis_status(RalphModel *model,
     staged.basis = basis_copy;
     staged.var_status = status_copy;
 
-    ret = ralph_load_basis(model, &staged);
+    ret = ralph_core_load_basis(model, &staged);
 
 cleanup:
     free(row_aux);
@@ -2718,14 +2718,14 @@ cleanup:
     return ret;
 }
 
-void ralph_free_basis(RalphBasis *basis) {
+void ralph_core_free_basis(RalphBasis *basis) {
     if (!basis) return;
     free(basis->basis);
     free(basis->var_status);
     free(basis);
 }
 
-int ralph_write_basis_file(const RalphBasis *basis, const char *filename) {
+int ralph_core_write_basis_file(const RalphBasis *basis, const char *filename) {
     if (!basis || !filename || !basis->basis || !basis->var_status) return -1;
     if (basis->m < 0 || basis->n < 0) return -1;
 
@@ -2763,7 +2763,7 @@ int ralph_write_basis_file(const RalphBasis *basis, const char *filename) {
     return 0;
 }
 
-RalphBasis* ralph_read_basis_file(const char *filename) {
+RalphBasis* ralph_core_read_basis_file(const char *filename) {
     if (!filename) return NULL;
 
     FILE *fp = fopen(filename, "r");
@@ -2791,7 +2791,7 @@ RalphBasis* ralph_read_basis_file(const char *filename) {
     if (m > 0) {
         basis->basis = (int*)calloc((size_t)m, sizeof(int));
         if (!basis->basis) {
-            ralph_free_basis(basis);
+            ralph_core_free_basis(basis);
             fclose(fp);
             return NULL;
         }
@@ -2799,7 +2799,7 @@ RalphBasis* ralph_read_basis_file(const char *filename) {
     if (n > 0) {
         basis->var_status = (VarStatus*)calloc((size_t)n, sizeof(VarStatus));
         if (!basis->var_status) {
-            ralph_free_basis(basis);
+            ralph_core_free_basis(basis);
             fclose(fp);
             return NULL;
         }
@@ -2807,7 +2807,7 @@ RalphBasis* ralph_read_basis_file(const char *filename) {
 
     for (int i = 0; i < m; i++) {
         if (fscanf(fp, "%d", &basis->basis[i]) != 1) {
-            ralph_free_basis(basis);
+            ralph_core_free_basis(basis);
             fclose(fp);
             return NULL;
         }
@@ -2815,12 +2815,12 @@ RalphBasis* ralph_read_basis_file(const char *filename) {
     for (int j = 0; j < n; j++) {
         int v = 0;
         if (fscanf(fp, "%d", &v) != 1) {
-            ralph_free_basis(basis);
+            ralph_core_free_basis(basis);
             fclose(fp);
             return NULL;
         }
         if (v < (int)RALPH_BASIC || v > (int)RALPH_FIXED) {
-            ralph_free_basis(basis);
+            ralph_core_free_basis(basis);
             fclose(fp);
             return NULL;
         }
@@ -2831,7 +2831,7 @@ RalphBasis* ralph_read_basis_file(const char *filename) {
     return basis;
 }
 
-int ralph_write_mip_start_file(const RalphModel *model, const char *filename) {
+int ralph_core_write_mip_start_file(const RalphModel *model, const char *filename) {
     if (!model || !model->lp_model || !filename) return -1;
 
     int n = model->lp_model->num_vars;
@@ -2845,7 +2845,7 @@ int ralph_write_mip_start_file(const RalphModel *model, const char *filename) {
         start = model->mip_start;
         mask = model->mip_start_mask;
         nnz = model->mip_start_nnz;
-    } else if (model->solution && ralph_is_mip(model)) {
+    } else if (model->solution && ralph_core_is_mip(model)) {
         start = model->solution;
     }
 
@@ -2879,7 +2879,7 @@ int ralph_write_mip_start_file(const RalphModel *model, const char *filename) {
     return 0;
 }
 
-int ralph_read_mip_start_file(RalphModel *model, const char *filename) {
+int ralph_core_read_mip_start_file(RalphModel *model, const char *filename) {
     if (!model || !model->lp_model || !filename) return -1;
 
     FILE *fp = fopen(filename, "r");
@@ -2954,7 +2954,7 @@ int ralph_read_mip_start_file(RalphModel *model, const char *filename) {
  * Cut Callback
  * ============================================================================ */
 
-void ralph_set_cut_callback(RalphModel *model, const RalphCutCallback *callback) {
+void ralph_core_set_cut_callback(RalphModel *model, const RalphCutCallback *callback) {
     if (!model) return;
 
     if (callback) {
@@ -2970,7 +2970,7 @@ void ralph_set_cut_callback(RalphModel *model, const RalphCutCallback *callback)
  * Branching Callback
  * ============================================================================ */
 
-void ralph_set_branch_callback(RalphModel *model, const RalphBranchCallback *callback) {
+void ralph_core_set_branch_callback(RalphModel *model, const RalphBranchCallback *callback) {
     if (!model) return;
 
     if (callback) {
@@ -2982,7 +2982,7 @@ void ralph_set_branch_callback(RalphModel *model, const RalphBranchCallback *cal
     }
 }
 
-void ralph_set_lp_progress_callback(RalphModel *model,
+void ralph_core_set_lp_progress_callback(RalphModel *model,
                                     const RalphLPProgressCallback *callback) {
     if (!model) return;
 
@@ -2995,7 +2995,7 @@ void ralph_set_lp_progress_callback(RalphModel *model,
     }
 }
 
-void ralph_set_lp_cancel_callback(RalphModel *model,
+void ralph_core_set_lp_cancel_callback(RalphModel *model,
                                   const RalphLPCancelCallback *callback) {
     if (!model) return;
 
@@ -3012,7 +3012,7 @@ void ralph_set_lp_cancel_callback(RalphModel *model,
  * Benders Decomposition
  * ============================================================================ */
 
-int ralph_solve_benders(
+int ralph_core_solve_benders(
     RalphModel *model,
     const RalphBendersConfig *config,
     double *x,
@@ -3480,11 +3480,11 @@ static int ralph_param_scope_allows_mip(RalphParamScope scope) {
     return scope == RALPH_PARAM_SCOPE_SHARED || scope == RALPH_PARAM_SCOPE_MIP;
 }
 
-int ralph_get_param_count(void) {
+int ralph_core_get_param_count(void) {
     return RALPH_PARAM_COUNT;
 }
 
-int ralph_get_param_meta(RalphParamId param, RalphParamMeta *meta) {
+int ralph_core_get_param_meta(RalphParamId param, RalphParamMeta *meta) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
     if (!spec || !meta) return -1;
 
@@ -3500,7 +3500,7 @@ int ralph_get_param_meta(RalphParamId param, RalphParamMeta *meta) {
     return 0;
 }
 
-int ralph_find_param_by_name(const char *name, RalphParamId *param) {
+int ralph_core_find_param_by_name(const char *name, RalphParamId *param) {
     if (!name || !param) return -1;
 
     const RalphParamSpec *specs = ralph_param_specs();
@@ -3520,7 +3520,7 @@ int ralph_find_param_by_name(const char *name, RalphParamId *param) {
     return -1;
 }
 
-int ralph_set_int_param_id(RalphModel *model, RalphParamId param, int value) {
+int ralph_core_set_int_param_id(RalphModel *model, RalphParamId param, int value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
     if (!model || !spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
 
@@ -3628,7 +3628,7 @@ int ralph_set_int_param_id(RalphModel *model, RalphParamId param, int value) {
     return 0;
 }
 
-int ralph_set_dbl_param_id(RalphModel *model, RalphParamId param, double value) {
+int ralph_core_set_dbl_param_id(RalphModel *model, RalphParamId param, double value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
     if (!model || !spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
     if (!model->lp_model) return -1;
@@ -3659,7 +3659,7 @@ int ralph_set_dbl_param_id(RalphModel *model, RalphParamId param, double value) 
     return 0;
 }
 
-int ralph_get_int_param_id(const RalphModel *model, RalphParamId param, int *value) {
+int ralph_core_get_int_param_id(const RalphModel *model, RalphParamId param, int *value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
     if (!model || !value || !spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
 
@@ -3758,7 +3758,7 @@ int ralph_get_int_param_id(const RalphModel *model, RalphParamId param, int *val
     return 0;
 }
 
-int ralph_get_dbl_param_id(const RalphModel *model, RalphParamId param, double *value) {
+int ralph_core_get_dbl_param_id(const RalphModel *model, RalphParamId param, double *value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
     if (!model || !value || !spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
     if (!model->lp_model) return -1;
@@ -3789,151 +3789,151 @@ int ralph_get_dbl_param_id(const RalphModel *model, RalphParamId param, double *
     return 0;
 }
 
-int ralph_set_lp_int_param_id(RalphModel *model, RalphParamId param, int value) {
+int ralph_core_set_lp_int_param_id(RalphModel *model, RalphParamId param, int value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
     if (!spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
     if (!ralph_param_scope_allows_lp(spec->scope)) return -1;
-    return ralph_set_int_param_id(model, param, value);
+    return ralph_core_set_int_param_id(model, param, value);
 }
 
-int ralph_set_lp_dbl_param_id(RalphModel *model, RalphParamId param, double value) {
+int ralph_core_set_lp_dbl_param_id(RalphModel *model, RalphParamId param, double value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
     if (!spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
     if (!ralph_param_scope_allows_lp(spec->scope)) return -1;
-    return ralph_set_dbl_param_id(model, param, value);
+    return ralph_core_set_dbl_param_id(model, param, value);
 }
 
-int ralph_get_lp_int_param_id(const RalphModel *model, RalphParamId param, int *value) {
+int ralph_core_get_lp_int_param_id(const RalphModel *model, RalphParamId param, int *value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
     if (!spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
     if (!ralph_param_scope_allows_lp(spec->scope)) return -1;
-    return ralph_get_int_param_id(model, param, value);
+    return ralph_core_get_int_param_id(model, param, value);
 }
 
-int ralph_get_lp_dbl_param_id(const RalphModel *model, RalphParamId param, double *value) {
+int ralph_core_get_lp_dbl_param_id(const RalphModel *model, RalphParamId param, double *value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
     if (!spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
     if (!ralph_param_scope_allows_lp(spec->scope)) return -1;
-    return ralph_get_dbl_param_id(model, param, value);
+    return ralph_core_get_dbl_param_id(model, param, value);
 }
 
-int ralph_set_mip_int_param_id(RalphModel *model, RalphParamId param, int value) {
+int ralph_core_set_mip_int_param_id(RalphModel *model, RalphParamId param, int value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
     if (!spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
     if (!ralph_param_scope_allows_mip(spec->scope)) return -1;
-    return ralph_set_int_param_id(model, param, value);
+    return ralph_core_set_int_param_id(model, param, value);
 }
 
-int ralph_set_mip_dbl_param_id(RalphModel *model, RalphParamId param, double value) {
+int ralph_core_set_mip_dbl_param_id(RalphModel *model, RalphParamId param, double value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
     if (!spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
     if (!ralph_param_scope_allows_mip(spec->scope)) return -1;
-    return ralph_set_dbl_param_id(model, param, value);
+    return ralph_core_set_dbl_param_id(model, param, value);
 }
 
-int ralph_get_mip_int_param_id(const RalphModel *model, RalphParamId param, int *value) {
+int ralph_core_get_mip_int_param_id(const RalphModel *model, RalphParamId param, int *value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
     if (!spec || spec->value_type != RALPH_PARAM_VALUE_INT) return -1;
     if (!ralph_param_scope_allows_mip(spec->scope)) return -1;
-    return ralph_get_int_param_id(model, param, value);
+    return ralph_core_get_int_param_id(model, param, value);
 }
 
-int ralph_get_mip_dbl_param_id(const RalphModel *model, RalphParamId param, double *value) {
+int ralph_core_get_mip_dbl_param_id(const RalphModel *model, RalphParamId param, double *value) {
     const RalphParamSpec *spec = ralph_param_spec_by_id(param);
     if (!spec || spec->value_type != RALPH_PARAM_VALUE_DOUBLE) return -1;
     if (!ralph_param_scope_allows_mip(spec->scope)) return -1;
-    return ralph_get_dbl_param_id(model, param, value);
+    return ralph_core_get_dbl_param_id(model, param, value);
 }
 
-int ralph_set_int_param(RalphModel *model, const char *name, int value) {
+int ralph_core_set_int_param(RalphModel *model, const char *name, int value) {
     RalphParamId param;
     if (!model || !name) return -1;
-    if (ralph_find_param_by_name(name, &param) != 0) return -1;
-    return ralph_set_int_param_id(model, param, value);
+    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_core_set_int_param_id(model, param, value);
 }
 
-int ralph_set_dbl_param(RalphModel *model, const char *name, double value) {
+int ralph_core_set_dbl_param(RalphModel *model, const char *name, double value) {
     RalphParamId param;
     if (!model || !name) return -1;
-    if (ralph_find_param_by_name(name, &param) != 0) return -1;
-    return ralph_set_dbl_param_id(model, param, value);
+    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_core_set_dbl_param_id(model, param, value);
 }
 
-int ralph_get_int_param(const RalphModel *model, const char *name, int *value) {
+int ralph_core_get_int_param(const RalphModel *model, const char *name, int *value) {
     RalphParamId param;
     if (!model || !name || !value) return -1;
-    if (ralph_find_param_by_name(name, &param) != 0) return -1;
-    return ralph_get_int_param_id(model, param, value);
+    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_core_get_int_param_id(model, param, value);
 }
 
-int ralph_get_dbl_param(const RalphModel *model, const char *name, double *value) {
+int ralph_core_get_dbl_param(const RalphModel *model, const char *name, double *value) {
     RalphParamId param;
     if (!model || !name || !value) return -1;
-    if (ralph_find_param_by_name(name, &param) != 0) return -1;
-    return ralph_get_dbl_param_id(model, param, value);
+    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_core_get_dbl_param_id(model, param, value);
 }
 
-int ralph_set_lp_int_param(RalphModel *model, const char *name, int value) {
+int ralph_core_set_lp_int_param(RalphModel *model, const char *name, int value) {
     RalphParamId param;
     if (!name) return -1;
-    if (ralph_find_param_by_name(name, &param) != 0) return -1;
-    return ralph_set_lp_int_param_id(model, param, value);
+    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_core_set_lp_int_param_id(model, param, value);
 }
 
-int ralph_set_lp_dbl_param(RalphModel *model, const char *name, double value) {
+int ralph_core_set_lp_dbl_param(RalphModel *model, const char *name, double value) {
     RalphParamId param;
     if (!name) return -1;
-    if (ralph_find_param_by_name(name, &param) != 0) return -1;
-    return ralph_set_lp_dbl_param_id(model, param, value);
+    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_core_set_lp_dbl_param_id(model, param, value);
 }
 
-int ralph_get_lp_int_param(const RalphModel *model, const char *name, int *value) {
+int ralph_core_get_lp_int_param(const RalphModel *model, const char *name, int *value) {
     RalphParamId param;
     if (!name) return -1;
-    if (ralph_find_param_by_name(name, &param) != 0) return -1;
-    return ralph_get_lp_int_param_id(model, param, value);
+    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_core_get_lp_int_param_id(model, param, value);
 }
 
-int ralph_get_lp_dbl_param(const RalphModel *model, const char *name, double *value) {
+int ralph_core_get_lp_dbl_param(const RalphModel *model, const char *name, double *value) {
     RalphParamId param;
     if (!name) return -1;
-    if (ralph_find_param_by_name(name, &param) != 0) return -1;
-    return ralph_get_lp_dbl_param_id(model, param, value);
+    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_core_get_lp_dbl_param_id(model, param, value);
 }
 
-int ralph_set_mip_int_param(RalphModel *model, const char *name, int value) {
+int ralph_core_set_mip_int_param(RalphModel *model, const char *name, int value) {
     RalphParamId param;
     if (!name) return -1;
-    if (ralph_find_param_by_name(name, &param) != 0) return -1;
-    return ralph_set_mip_int_param_id(model, param, value);
+    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_core_set_mip_int_param_id(model, param, value);
 }
 
-int ralph_set_mip_dbl_param(RalphModel *model, const char *name, double value) {
+int ralph_core_set_mip_dbl_param(RalphModel *model, const char *name, double value) {
     RalphParamId param;
     if (!name) return -1;
-    if (ralph_find_param_by_name(name, &param) != 0) return -1;
-    return ralph_set_mip_dbl_param_id(model, param, value);
+    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_core_set_mip_dbl_param_id(model, param, value);
 }
 
-int ralph_get_mip_int_param(const RalphModel *model, const char *name, int *value) {
+int ralph_core_get_mip_int_param(const RalphModel *model, const char *name, int *value) {
     RalphParamId param;
     if (!name) return -1;
-    if (ralph_find_param_by_name(name, &param) != 0) return -1;
-    return ralph_get_mip_int_param_id(model, param, value);
+    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_core_get_mip_int_param_id(model, param, value);
 }
 
-int ralph_get_mip_dbl_param(const RalphModel *model, const char *name, double *value) {
+int ralph_core_get_mip_dbl_param(const RalphModel *model, const char *name, double *value) {
     RalphParamId param;
     if (!name) return -1;
-    if (ralph_find_param_by_name(name, &param) != 0) return -1;
-    return ralph_get_mip_dbl_param_id(model, param, value);
+    if (ralph_core_find_param_by_name(name, &param) != 0) return -1;
+    return ralph_core_get_mip_dbl_param_id(model, param, value);
 }
 
 /* ============================================================================
  * Utility
  * ============================================================================ */
 
-const char* ralph_status_string(RalphStatus status) {
+const char* ralph_core_status_string(RalphStatus status) {
     switch (status) {
         case RALPH_STATUS_UNKNOWN:        return "UNKNOWN";
         case RALPH_STATUS_OPTIMAL:        return "OPTIMAL";
@@ -3950,7 +3950,7 @@ const char* ralph_status_string(RalphStatus status) {
     }
 }
 
-const char* ralph_version(void) {
+const char* ralph_core_version(void) {
     return RALPH_VERSION;
 }
 
@@ -3958,32 +3958,32 @@ const char* ralph_version(void) {
  * Name Management
  * ============================================================================ */
 
-const char* ralph_get_var_name(const RalphModel *model, int var) {
+const char* ralph_core_get_var_name(const RalphModel *model, int var) {
     if (!model || !model->lp_model) return NULL;
     return lp_model_get_var_name(model->lp_model, var);
 }
 
-const char* ralph_get_con_name(const RalphModel *model, int con) {
+const char* ralph_core_get_con_name(const RalphModel *model, int con) {
     if (!model || !model->lp_model) return NULL;
     return lp_model_get_con_name(model->lp_model, con);
 }
 
-int ralph_set_var_name(RalphModel *model, int var, const char *name) {
+int ralph_core_set_var_name(RalphModel *model, int var, const char *name) {
     if (!model || !model->lp_model) return -1;
     return lp_model_set_var_name(model->lp_model, var, name);
 }
 
-int ralph_set_con_name(RalphModel *model, int con, const char *name) {
+int ralph_core_set_con_name(RalphModel *model, int con, const char *name) {
     if (!model || !model->lp_model) return -1;
     return lp_model_set_con_name(model->lp_model, con, name);
 }
 
-const char* ralph_get_problem_name(const RalphModel *model) {
+const char* ralph_core_get_problem_name(const RalphModel *model) {
     if (!model || !model->lp_model) return NULL;
     return lp_model_get_name(model->lp_model);
 }
 
-int ralph_set_problem_name(RalphModel *model, const char *name) {
+int ralph_core_set_problem_name(RalphModel *model, const char *name) {
     if (!model || !model->lp_model) return -1;
     return lp_model_set_name(model->lp_model, name);
 }

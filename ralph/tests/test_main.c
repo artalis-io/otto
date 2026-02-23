@@ -516,7 +516,7 @@ void test_farkas_ray(void) {
     /* Get Farkas ray */
     int m = ralph_test_get_num_cons(model);
     double *ray = (double*)malloc(m * sizeof(double));
-    int ret = ralph_get_farkas_ray(model, ray);
+    int ret = ralph_core_get_farkas_ray(model, ray);
     ASSERT(ret == 0, "Farkas ray retrieved successfully");
 
     if (ret == 0) {
@@ -578,7 +578,7 @@ void test_farkas_bound_conflict(void) {
     ASSERT(status == RALPH_STATUS_INFEASIBLE, "Status is INFEASIBLE");
 
     double ray[2];
-    int ret = ralph_get_farkas_ray(model, ray);
+    int ret = ralph_core_get_farkas_ray(model, ray);
     ASSERT(ret == 0, "Farkas ray retrieved");
 
     if (ret == 0) {
@@ -645,7 +645,7 @@ void test_farkas_sum_conflict(void) {
     ASSERT(status == RALPH_STATUS_INFEASIBLE, "Status is INFEASIBLE");
 
     double ray[2];
-    int ret = ralph_get_farkas_ray(model, ray);
+    int ret = ralph_core_get_farkas_ray(model, ray);
     ASSERT(ret == 0, "Farkas ray retrieved");
 
     if (ret == 0) {
@@ -712,7 +712,7 @@ void test_farkas_equality(void) {
     ASSERT(status == RALPH_STATUS_INFEASIBLE, "Status is INFEASIBLE");
 
     double ray[3];
-    int ret = ralph_get_farkas_ray(model, ray);
+    int ret = ralph_core_get_farkas_ray(model, ray);
     ASSERT(ret == 0, "Farkas ray retrieved");
 
     if (ret == 0) {
@@ -770,7 +770,7 @@ void test_farkas_negative_rhs_gsense(void) {
     ASSERT(status == RALPH_STATUS_INFEASIBLE, "Status is INFEASIBLE");
 
     double ray[2];
-    int ret = ralph_get_farkas_ray(model, ray);
+    int ret = ralph_core_get_farkas_ray(model, ray);
     ASSERT(ret == 0, "Farkas ray retrieved");
 
     if (ret == 0) {
@@ -817,14 +817,14 @@ void test_unbounded_ray_api(void) {
            "Unbounded ray: status is UNBOUNDED");
 
     double ray[1] = {0.0};
-    ASSERT(ralph_get_unbounded_ray(model, ray) == 0,
+    ASSERT(ralph_core_get_unbounded_ray(model, ray) == 0,
            "Unbounded ray: retrieved successfully");
     ASSERT(ray[0] > 1e-8, "Unbounded ray: positive improving direction");
     ASSERT((-1.0 * ray[0]) < -1e-8, "Unbounded ray: improves objective for minimization");
 
-    ASSERT(ralph_get_unbounded_ray(NULL, ray) == -1,
+    ASSERT(ralph_core_get_unbounded_ray(NULL, ray) == -1,
            "Unbounded ray: NULL model rejected");
-    ASSERT(ralph_get_unbounded_ray(model, NULL) == -1,
+    ASSERT(ralph_core_get_unbounded_ray(model, NULL) == -1,
            "Unbounded ray: NULL output rejected");
 
     ralph_test_free(model);
@@ -836,7 +836,7 @@ void test_unbounded_ray_api(void) {
     ralph_test_optimize_lp(model);
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_OPTIMAL,
            "Unbounded ray: control model optimal");
-    ASSERT(ralph_get_unbounded_ray(model, ray) == -1,
+    ASSERT(ralph_core_get_unbounded_ray(model, ray) == -1,
            "Unbounded ray: unavailable for non-unbounded status");
     ralph_test_free(model);
 }
@@ -1023,12 +1023,12 @@ void test_param_typed_metadata_api(void) {
     RalphModel *model = ralph_test_create();
     ASSERT(model != NULL, "Typed param: model created");
 
-    int count = ralph_get_param_count();
+    int count = ralph_core_get_param_count();
     ASSERT(count == (int)RALPH_PARAM_COUNT, "Typed param: param count matches enum");
 
     RalphParamMeta meta;
     memset(&meta, 0, sizeof(meta));
-    ASSERT(ralph_get_param_meta(RALPH_PARAM_METHOD, &meta) == 0,
+    ASSERT(ralph_core_get_param_meta(RALPH_PARAM_METHOD, &meta) == 0,
            "Typed param: get metadata for method");
     ASSERT(strcmp(meta.name, "method") == 0,
            "Typed param: metadata canonical name");
@@ -1039,7 +1039,7 @@ void test_param_typed_metadata_api(void) {
     ASSERT_NEAR(meta.default_value, 0.0, TOLERANCE,
                 "Typed param: metadata default value");
 
-    ASSERT(ralph_get_param_meta(RALPH_PARAM_NODE_SELECT, &meta) == 0,
+    ASSERT(ralph_core_get_param_meta(RALPH_PARAM_NODE_SELECT, &meta) == 0,
            "Typed param: get metadata for node_select");
     ASSERT(meta.has_min == 1 && meta.has_max == 1,
            "Typed param: node_select has min/max");
@@ -1048,30 +1048,30 @@ void test_param_typed_metadata_api(void) {
     ASSERT_NEAR(meta.max_value, 3.0, TOLERANCE,
                 "Typed param: node_select max=3");
 
-    ASSERT(ralph_get_param_meta((RalphParamId)-1, &meta) == -1,
+    ASSERT(ralph_core_get_param_meta((RalphParamId)-1, &meta) == -1,
            "Typed param: invalid id rejected by metadata get");
-    ASSERT(ralph_get_param_meta(RALPH_PARAM_METHOD, NULL) == -1,
+    ASSERT(ralph_core_get_param_meta(RALPH_PARAM_METHOD, NULL) == -1,
            "Typed param: NULL metadata output rejected");
 
     RalphParamId pid = RALPH_PARAM_COUNT;
-    ASSERT(ralph_find_param_by_name("method", &pid) == 0 &&
+    ASSERT(ralph_core_find_param_by_name("method", &pid) == 0 &&
            pid == RALPH_PARAM_METHOD,
            "Typed param: canonical name lookup");
-    ASSERT(ralph_find_param_by_name("Method", &pid) == 0 &&
+    ASSERT(ralph_core_find_param_by_name("Method", &pid) == 0 &&
            pid == RALPH_PARAM_METHOD,
            "Typed param: alias lookup");
-    ASSERT(ralph_find_param_by_name("ScalingRounds", &pid) == 0 &&
+    ASSERT(ralph_core_find_param_by_name("ScalingRounds", &pid) == 0 &&
            pid == RALPH_PARAM_SCALING,
            "Typed param: scaling alias lookup");
-    ASSERT(ralph_find_param_by_name("does_not_exist", &pid) == -1,
+    ASSERT(ralph_core_find_param_by_name("does_not_exist", &pid) == -1,
            "Typed param: unknown name rejected");
-    ASSERT(ralph_find_param_by_name("method", NULL) == -1,
+    ASSERT(ralph_core_find_param_by_name("method", NULL) == -1,
            "Typed param: NULL lookup output rejected");
 
     int i_val = 0;
-    ASSERT(ralph_set_int_param_id(model, RALPH_PARAM_VERBOSE, 1) == 0,
+    ASSERT(ralph_core_set_int_param_id(model, RALPH_PARAM_VERBOSE, 1) == 0,
            "Typed param: set int by id");
-    ASSERT(ralph_get_int_param_id(model, RALPH_PARAM_VERBOSE, &i_val) == 0 &&
+    ASSERT(ralph_core_get_int_param_id(model, RALPH_PARAM_VERBOSE, &i_val) == 0 &&
            i_val == 1,
            "Typed param: get int by id");
     ASSERT(ralph_test_get_int_param(model, "verbose", &i_val) == 0 &&
@@ -1081,49 +1081,49 @@ void test_param_typed_metadata_api(void) {
     double d_val = 0.0;
     ASSERT(ralph_test_set_dbl_param(model, "time_limit", 12.5) == 0,
            "Typed param: set double by string");
-    ASSERT(ralph_get_dbl_param_id(model, RALPH_PARAM_TIME_LIMIT, &d_val) == 0,
+    ASSERT(ralph_core_get_dbl_param_id(model, RALPH_PARAM_TIME_LIMIT, &d_val) == 0,
            "Typed param: get double by id");
     ASSERT_NEAR(d_val, 12.5, TOLERANCE,
                 "Typed param: typed getter returns string-set value");
 
-    ASSERT(ralph_set_dbl_param_id(model, RALPH_PARAM_MIP_GAP, 0.02) == 0,
+    ASSERT(ralph_core_set_dbl_param_id(model, RALPH_PARAM_MIP_GAP, 0.02) == 0,
            "Typed param: set double by id");
     ASSERT(ralph_test_get_dbl_param(model, "mip_gap", &d_val) == 0,
            "Typed param: get double by string");
     ASSERT_NEAR(d_val, 0.02, TOLERANCE,
                 "Typed param: string getter returns typed-set value");
 
-    ASSERT(ralph_set_lp_int_param_id(model, RALPH_PARAM_MAX_NODES, 32) == -1,
+    ASSERT(ralph_core_set_lp_int_param_id(model, RALPH_PARAM_MAX_NODES, 32) == -1,
            "Typed param: LP strict rejects MIP-only int");
-    ASSERT(ralph_set_mip_int_param_id(model, RALPH_PARAM_METHOD, 1) == -1,
+    ASSERT(ralph_core_set_mip_int_param_id(model, RALPH_PARAM_METHOD, 1) == -1,
            "Typed param: MIP strict rejects LP-only int");
-    ASSERT(ralph_set_lp_int_param_id(model, RALPH_PARAM_VERBOSE, 0) == 0,
+    ASSERT(ralph_core_set_lp_int_param_id(model, RALPH_PARAM_VERBOSE, 0) == 0,
            "Typed param: LP strict accepts shared int");
-    ASSERT(ralph_set_mip_dbl_param_id(model, RALPH_PARAM_TIME_LIMIT, 5.0) == 0,
+    ASSERT(ralph_core_set_mip_dbl_param_id(model, RALPH_PARAM_TIME_LIMIT, 5.0) == 0,
            "Typed param: MIP strict accepts shared double");
 
-    ASSERT(ralph_set_int_param_id(model, RALPH_PARAM_NODE_SELECT, 4) == -1,
+    ASSERT(ralph_core_set_int_param_id(model, RALPH_PARAM_NODE_SELECT, 4) == -1,
            "Typed param: node_select range rejected");
-    ASSERT(ralph_set_int_param_id(model, RALPH_PARAM_VAR_SELECT, 5) == -1,
+    ASSERT(ralph_core_set_int_param_id(model, RALPH_PARAM_VAR_SELECT, 5) == -1,
            "Typed param: var_select range rejected");
-    ASSERT(ralph_set_int_param_id(model, RALPH_PARAM_NODE_SELECT, 2) == 0,
+    ASSERT(ralph_core_set_int_param_id(model, RALPH_PARAM_NODE_SELECT, 2) == 0,
            "Typed param: node_select valid value accepted");
-    ASSERT(ralph_get_int_param_id(model, RALPH_PARAM_NODE_SELECT, &i_val) == 0 &&
+    ASSERT(ralph_core_get_int_param_id(model, RALPH_PARAM_NODE_SELECT, &i_val) == 0 &&
            i_val == 2,
            "Typed param: node_select updated");
 
-    ASSERT(ralph_set_int_param_id(model, RALPH_PARAM_TIME_LIMIT, 1) == -1,
+    ASSERT(ralph_core_set_int_param_id(model, RALPH_PARAM_TIME_LIMIT, 1) == -1,
            "Typed param: int setter rejects double param");
-    ASSERT(ralph_set_dbl_param_id(model, RALPH_PARAM_VERBOSE, 1.0) == -1,
+    ASSERT(ralph_core_set_dbl_param_id(model, RALPH_PARAM_VERBOSE, 1.0) == -1,
            "Typed param: double setter rejects int param");
-    ASSERT(ralph_get_dbl_param_id(model, RALPH_PARAM_VERBOSE, &d_val) == -1,
+    ASSERT(ralph_core_get_dbl_param_id(model, RALPH_PARAM_VERBOSE, &d_val) == -1,
            "Typed param: double getter rejects int param");
-    ASSERT(ralph_get_int_param_id(model, (RalphParamId)-1, &i_val) == -1,
+    ASSERT(ralph_core_get_int_param_id(model, (RalphParamId)-1, &i_val) == -1,
            "Typed param: invalid id rejected by int getter");
 
     ASSERT(ralph_test_set_int_param(model, "ScalingRounds", 4) == 0,
            "Typed param: string alias set still supported");
-    ASSERT(ralph_get_int_param_id(model, RALPH_PARAM_SCALING, &i_val) == 0 &&
+    ASSERT(ralph_core_get_int_param_id(model, RALPH_PARAM_SCALING, &i_val) == 0 &&
            i_val == 4,
            "Typed param: alias maps to canonical scaling id");
 
@@ -2360,8 +2360,8 @@ void test_scp_lu_regression(void) {
 /* ============================================================================
  * Test: Constraint Modification API
  *
- * Tests ralph_set_constraint_rhs(), ralph_set_constraint_coef(),
- * ralph_set_constraint_coefs(), and ralph_test_get_var_bounds().
+ * Tests ralph_core_set_constraint_rhs(), ralph_core_set_constraint_coef(),
+ * ralph_core_set_constraint_coefs(), and ralph_test_get_var_bounds().
  * ============================================================================ */
 void test_constraint_modification(void) {
     printf("\n=== Test: Constraint Modification API ===\n");
@@ -2395,8 +2395,8 @@ void test_constraint_modification(void) {
     ASSERT_NEAR(ralph_test_get_objval(model), 2.0, TOLERANCE, "Objective is 2.0");
 
     /* Modify RHS: change x + y >= 2 to x + y >= 5 */
-    ret = ralph_set_constraint_rhs(model, 0, 5.0);
-    ASSERT(ret == 0, "ralph_set_constraint_rhs returns 0");
+    ret = ralph_core_set_constraint_rhs(model, 0, 5.0);
+    ASSERT(ret == 0, "ralph_core_set_constraint_rhs returns 0");
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_UNKNOWN,
            "RHS edit invalidates solve status");
 
@@ -2406,8 +2406,8 @@ void test_constraint_modification(void) {
     ASSERT_NEAR(ralph_test_get_objval(model), 5.0, TOLERANCE, "New objective is 5.0");
 
     /* Modify matrix coefficient: 2*x + y >= 5 */
-    ret = ralph_set_constraint_coef(model, 0, 0, 2.0);
-    ASSERT(ret == 0, "ralph_set_constraint_coef returns 0");
+    ret = ralph_core_set_constraint_coef(model, 0, 0, 2.0);
+    ASSERT(ret == 0, "ralph_core_set_constraint_coef returns 0");
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_UNKNOWN,
            "Coefficient edit invalidates solve status");
     ralph_test_optimize(model);
@@ -2416,8 +2416,8 @@ void test_constraint_modification(void) {
                 "Coefficient edit objective is 2.5");
 
     /* Remove x coefficient: y >= 5 */
-    ret = ralph_set_constraint_coef(model, 0, 0, 0.0);
-    ASSERT(ret == 0, "ralph_set_constraint_coef can remove entry");
+    ret = ralph_core_set_constraint_coef(model, 0, 0, 0.0);
+    ASSERT(ret == 0, "ralph_core_set_constraint_coef can remove entry");
     ralph_test_optimize(model);
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_OPTIMAL,
            "Entry removal re-solve is OPTIMAL");
@@ -2428,8 +2428,8 @@ void test_constraint_modification(void) {
     int up_cons[] = {0, 0};
     int up_vars[] = {0, 1};
     double up_vals[] = {1.0, 2.0};
-    ret = ralph_set_constraint_coefs(model, 2, up_cons, up_vars, up_vals);
-    ASSERT(ret == 0, "ralph_set_constraint_coefs returns 0");
+    ret = ralph_core_set_constraint_coefs(model, 2, up_cons, up_vars, up_vals);
+    ASSERT(ret == 0, "ralph_core_set_constraint_coefs returns 0");
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_UNKNOWN,
            "Bulk coefficient edit invalidates solve status");
     ralph_test_optimize(model);
@@ -2439,16 +2439,16 @@ void test_constraint_modification(void) {
                 "Bulk coefficient objective is 2.5");
 
     /* Test invalid constraint index */
-    ret = ralph_set_constraint_rhs(model, 99, 1.0);
+    ret = ralph_core_set_constraint_rhs(model, 99, 1.0);
     ASSERT(ret == -1, "Invalid constraint index returns -1");
 
-    ret = ralph_set_constraint_coef(model, 99, 0, 1.0);
+    ret = ralph_core_set_constraint_coef(model, 99, 0, 1.0);
     ASSERT(ret == -1, "Invalid constraint index for coef returns -1");
-    ret = ralph_set_constraint_coef(model, 0, 99, 1.0);
+    ret = ralph_core_set_constraint_coef(model, 0, 99, 1.0);
     ASSERT(ret == -1, "Invalid variable index for coef returns -1");
 
     int bad_vars[] = {0, 99};
-    ret = ralph_set_constraint_coefs(model, 2, up_cons, bad_vars, up_vals);
+    ret = ralph_core_set_constraint_coefs(model, 2, up_cons, bad_vars, up_vals);
     ASSERT(ret == -1, "Invalid index in bulk coef update returns -1");
 
     /* Test invalid variable index for bounds query */
@@ -2461,8 +2461,8 @@ void test_constraint_modification(void) {
 /* ============================================================================
  * Test: Constraint Query API
  *
- * Tests ralph_get_constraint_rhs(), ralph_get_constraint_sense(), and
- * ralph_get_constraint_coef() in both finalized and editable states.
+ * Tests ralph_core_get_constraint_rhs(), ralph_core_get_constraint_sense(), and
+ * ralph_core_get_constraint_coef() in both finalized and editable states.
  * ============================================================================ */
 void test_constraint_query_api(void) {
     printf("\n=== Test: Constraint Query API ===\n");
@@ -2489,41 +2489,41 @@ void test_constraint_query_api(void) {
     RalphSense sense = RALPH_EQUAL;
     double coef = 0.0;
 
-    ASSERT(ralph_get_constraint_rhs(model, 0, &rhs) == 0, "Query API: get RHS c0");
+    ASSERT(ralph_core_get_constraint_rhs(model, 0, &rhs) == 0, "Query API: get RHS c0");
     ASSERT_NEAR(rhs, 7.0, TOLERANCE, "Query API: c0 RHS is 7");
-    ASSERT(ralph_get_constraint_sense(model, 0, &sense) == 0, "Query API: get sense c0");
+    ASSERT(ralph_core_get_constraint_sense(model, 0, &sense) == 0, "Query API: get sense c0");
     ASSERT(sense == RALPH_LESS_EQUAL, "Query API: c0 sense is <=");
 
-    ASSERT(ralph_get_constraint_coef(model, 0, 0, &coef) == 0, "Query API: get A[0,0]");
+    ASSERT(ralph_core_get_constraint_coef(model, 0, 0, &coef) == 0, "Query API: get A[0,0]");
     ASSERT_NEAR(coef, 2.0, TOLERANCE, "Query API: A[0,0]=2");
-    ASSERT(ralph_get_constraint_coef(model, 0, 2, &coef) == 0, "Query API: get structural zero");
+    ASSERT(ralph_core_get_constraint_coef(model, 0, 2, &coef) == 0, "Query API: get structural zero");
     ASSERT_NEAR(coef, 0.0, TOLERANCE, "Query API: structural zero returns 0");
 
-    ASSERT(ralph_get_constraint_rhs(model, 1, &rhs) == 0, "Query API: get RHS c1");
+    ASSERT(ralph_core_get_constraint_rhs(model, 1, &rhs) == 0, "Query API: get RHS c1");
     ASSERT_NEAR(rhs, 1.0, TOLERANCE, "Query API: c1 RHS is 1");
-    ASSERT(ralph_get_constraint_sense(model, 1, &sense) == 0, "Query API: get sense c1");
+    ASSERT(ralph_core_get_constraint_sense(model, 1, &sense) == 0, "Query API: get sense c1");
     ASSERT(sense == RALPH_EQUAL, "Query API: c1 sense is =");
-    ASSERT(ralph_get_constraint_coef(model, 1, 1, &coef) == 0, "Query API: get A[1,1]");
+    ASSERT(ralph_core_get_constraint_coef(model, 1, 1, &coef) == 0, "Query API: get A[1,1]");
     ASSERT_NEAR(coef, 1.0, TOLERANCE, "Query API: A[1,1]=1");
-    ASSERT(ralph_get_constraint_coef(model, 1, 2, &coef) == 0, "Query API: get A[1,2]");
+    ASSERT(ralph_core_get_constraint_coef(model, 1, 2, &coef) == 0, "Query API: get A[1,2]");
     ASSERT_NEAR(coef, -1.0, TOLERANCE, "Query API: A[1,2]=-1");
 
     /* Editable path: any coefficient edit rebuilds build_state. */
-    ASSERT(ralph_set_constraint_coef(model, 0, 2, 4.0) == 0, "Query API: set A[0,2]=4");
-    ASSERT(ralph_get_constraint_coef(model, 0, 2, &coef) == 0, "Query API: read edited A[0,2]");
+    ASSERT(ralph_core_set_constraint_coef(model, 0, 2, 4.0) == 0, "Query API: set A[0,2]=4");
+    ASSERT(ralph_core_get_constraint_coef(model, 0, 2, &coef) == 0, "Query API: read edited A[0,2]");
     ASSERT_NEAR(coef, 4.0, TOLERANCE, "Query API: edited A[0,2]=4");
 
-    ASSERT(ralph_set_constraint_rhs(model, 1, 2.0) == 0, "Query API: set c1 RHS=2");
-    ASSERT(ralph_get_constraint_rhs(model, 1, &rhs) == 0, "Query API: read edited RHS");
+    ASSERT(ralph_core_set_constraint_rhs(model, 1, 2.0) == 0, "Query API: set c1 RHS=2");
+    ASSERT(ralph_core_get_constraint_rhs(model, 1, &rhs) == 0, "Query API: read edited RHS");
     ASSERT_NEAR(rhs, 2.0, TOLERANCE, "Query API: edited RHS is 2");
 
-    ASSERT(ralph_get_constraint_rhs(model, 99, &rhs) == -1, "Query API: invalid RHS row rejected");
-    ASSERT(ralph_get_constraint_sense(model, 99, &sense) == -1, "Query API: invalid sense row rejected");
-    ASSERT(ralph_get_constraint_coef(model, 0, 99, &coef) == -1, "Query API: invalid coef col rejected");
-    ASSERT(ralph_get_constraint_coef(model, 99, 0, &coef) == -1, "Query API: invalid coef row rejected");
-    ASSERT(ralph_get_constraint_rhs(model, 0, NULL) == -1, "Query API: NULL RHS output rejected");
-    ASSERT(ralph_get_constraint_sense(model, 0, NULL) == -1, "Query API: NULL sense output rejected");
-    ASSERT(ralph_get_constraint_coef(model, 0, 0, NULL) == -1, "Query API: NULL coef output rejected");
+    ASSERT(ralph_core_get_constraint_rhs(model, 99, &rhs) == -1, "Query API: invalid RHS row rejected");
+    ASSERT(ralph_core_get_constraint_sense(model, 99, &sense) == -1, "Query API: invalid sense row rejected");
+    ASSERT(ralph_core_get_constraint_coef(model, 0, 99, &coef) == -1, "Query API: invalid coef col rejected");
+    ASSERT(ralph_core_get_constraint_coef(model, 99, 0, &coef) == -1, "Query API: invalid coef row rejected");
+    ASSERT(ralph_core_get_constraint_rhs(model, 0, NULL) == -1, "Query API: NULL RHS output rejected");
+    ASSERT(ralph_core_get_constraint_sense(model, 0, NULL) == -1, "Query API: NULL sense output rejected");
+    ASSERT(ralph_core_get_constraint_coef(model, 0, 0, NULL) == -1, "Query API: NULL coef output rejected");
 
     ralph_test_free(model);
 }
@@ -2552,42 +2552,42 @@ void test_constraint_batch_edit_api(void) {
 
     int rows[] = {0, 1};
     double rhs_vals[] = {5.0, 8.0};
-    ASSERT(ralph_set_constraint_rhs_batch(model, 2, rows, rhs_vals) == 0,
+    ASSERT(ralph_core_set_constraint_rhs_batch(model, 2, rows, rhs_vals) == 0,
            "Batch API: RHS batch accepted");
 
     double rhs0 = 0.0, rhs1 = 0.0;
-    ASSERT(ralph_get_constraint_rhs(model, 0, &rhs0) == 0, "Batch API: read RHS c0");
-    ASSERT(ralph_get_constraint_rhs(model, 1, &rhs1) == 0, "Batch API: read RHS c1");
+    ASSERT(ralph_core_get_constraint_rhs(model, 0, &rhs0) == 0, "Batch API: read RHS c0");
+    ASSERT(ralph_core_get_constraint_rhs(model, 1, &rhs1) == 0, "Batch API: read RHS c1");
     ASSERT_NEAR(rhs0, 5.0, TOLERANCE, "Batch API: c0 RHS updated");
     ASSERT_NEAR(rhs1, 8.0, TOLERANCE, "Batch API: c1 RHS updated");
 
     int bad_rows[] = {0, 99};
     double bad_rhs_vals[] = {1.0, 1.0};
-    ASSERT(ralph_set_constraint_rhs_batch(model, 2, bad_rows, bad_rhs_vals) == -1,
+    ASSERT(ralph_core_set_constraint_rhs_batch(model, 2, bad_rows, bad_rhs_vals) == -1,
            "Batch API: invalid RHS batch rejected");
-    ASSERT(ralph_get_constraint_rhs(model, 0, &rhs0) == 0, "Batch API: read RHS after rejection");
+    ASSERT(ralph_core_get_constraint_rhs(model, 0, &rhs0) == 0, "Batch API: read RHS after rejection");
     ASSERT_NEAR(rhs0, 5.0, TOLERANCE, "Batch API: rejected RHS batch made no partial edits");
 
     RalphSense senses[] = {RALPH_LESS_EQUAL, RALPH_EQUAL};
-    ASSERT(ralph_set_constraint_sense_batch(model, 2, rows, senses) == 0,
+    ASSERT(ralph_core_set_constraint_sense_batch(model, 2, rows, senses) == 0,
            "Batch API: sense batch accepted");
     RalphSense s0 = RALPH_EQUAL;
-    ASSERT(ralph_get_constraint_sense(model, 0, &s0) == 0, "Batch API: read c0 sense");
+    ASSERT(ralph_core_get_constraint_sense(model, 0, &s0) == 0, "Batch API: read c0 sense");
     ASSERT(s0 == RALPH_LESS_EQUAL, "Batch API: c0 sense updated");
 
     RalphSense bad_senses[] = {RALPH_GREATER_EQUAL, (RalphSense)'X'};
-    ASSERT(ralph_set_constraint_sense_batch(model, 2, rows, bad_senses) == -1,
+    ASSERT(ralph_core_set_constraint_sense_batch(model, 2, rows, bad_senses) == -1,
            "Batch API: invalid sense batch rejected");
-    ASSERT(ralph_get_constraint_sense(model, 0, &s0) == 0, "Batch API: read c0 sense after reject");
+    ASSERT(ralph_core_get_constraint_sense(model, 0, &s0) == 0, "Batch API: read c0 sense after reject");
     ASSERT(s0 == RALPH_LESS_EQUAL, "Batch API: rejected sense batch made no partial edits");
 
-    ASSERT(ralph_set_constraint_rhs_batch(model, 2, NULL, rhs_vals) == -1,
+    ASSERT(ralph_core_set_constraint_rhs_batch(model, 2, NULL, rhs_vals) == -1,
            "Batch API: NULL row array rejected");
-    ASSERT(ralph_set_constraint_rhs_batch(model, 2, rows, NULL) == -1,
+    ASSERT(ralph_core_set_constraint_rhs_batch(model, 2, rows, NULL) == -1,
            "Batch API: NULL RHS array rejected");
-    ASSERT(ralph_set_constraint_sense_batch(model, 2, NULL, senses) == -1,
+    ASSERT(ralph_core_set_constraint_sense_batch(model, 2, NULL, senses) == -1,
            "Batch API: NULL sense row array rejected");
-    ASSERT(ralph_set_constraint_sense_batch(model, 2, rows, NULL) == -1,
+    ASSERT(ralph_core_set_constraint_sense_batch(model, 2, rows, NULL) == -1,
            "Batch API: NULL sense array rejected");
 
     ASSERT(ralph_test_optimize_lp(model) == 0, "Batch API: solve call succeeds");
@@ -2601,7 +2601,7 @@ void test_constraint_batch_edit_api(void) {
 /* ============================================================================
  * Test: Row/Column Deletion API
  *
- * Tests ralph_delete_constraint() and ralph_delete_var() semantics.
+ * Tests ralph_core_delete_constraint() and ralph_core_delete_var() semantics.
  * ============================================================================ */
 void test_row_col_deletion_api(void) {
     printf("\n=== Test: Row/Column Deletion API ===\n");
@@ -2624,29 +2624,29 @@ void test_row_col_deletion_api(void) {
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_OPTIMAL, "Delete API: initial status OPTIMAL");
     ASSERT_NEAR(ralph_test_get_objval(model), 14.0, TOLERANCE, "Delete API: initial objective is 14");
 
-    ASSERT(ralph_delete_constraint(model, 1) == 0, "Delete API: delete row 1");
+    ASSERT(ralph_core_delete_constraint(model, 1) == 0, "Delete API: delete row 1");
     ASSERT(ralph_test_get_num_cons(model) == 1, "Delete API: row count decreased");
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_UNKNOWN, "Delete API: row delete invalidates status");
     ASSERT(ralph_test_optimize_lp(model) == 0, "Delete API: solve after row delete succeeds");
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_OPTIMAL, "Delete API: row-delete solve OPTIMAL");
     ASSERT_NEAR(ralph_test_get_objval(model), 5.0, TOLERANCE, "Delete API: objective after row delete is 5");
 
-    ASSERT(ralph_delete_var(model, 0) == 0, "Delete API: delete var 0");
+    ASSERT(ralph_core_delete_var(model, 0) == 0, "Delete API: delete var 0");
     ASSERT(ralph_test_get_num_vars(model) == 2, "Delete API: var count decreased");
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_UNKNOWN, "Delete API: var delete invalidates status");
 
     double coef = 0.0;
-    ASSERT(ralph_get_constraint_coef(model, 0, 0, &coef) == 0, "Delete API: read shifted A[0,0]");
+    ASSERT(ralph_core_get_constraint_coef(model, 0, 0, &coef) == 0, "Delete API: read shifted A[0,0]");
     ASSERT_NEAR(coef, 1.0, TOLERANCE, "Delete API: shifted A[0,0]=1");
-    ASSERT(ralph_get_constraint_coef(model, 0, 1, &coef) == 0, "Delete API: read shifted A[0,1]");
+    ASSERT(ralph_core_get_constraint_coef(model, 0, 1, &coef) == 0, "Delete API: read shifted A[0,1]");
     ASSERT_NEAR(coef, 0.0, TOLERANCE, "Delete API: shifted A[0,1]=0");
 
     ASSERT(ralph_test_optimize_lp(model) == 0, "Delete API: solve after var delete succeeds");
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_OPTIMAL, "Delete API: var-delete solve OPTIMAL");
     ASSERT_NEAR(ralph_test_get_objval(model), 50.0, TOLERANCE, "Delete API: objective after var delete is 50");
 
-    ASSERT(ralph_delete_constraint(model, 99) == -1, "Delete API: invalid row delete rejected");
-    ASSERT(ralph_delete_var(model, 99) == -1, "Delete API: invalid var delete rejected");
+    ASSERT(ralph_core_delete_constraint(model, 99) == -1, "Delete API: invalid row delete rejected");
+    ASSERT(ralph_core_delete_var(model, 99) == -1, "Delete API: invalid var delete rejected");
 
     ralph_test_free(model);
 }
@@ -2684,7 +2684,7 @@ void test_lp_iis_api(void) {
 
     int flags[4] = {0, 0, 0, 0};
     int iis_size = 0;
-    ASSERT(ralph_compute_lp_iis(model, flags, &iis_size) == 0,
+    ASSERT(ralph_core_compute_lp_iis(model, flags, &iis_size) == 0,
            "IIS API: extraction succeeds");
     ASSERT(iis_size == 2, "IIS API: expected IIS size is 2");
     ASSERT(flags[0] == 1, "IIS API: row 0 is in IIS");
@@ -2711,7 +2711,7 @@ void test_lp_iis_api(void) {
         for (int row = 3; row >= 0; row--) {
             int keep = flags[row] && row != drop;
             if (!keep) {
-                ASSERT(ralph_delete_constraint(sub, row) == 0,
+                ASSERT(ralph_core_delete_constraint(sub, row) == 0,
                        "IIS API: row deletion succeeds for irreducibility check");
             }
         }
@@ -2722,9 +2722,9 @@ void test_lp_iis_api(void) {
         ralph_test_free(sub);
     }
 
-    ASSERT(ralph_compute_lp_iis(NULL, flags, &iis_size) == -1,
+    ASSERT(ralph_core_compute_lp_iis(NULL, flags, &iis_size) == -1,
            "IIS API: NULL model rejected");
-    ASSERT(ralph_compute_lp_iis(model, NULL, &iis_size) == -1,
+    ASSERT(ralph_core_compute_lp_iis(model, NULL, &iis_size) == -1,
            "IIS API: NULL flags rejected");
 
     ralph_test_free(model);
@@ -2735,7 +2735,7 @@ void test_lp_iis_api(void) {
     ralph_test_optimize_lp(model);
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_OPTIMAL,
            "IIS API: control model optimal");
-    ASSERT(ralph_compute_lp_iis(model, flags, &iis_size) == -1,
+    ASSERT(ralph_core_compute_lp_iis(model, flags, &iis_size) == -1,
            "IIS API: rejects non-infeasible status");
     ralph_test_free(model);
 }
@@ -2743,7 +2743,7 @@ void test_lp_iis_api(void) {
 /* ============================================================================
  * Test: Lazy Constraints API
  *
- * Tests ralph_add_lazy_constraint() and ralph_add_lazy_constraints().
+ * Tests ralph_core_add_lazy_constraint() and ralph_core_add_lazy_constraints().
  * ============================================================================ */
 void test_lazy_constraints(void) {
     printf("\n=== Test: Lazy Constraints API ===\n");
@@ -2781,8 +2781,8 @@ void test_lazy_constraints(void) {
         .rhs = 3.0
     };
 
-    int ret = ralph_add_lazy_constraint(model, &cut1);
-    ASSERT(ret == 0, "ralph_add_lazy_constraint returns 0");
+    int ret = ralph_core_add_lazy_constraint(model, &cut1);
+    ASSERT(ret == 0, "ralph_core_add_lazy_constraint returns 0");
 
     /* Re-solve with cut */
     ralph_test_optimize(model);
@@ -2811,8 +2811,8 @@ void test_lazy_constraints(void) {
     };
 
     RalphCut cuts[] = {cut2, cut3};
-    ret = ralph_add_lazy_constraints(model, cuts, 2);
-    ASSERT(ret == 0, "ralph_add_lazy_constraints returns 0");
+    ret = ralph_core_add_lazy_constraints(model, cuts, 2);
+    ASSERT(ret == 0, "ralph_core_add_lazy_constraints returns 0");
 
     /* Re-solve */
     ralph_test_optimize(model);
@@ -5660,7 +5660,7 @@ void test_reoptimization_rhs_bounds(void) {
      * Vertex: x+y=6 and y axis: x=0,y=6 → obj=-18.
      * min -2x-3y at (0,6) = -18.
      */
-    ralph_set_constraint_rhs(model, 0, 6.0);
+    ralph_core_set_constraint_rhs(model, 0, 6.0);
     ralph_test_optimize(model);
 
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_OPTIMAL, "Tighten RHS: OPTIMAL");
@@ -5675,8 +5675,8 @@ void test_reoptimization_rhs_bounds(void) {
      * At (8,2): obj=-22. (0,10) is better.
      * min -2x-3y at (0,10) = -30.
      */
-    ralph_set_constraint_rhs(model, 0, 10.0);
-    ralph_set_constraint_rhs(model, 1, 20.0);
+    ralph_core_set_constraint_rhs(model, 0, 10.0);
+    ralph_core_set_constraint_rhs(model, 1, 20.0);
     ralph_test_optimize(model);
 
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_OPTIMAL, "Loosen RHS: OPTIMAL");
@@ -5778,7 +5778,7 @@ void test_reoptimization_dual_no_phase1(void) {
 
     /* Tighten RHS significantly: x1 + x2 + x3 <= 5
      * Forces a very different optimum, tests re-solve correctness. */
-    ralph_set_constraint_rhs(model, 0, 5.0);
+    ralph_core_set_constraint_rhs(model, 0, 5.0);
     ralph_test_optimize(model);
 
     st = ralph_test_get_status(model);
@@ -5798,9 +5798,9 @@ void test_reoptimization_dual_no_phase1(void) {
 
     /* Make infeasible: all vars >= 0, x1+x2+x3 <= 5 but also
      * tighten individual bounds to sum > 5 */
-    ralph_set_constraint_rhs(model, 0, 2.0);  /* x1+x2+x3 <= 2 */
-    ralph_set_constraint_rhs(model, 1, 2.0);  /* x1+2*x2 <= 2 */
-    ralph_set_constraint_rhs(model, 2, 2.0);  /* x2+2*x3 <= 2 */
+    ralph_core_set_constraint_rhs(model, 0, 2.0);  /* x1+x2+x3 <= 2 */
+    ralph_core_set_constraint_rhs(model, 1, 2.0);  /* x1+2*x2 <= 2 */
+    ralph_core_set_constraint_rhs(model, 2, 2.0);  /* x2+2*x3 <= 2 */
     ralph_test_optimize(model);
 
     st = ralph_test_get_status(model);
@@ -5840,7 +5840,7 @@ void test_presolve_report_api(void) {
     printf("\n=== Test: Presolve Report API ===\n");
 
     /* API argument validation. */
-    ASSERT(ralph_get_last_presolve_report(NULL, NULL) == -1,
+    ASSERT(ralph_core_get_last_presolve_report(NULL, NULL) == -1,
            "Presolve report getter rejects NULL args");
 
     RalphPresolveReport report;
@@ -5853,7 +5853,7 @@ void test_presolve_report_api(void) {
     ASSERT(ralph_test_optimize(lp_off) == 0, "LP presolve=0 solve call succeeds");
     ASSERT(ralph_test_get_status(lp_off) == RALPH_STATUS_OPTIMAL,
            "LP presolve=0 solve OPTIMAL");
-    ASSERT(ralph_get_last_presolve_report(lp_off, &report) == 0,
+    ASSERT(ralph_core_get_last_presolve_report(lp_off, &report) == 0,
            "LP presolve=0 report retrieved");
     ASSERT(report.used == 0, "LP presolve=0 report marks presolve unused");
     ASSERT(report.mask == 0u, "LP presolve=0 report mask is zero");
@@ -5870,7 +5870,7 @@ void test_presolve_report_api(void) {
     ASSERT(ralph_test_optimize(lp_on) == 0, "LP presolve=1 solve call succeeds");
     ASSERT(ralph_test_get_status(lp_on) == RALPH_STATUS_OPTIMAL,
            "LP presolve=1 solve OPTIMAL");
-    ASSERT(ralph_get_last_presolve_report(lp_on, &report) == 0,
+    ASSERT(ralph_core_get_last_presolve_report(lp_on, &report) == 0,
            "LP presolve=1 report retrieved");
     ASSERT(report.used == 1, "LP presolve=1 report marks presolve used");
     ASSERT(report.mask == 0x310Fu, "LP presolve report preserves configured mask");
@@ -5889,7 +5889,7 @@ void test_presolve_report_api(void) {
     ASSERT(ralph_test_optimize_mip(mip_auto) == 0, "MIP auto-presolve solve call succeeds");
     ASSERT(ralph_test_get_status(mip_auto) == RALPH_STATUS_OPTIMAL,
            "MIP auto-presolve solve OPTIMAL");
-    ASSERT(ralph_get_last_presolve_report(mip_auto, &report) == 0,
+    ASSERT(ralph_core_get_last_presolve_report(mip_auto, &report) == 0,
            "MIP auto-presolve report retrieved");
     ASSERT(report.used == 1, "MIP auto-presolve report marks presolve used");
     ASSERT(report.mask == 0x110Fu, "MIP auto-presolve uses lightweight mask 0x110F");
@@ -5965,24 +5965,24 @@ void test_public_telemetry_snapshot_api(void) {
     RalphLPSolverTelemetry lp_tel;
     RalphLUTelemetry lu_tel;
 
-    ASSERT(ralph_get_last_lp_telemetry(NULL, &lp_tel) == -1,
+    ASSERT(ralph_core_get_last_lp_telemetry(NULL, &lp_tel) == -1,
            "LP telemetry getter rejects NULL model");
-    ASSERT(ralph_get_last_lu_telemetry(NULL, &lu_tel) == -1,
+    ASSERT(ralph_core_get_last_lu_telemetry(NULL, &lu_tel) == -1,
            "LU telemetry getter rejects NULL model");
 
     RalphModel *arg_model = ralph_test_create();
     build_telemetry_lp_case(arg_model);
-    ASSERT(ralph_get_last_lp_telemetry(arg_model, NULL) == -1,
+    ASSERT(ralph_core_get_last_lp_telemetry(arg_model, NULL) == -1,
            "LP telemetry getter rejects NULL output");
-    ASSERT(ralph_get_last_lu_telemetry(arg_model, NULL) == -1,
+    ASSERT(ralph_core_get_last_lu_telemetry(arg_model, NULL) == -1,
            "LU telemetry getter rejects NULL output");
     ralph_test_free(arg_model);
 
     RalphModel *unsolved = ralph_test_create();
     build_telemetry_lp_case(unsolved);
-    ASSERT(ralph_get_last_lp_telemetry(unsolved, &lp_tel) == 0,
+    ASSERT(ralph_core_get_last_lp_telemetry(unsolved, &lp_tel) == 0,
            "Unsolved model returns LP telemetry snapshot");
-    ASSERT(ralph_get_last_lu_telemetry(unsolved, &lu_tel) == 0,
+    ASSERT(ralph_core_get_last_lu_telemetry(unsolved, &lu_tel) == 0,
            "Unsolved model returns LU telemetry snapshot");
     ASSERT(lp_tel.perf_refactor_count == 0,
            "Unsolved model LP telemetry is zeroed");
@@ -5997,9 +5997,9 @@ void test_public_telemetry_snapshot_api(void) {
     ASSERT(ralph_test_optimize_lp(lp_off) == 0, "LP telemetry=0 solve succeeds");
     ASSERT(ralph_test_get_status(lp_off) == RALPH_STATUS_OPTIMAL,
            "LP telemetry=0 solve OPTIMAL");
-    ASSERT(ralph_get_last_lp_telemetry(lp_off, &lp_tel) == 0,
+    ASSERT(ralph_core_get_last_lp_telemetry(lp_off, &lp_tel) == 0,
            "LP telemetry=0 snapshot retrieved");
-    ASSERT(ralph_get_last_lu_telemetry(lp_off, &lu_tel) == 0,
+    ASSERT(ralph_core_get_last_lu_telemetry(lp_off, &lu_tel) == 0,
            "LP telemetry=0 LU snapshot retrieved");
     ASSERT(lp_tel.perf_refactor_count == 0,
            "LP telemetry=0 keeps refactor count at zero");
@@ -6014,9 +6014,9 @@ void test_public_telemetry_snapshot_api(void) {
     ASSERT(ralph_test_optimize_lp(lp_on) == 0, "LP telemetry=1 solve succeeds");
     ASSERT(ralph_test_get_status(lp_on) == RALPH_STATUS_OPTIMAL,
            "LP telemetry=1 solve OPTIMAL");
-    ASSERT(ralph_get_last_lp_telemetry(lp_on, &lp_tel) == 0,
+    ASSERT(ralph_core_get_last_lp_telemetry(lp_on, &lp_tel) == 0,
            "LP telemetry=1 snapshot retrieved");
-    ASSERT(ralph_get_last_lu_telemetry(lp_on, &lu_tel) == 0,
+    ASSERT(ralph_core_get_last_lu_telemetry(lp_on, &lu_tel) == 0,
            "LP telemetry=1 LU snapshot retrieved");
     ASSERT(lp_tel.perf_refactor_count >= 1,
            "LP telemetry=1 records at least one refactor");
@@ -6033,9 +6033,9 @@ void test_public_telemetry_snapshot_api(void) {
     ASSERT(ralph_test_optimize_mip(mip_off) == 0, "MIP telemetry=0 solve succeeds");
     ASSERT(ralph_test_get_status(mip_off) == RALPH_STATUS_OPTIMAL,
            "MIP telemetry=0 solve OPTIMAL");
-    ASSERT(ralph_get_last_lp_telemetry(mip_off, &lp_tel) == 0,
+    ASSERT(ralph_core_get_last_lp_telemetry(mip_off, &lp_tel) == 0,
            "MIP telemetry=0 LP snapshot retrieved");
-    ASSERT(ralph_get_last_lu_telemetry(mip_off, &lu_tel) == 0,
+    ASSERT(ralph_core_get_last_lu_telemetry(mip_off, &lu_tel) == 0,
            "MIP telemetry=0 LU snapshot retrieved");
     ASSERT(lp_tel.perf_refactor_count == 0,
            "MIP telemetry=0 keeps node LP refactor count at zero");
@@ -6052,9 +6052,9 @@ void test_public_telemetry_snapshot_api(void) {
     ASSERT(ralph_test_optimize_mip(mip_on) == 0, "MIP telemetry=1 solve succeeds");
     ASSERT(ralph_test_get_status(mip_on) == RALPH_STATUS_OPTIMAL,
            "MIP telemetry=1 solve OPTIMAL");
-    ASSERT(ralph_get_last_lp_telemetry(mip_on, &lp_tel) == 0,
+    ASSERT(ralph_core_get_last_lp_telemetry(mip_on, &lp_tel) == 0,
            "MIP telemetry=1 LP snapshot retrieved");
-    ASSERT(ralph_get_last_lu_telemetry(mip_on, &lu_tel) == 0,
+    ASSERT(ralph_core_get_last_lu_telemetry(mip_on, &lu_tel) == 0,
            "MIP telemetry=1 LU snapshot retrieved");
     ASSERT(lu_tel.perf_factorize_calls >= 1,
            "MIP telemetry=1 records node LU factorization");
@@ -6066,12 +6066,12 @@ void test_solution_quality_api(void) {
 
     RalphSolutionQuality quality;
 
-    ASSERT(ralph_get_solution_quality(NULL, &quality) == -1,
+    ASSERT(ralph_core_get_solution_quality(NULL, &quality) == -1,
            "Solution quality getter rejects NULL model");
 
     RalphModel *arg_model = ralph_test_create();
     build_telemetry_lp_case(arg_model);
-    ASSERT(ralph_get_solution_quality(arg_model, NULL) == -1,
+    ASSERT(ralph_core_get_solution_quality(arg_model, NULL) == -1,
            "Solution quality getter rejects NULL output");
     ralph_test_free(arg_model);
 
@@ -6082,7 +6082,7 @@ void test_solution_quality_api(void) {
     ASSERT(ralph_test_optimize_lp(verify_off) == 0, "verify=0 solve succeeds");
     ASSERT(ralph_test_get_status(verify_off) == RALPH_STATUS_OPTIMAL,
            "verify=0 solve OPTIMAL");
-    ASSERT(ralph_get_solution_quality(verify_off, &quality) == 0,
+    ASSERT(ralph_core_get_solution_quality(verify_off, &quality) == 0,
            "verify=0 quality snapshot retrieved");
     ASSERT(quality.status == RALPH_STATUS_OPTIMAL,
            "verify=0 quality status reflects solve status");
@@ -6098,7 +6098,7 @@ void test_solution_quality_api(void) {
     ASSERT(ralph_test_get_status(verify_on) == RALPH_STATUS_OPTIMAL ||
            ralph_test_get_status(verify_on) == RALPH_STATUS_IMPRECISE,
            "verify=1 solve status is OPTIMAL/IMPRECISE");
-    ASSERT(ralph_get_solution_quality(verify_on, &quality) == 0,
+    ASSERT(ralph_core_get_solution_quality(verify_on, &quality) == 0,
            "verify=1 quality snapshot retrieved");
     ASSERT(quality.verify_enabled == 1, "verify=1 quality marks verification enabled");
     ASSERT(quality.available == 1, "verify=1 quality metrics are available");
@@ -6126,7 +6126,7 @@ void test_solution_quality_api(void) {
     ASSERT(ralph_test_optimize_lp(infeas) == 0, "infeasible solve call succeeds");
     ASSERT(ralph_test_get_status(infeas) == RALPH_STATUS_INFEASIBLE,
            "infeasible model returns INFEASIBLE");
-    ASSERT(ralph_get_solution_quality(infeas, &quality) == 0,
+    ASSERT(ralph_core_get_solution_quality(infeas, &quality) == 0,
            "infeasible quality snapshot retrieved");
     ASSERT(quality.status == RALPH_STATUS_INFEASIBLE,
            "infeasible quality status reflects INFEASIBLE");
@@ -6192,7 +6192,7 @@ void test_lp_progress_callback_api(void) {
     cb.on_progress = test_lp_progress_probe_cb;
     cb.user_data = &probe;
     cb.every_n_iterations = 1;
-    ralph_set_lp_progress_callback(model, &cb);
+    ralph_core_set_lp_progress_callback(model, &cb);
 
     ASSERT(ralph_test_optimize_lp(model) == 0, "LP progress: solve call succeeds");
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_OPTIMAL ||
@@ -6201,7 +6201,7 @@ void test_lp_progress_callback_api(void) {
     ASSERT(probe.calls > 0, "LP progress callback invoked");
     ASSERT(probe.last_elapsed_sec >= 0.0, "LP progress elapsed time is non-negative");
 
-    ralph_set_lp_progress_callback(model, NULL);
+    ralph_core_set_lp_progress_callback(model, NULL);
     probe.calls = 0;
     ASSERT(ralph_test_optimize_lp(model) == 0, "LP progress: solve succeeds after clear");
     ASSERT(probe.calls == 0, "LP progress callback cleared");
@@ -6225,7 +6225,7 @@ void test_lp_progress_cancel_callback_api(void) {
     cb.on_progress = test_lp_progress_probe_cb;
     cb.user_data = &probe;
     cb.every_n_iterations = 1;
-    ralph_set_lp_progress_callback(model, &cb);
+    ralph_core_set_lp_progress_callback(model, &cb);
 
     ASSERT(ralph_test_optimize_lp(model) == 0, "LP progress-cancel: solve call succeeds");
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_TIME_LIMIT,
@@ -6250,14 +6250,14 @@ void test_lp_cancel_poll_callback_api(void) {
     memset(&cb, 0, sizeof(cb));
     cb.should_cancel = test_lp_cancel_probe_cb;
     cb.user_data = &probe;
-    ralph_set_lp_cancel_callback(model, &cb);
+    ralph_core_set_lp_cancel_callback(model, &cb);
 
     ASSERT(ralph_test_optimize_lp(model) == 0, "LP cancel-poll: solve call succeeds");
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_TIME_LIMIT,
            "LP cancel-poll: status is TIME_LIMIT");
     ASSERT(probe.polls >= 1, "LP cancel-poll callback invoked");
 
-    ralph_set_lp_cancel_callback(model, NULL);
+    ralph_core_set_lp_cancel_callback(model, NULL);
     ASSERT(ralph_test_optimize_lp(model) == 0, "LP cancel-poll: solve succeeds after clear");
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_OPTIMAL ||
            ralph_test_get_status(model) == RALPH_STATUS_IMPRECISE,
@@ -6282,7 +6282,7 @@ void test_lp_callbacks_are_orthogonal_to_mip(void) {
     progress_cb.on_progress = test_lp_progress_probe_cb;
     progress_cb.user_data = &progress_probe;
     progress_cb.every_n_iterations = 1;
-    ralph_set_lp_progress_callback(model, &progress_cb);
+    ralph_core_set_lp_progress_callback(model, &progress_cb);
 
     LPCancelProbe cancel_probe;
     memset(&cancel_probe, 0, sizeof(cancel_probe));
@@ -6291,7 +6291,7 @@ void test_lp_callbacks_are_orthogonal_to_mip(void) {
     memset(&cancel_cb, 0, sizeof(cancel_cb));
     cancel_cb.should_cancel = test_lp_cancel_probe_cb;
     cancel_cb.user_data = &cancel_probe;
-    ralph_set_lp_cancel_callback(model, &cancel_cb);
+    ralph_core_set_lp_cancel_callback(model, &cancel_cb);
 
     ASSERT(ralph_test_optimize_mip(model) == 0, "LP/MIP callback orthogonality: MIP solve call succeeds");
     ASSERT(ralph_test_get_status(model) == RALPH_STATUS_OPTIMAL,

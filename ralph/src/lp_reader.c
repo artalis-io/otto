@@ -1038,7 +1038,7 @@ static void lp_parser_free(LPParser *p) {
  * Public Interface
  * ============================================================================ */
 
-int ralph_read_lp(RalphLPModel *model, const char *filename) {
+int ralph_core_read_lp(RalphLPModel *model, const char *filename) {
     if (!model || !filename) return -1;
 
     LPParser *p = lp_parser_create();

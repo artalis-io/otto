@@ -396,7 +396,7 @@ static int mps_is_pos_inf(double x) {
  * Public Interface
  * ============================================================================ */
 
-int ralph_write_lp(const RalphLPModel *model, const char *filename) {
+int ralph_core_write_lp(const RalphLPModel *model, const char *filename) {
     if (!model || !filename) return -1;
 
     /* Access internal LPModel */
@@ -442,7 +442,7 @@ error:
     return -1;
 }
 
-int ralph_write_mps(const RalphLPModel *model, const char *filename) {
+int ralph_core_write_mps(const RalphLPModel *model, const char *filename) {
     if (!model || !filename) return -1;
 
     extern LPModel* ralph_get_lp_model(const RalphLPModel *model);
@@ -584,7 +584,7 @@ int ralph_write_mps(const RalphLPModel *model, const char *filename) {
  * Solution Format Writer
  * ============================================================================ */
 
-int ralph_write_solution_buf(const RalphLPModel *model, char *buf, size_t buf_size) {
+int ralph_core_write_solution_buf(const RalphLPModel *model, char *buf, size_t buf_size) {
     if (!model || !buf || buf_size == 0) return -1;
 
     extern LPModel* ralph_get_lp_model(const RalphLPModel *model);
@@ -660,7 +660,7 @@ int ralph_write_solution_buf(const RalphLPModel *model, char *buf, size_t buf_si
     return (int)pos;
 }
 
-int ralph_write_solution(const RalphLPModel *model, const char *filename) {
+int ralph_core_write_solution(const RalphLPModel *model, const char *filename) {
     if (!model || !filename) return -1;
 
     /* Estimate buffer size */
@@ -669,7 +669,7 @@ int ralph_write_solution(const RalphLPModel *model, const char *filename) {
     char *buf = (char *)malloc(buf_size);
     if (!buf) return -1;
 
-    int len = ralph_write_solution_buf(model, buf, buf_size);
+    int len = ralph_core_write_solution_buf(model, buf, buf_size);
     if (len < 0) {
         free(buf);
         return -1;

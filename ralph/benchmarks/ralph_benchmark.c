@@ -513,15 +513,15 @@ static SolveResult solve_with_glpk(const char *problem_path, double time_limit_s
     }
 
     num_vars = ralph_test_get_num_vars(model);
-    ralph_set_int_param_id(model, RALPH_PARAM_VERBOSE, 0);
-    ralph_set_int_param_id(model, RALPH_PARAM_PRESOLVE, 0);
-    ralph_set_int_param_id(model, RALPH_PARAM_DETECT_SPECIAL, 0);
-    ralph_set_dbl_param_id(model, RALPH_PARAM_TIME_LIMIT, time_limit_sec);
-    ralph_set_int_param_id(model, RALPH_PARAM_MAX_ITERATIONS, 10000000);
-    ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+    ralph_core_set_int_param_id(model, RALPH_PARAM_VERBOSE, 0);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_PRESOLVE, 0);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_DETECT_SPECIAL, 0);
+    ralph_core_set_dbl_param_id(model, RALPH_PARAM_TIME_LIMIT, time_limit_sec);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_MAX_ITERATIONS, 10000000);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
                            (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK);
-    ralph_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 1);
-    ralph_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 1);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                            (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL);
 
     {
@@ -2177,8 +2177,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Install GLPK: brew install glpk (macOS) or apt install glpk-utils (Linux)\n");
         return 1;
     }
-    ralph_unregister_all_lp_external_adapters();
-    if (ralph_register_lp_external_glpk_oop(NULL) != 0) {
+    ralph_core_unregister_all_lp_external_adapters();
+    if (ralph_core_register_lp_external_glpk_oop(NULL) != 0) {
         fprintf(stderr, "Error: failed to register GLPK out-of-process adapter.\n");
         return 1;
     }

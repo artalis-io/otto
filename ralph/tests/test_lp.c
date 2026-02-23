@@ -187,7 +187,7 @@ static void test_write_lp(void) {
     ASSERT(model != NULL, "Model created");
 
     ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
-    ralph_set_problem_name(model, "test_write");
+    ralph_core_set_problem_name(model, "test_write");
 
     /* Add variables */
     ralph_test_add_var(model, 0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
@@ -276,7 +276,7 @@ static void test_write_mps_roundtrip(void) {
     ASSERT(model1 != NULL, "Model 1 created");
 
     ralph_test_set_obj_sense(model1, RALPH_MINIMIZE);
-    ralph_set_problem_name(model1, "mps roundtrip");
+    ralph_core_set_problem_name(model1, "mps roundtrip");
     ralph_test_set_obj_offset(model1, 4.0);
 
     /* x: continuous [0,2], y: integer [0,3], z: binary */
@@ -356,10 +356,10 @@ static void test_name_api(void) {
     ASSERT(ralph_test_get_var_name(model, 100) == NULL, "Out of bounds returns NULL");
 
     /* Problem name */
-    ret = ralph_set_problem_name(model, "test_problem");
+    ret = ralph_core_set_problem_name(model, "test_problem");
     ASSERT(ret == 0, "Set problem name");
 
-    name = ralph_get_problem_name(model);
+    name = ralph_core_get_problem_name(model);
     ASSERT(name != NULL && strcmp(name, "test_problem") == 0, "Get problem name");
 
     ralph_test_free(model);
