@@ -49,6 +49,7 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/lp_dispatch.c \
           $(SRC_DIR)/lp_conflict.c \
           $(SRC_DIR)/lp_sensitivity.c \
+          $(SRC_DIR)/lp_error.c \
           $(SRC_DIR)/simplex.c \
           $(SRC_DIR)/lp_telemetry_core.c \
           $(SRC_DIR)/lp_telemetry_solver.c \

@@ -22,6 +22,14 @@ int ralph_mip_optimize(RalphMIPModel *model) {
     return ralph_core_optimize_mip((RalphModel *)model);
 }
 
+int ralph_mip_get_last_error(const RalphMIPModel *model, RalphAPIError *out) {
+    return ralph_core_get_last_error((const RalphModel *)model, out);
+}
+
+int ralph_mip_clear_error(RalphMIPModel *model) {
+    return ralph_core_clear_error((RalphModel *)model);
+}
+
 RalphLPStatus ralph_mip_get_status(const RalphMIPModel *model) {
     return (RalphLPStatus)ralph_core_get_status((const RalphModel *)model);
 }
