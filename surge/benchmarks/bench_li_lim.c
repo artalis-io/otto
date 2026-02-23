@@ -1,4 +1,5 @@
 #include "surge.h"
+#include "sg_parallel.h"
 
 #include <ctype.h>
 #include <glob.h>
@@ -54,6 +55,9 @@ static void sg_print_usage(const char *argv0) {
     printf("  --time-limit <sec>    ALNS max wall time per case (default: 0 = unlimited)\n");
     printf("  --seed <n>            Deterministic seed (default: 42)\n");
     printf("  --non-deterministic   Use time-based random seed\n");
+    printf("  --population          Use population-based parallel search\n");
+    printf("  --threads <n>         Thread count for population mode (default: auto)\n");
+    printf("  --generations <n>     Generation count for population mode (default: 3)\n");
     printf("  --telemetry           Print per-operator telemetry after each case\n");
     printf("  --help                Show this help\n");
     printf("\n");
@@ -206,6 +210,9 @@ int main(int argc, char **argv) {
     uint64_t seed = 42;
     int deterministic = 1;
     int show_telemetry = 0;
+    int use_population = 0;
+    uint32_t pop_threads = 0;
+    uint32_t pop_generations = 3;
     int filter_start = argc;
     glob_t matches;
     SGCaseFile *cases = NULL;
@@ -249,6 +256,18 @@ int main(int argc, char **argv) {
         }
         if (strcmp(argv[i], "--non-deterministic") == 0) {
             deterministic = 0;
+            continue;
+        }
+        if (strcmp(argv[i], "--population") == 0) {
+            use_population = 1;
+            continue;
+        }
+        if (strcmp(argv[i], "--threads") == 0 && i + 1 < (size_t)argc) {
+            pop_threads = (uint32_t)atoi(argv[++i]);
+            continue;
+        }
+        if (strcmp(argv[i], "--generations") == 0 && i + 1 < (size_t)argc) {
+            pop_generations = (uint32_t)atoi(argv[++i]);
             continue;
         }
         if (strcmp(argv[i], "--telemetry") == 0) {
@@ -298,6 +317,9 @@ int main(int argc, char **argv) {
         printf("  deterministic=true seed=%" PRIu64 "\n", seed);
     } else {
         printf("  deterministic=false\n");
+    }
+    if (use_population) {
+        printf("  population=true threads=%u generations=%u\n", pop_threads, pop_generations);
     }
     printf("\n");
     printf("%-14s %-9s %-8s %-6s %-6s %-10s %-5s %-10s %-8s %-8s\n",
@@ -375,7 +397,15 @@ int main(int argc, char **argv) {
         }
 
         start = sg_now_seconds();
-        solve_status = sg_solve(ctx);
+        if (use_population) {
+            SGPopulationConfig pop_cfg;
+            pop_cfg.num_threads = pop_threads;
+            pop_cfg.population_size = 0;
+            pop_cfg.num_generations = pop_generations;
+            solve_status = sg_solve_population(ctx, &pop_cfg);
+        } else {
+            solve_status = sg_solve(ctx);
+        }
         elapsed = sg_now_seconds() - start;
 
         request_count = sg_get_request_count(ctx);
