@@ -40,6 +40,8 @@ struct RalphModel {
     int max_nodes;
     int max_cut_rounds;
     int method;  /* 0=primal simplex, 1=dual simplex, 2=auto */
+    int lp_algorithm;      /* Requested LP algorithm (extends method with barrier value). */
+    int barrier_crossover; /* Requested barrier crossover mode (API-level capability gate). */
     int pricing; /* 0=Dantzig, 1=Steepest edge, 2=Devex (default), 3=Partial */
     int detect_special; /* 1=detect LAP/network structure, 0=disable */
     int node_pool_capacity; /* Pre-allocated B&B node pool size (default 1024) */
@@ -100,6 +102,8 @@ struct RalphModel {
     /* Statistics */
     int iteration_count;
     RalphPresolveReport last_presolve_report;
+    RalphLPSolveAlgorithmReport last_lp_algorithm_report;
+    int last_lp_algorithm_report_valid;
 
     /* Basis staged before first optimize() (applied when simplex tableau is created) */
     int staged_basis_m;
@@ -140,6 +144,115 @@ static void ralph_clear_mip_start_internal(RalphModel *model) {
 static void ralph_reset_presolve_report(RalphModel *model) {
     if (!model) return;
     memset(&model->last_presolve_report, 0, sizeof(model->last_presolve_report));
+}
+
+static int ralph_lp_algorithm_value_valid(int value) {
+    return value >= (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX &&
+           value <= (int)RALPH_LP_ALGORITHM_BARRIER;
+}
+
+static int ralph_lp_crossover_value_valid(int value) {
+    return value >= (int)RALPH_LP_CROSSOVER_AUTO &&
+           value <= (int)RALPH_LP_CROSSOVER_ON;
+}
+
+static int ralph_set_requested_lp_algorithm_internal(RalphModel *model, int value) {
+    if (!model || !ralph_lp_algorithm_value_valid(value)) return -1;
+    model->lp_algorithm = value;
+    if (value <= (int)RALPH_LP_ALGORITHM_AUTO) {
+        model->method = value;
+    } else {
+        /* Barrier is currently unsupported by the simplex kernel.
+         * Keep legacy "method" at auto for backward-compatible introspection. */
+        model->method = (int)RALPH_LP_ALGORITHM_AUTO;
+    }
+    return 0;
+}
+
+static int ralph_set_requested_barrier_crossover_internal(RalphModel *model, int value) {
+    if (!model || !ralph_lp_crossover_value_valid(value)) return -1;
+    model->barrier_crossover = value;
+    return 0;
+}
+
+static void ralph_prepare_lp_algorithm_report(const RalphModel *model,
+                                              RalphLPSolveAlgorithmReport *report,
+                                              int *simplex_method) {
+    RalphLPAlgorithm requested_algorithm = RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
+    RalphLPAlgorithm effective_algorithm = RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
+    RalphLPCrossoverMode requested_crossover = RALPH_LP_CROSSOVER_AUTO;
+    RalphLPCrossoverMode effective_crossover = RALPH_LP_CROSSOVER_AUTO;
+    int fallback_applied = 0;
+    RalphLPFallbackReason fallback_reason = RALPH_LP_FALLBACK_NONE;
+    int effective_method = (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
+
+    if (model && ralph_lp_algorithm_value_valid(model->lp_algorithm)) {
+        requested_algorithm = (RalphLPAlgorithm)model->lp_algorithm;
+    }
+    if (model && ralph_lp_crossover_value_valid(model->barrier_crossover)) {
+        requested_crossover = (RalphLPCrossoverMode)model->barrier_crossover;
+    }
+
+    effective_algorithm = requested_algorithm;
+    effective_crossover = requested_crossover;
+
+    if (requested_algorithm == RALPH_LP_ALGORITHM_BARRIER) {
+        effective_algorithm = RALPH_LP_ALGORITHM_AUTO;
+        fallback_applied = 1;
+        fallback_reason = RALPH_LP_FALLBACK_BARRIER_UNAVAILABLE;
+    }
+    if (effective_algorithm != RALPH_LP_ALGORITHM_BARRIER &&
+        requested_crossover != RALPH_LP_CROSSOVER_AUTO) {
+        effective_crossover = RALPH_LP_CROSSOVER_AUTO;
+        if (!fallback_applied) {
+            fallback_applied = 1;
+            fallback_reason = RALPH_LP_FALLBACK_CROSSOVER_UNAVAILABLE;
+        }
+    }
+
+    switch (effective_algorithm) {
+        case RALPH_LP_ALGORITHM_DUAL_SIMPLEX:
+            effective_method = 1;
+            break;
+        case RALPH_LP_ALGORITHM_AUTO:
+            effective_method = 2;
+            break;
+        case RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX:
+        default:
+            effective_method = 0;
+            break;
+    }
+
+    if (report) {
+        report->requested_algorithm = requested_algorithm;
+        report->effective_algorithm = effective_algorithm;
+        report->requested_crossover = requested_crossover;
+        report->effective_crossover = effective_crossover;
+        report->fallback_applied = fallback_applied;
+        report->fallback_reason = fallback_reason;
+    }
+    if (simplex_method) {
+        *simplex_method = effective_method;
+    }
+}
+
+static void ralph_reset_lp_algorithm_report(RalphModel *model) {
+    if (!model) return;
+    memset(&model->last_lp_algorithm_report, 0, sizeof(model->last_lp_algorithm_report));
+    model->last_lp_algorithm_report.requested_algorithm = RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
+    model->last_lp_algorithm_report.effective_algorithm = RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
+    model->last_lp_algorithm_report.requested_crossover = RALPH_LP_CROSSOVER_AUTO;
+    model->last_lp_algorithm_report.effective_crossover = RALPH_LP_CROSSOVER_AUTO;
+    model->last_lp_algorithm_report.fallback_applied = 0;
+    model->last_lp_algorithm_report.fallback_reason = RALPH_LP_FALLBACK_NONE;
+    model->last_lp_algorithm_report_valid = 0;
+}
+
+static void ralph_store_lp_algorithm_report(RalphModel *model,
+                                            const RalphLPSolveAlgorithmReport *report) {
+    if (!model || !report) return;
+    model->last_lp_algorithm_report = *report;
+    model->last_lp_algorithm_report_valid = 1;
 }
 
 static int ralph_is_valid_sense(RalphSense sense) {
@@ -355,6 +468,7 @@ static void ralph_invalidate_solve_state(RalphModel *model) {
     model->node_count = 0;
     model->iteration_count = 0;
     ralph_reset_presolve_report(model);
+    ralph_reset_lp_algorithm_report(model);
 }
 
 /* ============================================================================
@@ -382,6 +496,8 @@ RalphModel* ralph_create(void) {
     model->max_nodes = RALPH_DEFAULT_NODE_LIMIT;
     model->max_cut_rounds = 0;  /* Disabled by default */
     model->method = 0;  /* Default: primal simplex */
+    model->lp_algorithm = (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
+    model->barrier_crossover = (int)RALPH_LP_CROSSOVER_AUTO;
     model->pricing = 2; /* Default: Devex */
     model->scaling = 1;    /* Default: single-round geometric mean */
     model->crash = 0;      /* Default: off (all-slack basis) */
@@ -407,6 +523,7 @@ RalphModel* ralph_create(void) {
     model->mip_start_status = RALPH_MIP_START_NONE;
     model->mip_start_repair_mode = RALPH_MIP_START_REPAIR_STRICT;
     ralph_reset_presolve_report(model);
+    ralph_reset_lp_algorithm_report(model);
 
     return model;
 }
@@ -574,6 +691,15 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     }
     int solve_as_mip = (mode == RALPH_SOLVE_MIP_ONLY) ? 1 :
                        (mode == RALPH_SOLVE_LP_ONLY) ? 0 : model_is_mip;
+    RalphLPSolveAlgorithmReport lp_algorithm_report;
+    int lp_algorithm_report_ready = 0;
+    int lp_simplex_method = model->method;
+
+    ralph_reset_lp_algorithm_report(model);
+    if (!solve_as_mip) {
+        ralph_prepare_lp_algorithm_report(model, &lp_algorithm_report, &lp_simplex_method);
+        lp_algorithm_report_ready = 1;
+    }
 
     /* Finalize model if needed */
     if (!model->lp_model->A) {
@@ -625,6 +751,9 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                     model->best_bound = lap_obj;
                     model->node_count = 0;
                     model->iteration_count = 0;
+                    if (lp_algorithm_report_ready) {
+                        ralph_store_lp_algorithm_report(model, &lp_algorithm_report);
+                    }
 
                     detect_lap_free(&lap_sig);
                     return 0;
@@ -662,6 +791,9 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                     model->best_bound = net_obj;
                     model->node_count = 0;
                     model->iteration_count = 0;
+                    if (lp_algorithm_report_ready) {
+                        ralph_store_lp_algorithm_report(model, &lp_algorithm_report);
+                    }
 
                     detect_network_free(&net_sig);
                     return 0;
@@ -752,6 +884,9 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
             }
             free(trivial_sol);
             if (presolved) presolve_free(presolved);
+            if (lp_algorithm_report_ready) {
+                ralph_store_lp_algorithm_report(model, &lp_algorithm_report);
+            }
             return 0;
         }
     }
@@ -768,6 +903,9 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
             postsolve(presolved, &empty, model->solution);
         }
         if (presolved) presolve_free(presolved);
+        if (lp_algorithm_report_ready) {
+            ralph_store_lp_algorithm_report(model, &lp_algorithm_report);
+        }
         return 0;
     }
 
@@ -803,6 +941,9 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
 
                     detect_lap_free(&lap_sig);
                     if (presolved) presolve_free(presolved);
+                    if (lp_algorithm_report_ready) {
+                        ralph_store_lp_algorithm_report(model, &lp_algorithm_report);
+                    }
                     return 0;
                 }
                 free(model->solution);
@@ -849,6 +990,9 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
 
                     detect_network_free(&net_sig);
                     if (presolved) presolve_free(presolved);
+                    if (lp_algorithm_report_ready) {
+                        ralph_store_lp_algorithm_report(model, &lp_algorithm_report);
+                    }
                     return 0;
                 }
                 free(model->solution);
@@ -1051,7 +1195,7 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         }
         model->lp_solver->force_two_phase = model->force_two_phase;
         model->lp_solver->trace_phase1 = model->trace_phase1;
-        model->lp_solver->method = model->method;
+        model->lp_solver->method = lp_simplex_method;
         model->lp_solver->lp_progress_callback = model->lp_progress_callback;
         model->lp_solver->has_lp_progress_callback = model->has_lp_progress_callback;
         model->lp_solver->lp_cancel_callback = model->lp_cancel_callback;
@@ -1166,6 +1310,10 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         presolve_free(presolved);
     }
 
+    if (lp_algorithm_report_ready) {
+        ralph_store_lp_algorithm_report(model, &lp_algorithm_report);
+    }
+
     return 0;
 }
 
@@ -1214,6 +1362,24 @@ int ralph_get_reduced_costs(const RalphModel *model, double *rc) {
 
     int n = ralph_get_num_vars(model);
     memcpy(rc, model->reduced_costs, n * sizeof(double));
+    return 0;
+}
+
+int ralph_get_lp_capabilities(RalphLPCapabilities *caps) {
+    if (!caps) return -1;
+    caps->supports_primal_simplex = 1;
+    caps->supports_dual_simplex = 1;
+    caps->supports_barrier = 0;
+    caps->supports_crossover = 0;
+    return 0;
+}
+
+int ralph_get_last_lp_algorithm_report(const RalphModel *model,
+                                       RalphLPSolveAlgorithmReport *report) {
+    if (!model || !report) return -1;
+    if (ralph_is_mip(model)) return -1;
+    if (!model->last_lp_algorithm_report_valid) return -1;
+    *report = model->last_lp_algorithm_report;
     return 0;
 }
 
@@ -2750,6 +2916,32 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .aliases = {"LPThreads"},
             .alias_count = 1
         },
+        [RALPH_PARAM_LP_ALGORITHM] = {
+            .id = RALPH_PARAM_LP_ALGORITHM,
+            .name = "lp_algorithm",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
+            .has_min = 1,
+            .min_value = (double)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX,
+            .has_max = 1,
+            .max_value = (double)RALPH_LP_ALGORITHM_BARRIER,
+            .aliases = {"LPAlgorithm"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_BARRIER_CROSSOVER] = {
+            .id = RALPH_PARAM_BARRIER_CROSSOVER,
+            .name = "barrier_crossover",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_LP_CROSSOVER_AUTO,
+            .has_min = 1,
+            .min_value = (double)RALPH_LP_CROSSOVER_AUTO,
+            .has_max = 1,
+            .max_value = (double)RALPH_LP_CROSSOVER_ON,
+            .aliases = {"BarrierCrossover"},
+            .alias_count = 1
+        },
         [RALPH_PARAM_TIME_LIMIT] = {
             .id = RALPH_PARAM_TIME_LIMIT,
             .name = "time_limit",
@@ -2889,7 +3081,11 @@ int ralph_set_int_param_id(RalphModel *model, RalphParamId param, int value) {
             model->max_cut_rounds = value;
             break;
         case RALPH_PARAM_METHOD:
-            model->method = value;
+            if (value < (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX ||
+                value > (int)RALPH_LP_ALGORITHM_AUTO) {
+                return -1;
+            }
+            if (ralph_set_requested_lp_algorithm_internal(model, value) != 0) return -1;
             break;
         case RALPH_PARAM_PRICING:
             model->pricing = value;
@@ -2948,6 +3144,12 @@ int ralph_set_int_param_id(RalphModel *model, RalphParamId param, int value) {
         case RALPH_PARAM_LP_THREADS:
             if (value < 0) return -1;
             model->lp_threads = value;
+            break;
+        case RALPH_PARAM_LP_ALGORITHM:
+            if (ralph_set_requested_lp_algorithm_internal(model, value) != 0) return -1;
+            break;
+        case RALPH_PARAM_BARRIER_CROSSOVER:
+            if (ralph_set_requested_barrier_crossover_internal(model, value) != 0) return -1;
             break;
         default:
             return -1;
@@ -3066,6 +3268,12 @@ int ralph_get_int_param_id(const RalphModel *model, RalphParamId param, int *val
             break;
         case RALPH_PARAM_LP_THREADS:
             *value = model->lp_threads;
+            break;
+        case RALPH_PARAM_LP_ALGORITHM:
+            *value = model->lp_algorithm;
+            break;
+        case RALPH_PARAM_BARRIER_CROSSOVER:
+            *value = model->barrier_crossover;
             break;
         default:
             return -1;
