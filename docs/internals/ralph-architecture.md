@@ -2,39 +2,58 @@
 
 ## Overview
 
-Ralph is a complete LP (Linear Programming) and MIP (Mixed Integer Programming) solver implementing industrial-strength algorithms. This document describes the high-level architecture and how the components interact.
+Ralph is a complete LP (Linear Programming) and MIP (Mixed Integer Programming) solver.
+This document describes the high-level architecture and current API/dispatch boundaries.
+
+## API Design Philosophy (Feb 2026 Baseline)
+
+- LP and MIP entry points are explicit (`ralph_optimize_lp`, `ralph_optimize_mip`).
+- `ralph_optimize` remains as a compatibility dispatcher for legacy callers.
+- Parameter contracts are typed and scope-aware first (LP-only, MIP-only, shared),
+  with string-name APIs preserved as wrappers.
+- LP algorithm routing (requested vs effective algorithm/crossover and fallback reason)
+  is explicit and reportable.
+- Internal modules are kept orthogonal: API facade, LP dispatch, MIP↔LP adapter,
+  diagnostics/telemetry, and solver kernels.
 
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Public API (ralph.h)                      │
-│  ralph_create, ralph_add_var, ralph_add_constraint, ralph_solve  │
-└─────────────────────────────────────────────────────────────────┘
-                                 │
-                                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Model Layer (model.c)                       │
-│         LPModel: variables, constraints, bounds, objective       │
-└─────────────────────────────────────────────────────────────────┘
-                                 │
-                    ┌────────────┴────────────┐
-                    ▼                         ▼
-┌──────────────────────────┐    ┌──────────────────────────┐
-│   LP Solver (simplex.c)   │    │   MIP Solver (mip.c)     │
-│   Revised Simplex Method  │◄───│   Branch and Bound       │
-└──────────────────────────┘    └──────────────────────────┘
-            │                              │
-            ▼                              ▼
-┌──────────────────────────┐    ┌──────────────────────────┐
-│  LU Factorization (lu.c)  │    │  Cutting Planes (cuts.c) │
-│  Basis matrix operations  │    │  Gomory, MIR cuts        │
-└──────────────────────────┘    └──────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                          Public API (ralph.h)                        │
+│  Model build/edit/query + solve APIs + params + diagnostics         │
+│  ralph_optimize_lp / ralph_optimize_mip / ralph_optimize (compat)   │
+└─────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                       API Facade Layer (ralph.c)                    │
+│  Compatibility wrappers, parameter routing, solve orchestration      │
+└─────────────────────────────────────────────────────────────────────┘
+                     │                               │
+                     ▼                               ▼
+┌───────────────────────────────────┐   ┌────────────────────────────────┐
+│ LP Dispatch (lp_dispatch.c/.h)    │   │ MIP↔LP Adapter (mip_lp_adapter)│
+│ LP algorithm/backend plan/fallback│   │ Node/probe/recovery boundaries │
+└───────────────────────────────────┘   └────────────────────────────────┘
+                     │                               │
+                     └───────────────┬───────────────┘
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                          Model Layer (model.c)                      │
+│          LPModel: variables, constraints, bounds, objective         │
+└─────────────────────────────────────────────────────────────────────┘
+                     │                               │
+                     ▼                               ▼
+┌──────────────────────────┐           ┌──────────────────────────┐
+│ LP Solver (simplex/dual) │◄──────────│   MIP Solver (mip.c)     │
+│ Revised simplex + dual   │           │ Branch-and-bound + cuts  │
+└──────────────────────────┘           └──────────────────────────┘
             │
             ▼
 ┌──────────────────────────┐
-│  Sparse Matrix (sparse.c) │
-│  CSC format operations    │
+│ LU + Sparse Kernels       │
+│ lu.c / lu_sparse.c / CSC  │
 └──────────────────────────┘
 ```
 

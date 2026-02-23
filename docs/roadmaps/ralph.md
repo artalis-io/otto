@@ -4,7 +4,20 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-23, `c65fe09`) — LP algorithm/capability API baseline:
+**Current** (2026-02-23, `abd62fa`) — LP dispatch module extraction baseline:
+extracted LP algorithm/backend routing and fallback planning from `ralph.c` into a dedicated
+internal module (`ralph/src/lp_dispatch.c`, `ralph/src/lp_dispatch.h`) so LP solve selection,
+normalization, and capability logic are centralized and unit-testable in isolation.
+This keeps API behavior unchanged while reducing dispatch coupling in the main API facade.
+Added an orthogonal module test target `test-lp-dispatch` and wired it into Ralph test targets.
+Latest gates:
+`make -C ralph test-lp-dispatch` PASS (48/48),
+`make -C ralph test-lp-algorithm-api` PASS (93/93),
+`make -C ralph test-api` PASS (13/13), and
+`make -C ralph test-netlib-gate-small` PASS (26 files, dense fallback files: 0, no unexpected
+regressions, artifacts: `/tmp/netlib-regression-gate-20260223-110000`).
+
+Previous: (2026-02-23, `c65fe09`) — LP algorithm/capability API baseline:
 added LP algorithm API surface with explicit capability and fallback reporting:
 `ralph_get_lp_capabilities`, `ralph_get_last_lp_algorithm_report`,
 `RalphLPAlgorithm`, `RalphLPCrossoverMode`, and `RalphLPFallbackReason`.
@@ -20,8 +33,6 @@ Latest gates:
 `make -C ralph test-api` PASS (13/13), and
 `make -C ralph test-netlib-gate-small` PASS (26 files, dense fallback files: 0, no unexpected
 regressions, artifacts: `/tmp/netlib-regression-gate-20260223-102818`).
-Known existing aggregate issue remains unchanged: `make -C ralph test` still fails on pre-existing
-P5/P6 objective assertions in `test_main` (750/754).
 
 Previous: (2026-02-23, `8e5e8bf`) — fixed-basis LP sensitivity/ranging API baseline:
 added LP-only fixed-basis sensitivity APIs for constraint RHS, objective coefficients, and
@@ -532,14 +543,60 @@ one by one.
     `ralph_compute_lp_conflict()` with row/lower-bound/upper-bound members.
   - Added deterministic deletion-filter conflict module (`lp_conflict`) and kept
     `ralph_compute_lp_iis()` as row-only compatibility wrapper.
-  - Added optional Farkas-seeded row pruning (`use_farkas_seed`) with safe fallback.
-  - Added standalone tests `test-lp-conflict` (orthogonal to telemetry/logging).
-- Optional barrier/crossover API surface (if adopted in solver core).
+- Added optional Farkas-seeded row pruning (`use_farkas_seed`) with safe fallback.
+- Added standalone tests `test-lp-conflict` (orthogonal to telemetry/logging).
+- Optional barrier/crossover execution backend (API surface + dispatch planning already done).
 
 Exit criteria for this consolidated plan:
 - No regressions against NETLIB gates or existing API suites.
 - New APIs are LP/MIP-orthogonal by design, with focused unit tests per feature.
 - Existing callers using current API remain source-compatible.
+
+### API Design Philosophy (Current Baseline)
+
+- Keep LP and MIP entry points explicit: `ralph_optimize_lp()` and `ralph_optimize_mip()`.
+- Keep `ralph_optimize()` as a compatibility dispatcher only; new first-party code should use
+  explicit LP/MIP entry points.
+- Keep parameter scope explicit and typed first (`RalphParamId` + LP/MIP-scoped setters/getters);
+  string-name APIs remain compatibility wrappers.
+- Keep algorithm routing explicit and auditable: requested LP algorithm/crossover, effective path,
+  and fallback reason are queryable (`ralph_get_lp_capabilities`,
+  `ralph_get_last_lp_algorithm_report`).
+- Keep internals orthogonal: API facade (`ralph.c`) calls specialized modules
+  (`lp_dispatch`, `mip_lp_adapter`, `lp_determinism`, `lp_conflict`, telemetry modules).
+- Keep compatibility non-breaking but bounded: legacy APIs are preserved, while first-party
+  modules migrate to explicit and typed APIs incrementally.
+
+### First-Party Legacy API Migration Sweep (2026-02-23)
+
+Scan scope: `ralph/src`, `ralph/benchmarks`, `fuelwise/src`, `fuelwise/examples`, `fuelwise/api`.
+
+High-priority upgrade candidates:
+- `fuelwise/src/fw_refuel.c`: move LP solves to `ralph_optimize_lp()`, MIP solves to
+  `ralph_optimize_mip()`, and migrate hot string params (`verbose`, `max_cut_rounds`,
+  `presolve`, `presolve_mask`) to typed ID APIs.
+- `fuelwise/examples/refueling.c`: replace `ralph_optimize()` with explicit LP/MIP optimize calls
+  and LP/MIP-scoped param setters for sample code parity.
+- `ralph/src/ralph_api.c`: replace solve dispatch with explicit LP/MIP optimize calls and move
+  timeout param to typed ID setter.
+- `ralph/benchmarks/ralph_benchmark.c`, `ralph/benchmarks/bench_vs_glpk.c`,
+  `ralph/benchmarks/compare_glpk.c`, `ralph/benchmarks/bench_sizes.c`,
+  `ralph/benchmarks/bench_mip.c`, `ralph/benchmarks/bench_lap.c`,
+  `ralph/benchmarks/bench_netflow.c`: migrate benchmark harnesses to explicit optimize APIs and
+  typed/scoped params so benchmark behavior reflects the modern API contracts.
+
+Intentional compatibility usage to keep:
+- `ralph/src/lap.c` uses `ralph_optimize()` as a model-level auto-dispatch path.
+- Compatibility coverage in `ralph/tests` should continue exercising legacy string+dispatcher
+  paths.
+
+### Next API Feature Item
+
+10.4 LP backend expansion behind `lp_dispatch`:
+- Keep current fallback semantics and compatibility behavior.
+- Add a real non-simplex backend slot (barrier implementation or external backend adapter),
+  then enable capability gating via `ralph_get_lp_capabilities`.
+- Add orthogonal tests for: capability-on path, crossover behavior, and fallback parity.
 
 ---
 
