@@ -14,7 +14,6 @@
 #include <limits.h>
 
 #include "benders.h"
-#include "ralph_core.h"
 #include "ralph_lp.h"
 
 /* ============================================================================
