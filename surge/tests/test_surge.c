@@ -9201,6 +9201,271 @@ static void test_travel_profile_validation(void) {
     sg_free(ctx);
 }
 
+/* ===== Plan Validation Tests ===== */
+
+/* Helper: create a simple model with 1 depot, 1 vehicle, 2 delivery requests */
+static SGContext *make_validate_ctx(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 10000) == SG_STATUS_OK);
+    /* Vehicle: capacity 100, shift 0-10000 */
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100.0);
+    /* Request 0: delivery task 0 at (10,0), TW [0,5000], svc 60 */
+    add_delivery_request(ctx, 10.0, 0.0, 0, 5000, 60, -10.0);
+    /* Request 1: delivery task 1 at (20,0), TW [0,5000], svc 60 */
+    add_delivery_request(ctx, 20.0, 0.0, 0, 5000, 60, -10.0);
+    return ctx;
+}
+
+static void test_validate_plan_api(void) {
+    SGContext *ctx = make_validate_ctx();
+    uint32_t task_ids[] = {0, 1};
+    SGPlanRoute route;
+    SGStatus status;
+
+    route.vehicle_id = 0;
+    route.task_ids = task_ids;
+    route.task_count = 2;
+
+    status = sg_validate_plan(ctx, 1, &route);
+    assert(status == SG_STATUS_OK);
+    assert(sg_get_violation_count(ctx) == 0);
+
+    /* Solution export should work */
+    assert(sg_solution_get_route_count(ctx) == 1);
+    assert(sg_solution_get_route_vehicle_id(ctx, 0) == 0);
+    assert(sg_solution_get_route_stop_count(ctx, 0) == 2);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    sg_free(ctx);
+}
+
+static void test_validate_plan_timing(void) {
+    SGContext *ctx = make_validate_ctx();
+    uint32_t task_ids[] = {0, 1};
+    SGPlanRoute route;
+    SGSolutionStop stop;
+
+    route.vehicle_id = 0;
+    route.task_ids = task_ids;
+    route.task_count = 2;
+
+    assert(sg_validate_plan(ctx, 1, &route) == SG_STATUS_OK);
+
+    /* Check ETAs: stop 0 arrives after travel from depot (0,0) to (10,0) */
+    assert(sg_solution_get_route_stop(ctx, 0, 0, &stop) == SG_STATUS_OK);
+    assert(stop.task_id == 0);
+    assert(stop.arrival > 0.0);  /* travel distance = 10 */
+    assert(stop.service_start >= stop.arrival);
+    assert(stop.departure > stop.service_start);  /* has 60s service time */
+
+    /* Stop 1 */
+    assert(sg_solution_get_route_stop(ctx, 0, 1, &stop) == SG_STATUS_OK);
+    assert(stop.task_id == 1);
+    assert(stop.arrival > 0.0);
+
+    /* Route should have positive distance */
+    assert(sg_solution_get_route_distance(ctx, 0) > 0.0);
+    assert(sg_solution_get_route_duration(ctx, 0) > 0.0);
+
+    sg_free(ctx);
+}
+
+static void test_validate_plan_tw_violation(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    SGViolation v;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 10000) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100.0);
+    /* Task 0: TW [0, 5], very tight — svc 60 */
+    add_delivery_request(ctx, 10.0, 0.0, 0, 5, 60, -10.0);
+
+    {
+        uint32_t task_ids[] = {0};
+        SGPlanRoute route;
+        route.vehicle_id = 0;
+        route.task_ids = task_ids;
+        route.task_count = 1;
+
+        assert(sg_validate_plan(ctx, 1, &route) == SG_STATUS_OK);
+        /* Arrival at (10,0) = travel time 10 > tw_late 5 → violation */
+        assert(sg_get_violation_count(ctx) >= 1);
+        assert(sg_get_violation(ctx, 0, &v) == SG_STATUS_OK);
+        assert(v.type == SG_VIOLATION_HARD_TW);
+        assert(v.vehicle_id == 0);
+        assert(v.stop_index == 0);
+        assert(v.actual > v.limit);
+        assert(v.limit == 5.0);
+    }
+
+    sg_free(ctx);
+}
+
+static void test_validate_plan_capacity_violation(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    SGViolation v;
+
+    /* Use PD request where pickup adds positive demand, exceeding capacity */
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 10000) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 5.0);  /* capacity 5 */
+    /* PD request: pickup demand 10, exceeds capacity 5 */
+    add_pd_request(ctx,
+        10.0, 0.0, 0, 5000, 60,  /* pickup at (10,0) */
+        20.0, 0.0, 0, 5000, 60,  /* delivery at (20,0) */
+        10.0);  /* demand 10 */
+
+    {
+        uint32_t task_ids[] = {0, 1};  /* pickup first, then delivery */
+        SGPlanRoute route;
+        uint32_t vi;
+        int found = 0;
+        route.vehicle_id = 0;
+        route.task_ids = task_ids;
+        route.task_count = 2;
+
+        assert(sg_validate_plan(ctx, 1, &route) == SG_STATUS_OK);
+        for (vi = 0; vi < sg_get_violation_count(ctx); vi++) {
+            assert(sg_get_violation(ctx, vi, &v) == SG_STATUS_OK);
+            if (v.type == SG_VIOLATION_CAPACITY) {
+                found = 1;
+                assert(v.actual > v.limit);
+            }
+        }
+        assert(found);
+    }
+
+    sg_free(ctx);
+}
+
+static void test_validate_plan_pd_order(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    SGViolation v;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 10000) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100.0);
+    add_pd_request(ctx,
+        10.0, 0.0, 0, 5000, 60,
+        20.0, 0.0, 0, 5000, 60,
+        10.0);
+
+    {
+        /* Delivery BEFORE pickup — task 1 (delivery) then task 0 (pickup) */
+        uint32_t task_ids[] = {1, 0};
+        SGPlanRoute route;
+        int found = 0;
+        uint32_t vi;
+        route.vehicle_id = 0;
+        route.task_ids = task_ids;
+        route.task_count = 2;
+
+        assert(sg_validate_plan(ctx, 1, &route) == SG_STATUS_OK);
+        for (vi = 0; vi < sg_get_violation_count(ctx); vi++) {
+            assert(sg_get_violation(ctx, vi, &v) == SG_STATUS_OK);
+            if (v.type == SG_VIOLATION_PD_ORDER) {
+                found = 1;
+            }
+        }
+        assert(found);
+    }
+
+    sg_free(ctx);
+}
+
+static void test_validate_plan_unassigned(void) {
+    SGContext *ctx = make_validate_ctx();
+    /* Only assign request 0 (task 0), leave request 1 (task 1) unassigned */
+    uint32_t task_ids[] = {0};
+    SGPlanRoute route;
+
+    route.vehicle_id = 0;
+    route.task_ids = task_ids;
+    route.task_count = 1;
+
+    assert(sg_validate_plan(ctx, 1, &route) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 1);
+    assert(sg_solution_get_unassigned_request(ctx, 0) == 1);
+
+    sg_free(ctx);
+}
+
+static void test_validate_plan_multiple_violations(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t count;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 10000) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 5.0);  /* capacity 5 */
+
+    /* PD request: tight TW on pickup, high demand */
+    add_pd_request(ctx,
+        10.0, 0.0, 0, 5, 60,    /* pickup TW [0,5], arrival ~10 → TW violation */
+        20.0, 0.0, 0, 5000, 60,
+        10.0);  /* demand 10 > capacity 5 */
+
+    {
+        /* Delivery BEFORE pickup → PD order violation + TW + capacity */
+        uint32_t task_ids[] = {1, 0};
+        SGPlanRoute route;
+        route.vehicle_id = 0;
+        route.task_ids = task_ids;
+        route.task_count = 2;
+
+        assert(sg_validate_plan(ctx, 1, &route) == SG_STATUS_OK);
+        count = sg_get_violation_count(ctx);
+        assert(count >= 2);  /* At least PD_ORDER + something else */
+    }
+
+    sg_free(ctx);
+}
+
+static void test_validate_plan_json(void) {
+    const char *json =
+        "{"
+        "  \"config\": {\"max_iterations\": 100, \"seed\": 42},"
+        "  \"depots\": [{\"x\": 0, \"y\": 0, \"tw_early\": 0, \"tw_late\": 10000}],"
+        "  \"vehicles\": [{\"start_depot_id\": 0, \"end_depot_id\": 0,"
+        "    \"shift_early\": 0, \"shift_late\": 10000, \"capacity\": [100]}],"
+        "  \"tasks\": ["
+        "    {\"type\": \"delivery\", \"x\": 10, \"y\": 0,"
+        "     \"tw_early\": 0, \"tw_late\": 5000, \"service_seconds\": 60,"
+        "     \"demand\": [-10]},"
+        "    {\"type\": \"delivery\", \"x\": 20, \"y\": 0,"
+        "     \"tw_early\": 0, \"tw_late\": 5000, \"service_seconds\": 60,"
+        "     \"demand\": [-10]}"
+        "  ],"
+        "  \"requests\": ["
+        "    {\"delivery_task_id\": 0},"
+        "    {\"delivery_task_id\": 1}"
+        "  ],"
+        "  \"plan\": ["
+        "    {\"vehicle_id\": 0, \"task_ids\": [0, 1]}"
+        "  ]"
+        "}";
+
+    int code = 0;
+    size_t out_len = 0;
+    char *resp = sg_api_solve(json, strlen(json), &code, &out_len);
+
+    assert(resp != NULL);
+    assert(code == 200);
+    /* Should contain violations (empty array) and routes with ETAs */
+    assert(strstr(resp, "\"violations\"") != NULL);
+    assert(strstr(resp, "\"routes\"") != NULL);
+    assert(strstr(resp, "\"arrival\"") != NULL);
+    assert(strstr(resp, "\"status\":\"ok\"") != NULL ||
+           strstr(resp, "\"status\": \"ok\"") != NULL);
+
+    free(resp);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -9507,12 +9772,22 @@ int main(void) {
     RUN_TEST(test_deterministic_with_profiles);
     RUN_TEST(test_travel_profile_validation);
 
+    /* Plan validation */
+    RUN_TEST(test_validate_plan_api);
+    RUN_TEST(test_validate_plan_timing);
+    RUN_TEST(test_validate_plan_tw_violation);
+    RUN_TEST(test_validate_plan_capacity_violation);
+    RUN_TEST(test_validate_plan_pd_order);
+    RUN_TEST(test_validate_plan_unassigned);
+    RUN_TEST(test_validate_plan_multiple_violations);
+    RUN_TEST(test_validate_plan_json);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 244);
+    assert(tests_run == 252);
 #else
-    assert(tests_run == 235);
+    assert(tests_run == 243);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

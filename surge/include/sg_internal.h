@@ -298,6 +298,11 @@ struct SGContext {
     uint32_t num_destroy_ops;
     uint32_t num_repair_ops;
 
+    /* Plan validation violations */
+    SGViolation *violations;
+    uint32_t num_violations;
+    uint32_t violations_capacity;
+
     /* Error diagnostics */
     char last_error[256];
 
@@ -819,6 +824,9 @@ int sg_route_find_best_insertion_no_new_vehicle(const SGContext *ctx, const SGRo
                                                 uint32_t *best_delivery_pos_out,
                                                 double *best_route_distance_out);
 void sg_route_restore_from_backup(SGRouteSolution *sol, SGRouteSolution *backup);
+
+/* sg_validate.c */
+SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes, const SGPlanRoute *routes);
 
 /* sg_solve.c */
 void sg_adaptive_q_bounds(int num_requests, int config_q_min, int config_q_max,

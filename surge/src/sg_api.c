@@ -1170,6 +1170,124 @@ SGStatus sg_api_build_model_file(SGContext *ctx, const char *path) {
 }
 
 /* ============================================================================
+ * Violation type name mapping
+ * ============================================================================ */
+
+static const char *violation_type_name(SGViolationType type) {
+    switch (type) {
+        case SG_VIOLATION_HARD_TW:           return "hard_tw";
+        case SG_VIOLATION_CAPACITY:          return "capacity";
+        case SG_VIOLATION_PD_ORDER:          return "pd_order";
+        case SG_VIOLATION_RIDE_TIME:         return "ride_time";
+        case SG_VIOLATION_MAX_DURATION:      return "max_duration";
+        case SG_VIOLATION_MAX_DISTANCE:      return "max_distance";
+        case SG_VIOLATION_MAX_TASKS:         return "max_tasks";
+        case SG_VIOLATION_FORBIDDEN_VEHICLE: return "forbidden_vehicle";
+        case SG_VIOLATION_QUALIFICATION:     return "qualification";
+        case SG_VIOLATION_UNKNOWN_TASK:      return "unknown_task";
+        case SG_VIOLATION_DUPLICATE_TASK:    return "duplicate_task";
+        default:                             return "unknown";
+    }
+}
+
+static void write_violations(const SGContext *ctx, ShJsonWriter *w) {
+    uint32_t i, count;
+    SGViolation v;
+
+    count = sg_get_violation_count(ctx);
+    sh_json_write_key(w, "violations");
+    sh_json_write_array_start(w);
+    for (i = 0; i < count; i++) {
+        if (sg_get_violation(ctx, i, &v) == SG_STATUS_OK) {
+            sh_json_write_object_start(w);
+            sh_json_write_kv_string(w, "type", violation_type_name(v.type));
+            if (v.vehicle_id != UINT32_MAX)
+                sh_json_write_kv_int(w, "vehicle_id", v.vehicle_id);
+            if (v.stop_index != UINT32_MAX)
+                sh_json_write_kv_int(w, "stop_index", v.stop_index);
+            if (v.task_id != UINT32_MAX)
+                sh_json_write_kv_int(w, "task_id", v.task_id);
+            if (v.request_id != UINT32_MAX)
+                sh_json_write_kv_int(w, "request_id", v.request_id);
+            sh_json_write_kv_double_fmt(w, "actual", v.actual, 2);
+            sh_json_write_kv_double_fmt(w, "limit", v.limit, 2);
+            sh_json_write_object_end(w);
+        }
+    }
+    sh_json_write_array_end(w);
+}
+
+/* ============================================================================
+ * Plan Parsing
+ * ============================================================================ */
+
+static int parse_plan_routes(const ShJsonValue *plan_arr,
+                             SGPlanRoute **routes_out, uint32_t *num_routes_out,
+                             uint32_t **task_buf_out) {
+    size_t count, i;
+    SGPlanRoute *routes;
+    uint32_t total_tasks = 0;
+    uint32_t *task_buf;
+    uint32_t offset;
+
+    if (!plan_arr || sh_json_type(plan_arr) != SH_JSON_ARRAY) {
+        return -1;
+    }
+
+    count = sh_json_array_len(plan_arr);
+    if (count == 0) {
+        *routes_out = NULL;
+        *num_routes_out = 0;
+        *task_buf_out = NULL;
+        return 0;
+    }
+
+    /* First pass: count total tasks */
+    for (i = 0; i < count; i++) {
+        ShJsonValue *route = sh_json_array_get(plan_arr, i);
+        ShJsonValue *tids;
+        if (!route || sh_json_type(route) != SH_JSON_OBJECT) return -1;
+        tids = sh_json_get(route, "task_ids");
+        if (!tids || sh_json_type(tids) != SH_JSON_ARRAY) return -1;
+        total_tasks += (uint32_t)sh_json_array_len(tids);
+    }
+
+    routes = (SGPlanRoute *)malloc(count * sizeof(SGPlanRoute));
+    task_buf = total_tasks > 0
+               ? (uint32_t *)malloc((size_t)total_tasks * sizeof(uint32_t))
+               : NULL;
+    if (!routes || (total_tasks > 0 && !task_buf)) {
+        free(routes);
+        free(task_buf);
+        return -1;
+    }
+
+    /* Second pass: fill */
+    offset = 0;
+    for (i = 0; i < count; i++) {
+        ShJsonValue *route = sh_json_array_get(plan_arr, i);
+        ShJsonValue *tids = sh_json_get(route, "task_ids");
+        size_t tlen = sh_json_array_len(tids);
+        size_t j;
+
+        routes[i].vehicle_id = (uint32_t)sh_json_as_int(
+            sh_json_get(route, "vehicle_id"), 0);
+        routes[i].task_ids = task_buf + offset;
+        routes[i].task_count = (uint32_t)tlen;
+
+        for (j = 0; j < tlen; j++) {
+            task_buf[offset++] = (uint32_t)sh_json_as_int(
+                sh_json_array_get(tids, j), 0);
+        }
+    }
+
+    *routes_out = routes;
+    *num_routes_out = (uint32_t)count;
+    *task_buf_out = task_buf;
+    return 0;
+}
+
+/* ============================================================================
  * sg_api_write_solution — write solution to streaming JSON writer
  * ============================================================================ */
 
@@ -1352,21 +1470,164 @@ char *sg_api_solve(const char *json_body, size_t body_len,
     }
 
     build_status = sg_api_build_model(ctx, root);
-    sh_arena_free(arena);
-    arena = NULL;
 
     if (build_status != SG_STATUS_OK) {
-        const char *err = sg_get_last_error(ctx);
-        char *resp;
-        if (err && err[0]) {
-            resp = make_error_json(400, err, out_len);
-        } else {
-            resp = make_error_json(400, "failed to build model", out_len);
+        sh_arena_free(arena);
+        {
+            const char *err = sg_get_last_error(ctx);
+            char *resp;
+            if (err && err[0]) {
+                resp = make_error_json(400, err, out_len);
+            } else {
+                resp = make_error_json(400, "failed to build model", out_len);
+            }
+            sg_free(ctx);
+            if (status_code) *status_code = 400;
+            return resp;
         }
-        sg_free(ctx);
-        if (status_code) *status_code = 400;
-        return resp;
     }
+
+    /* Check for plan validation mode */
+    {
+        ShJsonValue *plan_arr = sh_json_get(root, "plan");
+        if (plan_arr && sh_json_type(plan_arr) == SH_JSON_ARRAY) {
+            SGPlanRoute *plan_routes = NULL;
+            uint32_t num_plan_routes = 0;
+            uint32_t *task_buf = NULL;
+
+            if (parse_plan_routes(plan_arr, &plan_routes, &num_plan_routes,
+                                  &task_buf) != 0) {
+                sh_arena_free(arena);
+                sg_free(ctx);
+                if (status_code) *status_code = 400;
+                return make_error_json(400, "invalid plan format", out_len);
+            }
+
+            sh_arena_free(arena);
+            arena = NULL;
+
+            solve_status = sg_validate_plan(ctx, num_plan_routes, plan_routes);
+            free(plan_routes);
+            free(task_buf);
+
+            sh_json_buf_init(&jb);
+            sh_json_writer_init(&w, sh_json_buf_write, &jb);
+
+            sg_api_write_solution(ctx, &w, solve_status);
+
+            /* Rewind: remove trailing '}' to append violations */
+            if (!sh_json_writer_error(&w) && jb.len > 0) {
+                /* Insert violations before the closing brace.
+                   sg_api_write_solution wrote a complete object. We need to
+                   splice the violations array into it. Instead, we write
+                   a new response with violations included. */
+            }
+
+            /* Actually, just build a fresh response with violations */
+            sh_json_buf_free(&jb);
+            sh_json_buf_init(&jb);
+            sh_json_writer_init(&w, sh_json_buf_write, &jb);
+
+            /* Write response with violations */
+            sh_json_write_object_start(&w);
+            if (solve_status == SG_STATUS_OK) {
+                SGStats stats;
+                uint32_t route_count, ri, unassigned_count;
+
+                sg_get_stats(ctx, &stats);
+                sh_json_write_kv_string(&w, "status", "ok");
+
+                sh_json_write_key(&w, "stats");
+                sh_json_write_object_start(&w);
+                sh_json_write_kv_int(&w, "iterations", stats.iterations);
+                sh_json_write_kv_double_fmt(&w, "total_cost", stats.total_cost, 2);
+                sh_json_write_kv_double_fmt(&w, "total_distance", stats.total_distance, 2);
+                sh_json_write_kv_int(&w, "unassigned", stats.unassigned);
+                sh_json_write_kv_int(&w, "vehicles_used", stats.vehicles_used);
+                sh_json_write_kv_double_fmt(&w, "total_waiting", stats.total_waiting, 2);
+                sh_json_write_kv_double_fmt(&w, "total_overtime", stats.total_overtime, 2);
+                sh_json_write_kv_double_fmt(&w, "total_tw_penalty", stats.total_tw_penalty, 2);
+                sh_json_write_object_end(&w);
+
+                route_count = sg_solution_get_route_count(ctx);
+                sh_json_write_key(&w, "routes");
+                sh_json_write_array_start(&w);
+                for (ri = 0; ri < route_count; ri++) {
+                    uint32_t vehicle_id = sg_solution_get_route_vehicle_id(ctx, ri);
+                    uint32_t stop_count = sg_solution_get_route_stop_count(ctx, ri);
+                    uint32_t si;
+
+                    sh_json_write_object_start(&w);
+                    sh_json_write_kv_int(&w, "vehicle_id", vehicle_id);
+                    sh_json_write_kv_double_fmt(&w, "distance",
+                        sg_solution_get_route_distance(ctx, ri), 2);
+                    sh_json_write_kv_double_fmt(&w, "duration",
+                        sg_solution_get_route_duration(ctx, ri), 2);
+
+                    sh_json_write_key(&w, "stops");
+                    sh_json_write_array_start(&w);
+                    for (si = 0; si < stop_count; si++) {
+                        SGSolutionStop stop;
+                        if (sg_solution_get_route_stop(ctx, ri, si, &stop) == SG_STATUS_OK) {
+                            const char *type_str;
+                            sh_json_write_object_start(&w);
+                            sh_json_write_kv_int(&w, "request_id", stop.request_id);
+                            sh_json_write_kv_int(&w, "task_id", stop.task_id);
+                            switch (stop.stop_type) {
+                                case SG_STOP_TYPE_PICKUP:  type_str = "pickup"; break;
+                                case SG_STOP_TYPE_DELIVERY: type_str = "delivery"; break;
+                                case SG_STOP_TYPE_SERVICE:  type_str = "service"; break;
+                                default:                    type_str = "unknown"; break;
+                            }
+                            sh_json_write_kv_string(&w, "type", type_str);
+                            sh_json_write_kv_double_fmt(&w, "arrival", stop.arrival, 2);
+                            sh_json_write_kv_double_fmt(&w, "service_start", stop.service_start, 2);
+                            sh_json_write_kv_double_fmt(&w, "departure", stop.departure, 2);
+                            sh_json_write_object_end(&w);
+                        }
+                    }
+                    sh_json_write_array_end(&w);
+                    sh_json_write_object_end(&w);
+                }
+                sh_json_write_array_end(&w);
+
+                unassigned_count = sg_get_unassigned(ctx);
+                sh_json_write_key(&w, "unassigned");
+                sh_json_write_array_start(&w);
+                for (ri = 0; ri < unassigned_count; ri++) {
+                    sh_json_write_int(&w,
+                        sg_solution_get_unassigned_request(ctx, ri));
+                }
+                sh_json_write_array_end(&w);
+            } else {
+                sh_json_write_kv_string(&w, "status", "error");
+            }
+
+            /* Violations array */
+            write_violations(ctx, &w);
+
+            {
+                const char *err = sg_get_last_error(ctx);
+                sh_json_write_kv_string(&w, "error", err ? err : "");
+            }
+            sh_json_write_object_end(&w);
+
+            sg_free(ctx);
+
+            if (sh_json_writer_error(&w) || !jb.buf) {
+                sh_json_buf_free(&jb);
+                if (status_code) *status_code = 500;
+                return make_error_json(500, "failed to write response JSON", out_len);
+            }
+
+            if (status_code) *status_code = 200;
+            if (out_len) *out_len = jb.len;
+            return sh_json_buf_take(&jb);
+        }
+    }
+
+    sh_arena_free(arena);
+    arena = NULL;
 
     if (sg_validate_model(ctx) != SG_STATUS_OK) {
         const char *err = sg_get_last_error(ctx);

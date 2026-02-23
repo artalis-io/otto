@@ -199,6 +199,11 @@ SGStatus sg_load_cordeau_darp(SGContext *ctx, const char *file_path);
 
 SGStatus sg_solve(SGContext *ctx);
 
+/* Plan validation — compute ETAs + check constraints on a fixed route */
+SGStatus sg_validate_plan(SGContext *ctx, uint32_t num_routes, const SGPlanRoute *routes);
+uint32_t sg_get_violation_count(const SGContext *ctx);
+SGStatus sg_get_violation(const SGContext *ctx, uint32_t index, SGViolation *out);
+
 double sg_get_total_cost(const SGContext *ctx);
 double sg_get_total_distance(const SGContext *ctx);
 uint32_t sg_get_unassigned(const SGContext *ctx);

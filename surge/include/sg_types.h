@@ -94,4 +94,35 @@ typedef struct {
     uint32_t trip_index;    /* 0-based trip number within the vehicle's shift */
 } SGSolutionStop;
 
+/* Plan validation */
+typedef enum {
+    SG_VIOLATION_HARD_TW = 1,
+    SG_VIOLATION_CAPACITY,
+    SG_VIOLATION_PD_ORDER,
+    SG_VIOLATION_RIDE_TIME,
+    SG_VIOLATION_MAX_DURATION,
+    SG_VIOLATION_MAX_DISTANCE,
+    SG_VIOLATION_MAX_TASKS,
+    SG_VIOLATION_FORBIDDEN_VEHICLE,
+    SG_VIOLATION_QUALIFICATION,
+    SG_VIOLATION_UNKNOWN_TASK,
+    SG_VIOLATION_DUPLICATE_TASK
+} SGViolationType;
+
+typedef struct {
+    SGViolationType type;
+    uint32_t vehicle_id;
+    uint32_t stop_index;
+    uint32_t request_id;
+    uint32_t task_id;
+    double actual;
+    double limit;
+} SGViolation;
+
+typedef struct {
+    uint32_t vehicle_id;
+    const uint32_t *task_ids;
+    uint32_t task_count;
+} SGPlanRoute;
+
 #endif /* SURGE_SG_TYPES_H */

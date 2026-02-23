@@ -318,6 +318,11 @@ void sg_free(SGContext *ctx) {
         ctx->final_solution = NULL;
     }
 
+    free(ctx->violations);
+    ctx->violations = NULL;
+    ctx->num_violations = 0;
+    ctx->violations_capacity = 0;
+
     free(ctx->initial_route_vehicle_ids);
     ctx->initial_route_vehicle_ids = NULL;
     free(ctx->initial_route_request_ids);
@@ -2487,4 +2492,38 @@ double sg_solution_get_route_total_work(const SGContext *ctx, uint32_t route_ind
         return 0.0;
     }
     return ctx->final_solution->route_total_work[vid];
+}
+
+/* ============================================================================
+ * Plan Validation
+ * ============================================================================ */
+
+SGStatus sg_validate_plan(SGContext *ctx, uint32_t num_routes, const SGPlanRoute *routes) {
+    SGStatus status;
+
+    if (!ctx) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    sg_clear_error(ctx);
+
+    status = sg_validate_model(ctx);
+    if (status != SG_STATUS_OK) {
+        return status;
+    }
+
+    return sg_validate_plan_impl(ctx, num_routes, routes);
+}
+
+uint32_t sg_get_violation_count(const SGContext *ctx) {
+    if (!ctx) return 0;
+    return ctx->num_violations;
+}
+
+SGStatus sg_get_violation(const SGContext *ctx, uint32_t index, SGViolation *out) {
+    if (!ctx || !out || index >= ctx->num_violations) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    *out = ctx->violations[index];
+    return SG_STATUS_OK;
 }
