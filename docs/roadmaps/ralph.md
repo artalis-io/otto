@@ -4,7 +4,24 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-23) — monolithic API surface removed; modular LP/MIP headers only:
+**Current** (2026-02-23) — LP wall-clock guard + NETLIB timeout-equivalent gate baseline:
+- Added explicit LP wall-clock guard in simplex/dual solve paths (including recovery loops), so
+  `time_limit` is enforced deterministically and does not rely on external process timeout.
+- Kept sparse Markowitz as default LU path (no dense fallback regressions introduced).
+- Updated NETLIB regression gate classification: solved runs with `ralph.status == "timeout"`
+  are treated as timeout-equivalent (not status/objective mismatches).
+- Updated NETLIB baseline manifest (`ralph/benchmarks/netlib_regression_baseline.json`) to 29 known
+  timeouts by adding:
+  - `25fv47.mps`
+  - `degen3.mps`
+Latest gates:
+`./ralph/test_ralph` PASS (762/762),
+`make -C ralph test-simplex-policy` PASS (20/20), and
+`make -C ralph test-netlib-gate` PASS (84 files, timeout files 29, status/objective/invalid mismatches 0,
+dense fallback files 0, no unexpected regressions; artifacts:
+`/tmp/netlib-regression-gate-20260224-001612`).
+
+Previous: (2026-02-23) — monolithic API surface removed; modular LP/MIP headers only:
 - Removed monolithic public header surface (`ralph/include/ralph.h`) entirely.
 - Introduced `ralph/include/ralph_core.h` as internal-only core API for Ralph internals/tests.
 - Migrated Ralph internal code/tests/benchmarks from `#include "ralph.h"` to
@@ -2846,65 +2863,134 @@ Evidence: pricing time is a meaningful tail on degenerate long runs (not the pri
 Implementation: refine pricing scan cadence/refresh behavior for large sparse degenerate bases while preserving pivot quality.
 Success gate: reduce `pricing_ms` by at least 30% on `80bau3b` without increasing iteration count by more than 10%.
 
-### 8.11 No-Regression Improvement Plan (Next Iterations)
+### 8.11 Item 1: Long-Term Parity Path (Refactor Pressure + Reinversion Control)
 
-Goal: close the remaining GLPK gap by reducing (a) reinversion/refactor pressure and (b) per-iteration
-kernel cost, while preserving full NETLIB status/objective parity.
+Objective: close the remaining GLPK gap by reducing policy-driven reinversion pressure while preserving LU
+hard-safety behavior and full NETLIB correctness parity.
 
-Guardrails (must pass on every change):
+Observed baseline evidence (from `/tmp/netlib-regression-gate-20260224-001612`):
+- `25fv47`: timeout with very high periodic refactor volume (`periodic_policy_count=554`, `periodic_lu_health_count=363`), dense fallback remains `0`.
+- `degen3`: timeout with almost entirely policy-driven periodic refactors (`periodic_policy_count=441`, `periodic_lu_health_count=2`), dense fallback remains `0`.
+- Interpretation: the current bottleneck on outliers is reinversion frequency/cost policy, not sparse LU fallback correctness.
+
+Design constraints (non-negotiable):
+- LU hard-safety triggers remain authoritative (`lu_needs_refactorization` path is untouched functionally).
+- Any policy adaptation must be orthogonal to LU numeric safety and testable in isolation.
+- Keep one lever per commit to preserve attribution and rollback clarity.
+
+Guardrails (required for each phase):
 - `make -C ralph test`
 - `make -C ralph test-netlib-gate-small`
 - `make -C ralph test-netlib-gate`
 - Full NETLIB GLPK comparison (`--glpk`) with zero new status/objective/invalid-solution mismatches
-- Dense fallback files must remain `0` on solved comparable set
+- Dense fallback files remain `0` on solved comparable set
 
-Acceptance policy:
-- Promote only if geometric mean `Ralph/GLPK` time ratio improves or is neutral within noise,
-  and no required canary regresses by more than 10% wall time (`fit1p`, `nesm`, `bandm`, `scagr25`, `degen3`).
-- Any correctness mismatch or new timeout in previously passing canaries is a hard reject.
-- Tune one lever at a time (single-feature commits) to preserve attribution.
+Promotion/reject policy:
+- Promote only if geometric mean `Ralph/GLPK` time ratio is improved or neutral within noise and canaries do not regress more than 10% (`fit1p`, `nesm`, `bandm`, `scagr25`, `degen3`).
+- Hard reject on any new correctness mismatch or timeout in previously passing canaries.
 
-Execution tracks (ordered):
+Implementation phases (ordered):
+1. Phase A (behavior-preserving): extract periodic refactor policy into a dedicated module with unit-test seam.
+2. Phase B (policy pressure control): bounded periodic budget/cooldown for long degenerate runs, policy-triggered only.
+3. Phase C (pressure model refinement): cap/smooth degeneracy pressure mapping without weakening LU health gates.
+4. Phase D (cost-focused follow-up): refactor wall-time and triangular solve throughput once policy pressure is stabilized.
 
-1. Refactor pressure control (frequency, not safety)
-   - Keep LU hard-safety refactor triggers authoritative.
-   - Tighten policy-only periodic reinversion with bounded cooldown and pressure decay in long degenerate runs.
-   - Separate telemetry counters: `policy_periodic`, `health_forced`, `safety_forced`.
-   - Target: lower policy-driven refactors on `degen3`/`fit1p` without increasing fallback or instability.
+#### Phase A Plan (First)
 
-2. Refactor wall-time reduction
-   - Extend incremental basis extraction fast paths (span rewrite + tail shift) to more layout-change patterns.
-   - Reduce avoidable clears/rebuilds in refactor staging buffers.
-   - Target: `refactor.all_ms` down >=20% on `fit1p` and `80bau3b`.
+Goal: isolate scheduler logic before tuning; keep behavior identical.
 
-3. Triangular solve kernel throughput
-   - Optimize hot sparse triangular paths (`solve_L*`, `solve_U*`, sparse FTRAN/BTRAN apply loops) with
-     branch-light inner loops and cache-local batching.
-   - Target: per-iteration time down >=20% on `scfxm3`/`ganges` class with stable iteration counts.
+Scope:
+- Introduce `ralph/src/lp_refactor_policy.c` + `ralph/include/lp_refactor_policy.h`.
+- Move pure policy math/decision logic out of `simplex.c`:
+  - interval bounds and pressure synthesis
+  - periodic run eligibility
+  - phase-2 cooldown/pressure-decay application
+- Keep runtime side effects (telemetry writes, refactor calls) in `simplex.c`.
 
-4. Degeneracy stabilization without over-refactor
-   - Prefer bounded anti-degeneracy actions (short Bland hold + conservative perturb) before policy periodic reinvert.
-   - Keep explicit attempt caps to avoid long-tail stalls.
-   - Target: reduce periodic-policy refactor share on `degen3` while maintaining objective/status parity.
+Expected file touch set:
+- `ralph/src/simplex.c` (call-site rewiring only)
+- `ralph/src/lp_refactor_policy.c` (new pure-policy module)
+- `ralph/include/lp_refactor_policy.h` (new API for policy engine)
+- `ralph/Makefile` (compile new module)
+- `ralph/tests/test_simplex_policy.c` (expanded unit cases, same behavioral expectations)
 
-5. Pricing-tail cleanup
-   - Continue adaptive pricing refresh tuning only after tracks 1-4 stabilize.
-   - Target: `pricing_ms` down >=20% on `80bau3b` with <=10% iteration drift.
+Unit-test plan (Phase A):
+- Preserve existing scheduler outputs via current test hook vectors.
+- Add explicit equivalence cases for:
+  - high degeneracy + low LU-health (tight policy)
+  - high degeneracy + healthy LU (relaxed policy)
+  - cooldown suppression window behavior
+  - pressure-decay adjusted run pressure
+- Ensure no LU module behavior change tests are needed beyond existing `test-lu-markowitz` and gate runs.
 
-Operational cadence:
-- Run focused A/B first (`fit1p`, `nesm`, `degen3`, `bandm`, `scagr25`, plus one per-iter hotspot).
-- If focused pass, run `test-netlib-gate-small`.
-- If small gate pass, run full `test-netlib-gate`.
-- If full gate pass, refresh GLPK comparison and update baseline section with commit hash + artifact path.
+Phase A gates:
+1. `make -C ralph test-simplex-policy`
+2. `make -C ralph test-lu-markowitz`
+3. `make -C ralph test`
+4. Focused benchmark parity check (`25fv47`, `degen3`, `fit1p`, `nesm`, `bandm`, `scagr25`) expecting no material drift
+5. `make -C ralph test-netlib-gate-small`
 
-Progress update (2026-02-22):
-- Track 2 instrumentation landed for basis extraction in refactor path:
-  `basis_fastpath_hits`, `basis_cols_rewritten`, `basis_tail_shift_bytes`
-  (exported in benchmark JSON under `refactor`).
-- Added guarded incremental hook in `build_basis_matrix` for layout-change
-  handling; currently kept conservative (`use_sparse_patch = 0`) to preserve
-  no-regression behavior while telemetry informs the next tuning pass.
-- Gates on this state: `test-simplex-policy` PASS (20/20),
-  `test-lu-markowitz` PASS (59/59),
-  `test-netlib-gate-small` PASS (`/tmp/netlib-regression-gate-20260222-090821`),
-  full `test-netlib-gate` PASS (`/tmp/netlib-regression-gate-20260222-091008`).
+Phase A acceptance:
+- No status/objective drift vs current baseline.
+- No increase in dense fallback count.
+- Scheduler test suite remains deterministic and green.
+
+Phase A progress (2026-02-24):
+- Implemented behavior-preserving scheduler extraction:
+  - new module `ralph/src/lp_refactor_policy.c`
+  - new header `ralph/include/lp_refactor_policy.h`
+  - `simplex.c` rewired to call policy-module functions (no LU-safety semantics change)
+- Gate results:
+  - `make -C ralph test-simplex-policy` PASS (20/20)
+  - `make -C ralph test-lp-refactor-policy` PASS (24/24)
+  - `make -C ralph test-lu-markowitz` PASS (30/30)
+  - `make -C ralph test` PASS
+  - `make -C ralph test-netlib-gate-small` PASS (`/tmp/netlib-regression-gate-20260224-081949`)
+  - `make -C ralph test-netlib-gate` PASS (`/tmp/netlib-regression-gate-20260224-081308`)
+- Focused canary parity check (same statuses as baseline; dense fallback remained 0):
+  - artifact: `/tmp/phaseA-focused-20260224`
+  - `25fv47` timeout->timeout, `degen3` timeout->timeout
+  - `fit1p`, `nesm`, `bandm`, `scagr25` optimal->optimal
+
+#### Phase B Plan (Policy Pressure Control)
+
+Goal: reduce policy-triggered periodic reinversion pressure on long degenerate runs while preserving LU
+hard-safety behavior and NETLIB correctness parity.
+
+Scope:
+- Keep LU health/safety triggers authoritative (no relaxation of `lu_needs_refactorization` outcomes).
+- Add bounded phase-1 periodic cooldown/pressure-decay for large, high-pressure runs.
+- Keep adaptation policy-only and orthogonal to numeric safety.
+
+Phase B implementation (2026-02-24):
+- Extended policy module APIs:
+  - `lp_refactor_policy_phase1_cooldown_eligible(...)`
+  - `lp_refactor_policy_phase1_cooldown_window_updates(...)`
+- Added phase-1 runtime pressure controls in `simplex.c`:
+  - policy cooldown budget
+  - policy-pressure decay/recovery
+  - suppression only for policy-triggered periodic refactors
+  - LU-health/safety-triggered refactors remain unsuppressed
+- Eligibility tuned to avoid over-broad activation:
+  - large-basis gate (`m >= 1200`)
+  - plus either high degeneracy or sustained policy-refactor pressure
+
+Phase B gates and artifacts:
+- `make -C ralph test-lp-refactor-policy` PASS (32/32)
+- `make -C ralph test-simplex-policy` PASS (22/22)
+- `make -C ralph test-lu-markowitz` PASS (30/30)
+- `make -C ralph test` PASS
+- `make -C ralph test-netlib-gate-small` PASS (`/tmp/netlib-regression-gate-20260224-084836`)
+- `make -C ralph test-netlib-gate` PASS (`/tmp/netlib-regression-gate-20260224-084846`)
+  - summary: 84 files, timeout files 28, command/status/objective/invalid mismatches 0, dense fallback files 0, unexpected regressions 0
+
+Focused canary impact (Phase A vs Phase B):
+- artifacts:
+  - baseline: `/tmp/phaseA-focused-20260224`
+  - phase B: `/tmp/phaseb2-focused-*.json`
+- `degen3`:
+  - status unchanged (`timeout`), dense fallback unchanged (`0`)
+  - phase-1 periodic-policy refactors reduced `391 -> 171`
+  - iterations within timeout window increased `338 -> 1503`
+- `25fv47`, `fit1p`, `nesm`, `bandm`, `scagr25`:
+  - no status regressions, dense fallback remained `0`
