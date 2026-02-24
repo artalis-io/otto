@@ -75,6 +75,8 @@ int simplex_periodic_cost_defer_plan_for_test(int phase,
                                               double growth_factor,
                                               double refactor_cost_ewma_ms,
                                               double iter_cost_ewma_ms,
+                                              int refactor_cost_samples,
+                                              int iter_cost_samples,
                                               int consecutive_defers,
                                               int *reason_out,
                                               int *cap_out,
@@ -207,6 +209,8 @@ typedef struct {
     double growth_factor;
     double refactor_cost_ewma_ms;
     double iter_cost_ewma_ms;
+    int refactor_cost_samples;
+    int iter_cost_samples;
     int consecutive_defers;
     int expected_defer;
     int expected_cap;
@@ -228,6 +232,8 @@ typedef struct {
     double growth_factor;
     double refactor_cost_ewma_ms;
     double iter_cost_ewma_ms;
+    int refactor_cost_samples;
+    int iter_cost_samples;
     int consecutive_defers;
     int expected_defer;
     int expected_cap;
@@ -353,6 +359,8 @@ static int run_periodic_cost_defer_case(const PeriodicCostDeferCase *tc) {
                                                            tc->growth_factor,
                                                            tc->refactor_cost_ewma_ms,
                                                            tc->iter_cost_ewma_ms,
+                                                           tc->refactor_cost_samples,
+                                                           tc->iter_cost_samples,
                                                            tc->consecutive_defers,
                                                            &reason,
                                                            &cap,
@@ -906,6 +914,8 @@ int main(void) {
             .growth_factor = 100.0,
             .refactor_cost_ewma_ms = 12.0,
             .iter_cost_ewma_ms = 1.0,
+            .refactor_cost_samples = 2,
+            .iter_cost_samples = 16,
             .consecutive_defers = 0,
             .expected_defer = 1,
             .expected_cap = 3,
@@ -927,6 +937,8 @@ int main(void) {
             .growth_factor = 100.0,
             .refactor_cost_ewma_ms = 12.0,
             .iter_cost_ewma_ms = 1.0,
+            .refactor_cost_samples = 2,
+            .iter_cost_samples = 16,
             .consecutive_defers = 3,
             .expected_defer = 0,
             .expected_cap = 3,
@@ -948,12 +960,37 @@ int main(void) {
             .growth_factor = 100.0,
             .refactor_cost_ewma_ms = 5.0,
             .iter_cost_ewma_ms = 1.0,
+            .refactor_cost_samples = 2,
+            .iter_cost_samples = 16,
             .consecutive_defers = 2,
             .expected_defer = 0,
             .expected_cap = 3,
             .expected_cap_blocked = 0,
             .expected_next_consecutive = 0,
             .expected_reason = LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO
+        },
+        {
+            .name = "periodic cost gate waits for warmup samples",
+            .phase = 2,
+            .m = 1503,
+            .use_bland = 0,
+            .degenerate_count = 80,
+            .num_updates = 60,
+            .max_updates = 120,
+            .spike_pool_used = 10,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e5,
+            .growth_factor = 100.0,
+            .refactor_cost_ewma_ms = 12.0,
+            .iter_cost_ewma_ms = 1.0,
+            .refactor_cost_samples = 0,
+            .iter_cost_samples = 16,
+            .consecutive_defers = 0,
+            .expected_defer = 0,
+            .expected_cap = 3,
+            .expected_cap_blocked = 0,
+            .expected_next_consecutive = 0,
+            .expected_reason = LP_PERIODIC_COST_DAMPEN_BLOCK_WARMUP
         },
         {
             .name = "phase1 periodic cost cap is stricter",
@@ -969,6 +1006,8 @@ int main(void) {
             .growth_factor = 100.0,
             .refactor_cost_ewma_ms = 12.0,
             .iter_cost_ewma_ms = 1.0,
+            .refactor_cost_samples = 2,
+            .iter_cost_samples = 16,
             .consecutive_defers = 2,
             .expected_defer = 0,
             .expected_cap = 2,
