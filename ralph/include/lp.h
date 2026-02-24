@@ -608,6 +608,13 @@ typedef struct {
     int soft_lu_consecutive_defers_phase2;/* current consecutive soft deferrals in Phase 2 */
     int soft_lu_defer_cap_forced_phase1;  /* cap-blocked soft defers in Phase 1 */
     int soft_lu_defer_cap_forced_phase2;  /* cap-blocked soft defers in Phase 2 */
+    int periodic_cost_gate_enabled;       /* 1=enabled (default), 0=disabled */
+    int periodic_cost_gate_defers_phase1; /* policy-periodic deferrals in Phase 1 */
+    int periodic_cost_gate_defers_phase2; /* policy-periodic deferrals in Phase 2 */
+    int periodic_cost_consecutive_defers_phase1; /* current policy-periodic defer streak (Phase 1) */
+    int periodic_cost_consecutive_defers_phase2; /* current policy-periodic defer streak (Phase 2) */
+    int periodic_cost_defer_cap_forced_phase1;   /* cap-blocked policy periodic defers (Phase 1) */
+    int periodic_cost_defer_cap_forced_phase2;   /* cap-blocked policy periodic defers (Phase 2) */
     double soft_lu_refactor_cost_ewma_phase1; /* EWMA refactor cost estimate (ms) */
     double soft_lu_refactor_cost_ewma_phase2; /* EWMA refactor cost estimate (ms) */
     double soft_lu_iter_cost_ewma_phase1;     /* EWMA per-iteration hot-path cost (ms) */
@@ -803,6 +810,13 @@ typedef struct {
     int soft_lu_consecutive_defers_phase2;
     int soft_lu_defer_cap_forced_phase1;
     int soft_lu_defer_cap_forced_phase2;
+    int periodic_cost_gate_enabled;
+    int periodic_cost_gate_defers_phase1;
+    int periodic_cost_gate_defers_phase2;
+    int periodic_cost_consecutive_defers_phase1;
+    int periodic_cost_consecutive_defers_phase2;
+    int periodic_cost_defer_cap_forced_phase1;
+    int periodic_cost_defer_cap_forced_phase2;
     double soft_lu_refactor_cost_ewma_phase1;
     double soft_lu_refactor_cost_ewma_phase2;
     double soft_lu_iter_cost_ewma_phase1;
