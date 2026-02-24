@@ -122,8 +122,16 @@ typedef enum {
 #define PHASE2_POLICY_PRESSURE_DECAY_STEP 0.06
 #define PHASE2_POLICY_PRESSURE_DECAY_MAX 0.24
 #define PHASE2_POLICY_PRESSURE_RECOVERY_STEP 0.01
-#define PHASE1_DIR_STABILIZE_COOLDOWN_ITERS 8
 #define PHASE1_DIR_INF_FORCE_REFACTOR_MULT 100.0
+#define PHASE1_DEGEN_THRESHOLD_DEFAULT 50
+#define PHASE1_DEGEN_THRESHOLD_LARGE_M 700
+#define PHASE1_DEGEN_THRESHOLD_LARGE 20
+#define PHASE1_STALL_THRESHOLD_DEFAULT 50
+#define PHASE1_STALL_THRESHOLD_LARGE 30
+#define PHASE1_NO_ENTERING_CLEANUP_MAX_ITERS 128
+#define PHASE1_AUTO_DANTZIG_MIN_M 700
+#define PHASE1_AUTO_DANTZIG_MAX_M 1200
+#define PHASE1_AUTO_DANTZIG_DEGEN_TRIGGER 20
 #define SOFT_LU_COST_EWMA_ALPHA 0.20
 #define SOFT_LU_MAX_CONSEC_DEFER_PHASE1 6
 #define SOFT_LU_MAX_CONSEC_DEFER_PHASE2 4
@@ -4913,7 +4921,10 @@ static int simplex_phase1(SimplexSolver *solver) {
 
     /* Cycling detection and anti-cycling measures */
     int degenerate_count = 0;
-    const int DEGEN_THRESHOLD = 50;    /* Switch to Bland's rule after this many */
+    const int DEGEN_THRESHOLD =
+        (tab->m >= PHASE1_DEGEN_THRESHOLD_LARGE_M)
+            ? PHASE1_DEGEN_THRESHOLD_LARGE
+            : PHASE1_DEGEN_THRESHOLD_DEFAULT;    /* Switch to Bland's rule after this many */
     const int RECOMPUTE_INTERVAL = 25; /* Periodic drift correction in Phase 1 */
     int use_bland = 0;
 
@@ -4922,7 +4933,10 @@ static int simplex_phase1(SimplexSolver *solver) {
      * primal_apply_perturbation_scaled skips artificial bounds (Phase 1 safe). */
     double last_obj_p1 = tab->obj_value;
     int stall_count_p1 = 0;
-    const int P1_STALL_THRESHOLD = 50;
+    const int P1_STALL_THRESHOLD =
+        (tab->m >= PHASE1_DEGEN_THRESHOLD_LARGE_M)
+            ? PHASE1_STALL_THRESHOLD_LARGE
+            : PHASE1_STALL_THRESHOLD_DEFAULT;
     int perturb_attempts_p1 = 0;
     const int P1_MAX_PERTURB_ATTEMPTS = 15;
     int fail_entering = -1;
@@ -4935,9 +4949,14 @@ static int simplex_phase1(SimplexSolver *solver) {
     int excluded_entering_b = -1;
     int excluded_entering_ttl_b = 0;
     int dir_stabilize_cooldown = 0;
+    int dir_stabilize_repeat_count = 0;
+    int no_entering_cleanup_streak = 0;
     int periodic_policy_cooldown = 0;
     double periodic_policy_pressure_decay = 0.0;
     int lu_soft_health_streak = 0;
+    int phase1_pricing_strategy =
+        (solver->phase1_pricing >= 0) ? solver->phase1_pricing : solver->pricing_strategy;
+    int phase1_auto_dantzig_enabled = 0;
 
     /* Apply proactive perturbation in Phase 1 for highly-degenerate two-phase
      * problems. Phase 1 is inherently degenerate (many bases give art_sum=0).
@@ -4957,7 +4976,7 @@ static int simplex_phase1(SimplexSolver *solver) {
 
     /* Compute initial reduced costs */
     tableau_compute_reduced_costs(tab);
-    if (solver->pricing_strategy == 4) heap_build(tab);
+    if (phase1_pricing_strategy == 4) heap_build(tab);
     double phase1_hot_ms_prev = phase_hotpath_ms(solver, 1);
 
     for (int iter = 0; iter < solver->max_iterations; iter++) {
@@ -4995,6 +5014,20 @@ static int simplex_phase1(SimplexSolver *solver) {
             }
         }
 
+        if (!phase1_auto_dantzig_enabled &&
+            solver->phase1_pricing < 0 &&
+            tab->use_two_phase &&
+            tab->m >= PHASE1_AUTO_DANTZIG_MIN_M &&
+            tab->m <= PHASE1_AUTO_DANTZIG_MAX_M &&
+            degenerate_count >= PHASE1_AUTO_DANTZIG_DEGEN_TRIGGER) {
+            phase1_pricing_strategy = 0;  /* Dantzig */
+            phase1_auto_dantzig_enabled = 1;
+            if (solver->verbose >= 2) {
+                LP_LOG_STDERR("[simplex_phase1] Switching pricing to Dantzig under large degenerate Phase 1 workload (m=%d, degen=%d)\n",
+                        tab->m, degenerate_count);
+            }
+        }
+
         /* Pricing: select entering variable */
         int entering;
         int price_status;
@@ -5002,13 +5035,13 @@ static int simplex_phase1(SimplexSolver *solver) {
 
         if (use_bland) {
             price_status = pricing_bland(tab, &entering);
-        } else if (solver->pricing_strategy == 0) {
+        } else if (phase1_pricing_strategy == 0) {
             price_status = pricing_dantzig(tab, &entering);
-        } else if (solver->pricing_strategy == 1) {
+        } else if (phase1_pricing_strategy == 1) {
             price_status = pricing_steepest_edge(tab, &entering);
-        } else if (solver->pricing_strategy == 3) {
+        } else if (phase1_pricing_strategy == 3) {
             price_status = pricing_partial(tab, &entering);
-        } else if (solver->pricing_strategy == 4) {
+        } else if (phase1_pricing_strategy == 4) {
             price_status = pricing_heap(tab, &entering);
         } else {
             price_status = pricing_devex(tab, &entering);
@@ -5053,6 +5086,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                  * Use a relaxed tolerance (1e-4) to distinguish true infeasibility
                  * from numerical noise. */
                 if (art_sum > 1e-4) {
+                    no_entering_cleanup_streak = 0;
                     /* Revalidate on a freshly factorized basis before certifying infeasible.
                      * This guards against RC/solution drift on numerically hard instances. */
                     if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP) == 0) {
@@ -5089,6 +5123,16 @@ static int simplex_phase1(SimplexSolver *solver) {
                 }
 
                 /* Small residual - try to clean up with a few more iterations */
+                no_entering_cleanup_streak++;
+                if (no_entering_cleanup_streak >= PHASE1_NO_ENTERING_CLEANUP_MAX_ITERS) {
+                    if (solver->verbose) {
+                        LP_LOG_STDERR("[simplex_phase1] Accepting Phase 1 feasibility after %d no-entering cleanup iterations (art_sum=%g)\n",
+                                no_entering_cleanup_streak, art_sum);
+                    }
+                    solver->iterations = iter;
+                    phase1_trace_emit_summary(solver, RALPH_STATUS_OPTIMAL);
+                    return 0;
+                }
                 if (solver->verbose) {
                     LP_LOG_STDERR("[simplex_phase1] Cleanup phase: art_sum=%g, continuing...\n", art_sum);
                 }
@@ -5097,6 +5141,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             }
 
             /* Success */
+            no_entering_cleanup_streak = 0;
             if (solver->verbose) {
                 LP_LOG_STDERR("[simplex_phase1] Phase 1 complete: feasible in %d iterations\n", iter);
             }
@@ -5104,6 +5149,8 @@ static int simplex_phase1(SimplexSolver *solver) {
             phase1_trace_emit_summary(solver, RALPH_STATUS_OPTIMAL);
             return 0;
         }
+
+        no_entering_cleanup_streak = 0;
 
         /* Ratio test: select leaving variable */
         int leaving;
@@ -5199,12 +5246,23 @@ static int simplex_phase1(SimplexSolver *solver) {
         if (dir_inf > RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
             double force_refactor_trigger =
                 RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER * PHASE1_DIR_INF_FORCE_REFACTOR_MULT;
+            int dir_stabilize_cooldown_target;
             int force_dir_refactor = (dir_inf > force_refactor_trigger) ||
                                      lu_needs_refactorization(tab->lu);
+            if (dir_stabilize_repeat_count < 1000000) {
+                dir_stabilize_repeat_count++;
+            }
+            dir_stabilize_cooldown_target =
+                lp_refactor_policy_phase1_dir_stabilize_cooldown_updates(
+                    tab->m, degenerate_count, dir_stabilize_repeat_count);
+
             if (dir_stabilize_cooldown > 0 && !force_dir_refactor) {
                 if (solver->verbose >= 2) {
                     LP_LOG_STDERR("[simplex_phase1] Large direction norm %.2e at iter %d (entering=%d), skipping direction-stabilize refactor (cooldown=%d)\n",
                             dir_inf, iter, entering, dir_stabilize_cooldown);
+                }
+                if (dir_stabilize_cooldown_target > dir_stabilize_cooldown) {
+                    dir_stabilize_cooldown = dir_stabilize_cooldown_target;
                 }
                 phase1_exclude_entering_var(entering,
                                             RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
@@ -5228,7 +5286,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_DIRECTION_STABILIZE) != 0) {
                     break;
                 }
-                dir_stabilize_cooldown = PHASE1_DIR_STABILIZE_COOLDOWN_ITERS;
+                dir_stabilize_cooldown = dir_stabilize_cooldown_target;
                 ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
                 if (ratio_status != 0) {
                     phase1_trace_record_no_entering(solver, iter, ratio_status);
@@ -5277,13 +5335,13 @@ static int simplex_phase1(SimplexSolver *solver) {
                                             &excluded_entering_ttl_a,
                                             &excluded_entering_b,
                                             &excluded_entering_ttl_b);
-                dir_stabilize_cooldown = PHASE1_DIR_STABILIZE_COOLDOWN_ITERS;
+                dir_stabilize_cooldown = dir_stabilize_cooldown_target;
                 use_bland = 1;
                 tableau_compute_solution(tab);
                 tableau_compute_reduced_costs(tab);
                 continue;
             }
-            dir_stabilize_cooldown = 0;
+            dir_stabilize_cooldown = dir_stabilize_cooldown_target;
             use_bland = 1;
         }
 
@@ -5501,7 +5559,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                     stall_count_p1 = 0;
                     tableau_compute_solution(tab);
                     tableau_compute_reduced_costs(tab);
-                    if (solver->pricing_strategy == 4) heap_build(tab);
+                    if (phase1_pricing_strategy == 4) heap_build(tab);
                     if (solver->verbose) {
                         LP_LOG_STDERR("[simplex_phase1] Stall detected, re-perturbing (attempt %d, scale %.1f)\n",
                                 perturb_attempts_p1, scale);

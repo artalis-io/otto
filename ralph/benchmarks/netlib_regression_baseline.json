@@ -74,9 +74,6 @@
     "woodw.mps"
   ],
   "problem_overrides": {
-    "25fv47.mps": {
-      "method": 2
-    },
     "80bau3b.mps": {
       "obj_rel_tol": 2e-6
     }

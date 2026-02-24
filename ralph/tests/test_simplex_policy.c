@@ -242,6 +242,14 @@ typedef struct {
     int expected_reason;
 } PeriodicCostDeferCase;
 
+typedef struct {
+    const char *name;
+    int m;
+    int degenerate_count;
+    int repeat_streak;
+    int expected_cooldown;
+} DirStabilizeCooldownCase;
+
 static int run_lu_health_case(const LUHealthCase *tc) {
     int hard = -1;
     int soft = -1;
@@ -392,6 +400,19 @@ static int run_periodic_cost_defer_case(const PeriodicCostDeferCase *tc) {
         return 0;
     }
 
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_dir_stabilize_cooldown_case(const DirStabilizeCooldownCase *tc) {
+    int cooldown = lp_refactor_policy_phase1_dir_stabilize_cooldown_updates(tc->m,
+                                                                             tc->degenerate_count,
+                                                                             tc->repeat_streak);
+    if (cooldown != tc->expected_cooldown) {
+        fprintf(stderr, "FAIL: %s (expected cooldown=%d got=%d)\n",
+                tc->name, tc->expected_cooldown, cooldown);
+        return 0;
+    }
     printf("PASS: %s\n", tc->name);
     return 1;
 }
@@ -1016,6 +1037,36 @@ int main(void) {
             .expected_reason = LP_PERIODIC_COST_DAMPEN_DEFER
         }
     };
+    const DirStabilizeCooldownCase dir_stabilize_cooldown_cases[] = {
+        {
+            .name = "phase1 dir-stabilize uses base cooldown on small matrices",
+            .m = 350,
+            .degenerate_count = 80,
+            .repeat_streak = 8,
+            .expected_cooldown = 8
+        },
+        {
+            .name = "phase1 dir-stabilize uses base cooldown without repeat streak",
+            .m = 900,
+            .degenerate_count = 10,
+            .repeat_streak = 1,
+            .expected_cooldown = 8
+        },
+        {
+            .name = "phase1 dir-stabilize escalates cooldown on repeated large-degenerate events",
+            .m = 900,
+            .degenerate_count = 80,
+            .repeat_streak = 7,
+            .expected_cooldown = 24
+        },
+        {
+            .name = "phase1 dir-stabilize cooldown is capped",
+            .m = 1500,
+            .degenerate_count = 120,
+            .repeat_streak = 40,
+            .expected_cooldown = 64
+        }
+    };
 
     int pass = 0;
     int total_policy = (int)(sizeof(cases) / sizeof(cases[0]));
@@ -1023,7 +1074,9 @@ int main(void) {
     int total_lu_health = (int)(sizeof(lu_health_cases) / sizeof(lu_health_cases[0]));
     int total_soft_lu_defer = (int)(sizeof(soft_lu_defer_cases) / sizeof(soft_lu_defer_cases[0]));
     int total_periodic_cost_defer = (int)(sizeof(periodic_cost_defer_cases) / sizeof(periodic_cost_defer_cases[0]));
-    int total = total_policy + total_sched + total_lu_health + total_soft_lu_defer + total_periodic_cost_defer;
+    int total_dir_stabilize = (int)(sizeof(dir_stabilize_cooldown_cases) / sizeof(dir_stabilize_cooldown_cases[0]));
+    int total = total_policy + total_sched + total_lu_health + total_soft_lu_defer +
+                total_periodic_cost_defer + total_dir_stabilize;
 
     for (int i = 0; i < total_policy; i++) {
         pass += run_case(&cases[i]);
@@ -1039,6 +1092,9 @@ int main(void) {
     }
     for (int i = 0; i < total_periodic_cost_defer; i++) {
         pass += run_periodic_cost_defer_case(&periodic_cost_defer_cases[i]);
+    }
+    for (int i = 0; i < total_dir_stabilize; i++) {
+        pass += run_dir_stabilize_cooldown_case(&dir_stabilize_cooldown_cases[i]);
     }
 
     printf("\nPolicy cases passed: %d/%d\n", pass, total);

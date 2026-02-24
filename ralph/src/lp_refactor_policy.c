@@ -29,6 +29,11 @@
 #define PHASE1_POLICY_COOLDOWN_MAX_UPDATES 192
 #define PHASE1_POLICY_COOLDOWN_NUM 2
 #define PHASE1_POLICY_COOLDOWN_DEN 1
+#define PHASE1_DIR_STABILIZE_BASE_COOLDOWN_UPDATES 8
+#define PHASE1_DIR_STABILIZE_ADAPT_MIN_M 700
+#define PHASE1_DIR_STABILIZE_STREAK_STEP 3
+#define PHASE1_DIR_STABILIZE_MAX_MULT 8
+#define PHASE1_DIR_STABILIZE_MAX_COOLDOWN_UPDATES 64
 #define LU_HEALTH_HARD_COND_MIN_UPDATES 10
 #define LU_HEALTH_HARD_COND_RATIO 1e10
 #define LU_HEALTH_SOFT_COND_MED 1e6
@@ -323,6 +328,28 @@ int lp_refactor_policy_phase1_cooldown_window_updates(int interval) {
     }
     if (cooldown > PHASE1_POLICY_COOLDOWN_MAX_UPDATES) {
         cooldown = PHASE1_POLICY_COOLDOWN_MAX_UPDATES;
+    }
+    return cooldown;
+}
+
+int lp_refactor_policy_phase1_dir_stabilize_cooldown_updates(int m,
+                                                             int degenerate_count,
+                                                             int repeat_streak) {
+    int cooldown = PHASE1_DIR_STABILIZE_BASE_COOLDOWN_UPDATES;
+    int mult = 1;
+
+    (void)degenerate_count;
+
+    if (repeat_streak < 2) return cooldown;
+    if (m < PHASE1_DIR_STABILIZE_ADAPT_MIN_M) return cooldown;
+
+    mult += (repeat_streak - 1) / PHASE1_DIR_STABILIZE_STREAK_STEP;
+    if (mult > PHASE1_DIR_STABILIZE_MAX_MULT) {
+        mult = PHASE1_DIR_STABILIZE_MAX_MULT;
+    }
+    cooldown *= mult;
+    if (cooldown > PHASE1_DIR_STABILIZE_MAX_COOLDOWN_UPDATES) {
+        cooldown = PHASE1_DIR_STABILIZE_MAX_COOLDOWN_UPDATES;
     }
     return cooldown;
 }
