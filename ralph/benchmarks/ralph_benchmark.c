@@ -916,6 +916,25 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
         if (result.solution) {
             ralph_test_get_solution(model, result.solution);
             result.solution_size = n;
+
+            /* Recompute objective from the final primal solution (Kahan sum).
+             * This avoids false objective mismatches from tableau objective
+             * accumulation drift on numerically sensitive instances. */
+            {
+                LPModel *lp = ralph_get_lp_model(model);
+                if (lp && lp->c && n == lp->num_vars) {
+                    double sum = 0.0;
+                    double comp = 0.0;
+                    for (int j = 0; j < n; j++) {
+                        double term = lp->c[j] * result.solution[j];
+                        double y = term - comp;
+                        double t = sum + y;
+                        comp = (t - sum) - y;
+                        sum = t;
+                    }
+                    result.objective = sum + lp->obj_offset;
+                }
+            }
         }
     }
 

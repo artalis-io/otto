@@ -10,10 +10,14 @@ BENCH_EXEC="$RALPH_DIR/ralph-benchmark"
 
 HARD_CAP_SEC=""
 OUTER_TIMEOUT_SEC=""
+METHOD=""
+OBJ_REL_TOL=""
 OUTDIR=""
 FILTER_REGEX=""
 ALLOWLIST_FILE=""
 NO_BUILD=0
+METHOD_FROM_CLI=0
+OBJ_REL_TOL_FROM_CLI=0
 
 usage() {
     cat <<'EOF'
@@ -25,6 +29,8 @@ Options:
   --bench <path>           ralph-benchmark executable path
   --hard-cap <sec>         --hard-cap passed to ralph-benchmark
   --outer-timeout <sec>    External timeout wrapper seconds
+  --method <n>             --method passed to ralph-benchmark
+  --obj-rel-tol <tol>      --obj-rel-tol passed to ralph-benchmark
   --outdir <dir>           Output directory for run artifacts
   --filter <regex>         Only run files where basename matches regex
   --allowlist <file>       Only run basenames listed in file (one per line)
@@ -53,6 +59,16 @@ while [[ $# -gt 0 ]]; do
             ;;
         --outer-timeout)
             OUTER_TIMEOUT_SEC="$2"
+            shift 2
+            ;;
+        --method)
+            METHOD="$2"
+            METHOD_FROM_CLI=1
+            shift 2
+            ;;
+        --obj-rel-tol)
+            OBJ_REL_TOL="$2"
+            OBJ_REL_TOL_FROM_CLI=1
             shift 2
             ;;
         --outdir)
@@ -118,6 +134,12 @@ if [[ -z "$HARD_CAP_SEC" ]]; then
 fi
 if [[ -z "$OUTER_TIMEOUT_SEC" ]]; then
     OUTER_TIMEOUT_SEC="$(jq -r '.defaults.outer_timeout_sec // 25' "$BASELINE_FILE")"
+fi
+if [[ -z "$METHOD" ]]; then
+    METHOD="$(jq -r '.defaults.method // 0' "$BASELINE_FILE")"
+fi
+if [[ -z "$OBJ_REL_TOL" ]]; then
+    OBJ_REL_TOL="$(jq -r '.defaults.obj_rel_tol // empty' "$BASELINE_FILE")"
 fi
 
 if [[ "$NO_BUILD" -eq 0 ]]; then
@@ -189,6 +211,10 @@ echo "  bench:    $BENCH_EXEC"
 echo "  files:    $total"
 echo "  hard-cap: $HARD_CAP_SEC sec"
 echo "  timeout:  $OUTER_TIMEOUT_SEC sec (external)"
+echo "  method:   $METHOD"
+if [[ -n "$OBJ_REL_TOL" ]]; then
+    echo "  obj-tol:  $OBJ_REL_TOL"
+fi
 if [[ -n "$ALLOWLIST_FILE" ]]; then
     echo "  allowlist:$ALLOWLIST_FILE"
 fi
@@ -202,11 +228,38 @@ while IFS= read -r f; do
     name="$base.mps"
     json="$OUTDIR/results/$base.json"
     stderr_file="$OUTDIR/results/$base.stderr"
+    run_method="$METHOD"
+    run_obj_rel_tol="$OBJ_REL_TOL"
 
-    echo "[$i/$total] $name"
+    if [[ "$METHOD_FROM_CLI" -eq 0 ]]; then
+        override_method="$(jq -r --arg name "$name" \
+            '.problem_overrides[$name].method // empty' "$BASELINE_FILE")"
+        if [[ -n "$override_method" ]]; then
+            run_method="$override_method"
+        fi
+    fi
+    if [[ "$OBJ_REL_TOL_FROM_CLI" -eq 0 ]]; then
+        override_obj_rel_tol="$(jq -r --arg name "$name" \
+            '.problem_overrides[$name].obj_rel_tol // empty' "$BASELINE_FILE")"
+        if [[ -n "$override_obj_rel_tol" ]]; then
+            run_obj_rel_tol="$override_obj_rel_tol"
+        fi
+    fi
+
+    bench_cmd=("$BENCH_EXEC" --hard-cap "$HARD_CAP_SEC" --method "$run_method")
+    if [[ -n "$run_obj_rel_tol" ]]; then
+        bench_cmd+=(--obj-rel-tol "$run_obj_rel_tol")
+    fi
+    bench_cmd+=("$f")
+
+    if [[ -n "$run_obj_rel_tol" ]]; then
+        echo "[$i/$total] $name (method=$run_method obj_rel_tol=$run_obj_rel_tol)"
+    else
+        echo "[$i/$total] $name (method=$run_method)"
+    fi
     set +e
     "$TIMEOUT_BIN" -k 5 "$OUTER_TIMEOUT_SEC" \
-        "$BENCH_EXEC" --hard-cap "$HARD_CAP_SEC" "$f" \
+        "${bench_cmd[@]}" \
         > "$json" 2> "$stderr_file"
     ec=$?
     set -e
@@ -276,6 +329,10 @@ while IFS=$'\t' read -r name ec; do
     fi
 
     IFS=$'\t' read -r prob_name r_status g_status obj_ok sol_ok dense_fb <<< "$rec"
+    if [[ "$r_status" == "timeout" ]]; then
+        echo "$prob_name" >> "$actual_timeout"
+        continue
+    fi
     if [[ "$r_status" != "$g_status" ]]; then
         echo "$prob_name" >> "$actual_status"
     fi
