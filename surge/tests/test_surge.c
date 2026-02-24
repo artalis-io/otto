@@ -9201,6 +9201,342 @@ static void test_travel_profile_validation(void) {
     sg_free(ctx);
 }
 
+/* ===== Time-Indexed Travel Bracket Tests ===== */
+
+static void test_time_bracket_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t l0 = sg_add_location(ctx);
+    uint32_t l1 = sg_add_location(ctx);
+    (void)l0; (void)l1;
+    double dur[4] = {0, 100, 100, 0};
+    double dist[4] = {0, 50, 50, 0};
+
+    /* NULL duration → error */
+    assert(sg_set_travel_time_bracket(ctx, 0.0, 2, dist, NULL) != SG_STATUS_OK);
+    /* location_count 0 → error */
+    assert(sg_set_travel_time_bracket(ctx, 0.0, 0, dist, dur) != SG_STATUS_OK);
+    /* Non-finite start_time → error */
+    assert(sg_set_travel_time_bracket(ctx, 1.0/0.0, 2, NULL, dur) != SG_STATUS_OK);
+    /* Valid */
+    assert(sg_set_travel_time_bracket(ctx, 0.0, 2, NULL, dur) == SG_STATUS_OK);
+    /* Duplicate start_time → error */
+    assert(sg_set_travel_time_bracket(ctx, 0.0, 2, NULL, dur) != SG_STATUS_OK);
+    /* Second bracket OK */
+    assert(sg_set_travel_time_bracket(ctx, 25200.0, 2, NULL, dur) == SG_STATUS_OK);
+
+    /* Per-profile bracket API */
+    uint32_t tp = sg_add_travel_profile(ctx);
+    /* NULL duration → error */
+    assert(sg_travel_profile_add_time_bracket(ctx, tp, 0.0, 2, NULL, NULL) != SG_STATUS_OK);
+    /* Valid */
+    assert(sg_travel_profile_add_time_bracket(ctx, tp, 0.0, 2, NULL, dur) == SG_STATUS_OK);
+    /* Duplicate → error */
+    assert(sg_travel_profile_add_time_bracket(ctx, tp, 0.0, 2, NULL, dur) != SG_STATUS_OK);
+    /* Invalid profile_id */
+    assert(sg_travel_profile_add_time_bracket(ctx, 99, 0.0, 2, NULL, dur) != SG_STATUS_OK);
+
+    /* Negative duration value → error */
+    {
+        double bad_dur[4] = {0, -100, 100, 0};
+        assert(sg_set_travel_time_bracket(ctx, 50000.0, 2, NULL, bad_dur) != SG_STATUS_OK);
+    }
+
+    sg_free(ctx);
+}
+
+static void test_time_bracket_basic(void) {
+    /* 2 global brackets: off-peak dur=100, rush dur=200.
+       Vehicle departs during rush → gets rush duration. */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t l0 = sg_add_location(ctx);
+    uint32_t l1 = sg_add_location(ctx);
+    double dist[4] = {0, 50, 50, 0};
+    double dur_offpeak[4] = {0, 100, 100, 0};
+    double dur_rush[4]    = {0, 200, 200, 0};
+
+    /* Base matrix needed for distance */
+    assert(sg_set_travel_matrix(ctx, 2, dist, dur_offpeak) == SG_STATUS_OK);
+
+    /* Time brackets: off-peak starts at t=0, rush at t=25200 (7 AM) */
+    assert(sg_set_travel_time_bracket(ctx, 0.0, 2, NULL, dur_offpeak) == SG_STATUS_OK);
+    assert(sg_set_travel_time_bracket(ctx, 25200.0, 2, NULL, dur_rush) == SG_STATUS_OK);
+
+    uint32_t depot = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, depot, l0) == SG_STATUS_OK);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 86400) == SG_STATUS_OK);
+
+    /* Vehicle starts at rush hour (7 AM = 25200) */
+    uint32_t v = sg_add_vehicle(ctx);
+    double cap = 100.0;
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 25200, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location_id(ctx, task, l1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Route duration = out(200) + back(200) = 400 (rush bracket) */
+    double route_dur = sg_solution_get_route_duration(ctx, 0);
+    assert(fabs(route_dur - 400.0) < 1e-6);
+    sg_free(ctx);
+}
+
+static void test_time_bracket_distance_unchanged(void) {
+    /* Brackets with only durations (no distance). Distance uses global matrix. */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t l0 = sg_add_location(ctx);
+    uint32_t l1 = sg_add_location(ctx);
+    double dist[4] = {0, 50, 50, 0};
+    double dur[4]  = {0, 100, 100, 0};
+
+    assert(sg_set_travel_matrix(ctx, 2, dist, dur) == SG_STATUS_OK);
+
+    /* Time bracket overrides duration only (no distance_matrix) */
+    double dur_rush[4] = {0, 300, 300, 0};
+    assert(sg_set_travel_time_bracket(ctx, 0.0, 2, NULL, dur_rush) == SG_STATUS_OK);
+
+    uint32_t depot = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, depot, l0) == SG_STATUS_OK);
+    uint32_t v = sg_add_vehicle(ctx);
+    double cap = 100.0;
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location_id(ctx, task, l1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    /* Distance from global: 50+50=100 */
+    assert(fabs(sg_get_total_distance(ctx) - 100.0) < 1e-6);
+    /* Duration from bracket: 300+300=600 */
+    double route_dur = sg_solution_get_route_duration(ctx, 0);
+    assert(fabs(route_dur - 600.0) < 1e-6);
+    sg_free(ctx);
+}
+
+static void test_time_bracket_with_speed_profile(void) {
+    /* Bracket duration (200) × speed multiplier (1.5) = 300 per leg */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t l0 = sg_add_location(ctx);
+    uint32_t l1 = sg_add_location(ctx);
+    double dist[4] = {0, 50, 50, 0};
+    double dur[4]  = {0, 100, 100, 0};
+
+    assert(sg_set_travel_matrix(ctx, 2, dist, dur) == SG_STATUS_OK);
+
+    double dur_bracket[4] = {0, 200, 200, 0};
+    assert(sg_set_travel_time_bracket(ctx, 0.0, 2, NULL, dur_bracket) == SG_STATUS_OK);
+
+    uint32_t sp = sg_add_speed_profile(ctx);
+    assert(sg_speed_profile_add_entry(ctx, sp, 0.0, 1.5) == SG_STATUS_OK);
+    assert(sg_set_global_speed_profile(ctx, sp) == SG_STATUS_OK);
+
+    uint32_t depot = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, depot, l0) == SG_STATUS_OK);
+    uint32_t v = sg_add_vehicle(ctx);
+    double cap = 100.0;
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location_id(ctx, task, l1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    /* Duration = 200*1.5 + 200*1.5 = 600 */
+    double route_dur = sg_solution_get_route_duration(ctx, 0);
+    assert(fabs(route_dur - 600.0) < 1e-6);
+    /* Distance unaffected by speed profile */
+    assert(fabs(sg_get_total_distance(ctx) - 100.0) < 1e-6);
+    sg_free(ctx);
+}
+
+static void test_time_bracket_vehicle_profile_override(void) {
+    /* Per-vehicle single-matrix profile overrides global brackets */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t l0 = sg_add_location(ctx);
+    uint32_t l1 = sg_add_location(ctx);
+    double dist[4] = {0, 50, 50, 0};
+    double dur[4]  = {0, 100, 100, 0};
+
+    assert(sg_set_travel_matrix(ctx, 2, dist, dur) == SG_STATUS_OK);
+
+    /* Global bracket: dur=200 */
+    double dur_bracket[4] = {0, 200, 200, 0};
+    assert(sg_set_travel_time_bracket(ctx, 0.0, 2, NULL, dur_bracket) == SG_STATUS_OK);
+
+    /* Travel profile: single matrix override with dur=500 */
+    uint32_t tp = sg_add_travel_profile(ctx);
+    double dur_profile[4] = {0, 500, 500, 0};
+    assert(sg_travel_profile_set_matrices(ctx, tp, 2, NULL, dur_profile) == SG_STATUS_OK);
+
+    uint32_t depot = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, depot, l0) == SG_STATUS_OK);
+    uint32_t v = sg_add_vehicle(ctx);
+    double cap = 100.0;
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_travel_profile(ctx, v, tp) == SG_STATUS_OK);
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location_id(ctx, task, l1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    /* Profile override: dur=500*2=1000 */
+    double route_dur = sg_solution_get_route_duration(ctx, 0);
+    assert(fabs(route_dur - 1000.0) < 1e-6);
+    sg_free(ctx);
+}
+
+static void test_time_bracket_vehicle_profile_brackets(void) {
+    /* Per-vehicle time brackets override global time brackets */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t l0 = sg_add_location(ctx);
+    uint32_t l1 = sg_add_location(ctx);
+    double dist[4] = {0, 50, 50, 0};
+    double dur[4]  = {0, 100, 100, 0};
+
+    assert(sg_set_travel_matrix(ctx, 2, dist, dur) == SG_STATUS_OK);
+
+    /* Global bracket: dur=200 */
+    double dur_global[4] = {0, 200, 200, 0};
+    assert(sg_set_travel_time_bracket(ctx, 0.0, 2, NULL, dur_global) == SG_STATUS_OK);
+
+    /* Per-vehicle profile with brackets: dur=400 */
+    uint32_t tp = sg_add_travel_profile(ctx);
+    double dur_veh[4] = {0, 400, 400, 0};
+    assert(sg_travel_profile_add_time_bracket(ctx, tp, 0.0, 2, NULL, dur_veh) == SG_STATUS_OK);
+
+    uint32_t depot = sg_add_depot(ctx);
+    assert(sg_depot_set_location_id(ctx, depot, l0) == SG_STATUS_OK);
+    uint32_t v = sg_add_vehicle(ctx);
+    double cap = 100.0;
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_travel_profile(ctx, v, tp) == SG_STATUS_OK);
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location_id(ctx, task, l1) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 0) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    /* Per-vehicle bracket overrides global: dur=400*2=800 */
+    double route_dur = sg_solution_get_route_duration(ctx, 0);
+    assert(fabs(route_dur - 800.0) < 1e-6);
+    sg_free(ctx);
+}
+
+static void test_time_bracket_json_roundtrip(void) {
+    /* JSON API with global time_brackets parses and solves correctly */
+    const char *json =
+        "{"
+        "  \"config\": {\"max_iterations\": 50, \"seed\": 42, \"deterministic\": true},"
+        "  \"locations\": [{\"x\": 0, \"y\": 0}, {\"x\": 10, \"y\": 0}],"
+        "  \"depots\": [{\"location_id\": 0, \"tw_early\": 0, \"tw_late\": 86400}],"
+        "  \"vehicles\": [{\"start_depot_id\": 0, \"end_depot_id\": 0,"
+        "    \"shift_early\": 0, \"shift_late\": 86400, \"capacity\": [100]}],"
+        "  \"tasks\": [{\"type\": \"delivery\", \"location_id\": 1,"
+        "    \"tw_early\": 0, \"tw_late\": 86400, \"service_seconds\": 0,"
+        "    \"demand\": [-10]}],"
+        "  \"requests\": [{\"delivery_task_id\": 0}],"
+        "  \"travel\": {"
+        "    \"location_count\": 2,"
+        "    \"distances\": [0, 50, 50, 0],"
+        "    \"durations\": [0, 100, 100, 0],"
+        "    \"time_brackets\": ["
+        "      {\"start_time\": 0, \"durations\": [0, 300, 300, 0]},"
+        "      {\"start_time\": 25200, \"durations\": [0, 600, 600, 0]}"
+        "    ]"
+        "  }"
+        "}";
+    int status_code = 0;
+    size_t out_len = 0;
+    char *result = sg_api_solve(json, strlen(json), &status_code, &out_len);
+    assert(result != NULL);
+    assert(status_code == 200);
+    /* Parse response to verify it solved */
+    assert(strstr(result, "\"status\":\"ok\"") != NULL ||
+           strstr(result, "\"status\": \"ok\"") != NULL);
+    free(result);
+}
+
+static void test_time_bracket_profile_json(void) {
+    /* JSON API with per-profile time_brackets */
+    const char *json =
+        "{"
+        "  \"config\": {\"max_iterations\": 50, \"seed\": 42, \"deterministic\": true},"
+        "  \"locations\": [{\"x\": 0, \"y\": 0}, {\"x\": 10, \"y\": 0}],"
+        "  \"depots\": [{\"location_id\": 0, \"tw_early\": 0, \"tw_late\": 86400}],"
+        "  \"travel_profiles\": [{"
+        "    \"time_brackets\": ["
+        "      {\"start_time\": 0, \"durations\": [0, 150, 150, 0]},"
+        "      {\"start_time\": 25200, \"durations\": [0, 400, 400, 0]}"
+        "    ]"
+        "  }],"
+        "  \"vehicles\": [{\"start_depot_id\": 0, \"end_depot_id\": 0,"
+        "    \"shift_early\": 0, \"shift_late\": 86400, \"capacity\": [100],"
+        "    \"travel_profile_id\": 0}],"
+        "  \"tasks\": [{\"type\": \"delivery\", \"location_id\": 1,"
+        "    \"tw_early\": 0, \"tw_late\": 86400, \"service_seconds\": 0,"
+        "    \"demand\": [-10]}],"
+        "  \"requests\": [{\"delivery_task_id\": 0}],"
+        "  \"travel\": {"
+        "    \"location_count\": 2,"
+        "    \"distances\": [0, 50, 50, 0],"
+        "    \"durations\": [0, 100, 100, 0]"
+        "  }"
+        "}";
+    int status_code = 0;
+    size_t out_len = 0;
+    char *result = sg_api_solve(json, strlen(json), &status_code, &out_len);
+    assert(result != NULL);
+    assert(status_code == 200);
+    assert(strstr(result, "\"status\":\"ok\"") != NULL ||
+           strstr(result, "\"status\": \"ok\"") != NULL);
+    free(result);
+}
+
 /* ===== Plan Validation Tests ===== */
 
 /* Helper: create a simple model with 1 depot, 1 vehicle, 2 delivery requests */
@@ -10095,6 +10431,16 @@ int main(void) {
     RUN_TEST(test_deterministic_with_profiles);
     RUN_TEST(test_travel_profile_validation);
 
+    /* Time-indexed travel brackets */
+    RUN_TEST(test_time_bracket_api);
+    RUN_TEST(test_time_bracket_basic);
+    RUN_TEST(test_time_bracket_distance_unchanged);
+    RUN_TEST(test_time_bracket_with_speed_profile);
+    RUN_TEST(test_time_bracket_vehicle_profile_override);
+    RUN_TEST(test_time_bracket_vehicle_profile_brackets);
+    RUN_TEST(test_time_bracket_json_roundtrip);
+    RUN_TEST(test_time_bracket_profile_json);
+
     /* Plan validation */
     RUN_TEST(test_validate_plan_api);
     RUN_TEST(test_validate_plan_timing);
@@ -10121,9 +10467,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 261);
+    assert(tests_run == 269);
 #else
-    assert(tests_run == 252);
+    assert(tests_run == 260);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

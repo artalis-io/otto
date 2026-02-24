@@ -247,6 +247,69 @@ static int build_travel_profiles(SGContext *ctx, const ShJsonValue *arr) {
                 return -1;
             }
         }
+
+        /* Per-profile time brackets */
+        {
+            ShJsonValue *tb_arr = sh_json_get(prof, "time_brackets");
+            if (tb_arr && sh_json_type(tb_arr) == SH_JSON_ARRAY) {
+                size_t tb_count = sh_json_array_len(tb_arr);
+                size_t tb_i;
+                for (tb_i = 0; tb_i < tb_count; tb_i++) {
+                    ShJsonValue *tb = sh_json_array_get(tb_arr, tb_i);
+                    ShJsonValue *st_v2, *dur_v2, *dist_v2;
+                    double st2;
+                    double *tb_dist = NULL;
+                    double *tb_dur = NULL;
+                    size_t tb_n, tb_j2;
+                    int tb_loc_count;
+
+                    if (!tb || sh_json_type(tb) != SH_JSON_OBJECT) return -1;
+
+                    st_v2 = sh_json_get(tb, "start_time");
+                    if (!st_v2) return -1;
+                    st2 = sh_json_as_double(st_v2, 0.0);
+
+                    dur_v2 = sh_json_get(tb, "durations");
+                    if (!dur_v2 || sh_json_type(dur_v2) != SH_JSON_ARRAY) return -1;
+                    tb_n = sh_json_array_len(dur_v2);
+                    tb_loc_count = (int)sqrt((double)tb_n);
+                    if ((size_t)tb_loc_count * (size_t)tb_loc_count != tb_n || tb_loc_count <= 0) {
+                        return -1;
+                    }
+
+                    tb_dur = (double *)malloc(tb_n * sizeof(double));
+                    if (!tb_dur) return -1;
+                    for (tb_j2 = 0; tb_j2 < tb_n; tb_j2++) {
+                        tb_dur[tb_j2] = sh_json_as_double(sh_json_array_get(dur_v2, tb_j2), 0.0);
+                    }
+
+                    dist_v2 = sh_json_get(tb, "distances");
+                    if (dist_v2 && sh_json_type(dist_v2) == SH_JSON_ARRAY) {
+                        if (sh_json_array_len(dist_v2) != tb_n) {
+                            free(tb_dur);
+                            return -1;
+                        }
+                        tb_dist = (double *)malloc(tb_n * sizeof(double));
+                        if (!tb_dist) {
+                            free(tb_dur);
+                            return -1;
+                        }
+                        for (tb_j2 = 0; tb_j2 < tb_n; tb_j2++) {
+                            tb_dist[tb_j2] = sh_json_as_double(sh_json_array_get(dist_v2, tb_j2), 0.0);
+                        }
+                    }
+
+                    if (sg_travel_profile_add_time_bracket(ctx, pid, st2,
+                            (uint32_t)tb_loc_count, tb_dist, tb_dur) != SG_STATUS_OK) {
+                        free(tb_dist);
+                        free(tb_dur);
+                        return -1;
+                    }
+                    free(tb_dist);
+                    free(tb_dur);
+                }
+            }
+        }
     }
 
     return 0;
@@ -306,6 +369,63 @@ static int build_travel(SGContext *ctx, const ShJsonValue *travel_val) {
         uint32_t sp_id = (uint32_t)sh_json_as_int(v, 0);
         if (sg_set_global_speed_profile(ctx, sp_id) != SG_STATUS_OK) {
             return -1;
+        }
+    }
+
+    /* Optional global time brackets */
+    v = sh_json_get(travel_val, "time_brackets");
+    if (v && sh_json_type(v) == SH_JSON_ARRAY) {
+        size_t tb_count = sh_json_array_len(v);
+        size_t tb_i;
+        for (tb_i = 0; tb_i < tb_count; tb_i++) {
+            ShJsonValue *tb = sh_json_array_get(v, tb_i);
+            ShJsonValue *st_v, *dur_v, *dist_v;
+            double st;
+            double *tb_distances = NULL;
+            double *tb_durations = NULL;
+            size_t tb_j;
+
+            if (!tb || sh_json_type(tb) != SH_JSON_OBJECT) return -1;
+
+            st_v = sh_json_get(tb, "start_time");
+            if (!st_v) return -1;
+            st = sh_json_as_double(st_v, 0.0);
+
+            dur_v = sh_json_get(tb, "durations");
+            if (!dur_v || sh_json_type(dur_v) != SH_JSON_ARRAY ||
+                sh_json_array_len(dur_v) != n) {
+                return -1;
+            }
+            tb_durations = (double *)malloc(n * sizeof(double));
+            if (!tb_durations) return -1;
+            for (tb_j = 0; tb_j < n; tb_j++) {
+                tb_durations[tb_j] = sh_json_as_double(sh_json_array_get(dur_v, tb_j), 0.0);
+            }
+
+            dist_v = sh_json_get(tb, "distances");
+            if (dist_v && sh_json_type(dist_v) == SH_JSON_ARRAY) {
+                if (sh_json_array_len(dist_v) != n) {
+                    free(tb_durations);
+                    return -1;
+                }
+                tb_distances = (double *)malloc(n * sizeof(double));
+                if (!tb_distances) {
+                    free(tb_durations);
+                    return -1;
+                }
+                for (tb_j = 0; tb_j < n; tb_j++) {
+                    tb_distances[tb_j] = sh_json_as_double(sh_json_array_get(dist_v, tb_j), 0.0);
+                }
+            }
+
+            if (sg_set_travel_time_bracket(ctx, st, (uint32_t)location_count,
+                                            tb_distances, tb_durations) != SG_STATUS_OK) {
+                free(tb_distances);
+                free(tb_durations);
+                return -1;
+            }
+            free(tb_distances);
+            free(tb_durations);
         }
     }
 

@@ -351,12 +351,32 @@ void sg_free(SGContext *ctx) {
         for (i = 0; i < ctx->num_travel_profiles; i++) {
             free(ctx->travel_profiles[i].distance_matrix);
             free(ctx->travel_profiles[i].duration_matrix);
+            if (ctx->travel_profiles[i].time_brackets) {
+                uint32_t j;
+                for (j = 0; j < ctx->travel_profiles[i].num_time_brackets; j++) {
+                    free(ctx->travel_profiles[i].time_brackets[j].distance_matrix);
+                    free(ctx->travel_profiles[i].time_brackets[j].duration_matrix);
+                }
+                free(ctx->travel_profiles[i].time_brackets);
+            }
         }
         free(ctx->travel_profiles);
         ctx->travel_profiles = NULL;
     }
     ctx->num_travel_profiles = 0;
     ctx->has_travel_profiles = 0;
+
+    /* Free global time brackets */
+    if (ctx->travel_time_brackets) {
+        for (i = 0; i < ctx->num_travel_time_brackets; i++) {
+            free(ctx->travel_time_brackets[i].distance_matrix);
+            free(ctx->travel_time_brackets[i].duration_matrix);
+        }
+        free(ctx->travel_time_brackets);
+        ctx->travel_time_brackets = NULL;
+    }
+    ctx->num_travel_time_brackets = 0;
+    ctx->has_travel_time_brackets = 0;
 
     sh_rng_free(ctx->op_rng);
     ctx->op_rng = NULL;
@@ -1009,6 +1029,43 @@ SGStatus sg_validate_model(SGContext *ctx) {
             sg_set_error(ctx, "travel_profile %u: duration matrix flag set but NULL", i);
             return SG_STATUS_INFEASIBLE;
         }
+        if (tp->has_time_brackets) {
+            uint32_t b;
+            if (tp->num_time_brackets == 0) {
+                sg_set_error(ctx, "travel_profile %u: has_time_brackets but count=0", i);
+                return SG_STATUS_INFEASIBLE;
+            }
+            for (b = 0; b < tp->num_time_brackets; b++) {
+                if (!tp->time_brackets[b].duration_matrix) {
+                    sg_set_error(ctx, "travel_profile %u: bracket %u has NULL duration", i, b);
+                    return SG_STATUS_INFEASIBLE;
+                }
+                if (b > 0 && tp->time_brackets[b].start_time <= tp->time_brackets[b - 1].start_time) {
+                    sg_set_error(ctx, "travel_profile %u: brackets not strictly ascending", i);
+                    return SG_STATUS_INFEASIBLE;
+                }
+            }
+        }
+    }
+
+    /* Validate global time brackets */
+    if (ctx->has_travel_time_brackets) {
+        uint32_t b;
+        if (ctx->num_travel_time_brackets == 0) {
+            sg_set_error(ctx, "has_travel_time_brackets but count=0");
+            return SG_STATUS_INFEASIBLE;
+        }
+        for (b = 0; b < ctx->num_travel_time_brackets; b++) {
+            if (!ctx->travel_time_brackets[b].duration_matrix) {
+                sg_set_error(ctx, "global time bracket %u has NULL duration", b);
+                return SG_STATUS_INFEASIBLE;
+            }
+            if (b > 0 && ctx->travel_time_brackets[b].start_time <=
+                          ctx->travel_time_brackets[b - 1].start_time) {
+                sg_set_error(ctx, "global time brackets not strictly ascending");
+                return SG_STATUS_INFEASIBLE;
+            }
+        }
     }
 
     /* Validate global speed profile reference */
@@ -1430,6 +1487,169 @@ SGStatus sg_vehicle_set_travel_profile(SGContext *ctx, uint32_t vehicle_id,
     }
     ctx->vehicles[vehicle_id].travel_profile_id = profile_id + 1;  /* 1-based */
     ctx->vehicles[vehicle_id].has_travel_profile = 1;
+    return SG_STATUS_OK;
+}
+
+/* ---- Time-indexed travel brackets ---- */
+
+SGStatus sg_set_travel_time_bracket(SGContext *ctx, double start_time,
+                                     uint32_t location_count,
+                                     const double *distance_matrix,
+                                     const double *duration_matrix) {
+    SGTravelTimeBracket *new_arr;
+    size_t total, i;
+    uint32_t insert_pos, k;
+    double *dist_copy = NULL;
+    double *dur_copy = NULL;
+
+    if (!ctx || !duration_matrix || location_count == 0 || !isfinite(start_time)) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    /* Check for duplicate start_time */
+    for (k = 0; k < ctx->num_travel_time_brackets; k++) {
+        if (ctx->travel_time_brackets[k].start_time == start_time) {
+            return SG_STATUS_INVALID_ARG;
+        }
+    }
+
+    total = (size_t)location_count * location_count;
+
+    /* Copy duration matrix (required) */
+    dur_copy = (double *)malloc(total * sizeof(double));
+    if (!dur_copy) return SG_STATUS_OUT_OF_MEMORY;
+    for (i = 0; i < total; i++) {
+        if (!isfinite(duration_matrix[i]) || duration_matrix[i] < 0.0) {
+            free(dur_copy);
+            return SG_STATUS_INVALID_ARG;
+        }
+        dur_copy[i] = duration_matrix[i];
+    }
+
+    /* Copy distance matrix (optional) */
+    if (distance_matrix) {
+        dist_copy = (double *)malloc(total * sizeof(double));
+        if (!dist_copy) {
+            free(dur_copy);
+            return SG_STATUS_OUT_OF_MEMORY;
+        }
+        for (i = 0; i < total; i++) {
+            if (!isfinite(distance_matrix[i]) || distance_matrix[i] < 0.0) {
+                free(dist_copy);
+                free(dur_copy);
+                return SG_STATUS_INVALID_ARG;
+            }
+            dist_copy[i] = distance_matrix[i];
+        }
+    }
+
+    /* Realloc bracket array */
+    new_arr = (SGTravelTimeBracket *)realloc(ctx->travel_time_brackets,
+        ((size_t)ctx->num_travel_time_brackets + 1) * sizeof(SGTravelTimeBracket));
+    if (!new_arr) {
+        free(dist_copy);
+        free(dur_copy);
+        return SG_STATUS_OUT_OF_MEMORY;
+    }
+    ctx->travel_time_brackets = new_arr;
+
+    /* Find insertion position to maintain sorted order */
+    insert_pos = ctx->num_travel_time_brackets;
+    while (insert_pos > 0 && ctx->travel_time_brackets[insert_pos - 1].start_time > start_time) {
+        ctx->travel_time_brackets[insert_pos] = ctx->travel_time_brackets[insert_pos - 1];
+        insert_pos--;
+    }
+
+    ctx->travel_time_brackets[insert_pos].start_time = start_time;
+    ctx->travel_time_brackets[insert_pos].distance_matrix = dist_copy;
+    ctx->travel_time_brackets[insert_pos].duration_matrix = dur_copy;
+    ctx->num_travel_time_brackets++;
+    ctx->has_travel_time_brackets = 1;
+
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_travel_profile_add_time_bracket(SGContext *ctx, uint32_t profile_id,
+                                             double start_time,
+                                             uint32_t location_count,
+                                             const double *distance_matrix,
+                                             const double *duration_matrix) {
+    SGTravelProfile *tp;
+    SGTravelTimeBracket *new_arr;
+    size_t total, i;
+    uint32_t insert_pos, k;
+    double *dist_copy = NULL;
+    double *dur_copy = NULL;
+
+    if (!ctx || profile_id >= ctx->num_travel_profiles) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (!duration_matrix || location_count == 0 || !isfinite(start_time)) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    tp = &ctx->travel_profiles[profile_id];
+
+    /* Check for duplicate start_time */
+    for (k = 0; k < tp->num_time_brackets; k++) {
+        if (tp->time_brackets[k].start_time == start_time) {
+            return SG_STATUS_INVALID_ARG;
+        }
+    }
+
+    total = (size_t)location_count * location_count;
+
+    /* Copy duration matrix (required) */
+    dur_copy = (double *)malloc(total * sizeof(double));
+    if (!dur_copy) return SG_STATUS_OUT_OF_MEMORY;
+    for (i = 0; i < total; i++) {
+        if (!isfinite(duration_matrix[i]) || duration_matrix[i] < 0.0) {
+            free(dur_copy);
+            return SG_STATUS_INVALID_ARG;
+        }
+        dur_copy[i] = duration_matrix[i];
+    }
+
+    /* Copy distance matrix (optional) */
+    if (distance_matrix) {
+        dist_copy = (double *)malloc(total * sizeof(double));
+        if (!dist_copy) {
+            free(dur_copy);
+            return SG_STATUS_OUT_OF_MEMORY;
+        }
+        for (i = 0; i < total; i++) {
+            if (!isfinite(distance_matrix[i]) || distance_matrix[i] < 0.0) {
+                free(dist_copy);
+                free(dur_copy);
+                return SG_STATUS_INVALID_ARG;
+            }
+            dist_copy[i] = distance_matrix[i];
+        }
+    }
+
+    /* Realloc bracket array */
+    new_arr = (SGTravelTimeBracket *)realloc(tp->time_brackets,
+        ((size_t)tp->num_time_brackets + 1) * sizeof(SGTravelTimeBracket));
+    if (!new_arr) {
+        free(dist_copy);
+        free(dur_copy);
+        return SG_STATUS_OUT_OF_MEMORY;
+    }
+    tp->time_brackets = new_arr;
+
+    /* Find insertion position to maintain sorted order */
+    insert_pos = tp->num_time_brackets;
+    while (insert_pos > 0 && tp->time_brackets[insert_pos - 1].start_time > start_time) {
+        tp->time_brackets[insert_pos] = tp->time_brackets[insert_pos - 1];
+        insert_pos--;
+    }
+
+    tp->time_brackets[insert_pos].start_time = start_time;
+    tp->time_brackets[insert_pos].distance_matrix = dist_copy;
+    tp->time_brackets[insert_pos].duration_matrix = dur_copy;
+    tp->num_time_brackets++;
+    tp->has_time_brackets = 1;
+
     return SG_STATUS_OK;
 }
 
@@ -2077,8 +2297,9 @@ SGStatus sg_prepare_travel(SGContext *ctx) {
         }
     }
 
-    /* Step 3: If no matrix and no callback, compute Euclidean matrices */
-    if (!ctx->travel_distance_matrix && !ctx->travel_duration_matrix && !ctx->travel_callback) {
+    /* Step 3: If no matrix and no callback and no time brackets, compute Euclidean matrices */
+    if (!ctx->travel_distance_matrix && !ctx->travel_duration_matrix
+        && !ctx->travel_callback && !ctx->has_travel_time_brackets) {
         uint32_t n = ctx->num_locations;
         if (n > 0) {
             size_t total = (size_t)n * n;

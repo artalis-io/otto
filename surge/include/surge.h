@@ -97,6 +97,32 @@ SGStatus sg_travel_profile_set_speed_profile(SGContext *ctx, uint32_t profile_id
 SGStatus sg_vehicle_set_travel_profile(SGContext *ctx, uint32_t vehicle_id,
                                         uint32_t profile_id);
 
+/*
+ * Travel duration override chain (first match wins at each level):
+ *   1. travel_callback              - short-circuits everything
+ *   2. per-vehicle travel profile:
+ *      a. time brackets             - select by departure_time
+ *      b. single matrix             - fixed override
+ *   3. global:
+ *      a. time brackets             - select by departure_time
+ *      b. single matrix             - base fallback
+ *   4. Euclidean fallback
+ *   5. speed profile (multiplicative, always applied on resolved duration)
+ */
+
+/* Time-indexed travel brackets (global) */
+SGStatus sg_set_travel_time_bracket(SGContext *ctx, double start_time,
+                                     uint32_t location_count,
+                                     const double *distance_matrix,
+                                     const double *duration_matrix);
+
+/* Time-indexed travel brackets (per-vehicle travel profile) */
+SGStatus sg_travel_profile_add_time_bracket(SGContext *ctx, uint32_t profile_id,
+                                             double start_time,
+                                             uint32_t location_count,
+                                             const double *distance_matrix,
+                                             const double *duration_matrix);
+
 SGStatus sg_vehicle_set_qualifications(SGContext *ctx, uint32_t vehicle_id,
                                         uint64_t qualification_flags);
 SGStatus sg_request_set_required_qualifications(SGContext *ctx, uint32_t request_id,

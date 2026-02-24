@@ -75,6 +75,7 @@ Surge supports orthogonal constraint dimensions that can be combined freely:
 | Constraint | Description |
 |------------|-------------|
 | **Time-dependent travel** | Speed profiles: step-function duration multipliers by departure time |
+| **Time-indexed travel brackets** | Multiple complete duration matrices indexed by departure time (global + per-vehicle) |
 | **Per-vehicle travel profiles** | Independent distance/duration matrices + speed profile per vehicle type |
 
 ### Objective Components
@@ -1176,9 +1177,13 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ## Implementation Plan
 
-### Current Status (as of 2026-02-23)
+### Current Status (as of 2026-02-24)
 
-**Baseline**: U1-U8 + S1-S12 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks + Multi-Trip + Multi-Threading (parallel + population) + SA cooling fix + mid-solve ejection pulse + Speed Profiles + Travel Profiles + Open Start + Plan/ETA Validation + Infeasible-Space Exploration + Aggressive SISR complete. All Tier 1 and Tier 2 production gaps closed. REST API server, WASM build, Python and Node.js bindings exist. 257 tests passing, ASAN/UBSAN clean.
+**Baseline**: U1-U8 + S1-S12 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks + Multi-Trip + Multi-Threading (parallel + population) + SA cooling fix + mid-solve ejection pulse + Speed Profiles + Travel Profiles + Time-Indexed Travel Brackets + Open Start + Plan/ETA Validation + Infeasible-Space Exploration + Aggressive SISR complete. All Tier 1 and Tier 2 production gaps closed. REST API server, WASM build, Python and Node.js bindings exist. 269 tests passing, ASAN/UBSAN clean.
+
+Implemented features: Everything in previous status plus: time-indexed travel brackets — multiple complete duration matrices indexed by departure time. Supported at both global level (`sg_set_travel_time_bracket()`) and per-vehicle travel profile level (`sg_travel_profile_add_time_bracket()`). Orthogonal to speed profiles (which compose multiplicatively on top). Override chain: callback → per-vehicle brackets/matrix → global brackets/matrix → Euclidean → speed profile. Distance uses bracket[0] when no departure_time is available. JSON API supports `time_brackets` in both `travel` and `travel_profiles` sections. 8 new tests (261→269).
+
+#### Previous Status (as of 2026-02-23)
 
 Best measured quality (10000 iterations, deterministic seed 42):
 
@@ -1329,6 +1334,7 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - [x] Add optional travel-time/distance matrix API and use it in construction + route feasibility (U1).
 - [x] Speed profiles (time-dependent duration multipliers).
 - [x] Per-vehicle travel profiles (independent distance/duration matrices + speed profile).
+- [x] Time-indexed travel brackets (multiple complete matrices by departure time, global + per-vehicle).
 - [x] Open start routes (skip first depot-to-stop leg).
 - [ ] Integrate Velo matrices for realistic routing costs/times.
 - [ ] Keep Ralph exact mode for small instances as baseline verifier.
@@ -1675,7 +1681,7 @@ Grouped by business impact:
 | **Commodity conflicts** | ✅ Complete | Bitmask-based (up to 64 types), O(1) conflict check. 4 tests. |
 | **Exclusion groups** | ✅ Complete | At most one request per group per vehicle. 4 tests. |
 | **Sequence-dependent setup** | ✅ Complete | Asymmetric N×N setup class matrix. 4 tests. |
-| **Time-dependent travel** | Partial | Speed profiles (step-function duration multipliers by departure time) done. Rush hour *indexed matrices* (multiple full matrix sets by time-of-day) not started. |
+| **Time-dependent travel** | ✅ Complete | Speed profiles (step-function multipliers) + time-indexed travel brackets (multiple complete matrices by departure time). Both global and per-vehicle. 8 tests. |
 | **LIFO/FIFO PD policy** | Not started | OR-Tools has per-vehicle pickup/delivery stacking order. Niche. |
 | **Backhaul constraint** | Not started | All deliveries before pickups on a route. jsprit has this. Niche. |
 | **Energy cost model** | Not started | EV-specific path energy cost. OR-Tools only. |
@@ -1684,12 +1690,12 @@ Grouped by business impact:
 
 | Gap | Status | Competitors | Notes |
 |-----|--------|-------------|-------|
-| **Time-dependent travel** | Partial | OR-Tools | Speed profiles done (`sg_vehicle_set_speed_profile`). Rush hour indexed matrices not started. |
+| **Time-dependent travel** | ✅ Done | OR-Tools | Speed profiles + time-indexed travel brackets (`sg_set_travel_time_bracket()`, `sg_travel_profile_add_time_bracket()`). Global + per-vehicle. 8 tests. |
 | **Max tasks per vehicle** | ✅ Done | VROOM | Per-vehicle cap on request count. 0 = unlimited. |
 | **Max distance per vehicle** | ✅ Done | VROOM | Per-vehicle cap on route distance. 0.0 = unlimited. |
 | **Open start (no depot)** | ✅ Done | OR-Tools | `sg_vehicle_set_open_start()`. Skips first depot-to-stop leg. 3 tests. |
 | **Per-vehicle travel matrix** | ✅ Done | OR-Tools, VROOM | `sg_vehicle_set_travel_profile()` — independent distance/duration matrices + speed profile per vehicle type. 6 tests. |
-| **Initial vehicle loads** | Not started | jsprit | Vehicle starts shift with pre-loaded cargo. Useful for return trips. |
+| **Initial vehicle loads** | ✅ Done | jsprit | `sg_vehicle_set_initial_load()`. First-trip capacity offset with prefix-sum feasibility. 4 tests. |
 | **Global span balancing** | ✅ Done | OR-Tools | `sg_set_span_cost_duration()` / `sg_set_span_cost_distance()`. Adds `span_cost × (max - min)` penalty to cost function. 5 tests. |
 | **Plan/ETA validation mode** | ✅ Done | VROOM | `sg_validate_plan()` — validate fixed routes, compute ETAs, report violations per stop. JSON API `"plan"` key. 8 tests. |
 
@@ -1732,7 +1738,7 @@ The JSON API provides three tiers of access:
 | `vehicles` | Fleet with costs | `sg_add_vehicle`, `sg_vehicle_set_*` (all cost/constraint/break fields) |
 | `tasks` | Stops with TWs | `sg_add_task`, `sg_task_set_*` (soft TW, disjunct TW) |
 | `requests` | PD pairs + constraints | `sg_add_*_request`, `sg_request_set_*` (qualifications, ride time, vehicle constraints, commodity, exclusion, setup, drop penalty) |
-| `travel` | Distance/duration matrices | `sg_set_travel_matrix` |
+| `travel` | Distance/duration matrices + time brackets | `sg_set_travel_matrix`, `sg_set_travel_time_bracket` |
 | `zones` | Zone distance matrix | `sg_set_zone_distance_matrix` |
 | `initial_routes` | Warm start | `sg_set_initial_routes` |
 
@@ -1744,7 +1750,7 @@ These are real-world features that require larger architectural changes:
 |---------|--------|
 | **Driver breaks / HoSE** | ✅ Complete. Abstract break model — generic `(max_work, break_duration, max_total_work)` maps to both EU EC 561 and US FMCSA rules. |
 | **Multiple trips** | ✅ Complete. Multi-route-per-vehicle state with depot reload modeling. `sg_vehicle_set_max_trips()`. |
-| **Time-dependent travel** | Partial. Speed profiles and per-vehicle travel profiles done (`sg_vehicle_set_travel_profile()`). Rush hour matrices indexed by departure time not yet implemented. |
+| **Time-dependent travel** | ✅ Complete. Speed profiles (step-function multipliers), per-vehicle travel profiles, and time-indexed travel brackets (multiple complete matrices by departure time). `sg_set_travel_time_bracket()` + `sg_travel_profile_add_time_bracket()`. |
 
 ---
 

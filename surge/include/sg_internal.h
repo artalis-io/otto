@@ -194,12 +194,21 @@ typedef struct {
 } SGDepotRecord;
 
 typedef struct {
+    double start_time;
+    double *distance_matrix;  /* [num_locations^2] or NULL */
+    double *duration_matrix;  /* [num_locations^2], required */
+} SGTravelTimeBracket;
+
+typedef struct {
     double *distance_matrix;     /* [num_locations^2] or NULL (= use global) */
     double *duration_matrix;     /* [num_locations^2] or NULL (= use global) */
     uint32_t speed_profile_id;   /* 0 = none, 1..N = ctx->speed_profiles[id-1] */
+    SGTravelTimeBracket *time_brackets;  /* sorted by start_time */
+    uint32_t num_time_brackets;
     uint8_t has_distance_matrix;
     uint8_t has_duration_matrix;
     uint8_t has_speed_profile;
+    uint8_t has_time_brackets;           /* fast-path flag */
 } SGTravelProfile;
 
 typedef struct {
@@ -372,6 +381,11 @@ struct SGContext {
     uint32_t num_travel_profiles;
     uint8_t has_travel_profiles;         /* fast-path flag */
 
+    /* Global time-indexed travel brackets */
+    SGTravelTimeBracket *travel_time_brackets;  /* sorted by start_time asc */
+    uint32_t num_travel_time_brackets;
+    uint8_t has_travel_time_brackets;           /* fast-path flag */
+
     /* Infeasible-space exploration penalty manager */
     SGPenaltyManager penalty;
 };
@@ -395,6 +409,18 @@ int sg_request_representative_location(const SGContext *ctx, uint32_t request_id
                                         uint32_t *location_id_out);
 
 /* Internal travel lookup functions (static inline) */
+
+/* Select the active bracket for a given departure_time.
+   Linear scan backward — optimal for 3–5 entries. */
+static inline const SGTravelTimeBracket *sg_select_bracket(
+    const SGTravelTimeBracket *brackets, uint32_t count,
+    double departure_time)
+{
+    uint32_t i = count;
+    while (i > 0 && brackets[i - 1].start_time > departure_time)
+        --i;
+    return &brackets[i > 0 ? i - 1 : 0];
+}
 
 static inline void sg_resolve_matrices(const SGContext *ctx, uint32_t vehicle_id,
                                         const double **dist_out, const double **dur_out,
@@ -422,9 +448,37 @@ static inline void sg_travel(const SGContext *ctx, uint32_t from_loc, uint32_t t
         return;
     }
     {
-        const double *dm, *tm; uint32_t sp_id;
-        sg_resolve_matrices(ctx, vehicle_id, &dm, &tm, &sp_id);
+        const double *dm = ctx->travel_distance_matrix;
+        const double *tm = ctx->travel_duration_matrix;
+        uint32_t sp_id = ctx->global_speed_profile_id;
         size_t idx = (size_t)from_loc * ctx->num_locations + to_loc;
+
+        /* Global time brackets */
+        if (ctx->has_travel_time_brackets) {
+            const SGTravelTimeBracket *br = sg_select_bracket(
+                ctx->travel_time_brackets, ctx->num_travel_time_brackets, departure_time);
+            tm = br->duration_matrix;
+            if (br->distance_matrix) dm = br->distance_matrix;
+        }
+
+        /* Per-vehicle override */
+        if (ctx->has_travel_profiles && vehicle_id != SG_NO_VEHICLE) {
+            uint32_t tp_id = ctx->vehicles[vehicle_id].travel_profile_id;
+            if (tp_id > 0) {
+                const SGTravelProfile *tp = &ctx->travel_profiles[tp_id - 1];
+                if (tp->has_time_brackets) {
+                    const SGTravelTimeBracket *br = sg_select_bracket(
+                        tp->time_brackets, tp->num_time_brackets, departure_time);
+                    tm = br->duration_matrix;
+                    if (br->distance_matrix) dm = br->distance_matrix;
+                } else {
+                    if (tp->has_distance_matrix) dm = tp->distance_matrix;
+                    if (tp->has_duration_matrix) tm = tp->duration_matrix;
+                }
+                if (tp->has_speed_profile) sp_id = tp->speed_profile_id;
+            }
+        }
+
         *dist = dm[idx];
         *dur  = tm[idx];
         if (sp_id > 0)
@@ -533,10 +587,21 @@ static inline double sg_travel_dist(const SGContext *ctx, uint32_t from_loc, uin
     }
     {
         const double *dist_matrix = ctx->travel_distance_matrix;
+        /* Global time brackets: use bracket[0] distance (no departure_time) */
+        if (ctx->has_travel_time_brackets &&
+            ctx->travel_time_brackets[0].distance_matrix) {
+            dist_matrix = ctx->travel_time_brackets[0].distance_matrix;
+        }
+        /* Per-vehicle override */
         if (ctx->has_travel_profiles && vehicle_id != SG_NO_VEHICLE) {
             uint32_t tp_id = ctx->vehicles[vehicle_id].travel_profile_id;
-            if (tp_id > 0 && ctx->travel_profiles[tp_id - 1].has_distance_matrix)
-                dist_matrix = ctx->travel_profiles[tp_id - 1].distance_matrix;
+            if (tp_id > 0) {
+                const SGTravelProfile *tp = &ctx->travel_profiles[tp_id - 1];
+                if (tp->has_time_brackets && tp->time_brackets[0].distance_matrix)
+                    dist_matrix = tp->time_brackets[0].distance_matrix;
+                else if (tp->has_distance_matrix)
+                    dist_matrix = tp->distance_matrix;
+            }
         }
         return dist_matrix[(size_t)from_loc * ctx->num_locations + to_loc];
     }
@@ -553,18 +618,36 @@ static inline double sg_travel_dur(const SGContext *ctx, uint32_t from_loc, uint
     {
         const double *dur_matrix = ctx->travel_duration_matrix;
         uint32_t sp_id = ctx->global_speed_profile_id;
+
+        /* Global time brackets */
+        if (ctx->has_travel_time_brackets) {
+            const SGTravelTimeBracket *br = sg_select_bracket(
+                ctx->travel_time_brackets, ctx->num_travel_time_brackets, departure_time);
+            dur_matrix = br->duration_matrix;
+        }
+
+        /* Per-vehicle override */
         if (ctx->has_travel_profiles && vehicle_id != SG_NO_VEHICLE) {
             uint32_t tp_id = ctx->vehicles[vehicle_id].travel_profile_id;
             if (tp_id > 0) {
                 const SGTravelProfile *tp = &ctx->travel_profiles[tp_id - 1];
-                if (tp->has_duration_matrix) dur_matrix = tp->duration_matrix;
+                if (tp->has_time_brackets) {
+                    const SGTravelTimeBracket *br = sg_select_bracket(
+                        tp->time_brackets, tp->num_time_brackets, departure_time);
+                    dur_matrix = br->duration_matrix;
+                } else {
+                    if (tp->has_duration_matrix) dur_matrix = tp->duration_matrix;
+                }
                 if (tp->has_speed_profile) sp_id = tp->speed_profile_id;
             }
         }
-        double dur = dur_matrix[(size_t)from_loc * ctx->num_locations + to_loc];
-        if (sp_id > 0)
-            dur *= sh_step_eval(ctx->speed_profiles[sp_id - 1], departure_time);
-        return dur;
+
+        {
+            double dur = dur_matrix[(size_t)from_loc * ctx->num_locations + to_loc];
+            if (sp_id > 0)
+                dur *= sh_step_eval(ctx->speed_profiles[sp_id - 1], departure_time);
+            return dur;
+        }
     }
 }
 
