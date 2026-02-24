@@ -267,6 +267,13 @@ typedef struct {
     int soft_lu_consecutive_defers_phase2;
     int soft_lu_defer_cap_forced_phase1;
     int soft_lu_defer_cap_forced_phase2;
+    int periodic_cost_gate_enabled;
+    int periodic_cost_gate_defers_phase1;
+    int periodic_cost_gate_defers_phase2;
+    int periodic_cost_consecutive_defers_phase1;
+    int periodic_cost_consecutive_defers_phase2;
+    int periodic_cost_defer_cap_forced_phase1;
+    int periodic_cost_defer_cap_forced_phase2;
     double soft_lu_refactor_cost_ewma_phase1;
     double soft_lu_refactor_cost_ewma_phase2;
     double soft_lu_iter_cost_ewma_phase1;
@@ -746,6 +753,13 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.soft_lu_consecutive_defers_phase2 = solver_tel.soft_lu_consecutive_defers_phase2;
             result.soft_lu_defer_cap_forced_phase1 = solver_tel.soft_lu_defer_cap_forced_phase1;
             result.soft_lu_defer_cap_forced_phase2 = solver_tel.soft_lu_defer_cap_forced_phase2;
+            result.periodic_cost_gate_enabled = solver_tel.periodic_cost_gate_enabled;
+            result.periodic_cost_gate_defers_phase1 = solver_tel.periodic_cost_gate_defers_phase1;
+            result.periodic_cost_gate_defers_phase2 = solver_tel.periodic_cost_gate_defers_phase2;
+            result.periodic_cost_consecutive_defers_phase1 = solver_tel.periodic_cost_consecutive_defers_phase1;
+            result.periodic_cost_consecutive_defers_phase2 = solver_tel.periodic_cost_consecutive_defers_phase2;
+            result.periodic_cost_defer_cap_forced_phase1 = solver_tel.periodic_cost_defer_cap_forced_phase1;
+            result.periodic_cost_defer_cap_forced_phase2 = solver_tel.periodic_cost_defer_cap_forced_phase2;
             result.soft_lu_refactor_cost_ewma_phase1 = solver_tel.soft_lu_refactor_cost_ewma_phase1;
             result.soft_lu_refactor_cost_ewma_phase2 = solver_tel.soft_lu_refactor_cost_ewma_phase2;
             result.soft_lu_iter_cost_ewma_phase1 = solver_tel.soft_lu_iter_cost_ewma_phase1;
@@ -1620,6 +1634,20 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->soft_lu_defer_cap_forced_phase1);
     fprintf(out, "    \"soft_lu_defer_cap_forced_phase2\": %d,\n",
             ralph->soft_lu_defer_cap_forced_phase2);
+    fprintf(out, "    \"periodic_cost_gate_enabled\": %s,\n",
+            ralph->periodic_cost_gate_enabled ? "true" : "false");
+    fprintf(out, "    \"periodic_cost_gate_defers_phase1\": %d,\n",
+            ralph->periodic_cost_gate_defers_phase1);
+    fprintf(out, "    \"periodic_cost_gate_defers_phase2\": %d,\n",
+            ralph->periodic_cost_gate_defers_phase2);
+    fprintf(out, "    \"periodic_cost_consecutive_defers_phase1\": %d,\n",
+            ralph->periodic_cost_consecutive_defers_phase1);
+    fprintf(out, "    \"periodic_cost_consecutive_defers_phase2\": %d,\n",
+            ralph->periodic_cost_consecutive_defers_phase2);
+    fprintf(out, "    \"periodic_cost_defer_cap_forced_phase1\": %d,\n",
+            ralph->periodic_cost_defer_cap_forced_phase1);
+    fprintf(out, "    \"periodic_cost_defer_cap_forced_phase2\": %d,\n",
+            ralph->periodic_cost_defer_cap_forced_phase2);
     fprintf(out, "    \"soft_lu_refactor_cost_ewma_phase1_ms\": %.6f,\n",
             ralph->soft_lu_refactor_cost_ewma_phase1);
     fprintf(out, "    \"soft_lu_refactor_cost_ewma_phase2_ms\": %.6f,\n",

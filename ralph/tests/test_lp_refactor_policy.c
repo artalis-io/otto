@@ -182,6 +182,62 @@ int main(void) {
                                                                     1.0);
     TEST(should_run == 0, "soft lu cost gate requires large basis");
 
+    should_run = lp_refactor_policy_periodic_cost_dampen_should_defer(2,
+                                                                       1503,
+                                                                       0,
+                                                                       80,
+                                                                       60,
+                                                                       120,
+                                                                       10,
+                                                                       100,
+                                                                       1e5,
+                                                                       100.0,
+                                                                       12.0,
+                                                                       1.0);
+    TEST(should_run == 1, "periodic cost dampen defers expensive periodic refactors");
+
+    should_run = lp_refactor_policy_periodic_cost_dampen_should_defer(2,
+                                                                       1503,
+                                                                       0,
+                                                                       80,
+                                                                       116,
+                                                                       120,
+                                                                       10,
+                                                                       100,
+                                                                       1e5,
+                                                                       100.0,
+                                                                       12.0,
+                                                                       1.0);
+    TEST(should_run == 0, "periodic cost dampen keeps reserve near max updates");
+
+    should_run = lp_refactor_policy_periodic_cost_dampen_should_defer(2,
+                                                                       1503,
+                                                                       0,
+                                                                       80,
+                                                                       60,
+                                                                       120,
+                                                                       10,
+                                                                       100,
+                                                                       1e5,
+                                                                       100.0,
+                                                                       5.0,
+                                                                       1.0);
+    TEST(should_run == 0, "periodic cost dampen requires high cost ratio");
+
+    should_run = lp_refactor_policy_periodic_cost_dampen_should_defer(2,
+                                                                       500,
+                                                                       0,
+                                                                       80,
+                                                                       60,
+                                                                       120,
+                                                                       10,
+                                                                       100,
+                                                                       1e5,
+                                                                       100.0,
+                                                                       12.0,
+                                                                       1.0);
+    TEST(should_run == 0, "periodic cost dampen requires large basis");
+
     policy.interval = 24;
     policy.min_update_age = 12;
     policy.interval_pressure = 0.30;

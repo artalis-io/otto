@@ -102,6 +102,13 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->policy.soft_lu_consecutive_defers_phase2 = 0;
     solver->policy.soft_lu_defer_cap_forced_phase1 = 0;
     solver->policy.soft_lu_defer_cap_forced_phase2 = 0;
+    solver->policy.periodic_cost_gate_enabled = 1;
+    solver->policy.periodic_cost_gate_defers_phase1 = 0;
+    solver->policy.periodic_cost_gate_defers_phase2 = 0;
+    solver->policy.periodic_cost_consecutive_defers_phase1 = 0;
+    solver->policy.periodic_cost_consecutive_defers_phase2 = 0;
+    solver->policy.periodic_cost_defer_cap_forced_phase1 = 0;
+    solver->policy.periodic_cost_defer_cap_forced_phase2 = 0;
     solver->policy.soft_lu_refactor_cost_ewma_phase1 = 0.0;
     solver->policy.soft_lu_refactor_cost_ewma_phase2 = 0.0;
     solver->policy.soft_lu_iter_cost_ewma_phase1 = 0.0;
@@ -332,6 +339,13 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     out->soft_lu_consecutive_defers_phase2 = solver->policy.soft_lu_consecutive_defers_phase2;
     out->soft_lu_defer_cap_forced_phase1 = solver->policy.soft_lu_defer_cap_forced_phase1;
     out->soft_lu_defer_cap_forced_phase2 = solver->policy.soft_lu_defer_cap_forced_phase2;
+    out->periodic_cost_gate_enabled = solver->policy.periodic_cost_gate_enabled;
+    out->periodic_cost_gate_defers_phase1 = solver->policy.periodic_cost_gate_defers_phase1;
+    out->periodic_cost_gate_defers_phase2 = solver->policy.periodic_cost_gate_defers_phase2;
+    out->periodic_cost_consecutive_defers_phase1 = solver->policy.periodic_cost_consecutive_defers_phase1;
+    out->periodic_cost_consecutive_defers_phase2 = solver->policy.periodic_cost_consecutive_defers_phase2;
+    out->periodic_cost_defer_cap_forced_phase1 = solver->policy.periodic_cost_defer_cap_forced_phase1;
+    out->periodic_cost_defer_cap_forced_phase2 = solver->policy.periodic_cost_defer_cap_forced_phase2;
     out->soft_lu_refactor_cost_ewma_phase1 = solver->policy.soft_lu_refactor_cost_ewma_phase1;
     out->soft_lu_refactor_cost_ewma_phase2 = solver->policy.soft_lu_refactor_cost_ewma_phase2;
     out->soft_lu_iter_cost_ewma_phase1 = solver->policy.soft_lu_iter_cost_ewma_phase1;
