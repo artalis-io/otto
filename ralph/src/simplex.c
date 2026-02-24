@@ -125,6 +125,8 @@ typedef enum {
 #define PHASE1_DIR_STABILIZE_COOLDOWN_ITERS 8
 #define PHASE1_DIR_INF_FORCE_REFACTOR_MULT 100.0
 #define SOFT_LU_COST_EWMA_ALPHA 0.20
+#define SOFT_LU_MAX_CONSEC_DEFER_PHASE1 6
+#define SOFT_LU_MAX_CONSEC_DEFER_PHASE2 4
 
 static double clamp_unit_interval(double x) {
     if (!(x > 0.0)) return 0.0;
@@ -208,6 +210,50 @@ static void soft_lu_record_defer(SimplexSolver *owner, int phase) {
     if (!owner) return;
     if (phase == 1) owner->policy.soft_lu_cost_gate_defers_phase1++;
     else if (phase == 2) owner->policy.soft_lu_cost_gate_defers_phase2++;
+}
+
+static int soft_lu_defer_cap_for_phase(int phase) {
+    if (phase == 1) return SOFT_LU_MAX_CONSEC_DEFER_PHASE1;
+    if (phase == 2) return SOFT_LU_MAX_CONSEC_DEFER_PHASE2;
+    return 0;
+}
+
+static int* soft_lu_consecutive_defers_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.soft_lu_consecutive_defers_phase1;
+    if (phase == 2) return &owner->policy.soft_lu_consecutive_defers_phase2;
+    return NULL;
+}
+
+static int* soft_lu_cap_forced_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.soft_lu_defer_cap_forced_phase1;
+    if (phase == 2) return &owner->policy.soft_lu_defer_cap_forced_phase2;
+    return NULL;
+}
+
+static int soft_lu_consecutive_defers(const SimplexSolver *owner, int phase) {
+    if (!owner) return 0;
+    if (phase == 1) return owner->policy.soft_lu_consecutive_defers_phase1;
+    if (phase == 2) return owner->policy.soft_lu_consecutive_defers_phase2;
+    return 0;
+}
+
+static void soft_lu_set_consecutive_defers(SimplexSolver *owner, int phase, int value) {
+    int *ptr = soft_lu_consecutive_defers_ptr(owner, phase);
+    if (!ptr) return;
+    if (value < 0) value = 0;
+    *ptr = value;
+}
+
+static void soft_lu_reset_defer_streak(SimplexSolver *owner, int phase) {
+    soft_lu_set_consecutive_defers(owner, phase, 0);
+}
+
+static void soft_lu_record_cap_forced(SimplexSolver *owner, int phase) {
+    int *ptr = soft_lu_cap_forced_ptr(owner, phase);
+    if (!ptr) return;
+    (*ptr)++;
 }
 
 static double periodic_feedback_bias_for_phase(const SimplexSolver *owner, int phase) {
@@ -505,6 +551,54 @@ int simplex_lu_health_refactor_plan_for_test(int m,
     if (soft_threshold_out) *soft_threshold_out = decision.soft_breach_threshold;
     if (soft_min_update_age_out) *soft_min_update_age_out = decision.soft_min_update_age;
     return decision.refactor_now;
+}
+
+int simplex_soft_lu_defer_plan_for_test(int phase,
+                                        int m,
+                                        int use_bland,
+                                        int degenerate_count,
+                                        int num_updates,
+                                        int max_updates,
+                                        int spike_pool_used,
+                                        int spike_pool_capacity,
+                                        double cond_estimate,
+                                        double growth_factor,
+                                        double refactor_cost_ewma_ms,
+                                        double iter_cost_ewma_ms,
+                                        int consecutive_defers,
+                                        int *cap_out,
+                                        int *cap_blocked_out,
+                                        int *next_consecutive_defers_out) {
+    int cap = soft_lu_defer_cap_for_phase(phase);
+    int should_defer = 0;
+    int cap_blocked = 0;
+    int next_consecutive = 0;
+
+    if (consecutive_defers < 0) consecutive_defers = 0;
+    if (lp_refactor_policy_soft_lu_cost_gate_should_defer(phase,
+                                                           m,
+                                                           use_bland,
+                                                           degenerate_count,
+                                                           num_updates,
+                                                           max_updates,
+                                                           spike_pool_used,
+                                                           spike_pool_capacity,
+                                                           cond_estimate,
+                                                           growth_factor,
+                                                           refactor_cost_ewma_ms,
+                                                           iter_cost_ewma_ms)) {
+        if (cap > 0 && consecutive_defers >= cap) {
+            cap_blocked = 1;
+        } else {
+            should_defer = 1;
+            next_consecutive = consecutive_defers + 1;
+        }
+    }
+
+    if (cap_out) *cap_out = cap;
+    if (cap_blocked_out) *cap_blocked_out = cap_blocked;
+    if (next_consecutive_defers_out) *next_consecutive_defers_out = next_consecutive;
+    return should_defer;
 }
 
 /* FNV-1a style mixer for deterministic trace signatures. */
@@ -5211,12 +5305,17 @@ static int simplex_phase1(SimplexSolver *solver) {
         if (lu_health_decision.hard_trigger) {
             periodic_policy_cooldown = 0;
             periodic_policy_pressure_decay = 0.0;
+            soft_lu_reset_defer_streak(solver, 1);
+        } else if (!lu_health_decision.soft_trigger || !solver->policy.soft_lu_cost_gate_enabled) {
+            soft_lu_reset_defer_streak(solver, 1);
         }
         if (lu_refactor_needed &&
             solver->policy.soft_lu_cost_gate_enabled &&
             lu_health_decision.soft_trigger &&
-            !lu_health_decision.hard_trigger &&
-            lp_refactor_policy_soft_lu_cost_gate_should_defer(
+            !lu_health_decision.hard_trigger) {
+            int cap_blocked = 0;
+            int next_consecutive = 0;
+            int should_defer = simplex_soft_lu_defer_plan_for_test(
                 1,
                 tab->m,
                 use_bland,
@@ -5228,10 +5327,28 @@ static int simplex_phase1(SimplexSolver *solver) {
                 tab->lu->cond_estimate,
                 tab->lu->growth_factor,
                 soft_lu_refactor_cost_ewma(solver, 1),
-                soft_lu_iter_cost_ewma(solver, 1))) {
-            lu_refactor_needed = 0;
-            lu_soft_cost_deferred = 1;
-            soft_lu_record_defer(solver, 1);
+                soft_lu_iter_cost_ewma(solver, 1),
+                soft_lu_consecutive_defers(solver, 1),
+                NULL,
+                &cap_blocked,
+                &next_consecutive);
+            if (should_defer) {
+                lu_refactor_needed = 0;
+                lu_soft_cost_deferred = 1;
+                soft_lu_record_defer(solver, 1);
+                soft_lu_set_consecutive_defers(solver, 1, next_consecutive);
+            } else {
+                soft_lu_reset_defer_streak(solver, 1);
+                if (cap_blocked) {
+                    soft_lu_record_cap_forced(solver, 1);
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Soft LU defer cap reached; forcing periodic LU-health refactor (updates=%d/%d, degen=%d)\n",
+                                tab->lu->num_updates,
+                                tab->lu->max_updates,
+                                degenerate_count);
+                    }
+                }
+            }
         }
         if (!lu_refactor_needed) {
             cooldown_eligible = lp_refactor_policy_phase1_cooldown_eligible(tab->m,
@@ -5263,6 +5380,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         }
 
         if (needs_refactor) {
+            soft_lu_reset_defer_streak(solver, 1);
             runtime_record_periodic_refactor_trigger(solver, 1, lu_refactor_needed);
             double t_refactor_ms = lp_telemetry_timer_start();
             int rc_refactor = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PERIODIC);
@@ -6046,12 +6164,17 @@ static int simplex_phase2(SimplexSolver *solver) {
         if (lu_health_decision.hard_trigger) {
             periodic_policy_cooldown = 0;
             periodic_policy_pressure_decay = 0.0;
+            soft_lu_reset_defer_streak(solver, 2);
+        } else if (!lu_health_decision.soft_trigger || !solver->policy.soft_lu_cost_gate_enabled) {
+            soft_lu_reset_defer_streak(solver, 2);
         }
         if (lu_refactor_needed &&
             solver->policy.soft_lu_cost_gate_enabled &&
             lu_health_decision.soft_trigger &&
-            !lu_health_decision.hard_trigger &&
-            lp_refactor_policy_soft_lu_cost_gate_should_defer(
+            !lu_health_decision.hard_trigger) {
+            int cap_blocked = 0;
+            int next_consecutive = 0;
+            int should_defer = simplex_soft_lu_defer_plan_for_test(
                 2,
                 tab->m,
                 use_bland,
@@ -6063,11 +6186,29 @@ static int simplex_phase2(SimplexSolver *solver) {
                 tab->lu->cond_estimate,
                 tab->lu->growth_factor,
                 soft_lu_refactor_cost_ewma(solver, 2),
-                soft_lu_iter_cost_ewma(solver, 2))) {
-            lu_refactor_needed = 0;
-            lu_soft_cost_deferred = 1;
-            soft_lu_record_defer(solver, 2);
-            needs_refactor = 0;
+                soft_lu_iter_cost_ewma(solver, 2),
+                soft_lu_consecutive_defers(solver, 2),
+                NULL,
+                &cap_blocked,
+                &next_consecutive);
+            if (should_defer) {
+                lu_refactor_needed = 0;
+                lu_soft_cost_deferred = 1;
+                soft_lu_record_defer(solver, 2);
+                soft_lu_set_consecutive_defers(solver, 2, next_consecutive);
+                needs_refactor = 0;
+            } else {
+                soft_lu_reset_defer_streak(solver, 2);
+                if (cap_blocked) {
+                    soft_lu_record_cap_forced(solver, 2);
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[primal_simplex] Soft LU defer cap reached; forcing periodic LU-health refactor (updates=%d/%d, degen=%d)\n",
+                                tab->lu->num_updates,
+                                tab->lu->max_updates,
+                                degenerate_count);
+                    }
+                }
+            }
         }
         if (!lu_refactor_needed) {
             LPPeriodicRefactorPolicy effective_policy;
@@ -6101,6 +6242,7 @@ static int simplex_phase2(SimplexSolver *solver) {
         }
 
         if (needs_refactor) {
+            soft_lu_reset_defer_streak(solver, 2);
             runtime_record_periodic_refactor_trigger(solver, 2, lu_refactor_needed);
             int rc_refactor;
             double refactor_elapsed_ms = 0.0;
