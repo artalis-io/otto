@@ -69,6 +69,18 @@ int lp_refactor_policy_phase1_dir_stabilize_cooldown_updates(int m,
                                                              int degenerate_count,
                                                              int repeat_streak);
 
+int lp_refactor_policy_phase1_stall_escape_eligible(int m,
+                                                    int degenerate_count,
+                                                    int no_pivot_streak,
+                                                    int use_bland,
+                                                    int cooldown_updates);
+
+int lp_refactor_policy_phase1_stall_escape_exclude_iters(int m,
+                                                         int no_pivot_streak);
+
+int lp_refactor_policy_phase1_stall_escape_cooldown_updates(int m,
+                                                            int no_pivot_streak);
+
 LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(
     int m,
     int use_ft_updates,
