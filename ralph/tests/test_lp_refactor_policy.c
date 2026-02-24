@@ -17,6 +17,7 @@ int main(void) {
     int total = 0;
     LPPeriodicRefactorPolicy policy;
     LPLUHealthRefactorDecision decision;
+    LPPeriodicCostDampenReason periodic_reason;
     int should_run;
 
     printf("=== LP Refactor Policy Module Tests ===\n");
@@ -237,6 +238,52 @@ int main(void) {
                                                                        12.0,
                                                                        1.0);
     TEST(should_run == 0, "periodic cost dampen requires large basis");
+
+    periodic_reason = lp_refactor_policy_periodic_cost_dampen_decision(2,
+                                                                        1503,
+                                                                        0,
+                                                                        80,
+                                                                        60,
+                                                                        120,
+                                                                        10,
+                                                                        100,
+                                                                        1e5,
+                                                                        100.0,
+                                                                        12.0,
+                                                                        1.0);
+    TEST(periodic_reason == LP_PERIODIC_COST_DAMPEN_DEFER,
+         "periodic cost dampen decision returns defer");
+    periodic_reason = lp_refactor_policy_periodic_cost_dampen_decision(2,
+                                                                        500,
+                                                                        0,
+                                                                        80,
+                                                                        60,
+                                                                        120,
+                                                                        10,
+                                                                        100,
+                                                                        1e5,
+                                                                        100.0,
+                                                                        12.0,
+                                                                        1.0);
+    TEST(periodic_reason == LP_PERIODIC_COST_DAMPEN_BLOCK_SMALL_M,
+         "periodic cost dampen decision reports small-m block");
+    periodic_reason = lp_refactor_policy_periodic_cost_dampen_decision(2,
+                                                                        1503,
+                                                                        0,
+                                                                        80,
+                                                                        116,
+                                                                        120,
+                                                                        10,
+                                                                        100,
+                                                                        1e5,
+                                                                        100.0,
+                                                                        12.0,
+                                                                        1.0);
+    TEST(periodic_reason == LP_PERIODIC_COST_DAMPEN_BLOCK_UPDATE_RESERVE,
+         "periodic cost dampen decision reports update-reserve block");
+    TEST(lp_refactor_policy_periodic_cost_dampen_reason_string(
+             LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO) != NULL,
+         "periodic cost dampen reason string is available");
 
     policy.interval = 24;
     policy.min_update_age = 12;

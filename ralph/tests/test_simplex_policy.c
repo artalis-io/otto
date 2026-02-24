@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "lp.h"
+#include "lp_refactor_policy.h"
 
 /* Internal test hook from simplex.c */
 int simplex_choose_basis_action_for_test(double pivot,
@@ -75,6 +76,7 @@ int simplex_periodic_cost_defer_plan_for_test(int phase,
                                               double refactor_cost_ewma_ms,
                                               double iter_cost_ewma_ms,
                                               int consecutive_defers,
+                                              int *reason_out,
                                               int *cap_out,
                                               int *cap_blocked_out,
                                               int *next_consecutive_defers_out);
@@ -231,6 +233,7 @@ typedef struct {
     int expected_cap;
     int expected_cap_blocked;
     int expected_next_consecutive;
+    int expected_reason;
 } PeriodicCostDeferCase;
 
 static int run_lu_health_case(const LUHealthCase *tc) {
@@ -334,6 +337,7 @@ static int run_soft_lu_defer_case(const SoftLUDeferCase *tc) {
 }
 
 static int run_periodic_cost_defer_case(const PeriodicCostDeferCase *tc) {
+    int reason = -1;
     int cap = -1;
     int cap_blocked = -1;
     int next_consecutive = -1;
@@ -350,6 +354,7 @@ static int run_periodic_cost_defer_case(const PeriodicCostDeferCase *tc) {
                                                            tc->refactor_cost_ewma_ms,
                                                            tc->iter_cost_ewma_ms,
                                                            tc->consecutive_defers,
+                                                           &reason,
                                                            &cap,
                                                            &cap_blocked,
                                                            &next_consecutive);
@@ -371,6 +376,11 @@ static int run_periodic_cost_defer_case(const PeriodicCostDeferCase *tc) {
     if (next_consecutive != tc->expected_next_consecutive) {
         fprintf(stderr, "FAIL: %s (expected next_consecutive=%d got=%d)\n",
                 tc->name, tc->expected_next_consecutive, next_consecutive);
+        return 0;
+    }
+    if (reason != tc->expected_reason) {
+        fprintf(stderr, "FAIL: %s (expected reason=%d got=%d)\n",
+                tc->name, tc->expected_reason, reason);
         return 0;
     }
 
@@ -900,7 +910,8 @@ int main(void) {
             .expected_defer = 1,
             .expected_cap = 3,
             .expected_cap_blocked = 0,
-            .expected_next_consecutive = 1
+            .expected_next_consecutive = 1,
+            .expected_reason = LP_PERIODIC_COST_DAMPEN_DEFER
         },
         {
             .name = "periodic cost defer cap blocks excessive defers",
@@ -920,7 +931,8 @@ int main(void) {
             .expected_defer = 0,
             .expected_cap = 3,
             .expected_cap_blocked = 1,
-            .expected_next_consecutive = 0
+            .expected_next_consecutive = 0,
+            .expected_reason = LP_PERIODIC_COST_DAMPEN_DEFER
         },
         {
             .name = "periodic cost gate requires high refactor-to-iter ratio",
@@ -940,7 +952,8 @@ int main(void) {
             .expected_defer = 0,
             .expected_cap = 3,
             .expected_cap_blocked = 0,
-            .expected_next_consecutive = 0
+            .expected_next_consecutive = 0,
+            .expected_reason = LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO
         },
         {
             .name = "phase1 periodic cost cap is stricter",
@@ -960,7 +973,8 @@ int main(void) {
             .expected_defer = 0,
             .expected_cap = 2,
             .expected_cap_blocked = 1,
-            .expected_next_consecutive = 0
+            .expected_next_consecutive = 0,
+            .expected_reason = LP_PERIODIC_COST_DAMPEN_DEFER
         }
     };
 
