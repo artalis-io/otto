@@ -1661,75 +1661,6 @@ static int symbolic_match_col(const SparseMatrix *B,
     return 0;
 }
 
-/* Finalize symbolic analysis as full-structural (k=m, no identity placement). */
-static int lu_symbolic_finalize_full_structural(
-    LUFactorization *lu,
-    const int *struct_nnz,
-    int *is_identity_col,
-    int *row_used,
-    int *row_identity_col,
-    int *col_order,
-    int *col_order_inv) {
-    int m = lu->m;
-    uint64_t fingerprint = FNV_OFFSET_BASIS;
-
-    memset(is_identity_col, 0, m * sizeof(int));
-    memset(row_used, 0, m * sizeof(int));
-    for (int i = 0; i < m; i++) {
-        row_identity_col[i] = -1;
-    }
-
-    for (int j = 0; j < m; j++) {
-        fingerprint ^= (uint64_t)struct_nnz[j];
-        fingerprint *= FNV_PRIME;
-    }
-
-    if (lu->sym_valid &&
-        lu->sym_fingerprint == fingerprint &&
-        lu->sym_num_identity == 0 &&
-        lu->sym_k == m) {
-        lp_telemetry_lu_record_symbolic_cache_hit(lu);
-        return 0;
-    }
-    lp_telemetry_lu_record_symbolic_cache_miss(lu);
-
-    for (int j = 0; j < m; j++) {
-        col_order[j] = j;
-        col_order_inv[j] = j;
-    }
-    lu->sym_valid = 1;
-    lu->sym_num_identity = 0;
-    lu->sym_k = m;
-    lu->sym_fingerprint = fingerprint;
-    return 0;
-}
-
-/* Check whether cached symbolic identity assignments are still valid for B.
- * Used for a guarded symbolic-failure retry path. */
-static int lu_symbolic_cached_identities_match(
-    const LUFactorization *lu,
-    const SparseMatrix *B) {
-    if (!lu || !B || !lu->sym_valid) return 0;
-
-    int m = lu->m;
-    const int *is_identity_col = lu->ws_is_identity;
-    const int *identity_row = lu->ws_identity_row;
-    const double *identity_val = lu->ws_identity_val;
-    if (!is_identity_col || !identity_row || !identity_val) return 0;
-
-    for (int j = 0; j < m; j++) {
-        if (!is_identity_col[j]) continue;
-
-        int col_nnz = B->colptr[j + 1] - B->colptr[j];
-        if (col_nnz != 1) return 0;
-
-        int p = B->colptr[j];
-        if (B->rowidx[p] != identity_row[j]) return 0;
-        if (fabs(B->values[p] - identity_val[j]) > RALPH_ZERO_TOL) return 0;
-    }
-    return 1;
-}
-
 /*
  * Symbolic analysis: identity detection + fill-reducing column ordering.
  * Populates ws_is_identity, ws_identity_row, ws_identity_val, ws_row_used,
@@ -1784,9 +1715,27 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
     /* Full-structural basis (k=m): no identity placement needed.
      * Keep sparse path eligible and avoid unnecessary symbolic fallback. */
     if (num_identity == 0) {
-        return lu_symbolic_finalize_full_structural(
-            lu, struct_nnz, is_identity_col, row_used, row_identity_col,
-            col_order, col_order_inv);
+        uint64_t fingerprint = FNV_OFFSET_BASIS;
+        for (int j = 0; j < m; j++) {
+            fingerprint ^= (uint64_t)struct_nnz[j];
+            fingerprint *= FNV_PRIME;
+        }
+
+        if (lu->sym_valid && lu->sym_fingerprint == fingerprint) {
+            lp_telemetry_lu_record_symbolic_cache_hit(lu);
+            return 0;
+        }
+        lp_telemetry_lu_record_symbolic_cache_miss(lu);
+
+        for (int j = 0; j < m; j++) {
+            col_order[j] = j;
+            col_order_inv[j] = j;
+        }
+        lu->sym_valid = 1;
+        lu->sym_num_identity = 0;
+        lu->sym_k = m;
+        lu->sym_fingerprint = fingerprint;
+        return 0;
     }
 
     /* Ensure structural columns can be matched to non-identity rows.
@@ -1819,10 +1768,14 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
                 break;
             }
         }
-        if (candidate_identity_row < 0) return -1;
+        if (candidate_identity_row < 0) {
+            return -1;
+        }
 
         int id_col = row_identity_col[candidate_identity_row];
-        if (id_col < 0 || !is_identity_col[id_col]) return -1;
+        if (id_col < 0 || !is_identity_col[id_col]) {
+            return -1;
+        }
 
         is_identity_col[id_col] = 0;
         row_used[candidate_identity_row] = 0;
@@ -3154,17 +3107,6 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
     int sym_result = lu_symbolic_analyze(lu, B);
     lp_telemetry_lu_record_symbolic_call_timed(lu, t_symbolic_ms);
     if (sym_result < 0) {
-        /* Guarded retry: when symbolic matching fails but the previously cached
-         * identity partition is still exact for this basis, reuse it once for
-         * numeric factorization instead of immediately falling back to dense. */
-        if (lu_symbolic_cached_identities_match(lu, B)) {
-            int cached_num_result = lu_numeric_factorize(lu, B, lu->sym_num_identity, lu->sym_k);
-            if (cached_num_result == 0) {
-                lp_telemetry_lu_mark_sparse_success(lu);
-                return 0;
-            }
-            lu->sym_valid = 0;  /* Cached plan no longer usable numerically */
-        }
         lp_telemetry_lu_set_sparse_fallback_reason(lu, LU_SPARSE_FALLBACK_SYMBOLIC);
         return -1;
     }
