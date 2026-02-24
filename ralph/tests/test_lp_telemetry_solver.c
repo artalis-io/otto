@@ -65,6 +65,9 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.policy.refactor_next_reason = RALPH_REFACTOR_REASON_SETUP;
     solver.telemetry.perf_basis_fastpath_hits = 7;
     solver.policy.periodic_feedback_bias_phase2 = 0.2;
+    solver.policy.soft_lu_cost_gate_enabled = 0;
+    solver.policy.soft_lu_cost_gate_defers_phase2 = 5;
+    solver.policy.soft_lu_refactor_cost_ewma_phase2 = 9.5;
 
     lp_telemetry_reset_solver(&solver);
 
@@ -75,6 +78,12 @@ static void test_solver_reset_and_refactor_accounting(void) {
     ASSERT_INT_EQ(solver.telemetry.perf_basis_fastpath_hits, 0, "reset: basis_fastpath_hits");
     ASSERT_DBL_EQ(solver.policy.periodic_feedback_bias_phase2, 0.0,
                   "reset: periodic feedback phase2");
+    ASSERT_INT_EQ(solver.policy.soft_lu_cost_gate_enabled, 1,
+                  "reset: soft lu cost gate enabled");
+    ASSERT_INT_EQ(solver.policy.soft_lu_cost_gate_defers_phase2, 0,
+                  "reset: soft lu defers phase2");
+    ASSERT_DBL_EQ(solver.policy.soft_lu_refactor_cost_ewma_phase2, 0.0,
+                  "reset: soft lu refactor ewma phase2");
 
     lp_telemetry_record_basis_build(&solver, 1, 2, 128ULL);
     ASSERT_INT_EQ(solver.telemetry.perf_basis_fastpath_hits, 1, "basis: fastpath hit");
@@ -141,6 +150,9 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_basis_tail_shift_bytes = 4096ULL;
     solver.telemetry.perf_phase1_pricing_calls = 17;
     solver.policy.periodic_feedback_hint_pressure_phase2 = 0.55;
+    solver.policy.soft_lu_cost_gate_enabled = 1;
+    solver.policy.soft_lu_cost_gate_defers_phase1 = 3;
+    solver.policy.soft_lu_refactor_cost_ewma_phase2 = 7.25;
 
     lp_telemetry_snapshot_solver(&solver, &snap);
 
@@ -153,6 +165,12 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1_pricing_calls");
     ASSERT_DBL_EQ(snap.periodic_feedback_hint_pressure_phase2, 0.55,
                   "solver_snapshot: feedback pressure phase2");
+    ASSERT_INT_EQ(snap.soft_lu_cost_gate_enabled, 1,
+                  "solver_snapshot: soft lu gate enabled");
+    ASSERT_INT_EQ(snap.soft_lu_cost_gate_defers_phase1, 3,
+                  "solver_snapshot: soft lu defers phase1");
+    ASSERT_DBL_EQ(snap.soft_lu_refactor_cost_ewma_phase2, 7.25,
+                  "solver_snapshot: soft lu refactor ewma phase2");
 }
 
 int main(void) {

@@ -65,4 +65,17 @@ LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(
     double growth_factor,
     int soft_breach_streak);
 
+int lp_refactor_policy_soft_lu_cost_gate_should_defer(int phase,
+                                                      int m,
+                                                      int use_bland,
+                                                      int degenerate_count,
+                                                      int num_updates,
+                                                      int max_updates,
+                                                      int spike_pool_used,
+                                                      int spike_pool_capacity,
+                                                      double cond_estimate,
+                                                      double growth_factor,
+                                                      double refactor_cost_ewma_ms,
+                                                      double iter_cost_ewma_ms);
+
 #endif
