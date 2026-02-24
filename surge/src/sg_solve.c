@@ -112,8 +112,15 @@ static void sg_copy_operator_stats(SGContext *ctx, const ARALNSContext *alns) {
 static double sg_compute_cost_scale(const SGContext *ctx,
                                     const SGRouteSolution *sol)
 {
-    double *costs = (double *)alloca(sol->num_vehicles * sizeof(double));
+    double *costs = ctx->scratch.cost_scale_buf;
+    int heap = 0;
     uint32_t n = 0, v;
+
+    if (!costs) {
+        costs = (double *)malloc((size_t)sol->num_vehicles * sizeof(double));
+        if (!costs) return 1.0;
+        heap = 1;
+    }
 
     for (v = 0; v < sol->num_vehicles; v++) {
         if (sol->route_stop_lengths[v] == 0) continue;
@@ -130,7 +137,7 @@ static double sg_compute_cost_scale(const SGContext *ctx,
             costs[n++] = rc;
     }
 
-    if (n == 0) return 1.0;  /* all-zero costs — safe fallback */
+    if (n == 0) { if (heap) free(costs); return 1.0; }
 
     /* Insertion sort for median (n is small, typically < 100) */
     for (uint32_t i = 1; i < n; i++) {
@@ -145,6 +152,7 @@ static double sg_compute_cost_scale(const SGContext *ctx,
 
     double median = (n % 2 == 1) ? costs[n / 2]
                                   : (costs[n / 2 - 1] + costs[n / 2]) / 2.0;
+    if (heap) free(costs);
 
     /* Clamp to safe numeric range */
     if (median != median || median <= 0.0) return 1.0;  /* NaN or non-positive */

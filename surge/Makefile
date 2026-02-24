@@ -55,7 +55,16 @@ else
     SHARED_LIB_FLAGS = -shared -Wl,-soname,libsurge_api.so
 endif
 
-.PHONY: all clean test lib debug bench bench-li-lim bench-cordeau shared-lib python-test node-test
+FUZZ_BIN = fuzz_json_api
+TSAN_TEST_BIN = test_surge_tsan
+
+# TSan build (cannot combine with ASan)
+TSAN_CFLAGS = -Wall -Wextra -g -O1 -std=c11 -D_GNU_SOURCE -DSG_HAS_THREADS -DDEBUG \
+              -fsanitize=thread -fno-omit-frame-pointer
+TSAN_LDFLAGS = -fsanitize=thread
+
+.PHONY: all clean test lib debug bench bench-li-lim bench-cordeau shared-lib python-test node-test \
+        cppcheck fuzz tsan
 
 all: lib $(TEST_BIN)
 
@@ -118,8 +127,44 @@ debug: CFLAGS = $(DEBUG_CFLAGS)
 debug: LDFLAGS = -lm $(DEBUG_LDFLAGS)
 debug: clean all
 
+# --- Static Analysis ---
+
+cppcheck:
+	cppcheck --enable=warning,performance,portability --suppress=missingIncludeSystem \
+	  --error-exitcode=1 --inline-suppr --std=c11 \
+	  -I include -I ../arbor/include -I ../shared/include \
+	  $(SRCS)
+
+cppcheck-all:
+	cppcheck --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction \
+	  --std=c11 -I include -I ../arbor/include -I ../shared/include \
+	  $(SRCS)
+
+# --- Fuzz Testing (requires clang with libFuzzer) ---
+
+$(FUZZ_BIN): fuzz/fuzz_json_api.c $(SRCS) $(ARBOR_SRCS) $(SHARED_BINDING_SRCS)
+	clang -Wall -Wextra -g -O1 -std=c11 -D_GNU_SOURCE -DSG_HAS_THREADS \
+	  -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer \
+	  $(INCLUDES) \
+	  $< $(SRCS) $(ARBOR_SRCS) $(SHARED_BINDING_SRCS) \
+	  -lm -lpthread -o $@
+
+fuzz: $(FUZZ_BIN)
+	@echo "Run: ./$(FUZZ_BIN) fuzz/corpus/ -max_len=65536 -jobs=4"
+
+# --- Thread Sanitizer ---
+
+$(TSAN_TEST_BIN): tests/test_surge.c $(SRCS) $(ARBOR_SRCS) ../shared/libshared.a
+	$(CC) $(TSAN_CFLAGS) $(INCLUDES) \
+	  $< $(SRCS) $(ARBOR_SRCS) \
+	  -L../shared -lshared -lm -lpthread $(TSAN_LDFLAGS) -o $@
+
+tsan: $(TSAN_TEST_BIN)
+	./$(TSAN_TEST_BIN)
+
 clean:
-	rm -f $(OBJS) $(LIB) $(TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(SHARED_LIB)
+	rm -f $(OBJS) $(LIB) $(TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(SHARED_LIB) \
+	  $(FUZZ_BIN) $(TSAN_TEST_BIN)
 
 help:
 	@echo "Surge Build System"
@@ -135,4 +180,7 @@ help:
 	@echo "  python-test - Build shared lib and run Python tests"
 	@echo "  node-test   - Build WASM and run Node.js tests"
 	@echo "  debug    - Build with debug symbols"
+	@echo "  cppcheck - Run cppcheck static analysis"
+	@echo "  fuzz     - Build libFuzzer harness for JSON API (requires clang)"
+	@echo "  tsan     - Build and run tests with ThreadSanitizer"
 	@echo "  clean    - Remove build artifacts"

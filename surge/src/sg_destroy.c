@@ -606,6 +606,7 @@ ARStatus sg_route_destroy_vehicle_empty(void *op_ctx, void *solution, int count,
             {
                 uint32_t j = n_sorted;
                 while (j > 0 && (sol->route_lengths[v] < sorted_len[j - 1] ||
+                       /* cppcheck-suppress arrayIndexThenCheck */
                        (sol->route_lengths[v] == sorted_len[j - 1] && v < sorted[j - 1]))) {
                     sorted[j] = sorted[j - 1];
                     sorted_len[j] = sorted_len[j - 1];

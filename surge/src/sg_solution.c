@@ -1710,6 +1710,8 @@ void sg_scratch_init(SGContext *ctx) {
         size_t comp_dim = (size_t)SG_MAX_COMPARTMENTS_PER_VEHICLE * (size_t)ctx->dimension_count;
         total += 3U * ALIGN8(comp_dim * sizeof(double));
     }
+    /* cost_scale_buf: num_vehicles doubles for sg_compute_cost_scale */
+    total += ALIGN8((size_t)num_veh * sizeof(double));
     #undef ALIGN8
 
     arena = sh_arena_create(total);
@@ -1741,6 +1743,7 @@ void sg_scratch_init(SGContext *ctx) {
         s->compartment_min_prefix = (double *)sh_arena_alloc(arena, comp_dim * sizeof(double));
         s->compartment_max_prefix = (double *)sh_arena_alloc(arena, comp_dim * sizeof(double));
     }
+    s->cost_scale_buf = (double *)sh_arena_alloc(arena, (size_t)num_veh * sizeof(double));
 }
 
 void sg_scratch_free(SGContext *ctx) {

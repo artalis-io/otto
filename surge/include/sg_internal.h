@@ -118,6 +118,7 @@ typedef struct {
     double *compartment_load;       /* [SG_MAX_COMPARTMENTS_PER_VEHICLE * dim_count] */
     double *compartment_min_prefix; /* [SG_MAX_COMPARTMENTS_PER_VEHICLE * dim_count] */
     double *compartment_max_prefix; /* [SG_MAX_COMPARTMENTS_PER_VEHICLE * dim_count] */
+    double *cost_scale_buf;     /* [num_vehicles] for sg_compute_cost_scale */
     uint32_t stop_capacity;     /* = num_requests * 2 */
     SHArena *arena;
 } SGScratchBuffers;

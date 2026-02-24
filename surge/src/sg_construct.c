@@ -155,6 +155,9 @@ ARStatus sg_construct_state_init(const SGContext *ctx, SGConstructState *state) 
         state->construct_commodities = (uint64_t *)calloc((size_t)ctx->num_vehicles, sizeof(uint64_t));
     }
     if (ctx->num_exclusion_groups > 0) {
+        if ((size_t)ctx->num_vehicles > SIZE_MAX / (size_t)ctx->num_exclusion_groups) {
+            return AR_STATUS_OUT_OF_MEMORY;
+        }
         state->construct_exclusion_counts = (uint32_t *)calloc(
             (size_t)ctx->num_vehicles * (size_t)ctx->num_exclusion_groups, sizeof(uint32_t));
     }

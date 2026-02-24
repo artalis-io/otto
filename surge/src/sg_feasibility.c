@@ -613,7 +613,11 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
 
     if (ctx->dimension_count > 0) {
         if (!use_scratch) {
-            size_t load_count = ((size_t)stop_count + 1U) * (size_t)ctx->dimension_count;
+            size_t load_count;
+            if ((size_t)stop_count + 1U > SIZE_MAX / (size_t)ctx->dimension_count) {
+                goto done;
+            }
+            load_count = ((size_t)stop_count + 1U) * (size_t)ctx->dimension_count;
             load_profile = (double *)malloc(load_count * sizeof(double));
             min_prefix = (double *)malloc((size_t)ctx->dimension_count * sizeof(double));
             max_prefix = (double *)malloc((size_t)ctx->dimension_count * sizeof(double));

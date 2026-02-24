@@ -1626,6 +1626,9 @@ SGStatus sg_travel_profile_set_matrices(SGContext *ctx, uint32_t profile_id,
         return SG_STATUS_INVALID_ARG;
     }
 
+    if ((size_t)location_count > SIZE_MAX / (size_t)location_count) {
+        return SG_STATUS_INVALID_ARG;
+    }
     total = (size_t)location_count * location_count;
     tp = &ctx->travel_profiles[profile_id];
 
@@ -1711,6 +1714,9 @@ SGStatus sg_set_travel_time_bracket(SGContext *ctx, double start_time,
         }
     }
 
+    if ((size_t)location_count > SIZE_MAX / (size_t)location_count) {
+        return SG_STATUS_INVALID_ARG;
+    }
     total = (size_t)location_count * location_count;
 
     /* Copy duration matrix (required) */
@@ -1795,6 +1801,9 @@ SGStatus sg_travel_profile_add_time_bracket(SGContext *ctx, uint32_t profile_id,
         }
     }
 
+    if ((size_t)location_count > SIZE_MAX / (size_t)location_count) {
+        return SG_STATUS_INVALID_ARG;
+    }
     total = (size_t)location_count * location_count;
 
     /* Copy duration matrix (required) */

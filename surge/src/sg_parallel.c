@@ -449,9 +449,6 @@ SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
         return sg_solve_parallel(ctx, num_threads);
     }
 
-    /* Trivial case: single thread, single generation */
-    if (num_threads == 1 && num_gens == 1) return sg_solve(ctx);
-
     /* Prepare travel + validate on original BEFORE cloning */
     status = sg_prepare_travel(ctx);
     if (status != SG_STATUS_OK) return status;
