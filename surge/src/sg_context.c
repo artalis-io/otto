@@ -378,6 +378,13 @@ void sg_free(SGContext *ctx) {
     ctx->num_travel_time_brackets = 0;
     ctx->has_travel_time_brackets = 0;
 
+    free(ctx->request_locks);
+    ctx->request_locks = NULL;
+    ctx->has_committed = 0;
+    ctx->has_frozen = 0;
+    free(ctx->frozen_vehicle_map);
+    ctx->frozen_vehicle_map = NULL;
+
     sh_rng_free(ctx->op_rng);
     ctx->op_rng = NULL;
     free(ctx);
@@ -731,6 +738,39 @@ SGStatus sg_vehicle_set_backhaul(SGContext *ctx, uint32_t vehicle_id, int backha
     if (backhaul) {
         ctx->has_backhaul = 1;
     }
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_request_set_lock(SGContext *ctx, uint32_t request_id, SGRequestLock lock) {
+    if (!ctx || request_id >= ctx->num_requests) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (lock != SG_LOCK_NONE && lock != SG_LOCK_COMMITTED && lock != SG_LOCK_FROZEN) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    if (lock == SG_LOCK_NONE && !ctx->request_locks) {
+        return SG_STATUS_OK;  /* Already all NONE, nothing to do */
+    }
+
+    /* Lazy allocation on first non-NONE lock */
+    if (!ctx->request_locks) {
+        ctx->request_locks = (uint8_t *)calloc((size_t)ctx->num_requests, sizeof(uint8_t));
+        if (!ctx->request_locks) {
+            return SG_STATUS_OUT_OF_MEMORY;
+        }
+    }
+
+    ctx->request_locks[request_id] = (uint8_t)lock;
+
+    /* Update fast-path flags */
+    if (lock >= SG_LOCK_COMMITTED) {
+        ctx->has_committed = 1;
+    }
+    if (lock == SG_LOCK_FROZEN) {
+        ctx->has_frozen = 1;
+    }
+
     return SG_STATUS_OK;
 }
 
@@ -1227,6 +1267,31 @@ SGStatus sg_validate_model(SGContext *ctx) {
 
         sg_set_error(ctx, "request %u: unknown kind %d", i, request->kind);
         return SG_STATUS_INFEASIBLE;
+    }
+
+    /* Validate frozen requests: each must appear in initial_routes */
+    if (ctx->has_frozen && ctx->request_locks) {
+        for (i = 0; i < ctx->num_requests; i++) {
+            if (ctx->request_locks[i] == SG_LOCK_FROZEN) {
+                int found = 0;
+                uint32_t r, offset = 0;
+                for (r = 0; r < ctx->num_initial_routes; r++) {
+                    uint32_t j;
+                    for (j = 0; j < ctx->initial_route_lengths[r]; j++) {
+                        if (ctx->initial_route_request_ids[offset + j] == i) {
+                            found = 1;
+                            break;
+                        }
+                    }
+                    offset += ctx->initial_route_lengths[r];
+                    if (found) break;
+                }
+                if (!found) {
+                    sg_set_error(ctx, "request %u: FROZEN lock requires initial_routes assignment", i);
+                    return SG_STATUS_INFEASIBLE;
+                }
+            }
+        }
     }
 
     return SG_STATUS_OK;

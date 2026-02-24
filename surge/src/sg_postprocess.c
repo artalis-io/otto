@@ -211,6 +211,12 @@ static int sg_route_try_exchange_once(const SGContext *ctx, SGRouteSolution *sol
                 continue;
             }
 
+            /* Skip if either request is frozen — re-insertion can't guarantee
+             * the frozen request stays on its assigned vehicle */
+            if (sg_request_is_frozen(ctx, req_a) || sg_request_is_frozen(ctx, req_b)) {
+                continue;
+            }
+
             backup = (SGRouteSolution *)sg_route_solution_copy(sol, (void *)ctx);
             if (!backup) {
                 continue;
@@ -339,6 +345,19 @@ static int sg_route_try_2opt_star_once(const SGContext *ctx, SGRouteSolution *so
 
                     if (new_len_a > sol->route_stride || new_len_b > sol->route_stride) {
                         continue;
+                    }
+
+                    /* Skip if any frozen request would change vehicle */
+                    if (ctx->has_frozen) {
+                        int frozen_conflict = 0;
+                        uint32_t fi;
+                        for (fi = cut_a; fi < len_a && !frozen_conflict; fi++) {
+                            if (sg_request_is_frozen(ctx, route_a[fi])) frozen_conflict = 1;
+                        }
+                        for (fi = cut_b; fi < len_b && !frozen_conflict; fi++) {
+                            if (sg_request_is_frozen(ctx, route_b[fi])) frozen_conflict = 1;
+                        }
+                        if (frozen_conflict) continue;
                     }
 
                     memcpy(candidate_a, route_a, (size_t)cut_a * sizeof(uint32_t));
@@ -490,6 +509,19 @@ static int sg_route_try_or_opt_once(const SGContext *ctx, SGRouteSolution *sol) 
                     }
                 }
 
+                /* Skip segment with frozen requests for cross-vehicle moves */
+                {
+                    int has_frozen_in_seg = 0;
+                    if (ctx->has_frozen) {
+                        uint32_t fi;
+                        for (fi = start; fi < start + (uint32_t)k; fi++) {
+                            if (sg_request_is_frozen(ctx, route_a[fi])) {
+                                has_frozen_in_seg = 1;
+                                break;
+                            }
+                        }
+                    }
+
                 /* Try each target vehicle */
                 for (vb = 0; vb < sol->num_vehicles && !improved; vb++) {
                     uint32_t len_b;
@@ -498,6 +530,11 @@ static int sg_route_try_or_opt_once(const SGContext *ctx, SGRouteSolution *sol) 
 
                     /* Don't create new routes on empty vehicles */
                     if (va != vb && sol->route_lengths[vb] == 0) {
+                        continue;
+                    }
+
+                    /* Skip cross-vehicle if segment has frozen requests */
+                    if (va != vb && has_frozen_in_seg) {
                         continue;
                     }
 
@@ -654,6 +691,7 @@ static int sg_route_try_or_opt_once(const SGContext *ctx, SGRouteSolution *sol) 
                         }
                     }
                 }
+                } /* close has_frozen_in_seg block */
             }
         }
     }
@@ -721,6 +759,17 @@ static int sg_route_try_cross_exchange_once(const SGContext *ctx, SGRouteSolutio
 
                     for (ia = 0; ia + (uint32_t)sa <= len_a && !improved; ia++) {
                         uint32_t ib;
+
+                        /* Skip if any frozen request in route_a segment */
+                        if (ctx->has_frozen) {
+                            int frozen_a = 0;
+                            uint32_t fi;
+                            for (fi = ia; fi < ia + (uint32_t)sa; fi++) {
+                                if (sg_request_is_frozen(ctx, route_a[fi])) { frozen_a = 1; break; }
+                            }
+                            if (frozen_a) continue;
+                        }
+
                         for (ib = 0; ib + (uint32_t)sb <= len_b; ib++) {
                             uint32_t new_len_a = len_a - (uint32_t)sa + (uint32_t)sb;
                             uint32_t new_len_b = len_b - (uint32_t)sb + (uint32_t)sa;
@@ -732,6 +781,16 @@ static int sg_route_try_cross_exchange_once(const SGContext *ctx, SGRouteSolutio
                                is impossible since va < vb, but skip sa==sb same content). */
                             if (sa == sb && ia == ib && va == vb) {
                                 continue;
+                            }
+
+                            /* Skip if any frozen request in route_b segment */
+                            if (ctx->has_frozen) {
+                                int frozen_b = 0;
+                                uint32_t fi;
+                                for (fi = ib; fi < ib + (uint32_t)sb; fi++) {
+                                    if (sg_request_is_frozen(ctx, route_b[fi])) { frozen_b = 1; break; }
+                                }
+                                if (frozen_b) continue;
                             }
 
                             if (new_len_a > sol->route_stride ||
@@ -1170,11 +1229,21 @@ ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx,
             double max_distance_after;
             ARStatus status;
 
-            /* Find two smallest non-empty, non-tried vehicles. */
+            /* Find two smallest non-empty, non-tried vehicles (skip frozen). */
             for (v = 0; v < sol->num_vehicles; v++) {
                 uint32_t len = sol->route_lengths[v];
                 if ((tried && tried[v]) || len == 0) {
                     continue;
+                }
+                /* Never try to eliminate a vehicle that has frozen requests */
+                if (ctx->has_frozen) {
+                    const uint32_t *rv = sg_route_vehicle_ptr_const(sol, v);
+                    uint32_t fi;
+                    int has_frozen_req = 0;
+                    for (fi = 0; fi < len; fi++) {
+                        if (sg_request_is_frozen(ctx, rv[fi])) { has_frozen_req = 1; break; }
+                    }
+                    if (has_frozen_req) continue;
                 }
                 if (len < len1 || (len == len1 && (v1 == UINT32_MAX || v < v1))) {
                     v2 = v1; len2 = len1;
@@ -1235,6 +1304,16 @@ ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx,
                 uint32_t len = sol->route_lengths[v];
                 if ((tried && tried[v]) || len == 0) {
                     continue;
+                }
+                /* Never try to eliminate a vehicle that has frozen requests */
+                if (ctx->has_frozen) {
+                    const uint32_t *rv = sg_route_vehicle_ptr_const(sol, v);
+                    uint32_t fi;
+                    int has_frozen_req = 0;
+                    for (fi = 0; fi < len; fi++) {
+                        if (sg_request_is_frozen(ctx, rv[fi])) { has_frozen_req = 1; break; }
+                    }
+                    if (has_frozen_req) continue;
                 }
                 if (len < selected_len ||
                     (len == selected_len && (selected_vehicle == UINT32_MAX || v < selected_vehicle))) {
@@ -1482,9 +1561,18 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
             return AR_STATUS_OUT_OF_MEMORY;
         }
         for (v = 0; v < sol->num_vehicles; v++) {
-            if (sol->route_lengths[v] > 0) {
-                vehicle_order[num_nonempty++] = v;
+            if (sol->route_lengths[v] == 0) continue;
+            /* Skip vehicles with frozen requests */
+            if (ctx->has_frozen) {
+                const uint32_t *rv = sg_route_vehicle_ptr_const(sol, v);
+                uint32_t fi;
+                int has_frozen_req = 0;
+                for (fi = 0; fi < sol->route_lengths[v]; fi++) {
+                    if (sg_request_is_frozen(ctx, rv[fi])) { has_frozen_req = 1; break; }
+                }
+                if (has_frozen_req) continue;
             }
+            vehicle_order[num_nonempty++] = v;
         }
         /* Insertion sort by route_length ascending, then vehicle ID ascending. */
         for (vi = 1; vi < num_nonempty; vi++) {
@@ -1650,6 +1738,10 @@ ARStatus sg_route_postprocess_polish_distance(const SGContext *ctx,
             double best_route_distance = 0.0;
 
             if (request_id >= sol->base.total_requests || !sol->base.assigned_flags[request_id]) {
+                continue;
+            }
+            /* Never relocate frozen requests — they must stay on their vehicle */
+            if (sg_request_is_frozen(ctx, request_id)) {
                 continue;
             }
 

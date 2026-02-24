@@ -1270,6 +1270,30 @@ SGStatus sg_api_build_model(SGContext *ctx, const ShJsonValue *root) {
         return SG_STATUS_ERROR;
     }
 
+    /* 11. Request locks (after requests and initial_routes) */
+    {
+        ShJsonValue *committed_arr = sh_json_get(root, "committed_requests");
+        ShJsonValue *frozen_arr = sh_json_get(root, "frozen_requests");
+        if (committed_arr && sh_json_type(committed_arr) == SH_JSON_ARRAY) {
+            size_t i, n = sh_json_array_len(committed_arr);
+            for (i = 0; i < n; i++) {
+                uint32_t rid = (uint32_t)sh_json_as_int(sh_json_array_get(committed_arr, i), 0);
+                if (sg_request_set_lock(ctx, rid, SG_LOCK_COMMITTED) != SG_STATUS_OK) {
+                    return SG_STATUS_ERROR;
+                }
+            }
+        }
+        if (frozen_arr && sh_json_type(frozen_arr) == SH_JSON_ARRAY) {
+            size_t i, n = sh_json_array_len(frozen_arr);
+            for (i = 0; i < n; i++) {
+                uint32_t rid = (uint32_t)sh_json_as_int(sh_json_array_get(frozen_arr, i), 0);
+                if (sg_request_set_lock(ctx, rid, SG_LOCK_FROZEN) != SG_STATUS_OK) {
+                    return SG_STATUS_ERROR;
+                }
+            }
+        }
+    }
+
     return SG_STATUS_OK;
 }
 

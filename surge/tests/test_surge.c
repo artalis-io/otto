@@ -11573,7 +11573,9 @@ static void test_lock_solomon_deterministic_frozen(void) {
 }
 
 static void test_lock_solomon_mixed_three_levels(void) {
-    /* C101: 20 FROZEN + 30 COMMITTED + 50 NONE. */
+    /* RC101: 20 FROZEN + 30 COMMITTED + 50 NONE.
+     * RC (random-clustered) exercises the frozen warm-start priority path
+     * that C (clustered) does not stress due to benign insertion order. */
     uint32_t *bv_ids, *br_lens, *br_ids;
     uint32_t btotal;
     uint32_t brc;
@@ -11587,7 +11589,7 @@ static void test_lock_solomon_mixed_three_levels(void) {
         cfg.seed = 42;
         cfg.deterministic = true;
         assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
-        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/RC101.txt") == SG_STATUS_OK);
         assert(sg_solve(ctx) == SG_STATUS_OK);
         brc = extract_solution_routes(ctx, &bv_ids, &br_lens, &br_ids, &btotal);
         sg_free(ctx);
@@ -11603,7 +11605,7 @@ static void test_lock_solomon_mixed_three_levels(void) {
         cfg.seed = 42;
         cfg.deterministic = true;
         assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
-        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/RC101.txt") == SG_STATUS_OK);
 
         /* 0-19: FROZEN, 20-49: COMMITTED, 50-99: NONE */
         for (i = 0; i < 20; i++)

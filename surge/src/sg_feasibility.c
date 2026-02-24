@@ -543,6 +543,7 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
     double *min_prefix = NULL;
     double *max_prefix = NULL;
     double *seq_arrival = NULL;
+    uint32_t *pd_stack = NULL;
     double seq_depot_return = 0.0;
     double distance = 0.0;
     double time_cursor;
@@ -717,7 +718,6 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
     }
 
     /* LIFO/FIFO PD policy: stack/queue for ordering check */
-    uint32_t *pd_stack = NULL;
     uint32_t pd_stack_top = 0;     /* LIFO: stack pointer; FIFO: enqueue pointer */
     uint32_t pd_queue_front = 0;   /* FIFO: dequeue pointer */
     uint8_t seen_pd_pickup = 0;    /* Backhaul: set when first PD pickup encountered */

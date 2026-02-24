@@ -333,6 +333,7 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
     uint32_t ranked_delivery_pos[SG_ROUTE_MAX_REGRET_K];
     int ranked_count = 0;
     uint32_t v;
+    uint32_t frozen_designated;
     int ok = 0;
     int is_pd;
 
@@ -344,8 +345,10 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
     }
 
     is_pd = (ctx->requests[request_id].kind == SG_REQUEST_KIND_PICKUP_DELIVERY);
+    frozen_designated = sg_frozen_designated_vehicle(ctx, request_id);
 
     for (v = 0; v < sol->num_vehicles; v++) {
+        if (frozen_designated != SG_NO_VEHICLE && v != frozen_designated) continue;
         if (ctx->avoid_new_vehicles && sol->route_lengths[v] == 0) {
             continue;
         }

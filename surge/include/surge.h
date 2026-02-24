@@ -129,6 +129,9 @@ SGStatus sg_vehicle_set_pd_policy(SGContext *ctx, uint32_t vehicle_id, SGPDPolic
 /* Backhaul: all delivery-only stops must precede PD pickups */
 SGStatus sg_vehicle_set_backhaul(SGContext *ctx, uint32_t vehicle_id, int backhaul);
 
+/* Request locking for live re-optimization */
+SGStatus sg_request_set_lock(SGContext *ctx, uint32_t request_id, SGRequestLock lock);
+
 SGStatus sg_vehicle_set_qualifications(SGContext *ctx, uint32_t vehicle_id,
                                         uint64_t qualification_flags);
 SGStatus sg_request_set_required_qualifications(SGContext *ctx, uint32_t request_id,

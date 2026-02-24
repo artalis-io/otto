@@ -500,67 +500,108 @@ ARStatus sg_route_construct_solomon_i1(SGContext *ctx, SGRouteSolution *sol) {
     return AR_STATUS_OK;
 }
 
-static ARStatus sg_route_construct_from_warm_start(SGContext *ctx, SGRouteSolution *sol) {
-    uint32_t r, offset;
+static void sg_build_frozen_vehicle_map(SGContext *ctx) {
+    uint32_t r, offset, i;
 
-    if (!ctx || !sol || ctx->num_initial_routes == 0) {
-        return AR_STATUS_ERROR;
-    }
+    if (!ctx->has_frozen || ctx->num_initial_routes == 0) return;
+
+    ctx->frozen_vehicle_map = (uint32_t *)malloc((size_t)ctx->num_requests * sizeof(uint32_t));
+    if (!ctx->frozen_vehicle_map) return;
+
+    for (i = 0; i < ctx->num_requests; i++)
+        ctx->frozen_vehicle_map[i] = SG_NO_VEHICLE;
 
     offset = 0;
     for (r = 0; r < ctx->num_initial_routes; r++) {
         uint32_t vid = ctx->initial_route_vehicle_ids[r];
         uint32_t len = ctx->initial_route_lengths[r];
         uint32_t j;
-
-        if (vid >= ctx->num_vehicles) {
-            offset += len;
-            continue;
-        }
-
-        for (j = 0; j < len; j++) {
-            uint32_t rid = ctx->initial_route_request_ids[offset + j];
-            double best_score = 0.0;
-            uint32_t best_pos = UINT32_MAX;
-            uint32_t best_pickup_pos = UINT32_MAX;
-            uint32_t best_delivery_pos = UINT32_MAX;
-            double best_route_distance = 0.0;
-            int is_pd;
-
-            if (rid >= ctx->num_requests) continue;
-            if (sol->base.assigned_flags[rid]) continue;
-
-            is_pd = (ctx->requests[rid].kind == SG_REQUEST_KIND_PICKUP_DELIVERY);
-            if (is_pd) {
-                if (sg_route_eval_pd_best_insertion_cached(ctx, sol, rid, vid,
-                        &best_score, &best_pickup_pos, &best_delivery_pos,
-                        &best_route_distance)) {
-                    sg_route_apply_pd_insertion(ctx, sol, rid, vid,
-                                                best_pickup_pos, best_delivery_pos,
-                                                best_route_distance);
-                }
-            } else {
-                uint32_t pos;
-                uint32_t cur_len = sol->route_lengths[vid];
-                double best_local_score = INFINITY;
-                for (pos = 0; pos <= cur_len; pos++) {
-                    double score = 0.0, new_dist = 0.0;
-                    if (sg_route_eval_insertion_cached(ctx, sol, rid, vid,
-                                                        pos, &score, &new_dist)) {
-                        if (score < best_local_score) {
-                            best_local_score = score;
-                            best_pos = pos;
-                            best_route_distance = new_dist;
-                        }
-                    }
-                }
-                if (best_pos != UINT32_MAX) {
-                    sg_route_apply_insertion(ctx, sol, rid, vid,
-                                             best_pos, best_route_distance);
-                }
+        if (vid < ctx->num_vehicles) {
+            for (j = 0; j < len; j++) {
+                uint32_t rid = ctx->initial_route_request_ids[offset + j];
+                if (rid < ctx->num_requests && sg_request_is_frozen(ctx, rid))
+                    ctx->frozen_vehicle_map[rid] = vid;
             }
         }
         offset += len;
+    }
+}
+
+static ARStatus sg_route_construct_from_warm_start(SGContext *ctx, SGRouteSolution *sol) {
+    uint32_t r, offset;
+    int pass, num_passes;
+
+    if (!ctx || !sol || ctx->num_initial_routes == 0) {
+        return AR_STATUS_ERROR;
+    }
+
+    /* Two-pass when frozen requests exist: pass 0 inserts frozen first (priority
+       on their designated vehicle), pass 1 inserts the rest.  Single pass otherwise. */
+    num_passes = ctx->has_frozen ? 2 : 1;
+
+    for (pass = 0; pass < num_passes; pass++) {
+        offset = 0;
+        for (r = 0; r < ctx->num_initial_routes; r++) {
+            uint32_t vid = ctx->initial_route_vehicle_ids[r];
+            uint32_t len = ctx->initial_route_lengths[r];
+            uint32_t j;
+
+            if (vid >= ctx->num_vehicles) {
+                offset += len;
+                continue;
+            }
+
+            for (j = 0; j < len; j++) {
+                uint32_t rid = ctx->initial_route_request_ids[offset + j];
+                double best_score = 0.0;
+                uint32_t best_pos = UINT32_MAX;
+                uint32_t best_pickup_pos = UINT32_MAX;
+                uint32_t best_delivery_pos = UINT32_MAX;
+                double best_route_distance = 0.0;
+                int is_pd;
+                int frozen;
+
+                if (rid >= ctx->num_requests) continue;
+                if (sol->base.assigned_flags[rid]) continue;
+
+                frozen = sg_request_is_frozen(ctx, rid);
+                if (num_passes == 2) {
+                    if (pass == 0 && !frozen) continue;   /* pass 0: frozen only */
+                    if (pass == 1 && frozen) continue;    /* pass 1: non-frozen only */
+                }
+
+                is_pd = (ctx->requests[rid].kind == SG_REQUEST_KIND_PICKUP_DELIVERY);
+                if (is_pd) {
+                    if (sg_route_eval_pd_best_insertion_cached(ctx, sol, rid, vid,
+                            &best_score, &best_pickup_pos, &best_delivery_pos,
+                            &best_route_distance)) {
+                        sg_route_apply_pd_insertion(ctx, sol, rid, vid,
+                                                    best_pickup_pos, best_delivery_pos,
+                                                    best_route_distance);
+                    }
+                } else {
+                    uint32_t pos;
+                    uint32_t cur_len = sol->route_lengths[vid];
+                    double best_local_score = INFINITY;
+                    for (pos = 0; pos <= cur_len; pos++) {
+                        double score = 0.0, new_dist = 0.0;
+                        if (sg_route_eval_insertion_cached(ctx, sol, rid, vid,
+                                                            pos, &score, &new_dist)) {
+                            if (score < best_local_score) {
+                                best_local_score = score;
+                                best_pos = pos;
+                                best_route_distance = new_dist;
+                            }
+                        }
+                    }
+                    if (best_pos != UINT32_MAX) {
+                        sg_route_apply_insertion(ctx, sol, rid, vid,
+                                                 best_pos, best_route_distance);
+                    }
+                }
+            }
+            offset += len;
+        }
     }
 
     return AR_STATUS_OK;
@@ -711,6 +752,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
     }
 
     sg_scratch_init(ctx);
+    sg_build_frozen_vehicle_map(ctx);
 
     if (ctx->num_initial_routes > 0) {
         init_status = sg_route_construct_from_warm_start(ctx, &initial);
@@ -722,12 +764,12 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         init_status = sg_route_construct_initial_solution(ctx, &initial);
     }
     if (init_status != AR_STATUS_OK) {
+        free(ctx->frozen_vehicle_map); ctx->frozen_vehicle_map = NULL;
         sg_scratch_free(ctx);
         sg_route_solution_reset(&initial);
         return init_status == AR_STATUS_OUT_OF_MEMORY ? SG_STATUS_OUT_OF_MEMORY
                                                       : SG_STATUS_ERROR;
     }
-
     total_iters = ctx->config.max_iterations;
 
     /* Skip vehicle minimization phase when no vehicle has positive fixed cost —
@@ -791,6 +833,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         alns = sg_create_route_alns(ctx, &params, &ops, 3.0, 2.0);
         if (!alns) {
             sg_penalty_free(&ctx->penalty);
+            free(ctx->frozen_vehicle_map); ctx->frozen_vehicle_map = NULL;
             sg_scratch_free(ctx);
             sg_route_solution_reset(&initial);
             return SG_STATUS_OUT_OF_MEMORY;
@@ -811,6 +854,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         ctx->avoid_new_vehicles = 0;
         if (ar_status != AR_STATUS_OK && ar_status != AR_STATUS_LIMIT) {
             sg_penalty_free(&ctx->penalty);
+            free(ctx->frozen_vehicle_map); ctx->frozen_vehicle_map = NULL;
             sg_scratch_free(ctx);
             sg_route_solution_reset(&initial);
             ar_alns_free(alns);
@@ -880,6 +924,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         alns = sg_create_route_alns(ctx, &params, &ops, 1.5, 1.0);
         if (!alns) {
             sg_penalty_free(&ctx->penalty);
+            free(ctx->frozen_vehicle_map); ctx->frozen_vehicle_map = NULL;
             sg_scratch_free(ctx);
             sg_route_solution_reset(&initial);
             sg_route_solution_free(p1_best, NULL);
@@ -899,6 +944,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         ar_status = ar_alns_solve(alns, p2_initial, (void **)&p2_best);
         if (ar_status != AR_STATUS_OK && ar_status != AR_STATUS_LIMIT) {
             sg_penalty_free(&ctx->penalty);
+            free(ctx->frozen_vehicle_map); ctx->frozen_vehicle_map = NULL;
             sg_scratch_free(ctx);
             sg_route_solution_reset(&initial);
             sg_route_solution_free(p1_best, NULL);
@@ -938,7 +984,14 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         final_sol = best ? best : &initial;
 
         if (!sg_route_solution_validate(final_sol, (void *)ctx)) {
-            solution_valid = 0;
+            /* Phase 1 infeasible-space exploration may have produced an
+               infeasible best.  Fall back to the initial solution if valid. */
+            if (final_sol != &initial &&
+                sg_route_solution_validate(&initial, (void *)ctx)) {
+                final_sol = &initial;
+            } else {
+                solution_valid = 0;
+            }
         }
 
         ctx->stats.iterations = total_alns_iters;
@@ -1008,6 +1061,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
     }
 
     sg_penalty_free(&ctx->penalty);
+    free(ctx->frozen_vehicle_map); ctx->frozen_vehicle_map = NULL;
     sg_scratch_free(ctx);
     sg_route_solution_reset(&initial);
     sg_route_solution_free(p1_best, NULL);

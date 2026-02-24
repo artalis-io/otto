@@ -256,6 +256,48 @@ uint32_t sg_get_assigned_element(void *solution, void *user_ctx, int index) {
     return sol->assigned_ids[(uint32_t)index];
 }
 
+int sg_get_removable_count(void *solution, void *user_ctx) {
+    SGBootstrapSolution *sol = (SGBootstrapSolution *)solution;
+    SGContext *ctx = (SGContext *)user_ctx;
+    uint32_t i;
+    int count;
+
+    if (!sol) return 0;
+    if (!ctx || !ctx->has_frozen || !ctx->request_locks) {
+        return (int)sol->num_assigned;
+    }
+
+    count = 0;
+    for (i = 0; i < sol->num_assigned; i++) {
+        if (ctx->request_locks[sol->assigned_ids[i]] < SG_LOCK_FROZEN) {
+            count++;
+        }
+    }
+    return count;
+}
+
+uint32_t sg_get_removable_element(void *solution, void *user_ctx, int index) {
+    SGBootstrapSolution *sol = (SGBootstrapSolution *)solution;
+    SGContext *ctx = (SGContext *)user_ctx;
+    uint32_t i;
+    int count;
+
+    if (!sol || index < 0) return UINT32_MAX;
+    if (!ctx || !ctx->has_frozen || !ctx->request_locks) {
+        if ((uint32_t)index >= sol->num_assigned) return UINT32_MAX;
+        return sol->assigned_ids[(uint32_t)index];
+    }
+
+    count = 0;
+    for (i = 0; i < sol->num_assigned; i++) {
+        if (ctx->request_locks[sol->assigned_ids[i]] < SG_LOCK_FROZEN) {
+            if (count == index) return sol->assigned_ids[i];
+            count++;
+        }
+    }
+    return UINT32_MAX;
+}
+
 int sg_route_solution_is_better(const void *candidate, const void *current_best,
                                  void *user_ctx) {
     const SGRouteSolution *cand = (const SGRouteSolution *)candidate;
@@ -1295,6 +1337,16 @@ int sg_route_solution_validate(const void *solution, void *user_ctx) {
         }
     }
 
+    /* Validate frozen requests are on their designated vehicle */
+    if (ctx->has_frozen && ctx->frozen_vehicle_map) {
+        for (r = 0; r < sol->base.total_requests; r++) {
+            if (!sol->base.assigned_flags[r]) continue;
+            if (ctx->frozen_vehicle_map[r] != SG_NO_VEHICLE &&
+                sol->request_vehicle[r] != ctx->frozen_vehicle_map[r])
+                goto done;
+        }
+    }
+
     /* Validate commodity and exclusion tracking */
     if (ctx->num_commodities > 0 && sol->route_commodities) {
         for (v = 0; v < sol->num_vehicles; v++) {
@@ -1536,6 +1588,13 @@ double sg_route_solution_cost(const void *solution, void *user_ctx) {
         uint32_t u;
         for (u = 0; u < sol->base.num_unassigned; u++) {
             uint32_t rid = sol->base.unassigned_ids[u];
+            /* COMMITTED/FROZEN requests get effectively infinite penalty */
+            if (ctx->has_committed && ctx->request_locks &&
+                rid < ctx->num_requests &&
+                ctx->request_locks[rid] >= SG_LOCK_COMMITTED) {
+                cost += 1e12;
+                continue;
+            }
             if (rid < ctx->num_requests && ctx->requests[rid].has_unassigned_penalty) {
                 cost += ctx->requests[rid].unassigned_penalty;
             } else {

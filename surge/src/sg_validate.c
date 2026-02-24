@@ -536,6 +536,54 @@ SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes,
     /* Collect constraint violations */
     collect_violations(ctx, sol);
 
+    /* Lock violation checks */
+    if (ctx->request_locks) {
+        for (ri = 0; ri < ctx->num_requests; ri++) {
+            uint8_t lock = ctx->request_locks[ri];
+            if (lock == SG_LOCK_FROZEN) {
+                /* Check frozen request is on the correct vehicle from initial_routes */
+                if (sol->request_vehicle[ri] != SG_NO_VEHICLE) {
+                    /* Find which vehicle it was assigned to in initial_routes */
+                    uint32_t expected_vehicle = SG_NO_VEHICLE;
+                    uint32_t ir_offset = 0, ir;
+                    for (ir = 0; ir < ctx->num_initial_routes; ir++) {
+                        uint32_t j;
+                        for (j = 0; j < ctx->initial_route_lengths[ir]; j++) {
+                            if (ctx->initial_route_request_ids[ir_offset + j] == ri) {
+                                expected_vehicle = ctx->initial_route_vehicle_ids[ir];
+                                break;
+                            }
+                        }
+                        ir_offset += ctx->initial_route_lengths[ir];
+                        if (expected_vehicle != SG_NO_VEHICLE) break;
+                    }
+                    if (expected_vehicle != SG_NO_VEHICLE &&
+                        sol->request_vehicle[ri] != expected_vehicle) {
+                        SGViolation viol;
+                        memset(&viol, 0, sizeof(viol));
+                        viol.type = SG_VIOLATION_FROZEN_ASSIGNMENT;
+                        viol.vehicle_id = sol->request_vehicle[ri];
+                        viol.request_id = ri;
+                        viol.actual = (double)sol->request_vehicle[ri];
+                        viol.limit = (double)expected_vehicle;
+                        push_violation(ctx, &viol);
+                    }
+                }
+            }
+            if (lock >= SG_LOCK_COMMITTED) {
+                /* Check committed/frozen request is assigned */
+                if (!sol->base.assigned_flags[ri]) {
+                    SGViolation viol;
+                    memset(&viol, 0, sizeof(viol));
+                    viol.type = SG_VIOLATION_COMMITTED_UNASSIGNED;
+                    viol.vehicle_id = UINT32_MAX;
+                    viol.request_id = ri;
+                    push_violation(ctx, &viol);
+                }
+            }
+        }
+    }
+
     /* Store as ctx->final_solution */
     if (ctx->final_solution) {
         sg_route_solution_free(ctx->final_solution, NULL);

@@ -394,6 +394,12 @@ struct SGContext {
     uint8_t has_pd_policy;                      /* 1 if any vehicle has pd_policy != NONE */
     uint8_t has_backhaul;                       /* 1 if any vehicle has backhaul=1 */
 
+    /* Request locking for live re-optimization */
+    uint8_t *request_locks;                     /* [num_requests], SGRequestLock values; NULL if none */
+    uint8_t  has_committed;                     /* fast-path: 1 if any request >= COMMITTED */
+    uint8_t  has_frozen;                        /* fast-path: 1 if any request == FROZEN */
+    uint32_t *frozen_vehicle_map;               /* [num_requests] rid -> designated vehicle, SG_NO_VEHICLE if not frozen */
+
     /* Infeasible-space exploration penalty manager */
     SGPenaltyManager penalty;
 };
@@ -698,6 +704,18 @@ static inline double sg_task_snap_backward(const SGTaskRecord *task, double late
     }
 }
 
+/* Returns 1 if the request is frozen (locked to its vehicle), 0 otherwise. */
+static inline int sg_request_is_frozen(const SGContext *ctx, uint32_t request_id) {
+    return ctx->has_frozen && ctx->request_locks &&
+           ctx->request_locks[request_id] == SG_LOCK_FROZEN;
+}
+
+/* Returns the designated vehicle for a frozen request, or SG_NO_VEHICLE. */
+static inline uint32_t sg_frozen_designated_vehicle(const SGContext *ctx, uint32_t request_id) {
+    if (!ctx->frozen_vehicle_map) return SG_NO_VEHICLE;
+    return ctx->frozen_vehicle_map[request_id];
+}
+
 /* Returns setup time (seconds) for transition between two consecutive stops.
    prev_request_id = UINT32_MAX means depot → no setup class → 0. */
 static inline double sg_setup_time_between(const SGContext *ctx,
@@ -732,6 +750,8 @@ int sg_bootstrap_size(const void *solution, void *user_ctx);
 int sg_bootstrap_validate(const void *solution, void *user_ctx);
 int sg_get_assigned_count(void *solution, void *user_ctx);
 uint32_t sg_get_assigned_element(void *solution, void *user_ctx, int index);
+int sg_get_removable_count(void *solution, void *user_ctx);
+uint32_t sg_get_removable_element(void *solution, void *user_ctx, int index);
 void sg_route_solution_reset(SGRouteSolution *sol);
 ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol);
 void *sg_route_solution_copy(const void *solution, void *user_ctx);

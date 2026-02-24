@@ -42,6 +42,12 @@ typedef enum {
 } SGPDPolicy;
 
 typedef enum {
+    SG_LOCK_NONE      = 0,   /* Default: can be dropped or reassigned */
+    SG_LOCK_COMMITTED = 1,   /* Must-serve: cannot be dropped, CAN be reassigned */
+    SG_LOCK_FROZEN    = 2    /* Must-serve + locked to vehicle: cannot be dropped or reassigned */
+} SGRequestLock;
+
+typedef enum {
     SG_DEMAND_PICKUP_POSITIVE_DELIVERY_NEGATIVE = 0,
     SG_DEMAND_PICKUP_NEGATIVE_DELIVERY_POSITIVE = 1
 } SGDemandSignConvention;
@@ -120,7 +126,9 @@ typedef enum {
     SG_VIOLATION_UNKNOWN_TASK,
     SG_VIOLATION_DUPLICATE_TASK,
     SG_VIOLATION_PD_POLICY,
-    SG_VIOLATION_BACKHAUL
+    SG_VIOLATION_BACKHAUL,
+    SG_VIOLATION_FROZEN_ASSIGNMENT,
+    SG_VIOLATION_COMMITTED_UNASSIGNED
 } SGViolationType;
 
 typedef struct {

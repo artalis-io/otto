@@ -177,8 +177,8 @@ ARStatus sg_route_destroy_random(void *op_ctx, void *solution, int count,
     }
 
     status = ar_remove_random(ctx->op_rng, sol, count, removed_ids,
-                              sg_get_assigned_count, sg_get_assigned_element,
-                              NULL, removed_count);
+                              sg_get_removable_count, sg_get_removable_element,
+                              ctx, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
     }
@@ -197,9 +197,9 @@ ARStatus sg_route_destroy_worst(void *op_ctx, void *solution, int count,
     }
 
     status = ar_remove_worst(ctx->op_rng, ctx, sol, count, removed_ids,
-                             sg_get_assigned_count, sg_get_assigned_element,
+                             sg_get_removable_count, sg_get_removable_element,
                              sg_route_removal_cost, SG_WORST_RANDOMNESS,
-                             NULL, removed_count);
+                             ctx, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
     }
@@ -219,9 +219,9 @@ ARStatus sg_route_destroy_shaw(void *op_ctx, void *solution, int count,
 
     ctx->active_solution = sol;
     status = ar_remove_related(ctx->op_rng, ctx, sol, count, removed_ids,
-                               sg_get_assigned_count, sg_get_assigned_element,
+                               sg_get_removable_count, sg_get_removable_element,
                                sg_route_shaw_relatedness, SG_ROUTE_SHAW_RANDOMNESS,
-                               NULL, removed_count);
+                               ctx, removed_count);
     ctx->active_solution = NULL;
     if (status != AR_STATUS_OK) {
         return status;
@@ -241,9 +241,9 @@ ARStatus sg_route_destroy_criticality_worst(void *op_ctx, void *solution, int co
     }
 
     status = ar_remove_worst(ctx->op_rng, ctx, sol, count, removed_ids,
-                             sg_get_assigned_count, sg_get_assigned_element,
+                             sg_get_removable_count, sg_get_removable_element,
                              sg_criticality_removal_cost, SG_WORST_RANDOMNESS,
-                             NULL, removed_count);
+                             ctx, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
     }
@@ -262,9 +262,9 @@ ARStatus sg_route_destroy_route_cluster(void *op_ctx, void *solution, int count,
     }
 
     status = ar_remove_related(ctx->op_rng, ctx, sol, count, removed_ids,
-                               sg_get_assigned_count, sg_get_assigned_element,
+                               sg_get_removable_count, sg_get_removable_element,
                                sg_route_cluster_relatedness, SG_ROUTE_CLUSTER_RANDOMNESS,
-                               NULL, removed_count);
+                               ctx, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
     }
@@ -283,9 +283,9 @@ ARStatus sg_route_destroy_time_cluster(void *op_ctx, void *solution, int count,
     }
 
     status = ar_remove_related(ctx->op_rng, ctx, sol, count, removed_ids,
-                               sg_get_assigned_count, sg_get_assigned_element,
+                               sg_get_removable_count, sg_get_removable_element,
                                sg_time_cluster_relatedness, SG_TIME_CLUSTER_RANDOMNESS,
-                               NULL, removed_count);
+                               ctx, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
     }
@@ -299,6 +299,7 @@ ARStatus sg_route_destroy_route_removal(void *op_ctx, void *solution, int count,
     SGRouteSolution *sol = (SGRouteSolution *)solution;
     int target;
     int total_removed = 0;
+    int stall = 0;
 
     if (!ctx || !ctx->op_rng || !sol || !removed_count || count < 0) {
         return AR_STATUS_INVALID_ARG;
@@ -315,6 +316,11 @@ ARStatus sg_route_destroy_route_removal(void *op_ctx, void *solution, int count,
     target = count;
     if ((uint32_t)target > sol->base.num_assigned) {
         target = (int)sol->base.num_assigned;
+    }
+    /* Cap at removable count to avoid spinning on frozen-only vehicles */
+    if (ctx->has_frozen && ctx->request_locks) {
+        int removable = sg_get_removable_count((void *)sol, (void *)ctx);
+        if (target > removable) target = removable;
     }
 
     while (total_removed < target) {
@@ -367,6 +373,25 @@ ARStatus sg_route_destroy_route_removal(void *op_ctx, void *solution, int count,
             removed_ids[total_removed + i] = route_snapshot[i];
         }
 
+        /* Filter out frozen requests */
+        if (ctx->has_frozen && ctx->request_locks) {
+            int w = 0;
+            for (i = 0; i < take; i++) {
+                if (ctx->request_locks[removed_ids[total_removed + i]] < SG_LOCK_FROZEN) {
+                    removed_ids[total_removed + w] = removed_ids[total_removed + i];
+                    w++;
+                }
+            }
+            take = w;
+        }
+
+        if (take == 0) {
+            free(route_snapshot);
+            if (++stall > (int)sol->num_vehicles * 10) break;
+            continue;
+        }
+        stall = 0;
+
         status = sg_route_unassign_removed_requests(ctx, sol, &removed_ids[total_removed], take);
         free(route_snapshot);
         if (status != AR_STATUS_OK) {
@@ -391,9 +416,9 @@ ARStatus sg_route_destroy_time_window(void *op_ctx, void *solution, int count,
     }
 
     status = ar_remove_related(ctx->op_rng, ctx, sol, count, removed_ids,
-                               sg_get_assigned_count, sg_get_assigned_element,
+                               sg_get_removable_count, sg_get_removable_element,
                                sg_time_window_relatedness, SG_TIME_CLUSTER_RANDOMNESS,
-                               NULL, removed_count);
+                               ctx, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
     }
@@ -412,9 +437,9 @@ ARStatus sg_route_destroy_paired_shaw(void *op_ctx, void *solution, int count,
     }
 
     status = ar_remove_related(ctx->op_rng, ctx, sol, count, removed_ids,
-                               sg_get_assigned_count, sg_get_assigned_element,
+                               sg_get_removable_count, sg_get_removable_element,
                                sg_pd_shaw_relatedness, SG_PD_SHAW_RANDOMNESS,
-                               NULL, removed_count);
+                               ctx, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
     }
@@ -517,6 +542,21 @@ ARStatus sg_route_destroy_vehicle_target(void *op_ctx, void *solution, int count
             }
         }
         ctx->active_solution = NULL;
+    }
+
+    /* Filter out frozen requests */
+    if (ctx->has_frozen && ctx->request_locks) {
+        int w = 0;
+        for (i = 0; i < (uint32_t)total_removed; i++) {
+            if (ctx->request_locks[removed_ids[i]] < SG_LOCK_FROZEN) {
+                removed_ids[w++] = removed_ids[i];
+            }
+        }
+        total_removed = w;
+        if (total_removed == 0) {
+            *removed_count = 0;
+            return AR_STATUS_OK;
+        }
     }
 
     *removed_count = total_removed;
@@ -649,6 +689,21 @@ ARStatus sg_route_destroy_vehicle_empty(void *op_ctx, void *solution, int count,
         ctx->active_solution = NULL;
     }
 
+    /* Filter out frozen requests */
+    if (ctx->has_frozen && ctx->request_locks) {
+        int w = 0;
+        for (i = 0; i < (uint32_t)total_removed; i++) {
+            if (ctx->request_locks[removed_ids[i]] < SG_LOCK_FROZEN) {
+                removed_ids[w++] = removed_ids[i];
+            }
+        }
+        total_removed = w;
+        if (total_removed == 0) {
+            *removed_count = 0;
+            return AR_STATUS_OK;
+        }
+    }
+
     *removed_count = total_removed;
     return sg_route_unassign_removed_requests(ctx, sol, removed_ids, *removed_count);
 }
@@ -726,12 +781,20 @@ ARStatus sg_route_destroy_string(void *op_ctx, void *solution, int count,
             start = end - (uint32_t)take;
         }
 
-        /* Snapshot substring before unassign */
+        /* Snapshot substring before unassign, skipping frozen requests */
         route = sg_route_vehicle_ptr_const(sol, seed_vehicle);
-        for (i = 0; i < take; i++) {
-            removed_ids[total_removed + i] = route[start + (uint32_t)i];
-        }
         {
+            int actual = 0;
+            for (i = 0; i < take; i++) {
+                uint32_t rid = route[start + (uint32_t)i];
+                if (!sg_request_is_frozen(ctx, rid)) {
+                    removed_ids[total_removed + actual] = rid;
+                    actual++;
+                }
+            }
+            take = actual;
+        }
+        if (take > 0) {
             ARStatus status = sg_route_unassign_removed_requests(
                 ctx, sol, &removed_ids[total_removed], take);
             if (status != AR_STATUS_OK) {
@@ -808,15 +871,24 @@ ARStatus sg_route_destroy_string(void *op_ctx, void *solution, int count,
             }
 
             route = sg_route_vehicle_ptr_const(sol, best_vehicle);
-            for (i = 0; i < take; i++) {
-                removed_ids[total_removed + i] = route[start + (uint32_t)i];
+            {
+                int actual = 0;
+                for (i = 0; i < take; i++) {
+                    uint32_t rid = route[start + (uint32_t)i];
+                    if (!sg_request_is_frozen(ctx, rid)) {
+                        removed_ids[total_removed + actual] = rid;
+                        actual++;
+                    }
+                }
+                take = actual;
             }
-
-            status = sg_route_unassign_removed_requests(
-                ctx, sol, &removed_ids[total_removed], take);
-            if (status != AR_STATUS_OK) {
-                if (visited_heap) free(visited);
-                return status;
+            if (take > 0) {
+                status = sg_route_unassign_removed_requests(
+                    ctx, sol, &removed_ids[total_removed], take);
+                if (status != AR_STATUS_OK) {
+                    if (visited_heap) free(visited);
+                    return status;
+                }
             }
             total_removed += take;
             visited[best_vehicle] = 1;
@@ -824,6 +896,7 @@ ARStatus sg_route_destroy_string(void *op_ctx, void *solution, int count,
     }
 
     if (visited_heap) free(visited);
+
     *removed_count = total_removed;
     return AR_STATUS_OK;
 }
