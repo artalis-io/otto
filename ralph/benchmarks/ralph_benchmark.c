@@ -320,6 +320,13 @@ typedef struct {
     int lu_sparse_fallback_reason_symbolic;
     int lu_sparse_fallback_reason_numeric;
     int lu_identity_sep_failures;
+    int lu_symbolic_failures;
+    int lu_symbolic_fail_workspace;
+    int lu_symbolic_fail_unmatched_no_reserved;
+    int lu_symbolic_fail_inconsistent_identity;
+    int lu_symbolic_full_retry_attempts;
+    int lu_symbolic_full_retry_successes;
+    int lu_symbolic_full_retry_numeric_failures;
     int lu_sn_calls;
     int lu_sn_successes;
     int lu_num_updates;
@@ -836,6 +843,13 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_sparse_fallback_reason_symbolic = lu_tel.sparse_fallback_reason_symbolic;
                 result.lu_sparse_fallback_reason_numeric = lu_tel.sparse_fallback_reason_numeric;
                 result.lu_identity_sep_failures = lu_tel.identity_sep_failures;
+                result.lu_symbolic_failures = lu_tel.symbolic_failures;
+                result.lu_symbolic_fail_workspace = lu_tel.symbolic_fail_workspace;
+                result.lu_symbolic_fail_unmatched_no_reserved = lu_tel.symbolic_fail_unmatched_no_reserved;
+                result.lu_symbolic_fail_inconsistent_identity = lu_tel.symbolic_fail_inconsistent_identity;
+                result.lu_symbolic_full_retry_attempts = lu_tel.symbolic_full_retry_attempts;
+                result.lu_symbolic_full_retry_successes = lu_tel.symbolic_full_retry_successes;
+                result.lu_symbolic_full_retry_numeric_failures = lu_tel.symbolic_full_retry_numeric_failures;
                 result.lu_sn_calls = lu_tel.sn_calls;
                 result.lu_sn_successes = lu_tel.sn_successes;
                 result.lu_num_updates = lu_tel.num_updates;
@@ -1800,6 +1814,18 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"sparse_fallback_reason_numeric\": %d,\n",
             ralph->lu_sparse_fallback_reason_numeric);
     fprintf(out, "    \"identity_sep_failures\": %d,\n", ralph->lu_identity_sep_failures);
+    fprintf(out, "    \"symbolic_failures\": %d,\n", ralph->lu_symbolic_failures);
+    fprintf(out, "    \"symbolic_fail_workspace\": %d,\n", ralph->lu_symbolic_fail_workspace);
+    fprintf(out, "    \"symbolic_fail_unmatched_no_reserved\": %d,\n",
+            ralph->lu_symbolic_fail_unmatched_no_reserved);
+    fprintf(out, "    \"symbolic_fail_inconsistent_identity\": %d,\n",
+            ralph->lu_symbolic_fail_inconsistent_identity);
+    fprintf(out, "    \"symbolic_full_retry_attempts\": %d,\n",
+            ralph->lu_symbolic_full_retry_attempts);
+    fprintf(out, "    \"symbolic_full_retry_successes\": %d,\n",
+            ralph->lu_symbolic_full_retry_successes);
+    fprintf(out, "    \"symbolic_full_retry_numeric_failures\": %d,\n",
+            ralph->lu_symbolic_full_retry_numeric_failures);
     fprintf(out, "    \"sn_calls\": %d,\n", ralph->lu_sn_calls);
     fprintf(out, "    \"sn_successes\": %d,\n", ralph->lu_sn_successes);
     fprintf(out, "    \"num_updates\": %d,\n", ralph->lu_num_updates);

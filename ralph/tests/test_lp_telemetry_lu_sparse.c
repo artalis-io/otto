@@ -216,6 +216,57 @@ static void test_sparse_fallback_reason_and_stage_telemetry(void) {
         free_csc(B);
         free(A);
     }
+
+    /* Case D: force symbolic-stage workspace failure and verify full-structural
+     * retry keeps sparse numeric active (no dense fallback). */
+    {
+        const int m = 50;
+        double *A = (double *)calloc((size_t)m * m, sizeof(double));
+
+        for (int j = 0; j < m; j++) {
+            A[j * m + j] = 7.0 + 0.01 * j;
+            A[((j + 1) % m) * m + j] = 0.2;
+            A[((j + 9) % m) * m + j] = -0.15;
+        }
+
+        SparseMatrix *B = dense_to_csc(A, m, m);
+        LUFactorization *lu = lu_create(m);
+        int *saved_row_match_col = lu->ws_row_match_col;
+        int *saved_row_seen = lu->ws_row_seen;
+        lu->mkz_enabled = 1;
+        lu->sn_enabled = 0;
+
+        /* Inject symbolic matching workspace fault. */
+        lu->ws_row_match_col = NULL;
+        lu->ws_row_seen = NULL;
+
+        int rc = lu_factorize(lu, B);
+        ASSERT_INT_EQ(rc, 0, "telemetry symbolic-retry: factorize");
+        ASSERT_INT_EQ(lu->telemetry.used_dense_fallback_last, 0,
+                      "telemetry symbolic-retry: no dense fallback");
+        ASSERT_INT_EQ(lu->telemetry.sparse_fallback_last_reason, LU_SPARSE_FALLBACK_NONE,
+                      "telemetry symbolic-retry: fallback reason=none");
+        ASSERT(lu->telemetry.symbolic_failures > 0,
+               "telemetry symbolic-retry: symbolic failure counted");
+        ASSERT(lu->telemetry.symbolic_fail_workspace > 0,
+               "telemetry symbolic-retry: workspace failure reason counted");
+        ASSERT_INT_EQ(lu->telemetry.symbolic_fail_unmatched_no_reserved, 0,
+                      "telemetry symbolic-retry: unmatched reason absent");
+        ASSERT_INT_EQ(lu->telemetry.symbolic_fail_inconsistent_identity, 0,
+                      "telemetry symbolic-retry: identity-map reason absent");
+        ASSERT(lu->telemetry.symbolic_full_retry_attempts > 0,
+               "telemetry symbolic-retry: full retry attempted");
+        ASSERT(lu->telemetry.symbolic_full_retry_successes > 0,
+               "telemetry symbolic-retry: full retry succeeded");
+        ASSERT_INT_EQ(lu->telemetry.symbolic_full_retry_numeric_failures, 0,
+                      "telemetry symbolic-retry: retry numeric did not fail");
+
+        lu->ws_row_match_col = saved_row_match_col;
+        lu->ws_row_seen = saved_row_seen;
+        lu_free(lu);
+        free_csc(B);
+        free(A);
+    }
 }
 
 int main(void) {

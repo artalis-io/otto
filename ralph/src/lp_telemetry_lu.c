@@ -29,6 +29,13 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.sparse_fallback_reason_symbolic = 0;
     lu->telemetry.sparse_fallback_reason_numeric = 0;
     lu->telemetry.identity_sep_failures = 0;
+    lu->telemetry.symbolic_failures = 0;
+    lu->telemetry.symbolic_fail_workspace = 0;
+    lu->telemetry.symbolic_fail_unmatched_no_reserved = 0;
+    lu->telemetry.symbolic_fail_inconsistent_identity = 0;
+    lu->telemetry.symbolic_full_retry_attempts = 0;
+    lu->telemetry.symbolic_full_retry_successes = 0;
+    lu->telemetry.symbolic_full_retry_numeric_failures = 0;
     lu->telemetry.perf_factorize_calls = 0;
     lu->telemetry.perf_last_basis_nnz = 0;
     lu->telemetry.perf_last_m = 0;
@@ -103,6 +110,13 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(sparse_fallback_reason_symbolic);
     COPY_LU_TELEM_FIELD(sparse_fallback_reason_numeric);
     COPY_LU_TELEM_FIELD(identity_sep_failures);
+    COPY_LU_TELEM_FIELD(symbolic_failures);
+    COPY_LU_TELEM_FIELD(symbolic_fail_workspace);
+    COPY_LU_TELEM_FIELD(symbolic_fail_unmatched_no_reserved);
+    COPY_LU_TELEM_FIELD(symbolic_fail_inconsistent_identity);
+    COPY_LU_TELEM_FIELD(symbolic_full_retry_attempts);
+    COPY_LU_TELEM_FIELD(symbolic_full_retry_successes);
+    COPY_LU_TELEM_FIELD(symbolic_full_retry_numeric_failures);
 
     COPY_LU_FIELD(sn_calls);
     COPY_LU_FIELD(sn_successes);
