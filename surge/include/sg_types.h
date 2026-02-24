@@ -36,6 +36,12 @@ typedef enum {
 } SGRequestKind;
 
 typedef enum {
+    SG_PD_POLICY_NONE = 0,   /* Default: no stacking constraint */
+    SG_PD_POLICY_LIFO = 1,   /* Nested: last picked up, first delivered */
+    SG_PD_POLICY_FIFO = 2    /* Same-order: first picked up, first delivered */
+} SGPDPolicy;
+
+typedef enum {
     SG_DEMAND_PICKUP_POSITIVE_DELIVERY_NEGATIVE = 0,
     SG_DEMAND_PICKUP_NEGATIVE_DELIVERY_POSITIVE = 1
 } SGDemandSignConvention;
@@ -112,7 +118,9 @@ typedef enum {
     SG_VIOLATION_FORBIDDEN_VEHICLE,
     SG_VIOLATION_QUALIFICATION,
     SG_VIOLATION_UNKNOWN_TASK,
-    SG_VIOLATION_DUPLICATE_TASK
+    SG_VIOLATION_DUPLICATE_TASK,
+    SG_VIOLATION_PD_POLICY,
+    SG_VIOLATION_BACKHAUL
 } SGViolationType;
 
 typedef struct {

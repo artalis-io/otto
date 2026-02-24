@@ -87,6 +87,8 @@ Current constraint coverage is genuinely rich:
 - Warm start
 - Time-dependent travel (speed profiles)
 - Per-vehicle travel profiles
+- LIFO/FIFO PD stacking (per-vehicle)
+- Backhaul constraint (linehaul before PD pickups)
 
 This is broader than VROOM (which lacks soft TW, DARP, breaks, multi-trip, setup times). It's comparable to OR-Tools in constraint breadth, though OR-Tools has more flexibility via its CP-SAT backend.
 
@@ -125,7 +127,7 @@ Language bindings are trivial given the JSON API — each binding is just a thin
 ## Auditability — Strong advantage
 
 - 21K lines of straightforward C. No metaprogramming, no templates, no macros beyond the basics. A competent C developer can read the entire solver in a day.
-- 257 tests covering every constraint individually. Each test is self-contained and readable.
+- 282 tests covering every constraint individually. Each test is self-contained and readable.
 - Operator telemetry: you can see exactly which destroy/repair operators were used, how often, and how effective they were.
 - Deterministic: reproducible bugs.
 - ASAN/UBSan clean: no undefined behavior.
@@ -313,9 +315,9 @@ Revised grades vs. initial assessment: Language bindings A- (Python + Node.js bi
 | Feature | Who Has It | Impact |
 |---------|-----------|--------|
 | ~~**Per-vehicle travel matrix**~~ | ~~OR-Tools, VROOM~~ | **Done.** Travel profiles give each vehicle its own distance/duration matrix + speed profile. |
-| **Initial vehicle loads** | jsprit | Vehicle starts pre-loaded (continuation of previous shift). Useful for multi-day planning. |
-| **LIFO/FIFO PD stacking** | OR-Tools | Physical loading constraints — last loaded = first unloaded. Matters for palletized freight. |
-| **Backhaul constraint** | jsprit | All deliveries before pickups on a route. Classic LTL trucking pattern. |
+| ~~**Initial vehicle loads**~~ | ~~jsprit~~ | **Done.** `sg_vehicle_set_initial_load()`. First-trip capacity offset with prefix-sum feasibility. |
+| ~~**LIFO/FIFO PD stacking**~~ | ~~OR-Tools~~ | **Done.** `sg_vehicle_set_pd_policy()` — LIFO (nested) or FIFO (same-order) per vehicle. Enforced in feasibility, insertion pruning, plan validation. |
+| ~~**Backhaul constraint**~~ | ~~jsprit~~ | **Done.** `sg_vehicle_set_backhaul()` — all D-only stops before PD pickups. Enforced in feasibility, both insertion evaluators, plan validation. |
 | **Energy/EV cost model** | OR-Tools (experimental) | Battery constraints, charging stops. Growing fast but still niche. |
 
 #### Solution Quality

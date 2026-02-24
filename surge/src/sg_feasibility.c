@@ -716,6 +716,20 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
         }
     }
 
+    /* LIFO/FIFO PD policy: stack/queue for ordering check */
+    uint32_t *pd_stack = NULL;
+    uint32_t pd_stack_top = 0;     /* LIFO: stack pointer; FIFO: enqueue pointer */
+    uint32_t pd_queue_front = 0;   /* FIFO: dequeue pointer */
+    uint8_t seen_pd_pickup = 0;    /* Backhaul: set when first PD pickup encountered */
+
+    if (ctx->has_pd_policy && ctx->vehicles[vehicle_id].pd_policy != SG_PD_POLICY_NONE &&
+        stop_count > 0) {
+        pd_stack = (uint32_t *)malloc((size_t)stop_count * sizeof(uint32_t));
+        if (!pd_stack) {
+            goto done;
+        }
+    }
+
     {
     double seq_work_since_break = 0.0;
     double seq_total_work = 0.0;
@@ -849,6 +863,36 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
                     ride_limit = (double)(drop_task->tw_late - pickup_task->tw_early);
                 }
                 if (isfinite(ride_limit) && ride_time > ride_limit + 1e-9) {
+                    goto done;
+                }
+            }
+        }
+
+        /* LIFO/FIFO PD policy check */
+        if (pd_stack && request->kind == SG_REQUEST_KIND_PICKUP_DELIVERY) {
+            if (stop->is_pickup) {
+                pd_stack[pd_stack_top++] = stop->request_id;
+            } else {
+                if (vehicle->pd_policy == SG_PD_POLICY_LIFO) {
+                    if (pd_stack_top == 0 || pd_stack[pd_stack_top - 1] != stop->request_id) {
+                        goto done;
+                    }
+                    pd_stack_top--;
+                } else { /* FIFO */
+                    if (pd_queue_front >= pd_stack_top || pd_stack[pd_queue_front] != stop->request_id) {
+                        goto done;
+                    }
+                    pd_queue_front++;
+                }
+            }
+        }
+
+        /* Backhaul check: no delivery-only stop after a PD pickup */
+        if (ctx->has_backhaul && vehicle->backhaul) {
+            if (stop->is_pickup && request->kind == SG_REQUEST_KIND_PICKUP_DELIVERY) {
+                seen_pd_pickup = 1;
+            } else if (!stop->is_pickup && request->kind == SG_REQUEST_KIND_DELIVERY_ONLY) {
+                if (seen_pd_pickup) {
                     goto done;
                 }
             }
@@ -1029,6 +1073,7 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
     } /* end seq_work_since_break scope */
 
 done:
+    free(pd_stack);
     if (!use_scratch) {
         free(service_start);
         free(depart);
@@ -1237,6 +1282,27 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
 
     if (pos > route_len || route_len >= sol->route_stride) {
         return 0;
+    }
+
+    /* Backhaul: D-only request must be inserted before any PD pickup */
+    if (ctx->has_backhaul && vehicle->backhaul &&
+        ctx->requests[request_id].kind == SG_REQUEST_KIND_DELIVERY_ONLY && stop_len > 0) {
+        /* Find stop-level position for new D-only stop at request position 'pos' */
+        uint32_t stop_pos = 0, r;
+        for (r = 0; r < pos && r < route_len; r++) {
+            stop_pos += (ctx->requests[route[r]].kind == SG_REQUEST_KIND_PICKUP_DELIVERY) ? 2 : 1;
+        }
+        /* Find first PD pickup stop */
+        {
+            uint32_t k;
+            for (k = 0; k < stop_len; k++) {
+                if (stops[k].is_pickup &&
+                    ctx->requests[stops[k].request_id].kind == SG_REQUEST_KIND_PICKUP_DELIVERY) {
+                    if (stop_pos > k) return 0;
+                    break;
+                }
+            }
+        }
     }
 
     /* Emit new stops for the request */
@@ -1814,6 +1880,86 @@ int sg_route_eval_pd_best_insertion_cached(
         ride_limit = (double)(delivery_task->tw_late - pickup_task->tw_early);
     }
 
+    /* --- LIFO/FIFO precomputation --- */
+    int32_t *pd_open_depth = NULL;          /* [stop_len + 1] for LIFO */
+    uint32_t *pd_max_del_before = NULL;     /* [stop_len + 2] for FIFO: max delivery pos of earlier pickups */
+    uint32_t *pd_min_del_after = NULL;      /* [stop_len + 2] for FIFO: min delivery pos of later pickups */
+    uint32_t pd_backhaul_last_donly = 0;    /* Backhaul: last D-only stop position + 1 */
+
+    if (ctx->has_pd_policy && vehicle->pd_policy != SG_PD_POLICY_NONE && stop_len > 0) {
+        uint32_t k;
+        if (vehicle->pd_policy == SG_PD_POLICY_LIFO) {
+            pd_open_depth = (int32_t *)malloc(((size_t)stop_len + 1) * sizeof(int32_t));
+            if (!pd_open_depth) return 0;
+            {
+                int32_t depth = 0;
+                pd_open_depth[0] = 0;
+                for (k = 0; k < stop_len; k++) {
+                    if (stops[k].is_pickup &&
+                        ctx->requests[stops[k].request_id].kind == SG_REQUEST_KIND_PICKUP_DELIVERY) {
+                        depth++;
+                    } else if (!stops[k].is_pickup &&
+                               ctx->requests[stops[k].request_id].kind == SG_REQUEST_KIND_PICKUP_DELIVERY) {
+                        depth--;
+                    }
+                    pd_open_depth[k + 1] = depth;
+                }
+            }
+        } else { /* FIFO */
+            /* Build pickup-order delivery position map */
+            pd_max_del_before = (uint32_t *)malloc(((size_t)stop_len + 2) * sizeof(uint32_t));
+            pd_min_del_after = (uint32_t *)malloc(((size_t)stop_len + 2) * sizeof(uint32_t));
+            if (!pd_max_del_before || !pd_min_del_after) {
+                free(pd_max_del_before);
+                free(pd_min_del_after);
+                pd_max_del_before = NULL;
+                pd_min_del_after = NULL;
+                return 0;
+            }
+            /* max_del_before[i] = max delivery stop position for PD pairs whose pickup pos < i */
+            {
+                uint32_t max_del = 0;
+                pd_max_del_before[0] = 0;
+                for (k = 0; k < stop_len; k++) {
+                    if (stops[k].is_pickup &&
+                        ctx->requests[stops[k].request_id].kind == SG_REQUEST_KIND_PICKUP_DELIVERY) {
+                        /* Find this pair's delivery position */
+                        uint32_t del_pos = sol->request_delivery_stop_pos[stops[k].request_id];
+                        if (del_pos > max_del) max_del = del_pos;
+                    }
+                    pd_max_del_before[k + 1] = max_del;
+                }
+                pd_max_del_before[stop_len + 1] = max_del;
+            }
+            /* min_del_after[i] = min delivery stop position for PD pairs whose pickup pos >= i
+               Sentinel: stop_len + 1 means no such pair exists (no constraint). */
+            {
+                uint32_t min_del = stop_len + 1;
+                pd_min_del_after[stop_len + 1] = stop_len + 1;
+                pd_min_del_after[stop_len] = stop_len + 1;
+                for (k = stop_len; k > 0; k--) {
+                    if (stops[k - 1].is_pickup &&
+                        ctx->requests[stops[k - 1].request_id].kind == SG_REQUEST_KIND_PICKUP_DELIVERY) {
+                        uint32_t del_pos = sol->request_delivery_stop_pos[stops[k - 1].request_id];
+                        if (del_pos < min_del) min_del = del_pos;
+                    }
+                    pd_min_del_after[k - 1] = min_del;
+                }
+            }
+        }
+    }
+
+    /* --- Backhaul precomputation --- */
+    if (ctx->has_backhaul && vehicle->backhaul && stop_len > 0) {
+        uint32_t k;
+        for (k = 0; k < stop_len; k++) {
+            if (!stops[k].is_pickup &&
+                ctx->requests[stops[k].request_id].kind == SG_REQUEST_KIND_DELIVERY_ONLY) {
+                pd_backhaul_last_donly = k + 1;
+            }
+        }
+    }
+
     /* For each pickup position i = 0..stop_len */
     for (i = 0; i <= stop_len; i++) {
         double prev_depart;
@@ -1821,6 +1967,11 @@ int sg_route_eval_pd_best_insertion_cached(
         double p_travel, p_arrival, p_start, p_depart;
         double p_wsb, p_break_time;
         uint32_t j;
+
+        /* Backhaul: PD pickup must be after all D-only stops */
+        if (ctx->has_backhaul && vehicle->backhaul && i < pd_backhaul_last_donly) {
+            continue;
+        }
 
         /* A. Compute pickup timing */
         if (i == 0) {
@@ -1885,6 +2036,35 @@ int sg_route_eval_pd_best_insertion_cached(
                 if (vehicle->has_multi_trip && j >= i + 2 && j - 2 < stop_len &&
                     stops[j - 2].trip_start) {
                     break;
+                }
+
+                /* LIFO: between our pickup at position i and delivery at position j,
+                   all existing PD pairs must be complete (opened and closed).
+                   pd_open_depth[k] = depth before stop[k]. Delivery at j means
+                   it goes after stop[j-2], so depth at insertion point = depth[j-1].
+                   For adjacent (j==i+1), depth[i]==depth[i] always true. */
+                if (pd_open_depth && vehicle->pd_policy == SG_PD_POLICY_LIFO) {
+                    uint32_t depth_idx = (j - 1 <= stop_len) ? j - 1 : stop_len;
+                    if (pd_open_depth[depth_idx] != pd_open_depth[i]) {
+                        goto next_j;
+                    }
+                }
+
+                /* FIFO: our delivery must come strictly after deliveries of pairs
+                   picked up before position i, and at or before deliveries of
+                   pairs picked up at or after position i.
+                   j-1 is our delivery's effective position in the pre-insertion
+                   stop array (delivery goes between stop[j-2] and stop[j-1]). */
+                if (pd_max_del_before && vehicle->pd_policy == SG_PD_POLICY_FIFO) {
+                    uint32_t eff_del = (j - 1 <= stop_len) ? j - 1 : stop_len;
+                    /* Our delivery must be after max delivery of earlier pickups */
+                    if (i > 0 && pd_max_del_before[i] >= eff_del) {
+                        goto next_j;
+                    }
+                    /* Our delivery must be at or before min delivery of later pickups */
+                    if (pd_min_del_after[i] < eff_del) {
+                        goto next_j;
+                    }
                 }
 
                 /* -- Try delivery at position j -- */
@@ -2322,6 +2502,10 @@ int sg_route_eval_pd_best_insertion_cached(
         if (break_after_j_loop) break;
         } /* end prev_req_pd scope */
     } /* end for i */
+
+    free(pd_open_depth);
+    free(pd_max_del_before);
+    free(pd_min_del_after);
 
     if (found) {
         *best_score_out = best_score;

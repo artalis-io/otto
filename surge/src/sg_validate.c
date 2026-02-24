@@ -172,6 +172,68 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
             }
         }
 
+        /* PD policy (LIFO/FIFO) check */
+        if (ctx->has_pd_policy && veh->pd_policy != SG_PD_POLICY_NONE) {
+            /* Use a stack/queue to verify ordering of PD pairs */
+            uint32_t *pd_buf = (uint32_t *)malloc((size_t)stop_len * sizeof(uint32_t));
+            if (pd_buf) {
+                uint32_t top = 0, front = 0;
+                for (i = 0; i < stop_len; i++) {
+                    const SGRouteStop *s = &stops[i];
+                    const SGRequestRecord *req = &ctx->requests[s->request_id];
+                    if (req->kind != SG_REQUEST_KIND_PICKUP_DELIVERY) continue;
+                    if (s->is_pickup) {
+                        pd_buf[top++] = s->request_id;
+                    } else {
+                        int violation = 0;
+                        if (veh->pd_policy == SG_PD_POLICY_LIFO) {
+                            violation = (top == 0 || pd_buf[top - 1] != s->request_id);
+                            if (!violation) top--;
+                        } else { /* FIFO */
+                            violation = (front >= top || pd_buf[front] != s->request_id);
+                            if (!violation) front++;
+                        }
+                        if (violation) {
+                            memset(&viol, 0, sizeof(viol));
+                            viol.type = SG_VIOLATION_PD_POLICY;
+                            viol.vehicle_id = v;
+                            viol.stop_index = i;
+                            viol.request_id = s->request_id;
+                            viol.task_id = s->task_id;
+                            viol.actual = (double)veh->pd_policy;
+                            viol.limit = 0.0;
+                            push_violation(ctx, &viol);
+                        }
+                    }
+                }
+                free(pd_buf);
+            }
+        }
+
+        /* Backhaul check: no D-only stop after PD pickup */
+        if (ctx->has_backhaul && veh->backhaul) {
+            uint8_t saw_pd_pickup = 0;
+            for (i = 0; i < stop_len; i++) {
+                const SGRouteStop *s = &stops[i];
+                const SGRequestRecord *req = &ctx->requests[s->request_id];
+                if (s->is_pickup && req->kind == SG_REQUEST_KIND_PICKUP_DELIVERY) {
+                    saw_pd_pickup = 1;
+                } else if (!s->is_pickup && req->kind == SG_REQUEST_KIND_DELIVERY_ONLY) {
+                    if (saw_pd_pickup) {
+                        memset(&viol, 0, sizeof(viol));
+                        viol.type = SG_VIOLATION_BACKHAUL;
+                        viol.vehicle_id = v;
+                        viol.stop_index = i;
+                        viol.request_id = s->request_id;
+                        viol.task_id = s->task_id;
+                        viol.actual = 0.0;
+                        viol.limit = 0.0;
+                        push_violation(ctx, &viol);
+                    }
+                }
+            }
+        }
+
         /* Ride time check */
         for (r = 0; r < ctx->num_requests; r++) {
             const SGRequestRecord *req = &ctx->requests[r];

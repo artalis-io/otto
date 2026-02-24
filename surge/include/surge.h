@@ -123,6 +123,12 @@ SGStatus sg_travel_profile_add_time_bracket(SGContext *ctx, uint32_t profile_id,
                                              const double *distance_matrix,
                                              const double *duration_matrix);
 
+/* PD stacking policy (LIFO/FIFO) */
+SGStatus sg_vehicle_set_pd_policy(SGContext *ctx, uint32_t vehicle_id, SGPDPolicy policy);
+
+/* Backhaul: all delivery-only stops must precede PD pickups */
+SGStatus sg_vehicle_set_backhaul(SGContext *ctx, uint32_t vehicle_id, int backhaul);
+
 SGStatus sg_vehicle_set_qualifications(SGContext *ctx, uint32_t vehicle_id,
                                         uint64_t qualification_flags);
 SGStatus sg_request_set_required_qualifications(SGContext *ctx, uint32_t request_id,

@@ -10125,6 +10125,473 @@ static void test_initial_load_multi_trip(void) {
     sg_free(ctx);
 }
 
+/* ===== PD Policy & Backhaul Tests ===== */
+
+static void test_pd_policy_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t v;
+    assert(ctx != NULL);
+    v = sg_add_vehicle(ctx);
+
+    /* Invalid args */
+    assert(sg_vehicle_set_pd_policy(NULL, 0, SG_PD_POLICY_LIFO) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_pd_policy(ctx, 999, SG_PD_POLICY_LIFO) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_pd_policy(ctx, v, (SGPDPolicy)99) == SG_STATUS_INVALID_ARG);
+
+    /* Valid */
+    assert(sg_vehicle_set_pd_policy(ctx, v, SG_PD_POLICY_LIFO) == SG_STATUS_OK);
+    assert(ctx->vehicles[v].pd_policy == SG_PD_POLICY_LIFO);
+    assert(ctx->has_pd_policy == 1);
+
+    assert(sg_vehicle_set_pd_policy(ctx, v, SG_PD_POLICY_FIFO) == SG_STATUS_OK);
+    assert(ctx->vehicles[v].pd_policy == SG_PD_POLICY_FIFO);
+
+    assert(sg_vehicle_set_pd_policy(ctx, v, SG_PD_POLICY_NONE) == SG_STATUS_OK);
+    assert(ctx->vehicles[v].pd_policy == SG_PD_POLICY_NONE);
+
+    sg_free(ctx);
+}
+
+static void test_pd_policy_lifo_basic(void) {
+    /* 2 PD pairs on a LIFO vehicle:
+       P1→P2→D2→D1 = valid (nested), P1→P2→D1→D2 = invalid */
+    SGContext *ctx = make_config(500, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    double dist;
+    SGRouteStop stops[4];
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    assert(sg_vehicle_set_pd_policy(ctx, 0, SG_PD_POLICY_LIFO) == SG_STATUS_OK);
+
+    /* Request 0: pickup at (1,0) delivery at (4,0) */
+    add_pd_request(ctx, 1.0, 0.0, 0, 86400, 10,
+                        4.0, 0.0, 0, 86400, 10, 10.0);
+    /* Request 1: pickup at (2,0) delivery at (3,0) */
+    add_pd_request(ctx, 2.0, 0.0, 0, 86400, 10,
+                        3.0, 0.0, 0, 86400, 10, 10.0);
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    sg_scratch_init(ctx);
+
+    /* LIFO valid: P0→P1→D1→D0 (nested) */
+    memset(stops, 0, sizeof(stops));
+    stops[0].request_id = 0; stops[0].task_id = 0; stops[0].is_pickup = 1;
+    stops[1].request_id = 1; stops[1].task_id = 2; stops[1].is_pickup = 1;
+    stops[2].request_id = 1; stops[2].task_id = 3; stops[2].is_pickup = 0;
+    stops[3].request_id = 0; stops[3].task_id = 1; stops[3].is_pickup = 0;
+    assert(sg_route_stop_sequence_feasible(ctx, 0, stops, 4, &dist) == 1);
+
+    /* LIFO invalid: P0→P1→D0→D1 (not nested — D0 before D1) */
+    stops[2].request_id = 0; stops[2].task_id = 1; stops[2].is_pickup = 0;
+    stops[3].request_id = 1; stops[3].task_id = 3; stops[3].is_pickup = 0;
+    assert(sg_route_stop_sequence_feasible(ctx, 0, stops, 4, &dist) == 0);
+
+    sg_scratch_free(ctx);
+    sg_free(ctx);
+}
+
+static void test_pd_policy_fifo_basic(void) {
+    /* 2 PD pairs on a FIFO vehicle:
+       P1→P2→D1→D2 = valid (same order), P1→P2→D2→D1 = invalid */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    double dist;
+    SGRouteStop stops[4];
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    assert(sg_vehicle_set_pd_policy(ctx, 0, SG_PD_POLICY_FIFO) == SG_STATUS_OK);
+
+    /* Request 0: pickup at (1,0) delivery at (3,0) */
+    add_pd_request(ctx, 1.0, 0.0, 0, 86400, 10,
+                        3.0, 0.0, 0, 86400, 10, 10.0);
+    /* Request 1: pickup at (2,0) delivery at (4,0) */
+    add_pd_request(ctx, 2.0, 0.0, 0, 86400, 10,
+                        4.0, 0.0, 0, 86400, 10, 10.0);
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    sg_scratch_init(ctx);
+
+    /* FIFO valid: P0→P1→D0→D1 (delivered in pickup order) */
+    memset(stops, 0, sizeof(stops));
+    stops[0].request_id = 0; stops[0].task_id = 0; stops[0].is_pickup = 1;
+    stops[1].request_id = 1; stops[1].task_id = 2; stops[1].is_pickup = 1;
+    stops[2].request_id = 0; stops[2].task_id = 1; stops[2].is_pickup = 0;
+    stops[3].request_id = 1; stops[3].task_id = 3; stops[3].is_pickup = 0;
+    assert(sg_route_stop_sequence_feasible(ctx, 0, stops, 4, &dist) == 1);
+
+    /* FIFO invalid: P0→P1→D1→D0 (D1 before D0 breaks FIFO) */
+    stops[2].request_id = 1; stops[2].task_id = 3; stops[2].is_pickup = 0;
+    stops[3].request_id = 0; stops[3].task_id = 1; stops[3].is_pickup = 0;
+    assert(sg_route_stop_sequence_feasible(ctx, 0, stops, 4, &dist) == 0);
+
+    sg_scratch_free(ctx);
+    sg_free(ctx);
+}
+
+static void test_pd_policy_lifo_insertion(void) {
+    /* PD insertion on LIFO vehicle should only produce nested placements */
+    SGContext *ctx = make_config(500, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    assert(sg_vehicle_set_pd_policy(ctx, 0, SG_PD_POLICY_LIFO) == SG_STATUS_OK);
+
+    /* Request 0: wide PD pair */
+    add_pd_request(ctx, 1.0, 0.0, 0, 86400, 10,
+                        4.0, 0.0, 0, 86400, 10, 10.0);
+    /* Request 1: nests inside req 0 */
+    add_pd_request(ctx, 2.0, 0.0, 0, 86400, 10,
+                        3.0, 0.0, 0, 86400, 10, 10.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert request 0 */
+    {
+        double score; uint32_t pp, dp; double rd;
+        assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 0, 0, &score, &pp, &dp, &rd));
+        assert(sg_route_apply_pd_insertion(ctx, &sol, 0, 0, pp, dp, rd) == AR_STATUS_OK);
+    }
+
+    /* Insert request 1 — LIFO requires nested placement */
+    {
+        double score; uint32_t pp, dp; double rd;
+        assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 1, 0, &score, &pp, &dp, &rd));
+        assert(sg_route_apply_pd_insertion(ctx, &sol, 1, 0, pp, dp, rd) == AR_STATUS_OK);
+    }
+
+    /* Verify LIFO ordering: produced solution is a valid LIFO sequence */
+    {
+        const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(&sol, 0);
+        uint32_t stk[4], top = 0, s;
+        assert(sol.route_stop_lengths[0] == 4);
+        for (s = 0; s < 4; s++) {
+            if (stops[s].is_pickup) {
+                stk[top++] = stops[s].request_id;
+            } else {
+                assert(top > 0 && stk[top - 1] == stops[s].request_id);
+                top--;
+            }
+        }
+        assert(top == 0);
+    }
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_pd_policy_fifo_insertion(void) {
+    /* PD insertion on FIFO vehicle should only produce same-order placements */
+    SGContext *ctx = make_config(500, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    assert(sg_vehicle_set_pd_policy(ctx, 0, SG_PD_POLICY_FIFO) == SG_STATUS_OK);
+
+    /* Request 0 */
+    add_pd_request(ctx, 1.0, 0.0, 0, 86400, 10,
+                        3.0, 0.0, 0, 86400, 10, 10.0);
+    /* Request 1 */
+    add_pd_request(ctx, 2.0, 0.0, 0, 86400, 10,
+                        4.0, 0.0, 0, 86400, 10, 10.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert request 0 */
+    {
+        double score; uint32_t pp, dp; double rd;
+        assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 0, 0, &score, &pp, &dp, &rd));
+        assert(sg_route_apply_pd_insertion(ctx, &sol, 0, 0, pp, dp, rd) == AR_STATUS_OK);
+    }
+
+    /* Insert request 1 — FIFO requires delivery in pickup order */
+    {
+        double score; uint32_t pp, dp; double rd;
+        assert(sg_route_eval_pd_best_insertion_cached(ctx, &sol, 1, 0, &score, &pp, &dp, &rd));
+        assert(sg_route_apply_pd_insertion(ctx, &sol, 1, 0, pp, dp, rd) == AR_STATUS_OK);
+    }
+
+    /* Verify FIFO ordering: deliveries in same order as pickups */
+    {
+        const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(&sol, 0);
+        uint32_t queue[4], front = 0, back = 0, s;
+        assert(sol.route_stop_lengths[0] == 4);
+        for (s = 0; s < 4; s++) {
+            if (stops[s].is_pickup) {
+                queue[back++] = stops[s].request_id;
+            } else {
+                assert(front < back && queue[front] == stops[s].request_id);
+                front++;
+            }
+        }
+        assert(front == back);
+    }
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_pd_policy_mixed_donly(void) {
+    /* D-only requests are not affected by LIFO/FIFO policy */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    double dist;
+    SGRouteStop stops[3];
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    assert(sg_vehicle_set_pd_policy(ctx, 0, SG_PD_POLICY_LIFO) == SG_STATUS_OK);
+
+    /* Request 0: D-only */
+    add_delivery_request(ctx, 5.0, 0.0, 0, 86400, 10, 10.0);
+    /* Request 1: PD pair */
+    add_pd_request(ctx, 1.0, 0.0, 0, 86400, 10,
+                        3.0, 0.0, 0, 86400, 10, 10.0);
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    sg_scratch_init(ctx);
+
+    /* D-only interleaved with PD should be fine: P1, D0, D1 */
+    memset(stops, 0, sizeof(stops));
+    stops[0].request_id = 1; stops[0].task_id = 1; stops[0].is_pickup = 1;
+    stops[1].request_id = 0; stops[1].task_id = 0; stops[1].is_pickup = 0;
+    stops[2].request_id = 1; stops[2].task_id = 2; stops[2].is_pickup = 0;
+    assert(sg_route_stop_sequence_feasible(ctx, 0, stops, 3, &dist) == 1);
+
+    sg_scratch_free(ctx);
+    sg_free(ctx);
+}
+
+static void test_pd_policy_json(void) {
+    const char *json =
+        "{"
+        "  \"config\": {\"max_iterations\": 100, \"seed\": 42, \"deterministic\": true},"
+        "  \"depots\": [{\"x\": 0, \"y\": 0, \"tw_early\": 0, \"tw_late\": 86400}],"
+        "  \"vehicles\": [{\"start_depot_id\": 0, \"end_depot_id\": 0,"
+        "    \"shift_early\": 0, \"shift_late\": 86400, \"capacity\": [100],"
+        "    \"pd_policy\": \"lifo\"}],"
+        "  \"tasks\": ["
+        "    {\"type\": \"pickup\", \"x\": 1, \"y\": 0, \"tw_early\": 0,"
+        "     \"tw_late\": 86400, \"service_seconds\": 10, \"demand\": [10]},"
+        "    {\"type\": \"delivery\", \"x\": 4, \"y\": 0, \"tw_early\": 0,"
+        "     \"tw_late\": 86400, \"service_seconds\": 10, \"demand\": [-10]},"
+        "    {\"type\": \"pickup\", \"x\": 2, \"y\": 0, \"tw_early\": 0,"
+        "     \"tw_late\": 86400, \"service_seconds\": 10, \"demand\": [10]},"
+        "    {\"type\": \"delivery\", \"x\": 3, \"y\": 0, \"tw_early\": 0,"
+        "     \"tw_late\": 86400, \"service_seconds\": 10, \"demand\": [-10]}"
+        "  ],"
+        "  \"requests\": ["
+        "    {\"pickup_task_id\": 0, \"delivery_task_id\": 1},"
+        "    {\"pickup_task_id\": 2, \"delivery_task_id\": 3}"
+        "  ]"
+        "}";
+    int status_code = 0;
+    size_t out_len = 0;
+    char *resp = sg_api_solve(json, strlen(json), &status_code, &out_len);
+    assert(resp != NULL);
+    assert(status_code == 200);
+    assert(strstr(resp, "\"unassigned\":0") != NULL ||
+           strstr(resp, "\"unassigned\": 0") != NULL);
+    free(resp);
+}
+
+static void test_backhaul_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t v;
+    assert(ctx != NULL);
+    v = sg_add_vehicle(ctx);
+
+    assert(sg_vehicle_set_backhaul(NULL, 0, 1) == SG_STATUS_INVALID_ARG);
+    assert(sg_vehicle_set_backhaul(ctx, 999, 1) == SG_STATUS_INVALID_ARG);
+
+    assert(sg_vehicle_set_backhaul(ctx, v, 1) == SG_STATUS_OK);
+    assert(ctx->vehicles[v].backhaul == 1);
+    assert(ctx->has_backhaul == 1);
+
+    assert(sg_vehicle_set_backhaul(ctx, v, 0) == SG_STATUS_OK);
+    assert(ctx->vehicles[v].backhaul == 0);
+
+    sg_free(ctx);
+}
+
+static void test_backhaul_basic(void) {
+    /* D-only + PD on backhaul vehicle:
+       D-only first → feasible, interleaved → rejected */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    double dist;
+    SGRouteStop stops[3];
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    assert(sg_vehicle_set_backhaul(ctx, 0, 1) == SG_STATUS_OK);
+
+    /* Request 0: D-only at (2,0) */
+    add_delivery_request(ctx, 2.0, 0.0, 0, 86400, 10, 10.0);
+    /* Request 1: PD pair at (5,0) → (8,0) */
+    add_pd_request(ctx, 5.0, 0.0, 0, 86400, 10,
+                        8.0, 0.0, 0, 86400, 10, 10.0);
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    sg_scratch_init(ctx);
+
+    /* Valid: D0, P1, D1 (linehaul first, then PD) */
+    memset(stops, 0, sizeof(stops));
+    stops[0].request_id = 0; stops[0].task_id = 0; stops[0].is_pickup = 0;
+    stops[1].request_id = 1; stops[1].task_id = 1; stops[1].is_pickup = 1;
+    stops[2].request_id = 1; stops[2].task_id = 2; stops[2].is_pickup = 0;
+    assert(sg_route_stop_sequence_feasible(ctx, 0, stops, 3, &dist) == 1);
+
+    /* Invalid: P1, D0, D1 (D0 after PD pickup P1) */
+    stops[0].request_id = 1; stops[0].task_id = 1; stops[0].is_pickup = 1;
+    stops[1].request_id = 0; stops[1].task_id = 0; stops[1].is_pickup = 0;
+    stops[2].request_id = 1; stops[2].task_id = 2; stops[2].is_pickup = 0;
+    assert(sg_route_stop_sequence_feasible(ctx, 0, stops, 3, &dist) == 0);
+
+    sg_scratch_free(ctx);
+    sg_free(ctx);
+}
+
+static void test_backhaul_pd_only(void) {
+    /* PD-only on backhaul vehicle: trivially satisfied */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    double dist;
+    SGRouteStop stops[2];
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    assert(sg_vehicle_set_backhaul(ctx, 0, 1) == SG_STATUS_OK);
+
+    add_pd_request(ctx, 5.0, 0.0, 0, 86400, 10,
+                        8.0, 0.0, 0, 86400, 10, 10.0);
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    sg_scratch_init(ctx);
+
+    memset(stops, 0, sizeof(stops));
+    stops[0].request_id = 0; stops[0].task_id = 0; stops[0].is_pickup = 1;
+    stops[1].request_id = 0; stops[1].task_id = 1; stops[1].is_pickup = 0;
+    assert(sg_route_stop_sequence_feasible(ctx, 0, stops, 2, &dist) == 1);
+
+    sg_scratch_free(ctx);
+    sg_free(ctx);
+}
+
+static void test_backhaul_donly_only(void) {
+    /* D-only only on backhaul vehicle: trivially satisfied */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    double dist;
+    SGRouteStop stops[2];
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    assert(sg_vehicle_set_backhaul(ctx, 0, 1) == SG_STATUS_OK);
+
+    add_delivery_request(ctx, 2.0, 0.0, 0, 86400, 10, 10.0);
+    add_delivery_request(ctx, 4.0, 0.0, 0, 86400, 10, 10.0);
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    sg_scratch_init(ctx);
+
+    memset(stops, 0, sizeof(stops));
+    stops[0].request_id = 0; stops[0].task_id = 0; stops[0].is_pickup = 0;
+    stops[1].request_id = 1; stops[1].task_id = 1; stops[1].is_pickup = 0;
+    assert(sg_route_stop_sequence_feasible(ctx, 0, stops, 2, &dist) == 1);
+
+    sg_scratch_free(ctx);
+    sg_free(ctx);
+}
+
+static void test_backhaul_insertion(void) {
+    /* Test that insertion respects backhaul:
+       - D-only insertion blocked after PD pickup
+       - PD insertion blocked before D-only */
+    SGContext *ctx = make_config(500, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    assert(sg_vehicle_set_backhaul(ctx, 0, 1) == SG_STATUS_OK);
+
+    /* Request 0: D-only at (2,0) */
+    add_delivery_request(ctx, 2.0, 0.0, 0, 86400, 10, 10.0);
+    /* Request 1: PD at (5,0) → (8,0) */
+    add_pd_request(ctx, 5.0, 0.0, 0, 86400, 10,
+                        8.0, 0.0, 0, 86400, 10, 10.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert D-only first */
+    {
+        double score; double rd;
+        int ok = sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &rd);
+        assert(ok);
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, rd) == AR_STATUS_OK);
+    }
+
+    /* Insert PD pair — must be after D-only */
+    {
+        double score; uint32_t pp, dp; double rd;
+        int ok = sg_route_eval_pd_best_insertion_cached(ctx, &sol, 1, 0, &score, &pp, &dp, &rd);
+        assert(ok);
+        /* Pickup position must be >= 1 (after the D-only) */
+        assert(pp >= 1);
+        assert(sg_route_apply_pd_insertion(ctx, &sol, 1, 0, pp, dp, rd) == AR_STATUS_OK);
+    }
+
+    /* Verify route: D0, P1, D1 */
+    {
+        const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(&sol, 0);
+        assert(sol.route_stop_lengths[0] == 3);
+        assert(!stops[0].is_pickup);  /* D-only delivery */
+        assert(stops[1].is_pickup);   /* PD pickup */
+        assert(!stops[2].is_pickup);  /* PD delivery */
+    }
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_backhaul_json(void) {
+    const char *json =
+        "{"
+        "  \"config\": {\"max_iterations\": 200, \"seed\": 42, \"deterministic\": true},"
+        "  \"depots\": [{\"x\": 0, \"y\": 0, \"tw_early\": 0, \"tw_late\": 86400}],"
+        "  \"vehicles\": [{\"start_depot_id\": 0, \"end_depot_id\": 0,"
+        "    \"shift_early\": 0, \"shift_late\": 86400, \"capacity\": [100],"
+        "    \"backhaul\": true}],"
+        "  \"tasks\": ["
+        "    {\"type\": \"delivery\", \"x\": 2, \"y\": 0, \"tw_early\": 0,"
+        "     \"tw_late\": 86400, \"service_seconds\": 10, \"demand\": [-10]},"
+        "    {\"type\": \"pickup\", \"x\": 5, \"y\": 0, \"tw_early\": 0,"
+        "     \"tw_late\": 86400, \"service_seconds\": 10, \"demand\": [10]},"
+        "    {\"type\": \"delivery\", \"x\": 8, \"y\": 0, \"tw_early\": 0,"
+        "     \"tw_late\": 86400, \"service_seconds\": 10, \"demand\": [-10]}"
+        "  ],"
+        "  \"requests\": ["
+        "    {\"delivery_task_id\": 0},"
+        "    {\"pickup_task_id\": 1, \"delivery_task_id\": 2}"
+        "  ]"
+        "}";
+    int status_code = 0;
+    size_t out_len = 0;
+    char *resp = sg_api_solve(json, strlen(json), &status_code, &out_len);
+    assert(resp != NULL);
+    assert(status_code == 200);
+    assert(strstr(resp, "\"unassigned\":0") != NULL ||
+           strstr(resp, "\"unassigned\": 0") != NULL);
+    free(resp);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -10464,12 +10931,29 @@ int main(void) {
     RUN_TEST(test_span_cost_affects_total_cost);
     RUN_TEST(test_span_cost_balances_routes);
 
+    /* PD policy (LIFO/FIFO) */
+    RUN_TEST(test_pd_policy_api);
+    RUN_TEST(test_pd_policy_lifo_basic);
+    RUN_TEST(test_pd_policy_fifo_basic);
+    RUN_TEST(test_pd_policy_lifo_insertion);
+    RUN_TEST(test_pd_policy_fifo_insertion);
+    RUN_TEST(test_pd_policy_mixed_donly);
+    RUN_TEST(test_pd_policy_json);
+
+    /* Backhaul */
+    RUN_TEST(test_backhaul_api);
+    RUN_TEST(test_backhaul_basic);
+    RUN_TEST(test_backhaul_pd_only);
+    RUN_TEST(test_backhaul_donly_only);
+    RUN_TEST(test_backhaul_insertion);
+    RUN_TEST(test_backhaul_json);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 269);
+    assert(tests_run == 282);
 #else
-    assert(tests_run == 260);
+    assert(tests_run == 273);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

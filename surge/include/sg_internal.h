@@ -254,6 +254,10 @@ typedef struct {
     /* Initial vehicle load (pre-loaded cargo at shift start) */
     double *initial_load;          /* Array[dimension_count], NULL = empty */
     uint8_t has_initial_load;
+
+    /* PD stacking policy and backhaul */
+    uint8_t pd_policy;             /* SGPDPolicy cast to uint8_t; 0 = NONE */
+    uint8_t backhaul;              /* 1 = linehaul stops before PD pickups */
 } SGVehicleRecord;
 
 typedef struct {
@@ -385,6 +389,10 @@ struct SGContext {
     SGTravelTimeBracket *travel_time_brackets;  /* sorted by start_time asc */
     uint32_t num_travel_time_brackets;
     uint8_t has_travel_time_brackets;           /* fast-path flag */
+
+    /* PD stacking policy and backhaul fast-path flags */
+    uint8_t has_pd_policy;                      /* 1 if any vehicle has pd_policy != NONE */
+    uint8_t has_backhaul;                       /* 1 if any vehicle has backhaul=1 */
 
     /* Infeasible-space exploration penalty manager */
     SGPenaltyManager penalty;

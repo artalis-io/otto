@@ -59,6 +59,8 @@ Surge supports orthogonal constraint dimensions that can be combined freely:
 | **Vehicle qualifications** | Request requires refrigerated/ADR/tail-lift |
 | **Customer preferences** | Soft: prefer driver X for customer Y |
 | **Sequence-dependent setup** | Cleanup/preparation time between incompatible cargo types |
+| **LIFO/FIFO PD stacking** | Per-vehicle pickup-delivery pair ordering (nested or same-order) |
+| **Backhaul** | All delivery-only stops before PD pickups on a vehicle |
 
 ### Depot Constraints
 
@@ -1179,6 +1181,12 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ### Current Status (as of 2026-02-24)
 
+**Baseline**: U1-U8 + S1-S12 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks + Multi-Trip + Multi-Threading (parallel + population) + SA cooling fix + mid-solve ejection pulse + Speed Profiles + Travel Profiles + Time-Indexed Travel Brackets + Open Start + Plan/ETA Validation + Infeasible-Space Exploration + Aggressive SISR + LIFO/FIFO PD Policy + Backhaul Constraint complete. All Tier 1 and Tier 2 production gaps closed. REST API server, WASM build, Python and Node.js bindings exist. 282 tests passing, ASAN/UBSAN clean.
+
+Implemented features: Everything in previous status plus: LIFO/FIFO PD stacking policy (`sg_vehicle_set_pd_policy()`) — per-vehicle constraint on pickup-delivery pair ordering. LIFO = nested pairs (last picked up, first delivered). FIFO = same-order delivery (first picked up, first delivered). Enforced in feasibility checks, insertion evaluation (O(N) precompute + O(1) per (i,j) pruning via `pd_open_depth[]` for LIFO, `pd_max_del_before[]`/`pd_min_del_after[]` for FIFO), and plan validation. Backhaul constraint (`sg_vehicle_set_backhaul()`) — all delivery-only ("linehaul") stops must precede all PD pickup stops. Enforced in feasibility, both insertion evaluators, and plan validation. Both features use fast-path flags (`has_pd_policy`, `has_backhaul`) for zero overhead when unused. JSON API: `"pd_policy": "lifo"/"fifo"`, `"backhaul": true`. New violation types: `SG_VIOLATION_PD_POLICY`, `SG_VIOLATION_BACKHAUL`. 13 new tests (269→282).
+
+#### Previous Status (as of 2026-02-24)
+
 **Baseline**: U1-U8 + S1-S12 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks + Multi-Trip + Multi-Threading (parallel + population) + SA cooling fix + mid-solve ejection pulse + Speed Profiles + Travel Profiles + Time-Indexed Travel Brackets + Open Start + Plan/ETA Validation + Infeasible-Space Exploration + Aggressive SISR complete. All Tier 1 and Tier 2 production gaps closed. REST API server, WASM build, Python and Node.js bindings exist. 269 tests passing, ASAN/UBSAN clean.
 
 Implemented features: Everything in previous status plus: time-indexed travel brackets — multiple complete duration matrices indexed by departure time. Supported at both global level (`sg_set_travel_time_bracket()`) and per-vehicle travel profile level (`sg_travel_profile_add_time_bracket()`). Orthogonal to speed profiles (which compose multiplicatively on top). Override chain: callback → per-vehicle brackets/matrix → global brackets/matrix → Euclidean → speed profile. Distance uses bracket[0] when no departure_time is available. JSON API supports `time_brackets` in both `travel` and `travel_profiles` sections. 8 new tests (261→269).
@@ -1682,8 +1690,8 @@ Grouped by business impact:
 | **Exclusion groups** | ✅ Complete | At most one request per group per vehicle. 4 tests. |
 | **Sequence-dependent setup** | ✅ Complete | Asymmetric N×N setup class matrix. 4 tests. |
 | **Time-dependent travel** | ✅ Complete | Speed profiles (step-function multipliers) + time-indexed travel brackets (multiple complete matrices by departure time). Both global and per-vehicle. 8 tests. |
-| **LIFO/FIFO PD policy** | Not started | OR-Tools has per-vehicle pickup/delivery stacking order. Niche. |
-| **Backhaul constraint** | Not started | All deliveries before pickups on a route. jsprit has this. Niche. |
+| **LIFO/FIFO PD policy** | ✅ Complete | Per-vehicle stacking order: LIFO (nested) or FIFO (same-order). `sg_vehicle_set_pd_policy()`. Feasibility + insertion pruning + plan validation. 7 tests. |
+| **Backhaul constraint** | ✅ Complete | All D-only stops before PD pickups. `sg_vehicle_set_backhaul()`. Feasibility + both insertion evaluators + plan validation. 6 tests. |
 | **Energy cost model** | Not started | EV-specific path energy cost. OR-Tools only. |
 
 **Tier 4 — Competitive gaps (vs OR-Tools / VROOM):**

@@ -708,6 +708,32 @@ SGStatus sg_vehicle_set_initial_load(SGContext *ctx, uint32_t vehicle_id,
     return SG_STATUS_OK;
 }
 
+SGStatus sg_vehicle_set_pd_policy(SGContext *ctx, uint32_t vehicle_id, SGPDPolicy policy) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (policy != SG_PD_POLICY_NONE && policy != SG_PD_POLICY_LIFO &&
+        policy != SG_PD_POLICY_FIFO) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->vehicles[vehicle_id].pd_policy = (uint8_t)policy;
+    if (policy != SG_PD_POLICY_NONE) {
+        ctx->has_pd_policy = 1;
+    }
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_vehicle_set_backhaul(SGContext *ctx, uint32_t vehicle_id, int backhaul) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->vehicles[vehicle_id].backhaul = backhaul ? 1 : 0;
+    if (backhaul) {
+        ctx->has_backhaul = 1;
+    }
+    return SG_STATUS_OK;
+}
+
 SGStatus sg_task_set_location(SGContext *ctx, uint32_t task_id, double x, double y) {
     SGTaskRecord *task;
 

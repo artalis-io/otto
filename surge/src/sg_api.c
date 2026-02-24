@@ -832,6 +832,26 @@ static int build_vehicles(SGContext *ctx, const ShJsonValue *vehicles_arr) {
                 return -1;
             }
         }
+
+        /* PD stacking policy */
+        v = sh_json_get(veh, "pd_policy");
+        if (v) {
+            const char *pol = sh_json_as_string(v, "none");
+            SGPDPolicy policy = SG_PD_POLICY_NONE;
+            if (strcmp(pol, "lifo") == 0) policy = SG_PD_POLICY_LIFO;
+            else if (strcmp(pol, "fifo") == 0) policy = SG_PD_POLICY_FIFO;
+            if (sg_vehicle_set_pd_policy(ctx, id, policy) != SG_STATUS_OK) {
+                return -1;
+            }
+        }
+
+        /* Backhaul constraint */
+        v = sh_json_get(veh, "backhaul");
+        if (v) {
+            if (sg_vehicle_set_backhaul(ctx, id, sh_json_as_bool(v, false) ? 1 : 0) != SG_STATUS_OK) {
+                return -1;
+            }
+        }
     }
 
     return 0;
