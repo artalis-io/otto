@@ -437,6 +437,48 @@ int main(void) {
             .expected_interval = 24,
             .min_pressure = 0.76,
             .max_pressure = 0.76
+        },
+        {
+            .name = "phase1 policy cooldown skips one periodic cadence under large degeneracy",
+            .phase = 1,
+            .iter = 24,
+            .m = 1503,
+            .max_updates = 120,
+            .num_updates = 24,
+            .spike_pool_used = 10,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e4,
+            .growth_factor = 10.0,
+            .use_bland = 0,
+            .degenerate_count = 120,
+            .feedback_bias = 0.0,
+            .periodic_policy_cooldown = 24,
+            .periodic_policy_pressure_decay = 0.0,
+            .expected_run = 0,
+            .expected_interval = 24,
+            .min_pressure = 0.99,
+            .max_pressure = 1.00
+        },
+        {
+            .name = "phase1 pressure decay lowers effective periodic pressure",
+            .phase = 1,
+            .iter = 24,
+            .m = 1503,
+            .max_updates = 120,
+            .num_updates = 24,
+            .spike_pool_used = 10,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e4,
+            .growth_factor = 10.0,
+            .use_bland = 0,
+            .degenerate_count = 120,
+            .feedback_bias = 0.0,
+            .periodic_policy_cooldown = 0,
+            .periodic_policy_pressure_decay = 0.24,
+            .expected_run = 1,
+            .expected_interval = 24,
+            .min_pressure = 0.76,
+            .max_pressure = 0.76
         }
     };
 
