@@ -138,6 +138,7 @@ Arbor; Surge provides the domain logic and constraint checking.
 │  │  • Disjunct  │ │  • Multi-dim │ │  • Qualifications          ││
 │  │  • Soft TW   │ │  • Axle load │ │  • Commodity conflicts     ││
 │  │  • Ride time │ │  • Volume    │ │  • Exclusion groups        ││
+│  │  • Precedence│ │  • Compart.  │ │  • LIFO/FIFO + Backhaul   ││
 │  └──────────────┘ └──────────────┘ └────────────────────────────┘│
 ├──────────────────────────────────────────────────────────────────┤
 │                   Solution Representation (Surge)                │
