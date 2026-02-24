@@ -62,6 +62,34 @@ void lp_telemetry_lu_set_sparse_fallback_reason(LUFactorization *lu,
     }
 }
 
+void lp_telemetry_lu_mark_symbolic_failure(LUFactorization *lu,
+                                           int reason) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.symbolic_failures++;
+    if (reason == LU_SYMBOLIC_FAIL_WORKSPACE) {
+        lu->telemetry.symbolic_fail_workspace++;
+    } else if (reason == LU_SYMBOLIC_FAIL_UNMATCHED_NO_RESERVED) {
+        lu->telemetry.symbolic_fail_unmatched_no_reserved++;
+    } else if (reason == LU_SYMBOLIC_FAIL_INCONSISTENT_IDENTITY) {
+        lu->telemetry.symbolic_fail_inconsistent_identity++;
+    }
+}
+
+void lp_telemetry_lu_mark_symbolic_full_retry_attempt(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.symbolic_full_retry_attempts++;
+}
+
+void lp_telemetry_lu_mark_symbolic_full_retry_success(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.symbolic_full_retry_successes++;
+}
+
+void lp_telemetry_lu_mark_symbolic_full_retry_numeric_failure(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.symbolic_full_retry_numeric_failures++;
+}
+
 void lp_telemetry_lu_mark_sparse_success(LUFactorization *lu) {
     lp_telemetry_lu_set_sparse_fallback_reason(lu, LU_SPARSE_FALLBACK_NONE);
 }
