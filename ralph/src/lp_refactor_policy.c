@@ -29,11 +29,37 @@
 #define PHASE1_POLICY_COOLDOWN_MAX_UPDATES 192
 #define PHASE1_POLICY_COOLDOWN_NUM 2
 #define PHASE1_POLICY_COOLDOWN_DEN 1
+#define LU_HEALTH_HARD_COND_MIN_UPDATES 10
+#define LU_HEALTH_HARD_COND_RATIO 1e10
+#define LU_HEALTH_SOFT_COND_MED 1e6
+#define LU_HEALTH_SOFT_COND_HIGH 1e8
+#define LU_HEALTH_SOFT_SPIKE_WARN_PCT 85
+#define LU_HEALTH_SOFT_SPIKE_WORK_MULT 8
+#define LU_HEALTH_SOFT_MIN_UPDATE_AGE_MIN 10
+#define LU_HEALTH_SOFT_MIN_UPDATE_AGE_MAX 30
+#define LU_HEALTH_SOFT_MIN_UPDATE_AGE_NUM 1
+#define LU_HEALTH_SOFT_MIN_UPDATE_AGE_DEN 5
+#define LU_HEALTH_SOFT_BREACH_THRESHOLD_BASE 3
+#define LU_HEALTH_SOFT_BREACH_THRESHOLD_HIGH 2
 
 static double clamp_unit_interval(double x) {
     if (!(x > 0.0)) return 0.0;
     if (x > 1.0) return 1.0;
     return x;
+}
+
+static int clamp_int_range(int x, int lo, int hi) {
+    if (x < lo) return lo;
+    if (x > hi) return hi;
+    return x;
+}
+
+static int lu_soft_min_update_age(int max_updates) {
+    int min_age = (max_updates * LU_HEALTH_SOFT_MIN_UPDATE_AGE_NUM) /
+                  LU_HEALTH_SOFT_MIN_UPDATE_AGE_DEN;
+    return clamp_int_range(min_age,
+                           LU_HEALTH_SOFT_MIN_UPDATE_AGE_MIN,
+                           LU_HEALTH_SOFT_MIN_UPDATE_AGE_MAX);
 }
 
 static int periodic_interval_bounds(int phase, int *min_interval, int *max_interval) {
@@ -279,4 +305,98 @@ int lp_refactor_policy_phase1_cooldown_window_updates(int interval) {
         cooldown = PHASE1_POLICY_COOLDOWN_MAX_UPDATES;
     }
     return cooldown;
+}
+
+LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(
+    int m,
+    int use_ft_updates,
+    int num_updates,
+    int max_updates,
+    int spike_pool_used,
+    int spike_pool_capacity,
+    double cond_estimate,
+    double growth_factor,
+    int soft_breach_streak) {
+    LPLUHealthRefactorDecision decision = {0, 0, 0, 0, 0, 0};
+    int adaptive_limit;
+    double cond_ratio = 0.0;
+
+    (void)m;
+
+    if (max_updates <= 0) max_updates = 1;
+    if (num_updates < 0) num_updates = 0;
+    if (spike_pool_used < 0) spike_pool_used = 0;
+    if (soft_breach_streak < 0) soft_breach_streak = 0;
+
+    decision.soft_breach_threshold = LU_HEALTH_SOFT_BREACH_THRESHOLD_BASE;
+    decision.soft_min_update_age = lu_soft_min_update_age(max_updates);
+
+    if (num_updates >= max_updates) {
+        decision.hard_trigger = 1;
+        decision.refactor_now = 1;
+        return decision;
+    }
+
+    if (isfinite(growth_factor) && growth_factor > RALPH_LU_GROWTH_REFACTOR_THRESHOLD) {
+        decision.hard_trigger = 1;
+        decision.refactor_now = 1;
+        return decision;
+    }
+
+    if (num_updates >= LU_HEALTH_HARD_COND_MIN_UPDATES &&
+        isfinite(growth_factor) &&
+        isfinite(cond_estimate) &&
+        growth_factor > 0.0 &&
+        cond_estimate > 0.0) {
+        cond_ratio = growth_factor * cond_estimate;
+        if (cond_ratio > LU_HEALTH_HARD_COND_RATIO) {
+            decision.hard_trigger = 1;
+            decision.refactor_now = 1;
+            return decision;
+        }
+    }
+
+    adaptive_limit = max_updates;
+    if (isfinite(cond_estimate)) {
+        if (cond_estimate > LU_HEALTH_SOFT_COND_HIGH) {
+            adaptive_limit = max_updates / 4;
+            decision.soft_breach_threshold = LU_HEALTH_SOFT_BREACH_THRESHOLD_HIGH;
+        } else if (cond_estimate > LU_HEALTH_SOFT_COND_MED) {
+            adaptive_limit = max_updates / 2;
+        }
+    }
+    if (adaptive_limit < 1) adaptive_limit = 1;
+    if (adaptive_limit < max_updates && num_updates >= adaptive_limit) {
+        decision.soft_trigger = 1;
+    }
+
+    if (use_ft_updates && spike_pool_capacity > 0) {
+        if (spike_pool_used >
+            (spike_pool_capacity * LU_HEALTH_SOFT_SPIKE_WARN_PCT) / 100) {
+            decision.soft_trigger = 1;
+            decision.soft_breach_threshold = LU_HEALTH_SOFT_BREACH_THRESHOLD_HIGH;
+        }
+    }
+
+    if (use_ft_updates && m >= 500 &&
+        spike_pool_used > m * LU_HEALTH_SOFT_SPIKE_WORK_MULT) {
+        decision.soft_trigger = 1;
+    }
+
+    if (decision.soft_trigger) {
+        decision.soft_breach_streak_next = soft_breach_streak + 1;
+        if (decision.soft_breach_streak_next < 0) {
+            decision.soft_breach_streak_next = 0;
+        }
+    } else {
+        decision.soft_breach_streak_next = 0;
+    }
+
+    if (decision.soft_trigger &&
+        decision.soft_breach_streak_next >= decision.soft_breach_threshold &&
+        num_updates >= decision.soft_min_update_age) {
+        decision.refactor_now = 1;
+    }
+
+    return decision;
 }

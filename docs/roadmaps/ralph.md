@@ -2994,3 +2994,47 @@ Focused canary impact (Phase A vs Phase B):
   - iterations within timeout window increased `338 -> 1503`
 - `25fv47`, `fit1p`, `nesm`, `bandm`, `scagr25`:
   - no status regressions, dense fallback remained `0`
+
+#### Phase C Plan (LU Health Trigger Hysteresis)
+
+Goal: reduce frequent LU-health periodic refactors on long degenerate runs without weakening hard LU
+safety triggers.
+
+Scope:
+- Preserve hard LU safety as immediate refactor triggers:
+  - `num_updates >= max_updates`
+  - growth-factor hard threshold
+  - severe `growth * cond` threshold
+- Apply hysteresis only to soft LU-health pressure:
+  - adaptive condition-based update limit
+  - spike-pool warning pressure
+  - spike-work pressure on large bases
+- Soft triggers require both:
+  - consecutive breach streak
+  - minimum update age before forcing periodic refactor
+
+Phase C implementation (2026-02-24):
+- Added LU-health decision API in policy module:
+  - `LPLUHealthRefactorDecision`
+  - `lp_refactor_policy_lu_health_refactor_decision(...)`
+- Added simplex test hook:
+  - `simplex_lu_health_refactor_plan_for_test(...)`
+- Rewired both Phase 1 and Phase 2 periodic refactor paths to use hard/soft LU-health decisions with
+  soft-breach streak state per phase.
+
+Phase C gates and artifacts:
+- `make -C ralph test-lp-refactor-policy` PASS (45/45)
+- `make -C ralph test-simplex-policy` PASS (27/27)
+- `make -C ralph test` PASS
+- `make -C ralph test-netlib-gate-small` PASS (`/tmp/netlib-regression-gate-20260224-094616`)
+- `make -C ralph test-netlib-gate` PASS (`/tmp/netlib-regression-gate-20260224-094628`)
+  - summary: 84 files, timeout files 29, command/status/objective/invalid mismatches 0, dense fallback files 0, unexpected regressions 0
+
+Focused canary impact (Phase B vs Phase C):
+- artifacts: `/tmp/phasec-focused-*.json`
+- `degen3`:
+  - status unchanged (`timeout`), dense fallback unchanged (`0`)
+  - LU-health periodic refactors reduced (`126 -> 104`)
+  - timeout envelope still exceeded under current `--time-mult` policy
+- `25fv47`, `fit1p`, `nesm`, `bandm`, `scagr25`:
+  - no status regressions, dense fallback remained `0`

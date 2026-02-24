@@ -27,6 +27,22 @@ int simplex_periodic_refactor_plan_for_test(int phase,
                                             int *interval_out,
                                             double *pressure_out);
 
+/* Internal LU health hysteresis test hook from simplex.c */
+int simplex_lu_health_refactor_plan_for_test(int m,
+                                             int use_ft_updates,
+                                             int num_updates,
+                                             int max_updates,
+                                             int spike_pool_used,
+                                             int spike_pool_capacity,
+                                             double cond_estimate,
+                                             double growth_factor,
+                                             int soft_breach_streak,
+                                             int *hard_trigger_out,
+                                             int *soft_trigger_out,
+                                             int *next_streak_out,
+                                             int *soft_threshold_out,
+                                             int *soft_min_update_age_out);
+
 enum {
     EXPECT_UPDATE = 0,
     EXPECT_REFACTOR = 1,
@@ -115,6 +131,78 @@ static int run_scheduler_case(const SchedulerCase *tc) {
     if (pressure < tc->min_pressure || pressure > tc->max_pressure) {
         fprintf(stderr, "FAIL: %s (expected pressure in [%.3f, %.3f], got %.6f)\n",
                 tc->name, tc->min_pressure, tc->max_pressure, pressure);
+        return 0;
+    }
+
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+typedef struct {
+    const char *name;
+    int m;
+    int use_ft_updates;
+    int num_updates;
+    int max_updates;
+    int spike_pool_used;
+    int spike_pool_capacity;
+    double cond_estimate;
+    double growth_factor;
+    int soft_breach_streak;
+    int expected_refactor;
+    int expected_hard;
+    int expected_soft;
+    int expected_next_streak;
+} LUHealthCase;
+
+static int run_lu_health_case(const LUHealthCase *tc) {
+    int hard = -1;
+    int soft = -1;
+    int next_streak = -1;
+    int soft_threshold = -1;
+    int soft_min_update_age = -1;
+    int refactor = simplex_lu_health_refactor_plan_for_test(tc->m,
+                                                             tc->use_ft_updates,
+                                                             tc->num_updates,
+                                                             tc->max_updates,
+                                                             tc->spike_pool_used,
+                                                             tc->spike_pool_capacity,
+                                                             tc->cond_estimate,
+                                                             tc->growth_factor,
+                                                             tc->soft_breach_streak,
+                                                             &hard,
+                                                             &soft,
+                                                             &next_streak,
+                                                             &soft_threshold,
+                                                             &soft_min_update_age);
+    if (refactor != tc->expected_refactor) {
+        fprintf(stderr, "FAIL: %s (expected refactor=%d got=%d)\n",
+                tc->name, tc->expected_refactor, refactor);
+        return 0;
+    }
+    if (hard != tc->expected_hard) {
+        fprintf(stderr, "FAIL: %s (expected hard=%d got=%d)\n",
+                tc->name, tc->expected_hard, hard);
+        return 0;
+    }
+    if (soft != tc->expected_soft) {
+        fprintf(stderr, "FAIL: %s (expected soft=%d got=%d)\n",
+                tc->name, tc->expected_soft, soft);
+        return 0;
+    }
+    if (next_streak != tc->expected_next_streak) {
+        fprintf(stderr, "FAIL: %s (expected next_streak=%d got=%d)\n",
+                tc->name, tc->expected_next_streak, next_streak);
+        return 0;
+    }
+    if (soft_threshold < 1) {
+        fprintf(stderr, "FAIL: %s (soft threshold must be >=1, got=%d)\n",
+                tc->name, soft_threshold);
+        return 0;
+    }
+    if (soft_min_update_age < 1) {
+        fprintf(stderr, "FAIL: %s (soft min update age must be >=1, got=%d)\n",
+                tc->name, soft_min_update_age);
         return 0;
     }
 
@@ -481,17 +569,103 @@ int main(void) {
             .max_pressure = 0.76
         }
     };
+    const LUHealthCase lu_health_cases[] = {
+        {
+            .name = "lu hard trigger on max updates bypasses hysteresis",
+            .m = 1500,
+            .use_ft_updates = 1,
+            .num_updates = 120,
+            .max_updates = 120,
+            .spike_pool_used = 0,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e3,
+            .growth_factor = 1.0,
+            .soft_breach_streak = 0,
+            .expected_refactor = 1,
+            .expected_hard = 1,
+            .expected_soft = 0,
+            .expected_next_streak = 0
+        },
+        {
+            .name = "lu hard trigger on severe cond ratio bypasses hysteresis",
+            .m = 1500,
+            .use_ft_updates = 1,
+            .num_updates = 10,
+            .max_updates = 120,
+            .spike_pool_used = 0,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 2e8,
+            .growth_factor = 100.0,
+            .soft_breach_streak = 0,
+            .expected_refactor = 1,
+            .expected_hard = 1,
+            .expected_soft = 0,
+            .expected_next_streak = 0
+        },
+        {
+            .name = "lu soft trigger requires consecutive breaches",
+            .m = 1500,
+            .use_ft_updates = 1,
+            .num_updates = 70,
+            .max_updates = 120,
+            .spike_pool_used = 0,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e7,
+            .growth_factor = 1.0,
+            .soft_breach_streak = 0,
+            .expected_refactor = 0,
+            .expected_hard = 0,
+            .expected_soft = 1,
+            .expected_next_streak = 1
+        },
+        {
+            .name = "lu soft trigger refactors after hysteresis streak",
+            .m = 1500,
+            .use_ft_updates = 1,
+            .num_updates = 70,
+            .max_updates = 120,
+            .spike_pool_used = 0,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e7,
+            .growth_factor = 1.0,
+            .soft_breach_streak = 2,
+            .expected_refactor = 1,
+            .expected_hard = 0,
+            .expected_soft = 1,
+            .expected_next_streak = 3
+        },
+        {
+            .name = "lu soft trigger respects min update age",
+            .m = 1500,
+            .use_ft_updates = 1,
+            .num_updates = 12,
+            .max_updates = 120,
+            .spike_pool_used = 90,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e3,
+            .growth_factor = 1.0,
+            .soft_breach_streak = 1,
+            .expected_refactor = 0,
+            .expected_hard = 0,
+            .expected_soft = 1,
+            .expected_next_streak = 2
+        }
+    };
 
     int pass = 0;
     int total_policy = (int)(sizeof(cases) / sizeof(cases[0]));
     int total_sched = (int)(sizeof(scheduler_cases) / sizeof(scheduler_cases[0]));
-    int total = total_policy + total_sched;
+    int total_lu_health = (int)(sizeof(lu_health_cases) / sizeof(lu_health_cases[0]));
+    int total = total_policy + total_sched + total_lu_health;
 
     for (int i = 0; i < total_policy; i++) {
         pass += run_case(&cases[i]);
     }
     for (int i = 0; i < total_sched; i++) {
         pass += run_scheduler_case(&scheduler_cases[i]);
+    }
+    for (int i = 0; i < total_lu_health; i++) {
+        pass += run_lu_health_case(&lu_health_cases[i]);
     }
 
     printf("\nPolicy cases passed: %d/%d\n", pass, total);
