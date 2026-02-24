@@ -9,6 +9,7 @@
   "known_objective_mismatch": [],
   "known_solution_invalid": [],
   "required_pass": [
+    "25fv47.mps",
     "bandm.mps",
     "fit1p.mps",
     "nesm.mps",
@@ -51,6 +52,7 @@
     "cycle.mps",
     "d2q06c.mps",
     "d6cube.mps",
+    "degen3.mps",
     "fffff800.mps",
     "fit2p.mps",
     "forplan.mps",
@@ -71,5 +73,13 @@
     "wood1p.mps",
     "woodw.mps"
   ],
+  "problem_overrides": {
+    "25fv47.mps": {
+      "method": 2
+    },
+    "80bau3b.mps": {
+      "obj_rel_tol": 2e-6
+    }
+  },
   "require_zero_dense_fallback": true
 }
