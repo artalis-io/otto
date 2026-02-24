@@ -1709,7 +1709,7 @@ These require changes to ALNS/feasibility/insertion. Neither OR-Tools nor VROOM 
 | Gap | Status | Impact | Notes |
 |-----|--------|--------|-------|
 | **Live re-optimization** | **Done** | High | Three-level request locking: NONE (free), COMMITTED (must-serve, can reassign), FROZEN (locked to vehicle). All destroy/repair/postprocess operators respect locks. 1e12 penalty for committed drops. Hardened warm-start: frozen vehicle map (`frozen_vehicle_map[rid] → vid`), two-pass construction (frozen first), frozen filter in repair ranking, frozen placement validation, infeasible-space fallback to initial solution. Stress-tested on RC101 + C101 Solomon and 53-pair Li & Lim benchmarks (2000-8000 ALNS iterations, 10 integration tests). |
-| **Vehicle compartments** | Not started | Medium | Per-compartment capacity (frozen/chilled/ambient). Insertion must check which compartment fits, feasibility tracks loads per compartment. Deal-closer for grocery/food distribution, irrelevant for parcel/LTL. |
+| **Vehicle compartments** | **Done** | Medium | Per-compartment capacity (frozen/chilled/ambient). `sg_add_compartment_type()`, `sg_vehicle_add_compartment()`, `sg_request_set_compartment_type()`. Dual capacity check (vehicle overall + compartment). Zero overhead when unused. Feasibility in forward pass + both insertion evaluators + plan validation. JSON API. 11 tests. |
 | **Inter-request precedence** | Not started | Low | "Deliver A before B" beyond PD pairing. Feasibility + insertion pruning, same class as LIFO/FIFO. Rarely a deal-breaker — most real precedence maps to time windows or application-layer sequencing. |
 
 **Tier 3c — Application-layer features (already expressible with current API):**
