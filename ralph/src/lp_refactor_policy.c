@@ -41,6 +41,17 @@
 #define LU_HEALTH_SOFT_MIN_UPDATE_AGE_DEN 5
 #define LU_HEALTH_SOFT_BREACH_THRESHOLD_BASE 3
 #define LU_HEALTH_SOFT_BREACH_THRESHOLD_HIGH 2
+#define LU_SOFT_COST_GATE_PHASE1_MIN_M 1200
+#define LU_SOFT_COST_GATE_PHASE2_MIN_M 700
+#define LU_SOFT_COST_GATE_MIN_DEGEN 20
+#define LU_SOFT_COST_GATE_MIN_REFACTOR_MS 1.0
+#define LU_SOFT_COST_GATE_RATIO_TRIGGER 8.0
+#define LU_SOFT_COST_GATE_UPDATE_RESERVE_NUM 1
+#define LU_SOFT_COST_GATE_UPDATE_RESERVE_DEN 8
+#define LU_SOFT_COST_GATE_UPDATE_RESERVE_MIN 4
+#define LU_SOFT_COST_GATE_MAX_SPIKE_PCT 70
+#define LU_SOFT_COST_GATE_MAX_COND 1e7
+#define LU_SOFT_COST_GATE_MAX_GROWTH 1e5
 
 static double clamp_unit_interval(double x) {
     if (!(x > 0.0)) return 0.0;
@@ -399,4 +410,56 @@ LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(
     }
 
     return decision;
+}
+
+int lp_refactor_policy_soft_lu_cost_gate_should_defer(int phase,
+                                                      int m,
+                                                      int use_bland,
+                                                      int degenerate_count,
+                                                      int num_updates,
+                                                      int max_updates,
+                                                      int spike_pool_used,
+                                                      int spike_pool_capacity,
+                                                      double cond_estimate,
+                                                      double growth_factor,
+                                                      double refactor_cost_ewma_ms,
+                                                      double iter_cost_ewma_ms) {
+    int min_m;
+    int update_reserve;
+    double ratio;
+
+    if (phase == 1) {
+        min_m = LU_SOFT_COST_GATE_PHASE1_MIN_M;
+    } else if (phase == 2) {
+        min_m = LU_SOFT_COST_GATE_PHASE2_MIN_M;
+    } else {
+        return 0;
+    }
+
+    if (m < min_m) return 0;
+    if (use_bland) return 0;
+    if (degenerate_count < LU_SOFT_COST_GATE_MIN_DEGEN) return 0;
+    if (max_updates <= 0 || num_updates < 0) return 0;
+    if (!isfinite(refactor_cost_ewma_ms) || !isfinite(iter_cost_ewma_ms)) return 0;
+    if (refactor_cost_ewma_ms < LU_SOFT_COST_GATE_MIN_REFACTOR_MS) return 0;
+    if (!(iter_cost_ewma_ms > 0.0)) return 0;
+
+    ratio = refactor_cost_ewma_ms / iter_cost_ewma_ms;
+    if (ratio < LU_SOFT_COST_GATE_RATIO_TRIGGER) return 0;
+
+    update_reserve = (max_updates * LU_SOFT_COST_GATE_UPDATE_RESERVE_NUM) /
+                     LU_SOFT_COST_GATE_UPDATE_RESERVE_DEN;
+    if (update_reserve < LU_SOFT_COST_GATE_UPDATE_RESERVE_MIN) {
+        update_reserve = LU_SOFT_COST_GATE_UPDATE_RESERVE_MIN;
+    }
+    if (num_updates >= max_updates - update_reserve) return 0;
+
+    if (spike_pool_capacity > 0 &&
+        spike_pool_used * 100 > spike_pool_capacity * LU_SOFT_COST_GATE_MAX_SPIKE_PCT) {
+        return 0;
+    }
+    if (isfinite(cond_estimate) && cond_estimate > LU_SOFT_COST_GATE_MAX_COND) return 0;
+    if (isfinite(growth_factor) && growth_factor > LU_SOFT_COST_GATE_MAX_GROWTH) return 0;
+
+    return 1;
 }

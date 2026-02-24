@@ -124,6 +124,7 @@ typedef enum {
 #define PHASE2_POLICY_PRESSURE_RECOVERY_STEP 0.01
 #define PHASE1_DIR_STABILIZE_COOLDOWN_ITERS 8
 #define PHASE1_DIR_INF_FORCE_REFACTOR_MULT 100.0
+#define SOFT_LU_COST_EWMA_ALPHA 0.20
 
 static double clamp_unit_interval(double x) {
     if (!(x > 0.0)) return 0.0;
@@ -136,6 +137,77 @@ static double clamp_feedback_bias(double x) {
     if (x > PERIODIC_FEEDBACK_BIAS_LIMIT) return PERIODIC_FEEDBACK_BIAS_LIMIT;
     if (x < -PERIODIC_FEEDBACK_BIAS_LIMIT) return -PERIODIC_FEEDBACK_BIAS_LIMIT;
     return x;
+}
+
+static double ewma_update_ms(double prev_ms, double sample_ms) {
+    if (!isfinite(sample_ms) || sample_ms <= 0.0) return prev_ms;
+    if (!isfinite(prev_ms) || prev_ms <= 0.0) return sample_ms;
+    return prev_ms + SOFT_LU_COST_EWMA_ALPHA * (sample_ms - prev_ms);
+}
+
+static double phase_hotpath_ms(const SimplexSolver *owner, int phase) {
+    if (!owner) return 0.0;
+    if (phase == 1) {
+        return owner->telemetry.perf_phase1_pricing_ms +
+               owner->telemetry.perf_phase1_ratio_ms +
+               owner->telemetry.perf_phase1_pivot_ms +
+               owner->telemetry.perf_phase1_compute_solution_ms +
+               owner->telemetry.perf_phase1_compute_rc_ms;
+    }
+    if (phase == 2) {
+        return owner->telemetry.perf_phase2_pricing_ms +
+               owner->telemetry.perf_phase2_ratio_ms +
+               owner->telemetry.perf_phase2_pivot_ms +
+               owner->telemetry.perf_phase2_compute_solution_ms +
+               owner->telemetry.perf_phase2_compute_rc_ms;
+    }
+    return 0.0;
+}
+
+static double* soft_lu_iter_cost_ewma_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.soft_lu_iter_cost_ewma_phase1;
+    if (phase == 2) return &owner->policy.soft_lu_iter_cost_ewma_phase2;
+    return NULL;
+}
+
+static double* soft_lu_refactor_cost_ewma_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.soft_lu_refactor_cost_ewma_phase1;
+    if (phase == 2) return &owner->policy.soft_lu_refactor_cost_ewma_phase2;
+    return NULL;
+}
+
+static void soft_lu_record_iter_cost(SimplexSolver *owner, int phase, double iter_ms) {
+    double *ewma_ptr = soft_lu_iter_cost_ewma_ptr(owner, phase);
+    if (!ewma_ptr) return;
+    *ewma_ptr = ewma_update_ms(*ewma_ptr, iter_ms);
+}
+
+static void soft_lu_record_refactor_cost(SimplexSolver *owner, int phase, double refactor_ms) {
+    double *ewma_ptr = soft_lu_refactor_cost_ewma_ptr(owner, phase);
+    if (!ewma_ptr) return;
+    *ewma_ptr = ewma_update_ms(*ewma_ptr, refactor_ms);
+}
+
+static double soft_lu_iter_cost_ewma(const SimplexSolver *owner, int phase) {
+    if (!owner) return 0.0;
+    if (phase == 1) return owner->policy.soft_lu_iter_cost_ewma_phase1;
+    if (phase == 2) return owner->policy.soft_lu_iter_cost_ewma_phase2;
+    return 0.0;
+}
+
+static double soft_lu_refactor_cost_ewma(const SimplexSolver *owner, int phase) {
+    if (!owner) return 0.0;
+    if (phase == 1) return owner->policy.soft_lu_refactor_cost_ewma_phase1;
+    if (phase == 2) return owner->policy.soft_lu_refactor_cost_ewma_phase2;
+    return 0.0;
+}
+
+static void soft_lu_record_defer(SimplexSolver *owner, int phase) {
+    if (!owner) return;
+    if (phase == 1) owner->policy.soft_lu_cost_gate_defers_phase1++;
+    else if (phase == 2) owner->policy.soft_lu_cost_gate_defers_phase2++;
 }
 
 static double periodic_feedback_bias_for_phase(const SimplexSolver *owner, int phase) {
@@ -3957,6 +4029,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->warm_basis_last_applied = 0;
     solver->warm_basis_last_rejected = 0;
     solver->unbounded_valid = 0;
+    solver->policy.soft_lu_cost_gate_enabled = 1;
 
     return solver;
 }
@@ -4552,6 +4625,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     /* Compute initial reduced costs */
     tableau_compute_reduced_costs(tab);
     if (solver->pricing_strategy == 4) heap_build(tab);
+    double phase1_hot_ms_prev = phase_hotpath_ms(solver, 1);
 
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         tab->iterations = iter;
@@ -5108,6 +5182,12 @@ static int simplex_phase1(SimplexSolver *solver) {
         }
 
         /* Periodic refactorization */
+        {
+            double phase1_hot_ms_now = phase_hotpath_ms(solver, 1);
+            double iter_hot_ms = phase1_hot_ms_now - phase1_hot_ms_prev;
+            soft_lu_record_iter_cost(solver, 1, iter_hot_ms);
+            phase1_hot_ms_prev = phase1_hot_ms_now;
+        }
         LPLUHealthRefactorDecision lu_health_decision =
             lp_refactor_policy_lu_health_refactor_decision(tab->m,
                                                            tab->lu->use_ft_updates,
@@ -5119,6 +5199,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                                                            tab->lu->growth_factor,
                                                            lu_soft_health_streak);
         int lu_refactor_needed = lu_health_decision.refactor_now;
+        int lu_soft_cost_deferred = 0;
         int cooldown_eligible = 0;
         double effective_policy_pressure = 0.0;
         LPPeriodicRefactorPolicy periodic_policy =
@@ -5130,6 +5211,27 @@ static int simplex_phase1(SimplexSolver *solver) {
         if (lu_health_decision.hard_trigger) {
             periodic_policy_cooldown = 0;
             periodic_policy_pressure_decay = 0.0;
+        }
+        if (lu_refactor_needed &&
+            solver->policy.soft_lu_cost_gate_enabled &&
+            lu_health_decision.soft_trigger &&
+            !lu_health_decision.hard_trigger &&
+            lp_refactor_policy_soft_lu_cost_gate_should_defer(
+                1,
+                tab->m,
+                use_bland,
+                degenerate_count,
+                tab->lu->num_updates,
+                tab->lu->max_updates,
+                tab->lu->spike_pool_used,
+                tab->lu->spike_pool_capacity,
+                tab->lu->cond_estimate,
+                tab->lu->growth_factor,
+                soft_lu_refactor_cost_ewma(solver, 1),
+                soft_lu_iter_cost_ewma(solver, 1))) {
+            lu_refactor_needed = 0;
+            lu_soft_cost_deferred = 1;
+            soft_lu_record_defer(solver, 1);
         }
         if (!lu_refactor_needed) {
             cooldown_eligible = lp_refactor_policy_phase1_cooldown_eligible(tab->m,
@@ -5162,7 +5264,10 @@ static int simplex_phase1(SimplexSolver *solver) {
 
         if (needs_refactor) {
             runtime_record_periodic_refactor_trigger(solver, 1, lu_refactor_needed);
+            double t_refactor_ms = lp_telemetry_timer_start();
             int rc_refactor = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PERIODIC);
+            double refactor_elapsed_ms = lp_telemetry_timer_elapsed_ms(t_refactor_ms);
+            soft_lu_record_refactor_cost(solver, 1, refactor_elapsed_ms);
             if (lu_refactor_needed && rc_refactor == 0) {
                 lu_soft_health_streak = 0;
             }
@@ -5250,6 +5355,13 @@ static int simplex_phase1(SimplexSolver *solver) {
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
             if (solver->pricing_strategy == 4) heap_build(tab);
+        } else if (lu_soft_cost_deferred && solver->verbose >= 2) {
+            LP_LOG_STDERR("[simplex_phase1] Deferred soft LU-health periodic refactor (updates=%d/%d, degen=%d, iter_ewma=%.3fms, ref_ewma=%.3fms)\n",
+                    tab->lu->num_updates,
+                    tab->lu->max_updates,
+                    degenerate_count,
+                    soft_lu_iter_cost_ewma(solver, 1),
+                    soft_lu_refactor_cost_ewma(solver, 1));
         } else if (iter > 0 && iter % RECOMPUTE_INTERVAL == 0) {
             /* Drift control even when LU updates are still accepted. */
             tableau_compute_solution(tab);
@@ -5630,6 +5742,7 @@ static int simplex_phase2(SimplexSolver *solver) {
         tableau_compute_reduced_costs(tab);
         if (solver->pricing_strategy == 4) heap_build(tab);
     }
+    double phase2_hot_ms_prev = phase_hotpath_ms(solver, 2);
 
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         tab->iterations = iter;
@@ -5906,6 +6019,12 @@ static int simplex_phase2(SimplexSolver *solver) {
 
         /* Refactorize if needed.
          * For two-phase problems, periodic refresh is adaptive (interval + LU health). */
+        {
+            double phase2_hot_ms_now = phase_hotpath_ms(solver, 2);
+            double iter_hot_ms = phase2_hot_ms_now - phase2_hot_ms_prev;
+            soft_lu_record_iter_cost(solver, 2, iter_hot_ms);
+            phase2_hot_ms_prev = phase2_hot_ms_now;
+        }
         LPLUHealthRefactorDecision lu_health_decision =
             lp_refactor_policy_lu_health_refactor_decision(tab->m,
                                                            tab->lu->use_ft_updates,
@@ -5917,6 +6036,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                                                            tab->lu->growth_factor,
                                                            lu_soft_health_streak);
         int lu_refactor_needed = lu_health_decision.refactor_now;
+        int lu_soft_cost_deferred = 0;
         int needs_refactor = lu_refactor_needed;
         int periodic_refactor = 0;
         int cooldown_eligible = 0;
@@ -5926,6 +6046,28 @@ static int simplex_phase2(SimplexSolver *solver) {
         if (lu_health_decision.hard_trigger) {
             periodic_policy_cooldown = 0;
             periodic_policy_pressure_decay = 0.0;
+        }
+        if (lu_refactor_needed &&
+            solver->policy.soft_lu_cost_gate_enabled &&
+            lu_health_decision.soft_trigger &&
+            !lu_health_decision.hard_trigger &&
+            lp_refactor_policy_soft_lu_cost_gate_should_defer(
+                2,
+                tab->m,
+                use_bland,
+                degenerate_count,
+                tab->lu->num_updates,
+                tab->lu->max_updates,
+                tab->lu->spike_pool_used,
+                tab->lu->spike_pool_capacity,
+                tab->lu->cond_estimate,
+                tab->lu->growth_factor,
+                soft_lu_refactor_cost_ewma(solver, 2),
+                soft_lu_iter_cost_ewma(solver, 2))) {
+            lu_refactor_needed = 0;
+            lu_soft_cost_deferred = 1;
+            soft_lu_record_defer(solver, 2);
+            needs_refactor = 0;
         }
         if (!lu_refactor_needed) {
             LPPeriodicRefactorPolicy effective_policy;
@@ -5961,11 +6103,14 @@ static int simplex_phase2(SimplexSolver *solver) {
         if (needs_refactor) {
             runtime_record_periodic_refactor_trigger(solver, 2, lu_refactor_needed);
             int rc_refactor;
+            double refactor_elapsed_ms = 0.0;
             {
                 double t_refactor_ms = lp_telemetry_timer_start();
                 rc_refactor = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PERIODIC);
-                lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+                refactor_elapsed_ms = lp_telemetry_timer_elapsed_ms(t_refactor_ms);
+                lp_telemetry_add_refactor_runtime_ms(solver, refactor_elapsed_ms);
             }
+            soft_lu_record_refactor_cost(solver, 2, refactor_elapsed_ms);
             if (lu_refactor_needed && rc_refactor == 0) {
                 lu_soft_health_streak = 0;
             }
@@ -6012,6 +6157,13 @@ static int simplex_phase2(SimplexSolver *solver) {
                 tableau_compute_reduced_costs(tab);  /* Full RC for incremental updates */
                 if (solver->pricing_strategy == 4) heap_build(tab);
             }
+        } else if (lu_soft_cost_deferred && solver->verbose >= 2) {
+            LP_LOG_STDERR("[primal_simplex] Deferred soft LU-health periodic refactor (updates=%d/%d, degen=%d, iter_ewma=%.3fms, ref_ewma=%.3fms)\n",
+                    tab->lu->num_updates,
+                    tab->lu->max_updates,
+                    degenerate_count,
+                    soft_lu_iter_cost_ewma(solver, 2),
+                    soft_lu_refactor_cost_ewma(solver, 2));
         }
 
         /* Periodically recompute solution and reduced costs to correct numerical drift */
@@ -6521,7 +6673,6 @@ static int setup_primal_tableau(SimplexSolver *solver, int allow_crash) {
             tableau_compute_reduced_costs(tab);
         }
     }
-
     free(saved_basis);
     free(saved_basis_pos);
     free(saved_var_status);

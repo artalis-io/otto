@@ -599,6 +599,15 @@ typedef struct {
     int periodic_feedback_hint_interval_phase2;
     double periodic_feedback_hint_pressure_phase1;
     double periodic_feedback_hint_pressure_phase2;
+
+    /* Phase E: soft LU-health refactor cost gating (behavioral, not telemetry). */
+    int soft_lu_cost_gate_enabled;        /* 1=enabled (default), 0=disabled */
+    int soft_lu_cost_gate_defers_phase1;  /* soft LU-triggered deferrals in Phase 1 */
+    int soft_lu_cost_gate_defers_phase2;  /* soft LU-triggered deferrals in Phase 2 */
+    double soft_lu_refactor_cost_ewma_phase1; /* EWMA refactor cost estimate (ms) */
+    double soft_lu_refactor_cost_ewma_phase2; /* EWMA refactor cost estimate (ms) */
+    double soft_lu_iter_cost_ewma_phase1;     /* EWMA per-iteration hot-path cost (ms) */
+    double soft_lu_iter_cost_ewma_phase2;     /* EWMA per-iteration hot-path cost (ms) */
 } LPSolverPolicyState;
 
 /* Simplex solver */
@@ -783,6 +792,13 @@ typedef struct {
     int periodic_feedback_hint_interval_phase2;
     double periodic_feedback_hint_pressure_phase1;
     double periodic_feedback_hint_pressure_phase2;
+    int soft_lu_cost_gate_enabled;
+    int soft_lu_cost_gate_defers_phase1;
+    int soft_lu_cost_gate_defers_phase2;
+    double soft_lu_refactor_cost_ewma_phase1;
+    double soft_lu_refactor_cost_ewma_phase2;
+    double soft_lu_iter_cost_ewma_phase1;
+    double soft_lu_iter_cost_ewma_phase2;
 } LPSolverTelemetrySnapshot;
 
 /* LU telemetry snapshot used by benchmarks and diagnostics. */

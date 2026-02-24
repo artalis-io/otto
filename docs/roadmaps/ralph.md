@@ -3074,3 +3074,47 @@ Controlled A/B (Phase C vs Phase D, sequential same command shape):
   - `refactor.all_ms`: `1324.472 -> 1292.954` (~2.4% better)
 - Fast canaries (`fit1p`, `nesm`, `bandm`, `scagr25`) remain status-stable with small drift.
 - Outliers still remain timeout-class under current `--time-mult` policy.
+
+#### Phase E Plan (Cost-Aware Soft LU-Health Triggering)
+
+Goal: reduce expensive soft LU-health periodic reinversions on large degenerate runs while keeping hard LU
+safety triggers fully authoritative.
+
+Scope:
+- Add per-phase policy-state EWMA estimates for:
+  - periodic refactor wall-time cost
+  - iteration hot-path wall-time cost
+- Add pure policy gate:
+  - defer only soft LU-health refactor requests when refactor/iteration cost ratio is high and LU health is
+    still inside safe envelope.
+  - never defer hard LU-health triggers (`max_updates`, hard growth, hard growth*cond).
+- Keep existing periodic scheduler path unchanged as fallback candidate when soft LU-health request is deferred.
+- Expose defer counters and EWMAs in solver telemetry snapshot for tuning.
+
+Phase E implementation (2026-02-24):
+- Added policy state and snapshot fields:
+  - `soft_lu_cost_gate_enabled`
+  - `soft_lu_cost_gate_defers_phase{1,2}`
+  - `soft_lu_refactor_cost_ewma_phase{1,2}`
+  - `soft_lu_iter_cost_ewma_phase{1,2}`
+- Added policy module gate:
+  - `lp_refactor_policy_soft_lu_cost_gate_should_defer(...)`
+- Rewired simplex Phase 1 and Phase 2 periodic refactor logic:
+  - update per-phase iteration-cost EWMA from hot-path stage deltas
+  - update per-phase refactor-cost EWMA on periodic refactor attempts
+  - apply soft LU-health defer gate before forcing periodic refactor
+  - preserve hard-trigger bypass behavior
+
+Phase E gates and artifacts:
+- `make -C ralph test-lp-refactor-policy` PASS (49/49)
+- `make -C ralph test-simplex-policy` PASS (27/27)
+- `make -C ralph test-lp-telemetry-solver` PASS (41/41)
+- `make -C ralph test-netlib-gate-small` PASS
+  - artifacts: `/tmp/netlib-regression-gate-20260224-102701`
+- `make -C ralph test-netlib-gate` PASS
+  - artifacts: `/tmp/netlib-regression-gate-20260224-102711`
+  - summary: 84 files, timeout files 29, command/status/objective/invalid mismatches 0, dense fallback files 0
+
+Notes:
+- `make -C ralph test` currently aborts in `test_ralph` on pre-existing Farkas/unbounded certificate checks in
+  this branch state; netlib regression gates remain green with no new mismatches and no new timeouts.

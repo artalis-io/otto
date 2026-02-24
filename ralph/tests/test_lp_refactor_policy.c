@@ -126,6 +126,62 @@ int main(void) {
     TEST(decision.refactor_now == 0, "lu health: soft trigger obeys min update age");
     TEST(decision.soft_breach_streak_next == 2, "lu health: spike soft trigger increments streak");
 
+    should_run = lp_refactor_policy_soft_lu_cost_gate_should_defer(2,
+                                                                    1503,
+                                                                    0,
+                                                                    80,
+                                                                    60,
+                                                                    120,
+                                                                    10,
+                                                                    100,
+                                                                    1e5,
+                                                                    100.0,
+                                                                    12.0,
+                                                                    1.0);
+    TEST(should_run == 1, "soft lu cost gate defers under expensive refactors");
+
+    should_run = lp_refactor_policy_soft_lu_cost_gate_should_defer(2,
+                                                                    1503,
+                                                                    0,
+                                                                    80,
+                                                                    118,
+                                                                    120,
+                                                                    10,
+                                                                    100,
+                                                                    1e5,
+                                                                    100.0,
+                                                                    12.0,
+                                                                    1.0);
+    TEST(should_run == 0, "soft lu cost gate does not defer near max updates");
+
+    should_run = lp_refactor_policy_soft_lu_cost_gate_should_defer(2,
+                                                                    1503,
+                                                                    0,
+                                                                    80,
+                                                                    60,
+                                                                    120,
+                                                                    10,
+                                                                    100,
+                                                                    1e8,
+                                                                    100.0,
+                                                                    12.0,
+                                                                    1.0);
+    TEST(should_run == 0, "soft lu cost gate does not defer poor LU condition");
+
+    should_run = lp_refactor_policy_soft_lu_cost_gate_should_defer(2,
+                                                                    400,
+                                                                    0,
+                                                                    80,
+                                                                    60,
+                                                                    120,
+                                                                    10,
+                                                                    100,
+                                                                    1e5,
+                                                                    100.0,
+                                                                    12.0,
+                                                                    1.0);
+    TEST(should_run == 0, "soft lu cost gate requires large basis");
+
     policy.interval = 24;
     policy.min_update_age = 12;
     policy.interval_pressure = 0.30;
