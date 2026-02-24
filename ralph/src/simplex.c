@@ -6148,6 +6148,43 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
     return 0;
 }
 
+/* Confirm Phase-2 optimality on a fresh basis.
+ * Incremental RC updates can occasionally mark a large degenerate basis as
+ * optimal too early; this pass re-factorizes and re-prices strictly before
+ * returning OPTIMAL. */
+static int phase2_confirm_optimality(SimplexSolver *solver, int iter, int *entering_out) {
+    SimplexTableau *tab;
+    int rc;
+    int entering = -1;
+
+    if (!solver || !solver->tableau) return -1;
+    tab = solver->tableau;
+
+    {
+        double t_refactor_ms = lp_telemetry_timer_start();
+        rc = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PERIODIC);
+        lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+    }
+    if (rc != 0) {
+        if (repair_singular_basis(tab) != 0) {
+            solver->status = RALPH_STATUS_ERROR;
+            solver->iterations = iter;
+            return -1;
+        }
+    }
+
+    tableau_compute_solution(tab);
+    tableau_compute_reduced_costs(tab);
+
+    if (pricing_dantzig(tab, &entering) != 0) {
+        if (entering_out) *entering_out = -1;
+        return 1;  /* confirmed optimal */
+    }
+
+    if (entering_out) *entering_out = entering;
+    return 0;  /* not optimal yet */
+}
+
 /* Phase 2: Optimize */
 static int simplex_phase2(SimplexSolver *solver) {
     SimplexTableau *tab = solver->tableau;
@@ -6295,15 +6332,21 @@ static int simplex_phase2(SimplexSolver *solver) {
         }
 
         if (price_status != 0) {
-            /* Optimal - remove perturbation and finalize */
-            primal_remove_perturbation(tab);
-            solver->status = RALPH_STATUS_OPTIMAL;
-            solver->iterations = iter;
-            solver->degenerate_pivots = degenerate_count;
-            tableau_compute_solution(tab);
-
-            solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
-            return 0;
+            int confirm = phase2_confirm_optimality(solver, iter, &entering);
+            if (confirm < 0) {
+                primal_remove_perturbation(tab);
+                return -1;
+            }
+            if (confirm > 0) {
+                /* Optimal - remove perturbation and finalize */
+                primal_remove_perturbation(tab);
+                solver->status = RALPH_STATUS_OPTIMAL;
+                solver->iterations = iter;
+                solver->degenerate_pivots = degenerate_count;
+                tableau_compute_solution(tab);
+                solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
+                return 0;
+            }
         }
 
         /* Ratio test: select leaving variable */
@@ -6361,14 +6404,21 @@ static int simplex_phase2(SimplexSolver *solver) {
                 }
 
                 if (price_status != 0) {
-                    /* Actually optimal after refactorization */
-                    primal_remove_perturbation(tab);
-                    solver->status = RALPH_STATUS_OPTIMAL;
-                    solver->iterations = iter;
-                    solver->degenerate_pivots = degenerate_count;
-                    tableau_compute_solution(tab);
-                    solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
-                    return 0;
+                    int confirm = phase2_confirm_optimality(solver, iter, &entering);
+                    if (confirm < 0) {
+                        primal_remove_perturbation(tab);
+                        return -1;
+                    }
+                    if (confirm > 0) {
+                        /* Actually optimal after refactorization */
+                        primal_remove_perturbation(tab);
+                        solver->status = RALPH_STATUS_OPTIMAL;
+                        solver->iterations = iter;
+                        solver->degenerate_pivots = degenerate_count;
+                        tableau_compute_solution(tab);
+                        solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
+                        return 0;
+                    }
                 }
 
                 /* Retry ratio test with fresh LU */

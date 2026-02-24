@@ -73,10 +73,6 @@
     "wood1p.mps",
     "woodw.mps"
   ],
-  "problem_overrides": {
-    "80bau3b.mps": {
-      "obj_rel_tol": 2e-6
-    }
-  },
+  "problem_overrides": {},
   "require_zero_dense_fallback": true
 }
