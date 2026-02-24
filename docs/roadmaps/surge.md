@@ -1700,7 +1700,7 @@ These require changes to ALNS/feasibility/insertion. Neither OR-Tools nor VROOM 
 
 | Gap | Status | Impact | Notes |
 |-----|--------|--------|-------|
-| **Live re-optimization** | Not started | High | Lock committed stops (frozen route prefix), re-solve unlocked suffix with new orders. Table stakes for real-time dispatch — Girteka/Waberer's would ask day one. Solver needs locked-prefix awareness in destroy/repair operators. |
+| **Live re-optimization** | **Done** | High | Three-level request locking: NONE (free), COMMITTED (must-serve, can reassign), FROZEN (locked to vehicle). All destroy/repair/postprocess operators respect locks. 1e12 penalty for committed drops. Stress-tested on 100-customer Solomon and 53-pair Li & Lim benchmarks (3000-8000 ALNS iterations, 10 integration tests). |
 | **Vehicle compartments** | Not started | Medium | Per-compartment capacity (frozen/chilled/ambient). Insertion must check which compartment fits, feasibility tracks loads per compartment. Deal-closer for grocery/food distribution, irrelevant for parcel/LTL. |
 | **Inter-request precedence** | Not started | Low | "Deliver A before B" beyond PD pairing. Feasibility + insertion pruning, same class as LIFO/FIFO. Rarely a deal-breaker — most real precedence maps to time windows or application-layer sequencing. |
 

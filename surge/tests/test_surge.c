@@ -83,6 +83,52 @@ static void add_vehicle_with_depot(SGContext *ctx, uint32_t depot,
     assert(sg_vehicle_set_capacity(ctx, v, &capacity, 1) == SG_STATUS_OK);
 }
 
+/* Extract solution routes into initial_routes format arrays.
+   Returns route count. Caller frees vehicle_ids_out, route_lengths_out, request_ids_out.
+   PD requests are deduplicated (only counted once per request_id). */
+static uint32_t extract_solution_routes(SGContext *ctx,
+                                         uint32_t **vehicle_ids_out,
+                                         uint32_t **route_lengths_out,
+                                         uint32_t **request_ids_out,
+                                         uint32_t *total_requests_out) {
+    uint32_t rc = sg_solution_get_route_count(ctx);
+    uint32_t *v_ids = (uint32_t *)calloc(rc, sizeof(uint32_t));
+    uint32_t *r_lens = (uint32_t *)calloc(rc, sizeof(uint32_t));
+    /* Worst case: every stop is a unique request */
+    uint32_t max_reqs = sg_get_request_count(ctx);
+    uint32_t *r_ids = (uint32_t *)calloc(max_reqs, sizeof(uint32_t));
+    uint8_t *seen = (uint8_t *)calloc(max_reqs, sizeof(uint8_t));
+    uint32_t total = 0;
+    uint32_t ri;
+
+    assert(v_ids && r_lens && r_ids && seen);
+
+    for (ri = 0; ri < rc; ri++) {
+        v_ids[ri] = sg_solution_get_route_vehicle_id(ctx, ri);
+        uint32_t sc = sg_solution_get_route_stop_count(ctx, ri);
+        uint32_t count = 0;
+        uint32_t si;
+        for (si = 0; si < sc; si++) {
+            SGSolutionStop stop;
+            assert(sg_solution_get_route_stop(ctx, ri, si, &stop) == SG_STATUS_OK);
+            if (!seen[stop.request_id]) {
+                seen[stop.request_id] = 1;
+                r_ids[total + count] = stop.request_id;
+                count++;
+            }
+        }
+        r_lens[ri] = count;
+        total += count;
+    }
+
+    free(seen);
+    *vehicle_ids_out = v_ids;
+    *route_lengths_out = r_lens;
+    *request_ids_out = r_ids;
+    *total_requests_out = total;
+    return rc;
+}
+
 /* ===== Context & Model Tests ===== */
 
 static void test_create_free_idempotent(void) {
@@ -8259,7 +8305,8 @@ static void test_parallel_deterministic(void) {
         add_pd_request(ctx, 6, 5, 0, 86400, 10, 8, 7, 0, 86400, 10, 1);
         add_pd_request(ctx, 3, 3, 0, 86400, 10, 6, 6, 0, 86400, 10, 1);
 
-        assert(sg_solve_parallel(ctx, 4) == SG_STATUS_OK);
+        SGStatus st = sg_solve_parallel(ctx, 4);
+        assert(st == SG_STATUS_OK);
 
         if (run == 0) {
             dist_a = sg_get_total_distance(ctx);
@@ -10592,6 +10639,1221 @@ static void test_backhaul_json(void) {
     free(resp);
 }
 
+/* ===== Request Locking Tests ===== */
+
+static void test_lock_api(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 10000) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100);
+    add_delivery_request(ctx, 10, 0, 0, 10000, 60, -10.0);
+    add_delivery_request(ctx, 20, 0, 0, 10000, 60, -10.0);
+
+    /* Invalid request id */
+    assert(sg_request_set_lock(ctx, 99, SG_LOCK_COMMITTED) == SG_STATUS_INVALID_ARG);
+
+    /* Invalid enum value */
+    assert(sg_request_set_lock(ctx, 0, (SGRequestLock)99) == SG_STATUS_INVALID_ARG);
+
+    /* Valid set */
+    assert(sg_request_set_lock(ctx, 0, SG_LOCK_COMMITTED) == SG_STATUS_OK);
+    assert(ctx->request_locks != NULL);
+    assert(ctx->request_locks[0] == SG_LOCK_COMMITTED);
+    assert(ctx->has_committed == 1);
+
+    /* Valid set frozen */
+    assert(sg_request_set_lock(ctx, 1, SG_LOCK_FROZEN) == SG_STATUS_OK);
+    assert(ctx->request_locks[1] == SG_LOCK_FROZEN);
+    assert(ctx->has_frozen == 1);
+
+    /* Clear back to NONE */
+    assert(sg_request_set_lock(ctx, 0, SG_LOCK_NONE) == SG_STATUS_OK);
+    assert(ctx->request_locks[0] == SG_LOCK_NONE);
+
+    sg_free(ctx);
+}
+
+static void test_frozen_requires_initial_routes(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 10000) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100);
+    add_delivery_request(ctx, 10, 0, 0, 10000, 60, -10.0);
+
+    /* Freeze request 0 without providing initial routes → should fail validation */
+    assert(sg_request_set_lock(ctx, 0, SG_LOCK_FROZEN) == SG_STATUS_OK);
+    assert(sg_validate_model(ctx) != SG_STATUS_OK);
+
+    sg_free(ctx);
+}
+
+static void test_committed_no_initial_routes(void) {
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 10000) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100);
+    add_delivery_request(ctx, 10, 0, 0, 10000, 60, -10.0);
+
+    /* Committed without initial routes should be fine — solver picks vehicle */
+    assert(sg_request_set_lock(ctx, 0, SG_LOCK_COMMITTED) == SG_STATUS_OK);
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+
+    SGStatus s = sg_solve(ctx);
+    assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    sg_free(ctx);
+}
+
+static void test_frozen_stays_on_vehicle(void) {
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 86400) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+
+    /* 4 delivery requests spread out */
+    add_delivery_request(ctx, 10, 0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 20, 0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 30, 0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 40, 0, 0, 86400, 60, -10.0);
+
+    /* Freeze request 0 on vehicle 0 */
+    assert(sg_request_set_lock(ctx, 0, SG_LOCK_FROZEN) == SG_STATUS_OK);
+    uint32_t v_ids[] = {0};
+    uint32_t r_lens[] = {1};
+    uint32_t r_ids[] = {0};
+    assert(sg_set_initial_routes(ctx, 1, v_ids, r_lens, r_ids) == SG_STATUS_OK);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    SGStatus s = sg_solve(ctx);
+    assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT);
+
+    /* Verify request 0 is assigned and on vehicle 0 */
+    assert(sg_get_unassigned(ctx) == 0);
+    {
+        uint32_t rc = sg_solution_get_route_count(ctx);
+        uint32_t ri;
+        int found = 0;
+        for (ri = 0; ri < rc; ri++) {
+            uint32_t vid = sg_solution_get_route_vehicle_id(ctx, ri);
+            uint32_t sc = sg_solution_get_route_stop_count(ctx, ri);
+            uint32_t si;
+            for (si = 0; si < sc; si++) {
+                SGSolutionStop stop;
+                assert(sg_solution_get_route_stop(ctx, ri, si, &stop) == SG_STATUS_OK);
+                if (stop.request_id == 0) {
+                    assert(vid == 0);
+                    found = 1;
+                }
+            }
+        }
+        assert(found);
+    }
+
+    sg_free(ctx);
+}
+
+static void test_committed_must_serve(void) {
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 86400) == SG_STATUS_OK);
+    /* Single vehicle with tight capacity */
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 30);
+
+    /* 3 requests, each demand 10 — all fit at capacity 30 */
+    add_delivery_request(ctx, 10, 0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 20, 0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 30, 0, 0, 86400, 60, -10.0);
+
+    /* Commit request 2 — it must always be assigned */
+    assert(sg_request_set_lock(ctx, 2, SG_LOCK_COMMITTED) == SG_STATUS_OK);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    SGStatus s = sg_solve(ctx);
+    assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT);
+
+    /* Verify request 2 is assigned */
+    {
+        uint32_t rc = sg_solution_get_route_count(ctx);
+        uint32_t ri;
+        int found = 0;
+        for (ri = 0; ri < rc; ri++) {
+            uint32_t sc = sg_solution_get_route_stop_count(ctx, ri);
+            uint32_t si;
+            for (si = 0; si < sc; si++) {
+                SGSolutionStop stop;
+                assert(sg_solution_get_route_stop(ctx, ri, si, &stop) == SG_STATUS_OK);
+                if (stop.request_id == 2) found = 1;
+            }
+        }
+        assert(found);
+    }
+
+    sg_free(ctx);
+}
+
+static void test_committed_can_reassign(void) {
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 86400) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+
+    /* 4 requests */
+    add_delivery_request(ctx, 10, 0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 20, 0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 30, 0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 40, 0, 0, 86400, 60, -10.0);
+
+    /* Commit request 0 — start on vehicle 1, solver can move to 0 if better */
+    assert(sg_request_set_lock(ctx, 0, SG_LOCK_COMMITTED) == SG_STATUS_OK);
+    uint32_t v_ids[] = {1};
+    uint32_t r_lens[] = {1};
+    uint32_t r_ids[] = {0};
+    assert(sg_set_initial_routes(ctx, 1, v_ids, r_lens, r_ids) == SG_STATUS_OK);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    SGStatus s = sg_solve(ctx);
+    assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT);
+
+    /* Committed request must be assigned — but can be on any vehicle */
+    assert(sg_get_unassigned(ctx) == 0);
+    {
+        uint32_t rc = sg_solution_get_route_count(ctx);
+        uint32_t ri;
+        int found = 0;
+        for (ri = 0; ri < rc; ri++) {
+            uint32_t sc = sg_solution_get_route_stop_count(ctx, ri);
+            uint32_t si;
+            for (si = 0; si < sc; si++) {
+                SGSolutionStop stop;
+                assert(sg_solution_get_route_stop(ctx, ri, si, &stop) == SG_STATUS_OK);
+                if (stop.request_id == 0) found = 1;
+            }
+        }
+        assert(found);
+    }
+
+    sg_free(ctx);
+}
+
+static void test_none_freely_optimized(void) {
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 86400) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+
+    /* 3 requests: 0 = frozen (on v0), 1 = committed, 2 = none */
+    add_delivery_request(ctx, 10, 0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 20, 0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 30, 0, 0, 86400, 60, -10.0);
+
+    assert(sg_request_set_lock(ctx, 0, SG_LOCK_FROZEN) == SG_STATUS_OK);
+    assert(sg_request_set_lock(ctx, 1, SG_LOCK_COMMITTED) == SG_STATUS_OK);
+    /* Request 2 stays NONE */
+
+    uint32_t v_ids[] = {0};
+    uint32_t r_lens[] = {1};
+    uint32_t r_ids[] = {0};
+    assert(sg_set_initial_routes(ctx, 1, v_ids, r_lens, r_ids) == SG_STATUS_OK);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    SGStatus s = sg_solve(ctx);
+    assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT);
+
+    /* All should be assigned */
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Request 0 must be on vehicle 0 (frozen) */
+    {
+        uint32_t rc = sg_solution_get_route_count(ctx);
+        uint32_t ri;
+        int found_0 = 0, found_1 = 0, found_2 = 0;
+        for (ri = 0; ri < rc; ri++) {
+            uint32_t vid = sg_solution_get_route_vehicle_id(ctx, ri);
+            uint32_t sc = sg_solution_get_route_stop_count(ctx, ri);
+            uint32_t si;
+            for (si = 0; si < sc; si++) {
+                SGSolutionStop stop;
+                assert(sg_solution_get_route_stop(ctx, ri, si, &stop) == SG_STATUS_OK);
+                if (stop.request_id == 0) { assert(vid == 0); found_0 = 1; }
+                if (stop.request_id == 1) found_1 = 1;
+                if (stop.request_id == 2) found_2 = 1;
+            }
+        }
+        assert(found_0 && found_1 && found_2);
+    }
+
+    sg_free(ctx);
+}
+
+static void test_frozen_destroy_filtering(void) {
+    /* Unit test for sg_get_removable_count/element: frozen skipped, committed included */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 10000) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 10000, 100);
+    add_delivery_request(ctx, 10, 0, 0, 10000, 60, -10.0);
+    add_delivery_request(ctx, 20, 0, 0, 10000, 60, -10.0);
+    add_delivery_request(ctx, 30, 0, 0, 10000, 60, -10.0);
+
+    /* R0 = FROZEN, R1 = COMMITTED, R2 = NONE */
+    assert(sg_request_set_lock(ctx, 0, SG_LOCK_FROZEN) == SG_STATUS_OK);
+    assert(sg_request_set_lock(ctx, 1, SG_LOCK_COMMITTED) == SG_STATUS_OK);
+
+    /* Build a bootstrap solution with all 3 assigned */
+    SGBootstrapSolution sol;
+    memset(&sol, 0, sizeof(sol));
+    assert(sg_bootstrap_solution_init(&sol, 3) == AR_STATUS_OK);
+    assert(sg_bootstrap_assign_request(&sol, 0) == AR_STATUS_OK);
+    assert(sg_bootstrap_assign_request(&sol, 1) == AR_STATUS_OK);
+    assert(sg_bootstrap_assign_request(&sol, 2) == AR_STATUS_OK);
+
+    /* Removable count should skip frozen: 2 (committed + none) */
+    int rcount = sg_get_removable_count(&sol, ctx);
+    assert(rcount == 2);
+
+    /* Elements should be 1 and 2 (not 0 which is frozen) */
+    uint32_t e0 = sg_get_removable_element(&sol, ctx, 0);
+    uint32_t e1 = sg_get_removable_element(&sol, ctx, 1);
+    assert(e0 != 0 && e1 != 0);
+    assert((e0 == 1 && e1 == 2) || (e0 == 2 && e1 == 1));
+
+    /* Original assigned count is still 3 */
+    int acount = sg_get_assigned_count(&sol, ctx);
+    assert(acount == 3);
+
+    sg_bootstrap_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_frozen_postprocess_no_cross_vehicle(void) {
+    SGContext *ctx = make_config(1000, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 86400) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+
+    /* Put 2 requests far apart so optimizer might want to swap vehicles */
+    add_delivery_request(ctx, 100, 100, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, -100, -100, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 105, 100, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, -105, -100, 0, 86400, 60, -10.0);
+
+    /* Freeze R0 on vehicle 0, R1 on vehicle 1 */
+    assert(sg_request_set_lock(ctx, 0, SG_LOCK_FROZEN) == SG_STATUS_OK);
+    assert(sg_request_set_lock(ctx, 1, SG_LOCK_FROZEN) == SG_STATUS_OK);
+    uint32_t v_ids[] = {0, 1};
+    uint32_t r_lens[] = {1, 1};
+    uint32_t r_ids[] = {0, 1};
+    assert(sg_set_initial_routes(ctx, 2, v_ids, r_lens, r_ids) == SG_STATUS_OK);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    SGStatus s = sg_solve(ctx);
+    assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT);
+
+    /* Verify frozen requests stayed on their vehicles */
+    {
+        uint32_t rc = sg_solution_get_route_count(ctx);
+        uint32_t ri;
+        for (ri = 0; ri < rc; ri++) {
+            uint32_t vid = sg_solution_get_route_vehicle_id(ctx, ri);
+            uint32_t sc = sg_solution_get_route_stop_count(ctx, ri);
+            uint32_t si;
+            for (si = 0; si < sc; si++) {
+                SGSolutionStop stop;
+                assert(sg_solution_get_route_stop(ctx, ri, si, &stop) == SG_STATUS_OK);
+                if (stop.request_id == 0) assert(vid == 0);
+                if (stop.request_id == 1) assert(vid == 1);
+            }
+        }
+    }
+
+    sg_free(ctx);
+}
+
+static void test_frozen_pd_pair(void) {
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 86400) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+
+    /* PD request 0: pickup at (10,0), deliver at (20,0) */
+    add_pd_request(ctx, 10, 0, 0, 86400, 60, 20, 0, 0, 86400, 60, 10.0);
+    /* Delivery-only request 1 */
+    add_delivery_request(ctx, 30, 0, 0, 86400, 60, -10.0);
+
+    /* Freeze PD request 0 on vehicle 0 */
+    assert(sg_request_set_lock(ctx, 0, SG_LOCK_FROZEN) == SG_STATUS_OK);
+    uint32_t v_ids[] = {0};
+    uint32_t r_lens[] = {1};
+    uint32_t r_ids[] = {0};
+    assert(sg_set_initial_routes(ctx, 1, v_ids, r_lens, r_ids) == SG_STATUS_OK);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    SGStatus s = sg_solve(ctx);
+    assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT);
+
+    /* Both pickup and delivery of frozen PD pair must be on vehicle 0 */
+    {
+        uint32_t rc = sg_solution_get_route_count(ctx);
+        uint32_t ri;
+        int found_pickup = 0, found_delivery = 0;
+        for (ri = 0; ri < rc; ri++) {
+            uint32_t vid = sg_solution_get_route_vehicle_id(ctx, ri);
+            uint32_t sc = sg_solution_get_route_stop_count(ctx, ri);
+            uint32_t si;
+            for (si = 0; si < sc; si++) {
+                SGSolutionStop stop;
+                assert(sg_solution_get_route_stop(ctx, ri, si, &stop) == SG_STATUS_OK);
+                if (stop.request_id == 0) {
+                    assert(vid == 0);
+                    if (stop.stop_type == SG_STOP_TYPE_PICKUP) found_pickup = 1;
+                    else found_delivery = 1;
+                }
+            }
+        }
+        assert(found_pickup && found_delivery);
+    }
+
+    sg_free(ctx);
+}
+
+static void test_lock_json(void) {
+    const char *json =
+        "{"
+        "  \"config\": {\"max_iterations\": 500, \"seed\": 42, \"deterministic\": true},"
+        "  \"depots\": [{\"x\": 0, \"y\": 0, \"tw_early\": 0, \"tw_late\": 86400}],"
+        "  \"vehicles\": ["
+        "    {\"start_depot_id\": 0, \"end_depot_id\": 0,"
+        "     \"shift_early\": 0, \"shift_late\": 86400, \"capacity\": [100]},"
+        "    {\"start_depot_id\": 0, \"end_depot_id\": 0,"
+        "     \"shift_early\": 0, \"shift_late\": 86400, \"capacity\": [100]}"
+        "  ],"
+        "  \"tasks\": ["
+        "    {\"type\": \"delivery\", \"x\": 10, \"y\": 0, \"tw_early\": 0,"
+        "     \"tw_late\": 86400, \"service_seconds\": 60, \"demand\": [-10]},"
+        "    {\"type\": \"delivery\", \"x\": 20, \"y\": 0, \"tw_early\": 0,"
+        "     \"tw_late\": 86400, \"service_seconds\": 60, \"demand\": [-10]},"
+        "    {\"type\": \"delivery\", \"x\": 30, \"y\": 0, \"tw_early\": 0,"
+        "     \"tw_late\": 86400, \"service_seconds\": 60, \"demand\": [-10]}"
+        "  ],"
+        "  \"requests\": ["
+        "    {\"delivery_task_id\": 0},"
+        "    {\"delivery_task_id\": 1},"
+        "    {\"delivery_task_id\": 2}"
+        "  ],"
+        "  \"initial_routes\": ["
+        "    {\"vehicle_id\": 0, \"request_ids\": [0]}"
+        "  ],"
+        "  \"committed_requests\": [1],"
+        "  \"frozen_requests\": [0]"
+        "}";
+    int status_code = 0;
+    size_t out_len = 0;
+    char *resp = sg_api_solve(json, strlen(json), &status_code, &out_len);
+    assert(resp != NULL);
+    assert(status_code == 200);
+    assert(strstr(resp, "\"status\":\"ok\"") != NULL ||
+           strstr(resp, "\"status\": \"ok\"") != NULL);
+    /* All 3 requests should be assigned */
+    assert(strstr(resp, "\"unassigned\":0") != NULL ||
+           strstr(resp, "\"unassigned\": 0") != NULL);
+    free(resp);
+}
+
+static void test_lock_validate_plan(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 86400) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_delivery_request(ctx, 10, 0, 0, 86400, 60, -10.0);  /* task 0 */
+    add_delivery_request(ctx, 20, 0, 0, 86400, 60, -10.0);  /* task 1 */
+    add_delivery_request(ctx, 30, 0, 0, 86400, 60, -10.0);  /* task 2 */
+
+    /* Freeze request 0 on vehicle 0, commit request 1 */
+    assert(sg_request_set_lock(ctx, 0, SG_LOCK_FROZEN) == SG_STATUS_OK);
+    assert(sg_request_set_lock(ctx, 1, SG_LOCK_COMMITTED) == SG_STATUS_OK);
+    uint32_t v_ids[] = {0};
+    uint32_t r_lens[] = {1};
+    uint32_t r_ids[] = {0};
+    assert(sg_set_initial_routes(ctx, 1, v_ids, r_lens, r_ids) == SG_STATUS_OK);
+
+    /* Plan: put frozen request 0 on vehicle 1 (wrong!) and leave committed request 1 unassigned */
+    {
+        uint32_t task_ids_v1[] = {0, 2};
+        SGPlanRoute routes[1];
+        routes[0].vehicle_id = 1;
+        routes[0].task_ids = task_ids_v1;
+        routes[0].task_count = 2;
+
+        assert(sg_validate_plan(ctx, 1, routes) == SG_STATUS_OK);
+        assert(sg_get_violation_count(ctx) >= 2);
+
+        /* Check for frozen assignment violation */
+        int found_frozen_viol = 0, found_committed_viol = 0;
+        uint32_t vi;
+        for (vi = 0; vi < sg_get_violation_count(ctx); vi++) {
+            SGViolation v;
+            assert(sg_get_violation(ctx, vi, &v) == SG_STATUS_OK);
+            if (v.type == SG_VIOLATION_FROZEN_ASSIGNMENT && v.request_id == 0)
+                found_frozen_viol = 1;
+            if (v.type == SG_VIOLATION_COMMITTED_UNASSIGNED && v.request_id == 1)
+                found_committed_viol = 1;
+        }
+        assert(found_frozen_viol);
+        assert(found_committed_viol);
+    }
+
+    sg_free(ctx);
+}
+
+/* ===== Request Locking Stress Tests (Solomon / Li-Lim) ===== */
+
+static void test_lock_solomon_freeze_all_identity(void) {
+    /* Freeze ALL 100 requests on their baseline vehicles. Solution must be identical. */
+    double baseline_dist;
+    uint32_t baseline_vehicles;
+    uint32_t *bv_ids, *br_lens, *br_ids;
+    uint32_t btotal;
+    uint32_t brc;
+
+    /* Phase 1: baseline solve */
+    {
+        SGContext *ctx = sg_create();
+        SGConfig cfg;
+        sg_config_default(&cfg);
+        cfg.max_iterations = 2000;
+        cfg.seed = 42;
+        cfg.deterministic = true;
+        assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        baseline_dist = sg_get_total_distance(ctx);
+        baseline_vehicles = sg_get_used_vehicle_count(ctx);
+        assert(sg_get_unassigned(ctx) == 0);
+        brc = extract_solution_routes(ctx, &bv_ids, &br_lens, &br_ids, &btotal);
+        assert(btotal == 100);
+        sg_free(ctx);
+    }
+
+    /* Phase 2: freeze all, re-solve with more iterations */
+    {
+        SGContext *ctx = sg_create();
+        SGConfig cfg;
+        uint32_t i;
+        sg_config_default(&cfg);
+        cfg.max_iterations = 3000;
+        cfg.seed = 42;
+        cfg.deterministic = true;
+        assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+
+        /* Freeze all 100 requests */
+        for (i = 0; i < 100; i++)
+            assert(sg_request_set_lock(ctx, i, SG_LOCK_FROZEN) == SG_STATUS_OK);
+        assert(sg_set_initial_routes(ctx, brc, bv_ids, br_lens, br_ids) == SG_STATUS_OK);
+
+        assert(sg_validate_model(ctx) == SG_STATUS_OK);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 0);
+        assert(fabs(sg_get_total_distance(ctx) - baseline_dist) < 1e-6);
+        assert(sg_get_used_vehicle_count(ctx) == baseline_vehicles);
+
+        /* Verify each request is on its original vehicle */
+        {
+            uint32_t ri;
+            uint32_t req_offset = 0;
+            for (ri = 0; ri < brc; ri++) {
+                uint32_t expected_vid = bv_ids[ri];
+                uint32_t j;
+                for (j = 0; j < br_lens[ri]; j++) {
+                    uint32_t req_id = br_ids[req_offset + j];
+                    /* Find this request in the solution */
+                    uint32_t src = sg_solution_get_route_count(ctx);
+                    uint32_t sri;
+                    int found = 0;
+                    for (sri = 0; sri < src; sri++) {
+                        uint32_t vid = sg_solution_get_route_vehicle_id(ctx, sri);
+                        uint32_t sc = sg_solution_get_route_stop_count(ctx, sri);
+                        uint32_t si;
+                        for (si = 0; si < sc; si++) {
+                            SGSolutionStop stop;
+                            sg_solution_get_route_stop(ctx, sri, si, &stop);
+                            if (stop.request_id == req_id) {
+                                assert(vid == expected_vid);
+                                found = 1;
+                                break;
+                            }
+                        }
+                        if (found) break;
+                    }
+                    assert(found);
+                }
+                req_offset += br_lens[ri];
+            }
+        }
+
+        sg_free(ctx);
+    }
+
+    free(bv_ids); free(br_lens); free(br_ids);
+}
+
+static void test_lock_solomon_freeze_half_quality(void) {
+    /* Freeze ~50% of routes. Frozen stay on vehicle; cost within 20% of baseline. */
+    double baseline_cost;
+    uint32_t *bv_ids, *br_lens, *br_ids;
+    uint32_t btotal;
+    uint32_t brc;
+    uint32_t freeze_routes;
+
+    /* Baseline */
+    {
+        SGContext *ctx = sg_create();
+        SGConfig cfg;
+        sg_config_default(&cfg);
+        cfg.max_iterations = 3000;
+        cfg.seed = 42;
+        cfg.deterministic = true;
+        assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/R101.txt") == SG_STATUS_OK);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        baseline_cost = sg_get_total_cost(ctx);
+        assert(sg_get_unassigned(ctx) == 0);
+        brc = extract_solution_routes(ctx, &bv_ids, &br_lens, &br_ids, &btotal);
+        sg_free(ctx);
+    }
+
+    freeze_routes = brc / 2;
+
+    /* Re-solve with half frozen */
+    {
+        SGContext *ctx = sg_create();
+        SGConfig cfg;
+        uint32_t i, req_offset = 0;
+        sg_config_default(&cfg);
+        cfg.max_iterations = 5000;
+        cfg.seed = 42;
+        cfg.deterministic = true;
+        assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/R101.txt") == SG_STATUS_OK);
+
+        /* Freeze requests on first half of routes */
+        for (i = 0; i < brc; i++) {
+            uint32_t j;
+            for (j = 0; j < br_lens[i]; j++) {
+                if (i < freeze_routes)
+                    assert(sg_request_set_lock(ctx, br_ids[req_offset + j], SG_LOCK_FROZEN) == SG_STATUS_OK);
+            }
+            req_offset += br_lens[i];
+        }
+        assert(sg_set_initial_routes(ctx, brc, bv_ids, br_lens, br_ids) == SG_STATUS_OK);
+
+        assert(sg_validate_model(ctx) == SG_STATUS_OK);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 0);
+        assert(sg_get_total_cost(ctx) <= baseline_cost * 1.2);
+
+        /* Verify frozen requests on original vehicles */
+        {
+            uint32_t ri;
+            req_offset = 0;
+            for (ri = 0; ri < freeze_routes; ri++) {
+                uint32_t expected_vid = bv_ids[ri];
+                uint32_t j;
+                for (j = 0; j < br_lens[ri]; j++) {
+                    uint32_t req_id = br_ids[req_offset + j];
+                    uint32_t src = sg_solution_get_route_count(ctx);
+                    uint32_t sri;
+                    int found = 0;
+                    for (sri = 0; sri < src; sri++) {
+                        uint32_t vid = sg_solution_get_route_vehicle_id(ctx, sri);
+                        uint32_t sc = sg_solution_get_route_stop_count(ctx, sri);
+                        uint32_t si;
+                        for (si = 0; si < sc; si++) {
+                            SGSolutionStop stop;
+                            sg_solution_get_route_stop(ctx, sri, si, &stop);
+                            if (stop.request_id == req_id) {
+                                assert(vid == expected_vid);
+                                found = 1;
+                                break;
+                            }
+                        }
+                        if (found) break;
+                    }
+                    assert(found);
+                }
+                req_offset += br_lens[ri];
+            }
+        }
+
+        sg_free(ctx);
+    }
+
+    free(bv_ids); free(br_lens); free(br_ids);
+}
+
+static void test_lock_solomon_frozen_fidelity(void) {
+    /* Freeze 10 scattered requests from different vehicles. Each must stay on its vehicle. */
+    uint32_t *bv_ids, *br_lens, *br_ids;
+    uint32_t btotal;
+    uint32_t brc;
+    uint32_t frozen_req_ids[10];
+    uint32_t frozen_vid[10];
+    uint32_t num_frozen = 0;
+
+    /* Baseline */
+    {
+        SGContext *ctx = sg_create();
+        SGConfig cfg;
+        sg_config_default(&cfg);
+        cfg.max_iterations = 2000;
+        cfg.seed = 77;
+        cfg.deterministic = true;
+        assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C201.txt") == SG_STATUS_OK);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        brc = extract_solution_routes(ctx, &bv_ids, &br_lens, &br_ids, &btotal);
+
+        /* Pick first request from up to 10 different vehicles */
+        {
+            uint32_t ri, req_offset = 0;
+            for (ri = 0; ri < brc && num_frozen < 10; ri++) {
+                if (br_lens[ri] > 0) {
+                    frozen_req_ids[num_frozen] = br_ids[req_offset];
+                    frozen_vid[num_frozen] = bv_ids[ri];
+                    num_frozen++;
+                }
+                req_offset += br_lens[ri];
+            }
+        }
+        sg_free(ctx);
+    }
+
+    assert(num_frozen > 0 && num_frozen <= 10);
+
+    /* Re-solve with scattered frozen */
+    {
+        SGContext *ctx = sg_create();
+        SGConfig cfg;
+        uint32_t i;
+        sg_config_default(&cfg);
+        cfg.max_iterations = 5000;
+        cfg.seed = 77;
+        cfg.deterministic = true;
+        assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C201.txt") == SG_STATUS_OK);
+
+        for (i = 0; i < num_frozen; i++)
+            assert(sg_request_set_lock(ctx, frozen_req_ids[i], SG_LOCK_FROZEN) == SG_STATUS_OK);
+        assert(sg_set_initial_routes(ctx, brc, bv_ids, br_lens, br_ids) == SG_STATUS_OK);
+
+        assert(sg_validate_model(ctx) == SG_STATUS_OK);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 0);
+
+        /* Verify each frozen request is on its original vehicle */
+        {
+            uint32_t fi;
+            for (fi = 0; fi < num_frozen; fi++) {
+                uint32_t src = sg_solution_get_route_count(ctx);
+                uint32_t sri;
+                int found = 0;
+                for (sri = 0; sri < src; sri++) {
+                    uint32_t vid = sg_solution_get_route_vehicle_id(ctx, sri);
+                    uint32_t sc = sg_solution_get_route_stop_count(ctx, sri);
+                    uint32_t si;
+                    for (si = 0; si < sc; si++) {
+                        SGSolutionStop stop;
+                        sg_solution_get_route_stop(ctx, sri, si, &stop);
+                        if (stop.request_id == frozen_req_ids[fi]) {
+                            assert(vid == frozen_vid[fi]);
+                            found = 1;
+                            break;
+                        }
+                    }
+                    if (found) break;
+                }
+                assert(found);
+            }
+        }
+
+        sg_free(ctx);
+    }
+
+    free(bv_ids); free(br_lens); free(br_ids);
+}
+
+static void test_lock_solomon_all_committed(void) {
+    /* Commit all 100 requests. Zero unassigned. */
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    uint32_t i;
+    sg_config_default(&cfg);
+    cfg.max_iterations = 3000;
+    cfg.seed = 42;
+    cfg.deterministic = true;
+    assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+    assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+
+    for (i = 0; i < 100; i++)
+        assert(sg_request_set_lock(ctx, i, SG_LOCK_COMMITTED) == SG_STATUS_OK);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_total_cost(ctx) > 0.0);
+    assert(sg_get_total_cost(ctx) < 1e12);
+
+    sg_free(ctx);
+}
+
+static void test_lock_solomon_frozen_stability_soak(void) {
+    /* Freeze 5 routes, run 8000 iterations. Frozen must never move. */
+    uint32_t *bv_ids, *br_lens, *br_ids;
+    uint32_t btotal;
+    uint32_t brc;
+    uint32_t freeze_routes;
+
+    /* Baseline */
+    {
+        SGContext *ctx = sg_create();
+        SGConfig cfg;
+        sg_config_default(&cfg);
+        cfg.max_iterations = 2000;
+        cfg.seed = 42;
+        cfg.deterministic = true;
+        assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        brc = extract_solution_routes(ctx, &bv_ids, &br_lens, &br_ids, &btotal);
+        sg_free(ctx);
+    }
+
+    freeze_routes = brc < 5 ? brc : 5;
+
+    /* Soak test */
+    {
+        SGContext *ctx = sg_create();
+        SGConfig cfg;
+        uint32_t i, req_offset = 0;
+        sg_config_default(&cfg);
+        cfg.max_iterations = 8000;
+        cfg.seed = 42;
+        cfg.deterministic = true;
+        assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+
+        for (i = 0; i < brc; i++) {
+            uint32_t j;
+            for (j = 0; j < br_lens[i]; j++) {
+                if (i < freeze_routes)
+                    assert(sg_request_set_lock(ctx, br_ids[req_offset + j], SG_LOCK_FROZEN) == SG_STATUS_OK);
+            }
+            req_offset += br_lens[i];
+        }
+        assert(sg_set_initial_routes(ctx, brc, bv_ids, br_lens, br_ids) == SG_STATUS_OK);
+
+        assert(sg_validate_model(ctx) == SG_STATUS_OK);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(sg_get_unassigned(ctx) == 0);
+
+        /* Verify frozen requests on original vehicles */
+        {
+            uint32_t ri;
+            req_offset = 0;
+            for (ri = 0; ri < freeze_routes; ri++) {
+                uint32_t expected_vid = bv_ids[ri];
+                uint32_t j;
+                for (j = 0; j < br_lens[ri]; j++) {
+                    uint32_t req_id = br_ids[req_offset + j];
+                    uint32_t src = sg_solution_get_route_count(ctx);
+                    uint32_t sri;
+                    int found = 0;
+                    for (sri = 0; sri < src; sri++) {
+                        uint32_t vid = sg_solution_get_route_vehicle_id(ctx, sri);
+                        uint32_t sc = sg_solution_get_route_stop_count(ctx, sri);
+                        uint32_t si;
+                        for (si = 0; si < sc; si++) {
+                            SGSolutionStop stop;
+                            sg_solution_get_route_stop(ctx, sri, si, &stop);
+                            if (stop.request_id == req_id) {
+                                assert(vid == expected_vid);
+                                found = 1;
+                                break;
+                            }
+                        }
+                        if (found) break;
+                    }
+                    assert(found);
+                }
+                req_offset += br_lens[ri];
+            }
+        }
+
+        sg_free(ctx);
+    }
+
+    free(bv_ids); free(br_lens); free(br_ids);
+}
+
+static void test_lock_solomon_deterministic_frozen(void) {
+    /* Two identical runs with frozen requests must produce identical costs. */
+    double costs[2];
+    double dists[2];
+    uint32_t vehicles[2];
+    uint32_t unassigned[2];
+    uint32_t *bv_ids = NULL, *br_lens = NULL, *br_ids = NULL;
+    uint32_t btotal, brc = 0;
+    int run;
+
+    /* First get a baseline to extract routes */
+    {
+        SGContext *ctx = sg_create();
+        SGConfig cfg;
+        sg_config_default(&cfg);
+        cfg.max_iterations = 2000;
+        cfg.seed = 99;
+        cfg.deterministic = true;
+        assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/R201.txt") == SG_STATUS_OK);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        brc = extract_solution_routes(ctx, &bv_ids, &br_lens, &br_ids, &btotal);
+        sg_free(ctx);
+    }
+
+    for (run = 0; run < 2; run++) {
+        SGContext *ctx = sg_create();
+        SGConfig cfg;
+        uint32_t i;
+        sg_config_default(&cfg);
+        cfg.max_iterations = 3000;
+        cfg.seed = 99;
+        cfg.deterministic = true;
+        assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/R201.txt") == SG_STATUS_OK);
+
+        /* Freeze requests 0-24 */
+        for (i = 0; i < 25; i++)
+            assert(sg_request_set_lock(ctx, i, SG_LOCK_FROZEN) == SG_STATUS_OK);
+        assert(sg_set_initial_routes(ctx, brc, bv_ids, br_lens, br_ids) == SG_STATUS_OK);
+
+        assert(sg_validate_model(ctx) == SG_STATUS_OK);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+
+        costs[run] = sg_get_total_cost(ctx);
+        dists[run] = sg_get_total_distance(ctx);
+        vehicles[run] = sg_get_used_vehicle_count(ctx);
+        unassigned[run] = sg_get_unassigned(ctx);
+        sg_free(ctx);
+    }
+
+    assert(fabs(costs[0] - costs[1]) < 1e-9);
+    assert(fabs(dists[0] - dists[1]) < 1e-9);
+    assert(vehicles[0] == vehicles[1]);
+    assert(unassigned[0] == unassigned[1]);
+
+    free(bv_ids); free(br_lens); free(br_ids);
+}
+
+static void test_lock_solomon_mixed_three_levels(void) {
+    /* C101: 20 FROZEN + 30 COMMITTED + 50 NONE. */
+    uint32_t *bv_ids, *br_lens, *br_ids;
+    uint32_t btotal;
+    uint32_t brc;
+
+    /* Baseline */
+    {
+        SGContext *ctx = sg_create();
+        SGConfig cfg;
+        sg_config_default(&cfg);
+        cfg.max_iterations = 2000;
+        cfg.seed = 42;
+        cfg.deterministic = true;
+        assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        brc = extract_solution_routes(ctx, &bv_ids, &br_lens, &br_ids, &btotal);
+        sg_free(ctx);
+    }
+
+    /* Re-solve with mixed locks */
+    {
+        SGContext *ctx = sg_create();
+        SGConfig cfg;
+        uint32_t i;
+        sg_config_default(&cfg);
+        cfg.max_iterations = 4000;
+        cfg.seed = 42;
+        cfg.deterministic = true;
+        assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+
+        /* 0-19: FROZEN, 20-49: COMMITTED, 50-99: NONE */
+        for (i = 0; i < 20; i++)
+            assert(sg_request_set_lock(ctx, i, SG_LOCK_FROZEN) == SG_STATUS_OK);
+        for (i = 20; i < 50; i++)
+            assert(sg_request_set_lock(ctx, i, SG_LOCK_COMMITTED) == SG_STATUS_OK);
+        assert(sg_set_initial_routes(ctx, brc, bv_ids, br_lens, br_ids) == SG_STATUS_OK);
+
+        assert(sg_validate_model(ctx) == SG_STATUS_OK);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+
+        /* Verify frozen on original vehicles */
+        {
+            uint32_t ri, req_offset = 0;
+            for (ri = 0; ri < brc; ri++) {
+                uint32_t expected_vid = bv_ids[ri];
+                uint32_t j;
+                for (j = 0; j < br_lens[ri]; j++) {
+                    uint32_t req_id = br_ids[req_offset + j];
+                    if (req_id < 20) {
+                        uint32_t src = sg_solution_get_route_count(ctx);
+                        uint32_t sri;
+                        int found = 0;
+                        for (sri = 0; sri < src; sri++) {
+                            uint32_t vid = sg_solution_get_route_vehicle_id(ctx, sri);
+                            uint32_t sc = sg_solution_get_route_stop_count(ctx, sri);
+                            uint32_t si;
+                            for (si = 0; si < sc; si++) {
+                                SGSolutionStop stop;
+                                sg_solution_get_route_stop(ctx, sri, si, &stop);
+                                if (stop.request_id == req_id) {
+                                    assert(vid == expected_vid);
+                                    found = 1;
+                                    break;
+                                }
+                            }
+                            if (found) break;
+                        }
+                        assert(found);
+                    }
+                }
+                req_offset += br_lens[ri];
+            }
+        }
+
+        /* Verify committed requests are assigned (not in unassigned list) */
+        {
+            uint32_t ucount = sg_get_unassigned(ctx);
+            uint32_t ui;
+            for (ui = 0; ui < ucount; ui++) {
+                uint32_t uid = sg_solution_get_unassigned_request(ctx, ui);
+                assert(uid >= 50); /* committed (20-49) must not be unassigned */
+            }
+        }
+
+        assert(sg_get_unassigned(ctx) <= 5);
+        sg_free(ctx);
+    }
+
+    free(bv_ids); free(br_lens); free(br_ids);
+}
+
+static void test_lock_li_lim_frozen_pd_stress(void) {
+    /* lc101: Freeze 10 PD pairs. Both pickup and delivery must stay on original vehicle. */
+    uint32_t *bv_ids, *br_lens, *br_ids;
+    uint32_t btotal;
+    uint32_t brc;
+    uint32_t frozen_req_ids[10];
+    uint32_t frozen_vid[10];
+    uint32_t num_frozen = 0;
+
+    /* Baseline */
+    {
+        SGContext *ctx = sg_create();
+        SGConfig cfg;
+        sg_config_default(&cfg);
+        cfg.max_iterations = 3000;
+        cfg.seed = 42;
+        cfg.deterministic = true;
+        assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+        assert(sg_load_li_lim_pdptw(ctx, "benchmarks/li_lim/lc101.txt") == SG_STATUS_OK);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        brc = extract_solution_routes(ctx, &bv_ids, &br_lens, &br_ids, &btotal);
+
+        /* Pick first request from up to 10 different routes */
+        {
+            uint32_t ri, req_offset = 0;
+            for (ri = 0; ri < brc && num_frozen < 10; ri++) {
+                if (br_lens[ri] > 0) {
+                    frozen_req_ids[num_frozen] = br_ids[req_offset];
+                    frozen_vid[num_frozen] = bv_ids[ri];
+                    num_frozen++;
+                }
+                req_offset += br_lens[ri];
+            }
+        }
+        sg_free(ctx);
+    }
+
+    assert(num_frozen > 0);
+
+    /* Re-solve with frozen PD pairs */
+    {
+        SGContext *ctx = sg_create();
+        SGConfig cfg;
+        uint32_t i;
+        sg_config_default(&cfg);
+        cfg.max_iterations = 5000;
+        cfg.seed = 42;
+        cfg.deterministic = true;
+        assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+        assert(sg_load_li_lim_pdptw(ctx, "benchmarks/li_lim/lc101.txt") == SG_STATUS_OK);
+
+        for (i = 0; i < num_frozen; i++)
+            assert(sg_request_set_lock(ctx, frozen_req_ids[i], SG_LOCK_FROZEN) == SG_STATUS_OK);
+        assert(sg_set_initial_routes(ctx, brc, bv_ids, br_lens, br_ids) == SG_STATUS_OK);
+
+        assert(sg_validate_model(ctx) == SG_STATUS_OK);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+
+        /* Verify both pickup and delivery of each frozen pair on original vehicle */
+        {
+            uint32_t fi;
+            for (fi = 0; fi < num_frozen; fi++) {
+                uint32_t src = sg_solution_get_route_count(ctx);
+                uint32_t sri;
+                int found_pickup = 0, found_delivery = 0;
+                for (sri = 0; sri < src; sri++) {
+                    uint32_t vid = sg_solution_get_route_vehicle_id(ctx, sri);
+                    uint32_t sc = sg_solution_get_route_stop_count(ctx, sri);
+                    uint32_t si;
+                    for (si = 0; si < sc; si++) {
+                        SGSolutionStop stop;
+                        sg_solution_get_route_stop(ctx, sri, si, &stop);
+                        if (stop.request_id == frozen_req_ids[fi]) {
+                            assert(vid == frozen_vid[fi]);
+                            if (stop.stop_type == SG_STOP_TYPE_PICKUP) found_pickup = 1;
+                            else found_delivery = 1;
+                        }
+                    }
+                }
+                assert(found_pickup && found_delivery);
+            }
+        }
+
+        sg_free(ctx);
+    }
+
+    free(bv_ids); free(br_lens); free(br_ids);
+}
+
+static void test_lock_solomon_frozen_blocks_elimination(void) {
+    /* Freeze 1 request per vehicle. Vehicle count must not drop below frozen vehicle count. */
+    uint32_t *bv_ids, *br_lens, *br_ids;
+    uint32_t btotal;
+    uint32_t brc;
+    uint32_t baseline_vehicles;
+    uint32_t num_frozen_vehicles;
+
+    /* Baseline */
+    {
+        SGContext *ctx = sg_create();
+        SGConfig cfg;
+        sg_config_default(&cfg);
+        cfg.max_iterations = 2000;
+        cfg.seed = 42;
+        cfg.deterministic = true;
+        assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        baseline_vehicles = sg_get_used_vehicle_count(ctx);
+        brc = extract_solution_routes(ctx, &bv_ids, &br_lens, &br_ids, &btotal);
+        sg_free(ctx);
+    }
+
+    num_frozen_vehicles = brc < 15 ? brc : 15;
+
+    /* Re-solve with fixed cost and 1 frozen per vehicle */
+    {
+        SGContext *ctx = sg_create();
+        SGConfig cfg;
+        uint32_t i, req_offset = 0;
+        sg_config_default(&cfg);
+        cfg.max_iterations = 4000;
+        cfg.seed = 42;
+        cfg.deterministic = true;
+        assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+
+        /* Set high fixed cost on all vehicles to incentivize elimination */
+        for (i = 0; i < sg_get_request_count(ctx); i++) {
+            /* Use num_vehicles — Solomon files create 25 vehicles */
+        }
+        for (i = 0; i < 25; i++)
+            sg_vehicle_set_costs(ctx, i, 1000.0, 1.0, 0.0);
+
+        /* Freeze first request from first num_frozen_vehicles routes */
+        req_offset = 0;
+        for (i = 0; i < brc; i++) {
+            if (i < num_frozen_vehicles && br_lens[i] > 0)
+                assert(sg_request_set_lock(ctx, br_ids[req_offset], SG_LOCK_FROZEN) == SG_STATUS_OK);
+            req_offset += br_lens[i];
+        }
+        assert(sg_set_initial_routes(ctx, brc, bv_ids, br_lens, br_ids) == SG_STATUS_OK);
+
+        assert(sg_validate_model(ctx) == SG_STATUS_OK);
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+
+        /* Vehicle count must be >= number of distinct frozen vehicles */
+        assert(sg_get_used_vehicle_count(ctx) >= num_frozen_vehicles);
+
+        sg_free(ctx);
+    }
+
+    free(bv_ids); free(br_lens); free(br_ids);
+}
+
+static void test_lock_solomon_committed_low_weight(void) {
+    /* 30 committed with unassigned_weight=0.1. Committed penalty must dominate. */
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    uint32_t i;
+    sg_config_default(&cfg);
+    cfg.max_iterations = 3000;
+    cfg.seed = 42;
+    cfg.deterministic = true;
+    assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+    assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+
+    assert(sg_set_unassigned_weight(ctx, 0.1) == SG_STATUS_OK);
+
+    for (i = 0; i < 30; i++)
+        assert(sg_request_set_lock(ctx, i, SG_LOCK_COMMITTED) == SG_STATUS_OK);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+
+    /* None of requests 0-29 should be unassigned */
+    {
+        uint32_t ucount = sg_get_unassigned(ctx);
+        uint32_t ui;
+        for (ui = 0; ui < ucount; ui++) {
+            uint32_t uid = sg_solution_get_unassigned_request(ctx, ui);
+            assert(uid >= 30);
+        }
+    }
+
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -10948,12 +12210,38 @@ int main(void) {
     RUN_TEST(test_backhaul_insertion);
     RUN_TEST(test_backhaul_json);
 
+    /* Request locking */
+    RUN_TEST(test_lock_api);
+    RUN_TEST(test_frozen_requires_initial_routes);
+    RUN_TEST(test_committed_no_initial_routes);
+    RUN_TEST(test_frozen_stays_on_vehicle);
+    RUN_TEST(test_committed_must_serve);
+    RUN_TEST(test_committed_can_reassign);
+    RUN_TEST(test_none_freely_optimized);
+    RUN_TEST(test_frozen_destroy_filtering);
+    RUN_TEST(test_frozen_postprocess_no_cross_vehicle);
+    RUN_TEST(test_frozen_pd_pair);
+    RUN_TEST(test_lock_json);
+    RUN_TEST(test_lock_validate_plan);
+
+    /* Request locking stress tests (Solomon / Li-Lim benchmarks) */
+    RUN_TEST(test_lock_solomon_freeze_all_identity);
+    RUN_TEST(test_lock_solomon_freeze_half_quality);
+    RUN_TEST(test_lock_solomon_frozen_fidelity);
+    RUN_TEST(test_lock_solomon_all_committed);
+    RUN_TEST(test_lock_solomon_frozen_stability_soak);
+    RUN_TEST(test_lock_solomon_deterministic_frozen);
+    RUN_TEST(test_lock_solomon_mixed_three_levels);
+    RUN_TEST(test_lock_li_lim_frozen_pd_stress);
+    RUN_TEST(test_lock_solomon_frozen_blocks_elimination);
+    RUN_TEST(test_lock_solomon_committed_low_weight);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 282);
+    assert(tests_run == 304);
 #else
-    assert(tests_run == 273);
+    assert(tests_run == 295);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }
