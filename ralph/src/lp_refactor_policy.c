@@ -34,6 +34,15 @@
 #define PHASE1_DIR_STABILIZE_STREAK_STEP 3
 #define PHASE1_DIR_STABILIZE_MAX_MULT 8
 #define PHASE1_DIR_STABILIZE_MAX_COOLDOWN_UPDATES 64
+#define PHASE1_STALL_ESCAPE_MIN_M 1200
+#define PHASE1_STALL_ESCAPE_MIN_DEGEN 20
+#define PHASE1_STALL_ESCAPE_NO_PIVOT_TRIGGER 512
+#define PHASE1_STALL_ESCAPE_STREAK_STEP 512
+#define PHASE1_STALL_ESCAPE_MAX_MULT 16
+#define PHASE1_STALL_ESCAPE_EXCLUDE_BASE (RALPH_PHASE1_ENTERING_EXCLUDE_ITERS * 4)
+#define PHASE1_STALL_ESCAPE_EXCLUDE_MAX 256
+#define PHASE1_STALL_ESCAPE_COOLDOWN_BASE 64
+#define PHASE1_STALL_ESCAPE_COOLDOWN_MAX 512
 #define LU_HEALTH_HARD_COND_MIN_UPDATES 10
 #define LU_HEALTH_HARD_COND_RATIO 1e10
 #define LU_HEALTH_SOFT_COND_MED 1e6
@@ -350,6 +359,63 @@ int lp_refactor_policy_phase1_dir_stabilize_cooldown_updates(int m,
     cooldown *= mult;
     if (cooldown > PHASE1_DIR_STABILIZE_MAX_COOLDOWN_UPDATES) {
         cooldown = PHASE1_DIR_STABILIZE_MAX_COOLDOWN_UPDATES;
+    }
+    return cooldown;
+}
+
+int lp_refactor_policy_phase1_stall_escape_eligible(int m,
+                                                    int degenerate_count,
+                                                    int no_pivot_streak,
+                                                    int use_bland,
+                                                    int cooldown_updates) {
+    if (cooldown_updates > 0) return 0;
+    if (m < PHASE1_STALL_ESCAPE_MIN_M) return 0;
+    if (!use_bland) return 0;
+    if (degenerate_count < PHASE1_STALL_ESCAPE_MIN_DEGEN) return 0;
+    if (no_pivot_streak < PHASE1_STALL_ESCAPE_NO_PIVOT_TRIGGER) return 0;
+    return 1;
+}
+
+int lp_refactor_policy_phase1_stall_escape_exclude_iters(int m,
+                                                         int no_pivot_streak) {
+    int mult = 1;
+    int exclude_iters;
+
+    if (m < PHASE1_STALL_ESCAPE_MIN_M) {
+        return PHASE1_STALL_ESCAPE_EXCLUDE_BASE;
+    }
+    if (no_pivot_streak > PHASE1_STALL_ESCAPE_NO_PIVOT_TRIGGER) {
+        mult += (no_pivot_streak - PHASE1_STALL_ESCAPE_NO_PIVOT_TRIGGER) /
+                PHASE1_STALL_ESCAPE_STREAK_STEP;
+    }
+    if (mult > PHASE1_STALL_ESCAPE_MAX_MULT) {
+        mult = PHASE1_STALL_ESCAPE_MAX_MULT;
+    }
+    exclude_iters = PHASE1_STALL_ESCAPE_EXCLUDE_BASE * mult;
+    if (exclude_iters > PHASE1_STALL_ESCAPE_EXCLUDE_MAX) {
+        exclude_iters = PHASE1_STALL_ESCAPE_EXCLUDE_MAX;
+    }
+    return exclude_iters;
+}
+
+int lp_refactor_policy_phase1_stall_escape_cooldown_updates(int m,
+                                                            int no_pivot_streak) {
+    int mult = 1;
+    int cooldown;
+
+    if (m < PHASE1_STALL_ESCAPE_MIN_M) {
+        return PHASE1_STALL_ESCAPE_COOLDOWN_BASE;
+    }
+    if (no_pivot_streak > PHASE1_STALL_ESCAPE_NO_PIVOT_TRIGGER) {
+        mult += (no_pivot_streak - PHASE1_STALL_ESCAPE_NO_PIVOT_TRIGGER) /
+                PHASE1_STALL_ESCAPE_STREAK_STEP;
+    }
+    if (mult > PHASE1_STALL_ESCAPE_MAX_MULT) {
+        mult = PHASE1_STALL_ESCAPE_MAX_MULT;
+    }
+    cooldown = PHASE1_STALL_ESCAPE_COOLDOWN_BASE * mult;
+    if (cooldown > PHASE1_STALL_ESCAPE_COOLDOWN_MAX) {
+        cooldown = PHASE1_STALL_ESCAPE_COOLDOWN_MAX;
     }
     return cooldown;
 }
