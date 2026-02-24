@@ -465,6 +465,24 @@ static int build_zones(SGContext *ctx, const ShJsonValue *zones_val) {
     return (status == SG_STATUS_OK) ? 0 : -1;
 }
 
+static int build_compartment_types(SGContext *ctx, const ShJsonValue *ct_arr) {
+    size_t i, count;
+
+    if (!ct_arr || sh_json_type(ct_arr) != SH_JSON_ARRAY) {
+        return 0;
+    }
+
+    count = sh_json_array_len(ct_arr);
+    for (i = 0; i < count; i++) {
+        uint32_t tid;
+        if (sg_add_compartment_type(ctx, &tid) != SG_STATUS_OK) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
 static int build_commodities(SGContext *ctx, const ShJsonValue *comm_val) {
     ShJsonValue *v;
     int count, i;
@@ -852,6 +870,39 @@ static int build_vehicles(SGContext *ctx, const ShJsonValue *vehicles_arr) {
                 return -1;
             }
         }
+
+        /* Compartments */
+        v = sh_json_get(veh, "compartments");
+        if (v && sh_json_type(v) == SH_JSON_ARRAY) {
+            size_t clen = sh_json_array_len(v);
+            size_t ci;
+            for (ci = 0; ci < clen; ci++) {
+                ShJsonValue *comp = sh_json_array_get(v, ci);
+                uint32_t ctype;
+                ShJsonValue *cap_arr;
+                if (!comp || sh_json_type(comp) != SH_JSON_OBJECT) return -1;
+                ctype = (uint32_t)sh_json_as_int(sh_json_get(comp, "type"), 0);
+                cap_arr = sh_json_get(comp, "capacity");
+                if (cap_arr && sh_json_type(cap_arr) == SH_JSON_ARRAY) {
+                    size_t dim = sh_json_array_len(cap_arr);
+                    double *cap = (double *)malloc(dim * sizeof(double));
+                    size_t cj;
+                    if (!cap) return -1;
+                    for (cj = 0; cj < dim; cj++) {
+                        cap[cj] = sh_json_as_double(sh_json_array_get(cap_arr, cj), 0.0);
+                    }
+                    if (sg_vehicle_add_compartment(ctx, id, ctype, cap, (uint32_t)dim) != SG_STATUS_OK) {
+                        free(cap);
+                        return -1;
+                    }
+                    free(cap);
+                } else {
+                    if (sg_vehicle_add_compartment(ctx, id, ctype, NULL, 0) != SG_STATUS_OK) {
+                        return -1;
+                    }
+                }
+            }
+        }
     }
 
     return 0;
@@ -1077,6 +1128,14 @@ static int build_requests(SGContext *ctx, const ShJsonValue *requests_arr) {
             }
         }
 
+        v = sh_json_get(r, "compartment_type");
+        if (v) {
+            uint32_t ct = (uint32_t)sh_json_as_int(v, 0);
+            if (sg_request_set_compartment_type(ctx, id, ct) != SG_STATUS_OK) {
+                return -1;
+            }
+        }
+
         v = sh_json_get(r, "exclusion_groups");
         if (v && sh_json_type(v) == SH_JSON_ARRAY) {
             size_t elen = sh_json_array_len(v);
@@ -1218,7 +1277,10 @@ SGStatus sg_api_build_model(SGContext *ctx, const ShJsonValue *root) {
         return SG_STATUS_ERROR;
     }
 
-    /* 4. Commodities, exclusion groups, setup times (before requests) */
+    /* 4. Compartment types, commodities, exclusion groups, setup times (before vehicles/requests) */
+    if (build_compartment_types(ctx, sh_json_get(root, "compartment_types")) != 0) {
+        return SG_STATUS_ERROR;
+    }
     if (build_commodities(ctx, sh_json_get(root, "commodities")) != 0) {
         return SG_STATUS_ERROR;
     }

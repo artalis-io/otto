@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#define SG_MAX_COMPARTMENTS_PER_VEHICLE 8
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -128,7 +130,8 @@ typedef enum {
     SG_VIOLATION_PD_POLICY,
     SG_VIOLATION_BACKHAUL,
     SG_VIOLATION_FROZEN_ASSIGNMENT,
-    SG_VIOLATION_COMMITTED_UNASSIGNED
+    SG_VIOLATION_COMMITTED_UNASSIGNED,
+    SG_VIOLATION_COMPARTMENT_CAPACITY
 } SGViolationType;
 
 typedef struct {

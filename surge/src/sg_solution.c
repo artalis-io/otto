@@ -1705,6 +1705,11 @@ void sg_scratch_init(SGContext *ctx) {
     if (ctx->num_exclusion_groups > 0) {
         total += ALIGN8((size_t)ctx->num_exclusion_groups * sizeof(uint32_t));
     }
+    /* compartment scratch */
+    if (ctx->has_compartments && ctx->dimension_count > 0) {
+        size_t comp_dim = (size_t)SG_MAX_COMPARTMENTS_PER_VEHICLE * (size_t)ctx->dimension_count;
+        total += 3U * ALIGN8(comp_dim * sizeof(double));
+    }
     #undef ALIGN8
 
     arena = sh_arena_create(total);
@@ -1729,6 +1734,12 @@ void sg_scratch_init(SGContext *ctx) {
     if (ctx->num_exclusion_groups > 0) {
         s->exclusion_counts = (uint32_t *)sh_arena_alloc(arena,
             (size_t)ctx->num_exclusion_groups * sizeof(uint32_t));
+    }
+    if (ctx->has_compartments && ctx->dimension_count > 0) {
+        size_t comp_dim = (size_t)SG_MAX_COMPARTMENTS_PER_VEHICLE * (size_t)ctx->dimension_count;
+        s->compartment_load = (double *)sh_arena_alloc(arena, comp_dim * sizeof(double));
+        s->compartment_min_prefix = (double *)sh_arena_alloc(arena, comp_dim * sizeof(double));
+        s->compartment_max_prefix = (double *)sh_arena_alloc(arena, comp_dim * sizeof(double));
     }
 }
 

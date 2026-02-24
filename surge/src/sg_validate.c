@@ -114,6 +114,53 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
             }
         }
 
+        /* Compartment capacity violation */
+        if (ctx->has_compartments && veh->num_compartments > 0 && dim_count > 0) {
+            double comp_load[SG_MAX_COMPARTMENTS_PER_VEHICLE * 6];
+            memset(comp_load, 0, sizeof(comp_load));
+            for (i = 0; i < stop_len; i++) {
+                const SGRouteStop *s = &stops[i];
+                const SGTaskRecord *task = &ctx->tasks[s->task_id];
+                uint32_t ct = ctx->requests[s->request_id].compartment_type;
+                if (ct == 0) continue;
+                {
+                    int ci = sg_vehicle_find_compartment(veh, ct);
+                    if (ci < 0) {
+                        memset(&viol, 0, sizeof(viol));
+                        viol.type = SG_VIOLATION_COMPARTMENT_CAPACITY;
+                        viol.vehicle_id = v;
+                        viol.stop_index = i;
+                        viol.request_id = s->request_id;
+                        viol.task_id = s->task_id;
+                        viol.actual = 0.0;
+                        viol.limit = 0.0;
+                        push_violation(ctx, &viol);
+                        continue;
+                    }
+                    for (d = 0; d < dim_count; d++) {
+                        double demand = (task->has_demand && task->demand) ? task->demand[d] : 0.0;
+                        comp_load[(size_t)ci * dim_count + d] += demand;
+                        {
+                            double cap = veh->compartments[ci].capacity
+                                         ? veh->compartments[ci].capacity[d] : 0.0;
+                            if (cap > 0.0 &&
+                                comp_load[(size_t)ci * dim_count + d] > cap + 1e-9) {
+                                memset(&viol, 0, sizeof(viol));
+                                viol.type = SG_VIOLATION_COMPARTMENT_CAPACITY;
+                                viol.vehicle_id = v;
+                                viol.stop_index = i;
+                                viol.request_id = s->request_id;
+                                viol.task_id = s->task_id;
+                                viol.actual = comp_load[(size_t)ci * dim_count + d];
+                                viol.limit = cap;
+                                push_violation(ctx, &viol);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         /* Forbidden vehicle / qualification checks (per request on this route) */
         {
             uint8_t *seen_request = (uint8_t *)calloc((size_t)ctx->num_requests, sizeof(uint8_t));

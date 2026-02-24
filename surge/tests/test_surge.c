@@ -11856,6 +11856,529 @@ static void test_lock_solomon_committed_low_weight(void) {
     sg_free(ctx);
 }
 
+/* ===== Vehicle Compartments ===== */
+
+static void test_compartment_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t t1, t2, t3;
+    uint32_t r0;
+    double cap1[1] = {100.0};
+
+    assert(ctx != NULL);
+    assert(sg_set_dimension_count(ctx, 1) == SG_STATUS_OK);
+
+    /* Add compartment types */
+    assert(sg_add_compartment_type(ctx, &t1) == SG_STATUS_OK);
+    assert(t1 == 1);
+    assert(sg_add_compartment_type(ctx, &t2) == SG_STATUS_OK);
+    assert(t2 == 2);
+    assert(sg_add_compartment_type(ctx, &t3) == SG_STATUS_OK);
+    assert(t3 == 3);
+
+    /* Error: NULL ctx */
+    assert(sg_add_compartment_type(NULL, &t1) == SG_STATUS_INVALID_ARG);
+    /* Error: NULL out */
+    assert(sg_add_compartment_type(ctx, NULL) == SG_STATUS_INVALID_ARG);
+
+    /* Add vehicle and compartment */
+    {
+        uint32_t v = sg_add_vehicle(ctx);
+        assert(v != UINT32_MAX);
+
+        /* Error: type_id 0 */
+        assert(sg_vehicle_add_compartment(ctx, v, 0, cap1, 1) == SG_STATUS_INVALID_ARG);
+        /* Error: type_id out of range */
+        assert(sg_vehicle_add_compartment(ctx, v, 99, cap1, 1) == SG_STATUS_INVALID_ARG);
+        /* Error: bad vehicle */
+        assert(sg_vehicle_add_compartment(ctx, 999, t1, cap1, 1) == SG_STATUS_INVALID_ARG);
+        /* Error: wrong dimension count */
+        {
+            double cap2[2] = {10.0, 20.0};
+            assert(sg_vehicle_add_compartment(ctx, v, t1, cap2, 2) == SG_STATUS_INVALID_ARG);
+        }
+
+        /* Valid */
+        assert(sg_vehicle_add_compartment(ctx, v, t1, cap1, 1) == SG_STATUS_OK);
+        assert(ctx->vehicles[v].num_compartments == 1);
+        assert(ctx->has_compartments == 1);
+
+        /* Add more until max */
+        assert(sg_vehicle_add_compartment(ctx, v, t2, cap1, 1) == SG_STATUS_OK);
+        {
+            uint8_t i;
+            for (i = 2; i < SG_MAX_COMPARTMENTS_PER_VEHICLE; i++) {
+                assert(sg_add_compartment_type(ctx, &t1) == SG_STATUS_OK);
+                assert(sg_vehicle_add_compartment(ctx, v, t1, cap1, 1) == SG_STATUS_OK);
+            }
+        }
+        /* At max — next should fail */
+        assert(sg_add_compartment_type(ctx, &t1) == SG_STATUS_OK);
+        assert(sg_vehicle_add_compartment(ctx, v, t1, cap1, 1) == SG_STATUS_INVALID_ARG);
+    }
+
+    /* Set compartment type on request */
+    r0 = sg_add_request(ctx);
+    assert(r0 != UINT32_MAX);
+    assert(sg_request_set_compartment_type(ctx, r0, t2) == SG_STATUS_OK);
+    assert(ctx->requests[r0].compartment_type == t2);
+
+    /* Error: bad type */
+    assert(sg_request_set_compartment_type(ctx, r0, 9999) == SG_STATUS_INVALID_ARG);
+    /* Error: bad request */
+    assert(sg_request_set_compartment_type(ctx, 999, t2) == SG_STATUS_INVALID_ARG);
+    /* 0 is valid (no compartment) */
+    assert(sg_request_set_compartment_type(ctx, r0, 0) == SG_STATUS_OK);
+
+    sg_free(ctx);
+}
+
+static void test_compartment_basic(void) {
+    /* 1 vehicle with 2 compartments (frozen=50, chilled=80), 2 requests each fitting.
+       Feasible — both fit in their respective compartments. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    uint32_t t_frozen, t_chilled;
+    uint32_t v;
+    double cap_frozen[1] = {50.0};
+    double cap_chilled[1] = {80.0};
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+
+    assert(sg_add_compartment_type(ctx, &t_frozen) == SG_STATUS_OK);
+    assert(sg_add_compartment_type(ctx, &t_chilled) == SG_STATUS_OK);
+
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    {
+        double vc = 200.0;
+        assert(sg_vehicle_set_capacity(ctx, v, &vc, 1) == SG_STATUS_OK);
+    }
+    assert(sg_vehicle_add_compartment(ctx, v, t_frozen, cap_frozen, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_add_compartment(ctx, v, t_chilled, cap_chilled, 1) == SG_STATUS_OK);
+
+    /* Request 0: 30 units in frozen compartment (fits in 50) */
+    {
+        uint32_t r = sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -30.0);
+        assert(r != UINT32_MAX);
+        assert(sg_request_set_compartment_type(ctx, r, t_frozen) == SG_STATUS_OK);
+    }
+    /* Request 1: 60 units in chilled compartment (fits in 80) */
+    {
+        uint32_t r = sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 0, -60.0);
+        assert(r != UINT32_MAX);
+        assert(sg_request_set_compartment_type(ctx, r, t_chilled) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+
+    sg_free(ctx);
+}
+
+static void test_compartment_capacity_exceeded(void) {
+    /* Request demand exceeds compartment capacity but fits overall vehicle.
+       Should be infeasible for the compartment → needs 2 vehicles or unassigned. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    uint32_t t_frozen;
+    uint32_t v0, v1;
+    double cap_frozen[1] = {25.0};  /* Small compartment */
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+
+    assert(sg_add_compartment_type(ctx, &t_frozen) == SG_STATUS_OK);
+
+    /* Vehicle 0: overall cap=200, frozen compartment=25 */
+    v0 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v0, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v0, 0, 99999) == SG_STATUS_OK);
+    {
+        double vc = 200.0;
+        assert(sg_vehicle_set_capacity(ctx, v0, &vc, 1) == SG_STATUS_OK);
+    }
+    assert(sg_vehicle_add_compartment(ctx, v0, t_frozen, cap_frozen, 1) == SG_STATUS_OK);
+
+    /* Vehicle 1: same config */
+    v1 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v1, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v1, 0, 99999) == SG_STATUS_OK);
+    {
+        double vc = 200.0;
+        assert(sg_vehicle_set_capacity(ctx, v1, &vc, 1) == SG_STATUS_OK);
+    }
+    assert(sg_vehicle_add_compartment(ctx, v1, t_frozen, cap_frozen, 1) == SG_STATUS_OK);
+
+    /* 2 requests, each 20 frozen (total 40 > cap_frozen=25 per vehicle) */
+    {
+        uint32_t r = sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -20.0);
+        assert(sg_request_set_compartment_type(ctx, r, t_frozen) == SG_STATUS_OK);
+    }
+    {
+        uint32_t r = sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 0, -20.0);
+        assert(sg_request_set_compartment_type(ctx, r, t_frozen) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    /* Each request fits in one vehicle's frozen compartment (20 < 25),
+       but not both (40 > 25), so they must go on separate vehicles. */
+    assert(sg_get_used_vehicle_count(ctx) == 2);
+
+    sg_free(ctx);
+}
+
+static void test_compartment_vehicle_cap_exceeded(void) {
+    /* Request fits in compartment but exceeds overall vehicle capacity.
+       Overall cap is binding. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    uint32_t t_frozen;
+    uint32_t v0, v1;
+    double cap_frozen[1] = {100.0};  /* Big compartment */
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+
+    assert(sg_add_compartment_type(ctx, &t_frozen) == SG_STATUS_OK);
+
+    /* Vehicle 0: overall cap=30, frozen compartment=100 */
+    v0 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v0, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v0, 0, 99999) == SG_STATUS_OK);
+    {
+        double vc = 30.0;
+        assert(sg_vehicle_set_capacity(ctx, v0, &vc, 1) == SG_STATUS_OK);
+    }
+    assert(sg_vehicle_add_compartment(ctx, v0, t_frozen, cap_frozen, 1) == SG_STATUS_OK);
+
+    /* Vehicle 1: same config */
+    v1 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v1, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v1, 0, 99999) == SG_STATUS_OK);
+    {
+        double vc = 30.0;
+        assert(sg_vehicle_set_capacity(ctx, v1, &vc, 1) == SG_STATUS_OK);
+    }
+    assert(sg_vehicle_add_compartment(ctx, v1, t_frozen, cap_frozen, 1) == SG_STATUS_OK);
+
+    /* 2 requests, each 20 frozen. Together: 40 > vehicle_cap=30, but both fit in compartment */
+    {
+        uint32_t r = sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -20.0);
+        assert(sg_request_set_compartment_type(ctx, r, t_frozen) == SG_STATUS_OK);
+    }
+    {
+        uint32_t r = sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 0, -20.0);
+        assert(sg_request_set_compartment_type(ctx, r, t_frozen) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    /* Overall vehicle capacity forces 2 vehicles even though compartment has room */
+    assert(sg_get_used_vehicle_count(ctx) == 2);
+
+    sg_free(ctx);
+}
+
+static void test_compartment_missing_type(void) {
+    /* Request needs compartment type that vehicle lacks → infeasible for that vehicle.
+       With only 1 vehicle, request is unassigned. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    uint32_t t_frozen, t_chilled;
+    uint32_t v;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+
+    assert(sg_add_compartment_type(ctx, &t_frozen) == SG_STATUS_OK);
+    assert(sg_add_compartment_type(ctx, &t_chilled) == SG_STATUS_OK);
+
+    /* Vehicle only has frozen compartment */
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    {
+        double vc = 200.0;
+        assert(sg_vehicle_set_capacity(ctx, v, &vc, 1) == SG_STATUS_OK);
+    }
+    {
+        double cap[1] = {100.0};
+        assert(sg_vehicle_add_compartment(ctx, v, t_frozen, cap, 1) == SG_STATUS_OK);
+    }
+
+    /* Request needs chilled → vehicle lacks it → unassigned */
+    {
+        uint32_t r = sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -10.0);
+        assert(sg_request_set_compartment_type(ctx, r, t_chilled) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 1);
+
+    sg_free(ctx);
+}
+
+static void test_compartment_no_type_ok(void) {
+    /* Request with compartment_type=0 on vehicle with compartments.
+       Uses overall capacity only, does not consume compartment capacity. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    uint32_t t_frozen;
+    uint32_t v;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+
+    assert(sg_add_compartment_type(ctx, &t_frozen) == SG_STATUS_OK);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    {
+        double vc = 100.0;
+        assert(sg_vehicle_set_capacity(ctx, v, &vc, 1) == SG_STATUS_OK);
+    }
+    {
+        double cap[1] = {20.0};
+        assert(sg_vehicle_add_compartment(ctx, v, t_frozen, cap, 1) == SG_STATUS_OK);
+    }
+
+    /* Request without compartment type — fits in vehicle overall (50 < 100) */
+    sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -50.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+
+    sg_free(ctx);
+}
+
+static void test_compartment_solver_basic(void) {
+    /* Small model: 2 vehicles, 3 compartment types, 4 requests.
+       Solve and verify all assigned to correct vehicles. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    uint32_t t_frozen, t_chilled, t_ambient;
+    uint32_t v0, v1;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+
+    assert(sg_add_compartment_type(ctx, &t_frozen) == SG_STATUS_OK);
+    assert(sg_add_compartment_type(ctx, &t_chilled) == SG_STATUS_OK);
+    assert(sg_add_compartment_type(ctx, &t_ambient) == SG_STATUS_OK);
+
+    /* Vehicle 0: frozen(30) + chilled(40), overall=100 */
+    v0 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v0, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v0, 0, 99999) == SG_STATUS_OK);
+    {
+        double vc = 100.0;
+        assert(sg_vehicle_set_capacity(ctx, v0, &vc, 1) == SG_STATUS_OK);
+    }
+    {
+        double cap[1] = {30.0};
+        assert(sg_vehicle_add_compartment(ctx, v0, t_frozen, cap, 1) == SG_STATUS_OK);
+    }
+    {
+        double cap[1] = {40.0};
+        assert(sg_vehicle_add_compartment(ctx, v0, t_chilled, cap, 1) == SG_STATUS_OK);
+    }
+
+    /* Vehicle 1: ambient(80), overall=100 */
+    v1 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v1, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v1, 0, 99999) == SG_STATUS_OK);
+    {
+        double vc = 100.0;
+        assert(sg_vehicle_set_capacity(ctx, v1, &vc, 1) == SG_STATUS_OK);
+    }
+    {
+        double cap[1] = {80.0};
+        assert(sg_vehicle_add_compartment(ctx, v1, t_ambient, cap, 1) == SG_STATUS_OK);
+    }
+
+    /* r0: frozen, 20 units */
+    {
+        uint32_t r = sg_add_delivery_request(ctx, 5.0, 0.0, 0, 99999, 0, -20.0);
+        assert(sg_request_set_compartment_type(ctx, r, t_frozen) == SG_STATUS_OK);
+    }
+    /* r1: chilled, 30 units */
+    {
+        uint32_t r = sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -30.0);
+        assert(sg_request_set_compartment_type(ctx, r, t_chilled) == SG_STATUS_OK);
+    }
+    /* r2: ambient, 50 units */
+    {
+        uint32_t r = sg_add_delivery_request(ctx, 15.0, 0.0, 0, 99999, 0, -50.0);
+        assert(sg_request_set_compartment_type(ctx, r, t_ambient) == SG_STATUS_OK);
+    }
+    /* r3: no compartment, 10 units */
+    sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 0, -10.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    sg_free(ctx);
+}
+
+static void test_compartment_json(void) {
+    const char *json =
+        "{"
+        "  \"config\": {\"max_iterations\": 200, \"seed\": 42, \"deterministic\": true},"
+        "  \"compartment_types\": [{\"id\": 1, \"name\": \"frozen\"}, {\"id\": 2, \"name\": \"chilled\"}],"
+        "  \"depots\": [{\"x\": 0, \"y\": 0, \"tw_early\": 0, \"tw_late\": 86400}],"
+        "  \"vehicles\": [{\"start_depot_id\": 0, \"end_depot_id\": 0,"
+        "    \"shift_early\": 0, \"shift_late\": 86400, \"capacity\": [200],"
+        "    \"compartments\": ["
+        "      {\"type\": 1, \"capacity\": [50]},"
+        "      {\"type\": 2, \"capacity\": [80]}"
+        "    ]}],"
+        "  \"tasks\": ["
+        "    {\"type\": \"delivery\", \"x\": 10, \"y\": 0, \"tw_early\": 0,"
+        "     \"tw_late\": 86400, \"service_seconds\": 10, \"demand\": [-30]},"
+        "    {\"type\": \"delivery\", \"x\": 20, \"y\": 0, \"tw_early\": 0,"
+        "     \"tw_late\": 86400, \"service_seconds\": 10, \"demand\": [-40]}"
+        "  ],"
+        "  \"requests\": ["
+        "    {\"delivery_task_id\": 0, \"compartment_type\": 1},"
+        "    {\"delivery_task_id\": 1, \"compartment_type\": 2}"
+        "  ]"
+        "}";
+    int status_code = 0;
+    size_t out_len = 0;
+    char *resp = sg_api_solve(json, strlen(json), &status_code, &out_len);
+    assert(resp != NULL);
+    assert(status_code == 200);
+    assert(strstr(resp, "\"unassigned\":0") != NULL ||
+           strstr(resp, "\"unassigned\": 0") != NULL);
+    free(resp);
+}
+
+static void test_compartment_multi_trip(void) {
+    /* Compartment load resets at trip boundary. Vehicle with frozen(30), 2 trips.
+       Each trip has 1 request needing 25 frozen. Without reset → 50 > 30 fails.
+       With reset → 25 < 30 each trip passes. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    uint32_t t_frozen;
+    uint32_t v;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+
+    assert(sg_add_compartment_type(ctx, &t_frozen) == SG_STATUS_OK);
+
+    v = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    {
+        double vc = 100.0;
+        assert(sg_vehicle_set_capacity(ctx, v, &vc, 1) == SG_STATUS_OK);
+    }
+    {
+        double cap[1] = {30.0};
+        assert(sg_vehicle_add_compartment(ctx, v, t_frozen, cap, 1) == SG_STATUS_OK);
+    }
+    assert(sg_vehicle_set_max_trips(ctx, v, 3) == SG_STATUS_OK);
+    assert(sg_vehicle_set_trip_reload_seconds(ctx, v, 10) == SG_STATUS_OK);
+
+    /* 2 requests, 25 each in frozen */
+    {
+        uint32_t r = sg_add_delivery_request(ctx, 10.0, 0.0, 0, 49999, 0, -25.0);
+        assert(sg_request_set_compartment_type(ctx, r, t_frozen) == SG_STATUS_OK);
+    }
+    {
+        uint32_t r = sg_add_delivery_request(ctx, 10.0, 0.0, 50000, 99999, 0, -25.0);
+        assert(sg_request_set_compartment_type(ctx, r, t_frozen) == SG_STATUS_OK);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+
+    sg_free(ctx);
+}
+
+static void test_compartment_with_commodity(void) {
+    /* Compartments + commodity conflicts together.
+       2 vehicles, 2 commodities conflicting, compartments on both.
+       2 requests with same compartment type but different conflicting commodities.
+       Must go on separate vehicles. */
+    SGContext *ctx = make_config(300, 42);
+    uint32_t depot;
+    uint32_t t_frozen;
+    uint32_t c1, c2;
+    uint32_t r0, r1;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+
+    assert(sg_add_compartment_type(ctx, &t_frozen) == SG_STATUS_OK);
+    assert(sg_add_commodity(ctx, &c1) == SG_STATUS_OK);
+    assert(sg_add_commodity(ctx, &c2) == SG_STATUS_OK);
+    assert(sg_commodity_set_conflict(ctx, c1, c2) == SG_STATUS_OK);
+
+    /* Vehicle 0: frozen(100), overall=200 */
+    {
+        uint32_t v = sg_add_vehicle(ctx);
+        double vc = 200.0, cap[1] = {100.0};
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &vc, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_add_compartment(ctx, v, t_frozen, cap, 1) == SG_STATUS_OK);
+    }
+    /* Vehicle 1: same */
+    {
+        uint32_t v = sg_add_vehicle(ctx);
+        double vc = 200.0, cap[1] = {100.0};
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &vc, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_add_compartment(ctx, v, t_frozen, cap, 1) == SG_STATUS_OK);
+    }
+
+    r0 = sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -20.0);
+    r1 = sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 0, -20.0);
+    assert(sg_request_set_compartment_type(ctx, r0, t_frozen) == SG_STATUS_OK);
+    assert(sg_request_set_compartment_type(ctx, r1, t_frozen) == SG_STATUS_OK);
+    assert(sg_request_set_commodity(ctx, r0, c1) == SG_STATUS_OK);
+    assert(sg_request_set_commodity(ctx, r1, c2) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    /* Commodity conflict forces 2 vehicles */
+    assert(sg_get_used_vehicle_count(ctx) == 2);
+
+    sg_free(ctx);
+}
+
+static void test_compartment_no_compartments_unchanged(void) {
+    /* Model with zero compartments. Verify existing capacity model works identically. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 50.0);
+
+    /* 2 requests, 30 + 15 = 45 < 50 */
+    sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -30.0);
+    sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 0, -15.0);
+
+    assert(ctx->has_compartments == 0);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -12238,12 +12761,25 @@ int main(void) {
     RUN_TEST(test_lock_solomon_frozen_blocks_elimination);
     RUN_TEST(test_lock_solomon_committed_low_weight);
 
+    /* Vehicle Compartments */
+    RUN_TEST(test_compartment_api);
+    RUN_TEST(test_compartment_basic);
+    RUN_TEST(test_compartment_capacity_exceeded);
+    RUN_TEST(test_compartment_vehicle_cap_exceeded);
+    RUN_TEST(test_compartment_missing_type);
+    RUN_TEST(test_compartment_no_type_ok);
+    RUN_TEST(test_compartment_solver_basic);
+    RUN_TEST(test_compartment_json);
+    RUN_TEST(test_compartment_multi_trip);
+    RUN_TEST(test_compartment_with_commodity);
+    RUN_TEST(test_compartment_no_compartments_unchanged);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 304);
+    assert(tests_run == 315);
 #else
-    assert(tests_run == 295);
+    assert(tests_run == 306);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

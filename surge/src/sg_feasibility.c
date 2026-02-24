@@ -706,6 +706,103 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
         }
     }
 
+    /* Per-compartment capacity check (layered on top of vehicle overall capacity) */
+    if (ctx->has_compartments && vehicle->num_compartments > 0 && ctx->dimension_count > 0) {
+        size_t dim_count = (size_t)ctx->dimension_count;
+        size_t comp_stride = (size_t)SG_MAX_COMPARTMENTS_PER_VEHICLE * dim_count;
+        double *comp_load, *comp_min, *comp_max;
+        uint8_t comp_stack = (comp_stride * 3 * sizeof(double)) <= 1152;
+
+        /* Compartment compatibility: vehicle must have the request's compartment type */
+        for (i = 0; i < stop_count; i++) {
+            uint32_t ct = ctx->requests[stops[i].request_id].compartment_type;
+            if (ct > 0 && sg_vehicle_find_compartment(vehicle, ct) < 0)
+                goto done;
+        }
+
+        if (comp_stack || (use_scratch && ctx->scratch.compartment_load)) {
+            if (use_scratch && ctx->scratch.compartment_load) {
+                comp_load = ctx->scratch.compartment_load;
+                comp_min = ctx->scratch.compartment_min_prefix;
+                comp_max = ctx->scratch.compartment_max_prefix;
+            } else {
+                comp_load = (double *)malloc(comp_stride * 3 * sizeof(double));
+                if (!comp_load) goto done;
+                comp_min = comp_load + comp_stride;
+                comp_max = comp_min + comp_stride;
+            }
+        } else {
+            comp_load = (double *)malloc(comp_stride * 3 * sizeof(double));
+            if (!comp_load) goto done;
+            comp_min = comp_load + comp_stride;
+            comp_max = comp_min + comp_stride;
+        }
+
+        memset(comp_load, 0, comp_stride * sizeof(double));
+        memset(comp_min, 0, comp_stride * sizeof(double));
+        memset(comp_max, 0, comp_stride * sizeof(double));
+
+        for (i = 0; i < stop_count; i++) {
+            const SGRouteStop *stop = &stops[i];
+            const SGTaskRecord *task = &ctx->tasks[stop->task_id];
+            uint32_t ct = ctx->requests[stop->request_id].compartment_type;
+
+            /* At trip boundary, check previous trip and reset */
+            if (stop->trip_start && i > 0) {
+                uint8_t ci;
+                for (ci = 0; ci < vehicle->num_compartments; ci++) {
+                    if (!vehicle->compartments[ci].capacity) continue;
+                    for (d = 0; d < ctx->dimension_count; d++) {
+                        size_t idx = (size_t)ci * dim_count + d;
+                        double cap = vehicle->compartments[ci].capacity[d];
+                        if ((comp_max[idx] - comp_min[idx]) > cap + SG_DEMAND_TOLERANCE) {
+                            if (!(use_scratch && ctx->scratch.compartment_load) && comp_load) {
+                                free(comp_load);
+                            }
+                            goto done;
+                        }
+                    }
+                }
+                memset(comp_load, 0, comp_stride * sizeof(double));
+                memset(comp_min, 0, comp_stride * sizeof(double));
+                memset(comp_max, 0, comp_stride * sizeof(double));
+            }
+
+            if (ct > 0) {
+                int ci = sg_vehicle_find_compartment(vehicle, ct);
+                for (d = 0; d < ctx->dimension_count; d++) {
+                    size_t idx = (size_t)ci * dim_count + d;
+                    double val = comp_load[idx] + task->demand[d];
+                    comp_load[idx] = val;
+                    if (val < comp_min[idx]) comp_min[idx] = val;
+                    if (val > comp_max[idx]) comp_max[idx] = val;
+                }
+            }
+        }
+
+        /* Check final trip segment */
+        {
+            uint8_t ci;
+            for (ci = 0; ci < vehicle->num_compartments; ci++) {
+                if (!vehicle->compartments[ci].capacity) continue;
+                for (d = 0; d < ctx->dimension_count; d++) {
+                    size_t idx = (size_t)ci * dim_count + d;
+                    double cap = vehicle->compartments[ci].capacity[d];
+                    if ((comp_max[idx] - comp_min[idx]) > cap + SG_DEMAND_TOLERANCE) {
+                        if (!(use_scratch && ctx->scratch.compartment_load) && comp_load) {
+                            free(comp_load);
+                        }
+                        goto done;
+                    }
+                }
+            }
+        }
+
+        if (!(use_scratch && ctx->scratch.compartment_load)) {
+            free(comp_load);
+        }
+    }
+
     if (ctx->num_requests > 0 && !use_scratch) {
         pickup_depart = (double *)malloc((size_t)ctx->num_requests * sizeof(double));
         pickup_seen = (uint8_t *)calloc((size_t)ctx->num_requests, sizeof(uint8_t));
@@ -1252,6 +1349,9 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
     if (!sg_exclusion_compatible(ctx, sol, vehicle_id, request_id)) {
         return 0;
     }
+    if (!sg_compartment_compatible(ctx, vehicle_id, request_id)) {
+        return 0;
+    }
 
     pen_enabled = ctx->penalty.enabled;
     memset(ins_violations, 0, sizeof(ins_violations));
@@ -1689,6 +1789,104 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
         }
     }
 
+    /* Compartment capacity check for insertion (single affected compartment) */
+    if (ctx->has_compartments && vehicle->num_compartments > 0 &&
+        ctx->dimension_count > 0 && sol->route_stop_load) {
+        uint32_t ct = ctx->requests[request_id].compartment_type;
+        if (ct > 0) {
+            int ci = sg_vehicle_find_compartment(vehicle, ct);
+            /* ci guaranteed valid by sg_compartment_compatible above */
+            if (ci >= 0 && vehicle->compartments[ci].capacity) {
+                uint32_t insert_stop_pos = (next_stop_idx != UINT32_MAX) ? next_stop_idx : stop_len;
+
+                /* Same trip boundaries as overall capacity check */
+                uint32_t comp_trip_first = 0;
+                uint32_t comp_trip_end = stop_len;
+                if (vehicle->has_multi_trip && stop_len > 0) {
+                    if (insert_stop_pos < stop_len && stops[insert_stop_pos].trip_start) {
+                        comp_trip_end = insert_stop_pos;
+                    } else {
+                        uint32_t s;
+                        for (s = insert_stop_pos + 1; s < stop_len; s++) {
+                            if (stops[s].trip_start) { comp_trip_end = s; break; }
+                        }
+                    }
+                    {
+                        uint32_t s;
+                        for (s = comp_trip_end; s > 0; s--) {
+                            if (stops[s - 1].trip_start && s - 1 < comp_trip_end) {
+                                comp_trip_first = s - 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                {
+                uint32_t cd;
+                for (cd = 0; cd < ctx->dimension_count; cd++) {
+                    double cap = vehicle->compartments[ci].capacity[cd];
+                    double added = 0.0;
+                    double hyp_min = 0.0;
+                    double hyp_max = 0.0;
+                    uint32_t s;
+
+                    for (ns = 0; ns < new_stop_count; ns++) {
+                        const SGTaskRecord *task = &ctx->tasks[new_stops[ns].task_id];
+                        double demand = (task->has_demand && task->demand) ? task->demand[cd] : 0.0;
+                        added += demand;
+                    }
+
+                    /* Upstream: only stops in same compartment */
+                    {
+                        double comp_prefix = 0.0;
+                        for (s = comp_trip_first; s < insert_stop_pos; s++) {
+                            uint32_t sc = ctx->requests[stops[s].request_id].compartment_type;
+                            if (sc == ct) {
+                                const SGTaskRecord *t = &ctx->tasks[stops[s].task_id];
+                                comp_prefix += (t->has_demand && t->demand) ? t->demand[cd] : 0.0;
+                                if (comp_prefix < hyp_min) hyp_min = comp_prefix;
+                                if (comp_prefix > hyp_max) hyp_max = comp_prefix;
+                            }
+                        }
+
+                        /* New stop(s) */
+                        {
+                            double partial = comp_prefix;
+                            for (ns = 0; ns < new_stop_count; ns++) {
+                                const SGTaskRecord *task = &ctx->tasks[new_stops[ns].task_id];
+                                double demand = (task->has_demand && task->demand) ? task->demand[cd] : 0.0;
+                                partial += demand;
+                                if (partial < hyp_min) hyp_min = partial;
+                                if (partial > hyp_max) hyp_max = partial;
+                            }
+                        }
+
+                        /* Downstream: only stops in same compartment, shifted by added */
+                        for (s = insert_stop_pos; s < comp_trip_end; s++) {
+                            uint32_t sc = ctx->requests[stops[s].request_id].compartment_type;
+                            if (sc == ct) {
+                                const SGTaskRecord *t = &ctx->tasks[stops[s].task_id];
+                                comp_prefix += (t->has_demand && t->demand) ? t->demand[cd] : 0.0;
+                                {
+                                    double val = comp_prefix + added;
+                                    if (val < hyp_min) hyp_min = val;
+                                    if (val > hyp_max) hyp_max = val;
+                                }
+                            }
+                        }
+                    }
+
+                    if ((hyp_max - hyp_min) > cap + SG_DEMAND_TOLERANCE) {
+                        if (!pen_enabled) return 0;
+                        ins_violations[SG_PENALTY_CAPACITY] += (hyp_max - hyp_min) - cap;
+                    }
+                }
+                }
+            }
+        }
+    }
+
     /* Compute distance delta */
     {
         uint32_t last_new_loc = ctx->tasks[new_stops[new_stop_count - 1].task_id].location_id;
@@ -1820,6 +2018,9 @@ int sg_route_eval_pd_best_insertion_cached(
         return 0;
     }
     if (!sg_exclusion_compatible(ctx, sol, vehicle_id, request_id)) {
+        return 0;
+    }
+    if (!sg_compartment_compatible(ctx, vehicle_id, request_id)) {
         return 0;
     }
 
@@ -2299,6 +2500,82 @@ int sg_route_eval_pd_best_insertion_cached(
                     }
                     if (!cap_ok) {
                         if (!pen_enabled) goto next_j;
+                    }
+                }
+
+                /* Compartment capacity check for PD insertion */
+                if (ctx->has_compartments && vehicle->num_compartments > 0 &&
+                    ctx->dimension_count > 0 && sol->route_stop_load) {
+                    uint32_t ct = ctx->requests[request_id].compartment_type;
+                    if (ct > 0) {
+                        int ci = sg_vehicle_find_compartment(vehicle, ct);
+                        if (ci >= 0 && vehicle->compartments[ci].capacity) {
+                            uint32_t d;
+                            int comp_ok = 1;
+                            for (d = 0; d < ctx->dimension_count && comp_ok; d++) {
+                                double cap = vehicle->compartments[ci].capacity[d];
+                                double pickup_dem = (pickup_task->has_demand && pickup_task->demand)
+                                                    ? pickup_task->demand[d] : 0.0;
+                                double delivery_dem = (delivery_task->has_demand && delivery_task->demand)
+                                                      ? delivery_task->demand[d] : 0.0;
+                                double comp_prefix = 0.0;
+                                double hyp_min = 0.0, hyp_max = 0.0;
+                                uint32_t s;
+
+                                /* Before pickup: compartment-filtered prefix sums */
+                                for (s = 0; s < i; s++) {
+                                    if (ctx->requests[stops[s].request_id].compartment_type == ct) {
+                                        const SGTaskRecord *t = &ctx->tasks[stops[s].task_id];
+                                        comp_prefix += (t->has_demand && t->demand) ? t->demand[d] : 0.0;
+                                        if (comp_prefix < hyp_min) hyp_min = comp_prefix;
+                                        if (comp_prefix > hyp_max) hyp_max = comp_prefix;
+                                    }
+                                }
+                                /* After pickup */
+                                {
+                                    double val = comp_prefix + pickup_dem;
+                                    if (val < hyp_min) hyp_min = val;
+                                    if (val > hyp_max) hyp_max = val;
+                                }
+                                /* Between pickup and delivery */
+                                {
+                                    double shifted = comp_prefix + pickup_dem;
+                                    for (s = i; s < j - 1 && s < stop_len; s++) {
+                                        if (ctx->requests[stops[s].request_id].compartment_type == ct) {
+                                            const SGTaskRecord *t = &ctx->tasks[stops[s].task_id];
+                                            shifted += (t->has_demand && t->demand) ? t->demand[d] : 0.0;
+                                            if (shifted < hyp_min) hyp_min = shifted;
+                                            if (shifted > hyp_max) hyp_max = shifted;
+                                        }
+                                    }
+                                    /* After delivery */
+                                    {
+                                        double val2 = shifted + delivery_dem;
+                                        if (val2 < hyp_min) hyp_min = val2;
+                                        if (val2 > hyp_max) hyp_max = val2;
+                                    }
+                                    /* After delivery within route */
+                                    {
+                                        double after_del = shifted + delivery_dem;
+                                        for (s = (j > 0 ? j - 1 : 0); s < stop_len; s++) {
+                                            if (ctx->requests[stops[s].request_id].compartment_type == ct) {
+                                                const SGTaskRecord *t = &ctx->tasks[stops[s].task_id];
+                                                after_del += (t->has_demand && t->demand) ? t->demand[d] : 0.0;
+                                                if (after_del < hyp_min) hyp_min = after_del;
+                                                if (after_del > hyp_max) hyp_max = after_del;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if ((hyp_max - hyp_min) > cap + SG_DEMAND_TOLERANCE) {
+                                    comp_ok = 0;
+                                    if (pen_enabled)
+                                        pd_viol[SG_PENALTY_CAPACITY] += (hyp_max - hyp_min) - cap;
+                                }
+                            }
+                            if (!comp_ok && !pen_enabled) goto next_j;
+                        }
                     }
                 }
 

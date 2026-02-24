@@ -114,6 +114,10 @@ typedef struct {
     uint32_t *candidate_b;     /* route_stride */
     /* sg_route_candidate_compat_ok */
     uint32_t *exclusion_counts; /* num_exclusion_groups, NULL if 0 */
+    /* Compartment load tracking (allocated when has_compartments) */
+    double *compartment_load;       /* [SG_MAX_COMPARTMENTS_PER_VEHICLE * dim_count] */
+    double *compartment_min_prefix; /* [SG_MAX_COMPARTMENTS_PER_VEHICLE * dim_count] */
+    double *compartment_max_prefix; /* [SG_MAX_COMPARTMENTS_PER_VEHICLE * dim_count] */
     uint32_t stop_capacity;     /* = num_requests * 2 */
     SHArena *arena;
 } SGScratchBuffers;
@@ -258,6 +262,13 @@ typedef struct {
     /* PD stacking policy and backhaul */
     uint8_t pd_policy;             /* SGPDPolicy cast to uint8_t; 0 = NONE */
     uint8_t backhaul;              /* 1 = linehaul stops before PD pickups */
+
+    /* Vehicle compartments (e.g. frozen, chilled, ambient) */
+    struct {
+        uint32_t type_id;       /* 1-indexed compartment type, 0 = unused slot */
+        double  *capacity;      /* [dim_count], NULL = unlimited. Owned. */
+    } compartments[SG_MAX_COMPARTMENTS_PER_VEHICLE];
+    uint8_t num_compartments;   /* 0..8 */
 } SGVehicleRecord;
 
 typedef struct {
@@ -295,6 +306,7 @@ typedef struct {
     uint8_t has_delivery_task;
     uint8_t has_max_ride_time;
     uint32_t commodity_id;             /* 0 = none, 1..num_commodities = type */
+    uint32_t compartment_type;         /* 0 = none (vehicle overall only), 1..num_compartment_types */
     uint32_t *exclusion_group_ids;     /* NULL = no groups. Heap array. */
     uint16_t num_exclusion_groups;     /* count of groups this request belongs to */
     uint32_t setup_class_id;           /* 0 = none, 1..num_setup_classes */
@@ -393,6 +405,10 @@ struct SGContext {
     /* PD stacking policy and backhaul fast-path flags */
     uint8_t has_pd_policy;                      /* 1 if any vehicle has pd_policy != NONE */
     uint8_t has_backhaul;                       /* 1 if any vehicle has backhaul=1 */
+
+    /* Vehicle compartments */
+    uint32_t num_compartment_types;             /* counter for type IDs issued */
+    uint8_t  has_compartments;                  /* 1 if any vehicle has num_compartments > 0 */
 
     /* Request locking for live re-optimization */
     uint8_t *request_locks;                     /* [num_requests], SGRequestLock values; NULL if none */
@@ -538,6 +554,25 @@ static inline int sg_commodity_compatible(const SGContext *ctx, const SGRouteSol
     route_bits = sol->route_commodities[vehicle_id];
     if (route_bits == 0) return 1;
     return (ctx->commodity_conflicts[cid - 1] & route_bits) == 0;
+}
+
+/* Returns the index into vehicle->compartments[] for the given type, or -1 */
+static inline int sg_vehicle_find_compartment(const SGVehicleRecord *veh, uint32_t type_id) {
+    uint8_t i;
+    for (i = 0; i < veh->num_compartments; i++) {
+        if (veh->compartments[i].type_id == type_id) return (int)i;
+    }
+    return -1;
+}
+
+/* Returns 1 if vehicle has the compartment type required by the request (or request needs none). */
+static inline int sg_compartment_compatible(const SGContext *ctx,
+                                             uint32_t vehicle_id, uint32_t request_id) {
+    uint32_t ct;
+    if (!ctx->has_compartments) return 1;
+    ct = ctx->requests[request_id].compartment_type;
+    if (ct == 0) return 1;
+    return sg_vehicle_find_compartment(&ctx->vehicles[vehicle_id], ct) >= 0;
 }
 
 /* Returns 1 if no exclusion group the request belongs to already has a member on the vehicle. */

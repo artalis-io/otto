@@ -141,6 +141,14 @@ SGStatus sg_request_set_required_qualifications(SGContext *ctx, uint32_t request
 SGStatus sg_request_add_allowed_vehicle(SGContext *ctx, uint32_t request_id, uint32_t vehicle_id);
 SGStatus sg_request_add_forbidden_vehicle(SGContext *ctx, uint32_t request_id, uint32_t vehicle_id);
 
+/* Vehicle compartments */
+SGStatus sg_add_compartment_type(SGContext *ctx, uint32_t *type_id_out);
+SGStatus sg_vehicle_add_compartment(SGContext *ctx, uint32_t vehicle_id,
+                                    uint32_t compartment_type_id,
+                                    const double *capacity, uint32_t capacity_count);
+SGStatus sg_request_set_compartment_type(SGContext *ctx, uint32_t request_id,
+                                         uint32_t compartment_type_id);
+
 /* Commodity conflicts */
 SGStatus sg_add_commodity(SGContext *ctx, uint32_t *commodity_id_out);
 SGStatus sg_commodity_set_conflict(SGContext *ctx, uint32_t commodity_a, uint32_t commodity_b);

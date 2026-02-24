@@ -51,6 +51,13 @@ void sg_vehicle_records_free(SGVehicleRecord *vehicles, uint32_t count) {
         vehicles[i].capacity = NULL;
         free(vehicles[i].initial_load);
         vehicles[i].initial_load = NULL;
+        {
+            uint8_t c;
+            for (c = 0; c < vehicles[i].num_compartments; c++) {
+                free(vehicles[i].compartments[c].capacity);
+                vehicles[i].compartments[c].capacity = NULL;
+            }
+        }
     }
     free(vehicles);
 }
@@ -1809,6 +1816,75 @@ SGStatus sg_request_add_forbidden_vehicle(SGContext *ctx, uint32_t request_id,
     }
 
     req->forbidden_vehicles[word] |= (1ULL << (vehicle_id & 63));
+    return SG_STATUS_OK;
+}
+
+/* ---- Compartments ---- */
+
+SGStatus sg_add_compartment_type(SGContext *ctx, uint32_t *type_id_out) {
+    if (!ctx || !type_id_out) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->num_compartment_types++;
+    *type_id_out = ctx->num_compartment_types;  /* 1-indexed */
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_vehicle_add_compartment(SGContext *ctx, uint32_t vehicle_id,
+                                    uint32_t compartment_type_id,
+                                    const double *capacity, uint32_t capacity_count) {
+    SGVehicleRecord *veh;
+
+    if (!ctx || vehicle_id >= ctx->num_vehicles) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (compartment_type_id == 0 || compartment_type_id > ctx->num_compartment_types) {
+        sg_set_error(ctx, "compartment_type_id %u out of range [1..%u]",
+                     compartment_type_id, ctx->num_compartment_types);
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (capacity && capacity_count != ctx->dimension_count) {
+        sg_set_error(ctx, "capacity_count %u != dimension_count %u",
+                     capacity_count, ctx->dimension_count);
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    veh = &ctx->vehicles[vehicle_id];
+    if (veh->num_compartments >= SG_MAX_COMPARTMENTS_PER_VEHICLE) {
+        sg_set_error(ctx, "vehicle %u already has %d compartments (max %d)",
+                     vehicle_id, veh->num_compartments, SG_MAX_COMPARTMENTS_PER_VEHICLE);
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    {
+        uint8_t idx = veh->num_compartments;
+        veh->compartments[idx].type_id = compartment_type_id;
+        if (capacity && capacity_count > 0) {
+            double *cap = (double *)malloc((size_t)capacity_count * sizeof(double));
+            if (!cap) return SG_STATUS_OUT_OF_MEMORY;
+            memcpy(cap, capacity, (size_t)capacity_count * sizeof(double));
+            veh->compartments[idx].capacity = cap;
+        } else {
+            veh->compartments[idx].capacity = NULL;
+        }
+        veh->num_compartments = idx + 1;
+    }
+
+    ctx->has_compartments = 1;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_request_set_compartment_type(SGContext *ctx, uint32_t request_id,
+                                         uint32_t compartment_type_id) {
+    if (!ctx || request_id >= ctx->num_requests) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (compartment_type_id > ctx->num_compartment_types) {
+        sg_set_error(ctx, "compartment_type_id %u out of range [0..%u]",
+                     compartment_type_id, ctx->num_compartment_types);
+        return SG_STATUS_INVALID_ARG;
+    }
+    ctx->requests[request_id].compartment_type = compartment_type_id;
     return SG_STATUS_OK;
 }
 
