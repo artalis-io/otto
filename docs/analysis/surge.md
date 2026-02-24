@@ -336,19 +336,24 @@ The persistent +1 vehicle gap on tight-TW instances (R1, RC1, LR1, LRC1) is the 
 
 #### What Commercial Solvers Have That Open-Source Doesn't
 
-This is where PTV, HERE, Ortec, and OptimoRoute play:
+This is where PTV, HERE, Ortec, and OptimoRoute play. Neither OR-Tools nor VROOM has these either — they are commercial-tier features.
+
+**Solver-layer** (requires changes to ALNS/feasibility/insertion):
 
 | Feature | Notes |
 |---------|-------|
-| **Multi-period/strategic planning** | Plan a week of routes at once. Different beast entirely. |
-| **Vehicle compartments** | Physically divided cargo areas (frozen/chilled/ambient). |
-| **Precedence between requests** | "Deliver A before B" (beyond PD pairing). |
-| **Driver skill calendars** | Driver X available Mon-Wed, certified for hazmat. |
-| **Live re-optimization** | New orders mid-shift, lock committed stops, re-plan remainder. |
-| **Territory/zone assignment** | Assign geographic zones to vehicles before routing. |
-| **Regulatory compliance** | Country-specific HoS rules (EU vs US vs AU), ADR routing restrictions. |
+| **Vehicle compartments** | Physically divided cargo areas (frozen/chilled/ambient). Capacity becomes per-compartment, insertion must check which compartment fits. Can't be faked in application layer. |
+| **Precedence between requests** | "Deliver A before B" (beyond PD pairing). Ordering constraints need feasibility checks and insertion pruning — same class as LIFO/FIFO. |
+| **Live re-optimization** | Locking committed stops is solver-level: locked prefix on routes, repair only operates on unlocked suffix. The "new orders arrive" trigger is application-layer, but the constrained re-solve is not. |
 
-Most of these are **application-layer** concerns, not solver-core. Surge's clean API makes them integrable without changing the solver.
+**Application-layer** (orchestration around the solver, already expressible with current API):
+
+| Feature | Notes |
+|---------|-------|
+| **Multi-period/strategic planning** | Solve each day independently, pass vehicle end-states as next-day initial loads/positions via `sg_vehicle_set_initial_load()`. Orchestration decides which requests go to which day. |
+| **Territory/zone assignment** | Pre-filter which vehicles serve which requests by geography, feed filtered problem to solver. Already expressible via `sg_request_set_allowed_vehicles()`. |
+| **Driver skill calendars** | Availability = which vehicles exist today. Map calendar to vehicle set per solve, feed to solver. Qualifications already handle skill matching. |
+| **Regulatory compliance** | Country-specific HoS rules map to break policy parameters. ADR routing restrictions map to per-vehicle travel profiles (restricted road network). |
 
 ### Priority Stack to GOAT
 
@@ -360,7 +365,7 @@ Most of these are **application-layer** concerns, not solver-core. Surge's clean
 6. **Infeasible-space exploration** — the algorithmic lever most likely to close the vehicle gap on tight instances.
 7. ~~**Global span balancing**~~ — **Done.** `sg_set_span_cost_duration()` / `sg_set_span_cost_distance()`.
 
-The constraint richness is ahead of OR-Tools/VROOM. The quality is competitive. The deployability is unmatched. Distribution is solved (REST API, WASM, Python, Node.js). Open start routes complete the field-service use case. Plan/ETA validation closes the dispatching integration gap. Global span balancing closes the enterprise fleet fairness gap. The remaining gap to GOAT is **algorithmic quality** (infeasible-space exploration) — not infrastructure or modelling.
+Modelling parity with OR-Tools is effectively achieved — the only remaining modelling gap is energy/EV cost (experimental in OR-Tools, niche for trucking). Surge exceeds OR-Tools on: breaks, multi-trip, DARP ride time, commodity conflicts, exclusion groups, sequence-dependent setup, initial loads, LIFO/FIFO stacking, backhaul. The remaining gap to GOAT is **algorithmic quality** on tight-TW instances — not infrastructure or modelling.
 
 ---
 
@@ -368,6 +373,6 @@ The constraint richness is ahead of OR-Tools/VROOM. The quality is competitive. 
 
 Surge's strengths are **deployability**, **API cleanliness**, **constraint richness**, and **auditability**. These matter enormously for commercial embedding — if you're selling routing as a feature inside a larger product, Surge is easier to ship than anything else in this space.
 
-Distribution is now solved: REST API server (with rate limiting, work queue, Prometheus metrics), WASM build, Python and Node.js bindings all exist and work. Time-dependent travel (speed profiles) and per-vehicle travel profiles close the two biggest modelling gaps vs competitors. Plan/ETA validation mode closes the dispatching integration gap vs VROOM and HERE. Parallelism, population-based search, and arena allocation are complete. The remaining quality gap is algorithmic — infeasible-space exploration and operator tuning.
+Modelling parity with OR-Tools is achieved (only gap: experimental EV/energy model). Surge exceeds OR-Tools on several constraint dimensions (breaks, multi-trip, DARP, commodity conflicts, exclusion groups, setup times, initial loads, LIFO/FIFO, backhaul). Distribution is solved (REST API, WASM, Python, Node.js). Parallelism, population-based search, and arena allocation are complete. The remaining commercial-tier features (compartments, inter-request precedence, live re-optimization) require solver-layer work; others (multi-period planning, territory assignment, driver calendars, regulatory compliance) are application-layer orchestration already expressible with the current API.
 
-The strategic bet has paid off: a lean, embeddable, WASM-ready solver with a clean API, rich constraints, and full distribution infrastructure. The gap to GOAT is now mostly **algorithmic quality** on tight-TW instances — not infrastructure or modelling.
+The strategic bet has paid off: a lean, embeddable, WASM-ready solver with a clean API, rich constraints, and full distribution infrastructure. The gap to GOAT is **algorithmic quality** on tight-TW instances — not infrastructure or modelling.
