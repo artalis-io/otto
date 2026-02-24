@@ -621,6 +621,8 @@ typedef struct {
     int periodic_cost_gate_block_small_m_phase2; /* blocked: matrix too small (Phase 2) */
     int periodic_cost_gate_block_invalid_inputs_phase1; /* blocked: invalid updates/inputs (Phase 1) */
     int periodic_cost_gate_block_invalid_inputs_phase2; /* blocked: invalid updates/inputs (Phase 2) */
+    int periodic_cost_gate_block_warmup_phase1;  /* blocked: insufficient cost signal warmup (Phase 1) */
+    int periodic_cost_gate_block_warmup_phase2;  /* blocked: insufficient cost signal warmup (Phase 2) */
     int periodic_cost_gate_block_invalid_cost_phase1;   /* blocked: invalid EWMA cost (Phase 1) */
     int periodic_cost_gate_block_invalid_cost_phase2;   /* blocked: invalid EWMA cost (Phase 2) */
     int periodic_cost_gate_block_ratio_phase1;    /* blocked: ratio below threshold (Phase 1) */
@@ -629,6 +631,10 @@ typedef struct {
     int periodic_cost_gate_block_update_reserve_phase2; /* blocked: too close to max updates (Phase 2) */
     int periodic_cost_gate_last_reason_phase1;    /* last policy decision code (Phase 1) */
     int periodic_cost_gate_last_reason_phase2;    /* last policy decision code (Phase 2) */
+    int periodic_cost_iter_samples_phase1;        /* iteration-cost EWMA sample count (Phase 1) */
+    int periodic_cost_iter_samples_phase2;        /* iteration-cost EWMA sample count (Phase 2) */
+    int periodic_cost_refactor_samples_phase1;    /* refactor-cost EWMA sample count (Phase 1) */
+    int periodic_cost_refactor_samples_phase2;    /* refactor-cost EWMA sample count (Phase 2) */
     double soft_lu_refactor_cost_ewma_phase1; /* EWMA refactor cost estimate (ms) */
     double soft_lu_refactor_cost_ewma_phase2; /* EWMA refactor cost estimate (ms) */
     double soft_lu_iter_cost_ewma_phase1;     /* EWMA per-iteration hot-path cost (ms) */
@@ -837,6 +843,8 @@ typedef struct {
     int periodic_cost_gate_block_small_m_phase2;
     int periodic_cost_gate_block_invalid_inputs_phase1;
     int periodic_cost_gate_block_invalid_inputs_phase2;
+    int periodic_cost_gate_block_warmup_phase1;
+    int periodic_cost_gate_block_warmup_phase2;
     int periodic_cost_gate_block_invalid_cost_phase1;
     int periodic_cost_gate_block_invalid_cost_phase2;
     int periodic_cost_gate_block_ratio_phase1;
@@ -845,6 +853,10 @@ typedef struct {
     int periodic_cost_gate_block_update_reserve_phase2;
     int periodic_cost_gate_last_reason_phase1;
     int periodic_cost_gate_last_reason_phase2;
+    int periodic_cost_iter_samples_phase1;
+    int periodic_cost_iter_samples_phase2;
+    int periodic_cost_refactor_samples_phase1;
+    int periodic_cost_refactor_samples_phase2;
     double soft_lu_refactor_cost_ewma_phase1;
     double soft_lu_refactor_cost_ewma_phase2;
     double soft_lu_iter_cost_ewma_phase1;

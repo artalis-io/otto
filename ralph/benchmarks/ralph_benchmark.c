@@ -281,6 +281,8 @@ typedef struct {
     int periodic_cost_gate_block_small_m_phase2;
     int periodic_cost_gate_block_invalid_inputs_phase1;
     int periodic_cost_gate_block_invalid_inputs_phase2;
+    int periodic_cost_gate_block_warmup_phase1;
+    int periodic_cost_gate_block_warmup_phase2;
     int periodic_cost_gate_block_invalid_cost_phase1;
     int periodic_cost_gate_block_invalid_cost_phase2;
     int periodic_cost_gate_block_ratio_phase1;
@@ -289,6 +291,10 @@ typedef struct {
     int periodic_cost_gate_block_update_reserve_phase2;
     int periodic_cost_gate_last_reason_phase1;
     int periodic_cost_gate_last_reason_phase2;
+    int periodic_cost_iter_samples_phase1;
+    int periodic_cost_iter_samples_phase2;
+    int periodic_cost_refactor_samples_phase1;
+    int periodic_cost_refactor_samples_phase2;
     double soft_lu_refactor_cost_ewma_phase1;
     double soft_lu_refactor_cost_ewma_phase2;
     double soft_lu_iter_cost_ewma_phase1;
@@ -786,6 +792,8 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.periodic_cost_gate_block_small_m_phase2 = solver_tel.periodic_cost_gate_block_small_m_phase2;
             result.periodic_cost_gate_block_invalid_inputs_phase1 = solver_tel.periodic_cost_gate_block_invalid_inputs_phase1;
             result.periodic_cost_gate_block_invalid_inputs_phase2 = solver_tel.periodic_cost_gate_block_invalid_inputs_phase2;
+            result.periodic_cost_gate_block_warmup_phase1 = solver_tel.periodic_cost_gate_block_warmup_phase1;
+            result.periodic_cost_gate_block_warmup_phase2 = solver_tel.periodic_cost_gate_block_warmup_phase2;
             result.periodic_cost_gate_block_invalid_cost_phase1 = solver_tel.periodic_cost_gate_block_invalid_cost_phase1;
             result.periodic_cost_gate_block_invalid_cost_phase2 = solver_tel.periodic_cost_gate_block_invalid_cost_phase2;
             result.periodic_cost_gate_block_ratio_phase1 = solver_tel.periodic_cost_gate_block_ratio_phase1;
@@ -794,6 +802,10 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.periodic_cost_gate_block_update_reserve_phase2 = solver_tel.periodic_cost_gate_block_update_reserve_phase2;
             result.periodic_cost_gate_last_reason_phase1 = solver_tel.periodic_cost_gate_last_reason_phase1;
             result.periodic_cost_gate_last_reason_phase2 = solver_tel.periodic_cost_gate_last_reason_phase2;
+            result.periodic_cost_iter_samples_phase1 = solver_tel.periodic_cost_iter_samples_phase1;
+            result.periodic_cost_iter_samples_phase2 = solver_tel.periodic_cost_iter_samples_phase2;
+            result.periodic_cost_refactor_samples_phase1 = solver_tel.periodic_cost_refactor_samples_phase1;
+            result.periodic_cost_refactor_samples_phase2 = solver_tel.periodic_cost_refactor_samples_phase2;
             result.soft_lu_refactor_cost_ewma_phase1 = solver_tel.soft_lu_refactor_cost_ewma_phase1;
             result.soft_lu_refactor_cost_ewma_phase2 = solver_tel.soft_lu_refactor_cost_ewma_phase2;
             result.soft_lu_iter_cost_ewma_phase1 = solver_tel.soft_lu_iter_cost_ewma_phase1;
@@ -1694,6 +1706,10 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->periodic_cost_gate_block_invalid_inputs_phase1);
     fprintf(out, "    \"periodic_cost_gate_block_invalid_inputs_phase2\": %d,\n",
             ralph->periodic_cost_gate_block_invalid_inputs_phase2);
+    fprintf(out, "    \"periodic_cost_gate_block_warmup_phase1\": %d,\n",
+            ralph->periodic_cost_gate_block_warmup_phase1);
+    fprintf(out, "    \"periodic_cost_gate_block_warmup_phase2\": %d,\n",
+            ralph->periodic_cost_gate_block_warmup_phase2);
     fprintf(out, "    \"periodic_cost_gate_block_invalid_cost_phase1\": %d,\n",
             ralph->periodic_cost_gate_block_invalid_cost_phase1);
     fprintf(out, "    \"periodic_cost_gate_block_invalid_cost_phase2\": %d,\n",
@@ -1714,6 +1730,14 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->periodic_cost_gate_last_reason_phase2);
     fprintf(out, "    \"periodic_cost_gate_last_reason_phase2\": \"%s\",\n",
             periodic_cost_reason_string(ralph->periodic_cost_gate_last_reason_phase2));
+    fprintf(out, "    \"periodic_cost_iter_samples_phase1\": %d,\n",
+            ralph->periodic_cost_iter_samples_phase1);
+    fprintf(out, "    \"periodic_cost_iter_samples_phase2\": %d,\n",
+            ralph->periodic_cost_iter_samples_phase2);
+    fprintf(out, "    \"periodic_cost_refactor_samples_phase1\": %d,\n",
+            ralph->periodic_cost_refactor_samples_phase1);
+    fprintf(out, "    \"periodic_cost_refactor_samples_phase2\": %d,\n",
+            ralph->periodic_cost_refactor_samples_phase2);
     fprintf(out, "    \"soft_lu_refactor_cost_ewma_phase1_ms\": %.6f,\n",
             ralph->soft_lu_refactor_cost_ewma_phase1);
     fprintf(out, "    \"soft_lu_refactor_cost_ewma_phase2_ms\": %.6f,\n",

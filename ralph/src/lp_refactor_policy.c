@@ -59,6 +59,8 @@
 #define PERIODIC_COST_DAMPEN_UPDATE_RESERVE_NUM 1
 #define PERIODIC_COST_DAMPEN_UPDATE_RESERVE_DEN 10
 #define PERIODIC_COST_DAMPEN_UPDATE_RESERVE_MIN 6
+#define PERIODIC_COST_DAMPEN_MIN_ITER_SAMPLES 8
+#define PERIODIC_COST_DAMPEN_MIN_REFACTOR_SAMPLES 1
 
 static double clamp_unit_interval(double x) {
     if (!(x > 0.0)) return 0.0;
@@ -483,7 +485,9 @@ LPPeriodicCostDampenReason lp_refactor_policy_periodic_cost_dampen_decision(
     double cond_estimate,
     double growth_factor,
     double refactor_cost_ewma_ms,
-    double iter_cost_ewma_ms) {
+    double iter_cost_ewma_ms,
+    int refactor_cost_samples,
+    int iter_cost_samples) {
     int min_m;
     int update_reserve;
     double ratio;
@@ -505,6 +509,10 @@ LPPeriodicCostDampenReason lp_refactor_policy_periodic_cost_dampen_decision(
 
     if (m < min_m) return LP_PERIODIC_COST_DAMPEN_BLOCK_SMALL_M;
     if (max_updates <= 0 || num_updates <= 0) return LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_INPUTS;
+    if (iter_cost_samples < PERIODIC_COST_DAMPEN_MIN_ITER_SAMPLES ||
+        refactor_cost_samples < PERIODIC_COST_DAMPEN_MIN_REFACTOR_SAMPLES) {
+        return LP_PERIODIC_COST_DAMPEN_BLOCK_WARMUP;
+    }
     if (!isfinite(refactor_cost_ewma_ms) || !isfinite(iter_cost_ewma_ms)) {
         return LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_COST;
     }
@@ -539,7 +547,9 @@ int lp_refactor_policy_periodic_cost_dampen_should_defer(int phase,
                                                          double cond_estimate,
                                                          double growth_factor,
                                                          double refactor_cost_ewma_ms,
-                                                         double iter_cost_ewma_ms) {
+                                                         double iter_cost_ewma_ms,
+                                                         int refactor_cost_samples,
+                                                         int iter_cost_samples) {
     LPPeriodicCostDampenReason decision =
         lp_refactor_policy_periodic_cost_dampen_decision(phase,
                                                          m,
@@ -552,7 +562,9 @@ int lp_refactor_policy_periodic_cost_dampen_should_defer(int phase,
                                                          cond_estimate,
                                                          growth_factor,
                                                          refactor_cost_ewma_ms,
-                                                         iter_cost_ewma_ms);
+                                                         iter_cost_ewma_ms,
+                                                         refactor_cost_samples,
+                                                         iter_cost_samples);
     return decision == LP_PERIODIC_COST_DAMPEN_DEFER;
 }
 
@@ -563,6 +575,7 @@ const char* lp_refactor_policy_periodic_cost_dampen_reason_string(
         case LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE: return "invalid_phase";
         case LP_PERIODIC_COST_DAMPEN_BLOCK_SMALL_M: return "small_matrix";
         case LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_INPUTS: return "invalid_inputs";
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_WARMUP: return "warmup";
         case LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_COST: return "invalid_cost";
         case LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO: return "ratio_below_threshold";
         case LP_PERIODIC_COST_DAMPEN_BLOCK_UPDATE_RESERVE: return "update_reserve";
