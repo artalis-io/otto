@@ -4,38 +4,7 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-24, `ad61915`) — Phase-2 optimality confirmation + `80bau3b` tolerance override removal baseline:
-- Added a strict Phase-2 optimality confirmation pass in `simplex.c`: before returning `OPTIMAL`
-  from pricing termination, Ralph now re-factorizes, recomputes solution/reduced costs, and
-  re-runs strict pricing to avoid early-optimal termination on large degenerate paths.
-- Removed per-instance `obj_rel_tol` override for `80bau3b.mps` from
-  `ralph/benchmarks/netlib_regression_baseline.json` (now empty `problem_overrides`).
-- This promotes default objective tolerance (`1e-6`) back to baseline behavior for `80bau3b`.
-Latest gates:
-`make -C ralph test-simplex-policy` PASS (39/39),
-`make -C ralph test` PASS (full suite),
-`make -C ralph test-netlib-gate` PASS (84 files, timeout files 26, status/objective/invalid mismatches 0,
-dense fallback files 0, no unexpected regressions; artifacts:
-`/tmp/netlib-regression-gate-20260224-170453`).
-
-Focused timeout triage (telemetry + GLPK side-by-side):
-- Ran focused gate on current timeout-equivalent set (22 files): PASS with no new regressions;
-  artifact: `/tmp/netlib-timeout-triage-20260224-172511`.
-- Aggregate wall-clock attribution over timeout set:
-  - `refactor_ms`: 51.34% of Ralph wall-time
-  - `pivot_ms`: 21.89%
-  - `ratio_ms`: 6.96%
-  - `ftran_ms`: 4.18%
-  - `btran_ms`: 2.38%
-  - overall Ralph/GLPK wall ratio on this set: 22.25x
-- Highest per-iteration hotspots:
-  - `pilot.mps` (60.86 ms/iter, pivot-dominant, very high refactor cost/event)
-  - `cycle.mps` (14.55 ms/iter, pivot-dominant, high refactor cost/event)
-  - `woodw.mps` (4.38 ms/iter, pivot-dominant)
-  - `bnl2.mps` (1.25 ms/iter, pivot-dominant)
-  - `degen3.mps` (0.276 ms/iter, pivot-dominant with heavy LU-health refactor pressure)
-
-Previous: (2026-02-23) — LP wall-clock guard + NETLIB timeout-equivalent gate baseline:
+**Current** (2026-02-23) — LP wall-clock guard + NETLIB timeout-equivalent gate baseline:
 - Added explicit LP wall-clock guard in simplex/dual solve paths (including recovery loops), so
   `time_limit` is enforced deterministically and does not rely on external process timeout.
 - Kept sparse Markowitz as default LU path (no dense fallback regressions introduced).
