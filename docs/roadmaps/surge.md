@@ -80,6 +80,14 @@ Surge supports orthogonal constraint dimensions that can be combined freely:
 | **Time-indexed travel brackets** | Multiple complete duration matrices indexed by departure time (global + per-vehicle) |
 | **Per-vehicle travel profiles** | Independent distance/duration matrices + speed profile per vehicle type |
 
+### Re-optimization Constraints
+
+| Constraint | Description |
+|------------|-------------|
+| **Request locking (NONE)** | Request freely reassignable by solver |
+| **Request locking (COMMITTED)** | Must be served (1e12 drop penalty), vehicle reassignable |
+| **Request locking (FROZEN)** | Locked to designated vehicle from initial solution |
+
 ### Objective Components
 
 | Component | Weight | Description |
@@ -1700,7 +1708,7 @@ These require changes to ALNS/feasibility/insertion. Neither OR-Tools nor VROOM 
 
 | Gap | Status | Impact | Notes |
 |-----|--------|--------|-------|
-| **Live re-optimization** | **Done** | High | Three-level request locking: NONE (free), COMMITTED (must-serve, can reassign), FROZEN (locked to vehicle). All destroy/repair/postprocess operators respect locks. 1e12 penalty for committed drops. Stress-tested on 100-customer Solomon and 53-pair Li & Lim benchmarks (3000-8000 ALNS iterations, 10 integration tests). |
+| **Live re-optimization** | **Done** | High | Three-level request locking: NONE (free), COMMITTED (must-serve, can reassign), FROZEN (locked to vehicle). All destroy/repair/postprocess operators respect locks. 1e12 penalty for committed drops. Hardened warm-start: frozen vehicle map (`frozen_vehicle_map[rid] → vid`), two-pass construction (frozen first), frozen filter in repair ranking, frozen placement validation, infeasible-space fallback to initial solution. Stress-tested on RC101 + C101 Solomon and 53-pair Li & Lim benchmarks (2000-8000 ALNS iterations, 10 integration tests). |
 | **Vehicle compartments** | Not started | Medium | Per-compartment capacity (frozen/chilled/ambient). Insertion must check which compartment fits, feasibility tracks loads per compartment. Deal-closer for grocery/food distribution, irrelevant for parcel/LTL. |
 | **Inter-request precedence** | Not started | Low | "Deliver A before B" beyond PD pairing. Feasibility + insertion pruning, same class as LIFO/FIFO. Rarely a deal-breaker — most real precedence maps to time windows or application-layer sequencing. |
 

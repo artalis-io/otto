@@ -89,8 +89,9 @@ Current constraint coverage is genuinely rich:
 - Per-vehicle travel profiles
 - LIFO/FIFO PD stacking (per-vehicle)
 - Backhaul constraint (linehaul before PD pickups)
+- Request locking (NONE/COMMITTED/FROZEN) for live re-optimization
 
-This is broader than VROOM (which lacks soft TW, DARP, breaks, multi-trip, setup times). It's comparable to OR-Tools in constraint breadth, though OR-Tools has more flexibility via its legacy CP solver backend.
+This is broader than VROOM (which lacks soft TW, DARP, breaks, multi-trip, setup times, request locking). It's comparable to OR-Tools in constraint breadth, though OR-Tools has more flexibility via its legacy CP solver backend.
 
 **Weakness**: No skills/technician scheduling constraints (availability calendars, lunch breaks at specific times). No multi-period/strategic planning. No vehicle compartments. No precedence constraints between requests (beyond PD pairing). These are things commercial solvers like Ortec or PTV handle. Some are on the roadmap.
 
@@ -127,7 +128,7 @@ Language bindings are trivial given the JSON API — each binding is just a thin
 ## Auditability — Strong advantage
 
 - 21K lines of straightforward C. No metaprogramming, no templates, no macros beyond the basics. A competent C developer can read the entire solver in a day.
-- 282 tests covering every constraint individually. Each test is self-contained and readable.
+- 304 tests covering every constraint individually. Each test is self-contained and readable.
 - Operator telemetry: you can see exactly which destroy/repair operators were used, how often, and how effective they were.
 - Deterministic: reproducible bugs.
 - ASAN/UBSan clean: no undefined behavior.
@@ -344,7 +345,7 @@ This is where PTV, HERE, Ortec, and OptimoRoute play. Neither OR-Tools nor VROOM
 |---------|-------|
 | **Vehicle compartments** | Physically divided cargo areas (frozen/chilled/ambient). Capacity becomes per-compartment, insertion must check which compartment fits. Can't be faked in application layer. |
 | **Precedence between requests** | "Deliver A before B" (beyond PD pairing). Ordering constraints need feasibility checks and insertion pruning — same class as LIFO/FIFO. |
-| **Live re-optimization** | Locking committed stops is solver-level: locked prefix on routes, repair only operates on unlocked suffix. The "new orders arrive" trigger is application-layer, but the constrained re-solve is not. |
+| ~~**Live re-optimization**~~ | **Done.** Three-level request locking (NONE/COMMITTED/FROZEN). Frozen requests stay on designated vehicle via frozen vehicle map + two-pass warm-start construction. All destroy/repair/postprocess operators respect locks. Hardened with infeasible-space fallback. Stress-tested on RC101 + Li & Lim (10 integration tests). |
 
 **Application-layer** (orchestration around the solver, already expressible with current API):
 
@@ -364,8 +365,9 @@ This is where PTV, HERE, Ortec, and OptimoRoute play. Neither OR-Tools nor VROOM
 5. ~~**Validation mode**~~ — **Done.** Dispatching integration use case closed.
 6. **Infeasible-space exploration** — the algorithmic lever most likely to close the vehicle gap on tight instances.
 7. ~~**Global span balancing**~~ — **Done.** `sg_set_span_cost_duration()` / `sg_set_span_cost_distance()`.
+8. ~~**Live re-optimization**~~ — **Done.** Three-level request locking with hardened warm-start construction.
 
-Modelling parity with OR-Tools is effectively achieved — the only remaining modelling gap is energy/EV cost (experimental in OR-Tools, niche for trucking). Surge exceeds OR-Tools on: breaks, multi-trip, DARP ride time, commodity conflicts, exclusion groups, sequence-dependent setup, initial loads, LIFO/FIFO stacking, backhaul. The remaining gap to GOAT is **algorithmic quality** on tight-TW instances — not infrastructure or modelling.
+Modelling parity with OR-Tools is effectively achieved — the only remaining modelling gap is energy/EV cost (experimental in OR-Tools, niche for trucking). Surge exceeds OR-Tools on: breaks, multi-trip, DARP ride time, commodity conflicts, exclusion groups, sequence-dependent setup, initial loads, LIFO/FIFO stacking, backhaul, request locking. The remaining gap to GOAT is **algorithmic quality** on tight-TW instances — not infrastructure or modelling.
 
 ---
 
@@ -373,6 +375,6 @@ Modelling parity with OR-Tools is effectively achieved — the only remaining mo
 
 Surge's strengths are **deployability**, **API cleanliness**, **constraint richness**, and **auditability**. These matter enormously for commercial embedding — if you're selling routing as a feature inside a larger product, Surge is easier to ship than anything else in this space.
 
-Modelling parity with OR-Tools is achieved (only gap: experimental EV/energy model). Surge exceeds OR-Tools on several constraint dimensions (breaks, multi-trip, DARP, commodity conflicts, exclusion groups, setup times, initial loads, LIFO/FIFO, backhaul). Distribution is solved (REST API, WASM, Python, Node.js). Parallelism, population-based search, and arena allocation are complete. The remaining commercial-tier features (compartments, inter-request precedence, live re-optimization) require solver-layer work; others (multi-period planning, territory assignment, driver calendars, regulatory compliance) are application-layer orchestration already expressible with the current API.
+Modelling parity with OR-Tools is achieved (only gap: experimental EV/energy model). Surge exceeds OR-Tools on several constraint dimensions (breaks, multi-trip, DARP, commodity conflicts, exclusion groups, setup times, initial loads, LIFO/FIFO, backhaul, request locking). Distribution is solved (REST API, WASM, Python, Node.js). Parallelism, population-based search, and arena allocation are complete. Live re-optimization (three-level request locking) is done. The remaining commercial-tier features (compartments, inter-request precedence) require solver-layer work; others (multi-period planning, territory assignment, driver calendars, regulatory compliance) are application-layer orchestration already expressible with the current API.
 
 The strategic bet has paid off: a lean, embeddable, WASM-ready solver with a clean API, rich constraints, and full distribution infrastructure. The gap to GOAT is **algorithmic quality** on tight-TW instances — not infrastructure or modelling.
