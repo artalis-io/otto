@@ -137,3 +137,18 @@ void lp_telemetry_lu_mark_mkz_failure_reason(LUFactorization *lu,
         lu->telemetry.mkz_fail_capacity++;
     }
 }
+
+void lp_telemetry_lu_mark_mkz_singular_retry_attempt(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.mkz_singular_retry_attempts++;
+}
+
+void lp_telemetry_lu_mark_mkz_singular_retry_success(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.mkz_singular_retry_successes++;
+}
+
+void lp_telemetry_lu_mark_mkz_singular_retry_failure(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.mkz_singular_retry_failures++;
+}

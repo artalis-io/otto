@@ -103,6 +103,14 @@ static void test_markowitz_failure_reason_counters(void) {
     ASSERT(lu->telemetry.mkz_calls > 0, "failure counters: Markowitz attempted");
     ASSERT(lu->telemetry.mkz_dense_fallbacks > 0, "failure counters: Markowitz fallback recorded");
     ASSERT(lu->telemetry.mkz_fail_singular > 0, "failure counters: singular reason counted");
+    ASSERT(lu->telemetry.mkz_singular_retry_attempts > 0,
+           "failure counters: singular micro-retry attempted");
+    ASSERT(lu->telemetry.mkz_singular_retry_failures > 0,
+           "failure counters: singular micro-retry failure counted");
+    ASSERT_INT_EQ(lu->telemetry.mkz_singular_retry_attempts,
+                  lu->telemetry.mkz_singular_retry_successes +
+                  lu->telemetry.mkz_singular_retry_failures,
+                  "failure counters: singular micro-retry attempts classified");
     ASSERT_INT_EQ(lu->telemetry.mkz_fail_workspace, 0, "failure counters: no workspace failure");
     ASSERT_INT_EQ(lu->telemetry.mkz_fail_capacity, 0, "failure counters: no capacity failure");
 

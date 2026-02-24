@@ -602,6 +602,9 @@ typedef struct {
     int mkz_fail_pool;
     int mkz_fail_singular;
     int mkz_fail_capacity;
+    int mkz_singular_retry_attempts;
+    int mkz_singular_retry_successes;
+    int mkz_singular_retry_failures;
 
     int sparse_dense_fallbacks;
     int used_dense_fallback_last;
@@ -610,6 +613,13 @@ typedef struct {
     int sparse_fallback_reason_symbolic;
     int sparse_fallback_reason_numeric;
     int identity_sep_failures;
+    int symbolic_failures;
+    int symbolic_fail_workspace;
+    int symbolic_fail_unmatched_no_reserved;
+    int symbolic_fail_inconsistent_identity;
+    int symbolic_full_retry_attempts;
+    int symbolic_full_retry_successes;
+    int symbolic_full_retry_numeric_failures;
 
     int sn_calls;
     int sn_successes;
