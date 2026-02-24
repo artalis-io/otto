@@ -43,6 +43,24 @@ int simplex_lu_health_refactor_plan_for_test(int m,
                                              int *soft_threshold_out,
                                              int *soft_min_update_age_out);
 
+/* Internal soft LU defer cap/gate test hook from simplex.c */
+int simplex_soft_lu_defer_plan_for_test(int phase,
+                                        int m,
+                                        int use_bland,
+                                        int degenerate_count,
+                                        int num_updates,
+                                        int max_updates,
+                                        int spike_pool_used,
+                                        int spike_pool_capacity,
+                                        double cond_estimate,
+                                        double growth_factor,
+                                        double refactor_cost_ewma_ms,
+                                        double iter_cost_ewma_ms,
+                                        int consecutive_defers,
+                                        int *cap_out,
+                                        int *cap_blocked_out,
+                                        int *next_consecutive_defers_out);
+
 enum {
     EXPECT_UPDATE = 0,
     EXPECT_REFACTOR = 1,
@@ -155,6 +173,27 @@ typedef struct {
     int expected_next_streak;
 } LUHealthCase;
 
+typedef struct {
+    const char *name;
+    int phase;
+    int m;
+    int use_bland;
+    int degenerate_count;
+    int num_updates;
+    int max_updates;
+    int spike_pool_used;
+    int spike_pool_capacity;
+    double cond_estimate;
+    double growth_factor;
+    double refactor_cost_ewma_ms;
+    double iter_cost_ewma_ms;
+    int consecutive_defers;
+    int expected_defer;
+    int expected_cap;
+    int expected_cap_blocked;
+    int expected_next_consecutive;
+} SoftLUDeferCase;
+
 static int run_lu_health_case(const LUHealthCase *tc) {
     int hard = -1;
     int soft = -1;
@@ -203,6 +242,51 @@ static int run_lu_health_case(const LUHealthCase *tc) {
     if (soft_min_update_age < 1) {
         fprintf(stderr, "FAIL: %s (soft min update age must be >=1, got=%d)\n",
                 tc->name, soft_min_update_age);
+        return 0;
+    }
+
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_soft_lu_defer_case(const SoftLUDeferCase *tc) {
+    int cap = -1;
+    int cap_blocked = -1;
+    int next_consecutive = -1;
+    int defer = simplex_soft_lu_defer_plan_for_test(tc->phase,
+                                                     tc->m,
+                                                     tc->use_bland,
+                                                     tc->degenerate_count,
+                                                     tc->num_updates,
+                                                     tc->max_updates,
+                                                     tc->spike_pool_used,
+                                                     tc->spike_pool_capacity,
+                                                     tc->cond_estimate,
+                                                     tc->growth_factor,
+                                                     tc->refactor_cost_ewma_ms,
+                                                     tc->iter_cost_ewma_ms,
+                                                     tc->consecutive_defers,
+                                                     &cap,
+                                                     &cap_blocked,
+                                                     &next_consecutive);
+    if (defer != tc->expected_defer) {
+        fprintf(stderr, "FAIL: %s (expected defer=%d got=%d)\n",
+                tc->name, tc->expected_defer, defer);
+        return 0;
+    }
+    if (cap != tc->expected_cap) {
+        fprintf(stderr, "FAIL: %s (expected cap=%d got=%d)\n",
+                tc->name, tc->expected_cap, cap);
+        return 0;
+    }
+    if (cap_blocked != tc->expected_cap_blocked) {
+        fprintf(stderr, "FAIL: %s (expected cap_blocked=%d got=%d)\n",
+                tc->name, tc->expected_cap_blocked, cap_blocked);
+        return 0;
+    }
+    if (next_consecutive != tc->expected_next_consecutive) {
+        fprintf(stderr, "FAIL: %s (expected next_consecutive=%d got=%d)\n",
+                tc->name, tc->expected_next_consecutive, next_consecutive);
         return 0;
     }
 
@@ -651,12 +735,75 @@ int main(void) {
             .expected_next_streak = 2
         }
     };
+    const SoftLUDeferCase soft_lu_defer_cases[] = {
+        {
+            .name = "soft LU defer gate allows defer below cap",
+            .phase = 2,
+            .m = 1503,
+            .use_bland = 0,
+            .degenerate_count = 80,
+            .num_updates = 60,
+            .max_updates = 120,
+            .spike_pool_used = 10,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e5,
+            .growth_factor = 100.0,
+            .refactor_cost_ewma_ms = 12.0,
+            .iter_cost_ewma_ms = 1.0,
+            .consecutive_defers = 0,
+            .expected_defer = 1,
+            .expected_cap = 4,
+            .expected_cap_blocked = 0,
+            .expected_next_consecutive = 1
+        },
+        {
+            .name = "soft LU defer cap blocks excessive consecutive defers",
+            .phase = 2,
+            .m = 1503,
+            .use_bland = 0,
+            .degenerate_count = 80,
+            .num_updates = 60,
+            .max_updates = 120,
+            .spike_pool_used = 10,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e5,
+            .growth_factor = 100.0,
+            .refactor_cost_ewma_ms = 12.0,
+            .iter_cost_ewma_ms = 1.0,
+            .consecutive_defers = 4,
+            .expected_defer = 0,
+            .expected_cap = 4,
+            .expected_cap_blocked = 1,
+            .expected_next_consecutive = 0
+        },
+        {
+            .name = "soft LU defer gate disabled by poor LU health envelope",
+            .phase = 2,
+            .m = 1503,
+            .use_bland = 0,
+            .degenerate_count = 80,
+            .num_updates = 60,
+            .max_updates = 120,
+            .spike_pool_used = 10,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e8,
+            .growth_factor = 100.0,
+            .refactor_cost_ewma_ms = 12.0,
+            .iter_cost_ewma_ms = 1.0,
+            .consecutive_defers = 2,
+            .expected_defer = 0,
+            .expected_cap = 4,
+            .expected_cap_blocked = 0,
+            .expected_next_consecutive = 0
+        }
+    };
 
     int pass = 0;
     int total_policy = (int)(sizeof(cases) / sizeof(cases[0]));
     int total_sched = (int)(sizeof(scheduler_cases) / sizeof(scheduler_cases[0]));
     int total_lu_health = (int)(sizeof(lu_health_cases) / sizeof(lu_health_cases[0]));
-    int total = total_policy + total_sched + total_lu_health;
+    int total_soft_lu_defer = (int)(sizeof(soft_lu_defer_cases) / sizeof(soft_lu_defer_cases[0]));
+    int total = total_policy + total_sched + total_lu_health + total_soft_lu_defer;
 
     for (int i = 0; i < total_policy; i++) {
         pass += run_case(&cases[i]);
@@ -666,6 +813,9 @@ int main(void) {
     }
     for (int i = 0; i < total_lu_health; i++) {
         pass += run_lu_health_case(&lu_health_cases[i]);
+    }
+    for (int i = 0; i < total_soft_lu_defer; i++) {
+        pass += run_soft_lu_defer_case(&soft_lu_defer_cases[i]);
     }
 
     printf("\nPolicy cases passed: %d/%d\n", pass, total);

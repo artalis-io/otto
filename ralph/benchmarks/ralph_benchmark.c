@@ -260,6 +260,17 @@ typedef struct {
     int phase2_refactor_periodic_policy;
     int phase2_refactor_periodic_lu_health;
     int phase2_refactor_safety_forced;
+    int soft_lu_cost_gate_enabled;
+    int soft_lu_cost_gate_defers_phase1;
+    int soft_lu_cost_gate_defers_phase2;
+    int soft_lu_consecutive_defers_phase1;
+    int soft_lu_consecutive_defers_phase2;
+    int soft_lu_defer_cap_forced_phase1;
+    int soft_lu_defer_cap_forced_phase2;
+    double soft_lu_refactor_cost_ewma_phase1;
+    double soft_lu_refactor_cost_ewma_phase2;
+    double soft_lu_iter_cost_ewma_phase1;
+    double soft_lu_iter_cost_ewma_phase2;
 
     int lu_mkz_enabled;
     int lu_sn_enabled;
@@ -728,6 +739,17 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.phase2_refactor_periodic_policy = solver_tel.perf_phase2_refactor_periodic_policy;
             result.phase2_refactor_periodic_lu_health = solver_tel.perf_phase2_refactor_periodic_lu_health;
             result.phase2_refactor_safety_forced = solver_tel.perf_phase2_refactor_safety_forced;
+            result.soft_lu_cost_gate_enabled = solver_tel.soft_lu_cost_gate_enabled;
+            result.soft_lu_cost_gate_defers_phase1 = solver_tel.soft_lu_cost_gate_defers_phase1;
+            result.soft_lu_cost_gate_defers_phase2 = solver_tel.soft_lu_cost_gate_defers_phase2;
+            result.soft_lu_consecutive_defers_phase1 = solver_tel.soft_lu_consecutive_defers_phase1;
+            result.soft_lu_consecutive_defers_phase2 = solver_tel.soft_lu_consecutive_defers_phase2;
+            result.soft_lu_defer_cap_forced_phase1 = solver_tel.soft_lu_defer_cap_forced_phase1;
+            result.soft_lu_defer_cap_forced_phase2 = solver_tel.soft_lu_defer_cap_forced_phase2;
+            result.soft_lu_refactor_cost_ewma_phase1 = solver_tel.soft_lu_refactor_cost_ewma_phase1;
+            result.soft_lu_refactor_cost_ewma_phase2 = solver_tel.soft_lu_refactor_cost_ewma_phase2;
+            result.soft_lu_iter_cost_ewma_phase1 = solver_tel.soft_lu_iter_cost_ewma_phase1;
+            result.soft_lu_iter_cost_ewma_phase2 = solver_tel.soft_lu_iter_cost_ewma_phase2;
             if (solver->tableau && solver->tableau->lu) {
                 LUTelemetrySnapshot lu_tel;
                 lp_telemetry_snapshot_lu(solver->tableau->lu, &lu_tel);
@@ -1584,6 +1606,28 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"periodic_policy_count\": %d,\n", ralph->refactor_periodic_policy);
     fprintf(out, "    \"periodic_lu_health_count\": %d,\n", ralph->refactor_periodic_lu_health);
     fprintf(out, "    \"safety_forced_count\": %d,\n", ralph->refactor_safety_forced);
+    fprintf(out, "    \"soft_lu_cost_gate_enabled\": %s,\n",
+            ralph->soft_lu_cost_gate_enabled ? "true" : "false");
+    fprintf(out, "    \"soft_lu_cost_gate_defers_phase1\": %d,\n",
+            ralph->soft_lu_cost_gate_defers_phase1);
+    fprintf(out, "    \"soft_lu_cost_gate_defers_phase2\": %d,\n",
+            ralph->soft_lu_cost_gate_defers_phase2);
+    fprintf(out, "    \"soft_lu_consecutive_defers_phase1\": %d,\n",
+            ralph->soft_lu_consecutive_defers_phase1);
+    fprintf(out, "    \"soft_lu_consecutive_defers_phase2\": %d,\n",
+            ralph->soft_lu_consecutive_defers_phase2);
+    fprintf(out, "    \"soft_lu_defer_cap_forced_phase1\": %d,\n",
+            ralph->soft_lu_defer_cap_forced_phase1);
+    fprintf(out, "    \"soft_lu_defer_cap_forced_phase2\": %d,\n",
+            ralph->soft_lu_defer_cap_forced_phase2);
+    fprintf(out, "    \"soft_lu_refactor_cost_ewma_phase1_ms\": %.6f,\n",
+            ralph->soft_lu_refactor_cost_ewma_phase1);
+    fprintf(out, "    \"soft_lu_refactor_cost_ewma_phase2_ms\": %.6f,\n",
+            ralph->soft_lu_refactor_cost_ewma_phase2);
+    fprintf(out, "    \"soft_lu_iter_cost_ewma_phase1_ms\": %.6f,\n",
+            ralph->soft_lu_iter_cost_ewma_phase1);
+    fprintf(out, "    \"soft_lu_iter_cost_ewma_phase2_ms\": %.6f,\n",
+            ralph->soft_lu_iter_cost_ewma_phase2);
     fprintf(out, "    \"basis_fastpath_hits\": %d,\n", ralph->basis_fastpath_hits);
     fprintf(out, "    \"basis_cols_rewritten\": %d,\n", ralph->basis_cols_rewritten);
     fprintf(out, "    \"basis_tail_shift_bytes\": %llu\n", ralph->basis_tail_shift_bytes);

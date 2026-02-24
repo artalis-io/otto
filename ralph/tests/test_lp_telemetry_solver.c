@@ -67,6 +67,8 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.policy.periodic_feedback_bias_phase2 = 0.2;
     solver.policy.soft_lu_cost_gate_enabled = 0;
     solver.policy.soft_lu_cost_gate_defers_phase2 = 5;
+    solver.policy.soft_lu_consecutive_defers_phase2 = 3;
+    solver.policy.soft_lu_defer_cap_forced_phase2 = 4;
     solver.policy.soft_lu_refactor_cost_ewma_phase2 = 9.5;
 
     lp_telemetry_reset_solver(&solver);
@@ -82,6 +84,10 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: soft lu cost gate enabled");
     ASSERT_INT_EQ(solver.policy.soft_lu_cost_gate_defers_phase2, 0,
                   "reset: soft lu defers phase2");
+    ASSERT_INT_EQ(solver.policy.soft_lu_consecutive_defers_phase2, 0,
+                  "reset: soft lu consecutive defers phase2");
+    ASSERT_INT_EQ(solver.policy.soft_lu_defer_cap_forced_phase2, 0,
+                  "reset: soft lu cap forced phase2");
     ASSERT_DBL_EQ(solver.policy.soft_lu_refactor_cost_ewma_phase2, 0.0,
                   "reset: soft lu refactor ewma phase2");
 
@@ -152,6 +158,8 @@ static void test_solver_snapshot(void) {
     solver.policy.periodic_feedback_hint_pressure_phase2 = 0.55;
     solver.policy.soft_lu_cost_gate_enabled = 1;
     solver.policy.soft_lu_cost_gate_defers_phase1 = 3;
+    solver.policy.soft_lu_consecutive_defers_phase1 = 2;
+    solver.policy.soft_lu_defer_cap_forced_phase1 = 1;
     solver.policy.soft_lu_refactor_cost_ewma_phase2 = 7.25;
 
     lp_telemetry_snapshot_solver(&solver, &snap);
@@ -169,6 +177,10 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: soft lu gate enabled");
     ASSERT_INT_EQ(snap.soft_lu_cost_gate_defers_phase1, 3,
                   "solver_snapshot: soft lu defers phase1");
+    ASSERT_INT_EQ(snap.soft_lu_consecutive_defers_phase1, 2,
+                  "solver_snapshot: soft lu consecutive defers phase1");
+    ASSERT_INT_EQ(snap.soft_lu_defer_cap_forced_phase1, 1,
+                  "solver_snapshot: soft lu cap forced phase1");
     ASSERT_DBL_EQ(snap.soft_lu_refactor_cost_ewma_phase2, 7.25,
                   "solver_snapshot: soft lu refactor ewma phase2");
 }
