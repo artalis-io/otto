@@ -14,6 +14,12 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 - Added retry telemetry counters:
   `symbolic_full_retry_attempts`, `symbolic_full_retry_successes`,
   `symbolic_full_retry_numeric_failures`.
+- Added Markowitz singular micro-retry telemetry counters:
+  `mkz_singular_retry_attempts`, `mkz_singular_retry_successes`,
+  `mkz_singular_retry_failures`.
+- Follow-up queue (intentionally pending):
+  - Step 2: reserved-row fallback policy in Markowitz singular handling
+  - Step 3: structure-local Markowitz circuit breaker to skip repeated singular retries
 - Extended benchmark LU JSON output with symbolic failure/retry counters for per-instance diagnosis.
 - Added unit coverage in `test_lp_telemetry_lu_sparse` to assert symbolic failure classification,
   sparse full-retry success path, and zero dense fallback on successful retry.

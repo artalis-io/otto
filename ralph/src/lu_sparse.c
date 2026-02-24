@@ -1883,6 +1883,7 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
 #define MARKOWITZ_MIN_K       40    /* Below this, dense GE is faster */
 #define MARKOWITZ_THRESHOLD   0.1   /* Threshold pivoting ratio */
 #define MARKOWITZ_MAX_SEARCH  3     /* Candidates per degree bucket */
+#define MARKOWITZ_SINGULAR_RETRY_THRESHOLD 0.02 /* Relaxed threshold for one singular micro-retry */
 #define MARKOWITZ_FILL_GAP    8     /* Extra slots per column/row for fill-in */
 #define MARKOWITZ_POOL_MULT   4     /* Pool = MULT × initial nnz */
 #define MARKOWITZ_POOL_RETRY_MULT 8 /* Legacy retry multiplier (first growth target) */
@@ -1974,6 +1975,7 @@ static void mkz_record_failure_reason(LUFactorization *lu, int rc) {
  * Caller falls back to dense GE on failure.
  */
 static int lu_factorize_markowitz(
+    LUFactorization *lu,
     const SparseMatrix *B, const int *col_order, int m, int k, int init_nnz,
     int *row_perm, int *row_pos, double pivot_tol,
     const int *row_reserved,
@@ -2168,6 +2170,7 @@ static int lu_factorize_markowitz(
     (void)0;  /* active rows/cols tracked implicitly by degree lists */
 
     for (int step = 0; step < k; step++) {
+        int singular_retry_used = 0;
         int reserve_non_reserved = (row_reserved != NULL);
         int piv_col = -1, piv_row = -1;
         long long best_cost = (long long)m * m + 1;
@@ -2184,8 +2187,12 @@ static int lu_factorize_markowitz(
                 if ((long long)(d - 1) >= best_cost && best_cost < (long long)m * m + 1)
                     break;
                 int cand = 0;
-                for (int jj = dg_head[d]; jj >= 0 && cand < MARKOWITZ_MAX_SEARCH; jj = dg_next[jj]) {
-                    double thr = MARKOWITZ_THRESHOLD * col_max[jj];
+                int max_search = singular_retry_used ? k : MARKOWITZ_MAX_SEARCH;
+                double threshold_ratio = singular_retry_used
+                    ? MARKOWITZ_SINGULAR_RETRY_THRESHOLD
+                    : MARKOWITZ_THRESHOLD;
+                for (int jj = dg_head[d]; jj >= 0 && cand < max_search; jj = dg_next[jj]) {
+                    double thr = threshold_ratio * col_max[jj];
                     int s = cv_ptr[jj], n2 = cv_len[jj];
                     for (int e = 0; e < n2; e++) {
                         int row = cv_idx[s + e];
@@ -2233,8 +2240,16 @@ static int lu_factorize_markowitz(
                 }
             }
 
-            /* Singular pivot handling */
             if (piv_col < 0 || best_piv_val < pivot_tol) {
+                if (!singular_retry_used) {
+                    singular_retry_used = 1;
+                    lp_telemetry_lu_mark_mkz_singular_retry_attempt(lu);
+                    continue;
+                }
+
+                lp_telemetry_lu_mark_mkz_singular_retry_failure(lu);
+
+                /* Singular pivot handling */
                 int can_reg = 0;
                 if (redundant_rows && num_redundant > 0) {
                     for (int jj = 0; jj < k && !can_reg; jj++) {
@@ -2270,6 +2285,8 @@ static int lu_factorize_markowitz(
                 }
                 (*num_regularized)++;
                 best_piv_val = 1.0;
+            } else if (singular_retry_used) {
+                lp_telemetry_lu_mark_mkz_singular_retry_success(lu);
             }
 
         pivot_found:;
@@ -2634,7 +2651,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             lp_telemetry_lu_mark_mkz_attempt(lu);
             t_stage_start_ms = lp_telemetry_timer_start();
             rc = lu_factorize_markowitz(
-                B, col_order, m, k, mkz_init_nnz, row_perm, row_pos, lu->pivot_tol,
+                lu, B, col_order, m, k, mkz_init_nnz, row_perm, row_pos, lu->pivot_tol,
                 row_is_identity,
                 lu->redundant_rows, lu->num_redundant,
                 lu->allow_regularization, lu->max_regularizations, &mkz_reg,

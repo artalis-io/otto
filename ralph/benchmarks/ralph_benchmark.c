@@ -312,6 +312,9 @@ typedef struct {
     int lu_mkz_fail_pool;
     int lu_mkz_fail_singular;
     int lu_mkz_fail_capacity;
+    int lu_mkz_singular_retry_attempts;
+    int lu_mkz_singular_retry_successes;
+    int lu_mkz_singular_retry_failures;
     int lu_sparse_dense_fallbacks;
     int lu_used_dense_fallback_last;
     int lu_sparse_fallback_last_reason;
@@ -836,6 +839,9 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_mkz_fail_pool = lu_tel.mkz_fail_pool;
                 result.lu_mkz_fail_singular = lu_tel.mkz_fail_singular;
                 result.lu_mkz_fail_capacity = lu_tel.mkz_fail_capacity;
+                result.lu_mkz_singular_retry_attempts = lu_tel.mkz_singular_retry_attempts;
+                result.lu_mkz_singular_retry_successes = lu_tel.mkz_singular_retry_successes;
+                result.lu_mkz_singular_retry_failures = lu_tel.mkz_singular_retry_failures;
                 result.lu_sparse_dense_fallbacks = lu_tel.sparse_dense_fallbacks;
                 result.lu_used_dense_fallback_last = lu_tel.used_dense_fallback_last;
                 result.lu_sparse_fallback_last_reason = lu_tel.sparse_fallback_last_reason;
@@ -1802,6 +1808,12 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"mkz_fail_pool\": %d,\n", ralph->lu_mkz_fail_pool);
     fprintf(out, "    \"mkz_fail_singular\": %d,\n", ralph->lu_mkz_fail_singular);
     fprintf(out, "    \"mkz_fail_capacity\": %d,\n", ralph->lu_mkz_fail_capacity);
+    fprintf(out, "    \"mkz_singular_retry_attempts\": %d,\n",
+            ralph->lu_mkz_singular_retry_attempts);
+    fprintf(out, "    \"mkz_singular_retry_successes\": %d,\n",
+            ralph->lu_mkz_singular_retry_successes);
+    fprintf(out, "    \"mkz_singular_retry_failures\": %d,\n",
+            ralph->lu_mkz_singular_retry_failures);
     fprintf(out, "    \"sparse_dense_fallbacks\": %d,\n", ralph->lu_sparse_dense_fallbacks);
     fprintf(out, "    \"used_dense_fallback_last\": %s,\n",
             ralph->lu_used_dense_fallback_last ? "true" : "false");

@@ -22,6 +22,9 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.mkz_fail_pool = 0;
     lu->telemetry.mkz_fail_singular = 0;
     lu->telemetry.mkz_fail_capacity = 0;
+    lu->telemetry.mkz_singular_retry_attempts = 0;
+    lu->telemetry.mkz_singular_retry_successes = 0;
+    lu->telemetry.mkz_singular_retry_failures = 0;
     lu->telemetry.sparse_dense_fallbacks = 0;
     lu->telemetry.used_dense_fallback_last = 0;
     lu->telemetry.sparse_fallback_last_reason = LU_SPARSE_FALLBACK_NONE;
@@ -102,6 +105,9 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(mkz_fail_pool);
     COPY_LU_TELEM_FIELD(mkz_fail_singular);
     COPY_LU_TELEM_FIELD(mkz_fail_capacity);
+    COPY_LU_TELEM_FIELD(mkz_singular_retry_attempts);
+    COPY_LU_TELEM_FIELD(mkz_singular_retry_successes);
+    COPY_LU_TELEM_FIELD(mkz_singular_retry_failures);
 
     COPY_LU_TELEM_FIELD(sparse_dense_fallbacks);
     COPY_LU_TELEM_FIELD(used_dense_fallback_last);

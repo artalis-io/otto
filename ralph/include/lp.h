@@ -181,6 +181,9 @@ typedef struct {
     int mkz_fail_pool;       /* Markowitz attempt failed with MKZ_FAIL_POOL */
     int mkz_fail_singular;   /* Markowitz attempt failed with MKZ_FAIL_SINGULAR */
     int mkz_fail_capacity;   /* Markowitz attempt failed with MKZ_FAIL_CAPACITY */
+    int mkz_singular_retry_attempts;  /* Singular micro-retry attempts */
+    int mkz_singular_retry_successes; /* Retry recovered a pivot >= pivot_tol */
+    int mkz_singular_retry_failures;  /* Retry still ended singular path */
 
     /* Sparse-efficient fallback telemetry */
     int sparse_dense_fallbacks;  /* lu_factorize_sparse_efficient -> lu_factorize_dense */
@@ -891,6 +894,9 @@ typedef struct {
     int mkz_fail_pool;
     int mkz_fail_singular;
     int mkz_fail_capacity;
+    int mkz_singular_retry_attempts;
+    int mkz_singular_retry_successes;
+    int mkz_singular_retry_failures;
 
     int sparse_dense_fallbacks;
     int used_dense_fallback_last;
@@ -1195,5 +1201,8 @@ void lp_telemetry_lu_mark_mkz_failure_reason(LUFactorization *lu,
                                              int rc);
 void lp_telemetry_lu_mark_mkz_failure(LUFactorization *lu,
                                       int rc);
+void lp_telemetry_lu_mark_mkz_singular_retry_attempt(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_singular_retry_success(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_singular_retry_failure(LUFactorization *lu);
 
 #endif /* RALPH_LP_H */
