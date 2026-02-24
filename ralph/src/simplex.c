@@ -403,6 +403,38 @@ int simplex_periodic_refactor_plan_for_test(int phase,
     return should_run;
 }
 
+int simplex_lu_health_refactor_plan_for_test(int m,
+                                             int use_ft_updates,
+                                             int num_updates,
+                                             int max_updates,
+                                             int spike_pool_used,
+                                             int spike_pool_capacity,
+                                             double cond_estimate,
+                                             double growth_factor,
+                                             int soft_breach_streak,
+                                             int *hard_trigger_out,
+                                             int *soft_trigger_out,
+                                             int *next_streak_out,
+                                             int *soft_threshold_out,
+                                             int *soft_min_update_age_out) {
+    LPLUHealthRefactorDecision decision =
+        lp_refactor_policy_lu_health_refactor_decision(m,
+                                                       use_ft_updates,
+                                                       num_updates,
+                                                       max_updates,
+                                                       spike_pool_used,
+                                                       spike_pool_capacity,
+                                                       cond_estimate,
+                                                       growth_factor,
+                                                       soft_breach_streak);
+    if (hard_trigger_out) *hard_trigger_out = decision.hard_trigger;
+    if (soft_trigger_out) *soft_trigger_out = decision.soft_trigger;
+    if (next_streak_out) *next_streak_out = decision.soft_breach_streak_next;
+    if (soft_threshold_out) *soft_threshold_out = decision.soft_breach_threshold;
+    if (soft_min_update_age_out) *soft_min_update_age_out = decision.soft_min_update_age;
+    return decision.refactor_now;
+}
+
 /* FNV-1a style mixer for deterministic trace signatures. */
 static unsigned long long phase1_trace_mix(unsigned long long sig, unsigned long long word) {
     sig ^= word;
@@ -4494,6 +4526,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     int dir_stabilize_cooldown = 0;
     int periodic_policy_cooldown = 0;
     double periodic_policy_pressure_decay = 0.0;
+    int lu_soft_health_streak = 0;
 
     /* Apply proactive perturbation in Phase 1 for highly-degenerate two-phase
      * problems. Phase 1 is inherently degenerate (many bases give art_sum=0).
@@ -5070,7 +5103,17 @@ static int simplex_phase1(SimplexSolver *solver) {
         }
 
         /* Periodic refactorization */
-        int lu_refactor_needed = lu_needs_refactorization(tab->lu);
+        LPLUHealthRefactorDecision lu_health_decision =
+            lp_refactor_policy_lu_health_refactor_decision(tab->m,
+                                                           tab->lu->use_ft_updates,
+                                                           tab->lu->num_updates,
+                                                           tab->lu->max_updates,
+                                                           tab->lu->spike_pool_used,
+                                                           tab->lu->spike_pool_capacity,
+                                                           tab->lu->cond_estimate,
+                                                           tab->lu->growth_factor,
+                                                           lu_soft_health_streak);
+        int lu_refactor_needed = lu_health_decision.refactor_now;
         int cooldown_eligible = 0;
         double effective_policy_pressure = 0.0;
         LPPeriodicRefactorPolicy periodic_policy =
@@ -5078,10 +5121,12 @@ static int simplex_phase1(SimplexSolver *solver) {
         LPPeriodicRefactorPolicy effective_policy = periodic_policy;
         int periodic_refactor = 0;
         int needs_refactor = lu_refactor_needed;
-        if (lu_refactor_needed) {
+        lu_soft_health_streak = lu_health_decision.soft_breach_streak_next;
+        if (lu_health_decision.hard_trigger) {
             periodic_policy_cooldown = 0;
             periodic_policy_pressure_decay = 0.0;
-        } else {
+        }
+        if (!lu_refactor_needed) {
             cooldown_eligible = lp_refactor_policy_phase1_cooldown_eligible(tab->m,
                                                                             degenerate_count,
                                                                             solver->policy.periodic_policy_refactors_phase1,
@@ -5113,6 +5158,9 @@ static int simplex_phase1(SimplexSolver *solver) {
         if (needs_refactor) {
             runtime_record_periodic_refactor_trigger(solver, 1, lu_refactor_needed);
             int rc_refactor = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PERIODIC);
+            if (lu_refactor_needed && rc_refactor == 0) {
+                lu_soft_health_streak = 0;
+            }
             if (!lu_refactor_needed && periodic_refactor) {
                 if (rc_refactor == 0 && cooldown_eligible) {
                     int cooldown = lp_refactor_policy_phase1_cooldown_window_updates(periodic_policy.interval);
@@ -5565,6 +5613,7 @@ static int simplex_phase2(SimplexSolver *solver) {
     int bland_start_iters = tab->use_two_phase ? 20 : 0;
     int periodic_policy_cooldown = 0;
     double periodic_policy_pressure_decay = 0.0;
+    int lu_soft_health_streak = 0;
 
     /* Compute initial reduced costs.
      * After two-phase transition, ALWAYS compute full RCs because Bland's rule
@@ -5852,16 +5901,28 @@ static int simplex_phase2(SimplexSolver *solver) {
 
         /* Refactorize if needed.
          * For two-phase problems, periodic refresh is adaptive (interval + LU health). */
-        int lu_refactor_needed = lu_needs_refactorization(tab->lu);
+        LPLUHealthRefactorDecision lu_health_decision =
+            lp_refactor_policy_lu_health_refactor_decision(tab->m,
+                                                           tab->lu->use_ft_updates,
+                                                           tab->lu->num_updates,
+                                                           tab->lu->max_updates,
+                                                           tab->lu->spike_pool_used,
+                                                           tab->lu->spike_pool_capacity,
+                                                           tab->lu->cond_estimate,
+                                                           tab->lu->growth_factor,
+                                                           lu_soft_health_streak);
+        int lu_refactor_needed = lu_health_decision.refactor_now;
         int needs_refactor = lu_refactor_needed;
         int periodic_refactor = 0;
         int cooldown_eligible = 0;
         double effective_policy_pressure = 0.0;
         LPPeriodicRefactorPolicy periodic_policy = {0, 0, 0.0, 0.0};
-        if (lu_refactor_needed) {
+        lu_soft_health_streak = lu_health_decision.soft_breach_streak_next;
+        if (lu_health_decision.hard_trigger) {
             periodic_policy_cooldown = 0;
             periodic_policy_pressure_decay = 0.0;
-        } else {
+        }
+        if (!lu_refactor_needed) {
             LPPeriodicRefactorPolicy effective_policy;
             periodic_policy = compute_periodic_refactor_policy(tab, 2, use_bland, degenerate_count);
             effective_policy = periodic_policy;
@@ -5899,6 +5960,9 @@ static int simplex_phase2(SimplexSolver *solver) {
                 double t_refactor_ms = lp_telemetry_timer_start();
                 rc_refactor = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PERIODIC);
                 lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+            }
+            if (lu_refactor_needed && rc_refactor == 0) {
+                lu_soft_health_streak = 0;
             }
             if (!lu_refactor_needed && periodic_refactor) {
                 if (rc_refactor == 0 && cooldown_eligible) {

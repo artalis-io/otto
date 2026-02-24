@@ -16,6 +16,7 @@ int main(void) {
     int pass = 0;
     int total = 0;
     LPPeriodicRefactorPolicy policy;
+    LPLUHealthRefactorDecision decision;
     int should_run;
 
     printf("=== LP Refactor Policy Module Tests ===\n");
@@ -96,6 +97,34 @@ int main(void) {
          "phase1 cooldown window clamps to minimum");
     TEST(lp_refactor_policy_phase1_cooldown_window_updates(200) == 192,
          "phase1 cooldown window clamps to maximum");
+
+    decision = lp_refactor_policy_lu_health_refactor_decision(1500, 1, 120, 120,
+                                                              0, 100, 1e3, 1.0, 0);
+    TEST(decision.hard_trigger == 1, "lu health: hard trigger when max updates reached");
+    TEST(decision.refactor_now == 1, "lu health: max updates refactors immediately");
+
+    decision = lp_refactor_policy_lu_health_refactor_decision(1500, 1, 10, 120,
+                                                              0, 100, 2e8, 100.0, 0);
+    TEST(decision.hard_trigger == 1, "lu health: hard trigger on severe cond ratio");
+    TEST(decision.refactor_now == 1, "lu health: severe cond ratio refactors immediately");
+
+    decision = lp_refactor_policy_lu_health_refactor_decision(1500, 1, 70, 120,
+                                                              0, 100, 1e7, 1.0, 0);
+    TEST(decision.hard_trigger == 0, "lu health: adaptive limit is soft trigger");
+    TEST(decision.soft_trigger == 1, "lu health: adaptive limit raises soft trigger");
+    TEST(decision.refactor_now == 0, "lu health: first soft breach does not refactor");
+    TEST(decision.soft_breach_streak_next == 1, "lu health: streak increments on soft breach");
+
+    decision = lp_refactor_policy_lu_health_refactor_decision(1500, 1, 70, 120,
+                                                              0, 100, 1e7, 1.0, 2);
+    TEST(decision.refactor_now == 1, "lu health: sustained soft breaches refactor");
+    TEST(decision.soft_breach_streak_next == 3, "lu health: streak carries into trigger step");
+
+    decision = lp_refactor_policy_lu_health_refactor_decision(1500, 1, 12, 120,
+                                                              90, 100, 1e3, 1.0, 1);
+    TEST(decision.soft_trigger == 1, "lu health: spike-pool warning is soft trigger");
+    TEST(decision.refactor_now == 0, "lu health: soft trigger obeys min update age");
+    TEST(decision.soft_breach_streak_next == 2, "lu health: spike soft trigger increments streak");
 
     policy.interval = 24;
     policy.min_update_age = 12;
