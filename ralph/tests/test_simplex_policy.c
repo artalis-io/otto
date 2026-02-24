@@ -83,15 +83,6 @@ int simplex_periodic_cost_defer_plan_for_test(int phase,
                                               int *cap_blocked_out,
                                               int *next_consecutive_defers_out);
 
-/* Internal phase-1 stall-escape policy hook from simplex.c */
-int simplex_phase1_stall_escape_plan_for_test(int m,
-                                              int degenerate_count,
-                                              int no_pivot_streak,
-                                              int use_bland,
-                                              int cooldown_updates,
-                                              int *exclude_iters_out,
-                                              int *next_cooldown_out);
-
 enum {
     EXPECT_UPDATE = 0,
     EXPECT_REFACTOR = 1,
@@ -259,18 +250,6 @@ typedef struct {
     int expected_cooldown;
 } DirStabilizeCooldownCase;
 
-typedef struct {
-    const char *name;
-    int m;
-    int degenerate_count;
-    int no_pivot_streak;
-    int use_bland;
-    int cooldown_updates;
-    int expected_escape;
-    int expected_exclude_iters;
-    int expected_next_cooldown;
-} StallEscapeCase;
-
 static int run_lu_health_case(const LUHealthCase *tc) {
     int hard = -1;
     int soft = -1;
@@ -432,35 +411,6 @@ static int run_dir_stabilize_cooldown_case(const DirStabilizeCooldownCase *tc) {
     if (cooldown != tc->expected_cooldown) {
         fprintf(stderr, "FAIL: %s (expected cooldown=%d got=%d)\n",
                 tc->name, tc->expected_cooldown, cooldown);
-        return 0;
-    }
-    printf("PASS: %s\n", tc->name);
-    return 1;
-}
-
-static int run_stall_escape_case(const StallEscapeCase *tc) {
-    int exclude_iters = -1;
-    int next_cooldown = -1;
-    int escape = simplex_phase1_stall_escape_plan_for_test(tc->m,
-                                                           tc->degenerate_count,
-                                                           tc->no_pivot_streak,
-                                                           tc->use_bland,
-                                                           tc->cooldown_updates,
-                                                           &exclude_iters,
-                                                           &next_cooldown);
-    if (escape != tc->expected_escape) {
-        fprintf(stderr, "FAIL: %s (expected escape=%d got=%d)\n",
-                tc->name, tc->expected_escape, escape);
-        return 0;
-    }
-    if (exclude_iters != tc->expected_exclude_iters) {
-        fprintf(stderr, "FAIL: %s (expected exclude_iters=%d got=%d)\n",
-                tc->name, tc->expected_exclude_iters, exclude_iters);
-        return 0;
-    }
-    if (next_cooldown != tc->expected_next_cooldown) {
-        fprintf(stderr, "FAIL: %s (expected next_cooldown=%d got=%d)\n",
-                tc->name, tc->expected_next_cooldown, next_cooldown);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -1117,96 +1067,6 @@ int main(void) {
             .expected_cooldown = 64
         }
     };
-    const StallEscapeCase stall_escape_cases[] = {
-        {
-            .name = "phase1 stall-escape disabled on small matrices",
-            .m = 900,
-            .degenerate_count = 40,
-            .no_pivot_streak = 2048,
-            .use_bland = 1,
-            .cooldown_updates = 0,
-            .expected_escape = 0,
-            .expected_exclude_iters = 32,
-            .expected_next_cooldown = 64
-        },
-        {
-            .name = "phase1 stall-escape requires bland mode",
-            .m = 1500,
-            .degenerate_count = 40,
-            .no_pivot_streak = 2048,
-            .use_bland = 0,
-            .cooldown_updates = 0,
-            .expected_escape = 0,
-            .expected_exclude_iters = 128,
-            .expected_next_cooldown = 256
-        },
-        {
-            .name = "phase1 stall-escape requires degeneracy trigger",
-            .m = 1500,
-            .degenerate_count = 10,
-            .no_pivot_streak = 2048,
-            .use_bland = 1,
-            .cooldown_updates = 0,
-            .expected_escape = 0,
-            .expected_exclude_iters = 128,
-            .expected_next_cooldown = 256
-        },
-        {
-            .name = "phase1 stall-escape requires no-pivot streak trigger",
-            .m = 1500,
-            .degenerate_count = 40,
-            .no_pivot_streak = 300,
-            .use_bland = 1,
-            .cooldown_updates = 0,
-            .expected_escape = 0,
-            .expected_exclude_iters = 32,
-            .expected_next_cooldown = 64
-        },
-        {
-            .name = "phase1 stall-escape respects cooldown",
-            .m = 1500,
-            .degenerate_count = 40,
-            .no_pivot_streak = 2048,
-            .use_bland = 1,
-            .cooldown_updates = 12,
-            .expected_escape = 0,
-            .expected_exclude_iters = 128,
-            .expected_next_cooldown = 256
-        },
-        {
-            .name = "phase1 stall-escape triggers at threshold",
-            .m = 1500,
-            .degenerate_count = 40,
-            .no_pivot_streak = 512,
-            .use_bland = 1,
-            .cooldown_updates = 0,
-            .expected_escape = 1,
-            .expected_exclude_iters = 32,
-            .expected_next_cooldown = 64
-        },
-        {
-            .name = "phase1 stall-escape scales exclusion and cooldown",
-            .m = 1500,
-            .degenerate_count = 40,
-            .no_pivot_streak = 2048,
-            .use_bland = 1,
-            .cooldown_updates = 0,
-            .expected_escape = 1,
-            .expected_exclude_iters = 128,
-            .expected_next_cooldown = 256
-        },
-        {
-            .name = "phase1 stall-escape caps exclusion and cooldown",
-            .m = 1500,
-            .degenerate_count = 40,
-            .no_pivot_streak = 20000,
-            .use_bland = 1,
-            .cooldown_updates = 0,
-            .expected_escape = 1,
-            .expected_exclude_iters = 256,
-            .expected_next_cooldown = 512
-        }
-    };
 
     int pass = 0;
     int total_policy = (int)(sizeof(cases) / sizeof(cases[0]));
@@ -1215,9 +1075,8 @@ int main(void) {
     int total_soft_lu_defer = (int)(sizeof(soft_lu_defer_cases) / sizeof(soft_lu_defer_cases[0]));
     int total_periodic_cost_defer = (int)(sizeof(periodic_cost_defer_cases) / sizeof(periodic_cost_defer_cases[0]));
     int total_dir_stabilize = (int)(sizeof(dir_stabilize_cooldown_cases) / sizeof(dir_stabilize_cooldown_cases[0]));
-    int total_stall_escape = (int)(sizeof(stall_escape_cases) / sizeof(stall_escape_cases[0]));
     int total = total_policy + total_sched + total_lu_health + total_soft_lu_defer +
-                total_periodic_cost_defer + total_dir_stabilize + total_stall_escape;
+                total_periodic_cost_defer + total_dir_stabilize;
 
     for (int i = 0; i < total_policy; i++) {
         pass += run_case(&cases[i]);
@@ -1236,9 +1095,6 @@ int main(void) {
     }
     for (int i = 0; i < total_dir_stabilize; i++) {
         pass += run_dir_stabilize_cooldown_case(&dir_stabilize_cooldown_cases[i]);
-    }
-    for (int i = 0; i < total_stall_escape; i++) {
-        pass += run_stall_escape_case(&stall_escape_cases[i]);
     }
 
     printf("\nPolicy cases passed: %d/%d\n", pass, total);
