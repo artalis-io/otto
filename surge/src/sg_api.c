@@ -1332,6 +1332,22 @@ SGStatus sg_api_build_model(SGContext *ctx, const ShJsonValue *root) {
         return SG_STATUS_ERROR;
     }
 
+    /* 10b. Precedences (after requests are built) */
+    {
+        ShJsonValue *prec_arr = sh_json_get(root, "precedences");
+        if (prec_arr && sh_json_type(prec_arr) == SH_JSON_ARRAY) {
+            size_t pi, pn = sh_json_array_len(prec_arr);
+            for (pi = 0; pi < pn; pi++) {
+                ShJsonValue *pair = sh_json_array_get(prec_arr, pi);
+                uint32_t before_id = (uint32_t)sh_json_as_int(sh_json_get(pair, "before"), 0);
+                uint32_t after_id = (uint32_t)sh_json_as_int(sh_json_get(pair, "after"), 0);
+                if (sg_add_precedence(ctx, before_id, after_id) != SG_STATUS_OK) {
+                    return SG_STATUS_ERROR;
+                }
+            }
+        }
+    }
+
     /* 11. Request locks (after requests and initial_routes) */
     {
         ShJsonValue *committed_arr = sh_json_get(root, "committed_requests");

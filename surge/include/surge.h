@@ -141,6 +141,10 @@ SGStatus sg_request_set_required_qualifications(SGContext *ctx, uint32_t request
 SGStatus sg_request_add_allowed_vehicle(SGContext *ctx, uint32_t request_id, uint32_t vehicle_id);
 SGStatus sg_request_add_forbidden_vehicle(SGContext *ctx, uint32_t request_id, uint32_t vehicle_id);
 
+/* Inter-request precedence */
+SGStatus sg_add_precedence(SGContext *ctx, uint32_t before_request_id,
+                           uint32_t after_request_id);
+
 /* Vehicle compartments */
 SGStatus sg_add_compartment_type(SGContext *ctx, uint32_t *type_id_out);
 SGStatus sg_vehicle_add_compartment(SGContext *ctx, uint32_t vehicle_id,

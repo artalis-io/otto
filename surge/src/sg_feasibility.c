@@ -544,6 +544,7 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
     double *max_prefix = NULL;
     double *seq_arrival = NULL;
     uint32_t *pd_stack = NULL;
+    uint8_t *prec_completed = NULL;
     double seq_depot_return = 0.0;
     double distance = 0.0;
     double time_cursor;
@@ -827,6 +828,23 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
         }
     }
 
+    if (ctx->has_precedence && stop_count > 0) {
+        /* Allocate 2 * num_requests: first half = completed, second half = on_route */
+        prec_completed = (uint8_t *)calloc((size_t)ctx->num_requests * 2, sizeof(uint8_t));
+        if (!prec_completed) {
+            goto done;
+        }
+        /* Build on_route set (second half of the buffer) */
+        {
+            uint8_t *on_route = prec_completed + ctx->num_requests;
+            uint32_t si;
+            for (si = 0; si < stop_count; si++) {
+                if (stops[si].request_id < ctx->num_requests)
+                    on_route[stops[si].request_id] = 1;
+            }
+        }
+    }
+
     {
     double seq_work_since_break = 0.0;
     double seq_total_work = 0.0;
@@ -992,6 +1010,26 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
                 if (seen_pd_pickup) {
                     goto done;
                 }
+            }
+        }
+
+        /* Precedence check: if this is the first stop of a request with predecessors,
+           all predecessors on this vehicle must be in the completed set */
+        if (prec_completed) {
+            uint8_t *on_route = prec_completed + ctx->num_requests;
+            int is_first = stop->is_pickup ||
+                           (request->kind == SG_REQUEST_KIND_DELIVERY_ONLY);
+            if (is_first) {
+                uint16_t pb;
+                for (pb = 0; pb < request->num_prec_before; pb++) {
+                    uint32_t pred = request->precedence_before[pb];
+                    /* Only enforce if predecessor is on this route */
+                    if (on_route[pred] && !prec_completed[pred]) goto done;
+                }
+            }
+            /* Mark completion: last stop of request (delivery for PD, delivery for D-only) */
+            if (!stop->is_pickup) {
+                prec_completed[stop->request_id] = 1;
             }
         }
 
@@ -1171,6 +1209,7 @@ int sg_route_stop_sequence_feasible(const SGContext *ctx, uint32_t vehicle_id,
 
 done:
     free(pd_stack);
+    free(prec_completed);
     if (!use_scratch) {
         free(service_start);
         free(depart);
@@ -1402,6 +1441,24 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
                     break;
                 }
             }
+        }
+    }
+
+    /* Precedence: check that request-level position 'pos' respects ordering constraints */
+    if (ctx->has_precedence) {
+        const SGRequestRecord *req = &ctx->requests[request_id];
+        uint16_t p;
+        for (p = 0; p < req->num_prec_before; p++) {
+            uint32_t pred = req->precedence_before[p];
+            if (sol->request_vehicle[pred] != vehicle_id) continue;
+            /* Predecessor must be at a request position < pos */
+            if (sol->request_pos[pred] >= pos) return 0;
+        }
+        for (p = 0; p < req->num_prec_after; p++) {
+            uint32_t succ = req->precedence_after[p];
+            if (sol->request_vehicle[succ] != vehicle_id) continue;
+            /* Successor must be at a request position >= pos (will shift to pos+1) */
+            if (sol->request_pos[succ] < pos) return 0;
         }
     }
 
@@ -2161,6 +2218,38 @@ int sg_route_eval_pd_best_insertion_cached(
         }
     }
 
+    /* --- Precedence precomputation --- */
+    int32_t prec_pickup_earliest = 0;
+    int32_t prec_delivery_latest = (int32_t)(stop_len + 1);
+
+    if (ctx->has_precedence) {
+        uint16_t pp;
+        for (pp = 0; pp < request->num_prec_before; pp++) {
+            uint32_t pred = request->precedence_before[pp];
+            if (sol->request_vehicle[pred] != vehicle_id) continue;
+            /* Predecessor's last stop must be before our pickup */
+            uint32_t last = sol->request_delivery_stop_pos[pred];
+            if ((int32_t)(last + 1) > prec_pickup_earliest)
+                prec_pickup_earliest = (int32_t)(last + 1);
+        }
+        for (pp = 0; pp < request->num_prec_after; pp++) {
+            uint32_t succ = request->precedence_after[pp];
+            if (sol->request_vehicle[succ] != vehicle_id) continue;
+            /* Successor's first stop must be after our delivery */
+            uint32_t first_stop = (ctx->requests[succ].kind == SG_REQUEST_KIND_PICKUP_DELIVERY)
+                ? sol->request_pickup_stop_pos[succ]
+                : sol->request_delivery_stop_pos[succ];
+            if ((int32_t)first_stop < prec_delivery_latest)
+                prec_delivery_latest = (int32_t)first_stop;
+        }
+        if (prec_pickup_earliest > prec_delivery_latest) {
+            free(pd_open_depth);
+            free(pd_max_del_before);
+            free(pd_min_del_after);
+            return 0;
+        }
+    }
+
     /* For each pickup position i = 0..stop_len */
     for (i = 0; i <= stop_len; i++) {
         double prev_depart;
@@ -2168,6 +2257,11 @@ int sg_route_eval_pd_best_insertion_cached(
         double p_travel, p_arrival, p_start, p_depart;
         double p_wsb, p_break_time;
         uint32_t j;
+
+        /* Precedence: pickup position must be >= prec_pickup_earliest */
+        if (ctx->has_precedence && (int32_t)i < prec_pickup_earliest) {
+            continue;
+        }
 
         /* Backhaul: PD pickup must be after all D-only stops */
         if (ctx->has_backhaul && vehicle->backhaul && i < pd_backhaul_last_donly) {
@@ -2266,6 +2360,11 @@ int sg_route_eval_pd_best_insertion_cached(
                     if (pd_min_del_after[i] < eff_del) {
                         goto next_j;
                     }
+                }
+
+                /* Precedence: delivery must be before all successors' first stops */
+                if (ctx->has_precedence && (int32_t)(j - 1) >= prec_delivery_latest) {
+                    break;  /* Later j only makes it worse */
                 }
 
                 /* -- Try delivery at position j -- */

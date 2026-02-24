@@ -12379,6 +12379,475 @@ static void test_compartment_no_compartments_unchanged(void) {
     sg_free(ctx);
 }
 
+/* ===== Inter-Request Precedence ===== */
+
+static void test_precedence_api(void) {
+    SGContext *ctx = sg_create();
+    uint32_t r0, r1, r2;
+    assert(ctx != NULL);
+    assert(sg_set_dimension_count(ctx, 1) == SG_STATUS_OK);
+
+    r0 = sg_add_request(ctx);
+    r1 = sg_add_request(ctx);
+    r2 = sg_add_request(ctx);
+    assert(r0 != UINT32_MAX && r1 != UINT32_MAX && r2 != UINT32_MAX);
+
+    /* Valid precedence */
+    assert(sg_add_precedence(ctx, r0, r1) == SG_STATUS_OK);
+    assert(ctx->has_precedence == 1);
+    assert(ctx->num_precedences == 1);
+    assert(ctx->requests[r1].num_prec_before == 1);
+    assert(ctx->requests[r1].precedence_before[0] == r0);
+    assert(ctx->requests[r0].num_prec_after == 1);
+    assert(ctx->requests[r0].precedence_after[0] == r1);
+
+    /* NULL ctx */
+    assert(sg_add_precedence(NULL, r0, r1) == SG_STATUS_INVALID_ARG);
+
+    /* Self-loop */
+    assert(sg_add_precedence(ctx, r0, r0) == SG_STATUS_INVALID_ARG);
+
+    /* Out of range */
+    assert(sg_add_precedence(ctx, 999, r1) == SG_STATUS_INVALID_ARG);
+    assert(sg_add_precedence(ctx, r0, 999) == SG_STATUS_INVALID_ARG);
+
+    /* Duplicate */
+    assert(sg_add_precedence(ctx, r0, r1) == SG_STATUS_INVALID_ARG);
+
+    /* Chain: r0 -> r1 -> r2 */
+    assert(sg_add_precedence(ctx, r1, r2) == SG_STATUS_OK);
+    assert(ctx->num_precedences == 2);
+
+    /* Cycle detection: r2 -> r0 would create r0 -> r1 -> r2 -> r0 */
+    assert(sg_add_precedence(ctx, r2, r0) == SG_STATUS_INVALID_ARG);
+
+    sg_free(ctx);
+}
+
+static void test_precedence_basic(void) {
+    /* A before B on same vehicle. Solve, verify A's delivery precedes B's first stop. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+
+    /* Two D-only requests at different locations */
+    sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 10, -10.0);  /* r0 */
+    sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 10, -10.0);  /* r1 */
+
+    /* r0 must be served before r1 */
+    assert(sg_add_precedence(ctx, 0, 1) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Verify ordering: r0's delivery stop before r1's delivery stop */
+    {
+        uint32_t rc = sg_solution_get_route_count(ctx);
+        uint32_t ri;
+        for (ri = 0; ri < rc; ri++) {
+            uint32_t sc = sg_solution_get_route_stop_count(ctx, ri);
+            if (sc == 0) continue;
+            {
+                uint32_t si;
+                int r0_pos = -1, r1_pos = -1;
+                for (si = 0; si < sc; si++) {
+                    SGSolutionStop stop;
+                    sg_solution_get_route_stop(ctx, ri, si, &stop);
+                    if (stop.request_id == 0) r0_pos = (int)si;
+                    if (stop.request_id == 1) r1_pos = (int)si;
+                }
+                if (r0_pos >= 0 && r1_pos >= 0) {
+                    assert(r0_pos < r1_pos);
+                }
+            }
+        }
+    }
+
+    sg_free(ctx);
+}
+
+static void test_precedence_violated(void) {
+    /* Build a manual route with B before A, verify feasibility rejects it. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    SGRouteStop stops[2];
+    double dist;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+
+    sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 10, -10.0);  /* r0 */
+    sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 10, -10.0);  /* r1 */
+
+    /* r0 must be served before r1 */
+    assert(sg_add_precedence(ctx, 0, 1) == SG_STATUS_OK);
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+
+    /* Build stop sequence: r1 before r0 (violated) */
+    memset(stops, 0, sizeof(stops));
+    stops[0].request_id = 1;
+    stops[0].task_id = ctx->requests[1].delivery_task_id;
+    stops[0].is_pickup = 0;
+    stops[1].request_id = 0;
+    stops[1].task_id = ctx->requests[0].delivery_task_id;
+    stops[1].is_pickup = 0;
+
+    /* Should be infeasible */
+    assert(sg_route_stop_sequence_feasible(ctx, 0, stops, 2, &dist) == 0);
+
+    /* Now correct order: r0 before r1 */
+    stops[0].request_id = 0;
+    stops[0].task_id = ctx->requests[0].delivery_task_id;
+    stops[1].request_id = 1;
+    stops[1].task_id = ctx->requests[1].delivery_task_id;
+
+    assert(sg_route_stop_sequence_feasible(ctx, 0, stops, 2, &dist) == 1);
+
+    sg_free(ctx);
+}
+
+static void test_precedence_different_vehicles(void) {
+    /* A and B on different vehicles. No constraint fires. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+
+    /* Two requests with wide time windows — solver can put them on different vehicles */
+    sg_add_delivery_request(ctx, 100.0, 0.0, 0, 99999, 10, -10.0);  /* r0 */
+    sg_add_delivery_request(ctx, -100.0, 0.0, 0, 99999, 10, -10.0); /* r1 */
+
+    /* r0 must be served before r1 — but only when on same vehicle */
+    assert(sg_add_precedence(ctx, 0, 1) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Both should be assigned (solver can use different vehicles) */
+    sg_free(ctx);
+}
+
+static void test_precedence_chain(void) {
+    /* A -> B -> C on same vehicle. Verify all three ordered. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+
+    sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 10, -10.0);  /* r0 */
+    sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 10, -10.0);  /* r1 */
+    sg_add_delivery_request(ctx, 30.0, 0.0, 0, 99999, 10, -10.0);  /* r2 */
+
+    assert(sg_add_precedence(ctx, 0, 1) == SG_STATUS_OK);
+    assert(sg_add_precedence(ctx, 1, 2) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Verify ordering on the single vehicle */
+    {
+        uint32_t rc = sg_solution_get_route_count(ctx);
+        uint32_t ri;
+        for (ri = 0; ri < rc; ri++) {
+            uint32_t sc = sg_solution_get_route_stop_count(ctx, ri);
+            if (sc == 0) continue;
+            {
+                uint32_t si;
+                int pos[3] = {-1, -1, -1};
+                for (si = 0; si < sc; si++) {
+                    SGSolutionStop stop;
+                    sg_solution_get_route_stop(ctx, ri, si, &stop);
+                    if (stop.request_id < 3) pos[stop.request_id] = (int)si;
+                }
+                if (pos[0] >= 0 && pos[1] >= 0 && pos[2] >= 0) {
+                    assert(pos[0] < pos[1]);
+                    assert(pos[1] < pos[2]);
+                }
+            }
+        }
+    }
+
+    sg_free(ctx);
+}
+
+static void test_precedence_pd(void) {
+    /* Precedence between two PD requests. A's delivery before B's pickup. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+
+    /* PD request A: pickup at (5,0), deliver at (15,0) */
+    add_pd_request(ctx, 5.0, 0.0, 0, 99999, 10,
+                        15.0, 0.0, 0, 99999, 10, 10.0);  /* r0 */
+    /* PD request B: pickup at (25,0), deliver at (35,0) */
+    add_pd_request(ctx, 25.0, 0.0, 0, 99999, 10,
+                        35.0, 0.0, 0, 99999, 10, 10.0);  /* r1 */
+
+    /* A must complete before B starts */
+    assert(sg_add_precedence(ctx, 0, 1) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Verify: A's delivery before B's pickup */
+    {
+        uint32_t rc = sg_solution_get_route_count(ctx);
+        uint32_t ri;
+        for (ri = 0; ri < rc; ri++) {
+            uint32_t sc = sg_solution_get_route_stop_count(ctx, ri);
+            if (sc == 0) continue;
+            {
+                uint32_t si;
+                int a_del = -1, b_pick = -1;
+                for (si = 0; si < sc; si++) {
+                    SGSolutionStop stop;
+                    sg_solution_get_route_stop(ctx, ri, si, &stop);
+                    if (stop.request_id == 0 && stop.stop_type == SG_STOP_TYPE_DELIVERY) a_del = (int)si;
+                    if (stop.request_id == 1 && stop.stop_type == SG_STOP_TYPE_PICKUP) b_pick = (int)si;
+                }
+                if (a_del >= 0 && b_pick >= 0) {
+                    assert(a_del < b_pick);
+                }
+            }
+        }
+    }
+
+    sg_free(ctx);
+}
+
+static void test_precedence_solver(void) {
+    /* 3 vehicles, 6 requests, 3 precedence pairs. Solve, verify. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+
+    sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 10, -10.0);  /* r0 */
+    sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 10, -10.0);  /* r1 */
+    sg_add_delivery_request(ctx, 30.0, 0.0, 0, 99999, 10, -10.0);  /* r2 */
+    sg_add_delivery_request(ctx, 40.0, 0.0, 0, 99999, 10, -10.0);  /* r3 */
+    sg_add_delivery_request(ctx, 50.0, 0.0, 0, 99999, 10, -10.0);  /* r4 */
+    sg_add_delivery_request(ctx, 60.0, 0.0, 0, 99999, 10, -10.0);  /* r5 */
+
+    /* Precedence pairs */
+    assert(sg_add_precedence(ctx, 0, 1) == SG_STATUS_OK);
+    assert(sg_add_precedence(ctx, 2, 3) == SG_STATUS_OK);
+    assert(sg_add_precedence(ctx, 4, 5) == SG_STATUS_OK);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Verify: on any vehicle where both requests of a pair exist, order is correct */
+    {
+        uint32_t rc = sg_solution_get_route_count(ctx);
+        uint32_t ri;
+        uint32_t pairs[][2] = {{0,1}, {2,3}, {4,5}};
+        int pi;
+        for (ri = 0; ri < rc; ri++) {
+            uint32_t sc = sg_solution_get_route_stop_count(ctx, ri);
+            if (sc == 0) continue;
+            for (pi = 0; pi < 3; pi++) {
+                int before_pos = -1, after_pos = -1;
+                uint32_t si;
+                for (si = 0; si < sc; si++) {
+                    SGSolutionStop stop;
+                    sg_solution_get_route_stop(ctx, ri, si, &stop);
+                    if (stop.request_id == pairs[pi][0]) before_pos = (int)si;
+                    if (stop.request_id == pairs[pi][1]) after_pos = (int)si;
+                }
+                if (before_pos >= 0 && after_pos >= 0) {
+                    assert(before_pos < after_pos);
+                }
+            }
+        }
+    }
+
+    sg_free(ctx);
+}
+
+static void test_precedence_json(void) {
+    /* JSON roundtrip with "precedences" array. */
+    const char *json =
+        "{"
+        "  \"config\": {\"max_iterations\": 200, \"seed\": 42, \"deterministic\": true},"
+        "  \"depots\": [{\"x\": 0.0, \"y\": 0.0, \"tw_early\": 0, \"tw_late\": 99999}],"
+        "  \"vehicles\": [{"
+        "    \"start_depot_id\": 0, \"end_depot_id\": 0,"
+        "    \"shift_early\": 0, \"shift_late\": 99999,"
+        "    \"capacity\": [100.0]"
+        "  }],"
+        "  \"tasks\": ["
+        "    {\"type\": \"delivery\", \"x\": 10.0, \"y\": 0.0, \"tw_early\": 0, \"tw_late\": 99999, \"service_seconds\": 10, \"demand\": [-10.0]},"
+        "    {\"type\": \"delivery\", \"x\": 20.0, \"y\": 0.0, \"tw_early\": 0, \"tw_late\": 99999, \"service_seconds\": 10, \"demand\": [-10.0]}"
+        "  ],"
+        "  \"requests\": ["
+        "    {\"delivery_task_id\": 0},"
+        "    {\"delivery_task_id\": 1}"
+        "  ],"
+        "  \"precedences\": ["
+        "    {\"before\": 0, \"after\": 1}"
+        "  ]"
+        "}";
+
+    SHArena *arena = sh_arena_create(4096);
+    ShJsonValue *root;
+    ShJsonStatus ps;
+    SGContext *ctx;
+
+    assert(arena != NULL);
+    ps = sh_json_parse(json, strlen(json), arena, &root);
+    assert(ps == SH_JSON_OK);
+
+    ctx = sg_create();
+    assert(ctx != NULL);
+    assert(sg_api_build_model(ctx, root) == SG_STATUS_OK);
+
+    /* Verify precedence was parsed */
+    assert(ctx->has_precedence == 1);
+    assert(ctx->num_precedences == 1);
+    assert(ctx->requests[1].num_prec_before == 1);
+    assert(ctx->requests[1].precedence_before[0] == 0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    sh_arena_free(arena);
+    sg_free(ctx);
+}
+
+static void test_precedence_with_compartments(void) {
+    /* Precedence + compartments together. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot, ct1;
+    double cap1[1] = {100.0};
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+
+    assert(sg_add_compartment_type(ctx, &ct1) == SG_STATUS_OK);
+
+    {
+        uint32_t v = sg_add_vehicle(ctx);
+        assert(v != UINT32_MAX);
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, cap1, 1) == SG_STATUS_OK);
+        assert(sg_vehicle_add_compartment(ctx, v, ct1, cap1, 1) == SG_STATUS_OK);
+    }
+
+    sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 10, -10.0);  /* r0 */
+    sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 10, -10.0);  /* r1 */
+
+    assert(sg_request_set_compartment_type(ctx, 0, ct1) == SG_STATUS_OK);
+    assert(sg_request_set_compartment_type(ctx, 1, ct1) == SG_STATUS_OK);
+
+    assert(sg_add_precedence(ctx, 0, 1) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    sg_free(ctx);
+}
+
+static void test_precedence_no_precedences_unchanged(void) {
+    /* Zero precedences — verify existing model untouched. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+
+    sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 10, -10.0);
+    sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 10, -10.0);
+
+    assert(ctx->has_precedence == 0);
+    assert(ctx->num_precedences == 0);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+
+    sg_free(ctx);
+}
+
+static void test_precedence_validate_plan(void) {
+    /* Plan validation detects precedence violation. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    assert(sg_depot_set_time_window(ctx, depot, 0, 99999) == SG_STATUS_OK);
+    add_vehicle_with_depot(ctx, depot, 0, 99999, 100.0);
+
+    sg_add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 10, -10.0);  /* r0, task 0 */
+    sg_add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 10, -10.0);  /* r1, task 1 */
+
+    assert(sg_add_precedence(ctx, 0, 1) == SG_STATUS_OK);
+
+    /* Provide a plan with violated order: task 1 before task 0 */
+    {
+        uint32_t task_ids[2] = {1, 0};  /* r1 delivery before r0 delivery */
+        SGPlanRoute route;
+        route.vehicle_id = 0;
+        route.task_ids = task_ids;
+        route.task_count = 2;
+
+        assert(sg_validate_plan(ctx, 1, &route) == SG_STATUS_OK);
+        assert(sg_get_violation_count(ctx) > 0);
+
+        /* Check that at least one violation is PRECEDENCE */
+        {
+            uint32_t vi;
+            int found_precedence = 0;
+            for (vi = 0; vi < sg_get_violation_count(ctx); vi++) {
+                SGViolation v;
+                sg_get_violation(ctx, vi, &v);
+                if (v.type == SG_VIOLATION_PRECEDENCE) {
+                    found_precedence = 1;
+                    break;
+                }
+            }
+            assert(found_precedence);
+        }
+    }
+
+    /* Now correct order: task 0 before task 1 */
+    {
+        uint32_t task_ids[2] = {0, 1};
+        SGPlanRoute route;
+        uint32_t vi;
+        int found_precedence = 0;
+        route.vehicle_id = 0;
+        route.task_ids = task_ids;
+        route.task_count = 2;
+
+        assert(sg_validate_plan(ctx, 1, &route) == SG_STATUS_OK);
+
+        for (vi = 0; vi < sg_get_violation_count(ctx); vi++) {
+            SGViolation v;
+            sg_get_violation(ctx, vi, &v);
+            if (v.type == SG_VIOLATION_PRECEDENCE) {
+                found_precedence = 1;
+                break;
+            }
+        }
+        assert(!found_precedence);
+    }
+
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -12774,12 +13243,25 @@ int main(void) {
     RUN_TEST(test_compartment_with_commodity);
     RUN_TEST(test_compartment_no_compartments_unchanged);
 
+    /* Inter-Request Precedence */
+    RUN_TEST(test_precedence_api);
+    RUN_TEST(test_precedence_basic);
+    RUN_TEST(test_precedence_violated);
+    RUN_TEST(test_precedence_different_vehicles);
+    RUN_TEST(test_precedence_chain);
+    RUN_TEST(test_precedence_pd);
+    RUN_TEST(test_precedence_solver);
+    RUN_TEST(test_precedence_json);
+    RUN_TEST(test_precedence_with_compartments);
+    RUN_TEST(test_precedence_no_precedences_unchanged);
+    RUN_TEST(test_precedence_validate_plan);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 315);
+    assert(tests_run == 326);
 #else
-    assert(tests_run == 306);
+    assert(tests_run == 317);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

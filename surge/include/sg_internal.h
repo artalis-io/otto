@@ -312,6 +312,12 @@ typedef struct {
     uint32_t setup_class_id;           /* 0 = none, 1..num_setup_classes */
     double unassigned_penalty;         /* Per-request drop penalty (0.0 = use global) */
     uint8_t has_unassigned_penalty;    /* 1 if per-request penalty is set */
+
+    /* Inter-request precedence */
+    uint32_t *precedence_before;       /* [num_prec_before] request IDs that must complete before me */
+    uint16_t num_prec_before;
+    uint32_t *precedence_after;        /* [num_prec_after] request IDs that must start after me */
+    uint16_t num_prec_after;
 } SGRequestRecord;
 
 struct SGContext {
@@ -409,6 +415,10 @@ struct SGContext {
     /* Vehicle compartments */
     uint32_t num_compartment_types;             /* counter for type IDs issued */
     uint8_t  has_compartments;                  /* 1 if any vehicle has num_compartments > 0 */
+
+    /* Inter-request precedence */
+    uint32_t num_precedences;                   /* count of precedence pairs added */
+    uint8_t  has_precedence;                    /* 1 if any precedence constraints exist */
 
     /* Request locking for live re-optimization */
     uint8_t *request_locks;                     /* [num_requests], SGRequestLock values; NULL if none */

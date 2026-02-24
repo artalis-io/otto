@@ -75,6 +75,10 @@ void sg_request_records_free(SGRequestRecord *requests, uint32_t count) {
         requests[i].forbidden_vehicles = NULL;
         free(requests[i].exclusion_group_ids);
         requests[i].exclusion_group_ids = NULL;
+        free(requests[i].precedence_before);
+        requests[i].precedence_before = NULL;
+        free(requests[i].precedence_after);
+        requests[i].precedence_after = NULL;
     }
     free(requests);
 }
@@ -391,6 +395,9 @@ void sg_free(SGContext *ctx) {
     ctx->has_frozen = 0;
     free(ctx->frozen_vehicle_map);
     ctx->frozen_vehicle_map = NULL;
+
+    ctx->num_precedences = 0;
+    ctx->has_precedence = 0;
 
     sh_rng_free(ctx->op_rng);
     ctx->op_rng = NULL;
@@ -778,6 +785,99 @@ SGStatus sg_request_set_lock(SGContext *ctx, uint32_t request_id, SGRequestLock 
         ctx->has_frozen = 1;
     }
 
+    return SG_STATUS_OK;
+}
+
+/* Inter-request precedence: before_request_id must complete before after_request_id starts
+   (when both are on the same vehicle). */
+SGStatus sg_add_precedence(SGContext *ctx, uint32_t before_request_id,
+                           uint32_t after_request_id) {
+    SGRequestRecord *before_rec, *after_rec;
+    uint16_t p;
+    uint32_t *tmp;
+
+    if (!ctx) return SG_STATUS_INVALID_ARG;
+    if (before_request_id >= ctx->num_requests || after_request_id >= ctx->num_requests) {
+        sg_set_error(ctx, "precedence: request ID out of range");
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (before_request_id == after_request_id) {
+        sg_set_error(ctx, "precedence: self-loop");
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    after_rec = &ctx->requests[after_request_id];
+
+    /* Reject duplicate */
+    for (p = 0; p < after_rec->num_prec_before; p++) {
+        if (after_rec->precedence_before[p] == before_request_id) {
+            sg_set_error(ctx, "precedence: duplicate (%u -> %u)",
+                         before_request_id, after_request_id);
+            return SG_STATUS_INVALID_ARG;
+        }
+    }
+
+    /* Cycle detection: DFS from after_request_id following precedence_after edges.
+       If before_request_id is reachable, adding this edge creates a cycle. */
+    {
+        uint32_t *stack = NULL;
+        uint8_t *visited = NULL;
+        uint32_t stack_top = 0;
+        int cycle = 0;
+
+        stack = (uint32_t *)malloc((size_t)ctx->num_requests * sizeof(uint32_t));
+        visited = (uint8_t *)calloc((size_t)ctx->num_requests, sizeof(uint8_t));
+        if (!stack || !visited) {
+            free(stack);
+            free(visited);
+            return SG_STATUS_OUT_OF_MEMORY;
+        }
+
+        stack[stack_top++] = after_request_id;
+        visited[after_request_id] = 1;
+        while (stack_top > 0 && !cycle) {
+            uint32_t cur = stack[--stack_top];
+            const SGRequestRecord *rec = &ctx->requests[cur];
+            uint16_t a;
+            for (a = 0; a < rec->num_prec_after; a++) {
+                uint32_t succ = rec->precedence_after[a];
+                if (succ == before_request_id) {
+                    cycle = 1;
+                    break;
+                }
+                if (!visited[succ]) {
+                    visited[succ] = 1;
+                    stack[stack_top++] = succ;
+                }
+            }
+        }
+        free(stack);
+        free(visited);
+
+        if (cycle) {
+            sg_set_error(ctx, "precedence: cycle detected (%u -> %u)",
+                         before_request_id, after_request_id);
+            return SG_STATUS_INVALID_ARG;
+        }
+    }
+
+    /* Append before_request_id to after's precedence_before */
+    tmp = (uint32_t *)realloc(after_rec->precedence_before,
+                              (size_t)(after_rec->num_prec_before + 1) * sizeof(uint32_t));
+    if (!tmp) return SG_STATUS_OUT_OF_MEMORY;
+    after_rec->precedence_before = tmp;
+    after_rec->precedence_before[after_rec->num_prec_before++] = before_request_id;
+
+    /* Append after_request_id to before's precedence_after */
+    before_rec = &ctx->requests[before_request_id];
+    tmp = (uint32_t *)realloc(before_rec->precedence_after,
+                              (size_t)(before_rec->num_prec_after + 1) * sizeof(uint32_t));
+    if (!tmp) return SG_STATUS_OUT_OF_MEMORY;
+    before_rec->precedence_after = tmp;
+    before_rec->precedence_after[before_rec->num_prec_after++] = after_request_id;
+
+    ctx->num_precedences++;
+    ctx->has_precedence = 1;
     return SG_STATUS_OK;
 }
 

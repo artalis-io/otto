@@ -281,6 +281,40 @@ static void collect_violations(SGContext *ctx, const SGRouteSolution *sol) {
             }
         }
 
+        /* Precedence check: predecessor must complete before successor starts */
+        if (ctx->has_precedence) {
+            uint8_t *completed = (uint8_t *)calloc((size_t)ctx->num_requests, sizeof(uint8_t));
+            if (completed) {
+                for (i = 0; i < stop_len; i++) {
+                    const SGRouteStop *s = &stops[i];
+                    const SGRequestRecord *req = &ctx->requests[s->request_id];
+                    int is_first = s->is_pickup ||
+                                   (req->kind == SG_REQUEST_KIND_DELIVERY_ONLY);
+                    if (is_first) {
+                        uint16_t pb;
+                        for (pb = 0; pb < req->num_prec_before; pb++) {
+                            uint32_t pred = req->precedence_before[pb];
+                            if (sol->request_vehicle[pred] == v && !completed[pred]) {
+                                memset(&viol, 0, sizeof(viol));
+                                viol.type = SG_VIOLATION_PRECEDENCE;
+                                viol.vehicle_id = v;
+                                viol.stop_index = i;
+                                viol.request_id = s->request_id;
+                                viol.task_id = s->task_id;
+                                viol.actual = (double)pred;
+                                viol.limit = (double)s->request_id;
+                                push_violation(ctx, &viol);
+                            }
+                        }
+                    }
+                    if (!s->is_pickup) {
+                        completed[s->request_id] = 1;
+                    }
+                }
+                free(completed);
+            }
+        }
+
         /* Ride time check */
         for (r = 0; r < ctx->num_requests; r++) {
             const SGRequestRecord *req = &ctx->requests[r];
