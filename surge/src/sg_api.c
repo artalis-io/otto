@@ -565,6 +565,22 @@ static int build_vehicles(SGContext *ctx, const ShJsonValue *vehicles_arr) {
             free(cap);
         }
 
+        v = sh_json_get(veh, "initial_load");
+        if (v && sh_json_type(v) == SH_JSON_ARRAY) {
+            size_t dim = sh_json_array_len(v);
+            double *il = (double *)malloc(dim * sizeof(double));
+            size_t j;
+            if (!il) return -1;
+            for (j = 0; j < dim; j++) {
+                il[j] = sh_json_as_double(sh_json_array_get(v, j), 0.0);
+            }
+            if (sg_vehicle_set_initial_load(ctx, id, il, (uint32_t)dim) != SG_STATUS_OK) {
+                free(il);
+                return -1;
+            }
+            free(il);
+        }
+
         v = sh_json_get(veh, "qualifications");
         if (v) {
             uint64_t q = (uint64_t)sh_json_as_double(v, 0.0);

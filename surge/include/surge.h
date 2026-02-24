@@ -49,6 +49,8 @@ SGStatus sg_vehicle_set_shift_time_window(SGContext *ctx, uint32_t vehicle_id, i
                                           int32_t late);
 SGStatus sg_vehicle_set_capacity(SGContext *ctx, uint32_t vehicle_id, const double *capacity,
                                  uint32_t capacity_count);
+SGStatus sg_vehicle_set_initial_load(SGContext *ctx, uint32_t vehicle_id,
+                                     const double *initial_load, uint32_t load_count);
 
 SGStatus sg_task_set_location(SGContext *ctx, uint32_t task_id, double x, double y);
 SGStatus sg_task_set_time_window(SGContext *ctx, uint32_t task_id, int32_t early, int32_t late);

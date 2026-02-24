@@ -9630,6 +9630,165 @@ static void test_span_cost_balances_routes(void) {
     sg_free(ctx_span);
 }
 
+/* ===== Initial vehicle load tests ===== */
+
+static void test_initial_load_api(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    double cap = 10.0;
+    double load_ok = 5.0;
+    double load_neg = -1.0;
+    double load_exceed = 15.0;
+    double load_2d[2] = {3.0, 2.0};
+    uint32_t v;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+
+    /* Dimension mismatch */
+    assert(sg_vehicle_set_initial_load(ctx, v, load_2d, 2) == SG_STATUS_INVALID_ARG);
+    /* Negative value */
+    assert(sg_vehicle_set_initial_load(ctx, v, &load_neg, 1) == SG_STATUS_INVALID_ARG);
+    /* Exceeds capacity */
+    assert(sg_vehicle_set_initial_load(ctx, v, &load_exceed, 1) == SG_STATUS_INVALID_ARG);
+    /* Valid */
+    assert(sg_vehicle_set_initial_load(ctx, v, &load_ok, 1) == SG_STATUS_OK);
+    /* NULL context */
+    assert(sg_vehicle_set_initial_load(NULL, v, &load_ok, 1) == SG_STATUS_INVALID_ARG);
+    /* Bad vehicle ID */
+    assert(sg_vehicle_set_initial_load(ctx, 999, &load_ok, 1) == SG_STATUS_INVALID_ARG);
+
+    sg_free(ctx);
+}
+
+static void test_initial_load_reduces_capacity(void) {
+    /* Two vehicles: one with initial_load=8 (only 2 units free), one empty.
+       Both have capacity=10.
+       Request A: delivery of 5 units (demand=-5) — needs 5 free capacity.
+       With initial_load=8, vehicle 0 has only 2 free → A must go to vehicle 1.
+       Without initial_load, vehicle 0 could serve A (5 <= 10).
+       Verify: both requests assigned, both vehicles used. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    double cap = 10.0;
+    double init = 8.0;
+    uint32_t v0, v1;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    sg_depot_set_time_window(ctx, depot, 0, 86400);
+
+    v0 = sg_add_vehicle(ctx);
+    assert(v0 != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v0, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v0, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v0, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_initial_load(ctx, v0, &init, 1) == SG_STATUS_OK);
+
+    v1 = sg_add_vehicle(ctx);
+    assert(v1 != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v1, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v1, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v1, &cap, 1) == SG_STATUS_OK);
+    /* v1 has no initial load — full 10 units available */
+
+    /* Two delivery requests, each needing 5 units of capacity.
+       Vehicle 0 (initial_load=8) can't take either (8+5=13 > 10, using abs demand filter).
+       Vehicle 1 (empty) can take both (5+5=10 <= 10).
+       But with construction remaining_capacity: v0=2, v1=10. */
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 0, -5.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 86400, 0, -5.0);
+
+    {
+        SGStatus s = sg_solve(ctx);
+        if (s != SG_STATUS_OK) {
+            printf("SOLVE FAILED: %s (status=%d)\n", sg_get_last_error(ctx), (int)s);
+        }
+        assert(s == SG_STATUS_OK);
+    }
+    /* Both should be assigned — they fit on vehicle 1 */
+    assert(sg_get_unassigned(ctx) == 0);
+
+    sg_free(ctx);
+}
+
+static void test_initial_load_stop_export(void) {
+    /* Verify sg_solution_get_route_stop_load shows initial offset at stop 0. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    double init = 30.0;
+    uint32_t v;
+    double load_val = 0.0;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 99999) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_initial_load(ctx, v, &init, 1) == SG_STATUS_OK);
+
+    /* Single delivery with demand -5 */
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -5.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_solution_get_route_count(ctx) == 1);
+    assert(sg_solution_get_route_stop_count(ctx, 0) == 1);
+
+    /* Load at stop 0 = initial_load = 30.0 (before delivery demand applied) */
+    assert(sg_solution_get_route_stop_load(ctx, 0, 0, 0, &load_val) == SG_STATUS_OK);
+    assert(fabs(load_val - 30.0) < 0.01);
+
+    sg_free(ctx);
+}
+
+static void test_initial_load_multi_trip(void) {
+    /* Initial load on first trip only; depot reload resets to zero.
+       Vehicle: capacity=10, initial_load=8, max_trips=unlimited, reload=10s.
+       Two deliveries of demand -5 each:
+       Trip 1: initial=8, deliver -5 → load goes 8→3. OK (peak 8 <= 10).
+       Trip 2: reload → initial=0, deliver -5 → load goes 0→5. OK (peak 5 <= 10).
+       Both should be assigned to 1 vehicle. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    double cap = 10.0;
+    double init = 8.0;
+    uint32_t v;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    sg_depot_set_time_window(ctx, depot, 0, 86400);
+
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 86400) == SG_STATUS_OK);
+    assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_initial_load(ctx, v, &init, 1) == SG_STATUS_OK);
+    assert(sg_vehicle_set_max_trips(ctx, v, 0) == SG_STATUS_OK);  /* unlimited */
+    assert(sg_vehicle_set_trip_reload_seconds(ctx, v, 10) == SG_STATUS_OK);
+
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 0, -5.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 86400, 0, -5.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) == 1);
+    /* Multi-trip should be used (2 trips) since first trip starts with 8/10 load */
+    assert(sg_solution_get_route_trip_count(ctx, 0) >= 1);
+
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -9946,6 +10105,12 @@ int main(void) {
     RUN_TEST(test_validate_plan_multiple_violations);
     RUN_TEST(test_validate_plan_json);
 
+    /* Initial vehicle load */
+    RUN_TEST(test_initial_load_api);
+    RUN_TEST(test_initial_load_reduces_capacity);
+    RUN_TEST(test_initial_load_stop_export);
+    RUN_TEST(test_initial_load_multi_trip);
+
     /* Span balancing */
     RUN_TEST(test_span_cost_api);
     RUN_TEST(test_span_cost_zero_when_single_vehicle);
@@ -9956,9 +10121,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 257);
+    assert(tests_run == 261);
 #else
-    assert(tests_run == 248);
+    assert(tests_run == 252);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

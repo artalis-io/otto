@@ -49,6 +49,8 @@ void sg_vehicle_records_free(SGVehicleRecord *vehicles, uint32_t count) {
     for (i = 0; i < count; i++) {
         free(vehicles[i].capacity);
         vehicles[i].capacity = NULL;
+        free(vehicles[i].initial_load);
+        vehicles[i].initial_load = NULL;
     }
     free(vehicles);
 }
@@ -562,6 +564,12 @@ uint32_t sg_add_vehicle(SGContext *ctx) {
     if (!vehicle->capacity) {
         return UINT32_MAX;
     }
+    vehicle->initial_load = (double *)calloc((size_t)ctx->dimension_count, sizeof(double));
+    if (!vehicle->initial_load) {
+        free(vehicle->capacity);
+        vehicle->capacity = NULL;
+        return UINT32_MAX;
+    }
 
     ctx->num_vehicles++;
     return id;
@@ -652,6 +660,31 @@ SGStatus sg_vehicle_set_capacity(SGContext *ctx, uint32_t vehicle_id, const doub
     }
     memcpy(vehicle->capacity, capacity, (size_t)capacity_count * sizeof(double));
     vehicle->has_capacity = 1;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_vehicle_set_initial_load(SGContext *ctx, uint32_t vehicle_id,
+                                     const double *initial_load, uint32_t load_count) {
+    SGVehicleRecord *vehicle;
+    uint32_t i;
+
+    if (!ctx || vehicle_id >= ctx->num_vehicles || !initial_load ||
+        load_count != ctx->dimension_count || !ctx->vehicles[vehicle_id].initial_load) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    vehicle = &ctx->vehicles[vehicle_id];
+    for (i = 0; i < load_count; i++) {
+        if (!isfinite(initial_load[i]) || initial_load[i] < 0.0) {
+            return SG_STATUS_INVALID_ARG;
+        }
+        if (vehicle->has_capacity && vehicle->capacity &&
+            initial_load[i] > vehicle->capacity[i]) {
+            return SG_STATUS_INVALID_ARG;
+        }
+    }
+    memcpy(vehicle->initial_load, initial_load, (size_t)load_count * sizeof(double));
+    vehicle->has_initial_load = 1;
     return SG_STATUS_OK;
 }
 
@@ -2435,10 +2468,27 @@ SGStatus sg_solution_get_route_stop_load(const SGContext *ctx, uint32_t route_in
         return SG_STATUS_INVALID_ARG;
     }
     /* Load array layout: [vehicle * (stop_stride+1) * dim_count + stop * dim_count + d]
-       Entry at stop_index holds cumulative load AFTER that stop. */
+       Internal storage uses prefix-sum convention (starting from 0).
+       Export adds initial_load offset for the first trip to show actual vehicle load. */
     idx = (size_t)vid * ((size_t)sol->stop_stride + 1U) * (size_t)ctx->dimension_count +
           (size_t)stop_index * (size_t)ctx->dimension_count + (size_t)dimension;
-    *load_out = sol->route_stop_load[idx];
+    {
+        double prefix = sol->route_stop_load[idx];
+        const SGVehicleRecord *vehicle = &ctx->vehicles[vid];
+        /* Determine if this stop is on the first trip (before any trip_start boundary) */
+        uint8_t first_trip = 1;
+        if (stop_index > 0) {
+            const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(sol, vid);
+            uint32_t s;
+            for (s = 1; s <= stop_index; s++) {
+                if (stops[s].trip_start) { first_trip = 0; break; }
+            }
+        }
+        if (first_trip && vehicle->has_initial_load && vehicle->initial_load) {
+            prefix += vehicle->initial_load[dimension];
+        }
+        *load_out = prefix;
+    }
     return SG_STATUS_OK;
 }
 

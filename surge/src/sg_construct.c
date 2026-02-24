@@ -189,7 +189,9 @@ ARStatus sg_construct_state_init(const SGContext *ctx, SGConstructState *state) 
             double cap = (vehicle->has_capacity && vehicle->capacity)
                          ? vehicle->capacity[d]
                          : INFINITY;
-            state->remaining_capacity[(size_t)v * (size_t)ctx->dimension_count + (size_t)d] = cap;
+            double init = (vehicle->has_initial_load && vehicle->initial_load)
+                          ? vehicle->initial_load[d] : 0.0;
+            state->remaining_capacity[(size_t)v * (size_t)ctx->dimension_count + (size_t)d] = cap - init;
         }
     }
 

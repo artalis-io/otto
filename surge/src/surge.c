@@ -93,9 +93,11 @@ typedef struct {
     int32_t shift_early;
     int32_t shift_late;
     double *capacity;
+    double *initial_load;
     uint8_t has_depots;
     uint8_t has_shift_time_window;
     uint8_t has_capacity;
+    uint8_t has_initial_load;
 } SGVehicleRecord;
 
 typedef struct {
@@ -176,6 +178,8 @@ static void sg_vehicle_records_free(SGVehicleRecord *vehicles, uint32_t count) {
     for (i = 0; i < count; i++) {
         free(vehicles[i].capacity);
         vehicles[i].capacity = NULL;
+        free(vehicles[i].initial_load);
+        vehicles[i].initial_load = NULL;
     }
     free(vehicles);
 }
@@ -1269,7 +1273,9 @@ static ARStatus sg_construct_state_init(const SGContext *ctx, SGConstructState *
             double cap = (vehicle->has_capacity && vehicle->capacity)
                          ? vehicle->capacity[d]
                          : INFINITY;
-            state->remaining_capacity[(size_t)v * (size_t)ctx->dimension_count + (size_t)d] = cap;
+            double init = (vehicle->has_initial_load && vehicle->initial_load)
+                          ? vehicle->initial_load[d] : 0.0;
+            state->remaining_capacity[(size_t)v * (size_t)ctx->dimension_count + (size_t)d] = cap - init;
         }
     }
 
@@ -4453,7 +4459,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
 
     init_status = sg_route_construct_initial_solution(ctx, &initial);
     if (init_status != AR_STATUS_OK) {
-        sg_route_solution_reset(&initial);
+            sg_route_solution_reset(&initial);
         return init_status == AR_STATUS_OUT_OF_MEMORY ? SG_STATUS_OUT_OF_MEMORY
                                                       : SG_STATUS_ERROR;
     }

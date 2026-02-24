@@ -241,6 +241,10 @@ typedef struct {
     /* Travel profile */
     uint32_t travel_profile_id;    /* 0 = use global, 1..N = ctx->travel_profiles[id-1] */
     uint8_t  has_travel_profile;
+
+    /* Initial vehicle load (pre-loaded cargo at shift start) */
+    double *initial_load;          /* Array[dimension_count], NULL = empty */
+    uint8_t has_initial_load;
 } SGVehicleRecord;
 
 typedef struct {
