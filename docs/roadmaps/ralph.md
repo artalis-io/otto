@@ -3038,3 +3038,39 @@ Focused canary impact (Phase B vs Phase C):
   - timeout envelope still exceeded under current `--time-mult` policy
 - `25fv47`, `fit1p`, `nesm`, `bandm`, `scagr25`:
   - no status regressions, dense fallback remained `0`
+
+#### Phase D Plan (Refactor Cost Path)
+
+Goal: reduce per-refactor wall time after Phase C pressure controls, without changing LU correctness
+semantics.
+
+Scope (first slice):
+- Optimize `build_basis_matrix` incremental rebuild path in `simplex.c`.
+- Reuse cached basis payload for unchanged columns inside changed spans when span-local churn is sparse,
+  instead of re-copying unchanged columns from `A_ext`.
+- Keep full rebuild fallback and cache-invalidating guards intact.
+
+Phase D implementation (2026-02-24):
+- Enabled adaptive sparse-patch reuse in `build_basis_matrix`:
+  - active when changed-span has majority unchanged columns and sufficient nnz payload.
+  - unchanged columns in changed span are copied from cached block snapshot, changed columns still rebuilt
+    from `A_ext`.
+
+Phase D gates and artifacts:
+- `make -C ralph test` PASS
+- `make -C ralph test-netlib-gate-small` PASS (`/tmp/netlib-regression-gate-20260224-100005`)
+- `make -C ralph test-netlib-gate` PASS (`/tmp/netlib-regression-gate-20260224-100016`)
+  - summary: 84 files, timeout files 29, status/objective/invalid mismatches 0, dense fallback files 0
+
+Controlled A/B (Phase C vs Phase D, sequential same command shape):
+- artifacts:
+  - phase C control: `/tmp/phaseC-seq-control-*.json`
+  - phase D control: `/tmp/phaseD-seq-control-*.json`
+- `degen3`:
+  - `time_ms`: `3933.455 -> 3857.176` (~1.9% better)
+  - `refactor.all_ms`: `2740.696 -> 2666.023` (~2.7% better)
+- `25fv47`:
+  - `time_ms`: `2562.773 -> 2522.892` (~1.6% better)
+  - `refactor.all_ms`: `1324.472 -> 1292.954` (~2.4% better)
+- Fast canaries (`fit1p`, `nesm`, `bandm`, `scagr25`) remain status-stable with small drift.
+- Outliers still remain timeout-class under current `--time-mult` policy.
