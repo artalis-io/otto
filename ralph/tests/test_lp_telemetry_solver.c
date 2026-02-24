@@ -12,6 +12,7 @@
 #include <string.h>
 #include <math.h>
 #include "lp.h"
+#include "lp_refactor_policy.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -74,6 +75,9 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.policy.periodic_cost_gate_defers_phase2 = 6;
     solver.policy.periodic_cost_consecutive_defers_phase2 = 2;
     solver.policy.periodic_cost_defer_cap_forced_phase2 = 3;
+    solver.policy.periodic_cost_gate_checks_phase2 = 9;
+    solver.policy.periodic_cost_gate_block_ratio_phase2 = 4;
+    solver.policy.periodic_cost_gate_last_reason_phase2 = LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO;
 
     lp_telemetry_reset_solver(&solver);
 
@@ -102,6 +106,13 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: periodic cost consecutive defers phase2");
     ASSERT_INT_EQ(solver.policy.periodic_cost_defer_cap_forced_phase2, 0,
                   "reset: periodic cost cap forced phase2");
+    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_checks_phase2, 0,
+                  "reset: periodic cost checks phase2");
+    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_block_ratio_phase2, 0,
+                  "reset: periodic cost ratio block phase2");
+    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_last_reason_phase2,
+                  LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE,
+                  "reset: periodic cost last reason phase2");
 
     lp_telemetry_record_basis_build(&solver, 1, 2, 128ULL);
     ASSERT_INT_EQ(solver.telemetry.perf_basis_fastpath_hits, 1, "basis: fastpath hit");
@@ -177,6 +188,9 @@ static void test_solver_snapshot(void) {
     solver.policy.periodic_cost_gate_defers_phase1 = 4;
     solver.policy.periodic_cost_consecutive_defers_phase1 = 1;
     solver.policy.periodic_cost_defer_cap_forced_phase1 = 2;
+    solver.policy.periodic_cost_gate_checks_phase1 = 7;
+    solver.policy.periodic_cost_gate_block_ratio_phase1 = 3;
+    solver.policy.periodic_cost_gate_last_reason_phase1 = LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO;
 
     lp_telemetry_snapshot_solver(&solver, &snap);
 
@@ -207,6 +221,13 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: periodic cost consecutive defers phase1");
     ASSERT_INT_EQ(snap.periodic_cost_defer_cap_forced_phase1, 2,
                   "solver_snapshot: periodic cost cap forced phase1");
+    ASSERT_INT_EQ(snap.periodic_cost_gate_checks_phase1, 7,
+                  "solver_snapshot: periodic cost checks phase1");
+    ASSERT_INT_EQ(snap.periodic_cost_gate_block_ratio_phase1, 3,
+                  "solver_snapshot: periodic cost ratio block phase1");
+    ASSERT_INT_EQ(snap.periodic_cost_gate_last_reason_phase1,
+                  LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO,
+                  "solver_snapshot: periodic cost last reason phase1");
 }
 
 int main(void) {

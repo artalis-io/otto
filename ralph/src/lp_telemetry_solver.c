@@ -6,6 +6,7 @@
 
 #include <string.h>
 #include "lp.h"
+#include "lp_refactor_policy.h"
 
 static int solver_telemetry_enabled(const SimplexSolver *solver) {
     return solver && solver->telemetry_enabled;
@@ -109,6 +110,20 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->policy.periodic_cost_consecutive_defers_phase2 = 0;
     solver->policy.periodic_cost_defer_cap_forced_phase1 = 0;
     solver->policy.periodic_cost_defer_cap_forced_phase2 = 0;
+    solver->policy.periodic_cost_gate_checks_phase1 = 0;
+    solver->policy.periodic_cost_gate_checks_phase2 = 0;
+    solver->policy.periodic_cost_gate_block_small_m_phase1 = 0;
+    solver->policy.periodic_cost_gate_block_small_m_phase2 = 0;
+    solver->policy.periodic_cost_gate_block_invalid_inputs_phase1 = 0;
+    solver->policy.periodic_cost_gate_block_invalid_inputs_phase2 = 0;
+    solver->policy.periodic_cost_gate_block_invalid_cost_phase1 = 0;
+    solver->policy.periodic_cost_gate_block_invalid_cost_phase2 = 0;
+    solver->policy.periodic_cost_gate_block_ratio_phase1 = 0;
+    solver->policy.periodic_cost_gate_block_ratio_phase2 = 0;
+    solver->policy.periodic_cost_gate_block_update_reserve_phase1 = 0;
+    solver->policy.periodic_cost_gate_block_update_reserve_phase2 = 0;
+    solver->policy.periodic_cost_gate_last_reason_phase1 = LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE;
+    solver->policy.periodic_cost_gate_last_reason_phase2 = LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE;
     solver->policy.soft_lu_refactor_cost_ewma_phase1 = 0.0;
     solver->policy.soft_lu_refactor_cost_ewma_phase2 = 0.0;
     solver->policy.soft_lu_iter_cost_ewma_phase1 = 0.0;
@@ -346,6 +361,20 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     out->periodic_cost_consecutive_defers_phase2 = solver->policy.periodic_cost_consecutive_defers_phase2;
     out->periodic_cost_defer_cap_forced_phase1 = solver->policy.periodic_cost_defer_cap_forced_phase1;
     out->periodic_cost_defer_cap_forced_phase2 = solver->policy.periodic_cost_defer_cap_forced_phase2;
+    out->periodic_cost_gate_checks_phase1 = solver->policy.periodic_cost_gate_checks_phase1;
+    out->periodic_cost_gate_checks_phase2 = solver->policy.periodic_cost_gate_checks_phase2;
+    out->periodic_cost_gate_block_small_m_phase1 = solver->policy.periodic_cost_gate_block_small_m_phase1;
+    out->periodic_cost_gate_block_small_m_phase2 = solver->policy.periodic_cost_gate_block_small_m_phase2;
+    out->periodic_cost_gate_block_invalid_inputs_phase1 = solver->policy.periodic_cost_gate_block_invalid_inputs_phase1;
+    out->periodic_cost_gate_block_invalid_inputs_phase2 = solver->policy.periodic_cost_gate_block_invalid_inputs_phase2;
+    out->periodic_cost_gate_block_invalid_cost_phase1 = solver->policy.periodic_cost_gate_block_invalid_cost_phase1;
+    out->periodic_cost_gate_block_invalid_cost_phase2 = solver->policy.periodic_cost_gate_block_invalid_cost_phase2;
+    out->periodic_cost_gate_block_ratio_phase1 = solver->policy.periodic_cost_gate_block_ratio_phase1;
+    out->periodic_cost_gate_block_ratio_phase2 = solver->policy.periodic_cost_gate_block_ratio_phase2;
+    out->periodic_cost_gate_block_update_reserve_phase1 = solver->policy.periodic_cost_gate_block_update_reserve_phase1;
+    out->periodic_cost_gate_block_update_reserve_phase2 = solver->policy.periodic_cost_gate_block_update_reserve_phase2;
+    out->periodic_cost_gate_last_reason_phase1 = solver->policy.periodic_cost_gate_last_reason_phase1;
+    out->periodic_cost_gate_last_reason_phase2 = solver->policy.periodic_cost_gate_last_reason_phase2;
     out->soft_lu_refactor_cost_ewma_phase1 = solver->policy.soft_lu_refactor_cost_ewma_phase1;
     out->soft_lu_refactor_cost_ewma_phase2 = solver->policy.soft_lu_refactor_cost_ewma_phase2;
     out->soft_lu_iter_cost_ewma_phase1 = solver->policy.soft_lu_iter_cost_ewma_phase1;

@@ -471,18 +471,19 @@ int lp_refactor_policy_soft_lu_cost_gate_should_defer(int phase,
     return 1;
 }
 
-int lp_refactor_policy_periodic_cost_dampen_should_defer(int phase,
-                                                         int m,
-                                                         int use_bland,
-                                                         int degenerate_count,
-                                                         int num_updates,
-                                                         int max_updates,
-                                                         int spike_pool_used,
-                                                         int spike_pool_capacity,
-                                                         double cond_estimate,
-                                                         double growth_factor,
-                                                         double refactor_cost_ewma_ms,
-                                                         double iter_cost_ewma_ms) {
+LPPeriodicCostDampenReason lp_refactor_policy_periodic_cost_dampen_decision(
+    int phase,
+    int m,
+    int use_bland,
+    int degenerate_count,
+    int num_updates,
+    int max_updates,
+    int spike_pool_used,
+    int spike_pool_capacity,
+    double cond_estimate,
+    double growth_factor,
+    double refactor_cost_ewma_ms,
+    double iter_cost_ewma_ms) {
     int min_m;
     int update_reserve;
     double ratio;
@@ -499,24 +500,72 @@ int lp_refactor_policy_periodic_cost_dampen_should_defer(int phase,
     } else if (phase == 2) {
         min_m = PERIODIC_COST_DAMPEN_PHASE2_MIN_M;
     } else {
-        return 0;
+        return LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE;
     }
 
-    if (m < min_m) return 0;
-    if (max_updates <= 0 || num_updates <= 0) return 0;
-    if (!isfinite(refactor_cost_ewma_ms) || !isfinite(iter_cost_ewma_ms)) return 0;
-    if (refactor_cost_ewma_ms < PERIODIC_COST_DAMPEN_MIN_REFACTOR_MS) return 0;
-    if (!(iter_cost_ewma_ms > 0.0)) return 0;
+    if (m < min_m) return LP_PERIODIC_COST_DAMPEN_BLOCK_SMALL_M;
+    if (max_updates <= 0 || num_updates <= 0) return LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_INPUTS;
+    if (!isfinite(refactor_cost_ewma_ms) || !isfinite(iter_cost_ewma_ms)) {
+        return LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_COST;
+    }
+    if (refactor_cost_ewma_ms < PERIODIC_COST_DAMPEN_MIN_REFACTOR_MS) {
+        return LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_COST;
+    }
+    if (!(iter_cost_ewma_ms > 0.0)) return LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_COST;
 
     ratio = refactor_cost_ewma_ms / iter_cost_ewma_ms;
-    if (ratio < PERIODIC_COST_DAMPEN_RATIO_TRIGGER) return 0;
+    if (ratio < PERIODIC_COST_DAMPEN_RATIO_TRIGGER) return LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO;
 
     update_reserve = (max_updates * PERIODIC_COST_DAMPEN_UPDATE_RESERVE_NUM) /
                      PERIODIC_COST_DAMPEN_UPDATE_RESERVE_DEN;
     if (update_reserve < PERIODIC_COST_DAMPEN_UPDATE_RESERVE_MIN) {
         update_reserve = PERIODIC_COST_DAMPEN_UPDATE_RESERVE_MIN;
     }
-    if (num_updates >= max_updates - update_reserve) return 0;
+    if (num_updates >= max_updates - update_reserve) {
+        return LP_PERIODIC_COST_DAMPEN_BLOCK_UPDATE_RESERVE;
+    }
 
-    return 1;
+    return LP_PERIODIC_COST_DAMPEN_DEFER;
+}
+
+int lp_refactor_policy_periodic_cost_dampen_should_defer(int phase,
+                                                         int m,
+                                                         int use_bland,
+                                                         int degenerate_count,
+                                                         int num_updates,
+                                                         int max_updates,
+                                                         int spike_pool_used,
+                                                         int spike_pool_capacity,
+                                                         double cond_estimate,
+                                                         double growth_factor,
+                                                         double refactor_cost_ewma_ms,
+                                                         double iter_cost_ewma_ms) {
+    LPPeriodicCostDampenReason decision =
+        lp_refactor_policy_periodic_cost_dampen_decision(phase,
+                                                         m,
+                                                         use_bland,
+                                                         degenerate_count,
+                                                         num_updates,
+                                                         max_updates,
+                                                         spike_pool_used,
+                                                         spike_pool_capacity,
+                                                         cond_estimate,
+                                                         growth_factor,
+                                                         refactor_cost_ewma_ms,
+                                                         iter_cost_ewma_ms);
+    return decision == LP_PERIODIC_COST_DAMPEN_DEFER;
+}
+
+const char* lp_refactor_policy_periodic_cost_dampen_reason_string(
+    LPPeriodicCostDampenReason reason) {
+    switch (reason) {
+        case LP_PERIODIC_COST_DAMPEN_DEFER: return "defer";
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE: return "invalid_phase";
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_SMALL_M: return "small_matrix";
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_INPUTS: return "invalid_inputs";
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_COST: return "invalid_cost";
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO: return "ratio_below_threshold";
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_UPDATE_RESERVE: return "update_reserve";
+        default: return "unknown";
+    }
 }

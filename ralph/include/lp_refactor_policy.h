@@ -17,6 +17,16 @@ typedef struct {
     int refactor_now;
 } LPLUHealthRefactorDecision;
 
+typedef enum {
+    LP_PERIODIC_COST_DAMPEN_DEFER = 0,
+    LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE = 1,
+    LP_PERIODIC_COST_DAMPEN_BLOCK_SMALL_M = 2,
+    LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_INPUTS = 3,
+    LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_COST = 4,
+    LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO = 5,
+    LP_PERIODIC_COST_DAMPEN_BLOCK_UPDATE_RESERVE = 6
+} LPPeriodicCostDampenReason;
+
 LPPeriodicRefactorPolicy lp_refactor_policy_build_from_metrics(int phase,
                                                                int m,
                                                                int max_updates,
@@ -90,5 +100,22 @@ int lp_refactor_policy_periodic_cost_dampen_should_defer(int phase,
                                                          double growth_factor,
                                                          double refactor_cost_ewma_ms,
                                                          double iter_cost_ewma_ms);
+
+LPPeriodicCostDampenReason lp_refactor_policy_periodic_cost_dampen_decision(
+    int phase,
+    int m,
+    int use_bland,
+    int degenerate_count,
+    int num_updates,
+    int max_updates,
+    int spike_pool_used,
+    int spike_pool_capacity,
+    double cond_estimate,
+    double growth_factor,
+    double refactor_cost_ewma_ms,
+    double iter_cost_ewma_ms);
+
+const char* lp_refactor_policy_periodic_cost_dampen_reason_string(
+    LPPeriodicCostDampenReason reason);
 
 #endif

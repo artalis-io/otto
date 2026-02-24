@@ -615,6 +615,20 @@ typedef struct {
     int periodic_cost_consecutive_defers_phase2; /* current policy-periodic defer streak (Phase 2) */
     int periodic_cost_defer_cap_forced_phase1;   /* cap-blocked policy periodic defers (Phase 1) */
     int periodic_cost_defer_cap_forced_phase2;   /* cap-blocked policy periodic defers (Phase 2) */
+    int periodic_cost_gate_checks_phase1;        /* evaluations of periodic cost gate in Phase 1 */
+    int periodic_cost_gate_checks_phase2;        /* evaluations of periodic cost gate in Phase 2 */
+    int periodic_cost_gate_block_small_m_phase1; /* blocked: matrix too small (Phase 1) */
+    int periodic_cost_gate_block_small_m_phase2; /* blocked: matrix too small (Phase 2) */
+    int periodic_cost_gate_block_invalid_inputs_phase1; /* blocked: invalid updates/inputs (Phase 1) */
+    int periodic_cost_gate_block_invalid_inputs_phase2; /* blocked: invalid updates/inputs (Phase 2) */
+    int periodic_cost_gate_block_invalid_cost_phase1;   /* blocked: invalid EWMA cost (Phase 1) */
+    int periodic_cost_gate_block_invalid_cost_phase2;   /* blocked: invalid EWMA cost (Phase 2) */
+    int periodic_cost_gate_block_ratio_phase1;    /* blocked: ratio below threshold (Phase 1) */
+    int periodic_cost_gate_block_ratio_phase2;    /* blocked: ratio below threshold (Phase 2) */
+    int periodic_cost_gate_block_update_reserve_phase1; /* blocked: too close to max updates (Phase 1) */
+    int periodic_cost_gate_block_update_reserve_phase2; /* blocked: too close to max updates (Phase 2) */
+    int periodic_cost_gate_last_reason_phase1;    /* last policy decision code (Phase 1) */
+    int periodic_cost_gate_last_reason_phase2;    /* last policy decision code (Phase 2) */
     double soft_lu_refactor_cost_ewma_phase1; /* EWMA refactor cost estimate (ms) */
     double soft_lu_refactor_cost_ewma_phase2; /* EWMA refactor cost estimate (ms) */
     double soft_lu_iter_cost_ewma_phase1;     /* EWMA per-iteration hot-path cost (ms) */
@@ -817,6 +831,20 @@ typedef struct {
     int periodic_cost_consecutive_defers_phase2;
     int periodic_cost_defer_cap_forced_phase1;
     int periodic_cost_defer_cap_forced_phase2;
+    int periodic_cost_gate_checks_phase1;
+    int periodic_cost_gate_checks_phase2;
+    int periodic_cost_gate_block_small_m_phase1;
+    int periodic_cost_gate_block_small_m_phase2;
+    int periodic_cost_gate_block_invalid_inputs_phase1;
+    int periodic_cost_gate_block_invalid_inputs_phase2;
+    int periodic_cost_gate_block_invalid_cost_phase1;
+    int periodic_cost_gate_block_invalid_cost_phase2;
+    int periodic_cost_gate_block_ratio_phase1;
+    int periodic_cost_gate_block_ratio_phase2;
+    int periodic_cost_gate_block_update_reserve_phase1;
+    int periodic_cost_gate_block_update_reserve_phase2;
+    int periodic_cost_gate_last_reason_phase1;
+    int periodic_cost_gate_last_reason_phase2;
     double soft_lu_refactor_cost_ewma_phase1;
     double soft_lu_refactor_cost_ewma_phase2;
     double soft_lu_iter_cost_ewma_phase1;

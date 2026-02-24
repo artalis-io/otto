@@ -284,6 +284,55 @@ static int* periodic_cost_cap_forced_ptr(SimplexSolver *owner, int phase) {
     return NULL;
 }
 
+static int* periodic_cost_checks_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_checks_phase1;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_checks_phase2;
+    return NULL;
+}
+
+static int* periodic_cost_block_small_m_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_block_small_m_phase1;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_block_small_m_phase2;
+    return NULL;
+}
+
+static int* periodic_cost_block_invalid_inputs_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_block_invalid_inputs_phase1;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_block_invalid_inputs_phase2;
+    return NULL;
+}
+
+static int* periodic_cost_block_invalid_cost_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_block_invalid_cost_phase1;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_block_invalid_cost_phase2;
+    return NULL;
+}
+
+static int* periodic_cost_block_ratio_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_block_ratio_phase1;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_block_ratio_phase2;
+    return NULL;
+}
+
+static int* periodic_cost_block_update_reserve_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_block_update_reserve_phase1;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_block_update_reserve_phase2;
+    return NULL;
+}
+
+static int* periodic_cost_last_reason_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_last_reason_phase1;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_last_reason_phase2;
+    return NULL;
+}
+
 static int periodic_cost_consecutive_defers(const SimplexSolver *owner, int phase) {
     if (!owner) return 0;
     if (phase == 1) return owner->policy.periodic_cost_consecutive_defers_phase1;
@@ -306,6 +355,42 @@ static void periodic_cost_record_cap_forced(SimplexSolver *owner, int phase) {
     int *ptr = periodic_cost_cap_forced_ptr(owner, phase);
     if (!ptr) return;
     (*ptr)++;
+}
+
+static void periodic_cost_record_gate_reason(SimplexSolver *owner,
+                                             int phase,
+                                             LPPeriodicCostDampenReason reason) {
+    int *checks_ptr = periodic_cost_checks_ptr(owner, phase);
+    int *last_reason_ptr = periodic_cost_last_reason_ptr(owner, phase);
+    int *block_ptr = NULL;
+
+    if (!owner) return;
+    if (checks_ptr) (*checks_ptr)++;
+    if (last_reason_ptr) *last_reason_ptr = (int)reason;
+
+    switch (reason) {
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_SMALL_M:
+            block_ptr = periodic_cost_block_small_m_ptr(owner, phase);
+            break;
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_INPUTS:
+            block_ptr = periodic_cost_block_invalid_inputs_ptr(owner, phase);
+            break;
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_COST:
+            block_ptr = periodic_cost_block_invalid_cost_ptr(owner, phase);
+            break;
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO:
+            block_ptr = periodic_cost_block_ratio_ptr(owner, phase);
+            break;
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_UPDATE_RESERVE:
+            block_ptr = periodic_cost_block_update_reserve_ptr(owner, phase);
+            break;
+        case LP_PERIODIC_COST_DAMPEN_DEFER:
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE:
+        default:
+            break;
+    }
+
+    if (block_ptr) (*block_ptr)++;
 }
 
 static double periodic_feedback_bias_for_phase(const SimplexSolver *owner, int phase) {
@@ -666,27 +751,31 @@ int simplex_periodic_cost_defer_plan_for_test(int phase,
                                               double refactor_cost_ewma_ms,
                                               double iter_cost_ewma_ms,
                                               int consecutive_defers,
+                                              int *reason_out,
                                               int *cap_out,
                                               int *cap_blocked_out,
                                               int *next_consecutive_defers_out) {
+    LPPeriodicCostDampenReason decision;
     int cap = periodic_cost_defer_cap_for_phase(phase);
     int should_defer = 0;
     int cap_blocked = 0;
     int next_consecutive = 0;
 
     if (consecutive_defers < 0) consecutive_defers = 0;
-    if (lp_refactor_policy_periodic_cost_dampen_should_defer(phase,
-                                                              m,
-                                                              use_bland,
-                                                              degenerate_count,
-                                                              num_updates,
-                                                              max_updates,
-                                                              spike_pool_used,
-                                                              spike_pool_capacity,
-                                                              cond_estimate,
-                                                              growth_factor,
-                                                              refactor_cost_ewma_ms,
-                                                              iter_cost_ewma_ms)) {
+    decision = lp_refactor_policy_periodic_cost_dampen_decision(
+        phase,
+        m,
+        use_bland,
+        degenerate_count,
+        num_updates,
+        max_updates,
+        spike_pool_used,
+        spike_pool_capacity,
+        cond_estimate,
+        growth_factor,
+        refactor_cost_ewma_ms,
+        iter_cost_ewma_ms);
+    if (decision == LP_PERIODIC_COST_DAMPEN_DEFER) {
         if (cap > 0 && consecutive_defers >= cap) {
             cap_blocked = 1;
         } else {
@@ -695,6 +784,7 @@ int simplex_periodic_cost_defer_plan_for_test(int phase,
         }
     }
 
+    if (reason_out) *reason_out = (int)decision;
     if (cap_out) *cap_out = cap;
     if (cap_blocked_out) *cap_blocked_out = cap_blocked;
     if (next_consecutive_defers_out) *next_consecutive_defers_out = next_consecutive;
@@ -5481,6 +5571,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 if (solver->policy.periodic_cost_gate_enabled) {
                     int cap_blocked = 0;
                     int next_consecutive = 0;
+                    int gate_reason = LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE;
                     int should_defer = simplex_periodic_cost_defer_plan_for_test(
                         1,
                         tab->m,
@@ -5495,9 +5586,12 @@ static int simplex_phase1(SimplexSolver *solver) {
                         soft_lu_refactor_cost_ewma(solver, 1),
                         soft_lu_iter_cost_ewma(solver, 1),
                         periodic_cost_consecutive_defers(solver, 1),
+                        &gate_reason,
                         NULL,
                         &cap_blocked,
                         &next_consecutive);
+                    periodic_cost_record_gate_reason(
+                        solver, 1, (LPPeriodicCostDampenReason)gate_reason);
                     if (should_defer) {
                         periodic_refactor = 0;
                         periodic_cost_record_defer(solver, 1);
@@ -5520,6 +5614,10 @@ static int simplex_phase1(SimplexSolver *solver) {
                                         tab->lu->max_updates,
                                         degenerate_count);
                             }
+                        } else if (solver->verbose >= 3) {
+                            LP_LOG_STDERR("[simplex_phase1] Policy periodic cost gate blocked defer: %s\n",
+                                    lp_refactor_policy_periodic_cost_dampen_reason_string(
+                                        (LPPeriodicCostDampenReason)gate_reason));
                         }
                     }
                 } else {
@@ -6396,6 +6494,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                 if (solver->policy.periodic_cost_gate_enabled) {
                     int cap_blocked = 0;
                     int next_consecutive = 0;
+                    int gate_reason = LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE;
                     int should_defer = simplex_periodic_cost_defer_plan_for_test(
                         2,
                         tab->m,
@@ -6410,9 +6509,12 @@ static int simplex_phase2(SimplexSolver *solver) {
                         soft_lu_refactor_cost_ewma(solver, 2),
                         soft_lu_iter_cost_ewma(solver, 2),
                         periodic_cost_consecutive_defers(solver, 2),
+                        &gate_reason,
                         NULL,
                         &cap_blocked,
                         &next_consecutive);
+                    periodic_cost_record_gate_reason(
+                        solver, 2, (LPPeriodicCostDampenReason)gate_reason);
                     if (should_defer) {
                         periodic_refactor = 0;
                         periodic_cost_record_defer(solver, 2);
@@ -6435,6 +6537,10 @@ static int simplex_phase2(SimplexSolver *solver) {
                                         tab->lu->max_updates,
                                         degenerate_count);
                             }
+                        } else if (solver->verbose >= 3) {
+                            LP_LOG_STDERR("[primal_simplex] Policy periodic cost gate blocked defer: %s\n",
+                                    lp_refactor_policy_periodic_cost_dampen_reason_string(
+                                        (LPPeriodicCostDampenReason)gate_reason));
                         }
                     }
                 } else {
