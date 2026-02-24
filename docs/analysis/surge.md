@@ -90,7 +90,7 @@ Current constraint coverage is genuinely rich:
 - LIFO/FIFO PD stacking (per-vehicle)
 - Backhaul constraint (linehaul before PD pickups)
 
-This is broader than VROOM (which lacks soft TW, DARP, breaks, multi-trip, setup times). It's comparable to OR-Tools in constraint breadth, though OR-Tools has more flexibility via its CP-SAT backend.
+This is broader than VROOM (which lacks soft TW, DARP, breaks, multi-trip, setup times). It's comparable to OR-Tools in constraint breadth, though OR-Tools has more flexibility via its legacy CP solver backend.
 
 **Weakness**: No skills/technician scheduling constraints (availability calendars, lunch breaks at specific times). No multi-period/strategic planning. No vehicle compartments. No precedence constraints between requests (beyond PD pairing). These are things commercial solvers like Ortec or PTV handle. Some are on the roadmap.
 
@@ -132,7 +132,7 @@ Language bindings are trivial given the JSON API — each binding is just a thin
 - Deterministic: reproducible bugs.
 - ASAN/UBSan clean: no undefined behavior.
 
-Compare with OR-Tools where the relevant code spans across CP-SAT, routing library, and constraint solver — hundreds of thousands of lines with complex template hierarchies. Good luck auditing that for a customer.
+Compare with OR-Tools where the relevant code spans across the legacy CP solver, routing library, and constraint solver — hundreds of thousands of lines with complex template hierarchies. Good luck auditing that for a customer.
 
 ---
 
@@ -193,7 +193,7 @@ Remaining opportunity: **Parallel move evaluation** — the `sg_route_rank_inser
 Surge now has best-in-class memory management for VRP solvers:
 
 - **VROOM (C++)**: STL containers with general-purpose allocators. No arena strategy. VROOM wins on speed by doing less work (construction + basic local search, no metaheuristic), not by better memory management.
-- **OR-Tools (C++)**: General-purpose C++ with smart pointers, STL, and heavy abstraction layers (CP-SAT, dimensions, callbacks). Significant allocation overhead from the framework machinery. No arena strategy in the routing layer.
+- **OR-Tools (C++)**: General-purpose C++ with smart pointers, STL, and heavy abstraction layers (legacy CP solver, dimensions, callbacks). Significant allocation overhead from the framework machinery. No arena strategy in the routing layer.
 - **Jsprit / OptaPlanner / Timefold (Java)**: JVM with garbage collection. Every object carries 12-16 bytes of header overhead. Lots of temporary objects in inner loops. GC pauses are unpredictable. 10-30x slower for equivalent quality isn't just algorithmic — it's largely allocation/GC overhead.
 - **HGS (C++)**: Vidal's implementation is lean — vectors and simple structs. Not arena-based but efficient idiomatic C++. Closest competitor on memory discipline, though still using general-purpose allocators.
 
@@ -327,7 +327,7 @@ The persistent +1 vehicle gap on tight-TW instances (R1, RC1, LR1, LRC1) is the 
 **What top solvers do differently:**
 - **HGS/PyVRP**: Population diversity + education (local search on infeasible solutions with penalty). Surge's population search is a step toward this but doesn't do infeasible-space exploration.
 - **LKH-3**: Giant-tour with Lin-Kernighan moves. Not applicable to rich VRP but devastating on clean VRPTW.
-- **OR-Tools + CP-SAT**: Can throw exact methods at small neighborhoods. Surge has no exact component (Ralph exists but isn't integrated).
+- **OR-Tools + CP solver**: Can throw exact methods at small neighborhoods via the legacy constraint programming solver. Surge has no exact component (Ralph exists but isn't integrated).
 
 **Realistic next quality moves:**
 1. **Infeasible-space exploration** — accept TW/capacity violations with self-adjusting penalty, letting ALNS explore across feasibility boundaries. This is what makes HGS work on tight instances.
