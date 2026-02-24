@@ -1694,6 +1694,27 @@ Grouped by business impact:
 | **Backhaul constraint** | ✅ Complete | All D-only stops before PD pickups. `sg_vehicle_set_backhaul()`. Feasibility + both insertion evaluators + plan validation. 6 tests. |
 | **Energy cost model** | Not started | EV-specific path energy cost. OR-Tools only. |
 
+**Tier 3b — Solver-layer gaps (vs commercial solvers):**
+
+These require changes to ALNS/feasibility/insertion. Neither OR-Tools nor VROOM has them.
+
+| Gap | Status | Impact | Notes |
+|-----|--------|--------|-------|
+| **Live re-optimization** | Not started | High | Lock committed stops (frozen route prefix), re-solve unlocked suffix with new orders. Table stakes for real-time dispatch — Girteka/Waberer's would ask day one. Solver needs locked-prefix awareness in destroy/repair operators. |
+| **Vehicle compartments** | Not started | Medium | Per-compartment capacity (frozen/chilled/ambient). Insertion must check which compartment fits, feasibility tracks loads per compartment. Deal-closer for grocery/food distribution, irrelevant for parcel/LTL. |
+| **Inter-request precedence** | Not started | Low | "Deliver A before B" beyond PD pairing. Feasibility + insertion pruning, same class as LIFO/FIFO. Rarely a deal-breaker — most real precedence maps to time windows or application-layer sequencing. |
+
+**Tier 3c — Application-layer features (already expressible with current API):**
+
+These do NOT require solver changes — they are orchestration around the existing API.
+
+| Feature | How to Express | Notes |
+|---------|---------------|-------|
+| **Multi-period/strategic planning** | Solve each day independently, chain via `sg_vehicle_set_initial_load()` for end-of-day state. | Orchestration decides request-to-day assignment. |
+| **Territory/zone assignment** | Pre-filter via `sg_request_set_allowed_vehicles()`. | Geographic zones → vehicle sets before solve. |
+| **Driver skill calendars** | Vehicle set per day + `sg_request_set_qualifications()`. | Availability = which vehicles exist in today's solve. |
+| **Regulatory compliance** | Break policy params (HoSE) + per-vehicle travel profiles (restricted networks). | Country-specific rules map to existing constraint parameters. |
+
 **Tier 4 — Competitive gaps (vs OR-Tools / VROOM):**
 
 | Gap | Status | Competitors | Notes |
