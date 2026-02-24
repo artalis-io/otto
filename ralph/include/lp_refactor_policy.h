@@ -65,6 +65,10 @@ int lp_refactor_policy_phase1_cooldown_eligible(int m,
 
 int lp_refactor_policy_phase1_cooldown_window_updates(int interval);
 
+int lp_refactor_policy_phase1_dir_stabilize_cooldown_updates(int m,
+                                                             int degenerate_count,
+                                                             int repeat_streak);
+
 LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(
     int m,
     int use_ft_updates,
