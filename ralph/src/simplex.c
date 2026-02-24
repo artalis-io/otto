@@ -1932,7 +1932,12 @@ static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
                 int new_block_nnz = 0;
                 int old_tail_start = old_block_end;
                 int old_tail_nnz = old_total_nnz - old_tail_start;
-                int use_sparse_patch = 0;
+                int span_cols = last_changed - first_changed + 1;
+                int unchanged_cols = span_cols - changed;
+                int use_sparse_patch =
+                    (unchanged_cols > 0 &&
+                     unchanged_cols * 2 >= span_cols &&
+                     old_block_nnz >= 256);
                 unsigned long long tail_shift_bytes = 0;
                 int changed_cols_rewritten = 0;
 
