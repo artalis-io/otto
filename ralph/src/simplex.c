@@ -129,7 +129,6 @@ typedef enum {
 #define PHASE1_STALL_THRESHOLD_DEFAULT 50
 #define PHASE1_STALL_THRESHOLD_LARGE 30
 #define PHASE1_NO_ENTERING_CLEANUP_MAX_ITERS 128
-#define PHASE1_NO_PIVOT_STREAK_SATURATION 1000000000
 #define PHASE1_AUTO_DANTZIG_MIN_M 700
 #define PHASE1_AUTO_DANTZIG_MAX_M 1200
 #define PHASE1_AUTO_DANTZIG_DEGEN_TRIGGER 20
@@ -846,26 +845,6 @@ int simplex_periodic_cost_defer_plan_for_test(int phase,
     if (cap_blocked_out) *cap_blocked_out = cap_blocked;
     if (next_consecutive_defers_out) *next_consecutive_defers_out = next_consecutive;
     return should_defer;
-}
-
-int simplex_phase1_stall_escape_plan_for_test(int m,
-                                              int degenerate_count,
-                                              int no_pivot_streak,
-                                              int use_bland,
-                                              int cooldown_updates,
-                                              int *exclude_iters_out,
-                                              int *next_cooldown_out) {
-    int eligible = lp_refactor_policy_phase1_stall_escape_eligible(m,
-                                                                    degenerate_count,
-                                                                    no_pivot_streak,
-                                                                    use_bland,
-                                                                    cooldown_updates);
-    int exclude_iters = lp_refactor_policy_phase1_stall_escape_exclude_iters(m, no_pivot_streak);
-    int next_cooldown = lp_refactor_policy_phase1_stall_escape_cooldown_updates(m, no_pivot_streak);
-
-    if (exclude_iters_out) *exclude_iters_out = exclude_iters;
-    if (next_cooldown_out) *next_cooldown_out = next_cooldown;
-    return eligible;
 }
 
 /* FNV-1a style mixer for deterministic trace signatures. */
@@ -4971,8 +4950,6 @@ static int simplex_phase1(SimplexSolver *solver) {
     int excluded_entering_ttl_b = 0;
     int dir_stabilize_cooldown = 0;
     int dir_stabilize_repeat_count = 0;
-    int no_pivot_streak = 0;
-    int stall_escape_cooldown = 0;
     int no_entering_cleanup_streak = 0;
     int periodic_policy_cooldown = 0;
     double periodic_policy_pressure_decay = 0.0;
@@ -5026,9 +5003,6 @@ static int simplex_phase1(SimplexSolver *solver) {
         }
         if (dir_stabilize_cooldown > 0) {
             dir_stabilize_cooldown--;
-        }
-        if (stall_escape_cooldown > 0) {
-            stall_escape_cooldown--;
         }
         if (periodic_policy_cooldown > 0) {
             periodic_policy_cooldown--;
@@ -5189,45 +5163,13 @@ static int simplex_phase1(SimplexSolver *solver) {
 
         if (ratio_status != 0) {
             phase1_trace_record_no_entering(solver, iter, ratio_status);
-            if (no_pivot_streak < PHASE1_NO_PIVOT_STREAK_SATURATION) {
-                no_pivot_streak++;
-            }
 
             /* "Unbounded" in Phase 1 is typically numerical, not structural.
              * Try to recover via refactorization and conservative pricing first. */
             if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_RATIO_RECOVERY) == 0) {
-                int escape_exclude_iters = 0;
-                int escape_cooldown_next = 0;
-                int trigger_escape = simplex_phase1_stall_escape_plan_for_test(
-                    tab->m,
-                    degenerate_count,
-                    no_pivot_streak,
-                    use_bland,
-                    stall_escape_cooldown,
-                    &escape_exclude_iters,
-                    &escape_cooldown_next);
-                if (trigger_escape) {
-                    phase1_exclude_entering_var(entering,
-                                                escape_exclude_iters,
-                                                &excluded_entering_a,
-                                                &excluded_entering_ttl_a,
-                                                &excluded_entering_b,
-                                                &excluded_entering_ttl_b);
-                    use_bland = 0;
-                    stall_escape_cooldown = escape_cooldown_next;
-                    ratio_breakdown_count = 0;
-                    if (solver->verbose >= 2) {
-                        LP_LOG_STDERR("[simplex_phase1] Stall-escape gate: no-pivot streak=%d, excluding entering %d for %d iterations (cooldown=%d)\n",
-                                no_pivot_streak,
-                                entering,
-                                escape_exclude_iters,
-                                stall_escape_cooldown);
-                    }
-                } else {
-                    use_bland = 1;
-                }
                 tableau_compute_solution(tab);
                 tableau_compute_reduced_costs(tab);
+                use_bland = 1;
                 continue;
             }
             if (!use_bland) {
@@ -5446,9 +5388,6 @@ static int simplex_phase1(SimplexSolver *solver) {
             lp_telemetry_record_pivot_timed(solver, 1, t_pivot_ms);
         }
         if (pivot_status != 0) {
-            if (no_pivot_streak < PHASE1_NO_PIVOT_STREAK_SATURATION) {
-                no_pivot_streak++;
-            }
             int pivot_fail_reason = tab->trace_last_fail_reason;
             if (entering == fail_entering &&
                 leaving == fail_leaving_pos &&
@@ -5491,7 +5430,6 @@ static int simplex_phase1(SimplexSolver *solver) {
                         lp_telemetry_record_pivot_timed(solver, 1, t_pivot_ms);
                     }
                     if (alt_pivot_status == 0) {
-                        no_pivot_streak = 0;
                         fail_reason = PHASE1_PIVOT_FAIL_NONE;
                         fail_repeat_count = 0;
                         continue;
@@ -5594,7 +5532,6 @@ static int simplex_phase1(SimplexSolver *solver) {
             phase1_trace_emit_summary(solver, RALPH_STATUS_ITERATION_LIMIT);
             return -1;
         }
-        no_pivot_streak = 0;
         fail_reason = PHASE1_PIVOT_FAIL_NONE;
         fail_repeat_count = 0;
         ratio_breakdown_count = 0;
