@@ -315,6 +315,12 @@ typedef struct {
     int lu_mkz_singular_retry_attempts;
     int lu_mkz_singular_retry_successes;
     int lu_mkz_singular_retry_failures;
+    int lu_mkz_reserved_fallback_attempts;
+    int lu_mkz_reserved_fallback_accepts;
+    int lu_mkz_reserved_fallback_rejects;
+    int lu_mkz_circuit_trips;
+    int lu_mkz_circuit_skips;
+    int lu_mkz_circuit_resets;
     int lu_sparse_dense_fallbacks;
     int lu_used_dense_fallback_last;
     int lu_sparse_fallback_last_reason;
@@ -842,6 +848,12 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_mkz_singular_retry_attempts = lu_tel.mkz_singular_retry_attempts;
                 result.lu_mkz_singular_retry_successes = lu_tel.mkz_singular_retry_successes;
                 result.lu_mkz_singular_retry_failures = lu_tel.mkz_singular_retry_failures;
+                result.lu_mkz_reserved_fallback_attempts = lu_tel.mkz_reserved_fallback_attempts;
+                result.lu_mkz_reserved_fallback_accepts = lu_tel.mkz_reserved_fallback_accepts;
+                result.lu_mkz_reserved_fallback_rejects = lu_tel.mkz_reserved_fallback_rejects;
+                result.lu_mkz_circuit_trips = lu_tel.mkz_circuit_trips;
+                result.lu_mkz_circuit_skips = lu_tel.mkz_circuit_skips;
+                result.lu_mkz_circuit_resets = lu_tel.mkz_circuit_resets;
                 result.lu_sparse_dense_fallbacks = lu_tel.sparse_dense_fallbacks;
                 result.lu_used_dense_fallback_last = lu_tel.used_dense_fallback_last;
                 result.lu_sparse_fallback_last_reason = lu_tel.sparse_fallback_last_reason;
@@ -1814,6 +1826,18 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_mkz_singular_retry_successes);
     fprintf(out, "    \"mkz_singular_retry_failures\": %d,\n",
             ralph->lu_mkz_singular_retry_failures);
+    fprintf(out, "    \"mkz_reserved_fallback_attempts\": %d,\n",
+            ralph->lu_mkz_reserved_fallback_attempts);
+    fprintf(out, "    \"mkz_reserved_fallback_accepts\": %d,\n",
+            ralph->lu_mkz_reserved_fallback_accepts);
+    fprintf(out, "    \"mkz_reserved_fallback_rejects\": %d,\n",
+            ralph->lu_mkz_reserved_fallback_rejects);
+    fprintf(out, "    \"mkz_circuit_trips\": %d,\n",
+            ralph->lu_mkz_circuit_trips);
+    fprintf(out, "    \"mkz_circuit_skips\": %d,\n",
+            ralph->lu_mkz_circuit_skips);
+    fprintf(out, "    \"mkz_circuit_resets\": %d,\n",
+            ralph->lu_mkz_circuit_resets);
     fprintf(out, "    \"sparse_dense_fallbacks\": %d,\n", ralph->lu_sparse_dense_fallbacks);
     fprintf(out, "    \"used_dense_fallback_last\": %s,\n",
             ralph->lu_used_dense_fallback_last ? "true" : "false");
