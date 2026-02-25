@@ -133,6 +133,20 @@ static void test_param_metadata_and_scope(void) {
     ASSERT_INT_EQ((int)meta.max_value, 1,
                   "params: lp_external_strict max");
 
+    memset(&meta, 0, sizeof(meta));
+    ASSERT_INT_EQ(ralph_core_get_param_meta(RALPH_PARAM_LP_BASIS_GOVERNOR_MODE, &meta), 0,
+                  "params: metadata for lp_basis_governor_mode");
+    ASSERT_TRUE(strcmp(meta.name, "lp_basis_governor_mode") == 0,
+                "params: lp_basis_governor_mode canonical name");
+    ASSERT_INT_EQ((int)meta.scope, (int)RALPH_PARAM_SCOPE_LP,
+                  "params: lp_basis_governor_mode LP scope");
+    ASSERT_INT_EQ(meta.has_min, 1, "params: lp_basis_governor_mode has min");
+    ASSERT_INT_EQ(meta.has_max, 1, "params: lp_basis_governor_mode has max");
+    ASSERT_INT_EQ((int)meta.min_value, 0,
+                  "params: lp_basis_governor_mode min");
+    ASSERT_INT_EQ((int)meta.max_value, 2,
+                  "params: lp_basis_governor_mode max");
+
     ASSERT_INT_EQ(ralph_core_find_param_by_name("lp_algorithm", &pid), 0,
                   "params: find lp_algorithm canonical");
     ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_ALGORITHM,
@@ -157,6 +171,14 @@ static void test_param_metadata_and_scope(void) {
                   "params: find lp_external_strict alias");
     ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_EXTERNAL_STRICT,
                   "params: lp_external_strict alias id");
+    ASSERT_INT_EQ(ralph_core_find_param_by_name("lp_basis_governor_mode", &pid), 0,
+                  "params: find lp_basis_governor_mode canonical");
+    ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_BASIS_GOVERNOR_MODE,
+                  "params: lp_basis_governor_mode canonical id");
+    ASSERT_INT_EQ(ralph_core_find_param_by_name("LPBasisGovernorMode", &pid), 0,
+                  "params: find lp_basis_governor_mode alias");
+    ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_BASIS_GOVERNOR_MODE,
+                  "params: lp_basis_governor_mode alias id");
 
     ASSERT_INT_EQ(ralph_core_set_mip_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                                              (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX),
@@ -173,6 +195,9 @@ static void test_param_metadata_and_scope(void) {
     ASSERT_INT_EQ(ralph_core_set_mip_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 1),
                   -1,
                   "params: MIP strict rejects lp_external_strict id");
+    ASSERT_INT_EQ(ralph_core_set_mip_int_param_id(model, RALPH_PARAM_LP_BASIS_GOVERNOR_MODE, 1),
+                  -1,
+                  "params: MIP strict rejects lp_basis_governor_mode id");
 
     ASSERT_INT_EQ(ralph_core_set_lp_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                                             (int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX),
@@ -234,6 +259,14 @@ static void test_param_metadata_and_scope(void) {
                   "params: reject lp_external_provider out of range");
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 2), -1,
                   "params: reject lp_external_strict out of range");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_BASIS_GOVERNOR_MODE, 3), -1,
+                  "params: reject lp_basis_governor_mode out of range");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_BASIS_GOVERNOR_MODE, 2), 0,
+                  "params: set lp_basis_governor_mode by id");
+    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_LP_BASIS_GOVERNOR_MODE, &value), 0,
+                  "params: get lp_basis_governor_mode by id");
+    ASSERT_INT_EQ(value, 2,
+                  "params: lp_basis_governor_mode set/get consistent");
 
     ASSERT_INT_EQ(ralph_test_set_int_param(model, "barrier_crossover",
                                       (int)RALPH_LP_CROSSOVER_ON),

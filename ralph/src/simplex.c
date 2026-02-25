@@ -4369,6 +4369,9 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->warm_basis_last_applied = 0;
     solver->warm_basis_last_rejected = 0;
     solver->unbounded_valid = 0;
+    solver->policy.basis_governor_mode = LP_BASIS_GOV_MODE_OFF;
+    lp_basis_governor_set_mode(&solver->policy.basis_governor,
+                               solver->policy.basis_governor_mode);
     solver->policy.soft_lu_cost_gate_enabled = 1;
     solver->policy.periodic_cost_gate_enabled = 1;
 
@@ -5740,16 +5743,25 @@ static int simplex_phase1(SimplexSolver *solver) {
         if (periodic_refactor) {
             periodic_feedback_set_hint(solver, 1, periodic_policy.interval, effective_policy_pressure);
         }
-        if (solver->telemetry_enabled) {
+        {
             int shadow_refactor = lp_basis_governor_shadow_decide(
                 LP_BASIS_GOV_PHASE1,
                 lu_refactor_nominal,
                 periodic_refactor_nominal);
-            lp_basis_governor_observe_refactor(
+            int governed_refactor = lp_basis_governor_decide_refactor(
                 &solver->policy.basis_governor,
                 LP_BASIS_GOV_PHASE1,
-                shadow_refactor,
+                lu_refactor_nominal,
+                periodic_refactor_nominal,
                 needs_refactor);
+            if (solver->telemetry_enabled) {
+                lp_basis_governor_observe_refactor(
+                    &solver->policy.basis_governor,
+                    LP_BASIS_GOV_PHASE1,
+                    shadow_refactor,
+                    governed_refactor);
+            }
+            needs_refactor = governed_refactor;
         }
 
         if (needs_refactor) {
@@ -6731,16 +6743,25 @@ static int simplex_phase2(SimplexSolver *solver) {
         if (periodic_refactor) {
             periodic_feedback_set_hint(solver, 2, periodic_policy.interval, effective_policy_pressure);
         }
-        if (solver->telemetry_enabled) {
+        {
             int shadow_refactor = lp_basis_governor_shadow_decide(
                 LP_BASIS_GOV_PHASE2,
                 lu_refactor_nominal,
                 periodic_refactor_nominal);
-            lp_basis_governor_observe_refactor(
+            int governed_refactor = lp_basis_governor_decide_refactor(
                 &solver->policy.basis_governor,
                 LP_BASIS_GOV_PHASE2,
-                shadow_refactor,
+                lu_refactor_nominal,
+                periodic_refactor_nominal,
                 needs_refactor);
+            if (solver->telemetry_enabled) {
+                lp_basis_governor_observe_refactor(
+                    &solver->policy.basis_governor,
+                    LP_BASIS_GOV_PHASE2,
+                    shadow_refactor,
+                    governed_refactor);
+            }
+            needs_refactor = governed_refactor;
         }
 
         if (needs_refactor) {
@@ -7168,6 +7189,12 @@ static int lp_run_user_callbacks(SimplexSolver *solver,
 static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *tab) {
     if (!solver || !tab) return;
 
+    if (!lp_basis_governor_mode_is_valid(solver->policy.basis_governor_mode)) {
+        solver->policy.basis_governor_mode = LP_BASIS_GOV_MODE_OFF;
+    }
+    lp_basis_governor_set_mode(&solver->policy.basis_governor,
+                               solver->policy.basis_governor_mode);
+
     tab->owner = solver;
     tab->use_steepest_edge = (solver->pricing_strategy == 1 || solver->pricing_strategy == 2
                               || solver->pricing_strategy == 5);
@@ -7175,7 +7202,11 @@ static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *
     tab->trace_phase1_enabled = solver->trace_phase1;
     if (tab->lu) {
         tab->lu->telemetry_enabled = solver->telemetry_enabled;
-        tab->lu->basis_governor = &solver->policy.basis_governor;
+        if (solver->policy.basis_governor_mode == LP_BASIS_GOV_MODE_OFF) {
+            tab->lu->basis_governor = NULL;
+        } else {
+            tab->lu->basis_governor = &solver->policy.basis_governor;
+        }
         if (solver->lu_supernode)
             tab->lu->sn_enabled = 1;
         else if (tab->m > 300)

@@ -9,9 +9,33 @@ static int phase_is_primal(int phase) {
     return (phase == LP_BASIS_GOV_PHASE1 || phase == LP_BASIS_GOV_PHASE2);
 }
 
+int lp_basis_governor_mode_is_valid(int mode) {
+    return mode == LP_BASIS_GOV_MODE_OFF ||
+           mode == LP_BASIS_GOV_MODE_SHADOW ||
+           mode == LP_BASIS_GOV_MODE_CONTROL_PHASE2;
+}
+
+int lp_basis_governor_get_mode(const LPBasisGovernorState *state) {
+    if (!state) return LP_BASIS_GOV_MODE_OFF;
+    if (!lp_basis_governor_mode_is_valid(state->mode)) {
+        return LP_BASIS_GOV_MODE_OFF;
+    }
+    return state->mode;
+}
+
+void lp_basis_governor_set_mode(LPBasisGovernorState *state, int mode) {
+    if (!state) return;
+    if (!lp_basis_governor_mode_is_valid(mode)) {
+        state->mode = LP_BASIS_GOV_MODE_OFF;
+        return;
+    }
+    state->mode = mode;
+}
+
 void lp_basis_governor_begin_solve(LPBasisGovernorState *state) {
     if (!state) return;
     memset(state, 0, sizeof(*state));
+    state->mode = LP_BASIS_GOV_MODE_OFF;
 }
 
 int lp_basis_governor_shadow_decide(int phase,
@@ -23,6 +47,24 @@ int lp_basis_governor_shadow_decide(int phase,
         return 0;
     }
     return (lu_health_refactor_now || periodic_policy_refactor_now) ? 1 : 0;
+}
+
+int lp_basis_governor_decide_refactor(const LPBasisGovernorState *state,
+                                      int phase,
+                                      int lu_health_refactor_now,
+                                      int periodic_policy_refactor_now,
+                                      int actual_refactor_now) {
+    int mode = lp_basis_governor_get_mode(state);
+    int shadow_refactor = lp_basis_governor_shadow_decide(phase,
+                                                          lu_health_refactor_now,
+                                                          periodic_policy_refactor_now);
+    int actual = actual_refactor_now ? 1 : 0;
+
+    if (mode == LP_BASIS_GOV_MODE_CONTROL_PHASE2 &&
+        phase == LP_BASIS_GOV_PHASE2) {
+        return shadow_refactor;
+    }
+    return actual;
 }
 
 void lp_basis_governor_observe_iter(LPBasisGovernorState *state,
@@ -39,7 +81,10 @@ void lp_basis_governor_observe_refactor(LPBasisGovernorState *state,
                                         int phase,
                                         int shadow_refactor_now,
                                         int actual_refactor_now) {
+    int mode = LP_BASIS_GOV_MODE_OFF;
     if (!state) return;
+    mode = lp_basis_governor_get_mode(state);
+    if (mode == LP_BASIS_GOV_MODE_OFF) return;
 
     if (shadow_refactor_now) {
         if (phase == LP_BASIS_GOV_PHASE1) state->shadow_refactor_yes_phase1++;
@@ -70,7 +115,10 @@ int lp_basis_governor_shadow_decide_lu_backend(int markowitz_eligible,
 void lp_basis_governor_observe_lu_backend(LPBasisGovernorState *state,
                                           int shadow_backend_pick,
                                           int actual_backend_used) {
+    int mode = LP_BASIS_GOV_MODE_OFF;
     if (!state) return;
+    mode = lp_basis_governor_get_mode(state);
+    if (mode == LP_BASIS_GOV_MODE_OFF) return;
 
     if (shadow_backend_pick == LP_BASIS_GOV_BACKEND_MARKOWITZ) {
         state->shadow_backend_pick_markowitz++;
