@@ -2756,7 +2756,8 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             mkz_skip_by_circuit = mkz_circuit_should_skip(lu, mkz_fingerprint);
         }
     }
-    {
+    if (lu->basis_governor &&
+        lp_basis_governor_get_mode(lu->basis_governor) != LP_BASIS_GOV_MODE_OFF) {
         int mkz_eligible = (!skip_sparse_numeric &&
                             lu->mkz_enabled &&
                             k >= MARKOWITZ_MIN_K &&

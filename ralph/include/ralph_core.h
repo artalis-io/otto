@@ -587,6 +587,7 @@ typedef struct {
     double soft_lu_refactor_cost_ewma_phase2;
     double soft_lu_iter_cost_ewma_phase1;
     double soft_lu_iter_cost_ewma_phase2;
+    int basis_governor_mode;
     int shadow_refactor_yes_phase1;
     int shadow_refactor_yes_phase2;
     int shadow_refactor_yes_dual;
@@ -1334,6 +1335,7 @@ typedef enum {
     RALPH_PARAM_BARRIER_CROSSOVER,
     RALPH_PARAM_LP_EXTERNAL_PROVIDER,
     RALPH_PARAM_LP_EXTERNAL_STRICT,
+    RALPH_PARAM_LP_BASIS_GOVERNOR_MODE,
     RALPH_PARAM_COUNT
 } RalphParamId;
 

@@ -807,16 +807,25 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
         int lu_refactor_needed = lu_needs_refactorization(tab->lu);
         int periodic_refactor = (iter > 0 && iter % 25 == 0);
         int need_refactor = lu_refactor_needed || periodic_refactor;
-        if (solver->telemetry_enabled) {
+        {
             int shadow_refactor = lp_basis_governor_shadow_decide(
                 LP_BASIS_GOV_PHASE_DUAL,
                 lu_refactor_needed,
                 periodic_refactor);
-            lp_basis_governor_observe_refactor(
+            int governed_refactor = lp_basis_governor_decide_refactor(
                 &solver->policy.basis_governor,
                 LP_BASIS_GOV_PHASE_DUAL,
-                shadow_refactor,
+                lu_refactor_needed,
+                periodic_refactor,
                 need_refactor);
+            if (solver->telemetry_enabled) {
+                lp_basis_governor_observe_refactor(
+                    &solver->policy.basis_governor,
+                    LP_BASIS_GOV_PHASE_DUAL,
+                    shadow_refactor,
+                    governed_refactor);
+            }
+            need_refactor = governed_refactor;
         }
         if (need_refactor) {
             if (tableau_refactorize(tab) != 0) {
@@ -1004,11 +1013,20 @@ void dual_v2_clear_perturbation(SimplexTableau *tab) {
 
 int dual_simplex_solve_v2(SimplexSolver *solver) {
     if (!solver || !solver->tableau) return -1;
+    if (!lp_basis_governor_mode_is_valid(solver->policy.basis_governor_mode)) {
+        solver->policy.basis_governor_mode = LP_BASIS_GOV_MODE_OFF;
+    }
+    lp_basis_governor_set_mode(&solver->policy.basis_governor,
+                               solver->policy.basis_governor_mode);
 
     SimplexTableau *tab = solver->tableau;
     tab->owner = solver;
     if (tab->lu) {
-        tab->lu->basis_governor = &solver->policy.basis_governor;
+        if (solver->policy.basis_governor_mode == LP_BASIS_GOV_MODE_OFF) {
+            tab->lu->basis_governor = NULL;
+        } else {
+            tab->lu->basis_governor = &solver->policy.basis_governor;
+        }
     }
     int n_orig = solver->model->num_vars;
 
@@ -1360,16 +1378,25 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
         int lu_refactor_needed = lu_needs_refactorization(tab->lu);
         int periodic_refactor = (iter > 0 && iter % 50 == 0);
         int need_refactor = lu_refactor_needed || periodic_refactor;
-        if (solver->telemetry_enabled) {
+        {
             int shadow_refactor = lp_basis_governor_shadow_decide(
                 LP_BASIS_GOV_PHASE_DUAL,
                 lu_refactor_needed,
                 periodic_refactor);
-            lp_basis_governor_observe_refactor(
+            int governed_refactor = lp_basis_governor_decide_refactor(
                 &solver->policy.basis_governor,
                 LP_BASIS_GOV_PHASE_DUAL,
-                shadow_refactor,
+                lu_refactor_needed,
+                periodic_refactor,
                 need_refactor);
+            if (solver->telemetry_enabled) {
+                lp_basis_governor_observe_refactor(
+                    &solver->policy.basis_governor,
+                    LP_BASIS_GOV_PHASE_DUAL,
+                    shadow_refactor,
+                    governed_refactor);
+            }
+            need_refactor = governed_refactor;
         }
         if (need_refactor) {
             double t_refactor_ms = lp_telemetry_timer_start();
@@ -1652,6 +1679,11 @@ int dual_phase1(SimplexSolver *solver) {
 
 int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver) {
     if (!solver || !solver->model) return -1;
+    if (!lp_basis_governor_mode_is_valid(solver->policy.basis_governor_mode)) {
+        solver->policy.basis_governor_mode = LP_BASIS_GOV_MODE_OFF;
+    }
+    lp_basis_governor_set_mode(&solver->policy.basis_governor,
+                               solver->policy.basis_governor_mode);
     if (solver->progress_start_ms <= 0.0) {
         solver->progress_start_ms = lp_telemetry_now_ms();
     }
@@ -1672,7 +1704,11 @@ int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver) {
         /* T2.1: Propagate supernodal LU flag (auto-enable for m > 300) */
         if (solver->tableau->lu) {
             solver->tableau->lu->telemetry_enabled = solver->telemetry_enabled;
-            solver->tableau->lu->basis_governor = &solver->policy.basis_governor;
+            if (solver->policy.basis_governor_mode == LP_BASIS_GOV_MODE_OFF) {
+                solver->tableau->lu->basis_governor = NULL;
+            } else {
+                solver->tableau->lu->basis_governor = &solver->policy.basis_governor;
+            }
             if (solver->lu_supernode)
                 solver->tableau->lu->sn_enabled = 1;
             else if (solver->tableau->m > 300)
@@ -1683,7 +1719,11 @@ int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver) {
     SimplexTableau *tab = solver->tableau;
     tab->owner = solver;
     if (tab->lu) {
-        tab->lu->basis_governor = &solver->policy.basis_governor;
+        if (solver->policy.basis_governor_mode == LP_BASIS_GOV_MODE_OFF) {
+            tab->lu->basis_governor = NULL;
+        } else {
+            tab->lu->basis_governor = &solver->policy.basis_governor;
+        }
     }
 
     /* Note: crash is NOT used for dual from-scratch.  The all-auxiliary basis

@@ -68,6 +68,7 @@ struct RalphModel {
     int deterministic;      /* 1=enforce deterministic LP runtime policy */
     int random_seed;        /* deterministic LP seed for anti-cycling perturbation offsets */
     int lp_threads;         /* LP thread policy (0=auto; deterministic mode defaults to 1) */
+    int lp_basis_governor_mode; /* 0=off, 1=shadow, 2=control_phase2 */
 
     /* Solution */
     RalphStatus status;
@@ -684,6 +685,9 @@ static int ralph_probe_lp_status(const RalphModel *model,
     probe->deterministic = model->deterministic ? 1 : 0;
     probe->random_seed = (model->random_seed >= 0) ? (unsigned int)model->random_seed : 0U;
     probe->lp_threads = (model->lp_threads >= 0) ? model->lp_threads : 0;
+    probe->policy.basis_governor_mode = model->lp_basis_governor_mode;
+    lp_basis_governor_set_mode(&probe->policy.basis_governor,
+                               probe->policy.basis_governor_mode);
     probe->method = 0;  /* Use primal for robust infeasibility checks */
 
     (void)simplex_solve(probe);
@@ -860,6 +864,7 @@ RalphModel* ralph_core_create(void) {
     model->deterministic = 0;
     model->random_seed = 0;
     model->lp_threads = 0;
+    model->lp_basis_governor_mode = LP_BASIS_GOV_MODE_OFF;
 
     model->status = RALPH_STATUS_UNKNOWN;
     model->mip_start = NULL;
@@ -1800,6 +1805,9 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         model->lp_solver->deterministic = model->deterministic ? 1 : 0;
         model->lp_solver->random_seed = (model->random_seed >= 0) ? (unsigned int)model->random_seed : 0U;
         model->lp_solver->lp_threads = (model->lp_threads >= 0) ? model->lp_threads : 0;
+        model->lp_solver->policy.basis_governor_mode = model->lp_basis_governor_mode;
+        lp_basis_governor_set_mode(&model->lp_solver->policy.basis_governor,
+                                   model->lp_basis_governor_mode);
 
         if (model->staged_basis && model->staged_var_status) {
             if (simplex_set_warm_basis(model->lp_solver,
@@ -5025,6 +5033,19 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .aliases = {"LPExternalStrict"},
             .alias_count = 1
         },
+        [RALPH_PARAM_LP_BASIS_GOVERNOR_MODE] = {
+            .id = RALPH_PARAM_LP_BASIS_GOVERNOR_MODE,
+            .name = "lp_basis_governor_mode",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)LP_BASIS_GOV_MODE_OFF,
+            .has_min = 1,
+            .min_value = (double)LP_BASIS_GOV_MODE_OFF,
+            .has_max = 1,
+            .max_value = (double)LP_BASIS_GOV_MODE_CONTROL_PHASE2,
+            .aliases = {"LPBasisGovernorMode"},
+            .alias_count = 1
+        },
         [RALPH_PARAM_TIME_LIMIT] = {
             .id = RALPH_PARAM_TIME_LIMIT,
             .name = "time_limit",
@@ -5396,6 +5417,19 @@ int ralph_core_set_int_param_id(RalphModel *model, RalphParamId param, int value
             }
             model->lp_external_strict = value;
             break;
+        case RALPH_PARAM_LP_BASIS_GOVERNOR_MODE:
+            if (!lp_basis_governor_mode_is_valid(value)) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               value,
+                               "lp_basis_governor_mode must be 0(off), 1(shadow), or 2(control_phase2)");
+            }
+            model->lp_basis_governor_mode = value;
+            break;
         default:
             RALPH_FAIL_API(model,
                            RALPH_ERROR_DOMAIN_PARAMETER,
@@ -5628,6 +5662,9 @@ int ralph_core_get_int_param_id(const RalphModel *model, RalphParamId param, int
             break;
         case RALPH_PARAM_LP_EXTERNAL_STRICT:
             *value = model->lp_external_strict;
+            break;
+        case RALPH_PARAM_LP_BASIS_GOVERNOR_MODE:
+            *value = model->lp_basis_governor_mode;
             break;
         default:
             RALPH_FAIL_API(model,

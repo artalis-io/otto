@@ -81,6 +81,9 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.policy.periodic_cost_gate_last_reason_phase2 = LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO;
     solver.policy.periodic_cost_iter_samples_phase2 = 12;
     solver.policy.periodic_cost_refactor_samples_phase2 = 3;
+    solver.policy.basis_governor_mode = LP_BASIS_GOV_MODE_CONTROL_PHASE2;
+    lp_basis_governor_set_mode(&solver.policy.basis_governor,
+                               solver.policy.basis_governor_mode);
     solver.policy.basis_governor.shadow_refactor_yes_phase1 = 4;
     solver.policy.basis_governor.shadow_disagree_lu_backend = 2;
 
@@ -124,6 +127,11 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: periodic cost iter samples phase2");
     ASSERT_INT_EQ(solver.policy.periodic_cost_refactor_samples_phase2, 0,
                   "reset: periodic cost refactor samples phase2");
+    ASSERT_INT_EQ(solver.policy.basis_governor_mode, LP_BASIS_GOV_MODE_CONTROL_PHASE2,
+                  "reset: basis governor mode preserved");
+    ASSERT_INT_EQ(lp_basis_governor_get_mode(&solver.policy.basis_governor),
+                  LP_BASIS_GOV_MODE_CONTROL_PHASE2,
+                  "reset: governor state mode preserved");
     ASSERT_INT_EQ(solver.policy.basis_governor.shadow_refactor_yes_phase1, 0,
                   "reset: basis governor yes phase1");
     ASSERT_INT_EQ(solver.policy.basis_governor.shadow_disagree_lu_backend, 0,
@@ -209,6 +217,9 @@ static void test_solver_snapshot(void) {
     solver.policy.periodic_cost_gate_last_reason_phase1 = LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO;
     solver.policy.periodic_cost_iter_samples_phase1 = 19;
     solver.policy.periodic_cost_refactor_samples_phase1 = 4;
+    solver.policy.basis_governor_mode = LP_BASIS_GOV_MODE_SHADOW;
+    lp_basis_governor_set_mode(&solver.policy.basis_governor,
+                               solver.policy.basis_governor_mode);
     solver.policy.basis_governor.shadow_refactor_yes_phase1 = 8;
     solver.policy.basis_governor.shadow_disagree_primal_refactor = 3;
 
@@ -254,6 +265,8 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: periodic cost iter samples phase1");
     ASSERT_INT_EQ(snap.periodic_cost_refactor_samples_phase1, 4,
                   "solver_snapshot: periodic cost refactor samples phase1");
+    ASSERT_INT_EQ(snap.basis_governor_mode, LP_BASIS_GOV_MODE_SHADOW,
+                  "solver_snapshot: basis governor mode");
     ASSERT_INT_EQ(snap.shadow_refactor_yes_phase1, 8,
                   "solver_snapshot: shadow refactor yes phase1");
     ASSERT_INT_EQ(snap.shadow_disagree_primal_refactor, 3,

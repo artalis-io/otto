@@ -618,6 +618,7 @@ typedef struct {
 /* Solver policy state (behavioral scheduling/control, not telemetry). */
 typedef struct {
     int refactor_next_reason;  /* RalphRefactorReason hint consumed by tableau_refactorize */
+    int basis_governor_mode;   /* LPBasisGovernorMode runtime mode */
     LPBasisGovernorState basis_governor; /* Shadow governor state (G0) */
 
     /* Runtime scheduling counters. */
@@ -897,6 +898,7 @@ typedef struct {
     double soft_lu_refactor_cost_ewma_phase2;
     double soft_lu_iter_cost_ewma_phase1;
     double soft_lu_iter_cost_ewma_phase2;
+    int basis_governor_mode;
     int shadow_refactor_yes_phase1;
     int shadow_refactor_yes_phase2;
     int shadow_refactor_yes_dual;

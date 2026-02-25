@@ -21,6 +21,12 @@ typedef enum {
 } LPBasisGovernorPhase;
 
 typedef enum {
+    LP_BASIS_GOV_MODE_OFF = 0,
+    LP_BASIS_GOV_MODE_SHADOW = 1,
+    LP_BASIS_GOV_MODE_CONTROL_PHASE2 = 2
+} LPBasisGovernorMode;
+
+typedef enum {
     LP_BASIS_GOV_BACKEND_NONE = 0,
     LP_BASIS_GOV_BACKEND_MARKOWITZ = 1,
     LP_BASIS_GOV_BACKEND_SUPERNODE = 2,
@@ -28,6 +34,7 @@ typedef enum {
 } LPBasisGovernorBackend;
 
 typedef struct {
+    int mode; /* LPBasisGovernorMode */
     int shadow_refactor_yes_phase1;
     int shadow_refactor_yes_phase2;
     int shadow_refactor_yes_dual;
@@ -43,10 +50,19 @@ typedef struct {
 } LPBasisGovernorState;
 
 void lp_basis_governor_begin_solve(LPBasisGovernorState *state);
+int lp_basis_governor_mode_is_valid(int mode);
+int lp_basis_governor_get_mode(const LPBasisGovernorState *state);
+void lp_basis_governor_set_mode(LPBasisGovernorState *state, int mode);
 
 int lp_basis_governor_shadow_decide(int phase,
                                     int lu_health_refactor_now,
                                     int periodic_policy_refactor_now);
+
+int lp_basis_governor_decide_refactor(const LPBasisGovernorState *state,
+                                      int phase,
+                                      int lu_health_refactor_now,
+                                      int periodic_policy_refactor_now,
+                                      int actual_refactor_now);
 
 void lp_basis_governor_observe_iter(LPBasisGovernorState *state,
                                     int phase,
