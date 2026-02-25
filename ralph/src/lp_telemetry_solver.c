@@ -134,6 +134,7 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->policy.soft_lu_refactor_cost_ewma_phase2 = 0.0;
     solver->policy.soft_lu_iter_cost_ewma_phase1 = 0.0;
     solver->policy.soft_lu_iter_cost_ewma_phase2 = 0.0;
+    lp_basis_governor_begin_solve(&solver->policy.basis_governor);
 }
 
 void lp_telemetry_record_basis_build(SimplexSolver *owner,
@@ -391,5 +392,17 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     out->soft_lu_refactor_cost_ewma_phase2 = solver->policy.soft_lu_refactor_cost_ewma_phase2;
     out->soft_lu_iter_cost_ewma_phase1 = solver->policy.soft_lu_iter_cost_ewma_phase1;
     out->soft_lu_iter_cost_ewma_phase2 = solver->policy.soft_lu_iter_cost_ewma_phase2;
+    out->shadow_refactor_yes_phase1 = solver->policy.basis_governor.shadow_refactor_yes_phase1;
+    out->shadow_refactor_yes_phase2 = solver->policy.basis_governor.shadow_refactor_yes_phase2;
+    out->shadow_refactor_yes_dual = solver->policy.basis_governor.shadow_refactor_yes_dual;
+    out->shadow_refactor_no_phase1 = solver->policy.basis_governor.shadow_refactor_no_phase1;
+    out->shadow_refactor_no_phase2 = solver->policy.basis_governor.shadow_refactor_no_phase2;
+    out->shadow_refactor_no_dual = solver->policy.basis_governor.shadow_refactor_no_dual;
+    out->shadow_backend_pick_markowitz = solver->policy.basis_governor.shadow_backend_pick_markowitz;
+    out->shadow_backend_pick_supernode = solver->policy.basis_governor.shadow_backend_pick_supernode;
+    out->shadow_backend_pick_dense = solver->policy.basis_governor.shadow_backend_pick_dense;
+    out->shadow_disagree_primal_refactor = solver->policy.basis_governor.shadow_disagree_primal_refactor;
+    out->shadow_disagree_dual_refactor = solver->policy.basis_governor.shadow_disagree_dual_refactor;
+    out->shadow_disagree_lu_backend = solver->policy.basis_governor.shadow_disagree_lu_backend;
 }
 #undef COPY_SOLVER_FIELD

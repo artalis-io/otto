@@ -102,12 +102,35 @@ static void extract_farkas_ray_dual(SimplexSolver *solver) {
     }
 }
 
+static int dual_time_limit_exceeded(SimplexSolver *solver, int iter) {
+    if (!solver) return 0;
+    if (solver->time_limit <= 0.0 || solver->time_limit >= RALPH_INFINITY / 2.0) {
+        return 0;
+    }
+    const double time_limit_sec = solver->time_limit * 1.05;
+
+    double now_ms = lp_telemetry_now_ms();
+    if (solver->progress_start_ms <= 0.0) {
+        solver->progress_start_ms = now_ms;
+    }
+
+    double elapsed_sec = (now_ms - solver->progress_start_ms) / 1000.0;
+    if (elapsed_sec <= time_limit_sec) {
+        return 0;
+    }
+
+    solver->status = RALPH_STATUS_TIME_LIMIT;
+    solver->iterations = iter;
+    return 1;
+}
+
 static int dual_run_user_callbacks(SimplexSolver *solver,
                                    const SimplexTableau *tab,
                                    int iter,
                                    int force_emit,
                                    int honor_progress_cancel) {
     if (!solver) return 0;
+    if (dual_time_limit_exceeded(solver, iter)) return 1;
 
     if (solver->has_lp_cancel_callback && solver->lp_cancel_callback.should_cancel) {
         if (solver->lp_cancel_callback.should_cancel(solver->lp_cancel_callback.user_data) != 0) {
@@ -663,6 +686,10 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
     int refactor_failures = 0;
 
     for (int iter = 0; iter < max_iters; iter++) {
+        if (dual_time_limit_exceeded(solver, iter)) {
+            free(tried_rows);
+            return 1;
+        }
         tableau_compute_solution(tab);
 
         if (phase1_rescue_has_bad_numerics(tab)) {
@@ -777,8 +804,20 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
         }
 
         /* Keep numerics under control during rescue. */
-        int need_refactor = lu_needs_refactorization(tab->lu) ||
-                           (iter > 0 && iter % 25 == 0);
+        int lu_refactor_needed = lu_needs_refactorization(tab->lu);
+        int periodic_refactor = (iter > 0 && iter % 25 == 0);
+        int need_refactor = lu_refactor_needed || periodic_refactor;
+        if (solver->telemetry_enabled) {
+            int shadow_refactor = lp_basis_governor_shadow_decide(
+                LP_BASIS_GOV_PHASE_DUAL,
+                lu_refactor_needed,
+                periodic_refactor);
+            lp_basis_governor_observe_refactor(
+                &solver->policy.basis_governor,
+                LP_BASIS_GOV_PHASE_DUAL,
+                shadow_refactor,
+                need_refactor);
+        }
         if (need_refactor) {
             if (tableau_refactorize(tab) != 0) {
                 refactor_failures++;
@@ -967,6 +1006,10 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
     if (!solver || !solver->tableau) return -1;
 
     SimplexTableau *tab = solver->tableau;
+    tab->owner = solver;
+    if (tab->lu) {
+        tab->lu->basis_governor = &solver->policy.basis_governor;
+    }
     int n_orig = solver->model->num_vars;
 
     /* Apply bound perturbation for cycling prevention.
@@ -1314,8 +1357,20 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
         }
 
         /* Periodic refactorization */
-        int need_refactor = lu_needs_refactorization(tab->lu) ||
-                           (iter > 0 && iter % 50 == 0);
+        int lu_refactor_needed = lu_needs_refactorization(tab->lu);
+        int periodic_refactor = (iter > 0 && iter % 50 == 0);
+        int need_refactor = lu_refactor_needed || periodic_refactor;
+        if (solver->telemetry_enabled) {
+            int shadow_refactor = lp_basis_governor_shadow_decide(
+                LP_BASIS_GOV_PHASE_DUAL,
+                lu_refactor_needed,
+                periodic_refactor);
+            lp_basis_governor_observe_refactor(
+                &solver->policy.basis_governor,
+                LP_BASIS_GOV_PHASE_DUAL,
+                shadow_refactor,
+                need_refactor);
+        }
         if (need_refactor) {
             double t_refactor_ms = lp_telemetry_timer_start();
             int rc_ref = tableau_refactorize(tab);
@@ -1456,6 +1511,12 @@ int dual_phase1(SimplexSolver *solver) {
     int succeeded = 0;
 
     for (int iter = 0; iter < max_phase1_iters; iter++) {
+        if (dual_time_limit_exceeded(solver, iter)) {
+            remove_bound_perturbation(tab);
+            memcpy(tab->c_ext, c_saved, n * sizeof(double));
+            free(c_saved);
+            return -1;
+        }
         tableau_compute_solution(tab);
 
         /* Find leaving variable (most infeasible basic) */
@@ -1591,6 +1652,9 @@ int dual_phase1(SimplexSolver *solver) {
 
 int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver) {
     if (!solver || !solver->model) return -1;
+    if (solver->progress_start_ms <= 0.0) {
+        solver->progress_start_ms = lp_telemetry_now_ms();
+    }
 
     clock_t start = clock();
 
@@ -1608,6 +1672,7 @@ int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver) {
         /* T2.1: Propagate supernodal LU flag (auto-enable for m > 300) */
         if (solver->tableau->lu) {
             solver->tableau->lu->telemetry_enabled = solver->telemetry_enabled;
+            solver->tableau->lu->basis_governor = &solver->policy.basis_governor;
             if (solver->lu_supernode)
                 solver->tableau->lu->sn_enabled = 1;
             else if (solver->tableau->m > 300)
@@ -1616,6 +1681,10 @@ int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver) {
     }
 
     SimplexTableau *tab = solver->tableau;
+    tab->owner = solver;
+    if (tab->lu) {
+        tab->lu->basis_governor = &solver->policy.basis_governor;
+    }
 
     /* Note: crash is NOT used for dual from-scratch.  The all-auxiliary basis
      * gives y=0, rc=c — ideal for make_dual_feasible + dual_phase1.  Crashing
