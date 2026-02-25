@@ -285,6 +285,9 @@ LUFactorization* lu_create(int m) {
     /* Sparse Markowitz LU (default on for k >= MARKOWITZ_MIN_K) */
     lu->mkz_enabled = 1;
     lu->mkz_pool_mult_hint = 4;
+    lu->mkz_circuit_fingerprint = 0;
+    lu->mkz_circuit_bad_streak = 0;
+    lu->mkz_circuit_skip_budget = 0;
     lp_telemetry_reset_lu(lu);
 
     /* T2.1: Supernodal LU (default off, opt-in via lu_supernode param) */

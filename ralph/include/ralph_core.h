@@ -605,6 +605,12 @@ typedef struct {
     int mkz_singular_retry_attempts;
     int mkz_singular_retry_successes;
     int mkz_singular_retry_failures;
+    int mkz_reserved_fallback_attempts;
+    int mkz_reserved_fallback_accepts;
+    int mkz_reserved_fallback_rejects;
+    int mkz_circuit_trips;
+    int mkz_circuit_skips;
+    int mkz_circuit_resets;
 
     int sparse_dense_fallbacks;
     int used_dense_fallback_last;

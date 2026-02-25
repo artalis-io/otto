@@ -184,6 +184,12 @@ typedef struct {
     int mkz_singular_retry_attempts;  /* Singular micro-retry attempts */
     int mkz_singular_retry_successes; /* Retry recovered a pivot >= pivot_tol */
     int mkz_singular_retry_failures;  /* Retry still ended singular path */
+    int mkz_reserved_fallback_attempts; /* Reserved-row fallback scans in singular handling */
+    int mkz_reserved_fallback_accepts;  /* Reserved-row fallback selected as pivot */
+    int mkz_reserved_fallback_rejects;  /* Reserved-row fallback not selected */
+    int mkz_circuit_trips;    /* Markowitz circuit breaker trip events */
+    int mkz_circuit_skips;    /* Markowitz attempts skipped by circuit breaker */
+    int mkz_circuit_resets;   /* Circuit streak reset after successful Markowitz path */
 
     /* Sparse-efficient fallback telemetry */
     int sparse_dense_fallbacks;  /* lu_factorize_sparse_efficient -> lu_factorize_dense */
@@ -353,6 +359,9 @@ typedef struct {
     /* Sparse Markowitz LU */
     int mkz_enabled;         /* 1 = use Markowitz path when k >= MARKOWITZ_MIN_K */
     int mkz_pool_mult_hint;  /* Adaptive starting pool multiplier (reduces retry churn) */
+    uint64_t mkz_circuit_fingerprint; /* Fingerprint keyed for circuit-breaker state */
+    int mkz_circuit_bad_streak;       /* Consecutive bad Markowitz outcomes for fingerprint */
+    int mkz_circuit_skip_budget;      /* Remaining calls to skip Markowitz for fingerprint */
 
     /* Supernodal LU (T2.1) */
     int sn_enabled;          /* 1 = use supernodal path when k >= SN_MIN_K */
@@ -897,6 +906,12 @@ typedef struct {
     int mkz_singular_retry_attempts;
     int mkz_singular_retry_successes;
     int mkz_singular_retry_failures;
+    int mkz_reserved_fallback_attempts;
+    int mkz_reserved_fallback_accepts;
+    int mkz_reserved_fallback_rejects;
+    int mkz_circuit_trips;
+    int mkz_circuit_skips;
+    int mkz_circuit_resets;
 
     int sparse_dense_fallbacks;
     int used_dense_fallback_last;
@@ -1204,5 +1219,11 @@ void lp_telemetry_lu_mark_mkz_failure(LUFactorization *lu,
 void lp_telemetry_lu_mark_mkz_singular_retry_attempt(LUFactorization *lu);
 void lp_telemetry_lu_mark_mkz_singular_retry_success(LUFactorization *lu);
 void lp_telemetry_lu_mark_mkz_singular_retry_failure(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_reserved_fallback_attempt(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_reserved_fallback_accept(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_reserved_fallback_reject(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_circuit_trip(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_circuit_skip(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_circuit_reset(LUFactorization *lu);
 
 #endif /* RALPH_LP_H */

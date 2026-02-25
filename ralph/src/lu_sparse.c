@@ -1884,6 +1884,9 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
 #define MARKOWITZ_THRESHOLD   0.1   /* Threshold pivoting ratio */
 #define MARKOWITZ_MAX_SEARCH  3     /* Candidates per degree bucket */
 #define MARKOWITZ_SINGULAR_RETRY_THRESHOLD 0.02 /* Relaxed threshold for one singular micro-retry */
+#define MARKOWITZ_RESERVED_RELAX_RATIO 0.1 /* Keep non-reserved if within 10x of reserved best */
+#define MARKOWITZ_CIRCUIT_BAD_STREAK 3 /* Trip breaker after this many bad outcomes */
+#define MARKOWITZ_CIRCUIT_SKIP_BUDGET 128 /* Skip this many same-structure Markowitz attempts */
 #define MARKOWITZ_FILL_GAP    8     /* Extra slots per column/row for fill-in */
 #define MARKOWITZ_POOL_MULT   4     /* Pool = MULT × initial nnz */
 #define MARKOWITZ_POOL_RETRY_MULT 8 /* Legacy retry multiplier (first growth target) */
@@ -1961,6 +1964,47 @@ static int mkz_workspace_reserve(LUFactorization *lu, size_t need_doubles) {
 
 static void mkz_record_failure_reason(LUFactorization *lu, int rc) {
     lp_telemetry_lu_mark_mkz_failure_reason(lu, rc);
+}
+
+/* Structure-local Markowitz circuit breaker.
+ * If Markowitz repeatedly gives bad outcomes for the same symbolic fingerprint,
+ * skip Markowitz for a bounded number of future refactorizations so sparse
+ * numeric can go directly to the next path (supernode or dense-GE). */
+static int mkz_circuit_should_skip(LUFactorization *lu, uint64_t fingerprint) {
+    if (!lu || lu->mkz_circuit_skip_budget <= 0) return 0;
+    if (lu->mkz_circuit_fingerprint != fingerprint) return 0;
+    lu->mkz_circuit_skip_budget--;
+    lp_telemetry_lu_mark_mkz_circuit_skip(lu);
+    return 1;
+}
+
+static void mkz_circuit_note_bad_outcome(LUFactorization *lu, uint64_t fingerprint) {
+    if (!lu) return;
+    if (lu->mkz_circuit_fingerprint != fingerprint) {
+        lu->mkz_circuit_fingerprint = fingerprint;
+        lu->mkz_circuit_bad_streak = 0;
+        lu->mkz_circuit_skip_budget = 0;
+    }
+    if (lu->mkz_circuit_bad_streak < INT_MAX) {
+        lu->mkz_circuit_bad_streak++;
+    }
+    if (lu->mkz_circuit_bad_streak >= MARKOWITZ_CIRCUIT_BAD_STREAK) {
+        lu->mkz_circuit_skip_budget = MARKOWITZ_CIRCUIT_SKIP_BUDGET;
+        lu->mkz_circuit_bad_streak = 0;
+        lp_telemetry_lu_mark_mkz_circuit_trip(lu);
+    }
+}
+
+static void mkz_circuit_note_good_outcome(LUFactorization *lu, uint64_t fingerprint) {
+    if (!lu) return;
+    if (lu->mkz_circuit_fingerprint == fingerprint && lu->mkz_circuit_bad_streak > 0) {
+        lu->mkz_circuit_bad_streak = 0;
+        lp_telemetry_lu_mark_mkz_circuit_reset(lu);
+    } else if (lu->mkz_circuit_fingerprint != fingerprint) {
+        lu->mkz_circuit_fingerprint = fingerprint;
+        lu->mkz_circuit_bad_streak = 0;
+        lu->mkz_circuit_skip_budget = 0;
+    }
 }
 
 /*
@@ -2249,42 +2293,105 @@ static int lu_factorize_markowitz(
 
                 lp_telemetry_lu_mark_mkz_singular_retry_failure(lu);
 
-                /* Singular pivot handling */
-                int can_reg = 0;
-                if (redundant_rows && num_redundant > 0) {
-                    for (int jj = 0; jj < k && !can_reg; jj++) {
+                /* Reserved-row fallback: allow identity rows only when they are
+                 * materially stronger than the best non-reserved option. */
+                if (reserve_non_reserved && row_reserved) {
+                    int nonres_col = -1;
+                    int reserved_col = -1, reserved_row = -1;
+                    long long nonres_cost = (long long)m * m + 1;
+                    long long reserved_cost = (long long)m * m + 1;
+                    double nonres_val = 0.0;
+                    double reserved_val = 0.0;
+
+                    lp_telemetry_lu_mark_mkz_reserved_fallback_attempt(lu);
+                    for (int jj = 0; jj < k; jj++) {
                         if (!col_alive[jj]) continue;
                         int s = cv_ptr[jj], n2 = cv_len[jj];
                         for (int e = 0; e < n2; e++) {
                             int row = cv_idx[s + e];
                             if (!row_alive[row]) continue;
-                            if (reserve_non_reserved && row_reserved && row_reserved[row]) continue;
-                            if (redundant_rows[row]) {
+                            double av = fabs(cv_val[s + e]);
+                            long long cost = (long long)(row_deg[row] - 1) * (col_deg[jj] - 1);
+
+                            if (row_reserved[row]) {
+                                if (av > reserved_val ||
+                                    (av == reserved_val && cost < reserved_cost)) {
+                                    reserved_col = jj;
+                                    reserved_row = row;
+                                    reserved_cost = cost;
+                                    reserved_val = av;
+                                }
+                            } else {
+                                if (av > nonres_val ||
+                                    (av == nonres_val && cost < nonres_cost)) {
+                                    nonres_col = jj;
+                                    nonres_cost = cost;
+                                    nonres_val = av;
+                                }
+                            }
+                        }
+                    }
+
+                    if (reserved_col >= 0 && reserved_val >= pivot_tol) {
+                        int use_reserved = 0;
+                        if (nonres_col < 0 || nonres_val < pivot_tol) {
+                            use_reserved = 1;
+                        } else if (nonres_val <
+                                   MARKOWITZ_RESERVED_RELAX_RATIO * reserved_val) {
+                            use_reserved = 1;
+                        }
+
+                        if (use_reserved) {
+                            piv_col = reserved_col;
+                            piv_row = reserved_row;
+                            best_cost = reserved_cost;
+                            best_piv_val = reserved_val;
+                            lp_telemetry_lu_mark_mkz_reserved_fallback_accept(lu);
+                        } else {
+                            lp_telemetry_lu_mark_mkz_reserved_fallback_reject(lu);
+                        }
+                    } else {
+                        lp_telemetry_lu_mark_mkz_reserved_fallback_reject(lu);
+                    }
+                }
+
+                if (piv_col < 0 || best_piv_val < pivot_tol) {
+                    /* Singular pivot handling */
+                    int can_reg = 0;
+                    if (redundant_rows && num_redundant > 0) {
+                        for (int jj = 0; jj < k && !can_reg; jj++) {
+                            if (!col_alive[jj]) continue;
+                            int s = cv_ptr[jj], n2 = cv_len[jj];
+                            for (int e = 0; e < n2; e++) {
+                                int row = cv_idx[s + e];
+                                if (!row_alive[row]) continue;
+                                if (reserve_non_reserved && row_reserved && row_reserved[row]) continue;
+                                if (redundant_rows[row]) {
+                                    piv_col = jj; piv_row = row; can_reg = 1; break;
+                                }
+                            }
+                        }
+                    }
+                    if (!can_reg && allow_regularization && *num_regularized < max_regularizations) {
+                        for (int jj = 0; jj < k && !can_reg; jj++) {
+                            if (!col_alive[jj]) continue;
+                            int s = cv_ptr[jj], n2 = cv_len[jj];
+                            for (int e = 0; e < n2; e++) {
+                                int row = cv_idx[s + e];
+                                if (!row_alive[row]) continue;
+                                if (reserve_non_reserved && row_reserved && row_reserved[row]) continue;
                                 piv_col = jj; piv_row = row; can_reg = 1; break;
                             }
                         }
                     }
-                }
-                if (!can_reg && allow_regularization && *num_regularized < max_regularizations) {
-                    for (int jj = 0; jj < k && !can_reg; jj++) {
-                        if (!col_alive[jj]) continue;
-                        int s = cv_ptr[jj], n2 = cv_len[jj];
-                        for (int e = 0; e < n2; e++) {
-                            int row = cv_idx[s + e];
-                            if (!row_alive[row]) continue;
-                            if (reserve_non_reserved && row_reserved && row_reserved[row]) continue;
-                            piv_col = jj; piv_row = row; can_reg = 1; break;
-                        }
+                    if (!can_reg) {
+                        /* No viable non-reserved pivot remains; caller will
+                         * fall back to the next sparse numeric path. */
+                        return MKZ_FAIL_SINGULAR;
                     }
+                    (*num_regularized)++;
+                    best_piv_val = 1.0;
                 }
-                if (!can_reg) {
-                    /* Do not consume reserved (identity) rows as a second-pass
-                     * fallback. If no viable non-reserved pivot exists, fail the
-                     * Markowitz attempt and let caller fall back to GE path. */
-                    return MKZ_FAIL_SINGULAR;
-                }
-                (*num_regularized)++;
-                best_piv_val = 1.0;
             } else if (singular_retry_used) {
                 lp_telemetry_lu_mark_mkz_singular_retry_success(lu);
             }
@@ -2512,6 +2619,9 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     double t_identity_placement_ms = 0.0;
     double t_coo_to_csc_ms = 0.0;
     double t_stage_start_ms = 0.0;
+    uint64_t mkz_fingerprint = lu->sym_fingerprint;
+    int mkz_used_this_call = 0;
+    int mkz_bad_outcome_this_call = 0;
 #define NUMERIC_COMMIT() do { \
     lp_telemetry_lu_record_numeric_stages(lu, \
         k, \
@@ -2611,11 +2721,17 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
 
     int L_nnz = 0, U_nnz = 0;
     lp_telemetry_lu_clear_mkz_last_failure(lu);
+    int mkz_skip_by_circuit = 0;
+    if (!skip_sparse_numeric && lu->mkz_enabled && k >= MARKOWITZ_MIN_K) {
+        mkz_skip_by_circuit = mkz_circuit_should_skip(lu, mkz_fingerprint);
+    }
 
     /* Try sparse Markowitz factorization if enabled and k is large enough.
      * This exploits sparsity within structural columns, reducing O(k³) to O(nnz×fill).
      * Uses dedicated growable mkz_work to avoid contention with dense_work layout. */
-    if (!skip_sparse_numeric && lu->mkz_enabled && k >= MARKOWITZ_MIN_K) {
+    if (!skip_sparse_numeric && lu->mkz_enabled && k >= MARKOWITZ_MIN_K &&
+        !mkz_skip_by_circuit) {
+        mkz_used_this_call = 1;
         int mkz_init_nnz = mkz_count_init_nnz(B, col_order, k);
         size_t mkz_perm_doubles = ((size_t)k * sizeof(int) + sizeof(double) - 1u) / sizeof(double);
         int *mkz_col_perm = NULL;
@@ -2734,6 +2850,10 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             goto identity_placement;
         }
         lp_telemetry_lu_mark_mkz_failure(lu, rc);
+        if (rc == MKZ_FAIL_SINGULAR) {
+            mkz_bad_outcome_this_call = 1;
+            mkz_circuit_note_bad_outcome(lu, mkz_fingerprint);
+        }
 
         /* Markowitz failed — reset and fall through to supernodal/dense */
         L_nnz = 0;
@@ -2966,6 +3086,10 @@ identity_placement:
             /* Row already used. Retry once with dense GE only (skip sparse numeric)
              * to preserve sparse-efficient path without top-level dense fallback. */
             lp_telemetry_lu_mark_identity_sep_failure(lu);
+            if (mkz_used_this_call) {
+                mkz_bad_outcome_this_call = 1;
+                mkz_circuit_note_bad_outcome(lu, mkz_fingerprint);
+            }
             if (!dense_ge_retry_done) {
                 dense_ge_retry_done = 1;
                 skip_sparse_numeric = 1;
@@ -3126,6 +3250,10 @@ identity_placement:
     for (int i = 0; i < m; i++) {
         lu->ft_col_order[i] = i;
         lu->ft_col_order_inv[i] = i;
+    }
+
+    if (mkz_used_this_call && !mkz_bad_outcome_this_call) {
+        mkz_circuit_note_good_outcome(lu, mkz_fingerprint);
     }
 
     NUMERIC_RETURN(0);

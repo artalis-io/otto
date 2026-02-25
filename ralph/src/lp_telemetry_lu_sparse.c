@@ -152,3 +152,33 @@ void lp_telemetry_lu_mark_mkz_singular_retry_failure(LUFactorization *lu) {
     if (!lu_telemetry_enabled(lu)) return;
     lu->telemetry.mkz_singular_retry_failures++;
 }
+
+void lp_telemetry_lu_mark_mkz_reserved_fallback_attempt(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.mkz_reserved_fallback_attempts++;
+}
+
+void lp_telemetry_lu_mark_mkz_reserved_fallback_accept(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.mkz_reserved_fallback_accepts++;
+}
+
+void lp_telemetry_lu_mark_mkz_reserved_fallback_reject(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.mkz_reserved_fallback_rejects++;
+}
+
+void lp_telemetry_lu_mark_mkz_circuit_trip(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.mkz_circuit_trips++;
+}
+
+void lp_telemetry_lu_mark_mkz_circuit_skip(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.mkz_circuit_skips++;
+}
+
+void lp_telemetry_lu_mark_mkz_circuit_reset(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.mkz_circuit_resets++;
+}

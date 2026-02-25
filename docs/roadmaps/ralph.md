@@ -17,19 +17,26 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 - Added Markowitz singular micro-retry telemetry counters:
   `mkz_singular_retry_attempts`, `mkz_singular_retry_successes`,
   `mkz_singular_retry_failures`.
+- Added Markowitz reserved-row singular fallback with relative safety guard
+  (`MARKOWITZ_RESERVED_RELAX_RATIO = 0.1`) plus telemetry counters:
+  `mkz_reserved_fallback_attempts`, `mkz_reserved_fallback_accepts`,
+  `mkz_reserved_fallback_rejects`.
+- Added structure-local Markowitz circuit breaker (fingerprint-keyed bad-streak
+  trip + bounded skip budget) plus telemetry counters:
+  `mkz_circuit_trips`, `mkz_circuit_skips`, `mkz_circuit_resets`.
 - Follow-up queue (intentionally pending):
-  - Step 2: reserved-row fallback policy in Markowitz singular handling
-  - Step 3: structure-local Markowitz circuit breaker to skip repeated singular retries
+  - Calibrate trip/skip constants per structural family (`pilot`/`stair`) to
+    reduce numeric retries without starving successful Markowitz paths.
 - Extended benchmark LU JSON output with symbolic failure/retry counters for per-instance diagnosis.
 - Added unit coverage in `test_lp_telemetry_lu_sparse` to assert symbolic failure classification,
   sparse full-retry success path, and zero dense fallback on successful retry.
 Latest gates:
-`make -C ralph test-lp-telemetry-lu-sparse` PASS (39/39),
+`make -C ralph test-lp-telemetry-lu-sparse` PASS (55/55),
 `make -C ralph test-simplex-policy` PASS (39/39),
 `make -C ralph test-lu-markowitz` PASS (30/30), and
 `make -C ralph test-netlib-gate` PASS (84 files, timeout files 26, status/objective/invalid mismatches 0,
 dense fallback files 0, no unexpected regressions; artifacts:
-`/tmp/netlib-regression-gate-20260224-221617`).
+`/tmp/netlib-regression-gate-20260225-110749`).
 
 Previous: (2026-02-23) — LP wall-clock guard + NETLIB timeout-equivalent gate baseline:
 - Added explicit LP wall-clock guard in simplex/dual solve paths (including recovery loops), so

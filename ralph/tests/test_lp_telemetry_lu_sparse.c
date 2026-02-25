@@ -99,6 +99,10 @@ static void test_markowitz_failure_reason_counters(void) {
 
     int rc = lu_factorize(lu, B);
     ASSERT(rc != 0, "failure counters: singular matrix should fail factorization");
+    for (int t = 0; t < 8; t++) {
+        int rc_retry = lu_factorize(lu, B);
+        ASSERT(rc_retry != 0, "failure counters: repeated singular factorization should fail");
+    }
 
     ASSERT(lu->telemetry.mkz_calls > 0, "failure counters: Markowitz attempted");
     ASSERT(lu->telemetry.mkz_dense_fallbacks > 0, "failure counters: Markowitz fallback recorded");
@@ -111,6 +115,18 @@ static void test_markowitz_failure_reason_counters(void) {
                   lu->telemetry.mkz_singular_retry_successes +
                   lu->telemetry.mkz_singular_retry_failures,
                   "failure counters: singular micro-retry attempts classified");
+    ASSERT(lu->telemetry.mkz_reserved_fallback_attempts > 0,
+           "failure counters: reserved-row fallback attempted");
+    ASSERT_INT_EQ(lu->telemetry.mkz_reserved_fallback_attempts,
+                  lu->telemetry.mkz_reserved_fallback_accepts +
+                  lu->telemetry.mkz_reserved_fallback_rejects,
+                  "failure counters: reserved-row fallback attempts classified");
+    ASSERT(lu->telemetry.mkz_circuit_trips > 0,
+           "failure counters: Markowitz circuit trips on repeated bad outcomes");
+    ASSERT(lu->telemetry.mkz_circuit_skips > 0,
+           "failure counters: Markowitz circuit skips some repeated attempts");
+    ASSERT(lu->telemetry.mkz_calls < 9,
+           "failure counters: circuit breaker reduced Markowitz attempts");
     ASSERT_INT_EQ(lu->telemetry.mkz_fail_workspace, 0, "failure counters: no workspace failure");
     ASSERT_INT_EQ(lu->telemetry.mkz_fail_capacity, 0, "failure counters: no capacity failure");
 
