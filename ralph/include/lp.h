@@ -206,6 +206,12 @@ typedef struct {
     int symbolic_full_retry_attempts;
     int symbolic_full_retry_successes;
     int symbolic_full_retry_numeric_failures;
+    int symbolic_full_retry_mkz_attempts;
+    int symbolic_full_retry_mkz_successes;
+    int symbolic_full_retry_mkz_failures;
+    int numeric_backend_markowitz;
+    int numeric_backend_supernode;
+    int numeric_backend_dense_ge;
 
     /* Sparse factorization stage timing telemetry (aggregate + last call) */
     int perf_factorize_calls;      /* Number of lu_factorize() calls */
@@ -927,6 +933,12 @@ typedef struct {
     int symbolic_full_retry_attempts;
     int symbolic_full_retry_successes;
     int symbolic_full_retry_numeric_failures;
+    int symbolic_full_retry_mkz_attempts;
+    int symbolic_full_retry_mkz_successes;
+    int symbolic_full_retry_mkz_failures;
+    int numeric_backend_markowitz;
+    int numeric_backend_supernode;
+    int numeric_backend_dense_ge;
 
     int sn_calls;
     int sn_successes;
@@ -1207,6 +1219,12 @@ void lp_telemetry_lu_mark_symbolic_failure(LUFactorization *lu,
 void lp_telemetry_lu_mark_symbolic_full_retry_attempt(LUFactorization *lu);
 void lp_telemetry_lu_mark_symbolic_full_retry_success(LUFactorization *lu);
 void lp_telemetry_lu_mark_symbolic_full_retry_numeric_failure(LUFactorization *lu);
+void lp_telemetry_lu_mark_symbolic_full_retry_mkz_attempt(LUFactorization *lu);
+void lp_telemetry_lu_mark_symbolic_full_retry_mkz_success(LUFactorization *lu);
+void lp_telemetry_lu_mark_symbolic_full_retry_mkz_failure(LUFactorization *lu);
+void lp_telemetry_lu_mark_numeric_backend_markowitz(LUFactorization *lu);
+void lp_telemetry_lu_mark_numeric_backend_supernode(LUFactorization *lu);
+void lp_telemetry_lu_mark_numeric_backend_dense_ge(LUFactorization *lu);
 void lp_telemetry_lu_mark_sparse_success(LUFactorization *lu);
 void lp_telemetry_lu_mark_dense_fallback(LUFactorization *lu);
 void lp_telemetry_lu_clear_mkz_last_failure(LUFactorization *lu);

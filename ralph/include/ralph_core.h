@@ -626,6 +626,12 @@ typedef struct {
     int symbolic_full_retry_attempts;
     int symbolic_full_retry_successes;
     int symbolic_full_retry_numeric_failures;
+    int symbolic_full_retry_mkz_attempts;
+    int symbolic_full_retry_mkz_successes;
+    int symbolic_full_retry_mkz_failures;
+    int numeric_backend_markowitz;
+    int numeric_backend_supernode;
+    int numeric_backend_dense_ge;
 
     int sn_calls;
     int sn_successes;
