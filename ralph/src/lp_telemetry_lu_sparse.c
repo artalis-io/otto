@@ -90,6 +90,36 @@ void lp_telemetry_lu_mark_symbolic_full_retry_numeric_failure(LUFactorization *l
     lu->telemetry.symbolic_full_retry_numeric_failures++;
 }
 
+void lp_telemetry_lu_mark_symbolic_full_retry_mkz_attempt(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.symbolic_full_retry_mkz_attempts++;
+}
+
+void lp_telemetry_lu_mark_symbolic_full_retry_mkz_success(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.symbolic_full_retry_mkz_successes++;
+}
+
+void lp_telemetry_lu_mark_symbolic_full_retry_mkz_failure(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.symbolic_full_retry_mkz_failures++;
+}
+
+void lp_telemetry_lu_mark_numeric_backend_markowitz(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.numeric_backend_markowitz++;
+}
+
+void lp_telemetry_lu_mark_numeric_backend_supernode(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.numeric_backend_supernode++;
+}
+
+void lp_telemetry_lu_mark_numeric_backend_dense_ge(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.numeric_backend_dense_ge++;
+}
+
 void lp_telemetry_lu_mark_sparse_success(LUFactorization *lu) {
     lp_telemetry_lu_set_sparse_fallback_reason(lu, LU_SPARSE_FALLBACK_NONE);
 }

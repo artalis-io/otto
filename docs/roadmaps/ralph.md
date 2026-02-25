@@ -4,7 +4,7 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Current** (2026-02-24) — symbolic-failure sparse retry + LU failure-reason telemetry baseline:
+**Current** (2026-02-25) — full-retry backend ordering + LU telemetry expansion baseline:
 - Added explicit symbolic-stage failure reason tracking in LU sparse path with per-reason telemetry
   counters (workspace, unmatched-no-reserved, inconsistent-identity).
 - Implemented sparse full-structural retry when symbolic planning fails:
@@ -24,19 +24,29 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 - Added structure-local Markowitz circuit breaker (fingerprint-keyed bad-streak
   trip + bounded skip budget) plus telemetry counters:
   `mkz_circuit_trips`, `mkz_circuit_skips`, `mkz_circuit_resets`.
+- Added full-structural retry backend ordering policy:
+  - in symbolic full-retry mode, force Markowitz-first numeric attempt;
+  - allow supernode only after that Markowitz attempt;
+  - keep dense-GE as final numeric fallback.
+- Added telemetry counters for full-retry/backend selection diagnosis:
+  `symbolic_full_retry_mkz_attempts`, `symbolic_full_retry_mkz_successes`,
+  `symbolic_full_retry_mkz_failures`, `numeric_backend_markowitz`,
+  `numeric_backend_supernode`, `numeric_backend_dense_ge`.
 - Follow-up queue (intentionally pending):
+  - Add guardrails to avoid repeated forced Markowitz failures on structural families
+    where full-retry Markowitz is consistently singular (`pilot`).
   - Calibrate trip/skip constants per structural family (`pilot`/`stair`) to
     reduce numeric retries without starving successful Markowitz paths.
 - Extended benchmark LU JSON output with symbolic failure/retry counters for per-instance diagnosis.
 - Added unit coverage in `test_lp_telemetry_lu_sparse` to assert symbolic failure classification,
   sparse full-retry success path, and zero dense fallback on successful retry.
 Latest gates:
-`make -C ralph test-lp-telemetry-lu-sparse` PASS (55/55),
+`make -C ralph test-lp-telemetry-lu-sparse` PASS (61/61),
 `make -C ralph test-simplex-policy` PASS (39/39),
 `make -C ralph test-lu-markowitz` PASS (30/30), and
 `make -C ralph test-netlib-gate` PASS (84 files, timeout files 26, status/objective/invalid mismatches 0,
 dense fallback files 0, no unexpected regressions; artifacts:
-`/tmp/netlib-regression-gate-20260225-110749`).
+`/tmp/netlib-regression-gate-20260225-120035`).
 
 Previous: (2026-02-23) — LP wall-clock guard + NETLIB timeout-equivalent gate baseline:
 - Added explicit LP wall-clock guard in simplex/dual solve paths (including recovery loops), so

@@ -45,6 +45,12 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.symbolic_full_retry_attempts = 0;
     lu->telemetry.symbolic_full_retry_successes = 0;
     lu->telemetry.symbolic_full_retry_numeric_failures = 0;
+    lu->telemetry.symbolic_full_retry_mkz_attempts = 0;
+    lu->telemetry.symbolic_full_retry_mkz_successes = 0;
+    lu->telemetry.symbolic_full_retry_mkz_failures = 0;
+    lu->telemetry.numeric_backend_markowitz = 0;
+    lu->telemetry.numeric_backend_supernode = 0;
+    lu->telemetry.numeric_backend_dense_ge = 0;
     lu->telemetry.perf_factorize_calls = 0;
     lu->telemetry.perf_last_basis_nnz = 0;
     lu->telemetry.perf_last_m = 0;
@@ -135,6 +141,12 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(symbolic_full_retry_attempts);
     COPY_LU_TELEM_FIELD(symbolic_full_retry_successes);
     COPY_LU_TELEM_FIELD(symbolic_full_retry_numeric_failures);
+    COPY_LU_TELEM_FIELD(symbolic_full_retry_mkz_attempts);
+    COPY_LU_TELEM_FIELD(symbolic_full_retry_mkz_successes);
+    COPY_LU_TELEM_FIELD(symbolic_full_retry_mkz_failures);
+    COPY_LU_TELEM_FIELD(numeric_backend_markowitz);
+    COPY_LU_TELEM_FIELD(numeric_backend_supernode);
+    COPY_LU_TELEM_FIELD(numeric_backend_dense_ge);
 
     COPY_LU_FIELD(sn_calls);
     COPY_LU_FIELD(sn_successes);

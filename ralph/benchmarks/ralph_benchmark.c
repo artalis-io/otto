@@ -336,6 +336,12 @@ typedef struct {
     int lu_symbolic_full_retry_attempts;
     int lu_symbolic_full_retry_successes;
     int lu_symbolic_full_retry_numeric_failures;
+    int lu_symbolic_full_retry_mkz_attempts;
+    int lu_symbolic_full_retry_mkz_successes;
+    int lu_symbolic_full_retry_mkz_failures;
+    int lu_numeric_backend_markowitz;
+    int lu_numeric_backend_supernode;
+    int lu_numeric_backend_dense_ge;
     int lu_sn_calls;
     int lu_sn_successes;
     int lu_num_updates;
@@ -868,6 +874,12 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_symbolic_full_retry_attempts = lu_tel.symbolic_full_retry_attempts;
                 result.lu_symbolic_full_retry_successes = lu_tel.symbolic_full_retry_successes;
                 result.lu_symbolic_full_retry_numeric_failures = lu_tel.symbolic_full_retry_numeric_failures;
+                result.lu_symbolic_full_retry_mkz_attempts = lu_tel.symbolic_full_retry_mkz_attempts;
+                result.lu_symbolic_full_retry_mkz_successes = lu_tel.symbolic_full_retry_mkz_successes;
+                result.lu_symbolic_full_retry_mkz_failures = lu_tel.symbolic_full_retry_mkz_failures;
+                result.lu_numeric_backend_markowitz = lu_tel.numeric_backend_markowitz;
+                result.lu_numeric_backend_supernode = lu_tel.numeric_backend_supernode;
+                result.lu_numeric_backend_dense_ge = lu_tel.numeric_backend_dense_ge;
                 result.lu_sn_calls = lu_tel.sn_calls;
                 result.lu_sn_successes = lu_tel.sn_successes;
                 result.lu_num_updates = lu_tel.num_updates;
@@ -1862,6 +1874,18 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_symbolic_full_retry_successes);
     fprintf(out, "    \"symbolic_full_retry_numeric_failures\": %d,\n",
             ralph->lu_symbolic_full_retry_numeric_failures);
+    fprintf(out, "    \"symbolic_full_retry_mkz_attempts\": %d,\n",
+            ralph->lu_symbolic_full_retry_mkz_attempts);
+    fprintf(out, "    \"symbolic_full_retry_mkz_successes\": %d,\n",
+            ralph->lu_symbolic_full_retry_mkz_successes);
+    fprintf(out, "    \"symbolic_full_retry_mkz_failures\": %d,\n",
+            ralph->lu_symbolic_full_retry_mkz_failures);
+    fprintf(out, "    \"numeric_backend_markowitz\": %d,\n",
+            ralph->lu_numeric_backend_markowitz);
+    fprintf(out, "    \"numeric_backend_supernode\": %d,\n",
+            ralph->lu_numeric_backend_supernode);
+    fprintf(out, "    \"numeric_backend_dense_ge\": %d,\n",
+            ralph->lu_numeric_backend_dense_ge);
     fprintf(out, "    \"sn_calls\": %d,\n", ralph->lu_sn_calls);
     fprintf(out, "    \"sn_successes\": %d,\n", ralph->lu_sn_successes);
     fprintf(out, "    \"num_updates\": %d,\n", ralph->lu_num_updates);

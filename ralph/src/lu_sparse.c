@@ -2598,6 +2598,18 @@ static int lu_factorize_markowitz(
     return 0;
 }
 
+typedef enum {
+    LU_NUMERIC_MODE_STANDARD = 0,
+    LU_NUMERIC_MODE_SYMBOLIC_FULL_RETRY = 1
+} LUNumericMode;
+
+typedef enum {
+    LU_NUMERIC_BACKEND_NONE = 0,
+    LU_NUMERIC_BACKEND_MARKOWITZ = 1,
+    LU_NUMERIC_BACKEND_SUPERNODE = 2,
+    LU_NUMERIC_BACKEND_DENSE_GE = 3
+} LUNumericBackend;
+
 /*
  * Numeric factorization: dense GE with partial pivoting on structural columns,
  * identity column placement, COO→CSC conversion, condition estimation.
@@ -2608,10 +2620,11 @@ static int lu_factorize_markowitz(
  * Returns 0 on success, -1 on failure (singular pivot or alloc failure).
  */
 static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
-                                 int num_identity, int k) {
+                                 int num_identity, int k, LUNumericMode mode) {
     int m = lu->m;
     int dense_ge_retry_done = 0;
     int skip_sparse_numeric = 0;
+    int full_retry_mode = (mode == LU_NUMERIC_MODE_SYMBOLIC_FULL_RETRY);
     double t_a_struct_build_ms = 0.0;
     double t_markowitz_numeric_ms = 0.0;
     double t_supernode_numeric_ms = 0.0;
@@ -2622,6 +2635,8 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     uint64_t mkz_fingerprint = lu->sym_fingerprint;
     int mkz_used_this_call = 0;
     int mkz_bad_outcome_this_call = 0;
+    int mkz_attempted_in_full_retry = 0;
+    LUNumericBackend backend_used = LU_NUMERIC_BACKEND_NONE;
 #define NUMERIC_COMMIT() do { \
     lp_telemetry_lu_record_numeric_stages(lu, \
         k, \
@@ -2723,7 +2738,9 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     lp_telemetry_lu_clear_mkz_last_failure(lu);
     int mkz_skip_by_circuit = 0;
     if (!skip_sparse_numeric && lu->mkz_enabled && k >= MARKOWITZ_MIN_K) {
-        mkz_skip_by_circuit = mkz_circuit_should_skip(lu, mkz_fingerprint);
+        if (!full_retry_mode) {
+            mkz_skip_by_circuit = mkz_circuit_should_skip(lu, mkz_fingerprint);
+        }
     }
 
     /* Try sparse Markowitz factorization if enabled and k is large enough.
@@ -2732,6 +2749,10 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     if (!skip_sparse_numeric && lu->mkz_enabled && k >= MARKOWITZ_MIN_K &&
         !mkz_skip_by_circuit) {
         mkz_used_this_call = 1;
+        if (full_retry_mode) {
+            mkz_attempted_in_full_retry = 1;
+            lp_telemetry_lu_mark_symbolic_full_retry_mkz_attempt(lu);
+        }
         int mkz_init_nnz = mkz_count_init_nnz(B, col_order, k);
         size_t mkz_perm_doubles = ((size_t)k * sizeof(int) + sizeof(double) - 1u) / sizeof(double);
         int *mkz_col_perm = NULL;
@@ -2810,8 +2831,12 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
 
         if (rc == 0) {
             lp_telemetry_lu_mark_mkz_success(lu);
+            if (full_retry_mode) {
+                lp_telemetry_lu_mark_symbolic_full_retry_mkz_success(lu);
+            }
             lu->num_regularized = mkz_reg;
             lu->mkz_pool_mult_hint = pool_mult;
+            backend_used = LU_NUMERIC_BACKEND_MARKOWITZ;
 
             /* Markowitz emits L_col/U_col in structural column space (0..k-1).
              * The COO→CSC path and identity_placement expect step-indexed columns.
@@ -2850,6 +2875,9 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             goto identity_placement;
         }
         lp_telemetry_lu_mark_mkz_failure(lu, rc);
+        if (full_retry_mode && mkz_attempted_in_full_retry) {
+            lp_telemetry_lu_mark_symbolic_full_retry_mkz_failure(lu);
+        }
         if (rc == MKZ_FAIL_SINGULAR) {
             mkz_bad_outcome_this_call = 1;
             mkz_circuit_note_bad_outcome(lu, mkz_fingerprint);
@@ -2886,7 +2914,8 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     }
 
     /* T2.1: Try supernodal factorization if enabled and k is large enough */
-    if (!skip_sparse_numeric && lu->sn_enabled && k >= SN_MIN_K) {
+    if (!skip_sparse_numeric && lu->sn_enabled && k >= SN_MIN_K &&
+        (!full_retry_mode || mkz_attempted_in_full_retry)) {
         lu->sn_calls++;
         /* Build or reuse symbolic analysis */
         SNSymbolic *sn_sym = lu->sn_symbolic;
@@ -2927,6 +2956,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             if (rc == 0) {
                 lu->sn_successes++;
                 lu->num_regularized = sn_reg;
+                backend_used = LU_NUMERIC_BACKEND_SUPERNODE;
                 /* Skip column-by-column GE, go straight to identity placement */
                 goto identity_placement;
             }
@@ -2963,6 +2993,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     }
 
 dense_ge_factorization:
+    backend_used = LU_NUMERIC_BACKEND_DENSE_GE;
     /* LU factorization of structural columns with partial pivoting */
     t_stage_start_ms = lp_telemetry_timer_start();
     for (int step = 0; step < k; step++) {
@@ -3255,6 +3286,13 @@ identity_placement:
     if (mkz_used_this_call && !mkz_bad_outcome_this_call) {
         mkz_circuit_note_good_outcome(lu, mkz_fingerprint);
     }
+    if (backend_used == LU_NUMERIC_BACKEND_MARKOWITZ) {
+        lp_telemetry_lu_mark_numeric_backend_markowitz(lu);
+    } else if (backend_used == LU_NUMERIC_BACKEND_SUPERNODE) {
+        lp_telemetry_lu_mark_numeric_backend_supernode(lu);
+    } else if (backend_used == LU_NUMERIC_BACKEND_DENSE_GE) {
+        lp_telemetry_lu_mark_numeric_backend_dense_ge(lu);
+    }
 
     NUMERIC_RETURN(0);
 #undef NUMERIC_RETURN
@@ -3292,7 +3330,9 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
          * dense top-level fallback when only identity/structural partitioning
          * failed but Markowitz numeric can still factorize robustly. */
         if (lu_symbolic_finalize_full_structural(lu, B) == 0) {
-            int retry_num_result = lu_numeric_factorize(lu, B, lu->sym_num_identity, lu->sym_k);
+            int retry_num_result = lu_numeric_factorize(
+                lu, B, lu->sym_num_identity, lu->sym_k,
+                LU_NUMERIC_MODE_SYMBOLIC_FULL_RETRY);
             if (retry_num_result == 0) {
                 lp_telemetry_lu_mark_symbolic_full_retry_success(lu);
                 lp_telemetry_lu_mark_sparse_success(lu);
@@ -3308,7 +3348,9 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
     }
 
     /* Numeric factorization (dense GE + COO→CSC) */
-    int num_result = lu_numeric_factorize(lu, B, lu->sym_num_identity, lu->sym_k);
+    int num_result = lu_numeric_factorize(
+        lu, B, lu->sym_num_identity, lu->sym_k,
+        LU_NUMERIC_MODE_STANDARD);
     if (num_result < 0) {
         lu->sym_valid = 0;  /* Invalidate on numeric failure */
         lp_telemetry_lu_set_sparse_fallback_reason(lu, LU_SPARSE_FALLBACK_NUMERIC);
