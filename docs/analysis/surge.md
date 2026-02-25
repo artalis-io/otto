@@ -38,19 +38,19 @@ The JSON API (`sg_api.c`) is a thin veneer over the same C API — no separate "
 - Solomon benchmarks: 56/56 solved, avgDistGap +0.2% vs. BKS, 39/56 matching vehicle count (avgVehGap +0.30). Solidly in "good metaheuristic" territory.
 - Li & Lim (PDPTW): avgDistGap +4.2%, 44/56 equal vehicles (avgVehGap +0.48).
 
-**Population-based** (10k iters, 3 generations, auto threads):
-- Solomon: avgDistGap **-0.2%** vs. BKS (beating BKS average on distance), **45/56** matching vehicle count (avgVehGap +0.20).
-- Li & Lim: avgDistGap +3.5%, **48/56** equal vehicles (avgVehGap +0.38).
+**Population-based** (10k iters, 3 generations, auto threads, Phase S13-S15):
+- Solomon: avgDistGap **-0.1%** vs. BKS (beating BKS average on distance), **46/56** matching vehicle count (avgVehGap +0.18). All C1xx/C2xx (17/17) exact BKS match.
+- Li & Lim: avgDistGap +3.7%, **47/56** equal vehicles (avgVehGap +0.39). LC2xx (8/8), LR2xx (11/11), LRC2xx (8/8) all exact BKS match.
 
 For context:
 - **VROOM**: Typically 2-5% above BKS on Solomon, but much faster. Surge is significantly better on quality.
 - **OR-Tools**: With careful tuning, OR-Tools can get within 1-3% of BKS. Surge is now better on Solomon, comparable on PDPTW.
-- **HGS-CVRP** (Vidal): State-of-the-art, often matches or sets BKS. Surge is closing the gap — particularly on vehicle count (45/56 vs HGS's ~54/56 on Solomon). The remaining gap is concentrated on tight-TW R1/RC1 instances. See "Why not HGS?" below.
+- **HGS-CVRP** (Vidal): State-of-the-art, often matches or sets BKS. Surge is closing the gap — particularly on vehicle count (46/56 vs HGS's ~54/56 on Solomon). The remaining gap is concentrated on tight-TW R1/RC1 instances. See "Why not HGS?" below.
 - **LKH-3**: Similar — academic champion, not a deployable product.
 
 The key algorithmic advancement is **HGS-style infeasible-space exploration**: the solver temporarily accepts constraint-violating solutions during search, with adaptive penalty weights that self-adjust per constraint type. This allows vehicle-reducing moves that require deep infeasible traversal (redistributing requests across fewer vehicles temporarily violates time windows). Combined with population-based parallel search, this is the single biggest quality lever — Solomon vehicle matches jumped from 37/56 (pre-infeasible) to 45/56 (population + infeasible).
 
-**Honest weakness**: The remaining +1 vehicle gap on R1/RC1 tight-TW instances (R104, R109-R112, RC101, RC105-RC108) likely requires either deeper infeasible traversal (higher iteration budgets), population diversity mechanisms (biased fitness), or specialized operators (SISRs/LNS targeting these specific structural patterns). The core ALNS + SA framework is well-understood; the infeasible-space exploration brings it closer to modern HGS-level techniques.
+**Honest weakness**: The remaining +1 vehicle gap on R1/RC1 tight-TW instances (R104, R109-R112, RC101, RC105-RC108) shows a trade-off pattern: +1 vehicle but often lower distance (e.g., R104 +1 veh / -1.5% dist). Progressive penalty, ejection in repair, and Phase 1.5 vehicle crunch (S13-S15) improved equalVehicles from 45→46 but didn't close this gap. These instances likely require either higher iteration budgets or specialized tight-TW operators (SISRs targeting specific structural patterns).
 
 ---
 
@@ -65,7 +65,7 @@ The key algorithmic advancement is **HGS-style infeasible-space exploration**: t
 
 The C implementation with arena-allocated solutions, pre-allocated scratch buffers, flat arrays, and cached feasibility — this is genuinely fast. Zero malloc/free in the hot loop. The ~14K lines of library code (excluding `surge.c` monolith and tests) compiles in under 2 seconds.
 
-**Multi-threaded**: `sg_solve_parallel()` runs N independent ALNS solves with different seeds, picking the best. `sg_solve_population()` adds generational warm-starting — same compute budget, but guided search finds significantly better solutions. Population mode with infeasible-space exploration is the strongest configuration: Solomon 45/56 equal vehicles (avgDistGap -0.2%), Li & Lim 48/56 equal vehicles (avgDistGap +3.5%).
+**Multi-threaded**: `sg_solve_parallel()` runs N independent ALNS solves with different seeds, picking the best. `sg_solve_population()` adds generational warm-starting with SREX crossover and diversity filtering — same compute budget, but guided search finds significantly better solutions. Population mode with infeasible-space exploration and progressive penalty is the strongest configuration: Solomon 46/56 equal vehicles (avgDistGap -0.1%), Li & Lim 47/56 equal vehicles (avgDistGap +3.7%).
 
 ---
 
@@ -130,7 +130,7 @@ Language bindings are trivial given the JSON API — each binding is just a thin
 ## Auditability — Strong advantage
 
 - 21K lines of straightforward C. No metaprogramming, no templates, no macros beyond the basics. A competent C developer can read the entire solver in a day.
-- 326 tests covering every constraint individually. Each test is self-contained and readable.
+- 340 tests covering every constraint individually. Each test is self-contained and readable.
 - Operator telemetry: you can see exactly which destroy/repair operators were used, how often, and how effective they were.
 - Deterministic: reproducible bugs.
 - ASAN/UBSan clean: no undefined behavior.
@@ -168,12 +168,12 @@ Two strategies implemented in `sg_parallel.c`:
 
 | Benchmark | Metric | Single-thread | Population (3 gen) |
 |-----------|--------|---------------|--------------------|
-| Solomon | equalVehicles | 39/56 | **45/56** |
-| Solomon | avgVehGap | +0.30 | **+0.20** |
-| Solomon | avgDistGap | +0.2% | **-0.2%** |
-| Li & Lim | equalVehicles | 44/56 | **48/56** |
-| Li & Lim | avgVehGap | +0.48 | **+0.38** |
-| Li & Lim | avgDistGap | +4.2% | **+3.5%** |
+| Solomon | equalVehicles | 39/56 | **46/56** |
+| Solomon | avgVehGap | +0.30 | **+0.18** |
+| Solomon | avgDistGap | +0.2% | **-0.1%** |
+| Li & Lim | equalVehicles | 44/56 | **47/56** |
+| Li & Lim | avgVehGap | +0.48 | **+0.39** |
+| Li & Lim | avgDistGap | +4.2% | **+3.7%** |
 
 Remaining opportunity: **Parallel move evaluation** — the `sg_route_rank_insertions_for_request()` vehicle loop is read-only per vehicle and could be parallelized with a thread pool for additional intra-solve speedup.
 
@@ -287,10 +287,10 @@ Revised grades vs. initial assessment: Constraint richness A (compartments, prec
 
 ## Competitive Gap Analysis: What's Missing to Be GOAT
 
-### Current Benchmark Quality (2026-02-23)
+### Current Benchmark Quality (2026-02-25)
 
-- Solomon (VRPTW, 56 cases): avgVehGap +0.36, avgDistGap +0.4%, 37/56 equal vehicles, lexiNonWorse 11
-- Li & Lim (PDPTW, 57 cases): avgVehGap +0.52, avgDistGap +4.8%, 41/56 equal vehicles, lexiNonWorse 22
+- Solomon (VRPTW, 56 cases, population): avgVehGap +0.18, avgDistGap -0.1%, 46/56 equal vehicles, lexiNonWorse 14
+- Li & Lim (PDPTW, 56 cases, population): avgVehGap +0.39, avgDistGap +3.7%, 47/56 equal vehicles, lexiNonWorse 27
 
 ### Missing Features — Grouped by Impact
 
@@ -325,17 +325,16 @@ Revised grades vs. initial assessment: Constraint richness A (compartments, prec
 
 #### Solution Quality
 
-The persistent +1 vehicle gap on tight-TW instances (R1, RC1, LR1, LRC1) is the main quality weakness. Phase 1 SA cooling fix and mid-solve ejection pulse helped (equalVehicles up on both benchmarks), but tight-TW instances still consistently overshoot by 1 vehicle.
+The persistent +1 vehicle gap on tight-TW instances (R1, RC1, LR1, LRC1) is the main quality weakness. Progressive penalty, ejection in repair, SREX crossover, and Phase 1.5 vehicle crunch (S13-S15) improved equalVehicles to 46/56 on Solomon, but tight-TW instances still show +1 vehicle with often better distance (trade-off pattern, e.g. R104 +1 veh / -1.5% dist).
 
 **What top solvers do differently:**
-- **HGS/PyVRP**: Population diversity + education (local search on infeasible solutions with penalty). Surge's population search is a step toward this but doesn't do infeasible-space exploration.
+- **HGS/PyVRP**: Population diversity + education (local search on infeasible solutions with penalty). Surge now has infeasible-space exploration (S12), population with SREX crossover and diversity filtering (S15), and progressive penalty scheduling (S13). The gap is narrowing.
 - **LKH-3**: Giant-tour with Lin-Kernighan moves. Not applicable to rich VRP but devastating on clean VRPTW.
-- **OR-Tools + CP solver**: Can throw exact methods at small neighborhoods via the legacy constraint programming solver. Surge has no exact component (Ralph exists but isn't integrated).
 
 **Realistic next quality moves:**
-1. **Infeasible-space exploration** — accept TW/capacity violations with self-adjusting penalty, letting ALNS explore across feasibility boundaries. This is what makes HGS work on tight instances.
-2. **Parallel move evaluation** — the vehicle loop in insertion ranking is embarrassingly parallel. Would double iteration throughput on multi-core.
-3. **Larger ALNS neighborhoods** — SISR (string removal) is implemented but could be tuned more aggressively.
+1. **Parallel move evaluation** — the vehicle loop in insertion ranking is embarrassingly parallel. Would double iteration throughput on multi-core.
+2. **Larger ALNS neighborhoods** — SISR (string removal) is implemented but could be tuned more aggressively for tight-TW instances.
+3. **Large-scale validation** — test on 500-5000 request instances to measure scaling behavior.
 
 #### What Commercial Solvers Have That Open-Source Doesn't
 
@@ -365,7 +364,7 @@ This is where PTV, HERE, Ortec, and OptimoRoute play. Neither OR-Tools nor VROOM
 3. ~~**Per-vehicle travel matrix**~~ — **Done.** Travel profiles.
 4. ~~**Open start**~~ — **Done.**
 5. ~~**Validation mode**~~ — **Done.** Dispatching integration use case closed.
-6. **Infeasible-space exploration** — the algorithmic lever most likely to close the vehicle gap on tight instances.
+6. ~~**Infeasible-space exploration**~~ — **Done.** HGS-style infeasible-space search (S12) + progressive penalty schedule (S13) + ejection chains in repair (S14) + SREX crossover + population diversity filter (S15).
 7. ~~**Global span balancing**~~ — **Done.** `sg_set_span_cost_duration()` / `sg_set_span_cost_distance()`.
 8. ~~**Live re-optimization**~~ — **Done.** Three-level request locking with hardened warm-start construction.
 9. ~~**Vehicle compartments**~~ — **Done.** Multi-temperature fleet modelling (frozen/chilled/ambient). 11 tests.
@@ -379,10 +378,10 @@ Modelling parity with OR-Tools is achieved and exceeded. All solver-layer gaps v
 
 Surge's strengths are **deployability**, **API cleanliness**, **constraint richness**, and **auditability**. These matter enormously for commercial embedding — if you're selling routing as a feature inside a larger product, Surge is easier to ship than anything else in this space.
 
-As of February 2026, Surge has the broadest constraint coverage of any open-source VRP solver — and arguably matches or exceeds commercial offerings from PTV, Ortec, and HERE on solver-layer modelling. The full list: multi-dimensional capacity, hard/soft/disjunct time windows, PD pairing with ride time limits, multi-trip with reload, break policies (HoS), sequence-dependent setup times, commodity conflicts, exclusion groups, vehicle qualifications, request-vehicle constraints (allowed/forbidden), open routes, max duration/tasks/distance, depot capacity, waiting/overtime costs, warm start, time-dependent travel (speed profiles + time-indexed brackets), per-vehicle travel profiles, LIFO/FIFO PD stacking, backhaul, request locking (NONE/COMMITTED/FROZEN), vehicle compartments (multi-temperature), and inter-request precedence. 326 tests. ~40K lines of C. Zero external dependencies.
+As of February 2026, Surge has the broadest constraint coverage of any open-source VRP solver — and arguably matches or exceeds commercial offerings from PTV, Ortec, and HERE on solver-layer modelling. The full list: multi-dimensional capacity, hard/soft/disjunct time windows, PD pairing with ride time limits, multi-trip with reload, break policies (HoS), sequence-dependent setup times, commodity conflicts, exclusion groups, vehicle qualifications, request-vehicle constraints (allowed/forbidden), open routes, max duration/tasks/distance, depot capacity, waiting/overtime costs, warm start, time-dependent travel (speed profiles + time-indexed brackets), per-vehicle travel profiles, LIFO/FIFO PD stacking, backhaul, request locking (NONE/COMMITTED/FROZEN), vehicle compartments (multi-temperature), and inter-request precedence. 340 tests. ~40K lines of C. Zero external dependencies.
 
 Distribution is solved: REST API server, WASM build, Python bindings, Node.js bindings. Parallelism is solved: independent multi-seed runs + population-based generational search. Memory management is solved: arena allocators with zero malloc/free in the hot loop.
 
 The only remaining modelling gap vs. the entire competitive landscape is energy/EV cost (experimental in OR-Tools, niche for trucking). Everything else on the "what commercial solvers have" list is either implemented at the solver layer or already expressible as application-layer orchestration.
 
-**The gap to GOAT is algorithmic quality on tight-TW instances — not infrastructure, not modelling, not distribution.** Specifically: the +1 vehicle gap on R1/RC1/LR1/LRC1 tight-TW instances, and the +3.5% distance gap on Li & Lim PDPTW. Closing this requires operator improvements (ejection chains, route-level crossover, deeper infeasible-space traversal), not more features.
+**The gap to GOAT is large-scale validation and the remaining tight-TW vehicle gap — not infrastructure, not modelling, not distribution.** Specifically: the +1 vehicle gap on 10/56 R1/RC1 Solomon tight-TW instances (trade-off: better distance), and the +3.7% distance gap on Li & Lim PDPTW (concentrated on LC1xx/LR1xx). The ALNS architecture scales better than CP-SAT by construction; whether the implementation handles 1000+ requests within target times is a measurement, not an architectural bet. See `docs/analysis/surge-competitive.md` for detailed feature-by-feature comparison against all major competitors.
