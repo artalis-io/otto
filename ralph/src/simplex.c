@@ -5589,6 +5589,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                                                            tab->lu->cond_estimate,
                                                            tab->lu->growth_factor,
                                                            lu_soft_health_streak);
+        int lu_refactor_nominal = lu_health_decision.refactor_now;
         int lu_refactor_needed = lu_health_decision.refactor_now;
         int lu_soft_cost_deferred = 0;
         int cooldown_eligible = 0;
@@ -5597,6 +5598,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             compute_periodic_refactor_policy(tab, 1, use_bland, degenerate_count);
         LPPeriodicRefactorPolicy effective_policy = periodic_policy;
         int periodic_refactor = 0;
+        int periodic_refactor_nominal = 0;
         int needs_refactor = lu_refactor_needed;
         lu_soft_health_streak = lu_health_decision.soft_breach_streak_next;
         if (lu_health_decision.hard_trigger) {
@@ -5668,6 +5670,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                                                              &effective_policy,
                                                              use_bland,
                                                              degenerate_count);
+            periodic_refactor_nominal = periodic_refactor;
             if (periodic_refactor &&
                 cooldown_eligible &&
                 periodic_policy_cooldown > 0) {
@@ -5736,6 +5739,17 @@ static int simplex_phase1(SimplexSolver *solver) {
         }
         if (periodic_refactor) {
             periodic_feedback_set_hint(solver, 1, periodic_policy.interval, effective_policy_pressure);
+        }
+        if (solver->telemetry_enabled) {
+            int shadow_refactor = lp_basis_governor_shadow_decide(
+                LP_BASIS_GOV_PHASE1,
+                lu_refactor_nominal,
+                periodic_refactor_nominal);
+            lp_basis_governor_observe_refactor(
+                &solver->policy.basis_governor,
+                LP_BASIS_GOV_PHASE1,
+                shadow_refactor,
+                needs_refactor);
         }
 
         if (needs_refactor) {
@@ -6565,10 +6579,12 @@ static int simplex_phase2(SimplexSolver *solver) {
                                                            tab->lu->cond_estimate,
                                                            tab->lu->growth_factor,
                                                            lu_soft_health_streak);
+        int lu_refactor_nominal = lu_health_decision.refactor_now;
         int lu_refactor_needed = lu_health_decision.refactor_now;
         int lu_soft_cost_deferred = 0;
         int needs_refactor = lu_refactor_needed;
         int periodic_refactor = 0;
+        int periodic_refactor_nominal = 0;
         int cooldown_eligible = 0;
         double effective_policy_pressure = 0.0;
         LPPeriodicRefactorPolicy periodic_policy = {0, 0, 0.0, 0.0};
@@ -6645,6 +6661,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                                                              &effective_policy,
                                                              use_bland,
                                                              degenerate_count);
+            periodic_refactor_nominal = periodic_refactor;
             if (periodic_refactor &&
                 cooldown_eligible &&
                 periodic_policy_cooldown > 0) {
@@ -6713,6 +6730,17 @@ static int simplex_phase2(SimplexSolver *solver) {
         }
         if (periodic_refactor) {
             periodic_feedback_set_hint(solver, 2, periodic_policy.interval, effective_policy_pressure);
+        }
+        if (solver->telemetry_enabled) {
+            int shadow_refactor = lp_basis_governor_shadow_decide(
+                LP_BASIS_GOV_PHASE2,
+                lu_refactor_nominal,
+                periodic_refactor_nominal);
+            lp_basis_governor_observe_refactor(
+                &solver->policy.basis_governor,
+                LP_BASIS_GOV_PHASE2,
+                shadow_refactor,
+                needs_refactor);
         }
 
         if (needs_refactor) {
@@ -7147,6 +7175,7 @@ static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *
     tab->trace_phase1_enabled = solver->trace_phase1;
     if (tab->lu) {
         tab->lu->telemetry_enabled = solver->telemetry_enabled;
+        tab->lu->basis_governor = &solver->policy.basis_governor;
         if (solver->lu_supernode)
             tab->lu->sn_enabled = 1;
         else if (tab->m > 300)

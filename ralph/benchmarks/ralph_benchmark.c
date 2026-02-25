@@ -299,6 +299,18 @@ typedef struct {
     double soft_lu_refactor_cost_ewma_phase2;
     double soft_lu_iter_cost_ewma_phase1;
     double soft_lu_iter_cost_ewma_phase2;
+    int shadow_refactor_yes_phase1;
+    int shadow_refactor_yes_phase2;
+    int shadow_refactor_yes_dual;
+    int shadow_refactor_no_phase1;
+    int shadow_refactor_no_phase2;
+    int shadow_refactor_no_dual;
+    int shadow_backend_pick_markowitz;
+    int shadow_backend_pick_supernode;
+    int shadow_backend_pick_dense;
+    int shadow_disagree_primal_refactor;
+    int shadow_disagree_dual_refactor;
+    int shadow_disagree_lu_backend;
 
     int lu_mkz_enabled;
     int lu_sn_enabled;
@@ -832,6 +844,18 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.soft_lu_refactor_cost_ewma_phase2 = solver_tel.soft_lu_refactor_cost_ewma_phase2;
             result.soft_lu_iter_cost_ewma_phase1 = solver_tel.soft_lu_iter_cost_ewma_phase1;
             result.soft_lu_iter_cost_ewma_phase2 = solver_tel.soft_lu_iter_cost_ewma_phase2;
+            result.shadow_refactor_yes_phase1 = solver_tel.shadow_refactor_yes_phase1;
+            result.shadow_refactor_yes_phase2 = solver_tel.shadow_refactor_yes_phase2;
+            result.shadow_refactor_yes_dual = solver_tel.shadow_refactor_yes_dual;
+            result.shadow_refactor_no_phase1 = solver_tel.shadow_refactor_no_phase1;
+            result.shadow_refactor_no_phase2 = solver_tel.shadow_refactor_no_phase2;
+            result.shadow_refactor_no_dual = solver_tel.shadow_refactor_no_dual;
+            result.shadow_backend_pick_markowitz = solver_tel.shadow_backend_pick_markowitz;
+            result.shadow_backend_pick_supernode = solver_tel.shadow_backend_pick_supernode;
+            result.shadow_backend_pick_dense = solver_tel.shadow_backend_pick_dense;
+            result.shadow_disagree_primal_refactor = solver_tel.shadow_disagree_primal_refactor;
+            result.shadow_disagree_dual_refactor = solver_tel.shadow_disagree_dual_refactor;
+            result.shadow_disagree_lu_backend = solver_tel.shadow_disagree_lu_backend;
             if (solver->tableau && solver->tableau->lu) {
                 LUTelemetrySnapshot lu_tel;
                 lp_telemetry_snapshot_lu(solver->tableau->lu, &lu_tel);
@@ -1809,6 +1833,30 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->soft_lu_iter_cost_ewma_phase1);
     fprintf(out, "    \"soft_lu_iter_cost_ewma_phase2_ms\": %.6f,\n",
             ralph->soft_lu_iter_cost_ewma_phase2);
+    fprintf(out, "    \"shadow_refactor_yes_phase1\": %d,\n",
+            ralph->shadow_refactor_yes_phase1);
+    fprintf(out, "    \"shadow_refactor_yes_phase2\": %d,\n",
+            ralph->shadow_refactor_yes_phase2);
+    fprintf(out, "    \"shadow_refactor_yes_dual\": %d,\n",
+            ralph->shadow_refactor_yes_dual);
+    fprintf(out, "    \"shadow_refactor_no_phase1\": %d,\n",
+            ralph->shadow_refactor_no_phase1);
+    fprintf(out, "    \"shadow_refactor_no_phase2\": %d,\n",
+            ralph->shadow_refactor_no_phase2);
+    fprintf(out, "    \"shadow_refactor_no_dual\": %d,\n",
+            ralph->shadow_refactor_no_dual);
+    fprintf(out, "    \"shadow_backend_pick_markowitz\": %d,\n",
+            ralph->shadow_backend_pick_markowitz);
+    fprintf(out, "    \"shadow_backend_pick_supernode\": %d,\n",
+            ralph->shadow_backend_pick_supernode);
+    fprintf(out, "    \"shadow_backend_pick_dense\": %d,\n",
+            ralph->shadow_backend_pick_dense);
+    fprintf(out, "    \"shadow_disagree_primal_refactor\": %d,\n",
+            ralph->shadow_disagree_primal_refactor);
+    fprintf(out, "    \"shadow_disagree_dual_refactor\": %d,\n",
+            ralph->shadow_disagree_dual_refactor);
+    fprintf(out, "    \"shadow_disagree_lu_backend\": %d,\n",
+            ralph->shadow_disagree_lu_backend);
     fprintf(out, "    \"basis_fastpath_hits\": %d,\n", ralph->basis_fastpath_hits);
     fprintf(out, "    \"basis_cols_rewritten\": %d,\n", ralph->basis_cols_rewritten);
     fprintf(out, "    \"basis_tail_shift_bytes\": %llu\n", ralph->basis_tail_shift_bytes);

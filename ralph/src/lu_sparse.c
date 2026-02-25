@@ -2610,6 +2610,19 @@ typedef enum {
     LU_NUMERIC_BACKEND_DENSE_GE = 3
 } LUNumericBackend;
 
+static int lu_numeric_backend_to_basis_governor_backend(int backend) {
+    if (backend == LU_NUMERIC_BACKEND_MARKOWITZ) {
+        return LP_BASIS_GOV_BACKEND_MARKOWITZ;
+    }
+    if (backend == LU_NUMERIC_BACKEND_SUPERNODE) {
+        return LP_BASIS_GOV_BACKEND_SUPERNODE;
+    }
+    if (backend == LU_NUMERIC_BACKEND_DENSE_GE) {
+        return LP_BASIS_GOV_BACKEND_DENSE;
+    }
+    return LP_BASIS_GOV_BACKEND_NONE;
+}
+
 /*
  * Numeric factorization: dense GE with partial pivoting on structural columns,
  * identity column placement, COO→CSC conversion, condition estimation.
@@ -2637,6 +2650,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     int mkz_bad_outcome_this_call = 0;
     int mkz_attempted_in_full_retry = 0;
     LUNumericBackend backend_used = LU_NUMERIC_BACKEND_NONE;
+    int shadow_backend_pick = LP_BASIS_GOV_BACKEND_NONE;
 #define NUMERIC_COMMIT() do { \
     lp_telemetry_lu_record_numeric_stages(lu, \
         k, \
@@ -2741,6 +2755,19 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
         if (!full_retry_mode) {
             mkz_skip_by_circuit = mkz_circuit_should_skip(lu, mkz_fingerprint);
         }
+    }
+    {
+        int mkz_eligible = (!skip_sparse_numeric &&
+                            lu->mkz_enabled &&
+                            k >= MARKOWITZ_MIN_K &&
+                            !mkz_skip_by_circuit);
+        int sn_eligible = (!skip_sparse_numeric &&
+                           lu->sn_enabled &&
+                           k >= SN_MIN_K &&
+                           (!full_retry_mode || mkz_eligible));
+        shadow_backend_pick = lp_basis_governor_shadow_decide_lu_backend(
+            mkz_eligible,
+            sn_eligible);
     }
 
     /* Try sparse Markowitz factorization if enabled and k is large enough.
@@ -3285,6 +3312,12 @@ identity_placement:
 
     if (mkz_used_this_call && !mkz_bad_outcome_this_call) {
         mkz_circuit_note_good_outcome(lu, mkz_fingerprint);
+    }
+    if (lu->basis_governor) {
+        lp_basis_governor_observe_lu_backend(
+            lu->basis_governor,
+            shadow_backend_pick,
+            lu_numeric_backend_to_basis_governor_backend((int)backend_used));
     }
     if (backend_used == LU_NUMERIC_BACKEND_MARKOWITZ) {
         lp_telemetry_lu_mark_numeric_backend_markowitz(lu);

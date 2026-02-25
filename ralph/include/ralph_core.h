@@ -587,6 +587,18 @@ typedef struct {
     double soft_lu_refactor_cost_ewma_phase2;
     double soft_lu_iter_cost_ewma_phase1;
     double soft_lu_iter_cost_ewma_phase2;
+    int shadow_refactor_yes_phase1;
+    int shadow_refactor_yes_phase2;
+    int shadow_refactor_yes_dual;
+    int shadow_refactor_no_phase1;
+    int shadow_refactor_no_phase2;
+    int shadow_refactor_no_dual;
+    int shadow_backend_pick_markowitz;
+    int shadow_backend_pick_supernode;
+    int shadow_backend_pick_dense;
+    int shadow_disagree_primal_refactor;
+    int shadow_disagree_dual_refactor;
+    int shadow_disagree_lu_backend;
 } RalphLPSolverTelemetry;
 
 /* LU telemetry snapshot (from the most recent solve call). */

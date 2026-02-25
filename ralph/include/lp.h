@@ -11,6 +11,7 @@
 #include "sparse.h"
 #include "ralph_core.h"
 #include "shared.h"
+#include "lp_basis_governor.h"
 
 /* Software prefetch (no-op on non-GCC/Clang compilers) */
 #if defined(__GNUC__) || defined(__clang__)
@@ -310,6 +311,7 @@ typedef struct {
     double pivot_tol;           /* Dynamic pivot tolerance (default RALPH_PIVOT_TOL) */
     int last_failure_reason;    /* LUFailureReason (last failed lu_factorize/lu_update reason) */
     int telemetry_enabled;      /* 1 = collect LU telemetry counters/timers */
+    LPBasisGovernorState *basis_governor; /* Non-owning pointer to solver governor state */
 
     /* Pre-allocated workspace for hyper-sparse operations */
     double *hs_work1;       /* Dense workspace 1 */
@@ -616,6 +618,7 @@ typedef struct {
 /* Solver policy state (behavioral scheduling/control, not telemetry). */
 typedef struct {
     int refactor_next_reason;  /* RalphRefactorReason hint consumed by tableau_refactorize */
+    LPBasisGovernorState basis_governor; /* Shadow governor state (G0) */
 
     /* Runtime scheduling counters. */
     int periodic_policy_refactors_phase1;
@@ -894,6 +897,18 @@ typedef struct {
     double soft_lu_refactor_cost_ewma_phase2;
     double soft_lu_iter_cost_ewma_phase1;
     double soft_lu_iter_cost_ewma_phase2;
+    int shadow_refactor_yes_phase1;
+    int shadow_refactor_yes_phase2;
+    int shadow_refactor_yes_dual;
+    int shadow_refactor_no_phase1;
+    int shadow_refactor_no_phase2;
+    int shadow_refactor_no_dual;
+    int shadow_backend_pick_markowitz;
+    int shadow_backend_pick_supernode;
+    int shadow_backend_pick_dense;
+    int shadow_disagree_primal_refactor;
+    int shadow_disagree_dual_refactor;
+    int shadow_disagree_lu_backend;
 } LPSolverTelemetrySnapshot;
 
 /* LU telemetry snapshot used by benchmarks and diagnostics. */
