@@ -36,6 +36,8 @@
 #define SG_ROUTE_MAX_INTENSIFY_PASSES 8
 #define SG_EJECTION_MAX_DEPTH 5
 #define SG_EJECTION_BUDGET 50000
+#define SG_EJECTION_BUDGET_CAP 500000
+#define SG_EJECTION_REPAIR_BUDGET 5000
 #define SG_STRING_L_MAX 10
 #define SG_NO_VEHICLE UINT32_MAX
 
@@ -352,6 +354,8 @@ struct SGContext {
     double span_cost_distance;
     _Atomic uint8_t travel_prepared;
     uint8_t avoid_new_vehicles;  /* Phase 1: skip empty vehicles in repair */
+    uint8_t ejection_in_repair;  /* 1 = try ejection for leftover unassigned after fill */
+    int     ejection_repair_budget;  /* per-repair budget (0 = SG_EJECTION_REPAIR_BUDGET) */
     uint8_t has_depot_capacity;  /* 1 if any depot has max_simultaneous > 0 */
     uint32_t num_commodities;          /* 0 = disabled */
     uint64_t *commodity_conflicts;     /* [num_commodities] bitmask per commodity */
@@ -1001,6 +1005,9 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
 
 /* sg_postprocess.c */
 ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx, SGRouteSolution *sol);
+ARStatus sg_route_postprocess_reduce_vehicles_relaxed(const SGContext *ctx,
+                                                       SGRouteSolution *sol,
+                                                       double distance_factor);
 ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolution *sol);
 ARStatus sg_route_postprocess_polish_distance(const SGContext *ctx, SGRouteSolution *sol);
 int sg_route_try_pd_reorder_once(const SGContext *ctx, SGRouteSolution *sol);
@@ -1021,6 +1028,9 @@ int sg_route_find_best_insertion_no_new_vehicle(const SGContext *ctx, const SGRo
                                                 uint32_t *best_delivery_pos_out,
                                                 double *best_route_distance_out);
 void sg_route_restore_from_backup(SGRouteSolution *sol, SGRouteSolution *backup);
+int sg_try_place_with_ejection(const SGContext *ctx, SGRouteSolution *sol,
+                               uint32_t req, int depth, uint32_t target_v,
+                               uint8_t *chain_visited, int *budget);
 
 /* sg_validate.c */
 SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes, const SGPlanRoute *routes);
@@ -1029,6 +1039,10 @@ SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes, const SGPlan
 void sg_penalty_init_adaptive(SGPenaltyManager *mgr, double target_feasible,
                               double tolerance, double increase_factor,
                               double decrease_factor, double cost_scale);
+void sg_penalty_init_progressive(SGPenaltyManager *mgr, double target_start,
+                                 double target_end, double tolerance,
+                                 double increase_factor, double decrease_factor,
+                                 double cost_scale, uint32_t total_segments);
 void sg_penalty_free(SGPenaltyManager *mgr);
 int sg_solution_is_feasible(const SGRouteSolution *sol);
 double sg_solution_total_violation(const SGRouteSolution *sol);

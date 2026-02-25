@@ -732,13 +732,78 @@ ARStatus sg_route_repair_fill_regret(SGContext *ctx, SGRouteSolution *sol,
     return AR_STATUS_OK;
 }
 
+/* Ejection fallback: try to place remaining unassigned requests using ejection chains.
+   Called at end of fill_greedy / fill_regret when ejection_in_repair is enabled. */
+static void sg_repair_ejection_fallback(SGContext *ctx, SGRouteSolution *sol) {
+    uint32_t *snapshot = NULL;
+    uint32_t n, i;
+    uint8_t *chain_visited = NULL;
+    int budget;
+    double cost_before;
+
+    if (!ctx->ejection_in_repair || sol->base.num_unassigned == 0) return;
+
+    budget = ctx->ejection_repair_budget > 0 ? ctx->ejection_repair_budget
+                                              : SG_EJECTION_REPAIR_BUDGET;
+
+    n = sol->base.num_unassigned;
+    snapshot = (uint32_t *)malloc((size_t)n * sizeof(uint32_t));
+    if (!snapshot) return;
+    memcpy(snapshot, sol->base.unassigned_ids, (size_t)n * sizeof(uint32_t));
+
+    if (sol->base.total_requests > 0) {
+        chain_visited = (uint8_t *)calloc(sol->base.total_requests, sizeof(uint8_t));
+        if (!chain_visited) { free(snapshot); return; }
+    }
+
+    cost_before = sg_route_solution_cost(sol, (void *)ctx);
+
+    for (i = 0; i < n && budget > 0; i++) {
+        uint32_t req = snapshot[i];
+        SGRouteSolution *backup;
+        if (sol->base.assigned_flags[req]) continue;  /* already placed by a prior chain */
+
+        backup = (SGRouteSolution *)sg_route_solution_copy(sol, (void *)ctx);
+        if (!backup) continue;
+
+        if (chain_visited) {
+            memset(chain_visited, 0, (size_t)sol->base.total_requests * sizeof(uint8_t));
+            chain_visited[req] = 1;
+        }
+
+        if (sg_try_place_with_ejection(ctx, sol, req, SG_EJECTION_MAX_DEPTH,
+                                        UINT32_MAX, chain_visited, &budget)) {
+            double cost_after = sg_route_solution_cost(sol, (void *)ctx);
+            if (cost_after >= cost_before) {
+                /* Ejection made cost worse — undo */
+                sg_route_restore_from_backup(sol, backup);
+            } else {
+                sg_route_solution_free(backup, NULL);
+                cost_before = cost_after;
+            }
+        } else {
+            sg_route_solution_free(backup, NULL);
+        }
+
+        if (chain_visited) chain_visited[req] = 0;
+    }
+
+    free(chain_visited);
+    free(snapshot);
+}
+
 ARStatus sg_route_repair_greedy(void *op_ctx, void *solution,
                                 const uint32_t *removed_ids, int removed_count) {
     SGContext *ctx = (SGContext *)op_ctx;
     SGRouteSolution *sol = (SGRouteSolution *)solution;
     (void)removed_ids;
     (void)removed_count;
-    return sg_route_repair_fill_greedy(ctx, sol, 0.0);
+    {
+        ARStatus s = sg_route_repair_fill_greedy(ctx, sol, 0.0);
+        if (s != AR_STATUS_OK) return s;
+    }
+    sg_repair_ejection_fallback(ctx, sol);
+    return AR_STATUS_OK;
 }
 
 ARStatus sg_route_repair_regret2(void *op_ctx, void *solution,
@@ -747,7 +812,12 @@ ARStatus sg_route_repair_regret2(void *op_ctx, void *solution,
     SGRouteSolution *sol = (SGRouteSolution *)solution;
     (void)removed_ids;
     (void)removed_count;
-    return sg_route_repair_fill_regret(ctx, sol, 2, 0.0);
+    {
+        ARStatus s = sg_route_repair_fill_regret(ctx, sol, 2, 0.0);
+        if (s != AR_STATUS_OK) return s;
+    }
+    sg_repair_ejection_fallback(ctx, sol);
+    return AR_STATUS_OK;
 }
 
 ARStatus sg_route_repair_regret3(void *op_ctx, void *solution,
@@ -756,7 +826,12 @@ ARStatus sg_route_repair_regret3(void *op_ctx, void *solution,
     SGRouteSolution *sol = (SGRouteSolution *)solution;
     (void)removed_ids;
     (void)removed_count;
-    return sg_route_repair_fill_regret(ctx, sol, 3, 0.0);
+    {
+        ARStatus s = sg_route_repair_fill_regret(ctx, sol, 3, 0.0);
+        if (s != AR_STATUS_OK) return s;
+    }
+    sg_repair_ejection_fallback(ctx, sol);
+    return AR_STATUS_OK;
 }
 
 ARStatus sg_route_repair_regret4(void *op_ctx, void *solution,
@@ -765,7 +840,12 @@ ARStatus sg_route_repair_regret4(void *op_ctx, void *solution,
     SGRouteSolution *sol = (SGRouteSolution *)solution;
     (void)removed_ids;
     (void)removed_count;
-    return sg_route_repair_fill_regret(ctx, sol, 4, 0.0);
+    {
+        ARStatus s = sg_route_repair_fill_regret(ctx, sol, 4, 0.0);
+        if (s != AR_STATUS_OK) return s;
+    }
+    sg_repair_ejection_fallback(ctx, sol);
+    return AR_STATUS_OK;
 }
 
 ARStatus sg_route_repair_noise_regret(void *op_ctx, void *solution,
@@ -774,7 +854,12 @@ ARStatus sg_route_repair_noise_regret(void *op_ctx, void *solution,
     SGRouteSolution *sol = (SGRouteSolution *)solution;
     (void)removed_ids;
     (void)removed_count;
-    return sg_route_repair_fill_regret(ctx, sol, 3, SG_NOISE_REGRET_SCALE);
+    {
+        ARStatus s = sg_route_repair_fill_regret(ctx, sol, 3, SG_NOISE_REGRET_SCALE);
+        if (s != AR_STATUS_OK) return s;
+    }
+    sg_repair_ejection_fallback(ctx, sol);
+    return AR_STATUS_OK;
 }
 
 ARStatus sg_route_repair_pair_sync(void *op_ctx, void *solution,
@@ -783,5 +868,10 @@ ARStatus sg_route_repair_pair_sync(void *op_ctx, void *solution,
     SGRouteSolution *sol = (SGRouteSolution *)solution;
     (void)removed_ids;
     (void)removed_count;
-    return sg_route_repair_fill_greedy(ctx, sol, 0.0);
+    {
+        ARStatus s = sg_route_repair_fill_greedy(ctx, sol, 0.0);
+        if (s != AR_STATUS_OK) return s;
+    }
+    sg_repair_ejection_fallback(ctx, sol);
+    return AR_STATUS_OK;
 }

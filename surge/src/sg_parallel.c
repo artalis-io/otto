@@ -19,6 +19,7 @@ typedef struct {
     int use_deterministic;
     SGStatus result;
     ShCompletion completion;
+    uint8_t owns_warm_start;          /* 1 = SREX-built, needs free */
 } SGParallelWorkItem;
 
 typedef struct {
@@ -191,8 +192,14 @@ static void sg_population_member_free(SGPopulationMember *m) {
     memset(m, 0, sizeof(*m));
 }
 
-static void sg_population_insert(SGPopulationMember *pool, uint32_t *pool_size,
-                                  uint32_t pool_capacity, SGPopulationMember *candidate) {
+/* Forward declaration — defined below with SREX helpers */
+static double sg_population_similarity(const SGPopulationMember *a,
+                                        const SGPopulationMember *b,
+                                        uint32_t num_requests);
+
+static void sg_population_insert_ex(SGPopulationMember *pool, uint32_t *pool_size,
+                                     uint32_t pool_capacity, SGPopulationMember *candidate,
+                                     uint32_t num_requests) {
     double cand_score = sg_route_objective_cost(candidate->num_unassigned,
                                                  candidate->vehicles_used,
                                                  candidate->total_distance);
@@ -206,6 +213,22 @@ static void sg_population_insert(SGPopulationMember *pool, uint32_t *pool_size,
             pool[i].num_unassigned == candidate->num_unassigned) {
             sg_population_member_free(candidate);
             return;
+        }
+    }
+
+    /* Diversity filter: if >90% similar to any existing member AND not strictly better, reject */
+    if (num_requests > 0) {
+        for (i = 0; i < sz; i++) {
+            double sim = sg_population_similarity(&pool[i], candidate, num_requests);
+            if (sim > 0.90) {
+                double existing_score = sg_route_objective_cost(pool[i].num_unassigned,
+                                                                pool[i].vehicles_used,
+                                                                pool[i].total_distance);
+                if (cand_score >= existing_score - 1e-9) {
+                    sg_population_member_free(candidate);
+                    return;
+                }
+            }
         }
     }
 
@@ -254,6 +277,181 @@ static uint32_t sg_population_tournament_select(SGPopulationMember *pool,
                                          pool[b].vehicles_used,
                                          pool[b].total_distance);
     return sa <= sb ? a : b;
+}
+
+/* ============================================================================
+ * SREX crossover: build merged warm-start from two parents
+ * ============================================================================ */
+
+static void sg_srex_build_warm_start(const SGPopulationMember *p1,
+                                      const SGPopulationMember *p2,
+                                      SHRng *rng, SGContext *clone) {
+    uint8_t *placed = NULL;
+    uint32_t *ws_vehicle_ids = NULL;
+    uint32_t *ws_route_lengths = NULL;
+    uint32_t *ws_request_ids = NULL;
+    uint32_t ws_num_routes = 0;
+    uint32_t ws_total_requests = 0;
+    uint32_t max_routes, max_requests;
+    uint32_t k, i, j, offset;
+
+    if (!p1 || !p2 || p1->num_routes == 0 || p2->num_routes == 0) return;
+
+    /* k = number of routes to take from P1 */
+    k = 1 + sh_rng_next_u32(rng) % (p1->num_routes < 3 ? p1->num_routes : 3);
+
+    placed = (uint8_t *)calloc(clone->num_requests, sizeof(uint8_t));
+    if (!placed) return;
+
+    /* Max possible routes and requests */
+    max_routes = p1->num_routes + p2->num_routes;
+    max_requests = p1->total_requests + p2->total_requests;
+    ws_vehicle_ids = (uint32_t *)malloc((size_t)max_routes * sizeof(uint32_t));
+    ws_route_lengths = (uint32_t *)malloc((size_t)max_routes * sizeof(uint32_t));
+    ws_request_ids = (uint32_t *)malloc((size_t)max_requests * sizeof(uint32_t));
+    if (!ws_vehicle_ids || !ws_route_lengths || !ws_request_ids) {
+        free(placed);
+        free(ws_vehicle_ids);
+        free(ws_route_lengths);
+        free(ws_request_ids);
+        return;
+    }
+
+    /* Step 1: Select k random routes from P1 */
+    {
+        uint32_t *perm = (uint32_t *)malloc((size_t)p1->num_routes * sizeof(uint32_t));
+        if (!perm) {
+            free(placed);
+            free(ws_vehicle_ids);
+            free(ws_route_lengths);
+            free(ws_request_ids);
+            return;
+        }
+        for (i = 0; i < p1->num_routes; i++) perm[i] = i;
+        /* Fisher-Yates partial shuffle for k elements */
+        for (i = 0; i < k && i < p1->num_routes; i++) {
+            uint32_t j2 = i + sh_rng_next_u32(rng) % (p1->num_routes - i);
+            uint32_t tmp = perm[i]; perm[i] = perm[j2]; perm[j2] = tmp;
+        }
+
+        /* Copy selected P1 routes */
+        for (i = 0; i < k; i++) {
+            uint32_t ri = perm[i];
+            uint32_t p1_offset = 0;
+            uint32_t rlen;
+
+            for (j = 0; j < ri; j++) p1_offset += p1->route_lengths[j];
+            rlen = p1->route_lengths[ri];
+
+            ws_vehicle_ids[ws_num_routes] = p1->vehicle_ids[ri];
+            ws_route_lengths[ws_num_routes] = rlen;
+            for (j = 0; j < rlen; j++) {
+                uint32_t rid = p1->request_ids[p1_offset + j];
+                ws_request_ids[ws_total_requests++] = rid;
+                if (rid < clone->num_requests) placed[rid] = 1;
+            }
+            ws_num_routes++;
+        }
+        free(perm);
+    }
+
+    /* Step 2: For each P2 route, include requests NOT in placed set */
+    offset = 0;
+    for (i = 0; i < p2->num_routes; i++) {
+        uint32_t rlen = p2->route_lengths[i];
+        uint32_t vid = p2->vehicle_ids[i];
+        uint32_t route_count = 0;
+        uint32_t route_start = ws_total_requests;
+
+        for (j = 0; j < rlen; j++) {
+            uint32_t rid = p2->request_ids[offset + j];
+            if (rid < clone->num_requests && !placed[rid]) {
+                ws_request_ids[ws_total_requests++] = rid;
+                placed[rid] = 1;
+                route_count++;
+            }
+        }
+        offset += rlen;
+
+        if (route_count > 0) {
+            ws_vehicle_ids[ws_num_routes] = vid;
+            ws_route_lengths[ws_num_routes] = route_count;
+            ws_num_routes++;
+        } else {
+            /* Roll back if no requests were added */
+            ws_total_requests = route_start;
+        }
+    }
+
+    /* Set warm start on clone */
+    clone->initial_route_vehicle_ids = ws_vehicle_ids;
+    clone->initial_route_request_ids = ws_request_ids;
+    clone->initial_route_lengths = ws_route_lengths;
+    clone->num_initial_routes = ws_num_routes;
+    clone->total_initial_requests = ws_total_requests;
+
+    free(placed);
+    /* Note: ws_vehicle_ids, ws_route_lengths, ws_request_ids are now owned by clone
+       and must be freed after the solve completes. */
+}
+
+/* ============================================================================
+ * Population diversity: request-to-vehicle similarity
+ * ============================================================================ */
+
+static double sg_population_similarity(const SGPopulationMember *a,
+                                        const SGPopulationMember *b,
+                                        uint32_t num_requests) {
+    uint32_t *map_a = NULL;
+    uint32_t *map_b = NULL;
+    uint32_t same = 0, total_assigned = 0;
+    uint32_t ri, offset, i;
+
+    if (!a || !b || num_requests == 0) return 0.0;
+
+    map_a = (uint32_t *)malloc((size_t)num_requests * sizeof(uint32_t));
+    map_b = (uint32_t *)malloc((size_t)num_requests * sizeof(uint32_t));
+    if (!map_a || !map_b) {
+        free(map_a);
+        free(map_b);
+        return 0.0;
+    }
+    memset(map_a, 0xFF, (size_t)num_requests * sizeof(uint32_t));
+    memset(map_b, 0xFF, (size_t)num_requests * sizeof(uint32_t));
+
+    /* Build request→vehicle map for A */
+    offset = 0;
+    for (ri = 0; ri < a->num_routes; ri++) {
+        uint32_t vid = a->vehicle_ids[ri];
+        for (i = 0; i < a->route_lengths[ri]; i++) {
+            uint32_t rid = a->request_ids[offset + i];
+            if (rid < num_requests) map_a[rid] = vid;
+        }
+        offset += a->route_lengths[ri];
+    }
+
+    /* Build request→vehicle map for B */
+    offset = 0;
+    for (ri = 0; ri < b->num_routes; ri++) {
+        uint32_t vid = b->vehicle_ids[ri];
+        for (i = 0; i < b->route_lengths[ri]; i++) {
+            uint32_t rid = b->request_ids[offset + i];
+            if (rid < num_requests) map_b[rid] = vid;
+        }
+        offset += b->route_lengths[ri];
+    }
+
+    /* Count requests on same vehicle in both */
+    for (i = 0; i < num_requests; i++) {
+        if (map_a[i] != UINT32_MAX && map_b[i] != UINT32_MAX) {
+            total_assigned++;
+            if (map_a[i] == map_b[i]) same++;
+        }
+    }
+
+    free(map_a);
+    free(map_b);
+    return total_assigned > 0 ? (double)same / (double)total_assigned : 0.0;
 }
 
 /* ============================================================================
@@ -415,6 +613,7 @@ cleanup:
 
 SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
     uint32_t num_threads, pop_size, num_gens;
+    double xover_frac;
     SGPopulationMember *pop_pool = NULL;
     uint32_t pop_pool_size = 0;
     SGParallelWorkItem *items = NULL;
@@ -437,6 +636,8 @@ SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
     num_threads = cfg ? cfg->num_threads : 0;
     pop_size = cfg ? cfg->population_size : 0;
     num_gens = cfg ? cfg->num_generations : 0;
+    xover_frac = cfg ? cfg->crossover_fraction : 0.0;
+    if (xover_frac <= 0.0 || xover_frac > 1.0) xover_frac = 0.5;
     if (num_threads == 0) {
         long n = sysconf(_SC_NPROCESSORS_ONLN);
         num_threads = (n > 0 && n <= 64) ? (uint32_t)n : 4;
@@ -520,14 +721,31 @@ SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
             }
 
             /* Warm start from population pool (generations > 0 only) */
+            items[i].owns_warm_start = 0;
             if (g > 0 && pop_pool_size > 0) {
+                uint32_t crossover_cutoff = (uint32_t)(xover_frac * (double)num_threads);
                 uint32_t parent = sg_population_tournament_select(
                     pop_pool, pop_pool_size, select_rng);
-                items[i].clone.initial_route_vehicle_ids = pop_pool[parent].vehicle_ids;
-                items[i].clone.initial_route_request_ids = pop_pool[parent].request_ids;
-                items[i].clone.initial_route_lengths = pop_pool[parent].route_lengths;
-                items[i].clone.num_initial_routes = pop_pool[parent].num_routes;
-                items[i].clone.total_initial_requests = pop_pool[parent].total_requests;
+
+                if (i < crossover_cutoff && pop_pool_size >= 2) {
+                    /* SREX crossover: merge two tournament-selected parents */
+                    uint32_t parent2 = sg_population_tournament_select(
+                        pop_pool, pop_pool_size, select_rng);
+                    /* Ensure different parents */
+                    if (parent2 == parent) {
+                        parent2 = (parent + 1) % pop_pool_size;
+                    }
+                    sg_srex_build_warm_start(&pop_pool[parent], &pop_pool[parent2],
+                                              select_rng, &items[i].clone);
+                    items[i].owns_warm_start = 1;
+                } else {
+                    /* Single-parent warm-start (current behavior) */
+                    items[i].clone.initial_route_vehicle_ids = pop_pool[parent].vehicle_ids;
+                    items[i].clone.initial_route_request_ids = pop_pool[parent].request_ids;
+                    items[i].clone.initial_route_lengths = pop_pool[parent].route_lengths;
+                    items[i].clone.num_initial_routes = pop_pool[parent].num_routes;
+                    items[i].clone.total_initial_requests = pop_pool[parent].total_requests;
+                }
             }
 
             sh_completion_init(&items[i].completion);
@@ -573,7 +791,8 @@ SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
 
             /* Extract route structure into population pool */
             if (sg_extract_routes(items[i].clone.final_solution, &candidate) == SG_STATUS_OK) {
-                sg_population_insert(pop_pool, &pop_pool_size, pop_size, &candidate);
+                sg_population_insert_ex(pop_pool, &pop_pool_size, pop_size,
+                                        &candidate, ctx->num_requests);
             }
 
             /* Accumulate iterations */
@@ -581,13 +800,20 @@ SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
         }
 
 gen_cleanup:
-        /* Clear warm start pointers before freeing clones (borrowed, not owned) */
+        /* Clear warm start pointers before freeing clones */
         for (i = 0; i < num_threads; i++) {
+            if (items[i].owns_warm_start) {
+                /* SREX-built arrays are owned by us */
+                free(items[i].clone.initial_route_vehicle_ids);
+                free(items[i].clone.initial_route_request_ids);
+                free(items[i].clone.initial_route_lengths);
+            }
             items[i].clone.initial_route_vehicle_ids = NULL;
             items[i].clone.initial_route_request_ids = NULL;
             items[i].clone.initial_route_lengths = NULL;
             items[i].clone.num_initial_routes = 0;
             items[i].clone.total_initial_requests = 0;
+            items[i].owns_warm_start = 0;
             sh_completion_cleanup(&items[i].completion);
             sg_context_clone_free(&items[i].clone);
         }

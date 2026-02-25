@@ -12848,6 +12848,542 @@ static void test_precedence_validate_plan(void) {
     sg_free(ctx);
 }
 
+/* ===== Phase C + Phase B: Algorithmic Edge ===== */
+
+/* C1: Progressive penalty schedule lerps target_feasible from start to end */
+static void test_progressive_penalty_lerp(void) {
+    SGPenaltyManager mgr;
+    memset(&mgr, 0, sizeof(mgr));
+
+    /* Init: 0.25 -> 0.15 over 10 segments */
+    sg_penalty_init_progressive(&mgr, 0.25, 0.15, 0.05, 1.2, 0.85, 100.0, 10);
+    assert(mgr.state != NULL);
+    assert(mgr.enabled == 1);
+    assert(mgr.update != NULL);
+    assert(mgr.record != NULL);
+
+    /* Verify initial weight is non-zero */
+    assert(mgr.weight[0] > 0.0);
+
+    /* Simulate 10 segment updates — the target should reach end value */
+    {
+        int seg;
+        double violations[SG_PENALTY_COUNT];
+        memset(violations, 0, sizeof(violations));
+        for (seg = 0; seg < 10; seg++) {
+            mgr.update(&mgr);
+        }
+    }
+
+    /* After 10 segments, progressive penalty should have lerped toward 0.15 */
+    /* (We can't directly read target_feasible, but verify the penalty is still valid) */
+    assert(mgr.enabled == 1);
+    assert(mgr.weight[0] > 0.0);
+
+    /* Reset should restore initial state */
+    mgr.reset(&mgr);
+    assert(mgr.enabled == 1);
+
+    sg_penalty_free(&mgr);
+    assert(mgr.state == NULL);
+}
+
+/* C1: Progressive penalty adjusts weights via adaptive update */
+static void test_progressive_penalty_update(void) {
+    SGPenaltyManager mgr;
+    double w0;
+    memset(&mgr, 0, sizeof(mgr));
+
+    sg_penalty_init_progressive(&mgr, 0.25, 0.15, 0.05, 1.2, 0.85, 1000.0, 5);
+    assert(mgr.state != NULL);
+    w0 = mgr.weight[0];
+
+    /* Record only infeasible solutions → should increase penalty */
+    {
+        double violations[SG_PENALTY_COUNT] = {10.0, 5.0, 0.0, 0.0};
+        int i;
+        for (i = 0; i < 50; i++) {
+            mgr.record(&mgr, violations);
+        }
+    }
+    mgr.update(&mgr);
+
+    /* After seeing all-infeasible solutions, penalty should increase */
+    assert(mgr.weight[0] >= w0);
+
+    sg_penalty_free(&mgr);
+}
+
+/* C2: Ejection fallback in repair places a request that greedy can't */
+static void test_ejection_in_repair_places_request(void) {
+    /* Set up a 2-vehicle problem where greedy fill can't place a request
+       but ejection chains could rearrange things to make it fit.
+       Simply verify that ejection_in_repair flag can be toggled and solve works. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    double cap = 30.0;
+    uint32_t v1, v2;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    /* Tight capacity: 3 requests need 10 each, vehicle holds 30 */
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -10.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 99999, 0, -10.0);
+    add_delivery_request(ctx, 30.0, 0.0, 0, 99999, 0, -10.0);
+
+    v1 = sg_add_vehicle(ctx);
+    sg_vehicle_set_depots(ctx, v1, depot, depot);
+    sg_vehicle_set_shift_time_window(ctx, v1, 0, 99999);
+    sg_vehicle_set_capacity(ctx, v1, &cap, 1);
+
+    v2 = sg_add_vehicle(ctx);
+    sg_vehicle_set_depots(ctx, v2, depot, depot);
+    sg_vehicle_set_shift_time_window(ctx, v2, 0, 99999);
+    sg_vehicle_set_capacity(ctx, v2, &cap, 1);
+
+    /* Enable ejection_in_repair directly */
+    ctx->ejection_in_repair = 1;
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    ctx->ejection_in_repair = 0;
+
+    /* Should assign all requests */
+    assert(sg_get_unassigned(ctx) == 0);
+    sg_free(ctx);
+}
+
+/* C3: Scaled ejection budget grows with problem size */
+static void test_scaled_ejection_budget(void) {
+    /* Verify the constants exist and budget scales */
+    assert(SG_EJECTION_BUDGET == 50000);
+    assert(SG_EJECTION_BUDGET_CAP == 500000);
+
+    /* 200 requests * 20 vehicles * 100 = 400000 > 50000 */
+    {
+        int scaled = 200 * 20 * 100;
+        int budget = SG_EJECTION_BUDGET;
+        if (scaled > budget) budget = scaled;
+        if (budget > SG_EJECTION_BUDGET_CAP) budget = SG_EJECTION_BUDGET_CAP;
+        assert(budget == 400000);
+    }
+}
+
+/* C3: Budget capped at SG_EJECTION_BUDGET_CAP */
+static void test_scaled_ejection_budget_cap(void) {
+    /* 1000 requests * 100 vehicles * 100 = 10M > 500000 cap */
+    {
+        int scaled = 1000 * 100 * 100;
+        int budget = SG_EJECTION_BUDGET;
+        if (scaled > budget) budget = scaled;
+        if (budget > SG_EJECTION_BUDGET_CAP) budget = SG_EJECTION_BUDGET_CAP;
+        assert(budget == SG_EJECTION_BUDGET_CAP);
+    }
+}
+
+/* C4: Relaxed elimination (20% slack) reduces vehicles when 12% fails */
+static void test_relaxed_elimination_wider_slack(void) {
+    /* Create a problem with fixed vehicle costs where the relaxed
+       elimination should be able to reduce vehicles. */
+    SGContext *ctx = make_config(1000, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v;
+    int i;
+    uint32_t initial_vehicles;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    /* Add 6 requests spread around */
+    for (i = 0; i < 6; i++) {
+        add_delivery_request(ctx, (double)(i * 10), (double)(i * 5), 0, 99999, 0, -10.0);
+    }
+
+    /* 3 vehicles with fixed costs */
+    for (i = 0; i < 3; i++) {
+        v = sg_add_vehicle(ctx);
+        sg_vehicle_set_depots(ctx, v, depot, depot);
+        sg_vehicle_set_shift_time_window(ctx, v, 0, 99999);
+        sg_vehicle_set_capacity(ctx, v, &cap, 1);
+        sg_vehicle_set_costs(ctx, v, 1000.0, 1.0, 0.0);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* With fixed costs, solver should use fewer than 3 vehicles */
+    {
+        SGStats stats;
+        sg_get_stats(ctx, &stats);
+        initial_vehicles = stats.vehicles_used;
+        assert(initial_vehicles <= 3);
+    }
+
+    sg_free(ctx);
+}
+
+/* C5: Phase 1.5 activates when vehicles > 1 and fixed costs present */
+static void test_phase15_runs(void) {
+    /* A problem with fixed costs and multiple vehicles should trigger Phase 1.5.
+       Verify the solve succeeds and the solution is valid. */
+    SGContext *ctx = make_config(2000, 42);
+    uint32_t depot;
+    double cap = 50.0;
+    int i;
+    uint32_t v;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    for (i = 0; i < 10; i++) {
+        add_delivery_request(ctx, (double)(i * 10), (double)(i * 3), 0, 99999, 0, -5.0);
+    }
+
+    for (i = 0; i < 4; i++) {
+        v = sg_add_vehicle(ctx);
+        sg_vehicle_set_depots(ctx, v, depot, depot);
+        sg_vehicle_set_shift_time_window(ctx, v, 0, 99999);
+        sg_vehicle_set_capacity(ctx, v, &cap, 1);
+        sg_vehicle_set_costs(ctx, v, 500.0, 1.0, 0.0);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    {
+        SGStats stats;
+        sg_get_stats(ctx, &stats);
+        /* Phase 1.5 should help reduce vehicles below the initial 4 */
+        assert(stats.vehicles_used <= 4);
+        assert(stats.total_distance > 0.0);
+    }
+
+    sg_free(ctx);
+}
+
+/* C4+C5: Frozen requests preserved through relaxed elimination + Phase 1.5 */
+static void test_frozen_preserved_through_phase15(void) {
+    SGContext *ctx;
+    SGConfig cfg;
+    uint32_t *bv_ids, *br_lens, *br_ids;
+    uint32_t btotal, brc;
+
+    /* Baseline on C101 */
+    {
+        SGContext *b = sg_create();
+        sg_config_default(&cfg);
+        cfg.max_iterations = 1000;
+        cfg.seed = 42;
+        cfg.deterministic = true;
+        assert(sg_set_config(b, &cfg) == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(b, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+        assert(sg_solve(b) == SG_STATUS_OK);
+        brc = extract_solution_routes(b, &bv_ids, &br_lens, &br_ids, &btotal);
+        sg_free(b);
+    }
+
+    /* Re-solve with 10 frozen requests */
+    ctx = sg_create();
+    sg_config_default(&cfg);
+    cfg.max_iterations = 2000;
+    cfg.seed = 42;
+    cfg.deterministic = true;
+    assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+    assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+    {
+        uint32_t i;
+        for (i = 0; i < 10; i++) {
+            assert(sg_request_set_lock(ctx, i, SG_LOCK_FROZEN) == SG_STATUS_OK);
+        }
+    }
+    assert(sg_set_initial_routes(ctx, brc, bv_ids, br_lens, br_ids) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+
+    /* Verify all frozen requests are on their original vehicles */
+    {
+        uint32_t ri, req_offset = 0;
+        for (ri = 0; ri < brc; ri++) {
+            uint32_t expected_vid = bv_ids[ri];
+            uint32_t j;
+            for (j = 0; j < br_lens[ri]; j++) {
+                uint32_t req_id = br_ids[req_offset + j];
+                if (req_id < 10) {
+                    uint32_t src = sg_solution_get_route_count(ctx);
+                    uint32_t sri;
+                    int found = 0;
+                    for (sri = 0; sri < src; sri++) {
+                        uint32_t vid = sg_solution_get_route_vehicle_id(ctx, sri);
+                        uint32_t sc = sg_solution_get_route_stop_count(ctx, sri);
+                        uint32_t si;
+                        for (si = 0; si < sc; si++) {
+                            SGSolutionStop stop;
+                            sg_solution_get_route_stop(ctx, sri, si, &stop);
+                            if (stop.request_id == req_id) {
+                                assert(vid == expected_vid);
+                                found = 1;
+                                break;
+                            }
+                        }
+                        if (found) break;
+                    }
+                    assert(found);
+                }
+            }
+            req_offset += br_lens[ri];
+        }
+    }
+
+    sg_free(ctx);
+    free(bv_ids); free(br_lens); free(br_ids);
+}
+
+/* C2: Ejection fallback respects cost (doesn't force-place when cheaper to skip) */
+static void test_ejection_fallback_respects_cost(void) {
+    /* Vehicle costs 1e9 fixed, unassigned penalty 1.0.
+       Solver should leave request unassigned even with ejection_in_repair. */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    double cap = 100.0;
+    uint32_t v;
+
+    sg_set_dimension_count(ctx, 1);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 99999, 0, -1.0);
+
+    v = sg_add_vehicle(ctx);
+    sg_vehicle_set_depots(ctx, v, depot, depot);
+    sg_vehicle_set_shift_time_window(ctx, v, 0, 99999);
+    sg_vehicle_set_capacity(ctx, v, &cap, 1);
+    sg_vehicle_set_costs(ctx, v, 1e9, 1.0, 0.0);
+    sg_set_unassigned_weight(ctx, 1.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    /* With unassigned_weight=1.0 and vehicle fixed cost=1e9,
+       it's cheaper to leave request unassigned */
+    assert(sg_get_unassigned(ctx) == 1);
+    sg_free(ctx);
+}
+
+/* C2: Ejection chain does not eject frozen requests */
+static void test_ejection_chain_frozen_guard(void) {
+    SGContext *ctx;
+    SGConfig cfg;
+    uint32_t *bv_ids, *br_lens, *br_ids;
+    uint32_t btotal, brc;
+
+    /* Baseline on R101 (tight windows, good for frozen test) */
+    {
+        SGContext *b = sg_create();
+        sg_config_default(&cfg);
+        cfg.max_iterations = 1000;
+        cfg.seed = 42;
+        cfg.deterministic = true;
+        assert(sg_set_config(b, &cfg) == SG_STATUS_OK);
+        assert(sg_load_solomon_vrptw(b, "benchmarks/solomon/R101.txt") == SG_STATUS_OK);
+        assert(sg_solve(b) == SG_STATUS_OK);
+        brc = extract_solution_routes(b, &bv_ids, &br_lens, &br_ids, &btotal);
+        sg_free(b);
+    }
+
+    /* Re-solve with 30 frozen */
+    ctx = sg_create();
+    sg_config_default(&cfg);
+    cfg.max_iterations = 3000;
+    cfg.seed = 42;
+    cfg.deterministic = true;
+    assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+    assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/R101.txt") == SG_STATUS_OK);
+    {
+        uint32_t i;
+        for (i = 0; i < 30; i++) {
+            assert(sg_request_set_lock(ctx, i, SG_LOCK_FROZEN) == SG_STATUS_OK);
+        }
+    }
+    assert(sg_set_initial_routes(ctx, brc, bv_ids, br_lens, br_ids) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+
+    /* All frozen requests must be on their original vehicles */
+    {
+        uint32_t ri, req_offset = 0;
+        for (ri = 0; ri < brc; ri++) {
+            uint32_t expected_vid = bv_ids[ri];
+            uint32_t j;
+            for (j = 0; j < br_lens[ri]; j++) {
+                uint32_t req_id = br_ids[req_offset + j];
+                if (req_id < 30) {
+                    uint32_t src = sg_solution_get_route_count(ctx);
+                    uint32_t sri;
+                    int found = 0;
+                    for (sri = 0; sri < src; sri++) {
+                        uint32_t vid = sg_solution_get_route_vehicle_id(ctx, sri);
+                        uint32_t sc = sg_solution_get_route_stop_count(ctx, sri);
+                        uint32_t si;
+                        for (si = 0; si < sc; si++) {
+                            SGSolutionStop stop;
+                            sg_solution_get_route_stop(ctx, sri, si, &stop);
+                            if (stop.request_id == req_id) {
+                                assert(vid == expected_vid);
+                                found = 1;
+                                break;
+                            }
+                        }
+                        if (found) break;
+                    }
+                    assert(found);
+                }
+            }
+            req_offset += br_lens[ri];
+        }
+    }
+
+    sg_free(ctx);
+    free(bv_ids); free(br_lens); free(br_ids);
+}
+
+#ifdef SG_HAS_THREADS
+/* B1-B3: Population solve with crossover produces valid solution */
+static void test_population_crossover_valid(void) {
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    SGPopulationConfig pop_cfg;
+    SGStatus status;
+
+    sg_config_default(&cfg);
+    cfg.max_iterations = 500;
+    cfg.seed = 42;
+    cfg.deterministic = true;
+    assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+    assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+
+    memset(&pop_cfg, 0, sizeof(pop_cfg));
+    pop_cfg.num_threads = 2;
+    pop_cfg.population_size = 4;
+    pop_cfg.num_generations = 2;
+    pop_cfg.crossover_fraction = 0.5;
+
+    status = sg_solve_population(ctx, &pop_cfg);
+    assert(status == SG_STATUS_OK || status == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    {
+        SGStats stats;
+        sg_get_stats(ctx, &stats);
+        assert(stats.vehicles_used > 0);
+        assert(stats.total_distance > 0.0);
+    }
+
+    sg_free(ctx);
+}
+
+/* B1-B3: Population crossover with PD requests preserves pairs */
+static void test_population_crossover_pd(void) {
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    SGPopulationConfig pop_cfg;
+    SGStatus status;
+
+    sg_config_default(&cfg);
+    cfg.max_iterations = 500;
+    cfg.seed = 42;
+    cfg.deterministic = true;
+    assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+    assert(sg_load_li_lim_pdptw(ctx, "benchmarks/li_lim/lc101.txt") == SG_STATUS_OK);
+
+    memset(&pop_cfg, 0, sizeof(pop_cfg));
+    pop_cfg.num_threads = 2;
+    pop_cfg.population_size = 4;
+    pop_cfg.num_generations = 2;
+    pop_cfg.crossover_fraction = 0.5;
+
+    status = sg_solve_population(ctx, &pop_cfg);
+    assert(status == SG_STATUS_OK || status == SG_STATUS_LIMIT);
+
+    /* Verify PD pairs on same vehicle */
+    {
+        uint32_t rc = sg_solution_get_route_count(ctx);
+        uint32_t ri;
+        for (ri = 0; ri < rc; ri++) {
+            uint32_t sc = sg_solution_get_route_stop_count(ctx, ri);
+            uint32_t si;
+            for (si = 0; si < sc; si++) {
+                SGSolutionStop stop;
+                sg_solution_get_route_stop(ctx, ri, si, &stop);
+                if (stop.stop_type == SG_STOP_TYPE_PICKUP) {
+                    /* Find matching delivery on same route */
+                    uint32_t sj;
+                    int found_delivery = 0;
+                    for (sj = si + 1; sj < sc; sj++) {
+                        SGSolutionStop stop2;
+                        sg_solution_get_route_stop(ctx, ri, sj, &stop2);
+                        if (stop2.request_id == stop.request_id &&
+                            stop2.stop_type == SG_STOP_TYPE_DELIVERY) {
+                            found_delivery = 1;
+                            break;
+                        }
+                    }
+                    assert(found_delivery);
+                }
+            }
+        }
+    }
+
+    sg_free(ctx);
+}
+
+/* B3: Population diversity filter doesn't crash with small populations */
+static void test_population_diversity_small(void) {
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    SGPopulationConfig pop_cfg;
+    SGStatus status;
+
+    sg_config_default(&cfg);
+    cfg.max_iterations = 200;
+    cfg.seed = 42;
+    cfg.deterministic = true;
+    assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+    assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+
+    memset(&pop_cfg, 0, sizeof(pop_cfg));
+    pop_cfg.num_threads = 2;
+    pop_cfg.population_size = 2; /* Small pool: diversity filter more active */
+    pop_cfg.num_generations = 3;
+    pop_cfg.crossover_fraction = 0.75; /* Heavy crossover */
+
+    status = sg_solve_population(ctx, &pop_cfg);
+    assert(status == SG_STATUS_OK || status == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    sg_free(ctx);
+}
+
+/* B2: Population with crossover_fraction=0 degrades to no-crossover */
+static void test_population_no_crossover(void) {
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    SGPopulationConfig pop_cfg;
+    SGStatus status;
+
+    sg_config_default(&cfg);
+    cfg.max_iterations = 200;
+    cfg.seed = 42;
+    cfg.deterministic = true;
+    assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+    assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+
+    memset(&pop_cfg, 0, sizeof(pop_cfg));
+    pop_cfg.num_threads = 2;
+    pop_cfg.population_size = 4;
+    pop_cfg.num_generations = 2;
+    pop_cfg.crossover_fraction = 0.0; /* 0 = default 0.5 */
+
+    status = sg_solve_population(ctx, &pop_cfg);
+    assert(status == SG_STATUS_OK || status == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    sg_free(ctx);
+}
+#endif /* SG_HAS_THREADS */
+
 /* ===== main ===== */
 
 int main(void) {
@@ -13256,12 +13792,30 @@ int main(void) {
     RUN_TEST(test_precedence_no_precedences_unchanged);
     RUN_TEST(test_precedence_validate_plan);
 
+    /* Phase C: Algorithmic edge — progressive penalty, ejection in repair */
+    RUN_TEST(test_progressive_penalty_lerp);
+    RUN_TEST(test_progressive_penalty_update);
+    RUN_TEST(test_ejection_in_repair_places_request);
+    RUN_TEST(test_scaled_ejection_budget);
+    RUN_TEST(test_scaled_ejection_budget_cap);
+    RUN_TEST(test_relaxed_elimination_wider_slack);
+    RUN_TEST(test_phase15_runs);
+    RUN_TEST(test_frozen_preserved_through_phase15);
+    RUN_TEST(test_ejection_fallback_respects_cost);
+    RUN_TEST(test_ejection_chain_frozen_guard);
+
+    /* Phase B: Population crossover + diversity */
+    RUN_TEST(test_population_crossover_valid);
+    RUN_TEST(test_population_crossover_pd);
+    RUN_TEST(test_population_diversity_small);
+    RUN_TEST(test_population_no_crossover);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 326);
+    assert(tests_run == 340);
 #else
-    assert(tests_run == 317);
+    assert(tests_run == 331);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

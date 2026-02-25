@@ -117,6 +117,72 @@ void sg_penalty_init_adaptive(SGPenaltyManager *mgr, double target_feasible,
     mgr->state = st;
 }
 
+/* --- Progressive penalty: lerp target_feasible from start to end over segments --- */
+
+typedef struct {
+    SGAdaptivePenaltyState base;
+    double target_start;
+    double target_end;
+    uint32_t total_segments;
+    uint32_t segments_elapsed;
+} SGProgressivePenaltyState;
+
+static void sg_progressive_update(SGPenaltyManager *mgr) {
+    SGProgressivePenaltyState *ps = (SGProgressivePenaltyState *)mgr->state;
+    double frac;
+
+    /* Lerp target_feasible based on elapsed segments */
+    ps->segments_elapsed++;
+    frac = (ps->total_segments > 1)
+           ? (double)ps->segments_elapsed / (double)ps->total_segments
+           : 1.0;
+    if (frac > 1.0) frac = 1.0;
+    ps->base.target_feasible = ps->target_start + frac * (ps->target_end - ps->target_start);
+
+    /* Delegate to standard adaptive update logic */
+    sg_adaptive_update(mgr);
+}
+
+static void sg_progressive_record(SGPenaltyManager *mgr,
+                                   const double violations[SG_PENALTY_COUNT]) {
+    sg_adaptive_record(mgr, violations);
+}
+
+static void sg_progressive_reset(SGPenaltyManager *mgr) {
+    SGProgressivePenaltyState *ps = (SGProgressivePenaltyState *)mgr->state;
+    ps->segments_elapsed = 0;
+    ps->base.target_feasible = ps->target_start;
+    sg_adaptive_reset(mgr);
+}
+
+void sg_penalty_init_progressive(SGPenaltyManager *mgr, double target_start,
+                                 double target_end, double tolerance,
+                                 double increase_factor, double decrease_factor,
+                                 double cost_scale, uint32_t total_segments) {
+    SGProgressivePenaltyState *ps;
+
+    if (!mgr) return;
+
+    /* Bootstrap with standard adaptive init (sets weights, bounds, callbacks) */
+    sg_penalty_init_adaptive(mgr, target_start, tolerance, increase_factor,
+                             decrease_factor, cost_scale);
+    if (!mgr->state) return;
+
+    /* Upgrade state to progressive (base is prefix-compatible) */
+    ps = (SGProgressivePenaltyState *)realloc(mgr->state, sizeof(*ps));
+    if (!ps) return;  /* keep adaptive state as fallback */
+
+    ps->target_start = target_start;
+    ps->target_end = target_end;
+    ps->total_segments = total_segments > 0 ? total_segments : 1;
+    ps->segments_elapsed = 0;
+
+    mgr->state = ps;
+    mgr->update = sg_progressive_update;
+    mgr->record = sg_progressive_record;
+    mgr->reset = sg_progressive_reset;
+}
+
 void sg_penalty_free(SGPenaltyManager *mgr) {
     if (!mgr) return;
     free(mgr->state);

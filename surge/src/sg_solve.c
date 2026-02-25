@@ -829,13 +829,16 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
             params.adaptive_q = 1;
         }
 
-        /* Enable infeasible-space exploration: aggressive for vehicle minimization.
-           cost_scale derived from median per-route cost of initial solution so
-           penalty bounds, initial weights, and adaptive ranges are proportional
-           to the instance's actual objective scale. */
+        /* Enable infeasible-space exploration with progressive schedule:
+           Start aggressive (25% infeasibility target) to allow deeper infeasible-space
+           exploration when vehicle cuts are most likely, linearly tighten to 15%
+           over Phase 1 to avoid returning infeasible solutions.
+           cost_scale derived from median per-route cost of initial solution. */
         {
             double cost_scale = sg_compute_cost_scale(ctx, &initial);
-            sg_penalty_init_adaptive(&ctx->penalty, 0.15, 0.05, 1.2, 0.85, cost_scale);
+            int p1_segs = phase1_iters / ctx->config.segment_size;
+            sg_penalty_init_progressive(&ctx->penalty, 0.25, 0.15, 0.08, 1.3, 0.80,
+                                        cost_scale, p1_segs > 0 ? (uint32_t)p1_segs : 1);
         }
 
         alns = sg_create_route_alns(ctx, &params, &ops, 3.0, 2.0);
@@ -858,7 +861,9 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         }
 
         ctx->avoid_new_vehicles = 1;
+        ctx->ejection_in_repair = 1;
         ar_status = ar_alns_solve(alns, &initial, (void **)&p1_best);
+        ctx->ejection_in_repair = 0;
         ctx->avoid_new_vehicles = 0;
         if (ar_status != AR_STATUS_OK && ar_status != AR_STATUS_LIMIT) {
             sg_penalty_free(&ctx->penalty);
@@ -881,7 +886,91 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
     /* ---- Ejection pulse: exploit Phase 1's loose routes to eliminate vehicles ---- */
     if (p1_best) {
         (void)sg_route_postprocess_ejection_reduce(ctx, p1_best);
+        (void)sg_route_postprocess_reduce_vehicles_relaxed(ctx, p1_best, 1.20);
         (void)sg_route_postprocess_intensify(ctx, p1_best);
+    }
+
+    /* ---- Phase 1.5: Vehicle crunch — short focused ALNS with vehicle-reducing operators ---- */
+    if (p1_best && p1_best->vehicles_used > 1) {
+        int p15_iters = 500;
+        double cost_scale;
+
+        /* Phase 1.5 runs as additional budget — do NOT subtract from Phase 2.
+           Reducing Phase 2 budget degrades search quality on frozen-request models. */
+
+        cost_scale = sg_compute_cost_scale(ctx, p1_best);
+        sg_penalty_init_adaptive(&ctx->penalty, 0.20, 0.05, 1.2, 0.85, cost_scale);
+
+        {
+            ARALNSParams p15_params;
+            ARSolutionOps p15_ops;
+            ARALNSContext *p15_alns;
+            SGRouteSolution *p15_best = NULL;
+            ARStatus p15_status;
+            ARALNSStats p15_stats;
+
+            ar_alns_params_default(&p15_params);
+            p15_params.max_iterations = p15_iters;
+            p15_params.max_time_seconds = ctx->config.max_time_seconds;
+            p15_params.segment_size = ctx->config.segment_size;
+            sg_adaptive_q_bounds((int)ctx->num_requests, ctx->config.q_min, ctx->config.q_max,
+                                 &p15_params.q_min, &p15_params.q_max);
+            p15_params.target_cost = 0.0;
+            p15_params.restart_threshold = p15_iters / 2;
+            ar_alns_calibrate_sa(&p15_params, sg_route_solution_cost(p1_best, ctx), p15_iters);
+            p15_params.cooling_rate = exp(log(0.05) / (double)p15_iters);
+
+            p15_ops.copy = sg_route_solution_copy;
+            p15_ops.free = sg_route_solution_free;
+            p15_ops.cost = sg_route_solution_cost_record;
+            p15_ops.size = sg_route_solution_size;
+            p15_ops.validate = sg_route_solution_validate;
+            p15_ops.is_better = sg_route_solution_is_better;
+            p15_ops.user_ctx = ctx;
+
+            p15_alns = ar_alns_create(&p15_params, &p15_ops, ctx);
+            if (p15_alns) {
+                /* Register only vehicle-reducing operators */
+                int reg_ok = 1;
+                if (ar_alns_add_destroy(p15_alns, "vehicle-target", sg_route_destroy_vehicle_target, ctx, 3.0) != AR_STATUS_OK) reg_ok = 0;
+                if (reg_ok && ar_alns_add_destroy(p15_alns, "vehicle-empty", sg_route_destroy_vehicle_empty, ctx, 2.0) != AR_STATUS_OK) reg_ok = 0;
+                if (reg_ok && ar_alns_add_destroy(p15_alns, "route-removal", sg_route_destroy_route_removal, ctx, 1.0) != AR_STATUS_OK) reg_ok = 0;
+                if (reg_ok && ar_alns_add_repair(p15_alns, "regret-3", sg_route_repair_regret3, ctx, 1.0) != AR_STATUS_OK) reg_ok = 0;
+                if (reg_ok && ar_alns_add_repair(p15_alns, "greedy-insert", sg_route_repair_greedy, ctx, 1.0) != AR_STATUS_OK) reg_ok = 0;
+
+                if (reg_ok) {
+                    if (ctx->config.deterministic) {
+                        ar_alns_set_seed(p15_alns, ctx->config.seed + 2);
+                        sh_rng_seed(ctx->op_rng, (ctx->config.seed + 2) ^ SG_OPERATOR_SEED_XOR);
+                    } else {
+                        sh_rng_seed_time(ctx->op_rng);
+                    }
+                    if (ctx->progress_callback || ctx->cancel_requested) {
+                        ar_alns_set_progress_callback(p15_alns, sg_progress_forwarder, ctx);
+                    }
+
+                    ctx->avoid_new_vehicles = 1;
+                    p15_status = ar_alns_solve(p15_alns, p1_best, (void **)&p15_best);
+                    ctx->avoid_new_vehicles = 0;
+
+                    if ((p15_status == AR_STATUS_OK || p15_status == AR_STATUS_LIMIT) && p15_best) {
+                        ar_alns_get_stats(p15_alns, &p15_stats);
+                        total_alns_iters += p15_stats.iterations;
+                        sg_copy_operator_stats(ctx, p15_alns);
+
+                        if (sg_route_solution_is_better(p15_best, p1_best, ctx)) {
+                            sg_route_solution_free(p1_best, NULL);
+                            p1_best = p15_best;
+                            p15_best = NULL;
+                        }
+                    }
+                    sg_route_solution_free(p15_best, NULL);
+                }
+                ar_alns_free(p15_alns);
+            }
+        }
+
+        ctx->penalty.enabled = 0;
     }
 
     /* ---- Phase 2: Distance polishing ---- */

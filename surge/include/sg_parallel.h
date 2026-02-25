@@ -31,6 +31,7 @@ typedef struct {
     uint32_t num_threads;       /* 0 = auto-detect */
     uint32_t population_size;   /* elite pool capacity (0 = default 6) */
     uint32_t num_generations;   /* 0 = default 3 */
+    double   crossover_fraction; /* fraction of workers using SREX crossover (0 = default 0.5) */
 } SGPopulationConfig;
 
 /*

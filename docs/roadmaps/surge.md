@@ -1282,15 +1282,16 @@ Implemented and active today:
 - Post-ALNS route elimination, exchange, 2-opt*, and distance polishing (PD-aware).
 - Solomon and Li & Lim benchmark harnesses with BKS comparison.
 
-Best measured quality (10000 iterations, deterministic seed 42):
-- Solomon (VRPTW, 56 cases): `avgVehGap=+0.36`, `avgDistGap=-0.2%`, `equalVehicles=36`, `lexiNonWorse=11`.
-- Li & Lim (PDPTW, 56 cases): `avgVehGap=+0.55`, `avgDistGap=+4.1%`, `equalVehicles=40`, `lexiNonWorse=19`.
+Best measured quality (10000 iterations, deterministic seed 42, population mode):
+- Solomon (VRPTW, 56 cases): `avgVehGap=+0.18`, `avgDistGap=-0.1%`, `equalVehicles=46/56`, `lexiNonWorse=14`.
+- Li & Lim (PDPTW, 56 cases): `avgVehGap=+0.39`, `avgDistGap=+3.7%`, `equalVehicles=47/56`, `lexiNonWorse=27`.
 - All 113 solutions verified feasible (post-solve validation gate in `sg_solve_route_model`).
 
 Solver quality highlights:
+- Solomon C1xx/C2xx (17/17): exact BKS match on both vehicles and distance.
 - Wide-TW instances (C2, LC2, LR2, LRC2) essentially solved — nearly all match BKS on both vehicles and distance.
-- Solomon C1xx: 8/9 match BKS distance exactly.
-- Remaining gap: tight-TW random instances (R1, LR1, RC1, LRC1) consistently use +1 vehicle; LC101/LC102 use +4-5 vehicles (identical TW widths defeat sorting heuristics).
+- Li & Lim LC2xx (8/8), LR2xx (11/11), LRC2xx (8/8): all match BKS vehicles and distance exactly.
+- Remaining gap: tight-TW random instances (R1, LR1, RC1, LRC1) show +1 vehicle with often better distance (trade-off pattern). LC101/LC102 use +5/+3 vehicles (identical PD TW widths defeat sorting heuristics).
 
 Solver uses Euclidean travel only — no distance/time matrix API exposed yet.
 
@@ -1370,6 +1371,7 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - **Phase 5+8 (objective modernization + verification)**: Lexicographic best-tracking via `is_better` callback in `ARSolutionOps` (gated by `SGConfig.lexicographic_objective`). Acceptance policy exposed via `SGAcceptType` (SA/RRT/Improving). Adaptive destroy size grows q_max on stagnation, resets on improvement (`SGConfig.adaptive_q`). Cordeau DARP loader (`sg_load_cordeau_darp`) and `bench_cordeau` harness. 20 new tests (135→155). Solomon +0.2%, Li & Lim +3.9% (no regression). DARP solve quality pending dedicated construction heuristic.
 - **Phase S11 (multi-threaded parallel + population search)**: `sg_solve_parallel()` runs N independent ALNS solves with different seeds, picks best (15 wins vs 0 losses on Li & Lim vs single-threaded). `sg_solve_population()` adds generational warm-starting — elite pool with tournament selection, same compute budget but guided search. Li & Lim population vs parallel: 10 wins, 6 losses, 40 ties, avg distance -0.6%. Includes `solution_arena_size` transfer fix ensuring fast arena-memcpy path in result harvesting. 5 new tests (215→220). ASAN clean.
 - **Phase S12 (infeasible-space exploration + aggressive SISR)**: HGS-style infeasible-space search with modular penalty manager (`SGPenaltyManager` in `sg_penalty.c`). 6 constraint types (time warp, capacity, duration, ride time, distance, total work) with independent per-constraint self-adjustment. Time warping accumulates violation and warps start to `tw_late` for downstream propagation. Feasible-beats-infeasible best-tracking in `sg_route_solution_is_better`. Penalty bounds and initial weights scale proportionally with problem cost structure via `cost_scale` parameter — no hardcoded constants. Instance-adaptive SISR `L_max` based on avg route length (Christiaens & Vanden Berghe 2020), initial string destroy weight 2.0. Phase 1 (vehicle min) uses aggressive 15% feasible target; Phase 2 (distance) runs strict (penalty disabled). Solomon single-thread: avgVehGap +0.36→+0.30, equalVehicles 37→39. Solomon population: avgVehGap +0.20, equalVehicles 45, avgDistGap -0.2%. Li & Lim single-thread: avgVehGap +0.52→+0.48, equalVehicles 41→44. Li & Lim population: avgVehGap +0.38, equalVehicles 48, avgDistGap +3.5%. 5 new tests (252→257). ASAN/UBSAN clean.
+- **Phase S13+S14+S15 (algorithmic edge + population crossover)**: Progressive penalty schedule (0.25→0.15 over Phase 1), ejection chains in repair operators with cost-gated fallback, scaled ejection budget (proportional to instance size, cap 500K), relaxed vehicle reduction (20% distance slack), Phase 1.5 vehicle crunch (500-iter focused ALNS with vehicle-reducing operators only), SREX crossover (merge routes from two parents), population diversity filter (>90% similarity rejection). Solomon population: avgVehGap +0.20→+0.18, equalVehicles 45→46, avgDistGap -0.1%. Li & Lim population: avgVehGap +0.39, equalVehicles 47, avgDistGap +3.7%. 14 new tests (326→340). ASAN/UBSAN clean.
 - Unified route state drives both delivery-only and PDPTW solves. The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time constraints.
 - Stop-level splice/excise operations preserve non-adjacent PD placement across ALNS destroy/repair cycles.
 
@@ -1398,8 +1400,8 @@ having one unified route/feasibility engine before additional constraints and in
 
 ## Usability & Rich Constraints Roadmap
 
-With solver quality at a production-usable level (Solomon +0.2% avg distance gap, Li & Lim
-+3.9%), the focus shifts to modeling real-world constraints. These phases are ordered by
+With solver quality at a production-usable level (Solomon -0.1% avg distance gap, Li & Lim
++3.7%), the focus shifts to modeling real-world constraints. These phases are ordered by
 dependency and business impact. Each builds on the architecture already in place — the unified
 stop-level route state, incremental feasibility kernel, and ALNS operator framework.
 
@@ -1802,7 +1804,7 @@ Users can override via `SGConfig.max_iterations` or `--iterations` in benchmarks
 | **Real-time** | 300 | ~0.2 s | ~+3% | ~+7% | API responses, live dispatch |
 | **Batch** (default) | 1,000 | ~0.6 s | ~+1.5% | ~+5% | Daily planning, route optimization |
 | **High quality** | 5,000 | ~2.0 s | ~+0.5% | ~+4.5% | Offline analysis |
-| **Best quality** | 10,000 | ~4.5 s | +0.2% | +4.2% | Benchmarking, maximum quality |
+| **Best quality** | 10,000 | ~4.5 s | -0.1% | +3.7% | Benchmarking, maximum quality |
 
 ### Iteration Scaling Data (100-customer instances, deterministic seed 42)
 
@@ -1812,11 +1814,11 @@ Users can override via `SGConfig.max_iterations` or `--iterations` in benchmarks
 |------:|--------:|-----------:|----------:|---------:|-------------:|
 | 10,000 | 9.2 | +0.2% | +0.30 | 39/56 | 23 |
 
-**Solomon — population (4 threads, 8 generations)**:
+**Solomon — population (auto threads, 3 generations, Phase S13-S15)**:
 
 | Iters | Sec/case | avgDistGap | avgVehGap | equalVeh | lexiNonWorse |
 |------:|--------:|-----------:|----------:|---------:|-------------:|
-| 10,000 | 31.0 | -0.2% | +0.20 | 45/56 | 35 |
+| 10,000 | 43.3 | -0.1% | +0.18 | 46/56 | 14 |
 
 **Li & Lim (PDPTW, 56 cases)** — single-thread with infeasible-space exploration:
 
@@ -1824,16 +1826,19 @@ Users can override via `SGConfig.max_iterations` or `--iterations` in benchmarks
 |------:|--------:|-----------:|----------:|---------:|-------------:|
 | 10,000 | 10.5 | +4.2% | +0.48 | 44/56 | 24 |
 
-**Li & Lim — population (4 threads, 8 generations)**:
+**Li & Lim — population (auto threads, 3 generations, Phase S13-S15)**:
 
 | Iters | Sec/case | avgDistGap | avgVehGap | equalVeh | lexiNonWorse |
 |------:|--------:|-----------:|----------:|---------:|-------------:|
-| 10,000 | 31.0 | +3.5% | +0.38 | 48/56 | 30 |
+| 10,000 | 23.0 | +3.7% | +0.39 | 47/56 | 27 |
 
 **Observations**:
 - Infeasible-space exploration (Phase S12) closed the +1 vehicle gap on most tight-TW instances. Solomon equalVehicles improved from 35 to 39 (single-thread) and 45 (population).
-- Population search adds ~3x wall-clock time but improves both vehicle count and distance quality. Solomon distance gap goes slightly negative (beating some BKS).
-- Li & Lim distance gap remains at +3.5-4.2% — closing this requires operator improvements (ejection chains, route-level crossover), not more search time.
+- Phase S13-S15 (progressive penalty, ejection in repair, SREX crossover, Phase 1.5 vehicle crunch) further improved Solomon population equalVehicles from 45→46 and avgVehGap from +0.20→+0.18.
+- Solomon C1xx/C2xx (17/17) now match BKS exactly on both vehicles and distance.
+- Li & Lim LC2xx (8/8), LR2xx (11/11), and LRC2xx (8/8) all match BKS on vehicles and distance. Remaining gaps concentrated on tight-TW LC1xx (lc101/102 at +5/+3 vehicles) and LR1xx (lr101/102 at +6/+3 vehicles).
+- Population search adds ~2-4x wall-clock time but improves vehicle count. Solomon distance gap stays near zero (beating some BKS).
+- Tight-TW R1/RC1 instances show a trade-off pattern: +1 vehicle gap but lower distance (e.g., R104 +1 veh / -1.5% dist). Closing these requires deeper search or dedicated tight-TW operators.
 
 ## Performance Targets
 
@@ -2090,17 +2095,44 @@ At 5000 iterations: Solomon +0.8%, Li & Lim +4.2%.
 
 **Tests**: 5 new tests (252→257). ASAN/UBSAN clean.
 
-### Phase S13: Robust Penalty Scaling (planned)
+### Phase S13+S14+S15: Algorithmic Edge + Population Crossover ✅
 
-Redefine `cost_scale` to reflect representative objective magnitude (median typical route cost across vehicles), not just average fixed cost. Add clamp/NaN guards. All scaling proportional to instance cost structure — no hardcoded absolute constants.
+**Result**: Solomon population: avgVehGap +0.20→+0.18, avgDistGap -0.2%→-0.1%, equalVehicles 45→46. Li & Lim population: avgVehGap +0.38→+0.39, avgDistGap +3.5%→+3.7%, equalVehicles 48→47. Vehicle counts stable or improved on most instances. New Phase 1.5 vehicle crunch phase adds focused vehicle reduction between Phase 1 and Phase 2 without cannibalizing Phase 2 budget.
 
-### Phase S14: Infeasible-Aware Ejection Chains (planned)
+**Changes (surge — sg_penalty.c):**
+- `sg_penalty_init_progressive`: progressive penalty schedule that lerps `target_feasible` from `target_start` to `target_end` over `total_segments` via linear interpolation
+- `SGProgressivePenaltyState` extends `SGAdaptivePenaltyState` with lerp parameters
+- Phase 1 now uses progressive 0.25→0.15 (was fixed 0.15) — starts aggressive for deeper infeasible-space exploration when vehicle cuts are most likely, tightens to avoid returning infeasible solutions
 
-Keep `penalty.enabled = 1` during the mid-solve ejection pulse between Phase 1 and Phase 2. Currently the ejection pulse in `sg_solve_route_model` runs with strict feasibility, which prevents it from finding vehicle-reducing moves that temporarily violate constraints. ~20 LOC change. Expected impact: close remaining +1 vehicle gap on tight-TW R1/RC1 instances.
+**Changes (surge — sg_postprocess.c):**
+- `sg_route_postprocess_reduce_vehicles_relaxed`: vehicle elimination with relaxed distance slack (accepts up to `distance_factor` × current distance + 50.0), both pair and single-vehicle elimination with frozen-request guards
+- `sg_try_place_with_ejection` promoted from static to extern — now called from repair operators
+- Ejection chains skip frozen requests (was missing — could eject FROZEN requests in chains)
+- Scaled ejection budget: `num_requests × vehicles_used × 100` (was fixed 50K), capped at `SG_EJECTION_BUDGET_CAP` (500K)
 
-### Phase S15: Biased Fitness in Population Manager (planned)
+**Changes (surge — sg_repair.c):**
+- `sg_repair_ejection_fallback`: ejection chain fallback at end of every repair operator (greedy, regret-2/3/4, noise-regret, pair-sync) when `ctx->ejection_in_repair == 1`
+- Budget-limited (`SG_EJECTION_REPAIR_BUDGET` = 5000), cost-gated (reverts if cost increases)
+- Toggled on during Phase 1 ALNS only (`ctx->ejection_in_repair = 1` around `ar_alns_solve`)
 
-Replace pure cost ranking in `sg_solve_population` with biased fitness: `fitness = cost_rank + diversity_rank`. Diversity measured via broken pairs distance (fraction of request adjacency pairs not shared between two solutions). Prevents population convergence and maintains exploration pressure across generations. ~100-150 LOC. Expected impact: improve Li & Lim distGap from +3.5% toward +2%.
+**Changes (surge — sg_solve.c):**
+- Phase 1.5 "Vehicle crunch": 500-iteration ALNS between ejection pulse and Phase 2, using only vehicle-reducing operators (vehicle-target, vehicle-empty, route-removal) with regret-3 and greedy repair
+- Phase 1.5 runs as additional budget — does NOT subtract from Phase 2
+- Relaxed vehicle reduction (`distance_factor=1.20`) called after ejection pulse, before Phase 1.5
+- Progressive penalty schedule for Phase 1 (`0.25→0.15` over segments)
+
+**Changes (surge — sg_parallel.c):**
+- SREX crossover: `sg_srex_build_warm_start` takes k routes from parent 1 + remaining requests from parent 2, builds merged warm-start arrays. Fisher-Yates partial shuffle for route selection
+- Population diversity filter in `sg_population_insert_ex`: rejects candidates >90% similar to existing members unless strictly better cost. Similarity = fraction of requests on same vehicle in both solutions
+- `crossover_fraction` config (default 0.5): fraction of workers using SREX vs single-parent warm-start
+- `owns_warm_start` flag on work items for proper memory management of SREX-allocated arrays
+
+**Changes (surge — sg_internal.h):**
+- `SG_EJECTION_BUDGET_CAP` (500K), `SG_EJECTION_REPAIR_BUDGET` (5K)
+- `ejection_in_repair`, `ejection_repair_budget` fields on `SGContext`
+- `crossover_fraction` field on `SGPopulationConfig`
+
+**Tests**: 14 new tests (326→340). Progressive penalty lerp/update, ejection in repair, scaled budget/cap, relaxed elimination, Phase 1.5 runs, frozen preservation through Phase 1.5, ejection fallback cost guard, ejection chain frozen guard, population crossover (VRPTW + PDPTW), diversity filter, no-crossover fallback. ASAN/UBSAN clean.
 
 ---
 
