@@ -179,6 +179,8 @@ LP_REFACTOR_POLICY_TEST_EXEC = test_lp_refactor_policy
 # LP basis-governor module tests (shadow policy module)
 LP_BASIS_GOVERNOR_TEST_SOURCES = $(TEST_DIR)/test_lp_basis_governor.c
 LP_BASIS_GOVERNOR_TEST_EXEC = test_lp_basis_governor
+LP_BASIS_GOVERNOR_RUNTIME_TEST_SOURCES = $(TEST_DIR)/test_lp_basis_governor_runtime.c
+LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC = test_lp_basis_governor_runtime
 
 # LP determinism tests (orthogonal to telemetry/logging)
 LP_DETERMINISM_TEST_SOURCES = $(TEST_DIR)/test_lp_determinism.c
@@ -288,7 +290,7 @@ debug: LDFLAGS += $(DEBUG_LDFLAGS)
 debug: clean all
 
 # Run tests
-test: $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BANDM_TEST_EXEC) $(BLEND_TEST_EXEC) $(LOTFI_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LP_REFACTOR_POLICY_TEST_EXEC) $(LP_BASIS_GOVERNOR_TEST_EXEC) $(LP_DETERMINISM_TEST_EXEC) $(LP_SENSITIVITY_TEST_EXEC) $(LP_CONFLICT_TEST_EXEC) $(LP_ALGORITHM_API_TEST_EXEC) $(LP_DISPATCH_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC) $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC) $(LP_EXTERNAL_FAILURE_API_TEST_EXEC) $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(LP_PUBLIC_API_SPLIT_TEST_EXEC) $(MIP_PUBLIC_API_SPLIT_TEST_EXEC) $(LP_ERROR_API_TEST_EXEC) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_WARMSTART_TEST_EXEC) $(MIP_WARMSTART_TEST_EXEC) $(MIP_LP_RECOVERY_TEST_EXEC) $(MIP_START_SPARSE_TEST_EXEC) $(MIP_START_REPAIR_TEST_EXEC) $(BENDERS_MASTER_START_TEST_EXEC) $(WARMSTART_SERDE_TEST_EXEC)
+test: $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BANDM_TEST_EXEC) $(BLEND_TEST_EXEC) $(LOTFI_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LP_REFACTOR_POLICY_TEST_EXEC) $(LP_BASIS_GOVERNOR_TEST_EXEC) $(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC) $(LP_DETERMINISM_TEST_EXEC) $(LP_SENSITIVITY_TEST_EXEC) $(LP_CONFLICT_TEST_EXEC) $(LP_ALGORITHM_API_TEST_EXEC) $(LP_DISPATCH_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC) $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC) $(LP_EXTERNAL_FAILURE_API_TEST_EXEC) $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(LP_PUBLIC_API_SPLIT_TEST_EXEC) $(MIP_PUBLIC_API_SPLIT_TEST_EXEC) $(LP_ERROR_API_TEST_EXEC) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_WARMSTART_TEST_EXEC) $(MIP_WARMSTART_TEST_EXEC) $(MIP_LP_RECOVERY_TEST_EXEC) $(MIP_START_SPARSE_TEST_EXEC) $(MIP_START_REPAIR_TEST_EXEC) $(BENDERS_MASTER_START_TEST_EXEC) $(WARMSTART_SERDE_TEST_EXEC)
 	./$(TEST_EXEC)
 	./$(PRESOLVE_TEST_EXEC)
 	./$(BANDM_TEST_EXEC)
@@ -297,6 +299,7 @@ test: $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BANDM_TEST_EXEC) $(BLEND_TEST_EXEC) $
 	./$(SIMPLEX_POLICY_TEST_EXEC)
 	./$(LP_REFACTOR_POLICY_TEST_EXEC)
 	./$(LP_BASIS_GOVERNOR_TEST_EXEC)
+	./$(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC)
 	./$(LP_DETERMINISM_TEST_EXEC)
 	./$(LP_SENSITIVITY_TEST_EXEC)
 	./$(LP_CONFLICT_TEST_EXEC)
@@ -520,6 +523,14 @@ $(LP_BASIS_GOVERNOR_TEST_EXEC): $(LP_BASIS_GOVERNOR_TEST_SOURCES) $(LIB_NAME) $(
 # Run LP basis-governor module test
 test-lp-basis-governor: $(LP_BASIS_GOVERNOR_TEST_EXEC)
 	./$(LP_BASIS_GOVERNOR_TEST_EXEC)
+
+# Build LP basis-governor runtime test
+$(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC): $(LP_BASIS_GOVERNOR_RUNTIME_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP basis-governor runtime test
+test-lp-basis-governor-runtime: $(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC)
+	./$(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC)
 
 # Build LP determinism tests
 $(LP_DETERMINISM_TEST_EXEC): $(LP_DETERMINISM_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
@@ -807,7 +818,7 @@ download-netlib:
 
 # Clean
 clean:
-	rm -f $(OBJECTS) $(SRC_DIR)/lp_telemetry.o $(LIB_NAME) $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_TEST_EXEC) $(BENDERS_WARMSTART_TEST_EXEC) $(MIP_WARMSTART_TEST_EXEC) $(MIP_LP_RECOVERY_TEST_EXEC) $(MIP_START_SPARSE_TEST_EXEC) $(MIP_START_REPAIR_TEST_EXEC) $(BENDERS_MASTER_START_TEST_EXEC) $(WARMSTART_SERDE_TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LP_BASIS_GOVERNOR_TEST_EXEC) $(LP_DETERMINISM_TEST_EXEC) $(LP_SENSITIVITY_TEST_EXEC) $(LP_CONFLICT_TEST_EXEC) $(LP_ALGORITHM_API_TEST_EXEC) $(LP_DISPATCH_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC) $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC) $(LP_EXTERNAL_FAILURE_API_TEST_EXEC) $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(LP_PUBLIC_API_SPLIT_TEST_EXEC) $(MIP_PUBLIC_API_SPLIT_TEST_EXEC) $(LP_ERROR_API_TEST_EXEC) $(LU_MARKOWITZ_TEST_EXEC) $(LU_SUPERNODE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC)
+	rm -f $(OBJECTS) $(SRC_DIR)/lp_telemetry.o $(LIB_NAME) $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_TEST_EXEC) $(BENDERS_WARMSTART_TEST_EXEC) $(MIP_WARMSTART_TEST_EXEC) $(MIP_LP_RECOVERY_TEST_EXEC) $(MIP_START_SPARSE_TEST_EXEC) $(MIP_START_REPAIR_TEST_EXEC) $(BENDERS_MASTER_START_TEST_EXEC) $(WARMSTART_SERDE_TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(LP_BASIS_GOVERNOR_TEST_EXEC) $(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC) $(LP_DETERMINISM_TEST_EXEC) $(LP_SENSITIVITY_TEST_EXEC) $(LP_CONFLICT_TEST_EXEC) $(LP_ALGORITHM_API_TEST_EXEC) $(LP_DISPATCH_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC) $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC) $(LP_EXTERNAL_FAILURE_API_TEST_EXEC) $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(LP_PUBLIC_API_SPLIT_TEST_EXEC) $(MIP_PUBLIC_API_SPLIT_TEST_EXEC) $(LP_ERROR_API_TEST_EXEC) $(LU_MARKOWITZ_TEST_EXEC) $(LU_SUPERNODE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
@@ -822,7 +833,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-benders-warmstart test-mip-warmstart test-mip-start-sparse test-mip-start-repair test-benders-master-start test-warmstart-serde test-beaconfd test-beaconfd-trace test-simplex-policy test-lp-refactor-policy test-lp-basis-governor test-lp-determinism test-lp-sensitivity test-lp-conflict test-lp-algorithm-api test-lp-dispatch test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lp-public-api-split test-mip-public-api-split test-lp-error-api test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-benders-warmstart test-mip-warmstart test-mip-start-sparse test-mip-start-repair test-benders-master-start test-warmstart-serde test-beaconfd test-beaconfd-trace test-simplex-policy test-lp-refactor-policy test-lp-basis-governor test-lp-basis-governor-runtime test-lp-determinism test-lp-sensitivity test-lp-conflict test-lp-algorithm-api test-lp-dispatch test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lp-public-api-split test-mip-public-api-split test-lp-error-api test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
 
 # MIP benchmark with specialized solvers (LAP, Network, SCP)
 bench-mip-specialized: $(BENCH_MIP_EXEC)
@@ -855,6 +866,7 @@ help:
 	@echo "  test-beaconfd - Run beaconfd numerical-regression test"
 	@echo "  test-simplex-policy - Run simplex basis-action policy tests"
 	@echo "  test-lp-basis-governor - Run LP basis-governor shadow-module tests"
+	@echo "  test-lp-basis-governor-runtime - Run LP basis-governor runtime mode tests"
 	@echo "  test-lp-determinism - Run LP determinism module tests"
 	@echo "  test-lp-sensitivity - Run LP sensitivity/ranging module tests"
 	@echo "  test-lp-conflict - Run LP conflict/IIS refinement module tests"
