@@ -257,6 +257,15 @@ typedef struct {
     int expected_force;
 } DirStabilizeForceCase;
 
+typedef struct {
+    const char *name;
+    double dir_inf_ratio;
+    int cooldown_active;
+    int lu_health_triggered;
+    int pending_repeat;
+    int expected_defer;
+} DirStabilizeModerateCase;
+
 static int run_lu_health_case(const LUHealthCase *tc) {
     int hard = -1;
     int soft = -1;
@@ -432,6 +441,22 @@ static int run_dir_stabilize_force_case(const DirStabilizeForceCase *tc) {
     if (force != tc->expected_force) {
         fprintf(stderr, "FAIL: %s (expected force=%d got=%d)\n",
                 tc->name, tc->expected_force, force);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_dir_stabilize_moderate_case(const DirStabilizeModerateCase *tc) {
+    int defer =
+        lp_refactor_policy_phase1_dir_stabilize_should_defer_moderate(
+            tc->dir_inf_ratio,
+            tc->cooldown_active,
+            tc->lu_health_triggered,
+            tc->pending_repeat);
+    if (defer != tc->expected_defer) {
+        fprintf(stderr, "FAIL: %s (expected defer=%d got=%d)\n",
+                tc->name, tc->expected_defer, defer);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -1114,6 +1139,48 @@ int main(void) {
             .expected_force = 1
         }
     };
+    const DirStabilizeModerateCase dir_stabilize_moderate_cases[] = {
+        {
+            .name = "phase1 moderate dir defers first event when LU health is good",
+            .dir_inf_ratio = 20.0,
+            .cooldown_active = 0,
+            .lu_health_triggered = 0,
+            .pending_repeat = 0,
+            .expected_defer = 1
+        },
+        {
+            .name = "phase1 moderate dir does not defer when repeat is pending",
+            .dir_inf_ratio = 20.0,
+            .cooldown_active = 0,
+            .lu_health_triggered = 0,
+            .pending_repeat = 1,
+            .expected_defer = 0
+        },
+        {
+            .name = "phase1 moderate dir does not defer when LU health requests refactor",
+            .dir_inf_ratio = 20.0,
+            .cooldown_active = 0,
+            .lu_health_triggered = 1,
+            .pending_repeat = 0,
+            .expected_defer = 0
+        },
+        {
+            .name = "phase1 moderate dir does not defer during cooldown",
+            .dir_inf_ratio = 20.0,
+            .cooldown_active = 1,
+            .lu_health_triggered = 0,
+            .pending_repeat = 0,
+            .expected_defer = 0
+        },
+        {
+            .name = "phase1 moderate dir does not defer high-ratio events",
+            .dir_inf_ratio = 80.0,
+            .cooldown_active = 0,
+            .lu_health_triggered = 0,
+            .pending_repeat = 0,
+            .expected_defer = 0
+        }
+    };
 
     int pass = 0;
     int total_policy = (int)(sizeof(cases) / sizeof(cases[0]));
@@ -1123,8 +1190,10 @@ int main(void) {
     int total_periodic_cost_defer = (int)(sizeof(periodic_cost_defer_cases) / sizeof(periodic_cost_defer_cases[0]));
     int total_dir_stabilize = (int)(sizeof(dir_stabilize_cooldown_cases) / sizeof(dir_stabilize_cooldown_cases[0]));
     int total_dir_force = (int)(sizeof(dir_stabilize_force_cases) / sizeof(dir_stabilize_force_cases[0]));
+    int total_dir_moderate = (int)(sizeof(dir_stabilize_moderate_cases) / sizeof(dir_stabilize_moderate_cases[0]));
     int total = total_policy + total_sched + total_lu_health + total_soft_lu_defer +
-                total_periodic_cost_defer + total_dir_stabilize + total_dir_force;
+                total_periodic_cost_defer + total_dir_stabilize + total_dir_force +
+                total_dir_moderate;
 
     for (int i = 0; i < total_policy; i++) {
         pass += run_case(&cases[i]);
@@ -1146,6 +1215,9 @@ int main(void) {
     }
     for (int i = 0; i < total_dir_force; i++) {
         pass += run_dir_stabilize_force_case(&dir_stabilize_force_cases[i]);
+    }
+    for (int i = 0; i < total_dir_moderate; i++) {
+        pass += run_dir_stabilize_moderate_case(&dir_stabilize_moderate_cases[i]);
     }
 
     printf("\nPolicy cases passed: %d/%d\n", pass, total);
