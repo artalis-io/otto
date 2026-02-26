@@ -279,3 +279,13 @@ void lp_telemetry_record_phase1_recompute(SimplexSolver *solver,
             break;
     }
 }
+
+void lp_telemetry_record_phase1_recompute_rc_only(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_recompute_rc_only_calls++;
+}
+
+void lp_telemetry_record_phase1_recompute_guard_forced_full(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_recompute_rc_guard_forced_full++;
+}
