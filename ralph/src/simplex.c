@@ -3250,7 +3250,21 @@ static int phase1_recompute_rc_only_guarded(SimplexSolver *solver,
 
 static void phase1_recompute_dir_skip_safe(SimplexSolver *solver,
                                            SimplexTableau *tab,
+                                           int degenerate_count,
                                            int *rc_only_streak) {
+    int allow_rc_only = 0;
+    if (tab->m >= PHASE1_DEGEN_THRESHOLD_LARGE_M &&
+        degenerate_count >= PHASE1_DEGEN_THRESHOLD_LARGE) {
+        allow_rc_only = 1;
+    }
+    if (!allow_rc_only) {
+        phase1_recompute_full_with_reason(solver,
+                                          tab,
+                                          rc_only_streak,
+                                          LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
+        lp_telemetry_record_phase1_dir_stabilize_skip(solver, 1);
+        return;
+    }
     int used_full = phase1_recompute_rc_only_guarded(solver, tab, rc_only_streak);
     lp_telemetry_record_phase1_dir_stabilize_skip(solver, used_full);
     if (used_full) {
@@ -5387,7 +5401,10 @@ static int simplex_phase1(SimplexSolver *solver) {
                                             &excluded_entering_b,
                                             &excluded_entering_ttl_b);
                 use_bland = 1;
-                phase1_recompute_dir_skip_safe(solver, tab, &phase1_rc_only_streak);
+                phase1_recompute_dir_skip_safe(solver,
+                                               tab,
+                                               degenerate_count,
+                                               &phase1_rc_only_streak);
                 continue;
             }
 
@@ -5407,7 +5424,10 @@ static int simplex_phase1(SimplexSolver *solver) {
                                             &excluded_entering_b,
                                             &excluded_entering_ttl_b);
                 use_bland = 1;
-                phase1_recompute_dir_skip_safe(solver, tab, &phase1_rc_only_streak);
+                phase1_recompute_dir_skip_safe(solver,
+                                               tab,
+                                               degenerate_count,
+                                               &phase1_rc_only_streak);
                 continue;
             }
             dir_stabilize_moderate_defer_pending = 0;
