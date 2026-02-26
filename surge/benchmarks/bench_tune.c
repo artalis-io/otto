@@ -5,14 +5,21 @@
  * using tiered parameter search (coarse grid -> refinement).
  * Results are written as JSON for analysis.
  *
+ * Checkpoint/resume: evaluations are written to a JSONL checkpoint
+ * file as they complete. On restart with --checkpoint <file>, already-
+ * evaluated configs are skipped. The JSONL is also ML-ready training
+ * data: each line has full params + per-instance scores.
+ *
  * Build: make bench-tune
  * Usage: bench_tune --tier 0 --iterations 2500 --json
- *        bench_tune --all-tiers --threads 4
+ *        bench_tune --all-tiers --threads 4 --checkpoint tune.jsonl
  *        bench_tune --baseline
  */
 #include "surge.h"
 #include "sg_bench_utils.h"
 #include "sh_args.h"
+#include "sh_json.h"
+#include "sh_arena.h"
 
 #include <math.h>
 #include <pthread.h>
@@ -82,6 +89,8 @@ static void lin_grid(double lo, double hi, int n, double *out) {
 
 /* ---- Evaluation ---- */
 
+#define MAX_TUNE_INSTANCES 24
+
 typedef struct {
     SGTuneParams params;
     double avg_vehicle_gap;
@@ -90,6 +99,10 @@ typedef struct {
     double composite_score;      /* lower = better */
     double total_time_seconds;
     int valid;
+    /* Per-instance breakdown (for ML training data in checkpoint) */
+    int num_instances;
+    double inst_vgap[MAX_TUNE_INSTANCES];
+    double inst_dgap[MAX_TUNE_INSTANCES];
 } TuneResult;
 
 static double evaluate_instance(const TuneInstance *inst, const SGTuneParams *params,
@@ -173,11 +186,16 @@ static void evaluate_config(const TuneInstance *instances, int num_instances,
 
     result->params = *params;
     result->valid = 1;
+    result->num_instances = num_instances < MAX_TUNE_INSTANCES ? num_instances : MAX_TUNE_INSTANCES;
 
     for (i = 0; i < num_instances; i++) {
         double vgap, dgap;
         double t = evaluate_instance(&instances[i], params, max_iterations, seed,
                                      &vgap, &dgap);
+        if (i < MAX_TUNE_INSTANCES) {
+            result->inst_vgap[i] = vgap;
+            result->inst_dgap[i] = dgap;
+        }
         sum_vgap += vgap;
         sum_dgap += dgap;
         if (vgap > worst_vgap) worst_vgap = vgap;
@@ -195,6 +213,238 @@ static void evaluate_config(const TuneInstance *instances, int num_instances,
                             + 50.0 * (worst_vgap > 0.0 ? worst_vgap : 0.0);
 }
 
+/* Forward declarations */
+static void print_tune_params_json(FILE *fp, const SGTuneParams *p);
+
+/* ---- Checkpoint (JSONL) ---- */
+
+/*
+ * Checkpoint format: one JSON object per line (JSONL).
+ *
+ * Line types:
+ *   {"type":"header","iterations":2500,"seed":42}
+ *   {"type":"baseline","score":123.4,"avg_vgap":0.5,"avg_dgap":12.3,...}
+ *   {"type":"result","tier":0,"idx":3,"score":110.2,...,"params":{...},"instances":[...]}
+ *   {"type":"tier_done","tier":0,"best_params":{...}}
+ *
+ * The "instances" array in result lines contains per-instance {vgap, dgap}
+ * pairs — this is ML training data for surrogate model fitting.
+ */
+
+typedef struct {
+    FILE *fp;                  /* Append handle (NULL = no checkpoint) */
+    pthread_mutex_t mutex;     /* Protects fp writes */
+    /* Loaded state from existing checkpoint */
+    int tier_done[6];          /* 1 = tier fully completed */
+    SGTuneParams tier_best[6]; /* Best params from each completed tier */
+    int has_baseline;
+    TuneResult baseline;
+    /* Cached results: flat array of (tier, idx, result) triples */
+    int *cached_tier;
+    int *cached_idx;
+    TuneResult *cached_results;
+    int cached_count;
+    int cached_cap;
+} CheckpointState;
+
+static void cp_init(CheckpointState *cp) {
+    memset(cp, 0, sizeof(*cp));
+    pthread_mutex_init(&cp->mutex, NULL);
+    for (int i = 0; i < 6; i++)
+        sg_tune_params_default(&cp->tier_best[i]);
+}
+
+static void cp_free(CheckpointState *cp) {
+    if (cp->fp) fclose(cp->fp);
+    free(cp->cached_tier);
+    free(cp->cached_idx);
+    free(cp->cached_results);
+    pthread_mutex_destroy(&cp->mutex);
+}
+
+/* Write one JSONL line for a result (thread-safe) */
+static void cp_write_result(CheckpointState *cp, int tier, int idx,
+                            const TuneResult *r, const TuneInstance *instances) {
+    if (!cp->fp) return;
+    pthread_mutex_lock(&cp->mutex);
+
+    fprintf(cp->fp, "{\"type\":\"result\",\"tier\":%d,\"idx\":%d,"
+            "\"score\":%.6f,\"avg_vgap\":%.6f,\"avg_dgap\":%.6f,"
+            "\"worst_vgap\":%.2f,\"time_s\":%.3f,\"params\":",
+            tier, idx, r->composite_score, r->avg_vehicle_gap,
+            r->avg_distance_gap_pct, r->worst_vehicle_gap, r->total_time_seconds);
+    print_tune_params_json(cp->fp, &r->params);
+    fprintf(cp->fp, ",\"instances\":[");
+    for (int i = 0; i < r->num_instances; i++) {
+        if (i > 0) fprintf(cp->fp, ",");
+        fprintf(cp->fp, "{\"name\":\"%s\",\"vgap\":%.4f,\"dgap\":%.4f}",
+                instances[i].name, r->inst_vgap[i], r->inst_dgap[i]);
+    }
+    fprintf(cp->fp, "]}\n");
+    fflush(cp->fp);
+
+    pthread_mutex_unlock(&cp->mutex);
+}
+
+static void cp_write_baseline(CheckpointState *cp, const TuneResult *r) {
+    if (!cp->fp) return;
+    fprintf(cp->fp, "{\"type\":\"baseline\",\"score\":%.6f,"
+            "\"avg_vgap\":%.6f,\"avg_dgap\":%.6f,\"worst_vgap\":%.2f,"
+            "\"time_s\":%.3f}\n",
+            r->composite_score, r->avg_vehicle_gap,
+            r->avg_distance_gap_pct, r->worst_vehicle_gap, r->total_time_seconds);
+    fflush(cp->fp);
+}
+
+static void cp_write_tier_done(CheckpointState *cp, int tier, const SGTuneParams *best) {
+    if (!cp->fp) return;
+    fprintf(cp->fp, "{\"type\":\"tier_done\",\"tier\":%d,\"best_params\":", tier);
+    print_tune_params_json(cp->fp, best);
+    fprintf(cp->fp, "}\n");
+    fflush(cp->fp);
+}
+
+static void cp_write_header(CheckpointState *cp, int iterations, uint64_t seed) {
+    if (!cp->fp) return;
+    fprintf(cp->fp, "{\"type\":\"header\",\"iterations\":%d,\"seed\":%llu}\n",
+            iterations, (unsigned long long)seed);
+    fflush(cp->fp);
+}
+
+/* Parse SGTuneParams from a ShJsonValue object */
+static void cp_parse_params(ShJsonValue *obj, SGTuneParams *p) {
+    sg_tune_params_default(p);
+    if (!obj) return;
+#define CP_D(name) do { \
+    ShJsonValue *v = sh_json_get(obj, #name); \
+    if (v) p->name = sh_json_as_double(v, SG_TUNE_SENTINEL_D); \
+    } while(0)
+#define CP_I(name) do { \
+    ShJsonValue *v = sh_json_get(obj, #name); \
+    if (v) p->name = sh_json_as_int(v, SG_TUNE_SENTINEL_I); \
+    } while(0)
+    CP_D(phase1_fraction); CP_I(phase15_iters);
+    CP_D(sa_accept_pct); CP_D(p1_final_temp_ratio); CP_D(p2_final_temp_ratio);
+    CP_D(pen_target_start); CP_D(pen_target_end); CP_D(pen_tolerance);
+    CP_D(pen_increase); CP_D(pen_decrease);
+    CP_D(pen_p15_target); CP_D(pen_p15_tolerance); CP_D(pen_p15_increase); CP_D(pen_p15_decrease);
+    CP_D(reaction_factor); CP_D(reward_best); CP_D(reward_better); CP_D(reward_accepted);
+    CP_I(segment_size);
+    CP_D(worst_randomness); CP_D(shaw_randomness); CP_D(route_cluster_randomness);
+    CP_D(time_cluster_randomness); CP_D(pd_shaw_randomness); CP_D(route_shaw_randomness);
+    CP_I(string_l_max);
+#undef CP_D
+#undef CP_I
+}
+
+/* Add a cached result to the checkpoint state */
+static void cp_cache_add(CheckpointState *cp, int tier, int idx, const TuneResult *r) {
+    if (cp->cached_count >= cp->cached_cap) {
+        int new_cap = cp->cached_cap ? cp->cached_cap * 2 : 256;
+        cp->cached_tier = realloc(cp->cached_tier, (size_t)new_cap * sizeof(int));
+        cp->cached_idx = realloc(cp->cached_idx, (size_t)new_cap * sizeof(int));
+        cp->cached_results = realloc(cp->cached_results, (size_t)new_cap * sizeof(TuneResult));
+        cp->cached_cap = new_cap;
+    }
+    cp->cached_tier[cp->cached_count] = tier;
+    cp->cached_idx[cp->cached_count] = idx;
+    cp->cached_results[cp->cached_count] = *r;
+    cp->cached_count++;
+}
+
+/* Load existing checkpoint file. Returns number of entries loaded. */
+static int cp_load(CheckpointState *cp, const char *path) {
+    FILE *f = fopen(path, "r");
+    char line[16384];
+    int loaded = 0;
+
+    if (!f) return 0;
+
+    while (fgets(line, (int)sizeof(line), f)) {
+        size_t len = strlen(line);
+        if (len < 2) continue;
+
+        SHArena *arena = sh_arena_create(len * 4 + 4096);
+        if (!arena) continue;
+
+        ShJsonValue *root = NULL;
+        if (sh_json_parse(line, len, arena, &root) != SH_JSON_OK || !root) {
+            sh_arena_free(arena);
+            continue;
+        }
+
+        const char *type = sh_json_as_string(sh_json_get(root, "type"), "");
+
+        if (strcmp(type, "result") == 0) {
+            TuneResult r;
+            memset(&r, 0, sizeof(r));
+            int tier = sh_json_as_int(sh_json_get(root, "tier"), -1);
+            int idx = sh_json_as_int(sh_json_get(root, "idx"), -1);
+            r.composite_score = sh_json_as_double(sh_json_get(root, "score"), 1e9);
+            r.avg_vehicle_gap = sh_json_as_double(sh_json_get(root, "avg_vgap"), 100.0);
+            r.avg_distance_gap_pct = sh_json_as_double(sh_json_get(root, "avg_dgap"), 100.0);
+            r.worst_vehicle_gap = sh_json_as_double(sh_json_get(root, "worst_vgap"), 100.0);
+            r.total_time_seconds = sh_json_as_double(sh_json_get(root, "time_s"), 0.0);
+            r.valid = 1;
+            cp_parse_params(sh_json_get(root, "params"), &r.params);
+
+            /* Parse per-instance data */
+            ShJsonValue *inst_arr = sh_json_get(root, "instances");
+            r.num_instances = (int)sh_json_array_len(inst_arr);
+            if (r.num_instances > MAX_TUNE_INSTANCES) r.num_instances = MAX_TUNE_INSTANCES;
+            for (int i = 0; i < r.num_instances; i++) {
+                ShJsonValue *item = sh_json_array_get(inst_arr, (size_t)i);
+                r.inst_vgap[i] = sh_json_as_double(sh_json_get(item, "vgap"), 0.0);
+                r.inst_dgap[i] = sh_json_as_double(sh_json_get(item, "dgap"), 0.0);
+            }
+
+            if (tier >= 0 && idx >= 0) {
+                cp_cache_add(cp, tier, idx, &r);
+                loaded++;
+            }
+
+        } else if (strcmp(type, "baseline") == 0) {
+            cp->has_baseline = 1;
+            memset(&cp->baseline, 0, sizeof(cp->baseline));
+            cp->baseline.composite_score = sh_json_as_double(sh_json_get(root, "score"), 1e9);
+            cp->baseline.avg_vehicle_gap = sh_json_as_double(sh_json_get(root, "avg_vgap"), 0.0);
+            cp->baseline.avg_distance_gap_pct = sh_json_as_double(sh_json_get(root, "avg_dgap"), 0.0);
+            cp->baseline.worst_vehicle_gap = sh_json_as_double(sh_json_get(root, "worst_vgap"), 0.0);
+            cp->baseline.total_time_seconds = sh_json_as_double(sh_json_get(root, "time_s"), 0.0);
+            cp->baseline.valid = 1;
+
+        } else if (strcmp(type, "tier_done") == 0) {
+            int tier = sh_json_as_int(sh_json_get(root, "tier"), -1);
+            if (tier >= 0 && tier < 6) {
+                cp->tier_done[tier] = 1;
+                cp_parse_params(sh_json_get(root, "best_params"), &cp->tier_best[tier]);
+            }
+        }
+
+        sh_arena_free(arena);
+    }
+
+    fclose(f);
+    return loaded;
+}
+
+/* Pre-fill results array with cached checkpoint data for a given tier.
+ * Returns the number of configs that were pre-filled (i.e., can be skipped). */
+static int cp_prefill(const CheckpointState *cp, int tier,
+                      TuneResult *results, int num_configs) {
+    int filled = 0;
+    for (int c = 0; c < cp->cached_count; c++) {
+        if (cp->cached_tier[c] == tier) {
+            int idx = cp->cached_idx[c];
+            if (idx >= 0 && idx < num_configs && !results[idx].valid) {
+                results[idx] = cp->cached_results[c];
+                filled++;
+            }
+        }
+    }
+    return filled;
+}
+
 /* ---- Parallel Evaluation ---- */
 
 typedef struct {
@@ -205,7 +455,11 @@ typedef struct {
     SGTuneParams *configs;   /* array of configurations */
     TuneResult *results;     /* output array */
     int total_configs;
-    volatile int next_config; /* atomic counter */
+    volatile int next_config; /* work counter */
+    int done_count;           /* completed counter (cached + evaluated) */
+    int cached_count;         /* pre-filled from checkpoint */
+    int current_tier;
+    CheckpointState *checkpoint;
     pthread_mutex_t mutex;
 } TuneWorkContext;
 
@@ -220,12 +474,34 @@ static void *tune_worker(void *arg) {
 
         if (idx >= wctx->total_configs) break;
 
+        /* Skip if already loaded from checkpoint */
+        if (wctx->results[idx].valid) {
+            pthread_mutex_lock(&wctx->mutex);
+            wctx->done_count++;
+            pthread_mutex_unlock(&wctx->mutex);
+            continue;
+        }
+
         evaluate_config(wctx->instances, wctx->num_instances,
                         &wctx->configs[idx], wctx->max_iterations,
                         wctx->seed, &wctx->results[idx]);
 
-        /* Progress indicator */
-        fprintf(stderr, "\r  [%d/%d] configs evaluated", idx + 1, wctx->total_configs);
+        /* Write checkpoint line */
+        if (wctx->checkpoint) {
+            cp_write_result(wctx->checkpoint, wctx->current_tier, idx,
+                            &wctx->results[idx], wctx->instances);
+        }
+
+        pthread_mutex_lock(&wctx->mutex);
+        wctx->done_count++;
+        if (wctx->cached_count > 0) {
+            fprintf(stderr, "\r  [%d/%d] evaluated (%d cached)",
+                    wctx->done_count, wctx->total_configs, wctx->cached_count);
+        } else {
+            fprintf(stderr, "\r  [%d/%d] configs evaluated",
+                    wctx->done_count, wctx->total_configs);
+        }
+        pthread_mutex_unlock(&wctx->mutex);
     }
     return NULL;
 }
@@ -233,10 +509,25 @@ static void *tune_worker(void *arg) {
 static void evaluate_configs_parallel(const TuneInstance *instances, int num_instances,
                                       SGTuneParams *configs, int num_configs,
                                       int max_iterations, uint64_t seed,
-                                      int num_threads, TuneResult *results) {
+                                      int num_threads, TuneResult *results,
+                                      int current_tier, CheckpointState *checkpoint) {
     TuneWorkContext wctx;
     pthread_t *threads;
     int i;
+    int cached = 0;
+
+    /* Pre-fill from checkpoint */
+    if (checkpoint) {
+        cached = cp_prefill(checkpoint, current_tier, results, num_configs);
+        if (cached > 0) {
+            fprintf(stderr, "  %d/%d configs restored from checkpoint\n",
+                    cached, num_configs);
+        }
+        if (cached >= num_configs) {
+            fprintf(stderr, "  All configs cached, skipping evaluation\n");
+            return;
+        }
+    }
 
     wctx.instances = instances;
     wctx.num_instances = num_instances;
@@ -246,16 +537,26 @@ static void evaluate_configs_parallel(const TuneInstance *instances, int num_ins
     wctx.results = results;
     wctx.total_configs = num_configs;
     wctx.next_config = 0;
+    wctx.done_count = 0;
+    wctx.cached_count = cached;
+    wctx.current_tier = current_tier;
+    wctx.checkpoint = checkpoint;
     pthread_mutex_init(&wctx.mutex, NULL);
 
     threads = (pthread_t *)calloc((size_t)num_threads, sizeof(*threads));
     if (!threads) {
         /* Fallback to single-threaded */
         for (i = 0; i < num_configs; i++) {
+            if (results[i].valid) continue; /* Skip cached */
             evaluate_config(instances, num_instances, &configs[i],
                             max_iterations, seed, &results[i]);
+            if (checkpoint) {
+                cp_write_result(checkpoint, current_tier, i,
+                                &results[i], instances);
+            }
             fprintf(stderr, "\r  [%d/%d] configs evaluated", i + 1, num_configs);
         }
+        fprintf(stderr, "\n");
         return;
     }
 
@@ -561,9 +862,15 @@ static void print_usage(const char *argv0) {
     printf("  --verify <n>          Multi-seed verify top N (default: 3)\n");
     printf("  --json                Output JSON results to stdout\n");
     printf("  --baseline            Run defaults first for comparison\n");
+    printf("  --checkpoint <file>   Checkpoint file for resume (default: surge_tune.jsonl)\n");
+    printf("  --no-checkpoint       Disable checkpointing\n");
     printf("  --solomon-dir <p>     Path to Solomon instances (overrides representative set)\n");
     printf("  --li-lim-dir <p>      Path to Li-Lim instances (overrides representative set)\n");
     printf("  --help                Show this help\n");
+    printf("\nCheckpoint/Resume:\n");
+    printf("  Results are saved to a JSONL checkpoint file as they complete.\n");
+    printf("  On restart, already-evaluated configs are skipped automatically.\n");
+    printf("  The JSONL file is also ML-ready training data for surrogate models.\n");
     printf("\nTiers (tuned in order of impact):\n");
     printf("  0: Phase budget split (phase1_fraction, phase15_iters)    25 configs\n");
     printf("  1: SA temperature (sa_accept_pct, final_temp_ratios)     80 configs\n");
@@ -583,6 +890,8 @@ int main(int argc, char **argv) {
     int verify_n = 3;
     int json_output = 0;
     int run_baseline = 0;
+    const char *checkpoint_path = "surge_tune.jsonl";
+    int use_checkpoint = 1;
     int i;
 
     SGTuneParams base_params;
@@ -590,6 +899,9 @@ int main(int argc, char **argv) {
     TuneResult *results = NULL;
     TuneResult baseline = {0};
     int num_configs = 0;
+    CheckpointState cp;
+
+    cp_init(&cp);
 
     /* Parse CLI */
     for (i = 1; i < argc; i++) {
@@ -614,6 +926,10 @@ int main(int argc, char **argv) {
             json_output = 1;
         } else if (strcmp(argv[i], "--baseline") == 0) {
             run_baseline = 1;
+        } else if (strcmp(argv[i], "--checkpoint") == 0 && i + 1 < argc) {
+            checkpoint_path = argv[++i];
+        } else if (strcmp(argv[i], "--no-checkpoint") == 0) {
+            use_checkpoint = 0;
         } else {
             fprintf(stderr, "Error: unknown option '%s'\n", argv[i]);
             print_usage(argv[0]);
@@ -629,12 +945,34 @@ int main(int argc, char **argv) {
     if (top_n < 1) top_n = 1;
     if (verify_n < 0) verify_n = 0;
 
+    /* Load existing checkpoint */
+    if (use_checkpoint) {
+        int loaded = cp_load(&cp, checkpoint_path);
+        if (loaded > 0) {
+            fprintf(stderr, "Loaded %d results from checkpoint: %s\n",
+                    loaded, checkpoint_path);
+            int td = 0;
+            for (i = 0; i < 6; i++) if (cp.tier_done[i]) td++;
+            if (td > 0) fprintf(stderr, "  %d tier(s) fully completed\n", td);
+        }
+        /* Open for appending */
+        cp.fp = fopen(checkpoint_path, "a");
+        if (!cp.fp) {
+            fprintf(stderr, "Warning: cannot open checkpoint file for writing: %s\n",
+                    checkpoint_path);
+        } else if (loaded == 0) {
+            /* New file — write header */
+            cp_write_header(&cp, max_iterations, seed);
+        }
+    }
+
     configs = (SGTuneParams *)calloc(MAX_CONFIGS, sizeof(*configs));
     results = (TuneResult *)calloc(MAX_CONFIGS, sizeof(*results));
     if (!configs || !results) {
         fprintf(stderr, "Error: out of memory\n");
         free(configs);
         free(results);
+        cp_free(&cp);
         return 1;
     }
 
@@ -643,9 +981,16 @@ int main(int argc, char **argv) {
 
     /* Baseline evaluation */
     if (run_baseline) {
-        fprintf(stderr, "Evaluating baseline (default params)...\n");
-        evaluate_config(k_representative, NUM_REPRESENTATIVE, &base_params,
-                        max_iterations, seed, &baseline);
+        if (cp.has_baseline) {
+            baseline = cp.baseline;
+            fprintf(stderr, "Baseline restored from checkpoint: score=%.4f\n",
+                    baseline.composite_score);
+        } else {
+            fprintf(stderr, "Evaluating baseline (default params)...\n");
+            evaluate_config(k_representative, NUM_REPRESENTATIVE, &base_params,
+                            max_iterations, seed, &baseline);
+            cp_write_baseline(&cp, &baseline);
+        }
         fprintf(stderr, "  Baseline score: %.4f (V-gap: %.2f, D-gap: %.2f%%, worst-V: %.0f)\n",
                 baseline.composite_score, baseline.avg_vehicle_gap,
                 baseline.avg_distance_gap_pct, baseline.worst_vehicle_gap);
@@ -654,8 +999,18 @@ int main(int argc, char **argv) {
     if (all_tiers) {
         /* Run all tiers sequentially, carrying best forward */
         int t;
-        for (t = 0; t <= 5; t++) {
+
+        /* Restore base_params from completed tiers in checkpoint */
+        for (t = 0; t < 6 && cp.tier_done[t]; t++) {
+            base_params = cp.tier_best[t];
+            fprintf(stderr, "\n=== Tier %d === (completed, restored from checkpoint)\n", t);
+        }
+
+        for (; t <= 5; t++) {
             fprintf(stderr, "\n=== Tier %d ===\n", t);
+
+            /* Clear results for this tier */
+            memset(results, 0, MAX_CONFIGS * sizeof(*results));
 
             switch (t) {
                 case 0: num_configs = generate_tier0(configs, &base_params); break;
@@ -670,7 +1025,8 @@ int main(int argc, char **argv) {
             fprintf(stderr, "  %d configurations to evaluate\n", num_configs);
             evaluate_configs_parallel(k_representative, NUM_REPRESENTATIVE,
                                      configs, num_configs, max_iterations,
-                                     seed, num_threads, results);
+                                     seed, num_threads, results,
+                                     t, use_checkpoint ? &cp : NULL);
 
             qsort(results, (size_t)num_configs, sizeof(TuneResult), compare_results);
 
@@ -679,6 +1035,9 @@ int main(int argc, char **argv) {
             fprintf(stderr, "  Best score: %.4f (V-gap: %.2f, D-gap: %.2f%%)\n",
                     results[0].composite_score, results[0].avg_vehicle_gap,
                     results[0].avg_distance_gap_pct);
+
+            /* Mark tier as done in checkpoint */
+            cp_write_tier_done(&cp, t, &base_params);
         }
 
         /* Verify final top results */
@@ -690,6 +1049,9 @@ int main(int argc, char **argv) {
     } else {
         /* Single tier */
         fprintf(stderr, "=== Tier %d ===\n", tier);
+
+        /* Clear results */
+        memset(results, 0, MAX_CONFIGS * sizeof(*results));
 
         switch (tier) {
             case 0: num_configs = generate_tier0(configs, &base_params); break;
@@ -704,7 +1066,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "%d configurations to evaluate\n", num_configs);
         evaluate_configs_parallel(k_representative, NUM_REPRESENTATIVE,
                                  configs, num_configs, max_iterations,
-                                 seed, num_threads, results);
+                                 seed, num_threads, results,
+                                 tier, use_checkpoint ? &cp : NULL);
 
         qsort(results, (size_t)num_configs, sizeof(TuneResult), compare_results);
 
@@ -769,5 +1132,6 @@ int main(int argc, char **argv) {
 
     free(configs);
     free(results);
+    cp_free(&cp);
     return 0;
 }
