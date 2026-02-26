@@ -142,6 +142,56 @@ if [[ -z "$OBJ_REL_TOL" ]]; then
     OBJ_REL_TOL="$(jq -r '.defaults.obj_rel_tol // empty' "$BASELINE_FILE")"
 fi
 
+# Compare runs can consume both GLPK and Ralph hard-cap windows. Keep an
+# external timeout floor high enough to avoid truncating valid runs.
+OUTER_TIMEOUT_ORIGINAL="$OUTER_TIMEOUT_SEC"
+OUTER_TIMEOUT_MIN="$(awk -v hc="$HARD_CAP_SEC" 'BEGIN { t = (hc * 2.0) + 10.0; if (t < 30.0) t = 30.0; printf "%.3f", t }')"
+OUTER_TIMEOUT_AUTO_ADJUSTED=0
+if awk -v cur="$OUTER_TIMEOUT_SEC" -v min="$OUTER_TIMEOUT_MIN" 'BEGIN { exit !((cur + 0.0) < (min + 0.0)) }'; then
+    OUTER_TIMEOUT_SEC="$OUTER_TIMEOUT_MIN"
+    OUTER_TIMEOUT_AUTO_ADJUSTED=1
+fi
+
+write_timeout_stub_json() {
+    local json_path="$1"
+    local problem_name="$2"
+    local hard_cap_sec="$3"
+    local outer_timeout_sec="$4"
+    local exit_code="$5"
+    local timeout_ms
+
+    timeout_ms="$(awk -v s="$outer_timeout_sec" 'BEGIN { printf "%.3f", s * 1000.0 }')"
+    jq -n \
+        --arg name "$problem_name" \
+        --arg timeout_ms "$timeout_ms" \
+        --arg hard_cap_sec "$hard_cap_sec" \
+        --arg outer_timeout_sec "$outer_timeout_sec" \
+        --arg exit_code "$exit_code" \
+        '{
+            problem: {name: $name},
+            ralph: {status: "command_timeout", objective: 0, time_ms: ($timeout_ms | tonumber), iterations: 0},
+            glpk: {status: "unknown", objective: 0, time_ms: 0, iterations: 0},
+            validation: {status_match: false, objective_match: false, solution_valid: false},
+            timing: {},
+            performance: {},
+            phase_hotspots: {phase1: {}, phase2: {}},
+            refactor: {all_ms: 0, count: 0, reason_direction_stabilize: 0},
+            lu: {sparse_dense_fallbacks: 0, retry_count: 0, markowitz_failures: 0},
+            diagnosis: {
+                issues: "benchmark command timed out before JSON completion",
+                recommendations: [
+                    "Increase outer timeout for compare mode if command timeouts persist",
+                    "Run this instance standalone with ralph-benchmark for detailed profiling"
+                ]
+            },
+            timeout: {
+                exit_code: ($exit_code | tonumber),
+                hard_cap_sec: ($hard_cap_sec | tonumber),
+                outer_timeout_sec: ($outer_timeout_sec | tonumber)
+            }
+        }' > "$json_path"
+}
+
 if [[ "$NO_BUILD" -eq 0 ]]; then
     make -C "$RALPH_DIR" build-ralph-benchmark >/dev/null
 fi
@@ -210,7 +260,11 @@ echo "  netlib:   $NETLIB_DIR"
 echo "  bench:    $BENCH_EXEC"
 echo "  files:    $total"
 echo "  hard-cap: $HARD_CAP_SEC sec"
-echo "  timeout:  $OUTER_TIMEOUT_SEC sec (external)"
+if [[ "$OUTER_TIMEOUT_AUTO_ADJUSTED" -eq 1 ]]; then
+    echo "  timeout:  $OUTER_TIMEOUT_SEC sec (external, auto-adjusted from $OUTER_TIMEOUT_ORIGINAL sec)"
+else
+    echo "  timeout:  $OUTER_TIMEOUT_SEC sec (external)"
+fi
 echo "  method:   $METHOD"
 if [[ -n "$OBJ_REL_TOL" ]]; then
     echo "  obj-tol:  $OBJ_REL_TOL"
@@ -263,6 +317,9 @@ while IFS= read -r f; do
         > "$json" 2> "$stderr_file"
     ec=$?
     set -e
+    if [[ "$ec" -eq 124 && ! -s "$json" ]]; then
+        write_timeout_stub_json "$json" "$name" "$HARD_CAP_SEC" "$OUTER_TIMEOUT_SEC" "$ec"
+    fi
     printf "%s\t%s\n" "$name" "$ec" >> "$STATUS_TSV"
 done < "$FILES_TXT"
 
