@@ -532,6 +532,11 @@ typedef struct {
     int perf_phase1_dir_stabilize_ratio_gt_100;
     int perf_phase1_dir_stabilize_ratio_gt_300;
     int perf_phase1_dir_stabilize_ratio_gt_1000;
+    int perf_phase1_recompute_after_ratio_breakdown;
+    int perf_phase1_recompute_after_dir_skip;
+    int perf_phase1_recompute_after_dir_refactor;
+    int perf_phase1_recompute_after_pivot_fail_recovery;
+    int perf_phase1_recompute_after_perturb;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;

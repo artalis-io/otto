@@ -73,6 +73,11 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_100 = 1;
     solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_300 = 1;
     solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_1000 = 1;
+    solver.telemetry.perf_phase1_recompute_after_ratio_breakdown = 4;
+    solver.telemetry.perf_phase1_recompute_after_dir_skip = 3;
+    solver.telemetry.perf_phase1_recompute_after_dir_refactor = 2;
+    solver.telemetry.perf_phase1_recompute_after_pivot_fail_recovery = 1;
+    solver.telemetry.perf_phase1_recompute_after_perturb = 5;
     solver.policy.refactor_next_reason = RALPH_REFACTOR_REASON_SETUP;
     solver.telemetry.perf_basis_fastpath_hits = 7;
     solver.policy.periodic_feedback_bias_phase2 = 0.2;
@@ -121,6 +126,16 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 dir ratio >300");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_1000, 0,
                   "reset: phase1 dir ratio >1000");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_ratio_breakdown, 0,
+                  "reset: phase1 recompute ratio breakdown");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_dir_skip, 0,
+                  "reset: phase1 recompute dir skip");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_dir_refactor, 0,
+                  "reset: phase1 recompute dir refactor");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_pivot_fail_recovery, 0,
+                  "reset: phase1 recompute pivot fail recovery");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_perturb, 0,
+                  "reset: phase1 recompute perturb");
     ASSERT_INT_EQ(solver.policy.refactor_next_reason, RALPH_REFACTOR_REASON_OTHER,
                   "reset: next reason");
     ASSERT_INT_EQ(solver.telemetry.perf_basis_fastpath_hits, 0, "reset: basis_fastpath_hits");
@@ -237,6 +252,24 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 dir ratio >300 count");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_1000, 1,
                   "record: phase1 dir ratio >1000 count");
+
+    lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
+    lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
+    lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
+    lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_DIR_REFACTOR);
+    lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY);
+    lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_PERTURB);
+    lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_PERTURB);
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_ratio_breakdown, 1,
+                  "record: phase1 recompute ratio breakdown");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_dir_skip, 2,
+                  "record: phase1 recompute dir skip");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_dir_refactor, 1,
+                  "record: phase1 recompute dir refactor");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_pivot_fail_recovery, 1,
+                  "record: phase1 recompute pivot fail recovery");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_perturb, 2,
+                  "record: phase1 recompute perturb");
 }
 
 static void test_refactor_reason_classifier(void) {
@@ -273,6 +306,11 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_100 = 2;
     solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_300 = 1;
     solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_1000 = 1;
+    solver.telemetry.perf_phase1_recompute_after_ratio_breakdown = 12;
+    solver.telemetry.perf_phase1_recompute_after_dir_skip = 7;
+    solver.telemetry.perf_phase1_recompute_after_dir_refactor = 5;
+    solver.telemetry.perf_phase1_recompute_after_pivot_fail_recovery = 4;
+    solver.telemetry.perf_phase1_recompute_after_perturb = 3;
     solver.policy.periodic_feedback_hint_pressure_phase2 = 0.55;
     solver.policy.soft_lu_cost_gate_enabled = 1;
     solver.policy.soft_lu_cost_gate_defers_phase1 = 3;
@@ -324,6 +362,16 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 dir ratio >300");
     ASSERT_INT_EQ(snap.perf_phase1_dir_stabilize_ratio_gt_1000, 1,
                   "solver_snapshot: phase1 dir ratio >1000");
+    ASSERT_INT_EQ(snap.perf_phase1_recompute_after_ratio_breakdown, 12,
+                  "solver_snapshot: phase1 recompute ratio breakdown");
+    ASSERT_INT_EQ(snap.perf_phase1_recompute_after_dir_skip, 7,
+                  "solver_snapshot: phase1 recompute dir skip");
+    ASSERT_INT_EQ(snap.perf_phase1_recompute_after_dir_refactor, 5,
+                  "solver_snapshot: phase1 recompute dir refactor");
+    ASSERT_INT_EQ(snap.perf_phase1_recompute_after_pivot_fail_recovery, 4,
+                  "solver_snapshot: phase1 recompute pivot fail recovery");
+    ASSERT_INT_EQ(snap.perf_phase1_recompute_after_perturb, 3,
+                  "solver_snapshot: phase1 recompute perturb");
     ASSERT_DBL_EQ(snap.periodic_feedback_hint_pressure_phase2, 0.55,
                   "solver_snapshot: feedback pressure phase2");
     ASSERT_INT_EQ(snap.soft_lu_cost_gate_enabled, 1,

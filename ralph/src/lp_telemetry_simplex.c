@@ -254,3 +254,28 @@ void lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(
         }
     }
 }
+
+void lp_telemetry_record_phase1_recompute(SimplexSolver *solver,
+                                          LPPhase1RecomputeReason reason) {
+    if (!solver_telemetry_enabled(solver)) return;
+
+    switch (reason) {
+        case LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN:
+            solver->telemetry.perf_phase1_recompute_after_ratio_breakdown++;
+            break;
+        case LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP:
+            solver->telemetry.perf_phase1_recompute_after_dir_skip++;
+            break;
+        case LP_PHASE1_RECOMPUTE_REASON_DIR_REFACTOR:
+            solver->telemetry.perf_phase1_recompute_after_dir_refactor++;
+            break;
+        case LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY:
+            solver->telemetry.perf_phase1_recompute_after_pivot_fail_recovery++;
+            break;
+        case LP_PHASE1_RECOMPUTE_REASON_PERTURB:
+            solver->telemetry.perf_phase1_recompute_after_perturb++;
+            break;
+        default:
+            break;
+    }
+}

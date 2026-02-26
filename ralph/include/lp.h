@@ -607,6 +607,11 @@ typedef struct {
     int perf_phase1_dir_stabilize_ratio_gt_100;
     int perf_phase1_dir_stabilize_ratio_gt_300;
     int perf_phase1_dir_stabilize_ratio_gt_1000;
+    int perf_phase1_recompute_after_ratio_breakdown;
+    int perf_phase1_recompute_after_dir_skip;
+    int perf_phase1_recompute_after_dir_refactor;
+    int perf_phase1_recompute_after_pivot_fail_recovery;
+    int perf_phase1_recompute_after_perturb;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -853,6 +858,11 @@ typedef struct {
     int perf_phase1_dir_stabilize_ratio_gt_100;
     int perf_phase1_dir_stabilize_ratio_gt_300;
     int perf_phase1_dir_stabilize_ratio_gt_1000;
+    int perf_phase1_recompute_after_ratio_breakdown;
+    int perf_phase1_recompute_after_dir_skip;
+    int perf_phase1_recompute_after_dir_refactor;
+    int perf_phase1_recompute_after_pivot_fail_recovery;
+    int perf_phase1_recompute_after_perturb;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -1017,6 +1027,14 @@ typedef enum {
     LP_SOLVER_STAGE_TRANSITION = 3,
     LP_SOLVER_STAGE_PHASE2 = 4
 } LPSolverStage;
+
+typedef enum {
+    LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN = 0,
+    LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP = 1,
+    LP_PHASE1_RECOMPUTE_REASON_DIR_REFACTOR = 2,
+    LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY = 3,
+    LP_PHASE1_RECOMPUTE_REASON_PERTURB = 4
+} LPPhase1RecomputeReason;
 
 /* LP model functions */
 LPModel* lp_model_create(void);
@@ -1236,6 +1254,8 @@ void lp_telemetry_record_phase1_dir_stabilize_force(SimplexSolver *solver,
 void lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(
     SimplexSolver *solver,
     double dir_inf_ratio);
+void lp_telemetry_record_phase1_recompute(SimplexSolver *solver,
+                                          LPPhase1RecomputeReason reason);
 void lp_telemetry_lu_record_dense_factorize_ms(LUFactorization *lu,
                                                double elapsed_ms);
 void lp_telemetry_lu_record_dense_factorize_timed(LUFactorization *lu,

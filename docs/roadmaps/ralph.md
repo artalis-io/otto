@@ -3074,6 +3074,11 @@ Phase C gates and artifacts:
 - `make -C ralph test-netlib-gate` PASS (`/tmp/netlib-regression-gate-20260224-094628`)
   - summary: 84 files, timeout files 29, command/status/objective/invalid mismatches 0, dense fallback files 0, unexpected regressions 0
 
+#### P1-ICR Active Plan (2026-02-26)
+
+- Detailed todo execution plan: `docs/roadmaps/ralph_phase1_iteration_control_plan.md`
+- Current implementation step: `P1-A` (telemetry-only recompute-cause instrumentation).
+
 Focused canary impact (Phase B vs Phase C):
 - artifacts: `/tmp/phasec-focused-*.json`
 - `degen3`:
