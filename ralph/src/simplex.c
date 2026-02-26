@@ -5250,14 +5250,23 @@ static int simplex_phase1(SimplexSolver *solver) {
             double force_refactor_trigger =
                 RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER * PHASE1_DIR_INF_FORCE_REFACTOR_MULT;
             int dir_stabilize_cooldown_target;
-            int force_dir_refactor = (dir_inf > force_refactor_trigger) ||
-                                     lu_needs_refactorization(tab->lu);
+            int force_dir_refactor_extreme = (dir_inf > force_refactor_trigger);
+            int force_dir_refactor_lu_health = lu_needs_refactorization(tab->lu);
+            int force_dir_refactor = force_dir_refactor_extreme ||
+                                     force_dir_refactor_lu_health;
             if (dir_stabilize_repeat_count < 1000000) {
                 dir_stabilize_repeat_count++;
             }
             dir_stabilize_cooldown_target =
                 lp_refactor_policy_phase1_dir_stabilize_cooldown_updates(
                     tab->m, degenerate_count, dir_stabilize_repeat_count);
+
+            if (dir_stabilize_cooldown > 0 && force_dir_refactor) {
+                lp_telemetry_record_phase1_dir_stabilize_force(
+                    solver,
+                    force_dir_refactor_extreme,
+                    force_dir_refactor_lu_health);
+            }
 
             if (dir_stabilize_cooldown > 0 && !force_dir_refactor) {
                 if (solver->verbose >= 2) {

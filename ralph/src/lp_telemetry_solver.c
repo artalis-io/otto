@@ -74,6 +74,8 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_refactor_periodic_policy = 0;
     solver->telemetry.perf_phase1_refactor_periodic_lu_health = 0;
     solver->telemetry.perf_phase1_refactor_safety_forced = 0;
+    solver->telemetry.perf_phase1_dir_stabilize_force_extreme_dir = 0;
+    solver->telemetry.perf_phase1_dir_stabilize_force_lu_health = 0;
 
     solver->telemetry.perf_phase2_pricing_ms = 0.0;
     solver->telemetry.perf_phase2_ratio_ms = 0.0;
@@ -334,6 +336,8 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_refactor_periodic_policy);
     COPY_SOLVER_FIELD(perf_phase1_refactor_periodic_lu_health);
     COPY_SOLVER_FIELD(perf_phase1_refactor_safety_forced);
+    COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_force_extreme_dir);
+    COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_force_lu_health);
 
     COPY_SOLVER_FIELD(perf_phase2_pricing_ms);
     COPY_SOLVER_FIELD(perf_phase2_ratio_ms);
