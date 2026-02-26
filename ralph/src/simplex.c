@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <time.h>
+#include <limits.h>
 #include "lp.h"
 #include "lp_refactor_policy.h"
 #include "lp_log.h"
@@ -136,6 +137,14 @@ typedef enum {
 #define PHASE1_AUTO_DANTZIG_MIN_M 700
 #define PHASE1_AUTO_DANTZIG_MAX_M 1200
 #define PHASE1_AUTO_DANTZIG_DEGEN_TRIGGER 20
+#define PHASE1_NO_PIVOT_FORCE_MIN_M 700
+#define PHASE1_NO_PIVOT_FORCE_BASE_TRIGGER 48
+#define PHASE1_NO_PIVOT_FORCE_MIN_TRIGGER 24
+#define PHASE1_NO_PIVOT_FORCE_COOLDOWN_UPDATES 24
+#define PHASE1_SOFT_LU_POLICY_COOLDOWN_MIN_M 700
+#define PHASE1_SOFT_LU_POLICY_COOLDOWN_DEGEN_TRIGGER 20
+#define PHASE1_SOFT_LU_POLICY_COOLDOWN_MIN_UPDATES 12
+#define PHASE1_SOFT_LU_POLICY_COOLDOWN_MAX_UPDATES 48
 #define SOFT_LU_COST_EWMA_ALPHA 0.20
 #define SOFT_LU_MAX_CONSEC_DEFER_PHASE1 6
 #define SOFT_LU_MAX_CONSEC_DEFER_PHASE2 4
@@ -849,6 +858,106 @@ int simplex_periodic_cost_defer_plan_for_test(int phase,
     if (cap_blocked_out) *cap_blocked_out = cap_blocked;
     if (next_consecutive_defers_out) *next_consecutive_defers_out = next_consecutive;
     return should_defer;
+}
+
+static const char* phase1_no_pivot_force_reason_string(
+    LPPhase1NoPivotForceReason reason) {
+    switch (reason) {
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN:
+            return "ratio_breakdown";
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP:
+            return "dir_skip";
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL:
+            return "pivot_fail";
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN:
+        default:
+            return "unknown";
+    }
+}
+
+static int phase1_no_pivot_force_threshold(int m, int degenerate_count) {
+    int threshold = PHASE1_NO_PIVOT_FORCE_BASE_TRIGGER;
+    if (m >= 1200) threshold -= 8;
+    if (degenerate_count >= 80) threshold -= 8;
+    if (degenerate_count >= 160) threshold -= 8;
+    if (threshold < PHASE1_NO_PIVOT_FORCE_MIN_TRIGGER) {
+        threshold = PHASE1_NO_PIVOT_FORCE_MIN_TRIGGER;
+    }
+    return threshold;
+}
+
+static int phase1_note_no_pivot_and_maybe_force(SimplexSolver *solver,
+                                                int m,
+                                                int degenerate_count,
+                                                LPPhase1NoPivotForceReason reason,
+                                                int *streak_io,
+                                                int *cooldown_io) {
+    int threshold = 0;
+    if (!streak_io || !cooldown_io) return 0;
+    if (*streak_io < INT_MAX) (*streak_io)++;
+    lp_telemetry_record_phase1_no_pivot_event(solver);
+    if (*cooldown_io > 0) return 0;
+    if (m < PHASE1_NO_PIVOT_FORCE_MIN_M) return 0;
+    threshold = phase1_no_pivot_force_threshold(m, degenerate_count);
+    if (*streak_io < threshold) return 0;
+    *streak_io = 0;
+    *cooldown_io = PHASE1_NO_PIVOT_FORCE_COOLDOWN_UPDATES;
+    lp_telemetry_record_phase1_no_pivot_force(solver, reason);
+    return 1;
+}
+
+static int phase1_soft_lu_policy_cooldown_updates(int m,
+                                                  int degenerate_count,
+                                                  int periodic_interval) {
+    int cooldown = PHASE1_SOFT_LU_POLICY_COOLDOWN_MIN_UPDATES;
+    if (m < PHASE1_SOFT_LU_POLICY_COOLDOWN_MIN_M) return 0;
+    if (degenerate_count < PHASE1_SOFT_LU_POLICY_COOLDOWN_DEGEN_TRIGGER) return 0;
+    if (periodic_interval > 0) {
+        int half = periodic_interval / 2;
+        if (half > cooldown) cooldown = half;
+    }
+    if (cooldown > PHASE1_SOFT_LU_POLICY_COOLDOWN_MAX_UPDATES) {
+        cooldown = PHASE1_SOFT_LU_POLICY_COOLDOWN_MAX_UPDATES;
+    }
+    return cooldown;
+}
+
+int simplex_phase1_no_pivot_force_plan_for_test(int m,
+                                                 int degenerate_count,
+                                                 int streak,
+                                                 int cooldown,
+                                                 int reason,
+                                                 int *next_streak_out,
+                                                 int *next_cooldown_out) {
+    int should_force = phase1_note_no_pivot_and_maybe_force(NULL,
+                                                             m,
+                                                             degenerate_count,
+                                                             (LPPhase1NoPivotForceReason)reason,
+                                                             &streak,
+                                                             &cooldown);
+    if (next_streak_out) *next_streak_out = streak;
+    if (next_cooldown_out) *next_cooldown_out = cooldown;
+    return should_force;
+}
+
+int simplex_phase1_soft_lu_policy_cooldown_plan_for_test(
+    int m,
+    int degenerate_count,
+    int periodic_interval,
+    int lu_soft_cost_deferred,
+    int periodic_policy_cooldown,
+    int *next_cooldown_out) {
+    int next_cooldown = periodic_policy_cooldown;
+    if (lu_soft_cost_deferred) {
+        int soft_cooldown = phase1_soft_lu_policy_cooldown_updates(m,
+                                                                    degenerate_count,
+                                                                    periodic_interval);
+        if (soft_cooldown > next_cooldown) {
+            next_cooldown = soft_cooldown;
+        }
+    }
+    if (next_cooldown_out) *next_cooldown_out = next_cooldown;
+    return next_cooldown > periodic_policy_cooldown;
 }
 
 /* FNV-1a style mixer for deterministic trace signatures. */
@@ -5039,6 +5148,11 @@ static int simplex_phase1(SimplexSolver *solver) {
     int dir_stabilize_repeat_count = 0;
     int dir_stabilize_moderate_defer_pending = 0;
     int no_entering_cleanup_streak = 0;
+    int phase1_no_pivot_streak = 0;
+    int phase1_no_pivot_force_pending = 0;
+    LPPhase1NoPivotForceReason phase1_no_pivot_force_reason =
+        LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
+    int phase1_no_pivot_force_cooldown = 0;
     int phase1_rc_only_streak = 0;
     int periodic_policy_cooldown = 0;
     double periodic_policy_pressure_decay = 0.0;
@@ -5096,6 +5210,9 @@ static int simplex_phase1(SimplexSolver *solver) {
         if (dir_stabilize_cooldown > 0) {
             dir_stabilize_cooldown--;
         }
+        if (phase1_no_pivot_force_cooldown > 0) {
+            phase1_no_pivot_force_cooldown--;
+        }
         if (periodic_policy_cooldown > 0) {
             periodic_policy_cooldown--;
         }
@@ -5117,6 +5234,27 @@ static int simplex_phase1(SimplexSolver *solver) {
             if (solver->verbose >= 2) {
                 LP_LOG_STDERR("[simplex_phase1] Switching pricing to Dantzig under large degenerate Phase 1 workload (m=%d, degen=%d)\n",
                         tab->m, degenerate_count);
+            }
+        }
+
+        if (phase1_no_pivot_force_pending) {
+            phase1_no_pivot_force_pending = 0;
+            if (solver->verbose >= 2) {
+                LP_LOG_STDERR("[simplex_phase1] No-pivot streak force refactor (%s)\n",
+                        phase1_no_pivot_force_reason_string(phase1_no_pivot_force_reason));
+            }
+            phase1_no_pivot_force_reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
+            if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_DIRECTION_STABILIZE) == 0) {
+                use_bland = 1;
+                ratio_breakdown_count = 0;
+                ratio_breakdown_last_entering = -1;
+                ratio_breakdown_same_entering_streak = 0;
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_DIR_REFACTOR);
+                continue;
             }
         }
 
@@ -5255,6 +5393,17 @@ static int simplex_phase1(SimplexSolver *solver) {
 
         if (ratio_status != 0) {
             phase1_trace_record_no_entering(solver, iter, ratio_status);
+            if (phase1_note_no_pivot_and_maybe_force(
+                    solver,
+                    tab->m,
+                    degenerate_count,
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
+                    &phase1_no_pivot_streak,
+                    &phase1_no_pivot_force_cooldown)) {
+                phase1_no_pivot_force_pending = 1;
+                phase1_no_pivot_force_reason =
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN;
+            }
 
             /* "Unbounded" in Phase 1 is typically numerical, not structural.
              * Try to recover via refactorization and conservative pricing first. */
@@ -5425,6 +5574,17 @@ static int simplex_phase1(SimplexSolver *solver) {
                                                tab,
                                                degenerate_count,
                                                &phase1_rc_only_streak);
+                if (phase1_note_no_pivot_and_maybe_force(
+                        solver,
+                        tab->m,
+                        degenerate_count,
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+                        &phase1_no_pivot_streak,
+                        &phase1_no_pivot_force_cooldown)) {
+                    phase1_no_pivot_force_pending = 1;
+                    phase1_no_pivot_force_reason =
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+                }
                 continue;
             }
 
@@ -5448,6 +5608,17 @@ static int simplex_phase1(SimplexSolver *solver) {
                                                tab,
                                                degenerate_count,
                                                &phase1_rc_only_streak);
+                if (phase1_note_no_pivot_and_maybe_force(
+                        solver,
+                        tab->m,
+                        degenerate_count,
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+                        &phase1_no_pivot_streak,
+                        &phase1_no_pivot_force_cooldown)) {
+                    phase1_no_pivot_force_pending = 1;
+                    phase1_no_pivot_force_reason =
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+                }
                 continue;
             }
             dir_stabilize_moderate_defer_pending = 0;
@@ -5521,6 +5692,17 @@ static int simplex_phase1(SimplexSolver *solver) {
                     tab,
                     &phase1_rc_only_streak,
                     LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
+                if (phase1_note_no_pivot_and_maybe_force(
+                        solver,
+                        tab->m,
+                        degenerate_count,
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+                        &phase1_no_pivot_streak,
+                        &phase1_no_pivot_force_cooldown)) {
+                    phase1_no_pivot_force_pending = 1;
+                    phase1_no_pivot_force_reason =
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+                }
                 continue;
             }
             dir_stabilize_cooldown = dir_stabilize_cooldown_target;
@@ -5570,6 +5752,17 @@ static int simplex_phase1(SimplexSolver *solver) {
             lp_telemetry_record_pivot_timed(solver, 1, t_pivot_ms);
         }
         if (pivot_status != 0) {
+            if (phase1_note_no_pivot_and_maybe_force(
+                    solver,
+                    tab->m,
+                    degenerate_count,
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL,
+                    &phase1_no_pivot_streak,
+                    &phase1_no_pivot_force_cooldown)) {
+                phase1_no_pivot_force_pending = 1;
+                phase1_no_pivot_force_reason =
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL;
+            }
             int pivot_fail_reason = tab->trace_last_fail_reason;
             if (entering == fail_entering &&
                 leaving == fail_leaving_pos &&
@@ -5614,6 +5807,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                     if (alt_pivot_status == 0) {
                         fail_reason = PHASE1_PIVOT_FAIL_NONE;
                         fail_repeat_count = 0;
+                        phase1_no_pivot_streak = 0;
                         continue;
                     } else {
                         phase1_trace_record_pivot_failure(solver, tab, iter, fail_repeat_count);
@@ -5774,6 +5968,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             phase1_trace_emit_summary(solver, RALPH_STATUS_ITERATION_LIMIT);
             return -1;
         }
+        phase1_no_pivot_streak = 0;
         fail_reason = PHASE1_PIVOT_FAIL_NONE;
         fail_repeat_count = 0;
         ratio_breakdown_count = 0;
@@ -5899,6 +6094,16 @@ static int simplex_phase1(SimplexSolver *solver) {
                                 degenerate_count);
                     }
                 }
+            }
+        }
+        if (lu_soft_cost_deferred) {
+            int soft_policy_cooldown = phase1_soft_lu_policy_cooldown_updates(
+                tab->m,
+                degenerate_count,
+                periodic_policy.interval);
+            if (soft_policy_cooldown > periodic_policy_cooldown) {
+                periodic_policy_cooldown = soft_policy_cooldown;
+                lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(solver);
             }
         }
         if (!lu_refactor_needed) {

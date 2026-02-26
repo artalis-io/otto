@@ -191,6 +191,9 @@ typedef struct {
     int mkz_circuit_trips;    /* Markowitz circuit breaker trip events */
     int mkz_circuit_skips;    /* Markowitz attempts skipped by circuit breaker */
     int mkz_circuit_resets;   /* Circuit streak reset after successful Markowitz path */
+    int mkz_profile_retry_attempts; /* Numeric retry with relaxed Markowitz profile */
+    int mkz_profile_retry_successes; /* Relaxed Markowitz profile recovered factorization */
+    int mkz_profile_retry_failures;  /* Relaxed Markowitz profile still failed */
 
     /* Sparse-efficient fallback telemetry */
     int sparse_dense_fallbacks;  /* lu_factorize_sparse_efficient -> lu_factorize_dense */
@@ -619,6 +622,12 @@ typedef struct {
     int perf_phase1_ratio_breakdown_retries;
     int perf_phase1_ratio_breakdown_escalations;
     int perf_phase1_pivot_fail_recovery_exclusions;
+    int perf_phase1_no_pivot_events;
+    int perf_phase1_no_pivot_forced_refactor;
+    int perf_phase1_no_pivot_forced_ratio_breakdown;
+    int perf_phase1_no_pivot_forced_dir_skip;
+    int perf_phase1_no_pivot_forced_pivot_fail;
+    int perf_phase1_soft_lu_policy_cooldown_defers;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -877,6 +886,12 @@ typedef struct {
     int perf_phase1_ratio_breakdown_retries;
     int perf_phase1_ratio_breakdown_escalations;
     int perf_phase1_pivot_fail_recovery_exclusions;
+    int perf_phase1_no_pivot_events;
+    int perf_phase1_no_pivot_forced_refactor;
+    int perf_phase1_no_pivot_forced_ratio_breakdown;
+    int perf_phase1_no_pivot_forced_dir_skip;
+    int perf_phase1_no_pivot_forced_pivot_fail;
+    int perf_phase1_soft_lu_policy_cooldown_defers;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -979,6 +994,9 @@ typedef struct {
     int mkz_circuit_trips;
     int mkz_circuit_skips;
     int mkz_circuit_resets;
+    int mkz_profile_retry_attempts;
+    int mkz_profile_retry_successes;
+    int mkz_profile_retry_failures;
 
     int sparse_dense_fallbacks;
     int used_dense_fallback_last;
@@ -1049,6 +1067,13 @@ typedef enum {
     LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY = 3,
     LP_PHASE1_RECOMPUTE_REASON_PERTURB = 4
 } LPPhase1RecomputeReason;
+
+typedef enum {
+    LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN = 0,
+    LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN = 1,
+    LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP = 2,
+    LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL = 3
+} LPPhase1NoPivotForceReason;
 
 /* LP model functions */
 LPModel* lp_model_create(void);
@@ -1277,6 +1302,11 @@ void lp_telemetry_record_phase1_recompute_guard_forced_full(SimplexSolver *solve
 void lp_telemetry_record_phase1_ratio_breakdown_retry(SimplexSolver *solver);
 void lp_telemetry_record_phase1_ratio_breakdown_escalation(SimplexSolver *solver);
 void lp_telemetry_record_phase1_pivot_fail_recovery_exclusion(SimplexSolver *solver);
+void lp_telemetry_record_phase1_no_pivot_event(SimplexSolver *solver);
+void lp_telemetry_record_phase1_no_pivot_force(SimplexSolver *solver,
+                                               LPPhase1NoPivotForceReason reason);
+void lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(
+    SimplexSolver *solver);
 void lp_telemetry_lu_record_dense_factorize_ms(LUFactorization *lu,
                                                double elapsed_ms);
 void lp_telemetry_lu_record_dense_factorize_timed(LUFactorization *lu,
@@ -1327,5 +1357,8 @@ void lp_telemetry_lu_mark_mkz_reserved_fallback_reject(LUFactorization *lu);
 void lp_telemetry_lu_mark_mkz_circuit_trip(LUFactorization *lu);
 void lp_telemetry_lu_mark_mkz_circuit_skip(LUFactorization *lu);
 void lp_telemetry_lu_mark_mkz_circuit_reset(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_profile_retry_attempt(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_profile_retry_success(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_profile_retry_failure(LUFactorization *lu);
 
 #endif /* RALPH_LP_H */

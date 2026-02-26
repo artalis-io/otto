@@ -212,3 +212,18 @@ void lp_telemetry_lu_mark_mkz_circuit_reset(LUFactorization *lu) {
     if (!lu_telemetry_enabled(lu)) return;
     lu->telemetry.mkz_circuit_resets++;
 }
+
+void lp_telemetry_lu_mark_mkz_profile_retry_attempt(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.mkz_profile_retry_attempts++;
+}
+
+void lp_telemetry_lu_mark_mkz_profile_retry_success(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.mkz_profile_retry_successes++;
+}
+
+void lp_telemetry_lu_mark_mkz_profile_retry_failure(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.mkz_profile_retry_failures++;
+}

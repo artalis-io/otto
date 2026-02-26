@@ -127,6 +127,14 @@ static void test_markowitz_failure_reason_counters(void) {
            "failure counters: Markowitz circuit skips some repeated attempts");
     ASSERT(lu->telemetry.mkz_calls < 9,
            "failure counters: circuit breaker reduced Markowitz attempts");
+    ASSERT(lu->telemetry.mkz_profile_retry_attempts > 0,
+           "failure counters: retry profile attempted");
+    ASSERT(lu->telemetry.mkz_profile_retry_failures > 0,
+           "failure counters: retry profile failure counted");
+    ASSERT_INT_EQ(lu->telemetry.mkz_profile_retry_attempts,
+                  lu->telemetry.mkz_profile_retry_successes +
+                  lu->telemetry.mkz_profile_retry_failures,
+                  "failure counters: retry profile attempts classified");
     ASSERT_INT_EQ(lu->telemetry.mkz_fail_workspace, 0, "failure counters: no workspace failure");
     ASSERT_INT_EQ(lu->telemetry.mkz_fail_capacity, 0, "failure counters: no capacity failure");
 

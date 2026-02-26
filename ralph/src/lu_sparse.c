@@ -1885,6 +1885,10 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
 #define MARKOWITZ_MAX_SEARCH  3     /* Candidates per degree bucket */
 #define MARKOWITZ_SINGULAR_RETRY_THRESHOLD 0.02 /* Relaxed threshold for one singular micro-retry */
 #define MARKOWITZ_RESERVED_RELAX_RATIO 0.1 /* Keep non-reserved if within 10x of reserved best */
+#define MARKOWITZ_RETRY_THRESHOLD 0.02 /* Secondary retry profile threshold ratio */
+#define MARKOWITZ_RETRY_MAX_SEARCH 8   /* Secondary retry profile candidate budget */
+#define MARKOWITZ_RETRY_SINGULAR_THRESHOLD 0.005 /* Retry profile singular scan threshold */
+#define MARKOWITZ_RETRY_RESERVED_RELAX_RATIO 0.05 /* Retry profile reserved-row relax */
 #define MARKOWITZ_CIRCUIT_BAD_STREAK 3 /* Trip breaker after this many bad outcomes */
 #define MARKOWITZ_CIRCUIT_SKIP_BUDGET 128 /* Skip this many same-structure Markowitz attempts */
 #define MARKOWITZ_FILL_GAP    8     /* Extra slots per column/row for fill-in */
@@ -2027,7 +2031,10 @@ static int lu_factorize_markowitz(
     int allow_regularization, int max_regularizations, int *num_regularized,
     int *L_row, int *L_col, double *L_val, int *L_nnz_out, int L_capacity,
     int *U_row, int *U_col, double *U_val, int *U_nnz_out, int U_capacity,
-    int *mkz_col_perm, int pool_mult, double *workspace, size_t workspace_doubles)
+    int *mkz_col_perm, int pool_mult,
+    double threshold_ratio_base, int max_search_base,
+    double singular_retry_threshold, double reserved_relax_ratio,
+    double *workspace, size_t workspace_doubles)
 {
     /* SVA pool sizing: MULT × initial nnz for both row and column pools */
     int pool_cap = 0;
@@ -2211,6 +2218,19 @@ static int lu_factorize_markowitz(
     *num_regularized = 0;
     for (int jj = 0; jj < k; jj++) mkz_col_perm[jj] = -1;
 
+    if (!(threshold_ratio_base > 0.0)) {
+        threshold_ratio_base = MARKOWITZ_THRESHOLD;
+    }
+    if (max_search_base < 1) {
+        max_search_base = MARKOWITZ_MAX_SEARCH;
+    }
+    if (!(singular_retry_threshold > 0.0)) {
+        singular_retry_threshold = MARKOWITZ_SINGULAR_RETRY_THRESHOLD;
+    }
+    if (!(reserved_relax_ratio > 0.0)) {
+        reserved_relax_ratio = MARKOWITZ_RESERVED_RELAX_RATIO;
+    }
+
     (void)0;  /* active rows/cols tracked implicitly by degree lists */
 
     for (int step = 0; step < k; step++) {
@@ -2231,10 +2251,10 @@ static int lu_factorize_markowitz(
                 if ((long long)(d - 1) >= best_cost && best_cost < (long long)m * m + 1)
                     break;
                 int cand = 0;
-                int max_search = singular_retry_used ? k : MARKOWITZ_MAX_SEARCH;
+                int max_search = singular_retry_used ? k : max_search_base;
                 double threshold_ratio = singular_retry_used
-                    ? MARKOWITZ_SINGULAR_RETRY_THRESHOLD
-                    : MARKOWITZ_THRESHOLD;
+                    ? singular_retry_threshold
+                    : threshold_ratio_base;
                 for (int jj = dg_head[d]; jj >= 0 && cand < max_search; jj = dg_next[jj]) {
                     double thr = threshold_ratio * col_max[jj];
                     int s = cv_ptr[jj], n2 = cv_len[jj];
@@ -2337,7 +2357,7 @@ static int lu_factorize_markowitz(
                         if (nonres_col < 0 || nonres_val < pivot_tol) {
                             use_reserved = 1;
                         } else if (nonres_val <
-                                   MARKOWITZ_RESERVED_RELAX_RATIO * reserved_val) {
+                                   reserved_relax_ratio * reserved_val) {
                             use_reserved = 1;
                         }
 
@@ -2786,77 +2806,143 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
         int *mkz_col_perm = NULL;
         int mkz_reg = 0;
         int rc = MKZ_FAIL_NONE;
+        int rc_final = MKZ_FAIL_NONE;
         int pool_mult = lu->mkz_pool_mult_hint;
+        int profile_count = 2;
         if (pool_mult < MARKOWITZ_POOL_MULT) pool_mult = MARKOWITZ_POOL_MULT;
         if (pool_mult > MARKOWITZ_POOL_MAX_MULT) pool_mult = MARKOWITZ_POOL_MAX_MULT;
 
-        while (1) {
-            int pool_cap_dummy = 0;
-            size_t mkz_need = 0;
-            if (mkz_compute_workspace_requirements(mkz_init_nnz, m, k, pool_mult,
-                                                   &pool_cap_dummy, &mkz_need) != 0) {
-                rc = MKZ_FAIL_WORKSPACE;
+        for (int profile_idx = 0; profile_idx < profile_count; profile_idx++) {
+            double profile_threshold_ratio = (profile_idx == 0)
+                ? MARKOWITZ_THRESHOLD
+                : MARKOWITZ_RETRY_THRESHOLD;
+            int profile_max_search = (profile_idx == 0)
+                ? MARKOWITZ_MAX_SEARCH
+                : MARKOWITZ_RETRY_MAX_SEARCH;
+            double profile_singular_retry_threshold = (profile_idx == 0)
+                ? MARKOWITZ_SINGULAR_RETRY_THRESHOLD
+                : MARKOWITZ_RETRY_SINGULAR_THRESHOLD;
+            double profile_reserved_relax_ratio = (profile_idx == 0)
+                ? MARKOWITZ_RESERVED_RELAX_RATIO
+                : MARKOWITZ_RETRY_RESERVED_RELAX_RATIO;
+            int pool_mult_profile = pool_mult;
+
+            if (profile_idx > 0) {
+                lp_telemetry_lu_mark_mkz_profile_retry_attempt(lu);
+            }
+
+            while (1) {
+                int pool_cap_dummy = 0;
+                size_t mkz_need = 0;
+                if (mkz_compute_workspace_requirements(mkz_init_nnz, m, k, pool_mult_profile,
+                                                       &pool_cap_dummy, &mkz_need) != 0) {
+                    rc = MKZ_FAIL_WORKSPACE;
+                    lp_telemetry_lu_mark_mkz_attempt(lu);
+                    mkz_record_failure_reason(lu, rc);
+                    break;
+                }
+
+                if (mkz_need > ((size_t)-1) - mkz_perm_doubles ||
+                    mkz_workspace_reserve(lu, mkz_perm_doubles + mkz_need) != 0) {
+                    rc = MKZ_FAIL_WORKSPACE;
+                    lp_telemetry_lu_mark_mkz_attempt(lu);
+                    mkz_record_failure_reason(lu, rc);
+                    break;
+                }
+
+                mkz_col_perm = (int *)lu->mkz_work;
+                double *mkz_workspace = lu->mkz_work + mkz_perm_doubles;
+                size_t mkz_ws_doubles = lu->mkz_work_capacity - mkz_perm_doubles;
+
                 lp_telemetry_lu_mark_mkz_attempt(lu);
+                t_stage_start_ms = lp_telemetry_timer_start();
+                rc = lu_factorize_markowitz(
+                    lu, B, col_order, m, k, mkz_init_nnz, row_perm, row_pos, lu->pivot_tol,
+                    row_is_identity,
+                    lu->redundant_rows, lu->num_redundant,
+                    lu->allow_regularization, lu->max_regularizations, &mkz_reg,
+                    L_row, L_col, L_val, &L_nnz, lu->coo_capacity,
+                    U_row, U_col, U_val, &U_nnz, lu->coo_capacity,
+                    mkz_col_perm, pool_mult_profile,
+                    profile_threshold_ratio, profile_max_search,
+                    profile_singular_retry_threshold, profile_reserved_relax_ratio,
+                    mkz_workspace, mkz_ws_doubles);
+                t_markowitz_numeric_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
+                if (rc == 0) break;
                 mkz_record_failure_reason(lu, rc);
-                break;
-            }
+                if (rc != MKZ_FAIL_POOL || pool_mult_profile >= MARKOWITZ_POOL_MAX_MULT) break;
 
-            if (mkz_need > ((size_t)-1) - mkz_perm_doubles ||
-                mkz_workspace_reserve(lu, mkz_perm_doubles + mkz_need) != 0) {
-                rc = MKZ_FAIL_WORKSPACE;
-                lp_telemetry_lu_mark_mkz_attempt(lu);
-                mkz_record_failure_reason(lu, rc);
-                break;
-            }
+                {
+                    int next_pool_mult = pool_mult_profile * 2;
+                    if (next_pool_mult < MARKOWITZ_POOL_RETRY_MULT) {
+                        next_pool_mult = MARKOWITZ_POOL_RETRY_MULT;
+                    }
+                    if (next_pool_mult <= pool_mult_profile) {
+                        next_pool_mult = pool_mult_profile + 1;
+                    }
+                    if (next_pool_mult > MARKOWITZ_POOL_MAX_MULT) {
+                        next_pool_mult = MARKOWITZ_POOL_MAX_MULT;
+                    }
+                    pool_mult_profile = next_pool_mult;
+                    lu->mkz_pool_mult_hint = pool_mult_profile;
+                }
 
-            mkz_col_perm = (int *)lu->mkz_work;
-            double *mkz_workspace = lu->mkz_work + mkz_perm_doubles;
-            size_t mkz_ws_doubles = lu->mkz_work_capacity - mkz_perm_doubles;
-
-            lp_telemetry_lu_mark_mkz_attempt(lu);
-            t_stage_start_ms = lp_telemetry_timer_start();
-            rc = lu_factorize_markowitz(
-                lu, B, col_order, m, k, mkz_init_nnz, row_perm, row_pos, lu->pivot_tol,
-                row_is_identity,
-                lu->redundant_rows, lu->num_redundant,
-                lu->allow_regularization, lu->max_regularizations, &mkz_reg,
-                L_row, L_col, L_val, &L_nnz, lu->coo_capacity,
-                U_row, U_col, U_val, &U_nnz, lu->coo_capacity,
-                mkz_col_perm, pool_mult, mkz_workspace, mkz_ws_doubles);
-            t_markowitz_numeric_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
-            if (rc == 0) break;
-            mkz_record_failure_reason(lu, rc);
-            if (rc != MKZ_FAIL_POOL || pool_mult >= MARKOWITZ_POOL_MAX_MULT) break;
-
-            int next_pool_mult = pool_mult * 2;
-            if (next_pool_mult < MARKOWITZ_POOL_RETRY_MULT) {
-                next_pool_mult = MARKOWITZ_POOL_RETRY_MULT;
-            }
-            if (next_pool_mult <= pool_mult) {
-                next_pool_mult = pool_mult + 1;
-            }
-            if (next_pool_mult > MARKOWITZ_POOL_MAX_MULT) {
-                next_pool_mult = MARKOWITZ_POOL_MAX_MULT;
-            }
-            pool_mult = next_pool_mult;
-            lu->mkz_pool_mult_hint = pool_mult;
-
-            L_nnz = 0;
-            U_nnz = 0;
-            int struct_pos = 0;
-            int ident_pos = k;
-            for (int i = 0; i < m; i++) {
-                if (row_is_identity[i]) {
-                    row_perm[ident_pos++] = i;
-                } else {
-                    row_perm[struct_pos++] = i;
+                L_nnz = 0;
+                U_nnz = 0;
+                {
+                    int struct_pos = 0;
+                    int ident_pos = k;
+                    for (int i = 0; i < m; i++) {
+                        if (row_is_identity[i]) {
+                            row_perm[ident_pos++] = i;
+                        } else {
+                            row_perm[struct_pos++] = i;
+                        }
+                    }
+                    for (int i = 0; i < m; i++) {
+                        row_pos[row_perm[i]] = i;
+                    }
                 }
             }
-            for (int i = 0; i < m; i++) {
-                row_pos[row_perm[i]] = i;
+
+            if (rc == 0) {
+                rc_final = 0;
+                pool_mult = pool_mult_profile;
+                if (profile_idx > 0) {
+                    lp_telemetry_lu_mark_mkz_profile_retry_success(lu);
+                }
+                break;
+            }
+
+            if (profile_idx > 0) {
+                lp_telemetry_lu_mark_mkz_profile_retry_failure(lu);
+            }
+            rc_final = rc;
+
+            if (profile_idx + 1 >= profile_count || rc != MKZ_FAIL_SINGULAR) {
+                break;
+            }
+
+            /* Retry once with a more permissive candidate profile. */
+            L_nnz = 0;
+            U_nnz = 0;
+            {
+                int struct_pos = 0;
+                int ident_pos = k;
+                for (int i = 0; i < m; i++) {
+                    if (row_is_identity[i]) {
+                        row_perm[ident_pos++] = i;
+                    } else {
+                        row_perm[struct_pos++] = i;
+                    }
+                }
+                for (int i = 0; i < m; i++) {
+                    row_pos[row_perm[i]] = i;
+                }
             }
         }
 
+        rc = rc_final;
         if (rc == 0) {
             lp_telemetry_lu_mark_mkz_success(lu);
             if (full_retry_mode) {
