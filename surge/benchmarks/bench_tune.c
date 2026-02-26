@@ -909,19 +909,19 @@ int main(int argc, char **argv) {
             print_usage(argv[0]);
             return 0;
         } else if (strcmp(argv[i], "--tier") == 0 && i + 1 < argc) {
-            tier = atoi(argv[++i]);
+            tier = sh_parse_int(argv[++i], 0, 0, 5);
         } else if (strcmp(argv[i], "--all-tiers") == 0) {
             all_tiers = 1;
         } else if (strcmp(argv[i], "--iterations") == 0 && i + 1 < argc) {
-            max_iterations = atoi(argv[++i]);
+            max_iterations = sh_parse_int(argv[++i], 2500, 1, 1000000);
         } else if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
             seed = (uint64_t)strtoull(argv[++i], NULL, 10);
         } else if (strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {
-            num_threads = atoi(argv[++i]);
+            num_threads = sh_parse_int(argv[++i], 1, 1, 256);
         } else if (strcmp(argv[i], "--top") == 0 && i + 1 < argc) {
-            top_n = atoi(argv[++i]);
+            top_n = sh_parse_int(argv[++i], 10, 1, 10000);
         } else if (strcmp(argv[i], "--verify") == 0 && i + 1 < argc) {
-            verify_n = atoi(argv[++i]);
+            verify_n = sh_parse_int(argv[++i], 3, 0, 100);
         } else if (strcmp(argv[i], "--json") == 0) {
             json_output = 1;
         } else if (strcmp(argv[i], "--baseline") == 0) {

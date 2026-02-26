@@ -454,7 +454,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
-            n_requests = atoi(argv[++i]);
+            n_requests = (int)strtol(argv[++i], NULL, 10);
             if (n_requests < 1 || n_requests > 10000) {
                 fprintf(stderr, "Error: size must be in [1, 10000]\n");
                 return 1;
@@ -477,7 +477,7 @@ int main(int argc, char **argv) {
             continue;
         }
         if (strcmp(argv[i], "--count") == 0 && i + 1 < argc) {
-            count = atoi(argv[++i]);
+            count = (int)strtol(argv[++i], NULL, 10);
             if (count < 1 || count > 100) {
                 fprintf(stderr, "Error: count must be in [1, 100]\n");
                 return 1;
