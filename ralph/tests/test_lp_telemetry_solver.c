@@ -85,6 +85,12 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_ratio_breakdown_retries = 6;
     solver.telemetry.perf_phase1_ratio_breakdown_escalations = 2;
     solver.telemetry.perf_phase1_pivot_fail_recovery_exclusions = 3;
+    solver.telemetry.perf_phase1_no_pivot_events = 11;
+    solver.telemetry.perf_phase1_no_pivot_forced_refactor = 4;
+    solver.telemetry.perf_phase1_no_pivot_forced_ratio_breakdown = 2;
+    solver.telemetry.perf_phase1_no_pivot_forced_dir_skip = 1;
+    solver.telemetry.perf_phase1_no_pivot_forced_pivot_fail = 1;
+    solver.telemetry.perf_phase1_soft_lu_policy_cooldown_defers = 5;
     solver.policy.refactor_next_reason = RALPH_REFACTOR_REASON_SETUP;
     solver.telemetry.perf_basis_fastpath_hits = 7;
     solver.policy.periodic_feedback_bias_phase2 = 0.2;
@@ -157,6 +163,18 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 ratio breakdown escalations");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_pivot_fail_recovery_exclusions, 0,
                   "reset: phase1 pivot fail recovery exclusions");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_no_pivot_events, 0,
+                  "reset: phase1 no-pivot events");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_no_pivot_forced_refactor, 0,
+                  "reset: phase1 no-pivot forced refactor");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_no_pivot_forced_ratio_breakdown, 0,
+                  "reset: phase1 no-pivot forced ratio breakdown");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_no_pivot_forced_dir_skip, 0,
+                  "reset: phase1 no-pivot forced dir skip");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_no_pivot_forced_pivot_fail, 0,
+                  "reset: phase1 no-pivot forced pivot fail");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_soft_lu_policy_cooldown_defers, 0,
+                  "reset: phase1 soft-lu periodic cooldown defers");
     ASSERT_INT_EQ(solver.policy.refactor_next_reason, RALPH_REFACTOR_REASON_OTHER,
                   "reset: next reason");
     ASSERT_INT_EQ(solver.telemetry.perf_basis_fastpath_hits, 0, "reset: basis_fastpath_hits");
@@ -316,6 +334,29 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 ratio breakdown escalations");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_pivot_fail_recovery_exclusions, 2,
                   "record: phase1 pivot fail recovery exclusions");
+    lp_telemetry_record_phase1_no_pivot_event(&solver);
+    lp_telemetry_record_phase1_no_pivot_event(&solver);
+    lp_telemetry_record_phase1_no_pivot_event(&solver);
+    lp_telemetry_record_phase1_no_pivot_force(&solver,
+                                              LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN);
+    lp_telemetry_record_phase1_no_pivot_force(&solver,
+                                              LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
+    lp_telemetry_record_phase1_no_pivot_force(&solver,
+                                              LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL);
+    lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(&solver);
+    lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(&solver);
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_no_pivot_events, 3,
+                  "record: phase1 no-pivot events");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_no_pivot_forced_refactor, 3,
+                  "record: phase1 no-pivot forced refactors");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_no_pivot_forced_ratio_breakdown, 1,
+                  "record: phase1 no-pivot force ratio breakdown");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_no_pivot_forced_dir_skip, 1,
+                  "record: phase1 no-pivot force dir skip");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_no_pivot_forced_pivot_fail, 1,
+                  "record: phase1 no-pivot force pivot fail");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_soft_lu_policy_cooldown_defers, 2,
+                  "record: phase1 soft-lu periodic cooldown defers");
 }
 
 static void test_refactor_reason_classifier(void) {
@@ -364,6 +405,12 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_ratio_breakdown_retries = 14;
     solver.telemetry.perf_phase1_ratio_breakdown_escalations = 3;
     solver.telemetry.perf_phase1_pivot_fail_recovery_exclusions = 5;
+    solver.telemetry.perf_phase1_no_pivot_events = 21;
+    solver.telemetry.perf_phase1_no_pivot_forced_refactor = 6;
+    solver.telemetry.perf_phase1_no_pivot_forced_ratio_breakdown = 2;
+    solver.telemetry.perf_phase1_no_pivot_forced_dir_skip = 3;
+    solver.telemetry.perf_phase1_no_pivot_forced_pivot_fail = 1;
+    solver.telemetry.perf_phase1_soft_lu_policy_cooldown_defers = 4;
     solver.policy.periodic_feedback_hint_pressure_phase2 = 0.55;
     solver.policy.soft_lu_cost_gate_enabled = 1;
     solver.policy.soft_lu_cost_gate_defers_phase1 = 3;
@@ -439,6 +486,18 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 ratio breakdown escalations");
     ASSERT_INT_EQ(snap.perf_phase1_pivot_fail_recovery_exclusions, 5,
                   "solver_snapshot: phase1 pivot fail recovery exclusions");
+    ASSERT_INT_EQ(snap.perf_phase1_no_pivot_events, 21,
+                  "solver_snapshot: phase1 no-pivot events");
+    ASSERT_INT_EQ(snap.perf_phase1_no_pivot_forced_refactor, 6,
+                  "solver_snapshot: phase1 no-pivot forced refactor");
+    ASSERT_INT_EQ(snap.perf_phase1_no_pivot_forced_ratio_breakdown, 2,
+                  "solver_snapshot: phase1 no-pivot force ratio breakdown");
+    ASSERT_INT_EQ(snap.perf_phase1_no_pivot_forced_dir_skip, 3,
+                  "solver_snapshot: phase1 no-pivot force dir skip");
+    ASSERT_INT_EQ(snap.perf_phase1_no_pivot_forced_pivot_fail, 1,
+                  "solver_snapshot: phase1 no-pivot force pivot fail");
+    ASSERT_INT_EQ(snap.perf_phase1_soft_lu_policy_cooldown_defers, 4,
+                  "solver_snapshot: phase1 soft-lu periodic cooldown defers");
     ASSERT_DBL_EQ(snap.periodic_feedback_hint_pressure_phase2, 0.55,
                   "solver_snapshot: feedback pressure phase2");
     ASSERT_INT_EQ(snap.soft_lu_cost_gate_enabled, 1,

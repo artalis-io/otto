@@ -83,6 +83,22 @@ int simplex_periodic_cost_defer_plan_for_test(int phase,
                                               int *cap_blocked_out,
                                               int *next_consecutive_defers_out);
 
+int simplex_phase1_no_pivot_force_plan_for_test(int m,
+                                                 int degenerate_count,
+                                                 int streak,
+                                                 int cooldown,
+                                                 int reason,
+                                                 int *next_streak_out,
+                                                 int *next_cooldown_out);
+
+int simplex_phase1_soft_lu_policy_cooldown_plan_for_test(
+    int m,
+    int degenerate_count,
+    int periodic_interval,
+    int lu_soft_cost_deferred,
+    int periodic_policy_cooldown,
+    int *next_cooldown_out);
+
 enum {
     EXPECT_UPDATE = 0,
     EXPECT_REFACTOR = 1,
@@ -265,6 +281,29 @@ typedef struct {
     int pending_repeat;
     int expected_defer;
 } DirStabilizeModerateCase;
+
+typedef struct {
+    const char *name;
+    int m;
+    int degenerate_count;
+    int streak;
+    int cooldown;
+    int reason;
+    int expected_force;
+    int expected_next_streak;
+    int expected_next_cooldown;
+} NoPivotForceCase;
+
+typedef struct {
+    const char *name;
+    int m;
+    int degenerate_count;
+    int periodic_interval;
+    int lu_soft_cost_deferred;
+    int periodic_policy_cooldown;
+    int expected_applied;
+    int expected_next_cooldown;
+} SoftLUPolicyCooldownCase;
 
 static int run_lu_health_case(const LUHealthCase *tc) {
     int hard = -1;
@@ -457,6 +496,58 @@ static int run_dir_stabilize_moderate_case(const DirStabilizeModerateCase *tc) {
     if (defer != tc->expected_defer) {
         fprintf(stderr, "FAIL: %s (expected defer=%d got=%d)\n",
                 tc->name, tc->expected_defer, defer);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_no_pivot_force_case(const NoPivotForceCase *tc) {
+    int next_streak = -1;
+    int next_cooldown = -1;
+    int force = simplex_phase1_no_pivot_force_plan_for_test(tc->m,
+                                                             tc->degenerate_count,
+                                                             tc->streak,
+                                                             tc->cooldown,
+                                                             tc->reason,
+                                                             &next_streak,
+                                                             &next_cooldown);
+    if (force != tc->expected_force) {
+        fprintf(stderr, "FAIL: %s (expected force=%d got=%d)\n",
+                tc->name, tc->expected_force, force);
+        return 0;
+    }
+    if (next_streak != tc->expected_next_streak) {
+        fprintf(stderr, "FAIL: %s (expected next_streak=%d got=%d)\n",
+                tc->name, tc->expected_next_streak, next_streak);
+        return 0;
+    }
+    if (next_cooldown != tc->expected_next_cooldown) {
+        fprintf(stderr, "FAIL: %s (expected next_cooldown=%d got=%d)\n",
+                tc->name, tc->expected_next_cooldown, next_cooldown);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_soft_lu_policy_cooldown_case(const SoftLUPolicyCooldownCase *tc) {
+    int next_cooldown = -1;
+    int applied = simplex_phase1_soft_lu_policy_cooldown_plan_for_test(
+        tc->m,
+        tc->degenerate_count,
+        tc->periodic_interval,
+        tc->lu_soft_cost_deferred,
+        tc->periodic_policy_cooldown,
+        &next_cooldown);
+    if (applied != tc->expected_applied) {
+        fprintf(stderr, "FAIL: %s (expected applied=%d got=%d)\n",
+                tc->name, tc->expected_applied, applied);
+        return 0;
+    }
+    if (next_cooldown != tc->expected_next_cooldown) {
+        fprintf(stderr, "FAIL: %s (expected next_cooldown=%d got=%d)\n",
+                tc->name, tc->expected_next_cooldown, next_cooldown);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -1181,6 +1272,73 @@ int main(void) {
             .expected_defer = 0
         }
     };
+    const NoPivotForceCase no_pivot_force_cases[] = {
+        {
+            .name = "phase1 no-pivot force triggers on large degenerate streak",
+            .m = 1500,
+            .degenerate_count = 120,
+            .streak = 32,
+            .cooldown = 0,
+            .reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
+            .expected_force = 1,
+            .expected_next_streak = 0,
+            .expected_next_cooldown = 24
+        },
+        {
+            .name = "phase1 no-pivot force does not trigger below threshold",
+            .m = 1500,
+            .degenerate_count = 120,
+            .streak = 30,
+            .cooldown = 0,
+            .reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+            .expected_force = 0,
+            .expected_next_streak = 31,
+            .expected_next_cooldown = 0
+        },
+        {
+            .name = "phase1 no-pivot force respects active cooldown",
+            .m = 1500,
+            .degenerate_count = 120,
+            .streak = 40,
+            .cooldown = 5,
+            .reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL,
+            .expected_force = 0,
+            .expected_next_streak = 41,
+            .expected_next_cooldown = 5
+        }
+    };
+    const SoftLUPolicyCooldownCase soft_lu_policy_cooldown_cases[] = {
+        {
+            .name = "phase1 soft-lu defer applies periodic cooldown on large degenerate run",
+            .m = 1500,
+            .degenerate_count = 80,
+            .periodic_interval = 24,
+            .lu_soft_cost_deferred = 1,
+            .periodic_policy_cooldown = 0,
+            .expected_applied = 1,
+            .expected_next_cooldown = 12
+        },
+        {
+            .name = "phase1 soft-lu defer can extend existing periodic cooldown",
+            .m = 1500,
+            .degenerate_count = 80,
+            .periodic_interval = 48,
+            .lu_soft_cost_deferred = 1,
+            .periodic_policy_cooldown = 20,
+            .expected_applied = 1,
+            .expected_next_cooldown = 24
+        },
+        {
+            .name = "phase1 soft-lu cooldown inactive on small problems",
+            .m = 500,
+            .degenerate_count = 80,
+            .periodic_interval = 24,
+            .lu_soft_cost_deferred = 1,
+            .periodic_policy_cooldown = 0,
+            .expected_applied = 0,
+            .expected_next_cooldown = 0
+        }
+    };
 
     int pass = 0;
     int total_policy = (int)(sizeof(cases) / sizeof(cases[0]));
@@ -1191,9 +1349,11 @@ int main(void) {
     int total_dir_stabilize = (int)(sizeof(dir_stabilize_cooldown_cases) / sizeof(dir_stabilize_cooldown_cases[0]));
     int total_dir_force = (int)(sizeof(dir_stabilize_force_cases) / sizeof(dir_stabilize_force_cases[0]));
     int total_dir_moderate = (int)(sizeof(dir_stabilize_moderate_cases) / sizeof(dir_stabilize_moderate_cases[0]));
+    int total_no_pivot = (int)(sizeof(no_pivot_force_cases) / sizeof(no_pivot_force_cases[0]));
+    int total_soft_lu_policy_cd = (int)(sizeof(soft_lu_policy_cooldown_cases) / sizeof(soft_lu_policy_cooldown_cases[0]));
     int total = total_policy + total_sched + total_lu_health + total_soft_lu_defer +
                 total_periodic_cost_defer + total_dir_stabilize + total_dir_force +
-                total_dir_moderate;
+                total_dir_moderate + total_no_pivot + total_soft_lu_policy_cd;
 
     for (int i = 0; i < total_policy; i++) {
         pass += run_case(&cases[i]);
@@ -1218,6 +1378,12 @@ int main(void) {
     }
     for (int i = 0; i < total_dir_moderate; i++) {
         pass += run_dir_stabilize_moderate_case(&dir_stabilize_moderate_cases[i]);
+    }
+    for (int i = 0; i < total_no_pivot; i++) {
+        pass += run_no_pivot_force_case(&no_pivot_force_cases[i]);
+    }
+    for (int i = 0; i < total_soft_lu_policy_cd; i++) {
+        pass += run_soft_lu_policy_cooldown_case(&soft_lu_policy_cooldown_cases[i]);
     }
 
     printf("\nPolicy cases passed: %d/%d\n", pass, total);

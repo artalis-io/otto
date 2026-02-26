@@ -267,6 +267,12 @@ typedef struct {
     int phase1_ratio_breakdown_retries;
     int phase1_ratio_breakdown_escalations;
     int phase1_pivot_fail_recovery_exclusions;
+    int phase1_no_pivot_events;
+    int phase1_no_pivot_forced_refactor;
+    int phase1_no_pivot_forced_ratio_breakdown;
+    int phase1_no_pivot_forced_dir_skip;
+    int phase1_no_pivot_forced_pivot_fail;
+    int phase1_soft_lu_policy_cooldown_defers;
 
     double phase2_pricing_ms;
     double phase2_ratio_ms;
@@ -356,6 +362,9 @@ typedef struct {
     int lu_mkz_circuit_trips;
     int lu_mkz_circuit_skips;
     int lu_mkz_circuit_resets;
+    int lu_mkz_profile_retry_attempts;
+    int lu_mkz_profile_retry_successes;
+    int lu_mkz_profile_retry_failures;
     int lu_sparse_dense_fallbacks;
     int lu_used_dense_fallback_last;
     int lu_sparse_fallback_last_reason;
@@ -860,6 +869,18 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_ratio_breakdown_escalations;
             result.phase1_pivot_fail_recovery_exclusions =
                 solver_tel.perf_phase1_pivot_fail_recovery_exclusions;
+            result.phase1_no_pivot_events =
+                solver_tel.perf_phase1_no_pivot_events;
+            result.phase1_no_pivot_forced_refactor =
+                solver_tel.perf_phase1_no_pivot_forced_refactor;
+            result.phase1_no_pivot_forced_ratio_breakdown =
+                solver_tel.perf_phase1_no_pivot_forced_ratio_breakdown;
+            result.phase1_no_pivot_forced_dir_skip =
+                solver_tel.perf_phase1_no_pivot_forced_dir_skip;
+            result.phase1_no_pivot_forced_pivot_fail =
+                solver_tel.perf_phase1_no_pivot_forced_pivot_fail;
+            result.phase1_soft_lu_policy_cooldown_defers =
+                solver_tel.perf_phase1_soft_lu_policy_cooldown_defers;
 
             result.phase2_pricing_ms = solver_tel.perf_phase2_pricing_ms;
             result.phase2_ratio_ms = solver_tel.perf_phase2_ratio_ms;
@@ -955,6 +976,9 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_mkz_circuit_trips = lu_tel.mkz_circuit_trips;
                 result.lu_mkz_circuit_skips = lu_tel.mkz_circuit_skips;
                 result.lu_mkz_circuit_resets = lu_tel.mkz_circuit_resets;
+                result.lu_mkz_profile_retry_attempts = lu_tel.mkz_profile_retry_attempts;
+                result.lu_mkz_profile_retry_successes = lu_tel.mkz_profile_retry_successes;
+                result.lu_mkz_profile_retry_failures = lu_tel.mkz_profile_retry_failures;
                 result.lu_sparse_dense_fallbacks = lu_tel.sparse_dense_fallbacks;
                 result.lu_used_dense_fallback_last = lu_tel.used_dense_fallback_last;
                 result.lu_sparse_fallback_last_reason = lu_tel.sparse_fallback_last_reason;
@@ -1820,6 +1844,18 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_ratio_breakdown_escalations);
     fprintf(out, "      \"pivot_fail_recovery_exclusions\": %d,\n",
             ralph->phase1_pivot_fail_recovery_exclusions);
+    fprintf(out, "      \"no_pivot_events\": %d,\n",
+            ralph->phase1_no_pivot_events);
+    fprintf(out, "      \"no_pivot_forced_refactor\": %d,\n",
+            ralph->phase1_no_pivot_forced_refactor);
+    fprintf(out, "      \"no_pivot_forced_ratio_breakdown\": %d,\n",
+            ralph->phase1_no_pivot_forced_ratio_breakdown);
+    fprintf(out, "      \"no_pivot_forced_dir_skip\": %d,\n",
+            ralph->phase1_no_pivot_forced_dir_skip);
+    fprintf(out, "      \"no_pivot_forced_pivot_fail\": %d,\n",
+            ralph->phase1_no_pivot_forced_pivot_fail);
+    fprintf(out, "      \"soft_lu_policy_cooldown_defers\": %d,\n",
+            ralph->phase1_soft_lu_policy_cooldown_defers);
     fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase1_compute_solution_calls);
     fprintf(out, "      \"compute_reduced_costs_calls\": %d\n", ralph->phase1_compute_rc_calls);
     fprintf(out, "    },\n");
@@ -1907,6 +1943,18 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_ratio_breakdown_escalations);
     fprintf(out, "    \"phase1_pivot_fail_recovery_exclusions\": %d,\n",
             ralph->phase1_pivot_fail_recovery_exclusions);
+    fprintf(out, "    \"phase1_no_pivot_events\": %d,\n",
+            ralph->phase1_no_pivot_events);
+    fprintf(out, "    \"phase1_no_pivot_forced_refactor\": %d,\n",
+            ralph->phase1_no_pivot_forced_refactor);
+    fprintf(out, "    \"phase1_no_pivot_forced_ratio_breakdown\": %d,\n",
+            ralph->phase1_no_pivot_forced_ratio_breakdown);
+    fprintf(out, "    \"phase1_no_pivot_forced_dir_skip\": %d,\n",
+            ralph->phase1_no_pivot_forced_dir_skip);
+    fprintf(out, "    \"phase1_no_pivot_forced_pivot_fail\": %d,\n",
+            ralph->phase1_no_pivot_forced_pivot_fail);
+    fprintf(out, "    \"phase1_soft_lu_policy_cooldown_defers\": %d,\n",
+            ralph->phase1_soft_lu_policy_cooldown_defers);
     fprintf(out, "    \"reason_infeasibility_cleanup\": %d,\n", ralph->refactor_reason_infeas_cleanup);
     fprintf(out, "    \"reason_other\": %d,\n", ralph->refactor_reason_other);
     fprintf(out, "    \"periodic_policy_count\": %d,\n", ralph->refactor_periodic_policy);
@@ -2059,6 +2107,12 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_mkz_circuit_skips);
     fprintf(out, "    \"mkz_circuit_resets\": %d,\n",
             ralph->lu_mkz_circuit_resets);
+    fprintf(out, "    \"mkz_profile_retry_attempts\": %d,\n",
+            ralph->lu_mkz_profile_retry_attempts);
+    fprintf(out, "    \"mkz_profile_retry_successes\": %d,\n",
+            ralph->lu_mkz_profile_retry_successes);
+    fprintf(out, "    \"mkz_profile_retry_failures\": %d,\n",
+            ralph->lu_mkz_profile_retry_failures);
     fprintf(out, "    \"sparse_dense_fallbacks\": %d,\n", ralph->lu_sparse_dense_fallbacks);
     fprintf(out, "    \"used_dense_fallback_last\": %s,\n",
             ralph->lu_used_dense_fallback_last ? "true" : "false");

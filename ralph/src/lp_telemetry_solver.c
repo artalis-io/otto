@@ -96,6 +96,12 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_ratio_breakdown_retries = 0;
     solver->telemetry.perf_phase1_ratio_breakdown_escalations = 0;
     solver->telemetry.perf_phase1_pivot_fail_recovery_exclusions = 0;
+    solver->telemetry.perf_phase1_no_pivot_events = 0;
+    solver->telemetry.perf_phase1_no_pivot_forced_refactor = 0;
+    solver->telemetry.perf_phase1_no_pivot_forced_ratio_breakdown = 0;
+    solver->telemetry.perf_phase1_no_pivot_forced_dir_skip = 0;
+    solver->telemetry.perf_phase1_no_pivot_forced_pivot_fail = 0;
+    solver->telemetry.perf_phase1_soft_lu_policy_cooldown_defers = 0;
 
     solver->telemetry.perf_phase2_pricing_ms = 0.0;
     solver->telemetry.perf_phase2_ratio_ms = 0.0;
@@ -378,6 +384,12 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_ratio_breakdown_retries);
     COPY_SOLVER_FIELD(perf_phase1_ratio_breakdown_escalations);
     COPY_SOLVER_FIELD(perf_phase1_pivot_fail_recovery_exclusions);
+    COPY_SOLVER_FIELD(perf_phase1_no_pivot_events);
+    COPY_SOLVER_FIELD(perf_phase1_no_pivot_forced_refactor);
+    COPY_SOLVER_FIELD(perf_phase1_no_pivot_forced_ratio_breakdown);
+    COPY_SOLVER_FIELD(perf_phase1_no_pivot_forced_dir_skip);
+    COPY_SOLVER_FIELD(perf_phase1_no_pivot_forced_pivot_fail);
+    COPY_SOLVER_FIELD(perf_phase1_soft_lu_policy_cooldown_defers);
 
     COPY_SOLVER_FIELD(perf_phase2_pricing_ms);
     COPY_SOLVER_FIELD(perf_phase2_ratio_ms);
