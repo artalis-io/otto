@@ -36,6 +36,7 @@
 #define PHASE1_DIR_STABILIZE_MAX_COOLDOWN_UPDATES 64
 #define PHASE1_DIR_STABILIZE_FORCE_RATIO_BASE 100.0
 #define PHASE1_DIR_STABILIZE_FORCE_RATIO_COOLDOWN 1000.0
+#define PHASE1_DIR_STABILIZE_MODERATE_RATIO_MAX 30.0
 #define LU_HEALTH_HARD_COND_MIN_UPDATES 10
 #define LU_HEALTH_HARD_COND_RATIO 1e10
 #define LU_HEALTH_SOFT_COND_MED 1e6
@@ -365,6 +366,19 @@ int lp_refactor_policy_phase1_dir_stabilize_force_extreme_ratio(
         threshold = PHASE1_DIR_STABILIZE_FORCE_RATIO_COOLDOWN;
     }
     return (dir_inf_ratio > threshold) ? 1 : 0;
+}
+
+int lp_refactor_policy_phase1_dir_stabilize_should_defer_moderate(
+    double dir_inf_ratio,
+    int cooldown_active,
+    int lu_health_triggered,
+    int pending_repeat) {
+    if (!(dir_inf_ratio > 0.0)) return 0;
+    if (cooldown_active) return 0;
+    if (lu_health_triggered) return 0;
+    if (dir_inf_ratio > PHASE1_DIR_STABILIZE_MODERATE_RATIO_MAX) return 0;
+    if (pending_repeat) return 0;
+    return 1;
 }
 
 LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(

@@ -73,6 +73,12 @@ int lp_refactor_policy_phase1_dir_stabilize_force_extreme_ratio(
     double dir_inf_ratio,
     int cooldown_active);
 
+int lp_refactor_policy_phase1_dir_stabilize_should_defer_moderate(
+    double dir_inf_ratio,
+    int cooldown_active,
+    int lu_health_triggered,
+    int pending_repeat);
+
 LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(
     int m,
     int use_ft_updates,

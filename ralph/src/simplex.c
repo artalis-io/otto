@@ -4952,6 +4952,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     int excluded_entering_ttl_b = 0;
     int dir_stabilize_cooldown = 0;
     int dir_stabilize_repeat_count = 0;
+    int dir_stabilize_moderate_defer_pending = 0;
     int no_entering_cleanup_streak = 0;
     int periodic_policy_cooldown = 0;
     double periodic_policy_pressure_decay = 0.0;
@@ -5248,14 +5249,21 @@ static int simplex_phase1(SimplexSolver *solver) {
         if (dir_inf > RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
             double dir_inf_ratio =
                 dir_inf / RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER;
+            int cooldown_active = (dir_stabilize_cooldown > 0);
             int dir_stabilize_cooldown_target;
             int force_dir_refactor_extreme =
                 lp_refactor_policy_phase1_dir_stabilize_force_extreme_ratio(
                     dir_inf_ratio,
-                    dir_stabilize_cooldown > 0);
+                    cooldown_active);
             int force_dir_refactor_lu_health = lu_needs_refactorization(tab->lu);
             int force_dir_refactor = force_dir_refactor_extreme ||
                                      force_dir_refactor_lu_health;
+            int moderate_defer =
+                lp_refactor_policy_phase1_dir_stabilize_should_defer_moderate(
+                    dir_inf_ratio,
+                    cooldown_active,
+                    force_dir_refactor_lu_health,
+                    dir_stabilize_moderate_defer_pending);
             if (dir_stabilize_repeat_count < 1000000) {
                 dir_stabilize_repeat_count++;
             }
@@ -5263,7 +5271,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 lp_refactor_policy_phase1_dir_stabilize_cooldown_updates(
                     tab->m, degenerate_count, dir_stabilize_repeat_count);
 
-            if (dir_stabilize_cooldown > 0) {
+            if (cooldown_active) {
                 lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(
                     solver,
                     dir_inf_ratio);
@@ -5275,7 +5283,26 @@ static int simplex_phase1(SimplexSolver *solver) {
                 }
             }
 
-            if (dir_stabilize_cooldown > 0 && !force_dir_refactor) {
+            if (moderate_defer && !force_dir_refactor) {
+                dir_stabilize_moderate_defer_pending = 1;
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Moderate direction norm %.2e at iter %d (entering=%d), deferring one refactor and retrying pricing\n",
+                            dir_inf, iter, entering);
+                }
+                phase1_exclude_entering_var(entering,
+                                            RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
+                                            &excluded_entering_a,
+                                            &excluded_entering_ttl_a,
+                                            &excluded_entering_b,
+                                            &excluded_entering_ttl_b);
+                use_bland = 1;
+                tableau_compute_solution(tab);
+                tableau_compute_reduced_costs(tab);
+                continue;
+            }
+
+            if (cooldown_active && !force_dir_refactor) {
+                dir_stabilize_moderate_defer_pending = 0;
                 if (solver->verbose >= 2) {
                     LP_LOG_STDERR("[simplex_phase1] Large direction norm %.2e at iter %d (entering=%d), skipping direction-stabilize refactor (cooldown=%d)\n",
                             dir_inf, iter, entering, dir_stabilize_cooldown);
@@ -5294,6 +5321,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 tableau_compute_reduced_costs(tab);
                 continue;
             }
+            dir_stabilize_moderate_defer_pending = 0;
 
             if (solver->verbose >= 2) {
                 LP_LOG_STDERR("[simplex_phase1] Large direction norm %.2e at iter %d (entering=%d), re-factorizing before pivot\n",
@@ -5554,6 +5582,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         fail_reason = PHASE1_PIVOT_FAIL_NONE;
         fail_repeat_count = 0;
         ratio_breakdown_count = 0;
+        dir_stabilize_moderate_defer_pending = 0;
         excluded_entering_a = -1;
         excluded_entering_ttl_a = 0;
         excluded_entering_b = -1;
