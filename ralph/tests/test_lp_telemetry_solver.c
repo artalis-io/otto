@@ -63,6 +63,8 @@ static void test_solver_reset_and_refactor_accounting(void) {
 
     solver.telemetry.perf_pricing_ms = 12.0;
     solver.telemetry.perf_refactor_count = 3;
+    solver.telemetry.perf_phase1_dir_stabilize_force_extreme_dir = 5;
+    solver.telemetry.perf_phase1_dir_stabilize_force_lu_health = 4;
     solver.policy.refactor_next_reason = RALPH_REFACTOR_REASON_SETUP;
     solver.telemetry.perf_basis_fastpath_hits = 7;
     solver.policy.periodic_feedback_bias_phase2 = 0.2;
@@ -91,6 +93,10 @@ static void test_solver_reset_and_refactor_accounting(void) {
 
     ASSERT_DBL_EQ(solver.telemetry.perf_pricing_ms, 0.0, "reset: perf_pricing_ms");
     ASSERT_INT_EQ(solver.telemetry.perf_refactor_count, 0, "reset: refactor_count");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_force_extreme_dir, 0,
+                  "reset: phase1 dir force extreme");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_force_lu_health, 0,
+                  "reset: phase1 dir force lu health");
     ASSERT_INT_EQ(solver.policy.refactor_next_reason, RALPH_REFACTOR_REASON_OTHER,
                   "reset: next reason");
     ASSERT_INT_EQ(solver.telemetry.perf_basis_fastpath_hits, 0, "reset: basis_fastpath_hits");
@@ -175,6 +181,14 @@ static void test_solver_reset_and_refactor_accounting(void) {
     ASSERT_DBL_EQ(solver.telemetry.perf_phase1_refactor_ms, 2.0, "record: phase1 refactor ms");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_refactor_safety_forced, 0,
                   "record: phase1 safety remains 0 for setup");
+
+    lp_telemetry_record_phase1_dir_stabilize_force(&solver, 1, 0);
+    lp_telemetry_record_phase1_dir_stabilize_force(&solver, 0, 1);
+    lp_telemetry_record_phase1_dir_stabilize_force(&solver, 1, 1);
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_force_extreme_dir, 2,
+                  "record: phase1 dir force extreme count");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_force_lu_health, 2,
+                  "record: phase1 dir force lu health count");
 }
 
 static void test_refactor_reason_classifier(void) {
@@ -201,6 +215,8 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_refactor_reason_periodic = 11;
     solver.telemetry.perf_basis_tail_shift_bytes = 4096ULL;
     solver.telemetry.perf_phase1_pricing_calls = 17;
+    solver.telemetry.perf_phase1_dir_stabilize_force_extreme_dir = 6;
+    solver.telemetry.perf_phase1_dir_stabilize_force_lu_health = 9;
     solver.policy.periodic_feedback_hint_pressure_phase2 = 0.55;
     solver.policy.soft_lu_cost_gate_enabled = 1;
     solver.policy.soft_lu_cost_gate_defers_phase1 = 3;
@@ -232,6 +248,10 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: basis_tail_shift_bytes");
     ASSERT_INT_EQ(snap.perf_phase1_pricing_calls, 17,
                   "solver_snapshot: phase1_pricing_calls");
+    ASSERT_INT_EQ(snap.perf_phase1_dir_stabilize_force_extreme_dir, 6,
+                  "solver_snapshot: phase1 dir force extreme");
+    ASSERT_INT_EQ(snap.perf_phase1_dir_stabilize_force_lu_health, 9,
+                  "solver_snapshot: phase1 dir force lu health");
     ASSERT_DBL_EQ(snap.periodic_feedback_hint_pressure_phase2, 0.55,
                   "solver_snapshot: feedback pressure phase2");
     ASSERT_INT_EQ(snap.soft_lu_cost_gate_enabled, 1,

@@ -245,6 +245,8 @@ typedef struct {
     int phase1_refactor_periodic_policy;
     int phase1_refactor_periodic_lu_health;
     int phase1_refactor_safety_forced;
+    int phase1_dir_stabilize_force_extreme_dir;
+    int phase1_dir_stabilize_force_lu_health;
 
     double phase2_pricing_ms;
     double phase2_ratio_ms;
@@ -794,6 +796,10 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.phase1_refactor_periodic_policy = solver_tel.perf_phase1_refactor_periodic_policy;
             result.phase1_refactor_periodic_lu_health = solver_tel.perf_phase1_refactor_periodic_lu_health;
             result.phase1_refactor_safety_forced = solver_tel.perf_phase1_refactor_safety_forced;
+            result.phase1_dir_stabilize_force_extreme_dir =
+                solver_tel.perf_phase1_dir_stabilize_force_extreme_dir;
+            result.phase1_dir_stabilize_force_lu_health =
+                solver_tel.perf_phase1_dir_stabilize_force_lu_health;
 
             result.phase2_pricing_ms = solver_tel.perf_phase2_pricing_ms;
             result.phase2_ratio_ms = solver_tel.perf_phase2_ratio_ms;
@@ -1710,6 +1716,10 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "      \"refactor_periodic_policy_calls\": %d,\n", ralph->phase1_refactor_periodic_policy);
     fprintf(out, "      \"refactor_lu_health_calls\": %d,\n", ralph->phase1_refactor_periodic_lu_health);
     fprintf(out, "      \"refactor_safety_forced_calls\": %d,\n", ralph->phase1_refactor_safety_forced);
+    fprintf(out, "      \"dir_stabilize_force_extreme_dir\": %d,\n",
+            ralph->phase1_dir_stabilize_force_extreme_dir);
+    fprintf(out, "      \"dir_stabilize_force_lu_health\": %d,\n",
+            ralph->phase1_dir_stabilize_force_lu_health);
     fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase1_compute_solution_calls);
     fprintf(out, "      \"compute_reduced_costs_calls\": %d\n", ralph->phase1_compute_rc_calls);
     fprintf(out, "    },\n");
@@ -1753,6 +1763,10 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"reason_forced_small_pivot\": %d,\n", ralph->refactor_reason_forced_small_pivot);
     fprintf(out, "    \"reason_update_recovery\": %d,\n", ralph->refactor_reason_update_recovery);
     fprintf(out, "    \"reason_direction_stabilize\": %d,\n", ralph->refactor_reason_direction_stabilize);
+    fprintf(out, "    \"phase1_dir_stabilize_force_extreme_dir\": %d,\n",
+            ralph->phase1_dir_stabilize_force_extreme_dir);
+    fprintf(out, "    \"phase1_dir_stabilize_force_lu_health\": %d,\n",
+            ralph->phase1_dir_stabilize_force_lu_health);
     fprintf(out, "    \"reason_infeasibility_cleanup\": %d,\n", ralph->refactor_reason_infeas_cleanup);
     fprintf(out, "    \"reason_other\": %d,\n", ralph->refactor_reason_other);
     fprintf(out, "    \"periodic_policy_count\": %d,\n", ralph->refactor_periodic_policy);

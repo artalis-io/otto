@@ -597,6 +597,8 @@ typedef struct {
     int perf_phase1_refactor_periodic_policy;
     int perf_phase1_refactor_periodic_lu_health;
     int perf_phase1_refactor_safety_forced;
+    int perf_phase1_dir_stabilize_force_extreme_dir;
+    int perf_phase1_dir_stabilize_force_lu_health;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -833,6 +835,8 @@ typedef struct {
     int perf_phase1_refactor_periodic_policy;
     int perf_phase1_refactor_periodic_lu_health;
     int perf_phase1_refactor_safety_forced;
+    int perf_phase1_dir_stabilize_force_extreme_dir;
+    int perf_phase1_dir_stabilize_force_lu_health;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -1210,6 +1214,9 @@ void lp_telemetry_record_pivot_timed(SimplexSolver *solver,
 void lp_telemetry_record_periodic_refactor_trigger(SimplexSolver *solver,
                                                    int phase,
                                                    int lu_health_triggered);
+void lp_telemetry_record_phase1_dir_stabilize_force(SimplexSolver *solver,
+                                                    int force_extreme_dir,
+                                                    int force_lu_health);
 void lp_telemetry_lu_record_dense_factorize_ms(LUFactorization *lu,
                                                double elapsed_ms);
 void lp_telemetry_lu_record_dense_factorize_timed(LUFactorization *lu,

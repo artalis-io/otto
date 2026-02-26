@@ -215,3 +215,15 @@ void lp_telemetry_record_periodic_refactor_trigger(SimplexSolver *solver,
         else if (phase == 2) solver->telemetry.perf_phase2_refactor_periodic_policy++;
     }
 }
+
+void lp_telemetry_record_phase1_dir_stabilize_force(SimplexSolver *solver,
+                                                    int force_extreme_dir,
+                                                    int force_lu_health) {
+    if (!solver_telemetry_enabled(solver)) return;
+    if (force_extreme_dir) {
+        solver->telemetry.perf_phase1_dir_stabilize_force_extreme_dir++;
+    }
+    if (force_lu_health) {
+        solver->telemetry.perf_phase1_dir_stabilize_force_lu_health++;
+    }
+}
