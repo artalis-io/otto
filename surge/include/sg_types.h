@@ -70,6 +70,63 @@ typedef enum {
     SG_ACCEPT_IMPROVING = 2
 } SGAcceptType;
 
+/* Solver profiles for hyperparameter tuning.
+   Each profile targets a different time/quality tradeoff. */
+typedef enum {
+    SG_PROFILE_REALTIME = 0,      /* ~500 iters, <1s  (100 req) */
+    SG_PROFILE_FAST = 1,          /* ~2500 iters, <5s (100 req) */
+    SG_PROFILE_NEAR_OPTIMAL = 2,  /* ~10000 iters, <15s (100 req) */
+    SG_PROFILE_BEST = 3,          /* ~50000 iters, <60s (100 req) */
+    SG_PROFILE_COUNT = 4
+} SGProfile;
+
+/*
+ * Tunable ALNS parameters for hyperparameter optimization.
+ * All fields use a sentinel value (-1.0 for doubles, -1 for ints)
+ * to indicate "use default". Set only fields you want to override.
+ * Initialize with sg_tune_params_default() to set all to sentinel.
+ */
+typedef struct {
+    /* Phase budget split */
+    double phase1_fraction;       /* [0.4, 0.8], default 0.60 — Phase 1 budget as fraction of total */
+    int    phase15_iters;         /* [100, 2000], default 500 — Phase 1.5 vehicle crunch iterations */
+
+    /* SA temperature / cooling */
+    double sa_accept_pct;         /* [0.01, 0.20], default 0.05 — fraction of cost accepted at 50% prob */
+    double p1_final_temp_ratio;   /* [0.005, 0.20], default 0.05 — Phase 1 cools to this fraction of T0 */
+    double p2_final_temp_ratio;   /* [0.0001, 0.05], default ~0.001 (via calibrate_sa) */
+
+    /* Penalty parameters (progressive + adaptive) */
+    double pen_target_start;      /* [0.10, 0.50], default 0.25 — Phase 1 initial feasibility target */
+    double pen_target_end;        /* [0.05, 0.30], default 0.15 — Phase 1 final feasibility target */
+    double pen_tolerance;         /* [0.02, 0.15], default 0.08 */
+    double pen_increase;          /* [1.05, 2.0], default 1.3 */
+    double pen_decrease;          /* [0.50, 0.95], default 0.80 */
+    double pen_p15_target;        /* [0.10, 0.40], default 0.20 — Phase 1.5 adaptive target */
+    double pen_p15_tolerance;     /* [0.02, 0.15], default 0.05 */
+    double pen_p15_increase;      /* [1.05, 2.0], default 1.2 */
+    double pen_p15_decrease;      /* [0.50, 0.95], default 0.85 */
+
+    /* ALNS adaptive weight parameters */
+    double reaction_factor;       /* [0.01, 0.5], default 0.1 */
+    double reward_best;           /* [3.0, 50.0], default 8.0 */
+    double reward_better;         /* [1.0, 20.0], default 4.0 */
+    double reward_accepted;       /* [0.5, 10.0], default 2.0 */
+    int    segment_size;          /* [25, 500], default 100 — override config.segment_size */
+
+    /* Destruction operator parameters */
+    double worst_randomness;      /* [1.0, 10.0], default 4.0 */
+    double shaw_randomness;       /* [1.0, 10.0], default 4.0 */
+    double route_cluster_randomness; /* [1.0, 10.0], default 2.5 */
+    double time_cluster_randomness;  /* [1.0, 10.0], default 2.0 */
+    double pd_shaw_randomness;    /* [1.0, 10.0], default 3.0 */
+    double route_shaw_randomness; /* [1.0, 10.0], default 4.0 */
+    int    string_l_max;          /* [4, 30], default 10 — max string removal length */
+} SGTuneParams;
+
+#define SG_TUNE_SENTINEL_D (-1.0)
+#define SG_TUNE_SENTINEL_I (-1)
+
 typedef struct {
     int max_iterations;
     int max_time_seconds;

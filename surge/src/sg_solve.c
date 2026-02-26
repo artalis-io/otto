@@ -2,6 +2,17 @@
 
 #include <time.h>
 
+/* Apply tune parameter overrides to ALNS params (rewards, reaction, segment_size) */
+static void sg_apply_tune_to_alns(const SGContext *ctx, ARALNSParams *params) {
+    if (!ctx->tune_params) return;
+    const SGTuneParams *tp = ctx->tune_params;
+    if (tp->reaction_factor != SG_TUNE_SENTINEL_D) params->reaction_factor = tp->reaction_factor;
+    if (tp->reward_best != SG_TUNE_SENTINEL_D) params->reward_best = tp->reward_best;
+    if (tp->reward_better != SG_TUNE_SENTINEL_D) params->reward_better = tp->reward_better;
+    if (tp->reward_accepted != SG_TUNE_SENTINEL_D) params->reward_accepted = tp->reward_accepted;
+    if (tp->segment_size != SG_TUNE_SENTINEL_I) params->segment_size = tp->segment_size;
+}
+
 static double sg_monotonic_seconds(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -907,7 +918,10 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
             }
         }
         if (has_fixed) {
-            phase1_iters = total_iters * 3 / 5;  /* 60% */
+            double p1_frac = sg_tune_d(ctx,
+                ctx->tune_params ? ctx->tune_params->phase1_fraction : SG_TUNE_SENTINEL_D,
+                0.60);
+            phase1_iters = (int)(total_iters * p1_frac);
             if (phase1_iters < 500) phase1_iters = 500;
             if (phase1_iters > total_iters) phase1_iters = total_iters;
         } else {
@@ -933,9 +947,20 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
            This makes temperature ~1000x hotter so SA accepts distance-worsening
            moves that reduce vehicle count. */
         ar_alns_calibrate_sa(&params, sg_route_solution_cost(&initial, ctx), phase1_iters);
-        /* Slower cooling for vehicle minimization: decay to 5% of T0 (not 0.1%).
+        /* Slower cooling for vehicle minimization: decay to final_temp_ratio of T0.
            Vehicle-reducing moves need high temperature; Phase 2 handles distance. */
-        params.cooling_rate = exp(log(0.05) / (double)phase1_iters);
+        {
+            double p1_final = sg_tune_d(ctx,
+                ctx->tune_params ? ctx->tune_params->p1_final_temp_ratio : SG_TUNE_SENTINEL_D,
+                0.05);
+            params.cooling_rate = exp(log(p1_final) / (double)phase1_iters);
+        }
+        /* Override initial temperature if sa_accept_pct is tuned */
+        if (ctx->tune_params && ctx->tune_params->sa_accept_pct != SG_TUNE_SENTINEL_D) {
+            double abs_cost = fabs(sg_route_solution_cost(&initial, ctx));
+            if (abs_cost < 1e-12) abs_cost = 1.0;
+            params.initial_temp = ctx->tune_params->sa_accept_pct * abs_cost / 0.693147180559945;
+        }
         if (ctx->config.accept_type != SG_ACCEPT_SA) {
             params.accept_type = (ARAcceptType)ctx->config.accept_type;
             if (params.accept_type == AR_ACCEPT_RRT) {
@@ -954,11 +979,20 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
            cost_scale derived from median per-route cost of initial solution. */
         {
             double cost_scale = sg_compute_cost_scale(ctx, &initial);
-            int p1_segs = phase1_iters / ctx->config.segment_size;
-            sg_penalty_init_progressive(&ctx->penalty, 0.25, 0.15, 0.08, 1.3, 0.80,
+            int seg_sz = ctx->tune_params
+                ? sg_tune_i(ctx, ctx->tune_params->segment_size, ctx->config.segment_size)
+                : ctx->config.segment_size;
+            int p1_segs = phase1_iters / seg_sz;
+            double pen_ts = sg_tune_d(ctx, ctx->tune_params ? ctx->tune_params->pen_target_start : SG_TUNE_SENTINEL_D, 0.25);
+            double pen_te = sg_tune_d(ctx, ctx->tune_params ? ctx->tune_params->pen_target_end : SG_TUNE_SENTINEL_D, 0.15);
+            double pen_tol = sg_tune_d(ctx, ctx->tune_params ? ctx->tune_params->pen_tolerance : SG_TUNE_SENTINEL_D, 0.08);
+            double pen_inc = sg_tune_d(ctx, ctx->tune_params ? ctx->tune_params->pen_increase : SG_TUNE_SENTINEL_D, 1.3);
+            double pen_dec = sg_tune_d(ctx, ctx->tune_params ? ctx->tune_params->pen_decrease : SG_TUNE_SENTINEL_D, 0.80);
+            sg_penalty_init_progressive(&ctx->penalty, pen_ts, pen_te, pen_tol, pen_inc, pen_dec,
                                         cost_scale, p1_segs > 0 ? (uint32_t)p1_segs : 1);
         }
 
+        sg_apply_tune_to_alns(ctx, &params);
         alns = sg_create_route_alns(ctx, &params, &ops, 3.0, 2.0);
         if (!alns) {
             sg_penalty_free(&ctx->penalty);
@@ -1015,7 +1049,8 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
 
     /* ---- Phase 1.5: Vehicle crunch — short focused ALNS with vehicle-reducing operators ---- */
     if (p1_best && p1_best->vehicles_used > 1) {
-        int p15_iters = 500;
+        int p15_iters = sg_tune_i(ctx,
+            ctx->tune_params ? ctx->tune_params->phase15_iters : SG_TUNE_SENTINEL_I, 500);
         double cost_scale;
 
         sg_phase_start(ctx, SG_PHASE_1_5_CRUNCH,
@@ -1026,7 +1061,13 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
            Reducing Phase 2 budget degrades search quality on frozen-request models. */
 
         cost_scale = sg_compute_cost_scale(ctx, p1_best);
-        sg_penalty_init_adaptive(&ctx->penalty, 0.20, 0.05, 1.2, 0.85, cost_scale);
+        {
+            double p15_tgt = sg_tune_d(ctx, ctx->tune_params ? ctx->tune_params->pen_p15_target : SG_TUNE_SENTINEL_D, 0.20);
+            double p15_tol = sg_tune_d(ctx, ctx->tune_params ? ctx->tune_params->pen_p15_tolerance : SG_TUNE_SENTINEL_D, 0.05);
+            double p15_inc = sg_tune_d(ctx, ctx->tune_params ? ctx->tune_params->pen_p15_increase : SG_TUNE_SENTINEL_D, 1.2);
+            double p15_dec = sg_tune_d(ctx, ctx->tune_params ? ctx->tune_params->pen_p15_decrease : SG_TUNE_SENTINEL_D, 0.85);
+            sg_penalty_init_adaptive(&ctx->penalty, p15_tgt, p15_tol, p15_inc, p15_dec, cost_scale);
+        }
 
         {
             ARALNSParams p15_params;
@@ -1139,6 +1180,16 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
                 p2_cal = sg_route_solution_cost(p2_initial, ctx);
             }
             ar_alns_calibrate_sa(&params, p2_cal, phase2_iters);
+            /* Override Phase 2 cooling and SA acceptance if tuned */
+            if (ctx->tune_params) {
+                if (ctx->tune_params->p2_final_temp_ratio != SG_TUNE_SENTINEL_D) {
+                    params.cooling_rate = exp(log(ctx->tune_params->p2_final_temp_ratio) / (double)phase2_iters);
+                }
+                if (ctx->tune_params->sa_accept_pct != SG_TUNE_SENTINEL_D &&
+                    fabs(p2_cal) > 1e-12) {
+                    params.initial_temp = ctx->tune_params->sa_accept_pct * fabs(p2_cal) / 0.693147180559945;
+                }
+            }
         }
         if (ctx->config.accept_type != SG_ACCEPT_SA) {
             params.accept_type = (ARAcceptType)ctx->config.accept_type;
@@ -1153,6 +1204,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
             params.adaptive_q = 1;
         }
 
+        sg_apply_tune_to_alns(ctx, &params);
         alns = sg_create_route_alns(ctx, &params, &ops, 1.5, 1.0);
         if (!alns) {
             sg_penalty_free(&ctx->penalty);

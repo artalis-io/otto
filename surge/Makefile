@@ -39,6 +39,7 @@ TEST_BIN = test_surge
 BENCH_SOL_BIN = bench_solomon
 BENCH_PD_BIN = bench_li_lim
 BENCH_CORD_BIN = bench_cordeau
+BENCH_TUNE_BIN = bench_tune
 
 # Shared library for FFI bindings (Python ctypes, etc.)
 ARBOR_SRCS = ../arbor/src/ar_alns.c ../arbor/src/ar_operators.c ../arbor/src/arbor.c
@@ -66,6 +67,9 @@ TSAN_LDFLAGS = -fsanitize=thread
 
 .PHONY: all clean test lib debug bench bench-li-lim bench-cordeau \
         bench-quick bench-li-lim-quick bench-cordeau-quick bench-all-quick \
+        bench-gh-200 bench-gh-all bench-ll-200 bench-ll-all bench-full \
+        bench-tune tune-quick tune-all \
+        bench-download bench-validate \
         shared-lib python-test node-test cppcheck fuzz tsan
 
 all: lib $(TEST_BIN)
@@ -81,14 +85,19 @@ src/%.o: src/%.c
 $(TEST_BIN): tests/test_surge.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
 
-$(BENCH_SOL_BIN): benchmarks/bench_solomon.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+BENCH_INCLUDES = $(INCLUDES) -Ibenchmarks
 
-$(BENCH_PD_BIN): benchmarks/bench_li_lim.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+$(BENCH_SOL_BIN): benchmarks/bench_solomon.c benchmarks/sg_bench_utils.h $(LIB) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(BENCH_INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
 
-$(BENCH_CORD_BIN): benchmarks/bench_cordeau.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
-	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+$(BENCH_PD_BIN): benchmarks/bench_li_lim.c benchmarks/sg_bench_utils.h $(LIB) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(BENCH_INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+
+$(BENCH_CORD_BIN): benchmarks/bench_cordeau.c benchmarks/sg_bench_utils.h $(LIB) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(BENCH_INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+
+$(BENCH_TUNE_BIN): benchmarks/bench_tune.c benchmarks/sg_bench_utils.h $(LIB) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(BENCH_INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
 
 ../arbor/libarbor.a:
 	$(MAKE) -C ../arbor lib
@@ -122,6 +131,50 @@ bench-all-quick: $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN)
 	./$(BENCH_SOL_BIN) --dir benchmarks/solomon --iterations 1000
 	./$(BENCH_PD_BIN) --dir benchmarks/li_lim --iterations 1000
 	./$(BENCH_CORD_BIN) --dir benchmarks/cordeau --iterations 1000
+
+# Gehring-Homberger (large-scale VRPTW) benchmarks
+bench-gh-200: $(BENCH_SOL_BIN)
+	./$(BENCH_SOL_BIN) --dir benchmarks/gehring_homberger --bks benchmarks/bks/gehring_homberger.csv --size 200
+
+bench-gh-all: $(BENCH_SOL_BIN)
+	@for size in 200 400 600 800 1000; do \
+		echo "=== Gehring-Homberger $$size ==="; \
+		./$(BENCH_SOL_BIN) --dir benchmarks/gehring_homberger --bks benchmarks/bks/gehring_homberger.csv --size $$size --time-limit 60; \
+	done
+
+# Extended Li-Lim (large-scale PDPTW) benchmarks
+bench-ll-200: $(BENCH_PD_BIN)
+	./$(BENCH_PD_BIN) --dir benchmarks/li_lim_extended --bks benchmarks/bks/li_lim_extended.csv --size 200
+
+bench-ll-all: $(BENCH_PD_BIN)
+	@for size in 200 400 600 800 1000; do \
+		echo "=== Li-Lim Extended $$size ==="; \
+		./$(BENCH_PD_BIN) --dir benchmarks/li_lim_extended --bks benchmarks/bks/li_lim_extended.csv --size $$size --time-limit 120; \
+	done
+
+# Full benchmark suite (all sizes)
+bench-full: bench bench-li-lim bench-cordeau bench-gh-all bench-ll-all
+
+# Hyperparameter tuner
+bench-tune: $(BENCH_TUNE_BIN)
+	./$(BENCH_TUNE_BIN) --baseline --json
+
+tune-quick: $(BENCH_TUNE_BIN)
+	./$(BENCH_TUNE_BIN) --tier 0 --iterations 1000 --baseline --json
+
+tune-all: $(BENCH_TUNE_BIN)
+	./$(BENCH_TUNE_BIN) --all-tiers --iterations 2500 --baseline --json
+
+# Download published benchmarks (GH + Li-Lim extended + Cordeau)
+bench-download:
+	bash benchmarks/scripts/download_benchmarks.sh
+
+# Validate all instances parse correctly
+bench-validate: $(BENCH_SOL_BIN) $(BENCH_PD_BIN)
+	@echo "Validating Solomon 100..."
+	./$(BENCH_SOL_BIN) --dir benchmarks/solomon --iterations 1
+	@echo "Validating Li-Lim 100..."
+	./$(BENCH_PD_BIN) --dir benchmarks/li_lim --iterations 1
 
 shared-lib: $(SHARED_LIB)
 
@@ -181,7 +234,7 @@ tsan: $(TSAN_TEST_BIN)
 	./$(TSAN_TEST_BIN)
 
 clean:
-	rm -f $(OBJS) $(LIB) $(TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(SHARED_LIB) \
+	rm -f $(OBJS) $(LIB) $(TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(BENCH_TUNE_BIN) $(SHARED_LIB) \
 	  $(FUZZ_BIN) $(TSAN_TEST_BIN)
 
 help:
