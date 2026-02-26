@@ -5261,11 +5261,16 @@ static int simplex_phase1(SimplexSolver *solver) {
                 lp_refactor_policy_phase1_dir_stabilize_cooldown_updates(
                     tab->m, degenerate_count, dir_stabilize_repeat_count);
 
-            if (dir_stabilize_cooldown > 0 && force_dir_refactor) {
-                lp_telemetry_record_phase1_dir_stabilize_force(
+            if (dir_stabilize_cooldown > 0) {
+                lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(
                     solver,
-                    force_dir_refactor_extreme,
-                    force_dir_refactor_lu_health);
+                    dir_inf / RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER);
+                if (force_dir_refactor) {
+                    lp_telemetry_record_phase1_dir_stabilize_force(
+                        solver,
+                        force_dir_refactor_extreme,
+                        force_dir_refactor_lu_health);
+                }
             }
 
             if (dir_stabilize_cooldown > 0 && !force_dir_refactor) {

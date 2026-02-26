@@ -599,6 +599,12 @@ typedef struct {
     int perf_phase1_refactor_safety_forced;
     int perf_phase1_dir_stabilize_force_extreme_dir;
     int perf_phase1_dir_stabilize_force_lu_health;
+    int perf_phase1_dir_stabilize_cooldown_candidates;
+    int perf_phase1_dir_stabilize_ratio_le_3;
+    int perf_phase1_dir_stabilize_ratio_le_10;
+    int perf_phase1_dir_stabilize_ratio_le_30;
+    int perf_phase1_dir_stabilize_ratio_le_100;
+    int perf_phase1_dir_stabilize_ratio_gt_100;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -837,6 +843,12 @@ typedef struct {
     int perf_phase1_refactor_safety_forced;
     int perf_phase1_dir_stabilize_force_extreme_dir;
     int perf_phase1_dir_stabilize_force_lu_health;
+    int perf_phase1_dir_stabilize_cooldown_candidates;
+    int perf_phase1_dir_stabilize_ratio_le_3;
+    int perf_phase1_dir_stabilize_ratio_le_10;
+    int perf_phase1_dir_stabilize_ratio_le_30;
+    int perf_phase1_dir_stabilize_ratio_le_100;
+    int perf_phase1_dir_stabilize_ratio_gt_100;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -1217,6 +1229,9 @@ void lp_telemetry_record_periodic_refactor_trigger(SimplexSolver *solver,
 void lp_telemetry_record_phase1_dir_stabilize_force(SimplexSolver *solver,
                                                     int force_extreme_dir,
                                                     int force_lu_health);
+void lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(
+    SimplexSolver *solver,
+    double dir_inf_ratio);
 void lp_telemetry_lu_record_dense_factorize_ms(LUFactorization *lu,
                                                double elapsed_ms);
 void lp_telemetry_lu_record_dense_factorize_timed(LUFactorization *lu,

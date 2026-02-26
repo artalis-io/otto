@@ -524,6 +524,12 @@ typedef struct {
     int perf_phase1_refactor_safety_forced;
     int perf_phase1_dir_stabilize_force_extreme_dir;
     int perf_phase1_dir_stabilize_force_lu_health;
+    int perf_phase1_dir_stabilize_cooldown_candidates;
+    int perf_phase1_dir_stabilize_ratio_le_3;
+    int perf_phase1_dir_stabilize_ratio_le_10;
+    int perf_phase1_dir_stabilize_ratio_le_30;
+    int perf_phase1_dir_stabilize_ratio_le_100;
+    int perf_phase1_dir_stabilize_ratio_gt_100;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
