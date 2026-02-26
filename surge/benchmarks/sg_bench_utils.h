@@ -212,7 +212,7 @@ static int sg_collect_cases(const char *dir, int size_filter,
 
             /* Apply size filter if set */
             if (size_filter > 0) {
-                int subdir_size = atoi(de->d_name);
+                int subdir_size = (int)strtol(de->d_name, NULL, 10);
                 if (subdir_size != size_filter) continue;
             }
 
