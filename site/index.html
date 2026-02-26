@@ -2577,9 +2577,9 @@
                             Combined with lower-bound pruning, it finds near-optimal solutions in bounded time.
                         </p>
                         <p>
-                            <strong>Surge</strong> uses Arbor&rsquo;s ALNS to solve rich VRP/PDPTW problems.
-                            Acceptance criteria (simulated annealing, record-to-record travel) let it escape
-                            local optima and converge within 5% of best known benchmarks.
+                            <a href="modules/surge.html" style="text-decoration:none"><strong>Surge</strong></a> uses Arbor&rsquo;s ALNS to solve rich VRP/PDPTW problems with 25+ constraint types.
+                            Population-based search with infeasible-space exploration beats BKS average distance
+                            on Solomon benchmarks.
                         </p>
                         <div class="algo-viz-features">
                             <div class="algo-viz-feature">ALNS Framework</div>
@@ -3001,15 +3001,15 @@ cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span
                         <div class="card-meta">39 tests &middot; 1.2K loc &middot; Generic search framework</div>
                         <div class="card-roadmap">Roadmap: Beam search, lower-bound pruning, Great Deluge acceptance</div>
                     </div>
-                    <div class="card">
+                    <a href="modules/surge.html" class="card" style="text-decoration:none;display:block">
                         <div class="card-header">
                             <span class="card-name">Surge</span>
                             <span class="card-lang">C</span>
                         </div>
-                        <div class="card-desc">VRP/PDPTW solver. Route-native stop sequencing, adaptive feasibility, ALNS via Arbor framework.</div>
-                        <div class="card-meta">90 tests &middot; 6K loc &middot; ALNS metaheuristic</div>
-                        <div class="card-roadmap">Roadmap: Rich constraints (multi-dim capacity, disjunct time windows), DARP and multi-depot support</div>
-                    </div>
+                        <div class="card-desc">Rich VRP/PDPTW solver. 25+ constraint types, BKS-competitive quality, ALNS via Arbor. Runs in browser via WASM.</div>
+                        <div class="card-meta">340 tests &middot; 40K loc &middot; ALNS metaheuristic</div>
+                        <div class="card-roadmap">View product page: benchmarks, competitive analysis, quick start &rarr;</div>
+                    </a>
                 </div>
             </div>
 
