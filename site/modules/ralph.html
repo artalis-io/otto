@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ralph — LP/MIP Solver | OTTO</title>
+    <meta name="description" content="Ralph is a complete LP/MIP solver written in C with zero dependencies. Revised simplex, branch-and-bound, network simplex, Jonker-Volgenant assignment solver. WASM-compilable, embeddable, domain-aware.">
+
+    <!-- SEO -->
+    <link rel="canonical" href="https://ottofleet.io/modules/ralph.html">
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#0a0a0a">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="Ralph — LP/MIP Solver | OTTO">
+    <meta property="og:description" content="Zero-dependency LP/MIP solver. Revised simplex, branch-and-bound, network simplex, JVC assignment solver. Compiles to WASM. Domain-aware problem detection routes to specialized algorithms.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://ottofleet.io/modules/ralph.html">
+    <meta property="og:site_name" content="OTTO">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%230a0a0a'/%3E%3Ctext x='50' y='68' font-family='ui-monospace,monospace' font-size='60' font-weight='700' fill='%233b82f6' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
+
+    <!-- Shared Styles -->
+    <link rel="stylesheet" href="../style.css">
+
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Ralph",
+        "alternateName": "OTTO Ralph LP/MIP Solver",
+        "description": "Complete LP/MIP solver with revised simplex, branch-and-bound, network simplex, and JVC assignment solver. Zero external dependencies, compiles to WebAssembly.",
+        "url": "https://ottofleet.io/modules/ralph.html",
+        "applicationCategory": "BusinessApplication",
+        "operatingSystem": "Cross-platform (WASM, Linux, macOS)",
+        "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+        "author": {
+            "@type": "Person",
+            "name": "Mark Farkas"
+        }
+    }
+    </script>
+
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --bg-secondary: #141414;
+            --bg-tertiary: #1a1a1a;
+            --text: #e5e5e5;
+            --text-muted: #9ca3af;
+            --accent: #3b82f6;
+            --accent-dim: #1e40af;
+            --border: #2a2a2a;
+            --success: #22c55e;
+            --warning: #eab308;
+            --error: #ef4444;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+
+        body {
+            font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'Segoe UI Mono', Menlo, Monaco, Consolas, monospace;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            font-size: 15px;
+        }
+
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        .container { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
+
+        header { padding: 48px 0 32px; border-bottom: 1px solid var(--border); }
+        .header-top { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px; }
+        .logo { font-size: 32px; font-weight: 700; letter-spacing: 4px; color: var(--text); animation: logo-electric 4s infinite; text-shadow: 0 0 10px rgba(255,255,255,0.1); }
+        .logo span { color: var(--accent); }
+
+        @keyframes logo-electric {
+            0%, 100% { text-shadow: 0 0 10px rgba(255,255,255,0.15), 0 0 20px rgba(255,255,255,0.05); transform: translate(0,0); filter: brightness(1); }
+            5% { text-shadow: -1px 0 rgba(255,100,100,0.5), 1px 0 rgba(100,180,255,0.5), 0 0 10px rgba(255,255,255,0.2); transform: translate(0.5px,0); }
+            10% { text-shadow: 0 0 10px rgba(255,255,255,0.15); transform: translate(0,0); }
+            30% { text-shadow: -2px 0 rgba(255,60,60,0.6), 2px 0 rgba(60,180,255,0.6), 0 0 20px rgba(255,255,255,0.3); transform: translate(1px,0) skewX(0.5deg); filter: brightness(1.15); }
+            31% { text-shadow: 2px 0 rgba(255,60,60,0.5), -2px 0 rgba(60,180,255,0.5), 0 0 15px rgba(255,255,255,0.2); transform: translate(-0.5px,0.3px) skewX(-0.3deg); }
+            33% { text-shadow: 0 0 10px rgba(255,255,255,0.15); transform: translate(0,0); filter: brightness(1); }
+            55% { text-shadow: 0.5px 0 rgba(255,150,150,0.3), -0.5px 0 rgba(150,200,255,0.3), 0 0 10px rgba(255,255,255,0.15); }
+            60% { text-shadow: 0 0 10px rgba(255,255,255,0.15), 0 0 20px rgba(255,255,255,0.05); }
+            75% { text-shadow: -1.5px 0 rgba(255,80,80,0.5), 1.5px 0 rgba(80,180,255,0.5), 0 0 15px rgba(255,255,255,0.25); transform: translate(0.6px,-0.2px); filter: brightness(1.1); }
+            77% { text-shadow: 0 0 10px rgba(255,255,255,0.15); transform: translate(0,0); filter: brightness(1); }
+            92% { filter: brightness(0.95); } 93% { filter: brightness(1.08); } 94% { filter: brightness(1); }
+        }
+
+        .tagline { margin-top: 8px; color: var(--text-muted); font-size: 14px; }
+        .header-nav { display: flex; gap: 8px; flex-wrap: wrap; }
+        .nav-group { display: flex; gap: 8px; flex-wrap: wrap; }
+        .nav-separator { color: var(--border); font-weight: 300; align-self: center; }
+        .header-nav a { padding: 6px 12px; font-size: 13px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 4px; text-decoration: none; }
+        .header-nav a:hover { color: var(--text); border-color: var(--accent-dim); text-decoration: none; }
+
+        .hero { padding: 48px 0; border-bottom: 1px solid var(--border); }
+        .hero h1 { font-size: 20px; font-weight: 600; margin-bottom: 16px; }
+        .hero p { color: var(--text-muted); max-width: 700px; }
+        .badges { margin-top: 24px; display: flex; flex-wrap: wrap; gap: 12px; }
+        .badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; font-size: 13px; color: var(--text-muted); }
+        .badge.green { border-color: var(--success); color: var(--success); }
+        .badge.blue { border-color: var(--accent); color: var(--accent); }
+        .badge.yellow { border-color: var(--warning); color: var(--warning); }
+
+        .section { padding: 48px 0; border-bottom: 1px solid var(--border); }
+        .section-title { font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 2px; color: var(--text-muted); margin-bottom: 24px; }
+        .section h2 { font-size: 18px; font-weight: 600; margin-bottom: 16px; }
+        .section h3 { font-size: 15px; font-weight: 600; margin-bottom: 12px; margin-top: 32px; }
+        .section h3:first-child { margin-top: 0; }
+        .section p { color: var(--text-muted); margin-bottom: 16px; max-width: 800px; }
+        .section p strong { color: var(--text); }
+        .section ul { color: var(--text-muted); margin-bottom: 16px; padding-left: 24px; }
+        .section ul li { margin-bottom: 6px; }
+        .section ul li strong { color: var(--text); }
+
+        .code-block { background: linear-gradient(135deg, #0a0a0a 0%, #141414 100%); border: 1px solid #2a2a2a; border-radius: 6px; padding: 20px; overflow-x: auto; position: relative; overflow: hidden; margin-bottom: 16px; }
+        .code-block::after { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: repeating-linear-gradient(0deg, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 1px, transparent 1px, transparent 2px); pointer-events: none; }
+        .code-block pre { margin: 0; font-size: 13px; font-family: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace; position: relative; z-index: 1; animation: crt-flicker-gray 5s infinite; }
+        .code-block .comment { color: #707070; text-shadow: 0 0 5px rgba(150,150,150,0.2); }
+        .code-block .command { color: #50c878; text-shadow: 0 0 5px rgba(80,200,120,0.4), 0 0 10px rgba(80,200,120,0.2); }
+        .code-block .keyword { color: #60a5fa; text-shadow: 0 0 5px rgba(96,165,250,0.3); }
+        .code-block .type { color: #a78bfa; text-shadow: 0 0 5px rgba(167,139,250,0.3); }
+        .code-block .string { color: #fbbf24; text-shadow: 0 0 5px rgba(251,191,36,0.3); }
+        .code-block .number { color: #34d399; text-shadow: 0 0 5px rgba(52,211,153,0.3); }
+        .code-block .func { color: #f0abfc; text-shadow: 0 0 5px rgba(240,171,252,0.3); }
+        @keyframes crt-flicker-gray { 0%, 100% { opacity: 1; } 94% { opacity: 1; } 95% { opacity: 0.97; } 96% { opacity: 1; } }
+
+        .ascii-art { background: linear-gradient(135deg, #1a1a1a 0%, #222 100%); border: 1px solid #333; border-radius: 6px; padding: 24px; overflow-x: auto; font-size: 13px; line-height: 1.3; position: relative; overflow: hidden; margin-bottom: 16px; }
+        .ascii-art::after { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: repeating-linear-gradient(0deg, rgba(255,255,255,0.03) 0px, rgba(255,255,255,0.03) 1px, transparent 1px, transparent 2px); pointer-events: none; }
+        .ascii-art pre { margin: 0; font-family: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace; color: #a0a0a0; text-shadow: 0 0 5px rgba(200,200,200,0.3), 0 0 10px rgba(200,200,200,0.1); position: relative; z-index: 1; animation: crt-flicker-gray 5s infinite; letter-spacing: 0; word-spacing: 0; font-variant-ligatures: none; font-feature-settings: "calt" 0; line-height: 1; }
+
+        table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 24px; }
+        th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+        th { color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; white-space: nowrap; }
+        td { color: var(--text-muted); }
+        td:first-child { color: var(--text); font-weight: 500; }
+        .y { color: var(--success); font-weight: 600; }
+        .p { color: var(--warning); }
+        .n { color: #555; }
+        .table-scroll { overflow-x: auto; margin-bottom: 24px; }
+        .table-scroll table { min-width: 700px; margin-bottom: 0; }
+        tr.highlight td { background: rgba(59,130,246,0.05); }
+        tr.highlight td:first-child { color: var(--accent); }
+
+        .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 16px; }
+        .feature-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 20px; }
+        .feature-card:hover { border-color: var(--accent-dim); }
+        .feature-card-title { font-weight: 600; font-size: 14px; margin-bottom: 8px; }
+        .feature-card-desc { color: var(--text-muted); font-size: 13px; line-height: 1.5; }
+        .feature-card-count { font-size: 12px; color: var(--accent); margin-top: 8px; }
+
+        .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .stat { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 16px; text-align: center; }
+        .stat-value { font-size: 24px; font-weight: 700; color: var(--text); }
+        .stat-value.green { color: var(--success); }
+        .stat-value.blue { color: var(--accent); }
+        .stat-value.yellow { color: var(--warning); }
+        .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+
+        .callout { background: var(--bg-secondary); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; padding: 16px 20px; margin-bottom: 24px; }
+        .callout p { margin-bottom: 0; }
+        .callout.honest { border-left-color: var(--warning); }
+
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+
+        footer { padding: 32px 0; color: var(--text-muted); font-size: 13px; }
+        .footer-links { display: flex; gap: 24px; margin-bottom: 16px; }
+
+        .skip-link { position: absolute; top: -40px; left: 0; background: var(--accent); color: white; padding: 8px 16px; z-index: 100; text-decoration: none; }
+        .skip-link:focus { top: 0; }
+
+        @media (max-width: 600px) {
+            .logo { font-size: 24px; }
+            .hero h1 { font-size: 18px; }
+            .ascii-art { font-size: 10px; padding: 16px; }
+            .footer-links { flex-direction: column; gap: 8px; }
+            .header-top { flex-direction: column; }
+            .header-nav { margin-top: 16px; }
+            .two-col { grid-template-columns: 1fr; }
+            .stat-row { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+    <div class="container">
+        <header>
+            <div class="header-top">
+                <div>
+                    <a href="../index.html" style="text-decoration:none"><div class="logo"><span>O</span>TTO</div></a>
+                    <div class="tagline">Ralph &mdash; LP/MIP Optimization Solver</div>
+                </div>
+                <nav class="header-nav">
+                    <div class="nav-group">
+                        <a href="../index.html">Home</a>
+                        <a href="../api.html">API</a>
+                    </div>
+                    <span class="nav-separator">|</span>
+                    <div class="nav-group">
+                        <a href="#why">Why</a>
+                        <a href="#solvers">Solvers</a>
+                        <a href="#benchmarks">Benchmarks</a>
+                        <a href="#architecture">Architecture</a>
+                        <a href="#quickstart">Quick Start</a>
+                    </div>
+                </nav>
+            </div>
+        </header>
+
+        <main id="main-content">
+
+        <!-- ============================================================ -->
+        <!-- Hero -->
+        <!-- ============================================================ -->
+        <section class="hero">
+            <h1>LP/MIP solver that fits in a browser tab</h1>
+            <p>
+                Ralph is a complete Linear Programming and Mixed-Integer Programming solver written in C11
+                with zero external dependencies. Revised simplex, branch-and-bound with Gomory cuts,
+                network simplex, and a Jonker-Volgenant-Castanon assignment solver. Domain-aware problem
+                detection auto-routes to specialized algorithms for 86&ndash;633&times; speedups.
+                Compiles to WASM.
+            </p>
+            <div class="badges">
+                <span class="badge green">600+ tests</span>
+                <span class="badge blue">4 solver engines</span>
+                <span class="badge yellow">Zero deps</span>
+                <span class="badge">C11</span>
+                <span class="badge">WASM</span>
+                <span class="badge">LP / MPS / JSON</span>
+                <span class="badge">AGPLv3 + Trucking Exception</span>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Why -->
+        <!-- ============================================================ -->
+        <section class="section" id="why">
+            <div class="section-title">Why</div>
+            <h2>A solver that knows your problem structure</h2>
+
+            <p>
+                Commercial solvers (Gurobi, CPLEX) are incredible at general-purpose optimization.
+                But they're black boxes that cost six figures, ship as 100MB+ binaries, require
+                license servers, and can't run in a browser or on the edge. Open-source alternatives
+                (HiGHS, GLPK) are lighter but still treat every problem as a generic LP/MIP.
+            </p>
+
+            <p>
+                Ralph takes a different approach: <strong>domain-aware optimization</strong>. When you
+                submit a problem, Ralph analyzes its structure. Is it a linear assignment? Route it to the
+                JVC solver (633&times; faster). Is it a minimum-cost network flow? Route it to the network
+                simplex (5&ndash;10&times; faster). Is it a set-covering problem from fleet optimization?
+                Apply domain-specific cuts.
+            </p>
+
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-card-title">Four solver engines</div>
+                    <div class="feature-card-desc">
+                        Revised simplex for general LP. Branch-and-bound with Gomory cuts for MIP.
+                        Network simplex for MCNF problems. Jonker-Volgenant-Castanon for assignment.
+                        Each specialized, each tested independently.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Automatic problem detection</div>
+                    <div class="feature-card-desc">
+                        Submit a generic LP. If it's secretly an assignment problem, Ralph detects
+                        the structure and dispatches to JVC &mdash; 86&ndash;633&times; faster than simplex.
+                        Network structure? Network simplex. No user intervention needed.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Embeddable kernel</div>
+                    <div class="feature-card-desc">
+                        ~35K lines of C. Zero dependencies. Compiles to a static library or WASM module.
+                        Powers FuelWise (refueling optimization) and future OTTO modules. Same solver
+                        runs native, in-browser, or embedded in your application.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Interface strategy</div>
+                    <div class="feature-card-desc">
+                        Ralph is the native solver for structured trucking problems (FuelWise, HoSE)
+                        where domain-specific cuts provide competitive advantage. For hard general-purpose
+                        MIPs, interface to Gurobi/CPLEX/HiGHS via <code>ralph_set_backend()</code>.
+                    </div>
+                </div>
+            </div>
+
+            <div class="callout">
+                <p>
+                    <strong>The strategy.</strong> Ralph doesn't compete with Gurobi on arbitrary LPs.
+                    It wins on structured trucking problems where (1) the problem type is known,
+                    (2) domain-specific cuts exist, and (3) embedding in WASM or edge devices matters.
+                    For everything else, Ralph provides a clean interface to commercial solvers.
+                </p>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Solver Engines -->
+        <!-- ============================================================ -->
+        <section class="section" id="solvers">
+            <div class="section-title">Solver Engines</div>
+            <h2>Four algorithms, one API</h2>
+
+            <div class="ascii-art">
+<pre>
+  ralph_optimize(model)
+         │
+         ▼
+  ┌──────────────┐     ┌─────────────┐
+  │  detect.c    │────▶│ LAP?        │──▶ JVC Solver (lap.c)
+  │  Analyze     │     │ Network?    │──▶ Network Simplex (netflow.c)
+  │  structure   │     │ Set Cover?  │──▶ Simplex + domain cuts
+  └──────┬───────┘     └─────────────┘
+         │ General LP/MIP
+         ▼
+  ┌──────────────┐     ┌─────────────┐     ┌─────────────┐
+  │  presolve.c  │────▶│ simplex.c   │────▶│   lu.c      │
+  │  Reduce      │     │ Revised     │     │ LU factor + │
+  │  Simplify    │     │ Simplex     │     │ eta updates │
+  └──────────────┘     └──────┬──────┘     └─────────────┘
+                              │ MIP?
+                              ▼
+                       ┌──────────────┐     ┌─────────────┐
+                       │ branch_      │────▶│  cuts.c     │
+                       │ bound.c      │     │ Gomory MIC  │
+                       │ B&amp;B tree     │     │ Reach cuts  │
+                       └──────────────┘     └─────────────┘
+</pre>
+            </div>
+
+            <div class="stat-row">
+                <div class="stat">
+                    <div class="stat-value blue">4</div>
+                    <div class="stat-label">Solver Engines</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">600+</div>
+                    <div class="stat-label">Tests</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value">~35K</div>
+                    <div class="stat-label">Lines of C</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">0</div>
+                    <div class="stat-label">Ext Dependencies</div>
+                </div>
+            </div>
+
+            <h3>1. Revised Simplex (General LP)</h3>
+            <p>
+                Full revised simplex implementation with LU factorization and eta file updates.
+                Dantzig and steepest-edge pricing, Harris two-pass ratio test, automatic
+                refactorization after 50 eta updates to prevent numerical drift. Two-phase method
+                with Big-M for infeasibility detection.
+            </p>
+
+            <h3>2. Branch-and-Bound (MIP)</h3>
+            <p>
+                LP-based branch-and-bound for mixed-integer programs. Best-first + depth-first
+                node selection. Most-fractional and pseudocost branching variable selection.
+                Gomory mixed-integer cutting planes. Presolve: singleton elimination, redundant
+                rows, bound tightening.
+            </p>
+
+            <h3>3. Jonker-Volgenant-Castanon (Assignment)</h3>
+            <p>
+                Industrial-strength linear assignment solver. Dense, sparse (CSR), and rectangular
+                variants. O(n&sup3;) worst case, often O(n&sup2;) in practice. <strong>k-best solutions</strong>
+                via Murty's algorithm. Warm start from previous dual solution (5&ndash;7&times; speedup).
+                Priority and cardinality constraints for unbalanced problems.
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Size</th>
+                        <th>Dense</th>
+                        <th>Sparse (10%)</th>
+                        <th>Warm Start</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>n = 500</td>
+                        <td>1.5ms</td>
+                        <td>1.1ms</td>
+                        <td style="color: var(--success)">0.3ms (5&times;)</td>
+                    </tr>
+                    <tr>
+                        <td>n = 1,000</td>
+                        <td>10ms</td>
+                        <td>6.7ms</td>
+                        <td style="color: var(--success)">1.5ms (7&times;)</td>
+                    </tr>
+                    <tr>
+                        <td>n = 2,000</td>
+                        <td>42ms</td>
+                        <td>&mdash;</td>
+                        <td style="color: var(--success)">6ms (7&times;)</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>4. Network Simplex (MCNF)</h3>
+            <p>
+                Specialized solver for Minimum Cost Network Flow problems. Candidate list pricing,
+                warm start, cost scaling (&epsilon;-scaling for degeneracy), and flow decomposition
+                into paths. Auto-detects special cases: shortest path, assignment, transportation.
+            </p>
+
+            <h3>Automatic problem detection</h3>
+            <p>
+                When <code>detect_special</code> is enabled, Ralph analyzes LP structure before solving:
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Detection</th>
+                        <th>Signature</th>
+                        <th>Dispatch</th>
+                        <th>Speedup</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Linear Assignment</td>
+                        <td>All-binary vars, permutation constraints</td>
+                        <td>JVC solver</td>
+                        <td style="color: var(--success)">86&ndash;633&times;</td>
+                    </tr>
+                    <tr>
+                        <td>Network Flow</td>
+                        <td>&plusmn;1 coefficients, flow conservation</td>
+                        <td>Network simplex</td>
+                        <td style="color: var(--success)">5&ndash;10&times;</td>
+                    </tr>
+                    <tr>
+                        <td>Set Cover/Partition</td>
+                        <td>Binary vars, 0/1 constraint matrix</td>
+                        <td>Simplex + domain cuts</td>
+                        <td>Problem-dependent</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Benchmarks -->
+        <!-- ============================================================ -->
+        <section class="section" id="benchmarks">
+            <div class="section-title">Benchmarks</div>
+            <h2>Where Ralph wins and where it doesn't</h2>
+
+            <h3>NETLIB LP test suite</h3>
+            <p>
+                Standard benchmark for LP solvers. Ralph passes 8 of 12 tested problems.
+                Four failures are due to numerical instability in LU updates &mdash; known issues
+                with documented root causes.
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Problem</th>
+                        <th>Status</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>adlittle</td><td class="y">PASS</td><td>9.6&times; faster than GLPK</td></tr>
+                    <tr><td>share2b</td><td class="y">PASS</td><td>6.8&times; faster than GLPK</td></tr>
+                    <tr><td>kb2, sc50a, sc50b</td><td class="y">PASS</td><td>Small dense problems</td></tr>
+                    <tr><td>grow7, israel, stocfor1</td><td class="y">PASS</td><td>Comparable to GLPK</td></tr>
+                    <tr><td>bnl1, brandy, degen2</td><td class="y">PASS</td><td>Degenerate problems handled</td></tr>
+                    <tr><td>bandm</td><td class="n">FAIL</td><td>Numerical instability in LU</td></tr>
+                    <tr><td>beaconfd</td><td class="n">FAIL</td><td>LU update threshold issue</td></tr>
+                    <tr><td>blend</td><td class="n">FAIL</td><td>Returns INFEASIBLE incorrectly</td></tr>
+                    <tr><td>lotfi</td><td class="n">FAIL</td><td>Numerical instability</td></tr>
+                </tbody>
+            </table>
+
+            <div class="callout honest">
+                <p>
+                    <strong>Honest assessment.</strong> Ralph's LP solver is 2&ndash;5&times; slower than GLPK
+                    per-iteration on large sparse problems. The bottleneck is FTRAN (63%) and LU updates (35%).
+                    Hyper-sparse FTRAN exists but is disabled due to numerical instability. Ralph is not
+                    trying to beat Gurobi at general LP &mdash; it wins on structured problems where specialized
+                    algorithms (JVC, network simplex) provide orders-of-magnitude speedups.
+                </p>
+            </div>
+
+            <h3>Specialized solver performance</h3>
+            <p>
+                Where Ralph excels: problems with exploitable structure.
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Problem Type</th>
+                        <th>Ralph (Specialized)</th>
+                        <th>Ralph (Simplex)</th>
+                        <th>GLPK</th>
+                        <th>Speedup</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Assignment (n=500)</td>
+                        <td style="color: var(--success)">1.5ms (JVC)</td>
+                        <td>950ms (simplex)</td>
+                        <td>130ms</td>
+                        <td style="color: var(--success)">633&times; vs simplex</td>
+                    </tr>
+                    <tr>
+                        <td>Assignment (n=1000)</td>
+                        <td style="color: var(--success)">10ms (JVC)</td>
+                        <td>timeout</td>
+                        <td>860ms</td>
+                        <td style="color: var(--success)">86&times; vs GLPK</td>
+                    </tr>
+                    <tr>
+                        <td>Transportation</td>
+                        <td style="color: var(--success)">Network simplex</td>
+                        <td>Simplex</td>
+                        <td>Simplex</td>
+                        <td style="color: var(--success)">5&ndash;10&times;</td>
+                    </tr>
+                    <tr>
+                        <td>Shortest path</td>
+                        <td style="color: var(--success)">Network simplex</td>
+                        <td>Simplex</td>
+                        <td>Simplex</td>
+                        <td style="color: var(--success)">~10&times;</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- API -->
+        <!-- ============================================================ -->
+        <section class="section" id="api">
+            <div class="section-title">API</div>
+            <h2>Build, solve, read &mdash; three steps</h2>
+
+            <div class="code-block">
+<pre><span class="comment">// Build model</span>
+<span class="type">RalphModel</span> *m = <span class="func">ralph_create</span>();
+<span class="func">ralph_set_obj_sense</span>(m, <span class="type">RALPH_MAXIMIZE</span>);
+
+<span class="type">int</span> x = <span class="func">ralph_add_var</span>(m, <span class="number">0</span>, <span class="number">RALPH_INFINITY</span>, <span class="number">5.0</span>, <span class="type">RALPH_CONTINUOUS</span>);
+<span class="type">int</span> y = <span class="func">ralph_add_var</span>(m, <span class="number">0</span>, <span class="number">RALPH_INFINITY</span>, <span class="number">3.0</span>, <span class="type">RALPH_CONTINUOUS</span>);
+
+<span class="type">int</span> idx[] = {x, y};
+<span class="type">double</span> vals[] = {<span class="number">2.0</span>, <span class="number">4.0</span>};
+<span class="func">ralph_add_constraint</span>(m, <span class="number">2</span>, idx, vals, <span class="type">RALPH_LESS_EQUAL</span>, <span class="number">40.0</span>);
+
+<span class="comment">// Solve</span>
+<span class="func">ralph_optimize</span>(m);
+
+<span class="comment">// Read solution</span>
+<span class="keyword">if</span> (<span class="func">ralph_get_status</span>(m) == <span class="type">RALPH_STATUS_OPTIMAL</span>) {
+    <span class="type">double</span> obj = <span class="func">ralph_get_objval</span>(m);
+    <span class="type">double</span> sol[<span class="number">2</span>];
+    <span class="func">ralph_get_solution</span>(m, sol);
+}
+<span class="func">ralph_free</span>(m);</pre>
+            </div>
+
+            <h3>Input formats</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Format</th>
+                        <th>Description</th>
+                        <th>Example</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>LP format</td>
+                        <td>Human-readable, named variables</td>
+                        <td><code>max: 5 x + 3 y</code></td>
+                    </tr>
+                    <tr>
+                        <td>MPS format</td>
+                        <td>Industry standard, column-oriented</td>
+                        <td>NETLIB, MIPLIB compatible</td>
+                    </tr>
+                    <tr>
+                        <td>JSON format</td>
+                        <td>Structured, programmatic</td>
+                        <td>REST API / WASM input</td>
+                    </tr>
+                    <tr>
+                        <td>C API</td>
+                        <td>Direct model building</td>
+                        <td><code>ralph_add_var()</code></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>REST API</h3>
+
+            <div class="code-block">
+<pre><span class="command">$ curl -X POST http://localhost:8084/api/v1/solve \</span>
+<span class="command">    -H "Content-Type: text/plain" \</span>
+<span class="command">    -d '</span>
+<span class="keyword">max:</span> <span class="number">5</span> x + <span class="number">3</span> y
+
+<span class="keyword">subject to</span>
+wood:  <span class="number">2</span> x + <span class="number">4</span> y &lt;= <span class="number">40</span>
+labor: <span class="number">3</span> x + <span class="number">2</span> y &lt;= <span class="number">24</span>
+
+<span class="keyword">bounds</span>
+x &gt;= <span class="number">0</span>
+y &gt;= <span class="number">0</span>
+
+<span class="keyword">end</span>
+<span class="command">'</span>
+
+<span class="comment"># Response:</span>
+<span class="comment"># solution status: OPTIMAL</span>
+<span class="comment"># objective value: 40.000000</span>
+<span class="comment"># x 8.000000</span>
+<span class="comment"># y 0.000000</span></pre>
+            </div>
+
+            <h3>Specialized APIs</h3>
+
+            <div class="two-col">
+                <div>
+                    <h3>Assignment (LAP)</h3>
+                    <div class="code-block">
+<pre><span class="type">double</span> cost[<span class="number">9</span>] = {
+    <span class="number">7</span>, <span class="number">2</span>, <span class="number">1</span>,
+    <span class="number">2</span>, <span class="number">4</span>, <span class="number">6</span>,
+    <span class="number">5</span>, <span class="number">3</span>, <span class="number">1</span>
+};
+<span class="type">int</span> row_sol[<span class="number">3</span>], col_sol[<span class="number">3</span>];
+<span class="type">double</span> total;
+
+<span class="func">ralph_lap_solve</span>(
+    <span class="number">3</span>, cost,
+    <span class="type">RALPH_LAP_MINIMIZE</span>,
+    row_sol, col_sol,
+    NULL, NULL, &amp;total);</pre>
+                    </div>
+                </div>
+                <div>
+                    <h3>Network Flow (MCNF)</h3>
+                    <div class="code-block">
+<pre><span class="type">RalphNetflowProblem</span> p = {
+    .num_nodes = <span class="number">4</span>,
+    .num_arcs  = <span class="number">5</span>,
+    .tail   = {<span class="number">0</span>,<span class="number">0</span>,<span class="number">1</span>,<span class="number">1</span>,<span class="number">2</span>},
+    .head   = {<span class="number">1</span>,<span class="number">2</span>,<span class="number">2</span>,<span class="number">3</span>,<span class="number">3</span>},
+    .cost   = {<span class="number">2</span>,<span class="number">4</span>,<span class="number">1</span>,<span class="number">3</span>,<span class="number">2</span>},
+    .cap    = {<span class="number">4</span>,<span class="number">2</span>,<span class="number">3</span>,<span class="number">2</span>,<span class="number">3</span>},
+    .supply = {<span class="number">4</span>,<span class="number">0</span>,<span class="number">0</span>,<span class="number">-4</span>}
+};
+<span class="type">RalphNetflowResult</span> r;
+<span class="func">ralph_netflow_solve</span>(
+    &amp;p, NULL, &amp;r, NULL);</pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Architecture -->
+        <!-- ============================================================ -->
+        <section class="section" id="architecture">
+            <div class="section-title">Under the Hood</div>
+            <h2>LU factorization, the heart of the simplex</h2>
+
+            <p>
+                The revised simplex method solves systems of the form <strong>Bx = b</strong> at every iteration,
+                where B is the basis matrix. Ralph maintains B in LU-factored form (B = LU) and applies
+                eta file updates instead of refactoring after each pivot.
+            </p>
+
+            <ul>
+                <li><strong>Sparse LU</strong> &mdash; LP-aware factorization with Schur complement. When the basis
+                    has k structural columns out of m total, achieves O(k&sup3;) instead of O(m&sup3;)</li>
+                <li><strong>Eta file updates</strong> &mdash; Instead of refactoring B after each pivot, store the
+                    update as an eta matrix E. B<sub>new</sub> = B<sub>old</sub> &times; E</li>
+                <li><strong>Refactorization trigger</strong> &mdash; After 50 eta updates to prevent numerical drift</li>
+                <li><strong>Harris ratio test</strong> &mdash; Two-pass ratio test with tolerance for numerical stability</li>
+            </ul>
+
+            <h3>Per-iteration breakdown (200&times;400 LP)</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Operation</th>
+                        <th>Time</th>
+                        <th>% of Total</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Ratio test (FTRAN)</td>
+                        <td>0.159s</td>
+                        <td>63.4%</td>
+                    </tr>
+                    <tr>
+                        <td>B&minus;&sup1; update (eta)</td>
+                        <td>0.089s</td>
+                        <td>35.3%</td>
+                    </tr>
+                    <tr>
+                        <td>Pricing</td>
+                        <td>0.002s</td>
+                        <td>1.0%</td>
+                    </tr>
+                    <tr>
+                        <td>Pivot selection</td>
+                        <td>0.001s</td>
+                        <td>0.4%</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Domain-specific cuts (FuelWise)</h3>
+            <p>
+                Ralph's MIP infrastructure is designed for domain-specific cutting planes. The flagship
+                use case: <strong>reach cuts</strong> for FuelWise refueling optimization.
+            </p>
+
+            <div class="callout">
+                <p>
+                    <strong>Reach cuts.</strong> "You must stop at least once between stations i and j to have
+                    enough fuel to reach j+1." Analogous to subtour elimination in TSP. Ralph scans for
+                    intervals where the LP relaxation shows insufficient stops and generates violated cuts.
+                    Expected: solving k=50 station problems in 100&ndash;300ms vs. timeout without cuts.
+                </p>
+            </div>
+
+            <h3>Codebase</h3>
+
+            <div class="stat-row">
+                <div class="stat">
+                    <div class="stat-value">~35K</div>
+                    <div class="stat-label">Lines of C</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">600+</div>
+                    <div class="stat-label">Tests</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value blue">43</div>
+                    <div class="stat-label">Test Files</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">0</div>
+                    <div class="stat-label">Ext Dependencies</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Quick Start -->
+        <!-- ============================================================ -->
+        <section class="section" id="quickstart">
+            <div class="section-title">Quick Start</div>
+            <h2>Three ways to try Ralph</h2>
+
+            <h3>1. Browser (zero install)</h3>
+            <p>
+                The <a href="../api.html#ralph">API documentation page</a> includes a live WASM demo.
+                Type an LP problem, click solve, see results. No server, no install.
+            </p>
+
+            <h3>2. Build from source</h3>
+            <div class="code-block">
+<pre><span class="comment"># Clone and build</span>
+<span class="command">git clone https://github.com/ottofleet/otto.git</span>
+<span class="command">cd otto && make ralph</span>
+
+<span class="comment"># Run all tests (600+)</span>
+<span class="command">make test-ralph</span>
+
+<span class="comment"># Run specialized solver tests</span>
+<span class="command">make test-ralph-lap</span>
+<span class="command">make test-ralph-netflow</span></pre>
+            </div>
+
+            <h3>3. REST API server</h3>
+            <div class="code-block">
+<pre><span class="comment"># Build and start</span>
+<span class="command">make ralph-api</span>
+<span class="command">./ralph/api/ralph-solver</span>
+
+<span class="comment"># Solve an LP (text/plain format)</span>
+<span class="command">curl -X POST http://localhost:8084/api/v1/solve \</span>
+<span class="command">  -H "Content-Type: text/plain" \</span>
+<span class="command">  -d @problem.lp</span>
+
+<span class="comment"># Solve MPS format</span>
+<span class="command">curl -X POST http://localhost:8084/api/v1/solve?format=mps \</span>
+<span class="command">  -H "Content-Type: text/plain" \</span>
+<span class="command">  -d @problem.mps</span></pre>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- FAQ -->
+        <!-- ============================================================ -->
+        <section class="section" id="faq">
+            <div class="section-title">FAQ</div>
+            <h2>Common questions</h2>
+
+            <h3>Why build a solver from scratch when Gurobi exists?</h3>
+            <p>
+                Three reasons: (1) <strong>Embedding</strong> &mdash; Gurobi is a 100MB+ binary with
+                license server requirements. Ralph is 35K lines of C that compiles to WASM.
+                (2) <strong>Domain cuts</strong> &mdash; For structured trucking problems (refueling, crew scheduling),
+                domain-specific cutting planes provide competitive advantage that generic solvers can't match.
+                (3) <strong>Interface strategy</strong> &mdash; Ralph provides a clean C API that can dispatch to
+                Gurobi/CPLEX/HiGHS when the problem doesn't have exploitable structure.
+            </p>
+
+            <h3>How does Ralph compare to GLPK?</h3>
+            <p>
+                On general sparse LP: Ralph is 2&ndash;5&times; slower per-iteration. On structured problems:
+                Ralph is 86&ndash;633&times; faster (via auto-detection to JVC or network simplex). GLPK treats
+                every problem as a generic LP. Ralph analyzes structure and dispatches accordingly.
+            </p>
+
+            <h3>Can Ralph solve real MIP problems?</h3>
+            <p>
+                For small structured MIPs (FuelWise: k &le; 50 binary variables), yes &mdash; especially
+                with domain cuts. For large arbitrary MIPs (1000+ variables, no known structure),
+                use the planned Gurobi/HiGHS backend. Ralph's MIP solver is correct but slower than
+                commercial alternatives without domain-specific cuts.
+            </p>
+
+            <h3>What are the NETLIB failures?</h3>
+            <p>
+                Four NETLIB problems (bandm, beaconfd, blend, lotfi) fail due to numerical instability
+                in LU updates. Root causes are documented: beaconfd needs Harris ratio test tuning,
+                blend has a bound perturbation issue, bandm and lotfi need iterative refinement for
+                ill-conditioned systems. These are engineering problems, not algorithmic limitations.
+            </p>
+
+            <h3>What's the LAP solver used for?</h3>
+            <p>
+                Vehicle-to-route assignment, driver-to-vehicle matching, facility-to-zone allocation,
+                and any problem that maps to "assign N workers to N jobs at minimum cost." The JVC
+                algorithm solves n=1000 in 10ms with warm start in 1.5ms. k-best solutions via Murty's
+                algorithm for presenting alternatives.
+            </p>
+
+            <h3>What license?</h3>
+            <p>
+                AGPLv3 with a Trucking Exception. Same terms as all OTTO modules. Trucking fleets
+                using Ralph for their own operations are covered by the exception. SaaS products
+                embedding Ralph need source disclosure or a commercial license.
+            </p>
+        </section>
+
+        </main>
+
+        <footer>
+            <nav class="footer-links" aria-label="Footer navigation">
+                <a href="../index.html">Home</a>
+                <a href="../api.html">API Docs</a>
+                <a href="https://github.com/ottofleet/otto/blob/main/docs/roadmaps/ralph.md">Roadmap</a>
+                <a href="https://github.com/ottofleet/otto/blob/main/LICENSE">License</a>
+                <a href="https://github.com/ottofleet/otto">GitHub</a>
+            </nav>
+            <div>&copy; 2026 Mark Farkas. Built by <a href="https://artalis.io">Artalis</a>.</div>
+        </footer>
+    </div>
+</body>
+</html>
