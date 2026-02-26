@@ -91,6 +91,8 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_recompute_after_perturb = 0;
     solver->telemetry.perf_phase1_recompute_rc_only_calls = 0;
     solver->telemetry.perf_phase1_recompute_rc_guard_forced_full = 0;
+    solver->telemetry.perf_phase1_ratio_breakdown_retries = 0;
+    solver->telemetry.perf_phase1_ratio_breakdown_escalations = 0;
 
     solver->telemetry.perf_phase2_pricing_ms = 0.0;
     solver->telemetry.perf_phase2_ratio_ms = 0.0;
@@ -368,6 +370,8 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_recompute_after_perturb);
     COPY_SOLVER_FIELD(perf_phase1_recompute_rc_only_calls);
     COPY_SOLVER_FIELD(perf_phase1_recompute_rc_guard_forced_full);
+    COPY_SOLVER_FIELD(perf_phase1_ratio_breakdown_retries);
+    COPY_SOLVER_FIELD(perf_phase1_ratio_breakdown_escalations);
 
     COPY_SOLVER_FIELD(perf_phase2_pricing_ms);
     COPY_SOLVER_FIELD(perf_phase2_ratio_ms);

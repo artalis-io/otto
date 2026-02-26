@@ -129,6 +129,8 @@ typedef enum {
 #define PHASE1_STALL_THRESHOLD_LARGE 30
 #define PHASE1_NO_ENTERING_CLEANUP_MAX_ITERS 128
 #define PHASE1_RC_ONLY_STREAK_GUARD 6
+#define PHASE1_RATIO_BREAKDOWN_REPEAT_TIGHTEN_THRESHOLD 3
+#define PHASE1_RATIO_BREAKDOWN_REPEAT_TIGHTEN_DIVISOR 3
 #define PHASE1_AUTO_DANTZIG_MIN_M 700
 #define PHASE1_AUTO_DANTZIG_MAX_M 1200
 #define PHASE1_AUTO_DANTZIG_DEGEN_TRIGGER 20
@@ -4982,6 +4984,8 @@ static int simplex_phase1(SimplexSolver *solver) {
     int fail_reason = PHASE1_PIVOT_FAIL_NONE;
     int fail_repeat_count = 0;
     int ratio_breakdown_count = 0;
+    int ratio_breakdown_last_entering = -1;
+    int ratio_breakdown_same_entering_streak = 0;
     int excluded_entering_a = -1;
     int excluded_entering_ttl_a = 0;
     int excluded_entering_b = -1;
@@ -5254,6 +5258,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                     &phase1_rc_only_streak,
                     LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
                 ratio_breakdown_count = 0;
+                ratio_breakdown_last_entering = -1;
+                ratio_breakdown_same_entering_streak = 0;
                 continue;
             }
             if (solver->status == RALPH_STATUS_TIME_LIMIT) {
@@ -5264,25 +5270,47 @@ static int simplex_phase1(SimplexSolver *solver) {
             }
 
             ratio_breakdown_count++;
+            if (entering == ratio_breakdown_last_entering) {
+                if (ratio_breakdown_same_entering_streak < 1000000) {
+                    ratio_breakdown_same_entering_streak++;
+                }
+            } else {
+                ratio_breakdown_last_entering = entering;
+                ratio_breakdown_same_entering_streak = 1;
+            }
             phase1_exclude_entering_var(entering,
                                         RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
                                         &excluded_entering_a,
                                         &excluded_entering_ttl_a,
                                         &excluded_entering_b,
                                         &excluded_entering_ttl_b);
-            if (ratio_breakdown_count < RALPH_PHASE1_RATIO_BREAKDOWN_LIMIT) {
-                if (solver->verbose >= 2) {
-                    LP_LOG_STDERR("[simplex_phase1] Continuing after ratio-test breakdown (count=%d), excluding entering %d for %d iterations\n",
-                            ratio_breakdown_count, entering, RALPH_PHASE1_ENTERING_EXCLUDE_ITERS);
+            {
+                int ratio_breakdown_limit = RALPH_PHASE1_RATIO_BREAKDOWN_LIMIT;
+                if (tab->m >= PHASE1_DEGEN_THRESHOLD_LARGE_M &&
+                    ratio_breakdown_same_entering_streak >= PHASE1_RATIO_BREAKDOWN_REPEAT_TIGHTEN_THRESHOLD) {
+                    int tightened_limit =
+                        RALPH_PHASE1_RATIO_BREAKDOWN_LIMIT / PHASE1_RATIO_BREAKDOWN_REPEAT_TIGHTEN_DIVISOR;
+                    if (tightened_limit < 4) tightened_limit = 4;
+                    if (ratio_breakdown_limit > tightened_limit) {
+                        ratio_breakdown_limit = tightened_limit;
+                    }
                 }
-                use_bland = 1;
-                phase1_recompute_full_with_reason(
-                    solver,
-                    tab,
-                    &phase1_rc_only_streak,
-                    LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
-                continue;
+                if (ratio_breakdown_count < ratio_breakdown_limit) {
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Continuing after ratio-test breakdown (count=%d, entering=%d streak=%d limit=%d), excluding entering for %d iterations\n",
+                                ratio_breakdown_count,
+                                entering,
+                                ratio_breakdown_same_entering_streak,
+                                ratio_breakdown_limit,
+                                RALPH_PHASE1_ENTERING_EXCLUDE_ITERS);
+                    }
+                    use_bland = 1;
+                    lp_telemetry_record_phase1_ratio_breakdown_retry(solver);
+                    phase1_recompute_rc_only_guarded(solver, tab, &phase1_rc_only_streak);
+                    continue;
+                }
             }
+            lp_telemetry_record_phase1_ratio_breakdown_escalation(solver);
 
             if (solver->verbose) {
                 LP_LOG_STDERR("[simplex_phase1] ERROR: unbounded in Phase 1 at iter %d (after recovery)\n", iter);
@@ -5661,6 +5689,8 @@ static int simplex_phase1(SimplexSolver *solver) {
         fail_reason = PHASE1_PIVOT_FAIL_NONE;
         fail_repeat_count = 0;
         ratio_breakdown_count = 0;
+        ratio_breakdown_last_entering = -1;
+        ratio_breakdown_same_entering_streak = 0;
         dir_stabilize_moderate_defer_pending = 0;
         phase1_rc_only_streak = 0;
         excluded_entering_a = -1;

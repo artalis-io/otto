@@ -35,7 +35,7 @@ Reduce Phase-1 wall time on degenerate NETLIB outliers by cutting unnecessary fu
   - Map all Phase-1 `tableau_compute_solution` and `tableau_compute_reduced_costs` call sites by cause.
   - Define safe RC-only vs full recompute invariants (per cause class).
   - Add assertions/telemetry guards to prevent stale-state drift.
-- [ ] P1-C Ratio-breakdown recovery tightening.
+- [x] P1-C Ratio-breakdown recovery tightening.
   - Reduce repeated full recompute loops when ratio breakdown repeats.
   - Keep dual-rescue and infeasibility cleanup escape hatches authoritative.
 - [ ] P1-D Direction-stabilize recompute decimation.
@@ -75,3 +75,17 @@ Reduce Phase-1 wall time on degenerate NETLIB outliers by cutting unnecessary fu
     - `make -C ralph test-simplex-policy` PASS (`48/48`)
     - `make -C ralph build-ralph-benchmark` PASS
     - Single-file smoke output verified on `ralph/benchmarks/netlib/afiro.mps`.
+- [x] 2026-02-26: P1-C implemented (ratio-breakdown recovery tightening).
+  - Tightened Phase-1 ratio-breakdown retries for repeated same-entering failures on large models:
+    - adaptive retry limit reduction when entering repeats (`streak >= 3`).
+  - Reduced soft retry cost path:
+    - switched ratio-breakdown soft retry branch to guarded RC-only recompute (full recompute guard still enforced).
+  - Added explicit ratio-breakdown telemetry:
+    - `phase1_ratio_breakdown_retries`
+    - `phase1_ratio_breakdown_escalations`
+  - Validation:
+    - `make -C ralph test-lp-telemetry-solver` PASS (`129/129`)
+    - `make -C ralph test-simplex-policy` PASS (`48/48`)
+    - `make -C ralph build-ralph-benchmark` PASS
+    - `make -C ralph test-netlib-gate-small` PASS
+      - artifact: `/tmp/netlib-regression-gate-20260226-192153`
