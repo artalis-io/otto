@@ -39,6 +39,7 @@ TEST_BIN = test_surge
 BENCH_SOL_BIN = bench_solomon
 BENCH_PD_BIN = bench_li_lim
 BENCH_CORD_BIN = bench_cordeau
+BENCH_TUNE_BIN = bench_tune
 
 # Shared library for FFI bindings (Python ctypes, etc.)
 ARBOR_SRCS = ../arbor/src/ar_alns.c ../arbor/src/ar_operators.c ../arbor/src/arbor.c
@@ -67,6 +68,7 @@ TSAN_LDFLAGS = -fsanitize=thread
 .PHONY: all clean test lib debug bench bench-li-lim bench-cordeau \
         bench-quick bench-li-lim-quick bench-cordeau-quick bench-all-quick \
         bench-gh-200 bench-gh-all bench-ll-200 bench-ll-all bench-full \
+        bench-tune tune-quick tune-all \
         bench-download bench-validate \
         shared-lib python-test node-test cppcheck fuzz tsan
 
@@ -92,6 +94,9 @@ $(BENCH_PD_BIN): benchmarks/bench_li_lim.c benchmarks/sg_bench_utils.h $(LIB) ..
 	$(CC) $(CFLAGS) $(BENCH_INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
 
 $(BENCH_CORD_BIN): benchmarks/bench_cordeau.c benchmarks/sg_bench_utils.h $(LIB) ../arbor/libarbor.a ../shared/libshared.a
+	$(CC) $(CFLAGS) $(BENCH_INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
+
+$(BENCH_TUNE_BIN): benchmarks/bench_tune.c benchmarks/sg_bench_utils.h $(LIB) ../arbor/libarbor.a ../shared/libshared.a
 	$(CC) $(CFLAGS) $(BENCH_INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
 
 ../arbor/libarbor.a:
@@ -149,6 +154,16 @@ bench-ll-all: $(BENCH_PD_BIN)
 
 # Full benchmark suite (all sizes)
 bench-full: bench bench-li-lim bench-cordeau bench-gh-all bench-ll-all
+
+# Hyperparameter tuner
+bench-tune: $(BENCH_TUNE_BIN)
+	./$(BENCH_TUNE_BIN) --baseline --json
+
+tune-quick: $(BENCH_TUNE_BIN)
+	./$(BENCH_TUNE_BIN) --tier 0 --iterations 1000 --baseline --json
+
+tune-all: $(BENCH_TUNE_BIN)
+	./$(BENCH_TUNE_BIN) --all-tiers --iterations 2500 --baseline --json
 
 # Download published benchmarks (GH + Li-Lim extended + Cordeau)
 bench-download:
@@ -219,7 +234,7 @@ tsan: $(TSAN_TEST_BIN)
 	./$(TSAN_TEST_BIN)
 
 clean:
-	rm -f $(OBJS) $(LIB) $(TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(SHARED_LIB) \
+	rm -f $(OBJS) $(LIB) $(TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(BENCH_TUNE_BIN) $(SHARED_LIB) \
 	  $(FUZZ_BIN) $(TSAN_TEST_BIN)
 
 help:
