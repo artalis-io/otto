@@ -1,5 +1,28 @@
 #include "sg_internal.h"
 
+/* Tune-aware randomness accessors */
+static inline double sg_worst_rand(const SGContext *ctx) {
+    return sg_tune_d(ctx, ctx->tune_params ? ctx->tune_params->worst_randomness : SG_TUNE_SENTINEL_D, SG_WORST_RANDOMNESS);
+}
+static inline double sg_shaw_rand(const SGContext *ctx) {
+    return sg_tune_d(ctx, ctx->tune_params ? ctx->tune_params->shaw_randomness : SG_TUNE_SENTINEL_D, SG_SHAW_RANDOMNESS);
+}
+static inline double sg_route_cluster_rand(const SGContext *ctx) {
+    return sg_tune_d(ctx, ctx->tune_params ? ctx->tune_params->route_cluster_randomness : SG_TUNE_SENTINEL_D, SG_ROUTE_CLUSTER_RANDOMNESS);
+}
+static inline double sg_time_cluster_rand(const SGContext *ctx) {
+    return sg_tune_d(ctx, ctx->tune_params ? ctx->tune_params->time_cluster_randomness : SG_TUNE_SENTINEL_D, SG_TIME_CLUSTER_RANDOMNESS);
+}
+static inline double sg_pd_shaw_rand(const SGContext *ctx) {
+    return sg_tune_d(ctx, ctx->tune_params ? ctx->tune_params->pd_shaw_randomness : SG_TUNE_SENTINEL_D, SG_PD_SHAW_RANDOMNESS);
+}
+static inline double sg_route_shaw_rand(const SGContext *ctx) {
+    return sg_tune_d(ctx, ctx->tune_params ? ctx->tune_params->route_shaw_randomness : SG_TUNE_SENTINEL_D, SG_ROUTE_SHAW_RANDOMNESS);
+}
+static inline int sg_string_lmax(const SGContext *ctx) {
+    return sg_tune_i(ctx, ctx->tune_params ? ctx->tune_params->string_l_max : SG_TUNE_SENTINEL_I, SG_STRING_L_MAX);
+}
+
 ARStatus sg_unassign_removed_requests(SGBootstrapSolution *sol,
                                       const uint32_t *removed_ids,
                                       int removed_count) {
@@ -52,7 +75,7 @@ ARStatus sg_destroy_worst(void *op_ctx, void *solution, int count,
 
     status = ar_remove_worst(ctx->op_rng, ctx, sol, count, removed_ids,
                              sg_get_assigned_count, sg_get_assigned_element,
-                             sg_bootstrap_removal_cost, SG_WORST_RANDOMNESS,
+                             sg_bootstrap_removal_cost, sg_worst_rand(ctx),
                              NULL, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
@@ -73,7 +96,7 @@ ARStatus sg_destroy_shaw(void *op_ctx, void *solution, int count,
 
     status = ar_remove_related(ctx->op_rng, ctx, sol, count, removed_ids,
                                sg_get_assigned_count, sg_get_assigned_element,
-                               sg_bootstrap_relatedness, SG_SHAW_RANDOMNESS,
+                               sg_bootstrap_relatedness, sg_shaw_rand(ctx),
                                NULL, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
@@ -94,7 +117,7 @@ ARStatus sg_destroy_criticality_worst(void *op_ctx, void *solution, int count,
 
     status = ar_remove_worst(ctx->op_rng, ctx, sol, count, removed_ids,
                              sg_get_assigned_count, sg_get_assigned_element,
-                             sg_criticality_removal_cost, SG_WORST_RANDOMNESS,
+                             sg_criticality_removal_cost, sg_worst_rand(ctx),
                              NULL, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
@@ -115,7 +138,7 @@ ARStatus sg_destroy_route_cluster(void *op_ctx, void *solution, int count,
 
     status = ar_remove_related(ctx->op_rng, ctx, sol, count, removed_ids,
                                sg_get_assigned_count, sg_get_assigned_element,
-                               sg_route_cluster_relatedness, SG_ROUTE_CLUSTER_RANDOMNESS,
+                               sg_route_cluster_relatedness, sg_route_cluster_rand(ctx),
                                NULL, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
@@ -136,7 +159,7 @@ ARStatus sg_destroy_time_cluster(void *op_ctx, void *solution, int count,
 
     status = ar_remove_related(ctx->op_rng, ctx, sol, count, removed_ids,
                                sg_get_assigned_count, sg_get_assigned_element,
-                               sg_time_cluster_relatedness, SG_TIME_CLUSTER_RANDOMNESS,
+                               sg_time_cluster_relatedness, sg_time_cluster_rand(ctx),
                                NULL, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
@@ -157,7 +180,7 @@ ARStatus sg_destroy_paired_shaw(void *op_ctx, void *solution, int count,
 
     status = ar_remove_related(ctx->op_rng, ctx, sol, count, removed_ids,
                                sg_get_assigned_count, sg_get_assigned_element,
-                               sg_pd_shaw_relatedness, SG_PD_SHAW_RANDOMNESS,
+                               sg_pd_shaw_relatedness, sg_pd_shaw_rand(ctx),
                                NULL, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
@@ -198,7 +221,7 @@ ARStatus sg_route_destroy_worst(void *op_ctx, void *solution, int count,
 
     status = ar_remove_worst(ctx->op_rng, ctx, sol, count, removed_ids,
                              sg_get_removable_count, sg_get_removable_element,
-                             sg_route_removal_cost, SG_WORST_RANDOMNESS,
+                             sg_route_removal_cost, sg_worst_rand(ctx),
                              ctx, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
@@ -220,7 +243,7 @@ ARStatus sg_route_destroy_shaw(void *op_ctx, void *solution, int count,
     ctx->active_solution = sol;
     status = ar_remove_related(ctx->op_rng, ctx, sol, count, removed_ids,
                                sg_get_removable_count, sg_get_removable_element,
-                               sg_route_shaw_relatedness, SG_ROUTE_SHAW_RANDOMNESS,
+                               sg_route_shaw_relatedness, sg_route_shaw_rand(ctx),
                                ctx, removed_count);
     ctx->active_solution = NULL;
     if (status != AR_STATUS_OK) {
@@ -242,7 +265,7 @@ ARStatus sg_route_destroy_criticality_worst(void *op_ctx, void *solution, int co
 
     status = ar_remove_worst(ctx->op_rng, ctx, sol, count, removed_ids,
                              sg_get_removable_count, sg_get_removable_element,
-                             sg_criticality_removal_cost, SG_WORST_RANDOMNESS,
+                             sg_criticality_removal_cost, sg_worst_rand(ctx),
                              ctx, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
@@ -263,7 +286,7 @@ ARStatus sg_route_destroy_route_cluster(void *op_ctx, void *solution, int count,
 
     status = ar_remove_related(ctx->op_rng, ctx, sol, count, removed_ids,
                                sg_get_removable_count, sg_get_removable_element,
-                               sg_route_cluster_relatedness, SG_ROUTE_CLUSTER_RANDOMNESS,
+                               sg_route_cluster_relatedness, sg_route_cluster_rand(ctx),
                                ctx, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
@@ -284,7 +307,7 @@ ARStatus sg_route_destroy_time_cluster(void *op_ctx, void *solution, int count,
 
     status = ar_remove_related(ctx->op_rng, ctx, sol, count, removed_ids,
                                sg_get_removable_count, sg_get_removable_element,
-                               sg_time_cluster_relatedness, SG_TIME_CLUSTER_RANDOMNESS,
+                               sg_time_cluster_relatedness, sg_time_cluster_rand(ctx),
                                ctx, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
@@ -417,7 +440,7 @@ ARStatus sg_route_destroy_time_window(void *op_ctx, void *solution, int count,
 
     status = ar_remove_related(ctx->op_rng, ctx, sol, count, removed_ids,
                                sg_get_removable_count, sg_get_removable_element,
-                               sg_time_window_relatedness, SG_TIME_CLUSTER_RANDOMNESS,
+                               sg_time_window_relatedness, sg_time_cluster_rand(ctx),
                                ctx, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
@@ -438,7 +461,7 @@ ARStatus sg_route_destroy_paired_shaw(void *op_ctx, void *solution, int count,
 
     status = ar_remove_related(ctx->op_rng, ctx, sol, count, removed_ids,
                                sg_get_removable_count, sg_get_removable_element,
-                               sg_pd_shaw_relatedness, SG_PD_SHAW_RANDOMNESS,
+                               sg_pd_shaw_relatedness, sg_pd_shaw_rand(ctx),
                                ctx, removed_count);
     if (status != AR_STATUS_OK) {
         return status;
@@ -758,7 +781,7 @@ ARStatus sg_route_destroy_string(void *op_ctx, void *solution, int count,
         uint32_t seed_vehicle = sol->request_vehicle[seed_id];
         uint32_t route_len = sol->route_lengths[seed_vehicle];
         uint32_t center_pos = sol->request_pos[seed_id];
-        int l_max = SG_STRING_L_MAX;
+        int l_max = sg_string_lmax(ctx);
         int L, take;
         uint32_t start, end;
         const uint32_t *route;
@@ -846,7 +869,7 @@ ARStatus sg_route_destroy_string(void *op_ctx, void *solution, int count,
             uint32_t route_len = sol->route_lengths[best_vehicle];
             uint32_t center_pos = sol->request_pos[best_id];
             int remaining = target - total_removed;
-            int l_max = SG_STRING_L_MAX;
+            int l_max = sg_string_lmax(ctx);
             int L, take;
             uint32_t start, end;
             const uint32_t *route;

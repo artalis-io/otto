@@ -21,6 +21,15 @@ const char *sg_version(void);
 SGContext *sg_create(void);
 void sg_free(SGContext *ctx);
 
+/* Initialize all tune params to sentinel (use defaults) */
+void sg_tune_params_default(SGTuneParams *params);
+
+/* Set tunable parameters. Copies the struct. Pass NULL to clear. */
+SGStatus sg_set_tune_params(SGContext *ctx, const SGTuneParams *params);
+
+/* Apply a preset profile: sets config iterations/time + optimal tune params for that profile. */
+SGStatus sg_config_set_profile(SGContext *ctx, SGProfile profile);
+
 void sg_config_default(SGConfig *config);
 SGStatus sg_set_config(SGContext *ctx, const SGConfig *config);
 SGStatus sg_set_require_bound_requests_at_solve(SGContext *ctx, bool require_bound);
