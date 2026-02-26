@@ -1,147 +1,49 @@
 #include "surge.h"
 #include "sh_args.h"
+#include "sg_bench_utils.h"
 
-#include <ctype.h>
-#include <glob.h>
 #include <inttypes.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
-typedef struct {
-    const char *path;
-    const char *name;
-} SGCaseFile;
-
-typedef struct {
-    const char *name;
-    uint32_t vehicles;
-    double distance;
-} SGBKS;
-
-/* BKS table for Cordeau a-series (approximate, from literature). */
-static const SGBKS k_bks_cordeau[] = {
-    {"a1",  3,  190.02},
-    {"a2",  3,  301.34},
-    {"a3",  4,  532.08},
-    {"a4",  4,  541.09},
-    {"a5",  5,  636.97},
-    {"a6",  6,  793.29},
-    {"a7",  7,  291.71},
-    {"a8",  7,  487.16},
-    {"a9",  8,  660.98},
-    {"a10", 8,  878.06},
-    {"a11", 8, 1004.82},
-    {"a12", 9, 1116.38},
-    {"a13", 9, 1356.03},
-};
+#define MAX_BKS_ENTRIES 128
 
 static void sg_print_usage(const char *argv0) {
     printf("Usage: %s [options] [CASE ...]\n", argv0);
     printf("\n");
     printf("Options:\n");
     printf("  --dir <path>          Directory with Cordeau .txt files (default: benchmarks/cordeau)\n");
+    printf("  --bks <path>          BKS CSV file (default: benchmarks/bks/cordeau_darp.csv)\n");
     printf("  --iterations <n>      ALNS max iterations per case (default: 10000)\n");
     printf("  --time-limit <sec>    ALNS max wall time per case (default: 0 = unlimited)\n");
     printf("  --seed <n>            Deterministic seed (default: 42)\n");
     printf("  --non-deterministic   Use time-based random seed\n");
     printf("  --telemetry           Print per-operator telemetry after each case\n");
+    printf("  --output-csv <path>   Write results to CSV file\n");
     printf("  --help                Show this help\n");
-}
-
-static const char *sg_basename(const char *path) {
-    const char *slash;
-    if (!path) return "";
-    slash = strrchr(path, '/');
-    return slash ? slash + 1 : path;
-}
-
-static void sg_normalize_case_name(const char *src, char *dst, size_t dst_size) {
-    size_t j = 0;
-    if (!dst || dst_size == 0) return;
-    if (!src) { dst[0] = '\0'; return; }
-    while (*src != '\0' && *src != '.' && j + 1 < dst_size) {
-        unsigned char c = (unsigned char)*src;
-        if (isalnum(c)) dst[j++] = (char)toupper(c);
-        src++;
-    }
-    dst[j] = '\0';
-}
-
-static int sg_case_selected(const char *case_name, int filter_count, char **filters) {
-    char normalized_case[64];
-    int i;
-    if (filter_count <= 0) return 1;
-    sg_normalize_case_name(case_name, normalized_case, sizeof(normalized_case));
-    for (i = 0; i < filter_count; i++) {
-        char normalized_filter[64];
-        sg_normalize_case_name(filters[i], normalized_filter, sizeof(normalized_filter));
-        if (strcmp(normalized_case, normalized_filter) == 0) return 1;
-    }
-    return 0;
-}
-
-static int sg_compare_case_files(const void *lhs, const void *rhs) {
-    const SGCaseFile *a = (const SGCaseFile *)lhs;
-    const SGCaseFile *b = (const SGCaseFile *)rhs;
-    return strcmp(a->name, b->name);
-}
-
-static int sg_case_key_from_name(const char *src, char *dst, size_t dst_size) {
-    size_t j = 0;
-    if (!src || !dst || dst_size < 2) return 0;
-    while (*src != '\0' && *src != '.' && j + 1 < dst_size) {
-        unsigned char c = (unsigned char)*src;
-        if (isalnum(c)) dst[j++] = (char)tolower(c);
-        src++;
-    }
-    dst[j] = '\0';
-    return j >= 2;
-}
-
-static const SGBKS *sg_find_bks(const char *case_name) {
-    char key[16];
-    size_t i;
-    if (!sg_case_key_from_name(case_name, key, sizeof(key))) return NULL;
-    for (i = 0; i < sizeof(k_bks_cordeau) / sizeof(k_bks_cordeau[0]); i++) {
-        if (strcmp(k_bks_cordeau[i].name, key) == 0) return &k_bks_cordeau[i];
-    }
-    return NULL;
-}
-
-static double sg_now_seconds(void) {
-    struct timespec ts;
-    timespec_get(&ts, TIME_UTC);
-    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
-}
-
-static const char *sg_status_name(SGStatus status) {
-    switch (status) {
-        case SG_STATUS_OK: return "OK";
-        case SG_STATUS_INVALID_ARG: return "INVALID_ARG";
-        case SG_STATUS_OUT_OF_MEMORY: return "OUT_OF_MEMORY";
-        case SG_STATUS_INFEASIBLE: return "INFEASIBLE";
-        case SG_STATUS_LIMIT: return "LIMIT";
-        case SG_STATUS_NOT_IMPLEMENTED: return "NOT_IMPLEMENTED";
-        case SG_STATUS_ERROR:
-        default: return "ERROR";
-    }
 }
 
 int main(int argc, char **argv) {
     const char *cases_dir = "benchmarks/cordeau";
+    const char *bks_path = "benchmarks/bks/cordeau_darp.csv";
+    const char *output_csv_path = NULL;
     int max_iterations = 10000;
     int max_time_seconds = 0;
     uint64_t seed = 42;
     int deterministic = 1;
     int show_telemetry = 0;
     int filter_start = argc;
-    glob_t matches;
-    SGCaseFile *cases = NULL;
-    size_t i;
+
+    SGBKSEntry bks_entries[MAX_BKS_ENTRIES];
+    int bks_count = 0;
+    SGBenchCase *cases = NULL;
+    int case_count = 0;
+    FILE *csv_fp = NULL;
+
+    int i;
     int selected_count = 0;
     int solved_count = 0;
     int failed_count = 0;
@@ -151,65 +53,61 @@ int main(int argc, char **argv) {
     double sum_vehicles = 0.0;
     double sum_unassigned = 0.0;
     double sum_distance_gap = 0.0;
-    char pattern[1024];
 
-    memset(&matches, 0, sizeof(matches));
-
-    for (i = 1; i < (size_t)argc; i++) {
+    for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0) { sg_print_usage(argv[0]); return 0; }
-        if (strcmp(argv[i], "--dir") == 0 && i + 1 < (size_t)argc) { cases_dir = argv[++i]; continue; }
-        if (strcmp(argv[i], "--iterations") == 0 && i + 1 < (size_t)argc) { max_iterations = sh_parse_int(argv[++i], 10000, 1, 1000000); continue; }
-        if (strcmp(argv[i], "--time-limit") == 0 && i + 1 < (size_t)argc) { max_time_seconds = sh_parse_int(argv[++i], 0, 0, 86400); continue; }
-        if (strcmp(argv[i], "--seed") == 0 && i + 1 < (size_t)argc) { seed = (uint64_t)strtoull(argv[++i], NULL, 10); continue; }
+        if (strcmp(argv[i], "--dir") == 0 && i + 1 < argc) { cases_dir = argv[++i]; continue; }
+        if (strcmp(argv[i], "--bks") == 0 && i + 1 < argc) { bks_path = argv[++i]; continue; }
+        if (strcmp(argv[i], "--iterations") == 0 && i + 1 < argc) { max_iterations = sh_parse_int(argv[++i], 10000, 1, 1000000); continue; }
+        if (strcmp(argv[i], "--time-limit") == 0 && i + 1 < argc) { max_time_seconds = sh_parse_int(argv[++i], 0, 0, 86400); continue; }
+        if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc) { seed = (uint64_t)strtoull(argv[++i], NULL, 10); continue; }
         if (strcmp(argv[i], "--non-deterministic") == 0) { deterministic = 0; continue; }
         if (strcmp(argv[i], "--telemetry") == 0) { show_telemetry = 1; continue; }
-        filter_start = (int)i;
+        if (strcmp(argv[i], "--output-csv") == 0 && i + 1 < argc) { output_csv_path = argv[++i]; continue; }
+        filter_start = i;
         break;
     }
 
-    if (snprintf(pattern, sizeof(pattern), "%s/*.txt", cases_dir) >= (int)sizeof(pattern)) {
-        fprintf(stderr, "Case directory path is too long\n");
-        return 1;
+    /* Load BKS */
+    bks_count = sg_load_bks_csv(bks_path, bks_entries, MAX_BKS_ENTRIES);
+    if (bks_count < 0) {
+        fprintf(stderr, "Warning: could not load BKS from %s\n", bks_path);
+        bks_count = 0;
     }
 
-    if (glob(pattern, 0, NULL, &matches) != 0 || matches.gl_pathc == 0) {
+    /* Collect cases */
+    case_count = sg_collect_cases(cases_dir, 0, &cases);
+    if (case_count == 0) {
         fprintf(stderr, "No benchmark cases found under %s\n", cases_dir);
-        globfree(&matches);
         return 1;
     }
+    qsort(cases, (size_t)case_count, sizeof(*cases), sg_compare_bench_cases);
 
-    cases = (SGCaseFile *)calloc(matches.gl_pathc, sizeof(*cases));
-    if (!cases) {
-        globfree(&matches);
-        return 1;
+    if (output_csv_path) {
+        csv_fp = fopen(output_csv_path, "w");
+        if (csv_fp) fprintf(csv_fp, "case,status,seconds,requests,vehicles,unassigned,distance,bks_vehicles,bks_distance,distance_gap_pct\n");
     }
-
-    for (i = 0; i < matches.gl_pathc; i++) {
-        cases[i].path = matches.gl_pathv[i];
-        cases[i].name = sg_basename(matches.gl_pathv[i]);
-    }
-    qsort(cases, matches.gl_pathc, sizeof(*cases), sg_compare_case_files);
 
     printf("Surge Cordeau DARP Benchmark\n");
-    printf("  dir=%s iterations=%d seed=%" PRIu64 "\n", cases_dir, max_iterations, seed);
+    printf("  dir=%s  bks=%s (%d entries)\n", cases_dir, bks_path, bks_count);
+    printf("  iterations=%d  seed=%" PRIu64 "\n", max_iterations, seed);
     printf("\n");
-    printf("%-14s %-9s %-8s %-6s %-6s %-10s %-5s %-10s %-8s\n",
+    printf("%-16s %-9s %-8s %-6s %-6s %-10s %-5s %-10s %-8s\n",
            "case", "status", "sec", "req", "veh", "distance",
            "bksV", "bksD", "distGap%");
 
-    for (i = 0; i < matches.gl_pathc; i++) {
+    for (i = 0; i < case_count; i++) {
         SGContext *ctx;
         SGConfig config;
-        SGStatus status;
-        SGStatus solve_status;
-        double start, elapsed;
+        SGStatus status, solve_status;
+        double start, elapsed, distance;
         uint32_t request_count, vehicles, unassigned;
-        double distance;
-        const SGBKS *bks;
+        char case_key[64];
+        const SGBKSEntry *bks = NULL;
         char bks_veh_buf[16], bks_dist_buf[32], dist_gap_buf[32];
         const char *bks_veh_str = "-", *bks_dist_str = "-", *dist_gap_str = "-";
 
-        if (!sg_case_selected(cases[i].name, argc - filter_start, argv + filter_start)) continue;
+        if (!sg_bench_case_selected(cases[i].name, argc - filter_start, argv + filter_start)) continue;
         selected_count++;
 
         ctx = sg_create();
@@ -223,31 +121,34 @@ int main(int argc, char **argv) {
 
         status = sg_set_config(ctx, &config);
         if (status != SG_STATUS_OK) {
-            printf("%-14s %-9s\n", cases[i].name, sg_status_name(status));
+            printf("%-16s %-9s\n", cases[i].name, sg_bench_status_name(status));
             sg_free(ctx); failed_count++; continue;
         }
 
         status = sg_load_cordeau_darp(ctx, cases[i].path);
         if (status != SG_STATUS_OK) {
-            printf("%-14s %-9s (load)\n", cases[i].name, sg_status_name(status));
+            printf("%-16s %-9s (load)\n", cases[i].name, sg_bench_status_name(status));
             sg_free(ctx); failed_count++; continue;
         }
 
         status = sg_validate_model(ctx);
         if (status != SG_STATUS_OK) {
-            printf("%-14s %-9s (validate)\n", cases[i].name, sg_status_name(status));
+            printf("%-16s %-9s (validate)\n", cases[i].name, sg_bench_status_name(status));
             sg_free(ctx); failed_count++; continue;
         }
 
-        start = sg_now_seconds();
+        start = sg_bench_now();
         solve_status = sg_solve(ctx);
-        elapsed = sg_now_seconds() - start;
+        elapsed = sg_bench_now() - start;
 
         request_count = sg_get_request_count(ctx);
         vehicles = sg_get_used_vehicle_count(ctx);
         unassigned = sg_get_unassigned(ctx);
         distance = sg_get_total_distance(ctx);
-        bks = sg_find_bks(cases[i].name);
+
+        if (sg_bench_case_key(cases[i].name, case_key, sizeof(case_key))) {
+            bks = sg_bks_find(bks_entries, bks_count, case_key);
+        }
 
         if (bks) {
             double gap = (distance - bks->distance) * 100.0 / bks->distance;
@@ -261,9 +162,17 @@ int main(int argc, char **argv) {
             sum_distance_gap += gap;
         }
 
-        printf("%-14s %-9s %-8.3f %-6u %-6u %-10.2f %-5s %-10s %-8s\n",
-               cases[i].name, sg_status_name(solve_status), elapsed, request_count,
-               vehicles, distance, bks_veh_str, bks_dist_str, dist_gap_str);
+        printf("%-16s %-9s %-8.3f %-6u %-6u %-10.2f %-5s %-10s %-8s\n",
+               cases[i].name, sg_bench_status_name(solve_status), elapsed,
+               request_count, vehicles, distance, bks_veh_str, bks_dist_str, dist_gap_str);
+
+        if (csv_fp) {
+            fprintf(csv_fp, "%s,%s,%.3f,%u,%u,%u,%.2f,%s,%s,%s\n",
+                    cases[i].name, sg_bench_status_name(solve_status), elapsed,
+                    request_count, vehicles, unassigned, distance,
+                    bks ? bks_veh_buf : "", bks ? bks_dist_buf : "",
+                    bks ? dist_gap_buf : "");
+        }
 
         if (show_telemetry && (solve_status == SG_STATUS_OK || solve_status == SG_STATUS_LIMIT)) {
             uint32_t oi;
@@ -303,17 +212,15 @@ int main(int argc, char **argv) {
     printf("\nSummary: cases=%d solved=%d failed=%d\n", selected_count, solved_count, failed_count);
     if (solved_count > 0) {
         printf("Average: seconds=%.3f vehicles=%.2f unassigned=%.2f distance=%.2f\n",
-               sum_seconds / (double)solved_count,
-               sum_vehicles / (double)solved_count,
-               sum_unassigned / (double)solved_count,
-               sum_distance / (double)solved_count);
+               sum_seconds / (double)solved_count, sum_vehicles / (double)solved_count,
+               sum_unassigned / (double)solved_count, sum_distance / (double)solved_count);
     }
     if (compared_count > 0) {
         printf("Against BKS: compared=%d avgDistGap=%+.1f%%\n",
                compared_count, sum_distance_gap / (double)compared_count);
     }
 
-    free(cases);
-    globfree(&matches);
+    sg_free_bench_cases(cases, case_count);
+    if (csv_fp) fclose(csv_fp);
     return failed_count == 0 ? 0 : 1;
 }
