@@ -3232,19 +3232,30 @@ static void phase1_recompute_full_no_reason(SimplexSolver *solver,
     (void)solver;
 }
 
-static void phase1_recompute_rc_only_guarded(SimplexSolver *solver,
-                                             SimplexTableau *tab,
-                                             int *rc_only_streak) {
+static int phase1_recompute_rc_only_guarded(SimplexSolver *solver,
+                                            SimplexTableau *tab,
+                                            int *rc_only_streak) {
     /* RC-only refresh is safe only while basis/LU and primal x are unchanged.
      * Guard long RC-only streaks with a forced full recompute to bound drift. */
     if (rc_only_streak && *rc_only_streak >= PHASE1_RC_ONLY_STREAK_GUARD) {
         lp_telemetry_record_phase1_recompute_guard_forced_full(solver);
         phase1_recompute_full_no_reason(solver, tab, rc_only_streak);
-        return;
+        return 1;
     }
     tableau_compute_reduced_costs(tab);
     lp_telemetry_record_phase1_recompute_rc_only(solver);
     if (rc_only_streak) (*rc_only_streak)++;
+    return 0;
+}
+
+static void phase1_recompute_dir_skip_safe(SimplexSolver *solver,
+                                           SimplexTableau *tab,
+                                           int *rc_only_streak) {
+    int used_full = phase1_recompute_rc_only_guarded(solver, tab, rc_only_streak);
+    lp_telemetry_record_phase1_dir_stabilize_skip(solver, used_full);
+    if (used_full) {
+        lp_telemetry_record_phase1_recompute(solver, LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
+    }
 }
 
 int pricing_steepest_edge(SimplexTableau *tab, int *entering) {
@@ -5376,11 +5387,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                                             &excluded_entering_b,
                                             &excluded_entering_ttl_b);
                 use_bland = 1;
-                phase1_recompute_full_with_reason(
-                    solver,
-                    tab,
-                    &phase1_rc_only_streak,
-                    LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
+                phase1_recompute_dir_skip_safe(solver, tab, &phase1_rc_only_streak);
                 continue;
             }
 
@@ -5400,11 +5407,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                                             &excluded_entering_b,
                                             &excluded_entering_ttl_b);
                 use_bland = 1;
-                phase1_recompute_full_with_reason(
-                    solver,
-                    tab,
-                    &phase1_rc_only_streak,
-                    LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
+                phase1_recompute_dir_skip_safe(solver, tab, &phase1_rc_only_streak);
                 continue;
             }
             dir_stabilize_moderate_defer_pending = 0;

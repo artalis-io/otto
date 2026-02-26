@@ -607,6 +607,8 @@ typedef struct {
     int perf_phase1_dir_stabilize_ratio_gt_100;
     int perf_phase1_dir_stabilize_ratio_gt_300;
     int perf_phase1_dir_stabilize_ratio_gt_1000;
+    int perf_phase1_dir_stabilize_skip_rc_only;
+    int perf_phase1_dir_stabilize_skip_full;
     int perf_phase1_recompute_after_ratio_breakdown;
     int perf_phase1_recompute_after_dir_skip;
     int perf_phase1_recompute_after_dir_refactor;
@@ -862,6 +864,8 @@ typedef struct {
     int perf_phase1_dir_stabilize_ratio_gt_100;
     int perf_phase1_dir_stabilize_ratio_gt_300;
     int perf_phase1_dir_stabilize_ratio_gt_1000;
+    int perf_phase1_dir_stabilize_skip_rc_only;
+    int perf_phase1_dir_stabilize_skip_full;
     int perf_phase1_recompute_after_ratio_breakdown;
     int perf_phase1_recompute_after_dir_skip;
     int perf_phase1_recompute_after_dir_refactor;
@@ -1262,6 +1266,8 @@ void lp_telemetry_record_phase1_dir_stabilize_force(SimplexSolver *solver,
 void lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(
     SimplexSolver *solver,
     double dir_inf_ratio);
+void lp_telemetry_record_phase1_dir_stabilize_skip(SimplexSolver *solver,
+                                                   int used_full_recompute);
 void lp_telemetry_record_phase1_recompute(SimplexSolver *solver,
                                           LPPhase1RecomputeReason reason);
 void lp_telemetry_record_phase1_recompute_rc_only(SimplexSolver *solver);

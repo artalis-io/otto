@@ -255,6 +255,8 @@ typedef struct {
     int phase1_dir_stabilize_ratio_gt_100;
     int phase1_dir_stabilize_ratio_gt_300;
     int phase1_dir_stabilize_ratio_gt_1000;
+    int phase1_dir_stabilize_skip_rc_only;
+    int phase1_dir_stabilize_skip_full;
     int phase1_recompute_after_ratio_breakdown;
     int phase1_recompute_after_dir_skip;
     int phase1_recompute_after_dir_refactor;
@@ -833,6 +835,10 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_dir_stabilize_ratio_gt_300;
             result.phase1_dir_stabilize_ratio_gt_1000 =
                 solver_tel.perf_phase1_dir_stabilize_ratio_gt_1000;
+            result.phase1_dir_stabilize_skip_rc_only =
+                solver_tel.perf_phase1_dir_stabilize_skip_rc_only;
+            result.phase1_dir_stabilize_skip_full =
+                solver_tel.perf_phase1_dir_stabilize_skip_full;
             result.phase1_recompute_after_ratio_breakdown =
                 solver_tel.perf_phase1_recompute_after_ratio_breakdown;
             result.phase1_recompute_after_dir_skip =
@@ -1787,6 +1793,10 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_dir_stabilize_ratio_gt_300);
     fprintf(out, "      \"dir_stabilize_ratio_gt_1000\": %d,\n",
             ralph->phase1_dir_stabilize_ratio_gt_1000);
+    fprintf(out, "      \"dir_stabilize_skip_rc_only\": %d,\n",
+            ralph->phase1_dir_stabilize_skip_rc_only);
+    fprintf(out, "      \"dir_stabilize_skip_full\": %d,\n",
+            ralph->phase1_dir_stabilize_skip_full);
     fprintf(out, "      \"recompute_after_ratio_breakdown\": %d,\n",
             ralph->phase1_recompute_after_ratio_breakdown);
     fprintf(out, "      \"recompute_after_dir_skip\": %d,\n",
@@ -1868,6 +1878,10 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_dir_stabilize_ratio_gt_300);
     fprintf(out, "    \"phase1_dir_stabilize_ratio_gt_1000\": %d,\n",
             ralph->phase1_dir_stabilize_ratio_gt_1000);
+    fprintf(out, "    \"phase1_dir_stabilize_skip_rc_only\": %d,\n",
+            ralph->phase1_dir_stabilize_skip_rc_only);
+    fprintf(out, "    \"phase1_dir_stabilize_skip_full\": %d,\n",
+            ralph->phase1_dir_stabilize_skip_full);
     fprintf(out, "    \"phase1_recompute_after_ratio_breakdown\": %d,\n",
             ralph->phase1_recompute_after_ratio_breakdown);
     fprintf(out, "    \"phase1_recompute_after_dir_skip\": %d,\n",

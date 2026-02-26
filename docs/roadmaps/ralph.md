@@ -3077,7 +3077,7 @@ Phase C gates and artifacts:
 #### P1-ICR Active Plan (2026-02-26)
 
 - Detailed todo execution plan: `docs/roadmaps/ralph_phase1_iteration_control_plan.md`
-- Current implementation step: `P1-C` completed (ratio-breakdown recovery tightening).
+- Current implementation step: `P1-D` completed (direction-stabilize recompute decimation).
 
 Focused canary impact (Phase B vs Phase C):
 - artifacts: `/tmp/phasec-focused-*.json`
