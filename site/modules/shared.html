@@ -1,0 +1,1132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shared — Infrastructure Library | OTTO</title>
+    <meta name="description" content="Shared is OTTO's zero-dependency infrastructure library. 40+ modules covering geo, data structures, parsing, HTTP hardening, resilience, concurrency, and rendering. 319 tests, WASM-compilable.">
+
+    <!-- SEO -->
+    <link rel="canonical" href="https://ottofleet.io/modules/shared.html">
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#0a0a0a">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="Shared — Infrastructure Library | OTTO">
+    <meta property="og:description" content="Zero-dependency infrastructure library. 40+ modules: geo, arena allocators, JSON/protobuf parsers, rate limiting, circuit breakers, worker pools. Written in C, compiles to WASM.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://ottofleet.io/modules/shared.html">
+    <meta property="og:site_name" content="OTTO">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%230a0a0a'/%3E%3Ctext x='50' y='68' font-family='ui-monospace,monospace' font-size='60' font-weight='700' fill='%233b82f6' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
+
+    <!-- Shared Styles -->
+    <link rel="stylesheet" href="../style.css">
+
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Shared",
+        "alternateName": "OTTO Shared Infrastructure Library",
+        "description": "Infrastructure library with 40+ modules: geo, arena allocators, JSON/protobuf parsers, rate limiting, circuit breakers, worker pools. Zero external dependencies, compiles to WebAssembly.",
+        "url": "https://ottofleet.io/modules/shared.html",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Cross-platform (WASM, Linux, macOS)",
+        "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+        "author": {
+            "@type": "Person",
+            "name": "Mark Farkas"
+        }
+    }
+    </script>
+
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --bg-secondary: #141414;
+            --bg-tertiary: #1a1a1a;
+            --text: #e5e5e5;
+            --text-muted: #9ca3af;
+            --accent: #3b82f6;
+            --accent-dim: #1e40af;
+            --border: #2a2a2a;
+            --success: #22c55e;
+            --warning: #eab308;
+            --error: #ef4444;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+
+        body {
+            font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'Segoe UI Mono', Menlo, Monaco, Consolas, monospace;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            font-size: 15px;
+        }
+
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        .container { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
+
+        header { padding: 48px 0 32px; border-bottom: 1px solid var(--border); }
+        .header-top { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px; }
+        .logo { font-size: 32px; font-weight: 700; letter-spacing: 4px; color: var(--text); animation: logo-electric 4s infinite; text-shadow: 0 0 10px rgba(255,255,255,0.1); }
+        .logo span { color: var(--accent); }
+
+        @keyframes logo-electric {
+            0%, 100% { text-shadow: 0 0 10px rgba(255,255,255,0.15), 0 0 20px rgba(255,255,255,0.05); transform: translate(0,0); filter: brightness(1); }
+            5% { text-shadow: -1px 0 rgba(255,100,100,0.5), 1px 0 rgba(100,180,255,0.5), 0 0 10px rgba(255,255,255,0.2); transform: translate(0.5px,0); }
+            10% { text-shadow: 0 0 10px rgba(255,255,255,0.15); transform: translate(0,0); }
+            30% { text-shadow: -2px 0 rgba(255,60,60,0.6), 2px 0 rgba(60,180,255,0.6), 0 0 20px rgba(255,255,255,0.3); transform: translate(1px,0) skewX(0.5deg); filter: brightness(1.15); }
+            31% { text-shadow: 2px 0 rgba(255,60,60,0.5), -2px 0 rgba(60,180,255,0.5), 0 0 15px rgba(255,255,255,0.2); transform: translate(-0.5px,0.3px) skewX(-0.3deg); }
+            33% { text-shadow: 0 0 10px rgba(255,255,255,0.15); transform: translate(0,0); filter: brightness(1); }
+            55% { text-shadow: 0.5px 0 rgba(255,150,150,0.3), -0.5px 0 rgba(150,200,255,0.3), 0 0 10px rgba(255,255,255,0.15); }
+            60% { text-shadow: 0 0 10px rgba(255,255,255,0.15), 0 0 20px rgba(255,255,255,0.05); }
+            75% { text-shadow: -1.5px 0 rgba(255,80,80,0.5), 1.5px 0 rgba(80,180,255,0.5), 0 0 15px rgba(255,255,255,0.25); transform: translate(0.6px,-0.2px); filter: brightness(1.1); }
+            77% { text-shadow: 0 0 10px rgba(255,255,255,0.15); transform: translate(0,0); filter: brightness(1); }
+            92% { filter: brightness(0.95); } 93% { filter: brightness(1.08); } 94% { filter: brightness(1); }
+        }
+
+        .tagline { margin-top: 8px; color: var(--text-muted); font-size: 14px; }
+        .header-nav { display: flex; gap: 8px; flex-wrap: wrap; }
+        .nav-group { display: flex; gap: 8px; flex-wrap: wrap; }
+        .nav-separator { color: var(--border); font-weight: 300; align-self: center; }
+        .header-nav a { padding: 6px 12px; font-size: 13px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 4px; text-decoration: none; }
+        .header-nav a:hover { color: var(--text); border-color: var(--accent-dim); text-decoration: none; }
+
+        .hero { padding: 48px 0; border-bottom: 1px solid var(--border); }
+        .hero h1 { font-size: 20px; font-weight: 600; margin-bottom: 16px; }
+        .hero p { color: var(--text-muted); max-width: 700px; }
+        .badges { margin-top: 24px; display: flex; flex-wrap: wrap; gap: 12px; }
+        .badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; font-size: 13px; color: var(--text-muted); }
+        .badge.green { border-color: var(--success); color: var(--success); }
+        .badge.blue { border-color: var(--accent); color: var(--accent); }
+        .badge.yellow { border-color: var(--warning); color: var(--warning); }
+
+        .section { padding: 48px 0; border-bottom: 1px solid var(--border); }
+        .section-title { font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 2px; color: var(--text-muted); margin-bottom: 24px; }
+        .section h2 { font-size: 18px; font-weight: 600; margin-bottom: 16px; }
+        .section h3 { font-size: 15px; font-weight: 600; margin-bottom: 12px; margin-top: 32px; }
+        .section h3:first-child { margin-top: 0; }
+        .section p { color: var(--text-muted); margin-bottom: 16px; max-width: 800px; }
+        .section p strong { color: var(--text); }
+        .section ul { color: var(--text-muted); margin-bottom: 16px; padding-left: 24px; }
+        .section ul li { margin-bottom: 6px; }
+        .section ul li strong { color: var(--text); }
+
+        .code-block { background: linear-gradient(135deg, #0a0a0a 0%, #141414 100%); border: 1px solid #2a2a2a; border-radius: 6px; padding: 20px; overflow-x: auto; position: relative; overflow: hidden; margin-bottom: 16px; }
+        .code-block::after { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: repeating-linear-gradient(0deg, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 1px, transparent 1px, transparent 2px); pointer-events: none; }
+        .code-block pre { margin: 0; font-size: 13px; font-family: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace; position: relative; z-index: 1; animation: crt-flicker-gray 5s infinite; }
+        .code-block .comment { color: #707070; text-shadow: 0 0 5px rgba(150,150,150,0.2); }
+        .code-block .command { color: #50c878; text-shadow: 0 0 5px rgba(80,200,120,0.4), 0 0 10px rgba(80,200,120,0.2); }
+        .code-block .keyword { color: #60a5fa; text-shadow: 0 0 5px rgba(96,165,250,0.3); }
+        .code-block .type { color: #a78bfa; text-shadow: 0 0 5px rgba(167,139,250,0.3); }
+        .code-block .string { color: #fbbf24; text-shadow: 0 0 5px rgba(251,191,36,0.3); }
+        .code-block .number { color: #34d399; text-shadow: 0 0 5px rgba(52,211,153,0.3); }
+        .code-block .func { color: #f0abfc; text-shadow: 0 0 5px rgba(240,171,252,0.3); }
+        @keyframes crt-flicker-gray { 0%, 100% { opacity: 1; } 94% { opacity: 1; } 95% { opacity: 0.97; } 96% { opacity: 1; } }
+
+        .ascii-art { background: linear-gradient(135deg, #1a1a1a 0%, #222 100%); border: 1px solid #333; border-radius: 6px; padding: 24px; overflow-x: auto; font-size: 13px; line-height: 1.3; position: relative; overflow: hidden; margin-bottom: 16px; }
+        .ascii-art::after { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: repeating-linear-gradient(0deg, rgba(255,255,255,0.03) 0px, rgba(255,255,255,0.03) 1px, transparent 1px, transparent 2px); pointer-events: none; }
+        .ascii-art pre { margin: 0; font-family: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace; color: #a0a0a0; text-shadow: 0 0 5px rgba(200,200,200,0.3), 0 0 10px rgba(200,200,200,0.1); position: relative; z-index: 1; animation: crt-flicker-gray 5s infinite; letter-spacing: 0; word-spacing: 0; font-variant-ligatures: none; font-feature-settings: "calt" 0; line-height: 1; }
+
+        table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 24px; }
+        th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+        th { color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; white-space: nowrap; }
+        td { color: var(--text-muted); }
+        td:first-child { color: var(--text); font-weight: 500; }
+        .y { color: var(--success); font-weight: 600; }
+        .p { color: var(--warning); }
+        .n { color: #555; }
+        .table-scroll { overflow-x: auto; margin-bottom: 24px; }
+        .table-scroll table { min-width: 700px; margin-bottom: 0; }
+
+        .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 16px; }
+        .feature-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 20px; }
+        .feature-card:hover { border-color: var(--accent-dim); }
+        .feature-card-title { font-weight: 600; font-size: 14px; margin-bottom: 8px; }
+        .feature-card-desc { color: var(--text-muted); font-size: 13px; line-height: 1.5; }
+        .feature-card-count { font-size: 12px; color: var(--accent); margin-top: 8px; }
+
+        .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .stat { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 16px; text-align: center; }
+        .stat-value { font-size: 24px; font-weight: 700; color: var(--text); }
+        .stat-value.green { color: var(--success); }
+        .stat-value.blue { color: var(--accent); }
+        .stat-value.yellow { color: var(--warning); }
+        .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+
+        .callout { background: var(--bg-secondary); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; padding: 16px 20px; margin-bottom: 24px; }
+        .callout p { margin-bottom: 0; }
+        .callout.honest { border-left-color: var(--warning); }
+
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+
+        footer { padding: 32px 0; color: var(--text-muted); font-size: 13px; }
+        .footer-links { display: flex; gap: 24px; margin-bottom: 16px; }
+
+        .skip-link { position: absolute; top: -40px; left: 0; background: var(--accent); color: white; padding: 8px 16px; z-index: 100; text-decoration: none; }
+        .skip-link:focus { top: 0; }
+
+        @media (max-width: 600px) {
+            .logo { font-size: 24px; }
+            .hero h1 { font-size: 18px; }
+            .ascii-art { font-size: 10px; padding: 16px; }
+            .footer-links { flex-direction: column; gap: 8px; }
+            .header-top { flex-direction: column; }
+            .header-nav { margin-top: 16px; }
+            .two-col { grid-template-columns: 1fr; }
+            .stat-row { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+    <div class="container">
+        <header>
+            <div class="header-top">
+                <div>
+                    <a href="../index.html" style="text-decoration:none"><div class="logo"><span>O</span>TTO</div></a>
+                    <div class="tagline">Shared &mdash; Infrastructure Library</div>
+                </div>
+                <nav class="header-nav">
+                    <div class="nav-group">
+                        <a href="../index.html">Home</a>
+                        <a href="../api.html">API</a>
+                    </div>
+                    <span class="nav-separator">|</span>
+                    <div class="nav-group">
+                        <a href="#why">Why</a>
+                        <a href="#modules">Modules</a>
+                        <a href="#api">API</a>
+                        <a href="#architecture">Architecture</a>
+                        <a href="#quickstart">Quick Start</a>
+                    </div>
+                </nav>
+            </div>
+        </header>
+
+        <main id="main-content">
+
+        <!-- ============================================================ -->
+        <!-- Hero -->
+        <!-- ============================================================ -->
+        <section class="hero">
+            <h1>The foundation every OTTO module stands on</h1>
+            <p>
+                Shared is OTTO's infrastructure library &mdash; 40+ modules providing geo calculations,
+                memory allocators, JSON/protobuf/CSV parsers, rate limiting, circuit breakers, worker pools,
+                and font rendering. Zero external dependencies. Every OTTO component from Surge to Carta to
+                Ralph links against Shared. If it's not domain-specific, it lives here.
+            </p>
+            <div class="badges">
+                <span class="badge green">319 tests</span>
+                <span class="badge blue">40+ modules</span>
+                <span class="badge yellow">Zero deps</span>
+                <span class="badge">C11</span>
+                <span class="badge">WASM</span>
+                <span class="badge">~24K LoC</span>
+                <span class="badge">AGPLv3 + Trucking Exception</span>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Why -->
+        <!-- ============================================================ -->
+        <section class="section" id="why">
+            <div class="section-title">Why</div>
+            <h2>Write it once, use it everywhere</h2>
+
+            <p>
+                Every OTTO module needs Haversine distances. Every API server needs rate limiting.
+                Every parser needs arena allocation. Without a shared library, each module reinvents
+                these primitives &mdash; differently, inconsistently, with different bugs.
+            </p>
+
+            <p>
+                Shared enforces a single implementation for cross-cutting concerns. When Carta, Velo, Locus,
+                and Surge all use <code>sh_ratelimit_check()</code>, there's one token bucket implementation
+                to audit, test, and harden. When FuelWise and Surge both need JSON parsing, there's
+                one <code>sh_json_parse()</code> with one fuzz corpus.
+            </p>
+
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-card-title">No duplication</div>
+                    <div class="feature-card-desc">
+                        One Haversine. One arena allocator. One rate limiter. One protobuf decoder.
+                        Every module links the same code. Bug fixes propagate everywhere instantly.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Zero external dependencies</div>
+                    <div class="feature-card-desc">
+                        No libcurl, no libjson, no libprotobuf. Every byte is hand-written C11 that
+                        compiles to WASM. No transitive dependency surprises. No supply chain risk.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Production-grade primitives</div>
+                    <div class="feature-card-desc">
+                        Token bucket rate limiters, bounded work queues, circuit breakers with half-open
+                        recovery, exponential backoff with jitter, M/M/c capacity planning. Built for
+                        real servers, not toy examples.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">WASM-compatible</div>
+                    <div class="feature-card-desc">
+                        Every module compiles to WebAssembly. The JSON parser runs in the browser.
+                        The protobuf decoder runs in the browser. Arena allocators work without
+                        <code>mmap</code>. Designed for edge deployment from day one.
+                    </div>
+                </div>
+            </div>
+
+            <div class="callout">
+                <p>
+                    <strong>The rule.</strong> If functionality isn't domain-specific to a single module,
+                    it belongs in Shared. Geo math, data structures, serialization, HTTP hardening,
+                    resilience patterns, memory management &mdash; all live here. Domain modules
+                    (Surge, Ralph, Velo) contain only their domain logic.
+                </p>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Module Catalog -->
+        <!-- ============================================================ -->
+        <section class="section" id="modules">
+            <div class="section-title">Module Catalog</div>
+            <h2>40+ modules across 10 categories</h2>
+
+            <div class="ascii-art">
+<pre>
+  ┌──────────────────────────────────────────────────────────────────┐
+  │                    OTTO Domain Modules                          │
+  │  Surge  │  Ralph  │  Velo  │  Carta  │  Locus  │  FuelWise     │
+  └────┬────┴────┬────┴───┬────┴────┬────┴────┬────┴────┬──────────┘
+       │         │        │         │         │         │
+       ▼         ▼        ▼         ▼         ▼         ▼
+  ┌──────────────────────────────────────────────────────────────────┐
+  │                       shared/                                    │
+  │                                                                  │
+  │  ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌───────────────┐    │
+  │  │   Geo   │  │  Memory  │  │ Parsing  │  │ HTTP/Server   │    │
+  │  │ haversine│  │  arena   │  │  json    │  │ ratelimit     │    │
+  │  │ eov     │  │  pool    │  │  csv     │  │ workqueue     │    │
+  │  │ spatial │  │  hashmap │  │  xml     │  │ cors          │    │
+  │  │ dist    │  │  heap    │  │  protobuf│  │ httpserver    │    │
+  │  │ polyline│  │          │  │  pbf     │  │ completion    │    │
+  │  │         │  │          │  │  geojson │  │ worker_pool   │    │
+  │  └─────────┘  └──────────┘  └──────────┘  └───────────────┘    │
+  │                                                                  │
+  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────────────┐   │
+  │  │Resilience│  │  Config  │  │ Render   │  │ Observability │   │
+  │  │ circuit  │  │  args    │  │  font    │  │ log           │   │
+  │  │ backoff  │  │  capacity│  │  render  │  │ trace         │   │
+  │  │ retry    │  │  query   │  │          │  │ metrics       │   │
+  │  └──────────┘  └──────────┘  └──────────┘  └───────────────┘   │
+  │                                                                  │
+  │  ┌──────────┐  ┌──────────┐                                     │
+  │  │  Math    │  │ Hashing  │      319 tests  ·  ~24K LoC         │
+  │  │ piecewise│  │  hash    │      40 headers ·  42 source files  │
+  │  │ stepfunc │  │  sha256  │      0 external dependencies        │
+  │  │ units    │  │          │                                     │
+  │  └──────────┘  └──────────┘                                     │
+  └──────────────────────────────────────────────────────────────────┘
+</pre>
+            </div>
+
+            <div class="stat-row">
+                <div class="stat">
+                    <div class="stat-value blue">40+</div>
+                    <div class="stat-label">Modules</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">319</div>
+                    <div class="stat-label">Tests</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value">~24K</div>
+                    <div class="stat-label">Lines of C</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">0</div>
+                    <div class="stat-label">Ext Dependencies</div>
+                </div>
+            </div>
+
+            <h3>Geography &amp; Coordinates</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Module</th>
+                        <th>Header</th>
+                        <th>Purpose</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>sh_geo</td>
+                        <td><code>sh_geo.h</code></td>
+                        <td>Haversine distance, SHCoord type, coordinate parsing/validation, bearing calculations</td>
+                    </tr>
+                    <tr>
+                        <td>sh_eov</td>
+                        <td><code>sh_eov.h</code></td>
+                        <td>HD72/EOV &harr; WGS84 conversion (Hungarian national grid, 7-parameter Helmert)</td>
+                    </tr>
+                    <tr>
+                        <td>sh_spatial_grid</td>
+                        <td><code>sh_spatial_grid.h</code></td>
+                        <td>Fixed-cell spatial index for radius queries. O(1) cell lookup, configurable resolution</td>
+                    </tr>
+                    <tr>
+                        <td>sh_dist</td>
+                        <td><code>sh_dist.h</code></td>
+                        <td>Point-to-segment distance, great circle intersections</td>
+                    </tr>
+                    <tr>
+                        <td>sh_polyline</td>
+                        <td><code>sh_polyline.h</code></td>
+                        <td>Google Polyline encoding/decoding for route geometry compression</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Memory &amp; Data Structures</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Module</th>
+                        <th>Header</th>
+                        <th>Purpose</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>sh_arena</td>
+                        <td><code>sh_arena.h</code></td>
+                        <td>Bump allocator. O(1) alloc, O(1) reset. Per-request scratch space for API servers</td>
+                    </tr>
+                    <tr>
+                        <td>sh_pool</td>
+                        <td><code>sh_pool.h</code></td>
+                        <td>Typed contiguous pool. Offset-based access, growable. Used for OSM coordinate storage</td>
+                    </tr>
+                    <tr>
+                        <td>sh_hashmap</td>
+                        <td><code>sh_hashmap.h</code></td>
+                        <td>Open addressing with Robin Hood probing. FNV-1a hashing. Used by Velo, Locus, Nexus</td>
+                    </tr>
+                    <tr>
+                        <td>sh_heap</td>
+                        <td><code>sh_heap.h</code></td>
+                        <td>Binary min/max heap. Used by Velo for Dijkstra priority queue</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Parsing &amp; Serialization</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Module</th>
+                        <th>Header</th>
+                        <th>Purpose</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>sh_json</td>
+                        <td><code>sh_json.h</code></td>
+                        <td>Full JSON parser + ShJsonWriter streaming encoder. Arena-backed. Mandatory for all OTTO APIs</td>
+                    </tr>
+                    <tr>
+                        <td>sh_csv</td>
+                        <td><code>sh_csv.h</code></td>
+                        <td>RFC 4180 CSV parser with configurable delimiters. Used by Nexus for data ingestion</td>
+                    </tr>
+                    <tr>
+                        <td>sh_xml</td>
+                        <td><code>sh_xml.h</code></td>
+                        <td>Streaming XML parser. Used by Nexus for XLSX extraction (Office Open XML)</td>
+                    </tr>
+                    <tr>
+                        <td>sh_protobuf</td>
+                        <td><code>sh_protobuf.h</code></td>
+                        <td>Wire-format protobuf decoder/encoder. No .proto files, no codegen. Used by Carta for MVT</td>
+                    </tr>
+                    <tr>
+                        <td>sh_pbf</td>
+                        <td><code>sh_pbf.h</code></td>
+                        <td>OpenStreetMap PBF parser. Delta-decoded coordinates, string tables. Powers Velo + Carta + Locus</td>
+                    </tr>
+                    <tr>
+                        <td>sh_geojson</td>
+                        <td><code>sh_geojson.h</code></td>
+                        <td>GeoJSON emitter for API responses. Feature collections, geometries</td>
+                    </tr>
+                    <tr>
+                        <td>sh_pdf2struc</td>
+                        <td><code>sh_pdf2struc.h</code></td>
+                        <td>PDF text extraction with column/table reconstruction. Used by Nexus for document ingestion</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>HTTP &amp; Server Hardening</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Module</th>
+                        <th>Header</th>
+                        <th>Purpose</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>sh_ratelimit</td>
+                        <td><code>sh_ratelimit.h</code></td>
+                        <td>Token bucket rate limiter. Per-IP tracking, configurable RPS/burst, thread-safe</td>
+                    </tr>
+                    <tr>
+                        <td>sh_workqueue</td>
+                        <td><code>sh_workqueue.h</code></td>
+                        <td>Bounded producer-consumer queue. Backpressure via 503, expiration for stale items</td>
+                    </tr>
+                    <tr>
+                        <td>sh_completion</td>
+                        <td><code>sh_completion.h</code></td>
+                        <td>Work item completion signaling. Replaces manual mutex/cond boilerplate</td>
+                    </tr>
+                    <tr>
+                        <td>sh_worker_pool</td>
+                        <td><code>sh_worker_pool.h</code></td>
+                        <td>Thread pool with callback dispatch. Auto-detects CPU count, clean shutdown</td>
+                    </tr>
+                    <tr>
+                        <td>sh_httpserver</td>
+                        <td><code>sh_httpserver.h</code></td>
+                        <td>Mongoose integration helpers. Socket write timeouts for slow-client protection</td>
+                    </tr>
+                    <tr>
+                        <td>sh_cors</td>
+                        <td><code>sh_cors.h</code></td>
+                        <td>CORS header generation. Origin allowlisting, preflight handling, credentials</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Resilience</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Module</th>
+                        <th>Header</th>
+                        <th>Purpose</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>sh_circuit</td>
+                        <td><code>sh_circuit.h</code></td>
+                        <td>Circuit breaker (closed/open/half-open). Thread-safe. Configurable thresholds via env vars</td>
+                    </tr>
+                    <tr>
+                        <td>sh_backoff</td>
+                        <td><code>sh_backoff.h</code></td>
+                        <td>Exponential backoff with jitter. Configurable base delay, max delay, jitter factor</td>
+                    </tr>
+                    <tr>
+                        <td>sh_retry</td>
+                        <td><code>sh_retry.h</code></td>
+                        <td>HTTP retry orchestrator. Combines circuit breaker + backoff. Respects Retry-After headers</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Configuration &amp; CLI</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Module</th>
+                        <th>Header</th>
+                        <th>Purpose</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>sh_args</td>
+                        <td><code>sh_args.h</code></td>
+                        <td>CLI/env arg parsing. <code>sh_parse_int()</code> with bounds checking. Type-safe defaults</td>
+                    </tr>
+                    <tr>
+                        <td>sh_capacity</td>
+                        <td><code>sh_capacity.h</code></td>
+                        <td>M/M/c queuing theory. Calculates rate limits, queue depths, burst capacity from SLA targets</td>
+                    </tr>
+                    <tr>
+                        <td>sh_query</td>
+                        <td><code>sh_query.h</code></td>
+                        <td>URL query string parser. <code>sh_query_get_int_bounded()</code> for safe integer extraction</td>
+                    </tr>
+                    <tr>
+                        <td>sh_adaptive</td>
+                        <td><code>sh_adaptive.h</code></td>
+                        <td>Auto-tune rate limits from measured response times. P50/P90/P99 tracking, EMA smoothing</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Observability</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Module</th>
+                        <th>Header</th>
+                        <th>Purpose</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>sh_log</td>
+                        <td><code>sh_log.h</code></td>
+                        <td>Structured logging. JSON or text output. Configurable level via <code>SH_LOG_LEVEL</code> env</td>
+                    </tr>
+                    <tr>
+                        <td>sh_trace</td>
+                        <td><code>sh_trace.h</code></td>
+                        <td>Trace ID propagation. Extract from X-Trace-Id headers, auto-generate if missing</td>
+                    </tr>
+                    <tr>
+                        <td>sh_metrics</td>
+                        <td><code>sh_metrics.h</code></td>
+                        <td>Metrics collection. Counters, histograms, timers. Prometheus /metrics endpoint output</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Math &amp; Units</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Module</th>
+                        <th>Header</th>
+                        <th>Purpose</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>sh_piecewise</td>
+                        <td><code>sh_piecewise.h</code></td>
+                        <td>Piecewise linear function evaluation and composition. Used for cost functions</td>
+                    </tr>
+                    <tr>
+                        <td>sh_stepfunc</td>
+                        <td><code>sh_stepfunc.h</code></td>
+                        <td>Step function evaluation. Used for time-dependent travel speeds</td>
+                    </tr>
+                    <tr>
+                        <td>sh_units</td>
+                        <td><code>sh_units.h</code></td>
+                        <td>SI &harr; imperial conversion. <code>sh_miles_to_m()</code>, <code>sh_mpg_to_l100km()</code>. Internal SI mandate</td>
+                    </tr>
+                    <tr>
+                        <td>sh_hash</td>
+                        <td><code>sh_hash.h</code></td>
+                        <td>FNV-1a hash function. Used by sh_hashmap and Nexus diff</td>
+                    </tr>
+                    <tr>
+                        <td>sh_hash_sha256</td>
+                        <td><code>sh_hash_sha256.h</code></td>
+                        <td>SHA-256 implementation for content integrity verification</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Rendering</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Module</th>
+                        <th>Header</th>
+                        <th>Purpose</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>sh_font</td>
+                        <td><code>sh_font.h</code></td>
+                        <td>Embedded bitmap font atlas (28K LoC data). Glyph lookup for Carta PNG tile labels</td>
+                    </tr>
+                    <tr>
+                        <td>sh_render</td>
+                        <td><code>sh_render.h</code></td>
+                        <td>Software rasterization primitives. Anti-aliased lines, polygon fill, text rendering</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- API -->
+        <!-- ============================================================ -->
+        <section class="section" id="api">
+            <div class="section-title">API</div>
+            <h2>Clean C APIs for every concern</h2>
+
+            <h3>Arena allocator</h3>
+
+            <div class="code-block">
+<pre><span class="keyword">#include</span> <span class="string">"sh_arena.h"</span>
+
+<span class="comment">// Create arena for per-request scratch space</span>
+<span class="type">SHArena</span> *arena = <span class="func">sh_arena_create</span>(<span class="number">64</span> * <span class="number">1024</span>);  <span class="comment">// 64KB</span>
+
+<span class="comment">// Bump-allocate (O(1), no individual frees)</span>
+<span class="type">double</span> *coords = <span class="func">sh_arena_alloc</span>(arena, n * <span class="keyword">sizeof</span>(<span class="type">double</span>));
+<span class="type">int</span> *indices = <span class="func">sh_arena_calloc</span>(arena, m, <span class="keyword">sizeof</span>(<span class="type">int</span>));
+
+<span class="comment">// Use allocations...</span>
+<span class="func">process</span>(coords, indices);
+
+<span class="comment">// Free everything at once (O(1))</span>
+<span class="func">sh_arena_free</span>(arena);</pre>
+            </div>
+
+            <h3>Rate limiter</h3>
+
+            <div class="code-block">
+<pre><span class="keyword">#include</span> <span class="string">"sh_ratelimit.h"</span>
+
+<span class="comment">// 10 RPS, burst of 100, track 4096 IPs</span>
+<span class="type">ShRateLimiter</span> *rl = <span class="func">sh_ratelimit_create</span>(<span class="number">10.0</span>, <span class="number">100.0</span>, <span class="number">4096</span>);
+
+<span class="comment">// In HTTP handler</span>
+<span class="type">ShRateLimitAddr</span> addr;
+<span class="func">sh_ratelimit_addr_ipv4</span>(&amp;addr, client_ip);
+
+<span class="keyword">if</span> (!<span class="func">sh_ratelimit_check</span>(rl, &amp;addr)) {
+    <span class="func">mg_http_reply</span>(c, <span class="number">429</span>, <span class="string">"Too Many Requests"</span>);
+    <span class="keyword">return</span>;
+}
+
+<span class="comment">// Adaptive: auto-tune from measured response times</span>
+<span class="func">sh_ratelimit_update_rate</span>(rl, new_rps, new_burst);</pre>
+            </div>
+
+            <h3>JSON parsing + writing</h3>
+
+            <div class="two-col">
+                <div>
+                    <h3>Parse (decode)</h3>
+                    <div class="code-block">
+<pre><span class="keyword">#include</span> <span class="string">"sh_json.h"</span>
+
+<span class="type">SHArena</span> *a = <span class="func">sh_arena_create</span>(<span class="number">4096</span>);
+<span class="type">ShJsonValue</span> *root;
+<span class="func">sh_json_parse</span>(body, len, a, &amp;root);
+
+<span class="type">double</span> lat = <span class="func">sh_json_as_double</span>(
+    <span class="func">sh_json_get</span>(root, <span class="string">"lat"</span>), <span class="number">0.0</span>);
+
+<span class="type">ShJsonValue</span> *arr =
+    <span class="func">sh_json_get</span>(root, <span class="string">"items"</span>);
+<span class="keyword">for</span> (<span class="type">size_t</span> i = <span class="number">0</span>;
+     i &lt; <span class="func">sh_json_array_len</span>(arr);
+     i++) {
+    <span class="type">ShJsonValue</span> *el =
+        <span class="func">sh_json_array_get</span>(arr, i);
+}
+<span class="func">sh_arena_free</span>(a);</pre>
+                    </div>
+                </div>
+                <div>
+                    <h3>Write (encode)</h3>
+                    <div class="code-block">
+<pre><span class="type">ShJsonBuf</span> jb;
+<span class="func">sh_json_buf_init</span>(&amp;jb);
+<span class="type">ShJsonWriter</span> jw;
+<span class="func">sh_json_writer_init</span>(
+    &amp;jw, sh_json_buf_write, &amp;jb);
+
+<span class="func">sh_json_write_object_start</span>(&amp;jw);
+<span class="func">sh_json_write_key</span>(&amp;jw, <span class="string">"status"</span>);
+<span class="func">sh_json_write_string</span>(&amp;jw, <span class="string">"OK"</span>);
+<span class="func">sh_json_write_key</span>(&amp;jw, <span class="string">"count"</span>);
+<span class="func">sh_json_write_int</span>(&amp;jw, <span class="number">42</span>);
+<span class="func">sh_json_write_object_end</span>(&amp;jw);
+
+<span class="type">char</span> *json = <span class="func">sh_json_buf_take</span>(&amp;jb);
+<span class="comment">// {"status":"OK","count":42}</span></pre>
+                    </div>
+                </div>
+            </div>
+
+            <h3>Circuit breaker + retry</h3>
+
+            <div class="code-block">
+<pre><span class="keyword">#include</span> <span class="string">"sh_circuit.h"</span>
+<span class="keyword">#include</span> <span class="string">"sh_retry.h"</span>
+
+<span class="type">ShCircuitBreaker</span> *cb = <span class="func">sh_circuit_create</span>(NULL);  <span class="comment">// defaults</span>
+<span class="type">ShRetryContext</span> ctx;
+<span class="func">sh_retry_init</span>(&amp;ctx, cb, NULL);
+
+<span class="keyword">while</span> (<span class="func">sh_retry_should_attempt</span>(&amp;ctx)) {
+    <span class="type">int</span> status = <span class="func">make_http_request</span>();
+    <span class="type">double</span> delay = <span class="func">sh_retry_after_response</span>(&amp;ctx, status, retry_after);
+
+    <span class="keyword">if</span> (!<span class="func">sh_retry_should_continue</span>(&amp;ctx))
+        <span class="keyword">break</span>;
+
+    <span class="func">usleep</span>((<span class="type">useconds_t</span>)(delay * <span class="number">1000</span>));
+}
+<span class="func">sh_circuit_free</span>(cb);</pre>
+            </div>
+
+            <h3>Worker pool</h3>
+
+            <div class="code-block">
+<pre><span class="keyword">#include</span> <span class="string">"sh_worker_pool.h"</span>
+<span class="keyword">#include</span> <span class="string">"sh_workqueue.h"</span>
+
+<span class="type">ShWorkQueue</span> *q = <span class="func">sh_workqueue_create</span>(<span class="number">1000</span>, <span class="number">5.0</span>);  <span class="comment">// 1000 items, 5s timeout</span>
+
+<span class="type">ShWorkerPoolConfig</span> cfg = {
+    .queue = q,
+    .callback = render_callback,
+    .poll_timeout_ms = <span class="number">100</span>
+};
+<span class="type">ShWorkerPool</span> *pool = <span class="func">sh_worker_pool_create</span>(<span class="number">0</span>, &amp;cfg);  <span class="comment">// 0 = auto CPU count</span>
+
+<span class="comment">// Shutdown: stop → join → free</span>
+<span class="func">sh_worker_pool_stop</span>(pool);
+<span class="func">sh_worker_pool_join</span>(pool);
+<span class="func">sh_worker_pool_free</span>(pool);
+<span class="func">sh_workqueue_free</span>(q);</pre>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Architecture -->
+        <!-- ============================================================ -->
+        <section class="section" id="architecture">
+            <div class="section-title">Under the Hood</div>
+            <h2>Design decisions</h2>
+
+            <h3>Memory management philosophy</h3>
+            <p>
+                Shared provides three memory strategies, each with clear tradeoffs:
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Strategy</th>
+                        <th>Alloc</th>
+                        <th>Free</th>
+                        <th>Best For</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>SHArena (bump)</td>
+                        <td class="y">O(1)</td>
+                        <td class="y">O(1) reset</td>
+                        <td>Per-request scratch, parsing temporaries</td>
+                    </tr>
+                    <tr>
+                        <td>SHPool (typed)</td>
+                        <td class="y">O(1)</td>
+                        <td class="y">O(1) reset</td>
+                        <td>Many same-type arrays (coordinates, nodes)</td>
+                    </tr>
+                    <tr>
+                        <td>Guarded malloc</td>
+                        <td>O(1) amortized</td>
+                        <td>O(1)</td>
+                        <td>Results that outlive the call, unbounded size</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="callout">
+                <p>
+                    <strong>The hybrid pattern.</strong> Arena for temporaries, malloc for results.
+                    API servers allocate per-request arenas; algorithm scratch lives in arenas; final
+                    results are malloc'd and owned by the caller. Arena resets on request completion
+                    clean up everything else automatically.
+                </p>
+            </div>
+
+            <h3>SI units mandate</h3>
+            <p>
+                All OTTO internal calculations use SI units: meters, liters, L/100km, kilograms.
+                <code>sh_units.h</code> provides boundary conversion only:
+                <code>sh_miles_to_m()</code>, <code>sh_mpg_to_l100km()</code>,
+                <code>sh_gallons_to_liters()</code>. Imperial units never appear in internal state.
+                One formula, no conversion errors.
+            </p>
+
+            <h3>Hashmap design</h3>
+            <p>
+                Open addressing with Robin Hood probing. FNV-1a hashing. Load factor triggers resize
+                at 75%. Used by Velo for node ID mapping during PBF parsing, by Locus for string
+                deduplication, and by Nexus for change detection. Tested for collision resistance
+                on real OSM data.
+            </p>
+
+            <h3>Who uses what</h3>
+
+            <div class="table-scroll">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Module</th>
+                        <th>Arena</th>
+                        <th>Pool</th>
+                        <th>JSON</th>
+                        <th>PBF</th>
+                        <th>Rate</th>
+                        <th>Workers</th>
+                        <th>Geo</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Surge</td>
+                        <td class="y">&#10003;</td>
+                        <td class="n">&mdash;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="n">&mdash;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                    </tr>
+                    <tr>
+                        <td>Ralph</td>
+                        <td class="y">&#10003;</td>
+                        <td class="n">&mdash;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="n">&mdash;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="n">&mdash;</td>
+                    </tr>
+                    <tr>
+                        <td>Velo</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                    </tr>
+                    <tr>
+                        <td>Carta</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                    </tr>
+                    <tr>
+                        <td>Locus</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                    </tr>
+                    <tr>
+                        <td>FuelWise</td>
+                        <td class="y">&#10003;</td>
+                        <td class="n">&mdash;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="n">&mdash;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="y">&#10003;</td>
+                    </tr>
+                    <tr>
+                        <td>Nexus</td>
+                        <td class="y">&#10003;</td>
+                        <td class="n">&mdash;</td>
+                        <td class="y">&#10003;</td>
+                        <td class="n">&mdash;</td>
+                        <td class="n">&mdash;</td>
+                        <td class="n">&mdash;</td>
+                        <td class="y">&#10003;</td>
+                    </tr>
+                </tbody>
+            </table>
+            </div>
+
+            <h3>Codebase</h3>
+
+            <div class="stat-row">
+                <div class="stat">
+                    <div class="stat-value">~24K</div>
+                    <div class="stat-label">Lines of C</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">319</div>
+                    <div class="stat-label">Tests</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value blue">40</div>
+                    <div class="stat-label">Headers</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value blue">42</div>
+                    <div class="stat-label">Source Files</div>
+                </div>
+            </div>
+
+            <div class="callout honest">
+                <p>
+                    <strong>LoC note.</strong> The raw count is ~52K, but ~28K of that is
+                    <code>sh_font_data.c</code> &mdash; an embedded bitmap font atlas for Carta's
+                    PNG tile label rendering. Actual logic is ~24K LoC across 42 source files.
+                </p>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Quick Start -->
+        <!-- ============================================================ -->
+        <section class="section" id="quickstart">
+            <div class="section-title">Quick Start</div>
+            <h2>Using Shared in your module</h2>
+
+            <h3>1. Build from source</h3>
+            <div class="code-block">
+<pre><span class="comment"># Clone and build</span>
+<span class="command">git clone https://github.com/ottofleet/otto.git</span>
+<span class="command">cd otto && make shared</span>
+
+<span class="comment"># Run all 319 tests</span>
+<span class="command">make test-shared</span>
+
+<span class="comment"># With AddressSanitizer</span>
+<span class="command">make test-shared CFLAGS="-fsanitize=address,undefined -g"</span></pre>
+            </div>
+
+            <h3>2. Link in your module</h3>
+            <div class="code-block">
+<pre><span class="comment"># In your module Makefile</span>
+<span class="keyword">INCLUDES</span> = -I../shared/include
+<span class="keyword">LIBS</span>     = ../shared/libshared.a
+
+<span class="comment"># Use any module</span>
+<span class="keyword">#include</span> <span class="string">"sh_arena.h"</span>
+<span class="keyword">#include</span> <span class="string">"sh_json.h"</span>
+<span class="keyword">#include</span> <span class="string">"sh_ratelimit.h"</span>
+<span class="keyword">#include</span> <span class="string">"sh_geo.h"</span></pre>
+            </div>
+
+            <h3>3. Build for WASM</h3>
+            <div class="code-block">
+<pre><span class="comment"># Shared compiles to WASM with zero changes</span>
+<span class="command">emcc -O2 shared/src/sh_arena.c shared/src/sh_json.c \</span>
+<span class="command">     -I shared/include -o shared.wasm</span>
+
+<span class="comment"># All parsers, geo functions, and data structures</span>
+<span class="comment"># work in the browser. No #ifdefs needed.</span></pre>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- FAQ -->
+        <!-- ============================================================ -->
+        <section class="section" id="faq">
+            <div class="section-title">FAQ</div>
+            <h2>Common questions</h2>
+
+            <h3>Why not use existing libraries (jsmn, cJSON, protobuf-c)?</h3>
+            <p>
+                Three reasons: (1) <strong>WASM compatibility</strong> &mdash; every dependency must
+                compile to WebAssembly without modification. Most C libraries assume POSIX.
+                (2) <strong>Audit surface</strong> &mdash; every line of code in OTTO is auditable.
+                No transitive dependencies, no supply chain risk. (3) <strong>Arena integration</strong>
+                &mdash; our JSON parser allocates from <code>SHArena</code>, which means zero individual
+                frees and predictable memory behavior. Third-party parsers use malloc.
+            </p>
+
+            <h3>What's the font atlas?</h3>
+            <p>
+                <code>sh_font_data.c</code> (~28K LoC) is an embedded bitmap font atlas for Carta's
+                PNG tile rendering. Carta renders map labels on server-generated PNG tiles using software
+                rasterization &mdash; no FreeType, no HarfBuzz, no system fonts. The atlas is a C array
+                compiled into the binary, so tile rendering works identically on Linux, macOS, and WASM.
+            </p>
+
+            <h3>How does the rate limiter work?</h3>
+            <p>
+                Token bucket algorithm with per-IP tracking. A hash table maps client IPs to bucket
+                state. Tokens refill at the configured RPS rate, burst allows short spikes. Thread-safe
+                for multi-worker servers. The adaptive tracker (<code>sh_adaptive.h</code>) measures
+                P50/P90/P99 response times and auto-tunes the rate limit to match actual server capacity.
+            </p>
+
+            <h3>Can I use Shared independently of OTTO?</h3>
+            <p>
+                Yes. Shared has no dependencies on any OTTO domain module. It's a standalone static library.
+                Link <code>libshared.a</code> and include the headers you need. Each header is self-contained
+                &mdash; <code>sh_arena.h</code> doesn't pull in <code>sh_json.h</code>.
+            </p>
+
+            <h3>How is thread safety handled?</h3>
+            <p>
+                Shared libraries never use static/global mutable state. All state is passed through
+                parameters or context structs. The rate limiter and work queue APIs are explicitly
+                thread-safe (internal mutexes). Arena and pool allocators are single-threaded by design
+                &mdash; each thread gets its own arena.
+            </p>
+
+            <h3>What license?</h3>
+            <p>
+                AGPLv3 with a Trucking Exception. Same terms as all OTTO modules. Trucking fleets
+                using Shared for their own operations are covered by the exception. SaaS products
+                embedding Shared need source disclosure or a commercial license.
+            </p>
+        </section>
+
+        </main>
+
+        <footer>
+            <nav class="footer-links" aria-label="Footer navigation">
+                <a href="../index.html">Home</a>
+                <a href="../api.html">API Docs</a>
+                <a href="https://github.com/ottofleet/otto/tree/main/shared">Source</a>
+                <a href="https://github.com/ottofleet/otto/blob/main/LICENSE">License</a>
+                <a href="https://github.com/ottofleet/otto">GitHub</a>
+            </nav>
+            <div>&copy; 2026 Mark Farkas. Built by <a href="https://artalis.io">Artalis</a>.</div>
+        </footer>
+    </div>
+</body>
+</html>
