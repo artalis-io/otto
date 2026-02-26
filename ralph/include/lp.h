@@ -11,6 +11,10 @@
 #include "ralph.h"
 #include "shared.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Tolerances */
 #define RALPH_FEAS_TOL 1e-6
 #define RALPH_OPT_TOL 1e-6
@@ -378,5 +382,9 @@ int dual_ratio_test(SimplexTableau *tableau, int leaving, int *entering, double 
 
 /* Utility */
 void lp_print_stats(const SimplexSolver *solver);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* RALPH_LP_H */

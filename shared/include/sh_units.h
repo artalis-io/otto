@@ -8,6 +8,10 @@
 #ifndef SH_UNITS_H
 #define SH_UNITS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ============================================================================
  * Unit System Enum
  * ============================================================================ */
@@ -131,5 +135,9 @@ SHUnitSystem sh_parse_units(const char *str);
  * Get string representation of unit system.
  */
 const char *sh_units_string(SHUnitSystem units);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SH_UNITS_H */

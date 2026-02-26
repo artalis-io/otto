@@ -19,6 +19,7 @@ typedef struct {
     double weight;
     double segment_score;
     int segment_uses;
+    double total_seconds;
     ARALNSOperatorStats stats;
 } ARDestroyEntry;
 
@@ -29,6 +30,7 @@ typedef struct {
     double weight;
     double segment_score;
     int segment_uses;
+    double total_seconds;
     ARALNSOperatorStats stats;
 } ARRepairEntry;
 
@@ -49,6 +51,9 @@ struct ARALNSContext {
 
     ARALNSStats stats;
     void *best_solution;
+
+    ARProgressCallback progress_callback;
+    void *progress_data;
 };
 
 static double ar_now_seconds(void) {
@@ -226,6 +231,12 @@ static int ar_validate_params(const ARALNSParams *params) {
     if (params->reaction_factor < 0.0 || params->reaction_factor > 1.0) {
         return 0;
     }
+    if (params->restart_threshold < 0) {
+        return 0;
+    }
+    if (params->restart_temp_ratio < 0.0 || params->restart_temp_ratio > 1.0) {
+        return 0;
+    }
 
     switch (params->accept_type) {
         case AR_ACCEPT_SA:
@@ -315,6 +326,10 @@ void ar_alns_params_default(ARALNSParams *params) {
     params->reward_better = 4.0;
     params->reward_accepted = 2.0;
     params->reward_rejected = 0.5;
+    params->restart_threshold = 0;
+    params->restart_temp_ratio = 0.5;
+    params->adaptive_q = 0;
+    params->adaptive_q_growth = 0.1;
 }
 
 ARALNSContext *ar_alns_create(const ARALNSParams *params,
@@ -424,6 +439,15 @@ ARStatus ar_alns_set_seed(ARALNSContext *ctx, uint64_t seed) {
     return AR_STATUS_OK;
 }
 
+ARStatus ar_alns_set_progress_callback(ARALNSContext *ctx,
+                                        ARProgressCallback callback,
+                                        void *user_data) {
+    if (!ctx) return AR_STATUS_INVALID_ARG;
+    ctx->progress_callback = callback;
+    ctx->progress_data = user_data;
+    return AR_STATUS_OK;
+}
+
 ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
                        void **best_solution_out) {
     ARStatus status = AR_STATUS_OK;
@@ -478,6 +502,12 @@ ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
     water_level = ctx->params.water_level > 0.0 ? ctx->params.water_level : current_cost;
     segment_size = ctx->params.segment_size > 0 ? ctx->params.segment_size : 1;
 
+    {
+        /* Adaptive q state */
+        int initial_q_max = ctx->params.q_max;
+        int current_q_max = ctx->params.q_max;
+        int segment_improved = 0;
+
     start_time = ar_now_seconds();
 
     for (iteration = 0; iteration < ctx->params.max_iterations; iteration++) {
@@ -500,6 +530,24 @@ ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
                 status = AR_STATUS_LIMIT;
                 stop_reason = AR_STOP_TIME_LIMIT;
                 break;
+            }
+        }
+
+        if (ctx->params.restart_threshold > 0 &&
+            stagnation_iterations >= ctx->params.restart_threshold) {
+            /* Restart from best solution with reheated temperature */
+            void *restart_copy = ctx->ops.copy(best, ctx->ops.user_ctx);
+            if (restart_copy) {
+                ctx->ops.free(current, ctx->ops.user_ctx);
+                current = restart_copy;
+                current_cost = best_cost;
+                if (ctx->params.accept_type == AR_ACCEPT_SA &&
+                    ctx->params.restart_temp_ratio > 0.0) {
+                    temperature = ctx->params.initial_temp *
+                                  ctx->params.restart_temp_ratio;
+                }
+                stagnation_iterations = 0;
+                ctx->stats.restarts++;
             }
         }
 
@@ -537,7 +585,7 @@ ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
 
         if (solution_size > 0) {
             int q_min = ctx->params.q_min;
-            int q_max = ctx->params.q_max;
+            int q_max = ctx->params.adaptive_q ? current_q_max : ctx->params.q_max;
             if (q_min < 0) {
                 q_min = 0;
             }
@@ -564,17 +612,24 @@ ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
             }
         }
 
-        op_status = ctx->destroy_ops[d_idx].op(
-            ctx->destroy_ops[d_idx].op_ctx, candidate, q, removed_ids, &removed_count);
+        {
+            double t0 = ar_now_seconds();
+            op_status = ctx->destroy_ops[d_idx].op(
+                ctx->destroy_ops[d_idx].op_ctx, candidate, q, removed_ids, &removed_count);
+            ctx->destroy_ops[d_idx].total_seconds += ar_now_seconds() - t0;
+        }
         if (op_status == AR_STATUS_OK) {
+            double t0;
             if (removed_count < 0) {
                 removed_count = 0;
             }
             if (removed_count > q) {
                 removed_count = q;
             }
+            t0 = ar_now_seconds();
             op_status = ctx->repair_ops[r_idx].op(
                 ctx->repair_ops[r_idx].op_ctx, candidate, removed_ids, removed_count);
+            ctx->repair_ops[r_idx].total_seconds += ar_now_seconds() - t0;
         }
 
         free(removed_ids);
@@ -612,7 +667,11 @@ ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
             candidate = NULL;
             current_cost = candidate_cost;
 
-            if (current_cost < best_cost) {
+            {
+                int is_new_best = ctx->ops.is_better
+                    ? ctx->ops.is_better(current, best, ctx->ops.user_ctx)
+                    : (current_cost < best_cost);
+            if (is_new_best) {
                 void *best_copy = ctx->ops.copy(current, ctx->ops.user_ctx);
                 if (!best_copy) {
                     status = AR_STATUS_OUT_OF_MEMORY;
@@ -628,8 +687,13 @@ ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
                 ctx->destroy_ops[d_idx].stats.improvements++;
                 ctx->repair_ops[r_idx].stats.improvements++;
                 stagnation_iterations = 0;
+                segment_improved = 1;
+                if (ctx->params.adaptive_q) {
+                    current_q_max = initial_q_max;
+                }
             } else {
                 stagnation_iterations++;
+            }
             }
         } else {
             ctx->stats.rejected++;
@@ -659,9 +723,36 @@ ARStatus ar_alns_solve(ARALNSContext *ctx, const void *initial_solution,
 
         if (((iteration + 1) % segment_size) == 0) {
             ar_update_weights(ctx);
+            if (ctx->params.adaptive_q) {
+                if (!segment_improved) {
+                    int range = initial_q_max > ctx->params.q_min
+                              ? initial_q_max - ctx->params.q_min : 1;
+                    int grow = (int)(range * ctx->params.adaptive_q_growth);
+                    if (grow < 1) grow = 1;
+                    current_q_max += grow;
+                    /* Cap: solution_size is last measured, but use a safe upper bound */
+                    if (current_q_max > ctx->params.q_max * 3) {
+                        current_q_max = ctx->params.q_max * 3;
+                    }
+                }
+                segment_improved = 0;
+            }
+            /* Progress callback at segment boundaries */
+            if (ctx->progress_callback) {
+                double elapsed = ar_now_seconds() - start_time;
+                if (ctx->progress_callback((int64_t)(iteration + 1), best_cost,
+                                            elapsed, ctx->progress_data)) {
+                    status = AR_STATUS_LIMIT;
+                    stop_reason = AR_STOP_CANCELLED;
+                    iterations_done++;
+                    break;
+                }
+            }
         }
         iterations_done++;
     }
+
+    } /* end adaptive_q scope */
 
     if (!fatal_error) {
         if ((iteration % segment_size) != 0) {
@@ -740,6 +831,7 @@ ARStatus ar_alns_get_destroy_stats(const ARALNSContext *ctx, int index,
         return AR_STATUS_INVALID_ARG;
     }
     *out_stats = ctx->destroy_ops[index].stats;
+    out_stats->total_seconds = ctx->destroy_ops[index].total_seconds;
     return AR_STATUS_OK;
 }
 
@@ -749,5 +841,33 @@ ARStatus ar_alns_get_repair_stats(const ARALNSContext *ctx, int index,
         return AR_STATUS_INVALID_ARG;
     }
     *out_stats = ctx->repair_ops[index].stats;
+    out_stats->total_seconds = ctx->repair_ops[index].total_seconds;
     return AR_STATUS_OK;
+}
+
+void ar_alns_calibrate_sa(ARALNSParams *params, double initial_cost,
+                           int max_iterations) {
+    double abs_cost;
+    double t0;
+
+    if (!params || max_iterations <= 0) {
+        return;
+    }
+
+    abs_cost = fabs(initial_cost);
+    if (abs_cost < 1e-12) {
+        abs_cost = 1.0;
+    }
+
+    /* T0 set so a 5%-worse solution is accepted with ~50% probability.
+       Derivation: P(accept) = exp(-delta/T) = 0.5
+       => T = delta / ln(2) = 0.05 * cost / ln(2) */
+    t0 = 0.05 * abs_cost / 0.693147180559945;
+
+    /* cooling_rate chosen so temperature drops to 0.1% of T0 after
+       max_iterations: T0 * cr^N = 0.001 * T0
+       => cr = exp(ln(0.001) / N) = exp(-6.9078 / N) */
+    params->accept_type = AR_ACCEPT_SA;
+    params->initial_temp = t0;
+    params->cooling_rate = exp(-6.907755278982137 / (double)max_iterations);
 }

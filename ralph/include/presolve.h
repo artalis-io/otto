@@ -7,6 +7,10 @@
 
 #include "lp.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Presolve result */
 typedef struct {
     LPModel *reduced_model;     /* Presolved model */
@@ -194,5 +198,9 @@ int presolve_scp(PresolveContext *ctx);
 
 /* Utility */
 void presolve_compute_implied_bounds(PresolveContext *ctx);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* RALPH_PRESOLVE_H */

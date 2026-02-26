@@ -30,6 +30,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Invalid offset sentinel */
 #define SH_POOL_INVALID ((size_t)-1)
 
@@ -105,5 +109,9 @@ int sh_pool_ensure_capacity(SHPool *pool, size_t min_capacity);
 
 #define SH_POOL_AT(pool, type, offset, idx) \
     (SH_POOL_PTR(pool, type, offset)[(idx)])
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SH_POOL_H */

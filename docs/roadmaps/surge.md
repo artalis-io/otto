@@ -58,15 +58,35 @@ Surge supports orthogonal constraint dimensions that can be combined freely:
 | **Commodity conflicts** | Hazmat ∉ same vehicle as food |
 | **Vehicle qualifications** | Request requires refrigerated/ADR/tail-lift |
 | **Customer preferences** | Soft: prefer driver X for customer Y |
+| **Sequence-dependent setup** | Cleanup/preparation time between incompatible cargo types |
+| **LIFO/FIFO PD stacking** | Per-vehicle pickup-delivery pair ordering (nested or same-order) |
+| **Backhaul** | All delivery-only stops before PD pickups on a vehicle |
 
 ### Depot Constraints
 
 | Constraint | Description |
 |------------|-------------|
 | **Multiple depots** | Vehicles assigned to different depots |
-| **Open routes** | End anywhere (not return to depot) |
+| **Open routes** | Start/end anywhere (open start + open end) |
 | **Depot capacity** | Max vehicles dispatched per depot |
 | **Depot time windows** | Loading dock availability |
+| **Multi-trip** | Vehicle returns to depot, reloads, serves another route |
+
+### Travel Constraints
+
+| Constraint | Description |
+|------------|-------------|
+| **Time-dependent travel** | Speed profiles: step-function duration multipliers by departure time |
+| **Time-indexed travel brackets** | Multiple complete duration matrices indexed by departure time (global + per-vehicle) |
+| **Per-vehicle travel profiles** | Independent distance/duration matrices + speed profile per vehicle type |
+
+### Re-optimization Constraints
+
+| Constraint | Description |
+|------------|-------------|
+| **Request locking (NONE)** | Request freely reassignable by solver |
+| **Request locking (COMMITTED)** | Must be served (1e12 drop penalty), vehicle reassignable |
+| **Request locking (FROZEN)** | Locked to designated vehicle from initial solution |
 
 ### Objective Components
 
@@ -118,6 +138,7 @@ Arbor; Surge provides the domain logic and constraint checking.
 │  │  • Disjunct  │ │  • Multi-dim │ │  • Qualifications          ││
 │  │  • Soft TW   │ │  • Axle load │ │  • Commodity conflicts     ││
 │  │  • Ride time │ │  • Volume    │ │  • Exclusion groups        ││
+│  │  • Precedence│ │  • Compart.  │ │  • LIFO/FIFO + Backhaul   ││
 │  └──────────────┘ └──────────────┘ └────────────────────────────┘│
 ├──────────────────────────────────────────────────────────────────┤
 │                   Solution Representation (Surge)                │
@@ -1167,36 +1188,125 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ## Implementation Plan
 
-### Current Status (as of 2026-02-11)
+### Current Status (as of 2026-02-24)
+
+**Baseline**: U1-U8 + S1-S12 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks + Multi-Trip + Multi-Threading (parallel + population) + SA cooling fix + mid-solve ejection pulse + Speed Profiles + Travel Profiles + Time-Indexed Travel Brackets + Open Start + Plan/ETA Validation + Infeasible-Space Exploration + Aggressive SISR + LIFO/FIFO PD Policy + Backhaul Constraint complete. All Tier 1 and Tier 2 production gaps closed. REST API server, WASM build, Python and Node.js bindings exist. 282 tests passing, ASAN/UBSAN clean.
+
+Implemented features: Everything in previous status plus: LIFO/FIFO PD stacking policy (`sg_vehicle_set_pd_policy()`) — per-vehicle constraint on pickup-delivery pair ordering. LIFO = nested pairs (last picked up, first delivered). FIFO = same-order delivery (first picked up, first delivered). Enforced in feasibility checks, insertion evaluation (O(N) precompute + O(1) per (i,j) pruning via `pd_open_depth[]` for LIFO, `pd_max_del_before[]`/`pd_min_del_after[]` for FIFO), and plan validation. Backhaul constraint (`sg_vehicle_set_backhaul()`) — all delivery-only ("linehaul") stops must precede all PD pickup stops. Enforced in feasibility, both insertion evaluators, and plan validation. Both features use fast-path flags (`has_pd_policy`, `has_backhaul`) for zero overhead when unused. JSON API: `"pd_policy": "lifo"/"fifo"`, `"backhaul": true`. New violation types: `SG_VIOLATION_PD_POLICY`, `SG_VIOLATION_BACKHAUL`. 13 new tests (269→282).
+
+#### Previous Status (as of 2026-02-24)
+
+**Baseline**: U1-U8 + S1-S12 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks + Multi-Trip + Multi-Threading (parallel + population) + SA cooling fix + mid-solve ejection pulse + Speed Profiles + Travel Profiles + Time-Indexed Travel Brackets + Open Start + Plan/ETA Validation + Infeasible-Space Exploration + Aggressive SISR complete. All Tier 1 and Tier 2 production gaps closed. REST API server, WASM build, Python and Node.js bindings exist. 269 tests passing, ASAN/UBSAN clean.
+
+Implemented features: Everything in previous status plus: time-indexed travel brackets — multiple complete duration matrices indexed by departure time. Supported at both global level (`sg_set_travel_time_bracket()`) and per-vehicle travel profile level (`sg_travel_profile_add_time_bracket()`). Orthogonal to speed profiles (which compose multiplicatively on top). Override chain: callback → per-vehicle brackets/matrix → global brackets/matrix → Euclidean → speed profile. Distance uses bracket[0] when no departure_time is available. JSON API supports `time_brackets` in both `travel` and `travel_profiles` sections. 8 new tests (261→269).
+
+#### Previous Status (as of 2026-02-23)
+
+Best measured quality (10000 iterations, deterministic seed 42):
+
+Single-threaded:
+- Solomon (VRPTW, 56 cases): `solved=56/56`, `avgVehGap=+0.30`, `avgDistGap=+0.2%`, `equalVehicles=39`, `lexiNonWorse=12`.
+- Li & Lim (PDPTW, 57 cases): `solved=57/57`, `avgVehGap=+0.48`, `avgDistGap=+4.2%`, `equalVehicles=44`, `lexiNonWorse=24`.
+
+Population-based (3 generations, auto threads):
+- Solomon (VRPTW, 56 cases): `solved=56/56`, `avgVehGap=+0.20`, `avgDistGap=-0.2%`, `equalVehicles=45`, `lexiNonWorse=13`.
+- Li & Lim (PDPTW, 57 cases): `solved=57/57`, `avgVehGap=+0.38`, `avgDistGap=+3.5%`, `equalVehicles=48`, `lexiNonWorse=26`.
+
+Implemented features: Everything in previous status plus: HGS-style infeasible-space exploration with adaptive penalty manager (6 constraint types — time warp, capacity, duration, ride time, distance, total work — with independent per-constraint self-adjustment), time warping (violation accumulated, start warped to tw_late for downstream propagation), feasible-beats-infeasible best-tracking, cost-proportional penalty scaling (bounds and initial weights adapt to problem cost structure), instance-adaptive SISR L_max (Christiaens & Vanden Berghe 2020). `--population` flag added to Solomon and Li & Lim benchmarks.
+
+Infrastructure: REST API server (Mongoose, rate limiting, work queue, Prometheus metrics, CORS), WASM build (Emscripten), Python bindings (ctypes), Node.js bindings (ffi-napi). REST API e2e test suite.
+
+#### Previous Status (as of 2026-02-23)
+
+**Baseline**: U1-U8 + S1-S11 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks + Multi-Trip + Multi-Threading (parallel + population) + SA cooling fix + mid-solve ejection pulse + Speed Profiles + Travel Profiles + Open Start + Plan/ETA Validation complete. All Tier 1 and Tier 2 production gaps closed. REST API server, WASM build, Python and Node.js bindings exist. 252 tests passing, ASAN/UBSAN clean.
+
+Best measured quality (10000 iterations, deterministic seed 42):
+- Solomon (VRPTW, 56 cases): `solved=56/56`, `avgVehGap=+0.36`, `avgDistGap=+0.4%`, `equalVehicles=37`, `lexiNonWorse=11`.
+- Li & Lim (PDPTW, 57 cases): `solved=57/57`, `avgVehGap=+0.52`, `avgDistGap=+4.8%`, `equalVehicles=41`, `lexiNonWorse=22`.
+
+Implemented features: Everything in previous status plus: plan/ETA validation mode (`sg_validate_plan()`) — validate pre-existing routes without re-optimizing, compute ETAs for every stop, report constraint violations (hard TW, capacity, PD order, ride time, max duration/distance/tasks, forbidden vehicle, qualifications). JSON API supports `"plan"` key for validation mode. New types: `SGPlanRoute`, `SGViolation`, `SGViolationType`.
+
+Infrastructure: REST API server (Mongoose, rate limiting, work queue, Prometheus metrics, CORS), WASM build (Emscripten), Python bindings (ctypes), Node.js bindings (ffi-napi). REST API e2e test suite.
+
+#### Previous Status (as of 2026-02-23)
+
+**Baseline**: U1-U8 + S1-S11 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks + Multi-Trip + Multi-Threading (parallel + population) + SA cooling fix + mid-solve ejection pulse complete. All Tier 1 and Tier 2 production gaps closed. 224 tests passing, ASAN/UBSAN clean.
+
+Best measured quality (10000 iterations, deterministic seed 42):
+- Solomon (VRPTW, 56 cases): `solved=56/56`, `avgVehGap=+0.36`, `avgDistGap=+0.4%`, `equalVehicles=37`, `lexiNonWorse=11`.
+- Li & Lim (PDPTW, 57 cases): `solved=57/57`, `avgVehGap=+0.52`, `avgDistGap=+4.8%`, `equalVehicles=41`, `lexiNonWorse=22`.
+
+Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), soft time windows (U7), request-vehicle constraints (U8), disjunct time windows, waiting cost (per-vehicle `cost_per_waiting`), overtime cost (per-vehicle `cost_per_overtime` with soft shift), convenience constructors, stop load/type/duration export, depot dock capacity (per-depot `max_simultaneous` with sweep-line overlap penalty), commodity conflicts (bitmask-based, up to 64 types, O(1) conflict check), exclusion groups (at most one request per group per vehicle), mandatory breaks (abstract `max_continuous_work` / `break_duration` / `max_total_work` per vehicle, break injection in timing forward pass, break position export), multi-trip (per-vehicle `max_trips` / `trip_reload_seconds`, capacity reset at depot, trip boundary metadata on stop sequence, new-trip insertion in repair operators, trip_count/trip_index in solution export), multi-threaded parallel solve (`sg_solve_parallel` — independent runs with different seeds), population-based search (`sg_solve_population` — generational ALNS with elite pool warm-starting, tournament selection), Phase 1 SA cooling override (decay to 5% of T0 for sustained vehicle-reducing acceptance), mid-solve ejection pulse (ejection chain + intensify between Phase 1 and Phase 2).
+
+#### Previous Status (as of 2026-02-23)
+
+**Baseline**: U1-U8 + S1-S10 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks + Multi-Trip + Multi-Threading (parallel + population) complete. All Tier 1 and Tier 2 production gaps closed. 220 tests passing, ASAN/UBSAN clean.
+
+#### Previous Status (as of 2026-02-22)
+
+**Baseline**: U1-U8 + S1-S9 + Disjunct TW complete. All usability phases done. 115 tests passing, ASAN/UBSAN clean. Benchmarks unchanged from previous baseline (disjunct TWs not active in benchmark instances — zero impact on existing behavior).
+
+Best measured quality (10000 iterations, deterministic seed 42):
+- Solomon (VRPTW, 56 cases): `solved=56/56`, `avgVehGap=+0.38`, `avgDistGap=+0.2%`, `equalVehicles=35`, `lexiNonWorse=11`.
+- Li & Lim (PDPTW, 57 cases): `solved=57/57`, `avgVehGap=+0.59`, `avgDistGap=+3.9%`, `equalVehicles=39`, `lexiNonWorse=21`.
+
+Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), soft time windows (U7), request-vehicle constraints (U8), disjunct time windows, waiting cost (per-vehicle `cost_per_waiting`), overtime cost (per-vehicle `cost_per_overtime` with soft shift), convenience constructors, stop load/type/duration export.
+
+#### Previous Status (as of 2026-02-22)
+
+**Baseline**: U1-U8 + S1-S9 complete. All usability phases done. 109 tests passing, ASAN/UBSAN clean. Benchmarks unchanged from previous baseline (soft TWs not active in benchmark instances — zero impact on existing behavior).
+
+Implemented features: travel matrix API (U1), vehicle-request qualifications (U2), solution route/stop export (U3), open routes (U4), max route duration + explicit max ride time (U5), vehicle cost model + configurable objective (U6), soft time windows (U7), request-vehicle constraints (U8), waiting cost (per-vehicle `cost_per_waiting`), overtime cost (per-vehicle `cost_per_overtime` with soft shift), convenience constructors, stop load/type/duration export.
+
+#### Previous Status (as of 2026-02-22)
+
+**Baseline**: U1-U6 + U8 + S1-S9 complete. Waiting cost and overtime cost implemented. 105 tests passing, ASAN/UBSAN clean.
+
+#### Previous Status (as of 2026-02-21)
+
+**Baseline**: U1-U6 + U8 + S1-S9 complete. Waiting cost implemented. 102 tests passing, ASAN/UBSAN clean.
+
+#### Previous Status (as of 2026-02-20)
 
 Implemented and active today:
 - C domain model for depots, vehicles, tasks, requests, and multi-dimensional capacities.
 - Model validation for delivery-only and pickup-delivery demand sign consistency.
-- Arbor ALNS integration in both solver paths.
-- Route-native ALNS path for delivery-only VRPTW with explicit routes, TW/capacity feasibility checks, and lexicographic objective proxy.
-- Advanced destroy/repair operators for route-native delivery-only solve:
+- Arbor ALNS integration with simulated annealing acceptance (Phase S1).
+- Route-native ALNS path for unified VRPTW/PDPTW with stop-level representation.
+- Incremental feasibility kernel with cached forward/backward timing slack and load profiles.
+- Independent PD stop placement with O(L²) evaluation of all (pickup, delivery) position pairs (Phase S2).
+- Stop-level splice/excise operations preserving non-adjacent PD placement across ALNS iterations.
+- Advanced destroy/repair operators:
   random, worst, shaw, criticality-worst, route-cluster, time-cluster, paired-shaw,
-  route-removal, time-window-removal, greedy and regret-k repairs.
-- Post-ALNS route elimination and fixed-vehicle distance polishing for delivery-only solve.
-- Solomon benchmark harness with BKS comparison in `surge/benchmarks/bench_solomon.c`.
+  route-removal, time-window-removal, greedy and regret-k repairs (with PD-aware dispatch).
+- Post-ALNS route elimination, exchange, 2-opt*, and distance polishing (PD-aware).
+- Solomon and Li & Lim benchmark harnesses with BKS comparison.
 
-Current measured quality (Solomon 100-customer set, deterministic seed 42):
-- 300 iterations: `avgVehGap=+0.88`, `avgDistGap=+9.3%`, `equalVehicles=22`, `lexiNonWorse=4`.
-- 1000 iterations: `avgVehGap=+0.75`, `avgDistGap=+5.5%`, `equalVehicles=25`, `lexiNonWorse=7`.
+Best measured quality (10000 iterations, deterministic seed 42, population mode):
+- Solomon (VRPTW, 56 cases): `avgVehGap=+0.18`, `avgDistGap=-0.1%`, `equalVehicles=46/56`, `lexiNonWorse=14`.
+- Li & Lim (PDPTW, 56 cases): `avgVehGap=+0.39`, `avgDistGap=+3.7%`, `equalVehicles=47/56`, `lexiNonWorse=27`.
+- All 113 solutions verified feasible (post-solve validation gate in `sg_solve_route_model`).
 
-Glaring architectural gaps:
-- Route-native solver is delivery-only gated (`sg_route_solver_eligible()` requires every request be `SG_REQUEST_KIND_DELIVERY_ONLY`), so PDPTW does not use the stronger route engine.
-- Feasibility kernel used by route-native insertion/removal is delivery-only (`sg_request_delivery_task_for_metrics()` and `sg_route_sequence_feasible_distance()`).
-- Fallback PD path optimizes assignment proxy cost (`sg_bootstrap_cost()` + `sg_vehicle_request_cost()`) rather than true route objective.
-- Non-delivery route metrics are still a heuristic fallback (`sg_compute_solution_route_metrics()`), not exact PD route reconstruction.
-- Solver currently uses Euclidean travel and does not expose/consume a proper travel-time matrix in public API.
+Solver quality highlights:
+- Solomon C1xx/C2xx (17/17): exact BKS match on both vehicles and distance.
+- Wide-TW instances (C2, LC2, LR2, LRC2) essentially solved — nearly all match BKS on both vehicles and distance.
+- Li & Lim LC2xx (8/8), LR2xx (11/11), LRC2xx (8/8): all match BKS vehicles and distance exactly.
+- Remaining gap: tight-TW random instances (R1, LR1, RC1, LRC1) show +1 vehicle with often better distance (trade-off pattern). LC101/LC102 use +5/+3 vehicles (identical PD TW widths defeat sorting heuristics).
+
+Solver uses Euclidean travel only — no distance/time matrix API exposed yet.
 
 Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
-- Disjunct time windows.
-- Soft TW tardiness/waiting penalties in objective.
-- Max ride-time constraints for PD requests.
-- Vehicle qualifications, commodity conflicts, exclusion groups.
-- Open routes, per-depot dispatch limits, multi-trip semantics.
+- Distance/time matrix (non-Euclidean travel costs).
+- Vehicle-request compatibility (skills/qualifications).
+- Open routes (vehicles that don't return to depot).
+- Max route duration per vehicle.
+- Explicit max ride time per PD request (currently derived from TW spans).
+- Vehicle cost model (fixed cost, per-km, per-hour).
+- Configurable objective weights.
+- Soft time windows with tardiness penalties.
+- Disjunct time windows (multiple allowed windows per task).
+- Request-vehicle assignment constraints (required/forbidden).
+- Solution route/stop export in JSON API.
 - Driver break/HoSE constraints in route feasibility.
 
 ### Actualized Plan (Unified VRPTW/PDPTW)
@@ -1206,7 +1316,7 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - [x] Delivery-only TW/capacity route feasibility checks and insertion/removal.
 - [x] Expanded destroy/repair operator portfolio (including route/time-window removals).
 - [x] Postprocess route elimination and distance polish.
-- [ ] Add per-operator telemetry reporting in benchmark output for focused tuning.
+- [x] Add per-operator telemetry reporting in benchmark output for focused tuning.
 
 ### Phase 2: Unified Route State for VRPTW + PDPTW (now active)
 - [x] Replace delivery-only route sequence assumptions with stop-level representation supporting both stop types.
@@ -1214,46 +1324,64 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - [x] Enforce same-vehicle and precedence constraints directly via the stop sequence; route validation now relies on the unified kernel.
 
 ### Phase 3: Unified Incremental Feasibility and Cost Kernel
-- [ ] Build one incremental feasibility engine for both VRPTW and PDPTW (TW propagation, signed load tracking, route-duration checks).
-- [ ] Add PD-specific checks: precedence, maximum ride time, pickup/drop consistency.
-- [ ] Replace full route recomputation per move with cached forward/backward slack and load deltas.
+- [x] Build one incremental feasibility engine for both VRPTW and PDPTW (TW propagation, signed load tracking, route-duration checks).
+- [x] Add PD-specific checks: precedence, maximum ride time, pickup/drop consistency.
+- [x] Replace full route recomputation per move with cached forward/backward slack and load deltas.
+- [x] O(L²) pickup/delivery position pair evaluation with push propagation and forward slack pruning.
 
 ### Phase 4: Unified ALNS Operators and Intensification
 - [x] Make ALNS remover/repair steps operate on the shared route state with explicit stops.
 - [x] Added exchange + 2-opt* intensification heuristics that now respect PD pair structure.
 - [x] Pair-aware Shaw + regret insertions operate against the unified feasibility kernel.
 
-### Phase 5: Objective and Acceptance Modernization
-- [ ] Move from scalar proxy toward explicit lexicographic compare (unassigned -> vehicles -> distance -> soft penalties).
-- [ ] Expose acceptance policy in `SGConfig` (SA/RRT/Improving) and tune per problem class.
-- [ ] Add adaptive destroy size policy based on request count and stagnation.
+### Phase 5: Objective and Acceptance Modernization ✅
+- [x] Move from scalar proxy toward explicit lexicographic compare (unassigned -> vehicles -> distance -> soft penalties). `SGConfig.lexicographic_objective` gates `is_better` callback in ARSolutionOps.
+- [x] Expose acceptance policy in `SGConfig` (SA/RRT/Improving). `SGAcceptType` enum mapped to `ARAcceptType` at solve time.
+- [x] Add adaptive destroy size policy based on stagnation. `SGConfig.adaptive_q` / `ARALNSParams.adaptive_q` grows `q_max` at segment boundaries on stagnation, resets on improvement.
 
 ### Phase 6: Rich Constraint Completion
-- [ ] Disjunct TW support.
-- [ ] Soft TW penalties and waiting-cost terms in objective.
-- [ ] Vehicle qualifications, commodity conflicts, exclusion groups.
-- [ ] Open routes and depot-level dispatch constraints.
-- [ ] HoSE/break constraints (with Tempo/HoSE integration).
+- [x] Disjunct TW support.
+- [x] Soft TW penalties and waiting-cost terms in objective.
+- [x] Vehicle qualifications (U2).
+- [x] Commodity conflicts, exclusion groups.
+- [x] Open routes (U4).
+- [x] Depot dock capacity (sweep-line overlap penalty).
+- [x] Max route duration (U5).
+- [x] Mandatory breaks (abstract `max_continuous_work` / `break_duration` / `max_total_work` per vehicle).
 
-- [ ] Add optional travel-time/distance matrix API and use it in construction + route feasibility.
+- [x] Add optional travel-time/distance matrix API and use it in construction + route feasibility (U1).
+- [x] Speed profiles (time-dependent duration multipliers).
+- [x] Per-vehicle travel profiles (independent distance/duration matrices + speed profile).
+- [x] Time-indexed travel brackets (multiple complete matrices by departure time, global + per-vehicle).
+- [x] Open start routes (skip first depot-to-stop leg).
 - [ ] Integrate Velo matrices for realistic routing costs/times.
 - [ ] Keep Ralph exact mode for small instances as baseline verifier.
 
 ### Recent progress
-- Unified route state now drives both delivery-only and PDPTW solves (no longer gated to delivery-only). The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time implicitly.
-- Added Li & Lim PDPTW loader + benchmark driver with BKS gap reporting + 100-task instance download. Benchmarks show the current solver runs all 56 standard Li & Lim cases but with large vehicle/distance gaps, highlighting that more PD-focused tuning is still required.
-- Solomon regression now reports lexicographic gaps (avgVehGap=+0.84; avgDistGap=+7.1%), confirming the new kernel remains competitive for pure VRPTW.
-
-### Next step proposal
-- **Extend PD-aware feasibility checks**: add precise load balancing (signed flows) and precedence slack propagation so the insertion kernel rejects PD violations without rebuilding routes from scratch; targeted instrumentation should quantify ride-time slack failures on the Li & Lim 100 instances.
-- **Introduce pair-preserving local search**: implement PDPDW-specific relocation/exchange (pickup+delivery moved together) plus route-based double-bridge moves that respect pairing; measure their impact on the calibrated gaps.
-- **Tune lexicographic acceptance + destroy schedule**: expose `SGConfig` knobs for acceptance curves and adaptive removal sizes to limit vehicle use on high-gap Li & Lim cases while continuing to polish Solomon performance; capturing per-case metrics will guide reweighting of objectives.
+- **Phase S1 (SA acceptance)**: Enabled simulated annealing in both solver paths via `ar_alns_calibrate_sa`. Solomon improved from +9.3% to +5.9% avgDistGap at 300 iterations.
+- **Phase S2 (independent PD placement)**: O(L²) pickup/delivery evaluation with stop-level splice/excise. Li & Lim improved from +112.7% to +9.5% avgDistGap. Solomon unchanged at +5.9%.
+- **Phase S3 (route-aware worst removal)**: Replaced proxy-based removal cost with actual distance delta. Solomon +5.5% → +0.8% (at 5k iters), Li & Lim +9.5% → +4.2%.
+- **Phase S4 (route-aware Shaw relatedness)**: Replaced zone-based proxy in Shaw removal with spatial/TW/load/co-route scoring. Solomon +0.8% → +0.4% (at 5k iters). Li & Lim neutral at +4.3%.
+- **Phase S5 (adaptive destroy count)**: Scale q_min/q_max with instance size: `q_min=max(config,n/20)`, `q_max=max(config,n/4)`. Solomon +0.4% → +0.2% (at 5k iters). Li & Lim unchanged (instances too small to trigger).
+- **Phase S6 (enhanced local search)**: Added or-opt(2,3) segment relocation and increased intensify passes 4→8. Solomon stable at +0.2% (C104 improved). Li & Lim stable at +4.3%. No runtime overhead.
+- **Phase S7 (stagnation restart)**: Added restart-from-best mechanism in Arbor ALNS loop. When stagnation iterations reach threshold (max_iterations/4), copies best solution to current and reheats SA temperature to 50% of initial. Solomon stable at +0.2% (avgVehGap improved +0.52→+0.46). Li & Lim stable at +4.3%. Neutral at 5k iterations; infrastructure ready for longer runs.
+- **Phase S8 (construction + vehicle minimization)**: Multi-strategy construction (regret-3, TW-sorted greedy, Solomon I1 — keep best), two-phase ALNS (60% vehicle minimization with hot SA + 40% distance polishing), vehicle-target and vehicle-empty destroy operators, pair elimination in reduce_vehicles, depth-2 ejection chains, pairwise exchange in postprocessing. Solomon +0.2% → +0.2% at 5k iters (avgVehGap +0.46→+0.46). Li & Lim +4.3% → +4.3% at 5k iters (avgVehGap +0.70→+0.55, equalVehicles 36→38).
+- **Phase S9 (deeper ejection chains, CROSS-exchange, or-opt k=1, validation)**: Ejection depth 2→5 with 50K attempt budget, CROSS-exchange operator swapping segments of size 1-3 between routes, or-opt extended to k=1 for single-request relocate in intensify loop, post-solve feasibility validation gate in `sg_solve_route_model`, benchmark iterations 5000→10000. Solomon avgVehGap +0.46→+0.36, avgDistGap +0.2%→-0.2%, equalVehicles 33→36. Li & Lim avgVehGap +0.55→+0.55, avgDistGap +4.3%→+4.1%, equalVehicles 38→40. All 113 solutions verified feasible.
+- **Phase S10 (sequence-dependent setup times + per-operator telemetry)**: Asymmetric N×N setup class matrix (1-indexed, 0 = no class). Setup time added after arrival, before service start, in forward/backward timing passes and both cached insertion evaluators. Per-operator telemetry (selected, accepted, improvements, weight, total_seconds) exposed through Surge API and `--telemetry` flag in benchmarks. Solomon +0.2% → +0.2%, Li & Lim +3.9% → +3.9% (no regression). 135 tests, ASAN clean.
+- **Phase 5+8 (objective modernization + verification)**: Lexicographic best-tracking via `is_better` callback in `ARSolutionOps` (gated by `SGConfig.lexicographic_objective`). Acceptance policy exposed via `SGAcceptType` (SA/RRT/Improving). Adaptive destroy size grows q_max on stagnation, resets on improvement (`SGConfig.adaptive_q`). Cordeau DARP loader (`sg_load_cordeau_darp`) and `bench_cordeau` harness. 20 new tests (135→155). Solomon +0.2%, Li & Lim +3.9% (no regression). DARP solve quality pending dedicated construction heuristic.
+- **Phase S11 (multi-threaded parallel + population search)**: `sg_solve_parallel()` runs N independent ALNS solves with different seeds, picks best (15 wins vs 0 losses on Li & Lim vs single-threaded). `sg_solve_population()` adds generational warm-starting — elite pool with tournament selection, same compute budget but guided search. Li & Lim population vs parallel: 10 wins, 6 losses, 40 ties, avg distance -0.6%. Includes `solution_arena_size` transfer fix ensuring fast arena-memcpy path in result harvesting. 5 new tests (215→220). ASAN clean.
+- **Phase S12 (infeasible-space exploration + aggressive SISR)**: HGS-style infeasible-space search with modular penalty manager (`SGPenaltyManager` in `sg_penalty.c`). 6 constraint types (time warp, capacity, duration, ride time, distance, total work) with independent per-constraint self-adjustment. Time warping accumulates violation and warps start to `tw_late` for downstream propagation. Feasible-beats-infeasible best-tracking in `sg_route_solution_is_better`. Penalty bounds and initial weights scale proportionally with problem cost structure via `cost_scale` parameter — no hardcoded constants. Instance-adaptive SISR `L_max` based on avg route length (Christiaens & Vanden Berghe 2020), initial string destroy weight 2.0. Phase 1 (vehicle min) uses aggressive 15% feasible target; Phase 2 (distance) runs strict (penalty disabled). Solomon single-thread: avgVehGap +0.36→+0.30, equalVehicles 37→39. Solomon population: avgVehGap +0.20, equalVehicles 45, avgDistGap -0.2%. Li & Lim single-thread: avgVehGap +0.52→+0.48, equalVehicles 41→44. Li & Lim population: avgVehGap +0.38, equalVehicles 48, avgDistGap +3.5%. 5 new tests (252→257). ASAN/UBSAN clean.
+- **Phase S13+S14+S15 (algorithmic edge + population crossover)**: Progressive penalty schedule (0.25→0.15 over Phase 1), ejection chains in repair operators with cost-gated fallback, scaled ejection budget (proportional to instance size, cap 500K), relaxed vehicle reduction (20% distance slack), Phase 1.5 vehicle crunch (500-iter focused ALNS with vehicle-reducing operators only), SREX crossover (merge routes from two parents), population diversity filter (>90% similarity rejection). Solomon population: avgVehGap +0.20→+0.18, equalVehicles 45→46, avgDistGap -0.1%. Li & Lim population: avgVehGap +0.39, equalVehicles 47, avgDistGap +3.7%. 14 new tests (326→340). ASAN/UBSAN clean.
+- Unified route state drives both delivery-only and PDPTW solves. The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time constraints.
+- Stop-level splice/excise operations preserve non-adjacent PD placement across ALNS destroy/repair cycles.
 
 ### Phase 8: Verification and Benchmark Expansion
-- [ ] Keep Solomon VRPTW as regression benchmark (already wired).
-- [ ] Add Li & Lim PDPTW harness and BKS comparator.
-- [ ] Add Cordeau DARP harness (including ride-time constraints).
-- [ ] Expand unit tests from smoke coverage to operator and feasibility regression suites.
+- [x] Keep Solomon VRPTW as regression benchmark (56/56, +0.2%).
+- [x] Add Li & Lim PDPTW harness and BKS comparator (57/57, +3.9%).
+- [x] Add Cordeau DARP harness (`bench_cordeau`, `sg_load_cordeau_darp`). Loader + benchmark wired; solve quality pending DARP-specific construction heuristic.
+- [x] Expand unit tests from smoke coverage to operator and feasibility regression suites (135 → 155 → 220 tests).
+- [x] Multi-threaded parallel solve (`sg_solve_parallel`): independent runs with different seeds.
+- [x] Population-based search (`sg_solve_population`): generational ALNS with elite pool warm-starting.
 - [ ] Add profiling-driven performance work (allocation hot paths, insertion complexity, cache reuse).
 
 Execution order:
@@ -1269,6 +1397,448 @@ This order is required because performance and quality on rich PDPTW depend prim
 having one unified route/feasibility engine before additional constraints and integrations.
 
 ---
+
+## Usability & Rich Constraints Roadmap
+
+With solver quality at a production-usable level (Solomon -0.1% avg distance gap, Li & Lim
++3.7%), the focus shifts to modeling real-world constraints. These phases are ordered by
+dependency and business impact. Each builds on the architecture already in place — the unified
+stop-level route state, incremental feasibility kernel, and ALNS operator framework.
+
+### Phase U1: Distance/Time Matrix API
+
+**Priority**: Critical — Euclidean distance is meaningless for real road networks.
+
+**What**: Add a precomputed location-to-location travel time and distance matrix that the
+solver consumes instead of `sg_euclid()`. Falls back to Euclidean when no matrix is set.
+
+**API surface**:
+```c
+SGStatus sg_set_travel_matrix(SGContext *ctx, uint32_t location_count,
+                               const double *distance_matrix,
+                               const double *time_matrix);
+```
+
+**Architecture fit**: The solver already routes all distance queries through a small number
+of call sites (`sg_euclid` in `sg_cost.c`, `sg_route_stop_sequence_feasible` in
+`sg_feasibility.c`). Replace with a lookup function that checks `ctx->travel_matrix` first.
+Store matrices as flat `double[n*n]` arrays in `SGContext`. The JSON API gets `"travel_matrix"`
+and `"time_matrix"` fields (or an array of `{from, to, distance, time}` sparse entries).
+
+**Changes**: `sg_context.c` (storage + setter), `sg_cost.c` (replace `sg_euclid`),
+`sg_feasibility.c` (use time matrix for travel time instead of distance/speed),
+`sg_api.c` (JSON parsing), `surge.h` (public API).
+
+**Complexity**: Small. ~200 LOC. No algorithmic changes.
+
+### Phase U2: Vehicle-Request Compatibility (Skills)
+
+**Priority**: High — nearly every fleet has vehicle types (refrigerated, tail-lift, ADR).
+
+**What**: Bitmask-based qualification system. Each vehicle has capabilities (`uint64_t
+qualifications`), each request has requirements (`uint64_t required_qualifications`).
+A vehicle can serve a request only if `(vehicle.quals & request.required) == request.required`.
+
+**API surface**:
+```c
+SGStatus sg_vehicle_set_qualifications(SGContext *ctx, uint32_t vehicle_id,
+                                        uint64_t qualification_flags);
+SGStatus sg_request_set_required_qualifications(SGContext *ctx, uint32_t request_id,
+                                                 uint64_t qualification_flags);
+```
+
+**Architecture fit**: One additional check at the top of `sg_route_eval_insertion_cached` and
+`sg_route_eval_pd_best_insertion_cached` — skip vehicle entirely if quals don't match. Store
+quals in `SGVehicleRecord` and `SGRequestRecord`. No change to route state or ALNS operators.
+The destroy/repair operators automatically respect it because they call the insertion evaluator.
+
+**Changes**: `sg_internal.h` (add fields), `sg_feasibility.c` (add check), `sg_api.c`
+(JSON parsing), `surge.h` (public API).
+
+**Complexity**: Tiny. ~80 LOC. One `if` statement in the hot path.
+
+### Phase U3: Solution Route/Stop Export
+
+**Priority**: High — the JSON API currently returns only aggregate stats. Users need
+actual routes with stop sequences, arrival times, and load states to display or execute.
+
+**What**: Extend the solve response JSON to include per-route stop details:
+
+```json
+{
+  "routes": [
+    {
+      "vehicle_id": 0,
+      "stops": [
+        {
+          "type": "depot_start",
+          "depot_id": 0,
+          "arrival": 0, "departure": 28800
+        },
+        {
+          "type": "delivery",
+          "request_id": 5, "task_id": 6,
+          "arrival": 29100, "service_start": 29100,
+          "departure": 29400, "load_after": [150.0]
+        }
+      ],
+      "distance": 234.5, "duration": 3600
+    }
+  ],
+  "unassigned_request_ids": [12, 17]
+}
+```
+
+**Architecture fit**: The internal `SGRouteSolution` already stores complete stop sequences
+with timing (`arrival`, `service_start`, `depart`) and load profiles. This is pure
+serialization — walk the solution state and emit JSON.
+
+**Changes**: `sg_api.c` (response builder), `surge.h` (add `sg_get_route_count`,
+`sg_get_route_stop_count`, `sg_get_route_stop_info` accessors).
+
+**Complexity**: Medium. ~300 LOC. No solver changes.
+
+### Phase U4: Open Routes ✅
+
+**Priority**: High — field service, one-way deliveries, and ride-hailing vehicles often
+don't return to depot.
+
+**What**: Per-vehicle flag: `open_end = true` means the vehicle's route ends at its last
+stop instead of returning to the end depot. Distance and time for the return leg are not
+counted.
+
+**API surface**:
+```c
+SGStatus sg_vehicle_set_open_end(SGContext *ctx, uint32_t vehicle_id, int open);
+```
+
+**Architecture fit**: The feasibility kernel (`sg_route_stop_sequence_feasible`) builds the
+stop sequence with depot start/end. For open-end vehicles, skip the return-to-depot leg in
+both distance computation and TW checking. The end-depot TW check is also skipped. Store
+flag in `SGVehicleRecord`.
+
+**Changes**: `sg_internal.h` (add field), `sg_feasibility.c` (conditional return leg),
+`sg_cost.c` (skip return distance), `sg_api.c` (JSON parsing).
+
+**Complexity**: Small. ~60 LOC. Localized to feasibility kernel.
+
+**Completion**: Implemented with 4 tests (basic distance reduction, timing feasibility, solution export, PD pair). Open-end correctly excludes return leg from distance, duration, and shift TW checks. Benchmarks stable.
+
+### Phase U5: Max Route Duration and Explicit Max Ride Time ✅
+
+**Priority**: Medium-High — max route duration is a standard fleet constraint (8-hour shift
+minus break). Explicit max ride time is needed for DARP/passenger transport.
+
+**What (duration)**: Per-vehicle `max_duration_seconds`. If `route_end_time - route_start_time
+> max_duration`, the route is infeasible. Checked at the end of the forward timing pass.
+
+**What (ride time)**: Per-request `max_ride_time_seconds` for PD pairs. If
+`delivery_service_start - pickup_depart > max_ride_time`, infeasible. Currently derived from
+TW spans — make it an explicit user-settable field that overrides the derived limit.
+
+**API surface**:
+```c
+SGStatus sg_vehicle_set_max_duration(SGContext *ctx, uint32_t vehicle_id,
+                                      int32_t max_seconds);
+SGStatus sg_request_set_max_ride_time(SGContext *ctx, uint32_t request_id,
+                                       int32_t max_seconds);
+```
+
+**Architecture fit**: Both are single additional checks in `sg_route_stop_sequence_feasible`.
+Duration check: one comparison at the end. Ride time: already computed, just compare against
+the explicit limit instead of the derived one.
+
+**Changes**: `sg_internal.h` (add fields), `sg_feasibility.c` (two checks),
+`sg_api.c` (JSON parsing).
+
+**Complexity**: Tiny. ~50 LOC.
+
+**Completion**: Implemented with 4 tests (API validation, duration infeasibility, explicit ride time override, TW-derived default). `max_duration=0` means unlimited, `max_ride_time=0` falls back to TW-derived limit. Benchmarks stable.
+
+### Phase U6: Vehicle Cost Model and Configurable Objective ✅
+
+**Priority**: Medium — needed to model heterogeneous fleets where a 40t truck costs more
+than a van. Also needed for any customer who wants to minimize cost rather than distance.
+
+**What**: Per-vehicle costs (`fixed_cost`, `cost_per_distance_unit`, `cost_per_hour`) and
+global objective weights. The objective becomes:
+
+```
+cost = w_unassigned * unassigned_penalty
+     + sum_v(fixed_cost_v * used_v + cost_per_km_v * distance_v + cost_per_hour_v * duration_v)
+```
+
+**API surface**:
+```c
+SGStatus sg_vehicle_set_costs(SGContext *ctx, uint32_t vehicle_id,
+                               double fixed_cost, double cost_per_distance,
+                               double cost_per_duration);
+SGStatus sg_set_unassigned_weight(SGContext *ctx, double weight);
+```
+
+**Architecture fit**: `sg_route_solution_cost` and `sg_route_objective_cost` are already
+centralized. Replace the hardcoded `1e9 * unassigned + 1e6 * vehicles + distance` with
+a weighted sum using per-vehicle costs. Duration requires tracking route duration in the
+solution state (add a `route_duration` array alongside `route_distance`).
+
+**Changes**: `sg_internal.h` (add vehicle cost fields, route_duration array),
+`sg_solution.c` (cost function), `sg_feasibility.c` (compute duration),
+`sg_api.c` (JSON parsing).
+
+**Complexity**: Medium. ~200 LOC. Touches cost function used by SA acceptance — needs care.
+
+**Completion**: Implemented with 3 tests (API validation, prefer-cheaper vehicle selection, unassigned weight tradeoff). Cost model correctly drives vehicle selection via SA acceptance. Route duration tracked and exported. Benchmarks stable.
+
+### Phase U7: Soft Time Windows ✅
+
+**Priority**: Medium — real dispatchers accept small delays with a cost penalty rather
+than declaring a delivery unservable.
+
+**What**: Per-task optional soft time window nested within the hard TW. Linear per-second
+penalty for service outside the preferred window. Hard TW `[tw_early, tw_late]` remains
+as absolute bounds (infeasible outside). Soft TW `[soft_tw_early, soft_tw_late]` adds a
+penalty layer within hard bounds.
+
+**API surface**:
+```c
+SGStatus sg_task_set_soft_time_window(SGContext *ctx, uint32_t task_id,
+                                      int32_t early, int32_t late,
+                                      double early_penalty, double late_penalty);
+double sg_solution_get_route_tw_penalty(const SGContext *ctx, uint32_t route_index);
+```
+
+**Penalty formula**: `tw_early_penalty * max(0, soft_tw_early - start) + tw_late_penalty * max(0, start - soft_tw_late)`.
+
+**Architecture fit**: Key insight — no feasibility kernel changes needed. Soft TWs are an
+additional penalty layer WITHIN the existing hard bounds. Hard TW checks remain unchanged
+at all ~13 sites in `sg_feasibility.c`. Penalty accumulated in the forward timing pass
+(`sg_route_update_timing`) and added directly to route cost (pre-multiplied by per-task
+coefficients, no vehicle-level multiplier).
+
+**Changes**: `sg_internal.h` (add task fields + route_tw_penalty array), `sg_types.h`
+(total_tw_penalty in SGStats), `surge.h` (public API), `sg_context.c` (setter + getter +
+validation), `sg_feasibility.c` (penalty accumulation in forward pass), `sg_solution.c`
+(lifecycle: reset/init/copy/validate/cost), `sg_solve.c` (stats accumulation).
+
+**Complexity**: Medium. ~250 LOC. No feasibility kernel changes — cleaner than originally anticipated.
+
+**Completion**: Implemented with 4 tests (API validation, late penalty accumulation, hard TW still rejects, early penalty + stats). Forward-compatible with future disjunct time windows (single soft window per task = N=1 case). Benchmarks stable — default settings (no soft TWs) have zero impact on existing behavior.
+
+### Phase U8: Request-Vehicle Constraints ✅
+
+**Priority**: Medium — "driver X always serves customer Y" or "vehicle Z cannot enter zone W."
+
+**What**: Per-request lists of allowed or forbidden vehicle IDs. If `allowed_vehicles` is
+non-empty, only those vehicles can serve the request. If `forbidden_vehicles` is non-empty,
+those vehicles are excluded.
+
+**API surface**:
+```c
+SGStatus sg_request_add_allowed_vehicle(SGContext *ctx, uint32_t request_id,
+                                         uint32_t vehicle_id);
+SGStatus sg_request_add_forbidden_vehicle(SGContext *ctx, uint32_t request_id,
+                                           uint32_t vehicle_id);
+```
+
+**Architecture fit**: Same as skills (U2) — one check at the top of insertion evaluation.
+Store as a bitset or small array in `SGRequestRecord`. For small vehicle counts (<64),
+a `uint64_t` bitmask is optimal. For larger fleets, a sorted array with binary search.
+
+**Changes**: `sg_internal.h` (add fields), `sg_feasibility.c` (add check),
+`sg_api.c` (JSON parsing).
+
+**Complexity**: Small. ~100 LOC.
+
+**Completion**: Implemented with dynamically-sized bitsets (`uint64_t *` arrays, grows on demand) for both allowed and forbidden vehicles — no vehicle count limit. Forbidden takes precedence over allowed. Inline check `sg_vehicle_allowed_for_request` added at all 4 insertion sites (same pattern as U2 qualifications). 5 tests: API validation, allowed-vehicle filtering, forbidden-vehicle unassignment, PD pair constraint, large fleet (100 vehicles, constraint on V99). Benchmarks stable.
+
+### Execution Order and Dependencies
+
+```
+U1 (travel matrix)      ──── ✅ complete
+U2 (skills)             ──── ✅ complete
+U3 (solution export)    ──── ✅ complete
+U4 (open routes)        ──── ✅ complete
+U5 (duration + ride)    ──── ✅ complete
+U6 (cost model)         ──── ✅ complete
+U7 (soft TW)            ──── ✅ complete
+U8 (vehicle constraints)──── ✅ complete
+```
+
+All usability phases (U1-U8) are complete.
+
+### Production Gap Analysis
+
+With U1-U8 complete, the following gaps remain between Surge and a production-ready solver.
+Grouped by business impact:
+
+**Tier 1 — Blocking for production:**
+
+| Gap | Status | Notes |
+|-----|--------|-------|
+| **Soft time windows** | ✅ Complete | Per-task soft TW with linear penalty within hard bounds. 4 tests. |
+| **Disjunct time windows** | ✅ Complete | Per-task multiple non-overlapping hard TWs with gap snapping. 6 tests. |
+| **JSON API completeness** | ✅ Complete | All C API features exposed via JSON. `sg_api_build_model`, `sg_api_build_model_file`, `sg_api_write_solution`. 10 tests. |
+| **Error diagnostics** | ✅ Complete | `sg_get_last_error()` with descriptive validation messages. Entity-level errors (depot, vehicle, request). 2 tests. |
+| **Driver breaks / HoS** | ✅ Complete | Abstract break model: per-vehicle `max_continuous_work`, `break_duration`, `max_total_work`. Breaks injected during timing forward pass (not as stops). Break position export for reporting. 14 tests. |
+
+**Tier 2 — High business value:**
+
+| Gap | Status | Notes |
+|-----|--------|-------|
+| **Waiting cost** | ✅ Complete | Per-vehicle `cost_per_waiting`, accumulated in forward pass. 3 tests. |
+| **Overtime cost** | ✅ Complete | Per-vehicle `cost_per_overtime` with soft shift boundary. 3 tests. |
+| **Depot dock capacity** | ✅ Complete | Per-depot `max_simultaneous` with sweep-line overlap penalty. 6 tests. |
+| **Per-request drop penalty** | ✅ Complete | `sg_request_set_unassigned_penalty()` overrides global weight per request. 2 tests. |
+| **Warm start** | ✅ Complete | `sg_set_initial_routes()` injects initial solution. Partial warm start supported. 2 tests. |
+| **Progress callback + cancel** | ✅ Complete | `sg_set_progress_callback()` at segment boundaries, `sg_cancel()` for early termination. Arbor-level `ARProgressCallback`. 3 tests. |
+| **Multiple trips per vehicle** | ✅ Complete | Per-vehicle `max_trips` / `trip_reload_seconds`. Capacity resets at depot, shift/break constraints span entire shift. Trip boundary metadata on stop sequence. New-trip insertion in ALNS repair. 10 tests. |
+
+**Tier 3 — Niche / specialized:**
+
+| Gap | Status | Notes |
+|-----|--------|-------|
+| **Commodity conflicts** | ✅ Complete | Bitmask-based (up to 64 types), O(1) conflict check. 4 tests. |
+| **Exclusion groups** | ✅ Complete | At most one request per group per vehicle. 4 tests. |
+| **Sequence-dependent setup** | ✅ Complete | Asymmetric N×N setup class matrix. 4 tests. |
+| **Time-dependent travel** | ✅ Complete | Speed profiles (step-function multipliers) + time-indexed travel brackets (multiple complete matrices by departure time). Both global and per-vehicle. 8 tests. |
+| **LIFO/FIFO PD policy** | ✅ Complete | Per-vehicle stacking order: LIFO (nested) or FIFO (same-order). `sg_vehicle_set_pd_policy()`. Feasibility + insertion pruning + plan validation. 7 tests. |
+| **Backhaul constraint** | ✅ Complete | All D-only stops before PD pickups. `sg_vehicle_set_backhaul()`. Feasibility + both insertion evaluators + plan validation. 6 tests. |
+| **Energy cost model** | Not started | EV-specific path energy cost. OR-Tools only. |
+
+**Tier 3b — Solver-layer gaps (vs commercial solvers):**
+
+These require changes to ALNS/feasibility/insertion. Neither OR-Tools nor VROOM has them.
+
+| Gap | Status | Impact | Notes |
+|-----|--------|--------|-------|
+| **Live re-optimization** | **Done** | High | Three-level request locking: NONE (free), COMMITTED (must-serve, can reassign), FROZEN (locked to vehicle). All destroy/repair/postprocess operators respect locks. 1e12 penalty for committed drops. Hardened warm-start: frozen vehicle map (`frozen_vehicle_map[rid] → vid`), two-pass construction (frozen first), frozen filter in repair ranking, frozen placement validation, infeasible-space fallback to initial solution. Stress-tested on RC101 + C101 Solomon and 53-pair Li & Lim benchmarks (2000-8000 ALNS iterations, 10 integration tests). |
+| **Vehicle compartments** | **Done** | Medium | Per-compartment capacity (frozen/chilled/ambient). `sg_add_compartment_type()`, `sg_vehicle_add_compartment()`, `sg_request_set_compartment_type()`. Dual capacity check (vehicle overall + compartment). Zero overhead when unused. Feasibility in forward pass + both insertion evaluators + plan validation. JSON API. 11 tests. |
+| **Inter-request precedence** | **Done** | Low | `sg_add_precedence(ctx, before_id, after_id)` — same-vehicle ordering: predecessor's last stop before successor's first stop. Cycle detection via DFS on add. Zero overhead when unused (`has_precedence` guard). Forward-pass feasibility with `completed`+`on_route` bitsets, precedence bounds precomputation in both insertion evaluators, plan validation. JSON API (`"precedences": [{"before":0,"after":1}]`). 11 tests: API validation, basic/chain/PD ordering, cross-vehicle independence, solver integration, JSON roundtrip, compartment orthogonality, zero-precedence regression, plan validation. |
+
+**Tier 3c — Application-layer features (already expressible with current API):**
+
+These do NOT require solver changes — they are orchestration around the existing API.
+
+| Feature | How to Express | Notes |
+|---------|---------------|-------|
+| **Multi-period/strategic planning** | Solve each day independently, chain via `sg_vehicle_set_initial_load()` for end-of-day state. | Orchestration decides request-to-day assignment. |
+| **Territory/zone assignment** | Pre-filter via `sg_request_set_allowed_vehicles()`. | Geographic zones → vehicle sets before solve. |
+| **Driver skill calendars** | Vehicle set per day + `sg_request_set_qualifications()`. | Availability = which vehicles exist in today's solve. |
+| **Regulatory compliance** | Break policy params (HoSE) + per-vehicle travel profiles (restricted networks). | Country-specific rules map to existing constraint parameters. |
+
+**Tier 4 — Competitive gaps (vs OR-Tools / VROOM):**
+
+| Gap | Status | Competitors | Notes |
+|-----|--------|-------------|-------|
+| **Time-dependent travel** | ✅ Done | OR-Tools | Speed profiles + time-indexed travel brackets (`sg_set_travel_time_bracket()`, `sg_travel_profile_add_time_bracket()`). Global + per-vehicle. 8 tests. |
+| **Max tasks per vehicle** | ✅ Done | VROOM | Per-vehicle cap on request count. 0 = unlimited. |
+| **Max distance per vehicle** | ✅ Done | VROOM | Per-vehicle cap on route distance. 0.0 = unlimited. |
+| **Open start (no depot)** | ✅ Done | OR-Tools | `sg_vehicle_set_open_start()`. Skips first depot-to-stop leg. 3 tests. |
+| **Per-vehicle travel matrix** | ✅ Done | OR-Tools, VROOM | `sg_vehicle_set_travel_profile()` — independent distance/duration matrices + speed profile per vehicle type. 6 tests. |
+| **Initial vehicle loads** | ✅ Done | jsprit | `sg_vehicle_set_initial_load()`. First-trip capacity offset with prefix-sum feasibility. 4 tests. |
+| **Global span balancing** | ✅ Done | OR-Tools | `sg_set_span_cost_duration()` / `sg_set_span_cost_distance()`. Adds `span_cost × (max - min)` penalty to cost function. 5 tests. |
+| **Plan/ETA validation mode** | ✅ Done | VROOM | `sg_validate_plan()` — validate fixed routes, compute ETAs, report violations per stop. JSON API `"plan"` key. 8 tests. |
+
+**Tier 5 — Infrastructure & Performance:**
+
+| Gap | Status | Impact | Notes |
+|-----|--------|--------|-------|
+| **Arena allocator** | Phases 1-3 done | High | Phase 1 (per-solution arena): ~29 malloc → 1, ~26 free → 1. Phase 2 (optimized copy): `init_for_copy()` + single `memcpy` of arena buffer. Phase 3 (scratch buffers): `SGScratchBuffers` on `SGContext` eliminates per-call malloc/free in feasibility and local search. Cumulative: Solomon -14.8%, Li&Lim -5.0%, Cordeau -3.4% vs Phase 1. |
+| **Multi-threading: independent runs** | ✅ Done | High | `sg_solve_parallel()`: N threads × N seeds, pick best. 15 wins vs 0 losses on Li & Lim vs single-threaded. |
+| **Multi-threading: parallel move eval** | Not started | Medium | `sg_route_rank_insertions_for_request()` vehicle loop is read-only per vehicle. Thread pool or OpenMP. |
+| **REST API server** | ✅ Done | High | `surge/api/surge-solver` — Mongoose + `sh_workqueue`. `sg_api_handle()` routes `/api/v1/solve`, `/health`, `/version`. E2e test suite (`test_api.sh`). |
+| **Language bindings** | ✅ Done | Medium | Python (`surge/bindings/python/`) and Node.js (`surge/bindings/node/`) wrappers around JSON API. Test suites for both. |
+| **Population-based search** | ✅ Done | Medium | `sg_solve_population()`: generational ALNS with elite pool warm-starting. 10 wins vs 6 losses on Li & Lim vs independent parallel runs, avg distance -0.6%. |
+| **WASM build** | ✅ Done | Medium | `surge/wasm/` — Emscripten target. `sg_wasm_api.c` wraps `sg_api_handle()`. Transport-agnostic by design. |
+
+### JSON API (`sg_api.h`)
+
+The JSON API provides three tiers of access:
+
+**Entry points:**
+- `sg_api_solve()` — parse JSON, build model, validate, solve, return JSON response
+- `sg_api_build_model()` — build model from parsed `ShJsonValue` DOM
+- `sg_api_build_model_file()` — read JSON file, parse, build model
+- `sg_api_write_solution()` — stream solution to `ShJsonWriter`
+- `sg_api_handle()` — HTTP-style request routing (`/api/v1/solve`, `/health`, `/version`)
+
+**JSON schema sections** (processed in dependency order):
+
+| Section | Description | C API calls |
+|---------|-------------|-------------|
+| `config` | Solver parameters | `sg_set_config` |
+| `dimension_count` | Capacity dimensions | `sg_set_dimension_count` |
+| `demand_sign_convention` | 0=pickup+/delivery- | `sg_set_demand_sign_convention` |
+| `unassigned_weight` | Global drop penalty | `sg_set_unassigned_weight` |
+| `locations` | Coordinate array | `sg_add_location`, `sg_location_set_coords` |
+| `commodities` | Types + conflicts | `sg_add_commodity`, `sg_commodity_set_conflict` |
+| `exclusion_groups` | Group count | `sg_add_exclusion_group` |
+| `setup_times` | Class matrix | `sg_set_num_setup_classes`, `sg_set_setup_time` |
+| `depots` | Depot definitions | `sg_add_depot`, `sg_depot_set_location`, `sg_depot_set_max_simultaneous` |
+| `vehicles` | Fleet with costs | `sg_add_vehicle`, `sg_vehicle_set_*` (all cost/constraint/break fields) |
+| `tasks` | Stops with TWs | `sg_add_task`, `sg_task_set_*` (soft TW, disjunct TW) |
+| `requests` | PD pairs + constraints | `sg_add_*_request`, `sg_request_set_*` (qualifications, ride time, vehicle constraints, commodity, exclusion, setup, drop penalty) |
+| `travel` | Distance/duration matrices + time brackets | `sg_set_travel_matrix`, `sg_set_travel_time_bracket` |
+| `zones` | Zone distance matrix | `sg_set_zone_distance_matrix` |
+| `initial_routes` | Warm start | `sg_set_initial_routes` |
+
+### Future (not planned yet)
+
+These are real-world features that require larger architectural changes:
+
+| Feature | Status |
+|---------|--------|
+| **Driver breaks / HoSE** | ✅ Complete. Abstract break model — generic `(max_work, break_duration, max_total_work)` maps to both EU EC 561 and US FMCSA rules. |
+| **Multiple trips** | ✅ Complete. Multi-route-per-vehicle state with depot reload modeling. `sg_vehicle_set_max_trips()`. |
+| **Time-dependent travel** | ✅ Complete. Speed profiles (step-function multipliers), per-vehicle travel profiles, and time-indexed travel brackets (multiple complete matrices by departure time). `sg_set_travel_time_bracket()` + `sg_travel_profile_add_time_bracket()`. |
+
+---
+
+## Solver Profiles
+
+Three built-in iteration profiles for different use cases. The API default is 1000 (batch).
+Users can override via `SGConfig.max_iterations` or `--iterations` in benchmarks.
+
+| Profile | Iterations | Runtime (100-req) | Solomon distGap | Li & Lim distGap | Use case |
+|---------|-----------|-------------------|-----------------|------------------|----------|
+| **Real-time** | 300 | ~0.2 s | ~+3% | ~+7% | API responses, live dispatch |
+| **Batch** (default) | 1,000 | ~0.6 s | ~+1.5% | ~+5% | Daily planning, route optimization |
+| **High quality** | 5,000 | ~2.0 s | ~+0.5% | ~+4.5% | Offline analysis |
+| **Best quality** | 10,000 | ~4.5 s | -0.1% | +3.7% | Benchmarking, maximum quality |
+
+### Iteration Scaling Data (100-customer instances, deterministic seed 42)
+
+**Solomon (VRPTW, 56 cases)** — single-thread with infeasible-space exploration:
+
+| Iters | Sec/case | avgDistGap | avgVehGap | equalVeh | lexiNonWorse |
+|------:|--------:|-----------:|----------:|---------:|-------------:|
+| 10,000 | 9.2 | +0.2% | +0.30 | 39/56 | 23 |
+
+**Solomon — population (auto threads, 3 generations, Phase S13-S15)**:
+
+| Iters | Sec/case | avgDistGap | avgVehGap | equalVeh | lexiNonWorse |
+|------:|--------:|-----------:|----------:|---------:|-------------:|
+| 10,000 | 43.3 | -0.1% | +0.18 | 46/56 | 14 |
+
+**Li & Lim (PDPTW, 56 cases)** — single-thread with infeasible-space exploration:
+
+| Iters | Sec/case | avgDistGap | avgVehGap | equalVeh | lexiNonWorse |
+|------:|--------:|-----------:|----------:|---------:|-------------:|
+| 10,000 | 10.5 | +4.2% | +0.48 | 44/56 | 24 |
+
+**Li & Lim — population (auto threads, 3 generations, Phase S13-S15)**:
+
+| Iters | Sec/case | avgDistGap | avgVehGap | equalVeh | lexiNonWorse |
+|------:|--------:|-----------:|----------:|---------:|-------------:|
+| 10,000 | 23.0 | +3.7% | +0.39 | 47/56 | 27 |
+
+**Observations**:
+- Infeasible-space exploration (Phase S12) closed the +1 vehicle gap on most tight-TW instances. Solomon equalVehicles improved from 35 to 39 (single-thread) and 45 (population).
+- Phase S13-S15 (progressive penalty, ejection in repair, SREX crossover, Phase 1.5 vehicle crunch) further improved Solomon population equalVehicles from 45→46 and avgVehGap from +0.20→+0.18.
+- Solomon C1xx/C2xx (17/17) now match BKS exactly on both vehicles and distance.
+- Li & Lim LC2xx (8/8), LR2xx (11/11), and LRC2xx (8/8) all match BKS on vehicles and distance. Remaining gaps concentrated on tight-TW LC1xx (lc101/102 at +5/+3 vehicles) and LR1xx (lr101/102 at +6/+3 vehicles).
+- Population search adds ~2-4x wall-clock time but improves vehicle count. Solomon distance gap stays near zero (beating some BKS).
+- Tight-TW R1/RC1 instances show a trade-off pattern: +1 vehicle gap but lower distance (e.g., R104 +1 veh / -1.5% dist). Closing these requires deeper search or dedicated tight-TW operators.
 
 ## Performance Targets
 
@@ -1357,3 +1927,381 @@ For rich constraint testing, generate synthetic instances with:
 - Exclusion groups (10-20% of requests have exclusions)
 
 Use these for validation against published best-known solutions.
+
+---
+
+## SoTA Performance Improvement Plan
+
+Seven ordered phases to close the gap between Surge and state-of-the-art benchmark results
+on Solomon (VRPTW) and Li & Lim (PDPTW) instances. Each phase is orthogonal and testable
+independently.
+
+### Current Gaps (1000 iterations / default, deterministic seed 42)
+
+| Benchmark | Metric | Surge | BKS Avg | Gap |
+|-----------|--------|-------|---------|-----|
+| Solomon 100 | Avg distance | 1,048 | 1,014 | +3.0% |
+| Li & Lim 100 | Avg distance | 1,072 | 1,017 | +5.0% |
+
+At 5000 iterations: Solomon +0.8%, Li & Lim +4.2%.
+
+### Phase S1: Simulated Annealing Acceptance ✅
+
+**Result**: Solomon improved from +9.3% to +5.9% avgDistGap at 300 iterations. Li & Lim improved from +112.7% to +112.7% (no change, needed S2 first).
+
+**Changes (arbor)**:
+- Added `ar_alns_calibrate_sa` helper that computes adaptive `initial_temp` and `cooling_rate`
+  from initial solution cost and iteration budget
+- Formula: `T0 = 0.05 * |initial_cost| / ln(2)`, `cooling_rate = exp(ln(0.001) / max_iter)`
+
+**Changes (surge)**:
+- In `sg_solve_route_model`: compute initial cost after construction, calibrate SA params,
+  set `accept_type = AR_ACCEPT_SA`
+
+### Phase S2: Independent PD Stop Placement ✅
+
+**Result**: Li & Lim improved from +112.7% to +9.5% avgDistGap at 300 iterations. Solomon unchanged at +5.9%.
+
+**Changes (surge)**:
+- Added `sg_route_splice_stop` / `sg_route_excise_stop` for direct stop-array manipulation
+- Added `sg_route_eval_pd_best_insertion_cached` evaluating O(L²) (pickup, delivery) pairs
+  with push propagation, forward slack pruning, ride-time checks, and capacity validation
+- Added `sg_route_apply_pd_insertion` for non-adjacent PD placement via splice
+- Switched `sg_route_apply_insertion` and `sg_route_unassign_request` to splice/excise
+  (preserves non-adjacent PD stops for other requests on same vehicle)
+- Wired PD dispatch through all repair and postprocess callers
+- 6 new tests for stop manipulation, PD placement, and correctness
+
+### Phase S3: Route-Aware Worst Removal ✅
+
+**Result**: Solomon +5.5% → +0.8% (at 5k iters), Li & Lim +9.0% → +4.2%. At 300 iters: Solomon +5.9% → +5.5%, Li & Lim +9.5% → +9.0%.
+
+**Changes (surge)**:
+- Added `sg_route_removal_cost` computing O(1) distance delta from removing a request,
+  handling delivery-only, adjacent PD, and non-adjacent PD cases using cached stop positions
+- Wired into `sg_route_destroy_worst` (single-line change), replacing `sg_bootstrap_removal_cost`
+- Criticality-worst operator intentionally unchanged (uses proxy metrics for diversity)
+- 3 new tests: delivery-only (first/middle/last stop), PD adjacent, PD non-adjacent
+
+### Phase S4: Route-Aware Shaw Relatedness ✅
+
+**Result**: Solomon +0.8% → +0.4% avgDistGap (at 5k iters), avgVehGap +0.50 → +0.55. Li & Lim +4.2% → +4.3% (neutral). At 1k iters: Solomon +3.0% → +2.0%.
+
+**Changes (surge)**:
+- Added `sg_route_shaw_relatedness` with 6-term scoring: spatial distance (`-euclid/40`),
+  TW overlap (Jaccard-like, `3.0 * overlap/span`), load similarity (`-|Δload|/100`),
+  co-route bonus (`+5.0` if same vehicle), PD kind bonus (`+2.0`/`-0.5`), tie-breaker
+- Added `void *active_solution` field to `SGContext` — set/cleared around `ar_remove_related` call
+  to pass route solution into relatedness callback without changing Arbor API
+- Wired into `sg_route_destroy_shaw`, replacing `sg_bootstrap_relatedness`
+- Bumped Shaw initial weight from 0.5 to 1.0 (route-aware Shaw deserves equal weight)
+- 1 new test: verifies spatial ordering, same-route bonus dominance, NULL safety
+
+### Phase S5: Adaptive Destroy Count ✅
+
+**Result**: Solomon +0.4% → +0.2% avgDistGap (at 5k iters), avgVehGap +0.55 → +0.52. Li & Lim unchanged (53 requests too small to trigger adaptive scaling). Runtime +40% on Solomon due to larger neighborhoods.
+
+**Changes (surge)**:
+- Added `sg_adaptive_q_bounds` helper: `q_min = max(config, n/20)`, `q_max = max(config, n/4)`
+- Called from both `sg_solve_route_model` and `sg_solve` entry points
+- Config defaults (4/20) serve as floor; adaptive scaling only increases bounds
+- 1 new test: verifies formula for small/medium/large instances, user overrides, edge cases
+
+### Phase S6: Enhanced Local Search ✅
+
+**Result**: Solomon +0.2% → +0.2% (stable, C104 improved 853→846). Li & Lim +4.3% → +4.3% (stable). No runtime overhead.
+
+**Changes (surge)**:
+- Added `sg_route_try_or_opt_once` for segment relocation (k=2,3) both intra- and inter-route
+- Wired into `sg_route_postprocess_intensify` before exchange and 2-opt*
+- Increased `SG_ROUTE_MAX_INTENSIFY_PASSES` from 4 to 8
+- 1 new test: verifies intensify improves suboptimal clustered solution
+
+### Phase S7: Stagnation Restart ✅
+
+**Result**: Solomon stable at +0.2% (avgVehGap improved +0.52→+0.46, equalVehicles 30→33). Li & Lim stable at +4.3%. Neutral at 5k iterations — infrastructure ready for longer runs where stagnation matters more.
+
+**Changes (arbor)**:
+- Added `restart_threshold` and `restart_temp_ratio` to `ARALNSParams`
+- Added `restarts` counter to `ARALNSStats`
+- Added restart logic in `ar_alns_solve`: when stagnation_iterations >= restart_threshold,
+  copy best to current, reheat SA temperature to `initial_temp * restart_temp_ratio`, reset counter
+- Added validation: `restart_threshold >= 0`, `restart_temp_ratio in [0, 1]`
+
+**Changes (surge)**:
+- Set `restart_threshold = max_iterations / 4` in both `sg_solve_route_model` and `sg_solve` paths
+
+**Tests**: Arbor restart test with validation edge cases.
+
+### Phase S8: Construction + Vehicle Minimization ✅
+
+**Result**: Solomon stable at +0.2% at 5k iters (avgVehGap +0.46). Li & Lim improved avgVehGap +0.70→+0.55, equalVehicles 36→38. Major architectural overhaul introducing multi-strategy construction, two-phase ALNS, and richer local search.
+
+**Changes (surge)**:
+- Multi-strategy construction: regret-3, TW-sorted greedy, Solomon I1 heuristic — keep best
+- Two-phase ALNS: 60% vehicle minimization (hot SA, lexicographic objective) + 40% distance polishing
+- Vehicle-target and vehicle-empty destroy operators for focused vehicle elimination
+- Pair elimination in `sg_route_postprocess_reduce_vehicles`
+- Depth-2 ejection chains in `sg_route_postprocess_ejection_reduce`
+- Pairwise exchange operator in postprocessing intensify loop
+
+### Phase S9: Deeper Ejection Chains, CROSS-Exchange, and Validation ✅
+
+**Result**: Solomon avgVehGap +0.46→+0.36, avgDistGap +0.2%→-0.2%, equalVehicles 33→36. Li & Lim avgVehGap +0.55→+0.55, avgDistGap +4.3%→+4.1%, equalVehicles 38→40. All 113 solutions verified feasible. Benchmark iterations increased to 10k.
+
+**Changes (surge)**:
+- Increased `SG_EJECTION_MAX_DEPTH` from 2 to 5 with `SG_EJECTION_BUDGET` of 50000 evaluations per vehicle elimination attempt to bound pathological blowup
+- Budget threaded through `sg_try_place_with_ejection` via `int *budget` parameter
+- CROSS-exchange operator (`sg_route_try_cross_exchange_once`): swaps interior segments of size 1-3 between route pairs, accepts first improvement
+- Or-opt extended from k=2,3 to k=1,2,3 — single-request inter-route relocate now in intensify loop
+- Post-solve feasibility validation gate in `sg_solve_route_model`: calls `sg_route_solution_validate` and returns `SG_STATUS_ERROR` on failure
+- Benchmark default iterations 5000 → 10000 in both `bench_li_lim.c` and `bench_solomon.c`
+
+**Tests**: All 56 Solomon + 57 Li & Lim cases pass validation.
+
+### Phase S12: Infeasible-Space Exploration + Aggressive SISR ✅
+
+**Result**: Solomon single-thread: avgVehGap +0.36→+0.30, avgDistGap +0.4%→+0.2%, equalVehicles 37→39. Solomon population (3 gen): avgVehGap +0.20, avgDistGap -0.2%, equalVehicles 45. Li & Lim single-thread: avgVehGap +0.52→+0.48, avgDistGap +4.8%→+4.2%, equalVehicles 41→44. Li & Lim population (3 gen): avgVehGap +0.38, avgDistGap +3.5%, equalVehicles 48.
+
+**Changes (surge — sg_penalty.c, new file):**
+- `SGPenaltyType` enum with 6 constraint types: TIME_WARP, CAPACITY, DURATION, RIDE_TIME, DISTANCE, TOTAL_WORK
+- `SGPenaltyManager` struct with per-constraint weights, strategy callbacks (update/record/reset), and opaque state
+- Adaptive strategy (HGS-style): per-constraint self-adjustment based on fraction of recent feasible solutions
+- `cost_scale` parameter drives penalty_min (`cost_scale * 1e-4`), penalty_max (`cost_scale * 100`), and initial weights (`cost_scale / 100`) — fully proportional to problem cost structure
+- `sg_solution_is_feasible()` and `sg_solution_total_violation()` helpers
+
+**Changes (surge — sg_feasibility.c):**
+- `sg_route_eval_insertion_cached`: continue past TW/capacity/duration/ride-time/distance/total-work violations when `penalty.enabled`, accumulating into `ins_violations[]` and adding penalty cost to insertion score
+- `sg_route_eval_pd_best_insertion_cached`: same pattern for PD insertions
+- `sg_route_update_timing`: compute per-route per-constraint violations, store in `route_violations[]`, sum into `sol->violations[]`
+- `sg_route_update_load`: capacity violations computed and stored
+- Time warping: `start = tw_late` for downstream propagation after accumulating warp
+- Hard rejects (qualifications, blacklist, commodity conflicts, exclusion groups) remain strict
+
+**Changes (surge — sg_solution.c):**
+- `sg_route_solution_is_better`: feasible beats infeasible regardless of cost; both-infeasible prefers less total violation
+- `sg_route_solution_cost_record` wrapper for ALNS `ops.cost` that calls `penalty.record()` (keeps `sg_route_solution_cost` pure)
+- `violations[SG_PENALTY_COUNT]` and `route_violations` allocated in arena, copied in `sg_route_solution_copy`
+
+**Changes (surge — sg_solve.c):**
+- Phase 1 penalty: `sg_penalty_init_adaptive(..., cost_scale)` with target_feasible=0.15 (aggressive)
+- Phase 2 penalty: disabled (strict distance polishing)
+- `ops->is_better = sg_route_solution_is_better` always set (was conditional)
+- `penalty.update()` wired into progress forwarder
+
+**Changes (surge — sg_destroy.c):**
+- Instance-adaptive SISR `L_max = max(SG_STRING_L_MAX, avg_route_length)` at both string extraction points
+- Initial string destroy operator weight 2.0 (was 1.0)
+
+**Tests**: 5 new tests (252→257). ASAN/UBSAN clean.
+
+### Phase S13+S14+S15: Algorithmic Edge + Population Crossover ✅
+
+**Result**: Solomon population: avgVehGap +0.20→+0.18, avgDistGap -0.2%→-0.1%, equalVehicles 45→46. Li & Lim population: avgVehGap +0.38→+0.39, avgDistGap +3.5%→+3.7%, equalVehicles 48→47. Vehicle counts stable or improved on most instances. New Phase 1.5 vehicle crunch phase adds focused vehicle reduction between Phase 1 and Phase 2 without cannibalizing Phase 2 budget.
+
+**Changes (surge — sg_penalty.c):**
+- `sg_penalty_init_progressive`: progressive penalty schedule that lerps `target_feasible` from `target_start` to `target_end` over `total_segments` via linear interpolation
+- `SGProgressivePenaltyState` extends `SGAdaptivePenaltyState` with lerp parameters
+- Phase 1 now uses progressive 0.25→0.15 (was fixed 0.15) — starts aggressive for deeper infeasible-space exploration when vehicle cuts are most likely, tightens to avoid returning infeasible solutions
+
+**Changes (surge — sg_postprocess.c):**
+- `sg_route_postprocess_reduce_vehicles_relaxed`: vehicle elimination with relaxed distance slack (accepts up to `distance_factor` × current distance + 50.0), both pair and single-vehicle elimination with frozen-request guards
+- `sg_try_place_with_ejection` promoted from static to extern — now called from repair operators
+- Ejection chains skip frozen requests (was missing — could eject FROZEN requests in chains)
+- Scaled ejection budget: `num_requests × vehicles_used × 100` (was fixed 50K), capped at `SG_EJECTION_BUDGET_CAP` (500K)
+
+**Changes (surge — sg_repair.c):**
+- `sg_repair_ejection_fallback`: ejection chain fallback at end of every repair operator (greedy, regret-2/3/4, noise-regret, pair-sync) when `ctx->ejection_in_repair == 1`
+- Budget-limited (`SG_EJECTION_REPAIR_BUDGET` = 5000), cost-gated (reverts if cost increases)
+- Toggled on during Phase 1 ALNS only (`ctx->ejection_in_repair = 1` around `ar_alns_solve`)
+
+**Changes (surge — sg_solve.c):**
+- Phase 1.5 "Vehicle crunch": 500-iteration ALNS between ejection pulse and Phase 2, using only vehicle-reducing operators (vehicle-target, vehicle-empty, route-removal) with regret-3 and greedy repair
+- Phase 1.5 runs as additional budget — does NOT subtract from Phase 2
+- Relaxed vehicle reduction (`distance_factor=1.20`) called after ejection pulse, before Phase 1.5
+- Progressive penalty schedule for Phase 1 (`0.25→0.15` over segments)
+
+**Changes (surge — sg_parallel.c):**
+- SREX crossover: `sg_srex_build_warm_start` takes k routes from parent 1 + remaining requests from parent 2, builds merged warm-start arrays. Fisher-Yates partial shuffle for route selection
+- Population diversity filter in `sg_population_insert_ex`: rejects candidates >90% similar to existing members unless strictly better cost. Similarity = fraction of requests on same vehicle in both solutions
+- `crossover_fraction` config (default 0.5): fraction of workers using SREX vs single-parent warm-start
+- `owns_warm_start` flag on work items for proper memory management of SREX-allocated arrays
+
+**Changes (surge — sg_internal.h):**
+- `SG_EJECTION_BUDGET_CAP` (500K), `SG_EJECTION_REPAIR_BUDGET` (5K)
+- `ejection_in_repair`, `ejection_repair_budget` fields on `SGContext`
+- `crossover_fraction` field on `SGPopulationConfig`
+
+**Tests**: 14 new tests (326→340). Progressive penalty lerp/update, ejection in repair, scaled budget/cap, relaxed elimination, Phase 1.5 runs, frozen preservation through Phase 1.5, ejection fallback cost guard, ejection chain frozen guard, population crossover (VRPTW + PDPTW), diversity filter, no-crossover fallback. ASAN/UBSAN clean.
+
+---
+
+## Infrastructure: Arena Allocator
+
+`sh_arena.h` (bump allocator with 8-byte alignment, reset, introspection) already exists in
+the shared library. Surge's allocation patterns map directly to arena semantics.
+
+### Allocation Tiers
+
+| Tier | Where | Pattern | Calls/solve | Arena benefit |
+|------|-------|---------|-------------|---------------|
+| Per-solve | `sg_route_solution_init` | ~23 malloc/calloc for flat arrays, freed together at end | ~23 | Replace with 1 arena alloc |
+| Hot-path backup | `sg_postprocess.c` | Full solution copy per move attempt (~23 malloc), restore (~23 free) | ~4600/iter | Scratch arena with reset |
+| Feasibility scratch | `sg_feasibility.c` | ~10 temp arrays per `sg_route_stop_sequence_feasible` call | ~1000/iter | Same scratch arena |
+| Setup | `sg_context.c` | Metadata, records, matrices — allocated once | ~25 | Per-context arena |
+
+### Implementation Plan
+
+**Phase 1 — Per-solution arena (DONE):**
+Added `SHArena *arena` to `SGRouteSolution`. All arrays (including bootstrap) allocated from
+a single arena in `sg_route_solution_init()`. Single `sh_arena_free()` in `reset()`. ~29 malloc/calloc → 1
+`sh_arena_create`, ~26 free → 1 `sh_arena_free`. Benchmark results: Solomon -7.3%, Li&Lim -2.2%, Cordeau -2.9%.
+
+**Phase 2 — Optimized solution copy (DONE):**
+Added `solution_arena_size` cache to `SGContext` and `sg_route_solution_init_for_copy()` which
+creates an uninitialized arena (no calloc-zeroing, no init loops). `sg_route_solution_copy()` fast
+path: single `sh_arena_alloc` + single `memcpy` of source arena buffer. Identical allocation order
+guarantees identical memory layout. Eliminates ~50KB of wasted zeroing + ~20K UINT32_MAX init
+writes per copy.
+
+**Phase 3 — Pre-allocated scratch buffers (DONE):**
+Added `SGScratchBuffers` to `SGContext` with pre-allocated arrays for feasibility checking
+(timing, load_profile, dim_scratch, pickup_depart, pickup_seen, feas_stops) and local search
+(candidate_a, candidate_b, exclusion_counts). Single arena created in `sg_scratch_init()`,
+freed in `sg_scratch_free()`. All callers use `use_scratch` flag with graceful malloc fallback.
+Eliminates 5-10 malloc/free per `sg_route_stop_sequence_feasible()` call and per-function
+candidate array allocations in 2-opt*, or-opt, and cross-exchange.
+
+Cumulative Phase 2+3 benchmark results vs Phase 1 baseline:
+Solomon -14.8% (5.616s → 4.786s), Li&Lim -5.0% (3.920s → 3.724s), Cordeau -3.4% (0.264s → 0.255s).
+
+### Sizing
+
+| Problem size | Solve arena | Scratch arena | Total |
+|-------------|-------------|---------------|-------|
+| 100 requests | ~2 MB | ~5 MB | ~10 MB |
+| 1000 requests | ~20 MB | ~50 MB | ~100 MB |
+| 5000 requests | ~100 MB | ~250 MB | ~500 MB |
+
+---
+
+## Infrastructure: Multi-Threading
+
+### Strategy 1 — Independent Runs (Embarrassingly Parallel)
+
+`SGContext` is fully self-contained with zero shared state. Each thread creates its own
+context, solves with a different seed, and the best result wins. Near-linear speedup.
+
+```
+Thread 0: sg_create() → sg_solve(seed=42) → cost=1027
+Thread 1: sg_create() → sg_solve(seed=43) → cost=1019  ← winner
+Thread 2: sg_create() → sg_solve(seed=44) → cost=1031
+Thread 3: sg_create() → sg_solve(seed=45) → cost=1024
+```
+
+Implementation: ~50 lines of pthread wrapper. No changes to Surge or Arbor internals.
+
+### Strategy 2 — Parallel Move Evaluation
+
+`sg_route_rank_insertions_for_request()` iterates over all vehicles, evaluating insertion
+cost independently per vehicle (read-only on solution). Parallelizing this inner loop with
+a thread pool would speed up the repair phase, which dominates solve time.
+
+Implementation: moderate — need to ensure thread-safe read access to solution state, collect
+per-vehicle results into shared array.
+
+### Strategy 3 — Population-Based Search (See HGS Analysis)
+
+Combine strategies 1 + 2 with a population manager at the Surge level. Each generation:
+crossover two elite solutions, intensify with Arbor ALNS, add to population if elite.
+
+---
+
+## HGS (Hybrid Genetic Search) Assessment
+
+### Why HGS is Not Suitable as Surge's Core Algorithm
+
+HGS (Vidal 2012-2022) is state-of-the-art on clean CVRP and VRPTW benchmarks. However,
+its architecture makes three commitments that conflict with Surge's rich constraint model:
+
+**1. Giant tour + Split decoder** — The chromosome is a customer permutation; Split uses O(n)
+DP to find optimal route boundaries. PD precedence makes Split NP-hard (pairing constraints
+create inter-route dependencies). Multi-trip explodes the state space. PyVRP explicitly does
+not support PDPTW for this reason.
+
+**2. O(1) concatenation scheme** — Route cost after a move is computed from fixed-size
+cumulative tuples per subsequence. This breaks for:
+- Sequence-dependent setup times (cost depends on adjacent node identity)
+- Max ride time (depends on positions of specific PD pairs — non-decomposable)
+- Commodity conflicts (set membership, not scalar load)
+- Breaks (driving/resting state machine — non-monotonic)
+
+Fallback is O(n) re-evaluation per move, eliminating HGS's main speed advantage.
+
+**3. Crossover destroys constraint structure** — OX/SREX operators permute individual nodes
+without awareness of PD pairs, commodity conflicts, or exclusion groups. Post-crossover
+repair weakens genetic information transmission.
+
+### Constraint Extensibility Comparison
+
+Adding a new constraint to **ALNS** requires:
+1. Feasibility check in insertion evaluator
+2. Possibly a new cost component
+
+Adding a new constraint to **HGS** requires:
+1. Extending the penalty function
+2. Modifying all 9+ local search move evaluations
+3. Extending the route update function
+4. Modifying or replacing the Split algorithm
+5. Possibly redesigning the crossover operator
+6. Adding a new self-adjusting penalty coefficient
+
+Touch-point count: 3-5x larger per constraint. With 15+ simultaneous constraint types,
+HGS would need to be rewritten from scratch.
+
+### What Would Work: Hybrid Population-ALNS
+
+Use ALNS destroy-repair as an operator within a population framework:
+
+```
+┌─────────────────────────────────────┐
+│     Population Manager (Surge)       │
+│  Tournament select, crossover,       │
+│  diversity tracking, replacement     │
+├─────────────────────────────────────┤
+│     Arbor ALNS (per-individual)      │
+│  Reuses all existing destroy/repair  │
+│  operators for local intensification │
+└─────────────────────────────────────┘
+```
+
+This preserves ALNS's constraint extensibility while gaining population-based diversity.
+Christiaens & Vanden Berghe (2020) demonstrate this hybrid for CVRP with strong results.
+
+Implementation: at Surge level, not Arbor. Arbor remains single-solution. Population
+management is ~200-400 lines of new code in `sg_solve.c`.
+
+### HGS Constraint Compatibility Matrix
+
+| Constraint | HGS support | Difficulty | Issue |
+|------------|-------------|------------|-------|
+| Capacity (single-dim) | Native | Easy | Core HGS-CVRP |
+| Hard time windows | Supported (time warp) | Easy | HGS-VRPTW |
+| Open routes | Supported | Easy | PyVRP OVRP |
+| Max distance/duration | Supported | Easy | Penalty-based |
+| Multi-depot | Supported | Moderate | UHGS 2014 |
+| Multi-dim capacity | Moderate | Moderate | Split harder, penalty extension |
+| Disjunct time windows | Supported | Moderate | PyVRP VRPMTW |
+| Vehicle qualifications | Supported in UHGS | Moderate | Assignment component |
+| PD pairing + precedence | **Problematic** | **Hard** | Breaks giant tour + Split |
+| Sequence-dependent setup | **Hard** | **Hard** | Breaks O(1) concatenation |
+| Commodity conflicts | **Hard** | **Hard** | Set membership, not scalar |
+| Exclusion groups | **Hard** | **Hard** | Inter-item constraint |
+| Max ride time (DARP) | **Very hard** | **Very hard** | Non-decomposable |
+| Break policies (HoS) | **Very hard** | **Very hard** | Non-decomposable, state-dependent |
+
+### Bottom Line
+
+ALNS+SA is the right architecture for Surge's constraint portfolio. HGS should only be
+considered for a separate, specialized clean-CVRP/VRPTW solver. The population-ALNS hybrid
+is the practical path to better solution quality within Surge's existing architecture.
