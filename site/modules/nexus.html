@@ -1,0 +1,1675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexus — Document Ingestion Pipeline | OTTO</title>
+    <meta name="description" content="Nexus is a production document ingestion pipeline written in C. Extracts tabular data from XLSX, PDF, and CSV into structured JSON. Six-stage pipeline, heuristic schema discovery, change detection, WASM-compilable.">
+
+    <!-- SEO -->
+    <link rel="canonical" href="https://ottofleet.io/modules/nexus.html">
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#0a0a0a">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="Nexus — Document Ingestion Pipeline | OTTO">
+    <meta property="og:description" content="Zero-dependency document ingestion pipeline. XLSX/PDF/CSV to structured JSON. Heuristic schema discovery, change detection, fuzz-tested. Written in C, compiles to WASM.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://ottofleet.io/modules/nexus.html">
+    <meta property="og:site_name" content="OTTO">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%230a0a0a'/%3E%3Ctext x='50' y='68' font-family='ui-monospace,monospace' font-size='60' font-weight='700' fill='%233b82f6' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
+
+    <!-- Shared Styles -->
+    <link rel="stylesheet" href="../style.css">
+
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Nexus",
+        "alternateName": "OTTO Nexus Document Ingestion",
+        "description": "Production document ingestion pipeline. Extracts tabular data from XLSX, PDF, and CSV into structured JSON with schema discovery, validation, and change detection.",
+        "url": "https://ottofleet.io/modules/nexus.html",
+        "applicationCategory": "BusinessApplication",
+        "operatingSystem": "Cross-platform (WASM, Linux, macOS)",
+        "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+        "author": {
+            "@type": "Person",
+            "name": "Mark Farkas"
+        }
+    }
+    </script>
+
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --bg-secondary: #141414;
+            --bg-tertiary: #1a1a1a;
+            --text: #e5e5e5;
+            --text-muted: #9ca3af;
+            --accent: #3b82f6;
+            --accent-dim: #1e40af;
+            --border: #2a2a2a;
+            --success: #22c55e;
+            --warning: #eab308;
+            --error: #ef4444;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'Segoe UI Mono', Menlo, Monaco, Consolas, monospace;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            font-size: 15px;
+        }
+
+        a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Header */
+        header {
+            padding: 48px 0 32px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .logo {
+            font-size: 32px;
+            font-weight: 700;
+            letter-spacing: 4px;
+            color: var(--text);
+            animation: logo-electric 4s infinite;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.1);
+        }
+
+        .logo span {
+            color: var(--accent);
+        }
+
+        @keyframes logo-electric {
+            0%, 100% {
+                text-shadow:
+                    0 0 10px rgba(255, 255, 255, 0.15),
+                    0 0 20px rgba(255, 255, 255, 0.05);
+                transform: translate(0, 0);
+                filter: brightness(1);
+            }
+            5% {
+                text-shadow:
+                    -1px 0 rgba(255, 100, 100, 0.5),
+                    1px 0 rgba(100, 180, 255, 0.5),
+                    0 0 10px rgba(255, 255, 255, 0.2);
+                transform: translate(0.5px, 0);
+            }
+            10% {
+                text-shadow:
+                    0 0 10px rgba(255, 255, 255, 0.15);
+                transform: translate(0, 0);
+            }
+            30% {
+                text-shadow:
+                    -2px 0 rgba(255, 60, 60, 0.6),
+                    2px 0 rgba(60, 180, 255, 0.6),
+                    0 0 20px rgba(255, 255, 255, 0.3);
+                transform: translate(1px, 0) skewX(0.5deg);
+                filter: brightness(1.15);
+            }
+            31% {
+                text-shadow:
+                    2px 0 rgba(255, 60, 60, 0.5),
+                    -2px 0 rgba(60, 180, 255, 0.5),
+                    0 0 15px rgba(255, 255, 255, 0.2);
+                transform: translate(-0.5px, 0.3px) skewX(-0.3deg);
+            }
+            33% {
+                text-shadow:
+                    0 0 10px rgba(255, 255, 255, 0.15);
+                transform: translate(0, 0);
+                filter: brightness(1);
+            }
+            55% {
+                text-shadow:
+                    0.5px 0 rgba(255, 150, 150, 0.3),
+                    -0.5px 0 rgba(150, 200, 255, 0.3),
+                    0 0 10px rgba(255, 255, 255, 0.15);
+            }
+            60% {
+                text-shadow:
+                    0 0 10px rgba(255, 255, 255, 0.15),
+                    0 0 20px rgba(255, 255, 255, 0.05);
+            }
+            75% {
+                text-shadow:
+                    -1.5px 0 rgba(255, 80, 80, 0.5),
+                    1.5px 0 rgba(80, 180, 255, 0.5),
+                    0 0 15px rgba(255, 255, 255, 0.25);
+                transform: translate(0.6px, -0.2px);
+                filter: brightness(1.1);
+            }
+            77% {
+                text-shadow:
+                    0 0 10px rgba(255, 255, 255, 0.15);
+                transform: translate(0, 0);
+                filter: brightness(1);
+            }
+            92% { filter: brightness(0.95); }
+            93% { filter: brightness(1.08); }
+            94% { filter: brightness(1); }
+        }
+
+        .tagline {
+            margin-top: 8px;
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        .header-nav {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .nav-group {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .nav-separator {
+            color: var(--border);
+            font-weight: 300;
+            align-self: center;
+        }
+
+        .header-nav a {
+            padding: 6px 12px;
+            font-size: 13px;
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            text-decoration: none;
+        }
+
+        .header-nav a:hover {
+            color: var(--text);
+            border-color: var(--accent-dim);
+            text-decoration: none;
+        }
+
+        .header-nav a.active {
+            color: var(--accent);
+            border-color: var(--accent);
+        }
+
+        /* Hero */
+        .hero {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .hero h1 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .hero p {
+            color: var(--text-muted);
+            max-width: 700px;
+        }
+
+        .badges {
+            margin-top: 24px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .badge.green { border-color: var(--success); color: var(--success); }
+        .badge.blue { border-color: var(--accent); color: var(--accent); }
+        .badge.yellow { border-color: var(--warning); color: var(--warning); }
+
+        /* Section styling */
+        .section {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--text-muted);
+            margin-bottom: 24px;
+        }
+
+        .section h2 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .section h3 {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            margin-top: 32px;
+        }
+
+        .section h3:first-child {
+            margin-top: 0;
+        }
+
+        .section p {
+            color: var(--text-muted);
+            margin-bottom: 16px;
+            max-width: 800px;
+        }
+
+        .section p strong {
+            color: var(--text);
+        }
+
+        .section ul {
+            color: var(--text-muted);
+            margin-bottom: 16px;
+            padding-left: 24px;
+        }
+
+        .section ul li {
+            margin-bottom: 6px;
+        }
+
+        .section ul li strong {
+            color: var(--text);
+        }
+
+        /* Code Block - Terminal CRT style */
+        .code-block {
+            background: linear-gradient(135deg, #0a0a0a 0%, #141414 100%);
+            border: 1px solid #2a2a2a;
+            border-radius: 6px;
+            padding: 20px;
+            overflow-x: auto;
+            position: relative;
+            overflow: hidden;
+            margin-bottom: 16px;
+        }
+
+        .code-block::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(255, 255, 255, 0.02) 0px,
+                rgba(255, 255, 255, 0.02) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+        }
+
+        .code-block pre {
+            margin: 0;
+            font-size: 13px;
+            font-family: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+            position: relative;
+            z-index: 1;
+            animation: crt-flicker-gray 5s infinite;
+        }
+
+        .code-block .comment {
+            color: #707070;
+            text-shadow: 0 0 5px rgba(150, 150, 150, 0.2);
+        }
+
+        .code-block .command {
+            color: #50c878;
+            text-shadow:
+                0 0 5px rgba(80, 200, 120, 0.4),
+                0 0 10px rgba(80, 200, 120, 0.2);
+        }
+
+        .code-block .keyword {
+            color: #60a5fa;
+            text-shadow: 0 0 5px rgba(96, 165, 250, 0.3);
+        }
+
+        .code-block .type {
+            color: #a78bfa;
+            text-shadow: 0 0 5px rgba(167, 139, 250, 0.3);
+        }
+
+        .code-block .string {
+            color: #fbbf24;
+            text-shadow: 0 0 5px rgba(251, 191, 36, 0.3);
+        }
+
+        .code-block .number {
+            color: #34d399;
+            text-shadow: 0 0 5px rgba(52, 211, 153, 0.3);
+        }
+
+        .code-block .func {
+            color: #f0abfc;
+            text-shadow: 0 0 5px rgba(240, 171, 252, 0.3);
+        }
+
+        @keyframes crt-flicker-gray {
+            0%, 100% { opacity: 1; }
+            94% { opacity: 1; }
+            95% { opacity: 0.97; }
+            96% { opacity: 1; }
+        }
+
+        /* ASCII Architecture */
+        .ascii-art {
+            background: linear-gradient(135deg, #1a1a1a 0%, #222 100%);
+            border: 1px solid #333;
+            border-radius: 6px;
+            padding: 24px;
+            overflow-x: auto;
+            font-size: 13px;
+            line-height: 1.3;
+            position: relative;
+            overflow: hidden;
+            margin-bottom: 16px;
+        }
+
+        .ascii-art::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(255, 255, 255, 0.03) 0px,
+                rgba(255, 255, 255, 0.03) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+        }
+
+        .ascii-art pre {
+            margin: 0;
+            font-family: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+            color: #a0a0a0;
+            text-shadow:
+                0 0 5px rgba(200, 200, 200, 0.3),
+                0 0 10px rgba(200, 200, 200, 0.1);
+            position: relative;
+            z-index: 1;
+            animation: crt-flicker-gray 5s infinite;
+            letter-spacing: 0;
+            word-spacing: 0;
+            font-variant-ligatures: none;
+            font-feature-settings: "calt" 0;
+            line-height: 1;
+        }
+
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin-bottom: 24px;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            color: var(--text-muted);
+            font-weight: 500;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            white-space: nowrap;
+        }
+
+        td {
+            color: var(--text-muted);
+        }
+
+        td:first-child {
+            color: var(--text);
+            font-weight: 500;
+        }
+
+        .y { color: var(--success); font-weight: 600; }
+        .p { color: var(--warning); }
+        .n { color: #555; }
+        .q { color: #555; font-style: italic; }
+
+        .table-scroll {
+            overflow-x: auto;
+            margin-bottom: 24px;
+        }
+
+        .table-scroll table {
+            min-width: 800px;
+            margin-bottom: 0;
+        }
+
+        .table-legend {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+        }
+
+        .table-legend span {
+            margin-right: 16px;
+        }
+
+        tr.highlight td {
+            background: rgba(59, 130, 246, 0.05);
+        }
+
+        tr.highlight td:first-child {
+            color: var(--accent);
+        }
+
+        /* Feature Grid */
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        .feature-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 20px;
+        }
+
+        .feature-card:hover {
+            border-color: var(--accent-dim);
+        }
+
+        .feature-card-title {
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+
+        .feature-card-desc {
+            color: var(--text-muted);
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .feature-card-count {
+            font-size: 12px;
+            color: var(--accent);
+            margin-top: 8px;
+        }
+
+        /* Stat row */
+        .stat-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .stat-value.green { color: var(--success); }
+        .stat-value.blue { color: var(--accent); }
+        .stat-value.yellow { color: var(--warning); }
+
+        .stat-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: 4px;
+        }
+
+        /* Callout box */
+        .callout {
+            background: var(--bg-secondary);
+            border-left: 3px solid var(--accent);
+            border-radius: 0 6px 6px 0;
+            padding: 16px 20px;
+            margin-bottom: 24px;
+        }
+
+        .callout p {
+            margin-bottom: 0;
+        }
+
+        .callout.honest {
+            border-left-color: var(--warning);
+        }
+
+        /* Two-column layout */
+        .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 32px;
+        }
+
+        /* Footer */
+        footer {
+            padding: 32px 0;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        .footer-links {
+            display: flex;
+            gap: 24px;
+            margin-bottom: 16px;
+        }
+
+        /* Skip to content */
+        .skip-link {
+            position: absolute;
+            top: -40px;
+            left: 0;
+            background: var(--accent);
+            color: white;
+            padding: 8px 16px;
+            z-index: 100;
+            text-decoration: none;
+        }
+
+        .skip-link:focus {
+            top: 0;
+        }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            .logo { font-size: 24px; }
+            .hero h1 { font-size: 18px; }
+            .ascii-art { font-size: 10px; padding: 16px; }
+            .footer-links { flex-direction: column; gap: 8px; }
+            .header-top { flex-direction: column; }
+            .header-nav { margin-top: 16px; }
+            .two-col { grid-template-columns: 1fr; }
+            .stat-row { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+    <div class="container">
+        <header>
+            <div class="header-top">
+                <div>
+                    <a href="../index.html" style="text-decoration:none"><div class="logo"><span>O</span>TTO</div></a>
+                    <div class="tagline">Nexus &mdash; Document Ingestion Pipeline</div>
+                </div>
+                <nav class="header-nav">
+                    <div class="nav-group">
+                        <a href="../index.html">Home</a>
+                        <a href="../api.html">API</a>
+                    </div>
+                    <span class="nav-separator">|</span>
+                    <div class="nav-group">
+                        <a href="#why">Why</a>
+                        <a href="#pipeline">Pipeline</a>
+                        <a href="#features">Features</a>
+                        <a href="#schemas">Schemas</a>
+                        <a href="#quickstart">Quick Start</a>
+                    </div>
+                </nav>
+            </div>
+        </header>
+
+        <main id="main-content">
+
+        <!-- ============================================================ -->
+        <!-- Hero -->
+        <!-- ============================================================ -->
+        <section class="hero">
+            <h1>Turn messy spreadsheets into clean data. In the browser.</h1>
+            <p>
+                Nexus is a six-stage document ingestion pipeline written in C with zero external dependencies.
+                Extracts tabular data from XLSX, PDF, and CSV files. Transforms, validates, and emits
+                structured JSON, GeoJSON, or CSV. Heuristic schema discovery &mdash; no LLMs, no cloud APIs.
+                Same pipeline runs native, in WASM, or embedded in your application.
+            </p>
+            <div class="badges">
+                <span class="badge green">192 tests</span>
+                <span class="badge blue">6-stage pipeline</span>
+                <span class="badge yellow">Zero deps</span>
+                <span class="badge">C11</span>
+                <span class="badge">WASM</span>
+                <span class="badge">Fuzz-tested</span>
+                <span class="badge">AGPLv3 + Trucking Exception</span>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Why Nexus Exists -->
+        <!-- ============================================================ -->
+        <section class="section" id="why">
+            <div class="section-title">Why</div>
+            <h2>Logistics runs on spreadsheets. Spreadsheets run on chaos.</h2>
+
+            <p>
+                Every trucking company, 3PL, and carrier has "the spreadsheet." The one emailed weekly with depot
+                locations, customer addresses, delivery windows, or station data. Different columns every time.
+                Merged cells. Continuation rows. Hungarian coordinates in a projection system from 1972.
+                A PDF that's actually a scan of a table that was originally an Excel file.
+            </p>
+
+            <p>
+                The typical response: a Python script that breaks every time the format changes. Or a manual process
+                with a human in the loop. Or a SaaS ETL tool that costs $50K/year and still can't parse
+                Hungarian EOV coordinates or reconstruct tables from PDF text runs.
+            </p>
+
+            <p>Nexus is the opposite of all three.</p>
+
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-card-title">Schema-driven, not script-driven</div>
+                    <div class="feature-card-desc">
+                        Declarative JSON schemas define column mapping, transforms, and validation rules.
+                        When the spreadsheet changes, update the schema &mdash; not the code. Schemas are
+                        versioned, diffable, and machine-readable.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Heuristic discovery, not LLM guessing</div>
+                    <div class="feature-card-desc">
+                        Drop a file with no schema. Nexus infers types, detects lat/lon columns, identifies
+                        unique fields, spots continuation rows, and generates a schema draft. Deterministic,
+                        reproducible, zero API calls. A human reviews and refines.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Structured errors, not stack traces</div>
+                    <div class="feature-card-desc">
+                        Every issue has a stage, severity, row number, field name, error code, and human message.
+                        Thread the <code>NxIssueList</code> through all six stages. Export as JSON. No more
+                        grepping logs to find which row broke the pipeline.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Runs in the browser</div>
+                    <div class="feature-card-desc">
+                        The WASM demo runs the full pipeline client-side. Upload a spreadsheet, see extracted
+                        data, apply transforms, validate, export. Zero server round-trips. Sensitive data
+                        never leaves the machine.
+                    </div>
+                </div>
+            </div>
+
+            <div class="callout">
+                <p>
+                    <strong>The real problem.</strong> Document ingestion is 80% of the work in logistics data
+                    integration and 0% of the value. Nexus exists so engineers can stop writing XLSX parsers
+                    and start building route optimizers, ETAs, and fleet dashboards.
+                </p>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Pipeline Architecture -->
+        <!-- ============================================================ -->
+        <section class="section" id="pipeline">
+            <div class="section-title">Pipeline</div>
+            <h2>Six stages, each independently testable</h2>
+
+            <p>
+                Nexus decomposes document ingestion into six composable stages. Each stage reads JSON,
+                produces JSON, and reports structured issues. You can run the full pipeline or invoke
+                individual stages via CLI or C API.
+            </p>
+
+            <div class="ascii-art">
+<pre>
+  XLSX / PDF / CSV                                    JSON / GeoJSON / CSV
+       │                                                      ▲
+       ▼                                                      │
+  ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐
+  │ Stage A │──▶│ Stage M │──▶│ Stage B │──▶│ Stage X │──▶│ Stage D │
+  │ Extract │   │  Merge  │   │Transform│   │Validate │   │  Emit   │
+  └─────────┘   └─────────┘   └─────────┘   └─────────┘   └─────────┘
+       │              │              │              │              │
+   nx_raw JSON    merged rows    nx_canonical   validated     GeoJSON
+   (cells, rows)  (cont. rows   (typed fields,  (bounds,      CSV
+                   stripped)     derived cols)   deduped)
+                                     │
+                                     ▼
+                               ┌───────────┐
+                               │  nx_diff   │  Change detection
+                               │ (baseline) │  FNV-1a hashing
+                               └───────────┘
+
+  ┌──────────────────────────────────────────────────────────────────┐
+  │  NxIssueList   threaded through all stages                      │
+  │  stage / severity / row / field / code / message                │
+  └──────────────────────────────────────────────────────────────────┘
+</pre>
+            </div>
+
+            <div class="stat-row">
+                <div class="stat">
+                    <div class="stat-value blue">6</div>
+                    <div class="stat-label">Pipeline Stages</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">192</div>
+                    <div class="stat-label">Tests</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value">~9.4K</div>
+                    <div class="stat-label">Lines of C</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">0</div>
+                    <div class="stat-label">Fuzz Crashes</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value yellow">0</div>
+                    <div class="stat-label">Ext Dependencies</div>
+                </div>
+            </div>
+
+            <h3>Stage A &mdash; Extract</h3>
+            <p>
+                Reads XLSX (ZIP &rarr; XML &rarr; shared strings &rarr; cells), PDF (text-run JSON &rarr;
+                Y-alignment clustering &rarr; X-gap column detection), or CSV (RFC 4180, auto-delimiter).
+                Outputs <code>nx_raw</code> JSON: an array of rows with cell values and metadata.
+            </p>
+            <ul>
+                <li><strong>XLSX</strong> &mdash; ZIP container extraction via miniz, shared string table, A1 notation &rarr; row/col</li>
+                <li><strong>PDF</strong> &mdash; Y-alignment clustering within row tolerance, X-gap column detection, multi-page support</li>
+                <li><strong>CSV</strong> &mdash; RFC 4180 with auto-delimiter detection (comma, semicolon, tab, pipe)</li>
+            </ul>
+
+            <h3>Stage M &mdash; Merge</h3>
+            <p>
+                Handles continuation rows in PDF tables where a single logical row spans multiple lines.
+                Schema-driven: the <code>row_merge</code> config specifies which field identifies continuation
+                and how values are concatenated. Also strips repeated header rows.
+            </p>
+
+            <h3>Stage B &mdash; Transform</h3>
+            <p>
+                Column mapping, type coercion (string/int/double/bool), derived fields (constants), and
+                a five-type multi-transform pipeline: <strong>split</strong> (delimiter + index),
+                <strong>merge</strong> (N fields + separator), <strong>regex</strong> (capture groups),
+                <strong>compute</strong> (built-in functions), <strong>conditional</strong> (pattern &rarr; value).
+                Row ID generation via slugified templates.
+            </p>
+
+            <h3>Stage X &mdash; Validate</h3>
+            <p>
+                Four validation rules: <strong>geo_bounds</strong> (lat/lon within bounding box),
+                <strong>format</strong> (POSIX regex pattern match), <strong>unique</strong> (dedup by field,
+                first kept), <strong>outlier</strong> (IQR-based detection with Q1 &minus; 1.5&times;IQR /
+                Q3 + 1.5&times;IQR bounds). Issues tagged with row, field, and reason.
+            </p>
+
+            <h3>Stage D &mdash; Emit</h3>
+            <p>
+                Output as RFC 7946 GeoJSON FeatureCollection (configurable lat/lon/id fields, precision)
+                or RFC 4180 CSV (configurable delimiter). Both formats validated downstream by standard tools.
+            </p>
+
+            <h3>Change Detection (nx_diff)</h3>
+            <p>
+                Compare current output against a baseline. FNV-1a 64-bit hashing for record IDs and content.
+                O(1) hashmap lookup per record. Output: added, removed, modified, unchanged counts with
+                field-level diffs for modified records. Useful for incremental pipeline runs.
+            </p>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Features -->
+        <!-- ============================================================ -->
+        <section class="section" id="features">
+            <div class="section-title">Features</div>
+            <h2>What makes Nexus different</h2>
+
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-card-title">Schema Discovery</div>
+                    <div class="feature-card-desc">
+                        Feed raw extracted data to <code>nx_discover_schema()</code>. Infers column types
+                        (int/double/string), detects lat/lon fields (range + header matching), identifies
+                        unique/required fields, spots continuation rows. Outputs a draft JSON schema.
+                    </div>
+                    <div class="feature-card-count">Zero LLMs, zero API calls</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Compute Functions</div>
+                    <div class="feature-card-desc">
+                        Six built-in compute functions for Hungarian logistics:
+                        <code>eov_to_wgs84</code>, <code>dms_to_dd</code>, <code>coalesce</code>,
+                        <code>phone_normalize</code>, <code>zip_to_region</code>,
+                        <code>opening_hours</code>. Extensible registry via <code>nx_compute_find()</code>.
+                    </div>
+                    <div class="feature-card-count">6 built-in transforms</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Multi-Transform Pipeline</div>
+                    <div class="feature-card-desc">
+                        Chain transforms on a single field: split a combined address, regex-extract a ZIP
+                        code, merge first + last name, compute coordinates from EOV, conditionally map
+                        values. Virtual columns appended after originals.
+                    </div>
+                    <div class="feature-card-count">5 transform types, composable</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">PDF Table Reconstruction</div>
+                    <div class="feature-card-desc">
+                        Reconstructs tables from PDF text runs using Y-alignment clustering and X-gap
+                        column detection. Auto-detects row tolerance and column gaps from median text height.
+                        Handles rotation, scaling, multiple pages.
+                    </div>
+                    <div class="feature-card-count">1,082 LOC, battle-tested</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Structured Issue Tracking</div>
+                    <div class="feature-card-desc">
+                        <code>NxIssueList</code> is an uncapped, realloc-doubling list of structured issues.
+                        Each issue: stage, severity (info/warning/error), row, field, code, message.
+                        Thread through all stages. Export as JSON. Filter by stage or severity.
+                    </div>
+                    <div class="feature-card-count">No more grepping logs</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Production Hardened</div>
+                    <div class="feature-card-desc">
+                        Input limits enforced: 100K rows, 1K columns, 100 MB files, 50 MB ZIP entries.
+                        Fuzz-tested with libFuzzer under ASan/UBSan: 1.25M+ runs across XLSX, PDF, CSV
+                        parsers with zero crashes. Regex complexity guards. No unsafe string functions.
+                    </div>
+                    <div class="feature-card-count">0 crashes in 1.25M fuzz runs</div>
+                </div>
+            </div>
+
+            <h3>Compute function reference</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Function</th>
+                        <th>Input</th>
+                        <th>Output</th>
+                        <th>Use Case</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>eov_to_wgs84</td>
+                        <td>EOV Y, EOV X</td>
+                        <td>lat, lon</td>
+                        <td>Hungarian HD72/EOV projection &rarr; GPS coordinates</td>
+                    </tr>
+                    <tr>
+                        <td>dms_to_dd</td>
+                        <td>DMS string</td>
+                        <td>decimal degrees</td>
+                        <td>47&deg;29'33"N &rarr; 47.4925</td>
+                    </tr>
+                    <tr>
+                        <td>coalesce</td>
+                        <td>N source fields</td>
+                        <td>first non-empty</td>
+                        <td>Fallback chain: city || town || village</td>
+                    </tr>
+                    <tr>
+                        <td>phone_normalize</td>
+                        <td>Hungarian phone</td>
+                        <td>E.164 format</td>
+                        <td>06-30-123-4567 &rarr; +36301234567</td>
+                    </tr>
+                    <tr>
+                        <td>zip_to_region</td>
+                        <td>ZIP code</td>
+                        <td>region name</td>
+                        <td>1052 &rarr; Budapest</td>
+                    </tr>
+                    <tr>
+                        <td>opening_hours</td>
+                        <td>Hungarian format</td>
+                        <td>OSM format</td>
+                        <td>H-P: 8-17 &rarr; Mo-Fr 08:00-17:00</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Schemas -->
+        <!-- ============================================================ -->
+        <section class="section" id="schemas">
+            <div class="section-title">Schema System</div>
+            <h2>Declarative, versioned, machine-readable</h2>
+
+            <p>
+                Nexus schemas are JSON documents that define column mapping, type coercion, multi-transforms,
+                validation rules, and output configuration. The schema is the single source of truth for
+                how a file format maps to your data model.
+            </p>
+
+            <div class="code-block">
+<pre>{
+  <span class="string">"nx_schema"</span>: <span class="number">2</span>,
+  <span class="string">"name"</span>: <span class="string">"gls-hu-automata"</span>,
+  <span class="string">"columns"</span>: [
+    {<span class="string">"source"</span>: <span class="string">"Aut. neve"</span>,  <span class="string">"target"</span>: <span class="string">"name"</span>,    <span class="string">"type"</span>: <span class="string">"string"</span>},
+    {<span class="string">"source"</span>: <span class="string">"EOV Y"</span>,     <span class="string">"target"</span>: <span class="string">"eov_y"</span>,   <span class="string">"type"</span>: <span class="string">"double"</span>},
+    {<span class="string">"source"</span>: <span class="string">"EOV X"</span>,     <span class="string">"target"</span>: <span class="string">"eov_x"</span>,   <span class="string">"type"</span>: <span class="string">"double"</span>}
+  ],
+  <span class="string">"multi_transforms"</span>: [
+    {<span class="string">"type"</span>: <span class="string">"compute"</span>, <span class="string">"function"</span>: <span class="string">"eov_to_wgs84"</span>,
+     <span class="string">"sources"</span>: [<span class="string">"eov_y"</span>, <span class="string">"eov_x"</span>],
+     <span class="string">"targets"</span>: [<span class="string">"lat"</span>, <span class="string">"lon"</span>]}
+  ],
+  <span class="string">"validate"</span>: {
+    <span class="string">"geo_bounds"</span>: {<span class="string">"lat"</span>: <span class="string">"lat"</span>, <span class="string">"lon"</span>: <span class="string">"lon"</span>,
+                   <span class="string">"min_lat"</span>: <span class="number">45.7</span>, <span class="string">"max_lat"</span>: <span class="number">48.6</span>,
+                   <span class="string">"min_lon"</span>: <span class="number">16.1</span>, <span class="string">"max_lon"</span>: <span class="number">22.9</span>}
+  },
+  <span class="string">"row_id"</span>: <span class="string">"{name}-{zip}"</span>
+}</pre>
+            </div>
+
+            <h3>Production schemas (GLS Hungary)</h3>
+
+            <p>
+                Nexus ships with 10 production schemas for GLS Hungary logistics data. These serve as
+                reference implementations and test fixtures for the full pipeline.
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Schema</th>
+                        <th>Entity</th>
+                        <th>Format</th>
+                        <th>Features</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>gls-hu-automata-v2</td>
+                        <td>Parcel lockers</td>
+                        <td>XLSX</td>
+                        <td>EOV compute, geo_bounds, regex, split</td>
+                    </tr>
+                    <tr>
+                        <td>gls-hu-automata-pdf-v2</td>
+                        <td>Parcel lockers</td>
+                        <td>PDF</td>
+                        <td>Row merge for continuation, same transforms</td>
+                    </tr>
+                    <tr>
+                        <td>gls-hu-pudo-v2</td>
+                        <td>Pickup/dropoff points</td>
+                        <td>XLSX</td>
+                        <td>Multi-transforms, phone normalize, opening hours</td>
+                    </tr>
+                    <tr>
+                        <td>gls-hu-pudo-pdf-v2</td>
+                        <td>Pickup/dropoff points</td>
+                        <td>PDF</td>
+                        <td>Row merge, same transforms as XLSX</td>
+                    </tr>
+                    <tr>
+                        <td>gls-hu-depots-v2</td>
+                        <td>Depot locations</td>
+                        <td>XLSX</td>
+                        <td>EOV compute, zip_to_region, merge transforms</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Schema discovery</h3>
+
+            <p>
+                Don't have a schema? Feed raw extracted data to <code>nx_discover_schema()</code> and get
+                a draft. The heuristics are deterministic and rule-based:
+            </p>
+
+            <ul>
+                <li><strong>Type inference</strong> &mdash; Tries <code>strtod</code>/<code>strtol</code> on every cell; consensus wins</li>
+                <li><strong>Lat/lon detection</strong> &mdash; Numeric columns in [-90, 90] or [-180, 180] with header name matching</li>
+                <li><strong>Required fields</strong> &mdash; Non-empty in all rows &rarr; marked required</li>
+                <li><strong>Uniqueness</strong> &mdash; All distinct values &rarr; candidate row ID</li>
+                <li><strong>Continuation rows</strong> &mdash; Detects merge patterns, emits <code>row_merge</code> config</li>
+            </ul>
+
+            <div class="callout honest">
+                <p>
+                    <strong>Honest assessment.</strong> Schema discovery is a starting point, not a finished product.
+                    It generates a correct schema ~70% of the time for clean XLSX files with clear headers.
+                    For messy PDFs with merged cells and multi-line values, human review is always needed.
+                    The point is to save 80% of the manual work, not eliminate it.
+                </p>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Comparison -->
+        <!-- ============================================================ -->
+        <section class="section" id="comparison">
+            <div class="section-title">Comparison</div>
+            <h2>Nexus vs. the alternatives</h2>
+
+            <p>
+                Nexus occupies a specific niche: <strong>schema-driven tabular extraction from messy documents
+                in logistics</strong>. It's not a general ETL framework, not a BI tool, and not a data lake.
+                Here's how it compares to what teams actually use.
+            </p>
+
+            <div class="table-scroll">
+            <table>
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th>Nexus</th>
+                        <th>Python scripts</th>
+                        <th>Tabula / Camelot</th>
+                        <th>dbt + Pandas</th>
+                        <th>Trifacta / Dataprep</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>XLSX parsing</td>
+                        <td class="y">Native</td>
+                        <td class="y">openpyxl</td>
+                        <td class="n">N</td>
+                        <td class="y">Via Pandas</td>
+                        <td class="y">Y</td>
+                    </tr>
+                    <tr>
+                        <td>PDF table extraction</td>
+                        <td class="y">Native</td>
+                        <td class="p">Manual</td>
+                        <td class="y">Y</td>
+                        <td class="n">N</td>
+                        <td class="p">Limited</td>
+                    </tr>
+                    <tr>
+                        <td>CSV parsing</td>
+                        <td class="y">RFC 4180</td>
+                        <td class="y">csv module</td>
+                        <td class="n">N</td>
+                        <td class="y">Via Pandas</td>
+                        <td class="y">Y</td>
+                    </tr>
+                    <tr>
+                        <td>Schema-driven</td>
+                        <td class="y">JSON schema</td>
+                        <td class="n">Hardcoded</td>
+                        <td class="n">N</td>
+                        <td class="p">SQL models</td>
+                        <td class="p">Recipes</td>
+                    </tr>
+                    <tr>
+                        <td>Schema discovery</td>
+                        <td class="y">Heuristic</td>
+                        <td class="n">N</td>
+                        <td class="n">N</td>
+                        <td class="n">N</td>
+                        <td class="y">ML-based</td>
+                    </tr>
+                    <tr>
+                        <td>Change detection</td>
+                        <td class="y">FNV-1a diff</td>
+                        <td class="n">Manual</td>
+                        <td class="n">N</td>
+                        <td class="p">Snapshots</td>
+                        <td class="n">N</td>
+                    </tr>
+                    <tr>
+                        <td>Structured errors</td>
+                        <td class="y">Per-row/field</td>
+                        <td class="n">Exceptions</td>
+                        <td class="n">Exceptions</td>
+                        <td class="p">Test failures</td>
+                        <td class="p">UI alerts</td>
+                    </tr>
+                    <tr>
+                        <td>GeoJSON output</td>
+                        <td class="y">RFC 7946</td>
+                        <td class="p">Manual</td>
+                        <td class="n">N</td>
+                        <td class="p">Plugin</td>
+                        <td class="n">N</td>
+                    </tr>
+                    <tr>
+                        <td>Runs in browser</td>
+                        <td class="y">WASM</td>
+                        <td class="n">N</td>
+                        <td class="n">N</td>
+                        <td class="n">N</td>
+                        <td class="n">Cloud only</td>
+                    </tr>
+                    <tr>
+                        <td>Embeddable</td>
+                        <td class="y">C / WASM</td>
+                        <td class="n">Python runtime</td>
+                        <td class="n">Java runtime</td>
+                        <td class="n">Python + DB</td>
+                        <td class="n">SaaS</td>
+                    </tr>
+                    <tr>
+                        <td>Dependencies</td>
+                        <td class="y">Zero</td>
+                        <td>pip install ...</td>
+                        <td>JRE + JAR</td>
+                        <td>Python + DB</td>
+                        <td>Cloud subscription</td>
+                    </tr>
+                    <tr>
+                        <td>Cost</td>
+                        <td class="y">Open source</td>
+                        <td class="y">Free</td>
+                        <td class="y">Free</td>
+                        <td class="y">Free + DB</td>
+                        <td>$$$ /year</td>
+                    </tr>
+                    <tr>
+                        <td>Fuzz-tested</td>
+                        <td class="y">1.25M+ runs</td>
+                        <td class="n">Rarely</td>
+                        <td class="n">N</td>
+                        <td class="n">N</td>
+                        <td class="q">Unknown</td>
+                    </tr>
+                </tbody>
+            </table>
+            </div>
+
+            <div class="callout">
+                <p>
+                    <strong>The key difference.</strong> Python scripts are flexible but fragile &mdash; they break
+                    when the spreadsheet changes. dbt/Pandas are powerful but require a Python runtime and a database.
+                    Trifacta/Dataprep are polished but SaaS-only and expensive. Nexus gives you a schema-driven,
+                    embeddable, fuzz-tested pipeline with zero dependencies that runs equally well native, in WASM,
+                    or embedded in a C application.
+                </p>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- API -->
+        <!-- ============================================================ -->
+        <section class="section" id="api">
+            <div class="section-title">API</div>
+            <h2>C functions, JSON in, JSON out</h2>
+
+            <p>
+                Each stage is a standalone function: takes JSON + optional schema, returns JSON + issues.
+                The orchestrator <code>nx_ingest()</code> chains them automatically, or call stages individually
+                for maximum control.
+            </p>
+
+            <div class="two-col">
+                <div>
+                    <h3>Orchestrator (full pipeline)</h3>
+                    <div class="code-block">
+<pre><span class="type">NxIssueList</span> issues;
+<span class="func">nx_issue_list_init</span>(&amp;issues);
+
+<span class="type">char</span> *raw, *canon;
+<span class="type">size_t</span> raw_len, canon_len;
+
+<span class="type">NxIngestStatus</span> s = <span class="func">nx_ingest</span>(
+    data, len,
+    <span class="type">NX_FORMAT_XLSX</span>, <span class="string">"depots.xlsx"</span>,
+    schema, schema_len,
+    &amp;raw, &amp;raw_len,
+    &amp;canon, &amp;canon_len,
+    &amp;issues);
+
+<span class="keyword">if</span> (s == <span class="type">NX_INGEST_OK</span>) {
+    <span class="comment">// canon = canonical JSON</span>
+    <span class="func">free</span>(raw);
+    <span class="func">free</span>(canon);
+}
+<span class="func">nx_issue_list_free</span>(&amp;issues);</pre>
+                    </div>
+                </div>
+                <div>
+                    <h3>Individual stage</h3>
+                    <div class="code-block">
+<pre><span class="comment">// Stage A: Extract XLSX</span>
+<span class="type">SHArena</span> *arena = <span class="func">sh_arena_create</span>(
+    <span class="number">32</span> * <span class="number">1024</span> * <span class="number">1024</span>);
+<span class="type">char</span> *raw_json;
+<span class="type">size_t</span> raw_len;
+
+<span class="type">NxXlsxStatus</span> s = <span class="func">nx_xlsx_parse</span>(
+    data, len,
+    &amp;limits, <span class="string">"input.xlsx"</span>,
+    arena, &amp;issues,
+    &amp;raw_json, &amp;raw_len);
+
+<span class="comment">// Stage B: Transform</span>
+<span class="type">char</span> *canon_json;
+<span class="type">size_t</span> canon_len;
+<span class="func">nx_xform_apply</span>(
+    raw_json, raw_len,
+    schema, schema_len,
+    arena, &amp;issues,
+    &amp;canon_json, &amp;canon_len);
+
+<span class="func">sh_arena_free</span>(arena);</pre>
+                    </div>
+                </div>
+            </div>
+
+            <h3>CLI</h3>
+
+            <div class="code-block">
+<pre><span class="comment"># Full pipeline: XLSX + schema &rarr; canonical JSON</span>
+<span class="command">./nx_pipeline input.xlsx --schema schemas/gls-hu-automata-v2.json</span>
+
+<span class="comment"># Extract only (raw JSON)</span>
+<span class="command">./nx_pipeline input.xlsx --raw</span>
+
+<span class="comment"># Emit GeoJSON</span>
+<span class="command">./nx_pipeline input.xlsx --schema s.json --emit geojson</span>
+
+<span class="comment"># Change detection against baseline</span>
+<span class="command">./nx_pipeline input.xlsx --schema s.json --baseline previous.json</span>
+
+<span class="comment"># Auto-discover schema from raw data</span>
+<span class="command">./nx_pipeline input.xlsx --raw -o raw.json</span>
+<span class="command">./nx_pipeline raw.json --discover</span></pre>
+            </div>
+
+            <h3>Error handling</h3>
+            <p>
+                Every stage returns a typed status enum. Every function accepts an optional <code>NxIssueList*</code>.
+                Issues accumulate across stages &mdash; you get the full picture, not just the first failure.
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Stage</th>
+                        <th>Status Enum</th>
+                        <th>Error Codes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Extract (XLSX)</td>
+                        <td>NxXlsxStatus</td>
+                        <td>NULL, ZIP, NO_SHEETS, XML, ARENA, LIMITS, EMPTY</td>
+                    </tr>
+                    <tr>
+                        <td>Extract (PDF)</td>
+                        <td>NxPdfStatus</td>
+                        <td>NULL, JSON, NO_TEXT, ARENA</td>
+                    </tr>
+                    <tr>
+                        <td>Extract (CSV)</td>
+                        <td>NxCsvStatus</td>
+                        <td>NULL, PARSE, NO_DATA, ARENA, EMPTY</td>
+                    </tr>
+                    <tr>
+                        <td>Merge</td>
+                        <td>NxMergeStatus</td>
+                        <td>NULL, JSON, SCHEMA, NO_TABLE, ARENA</td>
+                    </tr>
+                    <tr>
+                        <td>Transform</td>
+                        <td>NxXformStatus</td>
+                        <td>NULL, SCHEMA, RAW, NO_TABLE, ARENA</td>
+                    </tr>
+                    <tr>
+                        <td>Validate</td>
+                        <td>NxValidateStatus</td>
+                        <td>NULL, JSON, ARENA</td>
+                    </tr>
+                    <tr>
+                        <td>Emit</td>
+                        <td>NxEmitStatus</td>
+                        <td>NULL, JSON, NO_RECORDS, NO_LATLON, ALLOC</td>
+                    </tr>
+                    <tr>
+                        <td>Discover</td>
+                        <td>NxDiscoverStatus</td>
+                        <td>NULL, JSON, NO_TABLE, NO_ROWS, ARENA</td>
+                    </tr>
+                    <tr>
+                        <td>Diff</td>
+                        <td>NxDiffStatus</td>
+                        <td>NULL, PARSE, ARENA</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Architecture -->
+        <!-- ============================================================ -->
+        <section class="section" id="architecture">
+            <div class="section-title">Under the Hood</div>
+            <h2>Memory safety and parser hardening</h2>
+
+            <p>
+                Nexus processes untrusted input: user-uploaded spreadsheets, PDFs, and CSVs. Every parser
+                is fuzz-tested, input-bounded, and arena-allocated. No user-controlled data reaches
+                <code>malloc</code> without bounds checking.
+            </p>
+
+            <h3>Input limits</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Limit</th>
+                        <th>XLSX</th>
+                        <th>PDF</th>
+                        <th>CSV</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Max rows</td>
+                        <td>100,000</td>
+                        <td>Unlimited</td>
+                        <td>100,000</td>
+                    </tr>
+                    <tr>
+                        <td>Max columns</td>
+                        <td>1,000</td>
+                        <td>Auto-detected</td>
+                        <td>1,000</td>
+                    </tr>
+                    <tr>
+                        <td>Max file size</td>
+                        <td>100 MB</td>
+                        <td>Schema: 1 MB</td>
+                        <td>No limit</td>
+                    </tr>
+                    <tr>
+                        <td>Max sheets</td>
+                        <td>100</td>
+                        <td>N/A</td>
+                        <td>N/A</td>
+                    </tr>
+                    <tr>
+                        <td>ZIP bomb guard</td>
+                        <td style="color: var(--success)">50 MB/entry</td>
+                        <td>N/A</td>
+                        <td>N/A</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Fuzz testing</h3>
+
+            <p>
+                Three libFuzzer harnesses, all running under ASan + UBSan:
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Parser</th>
+                        <th>Fuzz Runs</th>
+                        <th>Crashes</th>
+                        <th>Coverage</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>XLSX (nx_xlsx_parse)</td>
+                        <td>364,000+</td>
+                        <td style="color: var(--success)">0</td>
+                        <td>ZIP, XML, shared strings, cell parsing</td>
+                    </tr>
+                    <tr>
+                        <td>PDF (nx_pdf_extract_tables)</td>
+                        <td>484,000+</td>
+                        <td style="color: var(--success)">0</td>
+                        <td>Y-clustering, X-gap detection, multi-page</td>
+                    </tr>
+                    <tr>
+                        <td>CSV (nx_csv_parse)</td>
+                        <td>405,000+</td>
+                        <td style="color: var(--success)">0</td>
+                        <td>RFC 4180, auto-delimiter, edge cases</td>
+                    </tr>
+                    <tr class="highlight">
+                        <td><strong>Total</strong></td>
+                        <td><strong>1,253,000+</strong></td>
+                        <td style="color: var(--success); font-weight: 600"><strong>0</strong></td>
+                        <td></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Memory model</h3>
+
+            <ul>
+                <li><strong>Arena allocation</strong> (SHArena) for all intermediate structures &mdash; 32 MB per stage</li>
+                <li><strong>Realloc-doubling</strong> for dynamic lists (shared strings, issues)</li>
+                <li><strong>No global state</strong> &mdash; all context passed through parameters</li>
+                <li><strong>No unsafe string functions</strong> &mdash; snprintf, strnlen, bounds-checked everywhere</li>
+            </ul>
+
+            <h3>Codebase</h3>
+
+            <div class="stat-row">
+                <div class="stat">
+                    <div class="stat-value">~9.4K</div>
+                    <div class="stat-label">Lines of C</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">192</div>
+                    <div class="stat-label">Tests</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value blue">13</div>
+                    <div class="stat-label">Source Files</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value">3</div>
+                    <div class="stat-label">Fuzz Harnesses</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">0</div>
+                    <div class="stat-label">Ext Dependencies</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Quick Start -->
+        <!-- ============================================================ -->
+        <section class="section" id="quickstart">
+            <div class="section-title">Quick Start</div>
+            <h2>Three ways to try Nexus</h2>
+
+            <h3>1. Browser (zero install)</h3>
+            <p>
+                The <a href="../api.html#nexus">API documentation page</a> includes a live WASM demo.
+                Drop an XLSX, PDF, or CSV file to run the full pipeline in your browser. No server, no upload,
+                no data leaves your machine.
+            </p>
+
+            <h3>2. Build from source</h3>
+            <div class="code-block">
+<pre><span class="comment"># Clone and build</span>
+<span class="command">git clone https://github.com/ottofleet/otto.git</span>
+<span class="command">cd otto && make nexus</span>
+
+<span class="comment"># Run tests (192 tests)</span>
+<span class="command">make test-nexus</span>
+
+<span class="comment"># Build CLI tools</span>
+<span class="command">make -C nexus tools</span></pre>
+            </div>
+
+            <h3>3. CLI pipeline</h3>
+            <div class="code-block">
+<pre><span class="comment"># Extract raw data from XLSX</span>
+<span class="command">./nexus/nx_pipeline depots.xlsx --raw</span>
+
+<span class="comment"># Full pipeline with schema</span>
+<span class="command">./nexus/nx_pipeline depots.xlsx \</span>
+<span class="command">  --schema nexus/schemas/gls-hu-depots-v2.json</span>
+
+<span class="comment"># Discover schema automatically</span>
+<span class="command">./nexus/nx_pipeline depots.xlsx --raw -o raw.json</span>
+<span class="command">./nexus/nx_pipeline raw.json --discover -o schema-draft.json</span>
+
+<span class="comment"># Emit as GeoJSON</span>
+<span class="command">./nexus/nx_pipeline depots.xlsx \</span>
+<span class="command">  --schema s.json --emit geojson -o depots.geojson</span>
+
+<span class="comment"># Diff against last week's data</span>
+<span class="command">./nexus/nx_pipeline depots.xlsx \</span>
+<span class="command">  --schema s.json --baseline last_week.json</span></pre>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- FAQ -->
+        <!-- ============================================================ -->
+        <section class="section" id="faq">
+            <div class="section-title">FAQ</div>
+            <h2>Common questions</h2>
+
+            <h3>Why not just use Pandas?</h3>
+            <p>
+                Pandas is excellent for ad-hoc analysis. For production pipelines that process untrusted
+                user uploads, you need input bounds enforcement, fuzz-tested parsers, structured error
+                reporting, schema-driven transforms, and change detection. Nexus gives you all of that
+                in a zero-dependency C library that compiles to WASM. Pandas requires a Python runtime
+                and doesn't run in a browser.
+            </p>
+
+            <h3>Can Nexus handle any XLSX file?</h3>
+            <p>
+                Nexus handles standard XLSX files (Office Open XML) with up to 100K rows and 1K columns.
+                It does not support: encrypted XLSX, password-protected files, files with VBA macros
+                (macros are ignored), or legacy .xls format (binary, pre-2007). For those, pre-convert
+                to .xlsx or .csv.
+            </p>
+
+            <h3>How does PDF table extraction work?</h3>
+            <p>
+                Nexus receives pre-extracted text runs (position + text) from a PDF parser.
+                It reconstructs tables by Y-alignment clustering (grouping text into rows by vertical position)
+                and X-gap column detection (identifying column boundaries by horizontal gaps).
+                Row tolerance and column gaps are auto-detected from median text height. This works well
+                for structured tables but not for free-form layouts or scanned documents.
+            </p>
+
+            <h3>What about OCR / scanned PDFs?</h3>
+            <p>
+                Nexus does not include OCR. It operates on text-based PDFs where text is extractable.
+                For scanned documents, run OCR first (Tesseract, AWS Textract, etc.) and feed the
+                text-run JSON output to Nexus. The pipeline is composable &mdash; plug in your preferred
+                OCR frontend.
+            </p>
+
+            <h3>Can I add custom compute functions?</h3>
+            <p>
+                Yes. Compute functions are registered in <code>nx_compute.c</code> via a simple function
+                pointer registry. Add a function matching the <code>NxComputeFunc</code> signature
+                (takes source strings, returns output strings) and register it with a name. The schema
+                references it by name in <code>multi_transforms</code>.
+            </p>
+
+            <h3>What license?</h3>
+            <p>
+                AGPLv3 with a Trucking Exception. If you're a trucking company using Nexus for your own
+                data processing, the exception applies. If you're embedding Nexus in a SaaS product
+                for resale, AGPL requires source disclosure &mdash; or contact us for a commercial license.
+            </p>
+        </section>
+
+        </main>
+
+        <footer>
+            <nav class="footer-links" aria-label="Footer navigation">
+                <a href="../index.html">Home</a>
+                <a href="../api.html">API Docs</a>
+                <a href="https://github.com/ottofleet/otto/blob/main/docs/roadmaps/nexus.md">Roadmap</a>
+                <a href="https://github.com/ottofleet/otto/blob/main/LICENSE">License</a>
+                <a href="https://github.com/ottofleet/otto">GitHub</a>
+            </nav>
+            <div>&copy; 2026 Mark Farkas. Built by <a href="https://artalis.io">Artalis</a>.</div>
+        </footer>
+    </div>
+</body>
+</html>
