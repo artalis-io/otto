@@ -227,3 +227,24 @@ void lp_telemetry_record_phase1_dir_stabilize_force(SimplexSolver *solver,
         solver->telemetry.perf_phase1_dir_stabilize_force_lu_health++;
     }
 }
+
+void lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(
+    SimplexSolver *solver,
+    double dir_inf_ratio) {
+    if (!solver_telemetry_enabled(solver)) return;
+
+    solver->telemetry.perf_phase1_dir_stabilize_cooldown_candidates++;
+    if (!(dir_inf_ratio > 0.0)) return;
+
+    if (dir_inf_ratio <= 3.0) {
+        solver->telemetry.perf_phase1_dir_stabilize_ratio_le_3++;
+    } else if (dir_inf_ratio <= 10.0) {
+        solver->telemetry.perf_phase1_dir_stabilize_ratio_le_10++;
+    } else if (dir_inf_ratio <= 30.0) {
+        solver->telemetry.perf_phase1_dir_stabilize_ratio_le_30++;
+    } else if (dir_inf_ratio <= 100.0) {
+        solver->telemetry.perf_phase1_dir_stabilize_ratio_le_100++;
+    } else {
+        solver->telemetry.perf_phase1_dir_stabilize_ratio_gt_100++;
+    }
+}
