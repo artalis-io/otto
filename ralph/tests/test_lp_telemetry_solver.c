@@ -78,6 +78,8 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_recompute_after_dir_refactor = 2;
     solver.telemetry.perf_phase1_recompute_after_pivot_fail_recovery = 1;
     solver.telemetry.perf_phase1_recompute_after_perturb = 5;
+    solver.telemetry.perf_phase1_recompute_rc_only_calls = 9;
+    solver.telemetry.perf_phase1_recompute_rc_guard_forced_full = 4;
     solver.policy.refactor_next_reason = RALPH_REFACTOR_REASON_SETUP;
     solver.telemetry.perf_basis_fastpath_hits = 7;
     solver.policy.periodic_feedback_bias_phase2 = 0.2;
@@ -136,6 +138,10 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 recompute pivot fail recovery");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_perturb, 0,
                   "reset: phase1 recompute perturb");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_rc_only_calls, 0,
+                  "reset: phase1 recompute rc-only calls");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_rc_guard_forced_full, 0,
+                  "reset: phase1 recompute rc-only guard forced");
     ASSERT_INT_EQ(solver.policy.refactor_next_reason, RALPH_REFACTOR_REASON_OTHER,
                   "reset: next reason");
     ASSERT_INT_EQ(solver.telemetry.perf_basis_fastpath_hits, 0, "reset: basis_fastpath_hits");
@@ -270,6 +276,13 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 recompute pivot fail recovery");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_perturb, 2,
                   "record: phase1 recompute perturb");
+    lp_telemetry_record_phase1_recompute_rc_only(&solver);
+    lp_telemetry_record_phase1_recompute_rc_only(&solver);
+    lp_telemetry_record_phase1_recompute_guard_forced_full(&solver);
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_rc_only_calls, 2,
+                  "record: phase1 recompute rc-only calls");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_rc_guard_forced_full, 1,
+                  "record: phase1 recompute rc-only guard forced");
 }
 
 static void test_refactor_reason_classifier(void) {
@@ -311,6 +324,8 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_recompute_after_dir_refactor = 5;
     solver.telemetry.perf_phase1_recompute_after_pivot_fail_recovery = 4;
     solver.telemetry.perf_phase1_recompute_after_perturb = 3;
+    solver.telemetry.perf_phase1_recompute_rc_only_calls = 11;
+    solver.telemetry.perf_phase1_recompute_rc_guard_forced_full = 2;
     solver.policy.periodic_feedback_hint_pressure_phase2 = 0.55;
     solver.policy.soft_lu_cost_gate_enabled = 1;
     solver.policy.soft_lu_cost_gate_defers_phase1 = 3;
@@ -372,6 +387,10 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 recompute pivot fail recovery");
     ASSERT_INT_EQ(snap.perf_phase1_recompute_after_perturb, 3,
                   "solver_snapshot: phase1 recompute perturb");
+    ASSERT_INT_EQ(snap.perf_phase1_recompute_rc_only_calls, 11,
+                  "solver_snapshot: phase1 recompute rc-only calls");
+    ASSERT_INT_EQ(snap.perf_phase1_recompute_rc_guard_forced_full, 2,
+                  "solver_snapshot: phase1 recompute rc-only guard forced");
     ASSERT_DBL_EQ(snap.periodic_feedback_hint_pressure_phase2, 0.55,
                   "solver_snapshot: feedback pressure phase2");
     ASSERT_INT_EQ(snap.soft_lu_cost_gate_enabled, 1,

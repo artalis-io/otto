@@ -260,6 +260,8 @@ typedef struct {
     int phase1_recompute_after_dir_refactor;
     int phase1_recompute_after_pivot_fail_recovery;
     int phase1_recompute_after_perturb;
+    int phase1_recompute_rc_only_calls;
+    int phase1_recompute_rc_guard_forced_full;
 
     double phase2_pricing_ms;
     double phase2_ratio_ms;
@@ -839,6 +841,10 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_recompute_after_pivot_fail_recovery;
             result.phase1_recompute_after_perturb =
                 solver_tel.perf_phase1_recompute_after_perturb;
+            result.phase1_recompute_rc_only_calls =
+                solver_tel.perf_phase1_recompute_rc_only_calls;
+            result.phase1_recompute_rc_guard_forced_full =
+                solver_tel.perf_phase1_recompute_rc_guard_forced_full;
 
             result.phase2_pricing_ms = solver_tel.perf_phase2_pricing_ms;
             result.phase2_ratio_ms = solver_tel.perf_phase2_ratio_ms;
@@ -1785,6 +1791,10 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_recompute_after_pivot_fail_recovery);
     fprintf(out, "      \"recompute_after_perturb\": %d,\n",
             ralph->phase1_recompute_after_perturb);
+    fprintf(out, "      \"recompute_rc_only_calls\": %d,\n",
+            ralph->phase1_recompute_rc_only_calls);
+    fprintf(out, "      \"recompute_rc_guard_forced_full\": %d,\n",
+            ralph->phase1_recompute_rc_guard_forced_full);
     fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase1_compute_solution_calls);
     fprintf(out, "      \"compute_reduced_costs_calls\": %d\n", ralph->phase1_compute_rc_calls);
     fprintf(out, "    },\n");
@@ -1858,6 +1868,10 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_recompute_after_pivot_fail_recovery);
     fprintf(out, "    \"phase1_recompute_after_perturb\": %d,\n",
             ralph->phase1_recompute_after_perturb);
+    fprintf(out, "    \"phase1_recompute_rc_only_calls\": %d,\n",
+            ralph->phase1_recompute_rc_only_calls);
+    fprintf(out, "    \"phase1_recompute_rc_guard_forced_full\": %d,\n",
+            ralph->phase1_recompute_rc_guard_forced_full);
     fprintf(out, "    \"reason_infeasibility_cleanup\": %d,\n", ralph->refactor_reason_infeas_cleanup);
     fprintf(out, "    \"reason_other\": %d,\n", ralph->refactor_reason_other);
     fprintf(out, "    \"periodic_policy_count\": %d,\n", ralph->refactor_periodic_policy);

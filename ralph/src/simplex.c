@@ -128,6 +128,7 @@ typedef enum {
 #define PHASE1_STALL_THRESHOLD_DEFAULT 50
 #define PHASE1_STALL_THRESHOLD_LARGE 30
 #define PHASE1_NO_ENTERING_CLEANUP_MAX_ITERS 128
+#define PHASE1_RC_ONLY_STREAK_GUARD 6
 #define PHASE1_AUTO_DANTZIG_MIN_M 700
 #define PHASE1_AUTO_DANTZIG_MAX_M 1200
 #define PHASE1_AUTO_DANTZIG_DEGEN_TRIGGER 20
@@ -3209,6 +3210,41 @@ static void phase1_exclude_entering_var(int var,
     }
 }
 
+static void phase1_recompute_full_with_reason(SimplexSolver *solver,
+                                              SimplexTableau *tab,
+                                              int *rc_only_streak,
+                                              LPPhase1RecomputeReason reason) {
+    /* Full recompute is required after basis/LU/perturbation state changes. */
+    tableau_compute_solution(tab);
+    tableau_compute_reduced_costs(tab);
+    if (rc_only_streak) *rc_only_streak = 0;
+    lp_telemetry_record_phase1_recompute(solver, reason);
+}
+
+static void phase1_recompute_full_no_reason(SimplexSolver *solver,
+                                            SimplexTableau *tab,
+                                            int *rc_only_streak) {
+    tableau_compute_solution(tab);
+    tableau_compute_reduced_costs(tab);
+    if (rc_only_streak) *rc_only_streak = 0;
+    (void)solver;
+}
+
+static void phase1_recompute_rc_only_guarded(SimplexSolver *solver,
+                                             SimplexTableau *tab,
+                                             int *rc_only_streak) {
+    /* RC-only refresh is safe only while basis/LU and primal x are unchanged.
+     * Guard long RC-only streaks with a forced full recompute to bound drift. */
+    if (rc_only_streak && *rc_only_streak >= PHASE1_RC_ONLY_STREAK_GUARD) {
+        lp_telemetry_record_phase1_recompute_guard_forced_full(solver);
+        phase1_recompute_full_no_reason(solver, tab, rc_only_streak);
+        return;
+    }
+    tableau_compute_reduced_costs(tab);
+    lp_telemetry_record_phase1_recompute_rc_only(solver);
+    if (rc_only_streak) (*rc_only_streak)++;
+}
+
 int pricing_steepest_edge(SimplexTableau *tab, int *entering) {
     /* Steepest edge pricing: max |rc_j| / sqrt(gamma_j)
      * Uses exact weights updated with the formula:
@@ -4954,6 +4990,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     int dir_stabilize_repeat_count = 0;
     int dir_stabilize_moderate_defer_pending = 0;
     int no_entering_cleanup_streak = 0;
+    int phase1_rc_only_streak = 0;
     int periodic_policy_cooldown = 0;
     double periodic_policy_pressure_decay = 0.0;
     int lu_soft_health_streak = 0;
@@ -4974,8 +5011,10 @@ static int simplex_phase1(SimplexSolver *solver) {
             LP_LOG_STDERR("[simplex_phase1] Proactive perturbation: %d equalities out of %d constraints (%.0f%%)\n",
                     tab->num_equalities, tab->m, 100.0 * tab->num_equalities / tab->m);
         }
-        tableau_compute_solution(tab);
-        lp_telemetry_record_phase1_recompute(solver, LP_PHASE1_RECOMPUTE_REASON_PERTURB);
+        phase1_recompute_full_with_reason(solver,
+                                          tab,
+                                          &phase1_rc_only_streak,
+                                          LP_PHASE1_RECOMPUTE_REASON_PERTURB);
     }
 
     /* Compute initial reduced costs */
@@ -5140,7 +5179,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 if (solver->verbose) {
                     LP_LOG_STDERR("[simplex_phase1] Cleanup phase: art_sum=%g, continuing...\n", art_sum);
                 }
-                tableau_compute_reduced_costs(tab);
+                phase1_recompute_rc_only_guarded(solver, tab, &phase1_rc_only_streak);
                 continue;  /* Try more iterations to drive artificials to zero */
             }
 
@@ -5171,16 +5210,17 @@ static int simplex_phase1(SimplexSolver *solver) {
             /* "Unbounded" in Phase 1 is typically numerical, not structural.
              * Try to recover via refactorization and conservative pricing first. */
             if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_RATIO_RECOVERY) == 0) {
-                tableau_compute_solution(tab);
-                tableau_compute_reduced_costs(tab);
-                lp_telemetry_record_phase1_recompute(
-                    solver, LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
                 use_bland = 1;
                 continue;
             }
             if (!use_bland) {
                 use_bland = 1;
-                tableau_compute_reduced_costs(tab);
+                phase1_recompute_rc_only_guarded(solver, tab, &phase1_rc_only_streak);
                 continue;
             }
 
@@ -5193,10 +5233,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                             marked);
                 }
                 if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP) == 0) {
-                    tableau_compute_solution(tab);
-                    tableau_compute_reduced_costs(tab);
-                    lp_telemetry_record_phase1_recompute(
-                        solver, LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
+                    phase1_recompute_full_with_reason(
+                        solver,
+                        tab,
+                        &phase1_rc_only_streak,
+                        LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
                     continue;
                 }
             }
@@ -5207,10 +5248,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                 if (solver->verbose) {
                     LP_LOG_STDERR("[simplex_phase1] Dual rescue recovered after ratio-test breakdown at iter %d\n", iter);
                 }
-                tableau_compute_solution(tab);
-                tableau_compute_reduced_costs(tab);
-                lp_telemetry_record_phase1_recompute(
-                    solver, LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
                 ratio_breakdown_count = 0;
                 continue;
             }
@@ -5234,10 +5276,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                             ratio_breakdown_count, entering, RALPH_PHASE1_ENTERING_EXCLUDE_ITERS);
                 }
                 use_bland = 1;
-                tableau_compute_solution(tab);
-                tableau_compute_reduced_costs(tab);
-                lp_telemetry_record_phase1_recompute(
-                    solver, LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
                 continue;
             }
 
@@ -5305,10 +5348,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                                             &excluded_entering_b,
                                             &excluded_entering_ttl_b);
                 use_bland = 1;
-                tableau_compute_solution(tab);
-                tableau_compute_reduced_costs(tab);
-                lp_telemetry_record_phase1_recompute(
-                    solver, LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
                 continue;
             }
 
@@ -5328,10 +5372,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                                             &excluded_entering_b,
                                             &excluded_entering_ttl_b);
                 use_bland = 1;
-                tableau_compute_solution(tab);
-                tableau_compute_reduced_costs(tab);
-                lp_telemetry_record_phase1_recompute(
-                    solver, LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
                 continue;
             }
             dir_stabilize_moderate_defer_pending = 0;
@@ -5351,10 +5396,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                 if (ratio_status != 0) {
                     phase1_trace_record_no_entering(solver, iter, ratio_status);
                     use_bland = 1;
-                    tableau_compute_solution(tab);
-                    tableau_compute_reduced_costs(tab);
-                    lp_telemetry_record_phase1_recompute(
-                        solver, LP_PHASE1_RECOMPUTE_REASON_DIR_REFACTOR);
+                    phase1_recompute_full_with_reason(
+                        solver,
+                        tab,
+                        &phase1_rc_only_streak,
+                        LP_PHASE1_RECOMPUTE_REASON_DIR_REFACTOR);
                     continue;
                 }
 
@@ -5399,10 +5445,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                                             &excluded_entering_ttl_b);
                 dir_stabilize_cooldown = dir_stabilize_cooldown_target;
                 use_bland = 1;
-                tableau_compute_solution(tab);
-                tableau_compute_reduced_costs(tab);
-                lp_telemetry_record_phase1_recompute(
-                    solver, LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
                 continue;
             }
             dir_stabilize_cooldown = dir_stabilize_cooldown_target;
@@ -5518,17 +5565,19 @@ static int simplex_phase1(SimplexSolver *solver) {
             /* simplex_pivot can leave basis/LU partially updated on failure.
              * Try the same recovery ladder used in Phase 2. */
             if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY) == 0) {
-                tableau_compute_solution(tab);
-                tableau_compute_reduced_costs(tab);
-                lp_telemetry_record_phase1_recompute(
-                    solver, LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY);
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY);
                 continue;
             }
             if (repair_singular_basis(tab) == 0) {
-                tableau_compute_solution(tab);
-                tableau_compute_reduced_costs(tab);
-                lp_telemetry_record_phase1_recompute(
-                    solver, LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY);
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY);
                 continue;
             }
 
@@ -5547,10 +5596,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                                 leaving, leave_var);
                     }
                     if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY) == 0) {
-                        tableau_compute_solution(tab);
-                        tableau_compute_reduced_costs(tab);
-                        lp_telemetry_record_phase1_recompute(
-                            solver, LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY);
+                        phase1_recompute_full_with_reason(
+                            solver,
+                            tab,
+                            &phase1_rc_only_streak,
+                            LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY);
                         continue;
                     }
                 }
@@ -5566,10 +5616,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                             marked);
                 }
                 if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY) == 0) {
-                    tableau_compute_solution(tab);
-                    tableau_compute_reduced_costs(tab);
-                    lp_telemetry_record_phase1_recompute(
-                        solver, LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY);
+                    phase1_recompute_full_with_reason(
+                        solver,
+                        tab,
+                        &phase1_rc_only_streak,
+                        LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY);
                     continue;
                 }
             }
@@ -5581,10 +5632,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                 if (solver->verbose) {
                     LP_LOG_STDERR("[simplex_phase1] Dual rescue restored feasibility progress at iter %d\n", iter);
                 }
-                tableau_compute_solution(tab);
-                tableau_compute_reduced_costs(tab);
-                lp_telemetry_record_phase1_recompute(
-                    solver, LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY);
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY);
                 fail_reason = PHASE1_PIVOT_FAIL_NONE;
                 fail_repeat_count = 0;
                 continue;
@@ -5610,6 +5662,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         fail_repeat_count = 0;
         ratio_breakdown_count = 0;
         dir_stabilize_moderate_defer_pending = 0;
+        phase1_rc_only_streak = 0;
         excluded_entering_a = -1;
         excluded_entering_ttl_a = 0;
         excluded_entering_b = -1;
@@ -5632,10 +5685,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                     use_bland = 0;
                     degenerate_count = 0;
                     stall_count_p1 = 0;
-                    tableau_compute_solution(tab);
-                    tableau_compute_reduced_costs(tab);
-                    lp_telemetry_record_phase1_recompute(
-                        solver, LP_PHASE1_RECOMPUTE_REASON_PERTURB);
+                    phase1_recompute_full_with_reason(
+                        solver,
+                        tab,
+                        &phase1_rc_only_streak,
+                        LP_PHASE1_RECOMPUTE_REASON_PERTURB);
                     if (phase1_pricing_strategy == 4) heap_build(tab);
                     if (solver->verbose) {
                         LP_LOG_STDERR("[simplex_phase1] Stall detected, re-perturbing (attempt %d, scale %.1f)\n",

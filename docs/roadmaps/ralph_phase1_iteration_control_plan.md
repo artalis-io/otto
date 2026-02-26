@@ -31,7 +31,7 @@ Reduce Phase-1 wall time on degenerate NETLIB outliers by cutting unnecessary fu
     - `perturb_recompute`
   - Export counters via solver telemetry snapshot and benchmark JSON.
   - Add/extend unit tests in `ralph/tests/test_lp_telemetry_solver.c`.
-- [ ] P1-B Recompute taxonomy and guardrails.
+- [x] P1-B Recompute taxonomy and guardrails.
   - Map all Phase-1 `tableau_compute_solution` and `tableau_compute_reduced_costs` call sites by cause.
   - Define safe RC-only vs full recompute invariants (per cause class).
   - Add assertions/telemetry guards to prevent stale-state drift.
@@ -59,6 +59,19 @@ Reduce Phase-1 wall time on degenerate NETLIB outliers by cutting unnecessary fu
   - Exported counters in benchmark JSON.
   - Validation:
     - `make -C ralph test-lp-telemetry-solver` PASS (`117/117`)
+    - `make -C ralph test-simplex-policy` PASS (`48/48`)
+    - `make -C ralph build-ralph-benchmark` PASS
+    - Single-file smoke output verified on `ralph/benchmarks/netlib/afiro.mps`.
+- [x] 2026-02-26: P1-B implemented (taxonomy + guardrails).
+  - Added explicit RC-only recompute telemetry:
+    - `phase1_recompute_rc_only_calls`
+    - `phase1_recompute_rc_guard_forced_full`
+  - Added Phase-1 recompute helpers in `simplex.c` to codify invariants:
+    - full recompute after basis/LU/perturbation state change
+    - guarded RC-only recompute when basis/LU/primal state are unchanged
+  - Added RC-only streak guard (`PHASE1_RC_ONLY_STREAK_GUARD=6`) to force full recompute and bound drift.
+  - Validation:
+    - `make -C ralph test-lp-telemetry-solver` PASS (`123/123`)
     - `make -C ralph test-simplex-policy` PASS (`48/48`)
     - `make -C ralph build-ralph-benchmark` PASS
     - Single-file smoke output verified on `ralph/benchmarks/netlib/afiro.mps`.
