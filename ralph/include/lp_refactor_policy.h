@@ -69,6 +69,10 @@ int lp_refactor_policy_phase1_dir_stabilize_cooldown_updates(int m,
                                                              int degenerate_count,
                                                              int repeat_streak);
 
+int lp_refactor_policy_phase1_dir_stabilize_force_extreme_ratio(
+    double dir_inf_ratio,
+    int cooldown_active);
+
 LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(
     int m,
     int use_ft_updates,

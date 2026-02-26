@@ -71,6 +71,8 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_dir_stabilize_ratio_le_30 = 2;
     solver.telemetry.perf_phase1_dir_stabilize_ratio_le_100 = 1;
     solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_100 = 1;
+    solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_300 = 1;
+    solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_1000 = 1;
     solver.policy.refactor_next_reason = RALPH_REFACTOR_REASON_SETUP;
     solver.telemetry.perf_basis_fastpath_hits = 7;
     solver.policy.periodic_feedback_bias_phase2 = 0.2;
@@ -115,6 +117,10 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 dir ratio <=100");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_100, 0,
                   "reset: phase1 dir ratio >100");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_300, 0,
+                  "reset: phase1 dir ratio >300");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_1000, 0,
+                  "reset: phase1 dir ratio >1000");
     ASSERT_INT_EQ(solver.policy.refactor_next_reason, RALPH_REFACTOR_REASON_OTHER,
                   "reset: next reason");
     ASSERT_INT_EQ(solver.telemetry.perf_basis_fastpath_hits, 0, "reset: basis_fastpath_hits");
@@ -213,7 +219,9 @@ static void test_solver_reset_and_refactor_accounting(void) {
     lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(&solver, 20.0);
     lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(&solver, 70.0);
     lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(&solver, 140.0);
-    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_cooldown_candidates, 5,
+    lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(&solver, 350.0);
+    lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(&solver, 1400.0);
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_cooldown_candidates, 7,
                   "record: phase1 dir cooldown candidate count");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_ratio_le_3, 1,
                   "record: phase1 dir ratio <=3 count");
@@ -223,8 +231,12 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 dir ratio <=30 count");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_ratio_le_100, 1,
                   "record: phase1 dir ratio <=100 count");
-    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_100, 1,
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_100, 3,
                   "record: phase1 dir ratio >100 count");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_300, 2,
+                  "record: phase1 dir ratio >300 count");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_1000, 1,
+                  "record: phase1 dir ratio >1000 count");
 }
 
 static void test_refactor_reason_classifier(void) {
@@ -259,6 +271,8 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_dir_stabilize_ratio_le_30 = 3;
     solver.telemetry.perf_phase1_dir_stabilize_ratio_le_100 = 4;
     solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_100 = 2;
+    solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_300 = 1;
+    solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_1000 = 1;
     solver.policy.periodic_feedback_hint_pressure_phase2 = 0.55;
     solver.policy.soft_lu_cost_gate_enabled = 1;
     solver.policy.soft_lu_cost_gate_defers_phase1 = 3;
@@ -306,6 +320,10 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 dir ratio <=100");
     ASSERT_INT_EQ(snap.perf_phase1_dir_stabilize_ratio_gt_100, 2,
                   "solver_snapshot: phase1 dir ratio >100");
+    ASSERT_INT_EQ(snap.perf_phase1_dir_stabilize_ratio_gt_300, 1,
+                  "solver_snapshot: phase1 dir ratio >300");
+    ASSERT_INT_EQ(snap.perf_phase1_dir_stabilize_ratio_gt_1000, 1,
+                  "solver_snapshot: phase1 dir ratio >1000");
     ASSERT_DBL_EQ(snap.periodic_feedback_hint_pressure_phase2, 0.55,
                   "solver_snapshot: feedback pressure phase2");
     ASSERT_INT_EQ(snap.soft_lu_cost_gate_enabled, 1,
