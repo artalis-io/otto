@@ -1,5 +1,5 @@
 {
-  "source_commit": "ece147e",
+  "source_commit": "4eecb44",
   "description": "Known NETLIB gate baseline for no-regression checks",
   "defaults": {
     "hard_cap_sec": 20,
@@ -44,7 +44,6 @@
     "scagr25.mps"
   ],
   "known_timeouts": [
-    "beaconfd.mps",
     "bnl1.mps",
     "bnl2.mps",
     "bore3d.mps",
@@ -55,7 +54,6 @@
     "degen3.mps",
     "fffff800.mps",
     "fit2p.mps",
-    "forplan.mps",
     "greenbea.mps",
     "greenbeb.mps",
     "maros-r7.mps",
@@ -67,7 +65,6 @@
     "pilot4.mps",
     "pilot87.mps",
     "pilotnov.mps",
-    "share1b.mps",
     "stair.mps",
     "stocfor2.mps",
     "wood1p.mps",
