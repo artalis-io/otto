@@ -18,7 +18,8 @@ SURGE_SRC = $(wildcard ../src/*.c)
 ARBOR_SRC = $(wildcard ../../arbor/src/*.c)
 # Shared sources needed by Surge
 SHARED_SRC = ../../shared/src/sh_json.c ../../shared/src/sh_arena.c \
-             ../../shared/src/sh_hashmap.c
+             ../../shared/src/sh_hashmap.c ../../shared/src/sh_dist.c \
+             ../../shared/src/sh_stepfunc.c
 WASM_SRC = src/sg_wasm.c
 
 # All source files (low-level API)
@@ -56,7 +57,7 @@ API_EXPORTS += ,_surge_api_handle,_surge_api_solve
 API_EXPORTS += ,_surge_response_status,_surge_response_content_type
 API_EXPORTS += ,_surge_response_body,_surge_response_body_len
 API_EXPORTS += ,_surge_api_version_string
-API_EXPORTS += ,_wasm_malloc,_wasm_free,_malloc,_free
+API_EXPORTS += ,_malloc,_free
 
 .PHONY: all clean check-emcc api-demo test-api
 
