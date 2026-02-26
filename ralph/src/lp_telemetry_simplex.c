@@ -289,3 +289,13 @@ void lp_telemetry_record_phase1_recompute_guard_forced_full(SimplexSolver *solve
     if (!solver_telemetry_enabled(solver)) return;
     solver->telemetry.perf_phase1_recompute_rc_guard_forced_full++;
 }
+
+void lp_telemetry_record_phase1_ratio_breakdown_retry(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_ratio_breakdown_retries++;
+}
+
+void lp_telemetry_record_phase1_ratio_breakdown_escalation(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_ratio_breakdown_escalations++;
+}

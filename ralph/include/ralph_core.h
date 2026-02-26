@@ -539,6 +539,8 @@ typedef struct {
     int perf_phase1_recompute_after_perturb;
     int perf_phase1_recompute_rc_only_calls;
     int perf_phase1_recompute_rc_guard_forced_full;
+    int perf_phase1_ratio_breakdown_retries;
+    int perf_phase1_ratio_breakdown_escalations;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;

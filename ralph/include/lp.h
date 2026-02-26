@@ -614,6 +614,8 @@ typedef struct {
     int perf_phase1_recompute_after_perturb;
     int perf_phase1_recompute_rc_only_calls;
     int perf_phase1_recompute_rc_guard_forced_full;
+    int perf_phase1_ratio_breakdown_retries;
+    int perf_phase1_ratio_breakdown_escalations;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -867,6 +869,8 @@ typedef struct {
     int perf_phase1_recompute_after_perturb;
     int perf_phase1_recompute_rc_only_calls;
     int perf_phase1_recompute_rc_guard_forced_full;
+    int perf_phase1_ratio_breakdown_retries;
+    int perf_phase1_ratio_breakdown_escalations;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -1262,6 +1266,8 @@ void lp_telemetry_record_phase1_recompute(SimplexSolver *solver,
                                           LPPhase1RecomputeReason reason);
 void lp_telemetry_record_phase1_recompute_rc_only(SimplexSolver *solver);
 void lp_telemetry_record_phase1_recompute_guard_forced_full(SimplexSolver *solver);
+void lp_telemetry_record_phase1_ratio_breakdown_retry(SimplexSolver *solver);
+void lp_telemetry_record_phase1_ratio_breakdown_escalation(SimplexSolver *solver);
 void lp_telemetry_lu_record_dense_factorize_ms(LUFactorization *lu,
                                                double elapsed_ms);
 void lp_telemetry_lu_record_dense_factorize_timed(LUFactorization *lu,
