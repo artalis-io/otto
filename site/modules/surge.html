@@ -1,0 +1,1793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Surge — Rich VRP Solver | OTTO</title>
+    <meta name="description" content="Surge is a rich Vehicle Routing Problem solver written in C with zero dependencies. ALNS metaheuristic, 25+ constraint types, WASM-compilable, BKS-competitive benchmarks.">
+
+    <!-- SEO -->
+    <link rel="canonical" href="https://ottofleet.io/modules/surge.html">
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#0a0a0a">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="Surge — Rich VRP Solver | OTTO">
+    <meta property="og:description" content="Zero-dependency VRP optimization kernel. 25+ constraint types, BKS-competitive quality, runs in a browser or on the edge. Written in C, compiles to WASM.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://ottofleet.io/modules/surge.html">
+    <meta property="og:site_name" content="OTTO">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%230a0a0a'/%3E%3Ctext x='50' y='68' font-family='ui-monospace,monospace' font-size='60' font-weight='700' fill='%233b82f6' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
+
+    <!-- Shared Styles -->
+    <link rel="stylesheet" href="../style.css">
+
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Surge",
+        "alternateName": "OTTO Surge VRP Solver",
+        "description": "Rich Vehicle Routing Problem solver. ALNS metaheuristic with 25+ constraint types, zero external dependencies, compiles to WebAssembly.",
+        "url": "https://ottofleet.io/modules/surge.html",
+        "applicationCategory": "BusinessApplication",
+        "operatingSystem": "Cross-platform (WASM, Linux, macOS)",
+        "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+        "author": {
+            "@type": "Person",
+            "name": "Mark Farkas"
+        }
+    }
+    </script>
+
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --bg-secondary: #141414;
+            --bg-tertiary: #1a1a1a;
+            --text: #e5e5e5;
+            --text-muted: #9ca3af;
+            --accent: #3b82f6;
+            --accent-dim: #1e40af;
+            --border: #2a2a2a;
+            --success: #22c55e;
+            --warning: #eab308;
+            --error: #ef4444;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'Segoe UI Mono', Menlo, Monaco, Consolas, monospace;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            font-size: 15px;
+        }
+
+        a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Header */
+        header {
+            padding: 48px 0 32px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .logo {
+            font-size: 32px;
+            font-weight: 700;
+            letter-spacing: 4px;
+            color: var(--text);
+            animation: logo-electric 4s infinite;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.1);
+        }
+
+        .logo span {
+            color: var(--accent);
+        }
+
+        @keyframes logo-electric {
+            0%, 100% {
+                text-shadow:
+                    0 0 10px rgba(255, 255, 255, 0.15),
+                    0 0 20px rgba(255, 255, 255, 0.05);
+                transform: translate(0, 0);
+                filter: brightness(1);
+            }
+            5% {
+                text-shadow:
+                    -1px 0 rgba(255, 100, 100, 0.5),
+                    1px 0 rgba(100, 180, 255, 0.5),
+                    0 0 10px rgba(255, 255, 255, 0.2);
+                transform: translate(0.5px, 0);
+            }
+            10% {
+                text-shadow:
+                    0 0 10px rgba(255, 255, 255, 0.15);
+                transform: translate(0, 0);
+            }
+            30% {
+                text-shadow:
+                    -2px 0 rgba(255, 60, 60, 0.6),
+                    2px 0 rgba(60, 180, 255, 0.6),
+                    0 0 20px rgba(255, 255, 255, 0.3);
+                transform: translate(1px, 0) skewX(0.5deg);
+                filter: brightness(1.15);
+            }
+            31% {
+                text-shadow:
+                    2px 0 rgba(255, 60, 60, 0.5),
+                    -2px 0 rgba(60, 180, 255, 0.5),
+                    0 0 15px rgba(255, 255, 255, 0.2);
+                transform: translate(-0.5px, 0.3px) skewX(-0.3deg);
+            }
+            33% {
+                text-shadow:
+                    0 0 10px rgba(255, 255, 255, 0.15);
+                transform: translate(0, 0);
+                filter: brightness(1);
+            }
+            55% {
+                text-shadow:
+                    0.5px 0 rgba(255, 150, 150, 0.3),
+                    -0.5px 0 rgba(150, 200, 255, 0.3),
+                    0 0 10px rgba(255, 255, 255, 0.15);
+            }
+            60% {
+                text-shadow:
+                    0 0 10px rgba(255, 255, 255, 0.15),
+                    0 0 20px rgba(255, 255, 255, 0.05);
+            }
+            75% {
+                text-shadow:
+                    -1.5px 0 rgba(255, 80, 80, 0.5),
+                    1.5px 0 rgba(80, 180, 255, 0.5),
+                    0 0 15px rgba(255, 255, 255, 0.25);
+                transform: translate(0.6px, -0.2px);
+                filter: brightness(1.1);
+            }
+            77% {
+                text-shadow:
+                    0 0 10px rgba(255, 255, 255, 0.15);
+                transform: translate(0, 0);
+                filter: brightness(1);
+            }
+            92% { filter: brightness(0.95); }
+            93% { filter: brightness(1.08); }
+            94% { filter: brightness(1); }
+        }
+
+        .tagline {
+            margin-top: 8px;
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        .header-nav {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .nav-group {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .nav-separator {
+            color: var(--border);
+            font-weight: 300;
+            align-self: center;
+        }
+
+        .header-nav a {
+            padding: 6px 12px;
+            font-size: 13px;
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            text-decoration: none;
+        }
+
+        .header-nav a:hover {
+            color: var(--text);
+            border-color: var(--accent-dim);
+            text-decoration: none;
+        }
+
+        .header-nav a.active {
+            color: var(--accent);
+            border-color: var(--accent);
+        }
+
+        /* Hero */
+        .hero {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .hero h1 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .hero p {
+            color: var(--text-muted);
+            max-width: 700px;
+        }
+
+        .badges {
+            margin-top: 24px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .badge.green { border-color: var(--success); color: var(--success); }
+        .badge.blue { border-color: var(--accent); color: var(--accent); }
+        .badge.yellow { border-color: var(--warning); color: var(--warning); }
+
+        /* Section styling */
+        .section {
+            padding: 48px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--text-muted);
+            margin-bottom: 24px;
+        }
+
+        .section h2 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .section h3 {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            margin-top: 32px;
+        }
+
+        .section h3:first-child {
+            margin-top: 0;
+        }
+
+        .section p {
+            color: var(--text-muted);
+            margin-bottom: 16px;
+            max-width: 800px;
+        }
+
+        .section p strong {
+            color: var(--text);
+        }
+
+        .section ul {
+            color: var(--text-muted);
+            margin-bottom: 16px;
+            padding-left: 24px;
+        }
+
+        .section ul li {
+            margin-bottom: 6px;
+        }
+
+        .section ul li strong {
+            color: var(--text);
+        }
+
+        /* Code Block - Terminal CRT style */
+        .code-block {
+            background: linear-gradient(135deg, #0a0a0a 0%, #141414 100%);
+            border: 1px solid #2a2a2a;
+            border-radius: 6px;
+            padding: 20px;
+            overflow-x: auto;
+            position: relative;
+            overflow: hidden;
+            margin-bottom: 16px;
+        }
+
+        .code-block::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(255, 255, 255, 0.02) 0px,
+                rgba(255, 255, 255, 0.02) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+        }
+
+        .code-block pre {
+            margin: 0;
+            font-size: 13px;
+            font-family: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+            position: relative;
+            z-index: 1;
+            animation: crt-flicker-gray 5s infinite;
+        }
+
+        .code-block .comment {
+            color: #707070;
+            text-shadow: 0 0 5px rgba(150, 150, 150, 0.2);
+        }
+
+        .code-block .command {
+            color: #50c878;
+            text-shadow:
+                0 0 5px rgba(80, 200, 120, 0.4),
+                0 0 10px rgba(80, 200, 120, 0.2);
+        }
+
+        .code-block .keyword {
+            color: #60a5fa;
+            text-shadow: 0 0 5px rgba(96, 165, 250, 0.3);
+        }
+
+        .code-block .type {
+            color: #a78bfa;
+            text-shadow: 0 0 5px rgba(167, 139, 250, 0.3);
+        }
+
+        .code-block .string {
+            color: #fbbf24;
+            text-shadow: 0 0 5px rgba(251, 191, 36, 0.3);
+        }
+
+        .code-block .number {
+            color: #34d399;
+            text-shadow: 0 0 5px rgba(52, 211, 153, 0.3);
+        }
+
+        .code-block .func {
+            color: #f0abfc;
+            text-shadow: 0 0 5px rgba(240, 171, 252, 0.3);
+        }
+
+        @keyframes crt-flicker-gray {
+            0%, 100% { opacity: 1; }
+            94% { opacity: 1; }
+            95% { opacity: 0.97; }
+            96% { opacity: 1; }
+        }
+
+        /* ASCII Architecture */
+        .ascii-art {
+            background: linear-gradient(135deg, #1a1a1a 0%, #222 100%);
+            border: 1px solid #333;
+            border-radius: 6px;
+            padding: 24px;
+            overflow-x: auto;
+            font-size: 13px;
+            line-height: 1.3;
+            position: relative;
+            overflow: hidden;
+            margin-bottom: 16px;
+        }
+
+        .ascii-art::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(255, 255, 255, 0.03) 0px,
+                rgba(255, 255, 255, 0.03) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+        }
+
+        .ascii-art pre {
+            margin: 0;
+            font-family: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+            color: #a0a0a0;
+            text-shadow:
+                0 0 5px rgba(200, 200, 200, 0.3),
+                0 0 10px rgba(200, 200, 200, 0.1);
+            position: relative;
+            z-index: 1;
+            animation: crt-flicker-gray 5s infinite;
+            letter-spacing: 0;
+            word-spacing: 0;
+            font-variant-ligatures: none;
+            font-feature-settings: "calt" 0;
+            line-height: 1;
+        }
+
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin-bottom: 24px;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            color: var(--text-muted);
+            font-weight: 500;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            white-space: nowrap;
+        }
+
+        td {
+            color: var(--text-muted);
+        }
+
+        td:first-child {
+            color: var(--text);
+            font-weight: 500;
+        }
+
+        /* Comparison table cell markers */
+        .y { color: var(--success); font-weight: 600; }
+        .p { color: var(--warning); }
+        .n { color: #555; }
+        .q { color: #555; font-style: italic; }
+
+        .table-scroll {
+            overflow-x: auto;
+            margin-bottom: 24px;
+        }
+
+        .table-scroll table {
+            min-width: 800px;
+            margin-bottom: 0;
+        }
+
+        .table-legend {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+        }
+
+        .table-legend span {
+            margin-right: 16px;
+        }
+
+        /* Grade cells */
+        .grade-a { color: var(--success); font-weight: 600; }
+        .grade-b { color: #60a5fa; }
+        .grade-c { color: var(--warning); }
+        .grade-d { color: var(--error); }
+
+        /* Highlight row */
+        tr.highlight td {
+            background: rgba(59, 130, 246, 0.05);
+        }
+
+        tr.highlight td:first-child {
+            color: var(--accent);
+        }
+
+        /* Feature Grid */
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        .feature-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 20px;
+        }
+
+        .feature-card:hover {
+            border-color: var(--accent-dim);
+        }
+
+        .feature-card-title {
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+
+        .feature-card-desc {
+            color: var(--text-muted);
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .feature-card-count {
+            font-size: 12px;
+            color: var(--accent);
+            margin-top: 8px;
+        }
+
+        /* Stat row */
+        .stat-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .stat-value.green { color: var(--success); }
+        .stat-value.blue { color: var(--accent); }
+        .stat-value.yellow { color: var(--warning); }
+
+        .stat-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: 4px;
+        }
+
+        /* Callout box */
+        .callout {
+            background: var(--bg-secondary);
+            border-left: 3px solid var(--accent);
+            border-radius: 0 6px 6px 0;
+            padding: 16px 20px;
+            margin-bottom: 24px;
+        }
+
+        .callout p {
+            margin-bottom: 0;
+        }
+
+        .callout.honest {
+            border-left-color: var(--warning);
+        }
+
+        /* Two-column layout */
+        .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 32px;
+        }
+
+        /* Footer */
+        footer {
+            padding: 32px 0;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        .footer-links {
+            display: flex;
+            gap: 24px;
+            margin-bottom: 16px;
+        }
+
+        /* Skip to content */
+        .skip-link {
+            position: absolute;
+            top: -40px;
+            left: 0;
+            background: var(--accent);
+            color: white;
+            padding: 8px 16px;
+            z-index: 100;
+            text-decoration: none;
+        }
+
+        .skip-link:focus {
+            top: 0;
+        }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            .logo { font-size: 24px; }
+            .hero h1 { font-size: 18px; }
+            .ascii-art { font-size: 10px; padding: 16px; }
+            .footer-links { flex-direction: column; gap: 8px; }
+            .header-top { flex-direction: column; }
+            .header-nav { margin-top: 16px; }
+            .two-col { grid-template-columns: 1fr; }
+            .stat-row { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+    <div class="container">
+        <header>
+            <div class="header-top">
+                <div>
+                    <a href="../index.html" style="text-decoration:none"><div class="logo"><span>O</span>TTO</div></a>
+                    <div class="tagline">Surge &mdash; Rich Vehicle Routing Problem Solver</div>
+                </div>
+                <nav class="header-nav">
+                    <div class="nav-group">
+                        <a href="../index.html">Home</a>
+                        <a href="../api.html">API</a>
+                    </div>
+                    <span class="nav-separator">|</span>
+                    <div class="nav-group">
+                        <a href="#why">Why</a>
+                        <a href="#benchmarks">Benchmarks</a>
+                        <a href="#features">Features</a>
+                        <a href="#comparison">Comparison</a>
+                        <a href="#quickstart">Quick Start</a>
+                    </div>
+                </nav>
+            </div>
+        </header>
+
+        <main id="main-content">
+
+        <!-- ============================================================ -->
+        <!-- Hero -->
+        <!-- ============================================================ -->
+        <section class="hero">
+            <h1>VRP optimization kernel that runs anywhere</h1>
+            <p>
+                Surge is a rich Vehicle Routing Problem solver written in C11 with zero external dependencies.
+                25+ constraint types, BKS-competitive solution quality, compiles to a ~200KB static library
+                or a 361KB WebAssembly module. Same solver runs in a browser, on the edge, or in a datacenter.
+            </p>
+            <div class="badges">
+                <span class="badge green">340+ tests</span>
+                <span class="badge blue">25+ constraints</span>
+                <span class="badge yellow">Zero deps</span>
+                <span class="badge">C11</span>
+                <span class="badge">WASM</span>
+                <span class="badge">ALNS</span>
+                <span class="badge">AGPLv3 + Trucking Exception</span>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Why Surge Exists -->
+        <!-- ============================================================ -->
+        <section class="section" id="why">
+            <div class="section-title">Why</div>
+            <h2>Every VRP solver makes you choose</h2>
+
+            <p>
+                The VRP solver landscape forces a trade-off. You get <strong>solution quality</strong> (HGS, LKH-3)
+                but can't deploy it. You get <strong>deployment flexibility</strong> (VROOM) but sacrifice constraint depth.
+                You get <strong>constraint richness</strong> (PTV, Ortec) but pay six figures and get locked into a JRE monolith.
+                You get <strong>a familiar API</strong> (OR-Tools) but the solver chokes beyond 500 requests and ships a 50MB binary.
+            </p>
+
+            <p>Surge refuses the trade-off.</p>
+
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-card-title">Quality without compromise</div>
+                    <div class="feature-card-desc">
+                        Population-based ALNS with infeasible-space exploration. Beats BKS average distance on Solomon VRPTW.
+                        Matches vehicle count on 46/56 instances. Not a toy &mdash; a production-grade metaheuristic.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Rich constraints, not rigid</div>
+                    <div class="feature-card-desc">
+                        25+ constraint types: PD pairing, DARP ride times, compartments, setup times, LIFO/FIFO stacking,
+                        breaks, multi-trip, precedence, request locking. Adding a constraint is one feasibility check,
+                        not rewriting the solver.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Runs anywhere. Literally.</div>
+                    <div class="feature-card-desc">
+                        ~200KB static library. No JVM, no Python, no CUDA, no internet connection required.
+                        Compiles to WASM for browsers and edge functions. Same solver, same results, every target.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Kernel, not platform</div>
+                    <div class="feature-card-desc">
+                        Surge is an optimization kernel, not a logistics platform. No maps, no driver apps, no dashboards
+                        bundled in. Embed it in your product. Wrap it in your API. Own your optimization stack.
+                    </div>
+                </div>
+            </div>
+
+            <div class="callout">
+                <p>
+                    <strong>The six-box test.</strong> Surge is the only VRP solver that is simultaneously:
+                    (1) competitive with academic BKS, (2) richer in constraint modeling than most commercial offerings,
+                    (3) embeddable anywhere, (4) zero external dependencies, (5) open source, and (6) written in C with
+                    universal ABI. No other solver checks all six.
+                </p>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- What Surge Is -->
+        <!-- ============================================================ -->
+        <section class="section" id="what">
+            <div class="section-title">What</div>
+            <h2>An optimization kernel for vehicle routing</h2>
+
+            <p>
+                Surge solves the family of Vehicle Routing Problems: VRPTW, PDPTW, DARP, and rich VRP with arbitrary
+                combinations of constraints. It uses an <strong>Adaptive Large Neighborhood Search</strong> (ALNS)
+                metaheuristic built on the Arbor framework, with simulated annealing acceptance, population-based
+                parallel search, and HGS-style infeasible-space exploration.
+            </p>
+
+            <div class="ascii-art">
+<pre>
+  Problem JSON                                         Solution JSON
+       │                                                     ▲
+       ▼                                                     │
+  ┌─────────┐    ┌──────────┐    ┌──────────┐    ┌──────────────┐
+  │ sg_api  │───▶│ sg_solve │───▶│ Arbor    │───▶│ sg_solution  │
+  │ (parse) │    │ (phases) │    │ (ALNS)   │    │ (extract)    │
+  └─────────┘    └──────────┘    └──────────┘    └──────────────┘
+                      │               │
+                      ▼               ▼
+                ┌──────────┐   ┌───────────┐
+                │ Construct│   │ Destroy   │  random, worst,
+                │ (greedy  │   │ + Repair  │  Shaw, route,
+                │  insert) │   │ operators │  regret-k, greedy
+                └──────────┘   └───────────┘
+                                     │
+                      ┌──────────────┼──────────────┐
+                      ▼              ▼              ▼
+                ┌──────────┐  ┌──────────┐  ┌──────────┐
+                │Feasibility│  │   Cost   │  │  Local   │
+                │  (timing, │  │ (lexicog │  │  Search  │
+                │  capacity,│  │  multi-  │  │ (2-opt*, │
+                │  pairing) │  │  obj)    │  │  or-opt, │
+                └──────────┘  └──────────┘  │  cross)  │
+                                            └──────────┘
+</pre>
+            </div>
+
+            <h3>Problem classes</h3>
+            <ul>
+                <li><strong>VRPTW</strong> &mdash; Capacitated VRP with time windows (Solomon benchmarks)</li>
+                <li><strong>PDPTW</strong> &mdash; Pickup and delivery with time windows (Li &amp; Lim benchmarks)</li>
+                <li><strong>DARP</strong> &mdash; Dial-a-ride with max ride time constraints</li>
+                <li><strong>Rich VRP</strong> &mdash; Arbitrary constraint combinations: compartments, breaks, setup times, multi-trip, stacking, precedence, locking</li>
+            </ul>
+
+            <h3>Solve phases</h3>
+            <ul>
+                <li><strong>Construction</strong> &mdash; Greedy insertion builds initial feasible solution</li>
+                <li><strong>Phase 1 (Vehicle minimization)</strong> &mdash; ALNS with infeasible-space exploration, targets unassigned count then vehicle count</li>
+                <li><strong>Phase 1.5 (Crunch)</strong> &mdash; Aggressive vehicle removal with extended repair attempts</li>
+                <li><strong>Phase 2 (Distance polish)</strong> &mdash; ALNS focusing on total distance with fixed vehicle count</li>
+                <li><strong>Postprocess</strong> &mdash; Intra-route local search (2-opt*, or-opt, cross-exchange)</li>
+            </ul>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Benchmark Results -->
+        <!-- ============================================================ -->
+        <section class="section" id="benchmarks">
+            <div class="section-title">Benchmarks</div>
+            <h2>Competitive with best known solutions</h2>
+
+            <p>
+                All results: population mode (3 generations, auto threads), 10,000 ALNS iterations per generation,
+                deterministic seed (42). Compared against published Best Known Solutions from the literature.
+            </p>
+
+            <div class="stat-row">
+                <div class="stat">
+                    <div class="stat-value green">-0.1%</div>
+                    <div class="stat-label">Solomon Dist Gap</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value blue">46/56</div>
+                    <div class="stat-label">Solomon Veh Match</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value yellow">+3.7%</div>
+                    <div class="stat-label">Li &amp; Lim Dist Gap</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value blue">47/56</div>
+                    <div class="stat-label">Li &amp; Lim Veh Match</div>
+                </div>
+            </div>
+
+            <h3>Solomon VRPTW (56 instances, 100 customers each)</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Category</th>
+                        <th>Instances</th>
+                        <th>Vehicles Match BKS</th>
+                        <th>Avg Veh Gap</th>
+                        <th>Avg Dist Gap</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>C1xx (clustered, tight TW)</td>
+                        <td>9</td>
+                        <td>9/9</td>
+                        <td>0.00</td>
+                        <td style="color: var(--success)">exact BKS</td>
+                    </tr>
+                    <tr>
+                        <td>C2xx (clustered, wide TW)</td>
+                        <td>8</td>
+                        <td>8/8</td>
+                        <td>0.00</td>
+                        <td style="color: var(--success)">exact BKS</td>
+                    </tr>
+                    <tr>
+                        <td>R1xx (random, tight TW)</td>
+                        <td>12</td>
+                        <td>5/12</td>
+                        <td>+0.58</td>
+                        <td style="color: var(--warning)">+1 veh / better dist</td>
+                    </tr>
+                    <tr>
+                        <td>R2xx (random, wide TW)</td>
+                        <td>11</td>
+                        <td>11/11</td>
+                        <td>0.00</td>
+                        <td style="color: var(--success)">-0.3%</td>
+                    </tr>
+                    <tr>
+                        <td>RC1xx (mixed, tight TW)</td>
+                        <td>8</td>
+                        <td>5/8</td>
+                        <td>+0.38</td>
+                        <td style="color: var(--warning)">+1 veh / better dist</td>
+                    </tr>
+                    <tr>
+                        <td>RC2xx (mixed, wide TW)</td>
+                        <td>8</td>
+                        <td>8/8</td>
+                        <td>0.00</td>
+                        <td style="color: var(--success)">-0.5%</td>
+                    </tr>
+                    <tr class="highlight">
+                        <td><strong>Overall</strong></td>
+                        <td>56</td>
+                        <td><strong>46/56</strong></td>
+                        <td><strong>+0.18</strong></td>
+                        <td style="color: var(--success); font-weight: 600"><strong>-0.1%</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Li &amp; Lim PDPTW (56 instances, 100 requests each)</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Category</th>
+                        <th>Instances</th>
+                        <th>Vehicles Match BKS</th>
+                        <th>Avg Veh Gap</th>
+                        <th>Avg Dist Gap</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>LC1xx (clustered, tight TW)</td>
+                        <td>9</td>
+                        <td>5/9</td>
+                        <td>+0.89</td>
+                        <td>+8.2%</td>
+                    </tr>
+                    <tr>
+                        <td>LC2xx (clustered, wide TW)</td>
+                        <td>8</td>
+                        <td>8/8</td>
+                        <td>0.00</td>
+                        <td style="color: var(--success)">exact BKS</td>
+                    </tr>
+                    <tr>
+                        <td>LR1xx (random, tight TW)</td>
+                        <td>12</td>
+                        <td>7/12</td>
+                        <td>+0.83</td>
+                        <td>+5.6%</td>
+                    </tr>
+                    <tr>
+                        <td>LR2xx (random, wide TW)</td>
+                        <td>11</td>
+                        <td>11/11</td>
+                        <td>0.00</td>
+                        <td style="color: var(--success)">exact BKS</td>
+                    </tr>
+                    <tr>
+                        <td>LRC1xx (mixed, tight TW)</td>
+                        <td>8</td>
+                        <td>8/8</td>
+                        <td>0.00</td>
+                        <td>+2.1%</td>
+                    </tr>
+                    <tr>
+                        <td>LRC2xx (mixed, wide TW)</td>
+                        <td>8</td>
+                        <td>8/8</td>
+                        <td>0.00</td>
+                        <td style="color: var(--success)">exact BKS</td>
+                    </tr>
+                    <tr class="highlight">
+                        <td><strong>Overall</strong></td>
+                        <td>56</td>
+                        <td><strong>47/56</strong></td>
+                        <td><strong>+0.39</strong></td>
+                        <td style="font-weight: 600"><strong>+3.7%</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="callout honest">
+                <p>
+                    <strong>Honest assessment.</strong> The remaining vehicle gap is concentrated on tight-TW R1/RC1
+                    instances, where Surge trades +1 vehicle for better distance (e.g. R104: +1 veh / -1.5% dist).
+                    These instances likely require higher iteration budgets or specialized tight-TW operators.
+                    On wide-TW and clustered instances, Surge matches or beats BKS consistently.
+                </p>
+            </div>
+
+            <h3>Performance</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Metric</th>
+                        <th>Value</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Solomon 100-customer</td>
+                        <td>~9.2s single-thread</td>
+                        <td>10K iterations, optimized build</td>
+                    </tr>
+                    <tr>
+                        <td>Population mode</td>
+                        <td>~31s total</td>
+                        <td>3 generations, auto threads</td>
+                    </tr>
+                    <tr>
+                        <td>Malloc in hot loop</td>
+                        <td style="color: var(--success)">Zero</td>
+                        <td>Arena allocators, pre-allocated scratch</td>
+                    </tr>
+                    <tr>
+                        <td>Arena speedup</td>
+                        <td style="color: var(--success)">-21% (Solomon)</td>
+                        <td>6.06s &rarr; 4.79s from arena alone</td>
+                    </tr>
+                    <tr>
+                        <td>Startup time</td>
+                        <td>Microseconds</td>
+                        <td>No JIT warmup, no module loading</td>
+                    </tr>
+                    <tr>
+                        <td>GC pauses</td>
+                        <td style="color: var(--success)">None</td>
+                        <td>C, not JVM</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Constraint Coverage -->
+        <!-- ============================================================ -->
+        <section class="section" id="features">
+            <div class="section-title">Constraint Coverage</div>
+            <h2>25+ constraint types, all composable</h2>
+
+            <p>
+                Every constraint is independently testable and freely composable. Adding a new constraint to ALNS
+                requires one feasibility check and one cost component &mdash; not rewriting the solver.
+                Compare with HGS, where each new constraint touches 5+ subsystems (Split, crossover, move evaluation,
+                penalties, route updates).
+            </p>
+
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-card-title">Time &amp; Scheduling</div>
+                    <div class="feature-card-desc">
+                        Hard time windows, soft time windows with penalty, disjunct (multiple) time windows,
+                        max route duration, waiting cost, overtime cost, time-dependent speed profiles,
+                        time-indexed travel brackets, per-vehicle travel profiles.
+                    </div>
+                    <div class="feature-card-count">10 constraint types</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Capacity &amp; Loading</div>
+                    <div class="feature-card-desc">
+                        Multi-dimensional capacity, vehicle compartments (frozen/chilled/ambient),
+                        LIFO PD stacking, FIFO PD stacking, backhaul (linehaul before pickups),
+                        initial vehicle loads, commodity conflicts.
+                    </div>
+                    <div class="feature-card-count">7 constraint types</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Vehicle Constraints</div>
+                    <div class="feature-card-desc">
+                        Qualifications/skills, request-vehicle allowed/forbidden, fixed/per-distance/per-duration costs,
+                        max tasks, max distance, multi-trip with depot reload, open start, open end.
+                    </div>
+                    <div class="feature-card-count">11 constraint types</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Pickup &amp; Delivery</div>
+                    <div class="feature-card-desc">
+                        PD pairing (same vehicle), PD precedence (pickup before delivery),
+                        independent PD placement (non-adjacent stops), max ride time per PD pair (DARP).
+                    </div>
+                    <div class="feature-card-count">4 constraint types</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Breaks &amp; Regulations</div>
+                    <div class="feature-card-desc">
+                        Driver breaks (max continuous work), max total work per shift,
+                        break injection in route, abstract HoS model (maps to EU/US rules).
+                    </div>
+                    <div class="feature-card-count">4 constraint types</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Sequencing &amp; Objectives</div>
+                    <div class="feature-card-desc">
+                        Sequence-dependent setup times, inter-request precedence, exclusion groups,
+                        lexicographic objective, per-request drop penalty, global span balancing,
+                        configurable cost weights.
+                    </div>
+                    <div class="feature-card-count">7 constraint types</div>
+                </div>
+            </div>
+
+            <h3>Re-optimization &amp; Warm Start</h3>
+            <ul>
+                <li><strong>Warm start</strong> &mdash; provide initial solution, solver improves from there</li>
+                <li><strong>Request locking (FROZEN)</strong> &mdash; request stays on designated vehicle, position preserved</li>
+                <li><strong>Request locking (COMMITTED)</strong> &mdash; request must be served, but vehicle/position flexible</li>
+                <li><strong>Plan/ETA validation</strong> &mdash; validate fixed routes, compute ETAs, report constraint violations</li>
+            </ul>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Competitive Comparison -->
+        <!-- ============================================================ -->
+        <section class="section" id="comparison">
+            <div class="section-title">Competitive Landscape</div>
+            <h2>Kernel-level comparison</h2>
+
+            <p>
+                Surge is a <strong>VRP optimization kernel</strong>, not a logistics platform. Comparing against
+                platforms (PTV, HERE) on platform features (real-time traffic, driver apps) is a category error &mdash;
+                those are application-layer concerns handled by other OTTO modules. This compares solvers as
+                <strong>optimization kernels</strong>.
+            </p>
+
+            <div class="table-scroll">
+            <table>
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th>Surge</th>
+                        <th>OR-Tools</th>
+                        <th>PTV</th>
+                        <th>HERE</th>
+                        <th>VROOM</th>
+                        <th>Ortec</th>
+                        <th>cuOpt</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>100-req quality</td>
+                        <td class="y">BKS-level</td>
+                        <td>Good</td>
+                        <td>Good</td>
+                        <td>Decent</td>
+                        <td>Decent</td>
+                        <td>Good</td>
+                        <td>Good</td>
+                    </tr>
+                    <tr>
+                        <td>Constraint richness</td>
+                        <td class="y">25+ types</td>
+                        <td>Good</td>
+                        <td>Good</td>
+                        <td>Good</td>
+                        <td class="n">Limited</td>
+                        <td class="y">Excellent</td>
+                        <td class="n">Limited</td>
+                    </tr>
+                    <tr>
+                        <td>Large-scale (1000+)</td>
+                        <td class="p">Untested</td>
+                        <td class="n">Degrades</td>
+                        <td>Decent</td>
+                        <td class="q">Opaque</td>
+                        <td>Good</td>
+                        <td>Good</td>
+                        <td>Fast but rigid</td>
+                    </tr>
+                    <tr>
+                        <td>Embeddability</td>
+                        <td class="y">C/WASM, 0 deps</td>
+                        <td class="n">C++, 50MB+</td>
+                        <td class="n">JRE monolith</td>
+                        <td class="n">API only</td>
+                        <td>C++, OSRM</td>
+                        <td class="n">JRE + license</td>
+                        <td class="n">GPU + CUDA</td>
+                    </tr>
+                    <tr>
+                        <td>Edge / offline</td>
+                        <td class="y">Native</td>
+                        <td class="p">Heavy</td>
+                        <td class="n">No</td>
+                        <td class="n">No</td>
+                        <td class="n">Needs server</td>
+                        <td class="n">No</td>
+                        <td class="n">Needs GPU</td>
+                    </tr>
+                    <tr>
+                        <td>Tunability</td>
+                        <td class="y">Full source</td>
+                        <td class="y">Good</td>
+                        <td class="n">Black box</td>
+                        <td class="n">Black box</td>
+                        <td class="p">Limited</td>
+                        <td class="n">Black box</td>
+                        <td class="p">Limited</td>
+                    </tr>
+                    <tr>
+                        <td>Cost</td>
+                        <td class="y">Open source</td>
+                        <td class="y">Open source</td>
+                        <td>$$$$$</td>
+                        <td>$$$ API</td>
+                        <td class="y">Open source</td>
+                        <td>$$$$$</td>
+                        <td>$$$ GPU</td>
+                    </tr>
+                </tbody>
+            </table>
+            </div>
+
+            <h3>Grade summary</h3>
+
+            <div class="table-scroll">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Dimension</th>
+                        <th>Surge</th>
+                        <th>VROOM</th>
+                        <th>OR-Tools</th>
+                        <th>OptaPlanner</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>API design</td>
+                        <td class="grade-a">A</td>
+                        <td class="grade-b">B+</td>
+                        <td class="grade-c">C+</td>
+                        <td class="grade-b">B</td>
+                    </tr>
+                    <tr>
+                        <td>Solution quality</td>
+                        <td class="grade-b">B+</td>
+                        <td class="grade-b">B</td>
+                        <td class="grade-b">B+</td>
+                        <td class="grade-b">B</td>
+                    </tr>
+                    <tr>
+                        <td>Speed</td>
+                        <td class="grade-a">A-</td>
+                        <td class="grade-a">A</td>
+                        <td class="grade-b">B+</td>
+                        <td class="grade-c">C</td>
+                    </tr>
+                    <tr>
+                        <td>Constraint richness</td>
+                        <td class="grade-a">A</td>
+                        <td class="grade-c">C+</td>
+                        <td class="grade-a">A-</td>
+                        <td class="grade-b">B+</td>
+                    </tr>
+                    <tr>
+                        <td>Deployability</td>
+                        <td class="grade-a">A+</td>
+                        <td class="grade-b">B+</td>
+                        <td class="grade-c">C</td>
+                        <td class="grade-d">C-</td>
+                    </tr>
+                    <tr>
+                        <td>Binary size</td>
+                        <td class="grade-a">A+</td>
+                        <td class="grade-b">B</td>
+                        <td class="grade-d">D</td>
+                        <td class="grade-d">D</td>
+                    </tr>
+                    <tr>
+                        <td>Auditability</td>
+                        <td class="grade-a">A</td>
+                        <td class="grade-b">B</td>
+                        <td class="grade-d">D</td>
+                        <td class="grade-c">C</td>
+                    </tr>
+                    <tr>
+                        <td>Community</td>
+                        <td class="grade-d">D</td>
+                        <td class="grade-b">B</td>
+                        <td class="grade-a">A</td>
+                        <td class="grade-b">B+</td>
+                    </tr>
+                </tbody>
+            </table>
+            </div>
+
+            <h3>Feature-by-feature constraint comparison</h3>
+
+            <p>
+                <span class="table-legend">
+                    <span><strong class="y">Y</strong> = Production quality</span>
+                    <span><strong class="p">P</strong> = Partial / limited</span>
+                    <span><strong class="n">N</strong> = Not supported</span>
+                    <span><strong class="q">?</strong> = Opaque / undocumented</span>
+                </span>
+            </p>
+
+            <h3>Time &amp; Scheduling</h3>
+            <div class="table-scroll">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Constraint</th>
+                        <th>Surge</th>
+                        <th>OR-Tools</th>
+                        <th>PTV</th>
+                        <th>HERE</th>
+                        <th>VROOM</th>
+                        <th>Ortec</th>
+                        <th>cuOpt</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>Hard time windows</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td></tr>
+                    <tr><td>Soft time windows (penalty)</td><td class="y">Y</td><td class="y">Y</td><td class="p">P</td><td class="q">?</td><td class="n">N</td><td class="y">Y</td><td class="n">N</td></tr>
+                    <tr><td>Disjunct time windows</td><td class="y">Y</td><td class="p">P</td><td class="p">P</td><td class="n">N</td><td class="n">N</td><td class="p">P</td><td class="n">N</td></tr>
+                    <tr><td>Max route duration</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td><td class="n">N</td><td class="y">Y</td><td class="p">P</td></tr>
+                    <tr><td>Max ride time (DARP)</td><td class="y">Y</td><td class="n">N</td><td class="n">N</td><td class="n">N</td><td class="n">N</td><td class="p">P</td><td class="n">N</td></tr>
+                    <tr><td>Waiting cost</td><td class="y">Y</td><td class="y">Y</td><td class="p">P</td><td class="q">?</td><td class="n">N</td><td class="y">Y</td><td class="n">N</td></tr>
+                    <tr><td>Overtime cost</td><td class="y">Y</td><td class="y">Y</td><td class="p">P</td><td class="q">?</td><td class="n">N</td><td class="y">Y</td><td class="n">N</td></tr>
+                    <tr><td>Time-dependent travel</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td><td class="n">N</td><td class="y">Y</td><td class="n">N</td></tr>
+                    <tr><td>Time-indexed brackets</td><td class="y">Y</td><td class="p">P</td><td class="p">P</td><td class="q">?</td><td class="n">N</td><td class="p">P</td><td class="n">N</td></tr>
+                    <tr><td>Per-vehicle travel profiles</td><td class="y">Y</td><td class="y">Y</td><td class="p">P</td><td class="n">N</td><td class="p">P</td><td class="p">P</td><td class="n">N</td></tr>
+                </tbody>
+            </table>
+            </div>
+
+            <h3>Capacity &amp; Loading</h3>
+            <div class="table-scroll">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Constraint</th>
+                        <th>Surge</th>
+                        <th>OR-Tools</th>
+                        <th>PTV</th>
+                        <th>HERE</th>
+                        <th>VROOM</th>
+                        <th>Ortec</th>
+                        <th>cuOpt</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>Multi-dimensional capacity</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td><td class="p">P</td><td class="y">Y</td><td class="y">Y</td><td class="p">P</td></tr>
+                    <tr><td>Vehicle compartments</td><td class="y">Y</td><td class="n">N</td><td class="p">P</td><td class="n">N</td><td class="n">N</td><td class="y">Y</td><td class="n">N</td></tr>
+                    <tr><td>LIFO PD stacking</td><td class="y">Y</td><td class="p">P</td><td class="n">N</td><td class="n">N</td><td class="n">N</td><td class="y">Y</td><td class="n">N</td></tr>
+                    <tr><td>FIFO PD stacking</td><td class="y">Y</td><td class="p">P</td><td class="n">N</td><td class="n">N</td><td class="n">N</td><td class="p">P</td><td class="n">N</td></tr>
+                    <tr><td>Backhaul</td><td class="y">Y</td><td class="p">P</td><td class="p">P</td><td class="n">N</td><td class="n">N</td><td class="y">Y</td><td class="n">N</td></tr>
+                    <tr><td>Initial vehicle loads</td><td class="y">Y</td><td class="p">P</td><td class="p">P</td><td class="n">N</td><td class="n">N</td><td class="p">P</td><td class="n">N</td></tr>
+                    <tr><td>Commodity conflicts</td><td class="y">Y</td><td class="n">N</td><td class="p">P</td><td class="n">N</td><td class="n">N</td><td class="y">Y</td><td class="n">N</td></tr>
+                </tbody>
+            </table>
+            </div>
+
+            <h3>Vehicle, PD, Breaks, Sequencing</h3>
+            <div class="table-scroll">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Constraint</th>
+                        <th>Surge</th>
+                        <th>OR-Tools</th>
+                        <th>PTV</th>
+                        <th>HERE</th>
+                        <th>VROOM</th>
+                        <th>Ortec</th>
+                        <th>cuOpt</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>Vehicle qualifications</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td><td class="p">P</td><td class="y">Y</td><td class="y">Y</td><td class="p">P</td></tr>
+                    <tr><td>Multi-trip (depot reload)</td><td class="y">Y</td><td class="n">N</td><td class="p">P</td><td class="n">N</td><td class="n">N</td><td class="y">Y</td><td class="n">N</td></tr>
+                    <tr><td>PD pairing (same vehicle)</td><td class="y">Y</td><td class="y">Y</td><td class="p">P</td><td class="p">P</td><td class="p">P</td><td class="y">Y</td><td class="p">P</td></tr>
+                    <tr><td>Max ride time (DARP)</td><td class="y">Y</td><td class="n">N</td><td class="n">N</td><td class="n">N</td><td class="n">N</td><td class="p">P</td><td class="n">N</td></tr>
+                    <tr><td>Driver breaks</td><td class="y">Y</td><td class="p">P</td><td class="y">Y</td><td class="p">P</td><td class="p">P</td><td class="y">Y</td><td class="n">N</td></tr>
+                    <tr><td>Setup times</td><td class="y">Y</td><td class="p">P</td><td class="p">P</td><td class="n">N</td><td class="n">N</td><td class="y">Y</td><td class="n">N</td></tr>
+                    <tr><td>Inter-request precedence</td><td class="y">Y</td><td class="p">P</td><td class="n">N</td><td class="n">N</td><td class="n">N</td><td class="p">P</td><td class="n">N</td></tr>
+                    <tr><td>Exclusion groups</td><td class="y">Y</td><td class="n">N</td><td class="n">N</td><td class="n">N</td><td class="n">N</td><td class="p">P</td><td class="n">N</td></tr>
+                    <tr><td>Request locking (FROZEN)</td><td class="y">Y</td><td class="n">N</td><td class="q">?</td><td class="n">N</td><td class="n">N</td><td class="p">P</td><td class="n">N</td></tr>
+                    <tr><td>Warm start</td><td class="y">Y</td><td class="y">Y</td><td class="q">?</td><td class="n">N</td><td class="n">N</td><td class="y">Y</td><td class="n">N</td></tr>
+                    <tr><td>Plan validation mode</td><td class="y">Y</td><td class="n">N</td><td class="p">P</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td><td class="n">N</td></tr>
+                </tbody>
+            </table>
+            </div>
+
+            <h3>Deployment &amp; Integration</h3>
+            <div class="table-scroll">
+            <table>
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th>Surge</th>
+                        <th>OR-Tools</th>
+                        <th>PTV</th>
+                        <th>HERE</th>
+                        <th>VROOM</th>
+                        <th>Ortec</th>
+                        <th>cuOpt</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>Language</td><td class="y">C11</td><td>C++</td><td>Java</td><td>REST</td><td>C++</td><td>Java</td><td>CUDA</td></tr>
+                    <tr><td>Binary size</td><td class="y">~200KB</td><td>50MB+</td><td>100MB+</td><td>N/A</td><td>~5MB</td><td>100MB+</td><td>~500MB</td></tr>
+                    <tr><td>WASM target</td><td class="y">Y</td><td class="n">N</td><td class="n">N</td><td class="n">N</td><td class="n">N</td><td class="n">N</td><td class="n">N</td></tr>
+                    <tr><td>Zero dependencies</td><td class="y">Y</td><td class="n">N</td><td class="n">N</td><td class="n">N</td><td class="n">N</td><td class="n">N</td><td class="n">N</td></tr>
+                    <tr><td>Startup time</td><td class="y">&mu;s</td><td>ms</td><td>seconds</td><td>N/A</td><td>ms</td><td>seconds</td><td>seconds</td></tr>
+                    <tr><td>GC pauses</td><td class="y">None</td><td class="y">None</td><td>Unpredictable</td><td>N/A</td><td class="y">None</td><td>Unpredictable</td><td class="y">None</td></tr>
+                    <tr><td>Deterministic</td><td class="y">Y</td><td class="y">Y</td><td class="q">?</td><td class="n">N</td><td class="p">P</td><td class="q">?</td><td class="p">P</td></tr>
+                    <tr><td>Edge deployment</td><td class="y">Y</td><td class="p">Difficult</td><td class="n">N</td><td class="n">N</td><td class="n">N</td><td class="n">N</td><td class="n">N</td></tr>
+                    <tr><td>Source available</td><td class="y">Y</td><td class="y">Y</td><td class="n">N</td><td class="n">N</td><td class="y">Y</td><td class="n">N</td><td class="n">N</td></tr>
+                    <tr><td>JSON API</td><td class="y">Y</td><td class="p">P</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td></tr>
+                    <tr><td>Python bindings</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td><td class="y">Y</td></tr>
+                </tbody>
+            </table>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- API -->
+        <!-- ============================================================ -->
+        <section class="section" id="api">
+            <div class="section-title">API</div>
+            <h2>Domain-native, not framework ceremony</h2>
+
+            <p>
+                ~80 C functions, all following the same pattern: <code>sg_&lt;noun&gt;_set_&lt;property&gt;(ctx, id, value)</code>.
+                No inheritance hierarchies, no builder patterns, no callback dimensions. You think in vehicles, requests,
+                tasks, and depots &mdash; not solver internals.
+            </p>
+
+            <div class="two-col">
+                <div>
+                    <h3>Surge: 3 lines</h3>
+                    <div class="code-block">
+<pre><span class="comment">// Add a constrained vehicle</span>
+<span class="type">uint32_t</span> v = <span class="func">sg_add_vehicle</span>(ctx);
+<span class="func">sg_vehicle_set_depots</span>(ctx, v, depot, depot);
+<span class="func">sg_vehicle_set_max_duration</span>(ctx, v, <span class="number">28800</span>);</pre>
+                    </div>
+                </div>
+                <div>
+                    <h3>OR-Tools: dimensions + callbacks</h3>
+                    <div class="code-block">
+<pre><span class="comment"># Dimension + callback + slack ceremony</span>
+routing.<span class="func">AddDimension</span>(
+    transit_cb, <span class="number">30</span>, <span class="number">28800</span>, True, <span class="string">'Time'</span>)
+time_dim = routing.<span class="func">GetDimensionOrDie</span>(<span class="string">'Time'</span>)
+time_dim.<span class="func">CumulVar</span>(
+    manager.<span class="func">NodeToIndex</span>(loc)
+).<span class="func">SetRange</span>(tw_start, tw_end)</pre>
+                    </div>
+                </div>
+            </div>
+
+            <h3>JSON API</h3>
+            <p>
+                The same solver is accessible via a JSON API &mdash; POST a problem, get a solution. The transport-agnostic
+                <code>sg_api_handle()</code> function works identically over HTTP, WASM, Unix sockets, or direct C calls.
+            </p>
+
+            <div class="code-block">
+<pre><span class="command">$ curl -X POST http://localhost:8085/api/v1/solve \</span>
+<span class="command">    -H "Content-Type: application/json" \</span>
+<span class="command">    -d '{</span>
+<span class="string">    "vehicles"</span>: [{<span class="string">"id"</span>: <span class="number">0</span>, <span class="string">"depot_start"</span>: <span class="number">0</span>, <span class="string">"depot_end"</span>: <span class="number">0</span>,
+                  <span class="string">"capacity"</span>: [<span class="number">20</span>], <span class="string">"shift"</span>: [<span class="number">0</span>, <span class="number">1000</span>]}],
+<span class="string">    "depots"</span>: [{<span class="string">"id"</span>: <span class="number">0</span>, <span class="string">"x"</span>: <span class="number">40.0</span>, <span class="string">"y"</span>: <span class="number">50.0</span>, <span class="string">"tw"</span>: [<span class="number">0</span>, <span class="number">1000</span>]}],
+<span class="string">    "tasks"</span>: [
+        {<span class="string">"id"</span>: <span class="number">0</span>, <span class="string">"x"</span>: <span class="number">45.0</span>, <span class="string">"y"</span>: <span class="number">55.0</span>, <span class="string">"tw"</span>: [<span class="number">0</span>, <span class="number">500</span>], <span class="string">"service"</span>: <span class="number">10</span>, <span class="string">"demand"</span>: [<span class="number">5</span>]},
+        {<span class="string">"id"</span>: <span class="number">1</span>, <span class="string">"x"</span>: <span class="number">42.0</span>, <span class="string">"y"</span>: <span class="number">58.0</span>, <span class="string">"tw"</span>: [<span class="number">0</span>, <span class="number">500</span>], <span class="string">"service"</span>: <span class="number">10</span>, <span class="string">"demand"</span>: [<span class="number">3</span>]}
+    ],
+<span class="string">    "requests"</span>: [{<span class="string">"id"</span>: <span class="number">0</span>, <span class="string">"delivery_task"</span>: <span class="number">0</span>}, {<span class="string">"id"</span>: <span class="number">1</span>, <span class="string">"delivery_task"</span>: <span class="number">1</span>}],
+<span class="string">    "config"</span>: {<span class="string">"max_iterations"</span>: <span class="number">1000</span>}
+<span class="command">  }'</span></pre>
+            </div>
+
+            <h3>Integration paths</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Method</th>
+                        <th>Use Case</th>
+                        <th>Example</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>C API</td>
+                        <td>Maximum performance, embedded systems</td>
+                        <td><code>#include "surge.h"</code></td>
+                    </tr>
+                    <tr>
+                        <td>JSON API (REST)</td>
+                        <td>Microservice architecture</td>
+                        <td><code>POST /api/v1/solve</code></td>
+                    </tr>
+                    <tr>
+                        <td>Python (ctypes)</td>
+                        <td>Data science, scripting</td>
+                        <td><code>from surge import Surge</code></td>
+                    </tr>
+                    <tr>
+                        <td>Node.js (WASM)</td>
+                        <td>Serverless, edge functions</td>
+                        <td><code>import { loadSurge }</code></td>
+                    </tr>
+                    <tr>
+                        <td>Browser (WASM)</td>
+                        <td>Client-side optimization</td>
+                        <td><code>&lt;script src="surge.js"&gt;</code></td>
+                    </tr>
+                    <tr>
+                        <td>Any FFI</td>
+                        <td>Go (cgo), Rust (bindgen), Java (Panama)</td>
+                        <td>C ABI is universal</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Architecture -->
+        <!-- ============================================================ -->
+        <section class="section" id="architecture">
+            <div class="section-title">Under the Hood</div>
+            <h2>Why ALNS, not HGS</h2>
+
+            <p>
+                HGS (Hybrid Genetic Search by Vidal) is state-of-the-art on clean CVRP benchmarks. But its
+                architecture makes three commitments that conflict with rich VRP:
+            </p>
+
+            <ul>
+                <li>
+                    <strong>Giant tour + Split decoder</strong> &mdash; With PD precedence, Split becomes NP-hard.
+                    PyVRP explicitly does not support PDPTW for this reason.
+                </li>
+                <li>
+                    <strong>O(1) concatenation scheme</strong> &mdash; Breaks for setup times (depends on adjacent node),
+                    max ride time (non-decomposable), commodity conflicts (set membership), and breaks (state machine).
+                    Falls back to O(n) per move, eliminating HGS's speed advantage.
+                </li>
+                <li>
+                    <strong>Crossover destroys structure</strong> &mdash; OX/SREX permute individual nodes without
+                    awareness of PD pairs, commodity conflicts, or exclusion groups. Repair required after nearly
+                    every crossover.
+                </li>
+            </ul>
+
+            <p>
+                Adding a new constraint to <strong>ALNS</strong> touches 1&ndash;2 files (feasibility check + cost component).
+                Adding a new constraint to <strong>HGS</strong> touches 5+ subsystems (Split, crossover, move evaluation,
+                penalties, route updates). For 25+ simultaneous constraint types, ALNS is the right architecture.
+            </p>
+
+            <h3>Memory management</h3>
+
+            <p>
+                Zero <code>malloc</code>/<code>free</code> in the hot loop. Arena allocators for per-solution memory,
+                optimized single-<code>memcpy</code> solution copy, pre-allocated scratch buffers for feasibility
+                and local search. <strong>21% speedup</strong> on Solomon from arenas alone.
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Solver</th>
+                        <th>Memory Strategy</th>
+                        <th>Hot-loop Allocations</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="highlight">
+                        <td>Surge</td>
+                        <td>Arena + pre-allocated scratch</td>
+                        <td style="color: var(--success)">Zero</td>
+                    </tr>
+                    <tr>
+                        <td>VROOM</td>
+                        <td>STL containers, general allocator</td>
+                        <td>Some (wins on less work, not better memory)</td>
+                    </tr>
+                    <tr>
+                        <td>OR-Tools</td>
+                        <td>Smart pointers, STL, framework overhead</td>
+                        <td>Significant</td>
+                    </tr>
+                    <tr>
+                        <td>OptaPlanner/jsprit</td>
+                        <td>JVM with GC</td>
+                        <td>Massive (12&ndash;16 byte object headers)</td>
+                    </tr>
+                    <tr>
+                        <td>HGS</td>
+                        <td>Lean C++ vectors, general allocator</td>
+                        <td>Moderate (closest competitor)</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Codebase</h3>
+
+            <div class="stat-row">
+                <div class="stat">
+                    <div class="stat-value">~40K</div>
+                    <div class="stat-label">Lines of C</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">340+</div>
+                    <div class="stat-label">Tests</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value blue">~200KB</div>
+                    <div class="stat-label">Static Library</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value">361KB</div>
+                    <div class="stat-label">WASM Module</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">0</div>
+                    <div class="stat-label">Ext Dependencies</div>
+                </div>
+            </div>
+
+            <p>
+                21K lines of solver library code. A competent C developer can read the entire solver in a day.
+                No metaprogramming, no templates, no macros beyond basics. Deterministic: same seed = same output.
+                ASan/UBSan clean. Per-operator telemetry built in.
+            </p>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Quick Start -->
+        <!-- ============================================================ -->
+        <section class="section" id="quickstart">
+            <div class="section-title">Quick Start</div>
+            <h2>Three ways to try Surge</h2>
+
+            <h3>1. Browser (zero install)</h3>
+            <p>
+                The <a href="../api.html#surge">API documentation page</a> includes a live WASM demo.
+                Click "Solve Problem" to run the actual solver in your browser.
+            </p>
+
+            <h3>2. Build from source</h3>
+            <div class="code-block">
+<pre><span class="comment"># Clone and build</span>
+<span class="command">git clone https://github.com/ottofleet/otto.git</span>
+<span class="command">cd otto && make surge</span>
+
+<span class="comment"># Run tests (340+ tests)</span>
+<span class="command">make test-surge</span>
+
+<span class="comment"># Run Solomon benchmarks</span>
+<span class="command">make -C surge bench</span></pre>
+            </div>
+
+            <h3>3. REST API server</h3>
+            <div class="code-block">
+<pre><span class="comment"># Build and start the API server</span>
+<span class="command">make -C surge/api</span>
+<span class="command">./surge/api/surge-solver</span>
+
+<span class="comment"># Solve a problem</span>
+<span class="command">curl -X POST http://localhost:8085/api/v1/solve \</span>
+<span class="command">  -H "Content-Type: application/json" \</span>
+<span class="command">  -d @problem.json</span></pre>
+            </div>
+
+            <h3>4. Python bindings</h3>
+            <div class="code-block">
+<pre><span class="comment"># Build shared library</span>
+<span class="command">make -C surge shared-lib</span>
+
+<span class="comment"># Use from Python</span>
+<span class="keyword">from</span> surge <span class="keyword">import</span> Surge
+
+solver = Surge()
+solver.add_vehicle(depot=<span class="number">0</span>, capacity=[<span class="number">20</span>], shift=(<span class="number">0</span>, <span class="number">1000</span>))
+solver.add_task(x=<span class="number">45.0</span>, y=<span class="number">55.0</span>, tw=(<span class="number">0</span>, <span class="number">500</span>), demand=[<span class="number">5</span>])
+result = solver.solve(max_iterations=<span class="number">1000</span>)</pre>
+            </div>
+
+            <h3>5. Node.js (WASM)</h3>
+            <div class="code-block">
+<pre><span class="keyword">import</span> { loadSurge } <span class="keyword">from</span> <span class="string">'@artalis/surge'</span>;
+
+<span class="keyword">const</span> surge = <span class="keyword">await</span> <span class="func">loadSurge</span>();
+<span class="keyword">const</span> result = surge.<span class="func">solve</span>({
+    vehicles: [{ id: <span class="number">0</span>, depot_start: <span class="number">0</span>, depot_end: <span class="number">0</span>,
+                 capacity: [<span class="number">20</span>], shift: [<span class="number">0</span>, <span class="number">1000</span>] }],
+    depots: [{ id: <span class="number">0</span>, x: <span class="number">40.0</span>, y: <span class="number">50.0</span>, tw: [<span class="number">0</span>, <span class="number">1000</span>] }],
+    tasks: [{ id: <span class="number">0</span>, x: <span class="number">45.0</span>, y: <span class="number">55.0</span>, tw: [<span class="number">0</span>, <span class="number">500</span>],
+              service: <span class="number">10</span>, demand: [<span class="number">5</span>] }],
+    requests: [{ id: <span class="number">0</span>, delivery_task: <span class="number">0</span> }],
+    config: { max_iterations: <span class="number">1000</span> }
+});</pre>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- FAQ -->
+        <!-- ============================================================ -->
+        <section class="section" id="faq">
+            <div class="section-title">FAQ</div>
+            <h2>Common questions</h2>
+
+            <h3>How does Surge compare to OR-Tools for large instances?</h3>
+            <p>
+                OR-Tools uses CP-SAT, which degrades badly beyond ~500 requests &mdash; memory footprint explodes
+                with distance matrix size. Surge's ALNS architecture scales by construction: destroy/repair operates
+                on a fixed-size solution representation regardless of instance size. Large-scale validation (1000+)
+                is pending but the architecture is sound.
+            </p>
+
+            <h3>Why C and not Rust?</h3>
+            <p>
+                Universal ABI. C is the only language callable from literally everything: Python (ctypes), Node (ffi-napi),
+                Go (cgo), Rust (bindgen), Java (Panama), Swift, WebAssembly. Rust would provide memory safety at compile
+                time, but the C ABI means zero FFI friction. Arena allocation mitigates the most dangerous class of memory
+                bugs while delivering best-in-class performance.
+            </p>
+
+            <h3>Is WASM performance competitive with native?</h3>
+            <p>
+                WASM runs at 50&ndash;80% of native speed depending on the workload. For a 100-customer problem,
+                that's the difference between 9 seconds and 14 seconds &mdash; both acceptable for batch optimization.
+                The deployment advantage (run in any browser, no install) outweighs the speed penalty for most use cases.
+            </p>
+
+            <h3>Can I use this for real-time dispatch?</h3>
+            <p>
+                For re-optimization of an existing plan (insert 1&ndash;5 new requests), yes. Use request locking
+                (FROZEN) to pin committed deliveries, then solve with a low iteration budget (100&ndash;500 iterations,
+                sub-second). For full fleet re-planning from scratch with 1000+ requests, budget 30&ndash;120 seconds.
+            </p>
+
+            <h3>What's missing vs. commercial solvers?</h3>
+            <p>
+                At the solver kernel level: energy/EV cost model (experimental in OR-Tools, niche for trucking).
+                Everything else &mdash; compartments, precedence, locking, breaks, multi-trip, setup times &mdash; is
+                implemented. At the platform level: real-time traffic, driver apps, dashboards, reporting.
+                Those are application-layer concerns handled by other OTTO modules or your own infrastructure.
+            </p>
+
+            <h3>What license? Can I embed this in a commercial product?</h3>
+            <p>
+                AGPLv3 with a Trucking Exception. If you're a trucking fleet using Surge for your own operations,
+                the exception applies and you don't need to open-source your application code. If you're embedding
+                Surge in a commercial SaaS product for resale, AGPL requires source disclosure &mdash; or contact
+                us for a commercial license.
+            </p>
+        </section>
+
+        </main>
+
+        <footer>
+            <nav class="footer-links" aria-label="Footer navigation">
+                <a href="../index.html">Home</a>
+                <a href="../api.html">API Docs</a>
+                <a href="https://github.com/ottofleet/otto/blob/main/docs/roadmaps/surge.md">Roadmap</a>
+                <a href="https://github.com/ottofleet/otto/blob/main/LICENSE">License</a>
+                <a href="https://github.com/ottofleet/otto">GitHub</a>
+            </nav>
+            <div>&copy; 2026 Mark Farkas. Built by <a href="https://artalis.io">Artalis</a>.</div>
+        </footer>
+    </div>
+</body>
+</html>
