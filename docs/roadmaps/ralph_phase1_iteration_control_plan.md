@@ -101,3 +101,13 @@ Reduce Phase-1 wall time on degenerate NETLIB outliers by cutting unnecessary fu
     - `make -C ralph build-ralph-benchmark` PASS
     - `make -C ralph test-netlib-gate-small` PASS
       - artifact: `/tmp/netlib-regression-gate-20260226-194717`
+- [x] 2026-02-26: P1-D hardening follow-up (`fit1p` regression guard).
+  - Restricted direction-skip RC-only recompute to large/high-degeneracy Phase-1 runs.
+  - For small/medium cases, direction-skip now uses full recompute path (safe parity path).
+  - Validation:
+    - `make -C ralph test-lp-telemetry-solver` PASS (`135/135`)
+    - `make -C ralph test-simplex-policy` PASS (`48/48`)
+    - `make -C ralph test-netlib-gate-small` PASS
+      - artifact: `/tmp/netlib-regression-gate-20260226-202009`
+    - `make -C ralph test-netlib-gate` PASS
+      - artifact: `/tmp/netlib-regression-gate-20260226-202023`
