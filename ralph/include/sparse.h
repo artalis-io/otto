@@ -24,6 +24,10 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Safe free macro - NULLs pointer after freeing to prevent double-free */
 #ifndef SAFE_FREE
 #define SAFE_FREE(p) do { free(p); (p) = NULL; } while(0)
@@ -141,5 +145,9 @@ int vec_argmax_abs(int n, const double *x);
 /* Utility */
 void sparse_print(const SparseMatrix *A, const char *name);
 void sparse_print_dense(const SparseMatrix *A, const char *name);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* RALPH_SPARSE_H */

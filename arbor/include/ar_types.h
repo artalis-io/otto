@@ -4,6 +4,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef enum {
     AR_STATUS_OK = 0,
     AR_STATUS_INVALID_ARG,
@@ -26,7 +30,8 @@ typedef enum {
     AR_STOP_TIME_LIMIT,
     AR_STOP_STAGNATION,
     AR_STOP_TARGET_COST,
-    AR_STOP_ERROR
+    AR_STOP_ERROR,
+    AR_STOP_CANCELLED
 } ARStopReason;
 
 typedef struct {
@@ -51,6 +56,12 @@ typedef struct {
     double reward_better;
     double reward_accepted;
     double reward_rejected;
+
+    int restart_threshold;        /* Stagnation iters before restart from best (0=disabled) */
+    double restart_temp_ratio;    /* SA temperature ratio for reheat on restart (0..1) */
+
+    int adaptive_q;            /* 0 = disabled */
+    double adaptive_q_growth;  /* growth per stagnation segment, default 0.1 */
 } ARALNSParams;
 
 typedef struct {
@@ -59,6 +70,7 @@ typedef struct {
     int64_t accepted;
     int64_t rejected;
     int64_t invalid_candidates;
+    int64_t restarts;
     double best_cost;
     double elapsed_seconds;
     ARStopReason stop_reason;
@@ -70,6 +82,11 @@ typedef struct {
     int64_t selected;
     int64_t accepted;
     int64_t improvements;
+    double total_seconds;
 } ARALNSOperatorStats;
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* ARBOR_AR_TYPES_H */

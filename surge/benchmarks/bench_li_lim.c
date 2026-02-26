@@ -1,4 +1,6 @@
 #include "surge.h"
+#include "sg_parallel.h"
+#include "sh_args.h"
 
 #include <ctype.h>
 #include <glob.h>
@@ -50,10 +52,14 @@ static void sg_print_usage(const char *argv0) {
     printf("\n");
     printf("Options:\n");
     printf("  --dir <path>          Directory with Li & Lim .txt files (default: benchmarks/li_lim)\n");
-    printf("  --iterations <n>      ALNS max iterations per case (default: 300)\n");
+    printf("  --iterations <n>      ALNS max iterations per case (default: 10000)\n");
     printf("  --time-limit <sec>    ALNS max wall time per case (default: 0 = unlimited)\n");
     printf("  --seed <n>            Deterministic seed (default: 42)\n");
     printf("  --non-deterministic   Use time-based random seed\n");
+    printf("  --population          Use population-based parallel search\n");
+    printf("  --threads <n>         Thread count for population mode (default: auto)\n");
+    printf("  --generations <n>     Generation count for population mode (default: 3)\n");
+    printf("  --telemetry           Print per-operator telemetry after each case\n");
     printf("  --help                Show this help\n");
     printf("\n");
     printf("Examples:\n");
@@ -200,10 +206,14 @@ static const char *sg_status_name(SGStatus status) {
 
 int main(int argc, char **argv) {
     const char *cases_dir = "benchmarks/li_lim";
-    int max_iterations = 300;
+    int max_iterations = 10000;
     int max_time_seconds = 0;
     uint64_t seed = 42;
     int deterministic = 1;
+    int show_telemetry = 0;
+    int use_population = 0;
+    uint32_t pop_threads = 0;
+    uint32_t pop_generations = 3;
     int filter_start = argc;
     glob_t matches;
     SGCaseFile *cases = NULL;
@@ -234,11 +244,11 @@ int main(int argc, char **argv) {
             continue;
         }
         if (strcmp(argv[i], "--iterations") == 0 && i + 1 < (size_t)argc) {
-            max_iterations = atoi(argv[++i]);
+            max_iterations = sh_parse_int(argv[++i], 10000, 1, 1000000);
             continue;
         }
         if (strcmp(argv[i], "--time-limit") == 0 && i + 1 < (size_t)argc) {
-            max_time_seconds = atoi(argv[++i]);
+            max_time_seconds = sh_parse_int(argv[++i], 0, 0, 86400);
             continue;
         }
         if (strcmp(argv[i], "--seed") == 0 && i + 1 < (size_t)argc) {
@@ -247,6 +257,22 @@ int main(int argc, char **argv) {
         }
         if (strcmp(argv[i], "--non-deterministic") == 0) {
             deterministic = 0;
+            continue;
+        }
+        if (strcmp(argv[i], "--population") == 0) {
+            use_population = 1;
+            continue;
+        }
+        if (strcmp(argv[i], "--threads") == 0 && i + 1 < (size_t)argc) {
+            pop_threads = (uint32_t)sh_parse_int(argv[++i], 0, 0, 256);
+            continue;
+        }
+        if (strcmp(argv[i], "--generations") == 0 && i + 1 < (size_t)argc) {
+            pop_generations = (uint32_t)sh_parse_int(argv[++i], 3, 1, 10000);
+            continue;
+        }
+        if (strcmp(argv[i], "--telemetry") == 0) {
+            show_telemetry = 1;
             continue;
         }
 
@@ -292,6 +318,9 @@ int main(int argc, char **argv) {
         printf("  deterministic=true seed=%" PRIu64 "\n", seed);
     } else {
         printf("  deterministic=false\n");
+    }
+    if (use_population) {
+        printf("  population=true threads=%u generations=%u\n", pop_threads, pop_generations);
     }
     printf("\n");
     printf("%-14s %-9s %-8s %-6s %-6s %-10s %-5s %-10s %-8s %-8s\n",
@@ -369,7 +398,15 @@ int main(int argc, char **argv) {
         }
 
         start = sg_now_seconds();
-        solve_status = sg_solve(ctx);
+        if (use_population) {
+            SGPopulationConfig pop_cfg;
+            pop_cfg.num_threads = pop_threads;
+            pop_cfg.population_size = 0;
+            pop_cfg.num_generations = pop_generations;
+            solve_status = sg_solve_population(ctx, &pop_cfg);
+        } else {
+            solve_status = sg_solve(ctx);
+        }
         elapsed = sg_now_seconds() - start;
 
         request_count = sg_get_request_count(ctx);
@@ -395,6 +432,30 @@ int main(int argc, char **argv) {
         printf("%-14s %-9s %-8.3f %-6u %-6u %-10.2f %-5s %-10s %-8s %-8s\n",
                cases[i].name, sg_status_name(solve_status), elapsed, request_count,
                vehicles, distance, bks_veh_str, bks_dist_str, veh_gap_str, dist_gap_str);
+
+        if (show_telemetry && (solve_status == SG_STATUS_OK || solve_status == SG_STATUS_LIMIT)) {
+            uint32_t oi;
+            uint32_t n_destroy = sg_get_destroy_operator_count(ctx);
+            uint32_t n_repair = sg_get_repair_operator_count(ctx);
+            for (oi = 0; oi < n_destroy; oi++) {
+                SGOperatorStats os;
+                if (sg_get_destroy_operator_stats(ctx, oi, &os) == SG_STATUS_OK) {
+                    printf("  Destroy: %-20s sel=%-6" PRId64 " acc=%-6" PRId64
+                           " imp=%-6" PRId64 " wt=%.2f sec=%.3f\n",
+                           os.name, os.selected, os.accepted,
+                           os.improvements, os.weight, os.total_seconds);
+                }
+            }
+            for (oi = 0; oi < n_repair; oi++) {
+                SGOperatorStats os;
+                if (sg_get_repair_operator_stats(ctx, oi, &os) == SG_STATUS_OK) {
+                    printf("  Repair:  %-20s sel=%-6" PRId64 " acc=%-6" PRId64
+                           " imp=%-6" PRId64 " wt=%.2f sec=%.3f\n",
+                           os.name, os.selected, os.accepted,
+                           os.improvements, os.weight, os.total_seconds);
+                }
+            }
+        }
 
         if (solve_status == SG_STATUS_OK || solve_status == SG_STATUS_LIMIT) {
             solved_count++;

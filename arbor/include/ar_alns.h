@@ -5,6 +5,10 @@
 
 #include "ar_types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct ARALNSContext ARALNSContext;
 
 typedef ARStatus (*ARDestroyOp)(void *op_ctx, void *solution, int count,
@@ -17,6 +21,8 @@ typedef void (*ARSolutionFreeFn)(void *solution, void *user_ctx);
 typedef double (*ARSolutionCostFn)(const void *solution, void *user_ctx);
 typedef int (*ARSolutionSizeFn)(const void *solution, void *user_ctx);
 typedef int (*ARSolutionValidateFn)(const void *solution, void *user_ctx);
+typedef int (*ARSolutionIsBetterFn)(const void *candidate, const void *current_best,
+                                     void *user_ctx);
 
 typedef struct {
     ARSolutionCopyFn copy;
@@ -24,6 +30,7 @@ typedef struct {
     ARSolutionCostFn cost;
     ARSolutionSizeFn size;
     ARSolutionValidateFn validate;
+    ARSolutionIsBetterFn is_better;  /* Optional: NULL = use cost < best_cost */
     void *user_ctx;
 } ARSolutionOps;
 
@@ -55,5 +62,18 @@ ARStatus ar_alns_get_destroy_stats(const ARALNSContext *ctx, int index,
                                    ARALNSOperatorStats *out_stats);
 ARStatus ar_alns_get_repair_stats(const ARALNSContext *ctx, int index,
                                   ARALNSOperatorStats *out_stats);
+
+void ar_alns_calibrate_sa(ARALNSParams *params, double initial_cost, int max_iterations);
+
+/* Progress callback: return non-zero to cancel. Called at segment boundaries. */
+typedef int (*ARProgressCallback)(int64_t iteration, double best_cost,
+                                   double elapsed_seconds, void *user_data);
+ARStatus ar_alns_set_progress_callback(ARALNSContext *ctx,
+                                        ARProgressCallback callback,
+                                        void *user_data);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* ARBOR_AR_ALNS_H */

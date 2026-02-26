@@ -21,6 +21,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * Scroll container style configuration.
  */
@@ -177,5 +181,9 @@ void cs_scroll_register_thumb(uint32_t scroll_id, float x, float y, float w, flo
     for (CsScrollContext _cs_scroll_ctx = cs_scroll_begin_internal(id, height, style); \
          _cs_scroll_ctx.loop; \
          _cs_scroll_ctx.loop = false, cs_scroll_end_internal(&_cs_scroll_ctx))
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CS_SCROLL_H */

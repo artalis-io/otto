@@ -617,3 +617,203 @@ done:
     free(rows);
     return status;
 }
+
+/* Cordeau DARP format:
+ *   Header: K  n  T  Q  L
+ *   Rows:   id  x  y  service  demand  tw_early  tw_late
+ *   Node 0 = depot, 1..n = pickups, n+1..2n = deliveries.
+ *   Pickup i pairs with delivery n+i. */
+
+typedef struct {
+    int id;
+    double x;
+    double y;
+    int service;
+    double demand;
+    int tw_early;
+    int tw_late;
+} SGCordeauRow;
+
+SGStatus sg_load_cordeau_darp(SGContext *ctx, const char *file_path) {
+    FILE *fp = NULL;
+    SGStatus status = SG_STATUS_OK;
+    SGCordeauRow *rows = NULL;
+    size_t row_count = 0;
+    size_t row_capacity = 0;
+    int K = 0, n = 0, T = 0;
+    double Q = 0.0, L = 0.0;
+    char line[512];
+    int header_parsed = 0;
+    int i;
+    SGDemandSignConvention demand_convention;
+
+    if (!ctx || !file_path) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (sg_get_request_count(ctx) != 0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    status = sg_set_dimension_count(ctx, 1);
+    if (status != SG_STATUS_OK) {
+        return status;
+    }
+
+    fp = fopen(file_path, "r");
+    if (!fp) {
+        return SG_STATUS_INVALID_ARG;
+    }
+
+    while (fgets(line, sizeof(line), fp) != NULL) {
+        const char *trim = sg_skip_ws(line);
+        if (!trim || *trim == '\0') continue;
+
+        if (!header_parsed) {
+            if (sscanf(trim, "%d %d %d %lf %lf", &K, &n, &T, &Q, &L) == 5 &&
+                K > 0 && n > 0) {
+                header_parsed = 1;
+            }
+            continue;
+        }
+
+        {
+            SGCordeauRow row;
+            memset(&row, 0, sizeof(row));
+            if (sscanf(trim, "%d %lf %lf %d %lf %d %d",
+                        &row.id, &row.x, &row.y, &row.service,
+                        &row.demand, &row.tw_early, &row.tw_late) == 7) {
+                SGCordeauRow *new_rows;
+                if (row_count == row_capacity) {
+                    size_t nc = row_capacity > 0 ? row_capacity * 2 : 128;
+                    new_rows = (SGCordeauRow *)realloc(rows, nc * sizeof(*rows));
+                    if (!new_rows) {
+                        status = SG_STATUS_OUT_OF_MEMORY;
+                        goto cdone;
+                    }
+                    rows = new_rows;
+                    row_capacity = nc;
+                }
+                rows[row_count++] = row;
+            }
+        }
+    }
+
+    if (!header_parsed || K <= 0 || n <= 0 || row_count < (size_t)(2 * n + 1)) {
+        status = SG_STATUS_INVALID_ARG;
+        goto cdone;
+    }
+
+    /* Depot = rows[0] (id 0) */
+    {
+        const SGCordeauRow *depot = &rows[0];
+        uint32_t depot_id = sg_add_depot(ctx);
+        double cap[1];
+
+        if (depot_id == UINT32_MAX) {
+            status = SG_STATUS_OUT_OF_MEMORY;
+            goto cdone;
+        }
+        status = sg_depot_set_location(ctx, depot_id, depot->x, depot->y);
+        if (status != SG_STATUS_OK) goto cdone;
+        status = sg_depot_set_time_window(ctx, depot_id, depot->tw_early, depot->tw_late);
+        if (status != SG_STATUS_OK) goto cdone;
+
+        cap[0] = Q;
+        for (i = 0; i < K; i++) {
+            uint32_t v = sg_add_vehicle(ctx);
+            if (v == UINT32_MAX) {
+                status = SG_STATUS_OUT_OF_MEMORY;
+                goto cdone;
+            }
+            status = sg_vehicle_set_depots(ctx, v, depot_id, depot_id);
+            if (status != SG_STATUS_OK) goto cdone;
+            status = sg_vehicle_set_shift_time_window(ctx, v, depot->tw_early, depot->tw_late);
+            if (status != SG_STATUS_OK) goto cdone;
+            status = sg_vehicle_set_capacity(ctx, v, cap, 1);
+            if (status != SG_STATUS_OK) goto cdone;
+            if (T > 0) {
+                status = sg_vehicle_set_max_duration(ctx, v, T);
+                if (status != SG_STATUS_OK) goto cdone;
+            }
+            /* DARP objective: minimize total route duration across the fleet.
+               fixed_cost=0 (fleet size is given, not minimized),
+               cost_per_distance=0 (distance is part of duration),
+               cost_per_duration=1 (the actual DARP objective). */
+            status = sg_vehicle_set_costs(ctx, v, 0.0, 0.0, 1.0);
+            if (status != SG_STATUS_OK) goto cdone;
+        }
+    }
+
+    /* Create n PD requests: pickup i (rows[i]) pairs with delivery n+i (rows[n+i]) */
+    demand_convention = sg_get_demand_sign_convention(ctx);
+    for (i = 1; i <= n; i++) {
+        const SGCordeauRow *p_row = &rows[i];
+        const SGCordeauRow *d_row = &rows[n + i];
+        uint32_t request_id, p_task, d_task;
+        double quantity = fabs(p_row->demand);
+        double pickup_demand[1], delivery_demand[1];
+        int32_t hint_early, hint_late;
+
+        if (quantity <= 1e-9) quantity = fabs(d_row->demand);
+        if (quantity <= 1e-9) quantity = 1.0;
+
+        request_id = sg_add_request(ctx);
+        if (request_id == UINT32_MAX) {
+            status = SG_STATUS_OUT_OF_MEMORY;
+            goto cdone;
+        }
+
+        p_task = sg_add_task(ctx, SG_TASK_PICKUP);
+        d_task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        if (p_task == UINT32_MAX || d_task == UINT32_MAX) {
+            status = SG_STATUS_OUT_OF_MEMORY;
+            goto cdone;
+        }
+
+        status = sg_task_set_location(ctx, p_task, p_row->x, p_row->y);
+        if (status != SG_STATUS_OK) goto cdone;
+        status = sg_task_set_time_window(ctx, p_task, p_row->tw_early, p_row->tw_late);
+        if (status != SG_STATUS_OK) goto cdone;
+        status = sg_task_set_service_seconds(ctx, p_task, p_row->service);
+        if (status != SG_STATUS_OK) goto cdone;
+
+        status = sg_task_set_location(ctx, d_task, d_row->x, d_row->y);
+        if (status != SG_STATUS_OK) goto cdone;
+        status = sg_task_set_time_window(ctx, d_task, d_row->tw_early, d_row->tw_late);
+        if (status != SG_STATUS_OK) goto cdone;
+        status = sg_task_set_service_seconds(ctx, d_task, d_row->service);
+        if (status != SG_STATUS_OK) goto cdone;
+
+        if (demand_convention == SG_DEMAND_PICKUP_POSITIVE_DELIVERY_NEGATIVE) {
+            pickup_demand[0] = quantity;
+            delivery_demand[0] = -quantity;
+        } else {
+            pickup_demand[0] = -quantity;
+            delivery_demand[0] = quantity;
+        }
+        status = sg_task_set_demand(ctx, p_task, pickup_demand, 1);
+        if (status != SG_STATUS_OK) goto cdone;
+        status = sg_task_set_demand(ctx, d_task, delivery_demand, 1);
+        if (status != SG_STATUS_OK) goto cdone;
+
+        status = sg_request_bind_pickup_delivery_tasks(ctx, request_id, p_task, d_task);
+        if (status != SG_STATUS_OK) goto cdone;
+
+        if (L > 0.0) {
+            status = sg_request_set_max_ride_time(ctx, request_id, (int32_t)L);
+            if (status != SG_STATUS_OK) goto cdone;
+        }
+
+        hint_early = p_row->tw_early < d_row->tw_early ? p_row->tw_early : d_row->tw_early;
+        hint_late = p_row->tw_late > d_row->tw_late ? p_row->tw_late : d_row->tw_late;
+        status = sg_request_set_time_window_hint(ctx, request_id, hint_early, hint_late);
+        if (status != SG_STATUS_OK) goto cdone;
+    }
+
+cdone:
+    if (fp) {
+        fclose(fp);
+    }
+    free(rows);
+    return status;
+}

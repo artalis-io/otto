@@ -31,4 +31,12 @@
 #include "cs_scroll.h"
 #include "cs_map.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif /* CS_IMMEDIATE_H */

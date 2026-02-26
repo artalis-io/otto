@@ -33,6 +33,9 @@
     <script src="wasm/ralph-api-demo.js"></script>
     <script src="js/ralph-api-demo.js"></script>
 
+    <script src="wasm/surge-api-demo.js"></script>
+    <script src="js/surge-api-demo.js"></script>
+
 
 
     <!-- API-specific Styles -->
@@ -612,6 +615,11 @@
                     <span>📐</span>
                     <span>Ralph LP/MIP Solver</span>
                     <span class="port">:8084</span>
+                </a>
+                <a href="#surge">
+                    <span>📦</span>
+                    <span>Surge VRP Solver</span>
+                    <span class="port">:8085</span>
                 </a>
 
             </nav>
@@ -1947,6 +1955,144 @@ y 0.000000</pre>
 
             </section>
 
+            <!-- ============================================================ -->
+            <!-- SURGE -->
+            <!-- ============================================================ -->
+            <section id="surge" class="service-section">
+                <div class="service-header">
+                    <div class="service-icon">📦</div>
+                    <div>
+                        <div class="service-title">Surge VRP Solver</div>
+                        <div class="service-port">Default port: 8085</div>
+                    </div>
+                </div>
+                <p class="service-desc">
+                    Rich Vehicle Routing Problem solver using ALNS metaheuristics. Supports VRPTW, PDPTW, DARP with time windows, capacity, compartments, and precedence constraints.
+                </p>
+
+                <!-- Endpoints generated from surge/include/sg_api.h annotations -->
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method post">POST</span>
+                        <span class="path">/api/v1/solve</span>
+                        <span class="endpoint-desc">Solve a Vehicle Routing Problem</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Request Body <span style="color: var(--text-muted); font-weight: normal; font-size: 12px;">(JSON)</span></h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"vehicles"</span>: [
+    {<span class="key">"id"</span>: <span class="number">0</span>, <span class="key">"depot_start"</span>: <span class="number">0</span>, <span class="key">"depot_end"</span>: <span class="number">0</span>,
+     <span class="key">"capacity"</span>: [<span class="number">20</span>], <span class="key">"shift"</span>: [<span class="number">0</span>, <span class="number">1000</span>]}
+  ],
+  <span class="key">"depots"</span>: [
+    {<span class="key">"id"</span>: <span class="number">0</span>, <span class="key">"x"</span>: <span class="number">40.0</span>, <span class="key">"y"</span>: <span class="number">50.0</span>, <span class="key">"tw"</span>: [<span class="number">0</span>, <span class="number">1000</span>]}
+  ],
+  <span class="key">"tasks"</span>: [
+    {<span class="key">"id"</span>: <span class="number">0</span>, <span class="key">"x"</span>: <span class="number">45.0</span>, <span class="key">"y"</span>: <span class="number">55.0</span>, <span class="key">"tw"</span>: [<span class="number">0</span>, <span class="number">500</span>], <span class="key">"service"</span>: <span class="number">10</span>, <span class="key">"demand"</span>: [<span class="number">5</span>]},
+    {<span class="key">"id"</span>: <span class="number">1</span>, <span class="key">"x"</span>: <span class="number">42.0</span>, <span class="key">"y"</span>: <span class="number">58.0</span>, <span class="key">"tw"</span>: [<span class="number">0</span>, <span class="number">500</span>], <span class="key">"service"</span>: <span class="number">10</span>, <span class="key">"demand"</span>: [<span class="number">3</span>]},
+    {<span class="key">"id"</span>: <span class="number">2</span>, <span class="key">"x"</span>: <span class="number">38.0</span>, <span class="key">"y"</span>: <span class="number">52.0</span>, <span class="key">"tw"</span>: [<span class="number">100</span>, <span class="number">800</span>], <span class="key">"service"</span>: <span class="number">10</span>, <span class="key">"demand"</span>: [<span class="number">4</span>]}
+  ],
+  <span class="key">"requests"</span>: [
+    {<span class="key">"id"</span>: <span class="number">0</span>, <span class="key">"delivery_task"</span>: <span class="number">0</span>},
+    {<span class="key">"id"</span>: <span class="number">1</span>, <span class="key">"delivery_task"</span>: <span class="number">1</span>},
+    {<span class="key">"id"</span>: <span class="number">2</span>, <span class="key">"delivery_task"</span>: <span class="number">2</span>}
+  ],
+  <span class="key">"config"</span>: {<span class="key">"max_iterations"</span>: <span class="number">1000</span>}
+}</pre>
+                            </div>
+                        </div>
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"status"</span>: <span class="string">"ok"</span>,
+  <span class="key">"stats"</span>: {
+    <span class="key">"iterations"</span>: <span class="number">1000</span>,
+    <span class="key">"total_cost"</span>: <span class="number">12345.67</span>,
+    <span class="key">"total_distance"</span>: <span class="number">828.94</span>,
+    <span class="key">"unassigned"</span>: <span class="number">0</span>,
+    <span class="key">"vehicles_used"</span>: <span class="number">1</span>
+  }
+}</pre>
+                            </div>
+                        </div>
+                        <div class="wasm-demo" id="surge-api-v1-solve-demo">
+                            <div class="wasm-demo-header">
+                                <span class="wasm-badge">WASM</span>
+                                <span class="wasm-demo-title">Try it in browser</span>
+                            </div>
+                            <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
+                                Solve a VRP problem using WASM
+                            </p>
+                            <button class="try-btn" id="surge-api-v1-solve-try-btn" disabled>Loading WASM...</button>
+                            <div class="demo-output" id="surge-api-v1-solve-output">
+                                <div class="code-block">
+                                    <pre id="surge-api-v1-solve-result"></pre>
+                                </div>
+                                <div class="demo-status" id="surge-api-v1-solve-status"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/health</span>
+                        <span class="endpoint-desc">Health check endpoint</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"status"</span>: <span class="string">"healthy"</span>,
+  <span class="key">"service"</span>: <span class="string">"surge"</span>,
+  <span class="key">"version"</span>: <span class="string">"0.1.0-dev"</span>
+}</pre>
+                            </div>
+                        </div>
+                        <div class="wasm-demo" id="surge-api-v1-health-demo">
+                            <div class="wasm-demo-header">
+                                <span class="wasm-badge">WASM</span>
+                                <span class="wasm-demo-title">Try it in browser</span>
+                            </div>
+                            <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">
+                                Check Surge health status
+                            </p>
+                            <button class="try-btn" id="surge-api-v1-health-try-btn" disabled>Loading WASM...</button>
+                            <div class="demo-output" id="surge-api-v1-health-output">
+                                <div class="code-block">
+                                    <pre id="surge-api-v1-health-result"></pre>
+                                </div>
+                                <div class="demo-status" id="surge-api-v1-health-status"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="endpoint">
+                    <div class="endpoint-header">
+                        <span class="method get">GET</span>
+                        <span class="path">/api/v1/version</span>
+                        <span class="endpoint-desc">Version information</span>
+                    </div>
+                    <div class="endpoint-body">
+                        <div class="endpoint-section">
+                            <h4>Response</h4>
+                            <div class="code-block">
+<pre>{
+  <span class="key">"version"</span>: <span class="string">"0.1.0-dev"</span>
+}</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </section>
+
 
             <!-- Status Codes -->
             <section class="service-section">
@@ -1990,6 +2136,8 @@ y 0.000000</pre>
         window.fuelwiseDemo = null;
 
         window.ralphDemo = null;
+
+        window.surgeDemo = null;
 
 
 
@@ -2176,6 +2324,25 @@ y 0.000000</pre>
             } catch (err) {
                 console.error('Ralph LP/MIP Solver WASM init failed:', err);
                 handleRalphError(err);
+            }
+        }
+
+
+        // Surge VRP Solver WASM init
+        async function initSurgeWasm() {
+            try {
+                if (typeof SurgeDemo === 'undefined') {
+                    throw new Error('SurgeDemo class not loaded');
+                }
+
+                surgeDemo = new SurgeDemo();
+                await surgeDemo.init();
+
+                // Enable WASM demo buttons for surge
+                initSurgeDemo();
+            } catch (err) {
+                console.error('Surge VRP Solver WASM init failed:', err);
+                handleSurgeError(err);
             }
         }
 
@@ -2912,6 +3079,97 @@ y 0.000000</pre>
                 document.getElementById('ralph-api-v1-solve-output').classList.add('visible');
             }
         }
+
+        // Surge handlers (from js/handlers/surge.js)
+        // Sample VRPTW problem: 1 vehicle, 1 depot, 3 delivery tasks
+        const SURGE_SAMPLE_PROBLEM = {
+            vehicles: [
+                {id: 0, depot_start: 0, depot_end: 0,
+                 capacity: [20], shift: [0, 1000]}
+            ],
+            depots: [
+                {id: 0, x: 40.0, y: 50.0, tw: [0, 1000]}
+            ],
+            tasks: [
+                {id: 0, x: 45.0, y: 55.0, tw: [0, 500], service: 10, demand: [5]},
+                {id: 1, x: 42.0, y: 58.0, tw: [0, 500], service: 10, demand: [3]},
+                {id: 2, x: 38.0, y: 52.0, tw: [100, 800], service: 10, demand: [4]}
+            ],
+            requests: [
+                {id: 0, delivery_task: 0},
+                {id: 1, delivery_task: 1},
+                {id: 2, delivery_task: 2}
+            ],
+            config: {max_iterations: 1000}
+        };
+
+        async function solveSurgeProblem() {
+            if (!surgeDemo || !surgeDemo.isReady()) return;
+
+            const btn = document.getElementById('surge-api-v1-solve-try-btn');
+            const result = document.getElementById('surge-api-v1-solve-result');
+            const status = document.getElementById('surge-api-v1-solve-status');
+            const output = document.getElementById('surge-api-v1-solve-output');
+
+            btn.disabled = true;
+            btn.textContent = 'Solving...';
+            output.classList.add('visible');
+
+            try {
+                const startTime = performance.now();
+                const solution = await surgeDemo.solve(SURGE_SAMPLE_PROBLEM);
+                const elapsed = (performance.now() - startTime).toFixed(1);
+
+                const html = formatJsonWithHighlighting(solution);
+                const codeBlock = result.closest('.code-block');
+                if (codeBlock && window.typeAnimateContent) {
+                    window.typeAnimateContent(codeBlock, html);
+                } else {
+                    result.innerHTML = html;
+                }
+
+                const stats = solution.stats || {};
+                const veh = stats.vehicles_used || '?';
+                const dist = stats.total_distance ? stats.total_distance.toFixed(1) : '?';
+                const unasgn = stats.unassigned || 0;
+                status.textContent = `Solved in ${elapsed}ms (${veh} vehicles, ${dist} distance, ${unasgn} unassigned)`;
+                status.className = 'demo-status success';
+            } catch (err) {
+                console.error('Solve failed:', err);
+                result.innerHTML = `<span class="demo-error">Error: ${err.message}</span>`;
+                status.textContent = '';
+                status.className = 'demo-status';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Solve Problem';
+            }
+        }
+
+        function fetchSurgeHealth() {
+            fetchJsonEndpoint(surgeDemo, '/api/v1/health', 'surge-api-v1-health-try-btn', 'surge-api-v1-health-result', 'surge-api-v1-health-status', 'surge-api-v1-health-output', 'Check Health');
+        }
+
+        function initSurgeDemo() {
+            enableBtn('surge-api-v1-solve-try-btn', 'Solve Problem');
+            enableBtn('surge-api-v1-health-try-btn', 'Check Health');
+            const surgeStatus = document.getElementById('surge-api-v1-health-status');
+            if (surgeStatus) {
+                surgeStatus.textContent = `Surge ${surgeDemo.getVersion()} ready - VRP solver in your browser`;
+                surgeStatus.className = 'demo-status success';
+                document.getElementById('surge-api-v1-health-output').classList.add('visible');
+            }
+        }
+
+        function handleSurgeError(err) {
+            disableBtn('surge-api-v1-solve-try-btn');
+            disableBtn('surge-api-v1-health-try-btn');
+            const surgeStatus = document.getElementById('surge-api-v1-health-status');
+            if (surgeStatus) {
+                surgeStatus.textContent = 'Failed to load WASM: ' + err.message;
+                surgeStatus.className = 'demo-status error';
+                document.getElementById('surge-api-v1-health-output').classList.add('visible');
+            }
+        }
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
             // Add copy buttons to all code blocks
@@ -2926,6 +3184,8 @@ y 0.000000</pre>
             initFuelwiseWasm();
 
             initRalphWasm();
+
+            initSurgeWasm();
 
 
 
@@ -2950,6 +3210,8 @@ y 0.000000</pre>
             document.getElementById('ralph-api-v1-solve-try-btn').addEventListener('click', solveRalphProblem);
             document.getElementById('ralph-api-v1-formats-try-btn').addEventListener('click', fetchRalphFormats);
             document.getElementById('ralph-api-v1-health-try-btn').addEventListener('click', fetchRalphHealth);
+            document.getElementById('surge-api-v1-solve-try-btn').addEventListener('click', solveSurgeProblem);
+            document.getElementById('surge-api-v1-health-try-btn').addEventListener('click', fetchSurgeHealth);
         });
     })();
     </script>
