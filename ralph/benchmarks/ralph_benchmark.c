@@ -266,6 +266,7 @@ typedef struct {
     int phase1_recompute_rc_guard_forced_full;
     int phase1_ratio_breakdown_retries;
     int phase1_ratio_breakdown_escalations;
+    int phase1_pivot_fail_recovery_exclusions;
 
     double phase2_pricing_ms;
     double phase2_ratio_ms;
@@ -857,6 +858,8 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_ratio_breakdown_retries;
             result.phase1_ratio_breakdown_escalations =
                 solver_tel.perf_phase1_ratio_breakdown_escalations;
+            result.phase1_pivot_fail_recovery_exclusions =
+                solver_tel.perf_phase1_pivot_fail_recovery_exclusions;
 
             result.phase2_pricing_ms = solver_tel.perf_phase2_pricing_ms;
             result.phase2_ratio_ms = solver_tel.perf_phase2_ratio_ms;
@@ -1815,6 +1818,8 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_ratio_breakdown_retries);
     fprintf(out, "      \"ratio_breakdown_escalations\": %d,\n",
             ralph->phase1_ratio_breakdown_escalations);
+    fprintf(out, "      \"pivot_fail_recovery_exclusions\": %d,\n",
+            ralph->phase1_pivot_fail_recovery_exclusions);
     fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase1_compute_solution_calls);
     fprintf(out, "      \"compute_reduced_costs_calls\": %d\n", ralph->phase1_compute_rc_calls);
     fprintf(out, "    },\n");
@@ -1900,6 +1905,8 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_ratio_breakdown_retries);
     fprintf(out, "    \"phase1_ratio_breakdown_escalations\": %d,\n",
             ralph->phase1_ratio_breakdown_escalations);
+    fprintf(out, "    \"phase1_pivot_fail_recovery_exclusions\": %d,\n",
+            ralph->phase1_pivot_fail_recovery_exclusions);
     fprintf(out, "    \"reason_infeasibility_cleanup\": %d,\n", ralph->refactor_reason_infeas_cleanup);
     fprintf(out, "    \"reason_other\": %d,\n", ralph->refactor_reason_other);
     fprintf(out, "    \"periodic_policy_count\": %d,\n", ralph->refactor_periodic_policy);

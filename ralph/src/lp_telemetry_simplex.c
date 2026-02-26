@@ -309,3 +309,8 @@ void lp_telemetry_record_phase1_ratio_breakdown_escalation(SimplexSolver *solver
     if (!solver_telemetry_enabled(solver)) return;
     solver->telemetry.perf_phase1_ratio_breakdown_escalations++;
 }
+
+void lp_telemetry_record_phase1_pivot_fail_recovery_exclusion(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_pivot_fail_recovery_exclusions++;
+}

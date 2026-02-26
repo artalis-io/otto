@@ -131,6 +131,8 @@ typedef enum {
 #define PHASE1_RC_ONLY_STREAK_GUARD 6
 #define PHASE1_RATIO_BREAKDOWN_REPEAT_TIGHTEN_THRESHOLD 3
 #define PHASE1_RATIO_BREAKDOWN_REPEAT_TIGHTEN_DIVISOR 3
+#define PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_TRIGGER 2
+#define PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_ITERS RALPH_PHASE1_ENTERING_EXCLUDE_ITERS
 #define PHASE1_AUTO_DANTZIG_MIN_M 700
 #define PHASE1_AUTO_DANTZIG_MAX_M 1200
 #define PHASE1_AUTO_DANTZIG_DEGEN_TRIGGER 20
@@ -3212,6 +3214,24 @@ static void phase1_exclude_entering_var(int var,
     }
 }
 
+static void phase1_pivot_fail_recovery_maybe_exclude_entering(
+    SimplexSolver *solver,
+    int fail_repeat_count,
+    int entering,
+    int *excluded_entering_a,
+    int *excluded_entering_ttl_a,
+    int *excluded_entering_b,
+    int *excluded_entering_ttl_b) {
+    if (fail_repeat_count < PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_TRIGGER) return;
+    phase1_exclude_entering_var(entering,
+                                PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_ITERS,
+                                excluded_entering_a,
+                                excluded_entering_ttl_a,
+                                excluded_entering_b,
+                                excluded_entering_ttl_b);
+    lp_telemetry_record_phase1_pivot_fail_recovery_exclusion(solver);
+}
+
 static void phase1_recompute_full_with_reason(SimplexSolver *solver,
                                               SimplexTableau *tab,
                                               int *rc_only_streak,
@@ -5616,6 +5636,15 @@ static int simplex_phase1(SimplexSolver *solver) {
             /* simplex_pivot can leave basis/LU partially updated on failure.
              * Try the same recovery ladder used in Phase 2. */
             if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY) == 0) {
+                phase1_pivot_fail_recovery_maybe_exclude_entering(
+                    solver,
+                    fail_repeat_count,
+                    entering,
+                    &excluded_entering_a,
+                    &excluded_entering_ttl_a,
+                    &excluded_entering_b,
+                    &excluded_entering_ttl_b);
+                use_bland = 1;
                 phase1_recompute_full_with_reason(
                     solver,
                     tab,
@@ -5624,6 +5653,15 @@ static int simplex_phase1(SimplexSolver *solver) {
                 continue;
             }
             if (repair_singular_basis(tab) == 0) {
+                phase1_pivot_fail_recovery_maybe_exclude_entering(
+                    solver,
+                    fail_repeat_count,
+                    entering,
+                    &excluded_entering_a,
+                    &excluded_entering_ttl_a,
+                    &excluded_entering_b,
+                    &excluded_entering_ttl_b);
+                use_bland = 1;
                 phase1_recompute_full_with_reason(
                     solver,
                     tab,
@@ -5647,6 +5685,15 @@ static int simplex_phase1(SimplexSolver *solver) {
                                 leaving, leave_var);
                     }
                     if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY) == 0) {
+                        phase1_pivot_fail_recovery_maybe_exclude_entering(
+                            solver,
+                            fail_repeat_count,
+                            entering,
+                            &excluded_entering_a,
+                            &excluded_entering_ttl_a,
+                            &excluded_entering_b,
+                            &excluded_entering_ttl_b);
+                        use_bland = 1;
                         phase1_recompute_full_with_reason(
                             solver,
                             tab,
@@ -5667,6 +5714,15 @@ static int simplex_phase1(SimplexSolver *solver) {
                             marked);
                 }
                 if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY) == 0) {
+                    phase1_pivot_fail_recovery_maybe_exclude_entering(
+                        solver,
+                        fail_repeat_count,
+                        entering,
+                        &excluded_entering_a,
+                        &excluded_entering_ttl_a,
+                        &excluded_entering_b,
+                        &excluded_entering_ttl_b);
+                    use_bland = 1;
                     phase1_recompute_full_with_reason(
                         solver,
                         tab,
@@ -5683,6 +5739,15 @@ static int simplex_phase1(SimplexSolver *solver) {
                 if (solver->verbose) {
                     LP_LOG_STDERR("[simplex_phase1] Dual rescue restored feasibility progress at iter %d\n", iter);
                 }
+                phase1_pivot_fail_recovery_maybe_exclude_entering(
+                    solver,
+                    fail_repeat_count,
+                    entering,
+                    &excluded_entering_a,
+                    &excluded_entering_ttl_a,
+                    &excluded_entering_b,
+                    &excluded_entering_ttl_b);
+                use_bland = 1;
                 phase1_recompute_full_with_reason(
                     solver,
                     tab,

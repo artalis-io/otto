@@ -41,7 +41,7 @@ Reduce Phase-1 wall time on degenerate NETLIB outliers by cutting unnecessary fu
 - [x] P1-D Direction-stabilize recompute decimation.
   - Keep LU-health forced refactors intact.
   - Avoid repeated full recompute on cooldown/defer loops when safe.
-- [ ] P1-E Pivot-failure recovery recompute hygiene.
+- [x] P1-E Pivot-failure recovery recompute hygiene.
   - Avoid redundant recompute bursts across consecutive failed recovery ladders.
   - Preserve recovery correctness and convergence safety.
 - [ ] P1-F Gate and benchmark validation.
@@ -111,3 +111,17 @@ Reduce Phase-1 wall time on degenerate NETLIB outliers by cutting unnecessary fu
       - artifact: `/tmp/netlib-regression-gate-20260226-202009`
     - `make -C ralph test-netlib-gate` PASS
       - artifact: `/tmp/netlib-regression-gate-20260226-202023`
+- [x] 2026-02-26: P1-E implemented (pivot-failure recovery recompute hygiene).
+  - Added targeted pivot-failure recovery exclusion policy:
+    - after repeated pivot failures (`repeat >= 2`), temporarily exclude the unstable entering column
+      during recovery-success continue paths.
+    - keep recovery ladder semantics and LU-safety paths intact.
+  - Added explicit telemetry:
+    - `phase1_pivot_fail_recovery_exclusions`
+  - Validation:
+    - `make -C ralph test-lp-telemetry-solver` PASS (`138/138`)
+    - `make -C ralph test-simplex-policy` PASS (`48/48`)
+    - `make -C ralph test-netlib-gate-small` PASS
+      - artifact: `/tmp/netlib-regression-gate-20260226-215057`
+    - `make -C ralph test-netlib-gate` PASS
+      - artifact: `/tmp/netlib-regression-gate-20260226-215111`
