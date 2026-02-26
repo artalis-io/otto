@@ -15,8 +15,9 @@ WASM_FILES = $(wildcard wasm/*.js)
 all: build
 
 build:
-	@mkdir -p $(BUILD_DIR)/js $(BUILD_DIR)/wasm $(BUILD_DIR)/fonts
+	@mkdir -p $(BUILD_DIR)/js $(BUILD_DIR)/wasm $(BUILD_DIR)/fonts $(BUILD_DIR)/modules
 	@cp index.html style.css api.html $(BUILD_DIR)/
+	@cp modules/*.html $(BUILD_DIR)/modules/ 2>/dev/null || true
 	@cp js/*.js $(BUILD_DIR)/js/ 2>/dev/null || true
 	@cp wasm/*.js $(BUILD_DIR)/wasm/ 2>/dev/null || true
 	@cp fonts/*.woff2 $(BUILD_DIR)/fonts/ 2>/dev/null || true
