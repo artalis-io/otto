@@ -13,7 +13,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.js",
-    "build-wasm": "make -C ../../wasm api-demo && mkdir -p build && cp ../../wasm/build/surge-api-demo.js build/"
+    "build-wasm": "make -C ../../wasm api-demo && mkdir -p build && cp ../../wasm/build/surge-api-demo.js build/surge-api-demo.cjs"
   },
   "license": "UNLICENSED",
   "engines": {

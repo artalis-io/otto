@@ -137,7 +137,7 @@ python-test: shared-lib
 node-test:
 	$(MAKE) -C wasm api-demo
 	mkdir -p bindings/node/build
-	cp wasm/build/surge-api-demo.js bindings/node/build/
+	cp wasm/build/surge-api-demo.js bindings/node/build/surge-api-demo.cjs
 	cd bindings/node && node --test test/*.test.js
 
 debug: CFLAGS = $(DEBUG_CFLAGS)

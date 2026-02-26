@@ -22,8 +22,8 @@ export async function loadSurge(wasmPath) {
     }
 
     try {
-        const modulePath = wasmPath || new URL('../build/surge-api-demo.js', import.meta.url).pathname;
-        const SurgeAPIDemo = (await import(modulePath)).default;
+        const modulePath = wasmPath || new URL('../build/surge-api-demo.cjs', import.meta.url).pathname;
+        const { default: SurgeAPIDemo } = await import(modulePath);
         cachedModule = await SurgeAPIDemo();
         cachedModule._surge_api_init();
         return createAPI(cachedModule);
