@@ -57,6 +57,25 @@ static SGStatus sg_context_clone_init(SGContext *clone, const SGContext *src) {
     clone->solution_arena_size = 0;
     atomic_store(&clone->cancel_requested, 0);
 
+    /* Penalty manager: clear so each clone's sg_solve() initializes its own.
+     * The memcpy above copied the original's penalty.state pointer — we must
+     * not share it (mutable feasible_count/total_count per constraint). */
+    memset(&clone->penalty, 0, sizeof(SGPenaltyManager));
+
+    /* Convergence: each clone must NOT write to the master's ring buffer.
+     * sg_solve() checks convergence_buffer != NULL before writing, so
+     * clearing these fields disables convergence recording in clones. */
+    clone->convergence_buffer = NULL;
+    clone->convergence_callback = NULL;
+    clone->convergence_callback_data = NULL;
+    clone->convergence_capacity = 0;
+    clone->convergence_count = 0;
+    clone->convergence_write_pos = 0;
+
+    /* tune_params: shared read-only pointer to master's params — safe for
+     * concurrent reads since sg_tune_d()/sg_tune_i() are pure accessors
+     * and tune_params is never modified during solving. */
+
     /* Clear inherited warm start (population search injects its own) */
     clone->initial_route_vehicle_ids = NULL;
     clone->initial_route_request_ids = NULL;
@@ -84,6 +103,11 @@ static void sg_context_clone_free(SGContext *clone) {
     clone->destroy_op_stats = NULL;
     free(clone->repair_op_stats);
     clone->repair_op_stats = NULL;
+
+    /* Free penalty state if sg_solve() allocated one but didn't clean up
+     * (e.g., early error exit). Normal path: sg_solve_route_model() already
+     * calls sg_penalty_free(), so this is a no-op (state == NULL). */
+    sg_penalty_free(&clone->penalty);
 
     /* scratch is freed inside sg_solve_route_model already */
     /* Do NOT free model data (depots, vehicles, requests, matrices, etc.) */

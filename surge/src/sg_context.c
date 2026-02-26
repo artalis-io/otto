@@ -396,12 +396,102 @@ void sg_free(SGContext *ctx) {
     free(ctx->frozen_vehicle_map);
     ctx->frozen_vehicle_map = NULL;
 
+    free(ctx->tune_params);
+    ctx->tune_params = NULL;
+
     ctx->num_precedences = 0;
     ctx->has_precedence = 0;
 
     sh_rng_free(ctx->op_rng);
     ctx->op_rng = NULL;
     free(ctx);
+}
+
+void sg_tune_params_default(SGTuneParams *params) {
+    if (!params) return;
+    params->phase1_fraction = SG_TUNE_SENTINEL_D;
+    params->phase15_iters = SG_TUNE_SENTINEL_I;
+    params->sa_accept_pct = SG_TUNE_SENTINEL_D;
+    params->p1_final_temp_ratio = SG_TUNE_SENTINEL_D;
+    params->p2_final_temp_ratio = SG_TUNE_SENTINEL_D;
+    params->pen_target_start = SG_TUNE_SENTINEL_D;
+    params->pen_target_end = SG_TUNE_SENTINEL_D;
+    params->pen_tolerance = SG_TUNE_SENTINEL_D;
+    params->pen_increase = SG_TUNE_SENTINEL_D;
+    params->pen_decrease = SG_TUNE_SENTINEL_D;
+    params->pen_p15_target = SG_TUNE_SENTINEL_D;
+    params->pen_p15_tolerance = SG_TUNE_SENTINEL_D;
+    params->pen_p15_increase = SG_TUNE_SENTINEL_D;
+    params->pen_p15_decrease = SG_TUNE_SENTINEL_D;
+    params->reaction_factor = SG_TUNE_SENTINEL_D;
+    params->reward_best = SG_TUNE_SENTINEL_D;
+    params->reward_better = SG_TUNE_SENTINEL_D;
+    params->reward_accepted = SG_TUNE_SENTINEL_D;
+    params->segment_size = SG_TUNE_SENTINEL_I;
+    params->worst_randomness = SG_TUNE_SENTINEL_D;
+    params->shaw_randomness = SG_TUNE_SENTINEL_D;
+    params->route_cluster_randomness = SG_TUNE_SENTINEL_D;
+    params->time_cluster_randomness = SG_TUNE_SENTINEL_D;
+    params->pd_shaw_randomness = SG_TUNE_SENTINEL_D;
+    params->route_shaw_randomness = SG_TUNE_SENTINEL_D;
+    params->string_l_max = SG_TUNE_SENTINEL_I;
+}
+
+SGStatus sg_set_tune_params(SGContext *ctx, const SGTuneParams *params) {
+    if (!ctx) return SG_STATUS_INVALID_ARG;
+    if (!params) {
+        free(ctx->tune_params);
+        ctx->tune_params = NULL;
+        return SG_STATUS_OK;
+    }
+    if (!ctx->tune_params) {
+        ctx->tune_params = (SGTuneParams *)malloc(sizeof(SGTuneParams));
+        if (!ctx->tune_params) return SG_STATUS_OUT_OF_MEMORY;
+    }
+    *ctx->tune_params = *params;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_config_set_profile(SGContext *ctx, SGProfile profile) {
+    SGTuneParams tp;
+
+    if (!ctx) return SG_STATUS_INVALID_ARG;
+    if ((int)profile < 0 || (int)profile >= SG_PROFILE_COUNT) return SG_STATUS_INVALID_ARG;
+
+    sg_tune_params_default(&tp);
+
+    /* Profiles set iteration counts and tune params appropriate for each tier.
+       Actual optimal values will be determined by bench_tune; these are initial estimates. */
+    switch (profile) {
+        case SG_PROFILE_REALTIME:
+            ctx->config.max_iterations = 500;
+            ctx->config.max_time_seconds = 1;
+            tp.phase1_fraction = 0.60;
+            tp.phase15_iters = 100;
+            break;
+        case SG_PROFILE_FAST:
+            ctx->config.max_iterations = 2500;
+            ctx->config.max_time_seconds = 5;
+            tp.phase1_fraction = 0.60;
+            tp.phase15_iters = 300;
+            break;
+        case SG_PROFILE_NEAR_OPTIMAL:
+            ctx->config.max_iterations = 10000;
+            ctx->config.max_time_seconds = 15;
+            tp.phase1_fraction = 0.60;
+            tp.phase15_iters = 500;
+            break;
+        case SG_PROFILE_BEST:
+            ctx->config.max_iterations = 50000;
+            ctx->config.max_time_seconds = 60;
+            tp.phase1_fraction = 0.60;
+            tp.phase15_iters = 1000;
+            break;
+        default:
+            return SG_STATUS_INVALID_ARG;
+    }
+
+    return sg_set_tune_params(ctx, &tp);
 }
 
 SGStatus sg_set_config(SGContext *ctx, const SGConfig *config) {

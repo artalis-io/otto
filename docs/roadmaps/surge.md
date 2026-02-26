@@ -2305,3 +2305,94 @@ management is ~200-400 lines of new code in `sg_solve.c`.
 ALNS+SA is the right architecture for Surge's constraint portfolio. HGS should only be
 considered for a separate, specialized clean-CVRP/VRPTW solver. The population-ALNS hybrid
 is the practical path to better solution quality within Surge's existing architecture.
+
+---
+
+## Hyperparameter Tuning & Large-Scale Benchmarks
+
+### Motivation
+
+Surge has ~50+ tunable parameters (SA temperature, penalty weights, phase budget splits,
+operator weights, destruction constants) but no systematic tuning infrastructure. Current
+benchmarks cover only ~115 instances at 100-customer/task scale. Need: (1) logarithmic grid
+search tuner to optimize parameters, (2) 1000+ benchmark instances including 200-1000
+customer scale.
+
+### Benchmark Expansion (~1152 instances)
+
+#### Published Instances (download)
+
+| Set | Count | Scale | Format | Source |
+|-----|-------|-------|--------|--------|
+| Gehring-Homberger VRPTW | 300 | 200-1000 customers | Solomon (parser compatible) | SINTEF TOP |
+| Li-Lim extended PDPTW | 298 | 200-1000 tasks | Li-Lim (parser compatible) | SINTEF TOP |
+| Cordeau DARP complete | 19 | Varies | Cordeau (parser compatible) | CIRRELT |
+
+#### Instance Generator (create)
+
+| Generator | Output | Sizes | Per Size | Total |
+|-----------|--------|-------|----------|-------|
+| `sg_gen_solomon` | Solomon VRPTW | 50-2000 (7 sizes) | 6 classes x 5 = 30 | 210 |
+| `sg_gen_li_lim` | Li-Lim PDPTW | 50-2000 (7 sizes) | 6 classes x 5 = 30 | 210 |
+
+Class-based generation (C1/C2/R1/R2/RC1/RC2) matching Solomon/GH structure: clustered,
+random, or mixed locations with narrow or wide time windows.
+
+#### BKS Management
+
+Move from hardcoded C arrays to CSV files in `surge/benchmarks/bks/`. Format:
+`name,vehicles,distance`. Loader: `sg_load_bks_csv()`.
+
+### Hyperparameter Tuner
+
+Standalone C program `bench_tune.c`. Adds `SGTuneParams` struct to `SGContext` for
+runtime parameter overrides (~15 insertion points in `sg_solve.c`).
+
+#### Parameter Tiers (tuned in order of impact)
+
+| Tier | Parameters | Count | Example |
+|------|-----------|-------|---------|
+| 0 | Phase budget split | 2 | phase1_fraction [0.4, 0.8], phase15_iters [100, 2000] |
+| 1 | SA temperature/cooling | 4 | sa_accept_pct, final_temp_ratios |
+| 2 | Penalty weights | 6 | target_start/end, tolerance, increase/decrease |
+| 3 | ALNS reward weights | 4 | reaction_factor, reward_best/better/accepted |
+| 4 | Destruction sizing | 3 | segment_size, adaptive_q_growth, q_min_fraction |
+| 5 | Randomness constants | 4 | worst/shaw randomness, string_l_max |
+
+Logarithmic grid for temperatures/penalties/rewards; linear for fractions/budgets.
+Progressive refinement: coarse grid per tier -> top-3 -> fine grid. ~3000 total evaluations.
+
+#### Evaluation Protocol
+
+Representative set: 12 Solomon + 6 Li-Lim = 18 instances covering all classes.
+Composite metric:
+`score = 100 * avg_vehicle_gap + avg_distance_gap_pct + 50 * max(0, worst_vehicle_gap)`.
+Parallel across configurations via `sh_worker_pool`.
+
+#### Solver Profiles
+
+The tuner optimizes parameters for 4 distinct quality/speed profiles:
+
+| Profile | Budget (100 req) | Budget (1000 req) | Use Case |
+|---------|-------------------|--------------------|----------|
+| `SG_PROFILE_REALTIME` | 500 iters / 0.5s | 200 iters / 2s | Live dispatch, API response, interactive UI |
+| `SG_PROFILE_FAST` | 2500 iters / 3s | 1000 iters / 15s | Planning with quick feedback, re-optimization |
+| `SG_PROFILE_NEAR_OPTIMAL` | 10000 iters / 15s | 5000 iters / 60s | Overnight planning, batch optimization |
+| `SG_PROFILE_BEST` | 50000 iters / 60s | 25000 iters / 300s | Research benchmarks, competition, final plan |
+
+Each profile may have different optimal parameters (e.g., real-time favors aggressive
+destruction + fast cooling; best favors gentle cooling + wide exploration). The tuner
+evaluates each tier at each profile's iteration budget, producing 4 independent parameter
+sets. Users select profiles via `sg_config_set_profile(ctx, SG_PROFILE_FAST)` which
+auto-sets iterations + tuned parameters.
+
+#### Evaluation Scenarios
+
+Each profile is evaluated on appropriate instance sizes:
+
+| Profile | Primary Eval Set | Secondary Eval Set |
+|---------|------------------|--------------------|
+| Realtime | Solomon 100 (57), Li-Lim 100 (57) | GH 200 (60) |
+| Fast | Solomon 100, Li-Lim 100, GH 200 | GH 400 (60) |
+| Near-optimal | Solomon 100, Li-Lim 100, GH 200-400 | GH 600 (60) |
+| Best | All published instances | GH 1000 (60) |

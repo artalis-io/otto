@@ -431,6 +431,9 @@ struct SGContext {
     uint8_t  has_frozen;                        /* fast-path: 1 if any request == FROZEN */
     uint32_t *frozen_vehicle_map;               /* [num_requests] rid -> designated vehicle, SG_NO_VEHICLE if not frozen */
 
+    /* Tunable parameters (NULL = use hardcoded defaults) */
+    SGTuneParams *tune_params;
+
     /* Infeasible-space exploration penalty manager */
     SGPenaltyManager penalty;
 
@@ -794,6 +797,16 @@ static inline double sg_setup_time_between(const SGContext *ctx,
          ? ctx->requests[cur_request_id].setup_class_id : 0;
     if (pc == 0 || cc == 0) return 0.0;
     return ctx->setup_time_matrix[(size_t)(pc - 1) * ctx->num_setup_classes + (cc - 1)];
+}
+
+/* Tune parameter accessors: return tuned value if set, else default */
+static inline double sg_tune_d(const SGContext *ctx, double field_val, double def) {
+    if (ctx->tune_params && field_val != SG_TUNE_SENTINEL_D) return field_val;
+    return def;
+}
+static inline int sg_tune_i(const SGContext *ctx, int field_val, int def) {
+    if (ctx->tune_params && field_val != SG_TUNE_SENTINEL_I) return field_val;
+    return def;
 }
 
 int sg_request_pd_demands_valid(const SGTaskRecord *pickup, const SGTaskRecord *delivery,
