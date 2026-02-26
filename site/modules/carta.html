@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Carta — Map Tile Server | OTTO</title>
+    <meta name="description" content="Carta is a pure-C map tile server with zero graphics dependencies. PNG, MVT, and ASCII tiles from OpenStreetMap PBF data. Software renderer with labels, metatile caching, R-tree spatial index. WASM-compilable.">
+
+    <!-- SEO -->
+    <link rel="canonical" href="https://ottofleet.io/modules/carta.html">
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#0a0a0a">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="Carta — Map Tile Server | OTTO">
+    <meta property="og:description" content="Zero-dependency map tile server. PNG raster, MVT vector, ASCII art tiles from OSM data. Pure C software renderer with labels, metatile caching, and R-tree spatial index. Compiles to WASM.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://ottofleet.io/modules/carta.html">
+    <meta property="og:site_name" content="OTTO">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%230a0a0a'/%3E%3Ctext x='50' y='68' font-family='ui-monospace,monospace' font-size='60' font-weight='700' fill='%233b82f6' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
+
+    <!-- Shared Styles -->
+    <link rel="stylesheet" href="../style.css">
+
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Carta",
+        "alternateName": "OTTO Carta Map Tile Server",
+        "description": "Map tile server with pure C software renderer. PNG, MVT, and ASCII tiles from OpenStreetMap PBF data. Zero external graphics dependencies, compiles to WebAssembly.",
+        "url": "https://ottofleet.io/modules/carta.html",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Cross-platform (WASM, Linux, macOS)",
+        "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+        "author": {
+            "@type": "Person",
+            "name": "Mark Farkas"
+        }
+    }
+    </script>
+
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --bg-secondary: #141414;
+            --bg-tertiary: #1a1a1a;
+            --text: #e5e5e5;
+            --text-muted: #9ca3af;
+            --accent: #3b82f6;
+            --accent-dim: #1e40af;
+            --border: #2a2a2a;
+            --success: #22c55e;
+            --warning: #eab308;
+            --error: #ef4444;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+
+        body {
+            font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'Segoe UI Mono', Menlo, Monaco, Consolas, monospace;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            font-size: 15px;
+        }
+
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        .container { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
+
+        header { padding: 48px 0 32px; border-bottom: 1px solid var(--border); }
+        .header-top { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px; }
+        .logo { font-size: 32px; font-weight: 700; letter-spacing: 4px; color: var(--text); animation: logo-electric 4s infinite; text-shadow: 0 0 10px rgba(255,255,255,0.1); }
+        .logo span { color: var(--accent); }
+
+        @keyframes logo-electric {
+            0%, 100% { text-shadow: 0 0 10px rgba(255,255,255,0.15), 0 0 20px rgba(255,255,255,0.05); transform: translate(0,0); filter: brightness(1); }
+            5% { text-shadow: -1px 0 rgba(255,100,100,0.5), 1px 0 rgba(100,180,255,0.5), 0 0 10px rgba(255,255,255,0.2); transform: translate(0.5px,0); }
+            10% { text-shadow: 0 0 10px rgba(255,255,255,0.15); transform: translate(0,0); }
+            30% { text-shadow: -2px 0 rgba(255,60,60,0.6), 2px 0 rgba(60,180,255,0.6), 0 0 20px rgba(255,255,255,0.3); transform: translate(1px,0) skewX(0.5deg); filter: brightness(1.15); }
+            31% { text-shadow: 2px 0 rgba(255,60,60,0.5), -2px 0 rgba(60,180,255,0.5), 0 0 15px rgba(255,255,255,0.2); transform: translate(-0.5px,0.3px) skewX(-0.3deg); }
+            33% { text-shadow: 0 0 10px rgba(255,255,255,0.15); transform: translate(0,0); filter: brightness(1); }
+            55% { text-shadow: 0.5px 0 rgba(255,150,150,0.3), -0.5px 0 rgba(150,200,255,0.3), 0 0 10px rgba(255,255,255,0.15); }
+            60% { text-shadow: 0 0 10px rgba(255,255,255,0.15), 0 0 20px rgba(255,255,255,0.05); }
+            75% { text-shadow: -1.5px 0 rgba(255,80,80,0.5), 1.5px 0 rgba(80,180,255,0.5), 0 0 15px rgba(255,255,255,0.25); transform: translate(0.6px,-0.2px); filter: brightness(1.1); }
+            77% { text-shadow: 0 0 10px rgba(255,255,255,0.15); transform: translate(0,0); filter: brightness(1); }
+            92% { filter: brightness(0.95); } 93% { filter: brightness(1.08); } 94% { filter: brightness(1); }
+        }
+
+        .tagline { margin-top: 8px; color: var(--text-muted); font-size: 14px; }
+        .header-nav { display: flex; gap: 8px; flex-wrap: wrap; }
+        .nav-group { display: flex; gap: 8px; flex-wrap: wrap; }
+        .nav-separator { color: var(--border); font-weight: 300; align-self: center; }
+        .header-nav a { padding: 6px 12px; font-size: 13px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 4px; text-decoration: none; }
+        .header-nav a:hover { color: var(--text); border-color: var(--accent-dim); text-decoration: none; }
+
+        .hero { padding: 48px 0; border-bottom: 1px solid var(--border); }
+        .hero h1 { font-size: 20px; font-weight: 600; margin-bottom: 16px; }
+        .hero p { color: var(--text-muted); max-width: 700px; }
+        .badges { margin-top: 24px; display: flex; flex-wrap: wrap; gap: 12px; }
+        .badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; font-size: 13px; color: var(--text-muted); }
+        .badge.green { border-color: var(--success); color: var(--success); }
+        .badge.blue { border-color: var(--accent); color: var(--accent); }
+        .badge.yellow { border-color: var(--warning); color: var(--warning); }
+
+        .section { padding: 48px 0; border-bottom: 1px solid var(--border); }
+        .section-title { font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 2px; color: var(--text-muted); margin-bottom: 24px; }
+        .section h2 { font-size: 18px; font-weight: 600; margin-bottom: 16px; }
+        .section h3 { font-size: 15px; font-weight: 600; margin-bottom: 12px; margin-top: 32px; }
+        .section h3:first-child { margin-top: 0; }
+        .section p { color: var(--text-muted); margin-bottom: 16px; max-width: 800px; }
+        .section p strong { color: var(--text); }
+        .section ul { color: var(--text-muted); margin-bottom: 16px; padding-left: 24px; }
+        .section ul li { margin-bottom: 6px; }
+        .section ul li strong { color: var(--text); }
+
+        .code-block { background: linear-gradient(135deg, #0a0a0a 0%, #141414 100%); border: 1px solid #2a2a2a; border-radius: 6px; padding: 20px; overflow-x: auto; position: relative; overflow: hidden; margin-bottom: 16px; }
+        .code-block::after { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: repeating-linear-gradient(0deg, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 1px, transparent 1px, transparent 2px); pointer-events: none; }
+        .code-block pre { margin: 0; font-size: 13px; font-family: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace; position: relative; z-index: 1; animation: crt-flicker-gray 5s infinite; }
+        .code-block .comment { color: #707070; text-shadow: 0 0 5px rgba(150,150,150,0.2); }
+        .code-block .command { color: #50c878; text-shadow: 0 0 5px rgba(80,200,120,0.4), 0 0 10px rgba(80,200,120,0.2); }
+        .code-block .keyword { color: #60a5fa; text-shadow: 0 0 5px rgba(96,165,250,0.3); }
+        .code-block .type { color: #a78bfa; text-shadow: 0 0 5px rgba(167,139,250,0.3); }
+        .code-block .string { color: #fbbf24; text-shadow: 0 0 5px rgba(251,191,36,0.3); }
+        .code-block .number { color: #34d399; text-shadow: 0 0 5px rgba(52,211,153,0.3); }
+        .code-block .func { color: #f0abfc; text-shadow: 0 0 5px rgba(240,171,252,0.3); }
+        @keyframes crt-flicker-gray { 0%, 100% { opacity: 1; } 94% { opacity: 1; } 95% { opacity: 0.97; } 96% { opacity: 1; } }
+
+        .ascii-art { background: linear-gradient(135deg, #1a1a1a 0%, #222 100%); border: 1px solid #333; border-radius: 6px; padding: 24px; overflow-x: auto; font-size: 13px; line-height: 1.3; position: relative; overflow: hidden; margin-bottom: 16px; }
+        .ascii-art::after { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: repeating-linear-gradient(0deg, rgba(255,255,255,0.03) 0px, rgba(255,255,255,0.03) 1px, transparent 1px, transparent 2px); pointer-events: none; }
+        .ascii-art pre { margin: 0; font-family: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace; color: #a0a0a0; text-shadow: 0 0 5px rgba(200,200,200,0.3), 0 0 10px rgba(200,200,200,0.1); position: relative; z-index: 1; animation: crt-flicker-gray 5s infinite; letter-spacing: 0; word-spacing: 0; font-variant-ligatures: none; font-feature-settings: "calt" 0; line-height: 1; }
+
+        table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 24px; }
+        th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+        th { color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; white-space: nowrap; }
+        td { color: var(--text-muted); }
+        td:first-child { color: var(--text); font-weight: 500; }
+        .y { color: var(--success); font-weight: 600; }
+        .n { color: #555; }
+        .table-scroll { overflow-x: auto; margin-bottom: 24px; }
+        .table-scroll table { min-width: 700px; margin-bottom: 0; }
+
+        .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 16px; }
+        .feature-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 20px; }
+        .feature-card:hover { border-color: var(--accent-dim); }
+        .feature-card-title { font-weight: 600; font-size: 14px; margin-bottom: 8px; }
+        .feature-card-desc { color: var(--text-muted); font-size: 13px; line-height: 1.5; }
+
+        .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .stat { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 16px; text-align: center; }
+        .stat-value { font-size: 24px; font-weight: 700; color: var(--text); }
+        .stat-value.green { color: var(--success); }
+        .stat-value.blue { color: var(--accent); }
+        .stat-value.yellow { color: var(--warning); }
+        .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+
+        .callout { background: var(--bg-secondary); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; padding: 16px 20px; margin-bottom: 24px; }
+        .callout p { margin-bottom: 0; }
+        .callout.honest { border-left-color: var(--warning); }
+
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+
+        footer { padding: 32px 0; color: var(--text-muted); font-size: 13px; }
+        .footer-links { display: flex; gap: 24px; margin-bottom: 16px; }
+
+        .skip-link { position: absolute; top: -40px; left: 0; background: var(--accent); color: white; padding: 8px 16px; z-index: 100; text-decoration: none; }
+        .skip-link:focus { top: 0; }
+
+        @media (max-width: 600px) {
+            .logo { font-size: 24px; }
+            .hero h1 { font-size: 18px; }
+            .ascii-art { font-size: 10px; padding: 16px; }
+            .footer-links { flex-direction: column; gap: 8px; }
+            .header-top { flex-direction: column; }
+            .header-nav { margin-top: 16px; }
+            .two-col { grid-template-columns: 1fr; }
+            .stat-row { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+    <div class="container">
+        <header>
+            <div class="header-top">
+                <div>
+                    <a href="../index.html" style="text-decoration:none"><div class="logo"><span>O</span>TTO</div></a>
+                    <div class="tagline">Carta &mdash; Map Tile Server</div>
+                </div>
+                <nav class="header-nav">
+                    <div class="nav-group">
+                        <a href="../index.html">Home</a>
+                        <a href="../api.html">API</a>
+                    </div>
+                    <span class="nav-separator">|</span>
+                    <div class="nav-group">
+                        <a href="#why">Why</a>
+                        <a href="#rendering">Rendering</a>
+                        <a href="#formats">Formats</a>
+                        <a href="#architecture">Architecture</a>
+                        <a href="#quickstart">Quick Start</a>
+                    </div>
+                </nav>
+            </div>
+        </header>
+
+        <main id="main-content">
+
+        <!-- ============================================================ -->
+        <!-- Hero -->
+        <!-- ============================================================ -->
+        <section class="hero">
+            <h1>Map tiles from raw PBF in pure C</h1>
+            <p>
+                Carta is a map tile server written in C11 with zero graphics dependencies. No Cairo,
+                no Mapnik, no FreeType. It reads OpenStreetMap PBF data directly, builds an R-tree
+                spatial index, and renders PNG raster tiles, MVT vector tiles, and ASCII art tiles &mdash;
+                all from the same codebase. Software renderer with anti-aliased lines, label placement,
+                metatile caching, and zoom-adaptive LOD. Compiles to WASM for browser demos.
+            </p>
+            <div class="badges">
+                <span class="badge green">164 tests</span>
+                <span class="badge blue">3 output formats</span>
+                <span class="badge yellow">Zero deps</span>
+                <span class="badge">C11</span>
+                <span class="badge">WASM</span>
+                <span class="badge">~18K LoC</span>
+                <span class="badge">~75ms/tile</span>
+                <span class="badge">AGPLv3 + Trucking Exception</span>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Why -->
+        <!-- ============================================================ -->
+        <section class="section" id="why">
+            <div class="section-title">Why</div>
+            <h2>A tile server you can deploy anywhere</h2>
+
+            <p>
+                Standard tile pipelines are complex: PostGIS + Mapnik + Tirex for raster, or
+                osm2pgsql + pg_tileserv for vector. Each requires PostgreSQL, dozens of dependencies,
+                and GB of disk for a simple deployment. Want to run it in a browser? Forget it.
+            </p>
+
+            <p>
+                Carta takes a different approach: <strong>read PBF, render tiles, serve HTTP</strong>.
+                One C binary, one PBF data file, zero external services. The same code renders tiles
+                natively at ~75ms, or runs in the browser via WASM with embedded data. For a trucking
+                fleet, this means map tiles served from the edge &mdash; no cloud tile provider needed.
+            </p>
+
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-card-title">Pure C software renderer</div>
+                    <div class="feature-card-desc">
+                        Xiaolin Wu anti-aliased lines, even-odd polygon fill, road casing, label
+                        placement with collision detection. No Cairo, no Skia, no GPU required.
+                        Renders identically on Linux, macOS, and in the browser via WASM.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Three output formats</div>
+                    <div class="feature-card-desc">
+                        PNG raster tiles (512&times;512), MVT vector tiles (Mapbox spec v2), and
+                        ASCII art tiles (4 character sets including Unicode Braille). Same data,
+                        same spatial index, three completely different renderers.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Direct PBF parsing</div>
+                    <div class="feature-card-desc">
+                        No intermediate database. Load a PBF file, build an R-tree index, start
+                        serving. Country-scale data loads in seconds. No PostGIS, no osm2pgsql,
+                        no import step. Updates: swap the PBF and restart.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Production-hardened server</div>
+                    <div class="feature-card-desc">
+                        Rate limiting, work queue with backpressure, ETag caching (304 Not Modified),
+                        adaptive capacity tuning from P50 response times, worker thread pool with
+                        SO_REUSEPORT load balancing. TileJSON 3.0.0 metadata.
+                    </div>
+                </div>
+            </div>
+
+            <div class="callout">
+                <p>
+                    <strong>Edge deployment.</strong> Trucks have intermittent connectivity. A Carta
+                    binary + country PBF on a vehicle-mounted computer serves map tiles offline.
+                    Same binary compiles to WASM for the web dashboard. One renderer, every platform.
+                </p>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Rendering Pipeline -->
+        <!-- ============================================================ -->
+        <section class="section" id="rendering">
+            <div class="section-title">Rendering Pipeline</div>
+            <h2>From PBF bytes to pixels</h2>
+
+            <div class="ascii-art">
+<pre>
+  PBF File (OSM data)
+       │
+       ▼
+  ┌──────────────┐     ┌──────────────┐
+  │ ct_pbf.c     │────▶│ ct_rtree.c   │  Hilbert-packed R-tree
+  │ Parse nodes, │     │ Spatial      │  O(log n + k) queries
+  │ ways, rels   │     │ index        │
+  └──────────────┘     └──────┬───────┘
+                              │
+  GET /tiles/14/8588/5664     │  Tile request
+       │                      │
+       ▼                      ▼
+  ┌──────────────┐     ┌──────────────┐
+  │ ct_tile.c    │────▶│ ct_lod.c     │  Level-of-detail
+  │ Web Mercator │     │ Zoom-based   │  filtering
+  │ projection   │     │ feature rules│
+  └──────────────┘     └──────┬───────┘
+                              │
+                    ┌─────────┼─────────┐
+                    ▼         ▼         ▼
+             ┌──────────┐ ┌───────┐ ┌───────┐
+             │ ct_render │ │ct_mvt │ │ct_ascii│
+             │ Rasterize │ │Protobuf│ │ Chars │
+             │ → PNG     │ │encode │ │ + ANSI│
+             └──────────┘ └───────┘ └───────┘
+</pre>
+            </div>
+
+            <div class="stat-row">
+                <div class="stat">
+                    <div class="stat-value blue">~75ms</div>
+                    <div class="stat-label">Avg Tile Latency</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">164</div>
+                    <div class="stat-label">Tests</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value">~18K</div>
+                    <div class="stat-label">Lines of C</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">&lt;1ms</div>
+                    <div class="stat-label">Cache Hit</div>
+                </div>
+            </div>
+
+            <h3>Software rasterizer</h3>
+            <p>
+                Carta's rasterizer draws directly to an RGBA pixel buffer. No GPU, no OpenGL, no
+                external graphics library. Anti-aliased lines via Xiaolin Wu's algorithm, polygon fill
+                with even-odd rule, road casing with configurable width.
+            </p>
+            <ul>
+                <li><strong>SIMD optimization</strong> &mdash; 8&times; speedup for opaque polygon fill</li>
+                <li><strong>Pre-allocated buffers</strong> &mdash; eliminates 500+ malloc/free pairs per tile</li>
+                <li><strong>Thread-local render contexts</strong> &mdash; zero contention between workers</li>
+                <li><strong>Miniz compression level 2</strong> &mdash; 3&times; faster than default PNG encoding</li>
+            </ul>
+
+            <h3>Label system</h3>
+            <p>
+                Three types of labels, all with collision detection on an 8&times;8 grid:
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Label Type</th>
+                        <th>Algorithm</th>
+                        <th>Features</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Point labels</td>
+                        <td>9-anchor placement</td>
+                        <td>Cities, towns, POIs. Priority: country (100) &rarr; village (50)</td>
+                    </tr>
+                    <tr>
+                        <td>Road labels</td>
+                        <td>Text along path</td>
+                        <td>Per-glyph angle, follows road geometry</td>
+                    </tr>
+                    <tr>
+                        <td>Area labels</td>
+                        <td>Pole of inaccessibility</td>
+                        <td>Lakes, parks. Finds interior point farthest from edges</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Metatile caching</h3>
+            <p>
+                Labels that span tile boundaries look wrong when each tile is rendered independently.
+                Carta's metatile system renders <strong>2&times;2 tile groups</strong> with a shared
+                collision grid, then extracts individual tiles. Thread-safe LRU cache with
+                <code>pthread_rwlock</code> and refcounted entries. Default capacity: 4,096 metatiles.
+            </p>
+
+            <h3>Level of detail</h3>
+            <p>
+                Zoom-adaptive feature visibility prevents tile clutter at low zoom levels:
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Feature</th>
+                        <th>Min Zoom</th>
+                        <th>Feature</th>
+                        <th>Min Zoom</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Motorways</td>
+                        <td>z5</td>
+                        <td>Buildings (&gt;5000m&sup2;)</td>
+                        <td>z13</td>
+                    </tr>
+                    <tr>
+                        <td>Primary roads</td>
+                        <td>z8</td>
+                        <td>Buildings (all)</td>
+                        <td>z15</td>
+                    </tr>
+                    <tr>
+                        <td>Residential roads</td>
+                        <td>z14</td>
+                        <td>Large lakes</td>
+                        <td>z4</td>
+                    </tr>
+                    <tr>
+                        <td>Service roads</td>
+                        <td>z15</td>
+                        <td>Rivers</td>
+                        <td>z8</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Output Formats -->
+        <!-- ============================================================ -->
+        <section class="section" id="formats">
+            <div class="section-title">Output Formats</div>
+            <h2>PNG, MVT, and ASCII from the same data</h2>
+
+            <h3>PNG raster tiles</h3>
+            <div class="code-block">
+<pre><span class="comment"># Fetch a PNG tile (z14, downtown Budapest)</span>
+<span class="command">curl http://localhost:8081/tiles/14/9116/5693.png -o tile.png</span>
+
+<span class="comment"># 512x512 pixels, ~75ms generation, &lt;1ms cache hit</span>
+<span class="comment"># ETag support for 304 Not Modified</span></pre>
+            </div>
+
+            <h3>MVT vector tiles</h3>
+            <div class="code-block">
+<pre><span class="comment"># Fetch an MVT tile (Mapbox Vector Tile spec v2)</span>
+<span class="command">curl http://localhost:8081/tiles/14/9116/5693.mvt -o tile.mvt</span>
+
+<span class="comment"># Layers: background, landuse, water, buildings,</span>
+<span class="comment">#         roads, railways, boundaries, labels</span>
+<span class="comment"># Delta + zigzag coordinate encoding</span>
+<span class="comment"># Douglas-Peucker simplification (20-30% smaller)</span></pre>
+            </div>
+
+            <h3>ASCII art tiles</h3>
+            <div class="code-block">
+<pre><span class="comment"># Render as ASCII art</span>
+<span class="command">curl "http://localhost:8081/tiles/14/9116/5693.txt?width=80&amp;charset=braille&amp;color=1"</span>
+
+<span class="comment"># Charsets: simple (10-level), extended, blocks (Unicode), braille (max detail)</span>
+<span class="comment"># Options: width, height, invert, ANSI color</span></pre>
+            </div>
+
+            <h3>TileJSON metadata</h3>
+            <div class="code-block">
+<pre><span class="comment"># TileJSON 3.0.0 endpoint</span>
+<span class="command">curl http://localhost:8081/tiles.json</span>
+
+<span class="comment"># Returns: tilejson, tiles URL template, bounds,</span>
+<span class="comment">#          center, minzoom, maxzoom, attribution</span></pre>
+            </div>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Endpoint</th>
+                        <th>Format</th>
+                        <th>Content-Type</th>
+                        <th>Use Case</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>/tiles/{z}/{x}/{y}.png</td>
+                        <td>PNG raster</td>
+                        <td>image/png</td>
+                        <td>Web maps, offline maps, previews</td>
+                    </tr>
+                    <tr>
+                        <td>/tiles/{z}/{x}/{y}.mvt</td>
+                        <td>MVT vector</td>
+                        <td>application/vnd.mapbox-vector-tile</td>
+                        <td>MapLibre GL, Mapbox GL, custom renderers</td>
+                    </tr>
+                    <tr>
+                        <td>/tiles/{z}/{x}/{y}.txt</td>
+                        <td>ASCII art</td>
+                        <td>text/plain</td>
+                        <td>Terminal, monitoring, novelty</td>
+                    </tr>
+                    <tr>
+                        <td>/tiles.json</td>
+                        <td>TileJSON 3.0.0</td>
+                        <td>application/json</td>
+                        <td>Client auto-configuration</td>
+                    </tr>
+                    <tr>
+                        <td>/api/v1/health</td>
+                        <td>JSON</td>
+                        <td>application/json</td>
+                        <td>Health check</td>
+                    </tr>
+                    <tr>
+                        <td>/api/v1/stats</td>
+                        <td>JSON</td>
+                        <td>application/json</td>
+                        <td>PBF stats, cache stats</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Architecture -->
+        <!-- ============================================================ -->
+        <section class="section" id="architecture">
+            <div class="section-title">Under the Hood</div>
+            <h2>R-tree, LRU cache, worker pool</h2>
+
+            <h3>Spatial index</h3>
+            <p>
+                Hilbert-packed Sort-Tile-Recursive R-tree. O(log n + k) tile queries vs O(n)
+                linear scan. Built once at startup from PBF data. Packed node structure for
+                cache-line efficiency. Carta queries the R-tree for every tile request to find
+                which OSM features intersect the tile bbox.
+            </p>
+
+            <h3>Tile cache</h3>
+            <p>
+                Per-zoom LRU cache with configurable total size (default 256MB). Separate caches
+                for PNG and MVT. 64-bit key packing: <code>z(5) | x(29) | y(30)</code>. Cache hit
+                latency: &lt;1ms vs ~75ms generation. ETag headers use FNV-1a 64-bit hash for
+                HTTP 304 responses.
+            </p>
+
+            <h3>Server architecture</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Component</th>
+                        <th>Implementation</th>
+                        <th>Configuration</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>HTTP server</td>
+                        <td>Mongoose (event loop)</td>
+                        <td>Port 8081</td>
+                    </tr>
+                    <tr>
+                        <td>Rate limiter</td>
+                        <td>sh_ratelimit (token bucket)</td>
+                        <td>10 RPS, burst 100</td>
+                    </tr>
+                    <tr>
+                        <td>Work queue</td>
+                        <td>sh_workqueue (bounded)</td>
+                        <td>256 depth, 5s timeout</td>
+                    </tr>
+                    <tr>
+                        <td>Workers</td>
+                        <td>sh_worker_pool</td>
+                        <td>Auto CPU count</td>
+                    </tr>
+                    <tr>
+                        <td>Adaptive</td>
+                        <td>sh_adaptive (P50/P90/P99)</td>
+                        <td>Optional, 70% target</td>
+                    </tr>
+                    <tr>
+                        <td>CORS</td>
+                        <td>sh_cors</td>
+                        <td>Origin allowlist</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Codebase</h3>
+
+            <div class="stat-row">
+                <div class="stat">
+                    <div class="stat-value">~18K</div>
+                    <div class="stat-label">Lines of C</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">164</div>
+                    <div class="stat-label">Tests</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value blue">21</div>
+                    <div class="stat-label">Headers</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value blue">27</div>
+                    <div class="stat-label">Source Files</div>
+                </div>
+            </div>
+
+            <div class="callout honest">
+                <p>
+                    <strong>Honest assessment.</strong> Carta is not Mapnik. Styling is not configurable
+                    via CartoCSS or MapboxGL JSON &mdash; road colors and widths are compiled in. Label
+                    rendering uses an embedded bitmap font, not FreeType with TTF fonts. For a fleet
+                    operations dashboard showing truck positions on a map, this is fine. For a consumer
+                    map product competing with Google Maps, you'd want Mapbox GL or MapLibre GL on top
+                    of Carta's MVT tiles.
+                </p>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Quick Start -->
+        <!-- ============================================================ -->
+        <section class="section" id="quickstart">
+            <div class="section-title">Quick Start</div>
+            <h2>Three ways to try Carta</h2>
+
+            <h3>1. Browser (zero install)</h3>
+            <p>
+                The <a href="../api.html#carta">API documentation page</a> includes a live WASM demo
+                with embedded Monaco data. Click to generate PNG, MVT, or ASCII tiles. No server needed.
+            </p>
+
+            <h3>2. Build from source</h3>
+            <div class="code-block">
+<pre><span class="comment"># Clone and build</span>
+<span class="command">git clone https://github.com/ottofleet/otto.git</span>
+<span class="command">cd otto && make carta</span>
+
+<span class="comment"># Run all 164 tests</span>
+<span class="command">make test-carta</span></pre>
+            </div>
+
+            <h3>3. Tile server</h3>
+            <div class="code-block">
+<pre><span class="comment"># Build and start server</span>
+<span class="command">make carta-api</span>
+<span class="command">./carta/api/carta-tile-server data/hungary-latest.osm.pbf</span>
+
+<span class="comment"># Fetch a PNG tile</span>
+<span class="command">curl http://localhost:8081/tiles/14/9116/5693.png -o tile.png</span>
+
+<span class="comment"># Fetch an MVT tile</span>
+<span class="command">curl http://localhost:8081/tiles/14/9116/5693.mvt -o tile.mvt</span>
+
+<span class="comment"># ASCII art in your terminal</span>
+<span class="command">curl "http://localhost:8081/tiles/14/9116/5693.txt?width=80&amp;color=1"</span></pre>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- FAQ -->
+        <!-- ============================================================ -->
+        <section class="section" id="faq">
+            <div class="section-title">FAQ</div>
+            <h2>Common questions</h2>
+
+            <h3>Why build a tile server from scratch?</h3>
+            <p>
+                Three reasons: (1) <strong>Edge deployment</strong> &mdash; one binary + one PBF file,
+                no PostgreSQL, no import pipeline. Put it on a truck's onboard computer for offline maps.
+                (2) <strong>WASM demos</strong> &mdash; the same C code renders tiles in the browser.
+                (3) <strong>Zero dependencies</strong> &mdash; no Cairo, no Mapnik, no transitive
+                dependency chain. What you audit is what you ship.
+            </p>
+
+            <h3>How does Carta compare to Mapnik or MapServer?</h3>
+            <p>
+                Mapnik is far more capable at cartography: configurable styling, TTF fonts, SVG symbols,
+                labeling heuristics refined over 15 years. Carta is simpler and self-contained. The
+                tradeoff is deployment complexity (Mapnik needs PostGIS + dozens of libs) vs. rendering
+                quality (Carta has fixed styling). For fleet dashboards showing vehicle positions and
+                route overlays, Carta's quality is sufficient. For consumer map products, use Carta's
+                MVT output with MapLibre GL for rendering.
+            </p>
+
+            <h3>What about vector tile rendering in the browser?</h3>
+            <p>
+                Carta's MVT tiles are fully compatible with MapLibre GL and Mapbox GL. Use Carta as a
+                vector tile server and let the browser handle beautiful rendering with WebGL. The PNG
+                output is for contexts where client-side rendering isn't available (email reports,
+                server-generated PDFs, terminal dashboards).
+            </p>
+
+            <h3>How large are the PBF files?</h3>
+            <p>
+                Monaco: 450KB. Hungary: 400MB. Germany: 3.5GB. Planet: 72GB. Carta loads data into
+                memory (10&ndash;15&times; PBF size for peak RAM), so country-scale works on a standard
+                server. Continental-scale needs 64&ndash;128GB RAM or sharding. See the roadmap for
+                planned continental sharding support.
+            </p>
+
+            <h3>What license?</h3>
+            <p>
+                AGPLv3 with a Trucking Exception. Same terms as all OTTO modules.
+            </p>
+        </section>
+
+        </main>
+
+        <footer>
+            <nav class="footer-links" aria-label="Footer navigation">
+                <a href="../index.html">Home</a>
+                <a href="../api.html">API Docs</a>
+                <a href="https://github.com/ottofleet/otto/blob/main/docs/roadmaps/carta.md">Roadmap</a>
+                <a href="https://github.com/ottofleet/otto/blob/main/LICENSE">License</a>
+                <a href="https://github.com/ottofleet/otto">GitHub</a>
+            </nav>
+            <div>&copy; 2026 Mark Farkas. Built by <a href="https://artalis.io">Artalis</a>.</div>
+        </footer>
+    </div>
+</body>
+</html>
