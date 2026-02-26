@@ -250,6 +250,13 @@ typedef struct {
     int expected_cooldown;
 } DirStabilizeCooldownCase;
 
+typedef struct {
+    const char *name;
+    double dir_inf_ratio;
+    int cooldown_active;
+    int expected_force;
+} DirStabilizeForceCase;
+
 static int run_lu_health_case(const LUHealthCase *tc) {
     int hard = -1;
     int soft = -1;
@@ -411,6 +418,20 @@ static int run_dir_stabilize_cooldown_case(const DirStabilizeCooldownCase *tc) {
     if (cooldown != tc->expected_cooldown) {
         fprintf(stderr, "FAIL: %s (expected cooldown=%d got=%d)\n",
                 tc->name, tc->expected_cooldown, cooldown);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_dir_stabilize_force_case(const DirStabilizeForceCase *tc) {
+    int force =
+        lp_refactor_policy_phase1_dir_stabilize_force_extreme_ratio(
+            tc->dir_inf_ratio,
+            tc->cooldown_active);
+    if (force != tc->expected_force) {
+        fprintf(stderr, "FAIL: %s (expected force=%d got=%d)\n",
+                tc->name, tc->expected_force, force);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -1067,6 +1088,32 @@ int main(void) {
             .expected_cooldown = 64
         }
     };
+    const DirStabilizeForceCase dir_stabilize_force_cases[] = {
+        {
+            .name = "phase1 dir-force uses baseline threshold before cooldown",
+            .dir_inf_ratio = 150.0,
+            .cooldown_active = 0,
+            .expected_force = 1
+        },
+        {
+            .name = "phase1 dir-force suppresses moderate extremes during cooldown",
+            .dir_inf_ratio = 150.0,
+            .cooldown_active = 1,
+            .expected_force = 0
+        },
+        {
+            .name = "phase1 dir-force keeps cooldown guard below 1000x",
+            .dir_inf_ratio = 350.0,
+            .cooldown_active = 1,
+            .expected_force = 0
+        },
+        {
+            .name = "phase1 dir-force allows severe extremes during cooldown",
+            .dir_inf_ratio = 1500.0,
+            .cooldown_active = 1,
+            .expected_force = 1
+        }
+    };
 
     int pass = 0;
     int total_policy = (int)(sizeof(cases) / sizeof(cases[0]));
@@ -1075,8 +1122,9 @@ int main(void) {
     int total_soft_lu_defer = (int)(sizeof(soft_lu_defer_cases) / sizeof(soft_lu_defer_cases[0]));
     int total_periodic_cost_defer = (int)(sizeof(periodic_cost_defer_cases) / sizeof(periodic_cost_defer_cases[0]));
     int total_dir_stabilize = (int)(sizeof(dir_stabilize_cooldown_cases) / sizeof(dir_stabilize_cooldown_cases[0]));
+    int total_dir_force = (int)(sizeof(dir_stabilize_force_cases) / sizeof(dir_stabilize_force_cases[0]));
     int total = total_policy + total_sched + total_lu_health + total_soft_lu_defer +
-                total_periodic_cost_defer + total_dir_stabilize;
+                total_periodic_cost_defer + total_dir_stabilize + total_dir_force;
 
     for (int i = 0; i < total_policy; i++) {
         pass += run_case(&cases[i]);
@@ -1095,6 +1143,9 @@ int main(void) {
     }
     for (int i = 0; i < total_dir_stabilize; i++) {
         pass += run_dir_stabilize_cooldown_case(&dir_stabilize_cooldown_cases[i]);
+    }
+    for (int i = 0; i < total_dir_force; i++) {
+        pass += run_dir_stabilize_force_case(&dir_stabilize_force_cases[i]);
     }
 
     printf("\nPolicy cases passed: %d/%d\n", pass, total);

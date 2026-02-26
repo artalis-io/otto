@@ -253,6 +253,8 @@ typedef struct {
     int phase1_dir_stabilize_ratio_le_30;
     int phase1_dir_stabilize_ratio_le_100;
     int phase1_dir_stabilize_ratio_gt_100;
+    int phase1_dir_stabilize_ratio_gt_300;
+    int phase1_dir_stabilize_ratio_gt_1000;
 
     double phase2_pricing_ms;
     double phase2_ratio_ms;
@@ -818,6 +820,10 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_dir_stabilize_ratio_le_100;
             result.phase1_dir_stabilize_ratio_gt_100 =
                 solver_tel.perf_phase1_dir_stabilize_ratio_gt_100;
+            result.phase1_dir_stabilize_ratio_gt_300 =
+                solver_tel.perf_phase1_dir_stabilize_ratio_gt_300;
+            result.phase1_dir_stabilize_ratio_gt_1000 =
+                solver_tel.perf_phase1_dir_stabilize_ratio_gt_1000;
 
             result.phase2_pricing_ms = solver_tel.perf_phase2_pricing_ms;
             result.phase2_ratio_ms = solver_tel.perf_phase2_ratio_ms;
@@ -1750,6 +1756,10 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_dir_stabilize_ratio_le_100);
     fprintf(out, "      \"dir_stabilize_ratio_gt_100\": %d,\n",
             ralph->phase1_dir_stabilize_ratio_gt_100);
+    fprintf(out, "      \"dir_stabilize_ratio_gt_300\": %d,\n",
+            ralph->phase1_dir_stabilize_ratio_gt_300);
+    fprintf(out, "      \"dir_stabilize_ratio_gt_1000\": %d,\n",
+            ralph->phase1_dir_stabilize_ratio_gt_1000);
     fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase1_compute_solution_calls);
     fprintf(out, "      \"compute_reduced_costs_calls\": %d\n", ralph->phase1_compute_rc_calls);
     fprintf(out, "    },\n");
@@ -1809,6 +1819,10 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_dir_stabilize_ratio_le_100);
     fprintf(out, "    \"phase1_dir_stabilize_ratio_gt_100\": %d,\n",
             ralph->phase1_dir_stabilize_ratio_gt_100);
+    fprintf(out, "    \"phase1_dir_stabilize_ratio_gt_300\": %d,\n",
+            ralph->phase1_dir_stabilize_ratio_gt_300);
+    fprintf(out, "    \"phase1_dir_stabilize_ratio_gt_1000\": %d,\n",
+            ralph->phase1_dir_stabilize_ratio_gt_1000);
     fprintf(out, "    \"reason_infeasibility_cleanup\": %d,\n", ralph->refactor_reason_infeas_cleanup);
     fprintf(out, "    \"reason_other\": %d,\n", ralph->refactor_reason_other);
     fprintf(out, "    \"periodic_policy_count\": %d,\n", ralph->refactor_periodic_policy);

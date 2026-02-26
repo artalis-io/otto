@@ -122,7 +122,6 @@ typedef enum {
 #define PHASE2_POLICY_PRESSURE_DECAY_STEP 0.06
 #define PHASE2_POLICY_PRESSURE_DECAY_MAX 0.24
 #define PHASE2_POLICY_PRESSURE_RECOVERY_STEP 0.01
-#define PHASE1_DIR_INF_FORCE_REFACTOR_MULT 100.0
 #define PHASE1_DEGEN_THRESHOLD_DEFAULT 50
 #define PHASE1_DEGEN_THRESHOLD_LARGE_M 700
 #define PHASE1_DEGEN_THRESHOLD_LARGE 20
@@ -5247,10 +5246,13 @@ static int simplex_phase1(SimplexSolver *solver) {
          * Re-factorize and recompute ratio test from the same entering column. */
         double dir_inf = vec_abs_max(tab->work2, tab->m);
         if (dir_inf > RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
-            double force_refactor_trigger =
-                RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER * PHASE1_DIR_INF_FORCE_REFACTOR_MULT;
+            double dir_inf_ratio =
+                dir_inf / RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER;
             int dir_stabilize_cooldown_target;
-            int force_dir_refactor_extreme = (dir_inf > force_refactor_trigger);
+            int force_dir_refactor_extreme =
+                lp_refactor_policy_phase1_dir_stabilize_force_extreme_ratio(
+                    dir_inf_ratio,
+                    dir_stabilize_cooldown > 0);
             int force_dir_refactor_lu_health = lu_needs_refactorization(tab->lu);
             int force_dir_refactor = force_dir_refactor_extreme ||
                                      force_dir_refactor_lu_health;
@@ -5264,7 +5266,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             if (dir_stabilize_cooldown > 0) {
                 lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(
                     solver,
-                    dir_inf / RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER);
+                    dir_inf_ratio);
                 if (force_dir_refactor) {
                     lp_telemetry_record_phase1_dir_stabilize_force(
                         solver,

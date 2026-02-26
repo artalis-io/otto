@@ -246,5 +246,11 @@ void lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(
         solver->telemetry.perf_phase1_dir_stabilize_ratio_le_100++;
     } else {
         solver->telemetry.perf_phase1_dir_stabilize_ratio_gt_100++;
+        if (dir_inf_ratio > 300.0) {
+            solver->telemetry.perf_phase1_dir_stabilize_ratio_gt_300++;
+            if (dir_inf_ratio > 1000.0) {
+                solver->telemetry.perf_phase1_dir_stabilize_ratio_gt_1000++;
+            }
+        }
     }
 }
