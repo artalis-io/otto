@@ -32,6 +32,28 @@ extern "C" {
  * @error 400 Invalid or malformed request body
  * @error 500 Internal solver error
  *
+ * @request_body json
+ * {
+ *   "vehicles": [
+ *     {"id": 0, "depot_start": 0, "depot_end": 0,
+ *      "capacity": [20], "shift": [0, 1000]}
+ *   ],
+ *   "depots": [
+ *     {"id": 0, "x": 40.0, "y": 50.0, "tw": [0, 1000]}
+ *   ],
+ *   "tasks": [
+ *     {"id": 0, "x": 45.0, "y": 55.0, "tw": [0, 500], "service": 10, "demand": [5]},
+ *     {"id": 1, "x": 42.0, "y": 58.0, "tw": [0, 500], "service": 10, "demand": [3]},
+ *     {"id": 2, "x": 38.0, "y": 52.0, "tw": [100, 800], "service": 10, "demand": [4]}
+ *   ],
+ *   "requests": [
+ *     {"id": 0, "delivery_task": 0},
+ *     {"id": 1, "delivery_task": 1},
+ *     {"id": 2, "delivery_task": 2}
+ *   ],
+ *   "config": {"max_iterations": 1000}
+ * }
+ *
  * @response_json
  * {
  *   "status": "ok",
@@ -40,9 +62,17 @@ extern "C" {
  *     "total_cost": 12345.67,
  *     "total_distance": 828.94,
  *     "unassigned": 0,
- *     "vehicles_used": 10
+ *     "vehicles_used": 1
  *   }
  * }
+ *
+ * @example
+ * curl -X POST http://localhost:8085/api/v1/solve \
+ *   -H "Content-Type: application/json" \
+ *   -d '{"vehicles":[{"id":0,"depot_start":0,"depot_end":0,"capacity":[20],"shift":[0,1000]}],"depots":[{"id":0,"x":40,"y":50,"tw":[0,1000]}],"tasks":[{"id":0,"x":45,"y":55,"tw":[0,500],"service":10,"demand":[5]}],"requests":[{"id":0,"delivery_task":0}],"config":{"max_iterations":1000}}'
+ *
+ * @demo json
+ * @demo_title Solve a VRP problem using WASM
  */
 
 /*@api
@@ -57,6 +87,12 @@ extern "C" {
  *   "service": "surge",
  *   "version": "0.1.0-dev"
  * }
+ *
+ * @example
+ * curl http://localhost:8085/api/v1/health
+ *
+ * @demo json
+ * @demo_title Check Surge health status
  */
 
 /*@api
@@ -69,6 +105,24 @@ extern "C" {
  * {
  *   "version": "0.1.0-dev"
  * }
+ *
+ * @example
+ * curl http://localhost:8085/api/v1/version
+ */
+
+/*@wasm
+ * @export surge_api_init
+ * @export surge_api_free
+ * @export surge_api_ready
+ * @export surge_api_handle
+ * @export surge_api_solve
+ * @export surge_response_status
+ * @export surge_response_content_type
+ * @export surge_response_body
+ * @export surge_response_body_len
+ * @export surge_api_version_string
+ * @export malloc
+ * @export free
  */
 
 /* ============================================================================

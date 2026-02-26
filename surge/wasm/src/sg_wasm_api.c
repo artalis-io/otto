@@ -12,9 +12,9 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 #include "surge.h"
 #include "sg_api.h"
+#include "sh_json.h"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -77,15 +77,25 @@ static void set_response(int status, char *body, size_t len) {
 
 static void set_error(int status, const char *message) {
     free(g_response_buf);
-    size_t msg_len = strlen(message);
-    /* {"error": "..."} */
-    g_response_buf = malloc(msg_len + 32);
-    if (g_response_buf) {
-        g_response_len = (size_t)snprintf(g_response_buf, msg_len + 32,
-                                          "{\"error\":\"%s\"}", message);
-    } else {
+
+    ShJsonBuf jb;
+    sh_json_buf_init(&jb);
+
+    ShJsonWriter jw;
+    sh_json_writer_init(&jw, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&jw);
+    sh_json_write_key(&jw, "error");
+    sh_json_write_string(&jw, message);
+    sh_json_write_object_end(&jw);
+
+    if (jw.error) {
+        sh_json_buf_free(&jb);
         g_response_buf = NULL;
         g_response_len = 0;
+    } else {
+        g_response_len = jb.len;
+        g_response_buf = sh_json_buf_take(&jb);
     }
     g_response_status = status;
     g_response_content_type = "application/json";
