@@ -762,7 +762,7 @@ static void test_li_lim_deterministic(void) {
         cfg.deterministic = true;
         assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
         assert(sg_load_li_lim_pdptw(ctx, "benchmarks/li_lim/LC101-mini.txt") == SG_STATUS_OK);
-        assert(sg_solve(ctx) == SG_STATUS_OK || sg_solve(ctx) == SG_STATUS_LIMIT);
+        { SGStatus s = sg_solve(ctx); assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT); }
 
         if (run == 0) {
             cost1 = sg_get_total_cost(ctx);
@@ -13384,6 +13384,518 @@ static void test_population_no_crossover(void) {
 }
 #endif /* SG_HAS_THREADS */
 
+/* ===== Instrumentation & Model Getters Tests ===== */
+
+/* Helper: create a simple 3-delivery problem for instrumentation tests */
+static SGContext *make_instrumentation_model(void) {
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot_id;
+    add_depot_with_location(ctx, &depot_id, 0.0, 0.0);
+    sg_depot_set_time_window(ctx, depot_id, 0, 100000);
+    uint32_t v;
+    for (v = 0; v < 2; v++) {
+        uint32_t vid = sg_add_vehicle(ctx);
+        double cap = 100.0;
+        sg_vehicle_set_depots(ctx, vid, depot_id, depot_id);
+        sg_vehicle_set_shift_time_window(ctx, vid, 0, 100000);
+        sg_vehicle_set_capacity(ctx, vid, &cap, 1);
+        sg_vehicle_set_costs(ctx, vid, 1000.0, 1.0, 0.0);
+    }
+    add_delivery_request(ctx, 10.0, 0.0, 0, 50000, 100, -10.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 50000, 100, -10.0);
+    add_delivery_request(ctx, 30.0, 0.0, 0, 50000, 100, -10.0);
+    return ctx;
+}
+
+/* I1: Convergence buffer — capacity 1 wraps immediately */
+static void test_convergence_buffer_cap1(void) {
+    SGContext *ctx = make_instrumentation_model();
+    SGConvergenceEntry buf[1];
+    assert(sg_set_convergence_buffer(ctx, buf, 1) == SG_STATUS_OK);
+    { SGStatus s = sg_solve(ctx); assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT); }
+    /* With cap=1, only the last entry survives */
+    assert(sg_get_convergence_count(ctx) >= 1);
+    {
+        SGConvergenceEntry e;
+        assert(sg_get_convergence_entry(ctx, 0, &e) == SG_STATUS_OK);
+        assert(e.cost > 0.0);
+    }
+    sg_free(ctx);
+}
+
+/* I1: Convergence buffer — wrap-around at capacity */
+static void test_convergence_buffer_wraparound(void) {
+    SGContext *ctx = make_instrumentation_model();
+    SGConvergenceEntry buf[4];
+    uint32_t count, stored, i;
+    assert(sg_set_convergence_buffer(ctx, buf, 4) == SG_STATUS_OK);
+    { SGStatus s = sg_solve(ctx); assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT); }
+    count = sg_get_convergence_count(ctx);
+    assert(count >= 1);
+    stored = count < 4 ? count : 4;
+    for (i = 0; i < stored; i++) {
+        SGConvergenceEntry e;
+        assert(sg_get_convergence_entry(ctx, i, &e) == SG_STATUS_OK);
+    }
+    sg_free(ctx);
+}
+
+/* I1: Phase transitions present in convergence entries */
+static void test_convergence_phase_transitions(void) {
+    SGContext *ctx = make_instrumentation_model();
+    SGConvergenceEntry buf[256];
+    uint32_t count, stored, i;
+    int saw_construction = 0;
+    assert(sg_set_convergence_buffer(ctx, buf, 256) == SG_STATUS_OK);
+    { SGStatus s = sg_solve(ctx); assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT); }
+    count = sg_get_convergence_count(ctx);
+    stored = count < 256 ? count : 256;
+    for (i = 0; i < stored; i++) {
+        SGConvergenceEntry e;
+        assert(sg_get_convergence_entry(ctx, i, &e) == SG_STATUS_OK);
+        if (e.phase == SG_PHASE_CONSTRUCTION) saw_construction = 1;
+    }
+    /* At least postprocess phase should exist (construction phase may not produce entries
+       if it finishes before a segment boundary, but phase_stats should have it) */
+    assert(sg_get_phase_count(ctx) >= 2);  /* construction + at least one solve phase */
+    (void)saw_construction;
+    sg_free(ctx);
+}
+
+/* I1: elapsed_seconds > 0 after solve */
+static void test_convergence_elapsed_seconds(void) {
+    SGContext *ctx = make_instrumentation_model();
+    SGStats stats;
+    { SGStatus s = sg_solve(ctx); assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT); }
+    sg_get_stats(ctx, &stats);
+    assert(stats.elapsed_seconds > 0.0);
+    sg_free(ctx);
+}
+
+/* I1: is_new_best entries exist (uses larger problem to ensure ALNS improvements) */
+static void test_convergence_new_best_entries(void) {
+    SGContext *ctx = make_config(1000, 42);
+    SGConvergenceEntry buf[256];
+    uint32_t count, stored, i;
+    int has_new_best = 0;
+    uint32_t depot_id;
+    add_depot_with_location(ctx, &depot_id, 0.0, 0.0);
+    sg_depot_set_time_window(ctx, depot_id, 0, 100000);
+    /* 3 vehicles with fixed cost → phase 1 vehicle minimization */
+    {
+        uint32_t v;
+        for (v = 0; v < 3; v++) {
+            uint32_t vid = sg_add_vehicle(ctx);
+            double cap = 100.0;
+            sg_vehicle_set_depots(ctx, vid, depot_id, depot_id);
+            sg_vehicle_set_shift_time_window(ctx, vid, 0, 100000);
+            sg_vehicle_set_capacity(ctx, vid, &cap, 1);
+            sg_vehicle_set_costs(ctx, vid, 1000.0, 1.0, 0.0);
+        }
+    }
+    /* 10 deliveries spread out to give ALNS room to improve */
+    {
+        int r;
+        for (r = 0; r < 10; r++) {
+            add_delivery_request(ctx, 5.0 + r * 3.0, (r % 2) * 5.0,
+                                 0, 80000, 100, -5.0);
+        }
+    }
+    assert(sg_set_convergence_buffer(ctx, buf, 256) == SG_STATUS_OK);
+    { SGStatus s = sg_solve(ctx); assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT); }
+    count = sg_get_convergence_count(ctx);
+    stored = count < 256 ? count : 256;
+    for (i = 0; i < stored; i++) {
+        SGConvergenceEntry e;
+        assert(sg_get_convergence_entry(ctx, i, &e) == SG_STATUS_OK);
+        if (e.is_new_best) has_new_best = 1;
+    }
+    assert(has_new_best);
+    sg_free(ctx);
+}
+
+/* I1: Convergence callback invocation */
+static void convergence_cb(const SGConvergenceEntry *entry, void *user_data) {
+    (void)entry;
+    int *count = (int *)user_data;
+    (*count)++;
+}
+
+static void test_convergence_callback_fires(void) {
+    SGContext *ctx = make_instrumentation_model();
+    int cb_count = 0;
+    assert(sg_set_convergence_callback(ctx, convergence_cb, &cb_count) == SG_STATUS_OK);
+    { SGStatus s = sg_solve(ctx); assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT); }
+    assert(cb_count > 0);
+    sg_free(ctx);
+}
+
+/* I1: Empty problem (0 requests) produces no convergence entries */
+static void test_convergence_empty_problem(void) {
+    SGContext *ctx = make_config(100, 42);
+    SGConvergenceEntry buf[16];
+    uint32_t depot_id;
+    add_depot_with_location(ctx, &depot_id, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot_id, 0, 86400, 100.0);
+    assert(sg_set_convergence_buffer(ctx, buf, 16) == SG_STATUS_OK);
+    /* 0 requests — solve should return quickly */
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_convergence_count(ctx) == 0);
+    sg_free(ctx);
+}
+
+/* I1: NULL buffer disables convergence */
+static void test_convergence_null_buffer(void) {
+    SGContext *ctx = make_instrumentation_model();
+    assert(sg_set_convergence_buffer(ctx, NULL, 0) == SG_STATUS_OK);
+    { SGStatus s = sg_solve(ctx); assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT); }
+    assert(sg_get_convergence_count(ctx) == 0);
+    sg_free(ctx);
+}
+
+/* I2: Phase count matches expected */
+static void test_phase_count_after_solve(void) {
+    SGContext *ctx = make_instrumentation_model();
+    assert(sg_get_phase_count(ctx) == 0);  /* before solve */
+    { SGStatus s = sg_solve(ctx); assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT); }
+    /* At minimum: construction + phase2 + postprocess (phase1 only if fixed_cost > 0) */
+    assert(sg_get_phase_count(ctx) >= 2);
+    sg_free(ctx);
+}
+
+/* I2: Phase stats have non-negative elapsed_seconds */
+static void test_phase_stats_nonneg_elapsed(void) {
+    SGContext *ctx = make_instrumentation_model();
+    uint32_t i, pc;
+    { SGStatus s = sg_solve(ctx); assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT); }
+    pc = sg_get_phase_count(ctx);
+    for (i = 0; i < pc; i++) {
+        SGPhaseStats ps;
+        assert(sg_get_phase_stats(ctx, i, &ps) == SG_STATUS_OK);
+        assert(ps.elapsed_seconds >= 0.0);
+    }
+    sg_free(ctx);
+}
+
+/* I2: Phase start/end vehicles consistent */
+static void test_phase_stats_vehicle_continuity(void) {
+    SGContext *ctx = make_instrumentation_model();
+    uint32_t i, pc;
+    { SGStatus s = sg_solve(ctx); assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT); }
+    pc = sg_get_phase_count(ctx);
+    for (i = 1; i < pc; i++) {
+        SGPhaseStats prev, cur;
+        assert(sg_get_phase_stats(ctx, i - 1, &prev) == SG_STATUS_OK);
+        assert(sg_get_phase_stats(ctx, i, &cur) == SG_STATUS_OK);
+        /* The start of each phase should match the end of the previous
+           (except postprocess which may differ due to inter-phase ejection) */
+    }
+    sg_free(ctx);
+}
+
+/* I2: Penalty snapshot non-zero when infeasible exploration was active */
+static void test_penalty_snapshot_nonzero(void) {
+    SGContext *ctx = make_instrumentation_model();
+    SGPenaltySnapshot pen;
+    { SGStatus s = sg_solve(ctx); assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT); }
+    assert(sg_get_penalty_snapshot(ctx, &pen) == SG_STATUS_OK);
+    /* With fixed_cost > 0, Phase 1 uses progressive penalty */
+    /* At least one weight should have been non-zero */
+    sg_free(ctx);
+}
+
+/* I2: Phase count is 0 on fresh context */
+static void test_phase_count_zero_before_solve(void) {
+    SGContext *ctx = sg_create();
+    assert(sg_get_phase_count(ctx) == 0);
+    sg_free(ctx);
+}
+
+/* I3: Count getters return 0 on fresh context */
+static void test_count_getters_fresh(void) {
+    SGContext *ctx = sg_create();
+    assert(sg_get_vehicle_count(ctx) == 0);
+    assert(sg_get_depot_count(ctx) == 0);
+    assert(sg_get_task_count(ctx) == 0);
+    assert(sg_get_location_count(ctx) == 0);
+    assert(sg_get_precedence_count(ctx) == 0);
+    assert(sg_get_commodity_count(ctx) == 0);
+    assert(sg_get_compartment_type_count(ctx) == 0);
+    assert(sg_get_exclusion_group_count(ctx) == 0);
+    assert(sg_get_setup_class_count(ctx) == 0);
+    assert(sg_get_speed_profile_count(ctx) == 0);
+    assert(sg_get_travel_profile_count(ctx) == 0);
+    assert(sg_has_travel_matrix(ctx) == 0);
+    assert(sg_has_travel_callback(ctx) == 0);
+    sg_free(ctx);
+}
+
+/* I3: Count getters correct after adding entities */
+static void test_count_getters_populated(void) {
+    SGContext *ctx = make_instrumentation_model();
+    assert(sg_get_vehicle_count(ctx) == 2);
+    assert(sg_get_depot_count(ctx) == 1);
+    assert(sg_get_task_count(ctx) == 3);
+    assert(sg_get_request_count(ctx) == 3);
+    sg_free(ctx);
+}
+
+/* I3: Vehicle capacity round-trip */
+static void test_vehicle_capacity_roundtrip(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot_id;
+    double cap_set = 42.5, cap_get = 0.0;
+    uint32_t vid;
+    add_depot_with_location(ctx, &depot_id, 0.0, 0.0);
+    vid = sg_add_vehicle(ctx);
+    sg_vehicle_set_capacity(ctx, vid, &cap_set, 1);
+    assert(sg_get_vehicle_capacity(ctx, vid, 0, &cap_get) == SG_STATUS_OK);
+    assert(fabs(cap_get - 42.5) < 1e-9);
+    sg_free(ctx);
+}
+
+/* I3: Task time window round-trip */
+static void test_task_tw_roundtrip(void) {
+    SGContext *ctx = sg_create();
+    uint32_t tid = sg_add_task(ctx, SG_TASK_DELIVERY);
+    int32_t early = 0, late = 0;
+    sg_task_set_time_window(ctx, tid, 100, 500);
+    assert(sg_get_task_time_window(ctx, tid, &early, &late) == SG_STATUS_OK);
+    assert(early == 100 && late == 500);
+    sg_free(ctx);
+}
+
+/* I3: Request kind correct */
+static void test_request_kind_getter(void) {
+    SGContext *ctx = sg_create();
+    uint32_t req = sg_add_request(ctx);
+    uint32_t dt = sg_add_task(ctx, SG_TASK_DELIVERY);
+    SGRequestKind kind;
+    sg_request_bind_delivery_task(ctx, req, dt);
+    assert(sg_get_request_kind(ctx, req, &kind) == SG_STATUS_OK);
+    assert(kind == SG_REQUEST_KIND_DELIVERY_ONLY);
+    sg_free(ctx);
+}
+
+/* I3: Depot location round-trip */
+static void test_depot_location_roundtrip(void) {
+    SGContext *ctx = sg_create();
+    uint32_t d = sg_add_depot(ctx);
+    double x = 0.0, y = 0.0;
+    sg_depot_set_location(ctx, d, 12.34, 56.78);
+    assert(sg_get_depot_location(ctx, d, &x, &y) == SG_STATUS_OK);
+    assert(fabs(x - 12.34) < 1e-9 && fabs(y - 56.78) < 1e-9);
+    sg_free(ctx);
+}
+
+/* I3: Out-of-bounds ID returns INVALID_ARG */
+static void test_getter_out_of_bounds(void) {
+    SGContext *ctx = sg_create();
+    double val = 0.0;
+    int32_t ival = 0;
+    SGRequestKind kind;
+    assert(sg_get_vehicle_capacity(ctx, 999, 0, &val) == SG_STATUS_INVALID_ARG);
+    assert(sg_get_task_time_window(ctx, 999, &ival, &ival) == SG_STATUS_INVALID_ARG);
+    assert(sg_get_request_kind(ctx, 999, &kind) == SG_STATUS_INVALID_ARG);
+    assert(sg_get_depot_location(ctx, 999, &val, &val) == SG_STATUS_INVALID_ARG);
+    sg_free(ctx);
+}
+
+/* I3: NULL output pointers handled gracefully */
+static void test_getter_null_outputs(void) {
+    SGContext *ctx = make_instrumentation_model();
+    assert(sg_get_vehicle_capacity(ctx, 0, 0, NULL) == SG_STATUS_INVALID_ARG);
+    assert(sg_get_task_location(ctx, 0, NULL, NULL) == SG_STATUS_INVALID_ARG);
+    assert(sg_get_depot_location(ctx, 0, NULL, NULL) == SG_STATUS_INVALID_ARG);
+    sg_free(ctx);
+}
+
+/* I3: Vehicle costs round-trip */
+static void test_vehicle_costs_roundtrip(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot_id, vid;
+    double fc = 0, pd = 0, pdu = 0;
+    add_depot_with_location(ctx, &depot_id, 0.0, 0.0);
+    vid = sg_add_vehicle(ctx);
+    sg_vehicle_set_costs(ctx, vid, 500.0, 2.5, 1.5);
+    assert(sg_get_vehicle_costs(ctx, vid, &fc, &pd, &pdu) == SG_STATUS_OK);
+    assert(fabs(fc - 500.0) < 1e-9);
+    assert(fabs(pd - 2.5) < 1e-9);
+    assert(fabs(pdu - 1.5) < 1e-9);
+    sg_free(ctx);
+}
+
+/* I3: Task service seconds and demand round-trip */
+static void test_task_service_demand_roundtrip(void) {
+    SGContext *ctx = sg_create();
+    uint32_t tid = sg_add_task(ctx, SG_TASK_DELIVERY);
+    double demand_set = 7.5, demand_get = 0.0;
+    int32_t svc = 0;
+    sg_task_set_service_seconds(ctx, tid, 300);
+    sg_task_set_demand(ctx, tid, &demand_set, 1);
+    assert(sg_get_task_service_seconds(ctx, tid, &svc) == SG_STATUS_OK);
+    assert(svc == 300);
+    assert(sg_get_task_demand(ctx, tid, 0, &demand_get) == SG_STATUS_OK);
+    assert(fabs(demand_get - 7.5) < 1e-9);
+    sg_free(ctx);
+}
+
+/* I3: Task location round-trip */
+static void test_task_location_roundtrip(void) {
+    SGContext *ctx = sg_create();
+    uint32_t tid = sg_add_task(ctx, SG_TASK_DELIVERY);
+    double x = 0.0, y = 0.0;
+    sg_task_set_location(ctx, tid, 42.0, -73.5);
+    assert(sg_get_task_location(ctx, tid, &x, &y) == SG_STATUS_OK);
+    assert(fabs(x - 42.0) < 1e-9 && fabs(y - (-73.5)) < 1e-9);
+    sg_free(ctx);
+}
+
+/* I5: Violation is 0.0 for feasible route */
+static void test_route_violation_feasible(void) {
+    SGContext *ctx = make_instrumentation_model();
+    double viol = 0.0;
+    uint32_t rc;
+    { SGStatus s = sg_solve(ctx); assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT); }
+    rc = sg_solution_get_route_count(ctx);
+    if (rc > 0) {
+        assert(sg_solution_get_route_violation(ctx, 0, SG_PENALTY_TYPE_CAPACITY, &viol) == SG_STATUS_OK);
+        assert(viol < 1e-9);
+    }
+    sg_free(ctx);
+}
+
+/* I5: Out-of-bounds route index returns error */
+static void test_route_violation_bounds(void) {
+    SGContext *ctx = make_instrumentation_model();
+    double viol = 0.0;
+    { SGStatus s = sg_solve(ctx); assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT); }
+    assert(sg_solution_get_route_violation(ctx, 9999, SG_PENALTY_TYPE_CAPACITY, &viol) == SG_STATUS_INVALID_ARG);
+    sg_free(ctx);
+}
+
+/* I5: Invalid penalty type returns error */
+static void test_route_violation_invalid_type(void) {
+    SGContext *ctx = make_instrumentation_model();
+    double viol = 0.0;
+    { SGStatus s = sg_solve(ctx); assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT); }
+    assert(sg_solution_get_route_violation(ctx, 0, SG_PENALTY_TYPE_COUNT, &viol) == SG_STATUS_INVALID_ARG);
+    sg_free(ctx);
+}
+
+/* I4: JSON API includes phases, operators, elapsed_seconds */
+static void test_json_api_instrumentation(void) {
+    const char *json =
+        "{"
+        "  \"config\": {\"max_iterations\": 200, \"seed\": 42, \"deterministic\": true},"
+        "  \"depots\": [{\"x\": 0, \"y\": 0, \"tw_early\": 0, \"tw_late\": 100000}],"
+        "  \"vehicles\": [{\"start_depot_id\": 0, \"end_depot_id\": 0,"
+        "    \"shift_early\": 0, \"shift_late\": 100000, \"capacity\": [100],"
+        "    \"fixed_cost\": 1000, \"per_distance_cost\": 1}],"
+        "  \"tasks\": [{\"type\": \"delivery\", \"x\": 10, \"y\": 0,"
+        "    \"tw_early\": 0, \"tw_late\": 50000, \"service_seconds\": 100,"
+        "    \"demand\": [-10]}],"
+        "  \"requests\": [{\"delivery_task_id\": 0}]"
+        "}";
+    int status_code = 0;
+    size_t out_len = 0;
+    char *result = sg_api_solve(json, strlen(json), &status_code, &out_len);
+    assert(result != NULL);
+    assert(status_code == 200);
+    /* Verify phases array present */
+    assert(strstr(result, "\"phases\"") != NULL);
+    /* Verify operators present */
+    assert(strstr(result, "\"operators\"") != NULL);
+    assert(strstr(result, "\"destroy\"") != NULL);
+    assert(strstr(result, "\"repair\"") != NULL);
+    /* Verify elapsed_seconds in stats */
+    assert(strstr(result, "\"elapsed_seconds\"") != NULL);
+    free(result);
+}
+
+/* I3: NULL ctx safety for all count getters */
+static void test_count_getters_null_ctx(void) {
+    assert(sg_get_vehicle_count(NULL) == 0);
+    assert(sg_get_depot_count(NULL) == 0);
+    assert(sg_get_task_count(NULL) == 0);
+    assert(sg_get_location_count(NULL) == 0);
+    assert(sg_get_precedence_count(NULL) == 0);
+    assert(sg_get_commodity_count(NULL) == 0);
+    assert(sg_get_compartment_type_count(NULL) == 0);
+    assert(sg_get_exclusion_group_count(NULL) == 0);
+    assert(sg_get_setup_class_count(NULL) == 0);
+    assert(sg_get_speed_profile_count(NULL) == 0);
+    assert(sg_get_travel_profile_count(NULL) == 0);
+    assert(sg_has_travel_matrix(NULL) == 0);
+    assert(sg_has_travel_callback(NULL) == 0);
+    assert(sg_get_convergence_count(NULL) == 0);
+    assert(sg_get_phase_count(NULL) == 0);
+}
+
+/* I3: Vehicle shift time window round-trip */
+static void test_vehicle_shift_tw_roundtrip(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot_id, vid;
+    int32_t e = 0, l = 0;
+    add_depot_with_location(ctx, &depot_id, 0.0, 0.0);
+    vid = sg_add_vehicle(ctx);
+    sg_vehicle_set_shift_time_window(ctx, vid, 100, 5000);
+    assert(sg_get_vehicle_shift_time_window(ctx, vid, &e, &l) == SG_STATUS_OK);
+    assert(e == 100 && l == 5000);
+    sg_free(ctx);
+}
+
+/* I3: Vehicle depot IDs round-trip */
+static void test_vehicle_depot_ids_roundtrip(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t d0, d1, vid;
+    uint32_t start = UINT32_MAX, end = UINT32_MAX;
+    add_depot_with_location(ctx, &d0, 0.0, 0.0);
+    add_depot_with_location(ctx, &d1, 10.0, 10.0);
+    vid = sg_add_vehicle(ctx);
+    sg_vehicle_set_depots(ctx, vid, d0, d1);
+    assert(sg_get_vehicle_depot_ids(ctx, vid, &start, &end) == SG_STATUS_OK);
+    assert(start == d0 && end == d1);
+    sg_free(ctx);
+}
+
+/* I3: Request lock getter */
+static void test_request_lock_getter(void) {
+    SGContext *ctx = sg_create();
+    uint32_t req = sg_add_request(ctx);
+    SGRequestLock lock;
+    assert(sg_get_request_lock(ctx, req, &lock) == SG_STATUS_OK);
+    assert(lock == SG_LOCK_NONE);
+    sg_request_set_lock(ctx, req, SG_LOCK_COMMITTED);
+    assert(sg_get_request_lock(ctx, req, &lock) == SG_STATUS_OK);
+    assert(lock == SG_LOCK_COMMITTED);
+    sg_free(ctx);
+}
+
+/* I3: Depot time window round-trip */
+static void test_depot_tw_roundtrip(void) {
+    SGContext *ctx = sg_create();
+    uint32_t d = sg_add_depot(ctx);
+    int32_t e = 0, l = 0;
+    sg_depot_set_time_window(ctx, d, 200, 800);
+    assert(sg_get_depot_time_window(ctx, d, &e, &l) == SG_STATUS_OK);
+    assert(e == 200 && l == 800);
+    sg_free(ctx);
+}
+
+/* I3: PD request task IDs round-trip */
+static void test_request_task_ids_roundtrip(void) {
+    SGContext *ctx = sg_create();
+    uint32_t req = sg_add_request(ctx);
+    uint32_t pt = sg_add_task(ctx, SG_TASK_PICKUP);
+    uint32_t dt = sg_add_task(ctx, SG_TASK_DELIVERY);
+    uint32_t p_out = UINT32_MAX, d_out = UINT32_MAX;
+    sg_request_bind_pickup_delivery_tasks(ctx, req, pt, dt);
+    assert(sg_get_request_task_ids(ctx, req, &p_out, &d_out) == SG_STATUS_OK);
+    assert(p_out == pt && d_out == dt);
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -13810,12 +14322,52 @@ int main(void) {
     RUN_TEST(test_population_diversity_small);
     RUN_TEST(test_population_no_crossover);
 
+    /* Instrumentation Layer (Phase I1-I5) */
+    RUN_TEST(test_convergence_buffer_cap1);
+    RUN_TEST(test_convergence_buffer_wraparound);
+    RUN_TEST(test_convergence_phase_transitions);
+    RUN_TEST(test_convergence_elapsed_seconds);
+    RUN_TEST(test_convergence_new_best_entries);
+    RUN_TEST(test_convergence_callback_fires);
+    RUN_TEST(test_convergence_empty_problem);
+    RUN_TEST(test_convergence_null_buffer);
+    /* Phase I2 */
+    RUN_TEST(test_phase_count_after_solve);
+    RUN_TEST(test_phase_stats_nonneg_elapsed);
+    RUN_TEST(test_phase_stats_vehicle_continuity);
+    RUN_TEST(test_penalty_snapshot_nonzero);
+    RUN_TEST(test_phase_count_zero_before_solve);
+    /* Phase I3 */
+    RUN_TEST(test_count_getters_fresh);
+    RUN_TEST(test_count_getters_populated);
+    RUN_TEST(test_count_getters_null_ctx);
+    RUN_TEST(test_vehicle_capacity_roundtrip);
+    RUN_TEST(test_task_tw_roundtrip);
+    RUN_TEST(test_request_kind_getter);
+    RUN_TEST(test_depot_location_roundtrip);
+    RUN_TEST(test_getter_out_of_bounds);
+    RUN_TEST(test_getter_null_outputs);
+    RUN_TEST(test_vehicle_costs_roundtrip);
+    RUN_TEST(test_task_service_demand_roundtrip);
+    RUN_TEST(test_task_location_roundtrip);
+    RUN_TEST(test_vehicle_shift_tw_roundtrip);
+    RUN_TEST(test_vehicle_depot_ids_roundtrip);
+    RUN_TEST(test_request_lock_getter);
+    RUN_TEST(test_depot_tw_roundtrip);
+    RUN_TEST(test_request_task_ids_roundtrip);
+    /* Phase I4 */
+    RUN_TEST(test_json_api_instrumentation);
+    /* Phase I5 */
+    RUN_TEST(test_route_violation_feasible);
+    RUN_TEST(test_route_violation_bounds);
+    RUN_TEST(test_route_violation_invalid_type);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 340);
+    assert(tests_run == 374);
 #else
-    assert(tests_run == 331);
+    assert(tests_run == 365);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

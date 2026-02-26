@@ -1,4 +1,5 @@
 #include "surge.h"
+#include "sh_args.h"
 
 #include <ctype.h>
 #include <glob.h>
@@ -157,8 +158,8 @@ int main(int argc, char **argv) {
     for (i = 1; i < (size_t)argc; i++) {
         if (strcmp(argv[i], "--help") == 0) { sg_print_usage(argv[0]); return 0; }
         if (strcmp(argv[i], "--dir") == 0 && i + 1 < (size_t)argc) { cases_dir = argv[++i]; continue; }
-        if (strcmp(argv[i], "--iterations") == 0 && i + 1 < (size_t)argc) { max_iterations = atoi(argv[++i]); continue; }
-        if (strcmp(argv[i], "--time-limit") == 0 && i + 1 < (size_t)argc) { max_time_seconds = atoi(argv[++i]); continue; }
+        if (strcmp(argv[i], "--iterations") == 0 && i + 1 < (size_t)argc) { max_iterations = sh_parse_int(argv[++i], 10000, 1, 1000000); continue; }
+        if (strcmp(argv[i], "--time-limit") == 0 && i + 1 < (size_t)argc) { max_time_seconds = sh_parse_int(argv[++i], 0, 0, 86400); continue; }
         if (strcmp(argv[i], "--seed") == 0 && i + 1 < (size_t)argc) { seed = (uint64_t)strtoull(argv[++i], NULL, 10); continue; }
         if (strcmp(argv[i], "--non-deterministic") == 0) { deterministic = 0; continue; }
         if (strcmp(argv[i], "--telemetry") == 0) { show_telemetry = 1; continue; }

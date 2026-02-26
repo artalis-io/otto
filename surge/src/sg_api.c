@@ -1586,7 +1586,165 @@ SGStatus sg_api_write_solution(const SGContext *ctx, ShJsonWriter *w,
         sh_json_write_kv_double_fmt(w, "total_tw_penalty", stats.total_tw_penalty, 2);
         sh_json_write_kv_double_fmt(w, "duration_span", stats.duration_span, 2);
         sh_json_write_kv_double_fmt(w, "distance_span", stats.distance_span, 2);
+        sh_json_write_kv_double_fmt(w, "elapsed_seconds", stats.elapsed_seconds, 3);
+        {
+            const char *phase_str;
+            switch (stats.phase) {
+                case SG_PHASE_CONSTRUCTION:   phase_str = "construction"; break;
+                case SG_PHASE_1_VEHICLE_MIN:  phase_str = "phase1"; break;
+                case SG_PHASE_1_5_CRUNCH:     phase_str = "phase1_5"; break;
+                case SG_PHASE_2_POLISH:       phase_str = "phase2"; break;
+                case SG_PHASE_POSTPROCESS:    phase_str = "postprocess"; break;
+                default:                      phase_str = "unknown"; break;
+            }
+            sh_json_write_kv_string(w, "phase", phase_str);
+        }
         sh_json_write_object_end(w);
+
+        /* Per-phase breakdown */
+        {
+            uint32_t pc = sg_get_phase_count(ctx);
+            if (pc > 0) {
+                uint32_t pi;
+                sh_json_write_key(w, "phases");
+                sh_json_write_array_start(w);
+                for (pi = 0; pi < pc; pi++) {
+                    SGPhaseStats ps;
+                    if (sg_get_phase_stats(ctx, pi, &ps) == SG_STATUS_OK) {
+                        const char *pn;
+                        sh_json_write_object_start(w);
+                        switch (ps.phase) {
+                            case SG_PHASE_CONSTRUCTION:   pn = "construction"; break;
+                            case SG_PHASE_1_VEHICLE_MIN:  pn = "phase1"; break;
+                            case SG_PHASE_1_5_CRUNCH:     pn = "phase1_5"; break;
+                            case SG_PHASE_2_POLISH:       pn = "phase2"; break;
+                            case SG_PHASE_POSTPROCESS:    pn = "postprocess"; break;
+                            default:                      pn = "unknown"; break;
+                        }
+                        sh_json_write_kv_string(w, "phase", pn);
+                        sh_json_write_kv_int(w, "iterations", ps.iterations);
+                        sh_json_write_kv_double_fmt(w, "elapsed_seconds", ps.elapsed_seconds, 3);
+                        sh_json_write_kv_double_fmt(w, "start_cost", ps.start_cost, 2);
+                        sh_json_write_kv_double_fmt(w, "end_cost", ps.end_cost, 2);
+                        sh_json_write_kv_int(w, "start_vehicles", ps.start_vehicles);
+                        sh_json_write_kv_int(w, "end_vehicles", ps.end_vehicles);
+                        sh_json_write_kv_int(w, "start_unassigned", ps.start_unassigned);
+                        sh_json_write_kv_int(w, "end_unassigned", ps.end_unassigned);
+                        sh_json_write_object_end(w);
+                    }
+                }
+                sh_json_write_array_end(w);
+            }
+        }
+
+        /* Convergence history */
+        {
+            uint32_t cc = sg_get_convergence_count(ctx);
+            SGConvergenceEntry test_entry;
+            if (cc > 0 && sg_get_convergence_entry(ctx, 0, &test_entry) == SG_STATUS_OK) {
+                uint32_t stored = cc;
+                uint32_t ci;
+                while (stored > 0 && sg_get_convergence_entry(ctx, stored - 1, &test_entry) != SG_STATUS_OK)
+                    stored--;
+                sh_json_write_key(w, "convergence");
+                sh_json_write_array_start(w);
+                for (ci = 0; ci < stored; ci++) {
+                    SGConvergenceEntry ce;
+                    if (sg_get_convergence_entry(ctx, ci, &ce) == SG_STATUS_OK) {
+                        const char *cpn;
+                        sh_json_write_object_start(w);
+                        sh_json_write_kv_int(w, "iteration", ce.iteration);
+                        sh_json_write_kv_double_fmt(w, "cost", ce.cost, 2);
+                        sh_json_write_kv_double_fmt(w, "elapsed", ce.elapsed_seconds, 3);
+                        switch (ce.phase) {
+                            case SG_PHASE_CONSTRUCTION:   cpn = "construction"; break;
+                            case SG_PHASE_1_VEHICLE_MIN:  cpn = "phase1"; break;
+                            case SG_PHASE_1_5_CRUNCH:     cpn = "phase1_5"; break;
+                            case SG_PHASE_2_POLISH:       cpn = "phase2"; break;
+                            case SG_PHASE_POSTPROCESS:    cpn = "postprocess"; break;
+                            default:                      cpn = "unknown"; break;
+                        }
+                        sh_json_write_kv_string(w, "phase", cpn);
+                        sh_json_write_kv_int(w, "vehicles", ce.vehicles_used);
+                        sh_json_write_kv_int(w, "unassigned", ce.unassigned);
+                        sh_json_write_kv_bool(w, "is_new_best", ce.is_new_best);
+                        sh_json_write_object_end(w);
+                    }
+                }
+                sh_json_write_array_end(w);
+            }
+        }
+
+        /* Penalty weights */
+        {
+            SGPenaltySnapshot pen;
+            if (sg_get_penalty_snapshot(ctx, &pen) == SG_STATUS_OK) {
+                int has_nonzero = 0;
+                int pi;
+                for (pi = 0; pi < SG_PENALTY_TYPE_COUNT; pi++) {
+                    if (pen.weight[pi] > 1e-12) { has_nonzero = 1; break; }
+                }
+                if (has_nonzero) {
+                    sh_json_write_key(w, "penalty_weights");
+                    sh_json_write_object_start(w);
+                    sh_json_write_kv_double_fmt(w, "time_warp", pen.weight[0], 4);
+                    sh_json_write_kv_double_fmt(w, "capacity", pen.weight[1], 4);
+                    sh_json_write_kv_double_fmt(w, "duration", pen.weight[2], 4);
+                    sh_json_write_kv_double_fmt(w, "ride_time", pen.weight[3], 4);
+                    sh_json_write_kv_double_fmt(w, "distance", pen.weight[4], 4);
+                    sh_json_write_kv_double_fmt(w, "total_work", pen.weight[5], 4);
+                    sh_json_write_object_end(w);
+                }
+            }
+        }
+
+        /* Operator telemetry */
+        {
+            uint32_t nd = sg_get_destroy_operator_count(ctx);
+            uint32_t nr = sg_get_repair_operator_count(ctx);
+            if (nd > 0 || nr > 0) {
+                uint32_t oi;
+                sh_json_write_key(w, "operators");
+                sh_json_write_object_start(w);
+                if (nd > 0) {
+                    sh_json_write_key(w, "destroy");
+                    sh_json_write_array_start(w);
+                    for (oi = 0; oi < nd; oi++) {
+                        SGOperatorStats os;
+                        if (sg_get_destroy_operator_stats(ctx, oi, &os) == SG_STATUS_OK) {
+                            sh_json_write_object_start(w);
+                            sh_json_write_kv_string(w, "name", os.name);
+                            sh_json_write_kv_double_fmt(w, "weight", os.weight, 3);
+                            sh_json_write_kv_int(w, "selected", os.selected);
+                            sh_json_write_kv_int(w, "accepted", os.accepted);
+                            sh_json_write_kv_int(w, "improvements", os.improvements);
+                            sh_json_write_kv_double_fmt(w, "total_seconds", os.total_seconds, 3);
+                            sh_json_write_object_end(w);
+                        }
+                    }
+                    sh_json_write_array_end(w);
+                }
+                if (nr > 0) {
+                    sh_json_write_key(w, "repair");
+                    sh_json_write_array_start(w);
+                    for (oi = 0; oi < nr; oi++) {
+                        SGOperatorStats os;
+                        if (sg_get_repair_operator_stats(ctx, oi, &os) == SG_STATUS_OK) {
+                            sh_json_write_object_start(w);
+                            sh_json_write_kv_string(w, "name", os.name);
+                            sh_json_write_kv_double_fmt(w, "weight", os.weight, 3);
+                            sh_json_write_kv_int(w, "selected", os.selected);
+                            sh_json_write_kv_int(w, "accepted", os.accepted);
+                            sh_json_write_kv_int(w, "improvements", os.improvements);
+                            sh_json_write_kv_double_fmt(w, "total_seconds", os.total_seconds, 3);
+                            sh_json_write_object_end(w);
+                        }
+                    }
+                    sh_json_write_array_end(w);
+                }
+                sh_json_write_object_end(w);
+            }
+        }
 
         /* Routes */
         route_count = sg_solution_get_route_count(ctx);

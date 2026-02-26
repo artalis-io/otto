@@ -85,6 +85,26 @@ typedef struct {
     bool adaptive_q;
 } SGConfig;
 
+/* Solve phase identifiers */
+typedef enum {
+    SG_PHASE_CONSTRUCTION = 0,
+    SG_PHASE_1_VEHICLE_MIN = 1,
+    SG_PHASE_1_5_CRUNCH = 2,
+    SG_PHASE_2_POLISH = 3,
+    SG_PHASE_POSTPROCESS = 4
+} SGSolvePhase;
+
+/* Penalty constraint types (public mirror of internal SG_PENALTY_* enum) */
+typedef enum {
+    SG_PENALTY_TYPE_TIME_WARP = 0,
+    SG_PENALTY_TYPE_CAPACITY = 1,
+    SG_PENALTY_TYPE_DURATION = 2,
+    SG_PENALTY_TYPE_RIDE_TIME = 3,
+    SG_PENALTY_TYPE_DISTANCE = 4,
+    SG_PENALTY_TYPE_TOTAL_WORK = 5,
+    SG_PENALTY_TYPE_COUNT = 6
+} SGPenaltyTypePublic;
+
 typedef struct {
     int64_t iterations;
     double total_cost;
@@ -96,7 +116,39 @@ typedef struct {
     double total_tw_penalty;
     double duration_span;   /* max_duration - min_duration across active routes */
     double distance_span;   /* max_distance - min_distance across active routes */
+    double elapsed_seconds; /* wall-clock since solve start */
+    SGSolvePhase phase;     /* current solve phase */
 } SGStats;
+
+/* Convergence history entry */
+typedef struct {
+    int64_t iteration;
+    double cost;
+    double elapsed_seconds;
+    uint32_t vehicles_used;
+    uint32_t unassigned;
+    double total_distance;
+    SGSolvePhase phase;
+    uint8_t is_new_best;    /* 1 = triggered by improvement, 0 = segment sample */
+} SGConvergenceEntry;
+
+/* Per-phase stats */
+typedef struct {
+    SGSolvePhase phase;
+    int64_t iterations;
+    double elapsed_seconds;
+    double start_cost;
+    double end_cost;
+    uint32_t start_vehicles;
+    uint32_t end_vehicles;
+    uint32_t start_unassigned;
+    uint32_t end_unassigned;
+} SGPhaseStats;
+
+/* Snapshot of penalty weights at end of solve */
+typedef struct {
+    double weight[6];  /* indexed by SGPenaltyTypePublic (0..5) */
+} SGPenaltySnapshot;
 
 typedef enum {
     SG_STOP_TYPE_PICKUP = 0,

@@ -433,6 +433,21 @@ struct SGContext {
 
     /* Infeasible-space exploration penalty manager */
     SGPenaltyManager penalty;
+
+    /* Convergence instrumentation */
+    SGConvergenceEntry *convergence_buffer;   /* caller-owned, NULL = disabled */
+    uint32_t convergence_capacity;
+    uint32_t convergence_count;               /* total entries written (wraps) */
+    uint32_t convergence_write_pos;           /* current write position mod capacity */
+    SGConvergenceCallback convergence_callback;
+    void *convergence_callback_data;
+    SGSolvePhase current_phase;
+    double solve_start_time;                  /* set at top of sg_solve_route_model */
+
+    /* Per-phase breakdown */
+    SGPhaseStats phase_stats[5];              /* max 5 phases */
+    uint32_t num_phase_stats;
+    SGPenaltySnapshot penalty_snapshot;       /* copied before sg_penalty_free */
 };
 
 /* sg_context.c */

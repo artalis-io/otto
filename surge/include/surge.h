@@ -246,6 +246,23 @@ typedef int (*SGProgressCallback)(const SGStats *stats, void *user_data);
 SGStatus sg_set_progress_callback(SGContext *ctx, SGProgressCallback cb, void *user_data);
 SGStatus sg_cancel(SGContext *ctx);
 
+/* Convergence tracking: caller-owned ring buffer */
+typedef void (*SGConvergenceCallback)(const SGConvergenceEntry *entry, void *user_data);
+SGStatus sg_set_convergence_buffer(SGContext *ctx, SGConvergenceEntry *buffer,
+                                    uint32_t capacity);
+uint32_t sg_get_convergence_count(const SGContext *ctx);
+SGStatus sg_get_convergence_entry(const SGContext *ctx, uint32_t index,
+                                   SGConvergenceEntry *out);
+SGStatus sg_set_convergence_callback(SGContext *ctx, SGConvergenceCallback cb,
+                                      void *user_data);
+
+/* Per-phase breakdown */
+uint32_t sg_get_phase_count(const SGContext *ctx);
+SGStatus sg_get_phase_stats(const SGContext *ctx, uint32_t index, SGPhaseStats *out);
+
+/* Penalty weight snapshot */
+SGStatus sg_get_penalty_snapshot(const SGContext *ctx, SGPenaltySnapshot *out);
+
 /* Error diagnostics */
 const char *sg_get_last_error(const SGContext *ctx);
 
@@ -292,6 +309,53 @@ SGStatus sg_solution_get_route_break(const SGContext *ctx, uint32_t route_index,
                                       uint32_t *after_stop_index_out,
                                       double *start_out, double *duration_out);
 double sg_solution_get_route_total_work(const SGContext *ctx, uint32_t route_index);
+
+/* Model introspection: count getters */
+uint32_t sg_get_vehicle_count(const SGContext *ctx);
+uint32_t sg_get_depot_count(const SGContext *ctx);
+uint32_t sg_get_task_count(const SGContext *ctx);
+uint32_t sg_get_location_count(const SGContext *ctx);
+uint32_t sg_get_precedence_count(const SGContext *ctx);
+uint32_t sg_get_commodity_count(const SGContext *ctx);
+uint32_t sg_get_compartment_type_count(const SGContext *ctx);
+uint32_t sg_get_exclusion_group_count(const SGContext *ctx);
+uint32_t sg_get_setup_class_count(const SGContext *ctx);
+uint32_t sg_get_speed_profile_count(const SGContext *ctx);
+uint32_t sg_get_travel_profile_count(const SGContext *ctx);
+int sg_has_travel_matrix(const SGContext *ctx);
+int sg_has_travel_callback(const SGContext *ctx);
+
+/* Model introspection: entity property getters */
+SGStatus sg_get_vehicle_capacity(const SGContext *ctx, uint32_t vehicle_id,
+                                  uint32_t dimension, double *out);
+SGStatus sg_get_vehicle_shift_time_window(const SGContext *ctx, uint32_t vehicle_id,
+                                           int32_t *early_out, int32_t *late_out);
+SGStatus sg_get_vehicle_depot_ids(const SGContext *ctx, uint32_t vehicle_id,
+                                   uint32_t *start_out, uint32_t *end_out);
+SGStatus sg_get_vehicle_costs(const SGContext *ctx, uint32_t vehicle_id,
+                               double *fixed_out, double *per_dist_out, double *per_dur_out);
+SGStatus sg_get_request_kind(const SGContext *ctx, uint32_t request_id,
+                              SGRequestKind *out);
+SGStatus sg_get_request_task_ids(const SGContext *ctx, uint32_t request_id,
+                                  uint32_t *pickup_out, uint32_t *delivery_out);
+SGStatus sg_get_request_lock(const SGContext *ctx, uint32_t request_id,
+                              SGRequestLock *out);
+SGStatus sg_get_task_location(const SGContext *ctx, uint32_t task_id,
+                               double *x_out, double *y_out);
+SGStatus sg_get_task_time_window(const SGContext *ctx, uint32_t task_id,
+                                  int32_t *early_out, int32_t *late_out);
+SGStatus sg_get_task_service_seconds(const SGContext *ctx, uint32_t task_id,
+                                      int32_t *out);
+SGStatus sg_get_task_demand(const SGContext *ctx, uint32_t task_id,
+                             uint32_t dimension, double *out);
+SGStatus sg_get_depot_location(const SGContext *ctx, uint32_t depot_id,
+                                double *x_out, double *y_out);
+SGStatus sg_get_depot_time_window(const SGContext *ctx, uint32_t depot_id,
+                                   int32_t *early_out, int32_t *late_out);
+
+/* Per-route constraint violations (from infeasible-space search) */
+SGStatus sg_solution_get_route_violation(const SGContext *ctx, uint32_t route_index,
+                                          SGPenaltyTypePublic type, double *violation_out);
 
 /* Per-operator telemetry */
 typedef struct {

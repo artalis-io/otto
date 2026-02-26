@@ -1,25 +1,115 @@
 #include "sg_internal.h"
 
+#include <time.h>
+
+static double sg_monotonic_seconds(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+
+/* Write a convergence entry to ring buffer and/or fire callback */
+static void sg_record_convergence(SGContext *ctx, const SGConvergenceEntry *entry) {
+    if (ctx->convergence_buffer) {
+        ctx->convergence_buffer[ctx->convergence_write_pos] = *entry;
+        ctx->convergence_write_pos = (ctx->convergence_write_pos + 1) % ctx->convergence_capacity;
+        ctx->convergence_count++;
+    }
+    if (ctx->convergence_callback) {
+        ctx->convergence_callback(entry, ctx->convergence_callback_data);
+    }
+}
+
+/* Record start of a phase */
+static void sg_phase_start(SGContext *ctx, SGSolvePhase phase,
+                           double cost, uint32_t vehicles, uint32_t unassigned) {
+    ctx->current_phase = phase;
+    if (ctx->num_phase_stats < 5) {
+        SGPhaseStats *ps = &ctx->phase_stats[ctx->num_phase_stats];
+        memset(ps, 0, sizeof(*ps));
+        ps->phase = phase;
+        ps->start_cost = cost;
+        ps->start_vehicles = vehicles;
+        ps->start_unassigned = unassigned;
+        ps->elapsed_seconds = sg_monotonic_seconds() - ctx->solve_start_time;
+    }
+}
+
+/* Record end of a phase */
+static void sg_phase_end(SGContext *ctx, int64_t iterations,
+                         double cost, uint32_t vehicles, uint32_t unassigned) {
+    if (ctx->num_phase_stats < 5) {
+        SGPhaseStats *ps = &ctx->phase_stats[ctx->num_phase_stats];
+        ps->iterations = iterations;
+        ps->end_cost = cost;
+        ps->end_vehicles = vehicles;
+        ps->end_unassigned = unassigned;
+        ps->elapsed_seconds = (sg_monotonic_seconds() - ctx->solve_start_time) - ps->elapsed_seconds;
+        ctx->num_phase_stats++;
+    }
+}
+
 /* Progress callback forwarder: Arbor → Surge */
 static int sg_progress_forwarder(int64_t iteration, double best_cost,
                                   double elapsed_seconds, void *user_data) {
     SGContext *ctx = (SGContext *)user_data;
-    (void)elapsed_seconds;
     if (ctx->cancel_requested) return 1;
     /* Adaptive penalty self-adjustment at segment boundaries */
     if (ctx->penalty.enabled && ctx->penalty.update)
         ctx->penalty.update(&ctx->penalty);
-    if (ctx->progress_callback) {
+
+    /* Build enriched progress stats */
+    {
         SGStats snap;
         memset(&snap, 0, sizeof(snap));
         snap.iterations = iteration;
         snap.total_cost = best_cost;
-        if (ctx->progress_callback(&snap, ctx->progress_callback_data)) {
-            ctx->cancel_requested = 1;
-            return 1;
+        snap.elapsed_seconds = elapsed_seconds;
+        snap.phase = ctx->current_phase;
+
+        /* Record convergence sample at segment boundary */
+        if (ctx->convergence_buffer || ctx->convergence_callback) {
+            SGConvergenceEntry entry;
+            entry.iteration = iteration;
+            entry.cost = best_cost;
+            entry.elapsed_seconds = elapsed_seconds;
+            entry.vehicles_used = 0;
+            entry.unassigned = 0;
+            entry.total_distance = 0.0;
+            entry.phase = ctx->current_phase;
+            entry.is_new_best = 0;
+            sg_record_convergence(ctx, &entry);
+        }
+
+        if (ctx->progress_callback) {
+            if (ctx->progress_callback(&snap, ctx->progress_callback_data)) {
+                ctx->cancel_requested = 1;
+                return 1;
+            }
         }
     }
     return 0;
+}
+
+/* Instrumented is_better wrapper: records convergence on improvement */
+static int sg_instrumented_is_better(const void *candidate, const void *current_best,
+                                      void *user_ctx) {
+    SGContext *ctx = (SGContext *)user_ctx;
+    int better = sg_route_solution_is_better(candidate, current_best, user_ctx);
+    if (better && (ctx->convergence_buffer || ctx->convergence_callback)) {
+        const SGRouteSolution *sol = (const SGRouteSolution *)candidate;
+        SGConvergenceEntry entry;
+        entry.iteration = 0;  /* approximate — arbor doesn't expose iter in is_better */
+        entry.cost = sg_route_solution_cost(candidate, user_ctx);
+        entry.elapsed_seconds = sg_monotonic_seconds() - ctx->solve_start_time;
+        entry.vehicles_used = sol->vehicles_used;
+        entry.unassigned = sol->base.num_unassigned;
+        entry.total_distance = sol->total_distance;
+        entry.phase = ctx->current_phase;
+        entry.is_new_best = 1;
+        sg_record_convergence(ctx, &entry);
+    }
+    return better;
 }
 
 static void sg_copy_operator_stats(SGContext *ctx, const ARALNSContext *alns) {
@@ -691,7 +781,7 @@ static ARALNSContext *sg_create_route_alns(SGContext *ctx, ARALNSParams *params,
     ops->cost = sg_route_solution_cost_record;
     ops->size = sg_route_solution_size;
     ops->validate = sg_route_solution_validate;
-    ops->is_better = sg_route_solution_is_better;
+    ops->is_better = sg_instrumented_is_better;
     ops->user_ctx = ctx;
 
     alns = ar_alns_create(params, ops, ctx);
@@ -746,6 +836,14 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         return SG_STATUS_INVALID_ARG;
     }
 
+    /* Initialize instrumentation */
+    ctx->solve_start_time = sg_monotonic_seconds();
+    ctx->current_phase = SG_PHASE_CONSTRUCTION;
+    ctx->convergence_count = 0;
+    ctx->convergence_write_pos = 0;
+    ctx->num_phase_stats = 0;
+    memset(&ctx->penalty_snapshot, 0, sizeof(ctx->penalty_snapshot));
+
     /* Reset operator telemetry for this solve */
     free(ctx->destroy_op_stats);
     ctx->destroy_op_stats = NULL;
@@ -762,6 +860,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
     sg_scratch_init(ctx);
     sg_build_frozen_vehicle_map(ctx);
 
+    sg_phase_start(ctx, SG_PHASE_CONSTRUCTION, 0.0, 0, ctx->num_requests);
     if (ctx->num_initial_routes > 0) {
         init_status = sg_route_construct_from_warm_start(ctx, &initial);
         /* Fill any remaining unassigned requests via standard construction */
@@ -770,6 +869,22 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         }
     } else {
         init_status = sg_route_construct_initial_solution(ctx, &initial);
+    }
+    sg_phase_end(ctx, 0, sg_route_solution_cost(&initial, ctx),
+                 initial.vehicles_used, initial.base.num_unassigned);
+    /* Record construction result as first convergence entry */
+    if (init_status == AR_STATUS_OK &&
+        (ctx->convergence_buffer || ctx->convergence_callback)) {
+        SGConvergenceEntry entry;
+        entry.iteration = 0;
+        entry.cost = sg_route_solution_cost(&initial, ctx);
+        entry.elapsed_seconds = sg_monotonic_seconds() - ctx->solve_start_time;
+        entry.vehicles_used = initial.vehicles_used;
+        entry.unassigned = initial.base.num_unassigned;
+        entry.total_distance = initial.total_distance;
+        entry.phase = SG_PHASE_CONSTRUCTION;
+        entry.is_new_best = 1;
+        sg_record_convergence(ctx, &entry);
     }
     if (init_status != AR_STATUS_OK) {
         free(ctx->frozen_vehicle_map); ctx->frozen_vehicle_map = NULL;
@@ -803,6 +918,9 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
 
     /* ---- Phase 1: Vehicle minimization ---- */
     if (phase1_iters > 0) {
+        sg_phase_start(ctx, SG_PHASE_1_VEHICLE_MIN,
+                       sg_route_solution_cost(&initial, ctx),
+                       initial.vehicles_used, initial.base.num_unassigned);
         ar_alns_params_default(&params);
         params.max_iterations = phase1_iters;
         params.max_time_seconds = ctx->config.max_time_seconds;
@@ -856,7 +974,8 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         } else {
             sh_rng_seed_time(ctx->op_rng);
         }
-        if (ctx->progress_callback || ctx->cancel_requested) {
+        if (ctx->progress_callback || ctx->cancel_requested ||
+            ctx->convergence_buffer || ctx->convergence_callback) {
             ar_alns_set_progress_callback(alns, sg_progress_forwarder, ctx);
         }
 
@@ -876,6 +995,10 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         ar_alns_get_stats(alns, &ar_stats);
         total_alns_iters += ar_stats.iterations;
         sg_copy_operator_stats(ctx, alns);
+        sg_phase_end(ctx, ar_stats.iterations,
+                     p1_best ? sg_route_solution_cost(p1_best, ctx) : sg_route_solution_cost(&initial, ctx),
+                     p1_best ? p1_best->vehicles_used : initial.vehicles_used,
+                     p1_best ? p1_best->base.num_unassigned : initial.base.num_unassigned);
         ar_alns_free(alns);
         alns = NULL;
     }
@@ -894,6 +1017,10 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
     if (p1_best && p1_best->vehicles_used > 1) {
         int p15_iters = 500;
         double cost_scale;
+
+        sg_phase_start(ctx, SG_PHASE_1_5_CRUNCH,
+                       sg_route_solution_cost(p1_best, ctx),
+                       p1_best->vehicles_used, p1_best->base.num_unassigned);
 
         /* Phase 1.5 runs as additional budget — do NOT subtract from Phase 2.
            Reducing Phase 2 budget degrades search quality on frozen-request models. */
@@ -925,7 +1052,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
             p15_ops.cost = sg_route_solution_cost_record;
             p15_ops.size = sg_route_solution_size;
             p15_ops.validate = sg_route_solution_validate;
-            p15_ops.is_better = sg_route_solution_is_better;
+            p15_ops.is_better = sg_instrumented_is_better;
             p15_ops.user_ctx = ctx;
 
             p15_alns = ar_alns_create(&p15_params, &p15_ops, ctx);
@@ -945,7 +1072,8 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
                     } else {
                         sh_rng_seed_time(ctx->op_rng);
                     }
-                    if (ctx->progress_callback || ctx->cancel_requested) {
+                    if (ctx->progress_callback || ctx->cancel_requested ||
+                        ctx->convergence_buffer || ctx->convergence_callback) {
                         ar_alns_set_progress_callback(p15_alns, sg_progress_forwarder, ctx);
                     }
 
@@ -970,12 +1098,19 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
             }
         }
 
+        sg_phase_end(ctx, 0,  /* p1.5 iters already counted in total */
+                     sg_route_solution_cost(p1_best, ctx),
+                     p1_best->vehicles_used, p1_best->base.num_unassigned);
         ctx->penalty.enabled = 0;
     }
 
     /* ---- Phase 2: Distance polishing ---- */
     if (phase2_iters > 0) {
         SGRouteSolution *p2_initial = p1_best ? p1_best : &initial;
+
+        sg_phase_start(ctx, SG_PHASE_2_POLISH,
+                       sg_route_solution_cost(p2_initial, ctx),
+                       p2_initial->vehicles_used, p2_initial->base.num_unassigned);
 
         /* Phase 2 runs strict (no infeasible exploration) — penalty hurts distance
            quality without meaningful vehicle reduction at this stage. */
@@ -1034,7 +1169,8 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         } else {
             sh_rng_seed_time(ctx->op_rng);
         }
-        if (ctx->progress_callback || ctx->cancel_requested) {
+        if (ctx->progress_callback || ctx->cancel_requested ||
+            ctx->convergence_buffer || ctx->convergence_callback) {
             ar_alns_set_progress_callback(alns, sg_progress_forwarder, ctx);
         }
 
@@ -1051,6 +1187,10 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         ar_alns_get_stats(alns, &ar_stats);
         total_alns_iters += ar_stats.iterations;
         sg_copy_operator_stats(ctx, alns);
+        sg_phase_end(ctx, ar_stats.iterations,
+                     p2_best ? sg_route_solution_cost(p2_best, ctx) : sg_route_solution_cost(p2_initial, ctx),
+                     p2_best ? p2_best->vehicles_used : p2_initial->vehicles_used,
+                     p2_best ? p2_best->base.num_unassigned : p2_initial->base.num_unassigned);
         ar_alns_free(alns);
         alns = NULL;
     }
@@ -1065,6 +1205,14 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
             best = sg_route_solution_is_better(p1_best, p2_best, ctx) ? p1_best : p2_best;
         } else {
             best = p2_best ? p2_best : p1_best;
+        }
+
+        /* Postprocess phase */
+        {
+            SGRouteSolution *pp_sol = best ? best : &initial;
+            sg_phase_start(ctx, SG_PHASE_POSTPROCESS,
+                           sg_route_solution_cost(pp_sol, ctx),
+                           pp_sol->vehicles_used, pp_sol->base.num_unassigned);
         }
         if (best) {
             (void)sg_route_postprocess_reduce_vehicles(ctx, best);
@@ -1091,11 +1239,18 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
             }
         }
 
+        /* End postprocess phase */
+        sg_phase_end(ctx, 0,
+                     sg_route_solution_cost(final_sol, ctx),
+                     final_sol->vehicles_used, final_sol->base.num_unassigned);
+
         ctx->stats.iterations = total_alns_iters;
         ctx->stats.unassigned = final_sol->base.num_unassigned;
         ctx->stats.vehicles_used = final_sol->vehicles_used;
         ctx->stats.total_distance = final_sol->total_distance;
         ctx->stats.total_cost = sg_route_solution_cost(final_sol, ctx);
+        ctx->stats.elapsed_seconds = sg_monotonic_seconds() - ctx->solve_start_time;
+        ctx->stats.phase = ctx->current_phase;
         {
             double tw = 0.0;
             uint32_t wv;
@@ -1157,6 +1312,13 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         ctx->final_solution = (SGRouteSolution *)sg_route_solution_copy(final_sol, (void *)ctx);
     }
 
+    /* Capture penalty weights before freeing */
+    {
+        int pi;
+        for (pi = 0; pi < SG_PENALTY_COUNT; pi++) {
+            ctx->penalty_snapshot.weight[pi] = ctx->penalty.weight[pi];
+        }
+    }
     sg_penalty_free(&ctx->penalty);
     free(ctx->frozen_vehicle_map); ctx->frozen_vehicle_map = NULL;
     sg_scratch_free(ctx);
@@ -1260,7 +1422,8 @@ SGStatus sg_solve(SGContext *ctx) {
     } else {
         sh_rng_seed_time(ctx->op_rng);
     }
-    if (ctx->progress_callback || ctx->cancel_requested) {
+    if (ctx->progress_callback || ctx->cancel_requested ||
+        ctx->convergence_buffer || ctx->convergence_callback) {
         ar_alns_set_progress_callback(alns, sg_progress_forwarder, ctx);
     }
 

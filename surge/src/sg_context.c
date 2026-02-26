@@ -3090,3 +3090,301 @@ SGStatus sg_get_violation(const SGContext *ctx, uint32_t index, SGViolation *out
     *out = ctx->violations[index];
     return SG_STATUS_OK;
 }
+
+/* ============================================================================
+ * Convergence instrumentation (Phase I1)
+ * ============================================================================ */
+
+SGStatus sg_set_convergence_buffer(SGContext *ctx, SGConvergenceEntry *buffer,
+                                    uint32_t capacity) {
+    if (!ctx) return SG_STATUS_INVALID_ARG;
+    if (buffer && capacity == 0) return SG_STATUS_INVALID_ARG;
+    ctx->convergence_buffer = buffer;
+    ctx->convergence_capacity = capacity;
+    ctx->convergence_count = 0;
+    ctx->convergence_write_pos = 0;
+    return SG_STATUS_OK;
+}
+
+uint32_t sg_get_convergence_count(const SGContext *ctx) {
+    if (!ctx) return 0;
+    return ctx->convergence_count;
+}
+
+SGStatus sg_get_convergence_entry(const SGContext *ctx, uint32_t index,
+                                   SGConvergenceEntry *out) {
+    uint32_t stored, ring_index;
+    if (!ctx || !out || !ctx->convergence_buffer || ctx->convergence_count == 0) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    stored = ctx->convergence_count < ctx->convergence_capacity
+             ? ctx->convergence_count : ctx->convergence_capacity;
+    if (index >= stored) return SG_STATUS_INVALID_ARG;
+    /* Oldest entry is at write_pos when buffer has wrapped */
+    if (ctx->convergence_count <= ctx->convergence_capacity) {
+        ring_index = index;
+    } else {
+        ring_index = (ctx->convergence_write_pos + index) % ctx->convergence_capacity;
+    }
+    *out = ctx->convergence_buffer[ring_index];
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_set_convergence_callback(SGContext *ctx, SGConvergenceCallback cb,
+                                      void *user_data) {
+    if (!ctx) return SG_STATUS_INVALID_ARG;
+    ctx->convergence_callback = cb;
+    ctx->convergence_callback_data = user_data;
+    return SG_STATUS_OK;
+}
+
+/* ============================================================================
+ * Per-phase breakdown (Phase I2)
+ * ============================================================================ */
+
+uint32_t sg_get_phase_count(const SGContext *ctx) {
+    if (!ctx) return 0;
+    return ctx->num_phase_stats;
+}
+
+SGStatus sg_get_phase_stats(const SGContext *ctx, uint32_t index, SGPhaseStats *out) {
+    if (!ctx || !out || index >= ctx->num_phase_stats) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    *out = ctx->phase_stats[index];
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_get_penalty_snapshot(const SGContext *ctx, SGPenaltySnapshot *out) {
+    if (!ctx || !out) return SG_STATUS_INVALID_ARG;
+    *out = ctx->penalty_snapshot;
+    return SG_STATUS_OK;
+}
+
+/* ============================================================================
+ * Model introspection: count getters (Phase I3)
+ * ============================================================================ */
+
+uint32_t sg_get_vehicle_count(const SGContext *ctx) {
+    return ctx ? ctx->num_vehicles : 0;
+}
+
+uint32_t sg_get_depot_count(const SGContext *ctx) {
+    return ctx ? ctx->num_depots : 0;
+}
+
+uint32_t sg_get_task_count(const SGContext *ctx) {
+    return ctx ? ctx->num_tasks : 0;
+}
+
+uint32_t sg_get_location_count(const SGContext *ctx) {
+    return ctx ? ctx->num_locations : 0;
+}
+
+uint32_t sg_get_precedence_count(const SGContext *ctx) {
+    return ctx ? ctx->num_precedences : 0;
+}
+
+uint32_t sg_get_commodity_count(const SGContext *ctx) {
+    return ctx ? ctx->num_commodities : 0;
+}
+
+uint32_t sg_get_compartment_type_count(const SGContext *ctx) {
+    return ctx ? ctx->num_compartment_types : 0;
+}
+
+uint32_t sg_get_exclusion_group_count(const SGContext *ctx) {
+    return ctx ? ctx->num_exclusion_groups : 0;
+}
+
+uint32_t sg_get_setup_class_count(const SGContext *ctx) {
+    return ctx ? ctx->num_setup_classes : 0;
+}
+
+uint32_t sg_get_speed_profile_count(const SGContext *ctx) {
+    return ctx ? ctx->num_speed_profiles : 0;
+}
+
+uint32_t sg_get_travel_profile_count(const SGContext *ctx) {
+    return ctx ? ctx->num_travel_profiles : 0;
+}
+
+int sg_has_travel_matrix(const SGContext *ctx) {
+    return ctx && ctx->travel_distance_matrix != NULL;
+}
+
+int sg_has_travel_callback(const SGContext *ctx) {
+    return ctx && ctx->travel_callback != NULL;
+}
+
+/* ============================================================================
+ * Model introspection: entity property getters (Phase I3)
+ * ============================================================================ */
+
+SGStatus sg_get_vehicle_capacity(const SGContext *ctx, uint32_t vehicle_id,
+                                  uint32_t dimension, double *out) {
+    if (!ctx || !out || vehicle_id >= ctx->num_vehicles ||
+        dimension >= ctx->dimension_count) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (!ctx->vehicles[vehicle_id].capacity) return SG_STATUS_INVALID_ARG;
+    *out = ctx->vehicles[vehicle_id].capacity[dimension];
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_get_vehicle_shift_time_window(const SGContext *ctx, uint32_t vehicle_id,
+                                           int32_t *early_out, int32_t *late_out) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles || !early_out || !late_out) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    *early_out = ctx->vehicles[vehicle_id].shift_early;
+    *late_out = ctx->vehicles[vehicle_id].shift_late;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_get_vehicle_depot_ids(const SGContext *ctx, uint32_t vehicle_id,
+                                   uint32_t *start_out, uint32_t *end_out) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles || !start_out || !end_out) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    *start_out = ctx->vehicles[vehicle_id].start_depot_id;
+    *end_out = ctx->vehicles[vehicle_id].end_depot_id;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_get_vehicle_costs(const SGContext *ctx, uint32_t vehicle_id,
+                               double *fixed_out, double *per_dist_out, double *per_dur_out) {
+    if (!ctx || vehicle_id >= ctx->num_vehicles) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (fixed_out) *fixed_out = ctx->vehicles[vehicle_id].fixed_cost;
+    if (per_dist_out) *per_dist_out = ctx->vehicles[vehicle_id].cost_per_distance;
+    if (per_dur_out) *per_dur_out = ctx->vehicles[vehicle_id].cost_per_duration;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_get_request_kind(const SGContext *ctx, uint32_t request_id,
+                              SGRequestKind *out) {
+    if (!ctx || !out || request_id >= ctx->num_requests) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    *out = ctx->requests[request_id].kind;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_get_request_task_ids(const SGContext *ctx, uint32_t request_id,
+                                  uint32_t *pickup_out, uint32_t *delivery_out) {
+    if (!ctx || request_id >= ctx->num_requests || !pickup_out || !delivery_out) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    *pickup_out = ctx->requests[request_id].pickup_task_id;
+    *delivery_out = ctx->requests[request_id].delivery_task_id;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_get_request_lock(const SGContext *ctx, uint32_t request_id,
+                              SGRequestLock *out) {
+    if (!ctx || !out || request_id >= ctx->num_requests) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (!ctx->request_locks) {
+        *out = SG_LOCK_NONE;
+    } else {
+        *out = (SGRequestLock)ctx->request_locks[request_id];
+    }
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_get_task_location(const SGContext *ctx, uint32_t task_id,
+                               double *x_out, double *y_out) {
+    if (!ctx || task_id >= ctx->num_tasks || !x_out || !y_out) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    *x_out = ctx->tasks[task_id].x;
+    *y_out = ctx->tasks[task_id].y;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_get_task_time_window(const SGContext *ctx, uint32_t task_id,
+                                  int32_t *early_out, int32_t *late_out) {
+    if (!ctx || task_id >= ctx->num_tasks || !early_out || !late_out) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    *early_out = ctx->tasks[task_id].tw_early;
+    *late_out = ctx->tasks[task_id].tw_late;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_get_task_service_seconds(const SGContext *ctx, uint32_t task_id,
+                                      int32_t *out) {
+    if (!ctx || !out || task_id >= ctx->num_tasks) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    *out = ctx->tasks[task_id].service_seconds;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_get_task_demand(const SGContext *ctx, uint32_t task_id,
+                             uint32_t dimension, double *out) {
+    if (!ctx || !out || task_id >= ctx->num_tasks ||
+        dimension >= ctx->dimension_count) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    if (!ctx->tasks[task_id].demand) return SG_STATUS_INVALID_ARG;
+    *out = ctx->tasks[task_id].demand[dimension];
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_get_depot_location(const SGContext *ctx, uint32_t depot_id,
+                                double *x_out, double *y_out) {
+    if (!ctx || depot_id >= ctx->num_depots || !x_out || !y_out) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    *x_out = ctx->depots[depot_id].x;
+    *y_out = ctx->depots[depot_id].y;
+    return SG_STATUS_OK;
+}
+
+SGStatus sg_get_depot_time_window(const SGContext *ctx, uint32_t depot_id,
+                                   int32_t *early_out, int32_t *late_out) {
+    if (!ctx || depot_id >= ctx->num_depots || !early_out || !late_out) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    *early_out = ctx->depots[depot_id].tw_early;
+    *late_out = ctx->depots[depot_id].tw_late;
+    return SG_STATUS_OK;
+}
+
+/* ============================================================================
+ * Per-route violation getter (Phase I5)
+ * ============================================================================ */
+
+SGStatus sg_solution_get_route_violation(const SGContext *ctx, uint32_t route_index,
+                                          SGPenaltyTypePublic type, double *violation_out) {
+    uint32_t vehicle_id, active_count, i, active_idx;
+    if (!ctx || !violation_out || !ctx->final_solution ||
+        type >= SG_PENALTY_TYPE_COUNT) {
+        return SG_STATUS_INVALID_ARG;
+    }
+    /* Map route_index to vehicle_id (same as sg_solution_get_route_vehicle_id) */
+    active_count = 0;
+    active_idx = UINT32_MAX;
+    for (i = 0; i < ctx->final_solution->num_vehicles; i++) {
+        if (ctx->final_solution->route_stop_lengths[i] > 0) {
+            if (active_count == route_index) {
+                active_idx = i;
+                break;
+            }
+            active_count++;
+        }
+    }
+    if (active_idx == UINT32_MAX) return SG_STATUS_INVALID_ARG;
+    vehicle_id = active_idx;
+    if (!ctx->final_solution->route_violations) {
+        *violation_out = 0.0;
+        return SG_STATUS_OK;
+    }
+    *violation_out = ctx->final_solution->route_violations[
+        (size_t)vehicle_id * SG_PENALTY_COUNT + (int)type];
+    return SG_STATUS_OK;
+}

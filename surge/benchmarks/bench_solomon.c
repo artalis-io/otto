@@ -1,5 +1,6 @@
 #include "surge.h"
 #include "sg_parallel.h"
+#include "sh_args.h"
 
 #include <ctype.h>
 #include <glob.h>
@@ -259,11 +260,11 @@ int main(int argc, char **argv) {
             continue;
         }
         if (strcmp(argv[i], "--iterations") == 0 && i + 1 < (size_t)argc) {
-            max_iterations = atoi(argv[++i]);
+            max_iterations = sh_parse_int(argv[++i], 10000, 1, 1000000);
             continue;
         }
         if (strcmp(argv[i], "--time-limit") == 0 && i + 1 < (size_t)argc) {
-            max_time_seconds = atoi(argv[++i]);
+            max_time_seconds = sh_parse_int(argv[++i], 0, 0, 86400);
             continue;
         }
         if (strcmp(argv[i], "--seed") == 0 && i + 1 < (size_t)argc) {
@@ -279,11 +280,11 @@ int main(int argc, char **argv) {
             continue;
         }
         if (strcmp(argv[i], "--threads") == 0 && i + 1 < (size_t)argc) {
-            pop_threads = (uint32_t)atoi(argv[++i]);
+            pop_threads = (uint32_t)sh_parse_int(argv[++i], 0, 0, 256);
             continue;
         }
         if (strcmp(argv[i], "--generations") == 0 && i + 1 < (size_t)argc) {
-            pop_generations = (uint32_t)atoi(argv[++i]);
+            pop_generations = (uint32_t)sh_parse_int(argv[++i], 3, 1, 10000);
             continue;
         }
         if (strcmp(argv[i], "--telemetry") == 0) {

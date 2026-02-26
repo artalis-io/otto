@@ -63,8 +63,9 @@ TSAN_CFLAGS = -Wall -Wextra -g -O1 -std=c11 -D_GNU_SOURCE -DSG_HAS_THREADS -DDEB
               -fsanitize=thread -fno-omit-frame-pointer
 TSAN_LDFLAGS = -fsanitize=thread
 
-.PHONY: all clean test lib debug bench bench-li-lim bench-cordeau shared-lib python-test node-test \
-        cppcheck fuzz tsan
+.PHONY: all clean test lib debug bench bench-li-lim bench-cordeau \
+        bench-quick bench-li-lim-quick bench-cordeau-quick bench-all-quick \
+        shared-lib python-test node-test cppcheck fuzz tsan
 
 all: lib $(TEST_BIN)
 
@@ -106,10 +107,26 @@ bench-li-lim: $(BENCH_PD_BIN)
 bench-cordeau: $(BENCH_CORD_BIN)
 	./$(BENCH_CORD_BIN) --dir benchmarks/cordeau
 
+# Quick benchmarks (1000 iterations) for hyperparameter tuning
+bench-quick: $(BENCH_SOL_BIN)
+	./$(BENCH_SOL_BIN) --dir benchmarks/solomon --iterations 1000
+
+bench-li-lim-quick: $(BENCH_PD_BIN)
+	./$(BENCH_PD_BIN) --dir benchmarks/li_lim --iterations 1000
+
+bench-cordeau-quick: $(BENCH_CORD_BIN)
+	./$(BENCH_CORD_BIN) --dir benchmarks/cordeau --iterations 1000
+
+bench-all-quick: $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN)
+	./$(BENCH_SOL_BIN) --dir benchmarks/solomon --iterations 1000
+	./$(BENCH_PD_BIN) --dir benchmarks/li_lim --iterations 1000
+	./$(BENCH_CORD_BIN) --dir benchmarks/cordeau --iterations 1000
+
 shared-lib: $(SHARED_LIB)
 
 $(SHARED_LIB): $(SRCS) $(ARBOR_SRCS) $(SHARED_BINDING_SRCS)
 	$(CC) -Wall -Wextra -O3 -std=c11 -D_GNU_SOURCE -DSG_HAS_THREADS -fPIC \
+	  -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fno-common \
 	  $(INCLUDES) $(SHARED_LIB_FLAGS) \
 	  $(SRCS) $(ARBOR_SRCS) $(SHARED_BINDING_SRCS) \
 	  -lm -lpthread -o $@
@@ -173,9 +190,13 @@ help:
 	@echo "  all      - Build library and tests (default)"
 	@echo "  lib      - Build static library (libsurge.a)"
 	@echo "  test     - Build and run tests"
-	@echo "  bench    - Build and run Solomon benchmark suite"
-	@echo "  bench-li-lim - Build and run Li & Lim PDPTW benchmark suite"
-	@echo "  bench-cordeau - Build and run Cordeau DARP benchmark suite"
+	@echo "  bench    - Build and run Solomon benchmark suite (10000 iters)"
+	@echo "  bench-li-lim - Build and run Li & Lim PDPTW benchmark suite (10000 iters)"
+	@echo "  bench-cordeau - Build and run Cordeau DARP benchmark suite (10000 iters)"
+	@echo "  bench-quick - Solomon quick bench (1000 iters, for tuning)"
+	@echo "  bench-li-lim-quick - Li & Lim quick bench (1000 iters, for tuning)"
+	@echo "  bench-cordeau-quick - Cordeau quick bench (1000 iters, for tuning)"
+	@echo "  bench-all-quick - Run all three quick benchmarks"
 	@echo "  shared-lib - Build shared library for FFI bindings"
 	@echo "  python-test - Build shared lib and run Python tests"
 	@echo "  node-test   - Build WASM and run Node.js tests"
