@@ -19,7 +19,7 @@ ARBOR_SRC = $(wildcard ../../arbor/src/*.c)
 # Shared sources needed by Surge
 SHARED_SRC = ../../shared/src/sh_json.c ../../shared/src/sh_arena.c \
              ../../shared/src/sh_hashmap.c ../../shared/src/sh_dist.c \
-             ../../shared/src/sh_stepfunc.c
+             ../../shared/src/sh_stepfunc.c ../../shared/src/sh_piecewise.c
 WASM_SRC = src/sg_wasm.c
 
 # All source files (low-level API)

@@ -44,6 +44,7 @@ BENCH_CORD_BIN = bench_cordeau
 ARBOR_SRCS = ../arbor/src/ar_alns.c ../arbor/src/ar_operators.c ../arbor/src/arbor.c
 SHARED_BINDING_SRCS = ../shared/src/sh_json.c ../shared/src/sh_arena.c \
                       ../shared/src/sh_hashmap.c ../shared/src/sh_dist.c \
+                      ../shared/src/sh_stepfunc.c ../shared/src/sh_piecewise.c \
                       ../shared/src/sh_completion.c ../shared/src/sh_worker_pool.c \
                       ../shared/src/sh_workqueue.c
 
