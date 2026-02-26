@@ -38,7 +38,7 @@ Reduce Phase-1 wall time on degenerate NETLIB outliers by cutting unnecessary fu
 - [x] P1-C Ratio-breakdown recovery tightening.
   - Reduce repeated full recompute loops when ratio breakdown repeats.
   - Keep dual-rescue and infeasibility cleanup escape hatches authoritative.
-- [ ] P1-D Direction-stabilize recompute decimation.
+- [x] P1-D Direction-stabilize recompute decimation.
   - Keep LU-health forced refactors intact.
   - Avoid repeated full recompute on cooldown/defer loops when safe.
 - [ ] P1-E Pivot-failure recovery recompute hygiene.
@@ -89,3 +89,15 @@ Reduce Phase-1 wall time on degenerate NETLIB outliers by cutting unnecessary fu
     - `make -C ralph build-ralph-benchmark` PASS
     - `make -C ralph test-netlib-gate-small` PASS
       - artifact: `/tmp/netlib-regression-gate-20260226-192153`
+- [x] 2026-02-26: P1-D implemented (direction-stabilize recompute decimation).
+  - Converted safe direction-stabilize skip/defer paths (no LU refactor) to guarded RC-only recompute.
+  - Preserved LU-health-forced refactor path and full recompute behavior for refactor-driven stabilization paths.
+  - Added explicit telemetry:
+    - `phase1_dir_stabilize_skip_rc_only`
+    - `phase1_dir_stabilize_skip_full`
+  - Validation:
+    - `make -C ralph test-lp-telemetry-solver` PASS (`135/135`)
+    - `make -C ralph test-simplex-policy` PASS (`48/48`)
+    - `make -C ralph build-ralph-benchmark` PASS
+    - `make -C ralph test-netlib-gate-small` PASS
+      - artifact: `/tmp/netlib-regression-gate-20260226-194717`

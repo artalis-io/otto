@@ -255,6 +255,16 @@ void lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(
     }
 }
 
+void lp_telemetry_record_phase1_dir_stabilize_skip(SimplexSolver *solver,
+                                                   int used_full_recompute) {
+    if (!solver_telemetry_enabled(solver)) return;
+    if (used_full_recompute) {
+        solver->telemetry.perf_phase1_dir_stabilize_skip_full++;
+    } else {
+        solver->telemetry.perf_phase1_dir_stabilize_skip_rc_only++;
+    }
+}
+
 void lp_telemetry_record_phase1_recompute(SimplexSolver *solver,
                                           LPPhase1RecomputeReason reason) {
     if (!solver_telemetry_enabled(solver)) return;
