@@ -122,6 +122,9 @@ typedef struct {
     double pd_shaw_randomness;    /* [1.0, 10.0], default 3.0 */
     double route_shaw_randomness; /* [1.0, 10.0], default 4.0 */
     int    string_l_max;          /* [4, 30], default 10 — max string removal length */
+
+    /* Insertion pruning */
+    int    neighbor_k;            /* [5, 50], default 20 — k-nearest neighbors for vehicle pruning */
 } SGTuneParams;
 
 #define SG_TUNE_SENTINEL_D (-1.0)
