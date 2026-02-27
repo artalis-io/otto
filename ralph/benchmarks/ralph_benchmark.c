@@ -365,6 +365,9 @@ typedef struct {
     int lu_mkz_profile_retry_attempts;
     int lu_mkz_profile_retry_successes;
     int lu_mkz_profile_retry_failures;
+    int lu_mkz_profile_retry_fail_identity_sep;
+    int lu_mkz_profile_retry_fail_backend_exhausted;
+    int lu_mkz_profile_retry_fail_pathological;
     int lu_sparse_dense_fallbacks;
     int lu_used_dense_fallback_last;
     int lu_sparse_fallback_last_reason;
@@ -372,6 +375,14 @@ typedef struct {
     int lu_sparse_fallback_reason_small_matrix;
     int lu_sparse_fallback_reason_symbolic;
     int lu_sparse_fallback_reason_numeric;
+    int lu_sparse_numeric_last_failure_reason;
+    char lu_sparse_numeric_last_failure_reason_str[64];
+    int lu_sparse_numeric_fail_identity_sep;
+    int lu_sparse_numeric_fail_backend_exhausted;
+    int lu_sparse_numeric_fail_pathological;
+    int lu_numeric_full_retry_attempts;
+    int lu_numeric_full_retry_successes;
+    int lu_numeric_full_retry_failures;
     int lu_identity_sep_failures;
     int lu_symbolic_failures;
     int lu_symbolic_fail_workspace;
@@ -584,6 +595,20 @@ static const char* lu_sparse_fallback_reason_string(int reason) {
     }
 }
 
+static const char* lu_sparse_numeric_failure_reason_string(int reason) {
+    switch ((LUSparseNumericFailureReason)reason) {
+        case LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION:
+            return "identity_separation";
+        case LU_SPARSE_NUMERIC_FAIL_BACKEND_EXHAUSTED:
+            return "backend_exhausted";
+        case LU_SPARSE_NUMERIC_FAIL_PATHOLOGICAL:
+            return "pathological";
+        case LU_SPARSE_NUMERIC_FAIL_NONE:
+        default:
+            return "none";
+    }
+}
+
 static const char* periodic_cost_reason_string(int reason) {
     return lp_refactor_policy_periodic_cost_dampen_reason_string(
         (LPPeriodicCostDampenReason)reason);
@@ -698,6 +723,8 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             sizeof(result.lu_last_failure_reason) - 1);
     strncpy(result.lu_sparse_fallback_last_reason_str, "none",
             sizeof(result.lu_sparse_fallback_last_reason_str) - 1);
+    strncpy(result.lu_sparse_numeric_last_failure_reason_str, "none",
+            sizeof(result.lu_sparse_numeric_last_failure_reason_str) - 1);
     strncpy(result.refactor_last_reason_str, "other",
             sizeof(result.refactor_last_reason_str) - 1);
 
@@ -979,12 +1006,26 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_mkz_profile_retry_attempts = lu_tel.mkz_profile_retry_attempts;
                 result.lu_mkz_profile_retry_successes = lu_tel.mkz_profile_retry_successes;
                 result.lu_mkz_profile_retry_failures = lu_tel.mkz_profile_retry_failures;
+                result.lu_mkz_profile_retry_fail_identity_sep =
+                    lu_tel.mkz_profile_retry_fail_identity_sep;
+                result.lu_mkz_profile_retry_fail_backend_exhausted =
+                    lu_tel.mkz_profile_retry_fail_backend_exhausted;
+                result.lu_mkz_profile_retry_fail_pathological =
+                    lu_tel.mkz_profile_retry_fail_pathological;
                 result.lu_sparse_dense_fallbacks = lu_tel.sparse_dense_fallbacks;
                 result.lu_used_dense_fallback_last = lu_tel.used_dense_fallback_last;
                 result.lu_sparse_fallback_last_reason = lu_tel.sparse_fallback_last_reason;
                 result.lu_sparse_fallback_reason_small_matrix = lu_tel.sparse_fallback_reason_small_matrix;
                 result.lu_sparse_fallback_reason_symbolic = lu_tel.sparse_fallback_reason_symbolic;
                 result.lu_sparse_fallback_reason_numeric = lu_tel.sparse_fallback_reason_numeric;
+                result.lu_sparse_numeric_last_failure_reason = lu_tel.sparse_numeric_last_failure_reason;
+                result.lu_sparse_numeric_fail_identity_sep = lu_tel.sparse_numeric_fail_identity_sep;
+                result.lu_sparse_numeric_fail_backend_exhausted =
+                    lu_tel.sparse_numeric_fail_backend_exhausted;
+                result.lu_sparse_numeric_fail_pathological = lu_tel.sparse_numeric_fail_pathological;
+                result.lu_numeric_full_retry_attempts = lu_tel.numeric_full_retry_attempts;
+                result.lu_numeric_full_retry_successes = lu_tel.numeric_full_retry_successes;
+                result.lu_numeric_full_retry_failures = lu_tel.numeric_full_retry_failures;
                 result.lu_identity_sep_failures = lu_tel.identity_sep_failures;
                 result.lu_symbolic_failures = lu_tel.symbolic_failures;
                 result.lu_symbolic_fail_workspace = lu_tel.symbolic_fail_workspace;
@@ -1042,6 +1083,15 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                     strncpy(result.lu_sparse_fallback_last_reason_str, reason,
                             sizeof(result.lu_sparse_fallback_last_reason_str) - 1);
                     result.lu_sparse_fallback_last_reason_str[sizeof(result.lu_sparse_fallback_last_reason_str) - 1] = '\0';
+                }
+                {
+                    const char *reason = lu_sparse_numeric_failure_reason_string(
+                        lu_tel.sparse_numeric_last_failure_reason);
+                    if (!reason) reason = "none";
+                    strncpy(result.lu_sparse_numeric_last_failure_reason_str, reason,
+                            sizeof(result.lu_sparse_numeric_last_failure_reason_str) - 1);
+                    result.lu_sparse_numeric_last_failure_reason_str[
+                        sizeof(result.lu_sparse_numeric_last_failure_reason_str) - 1] = '\0';
                 }
             }
         }
@@ -1669,6 +1719,12 @@ static void print_json_result(const char *problem_name, const char *source,
     char escaped_lu_sparse_fallback_reason[128];
     json_escape_string(escaped_lu_sparse_fallback_reason, sizeof(escaped_lu_sparse_fallback_reason),
                        ralph->lu_sparse_fallback_last_reason_str[0] ? ralph->lu_sparse_fallback_last_reason_str : "none");
+    char escaped_lu_sparse_numeric_failure_reason[128];
+    json_escape_string(escaped_lu_sparse_numeric_failure_reason,
+                       sizeof(escaped_lu_sparse_numeric_failure_reason),
+                       ralph->lu_sparse_numeric_last_failure_reason_str[0]
+                           ? ralph->lu_sparse_numeric_last_failure_reason_str
+                           : "none");
     char escaped_refactor_reason[128];
     json_escape_string(escaped_refactor_reason, sizeof(escaped_refactor_reason),
                        ralph->refactor_last_reason_str[0] ? ralph->refactor_last_reason_str : "other");
@@ -2113,6 +2169,12 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_mkz_profile_retry_successes);
     fprintf(out, "    \"mkz_profile_retry_failures\": %d,\n",
             ralph->lu_mkz_profile_retry_failures);
+    fprintf(out, "    \"mkz_profile_retry_fail_identity_sep\": %d,\n",
+            ralph->lu_mkz_profile_retry_fail_identity_sep);
+    fprintf(out, "    \"mkz_profile_retry_fail_backend_exhausted\": %d,\n",
+            ralph->lu_mkz_profile_retry_fail_backend_exhausted);
+    fprintf(out, "    \"mkz_profile_retry_fail_pathological\": %d,\n",
+            ralph->lu_mkz_profile_retry_fail_pathological);
     fprintf(out, "    \"sparse_dense_fallbacks\": %d,\n", ralph->lu_sparse_dense_fallbacks);
     fprintf(out, "    \"used_dense_fallback_last\": %s,\n",
             ralph->lu_used_dense_fallback_last ? "true" : "false");
@@ -2124,6 +2186,22 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_sparse_fallback_reason_symbolic);
     fprintf(out, "    \"sparse_fallback_reason_numeric\": %d,\n",
             ralph->lu_sparse_fallback_reason_numeric);
+    fprintf(out, "    \"sparse_numeric_last_failure_reason_code\": %d,\n",
+            ralph->lu_sparse_numeric_last_failure_reason);
+    fprintf(out, "    \"sparse_numeric_last_failure_reason\": \"%s\",\n",
+            escaped_lu_sparse_numeric_failure_reason);
+    fprintf(out, "    \"sparse_numeric_fail_identity_sep\": %d,\n",
+            ralph->lu_sparse_numeric_fail_identity_sep);
+    fprintf(out, "    \"sparse_numeric_fail_backend_exhausted\": %d,\n",
+            ralph->lu_sparse_numeric_fail_backend_exhausted);
+    fprintf(out, "    \"sparse_numeric_fail_pathological\": %d,\n",
+            ralph->lu_sparse_numeric_fail_pathological);
+    fprintf(out, "    \"numeric_full_retry_attempts\": %d,\n",
+            ralph->lu_numeric_full_retry_attempts);
+    fprintf(out, "    \"numeric_full_retry_successes\": %d,\n",
+            ralph->lu_numeric_full_retry_successes);
+    fprintf(out, "    \"numeric_full_retry_failures\": %d,\n",
+            ralph->lu_numeric_full_retry_failures);
     fprintf(out, "    \"identity_sep_failures\": %d,\n", ralph->lu_identity_sep_failures);
     fprintf(out, "    \"symbolic_failures\": %d,\n", ralph->lu_symbolic_failures);
     fprintf(out, "    \"symbolic_fail_workspace\": %d,\n", ralph->lu_symbolic_fail_workspace);

@@ -2643,6 +2643,18 @@ static int lu_numeric_backend_to_basis_governor_backend(int backend) {
     return LP_BASIS_GOV_BACKEND_NONE;
 }
 
+static int lu_numeric_terminal_failure_reason(int reason_hint,
+                                              int saw_mkz_singular_failure,
+                                              int saw_dense_ge_singular_failure) {
+    if (reason_hint != LU_SPARSE_NUMERIC_FAIL_NONE) {
+        return reason_hint;
+    }
+    if (saw_mkz_singular_failure || saw_dense_ge_singular_failure) {
+        return LU_SPARSE_NUMERIC_FAIL_PATHOLOGICAL;
+    }
+    return LU_SPARSE_NUMERIC_FAIL_BACKEND_EXHAUSTED;
+}
+
 /*
  * Numeric factorization: dense GE with partial pivoting on structural columns,
  * identity column placement, COO→CSC conversion, condition estimation.
@@ -2653,7 +2665,8 @@ static int lu_numeric_backend_to_basis_governor_backend(int backend) {
  * Returns 0 on success, -1 on failure (singular pivot or alloc failure).
  */
 static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
-                                 int num_identity, int k, LUNumericMode mode) {
+                                int num_identity, int k, LUNumericMode mode,
+                                int *terminal_failure_reason_out) {
     int m = lu->m;
     int dense_ge_retry_done = 0;
     int skip_sparse_numeric = 0;
@@ -2671,6 +2684,10 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     int mkz_attempted_in_full_retry = 0;
     LUNumericBackend backend_used = LU_NUMERIC_BACKEND_NONE;
     int shadow_backend_pick = LP_BASIS_GOV_BACKEND_NONE;
+    int terminal_failure_reason_hint = LU_SPARSE_NUMERIC_FAIL_NONE;
+    int saw_mkz_singular_failure = 0;
+    int saw_dense_ge_singular_failure = 0;
+    int mkz_profile_retry_used_this_call = 0;
 #define NUMERIC_COMMIT() do { \
     lp_telemetry_lu_record_numeric_stages(lu, \
         k, \
@@ -2682,9 +2699,28 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
         t_coo_to_csc_ms); \
 } while (0)
 #define NUMERIC_RETURN(code) do { \
+    int __code = (code); \
+    if (__code < 0) { \
+        int __reason = lu_numeric_terminal_failure_reason( \
+            terminal_failure_reason_hint, \
+            saw_mkz_singular_failure, \
+            saw_dense_ge_singular_failure); \
+        if (terminal_failure_reason_out) { \
+            *terminal_failure_reason_out = __reason; \
+        } \
+        lp_telemetry_lu_mark_sparse_numeric_failure(lu, __reason); \
+        if (mkz_profile_retry_used_this_call) { \
+            lp_telemetry_lu_mark_mkz_profile_retry_terminal_failure(lu, __reason); \
+        } \
+    } else if (terminal_failure_reason_out) { \
+        *terminal_failure_reason_out = LU_SPARSE_NUMERIC_FAIL_NONE; \
+    } \
     NUMERIC_COMMIT(); \
-    return (code); \
+    return __code; \
 } while (0)
+    if (terminal_failure_reason_out) {
+        *terminal_failure_reason_out = LU_SPARSE_NUMERIC_FAIL_NONE;
+    }
 
     int *identity_row = lu->ws_identity_row;
     double *identity_val = lu->ws_identity_val;
@@ -2716,10 +2752,12 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     for (int step = k; step < m; step++) {
         int orig_col = col_order[step];
         if (orig_col < 0 || orig_col >= m) {
+            terminal_failure_reason_hint = LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION;
             NUMERIC_RETURN(-1);
         }
         int r = identity_row[orig_col];
         if (r < 0 || r >= m || row_is_identity[r]) {
+            terminal_failure_reason_hint = LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION;
             NUMERIC_RETURN(-1);
         }
         row_is_identity[r] = 1;
@@ -2829,6 +2867,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
 
             if (profile_idx > 0) {
                 lp_telemetry_lu_mark_mkz_profile_retry_attempt(lu);
+                mkz_profile_retry_used_this_call = 1;
             }
 
             while (1) {
@@ -2994,6 +3033,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
         }
         if (rc == MKZ_FAIL_SINGULAR) {
             mkz_bad_outcome_this_call = 1;
+            saw_mkz_singular_failure = 1;
             mkz_circuit_note_bad_outcome(lu, mkz_fingerprint);
         }
 
@@ -3161,6 +3201,7 @@ dense_ge_factorization:
                 A_struct[piv_orig * k + step] = 1.0;
                 max_val = 1.0;
             } else {
+                saw_dense_ge_singular_failure = 1;
                 NUMERIC_RETURN(-1);
             }
         }
@@ -3268,6 +3309,7 @@ identity_placement:
                 t_a_struct_build_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
                 goto dense_ge_factorization;
             }
+            terminal_failure_reason_hint = LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION;
             NUMERIC_RETURN(-1);
         }
 
@@ -3450,9 +3492,11 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
          * dense top-level fallback when only identity/structural partitioning
          * failed but Markowitz numeric can still factorize robustly. */
         if (lu_symbolic_finalize_full_structural(lu, B) == 0) {
+            int retry_failure_reason = LU_SPARSE_NUMERIC_FAIL_NONE;
             int retry_num_result = lu_numeric_factorize(
                 lu, B, lu->sym_num_identity, lu->sym_k,
-                LU_NUMERIC_MODE_SYMBOLIC_FULL_RETRY);
+                LU_NUMERIC_MODE_SYMBOLIC_FULL_RETRY,
+                &retry_failure_reason);
             if (retry_num_result == 0) {
                 lp_telemetry_lu_mark_symbolic_full_retry_success(lu);
                 lp_telemetry_lu_mark_sparse_success(lu);
@@ -3468,10 +3512,28 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
     }
 
     /* Numeric factorization (dense GE + COO→CSC) */
+    int num_failure_reason = LU_SPARSE_NUMERIC_FAIL_NONE;
     int num_result = lu_numeric_factorize(
         lu, B, lu->sym_num_identity, lu->sym_k,
-        LU_NUMERIC_MODE_STANDARD);
+        LU_NUMERIC_MODE_STANDARD,
+        &num_failure_reason);
     if (num_result < 0) {
+        if (num_failure_reason == LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION) {
+            lp_telemetry_lu_mark_numeric_full_retry_attempt(lu);
+            if (lu_symbolic_finalize_full_structural(lu, B) == 0) {
+                int retry_failure_reason = LU_SPARSE_NUMERIC_FAIL_NONE;
+                int retry_num_result = lu_numeric_factorize(
+                    lu, B, lu->sym_num_identity, lu->sym_k,
+                    LU_NUMERIC_MODE_SYMBOLIC_FULL_RETRY,
+                    &retry_failure_reason);
+                if (retry_num_result == 0) {
+                    lp_telemetry_lu_mark_numeric_full_retry_success(lu);
+                    lp_telemetry_lu_mark_sparse_success(lu);
+                    return 0;
+                }
+            }
+            lp_telemetry_lu_mark_numeric_full_retry_failure(lu);
+        }
         lu->sym_valid = 0;  /* Invalidate on numeric failure */
         lp_telemetry_lu_set_sparse_fallback_reason(lu, LU_SPARSE_FALLBACK_NUMERIC);
         return -1;

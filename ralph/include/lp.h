@@ -117,6 +117,14 @@ typedef enum {
     LU_SYMBOLIC_FAIL_INCONSISTENT_IDENTITY = -3
 } LUSymbolicFailureReason;
 
+/* Sparse numeric-stage terminal failure codes (internal retry + telemetry routing). */
+typedef enum {
+    LU_SPARSE_NUMERIC_FAIL_NONE = 0,
+    LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION = 1,
+    LU_SPARSE_NUMERIC_FAIL_BACKEND_EXHAUSTED = 2,
+    LU_SPARSE_NUMERIC_FAIL_PATHOLOGICAL = 3
+} LUSparseNumericFailureReason;
+
 /* Sparse-efficient -> dense fallback classification (per lu_factorize call). */
 typedef enum {
     LU_SPARSE_FALLBACK_NONE = 0,
@@ -194,6 +202,9 @@ typedef struct {
     int mkz_profile_retry_attempts; /* Numeric retry with relaxed Markowitz profile */
     int mkz_profile_retry_successes; /* Relaxed Markowitz profile recovered factorization */
     int mkz_profile_retry_failures;  /* Relaxed Markowitz profile still failed */
+    int mkz_profile_retry_fail_identity_sep; /* Retry profile ended with identity-separation failure */
+    int mkz_profile_retry_fail_backend_exhausted; /* Retry profile ended with backend exhaustion */
+    int mkz_profile_retry_fail_pathological; /* Retry profile ended with singular/pathological failure */
 
     /* Sparse-efficient fallback telemetry */
     int sparse_dense_fallbacks;  /* lu_factorize_sparse_efficient -> lu_factorize_dense */
@@ -202,6 +213,13 @@ typedef struct {
     int sparse_fallback_reason_small_matrix;
     int sparse_fallback_reason_symbolic;
     int sparse_fallback_reason_numeric;
+    int sparse_numeric_last_failure_reason; /* LUSparseNumericFailureReason */
+    int sparse_numeric_fail_identity_sep;
+    int sparse_numeric_fail_backend_exhausted;
+    int sparse_numeric_fail_pathological;
+    int numeric_full_retry_attempts; /* Full-structural sparse retry after numeric identity-separation failure */
+    int numeric_full_retry_successes;
+    int numeric_full_retry_failures;
     int identity_sep_failures;   /* Identity-placement failures in sparse-efficient path */
     int symbolic_failures;       /* Symbolic-stage failures before retry */
     int symbolic_fail_workspace;
@@ -997,6 +1015,9 @@ typedef struct {
     int mkz_profile_retry_attempts;
     int mkz_profile_retry_successes;
     int mkz_profile_retry_failures;
+    int mkz_profile_retry_fail_identity_sep;
+    int mkz_profile_retry_fail_backend_exhausted;
+    int mkz_profile_retry_fail_pathological;
 
     int sparse_dense_fallbacks;
     int used_dense_fallback_last;
@@ -1004,6 +1025,13 @@ typedef struct {
     int sparse_fallback_reason_small_matrix;
     int sparse_fallback_reason_symbolic;
     int sparse_fallback_reason_numeric;
+    int sparse_numeric_last_failure_reason;
+    int sparse_numeric_fail_identity_sep;
+    int sparse_numeric_fail_backend_exhausted;
+    int sparse_numeric_fail_pathological;
+    int numeric_full_retry_attempts;
+    int numeric_full_retry_successes;
+    int numeric_full_retry_failures;
     int identity_sep_failures;
     int symbolic_failures;
     int symbolic_fail_workspace;
@@ -1326,8 +1354,13 @@ void lp_telemetry_lu_record_numeric_stages(LUFactorization *lu,
                                            double dense_ge_numeric_ms,
                                            double identity_placement_ms,
                                            double coo_to_csc_ms);
+void lp_telemetry_lu_mark_sparse_numeric_failure(LUFactorization *lu,
+                                                 int reason);
 void lp_telemetry_lu_set_sparse_fallback_reason(LUFactorization *lu,
                                                 int reason);
+void lp_telemetry_lu_mark_numeric_full_retry_attempt(LUFactorization *lu);
+void lp_telemetry_lu_mark_numeric_full_retry_success(LUFactorization *lu);
+void lp_telemetry_lu_mark_numeric_full_retry_failure(LUFactorization *lu);
 void lp_telemetry_lu_mark_symbolic_failure(LUFactorization *lu,
                                            int reason);
 void lp_telemetry_lu_mark_symbolic_full_retry_attempt(LUFactorization *lu);
@@ -1360,5 +1393,7 @@ void lp_telemetry_lu_mark_mkz_circuit_reset(LUFactorization *lu);
 void lp_telemetry_lu_mark_mkz_profile_retry_attempt(LUFactorization *lu);
 void lp_telemetry_lu_mark_mkz_profile_retry_success(LUFactorization *lu);
 void lp_telemetry_lu_mark_mkz_profile_retry_failure(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_profile_retry_terminal_failure(LUFactorization *lu,
+                                                             int reason);
 
 #endif /* RALPH_LP_H */
