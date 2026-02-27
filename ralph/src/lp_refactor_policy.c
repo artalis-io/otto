@@ -22,6 +22,15 @@
 #define PHASE2_POLICY_COOLDOWN_DEGEN_TRIGGER 40
 #define PHASE2_POLICY_COOLDOWN_MIN_UPDATES 16
 #define PHASE2_POLICY_COOLDOWN_MAX_UPDATES 96
+#define PHASE2_PERIODIC_RECOMPUTE_BASE_INTERVAL 200
+#define PHASE2_PERIODIC_RECOMPUTE_MAX_INTERVAL 600
+#define PHASE2_PERIODIC_RECOMPUTE_MIN_M 1200
+#define PHASE2_PERIODIC_RECOMPUTE_FULL_M 2600
+#define PHASE2_PERIODIC_RECOMPUTE_MIN_DEGEN 80
+#define PHASE2_PERIODIC_RECOMPUTE_FULL_DEGEN 320
+#define PHASE2_PERIODIC_RECOMPUTE_MAX_SPIKE_PCT 30
+#define PHASE2_PERIODIC_RECOMPUTE_MAX_COND 1e6
+#define PHASE2_PERIODIC_RECOMPUTE_MAX_GROWTH 1e4
 #define PHASE1_POLICY_COOLDOWN_MIN_M 1200
 #define PHASE1_POLICY_COOLDOWN_DEGEN_TRIGGER 40
 #define PHASE1_POLICY_COOLDOWN_POLICY_TRIGGER 40
@@ -37,6 +46,9 @@
 #define PHASE1_DIR_STABILIZE_FORCE_RATIO_BASE 100.0
 #define PHASE1_DIR_STABILIZE_FORCE_RATIO_COOLDOWN 1000.0
 #define PHASE1_DIR_STABILIZE_MODERATE_RATIO_MAX 30.0
+#define PHASE1_DIR_SKIP_RC_ONLY_MIN_M 700
+#define PHASE1_DIR_SKIP_RC_ONLY_MIN_DEGEN 20
+#define PHASE1_DIR_SKIP_RC_ONLY_MIN_NO_PIVOT_STREAK 8
 #define LU_HEALTH_HARD_COND_MIN_UPDATES 10
 #define LU_HEALTH_HARD_COND_RATIO 1e10
 #define LU_HEALTH_SOFT_COND_MED 1e6
@@ -296,6 +308,52 @@ int lp_refactor_policy_phase2_cooldown_eligible(int m,
     return 1;
 }
 
+int lp_refactor_policy_phase2_periodic_recompute_interval(
+    int m,
+    int use_bland,
+    int degenerate_count,
+    int spike_pool_used,
+    int spike_pool_capacity,
+    double cond_estimate,
+    double growth_factor) {
+    int base_interval = PHASE2_PERIODIC_RECOMPUTE_BASE_INTERVAL;
+    int max_interval = PHASE2_PERIODIC_RECOMPUTE_MAX_INTERVAL;
+    int interval = base_interval;
+    double m_pressure;
+    double degen_pressure;
+    double extend_pressure;
+
+    if (m < PHASE2_PERIODIC_RECOMPUTE_MIN_M) return base_interval;
+    if (use_bland) return base_interval;
+    if (degenerate_count < PHASE2_PERIODIC_RECOMPUTE_MIN_DEGEN) return base_interval;
+    if (spike_pool_capacity > 0 &&
+        spike_pool_used * 100 >
+            spike_pool_capacity * PHASE2_PERIODIC_RECOMPUTE_MAX_SPIKE_PCT) {
+        return base_interval;
+    }
+    if (isfinite(cond_estimate) && cond_estimate > PHASE2_PERIODIC_RECOMPUTE_MAX_COND) {
+        return base_interval;
+    }
+    if (isfinite(growth_factor) && growth_factor > PHASE2_PERIODIC_RECOMPUTE_MAX_GROWTH) {
+        return base_interval;
+    }
+
+    m_pressure =
+        clamp_unit_interval((double)(m - PHASE2_PERIODIC_RECOMPUTE_MIN_M) /
+                            (double)(PHASE2_PERIODIC_RECOMPUTE_FULL_M -
+                                     PHASE2_PERIODIC_RECOMPUTE_MIN_M));
+    degen_pressure =
+        clamp_unit_interval((double)(degenerate_count - PHASE2_PERIODIC_RECOMPUTE_MIN_DEGEN) /
+                            (double)(PHASE2_PERIODIC_RECOMPUTE_FULL_DEGEN -
+                                     PHASE2_PERIODIC_RECOMPUTE_MIN_DEGEN));
+    extend_pressure = (m_pressure < degen_pressure) ? m_pressure : degen_pressure;
+
+    interval = base_interval + (int)(extend_pressure * (double)(max_interval - base_interval) + 0.5);
+    if (interval < base_interval) interval = base_interval;
+    if (interval > max_interval) interval = max_interval;
+    return interval;
+}
+
 int lp_refactor_policy_phase2_cooldown_window_updates(int interval) {
     int cooldown = interval + interval / 2;
     if (cooldown < PHASE2_POLICY_COOLDOWN_MIN_UPDATES) {
@@ -355,6 +413,15 @@ int lp_refactor_policy_phase1_dir_stabilize_cooldown_updates(int m,
         cooldown = PHASE1_DIR_STABILIZE_MAX_COOLDOWN_UPDATES;
     }
     return cooldown;
+}
+
+int lp_refactor_policy_phase1_dir_skip_allow_rc_only(int m,
+                                                     int degenerate_count,
+                                                     int no_pivot_streak) {
+    if (m < PHASE1_DIR_SKIP_RC_ONLY_MIN_M) return 0;
+    if (degenerate_count >= PHASE1_DIR_SKIP_RC_ONLY_MIN_DEGEN) return 1;
+    if (no_pivot_streak >= PHASE1_DIR_SKIP_RC_ONLY_MIN_NO_PIVOT_STREAK) return 1;
+    return 0;
 }
 
 int lp_refactor_policy_phase1_dir_stabilize_force_extreme_ratio(

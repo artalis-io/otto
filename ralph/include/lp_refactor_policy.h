@@ -53,6 +53,15 @@ int lp_refactor_policy_phase2_cooldown_eligible(int m,
                                                 double cond_estimate,
                                                 double growth_factor);
 
+int lp_refactor_policy_phase2_periodic_recompute_interval(
+    int m,
+    int use_bland,
+    int degenerate_count,
+    int spike_pool_used,
+    int spike_pool_capacity,
+    double cond_estimate,
+    double growth_factor);
+
 int lp_refactor_policy_phase2_cooldown_window_updates(int interval);
 
 int lp_refactor_policy_phase1_cooldown_eligible(int m,
@@ -68,6 +77,10 @@ int lp_refactor_policy_phase1_cooldown_window_updates(int interval);
 int lp_refactor_policy_phase1_dir_stabilize_cooldown_updates(int m,
                                                              int degenerate_count,
                                                              int repeat_streak);
+
+int lp_refactor_policy_phase1_dir_skip_allow_rc_only(int m,
+                                                     int degenerate_count,
+                                                     int no_pivot_streak);
 
 int lp_refactor_policy_phase1_dir_stabilize_force_extreme_ratio(
     double dir_inf_ratio,

@@ -268,6 +268,14 @@ typedef struct {
 
 typedef struct {
     const char *name;
+    int m;
+    int degenerate_count;
+    int no_pivot_streak;
+    int expected_allow;
+} DirSkipRcOnlyCase;
+
+typedef struct {
+    const char *name;
     double dir_inf_ratio;
     int cooldown_active;
     int expected_force;
@@ -304,6 +312,18 @@ typedef struct {
     int expected_applied;
     int expected_next_cooldown;
 } SoftLUPolicyCooldownCase;
+
+typedef struct {
+    const char *name;
+    int m;
+    int use_bland;
+    int degenerate_count;
+    int spike_pool_used;
+    int spike_pool_capacity;
+    double cond_estimate;
+    double growth_factor;
+    int expected_interval;
+} Phase2RecomputeIntervalCase;
 
 static int run_lu_health_case(const LUHealthCase *tc) {
     int hard = -1;
@@ -472,6 +492,18 @@ static int run_dir_stabilize_cooldown_case(const DirStabilizeCooldownCase *tc) {
     return 1;
 }
 
+static int run_dir_skip_rc_only_case(const DirSkipRcOnlyCase *tc) {
+    int allow = lp_refactor_policy_phase1_dir_skip_allow_rc_only(
+        tc->m, tc->degenerate_count, tc->no_pivot_streak);
+    if (allow != tc->expected_allow) {
+        fprintf(stderr, "FAIL: %s (expected allow=%d got=%d)\n",
+                tc->name, tc->expected_allow, allow);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
 static int run_dir_stabilize_force_case(const DirStabilizeForceCase *tc) {
     int force =
         lp_refactor_policy_phase1_dir_stabilize_force_extreme_ratio(
@@ -548,6 +580,25 @@ static int run_soft_lu_policy_cooldown_case(const SoftLUPolicyCooldownCase *tc) 
     if (next_cooldown != tc->expected_next_cooldown) {
         fprintf(stderr, "FAIL: %s (expected next_cooldown=%d got=%d)\n",
                 tc->name, tc->expected_next_cooldown, next_cooldown);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_phase2_recompute_interval_case(
+    const Phase2RecomputeIntervalCase *tc) {
+    int interval = lp_refactor_policy_phase2_periodic_recompute_interval(
+        tc->m,
+        tc->use_bland,
+        tc->degenerate_count,
+        tc->spike_pool_used,
+        tc->spike_pool_capacity,
+        tc->cond_estimate,
+        tc->growth_factor);
+    if (interval != tc->expected_interval) {
+        fprintf(stderr, "FAIL: %s (expected interval=%d got=%d)\n",
+                tc->name, tc->expected_interval, interval);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -1204,6 +1255,36 @@ int main(void) {
             .expected_cooldown = 64
         }
     };
+    const DirSkipRcOnlyCase dir_skip_rc_only_cases[] = {
+        {
+            .name = "phase1 dir-skip rc-only disabled for small matrices",
+            .m = 500,
+            .degenerate_count = 100,
+            .no_pivot_streak = 20,
+            .expected_allow = 0
+        },
+        {
+            .name = "phase1 dir-skip rc-only enabled by high degeneracy on large matrix",
+            .m = 900,
+            .degenerate_count = 40,
+            .no_pivot_streak = 1,
+            .expected_allow = 1
+        },
+        {
+            .name = "phase1 dir-skip rc-only enabled by sustained no-pivot streak",
+            .m = 900,
+            .degenerate_count = 5,
+            .no_pivot_streak = 12,
+            .expected_allow = 1
+        },
+        {
+            .name = "phase1 dir-skip rc-only disabled before no-pivot threshold",
+            .m = 900,
+            .degenerate_count = 5,
+            .no_pivot_streak = 3,
+            .expected_allow = 0
+        }
+    };
     const DirStabilizeForceCase dir_stabilize_force_cases[] = {
         {
             .name = "phase1 dir-force uses baseline threshold before cooldown",
@@ -1339,6 +1420,63 @@ int main(void) {
             .expected_next_cooldown = 0
         }
     };
+    const Phase2RecomputeIntervalCase phase2_recompute_interval_cases[] = {
+        {
+            .name = "phase2 periodic recompute keeps base interval on small matrix",
+            .m = 900,
+            .use_bland = 0,
+            .degenerate_count = 200,
+            .spike_pool_used = 0,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e4,
+            .growth_factor = 10.0,
+            .expected_interval = 200
+        },
+        {
+            .name = "phase2 periodic recompute relaxes cadence on large healthy degeneracy",
+            .m = 1500,
+            .use_bland = 0,
+            .degenerate_count = 200,
+            .spike_pool_used = 10,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e4,
+            .growth_factor = 10.0,
+            .expected_interval = 286
+        },
+        {
+            .name = "phase2 periodic recompute reaches max interval on extreme size+degeneracy",
+            .m = 2600,
+            .use_bland = 0,
+            .degenerate_count = 400,
+            .spike_pool_used = 10,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e4,
+            .growth_factor = 10.0,
+            .expected_interval = 600
+        },
+        {
+            .name = "phase2 periodic recompute blocks relaxation on poor LU health",
+            .m = 2600,
+            .use_bland = 0,
+            .degenerate_count = 400,
+            .spike_pool_used = 10,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e8,
+            .growth_factor = 10.0,
+            .expected_interval = 200
+        },
+        {
+            .name = "phase2 periodic recompute blocks relaxation under bland mode",
+            .m = 2600,
+            .use_bland = 1,
+            .degenerate_count = 400,
+            .spike_pool_used = 10,
+            .spike_pool_capacity = 100,
+            .cond_estimate = 1e4,
+            .growth_factor = 10.0,
+            .expected_interval = 200
+        }
+    };
 
     int pass = 0;
     int total_policy = (int)(sizeof(cases) / sizeof(cases[0]));
@@ -1347,13 +1485,19 @@ int main(void) {
     int total_soft_lu_defer = (int)(sizeof(soft_lu_defer_cases) / sizeof(soft_lu_defer_cases[0]));
     int total_periodic_cost_defer = (int)(sizeof(periodic_cost_defer_cases) / sizeof(periodic_cost_defer_cases[0]));
     int total_dir_stabilize = (int)(sizeof(dir_stabilize_cooldown_cases) / sizeof(dir_stabilize_cooldown_cases[0]));
+    int total_dir_skip_rc_only = (int)(sizeof(dir_skip_rc_only_cases) / sizeof(dir_skip_rc_only_cases[0]));
     int total_dir_force = (int)(sizeof(dir_stabilize_force_cases) / sizeof(dir_stabilize_force_cases[0]));
     int total_dir_moderate = (int)(sizeof(dir_stabilize_moderate_cases) / sizeof(dir_stabilize_moderate_cases[0]));
     int total_no_pivot = (int)(sizeof(no_pivot_force_cases) / sizeof(no_pivot_force_cases[0]));
     int total_soft_lu_policy_cd = (int)(sizeof(soft_lu_policy_cooldown_cases) / sizeof(soft_lu_policy_cooldown_cases[0]));
+    int total_phase2_recompute_interval =
+        (int)(sizeof(phase2_recompute_interval_cases) /
+              sizeof(phase2_recompute_interval_cases[0]));
     int total = total_policy + total_sched + total_lu_health + total_soft_lu_defer +
                 total_periodic_cost_defer + total_dir_stabilize + total_dir_force +
-                total_dir_moderate + total_no_pivot + total_soft_lu_policy_cd;
+                total_dir_moderate + total_no_pivot + total_soft_lu_policy_cd +
+                total_phase2_recompute_interval;
+    total += total_dir_skip_rc_only;
 
     for (int i = 0; i < total_policy; i++) {
         pass += run_case(&cases[i]);
@@ -1373,6 +1517,9 @@ int main(void) {
     for (int i = 0; i < total_dir_stabilize; i++) {
         pass += run_dir_stabilize_cooldown_case(&dir_stabilize_cooldown_cases[i]);
     }
+    for (int i = 0; i < total_dir_skip_rc_only; i++) {
+        pass += run_dir_skip_rc_only_case(&dir_skip_rc_only_cases[i]);
+    }
     for (int i = 0; i < total_dir_force; i++) {
         pass += run_dir_stabilize_force_case(&dir_stabilize_force_cases[i]);
     }
@@ -1384,6 +1531,9 @@ int main(void) {
     }
     for (int i = 0; i < total_soft_lu_policy_cd; i++) {
         pass += run_soft_lu_policy_cooldown_case(&soft_lu_policy_cooldown_cases[i]);
+    }
+    for (int i = 0; i < total_phase2_recompute_interval; i++) {
+        pass += run_phase2_recompute_interval_case(&phase2_recompute_interval_cases[i]);
     }
 
     printf("\nPolicy cases passed: %d/%d\n", pass, total);
