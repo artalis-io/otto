@@ -2505,9 +2505,276 @@ Avg runtime 30.8s per instance (much faster than VRPTW).
 #### Scaling Observations
 
 400+ task instances are impractical at current iteration speed — a single 400-task PDPTW
-instance took 1834s with poor quality. The per-phase time limit architecture means each
-phase (Phase 1, 1.5, 2) independently consumes the time budget, and postprocessing has
-no time bound. Priorities for scaling:
-1. Global time limit across all phases (not per-phase)
-2. Operator complexity: O(n²) insertion scans need distance matrix caching
-3. Population mode for large instances (parallel search on multiple cores)
+instance took 1834s with poor quality (+89% distance gap). Root cause analysis follows.
+
+### Scaling to 400+ Requests
+
+#### Problem Diagnosis
+
+A 400-task LL instance with `max_time_seconds=120` ran for 1834 seconds. Breakdown:
+
+| Phase | Time Bounded? | Actual Time | Why |
+|-------|--------------|-------------|-----|
+| Construction | No | ~15s | Solomon I1 heuristic, O(n² log n) |
+| Phase 1 ALNS | Yes (120s) | ~120s | Hits time limit, few iterations complete |
+| Between-phase postprocessing | **No** | **~500-1000s** | ejection_reduce + reduce_vehicles_relaxed + intensify |
+| Phase 1.5 ALNS | Yes (120s shared) | ~5s | Budget already consumed by Phase 1 |
+| Phase 2 ALNS | Yes (120s shared) | ~5s | Budget already consumed by Phase 1 |
+| Final postprocessing | **No** | **~600-1500s** | reduce_vehicles + ejection_reduce + intensify + polish_distance |
+
+The same pattern explains GH-200 outliers (c1_2_7=1186s, c1_2_9=1045s with 60s limit).
+
+**Core issues:**
+1. Postprocessing is completely unbounded — no time checks anywhere
+2. Phase budget reuse — Phase 1 consumes the entire time budget, Phases 1.5/2 starve
+3. Postprocessing on a bad solution grinds without improving quality (+89% gap)
+4. O(n) insertion scans evaluate every position even when most are obviously bad
+
+#### Phase 1: Global Time Envelope
+
+**Priority: Critical. Prerequisite for all other scaling work.**
+
+Add a single wall-clock deadline across the entire `sg_solve_route_model()` call. Every
+section — construction, ALNS phases, postprocessing — checks remaining time and exits
+early when the budget is exhausted.
+
+**Design:**
+
+```c
+/* Record solve start time once at entry */
+double solve_start = ar_now_seconds();
+double time_budget = (double)ctx->config.max_time_seconds;
+
+/* Helper: check if time remains */
+static inline int sg_time_remaining(double start, double budget) {
+    return budget <= 0.0 || (ar_now_seconds() - start) < budget;
+}
+```
+
+**Budget allocation** (configurable via SGTuneParams):
+
+| Phase | Budget Share | Rationale |
+|-------|-------------|-----------|
+| Construction | 5% | Fixed cost, fast for Solomon format |
+| Phase 1 (vehicle min) | 40% | Needs high temperature + iterations |
+| Phase 1.5 (crunch) | 10% | Short focused search |
+| Phase 2 (distance polish) | 30% | Currently starves — needs real iterations |
+| Postprocessing (all) | 15% | Bounded, skip if budget exhausted |
+
+Each ALNS phase receives `remaining_time * share / total_remaining_share` rather than
+the raw `max_time_seconds`. This ensures Phase 2 always gets real iterations.
+
+**Postprocessing changes:**
+- Add `double deadline` parameter to all postprocessing functions
+- Check `ar_now_seconds() > deadline` at outer loop boundaries
+- Skip postprocessing entirely if <5% of budget remains
+- Gate postprocessing on solution quality: skip if vehicles > 2× BKS estimate
+
+**Files:** `sg_solve.c` (budget tracking), `sg_postprocess.c` (deadline parameter),
+`sg_tune.h` (budget share tunables).
+
+**Estimated effort:** 4-6 hours. No API changes. All existing tests unaffected (they
+use `max_time_seconds=0` which means unlimited).
+
+#### Phase 2: Phase Budget Management
+
+**Priority: High. Directly improves solution quality.**
+
+Currently all three ALNS phases pass the same `max_time_seconds` to `ar_alns_solve()`,
+which measures elapsed time from its own start. Phase 1 consumes the full budget;
+Phase 1.5 and Phase 2 get near-zero iterations.
+
+**Fix:** Pass remaining time from the global envelope, not the raw config value.
+
+```c
+/* Phase 1: gets 40% of total budget */
+double p1_budget = remaining * 0.40;
+params.max_time_seconds = (int)p1_budget;
+
+/* After Phase 1: recalculate remaining */
+double elapsed = ar_now_seconds() - solve_start;
+double remaining = time_budget - elapsed;
+
+/* Phase 1.5: gets 10% of original */
+double p15_budget = time_budget * 0.10;
+if (p15_budget > remaining) p15_budget = remaining;
+p15_params.max_time_seconds = (int)p15_budget;
+
+/* Phase 2: gets all remaining minus postprocessing reserve */
+double p2_budget = remaining - time_budget * 0.15;
+params.max_time_seconds = (int)fmax(p2_budget, 1.0);
+```
+
+This is a direct consequence of Phase 1 and should be implemented together.
+
+**Files:** `sg_solve.c` only.
+
+#### Phase 3: Neighbor Lists for Insertion Pruning
+
+**Priority: High. Largest per-iteration speedup for large instances.**
+
+The repair operators (greedy, regret-3) evaluate every vehicle × every position for
+each unassigned request. For 400 tasks with 20 vehicles and 20 stops per route,
+that's 20 × 20 = 400 insertion evaluations per request, with 40 removed requests =
+16,000 evaluations per ALNS iteration. At 200+ tasks, most positions are obviously bad.
+
+**Nearest-neighbor lists:**
+
+Pre-sort locations by distance from each location. During insertion, only evaluate
+positions adjacent to the k nearest neighbors (k=20-40).
+
+```c
+typedef struct {
+    uint32_t *neighbors;     /* neighbors[i * k + j] = j-th nearest to location i */
+    uint32_t k;              /* neighbors per location */
+    uint32_t num_locations;
+} SGNeighborIndex;
+```
+
+**Build cost:** O(n² log k) using partial sort. For 800 locations, k=30: ~19M comparisons,
+<100ms. Built once at solve start.
+
+**Insertion pruning:** When evaluating insertions for request R at location L:
+- Only consider vehicles whose route passes within the k-nearest neighbors of L
+- Skip positions where both adjacent stops are far from L
+- Fallback: if no feasible insertion found in neighbors, scan all positions
+
+**Expected speedup:** 5-10× for n>200. Insertion scan drops from O(n) to O(k) per vehicle.
+
+**Interaction with distance/duration model:**
+
+The neighbor index uses `sg_travel_dist()` for sorting, respecting the full resolution
+hierarchy. For static matrices (Solomon, GH, LL benchmarks), this is a one-time O(n²)
+build. For time-dependent or callback-based models:
+
+| Model | Neighbor Index | Behavior |
+|-------|---------------|----------|
+| Static matrix (global) | O(n²) build, exact | Standard case |
+| Per-vehicle profiles | Build per profile type | Vehicles with same profile share index |
+| Time-dependent brackets | Build from base bracket | Approximation — neighbor order may shift |
+| Callback | Build from departure_time=0 | Approximation — fallback to full scan if needed |
+| Speed profiles | N/A (doesn't affect distance) | Index unaffected |
+
+For TD/callback models, the neighbor list is an *approximation*. The insertion evaluator
+still calls `sg_travel_dist()` / `sg_travel_dur()` for exact costs — the neighbor list
+only prunes which positions to evaluate, not the evaluation itself. If a request can't
+be feasibly inserted in any neighbor position, the full scan runs as fallback.
+
+**Files:** New `sg_neighbor.c` / `sg_neighbor.h`. Changes to `sg_repair.c` (insertion
+loop), `sg_solve.c` (build at solve start), `sg_context.c` (storage).
+
+**Estimated effort:** 1-2 days.
+
+#### Phase 4: Postprocessing Complexity Reduction
+
+**Priority: Medium. Prevents worst-case blowup after global time envelope is in place.**
+
+Even with a global time envelope, postprocessing operators have high per-call complexity
+on large instances:
+
+| Operator | Current Complexity | Hot Path |
+|----------|-------------------|----------|
+| `ejection_reduce` | O(vehicles × requests² × budget) | Nested while(restarted) + try-all-ejections |
+| `reduce_vehicles_relaxed` | O(vehicles² × insertions) | Pair-elimination with full reinsertion |
+| `intensify` | O(8 × vehicles × route³) | OR-opt(1,2,3), 2-opt*, exchange, 8 passes |
+| `polish_distance` | O(3 × requests × vehicles × route) | Remove-reinsert, 3 passes |
+
+**Improvements:**
+
+1. **Limit intensify passes:** Cap at 3 passes (not 8) for n>200. Diminishing returns.
+2. **Neighbor-aware local search:** Use the Phase 3 neighbor index in OR-opt and exchange
+   to skip distant inter-route moves. O(vehicles × route × k) instead of O(vehicles² × route²).
+3. **Early exit in ejection:** If the current ejection chain hasn't improved in N attempts,
+   stop. Currently retries indefinitely.
+4. **Skip polish_distance for large instances:** Phase 2 ALNS already handles distance
+   optimization. Polish is redundant when Phase 2 gets adequate budget (Phase 2 fix).
+
+**Files:** `sg_postprocess.c`.
+
+**Estimated effort:** 1 day.
+
+#### Phase 5: Travel Resolution Cache for TD/Callback Models
+
+**Priority: Low for benchmarks. Important for production with TD routing.**
+
+For standard benchmarks (Solomon, GH, LL), `sg_travel_dist()` is already O(1) — it's
+a direct matrix lookup via the inline function. No caching needed.
+
+For production use cases with time-dependent travel or callbacks, repeated lookups for
+the same (from, to, vehicle_profile, time_bracket) tuple waste computation:
+
+| Model | Lookup Cost | Cache Benefit |
+|-------|------------|---------------|
+| Static matrix | O(1) — array index | None (already optimal) |
+| Time brackets | O(B) bracket selection + O(1) matrix | Minor — B is typically 3-5 |
+| Speed profiles | O(1) step function eval | None |
+| Callback | Arbitrary (could be API call) | **High** — memoize recent lookups |
+
+**Design: Tiered cache**
+
+```c
+typedef struct {
+    /* Tier 1: Per-solve distance matrix snapshot (for cacheable models) */
+    double *cached_distances;    /* num_locations × num_locations, NULL if uncacheable */
+    int distances_cacheable;     /* true if no TD brackets, no callback, no per-vehicle profiles */
+
+    /* Tier 2: Per-iteration LRU for callback/TD models */
+    struct {
+        uint64_t key;            /* pack(from, to, profile_id, bracket_id) */
+        double distance;
+        double duration;
+    } *lru_cache;
+    uint32_t lru_size;           /* 4096-16384 entries typical */
+    uint32_t lru_mask;           /* power-of-2 for fast modulo */
+} SGTravelCache;
+```
+
+**Cacheability detection** (at solve start):
+
+```
+if no callback && no per-vehicle profiles && no TD brackets:
+    → Tier 1: snapshot global matrix (or it's already the matrix — no-op)
+    → sg_travel_dist() already O(1), skip cache entirely
+
+if per-vehicle profiles but no TD brackets:
+    → Tier 1 per profile: snapshot each profile's matrix
+    → Lookup = profile_matrices[vehicle.profile_id][from * n + to]
+
+if TD brackets (global or per-profile):
+    → NOT fully cacheable (departure_time varies)
+    → Tier 2: LRU cache keyed on (from, to, profile_id, bracket_id)
+    → bracket_id determined by departure_time at call site
+
+if callback:
+    → NOT cacheable (arbitrary side effects possible)
+    → Tier 2: LRU cache if user opts in via flag
+    → Fallback: no cache, call through every time
+```
+
+**Key principle:** If the model is fully cacheable (static matrices, no TD, no callback),
+don't add any indirection — the current inline `sg_travel_dist()` is already optimal.
+The cache only activates for models that actually benefit from it.
+
+**Files:** New `sg_travel_cache.c` / `sg_travel_cache.h`. Changes to `sg_internal.h`
+(cache struct in SGContext), `sg_solve.c` (build/free cache), `sg_feasibility.c`
+(use cached lookups in hot path).
+
+**Estimated effort:** 2-3 days. Should be gated behind a feature flag initially.
+
+#### Implementation Order
+
+```
+Phase 1 + 2 (global envelope + budget)  →  immediate, few hours
+         ↓
+Phase 3 (neighbor lists)                →  biggest speedup, 1-2 days
+         ↓
+Phase 4 (postprocessing caps)           →  prevents outliers, 1 day
+         ↓
+Phase 5 (travel cache for TD)           →  production feature, 2-3 days
+         ↓
+Re-run GH-400, LL-400, then 600+        →  validate scaling
+```
+
+Phases 1+2 alone should make GH-200 outliers disappear (from 1186s → ~120s) and make
+400-task instances feasible. Phase 3 is where the real scaling unlock happens — it
+changes iteration cost from O(n) to O(k) and should enable 1000-customer instances.
