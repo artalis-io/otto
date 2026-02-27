@@ -397,6 +397,9 @@ typedef struct {
     int lu_numeric_backend_markowitz;
     int lu_numeric_backend_supernode;
     int lu_numeric_backend_dense_ge;
+    int lu_sn_cost_gate_trips;
+    int lu_sn_cost_gate_skips;
+    int lu_sn_cost_gate_resets;
     int lu_sn_calls;
     int lu_sn_successes;
     int lu_num_updates;
@@ -1040,6 +1043,9 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_numeric_backend_markowitz = lu_tel.numeric_backend_markowitz;
                 result.lu_numeric_backend_supernode = lu_tel.numeric_backend_supernode;
                 result.lu_numeric_backend_dense_ge = lu_tel.numeric_backend_dense_ge;
+                result.lu_sn_cost_gate_trips = lu_tel.sn_cost_gate_trips;
+                result.lu_sn_cost_gate_skips = lu_tel.sn_cost_gate_skips;
+                result.lu_sn_cost_gate_resets = lu_tel.sn_cost_gate_resets;
                 result.lu_sn_calls = lu_tel.sn_calls;
                 result.lu_sn_successes = lu_tel.sn_successes;
                 result.lu_num_updates = lu_tel.num_updates;
@@ -2227,6 +2233,12 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_numeric_backend_supernode);
     fprintf(out, "    \"numeric_backend_dense_ge\": %d,\n",
             ralph->lu_numeric_backend_dense_ge);
+    fprintf(out, "    \"sn_cost_gate_trips\": %d,\n",
+            ralph->lu_sn_cost_gate_trips);
+    fprintf(out, "    \"sn_cost_gate_skips\": %d,\n",
+            ralph->lu_sn_cost_gate_skips);
+    fprintf(out, "    \"sn_cost_gate_resets\": %d,\n",
+            ralph->lu_sn_cost_gate_resets);
     fprintf(out, "    \"sn_calls\": %d,\n", ralph->lu_sn_calls);
     fprintf(out, "    \"sn_successes\": %d,\n", ralph->lu_sn_successes);
     fprintf(out, "    \"num_updates\": %d,\n", ralph->lu_num_updates);

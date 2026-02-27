@@ -2655,6 +2655,74 @@ static int lu_numeric_terminal_failure_reason(int reason_hint,
     return LU_SPARSE_NUMERIC_FAIL_BACKEND_EXHAUSTED;
 }
 
+#define SN_COST_GATE_MIN_K 128
+#define SN_COST_GATE_TRIP_MIN_CALLS 6
+#define SN_COST_GATE_TRIP_MS 120.0
+#define SN_COST_GATE_TRIP_RATIO 6.0
+#define SN_COST_GATE_SKIP_BUDGET 2
+#define SN_COST_GATE_EWMA_ALPHA 0.25
+#define SN_COST_GATE_DENSE_RESET_RATIO 0.75
+
+static double lu_cost_gate_update_ewma(double prev, double sample) {
+    if (sample <= 0.0) return prev;
+    if (prev <= 0.0) return sample;
+    return (1.0 - SN_COST_GATE_EWMA_ALPHA) * prev + SN_COST_GATE_EWMA_ALPHA * sample;
+}
+
+static void lu_supernode_cost_gate_note_markowitz(LUFactorization *lu,
+                                                   int k,
+                                                   double markowitz_ms) {
+    if (!lu || k < SN_COST_GATE_MIN_K || markowitz_ms <= 0.0) return;
+    lu->sn_cost_gate_markowitz_ewma_ms =
+        lu_cost_gate_update_ewma(lu->sn_cost_gate_markowitz_ewma_ms, markowitz_ms);
+}
+
+static void lu_supernode_cost_gate_note_supernode(LUFactorization *lu,
+                                                   int k,
+                                                   double supernode_ms) {
+    if (!lu || k < SN_COST_GATE_MIN_K || supernode_ms <= 0.0) return;
+    lu->sn_cost_gate_supernode_ewma_ms =
+        lu_cost_gate_update_ewma(lu->sn_cost_gate_supernode_ewma_ms, supernode_ms);
+
+    if (lu->sn_calls < SN_COST_GATE_TRIP_MIN_CALLS) return;
+    if (lu->sn_cost_gate_markowitz_ewma_ms <= 0.0) return;
+    if (lu->sn_cost_gate_supernode_ewma_ms < SN_COST_GATE_TRIP_MS) return;
+    if (lu->sn_cost_gate_supernode_ewma_ms <
+        lu->sn_cost_gate_markowitz_ewma_ms * SN_COST_GATE_TRIP_RATIO) {
+        return;
+    }
+
+    if (lu->sn_cost_gate_skip_budget < SN_COST_GATE_SKIP_BUDGET) {
+        lu->sn_cost_gate_skip_budget = SN_COST_GATE_SKIP_BUDGET;
+        lp_telemetry_lu_mark_sn_cost_gate_trip(lu);
+    }
+}
+
+static int lu_supernode_cost_gate_should_skip(LUFactorization *lu,
+                                              int k,
+                                              int full_retry_mode) {
+    if (!lu || full_retry_mode || k < SN_COST_GATE_MIN_K) return 0;
+    if (lu->sn_cost_gate_skip_budget <= 0) return 0;
+    lu->sn_cost_gate_skip_budget--;
+    lp_telemetry_lu_mark_sn_cost_gate_skip(lu);
+    return 1;
+}
+
+static void lu_supernode_cost_gate_note_dense_after_skip(LUFactorization *lu,
+                                                         int k,
+                                                         double dense_ge_ms) {
+    if (!lu || k < SN_COST_GATE_MIN_K || dense_ge_ms <= 0.0) return;
+    if (lu->sn_cost_gate_supernode_ewma_ms <= 0.0) return;
+    if (dense_ge_ms <
+        (lu->sn_cost_gate_supernode_ewma_ms * SN_COST_GATE_DENSE_RESET_RATIO)) {
+        return;
+    }
+    if (lu->sn_cost_gate_skip_budget > 0) {
+        lu->sn_cost_gate_skip_budget = 0;
+        lp_telemetry_lu_mark_sn_cost_gate_reset(lu);
+    }
+}
+
 /*
  * Numeric factorization: dense GE with partial pivoting on structural columns,
  * identity column placement, COO→CSC conversion, condition estimation.
@@ -2688,6 +2756,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     int saw_mkz_singular_failure = 0;
     int saw_dense_ge_singular_failure = 0;
     int mkz_profile_retry_used_this_call = 0;
+    int sn_skip_by_cost_gate = 0;
 #define NUMERIC_COMMIT() do { \
     lp_telemetry_lu_record_numeric_stages(lu, \
         k, \
@@ -2984,6 +3053,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
         rc = rc_final;
         if (rc == 0) {
             lp_telemetry_lu_mark_mkz_success(lu);
+            lu_supernode_cost_gate_note_markowitz(lu, k, t_markowitz_numeric_ms);
             if (full_retry_mode) {
                 lp_telemetry_lu_mark_symbolic_full_retry_mkz_success(lu);
             }
@@ -3028,6 +3098,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             goto identity_placement;
         }
         lp_telemetry_lu_mark_mkz_failure(lu, rc);
+        lu_supernode_cost_gate_note_markowitz(lu, k, t_markowitz_numeric_ms);
         if (full_retry_mode && mkz_attempted_in_full_retry) {
             lp_telemetry_lu_mark_symbolic_full_retry_mkz_failure(lu);
         }
@@ -3070,79 +3141,87 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     /* T2.1: Try supernodal factorization if enabled and k is large enough */
     if (!skip_sparse_numeric && lu->sn_enabled && k >= SN_MIN_K &&
         (!full_retry_mode || mkz_attempted_in_full_retry)) {
-        lu->sn_calls++;
-        /* Build or reuse symbolic analysis */
-        SNSymbolic *sn_sym = lu->sn_symbolic;
-        if (!sn_sym || sn_sym->k != k || sn_sym->m != m) {
-            /* Invalidate stale cached analysis */
-            if (sn_sym) {
-                sn_symbolic_free(sn_sym);
-                lu->sn_symbolic = NULL;
-            }
-            sn_sym = sn_analyze(A_struct, m, k, row_perm);
-            lu->sn_symbolic = sn_sym;
-        }
-
-        if (sn_sym && sn_sym->num_supernodes > 0) {
-            /* Pre-allocate workspace: 3 * m * max_sn_size covers L+U+C blocks */
-            size_t sn_need = (size_t)3 * m * (sn_sym->max_supernode_size > 0 ?
-                             sn_sym->max_supernode_size : 1);
-            if (!lu->sn_work || lu->sn_work_capacity < sn_need) {
-                free(lu->sn_work);
-                lu->sn_work = (double *)calloc(sn_need, sizeof(double));
-                lu->sn_work_capacity = lu->sn_work ? sn_need : 0;
+        if (lu_supernode_cost_gate_should_skip(lu, k, full_retry_mode)) {
+            sn_skip_by_cost_gate = 1;
+        } else {
+            lu->sn_calls++;
+            /* Build or reuse symbolic analysis */
+            SNSymbolic *sn_sym = lu->sn_symbolic;
+            if (!sn_sym || sn_sym->k != k || sn_sym->m != m) {
+                /* Invalidate stale cached analysis */
+                if (sn_sym) {
+                    sn_symbolic_free(sn_sym);
+                    lu->sn_symbolic = NULL;
+                }
+                sn_sym = sn_analyze(A_struct, m, k, row_perm);
+                lu->sn_symbolic = sn_sym;
             }
 
-            int sn_reg = 0;
-            t_stage_start_ms = lp_telemetry_timer_start();
-            int rc = sn_factorize(A_struct, m, k, row_perm, row_pos,
-                                  lu->pivot_tol, row_is_identity,
-                                  sn_sym->supernodes, sn_sym->num_supernodes,
-                                  lu->redundant_rows, lu->num_redundant,
-                                  lu->allow_regularization,
-                                  lu->max_regularizations, &sn_reg,
-                                  L_row, L_col, L_val, &L_nnz,
-                                  lu->coo_capacity,
-                                  U_row, U_col, U_val, &U_nnz,
-                                  lu->coo_capacity,
-                                  lu->sn_work, lu->sn_work_capacity);
-            t_supernode_numeric_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
-            if (rc == 0) {
-                lu->sn_successes++;
-                lu->num_regularized = sn_reg;
-                backend_used = LU_NUMERIC_BACKEND_SUPERNODE;
-                /* Skip column-by-column GE, go straight to identity placement */
-                goto identity_placement;
-            }
-            /* Supernodal failed — reset and fall through to column-by-column */
-            L_nnz = 0;
-            U_nnz = 0;
-            /* Restore row ordering: structural rows first, identity rows last. */
-            {
-                int struct_pos = 0;
-                int ident_pos = k;
-                for (int i = 0; i < m; i++) {
-                    if (row_is_identity[i]) {
-                        row_perm[ident_pos++] = i;
-                    } else {
-                        row_perm[struct_pos++] = i;
+            if (sn_sym && sn_sym->num_supernodes > 0) {
+                /* Pre-allocate workspace: 3 * m * max_sn_size covers L+U+C blocks */
+                size_t sn_need = (size_t)3 * m * (sn_sym->max_supernode_size > 0 ?
+                                 sn_sym->max_supernode_size : 1);
+                if (!lu->sn_work || lu->sn_work_capacity < sn_need) {
+                    free(lu->sn_work);
+                    lu->sn_work = (double *)calloc(sn_need, sizeof(double));
+                    lu->sn_work_capacity = lu->sn_work ? sn_need : 0;
+                }
+
+                int sn_reg = 0;
+                t_stage_start_ms = lp_telemetry_timer_start();
+                int rc = sn_factorize(A_struct, m, k, row_perm, row_pos,
+                                      lu->pivot_tol, row_is_identity,
+                                      sn_sym->supernodes, sn_sym->num_supernodes,
+                                      lu->redundant_rows, lu->num_redundant,
+                                      lu->allow_regularization,
+                                      lu->max_regularizations, &sn_reg,
+                                      L_row, L_col, L_val, &L_nnz,
+                                      lu->coo_capacity,
+                                      U_row, U_col, U_val, &U_nnz,
+                                      lu->coo_capacity,
+                                      lu->sn_work, lu->sn_work_capacity);
+                {
+                    double sn_attempt_ms = lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
+                    t_supernode_numeric_ms += sn_attempt_ms;
+                    lu_supernode_cost_gate_note_supernode(lu, k, sn_attempt_ms);
+                }
+                if (rc == 0) {
+                    lu->sn_successes++;
+                    lu->num_regularized = sn_reg;
+                    backend_used = LU_NUMERIC_BACKEND_SUPERNODE;
+                    /* Skip column-by-column GE, go straight to identity placement */
+                    goto identity_placement;
+                }
+                /* Supernodal failed — reset and fall through to column-by-column */
+                L_nnz = 0;
+                U_nnz = 0;
+                /* Restore row ordering: structural rows first, identity rows last. */
+                {
+                    int struct_pos = 0;
+                    int ident_pos = k;
+                    for (int i = 0; i < m; i++) {
+                        if (row_is_identity[i]) {
+                            row_perm[ident_pos++] = i;
+                        } else {
+                            row_perm[struct_pos++] = i;
+                        }
+                    }
+                    for (int i = 0; i < m; i++) {
+                        row_pos[row_perm[i]] = i;
                     }
                 }
-                for (int i = 0; i < m; i++) {
-                    row_pos[row_perm[i]] = i;
+                /* Re-populate A_struct from B (sn_factorize modifies it in-place) */
+                t_stage_start_ms = lp_telemetry_timer_start();
+                memset(A_struct, 0, (size_t)m * k * sizeof(double));
+                for (int jj = 0; jj < k; jj++) {
+                    int j = col_order[jj];
+                    for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+                        int row = B->rowidx[p];
+                        A_struct[row * k + jj] = B->values[p];
+                    }
                 }
+                t_a_struct_build_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
             }
-            /* Re-populate A_struct from B (sn_factorize modifies it in-place) */
-            t_stage_start_ms = lp_telemetry_timer_start();
-            memset(A_struct, 0, (size_t)m * k * sizeof(double));
-            for (int jj = 0; jj < k; jj++) {
-                int j = col_order[jj];
-                for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
-                    int row = B->rowidx[p];
-                    A_struct[row * k + jj] = B->values[p];
-                }
-            }
-            t_a_struct_build_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
         }
     }
 
@@ -3255,6 +3334,9 @@ dense_ge_factorization:
         }
     }
     t_dense_ge_numeric_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
+    if (sn_skip_by_cost_gate) {
+        lu_supernode_cost_gate_note_dense_after_skip(lu, k, t_dense_ge_numeric_ms);
+    }
 
 identity_placement:
     /* Handle identity columns (steps k..m-1).
