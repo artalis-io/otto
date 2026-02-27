@@ -698,6 +698,54 @@ static void test_markowitz_numeric_identity_full_retry(void) {
 }
 
 /* ============================================================================
+ * Test 10: Supernode cost gate regression — when skip budget is active for a
+ *          large structural factorization, supernode path is skipped and dense
+ *          GE backend is used without top-level dense fallback.
+ * ============================================================================ */
+static void test_supernode_cost_gate_skip_regression(void) {
+    printf("  LU: supernode cost-gate skip regression (m=144)...\n");
+
+    const int m = 144;
+    double *A = (double *)calloc((size_t)m * m, sizeof(double));
+    for (int j = 0; j < m; j++) {
+        A[j * m + j] = 12.0 + 0.01 * j;
+        A[((j + 1) % m) * m + j] = 0.35;
+        A[((j + 11) % m) * m + j] = -0.18;
+    }
+
+    SparseMatrix *B = dense_to_csc(A, m, m);
+    LUFactorization *lu = lu_create(m);
+    ASSERT(lu != NULL, "sn-cost gate regression: lu_create");
+    if (!lu) {
+        free_csc(B);
+        free(A);
+        return;
+    }
+
+    lu->mkz_enabled = 0;
+    lu->sn_enabled = 1;
+    lu->sn_cost_gate_markowitz_ewma_ms = 1.0;
+    lu->sn_cost_gate_skip_budget = 1;
+
+    int rc = lu_factorize(lu, B);
+    ASSERT_INT_EQ(rc, 0, "sn-cost gate regression: factorize");
+    if (rc == 0) {
+        ASSERT(lu->telemetry.sn_cost_gate_skips > 0,
+               "sn-cost gate regression: supernode skip telemetry");
+        ASSERT_INT_EQ(lu->telemetry.numeric_backend_supernode, 0,
+                      "sn-cost gate regression: supernode backend skipped");
+        ASSERT(lu->telemetry.numeric_backend_dense_ge > 0,
+               "sn-cost gate regression: dense-GE backend selected");
+        ASSERT_INT_EQ(lu->telemetry.used_dense_fallback_last, 0,
+                      "sn-cost gate regression: no top-level dense fallback");
+    }
+
+    lu_free(lu);
+    free_csc(B);
+    free(A);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -712,6 +760,7 @@ int main(void) {
     test_markowitz_reserved_row_regression();
     test_ge_identity_lrow_regression();
     test_markowitz_numeric_identity_full_retry();
+    test_supernode_cost_gate_skip_regression();
 
     printf("\nIntegration (A/B Comparison):\n");
     test_markowitz_integration_small_lp();

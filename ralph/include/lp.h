@@ -234,6 +234,9 @@ typedef struct {
     int numeric_backend_markowitz;
     int numeric_backend_supernode;
     int numeric_backend_dense_ge;
+    int sn_cost_gate_trips;
+    int sn_cost_gate_skips;
+    int sn_cost_gate_resets;
 
     /* Sparse factorization stage timing telemetry (aggregate + last call) */
     int perf_factorize_calls;      /* Number of lu_factorize() calls */
@@ -397,6 +400,9 @@ typedef struct {
     struct SNSymbolic_tag *sn_symbolic;  /* Cached symbolic analysis (forward decl) */
     double *sn_work;         /* Pre-allocated workspace for GEMM blocks */
     size_t sn_work_capacity; /* Size in doubles */
+    double sn_cost_gate_supernode_ewma_ms;  /* Behavioral EWMA of supernode factorize cost */
+    double sn_cost_gate_markowitz_ewma_ms;  /* Behavioral EWMA of Markowitz factorize cost */
+    int sn_cost_gate_skip_budget;           /* Remaining supernode skips after cost-gate trip */
     int sn_calls;            /* Number of times supernodal path was attempted */
     int sn_successes;        /* Number of times supernodal path succeeded */
 
@@ -1046,6 +1052,9 @@ typedef struct {
     int numeric_backend_markowitz;
     int numeric_backend_supernode;
     int numeric_backend_dense_ge;
+    int sn_cost_gate_trips;
+    int sn_cost_gate_skips;
+    int sn_cost_gate_resets;
 
     int sn_calls;
     int sn_successes;
@@ -1372,6 +1381,9 @@ void lp_telemetry_lu_mark_symbolic_full_retry_mkz_failure(LUFactorization *lu);
 void lp_telemetry_lu_mark_numeric_backend_markowitz(LUFactorization *lu);
 void lp_telemetry_lu_mark_numeric_backend_supernode(LUFactorization *lu);
 void lp_telemetry_lu_mark_numeric_backend_dense_ge(LUFactorization *lu);
+void lp_telemetry_lu_mark_sn_cost_gate_trip(LUFactorization *lu);
+void lp_telemetry_lu_mark_sn_cost_gate_skip(LUFactorization *lu);
+void lp_telemetry_lu_mark_sn_cost_gate_reset(LUFactorization *lu);
 void lp_telemetry_lu_mark_sparse_success(LUFactorization *lu);
 void lp_telemetry_lu_mark_dense_fallback(LUFactorization *lu);
 void lp_telemetry_lu_clear_mkz_last_failure(LUFactorization *lu);

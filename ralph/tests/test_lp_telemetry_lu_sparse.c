@@ -378,6 +378,16 @@ static void test_sparse_numeric_failure_telemetry_helpers(void) {
     ASSERT_INT_EQ(lu->telemetry.numeric_full_retry_failures, 1,
                   "numeric helper telemetry: full-retry failures");
 
+    lp_telemetry_lu_mark_sn_cost_gate_trip(lu);
+    lp_telemetry_lu_mark_sn_cost_gate_skip(lu);
+    lp_telemetry_lu_mark_sn_cost_gate_reset(lu);
+    ASSERT_INT_EQ(lu->telemetry.sn_cost_gate_trips, 1,
+                  "numeric helper telemetry: sn-cost gate trips");
+    ASSERT_INT_EQ(lu->telemetry.sn_cost_gate_skips, 1,
+                  "numeric helper telemetry: sn-cost gate skips");
+    ASSERT_INT_EQ(lu->telemetry.sn_cost_gate_resets, 1,
+                  "numeric helper telemetry: sn-cost gate resets");
+
     lu_free(lu);
 }
 

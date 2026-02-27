@@ -155,6 +155,21 @@ void lp_telemetry_lu_mark_numeric_backend_dense_ge(LUFactorization *lu) {
     lu->telemetry.numeric_backend_dense_ge++;
 }
 
+void lp_telemetry_lu_mark_sn_cost_gate_trip(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.sn_cost_gate_trips++;
+}
+
+void lp_telemetry_lu_mark_sn_cost_gate_skip(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.sn_cost_gate_skips++;
+}
+
+void lp_telemetry_lu_mark_sn_cost_gate_reset(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.sn_cost_gate_resets++;
+}
+
 void lp_telemetry_lu_mark_sparse_success(LUFactorization *lu) {
     lp_telemetry_lu_set_sparse_fallback_reason(lu, LU_SPARSE_FALLBACK_NONE);
 }
