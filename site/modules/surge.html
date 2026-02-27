@@ -869,6 +869,25 @@
                 </div>
             </div>
 
+            <div class="stat-row">
+                <div class="stat">
+                    <div class="stat-value yellow">+7.9%</div>
+                    <div class="stat-label">GH-200 Dist Gap</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">54/60</div>
+                    <div class="stat-label">GH-200 Veh Match</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">+1.6%</div>
+                    <div class="stat-label">LL-200 Dist Gap</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value yellow">24/60</div>
+                    <div class="stat-label">LL-200 Veh Match</div>
+                </div>
+            </div>
+
             <h3>Solomon VRPTW (56 instances, 100 customers each)</h3>
 
             <table>
@@ -1006,9 +1025,149 @@
                     (e.g. R104: +1 veh / -1.3% dist). LC1xx PDPTW is hardest (+15.6% avg dist gap).
                     These instances likely require higher iteration budgets or specialized tight-TW operators.
                     On wide-TW and clustered instances, Surge matches or beats BKS consistently.
-                    Large-scale benchmarks (200-1000 customers) are pending.
+                    Large-scale results (200 customers/tasks) are below. 400+ instances
+                    need per-iteration speedups before practical benchmarking.
                 </p>
             </div>
+
+            <h3>Gehring-Homberger VRPTW (60 instances, 200 customers each)</h3>
+
+            <p>
+                Single-thread, 10K iterations, 60s time limit, deterministic seed 42.
+                Tuned SA parameters from hyperparameter search.
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Category</th>
+                        <th>Instances</th>
+                        <th>Vehicles Match BKS</th>
+                        <th>Avg Veh Gap</th>
+                        <th>Avg Dist Gap</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>C1_2 (clustered, tight TW)</td>
+                        <td>10</td>
+                        <td>8/10</td>
+                        <td>+0.20</td>
+                        <td>+7.6%</td>
+                    </tr>
+                    <tr>
+                        <td>C2_2 (clustered, wide TW)</td>
+                        <td>10</td>
+                        <td>10/10</td>
+                        <td>0.00</td>
+                        <td style="color: var(--success)">+1.2%</td>
+                    </tr>
+                    <tr>
+                        <td>R1_2 (random, tight TW)</td>
+                        <td>10</td>
+                        <td>10/10</td>
+                        <td>0.00</td>
+                        <td>+7.8%</td>
+                    </tr>
+                    <tr>
+                        <td>R2_2 (random, wide TW)</td>
+                        <td>10</td>
+                        <td>9/10</td>
+                        <td>+0.10</td>
+                        <td style="color: var(--success)">+1.7%</td>
+                    </tr>
+                    <tr>
+                        <td>RC1_2 (mixed, tight TW)</td>
+                        <td>10</td>
+                        <td>9/10</td>
+                        <td>+0.10</td>
+                        <td>+26.8%</td>
+                    </tr>
+                    <tr>
+                        <td>RC2_2 (mixed, wide TW)</td>
+                        <td>10</td>
+                        <td>8/10</td>
+                        <td>+0.20</td>
+                        <td style="color: var(--success)">+2.4%</td>
+                    </tr>
+                    <tr class="highlight">
+                        <td><strong>Overall</strong></td>
+                        <td>60</td>
+                        <td><strong>54/60 (90%)</strong></td>
+                        <td><strong>+0.10</strong></td>
+                        <td style="font-weight: 600"><strong>+7.9%</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Li &amp; Lim Extended PDPTW (60 instances, 200 tasks each)</h3>
+
+            <p>
+                Single-thread, 10K iterations, 120s time limit, deterministic seed 42.
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Category</th>
+                        <th>Instances</th>
+                        <th>Vehicles Match BKS</th>
+                        <th>Avg Veh Gap</th>
+                        <th>Avg Dist Gap</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>LC1_2 (clustered, tight TW)</td>
+                        <td>10</td>
+                        <td>4/10</td>
+                        <td>+2.10</td>
+                        <td>+17.3%</td>
+                    </tr>
+                    <tr>
+                        <td>LC2_2 (clustered, wide TW)</td>
+                        <td>10</td>
+                        <td>10/10</td>
+                        <td>0.00</td>
+                        <td style="color: var(--success)">+0.3%</td>
+                    </tr>
+                    <tr>
+                        <td>LR1_2 (random, tight TW)</td>
+                        <td>10</td>
+                        <td>0/10</td>
+                        <td>+3.30</td>
+                        <td>+5.7%</td>
+                    </tr>
+                    <tr>
+                        <td>LR2_2 (random, wide TW)</td>
+                        <td>10</td>
+                        <td>5/10</td>
+                        <td>+0.50</td>
+                        <td style="color: var(--success)">-5.5%</td>
+                    </tr>
+                    <tr>
+                        <td>LRC1_2 (mixed, tight TW)</td>
+                        <td>10</td>
+                        <td>1/10</td>
+                        <td>+1.20</td>
+                        <td>+0.5%</td>
+                    </tr>
+                    <tr>
+                        <td>LRC2_2 (mixed, wide TW)</td>
+                        <td>10</td>
+                        <td>4/10</td>
+                        <td>+0.60</td>
+                        <td style="color: var(--success)">-8.9%</td>
+                    </tr>
+                    <tr class="highlight">
+                        <td><strong>Overall</strong></td>
+                        <td>60</td>
+                        <td><strong>24/60 (40%)</strong></td>
+                        <td><strong>+1.28</strong></td>
+                        <td style="font-weight: 600"><strong>+1.6%</strong></td>
+                    </tr>
+                </tbody>
+            </table>
 
             <h3>Performance</h3>
 
@@ -1030,6 +1189,16 @@
                         <td>Li &amp; Lim 100-request</td>
                         <td>~29s avg (population)</td>
                         <td>10K iterations, 3 generations, auto threads</td>
+                    </tr>
+                    <tr>
+                        <td>GH 200-customer</td>
+                        <td>~206s avg (single-thread)</td>
+                        <td>10K iterations, 60s time limit</td>
+                    </tr>
+                    <tr>
+                        <td>LL 200-task</td>
+                        <td>~31s avg (single-thread)</td>
+                        <td>10K iterations, 120s time limit</td>
                     </tr>
                     <tr>
                         <td>Malloc in hot loop</td>
@@ -1182,8 +1351,8 @@
                         <td class="n">Limited</td>
                     </tr>
                     <tr>
-                        <td>Large-scale (1000+)</td>
-                        <td class="p">Untested</td>
+                        <td>Large-scale (200+)</td>
+                        <td class="y">90% veh match (GH-200)</td>
                         <td class="n">Degrades</td>
                         <td>Decent</td>
                         <td class="q">Opaque</td>
@@ -1736,8 +1905,9 @@ result = solver.solve(max_iterations=<span class="number">1000</span>)</pre>
             <p>
                 OR-Tools uses CP-SAT, which degrades badly beyond ~500 requests &mdash; memory footprint explodes
                 with distance matrix size. Surge's ALNS architecture scales by construction: destroy/repair operates
-                on a fixed-size solution representation regardless of instance size. Large-scale validation (1000+)
-                is pending but the architecture is sound.
+                on a fixed-size solution representation regardless of instance size. On Gehring-Homberger 200-customer
+                instances, Surge matches BKS vehicle count 90% of the time with +7.9% avg distance gap. 400+
+                instances need per-iteration speedups (distance matrix caching, global time limits) to be practical.
             </p>
 
             <h3>Why C and not Rust?</h3>

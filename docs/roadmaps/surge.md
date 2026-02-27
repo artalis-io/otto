@@ -2457,9 +2457,57 @@ PDPTW is hardest — needs more iterations or specialized tight-TW operators.
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | BKS CSV infrastructure + runner upgrades | Done |
-| 2 | Download GH/Li-Lim extended (200-1000 scale) | **TODO** |
+| 2 | Download GH/Li-Lim extended (200-1000 scale) | Done |
 | 3 | Instance generators | Done (sg_gen_solomon, sg_gen_li_lim) |
 | 4 | SGTuneParams infrastructure | Done |
 | 5 | Tuner program (bench_tune) | Done |
 | - | Apply winning params to profiles | Done |
-| - | Large-scale benchmarks (200-1000) | **TODO** (needs Phase 2) |
+| - | Large-scale benchmarks (200-1000) | Done (200-customer) |
+
+#### Benchmark Results: Gehring-Homberger VRPTW (60 instances, 200 customers each)
+
+Single-thread, 10K iterations, 60s time limit per phase, deterministic seed 42.
+Tuned SA params: sa_accept_pct=0.074, p1_final_temp_ratio=0.08, p2_final_temp_ratio=0.0001, phase15_iters=2000.
+
+| Category | Instances | BKS Veh Match | Avg Veh Gap | Avg Dist Gap |
+|----------|-----------|---------------|-------------|--------------|
+| C1_2 (clustered, tight) | 10 | 8/10 | +0.20 | +7.6% |
+| C2_2 (clustered, wide) | 10 | 10/10 | +0.00 | +1.2% |
+| R1_2 (random, tight) | 10 | 10/10 | +0.00 | +7.8% |
+| R2_2 (random, wide) | 10 | 9/10 | +0.10 | +1.7% |
+| RC1_2 (mixed, tight) | 10 | 9/10 | +0.10 | +26.8% |
+| RC2_2 (mixed, wide) | 10 | 8/10 | +0.20 | +2.4% |
+| **Overall** | **60** | **54/60 (90%)** | **+0.10** | **+7.9%** |
+
+Key findings: Vehicle minimization is excellent (90% match BKS). Distance gap is
+concentrated on RC1 (mixed tight-TW) at +26.8% — needs more iterations or specialized
+operators. C2 and R2 (wide-TW) perform best. Avg runtime 205.7s per instance.
+
+#### Benchmark Results: Li & Lim Extended PDPTW (60 instances, 200 tasks each)
+
+Single-thread, 10K iterations, 120s time limit per phase, deterministic seed 42.
+
+| Category | Instances | BKS Veh Match | Avg Veh Gap | Avg Dist Gap |
+|----------|-----------|---------------|-------------|--------------|
+| LC1_2 (clustered, tight) | 10 | 4/10 | +2.10 | +17.3% |
+| LC2_2 (clustered, wide) | 10 | 10/10 | +0.00 | +0.3% |
+| LR1_2 (random, tight) | 10 | 0/10 | +3.30 | +5.7% |
+| LR2_2 (random, wide) | 10 | 5/10 | +0.50 | -5.5% |
+| LRC1_2 (mixed, tight) | 10 | 1/10 | +1.20 | +0.5% |
+| LRC2_2 (mixed, wide) | 10 | 4/10 | +0.60 | -8.9% |
+| **Overall** | **60** | **24/60 (40%)** | **+1.28** | **+1.6%** |
+
+Key findings: PDPTW 200-task is harder for vehicle minimization (40% vs 90% for VRPTW).
+LC2 is near-perfect. LR1 (random tight-TW) is hardest (0/10 vehicle match). Several
+LR2/LRC2 instances beat BKS distance but use +1 vehicle (lexicographic tradeoff).
+Avg runtime 30.8s per instance (much faster than VRPTW).
+
+#### Scaling Observations
+
+400+ task instances are impractical at current iteration speed — a single 400-task PDPTW
+instance took 1834s with poor quality. The per-phase time limit architecture means each
+phase (Phase 1, 1.5, 2) independently consumes the time budget, and postprocessing has
+no time bound. Priorities for scaling:
+1. Global time limit across all phases (not per-phase)
+2. Operator complexity: O(n²) insertion scans need distance matrix caching
+3. Population mode for large instances (parallel search on multiple cores)
