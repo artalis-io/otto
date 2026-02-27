@@ -6276,6 +6276,39 @@ void test_lp_cancel_poll_callback_api(void) {
     ralph_test_free(model);
 }
 
+void test_lp_time_limit_guard_api(void) {
+    printf("\n=== Test: LP Time-Limit Guard API ===\n");
+
+    RalphModel *model = ralph_test_create();
+    ASSERT(model != NULL, "LP time-limit guard: model created");
+
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    {
+        int idx[] = {0};
+        double val[] = {1.0};
+        ralph_test_add_constraint(model, 1, idx, val, RALPH_LESS_EQUAL, -1.0);
+    }
+
+    ASSERT(ralph_test_set_int_param(model, "method", 0) == 0,
+           "LP time-limit guard: method=0 accepted");
+    ASSERT(ralph_test_set_int_param(model, "presolve", 0) == 0,
+           "LP time-limit guard: presolve=0 accepted");
+    ASSERT(ralph_test_set_int_param(model, "max_iterations", 10000000) == 0,
+           "LP time-limit guard: max_iterations accepted");
+    ASSERT(ralph_test_set_dbl_param(model, "time_limit", 1e-6) == 0,
+           "LP time-limit guard: tiny time_limit accepted");
+
+    ASSERT(ralph_test_optimize_lp(model) == 0,
+           "LP time-limit guard: solve call succeeds");
+    ASSERT(ralph_test_get_status(model) == RALPH_STATUS_TIME_LIMIT,
+           "LP time-limit guard: status is TIME_LIMIT");
+    ASSERT(ralph_test_get_iterations(model) < 10000000,
+           "LP time-limit guard: exits before iteration cap");
+
+    ralph_test_free(model);
+}
+
 void test_lp_callbacks_are_orthogonal_to_mip(void) {
     printf("\n=== Test: LP Callbacks Orthogonal To MIP ===\n");
 
@@ -6479,6 +6512,7 @@ int main(int argc, char **argv) {
     test_lp_progress_callback_api();
     test_lp_progress_cancel_callback_api();
     test_lp_cancel_poll_callback_api();
+    test_lp_time_limit_guard_api();
     test_phase3_optimize_entrypoints();
     test_phase3_param_partition();
     test_phase3_optimize_backward_compatibility();
