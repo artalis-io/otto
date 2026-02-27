@@ -14,6 +14,7 @@
 #include "sh_arena.h"
 #include "sh_dist.h"
 #include "sh_stepfunc.h"
+#include "../src/sg_time_budget.h"
 
 /* Constants */
 #define SG_UNASSIGNED_PENALTY 10000.0
@@ -446,6 +447,7 @@ struct SGContext {
     void *convergence_callback_data;
     SGSolvePhase current_phase;
     double solve_start_time;                  /* set at top of sg_solve_route_model */
+    SGTimeBudget time_budget;                 /* global deadline envelope */
 
     /* Per-phase breakdown */
     SGPhaseStats phase_stats[5];              /* max 5 phases */

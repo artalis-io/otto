@@ -70,8 +70,17 @@ static int sg_load_bks_csv(const char *csv_path, SGBKSEntry *entries, int max_en
         if (name_len >= sizeof(entries[0].name)) {
             name_len = sizeof(entries[0].name) - 1;
         }
-        memcpy(entries[count].name, name_start, name_len);
-        entries[count].name[name_len] = '\0';
+        /* Normalize: keep only alphanumeric, lowercase */
+        {
+            size_t si, di = 0;
+            for (si = 0; si < name_len && di + 1 < sizeof(entries[0].name); si++) {
+                unsigned char c = (unsigned char)name_start[si];
+                if (isalnum(c)) {
+                    entries[count].name[di++] = (char)tolower(c);
+                }
+            }
+            entries[count].name[di] = '\0';
+        }
 
         comma2 = strchr(comma1 + 1, ',');
         if (!comma2) continue;
