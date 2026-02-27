@@ -4,29 +4,52 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
-**Validation checkpoint** (2026-02-27, `64c154c`) — Phase-1 no-pivot governor + Markowitz retry-profile telemetry:
-- Added Phase-1 no-pivot streak governor with forced refactor trigger and reason telemetry:
-  `phase1_no_pivot_events`, `phase1_no_pivot_forced_*`, `phase1_soft_lu_policy_cooldown_defers`.
-- Added Markowitz retry-profile telemetry:
-  `mkz_profile_retry_attempts`, `mkz_profile_retry_successes`, `mkz_profile_retry_failures`.
-- Exported new telemetry fields in benchmark JSON and added unit coverage:
-  `test-lp-telemetry-solver`, `test-lp-telemetry-lu-sparse`, `test-simplex-policy`.
+**Validation checkpoint** (2026-02-27, `da16bce`) — P1-G Markowitz numeric retry-ladder baseline:
+- Implemented P1-G in sparse LU path:
+  - explicit sparse numeric terminal-failure taxonomy
+    (`identity_separation`, `backend_exhausted`, `pathological`);
+  - one-shot full-structural sparse retry (`k=m`) on numeric identity-separation
+    failure before allowing dense fallback;
+  - retry-profile terminal-reason telemetry for Markowitz retry path.
+- Added/updated telemetry counters exposed in benchmark JSON:
+  - sparse numeric terminal reason + per-reason counters;
+  - numeric full-retry attempts/successes/failures;
+  - Markowitz retry-profile terminal failure reason split.
+- Added focused unit coverage:
+  - `make -C ralph test-lu-markowitz` PASS (`44/44`);
+  - `make -C ralph test-lp-telemetry-lu-sparse` PASS (`85/85`).
 - Gate status:
-  - `make -C ralph test-lp-telemetry-solver` PASS (`156/156`)
-  - `make -C ralph test-simplex-policy` PASS (`54/54`)
-  - `make -C ralph test-netlib-gate-small` PASS (27 files; timeout 2; dense fallback files 0; artifact:
-    `/tmp/netlib-regression-gate-20260227-091415`)
-  - `make -C ralph test-netlib-gate` FAIL (84 files; timeout 25; dense fallback files 1; required-pass failure:
-    `nesm.mps`; artifact: `/tmp/netlib-regression-gate-20260227-091427`)
-- Focus telemetry artifacts:
-  - `/tmp/pilot_phase1_after64c154c.json`
-  - `/tmp/stair_phase1_after64c154c.json`
-  - `/tmp/degen3_phase1_after64c154c.json`
-- Saved next item (post context-clean): P1-G Markowitz retry-ladder effectiveness in
-  `docs/roadmaps/ralph_phase1_iteration_control_plan.md` with explicit `nesm.mps`
-  required-pass criterion.
+  - `make -C ralph test-netlib-gate-small` PASS
+    (27 files; timeout 2; dense fallback files 0; artifact:
+    `/tmp/netlib-regression-gate-20260227-105533`)
+  - `make -C ralph test-netlib-gate` PASS
+    (84 files; timeout 25; dense fallback files 0; required-pass failures 0; artifact:
+    `/tmp/netlib-regression-gate-20260227-105548`)
+  - post-push reconfirmation: `make -C ralph test-netlib-gate` PASS
+    (84 files; timeout 25; dense fallback files 0; artifact:
+    `/tmp/netlib-regression-gate-20260227-112817`)
+- Post-P1-G bottleneck findings (from `/tmp/netlib-regression-gate-20260227-112817`):
+  - no dense fallback regressions remain (`actual.dense_fallback.txt` empty);
+  - timeout hotspot dominance by case count:
+    `compute_reduced_costs_ms` (12), `compute_solution_ms` (7), `pivot_ms` (4),
+    `refactor_ms` (1), `ratio_ms` (1);
+  - heavy outliers:
+    - `pilot.mps`: refactor/pivot dominated with very high refactor cost per event
+      (supernode-heavy sparse numeric inside refactor);
+    - `maros-r7.mps`: expensive refactor events (high avg reinversion cost);
+    - `d6cube.mps`: mixed heavy refactor + ratio loop;
+    - `pilot87/pilot.ja/pilotnov/pilot.we/pilot4`: iteration explosion dominated by
+      full-vector `compute_solution` / `compute_reduced_costs` cost.
+- Next execution focus:
+  1. reduce expensive refactor backend cost on `pilot`/`maros-r7` families;
+  2. reduce full-vector recompute pressure (`compute_solution`, `compute_reduced_costs`)
+     on high-iteration timeout families;
+  3. continue degeneracy iteration-control tuning while preserving zero dense fallback regression.
 
-**Current** (2026-02-25) — full-retry backend ordering + LU telemetry expansion baseline:
+Previous checkpoint (2026-02-27, `64c154c`) had required-pass regression on `nesm.mps`
+(dense fallback), which P1-G resolved.
+
+Previous (2026-02-25) — full-retry backend ordering + LU telemetry expansion baseline:
 - Added explicit symbolic-stage failure reason tracking in LU sparse path with per-reason telemetry
   counters (workspace, unmatched-no-reserved, inconsistent-identity).
 - Implemented sparse full-structural retry when symbolic planning fails:
@@ -3099,7 +3122,10 @@ Phase C gates and artifacts:
 #### P1-ICR Active Plan (2026-02-26)
 
 - Detailed todo execution plan: `docs/roadmaps/ralph_phase1_iteration_control_plan.md`
-- Current implementation step: `P1-E` completed (pivot-failure recovery recompute hygiene).
+- Current implementation step: `P1-G` completed (Markowitz numeric retry-ladder effectiveness).
+- Current bottleneck class after P1-G: timeout outliers are now dominated by
+  per-iteration vector recomputation cost and selected high-cost refactor families,
+  not by sparse->dense fallback regressions.
 
 Focused canary impact (Phase B vs Phase C):
 - artifacts: `/tmp/phasec-focused-*.json`
