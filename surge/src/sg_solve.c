@@ -955,7 +955,9 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
                 0.05);
             params.cooling_rate = exp(log(p1_final) / (double)phase1_iters);
         }
-        /* Override initial temperature if sa_accept_pct is tuned */
+        /* Override initial temperature if sa_accept_pct is tuned.
+           Default calibrate_sa uses 0.05; tuner found 0.074 gives better results.
+           Profiles set this via tune_params; non-profiled solves use calibrate_sa default. */
         if (ctx->tune_params && ctx->tune_params->sa_accept_pct != SG_TUNE_SENTINEL_D) {
             double abs_cost = fabs(sg_route_solution_cost(&initial, ctx));
             if (abs_cost < 1e-12) abs_cost = 1.0;
@@ -1180,7 +1182,8 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
                 p2_cal = sg_route_solution_cost(p2_initial, ctx);
             }
             ar_alns_calibrate_sa(&params, p2_cal, phase2_iters);
-            /* Override Phase 2 cooling and SA acceptance if tuned */
+            /* Override Phase 2 cooling and SA acceptance if tuned via profiles.
+               Tuner found: p2_final_temp_ratio=0.0001, sa_accept_pct=0.074. */
             if (ctx->tune_params) {
                 if (ctx->tune_params->p2_final_temp_ratio != SG_TUNE_SENTINEL_D) {
                     params.cooling_rate = exp(log(ctx->tune_params->p2_final_temp_ratio) / (double)phase2_iters);
