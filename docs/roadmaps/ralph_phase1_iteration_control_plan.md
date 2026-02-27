@@ -51,7 +51,7 @@ Reduce Phase-1 wall time on degenerate NETLIB outliers by cutting unnecessary fu
   - `make -C ralph test-netlib-gate`
   - Focus telemetry reruns on `pilot`, `stair`, `degen3`.
   - Promotion rule: full gate must pass with no required-pass failures.
-- [ ] P1-G Markowitz retry ladder effectiveness (saved next step).
+- [x] P1-G Markowitz retry ladder effectiveness.
   - Add explicit sparse numeric fallback reason counters in `lu_sparse.c` to separate:
     - identity-separation failure after numeric,
     - numeric backend exhaustion,
@@ -162,3 +162,23 @@ Reduce Phase-1 wall time on degenerate NETLIB outliers by cutting unnecessary fu
       - timeout, 9861 iterations, ratio-recovery loop dominates (`reason_ratio_recovery=9810`).
     - `degen3`: `/tmp/degen3_phase1_after64c154c.json`
       - timeout, 9294 iterations, periodic+LU-health refactors dominate (`periodic_policy_count=37`, `periodic_lu_health_count=138`).
+- [x] 2026-02-27: P1-G implemented (Markowitz retry-ladder effectiveness).
+  - Added sparse numeric terminal-failure taxonomy + telemetry:
+    - `identity_separation`
+    - `backend_exhausted`
+    - `pathological`
+  - Added Markowitz retry-profile terminal-failure reason counters.
+  - Added one-shot numeric full-structural sparse retry path when numeric failure
+    terminal reason is identity-separation; dense fallback is now only after that
+    retry also fails.
+  - Added focused unit coverage:
+    - `test_lu_markowitz`: numeric identity-separation full-retry regression.
+    - `test_lp_telemetry_lu_sparse`: numeric terminal-reason + retry telemetry.
+  - Validation:
+    - `make -C ralph test-lu-markowitz` PASS (`44/44`)
+    - `make -C ralph test-lp-telemetry-lu-sparse` PASS (`85/85`)
+    - `make -C ralph test-netlib-gate-small` PASS
+      - artifact: `/tmp/netlib-regression-gate-20260227-105533`
+    - `make -C ralph test-netlib-gate` PASS
+      - artifact: `/tmp/netlib-regression-gate-20260227-105548`
+      - summary: 84 files, timeout files 25, dense fallback files 0, required-pass failures 0

@@ -34,12 +34,22 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.mkz_profile_retry_attempts = 0;
     lu->telemetry.mkz_profile_retry_successes = 0;
     lu->telemetry.mkz_profile_retry_failures = 0;
+    lu->telemetry.mkz_profile_retry_fail_identity_sep = 0;
+    lu->telemetry.mkz_profile_retry_fail_backend_exhausted = 0;
+    lu->telemetry.mkz_profile_retry_fail_pathological = 0;
     lu->telemetry.sparse_dense_fallbacks = 0;
     lu->telemetry.used_dense_fallback_last = 0;
     lu->telemetry.sparse_fallback_last_reason = LU_SPARSE_FALLBACK_NONE;
     lu->telemetry.sparse_fallback_reason_small_matrix = 0;
     lu->telemetry.sparse_fallback_reason_symbolic = 0;
     lu->telemetry.sparse_fallback_reason_numeric = 0;
+    lu->telemetry.sparse_numeric_last_failure_reason = LU_SPARSE_NUMERIC_FAIL_NONE;
+    lu->telemetry.sparse_numeric_fail_identity_sep = 0;
+    lu->telemetry.sparse_numeric_fail_backend_exhausted = 0;
+    lu->telemetry.sparse_numeric_fail_pathological = 0;
+    lu->telemetry.numeric_full_retry_attempts = 0;
+    lu->telemetry.numeric_full_retry_successes = 0;
+    lu->telemetry.numeric_full_retry_failures = 0;
     lu->telemetry.identity_sep_failures = 0;
     lu->telemetry.symbolic_failures = 0;
     lu->telemetry.symbolic_fail_workspace = 0;
@@ -90,6 +100,7 @@ void lp_telemetry_prepare_lu_factorize(LUFactorization *lu, const SparseMatrix *
     lu->telemetry.perf_last_basis_nnz = B ? B->nnz : 0;
     lu->telemetry.perf_last_m = B ? B->nrows : 0;
     lu->telemetry.perf_last_k = 0;
+    lu->telemetry.sparse_numeric_last_failure_reason = LU_SPARSE_NUMERIC_FAIL_NONE;
     lu->telemetry.perf_last_symbolic_ms = 0.0;
     lu->telemetry.perf_last_sparse_numeric_ms = 0.0;
     lu->telemetry.perf_last_dense_ge_numeric_ms = 0.0;
@@ -132,6 +143,9 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(mkz_profile_retry_attempts);
     COPY_LU_TELEM_FIELD(mkz_profile_retry_successes);
     COPY_LU_TELEM_FIELD(mkz_profile_retry_failures);
+    COPY_LU_TELEM_FIELD(mkz_profile_retry_fail_identity_sep);
+    COPY_LU_TELEM_FIELD(mkz_profile_retry_fail_backend_exhausted);
+    COPY_LU_TELEM_FIELD(mkz_profile_retry_fail_pathological);
 
     COPY_LU_TELEM_FIELD(sparse_dense_fallbacks);
     COPY_LU_TELEM_FIELD(used_dense_fallback_last);
@@ -139,6 +153,13 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(sparse_fallback_reason_small_matrix);
     COPY_LU_TELEM_FIELD(sparse_fallback_reason_symbolic);
     COPY_LU_TELEM_FIELD(sparse_fallback_reason_numeric);
+    COPY_LU_TELEM_FIELD(sparse_numeric_last_failure_reason);
+    COPY_LU_TELEM_FIELD(sparse_numeric_fail_identity_sep);
+    COPY_LU_TELEM_FIELD(sparse_numeric_fail_backend_exhausted);
+    COPY_LU_TELEM_FIELD(sparse_numeric_fail_pathological);
+    COPY_LU_TELEM_FIELD(numeric_full_retry_attempts);
+    COPY_LU_TELEM_FIELD(numeric_full_retry_successes);
+    COPY_LU_TELEM_FIELD(numeric_full_retry_failures);
     COPY_LU_TELEM_FIELD(identity_sep_failures);
     COPY_LU_TELEM_FIELD(symbolic_failures);
     COPY_LU_TELEM_FIELD(symbolic_fail_workspace);

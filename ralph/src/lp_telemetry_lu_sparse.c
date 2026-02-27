@@ -42,6 +42,26 @@ void lp_telemetry_lu_record_numeric_stages(LUFactorization *lu,
     lu->telemetry.perf_total_coo_to_csc_ms += coo_to_csc_ms;
 }
 
+void lp_telemetry_lu_mark_sparse_numeric_failure(LUFactorization *lu,
+                                                 int reason) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.sparse_numeric_last_failure_reason = reason;
+    switch ((LUSparseNumericFailureReason)reason) {
+        case LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION:
+            lu->telemetry.sparse_numeric_fail_identity_sep++;
+            break;
+        case LU_SPARSE_NUMERIC_FAIL_BACKEND_EXHAUSTED:
+            lu->telemetry.sparse_numeric_fail_backend_exhausted++;
+            break;
+        case LU_SPARSE_NUMERIC_FAIL_PATHOLOGICAL:
+            lu->telemetry.sparse_numeric_fail_pathological++;
+            break;
+        case LU_SPARSE_NUMERIC_FAIL_NONE:
+        default:
+            break;
+    }
+}
+
 void lp_telemetry_lu_set_sparse_fallback_reason(LUFactorization *lu,
                                                 int reason) {
     if (!lu_telemetry_enabled(lu)) return;
@@ -60,6 +80,21 @@ void lp_telemetry_lu_set_sparse_fallback_reason(LUFactorization *lu,
         default:
             break;
     }
+}
+
+void lp_telemetry_lu_mark_numeric_full_retry_attempt(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.numeric_full_retry_attempts++;
+}
+
+void lp_telemetry_lu_mark_numeric_full_retry_success(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.numeric_full_retry_successes++;
+}
+
+void lp_telemetry_lu_mark_numeric_full_retry_failure(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.numeric_full_retry_failures++;
 }
 
 void lp_telemetry_lu_mark_symbolic_failure(LUFactorization *lu,
@@ -226,4 +261,23 @@ void lp_telemetry_lu_mark_mkz_profile_retry_success(LUFactorization *lu) {
 void lp_telemetry_lu_mark_mkz_profile_retry_failure(LUFactorization *lu) {
     if (!lu_telemetry_enabled(lu)) return;
     lu->telemetry.mkz_profile_retry_failures++;
+}
+
+void lp_telemetry_lu_mark_mkz_profile_retry_terminal_failure(LUFactorization *lu,
+                                                             int reason) {
+    if (!lu_telemetry_enabled(lu)) return;
+    switch ((LUSparseNumericFailureReason)reason) {
+        case LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION:
+            lu->telemetry.mkz_profile_retry_fail_identity_sep++;
+            break;
+        case LU_SPARSE_NUMERIC_FAIL_BACKEND_EXHAUSTED:
+            lu->telemetry.mkz_profile_retry_fail_backend_exhausted++;
+            break;
+        case LU_SPARSE_NUMERIC_FAIL_PATHOLOGICAL:
+            lu->telemetry.mkz_profile_retry_fail_pathological++;
+            break;
+        case LU_SPARSE_NUMERIC_FAIL_NONE:
+        default:
+            break;
+    }
 }

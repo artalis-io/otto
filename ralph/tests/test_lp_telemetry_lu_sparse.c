@@ -135,6 +135,27 @@ static void test_markowitz_failure_reason_counters(void) {
                   lu->telemetry.mkz_profile_retry_successes +
                   lu->telemetry.mkz_profile_retry_failures,
                   "failure counters: retry profile attempts classified");
+    ASSERT(lu->telemetry.mkz_profile_retry_fail_pathological > 0,
+           "failure counters: retry profile terminal pathological reason counted");
+    ASSERT_INT_EQ(lu->telemetry.mkz_profile_retry_fail_identity_sep, 0,
+                  "failure counters: no retry-profile identity terminal reason");
+    ASSERT_INT_EQ(lu->telemetry.mkz_profile_retry_fail_backend_exhausted, 0,
+                  "failure counters: no retry-profile backend-exhausted terminal reason");
+    ASSERT_INT_EQ(lu->telemetry.sparse_numeric_last_failure_reason,
+                  LU_SPARSE_NUMERIC_FAIL_PATHOLOGICAL,
+                  "failure counters: numeric terminal reason=pathological");
+    ASSERT(lu->telemetry.sparse_numeric_fail_pathological > 0,
+           "failure counters: pathological numeric failure counted");
+    ASSERT_INT_EQ(lu->telemetry.sparse_numeric_fail_identity_sep, 0,
+                  "failure counters: no identity-separation numeric failure");
+    ASSERT_INT_EQ(lu->telemetry.sparse_numeric_fail_backend_exhausted, 0,
+                  "failure counters: no backend-exhausted numeric failure");
+    ASSERT_INT_EQ(lu->telemetry.numeric_full_retry_attempts, 0,
+                  "failure counters: no numeric full retry attempts");
+    ASSERT_INT_EQ(lu->telemetry.numeric_full_retry_successes, 0,
+                  "failure counters: no numeric full retry successes");
+    ASSERT_INT_EQ(lu->telemetry.numeric_full_retry_failures, 0,
+                  "failure counters: no numeric full retry failures");
     ASSERT_INT_EQ(lu->telemetry.mkz_fail_workspace, 0, "failure counters: no workspace failure");
     ASSERT_INT_EQ(lu->telemetry.mkz_fail_capacity, 0, "failure counters: no capacity failure");
 
@@ -313,11 +334,59 @@ static void test_sparse_fallback_reason_and_stage_telemetry(void) {
     }
 }
 
+static void test_sparse_numeric_failure_telemetry_helpers(void) {
+    printf("  telemetry/lu_sparse: numeric failure telemetry helpers...\n");
+
+    LUFactorization *lu = lu_create(40);
+    ASSERT(lu != NULL, "numeric helper telemetry: lu_create");
+    if (!lu) return;
+
+    lp_telemetry_lu_mark_sparse_numeric_failure(lu, LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION);
+    lp_telemetry_lu_mark_sparse_numeric_failure(lu, LU_SPARSE_NUMERIC_FAIL_BACKEND_EXHAUSTED);
+    lp_telemetry_lu_mark_sparse_numeric_failure(lu, LU_SPARSE_NUMERIC_FAIL_PATHOLOGICAL);
+    ASSERT_INT_EQ(lu->telemetry.sparse_numeric_last_failure_reason,
+                  LU_SPARSE_NUMERIC_FAIL_PATHOLOGICAL,
+                  "numeric helper telemetry: last reason tracks most recent");
+    ASSERT_INT_EQ(lu->telemetry.sparse_numeric_fail_identity_sep, 1,
+                  "numeric helper telemetry: identity reason count");
+    ASSERT_INT_EQ(lu->telemetry.sparse_numeric_fail_backend_exhausted, 1,
+                  "numeric helper telemetry: backend exhausted reason count");
+    ASSERT_INT_EQ(lu->telemetry.sparse_numeric_fail_pathological, 1,
+                  "numeric helper telemetry: pathological reason count");
+
+    lp_telemetry_lu_mark_mkz_profile_retry_terminal_failure(
+        lu, LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION);
+    lp_telemetry_lu_mark_mkz_profile_retry_terminal_failure(
+        lu, LU_SPARSE_NUMERIC_FAIL_BACKEND_EXHAUSTED);
+    lp_telemetry_lu_mark_mkz_profile_retry_terminal_failure(
+        lu, LU_SPARSE_NUMERIC_FAIL_PATHOLOGICAL);
+    ASSERT_INT_EQ(lu->telemetry.mkz_profile_retry_fail_identity_sep, 1,
+                  "numeric helper telemetry: retry-profile identity reason count");
+    ASSERT_INT_EQ(lu->telemetry.mkz_profile_retry_fail_backend_exhausted, 1,
+                  "numeric helper telemetry: retry-profile backend reason count");
+    ASSERT_INT_EQ(lu->telemetry.mkz_profile_retry_fail_pathological, 1,
+                  "numeric helper telemetry: retry-profile pathological reason count");
+
+    lp_telemetry_lu_mark_numeric_full_retry_attempt(lu);
+    lp_telemetry_lu_mark_numeric_full_retry_success(lu);
+    lp_telemetry_lu_mark_numeric_full_retry_attempt(lu);
+    lp_telemetry_lu_mark_numeric_full_retry_failure(lu);
+    ASSERT_INT_EQ(lu->telemetry.numeric_full_retry_attempts, 2,
+                  "numeric helper telemetry: full-retry attempts");
+    ASSERT_INT_EQ(lu->telemetry.numeric_full_retry_successes, 1,
+                  "numeric helper telemetry: full-retry successes");
+    ASSERT_INT_EQ(lu->telemetry.numeric_full_retry_failures, 1,
+                  "numeric helper telemetry: full-retry failures");
+
+    lu_free(lu);
+}
+
 int main(void) {
     printf("=== LP Telemetry Sparse-LU Tests ===\n");
 
     test_markowitz_failure_reason_counters();
     test_sparse_fallback_reason_and_stage_telemetry();
+    test_sparse_numeric_failure_telemetry_helpers();
 
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

@@ -602,6 +602,102 @@ static void test_ge_identity_lrow_regression(void) {
 }
 
 /* ============================================================================
+ * Test 9: P1-G regression — numeric identity-separation failure should trigger
+ *         one full-structural sparse retry before any top-level dense fallback.
+ * ============================================================================ */
+static void test_markowitz_numeric_identity_full_retry(void) {
+    printf("  Markowitz: numeric identity-separation full-retry (m=60, k=40)...\n");
+
+    const int m = 60;
+    const int k = 40;
+    double *A = (double *)calloc((size_t)m * m, sizeof(double));
+
+    for (int j = 0; j < k; j++) {
+        A[j * m + j] = 8.0 + 0.02 * j;
+        A[((j + 1) % k) * m + j] = 0.15;
+    }
+    for (int t = 0; t < m - k; t++) {
+        int row = k + t;
+        A[row * m + (k + t)] = 1.0;
+    }
+
+    SparseMatrix *B = dense_to_csc(A, m, m);
+    LUFactorization *lu = lu_create(m);
+    ASSERT(lu != NULL, "numeric full-retry: lu_create");
+    if (!lu) {
+        free_csc(B);
+        free(A);
+        return;
+    }
+
+    lu->mkz_enabled = 1;
+    lu->sn_enabled = 0;
+
+    int rc = lu_factorize(lu, B);
+    ASSERT_INT_EQ(rc, 0, "numeric full-retry: warm factorize");
+    if (rc == 0) {
+        ASSERT_INT_EQ(lu->sym_k, k, "numeric full-retry: warm symbolic k");
+        ASSERT_INT_EQ(lu->sym_num_identity, m - k,
+                      "numeric full-retry: warm symbolic identity count");
+    }
+
+    /* Keep symbolic cache valid, but poison cached column order so numeric
+     * identity partitioning fails before elimination. */
+    lp_telemetry_reset_lu(lu);
+    lu->ws_col_order[k + 1] = lu->ws_col_order[k];
+
+    int rc_retry = lu_factorize(lu, B);
+    ASSERT_INT_EQ(rc_retry, 0, "numeric full-retry: factorize after identity mismatch");
+    if (rc_retry == 0) {
+        ASSERT(lu->telemetry.sparse_numeric_fail_identity_sep > 0,
+               "numeric full-retry: identity-separation numeric failure counted");
+        ASSERT_INT_EQ(lu->telemetry.sparse_numeric_last_failure_reason,
+                      LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION,
+                      "numeric full-retry: terminal reason recorded");
+        ASSERT(lu->telemetry.numeric_full_retry_attempts > 0,
+               "numeric full-retry: full retry attempted");
+        ASSERT(lu->telemetry.numeric_full_retry_successes > 0,
+               "numeric full-retry: full retry succeeded");
+        ASSERT_INT_EQ(lu->telemetry.numeric_full_retry_failures, 0,
+                      "numeric full-retry: no retry failure");
+        ASSERT_INT_EQ(lu->telemetry.used_dense_fallback_last, 0,
+                      "numeric full-retry: no top-level dense fallback");
+        ASSERT_INT_EQ(lu->telemetry.sparse_fallback_last_reason, LU_SPARSE_FALLBACK_NONE,
+                      "numeric full-retry: sparse path succeeds");
+        ASSERT_INT_EQ(lu->sym_k, m,
+                      "numeric full-retry: retry switched to full-structural symbolic mode");
+
+        /* Solve sanity check after retry. */
+        double max_err = 0.0;
+        for (int trial = 0; trial < 3; trial++) {
+            double *b = (double *)calloc(m, sizeof(double));
+            double *x = (double *)calloc(m, sizeof(double));
+            double *b_orig = (double *)calloc(m, sizeof(double));
+            for (int i = 0; i < m; i++) {
+                b[i] = (double)(trial * 11 + i * 2 + 1);
+                b_orig[i] = b[i];
+            }
+            lu_solve(lu, b, x);
+            for (int i = 0; i < m; i++) {
+                double ax = 0.0;
+                for (int j = 0; j < m; j++) ax += A[i * m + j] * x[j];
+                double err = fabs(ax - b_orig[i]);
+                if (err > max_err) max_err = err;
+            }
+            free(b);
+            free(x);
+            free(b_orig);
+        }
+        ASSERT(max_err < 1e-7, "numeric full-retry: solve accuracy");
+        if (max_err >= 1e-7) printf("    max_err = %.2e\n", max_err);
+    }
+
+    lu_free(lu);
+    free_csc(B);
+    free(A);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -615,6 +711,7 @@ int main(void) {
     test_markowitz_tridiagonal();
     test_markowitz_reserved_row_regression();
     test_ge_identity_lrow_regression();
+    test_markowitz_numeric_identity_full_retry();
 
     printf("\nIntegration (A/B Comparison):\n");
     test_markowitz_integration_small_lp();
