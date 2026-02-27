@@ -2,21 +2,18 @@
 #define SURGE_SG_TIME_BUDGET_H
 
 #include <float.h>
-#include <time.h>
+#include "sh_time.h"
 
 /*
  * SGTimeBudget — lightweight global time envelope for multi-phase solves.
  *
  * All functions take an explicit `now` parameter (monotonic seconds) so the
  * module contains no clock calls and is fully deterministic for testing.
+ * Callers use sh_monotonic_seconds() from shared to obtain `now`.
  */
 
-/* Monotonic clock helper — used by callers to obtain `now`. */
-static inline double sg_monotonic_seconds(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
-}
+/* Backward compat alias — callers should prefer sh_monotonic_seconds(). */
+#define sg_monotonic_seconds sh_monotonic_seconds
 
 typedef struct {
     double deadline;      /* absolute monotonic time when budget expires */

@@ -2504,8 +2504,17 @@ Avg runtime 30.8s per instance (much faster than VRPTW).
 
 #### Scaling Observations
 
-400+ task instances are impractical at current iteration speed — a single 400-task PDPTW
-instance took 1834s with poor quality (+89% distance gap). Root cause analysis follows.
+400+ task instances were impractical before the global time envelope — a single 400-task
+PDPTW instance took 1834s with a 120s limit. Phases 1+2 (global time envelope + phase
+budget management + postprocessing deadline checks) are now complete. Results:
+
+| Case | Budget | Before | After | Overshoot |
+|------|--------|--------|-------|-----------|
+| GH-200 c1_2_1 (5s) | 5s | 5.1s | 5.1s | ~0.1s |
+| GH-200 c1_2_7 (60s) | 60s | 1186s (20x) | **60.2s** | ~0.2s |
+| LL-400 LC1_4_1 (120s) | 120s | 1834s (15x) | **123.0s** | ~3.0s |
+
+Root cause analysis and remaining scaling work follows.
 
 ### Scaling to 400+ Requests
 
@@ -2530,84 +2539,43 @@ The same pattern explains GH-200 outliers (c1_2_7=1186s, c1_2_9=1045s with 60s l
 3. Postprocessing on a bad solution grinds without improving quality (+89% gap)
 4. O(n) insertion scans evaluate every position even when most are obviously bad
 
-#### Phase 1: Global Time Envelope
+#### Phase 1: Global Time Envelope ✅ COMPLETE
 
-**Priority: Critical. Prerequisite for all other scaling work.**
+Implemented a standalone `SGTimeBudget` module (`sg_time_budget.h/.c`) that tracks a
+global monotonic deadline. All functions take an explicit `now` parameter — no internal
+clock calls — making the module fully deterministic for unit testing (19 tests).
 
-Add a single wall-clock deadline across the entire `sg_solve_route_model()` call. Every
-section — construction, ALNS phases, postprocessing — checks remaining time and exits
-early when the budget is exhausted.
+**Implementation:**
+- `SGTimeBudget` struct added to `SGContext` (initialized to unlimited in `sg_create()`)
+- `sg_time_budget_init()` called at top of `sg_solve_route_model()` with `max_time_seconds`
+- Unlimited budget (`max_time_seconds <= 0`) uses `deadline = -1.0` sentinel
+- Clock helper `sh_monotonic_seconds()` lives in `shared/include/sh_time.h`
 
-**Design:**
+**Files:** `surge/src/sg_time_budget.{h,c}` (new), `surge/src/sg_context.c`,
+`surge/src/sg_solve.c`, `surge/tests/test_time_budget.c` (new),
+`shared/include/sh_time.h` (new).
 
-```c
-/* Record solve start time once at entry */
-double solve_start = ar_now_seconds();
-double time_budget = (double)ctx->config.max_time_seconds;
+#### Phase 2: Phase Budget Management ✅ COMPLETE
 
-/* Helper: check if time remains */
-static inline int sg_time_remaining(double start, double budget) {
-    return budget <= 0.0 || (ar_now_seconds() - start) < budget;
-}
-```
+Phase budget distribution via `sg_time_budget_phase()` and `sg_time_budget_remaining_int()`:
 
-**Budget allocation** (configurable via SGTuneParams):
+| Phase | Allocation | Mechanism |
+|-------|-----------|-----------|
+| Phase 1 (vehicle min) | 55% of remaining | `sg_time_budget_phase(tb, now, 0.55, 5.0)` |
+| Between-phase postprocessing | Gated | `sg_time_budget_expired()` between each call |
+| Phase 1.5 (crunch) | All remaining | `sg_time_budget_remaining_int()` |
+| Phase 2 (distance) | All remaining | `sg_time_budget_remaining_int()` |
+| Final postprocessing | Gated | `sg_time_budget_expired()` between each call |
 
-| Phase | Budget Share | Rationale |
-|-------|-------------|-----------|
-| Construction | 5% | Fixed cost, fast for Solomon format |
-| Phase 1 (vehicle min) | 40% | Needs high temperature + iterations |
-| Phase 1.5 (crunch) | 10% | Short focused search |
-| Phase 2 (distance polish) | 30% | Currently starves — needs real iterations |
-| Postprocessing (all) | 15% | Bounded, skip if budget exhausted |
+Per-iteration deadline checks added inside all 5 postprocessing inner loops (9 check
+points total): `reduce_vehicles` (2 while-improved loops), `reduce_vehicles_relaxed`
+(2 while-improved loops), `ejection_reduce` (while-restarted + per-vehicle for loop),
+`polish_distance` (per-pass + per-request), `intensify` (per-pass).
 
-Each ALNS phase receives `remaining_time * share / total_remaining_share` rather than
-the raw `max_time_seconds`. This ensures Phase 2 always gets real iterations.
+Entire phases are skipped via `goto skip_phaseN` when budget is exhausted.
+`remaining_int()` returns 0 for unlimited budgets — ALNS interprets 0 as "no time limit".
 
-**Postprocessing changes:**
-- Add `double deadline` parameter to all postprocessing functions
-- Check `ar_now_seconds() > deadline` at outer loop boundaries
-- Skip postprocessing entirely if <5% of budget remains
-- Gate postprocessing on solution quality: skip if vehicles > 2× BKS estimate
-
-**Files:** `sg_solve.c` (budget tracking), `sg_postprocess.c` (deadline parameter),
-`sg_tune.h` (budget share tunables).
-
-**Estimated effort:** 4-6 hours. No API changes. All existing tests unaffected (they
-use `max_time_seconds=0` which means unlimited).
-
-#### Phase 2: Phase Budget Management
-
-**Priority: High. Directly improves solution quality.**
-
-Currently all three ALNS phases pass the same `max_time_seconds` to `ar_alns_solve()`,
-which measures elapsed time from its own start. Phase 1 consumes the full budget;
-Phase 1.5 and Phase 2 get near-zero iterations.
-
-**Fix:** Pass remaining time from the global envelope, not the raw config value.
-
-```c
-/* Phase 1: gets 40% of total budget */
-double p1_budget = remaining * 0.40;
-params.max_time_seconds = (int)p1_budget;
-
-/* After Phase 1: recalculate remaining */
-double elapsed = ar_now_seconds() - solve_start;
-double remaining = time_budget - elapsed;
-
-/* Phase 1.5: gets 10% of original */
-double p15_budget = time_budget * 0.10;
-if (p15_budget > remaining) p15_budget = remaining;
-p15_params.max_time_seconds = (int)p15_budget;
-
-/* Phase 2: gets all remaining minus postprocessing reserve */
-double p2_budget = remaining - time_budget * 0.15;
-params.max_time_seconds = (int)fmax(p2_budget, 1.0);
-```
-
-This is a direct consequence of Phase 1 and should be implemented together.
-
-**Files:** `sg_solve.c` only.
+**Files:** `surge/src/sg_solve.c`, `surge/src/sg_postprocess.c`.
 
 #### Phase 3: Neighbor Lists for Insertion Pruning
 
@@ -2667,10 +2635,11 @@ loop), `sg_solve.c` (build at solve start), `sg_context.c` (storage).
 
 #### Phase 4: Postprocessing Complexity Reduction
 
-**Priority: Medium. Prevents worst-case blowup after global time envelope is in place.**
+**Priority: Medium. Reduces wasted work within the time envelope.**
 
-Even with a global time envelope, postprocessing operators have high per-call complexity
-on large instances:
+The global time envelope (Phase 1+2) now enforces deadline checks inside every
+postprocessing inner loop, preventing unbounded runtime. However, postprocessing
+operators still have high per-call complexity and may waste budget on unproductive work:
 
 | Operator | Current Complexity | Hot Path |
 |----------|-------------------|----------|
@@ -2764,7 +2733,7 @@ The cache only activates for models that actually benefit from it.
 #### Implementation Order
 
 ```
-Phase 1 + 2 (global envelope + budget)  →  immediate, few hours
+Phase 1 + 2 (global envelope + budget)  →  ✅ DONE (Feb 2026)
          ↓
 Phase 3 (neighbor lists)                →  biggest speedup, 1-2 days
          ↓
@@ -2775,6 +2744,9 @@ Phase 5 (travel cache for TD)           →  production feature, 2-3 days
 Re-run GH-400, LL-400, then 600+        →  validate scaling
 ```
 
-Phases 1+2 alone should make GH-200 outliers disappear (from 1186s → ~120s) and make
-400-task instances feasible. Phase 3 is where the real scaling unlock happens — it
-changes iteration cost from O(n) to O(k) and should enable 1000-customer instances.
+Phases 1+2 confirmed: GH-200 outliers eliminated (c1_2_7: 1186s → 60.2s), 400-task
+instances now complete within budget (LC1_4_1: 1834s → 123s). Maximum overshoot is ~3s
+from a single postprocessing iteration completing after the deadline.
+
+Phase 3 is where the real scaling unlock happens — it changes iteration cost from O(n)
+to O(k) and should enable 1000-customer instances.

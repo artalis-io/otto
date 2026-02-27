@@ -87,7 +87,7 @@ $(TEST_BIN): tests/test_surge.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
 
 $(TEST_TB_BIN): tests/test_time_budget.c src/sg_time_budget.c src/sg_time_budget.h
-	$(CC) $(CFLAGS) -Isrc tests/test_time_budget.c src/sg_time_budget.c $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) -Isrc -I../shared/include tests/test_time_budget.c src/sg_time_budget.c $(LDFLAGS) -o $@
 
 BENCH_INCLUDES = $(INCLUDES) -Ibenchmarks
 
