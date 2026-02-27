@@ -50,6 +50,25 @@ Reduce Phase-1 wall time on degenerate NETLIB outliers by cutting unnecessary fu
   - `make -C ralph test-netlib-gate-small`
   - `make -C ralph test-netlib-gate`
   - Focus telemetry reruns on `pilot`, `stair`, `degen3`.
+  - Promotion rule: full gate must pass with no required-pass failures.
+- [ ] P1-G Markowitz retry ladder effectiveness (saved next step).
+  - Add explicit sparse numeric fallback reason counters in `lu_sparse.c` to separate:
+    - identity-separation failure after numeric,
+    - numeric backend exhaustion,
+    - singular/pathological numeric failure.
+  - On sparse numeric failure caused by identity-separation mismatch, force one
+    full-structural sparse retry (`k=m`, no identity split) before dense fallback.
+  - Make Markowitz retry-profile activation explicit and telemetry-verifiable:
+    retry attempts/success/failure by profile and terminal reason.
+  - Add focused unit coverage in:
+    - `ralph/tests/test_lu_markowitz.c`
+    - `ralph/tests/test_lp_telemetry_lu_sparse.c`
+  - Gate criteria:
+    - `make -C ralph test-lu-markowitz`
+    - `make -C ralph test-lp-telemetry-lu-sparse`
+    - `make -C ralph test-netlib-gate-small`
+    - `make -C ralph test-netlib-gate`
+    - required-pass `nesm.mps` must not appear in `actual.dense_fallback.txt`.
 
 ## Execution Log
 
@@ -125,3 +144,21 @@ Reduce Phase-1 wall time on degenerate NETLIB outliers by cutting unnecessary fu
       - artifact: `/tmp/netlib-regression-gate-20260226-215057`
     - `make -C ralph test-netlib-gate` PASS
       - artifact: `/tmp/netlib-regression-gate-20260226-215111`
+- [ ] 2026-02-27: P1-F validation run on `64c154c` (blocked by required-pass regression).
+  - Validation:
+    - `make -C ralph test-lp-telemetry-solver` PASS (`156/156`)
+    - `make -C ralph test-simplex-policy` PASS (`54/54`)
+    - `make -C ralph test-netlib-gate-small` PASS
+      - artifact: `/tmp/netlib-regression-gate-20260227-091415`
+      - summary: 27 files, timeout files 2, status/objective/invalid mismatches 0, dense fallback files 0.
+    - `make -C ralph test-netlib-gate` FAIL
+      - artifact: `/tmp/netlib-regression-gate-20260227-091427`
+      - summary: 84 files, timeout files 25, status/objective/invalid mismatches 0, dense fallback files 1.
+      - blocker: required-pass `nesm.mps` in `actual.dense_fallback.txt` and `required.failed.txt`.
+  - Focus telemetry reruns:
+    - `pilot`: `/tmp/pilot_phase1_after64c154c.json`
+      - timeout, 369 iterations, phase1 pivot/refactor dominates, `mkz_profile_retry_attempts=24` (all failed).
+    - `stair`: `/tmp/stair_phase1_after64c154c.json`
+      - timeout, 9861 iterations, ratio-recovery loop dominates (`reason_ratio_recovery=9810`).
+    - `degen3`: `/tmp/degen3_phase1_after64c154c.json`
+      - timeout, 9294 iterations, periodic+LU-health refactors dominate (`periodic_policy_count=37`, `periodic_lu_health_count=138`).
