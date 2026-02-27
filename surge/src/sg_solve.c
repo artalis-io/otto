@@ -1,7 +1,5 @@
 #include "sg_internal.h"
 
-#include <time.h>
-
 /* Apply tune parameter overrides to ALNS params (rewards, reaction, segment_size) */
 static void sg_apply_tune_to_alns(const SGContext *ctx, ARALNSParams *params) {
     if (!ctx->tune_params) return;
@@ -11,12 +9,6 @@ static void sg_apply_tune_to_alns(const SGContext *ctx, ARALNSParams *params) {
     if (tp->reward_better != SG_TUNE_SENTINEL_D) params->reward_better = tp->reward_better;
     if (tp->reward_accepted != SG_TUNE_SENTINEL_D) params->reward_accepted = tp->reward_accepted;
     if (tp->segment_size != SG_TUNE_SENTINEL_I) params->segment_size = tp->segment_size;
-}
-
-static double sg_monotonic_seconds(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
 /* Write a convergence entry to ring buffer and/or fire callback */
@@ -849,6 +841,8 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
 
     /* Initialize instrumentation */
     ctx->solve_start_time = sg_monotonic_seconds();
+    sg_time_budget_init(&ctx->time_budget, ctx->solve_start_time,
+                        (double)ctx->config.max_time_seconds);
     ctx->current_phase = SG_PHASE_CONSTRUCTION;
     ctx->convergence_count = 0;
     ctx->convergence_write_pos = 0;
@@ -937,7 +931,14 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
                        initial.vehicles_used, initial.base.num_unassigned);
         ar_alns_params_default(&params);
         params.max_iterations = phase1_iters;
-        params.max_time_seconds = ctx->config.max_time_seconds;
+        {
+            double p1_now = sg_monotonic_seconds();
+            if (sg_time_budget_expired(&ctx->time_budget, p1_now)) goto skip_phase1;
+            double p1_time = sg_time_budget_phase(&ctx->time_budget, p1_now, 0.55, 5.0);
+            params.max_time_seconds = (p1_time == DBL_MAX)
+                ? ctx->config.max_time_seconds
+                : (int)ceil(p1_time);
+        }
         params.segment_size = ctx->config.segment_size;
         sg_adaptive_q_bounds((int)ctx->num_requests, ctx->config.q_min, ctx->config.q_max,
                              &params.q_min, &params.q_max);
@@ -955,7 +956,9 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
                 0.05);
             params.cooling_rate = exp(log(p1_final) / (double)phase1_iters);
         }
-        /* Override initial temperature if sa_accept_pct is tuned */
+        /* Override initial temperature if sa_accept_pct is tuned.
+           Default calibrate_sa uses 0.05; tuner found 0.074 gives better results.
+           Profiles set this via tune_params; non-profiled solves use calibrate_sa default. */
         if (ctx->tune_params && ctx->tune_params->sa_accept_pct != SG_TUNE_SENTINEL_D) {
             double abs_cost = fabs(sg_route_solution_cost(&initial, ctx));
             if (abs_cost < 1e-12) abs_cost = 1.0;
@@ -1036,18 +1039,24 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         ar_alns_free(alns);
         alns = NULL;
     }
+skip_phase1:
 
     /* Disable penalty for postprocessing between phases (must be strict) */
     ctx->penalty.enabled = 0;
 
     /* ---- Ejection pulse: exploit Phase 1's loose routes to eliminate vehicles ---- */
-    if (p1_best) {
+    if (p1_best && !sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) {
         (void)sg_route_postprocess_ejection_reduce(ctx, p1_best);
-        (void)sg_route_postprocess_reduce_vehicles_relaxed(ctx, p1_best, 1.20);
-        (void)sg_route_postprocess_intensify(ctx, p1_best);
+        if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) {
+            (void)sg_route_postprocess_reduce_vehicles_relaxed(ctx, p1_best, 1.20);
+        }
+        if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) {
+            (void)sg_route_postprocess_intensify(ctx, p1_best);
+        }
     }
 
     /* ---- Phase 1.5: Vehicle crunch — short focused ALNS with vehicle-reducing operators ---- */
+    if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) goto skip_phase15;
     if (p1_best && p1_best->vehicles_used > 1) {
         int p15_iters = sg_tune_i(ctx,
             ctx->tune_params ? ctx->tune_params->phase15_iters : SG_TUNE_SENTINEL_I, 500);
@@ -1079,7 +1088,10 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
 
             ar_alns_params_default(&p15_params);
             p15_params.max_iterations = p15_iters;
-            p15_params.max_time_seconds = ctx->config.max_time_seconds;
+            {
+                int p15_time = sg_time_budget_remaining_int(&ctx->time_budget, sg_monotonic_seconds());
+                p15_params.max_time_seconds = (p15_time > 0) ? p15_time : ctx->config.max_time_seconds;
+            }
             p15_params.segment_size = ctx->config.segment_size;
             sg_adaptive_q_bounds((int)ctx->num_requests, ctx->config.q_min, ctx->config.q_max,
                                  &p15_params.q_min, &p15_params.q_max);
@@ -1144,8 +1156,10 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
                      p1_best->vehicles_used, p1_best->base.num_unassigned);
         ctx->penalty.enabled = 0;
     }
+skip_phase15:
 
     /* ---- Phase 2: Distance polishing ---- */
+    if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) goto skip_phase2;
     if (phase2_iters > 0) {
         SGRouteSolution *p2_initial = p1_best ? p1_best : &initial;
 
@@ -1159,7 +1173,10 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
 
         ar_alns_params_default(&params);
         params.max_iterations = phase2_iters;
-        params.max_time_seconds = ctx->config.max_time_seconds;
+        {
+            int p2_time = sg_time_budget_remaining_int(&ctx->time_budget, sg_monotonic_seconds());
+            params.max_time_seconds = (p2_time > 0) ? p2_time : ctx->config.max_time_seconds;
+        }
         params.segment_size = ctx->config.segment_size;
         sg_adaptive_q_bounds((int)ctx->num_requests, ctx->config.q_min, ctx->config.q_max,
                              &params.q_min, &params.q_max);
@@ -1180,7 +1197,8 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
                 p2_cal = sg_route_solution_cost(p2_initial, ctx);
             }
             ar_alns_calibrate_sa(&params, p2_cal, phase2_iters);
-            /* Override Phase 2 cooling and SA acceptance if tuned */
+            /* Override Phase 2 cooling and SA acceptance if tuned via profiles.
+               Tuner found: p2_final_temp_ratio=0.0001, sa_accept_pct=0.074. */
             if (ctx->tune_params) {
                 if (ctx->tune_params->p2_final_temp_ratio != SG_TUNE_SENTINEL_D) {
                     params.cooling_rate = exp(log(ctx->tune_params->p2_final_temp_ratio) / (double)phase2_iters);
@@ -1246,6 +1264,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         ar_alns_free(alns);
         alns = NULL;
     }
+skip_phase2:
 
     /* Disable infeasible-space exploration for postprocessing (must be strict) */
     ctx->penalty.enabled = 0;
@@ -1267,15 +1286,23 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
                            pp_sol->vehicles_used, pp_sol->base.num_unassigned);
         }
         if (best) {
-            (void)sg_route_postprocess_reduce_vehicles(ctx, best);
-            (void)sg_route_postprocess_ejection_reduce(ctx, best);
-            (void)sg_route_postprocess_intensify(ctx, best);
-            (void)sg_route_postprocess_polish_distance(ctx, best);
+            if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
+                (void)sg_route_postprocess_reduce_vehicles(ctx, best);
+            if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
+                (void)sg_route_postprocess_ejection_reduce(ctx, best);
+            if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
+                (void)sg_route_postprocess_intensify(ctx, best);
+            if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
+                (void)sg_route_postprocess_polish_distance(ctx, best);
         } else {
-            (void)sg_route_postprocess_reduce_vehicles(ctx, &initial);
-            (void)sg_route_postprocess_ejection_reduce(ctx, &initial);
-            (void)sg_route_postprocess_intensify(ctx, &initial);
-            (void)sg_route_postprocess_polish_distance(ctx, &initial);
+            if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
+                (void)sg_route_postprocess_reduce_vehicles(ctx, &initial);
+            if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
+                (void)sg_route_postprocess_ejection_reduce(ctx, &initial);
+            if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
+                (void)sg_route_postprocess_intensify(ctx, &initial);
+            if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
+                (void)sg_route_postprocess_polish_distance(ctx, &initial);
         }
 
         final_sol = best ? best : &initial;

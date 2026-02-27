@@ -1216,6 +1216,7 @@ ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx,
     improved = 1;
     while (improved) {
         improved = 0;
+        if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) break;
         if (tried && sol->num_vehicles > 0) {
             memset(tried, 0, (size_t)sol->num_vehicles * sizeof(uint8_t));
         }
@@ -1287,6 +1288,7 @@ ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx,
     while (improved) {
         uint32_t attempts = 0;
         improved = 0;
+        if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) break;
         if (tried && sol->num_vehicles > 0) {
             memset(tried, 0, (size_t)sol->num_vehicles * sizeof(uint8_t));
         }
@@ -1392,6 +1394,7 @@ ARStatus sg_route_postprocess_reduce_vehicles_relaxed(const SGContext *ctx,
     improved = 1;
     while (improved) {
         improved = 0;
+        if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) break;
         if (tried && sol->num_vehicles > 0) {
             memset(tried, 0, (size_t)sol->num_vehicles * sizeof(uint8_t));
         }
@@ -1452,6 +1455,7 @@ ARStatus sg_route_postprocess_reduce_vehicles_relaxed(const SGContext *ctx,
     while (improved) {
         uint32_t attempts = 0;
         improved = 0;
+        if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) break;
         if (tried && sol->num_vehicles > 0) {
             memset(tried, 0, (size_t)sol->num_vehicles * sizeof(uint8_t));
         }
@@ -1713,6 +1717,7 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
         uint32_t v, vi;
 
         restarted = 0;
+        if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) break;
 
         /* Build list of non-empty vehicles sorted by route length ascending. */
         vehicle_order = (uint32_t *)malloc((size_t)sol->num_vehicles * sizeof(uint32_t));
@@ -1754,6 +1759,7 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
         for (vi = 0; vi < num_nonempty && !restarted; vi++) {
             uint32_t target_v = vehicle_order[vi];
             uint32_t route_len = sol->route_lengths[target_v];
+            if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) break;
             uint32_t *requests = NULL;
             SGRouteSolution *backup = NULL;
             double before_cost;
@@ -1881,6 +1887,7 @@ ARStatus sg_route_postprocess_polish_distance(const SGContext *ctx,
         uint32_t i;
         int improved = 0;
 
+        if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) break;
         if (count == 0) {
             break;
         }
@@ -1902,6 +1909,7 @@ ARStatus sg_route_postprocess_polish_distance(const SGContext *ctx,
             uint32_t best_delivery_pos = UINT32_MAX;
             double best_route_distance = 0.0;
 
+            if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) break;
             if (request_id >= sol->base.total_requests || !sol->base.assigned_flags[request_id]) {
                 continue;
             }
@@ -2058,6 +2066,7 @@ ARStatus sg_route_postprocess_intensify(const SGContext *ctx, SGRouteSolution *s
 
     for (pass = 0; pass < SG_ROUTE_MAX_INTENSIFY_PASSES; pass++) {
         int improved = 0;
+        if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) break;
         if (sg_route_try_or_opt_once(ctx, sol)) {
             improved = 1;
         }

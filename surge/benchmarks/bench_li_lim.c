@@ -158,6 +158,17 @@ int main(int argc, char **argv) {
         status = sg_set_config(ctx, &config);
         if (status != SG_STATUS_OK) { printf("%-16s %-9s\n", cases[i].name, sg_bench_status_name(status)); sg_free(ctx); failed_count++; continue; }
 
+        /* Apply tuner-optimized SA parameters (from bench_tune Tier 1) */
+        {
+            SGTuneParams tp;
+            sg_tune_params_default(&tp);
+            tp.sa_accept_pct = 0.074;
+            tp.p1_final_temp_ratio = 0.08;
+            tp.p2_final_temp_ratio = 0.0001;
+            tp.phase15_iters = 2000;
+            sg_set_tune_params(ctx, &tp);
+        }
+
         status = sg_load_li_lim_pdptw(ctx, cases[i].path);
         if (status != SG_STATUS_OK) { printf("%-16s %-9s\n", cases[i].name, sg_bench_status_name(status)); sg_free(ctx); failed_count++; continue; }
 

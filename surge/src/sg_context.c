@@ -268,6 +268,9 @@ SGContext *sg_create(void) {
     ctx->demand_sign_convention = SG_DEMAND_PICKUP_POSITIVE_DELIVERY_NEGATIVE;
     ctx->dimension_count = 1;
     ctx->unassigned_weight = SG_ROUTE_OBJECTIVE_UNASSIGNED_WEIGHT;
+    /* Default to unlimited time budget so postprocessing functions work
+       when called outside of sg_solve_route_model() (e.g., from tests). */
+    ctx->time_budget.deadline = -1.0;
     return ctx;
 }
 
@@ -460,32 +463,45 @@ SGStatus sg_config_set_profile(SGContext *ctx, SGProfile profile) {
 
     sg_tune_params_default(&tp);
 
-    /* Profiles set iteration counts and tune params appropriate for each tier.
-       Actual optimal values will be determined by bench_tune; these are initial estimates. */
+    /* Profiles set iteration counts and tune params from bench_tune results.
+       SA params: sa_accept_pct=0.074, p1_final=0.08, p2_final=0.0001.
+       Phase 1.5: 2000 iters (vehicle crunch) for all except realtime. */
     switch (profile) {
         case SG_PROFILE_REALTIME:
             ctx->config.max_iterations = 500;
             ctx->config.max_time_seconds = 1;
             tp.phase1_fraction = 0.60;
-            tp.phase15_iters = 100;
+            tp.phase15_iters = 200;
+            tp.sa_accept_pct = 0.074;
+            tp.p1_final_temp_ratio = 0.08;
+            tp.p2_final_temp_ratio = 0.0001;
             break;
         case SG_PROFILE_FAST:
             ctx->config.max_iterations = 2500;
             ctx->config.max_time_seconds = 5;
             tp.phase1_fraction = 0.60;
-            tp.phase15_iters = 300;
+            tp.phase15_iters = 2000;
+            tp.sa_accept_pct = 0.074;
+            tp.p1_final_temp_ratio = 0.08;
+            tp.p2_final_temp_ratio = 0.0001;
             break;
         case SG_PROFILE_NEAR_OPTIMAL:
             ctx->config.max_iterations = 10000;
             ctx->config.max_time_seconds = 15;
             tp.phase1_fraction = 0.60;
-            tp.phase15_iters = 500;
+            tp.phase15_iters = 2000;
+            tp.sa_accept_pct = 0.074;
+            tp.p1_final_temp_ratio = 0.08;
+            tp.p2_final_temp_ratio = 0.0001;
             break;
         case SG_PROFILE_BEST:
             ctx->config.max_iterations = 50000;
             ctx->config.max_time_seconds = 60;
             tp.phase1_fraction = 0.60;
-            tp.phase15_iters = 1000;
+            tp.phase15_iters = 2000;
+            tp.sa_accept_pct = 0.074;
+            tp.p1_final_temp_ratio = 0.08;
+            tp.p2_final_temp_ratio = 0.0001;
             break;
         default:
             return SG_STATUS_INVALID_ARG;

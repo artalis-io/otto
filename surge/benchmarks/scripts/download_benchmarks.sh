@@ -33,31 +33,37 @@ TMP_DIR="$BENCH_DIR/.tmp_download"
 
 SINTEF_BASE="https://www.sintef.no"
 
-# Gehring-Homberger VRPTW instance zip URLs (from SINTEF TOP)
-declare -A GH_ZIPS=(
-    [200]="/globalassets/project/top/vrptw/homberger/200/homberger_200_customer_instances.zip"
-    [400]="/globalassets/project/top/vrptw/homberger/400/homberger_400_customer_instances.zip"
-    [600]="/globalassets/project/top/vrptw/homberger/600/homberger_600_customer_instances.zip"
-    [800]="/globalassets/project/top/vrptw/homberger/800/homberger_800_customer_instances.zip"
-    [1000]="/globalassets/project/top/vrptw/homberger/1000/homberger_1000_customer_instances.zip"
-)
+# Lookup functions (bash 3 compatible, no associative arrays)
+gh_zip_path() {
+    case "$1" in
+        200) echo "/globalassets/project/top/vrptw/homberger/200/homberger_200_customer_instances.zip" ;;
+        400) echo "/globalassets/project/top/vrptw/homberger/400/homberger_400_customer_instances.zip" ;;
+        600) echo "/globalassets/project/top/vrptw/homberger/600/homberger_600_customer_instances.zip" ;;
+        800) echo "/globalassets/project/top/vrptw/homberger/800/homberger_800_customer_instances.zip" ;;
+        1000) echo "/globalassets/project/top/vrptw/homberger/1000/homberger_1000_customer_instances.zip" ;;
+    esac
+}
 
-# Li-Lim extended PDPTW instance zip URLs (from SINTEF TOP)
-declare -A LL_ZIPS=(
-    [200]="/contentassets/1338af68996841d3922bc8e87adc430c/pdp_200.zip"
-    [400]="/contentassets/1338af68996841d3922bc8e87adc430c/pdp_400.zip"
-    [600]="/contentassets/1338af68996841d3922bc8e87adc430c/pdp_600.zip"
-    [800]="/contentassets/1338af68996841d3922bc8e87adc430c/pdptw800.zip"
-    [1000]="/contentassets/1338af68996841d3922bc8e87adc430c/pdptw1000.zip"
-)
+ll_zip_path() {
+    case "$1" in
+        200) echo "/contentassets/1338af68996841d3922bc8e87adc430c/pdp_200.zip" ;;
+        400) echo "/contentassets/1338af68996841d3922bc8e87adc430c/pdp_400.zip" ;;
+        600) echo "/contentassets/1338af68996841d3922bc8e87adc430c/pdp_600.zip" ;;
+        800) echo "/contentassets/1338af68996841d3922bc8e87adc430c/pdptw800.zip" ;;
+        1000) echo "/contentassets/1338af68996841d3922bc8e87adc430c/pdptw1000.zip" ;;
+    esac
+}
 
-# Expected instance counts per size
-declare -A GH_EXPECTED=(
-    [200]=60 [400]=60 [600]=60 [800]=60 [1000]=60
-)
-declare -A LL_EXPECTED=(
-    [200]=60 [400]=60 [600]=60 [800]=60 [1000]=58
-)
+gh_expected() {
+    echo 60
+}
+
+ll_expected() {
+    case "$1" in
+        1000) echo 58 ;;
+        *) echo 60 ;;
+    esac
+}
 
 # Terminal colors (if stdout is a tty)
 if [ -t 1 ]; then
@@ -106,7 +112,7 @@ fetch_file() {
 count_instances() {
     local dir="$1"
     if [ -d "$dir" ]; then
-        find "$dir" -maxdepth 1 -name '*.txt' -type f 2>/dev/null | wc -l | tr -d ' '
+        find "$dir" -maxdepth 1 \( -name '*.txt' -o -name '*.TXT' \) -type f 2>/dev/null | wc -l | tr -d ' '
     else
         echo 0
     fi
@@ -126,7 +132,8 @@ download_gehring_homberger() {
 
     for size in "${sizes[@]}"; do
         local dest_dir="$GH_DIR/$size"
-        local expected="${GH_EXPECTED[$size]}"
+        local expected
+        expected="$(gh_expected "$size")"
         local existing
         existing="$(count_instances "$dest_dir")"
 
@@ -136,7 +143,8 @@ download_gehring_homberger() {
             continue
         fi
 
-        local zip_path="${GH_ZIPS[$size]}"
+        local zip_path
+        zip_path="$(gh_zip_path "$size")"
         local zip_url="${SINTEF_BASE}${zip_path}"
         local zip_file="$TMP_DIR/gh_${size}.zip"
 
@@ -161,11 +169,10 @@ download_gehring_homberger() {
             continue
         fi
 
-        # Move all .txt files to the flat destination directory
-        find "$extract_dir" -name '*.txt' -type f | while read -r f; do
+        # Move all .txt/.TXT files to the flat destination directory (lowercase names)
+        find "$extract_dir" \( -name '*.txt' -o -name '*.TXT' \) -type f | while read -r f; do
             local base
-            base="$(basename "$f")"
-            # Normalize: ensure uppercase class prefix (C1_2_1.txt not c1_2_1.txt)
+            base="$(basename "$f" | tr '[:upper:]' '[:lower:]')"
             cp "$f" "$dest_dir/$base"
         done
 
@@ -196,7 +203,8 @@ download_li_lim_extended() {
 
     for size in "${sizes[@]}"; do
         local dest_dir="$LL_DIR/$size"
-        local expected="${LL_EXPECTED[$size]}"
+        local expected
+        expected="$(ll_expected "$size")"
         local existing
         existing="$(count_instances "$dest_dir")"
 
@@ -206,7 +214,8 @@ download_li_lim_extended() {
             continue
         fi
 
-        local zip_path="${LL_ZIPS[$size]}"
+        local zip_path
+        zip_path="$(ll_zip_path "$size")"
         local zip_url="${SINTEF_BASE}${zip_path}"
         local zip_file="$TMP_DIR/ll_${size}.zip"
 
