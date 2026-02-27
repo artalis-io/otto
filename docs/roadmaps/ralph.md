@@ -4,6 +4,28 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
+**Validation checkpoint** (2026-02-27, `64c154c`) — Phase-1 no-pivot governor + Markowitz retry-profile telemetry:
+- Added Phase-1 no-pivot streak governor with forced refactor trigger and reason telemetry:
+  `phase1_no_pivot_events`, `phase1_no_pivot_forced_*`, `phase1_soft_lu_policy_cooldown_defers`.
+- Added Markowitz retry-profile telemetry:
+  `mkz_profile_retry_attempts`, `mkz_profile_retry_successes`, `mkz_profile_retry_failures`.
+- Exported new telemetry fields in benchmark JSON and added unit coverage:
+  `test-lp-telemetry-solver`, `test-lp-telemetry-lu-sparse`, `test-simplex-policy`.
+- Gate status:
+  - `make -C ralph test-lp-telemetry-solver` PASS (`156/156`)
+  - `make -C ralph test-simplex-policy` PASS (`54/54`)
+  - `make -C ralph test-netlib-gate-small` PASS (27 files; timeout 2; dense fallback files 0; artifact:
+    `/tmp/netlib-regression-gate-20260227-091415`)
+  - `make -C ralph test-netlib-gate` FAIL (84 files; timeout 25; dense fallback files 1; required-pass failure:
+    `nesm.mps`; artifact: `/tmp/netlib-regression-gate-20260227-091427`)
+- Focus telemetry artifacts:
+  - `/tmp/pilot_phase1_after64c154c.json`
+  - `/tmp/stair_phase1_after64c154c.json`
+  - `/tmp/degen3_phase1_after64c154c.json`
+- Saved next item (post context-clean): P1-G Markowitz retry-ladder effectiveness in
+  `docs/roadmaps/ralph_phase1_iteration_control_plan.md` with explicit `nesm.mps`
+  required-pass criterion.
+
 **Current** (2026-02-25) — full-retry backend ordering + LU telemetry expansion baseline:
 - Added explicit symbolic-stage failure reason tracking in LU sparse path with per-reason telemetry
   counters (workspace, unmatched-no-reserved, inconsistent-identity).
