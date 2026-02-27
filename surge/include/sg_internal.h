@@ -15,6 +15,7 @@
 #include "sh_dist.h"
 #include "sh_stepfunc.h"
 #include "../src/sg_time_budget.h"
+#include "../src/sg_neighbor.h"
 
 /* Constants */
 #define SG_UNASSIGNED_PENALTY 10000.0
@@ -448,12 +449,22 @@ struct SGContext {
     SGSolvePhase current_phase;
     double solve_start_time;                  /* set at top of sg_solve_route_model */
     SGTimeBudget time_budget;                 /* global deadline envelope */
+    SGNeighborIndex neighbor_index;            /* k-nearest for insertion pruning */
 
     /* Per-phase breakdown */
     SGPhaseStats phase_stats[5];              /* max 5 phases */
     uint32_t num_phase_stats;
     SGPenaltySnapshot penalty_snapshot;       /* copied before sg_penalty_free */
 };
+
+/* sg_neighbor.c — k-nearest location pruning for insertion repair */
+void sg_neighbor_init(SGNeighborIndex *idx, const SGContext *ctx, uint32_t k);
+void sg_neighbor_free(SGNeighborIndex *idx);
+int sg_neighbor_is_near(const SGNeighborIndex *idx, const SGContext *ctx,
+                        uint32_t vehicle_id, uint32_t a, uint32_t b);
+int sg_neighbor_vehicle_has_nearby(const SGNeighborIndex *idx, const SGContext *ctx,
+                                   const SGRouteSolution *sol, uint32_t vehicle_id,
+                                   uint32_t request_id);
 
 /* sg_context.c */
 void sg_set_error(SGContext *ctx, const char *fmt, ...);

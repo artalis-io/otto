@@ -864,6 +864,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
 
     sg_scratch_init(ctx);
     sg_build_frozen_vehicle_map(ctx);
+    sg_neighbor_init(&ctx->neighbor_index, ctx, 20);
 
     sg_phase_start(ctx, SG_PHASE_CONSTRUCTION, 0.0, 0, ctx->num_requests);
     if (ctx->num_initial_routes > 0) {
@@ -1400,6 +1401,7 @@ skip_phase2:
     }
     sg_penalty_free(&ctx->penalty);
     free(ctx->frozen_vehicle_map); ctx->frozen_vehicle_map = NULL;
+    sg_neighbor_free(&ctx->neighbor_index);
     sg_scratch_free(ctx);
     sg_route_solution_reset(&initial);
     sg_route_solution_free(p1_best, NULL);

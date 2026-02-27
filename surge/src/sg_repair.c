@@ -347,6 +347,11 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
     is_pd = (ctx->requests[request_id].kind == SG_REQUEST_KIND_PICKUP_DELIVERY);
     frozen_designated = sg_frozen_designated_vehicle(ctx, request_id);
 
+    {
+    int neighbor_pruning = (ctx->neighbor_index.neighbors != NULL);
+    int any_pruned = 0;
+sg_rank_retry:
+
     for (v = 0; v < sol->num_vehicles; v++) {
         if (frozen_designated != SG_NO_VEHICLE && v != frozen_designated) continue;
         if (ctx->avoid_new_vehicles && sol->route_lengths[v] == 0) {
@@ -354,6 +359,15 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
         }
         if (ctx->vehicles[v].max_tasks > 0 && sol->route_lengths[v] >= ctx->vehicles[v].max_tasks) {
             continue;
+        }
+
+        /* Neighbor pruning: skip vehicles with no nearby stops */
+        if (neighbor_pruning && sol->route_lengths[v] > 0) {
+            if (!sg_neighbor_vehicle_has_nearby(&ctx->neighbor_index, ctx,
+                                                sol, v, request_id)) {
+                any_pruned = 1;
+                continue;
+            }
         }
         if (is_pd) {
             /* O(L²) stop-level evaluation for PD requests */
@@ -523,6 +537,14 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
             }
         }
     }
+
+    /* Fallback: if neighbor pruning skipped vehicles and found nothing, retry without pruning */
+    if (ranked_count == 0 && any_pruned && neighbor_pruning) {
+        neighbor_pruning = 0;
+        any_pruned = 0;
+        goto sg_rank_retry;
+    }
+    }  /* end neighbor_pruning block */
 
     if (ranked_count > 0) {
         int k_index = regret_k - 1;
