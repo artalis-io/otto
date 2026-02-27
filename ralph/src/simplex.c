@@ -3380,12 +3380,10 @@ static int phase1_recompute_rc_only_guarded(SimplexSolver *solver,
 static void phase1_recompute_dir_skip_safe(SimplexSolver *solver,
                                            SimplexTableau *tab,
                                            int degenerate_count,
+                                           int no_pivot_streak,
                                            int *rc_only_streak) {
-    int allow_rc_only = 0;
-    if (tab->m >= PHASE1_DEGEN_THRESHOLD_LARGE_M &&
-        degenerate_count >= PHASE1_DEGEN_THRESHOLD_LARGE) {
-        allow_rc_only = 1;
-    }
+    int allow_rc_only = lp_refactor_policy_phase1_dir_skip_allow_rc_only(
+        tab->m, degenerate_count, no_pivot_streak);
     if (!allow_rc_only) {
         phase1_recompute_full_with_reason(solver,
                                           tab,
@@ -5573,6 +5571,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 phase1_recompute_dir_skip_safe(solver,
                                                tab,
                                                degenerate_count,
+                                               phase1_no_pivot_streak + 1,
                                                &phase1_rc_only_streak);
                 if (phase1_note_no_pivot_and_maybe_force(
                         solver,
@@ -5607,6 +5606,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 phase1_recompute_dir_skip_safe(solver,
                                                tab,
                                                degenerate_count,
+                                               phase1_no_pivot_streak + 1,
                                                &phase1_rc_only_streak);
                 if (phase1_note_no_pivot_and_maybe_force(
                         solver,
@@ -7285,20 +7285,35 @@ static int simplex_phase2(SimplexSolver *solver) {
                     soft_lu_refactor_cost_ewma(solver, 2));
         }
 
-        /* Periodically recompute solution and reduced costs to correct numerical drift */
-        if (iter > 0 && iter % 200 == 0) {
-            tableau_compute_solution(tab);
-            /* For partial pricing, use lazy RC. For others, full RC. */
-            if (solver->pricing_strategy == 3) {
-                tableau_compute_duals(tab);  /* Lazy mode */
-            } else {
-                tableau_compute_reduced_costs(tab);  /* Full recomputation */
-                if (solver->pricing_strategy == 4) heap_build(tab);
-            }
-            if (solver->verbose) {
-                int leave_var = (leaving >= 0) ? tab->basis[leaving] : leaving;
-                LP_LOG_STDOUT("Iter %d: obj = %.6f, enter=%d, leave=%d, theta=%.2e, rc=%.2e\n",
-                       iter, tab->obj_value, entering, leave_var, theta, tab->rc[entering]);
+        /* Periodically recompute solution and reduced costs to correct numerical drift.
+         * For large, highly-degenerate phase-2 runs with healthy LU metrics, we relax
+         * cadence to reduce full-vector recompute overhead. */
+        {
+            int periodic_recompute_interval =
+                lp_refactor_policy_phase2_periodic_recompute_interval(
+                    tab->m,
+                    use_bland,
+                    degenerate_count,
+                    tab->lu->spike_pool_used,
+                    tab->lu->spike_pool_capacity,
+                    tab->lu->cond_estimate,
+                    tab->lu->growth_factor);
+            if (iter > 0 &&
+                periodic_recompute_interval > 0 &&
+                (iter % periodic_recompute_interval) == 0) {
+                tableau_compute_solution(tab);
+                /* For partial pricing, use lazy RC. For others, full RC. */
+                if (solver->pricing_strategy == 3) {
+                    tableau_compute_duals(tab);  /* Lazy mode */
+                } else {
+                    tableau_compute_reduced_costs(tab);  /* Full recomputation */
+                    if (solver->pricing_strategy == 4) heap_build(tab);
+                }
+                if (solver->verbose) {
+                    int leave_var = (leaving >= 0) ? tab->basis[leaving] : leaving;
+                    LP_LOG_STDOUT("Iter %d: obj = %.6f, enter=%d, leave=%d, theta=%.2e, rc=%.2e\n",
+                           iter, tab->obj_value, entering, leave_var, theta, tab->rc[entering]);
+                }
             }
         }
 
