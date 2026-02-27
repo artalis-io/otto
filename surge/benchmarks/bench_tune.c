@@ -235,8 +235,8 @@ typedef struct {
     FILE *fp;                  /* Append handle (NULL = no checkpoint) */
     pthread_mutex_t mutex;     /* Protects fp writes */
     /* Loaded state from existing checkpoint */
-    int tier_done[6];          /* 1 = tier fully completed */
-    SGTuneParams tier_best[6]; /* Best params from each completed tier */
+    int tier_done[7];          /* 1 = tier fully completed */
+    SGTuneParams tier_best[7]; /* Best params from each completed tier */
     int has_baseline;
     TuneResult baseline;
     /* Cached results: flat array of (tier, idx, result) triples */
@@ -250,7 +250,7 @@ typedef struct {
 static void cp_init(CheckpointState *cp) {
     memset(cp, 0, sizeof(*cp));
     pthread_mutex_init(&cp->mutex, NULL);
-    for (int i = 0; i < 6; i++)
+    for (int i = 0; i < 7; i++)
         sg_tune_params_default(&cp->tier_best[i]);
 }
 
@@ -333,6 +333,7 @@ static void cp_parse_params(ShJsonValue *obj, SGTuneParams *p) {
     CP_D(worst_randomness); CP_D(shaw_randomness); CP_D(route_cluster_randomness);
     CP_D(time_cluster_randomness); CP_D(pd_shaw_randomness); CP_D(route_shaw_randomness);
     CP_I(string_l_max);
+    CP_I(neighbor_k);
 #undef CP_D
 #undef CP_I
 }
@@ -621,6 +622,7 @@ static void print_tune_params_json(FILE *fp, const SGTuneParams *p) {
     JP_D(pd_shaw_randomness, "%.2f");
     JP_D(route_shaw_randomness, "%.2f");
     JP_I(string_l_max);
+    JP_I(neighbor_k);
 #undef JP_D
 #undef JP_I
     fprintf(fp, "}");
@@ -818,6 +820,23 @@ static int generate_tier5(SGTuneParams *configs, const SGTuneParams *base) {
     return count;
 }
 
+/*
+ * Tier 6: Neighbor pruning k (insertion repair speedup vs quality tradeoff)
+ */
+static int generate_tier6(SGTuneParams *configs, const SGTuneParams *base) {
+    int k_grid[] = {5, 8, 10, 15, 20, 25, 30, 40, 50};
+    int n = (int)(sizeof(k_grid) / sizeof(k_grid[0]));
+    int count = 0;
+    int i;
+
+    for (i = 0; i < n && count < MAX_CONFIGS; i++) {
+        configs[count] = *base;
+        configs[count].neighbor_k = k_grid[i];
+        count++;
+    }
+    return count;
+}
+
 /* ---- Multi-Seed Verification ---- */
 
 static void verify_top_results(const TuneInstance *instances, int num_instances,
@@ -853,7 +872,7 @@ static void print_usage(const char *argv0) {
     printf("Usage: %s [options]\n\n", argv0);
     printf("Hyperparameter tuner for Surge VRP solver.\n\n");
     printf("Options:\n");
-    printf("  --tier <0-5>          Tune specific tier (default: 0)\n");
+    printf("  --tier <0-6>          Tune specific tier (default: 0)\n");
     printf("  --all-tiers           Tune all tiers sequentially (carry best forward)\n");
     printf("  --iterations <n>      ALNS iterations per instance (default: 2500)\n");
     printf("  --seed <n>            Base seed (default: 42)\n");
@@ -952,7 +971,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "Loaded %d results from checkpoint: %s\n",
                     loaded, checkpoint_path);
             int td = 0;
-            for (i = 0; i < 6; i++) if (cp.tier_done[i]) td++;
+            for (i = 0; i < 7; i++) if (cp.tier_done[i]) td++;
             if (td > 0) fprintf(stderr, "  %d tier(s) fully completed\n", td);
         }
         /* Open for appending */
@@ -1001,12 +1020,12 @@ int main(int argc, char **argv) {
         int t;
 
         /* Restore base_params from completed tiers in checkpoint */
-        for (t = 0; t < 6 && cp.tier_done[t]; t++) {
+        for (t = 0; t < 7 && cp.tier_done[t]; t++) {
             base_params = cp.tier_best[t];
             fprintf(stderr, "\n=== Tier %d === (completed, restored from checkpoint)\n", t);
         }
 
-        for (; t <= 5; t++) {
+        for (; t <= 6; t++) {
             fprintf(stderr, "\n=== Tier %d ===\n", t);
 
             /* Clear results for this tier */
@@ -1019,6 +1038,7 @@ int main(int argc, char **argv) {
                 case 3: num_configs = generate_tier3(configs, &base_params); break;
                 case 4: num_configs = generate_tier4(configs, &base_params); break;
                 case 5: num_configs = generate_tier5(configs, &base_params); break;
+                case 6: num_configs = generate_tier6(configs, &base_params); break;
                 default: num_configs = 0; break;
             }
 
@@ -1060,6 +1080,7 @@ int main(int argc, char **argv) {
             case 3: num_configs = generate_tier3(configs, &base_params); break;
             case 4: num_configs = generate_tier4(configs, &base_params); break;
             case 5: num_configs = generate_tier5(configs, &base_params); break;
+            case 6: num_configs = generate_tier6(configs, &base_params); break;
             default: num_configs = 0; break;
         }
 
