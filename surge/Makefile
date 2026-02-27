@@ -31,11 +31,12 @@ DEBUG_LDFLAGS = -fsanitize=address,undefined
 SRCS = src/sg_context.c src/sg_solution.c src/sg_cost.c src/sg_feasibility.c \
        src/sg_construct.c src/sg_destroy.c src/sg_repair.c src/sg_postprocess.c \
        src/sg_solve.c src/sg_reader.c src/sg_api.c src/sg_parallel.c \
-       src/sg_validate.c src/sg_penalty.c
+       src/sg_validate.c src/sg_penalty.c src/sg_time_budget.c
 OBJS = $(SRCS:.c=.o)
 
 LIB = libsurge.a
 TEST_BIN = test_surge
+TEST_TB_BIN = test_time_budget
 BENCH_SOL_BIN = bench_solomon
 BENCH_PD_BIN = bench_li_lim
 BENCH_CORD_BIN = bench_cordeau
@@ -85,6 +86,9 @@ src/%.o: src/%.c
 $(TEST_BIN): tests/test_surge.c $(LIB) ../arbor/libarbor.a ../shared/libshared.a
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lsurge -L../arbor -larbor -L../shared -lshared $(LDFLAGS) -o $@
 
+$(TEST_TB_BIN): tests/test_time_budget.c src/sg_time_budget.c src/sg_time_budget.h
+	$(CC) $(CFLAGS) -Isrc tests/test_time_budget.c src/sg_time_budget.c $(LDFLAGS) -o $@
+
 BENCH_INCLUDES = $(INCLUDES) -Ibenchmarks
 
 $(BENCH_SOL_BIN): benchmarks/bench_solomon.c benchmarks/sg_bench_utils.h $(LIB) ../arbor/libarbor.a ../shared/libshared.a
@@ -105,7 +109,8 @@ $(BENCH_TUNE_BIN): benchmarks/bench_tune.c benchmarks/sg_bench_utils.h $(LIB) ..
 ../shared/libshared.a:
 	$(MAKE) -C ../shared lib
 
-test: $(TEST_BIN)
+test: $(TEST_BIN) $(TEST_TB_BIN)
+	./$(TEST_TB_BIN)
 	./$(TEST_BIN)
 
 bench: $(BENCH_SOL_BIN)
@@ -234,7 +239,7 @@ tsan: $(TSAN_TEST_BIN)
 	./$(TSAN_TEST_BIN)
 
 clean:
-	rm -f $(OBJS) $(LIB) $(TEST_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(BENCH_TUNE_BIN) $(SHARED_LIB) \
+	rm -f $(OBJS) $(LIB) $(TEST_BIN) $(TEST_TB_BIN) $(BENCH_SOL_BIN) $(BENCH_PD_BIN) $(BENCH_CORD_BIN) $(BENCH_TUNE_BIN) $(SHARED_LIB) \
 	  $(FUZZ_BIN) $(TSAN_TEST_BIN)
 
 help:
