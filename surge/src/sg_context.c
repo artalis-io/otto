@@ -268,6 +268,9 @@ SGContext *sg_create(void) {
     ctx->demand_sign_convention = SG_DEMAND_PICKUP_POSITIVE_DELIVERY_NEGATIVE;
     ctx->dimension_count = 1;
     ctx->unassigned_weight = SG_ROUTE_OBJECTIVE_UNASSIGNED_WEIGHT;
+    /* Default to unlimited time budget so postprocessing functions work
+       when called outside of sg_solve_route_model() (e.g., from tests). */
+    ctx->time_budget.deadline = -1.0;
     return ctx;
 }
 

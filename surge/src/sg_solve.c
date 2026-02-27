@@ -1,7 +1,4 @@
 #include "sg_internal.h"
-#include "sg_time_budget.h"
-
-#include <time.h>
 
 /* Apply tune parameter overrides to ALNS params (rewards, reaction, segment_size) */
 static void sg_apply_tune_to_alns(const SGContext *ctx, ARALNSParams *params) {
@@ -12,12 +9,6 @@ static void sg_apply_tune_to_alns(const SGContext *ctx, ARALNSParams *params) {
     if (tp->reward_better != SG_TUNE_SENTINEL_D) params->reward_better = tp->reward_better;
     if (tp->reward_accepted != SG_TUNE_SENTINEL_D) params->reward_accepted = tp->reward_accepted;
     if (tp->segment_size != SG_TUNE_SENTINEL_I) params->segment_size = tp->segment_size;
-}
-
-static double sg_monotonic_seconds(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
 /* Write a convergence entry to ring buffer and/or fire callback */
