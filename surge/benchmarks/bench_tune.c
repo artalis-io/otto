@@ -89,7 +89,7 @@ static void lin_grid(double lo, double hi, int n, double *out) {
 
 /* ---- Evaluation ---- */
 
-#define MAX_TUNE_INSTANCES 24
+#define MAX_TUNE_INSTANCES 64
 
 typedef struct {
     SGTuneParams params;
@@ -106,7 +106,8 @@ typedef struct {
 } TuneResult;
 
 static double evaluate_instance(const TuneInstance *inst, const SGTuneParams *params,
-                                int max_iterations, uint64_t seed,
+                                int max_iterations, int max_time_seconds,
+                                uint64_t seed,
                                 double *out_vgap, double *out_dgap) {
     SGContext *ctx = sg_create();
     SGConfig cfg;
@@ -123,6 +124,7 @@ static double evaluate_instance(const TuneInstance *inst, const SGTuneParams *pa
 
     sg_config_default(&cfg);
     cfg.max_iterations = max_iterations;
+    cfg.max_time_seconds = max_time_seconds;
     cfg.seed = seed;
     cfg.deterministic = true;
     cfg.require_bound_requests_at_solve = true;
@@ -178,7 +180,8 @@ static double evaluate_instance(const TuneInstance *inst, const SGTuneParams *pa
 
 static void evaluate_config(const TuneInstance *instances, int num_instances,
                             const SGTuneParams *params, int max_iterations,
-                            uint64_t seed, TuneResult *result) {
+                            int max_time_seconds, uint64_t seed,
+                            TuneResult *result) {
     double sum_vgap = 0.0, sum_dgap = 0.0;
     double worst_vgap = -1e9;
     double total_time = 0.0;
@@ -190,8 +193,8 @@ static void evaluate_config(const TuneInstance *instances, int num_instances,
 
     for (i = 0; i < num_instances; i++) {
         double vgap, dgap;
-        double t = evaluate_instance(&instances[i], params, max_iterations, seed,
-                                     &vgap, &dgap);
+        double t = evaluate_instance(&instances[i], params, max_iterations,
+                                     max_time_seconds, seed, &vgap, &dgap);
         if (i < MAX_TUNE_INSTANCES) {
             result->inst_vgap[i] = vgap;
             result->inst_dgap[i] = dgap;
@@ -416,7 +419,7 @@ static int cp_load(CheckpointState *cp, const char *path) {
 
         } else if (strcmp(type, "tier_done") == 0) {
             int tier = sh_json_as_int(sh_json_get(root, "tier"), -1);
-            if (tier >= 0 && tier < 6) {
+            if (tier >= 0 && tier < 7) {
                 cp->tier_done[tier] = 1;
                 cp_parse_params(sh_json_get(root, "best_params"), &cp->tier_best[tier]);
             }
@@ -452,6 +455,7 @@ typedef struct {
     const TuneInstance *instances;
     int num_instances;
     int max_iterations;
+    int max_time_seconds;
     uint64_t seed;
     SGTuneParams *configs;   /* array of configurations */
     TuneResult *results;     /* output array */
@@ -485,7 +489,8 @@ static void *tune_worker(void *arg) {
 
         evaluate_config(wctx->instances, wctx->num_instances,
                         &wctx->configs[idx], wctx->max_iterations,
-                        wctx->seed, &wctx->results[idx]);
+                        wctx->max_time_seconds, wctx->seed,
+                        &wctx->results[idx]);
 
         /* Write checkpoint line */
         if (wctx->checkpoint) {
@@ -509,7 +514,8 @@ static void *tune_worker(void *arg) {
 
 static void evaluate_configs_parallel(const TuneInstance *instances, int num_instances,
                                       SGTuneParams *configs, int num_configs,
-                                      int max_iterations, uint64_t seed,
+                                      int max_iterations, int max_time_seconds,
+                                      uint64_t seed,
                                       int num_threads, TuneResult *results,
                                       int current_tier, CheckpointState *checkpoint) {
     TuneWorkContext wctx;
@@ -533,6 +539,7 @@ static void evaluate_configs_parallel(const TuneInstance *instances, int num_ins
     wctx.instances = instances;
     wctx.num_instances = num_instances;
     wctx.max_iterations = max_iterations;
+    wctx.max_time_seconds = max_time_seconds;
     wctx.seed = seed;
     wctx.configs = configs;
     wctx.results = results;
@@ -550,7 +557,8 @@ static void evaluate_configs_parallel(const TuneInstance *instances, int num_ins
         for (i = 0; i < num_configs; i++) {
             if (results[i].valid) continue; /* Skip cached */
             evaluate_config(instances, num_instances, &configs[i],
-                            max_iterations, seed, &results[i]);
+                            max_iterations, max_time_seconds, seed,
+                            &results[i]);
             if (checkpoint) {
                 cp_write_result(checkpoint, current_tier, i,
                                 &results[i], instances);
@@ -841,7 +849,8 @@ static int generate_tier6(SGTuneParams *configs, const SGTuneParams *base) {
 
 static void verify_top_results(const TuneInstance *instances, int num_instances,
                                TuneResult *results, int top_n,
-                               int max_iterations, int num_threads) {
+                               int max_iterations, int max_time_seconds,
+                               int num_threads) {
     uint64_t seeds[] = {42, 123, 456, 789};
     int num_seeds = (int)(sizeof(seeds) / sizeof(seeds[0]));
     int i, s;
@@ -854,7 +863,8 @@ static void verify_top_results(const TuneInstance *instances, int num_instances,
         for (s = 0; s < num_seeds; s++) {
             TuneResult verify;
             evaluate_config(instances, num_instances, &results[i].params,
-                            max_iterations, seeds[s], &verify);
+                            max_iterations, max_time_seconds, seeds[s],
+                            &verify);
             total_score += verify.composite_score;
         }
         /* Replace score with multi-seed average */
@@ -875,6 +885,7 @@ static void print_usage(const char *argv0) {
     printf("  --tier <0-6>          Tune specific tier (default: 0)\n");
     printf("  --all-tiers           Tune all tiers sequentially (carry best forward)\n");
     printf("  --iterations <n>      ALNS iterations per instance (default: 2500)\n");
+    printf("  --time-limit <sec>    Wall-clock time limit per instance (0=none, default: 0)\n");
     printf("  --seed <n>            Base seed (default: 42)\n");
     printf("  --threads <n>         Parallel config evaluations (default: 4)\n");
     printf("  --top <n>             Report top N configs (default: 10)\n");
@@ -883,13 +894,18 @@ static void print_usage(const char *argv0) {
     printf("  --baseline            Run defaults first for comparison\n");
     printf("  --checkpoint <file>   Checkpoint file for resume (default: surge_tune.jsonl)\n");
     printf("  --no-checkpoint       Disable checkpointing\n");
-    printf("  --solomon-dir <p>     Path to Solomon instances (overrides representative set)\n");
-    printf("  --li-lim-dir <p>      Path to Li-Lim instances (overrides representative set)\n");
+    printf("  --dir <path>          Instance directory (overrides representative set)\n");
+    printf("  --bks <csv>           BKS CSV file for custom instances\n");
+    printf("  --size <n>            Filter instances by size (e.g., 400 for GH-400)\n");
+    printf("  --loader <type>       Instance format: solomon (default) or li_lim\n");
     printf("  --help                Show this help\n");
     printf("\nCheckpoint/Resume:\n");
     printf("  Results are saved to a JSONL checkpoint file as they complete.\n");
     printf("  On restart, already-evaluated configs are skipped automatically.\n");
     printf("  The JSONL file is also ML-ready training data for surrogate models.\n");
+    printf("\nCustom Instance Sets:\n");
+    printf("  --dir benchmarks/gehring_homberger --bks benchmarks/bks/gehring_homberger.csv --size 400\n");
+    printf("  --dir benchmarks/li_lim_extended --bks benchmarks/bks/li_lim_extended.csv --size 400 --loader li_lim\n");
     printf("\nTiers (tuned in order of impact):\n");
     printf("  0: Phase budget split (phase1_fraction, phase15_iters)    25 configs\n");
     printf("  1: SA temperature (sa_accept_pct, final_temp_ratios)     80 configs\n");
@@ -897,12 +913,14 @@ static void print_usage(const char *argv0) {
     printf("  3: ALNS rewards (reaction, reward_best/better/accepted) ~256 configs\n");
     printf("  4: Destruction sizing (worst/shaw randomness, string_l)   64 configs\n");
     printf("  5: Extended randomness (route_cluster, time, pd, route)   81 configs\n");
+    printf("  6: Neighbor pruning k (insertion repair speed vs quality)   9 configs\n");
 }
 
 int main(int argc, char **argv) {
     int tier = 0;
     int all_tiers = 0;
     int max_iterations = 2500;
+    int max_time_seconds = 0;
     uint64_t seed = 42;
     int num_threads = 4;
     int top_n = 10;
@@ -911,6 +929,10 @@ int main(int argc, char **argv) {
     int run_baseline = 0;
     const char *checkpoint_path = "surge_tune.jsonl";
     int use_checkpoint = 1;
+    const char *custom_dir = NULL;
+    const char *bks_path = NULL;
+    int custom_size = 0;
+    int custom_loader = 0; /* 0=solomon, 1=li_lim */
     int i;
 
     SGTuneParams base_params;
@@ -920,6 +942,13 @@ int main(int argc, char **argv) {
     int num_configs = 0;
     CheckpointState cp;
 
+    /* Instance set (defaults to k_representative, overridden by --dir) */
+    const TuneInstance *instances = k_representative;
+    int num_instances = NUM_REPRESENTATIVE;
+    TuneInstance *dynamic_instances = NULL;
+    SGBenchCase *dyn_cases = NULL;
+    int dyn_case_count = 0;
+
     cp_init(&cp);
 
     /* Parse CLI */
@@ -928,11 +957,13 @@ int main(int argc, char **argv) {
             print_usage(argv[0]);
             return 0;
         } else if (strcmp(argv[i], "--tier") == 0 && i + 1 < argc) {
-            tier = sh_parse_int(argv[++i], 0, 0, 5);
+            tier = sh_parse_int(argv[++i], 0, 0, 6);
         } else if (strcmp(argv[i], "--all-tiers") == 0) {
             all_tiers = 1;
         } else if (strcmp(argv[i], "--iterations") == 0 && i + 1 < argc) {
             max_iterations = sh_parse_int(argv[++i], 2500, 1, 1000000);
+        } else if (strcmp(argv[i], "--time-limit") == 0 && i + 1 < argc) {
+            max_time_seconds = sh_parse_int(argv[++i], 0, 0, 86400);
         } else if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
             seed = (uint64_t)strtoull(argv[++i], NULL, 10);
         } else if (strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {
@@ -949,6 +980,18 @@ int main(int argc, char **argv) {
             checkpoint_path = argv[++i];
         } else if (strcmp(argv[i], "--no-checkpoint") == 0) {
             use_checkpoint = 0;
+        } else if (strcmp(argv[i], "--dir") == 0 && i + 1 < argc) {
+            custom_dir = argv[++i];
+        } else if (strcmp(argv[i], "--bks") == 0 && i + 1 < argc) {
+            bks_path = argv[++i];
+        } else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
+            custom_size = sh_parse_int(argv[++i], 0, 0, 10000);
+        } else if (strcmp(argv[i], "--loader") == 0 && i + 1 < argc) {
+            i++;
+            if (strcmp(argv[i], "li_lim") == 0 || strcmp(argv[i], "pdptw") == 0)
+                custom_loader = 1;
+            else
+                custom_loader = 0;
         } else {
             fprintf(stderr, "Error: unknown option '%s'\n", argv[i]);
             print_usage(argv[0]);
@@ -956,13 +999,78 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (tier < 0 || tier > 5) {
-        fprintf(stderr, "Error: tier must be 0-5\n");
+    if (tier < 0 || tier > 6) {
+        fprintf(stderr, "Error: tier must be 0-6\n");
         return 1;
     }
     if (num_threads < 1) num_threads = 1;
     if (top_n < 1) top_n = 1;
     if (verify_n < 0) verify_n = 0;
+
+    /* Build custom instance set from --dir if specified */
+    if (custom_dir) {
+        SGBKSEntry bks_entries[2048];
+        int num_bks = 0;
+        int c;
+
+        dyn_case_count = sg_collect_cases(custom_dir, custom_size, &dyn_cases);
+        if (dyn_case_count <= 0) {
+            fprintf(stderr, "Error: no instances found in %s", custom_dir);
+            if (custom_size > 0) fprintf(stderr, " (size=%d)", custom_size);
+            fprintf(stderr, "\n");
+            cp_free(&cp);
+            return 1;
+        }
+
+        qsort(dyn_cases, (size_t)dyn_case_count, sizeof(*dyn_cases),
+              sg_compare_bench_cases);
+
+        if (bks_path) {
+            num_bks = sg_load_bks_csv(bks_path, bks_entries, 2048);
+            if (num_bks < 0) {
+                fprintf(stderr, "Warning: cannot load BKS from %s\n", bks_path);
+                num_bks = 0;
+            }
+        }
+
+        dynamic_instances = (TuneInstance *)calloc(
+            (size_t)(dyn_case_count < MAX_TUNE_INSTANCES ? dyn_case_count : MAX_TUNE_INSTANCES),
+            sizeof(TuneInstance));
+        if (!dynamic_instances) {
+            fprintf(stderr, "Error: out of memory\n");
+            sg_free_bench_cases(dyn_cases, dyn_case_count);
+            cp_free(&cp);
+            return 1;
+        }
+
+        num_instances = 0;
+        for (c = 0; c < dyn_case_count && num_instances < MAX_TUNE_INSTANCES; c++) {
+            char key[64];
+            const SGBKSEntry *bks;
+            sg_bench_case_key(dyn_cases[c].name, key, sizeof(key));
+            bks = sg_bks_find(bks_entries, num_bks, key);
+
+            dynamic_instances[num_instances].path = dyn_cases[c].path;
+            dynamic_instances[num_instances].name = dyn_cases[c].name;
+            dynamic_instances[num_instances].loader = custom_loader;
+            dynamic_instances[num_instances].bks_vehicles = bks ? bks->vehicles : 0;
+            dynamic_instances[num_instances].bks_distance = bks ? bks->distance : 0.0;
+            num_instances++;
+        }
+        instances = dynamic_instances;
+
+        fprintf(stderr, "Loaded %d instances from %s", num_instances, custom_dir);
+        if (custom_size > 0) fprintf(stderr, " (size=%d)", custom_size);
+        fprintf(stderr, "\n");
+        if (num_bks > 0) {
+            int matched = 0;
+            for (c = 0; c < num_instances; c++) {
+                if (instances[c].bks_vehicles > 0) matched++;
+            }
+            fprintf(stderr, "  %d/%d instances matched BKS entries\n",
+                    matched, num_instances);
+        }
+    }
 
     /* Load existing checkpoint */
     if (use_checkpoint) {
@@ -991,12 +1099,20 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Error: out of memory\n");
         free(configs);
         free(results);
+        free(dynamic_instances);
+        sg_free_bench_cases(dyn_cases, dyn_case_count);
         cp_free(&cp);
         return 1;
     }
 
     /* Initialize base params to all sentinels (= use defaults) */
     sg_tune_params_default(&base_params);
+
+    if (max_time_seconds > 0) {
+        fprintf(stderr, "Time limit: %d seconds per instance\n", max_time_seconds);
+    }
+    fprintf(stderr, "Instance set: %d instances, %d iterations/instance\n",
+            num_instances, max_iterations);
 
     /* Baseline evaluation */
     if (run_baseline) {
@@ -1006,8 +1122,8 @@ int main(int argc, char **argv) {
                     baseline.composite_score);
         } else {
             fprintf(stderr, "Evaluating baseline (default params)...\n");
-            evaluate_config(k_representative, NUM_REPRESENTATIVE, &base_params,
-                            max_iterations, seed, &baseline);
+            evaluate_config(instances, num_instances, &base_params,
+                            max_iterations, max_time_seconds, seed, &baseline);
             cp_write_baseline(&cp, &baseline);
         }
         fprintf(stderr, "  Baseline score: %.4f (V-gap: %.2f, D-gap: %.2f%%, worst-V: %.0f)\n",
@@ -1043,10 +1159,10 @@ int main(int argc, char **argv) {
             }
 
             fprintf(stderr, "  %d configurations to evaluate\n", num_configs);
-            evaluate_configs_parallel(k_representative, NUM_REPRESENTATIVE,
+            evaluate_configs_parallel(instances, num_instances,
                                      configs, num_configs, max_iterations,
-                                     seed, num_threads, results,
-                                     t, use_checkpoint ? &cp : NULL);
+                                     max_time_seconds, seed, num_threads,
+                                     results, t, use_checkpoint ? &cp : NULL);
 
             qsort(results, (size_t)num_configs, sizeof(TuneResult), compare_results);
 
@@ -1062,8 +1178,9 @@ int main(int argc, char **argv) {
 
         /* Verify final top results */
         if (verify_n > 0 && verify_n <= num_configs) {
-            verify_top_results(k_representative, NUM_REPRESENTATIVE,
-                               results, verify_n, max_iterations, num_threads);
+            verify_top_results(instances, num_instances,
+                               results, verify_n, max_iterations,
+                               max_time_seconds, num_threads);
         }
 
     } else {
@@ -1085,17 +1202,18 @@ int main(int argc, char **argv) {
         }
 
         fprintf(stderr, "%d configurations to evaluate\n", num_configs);
-        evaluate_configs_parallel(k_representative, NUM_REPRESENTATIVE,
+        evaluate_configs_parallel(instances, num_instances,
                                  configs, num_configs, max_iterations,
-                                 seed, num_threads, results,
-                                 tier, use_checkpoint ? &cp : NULL);
+                                 max_time_seconds, seed, num_threads,
+                                 results, tier, use_checkpoint ? &cp : NULL);
 
         qsort(results, (size_t)num_configs, sizeof(TuneResult), compare_results);
 
         /* Multi-seed verification */
         if (verify_n > 0 && verify_n <= num_configs) {
-            verify_top_results(k_representative, NUM_REPRESENTATIVE,
-                               results, verify_n, max_iterations, num_threads);
+            verify_top_results(instances, num_instances,
+                               results, verify_n, max_iterations,
+                               max_time_seconds, num_threads);
         }
     }
 
@@ -1105,9 +1223,10 @@ int main(int argc, char **argv) {
         printf("{\n");
         printf("  \"tier\": %d,\n", all_tiers ? -1 : tier);
         printf("  \"iterations\": %d,\n", max_iterations);
+        printf("  \"time_limit\": %d,\n", max_time_seconds);
         printf("  \"seed\": %llu,\n", (unsigned long long)seed);
         printf("  \"num_configs_evaluated\": %d,\n", num_configs);
-        printf("  \"num_instances\": %d,\n", NUM_REPRESENTATIVE);
+        printf("  \"num_instances\": %d,\n", num_instances);
         if (run_baseline) {
             printf("  \"baseline\": {\n");
             printf("    \"composite_score\": %.4f,\n", baseline.composite_score);
@@ -1153,6 +1272,8 @@ int main(int argc, char **argv) {
 
     free(configs);
     free(results);
+    free(dynamic_instances);
+    sg_free_bench_cases(dyn_cases, dyn_case_count);
     cp_free(&cp);
     return 0;
 }
