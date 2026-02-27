@@ -704,11 +704,12 @@
             <h1>VRP optimization kernel that runs anywhere</h1>
             <p>
                 Surge is a rich Vehicle Routing Problem solver written in C11 with zero external dependencies.
-                25+ constraint types, BKS-competitive solution quality, compiles to a ~200KB static library
-                or a 361KB WebAssembly module. Same solver runs in a browser, on the edge, or in a datacenter.
+                25+ constraint types, BKS-competitive solution quality (beats published best-known average
+                distance on Solomon VRPTW), compiles to a ~200KB static library or a 361KB WebAssembly module.
+                Same solver runs in a browser, on the edge, or in a datacenter.
             </p>
             <div class="badges">
-                <span class="badge green">340+ tests</span>
+                <span class="badge green">374 tests</span>
                 <span class="badge blue">25+ constraints</span>
                 <span class="badge yellow">Zero deps</span>
                 <span class="badge">C11</span>
@@ -739,7 +740,7 @@
                     <div class="feature-card-title">Quality without compromise</div>
                     <div class="feature-card-desc">
                         Population-based ALNS with infeasible-space exploration. Beats BKS average distance on Solomon VRPTW.
-                        Matches vehicle count on 46/56 instances. Not a toy &mdash; a production-grade metaheuristic.
+                        Matches vehicle count on 45/56 instances. Not a toy &mdash; a production-grade metaheuristic.
                     </div>
                 </div>
                 <div class="feature-card">
@@ -855,11 +856,11 @@
                     <div class="stat-label">Solomon Dist Gap</div>
                 </div>
                 <div class="stat">
-                    <div class="stat-value blue">46/56</div>
+                    <div class="stat-value blue">45/56</div>
                     <div class="stat-label">Solomon Veh Match</div>
                 </div>
                 <div class="stat">
-                    <div class="stat-value yellow">+3.7%</div>
+                    <div class="stat-value yellow">+3.3%</div>
                     <div class="stat-label">Li &amp; Lim Dist Gap</div>
                 </div>
                 <div class="stat">
@@ -886,7 +887,7 @@
                         <td>9</td>
                         <td>9/9</td>
                         <td>0.00</td>
-                        <td style="color: var(--success)">exact BKS</td>
+                        <td style="color: var(--success)">+0.2%</td>
                     </tr>
                     <tr>
                         <td>C2xx (clustered, wide TW)</td>
@@ -898,36 +899,36 @@
                     <tr>
                         <td>R1xx (random, tight TW)</td>
                         <td>12</td>
-                        <td>5/12</td>
-                        <td>+0.58</td>
-                        <td style="color: var(--warning)">+1 veh / better dist</td>
+                        <td>6/12</td>
+                        <td>+0.50</td>
+                        <td style="color: var(--warning)">-0.6% (trades +1 veh)</td>
                     </tr>
                     <tr>
                         <td>R2xx (random, wide TW)</td>
                         <td>11</td>
-                        <td>11/11</td>
-                        <td>0.00</td>
+                        <td>10/11</td>
+                        <td>+0.09</td>
                         <td style="color: var(--success)">-0.3%</td>
                     </tr>
                     <tr>
                         <td>RC1xx (mixed, tight TW)</td>
                         <td>8</td>
-                        <td>5/8</td>
-                        <td>+0.38</td>
-                        <td style="color: var(--warning)">+1 veh / better dist</td>
+                        <td>4/8</td>
+                        <td>+0.50</td>
+                        <td style="color: var(--warning)">-0.6% (trades +1 veh)</td>
                     </tr>
                     <tr>
                         <td>RC2xx (mixed, wide TW)</td>
                         <td>8</td>
                         <td>8/8</td>
                         <td>0.00</td>
-                        <td style="color: var(--success)">-0.5%</td>
+                        <td style="color: var(--success)">+1.3%</td>
                     </tr>
                     <tr class="highlight">
                         <td><strong>Overall</strong></td>
                         <td>56</td>
-                        <td><strong>46/56</strong></td>
-                        <td><strong>+0.18</strong></td>
+                        <td><strong>45/56</strong></td>
+                        <td><strong>+0.20</strong></td>
                         <td style="color: var(--success); font-weight: 600"><strong>-0.1%</strong></td>
                     </tr>
                 </tbody>
@@ -950,8 +951,8 @@
                         <td>LC1xx (clustered, tight TW)</td>
                         <td>9</td>
                         <td>5/9</td>
-                        <td>+0.89</td>
-                        <td>+8.2%</td>
+                        <td>+1.22</td>
+                        <td>+15.6%</td>
                     </tr>
                     <tr>
                         <td>LC2xx (clustered, wide TW)</td>
@@ -963,9 +964,9 @@
                     <tr>
                         <td>LR1xx (random, tight TW)</td>
                         <td>12</td>
-                        <td>7/12</td>
+                        <td>9/12</td>
                         <td>+0.83</td>
-                        <td>+5.6%</td>
+                        <td>+3.0%</td>
                     </tr>
                     <tr>
                         <td>LR2xx (random, wide TW)</td>
@@ -977,23 +978,23 @@
                     <tr>
                         <td>LRC1xx (mixed, tight TW)</td>
                         <td>8</td>
-                        <td>8/8</td>
-                        <td>0.00</td>
-                        <td>+2.1%</td>
+                        <td>6/8</td>
+                        <td>+0.25</td>
+                        <td>+0.6%</td>
                     </tr>
                     <tr>
                         <td>LRC2xx (mixed, wide TW)</td>
                         <td>8</td>
                         <td>8/8</td>
                         <td>0.00</td>
-                        <td style="color: var(--success)">exact BKS</td>
+                        <td style="color: var(--success)">+0.4%</td>
                     </tr>
                     <tr class="highlight">
                         <td><strong>Overall</strong></td>
                         <td>56</td>
                         <td><strong>47/56</strong></td>
-                        <td><strong>+0.39</strong></td>
-                        <td style="font-weight: 600"><strong>+3.7%</strong></td>
+                        <td><strong>+0.41</strong></td>
+                        <td style="font-weight: 600"><strong>+3.3%</strong></td>
                     </tr>
                 </tbody>
             </table>
@@ -1001,9 +1002,11 @@
             <div class="callout honest">
                 <p>
                     <strong>Honest assessment.</strong> The remaining vehicle gap is concentrated on tight-TW R1/RC1
-                    instances, where Surge trades +1 vehicle for better distance (e.g. R104: +1 veh / -1.5% dist).
+                    Solomon and LC1 Li-Lim instances, where Surge trades +1 vehicle for better distance
+                    (e.g. R104: +1 veh / -1.3% dist). LC1xx PDPTW is hardest (+15.6% avg dist gap).
                     These instances likely require higher iteration budgets or specialized tight-TW operators.
                     On wide-TW and clustered instances, Surge matches or beats BKS consistently.
+                    Large-scale benchmarks (200-1000 customers) are pending.
                 </p>
             </div>
 
@@ -1020,13 +1023,13 @@
                 <tbody>
                     <tr>
                         <td>Solomon 100-customer</td>
-                        <td>~9.2s single-thread</td>
-                        <td>10K iterations, optimized build</td>
+                        <td>~52s avg (population)</td>
+                        <td>10K iterations, 3 generations, auto threads</td>
                     </tr>
                     <tr>
-                        <td>Population mode</td>
-                        <td>~31s total</td>
-                        <td>3 generations, auto threads</td>
+                        <td>Li &amp; Lim 100-request</td>
+                        <td>~29s avg (population)</td>
+                        <td>10K iterations, 3 generations, auto threads</td>
                     </tr>
                     <tr>
                         <td>Malloc in hot loop</td>
@@ -1629,7 +1632,7 @@ time_dim.<span class="func">CumulVar</span>(
                     <div class="stat-label">Lines of C</div>
                 </div>
                 <div class="stat">
-                    <div class="stat-value green">340+</div>
+                    <div class="stat-value green">374</div>
                     <div class="stat-label">Tests</div>
                 </div>
                 <div class="stat">
@@ -1672,7 +1675,7 @@ time_dim.<span class="func">CumulVar</span>(
 <span class="command">git clone https://github.com/ottofleet/otto.git</span>
 <span class="command">cd otto && make surge</span>
 
-<span class="comment"># Run tests (340+ tests)</span>
+<span class="comment"># Run tests (374 tests)</span>
 <span class="command">make test-surge</span>
 
 <span class="comment"># Run Solomon benchmarks</span>

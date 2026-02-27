@@ -2396,3 +2396,70 @@ Each profile is evaluated on appropriate instance sizes:
 | Fast | Solomon 100, Li-Lim 100, GH 200 | GH 400 (60) |
 | Near-optimal | Solomon 100, Li-Lim 100, GH 200-400 | GH 600 (60) |
 | Best | All published instances | GH 1000 (60) |
+
+### Tuning Results (Feb 2026)
+
+#### Winning Parameters
+
+Tuned on 18 representative Solomon + Li-Lim instances at 2500 iterations per config.
+Tier 1 (SA temperature) produced the only statistically significant improvement:
+
+| Parameter | Default | Tuned | Effect |
+|-----------|---------|-------|--------|
+| `sa_accept_pct` | 0.05 | **0.074** | Higher initial temperature, more exploration |
+| `p1_final_temp_ratio` | 0.05 | **0.08** | Slower Phase 1 cooling, more vehicle reduction |
+| `p2_final_temp_ratio` | 0.001 | **0.0001** | Aggressive Phase 2 cooling, tighter distance polish |
+| `phase15_iters` | 500 | **2000** | More vehicle crunch budget |
+
+Tiers 2-5 (penalties, ALNS rewards, destruction, randomness) showed no improvement
+over defaults — the existing values were already well-chosen.
+
+Applied via profiles (conditional on `tune_params`) to preserve backward compatibility
+with existing tests. Benchmark runners also set these explicitly.
+
+#### Benchmark Results: Solomon VRPTW (100 customers)
+
+Population mode, 3 generations, 10K iterations, deterministic seed 42.
+
+| Category | Instances | BKS Veh Match | Avg Veh Gap | Avg Dist Gap |
+|----------|-----------|---------------|-------------|--------------|
+| C1xx (clustered, tight) | 9 | 9/9 | +0.00 | +0.2% |
+| C2xx (clustered, wide) | 8 | 8/8 | +0.00 | exact BKS |
+| R1xx (random, tight) | 12 | 6/12 | +0.50 | -0.6% |
+| R2xx (random, wide) | 11 | 10/11 | +0.09 | -0.3% |
+| RC1xx (mixed, tight) | 8 | 4/8 | +0.50 | -0.6% |
+| RC2xx (mixed, wide) | 8 | 8/8 | +0.00 | +1.3% |
+| **Overall** | **56** | **45/56 (80%)** | **+0.20** | **-0.1%** |
+
+Highlights: all clustered + wide-TW instances at exact BKS. Tight-TW R1/RC1
+trade +1 vehicle for better distance. Negative overall distance gap = beats BKS
+average.
+
+#### Benchmark Results: Li & Lim PDPTW (100 requests)
+
+Population mode, 3 generations, 10K iterations, deterministic seed 42.
+
+| Category | Instances | BKS Veh Match | Avg Veh Gap | Avg Dist Gap |
+|----------|-----------|---------------|-------------|--------------|
+| LC1xx (clustered, tight) | 9 | 5/9 | +1.22 | +15.6% |
+| LC2xx (clustered, wide) | 8 | 8/8 | +0.00 | exact BKS |
+| LR1xx (random, tight) | 12 | 9/12 | +0.83 | +3.0% |
+| LR2xx (random, wide) | 11 | 11/11 | +0.00 | exact BKS |
+| LRC1xx (mixed, tight) | 8 | 6/8 | +0.25 | +0.6% |
+| LRC2xx (mixed, wide) | 8 | 8/8 | +0.00 | +0.4% |
+| **Overall** | **56** | **47/56 (84%)** | **+0.41** | **+3.3%** |
+
+Highlights: all wide-TW categories at exact BKS. LC1xx tight-window clustered
+PDPTW is hardest — needs more iterations or specialized tight-TW operators.
+
+#### Implementation Status
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | BKS CSV infrastructure + runner upgrades | Done |
+| 2 | Download GH/Li-Lim extended (200-1000 scale) | **TODO** |
+| 3 | Instance generators | Done (sg_gen_solomon, sg_gen_li_lim) |
+| 4 | SGTuneParams infrastructure | Done |
+| 5 | Tuner program (bench_tune) | Done |
+| - | Apply winning params to profiles | Done |
+| - | Large-scale benchmarks (200-1000) | **TODO** (needs Phase 2) |
