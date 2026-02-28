@@ -2462,7 +2462,7 @@ PDPTW is hardest — needs more iterations or specialized tight-TW operators.
 | 4 | SGTuneParams infrastructure | Done |
 | 5 | Tuner program (bench_tune) | Done |
 | - | Apply winning params to profiles | Done |
-| - | Large-scale benchmarks (200-1000) | Done (200-customer) |
+| - | Large-scale benchmarks (200-1000) | Done (200 + 400 customer) |
 
 #### Benchmark Results: Gehring-Homberger VRPTW (60 instances, 200 customers each)
 
@@ -2633,34 +2633,60 @@ loop), `sg_solve.c` (build at solve start), `sg_context.c` (storage).
 
 **Estimated effort:** 1-2 days.
 
-#### Phase 4: Postprocessing Complexity Reduction
+#### Phase 4: Postprocessing Complexity Reduction ✅ COMPLETE
 
-**Priority: Medium. Reduces wasted work within the time envelope.**
+Postprocessing was consuming disproportionate time budget for n>200 instances.
+Four changes make postprocessing cost-proportional to instance size:
 
-The global time envelope (Phase 1+2) now enforces deadline checks inside every
-postprocessing inner loop, preventing unbounded runtime. However, postprocessing
-operators still have high per-call complexity and may waste budget on unproductive work:
+| Change | Mechanism | Impact |
+|--------|-----------|--------|
+| Adaptive intensify cap | 3 passes (not 8) for n>200 | ~60% less intensify time |
+| Neighbor-aware LS | Prune inter-route moves in exchange, 2-opt*, OR-opt, cross-exchange using k=30 neighbor index | 80-90% fewer futile evaluations |
+| Ejection early exit | Break after 3 consecutive failed vehicle elimination attempts | Stops grinding on intractable eliminations |
+| Skip polish_distance | Gate on `num_requests <= 200 \|\| phase2_iters == 0` | Avoids redundant O(R²) distance pass when Phase 2 ALNS already optimized |
 
-| Operator | Current Complexity | Hot Path |
-|----------|-------------------|----------|
-| `ejection_reduce` | O(vehicles × requests² × budget) | Nested while(restarted) + try-all-ejections |
-| `reduce_vehicles_relaxed` | O(vehicles² × insertions) | Pair-elimination with full reinsertion |
-| `intensify` | O(8 × vehicles × route³) | OR-opt(1,2,3), 2-opt*, exchange, 8 passes |
-| `polish_distance` | O(3 × requests × vehicles × route) | Remove-reinsert, 3 passes |
+All thresholds are below n=100, so Solomon/Li-Lim 100-customer benchmarks are
+unaffected (verified: 374/374 tests pass, Solomon 56/56 identical results).
 
-**Improvements:**
+**Files:** `sg_internal.h` (new constants), `sg_postprocess.c` (4 operator changes +
+ejection counter + adaptive cap), `sg_solve.c` (polish_distance gate).
 
-1. **Limit intensify passes:** Cap at 3 passes (not 8) for n>200. Diminishing returns.
-2. **Neighbor-aware local search:** Use the Phase 3 neighbor index in OR-opt and exchange
-   to skip distant inter-route moves. O(vehicles × route × k) instead of O(vehicles² × route²).
-3. **Early exit in ejection:** If the current ejection chain hasn't improved in N attempts,
-   stop. Currently retries indefinitely.
-4. **Skip polish_distance for large instances:** Phase 2 ALNS already handles distance
-   optimization. Polish is redundant when Phase 2 gets adequate budget (Phase 2 fix).
+#### Benchmark Results: Gehring-Homberger VRPTW Post-Phase-4 (200 customers, 60s limit)
 
-**Files:** `sg_postprocess.c`.
+Single-thread, 10K iterations, 60s time limit, deterministic seed 42.
+Phase 4 postprocessing changes active.
 
-**Estimated effort:** 1 day.
+| Category | Instances | BKS Veh Match | Avg Veh Gap | Avg Dist Gap |
+|----------|-----------|---------------|-------------|--------------|
+| C1_2 (clustered, tight) | 10 | 7/10 | +0.30 | +8.5% |
+| C2_2 (clustered, wide) | 10 | 10/10 | +0.00 | +3.2% |
+| R1_2 (random, tight) | 10 | 10/10 | +0.00 | +20.8% |
+| R2_2 (random, wide) | 10 | 9/10 | +0.10 | +3.0% |
+| RC1_2 (mixed, tight) | 10 | 4/10 | +0.60 | +27.2% |
+| RC2_2 (mixed, wide) | 10 | 7/10 | +0.30 | +5.3% |
+| **Overall** | **60** | **48/60 (80%)** | **+0.20** | **+13.2%** |
+
+Avg runtime: 61.5s (vs 205.7s pre-Phase-4 with same time limit — postprocessing
+no longer dominates).
+
+#### Benchmark Results: Gehring-Homberger VRPTW (400 customers, 60s limit)
+
+First 400-customer results. Single-thread, 10K iterations, 60s time limit, deterministic seed 42.
+
+| Category | Instances | BKS Veh Match | Avg Veh Gap | Avg Dist Gap |
+|----------|-----------|---------------|-------------|--------------|
+| C1_4 (clustered, tight) | 10 | 2/10 | +3.10 | +66.0% |
+| C2_4 (clustered, wide) | 10 | 0/10 | +1.00 | +37.1% |
+| R1_4 (random, tight) | 10 | 10/10 | +0.00 | +67.1% |
+| R2_4 (random, wide) | 10 | 10/10 | +0.00 | +56.8% |
+| RC1_4 (mixed, tight) | 10 | 3/10 | +1.90 | +57.1% |
+| RC2_4 (mixed, wide) | 10 | 4/10 | +0.70 | +24.6% |
+| **Overall** | **60** | **28/60 (47%)** | **+1.42** | **+51.8%** |
+
+Avg runtime: 82.4s. 60s is far too little for 400 customers — BKS papers run for
+hours. R1/R2 vehicle minimization is perfect (random layouts easier to construct
+good initial solutions for). Clustered C1 is hardest (tight TWs + large clusters
+need many more ALNS iterations to restructure routes).
 
 #### Phase 5: Travel Resolution Cache for TD/Callback Models
 
