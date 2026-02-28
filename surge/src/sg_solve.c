@@ -867,7 +867,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
     sg_neighbor_init(&ctx->neighbor_index, ctx,
                      (uint32_t)sg_tune_i(ctx,
                          ctx->tune_params ? ctx->tune_params->neighbor_k : SG_TUNE_SENTINEL_I,
-                         20));
+                         30));
 
     sg_phase_start(ctx, SG_PHASE_CONSTRUCTION, 0.0, 0, ctx->num_requests);
     if (ctx->num_initial_routes > 0) {
