@@ -16,6 +16,7 @@
 #include "sh_stepfunc.h"
 #include "../src/sg_time_budget.h"
 #include "../src/sg_neighbor.h"
+#include "../src/sg_profile_matrix.h"
 
 /* Constants */
 #define SG_UNASSIGNED_PENALTY 10000.0
@@ -435,6 +436,11 @@ struct SGContext {
 
     /* Tunable parameters (NULL = use hardcoded defaults) */
     SGTuneParams *tune_params;
+
+    /* Profile × scale matrix state (deferred resolution) */
+    SGProfile active_profile;    /* SG_PROFILE_COUNT = not set */
+    SGScale   active_scale;      /* SG_SCALE_COUNT = auto-detect */
+    uint8_t   profile_applied;   /* 1 = already resolved in this solve */
 
     /* Infeasible-space exploration penalty manager */
     SGPenaltyManager penalty;

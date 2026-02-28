@@ -80,6 +80,18 @@ typedef enum {
     SG_PROFILE_COUNT = 4
 } SGProfile;
 
+/* Problem scale for profile × scale matrix.
+   Each column targets a request-count range where iteration cost
+   changes qualitatively (O(n²) insertion). */
+typedef enum {
+    SG_SCALE_SMALL   = 0,  /* 1–100 requests */
+    SG_SCALE_MEDIUM  = 1,  /* 101–200 */
+    SG_SCALE_LARGE   = 2,  /* 201–400 */
+    SG_SCALE_XLARGE  = 3,  /* 401–800 */
+    SG_SCALE_MASSIVE = 4,  /* 801+ */
+    SG_SCALE_COUNT   = 5
+} SGScale;
+
 /*
  * Tunable ALNS parameters for hyperparameter optimization.
  * All fields use a sentinel value (-1.0 for doubles, -1 for ints)

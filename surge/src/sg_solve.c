@@ -1445,6 +1445,15 @@ SGStatus sg_solve(SGContext *ctx) {
     if (ctx->num_requests > 0 && ctx->num_vehicles == 0) {
         return SG_STATUS_INFEASIBLE;
     }
+    /* Resolve profile × scale matrix if a profile was set */
+    if (ctx->active_profile < SG_PROFILE_COUNT && !ctx->profile_applied) {
+        SGScale scale = ctx->active_scale;
+        if (scale >= SG_SCALE_COUNT) {
+            scale = sg_scale_from_count(ctx->num_requests);
+        }
+        sg_profile_matrix_apply(ctx, ctx->active_profile, scale);
+        ctx->profile_applied = 1;
+    }
     {
         SGStatus prep_status = sg_prepare_travel(ctx);
         if (prep_status != SG_STATUS_OK) {
