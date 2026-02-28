@@ -217,6 +217,16 @@ static int sg_route_try_exchange_once(const SGContext *ctx, SGRouteSolution *sol
                 continue;
             }
 
+            /* Neighbor pruning: skip inter-route exchange if neither request
+             * has nearby stops on the other vehicle */
+            if (vehicle_a != vehicle_b && ctx->neighbor_index.neighbors) {
+                if (!sg_neighbor_vehicle_has_nearby(&ctx->neighbor_index, ctx,
+                                                     sol, vehicle_b, req_a) &&
+                    !sg_neighbor_vehicle_has_nearby(&ctx->neighbor_index, ctx,
+                                                     sol, vehicle_a, req_b))
+                    continue;
+            }
+
             backup = (SGRouteSolution *)sg_route_solution_copy(sol, (void *)ctx);
             if (!backup) {
                 continue;
@@ -328,6 +338,20 @@ static int sg_route_try_2opt_star_once(const SGContext *ctx, SGRouteSolution *so
             uint32_t cut_a;
             if (len_b < 2) {
                 continue;
+            }
+
+            /* Neighbor pruning: skip vehicle pair if no stops on route_a
+             * are near any stop on route_b */
+            if (ctx->neighbor_index.neighbors) {
+                const uint32_t *ra = sg_route_vehicle_ptr_const(sol, va);
+                int pair_near = 0;
+                uint32_t si;
+                for (si = 0; si < len_a && !pair_near; si++) {
+                    if (sg_neighbor_vehicle_has_nearby(&ctx->neighbor_index, ctx,
+                                                        sol, vb, ra[si]))
+                        pair_near = 1;
+                }
+                if (!pair_near) continue;
             }
 
             route_a = sg_route_vehicle_ptr_const(sol, va);
@@ -538,6 +562,19 @@ static int sg_route_try_or_opt_once(const SGContext *ctx, SGRouteSolution *sol) 
                         continue;
                     }
 
+                    /* Neighbor pruning: skip inter-route OR-opt if no request
+                     * in the segment is near any stop on the target vehicle */
+                    if (va != vb && ctx->neighbor_index.neighbors) {
+                        int any_near = 0;
+                        uint32_t si;
+                        for (si = start; si < start + (uint32_t)k && !any_near; si++) {
+                            if (sg_neighbor_vehicle_has_nearby(&ctx->neighbor_index, ctx,
+                                                                sol, vb, route_a[si]))
+                                any_near = 1;
+                        }
+                        if (!any_near) continue;
+                    }
+
                     if (va == vb) {
                         len_b = src_len;
                         route_b_base = candidate_src;
@@ -740,6 +777,20 @@ static int sg_route_try_cross_exchange_once(const SGContext *ctx, SGRouteSolutio
 
             if (len_b == 0) {
                 continue;
+            }
+
+            /* Neighbor pruning: skip vehicle pair if no stops on route_a
+             * are near any stop on route_b */
+            if (ctx->neighbor_index.neighbors) {
+                const uint32_t *ra_tmp = sg_route_vehicle_ptr_const(sol, va);
+                int pair_near = 0;
+                uint32_t si;
+                for (si = 0; si < len_a && !pair_near; si++) {
+                    if (sg_neighbor_vehicle_has_nearby(&ctx->neighbor_index, ctx,
+                                                        sol, vb, ra_tmp[si]))
+                        pair_near = 1;
+                }
+                if (!pair_near) continue;
             }
 
             route_a = sg_route_vehicle_ptr_const(sol, va);
@@ -1756,6 +1807,8 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
             vehicle_order[j] = key;
         }
 
+        {
+        uint32_t consecutive_fails = 0;
         for (vi = 0; vi < num_nonempty && !restarted; vi++) {
             uint32_t target_v = vehicle_order[vi];
             uint32_t route_len = sol->route_lengths[target_v];
@@ -1854,11 +1907,15 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
                 /* Vehicle eliminated. */
                 sg_route_solution_free(backup, NULL);
                 restarted = 1;
+                consecutive_fails = 0;
             } else {
                 sg_route_restore_from_backup(sol, backup);
+                consecutive_fails++;
+                if (consecutive_fails >= SG_EJECTION_MAX_CONSECUTIVE_FAILS) break;
             }
 
             free(requests);
+        }
         }
 
         free(vehicle_order);
@@ -2059,12 +2116,17 @@ int sg_route_try_pd_reorder_once(const SGContext *ctx, SGRouteSolution *sol) {
 
 ARStatus sg_route_postprocess_intensify(const SGContext *ctx, SGRouteSolution *sol) {
     uint32_t pass;
+    uint32_t max_passes;
 
     if (!ctx || !sol) {
         return AR_STATUS_INVALID_ARG;
     }
 
-    for (pass = 0; pass < SG_ROUTE_MAX_INTENSIFY_PASSES; pass++) {
+    max_passes = SG_ROUTE_MAX_INTENSIFY_PASSES;
+    if (ctx->num_requests > 200)
+        max_passes = SG_ROUTE_MAX_INTENSIFY_PASSES_LARGE;
+
+    for (pass = 0; pass < max_passes; pass++) {
         int improved = 0;
         if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) break;
         if (sg_route_try_or_opt_once(ctx, sol)) {
