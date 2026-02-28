@@ -275,6 +275,8 @@ SGContext *sg_create(void) {
     ctx->active_profile = SG_PROFILE_COUNT;
     ctx->active_scale = SG_SCALE_COUNT;
     ctx->profile_applied = 0;
+    /* Construction: try all methods by default */
+    ctx->construct_method = SG_CONSTRUCT_COUNT;
     return ctx;
 }
 
