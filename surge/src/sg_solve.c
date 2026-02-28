@@ -1296,7 +1296,8 @@ skip_phase2:
                 (void)sg_route_postprocess_ejection_reduce(ctx, best);
             if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
                 (void)sg_route_postprocess_intensify(ctx, best);
-            if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
+            if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()) &&
+                (ctx->num_requests <= 200 || phase2_iters == 0))
                 (void)sg_route_postprocess_polish_distance(ctx, best);
         } else {
             if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
@@ -1305,7 +1306,8 @@ skip_phase2:
                 (void)sg_route_postprocess_ejection_reduce(ctx, &initial);
             if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
                 (void)sg_route_postprocess_intensify(ctx, &initial);
-            if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
+            if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()) &&
+                (ctx->num_requests <= 200 || phase2_iters == 0))
                 (void)sg_route_postprocess_polish_distance(ctx, &initial);
         }
 
