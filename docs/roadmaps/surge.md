@@ -2669,6 +2669,22 @@ Phase 4 postprocessing changes active.
 Avg runtime: 61.5s (vs 205.7s pre-Phase-4 with same time limit — postprocessing
 no longer dominates).
 
+**Before/after comparison (same commit minus Phase 4 changes):**
+
+| Metric | Before | After | Delta |
+|--------|--------|-------|-------|
+| Avg distance | 3520.98 | 3194.43 | **-9.3%** |
+| Avg dist gap vs BKS | +23.4% | +13.2% | **-10.2pp** |
+| Equal vehicles to BKS | 52/60 (87%) | 48/60 (80%) | -7pp |
+| Avg vehicle gap | +0.13 | +0.20 | +0.07 |
+
+Phase 4 cut the distance gap nearly in half by freeing time budget that postprocessing
+was wasting — ALNS gets more iterations within the same 60s envelope. Slight vehicle
+regression (87% → 80%) is the tradeoff: fewer intensify passes means fewer vehicle-
+eliminating local search moves, but net solution quality (distance) is substantially
+better. Biggest winners are R1/RC1 tight-TW instances where the old code ground in
+postprocessing (R1_2_8: +95.4% → +31.7%, RC1_2_4: +129.2% → +59.7%).
+
 #### Benchmark Results: Gehring-Homberger VRPTW (400 customers, 60s limit)
 
 First 400-customer results. Single-thread, 10K iterations, 60s time limit, deterministic seed 42.
