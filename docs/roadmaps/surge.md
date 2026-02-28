@@ -2750,3 +2750,171 @@ from a single postprocessing iteration completing after the deadline.
 
 Phase 3 is where the real scaling unlock happens — it changes iteration cost from O(n)
 to O(k) and should enable 1000-customer instances.
+
+### Profile × Scale Matrix
+
+The profile × scale matrix maps each `(SGProfile, SGScale)` pair to a specific
+`(max_iterations, max_time_seconds, SGTuneParams)` triple. This replaces the previous
+approach where profiles only worked for 100-request instances.
+
+#### Scale Columns
+
+5 breakpoints based on where ALNS iteration cost changes qualitatively:
+
+| Scale | Requests | Rationale |
+|-------|----------|-----------|
+| `SG_SCALE_SMALL` | 1–100 | Current tuning baseline. Same-day delivery. |
+| `SG_SCALE_MEDIUM` | 101–200 | GH-200 benchmark range. Iteration ~2x slower. |
+| `SG_SCALE_LARGE` | 201–400 | GH-400 range. Iteration ~4x slower. Neighbor pruning critical. |
+| `SG_SCALE_XLARGE` | 401–800 | Large fleet operations. |
+| `SG_SCALE_MASSIVE` | 801+ | Full-day planning. Longest budgets. |
+
+Scale selection: snap to the smallest column that covers the request count. No interpolation
+— SA parameters interact nonlinearly.
+
+#### Iteration / Time Budget Matrix
+
+| | SMALL | MEDIUM | LARGE | XLARGE | MASSIVE |
+|---|---|---|---|---|---|
+| **REALTIME** | 500 / 1s | 500 / 2s | 500 / 5s | 250 / 10s | 250 / 15s |
+| **FAST** | 2500 / 5s | 2500 / 10s | 2500 / 30s | 1500 / 60s | 1000 / 90s |
+| **NEAR_OPTIMAL** | 10000 / 15s | 10000 / 45s | 5000 / 120s | 3000 / 300s | 2000 / 600s |
+| **BEST** | 50000 / 60s | 25000 / 180s | 10000 / 600s | 5000 / 1200s | 3000 / 1800s |
+
+All cells start with the 100-request tuned params (sa_accept_pct=0.074, p1_final=0.08,
+p2_final=0.0001, neighbor_k=30). Each cell gets independently tuned via bench_tune.
+
+#### API Design
+
+Profile resolution is deferred to solve time since request count isn't known when the
+profile is set:
+
+```c
+sg_config_set_profile(ctx, SG_PROFILE_FAST);  // stores profile, doesn't apply yet
+// ... add requests ...
+sg_solve(ctx);  // resolves FAST × sg_scale_from_count(num_requests), applies cell
+```
+
+Explicit scale override for cases where the caller knows the problem size class:
+
+```c
+sg_config_set_profile_scale(ctx, SG_PROFILE_FAST, SG_SCALE_LARGE);  // forces LARGE
+```
+
+Manual `sg_set_config()` / `sg_set_tune_params()` without a profile still works identically
+to before — the matrix is only consulted when a profile was set.
+
+#### Files
+
+| File | Role |
+|------|------|
+| `include/sg_types.h` | `SGScale` enum |
+| `src/sg_profile_matrix.h` | `SGProfileCell`, extern matrix, `sg_scale_from_count()` |
+| `src/sg_profile_matrix.c` | Static const 4×5 matrix, apply function |
+| `include/sg_internal.h` | `active_profile`, `active_scale`, `profile_applied` in SGContext |
+| `include/surge.h` | `sg_config_set_profile_scale()` declaration |
+| `src/sg_context.c` | Deferred profile storage, new API |
+| `src/sg_solve.c` | Profile resolution before `sg_prepare_travel()` |
+| `tests/test_profile_matrix.c` | 16 unit tests |
+
+### Tuning Campaign Strategy
+
+#### Overview
+
+Systematic tuning of all 20 cells of the profile × scale matrix using `bench_tune`'s
+tiered grid search. Each cell gets its own JSONL checkpoint file for resume support.
+
+**Tool:** `scripts/tune_matrix.sh` — autonomous, resumable tuning campaign script.
+
+#### Cell Priority Order
+
+Cells tuned in order of production impact:
+
+| Priority | Cell | Instances | Time Budget | Rationale |
+|----------|------|-----------|-------------|-----------|
+| 1 | FAST × LARGE | 60 GH-400 | 30s | Most common production use case |
+| 2 | FAST × MEDIUM | 60 GH-200 | 10s | Medium fleet, common |
+| 3 | NEAR_OPTIMAL × LARGE | 60 GH-400 | 120s | Quality-sensitive large problems |
+| 4 | BEST × LARGE | 60 GH-400 | 600s | Best quality, large |
+| 5 | FAST × SMALL | 18 representative | 5s | Baseline (already tuned) |
+| 6 | NEAR_OPTIMAL × MEDIUM | 60 GH-200 | 45s | |
+| 7 | REALTIME × LARGE | 60 GH-400 | 5s | |
+| 8 | REALTIME × MEDIUM | 60 GH-200 | 2s | |
+| 9–20 | Remaining | GH or representative | varies | XLARGE, MASSIVE, remaining profiles |
+
+SMALL-scale cells (priorities 5, 9, 10, 11) use the 18 representative Solomon + Li-Lim
+instances. All other cells use the Gehring-Homberger instances at matching scale.
+
+#### Instance Subsampling
+
+For expensive cells, bench_tune's `--max-instances` flag selects evenly-spaced instances
+to keep per-config evaluation cost manageable. The stride ensures all 6 GH class types
+(C1, C2, R1, R2, RC1, RC2) are represented.
+
+| Time Budget | Instances Used | Rationale |
+|-------------|---------------|-----------|
+| < 60s | All 60 | Cheap enough to evaluate fully |
+| 60–119s | 30 of 60 | 5 per class |
+| 120–599s | 18 of 60 | 3 per class |
+| 600–1199s | 12 of 60 | 2 per class |
+| ≥ 1200s | 6 of 60 | 1 per class — minimum for diversity |
+
+#### Time Estimates
+
+With instance subsampling, ~615 configurations per cell across 7 tiers:
+
+| Scenario | 5950X (14 threads) | CCX63 (40 threads) |
+|----------|--------------------|--------------------|
+| Priority 8 cells | ~186h (7.7 days) | ~68h (2.8 days) |
+| All 20 cells | ~693h (28 days) | ~250h (10.4 days) |
+
+**Recommendation:** Hetzner CCX63 (48 vCPU, 192GB, ~$0.90/hr ≈ $220 for 10 days). All
+20 cells fit in a single rental period.
+
+#### Running the Campaign
+
+```bash
+# Setup
+git clone <repo> otto && cd otto/surge
+make bench_tune
+make bench-download
+
+# Full campaign (all 20 cells, ~10 days on CCX63)
+nohup ./scripts/tune_matrix.sh --threads 40 > campaign.log 2>&1 &
+
+# Priority cells only (~3 days on CCX63)
+nohup ./scripts/tune_matrix.sh --threads 40 --priority-only > campaign.log 2>&1 &
+
+# Specific cells (e.g., just FAST×LARGE and FAST×MEDIUM)
+nohup ./scripts/tune_matrix.sh --threads 40 --cell 0,1 > campaign.log 2>&1 &
+
+# Monitor
+tail -f campaign.log
+ls -la benchmarks/results/matrix/*.jsonl
+
+# Resume after any interruption — just re-run the same command
+# Checkpoint files track per-evaluation progress; completed tiers are skipped
+```
+
+#### After Tuning Completes
+
+1. Review JSONL checkpoint files in `benchmarks/results/matrix/`
+2. Extract winning params from each `tune_{profile}_{scale}.jsonl`
+3. Update `k_profile_matrix` in `src/sg_profile_matrix.c` with tuned values
+4. Re-validate winning configs with full instance sets (no subsampling)
+5. Run existing test suite (`make test`) to verify backward compatibility
+
+#### Implementation Status
+
+| Step | Status |
+|------|--------|
+| SGScale enum + SGProfileCell type | Done |
+| Static const 4×5 matrix | Done |
+| Deferred profile resolution in sg_solve() | Done |
+| sg_config_set_profile_scale() API | Done |
+| bench_tune --profile / --scale-size / --max-instances | Done |
+| scripts/tune_matrix.sh campaign script | Done |
+| 16 unit tests (test_profile_matrix.c) | Done |
+| Run tuning campaign | Pending |
+| Update matrix with tuned values | Pending |
+| Full-instance validation | Pending |
