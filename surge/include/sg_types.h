@@ -124,7 +124,7 @@ typedef struct {
     int    string_l_max;          /* [4, 30], default 10 — max string removal length */
 
     /* Insertion pruning */
-    int    neighbor_k;            /* [5, 50], default 20 — k-nearest neighbors for vehicle pruning */
+    int    neighbor_k;            /* [5, 50], default 30 — k-nearest neighbors for vehicle pruning */
 } SGTuneParams;
 
 #define SG_TUNE_SENTINEL_D (-1.0)
