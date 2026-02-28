@@ -16,6 +16,7 @@
  *        bench_tune --baseline
  */
 #include "surge.h"
+#include "../src/sg_profile_matrix.h"
 #include "sg_bench_utils.h"
 #include "sh_args.h"
 #include "sh_json.h"
@@ -898,6 +899,8 @@ static void print_usage(const char *argv0) {
     printf("  --bks <csv>           BKS CSV file for custom instances\n");
     printf("  --size <n>            Filter instances by size (e.g., 400 for GH-400)\n");
     printf("  --loader <type>       Instance format: solomon (default) or li_lim\n");
+    printf("  --profile <0-3>       Profile to tune (0=REALTIME..3=BEST)\n");
+    printf("  --scale-size <N>      Request count for scale column selection\n");
     printf("  --help                Show this help\n");
     printf("\nCheckpoint/Resume:\n");
     printf("  Results are saved to a JSONL checkpoint file as they complete.\n");
@@ -933,6 +936,8 @@ int main(int argc, char **argv) {
     const char *bks_path = NULL;
     int custom_size = 0;
     int custom_loader = 0; /* 0=solomon, 1=li_lim */
+    int profile_idx = -1;  /* -1 = not set; 0-3 = REALTIME..BEST */
+    int scale_size = 0;    /* request count for scale column (0 = not set) */
     int i;
 
     SGTuneParams base_params;
@@ -992,6 +997,10 @@ int main(int argc, char **argv) {
                 custom_loader = 1;
             else
                 custom_loader = 0;
+        } else if (strcmp(argv[i], "--profile") == 0 && i + 1 < argc) {
+            profile_idx = sh_parse_int(argv[++i], -1, 0, 3);
+        } else if (strcmp(argv[i], "--scale-size") == 0 && i + 1 < argc) {
+            scale_size = sh_parse_int(argv[++i], 0, 1, 100000);
         } else {
             fprintf(stderr, "Error: unknown option '%s'\n", argv[i]);
             print_usage(argv[0]);
@@ -1107,6 +1116,30 @@ int main(int argc, char **argv) {
 
     /* Initialize base params to all sentinels (= use defaults) */
     sg_tune_params_default(&base_params);
+
+    /* Profile mode: load matrix cell as baseline and fix iteration/time budget */
+    if (profile_idx >= 0) {
+        SGScale scale;
+        const SGProfileCell *cell;
+
+        if (scale_size > 0) {
+            scale = sg_scale_from_count((uint32_t)scale_size);
+        } else if (custom_size > 0) {
+            scale = sg_scale_from_count((uint32_t)custom_size);
+        } else {
+            scale = SG_SCALE_SMALL;
+        }
+
+        cell = &k_profile_matrix[profile_idx][scale];
+        base_params = cell->tune;
+        max_iterations = cell->max_iterations;
+        max_time_seconds = cell->max_time_seconds;
+
+        fprintf(stderr, "Profile mode: %s x %s (iters=%d, time=%ds)\n",
+                (const char *[]){"REALTIME","FAST","NEAR_OPTIMAL","BEST"}[profile_idx],
+                (const char *[]){"SMALL","MEDIUM","LARGE","XLARGE","MASSIVE"}[scale],
+                max_iterations, max_time_seconds);
+    }
 
     if (max_time_seconds > 0) {
         fprintf(stderr, "Time limit: %d seconds per instance\n", max_time_seconds);

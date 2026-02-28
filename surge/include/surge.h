@@ -27,8 +27,12 @@ void sg_tune_params_default(SGTuneParams *params);
 /* Set tunable parameters. Copies the struct. Pass NULL to clear. */
 SGStatus sg_set_tune_params(SGContext *ctx, const SGTuneParams *params);
 
-/* Apply a preset profile: sets config iterations/time + optimal tune params for that profile. */
+/* Apply a preset profile: auto-selects iteration/time budget and tune params
+   based on request count at solve time (deferred resolution). */
 SGStatus sg_config_set_profile(SGContext *ctx, SGProfile profile);
+
+/* Set profile with explicit scale override (skips auto-detection at solve time). */
+SGStatus sg_config_set_profile_scale(SGContext *ctx, SGProfile profile, SGScale scale);
 
 void sg_config_default(SGConfig *config);
 SGStatus sg_set_config(SGContext *ctx, const SGConfig *config);
