@@ -901,6 +901,7 @@ static void print_usage(const char *argv0) {
     printf("  --loader <type>       Instance format: solomon (default) or li_lim\n");
     printf("  --profile <0-3>       Profile to tune (0=REALTIME..3=BEST)\n");
     printf("  --scale-size <N>      Request count for scale column selection\n");
+    printf("  --max-instances <N>   Limit to N evenly-spaced instances (0=all)\n");
     printf("  --help                Show this help\n");
     printf("\nCheckpoint/Resume:\n");
     printf("  Results are saved to a JSONL checkpoint file as they complete.\n");
@@ -938,6 +939,7 @@ int main(int argc, char **argv) {
     int custom_loader = 0; /* 0=solomon, 1=li_lim */
     int profile_idx = -1;  /* -1 = not set; 0-3 = REALTIME..BEST */
     int scale_size = 0;    /* request count for scale column (0 = not set) */
+    int max_instances = 0; /* 0 = no limit; >0 = evenly sample N instances */
     int i;
 
     SGTuneParams base_params;
@@ -1001,6 +1003,8 @@ int main(int argc, char **argv) {
             profile_idx = sh_parse_int(argv[++i], -1, 0, 3);
         } else if (strcmp(argv[i], "--scale-size") == 0 && i + 1 < argc) {
             scale_size = sh_parse_int(argv[++i], 0, 1, 100000);
+        } else if (strcmp(argv[i], "--max-instances") == 0 && i + 1 < argc) {
+            max_instances = sh_parse_int(argv[++i], 0, 0, MAX_TUNE_INSTANCES);
         } else {
             fprintf(stderr, "Error: unknown option '%s'\n", argv[i]);
             print_usage(argv[0]);
@@ -1067,6 +1071,19 @@ int main(int argc, char **argv) {
             num_instances++;
         }
         instances = dynamic_instances;
+
+        /* Subsample instances if --max-instances is set */
+        if (max_instances > 0 && num_instances > max_instances) {
+            int stride = num_instances / max_instances;
+            int dst = 0;
+            for (c = 0; dst < max_instances && c < num_instances; c += stride) {
+                dynamic_instances[dst] = dynamic_instances[c];
+                dst++;
+            }
+            fprintf(stderr, "Subsampled %d -> %d instances (stride=%d)\n",
+                    num_instances, dst, stride);
+            num_instances = dst;
+        }
 
         fprintf(stderr, "Loaded %d instances from %s", num_instances, custom_dir);
         if (custom_size > 0) fprintf(stderr, " (size=%d)", custom_size);
