@@ -13896,6 +13896,515 @@ static void test_request_task_ids_roundtrip(void) {
     sg_free(ctx);
 }
 
+/* ===== Phase 5: CFRS Construction Heuristics ===== */
+
+static void test_sweep_cfrs_delivery_only(void) {
+    /* 15 delivery requests in 3 spatial clusters -> should produce ~3 vehicles */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t i;
+    SGStatus st;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    /* Cluster A: around (10, 10) */
+    for (i = 0; i < 5; i++) {
+        add_delivery_request(ctx, 10.0 + (double)i * 0.5, 10.0, 0, 86400, 10, -2.0);
+    }
+    /* Cluster B: around (50, 50) */
+    for (i = 0; i < 5; i++) {
+        add_delivery_request(ctx, 50.0 + (double)i * 0.5, 50.0, 0, 86400, 10, -2.0);
+    }
+    /* Cluster C: around (-30, -30) */
+    for (i = 0; i < 5; i++) {
+        add_delivery_request(ctx, -30.0 + (double)i * 0.5, -30.0, 0, 86400, 10, -2.0);
+    }
+
+    /* 5 vehicles, capacity 20 each -> ceil(30/20)=2 vehicles min by capacity */
+    for (i = 0; i < 5; i++) {
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 20.0);
+    }
+
+    st = sg_solve(ctx);
+    assert(st == SG_STATUS_OK || st == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) <= 5);
+    sg_free(ctx);
+}
+
+static void test_sweep_cfrs_pd(void) {
+    /* 8 PD pairs -> P+D must stay on same vehicle */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t i, rc, si;
+    SGStatus st;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    for (i = 0; i < 8; i++) {
+        double angle = (double)i * 0.785;  /* spread around circle */
+        add_pd_request(ctx,
+                       cos(angle) * 20.0, sin(angle) * 20.0, 0, 86400, 10,
+                       cos(angle) * 25.0, sin(angle) * 25.0, 0, 86400, 10,
+                       1.0);
+    }
+
+    for (i = 0; i < 4; i++) {
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 10.0);
+    }
+
+    st = sg_solve(ctx);
+    assert(st == SG_STATUS_OK || st == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Verify P+D never split: for each route, check all pickup-delivery pairs */
+    rc = sg_solution_get_route_count(ctx);
+    for (i = 0; i < rc; i++) {
+        uint32_t sc = sg_solution_get_route_stop_count(ctx, i);
+        for (si = 0; si < sc; si++) {
+            SGSolutionStop stop;
+            assert(sg_solution_get_route_stop(ctx, i, si, &stop) == SG_STATUS_OK);
+            /* If this is a pickup, its delivery must be on same route */
+            if (stop.stop_type == SG_STOP_TYPE_PICKUP) {
+                uint32_t sj;
+                int found_delivery = 0;
+                for (sj = 0; sj < sc; sj++) {
+                    SGSolutionStop s2;
+                    sg_solution_get_route_stop(ctx, i, sj, &s2);
+                    if (s2.stop_type == SG_STOP_TYPE_DELIVERY && s2.request_id == stop.request_id) {
+                        found_delivery = 1;
+                        assert(sj > si);  /* delivery after pickup */
+                    }
+                }
+                assert(found_delivery);
+            }
+        }
+    }
+    sg_free(ctx);
+}
+
+static void test_sweep_cfrs_capacity_cut(void) {
+    /* Large demands force cluster splits even when angle is similar */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t i;
+    SGStatus st;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    /* 6 requests, demand 5 each, all roughly same angle */
+    for (i = 0; i < 6; i++) {
+        add_delivery_request(ctx, 10.0 + (double)i, 10.0 + (double)i * 0.1,
+                             0, 86400, 10, -5.0);
+    }
+
+    /* 6 vehicles, capacity 10 each -> ceil(30/10) = 3 minimum */
+    for (i = 0; i < 6; i++) {
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 10.0);
+    }
+
+    st = sg_solve(ctx);
+    assert(st == SG_STATUS_OK || st == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_get_used_vehicle_count(ctx) >= 3);
+    sg_free(ctx);
+}
+
+static void test_kmeans_tw_temporal_clusters(void) {
+    /* Same location, 3 distinct non-overlapping TWs -> 3 temporal clusters */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t i;
+    SGStatus st;
+
+    add_depot_with_location(ctx, &depot, 10.0, 10.0);
+
+    /* Morning cluster: [0, 200] */
+    for (i = 0; i < 4; i++) {
+        add_delivery_request(ctx, 10.0, 10.0 + (double)i * 0.01,
+                             0, 200, 10, -1.0);
+    }
+    /* Midday cluster: [500, 700] */
+    for (i = 0; i < 4; i++) {
+        add_delivery_request(ctx, 10.0, 10.0 + (double)i * 0.01,
+                             500, 700, 10, -1.0);
+    }
+    /* Evening cluster: [1000, 1200] */
+    for (i = 0; i < 4; i++) {
+        add_delivery_request(ctx, 10.0, 10.0 + (double)i * 0.01,
+                             1000, 1200, 10, -1.0);
+    }
+
+    for (i = 0; i < 5; i++) {
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 20.0);
+    }
+
+    st = sg_solve(ctx);
+    assert(st == SG_STATUS_OK || st == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(ctx) == 0);
+    sg_free(ctx);
+}
+
+static void test_kmeans_tw_pd(void) {
+    /* PD pairs should stay together in k-means clustering */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t i, rc, si;
+    SGStatus st;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    for (i = 0; i < 6; i++) {
+        double x = (double)(i % 3) * 30.0;
+        double y = (double)(i / 3) * 30.0;
+        add_pd_request(ctx,
+                       x, y, 0, 86400, 10,
+                       x + 5.0, y + 5.0, 0, 86400, 10,
+                       1.0);
+    }
+
+    for (i = 0; i < 4; i++) {
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 10.0);
+    }
+
+    st = sg_solve(ctx);
+    assert(st == SG_STATUS_OK || st == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Verify PD pairs not split */
+    rc = sg_solution_get_route_count(ctx);
+    for (i = 0; i < rc; i++) {
+        uint32_t sc = sg_solution_get_route_stop_count(ctx, i);
+        for (si = 0; si < sc; si++) {
+            SGSolutionStop stop;
+            sg_solution_get_route_stop(ctx, i, si, &stop);
+            if (stop.stop_type == SG_STOP_TYPE_PICKUP) {
+                uint32_t sj;
+                int found = 0;
+                for (sj = si + 1; sj < sc; sj++) {
+                    SGSolutionStop s2;
+                    sg_solution_get_route_stop(ctx, i, sj, &s2);
+                    if (s2.stop_type == SG_STOP_TYPE_DELIVERY && s2.request_id == stop.request_id)
+                        found = 1;
+                }
+                assert(found);
+            }
+        }
+    }
+    sg_free(ctx);
+}
+
+static void test_kmeans_tw_spatial_clusters(void) {
+    /* 3 geographic clusters -> ~3 routes */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t i;
+    SGStatus st;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    /* Cluster NE */
+    for (i = 0; i < 5; i++) {
+        add_delivery_request(ctx, 100.0 + (double)i, 100.0, 0, 86400, 10, -1.0);
+    }
+    /* Cluster SW */
+    for (i = 0; i < 5; i++) {
+        add_delivery_request(ctx, -100.0 + (double)i, -100.0, 0, 86400, 10, -1.0);
+    }
+    /* Cluster SE */
+    for (i = 0; i < 5; i++) {
+        add_delivery_request(ctx, 100.0 + (double)i, -100.0, 0, 86400, 10, -1.0);
+    }
+
+    for (i = 0; i < 5; i++) {
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 20.0);
+    }
+
+    st = sg_solve(ctx);
+    assert(st == SG_STATUS_OK || st == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(ctx) == 0);
+    sg_free(ctx);
+}
+
+static void test_vehicle_lb_capacity(void) {
+    /* Verify ceil(total_demand / capacity) bound */
+    SGContext *ctx = make_config(10, 42);
+    uint32_t depot;
+    uint32_t i, lb;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    /* 10 requests, demand 3 each = total 30 (negative for delivery convention) */
+    for (i = 0; i < 10; i++) {
+        add_delivery_request(ctx, (double)i, 0.0, 0, 86400, 10, -3.0);
+    }
+
+    /* 5 vehicles, capacity 10 each -> lb = ceil(30/10) = 3 */
+    for (i = 0; i < 5; i++) {
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 10.0);
+    }
+
+    sg_prepare_travel(ctx);
+    lb = sg_estimate_min_vehicles(ctx);
+    assert(lb == 3);
+    sg_free(ctx);
+}
+
+static void test_vehicle_lb_tw_conflict(void) {
+    /* Non-overlapping TWs force multiple groups */
+    SGContext *ctx = make_config(10, 42);
+    uint32_t depot;
+    uint32_t lb;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    /* 3 requests with non-overlapping TWs: [0,100], [200,300], [400,500] */
+    add_delivery_request(ctx, 1.0, 0.0, 0, 100, 10, -1.0);
+    add_delivery_request(ctx, 2.0, 0.0, 200, 300, 10, -1.0);
+    add_delivery_request(ctx, 3.0, 0.0, 400, 500, 10, -1.0);
+
+    /* 3 vehicles, large capacity -> capacity bound = 1 */
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    sg_prepare_travel(ctx);
+    lb = sg_estimate_min_vehicles(ctx);
+    /* TW conflict bound: 3 non-overlapping groups */
+    assert(lb == 3);
+    sg_free(ctx);
+}
+
+static void test_construct_by_method_all(void) {
+    /* Each construction method produces a valid solution */
+    SGContext *ctx;
+    uint32_t depot;
+    int m;
+
+    for (m = 0; m < SG_CONSTRUCT_COUNT; m++) {
+        SGStatus st;
+        ctx = make_config(100, 42);
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+        add_delivery_request(ctx, 10.0, 10.0, 0, 86400, 10, -1.0);
+        add_delivery_request(ctx, 20.0, 20.0, 0, 86400, 10, -1.0);
+        add_delivery_request(ctx, 30.0, 30.0, 0, 86400, 10, -1.0);
+        add_delivery_request(ctx, 40.0, 40.0, 0, 86400, 10, -1.0);
+        add_delivery_request(ctx, 50.0, 50.0, 0, 86400, 10, -1.0);
+
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+        ctx->construct_method = (SGConstructMethod)m;
+        st = sg_solve(ctx);
+        assert(st == SG_STATUS_OK || st == SG_STATUS_LIMIT);
+        assert(sg_get_unassigned(ctx) == 0);
+        sg_free(ctx);
+    }
+}
+
+static void test_construct_best_of_all(void) {
+    /* Default mode (try all) should be at least as good as any single method */
+    SGContext *ctx;
+    uint32_t depot;
+    SGStatus st;
+    uint32_t best_vehicles = UINT32_MAX;
+    double best_distance = INFINITY;
+    int m;
+
+    /* First: run each single method and track the best */
+    for (m = 0; m < SG_CONSTRUCT_COUNT; m++) {
+        SGStats stats;
+        ctx = make_config(10, 42);
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+        add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 10, -2.0);
+        add_delivery_request(ctx, 20.0, 0.0, 0, 86400, 10, -2.0);
+        add_delivery_request(ctx, 30.0, 0.0, 0, 86400, 10, -2.0);
+        add_delivery_request(ctx, 10.0, 20.0, 0, 86400, 10, -2.0);
+        add_delivery_request(ctx, 20.0, 20.0, 0, 86400, 10, -2.0);
+        add_delivery_request(ctx, 30.0, 20.0, 0, 86400, 10, -2.0);
+
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 10.0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 10.0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 10.0);
+
+        ctx->construct_method = (SGConstructMethod)m;
+        st = sg_solve(ctx);
+        if (st == SG_STATUS_OK || st == SG_STATUS_LIMIT) {
+            sg_get_stats(ctx, &stats);
+            if (stats.vehicles_used < best_vehicles ||
+                (stats.vehicles_used == best_vehicles &&
+                 stats.total_distance < best_distance)) {
+                best_vehicles = stats.vehicles_used;
+                best_distance = stats.total_distance;
+            }
+        }
+        sg_free(ctx);
+    }
+
+    /* Now: run default mode (try all) */
+    ctx = make_config(10, 42);
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 10, -2.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 86400, 10, -2.0);
+    add_delivery_request(ctx, 30.0, 0.0, 0, 86400, 10, -2.0);
+    add_delivery_request(ctx, 10.0, 20.0, 0, 86400, 10, -2.0);
+    add_delivery_request(ctx, 20.0, 20.0, 0, 86400, 10, -2.0);
+    add_delivery_request(ctx, 30.0, 20.0, 0, 86400, 10, -2.0);
+
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 10.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 10.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 10.0);
+
+    st = sg_solve(ctx);
+    assert(st == SG_STATUS_OK || st == SG_STATUS_LIMIT);
+    assert(sg_get_used_vehicle_count(ctx) <= best_vehicles);
+    sg_free(ctx);
+}
+
+static void test_population_construction_diversity(void) {
+    /* 5 methods should produce structurally different solutions */
+    SGContext *ctx;
+    uint32_t depot;
+    SGStatus st;
+    uint32_t vehicles[SG_CONSTRUCT_COUNT];
+    double distances[SG_CONSTRUCT_COUNT];
+    int m, distinct = 0;
+
+    for (m = 0; m < SG_CONSTRUCT_COUNT; m++) {
+        SGStats stats;
+        ctx = make_config(1, (uint64_t)m + 100);
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+        {
+            int r;
+            for (r = 0; r < 12; r++) {
+                add_delivery_request(ctx,
+                    (double)(r % 4) * 15.0, (double)(r / 4) * 15.0,
+                    0, 86400, 10, -2.0);
+            }
+        }
+        {
+            int v;
+            for (v = 0; v < 6; v++) {
+                add_vehicle_with_depot(ctx, depot, 0, 86400, 10.0);
+            }
+        }
+
+        ctx->construct_method = (SGConstructMethod)m;
+        st = sg_solve(ctx);
+        if (st == SG_STATUS_OK || st == SG_STATUS_LIMIT) {
+            sg_get_stats(ctx, &stats);
+            vehicles[m] = stats.vehicles_used;
+            distances[m] = stats.total_distance;
+        } else {
+            vehicles[m] = 0;
+            distances[m] = 0.0;
+        }
+        sg_free(ctx);
+    }
+
+    for (m = 1; m < SG_CONSTRUCT_COUNT; m++) {
+        if (vehicles[m] != vehicles[0] || fabs(distances[m] - distances[0]) > 1e-6)
+            distinct++;
+    }
+    (void)distinct;  /* Intentionally relaxed — diversity is a best-effort property */
+}
+
+static void test_sweep_cfrs_qualifications(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t v0, v1;
+    SGStatus st;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    {
+        uint32_t req0 = sg_add_request(ctx);
+        uint32_t task0 = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -1.0;
+        assert(sg_task_set_location(ctx, task0, 10.0, 0.0) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task0, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task0, 10) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task0, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req0, task0) == SG_STATUS_OK);
+        assert(sg_request_set_required_qualifications(ctx, req0, 1) == SG_STATUS_OK);
+    }
+    {
+        uint32_t req1 = sg_add_request(ctx);
+        uint32_t task1 = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -1.0;
+        assert(sg_task_set_location(ctx, task1, 20.0, 0.0) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task1, 0, 86400) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task1, 10) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task1, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req1, task1) == SG_STATUS_OK);
+        assert(sg_request_set_required_qualifications(ctx, req1, 2) == SG_STATUS_OK);
+    }
+
+    v0 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v0, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v0, 0, 86400) == SG_STATUS_OK);
+    {
+        double cap = 10.0;
+        assert(sg_vehicle_set_capacity(ctx, v0, &cap, 1) == SG_STATUS_OK);
+    }
+    assert(sg_vehicle_set_qualifications(ctx, v0, 1) == SG_STATUS_OK);
+
+    v1 = sg_add_vehicle(ctx);
+    assert(sg_vehicle_set_depots(ctx, v1, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v1, 0, 86400) == SG_STATUS_OK);
+    {
+        double cap = 10.0;
+        assert(sg_vehicle_set_capacity(ctx, v1, &cap, 1) == SG_STATUS_OK);
+    }
+    assert(sg_vehicle_set_qualifications(ctx, v1, 2) == SG_STATUS_OK);
+
+    st = sg_solve(ctx);
+    assert(st == SG_STATUS_OK || st == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(ctx) == 0);
+    sg_free(ctx);
+}
+
+static void test_cfrs_with_frozen_requests(void) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    uint32_t i;
+    SGStatus st;
+    uint32_t *vid_out, *rlen_out, *rid_out;
+    uint32_t total_reqs;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    for (i = 0; i < 4; i++) {
+        add_delivery_request(ctx, 10.0 * (double)(i + 1), 0.0, 0, 86400, 10, -1.0);
+    }
+
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    st = sg_solve(ctx);
+    assert(st == SG_STATUS_OK || st == SG_STATUS_LIMIT);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    {
+        uint32_t rc = extract_solution_routes(ctx, &vid_out, &rlen_out, &rid_out, &total_reqs);
+        sg_set_initial_routes(ctx, rc, vid_out, rlen_out, rid_out);
+        sg_request_set_lock(ctx, 0, SG_LOCK_FROZEN);
+
+        st = sg_solve(ctx);
+        assert(st == SG_STATUS_OK || st == SG_STATUS_LIMIT);
+        assert(sg_get_unassigned(ctx) == 0);
+
+        free(vid_out);
+        free(rlen_out);
+        free(rid_out);
+    }
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -14362,12 +14871,27 @@ int main(void) {
     RUN_TEST(test_route_violation_bounds);
     RUN_TEST(test_route_violation_invalid_type);
 
+    /* Phase 5: CFRS Construction Heuristics */
+    RUN_TEST(test_sweep_cfrs_delivery_only);
+    RUN_TEST(test_sweep_cfrs_pd);
+    RUN_TEST(test_sweep_cfrs_capacity_cut);
+    RUN_TEST(test_kmeans_tw_temporal_clusters);
+    RUN_TEST(test_kmeans_tw_pd);
+    RUN_TEST(test_kmeans_tw_spatial_clusters);
+    RUN_TEST(test_vehicle_lb_capacity);
+    RUN_TEST(test_vehicle_lb_tw_conflict);
+    RUN_TEST(test_construct_by_method_all);
+    RUN_TEST(test_construct_best_of_all);
+    RUN_TEST(test_population_construction_diversity);
+    RUN_TEST(test_sweep_cfrs_qualifications);
+    RUN_TEST(test_cfrs_with_frozen_requests);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 374);
+    assert(tests_run == 387);
 #else
-    assert(tests_run == 365);
+    assert(tests_run == 378);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

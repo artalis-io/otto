@@ -18,6 +18,16 @@
 #include "../src/sg_neighbor.h"
 #include "../src/sg_profile_matrix.h"
 
+/* Construction method enum for pluggable heuristics */
+typedef enum {
+    SG_CONSTRUCT_REGRET3       = 0,  /* Existing: regret-3 fill */
+    SG_CONSTRUCT_TW_SORTED     = 1,  /* Existing: TW-sorted greedy */
+    SG_CONSTRUCT_SOLOMON_I1    = 2,  /* Existing: Solomon I1 sequential */
+    SG_CONSTRUCT_SWEEP_CFRS    = 3,  /* Angular sweep cluster-first */
+    SG_CONSTRUCT_KMEANS_TW     = 4,  /* K-means with TW dimension */
+    SG_CONSTRUCT_COUNT         = 5   /* Sentinel / "try all" default */
+} SGConstructMethod;
+
 /* Constants */
 #define SG_UNASSIGNED_PENALTY 10000.0
 #define SG_WORST_RANDOMNESS 4.0
@@ -435,6 +445,9 @@ struct SGContext {
     uint8_t  has_committed;                     /* fast-path: 1 if any request >= COMMITTED */
     uint8_t  has_frozen;                        /* fast-path: 1 if any request == FROZEN */
     uint32_t *frozen_vehicle_map;               /* [num_requests] rid -> designated vehicle, SG_NO_VEHICLE if not frozen */
+
+    /* Construction method override (SG_CONSTRUCT_COUNT = try all, default) */
+    SGConstructMethod construct_method;
 
     /* Tunable parameters (NULL = use hardcoded defaults) */
     SGTuneParams *tune_params;
@@ -1101,5 +1114,12 @@ void sg_adaptive_q_bounds(int num_requests, int config_q_min, int config_q_max,
                           int *q_min_out, int *q_max_out);
 int sg_route_solver_eligible(const SGContext *ctx);
 ARStatus sg_route_construct_solomon_i1(SGContext *ctx, SGRouteSolution *sol);
+ARStatus sg_route_construct_tw_sorted(SGContext *ctx, SGRouteSolution *sol);
+
+/* sg_construct_cfrs.c */
+uint32_t sg_estimate_min_vehicles(const SGContext *ctx);
+ARStatus sg_construct_sweep_cfrs(SGContext *ctx, SGRouteSolution *sol);
+ARStatus sg_construct_kmeans_tw(SGContext *ctx, SGRouteSolution *sol);
+ARStatus sg_construct_by_method(SGContext *ctx, SGRouteSolution *sol, SGConstructMethod method);
 
 #endif /* SURGE_SG_INTERNAL_H */
