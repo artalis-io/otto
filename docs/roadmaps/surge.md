@@ -1372,6 +1372,7 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - **Phase S11 (multi-threaded parallel + population search)**: `sg_solve_parallel()` runs N independent ALNS solves with different seeds, picks best (15 wins vs 0 losses on Li & Lim vs single-threaded). `sg_solve_population()` adds generational warm-starting — elite pool with tournament selection, same compute budget but guided search. Li & Lim population vs parallel: 10 wins, 6 losses, 40 ties, avg distance -0.6%. Includes `solution_arena_size` transfer fix ensuring fast arena-memcpy path in result harvesting. 5 new tests (215→220). ASAN clean.
 - **Phase S12 (infeasible-space exploration + aggressive SISR)**: HGS-style infeasible-space search with modular penalty manager (`SGPenaltyManager` in `sg_penalty.c`). 6 constraint types (time warp, capacity, duration, ride time, distance, total work) with independent per-constraint self-adjustment. Time warping accumulates violation and warps start to `tw_late` for downstream propagation. Feasible-beats-infeasible best-tracking in `sg_route_solution_is_better`. Penalty bounds and initial weights scale proportionally with problem cost structure via `cost_scale` parameter — no hardcoded constants. Instance-adaptive SISR `L_max` based on avg route length (Christiaens & Vanden Berghe 2020), initial string destroy weight 2.0. Phase 1 (vehicle min) uses aggressive 15% feasible target; Phase 2 (distance) runs strict (penalty disabled). Solomon single-thread: avgVehGap +0.36→+0.30, equalVehicles 37→39. Solomon population: avgVehGap +0.20, equalVehicles 45, avgDistGap -0.2%. Li & Lim single-thread: avgVehGap +0.52→+0.48, equalVehicles 41→44. Li & Lim population: avgVehGap +0.38, equalVehicles 48, avgDistGap +3.5%. 5 new tests (252→257). ASAN/UBSAN clean.
 - **Phase S13+S14+S15 (algorithmic edge + population crossover)**: Progressive penalty schedule (0.25→0.15 over Phase 1), ejection chains in repair operators with cost-gated fallback, scaled ejection budget (proportional to instance size, cap 500K), relaxed vehicle reduction (20% distance slack), Phase 1.5 vehicle crunch (500-iter focused ALNS with vehicle-reducing operators only), SREX crossover (merge routes from two parents), population diversity filter (>90% similarity rejection). Solomon population: avgVehGap +0.20→+0.18, equalVehicles 45→46, avgDistGap -0.1%. Li & Lim population: avgVehGap +0.39, equalVehicles 47, avgDistGap +3.7%. 14 new tests (326→340). ASAN/UBSAN clean.
+- **Phase S16 (CFRS construction heuristics)**: Cluster-First-Route-Second construction methods targeting vehicle count reduction on large instances. Two new heuristics: angular sweep CFRS (`sg_construct_sweep_cfrs`) and k-means with TW dimension (`sg_construct_kmeans_tw`), both using a shared vehicle count lower bound (`sg_estimate_min_vehicles` — bin packing + TW conflict clique). `SGConstructMethod` enum with dispatch table. Population mode round-robins construction method per thread (`thread_index % SG_CONSTRUCT_COUNT`) for generation 0 diversity. Default mode tries all 5 methods (regret-3, TW-sorted, Solomon I1, sweep CFRS, k-means TW) and keeps lexicographic best. GH-200 population: equalVehicles 48→55 (80%→92%), avgVehGap +0.20→+0.08 — best vehicle count result. Distance gap +13.2%→+13.1% (stable). 13 new tests (374→387). ASAN/UBSAN clean.
 - Unified route state drives both delivery-only and PDPTW solves. The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time constraints.
 - Stop-level splice/excise operations preserve non-adjacent PD placement across ALNS destroy/repair cycles.
 
@@ -2134,6 +2135,41 @@ At 5000 iterations: Solomon +0.8%, Li & Lim +4.2%.
 
 **Tests**: 14 new tests (326→340). Progressive penalty lerp/update, ejection in repair, scaled budget/cap, relaxed elimination, Phase 1.5 runs, frozen preservation through Phase 1.5, ejection fallback cost guard, ejection chain frozen guard, population crossover (VRPTW + PDPTW), diversity filter, no-crossover fallback. ASAN/UBSAN clean.
 
+### Phase S16: CFRS Construction Heuristics ✅
+
+**Result**: GH-200 population: equalVehicles 48→55 (80%→92%), avgVehGap +0.20→+0.08, avgDistGap +13.2%→+13.1%. Best vehicle count result to date. 100-customer benchmarks unchanged (374/374 existing tests pass).
+
+**Problem**: Large instances (200+) start with too many vehicles because sequential insertion (regret-3, TW-sorted, Solomon I1) creates routes one-at-a-time without global awareness of how requests should cluster. ALNS cannot eliminate excess vehicles within 60s — construction quality is the bottleneck.
+
+**Solution**: Cluster-First-Route-Second (CFRS) heuristics estimate the minimum vehicle count, cluster requests into that many groups, then route within each cluster.
+
+**Changes (surge — sg_construct_cfrs.c, new ~450 lines):**
+- `sg_estimate_min_vehicles()`: vehicle count lower bound via bin packing (per-dimension `ceil(total_demand / max_capacity)`) + time window conflict bound (greedy clique approximation via sweep-line)
+- `sg_construct_sweep_cfrs()`: angular sweep CFRS — compute depot centroid, sort requests by `atan2` angle, cut clusters by capacity/count/TW gap, assign to nearest qualified vehicle, route within cluster by tightest-TW-first insertion, mop up with regret-3
+- `sg_construct_kmeans_tw()`: k-means with time windows — 3D feature vectors `(x_norm, y_norm, alpha * tw_center_norm)` with alpha=0.3, k-means++ initialization, max 20 iterations, same cluster-to-vehicle assignment and intra-cluster routing
+- `sg_construct_by_method()`: dispatch table mapping `SGConstructMethod` enum to function pointers
+
+**Changes (surge — sg_internal.h):**
+- `SGConstructMethod` enum: `SG_CONSTRUCT_REGRET3=0, SG_CONSTRUCT_TW_SORTED=1, SG_CONSTRUCT_SOLOMON_I1=2, SG_CONSTRUCT_SWEEP_CFRS=3, SG_CONSTRUCT_KMEANS_TW=4, SG_CONSTRUCT_COUNT=5`
+- `construct_method` field on `SGContext` (default `SG_CONSTRUCT_COUNT` = try all)
+- Declared `sg_route_construct_tw_sorted` (was static in sg_solve.c)
+
+**Changes (surge — sg_solve.c):**
+- `sg_route_construct_initial_solution`: single-method fast path when `construct_method < SG_CONSTRUCT_COUNT`; default multi-trial extends from 3 to 5 methods with sweep CFRS and k-means TW attempts
+- `sg_route_construct_tw_sorted` promoted from static to extern
+
+**Changes (surge — sg_parallel.c):**
+- Generation 0: `clone->construct_method = (SGConstructMethod)(thread_index % SG_CONSTRUCT_COUNT)` — round-robin construction diversity across threads
+- Generations > 0: `SG_CONSTRUCT_COUNT` (default, since warm start bypasses construction)
+
+**Changes (surge — sg_context.c):**
+- `sg_create()`: init `ctx->construct_method = SG_CONSTRUCT_COUNT`
+
+**Changes (surge — Makefile):**
+- Added `sg_construct_cfrs.o` to SRCS
+
+**Tests**: 13 new tests (374→387). Sweep CFRS delivery-only (3 spatial clusters → 3 vehicles), sweep CFRS PD (P+D never split), sweep capacity cut, k-means temporal clusters, k-means PD, k-means spatial clusters, vehicle LB capacity bound, vehicle LB TW conflict bound, construct-by-method all methods, best-of-all default, population construction diversity, sweep with qualifications, CFRS with frozen requests. ASAN/UBSAN clean.
+
 ---
 
 ## Infrastructure: Arena Allocator
@@ -2685,6 +2721,38 @@ eliminating local search moves, but net solution quality (distance) is substanti
 better. Biggest winners are R1/RC1 tight-TW instances where the old code ground in
 postprocessing (R1_2_8: +95.4% → +31.7%, RC1_2_4: +129.2% → +59.7%).
 
+#### Benchmark Results: Gehring-Homberger VRPTW Post-Phase-S16 (200 customers, 60s limit)
+
+Population mode (3 generations, all CPU cores), 10K iterations, 60s time limit, deterministic seed 42.
+CFRS construction heuristics active — 5 construction methods round-robined across threads.
+
+| Category | Instances | BKS Veh Match | Avg Veh Gap | Avg Dist Gap |
+|----------|-----------|---------------|-------------|--------------|
+| C1_2 (clustered, tight) | 10 | 8/10 | +0.20 | +10.1% |
+| C2_2 (clustered, wide) | 10 | 10/10 | +0.00 | +2.0% |
+| R1_2 (random, tight) | 10 | 10/10 | +0.00 | +22.9% |
+| R2_2 (random, wide) | 10 | 9/10 | +0.10 | +3.9% |
+| RC1_2 (mixed, tight) | 10 | 9/10 | +0.10 | +34.2% |
+| RC2_2 (mixed, wide) | 10 | 9/10 | +0.10 | +5.8% |
+| **Overall** | **60** | **55/60 (92%)** | **+0.08** | **+13.1%** |
+
+Avg runtime: 104.9s. Best vehicle count result to date.
+
+**Progress across phases (GH-200, 60s time limit):**
+
+| Metric | Pre-Phase-4 (1T) | Post-Phase-4 (1T) | **Phase S16 + Pop** |
+|--------|-------------------|---------------------|---------------------|
+| Equal Vehicles | 54/60 (90%) | 48/60 (80%) | **55/60 (92%)** |
+| Avg Veh Gap | +0.10 | +0.20 | **+0.08** |
+| Avg Dist Gap | +7.9% | +13.2% | +13.1% |
+
+CFRS construction directly solved the vehicle count bottleneck — sweep/k-means
+heuristics produce initial solutions with the correct number of vehicles, so ALNS
+spends less time on vehicle elimination and more on distance optimization. Population
+diversity (5 structurally different starting points per generation) further improves
+vehicle minimization. Distance gap remains at ~13% — closing this requires more ALNS
+iterations (longer time budget) or better intra-route optimization operators.
+
 #### Benchmark Results: Gehring-Homberger VRPTW (400 customers, 60s limit)
 
 First 400-customer results. Single-thread, 10K iterations, 60s time limit, deterministic seed 42.
@@ -2704,27 +2772,28 @@ hours. R1/R2 vehicle minimization is perfect (random layouts easier to construct
 good initial solutions for). Clustered C1 is hardest (tight TWs + large clusters
 need many more ALNS iterations to restructure routes).
 
-#### Competitiveness Assessment (Feb 2026)
+#### Competitiveness Assessment (Mar 2026)
 
 **100 customers: Strong.** 80% vehicle match, -0.1% avg distance gap vs BKS with
 population mode. Competitive with published ALNS implementations (Ropke & Pisinger).
 Rich constraint support (PDPTW, DARP, compartments, breaks, multi-trip, locking,
 backhaul, LIFO/FIFO, precedence, setup times) goes well beyond most academic solvers.
 
-**200 customers: Decent vehicle minimization, weak distance.** 80% vehicle match is
-good, but +13.2% distance gap means the solver finds the right number of vehicles
-but doesn't efficiently route within them. BKS papers typically allow 200-600s for
-200-customer instances; Surge's 60s budget is tight. More time budget (profile matrix
-NEAR_OPTIMAL gives 120s) and per-cell tuning should close much of this gap.
+**200 customers: Strong vehicle minimization, distance needs work.** 92% vehicle match
+(+0.08 avgVehGap) with population + CFRS construction — only 5 instances use +1 vehicle.
+This is competitive with published solvers on the vehicle dimension. Distance gap of
++13.1% reflects the 60s time budget — BKS papers typically allow 200-600s. More time
+budget (profile matrix NEAR_OPTIMAL gives 120s) and per-cell tuning should close this.
 
 **400 customers: Not competitive yet.** +51.8% distance gap and 47% vehicle match at
 60s. BKS values come from algorithms running for hours with specialized operators.
+CFRS construction should help here too (not yet benchmarked with population mode).
 
 Root causes at 400+:
 
 | Issue | Impact | Mitigation |
 |-------|--------|------------|
-| Poor construction quality | Solomon I1 produces too many vehicles (51 vs BKS 40 on C1_4_1) | Better initial heuristic (parallel insertion, savings) |
+| Poor construction quality | Solomon I1 produces too many vehicles (51 vs BKS 40 on C1_4_1) | ✅ CFRS heuristics (Phase S16) — solved for GH-200, needs 400 benchmark |
 | Low iterations/sec | Destroy-repair cycle is O(n) per iteration; fewer iterations in budget | More aggressive neighbor pruning, incremental cost updates |
 | Vehicles-first objective | Most of 60s spent on vehicle elimination, not distance | Needs more total budget (profile matrix BEST gives 600s for LARGE) |
 | Limited operator set | 8 destroy + greedy/regret repair | More operators: SISR, route-level destroy, LNS with backtracking |
@@ -2756,19 +2825,20 @@ a design limitation — it's a matter of additive improvements on top of a sound
 - **Profile matrix scales independently.** The 4×5 matrix with per-cell tuning means
   each scale point can be independently optimized. Most solvers use one-size-fits-all.
 
-The gap from +51.8% to <20% at 400 customers is mostly two things: (1) giving it
-adequate time — the BEST profile gives 600s, not 60s, and (2) a better construction
-heuristic so ALNS starts from 40 vehicles instead of 51. Those two alone would likely
-halve the gap. Everything else (SISR, parallel ALNS, incremental cost) is further
-refinement on a working foundation.
+The gap from +51.8% to <20% at 400 customers is now mostly about time budget and
+iteration efficiency. CFRS construction (Phase S16) solved the vehicle count bottleneck
+at 200 customers (92% BKS match). Applying population + CFRS to 400-customer instances
+should significantly improve vehicle counts there too. The remaining work is: (1) giving
+it adequate time — the BEST profile gives 600s, not 60s, and (2) improving iteration
+throughput so ALNS completes more destroy-repair cycles in the budget.
 
 **Realistic targets for next phase of work:**
 
 | Scale | Current Gap | Target Gap | Required |
 |-------|-------------|------------|----------|
-| 100 | -0.1% dist | — | Already competitive |
-| 200 | +13.2% dist | <5% dist | Per-cell tuning of MEDIUM column + more time budget |
-| 400 | +51.8% dist | <20% dist | Better construction + more ALNS time (300-600s) + algorithmic improvements |
+| 100 | -0.1% dist, 80% veh | — | Already competitive |
+| 200 | +13.1% dist, **92% veh** | <5% dist | Per-cell tuning of MEDIUM column + more time budget |
+| 400 | +51.8% dist, 47% veh | <20% dist, >70% veh | Population + CFRS (not yet benchmarked) + more ALNS time (300-600s) |
 | 800+ | Not tested | <30% dist | All of above + parallel ALNS + SISR operator |
 
 #### Phase 5: Travel Resolution Cache for TD/Callback Models

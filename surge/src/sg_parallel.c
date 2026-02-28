@@ -744,6 +744,12 @@ SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
                 items[i].clone.config.max_time_seconds = time_per_gen;
             }
 
+            /* Generation 0: round-robin construction heuristic for diversity.
+               Generations > 0 use warm start, so construct_method stays default. */
+            if (g == 0) {
+                items[i].clone.construct_method = (SGConstructMethod)(i % SG_CONSTRUCT_COUNT);
+            }
+
             /* Warm start from population pool (generations > 0 only) */
             items[i].owns_warm_start = 0;
             if (g > 0 && pop_pool_size > 0) {
