@@ -308,7 +308,7 @@ int sg_route_solver_eligible(const SGContext *ctx) {
     return 1;
 }
 
-static ARStatus sg_route_construct_tw_sorted(SGContext *ctx, SGRouteSolution *sol) {
+ARStatus sg_route_construct_tw_sorted(SGContext *ctx, SGRouteSolution *sol) {
     uint32_t *order = NULL;
     uint32_t n, i;
 
@@ -708,34 +708,49 @@ static ARStatus sg_route_construct_from_warm_start(SGContext *ctx, SGRouteSoluti
     return AR_STATUS_OK;
 }
 
+/* Try a candidate solution against the current best; keep the lexicographic winner.
+   Returns 1 if candidate was better (sol updated), 0 otherwise. */
+static int sg_try_keep_better(SGContext *ctx, SGRouteSolution *sol, SGRouteSolution *candidate) {
+    (void)ctx;
+    if (candidate->base.num_unassigned < sol->base.num_unassigned ||
+        (candidate->base.num_unassigned == sol->base.num_unassigned &&
+         (candidate->vehicles_used < sol->vehicles_used ||
+          (candidate->vehicles_used == sol->vehicles_used &&
+           candidate->total_distance < sol->total_distance - 1e-9)))) {
+        sg_route_solution_reset(sol);
+        *sol = *candidate;
+        return 1;
+    }
+    sg_route_solution_reset(candidate);
+    return 0;
+}
+
 static ARStatus sg_route_construct_initial_solution(SGContext *ctx, SGRouteSolution *sol) {
-    SGRouteSolution alt;
     ARStatus status;
+
+    /* Population mode: single method for per-thread diversity */
+    if (ctx->construct_method < SG_CONSTRUCT_COUNT) {
+        return sg_construct_by_method(ctx, sol, ctx->construct_method);
+    }
+
+    /* Default multi-trial: try all methods, keep lexicographic best */
 
     /* Attempt 1: regret-3 */
     status = sg_route_repair_fill_regret(ctx, sol, 3, 0.0);
     if (status != AR_STATUS_OK) return status;
 
     /* Attempt 2: TW-sorted greedy */
-    status = sg_route_solution_init(ctx, &alt);
-    if (status != AR_STATUS_OK) return AR_STATUS_OK;
-
-    status = sg_route_construct_tw_sorted(ctx, &alt);
-    if (status != AR_STATUS_OK) {
-        sg_route_solution_reset(&alt);
-        return AR_STATUS_OK;
-    }
-
-    /* Keep whichever is better (lexicographic: unassigned, vehicles, distance) */
-    if (alt.base.num_unassigned < sol->base.num_unassigned ||
-        (alt.base.num_unassigned == sol->base.num_unassigned &&
-         (alt.vehicles_used < sol->vehicles_used ||
-          (alt.vehicles_used == sol->vehicles_used &&
-           alt.total_distance < sol->total_distance - 1e-9)))) {
-        sg_route_solution_reset(sol);
-        *sol = alt;
-    } else {
-        sg_route_solution_reset(&alt);
+    {
+        SGRouteSolution alt;
+        status = sg_route_solution_init(ctx, &alt);
+        if (status == AR_STATUS_OK) {
+            status = sg_route_construct_tw_sorted(ctx, &alt);
+            if (status != AR_STATUS_OK) {
+                sg_route_solution_reset(&alt);
+            } else {
+                sg_try_keep_better(ctx, sol, &alt);
+            }
+        }
     }
 
     /* Attempt 3: Solomon I1 */
@@ -744,16 +759,38 @@ static ARStatus sg_route_construct_initial_solution(SGContext *ctx, SGRouteSolut
         status = sg_route_solution_init(ctx, &i1);
         if (status == AR_STATUS_OK) {
             status = sg_route_construct_solomon_i1(ctx, &i1);
-            if (status == AR_STATUS_OK &&
-                (i1.base.num_unassigned < sol->base.num_unassigned ||
-                 (i1.base.num_unassigned == sol->base.num_unassigned &&
-                  (i1.vehicles_used < sol->vehicles_used ||
-                   (i1.vehicles_used == sol->vehicles_used &&
-                    i1.total_distance < sol->total_distance - 1e-9))))) {
-                sg_route_solution_reset(sol);
-                *sol = i1;
-            } else {
+            if (status != AR_STATUS_OK) {
                 sg_route_solution_reset(&i1);
+            } else {
+                sg_try_keep_better(ctx, sol, &i1);
+            }
+        }
+    }
+
+    /* Attempt 4: Sweep CFRS */
+    {
+        SGRouteSolution sweep;
+        status = sg_route_solution_init(ctx, &sweep);
+        if (status == AR_STATUS_OK) {
+            status = sg_construct_sweep_cfrs(ctx, &sweep);
+            if (status != AR_STATUS_OK) {
+                sg_route_solution_reset(&sweep);
+            } else {
+                sg_try_keep_better(ctx, sol, &sweep);
+            }
+        }
+    }
+
+    /* Attempt 5: K-means TW */
+    {
+        SGRouteSolution km;
+        status = sg_route_solution_init(ctx, &km);
+        if (status == AR_STATUS_OK) {
+            status = sg_construct_kmeans_tw(ctx, &km);
+            if (status != AR_STATUS_OK) {
+                sg_route_solution_reset(&km);
+            } else {
+                sg_try_keep_better(ctx, sol, &km);
             }
         }
     }
