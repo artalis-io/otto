@@ -2688,6 +2688,48 @@ hours. R1/R2 vehicle minimization is perfect (random layouts easier to construct
 good initial solutions for). Clustered C1 is hardest (tight TWs + large clusters
 need many more ALNS iterations to restructure routes).
 
+#### Competitiveness Assessment (Feb 2026)
+
+**100 customers: Strong.** 80% vehicle match, -0.1% avg distance gap vs BKS with
+population mode. Competitive with published ALNS implementations (Ropke & Pisinger).
+Rich constraint support (PDPTW, DARP, compartments, breaks, multi-trip, locking,
+backhaul, LIFO/FIFO, precedence, setup times) goes well beyond most academic solvers.
+
+**200 customers: Decent vehicle minimization, weak distance.** 80% vehicle match is
+good, but +13.2% distance gap means the solver finds the right number of vehicles
+but doesn't efficiently route within them. BKS papers typically allow 200-600s for
+200-customer instances; Surge's 60s budget is tight. More time budget (profile matrix
+NEAR_OPTIMAL gives 120s) and per-cell tuning should close much of this gap.
+
+**400 customers: Not competitive yet.** +51.8% distance gap and 47% vehicle match at
+60s. BKS values come from algorithms running for hours with specialized operators.
+
+Root causes at 400+:
+
+| Issue | Impact | Mitigation |
+|-------|--------|------------|
+| Poor construction quality | Solomon I1 produces too many vehicles (51 vs BKS 40 on C1_4_1) | Better initial heuristic (parallel insertion, savings) |
+| Low iterations/sec | Destroy-repair cycle is O(n) per iteration; fewer iterations in budget | More aggressive neighbor pruning, incremental cost updates |
+| Vehicles-first objective | Most of 60s spent on vehicle elimination, not distance | Needs more total budget (profile matrix BEST gives 600s for LARGE) |
+| Limited operator set | 8 destroy + greedy/regret repair | More operators: SISR, route-level destroy, LNS with backtracking |
+
+**Where Surge is strong regardless of scale:**
+
+- Rich constraint handling — most academic solvers handle VRPTW only; Surge handles
+  PDPTW + DARP + 15+ constraint dimensions out of the box
+- Deterministic, reproducible results from fixed seeds
+- Time-budgeted — never overruns, suitable for real-time systems
+- Production-ready API (JSON, WASM, C library) with warm start and progress callbacks
+
+**Realistic targets for next phase of work:**
+
+| Scale | Current Gap | Target Gap | Required |
+|-------|-------------|------------|----------|
+| 100 | -0.1% dist | — | Already competitive |
+| 200 | +13.2% dist | <5% dist | Per-cell tuning of MEDIUM column + more time budget |
+| 400 | +51.8% dist | <20% dist | Better construction + more ALNS time (300-600s) + algorithmic improvements |
+| 800+ | Not tested | <30% dist | All of above + parallel ALNS + SISR operator |
+
 #### Phase 5: Travel Resolution Cache for TD/Callback Models
 
 **Priority: Low for benchmarks. Important for production with TD routing.**
