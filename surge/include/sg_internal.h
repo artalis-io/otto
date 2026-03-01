@@ -479,6 +479,7 @@ struct SGContext {
     /* PD stacking policy and backhaul fast-path flags */
     uint8_t has_pd_policy;                      /* 1 if any vehicle has pd_policy != NONE */
     uint8_t has_backhaul;                       /* 1 if any vehicle has backhaul=1 */
+    uint8_t has_pd_requests;                    /* 1 if any request is PICKUP_DELIVERY (set in sg_prepare_travel) */
 
     /* Vehicle compartments */
     uint32_t num_compartment_types;             /* counter for type IDs issued */
@@ -1181,6 +1182,34 @@ int sg_route_check_capacity_concat(const SGContext *ctx, const SGRouteSolution *
                                     uint32_t vehicle_id, uint32_t insert_stop_pos,
                                     const SGRouteStop *new_stops, uint32_t new_stop_count,
                                     uint8_t pen_enabled, double *violation_out);
+
+/* Phase 3: O(1) concat pre-filtering for local search operators.
+   Returns 1 if vehicle has valid timing segments (no break/multi-trip). */
+static inline int sg_vehicle_has_timing_segments(const SGContext *ctx, uint32_t v) {
+    return !ctx->vehicles[v].has_break_policy && !ctx->vehicles[v].has_multi_trip;
+}
+
+/* Build SGSegSummary for a stop sequence using a specific vehicle's travel profile.
+   Used to rebuild a moved segment for the target vehicle in OR-opt/cross-exchange. */
+void sg_build_segment_for_vehicle(const SGContext *ctx, const SGRouteStop *stops,
+                                   uint32_t stop_count, uint32_t vehicle_id,
+                                   SGSegSummary *out);
+
+/* O(1) pre-filter for local search operators.
+   Returns 1 = promising (proceed to O(L) confirmation), 0 = not applicable (fallback).
+   When returning 1, *new_total_out is the estimated total distance after the move. */
+int sg_concat_eval_or_opt(const SGContext *ctx, const SGRouteSolution *sol,
+                           uint32_t va, uint32_t start, uint32_t k,
+                           uint32_t vb, uint32_t ins,
+                           double *new_total_out);
+int sg_concat_eval_2opt_star(const SGContext *ctx, const SGRouteSolution *sol,
+                              uint32_t va, uint32_t cut_a,
+                              uint32_t vb, uint32_t cut_b,
+                              double *new_total_out);
+int sg_concat_eval_cross_exchange(const SGContext *ctx, const SGRouteSolution *sol,
+                                   uint32_t va, uint32_t ia, uint32_t sa,
+                                   uint32_t vb, uint32_t ib, uint32_t sb,
+                                   double *new_total_out);
 
 /* sg_construct_cfrs.c */
 uint32_t sg_estimate_min_vehicles(const SGContext *ctx);

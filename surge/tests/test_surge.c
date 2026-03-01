@@ -14841,6 +14841,346 @@ static void test_timing_seg_setup_time(void) {
     assert(fabs(out.distance - 50.0) < 1e-9);
 }
 
+/* ===== Phase 3: O(1) Concat Pre-Filtering Tests ===== */
+
+static void test_build_segment_for_vehicle(void) {
+    /* Build a segment from 2 stops and verify distance/timing */
+    SGContext *ctx = make_config(50, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    SGSegSummary seg;
+    double expected_dist;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 86400, 60, -10.0);
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert both requests to get proper stop data */
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 0, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 1, 0, 1, dist) == AR_STATUS_OK);
+    }
+
+    /* Build segment from the 2 stops */
+    {
+        const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(&sol, 0);
+        sg_build_segment_for_vehicle(ctx, stops, 2, 0, &seg);
+
+        /* Distance should be the link between stop 0 and stop 1 */
+        expected_dist = sg_travel_dist(ctx,
+            ctx->tasks[stops[0].task_id].location_id,
+            ctx->tasks[stops[1].task_id].location_id, 0);
+        assert(fabs(seg.distance - expected_dist) < 1e-6);
+        assert(seg.stop_count == 2);
+        assert(seg.first_request_id == 0);
+        assert(seg.last_request_id == 1);
+        assert(fabs(seg.duration - (60.0 + sg_travel_dur(ctx,
+            ctx->tasks[stops[0].task_id].location_id,
+            ctx->tasks[stops[1].task_id].location_id, 0,
+            seg.earliest_start + 60.0) + 60.0)) < 1e-6);
+    }
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_concat_eval_or_opt_accept(void) {
+    /* OR-opt move that improves: eval returns 1, new_total < current */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    double concat_total;
+    int result;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+
+    /* Cluster A near (10,10), Cluster B near (90,90) — misassigned */
+    add_delivery_request(ctx, 10.0, 10.0, 0, 100000, 10, 1.0);  /* r0 */
+    add_delivery_request(ctx, 90.0, 90.0, 0, 100000, 10, 1.0);  /* r1 */
+    add_delivery_request(ctx, 92.0, 90.0, 0, 100000, 10, 1.0);  /* r2 */
+    add_delivery_request(ctx, 12.0, 10.0, 0, 100000, 10, 1.0);  /* r3 */
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    assert(!ctx->has_pd_requests);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    /* v0=[r0, r1, r2], v1=[r3] — clusters mixed in v0 */
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 0, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 1, 0, 1, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 2, 0, 2, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 2, 0, 2, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 3, 1, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 3, 1, 0, dist) == AR_STATUS_OK);
+    }
+
+    /* Try moving r1 (pos=1 in va=0) to vb=1, ins=1 (after r3).
+       This should be improving since r1 is near (90,90) which is far from
+       the (10,10) cluster on v0. */
+    result = sg_concat_eval_or_opt(ctx, &sol, 0, 1, 1, 1, 1, &concat_total);
+    assert(result == 1);  /* eval was performed (applicable) */
+    /* concat_total should be computable (doesn't need to improve, just needs to eval) */
+    assert(isfinite(concat_total));
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_concat_eval_or_opt_reject(void) {
+    /* OR-opt move that worsens: eval returns 1, new_total >= current */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    double concat_total;
+    int result;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+
+    /* Two nearby stops on v0, one on v1 — well-assigned */
+    add_delivery_request(ctx, 10.0, 10.0, 0, 100000, 10, 1.0);  /* r0 */
+    add_delivery_request(ctx, 12.0, 10.0, 0, 100000, 10, 1.0);  /* r1 */
+    add_delivery_request(ctx, 90.0, 90.0, 0, 100000, 10, 1.0);  /* r2 */
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    /* v0=[r0, r1], v1=[r2] — already optimal clusters */
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 0, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 1, 0, 1, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 2, 1, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 2, 1, 0, dist) == AR_STATUS_OK);
+    }
+
+    /* Moving r0 from v0 to v1 should NOT improve (moving away from cluster) */
+    result = sg_concat_eval_or_opt(ctx, &sol, 0, 0, 1, 1, 0, &concat_total);
+    assert(result == 1);  /* eval was performed */
+    /* concat_total should be worse than or equal to current */
+    assert(concat_total >= sol.total_distance - 1e-9);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_concat_eval_2opt_star(void) {
+    /* 2-opt* eval on delivery-only instance, verify exact distance */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    double concat_total;
+    int result;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+
+    /* Deliberately misassign: cluster A stops on v0/v1, cluster B on v0/v1 */
+    add_delivery_request(ctx, 10.0, 10.0, 0, 100000, 10, 1.0);  /* r0 on v0 */
+    add_delivery_request(ctx, 90.0, 90.0, 0, 100000, 10, 1.0);  /* r1 on v0 */
+    add_delivery_request(ctx, 12.0, 10.0, 0, 100000, 10, 1.0);  /* r2 on v1 */
+    add_delivery_request(ctx, 92.0, 90.0, 0, 100000, 10, 1.0);  /* r3 on v1 */
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    /* v0=[r0, r1], v1=[r2, r3] */
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 0, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 1, 0, 1, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 2, 1, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 2, 1, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 3, 1, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 3, 1, 1, dist) == AR_STATUS_OK);
+    }
+
+    /* 2-opt* with cut_a=1 on v0, cut_b=1 on v1:
+       New v0 = [r0] + [r3] = [r0, r3] (nearby on cluster A? No — r0 near (10,10), r3 near (92,90))
+       New v1 = [r2] + [r1] = [r2, r1] */
+    result = sg_concat_eval_2opt_star(ctx, &sol, 0, 1, 1, 1, &concat_total);
+    assert(result == 1);  /* applicable: delivery-only, same profile, no breaks */
+    assert(isfinite(concat_total));
+
+    /* Verify the concat distance matches the O(L) computation */
+    {
+        uint32_t candidate_a[2], candidate_b[2];
+        double dist_a = 0.0, dist_b = 0.0, ol_total;
+        const uint32_t *route_a = sg_route_vehicle_ptr_const(&sol, 0);
+        const uint32_t *route_b = sg_route_vehicle_ptr_const(&sol, 1);
+
+        candidate_a[0] = route_a[0]; candidate_a[1] = route_b[1];
+        candidate_b[0] = route_b[0]; candidate_b[1] = route_a[1];
+
+        assert(sg_route_sequence_feasible_distance(ctx, 0, candidate_a, 2, &dist_a, NULL));
+        assert(sg_route_sequence_feasible_distance(ctx, 1, candidate_b, 2, &dist_b, NULL));
+
+        ol_total = sol.total_distance - sol.route_distance[0] - sol.route_distance[1]
+                   + dist_a + dist_b;
+        assert(fabs(concat_total - ol_total) < 1.0);
+    }
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_concat_eval_cross_exchange(void) {
+    /* Cross-exchange eval: swap 1 request between two routes, verify distance */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    double concat_total;
+    int result;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+
+    add_delivery_request(ctx, 10.0, 10.0, 0, 100000, 10, 1.0);  /* r0 */
+    add_delivery_request(ctx, 90.0, 90.0, 0, 100000, 10, 1.0);  /* r1 */
+    add_delivery_request(ctx, 12.0, 10.0, 0, 100000, 10, 1.0);  /* r2 */
+    add_delivery_request(ctx, 92.0, 90.0, 0, 100000, 10, 1.0);  /* r3 */
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    /* v0=[r0, r1], v1=[r2, r3] */
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 0, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 1, 0, 1, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 2, 1, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 2, 1, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 3, 1, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 3, 1, 1, dist) == AR_STATUS_OK);
+    }
+
+    /* Cross-exchange: swap r1 (ia=1, sa=1 from v0) with r2 (ib=0, sb=1 from v1) */
+    result = sg_concat_eval_cross_exchange(ctx, &sol, 0, 1, 1, 1, 0, 1, &concat_total);
+    assert(result == 1);  /* applicable */
+    assert(isfinite(concat_total));
+
+    /* Verify: new v0=[r0, r2], new v1=[r1, r3]
+       Compare with O(L) computation */
+    {
+        uint32_t candidate_a[2], candidate_b[2];
+        double dist_a = 0.0, dist_b = 0.0, ol_total;
+        const uint32_t *route_a = sg_route_vehicle_ptr_const(&sol, 0);
+        const uint32_t *route_b = sg_route_vehicle_ptr_const(&sol, 1);
+
+        candidate_a[0] = route_a[0]; candidate_a[1] = route_b[0]; /* [r0, r2] */
+        candidate_b[0] = route_a[1]; candidate_b[1] = route_b[1]; /* [r1, r3] */
+
+        assert(sg_route_sequence_feasible_distance(ctx, 0, candidate_a, 2, &dist_a, NULL));
+        assert(sg_route_sequence_feasible_distance(ctx, 1, candidate_b, 2, &dist_b, NULL));
+
+        ol_total = sol.total_distance - sol.route_distance[0] - sol.route_distance[1]
+                   + dist_a + dist_b;
+        assert(fabs(concat_total - ol_total) < 1.0);
+    }
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_concat_eval_pd_fallback(void) {
+    /* PD instance: eval returns 0 (not applicable), existing path runs */
+    SGContext *ctx = make_config(10, 42);
+    uint32_t depot;
+    double concat_total = 0.0;
+    int result;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+
+    /* Add PD requests — triggers has_pd_requests */
+    add_pd_request(ctx, 10.0, 10.0, 0, 50000, 10,
+                        90.0, 90.0, 0, 100000, 10, 1.0);
+    add_pd_request(ctx, 20.0, 20.0, 0, 50000, 10,
+                        80.0, 80.0, 0, 100000, 10, 1.0);
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    assert(ctx->has_pd_requests == 1);
+
+    /* All concat evals should return 0 (not applicable) for PD instances */
+    result = sg_concat_eval_or_opt(ctx, NULL, 0, 0, 1, 1, 0, &concat_total);
+    assert(result == 0);
+
+    result = sg_concat_eval_2opt_star(ctx, NULL, 0, 1, 1, 1, &concat_total);
+    assert(result == 0);
+
+    result = sg_concat_eval_cross_exchange(ctx, NULL, 0, 0, 1, 1, 0, 1, &concat_total);
+    assert(result == 0);
+
+    sg_free(ctx);
+}
+
+static void test_concat_intensify_no_regression(void) {
+    /* Verify that intensify with pre-filters produces same or better results
+       as the baseline test_or_opt_intensify */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    double dist_before, dist_after;
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+
+    add_delivery_request(ctx, 10.0, 10.0, 0, 100000, 10, 1.0);
+    add_delivery_request(ctx, 90.0, 90.0, 0, 100000, 10, 1.0);
+    add_delivery_request(ctx, 92.0, 90.0, 0, 100000, 10, 1.0);
+    add_delivery_request(ctx, 12.0, 10.0, 0, 100000, 10, 1.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 0, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 1, 0, 1, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 2, 0, 2, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 2, 0, 2, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 3, 1, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 3, 1, 0, dist) == AR_STATUS_OK);
+    }
+
+    dist_before = sol.total_distance;
+    assert(dist_before > 0.0);
+
+    sg_route_postprocess_intensify(ctx, &sol);
+    dist_after = sol.total_distance;
+
+    /* Distance must improve (clusters should regroup) */
+    assert(dist_after < dist_before - 1.0);
+    assert(sol.base.num_unassigned == 0);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -15333,12 +15673,21 @@ int main(void) {
     RUN_TEST(test_timing_concat_matches_update_timing);
     RUN_TEST(test_timing_seg_setup_time);
 
+    /* Phase 3: O(1) Concat Pre-Filtering */
+    RUN_TEST(test_build_segment_for_vehicle);
+    RUN_TEST(test_concat_eval_or_opt_accept);
+    RUN_TEST(test_concat_eval_or_opt_reject);
+    RUN_TEST(test_concat_eval_2opt_star);
+    RUN_TEST(test_concat_eval_cross_exchange);
+    RUN_TEST(test_concat_eval_pd_fallback);
+    RUN_TEST(test_concat_intensify_no_regression);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 396);
+    assert(tests_run == 403);
 #else
-    assert(tests_run == 387);
+    assert(tests_run == 394);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

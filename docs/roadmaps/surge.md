@@ -2220,43 +2220,113 @@ SGRouteSegment sg_concat(const SGRouteSegment *a, const SGRouteSegment *b) {
 
 ### Implementation
 
-**Phase S17.1: Segment Prefix/Suffix (In Progress)**
+**Phase S17.1: Capacity Prefix/Suffix ✅ COMPLETE (PR #25)**
 
-- Add `SGRouteSegment *prefix`, `*suffix` arrays to `SGRoute`
-- Rebuild on every insertion/removal: O(L) but single pass
-- `sg_route_concat(seg1, seg2)` returns combined summary in O(1)
-- Use in `sg_route_eval_insertion_cached()` to get new route cost without full rebuild
+Per-vehicle capacity prefix/suffix arrays with `(delta, min, max)` per dimension. Built
+at the end of `sg_route_update_timing()`. O(1) capacity feasibility for any contiguous
+sub-route by concatenating prefix[start] with suffix[end].
 
-**Verification Mode:**
+**Files:** `sg_concat.c` (`sg_route_build_cap_segments()`), `sg_internal.h` (`SGCapSegment`).
 
+**Phase S17.2: Timing Prefix/Suffix ✅ COMPLETE (commit fad7453)**
+
+Per-vehicle timing prefix/suffix arrays using `SGSegSummary` (distance, duration,
+earliest_start, latest_start, time_warp, wait_time, first/last location). Built at the
+end of `sg_route_update_timing()` in a single O(L) pass. O(1) timing evaluation for any
+route formed by concatenating a prefix with a suffix via `sg_concat_timing()`.
+
+**Files:** `sg_concat.c` (`sg_route_build_segments()`, `sg_concat_timing()`),
+`sg_internal.h` (`SGSegSummary`).
+
+**Phase S17.3: Local Search Pre-filtering ✅ COMPLETE**
+
+O(1) pre-filter for three local search operators: 2-opt*, OR-opt, and cross-exchange.
+Before each trial move, the concat evaluator computes the new total distance in O(1)
+(or O(k) for moved segments of k ≤ 3 requests). If the move cannot improve total distance,
+it is skipped without running the O(L) `sg_route_sequence_feasible_distance()` confirmation.
+Moves that pass the pre-filter still go through the full O(L) path — no false acceptances.
+
+**Pattern (identical for all three operators):**
 ```c
-#ifdef SG_CONCAT_VERIFY
-    /* Run both old O(L) scan and new O(1) concat, assert agreement */
+double concat_total;
+if (sg_concat_eval_<operator>(ctx, sol, ..., &concat_total) &&
+    concat_total >= sol->total_distance - 1e-9) {
+    continue;  /* Skip — O(1) says not improving */
+}
+/* Existing O(L) path runs here (unchanged) */
 ```
 
-Enabled during testing to catch any divergence. Disabled in benchmarks/production.
+When the eval function returns 0 (not applicable), the existing O(L) path runs as fallback.
+This guarantees zero regression for any problem type.
 
-**Phase S17.2: Timing Concatenation for Eval (Future)**
+**Files:** `sg_concat.c` (eval functions), `sg_postprocess.c` (pre-filter calls),
+`sg_internal.h` (declarations). 7 unit tests in `test_surge.c`.
 
-Replace the timing feasibility check in `sg_route_eval_insertion_cached()` with segment
-concatenation. Currently timing is already ~O(1) via latest_start cache, so this phase is
-lower priority. Main benefit: unified framework, cleaner code.
+#### Applicability Conditions
 
-**Phase S17.3: Local Search Pre-filtering (Future)**
+The O(1) pre-filter applies when ALL of these conditions are met:
 
-Use segment summaries to evaluate local search moves without full copy+recompute:
-- Exchange: Concat with swapped stops to get new route cost estimate
-- Or-opt: Move segment from one route to another — 4 concatenations
-- 2-opt*: Concat tail swap between two routes
+| Condition | Why Required | Detection |
+|-----------|-------------|-----------|
+| Delivery-only routes | Prefix/suffix at stop level must align with request-level operator indices | `!ctx->has_pd_requests` |
+| No break policy | Break state machine makes timing non-decomposable | `!vehicle->has_break_policy` |
+| No multi-trip | Multi-trip resets violate monotonic timing invariants | `!vehicle->has_multi_trip` |
+| No travel callback | Callback cost may differ from prefix/suffix cached distances | `!ctx->travel_callback` |
+| No time brackets | Time-varying distance matrices may diverge from prefix/suffix build-time values | `!ctx->has_travel_time_brackets` |
 
-This eliminates the `sg_route_solution_copy()` + `sg_route_update_timing()` pattern in
-`sg_postprocess.c`, which is currently the dominant cost of local search.
+**2-opt\* has additional requirements** (suffix from vehicle B used on vehicle A):
+
+| Condition | Why Required | Detection |
+|-----------|-------------|-----------|
+| Same travel profile | Suffix distances are profile-dependent; cross-vehicle use requires identical matrices | `!ctx->has_travel_profiles` |
+| Closed start | Open-start vehicles need depot adjustment not yet implemented | `!vehicle->open_start` |
+| Closed end | Open-end vehicles have no depot return to adjust | `!vehicle->open_end` |
+
+**Primary target:** Solomon/GH VRPTW benchmarks (delivery-only, single profile, no breaks).
+These are 100% of our current benchmarks and represent most real trucking instances.
+
+#### Fallback Behavior
+
+When applicability conditions are NOT met, the eval function returns 0 and the existing
+O(L) code path runs unchanged. This is a hard guarantee — the pre-filter never rejects
+a move that the O(L) path would accept.
+
+| Problem Type | Pre-filter Active? | Behavior |
+|--------------|-------------------|----------|
+| VRPTW (delivery-only, single profile) | ✅ All 3 operators | Full O(1) pre-filtering |
+| VRPTW with travel profiles (OR-opt, cross-exchange) | ✅ OR-opt, cross-exchange | Segments rebuilt for target vehicle's profile |
+| VRPTW with travel profiles (2-opt\*) | ❌ | Fallback to O(L) — suffix distances profile-dependent |
+| PDPTW (pickup-delivery pairs) | ❌ | Fallback to O(L) — stop interleaving prevents prefix/suffix alignment |
+| DARP (dial-a-ride) | ❌ | Fallback to O(L) — same as PDPTW |
+| Routes with break policies | ❌ | Fallback to O(L) — break state non-decomposable |
+| Routes with multi-trip | ❌ | Fallback to O(L) — trip resets break timing invariants |
+| Time-dependent travel (brackets) | ❌ | Fallback to O(L) — distance may vary with departure time |
+| External travel callback | ❌ | Fallback to O(L) — callback cost not cached in segments |
+| Open-start/open-end (2-opt\*) | ❌ | Fallback to O(L) — depot return adjustment not implemented |
+| Intra-route OR-opt | ❌ | Fallback to O(L) — prefix/suffix positions shift after segment removal |
+
+#### Operator Details
+
+**OR-opt** (`sg_concat_eval_or_opt`): Remove k (1-3) requests from vehicle A, insert at
+position ins in vehicle B. Source route: `concat(prefix_A[start], suffix_A[start+k])`.
+Moved segment rebuilt for vb's profile via `sg_build_segment_for_vehicle()` — O(k) where
+k ≤ 6 stops. Dest route: `concat(prefix_B[ins], segment, suffix_B[ins])`. Capacity checked
+via `sg_concat_capacity_ok()`. Inter-vehicle only (intra-route falls back to O(L)).
+
+**2-opt\*** (`sg_concat_eval_2opt_star`): New A = A[0..cut_a-1] + B[cut_b..end], New B =
+B[0..cut_b-1] + A[cut_a..end]. Requires same travel profile across vehicles. Depot return
+adjustment computed when vehicles have different end depots:
+`depot_adj = d(last_stop, new_depot) - d(last_stop, old_depot)`.
+
+**Cross-exchange** (`sg_concat_eval_cross_exchange`): Swap segment [ia, ia+sa-1] from A
+with [ib, ib+sb-1] from B (sa, sb ∈ {1,2,3}). Both moved segments rebuilt for target
+vehicle via `sg_build_segment_for_vehicle()`. New routes: prefix + rebuilt_segment + suffix.
 
 **Phase S17.4: Segment Tree (Future, L>50)**
 
 For very long routes (400+ customers), even prefix/suffix rebuild after every insertion
 is O(L). A segment tree gives O(log L) updates and O(log L) range queries. Only needed
-if profiling shows segment rebuild as a bottleneck after Phase 1.
+if profiling shows segment rebuild as a bottleneck after Phase S17.1-3.
 
 ---
 
