@@ -687,7 +687,7 @@ typedef struct {
     int perf_dual_ratio_no_entering;   /* dual ratio test failed to find entering variable */
     int perf_dual_theta_nonpositive;   /* dual ratio test returned theta <= 0 */
     int perf_dual_pivot_reject_small;  /* dual pivot rejected on small/non-finite pivot */
-    int perf_dual_bound_flip_applied;  /* bound flips applied while constructing dual-feasible start */
+    int perf_dual_bound_flip_applied;  /* dual bound flips applied (startup + iterative mode) */
     int perf_dual_lu_hard_trigger;     /* dual pivot path triggered hard LU recovery/refactor */
 } LPSolverTelemetryState;
 
@@ -772,7 +772,7 @@ typedef struct SimplexSolver {
     int verify;             /* 0=off, 1=post-solve verification (T2.3) */
     int method;             /* 0=primal, 1=dual, 2=auto (dual first, primal fallback) */
     int ratio_test_mode;    /* 0=standard ratio, 1=Harris ratio (default) */
-    int dual_ratio_test_mode; /* 0=standard, 1=Harris, 2=flip-style tie-break */
+    int dual_ratio_test_mode; /* 0=standard, 1=Harris, 2=iterative bound-flip mode */
     double objective_limit; /* Early-exit when obj >= limit (internal min space), default RALPH_INFINITY */
     int phase1_pricing;     /* Override pricing for Phase 1: 0=Dantzig, -1=disabled (use solver pricing) */
     int trace_phase1;       /* 1 = emit deterministic Phase-1 pivot-failure trace */
@@ -1234,7 +1234,7 @@ int pricing_heap(SimplexTableau *tableau, int *entering);
 
 /* Ratio test */
 int ratio_test_harris(SimplexTableau *tableau, int entering, int *leaving, double *theta);
-int dual_ratio_test(SimplexTableau *tableau, int leaving, int *entering, double *theta);
+int dual_ratio_test(SimplexTableau *tableau, int leaving, int *entering, double *theta); /* entering=-2 => flip-only step */
 
 /* Utility */
 void lp_print_stats(const SimplexSolver *solver);
