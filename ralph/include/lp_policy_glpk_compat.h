@@ -70,6 +70,13 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
                                          int *method_io,
                                          int *pricing_io,
                                          int *phase1_pricing_io,
-                                         int *presolve_io);
+                                         int *presolve_io,
+                                         int *ratio_io,
+                                         int *dual_bound_flip_io,
+                                         int *crash_io,
+                                         int *bfcp_backend_io,
+                                         int *bfcp_update_limit_io,
+                                         double *bfcp_pivot_tol_io,
+                                         double *bfcp_growth_guard_io);
 
 #endif /* LP_POLICY_GLPK_COMPAT_H */

@@ -18,6 +18,11 @@
 static int tests_run = 0;
 static int tests_passed = 0;
 
+double lu_update_pivot_ratio_threshold_for_test(int num_updates,
+                                                int max_updates,
+                                                double cond_estimate,
+                                                double growth_factor);
+
 #define ASSERT(cond, msg) do { \
     tests_run++; \
     if (cond) { \
@@ -746,6 +751,31 @@ static void test_supernode_cost_gate_skip_regression(void) {
 }
 
 /* ============================================================================
+ * Test 11: Adaptive LU update pivot threshold policy
+ * ============================================================================ */
+static void test_lu_update_pivot_threshold_adaptive(void) {
+    printf("  LU: adaptive update-pivot threshold policy...\n");
+
+    double healthy_early = lu_update_pivot_ratio_threshold_for_test(
+        10, 120, 1e3, 1.0);
+    double moderate = lu_update_pivot_ratio_threshold_for_test(
+        70, 120, 1e5, 50.0);
+    double degraded = lu_update_pivot_ratio_threshold_for_test(
+        90, 120, 1e8, 1e4);
+
+    ASSERT_NEAR(healthy_early, 1.25e-5, 1e-12,
+                "adaptive threshold: healthy early state");
+    ASSERT_NEAR(moderate, 5.0e-5, 1e-12,
+                "adaptive threshold: moderate health state");
+    ASSERT_NEAR(degraded, 2.0e-4, 1e-12,
+                "adaptive threshold: degraded health state");
+    ASSERT(healthy_early < moderate,
+           "adaptive threshold: healthy threshold is looser than moderate");
+    ASSERT(moderate < degraded,
+           "adaptive threshold: degraded threshold is stricter than moderate");
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -761,6 +791,7 @@ int main(void) {
     test_ge_identity_lrow_regression();
     test_markowitz_numeric_identity_full_retry();
     test_supernode_cost_gate_skip_regression();
+    test_lu_update_pivot_threshold_adaptive();
 
     printf("\nIntegration (A/B Comparison):\n");
     test_markowitz_integration_small_lp();

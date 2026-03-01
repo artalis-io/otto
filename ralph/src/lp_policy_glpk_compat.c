@@ -94,7 +94,14 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
                                          int *method_io,
                                          int *pricing_io,
                                          int *phase1_pricing_io,
-                                         int *presolve_io) {
+                                         int *presolve_io,
+                                         int *ratio_io,
+                                         int *dual_bound_flip_io,
+                                         int *crash_io,
+                                         int *bfcp_backend_io,
+                                         int *bfcp_update_limit_io,
+                                         double *bfcp_pivot_tol_io,
+                                         double *bfcp_growth_guard_io) {
     if (!cfg) return;
     if (cfg->lp_policy_profile != LP_POLICY_PROFILE_GLPK_COMPAT) return;
 
@@ -126,5 +133,30 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
         } else if (cfg->glpk_smcp_presolve == LP_GLPK_SMCP_PRESOLVE_OFF) {
             *presolve_io = -1;
         }
+    }
+
+    if (ratio_io) {
+        *ratio_io = (cfg->glpk_smcp_ratio == LP_GLPK_SMCP_RATIO_HARRIS) ? 1 : 0;
+    }
+
+    if (dual_bound_flip_io) {
+        *dual_bound_flip_io = (cfg->glpk_smcp_flip == LP_GLPK_SMCP_FLIP_ON) ? 1 : 0;
+    }
+
+    if (crash_io) {
+        *crash_io = (cfg->glpk_smcp_basis == LP_GLPK_SMCP_BASIS_ADV) ? 1 : 0;
+    }
+
+    if (bfcp_backend_io) {
+        *bfcp_backend_io = cfg->glpk_bfcp_backend;
+    }
+    if (bfcp_update_limit_io) {
+        *bfcp_update_limit_io = cfg->glpk_bfcp_update_limit;
+    }
+    if (bfcp_pivot_tol_io) {
+        *bfcp_pivot_tol_io = cfg->glpk_bfcp_pivot_tol;
+    }
+    if (bfcp_growth_guard_io) {
+        *bfcp_growth_guard_io = cfg->glpk_bfcp_growth_guard;
     }
 }

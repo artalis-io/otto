@@ -49,6 +49,7 @@
 #define PHASE1_DIR_SKIP_RC_ONLY_MIN_M 700
 #define PHASE1_DIR_SKIP_RC_ONLY_MIN_DEGEN 20
 #define PHASE1_DIR_SKIP_RC_ONLY_MIN_NO_PIVOT_STREAK 8
+#define PHASE1_DIR_SKIP_NO_RECOMPUTE_GUARD 8
 #define LU_HEALTH_HARD_COND_MIN_UPDATES 10
 #define LU_HEALTH_HARD_COND_RATIO 1e10
 #define LU_HEALTH_SOFT_COND_MED 1e6
@@ -422,6 +423,20 @@ int lp_refactor_policy_phase1_dir_skip_allow_rc_only(int m,
     if (degenerate_count >= PHASE1_DIR_SKIP_RC_ONLY_MIN_DEGEN) return 1;
     if (no_pivot_streak >= PHASE1_DIR_SKIP_RC_ONLY_MIN_NO_PIVOT_STREAK) return 1;
     return 0;
+}
+
+int lp_refactor_policy_phase1_dir_skip_should_skip_recompute(
+    int m,
+    int degenerate_count,
+    int no_pivot_streak,
+    int no_recompute_streak) {
+    if (!lp_refactor_policy_phase1_dir_skip_allow_rc_only(
+            m, degenerate_count, no_pivot_streak)) {
+        return 0;
+    }
+    if (no_recompute_streak < 0) no_recompute_streak = 0;
+    if (no_recompute_streak >= PHASE1_DIR_SKIP_NO_RECOMPUTE_GUARD) return 0;
+    return 1;
 }
 
 int lp_refactor_policy_phase1_dir_stabilize_force_extreme_ratio(

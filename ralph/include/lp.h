@@ -40,6 +40,15 @@
 #define RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER 1e4
 #define RALPH_PHASE1_ENTERING_EXCLUDE_ITERS 8
 
+/* Runtime policy selectors (mapped from GLPK-compatible control plane). */
+#define LP_RATIO_TEST_STANDARD 0
+#define LP_RATIO_TEST_HARRIS 1
+
+#define LP_LU_BACKEND_POLICY_AUTO   -1
+#define LP_LU_BACKEND_POLICY_LUF_FT 0
+#define LP_LU_BACKEND_POLICY_CBG    1
+#define LP_LU_BACKEND_POLICY_CGR    2
+
 /* Refactor trigger reason telemetry codes */
 typedef enum {
     RALPH_REFACTOR_REASON_OTHER = 0,
@@ -324,6 +333,7 @@ typedef struct {
     double max_diag_U;      /* Maximum |U[i,i]| at factorization */
     double cond_estimate;   /* Estimated condition number */
     double growth_factor;   /* Growth in U during updates */
+    double growth_refactor_threshold; /* Growth threshold override (<=0 uses default) */
 
     /* Redundant row hints (for two-phase simplex with stuck artificials)
      * These point to external data from the tableau, not owned by LU */
@@ -636,6 +646,8 @@ typedef struct {
     int perf_phase1_dir_stabilize_ratio_gt_1000;
     int perf_phase1_dir_stabilize_skip_rc_only;
     int perf_phase1_dir_stabilize_skip_full;
+    int perf_phase1_dir_stabilize_skip_no_recompute;
+    int perf_phase1_dir_stabilize_skip_guard_refresh;
     int perf_phase1_recompute_after_ratio_breakdown;
     int perf_phase1_recompute_after_dir_skip;
     int perf_phase1_recompute_after_dir_refactor;
@@ -750,6 +762,7 @@ typedef struct SimplexSolver {
     int crash;              /* 0=off, 1=triangular crash basis */
     int verify;             /* 0=off, 1=post-solve verification (T2.3) */
     int method;             /* 0=primal, 1=dual, 2=auto (dual first, primal fallback) */
+    int ratio_test_mode;    /* 0=standard ratio, 1=Harris ratio (default) */
     double objective_limit; /* Early-exit when obj >= limit (internal min space), default RALPH_INFINITY */
     int phase1_pricing;     /* Override pricing for Phase 1: 0=Dantzig, -1=disabled (use solver pricing) */
     int trace_phase1;       /* 1 = emit deterministic Phase-1 pivot-failure trace */
@@ -825,6 +838,10 @@ typedef struct SimplexSolver {
 
     /* Supernodal LU (T2.1) — propagated to LU after tableau creation */
     int lu_supernode;           /* 0=off, 1=enable */
+    int lu_backend_policy;      /* -1=auto/default, 0=luf_ft, 1=cbg, 2=cgr */
+    int lu_update_limit_override; /* <=0 => use LU default */
+    double lu_pivot_tol_override; /* <=0 => use LU default */
+    double lu_growth_guard_override; /* <=0 => use default growth threshold */
 
     /* D4: Flag set when primal runs after dual fallback (known degenerate) */
     int from_dual_fallback;     /* 1 = arrived from failed dual simplex */
@@ -900,6 +917,8 @@ typedef struct {
     int perf_phase1_dir_stabilize_ratio_gt_1000;
     int perf_phase1_dir_stabilize_skip_rc_only;
     int perf_phase1_dir_stabilize_skip_full;
+    int perf_phase1_dir_stabilize_skip_no_recompute;
+    int perf_phase1_dir_stabilize_skip_guard_refresh;
     int perf_phase1_recompute_after_ratio_breakdown;
     int perf_phase1_recompute_after_dir_skip;
     int perf_phase1_recompute_after_dir_refactor;
@@ -1189,7 +1208,7 @@ void dual_v2_clear_perturbation(SimplexTableau *tab);  /* Clear stale perturbati
 int dual_simplex_solve_v2(SimplexSolver *solver);  /* Clean dual Phase 2 — no primal fallbacks */
 int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver);  /* Clean dual from scratch (T1.3) */
 int dual_phase1(SimplexSolver *solver);            /* Auxiliary-objective dual Phase 1 */
-int make_dual_feasible(SimplexTableau *tab, int obj_sense); /* Flip bounds for dual feasibility */
+int make_dual_feasible(SimplexTableau *tab, int obj_sense, int allow_bound_flip); /* Flip bounds for dual feasibility */
 
 /* Pricing strategies */
 int pricing_dantzig(SimplexTableau *tableau, int *entering);
@@ -1332,6 +1351,10 @@ void lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(
     double dir_inf_ratio);
 void lp_telemetry_record_phase1_dir_stabilize_skip(SimplexSolver *solver,
                                                    int used_full_recompute);
+void lp_telemetry_record_phase1_dir_stabilize_skip_no_recompute(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_dir_stabilize_skip_guard_refresh(
+    SimplexSolver *solver);
 void lp_telemetry_record_phase1_recompute(SimplexSolver *solver,
                                           LPPhase1RecomputeReason reason);
 void lp_telemetry_record_phase1_recompute_rc_only(SimplexSolver *solver);

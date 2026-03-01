@@ -86,6 +86,8 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_dir_stabilize_ratio_gt_1000 = 0;
     solver->telemetry.perf_phase1_dir_stabilize_skip_rc_only = 0;
     solver->telemetry.perf_phase1_dir_stabilize_skip_full = 0;
+    solver->telemetry.perf_phase1_dir_stabilize_skip_no_recompute = 0;
+    solver->telemetry.perf_phase1_dir_stabilize_skip_guard_refresh = 0;
     solver->telemetry.perf_phase1_recompute_after_ratio_breakdown = 0;
     solver->telemetry.perf_phase1_recompute_after_dir_skip = 0;
     solver->telemetry.perf_phase1_recompute_after_dir_refactor = 0;
@@ -374,6 +376,8 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_ratio_gt_1000);
     COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_skip_rc_only);
     COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_skip_full);
+    COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_skip_no_recompute);
+    COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_skip_guard_refresh);
     COPY_SOLVER_FIELD(perf_phase1_recompute_after_ratio_breakdown);
     COPY_SOLVER_FIELD(perf_phase1_recompute_after_dir_skip);
     COPY_SOLVER_FIELD(perf_phase1_recompute_after_dir_refactor);

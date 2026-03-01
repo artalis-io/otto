@@ -34,7 +34,51 @@ static void apply_bound_perturbation(SimplexTableau *tab);
 static void remove_bound_perturbation(SimplexTableau *tab);
 
 /* Forward declaration for dual feasibility function (non-static for simplex.c access) */
-int make_dual_feasible(SimplexTableau *tab, int obj_sense);
+int make_dual_feasible(SimplexTableau *tab, int obj_sense, int allow_bound_flip);
+
+static void configure_dual_tableau_for_solver(SimplexSolver *solver, SimplexTableau *tab) {
+    if (!solver || !tab) return;
+    tab->owner = solver;
+
+    if (!tab->lu) return;
+
+    int enable_supernode = 0;
+    tab->lu->telemetry_enabled = solver->telemetry_enabled;
+    if (solver->policy.basis_governor_mode == LP_BASIS_GOV_MODE_OFF) {
+        tab->lu->basis_governor = NULL;
+    } else {
+        tab->lu->basis_governor = &solver->policy.basis_governor;
+    }
+
+    tab->lu->mkz_enabled = 1;
+    if (solver->lu_supernode) {
+        enable_supernode = 1;
+    } else if (tab->m > 300) {
+        enable_supernode = 1;
+    }
+
+    if (solver->lu_backend_policy == LP_LU_BACKEND_POLICY_CBG) {
+        tab->lu->mkz_enabled = 0;
+        tab->lu->sn_enabled = 0;
+    } else if (solver->lu_backend_policy == LP_LU_BACKEND_POLICY_CGR) {
+        tab->lu->mkz_enabled = 1;
+        tab->lu->sn_enabled = 0;
+    } else {
+        tab->lu->sn_enabled = enable_supernode ? 1 : 0;
+    }
+
+    if (solver->lu_update_limit_override > 0) {
+        tab->lu->max_updates = solver->lu_update_limit_override;
+    }
+    if (solver->lu_pivot_tol_override > 0.0) {
+        tab->lu->pivot_tol = solver->lu_pivot_tol_override;
+    }
+    if (solver->lu_growth_guard_override > 0.0) {
+        tab->lu->growth_refactor_threshold = solver->lu_growth_guard_override;
+    } else if (tab->lu->growth_refactor_threshold <= 0.0) {
+        tab->lu->growth_refactor_threshold = RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
+    }
+}
 
 /*
  * Extract Farkas ray (certificate of infeasibility) for dual simplex.
@@ -657,6 +701,7 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
 
     SimplexTableau *tab = solver->tableau;
     if (tab->phase != 1) return -1;
+    configure_dual_tableau_for_solver(solver, tab);
 
     if (max_iters <= 0) {
         max_iters = 3 * tab->m;
@@ -671,7 +716,9 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
     tableau_compute_reduced_costs(tab);
 
     /* Try to improve dual feasibility via bound flips first. */
-    int changes = make_dual_feasible(tab, solver->model ? solver->model->obj_sense : 1);
+    int changes = make_dual_feasible(tab,
+                                     solver->model ? solver->model->obj_sense : 1,
+                                     solver->use_dual_bound_flip);
     if (changes > 0) {
         tableau_compute_solution(tab);
         tableau_compute_reduced_costs(tab);
@@ -868,13 +915,14 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
  * After flipping, basic variable values are recomputed and may become infeasible,
  * which dual Phase 2 will fix.
  */
-int make_dual_feasible(SimplexTableau *tab, int obj_sense) {
+int make_dual_feasible(SimplexTableau *tab, int obj_sense, int allow_bound_flip) {
     (void)obj_sense;  /* Not needed - rc is already for internal minimization */
 
     /* Compute reduced costs with current basis */
     tableau_compute_reduced_costs(tab);
 
     int changes = 0;
+    if (!allow_bound_flip) return changes;
 
     for (int j = 0; j < tab->n; j++) {
         if (tab->var_status[j] == RALPH_BASIC) continue;
@@ -1020,14 +1068,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                                solver->policy.basis_governor_mode);
 
     SimplexTableau *tab = solver->tableau;
-    tab->owner = solver;
-    if (tab->lu) {
-        if (solver->policy.basis_governor_mode == LP_BASIS_GOV_MODE_OFF) {
-            tab->lu->basis_governor = NULL;
-        } else {
-            tab->lu->basis_governor = &solver->policy.basis_governor;
-        }
-    }
+    configure_dual_tableau_for_solver(solver, tab);
     int n_orig = solver->model->num_vars;
 
     /* Apply bound perturbation for cycling prevention.
@@ -1473,6 +1514,7 @@ int dual_phase1(SimplexSolver *solver) {
     if (!solver || !solver->tableau) return -1;
 
     SimplexTableau *tab = solver->tableau;
+    configure_dual_tableau_for_solver(solver, tab);
     int n = tab->n;
 
     if (solver->verbose) {
@@ -1632,7 +1674,7 @@ int dual_phase1(SimplexSolver *solver) {
     tableau_compute_reduced_costs(tab);
 
     /* Final check: try make_dual_feasible on the new basis */
-    make_dual_feasible(tab, solver->model->obj_sense);
+    make_dual_feasible(tab, solver->model->obj_sense, solver->use_dual_bound_flip);
     tableau_compute_solution(tab);
     tableau_compute_reduced_costs(tab);
 
@@ -1701,30 +1743,10 @@ int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver) {
             solver->status = RALPH_STATUS_ERROR;
             return -1;
         }
-        /* T2.1: Propagate supernodal LU flag (auto-enable for m > 300) */
-        if (solver->tableau->lu) {
-            solver->tableau->lu->telemetry_enabled = solver->telemetry_enabled;
-            if (solver->policy.basis_governor_mode == LP_BASIS_GOV_MODE_OFF) {
-                solver->tableau->lu->basis_governor = NULL;
-            } else {
-                solver->tableau->lu->basis_governor = &solver->policy.basis_governor;
-            }
-            if (solver->lu_supernode)
-                solver->tableau->lu->sn_enabled = 1;
-            else if (solver->tableau->m > 300)
-                solver->tableau->lu->sn_enabled = 1;
-        }
     }
 
     SimplexTableau *tab = solver->tableau;
-    tab->owner = solver;
-    if (tab->lu) {
-        if (solver->policy.basis_governor_mode == LP_BASIS_GOV_MODE_OFF) {
-            tab->lu->basis_governor = NULL;
-        } else {
-            tab->lu->basis_governor = &solver->policy.basis_governor;
-        }
-    }
+    configure_dual_tableau_for_solver(solver, tab);
 
     /* Note: crash is NOT used for dual from-scratch.  The all-auxiliary basis
      * gives y=0, rc=c — ideal for make_dual_feasible + dual_phase1.  Crashing
@@ -1751,7 +1773,7 @@ int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver) {
     }
 
     /* Step 1: Flip non-basic bounds to achieve dual feasibility */
-    int changes = make_dual_feasible(tab, solver->model->obj_sense);
+    int changes = make_dual_feasible(tab, solver->model->obj_sense, solver->use_dual_bound_flip);
 
     if (changes > 0) {
         tableau_compute_solution(tab);

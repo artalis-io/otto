@@ -91,6 +91,13 @@ int simplex_phase1_no_pivot_force_plan_for_test(int m,
                                                  int *next_streak_out,
                                                  int *next_cooldown_out);
 
+int simplex_phase1_force_pivot_mode_plan_for_test(int m,
+                                                   int degenerate_count,
+                                                   int dir_skip_no_recompute_streak,
+                                                   int active_budget,
+                                                   int *next_streak_out,
+                                                   int *next_budget_out);
+
 int simplex_phase1_soft_lu_policy_cooldown_plan_for_test(
     int m,
     int degenerate_count,
@@ -276,6 +283,15 @@ typedef struct {
 
 typedef struct {
     const char *name;
+    int m;
+    int degenerate_count;
+    int no_pivot_streak;
+    int no_recompute_streak;
+    int expected_skip;
+} DirSkipNoRecomputeCase;
+
+typedef struct {
+    const char *name;
     double dir_inf_ratio;
     int cooldown_active;
     int expected_force;
@@ -301,6 +317,17 @@ typedef struct {
     int expected_next_streak;
     int expected_next_cooldown;
 } NoPivotForceCase;
+
+typedef struct {
+    const char *name;
+    int m;
+    int degenerate_count;
+    int dir_skip_no_recompute_streak;
+    int active_budget;
+    int expected_activate;
+    int expected_next_streak;
+    int expected_next_budget;
+} ForcePivotModeCase;
 
 typedef struct {
     const char *name;
@@ -504,6 +531,21 @@ static int run_dir_skip_rc_only_case(const DirSkipRcOnlyCase *tc) {
     return 1;
 }
 
+static int run_dir_skip_no_recompute_case(const DirSkipNoRecomputeCase *tc) {
+    int skip = lp_refactor_policy_phase1_dir_skip_should_skip_recompute(
+        tc->m,
+        tc->degenerate_count,
+        tc->no_pivot_streak,
+        tc->no_recompute_streak);
+    if (skip != tc->expected_skip) {
+        fprintf(stderr, "FAIL: %s (expected skip=%d got=%d)\n",
+                tc->name, tc->expected_skip, skip);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
 static int run_dir_stabilize_force_case(const DirStabilizeForceCase *tc) {
     int force =
         lp_refactor_policy_phase1_dir_stabilize_force_extreme_ratio(
@@ -557,6 +599,35 @@ static int run_no_pivot_force_case(const NoPivotForceCase *tc) {
     if (next_cooldown != tc->expected_next_cooldown) {
         fprintf(stderr, "FAIL: %s (expected next_cooldown=%d got=%d)\n",
                 tc->name, tc->expected_next_cooldown, next_cooldown);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_force_pivot_mode_case(const ForcePivotModeCase *tc) {
+    int next_streak = -1;
+    int next_budget = -1;
+    int activate = simplex_phase1_force_pivot_mode_plan_for_test(
+        tc->m,
+        tc->degenerate_count,
+        tc->dir_skip_no_recompute_streak,
+        tc->active_budget,
+        &next_streak,
+        &next_budget);
+    if (activate != tc->expected_activate) {
+        fprintf(stderr, "FAIL: %s (expected activate=%d got=%d)\n",
+                tc->name, tc->expected_activate, activate);
+        return 0;
+    }
+    if (next_streak != tc->expected_next_streak) {
+        fprintf(stderr, "FAIL: %s (expected next_streak=%d got=%d)\n",
+                tc->name, tc->expected_next_streak, next_streak);
+        return 0;
+    }
+    if (next_budget != tc->expected_next_budget) {
+        fprintf(stderr, "FAIL: %s (expected next_budget=%d got=%d)\n",
+                tc->name, tc->expected_next_budget, next_budget);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -1285,6 +1356,32 @@ int main(void) {
             .expected_allow = 0
         }
     };
+    const DirSkipNoRecomputeCase dir_skip_no_recompute_cases[] = {
+        {
+            .name = "phase1 dir-skip no-recompute disabled when rc-only not allowed",
+            .m = 500,
+            .degenerate_count = 100,
+            .no_pivot_streak = 20,
+            .no_recompute_streak = 0,
+            .expected_skip = 0
+        },
+        {
+            .name = "phase1 dir-skip no-recompute allowed under guard budget",
+            .m = 900,
+            .degenerate_count = 40,
+            .no_pivot_streak = 1,
+            .no_recompute_streak = 3,
+            .expected_skip = 1
+        },
+        {
+            .name = "phase1 dir-skip no-recompute blocked at guard boundary",
+            .m = 900,
+            .degenerate_count = 5,
+            .no_pivot_streak = 12,
+            .no_recompute_streak = 8,
+            .expected_skip = 0
+        }
+    };
     const DirStabilizeForceCase dir_stabilize_force_cases[] = {
         {
             .name = "phase1 dir-force uses baseline threshold before cooldown",
@@ -1388,6 +1485,38 @@ int main(void) {
             .expected_next_cooldown = 5
         }
     };
+    const ForcePivotModeCase force_pivot_mode_cases[] = {
+        {
+            .name = "force-pivot mode activates after repeated dir-skip no-recompute",
+            .m = 1500,
+            .degenerate_count = 120,
+            .dir_skip_no_recompute_streak = 32,
+            .active_budget = 0,
+            .expected_activate = 1,
+            .expected_next_streak = 0,
+            .expected_next_budget = 20
+        },
+        {
+            .name = "force-pivot mode does not activate below threshold",
+            .m = 1500,
+            .degenerate_count = 120,
+            .dir_skip_no_recompute_streak = 31,
+            .active_budget = 0,
+            .expected_activate = 0,
+            .expected_next_streak = 31,
+            .expected_next_budget = 0
+        },
+        {
+            .name = "force-pivot mode keeps active budget without re-arming",
+            .m = 1500,
+            .degenerate_count = 120,
+            .dir_skip_no_recompute_streak = 64,
+            .active_budget = 3,
+            .expected_activate = 0,
+            .expected_next_streak = 64,
+            .expected_next_budget = 3
+        }
+    };
     const SoftLUPolicyCooldownCase soft_lu_policy_cooldown_cases[] = {
         {
             .name = "phase1 soft-lu defer applies periodic cooldown on large degenerate run",
@@ -1486,18 +1615,24 @@ int main(void) {
     int total_periodic_cost_defer = (int)(sizeof(periodic_cost_defer_cases) / sizeof(periodic_cost_defer_cases[0]));
     int total_dir_stabilize = (int)(sizeof(dir_stabilize_cooldown_cases) / sizeof(dir_stabilize_cooldown_cases[0]));
     int total_dir_skip_rc_only = (int)(sizeof(dir_skip_rc_only_cases) / sizeof(dir_skip_rc_only_cases[0]));
+    int total_dir_skip_no_recompute =
+        (int)(sizeof(dir_skip_no_recompute_cases) /
+              sizeof(dir_skip_no_recompute_cases[0]));
     int total_dir_force = (int)(sizeof(dir_stabilize_force_cases) / sizeof(dir_stabilize_force_cases[0]));
     int total_dir_moderate = (int)(sizeof(dir_stabilize_moderate_cases) / sizeof(dir_stabilize_moderate_cases[0]));
     int total_no_pivot = (int)(sizeof(no_pivot_force_cases) / sizeof(no_pivot_force_cases[0]));
+    int total_force_pivot_mode = (int)(sizeof(force_pivot_mode_cases) / sizeof(force_pivot_mode_cases[0]));
     int total_soft_lu_policy_cd = (int)(sizeof(soft_lu_policy_cooldown_cases) / sizeof(soft_lu_policy_cooldown_cases[0]));
     int total_phase2_recompute_interval =
         (int)(sizeof(phase2_recompute_interval_cases) /
               sizeof(phase2_recompute_interval_cases[0]));
     int total = total_policy + total_sched + total_lu_health + total_soft_lu_defer +
                 total_periodic_cost_defer + total_dir_stabilize + total_dir_force +
-                total_dir_moderate + total_no_pivot + total_soft_lu_policy_cd +
+                total_dir_moderate + total_no_pivot + total_force_pivot_mode +
+                total_soft_lu_policy_cd +
                 total_phase2_recompute_interval;
     total += total_dir_skip_rc_only;
+    total += total_dir_skip_no_recompute;
 
     for (int i = 0; i < total_policy; i++) {
         pass += run_case(&cases[i]);
@@ -1520,6 +1655,9 @@ int main(void) {
     for (int i = 0; i < total_dir_skip_rc_only; i++) {
         pass += run_dir_skip_rc_only_case(&dir_skip_rc_only_cases[i]);
     }
+    for (int i = 0; i < total_dir_skip_no_recompute; i++) {
+        pass += run_dir_skip_no_recompute_case(&dir_skip_no_recompute_cases[i]);
+    }
     for (int i = 0; i < total_dir_force; i++) {
         pass += run_dir_stabilize_force_case(&dir_stabilize_force_cases[i]);
     }
@@ -1528,6 +1666,9 @@ int main(void) {
     }
     for (int i = 0; i < total_no_pivot; i++) {
         pass += run_no_pivot_force_case(&no_pivot_force_cases[i]);
+    }
+    for (int i = 0; i < total_force_pivot_mode; i++) {
+        pass += run_force_pivot_mode_case(&force_pivot_mode_cases[i]);
     }
     for (int i = 0; i < total_soft_lu_policy_cd; i++) {
         pass += run_soft_lu_policy_cooldown_case(&soft_lu_policy_cooldown_cases[i]);

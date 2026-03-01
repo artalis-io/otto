@@ -75,6 +75,8 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_1000 = 1;
     solver.telemetry.perf_phase1_dir_stabilize_skip_rc_only = 6;
     solver.telemetry.perf_phase1_dir_stabilize_skip_full = 2;
+    solver.telemetry.perf_phase1_dir_stabilize_skip_no_recompute = 7;
+    solver.telemetry.perf_phase1_dir_stabilize_skip_guard_refresh = 3;
     solver.telemetry.perf_phase1_recompute_after_ratio_breakdown = 4;
     solver.telemetry.perf_phase1_recompute_after_dir_skip = 3;
     solver.telemetry.perf_phase1_recompute_after_dir_refactor = 2;
@@ -143,6 +145,10 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 dir skip rc-only");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_skip_full, 0,
                   "reset: phase1 dir skip full");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_skip_no_recompute, 0,
+                  "reset: phase1 dir skip no recompute");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_skip_guard_refresh, 0,
+                  "reset: phase1 dir skip guard refresh");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_ratio_breakdown, 0,
                   "reset: phase1 recompute ratio breakdown");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_dir_skip, 0,
@@ -278,6 +284,9 @@ static void test_solver_reset_and_refactor_accounting(void) {
     lp_telemetry_record_phase1_dir_stabilize_skip(&solver, 0);
     lp_telemetry_record_phase1_dir_stabilize_skip(&solver, 0);
     lp_telemetry_record_phase1_dir_stabilize_skip(&solver, 1);
+    lp_telemetry_record_phase1_dir_stabilize_skip_no_recompute(&solver);
+    lp_telemetry_record_phase1_dir_stabilize_skip_no_recompute(&solver);
+    lp_telemetry_record_phase1_dir_stabilize_skip_guard_refresh(&solver);
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_cooldown_candidates, 7,
                   "record: phase1 dir cooldown candidate count");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_ratio_le_3, 1,
@@ -298,6 +307,10 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 dir skip rc-only count");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_skip_full, 1,
                   "record: phase1 dir skip full count");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_skip_no_recompute, 2,
+                  "record: phase1 dir skip no recompute count");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_skip_guard_refresh, 1,
+                  "record: phase1 dir skip guard refresh count");
 
     lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
     lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
@@ -395,6 +408,8 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_dir_stabilize_ratio_gt_1000 = 1;
     solver.telemetry.perf_phase1_dir_stabilize_skip_rc_only = 10;
     solver.telemetry.perf_phase1_dir_stabilize_skip_full = 4;
+    solver.telemetry.perf_phase1_dir_stabilize_skip_no_recompute = 12;
+    solver.telemetry.perf_phase1_dir_stabilize_skip_guard_refresh = 3;
     solver.telemetry.perf_phase1_recompute_after_ratio_breakdown = 12;
     solver.telemetry.perf_phase1_recompute_after_dir_skip = 7;
     solver.telemetry.perf_phase1_recompute_after_dir_refactor = 5;
@@ -466,6 +481,10 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 dir skip rc-only");
     ASSERT_INT_EQ(snap.perf_phase1_dir_stabilize_skip_full, 4,
                   "solver_snapshot: phase1 dir skip full");
+    ASSERT_INT_EQ(snap.perf_phase1_dir_stabilize_skip_no_recompute, 12,
+                  "solver_snapshot: phase1 dir skip no recompute");
+    ASSERT_INT_EQ(snap.perf_phase1_dir_stabilize_skip_guard_refresh, 3,
+                  "solver_snapshot: phase1 dir skip guard refresh");
     ASSERT_INT_EQ(snap.perf_phase1_recompute_after_ratio_breakdown, 12,
                   "solver_snapshot: phase1 recompute ratio breakdown");
     ASSERT_INT_EQ(snap.perf_phase1_recompute_after_dir_skip, 7,
