@@ -377,7 +377,14 @@ static int dual_ratio_test_core(SimplexTableau *tab,
     }
 
     if (*entering < 0) {
+        if (tab->owner) {
+            lp_telemetry_record_dual_ratio_no_entering(tab->owner);
+        }
         return -1;  /* Dual infeasible (primal unbounded) */
+    }
+
+    if (*theta <= 0.0 && tab->owner) {
+        lp_telemetry_record_dual_theta_nonpositive(tab->owner);
     }
 
     return 0;
@@ -465,6 +472,9 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
 
     double pivot = tab->work3[leaving];
     if (!isfinite(pivot) || fabs(pivot) < RALPH_PIVOT_TOL) {
+        if (tab->owner) {
+            lp_telemetry_record_dual_pivot_reject_small(tab->owner);
+        }
         goto pivot_fail_rollback;
     }
 
@@ -594,6 +604,9 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
     /* Update LU factorization */
     const int force_refactor = fabs(pivot) < 1e-4;
     if (force_refactor) {
+        if (tab->owner) {
+            lp_telemetry_record_dual_lu_hard_trigger(tab->owner);
+        }
         double t_refactor_ms = lp_telemetry_timer_start();
         int rc_ref = tableau_refactorize(tab);
         if (tab->owner) {
@@ -611,6 +624,9 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
                 lp_telemetry_add_lu_update_timed(tab->owner, t_lu_update_ms);
             }
             if (rc_upd != 0) {
+                if (tab->owner) {
+                    lp_telemetry_record_dual_lu_hard_trigger(tab->owner);
+                }
                 double t_refactor_ms = lp_telemetry_timer_start();
                 int rc_ref = tableau_refactorize(tab);
                 if (tab->owner) {
@@ -1007,6 +1023,10 @@ int make_dual_feasible(SimplexTableau *tab, int obj_sense, int allow_bound_flip)
          * infeasible but cannot be fixed by bound flipping.  They require basis
          * pivots to enter the basis (where rc becomes irrelevant).  Dual Phase 1
          * handles these residual infeasibilities. */
+    }
+
+    if (changes > 0 && tab->owner) {
+        lp_telemetry_record_dual_bound_flip_applied(tab->owner, changes);
     }
 
     return changes;

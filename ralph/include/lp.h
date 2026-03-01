@@ -684,6 +684,11 @@ typedef struct {
     int perf_phase2_refactor_periodic_policy;
     int perf_phase2_refactor_periodic_lu_health;
     int perf_phase2_refactor_safety_forced;
+    int perf_dual_ratio_no_entering;   /* dual ratio test failed to find entering variable */
+    int perf_dual_theta_nonpositive;   /* dual ratio test returned theta <= 0 */
+    int perf_dual_pivot_reject_small;  /* dual pivot rejected on small/non-finite pivot */
+    int perf_dual_bound_flip_applied;  /* bound flips applied while constructing dual-feasible start */
+    int perf_dual_lu_hard_trigger;     /* dual pivot path triggered hard LU recovery/refactor */
 } LPSolverTelemetryState;
 
 /* Solver policy state (behavioral scheduling/control, not telemetry). */
@@ -956,6 +961,11 @@ typedef struct {
     int perf_phase2_refactor_periodic_policy;
     int perf_phase2_refactor_periodic_lu_health;
     int perf_phase2_refactor_safety_forced;
+    int perf_dual_ratio_no_entering;
+    int perf_dual_theta_nonpositive;
+    int perf_dual_pivot_reject_small;
+    int perf_dual_bound_flip_applied;
+    int perf_dual_lu_hard_trigger;
 
     double periodic_feedback_bias_phase1;
     double periodic_feedback_bias_phase2;
@@ -1372,6 +1382,12 @@ void lp_telemetry_record_phase1_no_pivot_force(SimplexSolver *solver,
                                                LPPhase1NoPivotForceReason reason);
 void lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(
     SimplexSolver *solver);
+void lp_telemetry_record_dual_ratio_no_entering(SimplexSolver *solver);
+void lp_telemetry_record_dual_theta_nonpositive(SimplexSolver *solver);
+void lp_telemetry_record_dual_pivot_reject_small(SimplexSolver *solver);
+void lp_telemetry_record_dual_bound_flip_applied(SimplexSolver *solver,
+                                                 int flips);
+void lp_telemetry_record_dual_lu_hard_trigger(SimplexSolver *solver);
 void lp_telemetry_lu_record_dense_factorize_ms(LUFactorization *lu,
                                                double elapsed_ms);
 void lp_telemetry_lu_record_dense_factorize_timed(LUFactorization *lu,

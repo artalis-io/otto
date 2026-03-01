@@ -357,3 +357,30 @@ void lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(
     if (!solver_telemetry_enabled(solver)) return;
     solver->telemetry.perf_phase1_soft_lu_policy_cooldown_defers++;
 }
+
+void lp_telemetry_record_dual_ratio_no_entering(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_dual_ratio_no_entering++;
+}
+
+void lp_telemetry_record_dual_theta_nonpositive(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_dual_theta_nonpositive++;
+}
+
+void lp_telemetry_record_dual_pivot_reject_small(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_dual_pivot_reject_small++;
+}
+
+void lp_telemetry_record_dual_bound_flip_applied(SimplexSolver *solver,
+                                                 int flips) {
+    if (!solver_telemetry_enabled(solver)) return;
+    if (flips <= 0) return;
+    solver->telemetry.perf_dual_bound_flip_applied += flips;
+}
+
+void lp_telemetry_record_dual_lu_hard_trigger(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_dual_lu_hard_trigger++;
+}

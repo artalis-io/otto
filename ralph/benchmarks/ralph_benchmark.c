@@ -291,6 +291,11 @@ typedef struct {
     int phase2_refactor_periodic_policy;
     int phase2_refactor_periodic_lu_health;
     int phase2_refactor_safety_forced;
+    int dual_ratio_no_entering;
+    int dual_theta_nonpositive;
+    int dual_pivot_reject_small;
+    int dual_bound_flip_applied;
+    int dual_lu_hard_trigger;
     int soft_lu_cost_gate_enabled;
     int soft_lu_cost_gate_defers_phase1;
     int soft_lu_cost_gate_defers_phase2;
@@ -959,6 +964,11 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.phase2_refactor_periodic_policy = solver_tel.perf_phase2_refactor_periodic_policy;
             result.phase2_refactor_periodic_lu_health = solver_tel.perf_phase2_refactor_periodic_lu_health;
             result.phase2_refactor_safety_forced = solver_tel.perf_phase2_refactor_safety_forced;
+            result.dual_ratio_no_entering = solver_tel.perf_dual_ratio_no_entering;
+            result.dual_theta_nonpositive = solver_tel.perf_dual_theta_nonpositive;
+            result.dual_pivot_reject_small = solver_tel.perf_dual_pivot_reject_small;
+            result.dual_bound_flip_applied = solver_tel.perf_dual_bound_flip_applied;
+            result.dual_lu_hard_trigger = solver_tel.perf_dual_lu_hard_trigger;
             result.soft_lu_cost_gate_enabled = solver_tel.soft_lu_cost_gate_enabled;
             result.soft_lu_cost_gate_defers_phase1 = solver_tel.soft_lu_cost_gate_defers_phase1;
             result.soft_lu_cost_gate_defers_phase2 = solver_tel.soft_lu_cost_gate_defers_phase2;
@@ -1974,6 +1984,20 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase2_compute_solution_calls);
     fprintf(out, "      \"compute_reduced_costs_calls\": %d\n", ralph->phase2_compute_rc_calls);
     fprintf(out, "    }\n");
+    fprintf(out, "  },\n");
+
+    /* Dual-path failure diagnostics (pilot-family triage counters). */
+    fprintf(out, "  \"dual_failures\": {\n");
+    fprintf(out, "    \"dual_ratio_no_entering\": %d,\n",
+            ralph->dual_ratio_no_entering);
+    fprintf(out, "    \"theta_nonpositive\": %d,\n",
+            ralph->dual_theta_nonpositive);
+    fprintf(out, "    \"pivot_reject_small\": %d,\n",
+            ralph->dual_pivot_reject_small);
+    fprintf(out, "    \"bound_flip_applied\": %d,\n",
+            ralph->dual_bound_flip_applied);
+    fprintf(out, "    \"lu_hard_trigger\": %d\n",
+            ralph->dual_lu_hard_trigger);
     fprintf(out, "  },\n");
 
     /* Refactor-specific trigger and per-call telemetry */
