@@ -253,13 +253,30 @@ static int dual_candidate_can_flip(const SimplexTableau *tab, int var) {
     return 0;
 }
 
+static void dual_ratio_mode_flags(int mode, int *use_harris, int *prefer_flip_candidates) {
+    int harris = 1;
+    int prefer_flip = 0;
+    if (mode == LP_DUAL_RATIO_TEST_STANDARD) {
+        harris = 0;
+        prefer_flip = 0;
+    } else if (mode == LP_DUAL_RATIO_TEST_FLIP) {
+        harris = 1;
+        prefer_flip = 1;
+    }
+    if (use_harris) *use_harris = harris;
+    if (prefer_flip_candidates) *prefer_flip_candidates = prefer_flip;
+}
+
 static int dual_ratio_test_core(SimplexTableau *tab,
                                 int leaving,
                                 int *entering,
                                 double *theta,
                                 int use_harris,
-                                int prefer_flip_candidates) {
+                                int prefer_flip_candidates,
+                                double pivot_floor,
+                                double theta_floor) {
     if (!tab || !entering || !theta) return -1;
+    if (!(pivot_floor > 0.0)) pivot_floor = RALPH_PIVOT_TOL;
     int leaving_var = tab->basis[leaving];
     double x_leave = tab->x[leaving_var];
 
@@ -291,7 +308,7 @@ static int dual_ratio_test_core(SimplexTableau *tab,
         /* Compute alpha_j = (B^{-1} * a_j)[leaving] = alpha' * a_j using sparse dot */
         double alpha_j = sparse_dot_column(tab->A_ext, j, tab->work2);
 
-        if (fabs(alpha_j) < RALPH_PIVOT_TOL) continue;
+        if (fabs(alpha_j) < pivot_floor) continue;
 
         double rc_j = tab->rc[j];
         double ratio = RALPH_INFINITY;
@@ -337,7 +354,7 @@ static int dual_ratio_test_core(SimplexTableau *tab,
             }
         }
 
-        if (ratio < -RALPH_OPT_TOL) continue;
+        if (ratio < theta_floor) continue;
 
         int can_flip = prefer_flip_candidates ? dual_candidate_can_flip(tab, j) : 0;
         if (*entering < 0 || ratio < *theta) {
@@ -376,33 +393,58 @@ static int dual_ratio_test_core(SimplexTableau *tab,
         }
     }
 
-    if (*entering < 0) {
-        if (tab->owner) {
-            lp_telemetry_record_dual_ratio_no_entering(tab->owner);
-        }
-        return -1;  /* Dual infeasible (primal unbounded) */
-    }
-
-    if (*theta <= 0.0 && tab->owner) {
-        lp_telemetry_record_dual_theta_nonpositive(tab->owner);
-    }
-
-    return 0;
+    return (*entering >= 0) ? 0 : -1;
 }
 
 int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *theta) {
     int mode = LP_DUAL_RATIO_TEST_HARRIS;
+    int rc = -1;
+    int attempt_mode;
+    int use_harris = 1;
+    int prefer_flip = 0;
+
     if (tab && tab->owner) {
         mode = tab->owner->dual_ratio_test_mode;
     }
 
-    if (mode == LP_DUAL_RATIO_TEST_STANDARD) {
-        return dual_ratio_test_core(tab, leaving, entering, theta, 0, 0);
+    /* Retry ladder:
+     * 1) strict pivot floor and strictly-positive theta in requested mode
+     * 2) fallback modes with base pivot floor and strictly-positive theta
+     * 3) permissive last pass (default tolerance) to avoid false infeasibility */
+    dual_ratio_mode_flags(mode, &use_harris, &prefer_flip);
+    rc = dual_ratio_test_core(tab, leaving, entering, theta,
+                              use_harris, prefer_flip,
+                              10.0 * RALPH_PIVOT_TOL, 1e-12);
+    if (rc == 0) goto dual_ratio_done;
+
+    for (int i = 0; i < 3; i++) {
+        attempt_mode = (i == 0) ? LP_DUAL_RATIO_TEST_HARRIS :
+                       (i == 1) ? LP_DUAL_RATIO_TEST_STANDARD :
+                                  LP_DUAL_RATIO_TEST_FLIP;
+        if (attempt_mode == mode) continue;
+        dual_ratio_mode_flags(attempt_mode, &use_harris, &prefer_flip);
+        rc = dual_ratio_test_core(tab, leaving, entering, theta,
+                                  use_harris, prefer_flip,
+                                  RALPH_PIVOT_TOL, 1e-12);
+        if (rc == 0) goto dual_ratio_done;
     }
-    if (mode == LP_DUAL_RATIO_TEST_FLIP) {
-        return dual_ratio_test_core(tab, leaving, entering, theta, 1, 1);
+
+    dual_ratio_mode_flags(mode, &use_harris, &prefer_flip);
+    rc = dual_ratio_test_core(tab, leaving, entering, theta,
+                              use_harris, prefer_flip,
+                              RALPH_PIVOT_TOL, -RALPH_OPT_TOL);
+
+dual_ratio_done:
+    if (rc != 0) {
+        if (tab && tab->owner) {
+            lp_telemetry_record_dual_ratio_no_entering(tab->owner);
+        }
+        return -1;
     }
-    return dual_ratio_test_core(tab, leaving, entering, theta, 1, 0);
+    if (tab && tab->owner && *theta <= 0.0) {
+        lp_telemetry_record_dual_theta_nonpositive(tab->owner);
+    }
+    return 0;
 }
 
 /* ============================================================================
@@ -1320,6 +1362,9 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                     {
                         double t_ratio_ms = lp_telemetry_timer_start();
                         int rc_ratio = dual_ratio_test(tab, cl_leaving, &cl_entering, &cl_theta);
+                        if (rc_ratio != 0) {
+                            rc_ratio = phase1_rescue_ratio_test(tab, cl_leaving, &cl_entering, &cl_theta);
+                        }
                         lp_telemetry_record_ratio_timed(solver, 0, t_ratio_ms);
                         if (rc_ratio != 0) {
                             /* Infeasible after unshift — should not happen, bail */
@@ -1410,6 +1455,9 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
         {
             double t_ratio_ms = lp_telemetry_timer_start();
             int rc_ratio = dual_ratio_test(tab, leaving, &entering, &theta);
+            if (rc_ratio != 0) {
+                rc_ratio = phase1_rescue_ratio_test(tab, leaving, &entering, &theta);
+            }
             lp_telemetry_record_ratio_timed(solver, 0, t_ratio_ms);
             if (rc_ratio != 0) {
                 /* No entering variable — problem is infeasible */
@@ -1695,7 +1743,9 @@ int dual_phase1(SimplexSolver *solver) {
         int entering;
         double theta;
         if (dual_ratio_test(tab, leaving, &entering, &theta) != 0) {
-            break;  /* Infeasible for auxiliary — can't continue */
+            if (phase1_rescue_ratio_test(tab, leaving, &entering, &theta) != 0) {
+                break;  /* Infeasible for auxiliary — can't continue */
+            }
         }
 
         if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
