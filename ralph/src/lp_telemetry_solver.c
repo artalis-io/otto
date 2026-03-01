@@ -120,6 +120,11 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase2_refactor_periodic_policy = 0;
     solver->telemetry.perf_phase2_refactor_periodic_lu_health = 0;
     solver->telemetry.perf_phase2_refactor_safety_forced = 0;
+    solver->telemetry.perf_dual_ratio_no_entering = 0;
+    solver->telemetry.perf_dual_theta_nonpositive = 0;
+    solver->telemetry.perf_dual_pivot_reject_small = 0;
+    solver->telemetry.perf_dual_bound_flip_applied = 0;
+    solver->telemetry.perf_dual_lu_hard_trigger = 0;
 
     solver->policy.periodic_feedback_bias_phase1 = 0.0;
     solver->policy.periodic_feedback_bias_phase2 = 0.0;
@@ -410,6 +415,11 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase2_refactor_periodic_policy);
     COPY_SOLVER_FIELD(perf_phase2_refactor_periodic_lu_health);
     COPY_SOLVER_FIELD(perf_phase2_refactor_safety_forced);
+    COPY_SOLVER_FIELD(perf_dual_ratio_no_entering);
+    COPY_SOLVER_FIELD(perf_dual_theta_nonpositive);
+    COPY_SOLVER_FIELD(perf_dual_pivot_reject_small);
+    COPY_SOLVER_FIELD(perf_dual_bound_flip_applied);
+    COPY_SOLVER_FIELD(perf_dual_lu_hard_trigger);
 
     out->periodic_feedback_bias_phase1 = solver->policy.periodic_feedback_bias_phase1;
     out->periodic_feedback_bias_phase2 = solver->policy.periodic_feedback_bias_phase2;
