@@ -44,6 +44,7 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/lp_determinism.c \
           $(SRC_DIR)/lp_refactor_policy.c \
           $(SRC_DIR)/lp_basis_governor.c \
+          $(SRC_DIR)/lp_policy_glpk_compat.c \
           $(SRC_DIR)/lp_backend.c \
           $(SRC_DIR)/lp_external_adapter.c \
           $(SRC_DIR)/lp_external_oop.c \
