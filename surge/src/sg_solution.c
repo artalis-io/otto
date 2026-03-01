@@ -802,6 +802,12 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
         total += ALIGN8(seg_size * sizeof(double));       /* route_stop_load */
         total += 6 * ALIGN8(seg_size * sizeof(double));   /* cap prefix/suffix delta/min/max */
     }
+    /* Timing segment summaries (Phase 2): prefix + suffix SGSegSummary arrays */
+    {
+        size_t seg_summary_size = (size_t)num_veh * ((size_t)sol->stop_stride + 1U) *
+                                  sizeof(SGSegSummary);
+        total += 2 * ALIGN8(seg_summary_size);
+    }
     if (ctx->num_commodities > 0) {
         total += ALIGN8((size_t)num_veh * sizeof(uint64_t));
     }
@@ -875,6 +881,14 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
         sol->route_seg_cap_suffix_min   = (double *)sh_arena_calloc(sol->arena, load_size, sizeof(double));
         sol->route_seg_cap_suffix_max   = (double *)sh_arena_calloc(sol->arena, load_size, sizeof(double));
     }
+    /* Timing segment summaries (Phase 2) */
+    {
+        size_t seg_summary_count = (size_t)num_veh * ((size_t)sol->stop_stride + 1U);
+        sol->route_seg_prefix = (SGSegSummary *)sh_arena_calloc(sol->arena,
+            seg_summary_count, sizeof(SGSegSummary));
+        sol->route_seg_suffix = (SGSegSummary *)sh_arena_calloc(sol->arena,
+            seg_summary_count, sizeof(SGSegSummary));
+    }
     if (ctx->num_commodities > 0) {
         sol->route_commodities = (uint64_t *)sh_arena_calloc(sol->arena, (size_t)num_veh, sizeof(uint64_t));
     }
@@ -902,7 +916,7 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
         !sol->route_overtime || !sol->route_tw_penalty ||
         !sol->route_depot_depart || !sol->route_depot_return ||
         !sol->route_break_time || !sol->route_total_work || !sol->route_breaks ||
-        !sol->route_violations ||
+        !sol->route_violations || !sol->route_seg_prefix || !sol->route_seg_suffix ||
         (ctx->dimension_count > 0 && (!sol->route_stop_load ||
             !sol->route_seg_cap_prefix_delta || !sol->route_seg_cap_prefix_min ||
             !sol->route_seg_cap_prefix_max || !sol->route_seg_cap_suffix_delta ||
@@ -1010,6 +1024,14 @@ static ARStatus sg_route_solution_init_for_copy(const SGContext *ctx, SGRouteSol
         sol->route_seg_cap_suffix_delta = (double *)sh_arena_alloc(sol->arena, load_size * sizeof(double));
         sol->route_seg_cap_suffix_min   = (double *)sh_arena_alloc(sol->arena, load_size * sizeof(double));
         sol->route_seg_cap_suffix_max   = (double *)sh_arena_alloc(sol->arena, load_size * sizeof(double));
+    }
+    /* Timing segment summaries (Phase 2) */
+    {
+        size_t seg_summary_count = (size_t)num_veh * ((size_t)sol->stop_stride + 1U);
+        sol->route_seg_prefix = (SGSegSummary *)sh_arena_alloc(sol->arena,
+            seg_summary_count * sizeof(SGSegSummary));
+        sol->route_seg_suffix = (SGSegSummary *)sh_arena_alloc(sol->arena,
+            seg_summary_count * sizeof(SGSegSummary));
     }
     if (ctx->num_commodities > 0) {
         sol->route_commodities = (uint64_t *)sh_arena_alloc(sol->arena, (size_t)num_veh * sizeof(uint64_t));

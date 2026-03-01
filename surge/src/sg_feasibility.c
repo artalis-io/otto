@@ -419,9 +419,10 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
         }
     }
 
-    /* Rebuild concatenation-based capacity segment summaries (O(L)).
-       These enable O(1) capacity checks in sg_route_eval_insertion_cached. */
-    sg_route_build_cap_segments(ctx, sol, vehicle_id);
+    /* Rebuild concatenation-based segment summaries (O(L)).
+       Capacity segments enable O(1) capacity checks; timing segments
+       enable O(1) timing/distance evaluation for local search (Phase 3). */
+    sg_route_build_segments(ctx, sol, vehicle_id);
 
     return 1;
 }

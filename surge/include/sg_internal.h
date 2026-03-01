@@ -226,6 +226,13 @@ typedef struct {
     double *route_seg_cap_suffix_delta;
     double *route_seg_cap_suffix_min;
     double *route_seg_cap_suffix_max;
+
+    /* Timing segment summaries (Phase 2).
+       Prefix/suffix SGSegSummary arrays for O(1) timing/distance evaluation.
+       Layout: [vehicle * (stop_stride+1) + stop].
+       Not built for vehicles with break policies or multi-trip. */
+    SGSegSummary *route_seg_prefix;
+    SGSegSummary *route_seg_suffix;
 } SGRouteSolution;
 
 typedef struct {
@@ -1157,13 +1164,19 @@ int sg_route_solver_eligible(const SGContext *ctx);
 ARStatus sg_route_construct_solomon_i1(SGContext *ctx, SGRouteSolution *sol);
 ARStatus sg_route_construct_tw_sorted(SGContext *ctx, SGRouteSolution *sol);
 
-/* sg_concat.c — concatenation-based O(1) capacity feasibility */
+/* sg_concat.c — concatenation-based O(1) feasibility (capacity + timing) */
 void sg_seg_concat_capacity(
     double left_delta, double left_min, double left_max,
     double right_delta, double right_min, double right_max,
     double *out_delta, double *out_min, double *out_max);
-void sg_route_build_cap_segments(const SGContext *ctx, SGRouteSolution *sol,
-                                  uint32_t vehicle_id);
+void sg_seg_init_single(const SGContext *ctx, const SGRouteStop *stop,
+                        SGSegSummary *seg);
+void sg_seg_concat_timing(const SGSegSummary *left, const SGSegSummary *right,
+                          double link_travel_time, double link_travel_dist,
+                          double link_setup_time,
+                          SGSegSummary *out);
+void sg_route_build_segments(const SGContext *ctx, SGRouteSolution *sol,
+                              uint32_t vehicle_id);
 int sg_route_check_capacity_concat(const SGContext *ctx, const SGRouteSolution *sol,
                                     uint32_t vehicle_id, uint32_t insert_stop_pos,
                                     const SGRouteStop *new_stops, uint32_t new_stop_count,
