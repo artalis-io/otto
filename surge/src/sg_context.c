@@ -2708,6 +2708,15 @@ SGStatus sg_prepare_travel(SGContext *ctx) {
         }
     }
 
+    /* Scan for PD requests (used by Phase 3 concat pre-filter) */
+    ctx->has_pd_requests = 0;
+    for (i = 0; i < ctx->num_requests; i++) {
+        if (ctx->requests[i].kind == SG_REQUEST_KIND_PICKUP_DELIVERY) {
+            ctx->has_pd_requests = 1;
+            break;
+        }
+    }
+
     atomic_store(&ctx->travel_prepared, 1);
     return SG_STATUS_OK;
 }

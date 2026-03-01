@@ -384,6 +384,16 @@ static int sg_route_try_2opt_star_once(const SGContext *ctx, SGRouteSolution *so
                         if (frozen_conflict) continue;
                     }
 
+                    /* O(1) concat pre-filter: skip if distance can't improve */
+                    {
+                        double concat_total;
+                        if (sg_concat_eval_2opt_star(ctx, sol, va, cut_a, vb, cut_b,
+                                                      &concat_total) &&
+                            concat_total >= sol->total_distance - 1e-9) {
+                            continue;
+                        }
+                    }
+
                     memcpy(candidate_a, route_a, (size_t)cut_a * sizeof(uint32_t));
                     memcpy(&candidate_a[cut_a], &route_b[cut_b],
                            (size_t)(len_b - cut_b) * sizeof(uint32_t));
@@ -595,6 +605,16 @@ static int sg_route_try_or_opt_once(const SGContext *ctx, SGRouteSolution *sol) 
                         /* Skip identity move (intra-route, same position) */
                         if (va == vb && ins == start) {
                             continue;
+                        }
+
+                        /* O(1) concat pre-filter for inter-vehicle OR-opt */
+                        if (va != vb) {
+                            double concat_total;
+                            if (sg_concat_eval_or_opt(ctx, sol, va, start, (uint32_t)k,
+                                                       vb, ins, &concat_total) &&
+                                concat_total >= sol->total_distance - 1e-9) {
+                                continue;
+                            }
                         }
 
                         /* Build destination route */
@@ -847,6 +867,17 @@ static int sg_route_try_cross_exchange_once(const SGContext *ctx, SGRouteSolutio
                             if (new_len_a > sol->route_stride ||
                                 new_len_b > sol->route_stride) {
                                 continue;
+                            }
+
+                            /* O(1) concat pre-filter: skip if distance can't improve */
+                            {
+                                double concat_total;
+                                if (sg_concat_eval_cross_exchange(ctx, sol, va, ia, (uint32_t)sa,
+                                                                   vb, ib, (uint32_t)sb,
+                                                                   &concat_total) &&
+                                    concat_total >= sol->total_distance - 1e-9) {
+                                    continue;
+                                }
                             }
 
                             /* Build candidate A: A[0..ia-1] + B[ib..ib+sb-1] + A[ia+sa..end] */

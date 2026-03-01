@@ -543,3 +543,554 @@ void sg_route_build_segments(const SGContext *ctx, SGRouteSolution *sol,
     sg_route_build_cap_segments(ctx, sol, vehicle_id);
     sg_route_build_timing_segments(ctx, sol, vehicle_id);
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Phase 3: O(1) pre-filtering for local search operators
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/*
+ * Returns 1 if the concat pre-filter is applicable for the given vehicle.
+ * Requirements: delivery-only, valid timing segments, no travel callback,
+ * no global time brackets (so sg_travel_dist == sg_travel for distances).
+ */
+static int sg_concat_filter_applicable(const SGContext *ctx, uint32_t v) {
+    if (ctx->has_pd_requests) return 0;
+    if (!sg_vehicle_has_timing_segments(ctx, v)) return 0;
+    if (ctx->travel_callback) return 0;
+    if (ctx->has_travel_time_brackets) return 0;
+    return 1;
+}
+
+/*
+ * Build SGSegSummary for a short stop sequence using a specific vehicle's
+ * travel profile.  Used to rebuild a moved segment for the target vehicle
+ * in OR-opt and cross-exchange.  O(stop_count), but stop_count <= 6.
+ */
+void sg_build_segment_for_vehicle(const SGContext *ctx, const SGRouteStop *stops,
+                                   uint32_t stop_count, uint32_t vehicle_id,
+                                   SGSegSummary *out)
+{
+    uint32_t i;
+
+    if (!ctx || !stops || stop_count == 0 || !out) {
+        if (out) memset(out, 0, sizeof(*out));
+        return;
+    }
+
+    sg_seg_init_single(ctx, &stops[0], out);
+
+    for (i = 1; i < stop_count; i++) {
+        SGSegSummary single, combined;
+        double link_dist, link_dur, link_setup;
+
+        sg_seg_init_single(ctx, &stops[i], &single);
+
+        link_dist = sg_travel_dist(ctx, out->last_location_id,
+                                   single.first_location_id, vehicle_id);
+        link_dur  = sg_travel_dur(ctx, out->last_location_id,
+                                  single.first_location_id, vehicle_id,
+                                  out->earliest_start + out->duration);
+        link_setup = sg_setup_time_between(ctx,
+                         stops[i - 1].request_id, stops[i].request_id);
+
+        sg_seg_concat_timing(out, &single, link_dur, link_dist, link_setup,
+                             &combined);
+        *out = combined;
+    }
+}
+
+/*
+ * O(1) capacity check by concatenating prefix/suffix capacity segments.
+ * Returns 1 if capacity is feasible for the concatenated route, 0 otherwise.
+ * source_stop_start..source_stop_end-1 are removed from the route.
+ * new_seg_delta/min/max describe the replacement segment (empty = {0,0,0}).
+ */
+static int sg_concat_capacity_ok(const SGContext *ctx, const SGRouteSolution *sol,
+                                  uint32_t vehicle_id,
+                                  uint32_t prefix_stop, uint32_t suffix_stop,
+                                  const double *seg_delta, const double *seg_min,
+                                  const double *seg_max)
+{
+    const SGVehicleRecord *vehicle;
+    uint32_t dim_count, d;
+    size_t seg_stride, base;
+    const double *pd, *pm, *px;
+    const double *sd, *smn, *sx;
+
+    dim_count = ctx->dimension_count;
+    if (dim_count == 0) return 1;
+    if (!sol->route_seg_cap_prefix_delta) return 1;
+
+    vehicle = &ctx->vehicles[vehicle_id];
+    seg_stride = (size_t)(sol->stop_stride + 1U) * (size_t)dim_count;
+    base = (size_t)vehicle_id * seg_stride;
+
+    pd = sol->route_seg_cap_prefix_delta + base;
+    pm = sol->route_seg_cap_prefix_min   + base;
+    px = sol->route_seg_cap_prefix_max   + base;
+    sd = sol->route_seg_cap_suffix_delta + base;
+    smn = sol->route_seg_cap_suffix_min  + base;
+    sx = sol->route_seg_cap_suffix_max   + base;
+
+    for (d = 0; d < dim_count; d++) {
+        double cap = (vehicle->has_capacity && vehicle->capacity)
+                     ? vehicle->capacity[d] : INFINITY;
+        size_t pre_off = (size_t)prefix_stop * dim_count + d;
+        size_t suf_off = (size_t)suffix_stop * dim_count + d;
+        double sd_v = seg_delta ? seg_delta[d] : 0.0;
+        double sm_v = seg_min   ? seg_min[d]   : 0.0;
+        double sx_v = seg_max   ? seg_max[d]   : 0.0;
+        double left_d, left_min, left_max;
+        double comb_d, comb_min, comb_max;
+
+        if (!isfinite(cap)) continue;
+
+        /* prefix + new_seg */
+        sg_seg_concat_capacity(pd[pre_off], pm[pre_off], px[pre_off],
+                               sd_v, sm_v, sx_v,
+                               &left_d, &left_min, &left_max);
+        /* (prefix + new_seg) + suffix */
+        sg_seg_concat_capacity(left_d, left_min, left_max,
+                               sd[suf_off], smn[suf_off], sx[suf_off],
+                               &comb_d, &comb_min, &comb_max);
+
+        if ((comb_max - comb_min) > cap + SG_DEMAND_TOLERANCE) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/*
+ * Build capacity segment (delta, min, max) for a short stop sequence.
+ * Arrays must have dim_count elements each.
+ */
+static void sg_build_cap_segment(const SGContext *ctx, const SGRouteStop *stops,
+                                  uint32_t stop_count,
+                                  double *out_delta, double *out_min, double *out_max)
+{
+    uint32_t dim_count = ctx->dimension_count;
+    uint32_t i, d;
+
+    for (d = 0; d < dim_count; d++) {
+        out_delta[d] = 0.0;
+        out_min[d] = 0.0;
+        out_max[d] = 0.0;
+    }
+
+    for (i = 0; i < stop_count; i++) {
+        const SGTaskRecord *task = &ctx->tasks[stops[i].task_id];
+        for (d = 0; d < dim_count; d++) {
+            double demand = (task->has_demand && task->demand) ? task->demand[d] : 0.0;
+            double s_min = demand < 0.0 ? demand : 0.0;
+            double s_max = demand > 0.0 ? demand : 0.0;
+            double tmp_d, tmp_min, tmp_max;
+
+            sg_seg_concat_capacity(out_delta[d], out_min[d], out_max[d],
+                                   demand, s_min, s_max,
+                                   &tmp_d, &tmp_min, &tmp_max);
+            out_delta[d] = tmp_d;
+            out_min[d] = tmp_min;
+            out_max[d] = tmp_max;
+        }
+    }
+}
+
+/*
+ * OR-opt pre-filter.
+ * Move: remove k requests [start..start+k-1] from va, insert at position ins in vb.
+ * For delivery-only: request pos == stop pos.
+ *
+ * Returns 1 if evaluation was performed (check *new_total_out vs threshold).
+ * Returns 0 if not applicable (caller should fall through to O(L) path).
+ */
+int sg_concat_eval_or_opt(const SGContext *ctx, const SGRouteSolution *sol,
+                           uint32_t va, uint32_t start, uint32_t k,
+                           uint32_t vb, uint32_t ins,
+                           double *new_total_out)
+{
+    size_t seg_stride, base_a, base_b;
+    const SGSegSummary *pf_a, *sf_a, *pf_b, *sf_b;
+    SGSegSummary moved_seg, temp, new_dest;
+    double link_dist, link_dur, link_setup;
+    double source_dist, dest_dist;
+    uint32_t stop_len_a;
+    const SGRouteStop *stops_a, *stops_b;
+
+    if (!new_total_out) return 0;
+    if (!sg_concat_filter_applicable(ctx, va)) return 0;
+    if (!sg_concat_filter_applicable(ctx, vb)) return 0;
+    if (!sol->route_seg_prefix || !sol->route_seg_suffix) return 0;
+
+    /* For delivery-only: request pos == stop pos, route_lengths == route_stop_lengths */
+    stop_len_a = sol->route_stop_lengths[va];
+    stops_a = sg_route_vehicle_stop_ptr_const(sol, va);
+
+    seg_stride = (size_t)sol->stop_stride + 1U;
+    base_a = (size_t)va * seg_stride;
+    base_b = (size_t)vb * seg_stride;
+
+    pf_a = sol->route_seg_prefix + base_a;
+    sf_a = sol->route_seg_suffix + base_a;
+    pf_b = sol->route_seg_prefix + base_b;
+    sf_b = sol->route_seg_suffix + base_b;
+
+    /* ── Source route: va without the segment ── */
+    if (stop_len_a - k == 0) {
+        source_dist = 0.0;
+    } else {
+        SGSegSummary new_source;
+        /* Link from prefix's last location to suffix's first location */
+        link_dist = sg_travel_dist(ctx, pf_a[start].last_location_id,
+                                   sf_a[start + k].first_location_id, va);
+        link_dur  = sg_travel_dur(ctx, pf_a[start].last_location_id,
+                                  sf_a[start + k].first_location_id, va,
+                                  pf_a[start].earliest_start + pf_a[start].duration);
+        link_setup = sg_setup_time_between(ctx,
+                         pf_a[start].last_request_id,
+                         sf_a[start + k].first_request_id);
+
+        sg_seg_concat_timing(&pf_a[start], &sf_a[start + k],
+                             link_dur, link_dist, link_setup,
+                             &new_source);
+        source_dist = new_source.distance;
+    }
+
+    /* ── Build moved segment for vb's profile ── */
+    sg_build_segment_for_vehicle(ctx, &stops_a[start], k, vb, &moved_seg);
+
+    /* ── Destination route: vb with segment inserted at ins ── */
+    if (va == vb) {
+        /* Intra-route: use source route's prefix/suffix.
+           After removing the segment, positions shift:
+           prefix_src[ins'] and suffix_src[ins'] need to be computed from
+           the source route.  This is complex for intra-route, so fall back. */
+        return 0;
+    }
+
+    stops_b = sg_route_vehicle_stop_ptr_const(sol, vb);
+    (void)stops_b;
+
+    /* dest = prefix_B[ins] + moved_seg + suffix_B[ins] */
+    link_dist = sg_travel_dist(ctx, pf_b[ins].last_location_id,
+                               moved_seg.first_location_id, vb);
+    link_dur  = sg_travel_dur(ctx, pf_b[ins].last_location_id,
+                              moved_seg.first_location_id, vb,
+                              pf_b[ins].earliest_start + pf_b[ins].duration);
+    link_setup = sg_setup_time_between(ctx,
+                     pf_b[ins].last_request_id,
+                     moved_seg.first_request_id);
+    sg_seg_concat_timing(&pf_b[ins], &moved_seg,
+                         link_dur, link_dist, link_setup, &temp);
+
+    link_dist = sg_travel_dist(ctx, temp.last_location_id,
+                               sf_b[ins].first_location_id, vb);
+    link_dur  = sg_travel_dur(ctx, temp.last_location_id,
+                              sf_b[ins].first_location_id, vb,
+                              temp.earliest_start + temp.duration);
+    link_setup = sg_setup_time_between(ctx,
+                     temp.last_request_id,
+                     sf_b[ins].first_request_id);
+    sg_seg_concat_timing(&temp, &sf_b[ins],
+                         link_dur, link_dist, link_setup, &new_dest);
+    dest_dist = new_dest.distance;
+
+    /* ── Capacity check ── */
+    if (ctx->dimension_count > 0) {
+        /* Source: prefix_A[start] + suffix_A[start+k] */
+        if (!sg_concat_capacity_ok(ctx, sol, va, start, start + k,
+                                    NULL, NULL, NULL)) {
+            *new_total_out = INFINITY;
+            return 1;
+        }
+        /* Dest: prefix_B[ins] + moved_seg + suffix_B[ins] */
+        {
+            double seg_d[8], seg_mn[8], seg_mx[8];  /* max 8 dims */
+            double *sd = seg_d, *sm = seg_mn, *sx = seg_mx;
+            int heap = 0;
+
+            if (ctx->dimension_count > 8) {
+                sd = (double *)malloc((size_t)ctx->dimension_count * 3 * sizeof(double));
+                if (!sd) return 0;
+                sm = sd + ctx->dimension_count;
+                sx = sm + ctx->dimension_count;
+                heap = 1;
+            }
+
+            sg_build_cap_segment(ctx, &stops_a[start], k, sd, sm, sx);
+            if (!sg_concat_capacity_ok(ctx, sol, vb, ins, ins, sd, sm, sx)) {
+                if (heap) free(sd);
+                *new_total_out = INFINITY;
+                return 1;
+            }
+            if (heap) free(sd);
+        }
+    }
+
+    *new_total_out = sol->total_distance - sol->route_distance[va]
+                     - sol->route_distance[vb] + source_dist + dest_dist;
+    return 1;
+}
+
+/*
+ * 2-opt* pre-filter.
+ * Move: New A = A[0..cut_a-1] + B[cut_b..end], New B = B[0..cut_b-1] + A[cut_a..end].
+ *
+ * Additional requirement: same travel profile (all vehicles use same distance matrix).
+ * Also skip for open-start/open-end vehicles.
+ *
+ * Returns 1 if evaluation was performed (check *new_total_out vs threshold).
+ * Returns 0 if not applicable (caller should fall through to O(L) path).
+ */
+int sg_concat_eval_2opt_star(const SGContext *ctx, const SGRouteSolution *sol,
+                              uint32_t va, uint32_t cut_a,
+                              uint32_t vb, uint32_t cut_b,
+                              double *new_total_out)
+{
+    size_t seg_stride, base_a, base_b;
+    const SGSegSummary *pf_a, *sf_a, *pf_b, *sf_b;
+    const SGVehicleRecord *veh_a, *veh_b;
+    double link_dist_ab, link_dur_ab, link_setup_ab;
+    double link_dist_ba, link_dur_ba, link_setup_ba;
+    double new_dist_a, new_dist_b;
+    SGSegSummary new_route_a, new_route_b;
+    uint32_t stop_len_a, stop_len_b;
+    const SGRouteStop *stops_a, *stops_b;
+    double depot_adj_a = 0.0, depot_adj_b = 0.0;
+
+    if (!new_total_out) return 0;
+    if (!sg_concat_filter_applicable(ctx, va)) return 0;
+    if (!sg_concat_filter_applicable(ctx, vb)) return 0;
+    if (!sol->route_seg_prefix || !sol->route_seg_suffix) return 0;
+
+    /* 2-opt* requires same travel profile for cross-vehicle suffix usage */
+    if (ctx->has_travel_profiles || ctx->travel_callback) return 0;
+
+    veh_a = &ctx->vehicles[va];
+    veh_b = &ctx->vehicles[vb];
+
+    /* Skip open-start/open-end vehicles */
+    if (veh_a->open_start || veh_a->open_end) return 0;
+    if (veh_b->open_start || veh_b->open_end) return 0;
+
+    stop_len_a = sol->route_stop_lengths[va];
+    stop_len_b = sol->route_stop_lengths[vb];
+    stops_a = sg_route_vehicle_stop_ptr_const(sol, va);
+    stops_b = sg_route_vehicle_stop_ptr_const(sol, vb);
+
+    seg_stride = (size_t)sol->stop_stride + 1U;
+    base_a = (size_t)va * seg_stride;
+    base_b = (size_t)vb * seg_stride;
+
+    pf_a = sol->route_seg_prefix + base_a;
+    sf_a = sol->route_seg_suffix + base_a;
+    pf_b = sol->route_seg_prefix + base_b;
+    sf_b = sol->route_seg_suffix + base_b;
+
+    /* Depot return adjustment: suffix_B includes return to B's end depot.
+       New route A ends at A's end depot, so adjust for the difference. */
+    if (veh_a->end_location_id != veh_b->end_location_id) {
+        /* Last customer stop of B suffix (last stop on route B) */
+        uint32_t last_b_loc = ctx->tasks[stops_b[stop_len_b - 1].task_id].location_id;
+        /* Last customer stop of A suffix (last stop on route A) */
+        uint32_t last_a_loc = ctx->tasks[stops_a[stop_len_a - 1].task_id].location_id;
+
+        depot_adj_a = sg_travel_dist(ctx, last_b_loc, veh_a->end_location_id, va)
+                    - sg_travel_dist(ctx, last_b_loc, veh_b->end_location_id, vb);
+        depot_adj_b = sg_travel_dist(ctx, last_a_loc, veh_b->end_location_id, vb)
+                    - sg_travel_dist(ctx, last_a_loc, veh_a->end_location_id, va);
+    }
+
+    /* ── New route A: prefix_A[cut_a] + link + suffix_B[cut_b] + depot_adj ── */
+    link_dist_ab = sg_travel_dist(ctx, pf_a[cut_a].last_location_id,
+                                  sf_b[cut_b].first_location_id, va);
+    link_dur_ab  = sg_travel_dur(ctx, pf_a[cut_a].last_location_id,
+                                 sf_b[cut_b].first_location_id, va,
+                                 pf_a[cut_a].earliest_start + pf_a[cut_a].duration);
+    link_setup_ab = sg_setup_time_between(ctx,
+                        pf_a[cut_a].last_request_id,
+                        sf_b[cut_b].first_request_id);
+    sg_seg_concat_timing(&pf_a[cut_a], &sf_b[cut_b],
+                         link_dur_ab, link_dist_ab, link_setup_ab,
+                         &new_route_a);
+    new_dist_a = new_route_a.distance + depot_adj_a;
+
+    /* ── New route B: prefix_B[cut_b] + link + suffix_A[cut_a] + depot_adj ── */
+    link_dist_ba = sg_travel_dist(ctx, pf_b[cut_b].last_location_id,
+                                  sf_a[cut_a].first_location_id, vb);
+    link_dur_ba  = sg_travel_dur(ctx, pf_b[cut_b].last_location_id,
+                                 sf_a[cut_a].first_location_id, vb,
+                                 pf_b[cut_b].earliest_start + pf_b[cut_b].duration);
+    link_setup_ba = sg_setup_time_between(ctx,
+                        pf_b[cut_b].last_request_id,
+                        sf_a[cut_a].first_request_id);
+    sg_seg_concat_timing(&pf_b[cut_b], &sf_a[cut_a],
+                         link_dur_ba, link_dist_ba, link_setup_ba,
+                         &new_route_b);
+    new_dist_b = new_route_b.distance + depot_adj_b;
+
+    /* ── Capacity check ── */
+    if (ctx->dimension_count > 0) {
+        /* New A: prefix_A[cut_a] + suffix_B[cut_b] */
+        {
+            size_t dim = ctx->dimension_count;
+            size_t cap_stride = (size_t)(sol->stop_stride + 1U) * dim;
+            const double *sd_b = sol->route_seg_cap_suffix_delta + (size_t)vb * cap_stride;
+            const double *sm_b = sol->route_seg_cap_suffix_min   + (size_t)vb * cap_stride;
+            const double *sx_b = sol->route_seg_cap_suffix_max   + (size_t)vb * cap_stride;
+
+            if (!sg_concat_capacity_ok(ctx, sol, va, cut_a, cut_a,
+                    &sd_b[(size_t)cut_b * dim],
+                    &sm_b[(size_t)cut_b * dim],
+                    &sx_b[(size_t)cut_b * dim])) {
+                *new_total_out = INFINITY;
+                return 1;
+            }
+        }
+        /* New B: prefix_B[cut_b] + suffix_A[cut_a] */
+        {
+            size_t dim = ctx->dimension_count;
+            size_t cap_stride = (size_t)(sol->stop_stride + 1U) * dim;
+            const double *sd_a = sol->route_seg_cap_suffix_delta + (size_t)va * cap_stride;
+            const double *sm_a = sol->route_seg_cap_suffix_min   + (size_t)va * cap_stride;
+            const double *sx_a = sol->route_seg_cap_suffix_max   + (size_t)va * cap_stride;
+
+            if (!sg_concat_capacity_ok(ctx, sol, vb, cut_b, cut_b,
+                    &sd_a[(size_t)cut_a * dim],
+                    &sm_a[(size_t)cut_a * dim],
+                    &sx_a[(size_t)cut_a * dim])) {
+                *new_total_out = INFINITY;
+                return 1;
+            }
+        }
+    }
+
+    *new_total_out = sol->total_distance - sol->route_distance[va]
+                     - sol->route_distance[vb] + new_dist_a + new_dist_b;
+    return 1;
+}
+
+/*
+ * Cross-exchange pre-filter.
+ * Move: swap segment [ia..ia+sa-1] from A with [ib..ib+sb-1] from B.
+ * sa, sb in {1,2,3}.
+ *
+ * Returns 1 if evaluation was performed (check *new_total_out vs threshold).
+ * Returns 0 if not applicable (caller should fall through to O(L) path).
+ */
+int sg_concat_eval_cross_exchange(const SGContext *ctx, const SGRouteSolution *sol,
+                                   uint32_t va, uint32_t ia, uint32_t sa,
+                                   uint32_t vb, uint32_t ib, uint32_t sb,
+                                   double *new_total_out)
+{
+    size_t seg_stride, base_a, base_b;
+    const SGSegSummary *pf_a, *sf_a, *pf_b, *sf_b;
+    SGSegSummary seg_b_for_va, seg_a_for_vb;
+    SGSegSummary temp_a, new_a, temp_b, new_b;
+    double link_dist, link_dur, link_setup;
+    const SGRouteStop *stops_a, *stops_b;
+
+    if (!new_total_out) return 0;
+    if (!sg_concat_filter_applicable(ctx, va)) return 0;
+    if (!sg_concat_filter_applicable(ctx, vb)) return 0;
+    if (!sol->route_seg_prefix || !sol->route_seg_suffix) return 0;
+
+    stops_a = sg_route_vehicle_stop_ptr_const(sol, va);
+    stops_b = sg_route_vehicle_stop_ptr_const(sol, vb);
+
+    seg_stride = (size_t)sol->stop_stride + 1U;
+    base_a = (size_t)va * seg_stride;
+    base_b = (size_t)vb * seg_stride;
+
+    pf_a = sol->route_seg_prefix + base_a;
+    sf_a = sol->route_seg_suffix + base_a;
+    pf_b = sol->route_seg_prefix + base_b;
+    sf_b = sol->route_seg_suffix + base_b;
+
+    /* Rebuild moved segments for target vehicles */
+    sg_build_segment_for_vehicle(ctx, &stops_b[ib], sb, va, &seg_b_for_va);
+    sg_build_segment_for_vehicle(ctx, &stops_a[ia], sa, vb, &seg_a_for_vb);
+
+    /* ── New route A: prefix_A[ia] + seg_b_for_va + suffix_A[ia+sa] ── */
+    link_dist = sg_travel_dist(ctx, pf_a[ia].last_location_id,
+                               seg_b_for_va.first_location_id, va);
+    link_dur  = sg_travel_dur(ctx, pf_a[ia].last_location_id,
+                              seg_b_for_va.first_location_id, va,
+                              pf_a[ia].earliest_start + pf_a[ia].duration);
+    link_setup = sg_setup_time_between(ctx,
+                     pf_a[ia].last_request_id,
+                     seg_b_for_va.first_request_id);
+    sg_seg_concat_timing(&pf_a[ia], &seg_b_for_va,
+                         link_dur, link_dist, link_setup, &temp_a);
+
+    link_dist = sg_travel_dist(ctx, temp_a.last_location_id,
+                               sf_a[ia + sa].first_location_id, va);
+    link_dur  = sg_travel_dur(ctx, temp_a.last_location_id,
+                              sf_a[ia + sa].first_location_id, va,
+                              temp_a.earliest_start + temp_a.duration);
+    link_setup = sg_setup_time_between(ctx,
+                     temp_a.last_request_id,
+                     sf_a[ia + sa].first_request_id);
+    sg_seg_concat_timing(&temp_a, &sf_a[ia + sa],
+                         link_dur, link_dist, link_setup, &new_a);
+
+    /* ── New route B: prefix_B[ib] + seg_a_for_vb + suffix_B[ib+sb] ── */
+    link_dist = sg_travel_dist(ctx, pf_b[ib].last_location_id,
+                               seg_a_for_vb.first_location_id, vb);
+    link_dur  = sg_travel_dur(ctx, pf_b[ib].last_location_id,
+                              seg_a_for_vb.first_location_id, vb,
+                              pf_b[ib].earliest_start + pf_b[ib].duration);
+    link_setup = sg_setup_time_between(ctx,
+                     pf_b[ib].last_request_id,
+                     seg_a_for_vb.first_request_id);
+    sg_seg_concat_timing(&pf_b[ib], &seg_a_for_vb,
+                         link_dur, link_dist, link_setup, &temp_b);
+
+    link_dist = sg_travel_dist(ctx, temp_b.last_location_id,
+                               sf_b[ib + sb].first_location_id, vb);
+    link_dur  = sg_travel_dur(ctx, temp_b.last_location_id,
+                              sf_b[ib + sb].first_location_id, vb,
+                              temp_b.earliest_start + temp_b.duration);
+    link_setup = sg_setup_time_between(ctx,
+                     temp_b.last_request_id,
+                     sf_b[ib + sb].first_request_id);
+    sg_seg_concat_timing(&temp_b, &sf_b[ib + sb],
+                         link_dur, link_dist, link_setup, &new_b);
+
+    /* ── Capacity check ── */
+    if (ctx->dimension_count > 0) {
+        double seg_d[8], seg_mn[8], seg_mx[8];
+        double *sd_buf = seg_d, *sm_buf = seg_mn, *sx_buf = seg_mx;
+        int heap = 0;
+
+        if (ctx->dimension_count > 8) {
+            sd_buf = (double *)malloc((size_t)ctx->dimension_count * 3 * sizeof(double));
+            if (!sd_buf) return 0;
+            sm_buf = sd_buf + ctx->dimension_count;
+            sx_buf = sm_buf + ctx->dimension_count;
+            heap = 1;
+        }
+
+        /* New A: prefix_A[ia] + seg_b + suffix_A[ia+sa] */
+        sg_build_cap_segment(ctx, &stops_b[ib], sb, sd_buf, sm_buf, sx_buf);
+        if (!sg_concat_capacity_ok(ctx, sol, va, ia, ia + sa, sd_buf, sm_buf, sx_buf)) {
+            if (heap) free(sd_buf);
+            *new_total_out = INFINITY;
+            return 1;
+        }
+
+        /* New B: prefix_B[ib] + seg_a + suffix_B[ib+sb] */
+        sg_build_cap_segment(ctx, &stops_a[ia], sa, sd_buf, sm_buf, sx_buf);
+        if (!sg_concat_capacity_ok(ctx, sol, vb, ib, ib + sb, sd_buf, sm_buf, sx_buf)) {
+            if (heap) free(sd_buf);
+            *new_total_out = INFINITY;
+            return 1;
+        }
+
+        if (heap) free(sd_buf);
+    }
+
+    *new_total_out = sol->total_distance - sol->route_distance[va]
+                     - sol->route_distance[vb] + new_a.distance + new_b.distance;
+    return 1;
+}
