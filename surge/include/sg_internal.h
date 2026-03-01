@@ -28,6 +28,36 @@ typedef enum {
     SG_CONSTRUCT_COUNT         = 5   /* Sentinel / "try all" default */
 } SGConstructMethod;
 
+/* Segment summary for concatenation-based feasibility checks (Vidal 2012).
+   Two adjacent segments can be concatenated in O(1) to form the summary for
+   the combined sequence.  Phase 1 uses only the per-dimension capacity arrays
+   stored externally in SGRouteSolution; the timing fields here will be used
+   in Phase 2 (timing concatenation). */
+typedef struct {
+    /* Timing (Phase 2) */
+    double duration;
+    double distance;
+    double time_warp;
+    double earliest_start;
+    double latest_start;
+    double wait_time;
+
+    /* Work/Break */
+    double work_at_start;
+    double work_at_end;
+    double total_work;
+
+    /* Boundary info */
+    uint32_t first_request_id;
+    uint32_t last_request_id;
+    uint32_t first_location_id;
+    uint32_t last_location_id;
+    uint32_t stop_count;
+
+    /* Multi-trip */
+    uint8_t has_trip_boundary;
+} SGSegSummary;
+
 /* Constants */
 #define SG_UNASSIGNED_PENALTY 10000.0
 #define SG_WORST_RANDOMNESS 4.0
@@ -185,6 +215,17 @@ typedef struct {
     /* Infeasible-space exploration: constraint violations */
     double violations[SG_PENALTY_COUNT];            /* per-type totals across all routes */
     double *route_violations;                        /* [num_vehicles * SG_PENALTY_COUNT] per-route */
+
+    /* Concatenation-based capacity segment summaries (Phase 1).
+       Per-dimension prefix/suffix arrays for O(1) capacity feasibility checks.
+       Layout: [vehicle * (stop_stride+1) * dim_count + stop * dim_count + d].
+       Reset at trip boundaries for multi-trip vehicles. */
+    double *route_seg_cap_prefix_delta;
+    double *route_seg_cap_prefix_min;
+    double *route_seg_cap_prefix_max;
+    double *route_seg_cap_suffix_delta;
+    double *route_seg_cap_suffix_min;
+    double *route_seg_cap_suffix_max;
 } SGRouteSolution;
 
 typedef struct {
@@ -1115,6 +1156,18 @@ void sg_adaptive_q_bounds(int num_requests, int config_q_min, int config_q_max,
 int sg_route_solver_eligible(const SGContext *ctx);
 ARStatus sg_route_construct_solomon_i1(SGContext *ctx, SGRouteSolution *sol);
 ARStatus sg_route_construct_tw_sorted(SGContext *ctx, SGRouteSolution *sol);
+
+/* sg_concat.c — concatenation-based O(1) capacity feasibility */
+void sg_seg_concat_capacity(
+    double left_delta, double left_min, double left_max,
+    double right_delta, double right_min, double right_max,
+    double *out_delta, double *out_min, double *out_max);
+void sg_route_build_cap_segments(const SGContext *ctx, SGRouteSolution *sol,
+                                  uint32_t vehicle_id);
+int sg_route_check_capacity_concat(const SGContext *ctx, const SGRouteSolution *sol,
+                                    uint32_t vehicle_id, uint32_t insert_stop_pos,
+                                    const SGRouteStop *new_stops, uint32_t new_stop_count,
+                                    uint8_t pen_enabled, double *violation_out);
 
 /* sg_construct_cfrs.c */
 uint32_t sg_estimate_min_vehicles(const SGContext *ctx);
