@@ -797,8 +797,10 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
     total += 9 * ALIGN8((size_t)num_veh * sizeof(double));
     /* Conditional arrays */
     if (ctx->dimension_count > 0) {
-        total += ALIGN8((size_t)num_veh * ((size_t)sol->stop_stride + 1U) *
-                         (size_t)ctx->dimension_count * sizeof(double));
+        size_t seg_size = (size_t)num_veh * ((size_t)sol->stop_stride + 1U) *
+                          (size_t)ctx->dimension_count;
+        total += ALIGN8(seg_size * sizeof(double));       /* route_stop_load */
+        total += 6 * ALIGN8(seg_size * sizeof(double));   /* cap prefix/suffix delta/min/max */
     }
     if (ctx->num_commodities > 0) {
         total += ALIGN8((size_t)num_veh * sizeof(uint64_t));
@@ -866,6 +868,12 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
         size_t load_size = (size_t)num_veh * ((size_t)sol->stop_stride + 1U) *
                            (size_t)ctx->dimension_count;
         sol->route_stop_load = (double *)sh_arena_calloc(sol->arena, load_size, sizeof(double));
+        sol->route_seg_cap_prefix_delta = (double *)sh_arena_calloc(sol->arena, load_size, sizeof(double));
+        sol->route_seg_cap_prefix_min   = (double *)sh_arena_calloc(sol->arena, load_size, sizeof(double));
+        sol->route_seg_cap_prefix_max   = (double *)sh_arena_calloc(sol->arena, load_size, sizeof(double));
+        sol->route_seg_cap_suffix_delta = (double *)sh_arena_calloc(sol->arena, load_size, sizeof(double));
+        sol->route_seg_cap_suffix_min   = (double *)sh_arena_calloc(sol->arena, load_size, sizeof(double));
+        sol->route_seg_cap_suffix_max   = (double *)sh_arena_calloc(sol->arena, load_size, sizeof(double));
     }
     if (ctx->num_commodities > 0) {
         sol->route_commodities = (uint64_t *)sh_arena_calloc(sol->arena, (size_t)num_veh, sizeof(uint64_t));
@@ -895,7 +903,10 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
         !sol->route_depot_depart || !sol->route_depot_return ||
         !sol->route_break_time || !sol->route_total_work || !sol->route_breaks ||
         !sol->route_violations ||
-        (ctx->dimension_count > 0 && !sol->route_stop_load) ||
+        (ctx->dimension_count > 0 && (!sol->route_stop_load ||
+            !sol->route_seg_cap_prefix_delta || !sol->route_seg_cap_prefix_min ||
+            !sol->route_seg_cap_prefix_max || !sol->route_seg_cap_suffix_delta ||
+            !sol->route_seg_cap_suffix_min || !sol->route_seg_cap_suffix_max)) ||
         (ctx->num_commodities > 0 && !sol->route_commodities) ||
         (ctx->num_exclusion_groups > 0 && !sol->route_exclusion_counts)) {
         sh_arena_free(sol->arena);
@@ -993,6 +1004,12 @@ static ARStatus sg_route_solution_init_for_copy(const SGContext *ctx, SGRouteSol
         size_t load_size = (size_t)num_veh * ((size_t)sol->stop_stride + 1U) *
                            (size_t)ctx->dimension_count;
         sol->route_stop_load = (double *)sh_arena_alloc(sol->arena, load_size * sizeof(double));
+        sol->route_seg_cap_prefix_delta = (double *)sh_arena_alloc(sol->arena, load_size * sizeof(double));
+        sol->route_seg_cap_prefix_min   = (double *)sh_arena_alloc(sol->arena, load_size * sizeof(double));
+        sol->route_seg_cap_prefix_max   = (double *)sh_arena_alloc(sol->arena, load_size * sizeof(double));
+        sol->route_seg_cap_suffix_delta = (double *)sh_arena_alloc(sol->arena, load_size * sizeof(double));
+        sol->route_seg_cap_suffix_min   = (double *)sh_arena_alloc(sol->arena, load_size * sizeof(double));
+        sol->route_seg_cap_suffix_max   = (double *)sh_arena_alloc(sol->arena, load_size * sizeof(double));
     }
     if (ctx->num_commodities > 0) {
         sol->route_commodities = (uint64_t *)sh_arena_alloc(sol->arena, (size_t)num_veh * sizeof(uint64_t));

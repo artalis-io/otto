@@ -2172,6 +2172,94 @@ At 5000 iterations: Solomon +0.8%, Li & Lim +4.2%.
 
 ---
 
+## Phase S17: O(1) Route Concatenation via Segment Summaries
+
+### Motivation
+
+Route evaluation after every insertion currently rebuilds prefix/suffix in O(L) time:
+- `sg_route_update_timing()` recomputes all arrival/wait/departure times
+- `sg_route_update_load()` recomputes all load profiles
+
+This dominates local search runtime on long routes. HGS uses O(1) concatenation via cumulative
+tuples — but those don't support our rich constraints (setup times, ride time, breaks, etc.).
+
+### Solution: Segment Summaries
+
+Maintain `(distance, duration, load_vector, forward_slack, backward_slack)` tuples for each
+prefix and suffix. Concatenating two segments combines their summaries in O(1) by summing
+components and taking min/max of slack values.
+
+**Segment summary structure:**
+```c
+typedef struct {
+    double distance;           /* Total distance */
+    double duration;           /* Total travel + service + wait */
+    double forward_slack;      /* Latest start time - arrival */
+    double backward_slack;      /* Arrival - earliest start time */
+    double tardiness;          /* Accumulated soft TW penalty */
+    double wait_total;          /* Accumulated waiting time */
+    uint64_t load_after;       /* Cumulative load (bitmask for commodities) */
+    /* Multi-dim capacity handled separately */
+} SGRouteSegment;
+```
+
+**Concatenation operation:**
+```c
+SGRouteSegment sg_concat(const SGRouteSegment *a, const SGRouteSegment *b) {
+    return (SGRouteSegment){
+        .distance = a->distance + b->distance,
+        .duration = a->duration + b->duration,
+        .forward_slack = min(a->forward_slack, b->forward_slack - a->duration),
+        .backward_slack = min(a->backward_slack, b->backward_slack),
+        .tardiness = a->tardiness + b->tardiness,
+        .wait_total = a->wait_total + b->wait_total,
+        .load_after = a->load_after | b->load_after,
+    };
+}
+```
+
+### Implementation
+
+**Phase S17.1: Segment Prefix/Suffix (In Progress)**
+
+- Add `SGRouteSegment *prefix`, `*suffix` arrays to `SGRoute`
+- Rebuild on every insertion/removal: O(L) but single pass
+- `sg_route_concat(seg1, seg2)` returns combined summary in O(1)
+- Use in `sg_route_eval_insertion_cached()` to get new route cost without full rebuild
+
+**Verification Mode:**
+
+```c
+#ifdef SG_CONCAT_VERIFY
+    /* Run both old O(L) scan and new O(1) concat, assert agreement */
+```
+
+Enabled during testing to catch any divergence. Disabled in benchmarks/production.
+
+**Phase S17.2: Timing Concatenation for Eval (Future)**
+
+Replace the timing feasibility check in `sg_route_eval_insertion_cached()` with segment
+concatenation. Currently timing is already ~O(1) via latest_start cache, so this phase is
+lower priority. Main benefit: unified framework, cleaner code.
+
+**Phase S17.3: Local Search Pre-filtering (Future)**
+
+Use segment summaries to evaluate local search moves without full copy+recompute:
+- Exchange: Concat with swapped stops to get new route cost estimate
+- Or-opt: Move segment from one route to another — 4 concatenations
+- 2-opt*: Concat tail swap between two routes
+
+This eliminates the `sg_route_solution_copy()` + `sg_route_update_timing()` pattern in
+`sg_postprocess.c`, which is currently the dominant cost of local search.
+
+**Phase S17.4: Segment Tree (Future, L>50)**
+
+For very long routes (400+ customers), even prefix/suffix rebuild after every insertion
+is O(L). A segment tree gives O(log L) updates and O(log L) range queries. Only needed
+if profiling shows segment rebuild as a bottleneck after Phase 1.
+
+---
+
 ## Infrastructure: Arena Allocator
 
 `sh_arena.h` (bump allocator with 8-byte alignment, reset, introspection) already exists in

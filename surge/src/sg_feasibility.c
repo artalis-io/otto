@@ -419,6 +419,10 @@ int sg_route_update_timing(const SGContext *ctx, SGRouteSolution *sol, uint32_t 
         }
     }
 
+    /* Rebuild concatenation-based capacity segment summaries (O(L)).
+       These enable O(1) capacity checks in sg_route_eval_insertion_cached. */
+    sg_route_build_cap_segments(ctx, sol, vehicle_id);
+
     return 1;
 }
 
@@ -1741,11 +1745,7 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
 
     /* Capacity check (signed-load model: max_prefix - min_prefix <= capacity) */
     if (ctx->dimension_count > 0 && sol->route_stop_load) {
-        size_t dim_count = (size_t)ctx->dimension_count;
-        size_t load_base = (size_t)vehicle_id * ((size_t)sol->stop_stride + 1U) * dim_count;
-        const double *load = sol->route_stop_load + load_base;
         uint32_t insert_stop_pos;
-        uint32_t d;
 
         /* Find where in the stop sequence the insertion occurs */
         if (next_stop_idx != UINT32_MAX) {
@@ -1754,98 +1754,192 @@ int sg_route_eval_insertion_cached(const SGContext *ctx, const SGRouteSolution *
             insert_stop_pos = stop_len;
         }
 
-        /* Determine trip boundaries for capacity scan (multi-trip resets load) */
-        uint32_t cap_trip_first = 0;
-        uint32_t cap_trip_end = stop_len;
-        if (vehicle->has_multi_trip && stop_len > 0) {
-            /* Trip end: next trip_start after or at insertion point */
-            if (insert_stop_pos < stop_len && stops[insert_stop_pos].trip_start) {
-                cap_trip_end = insert_stop_pos;
-            } else {
-                uint32_t s;
-                for (s = insert_stop_pos + 1; s < stop_len; s++) {
-                    if (stops[s].trip_start) { cap_trip_end = s; break; }
-                }
-            }
-            /* Trip start: last trip_start before cap_trip_end */
+        if (sol->route_seg_cap_prefix_delta) {
+            /* O(1) capacity check via concatenation-based segment summaries */
+            double concat_violation = 0.0;
+            int concat_ok = sg_route_check_capacity_concat(
+                ctx, sol, vehicle_id, insert_stop_pos,
+                new_stops, new_stop_count, pen_enabled, &concat_violation);
+
+#ifdef SG_CONCAT_VERIFY
+            /* Verification: run both O(1) and O(L) paths, assert agreement */
             {
-                uint32_t s;
-                for (s = cap_trip_end; s > 0; s--) {
-                    if (stops[s - 1].trip_start && s - 1 < cap_trip_end) {
-                        cap_trip_first = s - 1;
-                        break;
+                size_t dim_count = (size_t)ctx->dimension_count;
+                size_t load_base = (size_t)vehicle_id * ((size_t)sol->stop_stride + 1U) * dim_count;
+                const double *load = sol->route_stop_load + load_base;
+                double scan_violation = 0.0;
+                int scan_ok = 1;
+                uint32_t d;
+                uint32_t cap_trip_first = 0;
+                uint32_t cap_trip_end = stop_len;
+                if (vehicle->has_multi_trip && stop_len > 0) {
+                    if (insert_stop_pos < stop_len && stops[insert_stop_pos].trip_start) {
+                        cap_trip_end = insert_stop_pos;
+                    } else {
+                        uint32_t s;
+                        for (s = insert_stop_pos + 1; s < stop_len; s++) {
+                            if (stops[s].trip_start) { cap_trip_end = s; break; }
+                        }
+                    }
+                    {
+                        uint32_t s;
+                        for (s = cap_trip_end; s > 0; s--) {
+                            if (stops[s - 1].trip_start && s - 1 < cap_trip_end) {
+                                cap_trip_first = s - 1;
+                                break;
+                            }
+                        }
                     }
                 }
-            }
-        }
-
-        for (d = 0; d < ctx->dimension_count; d++) {
-            double cap = (vehicle->has_capacity && vehicle->capacity)
-                         ? vehicle->capacity[d] : INFINITY;
-            double added = 0.0;
-            double hyp_min = 0.0;  /* Trip initial load = 0 */
-            double hyp_max = 0.0;
-            double load_at_insert;
-            uint32_t s;
-            /* First valid load index for this trip */
-            uint32_t scan_start = (cap_trip_first > 0) ? cap_trip_first + 1 : 1;
-
-            /* Compute total demand of new stops */
-            for (ns = 0; ns < new_stop_count; ns++) {
-                const SGTaskRecord *task = &ctx->tasks[new_stops[ns].task_id];
-                double demand = (task->has_demand && task->demand) ? task->demand[d] : 0.0;
-                added += demand;
-            }
-
-            /* Upstream prefix sums within trip */
-            for (s = scan_start; s <= insert_stop_pos; s++) {
-                double val = load[(size_t)s * dim_count + d];
-                if (val < hyp_min) hyp_min = val;
-                if (val > hyp_max) hyp_max = val;
-            }
-
-            /* New stop prefix sums */
-            load_at_insert = (insert_stop_pos >= scan_start)
-                ? load[(size_t)insert_stop_pos * dim_count + d] : 0.0;
-            {
-                double partial = 0.0;
-                for (ns = 0; ns < new_stop_count; ns++) {
-                    const SGTaskRecord *task = &ctx->tasks[new_stops[ns].task_id];
-                    double demand = (task->has_demand && task->demand) ? task->demand[d] : 0.0;
-                    partial += demand;
-                    {
-                        double val = load_at_insert + partial;
+                for (d = 0; d < ctx->dimension_count; d++) {
+                    double cap = (vehicle->has_capacity && vehicle->capacity)
+                                 ? vehicle->capacity[d] : INFINITY;
+                    double added = 0.0;
+                    double hyp_min = 0.0, hyp_max = 0.0;
+                    double load_at_insert;
+                    uint32_t s;
+                    uint32_t scan_start = (cap_trip_first > 0) ? cap_trip_first + 1 : 1;
+                    for (ns = 0; ns < new_stop_count; ns++) {
+                        const SGTaskRecord *task = &ctx->tasks[new_stops[ns].task_id];
+                        double demand = (task->has_demand && task->demand) ? task->demand[d] : 0.0;
+                        added += demand;
+                    }
+                    for (s = scan_start; s <= insert_stop_pos; s++) {
+                        double val = load[(size_t)s * dim_count + d];
                         if (val < hyp_min) hyp_min = val;
                         if (val > hyp_max) hyp_max = val;
                     }
+                    load_at_insert = (insert_stop_pos >= scan_start)
+                        ? load[(size_t)insert_stop_pos * dim_count + d] : 0.0;
+                    {
+                        double partial = 0.0;
+                        for (ns = 0; ns < new_stop_count; ns++) {
+                            const SGTaskRecord *task = &ctx->tasks[new_stops[ns].task_id];
+                            double demand = (task->has_demand && task->demand) ? task->demand[d] : 0.0;
+                            partial += demand;
+                            {
+                                double val = load_at_insert + partial;
+                                if (val < hyp_min) hyp_min = val;
+                                if (val > hyp_max) hyp_max = val;
+                            }
+                        }
+                    }
+                    for (s = insert_stop_pos + 1; s <= cap_trip_end; s++) {
+                        double val = load[(size_t)s * dim_count + d] + added;
+                        if (val < hyp_min) hyp_min = val;
+                        if (val > hyp_max) hyp_max = val;
+                    }
+                    if (cap_trip_first == 0 &&
+                        vehicle->has_initial_load && vehicle->initial_load) {
+                        double il = vehicle->initial_load[d];
+                        double excess = 0.0;
+                        if (il + hyp_min < -SG_DEMAND_TOLERANCE) excess += -(il + hyp_min);
+                        if (il + hyp_max > cap + SG_DEMAND_TOLERANCE) excess += (il + hyp_max) - cap;
+                        if (excess > 0.0) { scan_ok = 0; scan_violation += excess; }
+                    } else if ((hyp_max - hyp_min) > cap + SG_DEMAND_TOLERANCE) {
+                        scan_ok = 0;
+                        scan_violation += (hyp_max - hyp_min) - cap;
+                    }
+                }
+                /* Both paths must agree on feasibility */
+                if (concat_ok != scan_ok) {
+                    fprintf(stderr, "SG_CONCAT_VERIFY FAIL: concat_ok=%d scan_ok=%d "
+                            "v=%u pos=%u stop_len=%u concat_viol=%.6f scan_viol=%.6f\n",
+                            concat_ok, scan_ok, vehicle_id, insert_stop_pos,
+                            stop_len, concat_violation, scan_violation);
+                    abort();
                 }
             }
+#endif /* SG_CONCAT_VERIFY */
 
-            /* Downstream prefix sums within trip (shifted by added) */
-            for (s = insert_stop_pos + 1; s <= cap_trip_end; s++) {
-                double val = load[(size_t)s * dim_count + d] + added;
-                if (val < hyp_min) hyp_min = val;
-                if (val > hyp_max) hyp_max = val;
-            }
-
-            /* For first trip with initial_load, check fixed-start bounds */
-            if (cap_trip_first == 0 &&
-                vehicle->has_initial_load && vehicle->initial_load) {
-                double il = vehicle->initial_load[d];
-                double excess = 0.0;
-                if (il + hyp_min < -SG_DEMAND_TOLERANCE) {
-                    excess += -(il + hyp_min);
-                }
-                if (il + hyp_max > cap + SG_DEMAND_TOLERANCE) {
-                    excess += (il + hyp_max) - cap;
-                }
-                if (excess > 0.0) {
-                    if (!pen_enabled) return 0;
-                    ins_violations[SG_PENALTY_CAPACITY] += excess;
-                }
-            } else if ((hyp_max - hyp_min) > cap + SG_DEMAND_TOLERANCE) {
+            if (!concat_ok) {
                 if (!pen_enabled) return 0;
-                ins_violations[SG_PENALTY_CAPACITY] += (hyp_max - hyp_min) - cap;
+                ins_violations[SG_PENALTY_CAPACITY] += concat_violation;
+            }
+        } else {
+            /* Fallback: O(L) capacity scan (for routes without concat segments) */
+            size_t dim_count = (size_t)ctx->dimension_count;
+            size_t load_base = (size_t)vehicle_id * ((size_t)sol->stop_stride + 1U) * dim_count;
+            const double *load = sol->route_stop_load + load_base;
+            uint32_t d;
+            uint32_t cap_trip_first = 0;
+            uint32_t cap_trip_end = stop_len;
+            if (vehicle->has_multi_trip && stop_len > 0) {
+                if (insert_stop_pos < stop_len && stops[insert_stop_pos].trip_start) {
+                    cap_trip_end = insert_stop_pos;
+                } else {
+                    uint32_t s;
+                    for (s = insert_stop_pos + 1; s < stop_len; s++) {
+                        if (stops[s].trip_start) { cap_trip_end = s; break; }
+                    }
+                }
+                {
+                    uint32_t s;
+                    for (s = cap_trip_end; s > 0; s--) {
+                        if (stops[s - 1].trip_start && s - 1 < cap_trip_end) {
+                            cap_trip_first = s - 1;
+                            break;
+                        }
+                    }
+                }
+            }
+            for (d = 0; d < ctx->dimension_count; d++) {
+                double cap = (vehicle->has_capacity && vehicle->capacity)
+                             ? vehicle->capacity[d] : INFINITY;
+                double added = 0.0;
+                double hyp_min = 0.0;
+                double hyp_max = 0.0;
+                double load_at_insert;
+                uint32_t s;
+                uint32_t scan_start = (cap_trip_first > 0) ? cap_trip_first + 1 : 1;
+                for (ns = 0; ns < new_stop_count; ns++) {
+                    const SGTaskRecord *task = &ctx->tasks[new_stops[ns].task_id];
+                    double demand = (task->has_demand && task->demand) ? task->demand[d] : 0.0;
+                    added += demand;
+                }
+                for (s = scan_start; s <= insert_stop_pos; s++) {
+                    double val = load[(size_t)s * dim_count + d];
+                    if (val < hyp_min) hyp_min = val;
+                    if (val > hyp_max) hyp_max = val;
+                }
+                load_at_insert = (insert_stop_pos >= scan_start)
+                    ? load[(size_t)insert_stop_pos * dim_count + d] : 0.0;
+                {
+                    double partial = 0.0;
+                    for (ns = 0; ns < new_stop_count; ns++) {
+                        const SGTaskRecord *task = &ctx->tasks[new_stops[ns].task_id];
+                        double demand = (task->has_demand && task->demand) ? task->demand[d] : 0.0;
+                        partial += demand;
+                        {
+                            double val = load_at_insert + partial;
+                            if (val < hyp_min) hyp_min = val;
+                            if (val > hyp_max) hyp_max = val;
+                        }
+                    }
+                }
+                for (s = insert_stop_pos + 1; s <= cap_trip_end; s++) {
+                    double val = load[(size_t)s * dim_count + d] + added;
+                    if (val < hyp_min) hyp_min = val;
+                    if (val > hyp_max) hyp_max = val;
+                }
+                if (cap_trip_first == 0 &&
+                    vehicle->has_initial_load && vehicle->initial_load) {
+                    double il = vehicle->initial_load[d];
+                    double excess = 0.0;
+                    if (il + hyp_min < -SG_DEMAND_TOLERANCE) {
+                        excess += -(il + hyp_min);
+                    }
+                    if (il + hyp_max > cap + SG_DEMAND_TOLERANCE) {
+                        excess += (il + hyp_max) - cap;
+                    }
+                    if (excess > 0.0) {
+                        if (!pen_enabled) return 0;
+                        ins_violations[SG_PENALTY_CAPACITY] += excess;
+                    }
+                } else if ((hyp_max - hyp_min) > cap + SG_DEMAND_TOLERANCE) {
+                    if (!pen_enabled) return 0;
+                    ins_violations[SG_PENALTY_CAPACITY] += (hyp_max - hyp_min) - cap;
+                }
             }
         }
     }
