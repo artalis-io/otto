@@ -14405,6 +14405,442 @@ static void test_cfrs_with_frozen_requests(void) {
     sg_free(ctx);
 }
 
+/* ===== Phase 2: Timing Segment Concatenation Tests ===== */
+
+static void test_seg_init_single_timing(void) {
+    /* Single-stop segment has correct E/L/D from task TW and service time */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t depot;
+    SGSegSummary seg;
+    SGRouteStop stop;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    /* Add a delivery request with TW [1000, 5000] and service 120s */
+    {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = -10.0;
+        assert(sg_task_set_location(ctx, task, 1.0, 0.0) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, 1000, 5000) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 120) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+    }
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+
+    memset(&stop, 0, sizeof(stop));
+    stop.request_id = 0;
+    stop.task_id = ctx->requests[0].delivery_task_id;
+    stop.is_pickup = 0;
+
+    sg_seg_init_single(ctx, &stop, &seg);
+
+    assert(fabs(seg.earliest_start - 1000.0) < 1e-9);
+    assert(fabs(seg.latest_start - 5000.0) < 1e-9);
+    assert(fabs(seg.duration - 120.0) < 1e-9);
+    assert(fabs(seg.time_warp) < 1e-9);
+    assert(fabs(seg.wait_time) < 1e-9);
+    assert(fabs(seg.distance) < 1e-9);
+    assert(seg.stop_count == 1);
+    assert(seg.first_request_id == 0);
+    assert(seg.last_request_id == 0);
+    assert(seg.first_location_id == seg.last_location_id);
+
+    sg_free(ctx);
+}
+
+static void test_seg_concat_timing_no_wait(void) {
+    /* Arrival within TW: no wait, no time warp */
+    SGSegSummary left, right, out;
+
+    memset(&left, 0, sizeof(left));
+    left.earliest_start = 100.0;
+    left.latest_start   = 500.0;
+    left.duration       = 50.0;   /* departs at 150 */
+    left.first_location_id = 0;
+    left.last_location_id  = 1;
+    left.first_request_id  = 0;
+    left.last_request_id   = 0;
+    left.stop_count = 1;
+
+    memset(&right, 0, sizeof(right));
+    right.earliest_start = 100.0; /* TW starts at 100 */
+    right.latest_start   = 300.0;
+    right.duration       = 30.0;
+    right.first_location_id = 2;
+    right.last_location_id  = 2;
+    right.first_request_id  = 1;
+    right.last_request_id   = 1;
+    right.stop_count = 1;
+
+    /* link travel = 20s, link dist = 100.0m, link setup = 0 */
+    /* arrival at right = 100 + 50 + 20 + 0 = 170. 170 is in [100,300] so no wait/tw */
+    sg_seg_concat_timing(&left, &right, 20.0, 100.0, 0.0, &out);
+
+    assert(fabs(out.earliest_start - 100.0) < 1e-9);
+    assert(fabs(out.duration - (50.0 + 20.0 + 0.0 + 30.0)) < 1e-9); /* no wait */
+    assert(fabs(out.time_warp) < 1e-9);
+    assert(fabs(out.wait_time) < 1e-9);
+    assert(fabs(out.distance - 100.0) < 1e-9);
+    assert(out.stop_count == 2);
+    assert(out.first_location_id == 0);
+    assert(out.last_location_id == 2);
+    assert(out.first_request_id == 0);
+    assert(out.last_request_id == 1);
+
+    /* L = min(500, 300 - 50 - 20 - 0) = min(500, 230) = 230 */
+    assert(fabs(out.latest_start - 230.0) < 1e-9);
+}
+
+static void test_seg_concat_timing_wait(void) {
+    /* Arrival before TW: creates wait time */
+    SGSegSummary left, right, out;
+
+    memset(&left, 0, sizeof(left));
+    left.earliest_start = 0.0;
+    left.latest_start   = INFINITY;
+    left.duration       = 10.0;
+    left.first_location_id = 0;
+    left.last_location_id  = 0;
+    left.first_request_id  = UINT32_MAX;
+    left.last_request_id   = UINT32_MAX;
+    left.stop_count = 0;
+
+    memset(&right, 0, sizeof(right));
+    right.earliest_start = 100.0; /* TW starts at 100 */
+    right.latest_start   = 200.0;
+    right.duration       = 30.0;
+    right.first_location_id = 1;
+    right.last_location_id  = 1;
+    right.first_request_id  = 0;
+    right.last_request_id   = 0;
+    right.stop_count = 1;
+
+    /* link travel = 5s, arr = 0 + 10 + 5 + 0 = 15. Right.E=100, so wait=85 */
+    sg_seg_concat_timing(&left, &right, 5.0, 50.0, 0.0, &out);
+
+    assert(fabs(out.earliest_start - 0.0) < 1e-9);
+    /* D = 10 + 5 + 0 + 85 + 30 = 130 */
+    assert(fabs(out.duration - 130.0) < 1e-9);
+    assert(fabs(out.time_warp) < 1e-9);
+    assert(fabs(out.wait_time - 85.0) < 1e-9);
+    assert(fabs(out.distance - 50.0) < 1e-9);
+}
+
+static void test_seg_concat_timing_tw(void) {
+    /* Arrival after TW: creates time warp */
+    SGSegSummary left, right, out;
+
+    memset(&left, 0, sizeof(left));
+    left.earliest_start = 0.0;
+    left.latest_start   = INFINITY;
+    left.duration       = 200.0;
+    left.first_location_id = 0;
+    left.last_location_id  = 0;
+    left.first_request_id  = UINT32_MAX;
+    left.last_request_id   = UINT32_MAX;
+    left.stop_count = 0;
+
+    memset(&right, 0, sizeof(right));
+    right.earliest_start = 50.0;
+    right.latest_start   = 100.0; /* TW ends at 100 */
+    right.duration       = 30.0;
+    right.first_location_id = 1;
+    right.last_location_id  = 1;
+    right.first_request_id  = 0;
+    right.last_request_id   = 0;
+    right.stop_count = 1;
+
+    /* link travel = 10s, arr = 0 + 200 + 10 = 210. Right.L=100, so tw=110 */
+    sg_seg_concat_timing(&left, &right, 10.0, 80.0, 0.0, &out);
+
+    assert(fabs(out.time_warp - 110.0) < 1e-9);
+    assert(fabs(out.wait_time) < 1e-9);
+    /* D = 200 + 10 + 0 + 0 + 30 = 240 */
+    assert(fabs(out.duration - 240.0) < 1e-9);
+    assert(fabs(out.distance - 80.0) < 1e-9);
+}
+
+static void test_seg_concat_timing_associative(void) {
+    /* concat(A, concat(B, C)) should match concat(concat(A, B), C) */
+    SGSegSummary a, b, c, bc, abc1, ab, abc2;
+
+    memset(&a, 0, sizeof(a));
+    a.earliest_start = 0.0;
+    a.latest_start   = 500.0;
+    a.duration       = 60.0;
+    a.first_location_id = 0;
+    a.last_location_id  = 0;
+    a.first_request_id  = 0;
+    a.last_request_id   = 0;
+    a.stop_count = 1;
+
+    memset(&b, 0, sizeof(b));
+    b.earliest_start = 100.0;
+    b.latest_start   = 300.0;
+    b.duration       = 40.0;
+    b.first_location_id = 1;
+    b.last_location_id  = 1;
+    b.first_request_id  = 1;
+    b.last_request_id   = 1;
+    b.stop_count = 1;
+
+    memset(&c, 0, sizeof(c));
+    c.earliest_start = 200.0;
+    c.latest_start   = 400.0;
+    c.duration       = 50.0;
+    c.first_location_id = 2;
+    c.last_location_id  = 2;
+    c.first_request_id  = 2;
+    c.last_request_id   = 2;
+    c.stop_count = 1;
+
+    /* concat(B, C) then concat(A, BC) */
+    sg_seg_concat_timing(&b, &c, 10.0, 20.0, 0.0, &bc);
+    sg_seg_concat_timing(&a, &bc, 15.0, 25.0, 0.0, &abc1);
+
+    /* concat(A, B) then concat(AB, C) */
+    sg_seg_concat_timing(&a, &b, 15.0, 25.0, 0.0, &ab);
+    sg_seg_concat_timing(&ab, &c, 10.0, 20.0, 0.0, &abc2);
+
+    /* E, D, TW, WT, Dist should be the same */
+    assert(fabs(abc1.earliest_start - abc2.earliest_start) < 1e-9);
+    assert(fabs(abc1.duration - abc2.duration) < 1e-9);
+    assert(fabs(abc1.time_warp - abc2.time_warp) < 1e-9);
+    assert(fabs(abc1.wait_time - abc2.wait_time) < 1e-9);
+    assert(fabs(abc1.distance - abc2.distance) < 1e-9);
+    assert(abc1.stop_count == abc2.stop_count);
+    /* Boundary IDs */
+    assert(abc1.first_location_id == abc2.first_location_id);
+    assert(abc1.last_location_id == abc2.last_location_id);
+    assert(abc1.first_request_id == abc2.first_request_id);
+    assert(abc1.last_request_id == abc2.last_request_id);
+}
+
+static void test_timing_prefix_suffix_build(void) {
+    /* After solve, prefix/suffix are consistent: prefix[stop_len] covers full route */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    add_delivery_request(ctx, 10.0, 0.0, 1000, 50000, 60, -10.0);
+    add_delivery_request(ctx, 20.0, 0.0, 2000, 60000, 120, -15.0);
+    add_delivery_request(ctx, 30.0, 0.0, 3000, 70000, 90, -20.0);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Access final solution's timing segments */
+    {
+        const SGRouteSolution *sol = ctx->final_solution;
+        uint32_t v;
+        assert(sol != NULL);
+        assert(sol->route_seg_prefix != NULL);
+        assert(sol->route_seg_suffix != NULL);
+
+        for (v = 0; v < sol->num_vehicles; v++) {
+            uint32_t stop_len = sol->route_stop_lengths[v];
+            size_t seg_stride = (size_t)sol->stop_stride + 1U;
+            size_t base = (size_t)v * seg_stride;
+            const SGSegSummary *prefix = sol->route_seg_prefix + base;
+            const SGSegSummary *suffix = sol->route_seg_suffix + base;
+
+            if (stop_len == 0) continue;
+
+            /* prefix[0] should be depot segment (stop_count=0) */
+            assert(prefix[0].stop_count == 0);
+
+            /* prefix[stop_len] should cover all stops */
+            assert(prefix[stop_len].stop_count == stop_len);
+
+            /* suffix[stop_len] should be depot segment (stop_count=0) */
+            assert(suffix[stop_len].stop_count == 0);
+
+            /* suffix[0] should cover all stops */
+            assert(suffix[0].stop_count == stop_len);
+
+            /* prefix[stop_len] covers depot→all stops (excludes return leg).
+               Concat with suffix[stop_len] (end depot) to get full route distance. */
+            {
+                SGSegSummary full;
+                double link_dist = sg_travel_dist(ctx, prefix[stop_len].last_location_id,
+                                                   suffix[stop_len].first_location_id, v);
+                double link_dur  = sg_travel_dur(ctx, prefix[stop_len].last_location_id,
+                                                  suffix[stop_len].first_location_id, v,
+                                                  prefix[stop_len].earliest_start +
+                                                  prefix[stop_len].duration);
+                double link_setup = sg_setup_time_between(ctx,
+                                     prefix[stop_len].last_request_id,
+                                     suffix[stop_len].first_request_id);
+                if (ctx->vehicles[v].open_end) {
+                    link_dist = 0.0;
+                    link_dur  = 0.0;
+                }
+                sg_seg_concat_timing(&prefix[stop_len], &suffix[stop_len],
+                                     link_dur, link_dist, link_setup, &full);
+                assert(fabs(full.distance - sol->route_distance[v]) < 1.0);
+            }
+        }
+    }
+
+    sg_free(ctx);
+}
+
+static void test_timing_prefix_suffix_depot(void) {
+    /* Depot TW and shift times encoded in prefix[0] and suffix[stop_len] */
+    SGContext *ctx = make_config(50, 42);
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    /* Set depot TW */
+    assert(sg_depot_set_time_window(ctx, depot, 500, 80000) == SG_STATUS_OK);
+
+    /* Vehicle with shift TW [1000, 50000] */
+    {
+        uint32_t v = sg_add_vehicle(ctx);
+        double cap = 100.0;
+        assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+        assert(sg_vehicle_set_shift_time_window(ctx, v, 1000, 50000) == SG_STATUS_OK);
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    }
+
+    add_delivery_request(ctx, 5.0, 0.0, 2000, 40000, 60, -10.0);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    {
+        const SGRouteSolution *sol = ctx->final_solution;
+        const SGSegSummary *prefix = sol->route_seg_prefix;
+        const SGSegSummary *suffix = sol->route_seg_suffix;
+        uint32_t stop_len = sol->route_stop_lengths[0];
+
+        assert(sol != NULL);
+
+        /* prefix[0].E should be max(shift_early, depot.tw_early) = max(1000,500) = 1000 */
+        assert(fabs(prefix[0].earliest_start - 1000.0) < 1e-9);
+
+        /* prefix[0].L should be shift_late = 50000 */
+        assert(fabs(prefix[0].latest_start - 50000.0) < 1e-9);
+
+        /* suffix[stop_len] should have end depot TW encoded */
+        /* L should be min(depot.tw_late, shift_late) = min(80000, 50000) = 50000 */
+        assert(suffix[stop_len].latest_start <= 50000.0 + 1e-9);
+        assert(suffix[stop_len].stop_count == 0);
+    }
+
+    sg_free(ctx);
+}
+
+static void test_timing_concat_matches_update_timing(void) {
+    /* Full prefix[stop_len] timing should approximately match route metrics
+       from sg_route_update_timing (distance exact, TW approximate) */
+    SGContext *ctx = make_internal_ctx();  /* 3 deliveries, 1 vehicle */
+    SGRouteSolution sol;
+    uint32_t i;
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+
+    /* Insert all three requests */
+    for (i = 0; i < 3; i++) {
+        double score = 0.0, dist = 0.0;
+        if (sg_route_eval_insertion_cached(ctx, &sol, i, 0, sol.route_lengths[0],
+                                           &score, &dist)) {
+            assert(sg_route_apply_insertion(ctx, &sol, i, 0, sol.route_lengths[0], dist) == AR_STATUS_OK);
+        }
+    }
+
+    /* After insertion, timing is up-to-date and segments are built */
+    {
+        uint32_t stop_len = sol.route_stop_lengths[0];
+        const SGSegSummary *prefix = sol.route_seg_prefix;
+        const SGSegSummary *suffix = sol.route_seg_suffix;
+
+        assert(stop_len > 0);
+        assert(prefix != NULL);
+        assert(suffix != NULL);
+
+        /* stop_count should equal stop_len */
+        assert(prefix[stop_len].stop_count == stop_len);
+        assert(suffix[0].stop_count == stop_len);
+
+        /* prefix[stop_len] covers depot→stops (no return leg).
+           Concat with suffix[stop_len] (end depot) to get full route distance. */
+        {
+            SGSegSummary full_via_prefix;
+            double ld = sg_travel_dist(ctx, prefix[stop_len].last_location_id,
+                                        suffix[stop_len].first_location_id, 0);
+            double lt = sg_travel_dur(ctx, prefix[stop_len].last_location_id,
+                                       suffix[stop_len].first_location_id, 0,
+                                       prefix[stop_len].earliest_start +
+                                       prefix[stop_len].duration);
+            sg_seg_concat_timing(&prefix[stop_len], &suffix[stop_len],
+                                 lt, ld, 0.0, &full_via_prefix);
+            assert(fabs(full_via_prefix.distance - sol.route_distance[0]) < 1e-6);
+        }
+
+        /* suffix[0] covers stops→depot (no first leg from depot).
+           Concat prefix[0] (depot) with suffix[0] to get full route distance. */
+        {
+            SGSegSummary full_via_suffix;
+            double ld = sg_travel_dist(ctx, prefix[0].last_location_id,
+                                        suffix[0].first_location_id, 0);
+            double lt = sg_travel_dur(ctx, prefix[0].last_location_id,
+                                       suffix[0].first_location_id, 0,
+                                       prefix[0].earliest_start +
+                                       prefix[0].duration);
+            sg_seg_concat_timing(&prefix[0], &suffix[0],
+                                 lt, ld, 0.0, &full_via_suffix);
+            assert(fabs(full_via_suffix.distance - sol.route_distance[0]) < 1e-6);
+        }
+    }
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_timing_seg_setup_time(void) {
+    /* Timing segments correctly include setup times between requests */
+    SGSegSummary left, right, out;
+
+    memset(&left, 0, sizeof(left));
+    left.earliest_start = 0.0;
+    left.latest_start   = 1000.0;
+    left.duration       = 50.0;
+    left.first_location_id = 0;
+    left.last_location_id  = 0;
+    left.first_request_id  = 0;
+    left.last_request_id   = 0;
+    left.stop_count = 1;
+
+    memset(&right, 0, sizeof(right));
+    right.earliest_start = 0.0;
+    right.latest_start   = 1000.0;
+    right.duration       = 30.0;
+    right.first_location_id = 1;
+    right.last_location_id  = 1;
+    right.first_request_id  = 1;
+    right.last_request_id   = 1;
+    right.stop_count = 1;
+
+    /* With setup_time = 25s */
+    /* arr = 0 + 50 + 10 + 25 = 85. Right.E=0, so no wait. */
+    sg_seg_concat_timing(&left, &right, 10.0, 50.0, 25.0, &out);
+
+    /* D = 50 + 10 + 25 + 0 + 30 = 115 */
+    assert(fabs(out.duration - 115.0) < 1e-9);
+    /* L = min(1000, 1000 - 50 - 10 - 25) = min(1000, 915) = 915 */
+    assert(fabs(out.latest_start - 915.0) < 1e-9);
+    assert(fabs(out.distance - 50.0) < 1e-9);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -14886,12 +15322,23 @@ int main(void) {
     RUN_TEST(test_sweep_cfrs_qualifications);
     RUN_TEST(test_cfrs_with_frozen_requests);
 
+    /* Phase 2: Timing Segment Concatenation */
+    RUN_TEST(test_seg_init_single_timing);
+    RUN_TEST(test_seg_concat_timing_no_wait);
+    RUN_TEST(test_seg_concat_timing_wait);
+    RUN_TEST(test_seg_concat_timing_tw);
+    RUN_TEST(test_seg_concat_timing_associative);
+    RUN_TEST(test_timing_prefix_suffix_build);
+    RUN_TEST(test_timing_prefix_suffix_depot);
+    RUN_TEST(test_timing_concat_matches_update_timing);
+    RUN_TEST(test_timing_seg_setup_time);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 387);
+    assert(tests_run == 396);
 #else
-    assert(tests_run == 378);
+    assert(tests_run == 387);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }
