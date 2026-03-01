@@ -80,7 +80,7 @@ Acceptance:
 - `ralph.c` uses policy module as single source of truth for effective controls.
 - Existing solver behavior remains unchanged under `lp_policy_profile=default`.
 
-### P2: Runtime Hook Wiring (Next)
+### P2: Runtime Hook Wiring (Done)
 
 Deliverables:
 - Replace ad-hoc phase control branches with policy-gated decisions:
@@ -97,7 +97,7 @@ Acceptance:
 - GLPK-compat profile can be selected end-to-end from public params.
 - Hard LU safety triggers still preempt policy.
 
-### P3: Tests + Gates (Required at each stage)
+### P3: Tests + Gates (Done for current GLPK-compat slice)
 
 Unit tests (orthogonal):
 - new: `ralph/tests/test_lp_policy_glpk_compat.c`
@@ -111,8 +111,39 @@ Regression gates:
 - `make -C ralph test-netlib-gate`
 
 Focused parity checks:
-- `pilot.ja.mps`, `pilot.mps`, `stair.mps` with GLPK toggle comparisons
-  (`steep/nosteep`, `relax/norelax`, `primal/dual`, `flip`).
+- `pilot.ja.mps`, `pilot.mps`, `stair.mps` with GLPK toggle comparisons:
+  - `--method {0,1,2}` (primal/dual/auto)
+  - `--steep | --nosteep`
+  - `--relax | --norelax`
+  - `--flip | --noflip`
+
+### P3 Findings (2026-03-01)
+
+Implemented benchmark CLI toggles in `ralph-benchmark`:
+- `--steep`, `--nosteep` (pricing aliases)
+- `--relax`, `--norelax` (GLPK ratio mode: Harris vs standard)
+- `--flip`, `--noflip` (GLPK dual-bound flip mode)
+
+Gates:
+- `make -C ralph test-simplex-policy`: pass
+- `make -C ralph test-lu-markowitz`: pass
+- `make -C ralph test-lp-policy-glpk-compat`: pass
+- `make -C ralph test-netlib-gate-small`: pass (baseline-equivalent)
+- `make -C ralph test-netlib-gate`: pass (baseline-equivalent)
+
+Focused parity matrix:
+- Full sweep executed: 72 combos = `3 cases × 3 methods × 2 steep × 2 relax × 2 flip`
+- Results artifact: `/tmp/p3_full_matrix_v2.csv`
+
+Observed outcomes:
+- `pilot.ja.mps`: 0/24 optimal, mostly timeouts; dual path splits between timeout and error.
+- `pilot.mps`: 0/24 optimal; primal path remains worst (timeouts/external timeouts), dual path mixes timeout and error.
+- `stair.mps`: 8/24 optimal; all optimal runs required `flip=on` and `method in {dual,auto}`.
+- Best `stair.mps` combo observed: `--method 1 --nosteep --relax --flip` (~1.26x GLPK wall time in that run).
+
+Interpretation:
+- Exposing GLPK-like `relax/flip` controls improved diagnosability and recovered optimal behavior on `stair` subsets.
+- `pilot*` outliers are not resolved by control toggles alone; remaining gap is in solver robustness/per-iteration behavior on those families, not missing control-plane switches.
 
 ## GLPK-Compat Defaults (Planned)
 
