@@ -145,6 +145,21 @@ Interpretation:
 - Exposing GLPK-like `relax/flip` controls improved diagnosability and recovered optimal behavior on `stair` subsets.
 - `pilot*` outliers are not resolved by control toggles alone; remaining gap is in solver robustness/per-iteration behavior on those families, not missing control-plane switches.
 
+### P4 Scaffolding (Pilot-Family Focus Gate)
+
+Added focused pilot-family diagnostics (non-gating):
+- Allowlist: `ralph/benchmarks/netlib_pilot_focus.txt`
+- Baseline: `ralph/benchmarks/netlib_pilot_focus_baseline.json`
+- Make target: `make -C ralph test-netlib-gate-pilot-focus`
+
+Current focused result (2026-03-01, method=primal):
+- `pilot.ja.mps`, `pilot.mps`, `pilot.we.mps`, `pilot87.mps`: timeout (4/4)
+- command failures: 0
+- dense fallback files: 0
+
+Interpretation:
+- this confirms the dominant remaining issue in pilot-family is iteration/control robustness and/or per-iteration kernel efficiency under hard degenerate paths, not dense fallback routing.
+
 ## GLPK-Compat Defaults (Planned)
 
 For `lp_policy_profile=glpk_compat`:

@@ -856,6 +856,10 @@ test-netlib-gate: $(RALPH_BENCHMARK_EXEC)
 test-netlib-gate-small: $(RALPH_BENCHMARK_EXEC)
 	cd $(CURDIR) && bash benchmarks/netlib_regression_gate.sh --bench "$(CURDIR)/$(RALPH_BENCHMARK_EXEC)" --allowlist "$(CURDIR)/benchmarks/netlib_small_canary.txt"
 
+# Deterministic NETLIB pilot-family focus gate (non-gating diagnostics)
+test-netlib-gate-pilot-focus: $(RALPH_BENCHMARK_EXEC)
+	cd $(CURDIR) && bash benchmarks/netlib_regression_gate.sh --bench "$(CURDIR)/$(RALPH_BENCHMARK_EXEC)" --allowlist "$(CURDIR)/benchmarks/netlib_pilot_focus.txt" --baseline "$(CURDIR)/benchmarks/netlib_pilot_focus_baseline.json" || { rc=$$?; echo "NOTE: non-gating pilot focus gate failed (rc=$$rc)"; exit 0; }
+
 # Download NETLIB problems
 download-netlib:
 	cd $(BENCH_DIR) && bash download_netlib.sh
@@ -877,7 +881,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-benders-debug test-benders-known-regression test-benders-warmstart test-mip-bug test-mip-warmstart test-mip-start-sparse test-mip-start-repair test-benders-master-start test-warmstart-serde test-beaconfd test-beaconfd-trace test-simplex-policy test-lp-refactor-policy test-lp-basis-governor test-lp-basis-governor-runtime test-lp-determinism test-lp-sensitivity test-lp-conflict test-lp-algorithm-api test-lp-policy-glpk-compat test-lp-dispatch test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lp-public-api-split test-mip-public-api-split test-lp-error-api test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-benders-debug test-benders-known-regression test-benders-warmstart test-mip-bug test-mip-warmstart test-mip-start-sparse test-mip-start-repair test-benders-master-start test-warmstart-serde test-beaconfd test-beaconfd-trace test-simplex-policy test-lp-refactor-policy test-lp-basis-governor test-lp-basis-governor-runtime test-lp-determinism test-lp-sensitivity test-lp-conflict test-lp-algorithm-api test-lp-policy-glpk-compat test-lp-dispatch test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lp-public-api-split test-mip-public-api-split test-lp-error-api test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small test-netlib-gate-pilot-focus bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
 
 # MIP benchmark with specialized solvers (LAP, Network, SCP)
 bench-mip-specialized: $(BENCH_MIP_EXEC)
@@ -941,6 +945,7 @@ help:
 	@echo "  test-netlib-full       - Full test (all tiers, ~10min)"
 	@echo "  test-netlib-gate       - Baseline-locked no-regression NETLIB gate"
 	@echo "  test-netlib-gate-small - NETLIB small-canary gate (26 cases incl. beaconfd)"
+	@echo "  test-netlib-gate-pilot-focus - NETLIB pilot-family focus gate (non-gating diagnostics)"
 	@echo "  download-netlib        - Download all NETLIB problems"
 	@echo ""
 	@echo "NETLIB Benchmark Tool:"
