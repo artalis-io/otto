@@ -96,6 +96,7 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
                                          int *phase1_pricing_io,
                                          int *presolve_io) {
     if (!cfg) return;
+    if (cfg->lp_policy_profile != LP_POLICY_PROFILE_GLPK_COMPAT) return;
 
     if (cfg->glpk_smcp_method == LP_GLPK_SMCP_METHOD_PRIMAL) {
         if (method_io) *method_io = 0;

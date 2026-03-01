@@ -778,6 +778,18 @@ static int ralph_probe_lp_status(const RalphModel *model,
                                  RalphStatus *status_out) {
     if (!model || !probe_model || !status_out) return -1;
 
+    LPGLPKCompatConfig glpk_policy_cfg;
+    int probe_pricing = model->pricing;
+    int probe_phase1_pricing = model->phase1_pricing;
+
+    ralph_glpk_policy_config_from_model(model, &glpk_policy_cfg);
+    if (!lp_policy_glpk_compat_validate(&glpk_policy_cfg)) return -1;
+    lp_policy_glpk_compat_apply_runtime(&glpk_policy_cfg,
+                                        NULL,
+                                        &probe_pricing,
+                                        &probe_phase1_pricing,
+                                        NULL);
+
     SimplexSolver *probe = simplex_create(probe_model);
     if (!probe) return -1;
 
@@ -786,11 +798,11 @@ static int ralph_probe_lp_status(const RalphModel *model,
     probe->verbose = 0;
     probe->telemetry_enabled = 0;
     probe->presolve = 0;
-    probe->pricing_strategy = model->pricing;
+    probe->pricing_strategy = probe_pricing;
     probe->scaling = 0;
     probe->crash = model->crash;
     probe->verify = 0;
-    probe->phase1_pricing = model->phase1_pricing;
+    probe->phase1_pricing = probe_phase1_pricing;
     probe->objective_limit = RALPH_INFINITY;
     /* Probe solves prioritize robust infeasibility checks over caller mode. */
     probe->force_two_phase = 1;
@@ -1332,8 +1344,25 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     RalphLPSolveAlgorithmReport lp_algorithm_report;
     int lp_algorithm_report_ready = 0;
     int lp_simplex_method = model->method;
+    int lp_pricing_strategy = model->pricing;
+    int lp_phase1_pricing = model->phase1_pricing;
+    int use_presolve = model->presolve;
     LPDispatchBackend lp_effective_backend = LP_DISPATCH_BACKEND_SIMPLEX;
     LPExternalProvider lp_effective_provider = LP_EXTERNAL_PROVIDER_NONE;
+    LPGLPKCompatConfig glpk_policy_cfg;
+
+    ralph_glpk_policy_config_from_model(model, &glpk_policy_cfg);
+    if (!lp_policy_glpk_compat_validate(&glpk_policy_cfg)) {
+        model->status = RALPH_STATUS_ERROR;
+        RALPH_FAIL_API(model,
+                       RALPH_ERROR_DOMAIN_PARAMETER,
+                       RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                       model->status,
+                       RALPH_ERROR_API_SOLVE,
+                       0,
+                       0,
+                       "invalid glpk-compatible policy configuration");
+    }
 
     ralph_reset_lp_algorithm_report(model);
     ralph_reset_lp_external_failure_report(model);
@@ -1378,6 +1407,11 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                            lp_dispatch_plan.fallback_reason,
                            "strict external dispatch failed");
         }
+        lp_policy_glpk_compat_apply_runtime(&glpk_policy_cfg,
+                                            &lp_simplex_method,
+                                            &lp_pricing_strategy,
+                                            &lp_phase1_pricing,
+                                            &use_presolve);
         lp_algorithm_report_ready = 1;
     }
 
@@ -1499,7 +1533,6 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
      * PROPORTIONAL_ROWS which interact badly in B&B. */
     PresolveResult *presolved = NULL;
     LPModel *solve_model = model->lp_model;
-    int use_presolve = model->presolve;
     unsigned int use_mask = model->presolve_mask;
 
     if (!use_presolve && solve_as_mip && model->presolve != -1) {
@@ -1897,11 +1930,11 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         model->lp_solver->verbose = model->verbose;
         model->lp_solver->telemetry_enabled = model->telemetry ? 1 : 0;
         model->lp_solver->presolve = 0;  /* Already done */
-        model->lp_solver->pricing_strategy = model->pricing;
+        model->lp_solver->pricing_strategy = lp_pricing_strategy;
         model->lp_solver->scaling = model->scaling;
         model->lp_solver->crash = model->crash;
         model->lp_solver->verify = model->verify;
-        model->lp_solver->phase1_pricing = model->phase1_pricing;
+        model->lp_solver->phase1_pricing = lp_phase1_pricing;
         /* Convert objective limit from user space to internal minimization space */
         if (model->objective_limit < RALPH_INFINITY) {
             model->lp_solver->objective_limit = model->objective_limit * solve_model->obj_sense;
