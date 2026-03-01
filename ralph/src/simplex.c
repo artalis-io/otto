@@ -4745,6 +4745,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->scaling = 1;   /* Enable scaling for numerical stability */
     solver->pricing_strategy = 2;  /* Devex pricing (better than Dantzig) */
     solver->ratio_test_mode = LP_RATIO_TEST_HARRIS;
+    solver->dual_ratio_test_mode = LP_DUAL_RATIO_TEST_HARRIS;
     solver->verbose = 0;
     solver->telemetry_enabled = 1;
     solver->trace_phase1 = 0;

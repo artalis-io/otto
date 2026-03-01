@@ -43,6 +43,10 @@
 /* Runtime policy selectors (mapped from GLPK-compatible control plane). */
 #define LP_RATIO_TEST_STANDARD 0
 #define LP_RATIO_TEST_HARRIS 1
+/* Dual ratio-test selectors (used by dual simplex). */
+#define LP_DUAL_RATIO_TEST_STANDARD 0
+#define LP_DUAL_RATIO_TEST_HARRIS 1
+#define LP_DUAL_RATIO_TEST_FLIP 2
 
 #define LP_LU_BACKEND_POLICY_AUTO   -1
 #define LP_LU_BACKEND_POLICY_LUF_FT 0
@@ -763,6 +767,7 @@ typedef struct SimplexSolver {
     int verify;             /* 0=off, 1=post-solve verification (T2.3) */
     int method;             /* 0=primal, 1=dual, 2=auto (dual first, primal fallback) */
     int ratio_test_mode;    /* 0=standard ratio, 1=Harris ratio (default) */
+    int dual_ratio_test_mode; /* 0=standard, 1=Harris, 2=flip-style tie-break */
     double objective_limit; /* Early-exit when obj >= limit (internal min space), default RALPH_INFINITY */
     int phase1_pricing;     /* Override pricing for Phase 1: 0=Dantzig, -1=disabled (use solver pricing) */
     int trace_phase1;       /* 1 = emit deterministic Phase-1 pivot-failure trace */

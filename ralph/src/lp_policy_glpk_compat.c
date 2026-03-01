@@ -1,4 +1,5 @@
 #include "lp_policy_glpk_compat.h"
+#include "lp.h"
 #include <math.h>
 
 static int lp_policy_profile_valid(int value) {
@@ -96,12 +97,15 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
                                          int *phase1_pricing_io,
                                          int *presolve_io,
                                          int *ratio_io,
+                                         int *dual_ratio_io,
                                          int *dual_bound_flip_io,
                                          int *crash_io,
                                          int *bfcp_backend_io,
                                          int *bfcp_update_limit_io,
                                          double *bfcp_pivot_tol_io,
-                                         double *bfcp_growth_guard_io) {
+                                         double *bfcp_growth_guard_io,
+                                         int *soft_lu_cost_gate_enabled_io,
+                                         int *periodic_cost_gate_enabled_io) {
     if (!cfg) return;
     if (cfg->lp_policy_profile != LP_POLICY_PROFILE_GLPK_COMPAT) return;
 
@@ -139,9 +143,18 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
         *ratio_io = (cfg->glpk_smcp_ratio == LP_GLPK_SMCP_RATIO_HARRIS) ? 1 : 0;
     }
 
-    if (dual_bound_flip_io) {
-        *dual_bound_flip_io = (cfg->glpk_smcp_flip == LP_GLPK_SMCP_FLIP_ON) ? 1 : 0;
+    if (dual_ratio_io) {
+        if (cfg->glpk_smcp_flip == LP_GLPK_SMCP_FLIP_ON) {
+            *dual_ratio_io = LP_DUAL_RATIO_TEST_FLIP;
+        } else {
+            *dual_ratio_io = (cfg->glpk_smcp_ratio == LP_GLPK_SMCP_RATIO_HARRIS)
+                                 ? LP_DUAL_RATIO_TEST_HARRIS
+                                 : LP_DUAL_RATIO_TEST_STANDARD;
+        }
     }
+
+    /* GLPK RT_FLIP maps to dual ratio mode, not to dual-feasibility bound flipping. */
+    (void)dual_bound_flip_io;
 
     if (crash_io) {
         *crash_io = (cfg->glpk_smcp_basis == LP_GLPK_SMCP_BASIS_ADV) ? 1 : 0;
@@ -158,5 +171,11 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
     }
     if (bfcp_growth_guard_io) {
         *bfcp_growth_guard_io = cfg->glpk_bfcp_growth_guard;
+    }
+    if (soft_lu_cost_gate_enabled_io) {
+        *soft_lu_cost_gate_enabled_io = 0;
+    }
+    if (periodic_cost_gate_enabled_io) {
+        *periodic_cost_gate_enabled_io = 0;
     }
 }

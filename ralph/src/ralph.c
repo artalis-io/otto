@@ -795,6 +795,9 @@ static int ralph_probe_lp_status(const RalphModel *model,
                                         NULL,
                                         NULL,
                                         NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
                                         NULL);
 
     SimplexSolver *probe = simplex_create(probe_model);
@@ -1354,8 +1357,11 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     int lp_pricing_strategy = model->pricing;
     int lp_phase1_pricing = model->phase1_pricing;
     int use_presolve = model->presolve;
-    int lp_ratio_test_mode = 1; /* 0=standard, 1=harris */
+    int lp_ratio_test_mode = LP_RATIO_TEST_HARRIS;
+    int lp_dual_ratio_test_mode = LP_DUAL_RATIO_TEST_HARRIS;
     int lp_dual_bound_flip = model->dual_bound_flip;
+    int lp_soft_lu_cost_gate_enabled = 1;
+    int lp_periodic_cost_gate_enabled = 1;
     int lp_crash_mode = model->crash;
     int lp_bfcp_backend = -1; /* -1=auto/default */
     int lp_bfcp_update_limit = -1;
@@ -1427,12 +1433,15 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                                             &lp_phase1_pricing,
                                             &use_presolve,
                                             &lp_ratio_test_mode,
+                                            &lp_dual_ratio_test_mode,
                                             &lp_dual_bound_flip,
                                             &lp_crash_mode,
                                             &lp_bfcp_backend,
                                             &lp_bfcp_update_limit,
                                             &lp_bfcp_pivot_tol,
-                                            &lp_bfcp_growth_guard);
+                                            &lp_bfcp_growth_guard,
+                                            &lp_soft_lu_cost_gate_enabled,
+                                            &lp_periodic_cost_gate_enabled);
         lp_algorithm_report_ready = 1;
     }
 
@@ -1957,10 +1966,18 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         model->lp_solver->verify = model->verify;
         model->lp_solver->phase1_pricing = lp_phase1_pricing;
         model->lp_solver->ratio_test_mode = (lp_ratio_test_mode == 0) ? 0 : 1;
+        if (lp_dual_ratio_test_mode < LP_DUAL_RATIO_TEST_STANDARD ||
+            lp_dual_ratio_test_mode > LP_DUAL_RATIO_TEST_FLIP) {
+            model->lp_solver->dual_ratio_test_mode = LP_DUAL_RATIO_TEST_HARRIS;
+        } else {
+            model->lp_solver->dual_ratio_test_mode = lp_dual_ratio_test_mode;
+        }
         model->lp_solver->lu_backend_policy = lp_bfcp_backend;
         model->lp_solver->lu_update_limit_override = lp_bfcp_update_limit;
         model->lp_solver->lu_pivot_tol_override = lp_bfcp_pivot_tol;
         model->lp_solver->lu_growth_guard_override = lp_bfcp_growth_guard;
+        model->lp_solver->policy.soft_lu_cost_gate_enabled = lp_soft_lu_cost_gate_enabled ? 1 : 0;
+        model->lp_solver->policy.periodic_cost_gate_enabled = lp_periodic_cost_gate_enabled ? 1 : 0;
         /* Convert objective limit from user space to internal minimization space */
         if (model->objective_limit < RALPH_INFINITY) {
             model->lp_solver->objective_limit = model->objective_limit * solve_model->obj_sense;

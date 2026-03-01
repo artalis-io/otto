@@ -238,20 +238,28 @@ static int dual_run_user_callbacks(SimplexSolver *solver,
  * Dual Ratio Test
  * ============================================================================ */
 
-/*
- * Harris Ratio Test for Dual Simplex
- *
- * Uses a single-pass algorithm with Harris-style tie-breaking:
- * - Accept any ratio within tolerance of the best found so far
- * - Among near-equal ratios, prefer larger pivot elements
- *
- * Harris tolerance allows slightly suboptimal ratios if they provide
- * numerically more stable pivot elements.
- */
+/* Harris tolerance allows slightly suboptimal ratios if they provide
+ * numerically more stable pivot elements. */
 #define HARRIS_TOL 1e-6
 
-/* Select entering variable using Harris dual ratio test */
-int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *theta) {
+static int dual_candidate_can_flip(const SimplexTableau *tab, int var) {
+    if (!tab || var < 0 || var >= tab->n) return 0;
+    if (tab->var_status[var] == RALPH_NONBASIC_LOWER) {
+        return tab->ub_ext[var] < RALPH_INFINITY / 2.0;
+    }
+    if (tab->var_status[var] == RALPH_NONBASIC_UPPER) {
+        return tab->lb_ext[var] > -RALPH_INFINITY / 2.0;
+    }
+    return 0;
+}
+
+static int dual_ratio_test_core(SimplexTableau *tab,
+                                int leaving,
+                                int *entering,
+                                double *theta,
+                                int use_harris,
+                                int prefer_flip_candidates) {
+    if (!tab || !entering || !theta) return -1;
     int leaving_var = tab->basis[leaving];
     double x_leave = tab->x[leaving_var];
 
@@ -274,6 +282,8 @@ int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *the
     *entering = -1;
     *theta = RALPH_INFINITY;
     double best_pivot = 0.0;
+    int best_can_flip = 0;
+    const double tie_tol = 1e-12;
 
     for (int j = 0; j < tab->n; j++) {
         if (tab->var_status[j] == RALPH_BASIC) continue;
@@ -327,17 +337,41 @@ int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *the
             }
         }
 
-        if (ratio >= -RALPH_OPT_TOL && ratio < *theta) {
-            /* Better ratio found */
+        if (ratio < -RALPH_OPT_TOL) continue;
+
+        int can_flip = prefer_flip_candidates ? dual_candidate_can_flip(tab, j) : 0;
+        if (*entering < 0 || ratio < *theta) {
             *theta = ratio;
             *entering = j;
             best_pivot = fabs(alpha_j);
-        } else if (ratio >= -RALPH_OPT_TOL && ratio < *theta + HARRIS_TOL * (1.0 + fabs(*theta))) {
-            /* Harris: ratio is within tolerance of best - prefer larger pivot */
-            if (fabs(alpha_j) > best_pivot) {
+            best_can_flip = can_flip;
+            continue;
+        }
+
+        if (use_harris && ratio <= *theta + HARRIS_TOL * (1.0 + fabs(*theta))) {
+            if (prefer_flip_candidates && can_flip != best_can_flip) {
+                if (can_flip > best_can_flip) {
+                    *entering = j;
+                    best_pivot = fabs(alpha_j);
+                    best_can_flip = can_flip;
+                }
+            } else if (fabs(alpha_j) > best_pivot) {
                 *entering = j;
                 best_pivot = fabs(alpha_j);
-                /* Keep *theta as minimum ratio for dual feasibility */
+            }
+            continue;
+        }
+
+        if (!use_harris && fabs(ratio - *theta) <= tie_tol * (1.0 + fabs(*theta))) {
+            if (prefer_flip_candidates && can_flip != best_can_flip) {
+                if (can_flip > best_can_flip) {
+                    *entering = j;
+                    best_pivot = fabs(alpha_j);
+                    best_can_flip = can_flip;
+                }
+            } else if (fabs(alpha_j) > best_pivot) {
+                *entering = j;
+                best_pivot = fabs(alpha_j);
             }
         }
     }
@@ -347,6 +381,21 @@ int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *the
     }
 
     return 0;
+}
+
+int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *theta) {
+    int mode = LP_DUAL_RATIO_TEST_HARRIS;
+    if (tab && tab->owner) {
+        mode = tab->owner->dual_ratio_test_mode;
+    }
+
+    if (mode == LP_DUAL_RATIO_TEST_STANDARD) {
+        return dual_ratio_test_core(tab, leaving, entering, theta, 0, 0);
+    }
+    if (mode == LP_DUAL_RATIO_TEST_FLIP) {
+        return dual_ratio_test_core(tab, leaving, entering, theta, 1, 1);
+    }
+    return dual_ratio_test_core(tab, leaving, entering, theta, 1, 0);
 }
 
 /* ============================================================================
