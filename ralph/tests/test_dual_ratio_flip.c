@@ -108,6 +108,10 @@ static void test_flip_mode_applies_flip_only_step(void) {
     ASSERT_TRUE(fabs(tab->x[0] - tab->ub_ext[0]) < 1e-12, "flipped candidate value snapped to upper bound");
     ASSERT_TRUE(solver->telemetry.perf_dual_bound_flip_applied >= 1,
                 "dual flip telemetry increments");
+    ASSERT_TRUE(solver->telemetry.perf_dual_bound_flip_iterative >= 1,
+                "dual iterative flip telemetry increments");
+    ASSERT_TRUE(solver->telemetry.perf_dual_bound_flip_startup == 0,
+                "dual startup flip telemetry unchanged in iterative-only path");
 
     free_flip_fixture(solver, model);
 }
@@ -128,6 +132,8 @@ static void test_harris_mode_keeps_regular_entering(void) {
     solver->dual_ratio_test_mode = LP_DUAL_RATIO_TEST_HARRIS;
     solver->use_dual_bound_flip = 1;
     solver->telemetry.perf_dual_bound_flip_applied = 0;
+    solver->telemetry.perf_dual_bound_flip_startup = 0;
+    solver->telemetry.perf_dual_bound_flip_iterative = 0;
 
     rc = dual_ratio_test(tab, 0, &entering, &theta);
     ASSERT_TRUE(rc == 0, "dual_ratio_test succeeds in Harris mode");
@@ -135,6 +141,10 @@ static void test_harris_mode_keeps_regular_entering(void) {
     ASSERT_TRUE(entering != -2, "Harris mode does not produce flip-only step");
     ASSERT_TRUE(solver->telemetry.perf_dual_bound_flip_applied == 0,
                 "Harris mode leaves dual flip telemetry unchanged");
+    ASSERT_TRUE(solver->telemetry.perf_dual_bound_flip_startup == 0,
+                "Harris mode leaves dual startup flip telemetry unchanged");
+    ASSERT_TRUE(solver->telemetry.perf_dual_bound_flip_iterative == 0,
+                "Harris mode leaves dual iterative flip telemetry unchanged");
 
     free_flip_fixture(solver, model);
 }
@@ -155,6 +165,8 @@ static void test_flip_mode_respects_runtime_disable(void) {
     solver->dual_ratio_test_mode = LP_DUAL_RATIO_TEST_FLIP;
     solver->use_dual_bound_flip = 0;
     solver->telemetry.perf_dual_bound_flip_applied = 0;
+    solver->telemetry.perf_dual_bound_flip_startup = 0;
+    solver->telemetry.perf_dual_bound_flip_iterative = 0;
 
     rc = dual_ratio_test(tab, 0, &entering, &theta);
     ASSERT_TRUE(rc == 0, "dual_ratio_test succeeds when flip runtime is disabled");
@@ -162,6 +174,10 @@ static void test_flip_mode_respects_runtime_disable(void) {
     ASSERT_TRUE(entering != -2, "flip runtime disable avoids flip-only step");
     ASSERT_TRUE(solver->telemetry.perf_dual_bound_flip_applied == 0,
                 "runtime-disabled flip mode does not apply flips");
+    ASSERT_TRUE(solver->telemetry.perf_dual_bound_flip_startup == 0,
+                "runtime-disabled flip mode does not apply startup flips");
+    ASSERT_TRUE(solver->telemetry.perf_dual_bound_flip_iterative == 0,
+                "runtime-disabled flip mode does not apply iterative flips");
 
     free_flip_fixture(solver, model);
 }

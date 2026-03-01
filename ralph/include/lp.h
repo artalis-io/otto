@@ -688,6 +688,8 @@ typedef struct {
     int perf_dual_theta_nonpositive;   /* dual ratio test returned theta <= 0 */
     int perf_dual_pivot_reject_small;  /* dual pivot rejected on small/non-finite pivot */
     int perf_dual_bound_flip_applied;  /* dual bound flips applied (startup + iterative mode) */
+    int perf_dual_bound_flip_startup;  /* dual bound flips applied in startup dual-feasibility pass */
+    int perf_dual_bound_flip_iterative;/* dual bound flips applied in iterative flip-ratio path */
     int perf_dual_lu_hard_trigger;     /* dual pivot path triggered hard LU recovery/refactor */
 } LPSolverTelemetryState;
 
@@ -965,6 +967,8 @@ typedef struct {
     int perf_dual_theta_nonpositive;
     int perf_dual_pivot_reject_small;
     int perf_dual_bound_flip_applied;
+    int perf_dual_bound_flip_startup;
+    int perf_dual_bound_flip_iterative;
     int perf_dual_lu_hard_trigger;
 
     double periodic_feedback_bias_phase1;
@@ -1387,6 +1391,10 @@ void lp_telemetry_record_dual_theta_nonpositive(SimplexSolver *solver);
 void lp_telemetry_record_dual_pivot_reject_small(SimplexSolver *solver);
 void lp_telemetry_record_dual_bound_flip_applied(SimplexSolver *solver,
                                                  int flips);
+void lp_telemetry_record_dual_bound_flip_applied_startup(SimplexSolver *solver,
+                                                         int flips);
+void lp_telemetry_record_dual_bound_flip_applied_iterative(SimplexSolver *solver,
+                                                           int flips);
 void lp_telemetry_record_dual_lu_hard_trigger(SimplexSolver *solver);
 void lp_telemetry_lu_record_dense_factorize_ms(LUFactorization *lu,
                                                double elapsed_ms);
