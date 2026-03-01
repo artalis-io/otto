@@ -257,6 +257,8 @@ typedef struct {
     int phase1_dir_stabilize_ratio_gt_1000;
     int phase1_dir_stabilize_skip_rc_only;
     int phase1_dir_stabilize_skip_full;
+    int phase1_dir_stabilize_skip_no_recompute;
+    int phase1_dir_stabilize_skip_guard_refresh;
     int phase1_recompute_after_ratio_breakdown;
     int phase1_recompute_after_dir_skip;
     int phase1_recompute_after_dir_refactor;
@@ -478,6 +480,8 @@ typedef struct {
     /* Solver method */
     int method;  /* 0=primal, 1=dual, 2=auto */
     int pricing; /* -1=default, 0=Dantzig, 1=SE, 2=Devex, 3=Partial, 4=Heap */
+    int glpk_smcp_ratio; /* -1=default, 0=standard (--norelax), 1=harris (--relax) */
+    int glpk_smcp_flip;  /* -1=default, 0=off (--noflip), 1=on (--flip) */
     int lu_supernode; /* 0=off, 1=enable supernodal LU */
     int lp_basis_governor_mode; /* 0=off, 1=shadow, 2=control_phase2 */
 
@@ -715,8 +719,9 @@ static SolveResult solve_with_glpk(const char *problem_path, double time_limit_s
  * ============================================================================ */
 
 static SolveResult solve_with_ralph(const char *problem_path, double time_limit_sec,
-                                     int method, int pricing, int lu_supernode,
-                                     int lp_basis_governor_mode,
+                                     int method, int pricing,
+                                     int glpk_smcp_ratio, int glpk_smcp_flip,
+                                     int lu_supernode, int lp_basis_governor_mode,
                                      int *out_num_vars, int *out_num_cons, int *out_nnz,
                                      int *out_is_mip) {
     SolveResult result = {0};
@@ -766,6 +771,29 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     ralph_test_set_int_param(model, "lp_basis_governor_mode", lp_basis_governor_mode);
     if (pricing >= 0) {
         ralph_test_set_int_param(model, "pricing", pricing);
+    }
+    if (glpk_smcp_ratio >= 0 || glpk_smcp_flip >= 0) {
+        /* Route ratio/flip through GLPK-compat runtime mapping.
+         * Keep method/pricing aligned with explicit benchmark switches. */
+        ralph_test_set_int_param(model, "lp_policy_profile", 1); /* glpk_compat */
+        if (method == 0) {
+            ralph_test_set_int_param(model, "glpk_smcp_method", 1); /* primal */
+        } else if (method == 1) {
+            ralph_test_set_int_param(model, "glpk_smcp_method", 2); /* dual */
+        } else {
+            ralph_test_set_int_param(model, "glpk_smcp_method", 0); /* auto */
+        }
+        if (pricing == 0) {
+            ralph_test_set_int_param(model, "glpk_smcp_pricing", 0); /* standard */
+        } else if (pricing == 1) {
+            ralph_test_set_int_param(model, "glpk_smcp_pricing", 1); /* steep */
+        }
+        if (glpk_smcp_ratio >= 0) {
+            ralph_test_set_int_param(model, "glpk_smcp_ratio", glpk_smcp_ratio);
+        }
+        if (glpk_smcp_flip >= 0) {
+            ralph_test_set_int_param(model, "glpk_smcp_flip", glpk_smcp_flip);
+        }
     }
     if (lu_supernode) {
         ralph_test_set_int_param(model, "lu_supernode", 1);
@@ -879,6 +907,10 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_dir_stabilize_skip_rc_only;
             result.phase1_dir_stabilize_skip_full =
                 solver_tel.perf_phase1_dir_stabilize_skip_full;
+            result.phase1_dir_stabilize_skip_no_recompute =
+                solver_tel.perf_phase1_dir_stabilize_skip_no_recompute;
+            result.phase1_dir_stabilize_skip_guard_refresh =
+                solver_tel.perf_phase1_dir_stabilize_skip_guard_refresh;
             result.phase1_recompute_after_ratio_breakdown =
                 solver_tel.perf_phase1_recompute_after_ratio_breakdown;
             result.phase1_recompute_after_dir_skip =
@@ -1886,6 +1918,10 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_dir_stabilize_skip_rc_only);
     fprintf(out, "      \"dir_stabilize_skip_full\": %d,\n",
             ralph->phase1_dir_stabilize_skip_full);
+    fprintf(out, "      \"dir_stabilize_skip_no_recompute\": %d,\n",
+            ralph->phase1_dir_stabilize_skip_no_recompute);
+    fprintf(out, "      \"dir_stabilize_skip_guard_refresh\": %d,\n",
+            ralph->phase1_dir_stabilize_skip_guard_refresh);
     fprintf(out, "      \"recompute_after_ratio_breakdown\": %d,\n",
             ralph->phase1_recompute_after_ratio_breakdown);
     fprintf(out, "      \"recompute_after_dir_skip\": %d,\n",
@@ -1985,6 +2021,10 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_dir_stabilize_skip_rc_only);
     fprintf(out, "    \"phase1_dir_stabilize_skip_full\": %d,\n",
             ralph->phase1_dir_stabilize_skip_full);
+    fprintf(out, "    \"phase1_dir_stabilize_skip_no_recompute\": %d,\n",
+            ralph->phase1_dir_stabilize_skip_no_recompute);
+    fprintf(out, "    \"phase1_dir_stabilize_skip_guard_refresh\": %d,\n",
+            ralph->phase1_dir_stabilize_skip_guard_refresh);
     fprintf(out, "    \"phase1_recompute_after_ratio_breakdown\": %d,\n",
             ralph->phase1_recompute_after_ratio_breakdown);
     fprintf(out, "    \"phase1_recompute_after_dir_skip\": %d,\n",
@@ -2346,6 +2386,8 @@ static int run_single_benchmark(const char *problem_path, const char *name,
     int num_vars = 0, num_cons = 0, nnz = 0, is_mip = 0;
     SolveResult ralph = solve_with_ralph(problem_path, ralph_time_limit,
                                           opts->method, opts->pricing,
+                                          opts->glpk_smcp_ratio,
+                                          opts->glpk_smcp_flip,
                                           opts->lu_supernode,
                                           opts->lp_basis_governor_mode,
                                           &num_vars, &num_cons, &nnz, &is_mip);
@@ -2416,6 +2458,7 @@ static void test_alarm_handler(int sig) {
 static int test_solve_one(const char *path, const char *name,
                            const NetlibReference *ref,
                            int timeout_sec, int method, int pricing,
+                           int glpk_smcp_ratio, int glpk_smcp_flip,
                            int lu_supernode, int lp_basis_governor_mode) {
     /* Use a pipe to pass results from child to parent */
     int pipefd[2];
@@ -2441,7 +2484,9 @@ static int test_solve_one(const char *path, const char *name,
 
         int num_vars = 0, num_cons = 0, nnz = 0, is_mip = 0;
         SolveResult result = solve_with_ralph(path, (double)timeout_sec,
-                                               method, pricing, lu_supernode,
+                                               method, pricing,
+                                               glpk_smcp_ratio, glpk_smcp_flip,
+                                               lu_supernode,
                                                lp_basis_governor_mode,
                                                &num_vars, &num_cons, &nnz,
                                                &is_mip);
@@ -2555,6 +2600,8 @@ static int run_test_mode(const Options *opts) {
 
         int result = test_solve_one(problems[i].path, name, ref,
                                      timeout_sec, opts->method, opts->pricing,
+                                     opts->glpk_smcp_ratio,
+                                     opts->glpk_smcp_flip,
                                      opts->lu_supernode,
                                      opts->lp_basis_governor_mode);
         switch (result) {
@@ -2649,6 +2696,12 @@ static void print_help(const char *prog) {
     printf("\n");
     printf("Solver:\n");
     printf("  --method <N>                  LP method: 0=primal, 1=dual, 2=auto (default: 0)\n");
+    printf("  --steep                       Use steep pricing (alias for --pricing 1)\n");
+    printf("  --nosteep                     Use standard pricing (alias for --pricing 0)\n");
+    printf("  --relax                       Use Harris ratio test (GLPK-compat ratio=1)\n");
+    printf("  --norelax                     Use standard ratio test (GLPK-compat ratio=0)\n");
+    printf("  --flip                        Enable dual bound flipping (GLPK-compat flip=1)\n");
+    printf("  --noflip                      Disable dual bound flipping (GLPK-compat flip=0)\n");
     printf("  --lp-basis-governor-mode <N>  Basis governor: 0=off, 1=shadow, 2=control_phase2\n");
     printf("  --lu-supernode                Enable supernodal LU factorization\n");
     printf("\n");
@@ -2698,6 +2751,8 @@ static int parse_args(int argc, char **argv, Options *opts) {
     opts->feas_tol = DEFAULT_FEAS_TOL;
     opts->lp_only = 1;  /* Default: LP only */
     opts->pricing = -1;  /* Default: solver default */
+    opts->glpk_smcp_ratio = -1;
+    opts->glpk_smcp_flip = -1;
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -2753,6 +2808,18 @@ static int parse_args(int argc, char **argv, Options *opts) {
             opts->method = atoi(argv[++i]);
         } else if (strcmp(arg, "--pricing") == 0 && i + 1 < argc) {
             opts->pricing = atoi(argv[++i]);
+        } else if (strcmp(arg, "--steep") == 0) {
+            opts->pricing = 1;
+        } else if (strcmp(arg, "--nosteep") == 0) {
+            opts->pricing = 0;
+        } else if (strcmp(arg, "--relax") == 0) {
+            opts->glpk_smcp_ratio = 1;
+        } else if (strcmp(arg, "--norelax") == 0) {
+            opts->glpk_smcp_ratio = 0;
+        } else if (strcmp(arg, "--flip") == 0) {
+            opts->glpk_smcp_flip = 1;
+        } else if (strcmp(arg, "--noflip") == 0) {
+            opts->glpk_smcp_flip = 0;
         } else if (strcmp(arg, "--lp-basis-governor-mode") == 0 && i + 1 < argc) {
             opts->lp_basis_governor_mode = atoi(argv[++i]);
             if (opts->lp_basis_governor_mode < 0 ||
