@@ -39,6 +39,45 @@ static void lu_set_failure(LUFactorization *lu, int reason) {
     }
 }
 
+static double lu_update_pivot_ratio_threshold(const LUFactorization *lu) {
+    double threshold = RALPH_LU_UPDATE_PIVOT_THRESHOLD;
+    double update_ratio = 0.0;
+    if (!lu) return threshold;
+
+    if (lu->max_updates > 0) {
+        update_ratio = (double)lu->num_updates / (double)lu->max_updates;
+        if (update_ratio < 0.25) {
+            threshold *= 0.5;
+        } else if (update_ratio < 0.50) {
+            threshold *= 0.75;
+        }
+    }
+
+    if (lu->cond_estimate <= 1e4 && lu->growth_factor <= 10.0) {
+        threshold *= 0.25;
+    } else if (lu->cond_estimate <= 1e6 && lu->growth_factor <= 100.0) {
+        threshold *= 0.5;
+    } else if (lu->cond_estimate >= 1e8 || lu->growth_factor >= 1e4) {
+        threshold *= 2.0;
+    }
+
+    if (threshold < 1e-5) threshold = 1e-5;
+    if (threshold > 5e-4) threshold = 5e-4;
+    return threshold;
+}
+
+double lu_update_pivot_ratio_threshold_for_test(int num_updates,
+                                                int max_updates,
+                                                double cond_estimate,
+                                                double growth_factor) {
+    LUFactorization probe = {0};
+    probe.num_updates = num_updates;
+    probe.max_updates = max_updates;
+    probe.cond_estimate = cond_estimate;
+    probe.growth_factor = growth_factor;
+    return lu_update_pivot_ratio_threshold(&probe);
+}
+
 /* ============================================================================
  * LU Factorization Creation/Destruction
  * ============================================================================ */
@@ -49,6 +88,7 @@ LUFactorization* lu_create(int m) {
 
     lu->m = m;
     lu->pivot_tol = RALPH_PIVOT_TOL;
+    lu->growth_refactor_threshold = RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
     lu->telemetry_enabled = 1;
 
     /* Refactorization threshold: balance factorization cost vs spike application cost.
@@ -2346,24 +2386,24 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     }
 
     /* Threshold pivoting for updates: check if pivot is too small relative to
-     * the maximum element in the spike column. This prevents accumulation of
-     * numerical error from ill-conditioned pivots and forces refactorization
-     * before stability degrades.
+     * the maximum element in the spike column.
      *
-     * Threshold = 0.001 (0.1%) is less aggressive than MARKOWITZ_THRESHOLD (10%)
-     * to avoid excessive refactorization while still catching very bad pivots.
-     * This is more conservative than RALPH_PIVOT_TOL (1e-10) alone. */
+     * The ratio threshold is health-adaptive: early/healthy update runs allow
+     * slightly smaller pivots to avoid unnecessary reinversions, while poor
+     * cond/growth states tighten the threshold to preserve stability. */
     double max_abs_spike = fabs(spike[step_pos]);
     for (int i = 0; i < m; i++) {
         double absval = fabs(spike[i]);
         if (absval > max_abs_spike) max_abs_spike = absval;
     }
-
-    if (fabs(spike[step_pos]) < RALPH_LU_UPDATE_PIVOT_THRESHOLD * max_abs_spike) {
-        /* Pivot is too small relative to column magnitude.
-         * Force refactorization to get a more stable basis representation. */
-        lu_set_failure(lu, LU_FAIL_UPDATE_PIVOT_TOO_SMALL);
-        return -1;
+    {
+        double pivot_ratio_threshold = lu_update_pivot_ratio_threshold(lu);
+        if (fabs(spike[step_pos]) < pivot_ratio_threshold * max_abs_spike) {
+            /* Pivot is too small relative to column magnitude.
+             * Force refactorization to get a more stable basis representation. */
+            lu_set_failure(lu, LU_FAIL_UPDATE_PIVOT_TOO_SMALL);
+            return -1;
+        }
     }
 
     /* Normalize spike column and count OFF-DIAGONAL non-zeros */
@@ -2467,7 +2507,12 @@ int lu_needs_refactorization(const LUFactorization *lu) {
     if (lu->num_updates >= lu->max_updates) return 1;
 
     /* Refactorize early if growth factor is large */
-    if (lu->growth_factor > RALPH_LU_GROWTH_REFACTOR_THRESHOLD) return 1;
+    {
+        double growth_threshold = (lu->growth_refactor_threshold > 0.0)
+            ? lu->growth_refactor_threshold
+            : RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
+        if (lu->growth_factor > growth_threshold) return 1;
+    }
 
     /* T3.2: Condition-based early refactorization.
      * If condition estimate has grown significantly since last factorization,

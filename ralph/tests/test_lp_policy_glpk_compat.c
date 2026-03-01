@@ -70,6 +70,13 @@ static void test_runtime_mapping_noop_under_default_profile(void) {
     int pricing = 2;
     int phase1_pricing = -1;
     int presolve = 0;
+    int ratio = 1;
+    int flip = 1;
+    int crash = 0;
+    int backend = -1;
+    int update_limit = -1;
+    double pivot_tol = 0.0;
+    double growth_guard = 0.0;
 
     lp_policy_glpk_compat_init(&cfg);
     cfg.glpk_smcp_method = LP_GLPK_SMCP_METHOD_DUAL;
@@ -79,12 +86,24 @@ static void test_runtime_mapping_noop_under_default_profile(void) {
                                         &method,
                                         &pricing,
                                         &phase1_pricing,
-                                        &presolve);
+                                        &presolve,
+                                        &ratio,
+                                        &flip,
+                                        &crash,
+                                        &backend,
+                                        &update_limit,
+                                        &pivot_tol,
+                                        &growth_guard);
 
     ASSERT_INT_EQ(method, 2, "runtime default profile: method unchanged");
     ASSERT_INT_EQ(pricing, 2, "runtime default profile: pricing unchanged");
     ASSERT_INT_EQ(phase1_pricing, -1, "runtime default profile: phase1 pricing unchanged");
     ASSERT_INT_EQ(presolve, 0, "runtime default profile: presolve unchanged");
+    ASSERT_INT_EQ(ratio, 1, "runtime default profile: ratio unchanged");
+    ASSERT_INT_EQ(flip, 1, "runtime default profile: flip unchanged");
+    ASSERT_INT_EQ(crash, 0, "runtime default profile: crash unchanged");
+    ASSERT_INT_EQ(backend, -1, "runtime default profile: backend unchanged");
+    ASSERT_INT_EQ(update_limit, -1, "runtime default profile: update limit unchanged");
 }
 
 static void test_runtime_mapping_glpk_profile(void) {
@@ -93,22 +112,52 @@ static void test_runtime_mapping_glpk_profile(void) {
     int pricing = 2;
     int phase1_pricing = -1;
     int presolve = 0;
+    int ratio = -1;
+    int flip = -1;
+    int crash = -1;
+    int backend = -1;
+    int update_limit = -1;
+    double pivot_tol = -1.0;
+    double growth_guard = -1.0;
 
     lp_policy_glpk_compat_init(&cfg);
     cfg.lp_policy_profile = LP_POLICY_PROFILE_GLPK_COMPAT;
     cfg.glpk_smcp_method = LP_GLPK_SMCP_METHOD_DUAL;
     cfg.glpk_smcp_pricing = LP_GLPK_SMCP_PRICING_STANDARD;
     cfg.glpk_smcp_presolve = LP_GLPK_SMCP_PRESOLVE_OFF;
+    cfg.glpk_smcp_ratio = LP_GLPK_SMCP_RATIO_STANDARD;
+    cfg.glpk_smcp_flip = LP_GLPK_SMCP_FLIP_ON;
+    cfg.glpk_smcp_basis = LP_GLPK_SMCP_BASIS_STD;
+    cfg.glpk_bfcp_backend = LP_GLPK_BFCP_BACKEND_CGR;
+    cfg.glpk_bfcp_update_limit = 77;
+    cfg.glpk_bfcp_pivot_tol = 1e-8;
+    cfg.glpk_bfcp_growth_guard = 1e6;
     lp_policy_glpk_compat_apply_runtime(&cfg,
                                         &method,
                                         &pricing,
                                         &phase1_pricing,
-                                        &presolve);
+                                        &presolve,
+                                        &ratio,
+                                        &flip,
+                                        &crash,
+                                        &backend,
+                                        &update_limit,
+                                        &pivot_tol,
+                                        &growth_guard);
 
     ASSERT_INT_EQ(method, 1, "runtime glpk profile: dual method mapped");
     ASSERT_INT_EQ(pricing, 0, "runtime glpk profile: standard pricing mapped");
     ASSERT_INT_EQ(phase1_pricing, 0, "runtime glpk profile: phase1 pricing mapped");
     ASSERT_INT_EQ(presolve, -1, "runtime glpk profile: presolve off mapped");
+    ASSERT_INT_EQ(ratio, 0, "runtime glpk profile: standard ratio mapped");
+    ASSERT_INT_EQ(flip, 1, "runtime glpk profile: flip on mapped");
+    ASSERT_INT_EQ(crash, 0, "runtime glpk profile: std basis mapped to crash off");
+    ASSERT_INT_EQ(backend, LP_GLPK_BFCP_BACKEND_CGR, "runtime glpk profile: backend mapped");
+    ASSERT_INT_EQ(update_limit, 77, "runtime glpk profile: update limit mapped");
+    ASSERT_TRUE(fabs(pivot_tol - 1e-8) < 1e-14,
+                "runtime glpk profile: pivot tol mapped");
+    ASSERT_TRUE(fabs(growth_guard - 1e6) < 1e-6,
+                "runtime glpk profile: growth guard mapped");
 }
 
 static void test_validation_rejects_invalid_values(void) {

@@ -141,6 +141,10 @@ typedef enum {
 #define PHASE1_NO_PIVOT_FORCE_BASE_TRIGGER 48
 #define PHASE1_NO_PIVOT_FORCE_MIN_TRIGGER 24
 #define PHASE1_NO_PIVOT_FORCE_COOLDOWN_UPDATES 24
+#define PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_TRIGGER 64
+#define PHASE1_DIR_SKIP_FORCE_PIVOT_MIN_TRIGGER 24
+#define PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_BUDGET 12
+#define PHASE1_DIR_SKIP_FORCE_PIVOT_MAX_BUDGET 32
 #define PHASE1_SOFT_LU_POLICY_COOLDOWN_MIN_M 700
 #define PHASE1_SOFT_LU_POLICY_COOLDOWN_DEGEN_TRIGGER 20
 #define PHASE1_SOFT_LU_POLICY_COOLDOWN_MIN_UPDATES 12
@@ -619,7 +623,8 @@ static BasisAction choose_basis_action(double pivot,
                                        int lu_update_status,
                                        int lu_reason,
                                        int repeat_pattern,
-                                       double growth_factor) {
+                                       double growth_factor,
+                                       double growth_threshold) {
     (void)lu_reason;
 
     if (!isfinite(pivot) || fabs(pivot) < RALPH_PIVOT_TOL) {
@@ -636,7 +641,7 @@ static BasisAction choose_basis_action(double pivot,
     }
     if (force_refactor ||
         repeat_pattern >= RALPH_PHASE1_REPEAT_REFACTOR_TRIGGER ||
-        growth_factor > RALPH_LU_GROWTH_REFACTOR_THRESHOLD) {
+        growth_factor > growth_threshold) {
         return BASIS_ACTION_REFACTOR;
     }
     return BASIS_ACTION_UPDATE;
@@ -653,7 +658,8 @@ int simplex_choose_basis_action_for_test(double pivot,
                                     lu_update_status,
                                     lu_reason,
                                     repeat_pattern,
-                                    growth_factor);
+                                    growth_factor,
+                                    RALPH_LU_GROWTH_REFACTOR_THRESHOLD);
 }
 
 int simplex_periodic_refactor_plan_for_test(int phase,
@@ -886,6 +892,65 @@ static int phase1_no_pivot_force_threshold(int m, int degenerate_count) {
     return threshold;
 }
 
+static int phase1_dir_skip_force_pivot_threshold(int m, int degenerate_count) {
+    int threshold = PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_TRIGGER;
+    if (m >= PHASE1_DEGEN_THRESHOLD_LARGE_M) threshold -= 16;
+    if (m >= 1200) threshold -= 8;
+    if (degenerate_count >= 80) threshold -= 8;
+    if (degenerate_count >= 160) threshold -= 8;
+    if (threshold < PHASE1_DIR_SKIP_FORCE_PIVOT_MIN_TRIGGER) {
+        threshold = PHASE1_DIR_SKIP_FORCE_PIVOT_MIN_TRIGGER;
+    }
+    return threshold;
+}
+
+static int phase1_dir_skip_force_pivot_budget(int m, int degenerate_count) {
+    int budget = PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_BUDGET;
+    if (m >= PHASE1_DEGEN_THRESHOLD_LARGE_M) budget += 4;
+    if (m >= 1200) budget += 4;
+    if (degenerate_count >= 160) budget += 8;
+    if (budget > PHASE1_DIR_SKIP_FORCE_PIVOT_MAX_BUDGET) {
+        budget = PHASE1_DIR_SKIP_FORCE_PIVOT_MAX_BUDGET;
+    }
+    return budget;
+}
+
+static int phase1_activate_force_pivot_mode(
+    int m,
+    int degenerate_count,
+    int *dir_skip_event_streak_io,
+    int *force_pivot_attempt_budget_io,
+    int *force_pending_io,
+    LPPhase1NoPivotForceReason *force_reason_io) {
+    int streak = 0;
+    int budget = 0;
+    int threshold;
+
+    if (dir_skip_event_streak_io) {
+        streak = *dir_skip_event_streak_io;
+    }
+    if (force_pivot_attempt_budget_io) {
+        budget = *force_pivot_attempt_budget_io;
+    }
+    if (budget > 0) return 0;
+
+    threshold = phase1_dir_skip_force_pivot_threshold(m, degenerate_count);
+    if (streak < threshold) return 0;
+
+    budget = phase1_dir_skip_force_pivot_budget(m, degenerate_count);
+    if (force_pivot_attempt_budget_io) {
+        *force_pivot_attempt_budget_io = budget;
+    }
+    if (dir_skip_event_streak_io) {
+        *dir_skip_event_streak_io = 0;
+    }
+    if (force_pending_io && force_reason_io) {
+        *force_pending_io = 1;
+        *force_reason_io = LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+    }
+    return 1;
+}
+
 static int phase1_note_no_pivot_and_maybe_force(SimplexSolver *solver,
                                                 int m,
                                                 int degenerate_count,
@@ -938,6 +1003,29 @@ int simplex_phase1_no_pivot_force_plan_for_test(int m,
     if (next_streak_out) *next_streak_out = streak;
     if (next_cooldown_out) *next_cooldown_out = cooldown;
     return should_force;
+}
+
+int simplex_phase1_force_pivot_mode_plan_for_test(int m,
+                                                   int degenerate_count,
+                                                   int dir_skip_event_streak,
+                                                   int active_budget,
+                                                   int *next_streak_out,
+                                                   int *next_budget_out) {
+    int streak = dir_skip_event_streak;
+    int budget = active_budget;
+    int pending = 0;
+    LPPhase1NoPivotForceReason force_reason =
+        LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
+    int activated = phase1_activate_force_pivot_mode(
+        m,
+        degenerate_count,
+        &streak,
+        &budget,
+        &pending,
+        &force_reason);
+    if (next_streak_out) *next_streak_out = streak;
+    if (next_budget_out) *next_budget_out = budget;
+    return activated;
 }
 
 int simplex_phase1_soft_lu_policy_cooldown_plan_for_test(
@@ -3381,7 +3469,27 @@ static void phase1_recompute_dir_skip_safe(SimplexSolver *solver,
                                            SimplexTableau *tab,
                                            int degenerate_count,
                                            int no_pivot_streak,
-                                           int *rc_only_streak) {
+                                           int *rc_only_streak,
+                                           int *dir_skip_no_recompute_streak) {
+    int no_recompute_streak = 0;
+    if (dir_skip_no_recompute_streak) {
+        no_recompute_streak = *dir_skip_no_recompute_streak;
+    }
+    if (lp_refactor_policy_phase1_dir_skip_should_skip_recompute(
+            tab->m,
+            degenerate_count,
+            no_pivot_streak,
+            no_recompute_streak)) {
+        if (dir_skip_no_recompute_streak) {
+            (*dir_skip_no_recompute_streak)++;
+        }
+        lp_telemetry_record_phase1_dir_stabilize_skip_no_recompute(solver);
+        return;
+    }
+    if (dir_skip_no_recompute_streak && *dir_skip_no_recompute_streak > 0) {
+        lp_telemetry_record_phase1_dir_stabilize_skip_guard_refresh(solver);
+        *dir_skip_no_recompute_streak = 0;
+    }
     int allow_rc_only = lp_refactor_policy_phase1_dir_skip_allow_rc_only(
         tab->m, degenerate_count, no_pivot_streak);
     if (!allow_rc_only) {
@@ -3806,6 +3914,99 @@ int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *th
     }
 
     return (*leaving >= 0 || *leaving == -2) ? 0 : -1;
+}
+
+/* Standard (non-Harris) ratio test:
+ * - strict minimum ratio selection
+ * - no Harris tolerance expansion
+ */
+static int ratio_test_standard(SimplexTableau *tab, int entering, int *leaving, double *theta) {
+    int col_nnz;
+    const int *col_idx;
+    const double *col_val;
+    sparse_get_column_sparse(tab->A_ext, entering, &col_nnz, &col_idx, &col_val);
+
+    {
+        double t_ftran_ms = lp_telemetry_timer_start();
+        lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2, NULL, NULL);
+        if (tab->owner) {
+            lp_telemetry_add_ftran_timed(tab->owner, t_ftran_ms);
+        }
+    }
+
+    if (tab->num_redundant > 0) {
+        for (int a = 0; a < tab->num_artificial; a++) {
+            int art_j = tab->artificial_vars[a];
+            if (tab->var_status[art_j] == RALPH_BASIC) {
+                int pos = tab->basis_pos[art_j];
+                if (pos >= 0 && pos < tab->m) {
+                    tab->work2[pos] = 0.0;
+                }
+            }
+        }
+    }
+
+    double dir = 1.0;
+    if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
+        dir = -1.0;
+    }
+
+    double max_abs_dk = 0.0;
+    for (int k = 0; k < tab->m; k++) {
+        double abs_dk = fabs(tab->work2[k] * dir);
+        if (abs_dk > max_abs_dk) {
+            max_abs_dk = abs_dk;
+        }
+    }
+    double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
+
+    *leaving = -1;
+    *theta = RALPH_INFINITY;
+    for (int k = 0; k < tab->m; k++) {
+        double dk = tab->work2[k] * dir;
+        int j = tab->basis[k];
+        double xj = tab->x[j];
+
+        double ratio = RALPH_INFINITY;
+        if (dk > pivot_tol) {
+            ratio = (xj - tab->lb_ext[j]) / dk;
+        } else if (dk < -pivot_tol) {
+            ratio = (tab->ub_ext[j] - xj) / (-dk);
+        }
+
+        if (ratio < *theta - RALPH_FEAS_TOL) {
+            *theta = ratio;
+            *leaving = k;
+        }
+    }
+
+    {
+        double enter_range = tab->ub_ext[entering] - tab->lb_ext[entering];
+        if (enter_range <= *theta && enter_range < RALPH_INFINITY / 2) {
+            *theta = enter_range;
+            *leaving = -2;
+        }
+    }
+
+    if (*theta >= RALPH_INFINITY / 2) {
+        return -1;
+    }
+    return (*leaving >= 0 || *leaving == -2) ? 0 : -1;
+}
+
+static int primal_ratio_test_with_policy(const SimplexSolver *solver,
+                                         SimplexTableau *tab,
+                                         int use_bland,
+                                         int entering,
+                                         int *leaving,
+                                         double *theta) {
+    if (use_bland) {
+        return ratio_test_bland(tab, entering, leaving, theta);
+    }
+    if (solver && solver->ratio_test_mode == LP_RATIO_TEST_STANDARD) {
+        return ratio_test_standard(tab, entering, leaving, theta);
+    }
+    return ratio_test_harris(tab, entering, leaving, theta);
 }
 
 int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *theta) {
@@ -4250,12 +4451,16 @@ static int simplex_pivot(SimplexTableau *tab,
     int refactor_forced_path = 0;
     int skip_se_update = 0;  /* Flag to skip SE update after reset */
     double growth_factor = (tab->lu) ? tab->lu->growth_factor : 0.0;
+    double growth_threshold = (tab->lu && tab->lu->growth_refactor_threshold > 0.0)
+        ? tab->lu->growth_refactor_threshold
+        : RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
     BasisAction action = choose_basis_action(pivot,
                                              force_refactor,
                                              lu_update_status,
                                              lu_reason,
                                              repeat_pattern_count,
-                                             growth_factor);
+                                             growth_factor,
+                                             growth_threshold);
 
     for (;;) {
         switch (action) {
@@ -4280,7 +4485,8 @@ static int simplex_pivot(SimplexTableau *tab,
                                              lu_update_status,
                                              lu_reason,
                                              repeat_pattern_count,
-                                             growth_factor);
+                                             growth_factor,
+                                             growth_threshold);
                 continue;
 
             case BASIS_ACTION_REFACTOR:
@@ -4306,7 +4512,8 @@ static int simplex_pivot(SimplexTableau *tab,
                                              lu_update_status,
                                              lu_reason,
                                              repeat_pattern_count,
-                                             growth_factor);
+                                             growth_factor,
+                                             growth_threshold);
                 continue;
 
             case BASIS_ACTION_REPAIR:
@@ -4321,7 +4528,8 @@ static int simplex_pivot(SimplexTableau *tab,
                                              lu_update_status,
                                              lu_reason,
                                              repeat_pattern_count,
-                                             growth_factor);
+                                             growth_factor,
+                                             growth_threshold);
                 continue;
 
             case BASIS_ACTION_ABORT:
@@ -4536,6 +4744,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->presolve = 1;  /* Enable presolve for performance */
     solver->scaling = 1;   /* Enable scaling for numerical stability */
     solver->pricing_strategy = 2;  /* Devex pricing (better than Dantzig) */
+    solver->ratio_test_mode = LP_RATIO_TEST_HARRIS;
     solver->verbose = 0;
     solver->telemetry_enabled = 1;
     solver->trace_phase1 = 0;
@@ -4551,6 +4760,10 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->use_dual_bound_flip = 1;
     solver->use_dual_steepest_edge = 1;
     solver->method = 2;  /* Default: auto (dual first, primal fallback) */
+    solver->lu_backend_policy = LP_LU_BACKEND_POLICY_AUTO;
+    solver->lu_update_limit_override = -1;
+    solver->lu_pivot_tol_override = 0.0;
+    solver->lu_growth_guard_override = 0.0;
     solver->has_lp_progress_callback = 0;
     solver->has_lp_cancel_callback = 0;
     solver->progress_start_ms = 0.0;
@@ -5152,6 +5365,9 @@ static int simplex_phase1(SimplexSolver *solver) {
         LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
     int phase1_no_pivot_force_cooldown = 0;
     int phase1_rc_only_streak = 0;
+    int phase1_dir_skip_event_streak = 0;
+    int phase1_dir_skip_no_recompute_streak = 0;
+    int phase1_force_pivot_attempt_budget = 0;
     int periodic_policy_cooldown = 0;
     double periodic_policy_pressure_decay = 0.0;
     int lu_soft_health_streak = 0;
@@ -5247,6 +5463,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                 ratio_breakdown_count = 0;
                 ratio_breakdown_last_entering = -1;
                 ratio_breakdown_same_entering_streak = 0;
+                phase1_dir_skip_event_streak = 0;
+                phase1_dir_skip_no_recompute_streak = 0;
                 phase1_recompute_full_with_reason(
                     solver,
                     tab,
@@ -5384,7 +5602,12 @@ static int simplex_phase1(SimplexSolver *solver) {
         int leaving;
         double theta;
         double t_ratio_ms = lp_telemetry_timer_start();
-        int ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
+        int ratio_status = primal_ratio_test_with_policy(solver,
+                                                         tab,
+                                                         0,
+                                                         entering,
+                                                         &leaving,
+                                                         &theta);
         {
             lp_telemetry_record_ratio_timed(solver, 1, t_ratio_ms);
         }
@@ -5530,6 +5753,8 @@ static int simplex_phase1(SimplexSolver *solver) {
             int force_dir_refactor_lu_health = lu_needs_refactorization(tab->lu);
             int force_dir_refactor = force_dir_refactor_extreme ||
                                      force_dir_refactor_lu_health;
+            int force_pivot_mode_active =
+                (phase1_force_pivot_attempt_budget > 0);
             int moderate_defer =
                 lp_refactor_policy_phase1_dir_stabilize_should_defer_moderate(
                     dir_inf_ratio,
@@ -5555,7 +5780,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 }
             }
 
-            if (moderate_defer && !force_dir_refactor) {
+            if (moderate_defer && !force_dir_refactor && !force_pivot_mode_active) {
                 dir_stabilize_moderate_defer_pending = 1;
                 if (solver->verbose >= 2) {
                     LP_LOG_STDERR("[simplex_phase1] Moderate direction norm %.2e at iter %d (entering=%d), deferring one refactor and retrying pricing\n",
@@ -5567,12 +5792,27 @@ static int simplex_phase1(SimplexSolver *solver) {
                                             &excluded_entering_ttl_a,
                                             &excluded_entering_b,
                                             &excluded_entering_ttl_b);
+                if (phase1_dir_skip_event_streak < INT_MAX) {
+                    phase1_dir_skip_event_streak++;
+                }
                 use_bland = 1;
                 phase1_recompute_dir_skip_safe(solver,
                                                tab,
                                                degenerate_count,
                                                phase1_no_pivot_streak + 1,
-                                               &phase1_rc_only_streak);
+                                               &phase1_rc_only_streak,
+                                               &phase1_dir_skip_no_recompute_streak);
+                if (phase1_activate_force_pivot_mode(
+                        tab->m,
+                        degenerate_count,
+                        &phase1_dir_skip_event_streak,
+                        &phase1_force_pivot_attempt_budget,
+                        &phase1_no_pivot_force_pending,
+                        &phase1_no_pivot_force_reason) &&
+                    solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Force-pivot mode activated after repeated dir-skip/no-recompute (budget=%d)\n",
+                            phase1_force_pivot_attempt_budget);
+                }
                 if (phase1_note_no_pivot_and_maybe_force(
                         solver,
                         tab->m,
@@ -5587,7 +5827,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 continue;
             }
 
-            if (cooldown_active && !force_dir_refactor) {
+            if (cooldown_active && !force_dir_refactor && !force_pivot_mode_active) {
                 dir_stabilize_moderate_defer_pending = 0;
                 if (solver->verbose >= 2) {
                     LP_LOG_STDERR("[simplex_phase1] Large direction norm %.2e at iter %d (entering=%d), skipping direction-stabilize refactor (cooldown=%d)\n",
@@ -5602,12 +5842,27 @@ static int simplex_phase1(SimplexSolver *solver) {
                                             &excluded_entering_ttl_a,
                                             &excluded_entering_b,
                                             &excluded_entering_ttl_b);
+                if (phase1_dir_skip_event_streak < INT_MAX) {
+                    phase1_dir_skip_event_streak++;
+                }
                 use_bland = 1;
                 phase1_recompute_dir_skip_safe(solver,
                                                tab,
                                                degenerate_count,
                                                phase1_no_pivot_streak + 1,
-                                               &phase1_rc_only_streak);
+                                               &phase1_rc_only_streak,
+                                               &phase1_dir_skip_no_recompute_streak);
+                if (phase1_activate_force_pivot_mode(
+                        tab->m,
+                        degenerate_count,
+                        &phase1_dir_skip_event_streak,
+                        &phase1_force_pivot_attempt_budget,
+                        &phase1_no_pivot_force_pending,
+                        &phase1_no_pivot_force_reason) &&
+                    solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Force-pivot mode activated after repeated dir-skip/no-recompute (budget=%d)\n",
+                            phase1_force_pivot_attempt_budget);
+                }
                 if (phase1_note_no_pivot_and_maybe_force(
                         solver,
                         tab->m,
@@ -5621,6 +5876,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 }
                 continue;
             }
+            phase1_dir_skip_event_streak = 0;
             dir_stabilize_moderate_defer_pending = 0;
 
             if (solver->verbose >= 2) {
@@ -5634,7 +5890,12 @@ static int simplex_phase1(SimplexSolver *solver) {
                     break;
                 }
                 dir_stabilize_cooldown = dir_stabilize_cooldown_target;
-                ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
+                ratio_status = primal_ratio_test_with_policy(solver,
+                                                             tab,
+                                                             0,
+                                                             entering,
+                                                             &leaving,
+                                                             &theta);
                 if (ratio_status != 0) {
                     phase1_trace_record_no_entering(solver, iter, ratio_status);
                     use_bland = 1;
@@ -5659,7 +5920,12 @@ static int simplex_phase1(SimplexSolver *solver) {
                 if (pricing_bland_excluding(tab, original_entering, &entering) != 0) {
                     break;
                 }
-                ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
+                ratio_status = primal_ratio_test_with_policy(solver,
+                                                             tab,
+                                                             0,
+                                                             entering,
+                                                             &leaving,
+                                                             &theta);
                 if (ratio_status != 0) {
                     break;
                 }
@@ -5746,6 +6012,9 @@ static int simplex_phase1(SimplexSolver *solver) {
 
         /* Perform pivot */
         int pivot_status;
+        if (phase1_force_pivot_attempt_budget > 0) {
+            phase1_force_pivot_attempt_budget--;
+        }
         {
             double t_pivot_ms = lp_telemetry_timer_start();
             pivot_status = simplex_pivot(tab, entering, leaving, theta, fail_repeat_count);
@@ -5974,8 +6243,10 @@ static int simplex_phase1(SimplexSolver *solver) {
         ratio_breakdown_count = 0;
         ratio_breakdown_last_entering = -1;
         ratio_breakdown_same_entering_streak = 0;
+        phase1_dir_skip_event_streak = 0;
         dir_stabilize_moderate_defer_pending = 0;
         phase1_rc_only_streak = 0;
+        phase1_dir_skip_no_recompute_streak = 0;
         excluded_entering_a = -1;
         excluded_entering_ttl_a = 0;
         excluded_entering_b = -1;
@@ -6216,6 +6487,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         }
 
         if (needs_refactor) {
+            phase1_dir_skip_no_recompute_streak = 0;
             soft_lu_reset_defer_streak(solver, 1);
             periodic_cost_reset_defer_streak(solver, 1);
             runtime_record_periodic_refactor_trigger(solver, 1, lu_refactor_needed);
@@ -6321,6 +6593,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                     soft_lu_refactor_cost_ewma(solver, 1));
         } else if (iter > 0 && iter % RECOMPUTE_INTERVAL == 0) {
             /* Drift control even when LU updates are still accepted. */
+            phase1_dir_skip_no_recompute_streak = 0;
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
             if (solver->pricing_strategy == 4) heap_build(tab);
@@ -6832,11 +7105,12 @@ static int simplex_phase2(SimplexSolver *solver) {
         int ratio_status;
         double t_ratio_ms = lp_telemetry_timer_start();
 
-        if (use_bland) {
-            ratio_status = ratio_test_bland(tab, entering, &leaving, &theta);
-        } else {
-            ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
-        }
+        ratio_status = primal_ratio_test_with_policy(solver,
+                                                     tab,
+                                                     use_bland,
+                                                     entering,
+                                                     &leaving,
+                                                     &theta);
         {
             lp_telemetry_record_ratio_timed(solver, 2, t_ratio_ms);
         }
@@ -6900,11 +7174,12 @@ static int simplex_phase2(SimplexSolver *solver) {
 
                 /* Retry ratio test with fresh LU */
                 t_ratio_ms = lp_telemetry_timer_start();
-                if (use_bland) {
-                    ratio_status = ratio_test_bland(tab, entering, &leaving, &theta);
-                } else {
-                    ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
-                }
+                ratio_status = primal_ratio_test_with_policy(solver,
+                                                             tab,
+                                                             use_bland,
+                                                             entering,
+                                                             &leaving,
+                                                             &theta);
                 {
                     lp_telemetry_record_ratio_timed(solver, 2, t_ratio_ms);
                 }
@@ -7667,16 +7942,44 @@ static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *
     tab->pricing_strategy = solver->pricing_strategy;
     tab->trace_phase1_enabled = solver->trace_phase1;
     if (tab->lu) {
+        int enable_supernode = 0;
         tab->lu->telemetry_enabled = solver->telemetry_enabled;
         if (solver->policy.basis_governor_mode == LP_BASIS_GOV_MODE_OFF) {
             tab->lu->basis_governor = NULL;
         } else {
             tab->lu->basis_governor = &solver->policy.basis_governor;
         }
-        if (solver->lu_supernode)
-            tab->lu->sn_enabled = 1;
-        else if (tab->m > 300)
-            tab->lu->sn_enabled = 1;
+
+        tab->lu->mkz_enabled = 1;
+        if (solver->lu_supernode) {
+            enable_supernode = 1;
+        } else if (tab->m > 300) {
+            enable_supernode = 1;
+        }
+
+        if (solver->lu_backend_policy == LP_LU_BACKEND_POLICY_CBG) {
+            /* Map CBG to dense-GE numeric backend preference. */
+            tab->lu->mkz_enabled = 0;
+            tab->lu->sn_enabled = 0;
+        } else if (solver->lu_backend_policy == LP_LU_BACKEND_POLICY_CGR) {
+            /* Map CGR to sparse Markowitz preference without supernodes. */
+            tab->lu->mkz_enabled = 1;
+            tab->lu->sn_enabled = 0;
+        } else {
+            tab->lu->sn_enabled = enable_supernode ? 1 : 0;
+        }
+
+        if (solver->lu_update_limit_override > 0) {
+            tab->lu->max_updates = solver->lu_update_limit_override;
+        }
+        if (solver->lu_pivot_tol_override > 0.0) {
+            tab->lu->pivot_tol = solver->lu_pivot_tol_override;
+        }
+        if (solver->lu_growth_guard_override > 0.0) {
+            tab->lu->growth_refactor_threshold = solver->lu_growth_guard_override;
+        } else {
+            tab->lu->growth_refactor_threshold = RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
+        }
     }
     tab->trace_phase1_iter = -1;
     tab->trace_last_entering = -1;

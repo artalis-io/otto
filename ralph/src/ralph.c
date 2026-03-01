@@ -788,6 +788,13 @@ static int ralph_probe_lp_status(const RalphModel *model,
                                         NULL,
                                         &probe_pricing,
                                         &probe_phase1_pricing,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
                                         NULL);
 
     SimplexSolver *probe = simplex_create(probe_model);
@@ -1347,6 +1354,13 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     int lp_pricing_strategy = model->pricing;
     int lp_phase1_pricing = model->phase1_pricing;
     int use_presolve = model->presolve;
+    int lp_ratio_test_mode = 1; /* 0=standard, 1=harris */
+    int lp_dual_bound_flip = model->dual_bound_flip;
+    int lp_crash_mode = model->crash;
+    int lp_bfcp_backend = -1; /* -1=auto/default */
+    int lp_bfcp_update_limit = -1;
+    double lp_bfcp_pivot_tol = 0.0;
+    double lp_bfcp_growth_guard = 0.0;
     LPDispatchBackend lp_effective_backend = LP_DISPATCH_BACKEND_SIMPLEX;
     LPExternalProvider lp_effective_provider = LP_EXTERNAL_PROVIDER_NONE;
     LPGLPKCompatConfig glpk_policy_cfg;
@@ -1411,7 +1425,14 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                                             &lp_simplex_method,
                                             &lp_pricing_strategy,
                                             &lp_phase1_pricing,
-                                            &use_presolve);
+                                            &use_presolve,
+                                            &lp_ratio_test_mode,
+                                            &lp_dual_bound_flip,
+                                            &lp_crash_mode,
+                                            &lp_bfcp_backend,
+                                            &lp_bfcp_update_limit,
+                                            &lp_bfcp_pivot_tol,
+                                            &lp_bfcp_growth_guard);
         lp_algorithm_report_ready = 1;
     }
 
@@ -1932,9 +1953,14 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         model->lp_solver->presolve = 0;  /* Already done */
         model->lp_solver->pricing_strategy = lp_pricing_strategy;
         model->lp_solver->scaling = model->scaling;
-        model->lp_solver->crash = model->crash;
+        model->lp_solver->crash = lp_crash_mode ? 1 : 0;
         model->lp_solver->verify = model->verify;
         model->lp_solver->phase1_pricing = lp_phase1_pricing;
+        model->lp_solver->ratio_test_mode = (lp_ratio_test_mode == 0) ? 0 : 1;
+        model->lp_solver->lu_backend_policy = lp_bfcp_backend;
+        model->lp_solver->lu_update_limit_override = lp_bfcp_update_limit;
+        model->lp_solver->lu_pivot_tol_override = lp_bfcp_pivot_tol;
+        model->lp_solver->lu_growth_guard_override = lp_bfcp_growth_guard;
         /* Convert objective limit from user space to internal minimization space */
         if (model->objective_limit < RALPH_INFINITY) {
             model->lp_solver->objective_limit = model->objective_limit * solve_model->obj_sense;
@@ -1948,8 +1974,8 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         model->lp_solver->has_lp_progress_callback = model->has_lp_progress_callback;
         model->lp_solver->lp_cancel_callback = model->lp_cancel_callback;
         model->lp_solver->has_lp_cancel_callback = model->has_lp_cancel_callback;
-        if (model->dual_bound_flip >= 0)
-            model->lp_solver->use_dual_bound_flip = model->dual_bound_flip;
+        if (lp_dual_bound_flip >= 0)
+            model->lp_solver->use_dual_bound_flip = lp_dual_bound_flip;
         if (model->dual_steepest_edge >= 0)
             model->lp_solver->use_dual_steepest_edge = model->dual_steepest_edge;
         model->lp_solver->lu_supernode = model->lu_supernode;
