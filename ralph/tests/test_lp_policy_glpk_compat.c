@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <math.h>
+#include "lp.h"
 #include "lp_policy_glpk_compat.h"
 
 static int tests_run = 0;
@@ -71,12 +72,15 @@ static void test_runtime_mapping_noop_under_default_profile(void) {
     int phase1_pricing = -1;
     int presolve = 0;
     int ratio = 1;
+    int dual_ratio = LP_DUAL_RATIO_TEST_HARRIS;
     int flip = 1;
     int crash = 0;
     int backend = -1;
     int update_limit = -1;
     double pivot_tol = 0.0;
     double growth_guard = 0.0;
+    int soft_gate = 1;
+    int periodic_gate = 1;
 
     lp_policy_glpk_compat_init(&cfg);
     cfg.glpk_smcp_method = LP_GLPK_SMCP_METHOD_DUAL;
@@ -88,22 +92,29 @@ static void test_runtime_mapping_noop_under_default_profile(void) {
                                         &phase1_pricing,
                                         &presolve,
                                         &ratio,
+                                        &dual_ratio,
                                         &flip,
                                         &crash,
                                         &backend,
                                         &update_limit,
                                         &pivot_tol,
-                                        &growth_guard);
+                                        &growth_guard,
+                                        &soft_gate,
+                                        &periodic_gate);
 
     ASSERT_INT_EQ(method, 2, "runtime default profile: method unchanged");
     ASSERT_INT_EQ(pricing, 2, "runtime default profile: pricing unchanged");
     ASSERT_INT_EQ(phase1_pricing, -1, "runtime default profile: phase1 pricing unchanged");
     ASSERT_INT_EQ(presolve, 0, "runtime default profile: presolve unchanged");
     ASSERT_INT_EQ(ratio, 1, "runtime default profile: ratio unchanged");
+    ASSERT_INT_EQ(dual_ratio, LP_DUAL_RATIO_TEST_HARRIS,
+                  "runtime default profile: dual ratio unchanged");
     ASSERT_INT_EQ(flip, 1, "runtime default profile: flip unchanged");
     ASSERT_INT_EQ(crash, 0, "runtime default profile: crash unchanged");
     ASSERT_INT_EQ(backend, -1, "runtime default profile: backend unchanged");
     ASSERT_INT_EQ(update_limit, -1, "runtime default profile: update limit unchanged");
+    ASSERT_INT_EQ(soft_gate, 1, "runtime default profile: soft gate unchanged");
+    ASSERT_INT_EQ(periodic_gate, 1, "runtime default profile: periodic gate unchanged");
 }
 
 static void test_runtime_mapping_glpk_profile(void) {
@@ -113,12 +124,15 @@ static void test_runtime_mapping_glpk_profile(void) {
     int phase1_pricing = -1;
     int presolve = 0;
     int ratio = -1;
+    int dual_ratio = -1;
     int flip = -1;
     int crash = -1;
     int backend = -1;
     int update_limit = -1;
     double pivot_tol = -1.0;
     double growth_guard = -1.0;
+    int soft_gate = 1;
+    int periodic_gate = 1;
 
     lp_policy_glpk_compat_init(&cfg);
     cfg.lp_policy_profile = LP_POLICY_PROFILE_GLPK_COMPAT;
@@ -138,19 +152,24 @@ static void test_runtime_mapping_glpk_profile(void) {
                                         &phase1_pricing,
                                         &presolve,
                                         &ratio,
+                                        &dual_ratio,
                                         &flip,
                                         &crash,
                                         &backend,
                                         &update_limit,
                                         &pivot_tol,
-                                        &growth_guard);
+                                        &growth_guard,
+                                        &soft_gate,
+                                        &periodic_gate);
 
     ASSERT_INT_EQ(method, 1, "runtime glpk profile: dual method mapped");
     ASSERT_INT_EQ(pricing, 0, "runtime glpk profile: standard pricing mapped");
     ASSERT_INT_EQ(phase1_pricing, 0, "runtime glpk profile: phase1 pricing mapped");
     ASSERT_INT_EQ(presolve, -1, "runtime glpk profile: presolve off mapped");
     ASSERT_INT_EQ(ratio, 0, "runtime glpk profile: standard ratio mapped");
-    ASSERT_INT_EQ(flip, 1, "runtime glpk profile: flip on mapped");
+    ASSERT_INT_EQ(dual_ratio, LP_DUAL_RATIO_TEST_FLIP,
+                  "runtime glpk profile: flip maps to dual flip mode");
+    ASSERT_INT_EQ(flip, -1, "runtime glpk profile: dual bound flip untouched");
     ASSERT_INT_EQ(crash, 0, "runtime glpk profile: std basis mapped to crash off");
     ASSERT_INT_EQ(backend, LP_GLPK_BFCP_BACKEND_CGR, "runtime glpk profile: backend mapped");
     ASSERT_INT_EQ(update_limit, 77, "runtime glpk profile: update limit mapped");
@@ -158,6 +177,29 @@ static void test_runtime_mapping_glpk_profile(void) {
                 "runtime glpk profile: pivot tol mapped");
     ASSERT_TRUE(fabs(growth_guard - 1e6) < 1e-6,
                 "runtime glpk profile: growth guard mapped");
+    ASSERT_INT_EQ(soft_gate, 0, "runtime glpk profile: soft cost gate disabled");
+    ASSERT_INT_EQ(periodic_gate, 0, "runtime glpk profile: periodic cost gate disabled");
+
+    cfg.glpk_smcp_flip = LP_GLPK_SMCP_FLIP_OFF;
+    cfg.glpk_smcp_ratio = LP_GLPK_SMCP_RATIO_HARRIS;
+    dual_ratio = -1;
+    lp_policy_glpk_compat_apply_runtime(&cfg,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        &dual_ratio,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL);
+    ASSERT_INT_EQ(dual_ratio, LP_DUAL_RATIO_TEST_HARRIS,
+                  "runtime glpk profile: dual ratio falls back to Harris when flip off");
 }
 
 static void test_validation_rejects_invalid_values(void) {
