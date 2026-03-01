@@ -124,6 +124,8 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_dual_theta_nonpositive = 0;
     solver->telemetry.perf_dual_pivot_reject_small = 0;
     solver->telemetry.perf_dual_bound_flip_applied = 0;
+    solver->telemetry.perf_dual_bound_flip_startup = 0;
+    solver->telemetry.perf_dual_bound_flip_iterative = 0;
     solver->telemetry.perf_dual_lu_hard_trigger = 0;
 
     solver->policy.periodic_feedback_bias_phase1 = 0.0;
@@ -419,6 +421,8 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_dual_theta_nonpositive);
     COPY_SOLVER_FIELD(perf_dual_pivot_reject_small);
     COPY_SOLVER_FIELD(perf_dual_bound_flip_applied);
+    COPY_SOLVER_FIELD(perf_dual_bound_flip_startup);
+    COPY_SOLVER_FIELD(perf_dual_bound_flip_iterative);
     COPY_SOLVER_FIELD(perf_dual_lu_hard_trigger);
 
     out->periodic_feedback_bias_phase1 = solver->policy.periodic_feedback_bias_phase1;

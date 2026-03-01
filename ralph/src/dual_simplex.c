@@ -620,7 +620,7 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
 
     if (applied_flips > 0) {
         if (tab->owner) {
-            lp_telemetry_record_dual_bound_flip_applied(tab->owner, applied_flips);
+            lp_telemetry_record_dual_bound_flip_applied_iterative(tab->owner, applied_flips);
         }
         tab->dual_cand_valid = 0;
         tableau_compute_solution(tab);
@@ -1332,7 +1332,7 @@ int make_dual_feasible(SimplexTableau *tab, int obj_sense, int allow_bound_flip)
     }
 
     if (changes > 0 && tab->owner) {
-        lp_telemetry_record_dual_bound_flip_applied(tab->owner, changes);
+        lp_telemetry_record_dual_bound_flip_applied_startup(tab->owner, changes);
     }
 
     return changes;

@@ -380,6 +380,22 @@ void lp_telemetry_record_dual_bound_flip_applied(SimplexSolver *solver,
     solver->telemetry.perf_dual_bound_flip_applied += flips;
 }
 
+void lp_telemetry_record_dual_bound_flip_applied_startup(SimplexSolver *solver,
+                                                         int flips) {
+    if (!solver_telemetry_enabled(solver)) return;
+    if (flips <= 0) return;
+    solver->telemetry.perf_dual_bound_flip_applied += flips;
+    solver->telemetry.perf_dual_bound_flip_startup += flips;
+}
+
+void lp_telemetry_record_dual_bound_flip_applied_iterative(SimplexSolver *solver,
+                                                           int flips) {
+    if (!solver_telemetry_enabled(solver)) return;
+    if (flips <= 0) return;
+    solver->telemetry.perf_dual_bound_flip_applied += flips;
+    solver->telemetry.perf_dual_bound_flip_iterative += flips;
+}
+
 void lp_telemetry_record_dual_lu_hard_trigger(SimplexSolver *solver) {
     if (!solver_telemetry_enabled(solver)) return;
     solver->telemetry.perf_dual_lu_hard_trigger++;

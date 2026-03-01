@@ -2979,8 +2979,9 @@ int ralph_core_get_last_lp_telemetry(const RalphModel *model, RalphLPSolverTelem
     memset(&snapshot, 0, sizeof(snapshot));
     lp_telemetry_snapshot_solver(lp, &snapshot);
 
-    if (sizeof(*telemetry) != sizeof(snapshot)) return -1;
-    memcpy(telemetry, &snapshot, sizeof(*telemetry));
+    size_t copy_n = sizeof(*telemetry);
+    if (copy_n > sizeof(snapshot)) copy_n = sizeof(snapshot);
+    memcpy(telemetry, &snapshot, copy_n);
     return 0;
 }
 
@@ -2995,8 +2996,81 @@ int ralph_core_get_last_lu_telemetry(const RalphModel *model, RalphLUTelemetry *
     memset(&snapshot, 0, sizeof(snapshot));
     lp_telemetry_snapshot_lu(lp->tableau->lu, &snapshot);
 
-    if (sizeof(*telemetry) != sizeof(snapshot)) return -1;
-    memcpy(telemetry, &snapshot, sizeof(*telemetry));
+#define RALPH_LU_TELEM_COPY(field) telemetry->field = snapshot.field
+    RALPH_LU_TELEM_COPY(mkz_enabled);
+    RALPH_LU_TELEM_COPY(sn_enabled);
+    RALPH_LU_TELEM_COPY(mkz_calls);
+    RALPH_LU_TELEM_COPY(mkz_successes);
+    RALPH_LU_TELEM_COPY(mkz_failures);
+    RALPH_LU_TELEM_COPY(mkz_last_failure);
+    RALPH_LU_TELEM_COPY(mkz_dense_fallbacks);
+    RALPH_LU_TELEM_COPY(mkz_fail_workspace);
+    RALPH_LU_TELEM_COPY(mkz_fail_pool);
+    RALPH_LU_TELEM_COPY(mkz_fail_singular);
+    RALPH_LU_TELEM_COPY(mkz_fail_capacity);
+    RALPH_LU_TELEM_COPY(mkz_singular_retry_attempts);
+    RALPH_LU_TELEM_COPY(mkz_singular_retry_successes);
+    RALPH_LU_TELEM_COPY(mkz_singular_retry_failures);
+    RALPH_LU_TELEM_COPY(mkz_reserved_fallback_attempts);
+    RALPH_LU_TELEM_COPY(mkz_reserved_fallback_accepts);
+    RALPH_LU_TELEM_COPY(mkz_reserved_fallback_rejects);
+    RALPH_LU_TELEM_COPY(mkz_circuit_trips);
+    RALPH_LU_TELEM_COPY(mkz_circuit_skips);
+    RALPH_LU_TELEM_COPY(mkz_circuit_resets);
+
+    RALPH_LU_TELEM_COPY(sparse_dense_fallbacks);
+    RALPH_LU_TELEM_COPY(used_dense_fallback_last);
+    RALPH_LU_TELEM_COPY(sparse_fallback_last_reason);
+    RALPH_LU_TELEM_COPY(sparse_fallback_reason_small_matrix);
+    RALPH_LU_TELEM_COPY(sparse_fallback_reason_symbolic);
+    RALPH_LU_TELEM_COPY(sparse_fallback_reason_numeric);
+    RALPH_LU_TELEM_COPY(identity_sep_failures);
+    RALPH_LU_TELEM_COPY(symbolic_failures);
+    RALPH_LU_TELEM_COPY(symbolic_fail_workspace);
+    RALPH_LU_TELEM_COPY(symbolic_fail_unmatched_no_reserved);
+    RALPH_LU_TELEM_COPY(symbolic_fail_inconsistent_identity);
+    RALPH_LU_TELEM_COPY(symbolic_full_retry_attempts);
+    RALPH_LU_TELEM_COPY(symbolic_full_retry_successes);
+    RALPH_LU_TELEM_COPY(symbolic_full_retry_numeric_failures);
+    RALPH_LU_TELEM_COPY(symbolic_full_retry_mkz_attempts);
+    RALPH_LU_TELEM_COPY(symbolic_full_retry_mkz_successes);
+    RALPH_LU_TELEM_COPY(symbolic_full_retry_mkz_failures);
+    RALPH_LU_TELEM_COPY(numeric_backend_markowitz);
+    RALPH_LU_TELEM_COPY(numeric_backend_supernode);
+    RALPH_LU_TELEM_COPY(numeric_backend_dense_ge);
+
+    RALPH_LU_TELEM_COPY(sn_calls);
+    RALPH_LU_TELEM_COPY(sn_successes);
+    RALPH_LU_TELEM_COPY(num_updates);
+    RALPH_LU_TELEM_COPY(max_updates);
+    RALPH_LU_TELEM_COPY(last_failure_reason);
+
+    RALPH_LU_TELEM_COPY(perf_factorize_calls);
+    RALPH_LU_TELEM_COPY(perf_last_basis_nnz);
+    RALPH_LU_TELEM_COPY(perf_last_m);
+    RALPH_LU_TELEM_COPY(perf_last_k);
+    RALPH_LU_TELEM_COPY(perf_symbolic_calls);
+    RALPH_LU_TELEM_COPY(perf_symbolic_cache_hits);
+    RALPH_LU_TELEM_COPY(perf_symbolic_cache_misses);
+    RALPH_LU_TELEM_COPY(perf_last_symbolic_ms);
+    RALPH_LU_TELEM_COPY(perf_last_sparse_numeric_ms);
+    RALPH_LU_TELEM_COPY(perf_last_dense_ge_numeric_ms);
+    RALPH_LU_TELEM_COPY(perf_last_supernode_numeric_ms);
+    RALPH_LU_TELEM_COPY(perf_last_dense_factorize_ms);
+    RALPH_LU_TELEM_COPY(perf_last_a_struct_build_ms);
+    RALPH_LU_TELEM_COPY(perf_last_markowitz_numeric_ms);
+    RALPH_LU_TELEM_COPY(perf_last_identity_placement_ms);
+    RALPH_LU_TELEM_COPY(perf_last_coo_to_csc_ms);
+    RALPH_LU_TELEM_COPY(perf_total_symbolic_ms);
+    RALPH_LU_TELEM_COPY(perf_total_sparse_numeric_ms);
+    RALPH_LU_TELEM_COPY(perf_total_dense_ge_numeric_ms);
+    RALPH_LU_TELEM_COPY(perf_total_supernode_numeric_ms);
+    RALPH_LU_TELEM_COPY(perf_total_dense_factorize_ms);
+    RALPH_LU_TELEM_COPY(perf_total_a_struct_build_ms);
+    RALPH_LU_TELEM_COPY(perf_total_markowitz_numeric_ms);
+    RALPH_LU_TELEM_COPY(perf_total_identity_placement_ms);
+    RALPH_LU_TELEM_COPY(perf_total_coo_to_csc_ms);
+#undef RALPH_LU_TELEM_COPY
     return 0;
 }
 

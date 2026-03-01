@@ -93,6 +93,9 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_no_pivot_forced_dir_skip = 1;
     solver.telemetry.perf_phase1_no_pivot_forced_pivot_fail = 1;
     solver.telemetry.perf_phase1_soft_lu_policy_cooldown_defers = 5;
+    solver.telemetry.perf_dual_bound_flip_applied = 9;
+    solver.telemetry.perf_dual_bound_flip_startup = 4;
+    solver.telemetry.perf_dual_bound_flip_iterative = 5;
     solver.policy.refactor_next_reason = RALPH_REFACTOR_REASON_SETUP;
     solver.telemetry.perf_basis_fastpath_hits = 7;
     solver.policy.periodic_feedback_bias_phase2 = 0.2;
@@ -181,6 +184,12 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 no-pivot forced pivot fail");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_soft_lu_policy_cooldown_defers, 0,
                   "reset: phase1 soft-lu periodic cooldown defers");
+    ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_applied, 0,
+                  "reset: dual bound-flip aggregate");
+    ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_startup, 0,
+                  "reset: dual bound-flip startup");
+    ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_iterative, 0,
+                  "reset: dual bound-flip iterative");
     ASSERT_INT_EQ(solver.policy.refactor_next_reason, RALPH_REFACTOR_REASON_OTHER,
                   "reset: next reason");
     ASSERT_INT_EQ(solver.telemetry.perf_basis_fastpath_hits, 0, "reset: basis_fastpath_hits");
@@ -370,6 +379,16 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 no-pivot force pivot fail");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_soft_lu_policy_cooldown_defers, 2,
                   "record: phase1 soft-lu periodic cooldown defers");
+
+    lp_telemetry_record_dual_bound_flip_applied_startup(&solver, 3);
+    lp_telemetry_record_dual_bound_flip_applied_iterative(&solver, 2);
+    lp_telemetry_record_dual_bound_flip_applied(&solver, 4);
+    ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_applied, 9,
+                  "record: dual bound flips aggregate");
+    ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_startup, 3,
+                  "record: dual bound flips startup");
+    ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_iterative, 2,
+                  "record: dual bound flips iterative");
 }
 
 static void test_refactor_reason_classifier(void) {
@@ -426,6 +445,9 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_no_pivot_forced_dir_skip = 3;
     solver.telemetry.perf_phase1_no_pivot_forced_pivot_fail = 1;
     solver.telemetry.perf_phase1_soft_lu_policy_cooldown_defers = 4;
+    solver.telemetry.perf_dual_bound_flip_applied = 13;
+    solver.telemetry.perf_dual_bound_flip_startup = 5;
+    solver.telemetry.perf_dual_bound_flip_iterative = 8;
     solver.policy.periodic_feedback_hint_pressure_phase2 = 0.55;
     solver.policy.soft_lu_cost_gate_enabled = 1;
     solver.policy.soft_lu_cost_gate_defers_phase1 = 3;
@@ -517,6 +539,12 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 no-pivot force pivot fail");
     ASSERT_INT_EQ(snap.perf_phase1_soft_lu_policy_cooldown_defers, 4,
                   "solver_snapshot: phase1 soft-lu periodic cooldown defers");
+    ASSERT_INT_EQ(snap.perf_dual_bound_flip_applied, 13,
+                  "solver_snapshot: dual bound flips aggregate");
+    ASSERT_INT_EQ(snap.perf_dual_bound_flip_startup, 5,
+                  "solver_snapshot: dual bound flips startup");
+    ASSERT_INT_EQ(snap.perf_dual_bound_flip_iterative, 8,
+                  "solver_snapshot: dual bound flips iterative");
     ASSERT_DBL_EQ(snap.periodic_feedback_hint_pressure_phase2, 0.55,
                   "solver_snapshot: feedback pressure phase2");
     ASSERT_INT_EQ(snap.soft_lu_cost_gate_enabled, 1,

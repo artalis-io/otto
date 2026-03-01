@@ -534,6 +534,8 @@ typedef struct {
     int perf_phase1_dir_stabilize_ratio_gt_1000;
     int perf_phase1_dir_stabilize_skip_rc_only;
     int perf_phase1_dir_stabilize_skip_full;
+    int perf_phase1_dir_stabilize_skip_no_recompute;
+    int perf_phase1_dir_stabilize_skip_guard_refresh;
     int perf_phase1_recompute_after_ratio_breakdown;
     int perf_phase1_recompute_after_dir_skip;
     int perf_phase1_recompute_after_dir_refactor;
@@ -544,6 +546,12 @@ typedef struct {
     int perf_phase1_ratio_breakdown_retries;
     int perf_phase1_ratio_breakdown_escalations;
     int perf_phase1_pivot_fail_recovery_exclusions;
+    int perf_phase1_no_pivot_events;
+    int perf_phase1_no_pivot_forced_refactor;
+    int perf_phase1_no_pivot_forced_ratio_breakdown;
+    int perf_phase1_no_pivot_forced_dir_skip;
+    int perf_phase1_no_pivot_forced_pivot_fail;
+    int perf_phase1_soft_lu_policy_cooldown_defers;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -560,6 +568,13 @@ typedef struct {
     int perf_phase2_refactor_periodic_policy;
     int perf_phase2_refactor_periodic_lu_health;
     int perf_phase2_refactor_safety_forced;
+    int perf_dual_ratio_no_entering;
+    int perf_dual_theta_nonpositive;
+    int perf_dual_pivot_reject_small;
+    int perf_dual_bound_flip_applied;
+    int perf_dual_bound_flip_startup;
+    int perf_dual_bound_flip_iterative;
+    int perf_dual_lu_hard_trigger;
 
     double periodic_feedback_bias_phase1;
     double periodic_feedback_bias_phase2;
