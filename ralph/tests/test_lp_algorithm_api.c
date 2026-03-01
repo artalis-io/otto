@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include "ralph_test_mod_api.h"
 
 static int tests_run = 0;
@@ -71,6 +72,7 @@ static void test_param_metadata_and_scope(void) {
     RalphParamMeta meta;
     RalphParamId pid = RALPH_PARAM_COUNT;
     int value = -999;
+    double dvalue = -1.0;
 
     ASSERT_TRUE(model != NULL, "params: model created");
     if (!model) return;
@@ -147,6 +149,42 @@ static void test_param_metadata_and_scope(void) {
     ASSERT_INT_EQ((int)meta.max_value, 2,
                   "params: lp_basis_governor_mode max");
 
+    memset(&meta, 0, sizeof(meta));
+    ASSERT_INT_EQ(ralph_core_get_param_meta(RALPH_PARAM_LP_POLICY_PROFILE, &meta), 0,
+                  "params: metadata for lp_policy_profile");
+    ASSERT_TRUE(strcmp(meta.name, "lp_policy_profile") == 0,
+                "params: lp_policy_profile canonical name");
+    ASSERT_INT_EQ((int)meta.scope, (int)RALPH_PARAM_SCOPE_LP,
+                  "params: lp_policy_profile LP scope");
+    ASSERT_INT_EQ(meta.has_min, 1, "params: lp_policy_profile has min");
+    ASSERT_INT_EQ(meta.has_max, 1, "params: lp_policy_profile has max");
+    ASSERT_INT_EQ((int)meta.min_value, (int)RALPH_LP_POLICY_PROFILE_DEFAULT,
+                  "params: lp_policy_profile min");
+    ASSERT_INT_EQ((int)meta.max_value, (int)RALPH_LP_POLICY_PROFILE_GLPK_COMPAT,
+                  "params: lp_policy_profile max");
+
+    memset(&meta, 0, sizeof(meta));
+    ASSERT_INT_EQ(ralph_core_get_param_meta(RALPH_PARAM_GLPK_SMCP_METHOD, &meta), 0,
+                  "params: metadata for glpk_smcp_method");
+    ASSERT_TRUE(strcmp(meta.name, "glpk_smcp_method") == 0,
+                "params: glpk_smcp_method canonical name");
+    ASSERT_INT_EQ((int)meta.scope, (int)RALPH_PARAM_SCOPE_LP,
+                  "params: glpk_smcp_method LP scope");
+    ASSERT_INT_EQ(meta.has_min, 1, "params: glpk_smcp_method has min");
+    ASSERT_INT_EQ(meta.has_max, 1, "params: glpk_smcp_method has max");
+    ASSERT_INT_EQ((int)meta.min_value, (int)RALPH_LP_GLPK_SMCP_METHOD_AUTO,
+                  "params: glpk_smcp_method min");
+    ASSERT_INT_EQ((int)meta.max_value, (int)RALPH_LP_GLPK_SMCP_METHOD_DUAL,
+                  "params: glpk_smcp_method max");
+
+    memset(&meta, 0, sizeof(meta));
+    ASSERT_INT_EQ(ralph_core_get_param_meta(RALPH_PARAM_GLPK_BFCP_PIVOT_TOL, &meta), 0,
+                  "params: metadata for glpk_bfcp_pivot_tol");
+    ASSERT_TRUE(strcmp(meta.name, "glpk_bfcp_pivot_tol") == 0,
+                "params: glpk_bfcp_pivot_tol canonical name");
+    ASSERT_INT_EQ((int)meta.value_type, (int)RALPH_PARAM_VALUE_DOUBLE,
+                  "params: glpk_bfcp_pivot_tol double type");
+
     ASSERT_INT_EQ(ralph_core_find_param_by_name("lp_algorithm", &pid), 0,
                   "params: find lp_algorithm canonical");
     ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_ALGORITHM,
@@ -179,6 +217,22 @@ static void test_param_metadata_and_scope(void) {
                   "params: find lp_basis_governor_mode alias");
     ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_BASIS_GOVERNOR_MODE,
                   "params: lp_basis_governor_mode alias id");
+    ASSERT_INT_EQ(ralph_core_find_param_by_name("lp_policy_profile", &pid), 0,
+                  "params: find lp_policy_profile canonical");
+    ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_POLICY_PROFILE,
+                  "params: lp_policy_profile canonical id");
+    ASSERT_INT_EQ(ralph_core_find_param_by_name("LPPolicyProfile", &pid), 0,
+                  "params: find lp_policy_profile alias");
+    ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_POLICY_PROFILE,
+                  "params: lp_policy_profile alias id");
+    ASSERT_INT_EQ(ralph_core_find_param_by_name("glpk_bfcp_growth_guard", &pid), 0,
+                  "params: find glpk_bfcp_growth_guard canonical");
+    ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_GLPK_BFCP_GROWTH_GUARD,
+                  "params: glpk_bfcp_growth_guard canonical id");
+    ASSERT_INT_EQ(ralph_core_find_param_by_name("GLPKBFCPGrowthGuard", &pid), 0,
+                  "params: find glpk_bfcp_growth_guard alias");
+    ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_GLPK_BFCP_GROWTH_GUARD,
+                  "params: glpk_bfcp_growth_guard alias id");
 
     ASSERT_INT_EQ(ralph_core_set_mip_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                                              (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX),
@@ -198,6 +252,13 @@ static void test_param_metadata_and_scope(void) {
     ASSERT_INT_EQ(ralph_core_set_mip_int_param_id(model, RALPH_PARAM_LP_BASIS_GOVERNOR_MODE, 1),
                   -1,
                   "params: MIP strict rejects lp_basis_governor_mode id");
+    ASSERT_INT_EQ(ralph_core_set_mip_int_param_id(model, RALPH_PARAM_LP_POLICY_PROFILE,
+                                             (int)RALPH_LP_POLICY_PROFILE_GLPK_COMPAT),
+                  -1,
+                  "params: MIP strict rejects lp_policy_profile id");
+    ASSERT_INT_EQ(ralph_core_set_mip_dbl_param_id(model, RALPH_PARAM_GLPK_BFCP_PIVOT_TOL, 1e-8),
+                  -1,
+                  "params: MIP strict rejects glpk_bfcp_pivot_tol id");
 
     ASSERT_INT_EQ(ralph_core_set_lp_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
                                             (int)RALPH_LP_ALGORITHM_DUAL_SIMPLEX),
@@ -261,12 +322,71 @@ static void test_param_metadata_and_scope(void) {
                   "params: reject lp_external_strict out of range");
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_BASIS_GOVERNOR_MODE, 3), -1,
                   "params: reject lp_basis_governor_mode out of range");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_POLICY_PROFILE, 2), -1,
+                  "params: reject lp_policy_profile out of range");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_SMCP_METHOD, 3), -1,
+                  "params: reject glpk_smcp_method out of range");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT, -2), -1,
+                  "params: reject glpk_bfcp_update_limit out of range");
+    ASSERT_INT_EQ(ralph_core_set_dbl_param_id(model, RALPH_PARAM_GLPK_BFCP_PIVOT_TOL, INFINITY), -1,
+                  "params: reject glpk_bfcp_pivot_tol non-finite");
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_BASIS_GOVERNOR_MODE, 2), 0,
                   "params: set lp_basis_governor_mode by id");
     ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_LP_BASIS_GOVERNOR_MODE, &value), 0,
                   "params: get lp_basis_governor_mode by id");
     ASSERT_INT_EQ(value, 2,
                   "params: lp_basis_governor_mode set/get consistent");
+
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_POLICY_PROFILE,
+                                         (int)RALPH_LP_POLICY_PROFILE_GLPK_COMPAT),
+                  0,
+                  "params: set lp_policy_profile=glpk_compat");
+    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_GLPK_SMCP_METHOD, &value), 0,
+                  "params: get glpk_smcp_method after profile apply");
+    ASSERT_INT_EQ(value, (int)RALPH_LP_GLPK_SMCP_METHOD_PRIMAL,
+                  "params: profile defaults glpk_smcp_method=primal");
+    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_GLPK_SMCP_PRICING, &value), 0,
+                  "params: get glpk_smcp_pricing after profile apply");
+    ASSERT_INT_EQ(value, (int)RALPH_LP_GLPK_SMCP_PRICING_STEEP,
+                  "params: profile defaults glpk_smcp_pricing=steep");
+    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_GLPK_SMCP_PRESOLVE, &value), 0,
+                  "params: get glpk_smcp_presolve after profile apply");
+    ASSERT_INT_EQ(value, (int)RALPH_LP_GLPK_SMCP_PRESOLVE_ON,
+                  "params: profile defaults glpk_smcp_presolve=on");
+    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT, &value), 0,
+                  "params: get glpk_bfcp_update_limit after profile apply");
+    ASSERT_INT_EQ(value, 100,
+                  "params: profile defaults glpk_bfcp_update_limit=100 when auto");
+
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_SMCP_METHOD,
+                                         (int)RALPH_LP_GLPK_SMCP_METHOD_DUAL),
+                  0,
+                  "params: override glpk_smcp_method after profile");
+    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_GLPK_SMCP_METHOD, &value), 0,
+                  "params: get glpk_smcp_method override");
+    ASSERT_INT_EQ(value, (int)RALPH_LP_GLPK_SMCP_METHOD_DUAL,
+                  "params: explicit override persists after profile");
+
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT, -1), 0,
+                  "params: set glpk_bfcp_update_limit auto");
+    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT, &value), 0,
+                  "params: get glpk_bfcp_update_limit auto");
+    ASSERT_INT_EQ(value, -1,
+                  "params: glpk_bfcp_update_limit auto set/get");
+
+    ASSERT_INT_EQ(ralph_core_set_dbl_param_id(model, RALPH_PARAM_GLPK_BFCP_PIVOT_TOL, 1e-8), 0,
+                  "params: set glpk_bfcp_pivot_tol");
+    ASSERT_INT_EQ(ralph_core_get_dbl_param_id(model, RALPH_PARAM_GLPK_BFCP_PIVOT_TOL, &dvalue), 0,
+                  "params: get glpk_bfcp_pivot_tol");
+    ASSERT_TRUE(fabs(dvalue - 1e-8) < 1e-14,
+                "params: glpk_bfcp_pivot_tol set/get consistent");
+
+    ASSERT_INT_EQ(ralph_core_set_dbl_param_id(model, RALPH_PARAM_GLPK_BFCP_GROWTH_GUARD, 1e6), 0,
+                  "params: set glpk_bfcp_growth_guard");
+    ASSERT_INT_EQ(ralph_core_get_dbl_param_id(model, RALPH_PARAM_GLPK_BFCP_GROWTH_GUARD, &dvalue), 0,
+                  "params: get glpk_bfcp_growth_guard");
+    ASSERT_TRUE(fabs(dvalue - 1e6) < 1e-6,
+                "params: glpk_bfcp_growth_guard set/get consistent");
 
     ASSERT_INT_EQ(ralph_test_set_int_param(model, "barrier_crossover",
                                       (int)RALPH_LP_CROSSOVER_ON),

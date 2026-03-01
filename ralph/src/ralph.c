@@ -20,6 +20,7 @@
 #include "lp_dispatch.h"
 #include "lp_external_adapter.h"
 #include "lp_external_glpk_oop.h"
+#include "lp_policy_glpk_compat.h"
 
 #define RALPH_VERSION "0.1.0"
 
@@ -69,6 +70,17 @@ struct RalphModel {
     int random_seed;        /* deterministic LP seed for anti-cycling perturbation offsets */
     int lp_threads;         /* LP thread policy (0=auto; deterministic mode defaults to 1) */
     int lp_basis_governor_mode; /* 0=off, 1=shadow, 2=control_phase2 */
+    int lp_policy_profile;  /* 0=default, 1=glpk_compat */
+    int glpk_smcp_method;   /* 0=auto, 1=primal, 2=dual */
+    int glpk_smcp_pricing;  /* 0=standard, 1=steep */
+    int glpk_smcp_ratio;    /* 0=standard, 1=harris */
+    int glpk_smcp_flip;     /* 0=off, 1=on */
+    int glpk_smcp_basis;    /* 0=adv, 1=std */
+    int glpk_smcp_presolve; /* 0=auto, 1=off, 2=on */
+    int glpk_bfcp_backend;  /* 0=luf_ft, 1=cbg, 2=cgr */
+    int glpk_bfcp_update_limit; /* -1=auto */
+    double glpk_bfcp_pivot_tol; /* <=0=auto */
+    double glpk_bfcp_growth_guard; /* <=0=auto */
 
     /* Solution */
     RalphStatus status;
@@ -396,6 +408,107 @@ static int ralph_set_requested_lp_external_provider_internal(RalphModel *model, 
         return -1;
     }
     model->lp_external_provider = normalized_external_provider;
+    return 0;
+}
+
+static void ralph_glpk_policy_config_from_model(const RalphModel *model,
+                                                LPGLPKCompatConfig *cfg) {
+    if (!cfg) return;
+    lp_policy_glpk_compat_init(cfg);
+    if (!model) return;
+
+    cfg->lp_policy_profile = model->lp_policy_profile;
+    cfg->glpk_smcp_method = model->glpk_smcp_method;
+    cfg->glpk_smcp_pricing = model->glpk_smcp_pricing;
+    cfg->glpk_smcp_ratio = model->glpk_smcp_ratio;
+    cfg->glpk_smcp_flip = model->glpk_smcp_flip;
+    cfg->glpk_smcp_basis = model->glpk_smcp_basis;
+    cfg->glpk_smcp_presolve = model->glpk_smcp_presolve;
+    cfg->glpk_bfcp_backend = model->glpk_bfcp_backend;
+    cfg->glpk_bfcp_update_limit = model->glpk_bfcp_update_limit;
+    cfg->glpk_bfcp_pivot_tol = model->glpk_bfcp_pivot_tol;
+    cfg->glpk_bfcp_growth_guard = model->glpk_bfcp_growth_guard;
+}
+
+static void ralph_glpk_policy_config_to_model(RalphModel *model,
+                                              const LPGLPKCompatConfig *cfg) {
+    if (!model || !cfg) return;
+    model->lp_policy_profile = cfg->lp_policy_profile;
+    model->glpk_smcp_method = cfg->glpk_smcp_method;
+    model->glpk_smcp_pricing = cfg->glpk_smcp_pricing;
+    model->glpk_smcp_ratio = cfg->glpk_smcp_ratio;
+    model->glpk_smcp_flip = cfg->glpk_smcp_flip;
+    model->glpk_smcp_basis = cfg->glpk_smcp_basis;
+    model->glpk_smcp_presolve = cfg->glpk_smcp_presolve;
+    model->glpk_bfcp_backend = cfg->glpk_bfcp_backend;
+    model->glpk_bfcp_update_limit = cfg->glpk_bfcp_update_limit;
+    model->glpk_bfcp_pivot_tol = cfg->glpk_bfcp_pivot_tol;
+    model->glpk_bfcp_growth_guard = cfg->glpk_bfcp_growth_guard;
+}
+
+static int ralph_set_glpk_policy_int_param(RalphModel *model,
+                                           RalphParamId param,
+                                           int value) {
+    LPGLPKCompatConfig cfg;
+    ralph_glpk_policy_config_from_model(model, &cfg);
+
+    switch (param) {
+        case RALPH_PARAM_LP_POLICY_PROFILE:
+            cfg.lp_policy_profile = value;
+            lp_policy_glpk_compat_apply_profile_defaults(&cfg);
+            break;
+        case RALPH_PARAM_GLPK_SMCP_METHOD:
+            cfg.glpk_smcp_method = value;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_PRICING:
+            cfg.glpk_smcp_pricing = value;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_RATIO:
+            cfg.glpk_smcp_ratio = value;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_FLIP:
+            cfg.glpk_smcp_flip = value;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_BASIS:
+            cfg.glpk_smcp_basis = value;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_PRESOLVE:
+            cfg.glpk_smcp_presolve = value;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_BACKEND:
+            cfg.glpk_bfcp_backend = value;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT:
+            cfg.glpk_bfcp_update_limit = value;
+            break;
+        default:
+            return -1;
+    }
+
+    if (!lp_policy_glpk_compat_validate(&cfg)) return -1;
+    ralph_glpk_policy_config_to_model(model, &cfg);
+    return 0;
+}
+
+static int ralph_set_glpk_policy_double_param(RalphModel *model,
+                                              RalphParamId param,
+                                              double value) {
+    LPGLPKCompatConfig cfg;
+    ralph_glpk_policy_config_from_model(model, &cfg);
+
+    switch (param) {
+        case RALPH_PARAM_GLPK_BFCP_PIVOT_TOL:
+            cfg.glpk_bfcp_pivot_tol = value;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_GROWTH_GUARD:
+            cfg.glpk_bfcp_growth_guard = value;
+            break;
+        default:
+            return -1;
+    }
+
+    if (!lp_policy_glpk_compat_validate(&cfg)) return -1;
+    ralph_glpk_policy_config_to_model(model, &cfg);
     return 0;
 }
 
@@ -865,6 +978,11 @@ RalphModel* ralph_core_create(void) {
     model->random_seed = 0;
     model->lp_threads = 0;
     model->lp_basis_governor_mode = LP_BASIS_GOV_MODE_OFF;
+    {
+        LPGLPKCompatConfig cfg;
+        lp_policy_glpk_compat_init(&cfg);
+        ralph_glpk_policy_config_to_model(model, &cfg);
+    }
 
     model->status = RALPH_STATUS_UNKNOWN;
     model->mip_start = NULL;
@@ -5046,6 +5164,139 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .aliases = {"LPBasisGovernorMode"},
             .alias_count = 1
         },
+        [RALPH_PARAM_LP_POLICY_PROFILE] = {
+            .id = RALPH_PARAM_LP_POLICY_PROFILE,
+            .name = "lp_policy_profile",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_LP_POLICY_PROFILE_DEFAULT,
+            .has_min = 1,
+            .min_value = (double)RALPH_LP_POLICY_PROFILE_DEFAULT,
+            .has_max = 1,
+            .max_value = (double)RALPH_LP_POLICY_PROFILE_GLPK_COMPAT,
+            .aliases = {"LPPolicyProfile"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_SMCP_METHOD] = {
+            .id = RALPH_PARAM_GLPK_SMCP_METHOD,
+            .name = "glpk_smcp_method",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_LP_GLPK_SMCP_METHOD_AUTO,
+            .has_min = 1,
+            .min_value = (double)RALPH_LP_GLPK_SMCP_METHOD_AUTO,
+            .has_max = 1,
+            .max_value = (double)RALPH_LP_GLPK_SMCP_METHOD_DUAL,
+            .aliases = {"GLPKSMCPMethod"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_SMCP_PRICING] = {
+            .id = RALPH_PARAM_GLPK_SMCP_PRICING,
+            .name = "glpk_smcp_pricing",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_LP_GLPK_SMCP_PRICING_STEEP,
+            .has_min = 1,
+            .min_value = (double)RALPH_LP_GLPK_SMCP_PRICING_STANDARD,
+            .has_max = 1,
+            .max_value = (double)RALPH_LP_GLPK_SMCP_PRICING_STEEP,
+            .aliases = {"GLPKSMCPPricing"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_SMCP_RATIO] = {
+            .id = RALPH_PARAM_GLPK_SMCP_RATIO,
+            .name = "glpk_smcp_ratio",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_LP_GLPK_SMCP_RATIO_HARRIS,
+            .has_min = 1,
+            .min_value = (double)RALPH_LP_GLPK_SMCP_RATIO_STANDARD,
+            .has_max = 1,
+            .max_value = (double)RALPH_LP_GLPK_SMCP_RATIO_HARRIS,
+            .aliases = {"GLPKSMCPRatio"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_SMCP_FLIP] = {
+            .id = RALPH_PARAM_GLPK_SMCP_FLIP,
+            .name = "glpk_smcp_flip",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_LP_GLPK_SMCP_FLIP_OFF,
+            .has_min = 1,
+            .min_value = (double)RALPH_LP_GLPK_SMCP_FLIP_OFF,
+            .has_max = 1,
+            .max_value = (double)RALPH_LP_GLPK_SMCP_FLIP_ON,
+            .aliases = {"GLPKSMCPFlip"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_SMCP_BASIS] = {
+            .id = RALPH_PARAM_GLPK_SMCP_BASIS,
+            .name = "glpk_smcp_basis",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_LP_GLPK_SMCP_BASIS_ADV,
+            .has_min = 1,
+            .min_value = (double)RALPH_LP_GLPK_SMCP_BASIS_ADV,
+            .has_max = 1,
+            .max_value = (double)RALPH_LP_GLPK_SMCP_BASIS_STD,
+            .aliases = {"GLPKSMCPBasis"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_SMCP_PRESOLVE] = {
+            .id = RALPH_PARAM_GLPK_SMCP_PRESOLVE,
+            .name = "glpk_smcp_presolve",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_LP_GLPK_SMCP_PRESOLVE_AUTO,
+            .has_min = 1,
+            .min_value = (double)RALPH_LP_GLPK_SMCP_PRESOLVE_AUTO,
+            .has_max = 1,
+            .max_value = (double)RALPH_LP_GLPK_SMCP_PRESOLVE_ON,
+            .aliases = {"GLPKSMCPPresolve"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_BFCP_BACKEND] = {
+            .id = RALPH_PARAM_GLPK_BFCP_BACKEND,
+            .name = "glpk_bfcp_backend",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_LP_GLPK_BFCP_BACKEND_LUF_FT,
+            .has_min = 1,
+            .min_value = (double)RALPH_LP_GLPK_BFCP_BACKEND_LUF_FT,
+            .has_max = 1,
+            .max_value = (double)RALPH_LP_GLPK_BFCP_BACKEND_CGR,
+            .aliases = {"GLPKBFCPBackend"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT] = {
+            .id = RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT,
+            .name = "glpk_bfcp_update_limit",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = -1.0,
+            .has_min = 1,
+            .min_value = -1.0,
+            .aliases = {"GLPKBFCPUpdateLimit"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_BFCP_PIVOT_TOL] = {
+            .id = RALPH_PARAM_GLPK_BFCP_PIVOT_TOL,
+            .name = "glpk_bfcp_pivot_tol",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_DOUBLE,
+            .default_value = 0.0,
+            .aliases = {"GLPKBFCPPivotTol"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_BFCP_GROWTH_GUARD] = {
+            .id = RALPH_PARAM_GLPK_BFCP_GROWTH_GUARD,
+            .name = "glpk_bfcp_growth_guard",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_DOUBLE,
+            .default_value = 0.0,
+            .aliases = {"GLPKBFCPGrowthGuard"},
+            .alias_count = 1
+        },
         [RALPH_PARAM_TIME_LIMIT] = {
             .id = RALPH_PARAM_TIME_LIMIT,
             .name = "time_limit",
@@ -5430,6 +5681,26 @@ int ralph_core_set_int_param_id(RalphModel *model, RalphParamId param, int value
             }
             model->lp_basis_governor_mode = value;
             break;
+        case RALPH_PARAM_LP_POLICY_PROFILE:
+        case RALPH_PARAM_GLPK_SMCP_METHOD:
+        case RALPH_PARAM_GLPK_SMCP_PRICING:
+        case RALPH_PARAM_GLPK_SMCP_RATIO:
+        case RALPH_PARAM_GLPK_SMCP_FLIP:
+        case RALPH_PARAM_GLPK_SMCP_BASIS:
+        case RALPH_PARAM_GLPK_SMCP_PRESOLVE:
+        case RALPH_PARAM_GLPK_BFCP_BACKEND:
+        case RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT:
+            if (ralph_set_glpk_policy_int_param(model, param, value) != 0) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               value,
+                               "invalid glpk policy integer parameter value");
+            }
+            break;
         default:
             RALPH_FAIL_API(model,
                            RALPH_ERROR_DOMAIN_PARAMETER,
@@ -5526,6 +5797,29 @@ int ralph_core_set_dbl_param_id(RalphModel *model, RalphParamId param, double va
                                "pivot_tol must be positive");
             }
             model->lp_model->pivot_tol = value;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_PIVOT_TOL:
+        case RALPH_PARAM_GLPK_BFCP_GROWTH_GUARD:
+            if (!isfinite(value)) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               0,
+                               "glpk bfcp float parameter must be finite");
+            }
+            if (ralph_set_glpk_policy_double_param(model, param, value) != 0) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               0,
+                               "invalid glpk bfcp float parameter value");
+            }
             break;
         default:
             RALPH_FAIL_API(model,
@@ -5666,6 +5960,33 @@ int ralph_core_get_int_param_id(const RalphModel *model, RalphParamId param, int
         case RALPH_PARAM_LP_BASIS_GOVERNOR_MODE:
             *value = model->lp_basis_governor_mode;
             break;
+        case RALPH_PARAM_LP_POLICY_PROFILE:
+            *value = model->lp_policy_profile;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_METHOD:
+            *value = model->glpk_smcp_method;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_PRICING:
+            *value = model->glpk_smcp_pricing;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_RATIO:
+            *value = model->glpk_smcp_ratio;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_FLIP:
+            *value = model->glpk_smcp_flip;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_BASIS:
+            *value = model->glpk_smcp_basis;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_PRESOLVE:
+            *value = model->glpk_smcp_presolve;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_BACKEND:
+            *value = model->glpk_bfcp_backend;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT:
+            *value = model->glpk_bfcp_update_limit;
+            break;
         default:
             RALPH_FAIL_API(model,
                            RALPH_ERROR_DOMAIN_PARAMETER,
@@ -5732,6 +6053,12 @@ int ralph_core_get_dbl_param_id(const RalphModel *model, RalphParamId param, dou
             break;
         case RALPH_PARAM_PIVOT_TOL:
             *value = model->lp_model->pivot_tol;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_PIVOT_TOL:
+            *value = model->glpk_bfcp_pivot_tol;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_GROWTH_GUARD:
+            *value = model->glpk_bfcp_growth_guard;
             break;
         default:
             RALPH_FAIL_API(model,
