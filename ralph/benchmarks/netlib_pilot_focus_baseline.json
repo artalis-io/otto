@@ -1,0 +1,22 @@
+{
+  "source_commit": "0b185e2",
+  "description": "Pilot-family focus diagnostics baseline (non-gating).",
+  "defaults": {
+    "hard_cap_sec": 20,
+    "outer_timeout_sec": 50,
+    "method": 0
+  },
+  "known_status_mismatch": [],
+  "known_objective_mismatch": [],
+  "known_solution_invalid": [],
+  "required_pass": [],
+  "required_coverage": [
+    "pilot.ja.mps",
+    "pilot.mps",
+    "pilot.we.mps",
+    "pilot87.mps"
+  ],
+  "known_timeouts": [],
+  "problem_overrides": {},
+  "require_zero_dense_fallback": true
+}
