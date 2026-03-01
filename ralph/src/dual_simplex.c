@@ -32,6 +32,7 @@ void tableau_free(SimplexTableau *tab);
 /* Bound perturbation for degeneracy prevention (defined below) */
 static void apply_bound_perturbation(SimplexTableau *tab);
 static void remove_bound_perturbation(SimplexTableau *tab);
+static void dse_init_approx(SimplexTableau *tab);
 
 /* Forward declaration for dual feasibility function (non-static for simplex.c access) */
 int make_dual_feasible(SimplexTableau *tab, int obj_sense, int allow_bound_flip);
@@ -168,6 +169,14 @@ static int dual_time_limit_exceeded(SimplexSolver *solver, int iter) {
     return 1;
 }
 
+static int dual_allow_startup_bound_flip(const SimplexSolver *solver) {
+    if (!solver) return 0;
+    if (!solver->use_dual_bound_flip) return 0;
+    /* FLIP mode applies bound flips iteratively during ratio steps. */
+    if (solver->dual_ratio_test_mode == LP_DUAL_RATIO_TEST_FLIP) return 0;
+    return 1;
+}
+
 static int dual_run_user_callbacks(SimplexSolver *solver,
                                    const SimplexTableau *tab,
                                    int iter,
@@ -234,6 +243,57 @@ static int dual_run_user_callbacks(SimplexSolver *solver,
     return 0;
 }
 
+static int dual_try_one_shot_recovery(SimplexSolver *solver,
+                                      SimplexTableau *tab,
+                                      int use_dse,
+                                      int lu_hard_start,
+                                      int *recovery_used,
+                                      int iter,
+                                      const char *reason_tag) {
+    const int min_window = 128;
+    const int max_window = 384;
+    int iter_window;
+
+    if (!solver || !tab || !recovery_used || *recovery_used) return 0;
+    if (strcmp(reason_tag ? reason_tag : "", "ratio_no_entering") != 0) {
+        return 0;
+    }
+    if (solver->telemetry.perf_dual_lu_hard_trigger > lu_hard_start) {
+        return 0;
+    }
+    iter_window = tab->m / 3;
+    if (iter_window < min_window) iter_window = min_window;
+    if (iter_window > max_window) iter_window = max_window;
+    if (iter > iter_window) {
+        return 0;
+    }
+
+    *recovery_used = 1;
+    solver->dual_ratio_test_mode = LP_DUAL_RATIO_TEST_HARRIS;
+    solver->use_dual_bound_flip = 0;
+
+    if (solver->verbose) {
+        LP_LOG_STDOUT("[dual_v2] One-shot recovery at iter %d (%s): full refactor + Harris + noflip\n",
+               iter, reason_tag ? reason_tag : "unspecified");
+    }
+
+    lp_telemetry_set_refactor_next_reason(solver, RALPH_REFACTOR_REASON_RATIO_RECOVERY);
+    {
+        double t_refactor_ms = lp_telemetry_timer_start();
+        int rc_ref = tableau_refactorize(tab);
+        lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+        if (rc_ref != 0) {
+            return 0;
+        }
+    }
+
+    tab->dse_initialized = 0;
+    if (use_dse) dse_init_approx(tab);
+    tableau_compute_solution(tab);
+    tableau_compute_reduced_costs(tab);
+    return 1;
+}
+
 /* ============================================================================
  * Dual Ratio Test
  * ============================================================================ */
@@ -253,6 +313,72 @@ static int dual_candidate_can_flip(const SimplexTableau *tab, int var) {
     return 0;
 }
 
+static int dual_candidate_flip_preserves_dual_feasibility(const SimplexTableau *tab, int var) {
+    if (!tab || var < 0 || var >= tab->n) return 0;
+    if (!dual_candidate_can_flip(tab, var)) return 0;
+    if (tab->var_status[var] == RALPH_NONBASIC_LOWER) {
+        /* Opposite side is upper, which needs rc <= 0. */
+        return tab->rc[var] <= RALPH_OPT_TOL;
+    }
+    if (tab->var_status[var] == RALPH_NONBASIC_UPPER) {
+        /* Opposite side is lower, which needs rc >= 0. */
+        return tab->rc[var] >= -RALPH_OPT_TOL;
+    }
+    return 0;
+}
+
+static int dual_apply_bound_flip_nonbasic(SimplexTableau *tab, int var) {
+    if (!tab || var < 0 || var >= tab->n) return 0;
+    if (tab->var_status[var] == RALPH_NONBASIC_LOWER) {
+        if (tab->ub_ext[var] >= RALPH_INFINITY / 2.0) return 0;
+        tab->var_status[var] = RALPH_NONBASIC_UPPER;
+        tab->x[var] = tab->ub_ext[var];
+        return 1;
+    }
+    if (tab->var_status[var] == RALPH_NONBASIC_UPPER) {
+        if (tab->lb_ext[var] <= -RALPH_INFINITY / 2.0) return 0;
+        tab->var_status[var] = RALPH_NONBASIC_LOWER;
+        tab->x[var] = tab->lb_ext[var];
+        return 1;
+    }
+    return 0;
+}
+
+static int dual_ratio_candidate_value(const SimplexTableau *tab,
+                                      int dir,
+                                      int var,
+                                      double alpha_j,
+                                      double pivot_floor,
+                                      double *ratio_out) {
+    double rc_j;
+    double ratio = RALPH_INFINITY;
+    VarStatus st;
+
+    if (!tab || !ratio_out || var < 0 || var >= tab->n) return 0;
+    st = tab->var_status[var];
+    if (st == RALPH_BASIC || st == RALPH_FIXED) return 0;
+    if (fabs(alpha_j) < pivot_floor) return 0;
+
+    rc_j = tab->rc[var];
+    if (dir > 0) {
+        if (alpha_j < -RALPH_PIVOT_TOL && st == RALPH_NONBASIC_LOWER) {
+            ratio = -rc_j / alpha_j;
+        } else if (alpha_j > RALPH_PIVOT_TOL && st == RALPH_NONBASIC_UPPER) {
+            ratio = -rc_j / alpha_j;
+        }
+    } else {
+        if (alpha_j > RALPH_PIVOT_TOL && st == RALPH_NONBASIC_LOWER) {
+            ratio = rc_j / alpha_j;
+        } else if (alpha_j < -RALPH_PIVOT_TOL && st == RALPH_NONBASIC_UPPER) {
+            ratio = rc_j / alpha_j;
+        }
+    }
+
+    if (!isfinite(ratio)) return 0;
+    *ratio_out = ratio;
+    return 1;
+}
+
 static void dual_ratio_mode_flags(int mode, int *use_harris, int *prefer_flip_candidates) {
     int harris = 1;
     int prefer_flip = 0;
@@ -261,7 +387,9 @@ static void dual_ratio_mode_flags(int mode, int *use_harris, int *prefer_flip_ca
         prefer_flip = 0;
     } else if (mode == LP_DUAL_RATIO_TEST_FLIP) {
         harris = 1;
-        prefer_flip = 1;
+        /* Flip mode now uses dedicated iterative bound-flip logic. Keep core
+         * ratio test neutral (Harris) when that path is unavailable. */
+        prefer_flip = 0;
     }
     if (use_harris) *use_harris = harris;
     if (prefer_flip_candidates) *prefer_flip_candidates = prefer_flip;
@@ -303,7 +431,7 @@ static int dual_ratio_test_core(SimplexTableau *tab,
     const double tie_tol = 1e-12;
 
     for (int j = 0; j < tab->n; j++) {
-        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_BASIC || tab->var_status[j] == RALPH_FIXED) continue;
 
         /* Compute alpha_j = (B^{-1} * a_j)[leaving] = alpha' * a_j using sparse dot */
         double alpha_j = sparse_dot_column(tab->A_ext, j, tab->work2);
@@ -396,6 +524,120 @@ static int dual_ratio_test_core(SimplexTableau *tab,
     return (*entering >= 0) ? 0 : -1;
 }
 
+/* Iterative dual flip mode:
+ * - Run a Harris-style ratio window for the selected leaving row.
+ * - Apply non-basic bound flips (no basis update) for boxed candidates in the
+ *   strict interior of that window, but only when the opposite bound remains
+ *   dual-feasible under current reduced costs.
+ * - Return entering=-2 when at least one flip was applied; caller should skip
+ *   pivot and continue from refreshed primal values.
+ */
+static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
+                                          int leaving,
+                                          int *entering,
+                                          double *theta) {
+    int leaving_var;
+    double x_leave;
+    int dir;
+    int candidate_count = 0;
+    double theta_min = RALPH_INFINITY;
+    double theta_harris;
+    int best_entering = -1;
+    double best_theta = RALPH_INFINITY;
+    double best_pivot = 0.0;
+    int flip_cap;
+    int flip_count = 0;
+    int applied_flips = 0;
+
+    if (!tab || !entering || !theta || leaving < 0 || leaving >= tab->m) return -1;
+
+    leaving_var = tab->basis[leaving];
+    x_leave = tab->x[leaving_var];
+    if (x_leave < tab->lb_ext[leaving_var] - RALPH_FEAS_TOL) {
+        dir = 1;
+    } else if (x_leave > tab->ub_ext[leaving_var] + RALPH_FEAS_TOL) {
+        dir = -1;
+    } else {
+        return -1;
+    }
+
+    vec_set_zero(tab->work1, tab->m);
+    tab->work1[leaving] = 1.0;
+    lu_solve_transpose(tab->lu, tab->work1, tab->work2);
+
+    /* Pass 1: strict candidate window baseline (same strict floor as core). */
+    for (int j = 0; j < tab->n; j++) {
+        double alpha_j;
+        double ratio;
+        if (tab->var_status[j] == RALPH_BASIC || tab->var_status[j] == RALPH_FIXED) continue;
+        alpha_j = sparse_dot_column(tab->A_ext, j, tab->work2);
+        if (!dual_ratio_candidate_value(tab, dir, j, alpha_j, RALPH_PIVOT_TOL, &ratio)) continue;
+        if (ratio < 1e-12) continue;
+        candidate_count++;
+        if (ratio < theta_min) theta_min = ratio;
+    }
+
+    if (candidate_count <= 0 || theta_min >= RALPH_INFINITY / 2.0) {
+        return -1;
+    }
+
+    theta_harris = theta_min + HARRIS_TOL * (1.0 + fabs(theta_min));
+    flip_cap = tab->m / 2;
+    if (flip_cap < 1) flip_cap = 1;
+    if (flip_cap > tab->n) flip_cap = tab->n;
+
+    /* Pass 2: choose entering in the Harris window; stage interior flips. */
+    for (int j = 0; j < tab->n; j++) {
+        double alpha_j;
+        double ratio;
+        double abs_alpha;
+        if (tab->var_status[j] == RALPH_BASIC || tab->var_status[j] == RALPH_FIXED) continue;
+        alpha_j = sparse_dot_column(tab->A_ext, j, tab->work2);
+        if (!dual_ratio_candidate_value(tab, dir, j, alpha_j, RALPH_PIVOT_TOL, &ratio)) continue;
+        if (ratio < 1e-12) continue;
+
+        if (ratio <= theta_harris) {
+            abs_alpha = fabs(alpha_j);
+            if (best_entering < 0 || abs_alpha > best_pivot) {
+                best_entering = j;
+                best_theta = ratio;
+                best_pivot = abs_alpha;
+            }
+        }
+
+        if (flip_count < flip_cap &&
+            ratio < theta_harris &&
+            dual_candidate_flip_preserves_dual_feasibility(tab, j)) {
+            if (tab->flip_list) {
+                tab->flip_list[flip_count++] = j;
+            }
+        }
+    }
+
+    for (int i = 0; i < flip_count; i++) {
+        applied_flips += dual_apply_bound_flip_nonbasic(tab, tab->flip_list[i]);
+    }
+
+    if (applied_flips > 0) {
+        if (tab->owner) {
+            lp_telemetry_record_dual_bound_flip_applied(tab->owner, applied_flips);
+        }
+        tab->dual_cand_valid = 0;
+        tableau_compute_solution(tab);
+        *entering = -2;
+        *theta = 0.0;
+        return 0;
+    }
+
+    if (best_entering >= 0) {
+        *entering = best_entering;
+        *theta = best_theta;
+        return 0;
+    }
+
+    return -1;
+}
+
 int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *theta) {
     int mode = LP_DUAL_RATIO_TEST_HARRIS;
     int rc = -1;
@@ -405,6 +647,20 @@ int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *the
 
     if (tab && tab->owner) {
         mode = tab->owner->dual_ratio_test_mode;
+    }
+
+    if (mode == LP_DUAL_RATIO_TEST_FLIP &&
+        tab && tab->owner && tab->owner->use_dual_bound_flip) {
+        rc = dual_ratio_test_flip_iterative(tab, leaving, entering, theta);
+        if (rc == 0) {
+            if (*entering == -2) {
+                return 0;
+            }
+            if (tab->owner && *theta <= 0.0) {
+                lp_telemetry_record_dual_theta_nonpositive(tab->owner);
+            }
+            return 0;
+        }
     }
 
     /* Retry ladder:
@@ -825,7 +1081,7 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
     /* Try to improve dual feasibility via bound flips first. */
     int changes = make_dual_feasible(tab,
                                      solver->model ? solver->model->obj_sense : 1,
-                                     solver->use_dual_bound_flip);
+                                     dual_allow_startup_bound_flip(solver));
     if (changes > 0) {
         tableau_compute_solution(tab);
         tableau_compute_reduced_costs(tab);
@@ -891,6 +1147,7 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
 
         /* Try multiple infeasible leaving rows to avoid getting stuck on a
          * single row with no stable entering candidate. */
+        int flip_only_step = 0;
         for (int attempt = 0; attempt < tab->m; attempt++) {
             int candidate = -1;
             double max_infeas = RALPH_FEAS_TOL;
@@ -921,12 +1178,19 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
             if (dual_ratio_test(tab, candidate, &entering, &theta) == 0 && entering >= 0) {
                 leaving = candidate;
                 break;
+            } else if (entering == -2) {
+                flip_only_step = 1;
+                break;
             }
 
             if (phase1_rescue_ratio_test(tab, candidate, &entering, &theta) == 0 && entering >= 0) {
                 leaving = candidate;
                 break;
             }
+        }
+
+        if (flip_only_step) {
+            continue;
         }
 
         if (leaving < 0 || entering < 0) {
@@ -1202,6 +1466,8 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
     const int STALL_THRESHOLD = 50;
     int perturb_attempts = 0;
     const int MAX_PERTURB_ATTEMPTS = 20;
+    int dual_recovery_used = 0;
+    int lu_hard_start = solver->telemetry.perf_dual_lu_hard_trigger;
 
     /* Compute primal solution once before entering the main loop.
      * After this, dual_simplex_pivot() maintains x incrementally via
@@ -1371,6 +1637,11 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                             break;
                         }
                     }
+                    if (cl_entering == -2) {
+                        cleanup_iters++;
+                        solver->iterations++;
+                        continue;
+                    }
                     {
                         double t_pivot_ms = lp_telemetry_timer_start();
                         int rc_pivot = dual_simplex_pivot(tab, cl_entering, cl_leaving, cl_theta);
@@ -1431,6 +1702,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                         LP_LOG_STDOUT("[dual_v2] Suboptimal: max dual violation %.2e after unshift\n",
                                max_dual_viol);
                     }
+                    solver->status = RALPH_STATUS_ERROR;
                     return -1;  /* Trigger primal fallback */
                 }
             }
@@ -1460,6 +1732,15 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
             }
             lp_telemetry_record_ratio_timed(solver, 0, t_ratio_ms);
             if (rc_ratio != 0) {
+                if (dual_try_one_shot_recovery(solver,
+                                               tab,
+                                               use_dse,
+                                               lu_hard_start,
+                                               &dual_recovery_used,
+                                               iter,
+                                               "ratio_no_entering")) {
+                    continue;
+                }
                 /* No entering variable — problem is infeasible */
                 remove_bound_perturbation(tab);
                 extract_farkas_ray_dual(solver);
@@ -1467,6 +1748,10 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                 dual_run_user_callbacks(solver, tab, iter, 1, 0);
                 return 1;
             }
+        }
+
+        if (entering == -2) {
+            continue;
         }
 
         /* Perform dual pivot */
@@ -1480,6 +1765,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                 lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
                 if (rc_ref != 0) {
                     remove_bound_perturbation(tab);
+                    solver->status = RALPH_STATUS_ERROR;
                     return -1;  /* FAILED */
                 }
                 tab->dse_initialized = 0;
@@ -1524,6 +1810,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                                iter, perturb_attempts);
                     }
                     remove_bound_perturbation(tab);
+                    solver->status = RALPH_STATUS_ERROR;
                     return -1;
                 }
             }
@@ -1562,6 +1849,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
             lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
             if (rc_ref != 0) {
                 remove_bound_perturbation(tab);
+                solver->status = RALPH_STATUS_ERROR;
                 return -1;
             }
             tab->dse_initialized = 0;
@@ -1747,6 +2035,9 @@ int dual_phase1(SimplexSolver *solver) {
                 break;  /* Infeasible for auxiliary — can't continue */
             }
         }
+        if (entering == -2) {
+            continue;
+        }
 
         if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
             if (tableau_refactorize(tab) != 0) break;
@@ -1793,7 +2084,8 @@ int dual_phase1(SimplexSolver *solver) {
     tableau_compute_reduced_costs(tab);
 
     /* Final check: try make_dual_feasible on the new basis */
-    make_dual_feasible(tab, solver->model->obj_sense, solver->use_dual_bound_flip);
+    make_dual_feasible(tab, solver->model->obj_sense,
+                       dual_allow_startup_bound_flip(solver));
     tableau_compute_solution(tab);
     tableau_compute_reduced_costs(tab);
 
@@ -1892,7 +2184,8 @@ int dual_simplex_solve_from_scratch_v2(SimplexSolver *solver) {
     }
 
     /* Step 1: Flip non-basic bounds to achieve dual feasibility */
-    int changes = make_dual_feasible(tab, solver->model->obj_sense, solver->use_dual_bound_flip);
+    int changes = make_dual_feasible(tab, solver->model->obj_sense,
+                                     dual_allow_startup_bound_flip(solver));
 
     if (changes > 0) {
         tableau_compute_solution(tab);
