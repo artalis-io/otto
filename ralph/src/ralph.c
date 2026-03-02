@@ -823,6 +823,8 @@ static int ralph_probe_lp_status(const RalphModel *model,
     int probe_excl = LP_GLPK_SMCP_EXCL_ON;
     int probe_shift = LP_GLPK_SMCP_SHIFT_ON;
     int probe_aorn = LP_GLPK_SMCP_AORN_USE_NT;
+    int probe_dual_refactor_base_interval = 50;
+    int probe_dual_rc_recompute_interval = 20;
 
     ralph_glpk_policy_config_from_model(model, &glpk_policy_cfg);
     if (!lp_policy_glpk_compat_validate(&glpk_policy_cfg)) return -1;
@@ -845,6 +847,9 @@ static int ralph_probe_lp_status(const RalphModel *model,
                                         NULL,
                                         NULL,
                                         NULL,
+                                        NULL,
+                                        &probe_dual_refactor_base_interval,
+                                        &probe_dual_rc_recompute_interval,
                                         NULL,
                                         NULL);
 
@@ -880,6 +885,8 @@ static int ralph_probe_lp_status(const RalphModel *model,
     probe->smcp_excl = probe_excl;
     probe->smcp_shift = probe_shift;
     probe->smcp_aorn = probe_aorn;
+    probe->policy.dual_refactor_base_interval = probe_dual_refactor_base_interval;
+    probe->policy.dual_rc_recompute_interval = probe_dual_rc_recompute_interval;
     probe_model->feas_tol = probe_tol_bnd;
     probe_model->opt_tol = probe_tol_dj;
     probe_model->pivot_tol = probe_tol_piv;
@@ -1431,9 +1438,12 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     int lp_smcp_aorn = LP_GLPK_SMCP_AORN_USE_NT;
     int lp_crash_mode = model->crash;
     int lp_bfcp_backend = -1; /* -1=auto/default */
+    int lp_bfcp_backend_supported = 1;
     int lp_bfcp_update_limit = -1;
     double lp_bfcp_pivot_tol = 0.0;
     double lp_bfcp_growth_guard = 0.0;
+    int lp_dual_refactor_base_interval = 50;
+    int lp_dual_rc_recompute_interval = 20;
     LPDispatchBackend lp_effective_backend = LP_DISPATCH_BACKEND_SIMPLEX;
     LPExternalProvider lp_effective_provider = LP_EXTERNAL_PROVIDER_NONE;
     LPGLPKCompatConfig glpk_policy_cfg;
@@ -1513,11 +1523,19 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                                             &lp_smcp_aorn,
                                             &lp_crash_mode,
                                             &lp_bfcp_backend,
+                                            &lp_bfcp_backend_supported,
                                             &lp_bfcp_update_limit,
                                             &lp_bfcp_pivot_tol,
                                             &lp_bfcp_growth_guard,
+                                            &lp_dual_refactor_base_interval,
+                                            &lp_dual_rc_recompute_interval,
                                             &lp_soft_lu_cost_gate_enabled,
                                             &lp_periodic_cost_gate_enabled);
+        if (!lp_bfcp_backend_supported && model->verbose) {
+            fprintf(stderr,
+                    "[ralph] glpk_bfcp_backend=%d requested, but only LUF+FT is currently supported; clamped to luf_ft\n",
+                    glpk_policy_cfg.glpk_bfcp_backend);
+        }
         lp_algorithm_report_ready = 1;
     }
 
@@ -2057,6 +2075,8 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         model->lp_solver->lu_growth_guard_override = lp_bfcp_growth_guard;
         model->lp_solver->policy.soft_lu_cost_gate_enabled = lp_soft_lu_cost_gate_enabled ? 1 : 0;
         model->lp_solver->policy.periodic_cost_gate_enabled = lp_periodic_cost_gate_enabled ? 1 : 0;
+        model->lp_solver->policy.dual_refactor_base_interval = lp_dual_refactor_base_interval;
+        model->lp_solver->policy.dual_rc_recompute_interval = lp_dual_rc_recompute_interval;
         model->lp_solver->glpk_strict_mode = lp_glpk_strict_profile;
         model->lp_solver->smcp_tol_bnd = lp_smcp_tol_bnd;
         model->lp_solver->smcp_tol_dj = lp_smcp_tol_dj;

@@ -144,13 +144,18 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
                                          int *smcp_aorn_io,
                                          int *crash_io,
                                          int *bfcp_backend_io,
+                                         int *bfcp_backend_supported_io,
                                          int *bfcp_update_limit_io,
                                          double *bfcp_pivot_tol_io,
                                          double *bfcp_growth_guard_io,
+                                         int *dual_refactor_base_interval_io,
+                                         int *dual_rc_recompute_interval_io,
                                          int *soft_lu_cost_gate_enabled_io,
                                          int *periodic_cost_gate_enabled_io) {
     int active_profile = 0;
     int strict_profile = 0;
+    int dual_refactor_base_interval = 50;
+    int dual_rc_recompute_interval = 20;
 
     if (!cfg) return;
     active_profile = (cfg->lp_policy_profile == LP_POLICY_PROFILE_GLPK_COMPAT ||
@@ -222,10 +227,23 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
         *crash_io = (cfg->glpk_smcp_basis == LP_GLPK_SMCP_BASIS_ADV) ? 1 : 0;
     }
 
+    if (cfg->glpk_bfcp_update_limit > 0) {
+        dual_refactor_base_interval = cfg->glpk_bfcp_update_limit / 2;
+    }
+    if (dual_refactor_base_interval < 8) dual_refactor_base_interval = 8;
+    if (dual_refactor_base_interval > 128) dual_refactor_base_interval = 128;
+    dual_rc_recompute_interval = dual_refactor_base_interval / 2;
+    if (dual_rc_recompute_interval < 10) dual_rc_recompute_interval = 10;
+    if (dual_rc_recompute_interval > 64) dual_rc_recompute_interval = 64;
+
     if (bfcp_backend_io) {
         /* Until true BG/GR implementations are added, keep runtime backend on
          * LUF+FT to avoid misleading pseudo-mapping in simplex configuration. */
         *bfcp_backend_io = LP_GLPK_BFCP_BACKEND_LUF_FT;
+    }
+    if (bfcp_backend_supported_io) {
+        *bfcp_backend_supported_io =
+            (cfg->glpk_bfcp_backend == LP_GLPK_BFCP_BACKEND_LUF_FT) ? 1 : 0;
     }
     if (bfcp_update_limit_io) {
         *bfcp_update_limit_io = cfg->glpk_bfcp_update_limit;
@@ -235,6 +253,12 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
     }
     if (bfcp_growth_guard_io) {
         *bfcp_growth_guard_io = cfg->glpk_bfcp_growth_guard;
+    }
+    if (dual_refactor_base_interval_io) {
+        *dual_refactor_base_interval_io = dual_refactor_base_interval;
+    }
+    if (dual_rc_recompute_interval_io) {
+        *dual_rc_recompute_interval_io = dual_rc_recompute_interval;
     }
     if (soft_lu_cost_gate_enabled_io) {
         *soft_lu_cost_gate_enabled_io = 0;

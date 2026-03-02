@@ -752,6 +752,10 @@ typedef struct {
     int periodic_policy_refactors_phase1;
     int periodic_policy_refactors_phase2;
 
+    /* Dual scheduling cadence (runtime-tunable; replaces hardcoded literals). */
+    int dual_refactor_base_interval;
+    int dual_rc_recompute_interval;
+
     /* Adaptive periodic scheduler feedback (per-phase bias in [-0.25, +0.25]). */
     double periodic_feedback_bias_phase1;
     double periodic_feedback_bias_phase2;
