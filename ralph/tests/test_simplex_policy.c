@@ -1540,8 +1540,8 @@ int main(void) {
             .no_progress_streak = 2,
             .force_pivot_mode_active = 0,
             .expected_step = 0,
-            .min_threshold = 8,
-            .max_threshold = 12
+            .min_threshold = 10,
+            .max_threshold = 14
         },
         {
             .name = "phase1 no-pivot ladder escalates to dual rescue before refactor",
@@ -1549,11 +1549,11 @@ int main(void) {
             .degenerate_count = 120,
             .reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
             .no_pivot_streak = 8,
-            .no_progress_streak = 4,
+            .no_progress_streak = 6,
             .force_pivot_mode_active = 0,
             .expected_step = 1,
-            .min_threshold = 8,
-            .max_threshold = 12
+            .min_threshold = 10,
+            .max_threshold = 14
         },
         {
             .name = "phase1 no-pivot ladder forces refactor on sustained no-progress",
@@ -1561,11 +1561,11 @@ int main(void) {
             .degenerate_count = 120,
             .reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
             .no_pivot_streak = 12,
-            .no_progress_streak = 10,
+            .no_progress_streak = 12,
             .force_pivot_mode_active = 0,
             .expected_step = 2,
-            .min_threshold = 8,
-            .max_threshold = 12
+            .min_threshold = 10,
+            .max_threshold = 14
         },
         {
             .name = "phase1 no-pivot ladder keeps pivot-fail path aggressive",
