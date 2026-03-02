@@ -3469,6 +3469,18 @@ Key observations:
 - Distance gap is the main remaining opportunity — algorithm is sound, needs more
   iterations (time budget) and tuned parameters (S20) to close further.
 
+**Long-run comparison (GH-400, 7200s = 2h, population):**
+
+Literature standard: PyVRP 0.45% mean gap, HGS 0.32% mean gap at 2h on GH-1000.
+
+| Instance | Veh | BKS Veh | Dist | BKS Dist | Dist Gap | Notes |
+|----------|-----|---------|------|----------|----------|-------|
+| r1_4_1 | 40 | 40 | 11,352 | 10,372 | +9.4% | Random tight-TW, exact vehicles |
+| c1_4_1 | — | 40 | — | 7,152 | — | Pending |
+
+At equivalent 2h budget, real gap to state-of-the-art is ~9%, not the 18-24% seen at 60s.
+Remaining gap is local search move quality (HGS education/crossover) and parameter tuning.
+
 **Implementation status:** ✅ Done (Mar 2026)
 
 ### Phase S20: Profile-Based Tuning Campaign (Future)
