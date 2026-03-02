@@ -70,13 +70,19 @@ struct RalphModel {
     int random_seed;        /* deterministic LP seed for anti-cycling perturbation offsets */
     int lp_threads;         /* LP thread policy (0=auto; deterministic mode defaults to 1) */
     int lp_basis_governor_mode; /* 0=off, 1=shadow, 2=control_phase2 */
-    int lp_policy_profile;  /* 0=default, 1=glpk_compat */
+    int lp_policy_profile;  /* 0=default, 1=glpk_compat(strict), 2=glpk_strict, 3=glpk_legacy */
     int glpk_smcp_method;   /* 0=auto, 1=primal, 2=dual */
     int glpk_smcp_pricing;  /* 0=standard, 1=steep */
     int glpk_smcp_ratio;    /* 0=standard, 1=harris */
     int glpk_smcp_flip;     /* 0=off, 1=on */
     int glpk_smcp_basis;    /* 0=adv, 1=std */
     int glpk_smcp_presolve; /* 0=auto, 1=off, 2=on */
+    double glpk_smcp_tol_bnd; /* >0 */
+    double glpk_smcp_tol_dj;  /* >0 */
+    double glpk_smcp_tol_piv; /* >0 */
+    int glpk_smcp_excl;       /* 0=off, 1=on */
+    int glpk_smcp_shift;      /* 0=off, 1=on */
+    int glpk_smcp_aorn;       /* 1=use A^T, 2=use N^T */
     int glpk_bfcp_backend;  /* 0=luf_ft, 1=cbg, 2=cgr */
     int glpk_bfcp_update_limit; /* -1=auto */
     double glpk_bfcp_pivot_tol; /* <=0=auto */
@@ -424,6 +430,12 @@ static void ralph_glpk_policy_config_from_model(const RalphModel *model,
     cfg->glpk_smcp_flip = model->glpk_smcp_flip;
     cfg->glpk_smcp_basis = model->glpk_smcp_basis;
     cfg->glpk_smcp_presolve = model->glpk_smcp_presolve;
+    cfg->glpk_smcp_tol_bnd = model->glpk_smcp_tol_bnd;
+    cfg->glpk_smcp_tol_dj = model->glpk_smcp_tol_dj;
+    cfg->glpk_smcp_tol_piv = model->glpk_smcp_tol_piv;
+    cfg->glpk_smcp_excl = model->glpk_smcp_excl;
+    cfg->glpk_smcp_shift = model->glpk_smcp_shift;
+    cfg->glpk_smcp_aorn = model->glpk_smcp_aorn;
     cfg->glpk_bfcp_backend = model->glpk_bfcp_backend;
     cfg->glpk_bfcp_update_limit = model->glpk_bfcp_update_limit;
     cfg->glpk_bfcp_pivot_tol = model->glpk_bfcp_pivot_tol;
@@ -440,6 +452,12 @@ static void ralph_glpk_policy_config_to_model(RalphModel *model,
     model->glpk_smcp_flip = cfg->glpk_smcp_flip;
     model->glpk_smcp_basis = cfg->glpk_smcp_basis;
     model->glpk_smcp_presolve = cfg->glpk_smcp_presolve;
+    model->glpk_smcp_tol_bnd = cfg->glpk_smcp_tol_bnd;
+    model->glpk_smcp_tol_dj = cfg->glpk_smcp_tol_dj;
+    model->glpk_smcp_tol_piv = cfg->glpk_smcp_tol_piv;
+    model->glpk_smcp_excl = cfg->glpk_smcp_excl;
+    model->glpk_smcp_shift = cfg->glpk_smcp_shift;
+    model->glpk_smcp_aorn = cfg->glpk_smcp_aorn;
     model->glpk_bfcp_backend = cfg->glpk_bfcp_backend;
     model->glpk_bfcp_update_limit = cfg->glpk_bfcp_update_limit;
     model->glpk_bfcp_pivot_tol = cfg->glpk_bfcp_pivot_tol;
@@ -475,6 +493,15 @@ static int ralph_set_glpk_policy_int_param(RalphModel *model,
         case RALPH_PARAM_GLPK_SMCP_PRESOLVE:
             cfg.glpk_smcp_presolve = value;
             break;
+        case RALPH_PARAM_GLPK_SMCP_EXCL:
+            cfg.glpk_smcp_excl = value;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_SHIFT:
+            cfg.glpk_smcp_shift = value;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_AORN:
+            cfg.glpk_smcp_aorn = value;
+            break;
         case RALPH_PARAM_GLPK_BFCP_BACKEND:
             cfg.glpk_bfcp_backend = value;
             break;
@@ -497,6 +524,15 @@ static int ralph_set_glpk_policy_double_param(RalphModel *model,
     ralph_glpk_policy_config_from_model(model, &cfg);
 
     switch (param) {
+        case RALPH_PARAM_GLPK_SMCP_TOL_BND:
+            cfg.glpk_smcp_tol_bnd = value;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_TOL_DJ:
+            cfg.glpk_smcp_tol_dj = value;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_TOL_PIV:
+            cfg.glpk_smcp_tol_piv = value;
+            break;
         case RALPH_PARAM_GLPK_BFCP_PIVOT_TOL:
             cfg.glpk_bfcp_pivot_tol = value;
             break;
@@ -781,6 +817,12 @@ static int ralph_probe_lp_status(const RalphModel *model,
     LPGLPKCompatConfig glpk_policy_cfg;
     int probe_pricing = model->pricing;
     int probe_phase1_pricing = model->phase1_pricing;
+    double probe_tol_bnd = probe_model->feas_tol;
+    double probe_tol_dj = probe_model->opt_tol;
+    double probe_tol_piv = probe_model->pivot_tol;
+    int probe_excl = LP_GLPK_SMCP_EXCL_ON;
+    int probe_shift = LP_GLPK_SMCP_SHIFT_ON;
+    int probe_aorn = LP_GLPK_SMCP_AORN_USE_NT;
 
     ralph_glpk_policy_config_from_model(model, &glpk_policy_cfg);
     if (!lp_policy_glpk_compat_validate(&glpk_policy_cfg)) return -1;
@@ -792,6 +834,12 @@ static int ralph_probe_lp_status(const RalphModel *model,
                                         NULL,
                                         NULL,
                                         NULL,
+                                        &probe_tol_bnd,
+                                        &probe_tol_dj,
+                                        &probe_tol_piv,
+                                        &probe_excl,
+                                        &probe_shift,
+                                        &probe_aorn,
                                         NULL,
                                         NULL,
                                         NULL,
@@ -823,6 +871,18 @@ static int ralph_probe_lp_status(const RalphModel *model,
     probe->policy.basis_governor_mode = model->lp_basis_governor_mode;
     lp_basis_governor_set_mode(&probe->policy.basis_governor,
                                probe->policy.basis_governor_mode);
+    probe->glpk_strict_mode =
+        (glpk_policy_cfg.lp_policy_profile == LP_POLICY_PROFILE_GLPK_COMPAT ||
+         glpk_policy_cfg.lp_policy_profile == LP_POLICY_PROFILE_GLPK_STRICT) ? 1 : 0;
+    probe->smcp_tol_bnd = probe_tol_bnd;
+    probe->smcp_tol_dj = probe_tol_dj;
+    probe->smcp_tol_piv = probe_tol_piv;
+    probe->smcp_excl = probe_excl;
+    probe->smcp_shift = probe_shift;
+    probe->smcp_aorn = probe_aorn;
+    probe_model->feas_tol = probe_tol_bnd;
+    probe_model->opt_tol = probe_tol_dj;
+    probe_model->pivot_tol = probe_tol_piv;
     probe->method = 0;  /* Use primal for robust infeasibility checks */
 
     (void)simplex_solve(probe);
@@ -1362,6 +1422,13 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     int lp_dual_bound_flip = model->dual_bound_flip;
     int lp_soft_lu_cost_gate_enabled = 1;
     int lp_periodic_cost_gate_enabled = 1;
+    int lp_glpk_strict_profile = 0;
+    double lp_smcp_tol_bnd = model->lp_model->feas_tol;
+    double lp_smcp_tol_dj = model->lp_model->opt_tol;
+    double lp_smcp_tol_piv = model->lp_model->pivot_tol;
+    int lp_smcp_excl = LP_GLPK_SMCP_EXCL_ON;
+    int lp_smcp_shift = LP_GLPK_SMCP_SHIFT_ON;
+    int lp_smcp_aorn = LP_GLPK_SMCP_AORN_USE_NT;
     int lp_crash_mode = model->crash;
     int lp_bfcp_backend = -1; /* -1=auto/default */
     int lp_bfcp_update_limit = -1;
@@ -1383,6 +1450,9 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                        0,
                        "invalid glpk-compatible policy configuration");
     }
+    lp_glpk_strict_profile =
+        (glpk_policy_cfg.lp_policy_profile == LP_POLICY_PROFILE_GLPK_COMPAT ||
+         glpk_policy_cfg.lp_policy_profile == LP_POLICY_PROFILE_GLPK_STRICT) ? 1 : 0;
 
     ralph_reset_lp_algorithm_report(model);
     ralph_reset_lp_external_failure_report(model);
@@ -1435,6 +1505,12 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                                             &lp_ratio_test_mode,
                                             &lp_dual_ratio_test_mode,
                                             &lp_dual_bound_flip,
+                                            &lp_smcp_tol_bnd,
+                                            &lp_smcp_tol_dj,
+                                            &lp_smcp_tol_piv,
+                                            &lp_smcp_excl,
+                                            &lp_smcp_shift,
+                                            &lp_smcp_aorn,
                                             &lp_crash_mode,
                                             &lp_bfcp_backend,
                                             &lp_bfcp_update_limit,
@@ -1940,6 +2016,9 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         }
     } else {
         /* LP solve */
+        if (lp_smcp_tol_bnd > 0.0) solve_model->feas_tol = lp_smcp_tol_bnd;
+        if (lp_smcp_tol_dj > 0.0) solve_model->opt_tol = lp_smcp_tol_dj;
+        if (lp_smcp_tol_piv > 0.0) solve_model->pivot_tol = lp_smcp_tol_piv;
         model->lp_solver = simplex_create(solve_model);
         if (!model->lp_solver) {
             if (presolved) presolve_free(presolved);
@@ -1978,6 +2057,13 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         model->lp_solver->lu_growth_guard_override = lp_bfcp_growth_guard;
         model->lp_solver->policy.soft_lu_cost_gate_enabled = lp_soft_lu_cost_gate_enabled ? 1 : 0;
         model->lp_solver->policy.periodic_cost_gate_enabled = lp_periodic_cost_gate_enabled ? 1 : 0;
+        model->lp_solver->glpk_strict_mode = lp_glpk_strict_profile;
+        model->lp_solver->smcp_tol_bnd = lp_smcp_tol_bnd;
+        model->lp_solver->smcp_tol_dj = lp_smcp_tol_dj;
+        model->lp_solver->smcp_tol_piv = lp_smcp_tol_piv;
+        model->lp_solver->smcp_excl = lp_smcp_excl;
+        model->lp_solver->smcp_shift = lp_smcp_shift;
+        model->lp_solver->smcp_aorn = lp_smcp_aorn;
         /* Convert objective limit from user space to internal minimization space */
         if (model->objective_limit < RALPH_INFINITY) {
             model->lp_solver->objective_limit = model->objective_limit * solve_model->obj_sense;
@@ -5327,7 +5413,7 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .has_min = 1,
             .min_value = (double)RALPH_LP_POLICY_PROFILE_DEFAULT,
             .has_max = 1,
-            .max_value = (double)RALPH_LP_POLICY_PROFILE_GLPK_COMPAT,
+            .max_value = (double)RALPH_LP_POLICY_PROFILE_GLPK_LEGACY,
             .aliases = {"LPPolicyProfile"},
             .alias_count = 1
         },
@@ -5407,6 +5493,78 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .has_max = 1,
             .max_value = (double)RALPH_LP_GLPK_SMCP_PRESOLVE_ON,
             .aliases = {"GLPKSMCPPresolve"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_SMCP_TOL_BND] = {
+            .id = RALPH_PARAM_GLPK_SMCP_TOL_BND,
+            .name = "glpk_smcp_tol_bnd",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_DOUBLE,
+            .default_value = 1e-7,
+            .has_min = 1,
+            .min_value = 0.0,
+            .aliases = {"GLPKSMCPTolBnd"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_SMCP_TOL_DJ] = {
+            .id = RALPH_PARAM_GLPK_SMCP_TOL_DJ,
+            .name = "glpk_smcp_tol_dj",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_DOUBLE,
+            .default_value = 1e-7,
+            .has_min = 1,
+            .min_value = 0.0,
+            .aliases = {"GLPKSMCPTolDj"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_SMCP_TOL_PIV] = {
+            .id = RALPH_PARAM_GLPK_SMCP_TOL_PIV,
+            .name = "glpk_smcp_tol_piv",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_DOUBLE,
+            .default_value = 1e-9,
+            .has_min = 1,
+            .min_value = 0.0,
+            .aliases = {"GLPKSMCPTolPiv"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_SMCP_EXCL] = {
+            .id = RALPH_PARAM_GLPK_SMCP_EXCL,
+            .name = "glpk_smcp_excl",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_LP_GLPK_SMCP_EXCL_ON,
+            .has_min = 1,
+            .min_value = (double)RALPH_LP_GLPK_SMCP_EXCL_OFF,
+            .has_max = 1,
+            .max_value = (double)RALPH_LP_GLPK_SMCP_EXCL_ON,
+            .aliases = {"GLPKSMCPExcl"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_SMCP_SHIFT] = {
+            .id = RALPH_PARAM_GLPK_SMCP_SHIFT,
+            .name = "glpk_smcp_shift",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_LP_GLPK_SMCP_SHIFT_ON,
+            .has_min = 1,
+            .min_value = (double)RALPH_LP_GLPK_SMCP_SHIFT_OFF,
+            .has_max = 1,
+            .max_value = (double)RALPH_LP_GLPK_SMCP_SHIFT_ON,
+            .aliases = {"GLPKSMCPShift"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_SMCP_AORN] = {
+            .id = RALPH_PARAM_GLPK_SMCP_AORN,
+            .name = "glpk_smcp_aorn",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_LP_GLPK_SMCP_AORN_USE_NT,
+            .has_min = 1,
+            .min_value = (double)RALPH_LP_GLPK_SMCP_AORN_USE_AT,
+            .has_max = 1,
+            .max_value = (double)RALPH_LP_GLPK_SMCP_AORN_USE_NT,
+            .aliases = {"GLPKSMCPAorn"},
             .alias_count = 1
         },
         [RALPH_PARAM_GLPK_BFCP_BACKEND] = {
@@ -5842,6 +6000,9 @@ int ralph_core_set_int_param_id(RalphModel *model, RalphParamId param, int value
         case RALPH_PARAM_GLPK_SMCP_FLIP:
         case RALPH_PARAM_GLPK_SMCP_BASIS:
         case RALPH_PARAM_GLPK_SMCP_PRESOLVE:
+        case RALPH_PARAM_GLPK_SMCP_EXCL:
+        case RALPH_PARAM_GLPK_SMCP_SHIFT:
+        case RALPH_PARAM_GLPK_SMCP_AORN:
         case RALPH_PARAM_GLPK_BFCP_BACKEND:
         case RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT:
             if (ralph_set_glpk_policy_int_param(model, param, value) != 0) {
@@ -5952,6 +6113,9 @@ int ralph_core_set_dbl_param_id(RalphModel *model, RalphParamId param, double va
             }
             model->lp_model->pivot_tol = value;
             break;
+        case RALPH_PARAM_GLPK_SMCP_TOL_BND:
+        case RALPH_PARAM_GLPK_SMCP_TOL_DJ:
+        case RALPH_PARAM_GLPK_SMCP_TOL_PIV:
         case RALPH_PARAM_GLPK_BFCP_PIVOT_TOL:
         case RALPH_PARAM_GLPK_BFCP_GROWTH_GUARD:
             if (!isfinite(value)) {
@@ -5962,7 +6126,7 @@ int ralph_core_set_dbl_param_id(RalphModel *model, RalphParamId param, double va
                                RALPH_ERROR_API_PARAMETER,
                                param,
                                0,
-                               "glpk bfcp float parameter must be finite");
+                               "glpk policy float parameter must be finite");
             }
             if (ralph_set_glpk_policy_double_param(model, param, value) != 0) {
                 RALPH_FAIL_API(model,
@@ -5972,7 +6136,7 @@ int ralph_core_set_dbl_param_id(RalphModel *model, RalphParamId param, double va
                                RALPH_ERROR_API_PARAMETER,
                                param,
                                0,
-                               "invalid glpk bfcp float parameter value");
+                               "invalid glpk policy float parameter value");
             }
             break;
         default:
@@ -6135,6 +6299,15 @@ int ralph_core_get_int_param_id(const RalphModel *model, RalphParamId param, int
         case RALPH_PARAM_GLPK_SMCP_PRESOLVE:
             *value = model->glpk_smcp_presolve;
             break;
+        case RALPH_PARAM_GLPK_SMCP_EXCL:
+            *value = model->glpk_smcp_excl;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_SHIFT:
+            *value = model->glpk_smcp_shift;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_AORN:
+            *value = model->glpk_smcp_aorn;
+            break;
         case RALPH_PARAM_GLPK_BFCP_BACKEND:
             *value = model->glpk_bfcp_backend;
             break;
@@ -6207,6 +6380,15 @@ int ralph_core_get_dbl_param_id(const RalphModel *model, RalphParamId param, dou
             break;
         case RALPH_PARAM_PIVOT_TOL:
             *value = model->lp_model->pivot_tol;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_TOL_BND:
+            *value = model->glpk_smcp_tol_bnd;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_TOL_DJ:
+            *value = model->glpk_smcp_tol_dj;
+            break;
+        case RALPH_PARAM_GLPK_SMCP_TOL_PIV:
+            *value = model->glpk_smcp_tol_piv;
             break;
         case RALPH_PARAM_GLPK_BFCP_PIVOT_TOL:
             *value = model->glpk_bfcp_pivot_tol;

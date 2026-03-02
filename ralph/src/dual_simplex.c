@@ -60,15 +60,11 @@ static void configure_dual_tableau_for_solver(SimplexSolver *solver, SimplexTabl
         enable_supernode = 1;
     }
 
-    if (solver->lu_backend_policy == LP_LU_BACKEND_POLICY_CBG) {
-        tab->lu->mkz_enabled = 0;
-        tab->lu->sn_enabled = 0;
-    } else if (solver->lu_backend_policy == LP_LU_BACKEND_POLICY_CGR) {
-        tab->lu->mkz_enabled = 1;
-        tab->lu->sn_enabled = 0;
-    } else {
-        tab->lu->sn_enabled = enable_supernode ? 1 : 0;
-    }
+    /* Runtime backend path is currently LUF+FT only.
+     * Keep BFCP backend ids as API surface, but do not pseudo-map CBG/CGR
+     * to unrelated sparse/dense toggles in simplex internals. */
+    (void)solver->lu_backend_policy;
+    tab->lu->sn_enabled = enable_supernode ? 1 : 0;
 
     if (solver->lu_update_limit_override > 0) {
         tab->lu->max_updates = solver->lu_update_limit_override;
@@ -314,6 +310,7 @@ static int dual_time_limit_exceeded(SimplexSolver *solver, int iter) {
 
 static int dual_allow_startup_bound_flip(const SimplexSolver *solver) {
     if (!solver) return 0;
+    if (solver->glpk_strict_mode) return 0;
     if (!solver->use_dual_bound_flip) return 0;
     /* FLIP mode applies bound flips iteratively during ratio steps. */
     if (solver->dual_ratio_test_mode == LP_DUAL_RATIO_TEST_FLIP) return 0;
@@ -964,12 +961,44 @@ int dual_ratio_test(SimplexTableau *tab, int leaving, int *entering, double *the
     int attempt_mode;
     int use_harris = 1;
     int prefer_flip = 0;
+    int strict_profile = 0;
     DualRatioAdaptiveConfig cfg;
 
     if (tab && tab->owner) {
         mode = tab->owner->dual_ratio_test_mode;
+        strict_profile = tab->owner->glpk_strict_mode ? 1 : 0;
     }
     dual_ratio_adaptive_config_for_tableau(tab, &cfg);
+
+    if (strict_profile) {
+        if (mode == LP_DUAL_RATIO_TEST_FLIP &&
+            tab && tab->owner && tab->owner->use_dual_bound_flip) {
+            rc = dual_ratio_test_flip_iterative(tab, leaving, entering, theta, &cfg);
+            if (rc == 0) {
+                if (*entering == -2) {
+                    return 0;
+                }
+                if (tab->owner && *theta <= 0.0) {
+                    lp_telemetry_record_dual_theta_nonpositive(tab->owner);
+                }
+                return 0;
+            }
+        }
+        dual_ratio_mode_flags(mode, &use_harris, &prefer_flip);
+        rc = dual_ratio_test_core(tab, leaving, entering, theta,
+                                  use_harris, prefer_flip,
+                                  cfg.base_pivot_floor, cfg.strict_theta_floor);
+        if (rc != 0) {
+            if (tab && tab->owner) {
+                lp_telemetry_record_dual_ratio_no_entering(tab->owner);
+            }
+            return -1;
+        }
+        if (tab && tab->owner && *theta <= 0.0) {
+            lp_telemetry_record_dual_theta_nonpositive(tab->owner);
+        }
+        return 0;
+    }
 
     if (mode == LP_DUAL_RATIO_TEST_FLIP &&
         tab && tab->owner && tab->owner->use_dual_bound_flip) {

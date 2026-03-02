@@ -4,7 +4,7 @@
 
 static int lp_policy_profile_valid(int value) {
     return value >= LP_POLICY_PROFILE_DEFAULT &&
-           value <= LP_POLICY_PROFILE_GLPK_COMPAT;
+           value <= LP_POLICY_PROFILE_GLPK_LEGACY;
 }
 
 static int lp_glpk_smcp_method_valid(int value) {
@@ -37,6 +37,21 @@ static int lp_glpk_smcp_presolve_valid(int value) {
            value <= LP_GLPK_SMCP_PRESOLVE_ON;
 }
 
+static int lp_glpk_smcp_excl_valid(int value) {
+    return value >= LP_GLPK_SMCP_EXCL_OFF &&
+           value <= LP_GLPK_SMCP_EXCL_ON;
+}
+
+static int lp_glpk_smcp_shift_valid(int value) {
+    return value >= LP_GLPK_SMCP_SHIFT_OFF &&
+           value <= LP_GLPK_SMCP_SHIFT_ON;
+}
+
+static int lp_glpk_smcp_aorn_valid(int value) {
+    return value >= LP_GLPK_SMCP_AORN_USE_AT &&
+           value <= LP_GLPK_SMCP_AORN_USE_NT;
+}
+
 static int lp_glpk_bfcp_backend_valid(int value) {
     return value >= LP_GLPK_BFCP_BACKEND_LUF_FT &&
            value <= LP_GLPK_BFCP_BACKEND_CGR;
@@ -51,6 +66,12 @@ void lp_policy_glpk_compat_init(LPGLPKCompatConfig *cfg) {
     cfg->glpk_smcp_flip = LP_GLPK_SMCP_FLIP_OFF;
     cfg->glpk_smcp_basis = LP_GLPK_SMCP_BASIS_ADV;
     cfg->glpk_smcp_presolve = LP_GLPK_SMCP_PRESOLVE_AUTO;
+    cfg->glpk_smcp_tol_bnd = 1e-7;
+    cfg->glpk_smcp_tol_dj = 1e-7;
+    cfg->glpk_smcp_tol_piv = 1e-9;
+    cfg->glpk_smcp_excl = LP_GLPK_SMCP_EXCL_ON;
+    cfg->glpk_smcp_shift = LP_GLPK_SMCP_SHIFT_ON;
+    cfg->glpk_smcp_aorn = LP_GLPK_SMCP_AORN_USE_NT;
     cfg->glpk_bfcp_backend = LP_GLPK_BFCP_BACKEND_LUF_FT;
     cfg->glpk_bfcp_update_limit = -1;
     cfg->glpk_bfcp_pivot_tol = 0.0;
@@ -66,6 +87,12 @@ int lp_policy_glpk_compat_validate(const LPGLPKCompatConfig *cfg) {
     if (!lp_glpk_smcp_flip_valid(cfg->glpk_smcp_flip)) return 0;
     if (!lp_glpk_smcp_basis_valid(cfg->glpk_smcp_basis)) return 0;
     if (!lp_glpk_smcp_presolve_valid(cfg->glpk_smcp_presolve)) return 0;
+    if (!lp_glpk_smcp_excl_valid(cfg->glpk_smcp_excl)) return 0;
+    if (!lp_glpk_smcp_shift_valid(cfg->glpk_smcp_shift)) return 0;
+    if (!lp_glpk_smcp_aorn_valid(cfg->glpk_smcp_aorn)) return 0;
+    if (!isfinite(cfg->glpk_smcp_tol_bnd) || cfg->glpk_smcp_tol_bnd <= 0.0) return 0;
+    if (!isfinite(cfg->glpk_smcp_tol_dj) || cfg->glpk_smcp_tol_dj <= 0.0) return 0;
+    if (!isfinite(cfg->glpk_smcp_tol_piv) || cfg->glpk_smcp_tol_piv <= 0.0) return 0;
     if (!lp_glpk_bfcp_backend_valid(cfg->glpk_bfcp_backend)) return 0;
     if (cfg->glpk_bfcp_update_limit < -1) return 0;
     if (!isfinite(cfg->glpk_bfcp_pivot_tol)) return 0;
@@ -75,7 +102,11 @@ int lp_policy_glpk_compat_validate(const LPGLPKCompatConfig *cfg) {
 
 void lp_policy_glpk_compat_apply_profile_defaults(LPGLPKCompatConfig *cfg) {
     if (!cfg) return;
-    if (cfg->lp_policy_profile != LP_POLICY_PROFILE_GLPK_COMPAT) return;
+    if (cfg->lp_policy_profile != LP_POLICY_PROFILE_GLPK_COMPAT &&
+        cfg->lp_policy_profile != LP_POLICY_PROFILE_GLPK_STRICT &&
+        cfg->lp_policy_profile != LP_POLICY_PROFILE_GLPK_LEGACY) {
+        return;
+    }
 
     /* GLPK defaults: primal simplex, steep pricing, Harris ratio, no flip,
      * advanced basis, presolve enabled, LUF+FT backend. */
@@ -85,6 +116,12 @@ void lp_policy_glpk_compat_apply_profile_defaults(LPGLPKCompatConfig *cfg) {
     cfg->glpk_smcp_flip = LP_GLPK_SMCP_FLIP_OFF;
     cfg->glpk_smcp_basis = LP_GLPK_SMCP_BASIS_ADV;
     cfg->glpk_smcp_presolve = LP_GLPK_SMCP_PRESOLVE_ON;
+    cfg->glpk_smcp_tol_bnd = 1e-7;
+    cfg->glpk_smcp_tol_dj = 1e-7;
+    cfg->glpk_smcp_tol_piv = 1e-9;
+    cfg->glpk_smcp_excl = LP_GLPK_SMCP_EXCL_ON;
+    cfg->glpk_smcp_shift = LP_GLPK_SMCP_SHIFT_ON;
+    cfg->glpk_smcp_aorn = LP_GLPK_SMCP_AORN_USE_NT;
     cfg->glpk_bfcp_backend = LP_GLPK_BFCP_BACKEND_LUF_FT;
     cfg->glpk_bfcp_update_limit = 100;
     cfg->glpk_bfcp_pivot_tol = 0.0;
@@ -99,6 +136,12 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
                                          int *ratio_io,
                                          int *dual_ratio_io,
                                          int *dual_bound_flip_io,
+                                         double *smcp_tol_bnd_io,
+                                         double *smcp_tol_dj_io,
+                                         double *smcp_tol_piv_io,
+                                         int *smcp_excl_io,
+                                         int *smcp_shift_io,
+                                         int *smcp_aorn_io,
                                          int *crash_io,
                                          int *bfcp_backend_io,
                                          int *bfcp_update_limit_io,
@@ -106,8 +149,18 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
                                          double *bfcp_growth_guard_io,
                                          int *soft_lu_cost_gate_enabled_io,
                                          int *periodic_cost_gate_enabled_io) {
+    int active_profile = 0;
+    int strict_profile = 0;
+
     if (!cfg) return;
-    if (cfg->lp_policy_profile != LP_POLICY_PROFILE_GLPK_COMPAT) return;
+    active_profile = (cfg->lp_policy_profile == LP_POLICY_PROFILE_GLPK_COMPAT ||
+                      cfg->lp_policy_profile == LP_POLICY_PROFILE_GLPK_STRICT ||
+                      cfg->lp_policy_profile == LP_POLICY_PROFILE_GLPK_LEGACY);
+    strict_profile = (cfg->lp_policy_profile == LP_POLICY_PROFILE_GLPK_COMPAT ||
+                      cfg->lp_policy_profile == LP_POLICY_PROFILE_GLPK_STRICT);
+    if (!active_profile) {
+        return;
+    }
 
     if (cfg->glpk_smcp_method == LP_GLPK_SMCP_METHOD_PRIMAL) {
         if (method_io) *method_io = 0;
@@ -153,15 +206,26 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
         }
     }
 
-    /* GLPK RT_FLIP maps to dual ratio mode, not to dual-feasibility bound flipping. */
-    (void)dual_bound_flip_io;
+    /* Strict profile maps flip directly to startup/iterative bound-flip enable.
+     * Compat profile keeps historical behavior (ratio-mode only mapping). */
+    if (dual_bound_flip_io && strict_profile) {
+        *dual_bound_flip_io = (cfg->glpk_smcp_flip == LP_GLPK_SMCP_FLIP_ON) ? 1 : 0;
+    }
+    if (smcp_tol_bnd_io) *smcp_tol_bnd_io = cfg->glpk_smcp_tol_bnd;
+    if (smcp_tol_dj_io) *smcp_tol_dj_io = cfg->glpk_smcp_tol_dj;
+    if (smcp_tol_piv_io) *smcp_tol_piv_io = cfg->glpk_smcp_tol_piv;
+    if (smcp_excl_io) *smcp_excl_io = cfg->glpk_smcp_excl;
+    if (smcp_shift_io) *smcp_shift_io = cfg->glpk_smcp_shift;
+    if (smcp_aorn_io) *smcp_aorn_io = cfg->glpk_smcp_aorn;
 
     if (crash_io) {
         *crash_io = (cfg->glpk_smcp_basis == LP_GLPK_SMCP_BASIS_ADV) ? 1 : 0;
     }
 
     if (bfcp_backend_io) {
-        *bfcp_backend_io = cfg->glpk_bfcp_backend;
+        /* Until true BG/GR implementations are added, keep runtime backend on
+         * LUF+FT to avoid misleading pseudo-mapping in simplex configuration. */
+        *bfcp_backend_io = LP_GLPK_BFCP_BACKEND_LUF_FT;
     }
     if (bfcp_update_limit_io) {
         *bfcp_update_limit_io = cfg->glpk_bfcp_update_limit;

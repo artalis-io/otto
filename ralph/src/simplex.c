@@ -5327,6 +5327,13 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->phase1_pricing = -1;  /* Default: disabled (use solver pricing) */
     solver->use_dual_bound_flip = 1;
     solver->use_dual_steepest_edge = 1;
+    solver->glpk_strict_mode = 0;
+    solver->smcp_tol_bnd = 1e-7;
+    solver->smcp_tol_dj = 1e-7;
+    solver->smcp_tol_piv = 1e-9;
+    solver->smcp_excl = 1;
+    solver->smcp_shift = 1;
+    solver->smcp_aorn = 2;
     solver->method = 2;  /* Default: auto (dual first, primal fallback) */
     solver->lu_backend_policy = LP_LU_BACKEND_POLICY_AUTO;
     solver->lu_update_limit_override = -1;
@@ -9025,17 +9032,11 @@ static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *
             enable_supernode = 1;
         }
 
-        if (solver->lu_backend_policy == LP_LU_BACKEND_POLICY_CBG) {
-            /* Map CBG to dense-GE numeric backend preference. */
-            tab->lu->mkz_enabled = 0;
-            tab->lu->sn_enabled = 0;
-        } else if (solver->lu_backend_policy == LP_LU_BACKEND_POLICY_CGR) {
-            /* Map CGR to sparse Markowitz preference without supernodes. */
-            tab->lu->mkz_enabled = 1;
-            tab->lu->sn_enabled = 0;
-        } else {
-            tab->lu->sn_enabled = enable_supernode ? 1 : 0;
-        }
+        /* Runtime backend path is currently LUF+FT only.
+         * Keep BFCP backend ids as API surface, but do not pseudo-map CBG/CGR
+         * to unrelated sparse/dense toggles in simplex internals. */
+        (void)solver->lu_backend_policy;
+        tab->lu->sn_enabled = enable_supernode ? 1 : 0;
 
         if (solver->lu_update_limit_override > 0) {
             tab->lu->max_updates = solver->lu_update_limit_override;

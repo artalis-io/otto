@@ -896,6 +896,13 @@ typedef struct SimplexSolver {
     /* Dual simplex enhancements */
     int use_dual_bound_flip;    /* 0=off, 1=on (default 1) */
     int use_dual_steepest_edge; /* 0=off, 1=on (default 1) */
+    int glpk_strict_mode;       /* 0=off (default), 1=strict GLPK control semantics */
+    double smcp_tol_bnd;        /* GLPK-like primal feasibility tolerance */
+    double smcp_tol_dj;         /* GLPK-like dual feasibility tolerance */
+    double smcp_tol_piv;        /* GLPK-like pivot tolerance */
+    int smcp_excl;              /* GLPK-like fixed non-basic exclusion mode */
+    int smcp_shift;             /* GLPK-like bound-shift mode */
+    int smcp_aorn;              /* GLPK-like row-wise matrix option (A^T / N^T) */
 
     /* Supernodal LU (T2.1) — propagated to LU after tableau creation */
     int lu_supernode;           /* 0=off, 1=enable */

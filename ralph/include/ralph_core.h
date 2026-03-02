@@ -536,6 +536,17 @@ typedef struct {
     int perf_phase1_dir_stabilize_skip_full;
     int perf_phase1_dir_stabilize_skip_no_recompute;
     int perf_phase1_dir_stabilize_skip_guard_refresh;
+    int perf_phase1_dir_stabilize_escape_gate_triggers;
+    int perf_phase1_dir_stabilize_escape_gate_suppressed_lu_health;
+    int perf_phase1_dir_stabilize_escape_gate_suppressed_force_pivot_mode;
+    int perf_phase1_dir_stabilize_escape_gate_hard_bypass;
+    int perf_phase1_dir_stabilize_refactor_from_no_pivot_force;
+    int perf_phase1_dir_stabilize_refactor_from_force_extreme_dir;
+    int perf_phase1_dir_stabilize_refactor_from_force_lu_health;
+    int perf_phase1_dir_stabilize_refactor_from_force_pivot_mode;
+    int perf_phase1_dir_stabilize_refactor_from_ladder_force;
+    int perf_phase1_force_pivot_relax_applied;
+    int perf_phase1_force_extreme_relax_applied;
     int perf_phase1_recompute_after_ratio_breakdown;
     int perf_phase1_recompute_after_dir_skip;
     int perf_phase1_recompute_after_dir_refactor;
@@ -1362,7 +1373,9 @@ typedef enum {
 
 typedef enum {
     RALPH_LP_POLICY_PROFILE_DEFAULT = 0,
-    RALPH_LP_POLICY_PROFILE_GLPK_COMPAT = 1
+    RALPH_LP_POLICY_PROFILE_GLPK_COMPAT = 1,
+    RALPH_LP_POLICY_PROFILE_GLPK_STRICT = 2,
+    RALPH_LP_POLICY_PROFILE_GLPK_LEGACY = 3
 } RalphLPPolicyProfile;
 
 typedef enum {
@@ -1396,6 +1409,21 @@ typedef enum {
     RALPH_LP_GLPK_SMCP_PRESOLVE_OFF = 1,
     RALPH_LP_GLPK_SMCP_PRESOLVE_ON = 2
 } RalphLPGLPKSMCPPresolve;
+
+typedef enum {
+    RALPH_LP_GLPK_SMCP_EXCL_OFF = 0,
+    RALPH_LP_GLPK_SMCP_EXCL_ON = 1
+} RalphLPGLPKSMCPExcl;
+
+typedef enum {
+    RALPH_LP_GLPK_SMCP_SHIFT_OFF = 0,
+    RALPH_LP_GLPK_SMCP_SHIFT_ON = 1
+} RalphLPGLPKSMCPShift;
+
+typedef enum {
+    RALPH_LP_GLPK_SMCP_AORN_USE_AT = 1,
+    RALPH_LP_GLPK_SMCP_AORN_USE_NT = 2
+} RalphLPGLPKSMCPAorn;
 
 typedef enum {
     RALPH_LP_GLPK_BFCP_BACKEND_LUF_FT = 0,
@@ -1447,6 +1475,12 @@ typedef enum {
     RALPH_PARAM_GLPK_SMCP_FLIP,
     RALPH_PARAM_GLPK_SMCP_BASIS,
     RALPH_PARAM_GLPK_SMCP_PRESOLVE,
+    RALPH_PARAM_GLPK_SMCP_TOL_BND,
+    RALPH_PARAM_GLPK_SMCP_TOL_DJ,
+    RALPH_PARAM_GLPK_SMCP_TOL_PIV,
+    RALPH_PARAM_GLPK_SMCP_EXCL,
+    RALPH_PARAM_GLPK_SMCP_SHIFT,
+    RALPH_PARAM_GLPK_SMCP_AORN,
     RALPH_PARAM_GLPK_BFCP_BACKEND,
     RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT,
     RALPH_PARAM_GLPK_BFCP_PIVOT_TOL,
