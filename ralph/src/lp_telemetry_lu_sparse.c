@@ -155,6 +155,26 @@ void lp_telemetry_lu_mark_numeric_backend_dense_ge(LUFactorization *lu) {
     lu->telemetry.numeric_backend_dense_ge++;
 }
 
+void lp_telemetry_lu_mark_identity_sep_retry_lane_chosen(LUFactorization *lu,
+                                                         int lane) {
+    if (!lu_telemetry_enabled(lu)) return;
+    if (lane == LU_IDSEP_RETRY_LANE_DENSE) {
+        lu->telemetry.identity_sep_retry_lane_dense_chosen++;
+    } else if (lane == LU_IDSEP_RETRY_LANE_SUPERNODE) {
+        lu->telemetry.identity_sep_retry_lane_supernode_chosen++;
+    }
+}
+
+void lp_telemetry_lu_mark_identity_sep_retry_lane_success(LUFactorization *lu,
+                                                          int lane) {
+    if (!lu_telemetry_enabled(lu)) return;
+    if (lane == LU_IDSEP_RETRY_LANE_DENSE) {
+        lu->telemetry.identity_sep_retry_lane_dense_successes++;
+    } else if (lane == LU_IDSEP_RETRY_LANE_SUPERNODE) {
+        lu->telemetry.identity_sep_retry_lane_supernode_successes++;
+    }
+}
+
 void lp_telemetry_lu_mark_sn_cost_gate_trip(LUFactorization *lu) {
     if (!lu_telemetry_enabled(lu)) return;
     lu->telemetry.sn_cost_gate_trips++;

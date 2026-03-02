@@ -432,6 +432,10 @@ typedef struct {
     int lu_numeric_backend_markowitz;
     int lu_numeric_backend_supernode;
     int lu_numeric_backend_dense_ge;
+    int lu_identity_sep_retry_lane_dense_chosen;
+    int lu_identity_sep_retry_lane_supernode_chosen;
+    int lu_identity_sep_retry_lane_dense_successes;
+    int lu_identity_sep_retry_lane_supernode_successes;
     int lu_sn_cost_gate_trips;
     int lu_sn_cost_gate_skips;
     int lu_sn_cost_gate_resets;
@@ -1245,6 +1249,14 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_numeric_backend_markowitz = lu_tel.numeric_backend_markowitz;
                 result.lu_numeric_backend_supernode = lu_tel.numeric_backend_supernode;
                 result.lu_numeric_backend_dense_ge = lu_tel.numeric_backend_dense_ge;
+                result.lu_identity_sep_retry_lane_dense_chosen =
+                    lu_tel.identity_sep_retry_lane_dense_chosen;
+                result.lu_identity_sep_retry_lane_supernode_chosen =
+                    lu_tel.identity_sep_retry_lane_supernode_chosen;
+                result.lu_identity_sep_retry_lane_dense_successes =
+                    lu_tel.identity_sep_retry_lane_dense_successes;
+                result.lu_identity_sep_retry_lane_supernode_successes =
+                    lu_tel.identity_sep_retry_lane_supernode_successes;
                 result.lu_sn_cost_gate_trips = lu_tel.sn_cost_gate_trips;
                 result.lu_sn_cost_gate_skips = lu_tel.sn_cost_gate_skips;
                 result.lu_sn_cost_gate_resets = lu_tel.sn_cost_gate_resets;
@@ -2587,6 +2599,14 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_numeric_backend_supernode);
     fprintf(out, "    \"numeric_backend_dense_ge\": %d,\n",
             ralph->lu_numeric_backend_dense_ge);
+    fprintf(out, "    \"identity_sep_retry_lane_dense_chosen\": %d,\n",
+            ralph->lu_identity_sep_retry_lane_dense_chosen);
+    fprintf(out, "    \"identity_sep_retry_lane_supernode_chosen\": %d,\n",
+            ralph->lu_identity_sep_retry_lane_supernode_chosen);
+    fprintf(out, "    \"identity_sep_retry_lane_dense_successes\": %d,\n",
+            ralph->lu_identity_sep_retry_lane_dense_successes);
+    fprintf(out, "    \"identity_sep_retry_lane_supernode_successes\": %d,\n",
+            ralph->lu_identity_sep_retry_lane_supernode_successes);
     fprintf(out, "    \"sn_cost_gate_trips\": %d,\n",
             ralph->lu_sn_cost_gate_trips);
     fprintf(out, "    \"sn_cost_gate_skips\": %d,\n",

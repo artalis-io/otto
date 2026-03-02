@@ -702,6 +702,10 @@ typedef struct {
     int numeric_backend_markowitz;
     int numeric_backend_supernode;
     int numeric_backend_dense_ge;
+    int identity_sep_retry_lane_dense_chosen;
+    int identity_sep_retry_lane_supernode_chosen;
+    int identity_sep_retry_lane_dense_successes;
+    int identity_sep_retry_lane_supernode_successes;
 
     int sn_calls;
     int sn_successes;
