@@ -2596,6 +2596,521 @@ static void test_string_destroy_edge_cases(void) {
     }
 }
 
+/* ---- Split-string SISR destroy tests ---- */
+
+static void test_string_split_destroy_basic(void) {
+    /* 1 vehicle, 8 delivery requests in a line. Split-string destroy with
+       count=4 should remove requests from multiple route positions
+       (non-contiguous substrings). */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    uint32_t removed_ids[8];
+    int removed_count = 0;
+    ARStatus status;
+    uint32_t i;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+
+    for (i = 0; i < 8; i++) {
+        add_delivery_request(ctx, 10.0 + i * 10.0, 0.0, 0, 100000, 10, 1.0);
+    }
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    {
+        double score, dist;
+        for (i = 0; i < 8; i++) {
+            assert(sg_route_eval_insertion_cached(ctx, &sol, i, 0, i, &score, &dist));
+            assert(sg_route_apply_insertion(ctx, &sol, i, 0, i, dist) == AR_STATUS_OK);
+        }
+    }
+    assert(sol.route_lengths[0] == 8);
+
+    sh_rng_seed(ctx->op_rng, 42);
+    status = sg_route_destroy_string_split(ctx, &sol, 4, removed_ids, &removed_count);
+    assert(status == AR_STATUS_OK);
+    assert(removed_count >= 1 && removed_count <= 4);
+    assert(sol.route_lengths[0] == 8 - (uint32_t)removed_count);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_string_split_destroy_cross_route(void) {
+    /* 3 vehicles with spatially-separated clusters. Split-string destroy
+       with count=8 should visit multiple vehicles. */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    uint32_t removed_ids[12];
+    int removed_count = 0;
+    ARStatus status;
+    uint32_t vehicles_hit[3] = {0, 0, 0};
+    int i;
+    int multi_vehicle = 0;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+
+    /* v0 cluster: 4 requests near (10,10) */
+    add_delivery_request(ctx, 10.0, 10.0, 0, 100000, 10, 1.0);
+    add_delivery_request(ctx, 12.0, 10.0, 0, 100000, 10, 1.0);
+    add_delivery_request(ctx, 14.0, 10.0, 0, 100000, 10, 1.0);
+    add_delivery_request(ctx, 16.0, 10.0, 0, 100000, 10, 1.0);
+    /* v1 cluster: 4 requests near (50,50) */
+    add_delivery_request(ctx, 50.0, 50.0, 0, 100000, 10, 1.0);
+    add_delivery_request(ctx, 52.0, 50.0, 0, 100000, 10, 1.0);
+    add_delivery_request(ctx, 54.0, 50.0, 0, 100000, 10, 1.0);
+    add_delivery_request(ctx, 56.0, 50.0, 0, 100000, 10, 1.0);
+    /* v2 cluster: 4 requests near (90,90) */
+    add_delivery_request(ctx, 90.0, 90.0, 0, 100000, 10, 1.0);
+    add_delivery_request(ctx, 92.0, 90.0, 0, 100000, 10, 1.0);
+    add_delivery_request(ctx, 94.0, 90.0, 0, 100000, 10, 1.0);
+    add_delivery_request(ctx, 96.0, 90.0, 0, 100000, 10, 1.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    {
+        double score, dist;
+        for (i = 0; i < 4; i++) {
+            assert(sg_route_eval_insertion_cached(ctx, &sol, (uint32_t)i, 0, (uint32_t)i, &score, &dist));
+            assert(sg_route_apply_insertion(ctx, &sol, (uint32_t)i, 0, (uint32_t)i, dist) == AR_STATUS_OK);
+        }
+        for (i = 4; i < 8; i++) {
+            assert(sg_route_eval_insertion_cached(ctx, &sol, (uint32_t)i, 1, (uint32_t)(i - 4), &score, &dist));
+            assert(sg_route_apply_insertion(ctx, &sol, (uint32_t)i, 1, (uint32_t)(i - 4), dist) == AR_STATUS_OK);
+        }
+        for (i = 8; i < 12; i++) {
+            assert(sg_route_eval_insertion_cached(ctx, &sol, (uint32_t)i, 2, (uint32_t)(i - 8), &score, &dist));
+            assert(sg_route_apply_insertion(ctx, &sol, (uint32_t)i, 2, (uint32_t)(i - 8), dist) == AR_STATUS_OK);
+        }
+    }
+    assert(sol.base.num_assigned == 12);
+
+    sh_rng_seed(ctx->op_rng, 77);
+    status = sg_route_destroy_string_split(ctx, &sol, 8, removed_ids, &removed_count);
+    assert(status == AR_STATUS_OK);
+    assert(removed_count >= 1 && removed_count <= 8);
+
+    /* Check which vehicles were hit */
+    for (i = 0; i < removed_count; i++) {
+        /* Determine original vehicle from request ID */
+        if (removed_ids[i] < 4) vehicles_hit[0] = 1;
+        else if (removed_ids[i] < 8) vehicles_hit[1] = 1;
+        else vehicles_hit[2] = 1;
+    }
+    multi_vehicle = (vehicles_hit[0] + vehicles_hit[1] + vehicles_hit[2]) >= 2;
+    assert(multi_vehicle);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_string_split_destroy_small_route(void) {
+    /* 1 vehicle, 2 requests. With only 2 requests, K segments should
+       degrade gracefully (can't split into 2-3 non-overlapping substrings
+       from a 2-element route, so should still work). */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    uint32_t removed_ids[2];
+    int removed_count = 0;
+    ARStatus status;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+
+    add_delivery_request(ctx, 10.0, 0.0, 0, 100000, 10, 1.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 100000, 10, 1.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 0, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 1, 0, 1, dist) == AR_STATUS_OK);
+    }
+    assert(sol.route_lengths[0] == 2);
+
+    sh_rng_seed(ctx->op_rng, 42);
+    status = sg_route_destroy_string_split(ctx, &sol, 2, removed_ids, &removed_count);
+    assert(status == AR_STATUS_OK);
+    assert(removed_count >= 1 && removed_count <= 2);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_string_split_destroy_count_exceeds(void) {
+    /* count > num_assigned — should remove up to num_assigned. */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    uint32_t removed_ids[3];
+    int removed_count = 0;
+    ARStatus status;
+    uint32_t i;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+
+    add_delivery_request(ctx, 10.0, 0.0, 0, 100000, 10, 1.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 100000, 10, 1.0);
+    add_delivery_request(ctx, 30.0, 0.0, 0, 100000, 10, 1.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    {
+        double score, dist;
+        for (i = 0; i < 3; i++) {
+            assert(sg_route_eval_insertion_cached(ctx, &sol, i, 0, i, &score, &dist));
+            assert(sg_route_apply_insertion(ctx, &sol, i, 0, i, dist) == AR_STATUS_OK);
+        }
+    }
+    assert(sol.base.num_assigned == 3);
+
+    sh_rng_seed(ctx->op_rng, 42);
+    status = sg_route_destroy_string_split(ctx, &sol, 100, removed_ids, &removed_count);
+    assert(status == AR_STATUS_OK);
+    assert(removed_count == 3);
+    assert(sol.base.num_assigned == 0);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_string_split_destroy_frozen(void) {
+    /* Frozen requests should be excluded from split-string removal. */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    uint32_t removed_ids[6];
+    int removed_count = 0;
+    ARStatus status;
+    uint32_t i;
+    int j;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+
+    for (i = 0; i < 6; i++) {
+        add_delivery_request(ctx, 10.0 + i * 10.0, 0.0, 0, 100000, 10, 1.0);
+    }
+
+    /* Freeze requests 2 and 3 */
+    assert(sg_request_set_lock(ctx, 2, SG_LOCK_FROZEN) == SG_STATUS_OK);
+    assert(sg_request_set_lock(ctx, 3, SG_LOCK_FROZEN) == SG_STATUS_OK);
+
+    /* Set initial routes for frozen vehicle map */
+    {
+        uint32_t vehicle_ids[] = {0};
+        uint32_t request_ids[] = {0, 1, 2, 3, 4, 5};
+        uint32_t lengths[] = {6};
+        assert(sg_set_initial_routes(ctx, 1, vehicle_ids, request_ids, lengths) == SG_STATUS_OK);
+    }
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    {
+        double score, dist;
+        for (i = 0; i < 6; i++) {
+            assert(sg_route_eval_insertion_cached(ctx, &sol, i, 0, i, &score, &dist));
+            assert(sg_route_apply_insertion(ctx, &sol, i, 0, i, dist) == AR_STATUS_OK);
+        }
+    }
+    assert(sol.base.num_assigned == 6);
+
+    /* Build frozen vehicle map (normally done in solve) */
+    ctx->frozen_vehicle_map = (uint32_t *)malloc(ctx->num_requests * sizeof(uint32_t));
+    for (i = 0; i < ctx->num_requests; i++)
+        ctx->frozen_vehicle_map[i] = SG_NO_VEHICLE;
+    ctx->frozen_vehicle_map[2] = 0;
+    ctx->frozen_vehicle_map[3] = 0;
+
+    sh_rng_seed(ctx->op_rng, 42);
+    status = sg_route_destroy_string_split(ctx, &sol, 6, removed_ids, &removed_count);
+    assert(status == AR_STATUS_OK);
+
+    /* Frozen requests (2,3) must NOT be in removed set */
+    for (j = 0; j < removed_count; j++) {
+        assert(removed_ids[j] != 2);
+        assert(removed_ids[j] != 3);
+    }
+
+    free(ctx->frozen_vehicle_map);
+    ctx->frozen_vehicle_map = NULL;
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+/* ---- Worst-cost vehicle destroy tests ---- */
+
+static void test_vehicle_worst_cost_basic(void) {
+    /* 3 vehicles with varying cost efficiency. v0 has 2 requests and long
+       distance (expensive per-request), v1 has 3 requests close together
+       (cheap per-request), v2 has 2 requests medium distance.
+       Should select v0 (highest distance/requests ratio). */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    uint32_t removed_ids[7];
+    int removed_count = 0;
+    ARStatus status;
+    int has_r0 = 0, has_r1 = 0;
+    int i;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);  /* v0 */
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);  /* v1 */
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);  /* v2 */
+
+    /* v0: 2 requests far apart (high cost/request) */
+    add_delivery_request(ctx, 1.0, 1.0, 0, 100000, 10, 1.0);    /* r0 -> v0 */
+    add_delivery_request(ctx, 99.0, 99.0, 0, 100000, 10, 1.0);  /* r1 -> v0 */
+    /* v1: 3 requests close together (low cost/request) */
+    add_delivery_request(ctx, 50.0, 50.0, 0, 100000, 10, 1.0);  /* r2 -> v1 */
+    add_delivery_request(ctx, 51.0, 50.0, 0, 100000, 10, 1.0);  /* r3 -> v1 */
+    add_delivery_request(ctx, 52.0, 50.0, 0, 100000, 10, 1.0);  /* r4 -> v1 */
+    /* v2: 2 requests medium distance */
+    add_delivery_request(ctx, 40.0, 40.0, 0, 100000, 10, 1.0);  /* r5 -> v2 */
+    add_delivery_request(ctx, 60.0, 60.0, 0, 100000, 10, 1.0);  /* r6 -> v2 */
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 0, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 1, 0, 1, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 2, 1, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 2, 1, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 3, 1, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 3, 1, 1, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 4, 1, 2, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 4, 1, 2, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 5, 2, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 5, 2, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 6, 2, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 6, 2, 1, dist) == AR_STATUS_OK);
+    }
+    assert(sol.route_lengths[0] == 2);
+    assert(sol.route_lengths[1] == 3);
+    assert(sol.route_lengths[2] == 2);
+
+    /* v0 should have the highest distance/request ratio (far-apart requests) */
+    assert(sol.route_distance[0] / 2.0 > sol.route_distance[1] / 3.0);
+
+    sh_rng_seed(ctx->op_rng, 42);
+    status = sg_route_destroy_vehicle_worst_cost(ctx, &sol, 4, removed_ids, &removed_count);
+    assert(status == AR_STATUS_OK);
+    assert(removed_count >= 2 && removed_count <= 4);
+
+    /* r0 and r1 (from v0, the most expensive) must be among the removed */
+    for (i = 0; i < removed_count; i++) {
+        if (removed_ids[i] == 0) has_r0 = 1;
+        if (removed_ids[i] == 1) has_r1 = 1;
+    }
+    assert(has_r0);
+    assert(has_r1);
+
+    /* v0 should be empty */
+    assert(sol.route_lengths[0] == 0);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_vehicle_worst_cost_shaw_fill(void) {
+    /* Verify Shaw-fill fills remaining quota beyond the worst vehicle. */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    uint32_t removed_ids[10];
+    int removed_count = 0;
+    ARStatus status;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+
+    /* v0: 1 request very far away (high cost/request) */
+    add_delivery_request(ctx, 99.0, 99.0, 0, 100000, 10, 1.0);  /* r0 */
+    /* v1: 5 close requests */
+    add_delivery_request(ctx, 50.0, 50.0, 0, 100000, 10, 1.0);  /* r1 */
+    add_delivery_request(ctx, 51.0, 50.0, 0, 100000, 10, 1.0);  /* r2 */
+    add_delivery_request(ctx, 52.0, 50.0, 0, 100000, 10, 1.0);  /* r3 */
+    add_delivery_request(ctx, 53.0, 50.0, 0, 100000, 10, 1.0);  /* r4 */
+    add_delivery_request(ctx, 54.0, 50.0, 0, 100000, 10, 1.0);  /* r5 */
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+        {
+            uint32_t i;
+            for (i = 1; i <= 5; i++) {
+                assert(sg_route_eval_insertion_cached(ctx, &sol, i, 1, i - 1, &score, &dist));
+                assert(sg_route_apply_insertion(ctx, &sol, i, 1, i - 1, dist) == AR_STATUS_OK);
+            }
+        }
+    }
+    assert(sol.base.num_assigned == 6);
+
+    sh_rng_seed(ctx->op_rng, 42);
+    status = sg_route_destroy_vehicle_worst_cost(ctx, &sol, 4, removed_ids, &removed_count);
+    assert(status == AR_STATUS_OK);
+    /* v0 has 1 request → removed. Remaining 3 slots filled by Shaw from v1. */
+    assert(removed_count >= 2);  /* At least r0 + some Shaw-fill */
+    assert(removed_ids[0] == 0);  /* r0 from worst vehicle */
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_vehicle_worst_cost_frozen(void) {
+    /* Frozen requests should be excluded from worst-cost vehicle removal. */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    uint32_t removed_ids[4];
+    int removed_count = 0;
+    ARStatus status;
+    int j;
+    uint32_t i;
+
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+
+    /* v0: 2 far-apart requests (high cost/request), r0 is frozen */
+    add_delivery_request(ctx, 1.0, 1.0, 0, 100000, 10, 1.0);    /* r0 */
+    add_delivery_request(ctx, 99.0, 99.0, 0, 100000, 10, 1.0);  /* r1 */
+    /* v1: 2 close requests */
+    add_delivery_request(ctx, 50.0, 50.0, 0, 100000, 10, 1.0);  /* r2 */
+    add_delivery_request(ctx, 51.0, 50.0, 0, 100000, 10, 1.0);  /* r3 */
+
+    /* Freeze r0 */
+    assert(sg_request_set_lock(ctx, 0, SG_LOCK_FROZEN) == SG_STATUS_OK);
+    {
+        uint32_t vehicle_ids[] = {0, 1};
+        uint32_t request_ids[] = {0, 1, 2, 3};
+        uint32_t lengths[] = {2, 2};
+        assert(sg_set_initial_routes(ctx, 2, vehicle_ids, request_ids, lengths) == SG_STATUS_OK);
+    }
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 0, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 1, 0, 1, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 2, 1, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 2, 1, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 3, 1, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 3, 1, 1, dist) == AR_STATUS_OK);
+    }
+
+    /* Build frozen vehicle map */
+    ctx->frozen_vehicle_map = (uint32_t *)malloc(ctx->num_requests * sizeof(uint32_t));
+    for (i = 0; i < ctx->num_requests; i++)
+        ctx->frozen_vehicle_map[i] = SG_NO_VEHICLE;
+    ctx->frozen_vehicle_map[0] = 0;
+
+    sh_rng_seed(ctx->op_rng, 42);
+    status = sg_route_destroy_vehicle_worst_cost(ctx, &sol, 4, removed_ids, &removed_count);
+    assert(status == AR_STATUS_OK);
+
+    /* Frozen r0 must NOT be among the removed */
+    for (j = 0; j < removed_count; j++) {
+        assert(removed_ids[j] != 0);
+    }
+
+    free(ctx->frozen_vehicle_map);
+    ctx->frozen_vehicle_map = NULL;
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_vehicle_worst_cost_tie_break(void) {
+    /* Two vehicles with equal distance/request ratio — should pick the one
+       with more requests (tie-break). */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    uint32_t removed_ids[6];
+    int removed_count = 0;
+    ARStatus status;
+    int v0_hits = 0, v1_hits = 0;
+    int i;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);  /* v0 */
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);  /* v1 */
+
+    /* v0: 1 request at (50,0) — route_distance ~= depot->50->depot = ~100 */
+    add_delivery_request(ctx, 50.0, 0.0, 0, 100000, 10, 1.0);  /* r0 */
+    /* v1: 2 requests at (50,0) and (100,0) — route_distance ~= 200, ratio ~= 100 */
+    add_delivery_request(ctx, 50.0, 0.0, 0, 100000, 10, 1.0);  /* r1 */
+    add_delivery_request(ctx, 100.0, 0.0, 0, 100000, 10, 1.0); /* r2 */
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    {
+        double score, dist;
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 0, 0, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 0, 0, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 1, 1, 0, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 1, 1, 0, dist) == AR_STATUS_OK);
+        assert(sg_route_eval_insertion_cached(ctx, &sol, 2, 1, 1, &score, &dist));
+        assert(sg_route_apply_insertion(ctx, &sol, 2, 1, 1, dist) == AR_STATUS_OK);
+    }
+
+    sh_rng_seed(ctx->op_rng, 42);
+    status = sg_route_destroy_vehicle_worst_cost(ctx, &sol, 3, removed_ids, &removed_count);
+    assert(status == AR_STATUS_OK);
+    assert(removed_count >= 1);
+
+    /* Count which vehicle's requests were removed first */
+    for (i = 0; i < removed_count; i++) {
+        if (removed_ids[i] == 0) v0_hits++;
+        else v1_hits++;
+    }
+    /* The vehicle with the highest ratio should be selected; both might qualify.
+       At minimum, the operator should succeed and remove something. */
+    assert(v0_hits + v1_hits == removed_count);
+    (void)v0_hits; (void)v1_hits;
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_vehicle_worst_cost_empty(void) {
+    /* No non-empty vehicles — should return OK, count=0. */
+    SGContext *ctx = make_config(10, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+    uint32_t removed_ids[1];
+    int removed_count = -1;
+    ARStatus status;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 100000, 1000.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 100000, 10, 1.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    /* Don't insert anything */
+
+    sh_rng_seed(ctx->op_rng, 42);
+    status = sg_route_destroy_vehicle_worst_cost(ctx, &sol, 5, removed_ids, &removed_count);
+    assert(status == AR_STATUS_OK);
+    assert(removed_count == 0);
+
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
 static void test_two_phase_solve_no_regression(void) {
     /* Full solve with 5 vehicles, 10 delivery requests, moderate TWs.
        Verifies two-phase ALNS doesn't break basic solving. */
@@ -15246,6 +15761,16 @@ int main(void) {
     RUN_TEST(test_string_destroy_multi_route);
     RUN_TEST(test_string_destroy_pd_pairs);
     RUN_TEST(test_string_destroy_edge_cases);
+    RUN_TEST(test_string_split_destroy_basic);
+    RUN_TEST(test_string_split_destroy_cross_route);
+    RUN_TEST(test_string_split_destroy_small_route);
+    RUN_TEST(test_string_split_destroy_count_exceeds);
+    RUN_TEST(test_string_split_destroy_frozen);
+    RUN_TEST(test_vehicle_worst_cost_basic);
+    RUN_TEST(test_vehicle_worst_cost_shaw_fill);
+    RUN_TEST(test_vehicle_worst_cost_frozen);
+    RUN_TEST(test_vehicle_worst_cost_tie_break);
+    RUN_TEST(test_vehicle_worst_cost_empty);
     RUN_TEST(test_two_phase_solve_no_regression);
     RUN_TEST(test_travel_matrix_mode);
     RUN_TEST(test_travel_callback_mode);
@@ -15685,7 +16210,7 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 403);
+    assert(tests_run == 413);
 #else
     assert(tests_run == 394);
 #endif

@@ -1074,6 +1074,10 @@ ARStatus sg_route_destroy_vehicle_empty(void *op_ctx, void *solution, int count,
                                         uint32_t *removed_ids, int *removed_count);
 ARStatus sg_route_destroy_string(void *op_ctx, void *solution, int count,
                                  uint32_t *removed_ids, int *removed_count);
+ARStatus sg_route_destroy_string_split(void *op_ctx, void *solution, int count,
+                                        uint32_t *removed_ids, int *removed_count);
+ARStatus sg_route_destroy_vehicle_worst_cost(void *op_ctx, void *solution, int count,
+                                              uint32_t *removed_ids, int *removed_count);
 
 /* sg_repair.c */
 ARStatus sg_reinsert_removed_requests(SGBootstrapSolution *sol,

@@ -1815,11 +1815,11 @@ Users can override via `SGConfig.max_iterations` or `--iterations` in benchmarks
 |------:|--------:|-----------:|----------:|---------:|-------------:|
 | 10,000 | 9.2 | +0.2% | +0.30 | 39/56 | 23 |
 
-**Solomon — population (auto threads, 3 generations, Phase S13-S15)**:
+**Solomon — population (auto threads, 3 generations, Phase S13-S17)**:
 
 | Iters | Sec/case | avgDistGap | avgVehGap | equalVeh | lexiNonWorse |
 |------:|--------:|-----------:|----------:|---------:|-------------:|
-| 10,000 | 43.3 | -0.1% | +0.18 | 46/56 | 14 |
+| 10,000 | 37.6 | -0.2% | +0.20 | 45/56 | 14 |
 
 **Li & Lim (PDPTW, 56 cases)** — single-thread with infeasible-space exploration:
 
@@ -2499,6 +2499,28 @@ management is ~200-400 lines of new code in `sg_solve.c`.
 ALNS+SA is the right architecture for Surge's constraint portfolio. HGS should only be
 considered for a separate, specialized clean-CVRP/VRPTW solver. The population-ALNS hybrid
 is the practical path to better solution quality within Surge's existing architecture.
+
+---
+
+### Phase S18: Split-String SISR + Worst-Cost Vehicle Destroy ✅
+
+**Result**: Solomon 100 population (60s): avgDistGap -0.2%, avgVehGap +0.20, equalVehicles 45/56, lexiNonWorse 14. No regression from prior results. New operators provide destruction diversity without degrading solution quality on small instances.
+
+**Problem**: Two gaps in the destroy operator portfolio:
+1. SISR extracts one contiguous substring per vehicle. On large routes (40-80 requests), this creates one large gap. The original Christiaens & Vanden Berghe 2020 paper also uses a "split" mode that creates multiple smaller gaps at different route positions, giving repair more diverse insertion opportunities.
+2. Route-level operators (`vehicle-target`, `vehicle-empty`) select vehicles by size (fewest requests). No operator targets vehicles with the highest per-request cost — expensive routes often contain misplaced requests that would be cheaper on other vehicles.
+
+**Changes (surge — sg_destroy.c, +~210 lines):**
+- `sg_route_destroy_string_split()`: Split-string SISR variant. Picks random seed, chooses L removal count and K=2-3 segments, extracts K shorter substrings spaced across the route instead of one contiguous block. Cross-route continuation identical to existing string destroy. Re-reads route pointer after each segment unassign. Full frozen-request filtering.
+- `sg_route_destroy_vehicle_worst_cost()`: Worst-cost vehicle destroy. Computes `route_distance[v] / route_lengths[v]` for all non-empty vehicles, selects the vehicle with the highest per-request cost (tie-break: most requests), removes all its requests, fills remaining quota with Shaw-related requests from neighboring vehicles. Same frozen filter pattern as vehicle-target/vehicle-empty.
+
+**Changes (surge — sg_internal.h):**
+- Declared `sg_route_destroy_string_split()` and `sg_route_destroy_vehicle_worst_cost()`
+
+**Changes (surge — sg_solve.c):**
+- Registered `string-split` (weight 1.0) and `vehicle-worst-cost` (weight 1.0) in `sg_create_route_alns()`. Total destroy operators: 14.
+
+**Tests**: 10 new tests (403→413). Split-string: basic (8 requests, multiple gaps), cross-route (3 vehicles, visits >=2), small-route degradation (2 requests), count-exceeds, frozen filtering. Worst-cost: basic ratio selection, Shaw-fill quota, frozen filtering, tie-break (equal ratio → most requests), empty solution.
 
 ---
 

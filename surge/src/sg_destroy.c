@@ -924,3 +924,358 @@ ARStatus sg_route_destroy_string(void *op_ctx, void *solution, int count,
     *removed_count = total_removed;
     return AR_STATUS_OK;
 }
+
+/* Split-string SISR: remove K shorter substrings spread across a route
+   instead of one contiguous block.  Creates multiple insertion gaps,
+   improving repair diversity on large instances.  Cross-route continuation
+   is identical to the contiguous string destroy. */
+ARStatus sg_route_destroy_string_split(void *op_ctx, void *solution, int count,
+                                        uint32_t *removed_ids, int *removed_count) {
+    SGContext *ctx = (SGContext *)op_ctx;
+    SGRouteSolution *sol = (SGRouteSolution *)solution;
+    int target;
+    int total_removed = 0;
+    uint8_t visited_stack[256];
+    uint8_t *visited;
+    int visited_heap = 0;
+
+    if (!ctx || !ctx->op_rng || !sol || !removed_count || count < 0) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    *removed_count = 0;
+    if (count == 0 || sol->base.num_assigned == 0) {
+        return AR_STATUS_OK;
+    }
+    if (!removed_ids) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    target = count;
+    if ((uint32_t)target > sol->base.num_assigned) {
+        target = (int)sol->base.num_assigned;
+    }
+
+    /* Vehicle visited tracking */
+    if (sol->num_vehicles <= 256) {
+        visited = visited_stack;
+    } else {
+        visited = (uint8_t *)calloc(sol->num_vehicles, 1);
+        if (!visited) {
+            return AR_STATUS_OUT_OF_MEMORY;
+        }
+        visited_heap = 1;
+    }
+    if (!visited_heap) {
+        memset(visited, 0, sol->num_vehicles);
+    }
+
+    /* Step 1: Pick random seed request */
+    {
+        uint32_t seed_idx = (uint32_t)sh_rng_int_range(ctx->op_rng, 0,
+                                (int)sol->base.num_assigned - 1);
+        uint32_t seed_id = sol->base.assigned_ids[seed_idx];
+        uint32_t seed_vehicle = sol->request_vehicle[seed_id];
+        uint32_t route_len = sol->route_lengths[seed_vehicle];
+        int l_max = sg_string_lmax(ctx);
+        int L, K, per_seg, remainder, seg_spacing;
+        int s;
+        const uint32_t *route;
+
+        /* Instance-adaptive L_max */
+        if (sol->vehicles_used > 0) {
+            int avg_len = (int)((sol->base.num_assigned + sol->vehicles_used - 1) / sol->vehicles_used);
+            if (avg_len > l_max) l_max = avg_len;
+        }
+        L = sh_rng_int_range(ctx->op_rng, 1, l_max);
+        if (L > target) L = target;
+        if ((uint32_t)L > route_len) L = (int)route_len;
+
+        /* Choose K segments (2 or 3) */
+        K = 2 + (int)(sh_rng_next_u64(ctx->op_rng) & 1);
+        if (K > L) K = L;
+        if (K > (int)route_len / 2) K = (int)route_len > 1 ? 2 : 1;
+
+        /* Extract K substrings spaced across route */
+        per_seg = L / K;
+        remainder = L - per_seg * K;
+        seg_spacing = (int)route_len / K;
+        route = sg_route_vehicle_ptr_const(sol, seed_vehicle);
+
+        for (s = 0; s < K && total_removed < target; s++) {
+            int seg_len = per_seg + (s < remainder ? 1 : 0);
+            int center = s * seg_spacing + seg_spacing / 2;
+            int start, end, i, actual;
+
+            if (seg_len == 0) continue;
+
+            /* Clamp center-based extraction */
+            start = center - seg_len / 2;
+            if (start < 0) start = 0;
+            end = start + seg_len;
+            if (end > (int)route_len) {
+                end = (int)route_len;
+                start = end - seg_len;
+                if (start < 0) start = 0;
+            }
+
+            /* Snapshot substring, skipping frozen requests */
+            actual = 0;
+            for (i = start; i < end && total_removed + actual < target; i++) {
+                uint32_t rid = route[i];
+                if (!sg_request_is_frozen(ctx, rid)) {
+                    removed_ids[total_removed + actual] = rid;
+                    actual++;
+                }
+            }
+            if (actual > 0) {
+                ARStatus status = sg_route_unassign_removed_requests(
+                    ctx, sol, &removed_ids[total_removed], actual);
+                if (status != AR_STATUS_OK) {
+                    if (visited_heap) free(visited);
+                    return status;
+                }
+                total_removed += actual;
+                /* Re-read route pointer — unassign may have shifted contents */
+                route = sg_route_vehicle_ptr_const(sol, seed_vehicle);
+                route_len = sol->route_lengths[seed_vehicle];
+                /* Recalculate spacing for remaining segments */
+                if (route_len > 0 && s + 1 < K) {
+                    seg_spacing = (int)route_len / (K - s - 1);
+                }
+            }
+        }
+        visited[seed_vehicle] = 1;
+    }
+
+    /* Step 2: Cross-route continuation (identical to contiguous string destroy) */
+    while (total_removed < target) {
+        uint32_t best_id = UINT32_MAX;
+        uint32_t best_vehicle = UINT32_MAX;
+        double best_dist = INFINITY;
+        uint32_t j;
+
+        for (j = 0; j < sol->base.num_assigned; j++) {
+            uint32_t cand = sol->base.assigned_ids[j];
+            uint32_t cand_v = sol->request_vehicle[cand];
+            double cx, cy;
+            double min_d = INFINITY;
+            int r;
+
+            if (visited[cand_v]) continue;
+
+            sg_request_centroid(ctx, cand, &cx, &cy);
+            for (r = 0; r < total_removed; r++) {
+                double rx, ry, d;
+                sg_request_centroid(ctx, removed_ids[r], &rx, &ry);
+                d = sg_euclid(rx, ry, cx, cy);
+                if (d < min_d) min_d = d;
+            }
+
+            if (min_d < best_dist) {
+                best_dist = min_d;
+                best_id = cand;
+                best_vehicle = cand_v;
+            }
+        }
+
+        if (best_id == UINT32_MAX) break;
+
+        /* Extract split substrings from best_vehicle */
+        {
+            uint32_t route_len = sol->route_lengths[best_vehicle];
+            int remaining = target - total_removed;
+            int l_max = sg_string_lmax(ctx);
+            int L, K, per_seg, seg_remainder, seg_spacing;
+            int s;
+            const uint32_t *route;
+
+            if (sol->vehicles_used > 0) {
+                int avg_len = (int)((sol->base.num_assigned + sol->vehicles_used - 1) / sol->vehicles_used);
+                if (avg_len > l_max) l_max = avg_len;
+            }
+            L = sh_rng_int_range(ctx->op_rng, 1, l_max);
+            if (L > remaining) L = remaining;
+            if ((uint32_t)L > route_len) L = (int)route_len;
+
+            K = 2 + (int)(sh_rng_next_u64(ctx->op_rng) & 1);
+            if (K > L) K = L;
+            if (K > (int)route_len / 2) K = (int)route_len > 1 ? 2 : 1;
+
+            per_seg = L / K;
+            seg_remainder = L - per_seg * K;
+            seg_spacing = (int)route_len / K;
+            route = sg_route_vehicle_ptr_const(sol, best_vehicle);
+
+            for (s = 0; s < K && total_removed < target; s++) {
+                int seg_len = per_seg + (s < seg_remainder ? 1 : 0);
+                int center = s * seg_spacing + seg_spacing / 2;
+                int start, end, i, actual;
+
+                if (seg_len == 0) continue;
+
+                start = center - seg_len / 2;
+                if (start < 0) start = 0;
+                end = start + seg_len;
+                if (end > (int)route_len) {
+                    end = (int)route_len;
+                    start = end - seg_len;
+                    if (start < 0) start = 0;
+                }
+
+                actual = 0;
+                for (i = start; i < end && total_removed + actual < target; i++) {
+                    uint32_t rid = route[i];
+                    if (!sg_request_is_frozen(ctx, rid)) {
+                        removed_ids[total_removed + actual] = rid;
+                        actual++;
+                    }
+                }
+                if (actual > 0) {
+                    ARStatus status = sg_route_unassign_removed_requests(
+                        ctx, sol, &removed_ids[total_removed], actual);
+                    if (status != AR_STATUS_OK) {
+                        if (visited_heap) free(visited);
+                        return status;
+                    }
+                    total_removed += actual;
+                    route = sg_route_vehicle_ptr_const(sol, best_vehicle);
+                    route_len = sol->route_lengths[best_vehicle];
+                    if (route_len > 0 && s + 1 < K) {
+                        seg_spacing = (int)route_len / (K - s - 1);
+                    }
+                }
+            }
+            visited[best_vehicle] = 1;
+        }
+    }
+
+    if (visited_heap) free(visited);
+
+    *removed_count = total_removed;
+    return AR_STATUS_OK;
+}
+
+/* Worst-cost vehicle destroy: target the vehicle with the highest
+   distance-per-request ratio.  Expensive routes often contain misplaced
+   requests that would be cheaper on other vehicles.  Remaining quota is
+   filled with Shaw-related requests from neighboring vehicles (same
+   pattern as vehicle-target). */
+ARStatus sg_route_destroy_vehicle_worst_cost(void *op_ctx, void *solution, int count,
+                                              uint32_t *removed_ids, int *removed_count) {
+    SGContext *ctx = (SGContext *)op_ctx;
+    SGRouteSolution *sol = (SGRouteSolution *)solution;
+    uint32_t worst_vehicle = UINT32_MAX;
+    double worst_ratio = -1.0;
+    uint32_t v;
+    int total_removed = 0;
+    int target;
+    uint32_t i;
+
+    if (!ctx || !ctx->op_rng || !sol || !removed_count || count < 0) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    *removed_count = 0;
+    if (count == 0 || sol->base.num_assigned == 0) {
+        return AR_STATUS_OK;
+    }
+    if (!removed_ids) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    target = count;
+    if ((uint32_t)target > sol->base.num_assigned) {
+        target = (int)sol->base.num_assigned;
+    }
+
+    /* Step 1: Find vehicle with highest distance/requests ratio.
+       Tie-break: most requests (larger route = more misplaced requests). */
+    for (v = 0; v < sol->num_vehicles; v++) {
+        uint32_t len = sol->route_lengths[v];
+        double ratio;
+        if (len == 0) continue;
+        ratio = sol->route_distance[v] / (double)len;
+        if (ratio > worst_ratio ||
+            (ratio == worst_ratio && worst_vehicle != UINT32_MAX &&
+             len > sol->route_lengths[worst_vehicle])) {
+            worst_ratio = ratio;
+            worst_vehicle = v;
+        }
+    }
+    if (worst_vehicle == UINT32_MAX) {
+        return AR_STATUS_OK;
+    }
+
+    /* Step 2: Remove all requests from worst vehicle. */
+    {
+        const uint32_t *route = sg_route_vehicle_ptr_const(sol, worst_vehicle);
+        uint32_t take = sol->route_lengths[worst_vehicle];
+        if ((int)take > target) {
+            take = (uint32_t)target;
+        }
+        for (i = 0; i < take; i++) {
+            removed_ids[total_removed++] = route[i];
+        }
+    }
+
+    /* Step 3: Fill remaining quota with Shaw-related requests from other vehicles. */
+    if (total_removed < target && total_removed > 0) {
+        ctx->active_solution = sol;
+        for (i = 0; i < (uint32_t)total_removed && total_removed < target; i++) {
+            uint32_t seed_id = removed_ids[i];
+            uint32_t best_id = UINT32_MAX;
+            double best_rel = INFINITY;
+            uint32_t j;
+
+            for (j = 0; j < sol->base.num_assigned; j++) {
+                uint32_t cand = sol->base.assigned_ids[j];
+                uint32_t k;
+                int already_removed = 0;
+                double rel;
+
+                if (sol->request_vehicle[cand] == worst_vehicle) {
+                    continue;
+                }
+                for (k = 0; k < (uint32_t)total_removed; k++) {
+                    if (removed_ids[k] == cand) {
+                        already_removed = 1;
+                        break;
+                    }
+                }
+                if (already_removed) {
+                    continue;
+                }
+
+                rel = sg_route_shaw_relatedness(ctx, seed_id, cand);
+                if (rel < best_rel) {
+                    best_rel = rel;
+                    best_id = cand;
+                }
+            }
+
+            if (best_id != UINT32_MAX) {
+                removed_ids[total_removed++] = best_id;
+            }
+        }
+        ctx->active_solution = NULL;
+    }
+
+    /* Filter out frozen requests */
+    if (ctx->has_frozen && ctx->request_locks) {
+        int w = 0;
+        for (i = 0; i < (uint32_t)total_removed; i++) {
+            if (ctx->request_locks[removed_ids[i]] < SG_LOCK_FROZEN) {
+                removed_ids[w++] = removed_ids[i];
+            }
+        }
+        total_removed = w;
+        if (total_removed == 0) {
+            *removed_count = 0;
+            return AR_STATUS_OK;
+        }
+    }
+
+    *removed_count = total_removed;
+    return sg_route_unassign_removed_requests(ctx, sol, removed_ids, *removed_count);
+}
