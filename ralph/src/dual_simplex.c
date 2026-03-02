@@ -81,6 +81,147 @@ static void configure_dual_tableau_for_solver(SimplexSolver *solver, SimplexTabl
     }
 }
 
+/* Dual refactor quality signals (GLPK-like control intent):
+ * - basis age since last reinversion
+ * - degeneracy/stall pressure
+ * - repeated ratio/pivot pathology streaks
+ */
+typedef struct {
+    int last_refactor_iter;
+    int ratio_fail_streak;
+    int theta_nonpos_streak;
+    int pivot_fail_streak;
+    int flip_only_streak;
+} DualRefactorQualityState;
+
+static void dual_quality_init(DualRefactorQualityState *state) {
+    if (!state) return;
+    memset(state, 0, sizeof(*state));
+}
+
+static void dual_quality_on_refactor(DualRefactorQualityState *state, int iter) {
+    if (!state) return;
+    state->last_refactor_iter = iter;
+    state->ratio_fail_streak = 0;
+    state->theta_nonpos_streak = 0;
+    state->pivot_fail_streak = 0;
+    state->flip_only_streak = 0;
+}
+
+static void dual_quality_record_ratio_failure(DualRefactorQualityState *state) {
+    if (!state) return;
+    state->ratio_fail_streak++;
+    state->theta_nonpos_streak = 0;
+    state->flip_only_streak = 0;
+}
+
+static void dual_quality_record_ratio_success(DualRefactorQualityState *state,
+                                              int entering,
+                                              double theta) {
+    if (!state) return;
+    state->ratio_fail_streak = 0;
+    if (entering == -2) {
+        state->flip_only_streak++;
+    } else {
+        state->flip_only_streak = 0;
+    }
+    if (entering >= 0 && theta <= 0.0) {
+        state->theta_nonpos_streak++;
+    } else {
+        state->theta_nonpos_streak = 0;
+    }
+    if (entering >= 0 && theta > 0.0 && state->pivot_fail_streak > 0) {
+        state->pivot_fail_streak--;
+    }
+}
+
+static void dual_quality_record_pivot_failure(DualRefactorQualityState *state) {
+    if (!state) return;
+    state->pivot_fail_streak++;
+}
+
+static int dual_quality_periodic_refactor_signal(
+    const SimplexTableau *tab,
+    const DualRefactorQualityState *state,
+    int iter,
+    int base_interval,
+    int degenerate_count,
+    int stall_count,
+    int perturb_attempts) {
+    int interval = base_interval;
+    int age;
+    int m = tab ? tab->m : 0;
+
+    if (!state) return 0;
+
+    /* Large systems pay more per refactor; prefer longer nominal cadence. */
+    if (m >= 2000 && interval > 36) interval = 36;
+    else if (m >= 1200 && interval > 40) interval = 40;
+    else if (m >= 600 && interval > 45) interval = 45;
+
+    /* Tighten cadence when quality pressure rises. */
+    if (degenerate_count >= 40 && interval > 20) interval /= 2;
+    else if (degenerate_count >= 20 && interval > 30) interval = (2 * interval) / 3;
+    if (stall_count >= 20 && interval > 16) interval = 16;
+    if (perturb_attempts >= 2 && interval > 20) interval = 20;
+    if (interval < 8) interval = 8;
+
+    /* Pathology streaks override nominal cadence. */
+    if (state->ratio_fail_streak >= 2 ||
+        state->pivot_fail_streak >= 2 ||
+        state->theta_nonpos_streak >= 3 ||
+        state->flip_only_streak >= 8) {
+        return 1;
+    }
+
+    age = iter - state->last_refactor_iter;
+    return age >= interval;
+}
+
+static int dual_governor_refactor_decision(
+    SimplexSolver *solver,
+    SimplexTableau *tab,
+    const DualRefactorQualityState *quality,
+    int iter,
+    int base_interval,
+    int degenerate_count,
+    int stall_count,
+    int perturb_attempts) {
+    int lu_refactor_needed;
+    int quality_refactor;
+    int need_refactor;
+    int shadow_refactor;
+    int governed_refactor;
+
+    if (!solver || !tab || !tab->lu || !quality) return 0;
+
+    lu_refactor_needed = lu_needs_refactorization(tab->lu);
+    quality_refactor = dual_quality_periodic_refactor_signal(tab,
+                                                             quality,
+                                                             iter,
+                                                             base_interval,
+                                                             degenerate_count,
+                                                             stall_count,
+                                                             perturb_attempts);
+    need_refactor = (lu_refactor_needed || quality_refactor) ? 1 : 0;
+
+    shadow_refactor = lp_basis_governor_shadow_decide(LP_BASIS_GOV_PHASE_DUAL,
+                                                      lu_refactor_needed,
+                                                      quality_refactor);
+    governed_refactor = lp_basis_governor_decide_refactor(&solver->policy.basis_governor,
+                                                           LP_BASIS_GOV_PHASE_DUAL,
+                                                           lu_refactor_needed,
+                                                           quality_refactor,
+                                                           need_refactor);
+    if (solver->telemetry_enabled) {
+        lp_basis_governor_observe_refactor(&solver->policy.basis_governor,
+                                           LP_BASIS_GOV_PHASE_DUAL,
+                                           shadow_refactor,
+                                           governed_refactor);
+    }
+    return governed_refactor;
+}
+
 /*
  * Extract Farkas ray (certificate of infeasibility) for dual simplex.
  *
@@ -1094,6 +1235,8 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
 
     const int MAX_REFACTOR_FAILURES = RALPH_PHASE1_RESCUE_MAX_REFACTOR_FAILURES;
     int refactor_failures = 0;
+    DualRefactorQualityState quality;
+    dual_quality_init(&quality);
 
     for (int iter = 0; iter < max_iters; iter++) {
         if (dual_time_limit_exceeded(solver, iter)) {
@@ -1108,6 +1251,7 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
             }
             if (tableau_refactorize(tab) == 0) {
                 refactor_failures = 0;
+                dual_quality_on_refactor(&quality, iter);
                 tableau_compute_solution(tab);
                 tableau_compute_reduced_costs(tab);
                 continue;
@@ -1190,6 +1334,7 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
         }
 
         if (flip_only_step) {
+            dual_quality_record_ratio_success(&quality, -2, 0.0);
             continue;
         }
 
@@ -1202,7 +1347,10 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
             return 1;
         }
 
+        dual_quality_record_ratio_success(&quality, entering, theta);
+
         if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
+            dual_quality_record_pivot_failure(&quality);
             if (tableau_refactorize(tab) != 0) {
                 refactor_failures++;
                 if (solver->verbose >= 2) {
@@ -1215,6 +1363,7 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
                 }
             } else {
                 refactor_failures = 0;
+                dual_quality_on_refactor(&quality, iter);
             }
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
@@ -1222,29 +1371,14 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
         }
 
         /* Keep numerics under control during rescue. */
-        int lu_refactor_needed = lu_needs_refactorization(tab->lu);
-        int periodic_refactor = (iter > 0 && iter % 25 == 0);
-        int need_refactor = lu_refactor_needed || periodic_refactor;
-        {
-            int shadow_refactor = lp_basis_governor_shadow_decide(
-                LP_BASIS_GOV_PHASE_DUAL,
-                lu_refactor_needed,
-                periodic_refactor);
-            int governed_refactor = lp_basis_governor_decide_refactor(
-                &solver->policy.basis_governor,
-                LP_BASIS_GOV_PHASE_DUAL,
-                lu_refactor_needed,
-                periodic_refactor,
-                need_refactor);
-            if (solver->telemetry_enabled) {
-                lp_basis_governor_observe_refactor(
-                    &solver->policy.basis_governor,
-                    LP_BASIS_GOV_PHASE_DUAL,
-                    shadow_refactor,
-                    governed_refactor);
-            }
-            need_refactor = governed_refactor;
-        }
+        int need_refactor = dual_governor_refactor_decision(solver,
+                                                            tab,
+                                                            &quality,
+                                                            iter,
+                                                            25,
+                                                            0,
+                                                            0,
+                                                            0);
         if (need_refactor) {
             if (tableau_refactorize(tab) != 0) {
                 refactor_failures++;
@@ -1258,6 +1392,7 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
                 }
             } else {
                 refactor_failures = 0;
+                dual_quality_on_refactor(&quality, iter);
             }
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
@@ -1468,6 +1603,8 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
     const int MAX_PERTURB_ATTEMPTS = 20;
     int dual_recovery_used = 0;
     int lu_hard_start = solver->telemetry.perf_dual_lu_hard_trigger;
+    DualRefactorQualityState quality;
+    dual_quality_init(&quality);
 
     /* Compute primal solution once before entering the main loop.
      * After this, dual_simplex_pivot() maintains x incrementally via
@@ -1556,8 +1693,11 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                  * to appear feasible when it isn't. */
                 {
                     double t_refactor_ms = lp_telemetry_timer_start();
-                    tableau_refactorize(tab);
+                    int rc_ref = tableau_refactorize(tab);
                     lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+                    if (rc_ref == 0) {
+                        dual_quality_on_refactor(&quality, iter);
+                    }
                 }
                 tab->dse_initialized = 0;
                 if (use_dse) dse_init_approx(tab);
@@ -1633,24 +1773,29 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                         }
                         lp_telemetry_record_ratio_timed(solver, 0, t_ratio_ms);
                         if (rc_ratio != 0) {
+                            dual_quality_record_ratio_failure(&quality);
                             /* Infeasible after unshift — should not happen, bail */
                             break;
                         }
                     }
                     if (cl_entering == -2) {
+                        dual_quality_record_ratio_success(&quality, -2, 0.0);
                         cleanup_iters++;
                         solver->iterations++;
                         continue;
                     }
+                    dual_quality_record_ratio_success(&quality, cl_entering, cl_theta);
                     {
                         double t_pivot_ms = lp_telemetry_timer_start();
                         int rc_pivot = dual_simplex_pivot(tab, cl_entering, cl_leaving, cl_theta);
                         lp_telemetry_record_pivot_timed(solver, 0, t_pivot_ms);
                         if (rc_pivot != 0) {
+                            dual_quality_record_pivot_failure(&quality);
                             double t_refactor_ms = lp_telemetry_timer_start();
                             int rc_ref = tableau_refactorize(tab);
                             lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
                             if (rc_ref != 0) break;
+                            dual_quality_on_refactor(&quality, iter + cleanup_iters);
                             tab->dse_initialized = 0;
                             if (use_dse) dse_init_approx(tab);
                             tableau_compute_solution(tab);
@@ -1660,11 +1805,22 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                     cleanup_iters++;
                     solver->iterations++;
 
-                    /* Periodic refactorization during cleanup */
-                    if (cleanup_iters % 50 == 0) {
+                    /* Governed refactorization during unshift cleanup. */
+                    int need_cleanup_refactor = dual_governor_refactor_decision(
+                        solver,
+                        tab,
+                        &quality,
+                        iter + cleanup_iters,
+                        50,
+                        0,
+                        0,
+                        0);
+                    if (need_cleanup_refactor) {
                         double t_refactor_ms = lp_telemetry_timer_start();
-                        tableau_refactorize(tab);
+                        int rc_ref = tableau_refactorize(tab);
                         lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+                        if (rc_ref != 0) break;
+                        dual_quality_on_refactor(&quality, iter + cleanup_iters);
                         tab->dse_initialized = 0;
                         if (use_dse) dse_init_approx(tab);
                         tableau_compute_solution(tab);
@@ -1732,6 +1888,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
             }
             lp_telemetry_record_ratio_timed(solver, 0, t_ratio_ms);
             if (rc_ratio != 0) {
+                dual_quality_record_ratio_failure(&quality);
                 if (dual_try_one_shot_recovery(solver,
                                                tab,
                                                use_dse,
@@ -1751,8 +1908,10 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
         }
 
         if (entering == -2) {
+            dual_quality_record_ratio_success(&quality, -2, 0.0);
             continue;
         }
+        dual_quality_record_ratio_success(&quality, entering, theta);
 
         /* Perform dual pivot */
         {
@@ -1760,6 +1919,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
             int rc_pivot = dual_simplex_pivot(tab, entering, leaving, theta);
             lp_telemetry_record_pivot_timed(solver, 0, t_pivot_ms);
             if (rc_pivot != 0) {
+                dual_quality_record_pivot_failure(&quality);
                 double t_refactor_ms = lp_telemetry_timer_start();
                 int rc_ref = tableau_refactorize(tab);
                 lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
@@ -1768,6 +1928,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                     solver->status = RALPH_STATUS_ERROR;
                     return -1;  /* FAILED */
                 }
+                dual_quality_on_refactor(&quality, iter);
                 tab->dse_initialized = 0;
                 if (use_dse) dse_init_approx(tab);
                 tableau_compute_solution(tab);
@@ -1819,30 +1980,14 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
             last_obj = tab->obj_value;
         }
 
-        /* Periodic refactorization */
-        int lu_refactor_needed = lu_needs_refactorization(tab->lu);
-        int periodic_refactor = (iter > 0 && iter % 50 == 0);
-        int need_refactor = lu_refactor_needed || periodic_refactor;
-        {
-            int shadow_refactor = lp_basis_governor_shadow_decide(
-                LP_BASIS_GOV_PHASE_DUAL,
-                lu_refactor_needed,
-                periodic_refactor);
-            int governed_refactor = lp_basis_governor_decide_refactor(
-                &solver->policy.basis_governor,
-                LP_BASIS_GOV_PHASE_DUAL,
-                lu_refactor_needed,
-                periodic_refactor,
-                need_refactor);
-            if (solver->telemetry_enabled) {
-                lp_basis_governor_observe_refactor(
-                    &solver->policy.basis_governor,
-                    LP_BASIS_GOV_PHASE_DUAL,
-                    shadow_refactor,
-                    governed_refactor);
-            }
-            need_refactor = governed_refactor;
-        }
+        int need_refactor = dual_governor_refactor_decision(solver,
+                                                            tab,
+                                                            &quality,
+                                                            iter,
+                                                            50,
+                                                            degenerate_count,
+                                                            stall_count,
+                                                            perturb_attempts);
         if (need_refactor) {
             double t_refactor_ms = lp_telemetry_timer_start();
             int rc_ref = tableau_refactorize(tab);
@@ -1852,6 +1997,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                 solver->status = RALPH_STATUS_ERROR;
                 return -1;
             }
+            dual_quality_on_refactor(&quality, iter);
             tab->dse_initialized = 0;
             if (use_dse) dse_init_approx(tab);
             tableau_compute_solution(tab);
@@ -1983,6 +2129,8 @@ int dual_phase1(SimplexSolver *solver) {
 
     int max_phase1_iters = 200 * tab->m;
     int succeeded = 0;
+    DualRefactorQualityState quality;
+    dual_quality_init(&quality);
 
     for (int iter = 0; iter < max_phase1_iters; iter++) {
         if (dual_time_limit_exceeded(solver, iter)) {
@@ -2032,15 +2180,20 @@ int dual_phase1(SimplexSolver *solver) {
         double theta;
         if (dual_ratio_test(tab, leaving, &entering, &theta) != 0) {
             if (phase1_rescue_ratio_test(tab, leaving, &entering, &theta) != 0) {
+                dual_quality_record_ratio_failure(&quality);
                 break;  /* Infeasible for auxiliary — can't continue */
             }
         }
         if (entering == -2) {
+            dual_quality_record_ratio_success(&quality, -2, 0.0);
             continue;
         }
+        dual_quality_record_ratio_success(&quality, entering, theta);
 
         if (dual_simplex_pivot(tab, entering, leaving, theta) != 0) {
+            dual_quality_record_pivot_failure(&quality);
             if (tableau_refactorize(tab) != 0) break;
+            dual_quality_on_refactor(&quality, iter);
             tab->dse_initialized = 0;
             if (use_dse) dse_init_approx(tab);
             tableau_compute_solution(tab);
@@ -2048,9 +2201,17 @@ int dual_phase1(SimplexSolver *solver) {
             continue;
         }
 
-        /* Periodic refactorization */
-        if (lu_needs_refactorization(tab->lu) || (iter > 0 && iter % 50 == 0)) {
+        /* Governed periodic refactorization. */
+        if (dual_governor_refactor_decision(solver,
+                                            tab,
+                                            &quality,
+                                            iter,
+                                            50,
+                                            0,
+                                            0,
+                                            0)) {
             if (tableau_refactorize(tab) != 0) break;
+            dual_quality_on_refactor(&quality, iter);
             tab->dse_initialized = 0;
             if (use_dse) dse_init_approx(tab);
             tableau_compute_solution(tab);
