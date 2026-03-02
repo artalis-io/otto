@@ -666,8 +666,8 @@ static uint32_t sg_route_select_request_regret(SGContext *ctx, const SGRouteSolu
     return best_request;
 }
 
-ARStatus sg_route_repair_fill_greedy(SGContext *ctx, SGRouteSolution *sol,
-                                     double noise_scale) {
+static ARStatus sg_repair_fill_greedy_linear(SGContext *ctx, SGRouteSolution *sol,
+                                              double noise_scale) {
     while (sol->base.num_unassigned > 0) {
         uint32_t vehicle_id = UINT32_MAX;
         uint32_t pos = UINT32_MAX;
@@ -710,8 +710,8 @@ ARStatus sg_route_repair_fill_greedy(SGContext *ctx, SGRouteSolution *sol,
     return AR_STATUS_OK;
 }
 
-ARStatus sg_route_repair_fill_regret(SGContext *ctx, SGRouteSolution *sol,
-                                     int regret_k, double noise_scale) {
+static ARStatus sg_repair_fill_regret_linear(SGContext *ctx, SGRouteSolution *sol,
+                                              int regret_k, double noise_scale) {
     while (sol->base.num_unassigned > 0) {
         uint32_t vehicle_id = UINT32_MAX;
         uint32_t pos = UINT32_MAX;
@@ -752,6 +752,190 @@ ARStatus sg_route_repair_fill_regret(SGContext *ctx, SGRouteSolution *sol,
         }
     }
     return AR_STATUS_OK;
+}
+
+/* Apply insertion from a cached regret entry (strips SG_NEW_TRIP_BIT, marks new trip). */
+static ARStatus sg_repair_apply_cached(SGContext *ctx, SGRouteSolution *sol,
+                                        uint32_t req, const SGRegretEntry *entry) {
+    int is_new_trip = 0;
+    if (entry->pickup_pos != UINT32_MAX && entry->delivery_pos != UINT32_MAX) {
+        uint32_t pp = entry->pickup_pos;
+        uint32_t dp = entry->delivery_pos;
+        if (pp & SG_NEW_TRIP_BIT) {
+            is_new_trip = 1;
+            pp &= ~SG_NEW_TRIP_BIT;
+            dp &= ~SG_NEW_TRIP_BIT;
+        }
+        if (sg_route_apply_pd_insertion(ctx, sol, req, entry->vehicle_id,
+                                         pp, dp,
+                                         entry->route_distance) != AR_STATUS_OK) {
+            return AR_STATUS_ERROR;
+        }
+    } else {
+        uint32_t p = entry->pos;
+        if (p & SG_NEW_TRIP_BIT) {
+            is_new_trip = 1;
+            p &= ~SG_NEW_TRIP_BIT;
+        }
+        if (sg_route_apply_insertion(ctx, sol, req, entry->vehicle_id, p,
+                                      entry->route_distance) != AR_STATUS_OK) {
+            return AR_STATUS_ERROR;
+        }
+    }
+    if (is_new_trip) {
+        sg_route_mark_new_trip(ctx, sol, req, entry->vehicle_id);
+    }
+    return AR_STATUS_OK;
+}
+
+/* O(N log N) lazy heap repair.
+   Phase 1: evaluate all N unassigned requests, push to max-heap.
+   Phase 2: pop-validate-insert loop — only revalidates the top candidate each iteration.
+   Reduces total evaluations from O(N² × V × L) to ~O(2N × V × L). */
+static ARStatus sg_repair_fill_heap(SGContext *ctx, SGRouteSolution *sol,
+                                     int regret_k, double noise_scale) {
+    SHHeap *heap = ctx->scratch.repair_heap;
+    SGRegretEntry *cache = ctx->scratch.regret_cache;
+    uint32_t i;
+    int is_greedy = (regret_k <= 1);
+
+    /* Fallback to linear if scratch not initialized */
+    if (!heap || !cache) {
+        if (is_greedy)
+            return sg_repair_fill_greedy_linear(ctx, sol, noise_scale);
+        else
+            return sg_repair_fill_regret_linear(ctx, sol, regret_k, noise_scale);
+    }
+
+    sh_heap_clear(heap);
+
+    /* Phase 1: evaluate all unassigned requests, push to heap */
+    for (i = 0; i < sol->base.num_unassigned; i++) {
+        uint32_t req = sol->base.unassigned_ids[i];
+        double first_score = 0.0, kth_score = 0.0;
+        uint32_t vehicle_id = UINT32_MAX, pos = UINT32_MAX;
+        uint32_t pickup_pos = UINT32_MAX, delivery_pos = UINT32_MAX;
+        double route_distance = 0.0;
+        double regret, priority;
+
+        if (!sg_route_rank_insertions_for_request(ctx, sol, req, regret_k, noise_scale,
+                                                   &first_score, &kth_score,
+                                                   &vehicle_id, &pos,
+                                                   &pickup_pos, &delivery_pos,
+                                                   &route_distance)) {
+            continue;  /* No feasible insertion */
+        }
+
+        regret = kth_score - first_score;
+        cache[req].regret = regret;
+        cache[req].first_score = first_score;
+        cache[req].vehicle_id = vehicle_id;
+        cache[req].pos = pos;
+        cache[req].pickup_pos = pickup_pos;
+        cache[req].delivery_pos = delivery_pos;
+        cache[req].route_distance = route_distance;
+
+        priority = is_greedy ? first_score : -regret;
+        sh_heap_push(heap, req, priority);
+    }
+
+    /* Phase 2: pop-validate-insert loop.
+       bounce_count tracks consecutive pops without insertion. After we've bounced
+       more than the current heap size, every entry has been revalidated against
+       the same solution state — just insert the next one. This guarantees
+       O(N * bounce_limit) total pops. */
+    {
+    uint32_t bounce_count = 0;
+    while (!sh_heap_empty(heap)) {
+        SHHeapEntry top;
+        uint32_t req;
+        double first_score, kth_score;
+        uint32_t vehicle_id, pos, pickup_pos, delivery_pos;
+        double route_distance, regret, new_priority;
+        int force_insert;
+
+        sh_heap_pop(heap, &top);
+        req = top.node;
+
+        /* Recompute this request's insertion costs against the current solution */
+        if (!sg_route_rank_insertions_for_request(ctx, sol, req, regret_k, noise_scale,
+                                                   &first_score, &kth_score,
+                                                   &vehicle_id, &pos,
+                                                   &pickup_pos, &delivery_pos,
+                                                   &route_distance)) {
+            continue;  /* Became infeasible */
+        }
+
+        regret = kth_score - first_score;
+        cache[req].regret = regret;
+        cache[req].first_score = first_score;
+        cache[req].vehicle_id = vehicle_id;
+        cache[req].pos = pos;
+        cache[req].pickup_pos = pickup_pos;
+        cache[req].delivery_pos = delivery_pos;
+        cache[req].route_distance = route_distance;
+
+        new_priority = is_greedy ? first_score : -regret;
+
+        /* After bouncing more than heap size times, all entries have been
+           revalidated against the same solution — force insert to avoid
+           infinite bouncing from floating-point ties or noise. */
+        force_insert = (bounce_count > sh_heap_size(heap));
+
+        /* Check if still the best: compare revalidated priority with peek */
+        if (!force_insert && !sh_heap_empty(heap)) {
+            SHHeapEntry peek;
+            sh_heap_peek(heap, &peek);
+
+            if (new_priority > peek.priority + 1e-9) {
+                /* Revalidated is worse — push back and try next */
+                sh_heap_push(heap, req, new_priority);
+                bounce_count++;
+                continue;
+            }
+            /* Tiebreak on equal priority */
+            if (fabs(new_priority - peek.priority) <= 1e-9) {
+                uint32_t peek_req = peek.node;
+                if (is_greedy) {
+                    /* Greedy tiebreak: lower request_id wins */
+                    if (req > peek_req) {
+                        sh_heap_push(heap, req, new_priority);
+                        bounce_count++;
+                        continue;
+                    }
+                } else {
+                    /* Regret tiebreak: lower first_score wins, then lower request_id */
+                    double peek_first = cache[peek_req].first_score;
+                    if (first_score > peek_first + 1e-9 ||
+                        (fabs(first_score - peek_first) <= 1e-9 && req > peek_req)) {
+                        sh_heap_push(heap, req, new_priority);
+                        bounce_count++;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        /* This request is the best (or forced) — insert it */
+        {
+            ARStatus s = sg_repair_apply_cached(ctx, sol, req, &cache[req]);
+            if (s != AR_STATUS_OK) return s;
+        }
+        bounce_count = 0;  /* Reset after successful insertion */
+    }
+
+    }
+    return AR_STATUS_OK;
+}
+
+ARStatus sg_route_repair_fill_greedy(SGContext *ctx, SGRouteSolution *sol,
+                                     double noise_scale) {
+    return sg_repair_fill_heap(ctx, sol, 1, noise_scale);
+}
+
+ARStatus sg_route_repair_fill_regret(SGContext *ctx, SGRouteSolution *sol,
+                                     int regret_k, double noise_scale) {
+    return sg_repair_fill_heap(ctx, sol, regret_k, noise_scale);
 }
 
 /* Ejection fallback: try to place remaining unassigned requests using ejection chains.

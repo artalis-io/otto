@@ -13,6 +13,7 @@
 #include "arbor.h"
 #include "sh_arena.h"
 #include "sh_dist.h"
+#include "sh_heap.h"
 #include "sh_stepfunc.h"
 #include "../src/sg_time_budget.h"
 #include "../src/sg_neighbor.h"
@@ -124,6 +125,17 @@ typedef struct {
     uint8_t *assigned_flags;
 } SGBootstrapSolution;
 
+/* Cached insertion evaluation for a single request (used by heap repair) */
+typedef struct {
+    double regret;
+    double first_score;
+    uint32_t vehicle_id;
+    uint32_t pos;
+    uint32_t pickup_pos;
+    uint32_t delivery_pos;
+    double route_distance;
+} SGRegretEntry;
+
 typedef struct {
     uint32_t request_id;
     uint32_t task_id;
@@ -166,6 +178,8 @@ typedef struct {
     double *compartment_min_prefix; /* [SG_MAX_COMPARTMENTS_PER_VEHICLE * dim_count] */
     double *compartment_max_prefix; /* [SG_MAX_COMPARTMENTS_PER_VEHICLE * dim_count] */
     double *cost_scale_buf;     /* [num_vehicles] for sg_compute_cost_scale */
+    SHHeap *repair_heap;        /* 4-ary min-heap for lazy heap repair */
+    SGRegretEntry *regret_cache; /* [num_requests] indexed by request_id */
     uint32_t stop_capacity;     /* = num_requests * 2 */
     SHArena *arena;
 } SGScratchBuffers;

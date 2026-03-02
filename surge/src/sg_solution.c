@@ -1751,6 +1751,8 @@ void sg_scratch_init(SGContext *ctx) {
     }
     /* cost_scale_buf: num_vehicles doubles for sg_compute_cost_scale */
     total += ALIGN8((size_t)num_veh * sizeof(double));
+    /* regret_cache: num_requests SGRegretEntry for heap repair */
+    total += ALIGN8((size_t)num_req * sizeof(SGRegretEntry));
     #undef ALIGN8
 
     arena = sh_arena_create(total);
@@ -1783,10 +1785,17 @@ void sg_scratch_init(SGContext *ctx) {
         s->compartment_max_prefix = (double *)sh_arena_alloc(arena, comp_dim * sizeof(double));
     }
     s->cost_scale_buf = (double *)sh_arena_alloc(arena, (size_t)num_veh * sizeof(double));
+    s->regret_cache = (SGRegretEntry *)sh_arena_alloc(arena, (size_t)num_req * sizeof(SGRegretEntry));
+
+    /* Heap is separately allocated (not from arena) — reusable via clear() */
+    s->repair_heap = sh_heap_create((size_t)num_req);
 }
 
 void sg_scratch_free(SGContext *ctx) {
     if (!ctx) return;
+    if (ctx->scratch.repair_heap) {
+        sh_heap_free(ctx->scratch.repair_heap);
+    }
     if (ctx->scratch.arena) {
         sh_arena_free(ctx->scratch.arena);
     }
