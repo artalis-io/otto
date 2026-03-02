@@ -177,6 +177,21 @@ typedef enum {
 #define PHASE1_DIR_ESCAPE_TELEM_SUPPRESS_LU_HEALTH 2
 #define PHASE1_DIR_ESCAPE_TELEM_HARD_BYPASS 3
 #define PHASE1_DIR_ESCAPE_TELEM_SUPPRESS_FORCE_PIVOT_MODE 4
+#define PHASE1_DIR_REFACTOR_TELEM_NO_PIVOT_FORCE 1
+#define PHASE1_DIR_REFACTOR_TELEM_FORCE_EXTREME_DIR 2
+#define PHASE1_DIR_REFACTOR_TELEM_FORCE_LU_HEALTH 3
+#define PHASE1_DIR_REFACTOR_TELEM_FORCE_PIVOT_MODE 4
+#define PHASE1_DIR_REFACTOR_TELEM_LADDER_FORCE 5
+#define PHASE1_FORCE_PIVOT_RELAX_MIN_M 700
+#define PHASE1_FORCE_PIVOT_RELAX_DEGEN_TRIGGER 80
+#define PHASE1_FORCE_PIVOT_RELAX_MAX_NO_PROGRESS 10
+#define PHASE1_FORCE_PIVOT_RELAX_RESCUE_MIN_ATTEMPTS 8
+#define PHASE1_FORCE_PIVOT_RELAX_RESCUE_SUCCESS_NUM 4
+#define PHASE1_FORCE_PIVOT_RELAX_RESCUE_SUCCESS_DEN 5
+#define PHASE1_FORCE_EXTREME_RELAX_MIN_M 700
+#define PHASE1_FORCE_EXTREME_RELAX_DEGEN_TRIGGER 80
+#define PHASE1_FORCE_EXTREME_RELAX_MAX_NO_PROGRESS 10
+#define PHASE1_FORCE_EXTREME_RELAX_MAX_RATIO 300.0
 #define PHASE1_SOFT_LU_POLICY_COOLDOWN_MIN_M 700
 #define PHASE1_SOFT_LU_POLICY_COOLDOWN_DEGEN_TRIGGER 20
 #define PHASE1_SOFT_LU_POLICY_COOLDOWN_MIN_UPDATES 12
@@ -1347,6 +1362,56 @@ static int phase1_dir_stabilize_escape_gate_plan(int m,
     return suppress;
 }
 
+static int phase1_force_pivot_refactor_relax_plan(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    int force_pivot_mode_active,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int dual_rescue_attempts,
+    int dual_rescue_successes,
+    int dual_rescue_fail_streak) {
+    if (!force_pivot_mode_active) return 0;
+    if (force_extreme_dir || force_lu_health || lu_hard_trigger) return 0;
+    if (m < PHASE1_FORCE_PIVOT_RELAX_MIN_M) return 0;
+    if (degenerate_count < PHASE1_FORCE_PIVOT_RELAX_DEGEN_TRIGGER) return 0;
+    if (no_progress_streak > PHASE1_FORCE_PIVOT_RELAX_MAX_NO_PROGRESS) return 0;
+    if (dual_rescue_fail_streak > 0) return 0;
+    if (dual_rescue_attempts < PHASE1_FORCE_PIVOT_RELAX_RESCUE_MIN_ATTEMPTS) return 0;
+    if (dual_rescue_successes < 0) return 0;
+    if (dual_rescue_successes > dual_rescue_attempts) return 0;
+    return (dual_rescue_successes * PHASE1_FORCE_PIVOT_RELAX_RESCUE_SUCCESS_DEN) >=
+           (dual_rescue_attempts * PHASE1_FORCE_PIVOT_RELAX_RESCUE_SUCCESS_NUM);
+}
+
+static int phase1_force_extreme_refactor_relax_plan(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int dual_rescue_attempts,
+    int dual_rescue_successes,
+    int dual_rescue_fail_streak) {
+    if (!force_extreme_dir) return 0;
+    if (force_lu_health || lu_hard_trigger) return 0;
+    if (!(dir_inf_ratio > 0.0)) return 0;
+    if (dir_inf_ratio > PHASE1_FORCE_EXTREME_RELAX_MAX_RATIO) return 0;
+    if (m < PHASE1_FORCE_EXTREME_RELAX_MIN_M) return 0;
+    if (degenerate_count < PHASE1_FORCE_EXTREME_RELAX_DEGEN_TRIGGER) return 0;
+    if (no_progress_streak > PHASE1_FORCE_EXTREME_RELAX_MAX_NO_PROGRESS) return 0;
+    if (dual_rescue_fail_streak > 0) return 0;
+    if (dual_rescue_attempts < PHASE1_FORCE_PIVOT_RELAX_RESCUE_MIN_ATTEMPTS) return 0;
+    if (dual_rescue_successes < 0) return 0;
+    if (dual_rescue_successes > dual_rescue_attempts) return 0;
+    return (dual_rescue_successes * PHASE1_FORCE_PIVOT_RELAX_RESCUE_SUCCESS_DEN) >=
+           (dual_rescue_attempts * PHASE1_FORCE_PIVOT_RELAX_RESCUE_SUCCESS_NUM);
+}
+
 static int phase1_note_no_pivot_and_maybe_force(SimplexSolver *solver,
                                                 int m,
                                                 int degenerate_count,
@@ -1480,6 +1545,54 @@ int simplex_phase1_dir_stabilize_escape_gate_plan_for_test(
         next_escape_cooldown_out,
         triggered_out,
         hard_bypass_out);
+}
+
+int simplex_phase1_force_pivot_relax_plan_for_test(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    int force_pivot_mode_active,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int dual_rescue_attempts,
+    int dual_rescue_successes,
+    int dual_rescue_fail_streak) {
+    return phase1_force_pivot_refactor_relax_plan(
+        m,
+        degenerate_count,
+        no_progress_streak,
+        force_pivot_mode_active,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        dual_rescue_attempts,
+        dual_rescue_successes,
+        dual_rescue_fail_streak);
+}
+
+int simplex_phase1_force_extreme_relax_plan_for_test(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int dual_rescue_attempts,
+    int dual_rescue_successes,
+    int dual_rescue_fail_streak) {
+    return phase1_force_extreme_refactor_relax_plan(
+        m,
+        degenerate_count,
+        no_progress_streak,
+        dir_inf_ratio,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        dual_rescue_attempts,
+        dual_rescue_successes,
+        dual_rescue_fail_streak);
 }
 
 int simplex_phase1_soft_lu_policy_cooldown_plan_for_test(
@@ -5926,6 +6039,9 @@ static int simplex_phase1(SimplexSolver *solver) {
                         phase1_no_pivot_force_reason_string(phase1_no_pivot_force_reason));
             }
             phase1_no_pivot_force_reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
+            lp_telemetry_record_phase1_dir_stabilize_refactor_trigger(
+                solver,
+                PHASE1_DIR_REFACTOR_TELEM_NO_PIVOT_FORCE);
             if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_DIRECTION_STABILIZE) == 0) {
                 use_bland = 1;
                 ratio_breakdown_count = 0;
@@ -6320,6 +6436,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 (phase1_force_pivot_attempt_budget > 0);
             int force_dir_refactor_guard_trigger =
                 (force_dir_refactor_lu_health || force_pivot_mode_active);
+            int dir_refactor_ladder_forced = 0;
             int lu_hard_trigger =
                 phase1_dir_stabilize_lu_health_hard(tab->lu);
             int escape_triggered = 0;
@@ -6366,6 +6483,47 @@ static int simplex_phase1(SimplexSolver *solver) {
                             phase1_dir_skip_event_streak,
                             phase1_no_pivot_no_progress_streak,
                             phase1_dir_escape_cooldown);
+                }
+            }
+            if (phase1_force_pivot_refactor_relax_plan(
+                    tab->m,
+                    degenerate_count,
+                    phase1_no_pivot_no_progress_streak,
+                    force_pivot_mode_active,
+                    force_dir_refactor_extreme,
+                    force_dir_refactor_lu_health,
+                    lu_hard_trigger,
+                    solver->telemetry.perf_phase1_no_pivot_ladder_dual_rescue_attempts,
+                    solver->telemetry.perf_phase1_no_pivot_ladder_dual_rescue_successes,
+                    phase1_no_pivot_ladder_rescue_fail_streak)) {
+                force_pivot_mode_active = 0;
+                lp_telemetry_record_phase1_force_pivot_relax(solver);
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Relaxed force-pivot refactor under stable LU + high dual-rescue success (iter=%d entering=%d no_progress=%d)\n",
+                            iter,
+                            entering,
+                            phase1_no_pivot_no_progress_streak);
+                }
+            }
+            if (phase1_force_extreme_refactor_relax_plan(
+                    tab->m,
+                    degenerate_count,
+                    phase1_no_pivot_no_progress_streak,
+                    dir_inf_ratio,
+                    force_dir_refactor_extreme,
+                    force_dir_refactor_lu_health,
+                    lu_hard_trigger,
+                    solver->telemetry.perf_phase1_no_pivot_ladder_dual_rescue_attempts,
+                    solver->telemetry.perf_phase1_no_pivot_ladder_dual_rescue_successes,
+                    phase1_no_pivot_ladder_rescue_fail_streak)) {
+                force_dir_refactor_extreme = 0;
+                lp_telemetry_record_phase1_force_extreme_relax(solver);
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Relaxed extreme-direction refactor under stable LU + high dual-rescue success (iter=%d entering=%d ratio=%.2f no_progress=%d)\n",
+                            iter,
+                            entering,
+                            dir_inf_ratio,
+                            phase1_no_pivot_no_progress_streak);
                 }
             }
             int force_dir_refactor = force_dir_refactor_extreme ||
@@ -6665,6 +6823,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
                     solver,
                     LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
+                dir_refactor_ladder_forced = 1;
             }
             phase1_dir_skip_event_streak = 0;
             phase1_dir_escape_cooldown = 0;
@@ -6677,6 +6836,19 @@ static int simplex_phase1(SimplexSolver *solver) {
             int stabilized = 0;
             int original_entering = entering;
             for (int stab_try = 0; stab_try < 1; stab_try++) {
+                int dir_refactor_trigger = 0;
+                if (force_dir_refactor_extreme) {
+                    dir_refactor_trigger = PHASE1_DIR_REFACTOR_TELEM_FORCE_EXTREME_DIR;
+                } else if (force_dir_refactor_lu_health) {
+                    dir_refactor_trigger = PHASE1_DIR_REFACTOR_TELEM_FORCE_LU_HEALTH;
+                } else if (force_pivot_mode_active) {
+                    dir_refactor_trigger = PHASE1_DIR_REFACTOR_TELEM_FORCE_PIVOT_MODE;
+                } else if (dir_refactor_ladder_forced) {
+                    dir_refactor_trigger = PHASE1_DIR_REFACTOR_TELEM_LADDER_FORCE;
+                }
+                lp_telemetry_record_phase1_dir_stabilize_refactor_trigger(
+                    solver,
+                    dir_refactor_trigger);
                 if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_DIRECTION_STABILIZE) != 0) {
                     break;
                 }
