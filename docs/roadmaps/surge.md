@@ -3394,3 +3394,102 @@ ls -la benchmarks/results/matrix/*.jsonl
 | Run tuning campaign | Pending |
 | Update matrix with tuned values | Pending |
 | Full-instance validation | Pending |
+
+### Phase S19: Lazy Heap Regret Repair
+
+**Priority: High. Biggest remaining lever for iterations/second.**
+
+The repair fill functions (`sg_route_repair_fill_regret` and `sg_route_repair_fill_greedy`)
+had O(N² × V × L) complexity: each of N insertions re-evaluated all N unassigned requests
+across V vehicles. For GH-400 (N~400 construction, N~60 ALNS repair), most of the time
+budget was spent on redundant position evaluations.
+
+**Algorithm: Lazy max-heap with validate-on-pop**
+
+```
+Phase 1: evaluate all N requests, push to max-heap     ← O(N × V × L)
+Phase 2: while heap not empty:
+    pop highest-regret request                          ← O(log N)
+    recompute this request's regret                     ← O(V × L)
+    if still best (>= heap peek): insert it
+    else: push back with updated priority, continue
+```
+
+Inserting request R into vehicle V only affects requests whose top-K insertions included V.
+For V=40 vehicles, ~N/V ≈ 1-2 requests share the same best vehicle. So most pops validate
+on the first try (expected c ≈ 1-2 pops per insertion). Total: O((1+c) × N × V × L) ≈
+O(2N × V × L).
+
+**Expected speedup:** N/2c ≈ 30x for ALNS repair (N=60), 200x for construction (N=400).
+Even with constant factors, 5-20x real speedup means significantly more ALNS iterations
+per second.
+
+**Data structures:**
+
+- `SGRegretEntry` — cached regret, first_score, vehicle_id, positions, route_distance
+- `SHHeap *repair_heap` — 4-ary min-heap from `sh_heap.h` with negated priorities
+- `SGRegretEntry *regret_cache` — indexed by request_id, arena-allocated in scratch
+
+**Tiebreaking:** Regret: (1) highest regret, (2) lowest first_score, (3) lowest request_id.
+Greedy (regret_k=1): (1) lowest first_score, (2) lowest request_id.
+
+**Files modified:**
+
+| File | Changes |
+|------|---------|
+| `include/sg_internal.h` | `SGRegretEntry` typedef, 2 fields in `SGScratchBuffers` |
+| `src/sg_solution.c` | Arena size + alloc for `regret_cache`, `sh_heap_create`/`free` |
+| `src/sg_repair.c` | `sg_repair_fill_heap` (~100 lines), rename existing to `_linear`, wrappers |
+| `tests/test_surge.c` | 8 tests for heap repair correctness |
+
+**Implementation status:** ✅ Done (Mar 2026)
+
+### Phase S20: Profile-Based Tuning Campaign (Future)
+
+**Priority: Medium. Single biggest lever for closing the GH-400 gap.**
+
+The BEST/NEAR_OPTIMAL/FAST/REALTIME × TINY/SMALL/MEDIUM/LARGE/XLARGE/MASSIVE profile
+matrix has per-cell parameter overrides, but cells beyond SMALL are not tuned. Key
+parameters: SA temperature schedule, removal fraction, penalty weights, phase budget
+splits, operator initial weights.
+
+**Approach:** Logarithmic grid search using `bench_tune` (existing infrastructure),
+evaluating on GH-200/400 instances.
+
+**Expected improvement:** 5-15% distance gap reduction at 400+ scale from parameter
+optimization alone. This is the single biggest lever for closing the GH-400 gap —
+the 300s c1_4_1 result (+3.0% dist at near-BKS vehicles) proves the algorithm is
+sound, it just needs properly tuned parameters at each scale point.
+
+### Phase S21: Parallel Move Evaluation (Future)
+
+**Priority: Low. Stacks with S19 heap repair speedup.**
+
+Within each ALNS iteration, the destroy-repair cycle is single-threaded. Population
+mode runs independent ALNS threads, but each thread's repair evaluates positions
+sequentially. Two approaches:
+
+1. **Speculative parallelism:** Evaluate multiple destroy-repair pairs concurrently
+   within a single thread, keeping the best outcome.
+2. **Split repair evaluation:** Partition unassigned requests across OpenMP threads
+   for parallel insertion cost evaluation during Phase 1 of the heap repair.
+
+**Expected improvement:** 2-4x effective iterations/sec on multi-core, stacking with
+the heap repair speedup from S19. Net effect: 10-80x more ALNS iterations in the
+same time budget compared to pre-S19 baseline.
+
+### Phase S22: Instance-Adaptive Construction (Future)
+
+**Priority: Low. Incremental improvement over CFRS.**
+
+CFRS (Phase S16) improved construction significantly, but all instances use the same
+multi-strategy tournament (regret-3, TW-sorted, I1, sweep, k-means). Instance features
+(spatial distribution, TW tightness, capacity utilization) could drive strategy selection.
+
+**Approach:** Feature extraction → strategy scores from benchmark data → per-instance
+best strategy. Also: seeded insertion order based on geographic clustering (hard-to-place
+requests first).
+
+**Expected improvement:** 1-3 fewer vehicles in initial solution for clustered instances,
+giving ALNS a head start. Most impactful for C-type instances (clustered) where the
+insertion order has outsized effect on vehicle count.

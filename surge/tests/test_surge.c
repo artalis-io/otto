@@ -15696,6 +15696,276 @@ static void test_concat_intensify_no_regression(void) {
     sg_free(ctx);
 }
 
+/* ===== S19: Heap Repair Tests ===== */
+
+/* Helper: set up a problem, init solution+scratch, ready for fill */
+static void heap_repair_setup(SGContext **ctx_out, SGRouteSolution *sol,
+                               int num_deliveries, int num_vehicles,
+                               double capacity) {
+    SGContext *ctx = make_config(1, 42);
+    uint32_t depot;
+    int i;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    for (i = 0; i < num_vehicles; i++) {
+        add_vehicle_with_depot(ctx, depot, 0, 86400, capacity);
+    }
+    for (i = 0; i < num_deliveries; i++) {
+        double x = 5.0 + (double)i * 3.0;
+        double y = (double)(i % 3) * 4.0;
+        add_delivery_request(ctx, x, y, 0, 86400, 60, -5.0);
+    }
+
+    assert(sg_route_solution_init(ctx, sol) == AR_STATUS_OK);
+    sg_scratch_init(ctx);
+    *ctx_out = ctx;
+}
+
+static void heap_repair_teardown(SGContext *ctx, SGRouteSolution *sol) {
+    sg_scratch_free(ctx);
+    sg_route_solution_reset(sol);
+    sg_free(ctx);
+}
+
+static void test_heap_repair_regret_basic(void) {
+    /* 10 delivery-only requests, 2 vehicles, regret-3, no noise — all assigned */
+    SGContext *ctx;
+    SGRouteSolution sol;
+    heap_repair_setup(&ctx, &sol, 10, 2, 100.0);
+
+    assert(sg_route_repair_fill_regret(ctx, &sol, 3, 0.0) == AR_STATUS_OK);
+    assert(sol.base.num_unassigned == 0);
+    assert(sg_route_solution_validate(&sol, ctx));
+
+    heap_repair_teardown(ctx, &sol);
+}
+
+static void test_heap_repair_pd_requests(void) {
+    /* Mix of PD + delivery-only requests — all assigned, valid routes */
+    SGContext *ctx = make_config(1, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    /* 3 PD requests */
+    add_pd_request(ctx, 5.0, 0.0, 0, 86400, 60,
+                        10.0, 0.0, 0, 86400, 60, 10.0);
+    add_pd_request(ctx, 15.0, 5.0, 0, 86400, 60,
+                        20.0, 5.0, 0, 86400, 60, 10.0);
+    add_pd_request(ctx, 25.0, 0.0, 0, 86400, 60,
+                        30.0, 0.0, 0, 86400, 60, 10.0);
+    /* 2 delivery-only */
+    add_delivery_request(ctx, 8.0, 3.0, 0, 86400, 60, -5.0);
+    add_delivery_request(ctx, 18.0, 3.0, 0, 86400, 60, -5.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    sg_scratch_init(ctx);
+
+    assert(sg_route_repair_fill_regret(ctx, &sol, 3, 0.0) == AR_STATUS_OK);
+    assert(sol.base.num_unassigned == 0);
+    assert(sg_route_solution_validate(&sol, ctx));
+
+    sg_scratch_free(ctx);
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_heap_repair_noise_regret(void) {
+    /* noise_scale=0.1, deterministic with fixed seed */
+    SGContext *ctx;
+    SGRouteSolution sol;
+    heap_repair_setup(&ctx, &sol, 8, 2, 100.0);
+
+    assert(sg_route_repair_fill_regret(ctx, &sol, 3, 0.1) == AR_STATUS_OK);
+    assert(sol.base.num_unassigned == 0);
+    assert(sg_route_solution_validate(&sol, ctx));
+
+    heap_repair_teardown(ctx, &sol);
+}
+
+static void test_heap_repair_frozen(void) {
+    /* Frozen request must stay on designated vehicle through sg_solve
+       (which builds the frozen_vehicle_map needed by heap repair). */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot, v0, v1;
+    uint32_t req0, req1, req2;
+    uint32_t t0, t1, t2;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    v0 = sg_add_vehicle(ctx);
+    assert(v0 != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v0, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v0, 0, 86400) == SG_STATUS_OK);
+    {
+        double cap = 100.0;
+        assert(sg_vehicle_set_capacity(ctx, v0, &cap, 1) == SG_STATUS_OK);
+    }
+    v1 = sg_add_vehicle(ctx);
+    assert(v1 != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v1, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v1, 0, 86400) == SG_STATUS_OK);
+    {
+        double cap = 100.0;
+        assert(sg_vehicle_set_capacity(ctx, v1, &cap, 1) == SG_STATUS_OK);
+    }
+
+    /* 3 delivery requests */
+    req0 = sg_add_request(ctx);
+    t0 = sg_add_task(ctx, SG_TASK_DELIVERY);
+    assert(sg_task_set_location(ctx, t0, 5.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_set_time_window(ctx, t0, 0, 86400) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, t0, 60) == SG_STATUS_OK);
+    { double d = -5.0; assert(sg_task_set_demand(ctx, t0, &d, 1) == SG_STATUS_OK); }
+    assert(sg_request_bind_delivery_task(ctx, req0, t0) == SG_STATUS_OK);
+
+    req1 = sg_add_request(ctx);
+    t1 = sg_add_task(ctx, SG_TASK_DELIVERY);
+    assert(sg_task_set_location(ctx, t1, 10.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_set_time_window(ctx, t1, 0, 86400) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, t1, 60) == SG_STATUS_OK);
+    { double d = -5.0; assert(sg_task_set_demand(ctx, t1, &d, 1) == SG_STATUS_OK); }
+    assert(sg_request_bind_delivery_task(ctx, req1, t1) == SG_STATUS_OK);
+
+    req2 = sg_add_request(ctx);
+    t2 = sg_add_task(ctx, SG_TASK_DELIVERY);
+    assert(sg_task_set_location(ctx, t2, 15.0, 0.0) == SG_STATUS_OK);
+    assert(sg_task_set_time_window(ctx, t2, 0, 86400) == SG_STATUS_OK);
+    assert(sg_task_set_service_seconds(ctx, t2, 60) == SG_STATUS_OK);
+    { double d = -5.0; assert(sg_task_set_demand(ctx, t2, &d, 1) == SG_STATUS_OK); }
+    assert(sg_request_bind_delivery_task(ctx, req2, t2) == SG_STATUS_OK);
+
+    /* Freeze req1 to vehicle v1 via warm start */
+    {
+        uint32_t route_vids[] = { v1 };
+        uint32_t route_rids[] = { req1 };
+        uint32_t route_lens[] = { 1 };
+        assert(sg_set_initial_routes(ctx, 1, route_vids, route_rids, route_lens) == SG_STATUS_OK);
+    }
+    assert(sg_request_set_lock(ctx, req1, SG_LOCK_FROZEN) == SG_STATUS_OK);
+
+    assert(sg_validate_model(ctx) == SG_STATUS_OK);
+    {
+        SGStatus s = sg_solve(ctx);
+        assert(s == SG_STATUS_OK || s == SG_STATUS_LIMIT);
+    }
+    assert(sg_get_unassigned(ctx) == 0);
+    /* Frozen request must be on designated vehicle */
+    {
+        uint32_t rc = sg_solution_get_route_count(ctx);
+        uint32_t ri;
+        int found = 0;
+        for (ri = 0; ri < rc; ri++) {
+            uint32_t vid = sg_solution_get_route_vehicle_id(ctx, ri);
+            uint32_t sc = sg_solution_get_route_stop_count(ctx, ri);
+            uint32_t si;
+            for (si = 0; si < sc; si++) {
+                SGSolutionStop stop;
+                assert(sg_solution_get_route_stop(ctx, ri, si, &stop) == SG_STATUS_OK);
+                if (stop.request_id == req1) {
+                    assert(vid == v1);
+                    found = 1;
+                }
+            }
+        }
+        assert(found);
+    }
+
+    sg_free(ctx);
+}
+
+static void test_heap_repair_infeasible(void) {
+    /* Some requests can't be inserted (tight TW) → remain unassigned */
+    SGContext *ctx = make_config(1, 42);
+    SGRouteSolution sol;
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 20.0);
+
+    /* 3 requests that fit */
+    add_delivery_request(ctx, 5.0, 0.0, 0, 86400, 60, -5.0);
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -5.0);
+    add_delivery_request(ctx, 15.0, 0.0, 0, 86400, 60, -5.0);
+    /* 1 request that exceeds capacity */
+    add_delivery_request(ctx, 20.0, 0.0, 0, 86400, 60, -25.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    sg_scratch_init(ctx);
+
+    assert(sg_route_repair_fill_regret(ctx, &sol, 3, 0.0) == AR_STATUS_OK);
+    /* The over-capacity request (25.0 > 20.0) stays unassigned */
+    assert(sol.base.num_unassigned == 1);
+    assert(!sol.base.assigned_flags[3]);
+
+    sg_scratch_free(ctx);
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_heap_repair_single(void) {
+    /* 1 unassigned request — correct insertion */
+    SGContext *ctx;
+    SGRouteSolution sol;
+    heap_repair_setup(&ctx, &sol, 1, 1, 100.0);
+
+    assert(sg_route_repair_fill_regret(ctx, &sol, 3, 0.0) == AR_STATUS_OK);
+    assert(sol.base.num_unassigned == 0);
+    assert(sg_route_solution_validate(&sol, ctx));
+
+    heap_repair_teardown(ctx, &sol);
+}
+
+static void test_heap_repair_greedy(void) {
+    /* Greedy fill also uses heap path — all assigned */
+    SGContext *ctx;
+    SGRouteSolution sol;
+    heap_repair_setup(&ctx, &sol, 10, 2, 100.0);
+
+    assert(sg_route_repair_fill_greedy(ctx, &sol, 0.0) == AR_STATUS_OK);
+    assert(sol.base.num_unassigned == 0);
+    assert(sg_route_solution_validate(&sol, ctx));
+
+    heap_repair_teardown(ctx, &sol);
+}
+
+static void test_heap_repair_new_trip(void) {
+    /* Multi-trip vehicle, new-trip insertion handled through heap */
+    SGContext *ctx = make_config(1, 42);
+    SGRouteSolution sol;
+    uint32_t depot, v;
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    v = sg_add_vehicle(ctx);
+    assert(v != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, v, depot, depot) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, v, 0, 86400) == SG_STATUS_OK);
+    {
+        double cap = 10.0;
+        assert(sg_vehicle_set_capacity(ctx, v, &cap, 1) == SG_STATUS_OK);
+    }
+    assert(sg_vehicle_set_max_trips(ctx, v, 0) == SG_STATUS_OK);
+    assert(sg_vehicle_set_trip_reload_seconds(ctx, v, 60) == SG_STATUS_OK);
+
+    /* 3 requests each using most of the capacity → forces multi-trip */
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -8.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 86400, 60, -8.0);
+    add_delivery_request(ctx, 30.0, 0.0, 0, 86400, 60, -8.0);
+
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    sg_scratch_init(ctx);
+
+    assert(sg_route_repair_fill_regret(ctx, &sol, 3, 0.0) == AR_STATUS_OK);
+    /* All should be assigned (multi-trip allows it) */
+    assert(sol.base.num_unassigned == 0);
+
+    sg_scratch_free(ctx);
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -16207,12 +16477,22 @@ int main(void) {
     RUN_TEST(test_concat_eval_pd_fallback);
     RUN_TEST(test_concat_intensify_no_regression);
 
+    /* Phase S19: Lazy Heap Repair */
+    RUN_TEST(test_heap_repair_regret_basic);
+    RUN_TEST(test_heap_repair_pd_requests);
+    RUN_TEST(test_heap_repair_noise_regret);
+    RUN_TEST(test_heap_repair_frozen);
+    RUN_TEST(test_heap_repair_infeasible);
+    RUN_TEST(test_heap_repair_single);
+    RUN_TEST(test_heap_repair_greedy);
+    RUN_TEST(test_heap_repair_new_trip);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 413);
+    assert(tests_run == 421);
 #else
-    assert(tests_run == 394);
+    assert(tests_run == 402);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }
