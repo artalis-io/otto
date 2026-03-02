@@ -78,7 +78,8 @@ static void sg_route_recompute_compat_tracking(const SGContext *ctx,
 
 static ARStatus sg_route_try_eliminate_vehicle(const SGContext *ctx,
                                                SGRouteSolution *sol,
-                                               uint32_t vehicle_id) {
+                                               uint32_t vehicle_id,
+                                               const SGTimeBudget *tb) {
     uint32_t route_len;
     uint32_t *removed_requests = NULL;
     ARStatus status = AR_STATUS_OK;
@@ -127,31 +128,41 @@ static ARStatus sg_route_try_eliminate_vehicle(const SGContext *ctx,
         return status;
     }
 
-    for (i = 0; i < route_len; i++) {
-        uint32_t request_id = removed_requests[i];
-        uint32_t best_vehicle = UINT32_MAX;
-        uint32_t best_pos = UINT32_MAX;
-        uint32_t best_pickup_pos = UINT32_MAX;
-        uint32_t best_delivery_pos = UINT32_MAX;
-        double best_route_distance = 0.0;
-        if (!sg_route_find_best_insertion_for_request(ctx, sol, request_id, vehicle_id,
-                                                      &best_vehicle, &best_pos,
-                                                      &best_pickup_pos, &best_delivery_pos,
-                                                      &best_route_distance)) {
-            free(removed_requests);
-            return AR_STATUS_LIMIT;
-        }
-        if (best_pickup_pos != UINT32_MAX && best_delivery_pos != UINT32_MAX) {
-            status = sg_route_apply_pd_insertion(ctx, sol, request_id, best_vehicle,
-                                                  best_pickup_pos, best_delivery_pos,
+    {
+        SGBudgetProbe probe;
+        sg_budget_probe_init(&probe, tb, SG_BUDGET_PROBE_INTERVAL);
+
+        for (i = 0; i < route_len; i++) {
+            uint32_t request_id = removed_requests[i];
+            uint32_t best_vehicle = UINT32_MAX;
+            uint32_t best_pos = UINT32_MAX;
+            uint32_t best_pickup_pos = UINT32_MAX;
+            uint32_t best_delivery_pos = UINT32_MAX;
+            double best_route_distance = 0.0;
+
+            if (sg_budget_probe_expired(&probe)) {
+                free(removed_requests);
+                return AR_STATUS_LIMIT;
+            }
+            if (!sg_route_find_best_insertion_for_request(ctx, sol, request_id, vehicle_id,
+                                                          &best_vehicle, &best_pos,
+                                                          &best_pickup_pos, &best_delivery_pos,
+                                                          &best_route_distance)) {
+                free(removed_requests);
+                return AR_STATUS_LIMIT;
+            }
+            if (best_pickup_pos != UINT32_MAX && best_delivery_pos != UINT32_MAX) {
+                status = sg_route_apply_pd_insertion(ctx, sol, request_id, best_vehicle,
+                                                      best_pickup_pos, best_delivery_pos,
+                                                      best_route_distance);
+            } else {
+                status = sg_route_apply_insertion(ctx, sol, request_id, best_vehicle, best_pos,
                                                   best_route_distance);
-        } else {
-            status = sg_route_apply_insertion(ctx, sol, request_id, best_vehicle, best_pos,
-                                              best_route_distance);
-        }
-        if (status != AR_STATUS_OK) {
-            free(removed_requests);
-            return status;
+            }
+            if (status != AR_STATUS_OK) {
+                free(removed_requests);
+                return status;
+            }
         }
     }
 
@@ -1168,7 +1179,8 @@ int sg_route_find_best_insertion_no_new_vehicle(const SGContext *ctx,
 static ARStatus sg_route_try_eliminate_two_vehicles(const SGContext *ctx,
                                                      SGRouteSolution *sol,
                                                      uint32_t vehicle_a,
-                                                     uint32_t vehicle_b) {
+                                                     uint32_t vehicle_b,
+                                                     const SGTimeBudget *tb) {
     uint32_t len_a, len_b, total_len;
     uint32_t *removed = NULL;
     ARStatus status = AR_STATUS_OK;
@@ -1229,31 +1241,41 @@ static ARStatus sg_route_try_eliminate_two_vehicles(const SGContext *ctx,
         return status;
     }
 
-    for (i = 0; i < total_len; i++) {
-        uint32_t request_id = removed[i];
-        uint32_t best_vehicle = UINT32_MAX;
-        uint32_t best_pos = UINT32_MAX;
-        uint32_t best_pickup_pos = UINT32_MAX;
-        uint32_t best_delivery_pos = UINT32_MAX;
-        double best_route_distance = 0.0;
-        if (!sg_route_find_best_insertion_no_new_vehicle(ctx, sol, request_id, UINT32_MAX,
-                                                          &best_vehicle, &best_pos,
-                                                          &best_pickup_pos, &best_delivery_pos,
-                                                          &best_route_distance)) {
-            free(removed);
-            return AR_STATUS_LIMIT;
-        }
-        if (best_pickup_pos != UINT32_MAX && best_delivery_pos != UINT32_MAX) {
-            status = sg_route_apply_pd_insertion(ctx, sol, request_id, best_vehicle,
-                                                  best_pickup_pos, best_delivery_pos,
+    {
+        SGBudgetProbe probe;
+        sg_budget_probe_init(&probe, tb, SG_BUDGET_PROBE_INTERVAL);
+
+        for (i = 0; i < total_len; i++) {
+            uint32_t request_id = removed[i];
+            uint32_t best_vehicle = UINT32_MAX;
+            uint32_t best_pos = UINT32_MAX;
+            uint32_t best_pickup_pos = UINT32_MAX;
+            uint32_t best_delivery_pos = UINT32_MAX;
+            double best_route_distance = 0.0;
+
+            if (sg_budget_probe_expired(&probe)) {
+                free(removed);
+                return AR_STATUS_LIMIT;
+            }
+            if (!sg_route_find_best_insertion_no_new_vehicle(ctx, sol, request_id, UINT32_MAX,
+                                                              &best_vehicle, &best_pos,
+                                                              &best_pickup_pos, &best_delivery_pos,
+                                                              &best_route_distance)) {
+                free(removed);
+                return AR_STATUS_LIMIT;
+            }
+            if (best_pickup_pos != UINT32_MAX && best_delivery_pos != UINT32_MAX) {
+                status = sg_route_apply_pd_insertion(ctx, sol, request_id, best_vehicle,
+                                                      best_pickup_pos, best_delivery_pos,
+                                                      best_route_distance);
+            } else {
+                status = sg_route_apply_insertion(ctx, sol, request_id, best_vehicle, best_pos,
                                                   best_route_distance);
-        } else {
-            status = sg_route_apply_insertion(ctx, sol, request_id, best_vehicle, best_pos,
-                                              best_route_distance);
-        }
-        if (status != AR_STATUS_OK) {
-            free(removed);
-            return status;
+            }
+            if (status != AR_STATUS_OK) {
+                free(removed);
+                return status;
+            }
         }
     }
 
@@ -1297,11 +1319,13 @@ ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx,
     /* Phase 1: pair elimination — remove two vehicles simultaneously. */
     improved = 1;
     while (improved) {
+        SGBudgetProbe pair_probe;
         improved = 0;
         if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) break;
         if (tried && sol->num_vehicles > 0) {
             memset(tried, 0, (size_t)sol->num_vehicles * sizeof(uint8_t));
         }
+        sg_budget_probe_init(&pair_probe, &ctx->time_budget, SG_BUDGET_PROBE_INTERVAL);
 
         for (;;) {
             uint32_t v1 = UINT32_MAX, v2 = UINT32_MAX;
@@ -1311,6 +1335,8 @@ ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx,
             double before_cost;
             double max_distance_after;
             ARStatus status;
+
+            if (sg_budget_probe_expired(&pair_probe)) break;
 
             /* Find two smallest non-empty, non-tried vehicles (skip frozen). */
             for (v = 0; v < sol->num_vehicles; v++) {
@@ -1348,7 +1374,8 @@ ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx,
             before_cost = sg_route_solution_cost(backup, (void *)ctx);
             max_distance_after = backup->total_distance * 1.12 + 50.0;
 
-            status = sg_route_try_eliminate_two_vehicles(ctx, sol, v1, v2);
+            status = sg_route_try_eliminate_two_vehicles(ctx, sol, v1, v2,
+                                                          &ctx->time_budget);
             if (status == AR_STATUS_OK &&
                 sol->vehicles_used + 2 == backup->vehicles_used &&
                 sol->total_distance <= max_distance_after &&
@@ -1368,12 +1395,14 @@ ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx,
     /* Phase 2: single-vehicle elimination (existing logic). */
     improved = 1;
     while (improved) {
+        SGBudgetProbe single_probe;
         uint32_t attempts = 0;
         improved = 0;
         if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) break;
         if (tried && sol->num_vehicles > 0) {
             memset(tried, 0, (size_t)sol->num_vehicles * sizeof(uint8_t));
         }
+        sg_budget_probe_init(&single_probe, &ctx->time_budget, SG_BUDGET_PROBE_INTERVAL);
 
         while (attempts < sol->num_vehicles) {
             uint32_t selected_vehicle = UINT32_MAX;
@@ -1383,6 +1412,8 @@ ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx,
             double before_cost;
             double max_distance_after;
             ARStatus status;
+
+            if (sg_budget_probe_expired(&single_probe)) break;
 
             for (v = 0; v < sol->num_vehicles; v++) {
                 uint32_t len = sol->route_lengths[v];
@@ -1422,7 +1453,8 @@ ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx,
             before_cost = sg_route_solution_cost(backup, (void *)ctx);
             max_distance_after = backup->total_distance * 1.12 + 50.0;
 
-            status = sg_route_try_eliminate_vehicle(ctx, sol, selected_vehicle);
+            status = sg_route_try_eliminate_vehicle(ctx, sol, selected_vehicle,
+                                                     &ctx->time_budget);
             if (status == AR_STATUS_OK &&
                 sol->vehicles_used + 1 == backup->vehicles_used &&
                 sol->total_distance <= max_distance_after &&
@@ -1475,11 +1507,13 @@ ARStatus sg_route_postprocess_reduce_vehicles_relaxed(const SGContext *ctx,
     /* Pair elimination with relaxed distance slack */
     improved = 1;
     while (improved) {
+        SGBudgetProbe pair_probe;
         improved = 0;
         if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) break;
         if (tried && sol->num_vehicles > 0) {
             memset(tried, 0, (size_t)sol->num_vehicles * sizeof(uint8_t));
         }
+        sg_budget_probe_init(&pair_probe, &ctx->time_budget, SG_BUDGET_PROBE_INTERVAL);
 
         for (;;) {
             uint32_t v1 = UINT32_MAX, v2 = UINT32_MAX;
@@ -1489,6 +1523,8 @@ ARStatus sg_route_postprocess_reduce_vehicles_relaxed(const SGContext *ctx,
             double before_cost;
             double max_distance_after;
             ARStatus status;
+
+            if (sg_budget_probe_expired(&pair_probe)) break;
 
             for (v = 0; v < sol->num_vehicles; v++) {
                 uint32_t len = sol->route_lengths[v];
@@ -1517,7 +1553,8 @@ ARStatus sg_route_postprocess_reduce_vehicles_relaxed(const SGContext *ctx,
             before_cost = sg_route_solution_cost(backup, (void *)ctx);
             max_distance_after = backup->total_distance * distance_factor + 50.0;
 
-            status = sg_route_try_eliminate_two_vehicles(ctx, sol, v1, v2);
+            status = sg_route_try_eliminate_two_vehicles(ctx, sol, v1, v2,
+                                                          &ctx->time_budget);
             if (status == AR_STATUS_OK &&
                 sol->vehicles_used + 2 == backup->vehicles_used &&
                 sol->total_distance <= max_distance_after &&
@@ -1535,12 +1572,14 @@ ARStatus sg_route_postprocess_reduce_vehicles_relaxed(const SGContext *ctx,
     /* Single-vehicle elimination with relaxed distance slack */
     improved = 1;
     while (improved) {
+        SGBudgetProbe single_probe;
         uint32_t attempts = 0;
         improved = 0;
         if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) break;
         if (tried && sol->num_vehicles > 0) {
             memset(tried, 0, (size_t)sol->num_vehicles * sizeof(uint8_t));
         }
+        sg_budget_probe_init(&single_probe, &ctx->time_budget, SG_BUDGET_PROBE_INTERVAL);
 
         while (attempts < sol->num_vehicles) {
             uint32_t selected_vehicle = UINT32_MAX;
@@ -1550,6 +1589,8 @@ ARStatus sg_route_postprocess_reduce_vehicles_relaxed(const SGContext *ctx,
             double before_cost;
             double max_distance_after;
             ARStatus status;
+
+            if (sg_budget_probe_expired(&single_probe)) break;
 
             for (v = 0; v < sol->num_vehicles; v++) {
                 uint32_t len = sol->route_lengths[v];
@@ -1579,7 +1620,8 @@ ARStatus sg_route_postprocess_reduce_vehicles_relaxed(const SGContext *ctx,
             before_cost = sg_route_solution_cost(backup, (void *)ctx);
             max_distance_after = backup->total_distance * distance_factor + 50.0;
 
-            status = sg_route_try_eliminate_vehicle(ctx, sol, selected_vehicle);
+            status = sg_route_try_eliminate_vehicle(ctx, sol, selected_vehicle,
+                                                     &ctx->time_budget);
             if (status == AR_STATUS_OK &&
                 sol->vehicles_used + 1 == backup->vehicles_used &&
                 sol->total_distance <= max_distance_after &&
@@ -1599,7 +1641,13 @@ ARStatus sg_route_postprocess_reduce_vehicles_relaxed(const SGContext *ctx,
 
 int sg_try_place_with_ejection(const SGContext *ctx, SGRouteSolution *sol,
                                uint32_t req, int depth, uint32_t target_v,
-                               uint8_t *chain_visited, int *budget) {
+                               uint8_t *chain_visited, int *budget,
+                               SGBudgetProbe *time_probe) {
+    /* Step 0: Check wall-clock time budget (amortized). */
+    if (time_probe && sg_budget_probe_expired(time_probe)) {
+        return 0;
+    }
+
     /* Step 1: Direct insertion (no new vehicle). */
     {
         uint32_t best_v = UINT32_MAX, best_pos = UINT32_MAX;
@@ -1742,7 +1790,8 @@ int sg_try_place_with_ejection(const SGContext *ctx, SGRouteSolution *sol,
                     /* Recursively place the ejected request. */
                     chain_visited[eject_req] = 1;
                     if (sg_try_place_with_ejection(ctx, sol, eject_req, depth - 1,
-                                                    target_v, chain_visited, budget)) {
+                                                    target_v, chain_visited, budget,
+                                                    time_probe)) {
                         chain_visited[eject_req] = 0;
                         sg_route_solution_free(chain_backup, NULL);
                         free(vp_requests_snapshot);
@@ -1906,13 +1955,20 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
             /* Try to place each request via direct insertion or ejection chain. */
             {
                 int ejection_budget = SG_EJECTION_BUDGET;
+                SGBudgetProbe eject_probe;
                 {
                     int scaled = (int)ctx->num_requests * (int)sol->vehicles_used * 100;
                     if (scaled > ejection_budget) ejection_budget = scaled;
                     if (ejection_budget > SG_EJECTION_BUDGET_CAP) ejection_budget = SG_EJECTION_BUDGET_CAP;
                 }
+                sg_budget_probe_init(&eject_probe, &ctx->time_budget, SG_BUDGET_PROBE_INTERVAL);
             for (ri = 0; ri < route_len; ri++) {
                 uint32_t req = requests[ri];
+
+                if (sg_budget_probe_expired(&eject_probe)) {
+                    all_placed = 0;
+                    break;
+                }
 
                 if (chain_visited) {
                     memset(chain_visited, 0,
@@ -1922,7 +1978,7 @@ ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolut
 
                 if (!sg_try_place_with_ejection(ctx, sol, req, SG_EJECTION_MAX_DEPTH,
                                                  target_v, chain_visited,
-                                                 &ejection_budget)) {
+                                                 &ejection_budget, &eject_probe)) {
                     all_placed = 0;
                     break;
                 }

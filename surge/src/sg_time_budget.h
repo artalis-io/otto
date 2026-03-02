@@ -2,6 +2,7 @@
 #define SURGE_SG_TIME_BUDGET_H
 
 #include <float.h>
+#include <stdint.h>
 #include "sh_time.h"
 
 /*
@@ -42,5 +43,50 @@ int sg_time_budget_remaining_int(const SGTimeBudget *tb, double now);
 
 /* Total elapsed since solve start. */
 double sg_time_budget_elapsed(const SGTimeBudget *tb, double now);
+
+/* ---------------------------------------------------------------------------
+ * SGBudgetProbe — amortized time-budget checker for hot inner loops.
+ *
+ * clock_gettime is ~100-500ns per call.  Checking every iteration of an
+ * O(R×V) inner loop adds measurable overhead.  SGBudgetProbe calls the
+ * clock only every `interval` ticks, returning a cached result otherwise.
+ * Once expired the flag is sticky — no further clock calls are made.
+ * ---------------------------------------------------------------------------*/
+
+#define SG_BUDGET_PROBE_INTERVAL 64
+
+typedef struct {
+    const SGTimeBudget *budget;
+    uint32_t interval;
+    uint32_t counter;
+    int expired;
+} SGBudgetProbe;
+
+static inline void sg_budget_probe_init(SGBudgetProbe *p,
+                                         const SGTimeBudget *tb,
+                                         uint32_t interval) {
+    p->budget   = tb;
+    p->interval = interval > 0 ? interval : 1;
+    p->counter  = 0;
+    p->expired  = 0;
+}
+
+static inline int sg_budget_probe_expired(SGBudgetProbe *p) {
+    if (p->expired) return 1;
+    if (++p->counter >= p->interval) {
+        p->counter = 0;
+        p->expired = sg_time_budget_expired(p->budget, sg_monotonic_seconds());
+    }
+    return p->expired;
+}
+
+static inline int sg_budget_probe_expired_at(SGBudgetProbe *p, double now) {
+    if (p->expired) return 1;
+    if (++p->counter >= p->interval) {
+        p->counter = 0;
+        p->expired = sg_time_budget_expired(p->budget, now);
+    }
+    return p->expired;
+}
 
 #endif /* SURGE_SG_TIME_BUDGET_H */

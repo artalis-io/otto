@@ -1141,7 +1141,8 @@ int sg_route_find_best_insertion_no_new_vehicle(const SGContext *ctx, const SGRo
 void sg_route_restore_from_backup(SGRouteSolution *sol, SGRouteSolution *backup);
 int sg_try_place_with_ejection(const SGContext *ctx, SGRouteSolution *sol,
                                uint32_t req, int depth, uint32_t target_v,
-                               uint8_t *chain_visited, int *budget);
+                               uint8_t *chain_visited, int *budget,
+                               SGBudgetProbe *time_probe);
 
 /* sg_validate.c */
 SGStatus sg_validate_plan_impl(SGContext *ctx, uint32_t num_routes, const SGPlanRoute *routes);

@@ -794,7 +794,8 @@ static void sg_repair_ejection_fallback(SGContext *ctx, SGRouteSolution *sol) {
         }
 
         if (sg_try_place_with_ejection(ctx, sol, req, SG_EJECTION_MAX_DEPTH,
-                                        UINT32_MAX, chain_visited, &budget)) {
+                                        UINT32_MAX, chain_visited, &budget,
+                                        NULL)) {
             double cost_after = sg_route_solution_cost(sol, (void *)ctx);
             if (cost_after >= cost_before) {
                 /* Ejection made cost worse — undo */
