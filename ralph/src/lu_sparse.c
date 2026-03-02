@@ -2630,6 +2630,25 @@ typedef enum {
     LU_NUMERIC_BACKEND_DENSE_GE = 3
 } LUNumericBackend;
 
+#define IDSEP_RETRY_SUPERNODE_STREAK_TRIGGER 2
+
+static int lu_identity_sep_retry_lane_plan(int idsep_retry_streak,
+                                           int sn_enabled,
+                                           int k) {
+    if (sn_enabled &&
+        k >= SN_MIN_K &&
+        idsep_retry_streak >= IDSEP_RETRY_SUPERNODE_STREAK_TRIGGER) {
+        return LU_IDSEP_RETRY_LANE_SUPERNODE;
+    }
+    return LU_IDSEP_RETRY_LANE_DENSE;
+}
+
+int lu_identity_sep_retry_lane_plan_for_test(int idsep_retry_streak,
+                                             int sn_enabled,
+                                             int k) {
+    return lu_identity_sep_retry_lane_plan(idsep_retry_streak, sn_enabled, k);
+}
+
 static int lu_numeric_backend_to_basis_governor_backend(int backend) {
     if (backend == LU_NUMERIC_BACKEND_MARKOWITZ) {
         return LP_BASIS_GOV_BACKEND_MARKOWITZ;
@@ -2737,6 +2756,8 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
                                 int *terminal_failure_reason_out) {
     int m = lu->m;
     int dense_ge_retry_done = 0;
+    int supernode_retry_done = 0;
+    int force_supernode_attempt = 0;
     int skip_sparse_numeric = 0;
     int full_retry_mode = (mode == LU_NUMERIC_MODE_SYMBOLIC_FULL_RETRY);
     double t_a_struct_build_ms = 0.0;
@@ -2757,6 +2778,8 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     int saw_dense_ge_singular_failure = 0;
     int mkz_profile_retry_used_this_call = 0;
     int sn_skip_by_cost_gate = 0;
+    int identity_sep_failure_this_call = 0;
+    int identity_sep_retry_lane = LU_IDSEP_RETRY_LANE_NONE;
 #define NUMERIC_COMMIT() do { \
     lp_telemetry_lu_record_numeric_stages(lu, \
         k, \
@@ -3139,11 +3162,14 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     }
 
     /* T2.1: Try supernodal factorization if enabled and k is large enough */
+supernode_factorization:
     if (!skip_sparse_numeric && lu->sn_enabled && k >= SN_MIN_K &&
         (!full_retry_mode || mkz_attempted_in_full_retry)) {
-        if (lu_supernode_cost_gate_should_skip(lu, k, full_retry_mode)) {
+        if (!force_supernode_attempt &&
+            lu_supernode_cost_gate_should_skip(lu, k, full_retry_mode)) {
             sn_skip_by_cost_gate = 1;
         } else {
+            force_supernode_attempt = 0;
             lu->sn_calls++;
             /* Build or reuse symbolic analysis */
             SNSymbolic *sn_sym = lu->sn_symbolic;
@@ -3351,15 +3377,76 @@ identity_placement:
         int perm_pos = row_pos[orig_row];
 
         if (perm_pos < step) {
-            /* Row already used. Retry once with dense GE only (skip sparse numeric)
-             * to preserve sparse-efficient path without top-level dense fallback. */
+            /* Row already used at identity placement.
+             * Select retry lane adaptively:
+             * - dense-GE lane by default
+             * - supernode lane after repeated same-signature identity-separation
+             * Keep retry in sparse-efficient path (no top-level dense fallback). */
+            int retry_lane = LU_IDSEP_RETRY_LANE_DENSE;
+            identity_sep_failure_this_call = 1;
             lp_telemetry_lu_mark_identity_sep_failure(lu);
             if (mkz_used_this_call) {
                 mkz_bad_outcome_this_call = 1;
                 mkz_circuit_note_bad_outcome(lu, mkz_fingerprint);
             }
+            if (lu->idsep_retry_fingerprint == mkz_fingerprint) {
+                if (lu->idsep_retry_streak < INT_MAX) {
+                    lu->idsep_retry_streak++;
+                }
+            } else {
+                lu->idsep_retry_fingerprint = mkz_fingerprint;
+                lu->idsep_retry_streak = 1;
+            }
+            retry_lane = lu_identity_sep_retry_lane_plan(
+                lu->idsep_retry_streak,
+                lu->sn_enabled,
+                k);
+            if (retry_lane == LU_IDSEP_RETRY_LANE_SUPERNODE && supernode_retry_done) {
+                retry_lane = LU_IDSEP_RETRY_LANE_DENSE;
+            }
+
+            if (retry_lane == LU_IDSEP_RETRY_LANE_SUPERNODE) {
+                lp_telemetry_lu_mark_identity_sep_retry_lane_chosen(
+                    lu, LU_IDSEP_RETRY_LANE_SUPERNODE);
+                identity_sep_retry_lane = LU_IDSEP_RETRY_LANE_SUPERNODE;
+                supernode_retry_done = 1;
+                force_supernode_attempt = 1;
+                L_nnz = 0;
+                U_nnz = 0;
+
+                {
+                    int struct_pos = 0;
+                    int ident_pos = k;
+                    for (int i = 0; i < m; i++) {
+                        if (row_is_identity[i]) {
+                            row_perm[ident_pos++] = i;
+                        } else {
+                            row_perm[struct_pos++] = i;
+                        }
+                    }
+                    for (int i = 0; i < m; i++) {
+                        row_pos[row_perm[i]] = i;
+                    }
+                }
+
+                t_stage_start_ms = lp_telemetry_timer_start();
+                memset(A_struct, 0, (size_t)m * k * sizeof(double));
+                for (int jj = 0; jj < k; jj++) {
+                    int j = col_order[jj];
+                    for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+                        int row = B->rowidx[p];
+                        A_struct[row * k + jj] = B->values[p];
+                    }
+                }
+                t_a_struct_build_ms += lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
+                goto supernode_factorization;
+            }
+
             if (!dense_ge_retry_done) {
                 dense_ge_retry_done = 1;
+                lp_telemetry_lu_mark_identity_sep_retry_lane_chosen(
+                    lu, LU_IDSEP_RETRY_LANE_DENSE);
+                identity_sep_retry_lane = LU_IDSEP_RETRY_LANE_DENSE;
                 skip_sparse_numeric = 1;
                 L_nnz = 0;
                 U_nnz = 0;
@@ -3536,6 +3623,19 @@ identity_placement:
         lp_telemetry_lu_mark_numeric_backend_supernode(lu);
     } else if (backend_used == LU_NUMERIC_BACKEND_DENSE_GE) {
         lp_telemetry_lu_mark_numeric_backend_dense_ge(lu);
+    }
+    if (identity_sep_retry_lane == LU_IDSEP_RETRY_LANE_DENSE &&
+        backend_used == LU_NUMERIC_BACKEND_DENSE_GE) {
+        lp_telemetry_lu_mark_identity_sep_retry_lane_success(
+            lu, LU_IDSEP_RETRY_LANE_DENSE);
+    } else if (identity_sep_retry_lane == LU_IDSEP_RETRY_LANE_SUPERNODE &&
+               backend_used == LU_NUMERIC_BACKEND_SUPERNODE) {
+        lp_telemetry_lu_mark_identity_sep_retry_lane_success(
+            lu, LU_IDSEP_RETRY_LANE_SUPERNODE);
+    }
+    if (!identity_sep_failure_this_call &&
+        lu->idsep_retry_fingerprint == mkz_fingerprint) {
+        lu->idsep_retry_streak = 0;
     }
 
     NUMERIC_RETURN(0);

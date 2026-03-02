@@ -3038,6 +3038,10 @@ int ralph_core_get_last_lu_telemetry(const RalphModel *model, RalphLUTelemetry *
     RALPH_LU_TELEM_COPY(numeric_backend_markowitz);
     RALPH_LU_TELEM_COPY(numeric_backend_supernode);
     RALPH_LU_TELEM_COPY(numeric_backend_dense_ge);
+    RALPH_LU_TELEM_COPY(identity_sep_retry_lane_dense_chosen);
+    RALPH_LU_TELEM_COPY(identity_sep_retry_lane_supernode_chosen);
+    RALPH_LU_TELEM_COPY(identity_sep_retry_lane_dense_successes);
+    RALPH_LU_TELEM_COPY(identity_sep_retry_lane_supernode_successes);
 
     RALPH_LU_TELEM_COPY(sn_calls);
     RALPH_LU_TELEM_COPY(sn_successes);

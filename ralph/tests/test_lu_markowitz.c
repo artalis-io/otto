@@ -22,6 +22,9 @@ double lu_update_pivot_ratio_threshold_for_test(int num_updates,
                                                 int max_updates,
                                                 double cond_estimate,
                                                 double growth_factor);
+int lu_identity_sep_retry_lane_plan_for_test(int idsep_retry_streak,
+                                             int sn_enabled,
+                                             int k);
 
 #define ASSERT(cond, msg) do { \
     tests_run++; \
@@ -776,6 +779,34 @@ static void test_lu_update_pivot_threshold_adaptive(void) {
 }
 
 /* ============================================================================
+ * Test 12: Identity-separation retry-lane policy (dense vs supernode)
+ * ============================================================================ */
+static void test_identity_sep_retry_lane_policy(void) {
+    printf("  LU: identity-separation retry-lane policy...\n");
+
+    ASSERT_INT_EQ(
+        lu_identity_sep_retry_lane_plan_for_test(1, 1, 80),
+        LU_IDSEP_RETRY_LANE_DENSE,
+        "idsep lane policy: below streak trigger stays dense");
+    ASSERT_INT_EQ(
+        lu_identity_sep_retry_lane_plan_for_test(2, 0, 80),
+        LU_IDSEP_RETRY_LANE_DENSE,
+        "idsep lane policy: supernode disabled stays dense");
+    ASSERT_INT_EQ(
+        lu_identity_sep_retry_lane_plan_for_test(2, 1, 40),
+        LU_IDSEP_RETRY_LANE_DENSE,
+        "idsep lane policy: small-k stays dense");
+    ASSERT_INT_EQ(
+        lu_identity_sep_retry_lane_plan_for_test(2, 1, 80),
+        LU_IDSEP_RETRY_LANE_SUPERNODE,
+        "idsep lane policy: repeated streak promotes supernode");
+    ASSERT_INT_EQ(
+        lu_identity_sep_retry_lane_plan_for_test(6, 1, 80),
+        LU_IDSEP_RETRY_LANE_SUPERNODE,
+        "idsep lane policy: sustained streak keeps supernode lane");
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -792,6 +823,7 @@ int main(void) {
     test_markowitz_numeric_identity_full_retry();
     test_supernode_cost_gate_skip_regression();
     test_lu_update_pivot_threshold_adaptive();
+    test_identity_sep_retry_lane_policy();
 
     printf("\nIntegration (A/B Comparison):\n");
     test_markowitz_integration_small_lp();

@@ -388,6 +388,23 @@ static void test_sparse_numeric_failure_telemetry_helpers(void) {
     ASSERT_INT_EQ(lu->telemetry.sn_cost_gate_resets, 1,
                   "numeric helper telemetry: sn-cost gate resets");
 
+    lp_telemetry_lu_mark_identity_sep_retry_lane_chosen(
+        lu, LU_IDSEP_RETRY_LANE_DENSE);
+    lp_telemetry_lu_mark_identity_sep_retry_lane_chosen(
+        lu, LU_IDSEP_RETRY_LANE_SUPERNODE);
+    lp_telemetry_lu_mark_identity_sep_retry_lane_success(
+        lu, LU_IDSEP_RETRY_LANE_DENSE);
+    lp_telemetry_lu_mark_identity_sep_retry_lane_success(
+        lu, LU_IDSEP_RETRY_LANE_SUPERNODE);
+    ASSERT_INT_EQ(lu->telemetry.identity_sep_retry_lane_dense_chosen, 1,
+                  "numeric helper telemetry: idsep dense lane chosen");
+    ASSERT_INT_EQ(lu->telemetry.identity_sep_retry_lane_supernode_chosen, 1,
+                  "numeric helper telemetry: idsep supernode lane chosen");
+    ASSERT_INT_EQ(lu->telemetry.identity_sep_retry_lane_dense_successes, 1,
+                  "numeric helper telemetry: idsep dense lane success");
+    ASSERT_INT_EQ(lu->telemetry.identity_sep_retry_lane_supernode_successes, 1,
+                  "numeric helper telemetry: idsep supernode lane success");
+
     lu_free(lu);
 }
 

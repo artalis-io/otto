@@ -146,6 +146,13 @@ typedef enum {
     LU_SPARSE_FALLBACK_NUMERIC
 } LUSparseFallbackReason;
 
+/* Identity-separation retry-lane selection inside sparse numeric factorization. */
+typedef enum {
+    LU_IDSEP_RETRY_LANE_NONE = 0,
+    LU_IDSEP_RETRY_LANE_DENSE = 1,
+    LU_IDSEP_RETRY_LANE_SUPERNODE = 2
+} LUIdentitySepRetryLane;
+
 /* LP model internal representation */
 typedef struct {
     /* Problem dimensions */
@@ -247,6 +254,10 @@ typedef struct {
     int numeric_backend_markowitz;
     int numeric_backend_supernode;
     int numeric_backend_dense_ge;
+    int identity_sep_retry_lane_dense_chosen;
+    int identity_sep_retry_lane_supernode_chosen;
+    int identity_sep_retry_lane_dense_successes;
+    int identity_sep_retry_lane_supernode_successes;
     int sn_cost_gate_trips;
     int sn_cost_gate_skips;
     int sn_cost_gate_resets;
@@ -408,6 +419,8 @@ typedef struct {
     uint64_t mkz_circuit_fingerprint; /* Fingerprint keyed for circuit-breaker state */
     int mkz_circuit_bad_streak;       /* Consecutive bad Markowitz outcomes for fingerprint */
     int mkz_circuit_skip_budget;      /* Remaining calls to skip Markowitz for fingerprint */
+    uint64_t idsep_retry_fingerprint; /* Fingerprint keyed for identity-separation retry lane */
+    int idsep_retry_streak;           /* Consecutive identity-separation events on fingerprint */
 
     /* Supernodal LU (T2.1) */
     int sn_enabled;          /* 1 = use supernodal path when k >= SN_MIN_K */
@@ -1130,6 +1143,10 @@ typedef struct {
     int numeric_backend_markowitz;
     int numeric_backend_supernode;
     int numeric_backend_dense_ge;
+    int identity_sep_retry_lane_dense_chosen;
+    int identity_sep_retry_lane_supernode_chosen;
+    int identity_sep_retry_lane_dense_successes;
+    int identity_sep_retry_lane_supernode_successes;
     int sn_cost_gate_trips;
     int sn_cost_gate_skips;
     int sn_cost_gate_resets;
@@ -1486,6 +1503,10 @@ void lp_telemetry_lu_mark_symbolic_full_retry_mkz_failure(LUFactorization *lu);
 void lp_telemetry_lu_mark_numeric_backend_markowitz(LUFactorization *lu);
 void lp_telemetry_lu_mark_numeric_backend_supernode(LUFactorization *lu);
 void lp_telemetry_lu_mark_numeric_backend_dense_ge(LUFactorization *lu);
+void lp_telemetry_lu_mark_identity_sep_retry_lane_chosen(LUFactorization *lu,
+                                                         int lane);
+void lp_telemetry_lu_mark_identity_sep_retry_lane_success(LUFactorization *lu,
+                                                          int lane);
 void lp_telemetry_lu_mark_sn_cost_gate_trip(LUFactorization *lu);
 void lp_telemetry_lu_mark_sn_cost_gate_skip(LUFactorization *lu);
 void lp_telemetry_lu_mark_sn_cost_gate_reset(LUFactorization *lu);
