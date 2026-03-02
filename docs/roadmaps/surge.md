@@ -2925,10 +2925,81 @@ First 400-customer results. Single-thread, 10K iterations, 60s time limit, deter
 | RC2_4 (mixed, wide) | 10 | 4/10 | +0.70 | +24.6% |
 | **Overall** | **60** | **28/60 (47%)** | **+1.42** | **+51.8%** |
 
-Avg runtime: 82.4s. 60s is far too little for 400 customers — BKS papers run for
-hours. R1/R2 vehicle minimization is perfect (random layouts easier to construct
-good initial solutions for). Clustered C1 is hardest (tight TWs + large clusters
-need many more ALNS iterations to restructure routes).
+Avg runtime: 82.4s.
+
+#### Benchmark Results: Gehring-Homberger VRPTW Post-Phase-S17.3 (400 customers, 60s limit)
+
+Single-thread, 10K iterations, 60s time limit, deterministic seed 42.
+O(1) concat pre-filtering active in 2-opt*, OR-opt, cross-exchange. Pre-filter
+skip rate measured at 99.2-99.7% of trial moves on C1_4_1.
+
+| Category | Instances | BKS Veh Match | Avg Veh Gap | Avg Dist Gap |
+|----------|-----------|---------------|-------------|--------------|
+| C1_4 (clustered, tight) | 10 | 0/10 | +4.30 | +60.1% |
+| C2_4 (clustered, wide) | 10 | 0/10 | +1.00 | +33.2% |
+| R1_4 (random, tight) | 10 | 10/10 | +0.10 | +67.3% |
+| R2_4 (random, wide) | 10 | 10/10 | +0.00 | +54.4% |
+| RC1_4 (mixed, tight) | 10 | 2/10 | +1.80 | +50.6% |
+| RC2_4 (mixed, wide) | 10 | 6/10 | +0.80 | +21.6% |
+| **Overall** | **60** | **28/60 (47%)** | **+1.33** | **+47.9%** |
+
+Avg runtime: 118.7s.
+
+**Before/after comparison (Phase S17.3 vs pre-S17.3):**
+
+| Metric | Before | After | Delta |
+|--------|--------|-------|-------|
+| Avg distance | 9897.79 | 9644.43 | **-2.6%** |
+| Avg dist gap vs BKS | +51.8% | +47.9% | **-3.9pp** |
+| Equal vehicles to BKS | 28/60 (47%) | 28/60 (47%) | Same |
+| Avg vehicle gap | +1.42 | +1.33 | -0.09 |
+| RC2 vehicle match | 4/10 | 6/10 | +2 instances |
+
+O(1) pre-filtering freed intensify time — ALNS gets more iterations within the same
+budget. Distance gap improved by 3.9pp overall. RC2 (mixed, wide TW) benefits most
+from the extra ALNS iterations, gaining 2 more BKS-matching vehicle counts. Some
+instances ran well over 60s (C1_4_7: 407s, R1_4_1: 407s) due to postprocessing
+ejection chains running beyond the ALNS time limit — the concat pre-filter only
+accelerates the intensify phase, not ejection chains.
+
+#### Benchmark Results: Gehring-Homberger VRPTW Post-S17.3 Population (400 customers, 60s limit)
+
+Population mode (3 generations, all CPU cores), 10K iterations, 60s time limit,
+deterministic seed 42. O(1) concat pre-filtering + CFRS construction active.
+
+| Category | Instances | BKS Veh Match | Avg Veh Gap | Avg Dist Gap |
+|----------|-----------|---------------|-------------|--------------|
+| C1_4 (clustered, tight) | 10 | 2/10 | +4.00 | +55.2% |
+| C2_4 (clustered, wide) | 10 | 3/10 | +0.70 | +32.3% |
+| R1_4 (random, tight) | 10 | 10/10 | +0.00 | +41.2% |
+| R2_4 (random, wide) | 10 | 10/10 | +0.00 | +22.3% |
+| RC1_4 (mixed, tight) | 10 | 3/10 | +1.70 | +40.5% |
+| RC2_4 (mixed, wide) | 10 | 5/10 | +0.80 | +19.5% |
+| **Overall** | **60** | **33/60 (55%)** | **+1.13** | **+35.1%** |
+
+Avg runtime: 705.8s.
+
+**Progress across phases (GH-400):**
+
+| Metric | Pre-S17.3 (1T) | S17.3 (1T) | **S17.3 + Pop** |
+|--------|-----------------|------------|-----------------|
+| Equal Vehicles | 28/60 (47%) | 28/60 (47%) | **33/60 (55%)** |
+| Avg Veh Gap | +1.42 | +1.33 | **+1.13** |
+| Avg Dist Gap | +51.8% | +47.9% | **+35.1%** |
+| Avg Distance | 9898 | 9644 | **8803** |
+
+Population + CFRS construction improved distance by 12.8pp over single-thread S17.3.
+R2_4 improved dramatically: +54.4% → +22.3% (nearly halved). RC2_4: +21.6% → +19.5%.
+Vehicle match improved from 28 to 33 instances, with C2 gaining 3 and RC2 gaining 2
+(partially offset by C1 losing 2 from construction variance).
+
+**Runtime issue:** Several instances exceeded the 60s time limit dramatically (c2_4_8:
+4221s, c2_4_5: 3573s, c2_4_1: 3501s, r1_4_1: 2634s). Root cause: ejection chain
+budget checks are coarse-grained — they fire between vehicle elimination attempts, but
+a single attempt on wide-TW 400-customer instances can take minutes (O(R × N × V)
+insertion evaluations with no mid-operation budget check). Population mode amplifies
+this: 3 generations × N threads, each running postprocessing independently. This is
+the highest-priority bug to fix for production use at scale — see Phase 6 below.
 
 #### Competitiveness Assessment (Mar 2026)
 
@@ -2943,16 +3014,19 @@ This is competitive with published solvers on the vehicle dimension. Distance ga
 +13.1% reflects the 60s time budget — BKS papers typically allow 200-600s. More time
 budget (profile matrix NEAR_OPTIMAL gives 120s) and per-cell tuning should close this.
 
-**400 customers: Not competitive yet.** +51.8% distance gap and 47% vehicle match at
-60s. BKS values come from algorithms running for hours with specialized operators.
-CFRS construction should help here too (not yet benchmarked with population mode).
+**400 customers: Improving, not competitive yet.** +35.1% distance gap and 55% vehicle
+match with population + CFRS + O(1) concat. Down from +51.8% / 47% before S17.3.
+R2_4 (wide TW) is at +22.3%, approaching competitive. C1_4 (tight clustered) at
++55.2% is the hardest category. Runtime is a problem: population mode exceeds 60s
+significantly due to coarse-grained ejection chain budget checks (some instances >3500s).
 
 Root causes at 400+:
 
 | Issue | Impact | Mitigation |
 |-------|--------|------------|
-| Poor construction quality | Solomon I1 produces too many vehicles (51 vs BKS 40 on C1_4_1) | ✅ CFRS heuristics (Phase S16) — solved for GH-200, needs 400 benchmark |
-| Low iterations/sec | Destroy-repair cycle is O(n) per iteration; fewer iterations in budget | More aggressive neighbor pruning, incremental cost updates |
+| Poor construction quality | Solomon I1 produces too many vehicles (48 vs BKS 40 on C1_4_1) | ✅ CFRS heuristics (Phase S16) — 55% vehicle match with population at 400 |
+| Low iterations/sec | Destroy-repair cycle is O(n) per iteration; fewer iterations in budget | ✅ O(1) concat pre-filter (Phase S17.3) — 99%+ skip rate in intensify |
+| Ejection chain timeout | Coarse-grained budget check: single vehicle elimination attempt can run minutes on wide-TW 400-customer instances | **Need finer-grained budget checks inside ejection chain inner loops** |
 | Vehicles-first objective | Most of 60s spent on vehicle elimination, not distance | Needs more total budget (profile matrix BEST gives 600s for LARGE) |
 | Limited operator set | 8 destroy + greedy/regret repair | More operators: SISR, route-level destroy, LNS with backtracking |
 
@@ -2983,12 +3057,12 @@ a design limitation — it's a matter of additive improvements on top of a sound
 - **Profile matrix scales independently.** The 4×5 matrix with per-cell tuning means
   each scale point can be independently optimized. Most solvers use one-size-fits-all.
 
-The gap from +51.8% to <20% at 400 customers is now mostly about time budget and
-iteration efficiency. CFRS construction (Phase S16) solved the vehicle count bottleneck
-at 200 customers (92% BKS match). Applying population + CFRS to 400-customer instances
-should significantly improve vehicle counts there too. The remaining work is: (1) giving
-it adequate time — the BEST profile gives 600s, not 60s, and (2) improving iteration
-throughput so ALNS completes more destroy-repair cycles in the budget.
+The gap from +35.1% to <20% at 400 customers requires: (1) fixing ejection chain
+timeouts so population mode stays within budget, (2) more time budget — the BEST
+profile gives 600s, not 60s, and (3) further iteration throughput improvements.
+Population + CFRS + O(1) concat brought the gap down from +51.8% to +35.1%; the next
+big lever is fixing the ejection chain budget granularity so the solver actually
+respects its time limit at scale.
 
 **Realistic targets for next phase of work:**
 
@@ -2996,7 +3070,7 @@ throughput so ALNS completes more destroy-repair cycles in the budget.
 |-------|-------------|------------|----------|
 | 100 | -0.1% dist, 80% veh | — | Already competitive |
 | 200 | +13.1% dist, **92% veh** | <5% dist | Per-cell tuning of MEDIUM column + more time budget |
-| 400 | +51.8% dist, 47% veh | <20% dist, >70% veh | Population + CFRS (not yet benchmarked) + more ALNS time (300-600s) |
+| 400 | +35.1% dist, 55% veh (pop) | <20% dist, >70% veh | Fix ejection timeout + per-cell tuning + more ALNS time (300-600s) |
 | 800+ | Not tested | <30% dist | All of above + parallel ALNS + SISR operator |
 
 #### Phase 5: Travel Resolution Cache for TD/Callback Models
