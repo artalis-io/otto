@@ -344,6 +344,7 @@ actual_obj="$OUTDIR/actual.objective_mismatch.txt"
 actual_sol="$OUTDIR/actual.solution_invalid.txt"
 actual_dense="$OUTDIR/actual.dense_fallback.txt"
 solved_jsons="$OUTDIR/solved.jsons.txt"
+phase1_no_pivot_ladder_tsv="$OUTDIR/phase1_no_pivot_ladder.tsv"
 
 : > "$actual_timeout"
 : > "$actual_cmd_fail"
@@ -352,6 +353,7 @@ solved_jsons="$OUTDIR/solved.jsons.txt"
 : > "$actual_sol"
 : > "$actual_dense"
 : > "$solved_jsons"
+printf "problem\tno_progress_events\tretry_defers\tdual_rescue_attempts\tdual_rescue_successes\tdual_rescue_failures\tforced_refactors\n" > "$phase1_no_pivot_ladder_tsv"
 
 while IFS=$'\t' read -r name ec; do
     base="${name%.mps}"
@@ -378,18 +380,36 @@ while IFS=$'\t' read -r name ec; do
           .glpk.status,
           (if .validation.objective_match == true then "true" else "false" end),
           (if .validation.solution_valid == true then "true" else "false" end),
-          ((.lu.sparse_dense_fallbacks // 0) | tostring)
+          ((.lu.sparse_dense_fallbacks // 0) | tostring),
+          ((.refactor.phase1_no_pivot_no_progress_events // .phase_hotspots.phase1.no_pivot_no_progress_events // 0) | tostring),
+          ((.refactor.phase1_no_pivot_ladder_retry_defers // .phase_hotspots.phase1.no_pivot_ladder_retry_defers // 0) | tostring),
+          ((.refactor.phase1_no_pivot_ladder_dual_rescue_attempts // .phase_hotspots.phase1.no_pivot_ladder_dual_rescue_attempts // 0) | tostring),
+          ((.refactor.phase1_no_pivot_ladder_dual_rescue_successes // .phase_hotspots.phase1.no_pivot_ladder_dual_rescue_successes // 0) | tostring),
+          ((.refactor.phase1_no_pivot_ladder_dual_rescue_failures // .phase_hotspots.phase1.no_pivot_ladder_dual_rescue_failures // 0) | tostring),
+          ((.refactor.phase1_no_pivot_ladder_forced_refactors // .phase_hotspots.phase1.no_pivot_ladder_forced_refactors // 0) | tostring)
         ] | @tsv' "$json" 2>/dev/null || true)"
     if [[ -z "$rec" ]]; then
         echo "$name" >> "$actual_cmd_fail"
         continue
     fi
 
-    IFS=$'\t' read -r prob_name r_status g_status obj_ok sol_ok dense_fb <<< "$rec"
+    IFS=$'\t' read -r prob_name r_status g_status obj_ok sol_ok dense_fb \
+        phase1_no_pivot_no_progress_events phase1_no_pivot_ladder_retry_defers \
+        phase1_no_pivot_ladder_dual_rescue_attempts phase1_no_pivot_ladder_dual_rescue_successes \
+        phase1_no_pivot_ladder_dual_rescue_failures phase1_no_pivot_ladder_forced_refactors <<< "$rec"
     if [[ "$r_status" == "timeout" ]]; then
         echo "$prob_name" >> "$actual_timeout"
         continue
     fi
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        "$prob_name" \
+        "${phase1_no_pivot_no_progress_events:-0}" \
+        "${phase1_no_pivot_ladder_retry_defers:-0}" \
+        "${phase1_no_pivot_ladder_dual_rescue_attempts:-0}" \
+        "${phase1_no_pivot_ladder_dual_rescue_successes:-0}" \
+        "${phase1_no_pivot_ladder_dual_rescue_failures:-0}" \
+        "${phase1_no_pivot_ladder_forced_refactors:-0}" \
+        >> "$phase1_no_pivot_ladder_tsv"
     if [[ "$r_status" != "$g_status" ]]; then
         echo "$prob_name" >> "$actual_status"
     fi
@@ -477,6 +497,32 @@ required_failed_count="$(wc -l < "$required_failed" | tr -d ' ')"
 missing_allowlist_count="$(wc -l < "$missing_allowlist" | tr -d ' ')"
 missing_coverage_count="$(wc -l < "$missing_coverage" | tr -d ' ')"
 
+read -r ladder_no_progress_total ladder_retry_defers_total \
+    ladder_dual_rescue_attempts_total ladder_dual_rescue_successes_total \
+    ladder_dual_rescue_failures_total ladder_forced_refactors_total <<< "$(
+    awk -F'\t' '
+        NR > 1 {
+            no_progress += ($2 + 0);
+            retry += ($3 + 0);
+            attempts += ($4 + 0);
+            successes += ($5 + 0);
+            failures += ($6 + 0);
+            forced += ($7 + 0);
+        }
+        END {
+            printf "%d %d %d %d %d %d",
+                   no_progress, retry, attempts, successes, failures, forced;
+        }' "$phase1_no_pivot_ladder_tsv"
+)"
+
+ladder_dual_rescue_success_rate="0.0"
+if [[ "${ladder_dual_rescue_attempts_total:-0}" -gt 0 ]]; then
+    ladder_dual_rescue_success_rate="$(
+        awk -v s="$ladder_dual_rescue_successes_total" -v a="$ladder_dual_rescue_attempts_total" \
+            'BEGIN { printf "%.1f", (100.0 * s) / a }'
+    )"
+fi
+
 echo
 echo "Summary:"
 echo "  total files:            $total"
@@ -486,6 +532,16 @@ echo "  status mismatches:      $status_count"
 echo "  objective mismatches:   $obj_count"
 echo "  invalid solutions:      $sol_count"
 echo "  dense fallback files:   $dense_count"
+echo
+echo "Phase1 no-pivot ladder telemetry (aggregate on solved files):"
+echo "  no-progress events:     ${ladder_no_progress_total:-0}"
+echo "  retry defers:           ${ladder_retry_defers_total:-0}"
+echo "  dual rescue attempts:   ${ladder_dual_rescue_attempts_total:-0}"
+echo "  dual rescue successes:  ${ladder_dual_rescue_successes_total:-0}"
+echo "  dual rescue failures:   ${ladder_dual_rescue_failures_total:-0}"
+echo "  forced refactors:       ${ladder_forced_refactors_total:-0}"
+echo "  dual rescue success %:  ${ladder_dual_rescue_success_rate}%"
+echo "  per-file ladder TSV:    $phase1_no_pivot_ladder_tsv"
 
 echo
 echo "Unexpected vs baseline:"
