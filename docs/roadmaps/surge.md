@@ -3473,13 +3473,15 @@ Key observations:
 
 Literature standard: PyVRP 0.45% mean gap, HGS 0.32% mean gap at 2h on GH-1000.
 
-| Instance | Veh | BKS Veh | Dist | BKS Dist | Dist Gap | Notes |
-|----------|-----|---------|------|----------|----------|-------|
-| r1_4_1 | 40 | 40 | 11,352 | 10,372 | +9.4% | Random tight-TW, exact vehicles |
-| c1_4_1 | — | 40 | — | 7,152 | — | Pending |
+| Instance | Veh | BKS Veh | Dist | BKS Dist | Dist Gap | Runtime | Notes |
+|----------|-----|---------|------|----------|----------|---------|-------|
+| c1_4_1 | 40 | 40 | 7,152 | 7,152 | **+0.0%** | 2006s | Clustered tight-TW, BKS match |
+| r1_4_1 | 40 | 40 | 11,352 | 10,372 | +9.4% | 7240s | Random tight-TW, exact vehicles |
 
-At equivalent 2h budget, real gap to state-of-the-art is ~9%, not the 18-24% seen at 60s.
-Remaining gap is local search move quality (HGS education/crossover) and parameter tuning.
+c1_4_1 converged to BKS in 33 minutes (hit iteration limit before time limit).
+r1_4_1 used the full 2h budget. At equivalent 2h budget, gap ranges from 0% (clustered)
+to ~9% (random tight-TW). The random instances have more diverse feasible neighborhoods,
+requiring more sophisticated move operators to close the gap.
 
 **Implementation status:** ✅ Done (Mar 2026)
 
