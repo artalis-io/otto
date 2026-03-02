@@ -187,6 +187,14 @@ typedef struct {
 
 typedef struct {
     int status;          /* 0=optimal, 1=infeasible, 2=unbounded, 3=error, 4=timeout */
+    int raw_status_code; /* RalphStatus raw value */
+    char raw_status_str[32];
+    int termination_reason_code;
+    char termination_reason[64];
+    int api_error_domain;
+    int api_error_code;
+    int api_error_api_id;
+    char api_error_message[RALPH_API_ERROR_MESSAGE_MAX];
     double objective;
     double time_ms;
     int iterations;
@@ -274,6 +282,12 @@ typedef struct {
     int phase1_no_pivot_forced_ratio_breakdown;
     int phase1_no_pivot_forced_dir_skip;
     int phase1_no_pivot_forced_pivot_fail;
+    int phase1_no_pivot_no_progress_events;
+    int phase1_no_pivot_ladder_retry_defers;
+    int phase1_no_pivot_ladder_dual_rescue_attempts;
+    int phase1_no_pivot_ladder_dual_rescue_successes;
+    int phase1_no_pivot_ladder_dual_rescue_failures;
+    int phase1_no_pivot_ladder_forced_refactors;
     int phase1_soft_lu_policy_cooldown_defers;
 
     double phase2_pricing_ms;
@@ -621,6 +635,80 @@ static const char* lu_sparse_numeric_failure_reason_string(int reason) {
     }
 }
 
+typedef enum {
+    BENCH_TERM_NONE = 0,
+    BENCH_TERM_OPTIMAL = 1,
+    BENCH_TERM_INFEASIBLE = 2,
+    BENCH_TERM_UNBOUNDED = 3,
+    BENCH_TERM_TIME_LIMIT = 4,
+    BENCH_TERM_ITERATION_LIMIT = 5,
+    BENCH_TERM_OBJ_LIMIT = 6,
+    BENCH_TERM_DUAL_RATIO_NO_ENTERING = 100,
+    BENCH_TERM_DUAL_PIVOT_SMALL = 101,
+    BENCH_TERM_DUAL_LU_HARD = 102,
+    BENCH_TERM_LU_FAILURE = 103,
+    BENCH_TERM_API_ERROR = 104,
+    BENCH_TERM_NUMERICAL = 105,
+    BENCH_TERM_UNKNOWN = 199
+} BenchTerminationReason;
+
+static void bench_set_termination_reason(SolveResult *result,
+                                         BenchTerminationReason code,
+                                         const char *name) {
+    if (!result) return;
+    result->termination_reason_code = (int)code;
+    strncpy(result->termination_reason, name ? name : "unknown",
+            sizeof(result->termination_reason) - 1);
+    result->termination_reason[sizeof(result->termination_reason) - 1] = '\0';
+}
+
+static void bench_derive_termination_reason(SolveResult *result) {
+    if (!result) return;
+
+    if (result->raw_status_code == (int)RALPH_STATUS_OPTIMAL ||
+        result->raw_status_code == (int)RALPH_STATUS_IMPRECISE) {
+        bench_set_termination_reason(result, BENCH_TERM_OPTIMAL, "optimal");
+        return;
+    }
+    if (result->raw_status_code == (int)RALPH_STATUS_INFEASIBLE) {
+        bench_set_termination_reason(result, BENCH_TERM_INFEASIBLE, "infeasible");
+        return;
+    }
+    if (result->raw_status_code == (int)RALPH_STATUS_UNBOUNDED ||
+        result->raw_status_code == (int)RALPH_STATUS_INF_OR_UNBD) {
+        bench_set_termination_reason(result, BENCH_TERM_UNBOUNDED, "unbounded");
+        return;
+    }
+    if (result->raw_status_code == (int)RALPH_STATUS_TIME_LIMIT) {
+        bench_set_termination_reason(result, BENCH_TERM_TIME_LIMIT, "time_limit");
+        return;
+    }
+    if (result->raw_status_code == (int)RALPH_STATUS_ITERATION_LIMIT) {
+        bench_set_termination_reason(result, BENCH_TERM_ITERATION_LIMIT, "iteration_limit");
+        return;
+    }
+    if (result->raw_status_code == (int)RALPH_STATUS_OBJ_LIMIT) {
+        bench_set_termination_reason(result, BENCH_TERM_OBJ_LIMIT, "objective_limit");
+        return;
+    }
+
+    if (result->dual_lu_hard_trigger > 0) {
+        bench_set_termination_reason(result, BENCH_TERM_DUAL_LU_HARD, "dual_lu_hard_trigger");
+    } else if (result->dual_ratio_no_entering > 0) {
+        bench_set_termination_reason(result, BENCH_TERM_DUAL_RATIO_NO_ENTERING, "dual_ratio_no_entering");
+    } else if (result->dual_pivot_reject_small > 0) {
+        bench_set_termination_reason(result, BENCH_TERM_DUAL_PIVOT_SMALL, "dual_pivot_reject_small");
+    } else if (result->lu_last_failure_reason_code != LU_FAIL_NONE) {
+        bench_set_termination_reason(result, BENCH_TERM_LU_FAILURE, "lu_failure");
+    } else if (result->api_error_code != (int)RALPH_ERROR_CODE_NONE) {
+        bench_set_termination_reason(result, BENCH_TERM_API_ERROR, "api_error");
+    } else if (result->raw_status_code == (int)RALPH_STATUS_ERROR) {
+        bench_set_termination_reason(result, BENCH_TERM_NUMERICAL, "numerical_breakdown");
+    } else {
+        bench_set_termination_reason(result, BENCH_TERM_UNKNOWN, "unknown");
+    }
+}
+
 static const char* periodic_cost_reason_string(int reason) {
     return lp_refactor_policy_periodic_cost_dampen_reason_string(
         (LPPeriodicCostDampenReason)reason);
@@ -652,6 +740,9 @@ static SolveResult solve_with_glpk(const char *problem_path, double time_limit_s
     int num_vars;
 
     result.status = 3;  /* Error by default */
+    result.raw_status_code = (int)RALPH_STATUS_UNKNOWN;
+    strncpy(result.raw_status_str, "UNKNOWN", sizeof(result.raw_status_str) - 1);
+    bench_set_termination_reason(&result, BENCH_TERM_UNKNOWN, "unknown");
     result.solution = NULL;
     model = ralph_test_create();
     if (!model) return result;
@@ -679,6 +770,13 @@ static SolveResult solve_with_glpk(const char *problem_path, double time_limit_s
     }
     result.iterations = ralph_test_get_iterations(model);
     status = ralph_test_get_status(model);
+    result.raw_status_code = (int)status;
+    {
+        const char *status_str = ralph_test_status_string(status);
+        if (!status_str) status_str = "UNKNOWN";
+        strncpy(result.raw_status_str, status_str, sizeof(result.raw_status_str) - 1);
+        result.raw_status_str[sizeof(result.raw_status_str) - 1] = '\0';
+    }
     switch (status) {
         case RALPH_STATUS_OPTIMAL:
         case RALPH_STATUS_IMPRECISE:
@@ -714,6 +812,7 @@ static SolveResult solve_with_glpk(const char *problem_path, double time_limit_s
             result.status = 3;
             break;
     }
+    bench_derive_termination_reason(&result);
     ralph_test_free(model);
 
     return result;
@@ -731,6 +830,13 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                                      int *out_is_mip) {
     SolveResult result = {0};
     result.status = 3;  /* Error by default */
+    result.raw_status_code = (int)RALPH_STATUS_UNKNOWN;
+    strncpy(result.raw_status_str, "UNKNOWN", sizeof(result.raw_status_str) - 1);
+    bench_set_termination_reason(&result, BENCH_TERM_UNKNOWN, "unknown");
+    result.api_error_domain = (int)RALPH_ERROR_DOMAIN_NONE;
+    result.api_error_code = (int)RALPH_ERROR_CODE_NONE;
+    result.api_error_api_id = (int)RALPH_ERROR_API_NONE;
+    strncpy(result.api_error_message, "", sizeof(result.api_error_message) - 1);
     result.solution = NULL;
     strncpy(result.lu_last_failure_reason, "none",
             sizeof(result.lu_last_failure_reason) - 1);
@@ -946,6 +1052,18 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_no_pivot_forced_dir_skip;
             result.phase1_no_pivot_forced_pivot_fail =
                 solver_tel.perf_phase1_no_pivot_forced_pivot_fail;
+            result.phase1_no_pivot_no_progress_events =
+                solver_tel.perf_phase1_no_pivot_no_progress_events;
+            result.phase1_no_pivot_ladder_retry_defers =
+                solver_tel.perf_phase1_no_pivot_ladder_retry_defers;
+            result.phase1_no_pivot_ladder_dual_rescue_attempts =
+                solver_tel.perf_phase1_no_pivot_ladder_dual_rescue_attempts;
+            result.phase1_no_pivot_ladder_dual_rescue_successes =
+                solver_tel.perf_phase1_no_pivot_ladder_dual_rescue_successes;
+            result.phase1_no_pivot_ladder_dual_rescue_failures =
+                solver_tel.perf_phase1_no_pivot_ladder_dual_rescue_failures;
+            result.phase1_no_pivot_ladder_forced_refactors =
+                solver_tel.perf_phase1_no_pivot_ladder_forced_refactors;
             result.phase1_soft_lu_policy_cooldown_defers =
                 solver_tel.perf_phase1_soft_lu_policy_cooldown_defers;
 
@@ -1147,6 +1265,26 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
 
     /* Map status */
     RalphStatus status = ralph_test_get_status(model);
+    result.raw_status_code = (int)status;
+    {
+        const char *status_str = ralph_test_status_string(status);
+        if (!status_str) status_str = "UNKNOWN";
+        strncpy(result.raw_status_str, status_str, sizeof(result.raw_status_str) - 1);
+        result.raw_status_str[sizeof(result.raw_status_str) - 1] = '\0';
+    }
+    {
+        RalphAPIError api_error;
+        if (ralph_core_get_last_error(model, &api_error) == 0) {
+            result.api_error_domain = (int)api_error.domain;
+            result.api_error_code = (int)api_error.code;
+            result.api_error_api_id = (int)api_error.api_id;
+            if (api_error.message[0]) {
+                strncpy(result.api_error_message, api_error.message,
+                        sizeof(result.api_error_message) - 1);
+                result.api_error_message[sizeof(result.api_error_message) - 1] = '\0';
+            }
+        }
+    }
     switch (status) {
         case RALPH_STATUS_OPTIMAL:
         case RALPH_STATUS_IMPRECISE:
@@ -1169,6 +1307,7 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.status = 3;
             break;
     }
+    bench_derive_termination_reason(&result);
 
     /* Get solution vector if optimal */
     if (result.status == 0) {
@@ -1776,6 +1915,15 @@ static void print_json_result(const char *problem_name, const char *source,
     char escaped_refactor_reason[128];
     json_escape_string(escaped_refactor_reason, sizeof(escaped_refactor_reason),
                        ralph->refactor_last_reason_str[0] ? ralph->refactor_last_reason_str : "other");
+    char escaped_raw_status[128];
+    json_escape_string(escaped_raw_status, sizeof(escaped_raw_status),
+                       ralph->raw_status_str[0] ? ralph->raw_status_str : "UNKNOWN");
+    char escaped_termination_reason[128];
+    json_escape_string(escaped_termination_reason, sizeof(escaped_termination_reason),
+                       ralph->termination_reason[0] ? ralph->termination_reason : "unknown");
+    char escaped_api_error_message[256];
+    json_escape_string(escaped_api_error_message, sizeof(escaped_api_error_message),
+                       ralph->api_error_message[0] ? ralph->api_error_message : "");
 
     double density = (num_vars > 0 && num_cons > 0)
                      ? (double)nnz / ((double)num_vars * num_cons)
@@ -1819,6 +1967,14 @@ static void print_json_result(const char *problem_name, const char *source,
         case 4: ralph_status_str = "timeout"; break;
     }
     fprintf(out, "    \"status\": \"%s\",\n", ralph_status_str);
+    fprintf(out, "    \"raw_status_code\": %d,\n", ralph->raw_status_code);
+    fprintf(out, "    \"raw_status\": \"%s\",\n", escaped_raw_status);
+    fprintf(out, "    \"termination_reason_code\": %d,\n", ralph->termination_reason_code);
+    fprintf(out, "    \"termination_reason\": \"%s\",\n", escaped_termination_reason);
+    fprintf(out, "    \"api_error_domain\": %d,\n", ralph->api_error_domain);
+    fprintf(out, "    \"api_error_code\": %d,\n", ralph->api_error_code);
+    fprintf(out, "    \"api_error_api\": %d,\n", ralph->api_error_api_id);
+    fprintf(out, "    \"api_error_message\": \"%s\",\n", escaped_api_error_message);
     fprintf(out, "    \"objective\": %.15g,\n", ralph->objective);
     fprintf(out, "    \"time_ms\": %.3f,\n", ralph->time_ms);
     fprintf(out, "    \"iterations\": %d\n", ralph->iterations);
@@ -1962,6 +2118,18 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_no_pivot_forced_dir_skip);
     fprintf(out, "      \"no_pivot_forced_pivot_fail\": %d,\n",
             ralph->phase1_no_pivot_forced_pivot_fail);
+    fprintf(out, "      \"no_pivot_no_progress_events\": %d,\n",
+            ralph->phase1_no_pivot_no_progress_events);
+    fprintf(out, "      \"no_pivot_ladder_retry_defers\": %d,\n",
+            ralph->phase1_no_pivot_ladder_retry_defers);
+    fprintf(out, "      \"no_pivot_ladder_dual_rescue_attempts\": %d,\n",
+            ralph->phase1_no_pivot_ladder_dual_rescue_attempts);
+    fprintf(out, "      \"no_pivot_ladder_dual_rescue_successes\": %d,\n",
+            ralph->phase1_no_pivot_ladder_dual_rescue_successes);
+    fprintf(out, "      \"no_pivot_ladder_dual_rescue_failures\": %d,\n",
+            ralph->phase1_no_pivot_ladder_dual_rescue_failures);
+    fprintf(out, "      \"no_pivot_ladder_forced_refactors\": %d,\n",
+            ralph->phase1_no_pivot_ladder_forced_refactors);
     fprintf(out, "      \"soft_lu_policy_cooldown_defers\": %d,\n",
             ralph->phase1_soft_lu_policy_cooldown_defers);
     fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase1_compute_solution_calls);
@@ -1998,6 +2166,18 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->dual_bound_flip_applied);
     fprintf(out, "    \"lu_hard_trigger\": %d\n",
             ralph->dual_lu_hard_trigger);
+    fprintf(out, "  },\n");
+
+    /* Failure buckets used to classify "status=error" exits quickly. */
+    fprintf(out, "  \"failure_buckets\": {\n");
+    fprintf(out, "    \"dual_ratio_no_entering\": %d,\n", ralph->dual_ratio_no_entering);
+    fprintf(out, "    \"dual_pivot_reject_small\": %d,\n", ralph->dual_pivot_reject_small);
+    fprintf(out, "    \"dual_lu_hard_trigger\": %d,\n", ralph->dual_lu_hard_trigger);
+    fprintf(out, "    \"lu_last_failure_reason_code\": %d,\n", ralph->lu_last_failure_reason_code);
+    fprintf(out, "    \"lu_last_failure_reason\": \"%s\",\n", escaped_lu_reason);
+    fprintf(out, "    \"api_error_domain\": %d,\n", ralph->api_error_domain);
+    fprintf(out, "    \"api_error_code\": %d,\n", ralph->api_error_code);
+    fprintf(out, "    \"api_error_api\": %d\n", ralph->api_error_api_id);
     fprintf(out, "  },\n");
 
     /* Refactor-specific trigger and per-call telemetry */
@@ -2079,6 +2259,18 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_no_pivot_forced_dir_skip);
     fprintf(out, "    \"phase1_no_pivot_forced_pivot_fail\": %d,\n",
             ralph->phase1_no_pivot_forced_pivot_fail);
+    fprintf(out, "    \"phase1_no_pivot_no_progress_events\": %d,\n",
+            ralph->phase1_no_pivot_no_progress_events);
+    fprintf(out, "    \"phase1_no_pivot_ladder_retry_defers\": %d,\n",
+            ralph->phase1_no_pivot_ladder_retry_defers);
+    fprintf(out, "    \"phase1_no_pivot_ladder_dual_rescue_attempts\": %d,\n",
+            ralph->phase1_no_pivot_ladder_dual_rescue_attempts);
+    fprintf(out, "    \"phase1_no_pivot_ladder_dual_rescue_successes\": %d,\n",
+            ralph->phase1_no_pivot_ladder_dual_rescue_successes);
+    fprintf(out, "    \"phase1_no_pivot_ladder_dual_rescue_failures\": %d,\n",
+            ralph->phase1_no_pivot_ladder_dual_rescue_failures);
+    fprintf(out, "    \"phase1_no_pivot_ladder_forced_refactors\": %d,\n",
+            ralph->phase1_no_pivot_ladder_forced_refactors);
     fprintf(out, "    \"phase1_soft_lu_policy_cooldown_defers\": %d,\n",
             ralph->phase1_soft_lu_policy_cooldown_defers);
     fprintf(out, "    \"reason_infeasibility_cleanup\": %d,\n", ralph->refactor_reason_infeas_cleanup);
