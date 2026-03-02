@@ -551,12 +551,26 @@ typedef struct {
     int perf_phase1_no_pivot_forced_ratio_breakdown;
     int perf_phase1_no_pivot_forced_dir_skip;
     int perf_phase1_no_pivot_forced_pivot_fail;
+    int perf_phase1_no_pivot_events_ratio_breakdown;
+    int perf_phase1_no_pivot_events_dir_skip;
+    int perf_phase1_no_pivot_events_pivot_fail;
     int perf_phase1_no_pivot_no_progress_events;
     int perf_phase1_no_pivot_ladder_retry_defers;
+    int perf_phase1_no_pivot_ladder_retry_ratio_breakdown;
+    int perf_phase1_no_pivot_ladder_retry_dir_skip;
+    int perf_phase1_no_pivot_ladder_retry_pivot_fail;
     int perf_phase1_no_pivot_ladder_dual_rescue_attempts;
     int perf_phase1_no_pivot_ladder_dual_rescue_successes;
     int perf_phase1_no_pivot_ladder_dual_rescue_failures;
+    int perf_phase1_no_pivot_ladder_dual_rescue_attempts_ratio_breakdown;
+    int perf_phase1_no_pivot_ladder_dual_rescue_attempts_dir_skip;
+    int perf_phase1_no_pivot_ladder_dual_rescue_attempts_pivot_fail;
     int perf_phase1_no_pivot_ladder_forced_refactors;
+    int perf_phase1_no_pivot_ladder_forced_refactors_ratio_breakdown;
+    int perf_phase1_no_pivot_ladder_forced_refactors_dir_skip;
+    int perf_phase1_no_pivot_ladder_forced_refactors_pivot_fail;
+    int perf_phase1_no_pivot_ladder_rescue_guard_cooldown_blocks;
+    int perf_phase1_no_pivot_ladder_rescue_guard_fail_cap_forces;
     int perf_phase1_soft_lu_policy_cooldown_defers;
 
     double perf_phase2_pricing_ms;

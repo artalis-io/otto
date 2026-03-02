@@ -282,12 +282,26 @@ typedef struct {
     int phase1_no_pivot_forced_ratio_breakdown;
     int phase1_no_pivot_forced_dir_skip;
     int phase1_no_pivot_forced_pivot_fail;
+    int phase1_no_pivot_events_ratio_breakdown;
+    int phase1_no_pivot_events_dir_skip;
+    int phase1_no_pivot_events_pivot_fail;
     int phase1_no_pivot_no_progress_events;
     int phase1_no_pivot_ladder_retry_defers;
+    int phase1_no_pivot_ladder_retry_ratio_breakdown;
+    int phase1_no_pivot_ladder_retry_dir_skip;
+    int phase1_no_pivot_ladder_retry_pivot_fail;
     int phase1_no_pivot_ladder_dual_rescue_attempts;
     int phase1_no_pivot_ladder_dual_rescue_successes;
     int phase1_no_pivot_ladder_dual_rescue_failures;
+    int phase1_no_pivot_ladder_dual_rescue_attempts_ratio_breakdown;
+    int phase1_no_pivot_ladder_dual_rescue_attempts_dir_skip;
+    int phase1_no_pivot_ladder_dual_rescue_attempts_pivot_fail;
     int phase1_no_pivot_ladder_forced_refactors;
+    int phase1_no_pivot_ladder_forced_refactors_ratio_breakdown;
+    int phase1_no_pivot_ladder_forced_refactors_dir_skip;
+    int phase1_no_pivot_ladder_forced_refactors_pivot_fail;
+    int phase1_no_pivot_ladder_rescue_guard_cooldown_blocks;
+    int phase1_no_pivot_ladder_rescue_guard_fail_cap_forces;
     int phase1_soft_lu_policy_cooldown_defers;
 
     double phase2_pricing_ms;
@@ -1052,18 +1066,46 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_no_pivot_forced_dir_skip;
             result.phase1_no_pivot_forced_pivot_fail =
                 solver_tel.perf_phase1_no_pivot_forced_pivot_fail;
+            result.phase1_no_pivot_events_ratio_breakdown =
+                solver_tel.perf_phase1_no_pivot_events_ratio_breakdown;
+            result.phase1_no_pivot_events_dir_skip =
+                solver_tel.perf_phase1_no_pivot_events_dir_skip;
+            result.phase1_no_pivot_events_pivot_fail =
+                solver_tel.perf_phase1_no_pivot_events_pivot_fail;
             result.phase1_no_pivot_no_progress_events =
                 solver_tel.perf_phase1_no_pivot_no_progress_events;
             result.phase1_no_pivot_ladder_retry_defers =
                 solver_tel.perf_phase1_no_pivot_ladder_retry_defers;
+            result.phase1_no_pivot_ladder_retry_ratio_breakdown =
+                solver_tel.perf_phase1_no_pivot_ladder_retry_ratio_breakdown;
+            result.phase1_no_pivot_ladder_retry_dir_skip =
+                solver_tel.perf_phase1_no_pivot_ladder_retry_dir_skip;
+            result.phase1_no_pivot_ladder_retry_pivot_fail =
+                solver_tel.perf_phase1_no_pivot_ladder_retry_pivot_fail;
             result.phase1_no_pivot_ladder_dual_rescue_attempts =
                 solver_tel.perf_phase1_no_pivot_ladder_dual_rescue_attempts;
             result.phase1_no_pivot_ladder_dual_rescue_successes =
                 solver_tel.perf_phase1_no_pivot_ladder_dual_rescue_successes;
             result.phase1_no_pivot_ladder_dual_rescue_failures =
                 solver_tel.perf_phase1_no_pivot_ladder_dual_rescue_failures;
+            result.phase1_no_pivot_ladder_dual_rescue_attempts_ratio_breakdown =
+                solver_tel.perf_phase1_no_pivot_ladder_dual_rescue_attempts_ratio_breakdown;
+            result.phase1_no_pivot_ladder_dual_rescue_attempts_dir_skip =
+                solver_tel.perf_phase1_no_pivot_ladder_dual_rescue_attempts_dir_skip;
+            result.phase1_no_pivot_ladder_dual_rescue_attempts_pivot_fail =
+                solver_tel.perf_phase1_no_pivot_ladder_dual_rescue_attempts_pivot_fail;
             result.phase1_no_pivot_ladder_forced_refactors =
                 solver_tel.perf_phase1_no_pivot_ladder_forced_refactors;
+            result.phase1_no_pivot_ladder_forced_refactors_ratio_breakdown =
+                solver_tel.perf_phase1_no_pivot_ladder_forced_refactors_ratio_breakdown;
+            result.phase1_no_pivot_ladder_forced_refactors_dir_skip =
+                solver_tel.perf_phase1_no_pivot_ladder_forced_refactors_dir_skip;
+            result.phase1_no_pivot_ladder_forced_refactors_pivot_fail =
+                solver_tel.perf_phase1_no_pivot_ladder_forced_refactors_pivot_fail;
+            result.phase1_no_pivot_ladder_rescue_guard_cooldown_blocks =
+                solver_tel.perf_phase1_no_pivot_ladder_rescue_guard_cooldown_blocks;
+            result.phase1_no_pivot_ladder_rescue_guard_fail_cap_forces =
+                solver_tel.perf_phase1_no_pivot_ladder_rescue_guard_fail_cap_forces;
             result.phase1_soft_lu_policy_cooldown_defers =
                 solver_tel.perf_phase1_soft_lu_policy_cooldown_defers;
 
@@ -2118,18 +2160,46 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_no_pivot_forced_dir_skip);
     fprintf(out, "      \"no_pivot_forced_pivot_fail\": %d,\n",
             ralph->phase1_no_pivot_forced_pivot_fail);
+    fprintf(out, "      \"no_pivot_events_ratio_breakdown\": %d,\n",
+            ralph->phase1_no_pivot_events_ratio_breakdown);
+    fprintf(out, "      \"no_pivot_events_dir_skip\": %d,\n",
+            ralph->phase1_no_pivot_events_dir_skip);
+    fprintf(out, "      \"no_pivot_events_pivot_fail\": %d,\n",
+            ralph->phase1_no_pivot_events_pivot_fail);
     fprintf(out, "      \"no_pivot_no_progress_events\": %d,\n",
             ralph->phase1_no_pivot_no_progress_events);
     fprintf(out, "      \"no_pivot_ladder_retry_defers\": %d,\n",
             ralph->phase1_no_pivot_ladder_retry_defers);
+    fprintf(out, "      \"no_pivot_ladder_retry_ratio_breakdown\": %d,\n",
+            ralph->phase1_no_pivot_ladder_retry_ratio_breakdown);
+    fprintf(out, "      \"no_pivot_ladder_retry_dir_skip\": %d,\n",
+            ralph->phase1_no_pivot_ladder_retry_dir_skip);
+    fprintf(out, "      \"no_pivot_ladder_retry_pivot_fail\": %d,\n",
+            ralph->phase1_no_pivot_ladder_retry_pivot_fail);
     fprintf(out, "      \"no_pivot_ladder_dual_rescue_attempts\": %d,\n",
             ralph->phase1_no_pivot_ladder_dual_rescue_attempts);
     fprintf(out, "      \"no_pivot_ladder_dual_rescue_successes\": %d,\n",
             ralph->phase1_no_pivot_ladder_dual_rescue_successes);
     fprintf(out, "      \"no_pivot_ladder_dual_rescue_failures\": %d,\n",
             ralph->phase1_no_pivot_ladder_dual_rescue_failures);
+    fprintf(out, "      \"no_pivot_ladder_dual_rescue_attempts_ratio_breakdown\": %d,\n",
+            ralph->phase1_no_pivot_ladder_dual_rescue_attempts_ratio_breakdown);
+    fprintf(out, "      \"no_pivot_ladder_dual_rescue_attempts_dir_skip\": %d,\n",
+            ralph->phase1_no_pivot_ladder_dual_rescue_attempts_dir_skip);
+    fprintf(out, "      \"no_pivot_ladder_dual_rescue_attempts_pivot_fail\": %d,\n",
+            ralph->phase1_no_pivot_ladder_dual_rescue_attempts_pivot_fail);
     fprintf(out, "      \"no_pivot_ladder_forced_refactors\": %d,\n",
             ralph->phase1_no_pivot_ladder_forced_refactors);
+    fprintf(out, "      \"no_pivot_ladder_forced_refactors_ratio_breakdown\": %d,\n",
+            ralph->phase1_no_pivot_ladder_forced_refactors_ratio_breakdown);
+    fprintf(out, "      \"no_pivot_ladder_forced_refactors_dir_skip\": %d,\n",
+            ralph->phase1_no_pivot_ladder_forced_refactors_dir_skip);
+    fprintf(out, "      \"no_pivot_ladder_forced_refactors_pivot_fail\": %d,\n",
+            ralph->phase1_no_pivot_ladder_forced_refactors_pivot_fail);
+    fprintf(out, "      \"no_pivot_ladder_rescue_guard_cooldown_blocks\": %d,\n",
+            ralph->phase1_no_pivot_ladder_rescue_guard_cooldown_blocks);
+    fprintf(out, "      \"no_pivot_ladder_rescue_guard_fail_cap_forces\": %d,\n",
+            ralph->phase1_no_pivot_ladder_rescue_guard_fail_cap_forces);
     fprintf(out, "      \"soft_lu_policy_cooldown_defers\": %d,\n",
             ralph->phase1_soft_lu_policy_cooldown_defers);
     fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase1_compute_solution_calls);
@@ -2259,18 +2329,46 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_no_pivot_forced_dir_skip);
     fprintf(out, "    \"phase1_no_pivot_forced_pivot_fail\": %d,\n",
             ralph->phase1_no_pivot_forced_pivot_fail);
+    fprintf(out, "    \"phase1_no_pivot_events_ratio_breakdown\": %d,\n",
+            ralph->phase1_no_pivot_events_ratio_breakdown);
+    fprintf(out, "    \"phase1_no_pivot_events_dir_skip\": %d,\n",
+            ralph->phase1_no_pivot_events_dir_skip);
+    fprintf(out, "    \"phase1_no_pivot_events_pivot_fail\": %d,\n",
+            ralph->phase1_no_pivot_events_pivot_fail);
     fprintf(out, "    \"phase1_no_pivot_no_progress_events\": %d,\n",
             ralph->phase1_no_pivot_no_progress_events);
     fprintf(out, "    \"phase1_no_pivot_ladder_retry_defers\": %d,\n",
             ralph->phase1_no_pivot_ladder_retry_defers);
+    fprintf(out, "    \"phase1_no_pivot_ladder_retry_ratio_breakdown\": %d,\n",
+            ralph->phase1_no_pivot_ladder_retry_ratio_breakdown);
+    fprintf(out, "    \"phase1_no_pivot_ladder_retry_dir_skip\": %d,\n",
+            ralph->phase1_no_pivot_ladder_retry_dir_skip);
+    fprintf(out, "    \"phase1_no_pivot_ladder_retry_pivot_fail\": %d,\n",
+            ralph->phase1_no_pivot_ladder_retry_pivot_fail);
     fprintf(out, "    \"phase1_no_pivot_ladder_dual_rescue_attempts\": %d,\n",
             ralph->phase1_no_pivot_ladder_dual_rescue_attempts);
     fprintf(out, "    \"phase1_no_pivot_ladder_dual_rescue_successes\": %d,\n",
             ralph->phase1_no_pivot_ladder_dual_rescue_successes);
     fprintf(out, "    \"phase1_no_pivot_ladder_dual_rescue_failures\": %d,\n",
             ralph->phase1_no_pivot_ladder_dual_rescue_failures);
+    fprintf(out, "    \"phase1_no_pivot_ladder_dual_rescue_attempts_ratio_breakdown\": %d,\n",
+            ralph->phase1_no_pivot_ladder_dual_rescue_attempts_ratio_breakdown);
+    fprintf(out, "    \"phase1_no_pivot_ladder_dual_rescue_attempts_dir_skip\": %d,\n",
+            ralph->phase1_no_pivot_ladder_dual_rescue_attempts_dir_skip);
+    fprintf(out, "    \"phase1_no_pivot_ladder_dual_rescue_attempts_pivot_fail\": %d,\n",
+            ralph->phase1_no_pivot_ladder_dual_rescue_attempts_pivot_fail);
     fprintf(out, "    \"phase1_no_pivot_ladder_forced_refactors\": %d,\n",
             ralph->phase1_no_pivot_ladder_forced_refactors);
+    fprintf(out, "    \"phase1_no_pivot_ladder_forced_refactors_ratio_breakdown\": %d,\n",
+            ralph->phase1_no_pivot_ladder_forced_refactors_ratio_breakdown);
+    fprintf(out, "    \"phase1_no_pivot_ladder_forced_refactors_dir_skip\": %d,\n",
+            ralph->phase1_no_pivot_ladder_forced_refactors_dir_skip);
+    fprintf(out, "    \"phase1_no_pivot_ladder_forced_refactors_pivot_fail\": %d,\n",
+            ralph->phase1_no_pivot_ladder_forced_refactors_pivot_fail);
+    fprintf(out, "    \"phase1_no_pivot_ladder_rescue_guard_cooldown_blocks\": %d,\n",
+            ralph->phase1_no_pivot_ladder_rescue_guard_cooldown_blocks);
+    fprintf(out, "    \"phase1_no_pivot_ladder_rescue_guard_fail_cap_forces\": %d,\n",
+            ralph->phase1_no_pivot_ladder_rescue_guard_fail_cap_forces);
     fprintf(out, "    \"phase1_soft_lu_policy_cooldown_defers\": %d,\n",
             ralph->phase1_soft_lu_policy_cooldown_defers);
     fprintf(out, "    \"reason_infeasibility_cleanup\": %d,\n", ralph->refactor_reason_infeas_cleanup);
