@@ -2,6 +2,24 @@
 #include <math.h>
 #include "lp.h"
 
+/* Internal dual policy hooks from dual_simplex.c */
+void dual_ratio_adaptive_config_for_test(int m,
+                                         double lu_pivot_tol,
+                                         double cond_estimate,
+                                         double growth_factor,
+                                         double *strict_pivot_floor_out,
+                                         double *base_pivot_floor_out,
+                                         double *strict_theta_floor_out,
+                                         double *hard_refactor_floor_out,
+                                         int *flip_round_cap_out);
+int dual_sparse_pressure_force_refactor_for_test(int m,
+                                                 int num_updates,
+                                                 int max_updates,
+                                                 int spike_pool_used,
+                                                 int spike_pool_capacity,
+                                                 int ftran_nnz,
+                                                 int btran_nnz);
+
 static int tests_run = 0;
 static int tests_passed = 0;
 
@@ -182,11 +200,61 @@ static void test_flip_mode_respects_runtime_disable(void) {
     free_flip_fixture(solver, model);
 }
 
+static void test_adaptive_ratio_thresholds_scale_with_lu_health(void) {
+    double strict_good = 0.0, base_good = 0.0, theta_good = 0.0, hard_good = 0.0;
+    double strict_bad = 0.0, base_bad = 0.0, theta_bad = 0.0, hard_bad = 0.0;
+    int rounds_good = 0, rounds_bad = 0;
+
+    dual_ratio_adaptive_config_for_test(800,
+                                        1e-9,
+                                        1e5,
+                                        10.0,
+                                        &strict_good,
+                                        &base_good,
+                                        &theta_good,
+                                        &hard_good,
+                                        &rounds_good);
+    dual_ratio_adaptive_config_for_test(800,
+                                        1e-9,
+                                        1e9,
+                                        1e5,
+                                        &strict_bad,
+                                        &base_bad,
+                                        &theta_bad,
+                                        &hard_bad,
+                                        &rounds_bad);
+
+    ASSERT_TRUE(strict_good > 0.0 && base_good > 0.0, "adaptive thresholds produce positive healthy floors");
+    ASSERT_TRUE(strict_bad > strict_good, "adaptive thresholds tighten strict pivot floor for unhealthy LU");
+    ASSERT_TRUE(base_bad > base_good, "adaptive thresholds tighten base pivot floor for unhealthy LU");
+    ASSERT_TRUE(theta_bad > theta_good, "adaptive thresholds tighten theta floor for unhealthy LU");
+    ASSERT_TRUE(hard_bad >= hard_good, "adaptive thresholds tighten hard refactor floor for unhealthy LU");
+    ASSERT_TRUE(rounds_bad >= rounds_good, "adaptive thresholds keep or increase flip rounds under stress");
+}
+
+static void test_sparse_pressure_refactor_gate(void) {
+    int trigger_small = dual_sparse_pressure_force_refactor_for_test(
+        120, 80, 100, 0, 0, 80, 90);
+    int trigger_healthy = dual_sparse_pressure_force_refactor_for_test(
+        1200, 10, 100, 50, 4000, 200, 220);
+    int trigger_dense_old = dual_sparse_pressure_force_refactor_for_test(
+        1200, 80, 100, 1000, 4000, 800, 900);
+    int trigger_pool = dual_sparse_pressure_force_refactor_for_test(
+        1500, 30, 100, 7000, 8000, 700, 600);
+
+    ASSERT_TRUE(trigger_small == 0, "sparse pressure gate disabled for small systems");
+    ASSERT_TRUE(trigger_healthy == 0, "sparse pressure gate stays off for healthy sparse solves");
+    ASSERT_TRUE(trigger_dense_old == 1, "sparse pressure gate triggers for aged dense solves");
+    ASSERT_TRUE(trigger_pool == 1, "sparse pressure gate triggers under spike-pool pressure");
+}
+
 int main(void) {
     printf("=== Dual Ratio Flip Tests ===\n");
     test_flip_mode_applies_flip_only_step();
     test_harris_mode_keeps_regular_entering();
     test_flip_mode_respects_runtime_disable();
+    test_adaptive_ratio_thresholds_scale_with_lu_health();
+    test_sparse_pressure_refactor_gate();
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
 }
