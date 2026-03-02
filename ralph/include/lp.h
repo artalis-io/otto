@@ -667,6 +667,12 @@ typedef struct {
     int perf_phase1_no_pivot_forced_ratio_breakdown;
     int perf_phase1_no_pivot_forced_dir_skip;
     int perf_phase1_no_pivot_forced_pivot_fail;
+    int perf_phase1_no_pivot_no_progress_events;
+    int perf_phase1_no_pivot_ladder_retry_defers;
+    int perf_phase1_no_pivot_ladder_dual_rescue_attempts;
+    int perf_phase1_no_pivot_ladder_dual_rescue_successes;
+    int perf_phase1_no_pivot_ladder_dual_rescue_failures;
+    int perf_phase1_no_pivot_ladder_forced_refactors;
     int perf_phase1_soft_lu_policy_cooldown_defers;
 
     double perf_phase2_pricing_ms;
@@ -946,6 +952,12 @@ typedef struct {
     int perf_phase1_no_pivot_forced_ratio_breakdown;
     int perf_phase1_no_pivot_forced_dir_skip;
     int perf_phase1_no_pivot_forced_pivot_fail;
+    int perf_phase1_no_pivot_no_progress_events;
+    int perf_phase1_no_pivot_ladder_retry_defers;
+    int perf_phase1_no_pivot_ladder_dual_rescue_attempts;
+    int perf_phase1_no_pivot_ladder_dual_rescue_successes;
+    int perf_phase1_no_pivot_ladder_dual_rescue_failures;
+    int perf_phase1_no_pivot_ladder_forced_refactors;
     int perf_phase1_soft_lu_policy_cooldown_defers;
 
     double perf_phase2_pricing_ms;
@@ -1384,6 +1396,12 @@ void lp_telemetry_record_phase1_pivot_fail_recovery_exclusion(SimplexSolver *sol
 void lp_telemetry_record_phase1_no_pivot_event(SimplexSolver *solver);
 void lp_telemetry_record_phase1_no_pivot_force(SimplexSolver *solver,
                                                LPPhase1NoPivotForceReason reason);
+void lp_telemetry_record_phase1_no_pivot_no_progress(SimplexSolver *solver);
+void lp_telemetry_record_phase1_no_pivot_ladder_retry(SimplexSolver *solver);
+void lp_telemetry_record_phase1_no_pivot_ladder_dual_rescue(SimplexSolver *solver,
+                                                             int success);
+void lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
+    SimplexSolver *solver);
 void lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(
     SimplexSolver *solver);
 void lp_telemetry_record_dual_ratio_no_entering(SimplexSolver *solver);

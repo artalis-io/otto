@@ -352,6 +352,33 @@ void lp_telemetry_record_phase1_no_pivot_force(SimplexSolver *solver,
     }
 }
 
+void lp_telemetry_record_phase1_no_pivot_no_progress(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_no_pivot_no_progress_events++;
+}
+
+void lp_telemetry_record_phase1_no_pivot_ladder_retry(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_no_pivot_ladder_retry_defers++;
+}
+
+void lp_telemetry_record_phase1_no_pivot_ladder_dual_rescue(SimplexSolver *solver,
+                                                             int success) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_no_pivot_ladder_dual_rescue_attempts++;
+    if (success) {
+        solver->telemetry.perf_phase1_no_pivot_ladder_dual_rescue_successes++;
+    } else {
+        solver->telemetry.perf_phase1_no_pivot_ladder_dual_rescue_failures++;
+    }
+}
+
+void lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_no_pivot_ladder_forced_refactors++;
+}
+
 void lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(
     SimplexSolver *solver) {
     if (!solver_telemetry_enabled(solver)) return;

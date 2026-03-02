@@ -91,6 +91,14 @@ int simplex_phase1_no_pivot_force_plan_for_test(int m,
                                                  int *next_streak_out,
                                                  int *next_cooldown_out);
 
+int simplex_phase1_no_pivot_ladder_plan_for_test(int m,
+                                                  int degenerate_count,
+                                                  int reason,
+                                                  int no_pivot_streak,
+                                                  int no_progress_streak,
+                                                  int force_pivot_mode_active,
+                                                  int *refactor_threshold_out);
+
 int simplex_phase1_force_pivot_mode_plan_for_test(int m,
                                                    int degenerate_count,
                                                    int dir_skip_no_recompute_streak,
@@ -317,6 +325,19 @@ typedef struct {
     int expected_next_streak;
     int expected_next_cooldown;
 } NoPivotForceCase;
+
+typedef struct {
+    const char *name;
+    int m;
+    int degenerate_count;
+    int reason;
+    int no_pivot_streak;
+    int no_progress_streak;
+    int force_pivot_mode_active;
+    int expected_step;
+    int min_threshold;
+    int max_threshold;
+} NoPivotLadderCase;
 
 typedef struct {
     const char *name;
@@ -599,6 +620,30 @@ static int run_no_pivot_force_case(const NoPivotForceCase *tc) {
     if (next_cooldown != tc->expected_next_cooldown) {
         fprintf(stderr, "FAIL: %s (expected next_cooldown=%d got=%d)\n",
                 tc->name, tc->expected_next_cooldown, next_cooldown);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_no_pivot_ladder_case(const NoPivotLadderCase *tc) {
+    int threshold = -1;
+    int step = simplex_phase1_no_pivot_ladder_plan_for_test(
+        tc->m,
+        tc->degenerate_count,
+        tc->reason,
+        tc->no_pivot_streak,
+        tc->no_progress_streak,
+        tc->force_pivot_mode_active,
+        &threshold);
+    if (step != tc->expected_step) {
+        fprintf(stderr, "FAIL: %s (expected step=%d got=%d)\n",
+                tc->name, tc->expected_step, step);
+        return 0;
+    }
+    if (threshold < tc->min_threshold || threshold > tc->max_threshold) {
+        fprintf(stderr, "FAIL: %s (expected threshold in [%d,%d] got=%d)\n",
+                tc->name, tc->min_threshold, tc->max_threshold, threshold);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -1485,6 +1530,56 @@ int main(void) {
             .expected_next_cooldown = 5
         }
     };
+    const NoPivotLadderCase no_pivot_ladder_cases[] = {
+        {
+            .name = "phase1 no-pivot ladder defers early ratio breakdown events",
+            .m = 1500,
+            .degenerate_count = 120,
+            .reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
+            .no_pivot_streak = 3,
+            .no_progress_streak = 2,
+            .force_pivot_mode_active = 0,
+            .expected_step = 0,
+            .min_threshold = 8,
+            .max_threshold = 12
+        },
+        {
+            .name = "phase1 no-pivot ladder escalates to dual rescue before refactor",
+            .m = 1500,
+            .degenerate_count = 120,
+            .reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
+            .no_pivot_streak = 8,
+            .no_progress_streak = 4,
+            .force_pivot_mode_active = 0,
+            .expected_step = 1,
+            .min_threshold = 8,
+            .max_threshold = 12
+        },
+        {
+            .name = "phase1 no-pivot ladder forces refactor on sustained no-progress",
+            .m = 1500,
+            .degenerate_count = 120,
+            .reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
+            .no_pivot_streak = 12,
+            .no_progress_streak = 10,
+            .force_pivot_mode_active = 0,
+            .expected_step = 2,
+            .min_threshold = 8,
+            .max_threshold = 12
+        },
+        {
+            .name = "phase1 no-pivot ladder keeps pivot-fail path aggressive",
+            .m = 1500,
+            .degenerate_count = 120,
+            .reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL,
+            .no_pivot_streak = 6,
+            .no_progress_streak = 5,
+            .force_pivot_mode_active = 1,
+            .expected_step = 2,
+            .min_threshold = 3,
+            .max_threshold = 6
+        }
+    };
     const ForcePivotModeCase force_pivot_mode_cases[] = {
         {
             .name = "force-pivot mode activates after repeated dir-skip no-recompute",
@@ -1621,6 +1716,7 @@ int main(void) {
     int total_dir_force = (int)(sizeof(dir_stabilize_force_cases) / sizeof(dir_stabilize_force_cases[0]));
     int total_dir_moderate = (int)(sizeof(dir_stabilize_moderate_cases) / sizeof(dir_stabilize_moderate_cases[0]));
     int total_no_pivot = (int)(sizeof(no_pivot_force_cases) / sizeof(no_pivot_force_cases[0]));
+    int total_no_pivot_ladder = (int)(sizeof(no_pivot_ladder_cases) / sizeof(no_pivot_ladder_cases[0]));
     int total_force_pivot_mode = (int)(sizeof(force_pivot_mode_cases) / sizeof(force_pivot_mode_cases[0]));
     int total_soft_lu_policy_cd = (int)(sizeof(soft_lu_policy_cooldown_cases) / sizeof(soft_lu_policy_cooldown_cases[0]));
     int total_phase2_recompute_interval =
@@ -1628,7 +1724,8 @@ int main(void) {
               sizeof(phase2_recompute_interval_cases[0]));
     int total = total_policy + total_sched + total_lu_health + total_soft_lu_defer +
                 total_periodic_cost_defer + total_dir_stabilize + total_dir_force +
-                total_dir_moderate + total_no_pivot + total_force_pivot_mode +
+                total_dir_moderate + total_no_pivot + total_no_pivot_ladder +
+                total_force_pivot_mode +
                 total_soft_lu_policy_cd +
                 total_phase2_recompute_interval;
     total += total_dir_skip_rc_only;
@@ -1666,6 +1763,9 @@ int main(void) {
     }
     for (int i = 0; i < total_no_pivot; i++) {
         pass += run_no_pivot_force_case(&no_pivot_force_cases[i]);
+    }
+    for (int i = 0; i < total_no_pivot_ladder; i++) {
+        pass += run_no_pivot_ladder_case(&no_pivot_ladder_cases[i]);
     }
     for (int i = 0; i < total_force_pivot_mode; i++) {
         pass += run_force_pivot_mode_case(&force_pivot_mode_cases[i]);
