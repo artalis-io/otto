@@ -157,6 +157,13 @@ int simplex_phase1_soft_lu_policy_cooldown_plan_for_test(
     int periodic_policy_cooldown,
     int *next_cooldown_out);
 
+int simplex_smcp_excl_should_skip_for_test(int smcp_excl,
+                                           int var_status,
+                                           double lb,
+                                           double ub,
+                                           double tol_bnd);
+int simplex_smcp_shift_allows_perturb_for_test(int smcp_shift);
+
 enum {
     EXPECT_UPDATE = 0,
     EXPECT_REFACTOR = 1,
@@ -188,6 +195,41 @@ static int run_case(const PolicyCase *tc) {
         return 0;
     }
     printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+typedef struct {
+    const char *name;
+    int smcp_excl;
+    int var_status;
+    double lb;
+    double ub;
+    double tol_bnd;
+    int expected_skip;
+} SmcpExclCase;
+
+static int run_smcp_excl_case(const SmcpExclCase *tc) {
+    int skip = simplex_smcp_excl_should_skip_for_test(tc->smcp_excl,
+                                                      tc->var_status,
+                                                      tc->lb,
+                                                      tc->ub,
+                                                      tc->tol_bnd);
+    if (skip != tc->expected_skip) {
+        fprintf(stderr, "FAIL: %s (expected=%d got=%d)\n",
+                tc->name, tc->expected_skip, skip);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_smcp_shift_case(const char *name, int smcp_shift, int expected_allow) {
+    int allow = simplex_smcp_shift_allows_perturb_for_test(smcp_shift);
+    if (allow != expected_allow) {
+        fprintf(stderr, "FAIL: %s (expected=%d got=%d)\n", name, expected_allow, allow);
+        return 0;
+    }
+    printf("PASS: %s\n", name);
     return 1;
 }
 
@@ -2191,6 +2233,52 @@ int main(void) {
             .expected_interval = 200
         }
     };
+    const SmcpExclCase smcp_excl_cases[] = {
+        {
+            .name = "smcp excl skips explicit fixed status",
+            .smcp_excl = 0,
+            .var_status = (int)RALPH_FIXED,
+            .lb = 2.0,
+            .ub = 2.0,
+            .tol_bnd = 1e-7,
+            .expected_skip = 1
+        },
+        {
+            .name = "smcp excl skips boxed non-basic when enabled",
+            .smcp_excl = 1,
+            .var_status = (int)RALPH_NONBASIC_LOWER,
+            .lb = 5.0,
+            .ub = 5.0 + 5e-13,
+            .tol_bnd = 1e-7,
+            .expected_skip = 1
+        },
+        {
+            .name = "smcp excl keeps boxed non-basic when disabled",
+            .smcp_excl = 0,
+            .var_status = (int)RALPH_NONBASIC_LOWER,
+            .lb = 5.0,
+            .ub = 5.0 + 5e-13,
+            .tol_bnd = 1e-7,
+            .expected_skip = 0
+        },
+        {
+            .name = "smcp excl keeps wide-interval non-basic when enabled",
+            .smcp_excl = 1,
+            .var_status = (int)RALPH_NONBASIC_UPPER,
+            .lb = -1.0,
+            .ub = 3.0,
+            .tol_bnd = 1e-7,
+            .expected_skip = 0
+        }
+    };
+    const int smcp_shift_cases[][2] = {
+        {0, 0},
+        {1, 1}
+    };
+    const char *smcp_shift_case_names[] = {
+        "smcp shift disables perturbation when off",
+        "smcp shift enables perturbation when on"
+    };
 
     int pass = 0;
     int total_policy = (int)(sizeof(cases) / sizeof(cases[0]));
@@ -2223,6 +2311,10 @@ int main(void) {
     int total_phase2_recompute_interval =
         (int)(sizeof(phase2_recompute_interval_cases) /
               sizeof(phase2_recompute_interval_cases[0]));
+    int total_smcp_excl =
+        (int)(sizeof(smcp_excl_cases) / sizeof(smcp_excl_cases[0]));
+    int total_smcp_shift =
+        (int)(sizeof(smcp_shift_cases) / sizeof(smcp_shift_cases[0]));
     int total = total_policy + total_sched + total_lu_health + total_soft_lu_defer +
                 total_periodic_cost_defer + total_dir_stabilize + total_dir_force +
                 total_dir_moderate + total_no_pivot + total_no_pivot_ladder +
@@ -2236,6 +2328,8 @@ int main(void) {
                 total_phase2_recompute_interval;
     total += total_dir_skip_rc_only;
     total += total_dir_skip_no_recompute;
+    total += total_smcp_excl;
+    total += total_smcp_shift;
 
     for (int i = 0; i < total_policy; i++) {
         pass += run_case(&cases[i]);
@@ -2296,6 +2390,14 @@ int main(void) {
     }
     for (int i = 0; i < total_phase2_recompute_interval; i++) {
         pass += run_phase2_recompute_interval_case(&phase2_recompute_interval_cases[i]);
+    }
+    for (int i = 0; i < total_smcp_excl; i++) {
+        pass += run_smcp_excl_case(&smcp_excl_cases[i]);
+    }
+    for (int i = 0; i < total_smcp_shift; i++) {
+        pass += run_smcp_shift_case(smcp_shift_case_names[i],
+                                    smcp_shift_cases[i][0],
+                                    smcp_shift_cases[i][1]);
     }
 
     printf("\nPolicy cases passed: %d/%d\n", pass, total);

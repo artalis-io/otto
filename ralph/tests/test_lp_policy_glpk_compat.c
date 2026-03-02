@@ -173,9 +173,12 @@ static void test_runtime_mapping_noop_under_default_profile(void) {
     int aorn = 7;
     int crash = 0;
     int backend = -1;
+    int backend_supported = -1;
     int update_limit = -1;
     double pivot_tol = 0.0;
     double growth_guard = 0.0;
+    int dual_refactor_base_interval = -1;
+    int dual_rc_recompute_interval = -1;
     int soft_gate = 1;
     int periodic_gate = 1;
 
@@ -199,9 +202,12 @@ static void test_runtime_mapping_noop_under_default_profile(void) {
                                         &aorn,
                                         &crash,
                                         &backend,
+                                        &backend_supported,
                                         &update_limit,
                                         &pivot_tol,
                                         &growth_guard,
+                                        &dual_refactor_base_interval,
+                                        &dual_rc_recompute_interval,
                                         &soft_gate,
                                         &periodic_gate);
 
@@ -224,7 +230,12 @@ static void test_runtime_mapping_noop_under_default_profile(void) {
     ASSERT_INT_EQ(aorn, 7, "runtime default profile: aorn unchanged");
     ASSERT_INT_EQ(crash, 0, "runtime default profile: crash unchanged");
     ASSERT_INT_EQ(backend, -1, "runtime default profile: backend unchanged");
+    ASSERT_INT_EQ(backend_supported, -1, "runtime default profile: backend support unchanged");
     ASSERT_INT_EQ(update_limit, -1, "runtime default profile: update limit unchanged");
+    ASSERT_INT_EQ(dual_refactor_base_interval, -1,
+                  "runtime default profile: dual refactor interval unchanged");
+    ASSERT_INT_EQ(dual_rc_recompute_interval, -1,
+                  "runtime default profile: dual rc interval unchanged");
     ASSERT_INT_EQ(soft_gate, 1, "runtime default profile: soft gate unchanged");
     ASSERT_INT_EQ(periodic_gate, 1, "runtime default profile: periodic gate unchanged");
 }
@@ -246,9 +257,12 @@ static void test_runtime_mapping_glpk_profile(void) {
     int aorn = -1;
     int crash = -1;
     int backend = -1;
+    int backend_supported = -1;
     int update_limit = -1;
     double pivot_tol = -1.0;
     double growth_guard = -1.0;
+    int dual_refactor_base_interval = -1;
+    int dual_rc_recompute_interval = -1;
     int soft_gate = 1;
     int periodic_gate = 1;
 
@@ -286,9 +300,12 @@ static void test_runtime_mapping_glpk_profile(void) {
                                         &aorn,
                                         &crash,
                                         &backend,
+                                        &backend_supported,
                                         &update_limit,
                                         &pivot_tol,
                                         &growth_guard,
+                                        &dual_refactor_base_interval,
+                                        &dual_rc_recompute_interval,
                                         &soft_gate,
                                         &periodic_gate);
 
@@ -316,11 +333,17 @@ static void test_runtime_mapping_glpk_profile(void) {
     ASSERT_INT_EQ(crash, 0, "runtime glpk profile: std basis mapped to crash off");
     ASSERT_INT_EQ(backend, LP_GLPK_BFCP_BACKEND_LUF_FT,
                   "runtime glpk profile: backend clamped to LUF_FT");
+    ASSERT_INT_EQ(backend_supported, 0,
+                  "runtime glpk profile: reports unsupported backend request");
     ASSERT_INT_EQ(update_limit, 77, "runtime glpk profile: update limit mapped");
     ASSERT_DBL_NEAR(pivot_tol, 1e-8, 1e-14,
                     "runtime glpk profile: pivot tol mapped");
     ASSERT_DBL_NEAR(growth_guard, 1e6, 1e-6,
                     "runtime glpk profile: growth guard mapped");
+    ASSERT_INT_EQ(dual_refactor_base_interval, 38,
+                  "runtime glpk profile: dual refactor cadence mapped from update limit");
+    ASSERT_INT_EQ(dual_rc_recompute_interval, 19,
+                  "runtime glpk profile: dual rc cadence mapped from update limit");
     ASSERT_INT_EQ(soft_gate, 0, "runtime glpk profile: soft cost gate disabled");
     ASSERT_INT_EQ(periodic_gate, 0, "runtime glpk profile: periodic cost gate disabled");
 
@@ -334,6 +357,9 @@ static void test_runtime_mapping_glpk_profile(void) {
                                         NULL,
                                         NULL,
                                         &dual_ratio,
+                                        NULL,
+                                        NULL,
+                                        NULL,
                                         NULL,
                                         NULL,
                                         NULL,
@@ -381,6 +407,9 @@ static void test_runtime_mapping_glpk_strict_profile(void) {
                                         NULL,
                                         NULL,
                                         NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
                                         NULL);
     ASSERT_INT_EQ(dual_ratio, LP_DUAL_RATIO_TEST_STANDARD,
                   "runtime strict profile: standard ratio mapped");
@@ -398,6 +427,9 @@ static void test_runtime_mapping_glpk_strict_profile(void) {
                                         NULL,
                                         &dual_ratio,
                                         &dual_bound_flip,
+                                        NULL,
+                                        NULL,
+                                        NULL,
                                         NULL,
                                         NULL,
                                         NULL,

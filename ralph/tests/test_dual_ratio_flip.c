@@ -19,6 +19,12 @@ int dual_sparse_pressure_force_refactor_for_test(int m,
                                                  int spike_pool_capacity,
                                                  int ftran_nnz,
                                                  int btran_nnz);
+int dual_smcp_shift_allows_perturb_for_test(int smcp_shift);
+int dual_ratio_scan_direction_for_test(int smcp_aorn);
+void dual_cadence_intervals_for_test(int requested_base,
+                                     int requested_rc,
+                                     int *base_out,
+                                     int *rc_out);
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -248,6 +254,33 @@ static void test_sparse_pressure_refactor_gate(void) {
     ASSERT_TRUE(trigger_pool == 1, "sparse pressure gate triggers under spike-pool pressure");
 }
 
+static void test_dual_smcp_shift_toggle(void) {
+    ASSERT_TRUE(dual_smcp_shift_allows_perturb_for_test(0) == 0,
+                "dual shift off disables perturbation");
+    ASSERT_TRUE(dual_smcp_shift_allows_perturb_for_test(1) == 1,
+                "dual shift on enables perturbation");
+}
+
+static void test_dual_aorn_scan_direction(void) {
+    ASSERT_TRUE(dual_ratio_scan_direction_for_test(2) == 1,
+                "dual aorn N^T keeps legacy forward scan");
+    ASSERT_TRUE(dual_ratio_scan_direction_for_test(1) == -1,
+                "dual aorn A^T scans reverse");
+}
+
+static void test_dual_cadence_clamp(void) {
+    int base = -1;
+    int rc = -1;
+
+    dual_cadence_intervals_for_test(0, 0, &base, &rc);
+    ASSERT_TRUE(base == 50, "dual cadence default base interval");
+    ASSERT_TRUE(rc == 25, "dual cadence default rc interval");
+
+    dual_cadence_intervals_for_test(3, 1, &base, &rc);
+    ASSERT_TRUE(base == 8, "dual cadence clamps tiny base interval");
+    ASSERT_TRUE(rc == 10, "dual cadence clamps tiny rc interval");
+}
+
 int main(void) {
     printf("=== Dual Ratio Flip Tests ===\n");
     test_flip_mode_applies_flip_only_step();
@@ -255,6 +288,9 @@ int main(void) {
     test_flip_mode_respects_runtime_disable();
     test_adaptive_ratio_thresholds_scale_with_lu_health();
     test_sparse_pressure_refactor_gate();
+    test_dual_smcp_shift_toggle();
+    test_dual_aorn_scan_direction();
+    test_dual_cadence_clamp();
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
 }

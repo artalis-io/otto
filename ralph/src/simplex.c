@@ -254,6 +254,56 @@ static double* soft_lu_refactor_cost_ewma_ptr(SimplexSolver *owner, int phase) {
     return NULL;
 }
 
+int simplex_smcp_excl_should_skip_for_test(int smcp_excl,
+                                           int var_status,
+                                           double lb,
+                                           double ub,
+                                           double tol_bnd) {
+    const double fixed_tol_cap = 1e-12;
+    double fixed_tol = fixed_tol_cap;
+    if (var_status == (int)RALPH_FIXED) return 1;
+    if (smcp_excl == 0) return 0;
+    if (var_status != (int)RALPH_NONBASIC_LOWER &&
+        var_status != (int)RALPH_NONBASIC_UPPER) {
+        return 0;
+    }
+    if (lb <= -RALPH_INFINITY / 2.0 || ub >= RALPH_INFINITY / 2.0) {
+        return 0;
+    }
+    if (isfinite(tol_bnd) && tol_bnd > 0.0 && tol_bnd < fixed_tol_cap) {
+        fixed_tol = tol_bnd;
+    }
+    return fabs(ub - lb) <= fixed_tol;
+}
+
+static inline int simplex_smcp_excl_skip_var(const SimplexTableau *tab, int j) {
+    int smcp_excl = 1;
+    double tol_bnd = 1e-7;
+    if (!tab || j < 0 || j >= tab->n) return 0;
+    if (tab->owner && !tab->owner->glpk_strict_mode) {
+        return tab->var_status[j] == RALPH_FIXED;
+    }
+    if (tab->owner) {
+        smcp_excl = tab->owner->smcp_excl;
+        tol_bnd = tab->owner->smcp_tol_bnd;
+    }
+    return simplex_smcp_excl_should_skip_for_test(smcp_excl,
+                                                  (int)tab->var_status[j],
+                                                  tab->lb_ext[j],
+                                                  tab->ub_ext[j],
+                                                  tol_bnd);
+}
+
+int simplex_smcp_shift_allows_perturb_for_test(int smcp_shift) {
+    return smcp_shift != 0;
+}
+
+static inline int simplex_smcp_shift_allows_perturb(const SimplexTableau *tab) {
+    if (!tab || !tab->owner) return 1;
+    if (!tab->owner->glpk_strict_mode) return 1;
+    return simplex_smcp_shift_allows_perturb_for_test(tab->owner->smcp_shift);
+}
+
 static int* periodic_cost_iter_samples_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
     if (phase == 1) return &owner->policy.periodic_cost_iter_samples_phase1;
@@ -3723,6 +3773,7 @@ static inline void tableau_invalidate_rc(SimplexTableau *tab) {
  * ============================================================================ */
 
 static inline double heap_score(const SimplexTableau *tab, int j) {
+    if (simplex_smcp_excl_skip_var(tab, j)) return 0.0;
     double rc = tab->rc[j];
     VarStatus st = tab->var_status[j];
     if (st == RALPH_NONBASIC_LOWER && rc < 0) return -rc;
@@ -3850,7 +3901,7 @@ int pricing_dantzig(SimplexTableau *tab, int *entering) {
     *entering = -1;
 
     for (int j = 0; j < tab->n; j++) {
-        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
 
         double rc = tab->rc[j];
 
@@ -3876,7 +3927,7 @@ int pricing_bland(SimplexTableau *tab, int *entering) {
     *entering = -1;
 
     for (int j = 0; j < tab->n; j++) {
-        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
 
         double rc = tab->rc[j];
 
@@ -3902,7 +3953,7 @@ static int pricing_bland_excluding(SimplexTableau *tab, int excluded_var, int *e
 
     for (int j = 0; j < tab->n; j++) {
         if (j == excluded_var) continue;
-        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
 
         double rc = tab->rc[j];
 
@@ -3929,7 +3980,7 @@ static int pricing_bland_excluding_two(SimplexTableau *tab,
 
     for (int j = 0; j < tab->n; j++) {
         if (j == excluded_a || j == excluded_b) continue;
-        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
 
         double rc = tab->rc[j];
 
@@ -4087,7 +4138,7 @@ int pricing_steepest_edge(SimplexTableau *tab, int *entering) {
     *entering = -1;
 
     for (int j = 0; j < tab->n; j++) {
-        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
 
         double rc = tab->rc[j];
         double weight = tab->se_weights[j];
@@ -4122,7 +4173,7 @@ int pricing_devex(SimplexTableau *tab, int *entering) {
     *entering = -1;
 
     for (int j = 0; j < tab->n; j++) {
-        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
 
         double rc = tab->rc[j];
         double weight = tab->se_weights[j];
@@ -4171,7 +4222,7 @@ int pricing_devex(SimplexTableau *tab, int *entering) {
 /* Check if variable j is eligible for entering */
 static inline int is_entering_eligible(SimplexTableau *tab, int j, double *rc_out) {
     if (j < 0 || j >= tab->n) return 0;  /* Bounds check */
-    if (tab->var_status[j] == RALPH_BASIC) return 0;
+    if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) return 0;
 
     /* Use lazy RC computation - computes on demand if not already cached */
     double rc = tableau_get_rc(tab, j);
@@ -4217,7 +4268,7 @@ int pricing_partial(SimplexTableau *tab, int *entering) {
         int j = tab->partial_candidates[i];
 
         /* Skip and remove basic variables from hot set */
-        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
 
         /* Keep this variable in the compacted hot set */
         tab->partial_candidates[write_idx++] = j;
@@ -4249,7 +4300,7 @@ int pricing_partial(SimplexTableau *tab, int *entering) {
 
     for (int i = 0; i < n && scanned < PARTIAL_PRICE_BLOCK; i++) {
         int j = (start + i) % n;
-        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
 
         scanned++;
         double rc;
@@ -4298,7 +4349,7 @@ int pricing_partial(SimplexTableau *tab, int *entering) {
  * Devex's rc^2/weight scoring to preserve pivot quality characteristics. */
 static inline int devex_entering_eligible(SimplexTableau *tab, int j, double *score_out) {
     if (j < 0 || j >= tab->n) return 0;
-    if (tab->var_status[j] == RALPH_BASIC) return 0;
+    if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) return 0;
 
     double rc = tableau_get_rc(tab, j);
     double score = 0.0;
@@ -4335,7 +4386,7 @@ static int pricing_devex_partial(SimplexTableau *tab, int *entering) {
     int write_idx = 0;
     for (int i = 0; i < tab->partial_cand_count; i++) {
         int j = tab->partial_candidates[i];
-        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
         tab->partial_candidates[write_idx++] = j;
 
         double score;
@@ -4351,7 +4402,7 @@ static int pricing_devex_partial(SimplexTableau *tab, int *entering) {
     int scanned = 0;
     for (int i = 0; i < n && scanned < DEVEX_PARTIAL_BLOCK; i++) {
         int j = (start + i) % n;
-        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
 
         scanned++;
         double score;
@@ -5351,6 +5402,8 @@ SimplexSolver* simplex_create(LPModel *model) {
                                solver->policy.basis_governor_mode);
     solver->policy.soft_lu_cost_gate_enabled = 1;
     solver->policy.periodic_cost_gate_enabled = 1;
+    solver->policy.dual_refactor_base_interval = 50;
+    solver->policy.dual_rc_recompute_interval = 20;
 
     return solver;
 }
@@ -5610,6 +5663,7 @@ static int mark_basic_artificial_rows_redundant(SimplexTableau *tab, int only_in
 static void primal_remove_perturbation(SimplexTableau *tab);
 
 static void primal_apply_perturbation(SimplexTableau *tab) {
+    if (!simplex_smcp_shift_allows_perturb(tab)) return;
     int n = tab->n;
 
     /* Free any existing perturbation state */
@@ -5670,6 +5724,7 @@ static void primal_apply_perturbation(SimplexTableau *tab) {
 /* Scaled variant for stall-recovery re-perturbation.
  * scale > 1.0 widens the perturbation to break a different cycling pattern. */
 static void primal_apply_perturbation_scaled(SimplexTableau *tab, double scale) {
+    if (!simplex_smcp_shift_allows_perturb(tab)) return;
     int n = tab->n;
 
     /* If perturbation is already active, remove it first to start fresh */

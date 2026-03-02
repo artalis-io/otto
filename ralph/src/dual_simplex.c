@@ -550,6 +550,87 @@ static void dual_ratio_adaptive_config_for_tableau(const SimplexTableau *tab,
                                     cfg);
 }
 
+int dual_smcp_shift_allows_perturb_for_test(int smcp_shift) {
+    return smcp_shift != 0;
+}
+
+static inline int dual_smcp_shift_allows_perturb(const SimplexTableau *tab) {
+    if (!tab || !tab->owner) return 1;
+    if (!tab->owner->glpk_strict_mode) return 1;
+    return dual_smcp_shift_allows_perturb_for_test(tab->owner->smcp_shift);
+}
+
+int dual_ratio_scan_direction_for_test(int smcp_aorn) {
+    /* Keep legacy/default path on N^T (aorn=2). A^T uses reverse scan order. */
+    return (smcp_aorn == 1) ? -1 : 1;
+}
+
+static inline int dual_ratio_scan_direction(const SimplexTableau *tab) {
+    if (!tab || !tab->owner) return 1;
+    if (!tab->owner->glpk_strict_mode) return 1;
+    return dual_ratio_scan_direction_for_test(tab->owner->smcp_aorn);
+}
+
+static int dual_smcp_excl_skip_var(const SimplexTableau *tab, int var) {
+    int smcp_excl = 1;
+    double tol_bnd = 1e-12;
+    VarStatus st;
+    double lb;
+    double ub;
+    if (!tab || var < 0 || var >= tab->n) return 0;
+    st = tab->var_status[var];
+    if (st == RALPH_FIXED) return 1;
+    if (tab->owner && !tab->owner->glpk_strict_mode) return 0;
+    if (tab->owner) {
+        smcp_excl = tab->owner->smcp_excl;
+        tol_bnd = tab->owner->smcp_tol_bnd;
+    }
+    if (smcp_excl == 0) return 0;
+    if (st != RALPH_NONBASIC_LOWER && st != RALPH_NONBASIC_UPPER) return 0;
+    lb = tab->lb_ext[var];
+    ub = tab->ub_ext[var];
+    if (lb <= -RALPH_INFINITY / 2.0 || ub >= RALPH_INFINITY / 2.0) return 0;
+    if (!isfinite(tol_bnd) || tol_bnd <= 0.0 || tol_bnd > 1e-12) tol_bnd = 1e-12;
+    return fabs(ub - lb) <= tol_bnd;
+}
+
+static int dual_cadence_clamp_base_interval(int interval) {
+    if (interval <= 0) interval = 50;
+    if (interval < 8) interval = 8;
+    if (interval > 128) interval = 128;
+    return interval;
+}
+
+static int dual_cadence_clamp_rc_interval(int interval, int base_interval) {
+    if (interval <= 0) interval = base_interval / 2;
+    if (interval < 10) interval = 10;
+    if (interval > 64) interval = 64;
+    return interval;
+}
+
+void dual_cadence_intervals_for_test(int requested_base,
+                                     int requested_rc,
+                                     int *base_out,
+                                     int *rc_out) {
+    int base_interval = dual_cadence_clamp_base_interval(requested_base);
+    int rc_interval = dual_cadence_clamp_rc_interval(requested_rc, base_interval);
+    if (base_out) *base_out = base_interval;
+    if (rc_out) *rc_out = rc_interval;
+}
+
+static int dual_refactor_base_interval_for_solver(const SimplexSolver *solver) {
+    int requested = 50;
+    if (solver) requested = solver->policy.dual_refactor_base_interval;
+    return dual_cadence_clamp_base_interval(requested);
+}
+
+static int dual_rc_recompute_interval_for_solver(const SimplexSolver *solver,
+                                                 int base_interval) {
+    int requested = 20;
+    if (solver) requested = solver->policy.dual_rc_recompute_interval;
+    return dual_cadence_clamp_rc_interval(requested, base_interval);
+}
+
 /* Test hook: adaptive ratio thresholds (orthogonal to simplex-policy tests). */
 void dual_ratio_adaptive_config_for_test(int m,
                                          double lu_pivot_tol,
@@ -627,7 +708,7 @@ static int dual_ratio_candidate_value(const SimplexTableau *tab,
 
     if (!tab || !ratio_out || var < 0 || var >= tab->n) return 0;
     st = tab->var_status[var];
-    if (st == RALPH_BASIC || st == RALPH_FIXED) return 0;
+    if (st == RALPH_BASIC || dual_smcp_excl_skip_var(tab, var)) return 0;
     if (fabs(alpha_j) < pivot_floor) return 0;
 
     rc_j = tab->rc[var];
@@ -700,9 +781,11 @@ static int dual_ratio_test_core(SimplexTableau *tab,
     double best_pivot = 0.0;
     int best_can_flip = 0;
     const double tie_tol = 1e-12;
+    int scan_dir = dual_ratio_scan_direction(tab);
 
-    for (int j = 0; j < tab->n; j++) {
-        if (tab->var_status[j] == RALPH_BASIC || tab->var_status[j] == RALPH_FIXED) continue;
+    for (int t = 0; t < tab->n; t++) {
+        int j = (scan_dir > 0) ? t : (tab->n - 1 - t);
+        if (tab->var_status[j] == RALPH_BASIC || dual_smcp_excl_skip_var(tab, j)) continue;
 
         /* Compute alpha_j = (B^{-1} * a_j)[leaving] = alpha' * a_j using sparse dot */
         double alpha_j = sparse_dot_column(tab->A_ext, j, tab->work2);
@@ -825,6 +908,7 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
     int flip_cap;
     int max_total_flips;
     int round;
+    int scan_dir = dual_ratio_scan_direction(tab);
 
     if (!tab || !entering || !theta || leaving < 0 || leaving >= tab->m) return -1;
     if (!tab->flip_list) return -1;
@@ -865,10 +949,11 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
         int round_flip_count = 0;
 
         /* Pass 1: strict candidate window baseline. */
-        for (int j = 0; j < tab->n; j++) {
+        for (int t = 0; t < tab->n; t++) {
+            int j = (scan_dir > 0) ? t : (tab->n - 1 - t);
             double alpha_j;
             double ratio;
-            if (tab->var_status[j] == RALPH_BASIC || tab->var_status[j] == RALPH_FIXED) continue;
+            if (tab->var_status[j] == RALPH_BASIC || dual_smcp_excl_skip_var(tab, j)) continue;
             alpha_j = sparse_dot_column(tab->A_ext, j, tab->work2);
             if (!dual_ratio_candidate_value(tab, dir, j, alpha_j, pivot_floor, &ratio)) continue;
             if (ratio < theta_floor) continue;
@@ -883,11 +968,12 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
         theta_harris = theta_min + HARRIS_TOL * (1.0 + fabs(theta_min));
 
         /* Pass 2: choose entering in Harris window; stage interior flips. */
-        for (int j = 0; j < tab->n; j++) {
+        for (int t = 0; t < tab->n; t++) {
+            int j = (scan_dir > 0) ? t : (tab->n - 1 - t);
             double alpha_j;
             double ratio;
             double abs_alpha;
-            if (tab->var_status[j] == RALPH_BASIC || tab->var_status[j] == RALPH_FIXED) continue;
+            if (tab->var_status[j] == RALPH_BASIC || dual_smcp_excl_skip_var(tab, j)) continue;
             alpha_j = sparse_dot_column(tab->A_ext, j, tab->work2);
             if (!dual_ratio_candidate_value(tab, dir, j, alpha_j, pivot_floor, &ratio)) continue;
             if (ratio < theta_floor) continue;
@@ -1458,9 +1544,11 @@ static int phase1_rescue_ratio_test(SimplexTableau *tab, int leaving,
 
     *entering = -1;
     *theta = RALPH_INFINITY;
+    int scan_dir = dual_ratio_scan_direction(tab);
 
-    for (int j = 0; j < tab->n; j++) {
-        if (tab->var_status[j] == RALPH_BASIC || tab->var_status[j] == RALPH_FIXED) {
+    for (int t = 0; t < tab->n; t++) {
+        int j = (scan_dir > 0) ? t : (tab->n - 1 - t);
+        if (tab->var_status[j] == RALPH_BASIC || dual_smcp_excl_skip_var(tab, j)) {
             continue;
         }
 
@@ -1566,6 +1654,12 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
 
     const int MAX_REFACTOR_FAILURES = RALPH_PHASE1_RESCUE_MAX_REFACTOR_FAILURES;
     int refactor_failures = 0;
+    int rescue_refactor_base_interval = dual_refactor_base_interval_for_solver(solver) / 2;
+    int rescue_rc_recompute_interval;
+    if (rescue_refactor_base_interval < 8) rescue_refactor_base_interval = 8;
+    rescue_rc_recompute_interval =
+        dual_rc_recompute_interval_for_solver(solver, rescue_refactor_base_interval) / 2;
+    if (rescue_rc_recompute_interval < 5) rescue_rc_recompute_interval = 5;
     DualRefactorQualityState quality;
     dual_quality_init(&quality);
 
@@ -1701,7 +1795,7 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
                                                             tab,
                                                             &quality,
                                                             iter,
-                                                            25,
+                                                            rescue_refactor_base_interval,
                                                             0,
                                                             0,
                                                             0);
@@ -1722,7 +1816,7 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
             }
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
-        } else if (iter > 0 && iter % 10 == 0) {
+        } else if (iter > 0 && iter % rescue_rc_recompute_interval == 0) {
             tableau_compute_reduced_costs(tab);
         }
     }
@@ -1813,6 +1907,7 @@ int make_dual_feasible(SimplexTableau *tab, int obj_sense, int allow_bound_flip)
 #define PERTURB_MULT 7  /* Prime for pseudo-randomness */
 
 static void apply_bound_perturbation(SimplexTableau *tab) {
+    if (!dual_smcp_shift_allows_perturb(tab)) return;
     /* Allocate backup storage and save original bounds only on FIRST call.
      * Re-perturbation (for cycling) adds more perturbation but must
      * NOT overwrite the backup — remove_bound_perturbation must always restore
@@ -1929,6 +2024,9 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
     const int MAX_PERTURB_ATTEMPTS = 20;
     int dual_recovery_used = 0;
     int lu_hard_start = solver->telemetry.perf_dual_lu_hard_trigger;
+    int dual_refactor_base_interval = dual_refactor_base_interval_for_solver(solver);
+    int dual_rc_recompute_interval =
+        dual_rc_recompute_interval_for_solver(solver, dual_refactor_base_interval);
     DualRefactorQualityState quality;
     dual_quality_init(&quality);
 
@@ -2134,7 +2232,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                         tab,
                         &quality,
                         iter + cleanup_iters,
-                        50,
+                        dual_refactor_base_interval,
                         0,
                         0,
                         0);
@@ -2304,7 +2402,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                                                             tab,
                                                             &quality,
                                                             iter,
-                                                            50,
+                                                            dual_refactor_base_interval,
                                                             degenerate_count,
                                                             stall_count,
                                                             perturb_attempts);
@@ -2322,7 +2420,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
             if (use_dse) dse_init_approx(tab);
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
-        } else if (iter > 0 && iter % 20 == 0) {
+        } else if (iter > 0 && iter % dual_rc_recompute_interval == 0) {
             tableau_compute_reduced_costs(tab);
         }
 
@@ -2449,6 +2547,7 @@ int dual_phase1(SimplexSolver *solver) {
 
     int max_phase1_iters = 200 * tab->m;
     int succeeded = 0;
+    int dual_refactor_base_interval = dual_refactor_base_interval_for_solver(solver);
     DualRefactorQualityState quality;
     dual_quality_init(&quality);
 
@@ -2524,7 +2623,7 @@ int dual_phase1(SimplexSolver *solver) {
                                             tab,
                                             &quality,
                                             iter,
-                                            50,
+                                            dual_refactor_base_interval,
                                             0,
                                             0,
                                             0)) {
