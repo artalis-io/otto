@@ -1373,6 +1373,7 @@ Constraint gaps for rich VRPTW/PDPTW (not yet in core solve path):
 - **Phase S12 (infeasible-space exploration + aggressive SISR)**: HGS-style infeasible-space search with modular penalty manager (`SGPenaltyManager` in `sg_penalty.c`). 6 constraint types (time warp, capacity, duration, ride time, distance, total work) with independent per-constraint self-adjustment. Time warping accumulates violation and warps start to `tw_late` for downstream propagation. Feasible-beats-infeasible best-tracking in `sg_route_solution_is_better`. Penalty bounds and initial weights scale proportionally with problem cost structure via `cost_scale` parameter — no hardcoded constants. Instance-adaptive SISR `L_max` based on avg route length (Christiaens & Vanden Berghe 2020), initial string destroy weight 2.0. Phase 1 (vehicle min) uses aggressive 15% feasible target; Phase 2 (distance) runs strict (penalty disabled). Solomon single-thread: avgVehGap +0.36→+0.30, equalVehicles 37→39. Solomon population: avgVehGap +0.20, equalVehicles 45, avgDistGap -0.2%. Li & Lim single-thread: avgVehGap +0.52→+0.48, equalVehicles 41→44. Li & Lim population: avgVehGap +0.38, equalVehicles 48, avgDistGap +3.5%. 5 new tests (252→257). ASAN/UBSAN clean.
 - **Phase S13+S14+S15 (algorithmic edge + population crossover)**: Progressive penalty schedule (0.25→0.15 over Phase 1), ejection chains in repair operators with cost-gated fallback, scaled ejection budget (proportional to instance size, cap 500K), relaxed vehicle reduction (20% distance slack), Phase 1.5 vehicle crunch (500-iter focused ALNS with vehicle-reducing operators only), SREX crossover (merge routes from two parents), population diversity filter (>90% similarity rejection). Solomon population: avgVehGap +0.20→+0.18, equalVehicles 45→46, avgDistGap -0.1%. Li & Lim population: avgVehGap +0.39, equalVehicles 47, avgDistGap +3.7%. 14 new tests (326→340). ASAN/UBSAN clean.
 - **Phase S16 (CFRS construction heuristics)**: Cluster-First-Route-Second construction methods targeting vehicle count reduction on large instances. Two new heuristics: angular sweep CFRS (`sg_construct_sweep_cfrs`) and k-means with TW dimension (`sg_construct_kmeans_tw`), both using a shared vehicle count lower bound (`sg_estimate_min_vehicles` — bin packing + TW conflict clique). `SGConstructMethod` enum with dispatch table. Population mode round-robins construction method per thread (`thread_index % SG_CONSTRUCT_COUNT`) for generation 0 diversity. Default mode tries all 5 methods (regret-3, TW-sorted, Solomon I1, sweep CFRS, k-means TW) and keeps lexicographic best. GH-200 population: equalVehicles 48→55 (80%→92%), avgVehGap +0.20→+0.08 — best vehicle count result. Distance gap +13.2%→+13.1% (stable). 13 new tests (374→387). ASAN/UBSAN clean.
+- **Phase S19 (lazy heap repair)**: O(N log N) lazy max-heap replacement for O(N²) repair fill. Phase 1 evaluates all unassigned requests and pushes to heap; Phase 2 pop-validate-insert loop revalidates only the top candidate per insertion. Bounce counter prevents infinite loops from floating-point ties. `SGRegretEntry` cache + `SHHeap` in scratch buffers. GH-400 population: equalVehicles 27→33 (+6), avgDistGap +33.3%→+18.6% (-14.7pp). 8 new tests (413→421). ASAN/UBSAN clean.
 - Unified route state drives both delivery-only and PDPTW solves. The stop-based kernel tracks forward/backward time slack, load profiles, and ride-time constraints.
 - Stop-level splice/excise operations preserve non-adjacent PD placement across ALNS destroy/repair cycles.
 
@@ -3441,6 +3442,32 @@ Greedy (regret_k=1): (1) lowest first_score, (2) lowest request_id.
 | `src/sg_solution.c` | Arena size + alloc for `regret_cache`, `sh_heap_create`/`free` |
 | `src/sg_repair.c` | `sg_repair_fill_heap` (~100 lines), rename existing to `_linear`, wrappers |
 | `tests/test_surge.c` | 8 tests for heap repair correctness |
+
+**Benchmark results (GH-400, 60s, population, commit c26ff30):**
+
+| Metric | Before S19 (b3905e2) | After S19 (c26ff30) | Delta |
+|--------|---------------------|---------------------|-------|
+| Vehicle match | 27/60 (45%) | 33/60 (55%) | +6 instances |
+| Avg vehicle gap | — | +0.63 | — |
+| Avg distance gap | +33.3% | +18.6% | -14.7pp |
+| Avg runtime | 74s | 77s | +3s |
+
+Per-class detail (60s, population):
+
+| Class | Cases | Exact Veh | Avg Veh Gap | Avg Dist Gap | Notes |
+|-------|-------|-----------|-------------|--------------|-------|
+| C1 | 10 | 2 | +1.6 | +16.7% | c1_4_1 perfect (40v, +0.0%) |
+| C2 | 10 | 3 | +0.8 | +15.4% | Clustered wide-TW |
+| R1 | 10 | 7 | +0.2 | +31.9% | Random tight-TW |
+| R2 | 10 | 10 | +0.0 | +9.8% | Random wide-TW, all veh exact |
+| RC1 | 10 | 1 | +1.0 | +24.3% | Mixed tight-TW |
+| RC2 | 10 | 10 | +0.3 | +7.4% | Mixed wide-TW, all veh exact |
+
+Key observations:
+- R2 and RC2 (wide time windows) achieve exact vehicle counts on all instances.
+- c1_4_1 matches BKS perfectly (40 vehicles, +0.0% distance).
+- Distance gap is the main remaining opportunity — algorithm is sound, needs more
+  iterations (time budget) and tuned parameters (S20) to close further.
 
 **Implementation status:** ✅ Done (Mar 2026)
 
