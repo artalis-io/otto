@@ -102,6 +102,8 @@ int simplex_phase1_no_pivot_ladder_rescue_guard_plan_for_test(
     int ladder_step,
     int rescue_cooldown_iters,
     int rescue_fail_streak);
+int simplex_phase1_dir_skip_rescue_cadence_plan_for_test(
+    int dir_skip_event_streak);
 
 int simplex_phase1_force_pivot_mode_plan_for_test(int m,
                                                    int degenerate_count,
@@ -350,6 +352,12 @@ typedef struct {
     int rescue_fail_streak;
     int expected_step;
 } NoPivotLadderGuardCase;
+
+typedef struct {
+    const char *name;
+    int dir_skip_event_streak;
+    int expected_due;
+} DirSkipRescueCadenceCase;
 
 typedef struct {
     const char *name;
@@ -670,6 +678,18 @@ static int run_no_pivot_ladder_guard_case(const NoPivotLadderGuardCase *tc) {
     if (step != tc->expected_step) {
         fprintf(stderr, "FAIL: %s (expected step=%d got=%d)\n",
                 tc->name, tc->expected_step, step);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_dir_skip_rescue_cadence_case(const DirSkipRescueCadenceCase *tc) {
+    int due = simplex_phase1_dir_skip_rescue_cadence_plan_for_test(
+        tc->dir_skip_event_streak);
+    if (due != tc->expected_due) {
+        fprintf(stderr, "FAIL: %s (expected due=%d got=%d)\n",
+                tc->name, tc->expected_due, due);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -1641,6 +1661,28 @@ int main(void) {
             .expected_step = 1
         }
     };
+    const DirSkipRescueCadenceCase dir_skip_rescue_cadence_cases[] = {
+        {
+            .name = "phase1 dir-skip rescue cadence not due before threshold",
+            .dir_skip_event_streak = 23,
+            .expected_due = 0
+        },
+        {
+            .name = "phase1 dir-skip rescue cadence due at threshold multiple",
+            .dir_skip_event_streak = 24,
+            .expected_due = 1
+        },
+        {
+            .name = "phase1 dir-skip rescue cadence repeats on period",
+            .dir_skip_event_streak = 36,
+            .expected_due = 1
+        },
+        {
+            .name = "phase1 dir-skip rescue cadence off period",
+            .dir_skip_event_streak = 35,
+            .expected_due = 0
+        }
+    };
     const ForcePivotModeCase force_pivot_mode_cases[] = {
         {
             .name = "force-pivot mode activates after repeated dir-skip no-recompute",
@@ -1779,6 +1821,7 @@ int main(void) {
     int total_no_pivot = (int)(sizeof(no_pivot_force_cases) / sizeof(no_pivot_force_cases[0]));
     int total_no_pivot_ladder = (int)(sizeof(no_pivot_ladder_cases) / sizeof(no_pivot_ladder_cases[0]));
     int total_no_pivot_ladder_guard = (int)(sizeof(no_pivot_ladder_guard_cases) / sizeof(no_pivot_ladder_guard_cases[0]));
+    int total_dir_skip_rescue_cadence = (int)(sizeof(dir_skip_rescue_cadence_cases) / sizeof(dir_skip_rescue_cadence_cases[0]));
     int total_force_pivot_mode = (int)(sizeof(force_pivot_mode_cases) / sizeof(force_pivot_mode_cases[0]));
     int total_soft_lu_policy_cd = (int)(sizeof(soft_lu_policy_cooldown_cases) / sizeof(soft_lu_policy_cooldown_cases[0]));
     int total_phase2_recompute_interval =
@@ -1788,6 +1831,7 @@ int main(void) {
                 total_periodic_cost_defer + total_dir_stabilize + total_dir_force +
                 total_dir_moderate + total_no_pivot + total_no_pivot_ladder +
                 total_no_pivot_ladder_guard +
+                total_dir_skip_rescue_cadence +
                 total_force_pivot_mode +
                 total_soft_lu_policy_cd +
                 total_phase2_recompute_interval;
@@ -1832,6 +1876,9 @@ int main(void) {
     }
     for (int i = 0; i < total_no_pivot_ladder_guard; i++) {
         pass += run_no_pivot_ladder_guard_case(&no_pivot_ladder_guard_cases[i]);
+    }
+    for (int i = 0; i < total_dir_skip_rescue_cadence; i++) {
+        pass += run_dir_skip_rescue_cadence_case(&dir_skip_rescue_cadence_cases[i]);
     }
     for (int i = 0; i < total_force_pivot_mode; i++) {
         pass += run_force_pivot_mode_case(&force_pivot_mode_cases[i]);
