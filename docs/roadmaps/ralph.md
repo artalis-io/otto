@@ -4,6 +4,23 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
+**Validation checkpoint** (2026-03-02, `cc3d1ff`) — rollback to capri-working interim baseline:
+- Reverted the uncommitted Phase-1 extreme-relax/retry experiment and restored the prior clean code baseline.
+- Direct check:
+  - `capri.mps`: `optimal` (`82` iterations, `~264 ms`);
+  - artifact: `/tmp/capri_rolled_back.json`.
+- Gate status on restored state:
+  - `make -C ralph test-netlib-gate-small` PASS
+    (27 files; timeout 1 = `bore3d`; `capri` solved; artifact:
+    `/tmp/netlib-regression-gate-20260302-141712`).
+  - `make -C ralph test-netlib-gate` currently fails only on `fit1p.mps` timeout
+    as a time-limit boundary case (artifacts:
+    `/tmp/netlib-regression-gate-20260302-142223`,
+    `/tmp/netlib-regression-gate-20260302-142756`).
+- Baseline decision:
+  - keep this rollback state as the active working baseline for `capri`;
+  - treat `fit1p` timeout boundary stabilization as next targeted follow-up.
+
 **Validation checkpoint** (2026-03-02, `efd5c8b`) — identity-separation retry-lane baseline:
 - Implemented adaptive identity-separation retry-lane selection in sparse LU numeric:
   - default retry lane remains dense-GE;
