@@ -4,6 +4,28 @@ Development roadmap for Ralph LP/MIP solver covering algorithms, performance, an
 
 ## Stable Baseline
 
+**Validation checkpoint** (2026-03-02, `efd5c8b`) — identity-separation retry-lane baseline:
+- Implemented adaptive identity-separation retry-lane selection in sparse LU numeric:
+  - default retry lane remains dense-GE;
+  - repeated same-signature identity-separation events promote retry lane to supernode
+    (no top-level dense fallback path added).
+- Added LU telemetry for retry-lane selection and conversion:
+  - `identity_sep_retry_lane_dense_chosen/successes`;
+  - `identity_sep_retry_lane_supernode_chosen/successes`.
+- Added/updated unit coverage:
+  - `make -C ralph test-lu-markowitz` PASS (`60/60`);
+  - `make -C ralph test-lp-telemetry-lu-sparse` PASS (`92/92`);
+  - `make -C ralph test-lp-telemetry-lu` PASS (`13/13`).
+- Gate status:
+  - focused (`bore3d`, `capri`) PASS; timeout files: `1`
+    (`/tmp/netlib-regression-gate-20260302-122155`);
+  - `make -C ralph test-netlib-gate-small` PASS
+    (27 files; timeout 1; dense fallback files 0; artifact:
+    `/tmp/netlib-regression-gate-20260302-122218`).
+- Baseline delta vs previous checkpoint:
+  - `capri.mps`: timeout-class -> `optimal` (now solved inside gate budget);
+  - `bore3d.mps`: still timeout-class (next priority remains Phase-1 iteration-control).
+
 **Validation checkpoint** (2026-02-27, `da16bce`) — P1-G Markowitz numeric retry-ladder baseline:
 - Implemented P1-G in sparse LU path:
   - explicit sparse numeric terminal-failure taxonomy

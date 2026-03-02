@@ -1,5 +1,5 @@
 {
-  "source_commit": "4eecb44",
+  "source_commit": "efd5c8b",
   "description": "Known NETLIB gate baseline for no-regression checks",
   "defaults": {
     "hard_cap_sec": 20,
@@ -39,7 +39,6 @@
     "agg2.mps",
     "agg3.mps",
     "bore3d.mps",
-    "capri.mps",
     "share1b.mps",
     "scagr25.mps"
   ],
