@@ -8,6 +8,7 @@ int simplex_choose_basis_action_for_test(double pivot,
                                          int lu_update_status,
                                          int lu_reason,
                                          int repeat_pattern,
+                                         int lu_num_updates,
                                          double growth_factor);
 
 /* Internal scheduler test hook from simplex.c */
@@ -178,6 +179,7 @@ typedef struct {
     int lu_update_status;
     int lu_reason;
     int repeat_pattern;
+    int lu_num_updates;
     double growth_factor;
     int expected_action;
 } PolicyCase;
@@ -188,6 +190,7 @@ static int run_case(const PolicyCase *tc) {
                                                    tc->lu_update_status,
                                                    tc->lu_reason,
                                                    tc->repeat_pattern,
+                                                   tc->lu_num_updates,
                                                    tc->growth_factor);
     if (got != tc->expected_action) {
         fprintf(stderr, "FAIL: %s (expected=%d got=%d)\n",
@@ -984,6 +987,7 @@ int main(void) {
             .lu_update_status = 0,
             .lu_reason = LU_FAIL_NONE,
             .repeat_pattern = 0,
+            .lu_num_updates = 0,
             .growth_factor = 1.0,
             .expected_action = EXPECT_UPDATE
         },
@@ -994,18 +998,31 @@ int main(void) {
             .lu_update_status = 0,
             .lu_reason = LU_FAIL_NONE,
             .repeat_pattern = 0,
+            .lu_num_updates = 0,
             .growth_factor = 1.0,
             .expected_action = EXPECT_ABORT
         },
         {
-            .name = "forced-refactor flag bypasses LU update",
+            .name = "forced-refactor flag bypasses LU update after warmup",
             .pivot = 1e-2,
             .force_refactor = 1,
             .lu_update_status = 0,
             .lu_reason = LU_FAIL_NONE,
             .repeat_pattern = 0,
+            .lu_num_updates = 10,
             .growth_factor = 1.0,
             .expected_action = EXPECT_REFACTOR
+        },
+        {
+            .name = "forced-refactor small-pivot path is gated on fresh basis",
+            .pivot = 1e-2,
+            .force_refactor = 1,
+            .lu_update_status = 0,
+            .lu_reason = LU_FAIL_NONE,
+            .repeat_pattern = 0,
+            .lu_num_updates = 0,
+            .growth_factor = 1.0,
+            .expected_action = EXPECT_UPDATE
         },
         {
             .name = "repeat-pattern trigger forces refactor",
@@ -1014,6 +1031,7 @@ int main(void) {
             .lu_update_status = 0,
             .lu_reason = LU_FAIL_NONE,
             .repeat_pattern = RALPH_PHASE1_REPEAT_REFACTOR_TRIGGER,
+            .lu_num_updates = 0,
             .growth_factor = 1.0,
             .expected_action = EXPECT_REFACTOR
         },
@@ -1024,6 +1042,7 @@ int main(void) {
             .lu_update_status = 0,
             .lu_reason = LU_FAIL_NONE,
             .repeat_pattern = 0,
+            .lu_num_updates = 0,
             .growth_factor = RALPH_LU_GROWTH_REFACTOR_THRESHOLD * 1.01,
             .expected_action = EXPECT_REFACTOR
         },
@@ -1034,6 +1053,7 @@ int main(void) {
             .lu_update_status = -1,
             .lu_reason = LU_FAIL_MAX_UPDATES,
             .repeat_pattern = 0,
+            .lu_num_updates = 0,
             .growth_factor = 1.0,
             .expected_action = EXPECT_REFACTOR
         },
@@ -1044,6 +1064,7 @@ int main(void) {
             .lu_update_status = -2,
             .lu_reason = LU_FAIL_FACTOR_SINGULAR,
             .repeat_pattern = 0,
+            .lu_num_updates = 0,
             .growth_factor = 1.0,
             .expected_action = EXPECT_REPAIR
         },
@@ -1054,6 +1075,7 @@ int main(void) {
             .lu_update_status = -3,
             .lu_reason = LU_FAIL_FACTOR_SINGULAR,
             .repeat_pattern = 0,
+            .lu_num_updates = 0,
             .growth_factor = 1.0,
             .expected_action = EXPECT_ABORT
         }
