@@ -166,6 +166,17 @@ typedef enum {
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_MIN_TRIGGER 24
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_BUDGET 12
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_MAX_BUDGET 32
+#define PHASE1_DIR_ESCAPE_MIN_M 200
+#define PHASE1_DIR_ESCAPE_BASE_TRIGGER 48
+#define PHASE1_DIR_ESCAPE_MIN_TRIGGER 20
+#define PHASE1_DIR_ESCAPE_BASE_NO_PROGRESS_TRIGGER 10
+#define PHASE1_DIR_ESCAPE_MIN_NO_PROGRESS_TRIGGER 4
+#define PHASE1_DIR_ESCAPE_BASE_COOLDOWN_UPDATES 48
+#define PHASE1_DIR_ESCAPE_MAX_COOLDOWN_UPDATES 160
+#define PHASE1_DIR_ESCAPE_TELEM_TRIGGER 1
+#define PHASE1_DIR_ESCAPE_TELEM_SUPPRESS_LU_HEALTH 2
+#define PHASE1_DIR_ESCAPE_TELEM_HARD_BYPASS 3
+#define PHASE1_DIR_ESCAPE_TELEM_SUPPRESS_FORCE_PIVOT_MODE 4
 #define PHASE1_SOFT_LU_POLICY_COOLDOWN_MIN_M 700
 #define PHASE1_SOFT_LU_POLICY_COOLDOWN_DEGEN_TRIGGER 20
 #define PHASE1_SOFT_LU_POLICY_COOLDOWN_MIN_UPDATES 12
@@ -1234,6 +1245,108 @@ static int phase1_activate_force_pivot_mode(
     return 1;
 }
 
+static int phase1_dir_escape_trigger_streak(int m, int degenerate_count) {
+    int trigger = PHASE1_DIR_ESCAPE_BASE_TRIGGER;
+    if (m >= PHASE1_DEGEN_THRESHOLD_LARGE_M) trigger -= 8;
+    if (degenerate_count >= 80) trigger -= 8;
+    if (degenerate_count >= 160) trigger -= 8;
+    if (trigger < PHASE1_DIR_ESCAPE_MIN_TRIGGER) {
+        trigger = PHASE1_DIR_ESCAPE_MIN_TRIGGER;
+    }
+    return trigger;
+}
+
+static int phase1_dir_escape_no_progress_trigger(int m, int degenerate_count) {
+    int trigger = PHASE1_DIR_ESCAPE_BASE_NO_PROGRESS_TRIGGER;
+    if (m >= PHASE1_DEGEN_THRESHOLD_LARGE_M) trigger -= 2;
+    if (degenerate_count >= 80) trigger -= 2;
+    if (degenerate_count >= 160) trigger -= 2;
+    if (trigger < PHASE1_DIR_ESCAPE_MIN_NO_PROGRESS_TRIGGER) {
+        trigger = PHASE1_DIR_ESCAPE_MIN_NO_PROGRESS_TRIGGER;
+    }
+    return trigger;
+}
+
+static int phase1_dir_escape_cooldown_updates(int m, int degenerate_count) {
+    int cooldown = PHASE1_DIR_ESCAPE_BASE_COOLDOWN_UPDATES;
+    if (m >= PHASE1_DEGEN_THRESHOLD_LARGE_M) cooldown += 16;
+    if (degenerate_count >= 80) cooldown += 16;
+    if (degenerate_count >= 160) cooldown += 32;
+    if (cooldown > PHASE1_DIR_ESCAPE_MAX_COOLDOWN_UPDATES) {
+        cooldown = PHASE1_DIR_ESCAPE_MAX_COOLDOWN_UPDATES;
+    }
+    return cooldown;
+}
+
+static int phase1_dir_stabilize_lu_health_hard(const LUFactorization *lu) {
+    if (!lu) return 0;
+    if (lu->max_updates > 0 && lu->num_updates >= lu->max_updates) return 1;
+    {
+        double growth_threshold = (lu->growth_refactor_threshold > 0.0)
+            ? lu->growth_refactor_threshold
+            : RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
+        if (isfinite(lu->growth_factor) &&
+            lu->growth_factor > growth_threshold * 3.0) {
+            return 1;
+        }
+    }
+    if (isfinite(lu->cond_estimate) && lu->cond_estimate > 1e10) return 1;
+    if (lu->use_ft_updates && lu->spike_pool_capacity > 0) {
+        if (lu->spike_pool_used >= (lu->spike_pool_capacity * 95) / 100) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int phase1_dir_stabilize_escape_gate_plan(int m,
+                                                 int degenerate_count,
+                                                 int dir_skip_event_streak,
+                                                 int no_progress_streak,
+                                                 int escape_cooldown,
+                                                 int force_extreme_dir,
+                                                 int force_lu_health,
+                                                 int lu_hard_trigger,
+                                                 int *next_escape_cooldown_out,
+                                                 int *triggered_out,
+                                                 int *hard_bypass_out) {
+    int next_escape_cooldown = escape_cooldown;
+    int triggered = 0;
+    int hard_bypass = 0;
+    int suppress = 0;
+    int streak_trigger;
+    int no_progress_trigger;
+    int chronic_treadmill = 0;
+
+    if (next_escape_cooldown < 0) next_escape_cooldown = 0;
+    if (force_lu_health && !force_extreme_dir && m >= PHASE1_DIR_ESCAPE_MIN_M) {
+        streak_trigger = phase1_dir_escape_trigger_streak(m, degenerate_count);
+        no_progress_trigger = phase1_dir_escape_no_progress_trigger(m, degenerate_count);
+        chronic_treadmill =
+            ((dir_skip_event_streak >= streak_trigger &&
+              no_progress_streak >= no_progress_trigger) ||
+             (no_progress_streak >= no_progress_trigger * 3));
+        if (lu_hard_trigger) {
+            if (next_escape_cooldown > 0 ||
+                chronic_treadmill) {
+                hard_bypass = 1;
+            }
+        } else if (next_escape_cooldown > 0) {
+            suppress = 1;
+        } else if (chronic_treadmill) {
+            next_escape_cooldown = phase1_dir_escape_cooldown_updates(
+                m, degenerate_count);
+            triggered = 1;
+            suppress = 1;
+        }
+    }
+
+    if (next_escape_cooldown_out) *next_escape_cooldown_out = next_escape_cooldown;
+    if (triggered_out) *triggered_out = triggered;
+    if (hard_bypass_out) *hard_bypass_out = hard_bypass;
+    return suppress;
+}
+
 static int phase1_note_no_pivot_and_maybe_force(SimplexSolver *solver,
                                                 int m,
                                                 int degenerate_count,
@@ -1341,6 +1454,32 @@ int simplex_phase1_force_pivot_mode_plan_for_test(int m,
     if (next_streak_out) *next_streak_out = streak;
     if (next_budget_out) *next_budget_out = budget;
     return activated;
+}
+
+int simplex_phase1_dir_stabilize_escape_gate_plan_for_test(
+    int m,
+    int degenerate_count,
+    int dir_skip_event_streak,
+    int no_progress_streak,
+    int escape_cooldown,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int *next_escape_cooldown_out,
+    int *triggered_out,
+    int *hard_bypass_out) {
+    return phase1_dir_stabilize_escape_gate_plan(
+        m,
+        degenerate_count,
+        dir_skip_event_streak,
+        no_progress_streak,
+        escape_cooldown,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        next_escape_cooldown_out,
+        triggered_out,
+        hard_bypass_out);
 }
 
 int simplex_phase1_soft_lu_policy_cooldown_plan_for_test(
@@ -5689,6 +5828,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     int phase1_rc_only_streak = 0;
     int phase1_dir_skip_event_streak = 0;
     int phase1_dir_skip_no_recompute_streak = 0;
+    int phase1_dir_escape_cooldown = 0;
     int phase1_force_pivot_attempt_budget = 0;
     int periodic_policy_cooldown = 0;
     double periodic_policy_pressure_decay = 0.0;
@@ -5752,6 +5892,9 @@ static int simplex_phase1(SimplexSolver *solver) {
         if (phase1_no_pivot_ladder_rescue_cooldown > 0) {
             phase1_no_pivot_ladder_rescue_cooldown--;
         }
+        if (phase1_dir_escape_cooldown > 0) {
+            phase1_dir_escape_cooldown--;
+        }
         if (periodic_policy_cooldown > 0) {
             periodic_policy_cooldown--;
         }
@@ -5790,6 +5933,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 ratio_breakdown_same_entering_streak = 0;
                 phase1_dir_skip_event_streak = 0;
                 phase1_dir_skip_no_recompute_streak = 0;
+                phase1_dir_escape_cooldown = 0;
                 phase1_no_pivot_progress_reset(
                     &phase1_no_pivot_no_progress_streak,
                     &phase1_no_pivot_prev_art_sum,
@@ -6172,10 +6316,60 @@ static int simplex_phase1(SimplexSolver *solver) {
                     dir_inf_ratio,
                     cooldown_active);
             int force_dir_refactor_lu_health = lu_needs_refactorization(tab->lu);
-            int force_dir_refactor = force_dir_refactor_extreme ||
-                                     force_dir_refactor_lu_health;
             int force_pivot_mode_active =
                 (phase1_force_pivot_attempt_budget > 0);
+            int force_dir_refactor_guard_trigger =
+                (force_dir_refactor_lu_health || force_pivot_mode_active);
+            int lu_hard_trigger =
+                phase1_dir_stabilize_lu_health_hard(tab->lu);
+            int escape_triggered = 0;
+            int escape_hard_bypass = 0;
+            int suppress_lu_health = phase1_dir_stabilize_escape_gate_plan(
+                tab->m,
+                degenerate_count,
+                phase1_dir_skip_event_streak,
+                phase1_no_pivot_no_progress_streak,
+                phase1_dir_escape_cooldown,
+                force_dir_refactor_extreme,
+                force_dir_refactor_guard_trigger,
+                lu_hard_trigger,
+                &phase1_dir_escape_cooldown,
+                &escape_triggered,
+                &escape_hard_bypass);
+            if (escape_triggered) {
+                lp_telemetry_record_phase1_dir_stabilize_escape_gate(
+                    solver,
+                    PHASE1_DIR_ESCAPE_TELEM_TRIGGER);
+            }
+            if (escape_hard_bypass) {
+                lp_telemetry_record_phase1_dir_stabilize_escape_gate(
+                    solver,
+                    PHASE1_DIR_ESCAPE_TELEM_HARD_BYPASS);
+            }
+            if (suppress_lu_health) {
+                if (force_dir_refactor_lu_health) {
+                    force_dir_refactor_lu_health = 0;
+                    lp_telemetry_record_phase1_dir_stabilize_escape_gate(
+                        solver,
+                        PHASE1_DIR_ESCAPE_TELEM_SUPPRESS_LU_HEALTH);
+                }
+                if (force_pivot_mode_active) {
+                    force_pivot_mode_active = 0;
+                    lp_telemetry_record_phase1_dir_stabilize_escape_gate(
+                        solver,
+                        PHASE1_DIR_ESCAPE_TELEM_SUPPRESS_FORCE_PIVOT_MODE);
+                }
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Dir-stabilize escape gate suppressed forced direction-refactor path (iter=%d entering=%d dir_skip_streak=%d no_progress=%d cooldown=%d)\n",
+                            iter,
+                            entering,
+                            phase1_dir_skip_event_streak,
+                            phase1_no_pivot_no_progress_streak,
+                            phase1_dir_escape_cooldown);
+                }
+            }
+            int force_dir_refactor = force_dir_refactor_extreme ||
+                                     force_dir_refactor_lu_health;
             int moderate_defer =
                 lp_refactor_policy_phase1_dir_stabilize_should_defer_moderate(
                     dir_inf_ratio,
@@ -6473,6 +6667,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                     LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
             }
             phase1_dir_skip_event_streak = 0;
+            phase1_dir_escape_cooldown = 0;
             dir_stabilize_moderate_defer_pending = 0;
 
             if (solver->verbose >= 2) {
@@ -6944,6 +7139,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         ratio_breakdown_last_entering = -1;
         ratio_breakdown_same_entering_streak = 0;
         phase1_dir_skip_event_streak = 0;
+        phase1_dir_escape_cooldown = 0;
         dir_stabilize_moderate_defer_pending = 0;
         phase1_rc_only_streak = 0;
         phase1_dir_skip_no_recompute_streak = 0;

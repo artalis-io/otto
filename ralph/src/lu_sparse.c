@@ -1891,6 +1891,8 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
 #define MARKOWITZ_RETRY_RESERVED_RELAX_RATIO 0.05 /* Retry profile reserved-row relax */
 #define MARKOWITZ_CIRCUIT_BAD_STREAK 3 /* Trip breaker after this many bad outcomes */
 #define MARKOWITZ_CIRCUIT_SKIP_BUDGET 128 /* Skip this many same-structure Markowitz attempts */
+#define MARKOWITZ_GLOBAL_SINGULAR_BAD_STREAK 6 /* Trip global skip after this many singular outcomes */
+#define MARKOWITZ_GLOBAL_SKIP_BUDGET 96 /* Skip this many Markowitz attempts globally after chronic singulars */
 #define MARKOWITZ_FILL_GAP    8     /* Extra slots per column/row for fill-in */
 #define MARKOWITZ_POOL_MULT   4     /* Pool = MULT × initial nnz */
 #define MARKOWITZ_POOL_RETRY_MULT 8 /* Legacy retry multiplier (first growth target) */
@@ -2008,6 +2010,37 @@ static void mkz_circuit_note_good_outcome(LUFactorization *lu, uint64_t fingerpr
         lu->mkz_circuit_fingerprint = fingerprint;
         lu->mkz_circuit_bad_streak = 0;
         lu->mkz_circuit_skip_budget = 0;
+    }
+}
+
+/* Global Markowitz skip budget.
+ * This complements the fingerprint-local circuit: if singular outcomes are
+ * chronic across changing fingerprints, skip Markowitz for a bounded window. */
+static int mkz_global_skip_should_skip(LUFactorization *lu) {
+    if (!lu || lu->mkz_global_skip_budget <= 0) return 0;
+    lu->mkz_global_skip_budget--;
+    lp_telemetry_lu_mark_mkz_global_skip_skip(lu);
+    return 1;
+}
+
+static void mkz_global_skip_note_singular_bad_outcome(LUFactorization *lu) {
+    if (!lu) return;
+    if (lu->mkz_global_singular_streak < INT_MAX) {
+        lu->mkz_global_singular_streak++;
+    }
+    if (lu->mkz_global_singular_streak >= MARKOWITZ_GLOBAL_SINGULAR_BAD_STREAK) {
+        lu->mkz_global_skip_budget = MARKOWITZ_GLOBAL_SKIP_BUDGET;
+        lu->mkz_global_singular_streak = 0;
+        lp_telemetry_lu_mark_mkz_global_skip_trip(lu);
+    }
+}
+
+static void mkz_global_skip_note_reset(LUFactorization *lu) {
+    if (!lu) return;
+    if (lu->mkz_global_singular_streak > 0 || lu->mkz_global_skip_budget > 0) {
+        lu->mkz_global_singular_streak = 0;
+        lu->mkz_global_skip_budget = 0;
+        lp_telemetry_lu_mark_mkz_global_skip_reset(lu);
     }
 }
 
@@ -2649,6 +2682,42 @@ int lu_identity_sep_retry_lane_plan_for_test(int idsep_retry_streak,
     return lu_identity_sep_retry_lane_plan(idsep_retry_streak, sn_enabled, k);
 }
 
+enum {
+    LU_MKZ_GLOBAL_EVENT_NONE = 0,
+    LU_MKZ_GLOBAL_EVENT_SINGULAR_FAILURE = 1,
+    LU_MKZ_GLOBAL_EVENT_SUCCESS = 2
+};
+
+int lu_markowitz_global_skip_plan_for_test(int bad_streak,
+                                           int skip_budget,
+                                           int event,
+                                           int *next_bad_streak_out,
+                                           int *next_skip_budget_out) {
+    int should_skip = 0;
+    if (bad_streak < 0) bad_streak = 0;
+    if (skip_budget < 0) skip_budget = 0;
+
+    if (event == LU_MKZ_GLOBAL_EVENT_SINGULAR_FAILURE) {
+        if (bad_streak < INT_MAX) bad_streak++;
+        if (bad_streak >= MARKOWITZ_GLOBAL_SINGULAR_BAD_STREAK) {
+            skip_budget = MARKOWITZ_GLOBAL_SKIP_BUDGET;
+            bad_streak = 0;
+        }
+    } else if (event == LU_MKZ_GLOBAL_EVENT_SUCCESS) {
+        bad_streak = 0;
+        skip_budget = 0;
+    }
+
+    if (skip_budget > 0) {
+        should_skip = 1;
+        skip_budget--;
+    }
+
+    if (next_bad_streak_out) *next_bad_streak_out = bad_streak;
+    if (next_skip_budget_out) *next_skip_budget_out = skip_budget;
+    return should_skip;
+}
+
 static int lu_numeric_backend_to_basis_governor_backend(int backend) {
     if (backend == LU_NUMERIC_BACKEND_MARKOWITZ) {
         return LP_BASIS_GOV_BACKEND_MARKOWITZ;
@@ -2901,9 +2970,13 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     int L_nnz = 0, U_nnz = 0;
     lp_telemetry_lu_clear_mkz_last_failure(lu);
     int mkz_skip_by_circuit = 0;
+    int mkz_skip_by_global = 0;
     if (!skip_sparse_numeric && lu->mkz_enabled && k >= MARKOWITZ_MIN_K) {
         if (!full_retry_mode) {
             mkz_skip_by_circuit = mkz_circuit_should_skip(lu, mkz_fingerprint);
+            if (!mkz_skip_by_circuit) {
+                mkz_skip_by_global = mkz_global_skip_should_skip(lu);
+            }
         }
     }
     if (lu->basis_governor &&
@@ -2911,7 +2984,8 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
         int mkz_eligible = (!skip_sparse_numeric &&
                             lu->mkz_enabled &&
                             k >= MARKOWITZ_MIN_K &&
-                            !mkz_skip_by_circuit);
+                            !mkz_skip_by_circuit &&
+                            !mkz_skip_by_global);
         int sn_eligible = (!skip_sparse_numeric &&
                            lu->sn_enabled &&
                            k >= SN_MIN_K &&
@@ -2925,7 +2999,8 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
      * This exploits sparsity within structural columns, reducing O(k³) to O(nnz×fill).
      * Uses dedicated growable mkz_work to avoid contention with dense_work layout. */
     if (!skip_sparse_numeric && lu->mkz_enabled && k >= MARKOWITZ_MIN_K &&
-        !mkz_skip_by_circuit) {
+        !mkz_skip_by_circuit &&
+        !mkz_skip_by_global) {
         mkz_used_this_call = 1;
         if (full_retry_mode) {
             mkz_attempted_in_full_retry = 1;
@@ -3076,6 +3151,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
         rc = rc_final;
         if (rc == 0) {
             lp_telemetry_lu_mark_mkz_success(lu);
+            mkz_global_skip_note_reset(lu);
             lu_supernode_cost_gate_note_markowitz(lu, k, t_markowitz_numeric_ms);
             if (full_retry_mode) {
                 lp_telemetry_lu_mark_symbolic_full_retry_mkz_success(lu);
@@ -3128,7 +3204,10 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
         if (rc == MKZ_FAIL_SINGULAR) {
             mkz_bad_outcome_this_call = 1;
             saw_mkz_singular_failure = 1;
+            mkz_global_skip_note_singular_bad_outcome(lu);
             mkz_circuit_note_bad_outcome(lu, mkz_fingerprint);
+        } else {
+            mkz_global_skip_note_reset(lu);
         }
 
         /* Markowitz failed — reset and fall through to supernodal/dense */

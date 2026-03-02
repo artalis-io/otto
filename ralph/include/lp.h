@@ -219,6 +219,9 @@ typedef struct {
     int mkz_circuit_trips;    /* Markowitz circuit breaker trip events */
     int mkz_circuit_skips;    /* Markowitz attempts skipped by circuit breaker */
     int mkz_circuit_resets;   /* Circuit streak reset after successful Markowitz path */
+    int mkz_global_skip_trips; /* Global Markowitz skip-budget trip events */
+    int mkz_global_skip_skips; /* Markowitz attempts skipped by global skip-budget */
+    int mkz_global_skip_resets; /* Global skip-budget reset after successful Markowitz path */
     int mkz_profile_retry_attempts; /* Numeric retry with relaxed Markowitz profile */
     int mkz_profile_retry_successes; /* Relaxed Markowitz profile recovered factorization */
     int mkz_profile_retry_failures;  /* Relaxed Markowitz profile still failed */
@@ -419,6 +422,8 @@ typedef struct {
     uint64_t mkz_circuit_fingerprint; /* Fingerprint keyed for circuit-breaker state */
     int mkz_circuit_bad_streak;       /* Consecutive bad Markowitz outcomes for fingerprint */
     int mkz_circuit_skip_budget;      /* Remaining calls to skip Markowitz for fingerprint */
+    int mkz_global_singular_streak;   /* Consecutive singular Markowitz outcomes (cross-fingerprint) */
+    int mkz_global_skip_budget;       /* Remaining calls to skip Markowitz globally */
     uint64_t idsep_retry_fingerprint; /* Fingerprint keyed for identity-separation retry lane */
     int idsep_retry_streak;           /* Consecutive identity-separation events on fingerprint */
 
@@ -665,6 +670,10 @@ typedef struct {
     int perf_phase1_dir_stabilize_skip_full;
     int perf_phase1_dir_stabilize_skip_no_recompute;
     int perf_phase1_dir_stabilize_skip_guard_refresh;
+    int perf_phase1_dir_stabilize_escape_gate_triggers;
+    int perf_phase1_dir_stabilize_escape_gate_suppressed_lu_health;
+    int perf_phase1_dir_stabilize_escape_gate_suppressed_force_pivot_mode;
+    int perf_phase1_dir_stabilize_escape_gate_hard_bypass;
     int perf_phase1_recompute_after_ratio_breakdown;
     int perf_phase1_recompute_after_dir_skip;
     int perf_phase1_recompute_after_dir_refactor;
@@ -964,6 +973,10 @@ typedef struct {
     int perf_phase1_dir_stabilize_skip_full;
     int perf_phase1_dir_stabilize_skip_no_recompute;
     int perf_phase1_dir_stabilize_skip_guard_refresh;
+    int perf_phase1_dir_stabilize_escape_gate_triggers;
+    int perf_phase1_dir_stabilize_escape_gate_suppressed_lu_health;
+    int perf_phase1_dir_stabilize_escape_gate_suppressed_force_pivot_mode;
+    int perf_phase1_dir_stabilize_escape_gate_hard_bypass;
     int perf_phase1_recompute_after_ratio_breakdown;
     int perf_phase1_recompute_after_dir_skip;
     int perf_phase1_recompute_after_dir_refactor;
@@ -1109,6 +1122,9 @@ typedef struct {
     int mkz_circuit_trips;
     int mkz_circuit_skips;
     int mkz_circuit_resets;
+    int mkz_global_skip_trips;
+    int mkz_global_skip_skips;
+    int mkz_global_skip_resets;
     int mkz_profile_retry_attempts;
     int mkz_profile_retry_successes;
     int mkz_profile_retry_failures;
@@ -1431,6 +1447,9 @@ void lp_telemetry_record_phase1_dir_stabilize_skip_no_recompute(
     SimplexSolver *solver);
 void lp_telemetry_record_phase1_dir_stabilize_skip_guard_refresh(
     SimplexSolver *solver);
+void lp_telemetry_record_phase1_dir_stabilize_escape_gate(
+    SimplexSolver *solver,
+    int event);
 void lp_telemetry_record_phase1_recompute(SimplexSolver *solver,
                                           LPPhase1RecomputeReason reason);
 void lp_telemetry_record_phase1_recompute_rc_only(SimplexSolver *solver);
@@ -1528,6 +1547,9 @@ void lp_telemetry_lu_mark_mkz_reserved_fallback_reject(LUFactorization *lu);
 void lp_telemetry_lu_mark_mkz_circuit_trip(LUFactorization *lu);
 void lp_telemetry_lu_mark_mkz_circuit_skip(LUFactorization *lu);
 void lp_telemetry_lu_mark_mkz_circuit_reset(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_global_skip_trip(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_global_skip_skip(LUFactorization *lu);
+void lp_telemetry_lu_mark_mkz_global_skip_reset(LUFactorization *lu);
 void lp_telemetry_lu_mark_mkz_profile_retry_attempt(LUFactorization *lu);
 void lp_telemetry_lu_mark_mkz_profile_retry_success(LUFactorization *lu);
 void lp_telemetry_lu_mark_mkz_profile_retry_failure(LUFactorization *lu);

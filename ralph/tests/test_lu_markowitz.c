@@ -25,6 +25,11 @@ double lu_update_pivot_ratio_threshold_for_test(int num_updates,
 int lu_identity_sep_retry_lane_plan_for_test(int idsep_retry_streak,
                                              int sn_enabled,
                                              int k);
+int lu_markowitz_global_skip_plan_for_test(int bad_streak,
+                                           int skip_budget,
+                                           int event,
+                                           int *next_bad_streak_out,
+                                           int *next_skip_budget_out);
 
 #define ASSERT(cond, msg) do { \
     tests_run++; \
@@ -807,6 +812,103 @@ static void test_identity_sep_retry_lane_policy(void) {
 }
 
 /* ============================================================================
+ * Test 13: Markowitz global skip-budget policy (cross-fingerprint chronic singulars)
+ * ============================================================================ */
+static void test_markowitz_global_skip_policy(void) {
+    printf("  LU: Markowitz global skip-budget policy...\n");
+
+    int bad_streak = 0;
+    int skip_budget = 0;
+    int should_skip = 0;
+
+    for (int i = 0; i < 5; i++) {
+        should_skip = lu_markowitz_global_skip_plan_for_test(
+            bad_streak, skip_budget, 1, &bad_streak, &skip_budget);
+        ASSERT_INT_EQ(should_skip, 0,
+                      "mkz global policy: no skip before chronic-failure threshold");
+    }
+
+    should_skip = lu_markowitz_global_skip_plan_for_test(
+        bad_streak, skip_budget, 1, &bad_streak, &skip_budget);
+    ASSERT_INT_EQ(should_skip, 1,
+                  "mkz global policy: skip budget trips at chronic singular threshold");
+    ASSERT_INT_EQ(bad_streak, 0,
+                  "mkz global policy: bad streak resets after trip");
+    ASSERT(skip_budget > 0,
+           "mkz global policy: skip budget remains active after first consumed skip");
+
+    should_skip = lu_markowitz_global_skip_plan_for_test(
+        bad_streak, skip_budget, 0, &bad_streak, &skip_budget);
+    ASSERT_INT_EQ(should_skip, 1,
+                  "mkz global policy: active skip budget skips next attempt");
+
+    should_skip = lu_markowitz_global_skip_plan_for_test(
+        bad_streak, skip_budget, 2, &bad_streak, &skip_budget);
+    ASSERT_INT_EQ(should_skip, 0,
+                  "mkz global policy: Markowitz success clears skip budget");
+    ASSERT_INT_EQ(bad_streak, 0,
+                  "mkz global policy: success leaves bad streak cleared");
+    ASSERT_INT_EQ(skip_budget, 0,
+                  "mkz global policy: success clears remaining skip budget");
+}
+
+/* ============================================================================
+ * Test 14: Markowitz global skip-budget runtime telemetry integration
+ * ============================================================================ */
+static void test_markowitz_global_skip_runtime_telemetry(void) {
+    printf("  LU: Markowitz global skip-budget runtime telemetry...\n");
+
+    const int m = 60;
+    const int k = 40;
+    double *A = (double *)calloc((size_t)m * m, sizeof(double));
+
+    for (int i = 0; i < k; i++) {
+        A[i * m + i] = 5.0;
+        A[((i + 1) % k) * m + i] = 0.25;
+    }
+    for (int r = 0; r < k; r++) {
+        A[r * m + (k - 1)] = A[r * m + (k - 2)];
+    }
+    for (int t = 0; t < m - k; t++) {
+        int row = k + t;
+        A[row * m + (k + t)] = 1.0;
+    }
+
+    SparseMatrix *B = dense_to_csc(A, m, m);
+    LUFactorization *lu = lu_create(m);
+    ASSERT(lu != NULL, "mkz global runtime: lu_create");
+    if (!lu) {
+        free_csc(B);
+        free(A);
+        return;
+    }
+    lu->mkz_enabled = 1;
+    lu->sn_enabled = 0;
+
+    const int attempts = 24;
+    for (int t = 0; t < attempts; t++) {
+        /* Disable local fingerprint circuit per attempt so global policy is
+         * the active skip mechanism under chronic singular outcomes. */
+        lu->mkz_circuit_bad_streak = 0;
+        lu->mkz_circuit_skip_budget = 0;
+        lu->mkz_circuit_fingerprint = (uint64_t)(1000 + t);
+        ASSERT(lu_factorize(lu, B) != 0,
+               "mkz global runtime: singular factorization should fail");
+    }
+
+    ASSERT(lu->telemetry.mkz_global_skip_trips > 0,
+           "mkz global runtime: global skip trip counted");
+    ASSERT(lu->telemetry.mkz_global_skip_skips > 0,
+           "mkz global runtime: global skip usage counted");
+    ASSERT(lu->telemetry.mkz_calls < attempts,
+           "mkz global runtime: global skips reduced Markowitz attempts");
+
+    lu_free(lu);
+    free_csc(B);
+    free(A);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -824,6 +926,8 @@ int main(void) {
     test_supernode_cost_gate_skip_regression();
     test_lu_update_pivot_threshold_adaptive();
     test_identity_sep_retry_lane_policy();
+    test_markowitz_global_skip_policy();
+    test_markowitz_global_skip_runtime_telemetry();
 
     printf("\nIntegration (A/B Comparison):\n");
     test_markowitz_integration_small_lp();

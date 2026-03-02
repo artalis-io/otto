@@ -31,6 +31,9 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.mkz_circuit_trips = 0;
     lu->telemetry.mkz_circuit_skips = 0;
     lu->telemetry.mkz_circuit_resets = 0;
+    lu->telemetry.mkz_global_skip_trips = 0;
+    lu->telemetry.mkz_global_skip_skips = 0;
+    lu->telemetry.mkz_global_skip_resets = 0;
     lu->telemetry.mkz_profile_retry_attempts = 0;
     lu->telemetry.mkz_profile_retry_successes = 0;
     lu->telemetry.mkz_profile_retry_failures = 0;
@@ -147,6 +150,9 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(mkz_circuit_trips);
     COPY_LU_TELEM_FIELD(mkz_circuit_skips);
     COPY_LU_TELEM_FIELD(mkz_circuit_resets);
+    COPY_LU_TELEM_FIELD(mkz_global_skip_trips);
+    COPY_LU_TELEM_FIELD(mkz_global_skip_skips);
+    COPY_LU_TELEM_FIELD(mkz_global_skip_resets);
     COPY_LU_TELEM_FIELD(mkz_profile_retry_attempts);
     COPY_LU_TELEM_FIELD(mkz_profile_retry_successes);
     COPY_LU_TELEM_FIELD(mkz_profile_retry_failures);
