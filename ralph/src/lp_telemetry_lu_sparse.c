@@ -283,6 +283,21 @@ void lp_telemetry_lu_mark_mkz_circuit_reset(LUFactorization *lu) {
     lu->telemetry.mkz_circuit_resets++;
 }
 
+void lp_telemetry_lu_mark_mkz_global_skip_trip(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.mkz_global_skip_trips++;
+}
+
+void lp_telemetry_lu_mark_mkz_global_skip_skip(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.mkz_global_skip_skips++;
+}
+
+void lp_telemetry_lu_mark_mkz_global_skip_reset(LUFactorization *lu) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.mkz_global_skip_resets++;
+}
+
 void lp_telemetry_lu_mark_mkz_profile_retry_attempt(LUFactorization *lu) {
     if (!lu_telemetry_enabled(lu)) return;
     lu->telemetry.mkz_profile_retry_attempts++;

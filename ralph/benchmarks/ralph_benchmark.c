@@ -267,6 +267,10 @@ typedef struct {
     int phase1_dir_stabilize_skip_full;
     int phase1_dir_stabilize_skip_no_recompute;
     int phase1_dir_stabilize_skip_guard_refresh;
+    int phase1_dir_stabilize_escape_gate_triggers;
+    int phase1_dir_stabilize_escape_gate_suppressed_lu_health;
+    int phase1_dir_stabilize_escape_gate_suppressed_force_pivot_mode;
+    int phase1_dir_stabilize_escape_gate_hard_bypass;
     int phase1_recompute_after_ratio_breakdown;
     int phase1_recompute_after_dir_skip;
     int phase1_recompute_after_dir_refactor;
@@ -397,6 +401,9 @@ typedef struct {
     int lu_mkz_circuit_trips;
     int lu_mkz_circuit_skips;
     int lu_mkz_circuit_resets;
+    int lu_mkz_global_skip_trips;
+    int lu_mkz_global_skip_skips;
+    int lu_mkz_global_skip_resets;
     int lu_mkz_profile_retry_attempts;
     int lu_mkz_profile_retry_successes;
     int lu_mkz_profile_retry_failures;
@@ -1040,6 +1047,14 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_dir_stabilize_skip_no_recompute;
             result.phase1_dir_stabilize_skip_guard_refresh =
                 solver_tel.perf_phase1_dir_stabilize_skip_guard_refresh;
+            result.phase1_dir_stabilize_escape_gate_triggers =
+                solver_tel.perf_phase1_dir_stabilize_escape_gate_triggers;
+            result.phase1_dir_stabilize_escape_gate_suppressed_lu_health =
+                solver_tel.perf_phase1_dir_stabilize_escape_gate_suppressed_lu_health;
+            result.phase1_dir_stabilize_escape_gate_suppressed_force_pivot_mode =
+                solver_tel.perf_phase1_dir_stabilize_escape_gate_suppressed_force_pivot_mode;
+            result.phase1_dir_stabilize_escape_gate_hard_bypass =
+                solver_tel.perf_phase1_dir_stabilize_escape_gate_hard_bypass;
             result.phase1_recompute_after_ratio_breakdown =
                 solver_tel.perf_phase1_recompute_after_ratio_breakdown;
             result.phase1_recompute_after_dir_skip =
@@ -1212,6 +1227,9 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_mkz_circuit_trips = lu_tel.mkz_circuit_trips;
                 result.lu_mkz_circuit_skips = lu_tel.mkz_circuit_skips;
                 result.lu_mkz_circuit_resets = lu_tel.mkz_circuit_resets;
+                result.lu_mkz_global_skip_trips = lu_tel.mkz_global_skip_trips;
+                result.lu_mkz_global_skip_skips = lu_tel.mkz_global_skip_skips;
+                result.lu_mkz_global_skip_resets = lu_tel.mkz_global_skip_resets;
                 result.lu_mkz_profile_retry_attempts = lu_tel.mkz_profile_retry_attempts;
                 result.lu_mkz_profile_retry_successes = lu_tel.mkz_profile_retry_successes;
                 result.lu_mkz_profile_retry_failures = lu_tel.mkz_profile_retry_failures;
@@ -2142,6 +2160,14 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_dir_stabilize_skip_no_recompute);
     fprintf(out, "      \"dir_stabilize_skip_guard_refresh\": %d,\n",
             ralph->phase1_dir_stabilize_skip_guard_refresh);
+    fprintf(out, "      \"dir_stabilize_escape_gate_triggers\": %d,\n",
+            ralph->phase1_dir_stabilize_escape_gate_triggers);
+    fprintf(out, "      \"dir_stabilize_escape_gate_suppressed_lu_health\": %d,\n",
+            ralph->phase1_dir_stabilize_escape_gate_suppressed_lu_health);
+    fprintf(out, "      \"dir_stabilize_escape_gate_suppressed_force_pivot_mode\": %d,\n",
+            ralph->phase1_dir_stabilize_escape_gate_suppressed_force_pivot_mode);
+    fprintf(out, "      \"dir_stabilize_escape_gate_hard_bypass\": %d,\n",
+            ralph->phase1_dir_stabilize_escape_gate_hard_bypass);
     fprintf(out, "      \"recompute_after_ratio_breakdown\": %d,\n",
             ralph->phase1_recompute_after_ratio_breakdown);
     fprintf(out, "      \"recompute_after_dir_skip\": %d,\n",
@@ -2535,6 +2561,12 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_mkz_circuit_skips);
     fprintf(out, "    \"mkz_circuit_resets\": %d,\n",
             ralph->lu_mkz_circuit_resets);
+    fprintf(out, "    \"mkz_global_skip_trips\": %d,\n",
+            ralph->lu_mkz_global_skip_trips);
+    fprintf(out, "    \"mkz_global_skip_skips\": %d,\n",
+            ralph->lu_mkz_global_skip_skips);
+    fprintf(out, "    \"mkz_global_skip_resets\": %d,\n",
+            ralph->lu_mkz_global_skip_resets);
     fprintf(out, "    \"mkz_profile_retry_attempts\": %d,\n",
             ralph->lu_mkz_profile_retry_attempts);
     fprintf(out, "    \"mkz_profile_retry_successes\": %d,\n",

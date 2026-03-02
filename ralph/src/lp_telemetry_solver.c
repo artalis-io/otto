@@ -88,6 +88,10 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_dir_stabilize_skip_full = 0;
     solver->telemetry.perf_phase1_dir_stabilize_skip_no_recompute = 0;
     solver->telemetry.perf_phase1_dir_stabilize_skip_guard_refresh = 0;
+    solver->telemetry.perf_phase1_dir_stabilize_escape_gate_triggers = 0;
+    solver->telemetry.perf_phase1_dir_stabilize_escape_gate_suppressed_lu_health = 0;
+    solver->telemetry.perf_phase1_dir_stabilize_escape_gate_suppressed_force_pivot_mode = 0;
+    solver->telemetry.perf_phase1_dir_stabilize_escape_gate_hard_bypass = 0;
     solver->telemetry.perf_phase1_recompute_after_ratio_breakdown = 0;
     solver->telemetry.perf_phase1_recompute_after_dir_skip = 0;
     solver->telemetry.perf_phase1_recompute_after_dir_refactor = 0;
@@ -405,6 +409,10 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_skip_full);
     COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_skip_no_recompute);
     COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_skip_guard_refresh);
+    COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_escape_gate_triggers);
+    COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_escape_gate_suppressed_lu_health);
+    COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_escape_gate_suppressed_force_pivot_mode);
+    COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_escape_gate_hard_bypass);
     COPY_SOLVER_FIELD(perf_phase1_recompute_after_ratio_breakdown);
     COPY_SOLVER_FIELD(perf_phase1_recompute_after_dir_skip);
     COPY_SOLVER_FIELD(perf_phase1_recompute_after_dir_refactor);

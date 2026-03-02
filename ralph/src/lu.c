@@ -328,6 +328,10 @@ LUFactorization* lu_create(int m) {
     lu->mkz_circuit_fingerprint = 0;
     lu->mkz_circuit_bad_streak = 0;
     lu->mkz_circuit_skip_budget = 0;
+    lu->mkz_global_singular_streak = 0;
+    lu->mkz_global_skip_budget = 0;
+    lu->idsep_retry_fingerprint = 0;
+    lu->idsep_retry_streak = 0;
     lp_telemetry_reset_lu(lu);
 
     /* T2.1: Supernodal LU (default off, opt-in via lu_supernode param) */

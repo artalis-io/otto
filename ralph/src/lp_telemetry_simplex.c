@@ -277,6 +277,28 @@ void lp_telemetry_record_phase1_dir_stabilize_skip_guard_refresh(
     solver->telemetry.perf_phase1_dir_stabilize_skip_guard_refresh++;
 }
 
+enum {
+    LP_PHASE1_DIR_STABILIZE_ESCAPE_GATE_TRIGGER = 1,
+    LP_PHASE1_DIR_STABILIZE_ESCAPE_GATE_SUPPRESS_LU_HEALTH = 2,
+    LP_PHASE1_DIR_STABILIZE_ESCAPE_GATE_HARD_BYPASS = 3,
+    LP_PHASE1_DIR_STABILIZE_ESCAPE_GATE_SUPPRESS_FORCE_PIVOT_MODE = 4
+};
+
+void lp_telemetry_record_phase1_dir_stabilize_escape_gate(
+    SimplexSolver *solver,
+    int event) {
+    if (!solver_telemetry_enabled(solver)) return;
+    if (event == LP_PHASE1_DIR_STABILIZE_ESCAPE_GATE_TRIGGER) {
+        solver->telemetry.perf_phase1_dir_stabilize_escape_gate_triggers++;
+    } else if (event == LP_PHASE1_DIR_STABILIZE_ESCAPE_GATE_SUPPRESS_LU_HEALTH) {
+        solver->telemetry.perf_phase1_dir_stabilize_escape_gate_suppressed_lu_health++;
+    } else if (event == LP_PHASE1_DIR_STABILIZE_ESCAPE_GATE_SUPPRESS_FORCE_PIVOT_MODE) {
+        solver->telemetry.perf_phase1_dir_stabilize_escape_gate_suppressed_force_pivot_mode++;
+    } else if (event == LP_PHASE1_DIR_STABILIZE_ESCAPE_GATE_HARD_BYPASS) {
+        solver->telemetry.perf_phase1_dir_stabilize_escape_gate_hard_bypass++;
+    }
+}
+
 void lp_telemetry_record_phase1_recompute(SimplexSolver *solver,
                                           LPPhase1RecomputeReason reason) {
     if (!solver_telemetry_enabled(solver)) return;

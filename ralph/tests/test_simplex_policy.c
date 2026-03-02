@@ -112,6 +112,19 @@ int simplex_phase1_force_pivot_mode_plan_for_test(int m,
                                                    int *next_streak_out,
                                                    int *next_budget_out);
 
+int simplex_phase1_dir_stabilize_escape_gate_plan_for_test(
+    int m,
+    int degenerate_count,
+    int dir_skip_event_streak,
+    int no_progress_streak,
+    int escape_cooldown,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int *next_escape_cooldown_out,
+    int *triggered_out,
+    int *hard_bypass_out);
+
 int simplex_phase1_soft_lu_policy_cooldown_plan_for_test(
     int m,
     int degenerate_count,
@@ -369,6 +382,22 @@ typedef struct {
     int expected_next_streak;
     int expected_next_budget;
 } ForcePivotModeCase;
+
+typedef struct {
+    const char *name;
+    int m;
+    int degenerate_count;
+    int dir_skip_event_streak;
+    int no_progress_streak;
+    int escape_cooldown;
+    int force_extreme_dir;
+    int force_lu_health;
+    int lu_hard_trigger;
+    int expected_suppress;
+    int expected_triggered;
+    int expected_hard_bypass;
+    int expected_next_cooldown;
+} DirStabilizeEscapeGateCase;
 
 typedef struct {
     const char *name;
@@ -719,6 +748,47 @@ static int run_force_pivot_mode_case(const ForcePivotModeCase *tc) {
     if (next_budget != tc->expected_next_budget) {
         fprintf(stderr, "FAIL: %s (expected next_budget=%d got=%d)\n",
                 tc->name, tc->expected_next_budget, next_budget);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_dir_stabilize_escape_gate_case(
+    const DirStabilizeEscapeGateCase *tc) {
+    int next_cooldown = -1;
+    int triggered = -1;
+    int hard_bypass = -1;
+    int suppress = simplex_phase1_dir_stabilize_escape_gate_plan_for_test(
+        tc->m,
+        tc->degenerate_count,
+        tc->dir_skip_event_streak,
+        tc->no_progress_streak,
+        tc->escape_cooldown,
+        tc->force_extreme_dir,
+        tc->force_lu_health,
+        tc->lu_hard_trigger,
+        &next_cooldown,
+        &triggered,
+        &hard_bypass);
+    if (suppress != tc->expected_suppress) {
+        fprintf(stderr, "FAIL: %s (expected suppress=%d got=%d)\n",
+                tc->name, tc->expected_suppress, suppress);
+        return 0;
+    }
+    if (triggered != tc->expected_triggered) {
+        fprintf(stderr, "FAIL: %s (expected triggered=%d got=%d)\n",
+                tc->name, tc->expected_triggered, triggered);
+        return 0;
+    }
+    if (hard_bypass != tc->expected_hard_bypass) {
+        fprintf(stderr, "FAIL: %s (expected hard_bypass=%d got=%d)\n",
+                tc->name, tc->expected_hard_bypass, hard_bypass);
+        return 0;
+    }
+    if (next_cooldown != tc->expected_next_cooldown) {
+        fprintf(stderr, "FAIL: %s (expected next_cooldown=%d got=%d)\n",
+                tc->name, tc->expected_next_cooldown, next_cooldown);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -1715,6 +1785,83 @@ int main(void) {
             .expected_next_budget = 3
         }
     };
+    const DirStabilizeEscapeGateCase dir_stabilize_escape_gate_cases[] = {
+        {
+            .name = "dir-stabilize escape gate suppresses lu-health force on chronic dir-skip treadmill",
+            .m = 233,
+            .degenerate_count = 120,
+            .dir_skip_event_streak = 40,
+            .no_progress_streak = 8,
+            .escape_cooldown = 0,
+            .force_extreme_dir = 0,
+            .force_lu_health = 1,
+            .lu_hard_trigger = 0,
+            .expected_suppress = 1,
+            .expected_triggered = 1,
+            .expected_hard_bypass = 0,
+            .expected_next_cooldown = 64
+        },
+        {
+            .name = "dir-stabilize escape gate can trigger from no-progress streak alone",
+            .m = 233,
+            .degenerate_count = 120,
+            .dir_skip_event_streak = 0,
+            .no_progress_streak = 24,
+            .escape_cooldown = 0,
+            .force_extreme_dir = 0,
+            .force_lu_health = 1,
+            .lu_hard_trigger = 0,
+            .expected_suppress = 1,
+            .expected_triggered = 1,
+            .expected_hard_bypass = 0,
+            .expected_next_cooldown = 64
+        },
+        {
+            .name = "dir-stabilize escape gate keeps suppressing while cooldown active",
+            .m = 233,
+            .degenerate_count = 120,
+            .dir_skip_event_streak = 8,
+            .no_progress_streak = 2,
+            .escape_cooldown = 20,
+            .force_extreme_dir = 0,
+            .force_lu_health = 1,
+            .lu_hard_trigger = 0,
+            .expected_suppress = 1,
+            .expected_triggered = 0,
+            .expected_hard_bypass = 0,
+            .expected_next_cooldown = 20
+        },
+        {
+            .name = "dir-stabilize escape gate bypasses suppression on hard lu-health trigger",
+            .m = 233,
+            .degenerate_count = 120,
+            .dir_skip_event_streak = 40,
+            .no_progress_streak = 8,
+            .escape_cooldown = 0,
+            .force_extreme_dir = 0,
+            .force_lu_health = 1,
+            .lu_hard_trigger = 1,
+            .expected_suppress = 0,
+            .expected_triggered = 0,
+            .expected_hard_bypass = 1,
+            .expected_next_cooldown = 0
+        },
+        {
+            .name = "dir-stabilize escape gate never suppresses extreme-direction force",
+            .m = 233,
+            .degenerate_count = 120,
+            .dir_skip_event_streak = 40,
+            .no_progress_streak = 8,
+            .escape_cooldown = 0,
+            .force_extreme_dir = 1,
+            .force_lu_health = 1,
+            .lu_hard_trigger = 0,
+            .expected_suppress = 0,
+            .expected_triggered = 0,
+            .expected_hard_bypass = 0,
+            .expected_next_cooldown = 0
+        }
+    };
     const SoftLUPolicyCooldownCase soft_lu_policy_cooldown_cases[] = {
         {
             .name = "phase1 soft-lu defer applies periodic cooldown on large degenerate run",
@@ -1823,6 +1970,9 @@ int main(void) {
     int total_no_pivot_ladder_guard = (int)(sizeof(no_pivot_ladder_guard_cases) / sizeof(no_pivot_ladder_guard_cases[0]));
     int total_dir_skip_rescue_cadence = (int)(sizeof(dir_skip_rescue_cadence_cases) / sizeof(dir_skip_rescue_cadence_cases[0]));
     int total_force_pivot_mode = (int)(sizeof(force_pivot_mode_cases) / sizeof(force_pivot_mode_cases[0]));
+    int total_dir_escape_gate =
+        (int)(sizeof(dir_stabilize_escape_gate_cases) /
+              sizeof(dir_stabilize_escape_gate_cases[0]));
     int total_soft_lu_policy_cd = (int)(sizeof(soft_lu_policy_cooldown_cases) / sizeof(soft_lu_policy_cooldown_cases[0]));
     int total_phase2_recompute_interval =
         (int)(sizeof(phase2_recompute_interval_cases) /
@@ -1833,6 +1983,7 @@ int main(void) {
                 total_no_pivot_ladder_guard +
                 total_dir_skip_rescue_cadence +
                 total_force_pivot_mode +
+                total_dir_escape_gate +
                 total_soft_lu_policy_cd +
                 total_phase2_recompute_interval;
     total += total_dir_skip_rc_only;
@@ -1882,6 +2033,9 @@ int main(void) {
     }
     for (int i = 0; i < total_force_pivot_mode; i++) {
         pass += run_force_pivot_mode_case(&force_pivot_mode_cases[i]);
+    }
+    for (int i = 0; i < total_dir_escape_gate; i++) {
+        pass += run_dir_stabilize_escape_gate_case(&dir_stabilize_escape_gate_cases[i]);
     }
     for (int i = 0; i < total_soft_lu_policy_cd; i++) {
         pass += run_soft_lu_policy_cooldown_case(&soft_lu_policy_cooldown_cases[i]);
