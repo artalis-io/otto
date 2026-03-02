@@ -356,9 +356,12 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 ratio breakdown escalations");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_pivot_fail_recovery_exclusions, 2,
                   "record: phase1 pivot fail recovery exclusions");
-    lp_telemetry_record_phase1_no_pivot_event(&solver);
-    lp_telemetry_record_phase1_no_pivot_event(&solver);
-    lp_telemetry_record_phase1_no_pivot_event(&solver);
+    lp_telemetry_record_phase1_no_pivot_event(
+        &solver, LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN);
+    lp_telemetry_record_phase1_no_pivot_event(
+        &solver, LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
+    lp_telemetry_record_phase1_no_pivot_event(
+        &solver, LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL);
     lp_telemetry_record_phase1_no_pivot_force(&solver,
                                               LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN);
     lp_telemetry_record_phase1_no_pivot_force(&solver,
@@ -369,6 +372,12 @@ static void test_solver_reset_and_refactor_accounting(void) {
     lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(&solver);
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_no_pivot_events, 3,
                   "record: phase1 no-pivot events");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_no_pivot_events_ratio_breakdown, 1,
+                  "record: phase1 no-pivot events ratio breakdown");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_no_pivot_events_dir_skip, 1,
+                  "record: phase1 no-pivot events dir skip");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_no_pivot_events_pivot_fail, 1,
+                  "record: phase1 no-pivot events pivot fail");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_no_pivot_forced_refactor, 3,
                   "record: phase1 no-pivot forced refactors");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_no_pivot_forced_ratio_breakdown, 1,

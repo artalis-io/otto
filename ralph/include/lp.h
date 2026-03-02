@@ -667,12 +667,26 @@ typedef struct {
     int perf_phase1_no_pivot_forced_ratio_breakdown;
     int perf_phase1_no_pivot_forced_dir_skip;
     int perf_phase1_no_pivot_forced_pivot_fail;
+    int perf_phase1_no_pivot_events_ratio_breakdown;
+    int perf_phase1_no_pivot_events_dir_skip;
+    int perf_phase1_no_pivot_events_pivot_fail;
     int perf_phase1_no_pivot_no_progress_events;
     int perf_phase1_no_pivot_ladder_retry_defers;
+    int perf_phase1_no_pivot_ladder_retry_ratio_breakdown;
+    int perf_phase1_no_pivot_ladder_retry_dir_skip;
+    int perf_phase1_no_pivot_ladder_retry_pivot_fail;
     int perf_phase1_no_pivot_ladder_dual_rescue_attempts;
     int perf_phase1_no_pivot_ladder_dual_rescue_successes;
     int perf_phase1_no_pivot_ladder_dual_rescue_failures;
+    int perf_phase1_no_pivot_ladder_dual_rescue_attempts_ratio_breakdown;
+    int perf_phase1_no_pivot_ladder_dual_rescue_attempts_dir_skip;
+    int perf_phase1_no_pivot_ladder_dual_rescue_attempts_pivot_fail;
     int perf_phase1_no_pivot_ladder_forced_refactors;
+    int perf_phase1_no_pivot_ladder_forced_refactors_ratio_breakdown;
+    int perf_phase1_no_pivot_ladder_forced_refactors_dir_skip;
+    int perf_phase1_no_pivot_ladder_forced_refactors_pivot_fail;
+    int perf_phase1_no_pivot_ladder_rescue_guard_cooldown_blocks;
+    int perf_phase1_no_pivot_ladder_rescue_guard_fail_cap_forces;
     int perf_phase1_soft_lu_policy_cooldown_defers;
 
     double perf_phase2_pricing_ms;
@@ -952,12 +966,26 @@ typedef struct {
     int perf_phase1_no_pivot_forced_ratio_breakdown;
     int perf_phase1_no_pivot_forced_dir_skip;
     int perf_phase1_no_pivot_forced_pivot_fail;
+    int perf_phase1_no_pivot_events_ratio_breakdown;
+    int perf_phase1_no_pivot_events_dir_skip;
+    int perf_phase1_no_pivot_events_pivot_fail;
     int perf_phase1_no_pivot_no_progress_events;
     int perf_phase1_no_pivot_ladder_retry_defers;
+    int perf_phase1_no_pivot_ladder_retry_ratio_breakdown;
+    int perf_phase1_no_pivot_ladder_retry_dir_skip;
+    int perf_phase1_no_pivot_ladder_retry_pivot_fail;
     int perf_phase1_no_pivot_ladder_dual_rescue_attempts;
     int perf_phase1_no_pivot_ladder_dual_rescue_successes;
     int perf_phase1_no_pivot_ladder_dual_rescue_failures;
+    int perf_phase1_no_pivot_ladder_dual_rescue_attempts_ratio_breakdown;
+    int perf_phase1_no_pivot_ladder_dual_rescue_attempts_dir_skip;
+    int perf_phase1_no_pivot_ladder_dual_rescue_attempts_pivot_fail;
     int perf_phase1_no_pivot_ladder_forced_refactors;
+    int perf_phase1_no_pivot_ladder_forced_refactors_ratio_breakdown;
+    int perf_phase1_no_pivot_ladder_forced_refactors_dir_skip;
+    int perf_phase1_no_pivot_ladder_forced_refactors_pivot_fail;
+    int perf_phase1_no_pivot_ladder_rescue_guard_cooldown_blocks;
+    int perf_phase1_no_pivot_ladder_rescue_guard_fail_cap_forces;
     int perf_phase1_soft_lu_policy_cooldown_defers;
 
     double perf_phase2_pricing_ms;
@@ -1393,15 +1421,22 @@ void lp_telemetry_record_phase1_recompute_guard_forced_full(SimplexSolver *solve
 void lp_telemetry_record_phase1_ratio_breakdown_retry(SimplexSolver *solver);
 void lp_telemetry_record_phase1_ratio_breakdown_escalation(SimplexSolver *solver);
 void lp_telemetry_record_phase1_pivot_fail_recovery_exclusion(SimplexSolver *solver);
-void lp_telemetry_record_phase1_no_pivot_event(SimplexSolver *solver);
+void lp_telemetry_record_phase1_no_pivot_event(SimplexSolver *solver,
+                                               LPPhase1NoPivotForceReason reason);
 void lp_telemetry_record_phase1_no_pivot_force(SimplexSolver *solver,
                                                LPPhase1NoPivotForceReason reason);
 void lp_telemetry_record_phase1_no_pivot_no_progress(SimplexSolver *solver);
-void lp_telemetry_record_phase1_no_pivot_ladder_retry(SimplexSolver *solver);
+void lp_telemetry_record_phase1_no_pivot_ladder_retry(SimplexSolver *solver,
+                                                      LPPhase1NoPivotForceReason reason);
 void lp_telemetry_record_phase1_no_pivot_ladder_dual_rescue(SimplexSolver *solver,
+                                                             LPPhase1NoPivotForceReason reason,
                                                              int success);
 void lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
-    SimplexSolver *solver);
+    SimplexSolver *solver,
+    LPPhase1NoPivotForceReason reason);
+void lp_telemetry_record_phase1_no_pivot_ladder_rescue_guard(
+    SimplexSolver *solver,
+    int forced_refactor);
 void lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(
     SimplexSolver *solver);
 void lp_telemetry_record_dual_ratio_no_entering(SimplexSolver *solver);

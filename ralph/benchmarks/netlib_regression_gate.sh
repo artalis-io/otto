@@ -353,7 +353,7 @@ phase1_no_pivot_ladder_tsv="$OUTDIR/phase1_no_pivot_ladder.tsv"
 : > "$actual_sol"
 : > "$actual_dense"
 : > "$solved_jsons"
-printf "problem\tno_progress_events\tretry_defers\tdual_rescue_attempts\tdual_rescue_successes\tdual_rescue_failures\tforced_refactors\n" > "$phase1_no_pivot_ladder_tsv"
+printf "problem\tno_progress_events\tretry_defers\tdual_rescue_attempts\tdual_rescue_successes\tdual_rescue_failures\tforced_refactors\tevents_ratio_breakdown\tevents_dir_skip\tevents_pivot_fail\tretry_ratio_breakdown\tretry_dir_skip\tretry_pivot_fail\tdual_attempts_ratio_breakdown\tdual_attempts_dir_skip\tdual_attempts_pivot_fail\tforced_ratio_breakdown\tforced_dir_skip\tforced_pivot_fail\trescue_guard_cooldown_blocks\trescue_guard_fail_cap_forces\n" > "$phase1_no_pivot_ladder_tsv"
 
 while IFS=$'\t' read -r name ec; do
     base="${name%.mps}"
@@ -386,7 +386,21 @@ while IFS=$'\t' read -r name ec; do
           ((.refactor.phase1_no_pivot_ladder_dual_rescue_attempts // .phase_hotspots.phase1.no_pivot_ladder_dual_rescue_attempts // 0) | tostring),
           ((.refactor.phase1_no_pivot_ladder_dual_rescue_successes // .phase_hotspots.phase1.no_pivot_ladder_dual_rescue_successes // 0) | tostring),
           ((.refactor.phase1_no_pivot_ladder_dual_rescue_failures // .phase_hotspots.phase1.no_pivot_ladder_dual_rescue_failures // 0) | tostring),
-          ((.refactor.phase1_no_pivot_ladder_forced_refactors // .phase_hotspots.phase1.no_pivot_ladder_forced_refactors // 0) | tostring)
+          ((.refactor.phase1_no_pivot_ladder_forced_refactors // .phase_hotspots.phase1.no_pivot_ladder_forced_refactors // 0) | tostring),
+          ((.refactor.phase1_no_pivot_events_ratio_breakdown // .phase_hotspots.phase1.no_pivot_events_ratio_breakdown // 0) | tostring),
+          ((.refactor.phase1_no_pivot_events_dir_skip // .phase_hotspots.phase1.no_pivot_events_dir_skip // 0) | tostring),
+          ((.refactor.phase1_no_pivot_events_pivot_fail // .phase_hotspots.phase1.no_pivot_events_pivot_fail // 0) | tostring),
+          ((.refactor.phase1_no_pivot_ladder_retry_ratio_breakdown // .phase_hotspots.phase1.no_pivot_ladder_retry_ratio_breakdown // 0) | tostring),
+          ((.refactor.phase1_no_pivot_ladder_retry_dir_skip // .phase_hotspots.phase1.no_pivot_ladder_retry_dir_skip // 0) | tostring),
+          ((.refactor.phase1_no_pivot_ladder_retry_pivot_fail // .phase_hotspots.phase1.no_pivot_ladder_retry_pivot_fail // 0) | tostring),
+          ((.refactor.phase1_no_pivot_ladder_dual_rescue_attempts_ratio_breakdown // .phase_hotspots.phase1.no_pivot_ladder_dual_rescue_attempts_ratio_breakdown // 0) | tostring),
+          ((.refactor.phase1_no_pivot_ladder_dual_rescue_attempts_dir_skip // .phase_hotspots.phase1.no_pivot_ladder_dual_rescue_attempts_dir_skip // 0) | tostring),
+          ((.refactor.phase1_no_pivot_ladder_dual_rescue_attempts_pivot_fail // .phase_hotspots.phase1.no_pivot_ladder_dual_rescue_attempts_pivot_fail // 0) | tostring),
+          ((.refactor.phase1_no_pivot_ladder_forced_refactors_ratio_breakdown // .phase_hotspots.phase1.no_pivot_ladder_forced_refactors_ratio_breakdown // 0) | tostring),
+          ((.refactor.phase1_no_pivot_ladder_forced_refactors_dir_skip // .phase_hotspots.phase1.no_pivot_ladder_forced_refactors_dir_skip // 0) | tostring),
+          ((.refactor.phase1_no_pivot_ladder_forced_refactors_pivot_fail // .phase_hotspots.phase1.no_pivot_ladder_forced_refactors_pivot_fail // 0) | tostring),
+          ((.refactor.phase1_no_pivot_ladder_rescue_guard_cooldown_blocks // .phase_hotspots.phase1.no_pivot_ladder_rescue_guard_cooldown_blocks // 0) | tostring),
+          ((.refactor.phase1_no_pivot_ladder_rescue_guard_fail_cap_forces // .phase_hotspots.phase1.no_pivot_ladder_rescue_guard_fail_cap_forces // 0) | tostring)
         ] | @tsv' "$json" 2>/dev/null || true)"
     if [[ -z "$rec" ]]; then
         echo "$name" >> "$actual_cmd_fail"
@@ -396,8 +410,19 @@ while IFS=$'\t' read -r name ec; do
     IFS=$'\t' read -r prob_name r_status g_status obj_ok sol_ok dense_fb \
         phase1_no_pivot_no_progress_events phase1_no_pivot_ladder_retry_defers \
         phase1_no_pivot_ladder_dual_rescue_attempts phase1_no_pivot_ladder_dual_rescue_successes \
-        phase1_no_pivot_ladder_dual_rescue_failures phase1_no_pivot_ladder_forced_refactors <<< "$rec"
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+        phase1_no_pivot_ladder_dual_rescue_failures phase1_no_pivot_ladder_forced_refactors \
+        phase1_no_pivot_events_ratio_breakdown phase1_no_pivot_events_dir_skip \
+        phase1_no_pivot_events_pivot_fail phase1_no_pivot_ladder_retry_ratio_breakdown \
+        phase1_no_pivot_ladder_retry_dir_skip phase1_no_pivot_ladder_retry_pivot_fail \
+        phase1_no_pivot_ladder_dual_rescue_attempts_ratio_breakdown \
+        phase1_no_pivot_ladder_dual_rescue_attempts_dir_skip \
+        phase1_no_pivot_ladder_dual_rescue_attempts_pivot_fail \
+        phase1_no_pivot_ladder_forced_refactors_ratio_breakdown \
+        phase1_no_pivot_ladder_forced_refactors_dir_skip \
+        phase1_no_pivot_ladder_forced_refactors_pivot_fail \
+        phase1_no_pivot_ladder_rescue_guard_cooldown_blocks \
+        phase1_no_pivot_ladder_rescue_guard_fail_cap_forces <<< "$rec"
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
         "$prob_name" \
         "${phase1_no_pivot_no_progress_events:-0}" \
         "${phase1_no_pivot_ladder_retry_defers:-0}" \
@@ -405,6 +430,20 @@ while IFS=$'\t' read -r name ec; do
         "${phase1_no_pivot_ladder_dual_rescue_successes:-0}" \
         "${phase1_no_pivot_ladder_dual_rescue_failures:-0}" \
         "${phase1_no_pivot_ladder_forced_refactors:-0}" \
+        "${phase1_no_pivot_events_ratio_breakdown:-0}" \
+        "${phase1_no_pivot_events_dir_skip:-0}" \
+        "${phase1_no_pivot_events_pivot_fail:-0}" \
+        "${phase1_no_pivot_ladder_retry_ratio_breakdown:-0}" \
+        "${phase1_no_pivot_ladder_retry_dir_skip:-0}" \
+        "${phase1_no_pivot_ladder_retry_pivot_fail:-0}" \
+        "${phase1_no_pivot_ladder_dual_rescue_attempts_ratio_breakdown:-0}" \
+        "${phase1_no_pivot_ladder_dual_rescue_attempts_dir_skip:-0}" \
+        "${phase1_no_pivot_ladder_dual_rescue_attempts_pivot_fail:-0}" \
+        "${phase1_no_pivot_ladder_forced_refactors_ratio_breakdown:-0}" \
+        "${phase1_no_pivot_ladder_forced_refactors_dir_skip:-0}" \
+        "${phase1_no_pivot_ladder_forced_refactors_pivot_fail:-0}" \
+        "${phase1_no_pivot_ladder_rescue_guard_cooldown_blocks:-0}" \
+        "${phase1_no_pivot_ladder_rescue_guard_fail_cap_forces:-0}" \
         >> "$phase1_no_pivot_ladder_tsv"
     if [[ "$r_status" == "timeout" ]]; then
         echo "$prob_name" >> "$actual_timeout"
@@ -499,7 +538,12 @@ missing_coverage_count="$(wc -l < "$missing_coverage" | tr -d ' ')"
 
 read -r ladder_no_progress_total ladder_retry_defers_total \
     ladder_dual_rescue_attempts_total ladder_dual_rescue_successes_total \
-    ladder_dual_rescue_failures_total ladder_forced_refactors_total <<< "$(
+    ladder_dual_rescue_failures_total ladder_forced_refactors_total \
+    ladder_events_ratio_total ladder_events_dir_total ladder_events_pivot_total \
+    ladder_retry_ratio_total ladder_retry_dir_total ladder_retry_pivot_total \
+    ladder_dual_attempt_ratio_total ladder_dual_attempt_dir_total ladder_dual_attempt_pivot_total \
+    ladder_forced_ratio_total ladder_forced_dir_total ladder_forced_pivot_total \
+    ladder_guard_cooldown_total ladder_guard_fail_cap_total <<< "$(
     awk -F'\t' '
         NR > 1 {
             no_progress += ($2 + 0);
@@ -508,10 +552,29 @@ read -r ladder_no_progress_total ladder_retry_defers_total \
             successes += ($5 + 0);
             failures += ($6 + 0);
             forced += ($7 + 0);
+            events_ratio += ($8 + 0);
+            events_dir += ($9 + 0);
+            events_pivot += ($10 + 0);
+            retry_ratio += ($11 + 0);
+            retry_dir += ($12 + 0);
+            retry_pivot += ($13 + 0);
+            dual_attempt_ratio += ($14 + 0);
+            dual_attempt_dir += ($15 + 0);
+            dual_attempt_pivot += ($16 + 0);
+            forced_ratio += ($17 + 0);
+            forced_dir += ($18 + 0);
+            forced_pivot += ($19 + 0);
+            guard_cooldown += ($20 + 0);
+            guard_fail_cap += ($21 + 0);
         }
         END {
-            printf "%d %d %d %d %d %d",
-                   no_progress, retry, attempts, successes, failures, forced;
+            printf "%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d",
+                   no_progress, retry, attempts, successes, failures, forced,
+                   events_ratio, events_dir, events_pivot,
+                   retry_ratio, retry_dir, retry_pivot,
+                   dual_attempt_ratio, dual_attempt_dir, dual_attempt_pivot,
+                   forced_ratio, forced_dir, forced_pivot,
+                   guard_cooldown, guard_fail_cap;
         }' "$phase1_no_pivot_ladder_tsv"
 )"
 
@@ -541,6 +604,11 @@ echo "  dual rescue successes:  ${ladder_dual_rescue_successes_total:-0}"
 echo "  dual rescue failures:   ${ladder_dual_rescue_failures_total:-0}"
 echo "  forced refactors:       ${ladder_forced_refactors_total:-0}"
 echo "  dual rescue success %:  ${ladder_dual_rescue_success_rate}%"
+echo "  events by cause:        ratio=${ladder_events_ratio_total:-0} dir_skip=${ladder_events_dir_total:-0} pivot_fail=${ladder_events_pivot_total:-0}"
+echo "  retry by cause:         ratio=${ladder_retry_ratio_total:-0} dir_skip=${ladder_retry_dir_total:-0} pivot_fail=${ladder_retry_pivot_total:-0}"
+echo "  rescue attempts cause:  ratio=${ladder_dual_attempt_ratio_total:-0} dir_skip=${ladder_dual_attempt_dir_total:-0} pivot_fail=${ladder_dual_attempt_pivot_total:-0}"
+echo "  forced refs by cause:   ratio=${ladder_forced_ratio_total:-0} dir_skip=${ladder_forced_dir_total:-0} pivot_fail=${ladder_forced_pivot_total:-0}"
+echo "  rescue guard blocks:    cooldown=${ladder_guard_cooldown_total:-0} fail_cap=${ladder_guard_fail_cap_total:-0}"
 echo "  per-file ladder TSV:    $phase1_no_pivot_ladder_tsv"
 
 echo

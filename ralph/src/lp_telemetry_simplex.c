@@ -327,9 +327,24 @@ void lp_telemetry_record_phase1_pivot_fail_recovery_exclusion(SimplexSolver *sol
     solver->telemetry.perf_phase1_pivot_fail_recovery_exclusions++;
 }
 
-void lp_telemetry_record_phase1_no_pivot_event(SimplexSolver *solver) {
+void lp_telemetry_record_phase1_no_pivot_event(SimplexSolver *solver,
+                                               LPPhase1NoPivotForceReason reason) {
     if (!solver_telemetry_enabled(solver)) return;
     solver->telemetry.perf_phase1_no_pivot_events++;
+    switch (reason) {
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN:
+            solver->telemetry.perf_phase1_no_pivot_events_ratio_breakdown++;
+            break;
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP:
+            solver->telemetry.perf_phase1_no_pivot_events_dir_skip++;
+            break;
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL:
+            solver->telemetry.perf_phase1_no_pivot_events_pivot_fail++;
+            break;
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN:
+        default:
+            break;
+    }
 }
 
 void lp_telemetry_record_phase1_no_pivot_force(SimplexSolver *solver,
@@ -357,15 +372,45 @@ void lp_telemetry_record_phase1_no_pivot_no_progress(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_no_pivot_no_progress_events++;
 }
 
-void lp_telemetry_record_phase1_no_pivot_ladder_retry(SimplexSolver *solver) {
+void lp_telemetry_record_phase1_no_pivot_ladder_retry(SimplexSolver *solver,
+                                                      LPPhase1NoPivotForceReason reason) {
     if (!solver_telemetry_enabled(solver)) return;
     solver->telemetry.perf_phase1_no_pivot_ladder_retry_defers++;
+    switch (reason) {
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN:
+            solver->telemetry.perf_phase1_no_pivot_ladder_retry_ratio_breakdown++;
+            break;
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP:
+            solver->telemetry.perf_phase1_no_pivot_ladder_retry_dir_skip++;
+            break;
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL:
+            solver->telemetry.perf_phase1_no_pivot_ladder_retry_pivot_fail++;
+            break;
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN:
+        default:
+            break;
+    }
 }
 
 void lp_telemetry_record_phase1_no_pivot_ladder_dual_rescue(SimplexSolver *solver,
+                                                             LPPhase1NoPivotForceReason reason,
                                                              int success) {
     if (!solver_telemetry_enabled(solver)) return;
     solver->telemetry.perf_phase1_no_pivot_ladder_dual_rescue_attempts++;
+    switch (reason) {
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN:
+            solver->telemetry.perf_phase1_no_pivot_ladder_dual_rescue_attempts_ratio_breakdown++;
+            break;
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP:
+            solver->telemetry.perf_phase1_no_pivot_ladder_dual_rescue_attempts_dir_skip++;
+            break;
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL:
+            solver->telemetry.perf_phase1_no_pivot_ladder_dual_rescue_attempts_pivot_fail++;
+            break;
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN:
+        default:
+            break;
+    }
     if (success) {
         solver->telemetry.perf_phase1_no_pivot_ladder_dual_rescue_successes++;
     } else {
@@ -374,9 +419,35 @@ void lp_telemetry_record_phase1_no_pivot_ladder_dual_rescue(SimplexSolver *solve
 }
 
 void lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
-    SimplexSolver *solver) {
+    SimplexSolver *solver,
+    LPPhase1NoPivotForceReason reason) {
     if (!solver_telemetry_enabled(solver)) return;
     solver->telemetry.perf_phase1_no_pivot_ladder_forced_refactors++;
+    switch (reason) {
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN:
+            solver->telemetry.perf_phase1_no_pivot_ladder_forced_refactors_ratio_breakdown++;
+            break;
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP:
+            solver->telemetry.perf_phase1_no_pivot_ladder_forced_refactors_dir_skip++;
+            break;
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL:
+            solver->telemetry.perf_phase1_no_pivot_ladder_forced_refactors_pivot_fail++;
+            break;
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN:
+        default:
+            break;
+    }
+}
+
+void lp_telemetry_record_phase1_no_pivot_ladder_rescue_guard(
+    SimplexSolver *solver,
+    int forced_refactor) {
+    if (!solver_telemetry_enabled(solver)) return;
+    if (forced_refactor) {
+        solver->telemetry.perf_phase1_no_pivot_ladder_rescue_guard_fail_cap_forces++;
+    } else {
+        solver->telemetry.perf_phase1_no_pivot_ladder_rescue_guard_cooldown_blocks++;
+    }
 }
 
 void lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(
