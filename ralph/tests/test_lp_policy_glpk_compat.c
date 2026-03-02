@@ -24,6 +24,15 @@ static int tests_passed = 0;
     } \
 } while (0)
 
+#define ASSERT_DBL_NEAR(a, b, tol, msg) do { \
+    tests_run++; \
+    if (fabs((a) - (b)) <= (tol)) { \
+        tests_passed++; \
+    } else { \
+        printf("  FAIL: %s (%g != %g)\n", msg, (double)(a), (double)(b)); \
+    } \
+} while (0)
+
 static void test_init_and_validate(void) {
     LPGLPKCompatConfig cfg;
     lp_policy_glpk_compat_init(&cfg);
@@ -34,6 +43,18 @@ static void test_init_and_validate(void) {
                   "init: default method");
     ASSERT_INT_EQ(cfg.glpk_smcp_pricing, LP_GLPK_SMCP_PRICING_STEEP,
                   "init: default pricing");
+    ASSERT_DBL_NEAR(cfg.glpk_smcp_tol_bnd, 1e-7, 1e-16,
+                    "init: default tol_bnd");
+    ASSERT_DBL_NEAR(cfg.glpk_smcp_tol_dj, 1e-7, 1e-16,
+                    "init: default tol_dj");
+    ASSERT_DBL_NEAR(cfg.glpk_smcp_tol_piv, 1e-9, 1e-18,
+                    "init: default tol_piv");
+    ASSERT_INT_EQ(cfg.glpk_smcp_excl, LP_GLPK_SMCP_EXCL_ON,
+                  "init: default excl");
+    ASSERT_INT_EQ(cfg.glpk_smcp_shift, LP_GLPK_SMCP_SHIFT_ON,
+                  "init: default shift");
+    ASSERT_INT_EQ(cfg.glpk_smcp_aorn, LP_GLPK_SMCP_AORN_USE_NT,
+                  "init: default aorn");
     ASSERT_INT_EQ(cfg.glpk_bfcp_update_limit, -1,
                   "init: default update limit");
     ASSERT_TRUE(lp_policy_glpk_compat_validate(&cfg) == 1,
@@ -59,10 +80,80 @@ static void test_profile_defaults(void) {
                   "profile: basis");
     ASSERT_INT_EQ(cfg.glpk_smcp_presolve, LP_GLPK_SMCP_PRESOLVE_ON,
                   "profile: presolve");
+    ASSERT_DBL_NEAR(cfg.glpk_smcp_tol_bnd, 1e-7, 1e-16,
+                    "profile: tol_bnd");
+    ASSERT_DBL_NEAR(cfg.glpk_smcp_tol_dj, 1e-7, 1e-16,
+                    "profile: tol_dj");
+    ASSERT_DBL_NEAR(cfg.glpk_smcp_tol_piv, 1e-9, 1e-18,
+                    "profile: tol_piv");
+    ASSERT_INT_EQ(cfg.glpk_smcp_excl, LP_GLPK_SMCP_EXCL_ON,
+                  "profile: excl");
+    ASSERT_INT_EQ(cfg.glpk_smcp_shift, LP_GLPK_SMCP_SHIFT_ON,
+                  "profile: shift");
+    ASSERT_INT_EQ(cfg.glpk_smcp_aorn, LP_GLPK_SMCP_AORN_USE_NT,
+                  "profile: aorn");
     ASSERT_INT_EQ(cfg.glpk_bfcp_backend, LP_GLPK_BFCP_BACKEND_LUF_FT,
                   "profile: backend");
     ASSERT_INT_EQ(cfg.glpk_bfcp_update_limit, 100,
                   "profile: update limit");
+}
+
+static void test_profile_defaults_glpk_strict(void) {
+    LPGLPKCompatConfig cfg;
+    lp_policy_glpk_compat_init(&cfg);
+
+    cfg.lp_policy_profile = LP_POLICY_PROFILE_GLPK_STRICT;
+    lp_policy_glpk_compat_apply_profile_defaults(&cfg);
+
+    ASSERT_INT_EQ(cfg.glpk_smcp_method, LP_GLPK_SMCP_METHOD_PRIMAL,
+                  "strict profile: method");
+    ASSERT_INT_EQ(cfg.glpk_smcp_pricing, LP_GLPK_SMCP_PRICING_STEEP,
+                  "strict profile: pricing");
+    ASSERT_INT_EQ(cfg.glpk_smcp_ratio, LP_GLPK_SMCP_RATIO_HARRIS,
+                  "strict profile: ratio");
+    ASSERT_INT_EQ(cfg.glpk_smcp_flip, LP_GLPK_SMCP_FLIP_OFF,
+                  "strict profile: flip");
+    ASSERT_INT_EQ(cfg.glpk_smcp_basis, LP_GLPK_SMCP_BASIS_ADV,
+                  "strict profile: basis");
+    ASSERT_INT_EQ(cfg.glpk_smcp_presolve, LP_GLPK_SMCP_PRESOLVE_ON,
+                  "strict profile: presolve");
+    ASSERT_DBL_NEAR(cfg.glpk_smcp_tol_bnd, 1e-7, 1e-16,
+                    "strict profile: tol_bnd");
+    ASSERT_DBL_NEAR(cfg.glpk_smcp_tol_dj, 1e-7, 1e-16,
+                    "strict profile: tol_dj");
+    ASSERT_DBL_NEAR(cfg.glpk_smcp_tol_piv, 1e-9, 1e-18,
+                    "strict profile: tol_piv");
+    ASSERT_INT_EQ(cfg.glpk_smcp_excl, LP_GLPK_SMCP_EXCL_ON,
+                  "strict profile: excl");
+    ASSERT_INT_EQ(cfg.glpk_smcp_shift, LP_GLPK_SMCP_SHIFT_ON,
+                  "strict profile: shift");
+    ASSERT_INT_EQ(cfg.glpk_smcp_aorn, LP_GLPK_SMCP_AORN_USE_NT,
+                  "strict profile: aorn");
+    ASSERT_INT_EQ(cfg.glpk_bfcp_backend, LP_GLPK_BFCP_BACKEND_LUF_FT,
+                  "strict profile: backend");
+    ASSERT_INT_EQ(cfg.glpk_bfcp_update_limit, 100,
+                  "strict profile: update limit");
+}
+
+static void test_profile_defaults_glpk_legacy(void) {
+    LPGLPKCompatConfig cfg;
+    lp_policy_glpk_compat_init(&cfg);
+
+    cfg.lp_policy_profile = LP_POLICY_PROFILE_GLPK_LEGACY;
+    lp_policy_glpk_compat_apply_profile_defaults(&cfg);
+
+    ASSERT_INT_EQ(cfg.glpk_smcp_method, LP_GLPK_SMCP_METHOD_PRIMAL,
+                  "legacy profile: method");
+    ASSERT_INT_EQ(cfg.glpk_smcp_pricing, LP_GLPK_SMCP_PRICING_STEEP,
+                  "legacy profile: pricing");
+    ASSERT_INT_EQ(cfg.glpk_smcp_ratio, LP_GLPK_SMCP_RATIO_HARRIS,
+                  "legacy profile: ratio");
+    ASSERT_INT_EQ(cfg.glpk_smcp_flip, LP_GLPK_SMCP_FLIP_OFF,
+                  "legacy profile: flip");
+    ASSERT_INT_EQ(cfg.glpk_bfcp_backend, LP_GLPK_BFCP_BACKEND_LUF_FT,
+                  "legacy profile: backend");
+    ASSERT_TRUE(lp_policy_glpk_compat_validate(&cfg) == 1,
+                "legacy profile: config validates");
 }
 
 static void test_runtime_mapping_noop_under_default_profile(void) {
@@ -73,7 +164,13 @@ static void test_runtime_mapping_noop_under_default_profile(void) {
     int presolve = 0;
     int ratio = 1;
     int dual_ratio = LP_DUAL_RATIO_TEST_HARRIS;
-    int flip = 1;
+    int dual_bound_flip = 1;
+    double tol_bnd = 1.0;
+    double tol_dj = 2.0;
+    double tol_piv = 3.0;
+    int excl = 9;
+    int shift = 8;
+    int aorn = 7;
     int crash = 0;
     int backend = -1;
     int update_limit = -1;
@@ -93,7 +190,13 @@ static void test_runtime_mapping_noop_under_default_profile(void) {
                                         &presolve,
                                         &ratio,
                                         &dual_ratio,
-                                        &flip,
+                                        &dual_bound_flip,
+                                        &tol_bnd,
+                                        &tol_dj,
+                                        &tol_piv,
+                                        &excl,
+                                        &shift,
+                                        &aorn,
                                         &crash,
                                         &backend,
                                         &update_limit,
@@ -109,7 +212,16 @@ static void test_runtime_mapping_noop_under_default_profile(void) {
     ASSERT_INT_EQ(ratio, 1, "runtime default profile: ratio unchanged");
     ASSERT_INT_EQ(dual_ratio, LP_DUAL_RATIO_TEST_HARRIS,
                   "runtime default profile: dual ratio unchanged");
-    ASSERT_INT_EQ(flip, 1, "runtime default profile: flip unchanged");
+    ASSERT_INT_EQ(dual_bound_flip, 1, "runtime default profile: flip unchanged");
+    ASSERT_DBL_NEAR(tol_bnd, 1.0, 1e-16,
+                    "runtime default profile: tol_bnd unchanged");
+    ASSERT_DBL_NEAR(tol_dj, 2.0, 1e-16,
+                    "runtime default profile: tol_dj unchanged");
+    ASSERT_DBL_NEAR(tol_piv, 3.0, 1e-16,
+                    "runtime default profile: tol_piv unchanged");
+    ASSERT_INT_EQ(excl, 9, "runtime default profile: excl unchanged");
+    ASSERT_INT_EQ(shift, 8, "runtime default profile: shift unchanged");
+    ASSERT_INT_EQ(aorn, 7, "runtime default profile: aorn unchanged");
     ASSERT_INT_EQ(crash, 0, "runtime default profile: crash unchanged");
     ASSERT_INT_EQ(backend, -1, "runtime default profile: backend unchanged");
     ASSERT_INT_EQ(update_limit, -1, "runtime default profile: update limit unchanged");
@@ -125,7 +237,13 @@ static void test_runtime_mapping_glpk_profile(void) {
     int presolve = 0;
     int ratio = -1;
     int dual_ratio = -1;
-    int flip = -1;
+    int dual_bound_flip = -1;
+    double tol_bnd = -1.0;
+    double tol_dj = -1.0;
+    double tol_piv = -1.0;
+    int excl = -1;
+    int shift = -1;
+    int aorn = -1;
     int crash = -1;
     int backend = -1;
     int update_limit = -1;
@@ -142,6 +260,12 @@ static void test_runtime_mapping_glpk_profile(void) {
     cfg.glpk_smcp_ratio = LP_GLPK_SMCP_RATIO_STANDARD;
     cfg.glpk_smcp_flip = LP_GLPK_SMCP_FLIP_ON;
     cfg.glpk_smcp_basis = LP_GLPK_SMCP_BASIS_STD;
+    cfg.glpk_smcp_tol_bnd = 2e-7;
+    cfg.glpk_smcp_tol_dj = 3e-7;
+    cfg.glpk_smcp_tol_piv = 4e-9;
+    cfg.glpk_smcp_excl = LP_GLPK_SMCP_EXCL_OFF;
+    cfg.glpk_smcp_shift = LP_GLPK_SMCP_SHIFT_OFF;
+    cfg.glpk_smcp_aorn = LP_GLPK_SMCP_AORN_USE_AT;
     cfg.glpk_bfcp_backend = LP_GLPK_BFCP_BACKEND_CGR;
     cfg.glpk_bfcp_update_limit = 77;
     cfg.glpk_bfcp_pivot_tol = 1e-8;
@@ -153,7 +277,13 @@ static void test_runtime_mapping_glpk_profile(void) {
                                         &presolve,
                                         &ratio,
                                         &dual_ratio,
-                                        &flip,
+                                        &dual_bound_flip,
+                                        &tol_bnd,
+                                        &tol_dj,
+                                        &tol_piv,
+                                        &excl,
+                                        &shift,
+                                        &aorn,
                                         &crash,
                                         &backend,
                                         &update_limit,
@@ -169,14 +299,28 @@ static void test_runtime_mapping_glpk_profile(void) {
     ASSERT_INT_EQ(ratio, 0, "runtime glpk profile: standard ratio mapped");
     ASSERT_INT_EQ(dual_ratio, LP_DUAL_RATIO_TEST_FLIP,
                   "runtime glpk profile: flip maps to dual flip mode");
-    ASSERT_INT_EQ(flip, -1, "runtime glpk profile: dual bound flip untouched");
+    ASSERT_INT_EQ(dual_bound_flip, 1,
+                  "runtime glpk profile: strict-default enables bound flip");
+    ASSERT_DBL_NEAR(tol_bnd, 2e-7, 1e-16,
+                    "runtime glpk profile: tol_bnd mapped");
+    ASSERT_DBL_NEAR(tol_dj, 3e-7, 1e-16,
+                    "runtime glpk profile: tol_dj mapped");
+    ASSERT_DBL_NEAR(tol_piv, 4e-9, 1e-18,
+                    "runtime glpk profile: tol_piv mapped");
+    ASSERT_INT_EQ(excl, LP_GLPK_SMCP_EXCL_OFF,
+                  "runtime glpk profile: excl mapped");
+    ASSERT_INT_EQ(shift, LP_GLPK_SMCP_SHIFT_OFF,
+                  "runtime glpk profile: shift mapped");
+    ASSERT_INT_EQ(aorn, LP_GLPK_SMCP_AORN_USE_AT,
+                  "runtime glpk profile: aorn mapped");
     ASSERT_INT_EQ(crash, 0, "runtime glpk profile: std basis mapped to crash off");
-    ASSERT_INT_EQ(backend, LP_GLPK_BFCP_BACKEND_CGR, "runtime glpk profile: backend mapped");
+    ASSERT_INT_EQ(backend, LP_GLPK_BFCP_BACKEND_LUF_FT,
+                  "runtime glpk profile: backend clamped to LUF_FT");
     ASSERT_INT_EQ(update_limit, 77, "runtime glpk profile: update limit mapped");
-    ASSERT_TRUE(fabs(pivot_tol - 1e-8) < 1e-14,
-                "runtime glpk profile: pivot tol mapped");
-    ASSERT_TRUE(fabs(growth_guard - 1e6) < 1e-6,
-                "runtime glpk profile: growth guard mapped");
+    ASSERT_DBL_NEAR(pivot_tol, 1e-8, 1e-14,
+                    "runtime glpk profile: pivot tol mapped");
+    ASSERT_DBL_NEAR(growth_guard, 1e6, 1e-6,
+                    "runtime glpk profile: growth guard mapped");
     ASSERT_INT_EQ(soft_gate, 0, "runtime glpk profile: soft cost gate disabled");
     ASSERT_INT_EQ(periodic_gate, 0, "runtime glpk profile: periodic cost gate disabled");
 
@@ -197,9 +341,80 @@ static void test_runtime_mapping_glpk_profile(void) {
                                         NULL,
                                         NULL,
                                         NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
                                         NULL);
     ASSERT_INT_EQ(dual_ratio, LP_DUAL_RATIO_TEST_HARRIS,
                   "runtime glpk profile: dual ratio falls back to Harris when flip off");
+}
+
+static void test_runtime_mapping_glpk_strict_profile(void) {
+    LPGLPKCompatConfig cfg;
+    int dual_ratio = -1;
+    int dual_bound_flip = -1;
+
+    lp_policy_glpk_compat_init(&cfg);
+    cfg.lp_policy_profile = LP_POLICY_PROFILE_GLPK_STRICT;
+    cfg.glpk_smcp_ratio = LP_GLPK_SMCP_RATIO_STANDARD;
+    cfg.glpk_smcp_flip = LP_GLPK_SMCP_FLIP_OFF;
+    lp_policy_glpk_compat_apply_runtime(&cfg,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        &dual_ratio,
+                                        &dual_bound_flip,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL);
+    ASSERT_INT_EQ(dual_ratio, LP_DUAL_RATIO_TEST_STANDARD,
+                  "runtime strict profile: standard ratio mapped");
+    ASSERT_INT_EQ(dual_bound_flip, 0,
+                  "runtime strict profile: flip off disables bound flip");
+
+    cfg.glpk_smcp_flip = LP_GLPK_SMCP_FLIP_ON;
+    dual_ratio = -1;
+    dual_bound_flip = -1;
+    lp_policy_glpk_compat_apply_runtime(&cfg,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        &dual_ratio,
+                                        &dual_bound_flip,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL);
+    ASSERT_INT_EQ(dual_ratio, LP_DUAL_RATIO_TEST_FLIP,
+                  "runtime strict profile: flip on selects dual flip ratio");
+    ASSERT_INT_EQ(dual_bound_flip, 1,
+                  "runtime strict profile: flip on enables bound flip");
 }
 
 static void test_validation_rejects_invalid_values(void) {
@@ -216,6 +431,16 @@ static void test_validation_rejects_invalid_values(void) {
                 "validate: rejects invalid profile");
 
     lp_policy_glpk_compat_init(&cfg);
+    cfg.glpk_smcp_tol_bnd = 0.0;
+    ASSERT_TRUE(lp_policy_glpk_compat_validate(&cfg) == 0,
+                "validate: rejects non-positive tol_bnd");
+
+    lp_policy_glpk_compat_init(&cfg);
+    cfg.glpk_smcp_excl = 2;
+    ASSERT_TRUE(lp_policy_glpk_compat_validate(&cfg) == 0,
+                "validate: rejects invalid smcp_excl");
+
+    lp_policy_glpk_compat_init(&cfg);
     cfg.glpk_bfcp_pivot_tol = INFINITY;
     ASSERT_TRUE(lp_policy_glpk_compat_validate(&cfg) == 0,
                 "validate: rejects non-finite pivot tol");
@@ -226,8 +451,11 @@ int main(void) {
 
     test_init_and_validate();
     test_profile_defaults();
+    test_profile_defaults_glpk_strict();
+    test_profile_defaults_glpk_legacy();
     test_runtime_mapping_noop_under_default_profile();
     test_runtime_mapping_glpk_profile();
+    test_runtime_mapping_glpk_strict_profile();
     test_validation_rejects_invalid_values();
 
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
