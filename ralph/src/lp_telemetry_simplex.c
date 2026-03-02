@@ -284,6 +284,14 @@ enum {
     LP_PHASE1_DIR_STABILIZE_ESCAPE_GATE_SUPPRESS_FORCE_PIVOT_MODE = 4
 };
 
+enum {
+    LP_PHASE1_DIR_STABILIZE_REFACTOR_FROM_NO_PIVOT_FORCE = 1,
+    LP_PHASE1_DIR_STABILIZE_REFACTOR_FROM_FORCE_EXTREME_DIR = 2,
+    LP_PHASE1_DIR_STABILIZE_REFACTOR_FROM_FORCE_LU_HEALTH = 3,
+    LP_PHASE1_DIR_STABILIZE_REFACTOR_FROM_FORCE_PIVOT_MODE = 4,
+    LP_PHASE1_DIR_STABILIZE_REFACTOR_FROM_LADDER_FORCE = 5
+};
+
 void lp_telemetry_record_phase1_dir_stabilize_escape_gate(
     SimplexSolver *solver,
     int event) {
@@ -297,6 +305,41 @@ void lp_telemetry_record_phase1_dir_stabilize_escape_gate(
     } else if (event == LP_PHASE1_DIR_STABILIZE_ESCAPE_GATE_HARD_BYPASS) {
         solver->telemetry.perf_phase1_dir_stabilize_escape_gate_hard_bypass++;
     }
+}
+
+void lp_telemetry_record_phase1_dir_stabilize_refactor_trigger(
+    SimplexSolver *solver,
+    int trigger) {
+    if (!solver_telemetry_enabled(solver)) return;
+    switch (trigger) {
+        case LP_PHASE1_DIR_STABILIZE_REFACTOR_FROM_NO_PIVOT_FORCE:
+            solver->telemetry.perf_phase1_dir_stabilize_refactor_from_no_pivot_force++;
+            break;
+        case LP_PHASE1_DIR_STABILIZE_REFACTOR_FROM_FORCE_EXTREME_DIR:
+            solver->telemetry.perf_phase1_dir_stabilize_refactor_from_force_extreme_dir++;
+            break;
+        case LP_PHASE1_DIR_STABILIZE_REFACTOR_FROM_FORCE_LU_HEALTH:
+            solver->telemetry.perf_phase1_dir_stabilize_refactor_from_force_lu_health++;
+            break;
+        case LP_PHASE1_DIR_STABILIZE_REFACTOR_FROM_FORCE_PIVOT_MODE:
+            solver->telemetry.perf_phase1_dir_stabilize_refactor_from_force_pivot_mode++;
+            break;
+        case LP_PHASE1_DIR_STABILIZE_REFACTOR_FROM_LADDER_FORCE:
+            solver->telemetry.perf_phase1_dir_stabilize_refactor_from_ladder_force++;
+            break;
+        default:
+            break;
+    }
+}
+
+void lp_telemetry_record_phase1_force_pivot_relax(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_force_pivot_relax_applied++;
+}
+
+void lp_telemetry_record_phase1_force_extreme_relax(SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_force_extreme_relax_applied++;
 }
 
 void lp_telemetry_record_phase1_recompute(SimplexSolver *solver,

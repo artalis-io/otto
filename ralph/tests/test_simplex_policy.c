@@ -125,6 +125,30 @@ int simplex_phase1_dir_stabilize_escape_gate_plan_for_test(
     int *triggered_out,
     int *hard_bypass_out);
 
+int simplex_phase1_force_pivot_relax_plan_for_test(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    int force_pivot_mode_active,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int dual_rescue_attempts,
+    int dual_rescue_successes,
+    int dual_rescue_fail_streak);
+
+int simplex_phase1_force_extreme_relax_plan_for_test(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int dual_rescue_attempts,
+    int dual_rescue_successes,
+    int dual_rescue_fail_streak);
+
 int simplex_phase1_soft_lu_policy_cooldown_plan_for_test(
     int m,
     int degenerate_count,
@@ -398,6 +422,36 @@ typedef struct {
     int expected_hard_bypass;
     int expected_next_cooldown;
 } DirStabilizeEscapeGateCase;
+
+typedef struct {
+    const char *name;
+    int m;
+    int degenerate_count;
+    int no_progress_streak;
+    int force_pivot_mode_active;
+    int force_extreme_dir;
+    int force_lu_health;
+    int lu_hard_trigger;
+    int dual_rescue_attempts;
+    int dual_rescue_successes;
+    int dual_rescue_fail_streak;
+    int expected_relax;
+} ForcePivotRelaxCase;
+
+typedef struct {
+    const char *name;
+    int m;
+    int degenerate_count;
+    int no_progress_streak;
+    double dir_inf_ratio;
+    int force_extreme_dir;
+    int force_lu_health;
+    int lu_hard_trigger;
+    int dual_rescue_attempts;
+    int dual_rescue_successes;
+    int dual_rescue_fail_streak;
+    int expected_relax;
+} ForceExtremeRelaxCase;
 
 typedef struct {
     const char *name;
@@ -789,6 +843,48 @@ static int run_dir_stabilize_escape_gate_case(
     if (next_cooldown != tc->expected_next_cooldown) {
         fprintf(stderr, "FAIL: %s (expected next_cooldown=%d got=%d)\n",
                 tc->name, tc->expected_next_cooldown, next_cooldown);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_force_pivot_relax_case(const ForcePivotRelaxCase *tc) {
+    int relax = simplex_phase1_force_pivot_relax_plan_for_test(
+        tc->m,
+        tc->degenerate_count,
+        tc->no_progress_streak,
+        tc->force_pivot_mode_active,
+        tc->force_extreme_dir,
+        tc->force_lu_health,
+        tc->lu_hard_trigger,
+        tc->dual_rescue_attempts,
+        tc->dual_rescue_successes,
+        tc->dual_rescue_fail_streak);
+    if (relax != tc->expected_relax) {
+        fprintf(stderr, "FAIL: %s (expected relax=%d got=%d)\n",
+                tc->name, tc->expected_relax, relax);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_force_extreme_relax_case(const ForceExtremeRelaxCase *tc) {
+    int relax = simplex_phase1_force_extreme_relax_plan_for_test(
+        tc->m,
+        tc->degenerate_count,
+        tc->no_progress_streak,
+        tc->dir_inf_ratio,
+        tc->force_extreme_dir,
+        tc->force_lu_health,
+        tc->lu_hard_trigger,
+        tc->dual_rescue_attempts,
+        tc->dual_rescue_successes,
+        tc->dual_rescue_fail_streak);
+    if (relax != tc->expected_relax) {
+        fprintf(stderr, "FAIL: %s (expected relax=%d got=%d)\n",
+                tc->name, tc->expected_relax, relax);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -1862,6 +1958,150 @@ int main(void) {
             .expected_next_cooldown = 0
         }
     };
+    const ForcePivotRelaxCase force_pivot_relax_cases[] = {
+        {
+            .name = "force-pivot relax applies on large degenerate run with strong dual-rescue success",
+            .m = 1500,
+            .degenerate_count = 120,
+            .no_progress_streak = 6,
+            .force_pivot_mode_active = 1,
+            .force_extreme_dir = 0,
+            .force_lu_health = 0,
+            .lu_hard_trigger = 0,
+            .dual_rescue_attempts = 20,
+            .dual_rescue_successes = 19,
+            .dual_rescue_fail_streak = 0,
+            .expected_relax = 1
+        },
+        {
+            .name = "force-pivot relax blocked by LU hard trigger",
+            .m = 1500,
+            .degenerate_count = 120,
+            .no_progress_streak = 6,
+            .force_pivot_mode_active = 1,
+            .force_extreme_dir = 0,
+            .force_lu_health = 0,
+            .lu_hard_trigger = 1,
+            .dual_rescue_attempts = 20,
+            .dual_rescue_successes = 20,
+            .dual_rescue_fail_streak = 0,
+            .expected_relax = 0
+        },
+        {
+            .name = "force-pivot relax blocked by weak dual-rescue success rate",
+            .m = 1500,
+            .degenerate_count = 120,
+            .no_progress_streak = 6,
+            .force_pivot_mode_active = 1,
+            .force_extreme_dir = 0,
+            .force_lu_health = 0,
+            .lu_hard_trigger = 0,
+            .dual_rescue_attempts = 20,
+            .dual_rescue_successes = 12,
+            .dual_rescue_fail_streak = 0,
+            .expected_relax = 0
+        },
+        {
+            .name = "force-pivot relax blocked by sustained no-progress streak",
+            .m = 1500,
+            .degenerate_count = 120,
+            .no_progress_streak = 16,
+            .force_pivot_mode_active = 1,
+            .force_extreme_dir = 0,
+            .force_lu_health = 0,
+            .lu_hard_trigger = 0,
+            .dual_rescue_attempts = 20,
+            .dual_rescue_successes = 20,
+            .dual_rescue_fail_streak = 0,
+            .expected_relax = 0
+        },
+        {
+            .name = "force-pivot relax blocked on small matrices",
+            .m = 500,
+            .degenerate_count = 120,
+            .no_progress_streak = 6,
+            .force_pivot_mode_active = 1,
+            .force_extreme_dir = 0,
+            .force_lu_health = 0,
+            .lu_hard_trigger = 0,
+            .dual_rescue_attempts = 20,
+            .dual_rescue_successes = 20,
+            .dual_rescue_fail_streak = 0,
+            .expected_relax = 0
+        }
+    };
+    const ForceExtremeRelaxCase force_extreme_relax_cases[] = {
+        {
+            .name = "force-extreme relax applies for moderate extreme ratio under stable LU and strong dual rescue",
+            .m = 1500,
+            .degenerate_count = 120,
+            .no_progress_streak = 6,
+            .dir_inf_ratio = 150.0,
+            .force_extreme_dir = 1,
+            .force_lu_health = 0,
+            .lu_hard_trigger = 0,
+            .dual_rescue_attempts = 20,
+            .dual_rescue_successes = 19,
+            .dual_rescue_fail_streak = 0,
+            .expected_relax = 1
+        },
+        {
+            .name = "force-extreme relax blocked for severe direction ratio",
+            .m = 1500,
+            .degenerate_count = 120,
+            .no_progress_streak = 6,
+            .dir_inf_ratio = 450.0,
+            .force_extreme_dir = 1,
+            .force_lu_health = 0,
+            .lu_hard_trigger = 0,
+            .dual_rescue_attempts = 20,
+            .dual_rescue_successes = 20,
+            .dual_rescue_fail_streak = 0,
+            .expected_relax = 0
+        },
+        {
+            .name = "force-extreme relax blocked by LU-health trigger",
+            .m = 1500,
+            .degenerate_count = 120,
+            .no_progress_streak = 6,
+            .dir_inf_ratio = 150.0,
+            .force_extreme_dir = 1,
+            .force_lu_health = 1,
+            .lu_hard_trigger = 0,
+            .dual_rescue_attempts = 20,
+            .dual_rescue_successes = 20,
+            .dual_rescue_fail_streak = 0,
+            .expected_relax = 0
+        },
+        {
+            .name = "force-extreme relax blocked by poor dual-rescue effectiveness",
+            .m = 1500,
+            .degenerate_count = 120,
+            .no_progress_streak = 6,
+            .dir_inf_ratio = 150.0,
+            .force_extreme_dir = 1,
+            .force_lu_health = 0,
+            .lu_hard_trigger = 0,
+            .dual_rescue_attempts = 20,
+            .dual_rescue_successes = 12,
+            .dual_rescue_fail_streak = 0,
+            .expected_relax = 0
+        },
+        {
+            .name = "force-extreme relax blocked on small matrices",
+            .m = 500,
+            .degenerate_count = 120,
+            .no_progress_streak = 6,
+            .dir_inf_ratio = 150.0,
+            .force_extreme_dir = 1,
+            .force_lu_health = 0,
+            .lu_hard_trigger = 0,
+            .dual_rescue_attempts = 20,
+            .dual_rescue_successes = 20,
+            .dual_rescue_fail_streak = 0,
+            .expected_relax = 0
+        }
+    };
     const SoftLUPolicyCooldownCase soft_lu_policy_cooldown_cases[] = {
         {
             .name = "phase1 soft-lu defer applies periodic cooldown on large degenerate run",
@@ -1973,6 +2213,12 @@ int main(void) {
     int total_dir_escape_gate =
         (int)(sizeof(dir_stabilize_escape_gate_cases) /
               sizeof(dir_stabilize_escape_gate_cases[0]));
+    int total_force_pivot_relax =
+        (int)(sizeof(force_pivot_relax_cases) /
+              sizeof(force_pivot_relax_cases[0]));
+    int total_force_extreme_relax =
+        (int)(sizeof(force_extreme_relax_cases) /
+              sizeof(force_extreme_relax_cases[0]));
     int total_soft_lu_policy_cd = (int)(sizeof(soft_lu_policy_cooldown_cases) / sizeof(soft_lu_policy_cooldown_cases[0]));
     int total_phase2_recompute_interval =
         (int)(sizeof(phase2_recompute_interval_cases) /
@@ -1984,6 +2230,8 @@ int main(void) {
                 total_dir_skip_rescue_cadence +
                 total_force_pivot_mode +
                 total_dir_escape_gate +
+                total_force_pivot_relax +
+                total_force_extreme_relax +
                 total_soft_lu_policy_cd +
                 total_phase2_recompute_interval;
     total += total_dir_skip_rc_only;
@@ -2036,6 +2284,12 @@ int main(void) {
     }
     for (int i = 0; i < total_dir_escape_gate; i++) {
         pass += run_dir_stabilize_escape_gate_case(&dir_stabilize_escape_gate_cases[i]);
+    }
+    for (int i = 0; i < total_force_pivot_relax; i++) {
+        pass += run_force_pivot_relax_case(&force_pivot_relax_cases[i]);
+    }
+    for (int i = 0; i < total_force_extreme_relax; i++) {
+        pass += run_force_extreme_relax_case(&force_extreme_relax_cases[i]);
     }
     for (int i = 0; i < total_soft_lu_policy_cd; i++) {
         pass += run_soft_lu_policy_cooldown_case(&soft_lu_policy_cooldown_cases[i]);

@@ -674,6 +674,13 @@ typedef struct {
     int perf_phase1_dir_stabilize_escape_gate_suppressed_lu_health;
     int perf_phase1_dir_stabilize_escape_gate_suppressed_force_pivot_mode;
     int perf_phase1_dir_stabilize_escape_gate_hard_bypass;
+    int perf_phase1_dir_stabilize_refactor_from_no_pivot_force;
+    int perf_phase1_dir_stabilize_refactor_from_force_extreme_dir;
+    int perf_phase1_dir_stabilize_refactor_from_force_lu_health;
+    int perf_phase1_dir_stabilize_refactor_from_force_pivot_mode;
+    int perf_phase1_dir_stabilize_refactor_from_ladder_force;
+    int perf_phase1_force_pivot_relax_applied;
+    int perf_phase1_force_extreme_relax_applied;
     int perf_phase1_recompute_after_ratio_breakdown;
     int perf_phase1_recompute_after_dir_skip;
     int perf_phase1_recompute_after_dir_refactor;
@@ -977,6 +984,13 @@ typedef struct {
     int perf_phase1_dir_stabilize_escape_gate_suppressed_lu_health;
     int perf_phase1_dir_stabilize_escape_gate_suppressed_force_pivot_mode;
     int perf_phase1_dir_stabilize_escape_gate_hard_bypass;
+    int perf_phase1_dir_stabilize_refactor_from_no_pivot_force;
+    int perf_phase1_dir_stabilize_refactor_from_force_extreme_dir;
+    int perf_phase1_dir_stabilize_refactor_from_force_lu_health;
+    int perf_phase1_dir_stabilize_refactor_from_force_pivot_mode;
+    int perf_phase1_dir_stabilize_refactor_from_ladder_force;
+    int perf_phase1_force_pivot_relax_applied;
+    int perf_phase1_force_extreme_relax_applied;
     int perf_phase1_recompute_after_ratio_breakdown;
     int perf_phase1_recompute_after_dir_skip;
     int perf_phase1_recompute_after_dir_refactor;
@@ -1450,6 +1464,11 @@ void lp_telemetry_record_phase1_dir_stabilize_skip_guard_refresh(
 void lp_telemetry_record_phase1_dir_stabilize_escape_gate(
     SimplexSolver *solver,
     int event);
+void lp_telemetry_record_phase1_dir_stabilize_refactor_trigger(
+    SimplexSolver *solver,
+    int trigger);
+void lp_telemetry_record_phase1_force_pivot_relax(SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_extreme_relax(SimplexSolver *solver);
 void lp_telemetry_record_phase1_recompute(SimplexSolver *solver,
                                           LPPhase1RecomputeReason reason);
 void lp_telemetry_record_phase1_recompute_rc_only(SimplexSolver *solver);

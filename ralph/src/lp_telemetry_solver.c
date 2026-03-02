@@ -92,6 +92,13 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_dir_stabilize_escape_gate_suppressed_lu_health = 0;
     solver->telemetry.perf_phase1_dir_stabilize_escape_gate_suppressed_force_pivot_mode = 0;
     solver->telemetry.perf_phase1_dir_stabilize_escape_gate_hard_bypass = 0;
+    solver->telemetry.perf_phase1_dir_stabilize_refactor_from_no_pivot_force = 0;
+    solver->telemetry.perf_phase1_dir_stabilize_refactor_from_force_extreme_dir = 0;
+    solver->telemetry.perf_phase1_dir_stabilize_refactor_from_force_lu_health = 0;
+    solver->telemetry.perf_phase1_dir_stabilize_refactor_from_force_pivot_mode = 0;
+    solver->telemetry.perf_phase1_dir_stabilize_refactor_from_ladder_force = 0;
+    solver->telemetry.perf_phase1_force_pivot_relax_applied = 0;
+    solver->telemetry.perf_phase1_force_extreme_relax_applied = 0;
     solver->telemetry.perf_phase1_recompute_after_ratio_breakdown = 0;
     solver->telemetry.perf_phase1_recompute_after_dir_skip = 0;
     solver->telemetry.perf_phase1_recompute_after_dir_refactor = 0;
@@ -413,6 +420,13 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_escape_gate_suppressed_lu_health);
     COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_escape_gate_suppressed_force_pivot_mode);
     COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_escape_gate_hard_bypass);
+    COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_refactor_from_no_pivot_force);
+    COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_refactor_from_force_extreme_dir);
+    COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_refactor_from_force_lu_health);
+    COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_refactor_from_force_pivot_mode);
+    COPY_SOLVER_FIELD(perf_phase1_dir_stabilize_refactor_from_ladder_force);
+    COPY_SOLVER_FIELD(perf_phase1_force_pivot_relax_applied);
+    COPY_SOLVER_FIELD(perf_phase1_force_extreme_relax_applied);
     COPY_SOLVER_FIELD(perf_phase1_recompute_after_ratio_breakdown);
     COPY_SOLVER_FIELD(perf_phase1_recompute_after_dir_skip);
     COPY_SOLVER_FIELD(perf_phase1_recompute_after_dir_refactor);

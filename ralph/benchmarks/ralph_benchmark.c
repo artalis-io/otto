@@ -271,6 +271,13 @@ typedef struct {
     int phase1_dir_stabilize_escape_gate_suppressed_lu_health;
     int phase1_dir_stabilize_escape_gate_suppressed_force_pivot_mode;
     int phase1_dir_stabilize_escape_gate_hard_bypass;
+    int phase1_dir_stabilize_refactor_from_no_pivot_force;
+    int phase1_dir_stabilize_refactor_from_force_extreme_dir;
+    int phase1_dir_stabilize_refactor_from_force_lu_health;
+    int phase1_dir_stabilize_refactor_from_force_pivot_mode;
+    int phase1_dir_stabilize_refactor_from_ladder_force;
+    int phase1_force_pivot_relax_applied;
+    int phase1_force_extreme_relax_applied;
     int phase1_recompute_after_ratio_breakdown;
     int phase1_recompute_after_dir_skip;
     int phase1_recompute_after_dir_refactor;
@@ -1055,6 +1062,20 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_dir_stabilize_escape_gate_suppressed_force_pivot_mode;
             result.phase1_dir_stabilize_escape_gate_hard_bypass =
                 solver_tel.perf_phase1_dir_stabilize_escape_gate_hard_bypass;
+            result.phase1_dir_stabilize_refactor_from_no_pivot_force =
+                solver_tel.perf_phase1_dir_stabilize_refactor_from_no_pivot_force;
+            result.phase1_dir_stabilize_refactor_from_force_extreme_dir =
+                solver_tel.perf_phase1_dir_stabilize_refactor_from_force_extreme_dir;
+            result.phase1_dir_stabilize_refactor_from_force_lu_health =
+                solver_tel.perf_phase1_dir_stabilize_refactor_from_force_lu_health;
+            result.phase1_dir_stabilize_refactor_from_force_pivot_mode =
+                solver_tel.perf_phase1_dir_stabilize_refactor_from_force_pivot_mode;
+            result.phase1_dir_stabilize_refactor_from_ladder_force =
+                solver_tel.perf_phase1_dir_stabilize_refactor_from_ladder_force;
+            result.phase1_force_pivot_relax_applied =
+                solver_tel.perf_phase1_force_pivot_relax_applied;
+            result.phase1_force_extreme_relax_applied =
+                solver_tel.perf_phase1_force_extreme_relax_applied;
             result.phase1_recompute_after_ratio_breakdown =
                 solver_tel.perf_phase1_recompute_after_ratio_breakdown;
             result.phase1_recompute_after_dir_skip =
@@ -2168,6 +2189,20 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_dir_stabilize_escape_gate_suppressed_force_pivot_mode);
     fprintf(out, "      \"dir_stabilize_escape_gate_hard_bypass\": %d,\n",
             ralph->phase1_dir_stabilize_escape_gate_hard_bypass);
+    fprintf(out, "      \"dir_stabilize_refactor_from_no_pivot_force\": %d,\n",
+            ralph->phase1_dir_stabilize_refactor_from_no_pivot_force);
+    fprintf(out, "      \"dir_stabilize_refactor_from_force_extreme_dir\": %d,\n",
+            ralph->phase1_dir_stabilize_refactor_from_force_extreme_dir);
+    fprintf(out, "      \"dir_stabilize_refactor_from_force_lu_health\": %d,\n",
+            ralph->phase1_dir_stabilize_refactor_from_force_lu_health);
+    fprintf(out, "      \"dir_stabilize_refactor_from_force_pivot_mode\": %d,\n",
+            ralph->phase1_dir_stabilize_refactor_from_force_pivot_mode);
+    fprintf(out, "      \"dir_stabilize_refactor_from_ladder_force\": %d,\n",
+            ralph->phase1_dir_stabilize_refactor_from_ladder_force);
+    fprintf(out, "      \"force_pivot_relax_applied\": %d,\n",
+            ralph->phase1_force_pivot_relax_applied);
+    fprintf(out, "      \"force_extreme_relax_applied\": %d,\n",
+            ralph->phase1_force_extreme_relax_applied);
     fprintf(out, "      \"recompute_after_ratio_breakdown\": %d,\n",
             ralph->phase1_recompute_after_ratio_breakdown);
     fprintf(out, "      \"recompute_after_dir_skip\": %d,\n",
@@ -2337,6 +2372,20 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_dir_stabilize_skip_no_recompute);
     fprintf(out, "    \"phase1_dir_stabilize_skip_guard_refresh\": %d,\n",
             ralph->phase1_dir_stabilize_skip_guard_refresh);
+    fprintf(out, "    \"phase1_dir_stabilize_refactor_from_no_pivot_force\": %d,\n",
+            ralph->phase1_dir_stabilize_refactor_from_no_pivot_force);
+    fprintf(out, "    \"phase1_dir_stabilize_refactor_from_force_extreme_dir\": %d,\n",
+            ralph->phase1_dir_stabilize_refactor_from_force_extreme_dir);
+    fprintf(out, "    \"phase1_dir_stabilize_refactor_from_force_lu_health\": %d,\n",
+            ralph->phase1_dir_stabilize_refactor_from_force_lu_health);
+    fprintf(out, "    \"phase1_dir_stabilize_refactor_from_force_pivot_mode\": %d,\n",
+            ralph->phase1_dir_stabilize_refactor_from_force_pivot_mode);
+    fprintf(out, "    \"phase1_dir_stabilize_refactor_from_ladder_force\": %d,\n",
+            ralph->phase1_dir_stabilize_refactor_from_ladder_force);
+    fprintf(out, "    \"phase1_force_pivot_relax_applied\": %d,\n",
+            ralph->phase1_force_pivot_relax_applied);
+    fprintf(out, "    \"phase1_force_extreme_relax_applied\": %d,\n",
+            ralph->phase1_force_extreme_relax_applied);
     fprintf(out, "    \"phase1_recompute_after_ratio_breakdown\": %d,\n",
             ralph->phase1_recompute_after_ratio_breakdown);
     fprintf(out, "    \"phase1_recompute_after_dir_skip\": %d,\n",
