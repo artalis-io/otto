@@ -1568,6 +1568,18 @@ int main(void) {
             .max_threshold = 14
         },
         {
+            .name = "phase1 no-pivot ladder can trigger rescue from no-pivot streak",
+            .m = 1500,
+            .degenerate_count = 120,
+            .reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
+            .no_pivot_streak = 12,
+            .no_progress_streak = 1,
+            .force_pivot_mode_active = 0,
+            .expected_step = 1,
+            .min_threshold = 10,
+            .max_threshold = 14
+        },
+        {
             .name = "phase1 no-pivot ladder keeps pivot-fail path aggressive",
             .m = 1500,
             .degenerate_count = 120,

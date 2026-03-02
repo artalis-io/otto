@@ -147,6 +147,11 @@ typedef enum {
 #define PHASE1_NO_PIVOT_LADDER_REFACTOR_MIN 3
 #define PHASE1_NO_PIVOT_LADDER_RESCUE_START 4
 #define PHASE1_NO_PIVOT_LADDER_RESCUE_PERIOD 6
+#define PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_START 12
+#define PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_PERIOD 6
+#define PHASE1_NO_PIVOT_PROGRESS_WINDOW 6
+#define PHASE1_NO_PIVOT_PROGRESS_REL_IMPROVE_MIN 1e-4
+#define PHASE1_NO_PIVOT_PROGRESS_ABS_IMPROVE_MIN 1e-8
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_TRIGGER 64
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_MIN_TRIGGER 24
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_BUDGET 12
@@ -918,33 +923,95 @@ static double phase1_artificial_abs_sum(const SimplexTableau *tab) {
     return art_sum;
 }
 
+static void phase1_no_pivot_progress_reset(int *no_progress_streak_io,
+                                           double *last_art_sum_io,
+                                           double *anchor_art_sum_io,
+                                           int *progress_window_steps_io) {
+    if (no_progress_streak_io) *no_progress_streak_io = 0;
+    if (last_art_sum_io) *last_art_sum_io = RALPH_INFINITY;
+    if (anchor_art_sum_io) *anchor_art_sum_io = RALPH_INFINITY;
+    if (progress_window_steps_io) *progress_window_steps_io = 0;
+}
+
 static void phase1_no_pivot_progress_update(SimplexSolver *solver,
                                             const SimplexTableau *tab,
                                             double *last_art_sum_io,
+                                            double *anchor_art_sum_io,
+                                            int *progress_window_steps_io,
                                             int *no_progress_streak_io) {
     double art_sum;
     double prev_art_sum;
-    double improve_tol;
+    double anchor_art_sum;
+    double abs_improve_anchor;
+    double rel_improve_anchor;
+    double abs_improve_prev;
+    double rel_improve_prev;
+    double abs_target_anchor;
+    double abs_target_prev;
+    double window_rel_target;
+    int window_steps;
     int improved = 0;
 
-    if (!tab || !last_art_sum_io || !no_progress_streak_io) return;
+    if (!tab || !last_art_sum_io || !anchor_art_sum_io ||
+        !progress_window_steps_io || !no_progress_streak_io) {
+        return;
+    }
 
     art_sum = phase1_artificial_abs_sum(tab);
     prev_art_sum = *last_art_sum_io;
-    improve_tol = 1e-9 * (1.0 + fabs(prev_art_sum));
-    if (isfinite(prev_art_sum) && art_sum + improve_tol < prev_art_sum) {
+    anchor_art_sum = *anchor_art_sum_io;
+    window_steps = *progress_window_steps_io;
+
+    if (!isfinite(prev_art_sum) || !isfinite(anchor_art_sum) || window_steps < 0) {
+        *last_art_sum_io = art_sum;
+        *anchor_art_sum_io = art_sum;
+        *progress_window_steps_io = 0;
+        return;
+    }
+
+    if (window_steps < INT_MAX) {
+        window_steps++;
+    }
+
+    abs_improve_anchor = anchor_art_sum - art_sum;
+    rel_improve_anchor = abs_improve_anchor / (1.0 + fabs(anchor_art_sum));
+    abs_improve_prev = prev_art_sum - art_sum;
+    rel_improve_prev = abs_improve_prev / (1.0 + fabs(prev_art_sum));
+    abs_target_anchor = fmax(
+        PHASE1_NO_PIVOT_PROGRESS_ABS_IMPROVE_MIN,
+        PHASE1_NO_PIVOT_PROGRESS_REL_IMPROVE_MIN * (1.0 + fabs(anchor_art_sum)));
+    abs_target_prev = fmax(
+        PHASE1_NO_PIVOT_PROGRESS_ABS_IMPROVE_MIN,
+        0.5 * PHASE1_NO_PIVOT_PROGRESS_REL_IMPROVE_MIN * (1.0 + fabs(prev_art_sum)));
+    window_rel_target = 0.5 * PHASE1_NO_PIVOT_PROGRESS_REL_IMPROVE_MIN;
+
+    if (abs_improve_anchor >= abs_target_anchor) {
+        improved = 1;
+    } else if (rel_improve_prev >= PHASE1_NO_PIVOT_PROGRESS_REL_IMPROVE_MIN &&
+               abs_improve_prev >= abs_target_prev) {
+        improved = 1;
+    } else if (window_steps >= PHASE1_NO_PIVOT_PROGRESS_WINDOW &&
+               rel_improve_anchor >= window_rel_target &&
+               abs_improve_anchor >= PHASE1_NO_PIVOT_PROGRESS_ABS_IMPROVE_MIN) {
         improved = 1;
     }
 
     if (improved) {
         *no_progress_streak_io = 0;
+        *anchor_art_sum_io = art_sum;
+        window_steps = 0;
     } else {
         if (*no_progress_streak_io < INT_MAX) {
             (*no_progress_streak_io)++;
         }
         lp_telemetry_record_phase1_no_pivot_no_progress(solver);
+        if (window_steps >= PHASE1_NO_PIVOT_PROGRESS_WINDOW) {
+            *anchor_art_sum_io = art_sum;
+            window_steps = 0;
+        }
     }
     *last_art_sum_io = art_sum;
+    *progress_window_steps_io = window_steps;
 }
 
 static int phase1_no_pivot_ladder_refactor_threshold(
@@ -995,11 +1062,15 @@ static int phase1_no_pivot_ladder_step(
         m, degenerate_count, reason, force_pivot_mode_active);
     int rescue_start = PHASE1_NO_PIVOT_LADDER_RESCUE_START;
     int rescue_period = PHASE1_NO_PIVOT_LADDER_RESCUE_PERIOD;
+    int streak_rescue_start = PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_START;
+    int streak_rescue_period = PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_PERIOD;
 
     if (refactor_threshold_out) *refactor_threshold_out = refactor_threshold;
     if (reason == LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL) {
         rescue_start = 2;
         rescue_period = 2;
+        streak_rescue_start = 4;
+        streak_rescue_period = 2;
     }
 
     if (no_progress_streak >= refactor_threshold ||
@@ -1010,6 +1081,11 @@ static int phase1_no_pivot_ladder_step(
     if (no_progress_streak >= rescue_start &&
         rescue_period > 0 &&
         (no_progress_streak % rescue_period) == 0) {
+        return PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE;
+    }
+    if (no_pivot_streak >= streak_rescue_start &&
+        streak_rescue_period > 0 &&
+        (no_pivot_streak % streak_rescue_period) == 0) {
         return PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE;
     }
 
@@ -5504,6 +5580,8 @@ static int simplex_phase1(SimplexSolver *solver) {
     int phase1_no_pivot_streak = 0;
     int phase1_no_pivot_no_progress_streak = 0;
     double phase1_no_pivot_prev_art_sum = RALPH_INFINITY;
+    double phase1_no_pivot_anchor_art_sum = RALPH_INFINITY;
+    int phase1_no_pivot_progress_window_steps = 0;
     int phase1_no_pivot_force_pending = 0;
     LPPhase1NoPivotForceReason phase1_no_pivot_force_reason =
         LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
@@ -5609,8 +5687,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                 ratio_breakdown_same_entering_streak = 0;
                 phase1_dir_skip_event_streak = 0;
                 phase1_dir_skip_no_recompute_streak = 0;
-                phase1_no_pivot_no_progress_streak = 0;
-                phase1_no_pivot_prev_art_sum = RALPH_INFINITY;
+                phase1_no_pivot_progress_reset(
+                    &phase1_no_pivot_no_progress_streak,
+                    &phase1_no_pivot_prev_art_sum,
+                    &phase1_no_pivot_anchor_art_sum,
+                    &phase1_no_pivot_progress_window_steps);
                 phase1_recompute_full_with_reason(
                     solver,
                     tab,
@@ -5775,6 +5856,8 @@ static int simplex_phase1(SimplexSolver *solver) {
             phase1_no_pivot_progress_update(solver,
                                             tab,
                                             &phase1_no_pivot_prev_art_sum,
+                                            &phase1_no_pivot_anchor_art_sum,
+                                            &phase1_no_pivot_progress_window_steps,
                                             &phase1_no_pivot_no_progress_streak);
             {
                 int no_pivot_ladder_threshold = 0;
@@ -5825,8 +5908,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                         ratio_breakdown_count = 0;
                         ratio_breakdown_last_entering = -1;
                         ratio_breakdown_same_entering_streak = 0;
-                        phase1_no_pivot_no_progress_streak = 0;
-                        phase1_no_pivot_prev_art_sum = RALPH_INFINITY;
+                        phase1_no_pivot_progress_reset(
+                            &phase1_no_pivot_no_progress_streak,
+                            &phase1_no_pivot_prev_art_sum,
+                            &phase1_no_pivot_anchor_art_sum,
+                            &phase1_no_pivot_progress_window_steps);
                         continue;
                     }
                     if (solver->status == RALPH_STATUS_TIME_LIMIT) {
@@ -5851,8 +5937,11 @@ static int simplex_phase1(SimplexSolver *solver) {
             /* "Unbounded" in Phase 1 is typically numerical, not structural.
              * Try to recover via refactorization and conservative pricing first. */
             if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_RATIO_RECOVERY) == 0) {
-                phase1_no_pivot_no_progress_streak = 0;
-                phase1_no_pivot_prev_art_sum = RALPH_INFINITY;
+                phase1_no_pivot_progress_reset(
+                    &phase1_no_pivot_no_progress_streak,
+                    &phase1_no_pivot_prev_art_sum,
+                    &phase1_no_pivot_anchor_art_sum,
+                    &phase1_no_pivot_progress_window_steps);
                 phase1_recompute_full_with_reason(
                     solver,
                     tab,
@@ -6040,6 +6129,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                 phase1_no_pivot_progress_update(solver,
                                                 tab,
                                                 &phase1_no_pivot_prev_art_sum,
+                                                &phase1_no_pivot_anchor_art_sum,
+                                                &phase1_no_pivot_progress_window_steps,
                                                 &phase1_no_pivot_no_progress_streak);
                 lp_telemetry_record_phase1_no_pivot_ladder_retry(solver);
                 if (phase1_note_no_pivot_and_maybe_force(
@@ -6095,6 +6186,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                 phase1_no_pivot_progress_update(solver,
                                                 tab,
                                                 &phase1_no_pivot_prev_art_sum,
+                                                &phase1_no_pivot_anchor_art_sum,
+                                                &phase1_no_pivot_progress_window_steps,
                                                 &phase1_no_pivot_no_progress_streak);
                 lp_telemetry_record_phase1_no_pivot_ladder_retry(solver);
                 if (phase1_note_no_pivot_and_maybe_force(
@@ -6113,6 +6206,8 @@ static int simplex_phase1(SimplexSolver *solver) {
             phase1_no_pivot_progress_update(solver,
                                             tab,
                                             &phase1_no_pivot_prev_art_sum,
+                                            &phase1_no_pivot_anchor_art_sum,
+                                            &phase1_no_pivot_progress_window_steps,
                                             &phase1_no_pivot_no_progress_streak);
             if (!force_dir_refactor && !force_pivot_mode_active) {
                 int ladder_threshold = 0;
@@ -6135,8 +6230,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                             tab,
                             &phase1_rc_only_streak,
                             LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
-                        phase1_no_pivot_no_progress_streak = 0;
-                        phase1_no_pivot_prev_art_sum = RALPH_INFINITY;
+                        phase1_no_pivot_progress_reset(
+                            &phase1_no_pivot_no_progress_streak,
+                            &phase1_no_pivot_prev_art_sum,
+                            &phase1_no_pivot_anchor_art_sum,
+                            &phase1_no_pivot_progress_window_steps);
                         continue;
                     }
                     if (solver->status == RALPH_STATUS_TIME_LIMIT) {
@@ -6285,6 +6383,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                 phase1_no_pivot_progress_update(solver,
                                                 tab,
                                                 &phase1_no_pivot_prev_art_sum,
+                                                &phase1_no_pivot_anchor_art_sum,
+                                                &phase1_no_pivot_progress_window_steps,
                                                 &phase1_no_pivot_no_progress_streak);
                 lp_telemetry_record_phase1_no_pivot_ladder_retry(solver);
                 if (phase1_note_no_pivot_and_maybe_force(
@@ -6567,8 +6667,11 @@ static int simplex_phase1(SimplexSolver *solver) {
             return -1;
         }
         phase1_no_pivot_streak = 0;
-        phase1_no_pivot_no_progress_streak = 0;
-        phase1_no_pivot_prev_art_sum = RALPH_INFINITY;
+        phase1_no_pivot_progress_reset(
+            &phase1_no_pivot_no_progress_streak,
+            &phase1_no_pivot_prev_art_sum,
+            &phase1_no_pivot_anchor_art_sum,
+            &phase1_no_pivot_progress_window_steps);
         fail_reason = PHASE1_PIVOT_FAIL_NONE;
         fail_repeat_count = 0;
         ratio_breakdown_count = 0;

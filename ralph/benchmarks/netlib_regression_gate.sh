@@ -397,10 +397,6 @@ while IFS=$'\t' read -r name ec; do
         phase1_no_pivot_no_progress_events phase1_no_pivot_ladder_retry_defers \
         phase1_no_pivot_ladder_dual_rescue_attempts phase1_no_pivot_ladder_dual_rescue_successes \
         phase1_no_pivot_ladder_dual_rescue_failures phase1_no_pivot_ladder_forced_refactors <<< "$rec"
-    if [[ "$r_status" == "timeout" ]]; then
-        echo "$prob_name" >> "$actual_timeout"
-        continue
-    fi
     printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
         "$prob_name" \
         "${phase1_no_pivot_no_progress_events:-0}" \
@@ -410,6 +406,10 @@ while IFS=$'\t' read -r name ec; do
         "${phase1_no_pivot_ladder_dual_rescue_failures:-0}" \
         "${phase1_no_pivot_ladder_forced_refactors:-0}" \
         >> "$phase1_no_pivot_ladder_tsv"
+    if [[ "$r_status" == "timeout" ]]; then
+        echo "$prob_name" >> "$actual_timeout"
+        continue
+    fi
     if [[ "$r_status" != "$g_status" ]]; then
         echo "$prob_name" >> "$actual_status"
     fi
