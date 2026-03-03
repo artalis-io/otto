@@ -478,6 +478,44 @@ static void test_validation_rejects_invalid_values(void) {
                 "validate: rejects non-finite pivot tol");
 }
 
+static void test_working_lp_helpers(void) {
+    int skip_shift_off = lp_policy_glpk_working_exclude_nonbasic(
+        LP_GLPK_SMCP_EXCL_ON, LP_GLPK_SMCP_SHIFT_OFF,
+        (int)RALPH_NONBASIC_LOWER, 5.0, 5.0 + 5e-8, 1e-7);
+    int skip_shift_on = lp_policy_glpk_working_exclude_nonbasic(
+        LP_GLPK_SMCP_EXCL_ON, LP_GLPK_SMCP_SHIFT_ON,
+        (int)RALPH_NONBASIC_LOWER, 5.0, 5.0 + 5e-8, 1e-7);
+    int skip_fixed = lp_policy_glpk_working_exclude_nonbasic(
+        LP_GLPK_SMCP_EXCL_OFF, LP_GLPK_SMCP_SHIFT_OFF,
+        (int)RALPH_FIXED, 2.0, 2.0, 1e-7);
+    int skip_inf = lp_policy_glpk_working_exclude_nonbasic(
+        LP_GLPK_SMCP_EXCL_ON, LP_GLPK_SMCP_SHIFT_ON,
+        (int)RALPH_NONBASIC_LOWER, -RALPH_INFINITY, 10.0, 1e-7);
+    int skip_tol_cap = lp_policy_glpk_working_exclude_nonbasic(
+        LP_GLPK_SMCP_EXCL_ON, LP_GLPK_SMCP_SHIFT_ON,
+        (int)RALPH_NONBASIC_LOWER, 1.0, 1.0 + 5e-6, 1e-3);
+    int aorn_nt = lp_policy_glpk_working_use_at_kernel(LP_GLPK_SMCP_AORN_USE_NT, 1);
+    int aorn_at_no_rows = lp_policy_glpk_working_use_at_kernel(LP_GLPK_SMCP_AORN_USE_AT, 0);
+    int aorn_at_rows = lp_policy_glpk_working_use_at_kernel(LP_GLPK_SMCP_AORN_USE_AT, 1);
+
+    ASSERT_INT_EQ(skip_shift_off, 0,
+                  "working lp helper: shift off keeps narrow boxed var active");
+    ASSERT_INT_EQ(skip_shift_on, 1,
+                  "working lp helper: shift on excludes narrow boxed var");
+    ASSERT_INT_EQ(skip_fixed, 1,
+                  "working lp helper: fixed var excluded regardless of excl toggle");
+    ASSERT_INT_EQ(skip_inf, 0,
+                  "working lp helper: infinite-bound var remains in working LP");
+    ASSERT_INT_EQ(skip_tol_cap, 0,
+                  "working lp helper: shifted exclusion tolerance is capped");
+    ASSERT_INT_EQ(aorn_nt, 0,
+                  "working lp helper: N^T selects column kernel");
+    ASSERT_INT_EQ(aorn_at_no_rows, 0,
+                  "working lp helper: A^T falls back without row scatter");
+    ASSERT_INT_EQ(aorn_at_rows, 1,
+                  "working lp helper: A^T selects row kernel when available");
+}
+
 int main(void) {
     printf("=== LP GLPK-Compat Policy Tests ===\n");
 
@@ -489,6 +527,7 @@ int main(void) {
     test_runtime_mapping_glpk_profile();
     test_runtime_mapping_glpk_strict_profile();
     test_validation_rejects_invalid_values();
+    test_working_lp_helpers();
 
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

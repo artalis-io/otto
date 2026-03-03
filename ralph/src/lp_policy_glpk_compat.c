@@ -57,6 +57,46 @@ static int lp_glpk_bfcp_backend_valid(int value) {
            value <= LP_GLPK_BFCP_BACKEND_CGR;
 }
 
+static double lp_glpk_working_fixed_width_tol(int smcp_shift, double tol_bnd) {
+    const double strict_tol = 1e-12;
+    const double shifted_tol_default = 1e-7;
+    const double shifted_tol_cap = 1e-7;
+    if (smcp_shift != 0) {
+        if (isfinite(tol_bnd) && tol_bnd > 0.0) {
+            return (tol_bnd < shifted_tol_cap) ? tol_bnd : shifted_tol_cap;
+        }
+        return shifted_tol_default;
+    }
+    if (isfinite(tol_bnd) && tol_bnd > 0.0 && tol_bnd < strict_tol) {
+        return tol_bnd;
+    }
+    return strict_tol;
+}
+
+int lp_policy_glpk_working_exclude_nonbasic(int smcp_excl,
+                                            int smcp_shift,
+                                            int var_status,
+                                            double lb,
+                                            double ub,
+                                            double tol_bnd) {
+    double fixed_tol = lp_glpk_working_fixed_width_tol(smcp_shift, tol_bnd);
+    if (var_status == (int)RALPH_FIXED) return 1;
+    if (smcp_excl == LP_GLPK_SMCP_EXCL_OFF) return 0;
+    if (var_status != (int)RALPH_NONBASIC_LOWER &&
+        var_status != (int)RALPH_NONBASIC_UPPER) {
+        return 0;
+    }
+    if (lb <= -RALPH_INFINITY / 2.0 || ub >= RALPH_INFINITY / 2.0) {
+        return 0;
+    }
+    return fabs(ub - lb) <= fixed_tol;
+}
+
+int lp_policy_glpk_working_use_at_kernel(int smcp_aorn, int has_row_scatter) {
+    if (smcp_aorn != LP_GLPK_SMCP_AORN_USE_AT) return 0;
+    return has_row_scatter ? 1 : 0;
+}
+
 void lp_policy_glpk_compat_init(LPGLPKCompatConfig *cfg) {
     if (!cfg) return;
     cfg->lp_policy_profile = LP_POLICY_PROFILE_DEFAULT;
@@ -211,8 +251,8 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
         }
     }
 
-    /* Strict profile maps flip directly to startup/iterative bound-flip enable.
-     * Compat profile keeps historical behavior (ratio-mode only mapping). */
+    /* GLPK compat/strict profiles map flip directly to startup/iterative
+     * bound-flip enable. Legacy profile keeps historical behavior. */
     if (dual_bound_flip_io && strict_profile) {
         *dual_bound_flip_io = (cfg->glpk_smcp_flip == LP_GLPK_SMCP_FLIP_ON) ? 1 : 0;
     }
