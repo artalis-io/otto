@@ -1094,3 +1094,103 @@ int sg_concat_eval_cross_exchange(const SGContext *ctx, const SGRouteSolution *s
                      - sol->route_distance[vb] + new_a.distance + new_b.distance;
     return 1;
 }
+
+/*
+ * 2-opt intra-route pre-filter.
+ * Move: reverse stops [rev_start..rev_end] within vehicle v.
+ *
+ * Returns 1 if evaluation was performed (check *new_dist_out vs current route distance).
+ * Returns 0 if not applicable (caller should fall through to O(L) path).
+ */
+int sg_concat_eval_2opt_intra(const SGContext *ctx, const SGRouteSolution *sol,
+                               uint32_t v, uint32_t rev_start, uint32_t rev_end,
+                               double *new_dist_out)
+{
+    size_t seg_stride, base;
+    const SGSegSummary *pf, *sf;
+    SGSegSummary rev_seg, temp, result;
+    double link_dist, link_dur, link_setup;
+    uint32_t seg_len, k;
+    const SGRouteStop *stops;
+    SGRouteStop stack_buf[32];
+    SGRouteStop *reversed = stack_buf;
+    int heap = 0;
+
+    if (!new_dist_out) return 0;
+    if (!sg_concat_filter_applicable(ctx, v)) return 0;
+    if (!sol->route_seg_prefix || !sol->route_seg_suffix) return 0;
+
+    seg_len = rev_end - rev_start + 1;
+    if (seg_len < 2) return 0;
+
+    stops = sg_route_vehicle_stop_ptr_const(sol, v);
+
+    seg_stride = (size_t)sol->stop_stride + 1U;
+    base = (size_t)v * seg_stride;
+    pf = sol->route_seg_prefix + base;
+    sf = sol->route_seg_suffix + base;
+
+    /* Build reversed stop sequence */
+    if (seg_len > 32) {
+        reversed = (SGRouteStop *)malloc(seg_len * sizeof(SGRouteStop));
+        if (!reversed) return 0;
+        heap = 1;
+    }
+    for (k = 0; k < seg_len; k++) {
+        reversed[k] = stops[rev_end - k];
+    }
+
+    /* Build timing summary for reversed segment */
+    sg_build_segment_for_vehicle(ctx, reversed, seg_len, v, &rev_seg);
+
+    /* Concatenate: prefix[rev_start] + reversed + suffix[rev_end + 1] */
+    link_dist = sg_travel_dist(ctx, pf[rev_start].last_location_id,
+                               rev_seg.first_location_id, v);
+    link_dur  = sg_travel_dur(ctx, pf[rev_start].last_location_id,
+                              rev_seg.first_location_id, v,
+                              pf[rev_start].earliest_start + pf[rev_start].duration);
+    link_setup = sg_setup_time_between(ctx,
+                     pf[rev_start].last_request_id,
+                     rev_seg.first_request_id);
+    sg_seg_concat_timing(&pf[rev_start], &rev_seg,
+                         link_dur, link_dist, link_setup, &temp);
+
+    link_dist = sg_travel_dist(ctx, temp.last_location_id,
+                               sf[rev_end + 1].first_location_id, v);
+    link_dur  = sg_travel_dur(ctx, temp.last_location_id,
+                              sf[rev_end + 1].first_location_id, v,
+                              temp.earliest_start + temp.duration);
+    link_setup = sg_setup_time_between(ctx,
+                     temp.last_request_id,
+                     sf[rev_end + 1].first_request_id);
+    sg_seg_concat_timing(&temp, &sf[rev_end + 1],
+                         link_dur, link_dist, link_setup, &result);
+
+    /* Capacity check */
+    if (ctx->dimension_count > 0) {
+        double seg_d[8], seg_mn[8], seg_mx[8];
+        double *sd = seg_d, *sm = seg_mn, *sx = seg_mx;
+        int cap_heap = 0;
+
+        if (ctx->dimension_count > 8) {
+            sd = (double *)malloc((size_t)ctx->dimension_count * 3 * sizeof(double));
+            if (!sd) { if (heap) free(reversed); return 0; }
+            sm = sd + ctx->dimension_count;
+            sx = sm + ctx->dimension_count;
+            cap_heap = 1;
+        }
+
+        sg_build_cap_segment(ctx, reversed, seg_len, sd, sm, sx);
+        if (!sg_concat_capacity_ok(ctx, sol, v, rev_start, rev_end + 1, sd, sm, sx)) {
+            if (cap_heap) free(sd);
+            if (heap) free(reversed);
+            *new_dist_out = INFINITY;
+            return 1;
+        }
+        if (cap_heap) free(sd);
+    }
+
+    if (heap) free(reversed);
+    *new_dist_out = result.distance;
+    return 1;
+}

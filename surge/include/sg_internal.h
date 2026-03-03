@@ -1140,6 +1140,9 @@ ARStatus sg_route_postprocess_reduce_vehicles_relaxed(const SGContext *ctx,
 ARStatus sg_route_postprocess_ejection_reduce(const SGContext *ctx, SGRouteSolution *sol);
 ARStatus sg_route_postprocess_polish_distance(const SGContext *ctx, SGRouteSolution *sol);
 int sg_route_try_pd_reorder_once(const SGContext *ctx, SGRouteSolution *sol);
+int sg_route_try_2opt_intra_once(const SGContext *ctx, SGRouteSolution *sol);
+int sg_route_try_pd_relocate_intra_once(const SGContext *ctx, SGRouteSolution *sol);
+int sg_route_try_pd_relocate_once(const SGContext *ctx, SGRouteSolution *sol);
 ARStatus sg_route_postprocess_intensify(const SGContext *ctx, SGRouteSolution *sol);
 int sg_route_find_best_insertion_for_request(const SGContext *ctx, const SGRouteSolution *sol,
                                              uint32_t request_id, uint32_t forbidden_vehicle,
@@ -1229,6 +1232,9 @@ int sg_concat_eval_cross_exchange(const SGContext *ctx, const SGRouteSolution *s
                                    uint32_t va, uint32_t ia, uint32_t sa,
                                    uint32_t vb, uint32_t ib, uint32_t sb,
                                    double *new_total_out);
+int sg_concat_eval_2opt_intra(const SGContext *ctx, const SGRouteSolution *sol,
+                               uint32_t v, uint32_t rev_start, uint32_t rev_end,
+                               double *new_dist_out);
 
 /* sg_construct_cfrs.c */
 uint32_t sg_estimate_min_vehicles(const SGContext *ctx);

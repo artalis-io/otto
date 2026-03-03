@@ -2121,6 +2121,419 @@ ARStatus sg_route_postprocess_polish_distance(const SGContext *ctx,
     return AR_STATUS_OK;
 }
 
+/* ──────────────────────────────────────────────────────────────────────────
+ * Phase S20: PD-Aware Local Search Operators
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/*
+ * Intra-route 2-opt: reverse a contiguous subsequence of stops within a
+ * single route.  Classic TSP improvement move.  First-improvement exit.
+ *
+ * For PD instances: pre-checks that reversal doesn't violate pickup-before-
+ * delivery ordering.  For delivery-only: uses O(1) concat pre-filter to
+ * skip non-improving candidates cheaply.
+ */
+int sg_route_try_2opt_intra_once(const SGContext *ctx, SGRouteSolution *sol) {
+    uint32_t v;
+    int improved = 0;
+    SGRouteStop *candidate = NULL;
+    SGBudgetProbe probe;
+
+    if (!ctx || !sol) return 0;
+
+    candidate = (SGRouteStop *)malloc((size_t)sol->stop_stride * sizeof(SGRouteStop));
+    if (!candidate) return 0;
+
+    sg_budget_probe_init(&probe, &ctx->time_budget, SG_BUDGET_PROBE_INTERVAL);
+
+    for (v = 0; v < sol->num_vehicles && !improved; v++) {
+        uint32_t stop_len = sol->route_stop_lengths[v];
+        const SGRouteStop *stops;
+        uint32_t i;
+
+        if (stop_len < 4) continue;
+        stops = sg_route_vehicle_stop_ptr_const(sol, v);
+
+        for (i = 0; i + 2 < stop_len && !improved; i++) {
+            uint32_t j;
+
+            for (j = i + 2; j < stop_len; j++) {
+                double new_dist = 0.0;
+                uint32_t k;
+
+                if (sg_budget_probe_expired(&probe)) goto done_2opt;
+
+                /* PD safety: verify reversal of [i+1..j] keeps pickup before delivery */
+                if (ctx->has_pd_requests) {
+                    int pd_safe = 1;
+                    for (k = i + 1; k <= j && pd_safe; k++) {
+                        uint32_t req = stops[k].request_id;
+                        if (ctx->requests[req].kind == SG_REQUEST_KIND_PICKUP_DELIVERY) {
+                            uint32_t pp = sol->request_pickup_stop_pos[req];
+                            uint32_t dp = sol->request_delivery_stop_pos[req];
+                            uint32_t new_pp = pp, new_dp = dp;
+
+                            if (pp >= i + 1 && pp <= j) new_pp = i + 1 + (j - pp);
+                            if (dp >= i + 1 && dp <= j) new_dp = i + 1 + (j - dp);
+
+                            if (new_pp >= new_dp) pd_safe = 0;
+                        }
+                    }
+                    if (!pd_safe) continue;
+                }
+
+                /* O(1) concat pre-filter (delivery-only instances) */
+                {
+                    double concat_dist;
+                    if (sg_concat_eval_2opt_intra(ctx, sol, v, i + 1, j, &concat_dist) &&
+                        concat_dist >= sol->route_distance[v] - 1e-9) {
+                        continue;
+                    }
+                }
+
+                /* Build candidate: stops[0..i] + reverse(stops[i+1..j]) + stops[j+1..end] */
+                memcpy(candidate, stops, (size_t)(i + 1) * sizeof(SGRouteStop));
+                for (k = i + 1; k <= j; k++) {
+                    candidate[k] = stops[i + 1 + (j - k)];
+                }
+                if (j + 1 < stop_len) {
+                    memcpy(&candidate[j + 1], &stops[j + 1],
+                           (size_t)(stop_len - j - 1) * sizeof(SGRouteStop));
+                }
+
+                /* Feasibility check */
+                if (!sg_route_stop_sequence_feasible(ctx, v, candidate, stop_len, &new_dist)) {
+                    continue;
+                }
+
+                /* Distance improvement check */
+                if (new_dist >= sol->route_distance[v] - 1e-9) {
+                    continue;
+                }
+
+                /* Apply the move */
+                {
+                    SGRouteSolution *backup =
+                        (SGRouteSolution *)sg_route_solution_copy(sol, (void *)ctx);
+                    double before_cost;
+
+                    if (!backup) continue;
+                    before_cost = sg_route_solution_cost(backup, (void *)ctx);
+
+                    /* Copy reversed stops into solution */
+                    memcpy(sg_route_vehicle_stop_ptr(sol, v), candidate,
+                           (size_t)stop_len * sizeof(SGRouteStop));
+
+                    /* Update request stop positions */
+                    for (k = 0; k < stop_len; k++) {
+                        uint32_t req = candidate[k].request_id;
+                        if (candidate[k].is_pickup) {
+                            sol->request_pickup_stop_pos[req] = k;
+                        } else {
+                            sol->request_delivery_stop_pos[req] = k;
+                        }
+                    }
+
+                    /* Update timing and distance */
+                    sg_route_update_timing(ctx, sol, v);
+                    sol->total_distance = sol->total_distance
+                                          - backup->route_distance[v]
+                                          + sol->route_distance[v];
+
+                    if (sg_route_solution_cost(sol, (void *)ctx) < before_cost - 1e-9) {
+                        sg_route_solution_free(backup, NULL);
+                        improved = 1;
+                        break;
+                    } else {
+                        sg_route_restore_from_backup(sol, backup);
+                    }
+                }
+            }
+        }
+    }
+
+done_2opt:
+    free(candidate);
+    return improved;
+}
+
+/*
+ * PD-pair intra-route relocate: excise a PD pair's pickup and delivery stops,
+ * then try reinserting at every feasible (pickup_pos, delivery_pos) within the
+ * same route.  Finds the distance-optimal intra-route placement.
+ */
+int sg_route_try_pd_relocate_intra_once(const SGContext *ctx, SGRouteSolution *sol) {
+    uint32_t v;
+    int improved = 0;
+    SGRouteStop *reduced = NULL;
+    SGRouteStop *candidate = NULL;
+    SGBudgetProbe probe;
+
+    if (!ctx || !sol || !ctx->has_pd_requests) return 0;
+
+    reduced   = (SGRouteStop *)malloc((size_t)sol->stop_stride * sizeof(SGRouteStop));
+    candidate = (SGRouteStop *)malloc((size_t)sol->stop_stride * sizeof(SGRouteStop));
+    if (!reduced || !candidate) {
+        free(reduced);
+        free(candidate);
+        return 0;
+    }
+
+    sg_budget_probe_init(&probe, &ctx->time_budget, SG_BUDGET_PROBE_INTERVAL);
+
+    for (v = 0; v < sol->num_vehicles && !improved; v++) {
+        uint32_t stop_len = sol->route_stop_lengths[v];
+        uint32_t route_len = sol->route_lengths[v];
+        const uint32_t *route;
+        uint32_t ri;
+
+        if (stop_len < 4) continue;
+        route = sg_route_vehicle_ptr_const(sol, v);
+
+        for (ri = 0; ri < route_len && !improved; ri++) {
+            uint32_t req = route[ri];
+            uint32_t pp, dp;
+            SGRouteStop pickup_stop, delivery_stop;
+            uint32_t reduced_len;
+            uint32_t new_pp, new_dp;
+            double best_dist;
+            uint32_t best_pp, best_dp;
+            int found_better = 0;
+            const SGRouteStop *stops;
+
+            if (ctx->requests[req].kind != SG_REQUEST_KIND_PICKUP_DELIVERY) continue;
+            if (sg_budget_probe_expired(&probe)) goto done_pd_intra;
+
+            stops = sg_route_vehicle_stop_ptr_const(sol, v);
+            pp = sol->request_pickup_stop_pos[req];
+            dp = sol->request_delivery_stop_pos[req];
+            pickup_stop = stops[pp];
+            delivery_stop = stops[dp];
+
+            /* Build reduced stop array: all stops except pp and dp */
+            {
+                uint32_t wi = 0, si;
+                for (si = 0; si < stop_len; si++) {
+                    if (si != pp && si != dp) {
+                        reduced[wi++] = stops[si];
+                    }
+                }
+                reduced_len = wi;
+            }
+
+            best_dist = sol->route_distance[v];
+            best_pp = pp;
+            best_dp = dp;
+
+            /* Try all (new_pp, new_dp) placements in reduced array */
+            for (new_pp = 0; new_pp <= reduced_len; new_pp++) {
+                for (new_dp = new_pp + 1; new_dp <= reduced_len + 1; new_dp++) {
+                    double cand_dist = 0.0;
+                    uint32_t wi = 0, si;
+
+                    if (sg_budget_probe_expired(&probe)) goto done_pd_intra;
+
+                    /* Build candidate: reduced with pickup at new_pp, delivery at new_dp */
+                    for (si = 0; si < reduced_len + 2; si++) {
+                        if (si == new_pp) {
+                            candidate[wi++] = pickup_stop;
+                        } else if (si == new_dp) {
+                            candidate[wi++] = delivery_stop;
+                        } else {
+                            uint32_t idx = si;
+                            if (si > new_dp) idx -= 2;
+                            else if (si > new_pp) idx -= 1;
+                            candidate[wi++] = reduced[idx];
+                        }
+                    }
+
+                    if (!sg_route_stop_sequence_feasible(ctx, v, candidate,
+                                                          reduced_len + 2, &cand_dist)) {
+                        continue;
+                    }
+
+                    if (cand_dist < best_dist - 1e-9) {
+                        best_dist = cand_dist;
+                        best_pp = new_pp;
+                        best_dp = new_dp;
+                        found_better = 1;
+                    }
+                }
+            }
+
+            if (found_better) {
+                /* Apply the best placement */
+                SGRouteSolution *backup =
+                    (SGRouteSolution *)sg_route_solution_copy(sol, (void *)ctx);
+                double before_cost;
+                uint32_t wi = 0, si, k;
+
+                if (!backup) continue;
+                before_cost = sg_route_solution_cost(backup, (void *)ctx);
+
+                /* Build best candidate */
+                for (si = 0; si < reduced_len + 2; si++) {
+                    if (si == best_pp) {
+                        candidate[wi++] = pickup_stop;
+                    } else if (si == best_dp) {
+                        candidate[wi++] = delivery_stop;
+                    } else {
+                        uint32_t idx = si;
+                        if (si > best_dp) idx -= 2;
+                        else if (si > best_pp) idx -= 1;
+                        candidate[wi++] = reduced[idx];
+                    }
+                }
+
+                memcpy(sg_route_vehicle_stop_ptr(sol, v), candidate,
+                       (size_t)stop_len * sizeof(SGRouteStop));
+
+                /* Update request stop positions */
+                for (k = 0; k < stop_len; k++) {
+                    uint32_t r = candidate[k].request_id;
+                    if (candidate[k].is_pickup) {
+                        sol->request_pickup_stop_pos[r] = k;
+                    } else {
+                        sol->request_delivery_stop_pos[r] = k;
+                    }
+                }
+
+                sg_route_update_timing(ctx, sol, v);
+                sol->total_distance = sol->total_distance
+                                      - backup->route_distance[v]
+                                      + sol->route_distance[v];
+
+                if (sg_route_solution_cost(sol, (void *)ctx) < before_cost - 1e-9) {
+                    sg_route_solution_free(backup, NULL);
+                    improved = 1;
+                } else {
+                    sg_route_restore_from_backup(sol, backup);
+                }
+            }
+        }
+    }
+
+done_pd_intra:
+    free(reduced);
+    free(candidate);
+    return improved;
+}
+
+/*
+ * PD-pair inter-route relocate: move a PD pair from one route to the best
+ * interleaved positions on another route.  Uses the cached PD insertion
+ * evaluator and neighbor index for efficiency.
+ */
+int sg_route_try_pd_relocate_once(const SGContext *ctx, SGRouteSolution *sol) {
+    uint32_t count;
+    uint32_t *requests = NULL;
+    uint32_t i;
+    int improved = 0;
+    SGBudgetProbe probe;
+
+    if (!ctx || !sol || !ctx->has_pd_requests) return 0;
+    if (sol->num_vehicles < 2) return 0;
+
+    count = sol->base.num_assigned;
+    if (count == 0) return 0;
+
+    requests = (uint32_t *)malloc((size_t)count * sizeof(uint32_t));
+    if (!requests) return 0;
+    memcpy(requests, sol->base.assigned_ids, (size_t)count * sizeof(uint32_t));
+
+    sg_budget_probe_init(&probe, &ctx->time_budget, SG_BUDGET_PROBE_INTERVAL);
+
+    for (i = 0; i < count && !improved; i++) {
+        uint32_t req = requests[i];
+        uint32_t va;
+        SGRouteSolution *backup;
+        double before_cost;
+        ARStatus status;
+        uint32_t best_vb = UINT32_MAX;
+        uint32_t best_pp = UINT32_MAX, best_dp = UINT32_MAX;
+        double best_route_dist = 0.0;
+        double best_total = 0.0;
+        int found = 0;
+
+        if (req >= sol->base.total_requests || !sol->base.assigned_flags[req]) continue;
+        if (ctx->requests[req].kind != SG_REQUEST_KIND_PICKUP_DELIVERY) continue;
+        if (sg_request_is_frozen(ctx, req)) continue;
+        if (sg_budget_probe_expired(&probe)) break;
+
+        va = sol->request_vehicle[req];
+        if (va >= sol->num_vehicles) continue;
+
+        backup = (SGRouteSolution *)sg_route_solution_copy(sol, (void *)ctx);
+        if (!backup) continue;
+        before_cost = sg_route_solution_cost(backup, (void *)ctx);
+
+        /* Remove request from source vehicle */
+        status = sg_route_unassign_removed_requests(ctx, sol, &req, 1);
+        if (status != AR_STATUS_OK) {
+            sg_route_restore_from_backup(sol, backup);
+            continue;
+        }
+
+        /* Evaluate best insertion on each target vehicle */
+        {
+            uint32_t vb;
+            for (vb = 0; vb < sol->num_vehicles; vb++) {
+                double score = 0.0;
+                uint32_t ins_pp = UINT32_MAX, ins_dp = UINT32_MAX;
+                double ins_route_dist = 0.0;
+                double new_total;
+
+                if (vb == va) continue;
+                if (sol->route_lengths[vb] == 0) continue;
+
+                /* Neighbor pruning */
+                if (ctx->neighbor_index.neighbors) {
+                    if (!sg_neighbor_vehicle_has_nearby(&ctx->neighbor_index, ctx,
+                                                         sol, vb, req))
+                        continue;
+                }
+
+                if (!sg_route_eval_pd_best_insertion_cached(ctx, sol, req, vb,
+                                                              &score, &ins_pp,
+                                                              &ins_dp, &ins_route_dist)) {
+                    continue;
+                }
+
+                new_total = sol->total_distance
+                            - sol->route_distance[vb] + ins_route_dist;
+
+                if (!found || new_total < best_total - 1e-9) {
+                    found = 1;
+                    best_vb = vb;
+                    best_pp = ins_pp;
+                    best_dp = ins_dp;
+                    best_route_dist = ins_route_dist;
+                    best_total = new_total;
+                }
+            }
+        }
+
+        if (found) {
+            status = sg_route_apply_pd_insertion(ctx, sol, req, best_vb,
+                                                  best_pp, best_dp,
+                                                  best_route_dist);
+            if (status == AR_STATUS_OK &&
+                sol->base.num_unassigned == 0 &&
+                sg_route_solution_cost(sol, (void *)ctx) < before_cost - 1e-9) {
+                sg_route_solution_free(backup, NULL);
+                improved = 1;
+            } else {
+                sg_route_restore_from_backup(sol, backup);
+            }
+        } else {
+            sg_route_restore_from_backup(sol, backup);
+        }
+    }
+
+    free(requests);
+    return improved;
+}
+
 int sg_route_try_pd_reorder_once(const SGContext *ctx, SGRouteSolution *sol) {
     uint32_t v;
     int improved = 0;
@@ -2201,6 +2614,7 @@ int sg_route_try_pd_reorder_once(const SGContext *ctx, SGRouteSolution *sol) {
     return improved;
 }
 
+
 ARStatus sg_route_postprocess_intensify(const SGContext *ctx, SGRouteSolution *sol) {
     uint32_t pass;
     uint32_t max_passes;
@@ -2216,9 +2630,16 @@ ARStatus sg_route_postprocess_intensify(const SGContext *ctx, SGRouteSolution *s
     for (pass = 0; pass < max_passes; pass++) {
         int improved = 0;
         if (sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds())) break;
+
+        /* Intra-route (cheapest) */
+        if (sg_route_try_2opt_intra_once(ctx, sol)) {
+            improved = 1;
+        }
         if (sg_route_try_or_opt_once(ctx, sol)) {
             improved = 1;
         }
+
+        /* Inter-route */
         if (sg_route_try_exchange_once(ctx, sol)) {
             improved = 1;
         }
@@ -2228,9 +2649,20 @@ ARStatus sg_route_postprocess_intensify(const SGContext *ctx, SGRouteSolution *s
         if (sg_route_try_cross_exchange_once(ctx, sol)) {
             improved = 1;
         }
+
+        /* PD-specific (gated by has_pd_requests) */
+        if (ctx->has_pd_requests) {
+            if (sg_route_try_pd_relocate_intra_once(ctx, sol)) {
+                improved = 1;
+            }
+            if (sg_route_try_pd_relocate_once(ctx, sol)) {
+                improved = 1;
+            }
+        }
         if (sg_route_try_pd_reorder_once(ctx, sol)) {
             improved = 1;
         }
+
         if (!improved) {
             break;
         }
