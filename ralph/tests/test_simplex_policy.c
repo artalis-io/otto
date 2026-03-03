@@ -171,6 +171,11 @@ int simplex_smcp_excl_should_skip_for_test(int smcp_excl,
                                            double tol_bnd);
 int simplex_smcp_shift_allows_perturb_for_test(int smcp_shift);
 int simplex_solution_refine_limit_for_test(double max_residual, double feas_tol);
+int simplex_reinvert_periodic_control_for_test(int mode,
+                                               int phase,
+                                               int hard_lu_trigger,
+                                               int periodic_due,
+                                               int decision);
 
 enum {
     EXPECT_UPDATE = 0,
@@ -252,11 +257,36 @@ typedef struct {
     int expected_budget;
 } RefineBudgetCase;
 
+typedef struct {
+    const char *name;
+    int mode;
+    int phase;
+    int hard_lu_trigger;
+    int periodic_due;
+    int decision;
+    int expected_refactor;
+} ReinvertControlCase;
+
 static int run_refine_budget_case(const RefineBudgetCase *tc) {
     int budget = simplex_solution_refine_limit_for_test(tc->max_residual, tc->feas_tol);
     if (budget != tc->expected_budget) {
         fprintf(stderr, "FAIL: %s (expected budget=%d got=%d)\n",
                 tc->name, tc->expected_budget, budget);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_reinvert_control_case(const ReinvertControlCase *tc) {
+    int refactor = simplex_reinvert_periodic_control_for_test(tc->mode,
+                                                              tc->phase,
+                                                              tc->hard_lu_trigger,
+                                                              tc->periodic_due,
+                                                              tc->decision);
+    if (refactor != tc->expected_refactor) {
+        fprintf(stderr, "FAIL: %s (expected=%d got=%d)\n",
+                tc->name, tc->expected_refactor, refactor);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -2380,6 +2410,53 @@ int main(void) {
             .expected_budget = 5
         }
     };
+    const ReinvertControlCase reinvert_control_cases[] = {
+        {
+            .name = "reinvert control phase1 force overrides periodic cadence",
+            .mode = LP_REINVERT_MODE_CONTROL_PHASE1,
+            .phase = 1,
+            .hard_lu_trigger = 0,
+            .periodic_due = 0,
+            .decision = LP_REINVERT_DECISION_FORCE,
+            .expected_refactor = 1
+        },
+        {
+            .name = "reinvert control phase1 defer suppresses periodic cadence",
+            .mode = LP_REINVERT_MODE_CONTROL_PHASE1,
+            .phase = 1,
+            .hard_lu_trigger = 0,
+            .periodic_due = 1,
+            .decision = LP_REINVERT_DECISION_DEFER,
+            .expected_refactor = 0
+        },
+        {
+            .name = "reinvert control off keeps legacy periodic cadence",
+            .mode = LP_REINVERT_MODE_OFF,
+            .phase = 1,
+            .hard_lu_trigger = 0,
+            .periodic_due = 1,
+            .decision = LP_REINVERT_DECISION_DEFER,
+            .expected_refactor = 1
+        },
+        {
+            .name = "reinvert control does not affect phase2 in phase4 rollout",
+            .mode = LP_REINVERT_MODE_CONTROL_ALL,
+            .phase = 2,
+            .hard_lu_trigger = 0,
+            .periodic_due = 1,
+            .decision = LP_REINVERT_DECISION_DEFER,
+            .expected_refactor = 1
+        },
+        {
+            .name = "hard LU trigger bypasses reinvert periodic control",
+            .mode = LP_REINVERT_MODE_CONTROL_PHASE1,
+            .phase = 1,
+            .hard_lu_trigger = 1,
+            .periodic_due = 0,
+            .decision = LP_REINVERT_DECISION_FORCE,
+            .expected_refactor = 0
+        }
+    };
 
     int pass = 0;
     int total_policy = (int)(sizeof(cases) / sizeof(cases[0]));
@@ -2418,6 +2495,8 @@ int main(void) {
         (int)(sizeof(smcp_shift_cases) / sizeof(smcp_shift_cases[0]));
     int total_refine_budget =
         (int)(sizeof(refine_budget_cases) / sizeof(refine_budget_cases[0]));
+    int total_reinvert_control =
+        (int)(sizeof(reinvert_control_cases) / sizeof(reinvert_control_cases[0]));
     int total = total_policy + total_sched + total_lu_health + total_soft_lu_defer +
                 total_periodic_cost_defer + total_dir_stabilize + total_dir_force +
                 total_dir_moderate + total_no_pivot + total_no_pivot_ladder +
@@ -2434,6 +2513,7 @@ int main(void) {
     total += total_smcp_excl;
     total += total_smcp_shift;
     total += total_refine_budget;
+    total += total_reinvert_control;
 
     for (int i = 0; i < total_policy; i++) {
         pass += run_case(&cases[i]);
@@ -2505,6 +2585,9 @@ int main(void) {
     }
     for (int i = 0; i < total_refine_budget; i++) {
         pass += run_refine_budget_case(&refine_budget_cases[i]);
+    }
+    for (int i = 0; i < total_reinvert_control; i++) {
+        pass += run_reinvert_control_case(&reinvert_control_cases[i]);
     }
 
     printf("\nPolicy cases passed: %d/%d\n", pass, total);

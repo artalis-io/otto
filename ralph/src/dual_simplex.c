@@ -203,6 +203,7 @@ static int dual_governor_refactor_decision(
     int need_refactor;
     int shadow_refactor;
     int governed_refactor;
+    int reinvert_mode;
     LPReinvertControllerSignals reinvert_signals;
     LPReinvertControllerDecision reinvert_shadow;
     int reinvert_suggested_refactor;
@@ -237,6 +238,14 @@ static int dual_governor_refactor_decision(
                                            LP_BASIS_GOV_PHASE_DUAL,
                                            shadow_refactor,
                                            governed_refactor);
+    }
+
+    reinvert_mode = solver->policy.reinvert_controller_mode;
+    if (!lp_reinvert_controller_mode_is_valid(reinvert_mode)) {
+        reinvert_mode = LP_REINVERT_MODE_SHADOW;
+    }
+    if (reinvert_mode == LP_REINVERT_MODE_OFF) {
+        return governed_refactor;
     }
 
     reinvert_state = &solver->policy.reinvert_state_dual;

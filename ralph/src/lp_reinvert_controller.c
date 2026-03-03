@@ -27,6 +27,10 @@ static int signal_phase_is_valid(int phase) {
     return phase == 1 || phase == 2;
 }
 
+int lp_reinvert_controller_mode_is_valid(int mode) {
+    return mode >= LP_REINVERT_MODE_OFF && mode <= LP_REINVERT_MODE_CONTROL_ALL;
+}
+
 static double ewma_update(double current, double sample) {
     if (!isfinite(sample) || sample <= 0.0) return current;
     if (!isfinite(current) || current <= 0.0) return sample;
