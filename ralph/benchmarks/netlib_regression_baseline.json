@@ -6,6 +6,7 @@
     "outer_timeout_sec": 50,
     "time_multiplier": 20,
     "random_seed": 0,
+    "lp_reinvert_controller_mode": 1,
     "required_pass_timeout_retries": 1,
     "required_pass_timeout_near_cap_ratio": 0.98,
     "required_pass_timeout_min_ms": 1000
