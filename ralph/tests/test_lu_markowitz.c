@@ -909,6 +909,44 @@ static void test_markowitz_global_skip_runtime_telemetry(void) {
 }
 
 /* ============================================================================
+ * Test 15: FT update density reinversion guard
+ * ============================================================================ */
+static void test_ft_update_density_refactor_guard(void) {
+    printf("  LU: FT update density refactor guard...\n");
+
+    LUFactorization *lu = lu_create(400);
+    ASSERT(lu != NULL, "ft-density guard: lu_create");
+    if (!lu) return;
+
+    lu->use_ft_updates = 1;
+    lu->growth_factor = 1.0;
+    lu->cond_estimate = 1.0;
+
+    /* Non-aged updates: avg spike ratio above 0.45 should force refactor. */
+    lu->num_updates = 12;
+    lu->ft_num_updates = 12;
+    lu->spike_pool_used = 2200; /* avg = 183.3, ratio ~0.458 */
+    ASSERT_INT_EQ(lu_needs_refactorization(lu), 1,
+                  "ft-density guard: non-aged avg density forces refactor");
+
+    /* Non-aged updates: lower avg spike ratio should not force refactor. */
+    lu->num_updates = 12;
+    lu->ft_num_updates = 12;
+    lu->spike_pool_used = 1200; /* avg = 100, ratio 0.25 */
+    ASSERT_INT_EQ(lu_needs_refactorization(lu), 0,
+                  "ft-density guard: non-aged moderate density does not force refactor");
+
+    /* Aged updates tighten threshold to 0.35. */
+    lu->num_updates = lu->max_updates / 2;
+    lu->ft_num_updates = lu->num_updates;
+    lu->spike_pool_used = 15000; /* avg = 150, ratio 0.375 */
+    ASSERT_INT_EQ(lu_needs_refactorization(lu), 1,
+                  "ft-density guard: aged avg density forces refactor earlier");
+
+    lu_free(lu);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -928,6 +966,7 @@ int main(void) {
     test_identity_sep_retry_lane_policy();
     test_markowitz_global_skip_policy();
     test_markowitz_global_skip_runtime_telemetry();
+    test_ft_update_density_refactor_guard();
 
     printf("\nIntegration (A/B Comparison):\n");
     test_markowitz_integration_small_lp();
