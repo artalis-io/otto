@@ -150,6 +150,20 @@ static void test_param_metadata_and_scope(void) {
                   "params: lp_basis_governor_mode max");
 
     memset(&meta, 0, sizeof(meta));
+    ASSERT_INT_EQ(ralph_core_get_param_meta(RALPH_PARAM_LP_REINVERT_CONTROLLER_MODE, &meta), 0,
+                  "params: metadata for lp_reinvert_controller_mode");
+    ASSERT_TRUE(strcmp(meta.name, "lp_reinvert_controller_mode") == 0,
+                "params: lp_reinvert_controller_mode canonical name");
+    ASSERT_INT_EQ((int)meta.scope, (int)RALPH_PARAM_SCOPE_LP,
+                  "params: lp_reinvert_controller_mode LP scope");
+    ASSERT_INT_EQ(meta.has_min, 1, "params: lp_reinvert_controller_mode has min");
+    ASSERT_INT_EQ(meta.has_max, 1, "params: lp_reinvert_controller_mode has max");
+    ASSERT_INT_EQ((int)meta.min_value, (int)RALPH_LP_REINVERT_CONTROLLER_MODE_OFF,
+                  "params: lp_reinvert_controller_mode min");
+    ASSERT_INT_EQ((int)meta.max_value, (int)RALPH_LP_REINVERT_CONTROLLER_MODE_CONTROL_ALL,
+                  "params: lp_reinvert_controller_mode max");
+
+    memset(&meta, 0, sizeof(meta));
     ASSERT_INT_EQ(ralph_core_get_param_meta(RALPH_PARAM_LP_POLICY_PROFILE, &meta), 0,
                   "params: metadata for lp_policy_profile");
     ASSERT_TRUE(strcmp(meta.name, "lp_policy_profile") == 0,
@@ -235,6 +249,14 @@ static void test_param_metadata_and_scope(void) {
                   "params: find lp_basis_governor_mode alias");
     ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_BASIS_GOVERNOR_MODE,
                   "params: lp_basis_governor_mode alias id");
+    ASSERT_INT_EQ(ralph_core_find_param_by_name("lp_reinvert_controller_mode", &pid), 0,
+                  "params: find lp_reinvert_controller_mode canonical");
+    ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_REINVERT_CONTROLLER_MODE,
+                  "params: lp_reinvert_controller_mode canonical id");
+    ASSERT_INT_EQ(ralph_core_find_param_by_name("LPReinvertControllerMode", &pid), 0,
+                  "params: find lp_reinvert_controller_mode alias");
+    ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_REINVERT_CONTROLLER_MODE,
+                  "params: lp_reinvert_controller_mode alias id");
     ASSERT_INT_EQ(ralph_core_find_param_by_name("lp_policy_profile", &pid), 0,
                   "params: find lp_policy_profile canonical");
     ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_LP_POLICY_PROFILE,
@@ -274,6 +296,9 @@ static void test_param_metadata_and_scope(void) {
     ASSERT_INT_EQ(ralph_core_set_mip_int_param_id(model, RALPH_PARAM_LP_BASIS_GOVERNOR_MODE, 1),
                   -1,
                   "params: MIP strict rejects lp_basis_governor_mode id");
+    ASSERT_INT_EQ(ralph_core_set_mip_int_param_id(model, RALPH_PARAM_LP_REINVERT_CONTROLLER_MODE, 1),
+                  -1,
+                  "params: MIP strict rejects lp_reinvert_controller_mode id");
     ASSERT_INT_EQ(ralph_core_set_mip_int_param_id(model, RALPH_PARAM_LP_POLICY_PROFILE,
                                              (int)RALPH_LP_POLICY_PROFILE_GLPK_COMPAT),
                   -1,
@@ -344,6 +369,8 @@ static void test_param_metadata_and_scope(void) {
                   "params: reject lp_external_strict out of range");
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_BASIS_GOVERNOR_MODE, 3), -1,
                   "params: reject lp_basis_governor_mode out of range");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_REINVERT_CONTROLLER_MODE, 4), -1,
+                  "params: reject lp_reinvert_controller_mode out of range");
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_POLICY_PROFILE, 4), -1,
                   "params: reject lp_policy_profile out of range");
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_SMCP_METHOD, 3), -1,
@@ -362,6 +389,12 @@ static void test_param_metadata_and_scope(void) {
                   "params: get lp_basis_governor_mode by id");
     ASSERT_INT_EQ(value, 2,
                   "params: lp_basis_governor_mode set/get consistent");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_REINVERT_CONTROLLER_MODE, 3), 0,
+                  "params: set lp_reinvert_controller_mode by id");
+    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_LP_REINVERT_CONTROLLER_MODE, &value), 0,
+                  "params: get lp_reinvert_controller_mode by id");
+    ASSERT_INT_EQ(value, 3,
+                  "params: lp_reinvert_controller_mode set/get consistent");
 
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_POLICY_PROFILE,
                                          (int)RALPH_LP_POLICY_PROFILE_GLPK_COMPAT),

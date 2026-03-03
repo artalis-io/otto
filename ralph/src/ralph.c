@@ -70,6 +70,7 @@ struct RalphModel {
     int random_seed;        /* deterministic LP seed for anti-cycling perturbation offsets */
     int lp_threads;         /* LP thread policy (0=auto; deterministic mode defaults to 1) */
     int lp_basis_governor_mode; /* 0=off, 1=shadow, 2=control_phase2 */
+    int lp_reinvert_controller_mode; /* 0=off, 1=shadow, 2=control_phase1, 3=control_all */
     int lp_policy_profile;  /* 0=default, 1=glpk_compat(strict), 2=glpk_strict, 3=glpk_legacy */
     int glpk_smcp_method;   /* 0=auto, 1=primal, 2=dual */
     int glpk_smcp_pricing;  /* 0=standard, 1=steep */
@@ -874,6 +875,7 @@ static int ralph_probe_lp_status(const RalphModel *model,
     probe->random_seed = (model->random_seed >= 0) ? (unsigned int)model->random_seed : 0U;
     probe->lp_threads = (model->lp_threads >= 0) ? model->lp_threads : 0;
     probe->policy.basis_governor_mode = model->lp_basis_governor_mode;
+    probe->policy.reinvert_controller_mode = model->lp_reinvert_controller_mode;
     lp_basis_governor_set_mode(&probe->policy.basis_governor,
                                probe->policy.basis_governor_mode);
     probe->glpk_strict_mode =
@@ -1067,6 +1069,7 @@ RalphModel* ralph_core_create(void) {
     model->random_seed = 0;
     model->lp_threads = 0;
     model->lp_basis_governor_mode = LP_BASIS_GOV_MODE_OFF;
+    model->lp_reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
     {
         LPGLPKCompatConfig cfg;
         lp_policy_glpk_compat_init(&cfg);
@@ -2106,6 +2109,7 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         model->lp_solver->random_seed = (model->random_seed >= 0) ? (unsigned int)model->random_seed : 0U;
         model->lp_solver->lp_threads = (model->lp_threads >= 0) ? model->lp_threads : 0;
         model->lp_solver->policy.basis_governor_mode = model->lp_basis_governor_mode;
+        model->lp_solver->policy.reinvert_controller_mode = model->lp_reinvert_controller_mode;
         lp_basis_governor_set_mode(&model->lp_solver->policy.basis_governor,
                                    model->lp_basis_governor_mode);
 
@@ -5424,6 +5428,19 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .aliases = {"LPBasisGovernorMode"},
             .alias_count = 1
         },
+        [RALPH_PARAM_LP_REINVERT_CONTROLLER_MODE] = {
+            .id = RALPH_PARAM_LP_REINVERT_CONTROLLER_MODE,
+            .name = "lp_reinvert_controller_mode",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)LP_REINVERT_MODE_SHADOW,
+            .has_min = 1,
+            .min_value = (double)LP_REINVERT_MODE_OFF,
+            .has_max = 1,
+            .max_value = (double)LP_REINVERT_MODE_CONTROL_ALL,
+            .aliases = {"LPReinvertControllerMode"},
+            .alias_count = 1
+        },
         [RALPH_PARAM_LP_POLICY_PROFILE] = {
             .id = RALPH_PARAM_LP_POLICY_PROFILE,
             .name = "lp_policy_profile",
@@ -6013,6 +6030,19 @@ int ralph_core_set_int_param_id(RalphModel *model, RalphParamId param, int value
             }
             model->lp_basis_governor_mode = value;
             break;
+        case RALPH_PARAM_LP_REINVERT_CONTROLLER_MODE:
+            if (!lp_reinvert_controller_mode_is_valid(value)) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               value,
+                               "lp_reinvert_controller_mode must be 0(off), 1(shadow), 2(control_phase1), or 3(control_all)");
+            }
+            model->lp_reinvert_controller_mode = value;
+            break;
         case RALPH_PARAM_LP_POLICY_PROFILE:
         case RALPH_PARAM_GLPK_SMCP_METHOD:
         case RALPH_PARAM_GLPK_SMCP_PRICING:
@@ -6297,6 +6327,9 @@ int ralph_core_get_int_param_id(const RalphModel *model, RalphParamId param, int
             break;
         case RALPH_PARAM_LP_BASIS_GOVERNOR_MODE:
             *value = model->lp_basis_governor_mode;
+            break;
+        case RALPH_PARAM_LP_REINVERT_CONTROLLER_MODE:
+            *value = model->lp_reinvert_controller_mode;
             break;
         case RALPH_PARAM_LP_POLICY_PROFILE:
             *value = model->lp_policy_profile;

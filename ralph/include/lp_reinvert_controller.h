@@ -2,6 +2,13 @@
 #define LP_REINVERT_CONTROLLER_H
 
 typedef enum {
+    LP_REINVERT_MODE_OFF = 0,
+    LP_REINVERT_MODE_SHADOW = 1,
+    LP_REINVERT_MODE_CONTROL_PHASE1 = 2,
+    LP_REINVERT_MODE_CONTROL_ALL = 3
+} LPReinvertControllerMode;
+
+typedef enum {
     LP_REINVERT_DECISION_ALLOW = 0,
     LP_REINVERT_DECISION_DEFER = 1,
     LP_REINVERT_DECISION_FORCE = 2
@@ -79,6 +86,8 @@ void lp_reinvert_controller_state_apply_decision(
 LPReinvertControllerDecision lp_reinvert_controller_decide(
     const LPReinvertControllerState *state,
     const LPReinvertControllerSignals *signals);
+
+int lp_reinvert_controller_mode_is_valid(int mode);
 
 const char *lp_reinvert_controller_reason_string(LPReinvertReason reason);
 

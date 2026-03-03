@@ -382,6 +382,7 @@ typedef struct {
     double soft_lu_iter_cost_ewma_phase1;
     double soft_lu_iter_cost_ewma_phase2;
     int basis_governor_mode;
+    int reinvert_controller_mode;
     int shadow_refactor_yes_phase1;
     int shadow_refactor_yes_phase2;
     int shadow_refactor_yes_dual;
@@ -567,6 +568,7 @@ typedef struct {
     int glpk_smcp_flip;  /* -1=default, 0=off (--noflip), 1=on (--flip) */
     int lu_supernode; /* 0=off, 1=enable supernodal LU */
     int lp_basis_governor_mode; /* 0=off, 1=shadow, 2=control_phase2 */
+    int lp_reinvert_controller_mode; /* 0=off, 1=shadow, 2=control_phase1, 3=control_all */
 
     /* Output */
     char output_dir[MAX_PATH];
@@ -890,6 +892,7 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                                      int method, int pricing,
                                      int glpk_smcp_ratio, int glpk_smcp_flip,
                                      int lu_supernode, int lp_basis_governor_mode,
+                                     int lp_reinvert_controller_mode,
                                      int *out_num_vars, int *out_num_cons, int *out_nnz,
                                      int *out_is_mip) {
     SolveResult result = {0};
@@ -944,6 +947,7 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     ralph_test_set_int_param(model, "verify", 1);
     ralph_test_set_int_param(model, "method", method);
     ralph_test_set_int_param(model, "lp_basis_governor_mode", lp_basis_governor_mode);
+    ralph_test_set_int_param(model, "lp_reinvert_controller_mode", lp_reinvert_controller_mode);
     if (pricing >= 0) {
         ralph_test_set_int_param(model, "pricing", pricing);
     }
@@ -1248,6 +1252,7 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.soft_lu_iter_cost_ewma_phase1 = solver_tel.soft_lu_iter_cost_ewma_phase1;
             result.soft_lu_iter_cost_ewma_phase2 = solver_tel.soft_lu_iter_cost_ewma_phase2;
             result.basis_governor_mode = solver_tel.basis_governor_mode;
+            result.reinvert_controller_mode = solver_tel.reinvert_controller_mode;
             result.shadow_refactor_yes_phase1 = solver_tel.shadow_refactor_yes_phase1;
             result.shadow_refactor_yes_phase2 = solver_tel.shadow_refactor_yes_phase2;
             result.shadow_refactor_yes_dual = solver_tel.shadow_refactor_yes_dual;
@@ -2639,6 +2644,8 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->soft_lu_iter_cost_ewma_phase2);
     fprintf(out, "    \"basis_governor_mode\": %d,\n",
             ralph->basis_governor_mode);
+    fprintf(out, "    \"reinvert_controller_mode\": %d,\n",
+            ralph->reinvert_controller_mode);
     fprintf(out, "    \"shadow_refactor_yes_phase1\": %d,\n",
             ralph->shadow_refactor_yes_phase1);
     fprintf(out, "    \"shadow_refactor_yes_phase2\": %d,\n",
@@ -2956,6 +2963,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
                                           opts->glpk_smcp_flip,
                                           opts->lu_supernode,
                                           opts->lp_basis_governor_mode,
+                                          opts->lp_reinvert_controller_mode,
                                           &num_vars, &num_cons, &nnz, &is_mip);
 
     /* Validate if both solved optimally */
@@ -3025,7 +3033,8 @@ static int test_solve_one(const char *path, const char *name,
                            const NetlibReference *ref,
                            int timeout_sec, int method, int pricing,
                            int glpk_smcp_ratio, int glpk_smcp_flip,
-                           int lu_supernode, int lp_basis_governor_mode) {
+                           int lu_supernode, int lp_basis_governor_mode,
+                           int lp_reinvert_controller_mode) {
     /* Use a pipe to pass results from child to parent */
     int pipefd[2];
     if (pipe(pipefd) < 0) {
@@ -3054,6 +3063,7 @@ static int test_solve_one(const char *path, const char *name,
                                                glpk_smcp_ratio, glpk_smcp_flip,
                                                lu_supernode,
                                                lp_basis_governor_mode,
+                                               lp_reinvert_controller_mode,
                                                &num_vars, &num_cons, &nnz,
                                                &is_mip);
 
@@ -3169,7 +3179,8 @@ static int run_test_mode(const Options *opts) {
                                      opts->glpk_smcp_ratio,
                                      opts->glpk_smcp_flip,
                                      opts->lu_supernode,
-                                     opts->lp_basis_governor_mode);
+                                     opts->lp_basis_governor_mode,
+                                     opts->lp_reinvert_controller_mode);
         switch (result) {
             case 0: pass_count++; break;
             case 1: fail_count++; break;
@@ -3269,6 +3280,7 @@ static void print_help(const char *prog) {
     printf("  --flip                        Enable dual bound flipping (GLPK-compat flip=1)\n");
     printf("  --noflip                      Disable dual bound flipping (GLPK-compat flip=0)\n");
     printf("  --lp-basis-governor-mode <N>  Basis governor: 0=off, 1=shadow, 2=control_phase2\n");
+    printf("  --lp-reinvert-controller-mode <N> Reinvert controller: 0=off, 1=shadow, 2=control_phase1, 3=control_all\n");
     printf("  --lu-supernode                Enable supernodal LU factorization\n");
     printf("\n");
     printf("Problem Filtering:\n");
@@ -3319,6 +3331,7 @@ static int parse_args(int argc, char **argv, Options *opts) {
     opts->pricing = -1;  /* Default: solver default */
     opts->glpk_smcp_ratio = -1;
     opts->glpk_smcp_flip = -1;
+    opts->lp_reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -3393,6 +3406,15 @@ static int parse_args(int argc, char **argv, Options *opts) {
                 fprintf(stderr,
                         "Invalid --lp-basis-governor-mode: %d (expected 0..2)\n",
                         opts->lp_basis_governor_mode);
+                return -1;
+            }
+        } else if (strcmp(arg, "--lp-reinvert-controller-mode") == 0 && i + 1 < argc) {
+            opts->lp_reinvert_controller_mode = atoi(argv[++i]);
+            if (opts->lp_reinvert_controller_mode < LP_REINVERT_MODE_OFF ||
+                opts->lp_reinvert_controller_mode > LP_REINVERT_MODE_CONTROL_ALL) {
+                fprintf(stderr,
+                        "Invalid --lp-reinvert-controller-mode: %d (expected 0..3)\n",
+                        opts->lp_reinvert_controller_mode);
                 return -1;
             }
         } else if (strcmp(arg, "--lu-supernode") == 0) {

@@ -14,10 +14,15 @@ static int solver_telemetry_enabled(const SimplexSolver *solver) {
 
 void lp_telemetry_reset_solver(SimplexSolver *solver) {
     int governor_mode = LP_BASIS_GOV_MODE_OFF;
+    int reinvert_mode = LP_REINVERT_MODE_SHADOW;
     if (!solver) return;
     governor_mode = solver->policy.basis_governor_mode;
     if (!lp_basis_governor_mode_is_valid(governor_mode)) {
         governor_mode = LP_BASIS_GOV_MODE_OFF;
+    }
+    reinvert_mode = solver->policy.reinvert_controller_mode;
+    if (!lp_reinvert_controller_mode_is_valid(reinvert_mode)) {
+        reinvert_mode = LP_REINVERT_MODE_SHADOW;
     }
     solver->telemetry.perf_primal_setup_ms = 0.0;
     solver->telemetry.perf_dual_ms = 0.0;
@@ -244,6 +249,7 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     lp_reinvert_controller_state_reset(&solver->policy.reinvert_state_dual);
     solver->policy.reinvert_dual_last_hot_ms = 0.0;
     solver->policy.basis_governor_mode = governor_mode;
+    solver->policy.reinvert_controller_mode = reinvert_mode;
     lp_basis_governor_begin_solve(&solver->policy.basis_governor);
     lp_basis_governor_set_mode(&solver->policy.basis_governor, governor_mode);
 }
@@ -580,6 +586,10 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     out->soft_lu_iter_cost_ewma_phase1 = solver->policy.soft_lu_iter_cost_ewma_phase1;
     out->soft_lu_iter_cost_ewma_phase2 = solver->policy.soft_lu_iter_cost_ewma_phase2;
     out->basis_governor_mode = lp_basis_governor_get_mode(&solver->policy.basis_governor);
+    out->reinvert_controller_mode = lp_reinvert_controller_mode_is_valid(
+                                        solver->policy.reinvert_controller_mode)
+                                        ? solver->policy.reinvert_controller_mode
+                                        : LP_REINVERT_MODE_SHADOW;
     out->shadow_refactor_yes_phase1 = solver->policy.basis_governor.shadow_refactor_yes_phase1;
     out->shadow_refactor_yes_phase2 = solver->policy.basis_governor.shadow_refactor_yes_phase2;
     out->shadow_refactor_yes_dual = solver->policy.basis_governor.shadow_refactor_yes_dual;

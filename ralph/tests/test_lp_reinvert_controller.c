@@ -149,6 +149,19 @@ int main(void) {
     d1 = lp_reinvert_controller_decide(&state, &sig);
     TEST(decision_equal(&d0, &d1), "deterministic output for identical inputs");
 
+    TEST(lp_reinvert_controller_mode_is_valid(LP_REINVERT_MODE_OFF) == 1,
+         "mode validation accepts off");
+    TEST(lp_reinvert_controller_mode_is_valid(LP_REINVERT_MODE_SHADOW) == 1,
+         "mode validation accepts shadow");
+    TEST(lp_reinvert_controller_mode_is_valid(LP_REINVERT_MODE_CONTROL_PHASE1) == 1,
+         "mode validation accepts control_phase1");
+    TEST(lp_reinvert_controller_mode_is_valid(LP_REINVERT_MODE_CONTROL_ALL) == 1,
+         "mode validation accepts control_all");
+    TEST(lp_reinvert_controller_mode_is_valid(-1) == 0,
+         "mode validation rejects negative values");
+    TEST(lp_reinvert_controller_mode_is_valid(4) == 0,
+         "mode validation rejects out-of-range values");
+
     TEST(lp_reinvert_controller_reason_string(LP_REINVERT_REASON_COST_DAMPEN) != NULL,
          "reason strings are available");
 

@@ -54,6 +54,12 @@
 #define LP_LU_BACKEND_POLICY_CBG    1
 #define LP_LU_BACKEND_POLICY_CGR    2
 
+/* Reinvert-controller runtime modes (Phase 4 rollout). */
+#define LP_REINVERT_CONTROLLER_MODE_OFF 0
+#define LP_REINVERT_CONTROLLER_MODE_SHADOW 1
+#define LP_REINVERT_CONTROLLER_MODE_CONTROL_PHASE1 2
+#define LP_REINVERT_CONTROLLER_MODE_CONTROL_ALL 3
+
 /* Refactor trigger reason telemetry codes */
 typedef enum {
     RALPH_REFACTOR_REASON_OTHER = 0,
@@ -785,6 +791,7 @@ typedef struct {
 typedef struct {
     int refactor_next_reason;  /* RalphRefactorReason hint consumed by tableau_refactorize */
     int basis_governor_mode;   /* LPBasisGovernorMode runtime mode */
+    int reinvert_controller_mode; /* LPReinvertControllerMode runtime mode */
     LPBasisGovernorState basis_governor; /* Shadow governor state (G0) */
 
     /* Runtime scheduling counters. */
@@ -1164,6 +1171,7 @@ typedef struct {
     double soft_lu_iter_cost_ewma_phase1;
     double soft_lu_iter_cost_ewma_phase2;
     int basis_governor_mode;
+    int reinvert_controller_mode;
     int shadow_refactor_yes_phase1;
     int shadow_refactor_yes_phase2;
     int shadow_refactor_yes_dual;

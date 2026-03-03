@@ -733,7 +733,74 @@ static double average_solve_density(long long sol_nnz_total, int samples, int m)
     return density;
 }
 
-static void reinvert_shadow_observe_phase(SimplexSolver *solver,
+static int reinvert_controller_mode_get(const SimplexSolver *solver) {
+    int mode;
+    if (!solver) return LP_REINVERT_MODE_SHADOW;
+    mode = solver->policy.reinvert_controller_mode;
+    if (!lp_reinvert_controller_mode_is_valid(mode)) {
+        return LP_REINVERT_MODE_SHADOW;
+    }
+    return mode;
+}
+
+static int reinvert_controller_collect_shadow(const SimplexSolver *solver) {
+    return reinvert_controller_mode_get(solver) != LP_REINVERT_MODE_OFF;
+}
+
+static int reinvert_controller_controls_periodic_phase(const SimplexSolver *solver,
+                                                       int phase) {
+    int mode = reinvert_controller_mode_get(solver);
+    if (phase != 1) return 0;
+    return mode == LP_REINVERT_MODE_CONTROL_PHASE1 ||
+           mode == LP_REINVERT_MODE_CONTROL_ALL;
+}
+
+static int reinvert_periodic_apply_decision(int phase,
+                                            int hard_lu_trigger,
+                                            int periodic_due,
+                                            int decision,
+                                            int control_enabled) {
+    if (hard_lu_trigger) return periodic_due ? 1 : 0;
+    if (!control_enabled || phase != 1) return periodic_due ? 1 : 0;
+    switch ((LPReinvertDecision)decision) {
+        case LP_REINVERT_DECISION_FORCE:
+            return 1;
+        case LP_REINVERT_DECISION_DEFER:
+            return 0;
+        case LP_REINVERT_DECISION_ALLOW:
+        default:
+            return periodic_due ? 1 : 0;
+    }
+}
+
+int simplex_reinvert_periodic_control_for_test(int mode,
+                                               int phase,
+                                               int hard_lu_trigger,
+                                               int periodic_due,
+                                               int decision) {
+    int control_enabled =
+        (phase == 1) &&
+        (mode == LP_REINVERT_MODE_CONTROL_PHASE1 ||
+         mode == LP_REINVERT_MODE_CONTROL_ALL);
+    return reinvert_periodic_apply_decision(phase,
+                                            hard_lu_trigger,
+                                            periodic_due,
+                                            decision,
+                                            control_enabled);
+}
+
+typedef struct {
+    int active;
+    int suggested_refactor;
+    LPReinvertControllerDecision decision;
+} LPReinvertShadowEval;
+
+static void reinvert_shadow_eval_reset(LPReinvertShadowEval *eval) {
+    if (!eval) return;
+    memset(eval, 0, sizeof(*eval));
+}
+
+static void reinvert_shadow_prepare_phase(SimplexSolver *solver,
                                           SimplexTableau *tab,
                                           int phase,
                                           int iter,
@@ -741,15 +808,20 @@ static void reinvert_shadow_observe_phase(SimplexSolver *solver,
                                           int periodic_due,
                                           int min_update_age,
                                           int cooldown_updates,
-                                          int actual_refactor) {
+                                          int allow_control,
+                                          int *periodic_due_io,
+                                          LPReinvertShadowEval *eval) {
     LPReinvertControllerState *state;
     LPReinvertControllerSignals signals;
-    LPReinvertControllerDecision decision;
-    int suggested_refactor = 0;
+    int control_enabled;
     double ftran_density;
     double btran_density;
 
+    if (!eval) return;
+    reinvert_shadow_eval_reset(eval);
     if (!solver || !tab || !tab->lu || !lu_health_decision) return;
+    if (!reinvert_controller_collect_shadow(solver)) return;
+
     state = reinvert_state_for_phase(solver, phase);
     if (!state) return;
 
@@ -780,17 +852,37 @@ static void reinvert_shadow_observe_phase(SimplexSolver *solver,
     signals.ftran_density = ftran_density;
     signals.btran_density = btran_density;
 
-    decision = lp_reinvert_controller_decide(state, &signals);
-    suggested_refactor =
-        (decision.decision == LP_REINVERT_DECISION_FORCE) ||
-        (decision.decision == LP_REINVERT_DECISION_ALLOW && signals.periodic_due);
+    eval->decision = lp_reinvert_controller_decide(state, &signals);
+    eval->active = 1;
+    eval->suggested_refactor =
+        (eval->decision.decision == LP_REINVERT_DECISION_FORCE) ||
+        (eval->decision.decision == LP_REINVERT_DECISION_ALLOW && signals.periodic_due);
+
+    control_enabled = allow_control &&
+                      reinvert_controller_controls_periodic_phase(solver, phase);
+    if (periodic_due_io) {
+        *periodic_due_io = reinvert_periodic_apply_decision(phase,
+                                                            lu_health_decision->hard_trigger,
+                                                            periodic_due,
+                                                            eval->decision.decision,
+                                                            control_enabled);
+    }
+}
+
+static void reinvert_shadow_finalize_phase(SimplexSolver *solver,
+                                           int phase,
+                                           const LPReinvertShadowEval *eval,
+                                           int actual_refactor) {
+    LPReinvertControllerState *state;
+    if (!solver || !eval || !eval->active) return;
     lp_telemetry_record_reinvert_shadow(solver,
                                         phase,
-                                        decision.decision,
-                                        decision.reason,
-                                        suggested_refactor,
+                                        eval->decision.decision,
+                                        eval->decision.reason,
+                                        eval->suggested_refactor,
                                         actual_refactor);
-    lp_reinvert_controller_state_apply_decision(state, &decision);
+    state = reinvert_state_for_phase(solver, phase);
+    lp_reinvert_controller_state_apply_decision(state, &eval->decision);
 }
 
 static int solution_refine_iteration_budget(double max_residual, double feas_tol) {
@@ -5579,6 +5671,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->warm_basis_last_rejected = 0;
     solver->unbounded_valid = 0;
     solver->policy.basis_governor_mode = LP_BASIS_GOV_MODE_OFF;
+    solver->policy.reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
     lp_basis_governor_set_mode(&solver->policy.basis_governor,
                                solver->policy.basis_governor_mode);
     solver->policy.soft_lu_cost_gate_enabled = 1;
@@ -7628,6 +7721,10 @@ static int simplex_phase1(SimplexSolver *solver) {
         int periodic_refactor = 0;
         int periodic_refactor_nominal = 0;
         int needs_refactor = lu_refactor_needed;
+        int reinvert_periodic_candidate = 0;
+        int reinvert_control_periodic = reinvert_controller_controls_periodic_phase(solver, 1);
+        LPReinvertShadowEval reinvert_shadow_eval;
+        reinvert_shadow_eval_reset(&reinvert_shadow_eval);
         lu_soft_health_streak = lu_health_decision.soft_breach_streak_next;
         if (lu_health_decision.hard_trigger) {
             periodic_policy_cooldown = 0;
@@ -7709,71 +7806,101 @@ static int simplex_phase1(SimplexSolver *solver) {
                                                              use_bland,
                                                              degenerate_count);
             periodic_refactor_nominal = periodic_refactor;
-            if (periodic_refactor &&
-                cooldown_eligible &&
-                periodic_policy_cooldown > 0) {
-                periodic_refactor = 0;
-            }
-            if (periodic_refactor) {
-                if (solver->policy.periodic_cost_gate_enabled) {
-                    int cap_blocked = 0;
-                    int next_consecutive = 0;
-                    int gate_reason = LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE;
-                    int should_defer = simplex_periodic_cost_defer_plan_for_test(
-                        1,
-                        tab->m,
-                        use_bland,
-                        degenerate_count,
-                        tab->lu->num_updates,
-                        tab->lu->max_updates,
-                        tab->lu->spike_pool_used,
-                        tab->lu->spike_pool_capacity,
-                        tab->lu->cond_estimate,
-                        tab->lu->growth_factor,
-                        soft_lu_refactor_cost_ewma(solver, 1),
-                        soft_lu_iter_cost_ewma(solver, 1),
-                        periodic_cost_refactor_samples(solver, 1),
-                        periodic_cost_iter_samples(solver, 1),
-                        periodic_cost_consecutive_defers(solver, 1),
-                        &gate_reason,
-                        NULL,
-                        &cap_blocked,
-                        &next_consecutive);
-                    periodic_cost_record_gate_reason(
-                        solver, 1, (LPPeriodicCostDampenReason)gate_reason);
-                    if (should_defer) {
-                        periodic_refactor = 0;
-                        periodic_cost_record_defer(solver, 1);
-                        periodic_cost_set_consecutive_defers(solver, 1, next_consecutive);
-                        if (solver->verbose >= 2) {
-                            LP_LOG_STDERR("[simplex_phase1] Deferred policy periodic refactor by cost gate (updates=%d/%d, degen=%d, iter_ewma=%.3fms, ref_ewma=%.3fms)\n",
-                                    tab->lu->num_updates,
-                                    tab->lu->max_updates,
-                                    degenerate_count,
-                                    soft_lu_iter_cost_ewma(solver, 1),
-                                    soft_lu_refactor_cost_ewma(solver, 1));
+            reinvert_periodic_candidate = periodic_refactor_nominal;
+            reinvert_shadow_prepare_phase(solver,
+                                          tab,
+                                          1,
+                                          iter,
+                                          &lu_health_decision,
+                                          periodic_refactor_nominal,
+                                          periodic_policy.min_update_age,
+                                          periodic_policy_cooldown,
+                                          reinvert_control_periodic,
+                                          &reinvert_periodic_candidate,
+                                          &reinvert_shadow_eval);
+            if (reinvert_control_periodic) {
+                periodic_refactor = reinvert_periodic_candidate;
+                periodic_refactor_nominal = periodic_refactor;
+                periodic_cost_reset_defer_streak(solver, 1);
+            } else {
+                if (periodic_refactor &&
+                    cooldown_eligible &&
+                    periodic_policy_cooldown > 0) {
+                    periodic_refactor = 0;
+                }
+                if (periodic_refactor) {
+                    if (solver->policy.periodic_cost_gate_enabled) {
+                        int cap_blocked = 0;
+                        int next_consecutive = 0;
+                        int gate_reason = LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE;
+                        int should_defer = simplex_periodic_cost_defer_plan_for_test(
+                            1,
+                            tab->m,
+                            use_bland,
+                            degenerate_count,
+                            tab->lu->num_updates,
+                            tab->lu->max_updates,
+                            tab->lu->spike_pool_used,
+                            tab->lu->spike_pool_capacity,
+                            tab->lu->cond_estimate,
+                            tab->lu->growth_factor,
+                            soft_lu_refactor_cost_ewma(solver, 1),
+                            soft_lu_iter_cost_ewma(solver, 1),
+                            periodic_cost_refactor_samples(solver, 1),
+                            periodic_cost_iter_samples(solver, 1),
+                            periodic_cost_consecutive_defers(solver, 1),
+                            &gate_reason,
+                            NULL,
+                            &cap_blocked,
+                            &next_consecutive);
+                        periodic_cost_record_gate_reason(
+                            solver, 1, (LPPeriodicCostDampenReason)gate_reason);
+                        if (should_defer) {
+                            periodic_refactor = 0;
+                            periodic_cost_record_defer(solver, 1);
+                            periodic_cost_set_consecutive_defers(solver, 1, next_consecutive);
+                            if (solver->verbose >= 2) {
+                                LP_LOG_STDERR("[simplex_phase1] Deferred policy periodic refactor by cost gate (updates=%d/%d, degen=%d, iter_ewma=%.3fms, ref_ewma=%.3fms)\n",
+                                        tab->lu->num_updates,
+                                        tab->lu->max_updates,
+                                        degenerate_count,
+                                        soft_lu_iter_cost_ewma(solver, 1),
+                                        soft_lu_refactor_cost_ewma(solver, 1));
+                            }
+                        } else {
+                            periodic_cost_reset_defer_streak(solver, 1);
+                            if (cap_blocked) {
+                                periodic_cost_record_cap_forced(solver, 1);
+                                if (solver->verbose >= 2) {
+                                    LP_LOG_STDERR("[simplex_phase1] Policy periodic defer cap reached; forcing periodic policy refactor (updates=%d/%d, degen=%d)\n",
+                                            tab->lu->num_updates,
+                                            tab->lu->max_updates,
+                                            degenerate_count);
+                                }
+                            } else if (solver->verbose >= 3) {
+                                LP_LOG_STDERR("[simplex_phase1] Policy periodic cost gate blocked defer: %s\n",
+                                        lp_refactor_policy_periodic_cost_dampen_reason_string(
+                                            (LPPeriodicCostDampenReason)gate_reason));
+                            }
                         }
                     } else {
                         periodic_cost_reset_defer_streak(solver, 1);
-                        if (cap_blocked) {
-                            periodic_cost_record_cap_forced(solver, 1);
-                            if (solver->verbose >= 2) {
-                                LP_LOG_STDERR("[simplex_phase1] Policy periodic defer cap reached; forcing periodic policy refactor (updates=%d/%d, degen=%d)\n",
-                                        tab->lu->num_updates,
-                                        tab->lu->max_updates,
-                                        degenerate_count);
-                            }
-                        } else if (solver->verbose >= 3) {
-                            LP_LOG_STDERR("[simplex_phase1] Policy periodic cost gate blocked defer: %s\n",
-                                    lp_refactor_policy_periodic_cost_dampen_reason_string(
-                                        (LPPeriodicCostDampenReason)gate_reason));
-                        }
                     }
-                } else {
-                    periodic_cost_reset_defer_streak(solver, 1);
                 }
             }
             needs_refactor = periodic_refactor;
+        } else {
+            reinvert_shadow_prepare_phase(solver,
+                                          tab,
+                                          1,
+                                          iter,
+                                          &lu_health_decision,
+                                          0,
+                                          periodic_policy.min_update_age,
+                                          periodic_policy_cooldown,
+                                          0,
+                                          NULL,
+                                          &reinvert_shadow_eval);
         }
         if (periodic_refactor) {
             periodic_feedback_set_hint(solver, 1, periodic_policy.interval, effective_policy_pressure);
@@ -7798,15 +7925,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             }
             needs_refactor = governed_refactor;
         }
-        reinvert_shadow_observe_phase(solver,
-                                      tab,
-                                      1,
-                                      iter,
-                                      &lu_health_decision,
-                                      periodic_refactor_nominal,
-                                      periodic_policy.min_update_age,
-                                      periodic_policy_cooldown,
-                                      needs_refactor);
+        reinvert_shadow_finalize_phase(solver, 1, &reinvert_shadow_eval, needs_refactor);
 
         if (needs_refactor) {
             phase1_dir_skip_no_recompute_streak = 0;
@@ -8652,6 +8771,8 @@ static int simplex_phase2(SimplexSolver *solver) {
         int cooldown_eligible = 0;
         double effective_policy_pressure = 0.0;
         LPPeriodicRefactorPolicy periodic_policy = {0, 0, 0.0, 0.0};
+        LPReinvertShadowEval reinvert_shadow_eval;
+        reinvert_shadow_eval_reset(&reinvert_shadow_eval);
         lu_soft_health_streak = lu_health_decision.soft_breach_streak_next;
         if (lu_health_decision.hard_trigger) {
             periodic_policy_cooldown = 0;
@@ -8791,6 +8912,18 @@ static int simplex_phase2(SimplexSolver *solver) {
                 }
             }
             needs_refactor = periodic_refactor;
+        } else {
+            reinvert_shadow_prepare_phase(solver,
+                                          tab,
+                                          2,
+                                          iter,
+                                          &lu_health_decision,
+                                          0,
+                                          periodic_policy.min_update_age,
+                                          periodic_policy_cooldown,
+                                          0,
+                                          NULL,
+                                          &reinvert_shadow_eval);
         }
         if (periodic_refactor) {
             periodic_feedback_set_hint(solver, 2, periodic_policy.interval, effective_policy_pressure);
@@ -8815,15 +8948,21 @@ static int simplex_phase2(SimplexSolver *solver) {
             }
             needs_refactor = governed_refactor;
         }
-        reinvert_shadow_observe_phase(solver,
-                                      tab,
-                                      2,
-                                      iter,
-                                      &lu_health_decision,
-                                      periodic_refactor_nominal,
-                                      periodic_policy.min_update_age,
-                                      periodic_policy_cooldown,
-                                      needs_refactor);
+        if (!lu_refactor_needed) {
+            int periodic_shadow_due = periodic_refactor_nominal;
+            reinvert_shadow_prepare_phase(solver,
+                                          tab,
+                                          2,
+                                          iter,
+                                          &lu_health_decision,
+                                          periodic_shadow_due,
+                                          periodic_policy.min_update_age,
+                                          periodic_policy_cooldown,
+                                          0,
+                                          NULL,
+                                          &reinvert_shadow_eval);
+        }
+        reinvert_shadow_finalize_phase(solver, 2, &reinvert_shadow_eval, needs_refactor);
 
         if (needs_refactor) {
             soft_lu_reset_defer_streak(solver, 2);
@@ -9269,6 +9408,9 @@ static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *
 
     if (!lp_basis_governor_mode_is_valid(solver->policy.basis_governor_mode)) {
         solver->policy.basis_governor_mode = LP_BASIS_GOV_MODE_OFF;
+    }
+    if (!lp_reinvert_controller_mode_is_valid(solver->policy.reinvert_controller_mode)) {
+        solver->policy.reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
     }
     lp_basis_governor_set_mode(&solver->policy.basis_governor,
                                solver->policy.basis_governor_mode);
