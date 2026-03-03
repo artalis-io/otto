@@ -20,6 +20,13 @@
 
 /* Refactorize when spike pool exceeds this percentage of capacity */
 #define RALPH_SPIKE_POOL_WARN_PCT 85
+/* Reject extremely dense FT updates on large bases; they poison sparse solve cost. */
+#define RALPH_SPIKE_DENSE_REJECT_M_MIN 300
+#define RALPH_SPIKE_DENSE_BASE_RATIO 0.70
+#define RALPH_SPIKE_DENSE_AGED_RATIO 0.55
+/* Early reinversion when average stored spike density drifts too high. */
+#define RALPH_SPIKE_AVG_REFACTOR_RATIO 0.45
+#define RALPH_SPIKE_AVG_REFACTOR_AGED_RATIO 0.35
 
 /* Forward declarations for reach computation (used by sparse solves) */
 static void compute_reach_L(const LUFactorization *lu,
@@ -37,6 +44,26 @@ static void lu_set_failure(LUFactorization *lu, int reason) {
     if (lu) {
         lu->last_failure_reason = reason;
     }
+}
+
+static int lu_update_is_aged(const LUFactorization *lu) {
+    if (!lu) return 0;
+    if (lu->max_updates > 0) {
+        return (2 * lu->num_updates >= lu->max_updates);
+    }
+    return lu->num_updates >= 40;
+}
+
+static double lu_dense_spike_reject_ratio(const LUFactorization *lu) {
+    double ratio = RALPH_SPIKE_DENSE_BASE_RATIO;
+    if (!lu) return ratio;
+
+    if (lu_update_is_aged(lu) ||
+        lu->cond_estimate > 1e7 ||
+        lu->growth_factor > 1e3) {
+        ratio = RALPH_SPIKE_DENSE_AGED_RATIO;
+    }
+    return ratio;
 }
 
 static double lu_update_pivot_ratio_threshold(const LUFactorization *lu) {
@@ -2426,6 +2453,17 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     }
     spike[step_pos] = diag_val;  /* For eta-file compatibility */
 
+    /* Dense spike guard: very dense updates make every future FTRAN/BTRAN expensive.
+     * Fail the update early and refactorize to preserve sparse solve behavior. */
+    if (lu->use_ft_updates && m >= RALPH_SPIKE_DENSE_REJECT_M_MIN && m > 1) {
+        double spike_ratio = (double)off_diag_nnz / (double)(m - 1);
+        double reject_ratio = lu_dense_spike_reject_ratio(lu);
+        if (spike_ratio > reject_ratio) {
+            lu_set_failure(lu, LU_FAIL_SPIKE_POOL_FULL);
+            return -1;
+        }
+    }
+
     /* Store as Forrest-Tomlin spike or eta-file update */
     if (lu->use_ft_updates) {
         /* Check if pool has room for this spike */
@@ -2516,6 +2554,20 @@ int lu_needs_refactorization(const LUFactorization *lu) {
             ? lu->growth_refactor_threshold
             : RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
         if (lu->growth_factor > growth_threshold) return 1;
+    }
+
+    /* Reinvert when average stored FT spike density is persistently high.
+     * This targets high per-iteration solve cost even before hard pool limits hit. */
+    if (lu->use_ft_updates &&
+        lu->m >= RALPH_SPIKE_DENSE_REJECT_M_MIN &&
+        lu->ft_num_updates >= 8 &&
+        lu->spike_pool_used > 0) {
+        double avg_spike_ratio = ((double)lu->spike_pool_used /
+                                  (double)lu->ft_num_updates) / (double)lu->m;
+        double max_avg_ratio = lu_update_is_aged(lu)
+            ? RALPH_SPIKE_AVG_REFACTOR_AGED_RATIO
+            : RALPH_SPIKE_AVG_REFACTOR_RATIO;
+        if (avg_spike_ratio > max_avg_ratio) return 1;
     }
 
     /* T3.2: Condition-based early refactorization.
