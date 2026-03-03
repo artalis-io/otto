@@ -26,6 +26,13 @@ void dual_cadence_intervals_for_test(int requested_base,
                                      int requested_rc,
                                      int *base_out,
                                      int *rc_out);
+void dual_reinvert_hard_trigger_safety_step_for_test(int iter,
+                                                     int hard_trigger_total,
+                                                     int *last_total_io,
+                                                     int *last_iter_io,
+                                                     int *burst_io,
+                                                     int *demoted_io);
+int dual_reinvert_effective_mode_for_test(int configured_mode, int demoted);
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -291,6 +298,66 @@ static void test_dual_cadence_clamp(void) {
     ASSERT_TRUE(rc == 10, "dual cadence clamps tiny rc interval");
 }
 
+static void test_dual_reinvert_hard_trigger_demotion(void) {
+    int last_total = 0;
+    int last_iter = -1;
+    int burst = 0;
+    int demoted = 0;
+
+    for (int k = 0; k < 5; k++) {
+        dual_reinvert_hard_trigger_safety_step_for_test(k * 10,
+                                                        k + 1,
+                                                        &last_total,
+                                                        &last_iter,
+                                                        &burst,
+                                                        &demoted);
+    }
+    ASSERT_TRUE(demoted == 0, "dual reinvert safety keeps control_all before burst cap");
+
+    dual_reinvert_hard_trigger_safety_step_for_test(50,
+                                                    6,
+                                                    &last_total,
+                                                    &last_iter,
+                                                    &burst,
+                                                    &demoted);
+    ASSERT_TRUE(demoted == 1, "dual reinvert safety demotes control_all on hard-trigger burst");
+    ASSERT_TRUE(burst >= 6, "dual reinvert safety tracks hard-trigger burst depth");
+}
+
+static void test_dual_reinvert_hard_trigger_gap_resets_burst(void) {
+    int last_total = 0;
+    int last_iter = -1;
+    int burst = 0;
+    int demoted = 0;
+
+    dual_reinvert_hard_trigger_safety_step_for_test(0,
+                                                    1,
+                                                    &last_total,
+                                                    &last_iter,
+                                                    &burst,
+                                                    &demoted);
+    dual_reinvert_hard_trigger_safety_step_for_test(90,
+                                                    2,
+                                                    &last_total,
+                                                    &last_iter,
+                                                    &burst,
+                                                    &demoted);
+    ASSERT_TRUE(demoted == 0, "dual reinvert safety does not demote on sparse hard-trigger events");
+    ASSERT_TRUE(burst == 1, "dual reinvert safety resets burst after long gap");
+}
+
+static void test_dual_reinvert_effective_mode_mapping(void) {
+    ASSERT_TRUE(dual_reinvert_effective_mode_for_test(LP_REINVERT_MODE_CONTROL_ALL, 0) ==
+                    LP_REINVERT_MODE_CONTROL_ALL,
+                "dual reinvert effective mode keeps control_all when not demoted");
+    ASSERT_TRUE(dual_reinvert_effective_mode_for_test(LP_REINVERT_MODE_CONTROL_ALL, 1) ==
+                    LP_REINVERT_MODE_SHADOW,
+                "dual reinvert effective mode demotes control_all to shadow");
+    ASSERT_TRUE(dual_reinvert_effective_mode_for_test(LP_REINVERT_MODE_CONTROL_PHASE1, 1) ==
+                    LP_REINVERT_MODE_CONTROL_PHASE1,
+                "dual reinvert effective mode keeps non-control_all modes unchanged");
+}
+
 int main(void) {
     printf("=== Dual Ratio Flip Tests ===\n");
     test_flip_mode_applies_flip_only_step();
@@ -302,6 +369,9 @@ int main(void) {
     test_dual_aorn_scan_direction();
     test_dual_aorn_kernel_selection();
     test_dual_cadence_clamp();
+    test_dual_reinvert_hard_trigger_demotion();
+    test_dual_reinvert_hard_trigger_gap_resets_burst();
+    test_dual_reinvert_effective_mode_mapping();
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
 }

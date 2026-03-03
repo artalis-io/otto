@@ -383,6 +383,9 @@ typedef struct {
     double soft_lu_iter_cost_ewma_phase2;
     int basis_governor_mode;
     int reinvert_controller_mode;
+    int reinvert_dual_control_demoted;
+    int reinvert_dual_control_demotions;
+    int reinvert_dual_hard_trigger_burst;
     int shadow_refactor_yes_phase1;
     int shadow_refactor_yes_phase2;
     int shadow_refactor_yes_dual;
@@ -1256,6 +1259,9 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.soft_lu_iter_cost_ewma_phase2 = solver_tel.soft_lu_iter_cost_ewma_phase2;
             result.basis_governor_mode = solver_tel.basis_governor_mode;
             result.reinvert_controller_mode = solver_tel.reinvert_controller_mode;
+            result.reinvert_dual_control_demoted = solver_tel.reinvert_dual_control_demoted;
+            result.reinvert_dual_control_demotions = solver_tel.reinvert_dual_control_demotions;
+            result.reinvert_dual_hard_trigger_burst = solver_tel.reinvert_dual_hard_trigger_burst;
             result.shadow_refactor_yes_phase1 = solver_tel.shadow_refactor_yes_phase1;
             result.shadow_refactor_yes_phase2 = solver_tel.shadow_refactor_yes_phase2;
             result.shadow_refactor_yes_dual = solver_tel.shadow_refactor_yes_dual;
@@ -2649,6 +2655,12 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->basis_governor_mode);
     fprintf(out, "    \"reinvert_controller_mode\": %d,\n",
             ralph->reinvert_controller_mode);
+    fprintf(out, "    \"reinvert_dual_control_demoted\": %d,\n",
+            ralph->reinvert_dual_control_demoted);
+    fprintf(out, "    \"reinvert_dual_control_demotions\": %d,\n",
+            ralph->reinvert_dual_control_demotions);
+    fprintf(out, "    \"reinvert_dual_hard_trigger_burst\": %d,\n",
+            ralph->reinvert_dual_hard_trigger_burst);
     fprintf(out, "    \"shadow_refactor_yes_phase1\": %d,\n",
             ralph->shadow_refactor_yes_phase1);
     fprintf(out, "    \"shadow_refactor_yes_phase2\": %d,\n",
