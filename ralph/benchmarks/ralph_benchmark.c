@@ -569,6 +569,7 @@ typedef struct {
     int lu_supernode; /* 0=off, 1=enable supernodal LU */
     int lp_basis_governor_mode; /* 0=off, 1=shadow, 2=control_phase2 */
     int lp_reinvert_controller_mode; /* 0=off, 1=shadow, 2=control_phase1, 3=control_all */
+    int random_seed; /* deterministic LP anti-cycling perturbation seed */
 
     /* Output */
     char output_dir[MAX_PATH];
@@ -893,6 +894,7 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                                      int glpk_smcp_ratio, int glpk_smcp_flip,
                                      int lu_supernode, int lp_basis_governor_mode,
                                      int lp_reinvert_controller_mode,
+                                     int random_seed,
                                      int *out_num_vars, int *out_num_cons, int *out_nnz,
                                      int *out_is_mip) {
     SolveResult result = {0};
@@ -946,6 +948,7 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     ralph_test_set_int_param(model, "presolve", 1);
     ralph_test_set_int_param(model, "verify", 1);
     ralph_test_set_int_param(model, "method", method);
+    ralph_test_set_int_param(model, "random_seed", random_seed);
     ralph_test_set_int_param(model, "lp_basis_governor_mode", lp_basis_governor_mode);
     ralph_test_set_int_param(model, "lp_reinvert_controller_mode", lp_reinvert_controller_mode);
     if (pricing >= 0) {
@@ -2964,6 +2967,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
                                           opts->lu_supernode,
                                           opts->lp_basis_governor_mode,
                                           opts->lp_reinvert_controller_mode,
+                                          opts->random_seed,
                                           &num_vars, &num_cons, &nnz, &is_mip);
 
     /* Validate if both solved optimally */
@@ -3034,7 +3038,8 @@ static int test_solve_one(const char *path, const char *name,
                            int timeout_sec, int method, int pricing,
                            int glpk_smcp_ratio, int glpk_smcp_flip,
                            int lu_supernode, int lp_basis_governor_mode,
-                           int lp_reinvert_controller_mode) {
+                           int lp_reinvert_controller_mode,
+                           int random_seed) {
     /* Use a pipe to pass results from child to parent */
     int pipefd[2];
     if (pipe(pipefd) < 0) {
@@ -3064,6 +3069,7 @@ static int test_solve_one(const char *path, const char *name,
                                                lu_supernode,
                                                lp_basis_governor_mode,
                                                lp_reinvert_controller_mode,
+                                               random_seed,
                                                &num_vars, &num_cons, &nnz,
                                                &is_mip);
 
@@ -3180,7 +3186,8 @@ static int run_test_mode(const Options *opts) {
                                      opts->glpk_smcp_flip,
                                      opts->lu_supernode,
                                      opts->lp_basis_governor_mode,
-                                     opts->lp_reinvert_controller_mode);
+                                     opts->lp_reinvert_controller_mode,
+                                     opts->random_seed);
         switch (result) {
             case 0: pass_count++; break;
             case 1: fail_count++; break;
@@ -3281,6 +3288,7 @@ static void print_help(const char *prog) {
     printf("  --noflip                      Disable dual bound flipping (GLPK-compat flip=0)\n");
     printf("  --lp-basis-governor-mode <N>  Basis governor: 0=off, 1=shadow, 2=control_phase2\n");
     printf("  --lp-reinvert-controller-mode <N> Reinvert controller: 0=off, 1=shadow, 2=control_phase1, 3=control_all\n");
+    printf("  --random-seed <N>             Deterministic LP anti-cycling seed (default: 0)\n");
     printf("  --lu-supernode                Enable supernodal LU factorization\n");
     printf("\n");
     printf("Problem Filtering:\n");
@@ -3332,6 +3340,7 @@ static int parse_args(int argc, char **argv, Options *opts) {
     opts->glpk_smcp_ratio = -1;
     opts->glpk_smcp_flip = -1;
     opts->lp_reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
+    opts->random_seed = 0;
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -3415,6 +3424,13 @@ static int parse_args(int argc, char **argv, Options *opts) {
                 fprintf(stderr,
                         "Invalid --lp-reinvert-controller-mode: %d (expected 0..3)\n",
                         opts->lp_reinvert_controller_mode);
+                return -1;
+            }
+        } else if (strcmp(arg, "--random-seed") == 0 && i + 1 < argc) {
+            opts->random_seed = atoi(argv[++i]);
+            if (opts->random_seed < 0) {
+                fprintf(stderr, "Invalid --random-seed: %d (expected >= 0)\n",
+                        opts->random_seed);
                 return -1;
             }
         } else if (strcmp(arg, "--lu-supernode") == 0) {

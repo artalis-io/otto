@@ -200,10 +200,12 @@ static int dual_governor_refactor_decision(
     int perturb_attempts) {
     int lu_refactor_needed;
     int quality_refactor;
+    int quality_refactor_nominal;
     int need_refactor;
     int shadow_refactor;
     int governed_refactor;
     int reinvert_mode;
+    int reinvert_active = 0;
     LPReinvertControllerSignals reinvert_signals;
     LPReinvertControllerDecision reinvert_shadow;
     int reinvert_suggested_refactor;
@@ -223,15 +225,79 @@ static int dual_governor_refactor_decision(
                                                              degenerate_count,
                                                              stall_count,
                                                              perturb_attempts);
-    need_refactor = (lu_refactor_needed || quality_refactor) ? 1 : 0;
+    quality_refactor_nominal = quality_refactor;
 
+    reinvert_mode = solver->policy.reinvert_controller_mode;
+    if (!lp_reinvert_controller_mode_is_valid(reinvert_mode)) {
+        reinvert_mode = LP_REINVERT_MODE_SHADOW;
+    }
+    if (reinvert_mode != LP_REINVERT_MODE_OFF) {
+        reinvert_active = 1;
+        reinvert_state = &solver->policy.reinvert_state_dual;
+        dual_hot_ms = solver->telemetry.perf_ratio_ms +
+                      solver->telemetry.perf_pivot_ms +
+                      solver->telemetry.perf_compute_solution_ms +
+                      solver->telemetry.perf_compute_rc_ms;
+        dual_iter_hot_ms = dual_hot_ms - solver->policy.reinvert_dual_last_hot_ms;
+        solver->policy.reinvert_dual_last_hot_ms = dual_hot_ms;
+        lp_reinvert_controller_state_record_iter_cost(reinvert_state, dual_iter_hot_ms);
+        lp_reinvert_controller_state_record_update_age_ratio(reinvert_state,
+                                                             tab->lu->num_updates,
+                                                             tab->lu->max_updates);
+        ftran_density = dual_average_solve_density(solver->telemetry.perf_ftran_sol_nnz_total,
+                                                   solver->telemetry.perf_ftran_nnz_samples,
+                                                   tab->m);
+        btran_density = dual_average_solve_density(solver->telemetry.perf_btran_sol_nnz_total,
+                                                   solver->telemetry.perf_btran_nnz_samples,
+                                                   tab->m);
+        lp_reinvert_controller_state_record_solve_density(reinvert_state,
+                                                          ftran_density,
+                                                          btran_density);
+
+        reinvert_signals.phase = 2;
+        reinvert_signals.iter = iter;
+        reinvert_signals.m = tab->m;
+        reinvert_signals.num_updates = tab->lu->num_updates;
+        reinvert_signals.max_updates = tab->lu->max_updates;
+        reinvert_signals.periodic_due = quality_refactor_nominal ? 1 : 0;
+        reinvert_signals.min_update_age = (base_interval > 0) ? (base_interval / 2) : 8;
+        reinvert_signals.cooldown_updates = 0;
+        reinvert_signals.hard_lu_trigger = lu_refactor_needed ? 1 : 0;
+        reinvert_signals.soft_lu_trigger = 0;
+        reinvert_signals.ftran_density = ftran_density;
+        reinvert_signals.btran_density = btran_density;
+
+        reinvert_shadow = lp_reinvert_controller_decide(reinvert_state, &reinvert_signals);
+        if (reinvert_mode == LP_REINVERT_MODE_CONTROL_ALL && !lu_refactor_needed) {
+            switch ((LPReinvertDecision)reinvert_shadow.decision) {
+                case LP_REINVERT_DECISION_FORCE:
+                    quality_refactor = 1;
+                    break;
+                case LP_REINVERT_DECISION_DEFER:
+                    quality_refactor = 0;
+                    break;
+                case LP_REINVERT_DECISION_ALLOW:
+                default:
+                    quality_refactor = quality_refactor_nominal ? 1 : 0;
+                    break;
+            }
+            quality_refactor_nominal = quality_refactor;
+        }
+        reinvert_suggested_refactor =
+            (reinvert_shadow.decision == LP_REINVERT_DECISION_FORCE) ||
+            (reinvert_shadow.decision == LP_REINVERT_DECISION_ALLOW &&
+             quality_refactor_nominal);
+        lp_reinvert_controller_state_apply_decision(reinvert_state, &reinvert_shadow);
+    }
+
+    need_refactor = (lu_refactor_needed || quality_refactor) ? 1 : 0;
     shadow_refactor = lp_basis_governor_shadow_decide(LP_BASIS_GOV_PHASE_DUAL,
                                                       lu_refactor_needed,
-                                                      quality_refactor);
+                                                      quality_refactor_nominal);
     governed_refactor = lp_basis_governor_decide_refactor(&solver->policy.basis_governor,
                                                            LP_BASIS_GOV_PHASE_DUAL,
                                                            lu_refactor_needed,
-                                                           quality_refactor,
+                                                           quality_refactor_nominal,
                                                            need_refactor);
     if (solver->telemetry_enabled) {
         lp_basis_governor_observe_refactor(&solver->policy.basis_governor,
@@ -239,61 +305,14 @@ static int dual_governor_refactor_decision(
                                            shadow_refactor,
                                            governed_refactor);
     }
-
-    reinvert_mode = solver->policy.reinvert_controller_mode;
-    if (!lp_reinvert_controller_mode_is_valid(reinvert_mode)) {
-        reinvert_mode = LP_REINVERT_MODE_SHADOW;
+    if (reinvert_active) {
+        lp_telemetry_record_reinvert_shadow(solver,
+                                            0,
+                                            reinvert_shadow.decision,
+                                            reinvert_shadow.reason,
+                                            reinvert_suggested_refactor,
+                                            governed_refactor);
     }
-    if (reinvert_mode == LP_REINVERT_MODE_OFF) {
-        return governed_refactor;
-    }
-
-    reinvert_state = &solver->policy.reinvert_state_dual;
-    dual_hot_ms = solver->telemetry.perf_ratio_ms +
-                  solver->telemetry.perf_pivot_ms +
-                  solver->telemetry.perf_compute_solution_ms +
-                  solver->telemetry.perf_compute_rc_ms;
-    dual_iter_hot_ms = dual_hot_ms - solver->policy.reinvert_dual_last_hot_ms;
-    solver->policy.reinvert_dual_last_hot_ms = dual_hot_ms;
-    lp_reinvert_controller_state_record_iter_cost(reinvert_state, dual_iter_hot_ms);
-    lp_reinvert_controller_state_record_update_age_ratio(reinvert_state,
-                                                         tab->lu->num_updates,
-                                                         tab->lu->max_updates);
-    ftran_density = dual_average_solve_density(solver->telemetry.perf_ftran_sol_nnz_total,
-                                               solver->telemetry.perf_ftran_nnz_samples,
-                                               tab->m);
-    btran_density = dual_average_solve_density(solver->telemetry.perf_btran_sol_nnz_total,
-                                               solver->telemetry.perf_btran_nnz_samples,
-                                               tab->m);
-    lp_reinvert_controller_state_record_solve_density(reinvert_state,
-                                                      ftran_density,
-                                                      btran_density);
-
-    reinvert_signals.phase = 2;
-    reinvert_signals.iter = iter;
-    reinvert_signals.m = tab->m;
-    reinvert_signals.num_updates = tab->lu->num_updates;
-    reinvert_signals.max_updates = tab->lu->max_updates;
-    reinvert_signals.periodic_due = quality_refactor ? 1 : 0;
-    reinvert_signals.min_update_age = (base_interval > 0) ? (base_interval / 2) : 8;
-    reinvert_signals.cooldown_updates = 0;
-    reinvert_signals.hard_lu_trigger = lu_refactor_needed ? 1 : 0;
-    reinvert_signals.soft_lu_trigger = 0;
-    reinvert_signals.ftran_density = ftran_density;
-    reinvert_signals.btran_density = btran_density;
-
-    reinvert_shadow = lp_reinvert_controller_decide(reinvert_state, &reinvert_signals);
-    reinvert_suggested_refactor =
-        (reinvert_shadow.decision == LP_REINVERT_DECISION_FORCE) ||
-        (reinvert_shadow.decision == LP_REINVERT_DECISION_ALLOW &&
-         reinvert_signals.periodic_due);
-    lp_telemetry_record_reinvert_shadow(solver,
-                                        0,
-                                        reinvert_shadow.decision,
-                                        reinvert_shadow.reason,
-                                        reinvert_suggested_refactor,
-                                        governed_refactor);
-    lp_reinvert_controller_state_apply_decision(reinvert_state, &reinvert_shadow);
 
     return governed_refactor;
 }

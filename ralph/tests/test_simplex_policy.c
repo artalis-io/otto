@@ -2439,8 +2439,26 @@ int main(void) {
             .expected_refactor = 1
         },
         {
-            .name = "reinvert control does not affect phase2 in phase4 rollout",
+            .name = "reinvert control_all applies defer on phase2 periodic",
             .mode = LP_REINVERT_MODE_CONTROL_ALL,
+            .phase = 2,
+            .hard_lu_trigger = 0,
+            .periodic_due = 1,
+            .decision = LP_REINVERT_DECISION_DEFER,
+            .expected_refactor = 0
+        },
+        {
+            .name = "reinvert control_all applies force on phase2 periodic",
+            .mode = LP_REINVERT_MODE_CONTROL_ALL,
+            .phase = 2,
+            .hard_lu_trigger = 0,
+            .periodic_due = 0,
+            .decision = LP_REINVERT_DECISION_FORCE,
+            .expected_refactor = 1
+        },
+        {
+            .name = "reinvert control_phase1 leaves phase2 cadence unchanged",
+            .mode = LP_REINVERT_MODE_CONTROL_PHASE1,
             .phase = 2,
             .hard_lu_trigger = 0,
             .periodic_due = 1,

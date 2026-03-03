@@ -750,9 +750,10 @@ static int reinvert_controller_collect_shadow(const SimplexSolver *solver) {
 static int reinvert_controller_controls_periodic_phase(const SimplexSolver *solver,
                                                        int phase) {
     int mode = reinvert_controller_mode_get(solver);
-    if (phase != 1) return 0;
-    return mode == LP_REINVERT_MODE_CONTROL_PHASE1 ||
-           mode == LP_REINVERT_MODE_CONTROL_ALL;
+    if (mode == LP_REINVERT_MODE_CONTROL_ALL) {
+        return phase == 1 || phase == 2;
+    }
+    return (mode == LP_REINVERT_MODE_CONTROL_PHASE1 && phase == 1);
 }
 
 static int reinvert_periodic_apply_decision(int phase,
@@ -760,8 +761,9 @@ static int reinvert_periodic_apply_decision(int phase,
                                             int periodic_due,
                                             int decision,
                                             int control_enabled) {
+    (void)phase;
     if (hard_lu_trigger) return periodic_due ? 1 : 0;
-    if (!control_enabled || phase != 1) return periodic_due ? 1 : 0;
+    if (!control_enabled) return periodic_due ? 1 : 0;
     switch ((LPReinvertDecision)decision) {
         case LP_REINVERT_DECISION_FORCE:
             return 1;
@@ -778,10 +780,12 @@ int simplex_reinvert_periodic_control_for_test(int mode,
                                                int hard_lu_trigger,
                                                int periodic_due,
                                                int decision) {
-    int control_enabled =
-        (phase == 1) &&
-        (mode == LP_REINVERT_MODE_CONTROL_PHASE1 ||
-         mode == LP_REINVERT_MODE_CONTROL_ALL);
+    int control_enabled = 0;
+    if (mode == LP_REINVERT_MODE_CONTROL_ALL) {
+        control_enabled = (phase == 1 || phase == 2);
+    } else if (mode == LP_REINVERT_MODE_CONTROL_PHASE1) {
+        control_enabled = (phase == 1);
+    }
     return reinvert_periodic_apply_decision(phase,
                                             hard_lu_trigger,
                                             periodic_due,
@@ -8768,6 +8772,9 @@ static int simplex_phase2(SimplexSolver *solver) {
         int needs_refactor = lu_refactor_needed;
         int periodic_refactor = 0;
         int periodic_refactor_nominal = 0;
+        int reinvert_periodic_candidate = 0;
+        int reinvert_control_periodic =
+            reinvert_controller_controls_periodic_phase(solver, 2);
         int cooldown_eligible = 0;
         double effective_policy_pressure = 0.0;
         LPPeriodicRefactorPolicy periodic_policy = {0, 0, 0.0, 0.0};
@@ -8847,68 +8854,86 @@ static int simplex_phase2(SimplexSolver *solver) {
                                                              use_bland,
                                                              degenerate_count);
             periodic_refactor_nominal = periodic_refactor;
-            if (periodic_refactor &&
-                cooldown_eligible &&
-                periodic_policy_cooldown > 0) {
-                periodic_refactor = 0;
-            }
-            if (periodic_refactor) {
-                if (solver->policy.periodic_cost_gate_enabled) {
-                    int cap_blocked = 0;
-                    int next_consecutive = 0;
-                    int gate_reason = LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE;
-                    int should_defer = simplex_periodic_cost_defer_plan_for_test(
-                        2,
-                        tab->m,
-                        use_bland,
-                        degenerate_count,
-                        tab->lu->num_updates,
-                        tab->lu->max_updates,
-                        tab->lu->spike_pool_used,
-                        tab->lu->spike_pool_capacity,
-                        tab->lu->cond_estimate,
-                        tab->lu->growth_factor,
-                        soft_lu_refactor_cost_ewma(solver, 2),
-                        soft_lu_iter_cost_ewma(solver, 2),
-                        periodic_cost_refactor_samples(solver, 2),
-                        periodic_cost_iter_samples(solver, 2),
-                        periodic_cost_consecutive_defers(solver, 2),
-                        &gate_reason,
-                        NULL,
-                        &cap_blocked,
-                        &next_consecutive);
-                    periodic_cost_record_gate_reason(
-                        solver, 2, (LPPeriodicCostDampenReason)gate_reason);
-                    if (should_defer) {
-                        periodic_refactor = 0;
-                        periodic_cost_record_defer(solver, 2);
-                        periodic_cost_set_consecutive_defers(solver, 2, next_consecutive);
-                        if (solver->verbose >= 2) {
-                            LP_LOG_STDERR("[primal_simplex] Deferred policy periodic refactor by cost gate (updates=%d/%d, degen=%d, iter_ewma=%.3fms, ref_ewma=%.3fms)\n",
-                                    tab->lu->num_updates,
-                                    tab->lu->max_updates,
-                                    degenerate_count,
-                                    soft_lu_iter_cost_ewma(solver, 2),
-                                    soft_lu_refactor_cost_ewma(solver, 2));
+            reinvert_periodic_candidate = periodic_refactor_nominal;
+            reinvert_shadow_prepare_phase(solver,
+                                          tab,
+                                          2,
+                                          iter,
+                                          &lu_health_decision,
+                                          periodic_refactor_nominal,
+                                          periodic_policy.min_update_age,
+                                          periodic_policy_cooldown,
+                                          reinvert_control_periodic,
+                                          &reinvert_periodic_candidate,
+                                          &reinvert_shadow_eval);
+            if (reinvert_control_periodic) {
+                periodic_refactor = reinvert_periodic_candidate;
+                periodic_refactor_nominal = periodic_refactor;
+                periodic_cost_reset_defer_streak(solver, 2);
+            } else {
+                if (periodic_refactor &&
+                    cooldown_eligible &&
+                    periodic_policy_cooldown > 0) {
+                    periodic_refactor = 0;
+                }
+                if (periodic_refactor) {
+                    if (solver->policy.periodic_cost_gate_enabled) {
+                        int cap_blocked = 0;
+                        int next_consecutive = 0;
+                        int gate_reason = LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE;
+                        int should_defer = simplex_periodic_cost_defer_plan_for_test(
+                            2,
+                            tab->m,
+                            use_bland,
+                            degenerate_count,
+                            tab->lu->num_updates,
+                            tab->lu->max_updates,
+                            tab->lu->spike_pool_used,
+                            tab->lu->spike_pool_capacity,
+                            tab->lu->cond_estimate,
+                            tab->lu->growth_factor,
+                            soft_lu_refactor_cost_ewma(solver, 2),
+                            soft_lu_iter_cost_ewma(solver, 2),
+                            periodic_cost_refactor_samples(solver, 2),
+                            periodic_cost_iter_samples(solver, 2),
+                            periodic_cost_consecutive_defers(solver, 2),
+                            &gate_reason,
+                            NULL,
+                            &cap_blocked,
+                            &next_consecutive);
+                        periodic_cost_record_gate_reason(
+                            solver, 2, (LPPeriodicCostDampenReason)gate_reason);
+                        if (should_defer) {
+                            periodic_refactor = 0;
+                            periodic_cost_record_defer(solver, 2);
+                            periodic_cost_set_consecutive_defers(solver, 2, next_consecutive);
+                            if (solver->verbose >= 2) {
+                                LP_LOG_STDERR("[primal_simplex] Deferred policy periodic refactor by cost gate (updates=%d/%d, degen=%d, iter_ewma=%.3fms, ref_ewma=%.3fms)\n",
+                                        tab->lu->num_updates,
+                                        tab->lu->max_updates,
+                                        degenerate_count,
+                                        soft_lu_iter_cost_ewma(solver, 2),
+                                        soft_lu_refactor_cost_ewma(solver, 2));
+                            }
+                        } else {
+                            periodic_cost_reset_defer_streak(solver, 2);
+                            if (cap_blocked) {
+                                periodic_cost_record_cap_forced(solver, 2);
+                                if (solver->verbose >= 2) {
+                                    LP_LOG_STDERR("[primal_simplex] Policy periodic defer cap reached; forcing periodic policy refactor (updates=%d/%d, degen=%d)\n",
+                                            tab->lu->num_updates,
+                                            tab->lu->max_updates,
+                                            degenerate_count);
+                                }
+                            } else if (solver->verbose >= 3) {
+                                LP_LOG_STDERR("[primal_simplex] Policy periodic cost gate blocked defer: %s\n",
+                                        lp_refactor_policy_periodic_cost_dampen_reason_string(
+                                            (LPPeriodicCostDampenReason)gate_reason));
+                            }
                         }
                     } else {
                         periodic_cost_reset_defer_streak(solver, 2);
-                        if (cap_blocked) {
-                            periodic_cost_record_cap_forced(solver, 2);
-                            if (solver->verbose >= 2) {
-                                LP_LOG_STDERR("[primal_simplex] Policy periodic defer cap reached; forcing periodic policy refactor (updates=%d/%d, degen=%d)\n",
-                                        tab->lu->num_updates,
-                                        tab->lu->max_updates,
-                                        degenerate_count);
-                            }
-                        } else if (solver->verbose >= 3) {
-                            LP_LOG_STDERR("[primal_simplex] Policy periodic cost gate blocked defer: %s\n",
-                                    lp_refactor_policy_periodic_cost_dampen_reason_string(
-                                        (LPPeriodicCostDampenReason)gate_reason));
-                        }
                     }
-                } else {
-                    periodic_cost_reset_defer_streak(solver, 2);
                 }
             }
             needs_refactor = periodic_refactor;
@@ -8947,20 +8972,6 @@ static int simplex_phase2(SimplexSolver *solver) {
                     governed_refactor);
             }
             needs_refactor = governed_refactor;
-        }
-        if (!lu_refactor_needed) {
-            int periodic_shadow_due = periodic_refactor_nominal;
-            reinvert_shadow_prepare_phase(solver,
-                                          tab,
-                                          2,
-                                          iter,
-                                          &lu_health_decision,
-                                          periodic_shadow_due,
-                                          periodic_policy.min_update_age,
-                                          periodic_policy_cooldown,
-                                          0,
-                                          NULL,
-                                          &reinvert_shadow_eval);
         }
         reinvert_shadow_finalize_phase(solver, 2, &reinvert_shadow_eval, needs_refactor);
 
