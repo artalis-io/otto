@@ -81,9 +81,9 @@ Artifact validation requirements:
 
 ### Phase 3: Perturbation State Machine
 
-- [ ] Implement perturbation state machine with explicit transitions.
-- [ ] Add state-transition unit tests and degeneracy regression checks.
-- [ ] Run phase gate and mark phase complete in tracker.
+- [x] Implement perturbation state machine with explicit transitions.
+- [x] Add state-transition unit tests and degeneracy regression checks.
+- [x] Run phase gate and mark phase complete in tracker.
 
 ## Notes
 
