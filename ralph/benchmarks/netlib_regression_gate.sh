@@ -14,6 +14,7 @@ METHOD=""
 OBJ_REL_TOL=""
 TIME_MULT=""
 RANDOM_SEED=""
+LP_REINVERT_CONTROLLER_MODE=""
 REQUIRED_PASS_TIMEOUT_RETRIES=""
 REQUIRED_PASS_TIMEOUT_NEAR_CAP_RATIO=""
 REQUIRED_PASS_TIMEOUT_MIN_MS=""
@@ -38,6 +39,8 @@ Options:
   --obj-rel-tol <tol>      --obj-rel-tol passed to ralph-benchmark
   --time-mult <n>          --time-mult passed to ralph-benchmark
   --random-seed <n>        --random-seed passed to ralph-benchmark
+  --lp-reinvert-controller-mode <n>
+                            --lp-reinvert-controller-mode passed to ralph-benchmark
   --required-pass-timeout-retries <n>
                             Retry count for required-pass near-cap timeouts (default: 1)
   --required-pass-timeout-near-cap-ratio <r>
@@ -90,6 +93,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --random-seed)
             RANDOM_SEED="$2"
+            shift 2
+            ;;
+        --lp-reinvert-controller-mode)
+            LP_REINVERT_CONTROLLER_MODE="$2"
             shift 2
             ;;
         --required-pass-timeout-retries)
@@ -179,6 +186,11 @@ if [[ -z "$TIME_MULT" ]]; then
 fi
 if [[ -z "$RANDOM_SEED" ]]; then
     RANDOM_SEED="$(jq -r '.defaults.random_seed // 0' "$BASELINE_FILE")"
+fi
+if [[ -z "$LP_REINVERT_CONTROLLER_MODE" ]]; then
+    LP_REINVERT_CONTROLLER_MODE="$(
+        jq -r '.defaults.lp_reinvert_controller_mode // 1' "$BASELINE_FILE"
+    )"
 fi
 if [[ -z "$REQUIRED_PASS_TIMEOUT_RETRIES" ]]; then
     REQUIRED_PASS_TIMEOUT_RETRIES="$(
@@ -370,6 +382,7 @@ fi
 echo "  method:   $METHOD"
 echo "  time-mult:$TIME_MULT"
 echo "  seed:     $RANDOM_SEED"
+echo "  reinvert: $LP_REINVERT_CONTROLLER_MODE"
 if [[ -n "$OBJ_REL_TOL" ]]; then
     echo "  obj-tol:  $OBJ_REL_TOL"
 fi
@@ -413,6 +426,7 @@ while IFS= read -r f; do
         --hard-cap "$HARD_CAP_SEC"
         --time-mult "$TIME_MULT"
         --random-seed "$RANDOM_SEED"
+        --lp-reinvert-controller-mode "$LP_REINVERT_CONTROLLER_MODE"
         --method "$run_method"
     )
     if [[ -n "$run_obj_rel_tol" ]]; then
@@ -492,6 +506,9 @@ actual_sol="$OUTDIR/actual.solution_invalid.txt"
 actual_dense="$OUTDIR/actual.dense_fallback.txt"
 solved_jsons="$OUTDIR/solved.jsons.txt"
 phase1_no_pivot_ladder_tsv="$OUTDIR/phase1_no_pivot_ladder.tsv"
+update_recovery_hotspots_tsv="$OUTDIR/update_recovery_hotspots.tsv"
+update_recovery_hotspots_sorted_tsv="$OUTDIR/update_recovery_hotspots.sorted.tsv"
+update_recovery_hotspots_top_tsv="$OUTDIR/update_recovery_hotspots.top10.tsv"
 
 : > "$actual_timeout"
 : > "$actual_cmd_fail"
@@ -501,6 +518,7 @@ phase1_no_pivot_ladder_tsv="$OUTDIR/phase1_no_pivot_ladder.tsv"
 : > "$actual_dense"
 : > "$solved_jsons"
 printf "problem\tno_progress_events\tretry_defers\tdual_rescue_attempts\tdual_rescue_successes\tdual_rescue_failures\tforced_refactors\tevents_ratio_breakdown\tevents_dir_skip\tevents_pivot_fail\tretry_ratio_breakdown\tretry_dir_skip\tretry_pivot_fail\tdual_attempts_ratio_breakdown\tdual_attempts_dir_skip\tdual_attempts_pivot_fail\tforced_ratio_breakdown\tforced_dir_skip\tforced_pivot_fail\trescue_guard_cooldown_blocks\trescue_guard_fail_cap_forces\n" > "$phase1_no_pivot_ladder_tsv"
+printf "problem\tstatus\tupdate_recovery_refactors\ttotal_refactors\tupdate_recovery_share\ttime_ms\titerations\tms_per_iter\tpivot_ms\trefactor_ms\n" > "$update_recovery_hotspots_tsv"
 
 while IFS=$'\t' read -r name ec _retry_count; do
     base="${name%.mps}"
@@ -592,6 +610,27 @@ while IFS=$'\t' read -r name ec _retry_count; do
         "${phase1_no_pivot_ladder_rescue_guard_cooldown_blocks:-0}" \
         "${phase1_no_pivot_ladder_rescue_guard_fail_cap_forces:-0}" \
         >> "$phase1_no_pivot_ladder_tsv"
+
+    update_row="$(jq -r '
+        [
+          (.problem.name // ""),
+          (.ralph.status // "unknown"),
+          (.refactor.reason_update_recovery // 0),
+          (.refactor.count // 0),
+          (if (.refactor.count // 0) > 0
+             then ((.refactor.reason_update_recovery // 0) / (.refactor.count // 1))
+             else 0
+           end),
+          (.ralph.time_ms // 0),
+          (.ralph.iterations // 0),
+          (.performance.ralph_ms_per_iter // 0),
+          (.timing.pivot_ms // 0),
+          (.timing.refactor_ms // 0)
+        ] | @tsv' "$json" 2>/dev/null || true)"
+    if [[ -n "$update_row" ]]; then
+        printf "%s\n" "$update_row" >> "$update_recovery_hotspots_tsv"
+    fi
+
     if [[ "$r_status" == "timeout" ]]; then
         echo "$prob_name" >> "$actual_timeout"
         continue
@@ -616,6 +655,21 @@ LC_ALL=C sort -u "$actual_status" -o "$actual_status"
 LC_ALL=C sort -u "$actual_obj" -o "$actual_obj"
 LC_ALL=C sort -u "$actual_sol" -o "$actual_sol"
 LC_ALL=C sort -u "$actual_dense" -o "$actual_dense"
+
+if [[ -s "$update_recovery_hotspots_tsv" ]]; then
+    {
+        head -n 1 "$update_recovery_hotspots_tsv"
+        tail -n +2 "$update_recovery_hotspots_tsv" \
+            | LC_ALL=C sort -t $'\t' -k3,3nr -k5,5nr -k6,6nr
+    } > "$update_recovery_hotspots_sorted_tsv"
+    {
+        head -n 1 "$update_recovery_hotspots_sorted_tsv"
+        tail -n +2 "$update_recovery_hotspots_sorted_tsv" | head -n 10
+    } > "$update_recovery_hotspots_top_tsv"
+else
+    cp "$update_recovery_hotspots_tsv" "$update_recovery_hotspots_sorted_tsv"
+    cp "$update_recovery_hotspots_tsv" "$update_recovery_hotspots_top_tsv"
+fi
 
 unexpected_timeout="$OUTDIR/unexpected.timeouts.txt"
 unexpected_status="$OUTDIR/unexpected.status_mismatch.txt"
@@ -758,6 +812,13 @@ echo "  forced refs by cause:   ratio=${ladder_forced_ratio_total:-0} dir_skip=$
 echo "  rescue guard blocks:    cooldown=${ladder_guard_cooldown_total:-0} fail_cap=${ladder_guard_fail_cap_total:-0}"
 echo "  per-file ladder TSV:    $phase1_no_pivot_ladder_tsv"
 echo "  required-pass retries:  attempted=$retry_attempted recovered=$retry_recovered exhausted=$retry_exhausted"
+echo
+echo "Update-recovery hotspots:"
+echo "  per-file TSV:           $update_recovery_hotspots_sorted_tsv"
+echo "  top-10 TSV:             $update_recovery_hotspots_top_tsv"
+echo "  top-5 (problem status update_recovery/total share time_ms iter):"
+tail -n +2 "$update_recovery_hotspots_top_tsv" | head -n 5 | awk -F'\t' \
+    '{printf "    %s %s %s/%s %.3f %.3f %s\n", $1, $2, $3, $4, $5, $6, $7}'
 
 echo
 echo "Unexpected vs baseline:"
