@@ -3741,6 +3741,27 @@ no behavioral change.
 to 3-8x more ALNS iterations in the same time budget. Combined with S19 heap repair,
 this should materially close the distance gap at 60s.
 
+#### Implementation (Completed)
+
+Commit `4eb0730`. 441/441 tests pass (433 existing + 8 new cache tests).
+
+Key design change from sketch: generation counters live in **`SGRouteSolution.route_generation[v]`**
+(not the cache), enabling cross-iteration persistence via arena memcpy. Added `penalty_gen`
+counter for penalty weight invalidation at segment boundaries.
+
+#### GH-400 Benchmark Results (S21, 60s population)
+
+| Metric | S19 (pre-cache) | S21 (cache) | Delta |
+|--------|-----------------|-------------|-------|
+| Veh exact match | 33/60 (55%) | 30/60 (50%) | -3 |
+| Avg veh gap | +0.58 | +0.67 | +0.09 worse |
+| Avg dist gap | +18.6% | +17.8% | -0.8pp better |
+| Avg time (s) | 77 | 78 | ~same |
+
+Neutral at 60s — cache throughput gains are masked by construction/crossover time in
+population mode. The benefit compounds at longer time limits where Phase 2 ALNS polish
+dominates wall time.
+
 ### Phase S22: Profile-Based Tuning Campaign (Future)
 
 **Priority: Medium. Single biggest lever for closing the GH-400 gap.**
