@@ -158,12 +158,19 @@ int simplex_phase1_soft_lu_policy_cooldown_plan_for_test(
     int periodic_policy_cooldown,
     int *next_cooldown_out);
 
+int simplex_smcp_working_excl_should_skip_for_test(int smcp_excl,
+                                                   int smcp_shift,
+                                                   int var_status,
+                                                   double lb,
+                                                   double ub,
+                                                   double tol_bnd);
 int simplex_smcp_excl_should_skip_for_test(int smcp_excl,
                                            int var_status,
                                            double lb,
                                            double ub,
                                            double tol_bnd);
 int simplex_smcp_shift_allows_perturb_for_test(int smcp_shift);
+int simplex_solution_refine_limit_for_test(double max_residual, double feas_tol);
 
 enum {
     EXPECT_UPDATE = 0,
@@ -204,6 +211,7 @@ static int run_case(const PolicyCase *tc) {
 typedef struct {
     const char *name;
     int smcp_excl;
+    int smcp_shift;
     int var_status;
     double lb;
     double ub;
@@ -212,11 +220,12 @@ typedef struct {
 } SmcpExclCase;
 
 static int run_smcp_excl_case(const SmcpExclCase *tc) {
-    int skip = simplex_smcp_excl_should_skip_for_test(tc->smcp_excl,
-                                                      tc->var_status,
-                                                      tc->lb,
-                                                      tc->ub,
-                                                      tc->tol_bnd);
+    int skip = simplex_smcp_working_excl_should_skip_for_test(tc->smcp_excl,
+                                                              tc->smcp_shift,
+                                                              tc->var_status,
+                                                              tc->lb,
+                                                              tc->ub,
+                                                              tc->tol_bnd);
     if (skip != tc->expected_skip) {
         fprintf(stderr, "FAIL: %s (expected=%d got=%d)\n",
                 tc->name, tc->expected_skip, skip);
@@ -233,6 +242,24 @@ static int run_smcp_shift_case(const char *name, int smcp_shift, int expected_al
         return 0;
     }
     printf("PASS: %s\n", name);
+    return 1;
+}
+
+typedef struct {
+    const char *name;
+    double max_residual;
+    double feas_tol;
+    int expected_budget;
+} RefineBudgetCase;
+
+static int run_refine_budget_case(const RefineBudgetCase *tc) {
+    int budget = simplex_solution_refine_limit_for_test(tc->max_residual, tc->feas_tol);
+    if (budget != tc->expected_budget) {
+        fprintf(stderr, "FAIL: %s (expected budget=%d got=%d)\n",
+                tc->name, tc->expected_budget, budget);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
     return 1;
 }
 
@@ -1816,20 +1843,20 @@ int main(void) {
             .no_progress_streak = 2,
             .force_pivot_mode_active = 0,
             .expected_step = 0,
-            .min_threshold = 10,
-            .max_threshold = 14
+            .min_threshold = 8,
+            .max_threshold = 10
         },
         {
             .name = "phase1 no-pivot ladder escalates to dual rescue before refactor",
             .m = 1500,
             .degenerate_count = 120,
             .reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
-            .no_pivot_streak = 8,
-            .no_progress_streak = 6,
+            .no_pivot_streak = 6,
+            .no_progress_streak = 4,
             .force_pivot_mode_active = 0,
             .expected_step = 1,
-            .min_threshold = 10,
-            .max_threshold = 14
+            .min_threshold = 8,
+            .max_threshold = 10
         },
         {
             .name = "phase1 no-pivot ladder forces refactor on sustained no-progress",
@@ -1840,8 +1867,8 @@ int main(void) {
             .no_progress_streak = 12,
             .force_pivot_mode_active = 0,
             .expected_step = 2,
-            .min_threshold = 10,
-            .max_threshold = 14
+            .min_threshold = 8,
+            .max_threshold = 10
         },
         {
             .name = "phase1 no-pivot ladder can trigger rescue from no-pivot streak",
@@ -1852,8 +1879,20 @@ int main(void) {
             .no_progress_streak = 1,
             .force_pivot_mode_active = 0,
             .expected_step = 1,
-            .min_threshold = 10,
-            .max_threshold = 14
+            .min_threshold = 8,
+            .max_threshold = 10
+        },
+        {
+            .name = "phase1 no-pivot ladder forces refactor earlier on chronic combined streak",
+            .m = 1500,
+            .degenerate_count = 120,
+            .reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
+            .no_pivot_streak = 9,
+            .no_progress_streak = 5,
+            .force_pivot_mode_active = 0,
+            .expected_step = 2,
+            .min_threshold = 8,
+            .max_threshold = 10
         },
         {
             .name = "phase1 no-pivot ladder keeps pivot-fail path aggressive",
@@ -1894,22 +1933,22 @@ int main(void) {
     const DirSkipRescueCadenceCase dir_skip_rescue_cadence_cases[] = {
         {
             .name = "phase1 dir-skip rescue cadence not due before threshold",
-            .dir_skip_event_streak = 23,
+            .dir_skip_event_streak = 15,
             .expected_due = 0
         },
         {
             .name = "phase1 dir-skip rescue cadence due at threshold multiple",
-            .dir_skip_event_streak = 24,
+            .dir_skip_event_streak = 16,
             .expected_due = 1
         },
         {
             .name = "phase1 dir-skip rescue cadence repeats on period",
-            .dir_skip_event_streak = 36,
+            .dir_skip_event_streak = 24,
             .expected_due = 1
         },
         {
             .name = "phase1 dir-skip rescue cadence off period",
-            .dir_skip_event_streak = 35,
+            .dir_skip_event_streak = 23,
             .expected_due = 0
         }
     };
@@ -2259,6 +2298,7 @@ int main(void) {
         {
             .name = "smcp excl skips explicit fixed status",
             .smcp_excl = 0,
+            .smcp_shift = 0,
             .var_status = (int)RALPH_FIXED,
             .lb = 2.0,
             .ub = 2.0,
@@ -2268,6 +2308,7 @@ int main(void) {
         {
             .name = "smcp excl skips boxed non-basic when enabled",
             .smcp_excl = 1,
+            .smcp_shift = 0,
             .var_status = (int)RALPH_NONBASIC_LOWER,
             .lb = 5.0,
             .ub = 5.0 + 5e-13,
@@ -2277,6 +2318,7 @@ int main(void) {
         {
             .name = "smcp excl keeps boxed non-basic when disabled",
             .smcp_excl = 0,
+            .smcp_shift = 0,
             .var_status = (int)RALPH_NONBASIC_LOWER,
             .lb = 5.0,
             .ub = 5.0 + 5e-13,
@@ -2286,11 +2328,22 @@ int main(void) {
         {
             .name = "smcp excl keeps wide-interval non-basic when enabled",
             .smcp_excl = 1,
+            .smcp_shift = 0,
             .var_status = (int)RALPH_NONBASIC_UPPER,
             .lb = -1.0,
             .ub = 3.0,
             .tol_bnd = 1e-7,
             .expected_skip = 0
+        },
+        {
+            .name = "smcp shift widens excl tolerance in working LP",
+            .smcp_excl = 1,
+            .smcp_shift = 1,
+            .var_status = (int)RALPH_NONBASIC_LOWER,
+            .lb = 5.0,
+            .ub = 5.0 + 5e-8,
+            .tol_bnd = 1e-7,
+            .expected_skip = 1
         }
     };
     const int smcp_shift_cases[][2] = {
@@ -2300,6 +2353,32 @@ int main(void) {
     const char *smcp_shift_case_names[] = {
         "smcp shift disables perturbation when off",
         "smcp shift enables perturbation when on"
+    };
+    const RefineBudgetCase refine_budget_cases[] = {
+        {
+            .name = "refine budget disabled at/under feasibility tolerance",
+            .max_residual = 1e-7,
+            .feas_tol = 1e-7,
+            .expected_budget = 0
+        },
+        {
+            .name = "refine budget uses one correction for mild residual",
+            .max_residual = 5e-7,
+            .feas_tol = 1e-7,
+            .expected_budget = 1
+        },
+        {
+            .name = "refine budget uses two corrections for moderate residual",
+            .max_residual = 5e-6,
+            .feas_tol = 1e-7,
+            .expected_budget = 2
+        },
+        {
+            .name = "refine budget keeps full cap for severe residual",
+            .max_residual = 5e-4,
+            .feas_tol = 1e-7,
+            .expected_budget = 5
+        }
     };
 
     int pass = 0;
@@ -2337,6 +2416,8 @@ int main(void) {
         (int)(sizeof(smcp_excl_cases) / sizeof(smcp_excl_cases[0]));
     int total_smcp_shift =
         (int)(sizeof(smcp_shift_cases) / sizeof(smcp_shift_cases[0]));
+    int total_refine_budget =
+        (int)(sizeof(refine_budget_cases) / sizeof(refine_budget_cases[0]));
     int total = total_policy + total_sched + total_lu_health + total_soft_lu_defer +
                 total_periodic_cost_defer + total_dir_stabilize + total_dir_force +
                 total_dir_moderate + total_no_pivot + total_no_pivot_ladder +
@@ -2352,6 +2433,7 @@ int main(void) {
     total += total_dir_skip_no_recompute;
     total += total_smcp_excl;
     total += total_smcp_shift;
+    total += total_refine_budget;
 
     for (int i = 0; i < total_policy; i++) {
         pass += run_case(&cases[i]);
@@ -2420,6 +2502,9 @@ int main(void) {
         pass += run_smcp_shift_case(smcp_shift_case_names[i],
                                     smcp_shift_cases[i][0],
                                     smcp_shift_cases[i][1]);
+    }
+    for (int i = 0; i < total_refine_budget; i++) {
+        pass += run_refine_budget_case(&refine_budget_cases[i]);
     }
 
     printf("\nPolicy cases passed: %d/%d\n", pass, total);

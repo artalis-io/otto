@@ -114,4 +114,15 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
                                          int *soft_lu_cost_gate_enabled_io,
                                          int *periodic_cost_gate_enabled_io);
 
+/* Working-LP semantics helpers (orthogonal policy surface):
+ * - excl/shift: classify boxed non-basic columns removable from working LP.
+ * - aorn: select A^T (row-kernel) vs N^T (column-kernel) ratio evaluation. */
+int lp_policy_glpk_working_exclude_nonbasic(int smcp_excl,
+                                            int smcp_shift,
+                                            int var_status,
+                                            double lb,
+                                            double ub,
+                                            double tol_bnd);
+int lp_policy_glpk_working_use_at_kernel(int smcp_aorn, int has_row_scatter);
+
 #endif /* LP_POLICY_GLPK_COMPAT_H */

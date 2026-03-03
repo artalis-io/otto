@@ -16,6 +16,7 @@
 #include <time.h>
 #include "lp.h"
 #include "lp_log.h"
+#include "lp_policy_glpk_compat.h"
 
 /* Forward declarations */
 SimplexTableau* tableau_create(LPModel *model);
@@ -556,7 +557,6 @@ int dual_smcp_shift_allows_perturb_for_test(int smcp_shift) {
 
 static inline int dual_smcp_shift_allows_perturb(const SimplexTableau *tab) {
     if (!tab || !tab->owner) return 1;
-    if (!tab->owner->glpk_strict_mode) return 1;
     return dual_smcp_shift_allows_perturb_for_test(tab->owner->smcp_shift);
 }
 
@@ -565,33 +565,46 @@ int dual_ratio_scan_direction_for_test(int smcp_aorn) {
     return (smcp_aorn == 1) ? -1 : 1;
 }
 
+int dual_ratio_use_at_kernel_for_test(int smcp_aorn, int has_row_scatter) {
+    return lp_policy_glpk_working_use_at_kernel(smcp_aorn, has_row_scatter);
+}
+
 static inline int dual_ratio_scan_direction(const SimplexTableau *tab) {
     if (!tab || !tab->owner) return 1;
-    if (!tab->owner->glpk_strict_mode) return 1;
     return dual_ratio_scan_direction_for_test(tab->owner->smcp_aorn);
+}
+
+static inline int dual_ratio_use_at_kernel(const SimplexTableau *tab) {
+    int has_row_scatter = 0;
+    if (tab && tab->csr_rowptr && tab->csr_colidx && tab->csr_values && tab->csr_alpha) {
+        has_row_scatter = 1;
+    }
+    if (!tab || !tab->owner) {
+        return dual_ratio_use_at_kernel_for_test(LP_GLPK_SMCP_AORN_USE_NT,
+                                                 has_row_scatter);
+    }
+    return dual_ratio_use_at_kernel_for_test(tab->owner->smcp_aorn,
+                                             has_row_scatter);
 }
 
 static int dual_smcp_excl_skip_var(const SimplexTableau *tab, int var) {
     int smcp_excl = 1;
+    int smcp_shift = 1;
     double tol_bnd = 1e-12;
     VarStatus st;
-    double lb;
-    double ub;
     if (!tab || var < 0 || var >= tab->n) return 0;
     st = tab->var_status[var];
-    if (st == RALPH_FIXED) return 1;
-    if (tab->owner && !tab->owner->glpk_strict_mode) return 0;
     if (tab->owner) {
         smcp_excl = tab->owner->smcp_excl;
+        smcp_shift = tab->owner->smcp_shift;
         tol_bnd = tab->owner->smcp_tol_bnd;
     }
-    if (smcp_excl == 0) return 0;
-    if (st != RALPH_NONBASIC_LOWER && st != RALPH_NONBASIC_UPPER) return 0;
-    lb = tab->lb_ext[var];
-    ub = tab->ub_ext[var];
-    if (lb <= -RALPH_INFINITY / 2.0 || ub >= RALPH_INFINITY / 2.0) return 0;
-    if (!isfinite(tol_bnd) || tol_bnd <= 0.0 || tol_bnd > 1e-12) tol_bnd = 1e-12;
-    return fabs(ub - lb) <= tol_bnd;
+    return lp_policy_glpk_working_exclude_nonbasic(smcp_excl,
+                                                   smcp_shift,
+                                                   (int)st,
+                                                   tab->lb_ext[var],
+                                                   tab->ub_ext[var],
+                                                   tol_bnd);
 }
 
 static int dual_cadence_clamp_base_interval(int interval) {
@@ -782,13 +795,29 @@ static int dual_ratio_test_core(SimplexTableau *tab,
     int best_can_flip = 0;
     const double tie_tol = 1e-12;
     int scan_dir = dual_ratio_scan_direction(tab);
+    int use_at_kernel = dual_ratio_use_at_kernel(tab);
+    double *alpha_at = NULL;
+
+    if (use_at_kernel) {
+        alpha_at = tab->csr_alpha;
+        memset(alpha_at, 0, (size_t)tab->n * sizeof(double));
+        for (int i = 0; i < tab->m; i++) {
+            double wi = tab->work2[i];
+            if (wi == 0.0) continue;
+            for (int p = tab->csr_rowptr[i]; p < tab->csr_rowptr[i + 1]; p++) {
+                int col = tab->csr_colidx[p];
+                alpha_at[col] += wi * tab->csr_values[p];
+            }
+        }
+    }
 
     for (int t = 0; t < tab->n; t++) {
         int j = (scan_dir > 0) ? t : (tab->n - 1 - t);
         if (tab->var_status[j] == RALPH_BASIC || dual_smcp_excl_skip_var(tab, j)) continue;
 
         /* Compute alpha_j = (B^{-1} * a_j)[leaving] = alpha' * a_j using sparse dot */
-        double alpha_j = sparse_dot_column(tab->A_ext, j, tab->work2);
+        double alpha_j = use_at_kernel ? alpha_at[j]
+                                       : sparse_dot_column(tab->A_ext, j, tab->work2);
 
         if (fabs(alpha_j) < pivot_floor) continue;
 
@@ -909,6 +938,8 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
     int max_total_flips;
     int round;
     int scan_dir = dual_ratio_scan_direction(tab);
+    int use_at_kernel = dual_ratio_use_at_kernel(tab);
+    double *alpha_at = NULL;
 
     if (!tab || !entering || !theta || leaving < 0 || leaving >= tab->m) return -1;
     if (!tab->flip_list) return -1;
@@ -933,6 +964,19 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
     tab->work1[leaving] = 1.0;
     lu_solve_transpose(tab->lu, tab->work1, tab->work2);
 
+    if (use_at_kernel) {
+        alpha_at = tab->csr_alpha;
+        memset(alpha_at, 0, (size_t)tab->n * sizeof(double));
+        for (int i = 0; i < tab->m; i++) {
+            double wi = tab->work2[i];
+            if (wi == 0.0) continue;
+            for (int p = tab->csr_rowptr[i]; p < tab->csr_rowptr[i + 1]; p++) {
+                int col = tab->csr_colidx[p];
+                alpha_at[col] += wi * tab->csr_values[p];
+            }
+        }
+    }
+
     flip_cap = tab->m / 2;
     if (flip_cap < 1) flip_cap = 1;
     if (flip_cap > tab->n) flip_cap = tab->n;
@@ -954,7 +998,8 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
             double alpha_j;
             double ratio;
             if (tab->var_status[j] == RALPH_BASIC || dual_smcp_excl_skip_var(tab, j)) continue;
-            alpha_j = sparse_dot_column(tab->A_ext, j, tab->work2);
+            alpha_j = use_at_kernel ? alpha_at[j]
+                                    : sparse_dot_column(tab->A_ext, j, tab->work2);
             if (!dual_ratio_candidate_value(tab, dir, j, alpha_j, pivot_floor, &ratio)) continue;
             if (ratio < theta_floor) continue;
             candidate_count++;
@@ -974,7 +1019,8 @@ static int dual_ratio_test_flip_iterative(SimplexTableau *tab,
             double ratio;
             double abs_alpha;
             if (tab->var_status[j] == RALPH_BASIC || dual_smcp_excl_skip_var(tab, j)) continue;
-            alpha_j = sparse_dot_column(tab->A_ext, j, tab->work2);
+            alpha_j = use_at_kernel ? alpha_at[j]
+                                    : sparse_dot_column(tab->A_ext, j, tab->work2);
             if (!dual_ratio_candidate_value(tab, dir, j, alpha_j, pivot_floor, &ratio)) continue;
             if (ratio < theta_floor) continue;
 
@@ -2279,6 +2325,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                         LP_LOG_STDOUT("[dual_v2] Suboptimal: max dual violation %.2e after unshift\n",
                                max_dual_viol);
                     }
+                    remove_bound_perturbation(tab);
                     solver->status = RALPH_STATUS_ERROR;
                     return -1;  /* Trigger primal fallback */
                 }
@@ -2293,6 +2340,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                 for (int j = 0; j < n_orig; j++)
                     solver->solution[j] = tab->x[j];
             }
+            remove_bound_perturbation(tab);
             dual_run_user_callbacks(solver, tab, iter, 1, 0);
             return 0;
         }

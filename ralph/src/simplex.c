@@ -16,6 +16,7 @@
 #include <limits.h>
 #include "lp.h"
 #include "lp_refactor_policy.h"
+#include "lp_policy_glpk_compat.h"
 #include "lp_log.h"
 #include "ralph_lp.h"
 
@@ -147,21 +148,21 @@ typedef enum {
 #define PHASE1_NO_PIVOT_FORCE_BASE_TRIGGER 48
 #define PHASE1_NO_PIVOT_FORCE_MIN_TRIGGER 24
 #define PHASE1_NO_PIVOT_FORCE_COOLDOWN_UPDATES 24
-#define PHASE1_NO_PIVOT_LADDER_REFACTOR_BASE_RATIO 10
-#define PHASE1_NO_PIVOT_LADDER_REFACTOR_BASE_DIR_SKIP 10
+#define PHASE1_NO_PIVOT_LADDER_REFACTOR_BASE_RATIO 8
+#define PHASE1_NO_PIVOT_LADDER_REFACTOR_BASE_DIR_SKIP 8
 #define PHASE1_NO_PIVOT_LADDER_REFACTOR_BASE_PIVOT_FAIL 4
 #define PHASE1_NO_PIVOT_LADDER_REFACTOR_MIN 3
-#define PHASE1_NO_PIVOT_LADDER_RESCUE_START 4
-#define PHASE1_NO_PIVOT_LADDER_RESCUE_PERIOD 6
-#define PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_START 12
-#define PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_PERIOD 6
+#define PHASE1_NO_PIVOT_LADDER_RESCUE_START 3
+#define PHASE1_NO_PIVOT_LADDER_RESCUE_PERIOD 4
+#define PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_START 8
+#define PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_PERIOD 4
 #define PHASE1_NO_PIVOT_PROGRESS_WINDOW 6
 #define PHASE1_NO_PIVOT_PROGRESS_REL_IMPROVE_MIN 1e-4
 #define PHASE1_NO_PIVOT_PROGRESS_ABS_IMPROVE_MIN 1e-8
 #define PHASE1_NO_PIVOT_LADDER_RESCUE_COOLDOWN_ITERS 16
 #define PHASE1_NO_PIVOT_LADDER_RESCUE_FAIL_CAP 3
-#define PHASE1_DIR_SKIP_LADDER_RESCUE_START 24
-#define PHASE1_DIR_SKIP_LADDER_RESCUE_PERIOD 12
+#define PHASE1_DIR_SKIP_LADDER_RESCUE_START 16
+#define PHASE1_DIR_SKIP_LADDER_RESCUE_PERIOD 8
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_TRIGGER 64
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_MIN_TRIGGER 24
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_BUDGET 12
@@ -255,44 +256,49 @@ static double* soft_lu_refactor_cost_ewma_ptr(SimplexSolver *owner, int phase) {
     return NULL;
 }
 
+int simplex_smcp_working_excl_should_skip_for_test(int smcp_excl,
+                                                   int smcp_shift,
+                                                   int var_status,
+                                                   double lb,
+                                                   double ub,
+                                                   double tol_bnd) {
+    return lp_policy_glpk_working_exclude_nonbasic(smcp_excl,
+                                                   smcp_shift,
+                                                   var_status,
+                                                   lb,
+                                                   ub,
+                                                   tol_bnd);
+}
+
 int simplex_smcp_excl_should_skip_for_test(int smcp_excl,
                                            int var_status,
                                            double lb,
                                            double ub,
                                            double tol_bnd) {
-    const double fixed_tol_cap = 1e-12;
-    double fixed_tol = fixed_tol_cap;
-    if (var_status == (int)RALPH_FIXED) return 1;
-    if (smcp_excl == 0) return 0;
-    if (var_status != (int)RALPH_NONBASIC_LOWER &&
-        var_status != (int)RALPH_NONBASIC_UPPER) {
-        return 0;
-    }
-    if (lb <= -RALPH_INFINITY / 2.0 || ub >= RALPH_INFINITY / 2.0) {
-        return 0;
-    }
-    if (isfinite(tol_bnd) && tol_bnd > 0.0 && tol_bnd < fixed_tol_cap) {
-        fixed_tol = tol_bnd;
-    }
-    return fabs(ub - lb) <= fixed_tol;
+    return simplex_smcp_working_excl_should_skip_for_test(smcp_excl,
+                                                          LP_GLPK_SMCP_SHIFT_OFF,
+                                                          var_status,
+                                                          lb,
+                                                          ub,
+                                                          tol_bnd);
 }
 
 static inline int simplex_smcp_excl_skip_var(const SimplexTableau *tab, int j) {
     int smcp_excl = 1;
+    int smcp_shift = 1;
     double tol_bnd = 1e-7;
     if (!tab || j < 0 || j >= tab->n) return 0;
-    if (tab->owner && !tab->owner->glpk_strict_mode) {
-        return tab->var_status[j] == RALPH_FIXED;
-    }
     if (tab->owner) {
         smcp_excl = tab->owner->smcp_excl;
+        smcp_shift = tab->owner->smcp_shift;
         tol_bnd = tab->owner->smcp_tol_bnd;
     }
-    return simplex_smcp_excl_should_skip_for_test(smcp_excl,
-                                                  (int)tab->var_status[j],
-                                                  tab->lb_ext[j],
-                                                  tab->ub_ext[j],
-                                                  tol_bnd);
+    return simplex_smcp_working_excl_should_skip_for_test(smcp_excl,
+                                                          smcp_shift,
+                                                          (int)tab->var_status[j],
+                                                          tab->lb_ext[j],
+                                                          tab->ub_ext[j],
+                                                          tol_bnd);
 }
 
 int simplex_smcp_shift_allows_perturb_for_test(int smcp_shift) {
@@ -301,7 +307,6 @@ int simplex_smcp_shift_allows_perturb_for_test(int smcp_shift) {
 
 static inline int simplex_smcp_shift_allows_perturb(const SimplexTableau *tab) {
     if (!tab || !tab->owner) return 1;
-    if (!tab->owner->glpk_strict_mode) return 1;
     return simplex_smcp_shift_allows_perturb_for_test(tab->owner->smcp_shift);
 }
 
@@ -706,6 +711,18 @@ static int should_run_periodic_refactor(const SimplexTableau *tab,
                                                  policy,
                                                  use_bland,
                                                  degenerate_count);
+}
+
+static int solution_refine_iteration_budget(double max_residual, double feas_tol) {
+    if (!isfinite(max_residual) || !isfinite(feas_tol) || feas_tol <= 0.0) return 0;
+    if (max_residual <= feas_tol) return 0;
+    if (max_residual <= 10.0 * feas_tol) return 1;
+    if (max_residual <= 100.0 * feas_tol) return 2;
+    return 5;
+}
+
+int simplex_solution_refine_limit_for_test(double max_residual, double feas_tol) {
+    return solution_refine_iteration_budget(max_residual, feas_tol);
 }
 
 /*
@@ -1170,17 +1187,32 @@ static int phase1_no_pivot_ladder_step(
     int rescue_period = PHASE1_NO_PIVOT_LADDER_RESCUE_PERIOD;
     int streak_rescue_start = PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_START;
     int streak_rescue_period = PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_PERIOD;
+    int fast_escalation = 0;
 
-    if (refactor_threshold_out) *refactor_threshold_out = refactor_threshold;
+    if (m >= 1200 && degenerate_count >= 80 &&
+        reason != LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL) {
+        fast_escalation = 1;
+        if (refactor_threshold > PHASE1_NO_PIVOT_LADDER_REFACTOR_MIN + 1) {
+            refactor_threshold -= 1;
+        }
+        rescue_start = 2;
+        rescue_period = 3;
+        streak_rescue_start = 6;
+        streak_rescue_period = 3;
+    }
     if (reason == LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL) {
         rescue_start = 2;
         rescue_period = 2;
         streak_rescue_start = 4;
         streak_rescue_period = 2;
     }
+    if (refactor_threshold_out) *refactor_threshold_out = refactor_threshold;
 
     if (no_progress_streak >= refactor_threshold ||
-        no_pivot_streak >= refactor_threshold * 3) {
+        no_pivot_streak >= refactor_threshold * 2 ||
+        (fast_escalation &&
+         no_progress_streak >= rescue_start + 2 &&
+         no_pivot_streak >= refactor_threshold)) {
         return PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR;
     }
 
@@ -2260,8 +2292,8 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         3 * (size_t)n * sizeof(double) +
         /* double arrays: x, rc, se_weights, work3 (n each) */
         4 * (size_t)n * sizeof(double) +
-        /* double arrays: y, work1, work2, rhs, row_sign, pivot_row, tau_work (m each) */
-        7 * (size_t)m * sizeof(double) +
+        /* double arrays: y, work1, work2, work4, rhs, row_sign, pivot_row, tau_work (m each) */
+        8 * (size_t)m * sizeof(double) +
         /* double arrays: cb_sparse_val, aux_coef */
         (size_t)m * sizeof(double) + (size_t)num_aux_vars * sizeof(double) +
         /* double array: c_original for two-phase (n) */
@@ -2313,6 +2345,7 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     tab->work1 = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
     tab->work2 = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
     tab->work3 = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
+    tab->work4 = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
     tab->rhs = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
     tab->row_sign = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
     tab->pivot_row = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
@@ -2379,7 +2412,7 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         !tab->basis || !tab->nonbasis || !tab->var_status || !tab->basis_pos ||
         !tab->basis_col_cache || !tab->basis_col_nnz_cache ||
         !tab->x || !tab->y || !tab->rc ||
-        !tab->work1 || !tab->work2 || !tab->work3 || !tab->rhs || !tab->row_sign ||
+        !tab->work1 || !tab->work2 || !tab->work3 || !tab->work4 || !tab->rhs || !tab->row_sign ||
         !tab->pivot_row || !tab->tau_work || !tab->se_weights ||
         !tab->cb_sparse_idx || !tab->cb_sparse_val ||
         !tab->aux_row || !tab->aux_coef || !tab->partial_candidates || !tab->dual_candidates ||
@@ -2692,6 +2725,9 @@ static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, in
     /* Initialize phase */
     tab->phase = use_two_phase ? 1 : 2;
     tab->perturb_scale = 1.0;
+    tab->solution_last_residual_iter = -1;
+    tab->solution_last_residual_factorize_calls = -1;
+    tab->solution_last_residual_num_updates = -1;
 
     tab->A_ext = triplets_to_csc(trips);
     triplets_free(trips);
@@ -3004,6 +3040,7 @@ void tableau_free(SimplexTableau *tab) {
     tab->work1 = NULL;
     tab->work2 = NULL;
     tab->work3 = NULL;
+    tab->work4 = NULL;
     tab->rhs = NULL;
     tab->row_sign = NULL;
     tab->pivot_row = NULL;
@@ -3566,11 +3603,9 @@ int tableau_compute_solution(SimplexTableau *tab) {
         }
     }
 
-    /* Save original RHS for iterative refinement */
-    double *orig_rhs = (double*)calloc(tab->m, sizeof(double));
-    if (orig_rhs) {
-        vec_copy_data(orig_rhs, tab->work1, tab->m);
-    }
+    /* Save original RHS for iterative refinement in pre-allocated workspace. */
+    double *orig_rhs = tab->work4;
+    vec_copy_data(orig_rhs, tab->work1, tab->m);
 
     /* Solve B * x_B = work1 */
     lu_solve(tab->lu, tab->work1, tab->work2);
@@ -3580,50 +3615,70 @@ int tableau_compute_solution(SimplexTableau *tab) {
         tab->x[tab->basis[k]] = tab->work2[k];
     }
 
-    /* Iterative refinement: check residual and correct if needed */
-    if (orig_rhs) {
-        /* Compute residual: r = b - B*x_B */
-        /* work3 will hold B*x_B */
-        vec_set_zero(tab->work3, tab->m);
-        for (int k = 0; k < tab->m; k++) {
-            int j = tab->basis[k];
-            sparse_axpy_column(tab->A_ext, j, tab->x[j], tab->work3);
-        }
-
-        /* work1 = original_rhs - B*x_B = residual */
-        double max_residual = 0.0;
-        for (int i = 0; i < tab->m; i++) {
-            tab->work1[i] = orig_rhs[i] - tab->work3[i];
-            double absval = fabs(tab->work1[i]);
-            if (absval > max_residual) max_residual = absval;
-        }
-
-        /* If residual is large, do iterative refinement */
-        int max_refine_iters = 5;
-        for (int refine_iter = 0; refine_iter < max_refine_iters && max_residual > RALPH_FEAS_TOL; refine_iter++) {
-            /* Solve B * correction = residual */
-            lu_solve(tab->lu, tab->work1, tab->work2);
-
-            /* Update solution: x_B += correction */
-            for (int k = 0; k < tab->m; k++) {
-                tab->x[tab->basis[k]] += tab->work2[k];
+    /* Residual/refinement is expensive; run at most once per (iter, LU state). */
+    {
+        int do_residual_refine = 1;
+        int lu_factorize_calls = -1;
+        int lu_num_updates = -1;
+        if (tab->lu) {
+            lu_factorize_calls = tab->lu->telemetry.perf_factorize_calls;
+            lu_num_updates = tab->lu->num_updates;
+            if (tab->solution_last_residual_iter == tab->iterations &&
+                tab->solution_last_residual_factorize_calls == lu_factorize_calls &&
+                tab->solution_last_residual_num_updates == lu_num_updates) {
+                do_residual_refine = 0;
             }
+        }
 
-            /* Recompute residual */
-            vec_set_zero(tab->work3, tab->m);
+        if (do_residual_refine) {
+            double *basis_image = tab->y;  /* size m scratch */
+
+            tab->solution_last_residual_iter = tab->iterations;
+            tab->solution_last_residual_factorize_calls = lu_factorize_calls;
+            tab->solution_last_residual_num_updates = lu_num_updates;
+
+            /* Compute residual: r = rhs_orig - B*x_B */
+            vec_set_zero(basis_image, tab->m);
             for (int k = 0; k < tab->m; k++) {
                 int j = tab->basis[k];
-                sparse_axpy_column(tab->A_ext, j, tab->x[j], tab->work3);
+                sparse_axpy_column(tab->A_ext, j, tab->x[j], basis_image);
             }
-            max_residual = 0.0;
+
+            /* work1 = original_rhs - B*x_B = residual */
+            double max_residual = 0.0;
             for (int i = 0; i < tab->m; i++) {
-                tab->work1[i] = orig_rhs[i] - tab->work3[i];
+                tab->work1[i] = orig_rhs[i] - basis_image[i];
                 double absval = fabs(tab->work1[i]);
                 if (absval > max_residual) max_residual = absval;
             }
-        }
 
-        free(orig_rhs);
+            /* If residual is large, do bounded iterative refinement. */
+            int max_refine_iters = solution_refine_iteration_budget(max_residual, RALPH_FEAS_TOL);
+            for (int refine_iter = 0;
+                 refine_iter < max_refine_iters && max_residual > RALPH_FEAS_TOL;
+                 refine_iter++) {
+                /* Solve B * correction = residual */
+                lu_solve(tab->lu, tab->work1, tab->work2);
+
+                /* Update solution: x_B += correction */
+                for (int k = 0; k < tab->m; k++) {
+                    tab->x[tab->basis[k]] += tab->work2[k];
+                }
+
+                /* Recompute residual */
+                vec_set_zero(basis_image, tab->m);
+                for (int k = 0; k < tab->m; k++) {
+                    int j = tab->basis[k];
+                    sparse_axpy_column(tab->A_ext, j, tab->x[j], basis_image);
+                }
+                max_residual = 0.0;
+                for (int i = 0; i < tab->m; i++) {
+                    tab->work1[i] = orig_rhs[i] - basis_image[i];
+                    double absval = fabs(tab->work1[i]);
+                    if (absval > max_residual) max_residual = absval;
+                }
+            }
+        }
     }
 
     /* Compute objective value with SIMD reduction */

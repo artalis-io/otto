@@ -21,6 +21,7 @@ int dual_sparse_pressure_force_refactor_for_test(int m,
                                                  int btran_nnz);
 int dual_smcp_shift_allows_perturb_for_test(int smcp_shift);
 int dual_ratio_scan_direction_for_test(int smcp_aorn);
+int dual_ratio_use_at_kernel_for_test(int smcp_aorn, int has_row_scatter);
 void dual_cadence_intervals_for_test(int requested_base,
                                      int requested_rc,
                                      int *base_out,
@@ -268,6 +269,15 @@ static void test_dual_aorn_scan_direction(void) {
                 "dual aorn A^T scans reverse");
 }
 
+static void test_dual_aorn_kernel_selection(void) {
+    ASSERT_TRUE(dual_ratio_use_at_kernel_for_test(2, 1) == 0,
+                "dual aorn N^T keeps column-kernel");
+    ASSERT_TRUE(dual_ratio_use_at_kernel_for_test(1, 0) == 0,
+                "dual aorn A^T falls back when row-kernel unavailable");
+    ASSERT_TRUE(dual_ratio_use_at_kernel_for_test(1, 1) == 1,
+                "dual aorn A^T enables row-kernel when available");
+}
+
 static void test_dual_cadence_clamp(void) {
     int base = -1;
     int rc = -1;
@@ -290,6 +300,7 @@ int main(void) {
     test_sparse_pressure_refactor_gate();
     test_dual_smcp_shift_toggle();
     test_dual_aorn_scan_direction();
+    test_dual_aorn_kernel_selection();
     test_dual_cadence_clamp();
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
