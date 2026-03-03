@@ -57,6 +57,19 @@ typedef enum {
     LP_GLPK_SMCP_AORN_USE_NT = 2
 } LPGLPKSMCPAorn;
 
+typedef enum {
+    LP_GLPK_PERTURB_STATE_OFF = 0,
+    LP_GLPK_PERTURB_STATE_ACTIVE = 1,
+    LP_GLPK_PERTURB_STATE_CLEANUP = 2
+} LPGLPKPerturbState;
+
+typedef enum {
+    LP_GLPK_PERTURB_EVENT_ENABLE = 0,
+    LP_GLPK_PERTURB_EVENT_DISABLE = 1,
+    LP_GLPK_PERTURB_EVENT_BEGIN_CLEANUP = 2,
+    LP_GLPK_PERTURB_EVENT_REAPPLY = 3
+} LPGLPKPerturbEvent;
+
 /* BFCP-like controls. */
 typedef enum {
     LP_GLPK_BFCP_BACKEND_LUF_FT = 0,
@@ -124,5 +137,6 @@ int lp_policy_glpk_working_exclude_nonbasic(int smcp_excl,
                                             double ub,
                                             double tol_bnd);
 int lp_policy_glpk_working_use_at_kernel(int smcp_aorn, int has_row_scatter);
+int lp_policy_glpk_perturb_next_state(int state, int event, int *next_state_out);
 
 #endif /* LP_POLICY_GLPK_COMPAT_H */

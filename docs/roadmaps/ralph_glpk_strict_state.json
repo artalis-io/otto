@@ -1,8 +1,8 @@
 {
   "plan": "GLPK strict parity execution",
   "created_at": "2026-03-03T00:00:00Z",
-  "updated_at": "2026-03-03T09:32:30Z",
-  "current_phase": 2,
+  "updated_at": "2026-03-03T09:49:33Z",
+  "current_phase": 3,
   "phases": {
     "1": {
       "name": "pivot_quality_loop",
@@ -22,11 +22,11 @@
     },
     "3": {
       "name": "perturbation_state_machine",
-      "status": "pending",
-      "started_at": null,
-      "completed_at": null,
-      "last_artifact": null,
-      "last_validation": null
+      "status": "completed",
+      "started_at": "2026-03-03T09:44:27Z",
+      "completed_at": "2026-03-03T09:49:33Z",
+      "last_artifact": "/tmp/netlib-regression-gate-20260303-104436",
+      "last_validation": "full_gate_pass"
     }
   }
 }

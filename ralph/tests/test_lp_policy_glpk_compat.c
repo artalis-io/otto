@@ -516,6 +516,42 @@ static void test_working_lp_helpers(void) {
                   "working lp helper: A^T selects row kernel when available");
 }
 
+static void test_perturb_state_machine_helpers(void) {
+    int next = -1;
+    int ok = lp_policy_glpk_perturb_next_state(LP_GLPK_PERTURB_STATE_OFF,
+                                               LP_GLPK_PERTURB_EVENT_ENABLE,
+                                               &next);
+    ASSERT_INT_EQ(ok, 1, "perturb fsm: off->enable is valid");
+    ASSERT_INT_EQ(next, LP_GLPK_PERTURB_STATE_ACTIVE,
+                  "perturb fsm: off + enable => active");
+
+    ok = lp_policy_glpk_perturb_next_state(next,
+                                           LP_GLPK_PERTURB_EVENT_BEGIN_CLEANUP,
+                                           &next);
+    ASSERT_INT_EQ(ok, 1, "perturb fsm: active->begin cleanup is valid");
+    ASSERT_INT_EQ(next, LP_GLPK_PERTURB_STATE_CLEANUP,
+                  "perturb fsm: active + begin cleanup => cleanup");
+
+    ok = lp_policy_glpk_perturb_next_state(next,
+                                           LP_GLPK_PERTURB_EVENT_DISABLE,
+                                           &next);
+    ASSERT_INT_EQ(ok, 1, "perturb fsm: cleanup->disable is valid");
+    ASSERT_INT_EQ(next, LP_GLPK_PERTURB_STATE_OFF,
+                  "perturb fsm: cleanup + disable => off");
+
+    ok = lp_policy_glpk_perturb_next_state(LP_GLPK_PERTURB_STATE_OFF,
+                                           LP_GLPK_PERTURB_EVENT_BEGIN_CLEANUP,
+                                           &next);
+    ASSERT_INT_EQ(ok, 0, "perturb fsm: off->begin cleanup is invalid");
+    ASSERT_INT_EQ(next, LP_GLPK_PERTURB_STATE_OFF,
+                  "perturb fsm: invalid transition keeps state");
+
+    ok = lp_policy_glpk_perturb_next_state(99,
+                                           LP_GLPK_PERTURB_EVENT_ENABLE,
+                                           &next);
+    ASSERT_INT_EQ(ok, 0, "perturb fsm: invalid state rejected");
+}
+
 int main(void) {
     printf("=== LP GLPK-Compat Policy Tests ===\n");
 
@@ -528,6 +564,7 @@ int main(void) {
     test_runtime_mapping_glpk_strict_profile();
     test_validation_rejects_invalid_values();
     test_working_lp_helpers();
+    test_perturb_state_machine_helpers();
 
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

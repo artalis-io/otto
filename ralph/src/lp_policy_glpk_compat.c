@@ -97,6 +97,73 @@ int lp_policy_glpk_working_use_at_kernel(int smcp_aorn, int has_row_scatter) {
     return has_row_scatter ? 1 : 0;
 }
 
+int lp_policy_glpk_perturb_next_state(int state, int event, int *next_state_out) {
+    int next_state = state;
+    int valid = 1;
+
+    switch ((LPGLPKPerturbState)state) {
+        case LP_GLPK_PERTURB_STATE_OFF:
+            switch ((LPGLPKPerturbEvent)event) {
+                case LP_GLPK_PERTURB_EVENT_ENABLE:
+                case LP_GLPK_PERTURB_EVENT_REAPPLY:
+                    next_state = LP_GLPK_PERTURB_STATE_ACTIVE;
+                    break;
+                case LP_GLPK_PERTURB_EVENT_DISABLE:
+                    next_state = LP_GLPK_PERTURB_STATE_OFF;
+                    break;
+                case LP_GLPK_PERTURB_EVENT_BEGIN_CLEANUP:
+                    valid = 0;
+                    break;
+                default:
+                    valid = 0;
+                    break;
+            }
+            break;
+        case LP_GLPK_PERTURB_STATE_ACTIVE:
+            switch ((LPGLPKPerturbEvent)event) {
+                case LP_GLPK_PERTURB_EVENT_ENABLE:
+                case LP_GLPK_PERTURB_EVENT_REAPPLY:
+                    next_state = LP_GLPK_PERTURB_STATE_ACTIVE;
+                    break;
+                case LP_GLPK_PERTURB_EVENT_BEGIN_CLEANUP:
+                    next_state = LP_GLPK_PERTURB_STATE_CLEANUP;
+                    break;
+                case LP_GLPK_PERTURB_EVENT_DISABLE:
+                    next_state = LP_GLPK_PERTURB_STATE_OFF;
+                    break;
+                default:
+                    valid = 0;
+                    break;
+            }
+            break;
+        case LP_GLPK_PERTURB_STATE_CLEANUP:
+            switch ((LPGLPKPerturbEvent)event) {
+                case LP_GLPK_PERTURB_EVENT_DISABLE:
+                    next_state = LP_GLPK_PERTURB_STATE_OFF;
+                    break;
+                case LP_GLPK_PERTURB_EVENT_ENABLE:
+                case LP_GLPK_PERTURB_EVENT_REAPPLY:
+                    next_state = LP_GLPK_PERTURB_STATE_ACTIVE;
+                    break;
+                case LP_GLPK_PERTURB_EVENT_BEGIN_CLEANUP:
+                    next_state = LP_GLPK_PERTURB_STATE_CLEANUP;
+                    break;
+                default:
+                    valid = 0;
+                    break;
+            }
+            break;
+        default:
+            valid = 0;
+            break;
+    }
+
+    if (next_state_out) {
+        *next_state_out = valid ? next_state : state;
+    }
+    return valid;
+}
+
 void lp_policy_glpk_compat_init(LPGLPKCompatConfig *cfg) {
     if (!cfg) return;
     cfg->lp_policy_profile = LP_POLICY_PROFILE_DEFAULT;

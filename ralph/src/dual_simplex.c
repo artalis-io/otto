@@ -2019,6 +2019,55 @@ static void remove_bound_perturbation(SimplexTableau *tab) {
     }
 }
 
+static void dual_perturb_state_activate(SimplexTableau *tab,
+                                        int *state_io,
+                                        int reapply) {
+    int state = (state_io ? *state_io : LP_GLPK_PERTURB_STATE_OFF);
+    int next = state;
+    int event = reapply ? LP_GLPK_PERTURB_EVENT_REAPPLY
+                        : LP_GLPK_PERTURB_EVENT_ENABLE;
+    (void)lp_policy_glpk_perturb_next_state(state, event, &next);
+    apply_bound_perturbation(tab);
+    if (tab && tab->perturb_backup) {
+        state = next;
+    } else {
+        state = LP_GLPK_PERTURB_STATE_OFF;
+    }
+    if (state_io) *state_io = state;
+}
+
+static void dual_perturb_state_begin_cleanup(SimplexTableau *tab, int *state_io) {
+    int state = (state_io ? *state_io : LP_GLPK_PERTURB_STATE_OFF);
+    int next = state;
+    if (tab && tab->perturb_backup) {
+        if (lp_policy_glpk_perturb_next_state(state,
+                                              LP_GLPK_PERTURB_EVENT_BEGIN_CLEANUP,
+                                              &next)) {
+            state = next;
+        }
+        remove_bound_perturbation(tab);
+    } else {
+        state = LP_GLPK_PERTURB_STATE_OFF;
+    }
+    if (state_io) *state_io = state;
+}
+
+static void dual_perturb_state_disable(SimplexTableau *tab, int *state_io) {
+    int state = (state_io ? *state_io : LP_GLPK_PERTURB_STATE_OFF);
+    int next = state;
+    if (tab && tab->perturb_backup) {
+        remove_bound_perturbation(tab);
+    }
+    if (lp_policy_glpk_perturb_next_state(state,
+                                          LP_GLPK_PERTURB_EVENT_DISABLE,
+                                          &next)) {
+        state = next;
+    } else {
+        state = LP_GLPK_PERTURB_STATE_OFF;
+    }
+    if (state_io) *state_io = state;
+}
+
 /* Clear stale perturbation backup before warm-starting v2.
  * After branching, bounds change between nodes. apply_bound_perturbation()
  * saves the FIRST bounds to backup — if bounds changed, the backup is stale.
@@ -2050,7 +2099,8 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
 
     /* Apply bound perturbation for cycling prevention.
      * Cost is O(n) — cheap even for warm starts. */
-    apply_bound_perturbation(tab);
+    int perturb_state = LP_GLPK_PERTURB_STATE_OFF;
+    dual_perturb_state_activate(tab, &perturb_state, 0);
 
     int use_dse = solver->use_dual_steepest_edge;
 
@@ -2085,7 +2135,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         solver->iterations = iter;
         if (dual_run_user_callbacks(solver, tab, iter, 0, 1) != 0) {
-            remove_bound_perturbation(tab);
+            dual_perturb_state_disable(tab, &perturb_state);
             solver->status = RALPH_STATUS_TIME_LIMIT;
             solver->iterations = iter;
             return -1;
@@ -2094,7 +2144,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
         /* T3.1: Objective limit early-exit (internal minimization space) */
         if (solver->objective_limit < RALPH_INFINITY &&
             tab->obj_value >= solver->objective_limit) {
-            remove_bound_perturbation(tab);
+            dual_perturb_state_disable(tab, &perturb_state);
             tableau_compute_solution(tab);
             solver->status = RALPH_STATUS_OBJ_LIMIT;
             solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
@@ -2147,7 +2197,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                        iter, tab->perturb_backup ? "yes" : "no");
             }
             if (tab->perturb_backup) {
-                remove_bound_perturbation(tab);
+                dual_perturb_state_begin_cleanup(tab, &perturb_state);
                 /* Snap non-basic variables to restored (unperturbed) bounds.
                  * remove_bound_perturbation restores lb_ext/ub_ext but x[j]
                  * still holds the perturbed value (e.g. 1+ε instead of 1).
@@ -2325,7 +2375,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                         LP_LOG_STDOUT("[dual_v2] Suboptimal: max dual violation %.2e after unshift\n",
                                max_dual_viol);
                     }
-                    remove_bound_perturbation(tab);
+                    dual_perturb_state_disable(tab, &perturb_state);
                     solver->status = RALPH_STATUS_ERROR;
                     return -1;  /* Trigger primal fallback */
                 }
@@ -2340,7 +2390,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                 for (int j = 0; j < n_orig; j++)
                     solver->solution[j] = tab->x[j];
             }
-            remove_bound_perturbation(tab);
+            dual_perturb_state_disable(tab, &perturb_state);
             dual_run_user_callbacks(solver, tab, iter, 1, 0);
             return 0;
         }
@@ -2365,7 +2415,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                     continue;
                 }
                 /* No entering variable — problem is infeasible */
-                remove_bound_perturbation(tab);
+                dual_perturb_state_disable(tab, &perturb_state);
                 extract_farkas_ray_dual(solver);
                 solver->status = RALPH_STATUS_INFEASIBLE;
                 dual_run_user_callbacks(solver, tab, iter, 1, 0);
@@ -2390,7 +2440,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                 int rc_ref = tableau_refactorize(tab);
                 lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
                 if (rc_ref != 0) {
-                    remove_bound_perturbation(tab);
+                    dual_perturb_state_disable(tab, &perturb_state);
                     solver->status = RALPH_STATUS_ERROR;
                     return -1;  /* FAILED */
                 }
@@ -2407,7 +2457,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
         if (fabs(theta) < RALPH_FEAS_TOL) {
             degenerate_count++;
             if (degenerate_count >= DEGEN_PERTURB_THRESHOLD) {
-                apply_bound_perturbation(tab);
+                dual_perturb_state_activate(tab, &perturb_state, 0);
                 degenerate_count = 0;
             }
         } else {
@@ -2422,9 +2472,9 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
             if (stall_count >= STALL_THRESHOLD) {
                 perturb_attempts++;
                 if (perturb_attempts <= MAX_PERTURB_ATTEMPTS) {
-                    remove_bound_perturbation(tab);
+                    dual_perturb_state_disable(tab, &perturb_state);
                     tab->perturb_scale = 1.0 + 2.0 * perturb_attempts;
-                    apply_bound_perturbation(tab);
+                    dual_perturb_state_activate(tab, &perturb_state, 1);
                     stall_count = 0;
                     if (solver->verbose) {
                         LP_LOG_STDOUT("[dual_v2] Iter %d: stalled, re-perturbing (attempt %d, scale %.1f)\n",
@@ -2436,7 +2486,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
                         LP_LOG_STDOUT("[dual_v2] Iter %d: stalled after %d perturb attempts, giving up\n",
                                iter, perturb_attempts);
                     }
-                    remove_bound_perturbation(tab);
+                    dual_perturb_state_disable(tab, &perturb_state);
                     solver->status = RALPH_STATUS_ERROR;
                     return -1;
                 }
@@ -2459,7 +2509,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
             int rc_ref = tableau_refactorize(tab);
             lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
             if (rc_ref != 0) {
-                remove_bound_perturbation(tab);
+                dual_perturb_state_disable(tab, &perturb_state);
                 solver->status = RALPH_STATUS_ERROR;
                 return -1;
             }
@@ -2478,7 +2528,7 @@ int dual_simplex_solve_v2(SimplexSolver *solver) {
     }
 
     /* Exceeded max iterations — FAILED */
-    remove_bound_perturbation(tab);
+    dual_perturb_state_disable(tab, &perturb_state);
     solver->status = RALPH_STATUS_ITERATION_LIMIT;
     solver->iterations = solver->max_iterations;
     dual_run_user_callbacks(solver, tab, solver->iterations, 1, 0);
@@ -2588,7 +2638,8 @@ int dual_phase1(SimplexSolver *solver) {
     tableau_compute_reduced_costs(tab);
 
     /* Apply bound perturbation for cycling prevention */
-    apply_bound_perturbation(tab);
+    int perturb_state = LP_GLPK_PERTURB_STATE_OFF;
+    dual_perturb_state_activate(tab, &perturb_state, 0);
 
     int use_dse = solver->use_dual_steepest_edge;
     if (use_dse) dse_init_exact(tab);
@@ -2601,7 +2652,7 @@ int dual_phase1(SimplexSolver *solver) {
 
     for (int iter = 0; iter < max_phase1_iters; iter++) {
         if (dual_time_limit_exceeded(solver, iter)) {
-            remove_bound_perturbation(tab);
+            dual_perturb_state_disable(tab, &perturb_state);
             memcpy(tab->c_ext, c_saved, n * sizeof(double));
             free(c_saved);
             return -1;
@@ -2697,7 +2748,7 @@ int dual_phase1(SimplexSolver *solver) {
     }
 
     /* Remove perturbation */
-    remove_bound_perturbation(tab);
+    dual_perturb_state_disable(tab, &perturb_state);
 
     /* Restore original objective */
     memcpy(tab->c_ext, c_saved, n * sizeof(double));
