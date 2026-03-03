@@ -63,6 +63,14 @@ static void test_solver_reset_and_refactor_accounting(void) {
 
     solver.telemetry.perf_pricing_ms = 12.0;
     solver.telemetry.perf_refactor_count = 3;
+    solver.telemetry.perf_ftran_calls = 9;
+    solver.telemetry.perf_btran_calls = 7;
+    solver.telemetry.perf_ftran_nnz_samples = 6;
+    solver.telemetry.perf_btran_nnz_samples = 5;
+    solver.telemetry.perf_ftran_rhs_nnz_total = 111;
+    solver.telemetry.perf_ftran_sol_nnz_total = 222;
+    solver.telemetry.perf_btran_rhs_nnz_total = 333;
+    solver.telemetry.perf_btran_sol_nnz_total = 444;
     solver.telemetry.perf_phase1_dir_stabilize_force_extreme_dir = 5;
     solver.telemetry.perf_phase1_dir_stabilize_force_lu_health = 4;
     solver.telemetry.perf_phase1_dir_stabilize_cooldown_candidates = 8;
@@ -96,6 +104,9 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_dual_bound_flip_applied = 9;
     solver.telemetry.perf_dual_bound_flip_startup = 4;
     solver.telemetry.perf_dual_bound_flip_iterative = 5;
+    solver.telemetry.perf_reinvert_shadow_checks_phase1 = 7;
+    solver.telemetry.perf_reinvert_shadow_disagree_phase2 = 3;
+    solver.telemetry.perf_reinvert_shadow_last_reason_dual = LP_REINVERT_REASON_COST_DAMPEN;
     solver.policy.refactor_next_reason = RALPH_REFACTOR_REASON_SETUP;
     solver.telemetry.perf_basis_fastpath_hits = 7;
     solver.policy.periodic_feedback_bias_phase2 = 0.2;
@@ -124,6 +135,18 @@ static void test_solver_reset_and_refactor_accounting(void) {
 
     ASSERT_DBL_EQ(solver.telemetry.perf_pricing_ms, 0.0, "reset: perf_pricing_ms");
     ASSERT_INT_EQ(solver.telemetry.perf_refactor_count, 0, "reset: refactor_count");
+    ASSERT_INT_EQ(solver.telemetry.perf_ftran_calls, 0, "reset: ftran calls");
+    ASSERT_INT_EQ(solver.telemetry.perf_btran_calls, 0, "reset: btran calls");
+    ASSERT_INT_EQ(solver.telemetry.perf_ftran_nnz_samples, 0, "reset: ftran nnz samples");
+    ASSERT_INT_EQ(solver.telemetry.perf_btran_nnz_samples, 0, "reset: btran nnz samples");
+    ASSERT_ULL_EQ((unsigned long long)solver.telemetry.perf_ftran_rhs_nnz_total, 0ULL,
+                  "reset: ftran rhs nnz total");
+    ASSERT_ULL_EQ((unsigned long long)solver.telemetry.perf_ftran_sol_nnz_total, 0ULL,
+                  "reset: ftran sol nnz total");
+    ASSERT_ULL_EQ((unsigned long long)solver.telemetry.perf_btran_rhs_nnz_total, 0ULL,
+                  "reset: btran rhs nnz total");
+    ASSERT_ULL_EQ((unsigned long long)solver.telemetry.perf_btran_sol_nnz_total, 0ULL,
+                  "reset: btran sol nnz total");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_force_extreme_dir, 0,
                   "reset: phase1 dir force extreme");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_force_lu_health, 0,
@@ -190,6 +213,13 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: dual bound-flip startup");
     ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_iterative, 0,
                   "reset: dual bound-flip iterative");
+    ASSERT_INT_EQ(solver.telemetry.perf_reinvert_shadow_checks_phase1, 0,
+                  "reset: reinvert shadow checks phase1");
+    ASSERT_INT_EQ(solver.telemetry.perf_reinvert_shadow_disagree_phase2, 0,
+                  "reset: reinvert shadow disagree phase2");
+    ASSERT_INT_EQ(solver.telemetry.perf_reinvert_shadow_last_reason_dual,
+                  LP_REINVERT_REASON_NONE,
+                  "reset: reinvert shadow last reason dual");
     ASSERT_INT_EQ(solver.policy.refactor_next_reason, RALPH_REFACTOR_REASON_OTHER,
                   "reset: next reason");
     ASSERT_INT_EQ(solver.telemetry.perf_basis_fastpath_hits, 0, "reset: basis_fastpath_hits");
@@ -235,6 +265,20 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: basis governor yes phase1");
     ASSERT_INT_EQ(solver.policy.basis_governor.shadow_disagree_lu_backend, 0,
                   "reset: basis governor lu disagreement");
+
+    lp_telemetry_add_ftran_ms(&solver, 1.25);
+    lp_telemetry_add_btran_ms(&solver, 0.75);
+    lp_telemetry_record_ftran_nnz(&solver, 3, 17);
+    lp_telemetry_record_btran_nnz(&solver, 1, 9);
+    lp_telemetry_record_ftran_nnz(&solver, -1, 4);  /* ignored invalid sample */
+    ASSERT_INT_EQ(solver.telemetry.perf_ftran_calls, 1, "ftran: call count");
+    ASSERT_INT_EQ(solver.telemetry.perf_btran_calls, 1, "btran: call count");
+    ASSERT_INT_EQ(solver.telemetry.perf_ftran_nnz_samples, 1, "ftran: nnz sample count");
+    ASSERT_INT_EQ(solver.telemetry.perf_btran_nnz_samples, 1, "btran: nnz sample count");
+    ASSERT_INT_EQ((int)solver.telemetry.perf_ftran_rhs_nnz_total, 3, "ftran: rhs nnz total");
+    ASSERT_INT_EQ((int)solver.telemetry.perf_ftran_sol_nnz_total, 17, "ftran: sol nnz total");
+    ASSERT_INT_EQ((int)solver.telemetry.perf_btran_rhs_nnz_total, 1, "btran: rhs nnz total");
+    ASSERT_INT_EQ((int)solver.telemetry.perf_btran_sol_nnz_total, 9, "btran: sol nnz total");
 
     lp_telemetry_record_basis_build(&solver, 1, 2, 128ULL);
     ASSERT_INT_EQ(solver.telemetry.perf_basis_fastpath_hits, 1, "basis: fastpath hit");
@@ -398,6 +442,47 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: dual bound flips startup");
     ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_iterative, 2,
                   "record: dual bound flips iterative");
+
+    lp_telemetry_record_reinvert_shadow(&solver,
+                                        1,
+                                        LP_REINVERT_DECISION_DEFER,
+                                        LP_REINVERT_REASON_COST_DAMPEN,
+                                        0,
+                                        1);
+    lp_telemetry_record_reinvert_shadow(&solver,
+                                        2,
+                                        LP_REINVERT_DECISION_FORCE,
+                                        LP_REINVERT_REASON_HARD_LU_HEALTH,
+                                        1,
+                                        1);
+    lp_telemetry_record_reinvert_shadow(&solver,
+                                        0,
+                                        LP_REINVERT_DECISION_ALLOW,
+                                        LP_REINVERT_REASON_PERIODIC_CADENCE,
+                                        0,
+                                        0);
+    ASSERT_INT_EQ(solver.telemetry.perf_reinvert_shadow_checks_phase1, 1,
+                  "record: reinvert checks phase1");
+    ASSERT_INT_EQ(solver.telemetry.perf_reinvert_shadow_suggest_defer_phase1, 1,
+                  "record: reinvert suggest defer phase1");
+    ASSERT_INT_EQ(solver.telemetry.perf_reinvert_shadow_actual_refactor_yes_phase1, 1,
+                  "record: reinvert actual yes phase1");
+    ASSERT_INT_EQ(solver.telemetry.perf_reinvert_shadow_disagree_phase1, 1,
+                  "record: reinvert disagree phase1");
+    ASSERT_INT_EQ(solver.telemetry.perf_reinvert_shadow_checks_phase2, 1,
+                  "record: reinvert checks phase2");
+    ASSERT_INT_EQ(solver.telemetry.perf_reinvert_shadow_suggest_force_phase2, 1,
+                  "record: reinvert suggest force phase2");
+    ASSERT_INT_EQ(solver.telemetry.perf_reinvert_shadow_disagree_phase2, 0,
+                  "record: reinvert disagree phase2");
+    ASSERT_INT_EQ(solver.telemetry.perf_reinvert_shadow_checks_dual, 1,
+                  "record: reinvert checks dual");
+    ASSERT_INT_EQ(solver.telemetry.perf_reinvert_shadow_suggest_allow_dual, 1,
+                  "record: reinvert suggest allow dual");
+    ASSERT_INT_EQ(solver.telemetry.perf_reinvert_shadow_actual_refactor_no_dual, 1,
+                  "record: reinvert actual no dual");
+    ASSERT_INT_EQ(solver.telemetry.perf_reinvert_shadow_disagree_dual, 0,
+                  "record: reinvert disagree dual");
 }
 
 static void test_refactor_reason_classifier(void) {
@@ -421,6 +506,14 @@ static void test_solver_snapshot(void) {
     memset(&solver, 0, sizeof(solver));
 
     solver.telemetry.perf_phase2_ms = 42.25;
+    solver.telemetry.perf_ftran_calls = 31;
+    solver.telemetry.perf_btran_calls = 19;
+    solver.telemetry.perf_ftran_nnz_samples = 29;
+    solver.telemetry.perf_btran_nnz_samples = 17;
+    solver.telemetry.perf_ftran_rhs_nnz_total = 377;
+    solver.telemetry.perf_ftran_sol_nnz_total = 2441;
+    solver.telemetry.perf_btran_rhs_nnz_total = 121;
+    solver.telemetry.perf_btran_sol_nnz_total = 1303;
     solver.telemetry.perf_refactor_reason_periodic = 11;
     solver.telemetry.perf_basis_tail_shift_bytes = 4096ULL;
     solver.telemetry.perf_phase1_pricing_calls = 17;
@@ -457,6 +550,11 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_dual_bound_flip_applied = 13;
     solver.telemetry.perf_dual_bound_flip_startup = 5;
     solver.telemetry.perf_dual_bound_flip_iterative = 8;
+    solver.telemetry.perf_reinvert_shadow_checks_phase1 = 17;
+    solver.telemetry.perf_reinvert_shadow_suggest_defer_phase1 = 9;
+    solver.telemetry.perf_reinvert_shadow_actual_refactor_yes_phase1 = 4;
+    solver.telemetry.perf_reinvert_shadow_disagree_phase1 = 2;
+    solver.telemetry.perf_reinvert_shadow_last_reason_phase1 = LP_REINVERT_REASON_COST_DAMPEN;
     solver.policy.periodic_feedback_hint_pressure_phase2 = 0.55;
     solver.policy.soft_lu_cost_gate_enabled = 1;
     solver.policy.soft_lu_cost_gate_defers_phase1 = 3;
@@ -482,6 +580,14 @@ static void test_solver_snapshot(void) {
     lp_telemetry_snapshot_solver(&solver, &snap);
 
     ASSERT_DBL_EQ(snap.perf_phase2_ms, 42.25, "solver_snapshot: phase2_ms");
+    ASSERT_INT_EQ(snap.perf_ftran_calls, 31, "solver_snapshot: ftran calls");
+    ASSERT_INT_EQ(snap.perf_btran_calls, 19, "solver_snapshot: btran calls");
+    ASSERT_INT_EQ(snap.perf_ftran_nnz_samples, 29, "solver_snapshot: ftran nnz samples");
+    ASSERT_INT_EQ(snap.perf_btran_nnz_samples, 17, "solver_snapshot: btran nnz samples");
+    ASSERT_INT_EQ((int)snap.perf_ftran_rhs_nnz_total, 377, "solver_snapshot: ftran rhs nnz total");
+    ASSERT_INT_EQ((int)snap.perf_ftran_sol_nnz_total, 2441, "solver_snapshot: ftran sol nnz total");
+    ASSERT_INT_EQ((int)snap.perf_btran_rhs_nnz_total, 121, "solver_snapshot: btran rhs nnz total");
+    ASSERT_INT_EQ((int)snap.perf_btran_sol_nnz_total, 1303, "solver_snapshot: btran sol nnz total");
     ASSERT_INT_EQ(snap.perf_refactor_reason_periodic, 11,
                   "solver_snapshot: refactor_reason_periodic");
     ASSERT_ULL_EQ(snap.perf_basis_tail_shift_bytes, 4096ULL,
@@ -554,6 +660,16 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: dual bound flips startup");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_iterative, 8,
                   "solver_snapshot: dual bound flips iterative");
+    ASSERT_INT_EQ(snap.reinvert_shadow_checks_phase1, 17,
+                  "solver_snapshot: reinvert shadow checks phase1");
+    ASSERT_INT_EQ(snap.reinvert_shadow_suggest_defer_phase1, 9,
+                  "solver_snapshot: reinvert suggest defer phase1");
+    ASSERT_INT_EQ(snap.reinvert_shadow_actual_refactor_yes_phase1, 4,
+                  "solver_snapshot: reinvert actual yes phase1");
+    ASSERT_INT_EQ(snap.reinvert_shadow_disagree_phase1, 2,
+                  "solver_snapshot: reinvert disagree phase1");
+    ASSERT_INT_EQ(snap.reinvert_shadow_last_reason_phase1, LP_REINVERT_REASON_COST_DAMPEN,
+                  "solver_snapshot: reinvert last reason phase1");
     ASSERT_DBL_EQ(snap.periodic_feedback_hint_pressure_phase2, 0.55,
                   "solver_snapshot: feedback pressure phase2");
     ASSERT_INT_EQ(snap.soft_lu_cost_gate_enabled, 1,

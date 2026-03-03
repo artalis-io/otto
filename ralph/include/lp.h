@@ -12,6 +12,7 @@
 #include "ralph_core.h"
 #include "shared.h"
 #include "lp_basis_governor.h"
+#include "lp_reinvert_controller.h"
 
 /* Software prefetch (no-op on non-GCC/Clang compilers) */
 #if defined(__GNUC__) || defined(__clang__)
@@ -489,6 +490,7 @@ typedef struct {
     double *work1;
     double *work2;
     double *work3;
+    double *work4;
     double *rhs;            /* Normalized RHS (always >= 0) */
     double *row_sign;       /* Row transformation signs (+1 or -1) for Farkas mapping */
     double *pivot_row;      /* Pre-allocated for simplex_pivot */
@@ -572,6 +574,9 @@ typedef struct {
     /* Statistics */
     int iterations;
     int phase;              /* 1 or 2 */
+    int solution_last_residual_iter;            /* Last iteration with full residual/refinement check */
+    int solution_last_residual_factorize_calls; /* LU factorize_calls at last residual/refinement check */
+    int solution_last_residual_num_updates;     /* LU num_updates at last residual/refinement check */
 
     /* Phase-1 failure tracing (deterministic diagnostics for numerical stalls) */
     int trace_phase1_enabled;      /* 1 to emit trace lines */
@@ -612,6 +617,14 @@ typedef struct {
     double perf_refactor_ms;       /* Refactorization time */
     double perf_ftran_ms;          /* FTRAN solve time (B^{-1} * a) */
     double perf_btran_ms;          /* BTRAN solve time (B^{-T} * e) */
+    int perf_ftran_calls;          /* Number of FTRAN solve calls */
+    int perf_btran_calls;          /* Number of BTRAN solve calls */
+    int perf_ftran_nnz_samples;    /* Number of FTRAN solves with nnz telemetry */
+    int perf_btran_nnz_samples;    /* Number of BTRAN solves with nnz telemetry */
+    long long perf_ftran_rhs_nnz_total; /* Sum of FTRAN RHS nnz across sampled calls */
+    long long perf_ftran_sol_nnz_total; /* Sum of FTRAN solution nnz across sampled calls */
+    long long perf_btran_rhs_nnz_total; /* Sum of BTRAN RHS nnz across sampled calls */
+    long long perf_btran_sol_nnz_total; /* Sum of BTRAN solution nnz across sampled calls */
     double perf_lu_update_ms;      /* LU update time */
     double perf_compute_solution_ms; /* tableau_compute_solution time */
     double perf_compute_rc_ms;     /* tableau_compute_reduced_costs time */
@@ -740,6 +753,32 @@ typedef struct {
     int perf_dual_bound_flip_startup;  /* dual bound flips applied in startup dual-feasibility pass */
     int perf_dual_bound_flip_iterative;/* dual bound flips applied in iterative flip-ratio path */
     int perf_dual_lu_hard_trigger;     /* dual pivot path triggered hard LU recovery/refactor */
+
+    /* Reinvert-controller shadow telemetry (Phase 2 scaffolding; no behavior change). */
+    int perf_reinvert_shadow_checks_phase1;
+    int perf_reinvert_shadow_checks_phase2;
+    int perf_reinvert_shadow_checks_dual;
+    int perf_reinvert_shadow_suggest_allow_phase1;
+    int perf_reinvert_shadow_suggest_allow_phase2;
+    int perf_reinvert_shadow_suggest_allow_dual;
+    int perf_reinvert_shadow_suggest_defer_phase1;
+    int perf_reinvert_shadow_suggest_defer_phase2;
+    int perf_reinvert_shadow_suggest_defer_dual;
+    int perf_reinvert_shadow_suggest_force_phase1;
+    int perf_reinvert_shadow_suggest_force_phase2;
+    int perf_reinvert_shadow_suggest_force_dual;
+    int perf_reinvert_shadow_actual_refactor_yes_phase1;
+    int perf_reinvert_shadow_actual_refactor_yes_phase2;
+    int perf_reinvert_shadow_actual_refactor_yes_dual;
+    int perf_reinvert_shadow_actual_refactor_no_phase1;
+    int perf_reinvert_shadow_actual_refactor_no_phase2;
+    int perf_reinvert_shadow_actual_refactor_no_dual;
+    int perf_reinvert_shadow_disagree_phase1;
+    int perf_reinvert_shadow_disagree_phase2;
+    int perf_reinvert_shadow_disagree_dual;
+    int perf_reinvert_shadow_last_reason_phase1;
+    int perf_reinvert_shadow_last_reason_phase2;
+    int perf_reinvert_shadow_last_reason_dual;
 } LPSolverTelemetryState;
 
 /* Solver policy state (behavioral scheduling/control, not telemetry). */
@@ -807,6 +846,12 @@ typedef struct {
     double soft_lu_refactor_cost_ewma_phase2; /* EWMA refactor cost estimate (ms) */
     double soft_lu_iter_cost_ewma_phase1;     /* EWMA per-iteration hot-path cost (ms) */
     double soft_lu_iter_cost_ewma_phase2;     /* EWMA per-iteration hot-path cost (ms) */
+
+    /* Unified reinversion controller state (shadow-only in Phase 2). */
+    LPReinvertControllerState reinvert_state_phase1;
+    LPReinvertControllerState reinvert_state_phase2;
+    LPReinvertControllerState reinvert_state_dual;
+    double reinvert_dual_last_hot_ms;
 } LPSolverPolicyState;
 
 /* Simplex solver */
@@ -933,6 +978,14 @@ typedef struct {
     double perf_refactor_ms;
     double perf_ftran_ms;
     double perf_btran_ms;
+    int perf_ftran_calls;
+    int perf_btran_calls;
+    int perf_ftran_nnz_samples;
+    int perf_btran_nnz_samples;
+    long long perf_ftran_rhs_nnz_total;
+    long long perf_ftran_sol_nnz_total;
+    long long perf_btran_rhs_nnz_total;
+    long long perf_btran_sol_nnz_total;
     double perf_lu_update_ms;
     double perf_compute_solution_ms;
     double perf_compute_rc_ms;
@@ -1123,6 +1176,30 @@ typedef struct {
     int shadow_disagree_primal_refactor;
     int shadow_disagree_dual_refactor;
     int shadow_disagree_lu_backend;
+    int reinvert_shadow_checks_phase1;
+    int reinvert_shadow_checks_phase2;
+    int reinvert_shadow_checks_dual;
+    int reinvert_shadow_suggest_allow_phase1;
+    int reinvert_shadow_suggest_allow_phase2;
+    int reinvert_shadow_suggest_allow_dual;
+    int reinvert_shadow_suggest_defer_phase1;
+    int reinvert_shadow_suggest_defer_phase2;
+    int reinvert_shadow_suggest_defer_dual;
+    int reinvert_shadow_suggest_force_phase1;
+    int reinvert_shadow_suggest_force_phase2;
+    int reinvert_shadow_suggest_force_dual;
+    int reinvert_shadow_actual_refactor_yes_phase1;
+    int reinvert_shadow_actual_refactor_yes_phase2;
+    int reinvert_shadow_actual_refactor_yes_dual;
+    int reinvert_shadow_actual_refactor_no_phase1;
+    int reinvert_shadow_actual_refactor_no_phase2;
+    int reinvert_shadow_actual_refactor_no_dual;
+    int reinvert_shadow_disagree_phase1;
+    int reinvert_shadow_disagree_phase2;
+    int reinvert_shadow_disagree_dual;
+    int reinvert_shadow_last_reason_phase1;
+    int reinvert_shadow_last_reason_phase2;
+    int reinvert_shadow_last_reason_dual;
 } LPSolverTelemetrySnapshot;
 
 /* LU telemetry snapshot used by benchmarks and diagnostics. */
@@ -1419,10 +1496,16 @@ void lp_telemetry_add_ftran_ms(SimplexSolver *solver,
                                double elapsed_ms);
 void lp_telemetry_add_ftran_timed(SimplexSolver *solver,
                                   double start_ms);
+void lp_telemetry_record_ftran_nnz(SimplexSolver *solver,
+                                   int rhs_nnz,
+                                   int sol_nnz);
 void lp_telemetry_add_btran_ms(SimplexSolver *solver,
                                double elapsed_ms);
 void lp_telemetry_add_btran_timed(SimplexSolver *solver,
                                   double start_ms);
+void lp_telemetry_record_btran_nnz(SimplexSolver *solver,
+                                   int rhs_nnz,
+                                   int sol_nnz);
 void lp_telemetry_add_lu_update_ms(SimplexSolver *solver,
                                    double elapsed_ms);
 void lp_telemetry_add_lu_update_timed(SimplexSolver *solver,
@@ -1515,6 +1598,12 @@ void lp_telemetry_record_dual_bound_flip_applied_startup(SimplexSolver *solver,
 void lp_telemetry_record_dual_bound_flip_applied_iterative(SimplexSolver *solver,
                                                            int flips);
 void lp_telemetry_record_dual_lu_hard_trigger(SimplexSolver *solver);
+void lp_telemetry_record_reinvert_shadow(SimplexSolver *solver,
+                                         int phase,
+                                         LPReinvertDecision suggested_decision,
+                                         LPReinvertReason suggested_reason,
+                                         int suggested_refactor,
+                                         int actual_refactor);
 void lp_telemetry_lu_record_dense_factorize_ms(LUFactorization *lu,
                                                double elapsed_ms);
 void lp_telemetry_lu_record_dense_factorize_timed(LUFactorization *lu,

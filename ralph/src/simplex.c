@@ -713,6 +713,86 @@ static int should_run_periodic_refactor(const SimplexTableau *tab,
                                                  degenerate_count);
 }
 
+static LPReinvertControllerState *reinvert_state_for_phase(SimplexSolver *solver,
+                                                           int phase) {
+    if (!solver) return NULL;
+    if (phase == 1) return &solver->policy.reinvert_state_phase1;
+    if (phase == 2) return &solver->policy.reinvert_state_phase2;
+    return NULL;
+}
+
+static double average_solve_density(long long sol_nnz_total, int samples, int m) {
+    double density;
+    double denom;
+    if (samples <= 0 || m <= 0) return 0.0;
+    denom = (double)samples * (double)m;
+    if (!(denom > 0.0)) return 0.0;
+    density = (double)sol_nnz_total / denom;
+    if (!(density > 0.0)) return 0.0;
+    if (density > 1.0) return 1.0;
+    return density;
+}
+
+static void reinvert_shadow_observe_phase(SimplexSolver *solver,
+                                          SimplexTableau *tab,
+                                          int phase,
+                                          int iter,
+                                          const LPLUHealthRefactorDecision *lu_health_decision,
+                                          int periodic_due,
+                                          int min_update_age,
+                                          int cooldown_updates,
+                                          int actual_refactor) {
+    LPReinvertControllerState *state;
+    LPReinvertControllerSignals signals;
+    LPReinvertControllerDecision decision;
+    int suggested_refactor = 0;
+    double ftran_density;
+    double btran_density;
+
+    if (!solver || !tab || !tab->lu || !lu_health_decision) return;
+    state = reinvert_state_for_phase(solver, phase);
+    if (!state) return;
+
+    lp_reinvert_controller_state_record_update_age_ratio(state,
+                                                         tab->lu->num_updates,
+                                                         tab->lu->max_updates);
+    ftran_density = average_solve_density(solver->telemetry.perf_ftran_sol_nnz_total,
+                                          solver->telemetry.perf_ftran_nnz_samples,
+                                          tab->m);
+    btran_density = average_solve_density(solver->telemetry.perf_btran_sol_nnz_total,
+                                          solver->telemetry.perf_btran_nnz_samples,
+                                          tab->m);
+    lp_reinvert_controller_state_record_solve_density(state,
+                                                      ftran_density,
+                                                      btran_density);
+    lp_reinvert_controller_state_set_cooldown(state, cooldown_updates);
+
+    signals.phase = phase;
+    signals.iter = iter;
+    signals.m = tab->m;
+    signals.num_updates = tab->lu->num_updates;
+    signals.max_updates = tab->lu->max_updates;
+    signals.periodic_due = periodic_due ? 1 : 0;
+    signals.min_update_age = (min_update_age > 0) ? min_update_age : 0;
+    signals.cooldown_updates = (cooldown_updates > 0) ? cooldown_updates : 0;
+    signals.hard_lu_trigger = lu_health_decision->hard_trigger ? 1 : 0;
+    signals.soft_lu_trigger = lu_health_decision->soft_trigger ? 1 : 0;
+    signals.ftran_density = ftran_density;
+    signals.btran_density = btran_density;
+
+    decision = lp_reinvert_controller_decide(state, &signals);
+    suggested_refactor =
+        (decision.decision == LP_REINVERT_DECISION_FORCE) ||
+        (decision.decision == LP_REINVERT_DECISION_ALLOW && signals.periodic_due);
+    lp_telemetry_record_reinvert_shadow(solver,
+                                        phase,
+                                        decision.decision,
+                                        decision.reason,
+                                        suggested_refactor,
+                                        actual_refactor);
+    lp_reinvert_controller_state_apply_decision(state, &decision);
+}
+
 static int solution_refine_iteration_budget(double max_residual, double feas_tol) {
     if (!isfinite(max_residual) || !isfinite(feas_tol) || feas_tol <= 0.0) return 0;
     if (max_residual <= feas_tol) return 0;
@@ -4559,12 +4639,17 @@ int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *th
     }
 
     /* Relative pivot filter: avoid accepting numerically tiny pivots. */
+    int ftran_nnz = 0;
     double max_abs_dk = 0.0;
     for (int k = 0; k < tab->m; k++) {
         double abs_dk = fabs(tab->work2[k] * dir);
+        if (abs_dk > RALPH_ZERO_TOL) ftran_nnz++;
         if (abs_dk > max_abs_dk) {
             max_abs_dk = abs_dk;
         }
+    }
+    if (tab->owner) {
+        lp_telemetry_record_ftran_nnz(tab->owner, col_nnz, ftran_nnz);
     }
     double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
 
@@ -4644,12 +4729,17 @@ static int ratio_test_standard(SimplexTableau *tab, int entering, int *leaving, 
         dir = -1.0;
     }
 
+    int ftran_nnz = 0;
     double max_abs_dk = 0.0;
     for (int k = 0; k < tab->m; k++) {
         double abs_dk = fabs(tab->work2[k] * dir);
+        if (abs_dk > RALPH_ZERO_TOL) ftran_nnz++;
         if (abs_dk > max_abs_dk) {
             max_abs_dk = abs_dk;
         }
+    }
+    if (tab->owner) {
+        lp_telemetry_record_ftran_nnz(tab->owner, col_nnz, ftran_nnz);
     }
     double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
 
@@ -4743,13 +4833,18 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
     const double *work2 = tab->work2;
 
     /* Relative pivot filter: avoid numerically fragile leaving choices. */
+    int ftran_nnz = 0;
     double max_abs_dk = 0.0;
     for (int k = 0; k < tab->m; k++) {
         double dk = (dir > 0.0) ? work2[k] : -work2[k];
         double abs_dk = fabs(dk);
+        if (abs_dk > RALPH_ZERO_TOL) ftran_nnz++;
         if (abs_dk > max_abs_dk) {
             max_abs_dk = abs_dk;
         }
+    }
+    if (tab->owner) {
+        lp_telemetry_record_ftran_nnz(tab->owner, col_nnz, ftran_nnz);
     }
     double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
 
@@ -7508,6 +7603,8 @@ static int simplex_phase1(SimplexSolver *solver) {
             double phase1_hot_ms_now = phase_hotpath_ms(solver, 1);
             double iter_hot_ms = phase1_hot_ms_now - phase1_hot_ms_prev;
             soft_lu_record_iter_cost(solver, 1, iter_hot_ms);
+            lp_reinvert_controller_state_record_iter_cost(
+                reinvert_state_for_phase(solver, 1), iter_hot_ms);
             phase1_hot_ms_prev = phase1_hot_ms_now;
         }
         LPLUHealthRefactorDecision lu_health_decision =
@@ -7701,6 +7798,15 @@ static int simplex_phase1(SimplexSolver *solver) {
             }
             needs_refactor = governed_refactor;
         }
+        reinvert_shadow_observe_phase(solver,
+                                      tab,
+                                      1,
+                                      iter,
+                                      &lu_health_decision,
+                                      periodic_refactor_nominal,
+                                      periodic_policy.min_update_age,
+                                      periodic_policy_cooldown,
+                                      needs_refactor);
 
         if (needs_refactor) {
             phase1_dir_skip_no_recompute_streak = 0;
@@ -7712,6 +7818,8 @@ static int simplex_phase1(SimplexSolver *solver) {
             double refactor_elapsed_ms = lp_telemetry_timer_elapsed_ms(t_refactor_ms);
             if (rc_refactor == 0) {
                 soft_lu_record_refactor_cost(solver, 1, refactor_elapsed_ms);
+                lp_reinvert_controller_state_record_refactor_cost(
+                    reinvert_state_for_phase(solver, 1), refactor_elapsed_ms);
             }
             if (lu_refactor_needed && rc_refactor == 0) {
                 lu_soft_health_streak = 0;
@@ -8521,6 +8629,8 @@ static int simplex_phase2(SimplexSolver *solver) {
             double phase2_hot_ms_now = phase_hotpath_ms(solver, 2);
             double iter_hot_ms = phase2_hot_ms_now - phase2_hot_ms_prev;
             soft_lu_record_iter_cost(solver, 2, iter_hot_ms);
+            lp_reinvert_controller_state_record_iter_cost(
+                reinvert_state_for_phase(solver, 2), iter_hot_ms);
             phase2_hot_ms_prev = phase2_hot_ms_now;
         }
         LPLUHealthRefactorDecision lu_health_decision =
@@ -8705,6 +8815,15 @@ static int simplex_phase2(SimplexSolver *solver) {
             }
             needs_refactor = governed_refactor;
         }
+        reinvert_shadow_observe_phase(solver,
+                                      tab,
+                                      2,
+                                      iter,
+                                      &lu_health_decision,
+                                      periodic_refactor_nominal,
+                                      periodic_policy.min_update_age,
+                                      periodic_policy_cooldown,
+                                      needs_refactor);
 
         if (needs_refactor) {
             soft_lu_reset_defer_streak(solver, 2);
@@ -8720,6 +8839,8 @@ static int simplex_phase2(SimplexSolver *solver) {
             }
             if (rc_refactor == 0) {
                 soft_lu_record_refactor_cost(solver, 2, refactor_elapsed_ms);
+                lp_reinvert_controller_state_record_refactor_cost(
+                    reinvert_state_for_phase(solver, 2), refactor_elapsed_ms);
             }
             if (lu_refactor_needed && rc_refactor == 0) {
                 lu_soft_health_streak = 0;

@@ -6,6 +6,11 @@ This roadmap defines a strict GLPK-compatible LP control policy surface for Ralp
 Goal: match GLPK control semantics (SMCP/BFCP style knobs) while preserving Ralph's
 numerical safety triggers and existing no-regression gates.
 
+Execution tracking for the current strict three-step implementation is maintained in:
+- `docs/roadmaps/ralph-glpk-strict-execution.md`
+- `docs/roadmaps/ralph_glpk_strict_state.json`
+- `ralph/benchmarks/glpk_strict_plan.sh`
+
 ## Scope
 
 This plan is about control/policy behavior, not replacing Ralph kernels with GLPK.
