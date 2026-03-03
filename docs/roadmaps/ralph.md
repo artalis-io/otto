@@ -2,6 +2,40 @@
 
 Development roadmap for Ralph LP/MIP solver covering algorithms, performance, and planned features.
 
+## Active Plan: Unified Reinversion Controller (Plan 1)
+
+Objective: replace scattered reinversion/refactor heuristics with one controller that is
+telemetry-driven, globally testable, and not tuned to specific NETLIB instance names.
+
+Non-negotiable implementation policy (anti-monkey-patch):
+- No instance-specific logic (no filename checks, no per-instance branches, no hardcoded
+  per-case thresholds).
+- Hard LU safety triggers remain authoritative and unchanged (`LU_FAIL_*`, singular/update safety).
+- New behavior must be expressed as generic controller policy driven by runtime signals only.
+
+Execution steps:
+1. Add a dedicated module:
+   - `ralph/include/lp_reinvert_controller.h`
+   - `ralph/src/lp_reinvert_controller.c`
+2. Centralize reinversion state in one struct (per phase):
+   - EWMA iteration cost, EWMA refactor cost, update-age ratio, solve-density signal
+     (FTRAN/BTRAN nnz), LU-health streaks, cooldown window.
+3. Expose one decision API with explicit outcomes:
+   - `ALLOW`, `DEFER`, `FORCE` + stable reason codes.
+4. Integrate as the single periodic decision point in primal/dual paths:
+   - `simplex.c`, `dual_simplex.c`; keep `lp_refactor_policy.c` as thin wrapper/helpers.
+5. Add first-class telemetry:
+   - checks, decisions, reason histogram, cooldown hits, hard-override hits.
+6. Rollout in two phases:
+   - Shadow mode (log only), then control mode (phase 1 first, phase 2 after gates).
+
+Validation and promotion gates:
+1. Unit: deterministic controller table tests (`test_lp_reinvert_controller.c`).
+2. Policy tests: `test_simplex_policy`, `test_dual_ratio_flip`, `test_lp_refactor_policy`.
+3. Focused performance matrix: `pilot*`, `degen3`, `fit2p`.
+4. Full regression: `make -C ralph test-netlib-gate`.
+5. Promote only if no new correctness regressions and timeout envelope is improved or neutral.
+
 ## Stable Baseline
 
 **Validation checkpoint** (2026-03-02, `cc3d1ff`) — rollback to capri-working interim baseline:

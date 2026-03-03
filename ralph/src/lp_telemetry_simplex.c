@@ -59,6 +59,7 @@ void lp_telemetry_add_ftran_ms(SimplexSolver *solver,
                                double elapsed_ms) {
     if (!solver_telemetry_enabled(solver)) return;
     solver->telemetry.perf_ftran_ms += elapsed_ms;
+    solver->telemetry.perf_ftran_calls++;
 }
 
 void lp_telemetry_add_ftran_timed(SimplexSolver *solver,
@@ -71,12 +72,33 @@ void lp_telemetry_add_btran_ms(SimplexSolver *solver,
                                double elapsed_ms) {
     if (!solver_telemetry_enabled(solver)) return;
     solver->telemetry.perf_btran_ms += elapsed_ms;
+    solver->telemetry.perf_btran_calls++;
 }
 
 void lp_telemetry_add_btran_timed(SimplexSolver *solver,
                                   double start_ms) {
     lp_telemetry_add_btran_ms(solver,
                               lp_telemetry_timer_elapsed_ms(start_ms));
+}
+
+void lp_telemetry_record_ftran_nnz(SimplexSolver *solver,
+                                   int rhs_nnz,
+                                   int sol_nnz) {
+    if (!solver_telemetry_enabled(solver)) return;
+    if (rhs_nnz < 0 || sol_nnz < 0) return;
+    solver->telemetry.perf_ftran_nnz_samples++;
+    solver->telemetry.perf_ftran_rhs_nnz_total += (long long)rhs_nnz;
+    solver->telemetry.perf_ftran_sol_nnz_total += (long long)sol_nnz;
+}
+
+void lp_telemetry_record_btran_nnz(SimplexSolver *solver,
+                                   int rhs_nnz,
+                                   int sol_nnz) {
+    if (!solver_telemetry_enabled(solver)) return;
+    if (rhs_nnz < 0 || sol_nnz < 0) return;
+    solver->telemetry.perf_btran_nnz_samples++;
+    solver->telemetry.perf_btran_rhs_nnz_total += (long long)rhs_nnz;
+    solver->telemetry.perf_btran_sol_nnz_total += (long long)sol_nnz;
 }
 
 void lp_telemetry_add_lu_update_ms(SimplexSolver *solver,
@@ -562,4 +584,70 @@ void lp_telemetry_record_dual_bound_flip_applied_iterative(SimplexSolver *solver
 void lp_telemetry_record_dual_lu_hard_trigger(SimplexSolver *solver) {
     if (!solver_telemetry_enabled(solver)) return;
     solver->telemetry.perf_dual_lu_hard_trigger++;
+}
+
+void lp_telemetry_record_reinvert_shadow(SimplexSolver *solver,
+                                         int phase,
+                                         LPReinvertDecision suggested_decision,
+                                         LPReinvertReason suggested_reason,
+                                         int suggested_refactor,
+                                         int actual_refactor) {
+    int *checks = NULL;
+    int *allow = NULL;
+    int *defer = NULL;
+    int *force = NULL;
+    int *actual_yes = NULL;
+    int *actual_no = NULL;
+    int *disagree = NULL;
+    int *last_reason = NULL;
+    int suggested = suggested_refactor ? 1 : 0;
+    int actual = actual_refactor ? 1 : 0;
+
+    if (!solver_telemetry_enabled(solver)) return;
+
+    if (phase == 1) {
+        checks = &solver->telemetry.perf_reinvert_shadow_checks_phase1;
+        allow = &solver->telemetry.perf_reinvert_shadow_suggest_allow_phase1;
+        defer = &solver->telemetry.perf_reinvert_shadow_suggest_defer_phase1;
+        force = &solver->telemetry.perf_reinvert_shadow_suggest_force_phase1;
+        actual_yes = &solver->telemetry.perf_reinvert_shadow_actual_refactor_yes_phase1;
+        actual_no = &solver->telemetry.perf_reinvert_shadow_actual_refactor_no_phase1;
+        disagree = &solver->telemetry.perf_reinvert_shadow_disagree_phase1;
+        last_reason = &solver->telemetry.perf_reinvert_shadow_last_reason_phase1;
+    } else if (phase == 2) {
+        checks = &solver->telemetry.perf_reinvert_shadow_checks_phase2;
+        allow = &solver->telemetry.perf_reinvert_shadow_suggest_allow_phase2;
+        defer = &solver->telemetry.perf_reinvert_shadow_suggest_defer_phase2;
+        force = &solver->telemetry.perf_reinvert_shadow_suggest_force_phase2;
+        actual_yes = &solver->telemetry.perf_reinvert_shadow_actual_refactor_yes_phase2;
+        actual_no = &solver->telemetry.perf_reinvert_shadow_actual_refactor_no_phase2;
+        disagree = &solver->telemetry.perf_reinvert_shadow_disagree_phase2;
+        last_reason = &solver->telemetry.perf_reinvert_shadow_last_reason_phase2;
+    } else {
+        checks = &solver->telemetry.perf_reinvert_shadow_checks_dual;
+        allow = &solver->telemetry.perf_reinvert_shadow_suggest_allow_dual;
+        defer = &solver->telemetry.perf_reinvert_shadow_suggest_defer_dual;
+        force = &solver->telemetry.perf_reinvert_shadow_suggest_force_dual;
+        actual_yes = &solver->telemetry.perf_reinvert_shadow_actual_refactor_yes_dual;
+        actual_no = &solver->telemetry.perf_reinvert_shadow_actual_refactor_no_dual;
+        disagree = &solver->telemetry.perf_reinvert_shadow_disagree_dual;
+        last_reason = &solver->telemetry.perf_reinvert_shadow_last_reason_dual;
+    }
+
+    (*checks)++;
+    if (actual) (*actual_yes)++;
+    else (*actual_no)++;
+
+    if (suggested_decision == LP_REINVERT_DECISION_FORCE) {
+        (*force)++;
+    } else if (suggested_decision == LP_REINVERT_DECISION_ALLOW) {
+        (*allow)++;
+    } else {
+        (*defer)++;
+    }
+
+    *last_reason = (int)suggested_reason;
+    if (suggested != actual) {
+        (*disagree)++;
+    }
 }

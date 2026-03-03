@@ -209,6 +209,14 @@ typedef struct {
     double refactor_ms;
     double ftran_ms;
     double btran_ms;
+    int ftran_calls;
+    int btran_calls;
+    int ftran_nnz_samples;
+    int btran_nnz_samples;
+    long long ftran_rhs_nnz_total;
+    long long ftran_sol_nnz_total;
+    long long btran_rhs_nnz_total;
+    long long btran_sol_nnz_total;
     double lu_update_ms;
     double compute_solution_ms;
     double compute_rc_ms;
@@ -386,6 +394,30 @@ typedef struct {
     int shadow_disagree_primal_refactor;
     int shadow_disagree_dual_refactor;
     int shadow_disagree_lu_backend;
+    int reinvert_shadow_checks_phase1;
+    int reinvert_shadow_checks_phase2;
+    int reinvert_shadow_checks_dual;
+    int reinvert_shadow_suggest_allow_phase1;
+    int reinvert_shadow_suggest_allow_phase2;
+    int reinvert_shadow_suggest_allow_dual;
+    int reinvert_shadow_suggest_defer_phase1;
+    int reinvert_shadow_suggest_defer_phase2;
+    int reinvert_shadow_suggest_defer_dual;
+    int reinvert_shadow_suggest_force_phase1;
+    int reinvert_shadow_suggest_force_phase2;
+    int reinvert_shadow_suggest_force_dual;
+    int reinvert_shadow_actual_refactor_yes_phase1;
+    int reinvert_shadow_actual_refactor_yes_phase2;
+    int reinvert_shadow_actual_refactor_yes_dual;
+    int reinvert_shadow_actual_refactor_no_phase1;
+    int reinvert_shadow_actual_refactor_no_phase2;
+    int reinvert_shadow_actual_refactor_no_dual;
+    int reinvert_shadow_disagree_phase1;
+    int reinvert_shadow_disagree_phase2;
+    int reinvert_shadow_disagree_dual;
+    int reinvert_shadow_last_reason_phase1;
+    int reinvert_shadow_last_reason_phase2;
+    int reinvert_shadow_last_reason_dual;
 
     int lu_mkz_enabled;
     int lu_sn_enabled;
@@ -976,6 +1008,14 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.refactor_ms = solver_tel.perf_refactor_ms;
             result.ftran_ms = solver_tel.perf_ftran_ms;
             result.btran_ms = solver_tel.perf_btran_ms;
+            result.ftran_calls = solver_tel.perf_ftran_calls;
+            result.btran_calls = solver_tel.perf_btran_calls;
+            result.ftran_nnz_samples = solver_tel.perf_ftran_nnz_samples;
+            result.btran_nnz_samples = solver_tel.perf_btran_nnz_samples;
+            result.ftran_rhs_nnz_total = solver_tel.perf_ftran_rhs_nnz_total;
+            result.ftran_sol_nnz_total = solver_tel.perf_ftran_sol_nnz_total;
+            result.btran_rhs_nnz_total = solver_tel.perf_btran_rhs_nnz_total;
+            result.btran_sol_nnz_total = solver_tel.perf_btran_sol_nnz_total;
             result.lu_update_ms = solver_tel.perf_lu_update_ms;
             result.compute_solution_ms = solver_tel.perf_compute_solution_ms;
             result.compute_rc_ms = solver_tel.perf_compute_rc_ms;
@@ -1220,6 +1260,30 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.shadow_disagree_primal_refactor = solver_tel.shadow_disagree_primal_refactor;
             result.shadow_disagree_dual_refactor = solver_tel.shadow_disagree_dual_refactor;
             result.shadow_disagree_lu_backend = solver_tel.shadow_disagree_lu_backend;
+            result.reinvert_shadow_checks_phase1 = solver_tel.reinvert_shadow_checks_phase1;
+            result.reinvert_shadow_checks_phase2 = solver_tel.reinvert_shadow_checks_phase2;
+            result.reinvert_shadow_checks_dual = solver_tel.reinvert_shadow_checks_dual;
+            result.reinvert_shadow_suggest_allow_phase1 = solver_tel.reinvert_shadow_suggest_allow_phase1;
+            result.reinvert_shadow_suggest_allow_phase2 = solver_tel.reinvert_shadow_suggest_allow_phase2;
+            result.reinvert_shadow_suggest_allow_dual = solver_tel.reinvert_shadow_suggest_allow_dual;
+            result.reinvert_shadow_suggest_defer_phase1 = solver_tel.reinvert_shadow_suggest_defer_phase1;
+            result.reinvert_shadow_suggest_defer_phase2 = solver_tel.reinvert_shadow_suggest_defer_phase2;
+            result.reinvert_shadow_suggest_defer_dual = solver_tel.reinvert_shadow_suggest_defer_dual;
+            result.reinvert_shadow_suggest_force_phase1 = solver_tel.reinvert_shadow_suggest_force_phase1;
+            result.reinvert_shadow_suggest_force_phase2 = solver_tel.reinvert_shadow_suggest_force_phase2;
+            result.reinvert_shadow_suggest_force_dual = solver_tel.reinvert_shadow_suggest_force_dual;
+            result.reinvert_shadow_actual_refactor_yes_phase1 = solver_tel.reinvert_shadow_actual_refactor_yes_phase1;
+            result.reinvert_shadow_actual_refactor_yes_phase2 = solver_tel.reinvert_shadow_actual_refactor_yes_phase2;
+            result.reinvert_shadow_actual_refactor_yes_dual = solver_tel.reinvert_shadow_actual_refactor_yes_dual;
+            result.reinvert_shadow_actual_refactor_no_phase1 = solver_tel.reinvert_shadow_actual_refactor_no_phase1;
+            result.reinvert_shadow_actual_refactor_no_phase2 = solver_tel.reinvert_shadow_actual_refactor_no_phase2;
+            result.reinvert_shadow_actual_refactor_no_dual = solver_tel.reinvert_shadow_actual_refactor_no_dual;
+            result.reinvert_shadow_disagree_phase1 = solver_tel.reinvert_shadow_disagree_phase1;
+            result.reinvert_shadow_disagree_phase2 = solver_tel.reinvert_shadow_disagree_phase2;
+            result.reinvert_shadow_disagree_dual = solver_tel.reinvert_shadow_disagree_dual;
+            result.reinvert_shadow_last_reason_phase1 = solver_tel.reinvert_shadow_last_reason_phase1;
+            result.reinvert_shadow_last_reason_phase2 = solver_tel.reinvert_shadow_last_reason_phase2;
+            result.reinvert_shadow_last_reason_dual = solver_tel.reinvert_shadow_last_reason_dual;
             if (solver->tableau && solver->tableau->lu) {
                 LUTelemetrySnapshot lu_tel;
                 lp_telemetry_snapshot_lu(solver->tableau->lu, &lu_tel);
@@ -2119,6 +2183,36 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"glpk_ms_per_iter\": %.6f\n", glpk_per_iter);
     fprintf(out, "  },\n");
 
+    /* Solve sparsity telemetry for the FTRAN/BTRAN hot path. */
+    {
+        double ftran_avg_rhs_nnz = (ralph->ftran_nnz_samples > 0)
+            ? (double)ralph->ftran_rhs_nnz_total / (double)ralph->ftran_nnz_samples
+            : 0.0;
+        double ftran_avg_sol_nnz = (ralph->ftran_nnz_samples > 0)
+            ? (double)ralph->ftran_sol_nnz_total / (double)ralph->ftran_nnz_samples
+            : 0.0;
+        double btran_avg_rhs_nnz = (ralph->btran_nnz_samples > 0)
+            ? (double)ralph->btran_rhs_nnz_total / (double)ralph->btran_nnz_samples
+            : 0.0;
+        double btran_avg_sol_nnz = (ralph->btran_nnz_samples > 0)
+            ? (double)ralph->btran_sol_nnz_total / (double)ralph->btran_nnz_samples
+            : 0.0;
+        fprintf(out, "  \"solve_sparsity\": {\n");
+        fprintf(out, "    \"ftran_calls\": %d,\n", ralph->ftran_calls);
+        fprintf(out, "    \"ftran_nnz_samples\": %d,\n", ralph->ftran_nnz_samples);
+        fprintf(out, "    \"ftran_rhs_nnz_total\": %lld,\n", ralph->ftran_rhs_nnz_total);
+        fprintf(out, "    \"ftran_sol_nnz_total\": %lld,\n", ralph->ftran_sol_nnz_total);
+        fprintf(out, "    \"ftran_avg_rhs_nnz\": %.6f,\n", ftran_avg_rhs_nnz);
+        fprintf(out, "    \"ftran_avg_sol_nnz\": %.6f,\n", ftran_avg_sol_nnz);
+        fprintf(out, "    \"btran_calls\": %d,\n", ralph->btran_calls);
+        fprintf(out, "    \"btran_nnz_samples\": %d,\n", ralph->btran_nnz_samples);
+        fprintf(out, "    \"btran_rhs_nnz_total\": %lld,\n", ralph->btran_rhs_nnz_total);
+        fprintf(out, "    \"btran_sol_nnz_total\": %lld,\n", ralph->btran_sol_nnz_total);
+        fprintf(out, "    \"btran_avg_rhs_nnz\": %.6f,\n", btran_avg_rhs_nnz);
+        fprintf(out, "    \"btran_avg_sol_nnz\": %.6f\n", btran_avg_sol_nnz);
+        fprintf(out, "  },\n");
+    }
+
     /* Ralph timing breakdown (solver-internal instrumentation) */
     fprintf(out, "  \"timing\": {\n");
     fprintf(out, "    \"primal_setup_ms\": %.6f,\n", ralph->primal_setup_ms);
@@ -2569,6 +2663,63 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->shadow_disagree_dual_refactor);
     fprintf(out, "    \"shadow_disagree_lu_backend\": %d,\n",
             ralph->shadow_disagree_lu_backend);
+    fprintf(out, "    \"reinvert_shadow_checks_phase1\": %d,\n",
+            ralph->reinvert_shadow_checks_phase1);
+    fprintf(out, "    \"reinvert_shadow_checks_phase2\": %d,\n",
+            ralph->reinvert_shadow_checks_phase2);
+    fprintf(out, "    \"reinvert_shadow_checks_dual\": %d,\n",
+            ralph->reinvert_shadow_checks_dual);
+    fprintf(out, "    \"reinvert_shadow_suggest_allow_phase1\": %d,\n",
+            ralph->reinvert_shadow_suggest_allow_phase1);
+    fprintf(out, "    \"reinvert_shadow_suggest_allow_phase2\": %d,\n",
+            ralph->reinvert_shadow_suggest_allow_phase2);
+    fprintf(out, "    \"reinvert_shadow_suggest_allow_dual\": %d,\n",
+            ralph->reinvert_shadow_suggest_allow_dual);
+    fprintf(out, "    \"reinvert_shadow_suggest_defer_phase1\": %d,\n",
+            ralph->reinvert_shadow_suggest_defer_phase1);
+    fprintf(out, "    \"reinvert_shadow_suggest_defer_phase2\": %d,\n",
+            ralph->reinvert_shadow_suggest_defer_phase2);
+    fprintf(out, "    \"reinvert_shadow_suggest_defer_dual\": %d,\n",
+            ralph->reinvert_shadow_suggest_defer_dual);
+    fprintf(out, "    \"reinvert_shadow_suggest_force_phase1\": %d,\n",
+            ralph->reinvert_shadow_suggest_force_phase1);
+    fprintf(out, "    \"reinvert_shadow_suggest_force_phase2\": %d,\n",
+            ralph->reinvert_shadow_suggest_force_phase2);
+    fprintf(out, "    \"reinvert_shadow_suggest_force_dual\": %d,\n",
+            ralph->reinvert_shadow_suggest_force_dual);
+    fprintf(out, "    \"reinvert_shadow_actual_refactor_yes_phase1\": %d,\n",
+            ralph->reinvert_shadow_actual_refactor_yes_phase1);
+    fprintf(out, "    \"reinvert_shadow_actual_refactor_yes_phase2\": %d,\n",
+            ralph->reinvert_shadow_actual_refactor_yes_phase2);
+    fprintf(out, "    \"reinvert_shadow_actual_refactor_yes_dual\": %d,\n",
+            ralph->reinvert_shadow_actual_refactor_yes_dual);
+    fprintf(out, "    \"reinvert_shadow_actual_refactor_no_phase1\": %d,\n",
+            ralph->reinvert_shadow_actual_refactor_no_phase1);
+    fprintf(out, "    \"reinvert_shadow_actual_refactor_no_phase2\": %d,\n",
+            ralph->reinvert_shadow_actual_refactor_no_phase2);
+    fprintf(out, "    \"reinvert_shadow_actual_refactor_no_dual\": %d,\n",
+            ralph->reinvert_shadow_actual_refactor_no_dual);
+    fprintf(out, "    \"reinvert_shadow_disagree_phase1\": %d,\n",
+            ralph->reinvert_shadow_disagree_phase1);
+    fprintf(out, "    \"reinvert_shadow_disagree_phase2\": %d,\n",
+            ralph->reinvert_shadow_disagree_phase2);
+    fprintf(out, "    \"reinvert_shadow_disagree_dual\": %d,\n",
+            ralph->reinvert_shadow_disagree_dual);
+    fprintf(out, "    \"reinvert_shadow_last_reason_phase1_code\": %d,\n",
+            ralph->reinvert_shadow_last_reason_phase1);
+    fprintf(out, "    \"reinvert_shadow_last_reason_phase1\": \"%s\",\n",
+            lp_reinvert_controller_reason_string(
+                (LPReinvertReason)ralph->reinvert_shadow_last_reason_phase1));
+    fprintf(out, "    \"reinvert_shadow_last_reason_phase2_code\": %d,\n",
+            ralph->reinvert_shadow_last_reason_phase2);
+    fprintf(out, "    \"reinvert_shadow_last_reason_phase2\": \"%s\",\n",
+            lp_reinvert_controller_reason_string(
+                (LPReinvertReason)ralph->reinvert_shadow_last_reason_phase2));
+    fprintf(out, "    \"reinvert_shadow_last_reason_dual_code\": %d,\n",
+            ralph->reinvert_shadow_last_reason_dual);
+    fprintf(out, "    \"reinvert_shadow_last_reason_dual\": \"%s\",\n",
+            lp_reinvert_controller_reason_string(
+                (LPReinvertReason)ralph->reinvert_shadow_last_reason_dual));
     fprintf(out, "    \"basis_fastpath_hits\": %d,\n", ralph->basis_fastpath_hits);
     fprintf(out, "    \"basis_cols_rewritten\": %d,\n", ralph->basis_cols_rewritten);
     fprintf(out, "    \"basis_tail_shift_bytes\": %llu\n", ralph->basis_tail_shift_bytes);

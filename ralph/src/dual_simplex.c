@@ -177,6 +177,18 @@ static int dual_quality_periodic_refactor_signal(
     return age >= interval;
 }
 
+static double dual_average_solve_density(long long sol_nnz_total, int samples, int m) {
+    double density;
+    double denom;
+    if (samples <= 0 || m <= 0) return 0.0;
+    denom = (double)samples * (double)m;
+    if (!(denom > 0.0)) return 0.0;
+    density = (double)sol_nnz_total / denom;
+    if (!(density > 0.0)) return 0.0;
+    if (density > 1.0) return 1.0;
+    return density;
+}
+
 static int dual_governor_refactor_decision(
     SimplexSolver *solver,
     SimplexTableau *tab,
@@ -191,6 +203,14 @@ static int dual_governor_refactor_decision(
     int need_refactor;
     int shadow_refactor;
     int governed_refactor;
+    LPReinvertControllerSignals reinvert_signals;
+    LPReinvertControllerDecision reinvert_shadow;
+    int reinvert_suggested_refactor;
+    LPReinvertControllerState *reinvert_state;
+    double dual_hot_ms;
+    double dual_iter_hot_ms;
+    double ftran_density;
+    double btran_density;
 
     if (!solver || !tab || !tab->lu || !quality) return 0;
 
@@ -218,6 +238,54 @@ static int dual_governor_refactor_decision(
                                            shadow_refactor,
                                            governed_refactor);
     }
+
+    reinvert_state = &solver->policy.reinvert_state_dual;
+    dual_hot_ms = solver->telemetry.perf_ratio_ms +
+                  solver->telemetry.perf_pivot_ms +
+                  solver->telemetry.perf_compute_solution_ms +
+                  solver->telemetry.perf_compute_rc_ms;
+    dual_iter_hot_ms = dual_hot_ms - solver->policy.reinvert_dual_last_hot_ms;
+    solver->policy.reinvert_dual_last_hot_ms = dual_hot_ms;
+    lp_reinvert_controller_state_record_iter_cost(reinvert_state, dual_iter_hot_ms);
+    lp_reinvert_controller_state_record_update_age_ratio(reinvert_state,
+                                                         tab->lu->num_updates,
+                                                         tab->lu->max_updates);
+    ftran_density = dual_average_solve_density(solver->telemetry.perf_ftran_sol_nnz_total,
+                                               solver->telemetry.perf_ftran_nnz_samples,
+                                               tab->m);
+    btran_density = dual_average_solve_density(solver->telemetry.perf_btran_sol_nnz_total,
+                                               solver->telemetry.perf_btran_nnz_samples,
+                                               tab->m);
+    lp_reinvert_controller_state_record_solve_density(reinvert_state,
+                                                      ftran_density,
+                                                      btran_density);
+
+    reinvert_signals.phase = 2;
+    reinvert_signals.iter = iter;
+    reinvert_signals.m = tab->m;
+    reinvert_signals.num_updates = tab->lu->num_updates;
+    reinvert_signals.max_updates = tab->lu->max_updates;
+    reinvert_signals.periodic_due = quality_refactor ? 1 : 0;
+    reinvert_signals.min_update_age = (base_interval > 0) ? (base_interval / 2) : 8;
+    reinvert_signals.cooldown_updates = 0;
+    reinvert_signals.hard_lu_trigger = lu_refactor_needed ? 1 : 0;
+    reinvert_signals.soft_lu_trigger = 0;
+    reinvert_signals.ftran_density = ftran_density;
+    reinvert_signals.btran_density = btran_density;
+
+    reinvert_shadow = lp_reinvert_controller_decide(reinvert_state, &reinvert_signals);
+    reinvert_suggested_refactor =
+        (reinvert_shadow.decision == LP_REINVERT_DECISION_FORCE) ||
+        (reinvert_shadow.decision == LP_REINVERT_DECISION_ALLOW &&
+         reinvert_signals.periodic_due);
+    lp_telemetry_record_reinvert_shadow(solver,
+                                        0,
+                                        reinvert_shadow.decision,
+                                        reinvert_shadow.reason,
+                                        reinvert_suggested_refactor,
+                                        governed_refactor);
+    lp_reinvert_controller_state_apply_decision(reinvert_state, &reinvert_shadow);
+
     return governed_refactor;
 }
 
@@ -1347,6 +1415,7 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
         }
         if (tab->owner) {
             lp_telemetry_add_ftran_timed(tab->owner, t_ftran_ms);
+            lp_telemetry_record_ftran_nnz(tab->owner, col_nnz, ftran_nnz);
         }
     }
 
@@ -1376,6 +1445,7 @@ static int dual_simplex_pivot(SimplexTableau *tab, int entering, int leaving, do
         }
         if (tab->owner) {
             lp_telemetry_add_btran_timed(tab->owner, t_btran_ms);
+            lp_telemetry_record_btran_nnz(tab->owner, 1, btran_nnz);
         }
     }
 
