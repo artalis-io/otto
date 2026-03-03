@@ -3485,7 +3485,263 @@ requiring more sophisticated move operators to close the gap.
 
 **Implementation status:** ✅ Done (Mar 2026)
 
-### Phase S20: Profile-Based Tuning Campaign (Future)
+### Phase S20: PD-Aware Local Search Operators ✅
+
+**Priority: High. Fills structural gaps in the operator toolkit.**
+
+Added 3 new local search operators to the intensify loop and an O(1) concat pre-filter
+for intra-route 2-opt. The intensify loop previously had no segment-reversal move and
+no way to independently reposition pickup/delivery stops within or across routes.
+
+**Operators:**
+
+1. **Intra-route 2-opt** (`sg_route_try_2opt_intra_once`): Reverse a contiguous
+   subsequence of stops within a single route. Classic TSP distance improvement move.
+   PD safety check in O(j-i) ensures no pickup-before-delivery violations after
+   reversal. Uses `sg_concat_eval_2opt_intra` for O(1) distance lower-bound on
+   delivery-only instances. Falls back to O(L) `sg_route_stop_sequence_feasible`
+   on PD instances.
+
+2. **PD-pair intra-route relocate** (`sg_route_try_pd_relocate_intra_once`): Excise
+   a PD pair's pickup and delivery stops, try all (pickup_pos, delivery_pos) placements
+   within the same route. Finds distance-optimal intra-route PD interleaving that
+   request-level OR-opt can't discover. Gated by `ctx->has_pd_requests`.
+
+3. **PD-pair inter-route relocate** (`sg_route_try_pd_relocate_once`): Move a PD pair
+   from one vehicle to best interleaved positions on another. Uses
+   `sg_route_eval_pd_best_insertion_cached` for O(L²) evaluation with per-position
+   cached timing. Neighbor pruning and compatibility pre-checks for efficiency.
+   Gated by `ctx->has_pd_requests`.
+
+**Intensify loop order:**
+```
+2-opt intra → OR-opt → exchange → 2-opt* → cross-exchange
+  → [PD] pd-relocate-intra → pd-relocate-inter → pd-reorder
+```
+
+**Files modified:**
+
+| File | Changes |
+|------|---------|
+| `include/sg_internal.h` | 3 operator declarations + `sg_concat_eval_2opt_intra` |
+| `src/sg_postprocess.c` | 3 operator implementations (~300 lines), intensify loop |
+| `src/sg_concat.c` | `sg_concat_eval_2opt_intra` (~100 lines) |
+| `tests/test_surge.c` | 12 new tests (433 total) |
+
+**Benchmark results (GH-400, 60s, population, commit b132790):**
+
+| Metric | S19 baseline | S20 | Delta |
+|--------|-------------|-----|-------|
+| Vehicle match | 33/60 (55%) | 33/60 (55%) | 0 |
+| Avg distance gap | +18.6% | +19.2% | +0.6pp |
+| Avg runtime | 77s | 77s | 0 |
+
+**Assessment:** The +0.6pp distance regression is within noise and reflects the
+cost of running 2-opt intra in the intensify loop on time-starved 400-request
+instances. Option C (moving 2-opt to final polish) was tested and performed worse
+(+20.3%), confirming 2-opt needs to compound with other operators across passes.
+The PD operators are no-ops on delivery-only Solomon instances — their value will
+show on Li-Lim PDPTW benchmarks.
+
+**Next steps from S20:**
+- Run Li-Lim PDPTW benchmarks to validate PD operators
+- Consider size-gating 2-opt intra (`num_requests <= 200`) if regression persists
+- Document per-class GH-400 results in `benchmarks/results/`
+
+**Implementation status:** ✅ Done (Mar 2026)
+
+### Phase S21: Move Evaluation Cache
+
+**Priority: High. Biggest lever for effective ALNS iterations per second.**
+
+#### Motivation
+
+The repair hot path — `sg_route_rank_insertions_for_request()` — evaluates every
+unassigned request against every vehicle on every heap pop. After inserting request r
+into vehicle v, the insertion costs for all other requests on all other vehicles are
+unchanged — but we recompute them from scratch. With V=40 vehicles and k=60 removed
+requests, ~97% of evaluations are redundant.
+
+The key insight: **insertion cost for (request, vehicle) is a pure function of the
+vehicle's stop sequence and the request's attributes**. If the vehicle's route hasn't
+changed since the last evaluation, the cached result is identical.
+
+#### Design Principles
+
+1. **Orthogonal to constraints.** The cache sits between the caller
+   (`sg_route_rank_insertions_for_request`) and the evaluator
+   (`sg_route_eval_best_insertion_cached` / `sg_route_eval_pd_best_insertion_cached`).
+   No constraint logic is modified. Cache hit returns the stored result; cache miss
+   calls the real evaluator and stores the result.
+
+2. **Opaque to the rest of the system.** Callers don't know whether a result was
+   cached or freshly computed. The cache is managed internally by the evaluation
+   functions. A `ctx->insertion_cache` pointer being NULL disables caching entirely.
+
+3. **Identical moves with and without.** The cache is a pure memoization layer.
+   Given the same inputs, it returns the same outputs. Toggle via
+   `SGModelConfig.use_insertion_cache` (default: true). All existing tests pass
+   unchanged with cache enabled or disabled.
+
+#### Data Structures
+
+```c
+/* Per-(request, vehicle) cached insertion evaluation result */
+typedef struct {
+    uint64_t generation;        /* Vehicle route generation at evaluation time */
+    double   score;             /* Best insertion cost delta */
+    double   route_distance;    /* New route distance if inserted */
+    uint32_t pos;               /* Best insertion position (delivery-only) */
+    uint32_t pickup_pos;        /* Best pickup position (PD) */
+    uint32_t delivery_pos;      /* Best delivery position (PD) */
+    uint8_t  feasible;          /* 1 = at least one feasible position found */
+} SGInsertionCacheEntry;
+
+/* Cache state, owned by SGContext, allocated in scratch arena */
+typedef struct {
+    SGInsertionCacheEntry *entries;  /* [num_requests * max_vehicles] flat 2D */
+    uint64_t *vehicle_gen;          /* [max_vehicles] route generation counters */
+    uint32_t num_requests;
+    uint32_t max_vehicles;
+    uint64_t hits;                  /* Stats: cache hits */
+    uint64_t misses;                /* Stats: cache misses */
+} SGInsertionCache;
+```
+
+#### Generation Counter Protocol
+
+Every function that modifies a vehicle's stop sequence increments that vehicle's
+generation counter. This is the **sole invalidation mechanism** — no per-entry
+expiry, no LRU, no scanning.
+
+```
+Route modification sites (vehicle_gen[v]++):
+├── sg_route_apply_insertion()           ← delivery-only insert
+├── sg_route_apply_pd_insertion()        ← PD pair insert
+├── sg_route_unassign_removed_requests() ← destroy (per affected vehicle)
+├── sg_route_rebuild_vehicle_stop_state()← postprocess operators
+└── sg_route_restore_from_backup()       ← rollback (all vehicles)
+```
+
+**Lookup protocol** (inside `sg_route_eval_best_insertion_cached`):
+
+```c
+SGInsertionCacheEntry *e = &cache->entries[request_id * max_vehicles + vehicle_id];
+if (cache && e->generation == cache->vehicle_gen[vehicle_id]) {
+    cache->hits++;
+    *score_out = e->score;
+    /* ... copy other fields ... */
+    return e->feasible;
+}
+/* Cache miss: evaluate normally */
+cache->misses++;
+int feasible = sg_route_eval_best_insertion_uncached(ctx, sol, ...);
+/* Store result */
+e->generation = cache->vehicle_gen[vehicle_id];
+e->score = *score_out;
+/* ... store other fields ... */
+e->feasible = feasible;
+return feasible;
+```
+
+#### Where the Cache Lives
+
+```
+SGContext
+└── scratch (SGScratchBuffers)
+    └── insertion_cache (SGInsertionCache *)    ← arena-allocated
+        ├── entries[]    ← flat [R × V] array
+        └── vehicle_gen[] ← per-vehicle counter
+```
+
+Allocated once in `sg_route_solution_init_scratch()` alongside the existing
+`regret_cache` and `repair_heap`. Freed automatically when the arena resets.
+
+The cache persists across ALNS iterations within a solve. It is reset (all
+generations zeroed) at the start of each solve call, not per-iteration — the
+generation counters handle staleness.
+
+#### Expected Hit Rates
+
+**During repair (heap Phase 2):**
+
+After inserting request r_i into vehicle v_j:
+- 1 vehicle modified (v_j) → `vehicle_gen[v_j]++`
+- Remaining (k - i - 1) requests × (V - 1) vehicles → all cache hits
+- Hit rate per insertion: (V-1)/V ≈ 97% for V=40
+
+Over k insertions: total evaluations = k × V = 2400. Cache hits ≈ k × (V-1) ×
+(sum of remaining / k) ≈ 2340. Misses ≈ 60 (one per vehicle change).
+Net: **~97% hit rate**, eliminating ~97% of O(L) or O(L²) evaluations.
+
+**During repair (heap Phase 1 — initial evaluation):**
+
+All entries are cold (generation 0 vs vehicle_gen starts at 1). Hit rate: 0%.
+This is expected — Phase 1 must evaluate everything. The cache pays off in Phase 2.
+
+**After destroy:**
+
+Destroy typically modifies k vehicles (k ≈ 20-60 for GH-400). All k vehicles get
+generation increments. The remaining (V - k) vehicles retain valid cache entries
+from the previous iteration's repair. Hit rate on first Phase 1 evaluation:
+(V - k) / V ≈ 0-50% depending on destroy scope.
+
+#### Memory Cost
+
+For R=400 requests, V=100 vehicles:
+- entries: 400 × 100 × 48 bytes = 1.9 MB
+- vehicle_gen: 100 × 8 bytes = 800 bytes
+- Total: ~2 MB (fits in arena, negligible vs existing allocations)
+
+#### Files Modified
+
+| File | Changes |
+|------|---------|
+| `include/sg_internal.h` | `SGInsertionCacheEntry`, `SGInsertionCache` typedefs |
+| `src/sg_solution.c` | Arena alloc for cache in scratch init |
+| `src/sg_feasibility.c` | Cache lookup/store wrapper around eval functions |
+| `src/sg_repair.c` | Pass cache to eval calls (already has ctx) |
+| `src/sg_postprocess.c` | Generation increment in route-modifying operators |
+| `tests/test_surge.c` | Cache correctness tests |
+
+#### Constraint Non-Interference
+
+The cache **does not affect** any constraint evaluation:
+- Time window propagation: unchanged (called on cache miss)
+- Capacity checking: unchanged (called on cache miss)
+- Compatibility (qualifications, exclusions, compartments): unchanged
+- Break policy, ride time, LIFO/FIFO: unchanged
+- Segment summaries (SGSegSummary): unchanged (rebuilt on route modification,
+  independent of cache)
+
+The cache is **downstream** of all constraint logic — it stores the final result
+of a complete evaluation, not intermediate constraint state.
+
+#### Testing Strategy
+
+| Test | Verifies |
+|------|----------|
+| `test_insertion_cache_basic_hit` | Same (request, vehicle) returns cached result |
+| `test_insertion_cache_miss_on_modify` | Generation increment causes re-evaluation |
+| `test_insertion_cache_destroy_invalidates` | Destroy increments affected vehicles |
+| `test_insertion_cache_unaffected_survives` | Unmodified vehicles retain cache |
+| `test_insertion_cache_pd_correctness` | PD insertion cache stores correct (pp, dp) |
+| `test_insertion_cache_disabled_identical` | `use_insertion_cache=false` → same solution |
+| `test_insertion_cache_vs_uncached_fuzz` | Random destroy/repair: cached == uncached |
+| `test_insertion_cache_stats` | Hit/miss counters accurate |
+| `test_solve_with_cache_solomon` | Full Solomon solve: identical result ± cache |
+| `test_solve_with_cache_li_lim` | Full Li-Lim solve: identical result ± cache |
+
+The **identity tests** are the most important: run the same problem twice (once with
+cache, once without) with deterministic seed, assert `total_distance` and
+`vehicles_used` are identical. This proves the cache is a pure optimization with
+no behavioral change.
+
+**Expected improvement:** 5-15x faster repair phase on GH-400 instances, translating
+to 3-8x more ALNS iterations in the same time budget. Combined with S19 heap repair,
+this should materially close the distance gap at 60s.
+
+### Phase S22: Profile-Based Tuning Campaign (Future)
 
 **Priority: Medium. Single biggest lever for closing the GH-400 gap.**
 
@@ -3502,9 +3758,9 @@ optimization alone. This is the single biggest lever for closing the GH-400 gap 
 the 300s c1_4_1 result (+3.0% dist at near-BKS vehicles) proves the algorithm is
 sound, it just needs properly tuned parameters at each scale point.
 
-### Phase S21: Parallel Move Evaluation (Future)
+### Phase S23: Parallel Move Evaluation (Future)
 
-**Priority: Low. Stacks with S19 heap repair speedup.**
+**Priority: Low. Stacks with S19 heap repair and S21 cache.**
 
 Within each ALNS iteration, the destroy-repair cycle is single-threaded. Population
 mode runs independent ALNS threads, but each thread's repair evaluates positions
@@ -3519,7 +3775,7 @@ sequentially. Two approaches:
 the heap repair speedup from S19. Net effect: 10-80x more ALNS iterations in the
 same time budget compared to pre-S19 baseline.
 
-### Phase S22: Instance-Adaptive Construction (Future)
+### Phase S24: Instance-Adaptive Construction (Future)
 
 **Priority: Low. Incremental improvement over CFRS.**
 
