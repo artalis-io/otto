@@ -136,6 +136,28 @@ typedef struct {
     double route_distance;
 } SGRegretEntry;
 
+/* Move evaluation cache: caches per-(request, vehicle) insertion cost.
+   Invalidated via generation counters in SGRouteSolution and penalty_gen. */
+typedef struct {
+    uint64_t generation;        /* sol->route_generation[v] at eval time */
+    uint64_t penalty_gen;       /* cache->penalty_gen at eval time */
+    double   score;             /* best insertion cost delta */
+    double   route_distance;    /* new route distance if inserted */
+    uint32_t pos;               /* best insertion position (delivery-only) */
+    uint32_t pickup_pos;        /* best pickup position (PD) */
+    uint32_t delivery_pos;      /* best delivery position (PD) */
+    uint8_t  feasible;          /* 1 = at least one feasible position */
+} SGInsertionCacheEntry;
+
+typedef struct {
+    SGInsertionCacheEntry *entries;  /* [num_requests * max_vehicles] flat 2D */
+    uint32_t num_requests;
+    uint32_t max_vehicles;
+    uint64_t penalty_gen;           /* incremented when penalty weights change */
+    uint64_t hits, misses;          /* per-fill counters */
+    uint64_t total_hits, total_misses; /* cumulative */
+} SGInsertionCache;
+
 typedef struct {
     uint32_t request_id;
     uint32_t task_id;
@@ -180,6 +202,7 @@ typedef struct {
     double *cost_scale_buf;     /* [num_vehicles] for sg_compute_cost_scale */
     SHHeap *repair_heap;        /* 4-ary min-heap for lazy heap repair */
     SGRegretEntry *regret_cache; /* [num_requests] indexed by request_id */
+    SGInsertionCache *insertion_cache;  /* NULL = disabled */
     uint32_t stop_capacity;     /* = num_requests * 2 */
     SHArena *arena;
 } SGScratchBuffers;
@@ -247,7 +270,15 @@ typedef struct {
        Not built for vehicles with break policies or multi-trip. */
     SGSegSummary *route_seg_prefix;
     SGSegSummary *route_seg_suffix;
+
+    /* Move evaluation cache: monotonic counter per vehicle, bumped on any route mutation.
+       Cache entries with stale generation are re-evaluated. Init to 1 so entries at 0 miss. */
+    uint64_t *route_generation;  /* [num_vehicles] */
 } SGRouteSolution;
+
+static inline void sg_route_generation_bump(SGRouteSolution *sol, uint32_t v) {
+    if (sol->route_generation) sol->route_generation[v]++;
+}
 
 typedef struct {
     double *remaining_capacity;

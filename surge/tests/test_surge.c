@@ -16493,6 +16493,189 @@ static void test_intensify_delivery_only_no_regression(void) {
     sg_free(ctx);
 }
 
+/* ===== S21: Move Evaluation Cache Tests ===== */
+
+/* Helper: build a simple 4-request, 2-vehicle VRP */
+static SGContext *make_cache_test_ctx(uint64_t seed, int max_iter, int cache_on) {
+    uint32_t depot;
+    SGConfig cfg;
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+    sg_config_default(&cfg);
+    cfg.max_iterations = max_iter;
+    cfg.seed = seed;
+    cfg.deterministic = true;
+    cfg.use_insertion_cache = cache_on ? true : false;
+    assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    add_delivery_request(ctx, 10.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 20.0, 0.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 0.0, 10.0, 0, 86400, 60, -10.0);
+    add_delivery_request(ctx, 0.0, 20.0, 0, 86400, 60, -10.0);
+    return ctx;
+}
+
+/* Test 1: After solve, cache hits > 0 */
+static void test_insertion_cache_basic(void) {
+    SGContext *ctx = make_cache_test_ctx(42, 100, 1);
+    SGStats stats;
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    sg_get_stats(ctx, &stats);
+    assert(stats.insertion_cache_hits > 0);
+    assert(stats.insertion_cache_misses > 0);
+    sg_free(ctx);
+}
+
+/* Test 2: Generation invalidation — inserting into v0 causes miss on v0, hit on v1.
+   We test this indirectly: cache hits should be > 0 meaning some vehicles were cached. */
+static void test_insertion_cache_invalidation(void) {
+    SGContext *ctx = make_cache_test_ctx(99, 200, 1);
+    SGStats stats;
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    sg_get_stats(ctx, &stats);
+    /* With generation counters, modified vehicles miss but unmodified vehicles hit.
+       After enough iterations, both hits and misses should be > 0. */
+    assert(stats.insertion_cache_hits > 0);
+    assert(stats.insertion_cache_misses > 0);
+    sg_free(ctx);
+}
+
+/* Test 3: PD requests — cache works with pickup/delivery */
+static void test_insertion_cache_pd(void) {
+    uint32_t depot;
+    SGConfig cfg;
+    SGStats stats;
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+    sg_config_default(&cfg);
+    cfg.max_iterations = 200;
+    cfg.seed = 77;
+    cfg.deterministic = true;
+    cfg.use_insertion_cache = true;
+    assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+
+    add_pd_request(ctx, 5.0, 0.0, 0, 86400, 60,
+                        15.0, 0.0, 0, 86400, 60, 10.0);
+    add_pd_request(ctx, 0.0, 5.0, 0, 86400, 60,
+                        0.0, 15.0, 0, 86400, 60, 10.0);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    sg_get_stats(ctx, &stats);
+    /* PD cache entries should have hits */
+    assert(stats.insertion_cache_hits > 0);
+    sg_free(ctx);
+}
+
+/* Test 4: cache on vs off → identical solution (noise_scale=0, deterministic) */
+static void test_insertion_cache_disabled_identical(void) {
+    SGContext *ctx_on = make_cache_test_ctx(123, 200, 1);
+    SGContext *ctx_off = make_cache_test_ctx(123, 200, 0);
+    SGStats stats_on, stats_off;
+
+    assert(sg_solve(ctx_on) == SG_STATUS_OK);
+    assert(sg_solve(ctx_off) == SG_STATUS_OK);
+
+    sg_get_stats(ctx_on, &stats_on);
+    sg_get_stats(ctx_off, &stats_off);
+
+    /* Same seed, same problem → identical solution */
+    assert(stats_on.vehicles_used == stats_off.vehicles_used);
+    assert(stats_on.unassigned == stats_off.unassigned);
+    assert(fabs(stats_on.total_distance - stats_off.total_distance) < 1e-6);
+
+    sg_free(ctx_on);
+    sg_free(ctx_off);
+}
+
+/* Test 5: Solomon C101 (25 customers) cache on vs off → identical */
+static void test_insertion_cache_solomon_identity(void) {
+    SGContext *ctx_on, *ctx_off;
+    SGConfig cfg;
+    SGStats stats_on, stats_off;
+
+    ctx_on = sg_create();
+    sg_config_default(&cfg);
+    cfg.max_iterations = 300;
+    cfg.seed = 555;
+    cfg.deterministic = true;
+    cfg.use_insertion_cache = true;
+    sg_set_config(ctx_on, &cfg);
+    assert(sg_load_solomon_vrptw(ctx_on, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+
+    ctx_off = sg_create();
+    cfg.use_insertion_cache = false;
+    sg_set_config(ctx_off, &cfg);
+    assert(sg_load_solomon_vrptw(ctx_off, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
+
+    assert(sg_solve(ctx_on) == SG_STATUS_OK);
+    assert(sg_solve(ctx_off) == SG_STATUS_OK);
+
+    sg_get_stats(ctx_on, &stats_on);
+    sg_get_stats(ctx_off, &stats_off);
+
+    assert(stats_on.vehicles_used == stats_off.vehicles_used);
+    assert(stats_on.unassigned == stats_off.unassigned);
+    assert(fabs(stats_on.total_distance - stats_off.total_distance) < 1e-6);
+
+    sg_free(ctx_on);
+    sg_free(ctx_off);
+}
+
+/* Test 6: Stats populated after solve */
+static void test_insertion_cache_stats(void) {
+    SGContext *ctx = make_cache_test_ctx(42, 100, 1);
+    SGStats stats;
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    sg_get_stats(ctx, &stats);
+    /* Both hits and misses should be populated */
+    assert(stats.insertion_cache_hits > 0);
+    assert(stats.insertion_cache_misses > 0);
+    /* Hit rate should be non-trivial (at least some cache reuse) */
+    assert(stats.insertion_cache_hits + stats.insertion_cache_misses > 10);
+    sg_free(ctx);
+}
+
+/* Test 7: use_insertion_cache=false → NULL cache, zero stats */
+static void test_insertion_cache_config_off(void) {
+    SGContext *ctx = make_cache_test_ctx(42, 100, 0);
+    SGStats stats;
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    sg_get_stats(ctx, &stats);
+    assert(stats.insertion_cache_hits == 0);
+    assert(stats.insertion_cache_misses == 0);
+    sg_free(ctx);
+}
+
+/* Test 8: Two runs with cache, same seed → identical */
+static void test_insertion_cache_deterministic(void) {
+    SGContext *ctx1 = make_cache_test_ctx(777, 200, 1);
+    SGContext *ctx2 = make_cache_test_ctx(777, 200, 1);
+    SGStats stats1, stats2;
+
+    assert(sg_solve(ctx1) == SG_STATUS_OK);
+    assert(sg_solve(ctx2) == SG_STATUS_OK);
+
+    sg_get_stats(ctx1, &stats1);
+    sg_get_stats(ctx2, &stats2);
+
+    assert(stats1.vehicles_used == stats2.vehicles_used);
+    assert(stats1.unassigned == stats2.unassigned);
+    assert(fabs(stats1.total_distance - stats2.total_distance) < 1e-6);
+    assert(stats1.insertion_cache_hits == stats2.insertion_cache_hits);
+    assert(stats1.insertion_cache_misses == stats2.insertion_cache_misses);
+
+    sg_free(ctx1);
+    sg_free(ctx2);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -17028,12 +17211,22 @@ int main(void) {
     RUN_TEST(test_intensify_with_new_operators);
     RUN_TEST(test_intensify_delivery_only_no_regression);
 
+    /* Phase S21: Move Evaluation Cache */
+    RUN_TEST(test_insertion_cache_basic);
+    RUN_TEST(test_insertion_cache_invalidation);
+    RUN_TEST(test_insertion_cache_pd);
+    RUN_TEST(test_insertion_cache_disabled_identical);
+    RUN_TEST(test_insertion_cache_solomon_identity);
+    RUN_TEST(test_insertion_cache_stats);
+    RUN_TEST(test_insertion_cache_config_off);
+    RUN_TEST(test_insertion_cache_deterministic);
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 433);
+    assert(tests_run == 441);
 #else
-    assert(tests_run == 414);
+    assert(tests_run == 422);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

@@ -58,8 +58,12 @@ static int sg_progress_forwarder(int64_t iteration, double best_cost,
     SGContext *ctx = (SGContext *)user_data;
     if (ctx->cancel_requested) return 1;
     /* Adaptive penalty self-adjustment at segment boundaries */
-    if (ctx->penalty.enabled && ctx->penalty.update)
+    if (ctx->penalty.enabled && ctx->penalty.update) {
         ctx->penalty.update(&ctx->penalty);
+        /* Invalidate insertion cache: penalty weights changed → cached scores stale */
+        if (ctx->scratch.insertion_cache)
+            ctx->scratch.insertion_cache->penalty_gen++;
+    }
 
     /* Build enriched progress stats */
     {
@@ -1427,6 +1431,13 @@ skip_phase2:
             }
             ctx->stats.duration_span = (s_active >= 2 && max_dur > min_dur) ? (max_dur - min_dur) : 0.0;
             ctx->stats.distance_span = (s_active >= 2 && max_dist > min_dist) ? (max_dist - min_dist) : 0.0;
+        }
+
+        /* Copy insertion cache stats */
+        if (ctx->scratch.insertion_cache) {
+            SGInsertionCache *ic = ctx->scratch.insertion_cache;
+            ctx->stats.insertion_cache_hits = ic->total_hits + ic->hits;
+            ctx->stats.insertion_cache_misses = ic->total_misses + ic->misses;
         }
 
         /* Retain final solution for route/stop export */
