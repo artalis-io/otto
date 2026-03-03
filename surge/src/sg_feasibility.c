@@ -3091,6 +3091,7 @@ ARStatus sg_route_apply_insertion(const SGContext *ctx, SGRouteSolution *sol,
     sg_route_update_timing(ctx, sol, vehicle_id);
     sg_route_update_load(ctx, sol, vehicle_id);
     sol->total_distance += (sol->route_distance[vehicle_id] - old_distance);
+    sg_route_generation_bump(sol, vehicle_id);
 
     /* Update commodity tracking */
     if (sol->route_commodities) {
@@ -3228,6 +3229,7 @@ ARStatus sg_route_apply_pd_insertion(const SGContext *ctx, SGRouteSolution *sol,
     sg_route_update_timing(ctx, sol, vehicle_id);
     sg_route_update_load(ctx, sol, vehicle_id);
     sol->total_distance += (sol->route_distance[vehicle_id] - old_distance);
+    sg_route_generation_bump(sol, vehicle_id);
 
     /* Update commodity tracking */
     if (sol->route_commodities) {
@@ -3334,6 +3336,7 @@ ARStatus sg_route_unassign_request(const SGContext *ctx, SGRouteSolution *sol,
     sg_route_update_timing(ctx, sol, vehicle_id);
     sg_route_update_load(ctx, sol, vehicle_id);
     sol->total_distance += (sol->route_distance[vehicle_id] - old_distance);
+    sg_route_generation_bump(sol, vehicle_id);
     if (old_len > 0 && sol->route_lengths[vehicle_id] == 0) {
         sol->vehicles_used--;
     }

@@ -87,6 +87,9 @@ static SGStatus build_config(SGContext *ctx, const ShJsonValue *cfg_val) {
 
         v = sh_json_get(cfg_val, "adaptive_q");
         if (v) cfg.adaptive_q = sh_json_as_bool(v, cfg.adaptive_q);
+
+        v = sh_json_get(cfg_val, "use_insertion_cache");
+        if (v) cfg.use_insertion_cache = sh_json_as_bool(v, cfg.use_insertion_cache);
     }
 
     return sg_set_config(ctx, &cfg);
@@ -1587,6 +1590,10 @@ SGStatus sg_api_write_solution(const SGContext *ctx, ShJsonWriter *w,
         sh_json_write_kv_double_fmt(w, "duration_span", stats.duration_span, 2);
         sh_json_write_kv_double_fmt(w, "distance_span", stats.distance_span, 2);
         sh_json_write_kv_double_fmt(w, "elapsed_seconds", stats.elapsed_seconds, 3);
+        if (stats.insertion_cache_hits > 0 || stats.insertion_cache_misses > 0) {
+            sh_json_write_kv_int(w, "insertion_cache_hits", (int64_t)stats.insertion_cache_hits);
+            sh_json_write_kv_int(w, "insertion_cache_misses", (int64_t)stats.insertion_cache_misses);
+        }
         {
             const char *phase_str;
             switch (stats.phase) {

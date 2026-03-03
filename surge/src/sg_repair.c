@@ -353,6 +353,9 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
 sg_rank_retry:
 
     for (v = 0; v < sol->num_vehicles; v++) {
+        SGInsertionCache *ic = ctx->scratch.insertion_cache;
+        SGInsertionCacheEntry *ce = NULL;
+
         if (frozen_designated != SG_NO_VEHICLE && v != frozen_designated) continue;
         if (ctx->avoid_new_vehicles && sol->route_lengths[v] == 0) {
             continue;
@@ -369,6 +372,28 @@ sg_rank_retry:
                 continue;
             }
         }
+
+        /* Insertion cache lookup */
+        if (ic && ic->entries && sol->route_generation) {
+            ce = &ic->entries[(size_t)request_id * ic->max_vehicles + v];
+            if (ce->generation == sol->route_generation[v] &&
+                ce->penalty_gen == ic->penalty_gen) {
+                ic->hits++;
+                if (ce->feasible) {
+                    double noisy = ce->score;
+                    if (noise_scale > 0.0 && ctx->op_rng)
+                        noisy *= (1.0 + sh_rng_uniform_range(ctx->op_rng, -noise_scale, noise_scale));
+                    sg_rank_insert_candidate(ranked_noisy, ranked_scores, ranked_distance,
+                                             ranked_vehicle, ranked_pos,
+                                             ranked_pickup_pos, ranked_delivery_pos,
+                                             &ranked_count, noisy, ce->score, ce->route_distance,
+                                             v, ce->pos, ce->pickup_pos, ce->delivery_pos);
+                }
+                goto sg_rank_new_trip;
+            }
+            ic->misses++;
+        }
+
         if (is_pd) {
             /* O(L²) stop-level evaluation for PD requests */
             double score = 0.0;
@@ -381,7 +406,13 @@ sg_rank_retry:
                                                          &score, &pickup_pos,
                                                          &delivery_pos,
                                                          &new_route_distance)) {
-                continue;
+                /* Store infeasible in cache */
+                if (ce) {
+                    ce->generation = sol->route_generation[v];
+                    ce->penalty_gen = ic->penalty_gen;
+                    ce->feasible = 0;
+                }
+                goto sg_rank_new_trip;
             }
 
             noisy = score;
@@ -395,10 +426,27 @@ sg_rank_retry:
                                      &ranked_count,
                                      noisy, score, new_route_distance,
                                      v, UINT32_MAX, pickup_pos, delivery_pos);
+
+            /* Store in cache */
+            if (ce) {
+                ce->generation = sol->route_generation[v];
+                ce->penalty_gen = ic->penalty_gen;
+                ce->score = score;
+                ce->route_distance = new_route_distance;
+                ce->pos = UINT32_MAX;
+                ce->pickup_pos = pickup_pos;
+                ce->delivery_pos = delivery_pos;
+                ce->feasible = 1;
+            }
         } else {
             /* O(L) request-level evaluation for delivery-only */
             uint32_t len = sol->route_lengths[v];
             uint32_t pos;
+            double best_v_score = INFINITY;
+            uint32_t best_v_pos = UINT32_MAX;
+            double best_v_dist = 0.0;
+            int v_feasible = 0;
+
             for (pos = 0; pos <= len; pos++) {
                 double score = 0.0;
                 double noisy = 0.0;
@@ -420,9 +468,31 @@ sg_rank_retry:
                                          &ranked_count,
                                          noisy, score, new_route_distance,
                                          v, pos, UINT32_MAX, UINT32_MAX);
+
+                if (score < best_v_score) {
+                    best_v_score = score;
+                    best_v_pos = pos;
+                    best_v_dist = new_route_distance;
+                }
+                v_feasible = 1;
+            }
+
+            /* Store in cache */
+            if (ce) {
+                ce->generation = sol->route_generation[v];
+                ce->penalty_gen = ic->penalty_gen;
+                ce->feasible = (uint8_t)v_feasible;
+                if (v_feasible) {
+                    ce->score = best_v_score;
+                    ce->pos = best_v_pos;
+                    ce->route_distance = best_v_dist;
+                    ce->pickup_pos = UINT32_MAX;
+                    ce->delivery_pos = UINT32_MAX;
+                }
             }
         }
 
+sg_rank_new_trip:
         /* New-trip evaluation: try inserting as a new trip at end of route */
         if (ctx->vehicles[v].has_multi_trip && sol->route_lengths[v] > 0) {
             const SGVehicleRecord *vehicle = &ctx->vehicles[v];
@@ -798,6 +868,17 @@ static ARStatus sg_repair_fill_heap(SGContext *ctx, SGRouteSolution *sol,
     SGRegretEntry *cache = ctx->scratch.regret_cache;
     uint32_t i;
     int is_greedy = (regret_k <= 1);
+
+    /* Flush insertion cache per-fill counters to cumulative */
+    {
+        SGInsertionCache *ic = ctx->scratch.insertion_cache;
+        if (ic) {
+            ic->total_hits += ic->hits;
+            ic->total_misses += ic->misses;
+            ic->hits = 0;
+            ic->misses = 0;
+        }
+    }
 
     /* Fallback to linear if scratch not initialized */
     if (!heap || !cache) {

@@ -250,6 +250,7 @@ void sg_config_default(SGConfig *config) {
     config->lexicographic_objective = false;
     config->accept_type = SG_ACCEPT_SA;
     config->adaptive_q = false;
+    config->use_insertion_cache = true;
 }
 
 SGContext *sg_create(void) {

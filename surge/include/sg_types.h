@@ -155,6 +155,7 @@ typedef struct {
     bool lexicographic_objective;
     SGAcceptType accept_type;
     bool adaptive_q;
+    bool use_insertion_cache;
 } SGConfig;
 
 /* Solve phase identifiers */
@@ -190,6 +191,8 @@ typedef struct {
     double distance_span;   /* max_distance - min_distance across active routes */
     double elapsed_seconds; /* wall-clock since solve start */
     SGSolvePhase phase;     /* current solve phase */
+    uint64_t insertion_cache_hits;
+    uint64_t insertion_cache_misses;
 } SGStats;
 
 /* Convergence history entry */

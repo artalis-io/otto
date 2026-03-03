@@ -818,6 +818,8 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
     total += ALIGN8((size_t)num_veh * (size_t)sol->break_stride * sizeof(SGRouteBreak));
     /* Penalty violations (per-route per-constraint-type) */
     total += ALIGN8((size_t)num_veh * SG_PENALTY_COUNT * sizeof(double));
+    /* Route generation counters (move evaluation cache) */
+    total += ALIGN8((size_t)num_veh * sizeof(uint64_t));
     #undef ALIGN8
 
     /* Cache arena size for fast copy path */
@@ -905,6 +907,13 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
     sol->route_violations = (double *)sh_arena_calloc(sol->arena,
         (size_t)num_veh * SG_PENALTY_COUNT, sizeof(double));
 
+    /* Route generation counters (init to 1; cache entries start at 0 → guaranteed first miss) */
+    sol->route_generation = (uint64_t *)sh_arena_alloc(sol->arena,
+        (size_t)num_veh * sizeof(uint64_t));
+    if (sol->route_generation) {
+        for (i = 0; i < num_veh; i++) sol->route_generation[i] = 1;
+    }
+
     /* Verify all allocations succeeded */
     if (!sol->base.assigned_ids || !sol->base.unassigned_ids || !sol->base.assigned_flags ||
         !sol->route_lengths || !sol->route_stop_lengths || !sol->route_break_count ||
@@ -916,7 +925,8 @@ ARStatus sg_route_solution_init(const SGContext *ctx, SGRouteSolution *sol) {
         !sol->route_overtime || !sol->route_tw_penalty ||
         !sol->route_depot_depart || !sol->route_depot_return ||
         !sol->route_break_time || !sol->route_total_work || !sol->route_breaks ||
-        !sol->route_violations || !sol->route_seg_prefix || !sol->route_seg_suffix ||
+        !sol->route_violations || !sol->route_generation ||
+        !sol->route_seg_prefix || !sol->route_seg_suffix ||
         (ctx->dimension_count > 0 && (!sol->route_stop_load ||
             !sol->route_seg_cap_prefix_delta || !sol->route_seg_cap_prefix_min ||
             !sol->route_seg_cap_prefix_max || !sol->route_seg_cap_suffix_delta ||
@@ -1048,6 +1058,10 @@ static ARStatus sg_route_solution_init_for_copy(const SGContext *ctx, SGRouteSol
     /* Penalty violations */
     sol->route_violations = (double *)sh_arena_alloc(sol->arena,
         (size_t)num_veh * SG_PENALTY_COUNT * sizeof(double));
+
+    /* Route generation counters */
+    sol->route_generation = (uint64_t *)sh_arena_alloc(sol->arena,
+        (size_t)num_veh * sizeof(uint64_t));
 
     return AR_STATUS_OK;
 }
@@ -1182,6 +1196,10 @@ void *sg_route_solution_copy(const void *solution, void *user_ctx) {
             if (src->route_violations && dst->route_violations) {
                 memcpy(dst->route_violations, src->route_violations,
                        (size_t)src->num_vehicles * SG_PENALTY_COUNT * sizeof(double));
+            }
+            if (src->route_generation && dst->route_generation) {
+                memcpy(dst->route_generation, src->route_generation,
+                       (size_t)src->num_vehicles * sizeof(uint64_t));
             }
         }
     }
@@ -1753,6 +1771,11 @@ void sg_scratch_init(SGContext *ctx) {
     total += ALIGN8((size_t)num_veh * sizeof(double));
     /* regret_cache: num_requests SGRegretEntry for heap repair */
     total += ALIGN8((size_t)num_req * sizeof(SGRegretEntry));
+    /* insertion_cache (move evaluation cache) */
+    if (ctx->config.use_insertion_cache) {
+        total += ALIGN8(sizeof(SGInsertionCache));
+        total += ALIGN8((size_t)num_req * (size_t)num_veh * sizeof(SGInsertionCacheEntry));
+    }
     #undef ALIGN8
 
     arena = sh_arena_create(total);
@@ -1786,6 +1809,24 @@ void sg_scratch_init(SGContext *ctx) {
     }
     s->cost_scale_buf = (double *)sh_arena_alloc(arena, (size_t)num_veh * sizeof(double));
     s->regret_cache = (SGRegretEntry *)sh_arena_alloc(arena, (size_t)num_req * sizeof(SGRegretEntry));
+
+    /* Insertion cache (move evaluation cache) */
+    if (ctx->config.use_insertion_cache) {
+        s->insertion_cache = (SGInsertionCache *)sh_arena_alloc(arena, sizeof(SGInsertionCache));
+        if (s->insertion_cache) {
+            SGInsertionCache *ic = s->insertion_cache;
+            ic->num_requests = num_req;
+            ic->max_vehicles = num_veh;
+            ic->penalty_gen = 0;
+            ic->hits = ic->misses = ic->total_hits = ic->total_misses = 0;
+            ic->entries = (SGInsertionCacheEntry *)sh_arena_alloc(arena,
+                (size_t)num_req * (size_t)num_veh * sizeof(SGInsertionCacheEntry));
+            if (ic->entries) {
+                memset(ic->entries, 0,
+                       (size_t)num_req * (size_t)num_veh * sizeof(SGInsertionCacheEntry));
+            }
+        }
+    }
 
     /* Heap is separately allocated (not from arena) — reusable via clear() */
     s->repair_heap = sh_heap_create((size_t)num_req);
