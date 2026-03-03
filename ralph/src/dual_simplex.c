@@ -29,6 +29,8 @@ void tableau_free(SimplexTableau *tab);
 /* Dual candidate-list pricing constants (T2.2) */
 #define DUAL_CAND_CAPACITY    200    /* Max candidates in dual hot set */
 #define DUAL_CAND_RC_THRESH   1e-4   /* |rc| threshold for candidate inclusion */
+#define DUAL_REINVERT_HARD_BURST_WINDOW_ITERS 64
+#define DUAL_REINVERT_HARD_BURST_DEMOTE_COUNT 6
 
 /* Bound perturbation for degeneracy prevention (defined below) */
 static void apply_bound_perturbation(SimplexTableau *tab);
@@ -189,6 +191,80 @@ static double dual_average_solve_density(long long sol_nnz_total, int samples, i
     return density;
 }
 
+static void dual_reinvert_hard_trigger_safety_step_core(int iter,
+                                                         int hard_trigger_total,
+                                                         int *last_total_io,
+                                                         int *last_iter_io,
+                                                         int *burst_io,
+                                                         int *demoted_io) {
+    int last_total;
+    int last_iter;
+    int burst;
+    int demoted;
+    int delta;
+
+    if (!last_total_io || !last_iter_io || !burst_io || !demoted_io) return;
+
+    last_total = *last_total_io;
+    last_iter = *last_iter_io;
+    burst = *burst_io;
+    demoted = *demoted_io;
+
+    if (iter < 0) iter = 0;
+    if (hard_trigger_total < 0) hard_trigger_total = 0;
+    if (last_total < 0) last_total = 0;
+    if (burst < 0) burst = 0;
+
+    if (hard_trigger_total < last_total) {
+        last_total = hard_trigger_total;
+        last_iter = -1;
+        burst = 0;
+    }
+
+    delta = hard_trigger_total - last_total;
+    if (delta > 0) {
+        if (last_iter >= 0 && (iter - last_iter) <= DUAL_REINVERT_HARD_BURST_WINDOW_ITERS) {
+            burst += delta;
+        } else {
+            burst = delta;
+        }
+        last_total = hard_trigger_total;
+        last_iter = iter;
+    } else if (last_iter >= 0 && (iter - last_iter) > DUAL_REINVERT_HARD_BURST_WINDOW_ITERS) {
+        burst = 0;
+    }
+
+    if (burst >= DUAL_REINVERT_HARD_BURST_DEMOTE_COUNT) {
+        demoted = 1;
+    }
+
+    *last_total_io = last_total;
+    *last_iter_io = last_iter;
+    *burst_io = burst;
+    *demoted_io = demoted ? 1 : 0;
+}
+
+void dual_reinvert_hard_trigger_safety_step_for_test(int iter,
+                                                      int hard_trigger_total,
+                                                      int *last_total_io,
+                                                      int *last_iter_io,
+                                                      int *burst_io,
+                                                      int *demoted_io) {
+    dual_reinvert_hard_trigger_safety_step_core(iter,
+                                                hard_trigger_total,
+                                                last_total_io,
+                                                last_iter_io,
+                                                burst_io,
+                                                demoted_io);
+}
+
+int dual_reinvert_effective_mode_for_test(int configured_mode, int demoted) {
+    if (configured_mode == LP_REINVERT_MODE_CONTROL_ALL && demoted) {
+        return LP_REINVERT_MODE_SHADOW;
+    }
+    return configured_mode;
+}
+
 static int dual_governor_refactor_decision(
     SimplexSolver *solver,
     SimplexTableau *tab,
@@ -205,6 +281,7 @@ static int dual_governor_refactor_decision(
     int shadow_refactor;
     int governed_refactor;
     int reinvert_mode;
+    int reinvert_mode_effective;
     int reinvert_active = 0;
     LPReinvertControllerSignals reinvert_signals;
     LPReinvertControllerDecision reinvert_shadow;
@@ -231,7 +308,23 @@ static int dual_governor_refactor_decision(
     if (!lp_reinvert_controller_mode_is_valid(reinvert_mode)) {
         reinvert_mode = LP_REINVERT_MODE_SHADOW;
     }
-    if (reinvert_mode != LP_REINVERT_MODE_OFF) {
+    if (reinvert_mode == LP_REINVERT_MODE_CONTROL_ALL) {
+        int demoted_before = solver->policy.reinvert_dual_control_demoted;
+        dual_reinvert_hard_trigger_safety_step_core(
+            iter,
+            solver->telemetry.perf_dual_lu_hard_trigger,
+            &solver->policy.reinvert_dual_hard_trigger_last_total,
+            &solver->policy.reinvert_dual_hard_trigger_last_iter,
+            &solver->policy.reinvert_dual_hard_trigger_burst,
+            &solver->policy.reinvert_dual_control_demoted);
+        if (!demoted_before && solver->policy.reinvert_dual_control_demoted) {
+            solver->policy.reinvert_dual_control_demotions++;
+        }
+    }
+    reinvert_mode_effective =
+        dual_reinvert_effective_mode_for_test(reinvert_mode,
+                                              solver->policy.reinvert_dual_control_demoted);
+    if (reinvert_mode_effective != LP_REINVERT_MODE_OFF) {
         reinvert_active = 1;
         reinvert_state = &solver->policy.reinvert_state_dual;
         dual_hot_ms = solver->telemetry.perf_ratio_ms +
@@ -268,7 +361,7 @@ static int dual_governor_refactor_decision(
         reinvert_signals.btran_density = btran_density;
 
         reinvert_shadow = lp_reinvert_controller_decide(reinvert_state, &reinvert_signals);
-        if (reinvert_mode == LP_REINVERT_MODE_CONTROL_ALL && !lu_refactor_needed) {
+        if (reinvert_mode_effective == LP_REINVERT_MODE_CONTROL_ALL && !lu_refactor_needed) {
             switch ((LPReinvertDecision)reinvert_shadow.decision) {
                 case LP_REINVERT_DECISION_FORCE:
                     quality_refactor = 1;

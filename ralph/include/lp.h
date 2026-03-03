@@ -859,6 +859,11 @@ typedef struct {
     LPReinvertControllerState reinvert_state_phase2;
     LPReinvertControllerState reinvert_state_dual;
     double reinvert_dual_last_hot_ms;
+    int reinvert_dual_control_demoted; /* latched: control_all demoted to shadow this solve */
+    int reinvert_dual_control_demotions; /* number of control_all->shadow demotion events */
+    int reinvert_dual_hard_trigger_last_total; /* last observed dual hard-trigger telemetry total */
+    int reinvert_dual_hard_trigger_last_iter; /* iteration index for last observed hard-trigger delta */
+    int reinvert_dual_hard_trigger_burst; /* burst accumulator over short iteration windows */
 } LPSolverPolicyState;
 
 /* Simplex solver */
@@ -1172,6 +1177,11 @@ typedef struct {
     double soft_lu_iter_cost_ewma_phase2;
     int basis_governor_mode;
     int reinvert_controller_mode;
+    int reinvert_dual_control_demoted;
+    int reinvert_dual_control_demotions;
+    int reinvert_dual_hard_trigger_last_total;
+    int reinvert_dual_hard_trigger_last_iter;
+    int reinvert_dual_hard_trigger_burst;
     int shadow_refactor_yes_phase1;
     int shadow_refactor_yes_phase2;
     int shadow_refactor_yes_dual;

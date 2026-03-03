@@ -127,6 +127,11 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.policy.periodic_cost_refactor_samples_phase2 = 3;
     solver.policy.basis_governor_mode = LP_BASIS_GOV_MODE_CONTROL_PHASE2;
     solver.policy.reinvert_controller_mode = LP_REINVERT_MODE_CONTROL_PHASE1;
+    solver.policy.reinvert_dual_control_demoted = 1;
+    solver.policy.reinvert_dual_control_demotions = 2;
+    solver.policy.reinvert_dual_hard_trigger_last_total = 9;
+    solver.policy.reinvert_dual_hard_trigger_last_iter = 77;
+    solver.policy.reinvert_dual_hard_trigger_burst = 4;
     lp_basis_governor_set_mode(&solver.policy.basis_governor,
                                solver.policy.basis_governor_mode);
     solver.policy.basis_governor.shadow_refactor_yes_phase1 = 4;
@@ -261,6 +266,16 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: basis governor mode preserved");
     ASSERT_INT_EQ(solver.policy.reinvert_controller_mode, LP_REINVERT_MODE_CONTROL_PHASE1,
                   "reset: reinvert controller mode preserved");
+    ASSERT_INT_EQ(solver.policy.reinvert_dual_control_demoted, 0,
+                  "reset: dual reinvert control demoted");
+    ASSERT_INT_EQ(solver.policy.reinvert_dual_control_demotions, 0,
+                  "reset: dual reinvert control demotions");
+    ASSERT_INT_EQ(solver.policy.reinvert_dual_hard_trigger_last_total, 0,
+                  "reset: dual reinvert hard-trigger last total");
+    ASSERT_INT_EQ(solver.policy.reinvert_dual_hard_trigger_last_iter, -1,
+                  "reset: dual reinvert hard-trigger last iter");
+    ASSERT_INT_EQ(solver.policy.reinvert_dual_hard_trigger_burst, 0,
+                  "reset: dual reinvert hard-trigger burst");
     ASSERT_INT_EQ(lp_basis_governor_get_mode(&solver.policy.basis_governor),
                   LP_BASIS_GOV_MODE_CONTROL_PHASE2,
                   "reset: governor state mode preserved");
@@ -576,6 +591,11 @@ static void test_solver_snapshot(void) {
     solver.policy.periodic_cost_refactor_samples_phase1 = 4;
     solver.policy.basis_governor_mode = LP_BASIS_GOV_MODE_SHADOW;
     solver.policy.reinvert_controller_mode = LP_REINVERT_MODE_CONTROL_ALL;
+    solver.policy.reinvert_dual_control_demoted = 1;
+    solver.policy.reinvert_dual_control_demotions = 1;
+    solver.policy.reinvert_dual_hard_trigger_last_total = 13;
+    solver.policy.reinvert_dual_hard_trigger_last_iter = 101;
+    solver.policy.reinvert_dual_hard_trigger_burst = 7;
     lp_basis_governor_set_mode(&solver.policy.basis_governor,
                                solver.policy.basis_governor_mode);
     solver.policy.basis_governor.shadow_refactor_yes_phase1 = 8;
@@ -711,6 +731,16 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: basis governor mode");
     ASSERT_INT_EQ(snap.reinvert_controller_mode, LP_REINVERT_MODE_CONTROL_ALL,
                   "solver_snapshot: reinvert controller mode");
+    ASSERT_INT_EQ(snap.reinvert_dual_control_demoted, 1,
+                  "solver_snapshot: dual reinvert control demoted");
+    ASSERT_INT_EQ(snap.reinvert_dual_control_demotions, 1,
+                  "solver_snapshot: dual reinvert control demotions");
+    ASSERT_INT_EQ(snap.reinvert_dual_hard_trigger_last_total, 13,
+                  "solver_snapshot: dual reinvert hard-trigger last total");
+    ASSERT_INT_EQ(snap.reinvert_dual_hard_trigger_last_iter, 101,
+                  "solver_snapshot: dual reinvert hard-trigger last iter");
+    ASSERT_INT_EQ(snap.reinvert_dual_hard_trigger_burst, 7,
+                  "solver_snapshot: dual reinvert hard-trigger burst");
     ASSERT_INT_EQ(snap.shadow_refactor_yes_phase1, 8,
                   "solver_snapshot: shadow refactor yes phase1");
     ASSERT_INT_EQ(snap.shadow_disagree_primal_refactor, 3,
