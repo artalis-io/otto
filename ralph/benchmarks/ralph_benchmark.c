@@ -517,6 +517,23 @@ typedef struct {
     int lu_max_updates;
     int lu_last_failure_reason_code;
     char lu_last_failure_reason[64];
+    int lu_last_refactor_trigger_reason_code;
+    char lu_last_refactor_trigger_reason[64];
+    int lu_refactor_need_checks;
+    int lu_refactor_need_triggers;
+    int lu_refactor_need_reason_max_updates;
+    int lu_refactor_need_reason_growth_guard;
+    int lu_refactor_need_reason_avg_spike_density;
+    int lu_refactor_need_reason_cond_severe;
+    int lu_refactor_need_reason_cond_adaptive_limit;
+    int lu_refactor_need_reason_spike_pool_warn;
+    int lu_refactor_need_reason_spike_work;
+    int lu_update_fail_bad_input;
+    int lu_update_fail_max_updates;
+    int lu_update_fail_singular_update;
+    int lu_update_fail_update_pivot_too_small;
+    int lu_update_fail_spike_pool_full;
+    int lu_update_fail_eta_alloc;
     int lu_factorize_calls;
     int lu_last_basis_nnz;
     int lu_last_m;
@@ -938,6 +955,8 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             sizeof(result.lu_sparse_fallback_last_reason_str) - 1);
     strncpy(result.lu_sparse_numeric_last_failure_reason_str, "none",
             sizeof(result.lu_sparse_numeric_last_failure_reason_str) - 1);
+    strncpy(result.lu_last_refactor_trigger_reason, "none",
+            sizeof(result.lu_last_refactor_trigger_reason) - 1);
     strncpy(result.refactor_last_reason_str, "other",
             sizeof(result.refactor_last_reason_str) - 1);
 
@@ -1444,6 +1463,33 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_num_updates = lu_tel.num_updates;
                 result.lu_max_updates = lu_tel.max_updates;
                 result.lu_last_failure_reason_code = lu_tel.last_failure_reason;
+                result.lu_last_refactor_trigger_reason_code =
+                    lu_tel.last_refactor_trigger_reason;
+                result.lu_refactor_need_checks = lu_tel.refactor_need_checks;
+                result.lu_refactor_need_triggers = lu_tel.refactor_need_triggers;
+                result.lu_refactor_need_reason_max_updates =
+                    lu_tel.refactor_need_reason_max_updates;
+                result.lu_refactor_need_reason_growth_guard =
+                    lu_tel.refactor_need_reason_growth_guard;
+                result.lu_refactor_need_reason_avg_spike_density =
+                    lu_tel.refactor_need_reason_avg_spike_density;
+                result.lu_refactor_need_reason_cond_severe =
+                    lu_tel.refactor_need_reason_cond_severe;
+                result.lu_refactor_need_reason_cond_adaptive_limit =
+                    lu_tel.refactor_need_reason_cond_adaptive_limit;
+                result.lu_refactor_need_reason_spike_pool_warn =
+                    lu_tel.refactor_need_reason_spike_pool_warn;
+                result.lu_refactor_need_reason_spike_work =
+                    lu_tel.refactor_need_reason_spike_work;
+                result.lu_update_fail_bad_input = lu_tel.update_fail_bad_input;
+                result.lu_update_fail_max_updates = lu_tel.update_fail_max_updates;
+                result.lu_update_fail_singular_update =
+                    lu_tel.update_fail_singular_update;
+                result.lu_update_fail_update_pivot_too_small =
+                    lu_tel.update_fail_update_pivot_too_small;
+                result.lu_update_fail_spike_pool_full =
+                    lu_tel.update_fail_spike_pool_full;
+                result.lu_update_fail_eta_alloc = lu_tel.update_fail_eta_alloc;
                 result.lu_factorize_calls = lu_tel.perf_factorize_calls;
                 result.lu_last_basis_nnz = lu_tel.perf_last_basis_nnz;
                 result.lu_last_m = lu_tel.perf_last_m;
@@ -1475,6 +1521,15 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                     strncpy(result.lu_last_failure_reason, reason,
                             sizeof(result.lu_last_failure_reason) - 1);
                     result.lu_last_failure_reason[sizeof(result.lu_last_failure_reason) - 1] = '\0';
+                }
+                {
+                    const char *reason = lu_refactor_trigger_reason_string(
+                        lu_tel.last_refactor_trigger_reason);
+                    if (!reason) reason = "none";
+                    strncpy(result.lu_last_refactor_trigger_reason, reason,
+                            sizeof(result.lu_last_refactor_trigger_reason) - 1);
+                    result.lu_last_refactor_trigger_reason[
+                        sizeof(result.lu_last_refactor_trigger_reason) - 1] = '\0';
                 }
                 {
                     const char *reason = lu_sparse_fallback_reason_string(lu_tel.sparse_fallback_last_reason);
@@ -2136,6 +2191,11 @@ static void print_json_result(const char *problem_name, const char *source,
     char escaped_lu_reason[128];
     json_escape_string(escaped_lu_reason, sizeof(escaped_lu_reason),
                        ralph->lu_last_failure_reason[0] ? ralph->lu_last_failure_reason : "none");
+    char escaped_lu_refactor_reason[128];
+    json_escape_string(escaped_lu_refactor_reason, sizeof(escaped_lu_refactor_reason),
+                       ralph->lu_last_refactor_trigger_reason[0]
+                           ? ralph->lu_last_refactor_trigger_reason
+                           : "none");
     char escaped_lu_sparse_fallback_reason[128];
     json_escape_string(escaped_lu_sparse_fallback_reason, sizeof(escaped_lu_sparse_fallback_reason),
                        ralph->lu_sparse_fallback_last_reason_str[0] ? ralph->lu_sparse_fallback_last_reason_str : "none");
@@ -2977,6 +3037,40 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"sn_successes\": %d,\n", ralph->lu_sn_successes);
     fprintf(out, "    \"num_updates\": %d,\n", ralph->lu_num_updates);
     fprintf(out, "    \"max_updates\": %d,\n", ralph->lu_max_updates);
+    fprintf(out, "    \"last_refactor_trigger_reason_code\": %d,\n",
+            ralph->lu_last_refactor_trigger_reason_code);
+    fprintf(out, "    \"last_refactor_trigger_reason\": \"%s\",\n",
+            escaped_lu_refactor_reason);
+    fprintf(out, "    \"refactor_need_checks\": %d,\n",
+            ralph->lu_refactor_need_checks);
+    fprintf(out, "    \"refactor_need_triggers\": %d,\n",
+            ralph->lu_refactor_need_triggers);
+    fprintf(out, "    \"refactor_need_reason_max_updates\": %d,\n",
+            ralph->lu_refactor_need_reason_max_updates);
+    fprintf(out, "    \"refactor_need_reason_growth_guard\": %d,\n",
+            ralph->lu_refactor_need_reason_growth_guard);
+    fprintf(out, "    \"refactor_need_reason_avg_spike_density\": %d,\n",
+            ralph->lu_refactor_need_reason_avg_spike_density);
+    fprintf(out, "    \"refactor_need_reason_cond_severe\": %d,\n",
+            ralph->lu_refactor_need_reason_cond_severe);
+    fprintf(out, "    \"refactor_need_reason_cond_adaptive_limit\": %d,\n",
+            ralph->lu_refactor_need_reason_cond_adaptive_limit);
+    fprintf(out, "    \"refactor_need_reason_spike_pool_warn\": %d,\n",
+            ralph->lu_refactor_need_reason_spike_pool_warn);
+    fprintf(out, "    \"refactor_need_reason_spike_work\": %d,\n",
+            ralph->lu_refactor_need_reason_spike_work);
+    fprintf(out, "    \"update_fail_bad_input\": %d,\n",
+            ralph->lu_update_fail_bad_input);
+    fprintf(out, "    \"update_fail_max_updates\": %d,\n",
+            ralph->lu_update_fail_max_updates);
+    fprintf(out, "    \"update_fail_singular_update\": %d,\n",
+            ralph->lu_update_fail_singular_update);
+    fprintf(out, "    \"update_fail_update_pivot_too_small\": %d,\n",
+            ralph->lu_update_fail_update_pivot_too_small);
+    fprintf(out, "    \"update_fail_spike_pool_full\": %d,\n",
+            ralph->lu_update_fail_spike_pool_full);
+    fprintf(out, "    \"update_fail_eta_alloc\": %d,\n",
+            ralph->lu_update_fail_eta_alloc);
     fprintf(out, "    \"factorize_calls\": %d,\n", ralph->lu_factorize_calls);
     fprintf(out, "    \"last_basis_nnz\": %d,\n", ralph->lu_last_basis_nnz);
     fprintf(out, "    \"last_m\": %d,\n", ralph->lu_last_m);

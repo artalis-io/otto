@@ -12,6 +12,7 @@
 #include <math.h>
 #include <limits.h>
 #include "lp.h"
+#include "lp_bfcp_policy.h"
 #include "lu_supernode.h"
 
 #ifdef _OPENMP
@@ -43,6 +44,65 @@ static void build_csr_transpose(LUFactorization *lu);
 static void lu_set_failure(LUFactorization *lu, int reason) {
     if (lu) {
         lu->last_failure_reason = reason;
+    }
+}
+
+static void lu_mark_update_failure(LUFactorization *lu, int reason) {
+    if (!lu || !lu->telemetry_enabled) return;
+    switch ((LUFailureReason)reason) {
+        case LU_FAIL_BAD_INPUT:
+            lu->telemetry.update_fail_bad_input++;
+            break;
+        case LU_FAIL_MAX_UPDATES:
+            lu->telemetry.update_fail_max_updates++;
+            break;
+        case LU_FAIL_SINGULAR_UPDATE:
+            lu->telemetry.update_fail_singular_update++;
+            break;
+        case LU_FAIL_UPDATE_PIVOT_TOO_SMALL:
+            lu->telemetry.update_fail_update_pivot_too_small++;
+            break;
+        case LU_FAIL_SPIKE_POOL_FULL:
+            lu->telemetry.update_fail_spike_pool_full++;
+            break;
+        case LU_FAIL_ETA_ALLOC:
+            lu->telemetry.update_fail_eta_alloc++;
+            break;
+        default:
+            break;
+    }
+}
+
+static void lu_mark_refactor_need(LUFactorization *lu, int reason) {
+    if (!lu || !lu->telemetry_enabled) return;
+    lu->telemetry.refactor_need_checks++;
+    lu->telemetry.refactor_need_last_reason = reason;
+    if (reason == LP_BFCP_REFACTOR_REASON_NONE) return;
+    lu->telemetry.refactor_need_triggers++;
+    switch ((LPBFCPRefactorReason)reason) {
+        case LP_BFCP_REFACTOR_REASON_MAX_UPDATES:
+            lu->telemetry.refactor_need_reason_max_updates++;
+            break;
+        case LP_BFCP_REFACTOR_REASON_GROWTH_GUARD:
+            lu->telemetry.refactor_need_reason_growth_guard++;
+            break;
+        case LP_BFCP_REFACTOR_REASON_AVG_SPIKE_DENSITY:
+            lu->telemetry.refactor_need_reason_avg_spike_density++;
+            break;
+        case LP_BFCP_REFACTOR_REASON_COND_SEVERE:
+            lu->telemetry.refactor_need_reason_cond_severe++;
+            break;
+        case LP_BFCP_REFACTOR_REASON_COND_ADAPTIVE_LIMIT:
+            lu->telemetry.refactor_need_reason_cond_adaptive_limit++;
+            break;
+        case LP_BFCP_REFACTOR_REASON_SPIKE_POOL_WARN:
+            lu->telemetry.refactor_need_reason_spike_pool_warn++;
+            break;
+        case LP_BFCP_REFACTOR_REASON_SPIKE_WORK:
+            lu->telemetry.refactor_need_reason_spike_work++;
+            break;
+        default:
+            break;
     }
 }
 
@@ -297,6 +357,7 @@ LUFactorization* lu_create(int m) {
     lu->max_regularizations = 0;
     lu->num_regularized = 0;
     lu->last_failure_reason = LU_FAIL_NONE;
+    lu->last_refactor_trigger_reason = LP_BFCP_REFACTOR_REASON_NONE;
 
     /* Pre-allocate dense workspace for fallback factorization (m×m matrix)
      * Allocated separately due to large size O(m²) */
@@ -486,6 +547,7 @@ int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
         return -1;
     }
     lu_set_failure(lu, LU_FAIL_NONE);
+    lu->last_refactor_trigger_reason = LP_BFCP_REFACTOR_REASON_NONE;
     lp_telemetry_prepare_lu_factorize(lu, B);
 
     /* Try efficient sparse factorization first */
@@ -2379,11 +2441,13 @@ static void apply_ft_spikes_backward(const LUFactorization *lu, double *x) {
 int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) {
     if (!lu || !entering_col) {
         lu_set_failure(lu, LU_FAIL_BAD_INPUT);
+        lu_mark_update_failure(lu, LU_FAIL_BAD_INPUT);
         return -1;
     }
     lu_set_failure(lu, LU_FAIL_NONE);
     if (lu->num_updates >= lu->max_updates) {
         lu_set_failure(lu, LU_FAIL_MAX_UPDATES);
+        lu_mark_update_failure(lu, LU_FAIL_MAX_UPDATES);
         return -1;  /* Need refactorization */
     }
 
@@ -2413,6 +2477,7 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     /* Check pivot element (in step coordinates) */
     if (fabs(spike[step_pos]) < RALPH_PIVOT_TOL) {
         lu_set_failure(lu, LU_FAIL_SINGULAR_UPDATE);
+        lu_mark_update_failure(lu, LU_FAIL_SINGULAR_UPDATE);
         return -1;  /* Singular update */
     }
 
@@ -2433,6 +2498,7 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
             /* Pivot is too small relative to column magnitude.
              * Force refactorization to get a more stable basis representation. */
             lu_set_failure(lu, LU_FAIL_UPDATE_PIVOT_TOO_SMALL);
+            lu_mark_update_failure(lu, LU_FAIL_UPDATE_PIVOT_TOO_SMALL);
             return -1;
         }
     }
@@ -2460,6 +2526,7 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
         double reject_ratio = lu_dense_spike_reject_ratio(lu);
         if (spike_ratio > reject_ratio) {
             lu_set_failure(lu, LU_FAIL_SPIKE_POOL_FULL);
+            lu_mark_update_failure(lu, LU_FAIL_SPIKE_POOL_FULL);
             return -1;
         }
     }
@@ -2469,6 +2536,7 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
         /* Check if pool has room for this spike */
         if (lu->spike_pool_used + off_diag_nnz > lu->spike_pool_capacity) {
             lu_set_failure(lu, LU_FAIL_SPIKE_POOL_FULL);
+            lu_mark_update_failure(lu, LU_FAIL_SPIKE_POOL_FULL);
             return -1;  /* Pool full - need refactorization */
         }
 
@@ -2502,6 +2570,7 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
             free(indices);
             free(values);
             lu_set_failure(lu, LU_FAIL_ETA_ALLOC);
+            lu_mark_update_failure(lu, LU_FAIL_ETA_ALLOC);
             return -1;
         }
 
@@ -2542,63 +2611,41 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     return 0;
 }
 
-int lu_needs_refactorization(const LUFactorization *lu) {
+int lu_needs_refactorization(LUFactorization *lu) {
+    LPBFCPRefactorSignals sig;
+    int reason;
+
     if (!lu) return 0;
 
-    /* Refactorize if max updates reached */
-    if (lu->num_updates >= lu->max_updates) return 1;
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.num_updates = lu->num_updates;
+    sig.max_updates = lu->max_updates;
+    sig.growth_factor = lu->growth_factor;
+    sig.growth_guard_threshold = (lu->growth_refactor_threshold > 0.0)
+        ? lu->growth_refactor_threshold
+        : RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
+    sig.use_ft_updates = lu->use_ft_updates ? 1 : 0;
+    sig.m = lu->m;
+    sig.ft_num_updates = lu->ft_num_updates;
+    sig.spike_pool_used = lu->spike_pool_used;
+    sig.spike_pool_capacity = lu->spike_pool_capacity;
+    sig.update_aged = lu_update_is_aged(lu);
+    sig.min_ft_updates_for_avg_density = 8;
+    sig.spike_dense_reject_m_min = RALPH_SPIKE_DENSE_REJECT_M_MIN;
+    sig.spike_avg_refactor_ratio = RALPH_SPIKE_AVG_REFACTOR_RATIO;
+    sig.spike_avg_refactor_aged_ratio = RALPH_SPIKE_AVG_REFACTOR_AGED_RATIO;
+    sig.spike_pool_warn_pct = RALPH_SPIKE_POOL_WARN_PCT;
+    sig.spike_work_multiplier = 8;
+    sig.cond_min_updates = 10;
+    sig.cond_estimate = lu->cond_estimate;
+    sig.cond_severe_ratio = 1e10;
+    sig.cond_adaptive_hi = 1e8;
+    sig.cond_adaptive_mid = 1e6;
 
-    /* Refactorize early if growth factor is large */
-    {
-        double growth_threshold = (lu->growth_refactor_threshold > 0.0)
-            ? lu->growth_refactor_threshold
-            : RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
-        if (lu->growth_factor > growth_threshold) return 1;
-    }
-
-    /* Reinvert when average stored FT spike density is persistently high.
-     * This targets high per-iteration solve cost even before hard pool limits hit. */
-    if (lu->use_ft_updates &&
-        lu->m >= RALPH_SPIKE_DENSE_REJECT_M_MIN &&
-        lu->ft_num_updates >= 8 &&
-        lu->spike_pool_used > 0) {
-        double avg_spike_ratio = ((double)lu->spike_pool_used /
-                                  (double)lu->ft_num_updates) / (double)lu->m;
-        double max_avg_ratio = lu_update_is_aged(lu)
-            ? RALPH_SPIKE_AVG_REFACTOR_AGED_RATIO
-            : RALPH_SPIKE_AVG_REFACTOR_RATIO;
-        if (avg_spike_ratio > max_avg_ratio) return 1;
-    }
-
-    /* T3.2: Condition-based early refactorization.
-     * If condition estimate has grown significantly since last factorization,
-     * refactorize early to prevent numerical drift. */
-    if (lu->num_updates >= 10) {
-        double cond_ratio = lu->growth_factor * lu->cond_estimate;
-        if (cond_ratio > 1e10) return 1;  /* Severe conditioning */
-
-        /* Adaptive: refactorize earlier when condition is poor */
-        int adaptive_limit = lu->max_updates;
-        if (lu->cond_estimate > 1e8)
-            adaptive_limit = lu->max_updates / 4;
-        else if (lu->cond_estimate > 1e6)
-            adaptive_limit = lu->max_updates / 2;
-        if (lu->num_updates >= adaptive_limit) return 1;
-    }
-
-    /* Refactorize early if spike pool is nearly full
-     * This prevents update failures when spike density is higher than expected */
-    if (lu->use_ft_updates && lu->spike_pool_capacity > 0) {
-        if (lu->spike_pool_used > lu->spike_pool_capacity * RALPH_SPIKE_POOL_WARN_PCT / 100) return 1;
-    }
-
-    /* Spike-work trigger: for large problems (m>=500), refactorize when cumulative
-     * spike nnz exceeds threshold. Each FTRAN/BTRAN walks ALL accumulated spikes,
-     * and for large m the spike application cost dominates iteration time.
-     * Only for m>=500 where factorization is cheap relative to spike cost. */
-    if (lu->use_ft_updates && lu->m >= 500 && lu->spike_pool_used > lu->m * 8) return 1;
-
-    return 0;
+    reason = lp_bfcp_policy_refactor_reason(&sig);
+    lu->last_refactor_trigger_reason = reason;
+    lu_mark_refactor_need(lu, reason);
+    return reason != LP_BFCP_REFACTOR_REASON_NONE;
 }
 
 /* ============================================================================
@@ -2618,6 +2665,10 @@ const char* lu_failure_reason_string(int reason) {
         case LU_FAIL_FACTOR_ALLOC: return "factor_alloc";
         default: return "unknown";
     }
+}
+
+const char* lu_refactor_trigger_reason_string(int reason) {
+    return lp_bfcp_policy_refactor_reason_string(reason);
 }
 
 void lu_print(const LUFactorization *lu) {

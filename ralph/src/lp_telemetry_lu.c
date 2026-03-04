@@ -6,6 +6,7 @@
 
 #include <string.h>
 #include "lp.h"
+#include "lp_bfcp_policy.h"
 
 static int lu_telemetry_enabled(const LUFactorization *lu) {
     return lu && lu->telemetry_enabled;
@@ -13,6 +14,7 @@ static int lu_telemetry_enabled(const LUFactorization *lu) {
 
 void lp_telemetry_reset_lu(LUFactorization *lu) {
     if (!lu) return;
+    lu->last_refactor_trigger_reason = LP_BFCP_REFACTOR_REASON_NONE;
     lu->telemetry.mkz_calls = 0;
     lu->telemetry.mkz_successes = 0;
     lu->telemetry.mkz_failures = 0;
@@ -74,6 +76,22 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.sn_cost_gate_trips = 0;
     lu->telemetry.sn_cost_gate_skips = 0;
     lu->telemetry.sn_cost_gate_resets = 0;
+    lu->telemetry.refactor_need_checks = 0;
+    lu->telemetry.refactor_need_triggers = 0;
+    lu->telemetry.refactor_need_last_reason = 0;
+    lu->telemetry.refactor_need_reason_max_updates = 0;
+    lu->telemetry.refactor_need_reason_growth_guard = 0;
+    lu->telemetry.refactor_need_reason_avg_spike_density = 0;
+    lu->telemetry.refactor_need_reason_cond_severe = 0;
+    lu->telemetry.refactor_need_reason_cond_adaptive_limit = 0;
+    lu->telemetry.refactor_need_reason_spike_pool_warn = 0;
+    lu->telemetry.refactor_need_reason_spike_work = 0;
+    lu->telemetry.update_fail_bad_input = 0;
+    lu->telemetry.update_fail_max_updates = 0;
+    lu->telemetry.update_fail_singular_update = 0;
+    lu->telemetry.update_fail_update_pivot_too_small = 0;
+    lu->telemetry.update_fail_spike_pool_full = 0;
+    lu->telemetry.update_fail_eta_alloc = 0;
     lu->telemetry.perf_factorize_calls = 0;
     lu->telemetry.perf_last_basis_nnz = 0;
     lu->telemetry.perf_last_m = 0;
@@ -194,12 +212,29 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(sn_cost_gate_trips);
     COPY_LU_TELEM_FIELD(sn_cost_gate_skips);
     COPY_LU_TELEM_FIELD(sn_cost_gate_resets);
+    COPY_LU_TELEM_FIELD(refactor_need_checks);
+    COPY_LU_TELEM_FIELD(refactor_need_triggers);
+    COPY_LU_TELEM_FIELD(refactor_need_last_reason);
+    COPY_LU_TELEM_FIELD(refactor_need_reason_max_updates);
+    COPY_LU_TELEM_FIELD(refactor_need_reason_growth_guard);
+    COPY_LU_TELEM_FIELD(refactor_need_reason_avg_spike_density);
+    COPY_LU_TELEM_FIELD(refactor_need_reason_cond_severe);
+    COPY_LU_TELEM_FIELD(refactor_need_reason_cond_adaptive_limit);
+    COPY_LU_TELEM_FIELD(refactor_need_reason_spike_pool_warn);
+    COPY_LU_TELEM_FIELD(refactor_need_reason_spike_work);
+    COPY_LU_TELEM_FIELD(update_fail_bad_input);
+    COPY_LU_TELEM_FIELD(update_fail_max_updates);
+    COPY_LU_TELEM_FIELD(update_fail_singular_update);
+    COPY_LU_TELEM_FIELD(update_fail_update_pivot_too_small);
+    COPY_LU_TELEM_FIELD(update_fail_spike_pool_full);
+    COPY_LU_TELEM_FIELD(update_fail_eta_alloc);
 
     COPY_LU_FIELD(sn_calls);
     COPY_LU_FIELD(sn_successes);
     COPY_LU_FIELD(num_updates);
     COPY_LU_FIELD(max_updates);
     COPY_LU_FIELD(last_failure_reason);
+    COPY_LU_FIELD(last_refactor_trigger_reason);
 
     COPY_LU_TELEM_FIELD(perf_factorize_calls);
     COPY_LU_TELEM_FIELD(perf_last_basis_nnz);

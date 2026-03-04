@@ -15,7 +15,7 @@ extern int tableau_compute_reduced_costs(SimplexTableau *tab);
 extern int pricing_steepest_edge(SimplexTableau *tab, int *entering);
 extern int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *theta);
 extern int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col);
-extern int lu_needs_refactorization(const LUFactorization *lu);
+extern int lu_needs_refactorization(LUFactorization *lu);
 
 static int my_initialize_slack_basis(SimplexTableau *tab) {
     int m = tab->m;
