@@ -12,6 +12,7 @@
 #include <math.h>
 #include "ralph_test_mod_api.h"
 #include "lp.h"
+#include "lp_bfcp_policy.h"
 
 #define TOLERANCE 1e-8
 
@@ -928,6 +929,15 @@ static void test_ft_update_density_refactor_guard(void) {
     lu->spike_pool_used = 2200; /* avg = 183.3, ratio ~0.458 */
     ASSERT_INT_EQ(lu_needs_refactorization(lu), 1,
                   "ft-density guard: non-aged avg density forces refactor");
+    ASSERT_INT_EQ(lu->last_refactor_trigger_reason,
+                  LP_BFCP_REFACTOR_REASON_AVG_SPIKE_DENSITY,
+                  "ft-density guard: reason=avg_spike_density");
+    ASSERT_INT_EQ(lu->telemetry.refactor_need_checks, 1,
+                  "ft-density guard: telemetry checks incremented");
+    ASSERT_INT_EQ(lu->telemetry.refactor_need_triggers, 1,
+                  "ft-density guard: telemetry triggers incremented");
+    ASSERT_INT_EQ(lu->telemetry.refactor_need_reason_avg_spike_density, 1,
+                  "ft-density guard: reason counter avg_spike_density");
 
     /* Non-aged updates: lower avg spike ratio should not force refactor. */
     lu->num_updates = 12;
@@ -935,6 +945,9 @@ static void test_ft_update_density_refactor_guard(void) {
     lu->spike_pool_used = 1200; /* avg = 100, ratio 0.25 */
     ASSERT_INT_EQ(lu_needs_refactorization(lu), 0,
                   "ft-density guard: non-aged moderate density does not force refactor");
+    ASSERT_INT_EQ(lu->last_refactor_trigger_reason,
+                  LP_BFCP_REFACTOR_REASON_NONE,
+                  "ft-density guard: reason=none when not triggered");
 
     /* Aged updates tighten threshold to 0.35. */
     lu->num_updates = lu->max_updates / 2;
@@ -942,6 +955,11 @@ static void test_ft_update_density_refactor_guard(void) {
     lu->spike_pool_used = 15000; /* avg = 150, ratio 0.375 */
     ASSERT_INT_EQ(lu_needs_refactorization(lu), 1,
                   "ft-density guard: aged avg density forces refactor earlier");
+    ASSERT_INT_EQ(lu->last_refactor_trigger_reason,
+                  LP_BFCP_REFACTOR_REASON_AVG_SPIKE_DENSITY,
+                  "ft-density guard: aged reason=avg_spike_density");
+    ASSERT_INT_EQ(lu->telemetry.refactor_need_reason_avg_spike_density, 2,
+                  "ft-density guard: avg density reason count accumulates");
 
     lu_free(lu);
 }

@@ -17,6 +17,7 @@ int main(void) {
     int total = 0;
     LPBFCPPolicyRequest req;
     LPBFCPPolicyEffective eff;
+    LPBFCPRefactorSignals sig;
     int rc;
 
     printf("=== LP BFCP Policy Tests ===\n");
@@ -93,6 +94,75 @@ int main(void) {
          "compute: non-finite pivot tol normalized to auto");
     TEST(eff.growth_guard_override == 0.0,
          "compute: non-finite growth guard normalized to auto");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 100;
+    sig.num_updates = 100;
+    TEST(lp_bfcp_policy_refactor_reason(&sig) == LP_BFCP_REFACTOR_REASON_MAX_UPDATES,
+         "refactor reason: max updates");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 100;
+    sig.num_updates = 10;
+    sig.growth_factor = 2e8;
+    sig.growth_guard_threshold = 1e8;
+    TEST(lp_bfcp_policy_refactor_reason(&sig) == LP_BFCP_REFACTOR_REASON_GROWTH_GUARD,
+         "refactor reason: growth guard");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 100;
+    sig.num_updates = 12;
+    sig.use_ft_updates = 1;
+    sig.m = 400;
+    sig.ft_num_updates = 12;
+    sig.spike_pool_used = 2200;
+    sig.update_aged = 0;
+    TEST(lp_bfcp_policy_refactor_reason(&sig) == LP_BFCP_REFACTOR_REASON_AVG_SPIKE_DENSITY,
+         "refactor reason: avg spike density");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 100;
+    sig.num_updates = 10;
+    sig.growth_factor = 100.0;
+    sig.cond_estimate = 2e8;
+    TEST(lp_bfcp_policy_refactor_reason(&sig) == LP_BFCP_REFACTOR_REASON_COND_SEVERE,
+         "refactor reason: severe conditioning");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 100;
+    sig.num_updates = 50;
+    sig.cond_estimate = 2e7;
+    TEST(lp_bfcp_policy_refactor_reason(&sig) ==
+             LP_BFCP_REFACTOR_REASON_COND_ADAPTIVE_LIMIT,
+         "refactor reason: adaptive cond limit");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 100;
+    sig.num_updates = 20;
+    sig.use_ft_updates = 1;
+    sig.spike_pool_capacity = 1000;
+    sig.spike_pool_used = 900;
+    TEST(lp_bfcp_policy_refactor_reason(&sig) == LP_BFCP_REFACTOR_REASON_SPIKE_POOL_WARN,
+         "refactor reason: spike pool warn");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 100;
+    sig.num_updates = 20;
+    sig.use_ft_updates = 1;
+    sig.m = 600;
+    sig.spike_pool_used = 5000;
+    sig.spike_pool_capacity = 20000;
+    TEST(lp_bfcp_policy_refactor_reason(&sig) == LP_BFCP_REFACTOR_REASON_SPIKE_WORK,
+         "refactor reason: spike work");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 100;
+    sig.num_updates = 20;
+    sig.use_ft_updates = 0;
+    sig.growth_factor = 1.0;
+    sig.cond_estimate = 1.0;
+    TEST(lp_bfcp_policy_refactor_reason(&sig) == LP_BFCP_REFACTOR_REASON_NONE,
+         "refactor reason: none");
 
     printf("Passed %d/%d bfcp-policy tests\n", pass, total);
     return (pass == total) ? 0 : 1;

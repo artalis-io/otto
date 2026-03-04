@@ -271,6 +271,22 @@ typedef struct {
     int sn_cost_gate_trips;
     int sn_cost_gate_skips;
     int sn_cost_gate_resets;
+    int refactor_need_checks;      /* lu_needs_refactorization checks */
+    int refactor_need_triggers;    /* checks that requested reinvert */
+    int refactor_need_last_reason; /* LP_BFCP_REFACTOR_REASON_* */
+    int refactor_need_reason_max_updates;
+    int refactor_need_reason_growth_guard;
+    int refactor_need_reason_avg_spike_density;
+    int refactor_need_reason_cond_severe;
+    int refactor_need_reason_cond_adaptive_limit;
+    int refactor_need_reason_spike_pool_warn;
+    int refactor_need_reason_spike_work;
+    int update_fail_bad_input;
+    int update_fail_max_updates;
+    int update_fail_singular_update;
+    int update_fail_update_pivot_too_small;
+    int update_fail_spike_pool_full;
+    int update_fail_eta_alloc;
 
     /* Sparse factorization stage timing telemetry (aggregate + last call) */
     int perf_factorize_calls;      /* Number of lu_factorize() calls */
@@ -369,6 +385,7 @@ typedef struct {
     int num_regularized;        /* Count of rows regularized in current factorization */
     double pivot_tol;           /* Dynamic pivot tolerance (default RALPH_PIVOT_TOL) */
     int last_failure_reason;    /* LUFailureReason (last failed lu_factorize/lu_update reason) */
+    int last_refactor_trigger_reason; /* LP_BFCP_REFACTOR_REASON_* from lu_needs_refactorization */
     int telemetry_enabled;      /* 1 = collect LU telemetry counters/timers */
     LPBasisGovernorState *basis_governor; /* Non-owning pointer to solver governor state */
 
@@ -1341,12 +1358,29 @@ typedef struct {
     int sn_cost_gate_trips;
     int sn_cost_gate_skips;
     int sn_cost_gate_resets;
+    int refactor_need_checks;
+    int refactor_need_triggers;
+    int refactor_need_last_reason;
+    int refactor_need_reason_max_updates;
+    int refactor_need_reason_growth_guard;
+    int refactor_need_reason_avg_spike_density;
+    int refactor_need_reason_cond_severe;
+    int refactor_need_reason_cond_adaptive_limit;
+    int refactor_need_reason_spike_pool_warn;
+    int refactor_need_reason_spike_work;
+    int update_fail_bad_input;
+    int update_fail_max_updates;
+    int update_fail_singular_update;
+    int update_fail_update_pivot_too_small;
+    int update_fail_spike_pool_full;
+    int update_fail_eta_alloc;
 
     int sn_calls;
     int sn_successes;
     int num_updates;
     int max_updates;
     int last_failure_reason;
+    int last_refactor_trigger_reason;
 
     int perf_factorize_calls;
     int perf_last_basis_nnz;
@@ -1430,8 +1464,9 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B);   /* Dense f
 void lu_solve(const LUFactorization *lu, double *rhs, double *solution);
 void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution);
 int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col);
-int lu_needs_refactorization(const LUFactorization *lu);
+int lu_needs_refactorization(LUFactorization *lu);
 const char* lu_failure_reason_string(int reason);
+const char* lu_refactor_trigger_reason_string(int reason);
 
 /* Sparse LU solves - exploit sparsity in RHS */
 void lu_solve_sparse(const LUFactorization *lu,

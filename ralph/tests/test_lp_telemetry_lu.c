@@ -11,6 +11,7 @@
 #include <string.h>
 #include <math.h>
 #include "lp.h"
+#include "lp_bfcp_policy.h"
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -43,6 +44,9 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     lu.telemetry.perf_factorize_calls = 9;
     lu.telemetry.sparse_dense_fallbacks = 3;
     lu.telemetry.perf_total_sparse_numeric_ms = 99.0;
+    lu.telemetry.refactor_need_checks = 4;
+    lu.telemetry.update_fail_max_updates = 2;
+    lu.last_refactor_trigger_reason = LP_BFCP_REFACTOR_REASON_MAX_UPDATES;
 
     lp_telemetry_reset_lu(&lu);
 
@@ -50,6 +54,8 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     ASSERT_INT_EQ(lu.telemetry.perf_factorize_calls, 0, "lu_reset: factorize calls");
     ASSERT_INT_EQ(lu.telemetry.sparse_dense_fallbacks, 0, "lu_reset: sparse dense fallbacks");
     ASSERT_DBL_EQ(lu.telemetry.perf_total_sparse_numeric_ms, 0.0, "lu_reset: sparse numeric total");
+    ASSERT_INT_EQ(lu.telemetry.refactor_need_checks, 0, "lu_reset: refactor need checks");
+    ASSERT_INT_EQ(lu.telemetry.update_fail_max_updates, 0, "lu_reset: update fail max updates");
 
     SparseMatrix B;
     memset(&B, 0, sizeof(B));
@@ -77,6 +83,10 @@ static void test_lu_reset_prepare_and_snapshot(void) {
         ASSERT_INT_EQ(snap.mkz_enabled, 1, "lu_snapshot: mkz_enabled");
         ASSERT_INT_EQ(snap.perf_factorize_calls, 1, "lu_snapshot: factorize calls");
         ASSERT_INT_EQ(snap.perf_last_basis_nnz, 21, "lu_snapshot: last basis nnz");
+        ASSERT_INT_EQ(snap.refactor_need_checks, 0, "lu_snapshot: refactor checks");
+        ASSERT_INT_EQ(snap.last_refactor_trigger_reason,
+                      LP_BFCP_REFACTOR_REASON_NONE,
+                      "lu_snapshot: last refactor reason exported");
     }
 }
 

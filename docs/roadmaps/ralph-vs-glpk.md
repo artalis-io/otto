@@ -217,3 +217,22 @@ Promotion checks for G1:
 Follow-on (G2+):
 - Consume `lp_bfcp_policy` decisions deeper in LU update/reinvert triggers
   (`lu_update`, `lu_needs_refactorization`) with reason-coded telemetry.
+
+## G2 (In Progress): LU Trigger Integration + Reason Telemetry
+
+Objective:
+- Route LU reinvert decisions through BFCP refactor reasoning and expose
+  trigger/failure reasons as first-class telemetry counters.
+
+Scope:
+1. Use `lp_bfcp_policy_refactor_reason(...)` in `lu_needs_refactorization(...)`.
+2. Track `last_refactor_trigger_reason` on LU state and expose via LU telemetry snapshot.
+3. Add LU telemetry counters for:
+   - refactor-need checks/triggers by reason
+   - LU update failure reasons (`max_updates`, `pivot_too_small`, etc.).
+4. Surface the new LU reason counters in benchmark JSON for triage.
+
+Constraints:
+- Keep trigger ordering generic and policy-driven (no per-instance logic).
+- Keep hard numerical safety triggers unchanged.
+- Preserve baseline correctness expectations.
