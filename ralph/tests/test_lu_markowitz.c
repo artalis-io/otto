@@ -1011,6 +1011,40 @@ cleanup:
 }
 
 /* ============================================================================
+ * Test 17: LU update uses BFCP effective update budget at runtime
+ * ============================================================================ */
+static void test_lu_update_cond_adaptive_limit_runtime(void) {
+    printf("  LU: runtime cond-adaptive update budget...\n");
+
+    LUFactorization *lu = lu_create(80);
+    double entering_col[80];
+
+    ASSERT(lu != NULL, "lu adaptive runtime: lu_create");
+    if (!lu) return;
+
+    memset(entering_col, 0, sizeof(entering_col));
+    entering_col[0] = 1.0;
+
+    /* m=80 => max_updates defaults to 50. With poor cond and enough updates,
+     * BFCP effective update limit becomes 12 (= 50/4). */
+    lu->num_updates = 12;
+    lu->cond_estimate = 2e9;
+    lu->growth_factor = 1.0;
+
+    ASSERT_INT_EQ(lu_update(lu, 0, entering_col), -1,
+                  "lu adaptive runtime: update blocked by effective limit");
+    ASSERT_INT_EQ(lu->last_failure_reason, LU_FAIL_MAX_UPDATES,
+                  "lu adaptive runtime: failure reason max_updates");
+    ASSERT_INT_EQ(lu->last_refactor_trigger_reason,
+                  LP_BFCP_REFACTOR_REASON_COND_ADAPTIVE_LIMIT,
+                  "lu adaptive runtime: trigger reason cond_adaptive_limit");
+    ASSERT_INT_EQ(lu->telemetry.update_fail_max_updates, 1,
+                  "lu adaptive runtime: update_fail_max_updates incremented");
+
+    lu_free(lu);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1032,6 +1066,7 @@ int main(void) {
     test_markowitz_global_skip_runtime_telemetry();
     test_ft_update_density_refactor_guard();
     test_ft_dense_spike_warmup_update();
+    test_lu_update_cond_adaptive_limit_runtime();
 
     printf("\nIntegration (A/B Comparison):\n");
     test_markowitz_integration_small_lp();

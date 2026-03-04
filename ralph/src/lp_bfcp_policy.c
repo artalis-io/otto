@@ -82,6 +82,12 @@ int lp_bfcp_policy_effective_update_limit(const LPBFCPRefactorSignals *sig) {
     adaptive_limit = sig->max_updates;
     if (adaptive_limit <= 0) return 0;
 
+    /* Keep base update budget until enough updates are accumulated to estimate
+     * conditioning drift reliably. */
+    if (sig->num_updates < sig->cond_min_updates) {
+        return adaptive_limit;
+    }
+
     if (sig->cond_estimate > sig->cond_adaptive_hi) {
         adaptive_limit = sig->max_updates / 4;
     } else if (sig->cond_estimate > sig->cond_adaptive_mid) {
@@ -137,7 +143,9 @@ int lp_bfcp_policy_refactor_reason(const LPBFCPRefactorSignals *sig) {
         }
 
         adaptive_limit = lp_bfcp_policy_effective_update_limit(sig);
-        if (adaptive_limit > 0 && sig->num_updates >= adaptive_limit) {
+        if (adaptive_limit > 0 &&
+            adaptive_limit < sig->max_updates &&
+            sig->num_updates >= adaptive_limit) {
             return LP_BFCP_REFACTOR_REASON_COND_ADAPTIVE_LIMIT;
         }
     }
