@@ -2009,27 +2009,6 @@ static int phase1_dir_escape_cooldown_updates(int m, int degenerate_count) {
     return cooldown;
 }
 
-static int phase1_dir_stabilize_lu_health_hard(const LUFactorization *lu) {
-    if (!lu) return 0;
-    if (lu->max_updates > 0 && lu->num_updates >= lu->max_updates) return 1;
-    {
-        double growth_threshold = (lu->growth_refactor_threshold > 0.0)
-            ? lu->growth_refactor_threshold
-            : RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
-        if (isfinite(lu->growth_factor) &&
-            lu->growth_factor > growth_threshold * 3.0) {
-            return 1;
-        }
-    }
-    if (isfinite(lu->cond_estimate) && lu->cond_estimate > 1e10) return 1;
-    if (lu->use_ft_updates && lu->spike_pool_capacity > 0) {
-        if (lu->spike_pool_used >= (lu->spike_pool_capacity * 95) / 100) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 static int phase1_dir_stabilize_escape_gate_plan(int m,
                                                  int degenerate_count,
                                                  int dir_skip_event_streak,
@@ -7279,8 +7258,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             int force_dir_refactor_guard_trigger =
                 (force_dir_refactor_lu_health || force_pivot_mode_active);
             int dir_refactor_ladder_forced = 0;
-            int lu_hard_trigger =
-                phase1_dir_stabilize_lu_health_hard(tab->lu);
+            int lu_hard_trigger = lu_refactor_hard_trigger(tab->lu);
             int escape_triggered = 0;
             int escape_hard_bypass = 0;
             int suppress_lu_health = phase1_dir_stabilize_escape_gate_plan(

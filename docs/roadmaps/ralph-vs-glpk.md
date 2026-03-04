@@ -280,3 +280,8 @@ Validation:
 - `make -C ralph test-simplex-policy`
 - `make -C ralph test-netlib-gate-small`
 - `make -C ralph test-netlib-gate`
+
+Cleanup note:
+- Removed simplex-local LU hard-trigger heuristic path and delegated it to BFCP/LU
+  policy helpers (`lp_bfcp_policy_refactor_hard_trigger` + `lu_refactor_hard_trigger`),
+  eliminating one legacy duplicated threshold block.

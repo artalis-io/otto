@@ -156,6 +156,38 @@ int main(void) {
     lp_bfcp_policy_refactor_signals_init(&sig);
     sig.max_updates = 100;
     sig.num_updates = 100;
+    TEST(lp_bfcp_policy_refactor_hard_trigger(&sig) == 1,
+         "hard trigger: max updates");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.growth_factor = 4e8;
+    sig.growth_guard_threshold = 1e8;
+    TEST(lp_bfcp_policy_refactor_hard_trigger(&sig) == 1,
+         "hard trigger: growth > 3x guard");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.cond_estimate = 2e10;
+    TEST(lp_bfcp_policy_refactor_hard_trigger(&sig) == 1,
+         "hard trigger: extreme condition estimate");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.use_ft_updates = 1;
+    sig.spike_pool_capacity = 1000;
+    sig.spike_pool_used = 951;
+    TEST(lp_bfcp_policy_refactor_hard_trigger(&sig) == 1,
+         "hard trigger: spike pool near full");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 100;
+    sig.num_updates = 10;
+    sig.growth_factor = 1.0;
+    sig.cond_estimate = 1.0;
+    TEST(lp_bfcp_policy_refactor_hard_trigger(&sig) == 0,
+         "hard trigger: healthy signals");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 100;
+    sig.num_updates = 100;
     TEST(lp_bfcp_policy_refactor_reason(&sig) == LP_BFCP_REFACTOR_REASON_MAX_UPDATES,
          "refactor reason: max updates");
 
