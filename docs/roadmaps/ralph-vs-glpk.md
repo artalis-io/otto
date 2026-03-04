@@ -257,3 +257,26 @@ Validation:
 - `make -C ralph test-simplex-policy`
 - `make -C ralph test-netlib-gate-small`
 - `make -C ralph test-netlib-gate`
+
+## G4 (Done): BFCP Runtime Lifecycle Wiring (Adaptive Update Budget)
+
+Objective:
+- Wire BFCP lifecycle helpers into LU runtime so update-cap enforcement and
+  reinvert reasoning consume one shared policy signal model.
+
+Delivered:
+1. `lu_update(...)` now uses BFCP `effective_update_limit` (cond-gated) for
+   runtime max-update enforcement.
+2. `lu_needs_refactorization(...)` and `lu_update(...)` now share one LU->BFCP
+   signal builder (`lu_fill_bfcp_signals`) to avoid drift.
+3. Added targeted tests:
+   - BFCP helper behavior at/under `cond_min_updates`
+   - LU runtime `COND_ADAPTIVE_LIMIT` enforcement path.
+
+Validation:
+- `make -C ralph test-lp-bfcp-policy`
+- `make -C ralph test-lu-markowitz`
+- `make -C ralph test-lp-telemetry-lu`
+- `make -C ralph test-simplex-policy`
+- `make -C ralph test-netlib-gate-small`
+- `make -C ralph test-netlib-gate`

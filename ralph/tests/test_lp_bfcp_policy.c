@@ -97,21 +97,31 @@ int main(void) {
 
     lp_bfcp_policy_refactor_signals_init(&sig);
     sig.max_updates = 100;
+    sig.num_updates = 12;
     sig.cond_estimate = 1e3;
     TEST(lp_bfcp_policy_effective_update_limit(&sig) == 100,
          "effective update limit: healthy uses full max_updates");
 
     lp_bfcp_policy_refactor_signals_init(&sig);
     sig.max_updates = 100;
+    sig.num_updates = 12;
     sig.cond_estimate = 2e7;
     TEST(lp_bfcp_policy_effective_update_limit(&sig) == 50,
          "effective update limit: mid conditioning halves max_updates");
 
     lp_bfcp_policy_refactor_signals_init(&sig);
     sig.max_updates = 100;
+    sig.num_updates = 12;
     sig.cond_estimate = 2e9;
     TEST(lp_bfcp_policy_effective_update_limit(&sig) == 25,
          "effective update limit: poor conditioning quarters max_updates");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 100;
+    sig.num_updates = 5;
+    sig.cond_estimate = 2e9;
+    TEST(lp_bfcp_policy_effective_update_limit(&sig) == 100,
+         "effective update limit: cond adaptation gated until cond_min_updates");
 
     lp_bfcp_policy_refactor_signals_init(&sig);
     sig.max_updates = 120;

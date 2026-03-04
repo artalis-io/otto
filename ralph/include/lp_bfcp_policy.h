@@ -67,6 +67,7 @@ void lp_bfcp_policy_refactor_signals_init(LPBFCPRefactorSignals *sig);
 /* Returns 0 on success, -1 on invalid pointers. */
 int lp_bfcp_policy_compute(const LPBFCPPolicyRequest *req,
                            LPBFCPPolicyEffective *eff);
+/* Runtime lifecycle helpers used by LU update/reinvert decisions. */
 int lp_bfcp_policy_effective_update_limit(const LPBFCPRefactorSignals *sig);
 int lp_bfcp_policy_dense_reject_min_updates(const LPBFCPRefactorSignals *sig);
 int lp_bfcp_policy_refactor_reason(const LPBFCPRefactorSignals *sig);

@@ -115,6 +115,36 @@ static int lu_update_is_aged(const LUFactorization *lu) {
     return lu->num_updates >= 40;
 }
 
+static void lu_fill_bfcp_signals(const LUFactorization *lu,
+                                 LPBFCPRefactorSignals *sig) {
+    if (!lu || !sig) return;
+
+    lp_bfcp_policy_refactor_signals_init(sig);
+    sig->num_updates = lu->num_updates;
+    sig->max_updates = lu->max_updates;
+    sig->growth_factor = lu->growth_factor;
+    sig->growth_guard_threshold = (lu->growth_refactor_threshold > 0.0)
+        ? lu->growth_refactor_threshold
+        : RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
+    sig->use_ft_updates = lu->use_ft_updates ? 1 : 0;
+    sig->m = lu->m;
+    sig->ft_num_updates = lu->ft_num_updates;
+    sig->spike_pool_used = lu->spike_pool_used;
+    sig->spike_pool_capacity = lu->spike_pool_capacity;
+    sig->update_aged = lu_update_is_aged(lu);
+    sig->min_ft_updates_for_avg_density = RALPH_SPIKE_DENSE_REJECT_MIN_UPDATES;
+    sig->spike_dense_reject_m_min = RALPH_SPIKE_DENSE_REJECT_M_MIN;
+    sig->spike_avg_refactor_ratio = RALPH_SPIKE_AVG_REFACTOR_RATIO;
+    sig->spike_avg_refactor_aged_ratio = RALPH_SPIKE_AVG_REFACTOR_AGED_RATIO;
+    sig->spike_pool_warn_pct = RALPH_SPIKE_POOL_WARN_PCT;
+    sig->spike_work_multiplier = 8;
+    sig->cond_min_updates = 10;
+    sig->cond_estimate = lu->cond_estimate;
+    sig->cond_severe_ratio = 1e10;
+    sig->cond_adaptive_hi = 1e8;
+    sig->cond_adaptive_mid = 1e6;
+}
+
 static double lu_dense_spike_reject_ratio(const LUFactorization *lu) {
     double ratio = RALPH_SPIKE_DENSE_BASE_RATIO;
     if (!lu) return ratio;
@@ -2440,13 +2470,25 @@ static void apply_ft_spikes_backward(const LUFactorization *lu, double *x) {
 
 /* Update factorization when basis column changes */
 int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) {
+    LPBFCPRefactorSignals sig;
+    int effective_update_limit;
+
     if (!lu || !entering_col) {
         lu_set_failure(lu, LU_FAIL_BAD_INPUT);
         lu_mark_update_failure(lu, LU_FAIL_BAD_INPUT);
         return -1;
     }
     lu_set_failure(lu, LU_FAIL_NONE);
-    if (lu->num_updates >= lu->max_updates) {
+    lu_fill_bfcp_signals(lu, &sig);
+    effective_update_limit = lp_bfcp_policy_effective_update_limit(&sig);
+    if (effective_update_limit <= 0) {
+        effective_update_limit = lu->max_updates;
+    }
+    if (effective_update_limit > 0 && lu->num_updates >= effective_update_limit) {
+        lu->last_refactor_trigger_reason =
+            (effective_update_limit < lu->max_updates)
+                ? LP_BFCP_REFACTOR_REASON_COND_ADAPTIVE_LIMIT
+                : LP_BFCP_REFACTOR_REASON_MAX_UPDATES;
         lu_set_failure(lu, LU_FAIL_MAX_UPDATES);
         lu_mark_update_failure(lu, LU_FAIL_MAX_UPDATES);
         return -1;  /* Need refactorization */
@@ -2622,30 +2664,7 @@ int lu_needs_refactorization(LUFactorization *lu) {
 
     if (!lu) return 0;
 
-    lp_bfcp_policy_refactor_signals_init(&sig);
-    sig.num_updates = lu->num_updates;
-    sig.max_updates = lu->max_updates;
-    sig.growth_factor = lu->growth_factor;
-    sig.growth_guard_threshold = (lu->growth_refactor_threshold > 0.0)
-        ? lu->growth_refactor_threshold
-        : RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
-    sig.use_ft_updates = lu->use_ft_updates ? 1 : 0;
-    sig.m = lu->m;
-    sig.ft_num_updates = lu->ft_num_updates;
-    sig.spike_pool_used = lu->spike_pool_used;
-    sig.spike_pool_capacity = lu->spike_pool_capacity;
-    sig.update_aged = lu_update_is_aged(lu);
-    sig.min_ft_updates_for_avg_density = RALPH_SPIKE_DENSE_REJECT_MIN_UPDATES;
-    sig.spike_dense_reject_m_min = RALPH_SPIKE_DENSE_REJECT_M_MIN;
-    sig.spike_avg_refactor_ratio = RALPH_SPIKE_AVG_REFACTOR_RATIO;
-    sig.spike_avg_refactor_aged_ratio = RALPH_SPIKE_AVG_REFACTOR_AGED_RATIO;
-    sig.spike_pool_warn_pct = RALPH_SPIKE_POOL_WARN_PCT;
-    sig.spike_work_multiplier = 8;
-    sig.cond_min_updates = 10;
-    sig.cond_estimate = lu->cond_estimate;
-    sig.cond_severe_ratio = 1e10;
-    sig.cond_adaptive_hi = 1e8;
-    sig.cond_adaptive_mid = 1e6;
+    lu_fill_bfcp_signals(lu, &sig);
 
     reason = lp_bfcp_policy_refactor_reason(&sig);
     lu->last_refactor_trigger_reason = reason;
