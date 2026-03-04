@@ -257,6 +257,35 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->policy.reinvert_phase1_control_demotions = 0;
     solver->policy.reinvert_phase1_pressure_last_iter = -1;
     solver->policy.reinvert_phase1_pressure_burst = 0;
+    solver->policy.phase1_stagnation_window_start_iter = -1;
+    solver->policy.phase1_stagnation_window_start_obj = 0.0;
+    solver->policy.phase1_stagnation_window_retry_base = 0;
+    solver->policy.phase1_stagnation_window_no_pivot_base = 0;
+    solver->policy.phase1_stagnation_window_refactor_base = 0;
+    solver->policy.phase1_stagnation_window_update_recovery_base = 0;
+    solver->policy.phase1_stagnation_window_recompute_ratio_base = 0;
+    solver->policy.phase1_stagnation_window_recompute_dir_skip_base = 0;
+    solver->policy.phase1_stagnation_window_recompute_dir_refactor_base = 0;
+    solver->policy.phase1_stagnation_window_recompute_pivot_fail_base = 0;
+    solver->policy.phase1_stagnation_window_recompute_perturb_base = 0;
+    solver->policy.phase1_stagnation_escape_cooldown = 0;
+    solver->policy.phase1_stagnation_escape_triggers = 0;
+    solver->policy.phase1_stagnation_escape_successes = 0;
+    solver->policy.phase1_stagnation_escape_failures = 0;
+    solver->policy.phase1_stagnation_escape_cooldown_blocks = 0;
+    solver->policy.phase1_stagnation_last_window_iters = 0;
+    solver->policy.phase1_stagnation_last_obj_delta = 0.0;
+    solver->policy.phase1_stagnation_last_retry_defer_ratio = 0.0;
+    solver->policy.phase1_stagnation_last_update_recovery_ratio = 0.0;
+    solver->policy.phase1_stagnation_last_retry_defers = 0;
+    solver->policy.phase1_stagnation_last_no_pivot_events = 0;
+    solver->policy.phase1_stagnation_last_update_recovery_refactors = 0;
+    solver->policy.phase1_stagnation_last_refactors = 0;
+    solver->policy.phase1_stagnation_last_recompute_ratio = 0;
+    solver->policy.phase1_stagnation_last_recompute_dir_skip = 0;
+    solver->policy.phase1_stagnation_last_recompute_dir_refactor = 0;
+    solver->policy.phase1_stagnation_last_recompute_pivot_fail = 0;
+    solver->policy.phase1_stagnation_last_recompute_perturb = 0;
     solver->policy.basis_governor_mode = governor_mode;
     solver->policy.reinvert_controller_mode = reinvert_mode;
     lp_basis_governor_begin_solve(&solver->policy.basis_governor);
@@ -608,6 +637,34 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     out->reinvert_phase1_control_demotions = solver->policy.reinvert_phase1_control_demotions;
     out->reinvert_phase1_pressure_last_iter = solver->policy.reinvert_phase1_pressure_last_iter;
     out->reinvert_phase1_pressure_burst = solver->policy.reinvert_phase1_pressure_burst;
+    out->phase1_stagnation_escape_cooldown = solver->policy.phase1_stagnation_escape_cooldown;
+    out->phase1_stagnation_escape_triggers = solver->policy.phase1_stagnation_escape_triggers;
+    out->phase1_stagnation_escape_successes = solver->policy.phase1_stagnation_escape_successes;
+    out->phase1_stagnation_escape_failures = solver->policy.phase1_stagnation_escape_failures;
+    out->phase1_stagnation_escape_cooldown_blocks =
+        solver->policy.phase1_stagnation_escape_cooldown_blocks;
+    out->phase1_stagnation_last_window_iters = solver->policy.phase1_stagnation_last_window_iters;
+    out->phase1_stagnation_last_obj_delta = solver->policy.phase1_stagnation_last_obj_delta;
+    out->phase1_stagnation_last_retry_defer_ratio =
+        solver->policy.phase1_stagnation_last_retry_defer_ratio;
+    out->phase1_stagnation_last_update_recovery_ratio =
+        solver->policy.phase1_stagnation_last_update_recovery_ratio;
+    out->phase1_stagnation_last_retry_defers = solver->policy.phase1_stagnation_last_retry_defers;
+    out->phase1_stagnation_last_no_pivot_events =
+        solver->policy.phase1_stagnation_last_no_pivot_events;
+    out->phase1_stagnation_last_update_recovery_refactors =
+        solver->policy.phase1_stagnation_last_update_recovery_refactors;
+    out->phase1_stagnation_last_refactors = solver->policy.phase1_stagnation_last_refactors;
+    out->phase1_stagnation_last_recompute_ratio =
+        solver->policy.phase1_stagnation_last_recompute_ratio;
+    out->phase1_stagnation_last_recompute_dir_skip =
+        solver->policy.phase1_stagnation_last_recompute_dir_skip;
+    out->phase1_stagnation_last_recompute_dir_refactor =
+        solver->policy.phase1_stagnation_last_recompute_dir_refactor;
+    out->phase1_stagnation_last_recompute_pivot_fail =
+        solver->policy.phase1_stagnation_last_recompute_pivot_fail;
+    out->phase1_stagnation_last_recompute_perturb =
+        solver->policy.phase1_stagnation_last_recompute_perturb;
     out->shadow_refactor_yes_phase1 = solver->policy.basis_governor.shadow_refactor_yes_phase1;
     out->shadow_refactor_yes_phase2 = solver->policy.basis_governor.shadow_refactor_yes_phase2;
     out->shadow_refactor_yes_dual = solver->policy.basis_governor.shadow_refactor_yes_dual;

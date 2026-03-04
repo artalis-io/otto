@@ -390,6 +390,24 @@ typedef struct {
     int reinvert_phase1_control_demotions;
     int reinvert_phase1_pressure_last_iter;
     int reinvert_phase1_pressure_burst;
+    int phase1_stagnation_escape_cooldown;
+    int phase1_stagnation_escape_triggers;
+    int phase1_stagnation_escape_successes;
+    int phase1_stagnation_escape_failures;
+    int phase1_stagnation_escape_cooldown_blocks;
+    int phase1_stagnation_last_window_iters;
+    double phase1_stagnation_last_obj_delta;
+    double phase1_stagnation_last_retry_defer_ratio;
+    double phase1_stagnation_last_update_recovery_ratio;
+    int phase1_stagnation_last_retry_defers;
+    int phase1_stagnation_last_no_pivot_events;
+    int phase1_stagnation_last_update_recovery_refactors;
+    int phase1_stagnation_last_refactors;
+    int phase1_stagnation_last_recompute_ratio;
+    int phase1_stagnation_last_recompute_dir_skip;
+    int phase1_stagnation_last_recompute_dir_refactor;
+    int phase1_stagnation_last_recompute_pivot_fail;
+    int phase1_stagnation_last_recompute_perturb;
     int shadow_refactor_yes_phase1;
     int shadow_refactor_yes_phase2;
     int shadow_refactor_yes_dual;
@@ -1270,6 +1288,42 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.reinvert_phase1_control_demotions = solver_tel.reinvert_phase1_control_demotions;
             result.reinvert_phase1_pressure_last_iter = solver_tel.reinvert_phase1_pressure_last_iter;
             result.reinvert_phase1_pressure_burst = solver_tel.reinvert_phase1_pressure_burst;
+            result.phase1_stagnation_escape_cooldown =
+                solver_tel.phase1_stagnation_escape_cooldown;
+            result.phase1_stagnation_escape_triggers =
+                solver_tel.phase1_stagnation_escape_triggers;
+            result.phase1_stagnation_escape_successes =
+                solver_tel.phase1_stagnation_escape_successes;
+            result.phase1_stagnation_escape_failures =
+                solver_tel.phase1_stagnation_escape_failures;
+            result.phase1_stagnation_escape_cooldown_blocks =
+                solver_tel.phase1_stagnation_escape_cooldown_blocks;
+            result.phase1_stagnation_last_window_iters =
+                solver_tel.phase1_stagnation_last_window_iters;
+            result.phase1_stagnation_last_obj_delta =
+                solver_tel.phase1_stagnation_last_obj_delta;
+            result.phase1_stagnation_last_retry_defer_ratio =
+                solver_tel.phase1_stagnation_last_retry_defer_ratio;
+            result.phase1_stagnation_last_update_recovery_ratio =
+                solver_tel.phase1_stagnation_last_update_recovery_ratio;
+            result.phase1_stagnation_last_retry_defers =
+                solver_tel.phase1_stagnation_last_retry_defers;
+            result.phase1_stagnation_last_no_pivot_events =
+                solver_tel.phase1_stagnation_last_no_pivot_events;
+            result.phase1_stagnation_last_update_recovery_refactors =
+                solver_tel.phase1_stagnation_last_update_recovery_refactors;
+            result.phase1_stagnation_last_refactors =
+                solver_tel.phase1_stagnation_last_refactors;
+            result.phase1_stagnation_last_recompute_ratio =
+                solver_tel.phase1_stagnation_last_recompute_ratio;
+            result.phase1_stagnation_last_recompute_dir_skip =
+                solver_tel.phase1_stagnation_last_recompute_dir_skip;
+            result.phase1_stagnation_last_recompute_dir_refactor =
+                solver_tel.phase1_stagnation_last_recompute_dir_refactor;
+            result.phase1_stagnation_last_recompute_pivot_fail =
+                solver_tel.phase1_stagnation_last_recompute_pivot_fail;
+            result.phase1_stagnation_last_recompute_perturb =
+                solver_tel.phase1_stagnation_last_recompute_perturb;
             result.shadow_refactor_yes_phase1 = solver_tel.shadow_refactor_yes_phase1;
             result.shadow_refactor_yes_phase2 = solver_tel.shadow_refactor_yes_phase2;
             result.shadow_refactor_yes_dual = solver_tel.shadow_refactor_yes_dual;
@@ -2677,6 +2731,42 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->reinvert_phase1_pressure_last_iter);
     fprintf(out, "    \"reinvert_phase1_pressure_burst\": %d,\n",
             ralph->reinvert_phase1_pressure_burst);
+    fprintf(out, "    \"phase1_stagnation_escape_cooldown\": %d,\n",
+            ralph->phase1_stagnation_escape_cooldown);
+    fprintf(out, "    \"phase1_stagnation_escape_triggers\": %d,\n",
+            ralph->phase1_stagnation_escape_triggers);
+    fprintf(out, "    \"phase1_stagnation_escape_successes\": %d,\n",
+            ralph->phase1_stagnation_escape_successes);
+    fprintf(out, "    \"phase1_stagnation_escape_failures\": %d,\n",
+            ralph->phase1_stagnation_escape_failures);
+    fprintf(out, "    \"phase1_stagnation_escape_cooldown_blocks\": %d,\n",
+            ralph->phase1_stagnation_escape_cooldown_blocks);
+    fprintf(out, "    \"phase1_stagnation_last_window_iters\": %d,\n",
+            ralph->phase1_stagnation_last_window_iters);
+    fprintf(out, "    \"phase1_stagnation_last_obj_delta\": %.12g,\n",
+            ralph->phase1_stagnation_last_obj_delta);
+    fprintf(out, "    \"phase1_stagnation_last_retry_defer_ratio\": %.12g,\n",
+            ralph->phase1_stagnation_last_retry_defer_ratio);
+    fprintf(out, "    \"phase1_stagnation_last_update_recovery_ratio\": %.12g,\n",
+            ralph->phase1_stagnation_last_update_recovery_ratio);
+    fprintf(out, "    \"phase1_stagnation_last_retry_defers\": %d,\n",
+            ralph->phase1_stagnation_last_retry_defers);
+    fprintf(out, "    \"phase1_stagnation_last_no_pivot_events\": %d,\n",
+            ralph->phase1_stagnation_last_no_pivot_events);
+    fprintf(out, "    \"phase1_stagnation_last_update_recovery_refactors\": %d,\n",
+            ralph->phase1_stagnation_last_update_recovery_refactors);
+    fprintf(out, "    \"phase1_stagnation_last_refactors\": %d,\n",
+            ralph->phase1_stagnation_last_refactors);
+    fprintf(out, "    \"phase1_stagnation_last_recompute_ratio\": %d,\n",
+            ralph->phase1_stagnation_last_recompute_ratio);
+    fprintf(out, "    \"phase1_stagnation_last_recompute_dir_skip\": %d,\n",
+            ralph->phase1_stagnation_last_recompute_dir_skip);
+    fprintf(out, "    \"phase1_stagnation_last_recompute_dir_refactor\": %d,\n",
+            ralph->phase1_stagnation_last_recompute_dir_refactor);
+    fprintf(out, "    \"phase1_stagnation_last_recompute_pivot_fail\": %d,\n",
+            ralph->phase1_stagnation_last_recompute_pivot_fail);
+    fprintf(out, "    \"phase1_stagnation_last_recompute_perturb\": %d,\n",
+            ralph->phase1_stagnation_last_recompute_perturb);
     fprintf(out, "    \"shadow_refactor_yes_phase1\": %d,\n",
             ralph->shadow_refactor_yes_phase1);
     fprintf(out, "    \"shadow_refactor_yes_phase2\": %d,\n",
