@@ -733,6 +733,138 @@ static double average_solve_density(long long sol_nnz_total, int samples, int m)
     return density;
 }
 
+#define PHASE1_REINVERT_PRESSURE_WINDOW_ITERS 96
+#define PHASE1_REINVERT_PRESSURE_DEMOTE_COUNT 4
+#define PHASE1_REINVERT_DEMOTE_COOLDOWN_ITERS 32
+#define PHASE1_REINVERT_PRESSURE_NO_PIVOT_THRESHOLD 8
+#define PHASE1_REINVERT_PRESSURE_NO_PROGRESS_THRESHOLD 24
+#define PHASE1_REINVERT_PRESSURE_RATIO_BREAKDOWN_THRESHOLD 4
+#define PHASE1_REINVERT_PRESSURE_DIR_SKIP_THRESHOLD 24
+
+static int reinvert_phase1_pressure_event(int no_pivot_streak,
+                                          int no_progress_streak,
+                                          int ratio_breakdown_count,
+                                          int dir_skip_no_recompute_streak) {
+    if (no_pivot_streak >= PHASE1_REINVERT_PRESSURE_NO_PIVOT_THRESHOLD &&
+        no_progress_streak >= (PHASE1_REINVERT_PRESSURE_NO_PROGRESS_THRESHOLD / 2)) {
+        return 1;
+    }
+    if (no_progress_streak >= PHASE1_REINVERT_PRESSURE_NO_PROGRESS_THRESHOLD) return 1;
+    if (dir_skip_no_recompute_streak >= PHASE1_REINVERT_PRESSURE_DIR_SKIP_THRESHOLD) return 1;
+    if (ratio_breakdown_count >= PHASE1_REINVERT_PRESSURE_RATIO_BREAKDOWN_THRESHOLD) return 1;
+    return 0;
+}
+
+static void reinvert_phase1_pressure_safety_step_core(
+    int iter,
+    int no_pivot_streak,
+    int no_progress_streak,
+    int ratio_breakdown_count,
+    int dir_skip_no_recompute_streak,
+    int hard_lu_trigger,
+    int *last_iter_io,
+    int *burst_io,
+    int *demoted_io,
+    int *demotions_io) {
+    int last_iter;
+    int burst;
+    int demoted;
+    int demotions;
+    int pressure_event = 0;
+
+    if (!last_iter_io || !burst_io || !demoted_io || !demotions_io) return;
+
+    if (iter < 0) iter = 0;
+    if (no_pivot_streak < 0) no_pivot_streak = 0;
+    if (no_progress_streak < 0) no_progress_streak = 0;
+    if (ratio_breakdown_count < 0) ratio_breakdown_count = 0;
+    if (dir_skip_no_recompute_streak < 0) dir_skip_no_recompute_streak = 0;
+
+    last_iter = *last_iter_io;
+    burst = *burst_io;
+    demoted = *demoted_io ? 1 : 0;
+    demotions = *demotions_io;
+    if (burst < 0) burst = 0;
+    if (last_iter < -1) last_iter = -1;
+    if (demotions < 0) demotions = 0;
+
+    if (demoted) {
+        if (last_iter < 0) {
+            last_iter = iter;
+        } else if ((iter - last_iter) >= PHASE1_REINVERT_DEMOTE_COOLDOWN_ITERS) {
+            demoted = 0;
+            burst = 0;
+            last_iter = -1;
+        }
+        *last_iter_io = last_iter;
+        *burst_io = burst;
+        *demoted_io = demoted;
+        *demotions_io = demotions;
+        return;
+    }
+
+    if (hard_lu_trigger) {
+        if (last_iter >= 0 && (iter - last_iter) > PHASE1_REINVERT_PRESSURE_WINDOW_ITERS) {
+            burst = 0;
+        }
+        *last_iter_io = last_iter;
+        *burst_io = burst;
+        *demoted_io = demoted;
+        *demotions_io = demotions;
+        return;
+    }
+
+    pressure_event = reinvert_phase1_pressure_event(no_pivot_streak,
+                                                    no_progress_streak,
+                                                    ratio_breakdown_count,
+                                                    dir_skip_no_recompute_streak);
+    if (pressure_event) {
+        if (last_iter >= 0 && (iter - last_iter) <= PHASE1_REINVERT_PRESSURE_WINDOW_ITERS) {
+            burst++;
+        } else {
+            burst = 1;
+        }
+        last_iter = iter;
+    } else if (last_iter >= 0 && (iter - last_iter) > PHASE1_REINVERT_PRESSURE_WINDOW_ITERS) {
+        burst = 0;
+    }
+
+    if (burst >= PHASE1_REINVERT_PRESSURE_DEMOTE_COUNT) {
+        demoted = 1;
+        demotions++;
+        burst = 0;
+        last_iter = iter;
+    }
+
+    *last_iter_io = last_iter;
+    *burst_io = burst;
+    *demoted_io = demoted;
+    *demotions_io = demotions;
+}
+
+void simplex_reinvert_phase1_pressure_safety_step_for_test(
+    int iter,
+    int no_pivot_streak,
+    int no_progress_streak,
+    int ratio_breakdown_count,
+    int dir_skip_no_recompute_streak,
+    int hard_lu_trigger,
+    int *last_iter_io,
+    int *burst_io,
+    int *demoted_io,
+    int *demotions_io) {
+    reinvert_phase1_pressure_safety_step_core(iter,
+                                              no_pivot_streak,
+                                              no_progress_streak,
+                                              ratio_breakdown_count,
+                                              dir_skip_no_recompute_streak,
+                                              hard_lu_trigger,
+                                              last_iter_io,
+                                              burst_io,
+                                              demoted_io,
+                                              demotions_io);
+}
+
 static int reinvert_controller_mode_get(const SimplexSolver *solver) {
     int mode;
     if (!solver) return LP_REINVERT_MODE_SHADOW;
@@ -747,13 +879,46 @@ static int reinvert_controller_collect_shadow(const SimplexSolver *solver) {
     return reinvert_controller_mode_get(solver) != LP_REINVERT_MODE_OFF;
 }
 
-static int reinvert_controller_controls_periodic_phase(const SimplexSolver *solver,
-                                                       int phase) {
-    int mode = reinvert_controller_mode_get(solver);
+static void reinvert_phase1_pressure_safety_update(SimplexSolver *solver,
+                                                   int iter,
+                                                   int no_pivot_streak,
+                                                   int no_progress_streak,
+                                                   int ratio_breakdown_count,
+                                                   int dir_skip_no_recompute_streak,
+                                                   int hard_lu_trigger) {
+    if (!solver) return;
+    if (reinvert_controller_mode_get(solver) != LP_REINVERT_MODE_CONTROL_ALL) return;
+    reinvert_phase1_pressure_safety_step_core(
+        iter,
+        no_pivot_streak,
+        no_progress_streak,
+        ratio_breakdown_count,
+        dir_skip_no_recompute_streak,
+        hard_lu_trigger,
+        &solver->policy.reinvert_phase1_pressure_last_iter,
+        &solver->policy.reinvert_phase1_pressure_burst,
+        &solver->policy.reinvert_phase1_control_demoted,
+        &solver->policy.reinvert_phase1_control_demotions);
+}
+
+static int reinvert_controller_controls_periodic_phase_effective(int mode,
+                                                                 int phase,
+                                                                 int phase1_demoted) {
     if (mode == LP_REINVERT_MODE_CONTROL_ALL) {
+        if (phase == 1 && phase1_demoted) return 0;
         return phase == 1 || phase == 2;
     }
     return (mode == LP_REINVERT_MODE_CONTROL_PHASE1 && phase == 1);
+}
+
+static int reinvert_controller_controls_periodic_phase(const SimplexSolver *solver,
+                                                       int phase) {
+    int mode = reinvert_controller_mode_get(solver);
+    int phase1_demoted = 0;
+    if (solver) {
+        phase1_demoted = solver->policy.reinvert_phase1_control_demoted ? 1 : 0;
+    }
+    return reinvert_controller_controls_periodic_phase_effective(mode, phase, phase1_demoted);
 }
 
 static int reinvert_periodic_apply_decision(int phase,
@@ -780,12 +945,26 @@ int simplex_reinvert_periodic_control_for_test(int mode,
                                                int hard_lu_trigger,
                                                int periodic_due,
                                                int decision) {
-    int control_enabled = 0;
-    if (mode == LP_REINVERT_MODE_CONTROL_ALL) {
-        control_enabled = (phase == 1 || phase == 2);
-    } else if (mode == LP_REINVERT_MODE_CONTROL_PHASE1) {
-        control_enabled = (phase == 1);
-    }
+    int control_enabled =
+        reinvert_controller_controls_periodic_phase_effective(mode, phase, 0);
+    return reinvert_periodic_apply_decision(phase,
+                                            hard_lu_trigger,
+                                            periodic_due,
+                                            decision,
+                                            control_enabled);
+}
+
+int simplex_reinvert_periodic_control_with_phase1_demotion_for_test(
+    int mode,
+    int phase,
+    int phase1_demoted,
+    int hard_lu_trigger,
+    int periodic_due,
+    int decision) {
+    int control_enabled = reinvert_controller_controls_periodic_phase_effective(
+        mode,
+        phase,
+        phase1_demoted);
     return reinvert_periodic_apply_decision(phase,
                                             hard_lu_trigger,
                                             periodic_due,
@@ -7726,10 +7905,18 @@ static int simplex_phase1(SimplexSolver *solver) {
         int periodic_refactor_nominal = 0;
         int needs_refactor = lu_refactor_needed;
         int reinvert_periodic_candidate = 0;
-        int reinvert_control_periodic = reinvert_controller_controls_periodic_phase(solver, 1);
+        int reinvert_control_periodic = 0;
         LPReinvertShadowEval reinvert_shadow_eval;
         reinvert_shadow_eval_reset(&reinvert_shadow_eval);
         lu_soft_health_streak = lu_health_decision.soft_breach_streak_next;
+        reinvert_phase1_pressure_safety_update(solver,
+                                               iter,
+                                               phase1_no_pivot_streak,
+                                               phase1_no_pivot_no_progress_streak,
+                                               ratio_breakdown_count,
+                                               phase1_dir_skip_no_recompute_streak,
+                                               lu_health_decision.hard_trigger);
+        reinvert_control_periodic = reinvert_controller_controls_periodic_phase(solver, 1);
         if (lu_health_decision.hard_trigger) {
             periodic_policy_cooldown = 0;
             periodic_policy_pressure_decay = 0.0;
