@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stdio.h>
+#include "lp.h"
 #include "lp_refactor_policy.h"
 
 #define TEST(cond, msg) \
@@ -98,6 +99,39 @@ int main(void) {
          "phase1 cooldown window clamps to minimum");
     TEST(lp_refactor_policy_phase1_cooldown_window_updates(200) == 192,
          "phase1 cooldown window clamps to maximum");
+
+    TEST(lp_refactor_policy_phase1_small_pivot_refactor_allowed(0, 0, 20) == 0,
+         "small-pivot policy: disabled when force flag is off");
+    TEST(lp_refactor_policy_phase1_small_pivot_refactor_allowed(1, 0, 0) == 0,
+         "small-pivot policy: blocked on fresh basis without repeats");
+    TEST(lp_refactor_policy_phase1_small_pivot_refactor_allowed(
+             1, RALPH_PHASE1_REPEAT_REFACTOR_TRIGGER, 0) == 1,
+         "small-pivot policy: repeat streak enables forced refactor");
+    TEST(lp_refactor_policy_phase1_small_pivot_refactor_allowed(1, 0, 6) == 1,
+         "small-pivot policy: update age enables forced refactor");
+
+    TEST(lp_refactor_policy_choose_basis_action(0.0, 0, 0, 0, 10, 1.0, 1e8) ==
+             LP_BASIS_ACTION_ABORT,
+         "basis action: tiny pivot aborts");
+    TEST(lp_refactor_policy_choose_basis_action(1.0, 0, -1, 0, 10, 1.0, 1e8) ==
+             LP_BASIS_ACTION_REFACTOR,
+         "basis action: failed update escalates to refactor");
+    TEST(lp_refactor_policy_choose_basis_action(1.0, 0, -2, 0, 10, 1.0, 1e8) ==
+             LP_BASIS_ACTION_REPAIR,
+         "basis action: failed refactor escalates to repair");
+    TEST(lp_refactor_policy_choose_basis_action(1.0, 0, -3, 0, 10, 1.0, 1e8) ==
+             LP_BASIS_ACTION_ABORT,
+         "basis action: failed repair aborts");
+    TEST(lp_refactor_policy_choose_basis_action(
+             1.0, 1, 0, RALPH_PHASE1_REPEAT_REFACTOR_TRIGGER, 0, 1.0, 1e8) ==
+             LP_BASIS_ACTION_REFACTOR,
+         "basis action: repeat-triggered force requests refactor");
+    TEST(lp_refactor_policy_choose_basis_action(1.0, 0, 0, 0, 10, 2e8, 1e8) ==
+             LP_BASIS_ACTION_REFACTOR,
+         "basis action: growth-triggered refactor");
+    TEST(lp_refactor_policy_choose_basis_action(1.0, 0, 0, 0, 10, 1.0, 1e8) ==
+             LP_BASIS_ACTION_UPDATE,
+         "basis action: healthy path uses update");
 
     decision = lp_refactor_policy_lu_health_refactor_decision(1500, 1, 120, 120,
                                                               0, 100, 1e3, 1.0, 0);

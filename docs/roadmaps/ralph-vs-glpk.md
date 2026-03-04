@@ -285,3 +285,6 @@ Cleanup note:
 - Removed simplex-local LU hard-trigger heuristic path and delegated it to BFCP/LU
   policy helpers (`lp_bfcp_policy_refactor_hard_trigger` + `lu_refactor_hard_trigger`),
   eliminating one legacy duplicated threshold block.
+- Removed simplex-local basis action/refactor decision logic and delegated it to
+  `lp_refactor_policy` (`lp_refactor_policy_choose_basis_action` and
+  `lp_refactor_policy_phase1_small_pivot_refactor_allowed`) with dedicated policy tests.
