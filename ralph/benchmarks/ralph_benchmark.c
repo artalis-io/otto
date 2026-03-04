@@ -386,6 +386,10 @@ typedef struct {
     int reinvert_dual_control_demoted;
     int reinvert_dual_control_demotions;
     int reinvert_dual_hard_trigger_burst;
+    int reinvert_phase1_control_demoted;
+    int reinvert_phase1_control_demotions;
+    int reinvert_phase1_pressure_last_iter;
+    int reinvert_phase1_pressure_burst;
     int shadow_refactor_yes_phase1;
     int shadow_refactor_yes_phase2;
     int shadow_refactor_yes_dual;
@@ -1262,6 +1266,10 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.reinvert_dual_control_demoted = solver_tel.reinvert_dual_control_demoted;
             result.reinvert_dual_control_demotions = solver_tel.reinvert_dual_control_demotions;
             result.reinvert_dual_hard_trigger_burst = solver_tel.reinvert_dual_hard_trigger_burst;
+            result.reinvert_phase1_control_demoted = solver_tel.reinvert_phase1_control_demoted;
+            result.reinvert_phase1_control_demotions = solver_tel.reinvert_phase1_control_demotions;
+            result.reinvert_phase1_pressure_last_iter = solver_tel.reinvert_phase1_pressure_last_iter;
+            result.reinvert_phase1_pressure_burst = solver_tel.reinvert_phase1_pressure_burst;
             result.shadow_refactor_yes_phase1 = solver_tel.shadow_refactor_yes_phase1;
             result.shadow_refactor_yes_phase2 = solver_tel.shadow_refactor_yes_phase2;
             result.shadow_refactor_yes_dual = solver_tel.shadow_refactor_yes_dual;
@@ -2661,6 +2669,14 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->reinvert_dual_control_demotions);
     fprintf(out, "    \"reinvert_dual_hard_trigger_burst\": %d,\n",
             ralph->reinvert_dual_hard_trigger_burst);
+    fprintf(out, "    \"reinvert_phase1_control_demoted\": %d,\n",
+            ralph->reinvert_phase1_control_demoted);
+    fprintf(out, "    \"reinvert_phase1_control_demotions\": %d,\n",
+            ralph->reinvert_phase1_control_demotions);
+    fprintf(out, "    \"reinvert_phase1_pressure_last_iter\": %d,\n",
+            ralph->reinvert_phase1_pressure_last_iter);
+    fprintf(out, "    \"reinvert_phase1_pressure_burst\": %d,\n",
+            ralph->reinvert_phase1_pressure_burst);
     fprintf(out, "    \"shadow_refactor_yes_phase1\": %d,\n",
             ralph->shadow_refactor_yes_phase1);
     fprintf(out, "    \"shadow_refactor_yes_phase2\": %d,\n",

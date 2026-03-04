@@ -864,6 +864,10 @@ typedef struct {
     int reinvert_dual_hard_trigger_last_total; /* last observed dual hard-trigger telemetry total */
     int reinvert_dual_hard_trigger_last_iter; /* iteration index for last observed hard-trigger delta */
     int reinvert_dual_hard_trigger_burst; /* burst accumulator over short iteration windows */
+    int reinvert_phase1_control_demoted; /* latched: control_all demoted to shadow in phase1 this solve */
+    int reinvert_phase1_control_demotions; /* number of phase1 control_all->shadow demotions */
+    int reinvert_phase1_pressure_last_iter; /* iteration index for last observed phase1 pressure event */
+    int reinvert_phase1_pressure_burst; /* burst accumulator for phase1 pressure events */
 } LPSolverPolicyState;
 
 /* Simplex solver */
@@ -1182,6 +1186,10 @@ typedef struct {
     int reinvert_dual_hard_trigger_last_total;
     int reinvert_dual_hard_trigger_last_iter;
     int reinvert_dual_hard_trigger_burst;
+    int reinvert_phase1_control_demoted;
+    int reinvert_phase1_control_demotions;
+    int reinvert_phase1_pressure_last_iter;
+    int reinvert_phase1_pressure_burst;
     int shadow_refactor_yes_phase1;
     int shadow_refactor_yes_phase2;
     int shadow_refactor_yes_dual;

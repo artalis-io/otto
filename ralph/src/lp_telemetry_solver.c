@@ -253,6 +253,10 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->policy.reinvert_dual_hard_trigger_last_total = 0;
     solver->policy.reinvert_dual_hard_trigger_last_iter = -1;
     solver->policy.reinvert_dual_hard_trigger_burst = 0;
+    solver->policy.reinvert_phase1_control_demoted = 0;
+    solver->policy.reinvert_phase1_control_demotions = 0;
+    solver->policy.reinvert_phase1_pressure_last_iter = -1;
+    solver->policy.reinvert_phase1_pressure_burst = 0;
     solver->policy.basis_governor_mode = governor_mode;
     solver->policy.reinvert_controller_mode = reinvert_mode;
     lp_basis_governor_begin_solve(&solver->policy.basis_governor);
@@ -600,6 +604,10 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     out->reinvert_dual_hard_trigger_last_total = solver->policy.reinvert_dual_hard_trigger_last_total;
     out->reinvert_dual_hard_trigger_last_iter = solver->policy.reinvert_dual_hard_trigger_last_iter;
     out->reinvert_dual_hard_trigger_burst = solver->policy.reinvert_dual_hard_trigger_burst;
+    out->reinvert_phase1_control_demoted = solver->policy.reinvert_phase1_control_demoted;
+    out->reinvert_phase1_control_demotions = solver->policy.reinvert_phase1_control_demotions;
+    out->reinvert_phase1_pressure_last_iter = solver->policy.reinvert_phase1_pressure_last_iter;
+    out->reinvert_phase1_pressure_burst = solver->policy.reinvert_phase1_pressure_burst;
     out->shadow_refactor_yes_phase1 = solver->policy.basis_governor.shadow_refactor_yes_phase1;
     out->shadow_refactor_yes_phase2 = solver->policy.basis_governor.shadow_refactor_yes_phase2;
     out->shadow_refactor_yes_dual = solver->policy.basis_governor.shadow_refactor_yes_dual;
