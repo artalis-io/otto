@@ -236,3 +236,24 @@ Constraints:
 - Keep trigger ordering generic and policy-driven (no per-instance logic).
 - Keep hard numerical safety triggers unchanged.
 - Preserve baseline correctness expectations.
+
+## G3 (Done): BFCP Lifecycle Helper Consolidation (No-Regression Slice)
+
+Objective:
+- Centralize BFCP lifecycle computations used by LU reinvert policy so update-limit
+  and warmup semantics are policy-module controlled and independently testable.
+
+Delivered:
+1. Added policy helpers:
+   - `lp_bfcp_policy_effective_update_limit(...)`
+   - `lp_bfcp_policy_dense_reject_min_updates(...)`
+2. Routed `lp_bfcp_policy_refactor_reason(...)` through the new helpers.
+3. Extended unit coverage in `test_lp_bfcp_policy` for both helper APIs.
+4. Kept default runtime behavior stable (no instance-specific tuning, no gate drift).
+
+Validation:
+- `make -C ralph test-lp-bfcp-policy`
+- `make -C ralph test-lu-markowitz`
+- `make -C ralph test-simplex-policy`
+- `make -C ralph test-netlib-gate-small`
+- `make -C ralph test-netlib-gate`
