@@ -868,6 +868,35 @@ typedef struct {
     int reinvert_phase1_control_demotions; /* number of phase1 control_all->shadow demotions */
     int reinvert_phase1_pressure_last_iter; /* iteration index for last observed phase1 pressure event */
     int reinvert_phase1_pressure_burst; /* burst accumulator for phase1 pressure events */
+    int phase1_stagnation_window_start_iter; /* Phase-1 stagnation window anchor iteration */
+    double phase1_stagnation_window_start_obj; /* Phase-1 stagnation window anchor objective */
+    int phase1_stagnation_window_retry_base;
+    int phase1_stagnation_window_no_pivot_base;
+    int phase1_stagnation_window_refactor_base;
+    int phase1_stagnation_window_update_recovery_base;
+    int phase1_stagnation_window_recompute_ratio_base;
+    int phase1_stagnation_window_recompute_dir_skip_base;
+    int phase1_stagnation_window_recompute_dir_refactor_base;
+    int phase1_stagnation_window_recompute_pivot_fail_base;
+    int phase1_stagnation_window_recompute_perturb_base;
+    int phase1_stagnation_escape_cooldown;
+    int phase1_stagnation_escape_triggers;
+    int phase1_stagnation_escape_successes;
+    int phase1_stagnation_escape_failures;
+    int phase1_stagnation_escape_cooldown_blocks;
+    int phase1_stagnation_last_window_iters;
+    double phase1_stagnation_last_obj_delta;
+    double phase1_stagnation_last_retry_defer_ratio;
+    double phase1_stagnation_last_update_recovery_ratio;
+    int phase1_stagnation_last_retry_defers;
+    int phase1_stagnation_last_no_pivot_events;
+    int phase1_stagnation_last_update_recovery_refactors;
+    int phase1_stagnation_last_refactors;
+    int phase1_stagnation_last_recompute_ratio;
+    int phase1_stagnation_last_recompute_dir_skip;
+    int phase1_stagnation_last_recompute_dir_refactor;
+    int phase1_stagnation_last_recompute_pivot_fail;
+    int phase1_stagnation_last_recompute_perturb;
 } LPSolverPolicyState;
 
 /* Simplex solver */
@@ -1190,6 +1219,24 @@ typedef struct {
     int reinvert_phase1_control_demotions;
     int reinvert_phase1_pressure_last_iter;
     int reinvert_phase1_pressure_burst;
+    int phase1_stagnation_escape_cooldown;
+    int phase1_stagnation_escape_triggers;
+    int phase1_stagnation_escape_successes;
+    int phase1_stagnation_escape_failures;
+    int phase1_stagnation_escape_cooldown_blocks;
+    int phase1_stagnation_last_window_iters;
+    double phase1_stagnation_last_obj_delta;
+    double phase1_stagnation_last_retry_defer_ratio;
+    double phase1_stagnation_last_update_recovery_ratio;
+    int phase1_stagnation_last_retry_defers;
+    int phase1_stagnation_last_no_pivot_events;
+    int phase1_stagnation_last_update_recovery_refactors;
+    int phase1_stagnation_last_refactors;
+    int phase1_stagnation_last_recompute_ratio;
+    int phase1_stagnation_last_recompute_dir_skip;
+    int phase1_stagnation_last_recompute_dir_refactor;
+    int phase1_stagnation_last_recompute_pivot_fail;
+    int phase1_stagnation_last_recompute_perturb;
     int shadow_refactor_yes_phase1;
     int shadow_refactor_yes_phase2;
     int shadow_refactor_yes_dual;

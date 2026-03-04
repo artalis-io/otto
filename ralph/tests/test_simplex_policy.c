@@ -183,6 +183,20 @@ int simplex_reinvert_periodic_control_with_phase1_demotion_for_test(
     int hard_lu_trigger,
     int periodic_due,
     int decision);
+int simplex_phase1_stagnation_escape_decision_for_test(
+    int window_iters,
+    double obj_delta,
+    double obj_anchor,
+    int retry_defers,
+    int no_pivot_events,
+    int update_recovery_refactors,
+    int refactors,
+    int recompute_ratio_breakdown,
+    int recompute_dir_skip,
+    int recompute_dir_refactor,
+    int recompute_pivot_fail,
+    int recompute_perturb,
+    int cooldown_remaining);
 void simplex_reinvert_phase1_pressure_safety_step_for_test(
     int iter,
     int no_pivot_streak,
@@ -296,6 +310,24 @@ typedef struct {
     int expected_refactor;
 } ReinvertDemotionControlCase;
 
+typedef struct {
+    const char *name;
+    int window_iters;
+    double obj_delta;
+    double obj_anchor;
+    int retry_defers;
+    int no_pivot_events;
+    int update_recovery_refactors;
+    int refactors;
+    int recompute_ratio_breakdown;
+    int recompute_dir_skip;
+    int recompute_dir_refactor;
+    int recompute_pivot_fail;
+    int recompute_perturb;
+    int cooldown_remaining;
+    int expected_trigger;
+} Phase1StagnationCase;
+
 static int run_refine_budget_case(const RefineBudgetCase *tc) {
     int budget = simplex_solution_refine_limit_for_test(tc->max_residual, tc->feas_tol);
     if (budget != tc->expected_budget) {
@@ -333,6 +365,30 @@ static int run_reinvert_demotion_control_case(const ReinvertDemotionControlCase 
     if (refactor != tc->expected_refactor) {
         fprintf(stderr, "FAIL: %s (expected=%d got=%d)\n",
                 tc->name, tc->expected_refactor, refactor);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_phase1_stagnation_case(const Phase1StagnationCase *tc) {
+    int trigger = simplex_phase1_stagnation_escape_decision_for_test(
+        tc->window_iters,
+        tc->obj_delta,
+        tc->obj_anchor,
+        tc->retry_defers,
+        tc->no_pivot_events,
+        tc->update_recovery_refactors,
+        tc->refactors,
+        tc->recompute_ratio_breakdown,
+        tc->recompute_dir_skip,
+        tc->recompute_dir_refactor,
+        tc->recompute_pivot_fail,
+        tc->recompute_perturb,
+        tc->cooldown_remaining);
+    if (trigger != tc->expected_trigger) {
+        fprintf(stderr, "FAIL: %s (expected=%d got=%d)\n",
+                tc->name, tc->expected_trigger, trigger);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -2612,6 +2668,76 @@ int main(void) {
             .expected_refactor = 1
         }
     };
+    const Phase1StagnationCase phase1_stagnation_cases[] = {
+        {
+            .name = "phase1 stagnation escapes on flat objective with retry pressure",
+            .window_iters = 96,
+            .obj_delta = 1e-8,
+            .obj_anchor = 10.0,
+            .retry_defers = 14,
+            .no_pivot_events = 16,
+            .update_recovery_refactors = 2,
+            .refactors = 8,
+            .recompute_ratio_breakdown = 5,
+            .recompute_dir_skip = 7,
+            .recompute_dir_refactor = 1,
+            .recompute_pivot_fail = 1,
+            .recompute_perturb = 1,
+            .cooldown_remaining = 0,
+            .expected_trigger = 1
+        },
+        {
+            .name = "phase1 stagnation blocked while cooldown active",
+            .window_iters = 96,
+            .obj_delta = 1e-8,
+            .obj_anchor = 10.0,
+            .retry_defers = 14,
+            .no_pivot_events = 16,
+            .update_recovery_refactors = 2,
+            .refactors = 8,
+            .recompute_ratio_breakdown = 5,
+            .recompute_dir_skip = 7,
+            .recompute_dir_refactor = 1,
+            .recompute_pivot_fail = 1,
+            .recompute_perturb = 1,
+            .cooldown_remaining = 12,
+            .expected_trigger = 0
+        },
+        {
+            .name = "phase1 stagnation does not trigger when objective still moves",
+            .window_iters = 96,
+            .obj_delta = 1e-2,
+            .obj_anchor = 10.0,
+            .retry_defers = 14,
+            .no_pivot_events = 16,
+            .update_recovery_refactors = 4,
+            .refactors = 8,
+            .recompute_ratio_breakdown = 5,
+            .recompute_dir_skip = 7,
+            .recompute_dir_refactor = 1,
+            .recompute_pivot_fail = 1,
+            .recompute_perturb = 1,
+            .cooldown_remaining = 0,
+            .expected_trigger = 0
+        },
+        {
+            .name = "phase1 stagnation does not trigger without recompute pressure mix",
+            .window_iters = 96,
+            .obj_delta = 1e-8,
+            .obj_anchor = 10.0,
+            .retry_defers = 14,
+            .no_pivot_events = 16,
+            .update_recovery_refactors = 4,
+            .refactors = 8,
+            .recompute_ratio_breakdown = 1,
+            .recompute_dir_skip = 2,
+            .recompute_dir_refactor = 6,
+            .recompute_pivot_fail = 0,
+            .recompute_perturb = 3,
+            .cooldown_remaining = 0,
+            .expected_trigger = 0
+        }
+    };
 
     int pass = 0;
     int total_policy = (int)(sizeof(cases) / sizeof(cases[0]));
@@ -2656,6 +2782,8 @@ int main(void) {
         sizeof(reinvert_demotion_control_cases) /
         sizeof(reinvert_demotion_control_cases[0]));
     int total_reinvert_demotion_sequence = 1;
+    int total_phase1_stagnation =
+        (int)(sizeof(phase1_stagnation_cases) / sizeof(phase1_stagnation_cases[0]));
     int total = total_policy + total_sched + total_lu_health + total_soft_lu_defer +
                 total_periodic_cost_defer + total_dir_stabilize + total_dir_force +
                 total_dir_moderate + total_no_pivot + total_no_pivot_ladder +
@@ -2675,6 +2803,7 @@ int main(void) {
     total += total_reinvert_control;
     total += total_reinvert_demotion_control;
     total += total_reinvert_demotion_sequence;
+    total += total_phase1_stagnation;
 
     for (int i = 0; i < total_policy; i++) {
         pass += run_case(&cases[i]);
@@ -2754,6 +2883,9 @@ int main(void) {
         pass += run_reinvert_demotion_control_case(&reinvert_demotion_control_cases[i]);
     }
     pass += run_reinvert_phase1_pressure_demotion_sequence_case();
+    for (int i = 0; i < total_phase1_stagnation; i++) {
+        pass += run_phase1_stagnation_case(&phase1_stagnation_cases[i]);
+    }
 
     printf("\nPolicy cases passed: %d/%d\n", pass, total);
     return (pass == total) ? 0 : 1;

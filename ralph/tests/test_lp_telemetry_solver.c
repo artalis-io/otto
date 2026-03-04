@@ -136,6 +136,35 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.policy.reinvert_phase1_control_demotions = 3;
     solver.policy.reinvert_phase1_pressure_last_iter = 41;
     solver.policy.reinvert_phase1_pressure_burst = 5;
+    solver.policy.phase1_stagnation_window_start_iter = 19;
+    solver.policy.phase1_stagnation_window_start_obj = 13.5;
+    solver.policy.phase1_stagnation_window_retry_base = 7;
+    solver.policy.phase1_stagnation_window_no_pivot_base = 9;
+    solver.policy.phase1_stagnation_window_refactor_base = 5;
+    solver.policy.phase1_stagnation_window_update_recovery_base = 3;
+    solver.policy.phase1_stagnation_window_recompute_ratio_base = 2;
+    solver.policy.phase1_stagnation_window_recompute_dir_skip_base = 4;
+    solver.policy.phase1_stagnation_window_recompute_dir_refactor_base = 1;
+    solver.policy.phase1_stagnation_window_recompute_pivot_fail_base = 6;
+    solver.policy.phase1_stagnation_window_recompute_perturb_base = 8;
+    solver.policy.phase1_stagnation_escape_cooldown = 11;
+    solver.policy.phase1_stagnation_escape_triggers = 2;
+    solver.policy.phase1_stagnation_escape_successes = 1;
+    solver.policy.phase1_stagnation_escape_failures = 1;
+    solver.policy.phase1_stagnation_escape_cooldown_blocks = 3;
+    solver.policy.phase1_stagnation_last_window_iters = 96;
+    solver.policy.phase1_stagnation_last_obj_delta = 0.125;
+    solver.policy.phase1_stagnation_last_retry_defer_ratio = 0.75;
+    solver.policy.phase1_stagnation_last_update_recovery_ratio = 0.5;
+    solver.policy.phase1_stagnation_last_retry_defers = 12;
+    solver.policy.phase1_stagnation_last_no_pivot_events = 16;
+    solver.policy.phase1_stagnation_last_update_recovery_refactors = 4;
+    solver.policy.phase1_stagnation_last_refactors = 8;
+    solver.policy.phase1_stagnation_last_recompute_ratio = 9;
+    solver.policy.phase1_stagnation_last_recompute_dir_skip = 7;
+    solver.policy.phase1_stagnation_last_recompute_dir_refactor = 3;
+    solver.policy.phase1_stagnation_last_recompute_pivot_fail = 2;
+    solver.policy.phase1_stagnation_last_recompute_perturb = 1;
     lp_basis_governor_set_mode(&solver.policy.basis_governor,
                                solver.policy.basis_governor_mode);
     solver.policy.basis_governor.shadow_refactor_yes_phase1 = 4;
@@ -288,6 +317,28 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 reinvert pressure last iter");
     ASSERT_INT_EQ(solver.policy.reinvert_phase1_pressure_burst, 0,
                   "reset: phase1 reinvert pressure burst");
+    ASSERT_INT_EQ(solver.policy.phase1_stagnation_window_start_iter, -1,
+                  "reset: phase1 stagnation window start iter");
+    ASSERT_DBL_EQ(solver.policy.phase1_stagnation_window_start_obj, 0.0,
+                  "reset: phase1 stagnation window start obj");
+    ASSERT_INT_EQ(solver.policy.phase1_stagnation_escape_cooldown, 0,
+                  "reset: phase1 stagnation cooldown");
+    ASSERT_INT_EQ(solver.policy.phase1_stagnation_escape_triggers, 0,
+                  "reset: phase1 stagnation escape triggers");
+    ASSERT_INT_EQ(solver.policy.phase1_stagnation_escape_successes, 0,
+                  "reset: phase1 stagnation escape successes");
+    ASSERT_INT_EQ(solver.policy.phase1_stagnation_escape_failures, 0,
+                  "reset: phase1 stagnation escape failures");
+    ASSERT_INT_EQ(solver.policy.phase1_stagnation_escape_cooldown_blocks, 0,
+                  "reset: phase1 stagnation cooldown blocks");
+    ASSERT_INT_EQ(solver.policy.phase1_stagnation_last_window_iters, 0,
+                  "reset: phase1 stagnation last window iters");
+    ASSERT_DBL_EQ(solver.policy.phase1_stagnation_last_obj_delta, 0.0,
+                  "reset: phase1 stagnation last obj delta");
+    ASSERT_DBL_EQ(solver.policy.phase1_stagnation_last_retry_defer_ratio, 0.0,
+                  "reset: phase1 stagnation retry ratio");
+    ASSERT_DBL_EQ(solver.policy.phase1_stagnation_last_update_recovery_ratio, 0.0,
+                  "reset: phase1 stagnation update ratio");
     ASSERT_INT_EQ(lp_basis_governor_get_mode(&solver.policy.basis_governor),
                   LP_BASIS_GOV_MODE_CONTROL_PHASE2,
                   "reset: governor state mode preserved");
@@ -612,6 +663,24 @@ static void test_solver_snapshot(void) {
     solver.policy.reinvert_phase1_control_demotions = 2;
     solver.policy.reinvert_phase1_pressure_last_iter = 87;
     solver.policy.reinvert_phase1_pressure_burst = 6;
+    solver.policy.phase1_stagnation_escape_cooldown = 23;
+    solver.policy.phase1_stagnation_escape_triggers = 5;
+    solver.policy.phase1_stagnation_escape_successes = 4;
+    solver.policy.phase1_stagnation_escape_failures = 1;
+    solver.policy.phase1_stagnation_escape_cooldown_blocks = 2;
+    solver.policy.phase1_stagnation_last_window_iters = 96;
+    solver.policy.phase1_stagnation_last_obj_delta = 0.00012;
+    solver.policy.phase1_stagnation_last_retry_defer_ratio = 0.85;
+    solver.policy.phase1_stagnation_last_update_recovery_ratio = 0.6;
+    solver.policy.phase1_stagnation_last_retry_defers = 17;
+    solver.policy.phase1_stagnation_last_no_pivot_events = 20;
+    solver.policy.phase1_stagnation_last_update_recovery_refactors = 6;
+    solver.policy.phase1_stagnation_last_refactors = 8;
+    solver.policy.phase1_stagnation_last_recompute_ratio = 9;
+    solver.policy.phase1_stagnation_last_recompute_dir_skip = 7;
+    solver.policy.phase1_stagnation_last_recompute_dir_refactor = 2;
+    solver.policy.phase1_stagnation_last_recompute_pivot_fail = 1;
+    solver.policy.phase1_stagnation_last_recompute_perturb = 0;
     lp_basis_governor_set_mode(&solver.policy.basis_governor,
                                solver.policy.basis_governor_mode);
     solver.policy.basis_governor.shadow_refactor_yes_phase1 = 8;
@@ -765,6 +834,42 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 reinvert pressure last iter");
     ASSERT_INT_EQ(snap.reinvert_phase1_pressure_burst, 6,
                   "solver_snapshot: phase1 reinvert pressure burst");
+    ASSERT_INT_EQ(snap.phase1_stagnation_escape_cooldown, 23,
+                  "solver_snapshot: phase1 stagnation cooldown");
+    ASSERT_INT_EQ(snap.phase1_stagnation_escape_triggers, 5,
+                  "solver_snapshot: phase1 stagnation escape triggers");
+    ASSERT_INT_EQ(snap.phase1_stagnation_escape_successes, 4,
+                  "solver_snapshot: phase1 stagnation escape successes");
+    ASSERT_INT_EQ(snap.phase1_stagnation_escape_failures, 1,
+                  "solver_snapshot: phase1 stagnation escape failures");
+    ASSERT_INT_EQ(snap.phase1_stagnation_escape_cooldown_blocks, 2,
+                  "solver_snapshot: phase1 stagnation cooldown blocks");
+    ASSERT_INT_EQ(snap.phase1_stagnation_last_window_iters, 96,
+                  "solver_snapshot: phase1 stagnation last window iters");
+    ASSERT_DBL_EQ(snap.phase1_stagnation_last_obj_delta, 0.00012,
+                  "solver_snapshot: phase1 stagnation obj delta");
+    ASSERT_DBL_EQ(snap.phase1_stagnation_last_retry_defer_ratio, 0.85,
+                  "solver_snapshot: phase1 stagnation retry ratio");
+    ASSERT_DBL_EQ(snap.phase1_stagnation_last_update_recovery_ratio, 0.6,
+                  "solver_snapshot: phase1 stagnation update ratio");
+    ASSERT_INT_EQ(snap.phase1_stagnation_last_retry_defers, 17,
+                  "solver_snapshot: phase1 stagnation retry defers");
+    ASSERT_INT_EQ(snap.phase1_stagnation_last_no_pivot_events, 20,
+                  "solver_snapshot: phase1 stagnation no-pivot events");
+    ASSERT_INT_EQ(snap.phase1_stagnation_last_update_recovery_refactors, 6,
+                  "solver_snapshot: phase1 stagnation update refactors");
+    ASSERT_INT_EQ(snap.phase1_stagnation_last_refactors, 8,
+                  "solver_snapshot: phase1 stagnation refactors");
+    ASSERT_INT_EQ(snap.phase1_stagnation_last_recompute_ratio, 9,
+                  "solver_snapshot: phase1 stagnation recompute ratio");
+    ASSERT_INT_EQ(snap.phase1_stagnation_last_recompute_dir_skip, 7,
+                  "solver_snapshot: phase1 stagnation recompute dir skip");
+    ASSERT_INT_EQ(snap.phase1_stagnation_last_recompute_dir_refactor, 2,
+                  "solver_snapshot: phase1 stagnation recompute dir refactor");
+    ASSERT_INT_EQ(snap.phase1_stagnation_last_recompute_pivot_fail, 1,
+                  "solver_snapshot: phase1 stagnation recompute pivot fail");
+    ASSERT_INT_EQ(snap.phase1_stagnation_last_recompute_perturb, 0,
+                  "solver_snapshot: phase1 stagnation recompute perturb");
     ASSERT_INT_EQ(snap.shadow_refactor_yes_phase1, 8,
                   "solver_snapshot: shadow refactor yes phase1");
     ASSERT_INT_EQ(snap.shadow_disagree_primal_refactor, 3,
