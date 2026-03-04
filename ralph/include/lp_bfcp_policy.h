@@ -70,6 +70,7 @@ int lp_bfcp_policy_compute(const LPBFCPPolicyRequest *req,
 /* Runtime lifecycle helpers used by LU update/reinvert decisions. */
 int lp_bfcp_policy_effective_update_limit(const LPBFCPRefactorSignals *sig);
 int lp_bfcp_policy_dense_reject_min_updates(const LPBFCPRefactorSignals *sig);
+int lp_bfcp_policy_refactor_hard_trigger(const LPBFCPRefactorSignals *sig);
 int lp_bfcp_policy_refactor_reason(const LPBFCPRefactorSignals *sig);
 const char *lp_bfcp_policy_refactor_reason_string(int reason);
 

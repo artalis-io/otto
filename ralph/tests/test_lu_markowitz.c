@@ -1045,6 +1045,45 @@ static void test_lu_update_cond_adaptive_limit_runtime(void) {
 }
 
 /* ============================================================================
+ * Test 18: LU hard-trigger helper delegates to BFCP hard safety criteria
+ * ============================================================================ */
+static void test_lu_refactor_hard_trigger_runtime(void) {
+    printf("  LU: runtime hard-trigger helper...\n");
+
+    LUFactorization *lu = lu_create(80);
+    ASSERT(lu != NULL, "lu hard trigger runtime: lu_create");
+    if (!lu) return;
+
+    lu->num_updates = lu->max_updates;
+    ASSERT_INT_EQ(lu_refactor_hard_trigger(lu), 1,
+                  "lu hard trigger runtime: max-updates hard trigger");
+
+    lu->num_updates = 0;
+    lu->growth_factor = 4e8;
+    lu->growth_refactor_threshold = 1e8;
+    ASSERT_INT_EQ(lu_refactor_hard_trigger(lu), 1,
+                  "lu hard trigger runtime: growth hard trigger");
+
+    lu->growth_factor = 1.0;
+    lu->cond_estimate = 2e10;
+    ASSERT_INT_EQ(lu_refactor_hard_trigger(lu), 1,
+                  "lu hard trigger runtime: cond hard trigger");
+
+    lu->cond_estimate = 1.0;
+    lu->use_ft_updates = 1;
+    lu->spike_pool_capacity = 1000;
+    lu->spike_pool_used = 951;
+    ASSERT_INT_EQ(lu_refactor_hard_trigger(lu), 1,
+                  "lu hard trigger runtime: spike pool hard trigger");
+
+    lu->spike_pool_used = 0;
+    ASSERT_INT_EQ(lu_refactor_hard_trigger(lu), 0,
+                  "lu hard trigger runtime: healthy state not hard");
+
+    lu_free(lu);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1067,6 +1106,7 @@ int main(void) {
     test_ft_update_density_refactor_guard();
     test_ft_dense_spike_warmup_update();
     test_lu_update_cond_adaptive_limit_runtime();
+    test_lu_refactor_hard_trigger_runtime();
 
     printf("\nIntegration (A/B Comparison):\n");
     test_markowitz_integration_small_lp();

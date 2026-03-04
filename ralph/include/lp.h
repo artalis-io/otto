@@ -1465,6 +1465,7 @@ void lu_solve(const LUFactorization *lu, double *rhs, double *solution);
 void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution);
 int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col);
 int lu_needs_refactorization(LUFactorization *lu);
+int lu_refactor_hard_trigger(const LUFactorization *lu);
 const char* lu_failure_reason_string(int reason);
 const char* lu_refactor_trigger_reason_string(int reason);
 

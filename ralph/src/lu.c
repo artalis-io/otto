@@ -2672,6 +2672,14 @@ int lu_needs_refactorization(LUFactorization *lu) {
     return reason != LP_BFCP_REFACTOR_REASON_NONE;
 }
 
+int lu_refactor_hard_trigger(const LUFactorization *lu) {
+    LPBFCPRefactorSignals sig;
+
+    if (!lu) return 0;
+    lu_fill_bfcp_signals(lu, &sig);
+    return lp_bfcp_policy_refactor_hard_trigger(&sig);
+}
+
 /* ============================================================================
  * Utility
  * ============================================================================ */

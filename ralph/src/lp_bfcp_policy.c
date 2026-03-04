@@ -107,6 +107,27 @@ int lp_bfcp_policy_dense_reject_min_updates(const LPBFCPRefactorSignals *sig) {
     return min_updates;
 }
 
+int lp_bfcp_policy_refactor_hard_trigger(const LPBFCPRefactorSignals *sig) {
+    if (!sig) return 0;
+
+    if (sig->max_updates > 0 && sig->num_updates >= sig->max_updates) {
+        return 1;
+    }
+    if (isfinite(sig->growth_factor) &&
+        sig->growth_factor > sig->growth_guard_threshold * 3.0) {
+        return 1;
+    }
+    if (isfinite(sig->cond_estimate) && sig->cond_estimate > 1e10) {
+        return 1;
+    }
+    if (sig->use_ft_updates &&
+        sig->spike_pool_capacity > 0 &&
+        sig->spike_pool_used >= (sig->spike_pool_capacity * 95) / 100) {
+        return 1;
+    }
+    return 0;
+}
+
 int lp_bfcp_policy_refactor_reason(const LPBFCPRefactorSignals *sig) {
     int adaptive_limit;
     int min_dense_updates;
