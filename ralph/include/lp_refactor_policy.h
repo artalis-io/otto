@@ -117,6 +117,36 @@ LPBasisAction lp_refactor_policy_choose_basis_action(double pivot,
                                                      double growth_factor,
                                                      double growth_threshold);
 
+const char* lp_refactor_policy_phase1_no_pivot_force_reason_string(int reason);
+
+int lp_refactor_policy_phase1_no_pivot_force_threshold(int m,
+                                                       int degenerate_count);
+
+int lp_refactor_policy_phase1_no_pivot_force_transition(int m,
+                                                        int degenerate_count,
+                                                        int streak,
+                                                        int cooldown,
+                                                        int *next_streak,
+                                                        int *next_cooldown);
+
+int lp_refactor_policy_phase1_no_pivot_ladder_refactor_threshold(
+    int m,
+    int degenerate_count,
+    int reason,
+    int force_pivot_mode_active);
+
+int lp_refactor_policy_phase1_no_pivot_ladder_step(
+    int m,
+    int degenerate_count,
+    int reason,
+    int no_pivot_streak,
+    int no_progress_streak,
+    int force_pivot_mode_active,
+    int *refactor_threshold_out);
+
+int lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(
+    int dir_skip_event_streak);
+
 LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(
     int m,
     int use_ft_updates,

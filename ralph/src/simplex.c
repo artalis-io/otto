@@ -118,25 +118,11 @@ static int phase1_trace_reason_from_lu_failure(int lu_reason, int forced_refacto
 #define PHASE1_AUTO_DANTZIG_MIN_M 700
 #define PHASE1_AUTO_DANTZIG_MAX_M 1200
 #define PHASE1_AUTO_DANTZIG_DEGEN_TRIGGER 20
-#define PHASE1_NO_PIVOT_FORCE_MIN_M 700
-#define PHASE1_NO_PIVOT_FORCE_BASE_TRIGGER 48
-#define PHASE1_NO_PIVOT_FORCE_MIN_TRIGGER 24
-#define PHASE1_NO_PIVOT_FORCE_COOLDOWN_UPDATES 24
-#define PHASE1_NO_PIVOT_LADDER_REFACTOR_BASE_RATIO 8
-#define PHASE1_NO_PIVOT_LADDER_REFACTOR_BASE_DIR_SKIP 8
-#define PHASE1_NO_PIVOT_LADDER_REFACTOR_BASE_PIVOT_FAIL 4
-#define PHASE1_NO_PIVOT_LADDER_REFACTOR_MIN 3
-#define PHASE1_NO_PIVOT_LADDER_RESCUE_START 3
-#define PHASE1_NO_PIVOT_LADDER_RESCUE_PERIOD 4
-#define PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_START 8
-#define PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_PERIOD 4
 #define PHASE1_NO_PIVOT_PROGRESS_WINDOW 6
 #define PHASE1_NO_PIVOT_PROGRESS_REL_IMPROVE_MIN 1e-4
 #define PHASE1_NO_PIVOT_PROGRESS_ABS_IMPROVE_MIN 1e-8
 #define PHASE1_NO_PIVOT_LADDER_RESCUE_COOLDOWN_ITERS 16
 #define PHASE1_NO_PIVOT_LADDER_RESCUE_FAIL_CAP 3
-#define PHASE1_DIR_SKIP_LADDER_RESCUE_START 16
-#define PHASE1_DIR_SKIP_LADDER_RESCUE_PERIOD 8
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_TRIGGER 64
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_MIN_TRIGGER 24
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_BUDGET 12
@@ -1534,32 +1520,6 @@ int simplex_periodic_cost_defer_plan_for_test(int phase,
     return should_defer;
 }
 
-static const char* phase1_no_pivot_force_reason_string(
-    LPPhase1NoPivotForceReason reason) {
-    switch (reason) {
-        case LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN:
-            return "ratio_breakdown";
-        case LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP:
-            return "dir_skip";
-        case LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL:
-            return "pivot_fail";
-        case LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN:
-        default:
-            return "unknown";
-    }
-}
-
-static int phase1_no_pivot_force_threshold(int m, int degenerate_count) {
-    int threshold = PHASE1_NO_PIVOT_FORCE_BASE_TRIGGER;
-    if (m >= 1200) threshold -= 8;
-    if (degenerate_count >= 80) threshold -= 8;
-    if (degenerate_count >= 160) threshold -= 8;
-    if (threshold < PHASE1_NO_PIVOT_FORCE_MIN_TRIGGER) {
-        threshold = PHASE1_NO_PIVOT_FORCE_MIN_TRIGGER;
-    }
-    return threshold;
-}
-
 enum {
     PHASE1_NO_PIVOT_LADDER_STEP_RETRY = 0,
     PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE = 1,
@@ -1671,42 +1631,6 @@ static void phase1_no_pivot_progress_update(SimplexSolver *solver,
     *progress_window_steps_io = window_steps;
 }
 
-static int phase1_no_pivot_ladder_refactor_threshold(
-    int m,
-    int degenerate_count,
-    LPPhase1NoPivotForceReason reason,
-    int force_pivot_mode_active) {
-    int threshold;
-    switch (reason) {
-        case LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP:
-            threshold = PHASE1_NO_PIVOT_LADDER_REFACTOR_BASE_DIR_SKIP;
-            break;
-        case LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL:
-            threshold = PHASE1_NO_PIVOT_LADDER_REFACTOR_BASE_PIVOT_FAIL;
-            break;
-        case LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN:
-        case LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN:
-        default:
-            threshold = PHASE1_NO_PIVOT_LADDER_REFACTOR_BASE_RATIO;
-            break;
-    }
-
-    if (m >= 2500) threshold += 4;
-    else if (m >= 1200) threshold += 2;
-    if (degenerate_count >= 160) threshold -= 2;
-    else if (degenerate_count >= 80) threshold -= 1;
-    if (force_pivot_mode_active && threshold > PHASE1_NO_PIVOT_LADDER_REFACTOR_MIN) {
-        threshold -= 2;
-    }
-    if (reason == LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL && threshold > 6) {
-        threshold = 6;
-    }
-    if (threshold < PHASE1_NO_PIVOT_LADDER_REFACTOR_MIN) {
-        threshold = PHASE1_NO_PIVOT_LADDER_REFACTOR_MIN;
-    }
-    return threshold;
-}
-
 static int phase1_no_pivot_ladder_step(
     int m,
     int degenerate_count,
@@ -1715,53 +1639,14 @@ static int phase1_no_pivot_ladder_step(
     int no_progress_streak,
     int force_pivot_mode_active,
     int *refactor_threshold_out) {
-    int refactor_threshold = phase1_no_pivot_ladder_refactor_threshold(
-        m, degenerate_count, reason, force_pivot_mode_active);
-    int rescue_start = PHASE1_NO_PIVOT_LADDER_RESCUE_START;
-    int rescue_period = PHASE1_NO_PIVOT_LADDER_RESCUE_PERIOD;
-    int streak_rescue_start = PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_START;
-    int streak_rescue_period = PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_PERIOD;
-    int fast_escalation = 0;
-
-    if (m >= 1200 && degenerate_count >= 80 &&
-        reason != LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL) {
-        fast_escalation = 1;
-        if (refactor_threshold > PHASE1_NO_PIVOT_LADDER_REFACTOR_MIN + 1) {
-            refactor_threshold -= 1;
-        }
-        rescue_start = 2;
-        rescue_period = 3;
-        streak_rescue_start = 6;
-        streak_rescue_period = 3;
-    }
-    if (reason == LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL) {
-        rescue_start = 2;
-        rescue_period = 2;
-        streak_rescue_start = 4;
-        streak_rescue_period = 2;
-    }
-    if (refactor_threshold_out) *refactor_threshold_out = refactor_threshold;
-
-    if (no_progress_streak >= refactor_threshold ||
-        no_pivot_streak >= refactor_threshold * 2 ||
-        (fast_escalation &&
-         no_progress_streak >= rescue_start + 2 &&
-         no_pivot_streak >= refactor_threshold)) {
-        return PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR;
-    }
-
-    if (no_progress_streak >= rescue_start &&
-        rescue_period > 0 &&
-        (no_progress_streak % rescue_period) == 0) {
-        return PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE;
-    }
-    if (no_pivot_streak >= streak_rescue_start &&
-        streak_rescue_period > 0 &&
-        (no_pivot_streak % streak_rescue_period) == 0) {
-        return PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE;
-    }
-
-    return PHASE1_NO_PIVOT_LADDER_STEP_RETRY;
+    return lp_refactor_policy_phase1_no_pivot_ladder_step(
+        m,
+        degenerate_count,
+        (int)reason,
+        no_pivot_streak,
+        no_progress_streak,
+        force_pivot_mode_active,
+        refactor_threshold_out);
 }
 
 static int phase1_no_pivot_ladder_apply_rescue_guard(
@@ -1781,12 +1666,6 @@ static int phase1_no_pivot_ladder_apply_rescue_guard(
         return PHASE1_NO_PIVOT_LADDER_STEP_RETRY;
     }
     return PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE;
-}
-
-static int phase1_dir_skip_ladder_rescue_due(int dir_skip_event_streak) {
-    if (dir_skip_event_streak < PHASE1_DIR_SKIP_LADDER_RESCUE_START) return 0;
-    if (PHASE1_DIR_SKIP_LADDER_RESCUE_PERIOD <= 0) return 0;
-    return (dir_skip_event_streak % PHASE1_DIR_SKIP_LADDER_RESCUE_PERIOD) == 0;
 }
 
 static int phase1_attempt_ladder_dual_rescue(
@@ -2033,18 +1912,29 @@ static int phase1_note_no_pivot_and_maybe_force(SimplexSolver *solver,
                                                 LPPhase1NoPivotForceReason reason,
                                                 int *streak_io,
                                                 int *cooldown_io) {
-    int threshold = 0;
+    int next_streak = 0;
+    int next_cooldown = 0;
+    int should_force = 0;
+
     if (!streak_io || !cooldown_io) return 0;
+
     if (*streak_io < INT_MAX) (*streak_io)++;
     lp_telemetry_record_phase1_no_pivot_event(solver, reason);
-    if (*cooldown_io > 0) return 0;
-    if (m < PHASE1_NO_PIVOT_FORCE_MIN_M) return 0;
-    threshold = phase1_no_pivot_force_threshold(m, degenerate_count);
-    if (*streak_io < threshold) return 0;
-    *streak_io = 0;
-    *cooldown_io = PHASE1_NO_PIVOT_FORCE_COOLDOWN_UPDATES;
-    lp_telemetry_record_phase1_no_pivot_force(solver, reason);
-    return 1;
+
+    should_force = lp_refactor_policy_phase1_no_pivot_force_transition(
+        m,
+        degenerate_count,
+        *streak_io,
+        *cooldown_io,
+        &next_streak,
+        &next_cooldown);
+    *streak_io = next_streak;
+    *cooldown_io = next_cooldown;
+
+    if (should_force) {
+        lp_telemetry_record_phase1_no_pivot_force(solver, reason);
+    }
+    return should_force;
 }
 
 static int phase1_soft_lu_policy_cooldown_updates(int m,
@@ -2110,7 +2000,8 @@ int simplex_phase1_no_pivot_ladder_rescue_guard_plan_for_test(
 
 int simplex_phase1_dir_skip_rescue_cadence_plan_for_test(
     int dir_skip_event_streak) {
-    return phase1_dir_skip_ladder_rescue_due(dir_skip_event_streak);
+    return lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(
+        dir_skip_event_streak);
 }
 
 int simplex_phase1_force_pivot_mode_plan_for_test(int m,
@@ -6724,7 +6615,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             phase1_no_pivot_force_pending = 0;
             if (solver->verbose >= 2) {
                 LP_LOG_STDERR("[simplex_phase1] No-pivot streak force refactor (%s)\n",
-                        phase1_no_pivot_force_reason_string(phase1_no_pivot_force_reason));
+                        lp_refactor_policy_phase1_no_pivot_force_reason_string((int)phase1_no_pivot_force_reason));
             }
             phase1_no_pivot_force_reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
             lp_telemetry_record_phase1_dir_stabilize_refactor_trigger(
@@ -7347,7 +7238,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                         LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
                 }
                 if (!phase1_no_pivot_force_pending &&
-                    phase1_dir_skip_ladder_rescue_due(phase1_dir_skip_event_streak)) {
+                    lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(phase1_dir_skip_event_streak)) {
                     int rescue_step = phase1_no_pivot_ladder_apply_rescue_guard(
                         solver,
                         PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE,
@@ -7438,7 +7329,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                         LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
                 }
                 if (!phase1_no_pivot_force_pending &&
-                    phase1_dir_skip_ladder_rescue_due(phase1_dir_skip_event_streak)) {
+                    lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(phase1_dir_skip_event_streak)) {
                     int rescue_step = phase1_no_pivot_ladder_apply_rescue_guard(
                         solver,
                         PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE,
@@ -7682,7 +7573,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                         LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
                 }
                 if (!phase1_no_pivot_force_pending &&
-                    phase1_dir_skip_ladder_rescue_due(phase1_dir_skip_event_streak)) {
+                    lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(phase1_dir_skip_event_streak)) {
                     int rescue_step = phase1_no_pivot_ladder_apply_rescue_guard(
                         solver,
                         PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE,

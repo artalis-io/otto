@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 #include "lp.h"
 #include "lp_refactor_policy.h"
 
@@ -132,6 +133,127 @@ int main(void) {
     TEST(lp_refactor_policy_choose_basis_action(1.0, 0, 0, 0, 10, 1.0, 1e8) ==
              LP_BASIS_ACTION_UPDATE,
          "basis action: healthy path uses update");
+
+    TEST(strcmp(lp_refactor_policy_phase1_no_pivot_force_reason_string(
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN),
+                "ratio_breakdown") == 0,
+         "no-pivot reason string: ratio");
+    TEST(strcmp(lp_refactor_policy_phase1_no_pivot_force_reason_string(
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP),
+                "dir_skip") == 0,
+         "no-pivot reason string: dir-skip");
+    TEST(strcmp(lp_refactor_policy_phase1_no_pivot_force_reason_string(
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL),
+                "pivot_fail") == 0,
+         "no-pivot reason string: pivot-fail");
+    TEST(strcmp(lp_refactor_policy_phase1_no_pivot_force_reason_string(999),
+                "unknown") == 0,
+         "no-pivot reason string: unknown fallback");
+
+    TEST(lp_refactor_policy_phase1_no_pivot_force_threshold(300, 0) == 48,
+         "no-pivot force threshold: baseline");
+    TEST(lp_refactor_policy_phase1_no_pivot_force_threshold(1300, 90) == 32,
+         "no-pivot force threshold: large+degenerate tightens");
+    TEST(lp_refactor_policy_phase1_no_pivot_force_threshold(1300, 200) == 24,
+         "no-pivot force threshold: clamps to minimum");
+
+    {
+        int next_streak = -1;
+        int next_cooldown = -1;
+        int force = lp_refactor_policy_phase1_no_pivot_force_transition(
+            1300, 100, 40, 5, &next_streak, &next_cooldown);
+        TEST(force == 0, "no-pivot force transition: blocked by cooldown");
+        TEST(next_streak == 40 && next_cooldown == 5,
+             "no-pivot force transition: cooldown keeps state");
+    }
+
+    {
+        int next_streak = -1;
+        int next_cooldown = -1;
+        int force = lp_refactor_policy_phase1_no_pivot_force_transition(
+            400, 120, 100, 0, &next_streak, &next_cooldown);
+        TEST(force == 0, "no-pivot force transition: blocked on small m");
+        TEST(next_streak == 100 && next_cooldown == 0,
+             "no-pivot force transition: small m keeps state");
+    }
+
+    {
+        int next_streak = -1;
+        int next_cooldown = -1;
+        int force = lp_refactor_policy_phase1_no_pivot_force_transition(
+            1300, 90, 32, 0, &next_streak, &next_cooldown);
+        TEST(force == 1, "no-pivot force transition: triggers at threshold");
+        TEST(next_streak == 0 && next_cooldown == 24,
+             "no-pivot force transition: resets streak and arms cooldown");
+    }
+
+    TEST(lp_refactor_policy_phase1_no_pivot_ladder_refactor_threshold(
+             800,
+             0,
+             LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
+             0) == 8,
+         "no-pivot ladder threshold: ratio baseline");
+    TEST(lp_refactor_policy_phase1_no_pivot_ladder_refactor_threshold(
+             1300,
+             100,
+             LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+             1) == 7,
+         "no-pivot ladder threshold: dir-skip adjusted");
+    TEST(lp_refactor_policy_phase1_no_pivot_ladder_refactor_threshold(
+             300,
+             0,
+             LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL,
+             0) == 4,
+         "no-pivot ladder threshold: pivot-fail baseline");
+
+    {
+        int threshold = -1;
+        int step = lp_refactor_policy_phase1_no_pivot_ladder_step(
+            800,
+            0,
+            LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
+            1,
+            2,
+            0,
+            &threshold);
+        TEST(step == 0 && threshold == 8,
+             "no-pivot ladder step: retry before rescue threshold");
+    }
+
+    {
+        int threshold = -1;
+        int step = lp_refactor_policy_phase1_no_pivot_ladder_step(
+            800,
+            0,
+            LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
+            1,
+            4,
+            0,
+            &threshold);
+        TEST(step == 1 && threshold == 8,
+             "no-pivot ladder step: dual rescue on rescue cadence");
+    }
+
+    {
+        int threshold = -1;
+        int step = lp_refactor_policy_phase1_no_pivot_ladder_step(
+            800,
+            0,
+            LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
+            1,
+            8,
+            0,
+            &threshold);
+        TEST(step == 2 && threshold == 8,
+             "no-pivot ladder step: force refactor on sustained no-progress");
+    }
+
+    TEST(lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(15) == 0,
+         "dir-skip rescue cadence: below start");
+    TEST(lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(16) == 1,
+         "dir-skip rescue cadence: start threshold");
+    TEST(lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(24) == 1,
+         "dir-skip rescue cadence: periodic multiple");
 
     decision = lp_refactor_policy_lu_health_refactor_decision(1500, 1, 120, 120,
                                                               0, 100, 1e3, 1.0, 0);
