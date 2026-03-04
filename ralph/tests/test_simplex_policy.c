@@ -176,6 +176,24 @@ int simplex_reinvert_periodic_control_for_test(int mode,
                                                int hard_lu_trigger,
                                                int periodic_due,
                                                int decision);
+int simplex_reinvert_periodic_control_with_phase1_demotion_for_test(
+    int mode,
+    int phase,
+    int phase1_demoted,
+    int hard_lu_trigger,
+    int periodic_due,
+    int decision);
+void simplex_reinvert_phase1_pressure_safety_step_for_test(
+    int iter,
+    int no_pivot_streak,
+    int no_progress_streak,
+    int ratio_breakdown_count,
+    int dir_skip_no_recompute_streak,
+    int hard_lu_trigger,
+    int *last_iter_io,
+    int *burst_io,
+    int *demoted_io,
+    int *demotions_io);
 
 enum {
     EXPECT_UPDATE = 0,
@@ -267,6 +285,17 @@ typedef struct {
     int expected_refactor;
 } ReinvertControlCase;
 
+typedef struct {
+    const char *name;
+    int mode;
+    int phase;
+    int phase1_demoted;
+    int hard_lu_trigger;
+    int periodic_due;
+    int decision;
+    int expected_refactor;
+} ReinvertDemotionControlCase;
+
 static int run_refine_budget_case(const RefineBudgetCase *tc) {
     int budget = simplex_solution_refine_limit_for_test(tc->max_residual, tc->feas_tol);
     if (budget != tc->expected_budget) {
@@ -290,6 +319,82 @@ static int run_reinvert_control_case(const ReinvertControlCase *tc) {
         return 0;
     }
     printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_reinvert_demotion_control_case(const ReinvertDemotionControlCase *tc) {
+    int refactor = simplex_reinvert_periodic_control_with_phase1_demotion_for_test(
+        tc->mode,
+        tc->phase,
+        tc->phase1_demoted,
+        tc->hard_lu_trigger,
+        tc->periodic_due,
+        tc->decision);
+    if (refactor != tc->expected_refactor) {
+        fprintf(stderr, "FAIL: %s (expected=%d got=%d)\n",
+                tc->name, tc->expected_refactor, refactor);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_reinvert_phase1_pressure_demotion_sequence_case(void) {
+    int last_iter = -1;
+    int burst = 0;
+    int demoted = 0;
+    int demotions = 0;
+    for (int k = 0; k < 3; k++) {
+        simplex_reinvert_phase1_pressure_safety_step_for_test(k * 10,
+                                                              8,
+                                                              24,
+                                                              0,
+                                                              0,
+                                                              0,
+                                                              &last_iter,
+                                                              &burst,
+                                                              &demoted,
+                                                              &demotions);
+    }
+    if (demoted != 0 || demotions != 0) {
+        fprintf(stderr, "FAIL: phase1 pressure demotion waits for burst cap (demoted=%d demotions=%d)\n",
+                demoted, demotions);
+        return 0;
+    }
+
+    simplex_reinvert_phase1_pressure_safety_step_for_test(30,
+                                                          8,
+                                                          24,
+                                                          0,
+                                                          0,
+                                                          0,
+                                                          &last_iter,
+                                                          &burst,
+                                                          &demoted,
+                                                          &demotions);
+    if (demoted != 1 || demotions != 1) {
+        fprintf(stderr, "FAIL: phase1 pressure demotion triggers at burst cap (demoted=%d demotions=%d)\n",
+                demoted, demotions);
+        return 0;
+    }
+
+    simplex_reinvert_phase1_pressure_safety_step_for_test(63,
+                                                          0,
+                                                          0,
+                                                          0,
+                                                          0,
+                                                          0,
+                                                          &last_iter,
+                                                          &burst,
+                                                          &demoted,
+                                                          &demotions);
+    if (demoted != 0 || demotions != 1) {
+        fprintf(stderr, "FAIL: phase1 pressure demotion restores after cooldown (demoted=%d demotions=%d)\n",
+                demoted, demotions);
+        return 0;
+    }
+
+    printf("PASS: phase1 pressure demotion is bounded and restores\n");
     return 1;
 }
 
@@ -2475,6 +2580,38 @@ int main(void) {
             .expected_refactor = 0
         }
     };
+    const ReinvertDemotionControlCase reinvert_demotion_control_cases[] = {
+        {
+            .name = "phase1 demotion disables control_all override in phase1",
+            .mode = LP_REINVERT_MODE_CONTROL_ALL,
+            .phase = 1,
+            .phase1_demoted = 1,
+            .hard_lu_trigger = 0,
+            .periodic_due = 0,
+            .decision = LP_REINVERT_DECISION_FORCE,
+            .expected_refactor = 0
+        },
+        {
+            .name = "phase1 demotion keeps legacy periodic due behavior in phase1",
+            .mode = LP_REINVERT_MODE_CONTROL_ALL,
+            .phase = 1,
+            .phase1_demoted = 1,
+            .hard_lu_trigger = 0,
+            .periodic_due = 1,
+            .decision = LP_REINVERT_DECISION_DEFER,
+            .expected_refactor = 1
+        },
+        {
+            .name = "phase1 demotion does not disable control_all in phase2",
+            .mode = LP_REINVERT_MODE_CONTROL_ALL,
+            .phase = 2,
+            .phase1_demoted = 1,
+            .hard_lu_trigger = 0,
+            .periodic_due = 0,
+            .decision = LP_REINVERT_DECISION_FORCE,
+            .expected_refactor = 1
+        }
+    };
 
     int pass = 0;
     int total_policy = (int)(sizeof(cases) / sizeof(cases[0]));
@@ -2515,6 +2652,10 @@ int main(void) {
         (int)(sizeof(refine_budget_cases) / sizeof(refine_budget_cases[0]));
     int total_reinvert_control =
         (int)(sizeof(reinvert_control_cases) / sizeof(reinvert_control_cases[0]));
+    int total_reinvert_demotion_control = (int)(
+        sizeof(reinvert_demotion_control_cases) /
+        sizeof(reinvert_demotion_control_cases[0]));
+    int total_reinvert_demotion_sequence = 1;
     int total = total_policy + total_sched + total_lu_health + total_soft_lu_defer +
                 total_periodic_cost_defer + total_dir_stabilize + total_dir_force +
                 total_dir_moderate + total_no_pivot + total_no_pivot_ladder +
@@ -2532,6 +2673,8 @@ int main(void) {
     total += total_smcp_shift;
     total += total_refine_budget;
     total += total_reinvert_control;
+    total += total_reinvert_demotion_control;
+    total += total_reinvert_demotion_sequence;
 
     for (int i = 0; i < total_policy; i++) {
         pass += run_case(&cases[i]);
@@ -2607,6 +2750,10 @@ int main(void) {
     for (int i = 0; i < total_reinvert_control; i++) {
         pass += run_reinvert_control_case(&reinvert_control_cases[i]);
     }
+    for (int i = 0; i < total_reinvert_demotion_control; i++) {
+        pass += run_reinvert_demotion_control_case(&reinvert_demotion_control_cases[i]);
+    }
+    pass += run_reinvert_phase1_pressure_demotion_sequence_case();
 
     printf("\nPolicy cases passed: %d/%d\n", pass, total);
     return (pass == total) ? 0 : 1;
