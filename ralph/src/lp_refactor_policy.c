@@ -51,6 +51,20 @@
 #define PHASE1_DIR_SKIP_RC_ONLY_MIN_NO_PIVOT_STREAK 8
 #define PHASE1_DIR_SKIP_NO_RECOMPUTE_GUARD 8
 #define PHASE1_FORCE_SMALL_PIVOT_MIN_UPDATE_AGE 6
+#define PHASE1_NO_PIVOT_FORCE_MIN_M 700
+#define PHASE1_NO_PIVOT_FORCE_BASE_TRIGGER 48
+#define PHASE1_NO_PIVOT_FORCE_MIN_TRIGGER 24
+#define PHASE1_NO_PIVOT_FORCE_COOLDOWN_UPDATES 24
+#define PHASE1_NO_PIVOT_LADDER_REFACTOR_BASE_RATIO 8
+#define PHASE1_NO_PIVOT_LADDER_REFACTOR_BASE_DIR_SKIP 8
+#define PHASE1_NO_PIVOT_LADDER_REFACTOR_BASE_PIVOT_FAIL 4
+#define PHASE1_NO_PIVOT_LADDER_REFACTOR_MIN 3
+#define PHASE1_NO_PIVOT_LADDER_RESCUE_START 3
+#define PHASE1_NO_PIVOT_LADDER_RESCUE_PERIOD 4
+#define PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_START 8
+#define PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_PERIOD 4
+#define PHASE1_DIR_SKIP_LADDER_RESCUE_START 16
+#define PHASE1_DIR_SKIP_LADDER_RESCUE_PERIOD 8
 #define LU_HEALTH_HARD_COND_MIN_UPDATES 10
 #define LU_HEALTH_HARD_COND_RATIO 1e10
 #define LU_HEALTH_SOFT_COND_MED 1e6
@@ -506,6 +520,170 @@ LPBasisAction lp_refactor_policy_choose_basis_action(double pivot,
         return LP_BASIS_ACTION_REFACTOR;
     }
     return LP_BASIS_ACTION_UPDATE;
+}
+
+const char* lp_refactor_policy_phase1_no_pivot_force_reason_string(int reason) {
+    switch ((LPPhase1NoPivotForceReason)reason) {
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN:
+            return "ratio_breakdown";
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP:
+            return "dir_skip";
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL:
+            return "pivot_fail";
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN:
+        default:
+            return "unknown";
+    }
+}
+
+int lp_refactor_policy_phase1_no_pivot_force_threshold(int m,
+                                                       int degenerate_count) {
+    int threshold = PHASE1_NO_PIVOT_FORCE_BASE_TRIGGER;
+    if (m >= 1200) threshold -= 8;
+    if (degenerate_count >= 80) threshold -= 8;
+    if (degenerate_count >= 160) threshold -= 8;
+    if (threshold < PHASE1_NO_PIVOT_FORCE_MIN_TRIGGER) {
+        threshold = PHASE1_NO_PIVOT_FORCE_MIN_TRIGGER;
+    }
+    return threshold;
+}
+
+int lp_refactor_policy_phase1_no_pivot_force_transition(int m,
+                                                        int degenerate_count,
+                                                        int streak,
+                                                        int cooldown,
+                                                        int *next_streak,
+                                                        int *next_cooldown) {
+    int threshold = 0;
+
+    if (streak < 0) streak = 0;
+    if (cooldown < 0) cooldown = 0;
+
+    if (cooldown > 0) {
+        if (next_streak) *next_streak = streak;
+        if (next_cooldown) *next_cooldown = cooldown;
+        return 0;
+    }
+    if (m < PHASE1_NO_PIVOT_FORCE_MIN_M) {
+        if (next_streak) *next_streak = streak;
+        if (next_cooldown) *next_cooldown = cooldown;
+        return 0;
+    }
+
+    threshold = lp_refactor_policy_phase1_no_pivot_force_threshold(m, degenerate_count);
+    if (streak < threshold) {
+        if (next_streak) *next_streak = streak;
+        if (next_cooldown) *next_cooldown = cooldown;
+        return 0;
+    }
+
+    if (next_streak) *next_streak = 0;
+    if (next_cooldown) *next_cooldown = PHASE1_NO_PIVOT_FORCE_COOLDOWN_UPDATES;
+    return 1;
+}
+
+int lp_refactor_policy_phase1_no_pivot_ladder_refactor_threshold(
+    int m,
+    int degenerate_count,
+    int reason,
+    int force_pivot_mode_active) {
+    int threshold;
+    switch ((LPPhase1NoPivotForceReason)reason) {
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP:
+            threshold = PHASE1_NO_PIVOT_LADDER_REFACTOR_BASE_DIR_SKIP;
+            break;
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL:
+            threshold = PHASE1_NO_PIVOT_LADDER_REFACTOR_BASE_PIVOT_FAIL;
+            break;
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN:
+        case LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN:
+        default:
+            threshold = PHASE1_NO_PIVOT_LADDER_REFACTOR_BASE_RATIO;
+            break;
+    }
+
+    if (m >= 2500) threshold += 4;
+    else if (m >= 1200) threshold += 2;
+    if (degenerate_count >= 160) threshold -= 2;
+    else if (degenerate_count >= 80) threshold -= 1;
+    if (force_pivot_mode_active && threshold > PHASE1_NO_PIVOT_LADDER_REFACTOR_MIN) {
+        threshold -= 2;
+    }
+    if ((LPPhase1NoPivotForceReason)reason == LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL &&
+        threshold > 6) {
+        threshold = 6;
+    }
+    if (threshold < PHASE1_NO_PIVOT_LADDER_REFACTOR_MIN) {
+        threshold = PHASE1_NO_PIVOT_LADDER_REFACTOR_MIN;
+    }
+    return threshold;
+}
+
+int lp_refactor_policy_phase1_no_pivot_ladder_step(
+    int m,
+    int degenerate_count,
+    int reason,
+    int no_pivot_streak,
+    int no_progress_streak,
+    int force_pivot_mode_active,
+    int *refactor_threshold_out) {
+    int refactor_threshold = lp_refactor_policy_phase1_no_pivot_ladder_refactor_threshold(
+        m, degenerate_count, reason, force_pivot_mode_active);
+    int rescue_start = PHASE1_NO_PIVOT_LADDER_RESCUE_START;
+    int rescue_period = PHASE1_NO_PIVOT_LADDER_RESCUE_PERIOD;
+    int streak_rescue_start = PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_START;
+    int streak_rescue_period = PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_PERIOD;
+    int fast_escalation = 0;
+
+    if (no_pivot_streak < 0) no_pivot_streak = 0;
+    if (no_progress_streak < 0) no_progress_streak = 0;
+
+    if (m >= 1200 && degenerate_count >= 80 &&
+        (LPPhase1NoPivotForceReason)reason != LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL) {
+        fast_escalation = 1;
+        if (refactor_threshold > PHASE1_NO_PIVOT_LADDER_REFACTOR_MIN + 1) {
+            refactor_threshold -= 1;
+        }
+        rescue_start = 2;
+        rescue_period = 3;
+        streak_rescue_start = 6;
+        streak_rescue_period = 3;
+    }
+    if ((LPPhase1NoPivotForceReason)reason == LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL) {
+        rescue_start = 2;
+        rescue_period = 2;
+        streak_rescue_start = 4;
+        streak_rescue_period = 2;
+    }
+    if (refactor_threshold_out) *refactor_threshold_out = refactor_threshold;
+
+    if (no_progress_streak >= refactor_threshold ||
+        no_pivot_streak >= refactor_threshold * 2 ||
+        (fast_escalation &&
+         no_progress_streak >= rescue_start + 2 &&
+         no_pivot_streak >= refactor_threshold)) {
+        return 2;
+    }
+
+    if (no_progress_streak >= rescue_start &&
+        rescue_period > 0 &&
+        (no_progress_streak % rescue_period) == 0) {
+        return 1;
+    }
+    if (no_pivot_streak >= streak_rescue_start &&
+        streak_rescue_period > 0 &&
+        (no_pivot_streak % streak_rescue_period) == 0) {
+        return 1;
+    }
+
+    return 0;
+}
+
+int lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(
+    int dir_skip_event_streak) {
+    if (dir_skip_event_streak < PHASE1_DIR_SKIP_LADDER_RESCUE_START) return 0;
+    if (PHASE1_DIR_SKIP_LADDER_RESCUE_PERIOD <= 0) return 0;
+    return (dir_skip_event_streak % PHASE1_DIR_SKIP_LADDER_RESCUE_PERIOD) == 0;
 }
 
 LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(

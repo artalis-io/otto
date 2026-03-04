@@ -288,3 +288,9 @@ Cleanup note:
 - Removed simplex-local basis action/refactor decision logic and delegated it to
   `lp_refactor_policy` (`lp_refactor_policy_choose_basis_action` and
   `lp_refactor_policy_phase1_small_pivot_refactor_allowed`) with dedicated policy tests.
+- Removed simplex-local phase1 no-pivot force/ladder/cadence threshold logic and
+  delegated it to `lp_refactor_policy`
+  (`lp_refactor_policy_phase1_no_pivot_force_transition`,
+  `lp_refactor_policy_phase1_no_pivot_ladder_step`,
+  `lp_refactor_policy_phase1_dir_skip_ladder_rescue_due`), keeping telemetry in
+  simplex and policy math in one module.
