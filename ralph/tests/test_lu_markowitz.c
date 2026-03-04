@@ -965,6 +965,51 @@ static void test_ft_update_density_refactor_guard(void) {
 }
 
 /* ============================================================================
+ * Test 16: Dense FT spikes should not hard-fail during warmup
+ * ============================================================================ */
+static void test_ft_dense_spike_warmup_update(void) {
+    printf("  LU: FT dense-spike warmup update...\n");
+
+    const int m = 320;
+    double *A = (double *)calloc((size_t)m * m, sizeof(double));
+    SparseMatrix *B = NULL;
+    LUFactorization *lu = NULL;
+    double *entering_col = NULL;
+
+    for (int i = 0; i < m; i++) A[i * m + i] = 1.0;
+    B = dense_to_csc(A, m, m);
+
+    lu = lu_create(m);
+    ASSERT(lu != NULL, "ft dense warmup: lu_create");
+    if (!lu) goto cleanup;
+
+    ASSERT_INT_EQ(lu_factorize(lu, B), 0, "ft dense warmup: factorize");
+
+    entering_col = (double *)calloc((size_t)m, sizeof(double));
+    ASSERT(entering_col != NULL, "ft dense warmup: allocate entering column");
+    if (!entering_col) goto cleanup;
+
+    /* Identity basis + dense entering column => dense spike ratio ~1.0. */
+    for (int i = 0; i < m; i++) entering_col[i] = 1.0;
+    ASSERT_INT_EQ(lu_update(lu, 0, entering_col), 0,
+                  "ft dense warmup: first dense update should succeed");
+    ASSERT_INT_EQ(lu->last_failure_reason, LU_FAIL_NONE,
+                  "ft dense warmup: no LU failure after update");
+    ASSERT_INT_EQ(lu->num_updates, 1,
+                  "ft dense warmup: update count increments");
+    ASSERT_INT_EQ(lu->ft_num_updates, 1,
+                  "ft dense warmup: FT update count increments");
+    ASSERT_INT_EQ(lu->telemetry.update_fail_spike_pool_full, 0,
+                  "ft dense warmup: no dense-spike hard reject in warmup");
+
+cleanup:
+    free(entering_col);
+    lu_free(lu);
+    free_csc(B);
+    free(A);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -985,6 +1030,7 @@ int main(void) {
     test_markowitz_global_skip_policy();
     test_markowitz_global_skip_runtime_telemetry();
     test_ft_update_density_refactor_guard();
+    test_ft_dense_spike_warmup_update();
 
     printf("\nIntegration (A/B Comparison):\n");
     test_markowitz_integration_small_lp();

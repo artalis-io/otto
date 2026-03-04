@@ -23,6 +23,7 @@
 #define RALPH_SPIKE_POOL_WARN_PCT 85
 /* Reject extremely dense FT updates on large bases; they poison sparse solve cost. */
 #define RALPH_SPIKE_DENSE_REJECT_M_MIN 300
+#define RALPH_SPIKE_DENSE_REJECT_MIN_UPDATES 8
 #define RALPH_SPIKE_DENSE_BASE_RATIO 0.70
 #define RALPH_SPIKE_DENSE_AGED_RATIO 0.55
 /* Early reinversion when average stored spike density drifts too high. */
@@ -2520,8 +2521,12 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     spike[step_pos] = diag_val;  /* For eta-file compatibility */
 
     /* Dense spike guard: very dense updates make every future FTRAN/BTRAN expensive.
-     * Fail the update early and refactorize to preserve sparse solve behavior. */
-    if (lu->use_ft_updates && m >= RALPH_SPIKE_DENSE_REJECT_M_MIN && m > 1) {
+     * Keep an initial warmup window so updates do not immediately collapse into
+     * update-fail -> reinvert loops before density policy can react. */
+    if (lu->use_ft_updates &&
+        lu->ft_num_updates >= RALPH_SPIKE_DENSE_REJECT_MIN_UPDATES &&
+        m >= RALPH_SPIKE_DENSE_REJECT_M_MIN &&
+        m > 1) {
         double spike_ratio = (double)off_diag_nnz / (double)(m - 1);
         double reject_ratio = lu_dense_spike_reject_ratio(lu);
         if (spike_ratio > reject_ratio) {
@@ -2630,7 +2635,7 @@ int lu_needs_refactorization(LUFactorization *lu) {
     sig.spike_pool_used = lu->spike_pool_used;
     sig.spike_pool_capacity = lu->spike_pool_capacity;
     sig.update_aged = lu_update_is_aged(lu);
-    sig.min_ft_updates_for_avg_density = 8;
+    sig.min_ft_updates_for_avg_density = RALPH_SPIKE_DENSE_REJECT_MIN_UPDATES;
     sig.spike_dense_reject_m_min = RALPH_SPIKE_DENSE_REJECT_M_MIN;
     sig.spike_avg_refactor_ratio = RALPH_SPIKE_AVG_REFACTOR_RATIO;
     sig.spike_avg_refactor_aged_ratio = RALPH_SPIKE_AVG_REFACTOR_AGED_RATIO;
