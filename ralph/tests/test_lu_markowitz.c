@@ -922,6 +922,7 @@ static void test_ft_update_density_refactor_guard(void) {
     lu->use_ft_updates = 1;
     lu->growth_factor = 1.0;
     lu->cond_estimate = 1.0;
+    lu->max_updates = 100; /* Pin lifecycle budget for deterministic warmup threshold. */
 
     /* Non-aged updates: avg spike ratio above 0.45 should force refactor. */
     lu->num_updates = 12;

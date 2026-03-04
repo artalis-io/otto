@@ -97,6 +97,54 @@ int main(void) {
 
     lp_bfcp_policy_refactor_signals_init(&sig);
     sig.max_updates = 100;
+    sig.cond_estimate = 1e3;
+    TEST(lp_bfcp_policy_effective_update_limit(&sig) == 100,
+         "effective update limit: healthy uses full max_updates");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 100;
+    sig.cond_estimate = 2e7;
+    TEST(lp_bfcp_policy_effective_update_limit(&sig) == 50,
+         "effective update limit: mid conditioning halves max_updates");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 100;
+    sig.cond_estimate = 2e9;
+    TEST(lp_bfcp_policy_effective_update_limit(&sig) == 25,
+         "effective update limit: poor conditioning quarters max_updates");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 120;
+    sig.min_ft_updates_for_avg_density = 8;
+    TEST(lp_bfcp_policy_dense_reject_min_updates(&sig) == 8,
+         "dense reject warmup: keeps base minimum on default budgets");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 1000;
+    sig.min_ft_updates_for_avg_density = 8;
+    TEST(lp_bfcp_policy_dense_reject_min_updates(&sig) == 8,
+         "dense reject warmup: remains policy-provided base");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 400;
+    sig.min_ft_updates_for_avg_density = 8;
+    TEST(lp_bfcp_policy_dense_reject_min_updates(&sig) == 8,
+         "dense reject warmup: no implicit scaling in policy helper");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 50;
+    sig.min_ft_updates_for_avg_density = 8;
+    TEST(lp_bfcp_policy_dense_reject_min_updates(&sig) == 8,
+         "dense reject warmup: keeps base minimum on small budgets");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 50;
+    sig.min_ft_updates_for_avg_density = 0;
+    TEST(lp_bfcp_policy_dense_reject_min_updates(&sig) == 1,
+         "dense reject warmup: clamps invalid minimum to 1");
+
+    lp_bfcp_policy_refactor_signals_init(&sig);
+    sig.max_updates = 100;
     sig.num_updates = 100;
     TEST(lp_bfcp_policy_refactor_reason(&sig) == LP_BFCP_REFACTOR_REASON_MAX_UPDATES,
          "refactor reason: max updates");

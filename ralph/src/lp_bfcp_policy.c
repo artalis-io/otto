@@ -75,8 +75,35 @@ int lp_bfcp_policy_compute(const LPBFCPPolicyRequest *req,
     return 0;
 }
 
+int lp_bfcp_policy_effective_update_limit(const LPBFCPRefactorSignals *sig) {
+    int adaptive_limit;
+
+    if (!sig) return 0;
+    adaptive_limit = sig->max_updates;
+    if (adaptive_limit <= 0) return 0;
+
+    if (sig->cond_estimate > sig->cond_adaptive_hi) {
+        adaptive_limit = sig->max_updates / 4;
+    } else if (sig->cond_estimate > sig->cond_adaptive_mid) {
+        adaptive_limit = sig->max_updates / 2;
+    }
+
+    if (adaptive_limit < 1) adaptive_limit = 1;
+    return adaptive_limit;
+}
+
+int lp_bfcp_policy_dense_reject_min_updates(const LPBFCPRefactorSignals *sig) {
+    int min_updates;
+
+    if (!sig) return 8;
+    min_updates = sig->min_ft_updates_for_avg_density;
+    if (min_updates < 1) min_updates = 1;
+    return min_updates;
+}
+
 int lp_bfcp_policy_refactor_reason(const LPBFCPRefactorSignals *sig) {
     int adaptive_limit;
+    int min_dense_updates;
 
     if (!sig) return LP_BFCP_REFACTOR_REASON_NONE;
 
@@ -88,9 +115,10 @@ int lp_bfcp_policy_refactor_reason(const LPBFCPRefactorSignals *sig) {
         return LP_BFCP_REFACTOR_REASON_GROWTH_GUARD;
     }
 
+    min_dense_updates = lp_bfcp_policy_dense_reject_min_updates(sig);
     if (sig->use_ft_updates &&
         sig->m >= sig->spike_dense_reject_m_min &&
-        sig->ft_num_updates >= sig->min_ft_updates_for_avg_density &&
+        sig->ft_num_updates >= min_dense_updates &&
         sig->spike_pool_used > 0) {
         double avg_spike_ratio = ((double)sig->spike_pool_used /
                                   (double)sig->ft_num_updates) / (double)sig->m;
@@ -108,17 +136,9 @@ int lp_bfcp_policy_refactor_reason(const LPBFCPRefactorSignals *sig) {
             return LP_BFCP_REFACTOR_REASON_COND_SEVERE;
         }
 
-        adaptive_limit = sig->max_updates;
-        if (adaptive_limit > 0) {
-            if (sig->cond_estimate > sig->cond_adaptive_hi) {
-                adaptive_limit = sig->max_updates / 4;
-            } else if (sig->cond_estimate > sig->cond_adaptive_mid) {
-                adaptive_limit = sig->max_updates / 2;
-            }
-            if (adaptive_limit < 1) adaptive_limit = 1;
-            if (sig->num_updates >= adaptive_limit) {
-                return LP_BFCP_REFACTOR_REASON_COND_ADAPTIVE_LIMIT;
-            }
+        adaptive_limit = lp_bfcp_policy_effective_update_limit(sig);
+        if (adaptive_limit > 0 && sig->num_updates >= adaptive_limit) {
+            return LP_BFCP_REFACTOR_REASON_COND_ADAPTIVE_LIMIT;
         }
     }
 
