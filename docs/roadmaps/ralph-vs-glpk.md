@@ -183,3 +183,37 @@ For `lp_policy_profile=glpk_compat`:
 - The older reference document (`docs/roadmaps/ralph_vs_glpk.md`) remains for
   historical context; this file is the active execution plan for GLPK-compat
   control-policy implementation.
+
+## Next Execution Slice: G1 (BFCP Runtime Policy Module)
+
+Objective:
+- Move BFCP runtime normalization/clamping into a dedicated, orthogonal module so
+  LU reinversion behavior is controlled by one global policy surface, not scattered
+  local checks.
+
+Scope (G1 only):
+1. Add `lp_bfcp_policy` module:
+   - `ralph/include/lp_bfcp_policy.h`
+   - `ralph/src/lp_bfcp_policy.c`
+2. Define a pure request -> effective mapping for:
+   - backend support/clamp (`luf_ft` currently supported)
+   - update-limit override normalization
+   - pivot/growth override normalization
+3. Wire this module at solve setup in `ralph/src/ralph.c` before solver/LU override
+   fields are assigned.
+4. Add orthogonal unit coverage:
+   - `ralph/tests/test_lp_bfcp_policy.c`
+
+Constraints:
+- No instance-specific behavior (no per-NETLIB switches, no filename branches).
+- No algorithmic behavior change in G1; this is control-surface consolidation.
+- Hard LU safety triggers remain unchanged and authoritative.
+
+Promotion checks for G1:
+- `make -C ralph test-lp-bfcp-policy`
+- `make -C ralph test-lp-policy-glpk-compat`
+- `make -C ralph test-lp-algorithm-api`
+
+Follow-on (G2+):
+- Consume `lp_bfcp_policy` decisions deeper in LU update/reinvert triggers
+  (`lu_update`, `lu_needs_refactorization`) with reason-coded telemetry.

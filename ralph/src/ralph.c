@@ -21,6 +21,7 @@
 #include "lp_external_adapter.h"
 #include "lp_external_glpk_oop.h"
 #include "lp_policy_glpk_compat.h"
+#include "lp_bfcp_policy.h"
 
 #define RALPH_VERSION "0.1.0"
 
@@ -1450,6 +1451,8 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     LPDispatchBackend lp_effective_backend = LP_DISPATCH_BACKEND_SIMPLEX;
     LPExternalProvider lp_effective_provider = LP_EXTERNAL_PROVIDER_NONE;
     LPGLPKCompatConfig glpk_policy_cfg;
+    LPBFCPPolicyRequest bfcp_policy_req;
+    LPBFCPPolicyEffective bfcp_policy_eff;
 
     ralph_glpk_policy_config_from_model(model, &glpk_policy_cfg);
     if (!lp_policy_glpk_compat_validate(&glpk_policy_cfg)) {
@@ -1534,6 +1537,19 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                                             &lp_dual_rc_recompute_interval,
                                             &lp_soft_lu_cost_gate_enabled,
                                             &lp_periodic_cost_gate_enabled);
+        lp_bfcp_policy_request_init(&bfcp_policy_req);
+        lp_bfcp_policy_effective_init(&bfcp_policy_eff);
+        bfcp_policy_req.requested_backend = lp_bfcp_backend;
+        bfcp_policy_req.requested_update_limit = lp_bfcp_update_limit;
+        bfcp_policy_req.requested_pivot_tol = lp_bfcp_pivot_tol;
+        bfcp_policy_req.requested_growth_guard = lp_bfcp_growth_guard;
+        if (lp_bfcp_policy_compute(&bfcp_policy_req, &bfcp_policy_eff) == 0) {
+            lp_bfcp_backend = bfcp_policy_eff.effective_backend;
+            lp_bfcp_backend_supported = bfcp_policy_eff.backend_supported;
+            lp_bfcp_update_limit = bfcp_policy_eff.update_limit_override;
+            lp_bfcp_pivot_tol = bfcp_policy_eff.pivot_tol_override;
+            lp_bfcp_growth_guard = bfcp_policy_eff.growth_guard_override;
+        }
         if (!lp_bfcp_backend_supported && model->verbose) {
             fprintf(stderr,
                     "[ralph] glpk_bfcp_backend=%d requested, but only LUF+FT is currently supported; clamped to luf_ft\n",
