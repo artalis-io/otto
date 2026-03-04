@@ -50,6 +50,7 @@
 #define PHASE1_DIR_SKIP_RC_ONLY_MIN_DEGEN 20
 #define PHASE1_DIR_SKIP_RC_ONLY_MIN_NO_PIVOT_STREAK 8
 #define PHASE1_DIR_SKIP_NO_RECOMPUTE_GUARD 8
+#define PHASE1_FORCE_SMALL_PIVOT_MIN_UPDATE_AGE 6
 #define LU_HEALTH_HARD_COND_MIN_UPDATES 10
 #define LU_HEALTH_HARD_COND_RATIO 1e10
 #define LU_HEALTH_SOFT_COND_MED 1e6
@@ -461,6 +462,50 @@ int lp_refactor_policy_phase1_dir_stabilize_should_defer_moderate(
     if (dir_inf_ratio > PHASE1_DIR_STABILIZE_MODERATE_RATIO_MAX) return 0;
     if (pending_repeat) return 0;
     return 1;
+}
+
+int lp_refactor_policy_phase1_small_pivot_refactor_allowed(int force_refactor,
+                                                           int repeat_pattern,
+                                                           int lu_num_updates) {
+    if (!force_refactor) return 0;
+    if (lu_num_updates >= 0 &&
+        lu_num_updates < PHASE1_FORCE_SMALL_PIVOT_MIN_UPDATE_AGE &&
+        repeat_pattern < RALPH_PHASE1_REPEAT_REFACTOR_TRIGGER) {
+        return 0;
+    }
+    return 1;
+}
+
+LPBasisAction lp_refactor_policy_choose_basis_action(double pivot,
+                                                     int force_refactor,
+                                                     int lu_update_status,
+                                                     int repeat_pattern,
+                                                     int lu_num_updates,
+                                                     double growth_factor,
+                                                     double growth_threshold) {
+    const int force_refactor_allowed =
+        lp_refactor_policy_phase1_small_pivot_refactor_allowed(force_refactor,
+                                                               repeat_pattern,
+                                                               lu_num_updates);
+
+    if (!isfinite(pivot) || fabs(pivot) < RALPH_PIVOT_TOL) {
+        return LP_BASIS_ACTION_ABORT;
+    }
+    if (lu_update_status <= -3) {
+        return LP_BASIS_ACTION_ABORT;
+    }
+    if (lu_update_status == -2) {
+        return LP_BASIS_ACTION_REPAIR;
+    }
+    if (lu_update_status == -1) {
+        return LP_BASIS_ACTION_REFACTOR;
+    }
+    if (force_refactor_allowed ||
+        repeat_pattern >= RALPH_PHASE1_REPEAT_REFACTOR_TRIGGER ||
+        growth_factor > growth_threshold) {
+        return LP_BASIS_ACTION_REFACTOR;
+    }
+    return LP_BASIS_ACTION_UPDATE;
 }
 
 LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(

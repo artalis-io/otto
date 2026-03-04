@@ -18,6 +18,13 @@ typedef struct {
 } LPLUHealthRefactorDecision;
 
 typedef enum {
+    LP_BASIS_ACTION_UPDATE = 0,
+    LP_BASIS_ACTION_REFACTOR = 1,
+    LP_BASIS_ACTION_REPAIR = 2,
+    LP_BASIS_ACTION_ABORT = 3
+} LPBasisAction;
+
+typedef enum {
     LP_PERIODIC_COST_DAMPEN_DEFER = 0,
     LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE = 1,
     LP_PERIODIC_COST_DAMPEN_BLOCK_SMALL_M = 2,
@@ -97,6 +104,18 @@ int lp_refactor_policy_phase1_dir_stabilize_should_defer_moderate(
     int cooldown_active,
     int lu_health_triggered,
     int pending_repeat);
+
+int lp_refactor_policy_phase1_small_pivot_refactor_allowed(int force_refactor,
+                                                           int repeat_pattern,
+                                                           int lu_num_updates);
+
+LPBasisAction lp_refactor_policy_choose_basis_action(double pivot,
+                                                     int force_refactor,
+                                                     int lu_update_status,
+                                                     int repeat_pattern,
+                                                     int lu_num_updates,
+                                                     double growth_factor,
+                                                     double growth_threshold);
 
 LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(
     int m,

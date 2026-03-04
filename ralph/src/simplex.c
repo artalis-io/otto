@@ -84,34 +84,12 @@ static int phase1_trace_reason_from_lu_failure(int lu_reason, int forced_refacto
     }
 }
 
-typedef enum {
-    BASIS_ACTION_UPDATE = 0,
-    BASIS_ACTION_REFACTOR = 1,
-    BASIS_ACTION_REPAIR = 2,
-    BASIS_ACTION_ABORT = 3
-} BasisAction;
-
-#define PHASE1_PERIODIC_REFACTOR_MIN_INTERVAL 24
-#define PHASE1_PERIODIC_REFACTOR_MAX_INTERVAL 96
-#define PHASE2_PERIODIC_REFACTOR_MIN_INTERVAL 10
-#define PHASE2_PERIODIC_REFACTOR_MAX_INTERVAL 80
-#define PHASE2_PERIODIC_REFACTOR_LARGE_DEGEN_M 1200
-#define PHASE2_PERIODIC_REFACTOR_LARGE_DEGEN_COUNT 20
-#define PHASE2_PERIODIC_REFACTOR_LARGE_DEGEN_MIN_INTERVAL 24
-#define PHASE2_PERIODIC_REFACTOR_LARGE_DEGEN_MAX_SPIKE_PCT 30
-#define PHASE2_PERIODIC_REFACTOR_LARGE_DEGEN_MAX_COND 1e6
-#define PHASE2_PERIODIC_REFACTOR_LARGE_DEGEN_MAX_GROWTH 1e4
 #define PHASE2_DEGEN_ESCAPE_MIN_M 1200
 #define PHASE2_DEGEN_ESCAPE_DEGEN_TRIGGER 120
 #define PHASE2_DEGEN_ESCAPE_POLICY_TRIGGER 200
 #define PHASE2_DEGEN_ESCAPE_MAX_ATTEMPTS 2
 #define PHASE2_DEGEN_ESCAPE_BLAND_HOLD_ITERS 16
 #define PERIODIC_REFACTOR_MIN_UPDATE_AGE 8
-#define PERIODIC_REFACTOR_PRESSURE_TRIGGER 0.40
-#define PERIODIC_REFACTOR_SIZE_START_M 350
-#define PERIODIC_REFACTOR_SIZE_FULL_M 500
-#define PERIODIC_REFACTOR_RELAX_NUM 1
-#define PERIODIC_REFACTOR_RELAX_DEN 3
 #define PERIODIC_FEEDBACK_BIAS_LIMIT 0.25
 #define PERIODIC_FEEDBACK_DECAY 0.85
 #define PERIODIC_FEEDBACK_RELAX_STEP 0.06
@@ -120,10 +98,6 @@ typedef enum {
 #define PERIODIC_FEEDBACK_HIGH_PRESSURE 0.85
 #define PERIODIC_FEEDBACK_EARLY_RECOVERY_NUM 2
 #define PERIODIC_FEEDBACK_EARLY_RECOVERY_DEN 3
-#define PHASE2_POLICY_COOLDOWN_MIN_M 450
-#define PHASE2_POLICY_COOLDOWN_DEGEN_TRIGGER 40
-#define PHASE2_POLICY_COOLDOWN_MIN_UPDATES 16
-#define PHASE2_POLICY_COOLDOWN_MAX_UPDATES 96
 #define PHASE1_POLICY_PRESSURE_DECAY_STEP 0.06
 #define PHASE1_POLICY_PRESSURE_DECAY_MAX 0.24
 #define PHASE1_POLICY_PRESSURE_RECOVERY_STEP 0.01
@@ -167,7 +141,6 @@ typedef enum {
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_MIN_TRIGGER 24
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_BUDGET 12
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_MAX_BUDGET 32
-#define PHASE1_FORCE_SMALL_PIVOT_MIN_UPDATE_AGE 6
 #define PHASE1_DIR_ESCAPE_MIN_M 200
 #define PHASE1_DIR_ESCAPE_BASE_TRIGGER 48
 #define PHASE1_DIR_ESCAPE_MIN_TRIGGER 20
@@ -1339,60 +1312,6 @@ int simplex_solution_refine_limit_for_test(double max_residual, double feas_tol)
     return solution_refine_iteration_budget(max_residual, feas_tol);
 }
 
-/*
- * Centralized basis-update policy used by simplex_pivot().
- * lu_update_status convention:
- *   0  = no LU update attempt yet
- *  -1  = LU update failed
- *  -2  = refactorization failed
- *  -3  = repair failed
- */
-static int phase1_small_pivot_refactor_allowed(int force_refactor,
-                                               int repeat_pattern,
-                                               int lu_num_updates) {
-    if (!force_refactor) return 0;
-    if (lu_num_updates >= 0 &&
-        lu_num_updates < PHASE1_FORCE_SMALL_PIVOT_MIN_UPDATE_AGE &&
-        repeat_pattern < RALPH_PHASE1_REPEAT_REFACTOR_TRIGGER) {
-        return 0;
-    }
-    return 1;
-}
-
-static BasisAction choose_basis_action(double pivot,
-                                       int force_refactor,
-                                       int lu_update_status,
-                                       int lu_reason,
-                                       int repeat_pattern,
-                                       int lu_num_updates,
-                                       double growth_factor,
-                                       double growth_threshold) {
-    (void)lu_reason;
-    const int force_refactor_allowed = phase1_small_pivot_refactor_allowed(
-        force_refactor,
-        repeat_pattern,
-        lu_num_updates);
-
-    if (!isfinite(pivot) || fabs(pivot) < RALPH_PIVOT_TOL) {
-        return BASIS_ACTION_ABORT;
-    }
-    if (lu_update_status <= -3) {
-        return BASIS_ACTION_ABORT;
-    }
-    if (lu_update_status == -2) {
-        return BASIS_ACTION_REPAIR;
-    }
-    if (lu_update_status == -1) {
-        return BASIS_ACTION_REFACTOR;
-    }
-    if (force_refactor_allowed ||
-        repeat_pattern >= RALPH_PHASE1_REPEAT_REFACTOR_TRIGGER ||
-        growth_factor > growth_threshold) {
-        return BASIS_ACTION_REFACTOR;
-    }
-    return BASIS_ACTION_UPDATE;
-}
-
 int simplex_choose_basis_action_for_test(double pivot,
                                          int force_refactor,
                                          int lu_update_status,
@@ -1400,14 +1319,15 @@ int simplex_choose_basis_action_for_test(double pivot,
                                          int repeat_pattern,
                                          int lu_num_updates,
                                          double growth_factor) {
-    return (int)choose_basis_action(pivot,
-                                    force_refactor,
-                                    lu_update_status,
-                                    lu_reason,
-                                    repeat_pattern,
-                                    lu_num_updates,
-                                    growth_factor,
-                                    RALPH_LU_GROWTH_REFACTOR_THRESHOLD);
+    (void)lu_reason;
+    return (int)lp_refactor_policy_choose_basis_action(
+        pivot,
+        force_refactor,
+        lu_update_status,
+        repeat_pattern,
+        lu_num_updates,
+        growth_factor,
+        RALPH_LU_GROWTH_REFACTOR_THRESHOLD);
 }
 
 int simplex_periodic_refactor_plan_for_test(int phase,
@@ -5756,18 +5676,18 @@ static int simplex_pivot(SimplexTableau *tab,
     double growth_threshold = (tab->lu && tab->lu->growth_refactor_threshold > 0.0)
         ? tab->lu->growth_refactor_threshold
         : RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
-    BasisAction action = choose_basis_action(pivot,
-                                             force_refactor,
-                                             lu_update_status,
-                                             lu_reason,
-                                             repeat_pattern_count,
-                                             lu_num_updates,
-                                             growth_factor,
-                                             growth_threshold);
+    LPBasisAction action = lp_refactor_policy_choose_basis_action(
+        pivot,
+        force_refactor,
+        lu_update_status,
+        repeat_pattern_count,
+        lu_num_updates,
+        growth_factor,
+        growth_threshold);
 
     for (;;) {
         switch (action) {
-            case BASIS_ACTION_UPDATE:
+            case LP_BASIS_ACTION_UPDATE:
                 sparse_get_column(tab->A_ext, entering, tab->work1);
                 {
                     double t_lu_update_ms = lp_telemetry_timer_start();
@@ -5784,20 +5704,20 @@ static int simplex_pivot(SimplexTableau *tab,
                 lu_reason = update_reason;
                 growth_factor = (tab->lu) ? tab->lu->growth_factor : growth_factor;
                 lu_num_updates = (tab->lu) ? tab->lu->num_updates : lu_num_updates;
-                action = choose_basis_action(pivot,
-                                             force_refactor,
-                                             lu_update_status,
-                                             lu_reason,
-                                             repeat_pattern_count,
-                                             lu_num_updates,
-                                             growth_factor,
-                                             growth_threshold);
+                action = lp_refactor_policy_choose_basis_action(
+                    pivot,
+                    force_refactor,
+                    lu_update_status,
+                    repeat_pattern_count,
+                    lu_num_updates,
+                    growth_factor,
+                    growth_threshold);
                 continue;
 
-            case BASIS_ACTION_REFACTOR:
+            case LP_BASIS_ACTION_REFACTOR:
                 refactor_forced_path = (lu_update_status == 0);
                 {
-                    int ref_reason = phase1_small_pivot_refactor_allowed(
+                    int ref_reason = lp_refactor_policy_phase1_small_pivot_refactor_allowed(
                                          force_refactor,
                                          repeat_pattern_count,
                                          lu_num_updates)
@@ -5816,17 +5736,17 @@ static int simplex_pivot(SimplexTableau *tab,
                 lu_reason = (tab->lu) ? tab->lu->last_failure_reason : lu_reason;
                 growth_factor = (tab->lu) ? tab->lu->growth_factor : growth_factor;
                 lu_num_updates = (tab->lu) ? tab->lu->num_updates : lu_num_updates;
-                action = choose_basis_action(pivot,
-                                             force_refactor,
-                                             lu_update_status,
-                                             lu_reason,
-                                             repeat_pattern_count,
-                                             lu_num_updates,
-                                             growth_factor,
-                                             growth_threshold);
+                action = lp_refactor_policy_choose_basis_action(
+                    pivot,
+                    force_refactor,
+                    lu_update_status,
+                    repeat_pattern_count,
+                    lu_num_updates,
+                    growth_factor,
+                    growth_threshold);
                 continue;
 
-            case BASIS_ACTION_REPAIR:
+            case LP_BASIS_ACTION_REPAIR:
                 if (repair_singular_basis(tab) == 0) {
                     goto basis_update_done;
                 }
@@ -5834,17 +5754,17 @@ static int simplex_pivot(SimplexTableau *tab,
                 lu_reason = (tab->lu) ? tab->lu->last_failure_reason : lu_reason;
                 growth_factor = (tab->lu) ? tab->lu->growth_factor : growth_factor;
                 lu_num_updates = (tab->lu) ? tab->lu->num_updates : lu_num_updates;
-                action = choose_basis_action(pivot,
-                                             force_refactor,
-                                             lu_update_status,
-                                             lu_reason,
-                                             repeat_pattern_count,
-                                             lu_num_updates,
-                                             growth_factor,
-                                             growth_threshold);
+                action = lp_refactor_policy_choose_basis_action(
+                    pivot,
+                    force_refactor,
+                    lu_update_status,
+                    repeat_pattern_count,
+                    lu_num_updates,
+                    growth_factor,
+                    growth_threshold);
                 continue;
 
-            case BASIS_ACTION_ABORT:
+            case LP_BASIS_ACTION_ABORT:
             default:
                 if (tab->trace_phase1_enabled) {
                     int fail_lu_reason = lu_reason;
