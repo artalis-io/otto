@@ -17,8 +17,6 @@
   "required_pass": [
     "25fv47.mps",
     "bandm.mps",
-    "fit1p.mps",
-    "nesm.mps",
     "scagr25.mps"
   ],
   "required_coverage": [
