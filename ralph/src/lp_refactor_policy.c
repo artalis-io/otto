@@ -18,6 +18,14 @@
 #define PERIODIC_REFACTOR_SIZE_FULL_M 500
 #define PERIODIC_REFACTOR_RELAX_NUM 1
 #define PERIODIC_REFACTOR_RELAX_DEN 3
+#define PERIODIC_FEEDBACK_BIAS_LIMIT 0.25
+#define PERIODIC_FEEDBACK_DECAY 0.85
+#define PERIODIC_FEEDBACK_RELAX_STEP 0.06
+#define PERIODIC_FEEDBACK_TIGHTEN_STEP 0.08
+#define PERIODIC_FEEDBACK_LOW_PRESSURE 0.55
+#define PERIODIC_FEEDBACK_HIGH_PRESSURE 0.85
+#define PERIODIC_FEEDBACK_EARLY_RECOVERY_NUM 2
+#define PERIODIC_FEEDBACK_EARLY_RECOVERY_DEN 3
 #define PHASE2_POLICY_COOLDOWN_MIN_M 450
 #define PHASE2_POLICY_COOLDOWN_DEGEN_TRIGGER 40
 #define PHASE2_POLICY_COOLDOWN_MIN_UPDATES 16
@@ -156,6 +164,13 @@
 static double clamp_unit_interval(double x) {
     if (!(x > 0.0)) return 0.0;
     if (x > 1.0) return 1.0;
+    return x;
+}
+
+static double clamp_feedback_bias(double x) {
+    if (!isfinite(x)) return 0.0;
+    if (x > PERIODIC_FEEDBACK_BIAS_LIMIT) return PERIODIC_FEEDBACK_BIAS_LIMIT;
+    if (x < -PERIODIC_FEEDBACK_BIAS_LIMIT) return -PERIODIC_FEEDBACK_BIAS_LIMIT;
     return x;
 }
 
@@ -355,6 +370,87 @@ int lp_refactor_policy_should_run_metrics(int iter,
 
     if (use_bland || degenerate_count >= 20) return 1;
     return policy->run_pressure >= PERIODIC_REFACTOR_PRESSURE_TRIGGER;
+}
+
+void lp_refactor_policy_periodic_feedback_set_hint(LPPeriodicFeedbackState *state,
+                                                   int interval,
+                                                   double run_pressure) {
+    if (!state) return;
+    if (interval < 0) interval = 0;
+    state->hint_interval = interval;
+    state->hint_pressure = clamp_unit_interval(run_pressure);
+}
+
+void lp_refactor_policy_periodic_feedback_record_refactor(
+    LPPeriodicFeedbackState *state,
+    int reason,
+    int updates_before,
+    int status) {
+    double bias;
+    int hint_interval;
+    double hint_pressure;
+
+    if (!state) return;
+
+    bias = state->bias * PERIODIC_FEEDBACK_DECAY;
+    hint_interval = state->hint_interval;
+    hint_pressure = state->hint_pressure;
+
+    if (status != 0) {
+        if (reason == RALPH_REFACTOR_REASON_PERIODIC) {
+            bias += PERIODIC_FEEDBACK_TIGHTEN_STEP;
+        }
+        state->bias = clamp_feedback_bias(bias);
+        state->last_reason = reason;
+        if (reason == RALPH_REFACTOR_REASON_PERIODIC && hint_interval > 0) {
+            state->last_interval = hint_interval;
+        }
+        state->hint_interval = 0;
+        state->hint_pressure = 0.0;
+        return;
+    }
+
+    if (reason == RALPH_REFACTOR_REASON_PERIODIC) {
+        double update_ratio = 1.0;
+        if (hint_interval > 0 && updates_before > 0) {
+            update_ratio = (double)updates_before / (double)hint_interval;
+        }
+
+        if (hint_pressure < PERIODIC_FEEDBACK_LOW_PRESSURE &&
+            update_ratio <= 1.05) {
+            bias -= PERIODIC_FEEDBACK_RELAX_STEP;
+        } else if (hint_pressure >= PERIODIC_FEEDBACK_HIGH_PRESSURE) {
+            bias += PERIODIC_FEEDBACK_TIGHTEN_STEP;
+        }
+
+        if (hint_interval > 0) {
+            state->last_interval = hint_interval;
+        } else if (updates_before > 0) {
+            state->last_interval = updates_before;
+        }
+    } else if (state->last_reason == RALPH_REFACTOR_REASON_PERIODIC &&
+               state->last_interval > 0 &&
+               updates_before > 0) {
+        int early_threshold =
+            (state->last_interval * PERIODIC_FEEDBACK_EARLY_RECOVERY_NUM) /
+            PERIODIC_FEEDBACK_EARLY_RECOVERY_DEN;
+        if (early_threshold < PERIODIC_REFACTOR_MIN_UPDATE_AGE) {
+            early_threshold = PERIODIC_REFACTOR_MIN_UPDATE_AGE;
+        }
+
+        if ((reason == RALPH_REFACTOR_REASON_UPDATE_RECOVERY ||
+             reason == RALPH_REFACTOR_REASON_RATIO_RECOVERY ||
+             reason == RALPH_REFACTOR_REASON_PIVOT_RECOVERY ||
+             reason == RALPH_REFACTOR_REASON_DIRECTION_STABILIZE) &&
+            updates_before <= early_threshold) {
+            bias += PERIODIC_FEEDBACK_TIGHTEN_STEP;
+        }
+    }
+
+    state->bias = clamp_feedback_bias(bias);
+    state->last_reason = reason;
+    state->hint_interval = 0;
+    state->hint_pressure = 0.0;
 }
 
 int lp_refactor_policy_phase2_cooldown_eligible(int m,

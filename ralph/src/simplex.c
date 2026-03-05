@@ -89,15 +89,6 @@ static int phase1_trace_reason_from_lu_failure(int lu_reason, int forced_refacto
 #define PHASE2_DEGEN_ESCAPE_POLICY_TRIGGER 200
 #define PHASE2_DEGEN_ESCAPE_MAX_ATTEMPTS 2
 #define PHASE2_DEGEN_ESCAPE_BLAND_HOLD_ITERS 16
-#define PERIODIC_REFACTOR_MIN_UPDATE_AGE 8
-#define PERIODIC_FEEDBACK_BIAS_LIMIT 0.25
-#define PERIODIC_FEEDBACK_DECAY 0.85
-#define PERIODIC_FEEDBACK_RELAX_STEP 0.06
-#define PERIODIC_FEEDBACK_TIGHTEN_STEP 0.08
-#define PERIODIC_FEEDBACK_LOW_PRESSURE 0.55
-#define PERIODIC_FEEDBACK_HIGH_PRESSURE 0.85
-#define PERIODIC_FEEDBACK_EARLY_RECOVERY_NUM 2
-#define PERIODIC_FEEDBACK_EARLY_RECOVERY_DEN 3
 #define PHASE1_POLICY_PRESSURE_DECAY_STEP 0.06
 #define PHASE1_POLICY_PRESSURE_DECAY_MAX 0.24
 #define PHASE1_POLICY_PRESSURE_RECOVERY_STEP 0.01
@@ -134,13 +125,6 @@ static int phase1_trace_reason_from_lu_failure(int lu_reason, int forced_refacto
 static double clamp_unit_interval(double x) {
     if (!(x > 0.0)) return 0.0;
     if (x > 1.0) return 1.0;
-    return x;
-}
-
-static double clamp_feedback_bias(double x) {
-    if (!isfinite(x)) return 0.0;
-    if (x > PERIODIC_FEEDBACK_BIAS_LIMIT) return PERIODIC_FEEDBACK_BIAS_LIMIT;
-    if (x < -PERIODIC_FEEDBACK_BIAS_LIMIT) return -PERIODIC_FEEDBACK_BIAS_LIMIT;
     return x;
 }
 
@@ -503,15 +487,32 @@ static void periodic_feedback_set_hint(SimplexSolver *owner,
                                        int phase,
                                        int interval,
                                        double run_pressure) {
+    LPPeriodicFeedbackState state = {0.0, 0, 0, 0, 0.0};
     if (!owner) return;
-    if (interval < 0) interval = 0;
-    run_pressure = clamp_unit_interval(run_pressure);
     if (phase == 1) {
-        owner->policy.periodic_feedback_hint_interval_phase1 = interval;
-        owner->policy.periodic_feedback_hint_pressure_phase1 = run_pressure;
+        state.bias = owner->policy.periodic_feedback_bias_phase1;
+        state.last_reason = owner->policy.periodic_feedback_last_reason_phase1;
+        state.last_interval = owner->policy.periodic_feedback_last_interval_phase1;
+        state.hint_interval = owner->policy.periodic_feedback_hint_interval_phase1;
+        state.hint_pressure = owner->policy.periodic_feedback_hint_pressure_phase1;
+        lp_refactor_policy_periodic_feedback_set_hint(&state, interval, run_pressure);
+        owner->policy.periodic_feedback_bias_phase1 = state.bias;
+        owner->policy.periodic_feedback_last_reason_phase1 = state.last_reason;
+        owner->policy.periodic_feedback_last_interval_phase1 = state.last_interval;
+        owner->policy.periodic_feedback_hint_interval_phase1 = state.hint_interval;
+        owner->policy.periodic_feedback_hint_pressure_phase1 = state.hint_pressure;
     } else if (phase == 2) {
-        owner->policy.periodic_feedback_hint_interval_phase2 = interval;
-        owner->policy.periodic_feedback_hint_pressure_phase2 = run_pressure;
+        state.bias = owner->policy.periodic_feedback_bias_phase2;
+        state.last_reason = owner->policy.periodic_feedback_last_reason_phase2;
+        state.last_interval = owner->policy.periodic_feedback_last_interval_phase2;
+        state.hint_interval = owner->policy.periodic_feedback_hint_interval_phase2;
+        state.hint_pressure = owner->policy.periodic_feedback_hint_pressure_phase2;
+        lp_refactor_policy_periodic_feedback_set_hint(&state, interval, run_pressure);
+        owner->policy.periodic_feedback_bias_phase2 = state.bias;
+        owner->policy.periodic_feedback_last_reason_phase2 = state.last_reason;
+        owner->policy.periodic_feedback_last_interval_phase2 = state.last_interval;
+        owner->policy.periodic_feedback_hint_interval_phase2 = state.hint_interval;
+        owner->policy.periodic_feedback_hint_pressure_phase2 = state.hint_pressure;
     }
 }
 
@@ -520,89 +521,43 @@ static void periodic_feedback_record_refactor(SimplexSolver *owner,
                                               int reason,
                                               int updates_before,
                                               int status) {
-    double *bias_ptr = NULL;
-    int *last_reason_ptr = NULL;
-    int *last_interval_ptr = NULL;
-    int *hint_interval_ptr = NULL;
-    double *hint_pressure_ptr = NULL;
-    double bias;
-    int hint_interval;
-    double hint_pressure;
+    LPPeriodicFeedbackState state = {0.0, 0, 0, 0, 0.0};
 
     if (!owner || (phase != 1 && phase != 2)) return;
 
     if (phase == 1) {
-        bias_ptr = &owner->policy.periodic_feedback_bias_phase1;
-        last_reason_ptr = &owner->policy.periodic_feedback_last_reason_phase1;
-        last_interval_ptr = &owner->policy.periodic_feedback_last_interval_phase1;
-        hint_interval_ptr = &owner->policy.periodic_feedback_hint_interval_phase1;
-        hint_pressure_ptr = &owner->policy.periodic_feedback_hint_pressure_phase1;
+        state.bias = owner->policy.periodic_feedback_bias_phase1;
+        state.last_reason = owner->policy.periodic_feedback_last_reason_phase1;
+        state.last_interval = owner->policy.periodic_feedback_last_interval_phase1;
+        state.hint_interval = owner->policy.periodic_feedback_hint_interval_phase1;
+        state.hint_pressure = owner->policy.periodic_feedback_hint_pressure_phase1;
     } else {
-        bias_ptr = &owner->policy.periodic_feedback_bias_phase2;
-        last_reason_ptr = &owner->policy.periodic_feedback_last_reason_phase2;
-        last_interval_ptr = &owner->policy.periodic_feedback_last_interval_phase2;
-        hint_interval_ptr = &owner->policy.periodic_feedback_hint_interval_phase2;
-        hint_pressure_ptr = &owner->policy.periodic_feedback_hint_pressure_phase2;
+        state.bias = owner->policy.periodic_feedback_bias_phase2;
+        state.last_reason = owner->policy.periodic_feedback_last_reason_phase2;
+        state.last_interval = owner->policy.periodic_feedback_last_interval_phase2;
+        state.hint_interval = owner->policy.periodic_feedback_hint_interval_phase2;
+        state.hint_pressure = owner->policy.periodic_feedback_hint_pressure_phase2;
     }
 
-    bias = (*bias_ptr) * PERIODIC_FEEDBACK_DECAY;
-    hint_interval = *hint_interval_ptr;
-    hint_pressure = *hint_pressure_ptr;
+    lp_refactor_policy_periodic_feedback_record_refactor(
+        &state,
+        reason,
+        updates_before,
+        status);
 
-    if (status != 0) {
-        if (reason == RALPH_REFACTOR_REASON_PERIODIC) {
-            bias += PERIODIC_FEEDBACK_TIGHTEN_STEP;
-        }
-        *bias_ptr = clamp_feedback_bias(bias);
-        *last_reason_ptr = reason;
-        if (reason == RALPH_REFACTOR_REASON_PERIODIC && hint_interval > 0) {
-            *last_interval_ptr = hint_interval;
-        }
-        *hint_interval_ptr = 0;
-        *hint_pressure_ptr = 0.0;
-        return;
+    if (phase == 1) {
+        owner->policy.periodic_feedback_bias_phase1 = state.bias;
+        owner->policy.periodic_feedback_last_reason_phase1 = state.last_reason;
+        owner->policy.periodic_feedback_last_interval_phase1 = state.last_interval;
+        owner->policy.periodic_feedback_hint_interval_phase1 = state.hint_interval;
+        owner->policy.periodic_feedback_hint_pressure_phase1 = state.hint_pressure;
+    } else {
+        owner->policy.periodic_feedback_bias_phase2 = state.bias;
+        owner->policy.periodic_feedback_last_reason_phase2 = state.last_reason;
+        owner->policy.periodic_feedback_last_interval_phase2 = state.last_interval;
+        owner->policy.periodic_feedback_hint_interval_phase2 = state.hint_interval;
+        owner->policy.periodic_feedback_hint_pressure_phase2 = state.hint_pressure;
     }
-
-    if (reason == RALPH_REFACTOR_REASON_PERIODIC) {
-        double update_ratio = 1.0;
-        if (hint_interval > 0 && updates_before > 0) {
-            update_ratio = (double)updates_before / (double)hint_interval;
-        }
-
-        if (hint_pressure < PERIODIC_FEEDBACK_LOW_PRESSURE && update_ratio <= 1.05) {
-            bias -= PERIODIC_FEEDBACK_RELAX_STEP;
-        } else if (hint_pressure >= PERIODIC_FEEDBACK_HIGH_PRESSURE) {
-            bias += PERIODIC_FEEDBACK_TIGHTEN_STEP;
-        }
-
-        if (hint_interval > 0) {
-            *last_interval_ptr = hint_interval;
-        } else if (updates_before > 0) {
-            *last_interval_ptr = updates_before;
-        }
-    } else if (*last_reason_ptr == RALPH_REFACTOR_REASON_PERIODIC &&
-               *last_interval_ptr > 0 &&
-               updates_before > 0) {
-        int early_threshold =
-            (*last_interval_ptr * PERIODIC_FEEDBACK_EARLY_RECOVERY_NUM) /
-            PERIODIC_FEEDBACK_EARLY_RECOVERY_DEN;
-        if (early_threshold < PERIODIC_REFACTOR_MIN_UPDATE_AGE) {
-            early_threshold = PERIODIC_REFACTOR_MIN_UPDATE_AGE;
-        }
-
-        if ((reason == RALPH_REFACTOR_REASON_UPDATE_RECOVERY ||
-             reason == RALPH_REFACTOR_REASON_RATIO_RECOVERY ||
-             reason == RALPH_REFACTOR_REASON_PIVOT_RECOVERY ||
-             reason == RALPH_REFACTOR_REASON_DIRECTION_STABILIZE) &&
-            updates_before <= early_threshold) {
-            bias += PERIODIC_FEEDBACK_TIGHTEN_STEP;
-        }
-    }
-
-    *bias_ptr = clamp_feedback_bias(bias);
-    *last_reason_ptr = reason;
-    *hint_interval_ptr = 0;
-    *hint_pressure_ptr = 0.0;
 }
 
 static LPPeriodicRefactorPolicy compute_periodic_refactor_policy(const SimplexTableau *tab,
