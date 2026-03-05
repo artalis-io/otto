@@ -66,6 +66,14 @@
 #define PHASE1_DIR_SKIP_LADDER_RESCUE_START 16
 #define PHASE1_DIR_SKIP_LADDER_RESCUE_PERIOD 8
 #define PHASE1_DEGEN_THRESHOLD_LARGE_M 700
+#define PHASE1_DEGEN_THRESHOLD_DEFAULT 50
+#define PHASE1_DEGEN_THRESHOLD_LARGE 20
+#define PHASE1_STALL_THRESHOLD_DEFAULT 50
+#define PHASE1_STALL_THRESHOLD_LARGE 30
+#define PHASE1_RECOMPUTE_INTERVAL 25
+#define PHASE1_STALL_OBJ_REL_TOL 1e-4
+#define PHASE1_RATIO_BREAKDOWN_REPEAT_TIGHTEN_THRESHOLD 3
+#define PHASE1_RATIO_BREAKDOWN_REPEAT_TIGHTEN_DIVISOR 3
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_TRIGGER 64
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_MIN_TRIGGER 24
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_BUDGET 12
@@ -1116,6 +1124,44 @@ int lp_refactor_policy_phase1_stagnation_escape_decision(
     if (!objective_flat) return 0;
     if (!recompute_pressure) return 0;
     return retry_pressure || update_pressure;
+}
+
+int lp_refactor_policy_phase1_degen_threshold(int m) {
+    return (m >= PHASE1_DEGEN_THRESHOLD_LARGE_M)
+        ? PHASE1_DEGEN_THRESHOLD_LARGE
+        : PHASE1_DEGEN_THRESHOLD_DEFAULT;
+}
+
+int lp_refactor_policy_phase1_stall_threshold(int m) {
+    return (m >= PHASE1_DEGEN_THRESHOLD_LARGE_M)
+        ? PHASE1_STALL_THRESHOLD_LARGE
+        : PHASE1_STALL_THRESHOLD_DEFAULT;
+}
+
+int lp_refactor_policy_phase1_recompute_interval(void) {
+    return PHASE1_RECOMPUTE_INTERVAL;
+}
+
+double lp_refactor_policy_phase1_stall_obj_tol(double last_obj) {
+    if (!isfinite(last_obj)) last_obj = 0.0;
+    return PHASE1_STALL_OBJ_REL_TOL * (1.0 + fabs(last_obj));
+}
+
+int lp_refactor_policy_phase1_ratio_breakdown_limit(int m,
+                                                    int same_entering_streak) {
+    int ratio_breakdown_limit = RALPH_PHASE1_RATIO_BREAKDOWN_LIMIT;
+
+    if (same_entering_streak < 0) same_entering_streak = 0;
+    if (m >= PHASE1_DEGEN_THRESHOLD_LARGE_M &&
+        same_entering_streak >= PHASE1_RATIO_BREAKDOWN_REPEAT_TIGHTEN_THRESHOLD) {
+        int tightened_limit =
+            RALPH_PHASE1_RATIO_BREAKDOWN_LIMIT / PHASE1_RATIO_BREAKDOWN_REPEAT_TIGHTEN_DIVISOR;
+        if (tightened_limit < 4) tightened_limit = 4;
+        if (ratio_breakdown_limit > tightened_limit) {
+            ratio_breakdown_limit = tightened_limit;
+        }
+    }
+    return ratio_breakdown_limit;
 }
 
 LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(

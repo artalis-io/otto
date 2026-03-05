@@ -234,6 +234,17 @@ int lp_refactor_policy_phase1_stagnation_escape_decision(
     int recompute_perturb,
     int cooldown_remaining);
 
+int lp_refactor_policy_phase1_degen_threshold(int m);
+
+int lp_refactor_policy_phase1_stall_threshold(int m);
+
+int lp_refactor_policy_phase1_recompute_interval(void);
+
+double lp_refactor_policy_phase1_stall_obj_tol(double last_obj);
+
+int lp_refactor_policy_phase1_ratio_breakdown_limit(int m,
+                                                    int same_entering_streak);
+
 LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(
     int m,
     int use_ft_updates,
