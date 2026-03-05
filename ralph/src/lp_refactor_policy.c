@@ -91,6 +91,27 @@
 #define PHASE1_SOFT_LU_POLICY_COOLDOWN_DEGEN_TRIGGER 20
 #define PHASE1_SOFT_LU_POLICY_COOLDOWN_MIN_UPDATES 12
 #define PHASE1_SOFT_LU_POLICY_COOLDOWN_MAX_UPDATES 48
+#define PHASE1_REINVERT_PRESSURE_WINDOW_ITERS 96
+#define PHASE1_REINVERT_PRESSURE_DEMOTE_COUNT 4
+#define PHASE1_REINVERT_DEMOTE_COOLDOWN_ITERS 32
+#define PHASE1_REINVERT_PRESSURE_NO_PIVOT_THRESHOLD 8
+#define PHASE1_REINVERT_PRESSURE_NO_PROGRESS_THRESHOLD 24
+#define PHASE1_REINVERT_PRESSURE_RATIO_BREAKDOWN_THRESHOLD 4
+#define PHASE1_REINVERT_PRESSURE_DIR_SKIP_THRESHOLD 24
+#define PHASE1_STAGNATION_WINDOW_ITERS 96
+#define PHASE1_STAGNATION_OBJ_REL_TOL 1e-5
+#define PHASE1_STAGNATION_OBJ_ABS_TOL 1e-8
+#define PHASE1_STAGNATION_MIN_NO_PIVOT_EVENTS 10
+#define PHASE1_STAGNATION_MIN_RETRY_DEFERS 12
+#define PHASE1_STAGNATION_RETRY_RATIO_NUM 3
+#define PHASE1_STAGNATION_RETRY_RATIO_DEN 5
+#define PHASE1_STAGNATION_MIN_REFACTORS 6
+#define PHASE1_STAGNATION_MIN_UPDATE_RECOVERY 3
+#define PHASE1_STAGNATION_UPDATE_RATIO_NUM 1
+#define PHASE1_STAGNATION_UPDATE_RATIO_DEN 3
+#define PHASE1_STAGNATION_MIN_RECOMPUTES 12
+#define PHASE1_STAGNATION_RECOMPUTE_HOT_NUM 3
+#define PHASE1_STAGNATION_RECOMPUTE_HOT_DEN 4
 #define LU_HEALTH_HARD_COND_MIN_UPDATES 10
 #define LU_HEALTH_HARD_COND_RATIO 1e10
 #define LU_HEALTH_SOFT_COND_MED 1e6
@@ -927,6 +948,174 @@ int lp_refactor_policy_phase1_soft_lu_policy_cooldown_updates(
         cooldown = PHASE1_SOFT_LU_POLICY_COOLDOWN_MAX_UPDATES;
     }
     return cooldown;
+}
+
+static int phase1_reinvert_pressure_event(int no_pivot_streak,
+                                          int no_progress_streak,
+                                          int ratio_breakdown_count,
+                                          int dir_skip_no_recompute_streak) {
+    if (no_pivot_streak >= PHASE1_REINVERT_PRESSURE_NO_PIVOT_THRESHOLD &&
+        no_progress_streak >= (PHASE1_REINVERT_PRESSURE_NO_PROGRESS_THRESHOLD / 2)) {
+        return 1;
+    }
+    if (no_progress_streak >= PHASE1_REINVERT_PRESSURE_NO_PROGRESS_THRESHOLD) return 1;
+    if (dir_skip_no_recompute_streak >= PHASE1_REINVERT_PRESSURE_DIR_SKIP_THRESHOLD) return 1;
+    if (ratio_breakdown_count >= PHASE1_REINVERT_PRESSURE_RATIO_BREAKDOWN_THRESHOLD) return 1;
+    return 0;
+}
+
+void lp_refactor_policy_phase1_reinvert_pressure_safety_step(
+    int iter,
+    int no_pivot_streak,
+    int no_progress_streak,
+    int ratio_breakdown_count,
+    int dir_skip_no_recompute_streak,
+    int hard_lu_trigger,
+    int *last_iter_io,
+    int *burst_io,
+    int *demoted_io,
+    int *demotions_io) {
+    int last_iter;
+    int burst;
+    int demoted;
+    int demotions;
+    int pressure_event = 0;
+
+    if (!last_iter_io || !burst_io || !demoted_io || !demotions_io) return;
+
+    if (iter < 0) iter = 0;
+    if (no_pivot_streak < 0) no_pivot_streak = 0;
+    if (no_progress_streak < 0) no_progress_streak = 0;
+    if (ratio_breakdown_count < 0) ratio_breakdown_count = 0;
+    if (dir_skip_no_recompute_streak < 0) dir_skip_no_recompute_streak = 0;
+
+    last_iter = *last_iter_io;
+    burst = *burst_io;
+    demoted = *demoted_io ? 1 : 0;
+    demotions = *demotions_io;
+    if (burst < 0) burst = 0;
+    if (last_iter < -1) last_iter = -1;
+    if (demotions < 0) demotions = 0;
+
+    if (demoted) {
+        if (last_iter < 0) {
+            last_iter = iter;
+        } else if ((iter - last_iter) >= PHASE1_REINVERT_DEMOTE_COOLDOWN_ITERS) {
+            demoted = 0;
+            burst = 0;
+            last_iter = -1;
+        }
+        *last_iter_io = last_iter;
+        *burst_io = burst;
+        *demoted_io = demoted;
+        *demotions_io = demotions;
+        return;
+    }
+
+    if (hard_lu_trigger) {
+        if (last_iter >= 0 && (iter - last_iter) > PHASE1_REINVERT_PRESSURE_WINDOW_ITERS) {
+            burst = 0;
+        }
+        *last_iter_io = last_iter;
+        *burst_io = burst;
+        *demoted_io = demoted;
+        *demotions_io = demotions;
+        return;
+    }
+
+    pressure_event = phase1_reinvert_pressure_event(no_pivot_streak,
+                                                    no_progress_streak,
+                                                    ratio_breakdown_count,
+                                                    dir_skip_no_recompute_streak);
+    if (pressure_event) {
+        if (last_iter >= 0 && (iter - last_iter) <= PHASE1_REINVERT_PRESSURE_WINDOW_ITERS) {
+            burst++;
+        } else {
+            burst = 1;
+        }
+        last_iter = iter;
+    } else if (last_iter >= 0 && (iter - last_iter) > PHASE1_REINVERT_PRESSURE_WINDOW_ITERS) {
+        burst = 0;
+    }
+
+    if (burst >= PHASE1_REINVERT_PRESSURE_DEMOTE_COUNT) {
+        demoted = 1;
+        demotions++;
+        burst = 0;
+        last_iter = iter;
+    }
+
+    *last_iter_io = last_iter;
+    *burst_io = burst;
+    *demoted_io = demoted;
+    *demotions_io = demotions;
+}
+
+int lp_refactor_policy_phase1_stagnation_escape_decision(
+    int window_iters,
+    double obj_delta,
+    double obj_anchor,
+    int retry_defers,
+    int no_pivot_events,
+    int update_recovery_refactors,
+    int refactors,
+    int recompute_ratio_breakdown,
+    int recompute_dir_skip,
+    int recompute_dir_refactor,
+    int recompute_pivot_fail,
+    int recompute_perturb,
+    int cooldown_remaining) {
+    int retry_pressure;
+    int update_pressure;
+    int recompute_total;
+    int recompute_hot;
+    int recompute_pressure;
+    double obj_tol;
+    int objective_flat;
+
+    if (window_iters < PHASE1_STAGNATION_WINDOW_ITERS) return 0;
+    if (cooldown_remaining > 0) return 0;
+    if (retry_defers < 0) retry_defers = 0;
+    if (no_pivot_events < 0) no_pivot_events = 0;
+    if (update_recovery_refactors < 0) update_recovery_refactors = 0;
+    if (refactors < 0) refactors = 0;
+    if (recompute_ratio_breakdown < 0) recompute_ratio_breakdown = 0;
+    if (recompute_dir_skip < 0) recompute_dir_skip = 0;
+    if (recompute_dir_refactor < 0) recompute_dir_refactor = 0;
+    if (recompute_pivot_fail < 0) recompute_pivot_fail = 0;
+    if (recompute_perturb < 0) recompute_perturb = 0;
+
+    obj_tol = PHASE1_STAGNATION_OBJ_ABS_TOL +
+              PHASE1_STAGNATION_OBJ_REL_TOL * (1.0 + fabs(obj_anchor));
+    objective_flat = fabs(obj_delta) <= obj_tol;
+
+    retry_pressure =
+        no_pivot_events >= PHASE1_STAGNATION_MIN_NO_PIVOT_EVENTS &&
+        retry_defers >= PHASE1_STAGNATION_MIN_RETRY_DEFERS &&
+        retry_defers * PHASE1_STAGNATION_RETRY_RATIO_DEN >=
+            no_pivot_events * PHASE1_STAGNATION_RETRY_RATIO_NUM;
+    update_pressure =
+        refactors >= PHASE1_STAGNATION_MIN_REFACTORS &&
+        update_recovery_refactors >= PHASE1_STAGNATION_MIN_UPDATE_RECOVERY &&
+        update_recovery_refactors * PHASE1_STAGNATION_UPDATE_RATIO_DEN >=
+            refactors * PHASE1_STAGNATION_UPDATE_RATIO_NUM;
+
+    recompute_total = recompute_ratio_breakdown +
+                      recompute_dir_skip +
+                      recompute_dir_refactor +
+                      recompute_pivot_fail +
+                      recompute_perturb;
+    recompute_hot = recompute_ratio_breakdown +
+                    recompute_dir_skip +
+                    recompute_pivot_fail;
+    recompute_pressure =
+        recompute_total >= PHASE1_STAGNATION_MIN_RECOMPUTES &&
+        recompute_hot * PHASE1_STAGNATION_RECOMPUTE_HOT_DEN >=
+            recompute_total * PHASE1_STAGNATION_RECOMPUTE_HOT_NUM;
+
+    if (!objective_flat) return 0;
+    if (!recompute_pressure) return 0;
+    return retry_pressure || update_pressure;
 }
 
 LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(

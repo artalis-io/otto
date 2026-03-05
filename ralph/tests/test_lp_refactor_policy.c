@@ -333,6 +333,46 @@ int main(void) {
     TEST(lp_refactor_policy_phase1_soft_lu_policy_cooldown_updates(1200, 50, 300) == 48,
          "phase1 soft-lu cooldown: clamped to max");
 
+    {
+        int last_iter = -1;
+        int burst = 0;
+        int demoted = 0;
+        int demotions = 0;
+        for (int k = 0; k < 4; k++) {
+            lp_refactor_policy_phase1_reinvert_pressure_safety_step(
+                k * 10, 10, 20, 0, 0, 0, &last_iter, &burst, &demoted, &demotions);
+        }
+        TEST(demoted == 1 && demotions == 1,
+             "reinvert pressure: repeated events demote control");
+        lp_refactor_policy_phase1_reinvert_pressure_safety_step(
+            50, 10, 20, 0, 0, 0, &last_iter, &burst, &demoted, &demotions);
+        TEST(demoted == 1, "reinvert pressure: demotion holds during cooldown");
+        lp_refactor_policy_phase1_reinvert_pressure_safety_step(
+            90, 10, 20, 0, 0, 0, &last_iter, &burst, &demoted, &demotions);
+        TEST(demoted == 0, "reinvert pressure: demotion clears after cooldown");
+    }
+
+    {
+        int last_iter = 0;
+        int burst = 3;
+        int demoted = 0;
+        int demotions = 0;
+        lp_refactor_policy_phase1_reinvert_pressure_safety_step(
+            10, 10, 20, 5, 30, 1, &last_iter, &burst, &demoted, &demotions);
+        TEST(demoted == 0 && burst == 3,
+             "reinvert pressure: hard LU trigger blocks burst escalation");
+    }
+
+    TEST(lp_refactor_policy_phase1_stagnation_escape_decision(
+             96, 0.0, 10.0, 18, 20, 4, 8, 10, 8, 1, 2, 0, 0) == 1,
+         "stagnation decision: triggers on flat objective + retry/recompute pressure");
+    TEST(lp_refactor_policy_phase1_stagnation_escape_decision(
+             96, 1e-2, 10.0, 18, 20, 4, 8, 10, 8, 1, 2, 0, 0) == 0,
+         "stagnation decision: blocked when objective is still moving");
+    TEST(lp_refactor_policy_phase1_stagnation_escape_decision(
+             96, 0.0, 10.0, 18, 20, 4, 8, 10, 8, 1, 2, 0, 5) == 0,
+         "stagnation decision: blocked by cooldown");
+
     decision = lp_refactor_policy_lu_health_refactor_decision(1500, 1, 120, 120,
                                                               0, 100, 1e3, 1.0, 0);
     TEST(decision.hard_trigger == 1, "lu health: hard trigger when max updates reached");
