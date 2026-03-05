@@ -63,10 +63,7 @@ static void configure_dual_tableau_for_solver(SimplexSolver *solver, SimplexTabl
         enable_supernode = 1;
     }
 
-    /* BFCP backend ids are propagated through solver policy.
-     * Current LU update kernel remains unified, so backend ids are kept
-     * as control-plane selectors without local pseudo-mapping here. */
-    (void)solver->lu_backend_policy;
+    lu_apply_backend_policy(tab->lu, solver->lu_backend_policy);
     tab->lu->sn_enabled = enable_supernode ? 1 : 0;
 
     if (solver->lu_update_limit_override > 0) {
@@ -77,8 +74,6 @@ static void configure_dual_tableau_for_solver(SimplexSolver *solver, SimplexTabl
     }
     if (solver->lu_growth_guard_override > 0.0) {
         tab->lu->growth_refactor_threshold = solver->lu_growth_guard_override;
-    } else if (tab->lu->growth_refactor_threshold <= 0.0) {
-        tab->lu->growth_refactor_threshold = RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
     }
 }
 

@@ -713,6 +713,12 @@ typedef struct {
     int numeric_backend_markowitz;
     int numeric_backend_supernode;
     int numeric_backend_dense_ge;
+    int backend_policy_luf_ft;
+    int backend_policy_cbg;
+    int backend_policy_cgr;
+    int backend_policy_last;
+    int update_path_ft;
+    int update_path_eta;
     int identity_sep_retry_lane_dense_chosen;
     int identity_sep_retry_lane_supernode_chosen;
     int identity_sep_retry_lane_dense_successes;

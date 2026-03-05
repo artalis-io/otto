@@ -264,6 +264,12 @@ typedef struct {
     int numeric_backend_markowitz;
     int numeric_backend_supernode;
     int numeric_backend_dense_ge;
+    int backend_policy_luf_ft;
+    int backend_policy_cbg;
+    int backend_policy_cgr;
+    int backend_policy_last;
+    int update_path_ft;
+    int update_path_eta;
     int identity_sep_retry_lane_dense_chosen;
     int identity_sep_retry_lane_supernode_chosen;
     int identity_sep_retry_lane_dense_successes;
@@ -345,6 +351,7 @@ typedef struct {
 
     /* Forrest-Tomlin update data */
     int use_ft_updates;     /* 1 to use FT updates, 0 for eta-file */
+    int backend_policy;     /* LP_LU_BACKEND_POLICY_* effective backend policy */
     int *ft_col_order;      /* Permutation of columns due to FT updates */
     int *ft_col_order_inv;  /* Inverse of ft_col_order */
     int ft_num_updates;     /* Number of FT updates applied */
@@ -1359,6 +1366,12 @@ typedef struct {
     int numeric_backend_markowitz;
     int numeric_backend_supernode;
     int numeric_backend_dense_ge;
+    int backend_policy_luf_ft;
+    int backend_policy_cbg;
+    int backend_policy_cgr;
+    int backend_policy_last;
+    int update_path_ft;
+    int update_path_eta;
     int identity_sep_retry_lane_dense_chosen;
     int identity_sep_retry_lane_supernode_chosen;
     int identity_sep_retry_lane_dense_successes;
@@ -1467,6 +1480,7 @@ const char* lp_model_get_name(const LPModel *model);
 LUFactorization* lu_create(int m);
 void lu_free(LUFactorization *lu);
 int lu_factorize(LUFactorization *lu, const SparseMatrix *B);
+void lu_apply_backend_policy(LUFactorization *lu, int backend_policy);
 int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B);  /* Sparse with Markowitz */
 int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B);   /* Dense fallback */
 void lu_solve(const LUFactorization *lu, double *rhs, double *solution);

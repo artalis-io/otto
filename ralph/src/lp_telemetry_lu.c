@@ -69,6 +69,12 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.numeric_backend_markowitz = 0;
     lu->telemetry.numeric_backend_supernode = 0;
     lu->telemetry.numeric_backend_dense_ge = 0;
+    lu->telemetry.backend_policy_luf_ft = 0;
+    lu->telemetry.backend_policy_cbg = 0;
+    lu->telemetry.backend_policy_cgr = 0;
+    lu->telemetry.backend_policy_last = LP_LU_BACKEND_POLICY_LUF_FT;
+    lu->telemetry.update_path_ft = 0;
+    lu->telemetry.update_path_eta = 0;
     lu->telemetry.identity_sep_retry_lane_dense_chosen = 0;
     lu->telemetry.identity_sep_retry_lane_supernode_chosen = 0;
     lu->telemetry.identity_sep_retry_lane_dense_successes = 0;
@@ -205,6 +211,12 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(numeric_backend_markowitz);
     COPY_LU_TELEM_FIELD(numeric_backend_supernode);
     COPY_LU_TELEM_FIELD(numeric_backend_dense_ge);
+    COPY_LU_TELEM_FIELD(backend_policy_luf_ft);
+    COPY_LU_TELEM_FIELD(backend_policy_cbg);
+    COPY_LU_TELEM_FIELD(backend_policy_cgr);
+    COPY_LU_TELEM_FIELD(backend_policy_last);
+    COPY_LU_TELEM_FIELD(update_path_ft);
+    COPY_LU_TELEM_FIELD(update_path_eta);
     COPY_LU_TELEM_FIELD(identity_sep_retry_lane_dense_chosen);
     COPY_LU_TELEM_FIELD(identity_sep_retry_lane_supernode_chosen);
     COPY_LU_TELEM_FIELD(identity_sep_retry_lane_dense_successes);
