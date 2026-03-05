@@ -109,7 +109,7 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_reinvert_shadow_last_reason_dual = LP_REINVERT_REASON_COST_DAMPEN;
     solver.policy.refactor_next_reason = RALPH_REFACTOR_REASON_SETUP;
     solver.telemetry.perf_basis_fastpath_hits = 7;
-    solver.policy.periodic_feedback_bias_phase2 = 0.2;
+    solver.policy.periodic_feedback_phase2.bias = 0.2;
     solver.policy.soft_lu_cost_gate_enabled = 0;
     solver.policy.soft_lu_cost_gate_defers_phase2 = 5;
     solver.policy.soft_lu_consecutive_defers_phase2 = 3;
@@ -262,7 +262,7 @@ static void test_solver_reset_and_refactor_accounting(void) {
     ASSERT_INT_EQ(solver.policy.refactor_next_reason, RALPH_REFACTOR_REASON_OTHER,
                   "reset: next reason");
     ASSERT_INT_EQ(solver.telemetry.perf_basis_fastpath_hits, 0, "reset: basis_fastpath_hits");
-    ASSERT_DBL_EQ(solver.policy.periodic_feedback_bias_phase2, 0.0,
+    ASSERT_DBL_EQ(solver.policy.periodic_feedback_phase2.bias, 0.0,
                   "reset: periodic feedback phase2");
     ASSERT_INT_EQ(solver.policy.soft_lu_cost_gate_enabled, 1,
                   "reset: soft lu cost gate enabled");
@@ -636,7 +636,7 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_reinvert_shadow_actual_refactor_yes_phase1 = 4;
     solver.telemetry.perf_reinvert_shadow_disagree_phase1 = 2;
     solver.telemetry.perf_reinvert_shadow_last_reason_phase1 = LP_REINVERT_REASON_COST_DAMPEN;
-    solver.policy.periodic_feedback_hint_pressure_phase2 = 0.55;
+    solver.policy.periodic_feedback_phase2.hint_pressure = 0.55;
     solver.policy.soft_lu_cost_gate_enabled = 1;
     solver.policy.soft_lu_cost_gate_defers_phase1 = 3;
     solver.policy.soft_lu_consecutive_defers_phase1 = 2;
