@@ -106,7 +106,8 @@ static const double *global_dist_matrix(const SGContext *ctx) {
 /* ────────── Public API ────────── */
 
 void sg_neighbor_init(SGNeighborIndex *idx, const SGContext *ctx, uint32_t k) {
-    uint32_t n, num_profiles, num_entries, p;
+    uint32_t n, num_profiles, p;
+    size_t num_entries;
     const double *gdm;
     HeapEntry *heap;
 
@@ -120,12 +121,15 @@ void sg_neighbor_init(SGNeighborIndex *idx, const SGContext *ctx, uint32_t k) {
     if (k > n - 1) k = n - 1;
 
     num_profiles = ctx->has_travel_profiles ? ctx->num_travel_profiles : 0;
-    num_entries = n * (1 + num_profiles);
+    num_entries = (size_t)n * (1 + num_profiles);
 
-    idx->neighbors = (uint32_t *)malloc((size_t)num_entries * k * sizeof(uint32_t));
+    /* Overflow guard: num_entries * k * sizeof(uint32_t) */
+    if (num_entries > SIZE_MAX / k / sizeof(uint32_t)) return;
+
+    idx->neighbors = (uint32_t *)malloc(num_entries * k * sizeof(uint32_t));
     if (!idx->neighbors) return;
 
-    idx->num_entries   = num_entries;
+    idx->num_entries   = (uint32_t)num_entries;
     idx->num_locations = n;
     idx->k             = k;
     idx->num_profiles  = num_profiles;
