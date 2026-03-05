@@ -207,6 +207,33 @@ int lp_refactor_policy_phase1_soft_lu_policy_cooldown_updates(
     int degenerate_count,
     int periodic_interval);
 
+void lp_refactor_policy_phase1_reinvert_pressure_safety_step(
+    int iter,
+    int no_pivot_streak,
+    int no_progress_streak,
+    int ratio_breakdown_count,
+    int dir_skip_no_recompute_streak,
+    int hard_lu_trigger,
+    int *last_iter,
+    int *burst,
+    int *demoted,
+    int *demotions);
+
+int lp_refactor_policy_phase1_stagnation_escape_decision(
+    int window_iters,
+    double obj_delta,
+    double obj_anchor,
+    int retry_defers,
+    int no_pivot_events,
+    int update_recovery_refactors,
+    int refactors,
+    int recompute_ratio_breakdown,
+    int recompute_dir_skip,
+    int recompute_dir_refactor,
+    int recompute_pivot_fail,
+    int recompute_perturb,
+    int cooldown_remaining);
+
 LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(
     int m,
     int use_ft_updates,

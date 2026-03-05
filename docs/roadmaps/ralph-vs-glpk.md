@@ -298,3 +298,8 @@ Cleanup note:
   force-relax / soft-LU-cooldown thresholds and delegated them to
   `lp_refactor_policy` (activation/escape/relax/cooldown helpers), leaving
   simplex as orchestration + telemetry only.
+- Removed simplex-local phase1 reinvert-pressure and stagnation-decision
+  heuristics and delegated them to `lp_refactor_policy`
+  (`lp_refactor_policy_phase1_reinvert_pressure_safety_step`,
+  `lp_refactor_policy_phase1_stagnation_escape_decision`), with dedicated
+  policy tests and unchanged gate behavior.
