@@ -444,6 +444,52 @@ double lp_refactor_policy_periodic_pressure_decay_penalty(int phase,
     return next;
 }
 
+int lp_refactor_policy_periodic_cooldown_tick(int cooldown_updates) {
+    if (cooldown_updates <= 0) return 0;
+    return cooldown_updates - 1;
+}
+
+int lp_refactor_policy_periodic_cooldown_extend(int cooldown_updates,
+                                                int candidate_updates) {
+    if (cooldown_updates < 0) cooldown_updates = 0;
+    if (candidate_updates < 0) candidate_updates = 0;
+    return (candidate_updates > cooldown_updates)
+        ? candidate_updates
+        : cooldown_updates;
+}
+
+void lp_refactor_policy_periodic_post_refactor_update(int phase,
+                                                      int cooldown_eligible,
+                                                      int periodic_interval,
+                                                      int refactor_status,
+                                                      int *cooldown_updates_io,
+                                                      double *pressure_decay_io) {
+    int cooldown;
+    if (!cooldown_updates_io || !pressure_decay_io) return;
+
+    if (refactor_status != 0) {
+        *cooldown_updates_io = 0;
+        *pressure_decay_io = 0.0;
+        return;
+    }
+
+    if (!cooldown_eligible) return;
+
+    if (phase == 1) {
+        cooldown = lp_refactor_policy_phase1_cooldown_window_updates(periodic_interval);
+    } else if (phase == 2) {
+        cooldown = lp_refactor_policy_phase2_cooldown_window_updates(periodic_interval);
+    } else {
+        return;
+    }
+
+    *cooldown_updates_io =
+        lp_refactor_policy_periodic_cooldown_extend(*cooldown_updates_io, cooldown);
+    *pressure_decay_io =
+        lp_refactor_policy_periodic_pressure_decay_penalty(
+            phase, *pressure_decay_io);
+}
+
 void lp_refactor_policy_periodic_feedback_set_hint(LPPeriodicFeedbackState *state,
                                                    int interval,
                                                    double run_pressure) {

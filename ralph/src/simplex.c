@@ -6219,9 +6219,8 @@ static int simplex_phase1(SimplexSolver *solver) {
         if (phase1_dir_escape_cooldown > 0) {
             phase1_dir_escape_cooldown--;
         }
-        if (periodic_policy_cooldown > 0) {
-            periodic_policy_cooldown--;
-        }
+        periodic_policy_cooldown =
+            lp_refactor_policy_periodic_cooldown_tick(periodic_policy_cooldown);
 #if PHASE1_STAGNATION_ESCAPE_RUNTIME
         if (tab->m >= PHASE1_STAGNATION_MIN_M &&
             solver->policy.phase1_stagnation_escape_cooldown > 0) {
@@ -7715,8 +7714,12 @@ static int simplex_phase1(SimplexSolver *solver) {
                 tab->m,
                 degenerate_count,
                 periodic_policy.interval);
-            if (soft_policy_cooldown > periodic_policy_cooldown) {
-                periodic_policy_cooldown = soft_policy_cooldown;
+            int next_policy_cooldown =
+                lp_refactor_policy_periodic_cooldown_extend(
+                    periodic_policy_cooldown,
+                    soft_policy_cooldown);
+            if (next_policy_cooldown > periodic_policy_cooldown) {
+                periodic_policy_cooldown = next_policy_cooldown;
                 lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(solver);
             }
         }
@@ -7877,18 +7880,13 @@ static int simplex_phase1(SimplexSolver *solver) {
                 lu_soft_health_streak = 0;
             }
             if (!lu_refactor_needed && periodic_refactor) {
-                if (rc_refactor == 0 && cooldown_eligible) {
-                    int cooldown = lp_refactor_policy_phase1_cooldown_window_updates(periodic_policy.interval);
-                    if (cooldown > periodic_policy_cooldown) {
-                        periodic_policy_cooldown = cooldown;
-                    }
-                    periodic_policy_pressure_decay =
-                        lp_refactor_policy_periodic_pressure_decay_penalty(
-                            1, periodic_policy_pressure_decay);
-                } else if (rc_refactor != 0) {
-                    periodic_policy_cooldown = 0;
-                    periodic_policy_pressure_decay = 0.0;
-                }
+                lp_refactor_policy_periodic_post_refactor_update(
+                    1,
+                    cooldown_eligible,
+                    periodic_policy.interval,
+                    rc_refactor,
+                    &periodic_policy_cooldown,
+                    &periodic_policy_pressure_decay);
             }
             if (rc_refactor != 0) {
                 if (periodic_refactor) {
@@ -8395,9 +8393,8 @@ static int simplex_phase2(SimplexSolver *solver) {
             return -1;
         }
 
-        if (periodic_policy_cooldown > 0) {
-            periodic_policy_cooldown--;
-        }
+        periodic_policy_cooldown =
+            lp_refactor_policy_periodic_cooldown_tick(periodic_policy_cooldown);
         periodic_policy_pressure_decay =
             lp_refactor_policy_periodic_pressure_decay_recover(
                 2, periodic_policy_pressure_decay);
@@ -8921,18 +8918,13 @@ static int simplex_phase2(SimplexSolver *solver) {
                 lu_soft_health_streak = 0;
             }
             if (!lu_refactor_needed && periodic_refactor) {
-                if (rc_refactor == 0 && cooldown_eligible) {
-                    int cooldown = lp_refactor_policy_phase2_cooldown_window_updates(periodic_policy.interval);
-                    if (cooldown > periodic_policy_cooldown) {
-                        periodic_policy_cooldown = cooldown;
-                    }
-                    periodic_policy_pressure_decay =
-                        lp_refactor_policy_periodic_pressure_decay_penalty(
-                            2, periodic_policy_pressure_decay);
-                } else if (rc_refactor != 0) {
-                    periodic_policy_cooldown = 0;
-                    periodic_policy_pressure_decay = 0.0;
-                }
+                lp_refactor_policy_periodic_post_refactor_update(
+                    2,
+                    cooldown_eligible,
+                    periodic_policy.interval,
+                    rc_refactor,
+                    &periodic_policy_cooldown,
+                    &periodic_policy_pressure_decay);
             }
             if (rc_refactor != 0) {
                 if (solver->verbose) {
