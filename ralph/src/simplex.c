@@ -642,10 +642,10 @@ static void reinvert_phase1_pressure_safety_update(SimplexSolver *solver,
         ratio_breakdown_count,
         dir_skip_no_recompute_streak,
         hard_lu_trigger,
-        &solver->policy.reinvert_phase1_pressure_last_iter,
-        &solver->policy.reinvert_phase1_pressure_burst,
-        &solver->policy.reinvert_phase1_control_demoted,
-        &solver->policy.reinvert_phase1_control_demotions);
+        &solver->policy.reinvert_phase1.pressure_last_iter,
+        &solver->policy.reinvert_phase1.pressure_burst,
+        &solver->policy.reinvert_phase1.control_demoted,
+        &solver->policy.reinvert_phase1.control_demotions);
 }
 
 int simplex_phase1_stagnation_escape_decision_for_test(
@@ -683,25 +683,25 @@ static void phase1_stagnation_window_begin(SimplexSolver *solver,
                                            int iter) {
     if (!solver || !tab) return;
     if (iter < 0) iter = 0;
-    solver->policy.phase1_stagnation_window_start_iter = iter;
-    solver->policy.phase1_stagnation_window_start_obj = tab->obj_value;
-    solver->policy.phase1_stagnation_window_retry_base =
+    solver->policy.phase1_stagnation.window_start_iter = iter;
+    solver->policy.phase1_stagnation.window_start_obj = tab->obj_value;
+    solver->policy.phase1_stagnation.window_retry_base =
         solver->telemetry.perf_phase1_no_pivot_ladder_retry_defers;
-    solver->policy.phase1_stagnation_window_no_pivot_base =
+    solver->policy.phase1_stagnation.window_no_pivot_base =
         solver->telemetry.perf_phase1_no_pivot_events;
-    solver->policy.phase1_stagnation_window_refactor_base =
+    solver->policy.phase1_stagnation.window_refactor_base =
         solver->telemetry.perf_phase1_refactor_calls;
-    solver->policy.phase1_stagnation_window_update_recovery_base =
+    solver->policy.phase1_stagnation.window_update_recovery_base =
         solver->telemetry.perf_refactor_reason_update_recovery;
-    solver->policy.phase1_stagnation_window_recompute_ratio_base =
+    solver->policy.phase1_stagnation.window_recompute_ratio_base =
         solver->telemetry.perf_phase1_recompute_after_ratio_breakdown;
-    solver->policy.phase1_stagnation_window_recompute_dir_skip_base =
+    solver->policy.phase1_stagnation.window_recompute_dir_skip_base =
         solver->telemetry.perf_phase1_recompute_after_dir_skip;
-    solver->policy.phase1_stagnation_window_recompute_dir_refactor_base =
+    solver->policy.phase1_stagnation.window_recompute_dir_refactor_base =
         solver->telemetry.perf_phase1_recompute_after_dir_refactor;
-    solver->policy.phase1_stagnation_window_recompute_pivot_fail_base =
+    solver->policy.phase1_stagnation.window_recompute_pivot_fail_base =
         solver->telemetry.perf_phase1_recompute_after_pivot_fail_recovery;
-    solver->policy.phase1_stagnation_window_recompute_perturb_base =
+    solver->policy.phase1_stagnation.window_recompute_perturb_base =
         solver->telemetry.perf_phase1_recompute_after_perturb;
 }
 
@@ -727,12 +727,12 @@ static __attribute__((noinline, unused)) int phase1_stagnation_escape_should_tri
     if (!solver || !tab) return 0;
     if (iter < 0) iter = 0;
     if (tab->m < PHASE1_STAGNATION_MIN_M) return 0;
-    if (solver->policy.phase1_stagnation_escape_triggers >=
+    if (solver->policy.phase1_stagnation.escape_triggers >=
         PHASE1_STAGNATION_MAX_ESCAPES_PER_SOLVE) {
         return 0;
     }
 
-    start_iter = solver->policy.phase1_stagnation_window_start_iter;
+    start_iter = solver->policy.phase1_stagnation.window_start_iter;
     if (start_iter < 0) {
         phase1_stagnation_window_begin(solver, tab, iter);
         return 0;
@@ -741,29 +741,29 @@ static __attribute__((noinline, unused)) int phase1_stagnation_escape_should_tri
     window_iters = iter - start_iter;
     if (window_iters < PHASE1_STAGNATION_WINDOW_ITERS) return 0;
 
-    obj_anchor = solver->policy.phase1_stagnation_window_start_obj;
+    obj_anchor = solver->policy.phase1_stagnation.window_start_obj;
     obj_delta = tab->obj_value - obj_anchor;
     retry_defers = solver->telemetry.perf_phase1_no_pivot_ladder_retry_defers -
-                   solver->policy.phase1_stagnation_window_retry_base;
+                   solver->policy.phase1_stagnation.window_retry_base;
     no_pivot_events = solver->telemetry.perf_phase1_no_pivot_events -
-                      solver->policy.phase1_stagnation_window_no_pivot_base;
+                      solver->policy.phase1_stagnation.window_no_pivot_base;
     refactors = solver->telemetry.perf_phase1_refactor_calls -
-                solver->policy.phase1_stagnation_window_refactor_base;
+                solver->policy.phase1_stagnation.window_refactor_base;
     update_recovery_refactors = solver->telemetry.perf_refactor_reason_update_recovery -
-                                solver->policy.phase1_stagnation_window_update_recovery_base;
+                                solver->policy.phase1_stagnation.window_update_recovery_base;
     recompute_ratio_breakdown =
         solver->telemetry.perf_phase1_recompute_after_ratio_breakdown -
-        solver->policy.phase1_stagnation_window_recompute_ratio_base;
+        solver->policy.phase1_stagnation.window_recompute_ratio_base;
     recompute_dir_skip = solver->telemetry.perf_phase1_recompute_after_dir_skip -
-                         solver->policy.phase1_stagnation_window_recompute_dir_skip_base;
+                         solver->policy.phase1_stagnation.window_recompute_dir_skip_base;
     recompute_dir_refactor =
         solver->telemetry.perf_phase1_recompute_after_dir_refactor -
-        solver->policy.phase1_stagnation_window_recompute_dir_refactor_base;
+        solver->policy.phase1_stagnation.window_recompute_dir_refactor_base;
     recompute_pivot_fail =
         solver->telemetry.perf_phase1_recompute_after_pivot_fail_recovery -
-        solver->policy.phase1_stagnation_window_recompute_pivot_fail_base;
+        solver->policy.phase1_stagnation.window_recompute_pivot_fail_base;
     recompute_perturb = solver->telemetry.perf_phase1_recompute_after_perturb -
-                        solver->policy.phase1_stagnation_window_recompute_perturb_base;
+                        solver->policy.phase1_stagnation.window_recompute_perturb_base;
 
     if (retry_defers < 0) retry_defers = 0;
     if (no_pivot_events < 0) no_pivot_events = 0;
@@ -775,23 +775,23 @@ static __attribute__((noinline, unused)) int phase1_stagnation_escape_should_tri
     if (recompute_pivot_fail < 0) recompute_pivot_fail = 0;
     if (recompute_perturb < 0) recompute_perturb = 0;
 
-    solver->policy.phase1_stagnation_last_window_iters = window_iters;
-    solver->policy.phase1_stagnation_last_obj_delta = obj_delta;
-    solver->policy.phase1_stagnation_last_retry_defers = retry_defers;
-    solver->policy.phase1_stagnation_last_no_pivot_events = no_pivot_events;
-    solver->policy.phase1_stagnation_last_update_recovery_refactors =
+    solver->policy.phase1_stagnation.last_window_iters = window_iters;
+    solver->policy.phase1_stagnation.last_obj_delta = obj_delta;
+    solver->policy.phase1_stagnation.last_retry_defers = retry_defers;
+    solver->policy.phase1_stagnation.last_no_pivot_events = no_pivot_events;
+    solver->policy.phase1_stagnation.last_update_recovery_refactors =
         update_recovery_refactors;
-    solver->policy.phase1_stagnation_last_refactors = refactors;
-    solver->policy.phase1_stagnation_last_recompute_ratio = recompute_ratio_breakdown;
-    solver->policy.phase1_stagnation_last_recompute_dir_skip = recompute_dir_skip;
-    solver->policy.phase1_stagnation_last_recompute_dir_refactor = recompute_dir_refactor;
-    solver->policy.phase1_stagnation_last_recompute_pivot_fail = recompute_pivot_fail;
-    solver->policy.phase1_stagnation_last_recompute_perturb = recompute_perturb;
-    solver->policy.phase1_stagnation_last_retry_defer_ratio =
+    solver->policy.phase1_stagnation.last_refactors = refactors;
+    solver->policy.phase1_stagnation.last_recompute_ratio = recompute_ratio_breakdown;
+    solver->policy.phase1_stagnation.last_recompute_dir_skip = recompute_dir_skip;
+    solver->policy.phase1_stagnation.last_recompute_dir_refactor = recompute_dir_refactor;
+    solver->policy.phase1_stagnation.last_recompute_pivot_fail = recompute_pivot_fail;
+    solver->policy.phase1_stagnation.last_recompute_perturb = recompute_perturb;
+    solver->policy.phase1_stagnation.last_retry_defer_ratio =
         (no_pivot_events > 0)
             ? ((double)retry_defers / (double)no_pivot_events)
             : 0.0;
-    solver->policy.phase1_stagnation_last_update_recovery_ratio =
+    solver->policy.phase1_stagnation.last_update_recovery_ratio =
         (refactors > 0)
             ? ((double)update_recovery_refactors / (double)refactors)
             : 0.0;
@@ -810,12 +810,12 @@ static __attribute__((noinline, unused)) int phase1_stagnation_escape_should_tri
         recompute_pivot_fail,
         recompute_perturb,
         0);
-    if (should_trigger && solver->policy.phase1_stagnation_escape_cooldown > 0) {
-        solver->policy.phase1_stagnation_escape_cooldown_blocks++;
+    if (should_trigger && solver->policy.phase1_stagnation.escape_cooldown > 0) {
+        solver->policy.phase1_stagnation.escape_cooldown_blocks++;
         should_trigger = 0;
     }
     if (should_trigger) {
-        solver->policy.phase1_stagnation_escape_triggers++;
+        solver->policy.phase1_stagnation.escape_triggers++;
     }
     phase1_stagnation_window_begin(solver, tab, iter);
     return should_trigger;
@@ -836,7 +836,7 @@ static int reinvert_controller_controls_periodic_phase(const SimplexSolver *solv
     int mode = reinvert_controller_mode_get(solver);
     int phase1_demoted = 0;
     if (solver) {
-        phase1_demoted = solver->policy.reinvert_phase1_control_demoted ? 1 : 0;
+        phase1_demoted = solver->policy.reinvert_phase1.control_demoted ? 1 : 0;
     }
     return reinvert_controller_controls_periodic_phase_effective(mode, phase, phase1_demoted);
 }
@@ -6171,8 +6171,8 @@ static int simplex_phase1(SimplexSolver *solver) {
             lp_refactor_policy_periodic_cooldown_tick(periodic_policy_cooldown);
 #if PHASE1_STAGNATION_ESCAPE_RUNTIME
         if (tab->m >= PHASE1_STAGNATION_MIN_M &&
-            solver->policy.phase1_stagnation_escape_cooldown > 0) {
-            solver->policy.phase1_stagnation_escape_cooldown--;
+            solver->policy.phase1_stagnation.escape_cooldown > 0) {
+            solver->policy.phase1_stagnation.escape_cooldown--;
         }
 #endif
         periodic_policy_pressure_decay =
@@ -6231,21 +6231,21 @@ static int simplex_phase1(SimplexSolver *solver) {
             phase1_stagnation_escape_should_trigger(solver, tab, iter)) {
             if (solver->verbose >= 2) {
                 LP_LOG_STDERR("[simplex_phase1] Stagnation escape trigger: obj_delta=%g retry_ratio=%.3f update_ratio=%.3f recompute=[ratio=%d dir_skip=%d dir_ref=%d piv=%d pert=%d] window=%d\n",
-                        solver->policy.phase1_stagnation_last_obj_delta,
-                        solver->policy.phase1_stagnation_last_retry_defer_ratio,
-                        solver->policy.phase1_stagnation_last_update_recovery_ratio,
-                        solver->policy.phase1_stagnation_last_recompute_ratio,
-                        solver->policy.phase1_stagnation_last_recompute_dir_skip,
-                        solver->policy.phase1_stagnation_last_recompute_dir_refactor,
-                        solver->policy.phase1_stagnation_last_recompute_pivot_fail,
-                        solver->policy.phase1_stagnation_last_recompute_perturb,
-                        solver->policy.phase1_stagnation_last_window_iters);
+                        solver->policy.phase1_stagnation.last_obj_delta,
+                        solver->policy.phase1_stagnation.last_retry_defer_ratio,
+                        solver->policy.phase1_stagnation.last_update_recovery_ratio,
+                        solver->policy.phase1_stagnation.last_recompute_ratio,
+                        solver->policy.phase1_stagnation.last_recompute_dir_skip,
+                        solver->policy.phase1_stagnation.last_recompute_dir_refactor,
+                        solver->policy.phase1_stagnation.last_recompute_pivot_fail,
+                        solver->policy.phase1_stagnation.last_recompute_perturb,
+                        solver->policy.phase1_stagnation.last_window_iters);
             }
             if (tableau_refactorize_with_reason(
                     tab,
                     RALPH_REFACTOR_REASON_DIRECTION_STABILIZE) == 0) {
-                solver->policy.phase1_stagnation_escape_successes++;
-                solver->policy.phase1_stagnation_escape_cooldown =
+                solver->policy.phase1_stagnation.escape_successes++;
+                solver->policy.phase1_stagnation.escape_cooldown =
                     PHASE1_STAGNATION_ESCAPE_COOLDOWN_ITERS;
                 use_bland = 1;
                 phase1_no_pivot_streak = 0;
@@ -6270,10 +6270,10 @@ static int simplex_phase1(SimplexSolver *solver) {
                 phase1_stagnation_window_begin(solver, tab, iter);
                 continue;
             }
-            solver->policy.phase1_stagnation_escape_failures++;
-            if (solver->policy.phase1_stagnation_escape_cooldown <
+            solver->policy.phase1_stagnation.escape_failures++;
+            if (solver->policy.phase1_stagnation.escape_cooldown <
                 PHASE1_STAGNATION_ESCAPE_FAIL_COOLDOWN_ITERS) {
-                solver->policy.phase1_stagnation_escape_cooldown =
+                solver->policy.phase1_stagnation.escape_cooldown =
                     PHASE1_STAGNATION_ESCAPE_FAIL_COOLDOWN_ITERS;
             }
             phase1_stagnation_window_begin(solver, tab, iter);

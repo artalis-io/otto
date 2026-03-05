@@ -309,21 +309,21 @@ static int dual_governor_refactor_decision(
         reinvert_mode = LP_REINVERT_MODE_SHADOW;
     }
     if (reinvert_mode == LP_REINVERT_MODE_CONTROL_ALL) {
-        int demoted_before = solver->policy.reinvert_dual_control_demoted;
+        int demoted_before = solver->policy.reinvert_dual.control_demoted;
         dual_reinvert_hard_trigger_safety_step_core(
             iter,
             solver->telemetry.perf_dual_lu_hard_trigger,
-            &solver->policy.reinvert_dual_hard_trigger_last_total,
-            &solver->policy.reinvert_dual_hard_trigger_last_iter,
-            &solver->policy.reinvert_dual_hard_trigger_burst,
-            &solver->policy.reinvert_dual_control_demoted);
-        if (!demoted_before && solver->policy.reinvert_dual_control_demoted) {
-            solver->policy.reinvert_dual_control_demotions++;
+            &solver->policy.reinvert_dual.hard_trigger_last_total,
+            &solver->policy.reinvert_dual.hard_trigger_last_iter,
+            &solver->policy.reinvert_dual.hard_trigger_burst,
+            &solver->policy.reinvert_dual.control_demoted);
+        if (!demoted_before && solver->policy.reinvert_dual.control_demoted) {
+            solver->policy.reinvert_dual.control_demotions++;
         }
     }
     reinvert_mode_effective =
         dual_reinvert_effective_mode_for_test(reinvert_mode,
-                                              solver->policy.reinvert_dual_control_demoted);
+                                              solver->policy.reinvert_dual.control_demoted);
     if (reinvert_mode_effective != LP_REINVERT_MODE_OFF) {
         reinvert_active = 1;
         reinvert_state = &solver->policy.reinvert_state_dual;
@@ -331,8 +331,8 @@ static int dual_governor_refactor_decision(
                       solver->telemetry.perf_pivot_ms +
                       solver->telemetry.perf_compute_solution_ms +
                       solver->telemetry.perf_compute_rc_ms;
-        dual_iter_hot_ms = dual_hot_ms - solver->policy.reinvert_dual_last_hot_ms;
-        solver->policy.reinvert_dual_last_hot_ms = dual_hot_ms;
+        dual_iter_hot_ms = dual_hot_ms - solver->policy.reinvert_dual.last_hot_ms;
+        solver->policy.reinvert_dual.last_hot_ms = dual_hot_ms;
         lp_reinvert_controller_state_record_iter_cost(reinvert_state, dual_iter_hot_ms);
         lp_reinvert_controller_state_record_update_age_ratio(reinvert_state,
                                                              tab->lu->num_updates,
