@@ -804,6 +804,14 @@ typedef struct {
     int perf_reinvert_shadow_last_reason_dual;
 } LPSolverTelemetryState;
 
+typedef struct {
+    double bias;
+    int last_reason;
+    int last_interval;
+    int hint_interval;
+    double hint_pressure;
+} LPPeriodicFeedbackPhaseState;
+
 /* Solver policy state (behavioral scheduling/control, not telemetry). */
 typedef struct {
     int refactor_next_reason;  /* RalphRefactorReason hint consumed by tableau_refactorize */
@@ -819,17 +827,9 @@ typedef struct {
     int dual_refactor_base_interval;
     int dual_rc_recompute_interval;
 
-    /* Adaptive periodic scheduler feedback (per-phase bias in [-0.25, +0.25]). */
-    double periodic_feedback_bias_phase1;
-    double periodic_feedback_bias_phase2;
-    int periodic_feedback_last_reason_phase1;
-    int periodic_feedback_last_reason_phase2;
-    int periodic_feedback_last_interval_phase1;
-    int periodic_feedback_last_interval_phase2;
-    int periodic_feedback_hint_interval_phase1;
-    int periodic_feedback_hint_interval_phase2;
-    double periodic_feedback_hint_pressure_phase1;
-    double periodic_feedback_hint_pressure_phase2;
+    /* Adaptive periodic scheduler feedback, composed by simplex phase. */
+    LPPeriodicFeedbackPhaseState periodic_feedback_phase1;
+    LPPeriodicFeedbackPhaseState periodic_feedback_phase2;
 
     /* Phase E: soft LU-health refactor cost gating (behavioral, not telemetry). */
     int soft_lu_cost_gate_enabled;        /* 1=enabled (default), 0=disabled */
