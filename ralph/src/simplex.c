@@ -471,37 +471,59 @@ static double periodic_feedback_bias_for_phase(const SimplexSolver *owner, int p
     return 0.0;
 }
 
+static int periodic_feedback_state_load(const SimplexSolver *owner,
+                                        int phase,
+                                        LPPeriodicFeedbackState *state) {
+    if (!owner || !state) return 0;
+    *state = (LPPeriodicFeedbackState){0.0, 0, 0, 0, 0.0};
+    if (phase == 1) {
+        state->bias = owner->policy.periodic_feedback_bias_phase1;
+        state->last_reason = owner->policy.periodic_feedback_last_reason_phase1;
+        state->last_interval = owner->policy.periodic_feedback_last_interval_phase1;
+        state->hint_interval = owner->policy.periodic_feedback_hint_interval_phase1;
+        state->hint_pressure = owner->policy.periodic_feedback_hint_pressure_phase1;
+        return 1;
+    }
+    if (phase == 2) {
+        state->bias = owner->policy.periodic_feedback_bias_phase2;
+        state->last_reason = owner->policy.periodic_feedback_last_reason_phase2;
+        state->last_interval = owner->policy.periodic_feedback_last_interval_phase2;
+        state->hint_interval = owner->policy.periodic_feedback_hint_interval_phase2;
+        state->hint_pressure = owner->policy.periodic_feedback_hint_pressure_phase2;
+        return 1;
+    }
+    return 0;
+}
+
+static void periodic_feedback_state_store(SimplexSolver *owner,
+                                          int phase,
+                                          const LPPeriodicFeedbackState *state) {
+    if (!owner || !state) return;
+    if (phase == 1) {
+        owner->policy.periodic_feedback_bias_phase1 = state->bias;
+        owner->policy.periodic_feedback_last_reason_phase1 = state->last_reason;
+        owner->policy.periodic_feedback_last_interval_phase1 = state->last_interval;
+        owner->policy.periodic_feedback_hint_interval_phase1 = state->hint_interval;
+        owner->policy.periodic_feedback_hint_pressure_phase1 = state->hint_pressure;
+        return;
+    }
+    if (phase == 2) {
+        owner->policy.periodic_feedback_bias_phase2 = state->bias;
+        owner->policy.periodic_feedback_last_reason_phase2 = state->last_reason;
+        owner->policy.periodic_feedback_last_interval_phase2 = state->last_interval;
+        owner->policy.periodic_feedback_hint_interval_phase2 = state->hint_interval;
+        owner->policy.periodic_feedback_hint_pressure_phase2 = state->hint_pressure;
+    }
+}
+
 static void periodic_feedback_set_hint(SimplexSolver *owner,
                                        int phase,
                                        int interval,
                                        double run_pressure) {
     LPPeriodicFeedbackState state = {0.0, 0, 0, 0, 0.0};
-    if (!owner) return;
-    if (phase == 1) {
-        state.bias = owner->policy.periodic_feedback_bias_phase1;
-        state.last_reason = owner->policy.periodic_feedback_last_reason_phase1;
-        state.last_interval = owner->policy.periodic_feedback_last_interval_phase1;
-        state.hint_interval = owner->policy.periodic_feedback_hint_interval_phase1;
-        state.hint_pressure = owner->policy.periodic_feedback_hint_pressure_phase1;
-        lp_refactor_policy_periodic_feedback_set_hint(&state, interval, run_pressure);
-        owner->policy.periodic_feedback_bias_phase1 = state.bias;
-        owner->policy.periodic_feedback_last_reason_phase1 = state.last_reason;
-        owner->policy.periodic_feedback_last_interval_phase1 = state.last_interval;
-        owner->policy.periodic_feedback_hint_interval_phase1 = state.hint_interval;
-        owner->policy.periodic_feedback_hint_pressure_phase1 = state.hint_pressure;
-    } else if (phase == 2) {
-        state.bias = owner->policy.periodic_feedback_bias_phase2;
-        state.last_reason = owner->policy.periodic_feedback_last_reason_phase2;
-        state.last_interval = owner->policy.periodic_feedback_last_interval_phase2;
-        state.hint_interval = owner->policy.periodic_feedback_hint_interval_phase2;
-        state.hint_pressure = owner->policy.periodic_feedback_hint_pressure_phase2;
-        lp_refactor_policy_periodic_feedback_set_hint(&state, interval, run_pressure);
-        owner->policy.periodic_feedback_bias_phase2 = state.bias;
-        owner->policy.periodic_feedback_last_reason_phase2 = state.last_reason;
-        owner->policy.periodic_feedback_last_interval_phase2 = state.last_interval;
-        owner->policy.periodic_feedback_hint_interval_phase2 = state.hint_interval;
-        owner->policy.periodic_feedback_hint_pressure_phase2 = state.hint_pressure;
-    }
+    if (!periodic_feedback_state_load(owner, phase, &state)) return;
+    lp_refactor_policy_periodic_feedback_set_hint(&state, interval, run_pressure);
+    periodic_feedback_state_store(owner, phase, &state);
 }
 
 static void periodic_feedback_record_refactor(SimplexSolver *owner,
@@ -510,42 +532,13 @@ static void periodic_feedback_record_refactor(SimplexSolver *owner,
                                               int updates_before,
                                               int status) {
     LPPeriodicFeedbackState state = {0.0, 0, 0, 0, 0.0};
-
-    if (!owner || (phase != 1 && phase != 2)) return;
-
-    if (phase == 1) {
-        state.bias = owner->policy.periodic_feedback_bias_phase1;
-        state.last_reason = owner->policy.periodic_feedback_last_reason_phase1;
-        state.last_interval = owner->policy.periodic_feedback_last_interval_phase1;
-        state.hint_interval = owner->policy.periodic_feedback_hint_interval_phase1;
-        state.hint_pressure = owner->policy.periodic_feedback_hint_pressure_phase1;
-    } else {
-        state.bias = owner->policy.periodic_feedback_bias_phase2;
-        state.last_reason = owner->policy.periodic_feedback_last_reason_phase2;
-        state.last_interval = owner->policy.periodic_feedback_last_interval_phase2;
-        state.hint_interval = owner->policy.periodic_feedback_hint_interval_phase2;
-        state.hint_pressure = owner->policy.periodic_feedback_hint_pressure_phase2;
-    }
-
+    if (!periodic_feedback_state_load(owner, phase, &state)) return;
     lp_refactor_policy_periodic_feedback_record_refactor(
         &state,
         reason,
         updates_before,
         status);
-
-    if (phase == 1) {
-        owner->policy.periodic_feedback_bias_phase1 = state.bias;
-        owner->policy.periodic_feedback_last_reason_phase1 = state.last_reason;
-        owner->policy.periodic_feedback_last_interval_phase1 = state.last_interval;
-        owner->policy.periodic_feedback_hint_interval_phase1 = state.hint_interval;
-        owner->policy.periodic_feedback_hint_pressure_phase1 = state.hint_pressure;
-    } else {
-        owner->policy.periodic_feedback_bias_phase2 = state.bias;
-        owner->policy.periodic_feedback_last_reason_phase2 = state.last_reason;
-        owner->policy.periodic_feedback_last_interval_phase2 = state.last_interval;
-        owner->policy.periodic_feedback_hint_interval_phase2 = state.hint_interval;
-        owner->policy.periodic_feedback_hint_pressure_phase2 = state.hint_pressure;
-    }
+    periodic_feedback_state_store(owner, phase, &state);
 }
 
 static LPReinvertControllerState *reinvert_state_for_phase(SimplexSolver *solver,

@@ -335,3 +335,6 @@ Cleanup note:
   phase-1/phase-2 paths and `simplex_periodic_refactor_plan_for_test` through
   it, so cooldown eligibility, effective pressure, and run/suppress decisions
   are computed by one shared policy function.
+- Replaced duplicated phase1/phase2 periodic-feedback state field mapping in
+  `simplex.c` with tiny accessor/update helpers, so event handlers only pass
+  `(phase, event)` and policy state transitions stay centralized.
