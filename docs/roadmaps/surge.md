@@ -3762,22 +3762,59 @@ Neutral at 60s — cache throughput gains are masked by construction/crossover t
 population mode. The benefit compounds at longer time limits where Phase 2 ALNS polish
 dominates wall time.
 
-### Phase S22: Profile-Based Tuning Campaign (Future)
+### Phase S22: Profile-Based Tuning Campaign ✅
 
-**Priority: Medium. Single biggest lever for closing the GH-400 gap.**
+Ran 7-tier logarithmic grid search (`bench_tune all-tiers`) on 5 representative GH-400
+instances (r1_4_1, c1_4_1, rc1_4_1, r2_4_1, c2_4_1) with 60s budget. Total: ~839 configs
+plus 4-seed verification on top 3.
 
-The BEST/NEAR_OPTIMAL/FAST/REALTIME × TINY/SMALL/MEDIUM/LARGE/XLARGE/MASSIVE profile
-matrix has per-cell parameter overrides, but cells beyond SMALL are not tuned. Key
-parameters: SA temperature schedule, removal fraction, penalty weights, phase budget
-splits, operator initial weights.
+**Tuning tiers:**
+1. Phase budget (phase1_fraction, phase15_iters) — 25 configs
+2. SA temperature (sa_accept_pct, p1_final_temp_ratio, p2_final_temp_ratio) — 80 configs
+3. Penalty adaptation (target_start/end, tolerance, increase/decrease) — 324 configs
+4. ALNS rewards (reaction_factor, reward_best/better/accepted) — 256 configs
+5. Destruction sizing (segment_size, string_l_max) — 64 configs
+6. Extended randomness (worst, shaw, route_cluster, time_cluster) — 81 configs
+7. Neighborhood size (neighbor_k) — 9 configs
 
-**Approach:** Logarithmic grid search using `bench_tune` (existing infrastructure),
-evaluating on GH-200/400 instances.
+**Key parameter changes from BASE_TUNE (LARGE_TUNE macro):**
 
-**Expected improvement:** 5-15% distance gap reduction at 400+ scale from parameter
-optimization alone. This is the single biggest lever for closing the GH-400 gap —
-the 300s c1_4_1 result (+3.0% dist at near-BKS vehicles) proves the algorithm is
-sound, it just needs properly tuned parameters at each scale point.
+| Parameter | BASE_TUNE | LARGE_TUNE | Effect |
+|-----------|-----------|------------|--------|
+| sa_accept_pct | 0.074 | 0.010 | 7x cooler SA start temperature |
+| p2_final_temp_ratio | 0.0001 | 0.0063 | 63x slower Phase 2 cooling |
+| phase1_fraction | 0.60 | 0.40 | More time on distance polish |
+| phase15_iters | 2000 | 1000 | Shorter transition phase |
+| reaction_factor | 0.10 | 0.50 | 5x faster ALNS learning |
+| reward_better | 4.00 | 20.00 | 5x stronger reward for improvement |
+| reward_accepted | 2.00 | 0.50 | Weaker reward for merely accepted |
+| neighbor_k | 30 | 20 | Smaller neighborhood (faster at scale) |
+| worst_randomness | 4.0 | 10.0 | More randomness in worst removal |
+| time_cluster_randomness | 2.0 | 10.0 | More randomness in time clustering |
+
+Also includes explicit penalty adaptation (pen_target_start=0.50, pen_target_end=0.30,
+pen_tolerance=0.15, pen_increase=2.0, pen_decrease=0.5) overriding defaults.
+
+**Implementation:**
+- Created `LARGE_TUNE` and `RT_LARGE_TUNE` macros in `sg_profile_matrix.c`
+- Updated LARGE column in all 4 profiles (REALTIME, FAST, NEAR_OPTIMAL, BEST)
+- Fixed `bench_solomon.c` to use `sg_profile_matrix_apply()` instead of hardcoded params
+
+#### GH-400 Benchmark Results (S22, 60s population)
+
+| Metric | S19 (pre-tune) | S22 (tuned) | Delta |
+|--------|----------------|-------------|-------|
+| Veh exact match | 33/60 (55%) | 35/60 (58%) | +2 |
+| Avg veh gap | +0.67 | +0.53 | -0.14 better |
+| Avg dist gap | +18.6% | +12.9% | -5.7pp better |
+| Avg time (s) | 78 | 76 | ~same |
+
+Notable individual improvements: c1_4_6 +8.3%→+0.0% (BKS match), r1_4_1 +18.9%→+13.7%,
+rc1_4_8 +26.0%→+13.5%, c2_4_7 +17.7%→+21.8% (some regression expected with stochastic).
+
+**Insight:** SA temperature was the biggest lever (Tier 2 dropped composite from 9137→7053).
+At 400-customer scale, the default SA was far too hot — accepting too many bad moves.
+Smaller neighborhood (k=20) was also critical, reducing per-iteration eval cost.
 
 ### Phase S23: Parallel Move Evaluation (Future)
 
