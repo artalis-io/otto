@@ -331,10 +331,10 @@ static void test_runtime_mapping_glpk_profile(void) {
     ASSERT_INT_EQ(aorn, LP_GLPK_SMCP_AORN_USE_AT,
                   "runtime glpk profile: aorn mapped");
     ASSERT_INT_EQ(crash, 0, "runtime glpk profile: std basis mapped to crash off");
-    ASSERT_INT_EQ(backend, LP_GLPK_BFCP_BACKEND_LUF_FT,
-                  "runtime glpk profile: backend clamped to LUF_FT");
-    ASSERT_INT_EQ(backend_supported, 0,
-                  "runtime glpk profile: reports unsupported backend request");
+    ASSERT_INT_EQ(backend, LP_GLPK_BFCP_BACKEND_CGR,
+                  "runtime glpk profile: backend preserved");
+    ASSERT_INT_EQ(backend_supported, 1,
+                  "runtime glpk profile: cgr backend reported supported");
     ASSERT_INT_EQ(update_limit, 77, "runtime glpk profile: update limit mapped");
     ASSERT_DBL_NEAR(pivot_tol, 1e-8, 1e-14,
                     "runtime glpk profile: pivot tol mapped");

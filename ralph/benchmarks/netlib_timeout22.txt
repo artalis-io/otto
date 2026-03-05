@@ -1,0 +1,23 @@
+# NETLIB timeout22 outlier allowlist.
+bnl1
+bnl2
+cycle
+d2q06c
+d6cube
+degen3
+fffff800
+fit2p
+greenbea
+greenbeb
+maros-r7
+maros
+perold
+pilot.ja
+pilot
+pilot.we
+pilot4
+pilot87
+pilotnov
+stocfor2
+wood1p
+woodw

@@ -2,7 +2,8 @@
 #include "lp_bfcp_policy.h"
 
 static int bfcp_backend_supported(int backend) {
-    return backend == LP_GLPK_BFCP_BACKEND_LUF_FT;
+    return backend >= LP_GLPK_BFCP_BACKEND_LUF_FT &&
+           backend <= LP_GLPK_BFCP_BACKEND_CGR;
 }
 
 void lp_bfcp_policy_request_init(LPBFCPPolicyRequest *req) {
@@ -60,7 +61,9 @@ int lp_bfcp_policy_compute(const LPBFCPPolicyRequest *req,
 
     requested_backend = req->requested_backend;
     eff->backend_supported = bfcp_backend_supported(requested_backend);
-    eff->effective_backend = LP_GLPK_BFCP_BACKEND_LUF_FT;
+    eff->effective_backend = eff->backend_supported
+        ? requested_backend
+        : LP_GLPK_BFCP_BACKEND_LUF_FT;
 
     if (req->requested_update_limit > 0) {
         eff->update_limit_override = req->requested_update_limit;

@@ -165,6 +165,26 @@ Current focused result (2026-03-01, method=primal):
 Interpretation:
 - this confirms the dominant remaining issue in pilot-family is iteration/control robustness and/or per-iteration kernel efficiency under hard degenerate paths, not dense fallback routing.
 
+### P4.1 Timeout22 Gate + BFCP Backend De-clamp (2026-03-05)
+
+Deliverables:
+- Added timeout22-focused NETLIB diagnostics gate:
+  - allowlist: `ralph/benchmarks/netlib_timeout22.txt`
+  - baseline: `ralph/benchmarks/netlib_timeout22_baseline.json`
+  - target: `make -C ralph test-netlib-gate-timeout22`
+- Removed BFCP backend clamping in runtime policy plumbing:
+  - `lp_policy_glpk_compat_apply_runtime` now preserves requested
+    `glpk_bfcp_backend` id.
+  - `lp_bfcp_policy_compute` now accepts `luf_ft/cbg/cgr` as supported backend
+    ids and preserves requested id in `effective_backend`.
+
+Validation:
+- `make -C ralph test-lp-policy-glpk-compat`: pass
+- `make -C ralph test-lp-bfcp-policy`: pass
+- `make -C ralph test-netlib-gate-timeout22`: pass
+  - artifact: `/tmp/netlib-regression-gate-20260305-144634`
+  - summary: 22/22 timeout files, 0 command failures, 0 status/objective/invalid mismatches, 0 dense fallback files
+
 ## GLPK-Compat Defaults (Planned)
 
 For `lp_policy_profile=glpk_compat`:
@@ -196,7 +216,7 @@ Scope (G1 only):
    - `ralph/include/lp_bfcp_policy.h`
    - `ralph/src/lp_bfcp_policy.c`
 2. Define a pure request -> effective mapping for:
-   - backend support/clamp (`luf_ft` currently supported)
+   - backend support/normalization (`luf_ft/cbg/cgr` accepted backend ids)
    - update-limit override normalization
    - pivot/growth override normalization
 3. Wire this module at solve setup in `ralph/src/ralph.c` before solver/LU override
