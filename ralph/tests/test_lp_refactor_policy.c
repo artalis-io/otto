@@ -155,6 +155,60 @@ int main(void) {
     TEST(fabs(lp_refactor_policy_periodic_pressure_decay_penalty(99, 0.3) - 0.3) < 1e-12,
          "periodic pressure penalty: invalid phase is no-op");
 
+    TEST(lp_refactor_policy_periodic_cooldown_tick(3) == 2,
+         "periodic cooldown tick: decrements positive cooldown");
+    TEST(lp_refactor_policy_periodic_cooldown_tick(0) == 0,
+         "periodic cooldown tick: clamps at zero");
+    TEST(lp_refactor_policy_periodic_cooldown_tick(-7) == 0,
+         "periodic cooldown tick: sanitizes negative input");
+
+    TEST(lp_refactor_policy_periodic_cooldown_extend(5, 8) == 8,
+         "periodic cooldown extend: raises cooldown to candidate");
+    TEST(lp_refactor_policy_periodic_cooldown_extend(10, 3) == 10,
+         "periodic cooldown extend: keeps larger current cooldown");
+    TEST(lp_refactor_policy_periodic_cooldown_extend(-2, -5) == 0,
+         "periodic cooldown extend: sanitizes negative inputs");
+
+    {
+        int cooldown = 12;
+        double decay = 0.20;
+        lp_refactor_policy_periodic_post_refactor_update(
+            1, 1, 24, 0, &cooldown, &decay);
+        TEST(cooldown == 48,
+             "periodic post-refactor: phase1 success extends cooldown window");
+        TEST(fabs(decay - 0.24) < 1e-12,
+             "periodic post-refactor: phase1 success applies pressure penalty");
+    }
+
+    {
+        int cooldown = 12;
+        double decay = 0.20;
+        lp_refactor_policy_periodic_post_refactor_update(
+            2, 1, 24, 0, &cooldown, &decay);
+        TEST(cooldown == 36,
+             "periodic post-refactor: phase2 success extends cooldown window");
+        TEST(fabs(decay - 0.24) < 1e-12,
+             "periodic post-refactor: phase2 success applies pressure penalty");
+    }
+
+    {
+        int cooldown = 12;
+        double decay = 0.20;
+        lp_refactor_policy_periodic_post_refactor_update(
+            1, 0, 24, 0, &cooldown, &decay);
+        TEST(cooldown == 12 && fabs(decay - 0.20) < 1e-12,
+             "periodic post-refactor: cooldown-ineligible success keeps state");
+    }
+
+    {
+        int cooldown = 12;
+        double decay = 0.20;
+        lp_refactor_policy_periodic_post_refactor_update(
+            1, 1, 24, -1, &cooldown, &decay);
+        TEST(cooldown == 0 && fabs(decay) < 1e-12,
+             "periodic post-refactor: failure clears cooldown and pressure decay");
+    }
+
     TEST(lp_refactor_policy_phase1_cooldown_eligible(1503, 120, 0, 10, 100, 1e4, 10.0) == 1,
          "phase1 cooldown eligible under large degenerate stable LU");
     TEST(lp_refactor_policy_phase1_cooldown_eligible(1100, 120, 0, 10, 100, 1e4, 10.0) == 0,

@@ -72,6 +72,18 @@ double lp_refactor_policy_periodic_pressure_decay_recover(int phase,
 double lp_refactor_policy_periodic_pressure_decay_penalty(int phase,
                                                           double pressure_decay);
 
+int lp_refactor_policy_periodic_cooldown_tick(int cooldown_updates);
+
+int lp_refactor_policy_periodic_cooldown_extend(int cooldown_updates,
+                                                int candidate_updates);
+
+void lp_refactor_policy_periodic_post_refactor_update(int phase,
+                                                      int cooldown_eligible,
+                                                      int periodic_interval,
+                                                      int refactor_status,
+                                                      int *cooldown_updates_io,
+                                                      double *pressure_decay_io);
+
 void lp_refactor_policy_periodic_feedback_set_hint(LPPeriodicFeedbackState *state,
                                                    int interval,
                                                    double run_pressure);
