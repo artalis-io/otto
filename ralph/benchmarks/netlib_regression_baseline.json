@@ -49,8 +49,6 @@
   "known_timeouts": [
     "bnl1.mps",
     "bnl2.mps",
-    "bore3d.mps",
-    "capri.mps",
     "cycle.mps",
     "d2q06c.mps",
     "d6cube.mps",
@@ -68,7 +66,6 @@
     "pilot4.mps",
     "pilot87.mps",
     "pilotnov.mps",
-    "stair.mps",
     "stocfor2.mps",
     "wood1p.mps",
     "woodw.mps"
