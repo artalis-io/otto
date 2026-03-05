@@ -1,7 +1,9 @@
 #include "surge.h"
+#include "sg_internal.h"
 #include "sg_parallel.h"
 #include "sh_args.h"
 #include "sg_bench_utils.h"
+#include "../src/sg_profile_matrix.h"
 
 #include <inttypes.h>
 #include <math.h>
@@ -205,17 +207,6 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        /* Apply tuner-optimized SA parameters (from bench_tune Tier 1) */
-        {
-            SGTuneParams tp;
-            sg_tune_params_default(&tp);
-            tp.sa_accept_pct = 0.074;
-            tp.p1_final_temp_ratio = 0.08;
-            tp.p2_final_temp_ratio = 0.0001;
-            tp.phase15_iters = 2000;
-            sg_set_tune_params(ctx, &tp);
-        }
-
         status = sg_load_solomon_vrptw(ctx, cases[i].path);
         if (status != SG_STATUS_OK) {
             printf("%-16s %-9s\n", cases[i].name, sg_bench_status_name(status));
@@ -230,6 +221,16 @@ int main(int argc, char **argv) {
             sg_free(ctx);
             failed_count++;
             continue;
+        }
+
+        /* Apply scale-appropriate tune params from profile matrix.
+           FAST profile gives reasonable defaults; CLI iterations/time override. */
+        {
+            SGScale scale = sg_scale_from_count(sg_get_request_count(ctx));
+            sg_profile_matrix_apply(ctx, SG_PROFILE_FAST, scale);
+            /* Restore CLI-specified iterations and time limit */
+            ctx->config.max_iterations = max_iterations;
+            ctx->config.max_time_seconds = max_time_seconds;
         }
 
         start = sg_bench_now();

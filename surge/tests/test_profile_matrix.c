@@ -122,7 +122,9 @@ static void test_profile_matrix_apply(void) {
     assert(ctx->config.max_iterations == 2500);
     assert(ctx->config.max_time_seconds == 30);
     assert(ctx->tune_params != NULL);
-    assert(ctx->tune_params->sa_accept_pct == 0.074);
+    /* LARGE column uses S22-tuned params (sa_accept_pct=0.010, not BASE_TUNE 0.074) */
+    assert(ctx->tune_params->sa_accept_pct == 0.010);
+    assert(ctx->tune_params->neighbor_k == 20);
 
     sg_free(ctx);
 }
