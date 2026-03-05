@@ -111,20 +111,20 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_basis_fastpath_hits = 7;
     solver.policy.periodic_feedback_phase2.bias = 0.2;
     solver.policy.soft_lu_cost_gate_enabled = 0;
-    solver.policy.soft_lu_cost_gate_defers_phase2 = 5;
-    solver.policy.soft_lu_consecutive_defers_phase2 = 3;
-    solver.policy.soft_lu_defer_cap_forced_phase2 = 4;
-    solver.policy.soft_lu_refactor_cost_ewma_phase2 = 9.5;
+    solver.policy.soft_lu_cost_gate_phase2.defers = 5;
+    solver.policy.soft_lu_cost_gate_phase2.consecutive_defers = 3;
+    solver.policy.soft_lu_cost_gate_phase2.defer_cap_forced = 4;
+    solver.policy.soft_lu_cost_gate_phase2.refactor_cost_ewma = 9.5;
     solver.policy.periodic_cost_gate_enabled = 0;
-    solver.policy.periodic_cost_gate_defers_phase2 = 6;
-    solver.policy.periodic_cost_consecutive_defers_phase2 = 2;
-    solver.policy.periodic_cost_defer_cap_forced_phase2 = 3;
-    solver.policy.periodic_cost_gate_checks_phase2 = 9;
-    solver.policy.periodic_cost_gate_block_ratio_phase2 = 4;
-    solver.policy.periodic_cost_gate_block_warmup_phase2 = 2;
-    solver.policy.periodic_cost_gate_last_reason_phase2 = LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO;
-    solver.policy.periodic_cost_iter_samples_phase2 = 12;
-    solver.policy.periodic_cost_refactor_samples_phase2 = 3;
+    solver.policy.periodic_cost_gate_phase2.defers = 6;
+    solver.policy.periodic_cost_gate_phase2.consecutive_defers = 2;
+    solver.policy.periodic_cost_gate_phase2.defer_cap_forced = 3;
+    solver.policy.periodic_cost_gate_phase2.checks = 9;
+    solver.policy.periodic_cost_gate_phase2.block_ratio = 4;
+    solver.policy.periodic_cost_gate_phase2.block_warmup = 2;
+    solver.policy.periodic_cost_gate_phase2.last_reason = LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO;
+    solver.policy.periodic_cost_gate_phase2.iter_samples = 12;
+    solver.policy.periodic_cost_gate_phase2.refactor_samples = 3;
     solver.policy.basis_governor_mode = LP_BASIS_GOV_MODE_CONTROL_PHASE2;
     solver.policy.reinvert_controller_mode = LP_REINVERT_MODE_CONTROL_PHASE1;
     solver.policy.reinvert_dual_control_demoted = 1;
@@ -266,34 +266,34 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: periodic feedback phase2");
     ASSERT_INT_EQ(solver.policy.soft_lu_cost_gate_enabled, 1,
                   "reset: soft lu cost gate enabled");
-    ASSERT_INT_EQ(solver.policy.soft_lu_cost_gate_defers_phase2, 0,
+    ASSERT_INT_EQ(solver.policy.soft_lu_cost_gate_phase2.defers, 0,
                   "reset: soft lu defers phase2");
-    ASSERT_INT_EQ(solver.policy.soft_lu_consecutive_defers_phase2, 0,
+    ASSERT_INT_EQ(solver.policy.soft_lu_cost_gate_phase2.consecutive_defers, 0,
                   "reset: soft lu consecutive defers phase2");
-    ASSERT_INT_EQ(solver.policy.soft_lu_defer_cap_forced_phase2, 0,
+    ASSERT_INT_EQ(solver.policy.soft_lu_cost_gate_phase2.defer_cap_forced, 0,
                   "reset: soft lu cap forced phase2");
-    ASSERT_DBL_EQ(solver.policy.soft_lu_refactor_cost_ewma_phase2, 0.0,
+    ASSERT_DBL_EQ(solver.policy.soft_lu_cost_gate_phase2.refactor_cost_ewma, 0.0,
                   "reset: soft lu refactor ewma phase2");
     ASSERT_INT_EQ(solver.policy.periodic_cost_gate_enabled, 1,
                   "reset: periodic cost gate enabled");
-    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_defers_phase2, 0,
+    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_phase2.defers, 0,
                   "reset: periodic cost gate defers phase2");
-    ASSERT_INT_EQ(solver.policy.periodic_cost_consecutive_defers_phase2, 0,
+    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_phase2.consecutive_defers, 0,
                   "reset: periodic cost consecutive defers phase2");
-    ASSERT_INT_EQ(solver.policy.periodic_cost_defer_cap_forced_phase2, 0,
+    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_phase2.defer_cap_forced, 0,
                   "reset: periodic cost cap forced phase2");
-    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_checks_phase2, 0,
+    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_phase2.checks, 0,
                   "reset: periodic cost checks phase2");
-    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_block_ratio_phase2, 0,
+    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_phase2.block_ratio, 0,
                   "reset: periodic cost ratio block phase2");
-    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_block_warmup_phase2, 0,
+    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_phase2.block_warmup, 0,
                   "reset: periodic cost warmup block phase2");
-    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_last_reason_phase2,
+    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_phase2.last_reason,
                   LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE,
                   "reset: periodic cost last reason phase2");
-    ASSERT_INT_EQ(solver.policy.periodic_cost_iter_samples_phase2, 0,
+    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_phase2.iter_samples, 0,
                   "reset: periodic cost iter samples phase2");
-    ASSERT_INT_EQ(solver.policy.periodic_cost_refactor_samples_phase2, 0,
+    ASSERT_INT_EQ(solver.policy.periodic_cost_gate_phase2.refactor_samples, 0,
                   "reset: periodic cost refactor samples phase2");
     ASSERT_INT_EQ(solver.policy.basis_governor_mode, LP_BASIS_GOV_MODE_CONTROL_PHASE2,
                   "reset: basis governor mode preserved");
@@ -638,20 +638,20 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_reinvert_shadow_last_reason_phase1 = LP_REINVERT_REASON_COST_DAMPEN;
     solver.policy.periodic_feedback_phase2.hint_pressure = 0.55;
     solver.policy.soft_lu_cost_gate_enabled = 1;
-    solver.policy.soft_lu_cost_gate_defers_phase1 = 3;
-    solver.policy.soft_lu_consecutive_defers_phase1 = 2;
-    solver.policy.soft_lu_defer_cap_forced_phase1 = 1;
-    solver.policy.soft_lu_refactor_cost_ewma_phase2 = 7.25;
+    solver.policy.soft_lu_cost_gate_phase1.defers = 3;
+    solver.policy.soft_lu_cost_gate_phase1.consecutive_defers = 2;
+    solver.policy.soft_lu_cost_gate_phase1.defer_cap_forced = 1;
+    solver.policy.soft_lu_cost_gate_phase2.refactor_cost_ewma = 7.25;
     solver.policy.periodic_cost_gate_enabled = 1;
-    solver.policy.periodic_cost_gate_defers_phase1 = 4;
-    solver.policy.periodic_cost_consecutive_defers_phase1 = 1;
-    solver.policy.periodic_cost_defer_cap_forced_phase1 = 2;
-    solver.policy.periodic_cost_gate_checks_phase1 = 7;
-    solver.policy.periodic_cost_gate_block_ratio_phase1 = 3;
-    solver.policy.periodic_cost_gate_block_warmup_phase1 = 1;
-    solver.policy.periodic_cost_gate_last_reason_phase1 = LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO;
-    solver.policy.periodic_cost_iter_samples_phase1 = 19;
-    solver.policy.periodic_cost_refactor_samples_phase1 = 4;
+    solver.policy.periodic_cost_gate_phase1.defers = 4;
+    solver.policy.periodic_cost_gate_phase1.consecutive_defers = 1;
+    solver.policy.periodic_cost_gate_phase1.defer_cap_forced = 2;
+    solver.policy.periodic_cost_gate_phase1.checks = 7;
+    solver.policy.periodic_cost_gate_phase1.block_ratio = 3;
+    solver.policy.periodic_cost_gate_phase1.block_warmup = 1;
+    solver.policy.periodic_cost_gate_phase1.last_reason = LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO;
+    solver.policy.periodic_cost_gate_phase1.iter_samples = 19;
+    solver.policy.periodic_cost_gate_phase1.refactor_samples = 4;
     solver.policy.basis_governor_mode = LP_BASIS_GOV_MODE_SHADOW;
     solver.policy.reinvert_controller_mode = LP_REINVERT_MODE_CONTROL_ALL;
     solver.policy.reinvert_dual_control_demoted = 1;
