@@ -141,6 +141,40 @@ static double phase_hotpath_ms(const SimplexSolver *owner, int phase) {
     return 0.0;
 }
 
+static LPPeriodicPolicyPhaseState* periodic_policy_phase_state_ptr(SimplexSolver *owner,
+                                                                   int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_policy_phase1;
+    if (phase == 2) return &owner->policy.periodic_policy_phase2;
+    return NULL;
+}
+
+static const LPPeriodicPolicyPhaseState* periodic_policy_phase_state_ptr_const(
+    const SimplexSolver *owner,
+    int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_policy_phase1;
+    if (phase == 2) return &owner->policy.periodic_policy_phase2;
+    return NULL;
+}
+
+static int periodic_policy_refactor_count(const SimplexSolver *owner, int phase) {
+    const LPPeriodicPolicyPhaseState *state = periodic_policy_phase_state_ptr_const(owner, phase);
+    return state ? state->refactors : 0;
+}
+
+static void periodic_policy_refactor_increment(SimplexSolver *owner, int phase) {
+    LPPeriodicPolicyPhaseState *state = periodic_policy_phase_state_ptr(owner, phase);
+    if (!state) return;
+    state->refactors++;
+}
+
+static void periodic_policy_refactor_reset(SimplexSolver *owner) {
+    if (!owner) return;
+    owner->policy.periodic_policy_phase1.refactors = 0;
+    owner->policy.periodic_policy_phase2.refactors = 0;
+}
+
 static double* soft_lu_iter_cost_ewma_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
     if (phase == 1) return &owner->policy.soft_lu_cost_gate_phase1.iter_cost_ewma;
@@ -3085,8 +3119,7 @@ static void runtime_record_periodic_refactor_trigger(SimplexSolver *solver,
                                                      int lu_health_triggered) {
     if (!solver) return;
     if (!lu_health_triggered) {
-        if (phase == 1) solver->policy.periodic_policy_refactors_phase1++;
-        else if (phase == 2) solver->policy.periodic_policy_refactors_phase2++;
+        periodic_policy_refactor_increment(solver, phase);
     }
     lp_telemetry_record_periodic_refactor_trigger(solver, phase, lu_health_triggered);
 }
@@ -7662,7 +7695,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 use_bland,
                 degenerate_count,
                 periodic_feedback_bias,
-                solver->policy.periodic_policy_refactors_phase1,
+                periodic_policy_refactor_count(solver, 1),
                 periodic_policy_cooldown,
                 periodic_policy_pressure_decay);
             periodic_policy = periodic_plan.policy;
@@ -8940,7 +8973,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                 perturb_attempts_p2 < PHASE2_DEGEN_ESCAPE_MAX_ATTEMPTS &&
                 tab->m >= PHASE2_DEGEN_ESCAPE_MIN_M &&
                 degenerate_count >= PHASE2_DEGEN_ESCAPE_DEGEN_TRIGGER &&
-                solver->policy.periodic_policy_refactors_phase2 >= PHASE2_DEGEN_ESCAPE_POLICY_TRIGGER) {
+                periodic_policy_refactor_count(solver, 2) >= PHASE2_DEGEN_ESCAPE_POLICY_TRIGGER) {
                 double scale = 4.0 + 2.0 * (double)perturb_attempts_p2;
                 primal_apply_perturbation_scaled(tab, scale);
                 perturbation_active = 1;
@@ -9166,9 +9199,7 @@ static int crash_triangular(SimplexTableau *tab, int verbose) {
 
 static void reset_solver_perf(SimplexSolver *solver) {
     lp_telemetry_reset_solver(solver);
-    if (!solver) return;
-    solver->policy.periodic_policy_refactors_phase1 = 0;
-    solver->policy.periodic_policy_refactors_phase2 = 0;
+    periodic_policy_refactor_reset(solver);
 }
 
 static int lp_time_limit_exceeded(SimplexSolver *solver, int iter) {
