@@ -1,5 +1,6 @@
 # Compiled binaries
 *.o
+*.d
 *.a
 test_ralph
 test_edge_cases
