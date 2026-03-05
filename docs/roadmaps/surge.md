@@ -2923,16 +2923,18 @@ Avg runtime: 104.9s. Best vehicle count result to date.
 
 | Metric | Pre-Phase-4 (1T) | Post-Phase-4 (1T) | Phase S16 + Pop | **S22 Tuned** |
 |--------|-------------------|---------------------|-----------------|---------------|
-| Equal Vehicles | 54/60 (90%) | 48/60 (80%) | 55/60 (92%) | **56/60 (93%)** |
-| Avg Veh Gap | +0.10 | +0.20 | +0.08 | **+0.07** |
-| Avg Dist Gap | +7.9% | +13.2% | +13.1% | **+8.4%** |
-| Lexi non-worse | — | — | 0 | **4** |
+| Equal Vehicles | 54/60 (90%) | 48/60 (80%) | 55/60 (92%) | **53/60 (88%)** |
+| Avg Veh Gap | +0.10 | +0.20 | +0.08 | **+0.12** |
+| Avg Dist Gap | +7.9% | +13.2% | +13.1% | **+6.0%** |
+| Lexi non-worse | — | — | 0 | **3** |
 
 S22 parameter tuning via bench_tune all-tiers on GH-200 instances. Key tuning
 insights: 200-customer instances benefit from much warmer SA (20% acceptance vs 7.4%
 baseline) with aggressive cooling (final temp 1.3% of initial vs 8%), gentle penalty
 decrease (0.95 vs default), and strong "best improvement" operator reward (50.0).
-Distance gap improved by 4.7pp from tuning alone — no code changes needed.
+Distance gap improved by 7.1pp (-13.1%→-6.0%) from tuning alone — no code changes
+needed. Vehicle match dropped slightly (55→53) as the warmer SA trades some vehicle
+minimization for much better distance optimization.
 
 #### Benchmark Results: Gehring-Homberger VRPTW S22 (200 customers, 60s limit)
 
@@ -2941,20 +2943,21 @@ deterministic seed 42. S22 MEDIUM_TUNE params (bench_tune all-tiers on GH-200).
 
 | Category | Instances | BKS Veh Match | Avg Veh Gap | Avg Dist Gap |
 |----------|-----------|---------------|-------------|--------------|
-| C1_2 (clustered, tight) | 10 | 8/10 | +0.20 | +7.5% |
-| C2_2 (clustered, wide) | 10 | 10/10 | +0.00 | +1.1% |
-| R1_2 (random, tight) | 10 | 10/10 | +0.00 | +16.4% |
-| R2_2 (random, wide) | 10 | 9/10 | +0.10 | +0.9% |
-| RC1_2 (mixed, tight) | 10 | 9/10 | +0.10 | +21.5% |
-| RC2_2 (mixed, wide) | 10 | 10/10 | +0.00 | +3.1% |
-| **Overall** | **60** | **56/60 (93%)** | **+0.07** | **+8.4%** |
+| C1_2 (clustered, tight) | 10 | 8/10 | +0.20 | +3.8% |
+| C2_2 (clustered, wide) | 10 | 10/10 | +0.00 | +0.8% |
+| R1_2 (random, tight) | 10 | 10/10 | +0.00 | +11.2% |
+| R2_2 (random, wide) | 10 | 9/10 | +0.10 | +1.5% |
+| RC1_2 (mixed, tight) | 10 | 8/10 | +0.20 | +17.3% |
+| RC2_2 (mixed, wide) | 10 | 8/10 | +0.20 | +1.3% |
+| **Overall** | **60** | **53/60 (88%)** | **+0.12** | **+6.0%** |
 
-Avg runtime: 68.3s. 4 instances lexicographically non-worse than BKS.
+Avg runtime: 66.5s. 3 instances lexicographically non-worse than BKS.
 
-Wide-TW categories (C2, R2, RC2) are near-optimal: +0.9% to +3.1% distance.
-C2_2 achieves 5 BKS matches and 10/10 vehicle matches. Tight-TW categories
-(R1, RC1) remain the bottleneck at +16-22% distance — these benefit most from
-longer time budgets or better intra-route operators.
+Wide-TW categories (C2, R2, RC2) are near-optimal: +0.8% to +1.5% distance.
+Distance improved substantially vs pre-tune (+13.1%→+6.0%) at a slight vehicle
+cost (55→53 matches). Tight-TW categories (R1, RC1) remain the bottleneck at
++11-17% distance — these benefit most from longer time budgets or better
+intra-route operators.
 
 #### Benchmark Results: Gehring-Homberger VRPTW (400 customers, 60s limit)
 
@@ -3085,11 +3088,11 @@ population mode. Competitive with published ALNS implementations (Ropke & Pising
 Rich constraint support (PDPTW, DARP, compartments, breaks, multi-trip, locking,
 backhaul, LIFO/FIFO, precedence, setup times) goes well beyond most academic solvers.
 
-**200 customers: Strong and improving.** 93% vehicle match (+0.07 avgVehGap) with
-S22 tuned params — only 4 instances use +1 vehicle. Distance gap down to +8.4% from
-+13.1% pre-tuning, with wide-TW categories (C2, R2, RC2) at +0.9% to +3.1%. Four
-instances are lexicographically non-worse than BKS. At 200-customer scale, Surge is
-competitive with published ALNS solvers on a 60s budget.
+**200 customers: Strong distance, good vehicles.** +6.0% avg distance gap with S22
+tuned params — down from +13.1% pre-tuning. Wide-TW categories near-optimal (C2 +0.8%,
+R2 +1.5%, RC2 +1.3%). Vehicle match 53/60 (88%) — slightly lower than pre-tune (92%)
+as the warmer SA trades some vehicle minimization for better distance. 3 instances
+lexicographically non-worse than BKS.
 
 **400 customers: Improving rapidly at 60s, untested at competition budgets.** +12.9%
 distance gap and 58% vehicle match at 60s with population + CFRS + S22 tuned params.
