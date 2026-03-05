@@ -311,3 +311,9 @@ Cleanup note:
   `lp_refactor_policy_phase1_stall_obj_tol`,
   `lp_refactor_policy_phase1_ratio_breakdown_limit`), with dedicated
   unit tests in `test_lp_refactor_policy` and unchanged NETLIB gate behavior.
+- Removed simplex-local periodic-feedback update heuristics and delegated the
+  state transition to `lp_refactor_policy`
+  (`lp_refactor_policy_periodic_feedback_set_hint`,
+  `lp_refactor_policy_periodic_feedback_record_refactor`) via an orthogonal
+  `LPPeriodicFeedbackState` API, with dedicated policy unit tests and unchanged
+  NETLIB gate behavior.

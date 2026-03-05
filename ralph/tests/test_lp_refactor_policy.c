@@ -18,6 +18,7 @@ int main(void) {
     int pass = 0;
     int total = 0;
     LPPeriodicRefactorPolicy policy;
+    LPPeriodicFeedbackState feedback;
     LPLUHealthRefactorDecision decision;
     LPPeriodicCostDampenReason periodic_reason;
     int should_run;
@@ -41,6 +42,51 @@ int main(void) {
          "healthy medium phase2 run pressure matches baseline");
     should_run = lp_refactor_policy_should_run_metrics(45, 45, &policy, 0, 0);
     TEST(should_run == 0, "healthy medium phase2 skips periodic cadence");
+
+    feedback = (LPPeriodicFeedbackState){0.0, 0, 0, 0, 0.0};
+    lp_refactor_policy_periodic_feedback_set_hint(&feedback, -5, 2.0);
+    TEST(feedback.hint_interval == 0,
+         "periodic feedback hint: negative interval clamps to zero");
+    TEST(fabs(feedback.hint_pressure - 1.0) < 1e-12,
+         "periodic feedback hint: run pressure clamps to unit interval");
+    lp_refactor_policy_periodic_feedback_set_hint(&feedback, 12, -1.0);
+    TEST(feedback.hint_interval == 12,
+         "periodic feedback hint: interval stores positive value");
+    TEST(fabs(feedback.hint_pressure - 0.0) < 1e-12,
+         "periodic feedback hint: negative pressure clamps to zero");
+
+    feedback = (LPPeriodicFeedbackState){0.0, 0, 0, 24, 0.7};
+    lp_refactor_policy_periodic_feedback_record_refactor(
+        &feedback, RALPH_REFACTOR_REASON_PERIODIC, 24, -1);
+    TEST(fabs(feedback.bias - 0.08) < 1e-12,
+         "periodic feedback record: failed periodic refactor tightens bias");
+    TEST(feedback.last_reason == RALPH_REFACTOR_REASON_PERIODIC,
+         "periodic feedback record: tracks last periodic reason");
+    TEST(feedback.last_interval == 24,
+         "periodic feedback record: keeps periodic hint interval");
+    TEST(feedback.hint_interval == 0 && fabs(feedback.hint_pressure) < 1e-12,
+         "periodic feedback record: clears hint state");
+
+    feedback = (LPPeriodicFeedbackState){0.0, 0, 0, 40, 0.2};
+    lp_refactor_policy_periodic_feedback_record_refactor(
+        &feedback, RALPH_REFACTOR_REASON_PERIODIC, 40, 0);
+    TEST(fabs(feedback.bias + 0.06) < 1e-12,
+         "periodic feedback record: low-pressure periodic success relaxes bias");
+    TEST(feedback.last_interval == 40,
+         "periodic feedback record: periodic success updates interval history");
+
+    feedback = (LPPeriodicFeedbackState){
+        0.0, RALPH_REFACTOR_REASON_PERIODIC, 30, 0, 0.0};
+    lp_refactor_policy_periodic_feedback_record_refactor(
+        &feedback, RALPH_REFACTOR_REASON_UPDATE_RECOVERY, 15, 0);
+    TEST(fabs(feedback.bias - 0.08) < 1e-12,
+         "periodic feedback record: early recovery after periodic tightens bias");
+
+    feedback = (LPPeriodicFeedbackState){0.30, 0, 0, 0, 0.0};
+    lp_refactor_policy_periodic_feedback_record_refactor(
+        &feedback, RALPH_REFACTOR_REASON_PERIODIC, 0, -1);
+    TEST(fabs(feedback.bias - 0.25) < 1e-12,
+         "periodic feedback record: bias clamps to configured ceiling");
 
     policy = lp_refactor_policy_build_from_metrics(2, 250, 120, 90,
                                                    0, 100, 1e3, 1.0,

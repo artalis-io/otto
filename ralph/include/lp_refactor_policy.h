@@ -35,6 +35,14 @@ typedef enum {
     LP_PERIODIC_COST_DAMPEN_BLOCK_UPDATE_RESERVE = 7
 } LPPeriodicCostDampenReason;
 
+typedef struct {
+    double bias;
+    int last_reason;
+    int last_interval;
+    int hint_interval;
+    double hint_pressure;
+} LPPeriodicFeedbackState;
+
 LPPeriodicRefactorPolicy lp_refactor_policy_build_from_metrics(int phase,
                                                                int m,
                                                                int max_updates,
@@ -52,6 +60,16 @@ int lp_refactor_policy_should_run_metrics(int iter,
                                           const LPPeriodicRefactorPolicy *policy,
                                           int use_bland,
                                           int degenerate_count);
+
+void lp_refactor_policy_periodic_feedback_set_hint(LPPeriodicFeedbackState *state,
+                                                   int interval,
+                                                   double run_pressure);
+
+void lp_refactor_policy_periodic_feedback_record_refactor(
+    LPPeriodicFeedbackState *state,
+    int reason,
+    int updates_before,
+    int status);
 
 int lp_refactor_policy_phase2_cooldown_eligible(int m,
                                                 int degenerate_count,
