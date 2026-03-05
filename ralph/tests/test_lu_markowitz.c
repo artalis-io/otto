@@ -1084,6 +1084,117 @@ static void test_lu_refactor_hard_trigger_runtime(void) {
 }
 
 /* ============================================================================
+ * Test 19: Backend policy controls LU update path and thresholds
+ * ============================================================================ */
+static void test_lu_backend_policy_runtime(void) {
+    printf("  LU: backend policy runtime mapping...\n");
+
+    LUFactorization *lu = lu_create(400);
+    ASSERT(lu != NULL, "lu backend policy runtime: lu_create");
+    if (!lu) return;
+
+    lu_apply_backend_policy(lu, LP_LU_BACKEND_POLICY_LUF_FT);
+    int luf_updates = lu->max_updates;
+    double luf_pivot_tol = lu->pivot_tol;
+    double luf_growth_guard = lu->growth_refactor_threshold;
+    ASSERT_INT_EQ(lu->backend_policy, LP_LU_BACKEND_POLICY_LUF_FT,
+                  "lu backend policy runtime: luf_ft selected");
+    ASSERT_INT_EQ(lu->use_ft_updates, 1,
+                  "lu backend policy runtime: luf_ft uses FT updates");
+
+    lu_apply_backend_policy(lu, LP_LU_BACKEND_POLICY_CBG);
+    ASSERT_INT_EQ(lu->backend_policy, LP_LU_BACKEND_POLICY_CBG,
+                  "lu backend policy runtime: cbg selected");
+    ASSERT_INT_EQ(lu->use_ft_updates, 0,
+                  "lu backend policy runtime: cbg uses ETA updates");
+    ASSERT(lu->max_updates < luf_updates,
+           "lu backend policy runtime: cbg lowers update budget");
+    ASSERT(lu->pivot_tol > luf_pivot_tol,
+           "lu backend policy runtime: cbg tightens pivot tolerance");
+    ASSERT(lu->growth_refactor_threshold < luf_growth_guard,
+           "lu backend policy runtime: cbg tightens growth guard");
+
+    lu_apply_backend_policy(lu, LP_LU_BACKEND_POLICY_CGR);
+    ASSERT_INT_EQ(lu->backend_policy, LP_LU_BACKEND_POLICY_CGR,
+                  "lu backend policy runtime: cgr selected");
+    ASSERT_INT_EQ(lu->use_ft_updates, 1,
+                  "lu backend policy runtime: cgr uses FT updates");
+    ASSERT(lu->max_updates > luf_updates,
+           "lu backend policy runtime: cgr raises update budget");
+    ASSERT(lu->pivot_tol < luf_pivot_tol,
+           "lu backend policy runtime: cgr relaxes pivot tolerance");
+    ASSERT(lu->growth_refactor_threshold > luf_growth_guard,
+           "lu backend policy runtime: cgr relaxes growth guard");
+
+    lu_apply_backend_policy(lu, 99);
+    ASSERT_INT_EQ(lu->backend_policy, LP_LU_BACKEND_POLICY_LUF_FT,
+                  "lu backend policy runtime: invalid policy falls back to luf_ft");
+
+    ASSERT(lu->telemetry.backend_policy_luf_ft > 0,
+           "lu backend policy runtime: telemetry luf_ft selection counted");
+    ASSERT(lu->telemetry.backend_policy_cbg > 0,
+           "lu backend policy runtime: telemetry cbg selection counted");
+    ASSERT(lu->telemetry.backend_policy_cgr > 0,
+           "lu backend policy runtime: telemetry cgr selection counted");
+    ASSERT_INT_EQ(lu->telemetry.backend_policy_last, LP_LU_BACKEND_POLICY_LUF_FT,
+                  "lu backend policy runtime: telemetry last policy tracks fallback");
+
+    lu_free(lu);
+}
+
+/* ============================================================================
+ * Test 20: Backend policy update-path telemetry (FT vs ETA)
+ * ============================================================================ */
+static void test_lu_backend_policy_update_path_telemetry(void) {
+    printf("  LU: backend policy update-path telemetry...\n");
+
+    const int m = 32;
+    double *A = (double *)calloc((size_t)m * m, sizeof(double));
+    SparseMatrix *B = NULL;
+    LUFactorization *lu = NULL;
+    double *entering_col = NULL;
+
+    for (int i = 0; i < m; i++) A[i * m + i] = 1.0;
+    B = dense_to_csc(A, m, m);
+    lu = lu_create(m);
+    ASSERT(lu != NULL, "lu backend update telemetry: lu_create");
+    if (!lu) goto cleanup;
+
+    entering_col = (double *)calloc((size_t)m, sizeof(double));
+    ASSERT(entering_col != NULL, "lu backend update telemetry: entering col alloc");
+    if (!entering_col) goto cleanup;
+    for (int i = 0; i < m; i++) entering_col[i] = 1.0;
+
+    lu_apply_backend_policy(lu, LP_LU_BACKEND_POLICY_CBG);
+    ASSERT_INT_EQ(lu_factorize(lu, B), 0,
+                  "lu backend update telemetry: cbg factorize");
+    {
+        int eta_before = lu->telemetry.update_path_eta;
+        ASSERT_INT_EQ(lu_update(lu, 0, entering_col), 0,
+                      "lu backend update telemetry: cbg update");
+        ASSERT(lu->telemetry.update_path_eta > eta_before,
+               "lu backend update telemetry: eta update path counted");
+    }
+
+    lu_apply_backend_policy(lu, LP_LU_BACKEND_POLICY_LUF_FT);
+    ASSERT_INT_EQ(lu_factorize(lu, B), 0,
+                  "lu backend update telemetry: luf_ft factorize");
+    {
+        int ft_before = lu->telemetry.update_path_ft;
+        ASSERT_INT_EQ(lu_update(lu, 0, entering_col), 0,
+                      "lu backend update telemetry: luf_ft update");
+        ASSERT(lu->telemetry.update_path_ft > ft_before,
+               "lu backend update telemetry: FT update path counted");
+    }
+
+cleanup:
+    free(entering_col);
+    lu_free(lu);
+    free_csc(B);
+    free(A);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1107,6 +1218,8 @@ int main(void) {
     test_ft_dense_spike_warmup_update();
     test_lu_update_cond_adaptive_limit_runtime();
     test_lu_refactor_hard_trigger_runtime();
+    test_lu_backend_policy_runtime();
+    test_lu_backend_policy_update_path_telemetry();
 
     printf("\nIntegration (A/B Comparison):\n");
     test_markowitz_integration_small_lp();

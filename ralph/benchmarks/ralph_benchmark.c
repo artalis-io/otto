@@ -504,6 +504,12 @@ typedef struct {
     int lu_numeric_backend_markowitz;
     int lu_numeric_backend_supernode;
     int lu_numeric_backend_dense_ge;
+    int lu_backend_policy_luf_ft;
+    int lu_backend_policy_cbg;
+    int lu_backend_policy_cgr;
+    int lu_backend_policy_last;
+    int lu_update_path_ft;
+    int lu_update_path_eta;
     int lu_identity_sep_retry_lane_dense_chosen;
     int lu_identity_sep_retry_lane_supernode_chosen;
     int lu_identity_sep_retry_lane_dense_successes;
@@ -1447,6 +1453,12 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_numeric_backend_markowitz = lu_tel.numeric_backend_markowitz;
                 result.lu_numeric_backend_supernode = lu_tel.numeric_backend_supernode;
                 result.lu_numeric_backend_dense_ge = lu_tel.numeric_backend_dense_ge;
+                result.lu_backend_policy_luf_ft = lu_tel.backend_policy_luf_ft;
+                result.lu_backend_policy_cbg = lu_tel.backend_policy_cbg;
+                result.lu_backend_policy_cgr = lu_tel.backend_policy_cgr;
+                result.lu_backend_policy_last = lu_tel.backend_policy_last;
+                result.lu_update_path_ft = lu_tel.update_path_ft;
+                result.lu_update_path_eta = lu_tel.update_path_eta;
                 result.lu_identity_sep_retry_lane_dense_chosen =
                     lu_tel.identity_sep_retry_lane_dense_chosen;
                 result.lu_identity_sep_retry_lane_supernode_chosen =
@@ -3019,6 +3031,18 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_numeric_backend_supernode);
     fprintf(out, "    \"numeric_backend_dense_ge\": %d,\n",
             ralph->lu_numeric_backend_dense_ge);
+    fprintf(out, "    \"backend_policy_luf_ft\": %d,\n",
+            ralph->lu_backend_policy_luf_ft);
+    fprintf(out, "    \"backend_policy_cbg\": %d,\n",
+            ralph->lu_backend_policy_cbg);
+    fprintf(out, "    \"backend_policy_cgr\": %d,\n",
+            ralph->lu_backend_policy_cgr);
+    fprintf(out, "    \"backend_policy_last\": %d,\n",
+            ralph->lu_backend_policy_last);
+    fprintf(out, "    \"update_path_ft\": %d,\n",
+            ralph->lu_update_path_ft);
+    fprintf(out, "    \"update_path_eta\": %d,\n",
+            ralph->lu_update_path_eta);
     fprintf(out, "    \"identity_sep_retry_lane_dense_chosen\": %d,\n",
             ralph->lu_identity_sep_retry_lane_dense_chosen);
     fprintf(out, "    \"identity_sep_retry_lane_supernode_chosen\": %d,\n",

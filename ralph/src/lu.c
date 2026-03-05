@@ -42,6 +42,71 @@ static void compute_reach_U(const LUFactorization *lu,
 /* W1: Forward declaration for sparse BTRAN support */
 static void build_csr_transpose(LUFactorization *lu);
 
+static int lu_default_max_updates_for_m(int m) {
+    return (m < 100) ? 50 : (m < 500) ? m / 2 : (m < 1000) ? 100 : 120;
+}
+
+static int lu_normalize_backend_policy(int backend_policy) {
+    if (backend_policy == LP_LU_BACKEND_POLICY_AUTO) {
+        return LP_LU_BACKEND_POLICY_LUF_FT;
+    }
+    if (backend_policy < LP_LU_BACKEND_POLICY_LUF_FT ||
+        backend_policy > LP_LU_BACKEND_POLICY_CGR) {
+        return LP_LU_BACKEND_POLICY_LUF_FT;
+    }
+    return backend_policy;
+}
+
+void lu_apply_backend_policy(LUFactorization *lu, int backend_policy) {
+    int effective;
+    int base_updates;
+
+    if (!lu) return;
+
+    effective = lu_normalize_backend_policy(backend_policy);
+    base_updates = lu_default_max_updates_for_m(lu->m);
+
+    lu->backend_policy = effective;
+    lu->pivot_tol = RALPH_PIVOT_TOL;
+    lu->growth_refactor_threshold = RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
+    lu->max_updates = base_updates;
+    lu->use_ft_updates = 1;
+
+    switch (effective) {
+        case LP_LU_BACKEND_POLICY_CBG:
+            /* CBG: conservative stability posture. */
+            lu->use_ft_updates = 0;
+            lu->max_updates = (base_updates * 3) / 4;
+            if (lu->max_updates < 24) lu->max_updates = 24;
+            lu->pivot_tol = RALPH_PIVOT_TOL * 1.5;
+            lu->growth_refactor_threshold = RALPH_LU_GROWTH_REFACTOR_THRESHOLD * 0.5;
+            break;
+        case LP_LU_BACKEND_POLICY_CGR:
+            /* CGR: aggressive update posture. */
+            lu->use_ft_updates = 1;
+            lu->max_updates = (base_updates * 5) / 4;
+            if (lu->max_updates > 256) lu->max_updates = 256;
+            if (lu->max_updates < 32) lu->max_updates = 32;
+            lu->pivot_tol = RALPH_PIVOT_TOL * 0.75;
+            lu->growth_refactor_threshold = RALPH_LU_GROWTH_REFACTOR_THRESHOLD * 1.5;
+            break;
+        case LP_LU_BACKEND_POLICY_LUF_FT:
+        default:
+            break;
+    }
+
+    if (lu->telemetry_enabled) {
+        lu->telemetry.backend_policy_last = effective;
+        if (effective == LP_LU_BACKEND_POLICY_LUF_FT) {
+            lu->telemetry.backend_policy_luf_ft++;
+        } else if (effective == LP_LU_BACKEND_POLICY_CBG) {
+            lu->telemetry.backend_policy_cbg++;
+        } else if (effective == LP_LU_BACKEND_POLICY_CGR) {
+            lu->telemetry.backend_policy_cgr++;
+        }
+    }
+}
+
 static void lu_set_failure(LUFactorization *lu, int reason) {
     if (lu) {
         lu->last_failure_reason = reason;
@@ -147,20 +212,32 @@ static void lu_fill_bfcp_signals(const LUFactorization *lu,
 
 static double lu_dense_spike_reject_ratio(const LUFactorization *lu) {
     double ratio = RALPH_SPIKE_DENSE_BASE_RATIO;
+    int backend_policy = LP_LU_BACKEND_POLICY_LUF_FT;
     if (!lu) return ratio;
+    backend_policy = lu_normalize_backend_policy(lu->backend_policy);
 
     if (lu_update_is_aged(lu) ||
         lu->cond_estimate > 1e7 ||
         lu->growth_factor > 1e3) {
         ratio = RALPH_SPIKE_DENSE_AGED_RATIO;
     }
+
+    if (backend_policy == LP_LU_BACKEND_POLICY_CBG) {
+        ratio *= 0.9;
+    } else if (backend_policy == LP_LU_BACKEND_POLICY_CGR) {
+        ratio *= 1.1;
+    }
+    if (ratio < 0.25) ratio = 0.25;
+    if (ratio > 0.90) ratio = 0.90;
     return ratio;
 }
 
 static double lu_update_pivot_ratio_threshold(const LUFactorization *lu) {
     double threshold = RALPH_LU_UPDATE_PIVOT_THRESHOLD;
     double update_ratio = 0.0;
+    int backend_policy = LP_LU_BACKEND_POLICY_LUF_FT;
     if (!lu) return threshold;
+    backend_policy = lu_normalize_backend_policy(lu->backend_policy);
 
     if (lu->max_updates > 0) {
         update_ratio = (double)lu->num_updates / (double)lu->max_updates;
@@ -177,6 +254,12 @@ static double lu_update_pivot_ratio_threshold(const LUFactorization *lu) {
         threshold *= 0.5;
     } else if (lu->cond_estimate >= 1e8 || lu->growth_factor >= 1e4) {
         threshold *= 2.0;
+    }
+
+    if (backend_policy == LP_LU_BACKEND_POLICY_CBG) {
+        threshold *= 1.25;
+    } else if (backend_policy == LP_LU_BACKEND_POLICY_CGR) {
+        threshold *= 0.85;
     }
 
     if (threshold < 1e-5) threshold = 1e-5;
@@ -205,17 +288,9 @@ LUFactorization* lu_create(int m) {
     if (!lu) return NULL;
 
     lu->m = m;
-    lu->pivot_tol = RALPH_PIVOT_TOL;
-    lu->growth_refactor_threshold = RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
     lu->telemetry_enabled = 1;
+    lu_apply_backend_policy(lu, LP_LU_BACKEND_POLICY_LUF_FT);
 
-    /* Refactorization threshold: balance factorization cost vs spike application cost.
-     * With Forrest-Tomlin updates, each FTRAN/BTRAN pays O(total_spike_nnz).
-     * For m<500, factorization cost is still significant relative to spike cost,
-     * so keep thresholds close to original (m/2 capped at 200).
-     * For m>=500, spike application dominates and more frequent refactorization
-     * with fast Markowitz/supernodal factorization is a net win. */
-    lu->max_updates = (m < 100) ? 50 : (m < 500) ? m/2 : (m < 1000) ? 100 : 120;
     int max_upd = lu->max_updates;
 
     /* Calculate arena size for fixed-size arrays (with 8-byte alignment padding).
@@ -289,8 +364,8 @@ LUFactorization* lu_create(int m) {
         lu->eta_nnz[i] = 0;
     }
 
-    /* Forrest-Tomlin update structures from arena */
-    lu->use_ft_updates = 1;
+    /* Update structures from arena. Runtime update kernel mode (FT vs ETA)
+     * is selected by backend policy and may change per solve. */
     lu->ft_num_updates = 0;
     lu->ft_col_order = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
     lu->ft_col_order_inv = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
@@ -2579,6 +2654,10 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     }
 
     /* Store as Forrest-Tomlin spike or eta-file update */
+    if (lu->telemetry_enabled) {
+        if (lu->use_ft_updates) lu->telemetry.update_path_ft++;
+        else lu->telemetry.update_path_eta++;
+    }
     if (lu->use_ft_updates) {
         /* Check if pool has room for this spike */
         if (lu->spike_pool_used + off_diag_nnz > lu->spike_pool_capacity) {
