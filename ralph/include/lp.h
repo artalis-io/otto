@@ -840,6 +840,54 @@ typedef struct {
     int refactors;
 } LPPeriodicPolicyPhaseState;
 
+typedef struct {
+    double last_hot_ms;
+    int control_demoted;
+    int control_demotions;
+    int hard_trigger_last_total;
+    int hard_trigger_last_iter;
+    int hard_trigger_burst;
+} LPDualReinvertPolicyState;
+
+typedef struct {
+    int control_demoted;
+    int control_demotions;
+    int pressure_last_iter;
+    int pressure_burst;
+} LPPhase1ReinvertPolicyState;
+
+typedef struct {
+    int window_start_iter;
+    double window_start_obj;
+    int window_retry_base;
+    int window_no_pivot_base;
+    int window_refactor_base;
+    int window_update_recovery_base;
+    int window_recompute_ratio_base;
+    int window_recompute_dir_skip_base;
+    int window_recompute_dir_refactor_base;
+    int window_recompute_pivot_fail_base;
+    int window_recompute_perturb_base;
+    int escape_cooldown;
+    int escape_triggers;
+    int escape_successes;
+    int escape_failures;
+    int escape_cooldown_blocks;
+    int last_window_iters;
+    double last_obj_delta;
+    double last_retry_defer_ratio;
+    double last_update_recovery_ratio;
+    int last_retry_defers;
+    int last_no_pivot_events;
+    int last_update_recovery_refactors;
+    int last_refactors;
+    int last_recompute_ratio;
+    int last_recompute_dir_skip;
+    int last_recompute_dir_refactor;
+    int last_recompute_pivot_fail;
+    int last_recompute_perturb;
+} LPPhase1StagnationPolicyState;
+
 /* Solver policy state (behavioral scheduling/control, not telemetry). */
 typedef struct {
     int refactor_next_reason;  /* RalphRefactorReason hint consumed by tableau_refactorize */
@@ -871,45 +919,9 @@ typedef struct {
     LPReinvertControllerState reinvert_state_phase1;
     LPReinvertControllerState reinvert_state_phase2;
     LPReinvertControllerState reinvert_state_dual;
-    double reinvert_dual_last_hot_ms;
-    int reinvert_dual_control_demoted; /* latched: control_all demoted to shadow this solve */
-    int reinvert_dual_control_demotions; /* number of control_all->shadow demotion events */
-    int reinvert_dual_hard_trigger_last_total; /* last observed dual hard-trigger telemetry total */
-    int reinvert_dual_hard_trigger_last_iter; /* iteration index for last observed hard-trigger delta */
-    int reinvert_dual_hard_trigger_burst; /* burst accumulator over short iteration windows */
-    int reinvert_phase1_control_demoted; /* latched: control_all demoted to shadow in phase1 this solve */
-    int reinvert_phase1_control_demotions; /* number of phase1 control_all->shadow demotions */
-    int reinvert_phase1_pressure_last_iter; /* iteration index for last observed phase1 pressure event */
-    int reinvert_phase1_pressure_burst; /* burst accumulator for phase1 pressure events */
-    int phase1_stagnation_window_start_iter; /* Phase-1 stagnation window anchor iteration */
-    double phase1_stagnation_window_start_obj; /* Phase-1 stagnation window anchor objective */
-    int phase1_stagnation_window_retry_base;
-    int phase1_stagnation_window_no_pivot_base;
-    int phase1_stagnation_window_refactor_base;
-    int phase1_stagnation_window_update_recovery_base;
-    int phase1_stagnation_window_recompute_ratio_base;
-    int phase1_stagnation_window_recompute_dir_skip_base;
-    int phase1_stagnation_window_recompute_dir_refactor_base;
-    int phase1_stagnation_window_recompute_pivot_fail_base;
-    int phase1_stagnation_window_recompute_perturb_base;
-    int phase1_stagnation_escape_cooldown;
-    int phase1_stagnation_escape_triggers;
-    int phase1_stagnation_escape_successes;
-    int phase1_stagnation_escape_failures;
-    int phase1_stagnation_escape_cooldown_blocks;
-    int phase1_stagnation_last_window_iters;
-    double phase1_stagnation_last_obj_delta;
-    double phase1_stagnation_last_retry_defer_ratio;
-    double phase1_stagnation_last_update_recovery_ratio;
-    int phase1_stagnation_last_retry_defers;
-    int phase1_stagnation_last_no_pivot_events;
-    int phase1_stagnation_last_update_recovery_refactors;
-    int phase1_stagnation_last_refactors;
-    int phase1_stagnation_last_recompute_ratio;
-    int phase1_stagnation_last_recompute_dir_skip;
-    int phase1_stagnation_last_recompute_dir_refactor;
-    int phase1_stagnation_last_recompute_pivot_fail;
-    int phase1_stagnation_last_recompute_perturb;
+    LPDualReinvertPolicyState reinvert_dual;
+    LPPhase1ReinvertPolicyState reinvert_phase1;
+    LPPhase1StagnationPolicyState phase1_stagnation;
 } LPSolverPolicyState;
 
 /* Simplex solver */
