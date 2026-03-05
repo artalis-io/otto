@@ -836,6 +836,10 @@ typedef struct {
     int refactor_samples;
 } LPPeriodicCostGatePhaseState;
 
+typedef struct {
+    int refactors;
+} LPPeriodicPolicyPhaseState;
+
 /* Solver policy state (behavioral scheduling/control, not telemetry). */
 typedef struct {
     int refactor_next_reason;  /* RalphRefactorReason hint consumed by tableau_refactorize */
@@ -844,8 +848,8 @@ typedef struct {
     LPBasisGovernorState basis_governor; /* Shadow governor state (G0) */
 
     /* Runtime scheduling counters. */
-    int periodic_policy_refactors_phase1;
-    int periodic_policy_refactors_phase2;
+    LPPeriodicPolicyPhaseState periodic_policy_phase1;
+    LPPeriodicPolicyPhaseState periodic_policy_phase2;
 
     /* Dual scheduling cadence (runtime-tunable; replaces hardcoded literals). */
     int dual_refactor_base_interval;
