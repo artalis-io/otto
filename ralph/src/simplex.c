@@ -143,15 +143,15 @@ static double phase_hotpath_ms(const SimplexSolver *owner, int phase) {
 
 static double* soft_lu_iter_cost_ewma_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
-    if (phase == 1) return &owner->policy.soft_lu_iter_cost_ewma_phase1;
-    if (phase == 2) return &owner->policy.soft_lu_iter_cost_ewma_phase2;
+    if (phase == 1) return &owner->policy.soft_lu_cost_gate_phase1.iter_cost_ewma;
+    if (phase == 2) return &owner->policy.soft_lu_cost_gate_phase2.iter_cost_ewma;
     return NULL;
 }
 
 static double* soft_lu_refactor_cost_ewma_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
-    if (phase == 1) return &owner->policy.soft_lu_refactor_cost_ewma_phase1;
-    if (phase == 2) return &owner->policy.soft_lu_refactor_cost_ewma_phase2;
+    if (phase == 1) return &owner->policy.soft_lu_cost_gate_phase1.refactor_cost_ewma;
+    if (phase == 2) return &owner->policy.soft_lu_cost_gate_phase2.refactor_cost_ewma;
     return NULL;
 }
 
@@ -211,29 +211,29 @@ static inline int simplex_smcp_shift_allows_perturb(const SimplexTableau *tab) {
 
 static int* periodic_cost_iter_samples_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
-    if (phase == 1) return &owner->policy.periodic_cost_iter_samples_phase1;
-    if (phase == 2) return &owner->policy.periodic_cost_iter_samples_phase2;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.iter_samples;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.iter_samples;
     return NULL;
 }
 
 static int* periodic_cost_refactor_samples_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
-    if (phase == 1) return &owner->policy.periodic_cost_refactor_samples_phase1;
-    if (phase == 2) return &owner->policy.periodic_cost_refactor_samples_phase2;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.refactor_samples;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.refactor_samples;
     return NULL;
 }
 
 static int periodic_cost_iter_samples(const SimplexSolver *owner, int phase) {
     if (!owner) return 0;
-    if (phase == 1) return owner->policy.periodic_cost_iter_samples_phase1;
-    if (phase == 2) return owner->policy.periodic_cost_iter_samples_phase2;
+    if (phase == 1) return owner->policy.periodic_cost_gate_phase1.iter_samples;
+    if (phase == 2) return owner->policy.periodic_cost_gate_phase2.iter_samples;
     return 0;
 }
 
 static int periodic_cost_refactor_samples(const SimplexSolver *owner, int phase) {
     if (!owner) return 0;
-    if (phase == 1) return owner->policy.periodic_cost_refactor_samples_phase1;
-    if (phase == 2) return owner->policy.periodic_cost_refactor_samples_phase2;
+    if (phase == 1) return owner->policy.periodic_cost_gate_phase1.refactor_samples;
+    if (phase == 2) return owner->policy.periodic_cost_gate_phase2.refactor_samples;
     return 0;
 }
 
@@ -257,22 +257,22 @@ static void soft_lu_record_refactor_cost(SimplexSolver *owner, int phase, double
 
 static double soft_lu_iter_cost_ewma(const SimplexSolver *owner, int phase) {
     if (!owner) return 0.0;
-    if (phase == 1) return owner->policy.soft_lu_iter_cost_ewma_phase1;
-    if (phase == 2) return owner->policy.soft_lu_iter_cost_ewma_phase2;
+    if (phase == 1) return owner->policy.soft_lu_cost_gate_phase1.iter_cost_ewma;
+    if (phase == 2) return owner->policy.soft_lu_cost_gate_phase2.iter_cost_ewma;
     return 0.0;
 }
 
 static double soft_lu_refactor_cost_ewma(const SimplexSolver *owner, int phase) {
     if (!owner) return 0.0;
-    if (phase == 1) return owner->policy.soft_lu_refactor_cost_ewma_phase1;
-    if (phase == 2) return owner->policy.soft_lu_refactor_cost_ewma_phase2;
+    if (phase == 1) return owner->policy.soft_lu_cost_gate_phase1.refactor_cost_ewma;
+    if (phase == 2) return owner->policy.soft_lu_cost_gate_phase2.refactor_cost_ewma;
     return 0.0;
 }
 
 static void soft_lu_record_defer(SimplexSolver *owner, int phase) {
     if (!owner) return;
-    if (phase == 1) owner->policy.soft_lu_cost_gate_defers_phase1++;
-    else if (phase == 2) owner->policy.soft_lu_cost_gate_defers_phase2++;
+    if (phase == 1) owner->policy.soft_lu_cost_gate_phase1.defers++;
+    else if (phase == 2) owner->policy.soft_lu_cost_gate_phase2.defers++;
 }
 
 static int soft_lu_defer_cap_for_phase(int phase) {
@@ -283,22 +283,22 @@ static int soft_lu_defer_cap_for_phase(int phase) {
 
 static int* soft_lu_consecutive_defers_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
-    if (phase == 1) return &owner->policy.soft_lu_consecutive_defers_phase1;
-    if (phase == 2) return &owner->policy.soft_lu_consecutive_defers_phase2;
+    if (phase == 1) return &owner->policy.soft_lu_cost_gate_phase1.consecutive_defers;
+    if (phase == 2) return &owner->policy.soft_lu_cost_gate_phase2.consecutive_defers;
     return NULL;
 }
 
 static int* soft_lu_cap_forced_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
-    if (phase == 1) return &owner->policy.soft_lu_defer_cap_forced_phase1;
-    if (phase == 2) return &owner->policy.soft_lu_defer_cap_forced_phase2;
+    if (phase == 1) return &owner->policy.soft_lu_cost_gate_phase1.defer_cap_forced;
+    if (phase == 2) return &owner->policy.soft_lu_cost_gate_phase2.defer_cap_forced;
     return NULL;
 }
 
 static int soft_lu_consecutive_defers(const SimplexSolver *owner, int phase) {
     if (!owner) return 0;
-    if (phase == 1) return owner->policy.soft_lu_consecutive_defers_phase1;
-    if (phase == 2) return owner->policy.soft_lu_consecutive_defers_phase2;
+    if (phase == 1) return owner->policy.soft_lu_cost_gate_phase1.consecutive_defers;
+    if (phase == 2) return owner->policy.soft_lu_cost_gate_phase2.consecutive_defers;
     return 0;
 }
 
@@ -321,8 +321,8 @@ static void soft_lu_record_cap_forced(SimplexSolver *owner, int phase) {
 
 static void periodic_cost_record_defer(SimplexSolver *owner, int phase) {
     if (!owner) return;
-    if (phase == 1) owner->policy.periodic_cost_gate_defers_phase1++;
-    else if (phase == 2) owner->policy.periodic_cost_gate_defers_phase2++;
+    if (phase == 1) owner->policy.periodic_cost_gate_phase1.defers++;
+    else if (phase == 2) owner->policy.periodic_cost_gate_phase2.defers++;
 }
 
 static int periodic_cost_defer_cap_for_phase(int phase) {
@@ -333,78 +333,78 @@ static int periodic_cost_defer_cap_for_phase(int phase) {
 
 static int* periodic_cost_consecutive_defers_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
-    if (phase == 1) return &owner->policy.periodic_cost_consecutive_defers_phase1;
-    if (phase == 2) return &owner->policy.periodic_cost_consecutive_defers_phase2;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.consecutive_defers;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.consecutive_defers;
     return NULL;
 }
 
 static int* periodic_cost_cap_forced_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
-    if (phase == 1) return &owner->policy.periodic_cost_defer_cap_forced_phase1;
-    if (phase == 2) return &owner->policy.periodic_cost_defer_cap_forced_phase2;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.defer_cap_forced;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.defer_cap_forced;
     return NULL;
 }
 
 static int* periodic_cost_checks_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
-    if (phase == 1) return &owner->policy.periodic_cost_gate_checks_phase1;
-    if (phase == 2) return &owner->policy.periodic_cost_gate_checks_phase2;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.checks;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.checks;
     return NULL;
 }
 
 static int* periodic_cost_block_small_m_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
-    if (phase == 1) return &owner->policy.periodic_cost_gate_block_small_m_phase1;
-    if (phase == 2) return &owner->policy.periodic_cost_gate_block_small_m_phase2;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.block_small_m;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.block_small_m;
     return NULL;
 }
 
 static int* periodic_cost_block_invalid_inputs_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
-    if (phase == 1) return &owner->policy.periodic_cost_gate_block_invalid_inputs_phase1;
-    if (phase == 2) return &owner->policy.periodic_cost_gate_block_invalid_inputs_phase2;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.block_invalid_inputs;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.block_invalid_inputs;
     return NULL;
 }
 
 static int* periodic_cost_block_warmup_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
-    if (phase == 1) return &owner->policy.periodic_cost_gate_block_warmup_phase1;
-    if (phase == 2) return &owner->policy.periodic_cost_gate_block_warmup_phase2;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.block_warmup;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.block_warmup;
     return NULL;
 }
 
 static int* periodic_cost_block_invalid_cost_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
-    if (phase == 1) return &owner->policy.periodic_cost_gate_block_invalid_cost_phase1;
-    if (phase == 2) return &owner->policy.periodic_cost_gate_block_invalid_cost_phase2;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.block_invalid_cost;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.block_invalid_cost;
     return NULL;
 }
 
 static int* periodic_cost_block_ratio_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
-    if (phase == 1) return &owner->policy.periodic_cost_gate_block_ratio_phase1;
-    if (phase == 2) return &owner->policy.periodic_cost_gate_block_ratio_phase2;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.block_ratio;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.block_ratio;
     return NULL;
 }
 
 static int* periodic_cost_block_update_reserve_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
-    if (phase == 1) return &owner->policy.periodic_cost_gate_block_update_reserve_phase1;
-    if (phase == 2) return &owner->policy.periodic_cost_gate_block_update_reserve_phase2;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.block_update_reserve;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.block_update_reserve;
     return NULL;
 }
 
 static int* periodic_cost_last_reason_ptr(SimplexSolver *owner, int phase) {
     if (!owner) return NULL;
-    if (phase == 1) return &owner->policy.periodic_cost_gate_last_reason_phase1;
-    if (phase == 2) return &owner->policy.periodic_cost_gate_last_reason_phase2;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.last_reason;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.last_reason;
     return NULL;
 }
 
 static int periodic_cost_consecutive_defers(const SimplexSolver *owner, int phase) {
     if (!owner) return 0;
-    if (phase == 1) return owner->policy.periodic_cost_consecutive_defers_phase1;
-    if (phase == 2) return owner->policy.periodic_cost_consecutive_defers_phase2;
+    if (phase == 1) return owner->policy.periodic_cost_gate_phase1.consecutive_defers;
+    if (phase == 2) return owner->policy.periodic_cost_gate_phase2.consecutive_defers;
     return 0;
 }
 

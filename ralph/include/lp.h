@@ -812,6 +812,30 @@ typedef struct {
     double hint_pressure;
 } LPPeriodicFeedbackPhaseState;
 
+typedef struct {
+    int defers;
+    int consecutive_defers;
+    int defer_cap_forced;
+    double refactor_cost_ewma;
+    double iter_cost_ewma;
+} LPSoftLUCostGatePhaseState;
+
+typedef struct {
+    int defers;
+    int consecutive_defers;
+    int defer_cap_forced;
+    int checks;
+    int block_small_m;
+    int block_invalid_inputs;
+    int block_warmup;
+    int block_invalid_cost;
+    int block_ratio;
+    int block_update_reserve;
+    int last_reason;
+    int iter_samples;
+    int refactor_samples;
+} LPPeriodicCostGatePhaseState;
+
 /* Solver policy state (behavioral scheduling/control, not telemetry). */
 typedef struct {
     int refactor_next_reason;  /* RalphRefactorReason hint consumed by tableau_refactorize */
@@ -833,43 +857,11 @@ typedef struct {
 
     /* Phase E: soft LU-health refactor cost gating (behavioral, not telemetry). */
     int soft_lu_cost_gate_enabled;        /* 1=enabled (default), 0=disabled */
-    int soft_lu_cost_gate_defers_phase1;  /* soft LU-triggered deferrals in Phase 1 */
-    int soft_lu_cost_gate_defers_phase2;  /* soft LU-triggered deferrals in Phase 2 */
-    int soft_lu_consecutive_defers_phase1;/* current consecutive soft deferrals in Phase 1 */
-    int soft_lu_consecutive_defers_phase2;/* current consecutive soft deferrals in Phase 2 */
-    int soft_lu_defer_cap_forced_phase1;  /* cap-blocked soft defers in Phase 1 */
-    int soft_lu_defer_cap_forced_phase2;  /* cap-blocked soft defers in Phase 2 */
+    LPSoftLUCostGatePhaseState soft_lu_cost_gate_phase1;
+    LPSoftLUCostGatePhaseState soft_lu_cost_gate_phase2;
     int periodic_cost_gate_enabled;       /* 1=enabled (default), 0=disabled */
-    int periodic_cost_gate_defers_phase1; /* policy-periodic deferrals in Phase 1 */
-    int periodic_cost_gate_defers_phase2; /* policy-periodic deferrals in Phase 2 */
-    int periodic_cost_consecutive_defers_phase1; /* current policy-periodic defer streak (Phase 1) */
-    int periodic_cost_consecutive_defers_phase2; /* current policy-periodic defer streak (Phase 2) */
-    int periodic_cost_defer_cap_forced_phase1;   /* cap-blocked policy periodic defers (Phase 1) */
-    int periodic_cost_defer_cap_forced_phase2;   /* cap-blocked policy periodic defers (Phase 2) */
-    int periodic_cost_gate_checks_phase1;        /* evaluations of periodic cost gate in Phase 1 */
-    int periodic_cost_gate_checks_phase2;        /* evaluations of periodic cost gate in Phase 2 */
-    int periodic_cost_gate_block_small_m_phase1; /* blocked: matrix too small (Phase 1) */
-    int periodic_cost_gate_block_small_m_phase2; /* blocked: matrix too small (Phase 2) */
-    int periodic_cost_gate_block_invalid_inputs_phase1; /* blocked: invalid updates/inputs (Phase 1) */
-    int periodic_cost_gate_block_invalid_inputs_phase2; /* blocked: invalid updates/inputs (Phase 2) */
-    int periodic_cost_gate_block_warmup_phase1;  /* blocked: insufficient cost signal warmup (Phase 1) */
-    int periodic_cost_gate_block_warmup_phase2;  /* blocked: insufficient cost signal warmup (Phase 2) */
-    int periodic_cost_gate_block_invalid_cost_phase1;   /* blocked: invalid EWMA cost (Phase 1) */
-    int periodic_cost_gate_block_invalid_cost_phase2;   /* blocked: invalid EWMA cost (Phase 2) */
-    int periodic_cost_gate_block_ratio_phase1;    /* blocked: ratio below threshold (Phase 1) */
-    int periodic_cost_gate_block_ratio_phase2;    /* blocked: ratio below threshold (Phase 2) */
-    int periodic_cost_gate_block_update_reserve_phase1; /* blocked: too close to max updates (Phase 1) */
-    int periodic_cost_gate_block_update_reserve_phase2; /* blocked: too close to max updates (Phase 2) */
-    int periodic_cost_gate_last_reason_phase1;    /* last policy decision code (Phase 1) */
-    int periodic_cost_gate_last_reason_phase2;    /* last policy decision code (Phase 2) */
-    int periodic_cost_iter_samples_phase1;        /* iteration-cost EWMA sample count (Phase 1) */
-    int periodic_cost_iter_samples_phase2;        /* iteration-cost EWMA sample count (Phase 2) */
-    int periodic_cost_refactor_samples_phase1;    /* refactor-cost EWMA sample count (Phase 1) */
-    int periodic_cost_refactor_samples_phase2;    /* refactor-cost EWMA sample count (Phase 2) */
-    double soft_lu_refactor_cost_ewma_phase1; /* EWMA refactor cost estimate (ms) */
-    double soft_lu_refactor_cost_ewma_phase2; /* EWMA refactor cost estimate (ms) */
-    double soft_lu_iter_cost_ewma_phase1;     /* EWMA per-iteration hot-path cost (ms) */
-    double soft_lu_iter_cost_ewma_phase2;     /* EWMA per-iteration hot-path cost (ms) */
+    LPPeriodicCostGatePhaseState periodic_cost_gate_phase1;
+    LPPeriodicCostGatePhaseState periodic_cost_gate_phase2;
 
     /* Unified reinversion controller state (shadow-only in Phase 2). */
     LPReinvertControllerState reinvert_state_phase1;
