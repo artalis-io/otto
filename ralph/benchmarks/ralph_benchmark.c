@@ -614,6 +614,7 @@ typedef struct {
     int pricing; /* -1=default, 0=Dantzig, 1=SE, 2=Devex, 3=Partial, 4=Heap */
     int glpk_smcp_ratio; /* -1=default, 0=standard (--norelax), 1=harris (--relax) */
     int glpk_smcp_flip;  /* -1=default, 0=off (--noflip), 1=on (--flip) */
+    int glpk_bfcp_backend; /* -1=default, 0=luf_ft, 1=cbg, 2=cgr */
     int lu_supernode; /* 0=off, 1=enable supernodal LU */
     int lp_basis_governor_mode; /* 0=off, 1=shadow, 2=control_phase2 */
     int lp_reinvert_controller_mode; /* 0=off, 1=shadow, 2=control_phase1, 3=control_all */
@@ -940,6 +941,7 @@ static SolveResult solve_with_glpk(const char *problem_path, double time_limit_s
 static SolveResult solve_with_ralph(const char *problem_path, double time_limit_sec,
                                      int method, int pricing,
                                      int glpk_smcp_ratio, int glpk_smcp_flip,
+                                     int glpk_bfcp_backend,
                                      int lu_supernode, int lp_basis_governor_mode,
                                      int lp_reinvert_controller_mode,
                                      int random_seed,
@@ -1004,7 +1006,7 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
     if (pricing >= 0) {
         ralph_test_set_int_param(model, "pricing", pricing);
     }
-    if (glpk_smcp_ratio >= 0 || glpk_smcp_flip >= 0) {
+    if (glpk_smcp_ratio >= 0 || glpk_smcp_flip >= 0 || glpk_bfcp_backend >= 0) {
         /* Route ratio/flip through GLPK-compat runtime mapping.
          * Keep method/pricing aligned with explicit benchmark switches. */
         ralph_test_set_int_param(model, "lp_policy_profile", 1); /* glpk_compat */
@@ -1025,6 +1027,9 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
         }
         if (glpk_smcp_flip >= 0) {
             ralph_test_set_int_param(model, "glpk_smcp_flip", glpk_smcp_flip);
+        }
+        if (glpk_bfcp_backend >= 0) {
+            ralph_test_set_int_param(model, "glpk_bfcp_backend", glpk_bfcp_backend);
         }
     }
     if (lu_supernode) {
@@ -3200,6 +3205,7 @@ static int run_single_benchmark(const char *problem_path, const char *name,
                                           opts->method, opts->pricing,
                                           opts->glpk_smcp_ratio,
                                           opts->glpk_smcp_flip,
+                                          opts->glpk_bfcp_backend,
                                           opts->lu_supernode,
                                           opts->lp_basis_governor_mode,
                                           opts->lp_reinvert_controller_mode,
@@ -3273,6 +3279,7 @@ static int test_solve_one(const char *path, const char *name,
                            const NetlibReference *ref,
                            int timeout_sec, int method, int pricing,
                            int glpk_smcp_ratio, int glpk_smcp_flip,
+                           int glpk_bfcp_backend,
                            int lu_supernode, int lp_basis_governor_mode,
                            int lp_reinvert_controller_mode,
                            int random_seed) {
@@ -3302,6 +3309,7 @@ static int test_solve_one(const char *path, const char *name,
         SolveResult result = solve_with_ralph(path, (double)timeout_sec,
                                                method, pricing,
                                                glpk_smcp_ratio, glpk_smcp_flip,
+                                               glpk_bfcp_backend,
                                                lu_supernode,
                                                lp_basis_governor_mode,
                                                lp_reinvert_controller_mode,
@@ -3420,6 +3428,7 @@ static int run_test_mode(const Options *opts) {
                                      timeout_sec, opts->method, opts->pricing,
                                      opts->glpk_smcp_ratio,
                                      opts->glpk_smcp_flip,
+                                     opts->glpk_bfcp_backend,
                                      opts->lu_supernode,
                                      opts->lp_basis_governor_mode,
                                      opts->lp_reinvert_controller_mode,
@@ -3522,6 +3531,7 @@ static void print_help(const char *prog) {
     printf("  --norelax                     Use standard ratio test (GLPK-compat ratio=0)\n");
     printf("  --flip                        Enable dual bound flipping (GLPK-compat flip=1)\n");
     printf("  --noflip                      Disable dual bound flipping (GLPK-compat flip=0)\n");
+    printf("  --bfcp-backend <N>            GLPK BFCP backend: 0=luf_ft, 1=cbg, 2=cgr\n");
     printf("  --lp-basis-governor-mode <N>  Basis governor: 0=off, 1=shadow, 2=control_phase2\n");
     printf("  --lp-reinvert-controller-mode <N> Reinvert controller: 0=off, 1=shadow, 2=control_phase1, 3=control_all\n");
     printf("  --random-seed <N>             Deterministic LP anti-cycling seed (default: 0)\n");
@@ -3575,6 +3585,7 @@ static int parse_args(int argc, char **argv, Options *opts) {
     opts->pricing = -1;  /* Default: solver default */
     opts->glpk_smcp_ratio = -1;
     opts->glpk_smcp_flip = -1;
+    opts->glpk_bfcp_backend = -1;
     opts->lp_reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
     opts->random_seed = 0;
 
@@ -3644,6 +3655,14 @@ static int parse_args(int argc, char **argv, Options *opts) {
             opts->glpk_smcp_flip = 1;
         } else if (strcmp(arg, "--noflip") == 0) {
             opts->glpk_smcp_flip = 0;
+        } else if (strcmp(arg, "--bfcp-backend") == 0 && i + 1 < argc) {
+            opts->glpk_bfcp_backend = atoi(argv[++i]);
+            if (opts->glpk_bfcp_backend < 0 || opts->glpk_bfcp_backend > 2) {
+                fprintf(stderr,
+                        "Invalid --bfcp-backend: %d (expected 0..2)\n",
+                        opts->glpk_bfcp_backend);
+                return -1;
+            }
         } else if (strcmp(arg, "--lp-basis-governor-mode") == 0 && i + 1 < argc) {
             opts->lp_basis_governor_mode = atoi(argv[++i]);
             if (opts->lp_basis_governor_mode < 0 ||
