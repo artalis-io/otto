@@ -65,6 +65,32 @@
 #define PHASE1_NO_PIVOT_LADDER_STREAK_RESCUE_PERIOD 4
 #define PHASE1_DIR_SKIP_LADDER_RESCUE_START 16
 #define PHASE1_DIR_SKIP_LADDER_RESCUE_PERIOD 8
+#define PHASE1_DEGEN_THRESHOLD_LARGE_M 700
+#define PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_TRIGGER 64
+#define PHASE1_DIR_SKIP_FORCE_PIVOT_MIN_TRIGGER 24
+#define PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_BUDGET 12
+#define PHASE1_DIR_SKIP_FORCE_PIVOT_MAX_BUDGET 32
+#define PHASE1_DIR_ESCAPE_MIN_M 200
+#define PHASE1_DIR_ESCAPE_BASE_TRIGGER 48
+#define PHASE1_DIR_ESCAPE_MIN_TRIGGER 20
+#define PHASE1_DIR_ESCAPE_BASE_NO_PROGRESS_TRIGGER 10
+#define PHASE1_DIR_ESCAPE_MIN_NO_PROGRESS_TRIGGER 4
+#define PHASE1_DIR_ESCAPE_BASE_COOLDOWN_UPDATES 48
+#define PHASE1_DIR_ESCAPE_MAX_COOLDOWN_UPDATES 160
+#define PHASE1_FORCE_PIVOT_RELAX_MIN_M 700
+#define PHASE1_FORCE_PIVOT_RELAX_DEGEN_TRIGGER 80
+#define PHASE1_FORCE_PIVOT_RELAX_MAX_NO_PROGRESS 10
+#define PHASE1_FORCE_PIVOT_RELAX_RESCUE_MIN_ATTEMPTS 8
+#define PHASE1_FORCE_PIVOT_RELAX_RESCUE_SUCCESS_NUM 4
+#define PHASE1_FORCE_PIVOT_RELAX_RESCUE_SUCCESS_DEN 5
+#define PHASE1_FORCE_EXTREME_RELAX_MIN_M 700
+#define PHASE1_FORCE_EXTREME_RELAX_DEGEN_TRIGGER 80
+#define PHASE1_FORCE_EXTREME_RELAX_MAX_NO_PROGRESS 10
+#define PHASE1_FORCE_EXTREME_RELAX_MAX_RATIO 300.0
+#define PHASE1_SOFT_LU_POLICY_COOLDOWN_MIN_M 700
+#define PHASE1_SOFT_LU_POLICY_COOLDOWN_DEGEN_TRIGGER 20
+#define PHASE1_SOFT_LU_POLICY_COOLDOWN_MIN_UPDATES 12
+#define PHASE1_SOFT_LU_POLICY_COOLDOWN_MAX_UPDATES 48
 #define LU_HEALTH_HARD_COND_MIN_UPDATES 10
 #define LU_HEALTH_HARD_COND_RATIO 1e10
 #define LU_HEALTH_SOFT_COND_MED 1e6
@@ -684,6 +710,223 @@ int lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(
     if (dir_skip_event_streak < PHASE1_DIR_SKIP_LADDER_RESCUE_START) return 0;
     if (PHASE1_DIR_SKIP_LADDER_RESCUE_PERIOD <= 0) return 0;
     return (dir_skip_event_streak % PHASE1_DIR_SKIP_LADDER_RESCUE_PERIOD) == 0;
+}
+
+int lp_refactor_policy_phase1_dir_skip_force_pivot_threshold(
+    int m,
+    int degenerate_count) {
+    int threshold = PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_TRIGGER;
+    if (m >= PHASE1_DEGEN_THRESHOLD_LARGE_M) threshold -= 16;
+    if (m >= 1200) threshold -= 8;
+    if (degenerate_count >= 80) threshold -= 8;
+    if (degenerate_count >= 160) threshold -= 8;
+    if (threshold < PHASE1_DIR_SKIP_FORCE_PIVOT_MIN_TRIGGER) {
+        threshold = PHASE1_DIR_SKIP_FORCE_PIVOT_MIN_TRIGGER;
+    }
+    return threshold;
+}
+
+int lp_refactor_policy_phase1_dir_skip_force_pivot_budget(
+    int m,
+    int degenerate_count) {
+    int budget = PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_BUDGET;
+    if (m >= PHASE1_DEGEN_THRESHOLD_LARGE_M) budget += 4;
+    if (m >= 1200) budget += 4;
+    if (degenerate_count >= 160) budget += 8;
+    if (budget > PHASE1_DIR_SKIP_FORCE_PIVOT_MAX_BUDGET) {
+        budget = PHASE1_DIR_SKIP_FORCE_PIVOT_MAX_BUDGET;
+    }
+    return budget;
+}
+
+int lp_refactor_policy_phase1_activate_force_pivot_mode(
+    int m,
+    int degenerate_count,
+    int dir_skip_event_streak,
+    int force_pivot_attempt_budget,
+    int *next_dir_skip_event_streak,
+    int *next_force_pivot_attempt_budget,
+    int *next_force_pending,
+    int *next_force_reason) {
+    int streak = dir_skip_event_streak;
+    int budget = force_pivot_attempt_budget;
+    int threshold;
+
+    if (streak < 0) streak = 0;
+    if (budget < 0) budget = 0;
+
+    if (budget > 0) {
+        if (next_dir_skip_event_streak) *next_dir_skip_event_streak = streak;
+        if (next_force_pivot_attempt_budget) *next_force_pivot_attempt_budget = budget;
+        return 0;
+    }
+
+    threshold = lp_refactor_policy_phase1_dir_skip_force_pivot_threshold(
+        m, degenerate_count);
+    if (streak < threshold) {
+        if (next_dir_skip_event_streak) *next_dir_skip_event_streak = streak;
+        if (next_force_pivot_attempt_budget) *next_force_pivot_attempt_budget = budget;
+        return 0;
+    }
+
+    budget = lp_refactor_policy_phase1_dir_skip_force_pivot_budget(
+        m, degenerate_count);
+    streak = 0;
+    if (next_dir_skip_event_streak) *next_dir_skip_event_streak = streak;
+    if (next_force_pivot_attempt_budget) *next_force_pivot_attempt_budget = budget;
+    if (next_force_pending) *next_force_pending = 1;
+    if (next_force_reason) {
+        *next_force_reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+    }
+    return 1;
+}
+
+static int phase1_dir_escape_trigger_streak(int m, int degenerate_count) {
+    int trigger = PHASE1_DIR_ESCAPE_BASE_TRIGGER;
+    if (m >= PHASE1_DEGEN_THRESHOLD_LARGE_M) trigger -= 8;
+    if (degenerate_count >= 80) trigger -= 8;
+    if (degenerate_count >= 160) trigger -= 8;
+    if (trigger < PHASE1_DIR_ESCAPE_MIN_TRIGGER) {
+        trigger = PHASE1_DIR_ESCAPE_MIN_TRIGGER;
+    }
+    return trigger;
+}
+
+static int phase1_dir_escape_no_progress_trigger(int m, int degenerate_count) {
+    int trigger = PHASE1_DIR_ESCAPE_BASE_NO_PROGRESS_TRIGGER;
+    if (m >= PHASE1_DEGEN_THRESHOLD_LARGE_M) trigger -= 2;
+    if (degenerate_count >= 80) trigger -= 2;
+    if (degenerate_count >= 160) trigger -= 2;
+    if (trigger < PHASE1_DIR_ESCAPE_MIN_NO_PROGRESS_TRIGGER) {
+        trigger = PHASE1_DIR_ESCAPE_MIN_NO_PROGRESS_TRIGGER;
+    }
+    return trigger;
+}
+
+static int phase1_dir_escape_cooldown_updates(int m, int degenerate_count) {
+    int cooldown = PHASE1_DIR_ESCAPE_BASE_COOLDOWN_UPDATES;
+    if (m >= PHASE1_DEGEN_THRESHOLD_LARGE_M) cooldown += 16;
+    if (degenerate_count >= 80) cooldown += 16;
+    if (degenerate_count >= 160) cooldown += 32;
+    if (cooldown > PHASE1_DIR_ESCAPE_MAX_COOLDOWN_UPDATES) {
+        cooldown = PHASE1_DIR_ESCAPE_MAX_COOLDOWN_UPDATES;
+    }
+    return cooldown;
+}
+
+int lp_refactor_policy_phase1_dir_stabilize_escape_gate_plan(
+    int m,
+    int degenerate_count,
+    int dir_skip_event_streak,
+    int no_progress_streak,
+    int escape_cooldown,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int *next_escape_cooldown,
+    int *triggered,
+    int *hard_bypass) {
+    int next_cooldown = escape_cooldown;
+    int local_triggered = 0;
+    int local_hard_bypass = 0;
+    int suppress = 0;
+    int streak_trigger;
+    int no_progress_trigger;
+    int chronic_treadmill = 0;
+
+    if (next_cooldown < 0) next_cooldown = 0;
+    if (force_lu_health && !force_extreme_dir && m >= PHASE1_DIR_ESCAPE_MIN_M) {
+        streak_trigger = phase1_dir_escape_trigger_streak(m, degenerate_count);
+        no_progress_trigger = phase1_dir_escape_no_progress_trigger(m, degenerate_count);
+        chronic_treadmill =
+            ((dir_skip_event_streak >= streak_trigger &&
+              no_progress_streak >= no_progress_trigger) ||
+             (no_progress_streak >= no_progress_trigger * 3));
+        if (lu_hard_trigger) {
+            if (next_cooldown > 0 || chronic_treadmill) {
+                local_hard_bypass = 1;
+            }
+        } else if (next_cooldown > 0) {
+            suppress = 1;
+        } else if (chronic_treadmill) {
+            next_cooldown = phase1_dir_escape_cooldown_updates(
+                m, degenerate_count);
+            local_triggered = 1;
+            suppress = 1;
+        }
+    }
+
+    if (next_escape_cooldown) *next_escape_cooldown = next_cooldown;
+    if (triggered) *triggered = local_triggered;
+    if (hard_bypass) *hard_bypass = local_hard_bypass;
+    return suppress;
+}
+
+int lp_refactor_policy_phase1_force_pivot_refactor_relax_plan(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    int force_pivot_mode_active,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int dual_rescue_attempts,
+    int dual_rescue_successes,
+    int dual_rescue_fail_streak) {
+    if (!force_pivot_mode_active) return 0;
+    if (force_extreme_dir || force_lu_health || lu_hard_trigger) return 0;
+    if (m < PHASE1_FORCE_PIVOT_RELAX_MIN_M) return 0;
+    if (degenerate_count < PHASE1_FORCE_PIVOT_RELAX_DEGEN_TRIGGER) return 0;
+    if (no_progress_streak > PHASE1_FORCE_PIVOT_RELAX_MAX_NO_PROGRESS) return 0;
+    if (dual_rescue_fail_streak > 0) return 0;
+    if (dual_rescue_attempts < PHASE1_FORCE_PIVOT_RELAX_RESCUE_MIN_ATTEMPTS) return 0;
+    if (dual_rescue_successes < 0) return 0;
+    if (dual_rescue_successes > dual_rescue_attempts) return 0;
+    return (dual_rescue_successes * PHASE1_FORCE_PIVOT_RELAX_RESCUE_SUCCESS_DEN) >=
+           (dual_rescue_attempts * PHASE1_FORCE_PIVOT_RELAX_RESCUE_SUCCESS_NUM);
+}
+
+int lp_refactor_policy_phase1_force_extreme_refactor_relax_plan(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int dual_rescue_attempts,
+    int dual_rescue_successes,
+    int dual_rescue_fail_streak) {
+    if (!force_extreme_dir) return 0;
+    if (force_lu_health || lu_hard_trigger) return 0;
+    if (!(dir_inf_ratio > 0.0)) return 0;
+    if (dir_inf_ratio > PHASE1_FORCE_EXTREME_RELAX_MAX_RATIO) return 0;
+    if (m < PHASE1_FORCE_EXTREME_RELAX_MIN_M) return 0;
+    if (degenerate_count < PHASE1_FORCE_EXTREME_RELAX_DEGEN_TRIGGER) return 0;
+    if (no_progress_streak > PHASE1_FORCE_EXTREME_RELAX_MAX_NO_PROGRESS) return 0;
+    if (dual_rescue_fail_streak > 0) return 0;
+    if (dual_rescue_attempts < PHASE1_FORCE_PIVOT_RELAX_RESCUE_MIN_ATTEMPTS) return 0;
+    if (dual_rescue_successes < 0) return 0;
+    if (dual_rescue_successes > dual_rescue_attempts) return 0;
+    return (dual_rescue_successes * PHASE1_FORCE_PIVOT_RELAX_RESCUE_SUCCESS_DEN) >=
+           (dual_rescue_attempts * PHASE1_FORCE_PIVOT_RELAX_RESCUE_SUCCESS_NUM);
+}
+
+int lp_refactor_policy_phase1_soft_lu_policy_cooldown_updates(
+    int m,
+    int degenerate_count,
+    int periodic_interval) {
+    int cooldown = PHASE1_SOFT_LU_POLICY_COOLDOWN_MIN_UPDATES;
+    if (m < PHASE1_SOFT_LU_POLICY_COOLDOWN_MIN_M) return 0;
+    if (degenerate_count < PHASE1_SOFT_LU_POLICY_COOLDOWN_DEGEN_TRIGGER) return 0;
+    if (periodic_interval > 0) {
+        int half = periodic_interval / 2;
+        if (half > cooldown) cooldown = half;
+    }
+    if (cooldown > PHASE1_SOFT_LU_POLICY_COOLDOWN_MAX_UPDATES) {
+        cooldown = PHASE1_SOFT_LU_POLICY_COOLDOWN_MAX_UPDATES;
+    }
+    return cooldown;
 }
 
 LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(

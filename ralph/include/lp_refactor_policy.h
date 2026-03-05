@@ -147,6 +147,66 @@ int lp_refactor_policy_phase1_no_pivot_ladder_step(
 int lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(
     int dir_skip_event_streak);
 
+int lp_refactor_policy_phase1_dir_skip_force_pivot_threshold(
+    int m,
+    int degenerate_count);
+
+int lp_refactor_policy_phase1_dir_skip_force_pivot_budget(
+    int m,
+    int degenerate_count);
+
+int lp_refactor_policy_phase1_activate_force_pivot_mode(
+    int m,
+    int degenerate_count,
+    int dir_skip_event_streak,
+    int force_pivot_attempt_budget,
+    int *next_dir_skip_event_streak,
+    int *next_force_pivot_attempt_budget,
+    int *next_force_pending,
+    int *next_force_reason);
+
+int lp_refactor_policy_phase1_dir_stabilize_escape_gate_plan(
+    int m,
+    int degenerate_count,
+    int dir_skip_event_streak,
+    int no_progress_streak,
+    int escape_cooldown,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int *next_escape_cooldown,
+    int *triggered,
+    int *hard_bypass);
+
+int lp_refactor_policy_phase1_force_pivot_refactor_relax_plan(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    int force_pivot_mode_active,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int dual_rescue_attempts,
+    int dual_rescue_successes,
+    int dual_rescue_fail_streak);
+
+int lp_refactor_policy_phase1_force_extreme_refactor_relax_plan(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int dual_rescue_attempts,
+    int dual_rescue_successes,
+    int dual_rescue_fail_streak);
+
+int lp_refactor_policy_phase1_soft_lu_policy_cooldown_updates(
+    int m,
+    int degenerate_count,
+    int periodic_interval);
+
 LPLUHealthRefactorDecision lp_refactor_policy_lu_health_refactor_decision(
     int m,
     int use_ft_updates,
