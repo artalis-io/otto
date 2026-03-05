@@ -15,6 +15,7 @@ OBJ_REL_TOL=""
 TIME_MULT=""
 RANDOM_SEED=""
 LP_REINVERT_CONTROLLER_MODE=""
+BFCP_BACKEND=""
 REQUIRED_PASS_TIMEOUT_RETRIES=""
 REQUIRED_PASS_TIMEOUT_NEAR_CAP_RATIO=""
 REQUIRED_PASS_TIMEOUT_MIN_MS=""
@@ -41,6 +42,7 @@ Options:
   --random-seed <n>        --random-seed passed to ralph-benchmark
   --lp-reinvert-controller-mode <n>
                             --lp-reinvert-controller-mode passed to ralph-benchmark
+  --bfcp-backend <n>        --bfcp-backend passed to ralph-benchmark (0=luf_ft, 1=cbg, 2=cgr)
   --required-pass-timeout-retries <n>
                             Retry count for required-pass near-cap timeouts (default: 1)
   --required-pass-timeout-near-cap-ratio <r>
@@ -97,6 +99,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --lp-reinvert-controller-mode)
             LP_REINVERT_CONTROLLER_MODE="$2"
+            shift 2
+            ;;
+        --bfcp-backend)
+            BFCP_BACKEND="$2"
             shift 2
             ;;
         --required-pass-timeout-retries)
@@ -191,6 +197,12 @@ if [[ -z "$LP_REINVERT_CONTROLLER_MODE" ]]; then
     LP_REINVERT_CONTROLLER_MODE="$(
         jq -r '.defaults.lp_reinvert_controller_mode // 1' "$BASELINE_FILE"
     )"
+fi
+if [[ -n "$BFCP_BACKEND" ]]; then
+    if ! [[ "$BFCP_BACKEND" =~ ^[0-2]$ ]]; then
+        echo "ERROR: invalid --bfcp-backend '$BFCP_BACKEND' (expected 0, 1, or 2)" >&2
+        exit 2
+    fi
 fi
 if [[ -z "$REQUIRED_PASS_TIMEOUT_RETRIES" ]]; then
     REQUIRED_PASS_TIMEOUT_RETRIES="$(
@@ -383,6 +395,9 @@ echo "  method:   $METHOD"
 echo "  time-mult:$TIME_MULT"
 echo "  seed:     $RANDOM_SEED"
 echo "  reinvert: $LP_REINVERT_CONTROLLER_MODE"
+if [[ -n "$BFCP_BACKEND" ]]; then
+    echo "  bfcp:     $BFCP_BACKEND"
+fi
 if [[ -n "$OBJ_REL_TOL" ]]; then
     echo "  obj-tol:  $OBJ_REL_TOL"
 fi
@@ -431,6 +446,9 @@ while IFS= read -r f; do
     )
     if [[ -n "$run_obj_rel_tol" ]]; then
         bench_cmd+=(--obj-rel-tol "$run_obj_rel_tol")
+    fi
+    if [[ -n "$BFCP_BACKEND" ]]; then
+        bench_cmd+=(--bfcp-backend "$BFCP_BACKEND")
     fi
     bench_cmd+=("$f")
 
