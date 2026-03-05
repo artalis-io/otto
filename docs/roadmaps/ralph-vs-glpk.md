@@ -317,3 +317,9 @@ Cleanup note:
   `lp_refactor_policy_periodic_feedback_record_refactor`) via an orthogonal
   `LPPeriodicFeedbackState` API, with dedicated policy unit tests and unchanged
   NETLIB gate behavior.
+- Removed simplex-local periodic pressure-decay arithmetic and delegated it to
+  `lp_refactor_policy`
+  (`lp_refactor_policy_periodic_pressure_effective`,
+  `lp_refactor_policy_periodic_pressure_decay_recover`,
+  `lp_refactor_policy_periodic_pressure_decay_penalty`) so cooldown pressure
+  damping is policy-owned and unit-tested independently.

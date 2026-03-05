@@ -61,6 +61,17 @@ int lp_refactor_policy_should_run_metrics(int iter,
                                           int use_bland,
                                           int degenerate_count);
 
+double lp_refactor_policy_periodic_pressure_effective(
+    int cooldown_eligible,
+    double run_pressure,
+    double pressure_decay);
+
+double lp_refactor_policy_periodic_pressure_decay_recover(int phase,
+                                                          double pressure_decay);
+
+double lp_refactor_policy_periodic_pressure_decay_penalty(int phase,
+                                                          double pressure_decay);
+
 void lp_refactor_policy_periodic_feedback_set_hint(LPPeriodicFeedbackState *state,
                                                    int interval,
                                                    double run_pressure);
