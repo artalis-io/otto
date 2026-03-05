@@ -129,6 +129,24 @@ static void test_profile_matrix_apply(void) {
     sg_free(ctx);
 }
 
+static void test_profile_matrix_apply_medium(void) {
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    assert(sg_profile_matrix_apply(ctx, SG_PROFILE_FAST, SG_SCALE_MEDIUM) == SG_STATUS_OK);
+    assert(ctx->config.max_iterations == 2500);
+    assert(ctx->config.max_time_seconds == 10);
+    assert(ctx->tune_params != NULL);
+    /* MEDIUM column uses S22-tuned params (sa_accept_pct=0.200, not BASE_TUNE 0.074) */
+    assert(ctx->tune_params->sa_accept_pct == 0.200);
+    assert(ctx->tune_params->neighbor_k == 20);
+    /* Verify key MEDIUM_TUNE differences from LARGE_TUNE */
+    assert(ctx->tune_params->reward_best == 50.00);
+    assert(ctx->tune_params->pen_decrease == 0.95);
+
+    sg_free(ctx);
+}
+
 static void test_profile_matrix_apply_invalid(void) {
     SGContext *ctx = sg_create();
     assert(ctx != NULL);
@@ -409,6 +427,7 @@ int main(void) {
     RUN_TEST(test_matrix_cell_validity);
     RUN_TEST(test_matrix_small_matches_old_profiles);
     RUN_TEST(test_profile_matrix_apply);
+    RUN_TEST(test_profile_matrix_apply_medium);
     RUN_TEST(test_profile_matrix_apply_invalid);
     RUN_TEST(test_set_profile_defers);
     RUN_TEST(test_set_profile_scale);
