@@ -9324,9 +9324,9 @@ static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *
             enable_supernode = 1;
         }
 
-        /* Runtime backend path is currently LUF+FT only.
-         * Keep BFCP backend ids as API surface, but do not pseudo-map CBG/CGR
-         * to unrelated sparse/dense toggles in simplex internals. */
+        /* BFCP backend ids are propagated through solver policy.
+         * Current LU update kernel remains unified, so backend ids are kept
+         * as control-plane selectors without local pseudo-mapping here. */
         (void)solver->lu_backend_policy;
         tab->lu->sn_enabled = enable_supernode ? 1 : 0;
 

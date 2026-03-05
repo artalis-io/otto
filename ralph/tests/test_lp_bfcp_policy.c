@@ -70,11 +70,11 @@ int main(void) {
     req.requested_pivot_tol = 0.0;
     req.requested_growth_guard = 0.0;
     rc = lp_bfcp_policy_compute(&req, &eff);
-    TEST(rc == 0, "compute: unsupported backend request accepted");
-    TEST(eff.backend_supported == 0,
-         "compute: cgr marked unsupported");
-    TEST(eff.effective_backend == LP_GLPK_BFCP_BACKEND_LUF_FT,
-         "compute: unsupported backend clamped to luf_ft");
+    TEST(rc == 0, "compute: cgr backend request accepted");
+    TEST(eff.backend_supported == 1,
+         "compute: cgr marked supported");
+    TEST(eff.effective_backend == LP_GLPK_BFCP_BACKEND_CGR,
+         "compute: cgr remains effective backend");
     TEST(eff.update_limit_override == -1,
          "compute: auto update limit preserved");
 

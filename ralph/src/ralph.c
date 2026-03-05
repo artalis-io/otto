@@ -1552,7 +1552,7 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         }
         if (!lp_bfcp_backend_supported && model->verbose) {
             fprintf(stderr,
-                    "[ralph] glpk_bfcp_backend=%d requested, but only LUF+FT is currently supported; clamped to luf_ft\n",
+                    "[ralph] glpk_bfcp_backend=%d requested, but backend id is unsupported; clamped to luf_ft\n",
                     glpk_policy_cfg.glpk_bfcp_backend);
         }
         lp_algorithm_report_ready = 1;

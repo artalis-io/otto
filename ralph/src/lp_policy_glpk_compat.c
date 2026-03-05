@@ -344,13 +344,11 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
     if (dual_rc_recompute_interval > 64) dual_rc_recompute_interval = 64;
 
     if (bfcp_backend_io) {
-        /* Until true BG/GR implementations are added, keep runtime backend on
-         * LUF+FT to avoid misleading pseudo-mapping in simplex configuration. */
-        *bfcp_backend_io = LP_GLPK_BFCP_BACKEND_LUF_FT;
+        *bfcp_backend_io = cfg->glpk_bfcp_backend;
     }
     if (bfcp_backend_supported_io) {
         *bfcp_backend_supported_io =
-            (cfg->glpk_bfcp_backend == LP_GLPK_BFCP_BACKEND_LUF_FT) ? 1 : 0;
+            lp_glpk_bfcp_backend_valid(cfg->glpk_bfcp_backend) ? 1 : 0;
     }
     if (bfcp_update_limit_io) {
         *bfcp_update_limit_io = cfg->glpk_bfcp_update_limit;

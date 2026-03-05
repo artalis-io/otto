@@ -13,7 +13,7 @@ typedef struct {
 } LPBFCPPolicyRequest;
 
 typedef struct {
-    int effective_backend;      /* currently clamped to LUF_FT */
+    int effective_backend;      /* normalized LP_GLPK_BFCP_BACKEND_* */
     int backend_supported;      /* 1 if requested backend is available */
     int update_limit_override;  /* <=0 => use LU default */
     double pivot_tol_override;  /* <=0 => use LU default */
