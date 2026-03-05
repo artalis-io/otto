@@ -303,3 +303,11 @@ Cleanup note:
   (`lp_refactor_policy_phase1_reinvert_pressure_safety_step`,
   `lp_refactor_policy_phase1_stagnation_escape_decision`), with dedicated
   policy tests and unchanged gate behavior.
+- Removed simplex-local phase1 degen/stall/recompute/ratio-breakdown threshold
+  constants and delegated those decisions to `lp_refactor_policy`
+  (`lp_refactor_policy_phase1_degen_threshold`,
+  `lp_refactor_policy_phase1_stall_threshold`,
+  `lp_refactor_policy_phase1_recompute_interval`,
+  `lp_refactor_policy_phase1_stall_obj_tol`,
+  `lp_refactor_policy_phase1_ratio_breakdown_limit`), with dedicated
+  unit tests in `test_lp_refactor_policy` and unchanged NETLIB gate behavior.

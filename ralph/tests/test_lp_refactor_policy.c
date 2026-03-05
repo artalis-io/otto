@@ -373,6 +373,33 @@ int main(void) {
              96, 0.0, 10.0, 18, 20, 4, 8, 10, 8, 1, 2, 0, 5) == 0,
          "stagnation decision: blocked by cooldown");
 
+    TEST(lp_refactor_policy_phase1_degen_threshold(699) == 50,
+         "phase1 degen threshold: default below large-m boundary");
+    TEST(lp_refactor_policy_phase1_degen_threshold(700) == 20,
+         "phase1 degen threshold: tightened at large-m boundary");
+
+    TEST(lp_refactor_policy_phase1_stall_threshold(699) == 50,
+         "phase1 stall threshold: default below large-m boundary");
+    TEST(lp_refactor_policy_phase1_stall_threshold(700) == 30,
+         "phase1 stall threshold: tightened at large-m boundary");
+
+    TEST(lp_refactor_policy_phase1_recompute_interval() == 25,
+         "phase1 recompute interval: policy constant");
+
+    TEST(fabs(lp_refactor_policy_phase1_stall_obj_tol(9.0) - 1e-3) < 1e-12,
+         "phase1 stall obj tol: finite input uses relative rule");
+    TEST(fabs(lp_refactor_policy_phase1_stall_obj_tol(NAN) - 1e-4) < 1e-12,
+         "phase1 stall obj tol: non-finite input sanitized");
+
+    TEST(lp_refactor_policy_phase1_ratio_breakdown_limit(699, 100) == 60,
+         "phase1 ratio-breakdown limit: no tighten for small basis");
+    TEST(lp_refactor_policy_phase1_ratio_breakdown_limit(700, 2) == 60,
+         "phase1 ratio-breakdown limit: no tighten below repeat threshold");
+    TEST(lp_refactor_policy_phase1_ratio_breakdown_limit(700, 3) == 20,
+         "phase1 ratio-breakdown limit: tighten on large basis repeated entering");
+    TEST(lp_refactor_policy_phase1_ratio_breakdown_limit(700, -7) == 60,
+         "phase1 ratio-breakdown limit: negative streak sanitized");
+
     decision = lp_refactor_policy_lu_health_refactor_decision(1500, 1, 120, 120,
                                                               0, 100, 1e3, 1.0, 0);
     TEST(decision.hard_trigger == 1, "lu health: hard trigger when max updates reached");

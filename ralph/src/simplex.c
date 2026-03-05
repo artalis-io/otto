@@ -104,15 +104,8 @@ static int phase1_trace_reason_from_lu_failure(int lu_reason, int forced_refacto
 #define PHASE2_POLICY_PRESSURE_DECAY_STEP 0.06
 #define PHASE2_POLICY_PRESSURE_DECAY_MAX 0.24
 #define PHASE2_POLICY_PRESSURE_RECOVERY_STEP 0.01
-#define PHASE1_DEGEN_THRESHOLD_DEFAULT 50
-#define PHASE1_DEGEN_THRESHOLD_LARGE_M 700
-#define PHASE1_DEGEN_THRESHOLD_LARGE 20
-#define PHASE1_STALL_THRESHOLD_DEFAULT 50
-#define PHASE1_STALL_THRESHOLD_LARGE 30
 #define PHASE1_NO_ENTERING_CLEANUP_MAX_ITERS 128
 #define PHASE1_RC_ONLY_STREAK_GUARD 6
-#define PHASE1_RATIO_BREAKDOWN_REPEAT_TIGHTEN_THRESHOLD 3
-#define PHASE1_RATIO_BREAKDOWN_REPEAT_TIGHTEN_DIVISOR 3
 #define PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_TRIGGER 2
 #define PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_ITERS RALPH_PHASE1_ENTERING_EXCLUDE_ITERS
 #define PHASE1_AUTO_DANTZIG_MIN_M 700
@@ -6168,10 +6161,9 @@ static int simplex_phase1(SimplexSolver *solver) {
     /* Cycling detection and anti-cycling measures */
     int degenerate_count = 0;
     const int DEGEN_THRESHOLD =
-        (tab->m >= PHASE1_DEGEN_THRESHOLD_LARGE_M)
-            ? PHASE1_DEGEN_THRESHOLD_LARGE
-            : PHASE1_DEGEN_THRESHOLD_DEFAULT;    /* Switch to Bland's rule after this many */
-    const int RECOMPUTE_INTERVAL = 25; /* Periodic drift correction in Phase 1 */
+        lp_refactor_policy_phase1_degen_threshold(tab->m); /* Bland switch threshold */
+    const int RECOMPUTE_INTERVAL =
+        lp_refactor_policy_phase1_recompute_interval();
     int use_bland = 0;
 
     /* Phase 1 stall detection: track objective (art_sum) progress.
@@ -6180,9 +6172,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     double last_obj_p1 = tab->obj_value;
     int stall_count_p1 = 0;
     const int P1_STALL_THRESHOLD =
-        (tab->m >= PHASE1_DEGEN_THRESHOLD_LARGE_M)
-            ? PHASE1_STALL_THRESHOLD_LARGE
-            : PHASE1_STALL_THRESHOLD_DEFAULT;
+        lp_refactor_policy_phase1_stall_threshold(tab->m);
     int perturb_attempts_p1 = 0;
     const int P1_MAX_PERTURB_ATTEMPTS = 15;
     int fail_entering = -1;
@@ -6718,16 +6708,10 @@ static int simplex_phase1(SimplexSolver *solver) {
                                         &excluded_entering_b,
                                         &excluded_entering_ttl_b);
             {
-                int ratio_breakdown_limit = RALPH_PHASE1_RATIO_BREAKDOWN_LIMIT;
-                if (tab->m >= PHASE1_DEGEN_THRESHOLD_LARGE_M &&
-                    ratio_breakdown_same_entering_streak >= PHASE1_RATIO_BREAKDOWN_REPEAT_TIGHTEN_THRESHOLD) {
-                    int tightened_limit =
-                        RALPH_PHASE1_RATIO_BREAKDOWN_LIMIT / PHASE1_RATIO_BREAKDOWN_REPEAT_TIGHTEN_DIVISOR;
-                    if (tightened_limit < 4) tightened_limit = 4;
-                    if (ratio_breakdown_limit > tightened_limit) {
-                        ratio_breakdown_limit = tightened_limit;
-                    }
-                }
+                int ratio_breakdown_limit =
+                    lp_refactor_policy_phase1_ratio_breakdown_limit(
+                        tab->m,
+                        ratio_breakdown_same_entering_streak);
                 if (ratio_breakdown_count < ratio_breakdown_limit) {
                     if (solver->verbose >= 2) {
                         LP_LOG_STDERR("[simplex_phase1] Continuing after ratio-test breakdown (count=%d, entering=%d streak=%d limit=%d), excluding entering for %d iterations\n",
@@ -7660,7 +7644,8 @@ static int simplex_phase1(SimplexSolver *solver) {
          * This is critical for problems like recipe (80 artificials) where
          * Bland's rule grinds forever without making progress. */
         {
-        double obj_tol_p1 = 1e-4 * (1.0 + fabs(last_obj_p1));
+        double obj_tol_p1 =
+            lp_refactor_policy_phase1_stall_obj_tol(last_obj_p1);
         double obj_change_p1 = fabs(tab->obj_value - last_obj_p1);
         if (obj_change_p1 < obj_tol_p1) {
             stall_count_p1++;
