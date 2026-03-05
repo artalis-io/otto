@@ -9,6 +9,13 @@ typedef struct {
 } LPPeriodicRefactorPolicy;
 
 typedef struct {
+    LPPeriodicRefactorPolicy policy;
+    int cooldown_eligible;
+    double effective_run_pressure;
+    int should_run;
+} LPPeriodicRefactorPlan;
+
+typedef struct {
     int hard_trigger;
     int soft_trigger;
     int soft_breach_streak_next;
@@ -54,6 +61,23 @@ LPPeriodicRefactorPolicy lp_refactor_policy_build_from_metrics(int phase,
                                                                int use_bland,
                                                                int degenerate_count,
                                                                double feedback_bias);
+
+LPPeriodicRefactorPlan lp_refactor_policy_periodic_plan(
+    int phase,
+    int iter,
+    int m,
+    int max_updates,
+    int num_updates,
+    int spike_pool_used,
+    int spike_pool_capacity,
+    double cond_estimate,
+    double growth_factor,
+    int use_bland,
+    int degenerate_count,
+    double feedback_bias,
+    int phase1_periodic_policy_refactor_count,
+    int periodic_policy_cooldown,
+    double periodic_policy_pressure_decay);
 
 int lp_refactor_policy_should_run_metrics(int iter,
                                           int num_updates,
