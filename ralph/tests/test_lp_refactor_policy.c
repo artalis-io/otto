@@ -255,6 +255,84 @@ int main(void) {
     TEST(lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(24) == 1,
          "dir-skip rescue cadence: periodic multiple");
 
+    TEST(lp_refactor_policy_phase1_dir_skip_force_pivot_threshold(600, 0) == 64,
+         "force-pivot threshold: baseline");
+    TEST(lp_refactor_policy_phase1_dir_skip_force_pivot_threshold(1300, 100) == 32,
+         "force-pivot threshold: tightened by scale+degeneracy");
+    TEST(lp_refactor_policy_phase1_dir_skip_force_pivot_budget(600, 0) == 12,
+         "force-pivot budget: baseline");
+    TEST(lp_refactor_policy_phase1_dir_skip_force_pivot_budget(1300, 200) == 28,
+         "force-pivot budget: increased under heavy degeneracy");
+
+    {
+        int next_streak = -1;
+        int next_budget = -1;
+        int next_pending = 0;
+        int next_reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
+        int activated = lp_refactor_policy_phase1_activate_force_pivot_mode(
+            1300, 120, 40, 0, &next_streak, &next_budget, &next_pending, &next_reason);
+        TEST(activated == 1, "force-pivot activation: triggers above threshold");
+        TEST(next_streak == 0 && next_budget == 20,
+             "force-pivot activation: resets streak and arms budget");
+        TEST(next_pending == 1 && next_reason == LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+             "force-pivot activation: marks pending DIR_SKIP force");
+    }
+
+    {
+        int next_streak = -1;
+        int next_budget = -1;
+        int next_pending = 0;
+        int next_reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
+        int activated = lp_refactor_policy_phase1_activate_force_pivot_mode(
+            1300, 120, 20, 5, &next_streak, &next_budget, &next_pending, &next_reason);
+        TEST(activated == 0, "force-pivot activation: blocked by active budget");
+        TEST(next_streak == 20 && next_budget == 5,
+             "force-pivot activation: preserves state when blocked");
+    }
+
+    {
+        int next_cooldown = -1;
+        int triggered = -1;
+        int hard_bypass = -1;
+        int suppress = lp_refactor_policy_phase1_dir_stabilize_escape_gate_plan(
+            1200, 120, 48, 12, 0, 0, 1, 0,
+            &next_cooldown, &triggered, &hard_bypass);
+        TEST(suppress == 1 && triggered == 1 && hard_bypass == 0 && next_cooldown > 0,
+             "dir-escape gate: triggers suppression on chronic treadmill");
+    }
+
+    {
+        int next_cooldown = -1;
+        int triggered = -1;
+        int hard_bypass = -1;
+        int suppress = lp_refactor_policy_phase1_dir_stabilize_escape_gate_plan(
+            1200, 120, 48, 12, 20, 0, 1, 1,
+            &next_cooldown, &triggered, &hard_bypass);
+        TEST(suppress == 0 && hard_bypass == 1,
+             "dir-escape gate: hard LU bypass avoids suppression");
+    }
+
+    TEST(lp_refactor_policy_phase1_force_pivot_refactor_relax_plan(
+             1200, 120, 2, 1, 0, 0, 0, 10, 8, 0) == 1,
+         "force-pivot relax: enabled under stable successful rescue");
+    TEST(lp_refactor_policy_phase1_force_pivot_refactor_relax_plan(
+             1200, 120, 2, 1, 0, 1, 0, 10, 8, 0) == 0,
+         "force-pivot relax: blocked by LU-health force");
+
+    TEST(lp_refactor_policy_phase1_force_extreme_refactor_relax_plan(
+             1200, 120, 2, 120.0, 1, 0, 0, 10, 8, 0) == 1,
+         "force-extreme relax: enabled on moderate ratio");
+    TEST(lp_refactor_policy_phase1_force_extreme_refactor_relax_plan(
+             1200, 120, 2, 400.0, 1, 0, 0, 10, 8, 0) == 0,
+         "force-extreme relax: blocked on severe ratio");
+
+    TEST(lp_refactor_policy_phase1_soft_lu_policy_cooldown_updates(600, 50, 80) == 0,
+         "phase1 soft-lu cooldown: disabled for small basis");
+    TEST(lp_refactor_policy_phase1_soft_lu_policy_cooldown_updates(1200, 50, 80) == 40,
+         "phase1 soft-lu cooldown: scales with periodic interval");
+    TEST(lp_refactor_policy_phase1_soft_lu_policy_cooldown_updates(1200, 50, 300) == 48,
+         "phase1 soft-lu cooldown: clamped to max");
+
     decision = lp_refactor_policy_lu_health_refactor_decision(1500, 1, 120, 120,
                                                               0, 100, 1e3, 1.0, 0);
     TEST(decision.hard_trigger == 1, "lu health: hard trigger when max updates reached");

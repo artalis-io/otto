@@ -294,3 +294,7 @@ Cleanup note:
   `lp_refactor_policy_phase1_no_pivot_ladder_step`,
   `lp_refactor_policy_phase1_dir_skip_ladder_rescue_due`), keeping telemetry in
   simplex and policy math in one module.
+- Removed simplex-local phase1 force-pivot activation / dir-escape gate /
+  force-relax / soft-LU-cooldown thresholds and delegated them to
+  `lp_refactor_policy` (activation/escape/relax/cooldown helpers), leaving
+  simplex as orchestration + telemetry only.
