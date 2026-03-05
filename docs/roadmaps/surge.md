@@ -3069,11 +3069,12 @@ This is competitive with published solvers on the vehicle dimension. Distance ga
 +13.1% reflects the 60s time budget — BKS papers typically allow 200-600s. More time
 budget (profile matrix NEAR_OPTIMAL gives 120s) and per-cell tuning should close this.
 
-**400 customers: Closing the gap.** +12.9% distance gap and 58% vehicle match with
-population + CFRS + S22 scale-tuned params. Down from +51.8% / 47% before S17.3,
-and +33.3% / 45% before S19 heap repair. R2_4 (wide TW) at +7.9% is competitive.
-C1_4 at +12.3% (including c1_4_1 BKS match). At 300s, rc1_4_1 drops to +6.6% dist.
-Runtime is predictable: all 60 instances complete in <165s with a 60s budget.
+**400 customers: Improving rapidly at 60s, untested at competition budgets.** +12.9%
+distance gap and 58% vehicle match at 60s with population + CFRS + S22 tuned params.
+Down from +51.8% / 47% before S17.3. R2_4 (wide TW) at +7.9%, C1_4 at +12.3%
+(c1_4_1 BKS match). At 300s, rc1_4_1 drops to +6.6%. Note: the DIMACS competition
+standard is **2 hours** per instance on a reference CPU — Surge has only been tested
+at 60-300s. A fair comparison requires running at BEST profile (600s) or full 2h.
 
 Root causes at 400+:
 
