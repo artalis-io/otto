@@ -548,41 +548,6 @@ static void periodic_feedback_record_refactor(SimplexSolver *owner,
     }
 }
 
-static LPPeriodicRefactorPolicy compute_periodic_refactor_policy(const SimplexTableau *tab,
-                                                                 int phase,
-                                                                 int use_bland,
-                                                                 int degenerate_count) {
-    LPPeriodicRefactorPolicy policy = {0, 0, 0.0, 0.0};
-    double feedback_bias = 0.0;
-
-    if (!tab || !tab->lu || !tab->use_two_phase) return policy;
-    feedback_bias = periodic_feedback_bias_for_phase(tab->owner, phase);
-    return lp_refactor_policy_build_from_metrics(phase,
-                                                 tab->m,
-                                                 tab->lu->max_updates,
-                                                 tab->lu->num_updates,
-                                                 tab->lu->spike_pool_used,
-                                                 tab->lu->spike_pool_capacity,
-                                                 tab->lu->cond_estimate,
-                                                 tab->lu->growth_factor,
-                                                 use_bland,
-                                                 degenerate_count,
-                                                 feedback_bias);
-}
-
-static int should_run_periodic_refactor(const SimplexTableau *tab,
-                                        int iter,
-                                        const LPPeriodicRefactorPolicy *policy,
-                                        int use_bland,
-                                        int degenerate_count) {
-    if (!tab || !tab->lu) return 0;
-    return lp_refactor_policy_should_run_metrics(iter,
-                                                 tab->lu->num_updates,
-                                                 policy,
-                                                 use_bland,
-                                                 degenerate_count);
-}
-
 static LPReinvertControllerState *reinvert_state_for_phase(SimplexSolver *solver,
                                                            int phase) {
     if (!solver) return NULL;
@@ -1056,55 +1021,26 @@ int simplex_periodic_refactor_plan_for_test(int phase,
                                             double periodic_policy_pressure_decay,
                                             int *interval_out,
                                             double *pressure_out) {
-    LPPeriodicRefactorPolicy policy = lp_refactor_policy_build_from_metrics(phase,
-                                                                            m,
-                                                                            max_updates,
-                                                                            num_updates,
-                                                                            spike_pool_used,
-                                                                            spike_pool_capacity,
-                                                                            cond_estimate,
-                                                                            growth_factor,
-                                                                            use_bland,
-                                                                            degenerate_count,
-                                                                            feedback_bias);
-    int cooldown_eligible = 0;
-    LPPeriodicRefactorPolicy effective_policy = policy;
-    int should_run;
-
-    if (phase == 1) {
-        cooldown_eligible = lp_refactor_policy_phase1_cooldown_eligible(m,
-                                                                        degenerate_count,
-                                                                        0,
-                                                                        spike_pool_used,
-                                                                        spike_pool_capacity,
-                                                                        cond_estimate,
-                                                                        growth_factor);
-    } else if (phase == 2) {
-        cooldown_eligible = lp_refactor_policy_phase2_cooldown_eligible(m,
-                                                                        degenerate_count,
-                                                                        spike_pool_used,
-                                                                        spike_pool_capacity,
-                                                                        cond_estimate,
-                                                                        growth_factor);
-    }
-    effective_policy.run_pressure = lp_refactor_policy_periodic_pressure_effective(
-        cooldown_eligible,
-        effective_policy.run_pressure,
+    LPPeriodicRefactorPlan plan = lp_refactor_policy_periodic_plan(
+        phase,
+        iter,
+        m,
+        max_updates,
+        num_updates,
+        spike_pool_used,
+        spike_pool_capacity,
+        cond_estimate,
+        growth_factor,
+        use_bland,
+        degenerate_count,
+        feedback_bias,
+        0,
+        periodic_policy_cooldown,
         periodic_policy_pressure_decay);
 
-    if (interval_out) *interval_out = policy.interval;
-    if (pressure_out) *pressure_out = effective_policy.run_pressure;
-    should_run = lp_refactor_policy_should_run_metrics(iter,
-                                                       num_updates,
-                                                       &effective_policy,
-                                                       use_bland,
-                                                       degenerate_count);
-    if (should_run &&
-        cooldown_eligible &&
-        periodic_policy_cooldown > 0) {
-        should_run = 0;
-    }
-    return should_run;
+    if (interval_out) *interval_out = plan.policy.interval;
+    if (pressure_out) *pressure_out = plan.effective_run_pressure;
+    return plan.should_run;
 }
 
 int simplex_lu_health_refactor_plan_for_test(int m,
@@ -7639,9 +7575,19 @@ static int simplex_phase1(SimplexSolver *solver) {
         int lu_soft_cost_deferred = 0;
         int cooldown_eligible = 0;
         double effective_policy_pressure = 0.0;
+        double periodic_feedback_bias = periodic_feedback_bias_for_phase(solver, 1);
         LPPeriodicRefactorPolicy periodic_policy =
-            compute_periodic_refactor_policy(tab, 1, use_bland, degenerate_count);
-        LPPeriodicRefactorPolicy effective_policy = periodic_policy;
+            lp_refactor_policy_build_from_metrics(1,
+                                                  tab->m,
+                                                  tab->lu->max_updates,
+                                                  tab->lu->num_updates,
+                                                  tab->lu->spike_pool_used,
+                                                  tab->lu->spike_pool_capacity,
+                                                  tab->lu->cond_estimate,
+                                                  tab->lu->growth_factor,
+                                                  use_bland,
+                                                  degenerate_count,
+                                                  periodic_feedback_bias);
         int periodic_refactor = 0;
         int periodic_refactor_nominal = 0;
         int needs_refactor = lu_refactor_needed;
@@ -7724,23 +7670,26 @@ static int simplex_phase1(SimplexSolver *solver) {
             }
         }
         if (!lu_refactor_needed) {
-            cooldown_eligible = lp_refactor_policy_phase1_cooldown_eligible(tab->m,
-                                                                            degenerate_count,
-                                                                            solver->policy.periodic_policy_refactors_phase1,
-                                                                            tab->lu->spike_pool_used,
-                                                                            tab->lu->spike_pool_capacity,
-                                                                            tab->lu->cond_estimate,
-                                                                            tab->lu->growth_factor);
-            effective_policy.run_pressure = lp_refactor_policy_periodic_pressure_effective(
-                cooldown_eligible,
-                effective_policy.run_pressure,
+            LPPeriodicRefactorPlan periodic_plan = lp_refactor_policy_periodic_plan(
+                1,
+                iter,
+                tab->m,
+                tab->lu->max_updates,
+                tab->lu->num_updates,
+                tab->lu->spike_pool_used,
+                tab->lu->spike_pool_capacity,
+                tab->lu->cond_estimate,
+                tab->lu->growth_factor,
+                use_bland,
+                degenerate_count,
+                periodic_feedback_bias,
+                solver->policy.periodic_policy_refactors_phase1,
+                periodic_policy_cooldown,
                 periodic_policy_pressure_decay);
-            effective_policy_pressure = effective_policy.run_pressure;
-            periodic_refactor = should_run_periodic_refactor(tab,
-                                                             iter,
-                                                             &effective_policy,
-                                                             use_bland,
-                                                             degenerate_count);
+            periodic_policy = periodic_plan.policy;
+            cooldown_eligible = periodic_plan.cooldown_eligible;
+            effective_policy_pressure = periodic_plan.effective_run_pressure;
+            periodic_refactor = periodic_plan.should_run;
             periodic_refactor_nominal = periodic_refactor;
             reinvert_periodic_candidate = periodic_refactor_nominal;
             reinvert_shadow_prepare_phase(solver,
@@ -8699,6 +8648,7 @@ static int simplex_phase2(SimplexSolver *solver) {
             reinvert_controller_controls_periodic_phase(solver, 2);
         int cooldown_eligible = 0;
         double effective_policy_pressure = 0.0;
+        double periodic_feedback_bias = periodic_feedback_bias_for_phase(solver, 2);
         LPPeriodicRefactorPolicy periodic_policy = {0, 0, 0.0, 0.0};
         LPReinvertShadowEval reinvert_shadow_eval;
         reinvert_shadow_eval_reset(&reinvert_shadow_eval);
@@ -8756,25 +8706,26 @@ static int simplex_phase2(SimplexSolver *solver) {
             }
         }
         if (!lu_refactor_needed) {
-            LPPeriodicRefactorPolicy effective_policy;
-            periodic_policy = compute_periodic_refactor_policy(tab, 2, use_bland, degenerate_count);
-            effective_policy = periodic_policy;
-            cooldown_eligible = lp_refactor_policy_phase2_cooldown_eligible(tab->m,
-                                                                            degenerate_count,
-                                                                            tab->lu->spike_pool_used,
-                                                                            tab->lu->spike_pool_capacity,
-                                                                            tab->lu->cond_estimate,
-                                                                            tab->lu->growth_factor);
-            effective_policy.run_pressure = lp_refactor_policy_periodic_pressure_effective(
-                cooldown_eligible,
-                effective_policy.run_pressure,
+            LPPeriodicRefactorPlan periodic_plan = lp_refactor_policy_periodic_plan(
+                2,
+                iter,
+                tab->m,
+                tab->lu->max_updates,
+                tab->lu->num_updates,
+                tab->lu->spike_pool_used,
+                tab->lu->spike_pool_capacity,
+                tab->lu->cond_estimate,
+                tab->lu->growth_factor,
+                use_bland,
+                degenerate_count,
+                periodic_feedback_bias,
+                0,
+                periodic_policy_cooldown,
                 periodic_policy_pressure_decay);
-            effective_policy_pressure = effective_policy.run_pressure;
-            periodic_refactor = should_run_periodic_refactor(tab,
-                                                             iter,
-                                                             &effective_policy,
-                                                             use_bland,
-                                                             degenerate_count);
+            periodic_policy = periodic_plan.policy;
+            cooldown_eligible = periodic_plan.cooldown_eligible;
+            effective_policy_pressure = periodic_plan.effective_run_pressure;
+            periodic_refactor = periodic_plan.should_run;
             periodic_refactor_nominal = periodic_refactor;
             reinvert_periodic_candidate = periodic_refactor_nominal;
             reinvert_shadow_prepare_phase(solver,

@@ -403,6 +403,79 @@ int lp_refactor_policy_should_run_metrics(int iter,
     return policy->run_pressure >= PERIODIC_REFACTOR_PRESSURE_TRIGGER;
 }
 
+LPPeriodicRefactorPlan lp_refactor_policy_periodic_plan(
+    int phase,
+    int iter,
+    int m,
+    int max_updates,
+    int num_updates,
+    int spike_pool_used,
+    int spike_pool_capacity,
+    double cond_estimate,
+    double growth_factor,
+    int use_bland,
+    int degenerate_count,
+    double feedback_bias,
+    int phase1_periodic_policy_refactor_count,
+    int periodic_policy_cooldown,
+    double periodic_policy_pressure_decay) {
+    LPPeriodicRefactorPlan plan = {{0, 0, 0.0, 0.0}, 0, 0.0, 0};
+    LPPeriodicRefactorPolicy effective_policy;
+
+    plan.policy = lp_refactor_policy_build_from_metrics(phase,
+                                                        m,
+                                                        max_updates,
+                                                        num_updates,
+                                                        spike_pool_used,
+                                                        spike_pool_capacity,
+                                                        cond_estimate,
+                                                        growth_factor,
+                                                        use_bland,
+                                                        degenerate_count,
+                                                        feedback_bias);
+
+    if (phase == 1) {
+        plan.cooldown_eligible = lp_refactor_policy_phase1_cooldown_eligible(
+            m,
+            degenerate_count,
+            phase1_periodic_policy_refactor_count,
+            spike_pool_used,
+            spike_pool_capacity,
+            cond_estimate,
+            growth_factor);
+    } else if (phase == 2) {
+        plan.cooldown_eligible = lp_refactor_policy_phase2_cooldown_eligible(
+            m,
+            degenerate_count,
+            spike_pool_used,
+            spike_pool_capacity,
+            cond_estimate,
+            growth_factor);
+    } else {
+        return plan;
+    }
+
+    effective_policy = plan.policy;
+    effective_policy.run_pressure = lp_refactor_policy_periodic_pressure_effective(
+        plan.cooldown_eligible,
+        effective_policy.run_pressure,
+        periodic_policy_pressure_decay);
+    plan.effective_run_pressure = effective_policy.run_pressure;
+
+    plan.should_run = lp_refactor_policy_should_run_metrics(iter,
+                                                            num_updates,
+                                                            &effective_policy,
+                                                            use_bland,
+                                                            degenerate_count);
+    if (plan.should_run &&
+        plan.cooldown_eligible &&
+        periodic_policy_cooldown > 0) {
+        plan.should_run = 0;
+    }
+
+    return plan;
+}
+
 double lp_refactor_policy_periodic_pressure_effective(
     int cooldown_eligible,
     double run_pressure,

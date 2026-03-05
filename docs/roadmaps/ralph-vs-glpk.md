@@ -330,3 +330,8 @@ Cleanup note:
   `lp_refactor_policy_periodic_post_refactor_update`) so cooldown progression,
   soft-LU cooldown extension, and periodic post-refactor state updates are
   centralized in one policy module.
+- Unified periodic scheduling decision plumbing behind one policy plan helper
+  (`lp_refactor_policy_periodic_plan`) and routed both runtime simplex
+  phase-1/phase-2 paths and `simplex_periodic_refactor_plan_for_test` through
+  it, so cooldown eligibility, effective pressure, and run/suppress decisions
+  are computed by one shared policy function.

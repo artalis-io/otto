@@ -155,6 +155,49 @@ int main(void) {
     TEST(fabs(lp_refactor_policy_periodic_pressure_decay_penalty(99, 0.3) - 0.3) < 1e-12,
          "periodic pressure penalty: invalid phase is no-op");
 
+    {
+        LPPeriodicRefactorPlan plan = lp_refactor_policy_periodic_plan(
+            2, 24, 1503, 120, 24, 10, 100, 1e4, 10.0, 0, 40, 0.0, 0, 0, 0.0);
+        TEST(plan.policy.interval == 24,
+             "periodic plan: phase2 exposes policy interval");
+        TEST(plan.cooldown_eligible == 1,
+             "periodic plan: phase2 marks cooldown eligibility");
+        TEST(fabs(plan.effective_run_pressure - 1.0) < 1e-12,
+             "periodic plan: phase2 effective pressure matches policy");
+        TEST(plan.should_run == 1,
+             "periodic plan: phase2 cadence selected when due");
+    }
+
+    {
+        LPPeriodicRefactorPlan plan = lp_refactor_policy_periodic_plan(
+            2, 24, 1503, 120, 24, 10, 100, 1e4, 10.0, 0, 40, 0.0, 0, 12, 0.24);
+        TEST(fabs(plan.effective_run_pressure - 0.76) < 1e-12,
+             "periodic plan: pressure decay lowers effective pressure");
+        TEST(plan.should_run == 0,
+             "periodic plan: cooldown suppresses due periodic run");
+    }
+
+    {
+        LPPeriodicRefactorPlan plan_low = lp_refactor_policy_periodic_plan(
+            1, 24, 1503, 120, 24, 10, 100, 1e4, 10.0, 0, 10, 0.0, 0, 12, 0.0);
+        LPPeriodicRefactorPlan plan_hi = lp_refactor_policy_periodic_plan(
+            1, 24, 1503, 120, 24, 10, 100, 1e4, 10.0, 0, 10, 0.0, 80, 12, 0.0);
+        TEST(plan_low.cooldown_eligible == 0,
+             "periodic plan: phase1 low policy-refactor count not cooldown-eligible");
+        TEST(plan_hi.cooldown_eligible == 1,
+             "periodic plan: phase1 high policy-refactor count enables cooldown eligibility");
+    }
+
+    {
+        LPPeriodicRefactorPlan plan = lp_refactor_policy_periodic_plan(
+            99, 24, 1503, 120, 24, 10, 100, 1e4, 10.0, 0, 40, 0.0, 0, 12, 0.24);
+        TEST(plan.policy.interval == 0 &&
+                 plan.cooldown_eligible == 0 &&
+                 fabs(plan.effective_run_pressure) < 1e-12 &&
+                 plan.should_run == 0,
+             "periodic plan: invalid phase returns empty plan");
+    }
+
     TEST(lp_refactor_policy_periodic_cooldown_tick(3) == 2,
          "periodic cooldown tick: decrements positive cooldown");
     TEST(lp_refactor_policy_periodic_cooldown_tick(0) == 0,
