@@ -26,6 +26,12 @@
 #define PERIODIC_FEEDBACK_HIGH_PRESSURE 0.85
 #define PERIODIC_FEEDBACK_EARLY_RECOVERY_NUM 2
 #define PERIODIC_FEEDBACK_EARLY_RECOVERY_DEN 3
+#define PHASE1_POLICY_PRESSURE_DECAY_STEP 0.06
+#define PHASE1_POLICY_PRESSURE_DECAY_MAX 0.24
+#define PHASE1_POLICY_PRESSURE_RECOVERY_STEP 0.01
+#define PHASE2_POLICY_PRESSURE_DECAY_STEP 0.06
+#define PHASE2_POLICY_PRESSURE_DECAY_MAX 0.24
+#define PHASE2_POLICY_PRESSURE_RECOVERY_STEP 0.01
 #define PHASE2_POLICY_COOLDOWN_MIN_M 450
 #define PHASE2_POLICY_COOLDOWN_DEGEN_TRIGGER 40
 #define PHASE2_POLICY_COOLDOWN_MIN_UPDATES 16
@@ -178,6 +184,31 @@ static int clamp_int_range(int x, int lo, int hi) {
     if (x < lo) return lo;
     if (x > hi) return hi;
     return x;
+}
+
+static double clamp_nonnegative(double x) {
+    if (!isfinite(x) || x <= 0.0) return 0.0;
+    return x;
+}
+
+static int periodic_pressure_params(int phase,
+                                    double *decay_step,
+                                    double *decay_max,
+                                    double *recovery_step) {
+    if (!decay_step || !decay_max || !recovery_step) return 0;
+    if (phase == 1) {
+        *decay_step = PHASE1_POLICY_PRESSURE_DECAY_STEP;
+        *decay_max = PHASE1_POLICY_PRESSURE_DECAY_MAX;
+        *recovery_step = PHASE1_POLICY_PRESSURE_RECOVERY_STEP;
+        return 1;
+    }
+    if (phase == 2) {
+        *decay_step = PHASE2_POLICY_PRESSURE_DECAY_STEP;
+        *decay_max = PHASE2_POLICY_PRESSURE_DECAY_MAX;
+        *recovery_step = PHASE2_POLICY_PRESSURE_RECOVERY_STEP;
+        return 1;
+    }
+    return 0;
 }
 
 static int lu_soft_min_update_age(int max_updates) {
@@ -370,6 +401,47 @@ int lp_refactor_policy_should_run_metrics(int iter,
 
     if (use_bland || degenerate_count >= 20) return 1;
     return policy->run_pressure >= PERIODIC_REFACTOR_PRESSURE_TRIGGER;
+}
+
+double lp_refactor_policy_periodic_pressure_effective(
+    int cooldown_eligible,
+    double run_pressure,
+    double pressure_decay) {
+    double effective = clamp_unit_interval(run_pressure);
+    if (!cooldown_eligible) return effective;
+    return clamp_unit_interval(effective - clamp_unit_interval(pressure_decay));
+}
+
+double lp_refactor_policy_periodic_pressure_decay_recover(int phase,
+                                                          double pressure_decay) {
+    double decay_step = 0.0;
+    double decay_max = 0.0;
+    double recovery_step = 0.0;
+    double next = clamp_nonnegative(pressure_decay);
+
+    if (!periodic_pressure_params(phase, &decay_step, &decay_max, &recovery_step)) {
+        return next;
+    }
+    if (next <= recovery_step) return 0.0;
+    next -= recovery_step;
+    if (next > decay_max) next = decay_max;
+    return next;
+}
+
+double lp_refactor_policy_periodic_pressure_decay_penalty(int phase,
+                                                          double pressure_decay) {
+    double decay_step = 0.0;
+    double decay_max = 0.0;
+    double recovery_step = 0.0;
+    double next = clamp_nonnegative(pressure_decay);
+
+    if (!periodic_pressure_params(phase, &decay_step, &decay_max, &recovery_step)) {
+        return next;
+    }
+    (void)recovery_step;
+    next += decay_step;
+    if (next > decay_max) next = decay_max;
+    return next;
 }
 
 void lp_refactor_policy_periodic_feedback_set_hint(LPPeriodicFeedbackState *state,

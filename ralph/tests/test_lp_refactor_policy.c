@@ -130,6 +130,31 @@ int main(void) {
     TEST(lp_refactor_policy_phase2_cooldown_window_updates(200) == 96,
          "cooldown window clamps to maximum");
 
+    TEST(fabs(lp_refactor_policy_periodic_pressure_effective(0, 0.9, 0.2) - 0.9) < 1e-12,
+         "periodic pressure effective: cooldown-off keeps run pressure");
+    TEST(fabs(lp_refactor_policy_periodic_pressure_effective(1, 0.9, 0.2) - 0.7) < 1e-12,
+         "periodic pressure effective: cooldown-on subtracts decay");
+    TEST(fabs(lp_refactor_policy_periodic_pressure_effective(1, 0.1, 0.4) - 0.0) < 1e-12,
+         "periodic pressure effective: clamps at zero");
+
+    TEST(fabs(lp_refactor_policy_periodic_pressure_decay_recover(1, 0.24) - 0.23) < 1e-12,
+         "periodic pressure recover: phase1 uses configured recovery step");
+    TEST(fabs(lp_refactor_policy_periodic_pressure_decay_recover(2, 0.24) - 0.23) < 1e-12,
+         "periodic pressure recover: phase2 uses configured recovery step");
+    TEST(fabs(lp_refactor_policy_periodic_pressure_decay_recover(1, 0.005) - 0.0) < 1e-12,
+         "periodic pressure recover: floors at zero");
+
+    TEST(fabs(lp_refactor_policy_periodic_pressure_decay_penalty(1, 0.22) - 0.24) < 1e-12,
+         "periodic pressure penalty: phase1 clamps to max");
+    TEST(fabs(lp_refactor_policy_periodic_pressure_decay_penalty(2, 0.22) - 0.24) < 1e-12,
+         "periodic pressure penalty: phase2 clamps to max");
+    TEST(fabs(lp_refactor_policy_periodic_pressure_decay_penalty(1, -1.0) - 0.06) < 1e-12,
+         "periodic pressure penalty: negative input sanitized");
+    TEST(fabs(lp_refactor_policy_periodic_pressure_decay_recover(99, 0.3) - 0.3) < 1e-12,
+         "periodic pressure recover: invalid phase is no-op");
+    TEST(fabs(lp_refactor_policy_periodic_pressure_decay_penalty(99, 0.3) - 0.3) < 1e-12,
+         "periodic pressure penalty: invalid phase is no-op");
+
     TEST(lp_refactor_policy_phase1_cooldown_eligible(1503, 120, 0, 10, 100, 1e4, 10.0) == 1,
          "phase1 cooldown eligible under large degenerate stable LU");
     TEST(lp_refactor_policy_phase1_cooldown_eligible(1100, 120, 0, 10, 100, 1e4, 10.0) == 0,
