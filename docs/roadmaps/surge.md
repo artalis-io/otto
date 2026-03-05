@@ -3041,14 +3041,14 @@ Avg runtime: 74.2s. Max runtime: 104.5s (r1_4_1).
 
 **Progress across phases (GH-400):**
 
-| Metric | Pre-S17.3 (1T) | S17.3 (1T) | S17.3 + Pop | **+ Ejection Probe** |
-|--------|-----------------|------------|-------------|----------------------|
-| Equal Vehicles | 28/60 (47%) | 28/60 (47%) | 33/60 (55%) | **27/60 (45%)** |
-| Avg Veh Gap | +1.42 | +1.33 | +1.13 | **+1.33** |
-| Avg Dist Gap | +51.8% | +47.9% | +35.1% | **+33.3%** |
-| Avg Distance | 9898 | 9644 | 8803 | **8699** |
-| Avg Runtime | — | — | 705.8s | **74.2s** |
-| Max Runtime | — | — | 4221s | **104.5s** |
+| Metric | Pre-S17.3 (1T) | S17.3 (1T) | S17.3 + Pop | + Ejection Probe | S19 Heap | **S22 Tuned** |
+|--------|-----------------|------------|-------------|------------------|----------|---------------|
+| Equal Vehicles | 28/60 (47%) | 28/60 (47%) | 33/60 (55%) | 27/60 (45%) | 33/60 (55%) | **35/60 (58%)** |
+| Avg Veh Gap | +1.42 | +1.33 | +1.13 | +1.33 | +0.67 | **+0.53** |
+| Avg Dist Gap | +51.8% | +47.9% | +35.1% | +33.3% | +18.6% | **+12.9%** |
+| Avg Distance | 9898 | 9644 | 8803 | 8699 | — | **7359** |
+| Avg Runtime | — | — | 705.8s | 74.2s | 77s | **76s** |
+| Max Runtime | — | — | 4221s | 104.5s | — | **164s** |
 
 Vehicle match dropped from 33 to 27 because the pre-fix runs were "cheating" — ejection
 chains that overran the budget by 50x sometimes found vehicle reductions. With correct budget
@@ -3069,11 +3069,11 @@ This is competitive with published solvers on the vehicle dimension. Distance ga
 +13.1% reflects the 60s time budget — BKS papers typically allow 200-600s. More time
 budget (profile matrix NEAR_OPTIMAL gives 120s) and per-cell tuning should close this.
 
-**400 customers: Improving, not competitive yet.** +33.3% distance gap and 45% vehicle
-match with population + CFRS + O(1) concat + ejection probes. Down from +51.8% / 47%
-before S17.3. R2_4 (wide TW) is at +22.6%, approaching competitive. C1_4 (tight
-clustered) at +45.6% is the hardest category. Runtime is now predictable: all 60
-instances complete in <105s with a 60s budget (was 4221s worst case before probes).
+**400 customers: Closing the gap.** +12.9% distance gap and 58% vehicle match with
+population + CFRS + S22 scale-tuned params. Down from +51.8% / 47% before S17.3,
+and +33.3% / 45% before S19 heap repair. R2_4 (wide TW) at +7.9% is competitive.
+C1_4 at +12.3% (including c1_4_1 BKS match). At 300s, rc1_4_1 drops to +6.6% dist.
+Runtime is predictable: all 60 instances complete in <165s with a 60s budget.
 
 Root causes at 400+:
 
@@ -3112,11 +3112,11 @@ a design limitation — it's a matter of additive improvements on top of a sound
 - **Profile matrix scales independently.** The 4×5 matrix with per-cell tuning means
   each scale point can be independently optimized. Most solvers use one-size-fits-all.
 
-The gap from +33.3% to <20% at 400 customers requires: (1) ~~fixing ejection chain
-timeouts~~ ✅ done (commit b3905e2), (2) more time budget — the BEST profile gives
-600s, not 60s, and (3) per-cell tuning of the profile matrix for LARGE scale.
-Population + CFRS + O(1) concat + ejection probes brought the gap down from +51.8% to
-+33.3%; the next big lever is running the tuning campaign with longer time budgets.
+The gap from +12.9% to <10% at 400 customers requires: (1) ~~fixing ejection chain
+timeouts~~ ✅ done (commit b3905e2), (2) ~~per-cell tuning of the profile matrix for
+LARGE scale~~ ✅ done (S22, brought +33.3%→+12.9%), (3) more time budget — the BEST
+profile gives 600s and NEAR_OPTIMAL gives 120s, (4) operator improvements for R1-class
+random instances that plateau early. At 300s, rc1_4_1 already drops to +6.6% distance.
 
 **Realistic targets for next phase of work:**
 
@@ -3124,20 +3124,21 @@ Population + CFRS + O(1) concat + ejection probes brought the gap down from +51.
 |-------|-------------------|------------|----------|
 | 100 | -0.1% dist, 80% veh | — | Already competitive |
 | 200 | +13.1% dist, **92% veh** | <5% dist | Per-cell tuning of MEDIUM column + more time budget |
-| 400 | +33.3% dist, 45% veh (60s pop) | <20% dist, >70% veh | ✅ Ejection timeout fixed. Next: per-cell tuning + more ALNS time |
+| 400 | **+12.9% dist, 58% veh** (60s pop, S22) | <10% dist, >70% veh | More time budget (NEAR_OPTIMAL 120s), operator improvements |
 | 800+ | Not tested | <30% dist | All of above + parallel ALNS + SISR operator |
 
 **Time budget scaling (c1_4_1 — hardest instance, tight clustered 400-customer):**
 
-| Budget | Vehicles (BKS: 40) | Dist Gap |
-|--------|--------------------|----------|
-| 60s | 47 (+7) | +50.6% |
-| 120s | 47 (+7) | +51.8% |
-| 300s | **41 (+1)** | **+3.0%** |
+| Budget | Vehicles (BKS: 40) | Dist Gap | Notes |
+|--------|--------------------|----------|-------|
+| 60s (pre-S22) | 47 (+7) | +50.6% | BASE_TUNE params |
+| 120s (pre-S22) | 47 (+7) | +51.8% | BASE_TUNE params |
+| 300s (pre-S22) | **41 (+1)** | **+3.0%** | BASE_TUNE params |
+| 60s (S22) | 40 (+0) | **+0.0%** | LARGE_TUNE — BKS match! |
+| 300s (S22) | 40 (+0) | **+0.0%** | LARGE_TUNE — BKS match |
 
-At 300s the solver reaches near-BKS quality on the single hardest instance in the suite.
-The gap at 60s is almost entirely time starvation, not algorithmic weakness. The BEST
-profile (600s) and per-cell tuning should close most of the remaining gap at all scales.
+With S22 scale-tuned params, c1_4_1 matches BKS at just 60s — the pre-S22 gap was
+entirely due to poorly tuned SA temperature and ALNS learning rate, not time starvation.
 
 #### Phase 5: Travel Resolution Cache for TD/Callback Models
 
@@ -3809,8 +3810,32 @@ pen_tolerance=0.15, pen_increase=2.0, pen_decrease=0.5) overriding defaults.
 | Avg dist gap | +18.6% | +12.9% | -5.7pp better |
 | Avg time (s) | 78 | 76 | ~same |
 
-Notable individual improvements: c1_4_6 +8.3%→+0.0% (BKS match), r1_4_1 +18.9%→+13.7%,
+Per-category breakdown (60s population, S22 tuned):
+
+| Category | Instances | BKS Veh Match | Avg Veh Gap | Avg Dist Gap |
+|----------|-----------|---------------|-------------|--------------|
+| C1_4 (clustered, tight) | 10 | 5/10 | +0.90 | +12.3% |
+| C2_4 (clustered, wide) | 10 | 3/10 | +0.70 | +8.9% |
+| R1_4 (random, tight) | 10 | 9/10 | +0.10 | +21.6% |
+| R2_4 (random, wide) | 10 | 10/10 | +0.00 | +7.9% |
+| RC1_4 (mixed, tight) | 10 | 1/10 | +0.90 | +17.2% |
+| RC2_4 (mixed, wide) | 10 | 7/10 | +0.60 | +9.4% |
+| **Overall** | **60** | **35/60 (58%)** | **+0.53** | **+12.9%** |
+
+Notable improvements: c1_4_6 +8.3%→+0.0% (BKS match), r1_4_1 +18.9%→+13.7%,
 rc1_4_8 +26.0%→+13.5%, c2_4_7 +17.7%→+21.8% (some regression expected with stochastic).
+
+**300s spot-check (3 representative instances, population, S22 tuned):**
+
+| Instance | Veh | BKS Veh | Dist | BKS Dist | Dist Gap | Runtime |
+|----------|-----|---------|------|----------|----------|---------|
+| c1_4_1 | 40 | 40 | 7,152 | 7,152 | **+0.0%** | 384s |
+| r1_4_1 | 40 | 40 | 11,815 | 10,372 | +13.9% | 344s |
+| rc1_4_1 | 38 | 36 | 9,139 | 8,571 | +6.6% | 321s |
+
+c1_4_1 matches BKS perfectly at both 60s and 300s. rc1_4_1 distance improved substantially
+(+12.2%→+6.6%) but still uses +2 vehicles. r1_4_1 plateaued — random tight-TW instances
+need more sophisticated operators or longer time budgets to close the gap.
 
 **Insight:** SA temperature was the biggest lever (Tier 2 dropped composite from 9137→7053).
 At 400-customer scale, the default SA was far too hot — accepting too many bad moves.
