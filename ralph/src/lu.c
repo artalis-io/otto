@@ -125,8 +125,6 @@ void lu_apply_backend_policy(LUFactorization *lu, int backend_policy) {
             break;
     }
 
-    lu_clamp_max_updates_to_storage(lu);
-
     if (lu->telemetry_enabled) {
         lu->telemetry.backend_policy_last = effective;
         if (effective == LP_LU_BACKEND_POLICY_LUF_FT) {
@@ -317,17 +315,13 @@ double lu_update_pivot_ratio_threshold_for_test(int num_updates,
 
 LUFactorization* lu_create(int m) {
     LUFactorization *lu = (LUFactorization*)calloc(1, sizeof(LUFactorization));
-    int base_updates;
-    int cgr_updates;
     int max_upd;
     if (!lu) return NULL;
 
     lu->m = m;
     lu->telemetry_enabled = 1;
     lu_apply_backend_policy(lu, LP_LU_BACKEND_POLICY_LUF_FT);
-    base_updates = lu_default_max_updates_for_m(m);
-    cgr_updates = lu_cgr_max_updates_for_base(base_updates);
-    max_upd = (cgr_updates > base_updates) ? cgr_updates : base_updates;
+    max_upd = lu->max_updates;
 
     /* Calculate arena size for fixed-size arrays (with 8-byte alignment padding).
      * Arena contains: permutation arrays, FT column order, spike metadata,
