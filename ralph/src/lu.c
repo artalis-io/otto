@@ -46,6 +46,38 @@ static int lu_default_max_updates_for_m(int m) {
     return (m < 100) ? 50 : (m < 500) ? m / 2 : (m < 1000) ? 100 : 120;
 }
 
+static int lu_cgr_max_updates_for_base(int base_updates) {
+    int cgr_updates;
+
+    if (base_updates <= 0) return 0;
+    cgr_updates = (base_updates * 5) / 4;
+    if (cgr_updates > 256) cgr_updates = 256;
+    if (cgr_updates < 32) cgr_updates = 32;
+    return cgr_updates;
+}
+
+static int lu_update_storage_capacity(const LUFactorization *lu) {
+    int cap = 0;
+
+    if (!lu) return 0;
+
+    if (lu->ft_spike_capacity > 0) cap = lu->ft_spike_capacity;
+    if (lu->eta_capacity > 0) {
+        if (cap <= 0 || lu->eta_capacity < cap) cap = lu->eta_capacity;
+    }
+    return cap;
+}
+
+static void lu_clamp_max_updates_to_storage(LUFactorization *lu) {
+    int cap;
+
+    if (!lu) return;
+    cap = lu_update_storage_capacity(lu);
+    if (cap > 0 && lu->max_updates > cap) {
+        lu->max_updates = cap;
+    }
+}
+
 static int lu_normalize_backend_policy(int backend_policy) {
     if (backend_policy == LP_LU_BACKEND_POLICY_AUTO) {
         return LP_LU_BACKEND_POLICY_LUF_FT;
@@ -84,9 +116,7 @@ void lu_apply_backend_policy(LUFactorization *lu, int backend_policy) {
         case LP_LU_BACKEND_POLICY_CGR:
             /* CGR: aggressive update posture. */
             lu->use_ft_updates = 1;
-            lu->max_updates = (base_updates * 5) / 4;
-            if (lu->max_updates > 256) lu->max_updates = 256;
-            if (lu->max_updates < 32) lu->max_updates = 32;
+            lu->max_updates = lu_cgr_max_updates_for_base(base_updates);
             lu->pivot_tol = RALPH_PIVOT_TOL * 0.75;
             lu->growth_refactor_threshold = RALPH_LU_GROWTH_REFACTOR_THRESHOLD * 1.5;
             break;
@@ -94,6 +124,8 @@ void lu_apply_backend_policy(LUFactorization *lu, int backend_policy) {
         default:
             break;
     }
+
+    lu_clamp_max_updates_to_storage(lu);
 
     if (lu->telemetry_enabled) {
         lu->telemetry.backend_policy_last = effective;
@@ -285,13 +317,17 @@ double lu_update_pivot_ratio_threshold_for_test(int num_updates,
 
 LUFactorization* lu_create(int m) {
     LUFactorization *lu = (LUFactorization*)calloc(1, sizeof(LUFactorization));
+    int base_updates;
+    int cgr_updates;
+    int max_upd;
     if (!lu) return NULL;
 
     lu->m = m;
     lu->telemetry_enabled = 1;
     lu_apply_backend_policy(lu, LP_LU_BACKEND_POLICY_LUF_FT);
-
-    int max_upd = lu->max_updates;
+    base_updates = lu_default_max_updates_for_m(m);
+    cgr_updates = lu_cgr_max_updates_for_base(base_updates);
+    max_upd = (cgr_updates > base_updates) ? cgr_updates : base_updates;
 
     /* Calculate arena size for fixed-size arrays (with 8-byte alignment padding).
      * Arena contains: permutation arrays, FT column order, spike metadata,
@@ -2636,12 +2672,14 @@ static void apply_ft_spikes_backward(const LUFactorization *lu, double *x) {
 int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) {
     LPBFCPRefactorSignals sig;
     int effective_update_limit;
+    int storage_cap;
 
     if (!lu || !entering_col) {
         lu_set_failure(lu, LU_FAIL_BAD_INPUT);
         lu_mark_update_failure(lu, LU_FAIL_BAD_INPUT);
         return -1;
     }
+    lu_clamp_max_updates_to_storage(lu);
     lu_set_failure(lu, LU_FAIL_NONE);
     lu_fill_bfcp_signals(lu, &sig);
     effective_update_limit = lp_bfcp_policy_effective_update_limit(&sig);
@@ -2751,6 +2789,12 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     }
     if (lu->use_ft_updates) {
         /* Check if pool has room for this spike */
+        if (lu->ft_num_updates < 0 || lu->ft_num_updates >= lu->ft_spike_capacity) {
+            lu->last_refactor_trigger_reason = LP_BFCP_REFACTOR_REASON_MAX_UPDATES;
+            lu_set_failure(lu, LU_FAIL_MAX_UPDATES);
+            lu_mark_update_failure(lu, LU_FAIL_MAX_UPDATES);
+            return -1;
+        }
         if (lu->spike_pool_used + off_diag_nnz > lu->spike_pool_capacity) {
             lu_set_failure(lu, LU_FAIL_SPIKE_POOL_FULL);
             lu_mark_update_failure(lu, LU_FAIL_SPIKE_POOL_FULL);
@@ -2780,6 +2824,12 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
         lu->ft_num_updates++;
     } else {
         /* Store as eta-file update (includes diagonal) - still uses malloc */
+        if (lu->num_eta < 0 || lu->num_eta >= lu->eta_capacity) {
+            lu->last_refactor_trigger_reason = LP_BFCP_REFACTOR_REASON_MAX_UPDATES;
+            lu_set_failure(lu, LU_FAIL_MAX_UPDATES);
+            lu_mark_update_failure(lu, LU_FAIL_MAX_UPDATES);
+            return -1;
+        }
         int total_nnz = off_diag_nnz + 1;  /* +1 for diagonal */
         int *indices = (int*)calloc(total_nnz, sizeof(int));
         double *values = (double*)calloc(total_nnz, sizeof(double));
@@ -2807,6 +2857,10 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
         lu->num_eta++;
     }
     lu->num_updates++;
+    storage_cap = lu_update_storage_capacity(lu);
+    if (storage_cap > 0 && lu->num_updates > storage_cap) {
+        lu->num_updates = storage_cap;
+    }
 
     /* Track growth factor */
     if (max_spike > lu->growth_factor) {
