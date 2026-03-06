@@ -2732,10 +2732,17 @@ static int lu_numeric_backend_to_basis_governor_backend(int backend) {
 }
 
 static int lu_numeric_terminal_failure_reason(int reason_hint,
+                                              int saw_identity_sep_failure,
                                               int saw_mkz_singular_failure,
                                               int saw_dense_ge_singular_failure) {
     if (reason_hint != LU_SPARSE_NUMERIC_FAIL_NONE) {
         return reason_hint;
+    }
+    /* If numeric path hit identity-separation at any point, preserve that
+     * terminal reason even if a retry lane later fails singularly. This keeps
+     * top-level full-structural sparse retry enabled before dense fallback. */
+    if (saw_identity_sep_failure) {
+        return LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION;
     }
     if (saw_mkz_singular_failure || saw_dense_ge_singular_failure) {
         return LU_SPARSE_NUMERIC_FAIL_PATHOLOGICAL;
@@ -2864,6 +2871,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     if (__code < 0) { \
         int __reason = lu_numeric_terminal_failure_reason( \
             terminal_failure_reason_hint, \
+            identity_sep_failure_this_call, \
             saw_mkz_singular_failure, \
             saw_dense_ge_singular_failure); \
         if (terminal_failure_reason_out) { \
