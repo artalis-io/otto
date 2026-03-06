@@ -9292,6 +9292,8 @@ static int lp_run_user_callbacks(SimplexSolver *solver,
 }
 
 static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *tab) {
+    int update_cap = 0;
+
     if (!solver || !tab) return;
 
     if (!lp_basis_governor_mode_is_valid(solver->policy.basis_governor_mode)) {
@@ -9329,6 +9331,16 @@ static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *
 
         if (solver->lu_update_limit_override > 0) {
             tab->lu->max_updates = solver->lu_update_limit_override;
+            if (tab->lu->ft_spike_capacity > 0) {
+                update_cap = tab->lu->ft_spike_capacity;
+            }
+            if (tab->lu->eta_capacity > 0 &&
+                (update_cap <= 0 || tab->lu->eta_capacity < update_cap)) {
+                update_cap = tab->lu->eta_capacity;
+            }
+            if (update_cap > 0 && tab->lu->max_updates > update_cap) {
+                tab->lu->max_updates = update_cap;
+            }
         }
         if (solver->lu_pivot_tol_override > 0.0) {
             tab->lu->pivot_tol = solver->lu_pivot_tol_override;

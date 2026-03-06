@@ -1195,6 +1195,64 @@ cleanup:
 }
 
 /* ============================================================================
+ * Test 21: Runtime update limit is bounded by allocated LU update storage
+ * ============================================================================ */
+static void test_lu_update_storage_capacity_guard_runtime(void) {
+    printf("  LU: runtime update-capacity guard...\n");
+
+    const int m = 40;
+    double *A = (double *)calloc((size_t)m * m, sizeof(double));
+    SparseMatrix *B = NULL;
+    LUFactorization *lu = NULL;
+    double *entering_col = NULL;
+    int cap = 0;
+
+    for (int i = 0; i < m; i++) A[i * m + i] = 1.0;
+    B = dense_to_csc(A, m, m);
+    lu = lu_create(m);
+    ASSERT(lu != NULL, "lu capacity guard: lu_create");
+    if (!lu) goto cleanup;
+
+    ASSERT_INT_EQ(lu_factorize(lu, B), 0, "lu capacity guard: factorize");
+
+    cap = lu->ft_spike_capacity;
+    if (lu->eta_capacity > 0 && (cap <= 0 || lu->eta_capacity < cap)) {
+        cap = lu->eta_capacity;
+    }
+    ASSERT(cap > 0, "lu capacity guard: update storage capacity available");
+    if (cap <= 0) goto cleanup;
+
+    entering_col = (double *)calloc((size_t)m, sizeof(double));
+    ASSERT(entering_col != NULL, "lu capacity guard: entering col alloc");
+    if (!entering_col) goto cleanup;
+    entering_col[0] = 1.0; /* Identity update: stable, sparse spike. */
+
+    lu->max_updates = cap + 25; /* Deliberately exceed allocated metadata capacity. */
+
+    for (int i = 0; i < cap; i++) {
+        ASSERT_INT_EQ(lu_update(lu, 0, entering_col), 0,
+                      "lu capacity guard: update succeeds up to capacity");
+    }
+    ASSERT_INT_EQ(lu->max_updates, cap,
+                  "lu capacity guard: runtime max_updates clamped to storage");
+
+    ASSERT_INT_EQ(lu_update(lu, 0, entering_col), -1,
+                  "lu capacity guard: update rejected at storage capacity");
+    ASSERT_INT_EQ(lu->last_failure_reason, LU_FAIL_MAX_UPDATES,
+                  "lu capacity guard: failure reason max_updates");
+    ASSERT_INT_EQ(lu->telemetry.update_fail_bad_input, 0,
+                  "lu capacity guard: no bad_input failures");
+    ASSERT(lu->telemetry.update_fail_max_updates > 0,
+           "lu capacity guard: max_updates failure telemetry increments");
+
+cleanup:
+    free(entering_col);
+    lu_free(lu);
+    free_csc(B);
+    free(A);
+}
+
+/* ============================================================================
  * Main
  * ============================================================================ */
 
@@ -1220,6 +1278,7 @@ int main(void) {
     test_lu_refactor_hard_trigger_runtime();
     test_lu_backend_policy_runtime();
     test_lu_backend_policy_update_path_telemetry();
+    test_lu_update_storage_capacity_guard_runtime();
 
     printf("\nIntegration (A/B Comparison):\n");
     test_markowitz_integration_small_lp();
