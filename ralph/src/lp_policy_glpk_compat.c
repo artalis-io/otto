@@ -29,7 +29,35 @@ static int lp_glpk_smcp_flip_valid(int value) {
 
 static int lp_glpk_smcp_basis_valid(int value) {
     return value >= LP_GLPK_SMCP_BASIS_ADV &&
-           value <= LP_GLPK_SMCP_BASIS_STD;
+           value <= LP_GLPK_SMCP_BASIS_INI;
+}
+
+const char* lp_policy_glpk_basis_name(int smcp_basis) {
+    switch ((LPGLPKSMCPBasis)smcp_basis) {
+        case LP_GLPK_SMCP_BASIS_ADV: return "adv";
+        case LP_GLPK_SMCP_BASIS_STD: return "std";
+        case LP_GLPK_SMCP_BASIS_BIB: return "bib";
+        case LP_GLPK_SMCP_BASIS_INI: return "ini";
+        default: return "unknown";
+    }
+}
+
+int lp_policy_glpk_basis_crash_mode(int smcp_basis, int *crash_mode_out) {
+    int crash_mode = 0;
+    if (!lp_glpk_smcp_basis_valid(smcp_basis)) return 0;
+    crash_mode = (smcp_basis == LP_GLPK_SMCP_BASIS_ADV ||
+                  smcp_basis == LP_GLPK_SMCP_BASIS_BIB) ? 1 : 0;
+    if (crash_mode_out) *crash_mode_out = crash_mode;
+    return 1;
+}
+
+int lp_policy_glpk_basis_requires_staged_basis(int smcp_basis) {
+    return smcp_basis == LP_GLPK_SMCP_BASIS_INI ? 1 : 0;
+}
+
+int lp_policy_glpk_basis_supports_current_runtime(int smcp_basis) {
+    if (!lp_glpk_smcp_basis_valid(smcp_basis)) return 0;
+    return smcp_basis == LP_GLPK_SMCP_BASIS_BIB ? 0 : 1;
 }
 
 static int lp_glpk_smcp_presolve_valid(int value) {
@@ -276,6 +304,8 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
 
     if (cfg->glpk_smcp_method == LP_GLPK_SMCP_METHOD_PRIMAL) {
         if (method_io) *method_io = 0;
+    } else if (cfg->glpk_smcp_method == LP_GLPK_SMCP_METHOD_DUALP) {
+        if (method_io) *method_io = 2;
     } else if (cfg->glpk_smcp_method == LP_GLPK_SMCP_METHOD_DUAL) {
         if (method_io) *method_io = 1;
     }
@@ -304,8 +334,6 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
         }
     }
 
-    } else if (cfg->glpk_smcp_method == LP_GLPK_SMCP_METHOD_DUALP) {
-        if (method_io) *method_io = 2;
     if (ratio_io) {
         *ratio_io = (cfg->glpk_smcp_ratio == LP_GLPK_SMCP_RATIO_HARRIS) ? 1 : 0;
     }
@@ -333,7 +361,10 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
     if (smcp_aorn_io) *smcp_aorn_io = cfg->glpk_smcp_aorn;
 
     if (crash_io) {
-        *crash_io = (cfg->glpk_smcp_basis == LP_GLPK_SMCP_BASIS_ADV) ? 1 : 0;
+        int crash_mode = 0;
+        if (lp_policy_glpk_basis_crash_mode(cfg->glpk_smcp_basis, &crash_mode)) {
+            *crash_io = crash_mode;
+        }
     }
 
     if (cfg->glpk_bfcp_update_limit > 0) {

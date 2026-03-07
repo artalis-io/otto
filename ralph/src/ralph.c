@@ -46,7 +46,7 @@ struct RalphModel {
     double mip_gap;
     int max_nodes;
     int max_cut_rounds;
-    int method;  /* 0=primal simplex, 1=dual simplex, 2=auto */
+    int method;  /* 0=primal simplex, 1=dual simplex, 2=dual-first fallback */
     int lp_algorithm;      /* Requested LP algorithm (extends method with barrier value). */
     int barrier_crossover; /* Requested barrier crossover mode (API-level capability gate). */
     int lp_external_provider; /* Requested external LP provider for explicit external algorithms. */
@@ -73,11 +73,11 @@ struct RalphModel {
     int lp_basis_governor_mode; /* 0=off, 1=shadow, 2=control_phase2 */
     int lp_reinvert_controller_mode; /* 0=off, 1=shadow, 2=control_phase1, 3=control_all */
     int lp_policy_profile;  /* 0=default, 1=glpk_compat(strict), 2=glpk_strict, 3=glpk_legacy */
-    int glpk_smcp_method;   /* 0=auto, 1=primal, 2=dual */
+    int glpk_smcp_method;   /* 0=auto, 1=primal, 2=dualp, 3=dual */
     int glpk_smcp_pricing;  /* 0=standard, 1=steep */
     int glpk_smcp_ratio;    /* 0=standard, 1=harris */
     int glpk_smcp_flip;     /* 0=off, 1=on */
-    int glpk_smcp_basis;    /* 0=adv, 1=std */
+    int glpk_smcp_basis;    /* 0=adv, 1=std, 2=bib, 3=ini */
     int glpk_smcp_presolve; /* 0=auto, 1=off, 2=on */
     double glpk_smcp_tol_bnd; /* >0 */
     double glpk_smcp_tol_dj;  /* >0 */
@@ -1453,6 +1453,7 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     LPGLPKCompatConfig glpk_policy_cfg;
     LPBFCPPolicyRequest bfcp_policy_req;
     LPBFCPPolicyEffective bfcp_policy_eff;
+    int glpk_policy_active = 0;
 
     ralph_glpk_policy_config_from_model(model, &glpk_policy_cfg);
     if (!lp_policy_glpk_compat_validate(&glpk_policy_cfg)) {
@@ -1466,6 +1467,10 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                        0,
                        "invalid glpk-compatible policy configuration");
     }
+    glpk_policy_active =
+        (glpk_policy_cfg.lp_policy_profile == LP_POLICY_PROFILE_GLPK_COMPAT ||
+         glpk_policy_cfg.lp_policy_profile == LP_POLICY_PROFILE_GLPK_STRICT ||
+         glpk_policy_cfg.lp_policy_profile == LP_POLICY_PROFILE_GLPK_LEGACY) ? 1 : 0;
     lp_glpk_strict_profile =
         (glpk_policy_cfg.lp_policy_profile == LP_POLICY_PROFILE_GLPK_COMPAT ||
          glpk_policy_cfg.lp_policy_profile == LP_POLICY_PROFILE_GLPK_STRICT) ? 1 : 0;
@@ -1537,6 +1542,31 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                                             &lp_dual_rc_recompute_interval,
                                             &lp_soft_lu_cost_gate_enabled,
                                             &lp_periodic_cost_gate_enabled);
+        if (glpk_policy_active &&
+            !lp_policy_glpk_basis_supports_current_runtime(glpk_policy_cfg.glpk_smcp_basis)) {
+            model->status = RALPH_STATUS_ERROR;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_STATE,
+                           RALPH_ERROR_CODE_NOT_AVAILABLE,
+                           model->status,
+                           RALPH_ERROR_API_SOLVE,
+                           glpk_policy_cfg.glpk_smcp_basis,
+                           0,
+                           "glpk_smcp_basis mode is not supported by the current Ralph runtime");
+        }
+        if (glpk_policy_active &&
+            lp_policy_glpk_basis_requires_staged_basis(glpk_policy_cfg.glpk_smcp_basis) &&
+            !(model->staged_basis && model->staged_var_status)) {
+            model->status = RALPH_STATUS_ERROR;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_STATE,
+                           RALPH_ERROR_CODE_NOT_AVAILABLE,
+                           model->status,
+                           RALPH_ERROR_API_SOLVE,
+                           glpk_policy_cfg.glpk_smcp_basis,
+                           0,
+                           "glpk_smcp_basis=ini requires a staged LP basis");
+        }
         lp_bfcp_policy_request_init(&bfcp_policy_req);
         lp_bfcp_policy_effective_init(&bfcp_policy_eff);
         bfcp_policy_req.requested_backend = lp_bfcp_backend;
@@ -5537,7 +5567,7 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .has_min = 1,
             .min_value = (double)RALPH_LP_GLPK_SMCP_BASIS_ADV,
             .has_max = 1,
-            .max_value = (double)RALPH_LP_GLPK_SMCP_BASIS_STD,
+            .max_value = (double)RALPH_LP_GLPK_SMCP_BASIS_INI,
             .aliases = {"GLPKSMCPBasis"},
             .alias_count = 1
         },

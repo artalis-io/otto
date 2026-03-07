@@ -192,6 +192,20 @@ static void test_param_metadata_and_scope(void) {
                   "params: glpk_smcp_method max");
 
     memset(&meta, 0, sizeof(meta));
+    ASSERT_INT_EQ(ralph_core_get_param_meta(RALPH_PARAM_GLPK_SMCP_BASIS, &meta), 0,
+                  "params: metadata for glpk_smcp_basis");
+    ASSERT_TRUE(strcmp(meta.name, "glpk_smcp_basis") == 0,
+                "params: glpk_smcp_basis canonical name");
+    ASSERT_INT_EQ((int)meta.scope, (int)RALPH_PARAM_SCOPE_LP,
+                  "params: glpk_smcp_basis LP scope");
+    ASSERT_INT_EQ(meta.has_min, 1, "params: glpk_smcp_basis has min");
+    ASSERT_INT_EQ(meta.has_max, 1, "params: glpk_smcp_basis has max");
+    ASSERT_INT_EQ((int)meta.min_value, (int)RALPH_LP_GLPK_SMCP_BASIS_ADV,
+                  "params: glpk_smcp_basis min");
+    ASSERT_INT_EQ((int)meta.max_value, (int)RALPH_LP_GLPK_SMCP_BASIS_INI,
+                  "params: glpk_smcp_basis max");
+
+    memset(&meta, 0, sizeof(meta));
     ASSERT_INT_EQ(ralph_core_get_param_meta(RALPH_PARAM_GLPK_BFCP_PIVOT_TOL, &meta), 0,
                   "params: metadata for glpk_bfcp_pivot_tol");
     ASSERT_TRUE(strcmp(meta.name, "glpk_bfcp_pivot_tol") == 0,
@@ -375,6 +389,8 @@ static void test_param_metadata_and_scope(void) {
                   "params: reject lp_policy_profile out of range");
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_SMCP_METHOD, 4), -1,
                   "params: reject glpk_smcp_method out of range");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_SMCP_BASIS, 4), -1,
+                  "params: reject glpk_smcp_basis out of range");
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_SMCP_EXCL, 2), -1,
                   "params: reject glpk_smcp_excl out of range");
     ASSERT_INT_EQ(ralph_core_set_dbl_param_id(model, RALPH_PARAM_GLPK_SMCP_TOL_BND, 0.0), -1,
@@ -418,6 +434,15 @@ static void test_param_metadata_and_scope(void) {
                   "params: profile defaults glpk_bfcp_update_limit=100 when auto");
 
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_SMCP_METHOD,
+                                         (int)RALPH_LP_GLPK_SMCP_METHOD_DUALP),
+                  0,
+                  "params: override glpk_smcp_method=dualp after profile");
+    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_GLPK_SMCP_METHOD, &value), 0,
+                  "params: get glpk_smcp_method dualp override");
+    ASSERT_INT_EQ(value, (int)RALPH_LP_GLPK_SMCP_METHOD_DUALP,
+                  "params: explicit dualp override persists after profile");
+
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_SMCP_METHOD,
                                          (int)RALPH_LP_GLPK_SMCP_METHOD_DUAL),
                   0,
                   "params: override glpk_smcp_method after profile");
@@ -426,21 +451,30 @@ static void test_param_metadata_and_scope(void) {
     ASSERT_INT_EQ(value, (int)RALPH_LP_GLPK_SMCP_METHOD_DUAL,
                   "params: explicit override persists after profile");
 
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_SMCP_BASIS,
+                                         (int)RALPH_LP_GLPK_SMCP_BASIS_BIB),
+                  0,
+                  "params: set glpk_smcp_basis=bib");
+    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_GLPK_SMCP_BASIS, &value), 0,
+                  "params: get glpk_smcp_basis=bib");
+    ASSERT_INT_EQ(value, (int)RALPH_LP_GLPK_SMCP_BASIS_BIB,
+                  "params: glpk_smcp_basis=bib persists");
+
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_SMCP_BASIS,
+                                         (int)RALPH_LP_GLPK_SMCP_BASIS_INI),
+                  0,
+                  "params: set glpk_smcp_basis=ini");
+    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_GLPK_SMCP_BASIS, &value), 0,
+                  "params: get glpk_smcp_basis=ini");
+    ASSERT_INT_EQ(value, (int)RALPH_LP_GLPK_SMCP_BASIS_INI,
+                  "params: glpk_smcp_basis=ini persists");
+
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT, -1), 0,
                   "params: set glpk_bfcp_update_limit auto");
     ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT, &value), 0,
                   "params: get glpk_bfcp_update_limit auto");
     ASSERT_INT_EQ(value, -1,
                   "params: glpk_bfcp_update_limit auto set/get");
-
-    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_SMCP_METHOD,
-                                         (int)RALPH_LP_GLPK_SMCP_METHOD_DUALP),
-                  0,
-                  "params: override glpk_smcp_method=dualp after profile");
-    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_GLPK_SMCP_METHOD, &value), 0,
-                  "params: get glpk_smcp_method dualp override");
-    ASSERT_INT_EQ(value, (int)RALPH_LP_GLPK_SMCP_METHOD_DUALP,
-                  "params: explicit dualp override persists after profile");
 
     ASSERT_INT_EQ(ralph_core_set_dbl_param_id(model, RALPH_PARAM_GLPK_BFCP_PIVOT_TOL, 1e-8), 0,
                   "params: set glpk_bfcp_pivot_tol");
@@ -739,6 +773,107 @@ static void test_lp_report_rejects_mip_models(void) {
     ralph_test_free(mip);
 }
 
+static void test_glpk_basis_ini_requires_staged_basis(void) {
+    RalphModel *model = build_small_lp();
+    RalphAPIError err;
+
+    ASSERT_TRUE(model != NULL, "glpk-basis-ini: model created");
+    if (!model) return;
+
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_POLICY_PROFILE,
+                                         (int)RALPH_LP_POLICY_PROFILE_GLPK_COMPAT),
+                  0,
+                  "glpk-basis-ini: set glpk compat profile");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_SMCP_BASIS,
+                                         (int)RALPH_LP_GLPK_SMCP_BASIS_INI),
+                  0,
+                  "glpk-basis-ini: request ini basis");
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), -1,
+                  "glpk-basis-ini: solve fails without staged basis");
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_ERROR,
+                  "glpk-basis-ini: status is error");
+    ASSERT_INT_EQ(ralph_lp_get_last_error((const RalphLPModel *)model, &err), 0,
+                  "glpk-basis-ini: last error available");
+    ASSERT_INT_EQ((int)err.domain, (int)RALPH_ERROR_DOMAIN_STATE,
+                  "glpk-basis-ini: last error domain");
+    ASSERT_INT_EQ((int)err.code, (int)RALPH_ERROR_CODE_NOT_AVAILABLE,
+                  "glpk-basis-ini: last error code");
+
+    ralph_test_free(model);
+}
+
+static void test_glpk_basis_ini_accepts_staged_basis(void) {
+    RalphModel *source = build_small_lp();
+    RalphModel *target = build_small_lp();
+    RalphBasis *basis = NULL;
+
+    ASSERT_TRUE(source != NULL, "glpk-basis-ini-load: source model created");
+    ASSERT_TRUE(target != NULL, "glpk-basis-ini-load: target model created");
+    if (!source || !target) {
+        ralph_test_free(source);
+        ralph_test_free(target);
+        return;
+    }
+
+    ASSERT_INT_EQ(ralph_test_optimize_lp(source), 0,
+                  "glpk-basis-ini-load: source solve succeeds");
+    basis = ralph_test_save_basis(source);
+    ASSERT_TRUE(basis != NULL, "glpk-basis-ini-load: source basis saved");
+    if (!basis) {
+        ralph_test_free(source);
+        ralph_test_free(target);
+        return;
+    }
+
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(target, RALPH_PARAM_LP_POLICY_PROFILE,
+                                         (int)RALPH_LP_POLICY_PROFILE_GLPK_COMPAT),
+                  0,
+                  "glpk-basis-ini-load: set glpk compat profile");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(target, RALPH_PARAM_GLPK_SMCP_BASIS,
+                                         (int)RALPH_LP_GLPK_SMCP_BASIS_INI),
+                  0,
+                  "glpk-basis-ini-load: request ini basis");
+    ASSERT_INT_EQ(ralph_test_load_basis(target, basis), 0,
+                  "glpk-basis-ini-load: stage basis");
+    ASSERT_INT_EQ(ralph_test_optimize_lp(target), 0,
+                  "glpk-basis-ini-load: solve succeeds with staged basis");
+    ASSERT_INT_EQ((int)ralph_test_get_status(target), (int)RALPH_STATUS_OPTIMAL,
+                  "glpk-basis-ini-load: target status optimal");
+
+    ralph_test_free_basis(basis);
+    ralph_test_free(source);
+    ralph_test_free(target);
+}
+
+static void test_glpk_basis_bib_reports_not_available(void) {
+    RalphModel *model = build_small_lp();
+    RalphAPIError err;
+
+    ASSERT_TRUE(model != NULL, "glpk-basis-bib: model created");
+    if (!model) return;
+
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_POLICY_PROFILE,
+                                         (int)RALPH_LP_POLICY_PROFILE_GLPK_COMPAT),
+                  0,
+                  "glpk-basis-bib: set glpk compat profile");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_SMCP_BASIS,
+                                         (int)RALPH_LP_GLPK_SMCP_BASIS_BIB),
+                  0,
+                  "glpk-basis-bib: request bib basis");
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), -1,
+                  "glpk-basis-bib: solve fails cleanly");
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_ERROR,
+                  "glpk-basis-bib: status is error");
+    ASSERT_INT_EQ(ralph_lp_get_last_error((const RalphLPModel *)model, &err), 0,
+                  "glpk-basis-bib: last error available");
+    ASSERT_INT_EQ((int)err.domain, (int)RALPH_ERROR_DOMAIN_STATE,
+                  "glpk-basis-bib: last error domain");
+    ASSERT_INT_EQ((int)err.code, (int)RALPH_ERROR_CODE_NOT_AVAILABLE,
+                  "glpk-basis-bib: last error code");
+
+    ralph_test_free(model);
+}
+
 int main(void) {
     printf("=== LP Algorithm API Tests ===\n");
 
@@ -751,6 +886,9 @@ int main(void) {
     test_external_strict_mode_error();
     test_legacy_method_dispatch_report();
     test_lp_report_rejects_mip_models();
+    test_glpk_basis_ini_requires_staged_basis();
+    test_glpk_basis_ini_accepts_staged_basis();
+    test_glpk_basis_bib_reports_not_available();
 
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

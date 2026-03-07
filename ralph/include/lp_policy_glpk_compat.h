@@ -34,7 +34,9 @@ typedef enum {
 
 typedef enum {
     LP_GLPK_SMCP_BASIS_ADV = 0,
-    LP_GLPK_SMCP_BASIS_STD = 1
+    LP_GLPK_SMCP_BASIS_STD = 1,
+    LP_GLPK_SMCP_BASIS_BIB = 2,
+    LP_GLPK_SMCP_BASIS_INI = 3
 } LPGLPKSMCPBasis;
 
 typedef enum {
@@ -139,5 +141,9 @@ int lp_policy_glpk_working_exclude_nonbasic(int smcp_excl,
                                             double tol_bnd);
 int lp_policy_glpk_working_use_at_kernel(int smcp_aorn, int has_row_scatter);
 int lp_policy_glpk_perturb_next_state(int state, int event, int *next_state_out);
+int lp_policy_glpk_basis_crash_mode(int smcp_basis, int *crash_mode_out);
+int lp_policy_glpk_basis_requires_staged_basis(int smcp_basis);
+int lp_policy_glpk_basis_supports_current_runtime(int smcp_basis);
+const char* lp_policy_glpk_basis_name(int smcp_basis);
 
 #endif /* LP_POLICY_GLPK_COMPAT_H */

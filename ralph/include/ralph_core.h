@@ -1415,7 +1415,9 @@ typedef enum {
 
 typedef enum {
     RALPH_LP_GLPK_SMCP_BASIS_ADV = 0,
-    RALPH_LP_GLPK_SMCP_BASIS_STD = 1
+    RALPH_LP_GLPK_SMCP_BASIS_STD = 1,
+    RALPH_LP_GLPK_SMCP_BASIS_BIB = 2,
+    RALPH_LP_GLPK_SMCP_BASIS_INI = 3
 } RalphLPGLPKSMCPBasis;
 
 typedef enum {
