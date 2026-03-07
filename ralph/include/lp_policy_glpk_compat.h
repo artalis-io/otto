@@ -81,6 +81,11 @@ typedef enum {
 } LPGLPKBFCPBackend;
 
 typedef enum {
+    LP_GLPK_BFCP_FACTORIZATION_LUF = 0,
+    LP_GLPK_BFCP_FACTORIZATION_BTF = 1
+} LPGLPKBFCPFactorization;
+
+typedef enum {
     LP_GLPK_BFCP_SUHL_AUTO = -1,
     LP_GLPK_BFCP_SUHL_OFF = 0,
     LP_GLPK_BFCP_SUHL_ON = 1
@@ -100,6 +105,7 @@ typedef struct {
     int glpk_smcp_excl;            /* 0=off, 1=on */
     int glpk_smcp_shift;           /* 0=off, 1=on */
     int glpk_smcp_aorn;            /* 1=use A^T, 2=use N^T */
+    int glpk_bfcp_factorization;   /* 0=luf, 1=btf */
     int glpk_bfcp_backend;
     int glpk_bfcp_update_limit;   /* -1 = auto */
     int glpk_bfcp_pivot_limit;    /* -1 = auto */

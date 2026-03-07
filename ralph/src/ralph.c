@@ -85,6 +85,7 @@ struct RalphModel {
     int glpk_smcp_excl;       /* 0=off, 1=on */
     int glpk_smcp_shift;      /* 0=off, 1=on */
     int glpk_smcp_aorn;       /* 1=use A^T, 2=use N^T */
+    int glpk_bfcp_factorization; /* 0=luf, 1=btf */
     int glpk_bfcp_backend;  /* 0=luf_ft, 1=cbg, 2=cgr */
     int glpk_bfcp_update_limit; /* -1=auto */
     int glpk_bfcp_pivot_limit; /* -1=auto */
@@ -443,6 +444,7 @@ static void ralph_glpk_policy_config_from_model(const RalphModel *model,
     cfg->glpk_smcp_excl = model->glpk_smcp_excl;
     cfg->glpk_smcp_shift = model->glpk_smcp_shift;
     cfg->glpk_smcp_aorn = model->glpk_smcp_aorn;
+    cfg->glpk_bfcp_factorization = model->glpk_bfcp_factorization;
     cfg->glpk_bfcp_backend = model->glpk_bfcp_backend;
     cfg->glpk_bfcp_update_limit = model->glpk_bfcp_update_limit;
     cfg->glpk_bfcp_pivot_limit = model->glpk_bfcp_pivot_limit;
@@ -470,6 +472,7 @@ static void ralph_glpk_policy_config_to_model(RalphModel *model,
     model->glpk_smcp_excl = cfg->glpk_smcp_excl;
     model->glpk_smcp_shift = cfg->glpk_smcp_shift;
     model->glpk_smcp_aorn = cfg->glpk_smcp_aorn;
+    model->glpk_bfcp_factorization = cfg->glpk_bfcp_factorization;
     model->glpk_bfcp_backend = cfg->glpk_bfcp_backend;
     model->glpk_bfcp_update_limit = cfg->glpk_bfcp_update_limit;
     model->glpk_bfcp_pivot_limit = cfg->glpk_bfcp_pivot_limit;
@@ -518,6 +521,9 @@ static int ralph_set_glpk_policy_int_param(RalphModel *model,
             break;
         case RALPH_PARAM_GLPK_SMCP_AORN:
             cfg.glpk_smcp_aorn = value;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_FACTORIZATION:
+            cfg.glpk_bfcp_factorization = value;
             break;
         case RALPH_PARAM_GLPK_BFCP_BACKEND:
             cfg.glpk_bfcp_backend = value;
@@ -5704,6 +5710,19 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .aliases = {"GLPKSMCPAorn"},
             .alias_count = 1
         },
+        [RALPH_PARAM_GLPK_BFCP_FACTORIZATION] = {
+            .id = RALPH_PARAM_GLPK_BFCP_FACTORIZATION,
+            .name = "glpk_bfcp_factorization",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_LP_GLPK_BFCP_FACTORIZATION_LUF,
+            .has_min = 1,
+            .min_value = (double)RALPH_LP_GLPK_BFCP_FACTORIZATION_LUF,
+            .has_max = 1,
+            .max_value = (double)RALPH_LP_GLPK_BFCP_FACTORIZATION_BTF,
+            .aliases = {"GLPKBFCPFactorization"},
+            .alias_count = 1
+        },
         [RALPH_PARAM_GLPK_BFCP_BACKEND] = {
             .id = RALPH_PARAM_GLPK_BFCP_BACKEND,
             .name = "glpk_bfcp_backend",
@@ -6210,6 +6229,7 @@ int ralph_core_set_int_param_id(RalphModel *model, RalphParamId param, int value
         case RALPH_PARAM_GLPK_SMCP_EXCL:
         case RALPH_PARAM_GLPK_SMCP_SHIFT:
         case RALPH_PARAM_GLPK_SMCP_AORN:
+        case RALPH_PARAM_GLPK_BFCP_FACTORIZATION:
         case RALPH_PARAM_GLPK_BFCP_BACKEND:
         case RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT:
         case RALPH_PARAM_GLPK_BFCP_PIVOT_LIMIT:
@@ -6522,6 +6542,9 @@ int ralph_core_get_int_param_id(const RalphModel *model, RalphParamId param, int
             break;
         case RALPH_PARAM_GLPK_SMCP_AORN:
             *value = model->glpk_smcp_aorn;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_FACTORIZATION:
+            *value = model->glpk_bfcp_factorization;
             break;
         case RALPH_PARAM_GLPK_BFCP_BACKEND:
             *value = model->glpk_bfcp_backend;
