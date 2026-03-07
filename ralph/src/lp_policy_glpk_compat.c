@@ -64,6 +64,10 @@ int lp_policy_glpk_bfcp_supports_current_runtime(const LPGLPKCompatConfig *cfg,
                                                  const char **unsupported_param_out) {
     if (unsupported_param_out) *unsupported_param_out = NULL;
     if (!cfg) return 0;
+    if (cfg->glpk_bfcp_factorization == LP_GLPK_BFCP_FACTORIZATION_BTF) {
+        if (unsupported_param_out) *unsupported_param_out = "glpk_bfcp_factorization";
+        return 0;
+    }
     if (cfg->glpk_bfcp_pivot_limit >= 0) {
         if (unsupported_param_out) *unsupported_param_out = "glpk_bfcp_pivot_limit";
         return 0;
@@ -110,6 +114,11 @@ static int lp_glpk_smcp_aorn_valid(int value) {
 static int lp_glpk_bfcp_backend_valid(int value) {
     return value >= LP_GLPK_BFCP_BACKEND_LUF_FT &&
            value <= LP_GLPK_BFCP_BACKEND_CGR;
+}
+
+static int lp_glpk_bfcp_factorization_valid(int value) {
+    return value >= LP_GLPK_BFCP_FACTORIZATION_LUF &&
+           value <= LP_GLPK_BFCP_FACTORIZATION_BTF;
 }
 
 static int lp_glpk_bfcp_suhl_valid(int value) {
@@ -239,6 +248,7 @@ void lp_policy_glpk_compat_init(LPGLPKCompatConfig *cfg) {
     cfg->glpk_smcp_excl = LP_GLPK_SMCP_EXCL_ON;
     cfg->glpk_smcp_shift = LP_GLPK_SMCP_SHIFT_ON;
     cfg->glpk_smcp_aorn = LP_GLPK_SMCP_AORN_USE_NT;
+    cfg->glpk_bfcp_factorization = LP_GLPK_BFCP_FACTORIZATION_LUF;
     cfg->glpk_bfcp_backend = LP_GLPK_BFCP_BACKEND_LUF_FT;
     cfg->glpk_bfcp_update_limit = -1;
     cfg->glpk_bfcp_pivot_limit = -1;
@@ -265,6 +275,7 @@ int lp_policy_glpk_compat_validate(const LPGLPKCompatConfig *cfg) {
     if (!isfinite(cfg->glpk_smcp_tol_bnd) || cfg->glpk_smcp_tol_bnd <= 0.0) return 0;
     if (!isfinite(cfg->glpk_smcp_tol_dj) || cfg->glpk_smcp_tol_dj <= 0.0) return 0;
     if (!isfinite(cfg->glpk_smcp_tol_piv) || cfg->glpk_smcp_tol_piv <= 0.0) return 0;
+    if (!lp_glpk_bfcp_factorization_valid(cfg->glpk_bfcp_factorization)) return 0;
     if (!lp_glpk_bfcp_backend_valid(cfg->glpk_bfcp_backend)) return 0;
     if (cfg->glpk_bfcp_update_limit < -1) return 0;
     if (cfg->glpk_bfcp_pivot_limit < -1) return 0;
@@ -299,6 +310,7 @@ void lp_policy_glpk_compat_apply_profile_defaults(LPGLPKCompatConfig *cfg) {
     cfg->glpk_smcp_excl = LP_GLPK_SMCP_EXCL_ON;
     cfg->glpk_smcp_shift = LP_GLPK_SMCP_SHIFT_ON;
     cfg->glpk_smcp_aorn = LP_GLPK_SMCP_AORN_USE_NT;
+    cfg->glpk_bfcp_factorization = LP_GLPK_BFCP_FACTORIZATION_LUF;
     cfg->glpk_bfcp_backend = LP_GLPK_BFCP_BACKEND_LUF_FT;
     cfg->glpk_bfcp_update_limit = 100;
     cfg->glpk_bfcp_pivot_limit = -1;

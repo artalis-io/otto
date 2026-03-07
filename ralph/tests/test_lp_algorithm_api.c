@@ -206,6 +206,14 @@ static void test_param_metadata_and_scope(void) {
                   "params: glpk_smcp_basis max");
 
     memset(&meta, 0, sizeof(meta));
+    ASSERT_INT_EQ(ralph_core_get_param_meta(RALPH_PARAM_GLPK_BFCP_FACTORIZATION, &meta), 0,
+                  "params: metadata for glpk_bfcp_factorization");
+    ASSERT_TRUE(strcmp(meta.name, "glpk_bfcp_factorization") == 0,
+                "params: glpk_bfcp_factorization canonical name");
+    ASSERT_INT_EQ((int)meta.value_type, (int)RALPH_PARAM_VALUE_INT,
+                  "params: glpk_bfcp_factorization int type");
+
+    memset(&meta, 0, sizeof(meta));
     ASSERT_INT_EQ(ralph_core_get_param_meta(RALPH_PARAM_GLPK_BFCP_PIVOT_LIMIT, &meta), 0,
                   "params: metadata for glpk_bfcp_pivot_limit");
     ASSERT_TRUE(strcmp(meta.name, "glpk_bfcp_pivot_limit") == 0,
@@ -323,6 +331,10 @@ static void test_param_metadata_and_scope(void) {
                   "params: find glpk_smcp_excl alias");
     ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_GLPK_SMCP_EXCL,
                   "params: glpk_smcp_excl alias id");
+    ASSERT_INT_EQ(ralph_core_find_param_by_name("GLPKBFCPFactorization", &pid), 0,
+                  "params: find glpk_bfcp_factorization alias");
+    ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_GLPK_BFCP_FACTORIZATION,
+                  "params: glpk_bfcp_factorization alias id");
     ASSERT_INT_EQ(ralph_core_find_param_by_name("GLPKBFCPPivotLimit", &pid), 0,
                   "params: find glpk_bfcp_pivot_limit alias");
     ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_GLPK_BFCP_PIVOT_LIMIT,
@@ -443,6 +455,8 @@ static void test_param_metadata_and_scope(void) {
                   "params: reject glpk_smcp_excl out of range");
     ASSERT_INT_EQ(ralph_core_set_dbl_param_id(model, RALPH_PARAM_GLPK_SMCP_TOL_BND, 0.0), -1,
                   "params: reject glpk_smcp_tol_bnd non-positive");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_FACTORIZATION, 2), -1,
+                  "params: reject glpk_bfcp_factorization out of range");
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT, -2), -1,
                   "params: reject glpk_bfcp_update_limit out of range");
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_PIVOT_LIMIT, -2), -1,
@@ -533,6 +547,15 @@ static void test_param_metadata_and_scope(void) {
                   "params: get glpk_bfcp_update_limit auto");
     ASSERT_INT_EQ(value, -1,
                   "params: glpk_bfcp_update_limit auto set/get");
+
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_FACTORIZATION,
+                                         (int)RALPH_LP_GLPK_BFCP_FACTORIZATION_BTF),
+                  0,
+                  "params: set glpk_bfcp_factorization");
+    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_GLPK_BFCP_FACTORIZATION, &value), 0,
+                  "params: get glpk_bfcp_factorization");
+    ASSERT_INT_EQ(value, (int)RALPH_LP_GLPK_BFCP_FACTORIZATION_BTF,
+                  "params: glpk_bfcp_factorization set/get consistent");
 
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_PIVOT_LIMIT, 4), 0,
                   "params: set glpk_bfcp_pivot_limit");
@@ -997,6 +1020,35 @@ static void test_glpk_bfcp_unsupported_extra_control_reports_not_available(void)
     ralph_test_free(model);
 }
 
+static void test_glpk_bfcp_btf_reports_not_available(void) {
+    RalphModel *model = build_small_lp();
+    RalphAPIError err;
+
+    ASSERT_TRUE(model != NULL, "glpk-bfcp-btf: model created");
+    if (!model) return;
+
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_POLICY_PROFILE,
+                                         (int)RALPH_LP_POLICY_PROFILE_GLPK_COMPAT),
+                  0,
+                  "glpk-bfcp-btf: set glpk compat profile");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_FACTORIZATION,
+                                         (int)RALPH_LP_GLPK_BFCP_FACTORIZATION_BTF),
+                  0,
+                  "glpk-bfcp-btf: request btf factorization");
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), -1,
+                  "glpk-bfcp-btf: solve fails cleanly");
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_ERROR,
+                  "glpk-bfcp-btf: status is error");
+    ASSERT_INT_EQ(ralph_lp_get_last_error((const RalphLPModel *)model, &err), 0,
+                  "glpk-bfcp-btf: last error available");
+    ASSERT_INT_EQ((int)err.domain, (int)RALPH_ERROR_DOMAIN_STATE,
+                  "glpk-bfcp-btf: last error domain");
+    ASSERT_INT_EQ((int)err.code, (int)RALPH_ERROR_CODE_NOT_AVAILABLE,
+                  "glpk-bfcp-btf: last error code");
+
+    ralph_test_free(model);
+}
+
 int main(void) {
     printf("=== LP Algorithm API Tests ===\n");
 
@@ -1012,6 +1064,7 @@ int main(void) {
     test_glpk_basis_ini_requires_staged_basis();
     test_glpk_basis_ini_accepts_staged_basis();
     test_glpk_basis_bib_reports_not_available();
+    test_glpk_bfcp_btf_reports_not_available();
     test_glpk_bfcp_unsupported_extra_control_reports_not_available();
 
     printf("Passed %d/%d tests\n", tests_passed, tests_run);

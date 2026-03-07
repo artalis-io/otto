@@ -56,6 +56,8 @@ static void test_init_and_validate(void) {
                   "init: default shift");
     ASSERT_INT_EQ(cfg.glpk_smcp_aorn, LP_GLPK_SMCP_AORN_USE_NT,
                   "init: default aorn");
+    ASSERT_INT_EQ(cfg.glpk_bfcp_factorization, LP_GLPK_BFCP_FACTORIZATION_LUF,
+                  "init: default factorization");
     ASSERT_INT_EQ(cfg.glpk_bfcp_update_limit, -1,
                   "init: default update limit");
     ASSERT_INT_EQ(cfg.glpk_bfcp_pivot_limit, -1,
@@ -105,6 +107,8 @@ static void test_profile_defaults(void) {
                   "profile: aorn");
     ASSERT_INT_EQ(cfg.glpk_bfcp_backend, LP_GLPK_BFCP_BACKEND_LUF_FT,
                   "profile: backend");
+    ASSERT_INT_EQ(cfg.glpk_bfcp_factorization, LP_GLPK_BFCP_FACTORIZATION_LUF,
+                  "profile: factorization remains luf");
     ASSERT_INT_EQ(cfg.glpk_bfcp_update_limit, 100,
                   "profile: update limit");
     ASSERT_INT_EQ(cfg.glpk_bfcp_pivot_limit, -1,
@@ -219,6 +223,13 @@ static void test_bfcp_runtime_support_helpers(void) {
     ASSERT_TRUE(unsupported == NULL,
                 "bfcp helper: defaults keep unsupported parameter null");
 
+    cfg.glpk_bfcp_factorization = LP_GLPK_BFCP_FACTORIZATION_BTF;
+    ASSERT_INT_EQ(lp_policy_glpk_bfcp_supports_current_runtime(&cfg, &unsupported), 0,
+                  "bfcp helper: btf unsupported");
+    ASSERT_TRUE(strcmp(unsupported, "glpk_bfcp_factorization") == 0,
+                "bfcp helper: btf factorization name");
+
+    lp_policy_glpk_compat_init(&cfg);
     cfg.glpk_bfcp_pivot_limit = 4;
     ASSERT_INT_EQ(lp_policy_glpk_bfcp_supports_current_runtime(&cfg, &unsupported), 0,
                   "bfcp helper: pivot limit unsupported");
@@ -588,6 +599,11 @@ static void test_validation_rejects_invalid_values(void) {
     cfg.glpk_bfcp_pivot_tol = INFINITY;
     ASSERT_TRUE(lp_policy_glpk_compat_validate(&cfg) == 0,
                 "validate: rejects non-finite pivot tol");
+
+    lp_policy_glpk_compat_init(&cfg);
+    cfg.glpk_bfcp_factorization = 2;
+    ASSERT_TRUE(lp_policy_glpk_compat_validate(&cfg) == 0,
+                "validate: rejects invalid factorization");
 
     lp_policy_glpk_compat_init(&cfg);
     cfg.glpk_bfcp_pivot_limit = -2;
