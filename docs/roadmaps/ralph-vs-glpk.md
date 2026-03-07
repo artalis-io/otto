@@ -40,11 +40,11 @@ Add GLPK-compatible policy params (explicit, runtime-settable):
 - `lp_policy_profile`: `default` (0), `glpk_compat` (1)
 
 2. SMCP-like controls
-- `glpk_smcp_method`: `auto` (0), `primal` (1), `dual` (2)
+- `glpk_smcp_method`: `auto` (0), `primal` (1), `dualp` (2), `dual` (3)
 - `glpk_smcp_pricing`: `standard` (0), `steep` (1)
 - `glpk_smcp_ratio`: `standard` (0), `harris` (1)
 - `glpk_smcp_flip`: `off` (0), `on` (1)
-- `glpk_smcp_basis`: `adv` (0), `std` (1)
+- `glpk_smcp_basis`: `adv` (0), `std` (1), `bib` (2), `ini` (3)
 - `glpk_smcp_presolve`: `auto` (0), `off` (1), `on` (2)
 
 3. BFCP-like controls

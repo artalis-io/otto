@@ -156,6 +156,44 @@ static void test_profile_defaults_glpk_legacy(void) {
                 "legacy profile: config validates");
 }
 
+static void test_basis_helpers(void) {
+    int crash = -1;
+
+    ASSERT_TRUE(lp_policy_glpk_basis_crash_mode(LP_GLPK_SMCP_BASIS_ADV, &crash) == 1,
+                "basis helper: adv crash mode valid");
+    ASSERT_INT_EQ(crash, 1, "basis helper: adv maps to crash on");
+    ASSERT_TRUE(lp_policy_glpk_basis_crash_mode(LP_GLPK_SMCP_BASIS_STD, &crash) == 1,
+                "basis helper: std crash mode valid");
+    ASSERT_INT_EQ(crash, 0, "basis helper: std maps to crash off");
+    ASSERT_TRUE(lp_policy_glpk_basis_crash_mode(LP_GLPK_SMCP_BASIS_BIB, &crash) == 1,
+                "basis helper: bib crash mode valid");
+    ASSERT_INT_EQ(crash, 1, "basis helper: bib maps to crash-like mode");
+    ASSERT_TRUE(lp_policy_glpk_basis_crash_mode(LP_GLPK_SMCP_BASIS_INI, &crash) == 1,
+                "basis helper: ini crash mode valid");
+    ASSERT_INT_EQ(crash, 0, "basis helper: ini maps to crash off");
+
+    ASSERT_INT_EQ(lp_policy_glpk_basis_requires_staged_basis(LP_GLPK_SMCP_BASIS_ADV), 0,
+                  "basis helper: adv does not require staged basis");
+    ASSERT_INT_EQ(lp_policy_glpk_basis_requires_staged_basis(LP_GLPK_SMCP_BASIS_INI), 1,
+                  "basis helper: ini requires staged basis");
+
+    ASSERT_INT_EQ(lp_policy_glpk_basis_supports_current_runtime(LP_GLPK_SMCP_BASIS_ADV), 1,
+                  "basis helper: adv supported");
+    ASSERT_INT_EQ(lp_policy_glpk_basis_supports_current_runtime(LP_GLPK_SMCP_BASIS_STD), 1,
+                  "basis helper: std supported");
+    ASSERT_INT_EQ(lp_policy_glpk_basis_supports_current_runtime(LP_GLPK_SMCP_BASIS_BIB), 0,
+                  "basis helper: bib not yet supported");
+    ASSERT_INT_EQ(lp_policy_glpk_basis_supports_current_runtime(LP_GLPK_SMCP_BASIS_INI), 1,
+                  "basis helper: ini supported");
+
+    ASSERT_TRUE(strcmp(lp_policy_glpk_basis_name(LP_GLPK_SMCP_BASIS_ADV), "adv") == 0,
+                "basis helper: adv name");
+    ASSERT_TRUE(strcmp(lp_policy_glpk_basis_name(LP_GLPK_SMCP_BASIS_BIB), "bib") == 0,
+                "basis helper: bib name");
+    ASSERT_TRUE(strcmp(lp_policy_glpk_basis_name(LP_GLPK_SMCP_BASIS_INI), "ini") == 0,
+                "basis helper: ini name");
+}
+
 static void test_runtime_mapping_noop_under_default_profile(void) {
     LPGLPKCompatConfig cfg;
     int method = 2;
@@ -376,6 +414,34 @@ static void test_runtime_mapping_glpk_profile(void) {
                                         NULL);
     ASSERT_INT_EQ(dual_ratio, LP_DUAL_RATIO_TEST_HARRIS,
                   "runtime glpk profile: dual ratio falls back to Harris when flip off");
+
+    cfg.glpk_smcp_method = LP_GLPK_SMCP_METHOD_DUAL;
+    method = -1;
+    lp_policy_glpk_compat_apply_runtime(&cfg,
+                                        &method,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL);
+    ASSERT_INT_EQ(method, 1, "runtime glpk profile: dual-only method mapped");
 }
 
 static void test_runtime_mapping_glpk_strict_profile(void) {
@@ -411,34 +477,6 @@ static void test_runtime_mapping_glpk_strict_profile(void) {
                                         NULL,
                                         NULL,
                                         NULL);
-
-    cfg.glpk_smcp_method = LP_GLPK_SMCP_METHOD_DUAL;
-    method = -1;
-    lp_policy_glpk_compat_apply_runtime(&cfg,
-                                        &method,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL,
-                                        NULL);
-    ASSERT_INT_EQ(method, 1, "runtime glpk profile: dual-only method mapped");
     ASSERT_INT_EQ(dual_ratio, LP_DUAL_RATIO_TEST_STANDARD,
                   "runtime strict profile: standard ratio mapped");
     ASSERT_INT_EQ(dual_bound_flip, 0,
@@ -587,6 +625,7 @@ int main(void) {
     test_profile_defaults();
     test_profile_defaults_glpk_strict();
     test_profile_defaults_glpk_legacy();
+    test_basis_helpers();
     test_runtime_mapping_noop_under_default_profile();
     test_runtime_mapping_glpk_profile();
     test_runtime_mapping_glpk_strict_profile();

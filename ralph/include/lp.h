@@ -947,7 +947,7 @@ typedef struct SimplexSolver {
     int force_two_phase;    /* 1 = force two-phase simplex (for Benders duals) */
     int crash;              /* 0=off, 1=triangular crash basis */
     int verify;             /* 0=off, 1=post-solve verification (T2.3) */
-    int method;             /* 0=primal, 1=dual, 2=auto (dual first, primal fallback) */
+    int method;             /* 0=primal, 1=dual-only, 2=dual-first fallback lane */
     int ratio_test_mode;    /* 0=standard ratio, 1=Harris ratio (default) */
     int dual_ratio_test_mode; /* 0=standard, 1=Harris, 2=iterative bound-flip mode */
     double objective_limit; /* Early-exit when obj >= limit (internal min space), default RALPH_INFINITY */
