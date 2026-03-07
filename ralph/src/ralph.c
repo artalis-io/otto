@@ -87,8 +87,13 @@ struct RalphModel {
     int glpk_smcp_aorn;       /* 1=use A^T, 2=use N^T */
     int glpk_bfcp_backend;  /* 0=luf_ft, 1=cbg, 2=cgr */
     int glpk_bfcp_update_limit; /* -1=auto */
+    int glpk_bfcp_pivot_limit; /* -1=auto */
+    int glpk_bfcp_suhl; /* -1=auto, 0=off, 1=on */
     double glpk_bfcp_pivot_tol; /* <=0=auto */
+    double glpk_bfcp_eps_tol; /* <=0=auto */
     double glpk_bfcp_growth_guard; /* <=0=auto */
+    int glpk_bfcp_nfs_max; /* -1=auto */
+    int glpk_bfcp_nrs_max; /* -1=auto */
 
     /* Solution */
     RalphStatus status;
@@ -440,8 +445,13 @@ static void ralph_glpk_policy_config_from_model(const RalphModel *model,
     cfg->glpk_smcp_aorn = model->glpk_smcp_aorn;
     cfg->glpk_bfcp_backend = model->glpk_bfcp_backend;
     cfg->glpk_bfcp_update_limit = model->glpk_bfcp_update_limit;
+    cfg->glpk_bfcp_pivot_limit = model->glpk_bfcp_pivot_limit;
+    cfg->glpk_bfcp_suhl = model->glpk_bfcp_suhl;
     cfg->glpk_bfcp_pivot_tol = model->glpk_bfcp_pivot_tol;
+    cfg->glpk_bfcp_eps_tol = model->glpk_bfcp_eps_tol;
     cfg->glpk_bfcp_growth_guard = model->glpk_bfcp_growth_guard;
+    cfg->glpk_bfcp_nfs_max = model->glpk_bfcp_nfs_max;
+    cfg->glpk_bfcp_nrs_max = model->glpk_bfcp_nrs_max;
 }
 
 static void ralph_glpk_policy_config_to_model(RalphModel *model,
@@ -462,8 +472,13 @@ static void ralph_glpk_policy_config_to_model(RalphModel *model,
     model->glpk_smcp_aorn = cfg->glpk_smcp_aorn;
     model->glpk_bfcp_backend = cfg->glpk_bfcp_backend;
     model->glpk_bfcp_update_limit = cfg->glpk_bfcp_update_limit;
+    model->glpk_bfcp_pivot_limit = cfg->glpk_bfcp_pivot_limit;
+    model->glpk_bfcp_suhl = cfg->glpk_bfcp_suhl;
     model->glpk_bfcp_pivot_tol = cfg->glpk_bfcp_pivot_tol;
+    model->glpk_bfcp_eps_tol = cfg->glpk_bfcp_eps_tol;
     model->glpk_bfcp_growth_guard = cfg->glpk_bfcp_growth_guard;
+    model->glpk_bfcp_nfs_max = cfg->glpk_bfcp_nfs_max;
+    model->glpk_bfcp_nrs_max = cfg->glpk_bfcp_nrs_max;
 }
 
 static int ralph_set_glpk_policy_int_param(RalphModel *model,
@@ -510,6 +525,18 @@ static int ralph_set_glpk_policy_int_param(RalphModel *model,
         case RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT:
             cfg.glpk_bfcp_update_limit = value;
             break;
+        case RALPH_PARAM_GLPK_BFCP_PIVOT_LIMIT:
+            cfg.glpk_bfcp_pivot_limit = value;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_SUHL:
+            cfg.glpk_bfcp_suhl = value;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_NFS_MAX:
+            cfg.glpk_bfcp_nfs_max = value;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_NRS_MAX:
+            cfg.glpk_bfcp_nrs_max = value;
+            break;
         default:
             return -1;
     }
@@ -537,6 +564,9 @@ static int ralph_set_glpk_policy_double_param(RalphModel *model,
             break;
         case RALPH_PARAM_GLPK_BFCP_PIVOT_TOL:
             cfg.glpk_bfcp_pivot_tol = value;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_EPS_TOL:
+            cfg.glpk_bfcp_eps_tol = value;
             break;
         case RALPH_PARAM_GLPK_BFCP_GROWTH_GUARD:
             cfg.glpk_bfcp_growth_guard = value;
@@ -1451,6 +1481,7 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     LPDispatchBackend lp_effective_backend = LP_DISPATCH_BACKEND_SIMPLEX;
     LPExternalProvider lp_effective_provider = LP_EXTERNAL_PROVIDER_NONE;
     LPGLPKCompatConfig glpk_policy_cfg;
+    const char *unsupported_bfcp_param = NULL;
     LPBFCPPolicyRequest bfcp_policy_req;
     LPBFCPPolicyEffective bfcp_policy_eff;
     int glpk_policy_active = 0;
@@ -1566,6 +1597,23 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                            glpk_policy_cfg.glpk_smcp_basis,
                            0,
                            "glpk_smcp_basis=ini requires a staged LP basis");
+        }
+        if (glpk_policy_active &&
+            !lp_policy_glpk_bfcp_supports_current_runtime(&glpk_policy_cfg,
+                                                          &unsupported_bfcp_param)) {
+            char msg[RALPH_API_ERROR_MESSAGE_MAX];
+            snprintf(msg, sizeof(msg),
+                     "%s is not supported by the current Ralph BFCP runtime",
+                     unsupported_bfcp_param ? unsupported_bfcp_param : "glpk_bfcp control");
+            model->status = RALPH_STATUS_ERROR;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_STATE,
+                           RALPH_ERROR_CODE_NOT_AVAILABLE,
+                           model->status,
+                           RALPH_ERROR_API_SOLVE,
+                           0,
+                           0,
+                           msg);
         }
         lp_bfcp_policy_request_init(&bfcp_policy_req);
         lp_bfcp_policy_effective_init(&bfcp_policy_eff);
@@ -5680,6 +5728,30 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .aliases = {"GLPKBFCPUpdateLimit"},
             .alias_count = 1
         },
+        [RALPH_PARAM_GLPK_BFCP_PIVOT_LIMIT] = {
+            .id = RALPH_PARAM_GLPK_BFCP_PIVOT_LIMIT,
+            .name = "glpk_bfcp_pivot_limit",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = -1.0,
+            .has_min = 1,
+            .min_value = -1.0,
+            .aliases = {"GLPKBFCPPivotLimit"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_BFCP_SUHL] = {
+            .id = RALPH_PARAM_GLPK_BFCP_SUHL,
+            .name = "glpk_bfcp_suhl",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)RALPH_LP_GLPK_BFCP_SUHL_AUTO,
+            .has_min = 1,
+            .min_value = (double)RALPH_LP_GLPK_BFCP_SUHL_AUTO,
+            .has_max = 1,
+            .max_value = (double)RALPH_LP_GLPK_BFCP_SUHL_ON,
+            .aliases = {"GLPKBFCPSuhl"},
+            .alias_count = 1
+        },
         [RALPH_PARAM_GLPK_BFCP_PIVOT_TOL] = {
             .id = RALPH_PARAM_GLPK_BFCP_PIVOT_TOL,
             .name = "glpk_bfcp_pivot_tol",
@@ -5689,6 +5761,17 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .aliases = {"GLPKBFCPPivotTol"},
             .alias_count = 1
         },
+        [RALPH_PARAM_GLPK_BFCP_EPS_TOL] = {
+            .id = RALPH_PARAM_GLPK_BFCP_EPS_TOL,
+            .name = "glpk_bfcp_eps_tol",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_DOUBLE,
+            .default_value = 0.0,
+            .has_min = 1,
+            .min_value = 0.0,
+            .aliases = {"GLPKBFCPEpsTol"},
+            .alias_count = 1
+        },
         [RALPH_PARAM_GLPK_BFCP_GROWTH_GUARD] = {
             .id = RALPH_PARAM_GLPK_BFCP_GROWTH_GUARD,
             .name = "glpk_bfcp_growth_guard",
@@ -5696,6 +5779,28 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .value_type = RALPH_PARAM_VALUE_DOUBLE,
             .default_value = 0.0,
             .aliases = {"GLPKBFCPGrowthGuard"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_BFCP_NFS_MAX] = {
+            .id = RALPH_PARAM_GLPK_BFCP_NFS_MAX,
+            .name = "glpk_bfcp_nfs_max",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = -1.0,
+            .has_min = 1,
+            .min_value = -1.0,
+            .aliases = {"GLPKBFCPNfsMax"},
+            .alias_count = 1
+        },
+        [RALPH_PARAM_GLPK_BFCP_NRS_MAX] = {
+            .id = RALPH_PARAM_GLPK_BFCP_NRS_MAX,
+            .name = "glpk_bfcp_nrs_max",
+            .scope = RALPH_PARAM_SCOPE_LP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = -1.0,
+            .has_min = 1,
+            .min_value = -1.0,
+            .aliases = {"GLPKBFCPNrsMax"},
             .alias_count = 1
         },
         [RALPH_PARAM_TIME_LIMIT] = {
@@ -6107,6 +6212,10 @@ int ralph_core_set_int_param_id(RalphModel *model, RalphParamId param, int value
         case RALPH_PARAM_GLPK_SMCP_AORN:
         case RALPH_PARAM_GLPK_BFCP_BACKEND:
         case RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT:
+        case RALPH_PARAM_GLPK_BFCP_PIVOT_LIMIT:
+        case RALPH_PARAM_GLPK_BFCP_SUHL:
+        case RALPH_PARAM_GLPK_BFCP_NFS_MAX:
+        case RALPH_PARAM_GLPK_BFCP_NRS_MAX:
             if (ralph_set_glpk_policy_int_param(model, param, value) != 0) {
                 RALPH_FAIL_API(model,
                                RALPH_ERROR_DOMAIN_PARAMETER,
@@ -6219,6 +6328,7 @@ int ralph_core_set_dbl_param_id(RalphModel *model, RalphParamId param, double va
         case RALPH_PARAM_GLPK_SMCP_TOL_DJ:
         case RALPH_PARAM_GLPK_SMCP_TOL_PIV:
         case RALPH_PARAM_GLPK_BFCP_PIVOT_TOL:
+        case RALPH_PARAM_GLPK_BFCP_EPS_TOL:
         case RALPH_PARAM_GLPK_BFCP_GROWTH_GUARD:
             if (!isfinite(value)) {
                 RALPH_FAIL_API(model,
@@ -6419,6 +6529,18 @@ int ralph_core_get_int_param_id(const RalphModel *model, RalphParamId param, int
         case RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT:
             *value = model->glpk_bfcp_update_limit;
             break;
+        case RALPH_PARAM_GLPK_BFCP_PIVOT_LIMIT:
+            *value = model->glpk_bfcp_pivot_limit;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_SUHL:
+            *value = model->glpk_bfcp_suhl;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_NFS_MAX:
+            *value = model->glpk_bfcp_nfs_max;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_NRS_MAX:
+            *value = model->glpk_bfcp_nrs_max;
+            break;
         default:
             RALPH_FAIL_API(model,
                            RALPH_ERROR_DOMAIN_PARAMETER,
@@ -6497,6 +6619,9 @@ int ralph_core_get_dbl_param_id(const RalphModel *model, RalphParamId param, dou
             break;
         case RALPH_PARAM_GLPK_BFCP_PIVOT_TOL:
             *value = model->glpk_bfcp_pivot_tol;
+            break;
+        case RALPH_PARAM_GLPK_BFCP_EPS_TOL:
+            *value = model->glpk_bfcp_eps_tol;
             break;
         case RALPH_PARAM_GLPK_BFCP_GROWTH_GUARD:
             *value = model->glpk_bfcp_growth_guard;

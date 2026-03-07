@@ -60,6 +60,33 @@ int lp_policy_glpk_basis_supports_current_runtime(int smcp_basis) {
     return smcp_basis == LP_GLPK_SMCP_BASIS_BIB ? 0 : 1;
 }
 
+int lp_policy_glpk_bfcp_supports_current_runtime(const LPGLPKCompatConfig *cfg,
+                                                 const char **unsupported_param_out) {
+    if (unsupported_param_out) *unsupported_param_out = NULL;
+    if (!cfg) return 0;
+    if (cfg->glpk_bfcp_pivot_limit >= 0) {
+        if (unsupported_param_out) *unsupported_param_out = "glpk_bfcp_pivot_limit";
+        return 0;
+    }
+    if (cfg->glpk_bfcp_suhl != LP_GLPK_BFCP_SUHL_AUTO) {
+        if (unsupported_param_out) *unsupported_param_out = "glpk_bfcp_suhl";
+        return 0;
+    }
+    if (cfg->glpk_bfcp_eps_tol > 0.0) {
+        if (unsupported_param_out) *unsupported_param_out = "glpk_bfcp_eps_tol";
+        return 0;
+    }
+    if (cfg->glpk_bfcp_nfs_max >= 0) {
+        if (unsupported_param_out) *unsupported_param_out = "glpk_bfcp_nfs_max";
+        return 0;
+    }
+    if (cfg->glpk_bfcp_nrs_max >= 0) {
+        if (unsupported_param_out) *unsupported_param_out = "glpk_bfcp_nrs_max";
+        return 0;
+    }
+    return 1;
+}
+
 static int lp_glpk_smcp_presolve_valid(int value) {
     return value >= LP_GLPK_SMCP_PRESOLVE_AUTO &&
            value <= LP_GLPK_SMCP_PRESOLVE_ON;
@@ -83,6 +110,11 @@ static int lp_glpk_smcp_aorn_valid(int value) {
 static int lp_glpk_bfcp_backend_valid(int value) {
     return value >= LP_GLPK_BFCP_BACKEND_LUF_FT &&
            value <= LP_GLPK_BFCP_BACKEND_CGR;
+}
+
+static int lp_glpk_bfcp_suhl_valid(int value) {
+    return value >= LP_GLPK_BFCP_SUHL_AUTO &&
+           value <= LP_GLPK_BFCP_SUHL_ON;
 }
 
 static double lp_glpk_working_fixed_width_tol(int smcp_shift, double tol_bnd) {
@@ -209,8 +241,13 @@ void lp_policy_glpk_compat_init(LPGLPKCompatConfig *cfg) {
     cfg->glpk_smcp_aorn = LP_GLPK_SMCP_AORN_USE_NT;
     cfg->glpk_bfcp_backend = LP_GLPK_BFCP_BACKEND_LUF_FT;
     cfg->glpk_bfcp_update_limit = -1;
+    cfg->glpk_bfcp_pivot_limit = -1;
+    cfg->glpk_bfcp_suhl = LP_GLPK_BFCP_SUHL_AUTO;
     cfg->glpk_bfcp_pivot_tol = 0.0;
+    cfg->glpk_bfcp_eps_tol = 0.0;
     cfg->glpk_bfcp_growth_guard = 0.0;
+    cfg->glpk_bfcp_nfs_max = -1;
+    cfg->glpk_bfcp_nrs_max = -1;
 }
 
 int lp_policy_glpk_compat_validate(const LPGLPKCompatConfig *cfg) {
@@ -230,8 +267,13 @@ int lp_policy_glpk_compat_validate(const LPGLPKCompatConfig *cfg) {
     if (!isfinite(cfg->glpk_smcp_tol_piv) || cfg->glpk_smcp_tol_piv <= 0.0) return 0;
     if (!lp_glpk_bfcp_backend_valid(cfg->glpk_bfcp_backend)) return 0;
     if (cfg->glpk_bfcp_update_limit < -1) return 0;
+    if (cfg->glpk_bfcp_pivot_limit < -1) return 0;
+    if (!lp_glpk_bfcp_suhl_valid(cfg->glpk_bfcp_suhl)) return 0;
     if (!isfinite(cfg->glpk_bfcp_pivot_tol)) return 0;
+    if (!isfinite(cfg->glpk_bfcp_eps_tol)) return 0;
     if (!isfinite(cfg->glpk_bfcp_growth_guard)) return 0;
+    if (cfg->glpk_bfcp_nfs_max < -1) return 0;
+    if (cfg->glpk_bfcp_nrs_max < -1) return 0;
     return 1;
 }
 
@@ -259,8 +301,13 @@ void lp_policy_glpk_compat_apply_profile_defaults(LPGLPKCompatConfig *cfg) {
     cfg->glpk_smcp_aorn = LP_GLPK_SMCP_AORN_USE_NT;
     cfg->glpk_bfcp_backend = LP_GLPK_BFCP_BACKEND_LUF_FT;
     cfg->glpk_bfcp_update_limit = 100;
+    cfg->glpk_bfcp_pivot_limit = -1;
+    cfg->glpk_bfcp_suhl = LP_GLPK_BFCP_SUHL_AUTO;
     cfg->glpk_bfcp_pivot_tol = 0.0;
+    cfg->glpk_bfcp_eps_tol = 0.0;
     cfg->glpk_bfcp_growth_guard = 0.0;
+    cfg->glpk_bfcp_nfs_max = -1;
+    cfg->glpk_bfcp_nrs_max = -1;
 }
 
 void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,

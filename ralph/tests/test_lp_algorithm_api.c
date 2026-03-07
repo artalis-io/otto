@@ -206,12 +206,52 @@ static void test_param_metadata_and_scope(void) {
                   "params: glpk_smcp_basis max");
 
     memset(&meta, 0, sizeof(meta));
+    ASSERT_INT_EQ(ralph_core_get_param_meta(RALPH_PARAM_GLPK_BFCP_PIVOT_LIMIT, &meta), 0,
+                  "params: metadata for glpk_bfcp_pivot_limit");
+    ASSERT_TRUE(strcmp(meta.name, "glpk_bfcp_pivot_limit") == 0,
+                "params: glpk_bfcp_pivot_limit canonical name");
+    ASSERT_INT_EQ((int)meta.value_type, (int)RALPH_PARAM_VALUE_INT,
+                  "params: glpk_bfcp_pivot_limit int type");
+
+    memset(&meta, 0, sizeof(meta));
+    ASSERT_INT_EQ(ralph_core_get_param_meta(RALPH_PARAM_GLPK_BFCP_SUHL, &meta), 0,
+                  "params: metadata for glpk_bfcp_suhl");
+    ASSERT_TRUE(strcmp(meta.name, "glpk_bfcp_suhl") == 0,
+                "params: glpk_bfcp_suhl canonical name");
+    ASSERT_INT_EQ((int)meta.value_type, (int)RALPH_PARAM_VALUE_INT,
+                  "params: glpk_bfcp_suhl int type");
+
+    memset(&meta, 0, sizeof(meta));
     ASSERT_INT_EQ(ralph_core_get_param_meta(RALPH_PARAM_GLPK_BFCP_PIVOT_TOL, &meta), 0,
                   "params: metadata for glpk_bfcp_pivot_tol");
     ASSERT_TRUE(strcmp(meta.name, "glpk_bfcp_pivot_tol") == 0,
                 "params: glpk_bfcp_pivot_tol canonical name");
     ASSERT_INT_EQ((int)meta.value_type, (int)RALPH_PARAM_VALUE_DOUBLE,
                   "params: glpk_bfcp_pivot_tol double type");
+
+    memset(&meta, 0, sizeof(meta));
+    ASSERT_INT_EQ(ralph_core_get_param_meta(RALPH_PARAM_GLPK_BFCP_EPS_TOL, &meta), 0,
+                  "params: metadata for glpk_bfcp_eps_tol");
+    ASSERT_TRUE(strcmp(meta.name, "glpk_bfcp_eps_tol") == 0,
+                "params: glpk_bfcp_eps_tol canonical name");
+    ASSERT_INT_EQ((int)meta.value_type, (int)RALPH_PARAM_VALUE_DOUBLE,
+                  "params: glpk_bfcp_eps_tol double type");
+
+    memset(&meta, 0, sizeof(meta));
+    ASSERT_INT_EQ(ralph_core_get_param_meta(RALPH_PARAM_GLPK_BFCP_NFS_MAX, &meta), 0,
+                  "params: metadata for glpk_bfcp_nfs_max");
+    ASSERT_TRUE(strcmp(meta.name, "glpk_bfcp_nfs_max") == 0,
+                "params: glpk_bfcp_nfs_max canonical name");
+    ASSERT_INT_EQ((int)meta.value_type, (int)RALPH_PARAM_VALUE_INT,
+                  "params: glpk_bfcp_nfs_max int type");
+
+    memset(&meta, 0, sizeof(meta));
+    ASSERT_INT_EQ(ralph_core_get_param_meta(RALPH_PARAM_GLPK_BFCP_NRS_MAX, &meta), 0,
+                  "params: metadata for glpk_bfcp_nrs_max");
+    ASSERT_TRUE(strcmp(meta.name, "glpk_bfcp_nrs_max") == 0,
+                "params: glpk_bfcp_nrs_max canonical name");
+    ASSERT_INT_EQ((int)meta.value_type, (int)RALPH_PARAM_VALUE_INT,
+                  "params: glpk_bfcp_nrs_max int type");
 
     memset(&meta, 0, sizeof(meta));
     ASSERT_INT_EQ(ralph_core_get_param_meta(RALPH_PARAM_GLPK_SMCP_TOL_BND, &meta), 0,
@@ -283,6 +323,14 @@ static void test_param_metadata_and_scope(void) {
                   "params: find glpk_smcp_excl alias");
     ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_GLPK_SMCP_EXCL,
                   "params: glpk_smcp_excl alias id");
+    ASSERT_INT_EQ(ralph_core_find_param_by_name("GLPKBFCPPivotLimit", &pid), 0,
+                  "params: find glpk_bfcp_pivot_limit alias");
+    ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_GLPK_BFCP_PIVOT_LIMIT,
+                  "params: glpk_bfcp_pivot_limit alias id");
+    ASSERT_INT_EQ(ralph_core_find_param_by_name("GLPKBFCPSuhl", &pid), 0,
+                  "params: find glpk_bfcp_suhl alias");
+    ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_GLPK_BFCP_SUHL,
+                  "params: glpk_bfcp_suhl alias id");
     ASSERT_INT_EQ(ralph_core_find_param_by_name("glpk_bfcp_growth_guard", &pid), 0,
                   "params: find glpk_bfcp_growth_guard canonical");
     ASSERT_INT_EQ((int)pid, (int)RALPH_PARAM_GLPK_BFCP_GROWTH_GUARD,
@@ -397,8 +445,18 @@ static void test_param_metadata_and_scope(void) {
                   "params: reject glpk_smcp_tol_bnd non-positive");
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_UPDATE_LIMIT, -2), -1,
                   "params: reject glpk_bfcp_update_limit out of range");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_PIVOT_LIMIT, -2), -1,
+                  "params: reject glpk_bfcp_pivot_limit out of range");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_SUHL, 2), -1,
+                  "params: reject glpk_bfcp_suhl out of range");
     ASSERT_INT_EQ(ralph_core_set_dbl_param_id(model, RALPH_PARAM_GLPK_BFCP_PIVOT_TOL, INFINITY), -1,
                   "params: reject glpk_bfcp_pivot_tol non-finite");
+    ASSERT_INT_EQ(ralph_core_set_dbl_param_id(model, RALPH_PARAM_GLPK_BFCP_EPS_TOL, INFINITY), -1,
+                  "params: reject glpk_bfcp_eps_tol non-finite");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_NFS_MAX, -2), -1,
+                  "params: reject glpk_bfcp_nfs_max out of range");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_NRS_MAX, -2), -1,
+                  "params: reject glpk_bfcp_nrs_max out of range");
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_BASIS_GOVERNOR_MODE, 2), 0,
                   "params: set lp_basis_governor_mode by id");
     ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_LP_BASIS_GOVERNOR_MODE, &value), 0,
@@ -476,6 +534,22 @@ static void test_param_metadata_and_scope(void) {
     ASSERT_INT_EQ(value, -1,
                   "params: glpk_bfcp_update_limit auto set/get");
 
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_PIVOT_LIMIT, 4), 0,
+                  "params: set glpk_bfcp_pivot_limit");
+    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_GLPK_BFCP_PIVOT_LIMIT, &value), 0,
+                  "params: get glpk_bfcp_pivot_limit");
+    ASSERT_INT_EQ(value, 4,
+                  "params: glpk_bfcp_pivot_limit set/get consistent");
+
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_SUHL,
+                                         (int)RALPH_LP_GLPK_BFCP_SUHL_ON),
+                  0,
+                  "params: set glpk_bfcp_suhl");
+    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_GLPK_BFCP_SUHL, &value), 0,
+                  "params: get glpk_bfcp_suhl");
+    ASSERT_INT_EQ(value, (int)RALPH_LP_GLPK_BFCP_SUHL_ON,
+                  "params: glpk_bfcp_suhl set/get consistent");
+
     ASSERT_INT_EQ(ralph_core_set_dbl_param_id(model, RALPH_PARAM_GLPK_BFCP_PIVOT_TOL, 1e-8), 0,
                   "params: set glpk_bfcp_pivot_tol");
     ASSERT_INT_EQ(ralph_core_get_dbl_param_id(model, RALPH_PARAM_GLPK_BFCP_PIVOT_TOL, &dvalue), 0,
@@ -489,6 +563,27 @@ static void test_param_metadata_and_scope(void) {
                   "params: get glpk_bfcp_growth_guard");
     ASSERT_TRUE(fabs(dvalue - 1e6) < 1e-6,
                 "params: glpk_bfcp_growth_guard set/get consistent");
+
+    ASSERT_INT_EQ(ralph_core_set_dbl_param_id(model, RALPH_PARAM_GLPK_BFCP_EPS_TOL, 1e-15), 0,
+                  "params: set glpk_bfcp_eps_tol");
+    ASSERT_INT_EQ(ralph_core_get_dbl_param_id(model, RALPH_PARAM_GLPK_BFCP_EPS_TOL, &dvalue), 0,
+                  "params: get glpk_bfcp_eps_tol");
+    ASSERT_TRUE(fabs(dvalue - 1e-15) < 1e-21,
+                "params: glpk_bfcp_eps_tol set/get consistent");
+
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_NFS_MAX, 50), 0,
+                  "params: set glpk_bfcp_nfs_max");
+    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_GLPK_BFCP_NFS_MAX, &value), 0,
+                  "params: get glpk_bfcp_nfs_max");
+    ASSERT_INT_EQ(value, 50,
+                  "params: glpk_bfcp_nfs_max set/get consistent");
+
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_NRS_MAX, 60), 0,
+                  "params: set glpk_bfcp_nrs_max");
+    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_GLPK_BFCP_NRS_MAX, &value), 0,
+                  "params: get glpk_bfcp_nrs_max");
+    ASSERT_INT_EQ(value, 60,
+                  "params: glpk_bfcp_nrs_max set/get consistent");
 
     ASSERT_INT_EQ(ralph_core_set_dbl_param_id(model, RALPH_PARAM_GLPK_SMCP_TOL_BND, 2e-7), 0,
                   "params: set glpk_smcp_tol_bnd");
@@ -874,6 +969,34 @@ static void test_glpk_basis_bib_reports_not_available(void) {
     ralph_test_free(model);
 }
 
+static void test_glpk_bfcp_unsupported_extra_control_reports_not_available(void) {
+    RalphModel *model = build_small_lp();
+    RalphAPIError err;
+
+    ASSERT_TRUE(model != NULL, "glpk-bfcp-extra: model created");
+    if (!model) return;
+
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_POLICY_PROFILE,
+                                         (int)RALPH_LP_POLICY_PROFILE_GLPK_COMPAT),
+                  0,
+                  "glpk-bfcp-extra: set glpk compat profile");
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_BFCP_PIVOT_LIMIT, 4),
+                  0,
+                  "glpk-bfcp-extra: request pivot limit");
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), -1,
+                  "glpk-bfcp-extra: solve fails cleanly");
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_ERROR,
+                  "glpk-bfcp-extra: status is error");
+    ASSERT_INT_EQ(ralph_lp_get_last_error((const RalphLPModel *)model, &err), 0,
+                  "glpk-bfcp-extra: last error available");
+    ASSERT_INT_EQ((int)err.domain, (int)RALPH_ERROR_DOMAIN_STATE,
+                  "glpk-bfcp-extra: last error domain");
+    ASSERT_INT_EQ((int)err.code, (int)RALPH_ERROR_CODE_NOT_AVAILABLE,
+                  "glpk-bfcp-extra: last error code");
+
+    ralph_test_free(model);
+}
+
 int main(void) {
     printf("=== LP Algorithm API Tests ===\n");
 
@@ -889,6 +1012,7 @@ int main(void) {
     test_glpk_basis_ini_requires_staged_basis();
     test_glpk_basis_ini_accepts_staged_basis();
     test_glpk_basis_bib_reports_not_available();
+    test_glpk_bfcp_unsupported_extra_control_reports_not_available();
 
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
