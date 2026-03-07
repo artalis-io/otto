@@ -13,6 +13,7 @@
 #include <limits.h>
 #include "lp.h"
 #include "lp_bfcp_policy.h"
+#include "lp_glpk_strict.h"
 #include "lu_supernode.h"
 
 #ifdef _OPENMP
@@ -66,6 +67,11 @@ static int lu_update_storage_capacity(const LUFactorization *lu) {
         if (cap <= 0 || lu->eta_capacity < cap) cap = lu->eta_capacity;
     }
     return cap;
+}
+
+static int lu_glpk_strict_mode(const LUFactorization *lu) {
+    if (!lu || !lu->owner) return 0;
+    return lp_glpk_strict_mode_enabled(lu->owner->glpk_strict_mode);
 }
 
 static void lu_clamp_max_updates_to_storage(LUFactorization *lu) {
@@ -215,6 +221,7 @@ static void lu_fill_bfcp_signals(const LUFactorization *lu,
     if (!lu || !sig) return;
 
     lp_bfcp_policy_refactor_signals_init(sig);
+    sig->strict_mode = lu_glpk_strict_mode(lu);
     sig->num_updates = lu->num_updates;
     sig->max_updates = lu->max_updates;
     sig->growth_factor = lu->growth_factor;
@@ -243,6 +250,10 @@ static void lu_fill_bfcp_signals(const LUFactorization *lu,
 static double lu_dense_spike_reject_ratio(const LUFactorization *lu) {
     double ratio = RALPH_SPIKE_DENSE_BASE_RATIO;
     int backend_policy = LP_LU_BACKEND_POLICY_LUF_FT;
+    if (!lp_glpk_strict_allow_lu_update_adaptive_thresholds(
+            lu ? lu_glpk_strict_mode(lu) : 0)) {
+        return 1.0;
+    }
     if (!lu) return ratio;
     backend_policy = lu_normalize_backend_policy(lu->backend_policy);
 
@@ -266,6 +277,10 @@ static double lu_update_pivot_ratio_threshold(const LUFactorization *lu) {
     double threshold = RALPH_LU_UPDATE_PIVOT_THRESHOLD;
     double update_ratio = 0.0;
     int backend_policy = LP_LU_BACKEND_POLICY_LUF_FT;
+    if (!lp_glpk_strict_allow_lu_update_adaptive_thresholds(
+            lu ? lu_glpk_strict_mode(lu) : 0)) {
+        return threshold;
+    }
     if (!lu) return threshold;
     backend_policy = lu_normalize_backend_policy(lu->backend_policy);
 

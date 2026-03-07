@@ -14,6 +14,7 @@
 #include <math.h>
 #include <limits.h>
 #include "lp.h"
+#include "lp_glpk_strict.h"
 #include "lu_supernode.h"
 
 /* ============================================================================
@@ -2731,6 +2732,11 @@ static int lu_numeric_backend_to_basis_governor_backend(int backend) {
     return LP_BASIS_GOV_BACKEND_NONE;
 }
 
+static int lu_sparse_glpk_strict_mode(const LUFactorization *lu) {
+    if (!lu || !lu->owner) return 0;
+    return lp_glpk_strict_mode_enabled(lu->owner->glpk_strict_mode);
+}
+
 static int lu_numeric_terminal_failure_reason(int reason_hint,
                                               int saw_identity_sep_failure,
                                               int saw_mkz_singular_failure,
@@ -2979,7 +2985,11 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     lp_telemetry_lu_clear_mkz_last_failure(lu);
     int mkz_skip_by_circuit = 0;
     int mkz_skip_by_global = 0;
-    if (!skip_sparse_numeric && lu->mkz_enabled && k >= MARKOWITZ_MIN_K) {
+    if (!skip_sparse_numeric &&
+        lu->mkz_enabled &&
+        k >= MARKOWITZ_MIN_K &&
+        lp_glpk_strict_allow_lu_sparse_skip_heuristics(
+            lu_sparse_glpk_strict_mode(lu))) {
         if (!full_retry_mode) {
             mkz_skip_by_circuit = mkz_circuit_should_skip(lu, mkz_fingerprint);
             if (!mkz_skip_by_circuit) {
@@ -3253,6 +3263,8 @@ supernode_factorization:
     if (!skip_sparse_numeric && lu->sn_enabled && k >= SN_MIN_K &&
         (!full_retry_mode || mkz_attempted_in_full_retry)) {
         if (!force_supernode_attempt &&
+            lp_glpk_strict_allow_lu_sparse_skip_heuristics(
+                lu_sparse_glpk_strict_mode(lu)) &&
             lu_supernode_cost_gate_should_skip(lu, k, full_retry_mode)) {
             sn_skip_by_cost_gate = 1;
         } else {

@@ -15,6 +15,7 @@
 #include <math.h>
 #include <time.h>
 #include "lp.h"
+#include "lp_glpk_strict.h"
 #include "lp_log.h"
 #include "lp_policy_glpk_compat.h"
 
@@ -52,6 +53,7 @@ static void configure_dual_tableau_for_solver(SimplexSolver *solver, SimplexTabl
 
     int enable_supernode = 0;
     tab->lu->telemetry_enabled = solver->telemetry_enabled;
+    tab->lu->owner = solver;
     if (solver->policy.basis_governor_mode == LP_BASIS_GOV_MODE_OFF) {
         tab->lu->basis_governor = NULL;
     } else {
@@ -507,7 +509,10 @@ static int dual_time_limit_exceeded(SimplexSolver *solver, int iter) {
 
 static int dual_allow_startup_bound_flip(const SimplexSolver *solver) {
     if (!solver) return 0;
-    if (solver->glpk_strict_mode) return 0;
+    if (!lp_glpk_strict_allow_dual_startup_bound_flip(
+            solver->glpk_strict_mode)) {
+        return 0;
+    }
     if (!solver->use_dual_bound_flip) return 0;
     /* FLIP mode applies bound flips iteratively during ratio steps. */
     if (solver->dual_ratio_test_mode == LP_DUAL_RATIO_TEST_FLIP) return 0;
@@ -592,6 +597,10 @@ static int dual_try_one_shot_recovery(SimplexSolver *solver,
     int iter_window;
 
     if (!solver || !tab || !recovery_used || *recovery_used) return 0;
+    if (!lp_glpk_strict_allow_dual_one_shot_recovery(
+            solver->glpk_strict_mode)) {
+        return 0;
+    }
     if (strcmp(reason_tag ? reason_tag : "", "ratio_no_entering") != 0) {
         return 0;
     }
@@ -734,6 +743,19 @@ static void dual_ratio_adaptive_config_for_tableau(const SimplexTableau *tab,
         pivot_tol = tab->lu->pivot_tol;
         cond_estimate = tab->lu->cond_estimate;
         growth_factor = tab->lu->growth_factor;
+    }
+    if (tab && tab->owner &&
+        !lp_glpk_strict_use_dual_adaptive_ratio_thresholds(
+            tab->owner->glpk_strict_mode)) {
+        dual_ratio_adaptive_config_defaults(cfg);
+        if (isfinite(pivot_tol) && pivot_tol > cfg->base_pivot_floor) {
+            cfg->base_pivot_floor = pivot_tol;
+            cfg->strict_pivot_floor = 10.0 * pivot_tol;
+            cfg->hard_refactor_floor = cfg->base_pivot_floor * 1024.0;
+            if (cfg->hard_refactor_floor < 1e-4) cfg->hard_refactor_floor = 1e-4;
+            if (cfg->hard_refactor_floor > 1e-2) cfg->hard_refactor_floor = 1e-2;
+        }
+        return;
     }
     if (tab && tab->model && tab->model->num_integers > 0) {
         /* Keep MIP node-LP path on conservative legacy ratio thresholds. */

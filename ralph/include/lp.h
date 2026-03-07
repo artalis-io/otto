@@ -161,6 +161,8 @@ typedef enum {
 } LUIdentitySepRetryLane;
 
 /* LP model internal representation */
+struct SimplexSolver;
+
 typedef struct {
     /* Problem dimensions */
     int num_vars;           /* Number of variables (structural) */
@@ -394,6 +396,7 @@ typedef struct {
     int last_failure_reason;    /* LUFailureReason (last failed lu_factorize/lu_update reason) */
     int last_refactor_trigger_reason; /* LP_BFCP_REFACTOR_REASON_* from lu_needs_refactorization */
     int telemetry_enabled;      /* 1 = collect LU telemetry counters/timers */
+    struct SimplexSolver *owner; /* Owning solver when attached to a tableau */
     LPBasisGovernorState *basis_governor; /* Non-owning pointer to solver governor state */
 
     /* Pre-allocated workspace for hyper-sparse operations */
@@ -478,9 +481,6 @@ typedef struct {
     /* Arena allocator for fixed-size arrays (reduces ~20 mallocs to 1) */
     SHArena *arena;
 } LUFactorization;
-
-/* Forward declaration (tableau back-pointer for timing instrumentation) */
-struct SimplexSolver;
 
 /* Simplex tableau representation */
 typedef struct {

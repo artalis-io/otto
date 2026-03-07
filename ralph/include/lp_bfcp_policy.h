@@ -32,6 +32,7 @@ typedef enum {
 } LPBFCPRefactorReason;
 
 typedef struct {
+    int strict_mode;
     int num_updates;
     int max_updates;
     double growth_factor;
