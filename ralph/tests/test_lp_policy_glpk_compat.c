@@ -268,7 +268,7 @@ static void test_runtime_mapping_glpk_profile(void) {
 
     lp_policy_glpk_compat_init(&cfg);
     cfg.lp_policy_profile = LP_POLICY_PROFILE_GLPK_COMPAT;
-    cfg.glpk_smcp_method = LP_GLPK_SMCP_METHOD_DUAL;
+    cfg.glpk_smcp_method = LP_GLPK_SMCP_METHOD_DUALP;
     cfg.glpk_smcp_pricing = LP_GLPK_SMCP_PRICING_STANDARD;
     cfg.glpk_smcp_presolve = LP_GLPK_SMCP_PRESOLVE_OFF;
     cfg.glpk_smcp_ratio = LP_GLPK_SMCP_RATIO_STANDARD;
@@ -309,7 +309,7 @@ static void test_runtime_mapping_glpk_profile(void) {
                                         &soft_gate,
                                         &periodic_gate);
 
-    ASSERT_INT_EQ(method, 1, "runtime glpk profile: dual method mapped");
+    ASSERT_INT_EQ(method, 2, "runtime glpk profile: dualp method mapped");
     ASSERT_INT_EQ(pricing, 0, "runtime glpk profile: standard pricing mapped");
     ASSERT_INT_EQ(phase1_pricing, 0, "runtime glpk profile: phase1 pricing mapped");
     ASSERT_INT_EQ(presolve, -1, "runtime glpk profile: presolve off mapped");
@@ -411,6 +411,34 @@ static void test_runtime_mapping_glpk_strict_profile(void) {
                                         NULL,
                                         NULL,
                                         NULL);
+
+    cfg.glpk_smcp_method = LP_GLPK_SMCP_METHOD_DUAL;
+    method = -1;
+    lp_policy_glpk_compat_apply_runtime(&cfg,
+                                        &method,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL);
+    ASSERT_INT_EQ(method, 1, "runtime glpk profile: dual-only method mapped");
     ASSERT_INT_EQ(dual_ratio, LP_DUAL_RATIO_TEST_STANDARD,
                   "runtime strict profile: standard ratio mapped");
     ASSERT_INT_EQ(dual_bound_flip, 0,

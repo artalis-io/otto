@@ -373,7 +373,7 @@ static void test_param_metadata_and_scope(void) {
                   "params: reject lp_reinvert_controller_mode out of range");
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_LP_POLICY_PROFILE, 4), -1,
                   "params: reject lp_policy_profile out of range");
-    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_SMCP_METHOD, 3), -1,
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_SMCP_METHOD, 4), -1,
                   "params: reject glpk_smcp_method out of range");
     ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_SMCP_EXCL, 2), -1,
                   "params: reject glpk_smcp_excl out of range");
@@ -432,6 +432,15 @@ static void test_param_metadata_and_scope(void) {
                   "params: get glpk_bfcp_update_limit auto");
     ASSERT_INT_EQ(value, -1,
                   "params: glpk_bfcp_update_limit auto set/get");
+
+    ASSERT_INT_EQ(ralph_core_set_int_param_id(model, RALPH_PARAM_GLPK_SMCP_METHOD,
+                                         (int)RALPH_LP_GLPK_SMCP_METHOD_DUALP),
+                  0,
+                  "params: override glpk_smcp_method=dualp after profile");
+    ASSERT_INT_EQ(ralph_core_get_int_param_id(model, RALPH_PARAM_GLPK_SMCP_METHOD, &value), 0,
+                  "params: get glpk_smcp_method dualp override");
+    ASSERT_INT_EQ(value, (int)RALPH_LP_GLPK_SMCP_METHOD_DUALP,
+                  "params: explicit dualp override persists after profile");
 
     ASSERT_INT_EQ(ralph_core_set_dbl_param_id(model, RALPH_PARAM_GLPK_BFCP_PIVOT_TOL, 1e-8), 0,
                   "params: set glpk_bfcp_pivot_tol");

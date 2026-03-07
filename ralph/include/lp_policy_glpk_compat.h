@@ -13,7 +13,8 @@ typedef enum {
 typedef enum {
     LP_GLPK_SMCP_METHOD_AUTO = 0,
     LP_GLPK_SMCP_METHOD_PRIMAL = 1,
-    LP_GLPK_SMCP_METHOD_DUAL = 2
+    LP_GLPK_SMCP_METHOD_DUALP = 2,
+    LP_GLPK_SMCP_METHOD_DUAL = 3
 } LPGLPKSMCPMethod;
 
 typedef enum {
