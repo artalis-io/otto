@@ -5515,10 +5515,15 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->smcp_shift = 1;
     solver->smcp_aorn = 2;
     solver->method = 2;  /* Default: auto (dual first, primal fallback) */
+    solver->lu_factorization_type = LP_GLPK_BFCP_FACTORIZATION_LUF;
     solver->lu_backend_policy = LP_LU_BACKEND_POLICY_AUTO;
     solver->lu_update_limit_override = -1;
     solver->lu_pivot_tol_override = 0.0;
     solver->lu_growth_guard_override = 0.0;
+    solver->lu_strict_lane_active = 0;
+    solver->lu_strict_allow_supernode_lane = 1;
+    solver->lu_strict_allow_symbolic_full_retry = 1;
+    solver->lu_strict_allow_top_level_dense_fallback = 1;
     solver->has_lp_progress_callback = 0;
     solver->has_lp_cancel_callback = 0;
     solver->progress_start_ms = 0.0;
