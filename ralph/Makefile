@@ -47,6 +47,7 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/lp_basis_governor.c \
           $(SRC_DIR)/lp_policy_glpk_compat.c \
           $(SRC_DIR)/lp_glpk_strict.c \
+          $(SRC_DIR)/lp_glpk_strict_bfcp.c \
           $(SRC_DIR)/lp_bfcp_policy.c \
           $(SRC_DIR)/lp_backend.c \
           $(SRC_DIR)/lp_external_adapter.c \
@@ -217,6 +218,8 @@ LP_POLICY_GLPK_COMPAT_TEST_SOURCES = $(TEST_DIR)/test_lp_policy_glpk_compat.c
 LP_POLICY_GLPK_COMPAT_TEST_EXEC = test_lp_policy_glpk_compat
 LP_GLPK_STRICT_TEST_SOURCES = $(TEST_DIR)/test_lp_glpk_strict.c
 LP_GLPK_STRICT_TEST_EXEC = test_lp_glpk_strict
+LP_GLPK_STRICT_BFCP_TEST_SOURCES = $(TEST_DIR)/test_lp_glpk_strict_bfcp.c
+LP_GLPK_STRICT_BFCP_TEST_EXEC = test_lp_glpk_strict_bfcp
 LP_BFCP_POLICY_TEST_SOURCES = $(TEST_DIR)/test_lp_bfcp_policy.c
 LP_BFCP_POLICY_TEST_EXEC = test_lp_bfcp_policy
 
@@ -642,6 +645,14 @@ $(LP_GLPK_STRICT_TEST_EXEC): $(LP_GLPK_STRICT_TEST_SOURCES) $(LIB_NAME) $(SHARED
 # Run LP GLPK strict-mode gate tests
 test-lp-glpk-strict: $(LP_GLPK_STRICT_TEST_EXEC)
 	./$(LP_GLPK_STRICT_TEST_EXEC)
+
+# Build LP GLPK strict BFCP dispatch tests
+$(LP_GLPK_STRICT_BFCP_TEST_EXEC): $(LP_GLPK_STRICT_BFCP_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP GLPK strict BFCP dispatch tests
+test-lp-glpk-strict-bfcp: $(LP_GLPK_STRICT_BFCP_TEST_EXEC)
+	./$(LP_GLPK_STRICT_BFCP_TEST_EXEC)
 
 # Build LP BFCP policy module tests
 $(LP_BFCP_POLICY_TEST_EXEC): $(LP_BFCP_POLICY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)

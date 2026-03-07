@@ -74,6 +74,11 @@ static int lu_glpk_strict_mode(const LUFactorization *lu) {
     return lp_glpk_strict_mode_enabled(lu->owner->glpk_strict_mode);
 }
 
+static int lu_strict_allow_top_level_dense_fallback(const LUFactorization *lu) {
+    if (!lu || !lu->owner) return 1;
+    return lu->owner->lu_strict_allow_top_level_dense_fallback ? 1 : 0;
+}
+
 static void lu_clamp_max_updates_to_storage(LUFactorization *lu) {
     int cap;
 
@@ -707,6 +712,10 @@ int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
         build_csr_transpose(lu);  /* W1: CSR transposes for sparse BTRAN */
         lu_set_failure(lu, LU_FAIL_NONE);
         return 0;
+    }
+
+    if (!lu_strict_allow_top_level_dense_fallback(lu)) {
+        return result;
     }
 
     /* Fall back to dense */

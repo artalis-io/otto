@@ -1032,10 +1032,15 @@ typedef struct SimplexSolver {
 
     /* Supernodal LU (T2.1) — propagated to LU after tableau creation */
     int lu_supernode;           /* 0=off, 1=enable */
+    int lu_factorization_type;  /* 0=luf, 1=btf */
     int lu_backend_policy;      /* -1=auto/default, 0=luf_ft, 1=cbg, 2=cgr */
     int lu_update_limit_override; /* <=0 => use LU default */
     double lu_pivot_tol_override; /* <=0 => use LU default */
     double lu_growth_guard_override; /* <=0 => use default growth threshold */
+    int lu_strict_lane_active;  /* 1 = strict LU/BFCP dispatch lane active */
+    int lu_strict_allow_supernode_lane;      /* 0 disables Ralph supernode lane */
+    int lu_strict_allow_symbolic_full_retry; /* 0 disables full-structural sparse retry */
+    int lu_strict_allow_top_level_dense_fallback; /* 0 disables lu_factorize dense fallback */
 
     /* D4: Flag set when primal runs after dual fallback (known degenerate) */
     int from_dual_fallback;     /* 1 = arrived from failed dual simplex */

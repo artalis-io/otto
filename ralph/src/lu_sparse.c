@@ -2737,6 +2737,16 @@ static int lu_sparse_glpk_strict_mode(const LUFactorization *lu) {
     return lp_glpk_strict_mode_enabled(lu->owner->glpk_strict_mode);
 }
 
+static int lu_sparse_strict_allow_supernode_lane(const LUFactorization *lu) {
+    if (!lu || !lu->owner) return 1;
+    return lu->owner->lu_strict_allow_supernode_lane ? 1 : 0;
+}
+
+static int lu_sparse_strict_allow_symbolic_full_retry(const LUFactorization *lu) {
+    if (!lu || !lu->owner) return 1;
+    return lu->owner->lu_strict_allow_symbolic_full_retry ? 1 : 0;
+}
+
 static int lu_numeric_terminal_failure_reason(int reason_hint,
                                               int saw_identity_sep_failure,
                                               int saw_mkz_singular_failure,
@@ -3260,7 +3270,8 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
 
     /* T2.1: Try supernodal factorization if enabled and k is large enough */
 supernode_factorization:
-    if (!skip_sparse_numeric && lu->sn_enabled && k >= SN_MIN_K &&
+    if (!skip_sparse_numeric && lu_sparse_strict_allow_supernode_lane(lu) &&
+        lu->sn_enabled && k >= SN_MIN_K &&
         (!full_retry_mode || mkz_attempted_in_full_retry)) {
         if (!force_supernode_attempt &&
             lp_glpk_strict_allow_lu_sparse_skip_heuristics(
@@ -3767,6 +3778,11 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
     lp_telemetry_lu_record_symbolic_call_timed(lu, t_symbolic_ms);
     if (sym_result < 0) {
         lp_telemetry_lu_mark_symbolic_failure(lu, sym_result);
+        if (!lu_sparse_strict_allow_symbolic_full_retry(lu)) {
+            lu->sym_valid = 0;
+            lp_telemetry_lu_set_sparse_fallback_reason(lu, LU_SPARSE_FALLBACK_SYMBOLIC);
+            return -1;
+        }
         lp_telemetry_lu_mark_symbolic_full_retry_attempt(lu);
 
         /* Retry sparse numeric once in full-structural mode (k=m). This avoids
@@ -3800,6 +3816,11 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
         &num_failure_reason);
     if (num_result < 0) {
         if (num_failure_reason == LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION) {
+            if (!lu_sparse_strict_allow_symbolic_full_retry(lu)) {
+                lu->sym_valid = 0;
+                lp_telemetry_lu_set_sparse_fallback_reason(lu, LU_SPARSE_FALLBACK_NUMERIC);
+                return -1;
+            }
             lp_telemetry_lu_mark_numeric_full_retry_attempt(lu);
             if (lu_symbolic_finalize_full_structural(lu, B) == 0) {
                 int retry_failure_reason = LU_SPARSE_NUMERIC_FAIL_NONE;

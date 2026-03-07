@@ -22,6 +22,7 @@
 #include "lp_external_glpk_oop.h"
 #include "lp_policy_glpk_compat.h"
 #include "lp_bfcp_policy.h"
+#include "lp_glpk_strict_bfcp.h"
 
 #define RALPH_VERSION "0.1.0"
 
@@ -1482,6 +1483,8 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     int lp_bfcp_update_limit = -1;
     double lp_bfcp_pivot_tol = 0.0;
     double lp_bfcp_growth_guard = 0.0;
+    LPGLPKStrictBFCPRequest strict_bfcp_req;
+    LPGLPKStrictBFCPPlan strict_bfcp_plan;
     int lp_dual_refactor_base_interval = 50;
     int lp_dual_rc_recompute_interval = 20;
     LPDispatchBackend lp_effective_backend = LP_DISPATCH_BACKEND_SIMPLEX;
@@ -1493,6 +1496,8 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
     int glpk_policy_active = 0;
 
     ralph_glpk_policy_config_from_model(model, &glpk_policy_cfg);
+    lp_glpk_strict_bfcp_request_init(&strict_bfcp_req);
+    lp_glpk_strict_bfcp_plan_init(&strict_bfcp_plan);
     if (!lp_policy_glpk_compat_validate(&glpk_policy_cfg)) {
         model->status = RALPH_STATUS_ERROR;
         RALPH_FAIL_API(model,
@@ -1579,6 +1584,20 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
                                             &lp_dual_rc_recompute_interval,
                                             &lp_soft_lu_cost_gate_enabled,
                                             &lp_periodic_cost_gate_enabled);
+        strict_bfcp_req.strict_mode = lp_glpk_strict_profile;
+        strict_bfcp_req.factorization = glpk_policy_cfg.glpk_bfcp_factorization;
+        strict_bfcp_req.backend = lp_bfcp_backend;
+        if (lp_glpk_strict_bfcp_build_plan(&strict_bfcp_req, &strict_bfcp_plan) != 0) {
+            model->status = RALPH_STATUS_ERROR;
+            RALPH_FAIL_API(model,
+                           RALPH_ERROR_DOMAIN_INTERNAL,
+                           RALPH_ERROR_CODE_INTERNAL_FAILURE,
+                           model->status,
+                           RALPH_ERROR_API_SOLVE,
+                           0,
+                           0,
+                           "failed to build strict LU/BFCP dispatch plan");
+        }
         if (glpk_policy_active &&
             !lp_policy_glpk_basis_supports_current_runtime(glpk_policy_cfg.glpk_smcp_basis)) {
             model->status = RALPH_STATUS_ERROR;
@@ -2196,6 +2215,7 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         model->lp_solver->force_two_phase = model->force_two_phase;
         model->lp_solver->trace_phase1 = model->trace_phase1;
         model->lp_solver->method = lp_simplex_method;
+        model->lp_solver->lu_factorization_type = strict_bfcp_plan.effective_factorization;
         model->lp_solver->lp_progress_callback = model->lp_progress_callback;
         model->lp_solver->has_lp_progress_callback = model->has_lp_progress_callback;
         model->lp_solver->lp_cancel_callback = model->lp_cancel_callback;
@@ -2205,6 +2225,13 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         if (model->dual_steepest_edge >= 0)
             model->lp_solver->use_dual_steepest_edge = model->dual_steepest_edge;
         model->lp_solver->lu_supernode = model->lu_supernode;
+        model->lp_solver->lu_strict_lane_active = strict_bfcp_plan.strict_lane_active;
+        model->lp_solver->lu_strict_allow_supernode_lane =
+            strict_bfcp_plan.allow_supernode_lane;
+        model->lp_solver->lu_strict_allow_symbolic_full_retry =
+            strict_bfcp_plan.allow_symbolic_full_retry;
+        model->lp_solver->lu_strict_allow_top_level_dense_fallback =
+            strict_bfcp_plan.allow_top_level_dense_fallback;
         model->lp_solver->deterministic = model->deterministic ? 1 : 0;
         model->lp_solver->random_seed = (model->random_seed >= 0) ? (unsigned int)model->random_seed : 0U;
         model->lp_solver->lp_threads = (model->lp_threads >= 0) ? model->lp_threads : 0;
