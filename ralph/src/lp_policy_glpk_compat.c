@@ -304,6 +304,8 @@ void lp_policy_glpk_compat_apply_runtime(const LPGLPKCompatConfig *cfg,
         }
     }
 
+    } else if (cfg->glpk_smcp_method == LP_GLPK_SMCP_METHOD_DUALP) {
+        if (method_io) *method_io = 2;
     if (ratio_io) {
         *ratio_io = (cfg->glpk_smcp_ratio == LP_GLPK_SMCP_RATIO_HARRIS) ? 1 : 0;
     }
