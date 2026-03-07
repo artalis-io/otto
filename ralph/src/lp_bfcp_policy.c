@@ -1,5 +1,6 @@
 #include <math.h>
 #include "lp_bfcp_policy.h"
+#include "lp_glpk_strict.h"
 
 static int bfcp_backend_supported(int backend) {
     return backend >= LP_GLPK_BFCP_BACKEND_LUF_FT &&
@@ -26,6 +27,7 @@ void lp_bfcp_policy_effective_init(LPBFCPPolicyEffective *eff) {
 void lp_bfcp_policy_refactor_signals_init(LPBFCPRefactorSignals *sig) {
     if (!sig) return;
 
+    sig->strict_mode = 0;
     sig->num_updates = 0;
     sig->max_updates = 0;
     sig->growth_factor = 1.0;
@@ -84,6 +86,9 @@ int lp_bfcp_policy_effective_update_limit(const LPBFCPRefactorSignals *sig) {
     if (!sig) return 0;
     adaptive_limit = sig->max_updates;
     if (adaptive_limit <= 0) return 0;
+    if (!lp_glpk_strict_allow_bfcp_adaptive_reasons(sig->strict_mode)) {
+        return adaptive_limit;
+    }
 
     /* Keep base update budget until enough updates are accumulated to estimate
      * conditioning drift reliably. */
@@ -120,6 +125,9 @@ int lp_bfcp_policy_refactor_hard_trigger(const LPBFCPRefactorSignals *sig) {
         sig->growth_factor > sig->growth_guard_threshold * 3.0) {
         return 1;
     }
+    if (!lp_glpk_strict_allow_bfcp_adaptive_reasons(sig->strict_mode)) {
+        return 0;
+    }
     if (isfinite(sig->cond_estimate) && sig->cond_estimate > 1e10) {
         return 1;
     }
@@ -134,8 +142,10 @@ int lp_bfcp_policy_refactor_hard_trigger(const LPBFCPRefactorSignals *sig) {
 int lp_bfcp_policy_refactor_reason(const LPBFCPRefactorSignals *sig) {
     int adaptive_limit;
     int min_dense_updates;
+    int allow_adaptive;
 
     if (!sig) return LP_BFCP_REFACTOR_REASON_NONE;
+    allow_adaptive = lp_glpk_strict_allow_bfcp_adaptive_reasons(sig->strict_mode);
 
     if (sig->max_updates > 0 && sig->num_updates >= sig->max_updates) {
         return LP_BFCP_REFACTOR_REASON_MAX_UPDATES;
@@ -143,6 +153,9 @@ int lp_bfcp_policy_refactor_reason(const LPBFCPRefactorSignals *sig) {
 
     if (sig->growth_factor > sig->growth_guard_threshold) {
         return LP_BFCP_REFACTOR_REASON_GROWTH_GUARD;
+    }
+    if (!allow_adaptive) {
+        return LP_BFCP_REFACTOR_REASON_NONE;
     }
 
     min_dense_updates = lp_bfcp_policy_dense_reject_min_updates(sig);

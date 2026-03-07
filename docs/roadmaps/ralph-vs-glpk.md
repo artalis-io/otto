@@ -358,3 +358,334 @@ Cleanup note:
 - Replaced duplicated phase1/phase2 periodic-feedback state field mapping in
   `simplex.c` with tiny accessor/update helpers, so event handlers only pass
   `(phase, event)` and policy state transitions stay centralized.
+
+## Remaining Gap to Verbatim GLPK Parity (2026-03-07)
+
+The current roadmap closed much of the public control-surface gap, but not the
+execution-path gap. Ralph now exposes many GLPK-shaped knobs, however strict
+mode still does not execute one coherent GLPK-like policy lane end-to-end.
+
+Observed remaining differences:
+- strict mode is not authoritative across primal simplex, dual simplex, and LU
+  at the same time
+- primal phase-1 still carries Ralph-local rescue/stagnation machinery
+- dual strict mode still runs on top of Ralph-local adaptive threshold logic
+- LU/BFCP strict mode is still a policy wrapper around Ralph sparse-LU routing,
+  not a backend-directed GLPK-like factor/update lane
+- several GLPK semantics are still missing from the typed/runtime surface
+  (`DUALP`, richer basis-init semantics, BTF, BFCP fine controls, `xcheck`,
+  later `exact`)
+- runtime parity is now blocked less by missing knobs and more by execution
+  behavior and kernel cost
+
+This means there are now two separate goals:
+1. Functional parity: strict mode should make the same classes of control/LU
+   decisions as GLPK.
+2. Cost parity: once those decisions are aligned, Ralph's per-iteration kernels
+   need to be cheap enough to approach GLPK wall time on NETLIB outliers.
+
+## Gap-Closure Program
+
+### A1: Authoritative Strict Control Plane
+
+Objective:
+- Make `glpk_strict_mode` the single authoritative control switch across
+  primal simplex, dual simplex, and LU.
+
+Scope:
+1. Introduce a dedicated strict-policy executor module instead of scattering
+   `if (strict)` branches across solver code.
+2. Under strict mode, bypass Ralph-local control machinery that does not map to
+   GLPK semantics:
+   - phase-1 stagnation escape
+   - phase-1 no-pivot ladder / rescue ladder
+   - direction-stabilize force path
+   - dual one-shot recovery
+   - dual adaptive ratio thresholds from LU health/model size
+   - LU spike-density / spike-work / cond-adaptive reinversion triggers
+3. Keep only hard numerical safety stops authoritative in strict mode:
+   - singular factor/update
+   - invalid basis state
+   - catastrophic instability
+
+Implementation constraints:
+- default profile behavior must remain unchanged
+- no per-instance logic
+- strict-mode branching must be unit-testable in isolation
+
+Acceptance:
+- strict mode decisions come from one module
+- primal/dual/LU all respect the same strict profile semantics
+- unit coverage proves the suppressed Ralph-local branches are inactive under
+  strict mode
+
+Suggested units:
+- `ralph/tests/test_lp_glpk_strict_smcp.c`
+- `ralph/tests/test_lp_glpk_strict_branching.c`
+
+### A2: Complete SMCP Surface to GLPK Semantics
+
+Objective:
+- Close the remaining simplex-control API/behavior gap versus GLPK.
+
+Scope:
+1. Add missing method semantic:
+   - `DUALP` (`dual first, then primal fallback`)
+2. Add missing basis-init semantic surface:
+   - `BIB`
+   - `INI` / basis-load path
+3. Preserve explicit SMCP controls as first-class policy data:
+   - `method`
+   - `pricing`
+   - `ratio`
+   - `flip`
+   - `basis`
+   - `presolve`
+   - `tol_bnd`
+   - `tol_dj`
+   - `tol_piv`
+   - `excl`
+   - `shift`
+   - `aorn`
+4. Add exact final-basis verification control:
+   - `xcheck`
+5. Defer `exact` solve mode to the numerical-certification phase below.
+
+Constraints:
+- do not silently map missing GLPK semantics to legacy Ralph behavior
+- if a strict-mode feature is not implemented yet, it should fail clearly
+
+Acceptance:
+- all SMCP-relevant semantics needed for LP parity have typed parameter IDs
+- strict-mode runtime mapping is direct, not translated through ad hoc Ralph
+  cadence heuristics
+
+Suggested units:
+- `ralph/tests/test_lp_glpk_strict_smcp.c`
+- `ralph/tests/test_lp_basis_api.c`
+
+### B1: Complete BFCP Surface to GLPK Semantics
+
+Objective:
+- Close the remaining basis-factorization control gap versus GLPK.
+
+Scope:
+1. Extend BFCP policy data with explicit GLPK-like fields:
+   - factorization type (`LUF`, later `BTF+LUF`)
+   - update engine (`FT`, `BG`, `GR`)
+   - pivot tolerance
+   - pivot search limit (`piv_lim`)
+   - Suhl handling flag
+   - epsilon tolerance
+   - update limit (`nfs_max` style control)
+   - Schur-update row/space controls (`nrs_max`-style control)
+2. Stop deriving unrelated Ralph-local cadence knobs from BFCP settings in
+   strict mode.
+3. Keep BFCP normalization in one module and make all effective settings
+   inspectable in telemetry/debug output.
+
+Acceptance:
+- strict-mode BFCP state fully describes the chosen factor/update behavior
+- no strict-mode hidden translations from BFCP settings into unrelated simplex
+  timers or rescue cadence
+
+Suggested units:
+- `ralph/tests/test_lp_glpk_strict_bfcp.c`
+
+### B2: Add BTF Factorization Type
+
+Objective:
+- Match GLPK's exposed `BTF` factorization capability in the strict lane.
+
+Scope:
+1. Add typed/runtime support for BTF selection.
+2. Add symbolic block-triangular decomposition path usable by the strict LU
+   backend.
+3. Use BTF only as an explicit backend/type choice in strict mode until the
+   implementation is well characterized.
+
+Acceptance:
+- BTF is selectable and testable independently
+- strict LU path can report whether BTF was used
+
+Suggested units:
+- `ralph/tests/test_lu_btf.c`
+
+### C1: Build a Real Strict LU/BFCP Lane
+
+Objective:
+- Replace "GLPK-shaped policy over Ralph sparse-LU routing" with a true
+  backend-directed strict LU execution path.
+
+Scope:
+1. Introduce a separate strict LU control/dispatch module.
+2. In strict mode, route by BFCP backend/type directly rather than through the
+   current Ralph orchestration of:
+   - Markowitz retries
+   - supernode cost gates
+   - symbolic full-structural retry ladders
+   - dense fallback heuristics
+3. Preserve hard numerical failure exits, but remove Ralph-local adaptive
+   routing logic from strict mode.
+4. Keep the current sparse-LU orchestration as the default Ralph lane.
+
+Constraints:
+- do not delete the existing Ralph LU path during this phase
+- strict LU must be independently selectable, inspectable, and testable
+
+Acceptance:
+- in strict mode, the chosen BFCP backend explains the numeric/update path
+- refactor reasons map cleanly to BFCP semantics
+- no Markowitz circuit breaker or supernode cost gate is active in strict mode
+
+Suggested units:
+- `ralph/tests/test_lu_glpk_strict.c`
+- `ralph/tests/test_lu_backend_dispatch.c`
+
+### C2: Decouple Safety from Capacity Management
+
+Objective:
+- Ensure storage/capacity management supports the requested BFCP policy instead
+  of silently rewriting effective strict-mode behavior.
+
+Scope:
+1. Separate allocation sizing from update-policy semantics.
+2. Grow or provision storage to satisfy the active strict BFCP policy where
+   feasible.
+3. If capacity cannot satisfy the requested strict mode, fail explicitly rather
+   than degrading into Ralph-local heuristics.
+
+Acceptance:
+- strict BFCP policy remains stable under varying workspace/storage pressure
+- capacity exhaustion is telemetry-visible and explicit
+
+Suggested units:
+- `ralph/tests/test_lu_capacity_policy.c`
+
+### D1: Add Numerical Certification (`xcheck`)
+
+Objective:
+- Provide GLPK-like final-basis verification to distinguish true infeasibility
+  from numerical failure.
+
+Scope:
+1. Add final residual / primal-feasibility / dual-feasibility / complementary
+   slackness certification on demand.
+2. Expose explicit failure/status mapping for numerically doubtful end states.
+3. Use this first as a strict-mode debug/verification tool and gate aid.
+
+Acceptance:
+- hard NETLIB outliers no longer end in ambiguous "infeasible vs unstable"
+  states when `xcheck` is enabled
+- certification can be tested independently of normal solve flow
+
+Suggested units:
+- `ralph/tests/test_lp_xcheck.c`
+
+### D2: Add Exact Simplex Mode (Later)
+
+Objective:
+- Close the remaining numerical-diagnosis gap with GLPK's `exact` mode.
+
+Scope:
+1. Add a separate exact-simplex execution lane or exact-basis correction path.
+2. Use this only after `xcheck` is in place and the strict floating-point lane
+   is stable.
+
+Acceptance:
+- exact mode is explicit, orthogonal, and non-default
+- correctness tests distinguish exact-vs-floating solve expectations
+
+Note:
+- this is important for functional parity and diagnosis, but not the first
+  lever for runtime parity
+
+### E1: Kernel-Cost Parity Program
+
+Objective:
+- Once strict control/LU behavior matches GLPK semantics, reduce Ralph's
+  per-iteration cost to close the remaining wall-time gap.
+
+Focus areas:
+1. sparse FTRAN/BTRAN cost
+2. update-factor path cost per event
+3. reduced-cost recomputation frequency and cost
+4. primal solution recomputation frequency and cost
+5. steepest-edge / Devex weight maintenance quality and cost
+
+Required telemetry:
+- refactors
+- updates
+- ms/refactor
+- ms/iter
+- FTRAN/BTRAN nnz and runtime
+- reduced-cost recompute counts and runtime
+- solution recompute counts and runtime
+- update rejection / reinversion trigger counts
+
+Acceptance:
+- improvements are generic and policy-agnostic
+- outlier gains come from lower kernel cost, not instance-specific branching
+
+## Verification Matrix for the Gap-Closure Program
+
+Each phase above should be gated independently with:
+
+Core unit gates:
+- `make -C ralph test-lp-policy-glpk-compat`
+- `make -C ralph test-lp-bfcp-policy`
+- `make -C ralph test-simplex-policy`
+- `make -C ralph test-lu-markowitz`
+
+New strict-lane units:
+- `make -C ralph test-lp-glpk-strict-smcp`
+- `make -C ralph test-lp-glpk-strict-bfcp`
+- `make -C ralph test-lu-glpk-strict`
+- `make -C ralph test-lp-xcheck`
+
+Focused GLPK parity set:
+- `pilot.mps`
+- `pilot.ja.mps`
+- `pilot.we.mps`
+- `pilot87.mps`
+- `stair.mps`
+- `degen3.mps`
+- `fit1p.mps`
+- `fit2p.mps`
+- `wood1p.mps`
+- `bore3d.mps`
+- `capri.mps`
+
+Full gates:
+- `make -C ralph test-netlib-gate-small`
+- `make -C ralph test-netlib-gate`
+
+Success criteria for promotion:
+1. no new correctness regressions
+2. strict-mode telemetry is explainable from SMCP/BFCP settings
+3. timeout reductions persist on repeated runs
+4. improvements come from shared policy/kernel changes, not filename-specific
+   tuning
+
+## Recommended Execution Order
+
+1. `A1` Authoritative strict control plane
+2. `A2` Complete SMCP surface
+3. `B1` Complete BFCP surface
+4. `B2` Add BTF factorization type
+5. `C1` Build strict LU/BFCP lane
+6. `C2` Decouple safety from capacity management
+7. `D1` Add `xcheck`
+8. Re-run focused GLPK parity matrix
+9. `D2` Add exact mode
+10. `E1` Kernel-cost parity program
+
+## Exit Criteria
+
+The gap is considered closed only when all of the following are true:
+- strict mode is one coherent execution lane, not a partial adapter
+- LU/refactor decisions in strict mode are explainable directly from BFCP state
+- remaining NETLIB outliers are dominated by kernel cost, not control drift
+- strict-mode statuses/objectives are stable across repeated runs
+- runtime improvements hold on the full NETLIB gate, not just a hand-picked
+  subset
