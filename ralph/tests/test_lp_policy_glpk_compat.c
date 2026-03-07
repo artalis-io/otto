@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <math.h>
+#include <string.h>
 #include "lp.h"
 #include "lp_policy_glpk_compat.h"
 
@@ -57,6 +58,16 @@ static void test_init_and_validate(void) {
                   "init: default aorn");
     ASSERT_INT_EQ(cfg.glpk_bfcp_update_limit, -1,
                   "init: default update limit");
+    ASSERT_INT_EQ(cfg.glpk_bfcp_pivot_limit, -1,
+                  "init: default pivot limit");
+    ASSERT_INT_EQ(cfg.glpk_bfcp_suhl, LP_GLPK_BFCP_SUHL_AUTO,
+                  "init: default suhl");
+    ASSERT_DBL_NEAR(cfg.glpk_bfcp_eps_tol, 0.0, 1e-16,
+                    "init: default eps_tol");
+    ASSERT_INT_EQ(cfg.glpk_bfcp_nfs_max, -1,
+                  "init: default nfs_max");
+    ASSERT_INT_EQ(cfg.glpk_bfcp_nrs_max, -1,
+                  "init: default nrs_max");
     ASSERT_TRUE(lp_policy_glpk_compat_validate(&cfg) == 1,
                 "init: default config validates");
 }
@@ -96,6 +107,10 @@ static void test_profile_defaults(void) {
                   "profile: backend");
     ASSERT_INT_EQ(cfg.glpk_bfcp_update_limit, 100,
                   "profile: update limit");
+    ASSERT_INT_EQ(cfg.glpk_bfcp_pivot_limit, -1,
+                  "profile: pivot limit remains auto");
+    ASSERT_INT_EQ(cfg.glpk_bfcp_suhl, LP_GLPK_BFCP_SUHL_AUTO,
+                  "profile: suhl remains auto");
 }
 
 static void test_profile_defaults_glpk_strict(void) {
@@ -192,6 +207,37 @@ static void test_basis_helpers(void) {
                 "basis helper: bib name");
     ASSERT_TRUE(strcmp(lp_policy_glpk_basis_name(LP_GLPK_SMCP_BASIS_INI), "ini") == 0,
                 "basis helper: ini name");
+}
+
+static void test_bfcp_runtime_support_helpers(void) {
+    LPGLPKCompatConfig cfg;
+    const char *unsupported = "sentinel";
+
+    lp_policy_glpk_compat_init(&cfg);
+    ASSERT_INT_EQ(lp_policy_glpk_bfcp_supports_current_runtime(&cfg, &unsupported), 1,
+                  "bfcp helper: defaults supported");
+    ASSERT_TRUE(unsupported == NULL,
+                "bfcp helper: defaults keep unsupported parameter null");
+
+    cfg.glpk_bfcp_pivot_limit = 4;
+    ASSERT_INT_EQ(lp_policy_glpk_bfcp_supports_current_runtime(&cfg, &unsupported), 0,
+                  "bfcp helper: pivot limit unsupported");
+    ASSERT_TRUE(strcmp(unsupported, "glpk_bfcp_pivot_limit") == 0,
+                "bfcp helper: pivot limit name");
+
+    lp_policy_glpk_compat_init(&cfg);
+    cfg.glpk_bfcp_suhl = LP_GLPK_BFCP_SUHL_ON;
+    ASSERT_INT_EQ(lp_policy_glpk_bfcp_supports_current_runtime(&cfg, &unsupported), 0,
+                  "bfcp helper: suhl unsupported");
+    ASSERT_TRUE(strcmp(unsupported, "glpk_bfcp_suhl") == 0,
+                "bfcp helper: suhl name");
+
+    lp_policy_glpk_compat_init(&cfg);
+    cfg.glpk_bfcp_eps_tol = 1e-15;
+    ASSERT_INT_EQ(lp_policy_glpk_bfcp_supports_current_runtime(&cfg, &unsupported), 0,
+                  "bfcp helper: eps tol unsupported");
+    ASSERT_TRUE(strcmp(unsupported, "glpk_bfcp_eps_tol") == 0,
+                "bfcp helper: eps tol name");
 }
 
 static void test_runtime_mapping_noop_under_default_profile(void) {
@@ -542,6 +588,31 @@ static void test_validation_rejects_invalid_values(void) {
     cfg.glpk_bfcp_pivot_tol = INFINITY;
     ASSERT_TRUE(lp_policy_glpk_compat_validate(&cfg) == 0,
                 "validate: rejects non-finite pivot tol");
+
+    lp_policy_glpk_compat_init(&cfg);
+    cfg.glpk_bfcp_pivot_limit = -2;
+    ASSERT_TRUE(lp_policy_glpk_compat_validate(&cfg) == 0,
+                "validate: rejects pivot_limit < -1");
+
+    lp_policy_glpk_compat_init(&cfg);
+    cfg.glpk_bfcp_suhl = 2;
+    ASSERT_TRUE(lp_policy_glpk_compat_validate(&cfg) == 0,
+                "validate: rejects invalid suhl");
+
+    lp_policy_glpk_compat_init(&cfg);
+    cfg.glpk_bfcp_eps_tol = INFINITY;
+    ASSERT_TRUE(lp_policy_glpk_compat_validate(&cfg) == 0,
+                "validate: rejects non-finite eps tol");
+
+    lp_policy_glpk_compat_init(&cfg);
+    cfg.glpk_bfcp_nfs_max = -2;
+    ASSERT_TRUE(lp_policy_glpk_compat_validate(&cfg) == 0,
+                "validate: rejects nfs_max < -1");
+
+    lp_policy_glpk_compat_init(&cfg);
+    cfg.glpk_bfcp_nrs_max = -2;
+    ASSERT_TRUE(lp_policy_glpk_compat_validate(&cfg) == 0,
+                "validate: rejects nrs_max < -1");
 }
 
 static void test_working_lp_helpers(void) {
@@ -626,6 +697,7 @@ int main(void) {
     test_profile_defaults_glpk_strict();
     test_profile_defaults_glpk_legacy();
     test_basis_helpers();
+    test_bfcp_runtime_support_helpers();
     test_runtime_mapping_noop_under_default_profile();
     test_runtime_mapping_glpk_profile();
     test_runtime_mapping_glpk_strict_profile();

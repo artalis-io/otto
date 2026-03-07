@@ -80,6 +80,12 @@ typedef enum {
     LP_GLPK_BFCP_BACKEND_CGR = 2
 } LPGLPKBFCPBackend;
 
+typedef enum {
+    LP_GLPK_BFCP_SUHL_AUTO = -1,
+    LP_GLPK_BFCP_SUHL_OFF = 0,
+    LP_GLPK_BFCP_SUHL_ON = 1
+} LPGLPKBFCPSuhl;
+
 typedef struct {
     int lp_policy_profile;
     int glpk_smcp_method;
@@ -96,8 +102,13 @@ typedef struct {
     int glpk_smcp_aorn;            /* 1=use A^T, 2=use N^T */
     int glpk_bfcp_backend;
     int glpk_bfcp_update_limit;   /* -1 = auto */
+    int glpk_bfcp_pivot_limit;    /* -1 = auto */
+    int glpk_bfcp_suhl;           /* -1 = auto, 0 = off, 1 = on */
     double glpk_bfcp_pivot_tol;   /* <=0 = auto */
+    double glpk_bfcp_eps_tol;     /* <=0 = auto */
     double glpk_bfcp_growth_guard;/* <=0 = auto */
+    int glpk_bfcp_nfs_max;        /* -1 = auto */
+    int glpk_bfcp_nrs_max;        /* -1 = auto */
 } LPGLPKCompatConfig;
 
 void lp_policy_glpk_compat_init(LPGLPKCompatConfig *cfg);
@@ -144,6 +155,8 @@ int lp_policy_glpk_perturb_next_state(int state, int event, int *next_state_out)
 int lp_policy_glpk_basis_crash_mode(int smcp_basis, int *crash_mode_out);
 int lp_policy_glpk_basis_requires_staged_basis(int smcp_basis);
 int lp_policy_glpk_basis_supports_current_runtime(int smcp_basis);
+int lp_policy_glpk_bfcp_supports_current_runtime(const LPGLPKCompatConfig *cfg,
+                                                 const char **unsupported_param_out);
 const char* lp_policy_glpk_basis_name(int smcp_basis);
 
 #endif /* LP_POLICY_GLPK_COMPAT_H */

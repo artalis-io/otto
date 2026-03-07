@@ -50,8 +50,13 @@ Add GLPK-compatible policy params (explicit, runtime-settable):
 3. BFCP-like controls
 - `glpk_bfcp_backend`: `luf_ft` (0), `cbg` (1), `cgr` (2)
 - `glpk_bfcp_update_limit`: integer (`-1` = auto/default)
+- `glpk_bfcp_pivot_limit`: integer (`-1` = auto/default)
+- `glpk_bfcp_suhl`: `auto` (`-1`), `off` (`0`), `on` (`1`)
 - `glpk_bfcp_pivot_tol`: double (`<=0` = auto/default)
+- `glpk_bfcp_eps_tol`: double (`<=0` = auto/default)
 - `glpk_bfcp_growth_guard`: double (`<=0` = auto/default)
+- `glpk_bfcp_nfs_max`: integer (`-1` = auto/default)
+- `glpk_bfcp_nrs_max`: integer (`-1` = auto/default)
 
 ## Implementation Phases
 
