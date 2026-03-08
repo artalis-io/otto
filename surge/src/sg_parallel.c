@@ -717,6 +717,12 @@ SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
     items = (SGParallelWorkItem *)calloc(num_threads, sizeof(SGParallelWorkItem));
     if (!items) { status = SG_STATUS_OUT_OF_MEMORY; goto pop_cleanup; }
 
+    /* Pre-compute feature-based strategy order for Gen 0 (once, before loop) */
+    SGInstanceFeatures gen0_features;
+    SGConstructMethod gen0_order[SG_CONSTRUCT_COUNT];
+    sg_compute_instance_features(ctx, &gen0_features);
+    sg_feature_strategy_order(&gen0_features, gen0_order);
+
     /* --- Generation loop --- */
     for (g = 0; g < num_gens; g++) {
 
@@ -744,10 +750,10 @@ SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
                 items[i].clone.config.max_time_seconds = time_per_gen;
             }
 
-            /* Generation 0: round-robin construction heuristic for diversity.
+            /* Generation 0: feature-informed round-robin for diversity.
                Generations > 0 use warm start, so construct_method stays default. */
             if (g == 0) {
-                items[i].clone.construct_method = (SGConstructMethod)(i % SG_CONSTRUCT_COUNT);
+                items[i].clone.construct_method = gen0_order[i % SG_CONSTRUCT_COUNT];
             }
 
             /* Warm start from population pool (generations > 0 only) */

@@ -30,6 +30,7 @@ static void sg_print_usage(const char *argv0) {
     printf("  --generations <n>     Generation count for population mode (default: 3)\n");
     printf("  --telemetry           Print per-operator telemetry after each case\n");
     printf("  --output-csv <path>   Write results to CSV file\n");
+    printf("  --features            Dump instance features CSV (spatial_cv, tw_tightness) and exit\n");
     printf("  --help                Show this help\n");
     printf("\n");
     printf("Examples:\n");
@@ -48,6 +49,7 @@ int main(int argc, char **argv) {
     uint64_t seed = 42;
     int deterministic = 1;
     int show_telemetry = 0;
+    int show_features = 0;
     int use_population = 0;
     uint32_t pop_threads = 0;
     uint32_t pop_generations = 3;
@@ -110,6 +112,9 @@ int main(int argc, char **argv) {
         if (strcmp(argv[i], "--telemetry") == 0) {
             show_telemetry = 1; continue;
         }
+        if (strcmp(argv[i], "--features") == 0) {
+            show_features = 1; continue;
+        }
         if (strcmp(argv[i], "--output-csv") == 0 && i + 1 < argc) {
             output_csv_path = argv[++i]; continue;
         }
@@ -136,6 +141,45 @@ int main(int argc, char **argv) {
         return 1;
     }
     qsort(cases, (size_t)case_count, sizeof(*cases), sg_compare_bench_cases);
+
+    /* Features mode: dump CSV and exit */
+    if (show_features) {
+        printf("instance,spatial_cv,tw_tightness,is_clustered,is_tight_tw\n");
+        for (i = 0; i < case_count; i++) {
+            SGContext *ctx;
+            SGStatus status;
+            char case_key[64];
+
+            if (!sg_bench_case_selected(cases[i].name, argc - filter_start,
+                                         argv + filter_start))
+                continue;
+
+            ctx = sg_create();
+            if (!ctx) continue;
+            {
+                SGConfig config;
+                sg_config_default(&config);
+                sg_set_config(ctx, &config);
+            }
+            status = sg_load_solomon_vrptw(ctx, cases[i].path);
+            if (status != SG_STATUS_OK) { sg_free(ctx); continue; }
+            status = sg_prepare_travel(ctx);
+            if (status != SG_STATUS_OK) { sg_free(ctx); continue; }
+
+            {
+                SGInstanceFeatures feat;
+                sg_compute_instance_features(ctx, &feat);
+                if (sg_bench_case_key(cases[i].name, case_key, sizeof(case_key))) {
+                    printf("%s,%.4f,%.4f,%d,%d\n",
+                           case_key, feat.spatial_cv, feat.tw_tightness,
+                           feat.is_clustered, feat.is_tight_tw);
+                }
+            }
+            sg_free(ctx);
+        }
+        sg_free_bench_cases(cases, case_count);
+        return 0;
+    }
 
     /* Open CSV output */
     if (output_csv_path) {

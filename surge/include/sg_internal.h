@@ -87,6 +87,18 @@ typedef struct {
 #define SG_STRING_L_MAX 10
 #define SG_NO_VEHICLE UINT32_MAX
 
+/* Instance feature thresholds (calibrate from Solomon-100 via --features) */
+#define SG_CLUSTER_THRESHOLD   0.60  /* spatial_cv < this → clustered */
+#define SG_TIGHT_TW_THRESHOLD  0.15  /* tw_tightness < this → tight TW */
+
+/* Instance features for adaptive construction */
+typedef struct {
+    double tw_tightness;       /* avg(tw_width) / planning_horizon; <0.15 = tight */
+    double spatial_cv;         /* coeff of variation of request distances from centroid */
+    uint8_t is_clustered;      /* 1 if spatial_cv < SG_CLUSTER_THRESHOLD */
+    uint8_t is_tight_tw;       /* 1 if tw_tightness < SG_TIGHT_TW_THRESHOLD */
+} SGInstanceFeatures;
+
 /* Penalty manager: constraint types for infeasible-space exploration */
 typedef enum {
     SG_PENALTY_TIME_WARP,        /* TW violation: service past tw_late */
@@ -1272,5 +1284,11 @@ uint32_t sg_estimate_min_vehicles(const SGContext *ctx);
 ARStatus sg_construct_sweep_cfrs(SGContext *ctx, SGRouteSolution *sol);
 ARStatus sg_construct_kmeans_tw(SGContext *ctx, SGRouteSolution *sol);
 ARStatus sg_construct_by_method(SGContext *ctx, SGRouteSolution *sol, SGConstructMethod method);
+void sg_compute_instance_features(const SGContext *ctx, SGInstanceFeatures *out);
+uint32_t sg_cluster_tw_check(const SGContext *ctx, const uint32_t *requests,
+                              uint32_t count, uint32_t vehicle_id);
+ARStatus sg_construct_try_merge_routes(SGContext *ctx, SGRouteSolution *sol);
+void sg_feature_strategy_order(const SGInstanceFeatures *f,
+                                SGConstructMethod order[SG_CONSTRUCT_COUNT]);
 
 #endif /* SURGE_SG_INTERNAL_H */
