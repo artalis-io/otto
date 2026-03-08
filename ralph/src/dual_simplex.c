@@ -16,6 +16,7 @@
 #include <time.h>
 #include "lp.h"
 #include "lp_glpk_strict.h"
+#include "lu_update_backend.h"
 #include "lp_log.h"
 #include "lp_policy_glpk_compat.h"
 
@@ -72,13 +73,7 @@ static void configure_dual_tableau_for_solver(SimplexSolver *solver, SimplexTabl
 
     if (solver->lu_update_limit_override > 0) {
         tab->lu->max_updates = solver->lu_update_limit_override;
-        if (tab->lu->ft_spike_capacity > 0) {
-            update_cap = tab->lu->ft_spike_capacity;
-        }
-        if (tab->lu->eta_capacity > 0 &&
-            (update_cap <= 0 || tab->lu->eta_capacity < update_cap)) {
-            update_cap = tab->lu->eta_capacity;
-        }
+        update_cap = lu_update_backend_storage_capacity(tab->lu);
         if (update_cap > 0 && tab->lu->max_updates > update_cap) {
             tab->lu->max_updates = update_cap;
         }

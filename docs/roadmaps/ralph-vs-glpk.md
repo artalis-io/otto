@@ -547,6 +547,13 @@ Suggested units:
 - `ralph/tests/test_lu_glpk_strict.c`
 - `ralph/tests/test_lu_backend_dispatch.c`
 
+Current progress (2026-03-08):
+- extracted backend-owned LU update operations into `ralph/src/lu_update_backend.c`
+- separated BG/GR compatibility backends from eta-file state by giving them a
+  dedicated sparse Schur-compat update lane
+- preserved the existing FT kernel order verbatim after a first extraction
+  changed `bore3d` behavior; this is now covered by the small NETLIB gate
+
 ### C2: Decouple Safety from Capacity Management
 
 Objective:

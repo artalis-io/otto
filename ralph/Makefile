@@ -38,6 +38,7 @@ TEST_DIR = tests
 SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/model.c \
           $(SRC_DIR)/lu.c \
+          $(SRC_DIR)/lu_update_backend.c \
           $(SRC_DIR)/lu_sparse.c \
           $(SRC_DIR)/lu_supernode.c \
           $(SRC_DIR)/lp_log.c \
