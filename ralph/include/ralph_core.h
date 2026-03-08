@@ -719,6 +719,8 @@ typedef struct {
     int backend_policy_last;
     int update_path_ft;
     int update_path_eta;
+    int update_path_bg_compat;
+    int update_path_gr_compat;
     int identity_sep_retry_lane_dense_chosen;
     int identity_sep_retry_lane_supernode_chosen;
     int identity_sep_retry_lane_dense_successes;

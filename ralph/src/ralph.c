@@ -3283,6 +3283,8 @@ int ralph_core_get_last_lu_telemetry(const RalphModel *model, RalphLUTelemetry *
     RALPH_LU_TELEM_COPY(backend_policy_last);
     RALPH_LU_TELEM_COPY(update_path_ft);
     RALPH_LU_TELEM_COPY(update_path_eta);
+    RALPH_LU_TELEM_COPY(update_path_bg_compat);
+    RALPH_LU_TELEM_COPY(update_path_gr_compat);
     RALPH_LU_TELEM_COPY(identity_sep_retry_lane_dense_chosen);
     RALPH_LU_TELEM_COPY(identity_sep_retry_lane_supernode_chosen);
     RALPH_LU_TELEM_COPY(identity_sep_retry_lane_dense_successes);

@@ -279,6 +279,8 @@ typedef struct {
     int backend_policy_last;
     int update_path_ft;
     int update_path_eta;
+    int update_path_bg_compat;
+    int update_path_gr_compat;
     int identity_sep_retry_lane_dense_chosen;
     int identity_sep_retry_lane_supernode_chosen;
     int identity_sep_retry_lane_dense_successes;
@@ -358,8 +360,17 @@ typedef struct {
     double **eta_values;    /* Values of non-zeros for each eta */
     int *eta_nnz;           /* Number of non-zeros in each eta */
 
+    /* BG/GR compatibility sparse-update lane. This is separate from the eta
+     * file so a real Schur-complement update kernel can replace it cleanly. */
+    int schur_capacity;
+    int schur_num_updates;
+    int *schur_col;
+    int **schur_indices;
+    double **schur_values;
+    int *schur_nnz;
+
     /* Forrest-Tomlin update data */
-    int use_ft_updates;     /* 1 to use FT updates, 0 for eta-file */
+    int use_ft_updates;     /* 1 to use FT updates, 0 for non-FT update lanes */
     int backend_policy;     /* LP_LU_BACKEND_POLICY_* effective backend policy */
     int update_backend;     /* LUUpdateBackend */
     int *ft_col_order;      /* Permutation of columns due to FT updates */
@@ -1388,6 +1399,8 @@ typedef struct {
     int backend_policy_last;
     int update_path_ft;
     int update_path_eta;
+    int update_path_bg_compat;
+    int update_path_gr_compat;
     int identity_sep_retry_lane_dense_chosen;
     int identity_sep_retry_lane_supernode_chosen;
     int identity_sep_retry_lane_dense_successes;

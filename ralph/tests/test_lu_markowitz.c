@@ -1327,7 +1327,7 @@ static void test_lu_strict_backend_policy_runtime(void) {
 }
 
 /* ============================================================================
- * Test 21: Backend policy update-path telemetry (FT vs ETA)
+ * Test 21: Backend policy update-path telemetry (FT vs BG compat)
  * ============================================================================ */
 static void test_lu_backend_policy_update_path_telemetry(void) {
     printf("  LU: backend policy update-path telemetry...\n");
@@ -1353,11 +1353,15 @@ static void test_lu_backend_policy_update_path_telemetry(void) {
     ASSERT_INT_EQ(lu_factorize(lu, B), 0,
                   "lu backend update telemetry: cbg factorize");
     {
-        int eta_before = lu->telemetry.update_path_eta;
+        int bg_before = lu->telemetry.update_path_bg_compat;
         ASSERT_INT_EQ(lu_update(lu, 0, entering_col), 0,
                       "lu backend update telemetry: cbg update");
-        ASSERT(lu->telemetry.update_path_eta > eta_before,
-               "lu backend update telemetry: eta update path counted");
+        ASSERT(lu->telemetry.update_path_bg_compat > bg_before,
+               "lu backend update telemetry: bg compat update path counted");
+        ASSERT_INT_EQ(lu->num_eta, 0,
+                      "lu backend update telemetry: cbg leaves eta chain empty");
+        ASSERT(lu->schur_num_updates > 0,
+               "lu backend update telemetry: cbg stores schur compat chain");
     }
 
     lu_apply_backend_policy(lu, LP_LU_BACKEND_POLICY_LUF_FT);
@@ -1379,7 +1383,7 @@ cleanup:
 }
 
 /* ============================================================================
- * Test 22: Strict CGR update path should use non-FT compatibility storage
+ * Test 22: Strict CGR update path should use dedicated GR compatibility storage
  * ============================================================================ */
 static void test_lu_strict_cgr_update_path_telemetry(void) {
     printf("  LU: strict cgr update-path telemetry...\n");
@@ -1411,14 +1415,18 @@ static void test_lu_strict_cgr_update_path_telemetry(void) {
     ASSERT_INT_EQ(lu_factorize(lu, B), 0,
                   "lu strict cgr update telemetry: factorize");
     {
-        int eta_before = lu->telemetry.update_path_eta;
+        int gr_before = lu->telemetry.update_path_gr_compat;
         int ft_before = lu->telemetry.update_path_ft;
         ASSERT_INT_EQ(lu_update(lu, 0, entering_col), 0,
                       "lu strict cgr update telemetry: update");
-        ASSERT(lu->telemetry.update_path_eta > eta_before,
-               "lu strict cgr update telemetry: eta path counted");
+        ASSERT(lu->telemetry.update_path_gr_compat > gr_before,
+               "lu strict cgr update telemetry: gr compat path counted");
         ASSERT_INT_EQ(lu->telemetry.update_path_ft, ft_before,
                       "lu strict cgr update telemetry: ft path unchanged");
+        ASSERT_INT_EQ(lu->num_eta, 0,
+                      "lu strict cgr update telemetry: eta chain remains empty");
+        ASSERT(lu->schur_num_updates > 0,
+               "lu strict cgr update telemetry: gr uses schur compat chain");
     }
 
 cleanup:

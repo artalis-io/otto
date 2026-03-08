@@ -16,6 +16,7 @@
 #include "lp.h"
 #include "lp_policy_glpk_compat.h"
 #include "lp_glpk_strict.h"
+#include "lu_update_backend.h"
 #include "lu_supernode.h"
 
 /* ============================================================================
@@ -1354,28 +1355,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
     memcpy(lu->col_perm, work->col_perm, m * sizeof(int));
     memcpy(lu->col_perm_inv, work->col_perm_inv, m * sizeof(int));
 
-    /* Clear sparse eta file */
-    for (int i = 0; i < lu->num_eta; i++) {
-        free(lu->eta_indices[i]);
-        free(lu->eta_values[i]);
-        lu->eta_indices[i] = NULL;
-        lu->eta_values[i] = NULL;
-        lu->eta_nnz[i] = 0;
-    }
-    lu->num_eta = 0;
-
-    /* Clear Forrest-Tomlin spikes - contiguous pool storage, just reset counters */
-    for (int i = 0; i < lu->ft_num_updates; i++) {
-        lu->ft_spike_nnz[i] = 0;
-        lu->ft_spike_diag[i] = 0.0;
-        lu->ft_spike_start[i] = 0;
-    }
-    lu->ft_num_updates = 0;
-    lu->spike_pool_used = 0;  /* Reset contiguous pool */
-    for (int i = 0; i < m; i++) {
-        lu->ft_col_order[i] = i;
-        lu->ft_col_order_inv[i] = i;
-    }
+    lu_update_backend_reset(lu);
 
     lu->num_updates = 0;
 
@@ -4136,13 +4116,7 @@ identity_placement:
 
     /* Reset update structures */
     lu->num_updates = 0;
-    lu->num_eta = 0;
-    lu->ft_num_updates = 0;
-    lu->spike_pool_used = 0;
-    for (int i = 0; i < m; i++) {
-        lu->ft_col_order[i] = i;
-        lu->ft_col_order_inv[i] = i;
-    }
+    lu_update_backend_reset(lu);
 
     if (mkz_used_this_call && !mkz_bad_outcome_this_call) {
         mkz_circuit_note_good_outcome(lu, mkz_fingerprint);
