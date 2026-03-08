@@ -102,6 +102,35 @@ static void free_csc(SparseMatrix *sp) {
     free(sp);
 }
 
+static void dense_matvec(const double *A, int m, const double *x, double *y) {
+    for (int i = 0; i < m; i++) {
+        double sum = 0.0;
+        for (int j = 0; j < m; j++) sum += A[i * m + j] * x[j];
+        y[i] = sum;
+    }
+}
+
+static void dense_matvec_transpose(const double *A, int m, const double *x, double *y) {
+    for (int j = 0; j < m; j++) {
+        double sum = 0.0;
+        for (int i = 0; i < m; i++) sum += A[i * m + j] * x[i];
+        y[j] = sum;
+    }
+}
+
+static double max_abs_diff(const double *a, const double *b, int n) {
+    double max_diff = 0.0;
+    for (int i = 0; i < n; i++) {
+        double diff = fabs(a[i] - b[i]);
+        if (diff > max_diff) max_diff = diff;
+    }
+    return max_diff;
+}
+
+static void dense_replace_basis_column(double *B, int m, int leaving_pos, const double *col) {
+    for (int i = 0; i < m; i++) B[i * m + leaving_pos] = col[i];
+}
+
 /* ============================================================================
  * Test 1: Factorize a diagonally-dominant sparse matrix, verify solve
  * ============================================================================ */
@@ -1436,8 +1465,129 @@ cleanup:
     free(A);
 }
 
+static void configure_backend_invariant_lane(LUFactorization *lu, LUUpdateBackend backend) {
+    lu->backend_policy = LP_LU_BACKEND_POLICY_LUF_FT;
+    lu->update_backend = backend;
+    lu->use_ft_updates = (backend == LU_UPDATE_BACKEND_FT) ? 1 : 0;
+    lu->max_updates = 64;
+    lu->pivot_tol = RALPH_PIVOT_TOL;
+    lu->growth_refactor_threshold = RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
+}
+
+static void run_backend_invariant_sequence(LUUpdateBackend backend,
+                                           const char *label,
+                                           int expect_bg_math) {
+    const int m = 8;
+    double B0[64] = {0};
+    double Bcur[64] = {0};
+    LUFactorization *lu_ft = NULL;
+    LUFactorization *lu_cmp = NULL;
+    SparseMatrix *B = NULL;
+    double x_ft[8], x_cmp[8], y_ft[8], y_cmp[8], check[8];
+    static const double updates[][8] = {
+        {1.50, 0.20, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00},
+        {0.00, 0.00, 0.10, 1.40, 0.30, 0.00, 0.00, 0.00},
+        {0.00, 0.00, 0.00, 0.20, 0.00, 1.30, 0.10, 0.00},
+        {1.20, 0.10, 0.05, 0.00, 0.00, 0.00, 0.00, 0.00}
+    };
+    static const int leaving_pos[] = {0, 3, 5, 0};
+    static const double rhs[][8] = {
+        {1.0, 2.0, -1.0, 0.5, 0.0, 1.0, -0.5, 2.0},
+        {0.5, -1.0, 2.0, 1.5, -0.5, 0.0, 1.0, 3.0},
+        {-1.5, 0.0, 0.5, 2.0, 1.0, -0.5, 0.25, 1.0},
+        {1.0, 1.0, 1.0, -1.0, 0.0, 2.0, -2.0, 0.5}
+    };
+    static const double rhs_t[][8] = {
+        {0.0, 1.0, 2.0, -1.0, 0.5, 0.0, 1.0, -0.5},
+        {1.5, -0.5, 0.0, 1.0, 2.0, -1.0, 0.0, 0.5},
+        {0.5, 0.0, -1.5, 1.0, 0.0, 2.0, -0.5, 1.5},
+        {-1.0, 0.5, 0.25, 0.0, 1.0, 1.5, -0.5, 0.0}
+    };
+
+    for (int i = 0; i < m; i++) {
+        B0[i * m + i] = 1.0;
+        Bcur[i * m + i] = 1.0;
+    }
+
+    B = dense_to_csc(B0, m, m);
+    lu_ft = lu_create(m);
+    lu_cmp = lu_create(m);
+    ASSERT(lu_ft != NULL, "lu backend invariant: lu_ft create");
+    ASSERT(lu_cmp != NULL, "lu backend invariant: lu_cmp create");
+    if (!lu_ft || !lu_cmp || !B) goto cleanup;
+
+    ASSERT_INT_EQ(lu_factorize(lu_ft, B), 0, "lu backend invariant: ft factorize");
+    ASSERT_INT_EQ(lu_factorize(lu_cmp, B), 0, "lu backend invariant: cmp factorize");
+    configure_backend_invariant_lane(lu_ft, LU_UPDATE_BACKEND_FT);
+    configure_backend_invariant_lane(lu_cmp, backend);
+
+    for (int step = 0; step < 4; step++) {
+        int rc_ft = lu_update(lu_ft, leaving_pos[step], updates[step]);
+        int rc_cmp = lu_update(lu_cmp, leaving_pos[step], updates[step]);
+        char msg[128];
+
+        snprintf(msg, sizeof(msg), "lu backend invariant (%s): update rc step %d", label, step);
+        ASSERT_INT_EQ(rc_cmp, rc_ft, msg);
+        if (rc_ft != 0 || rc_cmp != 0) break;
+
+        dense_replace_basis_column(Bcur, m, leaving_pos[step], updates[step]);
+
+        lu_solve(lu_ft, (double *)rhs[step], x_ft);
+        lu_solve(lu_cmp, (double *)rhs[step], x_cmp);
+        snprintf(msg, sizeof(msg), "lu backend invariant (%s): solve x match step %d", label, step);
+        ASSERT(max_abs_diff(x_ft, x_cmp, m) < 1e-8, msg);
+
+        dense_matvec(Bcur, m, x_ft, check);
+        snprintf(msg, sizeof(msg), "lu backend invariant (%s): ft residual step %d", label, step);
+        ASSERT(max_abs_diff(check, rhs[step], m) < 1e-8, msg);
+        dense_matvec(Bcur, m, x_cmp, check);
+        snprintf(msg, sizeof(msg), "lu backend invariant (%s): cmp residual step %d", label, step);
+        ASSERT(max_abs_diff(check, rhs[step], m) < 1e-8, msg);
+
+        lu_solve_transpose(lu_ft, (double *)rhs_t[step], y_ft);
+        lu_solve_transpose(lu_cmp, (double *)rhs_t[step], y_cmp);
+        snprintf(msg, sizeof(msg), "lu backend invariant (%s): btran x match step %d", label, step);
+        ASSERT(max_abs_diff(y_ft, y_cmp, m) < 1e-8, msg);
+
+        dense_matvec_transpose(Bcur, m, y_ft, check);
+        snprintf(msg, sizeof(msg), "lu backend invariant (%s): ft transpose residual step %d", label, step);
+        ASSERT(max_abs_diff(check, rhs_t[step], m) < 1e-8, msg);
+        dense_matvec_transpose(Bcur, m, y_cmp, check);
+        snprintf(msg, sizeof(msg), "lu backend invariant (%s): cmp transpose residual step %d", label, step);
+        ASSERT(max_abs_diff(check, rhs_t[step], m) < 1e-8, msg);
+    }
+
+    if (expect_bg_math) {
+        ASSERT(lu_cmp->schur_num_updates > 0,
+               "lu backend invariant (bg): schur low-rank updates populated");
+        ASSERT(lu_cmp->schur_k != NULL,
+               "lu backend invariant (bg): schur dense K allocated");
+    }
+
+cleanup:
+    lu_free(lu_ft);
+    lu_free(lu_cmp);
+    free_csc(B);
+}
+
 /* ============================================================================
- * Test 23: Runtime update limit is bounded by allocated LU update storage
+ * Test 23: BG backend matches FT solve invariants on the same update sequence
+ * ============================================================================ */
+static void test_lu_bg_backend_matches_ft_invariants(void) {
+    printf("  LU: bg backend matches FT invariants...\n");
+    run_backend_invariant_sequence(LU_UPDATE_BACKEND_BG_COMPAT, "bg", 1);
+}
+
+/* ============================================================================
+ * Test 24: GR compatibility backend matches FT solve invariants
+ * ============================================================================ */
+static void test_lu_gr_backend_matches_ft_invariants(void) {
+    printf("  LU: gr backend matches FT invariants...\n");
+    run_backend_invariant_sequence(LU_UPDATE_BACKEND_GR_COMPAT, "gr", 0);
+}
+
+/* ============================================================================
+ * Test 25: Runtime update limit is bounded by allocated LU update storage
  * ============================================================================ */
 static void test_lu_update_storage_capacity_guard_runtime(void) {
     printf("  LU: runtime update-capacity guard...\n");
@@ -1524,6 +1674,8 @@ int main(void) {
     test_lu_strict_backend_policy_runtime();
     test_lu_backend_policy_update_path_telemetry();
     test_lu_strict_cgr_update_path_telemetry();
+    test_lu_bg_backend_matches_ft_invariants();
+    test_lu_gr_backend_matches_ft_invariants();
     test_lu_update_storage_capacity_guard_runtime();
 
     printf("\nIntegration (A/B Comparison):\n");

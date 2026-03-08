@@ -360,14 +360,19 @@ typedef struct {
     double **eta_values;    /* Values of non-zeros for each eta */
     int *eta_nnz;           /* Number of non-zeros in each eta */
 
-    /* BG/GR compatibility sparse-update lane. This is separate from the eta
-     * file so a real Schur-complement update kernel can replace it cleanly. */
+    /* BG/GR sparse-update lane. BG uses these columns as the low-rank U part
+     * of M = I + U V^T; GR continues to use them as a compatibility chain
+     * until a real GR kernel exists. */
     int schur_capacity;
     int schur_num_updates;
     int *schur_col;
     int **schur_indices;
     double **schur_values;
     int *schur_nnz;
+    double *schur_k;        /* Dense K = I + V^T U for BG backend */
+    double *schur_k_work;   /* Scratch copy for dense Schur solves */
+    double *schur_rhs;      /* RHS/solution workspace for Schur solves */
+    int *schur_piv;         /* Pivot workspace for dense Schur solves */
 
     /* Forrest-Tomlin update data */
     int use_ft_updates;     /* 1 to use FT updates, 0 for non-FT update lanes */

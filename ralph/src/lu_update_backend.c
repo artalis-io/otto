@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 #include "lp.h"
 #include "lp_bfcp_policy.h"
@@ -8,6 +9,14 @@ static int lu_update_backend_is_schur_compat(const LUFactorization *lu) {
     if (!lu) return 0;
     return lu->update_backend == LU_UPDATE_BACKEND_BG_COMPAT ||
            lu->update_backend == LU_UPDATE_BACKEND_GR_COMPAT;
+}
+
+static int lu_update_backend_is_bg(const LUFactorization *lu) {
+    return lu && lu->update_backend == LU_UPDATE_BACKEND_BG_COMPAT;
+}
+
+static int lu_update_backend_is_gr(const LUFactorization *lu) {
+    return lu && lu->update_backend == LU_UPDATE_BACKEND_GR_COMPAT;
 }
 
 int lu_update_backend_is_ft(const LUFactorization *lu) {
@@ -26,6 +35,17 @@ int lu_update_backend_storage_capacity(const LUFactorization *lu) {
     return lu->eta_capacity > 0 ? lu->eta_capacity : 0;
 }
 
+int lu_update_backend_has_updates(const LUFactorization *lu) {
+    if (!lu) return 0;
+    if (lu_update_backend_is_ft(lu)) {
+        return lu->ft_num_updates > 0 ? 1 : 0;
+    }
+    if (lu_update_backend_is_bg(lu) || lu_update_backend_is_gr(lu)) {
+        return lu->schur_num_updates > 0 ? 1 : 0;
+    }
+    return lu->num_eta > 0 ? 1 : 0;
+}
+
 static void lu_mark_bad_input_and_force_refactor(const LUFactorization *lu_const) {
     LUFactorization *lu = (LUFactorization*)lu_const;
 
@@ -39,6 +59,7 @@ static void lu_mark_bad_input_and_force_refactor(const LUFactorization *lu_const
     }
     lu->ft_num_updates = 0;
     lu->spike_pool_used = 0;
+    lu->schur_num_updates = 0;
 }
 
 static void free_sparse_update_chain(int *count,
@@ -63,6 +84,15 @@ void lu_update_backend_reset(LUFactorization *lu) {
 
     free_sparse_update_chain(&lu->num_eta, lu->eta_indices, lu->eta_values, lu->eta_nnz);
     free_sparse_update_chain(&lu->schur_num_updates, lu->schur_indices, lu->schur_values, lu->schur_nnz);
+    if (lu->schur_k && lu->schur_capacity > 0) {
+        memset(lu->schur_k, 0, (size_t)lu->schur_capacity * (size_t)lu->schur_capacity * sizeof(double));
+    }
+    if (lu->schur_rhs && lu->schur_capacity > 0) {
+        memset(lu->schur_rhs, 0, (size_t)lu->schur_capacity * sizeof(double));
+    }
+    if (lu->schur_piv && lu->schur_capacity > 0) {
+        memset(lu->schur_piv, 0, (size_t)lu->schur_capacity * sizeof(int));
+    }
 
     for (int i = 0; i < lu->ft_num_updates; i++) {
         lu->ft_spike_nnz[i] = 0;
@@ -119,6 +149,152 @@ static void apply_sparse_update_chain_backward(int count,
         }
         x[pivot_col] = xc;
     }
+}
+
+static double sparse_column_get_entry(const int *indices,
+                                      const double *values,
+                                      int nnz,
+                                      int row) {
+    for (int p = 0; p < nnz; p++) {
+        if (indices[p] == row) return values[p];
+    }
+    return 0.0;
+}
+
+static void sparse_column_axpy(const int *indices,
+                               const double *values,
+                               int nnz,
+                               double alpha,
+                               double *x) {
+    for (int p = 0; p < nnz; p++) {
+        x[indices[p]] += alpha * values[p];
+    }
+}
+
+static void bg_build_m_times_unit_column(const LUFactorization *lu,
+                                         int step_pos,
+                                         double *out) {
+    int k = lu->schur_num_updates;
+    int m = lu->m;
+
+    memset(out, 0, (size_t)m * sizeof(double));
+    if (step_pos >= 0 && step_pos < m) out[step_pos] = 1.0;
+    for (int t = 0; t < k; t++) {
+        if (lu->schur_col[t] != step_pos) continue;
+        sparse_column_axpy(lu->schur_indices[t], lu->schur_values[t],
+                           lu->schur_nnz[t], 1.0, out);
+    }
+}
+
+static int bg_solve_dense(int n, double *A, int *piv, double *rhs) {
+    for (int i = 0; i < n; i++) piv[i] = i;
+
+    for (int col = 0; col < n; col++) {
+        int piv_row = col;
+        double max_abs = fabs(A[(size_t)col * n + col]);
+        for (int row = col + 1; row < n; row++) {
+            double absval = fabs(A[(size_t)row * n + col]);
+            if (absval > max_abs) {
+                max_abs = absval;
+                piv_row = row;
+            }
+        }
+        if (max_abs < RALPH_PIVOT_TOL) return -1;
+        if (piv_row != col) {
+            for (int j = 0; j < n; j++) {
+                double tmp = A[(size_t)col * n + j];
+                A[(size_t)col * n + j] = A[(size_t)piv_row * n + j];
+                A[(size_t)piv_row * n + j] = tmp;
+            }
+            {
+                double tmp_rhs = rhs[col];
+                rhs[col] = rhs[piv_row];
+                rhs[piv_row] = tmp_rhs;
+            }
+            {
+                int tmp_p = piv[col];
+                piv[col] = piv[piv_row];
+                piv[piv_row] = tmp_p;
+            }
+        }
+        for (int row = col + 1; row < n; row++) {
+            double factor = A[(size_t)row * n + col] / A[(size_t)col * n + col];
+            A[(size_t)row * n + col] = factor;
+            for (int j = col + 1; j < n; j++) {
+                A[(size_t)row * n + j] -= factor * A[(size_t)col * n + j];
+            }
+            rhs[row] -= factor * rhs[col];
+        }
+    }
+
+    for (int row = n - 1; row >= 0; row--) {
+        double sum = rhs[row];
+        for (int j = row + 1; j < n; j++) {
+            sum -= A[(size_t)row * n + j] * rhs[j];
+        }
+        rhs[row] = sum / A[(size_t)row * n + row];
+    }
+    return 0;
+}
+
+static int bg_apply_forward(const LUFactorization *lu, double *x) {
+    int k = lu->schur_num_updates;
+    int cap = lu->schur_capacity;
+
+    if (k <= 0) return 0;
+    if (!lu->schur_k || !lu->schur_k_work || !lu->schur_rhs || !lu->schur_piv) {
+        return -1;
+    }
+
+    for (int i = 0; i < k; i++) {
+        lu->schur_rhs[i] = x[lu->schur_col[i]];
+    }
+    for (int row = 0; row < k; row++) {
+        memcpy(lu->schur_k_work + (size_t)row * k,
+               lu->schur_k + (size_t)row * cap,
+               (size_t)k * sizeof(double));
+    }
+    if (bg_solve_dense(k, lu->schur_k_work, lu->schur_piv, lu->schur_rhs) != 0) {
+        lu_mark_bad_input_and_force_refactor(lu);
+        return -1;
+    }
+    for (int i = 0; i < k; i++) {
+        double alpha = -lu->schur_rhs[i];
+        if (fabs(alpha) <= RALPH_ZERO_TOL) continue;
+        sparse_column_axpy(lu->schur_indices[i], lu->schur_values[i],
+                           lu->schur_nnz[i], alpha, x);
+    }
+    return 0;
+}
+
+static int bg_apply_backward(const LUFactorization *lu, double *x) {
+    int k = lu->schur_num_updates;
+    int cap = lu->schur_capacity;
+
+    if (k <= 0) return 0;
+    if (!lu->schur_k || !lu->schur_k_work || !lu->schur_rhs || !lu->schur_piv) {
+        return -1;
+    }
+
+    for (int i = 0; i < k; i++) {
+        lu->schur_rhs[i] = 0.0;
+        for (int p = 0; p < lu->schur_nnz[i]; p++) {
+            lu->schur_rhs[i] += lu->schur_values[i][p] * x[lu->schur_indices[i][p]];
+        }
+    }
+    for (int row = 0; row < k; row++) {
+        for (int col = 0; col < k; col++) {
+            lu->schur_k_work[(size_t)row * k + col] = lu->schur_k[(size_t)col * cap + row];
+        }
+    }
+    if (bg_solve_dense(k, lu->schur_k_work, lu->schur_piv, lu->schur_rhs) != 0) {
+        lu_mark_bad_input_and_force_refactor(lu);
+        return -1;
+    }
+    for (int i = 0; i < k; i++) {
+        x[lu->schur_col[i]] -= lu->schur_rhs[i];
+    }
+    return 0;
 }
 
 static inline int apply_single_ft_spike_forward(const int col,
@@ -314,7 +490,10 @@ int lu_update_backend_apply_forward(const LUFactorization *lu, double *x) {
         if (lu->ft_num_updates <= 0) return 0;
         return apply_ft_spikes_forward(lu, x);
     }
-    if (lu_update_backend_is_schur_compat(lu)) {
+    if (lu_update_backend_is_bg(lu)) {
+        return bg_apply_forward(lu, x);
+    }
+    if (lu_update_backend_is_gr(lu)) {
         if (lu->schur_num_updates <= 0) return 0;
         apply_sparse_update_chain_forward(lu->schur_num_updates, lu->schur_col,
                                           lu->schur_indices, lu->schur_values,
@@ -335,7 +514,11 @@ void lu_update_backend_apply_backward(const LUFactorization *lu, double *x) {
         apply_ft_spikes_backward(lu, x);
         return;
     }
-    if (lu_update_backend_is_schur_compat(lu)) {
+    if (lu_update_backend_is_bg(lu)) {
+        (void)bg_apply_backward(lu, x);
+        return;
+    }
+    if (lu_update_backend_is_gr(lu)) {
         if (lu->schur_num_updates <= 0) return;
         apply_sparse_update_chain_backward(lu->schur_num_updates, lu->schur_col,
                                            lu->schur_indices, lu->schur_values,
@@ -410,8 +593,62 @@ static int store_sparse_update_chain(int *count,
     return LU_FAIL_NONE;
 }
 
+static int store_bg_update(LUFactorization *lu,
+                           int step_pos,
+                           const double *base_spike) {
+    int k = lu->schur_num_updates;
+    int m = lu->m;
+    double *u_dense;
+    int total_nnz = 0;
+    int reason;
+
+    if (!lu->schur_k || !lu->schur_k_work || !lu->schur_rhs || !lu->schur_piv) {
+        return LU_FAIL_BAD_INPUT;
+    }
+    if (k < 0 || k >= lu->schur_capacity) {
+        return LU_FAIL_MAX_UPDATES;
+    }
+
+    u_dense = lu->hs_work1;
+    memcpy(u_dense, base_spike, (size_t)m * sizeof(double));
+    bg_build_m_times_unit_column(lu, step_pos, lu->hs_work2);
+    for (int i = 0; i < m; i++) {
+        u_dense[i] -= lu->hs_work2[i];
+        if (fabs(u_dense[i]) > RALPH_ZERO_TOL) total_nnz++;
+    }
+
+    reason = store_sparse_update_chain(&lu->schur_num_updates,
+                                       lu->schur_capacity,
+                                       lu->schur_col,
+                                       lu->schur_indices,
+                                       lu->schur_values,
+                                       lu->schur_nnz,
+                                       step_pos,
+                                       u_dense,
+                                       m,
+                                       total_nnz);
+    if (reason != LU_FAIL_NONE) {
+        return reason;
+    }
+
+    for (int row = 0; row < k; row++) {
+        lu->schur_k[(size_t)row * lu->schur_capacity + k] =
+            u_dense[lu->schur_col[row]];
+    }
+    for (int col = 0; col < k; col++) {
+        lu->schur_k[(size_t)k * lu->schur_capacity + col] =
+            sparse_column_get_entry(lu->schur_indices[col],
+                                    lu->schur_values[col],
+                                    lu->schur_nnz[col],
+                                    step_pos);
+    }
+    lu->schur_k[(size_t)k * lu->schur_capacity + k] = 1.0 + u_dense[step_pos];
+    return LU_FAIL_NONE;
+}
+
 int lu_update_backend_store(LUFactorization *lu,
                             int step_pos,
+                            const double *base_spike,
                             const double *spike,
                             int off_diag_nnz) {
     int m;
@@ -459,7 +696,13 @@ int lu_update_backend_store(LUFactorization *lu,
         int reason;
         int total_nnz = off_diag_nnz + 1;
 
-        if (lu_update_backend_is_schur_compat(lu)) {
+        if (lu_update_backend_is_bg(lu)) {
+            if (!base_spike) {
+                reason = LU_FAIL_BAD_INPUT;
+            } else {
+                reason = store_bg_update(lu, step_pos, base_spike);
+            }
+        } else if (lu_update_backend_is_gr(lu)) {
             reason = store_sparse_update_chain(&lu->schur_num_updates,
                                                lu->schur_capacity,
                                                lu->schur_col,
@@ -486,7 +729,9 @@ int lu_update_backend_store(LUFactorization *lu,
         if (reason == LU_FAIL_NONE) return 0;
 
         lu->last_failure_reason = reason;
-        if (reason == LU_FAIL_MAX_UPDATES) {
+        if (reason == LU_FAIL_BAD_INPUT) {
+            if (lu->telemetry_enabled) lu->telemetry.update_fail_bad_input++;
+        } else if (reason == LU_FAIL_MAX_UPDATES) {
             lu->last_refactor_trigger_reason = LP_BFCP_REFACTOR_REASON_MAX_UPDATES;
             if (lu->telemetry_enabled) lu->telemetry.update_fail_max_updates++;
         } else if (reason == LU_FAIL_ETA_ALLOC) {
