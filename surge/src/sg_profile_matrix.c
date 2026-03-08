@@ -211,7 +211,7 @@ const SGProfileCell k_profile_matrix[SG_PROFILE_COUNT][SG_SCALE_COUNT] = {
         {  500,    1, RT_TUNE },         /* SMALL */
         {  500,    2, RT_MEDIUM_TUNE },  /* MEDIUM (S22 tuned) */
         {  500,    5, RT_LARGE_TUNE },   /* LARGE (S22 tuned) */
-        {  250,   10, RT_TUNE },         /* XLARGE */
+        {  250,   10, RT_LARGE_TUNE },   /* XLARGE (GH-400 params) */
         {  250,   15, RT_TUNE },         /* MASSIVE */
     },
     /* FAST */
@@ -219,7 +219,7 @@ const SGProfileCell k_profile_matrix[SG_PROFILE_COUNT][SG_SCALE_COUNT] = {
         { 2500,    5, BASE_TUNE },    /* SMALL */
         { 2500,   10, MEDIUM_TUNE },  /* MEDIUM (S22 tuned) */
         { 2500,   30, LARGE_TUNE },   /* LARGE (S22 tuned) */
-        { 1500,   60, BASE_TUNE },    /* XLARGE */
+        { 1500,   60, LARGE_TUNE },   /* XLARGE (GH-400 params) */
         { 1000,   90, BASE_TUNE },    /* MASSIVE */
     },
     /* NEAR_OPTIMAL */
@@ -227,7 +227,7 @@ const SGProfileCell k_profile_matrix[SG_PROFILE_COUNT][SG_SCALE_COUNT] = {
         { 10000,  15, BASE_TUNE },    /* SMALL */
         { 10000,  45, MEDIUM_TUNE },  /* MEDIUM (S22 tuned) */
         {  5000, 120, LARGE_TUNE },   /* LARGE (S22 tuned) */
-        {  3000, 300, BASE_TUNE },    /* XLARGE */
+        {  3000, 300, LARGE_TUNE },   /* XLARGE (GH-400 params) */
         {  2000, 600, BASE_TUNE },    /* MASSIVE */
     },
     /* BEST */
@@ -235,7 +235,7 @@ const SGProfileCell k_profile_matrix[SG_PROFILE_COUNT][SG_SCALE_COUNT] = {
         { 50000,   60, BASE_TUNE },    /* SMALL */
         { 25000,  180, MEDIUM_TUNE },  /* MEDIUM (S22 tuned) */
         { 10000,  600, LARGE_TUNE },   /* LARGE (S22 tuned) */
-        {  5000, 1200, BASE_TUNE },    /* XLARGE */
+        {  5000, 1200, LARGE_TUNE },   /* XLARGE (GH-400 params) */
         {  3000, 1800, BASE_TUNE },    /* MASSIVE */
     },
 };
