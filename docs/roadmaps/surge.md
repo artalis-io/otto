@@ -3867,6 +3867,46 @@ need more sophisticated operators or longer time budgets to close the gap.
 At 400-customer scale, the default SA was far too hot — accepting too many bad moves.
 Smaller neighborhood (k=20) was also critical, reducing per-iteration eval cost.
 
+#### GH-800 Benchmark Results (LARGE_TUNE, 120s population)
+
+First 800-customer results. Uses GH-400 tuned params (LARGE_TUNE) as starting point —
+no dedicated XLARGE tuning yet. Population mode (3 generations, all CPU cores), 10K
+iterations, 120s time limit, deterministic seed 42.
+
+| Category | Instances | BKS Veh Match | Avg Veh Gap | Avg Dist Gap |
+|----------|-----------|---------------|-------------|--------------|
+| C1_8 (clustered, tight) | 10 | 1/10 | +3.60 | +5.7% |
+| C2_8 (clustered, wide) | 10 | 1/10 | +1.50 | +12.0% |
+| R1_8 (random, tight) | 10 | 8/10 | +0.20 | +35.9% |
+| R2_8 (random, wide) | 10 | 10/10 | +0.00 | +12.6% |
+| RC1_8 (mixed, tight) | 10 | 0/10 | +2.60 | +21.7% |
+| RC2_8 (mixed, wide) | 10 | 5/10 | +1.10 | +12.0% |
+| **Overall** | **60** | **25/60 (42%)** | **+1.55** | **+17.0%** |
+
+Avg runtime: 215s. 0 instances lexicographically non-worse than BKS.
+
+**Scaling comparison (LARGE_TUNE across scales):**
+
+| Scale | Time | Veh Match | Avg Veh Gap | Avg Dist Gap |
+|-------|------|-----------|-------------|--------------|
+| GH-400 | 60s | 35/60 (58%) | +0.53 | +12.9% |
+| GH-800 | 120s | 25/60 (42%) | +1.55 | +17.0% |
+
+Vehicle gap widened significantly (+0.53→+1.55), especially on clustered instances
+(C1 +3.60, C2 +1.50). Distance gap degraded +4.1pp despite 2x more time. Key issues:
+
+1. **Vehicle count on C-type**: Construction uses 1-3 extra vehicles that ALNS can't
+   eliminate in 120s. CFRS sweep/k-means may need scale-specific cluster count.
+2. **R1 distance plateau**: +35.9% at 800 vs +21.6% at 400 — tight-TW random instances
+   hit computational wall. Per-iteration cost is O(n²·V), ~4x slower at 800 vs 400.
+3. **R2 vehicle count**: Perfect 10/10 match — wide-TW random instances scale well.
+4. **Time starvation**: Many instances hit LIMIT status (time budget exhausted). The
+   120s budget gives ~4x fewer iterations than 400-customer scale at 60s.
+
+**Next steps**: Dedicated XLARGE_TUNE tuning campaign (bench_tune at GH-800 scale).
+SA temperature likely needs to go even colder, and phase1_fraction may need adjustment
+for the longer time budgets appropriate at this scale.
+
 ### Phase S23: Parallel Move Evaluation (Future)
 
 **Priority: Low. Stacks with S19 heap repair and S21 cache.**
