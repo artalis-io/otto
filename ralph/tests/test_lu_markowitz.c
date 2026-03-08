@@ -13,6 +13,7 @@
 #include "ralph_test_mod_api.h"
 #include "lp.h"
 #include "lp_bfcp_policy.h"
+#include "lp_policy_glpk_compat.h"
 
 #define TOLERANCE 1e-8
 
@@ -712,6 +713,147 @@ static void test_markowitz_numeric_identity_full_retry(void) {
 }
 
 /* ============================================================================
+ * Test 10: BTF symbolic ordering should detect disconnected structural blocks
+ *          and still produce a correct sparse factorization.
+ * ============================================================================ */
+static void test_lu_btf_symbolic_blocks(void) {
+    printf("  LU: btf symbolic block ordering (m=24, k=20)...\n");
+
+    const int m = 24;
+    const int k = 20;
+    double *A = (double *)calloc((size_t)m * m, sizeof(double));
+    SparseMatrix *B = NULL;
+    LUFactorization *lu = NULL;
+    SimplexSolver owner;
+    double max_err = 0.0;
+
+    for (int block = 0; block < 2; block++) {
+        int base = block * 10;
+        for (int c = 0; c < 10; c++) {
+            int col = base + c;
+            int row = base + c;
+            int next_row = base + ((c + 1) % 10);
+            A[row * m + col] = 7.0 + 0.05 * col;
+            A[next_row * m + col] = 0.2;
+        }
+    }
+    for (int t = 0; t < m - k; t++) {
+        int row = k + t;
+        A[row * m + (k + t)] = 1.0;
+    }
+
+    B = dense_to_csc(A, m, m);
+    lu = lu_create(m);
+    ASSERT(lu != NULL, "btf symbolic blocks: lu_create");
+    if (!lu) goto cleanup;
+
+    memset(&owner, 0, sizeof(owner));
+    owner.lu_factorization_type = LP_GLPK_BFCP_FACTORIZATION_BTF;
+    lu->owner = &owner;
+    lu->mkz_enabled = 1;
+    lu->sn_enabled = 0;
+
+    ASSERT_INT_EQ(lu_factorize(lu, B), 0, "btf symbolic blocks: factorize");
+    if (lu->last_failure_reason == LU_FAIL_NONE) {
+        ASSERT_INT_EQ(lu->sym_factorization_type, LP_GLPK_BFCP_FACTORIZATION_BTF,
+                      "btf symbolic blocks: symbolic mode recorded");
+        ASSERT_INT_EQ(lu->sym_btf_blocks, 2,
+                      "btf symbolic blocks: two structural SCC blocks detected");
+        ASSERT_INT_EQ(lu->telemetry.used_dense_fallback_last, 0,
+                      "btf symbolic blocks: sparse path used");
+
+        for (int trial = 0; trial < 3; trial++) {
+            double *b = (double *)calloc(m, sizeof(double));
+            double *x = (double *)calloc(m, sizeof(double));
+            double *b_orig = (double *)calloc(m, sizeof(double));
+            for (int i = 0; i < m; i++) {
+                b[i] = (double)(trial * 7 + i + 1);
+                b_orig[i] = b[i];
+            }
+            lu_solve(lu, b, x);
+            for (int i = 0; i < m; i++) {
+                double ax = 0.0;
+                for (int j = 0; j < m; j++) ax += A[i * m + j] * x[j];
+                if (fabs(ax - b_orig[i]) > max_err) {
+                    max_err = fabs(ax - b_orig[i]);
+                }
+            }
+            free(b);
+            free(x);
+            free(b_orig);
+        }
+        ASSERT(max_err < 1e-7, "btf symbolic blocks: solve accuracy");
+    }
+
+cleanup:
+    lu_free(lu);
+    free_csc(B);
+    free(A);
+}
+
+/* ============================================================================
+ * Test 11: Strict LU dispatch should not use the default numeric full-retry
+ *          ladder when identity separation fails.
+ * ============================================================================ */
+static void test_strict_dispatch_skips_numeric_full_retry(void) {
+    printf("  LU: strict dispatch skips numeric full-retry...\n");
+
+    const int m = 60;
+    const int k = 40;
+    double *A = (double *)calloc((size_t)m * m, sizeof(double));
+    SparseMatrix *B = NULL;
+    LUFactorization *lu = NULL;
+    SimplexSolver owner;
+
+    for (int j = 0; j < k; j++) {
+        A[j * m + j] = 8.0 + 0.02 * j;
+        A[((j + 1) % k) * m + j] = 0.15;
+    }
+    for (int t = 0; t < m - k; t++) {
+        int row = k + t;
+        A[row * m + (k + t)] = 1.0;
+    }
+
+    B = dense_to_csc(A, m, m);
+    lu = lu_create(m);
+    ASSERT(lu != NULL, "strict dispatch retry skip: lu_create");
+    if (!lu) goto cleanup;
+
+    memset(&owner, 0, sizeof(owner));
+    owner.glpk_strict_mode = 1;
+    owner.lu_factorization_type = LP_GLPK_BFCP_FACTORIZATION_LUF;
+    owner.lu_strict_lane_active = 1;
+    owner.lu_strict_prefer_dense_ge_numeric = 0;
+    owner.lu_strict_allow_supernode_lane = 0;
+    owner.lu_strict_allow_symbolic_full_retry = 0;
+    owner.lu_strict_allow_top_level_dense_fallback = 0;
+    lu->owner = &owner;
+    lu->mkz_enabled = 1;
+    lu->sn_enabled = 0;
+
+    ASSERT_INT_EQ(lu_factorize(lu, B), 0, "strict dispatch retry skip: warm factorize");
+
+    lp_telemetry_reset_lu(lu);
+    lu->ws_col_order[k + 1] = lu->ws_col_order[k];
+
+    ASSERT(lu_factorize(lu, B) != 0,
+           "strict dispatch retry skip: strict factorize fails without retry ladder");
+    ASSERT(lu->telemetry.sparse_numeric_fail_identity_sep > 0,
+           "strict dispatch retry skip: identity-separation recorded");
+    ASSERT_INT_EQ(lu->telemetry.numeric_full_retry_attempts, 0,
+                  "strict dispatch retry skip: no full-structural retry");
+    ASSERT_INT_EQ(lu->telemetry.used_dense_fallback_last, 0,
+                  "strict dispatch retry skip: no top-level dense fallback");
+    ASSERT_INT_EQ(lu->telemetry.sparse_fallback_last_reason, LU_SPARSE_FALLBACK_NUMERIC,
+                  "strict dispatch retry skip: numeric fallback reason recorded");
+
+cleanup:
+    lu_free(lu);
+    free_csc(B);
+    free(A);
+}
+
+/* ============================================================================
  * Test 10: Supernode cost gate regression — when skip budget is active for a
  *          large structural factorization, supernode path is skipped and dense
  *          GE backend is used without top-level dense fallback.
@@ -760,7 +902,7 @@ static void test_supernode_cost_gate_skip_regression(void) {
 }
 
 /* ============================================================================
- * Test 11: Adaptive LU update pivot threshold policy
+ * Test 12: Adaptive LU update pivot threshold policy
  * ============================================================================ */
 static void test_lu_update_pivot_threshold_adaptive(void) {
     printf("  LU: adaptive update-pivot threshold policy...\n");
@@ -785,7 +927,7 @@ static void test_lu_update_pivot_threshold_adaptive(void) {
 }
 
 /* ============================================================================
- * Test 12: Identity-separation retry-lane policy (dense vs supernode)
+ * Test 13: Identity-separation retry-lane policy (dense vs supernode)
  * ============================================================================ */
 static void test_identity_sep_retry_lane_policy(void) {
     printf("  LU: identity-separation retry-lane policy...\n");
@@ -813,7 +955,7 @@ static void test_identity_sep_retry_lane_policy(void) {
 }
 
 /* ============================================================================
- * Test 13: Markowitz global skip-budget policy (cross-fingerprint chronic singulars)
+ * Test 14: Markowitz global skip-budget policy (cross-fingerprint chronic singulars)
  * ============================================================================ */
 static void test_markowitz_global_skip_policy(void) {
     printf("  LU: Markowitz global skip-budget policy...\n");
@@ -854,7 +996,7 @@ static void test_markowitz_global_skip_policy(void) {
 }
 
 /* ============================================================================
- * Test 14: Markowitz global skip-budget runtime telemetry integration
+ * Test 15: Markowitz global skip-budget runtime telemetry integration
  * ============================================================================ */
 static void test_markowitz_global_skip_runtime_telemetry(void) {
     printf("  LU: Markowitz global skip-budget runtime telemetry...\n");
@@ -910,7 +1052,7 @@ static void test_markowitz_global_skip_runtime_telemetry(void) {
 }
 
 /* ============================================================================
- * Test 15: FT update density reinversion guard
+ * Test 16: FT update density reinversion guard
  * ============================================================================ */
 static void test_ft_update_density_refactor_guard(void) {
     printf("  LU: FT update density refactor guard...\n");
@@ -966,7 +1108,7 @@ static void test_ft_update_density_refactor_guard(void) {
 }
 
 /* ============================================================================
- * Test 16: Dense FT spikes should not hard-fail during warmup
+ * Test 17: Dense FT spikes should not hard-fail during warmup
  * ============================================================================ */
 static void test_ft_dense_spike_warmup_update(void) {
     printf("  LU: FT dense-spike warmup update...\n");
@@ -1011,7 +1153,7 @@ cleanup:
 }
 
 /* ============================================================================
- * Test 17: LU update uses BFCP effective update budget at runtime
+ * Test 18: LU update uses BFCP effective update budget at runtime
  * ============================================================================ */
 static void test_lu_update_cond_adaptive_limit_runtime(void) {
     printf("  LU: runtime cond-adaptive update budget...\n");
@@ -1045,7 +1187,7 @@ static void test_lu_update_cond_adaptive_limit_runtime(void) {
 }
 
 /* ============================================================================
- * Test 18: LU hard-trigger helper delegates to BFCP hard safety criteria
+ * Test 19: LU hard-trigger helper delegates to BFCP hard safety criteria
  * ============================================================================ */
 static void test_lu_refactor_hard_trigger_runtime(void) {
     printf("  LU: runtime hard-trigger helper...\n");
@@ -1084,7 +1226,7 @@ static void test_lu_refactor_hard_trigger_runtime(void) {
 }
 
 /* ============================================================================
- * Test 19: Backend policy controls LU update path and thresholds
+ * Test 20: Backend policy controls LU update path and thresholds
  * ============================================================================ */
 static void test_lu_backend_policy_runtime(void) {
     printf("  LU: backend policy runtime mapping...\n");
@@ -1143,7 +1285,7 @@ static void test_lu_backend_policy_runtime(void) {
 }
 
 /* ============================================================================
- * Test 20: Backend policy update-path telemetry (FT vs ETA)
+ * Test 21: Backend policy update-path telemetry (FT vs ETA)
  * ============================================================================ */
 static void test_lu_backend_policy_update_path_telemetry(void) {
     printf("  LU: backend policy update-path telemetry...\n");
@@ -1195,7 +1337,7 @@ cleanup:
 }
 
 /* ============================================================================
- * Test 21: Runtime update limit is bounded by allocated LU update storage
+ * Test 22: Runtime update limit is bounded by allocated LU update storage
  * ============================================================================ */
 static void test_lu_update_storage_capacity_guard_runtime(void) {
     printf("  LU: runtime update-capacity guard...\n");
@@ -1267,6 +1409,8 @@ int main(void) {
     test_markowitz_reserved_row_regression();
     test_ge_identity_lrow_regression();
     test_markowitz_numeric_identity_full_retry();
+    test_lu_btf_symbolic_blocks();
+    test_strict_dispatch_skips_numeric_full_retry();
     test_supernode_cost_gate_skip_regression();
     test_lu_update_pivot_threshold_adaptive();
     test_identity_sep_retry_lane_policy();

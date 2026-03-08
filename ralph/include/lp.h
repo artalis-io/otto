@@ -448,6 +448,8 @@ typedef struct {
     int sym_num_identity;    /* Cached identity column count */
     int sym_k;               /* Cached structural column count (m - num_identity) */
     uint64_t sym_fingerprint;    /* FNV-1a hash of basis sparsity pattern */
+    int sym_factorization_type;  /* LP_GLPK_BFCP_FACTORIZATION_* */
+    int sym_btf_blocks;          /* Structural SCC block count for BTF mode */
     /* sym uses ws_is_identity, ws_identity_row, ws_identity_val, ws_col_order, ws_col_order_inv */
 
     /* Sparse Markowitz LU */
@@ -1038,6 +1040,7 @@ typedef struct SimplexSolver {
     double lu_pivot_tol_override; /* <=0 => use LU default */
     double lu_growth_guard_override; /* <=0 => use default growth threshold */
     int lu_strict_lane_active;  /* 1 = strict LU/BFCP dispatch lane active */
+    int lu_strict_prefer_dense_ge_numeric; /* 1 = strict lane skips Markowitz */
     int lu_strict_allow_supernode_lane;      /* 0 disables Ralph supernode lane */
     int lu_strict_allow_symbolic_full_retry; /* 0 disables full-structural sparse retry */
     int lu_strict_allow_top_level_dense_fallback; /* 0 disables lu_factorize dense fallback */

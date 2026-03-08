@@ -23,6 +23,7 @@ void lp_glpk_strict_bfcp_plan_init(LPGLPKStrictBFCPPlan *plan) {
     plan->effective_factorization = LP_GLPK_BFCP_FACTORIZATION_LUF;
     plan->effective_backend = LP_GLPK_BFCP_BACKEND_LUF_FT;
     plan->use_btf = 0;
+    plan->prefer_dense_ge_numeric = 0;
     plan->allow_supernode_lane = 1;
     plan->allow_symbolic_full_retry = 1;
     plan->allow_top_level_dense_fallback = 1;
@@ -46,6 +47,7 @@ int lp_glpk_strict_bfcp_build_plan(const LPGLPKStrictBFCPRequest *req,
     plan->effective_factorization = factorization;
     plan->effective_backend = backend;
     plan->use_btf = (factorization == LP_GLPK_BFCP_FACTORIZATION_BTF) ? 1 : 0;
+    plan->prefer_dense_ge_numeric = (backend == LP_GLPK_BFCP_BACKEND_CBG) ? 1 : 0;
 
     if (req->strict_mode) {
         plan->strict_lane_active = 1;

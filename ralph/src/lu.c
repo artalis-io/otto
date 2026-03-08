@@ -74,6 +74,11 @@ static int lu_glpk_strict_mode(const LUFactorization *lu) {
     return lp_glpk_strict_mode_enabled(lu->owner->glpk_strict_mode);
 }
 
+static int lu_strict_lane_active(const LUFactorization *lu) {
+    if (!lu || !lu->owner) return 0;
+    return lu->owner->lu_strict_lane_active ? 1 : 0;
+}
+
 static int lu_strict_allow_top_level_dense_fallback(const LUFactorization *lu) {
     if (!lu || !lu->owner) return 1;
     return lu->owner->lu_strict_allow_top_level_dense_fallback ? 1 : 0;
@@ -687,6 +692,7 @@ void lu_free(LUFactorization *lu) {
 /* External sparse factorization (from lu_sparse.c) */
 int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B);
 int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B);
+int lu_factorize_sparse_strict_dispatch(LUFactorization *lu, const SparseMatrix *B);
 
 /* ============================================================================
  * Main LU Factorization Entry Point
@@ -706,8 +712,11 @@ int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
     lu->last_refactor_trigger_reason = LP_BFCP_REFACTOR_REASON_NONE;
     lp_telemetry_prepare_lu_factorize(lu, B);
 
-    /* Try efficient sparse factorization first */
-    int result = lu_factorize_sparse_efficient(lu, B);
+    /* Try sparse factorization first. Strict GLPK-like lane uses a dedicated
+     * one-shot dispatch path rather than the adaptive default sparse retries. */
+    int result = lu_strict_lane_active(lu)
+        ? lu_factorize_sparse_strict_dispatch(lu, B)
+        : lu_factorize_sparse_efficient(lu, B);
     if (result == 0) {
         build_csr_transpose(lu);  /* W1: CSR transposes for sparse BTRAN */
         lu_set_failure(lu, LU_FAIL_NONE);

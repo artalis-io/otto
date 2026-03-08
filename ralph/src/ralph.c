@@ -2226,6 +2226,8 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
             model->lp_solver->use_dual_steepest_edge = model->dual_steepest_edge;
         model->lp_solver->lu_supernode = model->lu_supernode;
         model->lp_solver->lu_strict_lane_active = strict_bfcp_plan.strict_lane_active;
+        model->lp_solver->lu_strict_prefer_dense_ge_numeric =
+            strict_bfcp_plan.prefer_dense_ge_numeric;
         model->lp_solver->lu_strict_allow_supernode_lane =
             strict_bfcp_plan.allow_supernode_lane;
         model->lp_solver->lu_strict_allow_symbolic_full_retry =

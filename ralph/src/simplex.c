@@ -5521,6 +5521,7 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->lu_pivot_tol_override = 0.0;
     solver->lu_growth_guard_override = 0.0;
     solver->lu_strict_lane_active = 0;
+    solver->lu_strict_prefer_dense_ge_numeric = 0;
     solver->lu_strict_allow_supernode_lane = 1;
     solver->lu_strict_allow_symbolic_full_retry = 1;
     solver->lu_strict_allow_top_level_dense_fallback = 1;
