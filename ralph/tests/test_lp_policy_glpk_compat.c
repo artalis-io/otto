@@ -224,10 +224,10 @@ static void test_bfcp_runtime_support_helpers(void) {
                 "bfcp helper: defaults keep unsupported parameter null");
 
     cfg.glpk_bfcp_factorization = LP_GLPK_BFCP_FACTORIZATION_BTF;
-    ASSERT_INT_EQ(lp_policy_glpk_bfcp_supports_current_runtime(&cfg, &unsupported), 0,
-                  "bfcp helper: btf unsupported");
-    ASSERT_TRUE(strcmp(unsupported, "glpk_bfcp_factorization") == 0,
-                "bfcp helper: btf factorization name");
+    ASSERT_INT_EQ(lp_policy_glpk_bfcp_supports_current_runtime(&cfg, &unsupported), 1,
+                  "bfcp helper: btf supported");
+    ASSERT_TRUE(unsupported == NULL,
+                "bfcp helper: btf keeps unsupported parameter null");
 
     lp_policy_glpk_compat_init(&cfg);
     cfg.glpk_bfcp_pivot_limit = 4;

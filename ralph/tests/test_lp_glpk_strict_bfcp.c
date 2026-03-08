@@ -34,6 +34,8 @@ int main(void) {
          "strict bfcp: default plan keeps supernode lane");
     TEST(plan.allow_symbolic_full_retry == 1,
          "strict bfcp: default plan keeps symbolic full retry");
+    TEST(plan.prefer_dense_ge_numeric == 0,
+         "strict bfcp: default plan prefers Markowitz");
     TEST(plan.allow_top_level_dense_fallback == 1,
          "strict bfcp: default plan keeps dense fallback");
 
@@ -50,6 +52,8 @@ int main(void) {
          "strict bfcp: strict plan keeps backend");
     TEST(plan.use_btf == 0,
          "strict bfcp: strict luf plan not btf");
+    TEST(plan.prefer_dense_ge_numeric == 0,
+         "strict bfcp: strict cgr-like plan keeps Markowitz");
     TEST(plan.allow_supernode_lane == 0,
          "strict bfcp: strict plan disables supernode");
     TEST(plan.allow_symbolic_full_retry == 0,
@@ -65,6 +69,8 @@ int main(void) {
          "strict bfcp: strict btf plan marks btf");
     TEST(plan.effective_backend == LP_GLPK_BFCP_BACKEND_CBG,
          "strict bfcp: strict btf plan keeps backend");
+    TEST(plan.prefer_dense_ge_numeric == 1,
+         "strict bfcp: strict cbg-like plan prefers dense ge");
 
     printf("Passed %d/%d glpk-strict-bfcp tests\n", pass, total);
     return (pass == total) ? 0 : 1;

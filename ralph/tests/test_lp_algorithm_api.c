@@ -1020,9 +1020,8 @@ static void test_glpk_bfcp_unsupported_extra_control_reports_not_available(void)
     ralph_test_free(model);
 }
 
-static void test_glpk_bfcp_btf_reports_not_available(void) {
+static void test_glpk_bfcp_btf_solves_cleanly(void) {
     RalphModel *model = build_small_lp();
-    RalphAPIError err;
 
     ASSERT_TRUE(model != NULL, "glpk-bfcp-btf: model created");
     if (!model) return;
@@ -1035,16 +1034,10 @@ static void test_glpk_bfcp_btf_reports_not_available(void) {
                                          (int)RALPH_LP_GLPK_BFCP_FACTORIZATION_BTF),
                   0,
                   "glpk-bfcp-btf: request btf factorization");
-    ASSERT_INT_EQ(ralph_test_optimize_lp(model), -1,
-                  "glpk-bfcp-btf: solve fails cleanly");
-    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_ERROR,
-                  "glpk-bfcp-btf: status is error");
-    ASSERT_INT_EQ(ralph_lp_get_last_error((const RalphLPModel *)model, &err), 0,
-                  "glpk-bfcp-btf: last error available");
-    ASSERT_INT_EQ((int)err.domain, (int)RALPH_ERROR_DOMAIN_STATE,
-                  "glpk-bfcp-btf: last error domain");
-    ASSERT_INT_EQ((int)err.code, (int)RALPH_ERROR_CODE_NOT_AVAILABLE,
-                  "glpk-bfcp-btf: last error code");
+    ASSERT_INT_EQ(ralph_test_optimize_lp(model), 0,
+                  "glpk-bfcp-btf: solve succeeds");
+    ASSERT_INT_EQ((int)ralph_test_get_status(model), (int)RALPH_STATUS_OPTIMAL,
+                  "glpk-bfcp-btf: status optimal");
 
     ralph_test_free(model);
 }
@@ -1064,7 +1057,7 @@ int main(void) {
     test_glpk_basis_ini_requires_staged_basis();
     test_glpk_basis_ini_accepts_staged_basis();
     test_glpk_basis_bib_reports_not_available();
-    test_glpk_bfcp_btf_reports_not_available();
+    test_glpk_bfcp_btf_solves_cleanly();
     test_glpk_bfcp_unsupported_extra_control_reports_not_available();
 
     printf("Passed %d/%d tests\n", tests_passed, tests_run);

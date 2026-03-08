@@ -14,6 +14,7 @@
 #include <math.h>
 #include <limits.h>
 #include "lp.h"
+#include "lp_policy_glpk_compat.h"
 #include "lp_glpk_strict.h"
 #include "lu_supernode.h"
 
@@ -1638,6 +1639,13 @@ static void free_lp_basis_structure(LPBasisStructure *lp) {
 #define FNV_OFFSET_BASIS 0xcbf29ce484222325ULL
 #define FNV_PRIME         0x100000001b3ULL
 
+static int lu_requested_factorization_type(const LUFactorization *lu) {
+    if (!lu || !lu->owner) return LP_GLPK_BFCP_FACTORIZATION_LUF;
+    return (lu->owner->lu_factorization_type == LP_GLPK_BFCP_FACTORIZATION_BTF)
+        ? LP_GLPK_BFCP_FACTORIZATION_BTF
+        : LP_GLPK_BFCP_FACTORIZATION_LUF;
+}
+
 /* Augmenting-path matcher used by symbolic identity/structural split.
  * row_used[row] == 1 means identity row (forbidden for structural matching). */
 static int symbolic_match_col(const SparseMatrix *B,
@@ -1662,6 +1670,342 @@ static int symbolic_match_col(const SparseMatrix *B,
     return 0;
 }
 
+typedef struct {
+    int k;
+    const int *adj_start;
+    const int *adj_list;
+    int *disc;
+    int *low;
+    int *stack;
+    unsigned char *on_stack;
+    int *node_scc;
+    int next_disc;
+    int stack_top;
+    int scc_count;
+} BTFSCCContext;
+
+static int btf_scc_visit(BTFSCCContext *ctx, int v) {
+    ctx->disc[v] = ctx->next_disc;
+    ctx->low[v] = ctx->next_disc;
+    ctx->next_disc++;
+    ctx->stack[ctx->stack_top++] = v;
+    ctx->on_stack[v] = 1;
+
+    for (int p = ctx->adj_start[v]; p < ctx->adj_start[v + 1]; p++) {
+        int w = ctx->adj_list[p];
+        if (ctx->disc[w] < 0) {
+            if (btf_scc_visit(ctx, w) != 0) return -1;
+            if (ctx->low[w] < ctx->low[v]) ctx->low[v] = ctx->low[w];
+        } else if (ctx->on_stack[w] && ctx->disc[w] < ctx->low[v]) {
+            ctx->low[v] = ctx->disc[w];
+        }
+    }
+
+    if (ctx->low[v] == ctx->disc[v]) {
+        for (;;) {
+            int w;
+            if (ctx->stack_top <= 0) return -1;
+            w = ctx->stack[--ctx->stack_top];
+            ctx->on_stack[w] = 0;
+            ctx->node_scc[w] = ctx->scc_count;
+            if (w == v) break;
+        }
+        ctx->scc_count++;
+    }
+
+    return 0;
+}
+
+static int lu_symbolic_apply_btf_ordering(const SparseMatrix *B,
+                                          int m,
+                                          int k,
+                                          const int *is_identity_col,
+                                          const int *row_used,
+                                          const int *row_match_col,
+                                          int *col_order,
+                                          int *col_order_inv,
+                                          int *btf_blocks_out) {
+    int *struct_cols = NULL;
+    int *col_to_struct = NULL;
+    int *matched_row = NULL;
+    int *row_ptr = NULL;
+    int *row_cols = NULL;
+    int *row_fill = NULL;
+    int *edge_count = NULL;
+    int *adj_start = NULL;
+    int *adj_list = NULL;
+    int *seen_struct = NULL;
+    int *disc = NULL;
+    int *low = NULL;
+    int *stack = NULL;
+    unsigned char *on_stack = NULL;
+    int *node_scc = NULL;
+    int *scc_edge_count = NULL;
+    int *scc_adj_start = NULL;
+    int *scc_adj_list = NULL;
+    int *scc_indegree = NULL;
+    int *queue = NULL;
+    int *topo = NULL;
+    int *temp_order = NULL;
+    int total_edges = 0;
+    int total_scc_edges = 0;
+    int btf_blocks = 0;
+    int rc = LU_SYMBOLIC_FAIL_WORKSPACE;
+
+    if (btf_blocks_out) *btf_blocks_out = 0;
+    if (k <= 0) {
+        if (btf_blocks_out) *btf_blocks_out = 0;
+        return 0;
+    }
+
+    struct_cols = (int *)calloc((size_t)k, sizeof(int));
+    col_to_struct = (int *)calloc((size_t)m, sizeof(int));
+    matched_row = (int *)calloc((size_t)k, sizeof(int));
+    row_ptr = (int *)calloc((size_t)m + 1u, sizeof(int));
+    row_cols = (int *)calloc((size_t)B->nnz, sizeof(int));
+    row_fill = (int *)calloc((size_t)m, sizeof(int));
+    edge_count = (int *)calloc((size_t)k, sizeof(int));
+    seen_struct = (int *)calloc((size_t)k, sizeof(int));
+    disc = (int *)calloc((size_t)k, sizeof(int));
+    low = (int *)calloc((size_t)k, sizeof(int));
+    stack = (int *)calloc((size_t)k, sizeof(int));
+    on_stack = (unsigned char *)calloc((size_t)k, sizeof(unsigned char));
+    node_scc = (int *)calloc((size_t)k, sizeof(int));
+    temp_order = (int *)calloc((size_t)k, sizeof(int));
+    if (!struct_cols || !col_to_struct || !matched_row || !row_ptr || !row_cols ||
+        !row_fill || !edge_count || !seen_struct || !disc || !low || !stack ||
+        !on_stack || !node_scc || !temp_order) {
+        goto cleanup;
+    }
+
+    for (int i = 0; i < m; i++) col_to_struct[i] = -1;
+    for (int i = 0; i < k; i++) {
+        int orig_col = col_order[i];
+        struct_cols[i] = orig_col;
+        if (orig_col < 0 || orig_col >= m) {
+            rc = LU_SYMBOLIC_FAIL_INCONSISTENT_IDENTITY;
+            goto cleanup;
+        }
+        col_to_struct[orig_col] = i;
+        matched_row[i] = -1;
+        disc[i] = -1;
+        node_scc[i] = -1;
+        seen_struct[i] = -1;
+    }
+
+    for (int j = 0; j < B->ncols; j++) {
+        for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+            row_ptr[B->rowidx[p] + 1]++;
+        }
+    }
+    for (int i = 0; i < m; i++) {
+        row_ptr[i + 1] += row_ptr[i];
+    }
+    for (int j = 0; j < B->ncols; j++) {
+        for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
+            int row = B->rowidx[p];
+            row_cols[row_ptr[row] + row_fill[row]++] = j;
+        }
+    }
+
+    for (int row = 0; row < m; row++) {
+        int matched_col;
+        int struct_pos;
+        if (row_used[row]) continue;
+        matched_col = row_match_col[row];
+        if (matched_col < 0 || matched_col >= m || is_identity_col[matched_col]) {
+            rc = LU_SYMBOLIC_FAIL_UNMATCHED_NO_RESERVED;
+            goto cleanup;
+        }
+        struct_pos = col_to_struct[matched_col];
+        if (struct_pos < 0 || struct_pos >= k) {
+            rc = LU_SYMBOLIC_FAIL_INCONSISTENT_IDENTITY;
+            goto cleanup;
+        }
+        matched_row[struct_pos] = row;
+    }
+    for (int s = 0; s < k; s++) {
+        if (matched_row[s] < 0) {
+            rc = LU_SYMBOLIC_FAIL_UNMATCHED_NO_RESERVED;
+            goto cleanup;
+        }
+    }
+
+    for (int s = 0; s < k; s++) {
+        int row = matched_row[s];
+        int token = s;
+        for (int p = row_ptr[row]; p < row_ptr[row + 1]; p++) {
+            int orig_col = row_cols[p];
+            int to;
+            if (orig_col < 0 || orig_col >= m || is_identity_col[orig_col]) continue;
+            to = col_to_struct[orig_col];
+            if (to < 0 || to == s) continue;
+            if (seen_struct[to] == token) continue;
+            seen_struct[to] = token;
+            edge_count[s]++;
+            total_edges++;
+        }
+    }
+
+    adj_start = (int *)calloc((size_t)k + 1u, sizeof(int));
+    if (!adj_start) goto cleanup;
+    for (int s = 0; s < k; s++) {
+        adj_start[s + 1] = adj_start[s] + edge_count[s];
+    }
+    adj_list = (int *)calloc((size_t)(total_edges > 0 ? total_edges : 1), sizeof(int));
+    if (!adj_list) goto cleanup;
+
+    memset(edge_count, 0, (size_t)k * sizeof(int));
+    for (int s = 0; s < k; s++) {
+        int row = matched_row[s];
+        int token = s + k;
+        for (int p = row_ptr[row]; p < row_ptr[row + 1]; p++) {
+            int orig_col = row_cols[p];
+            int to;
+            if (orig_col < 0 || orig_col >= m || is_identity_col[orig_col]) continue;
+            to = col_to_struct[orig_col];
+            if (to < 0 || to == s) continue;
+            if (seen_struct[to] == token) continue;
+            seen_struct[to] = token;
+            adj_list[adj_start[s] + edge_count[s]++] = to;
+        }
+    }
+
+    {
+        BTFSCCContext ctx;
+        memset(&ctx, 0, sizeof(ctx));
+        ctx.k = k;
+        ctx.adj_start = adj_start;
+        ctx.adj_list = adj_list;
+        ctx.disc = disc;
+        ctx.low = low;
+        ctx.stack = stack;
+        ctx.on_stack = on_stack;
+        ctx.node_scc = node_scc;
+
+        for (int v = 0; v < k; v++) {
+            if (ctx.disc[v] < 0 && btf_scc_visit(&ctx, v) != 0) {
+                goto cleanup;
+            }
+        }
+        btf_blocks = ctx.scc_count;
+    }
+
+    if (btf_blocks <= 0) {
+        rc = LU_SYMBOLIC_FAIL_WORKSPACE;
+        goto cleanup;
+    }
+
+    scc_edge_count = (int *)calloc((size_t)btf_blocks, sizeof(int));
+    scc_adj_start = (int *)calloc((size_t)btf_blocks + 1u, sizeof(int));
+    scc_indegree = (int *)calloc((size_t)btf_blocks, sizeof(int));
+    queue = (int *)calloc((size_t)btf_blocks, sizeof(int));
+    topo = (int *)calloc((size_t)btf_blocks, sizeof(int));
+    if (!scc_edge_count || !scc_adj_start || !scc_indegree || !queue || !topo) {
+        goto cleanup;
+    }
+
+    for (int s = 0; s < k; s++) {
+        int src_scc = node_scc[s];
+        for (int p = adj_start[s]; p < adj_start[s + 1]; p++) {
+            int dst_scc = node_scc[adj_list[p]];
+            if (dst_scc == src_scc) continue;
+            scc_edge_count[src_scc]++;
+            total_scc_edges++;
+            scc_indegree[dst_scc]++;
+        }
+    }
+    for (int c = 0; c < btf_blocks; c++) {
+        scc_adj_start[c + 1] = scc_adj_start[c] + scc_edge_count[c];
+    }
+    scc_adj_list = (int *)calloc((size_t)(total_scc_edges > 0 ? total_scc_edges : 1), sizeof(int));
+    if (!scc_adj_list) goto cleanup;
+
+    memset(scc_edge_count, 0, (size_t)btf_blocks * sizeof(int));
+    for (int s = 0; s < k; s++) {
+        int src_scc = node_scc[s];
+        for (int p = adj_start[s]; p < adj_start[s + 1]; p++) {
+            int dst_scc = node_scc[adj_list[p]];
+            if (dst_scc == src_scc) continue;
+            scc_adj_list[scc_adj_start[src_scc] + scc_edge_count[src_scc]++] = dst_scc;
+        }
+    }
+
+    {
+        int q_head = 0;
+        int q_tail = 0;
+        int topo_n = 0;
+        for (int c = 0; c < btf_blocks; c++) {
+            if (scc_indegree[c] == 0) queue[q_tail++] = c;
+        }
+        while (q_head < q_tail) {
+            int src = queue[q_head++];
+            topo[topo_n++] = src;
+            for (int p = scc_adj_start[src]; p < scc_adj_start[src + 1]; p++) {
+                int dst = scc_adj_list[p];
+                scc_indegree[dst]--;
+                if (scc_indegree[dst] == 0) {
+                    queue[q_tail++] = dst;
+                }
+            }
+        }
+        if (topo_n != btf_blocks) {
+            rc = LU_SYMBOLIC_FAIL_WORKSPACE;
+            goto cleanup;
+        }
+    }
+
+    {
+        int out = 0;
+        for (int t = 0; t < btf_blocks; t++) {
+            int scc = topo[t];
+            for (int s = 0; s < k; s++) {
+                if (node_scc[s] == scc) {
+                    temp_order[out++] = struct_cols[s];
+                }
+            }
+        }
+        if (out != k) {
+            rc = LU_SYMBOLIC_FAIL_WORKSPACE;
+            goto cleanup;
+        }
+        for (int s = 0; s < k; s++) {
+            col_order[s] = temp_order[s];
+        }
+        for (int j = 0; j < m; j++) {
+            col_order_inv[col_order[j]] = j;
+        }
+    }
+
+    if (btf_blocks_out) *btf_blocks_out = btf_blocks;
+    rc = 0;
+
+cleanup:
+    free(struct_cols);
+    free(col_to_struct);
+    free(matched_row);
+    free(row_ptr);
+    free(row_cols);
+    free(row_fill);
+    free(edge_count);
+    free(adj_start);
+    free(adj_list);
+    free(seen_struct);
+    free(disc);
+    free(low);
+    free(stack);
+    free(on_stack);
+    free(node_scc);
+    free(scc_edge_count);
+    free(scc_adj_start);
+    free(scc_adj_list);
+    free(scc_indegree);
+    free(queue);
+    free(topo);
+    free(temp_order);
+    return rc;
+}
+
 /* Finalize symbolic plan as full-structural (k=m, no identity placement).
  * Used for both normal k=m path and symbolic-failure retry path. */
 static int lu_symbolic_finalize_full_structural(LUFactorization *lu,
@@ -1671,12 +2015,16 @@ static int lu_symbolic_finalize_full_structural(LUFactorization *lu,
     int *is_identity_col = lu->ws_is_identity;
     int *row_used = lu->ws_row_used;
     int *row_identity_col = lu->ws_row_identity_col;
+    int *row_match_col = lu->ws_row_match_col;
+    int *row_seen = lu->ws_row_seen;
     int *col_order = lu->ws_col_order;
     int *col_order_inv = lu->ws_col_order_inv;
+    int factorization_type = lu_requested_factorization_type(lu);
+    int btf_blocks = 0;
     uint64_t fingerprint = FNV_OFFSET_BASIS;
 
     if (!struct_nnz || !is_identity_col || !row_used || !row_identity_col ||
-        !col_order || !col_order_inv) {
+        !row_match_col || !row_seen || !col_order || !col_order_inv) {
         return -1;
     }
 
@@ -1696,7 +2044,8 @@ static int lu_symbolic_finalize_full_structural(LUFactorization *lu,
     if (lu->sym_valid &&
         lu->sym_fingerprint == fingerprint &&
         lu->sym_num_identity == 0 &&
-        lu->sym_k == m) {
+        lu->sym_k == m &&
+        lu->sym_factorization_type == factorization_type) {
         lp_telemetry_lu_record_symbolic_cache_hit(lu);
         return 0;
     }
@@ -1706,10 +2055,28 @@ static int lu_symbolic_finalize_full_structural(LUFactorization *lu,
         col_order[j] = j;
         col_order_inv[j] = j;
     }
+    if (factorization_type == LP_GLPK_BFCP_FACTORIZATION_BTF) {
+        for (int i = 0; i < m; i++) {
+            row_match_col[i] = -1;
+            row_seen[i] = 0;
+        }
+        for (int j = 0; j < m; j++) {
+            if (!symbolic_match_col(B, j, row_used, row_match_col, row_seen, j + 1)) {
+                return -1;
+            }
+        }
+        if (lu_symbolic_apply_btf_ordering(B, m, m, is_identity_col, row_used,
+                                           row_match_col, col_order, col_order_inv,
+                                           &btf_blocks) != 0) {
+            return -1;
+        }
+    }
     lu->sym_valid = 1;
     lu->sym_num_identity = 0;
     lu->sym_k = m;
     lu->sym_fingerprint = fingerprint;
+    lu->sym_factorization_type = factorization_type;
+    lu->sym_btf_blocks = btf_blocks;
     return 0;
 }
 
@@ -1722,6 +2089,7 @@ static int lu_symbolic_finalize_full_structural(LUFactorization *lu,
  */
 static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
     int m = lu->m;
+    int factorization_type = lu_requested_factorization_type(lu);
 
     /* Compute column nnz counts + identity/structural split */
     int *struct_nnz = lu->ws_struct_nnz;
@@ -1829,7 +2197,9 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
     }
 
     /* Check symbolic cache: if fingerprint matches, reuse previous analysis */
-    if (lu->sym_valid && lu->sym_fingerprint == fingerprint) {
+    if (lu->sym_valid &&
+        lu->sym_fingerprint == fingerprint &&
+        lu->sym_factorization_type == factorization_type) {
         lp_telemetry_lu_record_symbolic_cache_hit(lu);
         return 0;  /* Cache hit — ws arrays still valid from last call */
     }
@@ -1852,6 +2222,19 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
         }
     }
 
+    if (factorization_type == LP_GLPK_BFCP_FACTORIZATION_BTF) {
+        int btf_blocks = 0;
+        int btf_rc = lu_symbolic_apply_btf_ordering(
+            B, m, k, is_identity_col, row_used, row_match_col,
+            col_order, col_order_inv, &btf_blocks);
+        if (btf_rc != 0) {
+            return btf_rc;
+        }
+        lu->sym_btf_blocks = btf_blocks;
+    } else {
+        lu->sym_btf_blocks = 0;
+    }
+
     /* NOTE: Fill-reducing sort (sorting structural columns by nnz ascending) is
      * disabled for now. While it reduces fill-in during dense GE, it changes the
      * partial pivoting row selection, which causes numerical regressions on
@@ -1864,6 +2247,7 @@ static int lu_symbolic_analyze(LUFactorization *lu, const SparseMatrix *B) {
     lu->sym_num_identity = num_identity;
     lu->sym_k = k;
     lu->sym_fingerprint = fingerprint;
+    lu->sym_factorization_type = factorization_type;
 
     return 0;
 }
@@ -2654,7 +3038,8 @@ static int lu_factorize_markowitz(
 
 typedef enum {
     LU_NUMERIC_MODE_STANDARD = 0,
-    LU_NUMERIC_MODE_SYMBOLIC_FULL_RETRY = 1
+    LU_NUMERIC_MODE_SYMBOLIC_FULL_RETRY = 1,
+    LU_NUMERIC_MODE_STRICT_DISPATCH = 2
 } LUNumericMode;
 
 typedef enum {
@@ -2735,6 +3120,11 @@ static int lu_numeric_backend_to_basis_governor_backend(int backend) {
 static int lu_sparse_glpk_strict_mode(const LUFactorization *lu) {
     if (!lu || !lu->owner) return 0;
     return lp_glpk_strict_mode_enabled(lu->owner->glpk_strict_mode);
+}
+
+static int lu_sparse_strict_prefer_dense_ge_numeric(const LUFactorization *lu) {
+    if (!lu || !lu->owner) return 0;
+    return lu->owner->lu_strict_prefer_dense_ge_numeric ? 1 : 0;
 }
 
 static int lu_sparse_strict_allow_supernode_lane(const LUFactorization *lu) {
@@ -2850,7 +3240,9 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     int dense_ge_retry_done = 0;
     int supernode_retry_done = 0;
     int force_supernode_attempt = 0;
-    int skip_sparse_numeric = 0;
+    int strict_dispatch_mode = (mode == LU_NUMERIC_MODE_STRICT_DISPATCH);
+    int skip_sparse_numeric = strict_dispatch_mode &&
+        lu_sparse_strict_prefer_dense_ge_numeric(lu);
     int full_retry_mode = (mode == LU_NUMERIC_MODE_SYMBOLIC_FULL_RETRY);
     double t_a_struct_build_ms = 0.0;
     double t_markowitz_numeric_ms = 0.0;
@@ -2950,11 +3342,37 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
     {
         int struct_pos = 0;
         int ident_pos = k;
-        for (int i = 0; i < m; i++) {
-            if (row_is_identity[i]) {
-                row_perm[ident_pos++] = i;
-            } else {
-                row_perm[struct_pos++] = i;
+        if (lu_requested_factorization_type(lu) == LP_GLPK_BFCP_FACTORIZATION_BTF) {
+            int *matched_row_for_col = lu->ws_struct_nnz;
+            for (int i = 0; i < m; i++) matched_row_for_col[i] = -1;
+            for (int row = 0; row < m; row++) {
+                int matched_col;
+                if (row_is_identity[row]) continue;
+                matched_col = lu->ws_row_match_col[row];
+                if (matched_col >= 0 && matched_col < m) {
+                    matched_row_for_col[matched_col] = row;
+                }
+            }
+            for (int step = 0; step < k; step++) {
+                int row = matched_row_for_col[col_order[step]];
+                if (row < 0 || row >= m || row_is_identity[row]) {
+                    terminal_failure_reason_hint = LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION;
+                    NUMERIC_RETURN(-1);
+                }
+                row_perm[struct_pos++] = row;
+            }
+            for (int i = 0; i < m; i++) {
+                if (row_is_identity[i]) {
+                    row_perm[ident_pos++] = i;
+                }
+            }
+        } else {
+            for (int i = 0; i < m; i++) {
+                if (row_is_identity[i]) {
+                    row_perm[ident_pos++] = i;
+                } else {
+                    row_perm[struct_pos++] = i;
+                }
             }
         }
         if (struct_pos != k || ident_pos != m) {
@@ -3041,7 +3459,7 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
         int rc = MKZ_FAIL_NONE;
         int rc_final = MKZ_FAIL_NONE;
         int pool_mult = lu->mkz_pool_mult_hint;
-        int profile_count = 2;
+        int profile_count = strict_dispatch_mode ? 1 : 2;
         if (pool_mult < MARKOWITZ_POOL_MULT) pool_mult = MARKOWITZ_POOL_MULT;
         if (pool_mult > MARKOWITZ_POOL_MAX_MULT) pool_mult = MARKOWITZ_POOL_MAX_MULT;
 
@@ -3236,6 +3654,10 @@ static int lu_numeric_factorize(LUFactorization *lu, const SparseMatrix *B,
             mkz_circuit_note_bad_outcome(lu, mkz_fingerprint);
         } else {
             mkz_global_skip_note_reset(lu);
+        }
+
+        if (strict_dispatch_mode) {
+            NUMERIC_RETURN(-1);
         }
 
         /* Markowitz failed — reset and fall through to supernodal/dense */
@@ -3506,6 +3928,10 @@ identity_placement:
             } else {
                 lu->idsep_retry_fingerprint = mkz_fingerprint;
                 lu->idsep_retry_streak = 1;
+            }
+            if (strict_dispatch_mode) {
+                terminal_failure_reason_hint = LU_SPARSE_NUMERIC_FAIL_IDENTITY_SEPARATION;
+                NUMERIC_RETURN(-1);
             }
             retry_lane = lu_identity_sep_retry_lane_plan(
                 lu->idsep_retry_streak,
@@ -3837,6 +4263,44 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B) {
             lp_telemetry_lu_mark_numeric_full_retry_failure(lu);
         }
         lu->sym_valid = 0;  /* Invalidate on numeric failure */
+        lp_telemetry_lu_set_sparse_fallback_reason(lu, LU_SPARSE_FALLBACK_NUMERIC);
+        return -1;
+    }
+
+    lp_telemetry_lu_mark_sparse_success(lu);
+    return 0;
+}
+
+int lu_factorize_sparse_strict_dispatch(LUFactorization *lu, const SparseMatrix *B) {
+    int num_failure_reason = LU_SPARSE_NUMERIC_FAIL_NONE;
+    int num_result;
+    double t_symbolic_ms;
+    int sym_result;
+
+    if (!lu || !B) return -1;
+    if (B->nrows != B->ncols || B->nrows != lu->m) return -1;
+
+    if (lu->m < 20) {
+        lp_telemetry_lu_set_sparse_fallback_reason(lu, LU_SPARSE_FALLBACK_SMALL_MATRIX);
+        return -1;
+    }
+
+    t_symbolic_ms = lp_telemetry_timer_start();
+    sym_result = lu_symbolic_analyze(lu, B);
+    lp_telemetry_lu_record_symbolic_call_timed(lu, t_symbolic_ms);
+    if (sym_result < 0) {
+        lu->sym_valid = 0;
+        lp_telemetry_lu_mark_symbolic_failure(lu, sym_result);
+        lp_telemetry_lu_set_sparse_fallback_reason(lu, LU_SPARSE_FALLBACK_SYMBOLIC);
+        return -1;
+    }
+
+    num_result = lu_numeric_factorize(
+        lu, B, lu->sym_num_identity, lu->sym_k,
+        LU_NUMERIC_MODE_STRICT_DISPATCH,
+        &num_failure_reason);
+    if (num_result < 0) {
+        lu->sym_valid = 0;
         lp_telemetry_lu_set_sparse_fallback_reason(lu, LU_SPARSE_FALLBACK_NUMERIC);
         return -1;
     }

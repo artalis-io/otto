@@ -64,10 +64,6 @@ int lp_policy_glpk_bfcp_supports_current_runtime(const LPGLPKCompatConfig *cfg,
                                                  const char **unsupported_param_out) {
     if (unsupported_param_out) *unsupported_param_out = NULL;
     if (!cfg) return 0;
-    if (cfg->glpk_bfcp_factorization == LP_GLPK_BFCP_FACTORIZATION_BTF) {
-        if (unsupported_param_out) *unsupported_param_out = "glpk_bfcp_factorization";
-        return 0;
-    }
     if (cfg->glpk_bfcp_pivot_limit >= 0) {
         if (unsupported_param_out) *unsupported_param_out = "glpk_bfcp_pivot_limit";
         return 0;

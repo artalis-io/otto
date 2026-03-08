@@ -19,6 +19,7 @@ typedef struct {
     int effective_factorization;        /* LP_GLPK_BFCP_FACTORIZATION_* */
     int effective_backend;              /* LP_GLPK_BFCP_BACKEND_* */
     int use_btf;                        /* 1 when BTF factorization requested */
+    int prefer_dense_ge_numeric;        /* 1 when strict lane should skip Markowitz */
     int allow_supernode_lane;           /* 0 in strict lane */
     int allow_symbolic_full_retry;      /* 0 in strict lane */
     int allow_top_level_dense_fallback; /* 1 while strict lane still uses dense safety fallback */
