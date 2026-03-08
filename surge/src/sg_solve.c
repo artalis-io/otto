@@ -731,24 +731,32 @@ static int sg_try_keep_better(SGContext *ctx, SGRouteSolution *sol, SGRouteSolut
 
 static ARStatus sg_route_construct_initial_solution(SGContext *ctx, SGRouteSolution *sol) {
     ARStatus status;
+    SGInstanceFeatures features;
+    SGConstructMethod order[SG_CONSTRUCT_COUNT];
+    int m;
 
     /* Population mode: single method for per-thread diversity */
     if (ctx->construct_method < SG_CONSTRUCT_COUNT) {
-        return sg_construct_by_method(ctx, sol, ctx->construct_method);
+        status = sg_construct_by_method(ctx, sol, ctx->construct_method);
+        if (status == AR_STATUS_OK)
+            sg_construct_try_merge_routes(ctx, sol);
+        return status;
     }
 
-    /* Default multi-trial: try all methods, keep lexicographic best */
+    /* Compute instance features and determine strategy ordering */
+    sg_compute_instance_features(ctx, &features);
+    sg_feature_strategy_order(&features, order);
 
-    /* Attempt 1: regret-3 */
-    status = sg_route_repair_fill_regret(ctx, sol, 3, 0.0);
+    /* Run first strategy as baseline */
+    status = sg_construct_by_method(ctx, sol, order[0]);
     if (status != AR_STATUS_OK) return status;
 
-    /* Attempt 2: TW-sorted greedy */
-    {
+    /* Try remaining strategies, keep lexicographic best */
+    for (m = 1; m < SG_CONSTRUCT_COUNT; m++) {
         SGRouteSolution alt;
         status = sg_route_solution_init(ctx, &alt);
         if (status == AR_STATUS_OK) {
-            status = sg_route_construct_tw_sorted(ctx, &alt);
+            status = sg_construct_by_method(ctx, &alt, order[m]);
             if (status != AR_STATUS_OK) {
                 sg_route_solution_reset(&alt);
             } else {
@@ -757,47 +765,8 @@ static ARStatus sg_route_construct_initial_solution(SGContext *ctx, SGRouteSolut
         }
     }
 
-    /* Attempt 3: Solomon I1 */
-    {
-        SGRouteSolution i1;
-        status = sg_route_solution_init(ctx, &i1);
-        if (status == AR_STATUS_OK) {
-            status = sg_route_construct_solomon_i1(ctx, &i1);
-            if (status != AR_STATUS_OK) {
-                sg_route_solution_reset(&i1);
-            } else {
-                sg_try_keep_better(ctx, sol, &i1);
-            }
-        }
-    }
-
-    /* Attempt 4: Sweep CFRS */
-    {
-        SGRouteSolution sweep;
-        status = sg_route_solution_init(ctx, &sweep);
-        if (status == AR_STATUS_OK) {
-            status = sg_construct_sweep_cfrs(ctx, &sweep);
-            if (status != AR_STATUS_OK) {
-                sg_route_solution_reset(&sweep);
-            } else {
-                sg_try_keep_better(ctx, sol, &sweep);
-            }
-        }
-    }
-
-    /* Attempt 5: K-means TW */
-    {
-        SGRouteSolution km;
-        status = sg_route_solution_init(ctx, &km);
-        if (status == AR_STATUS_OK) {
-            status = sg_construct_kmeans_tw(ctx, &km);
-            if (status != AR_STATUS_OK) {
-                sg_route_solution_reset(&km);
-            } else {
-                sg_try_keep_better(ctx, sol, &km);
-            }
-        }
-    }
+    /* Post-construction route merging */
+    sg_construct_try_merge_routes(ctx, sol);
 
     return AR_STATUS_OK;
 }

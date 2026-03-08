@@ -16676,6 +16676,256 @@ static void test_insertion_cache_deterministic(void) {
     sg_free(ctx2);
 }
 
+/* ===== S24: Instance-Adaptive Construction tests ===== */
+
+/* Helper: create a clustered instance (requests in a tight spatial group) */
+static SGContext *make_clustered_instance(uint8_t tight_tw) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    int i;
+    add_depot_with_location(ctx, &depot, 40.0, 50.0);
+    /* 20 requests in a tight cluster around (45, 55) with demand 10 */
+    for (i = 0; i < 20; i++) {
+        double x = 42.0 + (i % 5) * 1.5;
+        double y = 52.0 + (i / 5) * 1.5;
+        int32_t early = tight_tw ? (i * 200) : 0;
+        int32_t late = tight_tw ? (i * 200 + 600) : 57600;
+        add_delivery_request(ctx, x, y, early, late, 600, 10.0);
+    }
+    /* 4 vehicles, capacity 60, wide shift */
+    for (i = 0; i < 4; i++)
+        add_vehicle_with_depot(ctx, depot, 0, 57600, 60.0);
+    return ctx;
+}
+
+/* Helper: create a random-spread instance with high spatial CV.
+   Place points at widely varying distances from centroid: some near center,
+   some at edges of a large area. This gives stddev/mean > 0.6. */
+static SGContext *make_random_instance(uint8_t tight_tw) {
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    int i;
+    /* Distant corner positions to maximize distance variance */
+    static const double pos[][2] = {
+        {5.0, 5.0}, {95.0, 95.0}, {5.0, 95.0}, {95.0, 5.0},   /* far corners */
+        {50.0, 50.0}, {50.0, 51.0}, {51.0, 50.0}, {49.0, 50.0},/* near center */
+        {5.0, 50.0}, {95.0, 50.0}, {50.0, 5.0}, {50.0, 95.0},  /* far edges */
+        {48.0, 48.0}, {52.0, 52.0}, {30.0, 70.0}, {70.0, 30.0},/* mixed */
+        {10.0, 10.0}, {90.0, 90.0}, {10.0, 90.0}, {90.0, 10.0} /* far corners 2 */
+    };
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+    for (i = 0; i < 20; i++) {
+        int32_t early = tight_tw ? (i * 150) : 0;
+        int32_t late = tight_tw ? (i * 150 + 500) : 57600;
+        add_delivery_request(ctx, pos[i][0], pos[i][1], early, late, 600, 10.0);
+    }
+    for (i = 0; i < 5; i++)
+        add_vehicle_with_depot(ctx, depot, 0, 57600, 60.0);
+    return ctx;
+}
+
+static void test_instance_features_clustered(void) {
+    SGContext *ctx = make_clustered_instance(0);
+    SGInstanceFeatures feat;
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    sg_compute_instance_features(ctx, &feat);
+    /* Clustered: low spatial_cv */
+    assert(feat.is_clustered == 1);
+    assert(feat.spatial_cv < SG_CLUSTER_THRESHOLD);
+    sg_free(ctx);
+}
+
+static void test_instance_features_random(void) {
+    SGContext *ctx = make_random_instance(0);
+    SGInstanceFeatures feat;
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    sg_compute_instance_features(ctx, &feat);
+    /* Random: high spatial_cv */
+    assert(feat.is_clustered == 0);
+    assert(feat.spatial_cv >= SG_CLUSTER_THRESHOLD);
+    sg_free(ctx);
+}
+
+static void test_instance_features_tight_tw(void) {
+    SGContext *ctx = make_random_instance(1);
+    SGInstanceFeatures feat;
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    sg_compute_instance_features(ctx, &feat);
+    /* Tight TWs */
+    assert(feat.is_tight_tw == 1);
+    assert(feat.tw_tightness < SG_TIGHT_TW_THRESHOLD);
+    sg_free(ctx);
+}
+
+static void test_cluster_tw_check_no_split(void) {
+    /* 5 compatible requests with non-overlapping but sequential TWs */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot, reqs[5];
+    int i;
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    for (i = 0; i < 5; i++) {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = 5.0;
+        assert(sg_task_set_location(ctx, task, 10.0 + i * 5.0, 10.0) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, i * 3600, (i + 1) * 3600) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 60) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+        reqs[i] = req;
+    }
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+
+    /* All 5 should fit */
+    assert(sg_cluster_tw_check(ctx, reqs, 5, 0) == 5);
+    sg_free(ctx);
+}
+
+static void test_cluster_tw_check_split(void) {
+    /* 5 requests where accumulated service + travel exceeds time windows.
+       Locations are far apart (100 units), service is 60s each, windows are
+       only 30s wide and spaced 80s apart. By request 2, the cursor from
+       service + travel will overshoot the window. */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot, reqs[5];
+    int i;
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    for (i = 0; i < 5; i++) {
+        uint32_t req = sg_add_request(ctx);
+        uint32_t task = sg_add_task(ctx, SG_TASK_DELIVERY);
+        double demand = 5.0;
+        /* TW: [0,30], [80,110], [160,190], [240,270], [320,350]
+           Window width 30, gap 80. Service 60 + travel 100 = 160 per hop.
+           After req 0: cursor = 0 + 60 = 60.
+           Req 1: cursor = 60 + 100(travel) = 160, but late=110 → SPLIT at i=1 */
+        int32_t early = i * 80;
+        int32_t late  = i * 80 + 30;
+        assert(sg_task_set_location(ctx, task, 10.0 + i * 100.0, 10.0) == SG_STATUS_OK);
+        assert(sg_task_set_time_window(ctx, task, early, late) == SG_STATUS_OK);
+        assert(sg_task_set_service_seconds(ctx, task, 60) == SG_STATUS_OK);
+        assert(sg_task_set_demand(ctx, task, &demand, 1) == SG_STATUS_OK);
+        assert(sg_request_bind_delivery_task(ctx, req, task) == SG_STATUS_OK);
+        reqs[i] = req;
+    }
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+
+    /* service(60) + travel(100) = 160 > gap(80), so split must occur */
+    {
+        uint32_t split = sg_cluster_tw_check(ctx, reqs, 5, 0);
+        assert(split < 5);  /* Must split somewhere before all 5 */
+    }
+    sg_free(ctx);
+}
+
+static void test_improved_lower_bound(void) {
+    /* Instance where service times tighten the TW clique bound vs naive.
+       Requests have overlapping but distinct TWs. Without deduction, the naive
+       sweep groups them all together (1 vehicle). With avg_service deduction,
+       the adjusted late times cause earlier splits → more groups.
+
+       Setup: 6 requests with staggered TWs [0,3000], [500,3500], ..., [2500,5500].
+       Each has 600s service. Requests are nearby (low travel).
+       Naive: all early_i <= min_late of prior group → 1 group.
+       With deduction ~600: adj_late = late - 600, so [0,2400], [500,2900], ...
+       The min adj_late in group shrinks faster, causing earlier splits. */
+    SGContext *ctx = make_config(100, 42);
+    uint32_t depot;
+    int i;
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+
+    for (i = 0; i < 6; i++) {
+        int32_t early = i * 500;
+        int32_t late  = i * 500 + 3000;
+        add_delivery_request(ctx, 1.0 + i * 0.1, 1.0, early, late, 600, 5.0);
+    }
+    for (i = 0; i < 6; i++)
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100.0);
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+
+    {
+        uint32_t lb = sg_estimate_min_vehicles(ctx);
+        /* With service-adjusted bound, should be >= 2.
+           Naive sweep: early_i ≤ 3000 for all → 1 group.
+           Adjusted: deduction ~600, adj_late starts at 2400, gets updated to
+           min(2400, 2900, ...) which stays at 2400. When early=2500 > adj_late=2400,
+           a split occurs → groups2 >= 2. */
+        assert(lb >= 2);
+    }
+    sg_free(ctx);
+}
+
+static void test_route_merging(void) {
+    /* Create a solved instance with some small routes, verify merging reduces them */
+    SGContext *ctx = make_config(10, 42);
+    uint32_t depot;
+    int i;
+    SGRouteSolution sol;
+    add_depot_with_location(ctx, &depot, 50.0, 50.0);
+
+    /* 8 requests in a tight area with wide TWs - should be mergeable */
+    for (i = 0; i < 8; i++) {
+        add_delivery_request(ctx, 50.0 + i * 2.0, 50.0, 0, 86400, 60, 5.0);
+    }
+    for (i = 0; i < 8; i++)
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 50.0);
+
+    assert(sg_prepare_travel(ctx) == SG_STATUS_OK);
+    assert(sg_route_solution_init(ctx, &sol) == AR_STATUS_OK);
+    sg_scratch_init(ctx);
+
+    /* Construct with Solomon I1 (tends to create more short routes) then merge */
+    (void)sg_route_construct_solomon_i1(ctx, &sol);
+    {
+        uint32_t before_vehicles = sol.vehicles_used;
+        sg_construct_try_merge_routes(ctx, &sol);
+        /* Merging should not increase vehicles */
+        assert(sol.vehicles_used <= before_vehicles);
+    }
+
+    sg_scratch_free(ctx);
+    sg_route_solution_reset(&sol);
+    sg_free(ctx);
+}
+
+static void test_strategy_order_clustered(void) {
+    SGInstanceFeatures feat;
+    SGConstructMethod order[SG_CONSTRUCT_COUNT];
+
+    /* Clustered + tight TW → I1 first */
+    feat.spatial_cv = 0.3;
+    feat.tw_tightness = 0.08;
+    feat.is_clustered = 1;
+    feat.is_tight_tw = 1;
+    sg_feature_strategy_order(&feat, order);
+    assert(order[0] == SG_CONSTRUCT_SOLOMON_I1);
+
+    /* Clustered + wide TW → K-means first */
+    feat.spatial_cv = 0.3;
+    feat.tw_tightness = 0.5;
+    feat.is_clustered = 1;
+    feat.is_tight_tw = 0;
+    sg_feature_strategy_order(&feat, order);
+    assert(order[0] == SG_CONSTRUCT_KMEANS_TW);
+
+    /* Random + tight TW → TW-sorted first */
+    feat.spatial_cv = 0.8;
+    feat.tw_tightness = 0.08;
+    feat.is_clustered = 0;
+    feat.is_tight_tw = 1;
+    sg_feature_strategy_order(&feat, order);
+    assert(order[0] == SG_CONSTRUCT_TW_SORTED);
+
+    /* Random + wide TW → Regret first */
+    feat.spatial_cv = 0.8;
+    feat.tw_tightness = 0.5;
+    feat.is_clustered = 0;
+    feat.is_tight_tw = 0;
+    sg_feature_strategy_order(&feat, order);
+    assert(order[0] == SG_CONSTRUCT_REGRET3);
+}
+
 /* ===== main ===== */
 
 int main(void) {
@@ -17167,6 +17417,16 @@ int main(void) {
     RUN_TEST(test_sweep_cfrs_qualifications);
     RUN_TEST(test_cfrs_with_frozen_requests);
 
+    /* S24: Instance-Adaptive Construction */
+    RUN_TEST(test_instance_features_clustered);
+    RUN_TEST(test_instance_features_random);
+    RUN_TEST(test_instance_features_tight_tw);
+    RUN_TEST(test_cluster_tw_check_no_split);
+    RUN_TEST(test_cluster_tw_check_split);
+    RUN_TEST(test_improved_lower_bound);
+    RUN_TEST(test_route_merging);
+    RUN_TEST(test_strategy_order_clustered);
+
     /* Phase 2: Timing Segment Concatenation */
     RUN_TEST(test_seg_init_single_timing);
     RUN_TEST(test_seg_concat_timing_no_wait);
@@ -17224,9 +17484,9 @@ int main(void) {
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 441);
+    assert(tests_run == 449);
 #else
-    assert(tests_run == 422);
+    assert(tests_run == 430);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }
