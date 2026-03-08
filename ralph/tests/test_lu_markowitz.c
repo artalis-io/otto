@@ -1243,12 +1243,16 @@ static void test_lu_backend_policy_runtime(void) {
                   "lu backend policy runtime: luf_ft selected");
     ASSERT_INT_EQ(lu->use_ft_updates, 1,
                   "lu backend policy runtime: luf_ft uses FT updates");
+    ASSERT_INT_EQ(lu->update_backend, LU_UPDATE_BACKEND_FT,
+                  "lu backend policy runtime: luf_ft backend is FT");
 
     lu_apply_backend_policy(lu, LP_LU_BACKEND_POLICY_CBG);
     ASSERT_INT_EQ(lu->backend_policy, LP_LU_BACKEND_POLICY_CBG,
                   "lu backend policy runtime: cbg selected");
     ASSERT_INT_EQ(lu->use_ft_updates, 0,
                   "lu backend policy runtime: cbg uses ETA updates");
+    ASSERT_INT_EQ(lu->update_backend, LU_UPDATE_BACKEND_BG_COMPAT,
+                  "lu backend policy runtime: cbg backend is bg-compat");
     ASSERT(lu->max_updates < luf_updates,
            "lu backend policy runtime: cbg lowers update budget");
     ASSERT(lu->pivot_tol > luf_pivot_tol,
@@ -1261,6 +1265,8 @@ static void test_lu_backend_policy_runtime(void) {
                   "lu backend policy runtime: cgr selected");
     ASSERT_INT_EQ(lu->use_ft_updates, 1,
                   "lu backend policy runtime: cgr uses FT updates");
+    ASSERT_INT_EQ(lu->update_backend, LU_UPDATE_BACKEND_FT,
+                  "lu backend policy runtime: default cgr backend stays FT");
     ASSERT(lu->max_updates > luf_updates,
            "lu backend policy runtime: cgr raises update budget");
     ASSERT(lu->pivot_tol < luf_pivot_tol,
@@ -1280,6 +1286,42 @@ static void test_lu_backend_policy_runtime(void) {
            "lu backend policy runtime: telemetry cgr selection counted");
     ASSERT_INT_EQ(lu->telemetry.backend_policy_last, LP_LU_BACKEND_POLICY_LUF_FT,
                   "lu backend policy runtime: telemetry last policy tracks fallback");
+
+    lu_free(lu);
+}
+
+/* ============================================================================
+ * Test 21: Strict backend policy remaps CGR off the FT update lane
+ * ============================================================================ */
+static void test_lu_strict_backend_policy_runtime(void) {
+    printf("  LU: strict backend policy update-lane mapping...\n");
+
+    LUFactorization *lu = lu_create(400);
+    SimplexSolver owner;
+
+    ASSERT(lu != NULL, "lu strict backend runtime: lu_create");
+    if (!lu) return;
+
+    memset(&owner, 0, sizeof(owner));
+    owner.glpk_strict_mode = 1;
+    owner.lu_strict_lane_active = 1;
+    lu->owner = &owner;
+
+    lu_apply_backend_policy(lu, LP_LU_BACKEND_POLICY_CBG);
+    ASSERT_INT_EQ(lu->backend_policy, LP_LU_BACKEND_POLICY_CBG,
+                  "lu strict backend runtime: cbg selected");
+    ASSERT_INT_EQ(lu->use_ft_updates, 0,
+                  "lu strict backend runtime: cbg leaves FT lane");
+    ASSERT_INT_EQ(lu->update_backend, LU_UPDATE_BACKEND_BG_COMPAT,
+                  "lu strict backend runtime: cbg backend is bg-compat");
+
+    lu_apply_backend_policy(lu, LP_LU_BACKEND_POLICY_CGR);
+    ASSERT_INT_EQ(lu->backend_policy, LP_LU_BACKEND_POLICY_CGR,
+                  "lu strict backend runtime: cgr selected");
+    ASSERT_INT_EQ(lu->use_ft_updates, 0,
+                  "lu strict backend runtime: strict cgr leaves FT lane");
+    ASSERT_INT_EQ(lu->update_backend, LU_UPDATE_BACKEND_GR_COMPAT,
+                  "lu strict backend runtime: strict cgr backend is gr-compat");
 
     lu_free(lu);
 }
@@ -1337,7 +1379,57 @@ cleanup:
 }
 
 /* ============================================================================
- * Test 22: Runtime update limit is bounded by allocated LU update storage
+ * Test 22: Strict CGR update path should use non-FT compatibility storage
+ * ============================================================================ */
+static void test_lu_strict_cgr_update_path_telemetry(void) {
+    printf("  LU: strict cgr update-path telemetry...\n");
+
+    const int m = 32;
+    double *A = (double *)calloc((size_t)m * m, sizeof(double));
+    SparseMatrix *B = NULL;
+    LUFactorization *lu = NULL;
+    double *entering_col = NULL;
+    SimplexSolver owner;
+
+    for (int i = 0; i < m; i++) A[i * m + i] = 1.0;
+    B = dense_to_csc(A, m, m);
+    lu = lu_create(m);
+    ASSERT(lu != NULL, "lu strict cgr update telemetry: lu_create");
+    if (!lu) goto cleanup;
+
+    memset(&owner, 0, sizeof(owner));
+    owner.glpk_strict_mode = 1;
+    owner.lu_strict_lane_active = 1;
+    lu->owner = &owner;
+
+    entering_col = (double *)calloc((size_t)m, sizeof(double));
+    ASSERT(entering_col != NULL, "lu strict cgr update telemetry: entering col alloc");
+    if (!entering_col) goto cleanup;
+    for (int i = 0; i < m; i++) entering_col[i] = 1.0;
+
+    lu_apply_backend_policy(lu, LP_LU_BACKEND_POLICY_CGR);
+    ASSERT_INT_EQ(lu_factorize(lu, B), 0,
+                  "lu strict cgr update telemetry: factorize");
+    {
+        int eta_before = lu->telemetry.update_path_eta;
+        int ft_before = lu->telemetry.update_path_ft;
+        ASSERT_INT_EQ(lu_update(lu, 0, entering_col), 0,
+                      "lu strict cgr update telemetry: update");
+        ASSERT(lu->telemetry.update_path_eta > eta_before,
+               "lu strict cgr update telemetry: eta path counted");
+        ASSERT_INT_EQ(lu->telemetry.update_path_ft, ft_before,
+                      "lu strict cgr update telemetry: ft path unchanged");
+    }
+
+cleanup:
+    free(entering_col);
+    lu_free(lu);
+    free_csc(B);
+    free(A);
+}
+
+/* ============================================================================
+ * Test 23: Runtime update limit is bounded by allocated LU update storage
  * ============================================================================ */
 static void test_lu_update_storage_capacity_guard_runtime(void) {
     printf("  LU: runtime update-capacity guard...\n");
@@ -1421,7 +1513,9 @@ int main(void) {
     test_lu_update_cond_adaptive_limit_runtime();
     test_lu_refactor_hard_trigger_runtime();
     test_lu_backend_policy_runtime();
+    test_lu_strict_backend_policy_runtime();
     test_lu_backend_policy_update_path_telemetry();
+    test_lu_strict_cgr_update_path_telemetry();
     test_lu_update_storage_capacity_guard_runtime();
 
     printf("\nIntegration (A/B Comparison):\n");

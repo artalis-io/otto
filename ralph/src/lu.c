@@ -105,16 +105,24 @@ static int lu_normalize_backend_policy(int backend_policy) {
     return backend_policy;
 }
 
+static int lu_update_backend_uses_ft(const LUFactorization *lu) {
+    if (!lu) return 1;
+    return lu->update_backend == LU_UPDATE_BACKEND_FT ? 1 : 0;
+}
+
 void lu_apply_backend_policy(LUFactorization *lu, int backend_policy) {
     int effective;
     int base_updates;
+    int strict_mode;
 
     if (!lu) return;
 
     effective = lu_normalize_backend_policy(backend_policy);
     base_updates = lu_default_max_updates_for_m(lu->m);
+    strict_mode = lu_glpk_strict_mode(lu);
 
     lu->backend_policy = effective;
+    lu->update_backend = LU_UPDATE_BACKEND_FT;
     lu->pivot_tol = RALPH_PIVOT_TOL;
     lu->growth_refactor_threshold = RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
     lu->max_updates = base_updates;
@@ -123,6 +131,7 @@ void lu_apply_backend_policy(LUFactorization *lu, int backend_policy) {
     switch (effective) {
         case LP_LU_BACKEND_POLICY_CBG:
             /* CBG: conservative stability posture. */
+            lu->update_backend = LU_UPDATE_BACKEND_BG_COMPAT;
             lu->use_ft_updates = 0;
             lu->max_updates = (base_updates * 3) / 4;
             if (lu->max_updates < 24) lu->max_updates = 24;
@@ -130,8 +139,12 @@ void lu_apply_backend_policy(LUFactorization *lu, int backend_policy) {
             lu->growth_refactor_threshold = RALPH_LU_GROWTH_REFACTOR_THRESHOLD * 0.5;
             break;
         case LP_LU_BACKEND_POLICY_CGR:
-            /* CGR: aggressive update posture. */
-            lu->use_ft_updates = 1;
+            /* CGR: aggressive posture. Strict GLPK-like mode keeps this off
+             * the FT lane until a real GR Schur-complement update exists. */
+            lu->update_backend = strict_mode
+                ? LU_UPDATE_BACKEND_GR_COMPAT
+                : LU_UPDATE_BACKEND_FT;
+            lu->use_ft_updates = strict_mode ? 0 : 1;
             lu->max_updates = lu_cgr_max_updates_for_base(base_updates);
             lu->pivot_tol = RALPH_PIVOT_TOL * 0.75;
             lu->growth_refactor_threshold = RALPH_LU_GROWTH_REFACTOR_THRESHOLD * 1.5;
@@ -238,7 +251,7 @@ static void lu_fill_bfcp_signals(const LUFactorization *lu,
     sig->growth_guard_threshold = (lu->growth_refactor_threshold > 0.0)
         ? lu->growth_refactor_threshold
         : RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
-    sig->use_ft_updates = lu->use_ft_updates ? 1 : 0;
+    sig->use_ft_updates = lu_update_backend_uses_ft(lu);
     sig->m = lu->m;
     sig->ft_num_updates = lu->ft_num_updates;
     sig->spike_pool_used = lu->spike_pool_used;
@@ -1315,7 +1328,7 @@ void lu_solve(const LUFactorization *lu, double *rhs, double *solution) {
     solve_U(lu, work, work2);
 
     /* Apply updates (in step coordinates, before column permutation) */
-    if (lu->use_ft_updates && lu->ft_num_updates > 0) {
+    if (lu_update_backend_uses_ft(lu) && lu->ft_num_updates > 0) {
         apply_ft_spikes_forward(lu, work2);
     } else if (lu->num_eta > 0) {
         apply_eta_forward(lu, work2);
@@ -1349,7 +1362,7 @@ void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution
     }
 
     /* Apply updates in reverse (in step coordinates) */
-    if (lu->use_ft_updates && lu->ft_num_updates > 0) {
+    if (lu_update_backend_uses_ft(lu) && lu->ft_num_updates > 0) {
         apply_ft_spikes_backward(lu, work);
     } else if (lu->num_eta > 0) {
         apply_eta_backward(lu, work);
@@ -1409,7 +1422,7 @@ void lu_solve_sparse(const LUFactorization *lu,
         solve_L(lu, work, work2);        /* work2 = L^{-1} * P * work */
         solve_U(lu, work2, work);        /* work = U^{-1} * work2 */
 
-        if (lu->use_ft_updates && lu->ft_num_updates > 0) {
+        if (lu_update_backend_uses_ft(lu) && lu->ft_num_updates > 0) {
             apply_ft_spikes_forward(lu, work);
         } else if (lu->num_eta > 0) {
             apply_eta_forward(lu, work);
@@ -1491,7 +1504,7 @@ void lu_solve_sparse(const LUFactorization *lu,
     }
 
     /* Apply updates */
-    if (lu->use_ft_updates && lu->ft_num_updates > 0) {
+    if (lu_update_backend_uses_ft(lu) && lu->ft_num_updates > 0) {
         apply_ft_spikes_forward(lu, work2);
     } else if (lu->num_eta > 0) {
         apply_eta_forward(lu, work2);
@@ -1544,7 +1557,7 @@ void lu_solve_transpose_sparse(const LUFactorization *lu,
         }
 
         /* Apply updates in reverse (in step coordinates) */
-        if (lu->use_ft_updates && lu->ft_num_updates > 0) {
+        if (lu_update_backend_uses_ft(lu) && lu->ft_num_updates > 0) {
             apply_ft_spikes_backward(lu, work2);
         } else if (lu->num_eta > 0) {
             apply_eta_backward(lu, work2);
@@ -1571,7 +1584,7 @@ void lu_solve_transpose_sparse(const LUFactorization *lu,
     }
 
     /* Apply updates in reverse */
-    if (lu->use_ft_updates && lu->ft_num_updates > 0) {
+    if (lu_update_backend_uses_ft(lu) && lu->ft_num_updates > 0) {
         apply_ft_spikes_backward(lu, work);
     } else if (lu->num_eta > 0) {
         apply_eta_backward(lu, work);
@@ -1939,7 +1952,7 @@ void lu_ftran_hyper_sparse(const LUFactorization *lu,
 
     /* Step 4: Apply FT/eta updates */
     int has_updates = 0;
-    if (lu->use_ft_updates && lu->ft_num_updates > 0) {
+    if (lu_update_backend_uses_ft(lu) && lu->ft_num_updates > 0) {
         has_updates = 1;
         apply_ft_spikes_forward(lu, work2);
     } else if (lu->num_eta > 0) {
@@ -2364,7 +2377,7 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
 
     /* Step 2: Apply updates in reverse */
     int has_updates = 0;
-    if (lu->use_ft_updates && lu->ft_num_updates > 0) {
+    if (lu_update_backend_uses_ft(lu) && lu->ft_num_updates > 0) {
         has_updates = 1;
         apply_ft_spikes_backward(lu, work);
     } else if (lu->num_eta > 0) {
@@ -2740,7 +2753,7 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     solve_U(lu, work, spike);
 
     /* Apply existing updates (FT spikes or eta matrices) */
-    if (lu->use_ft_updates && lu->ft_num_updates > 0) {
+    if (lu_update_backend_uses_ft(lu) && lu->ft_num_updates > 0) {
         if (apply_ft_spikes_forward(lu, spike) != 0) {
             return -1;
         }
@@ -2796,7 +2809,7 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     /* Dense spike guard: very dense updates make every future FTRAN/BTRAN expensive.
      * Keep an initial warmup window so updates do not immediately collapse into
      * update-fail -> reinvert loops before density policy can react. */
-    if (lu->use_ft_updates &&
+    if (lu_update_backend_uses_ft(lu) &&
         lu->ft_num_updates >= RALPH_SPIKE_DENSE_REJECT_MIN_UPDATES &&
         m >= RALPH_SPIKE_DENSE_REJECT_M_MIN &&
         m > 1) {
@@ -2811,10 +2824,10 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
 
     /* Store as Forrest-Tomlin spike or eta-file update */
     if (lu->telemetry_enabled) {
-        if (lu->use_ft_updates) lu->telemetry.update_path_ft++;
+        if (lu_update_backend_uses_ft(lu)) lu->telemetry.update_path_ft++;
         else lu->telemetry.update_path_eta++;
     }
-    if (lu->use_ft_updates) {
+    if (lu_update_backend_uses_ft(lu)) {
         /* Check if pool has room for this spike */
         if (lu->ft_num_updates < 0 || lu->ft_num_updates >= lu->ft_spike_capacity) {
             lu->last_refactor_trigger_reason = LP_BFCP_REFACTOR_REASON_MAX_UPDATES;

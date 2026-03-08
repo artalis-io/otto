@@ -120,6 +120,13 @@ typedef enum {
     LU_FAIL_FACTOR_ALLOC
 } LUFailureReason;
 
+/* LU update backend (internal execution lane for post-factorization updates). */
+typedef enum {
+    LU_UPDATE_BACKEND_FT = 0,
+    LU_UPDATE_BACKEND_BG_COMPAT = 1,
+    LU_UPDATE_BACKEND_GR_COMPAT = 2
+} LUUpdateBackend;
+
 /* Markowitz sparse numeric failure codes (internal telemetry + fallback routing). */
 typedef enum {
     MKZ_FAIL_NONE = 0,
@@ -354,6 +361,7 @@ typedef struct {
     /* Forrest-Tomlin update data */
     int use_ft_updates;     /* 1 to use FT updates, 0 for eta-file */
     int backend_policy;     /* LP_LU_BACKEND_POLICY_* effective backend policy */
+    int update_backend;     /* LUUpdateBackend */
     int *ft_col_order;      /* Permutation of columns due to FT updates */
     int *ft_col_order_inv;  /* Inverse of ft_col_order */
     int ft_num_updates;     /* Number of FT updates applied */
