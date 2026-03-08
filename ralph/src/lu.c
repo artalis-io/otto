@@ -410,9 +410,14 @@ LUFactorization* lu_create(int m) {
     lu->eta_values = (double**)calloc(max_upd, sizeof(double*));
     lu->schur_indices = (int**)calloc(max_upd, sizeof(int*));
     lu->schur_values = (double**)calloc(max_upd, sizeof(double*));
+    lu->schur_k = (double*)calloc((size_t)max_upd * (size_t)max_upd, sizeof(double));
+    lu->schur_k_work = (double*)calloc((size_t)max_upd * (size_t)max_upd, sizeof(double));
+    lu->schur_rhs = (double*)calloc(max_upd, sizeof(double));
+    lu->schur_piv = (int*)calloc(max_upd, sizeof(int));
 
     if (!lu->eta_indices || !lu->eta_values ||
-        !lu->schur_indices || !lu->schur_values) {
+        !lu->schur_indices || !lu->schur_values ||
+        !lu->schur_k || !lu->schur_k_work || !lu->schur_rhs || !lu->schur_piv) {
         lu_free(lu);
         return NULL;
     }
@@ -642,6 +647,10 @@ void lu_free(LUFactorization *lu) {
         }
         SAFE_FREE(lu->schur_values);
     }
+    SAFE_FREE(lu->schur_k);
+    SAFE_FREE(lu->schur_k_work);
+    SAFE_FREE(lu->schur_rhs);
+    SAFE_FREE(lu->schur_piv);
 
     /* (B4: spike compaction removed) */
 
@@ -682,6 +691,10 @@ void lu_free(LUFactorization *lu) {
     lu->schur_values = NULL;
     lu->schur_col = NULL;
     lu->schur_nnz = NULL;
+    lu->schur_k = NULL;
+    lu->schur_k_work = NULL;
+    lu->schur_rhs = NULL;
+    lu->schur_piv = NULL;
     lu->ft_col_order = NULL;
     lu->ft_col_order_inv = NULL;
     lu->ft_spike_col = NULL;
@@ -1867,13 +1880,7 @@ void lu_ftran_hyper_sparse(const LUFactorization *lu,
 
     /* Step 4: Apply FT/eta updates */
     int has_updates = 0;
-    if ((lu_update_backend_is_ft(lu) && lu->ft_num_updates > 0) ||
-        (lu->update_backend == LU_UPDATE_BACKEND_BG_COMPAT && lu->schur_num_updates > 0) ||
-        (lu->update_backend == LU_UPDATE_BACKEND_GR_COMPAT && lu->schur_num_updates > 0) ||
-        (!lu_update_backend_is_ft(lu) &&
-         lu->update_backend != LU_UPDATE_BACKEND_BG_COMPAT &&
-         lu->update_backend != LU_UPDATE_BACKEND_GR_COMPAT &&
-         lu->num_eta > 0)) {
+    if (lu_update_backend_has_updates(lu)) {
         has_updates = 1;
         (void)lu_update_backend_apply_forward(lu, work2);
     }
@@ -2295,13 +2302,7 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
 
     /* Step 2: Apply updates in reverse */
     int has_updates = 0;
-    if ((lu_update_backend_is_ft(lu) && lu->ft_num_updates > 0) ||
-        (lu->update_backend == LU_UPDATE_BACKEND_BG_COMPAT && lu->schur_num_updates > 0) ||
-        (lu->update_backend == LU_UPDATE_BACKEND_GR_COMPAT && lu->schur_num_updates > 0) ||
-        (!lu_update_backend_is_ft(lu) &&
-         lu->update_backend != LU_UPDATE_BACKEND_BG_COMPAT &&
-         lu->update_backend != LU_UPDATE_BACKEND_GR_COMPAT &&
-         lu->num_eta > 0)) {
+    if (lu_update_backend_has_updates(lu)) {
         has_updates = 1;
         lu_update_backend_apply_backward(lu, work);
     }
@@ -2439,12 +2440,14 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
      * Use pre-allocated workspaces to avoid malloc in hot path */
     double *work = lu->hs_work1;
     double *spike = lu->hs_work2;
+    double *base_spike = lu->hs_val;
 
     /* Solve L * y = P * entering_col */
     solve_L(lu, entering_col, work);
 
     /* Solve U * spike = y */
     solve_U(lu, work, spike);
+    memcpy(base_spike, spike, (size_t)m * sizeof(double));
 
     /* Apply existing updates (FT spikes or eta matrices) */
     if (lu_update_backend_apply_forward(lu, spike) != 0) {
@@ -2512,7 +2515,7 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
         }
     }
 
-    if (lu_update_backend_store(lu, step_pos, spike, off_diag_nnz) != 0) {
+    if (lu_update_backend_store(lu, step_pos, base_spike, spike, off_diag_nnz) != 0) {
         return -1;
     }
     lu->num_updates++;
