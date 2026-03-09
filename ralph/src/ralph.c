@@ -3256,6 +3256,13 @@ int ralph_core_get_last_lu_telemetry(const RalphModel *model, RalphLUTelemetry *
     RALPH_LU_TELEM_COPY(mkz_circuit_trips);
     RALPH_LU_TELEM_COPY(mkz_circuit_skips);
     RALPH_LU_TELEM_COPY(mkz_circuit_resets);
+    RALPH_LU_TELEM_COPY(mkz_primary_scan_entries);
+    RALPH_LU_TELEM_COPY(mkz_rescue_scan_entries);
+    RALPH_LU_TELEM_COPY(mkz_reserved_scan_entries);
+    RALPH_LU_TELEM_COPY(mkz_update_existing_entries);
+    RALPH_LU_TELEM_COPY(mkz_update_fill_candidates);
+    RALPH_LU_TELEM_COPY(mkz_hint_fallback_scans);
+    RALPH_LU_TELEM_COPY(mkz_hint_fallback_scan_entries);
 
     RALPH_LU_TELEM_COPY(sparse_dense_fallbacks);
     RALPH_LU_TELEM_COPY(used_dense_fallback_last);

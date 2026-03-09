@@ -34,6 +34,17 @@ static int tests_passed = 0;
     } \
 } while (0)
 
+#define ASSERT_U64_EQ(a, b, msg) do { \
+    tests_run++; \
+    if ((uint64_t)(a) == (uint64_t)(b)) { \
+        tests_passed++; \
+    } else { \
+        printf("  FAIL: %s (%llu != %llu)\n", msg, \
+               (unsigned long long)(uint64_t)(a), \
+               (unsigned long long)(uint64_t)(b)); \
+    } \
+} while (0)
+
 static void test_lu_reset_prepare_and_snapshot(void) {
     printf("  telemetry/lu: reset + prepare + snapshot...\n");
 
@@ -118,6 +129,7 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     lp_telemetry_lu_record_update_apply_backward_ms(&lu, 1.25);
     lp_telemetry_lu_record_compact_factor_ms(&lu, 0.20);
     lp_telemetry_lu_record_compact_solve_ms(&lu, 0.50);
+    lp_telemetry_lu_add_mkz_scan_work(&lu, 11, 12, 13, 14, 15, 16, 17);
 
     {
         LUTelemetrySnapshot snap;
@@ -153,6 +165,20 @@ static void test_lu_reset_prepare_and_snapshot(void) {
                       "lu_snapshot: compact factor total");
         ASSERT_DBL_EQ(snap.perf_total_compact_solve_ms, 0.50,
                       "lu_snapshot: compact solve total");
+        ASSERT_U64_EQ(snap.mkz_primary_scan_entries, 11,
+                      "lu_snapshot: mkz primary scan entries");
+        ASSERT_U64_EQ(snap.mkz_rescue_scan_entries, 12,
+                      "lu_snapshot: mkz rescue scan entries");
+        ASSERT_U64_EQ(snap.mkz_reserved_scan_entries, 13,
+                      "lu_snapshot: mkz reserved scan entries");
+        ASSERT_U64_EQ(snap.mkz_update_existing_entries, 14,
+                      "lu_snapshot: mkz update existing entries");
+        ASSERT_U64_EQ(snap.mkz_update_fill_candidates, 15,
+                      "lu_snapshot: mkz update fill candidates");
+        ASSERT_U64_EQ(snap.mkz_hint_fallback_scans, 16,
+                      "lu_snapshot: mkz hint fallback scans");
+        ASSERT_U64_EQ(snap.mkz_hint_fallback_scan_entries, 17,
+                      "lu_snapshot: mkz hint fallback scan entries");
     }
 }
 

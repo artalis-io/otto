@@ -2526,6 +2526,25 @@ static int lu_factorize_markowitz(
     for (int jj = 0; jj < k; jj++) col_alive[jj] = 1;
     memset(row_alive, 0, m * sizeof(int));
 
+    int L_nnz = 0, U_nnz = 0;
+    uint64_t mkz_primary_scan_entries = 0;
+    uint64_t mkz_rescue_scan_entries = 0;
+    uint64_t mkz_reserved_scan_entries = 0;
+    uint64_t mkz_update_existing_entries = 0;
+    uint64_t mkz_update_fill_candidates = 0;
+    uint64_t mkz_hint_fallback_scans = 0;
+    uint64_t mkz_hint_fallback_scan_entries = 0;
+
+    #define MKZ_FLUSH_SCAN_WORK() \
+        lp_telemetry_lu_add_mkz_scan_work(lu, \
+                                          mkz_primary_scan_entries, \
+                                          mkz_rescue_scan_entries, \
+                                          mkz_reserved_scan_entries, \
+                                          mkz_update_existing_entries, \
+                                          mkz_update_fill_candidates, \
+                                          mkz_hint_fallback_scans, \
+                                          mkz_hint_fallback_scan_entries)
+
     /* Build column SVA from B */
     int cv_used = 0;
     for (int jj = 0; jj < k; jj++) {
@@ -2534,7 +2553,10 @@ static int lu_factorize_markowitz(
         int cnt = 0;
         for (int p = B->colptr[j]; p < B->colptr[j + 1]; p++) {
             if (fabs(B->values[p]) > RALPH_ZERO_TOL) {
-                if (cv_used >= pool_cap) return MKZ_FAIL_POOL;
+                if (cv_used >= pool_cap) {
+                    MKZ_FLUSH_SCAN_WORK();
+                    return MKZ_FAIL_POOL;
+                }
                 cv_idx[cv_used] = B->rowidx[p];
                 cv_val[cv_used] = B->values[p];
                 cv_used++;
@@ -2573,7 +2595,10 @@ static int lu_factorize_markowitz(
         for (int e = 0; e < n2; e++) {
             int row = cv_idx[s + e];
             int rp = rv_ptr[row] + rv_len[row];
-            if (rp >= pool_cap) return MKZ_FAIL_POOL;
+            if (rp >= pool_cap) {
+                MKZ_FLUSH_SCAN_WORK();
+                return MKZ_FAIL_POOL;
+            }
             rv_idx[rp] = jj;
             rv_val[rp] = cv_val[s + e];
             rv_hint[rp] = e;
@@ -2637,7 +2662,6 @@ static int lu_factorize_markowitz(
         } \
     } while(0)
 
-    int L_nnz = 0, U_nnz = 0;
     *num_regularized = 0;
     for (int jj = 0; jj < k; jj++) mkz_col_perm[jj] = -1;
 
@@ -2684,6 +2708,7 @@ static int lu_factorize_markowitz(
                         double thr = threshold_ratio * max_col;
                         int s = cv_ptr[jj], n2 = cv_len[jj];
                         for (int e = 0; e < n2; e++) {
+                            mkz_primary_scan_entries++;
                             int row = cv_idx[s + e];
                             if (!row_alive[row] || row_reserved[row]) continue;
                             double av = fabs(cv_val[s + e]);
@@ -2703,6 +2728,7 @@ static int lu_factorize_markowitz(
                         double thr = threshold_ratio * max_col;
                         int s = cv_ptr[jj], n2 = cv_len[jj];
                         for (int e = 0; e < n2; e++) {
+                            mkz_primary_scan_entries++;
                             int row = cv_idx[s + e];
                             if (!row_alive[row]) continue;
                             double av = fabs(cv_val[s + e]);
@@ -2728,6 +2754,7 @@ static int lu_factorize_markowitz(
                     if (!col_alive[jj]) continue;
                     int s = cv_ptr[jj], n2 = cv_len[jj];
                     for (int e = 0; e < n2; e++) {
+                        mkz_rescue_scan_entries++;
                         int row = cv_idx[s + e];
                         if (!row_alive[row]) continue;
                         if (reserve_non_reserved && row_reserved && row_reserved[row]) continue;
@@ -2772,6 +2799,7 @@ static int lu_factorize_markowitz(
                         if (!col_alive[jj]) continue;
                         int s = cv_ptr[jj], n2 = cv_len[jj];
                         for (int e = 0; e < n2; e++) {
+                            mkz_reserved_scan_entries++;
                             int row = cv_idx[s + e];
                             if (!row_alive[row]) continue;
                             double av = fabs(cv_val[s + e]);
@@ -2851,6 +2879,7 @@ static int lu_factorize_markowitz(
                     if (!can_reg) {
                         /* No viable non-reserved pivot remains; caller will
                          * fall back to the next sparse numeric path. */
+                        MKZ_FLUSH_SCAN_WORK();
                         return MKZ_FAIL_SINGULAR;
                     }
                     (*num_regularized)++;
@@ -2894,7 +2923,10 @@ static int lu_factorize_markowitz(
           } }
 
         /* === 4. Emit L diagonal + U pivot row === */
-        if (L_nnz >= L_capacity || U_nnz >= U_capacity) return MKZ_FAIL_CAPACITY;
+        if (L_nnz >= L_capacity || U_nnz >= U_capacity) {
+            MKZ_FLUSH_SCAN_WORK();
+            return MKZ_FAIL_CAPACITY;
+        }
         L_row[L_nnz] = piv_row; L_col[L_nnz] = piv_col; L_val[L_nnz] = 1.0; L_nnz++;
         U_row[U_nnz] = step; U_col[U_nnz] = piv_col; U_val[U_nnz] = pivot_val; U_nnz++;
 
@@ -2903,7 +2935,10 @@ static int lu_factorize_markowitz(
               int jj = rv_idx[s + e];
               if (!col_alive[jj]) continue;
               if (fabs(rv_val[s + e]) > RALPH_ZERO_TOL) {
-                  if (U_nnz >= U_capacity) return MKZ_FAIL_CAPACITY;
+                  if (U_nnz >= U_capacity) {
+                      MKZ_FLUSH_SCAN_WORK();
+                      return MKZ_FAIL_CAPACITY;
+                  }
                   U_row[U_nnz] = step; U_col[U_nnz] = jj; U_val[U_nnz] = rv_val[s + e]; U_nnz++;
               }
           } }
@@ -2918,12 +2953,16 @@ static int lu_factorize_markowitz(
               double mult = a_ik / pivot_val;
 
               /* Emit L entry */
-              if (L_nnz >= L_capacity) return MKZ_FAIL_CAPACITY;
+              if (L_nnz >= L_capacity) {
+                  MKZ_FLUSH_SCAN_WORK();
+                  return MKZ_FAIL_CAPACITY;
+              }
               L_row[L_nnz] = row; L_col[L_nnz] = piv_col; L_val[L_nnz] = mult; L_nnz++;
 
               /* Pass 1: Walk row's entries, update existing entries using flag[] O(1) */
               int rs = rv_ptr[row], rn = rv_len[row];
               for (int re = 0; re < rn; re++) {
+                  mkz_update_existing_entries++;
                   int jj = rv_idx[rs + re];
                   if (!col_alive[jj]) continue;
                   if (flag[jj]) {
@@ -2936,7 +2975,9 @@ static int lu_factorize_markowitz(
                       int ce = rv_hint[rp];
                       if (ce < 0 || ce >= cn || cv_idx[cs + ce] != row) {
                           ce = -1;
+                          mkz_hint_fallback_scans++;
                           for (int scan = 0; scan < cn; scan++) {
+                              mkz_hint_fallback_scan_entries++;
                               if (cv_idx[cs + scan] == row) {
                                   ce = scan;
                                   break;
@@ -2961,6 +3002,7 @@ static int lu_factorize_markowitz(
               /* Pass 2: Fill-in — flag[jj] still set means no existing entry */
               { int ps = rv_ptr[piv_row], pn = rv_len[piv_row];
                 for (int pe = 0; pe < pn; pe++) {
+                    mkz_update_fill_candidates++;
                     int jj = rv_idx[ps + pe];
                     if (!col_alive[jj] || !flag[jj]) continue;
                     double fill = -mult * work[jj];
@@ -2972,7 +3014,10 @@ static int lu_factorize_markowitz(
                     if (cn >= cv_cap_a[jj]) {
                         /* Relocate column */
                         int new_cap = cn + MARKOWITZ_FILL_GAP + 4;
-                        if (cv_used + new_cap > pool_cap) return MKZ_FAIL_POOL;
+                        if (cv_used + new_cap > pool_cap) {
+                            MKZ_FLUSH_SCAN_WORK();
+                            return MKZ_FAIL_POOL;
+                        }
                         int ns = cv_used;
                         for (int f = 0; f < cn; f++) {
                             cv_idx[ns + f] = cv_idx[cv_ptr[jj] + f];
@@ -2987,7 +3032,10 @@ static int lu_factorize_markowitz(
                     /* Insert into row SVA */
                     if (rn2 >= rv_cap_a[row]) {
                         int new_cap = rn2 + MARKOWITZ_FILL_GAP + 4;
-                        if (rv_used + new_cap > pool_cap) return MKZ_FAIL_POOL;
+                        if (rv_used + new_cap > pool_cap) {
+                            MKZ_FLUSH_SCAN_WORK();
+                            return MKZ_FAIL_POOL;
+                        }
                         int ns = rv_used;
                         for (int f = 0; f < rn2; f++) {
                             rv_idx[ns + f] = rv_idx[rv_ptr[row] + f];
@@ -3027,7 +3075,9 @@ static int lu_factorize_markowitz(
               int ce = rv_hint[rp];
               if (ce < 0 || ce >= n2 || cv_idx[s + ce] != piv_row) {
                   ce = -1;
+                  mkz_hint_fallback_scans++;
                   for (int scan = 0; scan < n2; scan++) {
+                      mkz_hint_fallback_scan_entries++;
                       if (cv_idx[s + scan] == piv_row) {
                           ce = scan;
                           break;
@@ -3067,9 +3117,18 @@ static int lu_factorize_markowitz(
     #undef DG_INSERT
     #undef CV_REMOVE
     #undef RV_REMOVE
+    #undef MKZ_FLUSH_SCAN_WORK
 
     *L_nnz_out = L_nnz;
     *U_nnz_out = U_nnz;
+    lp_telemetry_lu_add_mkz_scan_work(lu,
+                                      mkz_primary_scan_entries,
+                                      mkz_rescue_scan_entries,
+                                      mkz_reserved_scan_entries,
+                                      mkz_update_existing_entries,
+                                      mkz_update_fill_candidates,
+                                      mkz_hint_fallback_scans,
+                                      mkz_hint_fallback_scan_entries);
     return 0;
 }
 
