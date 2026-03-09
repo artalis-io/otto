@@ -338,6 +338,7 @@ static void cp_parse_params(ShJsonValue *obj, SGTuneParams *p) {
     CP_D(time_cluster_randomness); CP_D(pd_shaw_randomness); CP_D(route_shaw_randomness);
     CP_I(string_l_max);
     CP_I(neighbor_k);
+    CP_D(gen_reheat_ratio); CP_D(gen_cooling_stretch);
 #undef CP_D
 #undef CP_I
 }
@@ -632,6 +633,8 @@ static void print_tune_params_json(FILE *fp, const SGTuneParams *p) {
     JP_D(route_shaw_randomness, "%.2f");
     JP_I(string_l_max);
     JP_I(neighbor_k);
+    JP_D(gen_reheat_ratio, "%.4f");
+    JP_D(gen_cooling_stretch, "%.4f");
 #undef JP_D
 #undef JP_I
     fprintf(fp, "}");

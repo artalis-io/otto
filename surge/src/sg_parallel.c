@@ -756,6 +756,17 @@ SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
                 items[i].clone.construct_method = gen0_order[i % SG_CONSTRUCT_COUNT];
             }
 
+            /* Apply generation reheat for generations > 0 */
+            if (g > 0 && ctx->tune_params) {
+                items[i].clone.gen_reheat_ratio = sg_tune_d(ctx,
+                    ctx->tune_params->gen_reheat_ratio, 1.0);
+                items[i].clone.gen_cooling_stretch = sg_tune_d(ctx,
+                    ctx->tune_params->gen_cooling_stretch, 1.0);
+            } else {
+                items[i].clone.gen_reheat_ratio = 1.0;
+                items[i].clone.gen_cooling_stretch = 1.0;
+            }
+
             /* Warm start from population pool (generations > 0 only) */
             items[i].owns_warm_start = 0;
             if (g > 0 && pop_pool_size > 0) {

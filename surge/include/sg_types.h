@@ -137,6 +137,10 @@ typedef struct {
 
     /* Insertion pruning */
     int    neighbor_k;            /* [5, 50], default 30 — k-nearest neighbors for vehicle pruning */
+
+    /* Generation-aware SA reheat (population mode only) */
+    double gen_reheat_ratio;      /* [1.0, 5.0], default 1.0 — SA T₀ multiplier for generations > 0 */
+    double gen_cooling_stretch;   /* [1.0, 3.0], default 1.0 — cooling schedule stretch for generations > 0 */
 } SGTuneParams;
 
 #define SG_TUNE_SENTINEL_D (-1.0)

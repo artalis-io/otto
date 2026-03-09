@@ -980,6 +980,17 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
             if (abs_cost < 1e-12) abs_cost = 1.0;
             params.initial_temp = ctx->tune_params->sa_accept_pct * abs_cost / 0.693147180559945;
         }
+        /* Generation reheat: hotter start for warm-started generations to escape basins */
+        if (ctx->gen_reheat_ratio > 0.0 && ctx->gen_reheat_ratio != 1.0) {
+            params.initial_temp *= ctx->gen_reheat_ratio;
+        }
+        /* Generation cooling stretch: slower decay for more exploration time */
+        if (ctx->gen_cooling_stretch > 0.0 && ctx->gen_cooling_stretch != 1.0) {
+            double p1_final = sg_tune_d(ctx,
+                ctx->tune_params ? ctx->tune_params->p1_final_temp_ratio : SG_TUNE_SENTINEL_D,
+                0.05);
+            params.cooling_rate = exp(log(p1_final) / ((double)phase1_iters * ctx->gen_cooling_stretch));
+        }
         if (ctx->config.accept_type != SG_ACCEPT_SA) {
             params.accept_type = (ARAcceptType)ctx->config.accept_type;
             if (params.accept_type == AR_ACCEPT_RRT) {
@@ -1223,6 +1234,17 @@ skip_phase15:
                     fabs(p2_cal) > 1e-12) {
                     params.initial_temp = ctx->tune_params->sa_accept_pct * fabs(p2_cal) / 0.693147180559945;
                 }
+            }
+            /* Generation reheat: hotter start for warm-started generations */
+            if (ctx->gen_reheat_ratio > 0.0 && ctx->gen_reheat_ratio != 1.0) {
+                params.initial_temp *= ctx->gen_reheat_ratio;
+            }
+            /* Generation cooling stretch: slower decay for later generations */
+            if (ctx->gen_cooling_stretch > 0.0 && ctx->gen_cooling_stretch != 1.0) {
+                double p2_final = (ctx->tune_params &&
+                    ctx->tune_params->p2_final_temp_ratio != SG_TUNE_SENTINEL_D)
+                    ? ctx->tune_params->p2_final_temp_ratio : 0.001;
+                params.cooling_rate = exp(log(p2_final) / ((double)phase2_iters * ctx->gen_cooling_stretch));
             }
         }
         if (ctx->config.accept_type != SG_ACCEPT_SA) {

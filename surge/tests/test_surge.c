@@ -9129,6 +9129,146 @@ static void test_population_quality(void) {
     }
 }
 
+/* ===== S25: Generation-Aware SA Reheat Tests ===== */
+
+static void test_gen_reheat_default_no_effect(void) {
+    /* Default gen_reheat_ratio=1.0 and gen_cooling_stretch=1.0 should produce
+       identical results to a solve without any reheat fields set. */
+    double dist_baseline, dist_reheat;
+    uint32_t veh_baseline, veh_reheat;
+
+    {
+        SGContext *ctx = make_config(200, 42);
+        uint32_t depot;
+        add_depot_with_location(ctx, &depot, 0, 0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_pd_request(ctx, 1, 2, 0, 86400, 10, 3, 4, 0, 86400, 10, 1);
+        add_pd_request(ctx, 5, 6, 0, 86400, 10, 7, 8, 0, 86400, 10, 1);
+
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        dist_baseline = sg_get_total_distance(ctx);
+        veh_baseline = sg_get_used_vehicle_count(ctx);
+        sg_free(ctx);
+    }
+
+    {
+        SGContext *ctx = make_config(200, 42);
+        uint32_t depot;
+        add_depot_with_location(ctx, &depot, 0, 0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_pd_request(ctx, 1, 2, 0, 86400, 10, 3, 4, 0, 86400, 10, 1);
+        add_pd_request(ctx, 5, 6, 0, 86400, 10, 7, 8, 0, 86400, 10, 1);
+
+        /* Explicitly set reheat to 1.0 (neutral) */
+        ctx->gen_reheat_ratio = 1.0;
+        ctx->gen_cooling_stretch = 1.0;
+
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        dist_reheat = sg_get_total_distance(ctx);
+        veh_reheat = sg_get_used_vehicle_count(ctx);
+        sg_free(ctx);
+    }
+
+    assert(veh_baseline == veh_reheat);
+    assert(fabs(dist_baseline - dist_reheat) < 1e-6);
+}
+
+static void test_gen_reheat_ratio_applied(void) {
+    /* Setting gen_reheat_ratio > 1.0 should change solver behavior
+       (different SA temperature leads to different search trajectory).
+       We verify the solve completes successfully with a non-trivial reheat. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_pd_request(ctx, 1, 2, 0, 86400, 10, 3, 4, 0, 86400, 10, 1);
+    add_pd_request(ctx, 5, 6, 0, 86400, 10, 7, 8, 0, 86400, 10, 1);
+    add_pd_request(ctx, 2, 1, 0, 86400, 10, 4, 3, 0, 86400, 10, 1);
+
+    ctx->gen_reheat_ratio = 2.0;
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    sg_free(ctx);
+}
+
+static void test_gen_cooling_stretch_applied(void) {
+    /* Setting gen_cooling_stretch > 1.0 slows cooling.
+       Verify solve completes successfully. */
+    SGContext *ctx = make_config(200, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_pd_request(ctx, 1, 2, 0, 86400, 10, 3, 4, 0, 86400, 10, 1);
+    add_pd_request(ctx, 5, 6, 0, 86400, 10, 7, 8, 0, 86400, 10, 1);
+    add_pd_request(ctx, 2, 1, 0, 86400, 10, 4, 3, 0, 86400, 10, 1);
+
+    ctx->gen_cooling_stretch = 1.5;
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    sg_free(ctx);
+}
+
+static void test_gen_reheat_tune_params_roundtrip(void) {
+    /* Verify tune params sentinel defaults and setting via profile matrix */
+    SGTuneParams tp;
+    sg_tune_params_default(&tp);
+    assert(tp.gen_reheat_ratio == SG_TUNE_SENTINEL_D);
+    assert(tp.gen_cooling_stretch == SG_TUNE_SENTINEL_D);
+
+    /* Verify sg_tune_d returns default when sentinel */
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+    sg_set_tune_params(ctx, &tp);
+    assert(sg_tune_d(ctx, ctx->tune_params->gen_reheat_ratio, 1.0) == 1.0);
+    assert(sg_tune_d(ctx, ctx->tune_params->gen_cooling_stretch, 1.0) == 1.0);
+
+    /* Set explicit values */
+    tp.gen_reheat_ratio = 1.5;
+    tp.gen_cooling_stretch = 1.2;
+    sg_set_tune_params(ctx, &tp);
+    assert(fabs(sg_tune_d(ctx, ctx->tune_params->gen_reheat_ratio, 1.0) - 1.5) < 1e-9);
+    assert(fabs(sg_tune_d(ctx, ctx->tune_params->gen_cooling_stretch, 1.0) - 1.2) < 1e-9);
+    sg_free(ctx);
+}
+
+static void test_gen_reheat_population_mode(void) {
+    /* Run population mode with reheat enabled.
+       Verify solve completes and produces valid solution. */
+    SGContext *ctx = make_config(200, 42);
+    SGTuneParams tp;
+    SGPopulationConfig cfg;
+    uint32_t depot;
+
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_pd_request(ctx, 1, 2, 0, 86400, 10, 3, 4, 0, 86400, 10, 1);
+    add_pd_request(ctx, 5, 6, 0, 86400, 10, 7, 8, 0, 86400, 10, 1);
+    add_pd_request(ctx, 2, 1, 0, 86400, 10, 4, 3, 0, 86400, 10, 1);
+    add_pd_request(ctx, 6, 5, 0, 86400, 10, 8, 7, 0, 86400, 10, 1);
+    add_pd_request(ctx, 3, 3, 0, 86400, 10, 6, 6, 0, 86400, 10, 1);
+
+    /* Set reheat tune params */
+    sg_tune_params_default(&tp);
+    tp.gen_reheat_ratio = 1.5;
+    tp.gen_cooling_stretch = 1.2;
+    sg_set_tune_params(ctx, &tp);
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.num_threads = 4;
+    cfg.population_size = 4;
+    cfg.num_generations = 3;
+
+    assert(sg_solve_population(ctx, &cfg) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_solution_get_route_count(ctx) > 0);
+    sg_free(ctx);
+}
+
 #endif /* SG_HAS_THREADS */
 
 /* ===== Speed Profile & Travel Profile Tests ===== */
@@ -17481,12 +17621,21 @@ int main(void) {
     RUN_TEST(test_insertion_cache_config_off);
     RUN_TEST(test_insertion_cache_deterministic);
 
+    /* S25: Generation-Aware SA Reheat */
+    RUN_TEST(test_gen_reheat_default_no_effect);
+    RUN_TEST(test_gen_reheat_ratio_applied);
+    RUN_TEST(test_gen_cooling_stretch_applied);
+    RUN_TEST(test_gen_reheat_tune_params_roundtrip);
+#ifdef SG_HAS_THREADS
+    RUN_TEST(test_gen_reheat_population_mode);
+#endif
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 449);
+    assert(tests_run == 454);
 #else
-    assert(tests_run == 430);
+    assert(tests_run == 434);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }
