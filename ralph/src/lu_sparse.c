@@ -4023,6 +4023,8 @@ supernode_factorization:
                 (void)sn_workspace_reserve(lu, sn_need);
 
                 int sn_reg = 0;
+                SNSupernodeWork sn_work_stats;
+                memset(&sn_work_stats, 0, sizeof(sn_work_stats));
                 t_stage_start_ms = lp_telemetry_timer_start();
                 int rc = sn_factorize(A_struct, m, k, row_perm, row_pos,
                                       lu->pivot_tol, row_is_identity,
@@ -4034,11 +4036,27 @@ supernode_factorization:
                                       lu->coo_capacity,
                                       U_row, U_col, U_val, &U_nnz,
                                       lu->coo_capacity,
-                                      lu->sn_work, lu->sn_work_capacity);
+                                      lu->sn_work, lu->sn_work_capacity,
+                                      &sn_work_stats);
                 {
                     double sn_attempt_ms = lp_telemetry_timer_elapsed_ms(t_stage_start_ms);
                     t_supernode_numeric_ms += sn_attempt_ms;
                     lu_supernode_cost_gate_note_supernode(lu, k, sn_attempt_ms);
+                    lp_telemetry_lu_add_supernode_work(
+                        lu,
+                        sn_work_stats.active_row_scan_entries,
+                        sn_work_stats.active_col_scan_entries,
+                        sn_work_stats.trailing_rows_total,
+                        sn_work_stats.trailing_cols_total,
+                        sn_work_stats.active_rows_total,
+                        sn_work_stats.active_cols_total,
+                        sn_work_stats.pack_l_entries_total,
+                        sn_work_stats.pack_u_entries_total,
+                        sn_work_stats.dense_triplets_total,
+                        sn_work_stats.compact_triplets_total,
+                        sn_work_stats.full_update_calls,
+                        sn_work_stats.compact_update_calls,
+                        sn_work_stats.skipped_update_calls);
                 }
                 if (rc == 0) {
                     lu->sn_successes++;

@@ -690,7 +690,8 @@ int sn_factorize(double *A_struct, int m, int k,
                  int L_capacity,
                  int *U_row, int *U_col, double *U_val, int *U_nnz,
                  int U_capacity,
-                 double *work, size_t work_capacity) {
+                 double *work, size_t work_capacity,
+                 SNSupernodeWork *stats) {
     if (!A_struct || !row_perm || !row_pos || !supernodes ||
         !L_row || !L_col || !L_val || !L_nnz ||
         !U_row || !U_col || !U_val || !U_nnz ||
@@ -700,6 +701,7 @@ int sn_factorize(double *A_struct, int m, int k,
     *L_nnz = 0;
     *U_nnz = 0;
     if (num_regularized) *num_regularized = 0;
+    if (stats) memset(stats, 0, sizeof(*stats));
 
     /* Bounds-check macro for COO array writes */
     #define SN_EMIT_L(r, c, v) do { \
@@ -905,11 +907,17 @@ int sn_factorize(double *A_struct, int m, int k,
                 return -1;
             }
 
+            if (stats) {
+                stats->trailing_rows_total += (uint64_t)trailing_rows;
+                stats->trailing_cols_total += (uint64_t)trailing_cols;
+            }
+
             int active_row_count = 0;
             for (int i = 0; i < trailing_rows; i++) {
                 int orig_row = row_perm[sn_start + sn_size + i];
                 int row_active = 0;
                 for (int j_local = 0; j_local < sn_size; j_local++) {
+                    if (stats) stats->active_row_scan_entries++;
                     if (fabs(A_struct[(size_t)orig_row * k + (sn_start + j_local)]) > RALPH_ZERO_TOL) {
                         row_active = 1;
                         break;
@@ -924,6 +932,7 @@ int sn_factorize(double *A_struct, int m, int k,
                 int col = sn_start + sn_size + jj;
                 for (int j_local = 0; j_local < sn_size; j_local++) {
                     int piv_orig = row_perm[sn_start + j_local];
+                    if (stats) stats->active_col_scan_entries++;
                     if (fabs(A_struct[(size_t)piv_orig * k + col]) > RALPH_ZERO_TOL) {
                         col_active = 1;
                         break;
@@ -933,9 +942,21 @@ int sn_factorize(double *A_struct, int m, int k,
             }
 
             if (active_row_count == 0 || active_col_count == 0) {
+                if (stats) stats->skipped_update_calls++;
                 free(active_rows);
                 free(active_cols);
                 continue;
+            }
+
+            if (stats) {
+                stats->active_rows_total += (uint64_t)active_row_count;
+                stats->active_cols_total += (uint64_t)active_col_count;
+                stats->pack_l_entries_total += (uint64_t)active_row_count * (uint64_t)sn_size;
+                stats->pack_u_entries_total += (uint64_t)active_col_count * (uint64_t)sn_size;
+                stats->dense_triplets_total +=
+                    (uint64_t)trailing_rows * (uint64_t)sn_size * (uint64_t)trailing_cols;
+                stats->compact_triplets_total +=
+                    (uint64_t)active_row_count * (uint64_t)sn_size * (uint64_t)active_col_count;
             }
 
             /* Workspace layout: [L_block | U_block]
@@ -976,6 +997,7 @@ int sn_factorize(double *A_struct, int m, int k,
             }
 
             if (active_row_count == trailing_rows && active_col_count == trailing_cols) {
+                if (stats) stats->full_update_calls++;
                 sn_dgemm_update_scattered_rows(trailing_rows, sn_size, trailing_cols,
                                                L_block, sn_size,
                                                U_block, trailing_cols,
@@ -983,6 +1005,7 @@ int sn_factorize(double *A_struct, int m, int k,
                                                sn_start + sn_size,
                                                sn_start + sn_size);
             } else {
+                if (stats) stats->compact_update_calls++;
                 sn_dgemm_update_scattered_rows_cols(active_row_count, sn_size, active_col_count,
                                                     L_block, sn_size,
                                                     U_block, active_col_count,

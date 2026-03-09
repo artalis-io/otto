@@ -404,19 +404,20 @@ static void test_sn_factorize_known_matrix(void) {
     int *Uc = (int *)calloc(cap, sizeof(int));
     double *Uv = (double *)calloc(cap, sizeof(double));
     int Lnnz = 0, Unnz = 0;
+    SNSupernodeWork stats;
+    memset(&stats, 0, sizeof(stats));
 
     int rc = sn_factorize(A, m, k, row_perm, row_pos, 1e-10, NULL,
                           sym->supernodes, sym->num_supernodes,
                           NULL, 0, 0, 0, NULL,
                           Lr, Lc, Lv, &Lnnz, cap,
                           Ur, Uc, Uv, &Unnz, cap,
-                          NULL, 0);
+                          NULL, 0, &stats);
     ASSERT_INT_EQ(rc, 0, "sn factorize known: return code");
 
     if (rc == 0) {
         ASSERT(Lnnz > 0, "sn factorize known: L has entries");
         ASSERT(Unnz > 0, "sn factorize known: U has entries");
-
         /* Build dense L and U from COO */
         double *L = (double *)calloc(m * k, sizeof(double));
         double *U = (double *)calloc(k * k, sizeof(double));
@@ -505,13 +506,15 @@ static void test_sn_factorize_random(void) {
     int *Uc = (int *)calloc(cap, sizeof(int));
     double *Uv = (double *)calloc(cap, sizeof(double));
     int Lnnz = 0, Unnz = 0;
+    SNSupernodeWork stats;
+    memset(&stats, 0, sizeof(stats));
 
     int rc = sn_factorize(A, m, k, row_perm, row_pos, 1e-10, NULL,
                           sym->supernodes, sym->num_supernodes,
                           NULL, 0, 0, 0, NULL,
                           Lr, Lc, Lv, &Lnnz, cap,
                           Ur, Uc, Uv, &Unnz, cap,
-                          NULL, 0);
+                          NULL, 0, &stats);
     ASSERT_INT_EQ(rc, 0, "sn factorize random: return code");
 
     if (rc == 0) {
@@ -563,6 +566,66 @@ static void test_sn_factorize_random(void) {
     free(Lr); free(Lc); free(Lv);
     free(Ur); free(Uc); free(Uv);
     sn_symbolic_free(sym);
+}
+
+static void test_sn_factorize_stats_tracking(void) {
+    printf("  Phase 3: supernodal factorize stats tracking...\n");
+
+    int m = 8, k = 8;
+    double A[64];
+    memset(A, 0, sizeof(A));
+    for (int i = 0; i < m; i++) {
+        A[i * k + i] = 20.0 + (double)i;
+        if (i + 1 < k) A[i * k + (i + 1)] = 0.25;
+        if (i > 0) A[i * k + (i - 1)] = -0.1;
+    }
+    for (int i = 2; i < m; i++) A[i * k + 0] += 0.4;
+    for (int i = 3; i < m; i++) A[i * k + 1] -= 0.2;
+    for (int i = 4; i < m; i++) A[i * k + 2] += 0.3;
+    for (int i = 5; i < m; i++) A[i * k + 3] -= 0.15;
+    for (int j = 2; j < k; j++) A[0 * k + j] += 0.1 * (double)(j + 1);
+    for (int j = 3; j < k; j++) A[1 * k + j] -= 0.07 * (double)(j + 1);
+    for (int j = 4; j < k; j++) A[2 * k + j] += 0.05 * (double)(j + 1);
+    for (int j = 5; j < k; j++) A[3 * k + j] -= 0.03 * (double)(j + 1);
+
+    int row_perm[8], row_pos[8];
+    for (int i = 0; i < m; i++) { row_perm[i] = i; row_pos[i] = i; }
+
+    Supernode supernodes[4] = {
+        {0, 2}, {2, 2}, {4, 2}, {6, 2}
+    };
+
+    int cap = m * k * 2;
+    int *Lr = (int *)calloc(cap, sizeof(int));
+    int *Lc = (int *)calloc(cap, sizeof(int));
+    double *Lv = (double *)calloc(cap, sizeof(double));
+    int *Ur = (int *)calloc(cap, sizeof(int));
+    int *Uc = (int *)calloc(cap, sizeof(int));
+    double *Uv = (double *)calloc(cap, sizeof(double));
+    int Lnnz = 0, Unnz = 0;
+    SNSupernodeWork stats;
+    memset(&stats, 0, sizeof(stats));
+
+    int rc = sn_factorize(A, m, k, row_perm, row_pos, 1e-10, NULL,
+                          supernodes, 4,
+                          NULL, 0, 0, 0, NULL,
+                          Lr, Lc, Lv, &Lnnz, cap,
+                          Ur, Uc, Uv, &Unnz, cap,
+                          NULL, 0, &stats);
+    ASSERT_INT_EQ(rc, 0, "sn factorize stats: return code");
+    if (rc == 0) {
+        ASSERT(stats.trailing_rows_total > 0, "sn factorize stats: trailing rows");
+        ASSERT(stats.active_row_scan_entries > 0, "sn factorize stats: row scans");
+        ASSERT(stats.active_col_scan_entries > 0, "sn factorize stats: col scans");
+        ASSERT(stats.pack_l_entries_total > 0, "sn factorize stats: pack L");
+        ASSERT(stats.pack_u_entries_total > 0, "sn factorize stats: pack U");
+        ASSERT(stats.full_update_calls + stats.compact_update_calls > 0,
+               "sn factorize stats: update path");
+        ASSERT(stats.compact_triplets_total > 0, "sn factorize stats: compact triplets");
+    }
+
+    free(Lr); free(Lc); free(Lv);
+    free(Ur); free(Uc); free(Uv);
 }
 
 /* ============================================================================
@@ -697,6 +760,7 @@ int main(void) {
     printf("\nPhase 3: Supernodal Numeric Factorization\n");
     test_sn_factorize_known_matrix();
     test_sn_factorize_random();
+    test_sn_factorize_stats_tracking();
 
     printf("\nPhase 4: Integration (A/B Comparison)\n");
     test_integration_small_lp();

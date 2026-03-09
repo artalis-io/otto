@@ -14,6 +14,7 @@
 #define RALPH_LU_SUPERNODE_H
 
 #include <stdlib.h>
+#include <stdint.h>
 
 /* Supernodal constants */
 #define SN_MIN_K          64    /* Minimum structural columns to use supernodal */
@@ -38,6 +39,22 @@ typedef struct SNSymbolic_tag {
     int max_supernode_size;  /* For workspace sizing */
     int max_panel_rows;      /* For workspace sizing */
 } SNSymbolic;
+
+typedef struct {
+    uint64_t active_row_scan_entries;
+    uint64_t active_col_scan_entries;
+    uint64_t trailing_rows_total;
+    uint64_t trailing_cols_total;
+    uint64_t active_rows_total;
+    uint64_t active_cols_total;
+    uint64_t pack_l_entries_total;
+    uint64_t pack_u_entries_total;
+    uint64_t dense_triplets_total;
+    uint64_t compact_triplets_total;
+    uint64_t full_update_calls;
+    uint64_t compact_update_calls;
+    uint64_t skipped_update_calls;
+} SNSupernodeWork;
 
 /* --- Phase 1: Elimination tree + supernode detection --- */
 
@@ -96,6 +113,7 @@ int sn_factorize(double *A_struct, int m, int k,
                  int L_capacity,
                  int *U_row, int *U_col, double *U_val, int *U_nnz,
                  int U_capacity,
-                 double *work, size_t work_capacity);
+                 double *work, size_t work_capacity,
+                 SNSupernodeWork *stats);
 
 #endif /* RALPH_LU_SUPERNODE_H */

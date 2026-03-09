@@ -63,6 +63,8 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     lu.telemetry.perf_total_update_apply_backward_ms = 2.5;
     lu.telemetry.perf_total_compact_factor_ms = 0.75;
     lu.telemetry.perf_total_compact_solve_ms = 3.5;
+    lu.telemetry.perf_sn_active_row_scan_entries = 21;
+    lu.telemetry.perf_sn_full_update_calls = 2;
     lu.telemetry.refactor_need_checks = 4;
     lu.telemetry.update_fail_max_updates = 2;
     lu.telemetry.backend_policy_cgr = 7;
@@ -94,6 +96,10 @@ static void test_lu_reset_prepare_and_snapshot(void) {
                   "lu_reset: compact factor total");
     ASSERT_DBL_EQ(lu.telemetry.perf_total_compact_solve_ms, 0.0,
                   "lu_reset: compact solve total");
+    ASSERT_U64_EQ(lu.telemetry.perf_sn_active_row_scan_entries, 0,
+                  "lu_reset: supernode row scan entries");
+    ASSERT_U64_EQ(lu.telemetry.perf_sn_full_update_calls, 0,
+                  "lu_reset: supernode full update calls");
     ASSERT_INT_EQ(lu.telemetry.refactor_need_checks, 0, "lu_reset: refactor need checks");
     ASSERT_INT_EQ(lu.telemetry.update_fail_max_updates, 0, "lu_reset: update fail max updates");
     ASSERT_INT_EQ(lu.telemetry.backend_policy_cgr, 0, "lu_reset: backend policy cgr count");
@@ -131,6 +137,8 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     lp_telemetry_lu_record_compact_solve_ms(&lu, 0.50);
     lp_telemetry_lu_add_mkz_scan_work(&lu, 11, 12, 13, 14, 15, 16, 17);
     lp_telemetry_lu_add_mkz_colmax_work(&lu, 18, 19, 20);
+    lp_telemetry_lu_add_supernode_work(&lu, 21, 22, 23, 24, 25, 26, 27, 28,
+                                       29, 30, 31, 32, 33);
 
     {
         LUTelemetrySnapshot snap;
@@ -186,6 +194,32 @@ static void test_lu_reset_prepare_and_snapshot(void) {
                       "lu_snapshot: mkz affected columns max");
         ASSERT_U64_EQ(snap.mkz_col_max_scan_entries, 20,
                       "lu_snapshot: mkz col_max scan entries");
+        ASSERT_U64_EQ(snap.perf_sn_active_row_scan_entries, 21,
+                      "lu_snapshot: supernode active row scans");
+        ASSERT_U64_EQ(snap.perf_sn_active_col_scan_entries, 22,
+                      "lu_snapshot: supernode active col scans");
+        ASSERT_U64_EQ(snap.perf_sn_trailing_rows_total, 23,
+                      "lu_snapshot: supernode trailing rows");
+        ASSERT_U64_EQ(snap.perf_sn_trailing_cols_total, 24,
+                      "lu_snapshot: supernode trailing cols");
+        ASSERT_U64_EQ(snap.perf_sn_active_rows_total, 25,
+                      "lu_snapshot: supernode active rows");
+        ASSERT_U64_EQ(snap.perf_sn_active_cols_total, 26,
+                      "lu_snapshot: supernode active cols");
+        ASSERT_U64_EQ(snap.perf_sn_pack_l_entries_total, 27,
+                      "lu_snapshot: supernode L pack entries");
+        ASSERT_U64_EQ(snap.perf_sn_pack_u_entries_total, 28,
+                      "lu_snapshot: supernode U pack entries");
+        ASSERT_U64_EQ(snap.perf_sn_dense_triplets_total, 29,
+                      "lu_snapshot: supernode dense triplets");
+        ASSERT_U64_EQ(snap.perf_sn_compact_triplets_total, 30,
+                      "lu_snapshot: supernode compact triplets");
+        ASSERT_U64_EQ(snap.perf_sn_full_update_calls, 31,
+                      "lu_snapshot: supernode full update calls");
+        ASSERT_U64_EQ(snap.perf_sn_compact_update_calls, 32,
+                      "lu_snapshot: supernode compact update calls");
+        ASSERT_U64_EQ(snap.perf_sn_skipped_update_calls, 33,
+                      "lu_snapshot: supernode skipped update calls");
     }
 }
 
