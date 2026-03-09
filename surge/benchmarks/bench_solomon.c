@@ -21,7 +21,7 @@ static void sg_print_usage(const char *argv0) {
     printf("  --dir <path>          Directory with Solomon .txt files (default: benchmarks/solomon)\n");
     printf("  --bks <path>          BKS CSV file (default: benchmarks/bks/solomon_100.csv)\n");
     printf("  --size <n>            Only run instances in subdirectory <n> (e.g., 200)\n");
-    printf("  --iterations <n>      ALNS max iterations per case (default: 10000)\n");
+    printf("  --iterations <n>      ALNS max iterations per case (default: scale-aware)\n");
     printf("  --time-limit <sec>    ALNS max wall time per case (default: 0 = unlimited)\n");
     printf("  --seed <n>            Deterministic seed (default: 42)\n");
     printf("  --non-deterministic   Use time-based random seed\n");
@@ -44,7 +44,7 @@ int main(int argc, char **argv) {
     const char *cases_dir = "benchmarks/solomon";
     const char *bks_path = "benchmarks/bks/solomon_100.csv";
     const char *output_csv_path = NULL;
-    int max_iterations = 10000;
+    int max_iterations = -1;  /* -1 = use profile matrix (scale-aware) */
     int max_time_seconds = 0;
     uint64_t seed = 42;
     int deterministic = 1;
@@ -89,7 +89,8 @@ int main(int argc, char **argv) {
             size_filter = sh_parse_int(argv[++i], 0, 0, 100000); continue;
         }
         if (strcmp(argv[i], "--iterations") == 0 && i + 1 < argc) {
-            max_iterations = sh_parse_int(argv[++i], 10000, 1, 1000000); continue;
+            max_iterations = sh_parse_int(argv[++i], 10000, 1, 1000000);
+            continue;
         }
         if (strcmp(argv[i], "--time-limit") == 0 && i + 1 < argc) {
             max_time_seconds = sh_parse_int(argv[++i], 0, 0, 86400); continue;
@@ -122,8 +123,8 @@ int main(int argc, char **argv) {
         break;
     }
 
-    if (max_iterations <= 0 || max_time_seconds < 0) {
-        fprintf(stderr, "Invalid settings: iterations > 0, time-limit >= 0\n");
+    if (max_iterations == 0 || max_iterations < -1 || max_time_seconds < 0) {
+        fprintf(stderr, "Invalid settings: iterations > 0 (or -1 for auto), time-limit >= 0\n");
         return 1;
     }
 
@@ -191,7 +192,10 @@ int main(int argc, char **argv) {
 
     printf("Surge Solomon Benchmark (Lexicographic vs BKS)\n");
     printf("  dir=%s  bks=%s (%d entries)\n", cases_dir, bks_path, bks_count);
-    printf("  iterations=%d  time_limit=%d\n", max_iterations, max_time_seconds);
+    if (max_iterations > 0)
+        printf("  iterations=%d  time_limit=%d\n", max_iterations, max_time_seconds);
+    else
+        printf("  iterations=auto  time_limit=%d\n", max_time_seconds);
     if (deterministic) {
         printf("  deterministic=true seed=%" PRIu64 "\n", seed);
     } else {
@@ -238,7 +242,8 @@ int main(int argc, char **argv) {
         }
 
         sg_config_default(&config);
-        config.max_iterations = max_iterations;
+        if (max_iterations > 0)
+            config.max_iterations = max_iterations;
         config.max_time_seconds = max_time_seconds;
         config.seed = seed;
         config.deterministic = deterministic != 0;
@@ -267,14 +272,16 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        /* Apply scale-appropriate tune params from profile matrix.
-           FAST profile gives reasonable defaults; CLI iterations/time override. */
+        /* Apply scale-appropriate tune params and iteration budget from profile matrix.
+           NEAR_OPTIMAL profile for benchmarking quality; CLI overrides if specified. */
         {
             SGScale scale = sg_scale_from_count(sg_get_request_count(ctx));
-            sg_profile_matrix_apply(ctx, SG_PROFILE_FAST, scale);
-            /* Restore CLI-specified iterations and time limit */
-            ctx->config.max_iterations = max_iterations;
-            ctx->config.max_time_seconds = max_time_seconds;
+            sg_profile_matrix_apply(ctx, SG_PROFILE_NEAR_OPTIMAL, scale);
+            /* Override with CLI values only if explicitly specified */
+            if (max_iterations > 0)
+                ctx->config.max_iterations = max_iterations;
+            if (max_time_seconds > 0)
+                ctx->config.max_time_seconds = max_time_seconds;
         }
 
         start = sg_bench_now();

@@ -226,17 +226,17 @@ const SGProfileCell k_profile_matrix[SG_PROFILE_COUNT][SG_SCALE_COUNT] = {
     {
         { 10000,  15, BASE_TUNE },    /* SMALL */
         { 10000,  45, MEDIUM_TUNE },  /* MEDIUM (S22 tuned) */
-        {  5000, 120, LARGE_TUNE },   /* LARGE (S22 tuned) */
-        {  3000, 300, LARGE_TUNE },   /* XLARGE (GH-400 params) */
-        {  2000, 600, BASE_TUNE },    /* MASSIVE */
+        { 30000, 120, LARGE_TUNE },   /* LARGE — raised from 5K (10K cap confirmed bottleneck) */
+        { 15000, 300, LARGE_TUNE },   /* XLARGE — raised from 3K */
+        {  8000, 600, BASE_TUNE },    /* MASSIVE — raised from 2K */
     },
     /* BEST */
     {
         { 50000,   60, BASE_TUNE },    /* SMALL */
         { 25000,  180, MEDIUM_TUNE },  /* MEDIUM (S22 tuned) */
-        { 10000,  600, LARGE_TUNE },   /* LARGE (S22 tuned) */
-        {  5000, 1200, LARGE_TUNE },   /* XLARGE (GH-400 params) */
-        {  3000, 1800, BASE_TUNE },    /* MASSIVE */
+        { 50000,  600, LARGE_TUNE },   /* LARGE — raised from 10K (50K shows +2v, -15pp) */
+        { 30000, 1200, LARGE_TUNE },   /* XLARGE — raised from 5K */
+        { 15000, 1800, BASE_TUNE },    /* MASSIVE — raised from 3K */
     },
 };
 
