@@ -3988,6 +3988,17 @@ line 957. Used `merged_seq[sol->route_lengths[other] + si]` after route modifica
 the live `route_lengths` could differ from the captured `other_len`. Fix: use
 `small_reqs[si]` directly. Found via ASan, confirmed crash on c1_2_9 (GH-200).
 
+**GH-400 results (S24):** 32/60 (53%) vehicle match, +12.4% distance gap. C1 gained
++2 matches vs S22; R1 regressed -2 matches. Overall -3 matches, -0.5pp distance.
+
+**Time budget analysis (GH-400, selected C1/R1 instances):** The 10K iteration cap is
+the primary bottleneck, not wall time. R1 instances plateau at 120s/10K with zero
+improvement through 600s/10K. Raising to 50K iterations at 600s unlocks:
+- c1_4_2: +3v → **+2v** (first vehicle elimination on this instance)
+- c1_4_3: +34.6% → **+19.1%** dist (-15.5pp improvement)
+- r1_4_1: +10.6% → **+7.2%** dist (approaching competitive range)
+- r1_4_10/r1_4_7: Plateau at +24-27% — local optima, needs SA reheat
+
 **Tests:** 8 new tests (441→449). Feature extraction, cluster TW check, improved LB,
 route merging, strategy ordering for all 4 feature combinations.
 

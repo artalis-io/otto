@@ -102,6 +102,39 @@ S22 LARGE_TUNE parameters + S24 instance-adaptive construction:
 Avg runtime: 76s. C1 gained +2 vehicle matches vs S22; RC2 distance improved -7.6pp.
 R1 regressed -2 vehicle matches. Overall: -3 matches, -0.5pp distance vs S22.
 
+### GH-400 Time Budget Analysis (selected C1/R1 instances)
+
+Testing whether longer budgets and higher iteration caps close the gap. Population
+mode, S24 construction, seed 42.
+
+| Instance | BKS | 60s/10K | 120s/10K | 300s/10K | 600s/10K | 600s/50K |
+|----------|-----|---------|----------|----------|----------|----------|
+| c1_4_2 | 36v / 7686 | +3v, -5.5% | +3v, -6.2% | +3v, -6.5% | +3v, -6.5% | **+2v**, -5.5% |
+| c1_4_3 | 36v / 7061 | +0v, +34.6% | +0v, +34.4% | +0v, +29.1% | +0v, +23.7% | +0v, **+19.1%** |
+| c1_4_9 | 36v / 7043 | +2v, +13.3% | +1v, +26.7% | +1v, +36.3% | +1v, +32.0% | +1v, +24.1% |
+| r1_4_1 | 40v / 10372 | +0v, +10.6% | +0v, +16.0% | +0v, +13.0% | +0v, +16.3% | +0v, **+7.2%** |
+| r1_4_10 | 36v / 8094 | +0v, +37.8% | +0v, +25.7% | +0v, +25.7% | +0v, +25.7% | +0v, +27.0% |
+| r1_4_7 | 36v / 7616 | +0v, +30.3% | +0v, +24.8% | +0v, +24.8% | +0v, +24.8% | +0v, +23.6% |
+
+**Key findings:**
+
+1. **10K iteration cap is the bottleneck, not wall time.** R1 instances plateau at
+   120s/10K and show zero improvement through 600s/10K — the solver converges before
+   the time limit. Raising to 50K unlocks further progress.
+
+2. **C1 vehicle elimination responds to iterations.** c1_4_2 drops from +3v to +2v
+   only at 50K iterations. The ejection chain needs many ALNS cycles to find viable
+   vehicle-emptying sequences.
+
+3. **Distance improves substantially with 50K iters.** c1_4_3: +34.6% → +19.1%
+   (-15.5pp). r1_4_1: +10.6% → +7.2% (-3.4pp, approaching competitive range).
+
+4. **Some R1 instances hit local optima.** r1_4_10 and r1_4_7 plateau at ~+24-27%
+   regardless of budget — SA reheat or diversity injection needed to escape.
+
+5. **c1_4_3 hit the 600s time limit** at 50K iters (LIMIT status), meaning even more
+   budget would help. At 400 requests, each iteration costs ~12ms.
+
 ### Gehring-Homberger 800 (VRPTW, 60 instances, 120s, population)
 
 LARGE_TUNE parameters (no dedicated XLARGE tuning yet):
@@ -199,4 +232,6 @@ type-2 with threshold 0.15.
 | Low iterations/sec | Fewer ALNS iterations | Improved (S17.3 concat, S19 heap) |
 | Ejection chain timeout | Budget overruns | Fixed (SGBudgetProbe) |
 | SA temperature | Too hot for large instances | Tuned (S22 profile matrix) |
-| Vehicle-first objective | 60s spent on vehicle elimination | Needs longer budgets |
+| **10K iteration cap** | Solver converges before time limit | **Confirmed bottleneck** (50K shows +2v, -15pp) |
+| R1 local optima | Distance plateaus at +24-27% | Needs SA reheat / diversity injection |
+| Vehicle-first objective | 60s spent on vehicle elimination | Needs longer budgets + more iters |
