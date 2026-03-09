@@ -706,6 +706,9 @@ typedef struct {
     uint64_t mkz_update_fill_candidates;
     uint64_t mkz_hint_fallback_scans;
     uint64_t mkz_hint_fallback_scan_entries;
+    uint64_t mkz_affected_columns_total;
+    uint64_t mkz_affected_columns_max;
+    uint64_t mkz_col_max_scan_entries;
 
     int sparse_dense_fallbacks;
     int used_dense_fallback_last;

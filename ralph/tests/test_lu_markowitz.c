@@ -1709,6 +1709,12 @@ static void test_markowitz_scan_runtime_telemetry(void) {
                   "lu mkz telemetry: hint fallback scans eliminated");
     ASSERT_INT_EQ((int)snap.mkz_hint_fallback_scan_entries, 0,
                   "lu mkz telemetry: hint fallback scan entries eliminated");
+    ASSERT(snap.mkz_affected_columns_total > 0,
+           "lu mkz telemetry: affected columns counted");
+    ASSERT(snap.mkz_affected_columns_max > 0,
+           "lu mkz telemetry: affected columns max counted");
+    ASSERT(snap.mkz_col_max_scan_entries > 0,
+           "lu mkz telemetry: col_max scan entries counted");
 
 cleanup:
     lu_free(lu);

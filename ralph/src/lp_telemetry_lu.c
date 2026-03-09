@@ -49,6 +49,9 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.mkz_update_fill_candidates = 0;
     lu->telemetry.mkz_hint_fallback_scans = 0;
     lu->telemetry.mkz_hint_fallback_scan_entries = 0;
+    lu->telemetry.mkz_affected_columns_total = 0;
+    lu->telemetry.mkz_affected_columns_max = 0;
+    lu->telemetry.mkz_col_max_scan_entries = 0;
     lu->telemetry.sparse_dense_fallbacks = 0;
     lu->telemetry.used_dense_fallback_last = 0;
     lu->telemetry.sparse_fallback_last_reason = LU_SPARSE_FALLBACK_NONE;
@@ -207,6 +210,9 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(mkz_update_fill_candidates);
     COPY_LU_TELEM_FIELD(mkz_hint_fallback_scans);
     COPY_LU_TELEM_FIELD(mkz_hint_fallback_scan_entries);
+    COPY_LU_TELEM_FIELD(mkz_affected_columns_total);
+    COPY_LU_TELEM_FIELD(mkz_affected_columns_max);
+    COPY_LU_TELEM_FIELD(mkz_col_max_scan_entries);
 
     COPY_LU_TELEM_FIELD(sparse_dense_fallbacks);
     COPY_LU_TELEM_FIELD(used_dense_fallback_last);
@@ -368,6 +374,18 @@ void lp_telemetry_lu_add_mkz_scan_work(LUFactorization *lu,
     lu->telemetry.mkz_update_fill_candidates += update_fill_candidates;
     lu->telemetry.mkz_hint_fallback_scans += hint_fallback_scans;
     lu->telemetry.mkz_hint_fallback_scan_entries += hint_fallback_scan_entries;
+}
+
+void lp_telemetry_lu_add_mkz_colmax_work(LUFactorization *lu,
+                                         uint64_t affected_columns,
+                                         uint64_t affected_columns_max,
+                                         uint64_t col_max_scan_entries) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.mkz_affected_columns_total += affected_columns;
+    if (affected_columns_max > lu->telemetry.mkz_affected_columns_max) {
+        lu->telemetry.mkz_affected_columns_max = affected_columns_max;
+    }
+    lu->telemetry.mkz_col_max_scan_entries += col_max_scan_entries;
 }
 
 void lp_telemetry_lu_record_symbolic_cache_hit(LUFactorization *lu) {

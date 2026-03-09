@@ -251,6 +251,9 @@ typedef struct {
     uint64_t mkz_update_fill_candidates;  /* Pass-2 pivot-row candidates visited */
     uint64_t mkz_hint_fallback_scans;     /* Times rv_hint fell back to a full scan */
     uint64_t mkz_hint_fallback_scan_entries; /* Entries scanned during rv_hint fallback */
+    uint64_t mkz_affected_columns_total;  /* Live pivot-row columns touched across steps */
+    uint64_t mkz_affected_columns_max;    /* Max live pivot-row columns touched in one step */
+    uint64_t mkz_col_max_scan_entries;    /* Entries scanned while recomputing col_max */
 
     /* Sparse-efficient fallback telemetry */
     int sparse_dense_fallbacks;  /* lu_factorize_sparse_efficient -> lu_factorize_dense */
@@ -1413,6 +1416,9 @@ typedef struct {
     uint64_t mkz_update_fill_candidates;
     uint64_t mkz_hint_fallback_scans;
     uint64_t mkz_hint_fallback_scan_entries;
+    uint64_t mkz_affected_columns_total;
+    uint64_t mkz_affected_columns_max;
+    uint64_t mkz_col_max_scan_entries;
 
     int sparse_dense_fallbacks;
     int used_dense_fallback_last;
@@ -1922,5 +1928,9 @@ void lp_telemetry_lu_add_mkz_scan_work(LUFactorization *lu,
                                        uint64_t update_fill_candidates,
                                        uint64_t hint_fallback_scans,
                                        uint64_t hint_fallback_scan_entries);
+void lp_telemetry_lu_add_mkz_colmax_work(LUFactorization *lu,
+                                         uint64_t affected_columns,
+                                         uint64_t affected_columns_max,
+                                         uint64_t col_max_scan_entries);
 
 #endif /* RALPH_LP_H */
