@@ -3339,6 +3339,19 @@ int ralph_core_get_last_lu_telemetry(const RalphModel *model, RalphLUTelemetry *
     RALPH_LU_TELEM_COPY(perf_total_update_apply_backward_ms);
     RALPH_LU_TELEM_COPY(perf_total_compact_factor_ms);
     RALPH_LU_TELEM_COPY(perf_total_compact_solve_ms);
+    RALPH_LU_TELEM_COPY(perf_sn_active_row_scan_entries);
+    RALPH_LU_TELEM_COPY(perf_sn_active_col_scan_entries);
+    RALPH_LU_TELEM_COPY(perf_sn_trailing_rows_total);
+    RALPH_LU_TELEM_COPY(perf_sn_trailing_cols_total);
+    RALPH_LU_TELEM_COPY(perf_sn_active_rows_total);
+    RALPH_LU_TELEM_COPY(perf_sn_active_cols_total);
+    RALPH_LU_TELEM_COPY(perf_sn_pack_l_entries_total);
+    RALPH_LU_TELEM_COPY(perf_sn_pack_u_entries_total);
+    RALPH_LU_TELEM_COPY(perf_sn_dense_triplets_total);
+    RALPH_LU_TELEM_COPY(perf_sn_compact_triplets_total);
+    RALPH_LU_TELEM_COPY(perf_sn_full_update_calls);
+    RALPH_LU_TELEM_COPY(perf_sn_compact_update_calls);
+    RALPH_LU_TELEM_COPY(perf_sn_skipped_update_calls);
 #undef RALPH_LU_TELEM_COPY
     return 0;
 }

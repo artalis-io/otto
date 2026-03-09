@@ -907,6 +907,33 @@ Status:
     - exact supernode numeric cost reduction is now structurally in place
     - the remaining pilot-family gap is still primarily supernode numeric cost,
       not Schur-update correctness or dense fallback
+- `W1.2` seventh slice implemented
+  - added exact supernode work telemetry:
+    - active-row scan entries
+    - active-col scan entries
+    - trailing-vs-active row/column totals
+    - L/U pack-entry totals
+    - nominal dense-vs-compact triplet totals
+    - compact/full/skipped update-call counts
+  - validation:
+    - `make -C ralph test-lu-supernode`
+    - `make -C ralph test-lp-telemetry-lu`
+    - `make -C ralph test-netlib-gate-small`
+  - measured effect on direct `pilot.mps`:
+    - GLPK: about `2.25s`, `5232` iterations
+    - Ralph: about `47.9s`, `430` iterations
+    - `total_supernode_numeric_ms`: about `19.94s`
+    - `sn_active_row_scan_entries`: about `2.03B`
+    - `sn_active_col_scan_entries`: about `2.03B`
+    - `sn_dense_triplets_total`: about `347.7B`
+    - `sn_compact_triplets_total`: about `235.9M`
+    - `sn_compact_update_calls`: about `290k`
+    - `sn_skipped_update_calls`: about `1.92M`
+  - result:
+    - the dominant remaining pilot-family supernode cost is active-set discovery,
+      not the compact update arithmetic itself
+    - next Week 1 supernode work should target exact active-row/active-column
+      discovery reuse, not another Schur-update arithmetic tweak
 - rejected during `W1.2`
   - stale or approximate `col_max` shortcuts and other behavior-adjacent
     Markowitz optimizations were tried and rolled back

@@ -782,6 +782,19 @@ typedef struct {
     double perf_total_update_apply_backward_ms;
     double perf_total_compact_factor_ms;
     double perf_total_compact_solve_ms;
+    uint64_t perf_sn_active_row_scan_entries;
+    uint64_t perf_sn_active_col_scan_entries;
+    uint64_t perf_sn_trailing_rows_total;
+    uint64_t perf_sn_trailing_cols_total;
+    uint64_t perf_sn_active_rows_total;
+    uint64_t perf_sn_active_cols_total;
+    uint64_t perf_sn_pack_l_entries_total;
+    uint64_t perf_sn_pack_u_entries_total;
+    uint64_t perf_sn_dense_triplets_total;
+    uint64_t perf_sn_compact_triplets_total;
+    uint64_t perf_sn_full_update_calls;
+    uint64_t perf_sn_compact_update_calls;
+    uint64_t perf_sn_skipped_update_calls;
 } RalphLUTelemetry;
 
 /* Get LP solver telemetry snapshot from the most recent solve.

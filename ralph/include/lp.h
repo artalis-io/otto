@@ -349,6 +349,19 @@ typedef struct {
     double perf_total_update_apply_backward_ms;
     double perf_total_compact_factor_ms;
     double perf_total_compact_solve_ms;
+    uint64_t perf_sn_active_row_scan_entries;
+    uint64_t perf_sn_active_col_scan_entries;
+    uint64_t perf_sn_trailing_rows_total;
+    uint64_t perf_sn_trailing_cols_total;
+    uint64_t perf_sn_active_rows_total;
+    uint64_t perf_sn_active_cols_total;
+    uint64_t perf_sn_pack_l_entries_total;
+    uint64_t perf_sn_pack_u_entries_total;
+    uint64_t perf_sn_dense_triplets_total;
+    uint64_t perf_sn_compact_triplets_total;
+    uint64_t perf_sn_full_update_calls;
+    uint64_t perf_sn_compact_update_calls;
+    uint64_t perf_sn_skipped_update_calls;
 } LUTelemetryState;
 
 /* LU factorization of basis matrix */
@@ -1519,6 +1532,19 @@ typedef struct {
     double perf_total_update_apply_backward_ms;
     double perf_total_compact_factor_ms;
     double perf_total_compact_solve_ms;
+    uint64_t perf_sn_active_row_scan_entries;
+    uint64_t perf_sn_active_col_scan_entries;
+    uint64_t perf_sn_trailing_rows_total;
+    uint64_t perf_sn_trailing_cols_total;
+    uint64_t perf_sn_active_rows_total;
+    uint64_t perf_sn_active_cols_total;
+    uint64_t perf_sn_pack_l_entries_total;
+    uint64_t perf_sn_pack_u_entries_total;
+    uint64_t perf_sn_dense_triplets_total;
+    uint64_t perf_sn_compact_triplets_total;
+    uint64_t perf_sn_full_update_calls;
+    uint64_t perf_sn_compact_update_calls;
+    uint64_t perf_sn_skipped_update_calls;
 } LUTelemetrySnapshot;
 
 typedef enum {
@@ -1932,5 +1958,19 @@ void lp_telemetry_lu_add_mkz_colmax_work(LUFactorization *lu,
                                          uint64_t affected_columns,
                                          uint64_t affected_columns_max,
                                          uint64_t col_max_scan_entries);
+void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
+                                        uint64_t active_row_scan_entries,
+                                        uint64_t active_col_scan_entries,
+                                        uint64_t trailing_rows_total,
+                                        uint64_t trailing_cols_total,
+                                        uint64_t active_rows_total,
+                                        uint64_t active_cols_total,
+                                        uint64_t pack_l_entries_total,
+                                        uint64_t pack_u_entries_total,
+                                        uint64_t dense_triplets_total,
+                                        uint64_t compact_triplets_total,
+                                        uint64_t full_update_calls,
+                                        uint64_t compact_update_calls,
+                                        uint64_t skipped_update_calls);
 
 #endif /* RALPH_LP_H */

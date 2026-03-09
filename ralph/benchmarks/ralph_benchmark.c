@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <inttypes.h>
 #include <math.h>
 #include <time.h>
 #include <sys/time.h>
@@ -589,6 +590,19 @@ typedef struct {
     double lu_total_update_apply_backward_ms;
     double lu_total_compact_factor_ms;
     double lu_total_compact_solve_ms;
+    uint64_t lu_sn_active_row_scan_entries;
+    uint64_t lu_sn_active_col_scan_entries;
+    uint64_t lu_sn_trailing_rows_total;
+    uint64_t lu_sn_trailing_cols_total;
+    uint64_t lu_sn_active_rows_total;
+    uint64_t lu_sn_active_cols_total;
+    uint64_t lu_sn_pack_l_entries_total;
+    uint64_t lu_sn_pack_u_entries_total;
+    uint64_t lu_sn_dense_triplets_total;
+    uint64_t lu_sn_compact_triplets_total;
+    uint64_t lu_sn_full_update_calls;
+    uint64_t lu_sn_compact_update_calls;
+    uint64_t lu_sn_skipped_update_calls;
     double *solution;    /* Primal solution (may be NULL) */
     int solution_size;
 } SolveResult;
@@ -1588,6 +1602,32 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                     lu_tel.perf_total_compact_factor_ms;
                 result.lu_total_compact_solve_ms =
                     lu_tel.perf_total_compact_solve_ms;
+                result.lu_sn_active_row_scan_entries =
+                    lu_tel.perf_sn_active_row_scan_entries;
+                result.lu_sn_active_col_scan_entries =
+                    lu_tel.perf_sn_active_col_scan_entries;
+                result.lu_sn_trailing_rows_total =
+                    lu_tel.perf_sn_trailing_rows_total;
+                result.lu_sn_trailing_cols_total =
+                    lu_tel.perf_sn_trailing_cols_total;
+                result.lu_sn_active_rows_total =
+                    lu_tel.perf_sn_active_rows_total;
+                result.lu_sn_active_cols_total =
+                    lu_tel.perf_sn_active_cols_total;
+                result.lu_sn_pack_l_entries_total =
+                    lu_tel.perf_sn_pack_l_entries_total;
+                result.lu_sn_pack_u_entries_total =
+                    lu_tel.perf_sn_pack_u_entries_total;
+                result.lu_sn_dense_triplets_total =
+                    lu_tel.perf_sn_dense_triplets_total;
+                result.lu_sn_compact_triplets_total =
+                    lu_tel.perf_sn_compact_triplets_total;
+                result.lu_sn_full_update_calls =
+                    lu_tel.perf_sn_full_update_calls;
+                result.lu_sn_compact_update_calls =
+                    lu_tel.perf_sn_compact_update_calls;
+                result.lu_sn_skipped_update_calls =
+                    lu_tel.perf_sn_skipped_update_calls;
                 {
                     const char *reason = lu_failure_reason_string(lu_tel.last_failure_reason);
                     if (!reason) reason = "unknown";
@@ -3227,6 +3267,32 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_total_compact_factor_ms);
     fprintf(out, "    \"total_compact_solve_ms\": %.6f,\n",
             ralph->lu_total_compact_solve_ms);
+    fprintf(out, "    \"sn_active_row_scan_entries\": %" PRIu64 ",\n",
+            ralph->lu_sn_active_row_scan_entries);
+    fprintf(out, "    \"sn_active_col_scan_entries\": %" PRIu64 ",\n",
+            ralph->lu_sn_active_col_scan_entries);
+    fprintf(out, "    \"sn_trailing_rows_total\": %" PRIu64 ",\n",
+            ralph->lu_sn_trailing_rows_total);
+    fprintf(out, "    \"sn_trailing_cols_total\": %" PRIu64 ",\n",
+            ralph->lu_sn_trailing_cols_total);
+    fprintf(out, "    \"sn_active_rows_total\": %" PRIu64 ",\n",
+            ralph->lu_sn_active_rows_total);
+    fprintf(out, "    \"sn_active_cols_total\": %" PRIu64 ",\n",
+            ralph->lu_sn_active_cols_total);
+    fprintf(out, "    \"sn_pack_l_entries_total\": %" PRIu64 ",\n",
+            ralph->lu_sn_pack_l_entries_total);
+    fprintf(out, "    \"sn_pack_u_entries_total\": %" PRIu64 ",\n",
+            ralph->lu_sn_pack_u_entries_total);
+    fprintf(out, "    \"sn_dense_triplets_total\": %" PRIu64 ",\n",
+            ralph->lu_sn_dense_triplets_total);
+    fprintf(out, "    \"sn_compact_triplets_total\": %" PRIu64 ",\n",
+            ralph->lu_sn_compact_triplets_total);
+    fprintf(out, "    \"sn_full_update_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_full_update_calls);
+    fprintf(out, "    \"sn_compact_update_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_compact_update_calls);
+    fprintf(out, "    \"sn_skipped_update_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_skipped_update_calls);
     fprintf(out, "    \"last_failure_reason_code\": %d,\n", ralph->lu_last_failure_reason_code);
     fprintf(out, "    \"last_failure_reason\": \"%s\"\n", escaped_lu_reason);
     fprintf(out, "  },\n");
