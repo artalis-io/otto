@@ -42,6 +42,13 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.mkz_profile_retry_fail_identity_sep = 0;
     lu->telemetry.mkz_profile_retry_fail_backend_exhausted = 0;
     lu->telemetry.mkz_profile_retry_fail_pathological = 0;
+    lu->telemetry.mkz_primary_scan_entries = 0;
+    lu->telemetry.mkz_rescue_scan_entries = 0;
+    lu->telemetry.mkz_reserved_scan_entries = 0;
+    lu->telemetry.mkz_update_existing_entries = 0;
+    lu->telemetry.mkz_update_fill_candidates = 0;
+    lu->telemetry.mkz_hint_fallback_scans = 0;
+    lu->telemetry.mkz_hint_fallback_scan_entries = 0;
     lu->telemetry.sparse_dense_fallbacks = 0;
     lu->telemetry.used_dense_fallback_last = 0;
     lu->telemetry.sparse_fallback_last_reason = LU_SPARSE_FALLBACK_NONE;
@@ -193,6 +200,13 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(mkz_profile_retry_fail_identity_sep);
     COPY_LU_TELEM_FIELD(mkz_profile_retry_fail_backend_exhausted);
     COPY_LU_TELEM_FIELD(mkz_profile_retry_fail_pathological);
+    COPY_LU_TELEM_FIELD(mkz_primary_scan_entries);
+    COPY_LU_TELEM_FIELD(mkz_rescue_scan_entries);
+    COPY_LU_TELEM_FIELD(mkz_reserved_scan_entries);
+    COPY_LU_TELEM_FIELD(mkz_update_existing_entries);
+    COPY_LU_TELEM_FIELD(mkz_update_fill_candidates);
+    COPY_LU_TELEM_FIELD(mkz_hint_fallback_scans);
+    COPY_LU_TELEM_FIELD(mkz_hint_fallback_scan_entries);
 
     COPY_LU_TELEM_FIELD(sparse_dense_fallbacks);
     COPY_LU_TELEM_FIELD(used_dense_fallback_last);
@@ -336,6 +350,24 @@ void lp_telemetry_lu_record_compact_solve_ms(LUFactorization *lu,
     if (!lu_telemetry_enabled(lu)) return;
     lu->telemetry.perf_compact_solve_calls++;
     lu->telemetry.perf_total_compact_solve_ms += elapsed_ms;
+}
+
+void lp_telemetry_lu_add_mkz_scan_work(LUFactorization *lu,
+                                       uint64_t primary_scan_entries,
+                                       uint64_t rescue_scan_entries,
+                                       uint64_t reserved_scan_entries,
+                                       uint64_t update_existing_entries,
+                                       uint64_t update_fill_candidates,
+                                       uint64_t hint_fallback_scans,
+                                       uint64_t hint_fallback_scan_entries) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.mkz_primary_scan_entries += primary_scan_entries;
+    lu->telemetry.mkz_rescue_scan_entries += rescue_scan_entries;
+    lu->telemetry.mkz_reserved_scan_entries += reserved_scan_entries;
+    lu->telemetry.mkz_update_existing_entries += update_existing_entries;
+    lu->telemetry.mkz_update_fill_candidates += update_fill_candidates;
+    lu->telemetry.mkz_hint_fallback_scans += hint_fallback_scans;
+    lu->telemetry.mkz_hint_fallback_scan_entries += hint_fallback_scan_entries;
 }
 
 void lp_telemetry_lu_record_symbolic_cache_hit(LUFactorization *lu) {

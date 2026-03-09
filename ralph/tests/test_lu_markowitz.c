@@ -1657,7 +1657,63 @@ static void test_lu_gr_compact_factor_cache(void) {
 }
 
 /* ============================================================================
- * Test 26: Runtime update limit is bounded by allocated LU update storage
+ * Test 26: Markowitz scan telemetry is emitted on a real factorization
+ * ============================================================================ */
+static void test_markowitz_scan_runtime_telemetry(void) {
+    printf("  LU: Markowitz scan runtime telemetry...\n");
+
+    const int m = 40;
+    unsigned int seed = 777;
+    double *A = (double *)calloc((size_t)m * m, sizeof(double));
+    SparseMatrix *B = NULL;
+    LUFactorization *lu = NULL;
+    LUTelemetrySnapshot snap;
+
+    ASSERT(A != NULL, "lu mkz telemetry: dense matrix alloc");
+    if (!A) return;
+
+    for (int i = 0; i < m; i++) {
+        A[i * m + i] = 18.0 + (double)(i % 7);
+        for (int j = 0; j < m; j++) {
+            if (i == j) continue;
+            seed = seed * 1103515245u + 12345u;
+            if (((seed >> 16) & 0x7fffu) % 100 < 24) {
+                seed = seed * 1103515245u + 12345u;
+                A[i * m + j] =
+                    ((double)((seed >> 16) & 0x7fffu) / 32768.0) * 3.0 - 1.5;
+            }
+        }
+    }
+
+    B = dense_to_csc(A, m, m);
+    lu = lu_create(m);
+    ASSERT(B != NULL, "lu mkz telemetry: sparse matrix alloc");
+    ASSERT(lu != NULL, "lu mkz telemetry: lu_create");
+    if (!B || !lu) goto cleanup;
+
+    lu->mkz_enabled = 1;
+    lu->telemetry_enabled = 1;
+    lp_telemetry_reset_lu(lu);
+
+    ASSERT_INT_EQ(lu_factorize(lu, B), 0, "lu mkz telemetry: factorize");
+    lp_telemetry_snapshot_lu(lu, &snap);
+
+    ASSERT(snap.mkz_calls > 0, "lu mkz telemetry: Markowitz called");
+    ASSERT(snap.mkz_primary_scan_entries > 0,
+           "lu mkz telemetry: primary scan entries counted");
+    ASSERT(snap.mkz_update_existing_entries > 0,
+           "lu mkz telemetry: update existing entries counted");
+    ASSERT(snap.mkz_update_fill_candidates > 0,
+           "lu mkz telemetry: update fill candidates counted");
+
+cleanup:
+    lu_free(lu);
+    free_csc(B);
+    free(A);
+}
+
+/* ============================================================================
+ * Test 27: Runtime update limit is bounded by allocated LU update storage
  * ============================================================================ */
 static void test_lu_update_storage_capacity_guard_runtime(void) {
     printf("  LU: runtime update-capacity guard...\n");
@@ -1748,6 +1804,7 @@ int main(void) {
     test_lu_gr_backend_matches_ft_invariants();
     test_lu_bg_compact_factor_cache();
     test_lu_gr_compact_factor_cache();
+    test_markowitz_scan_runtime_telemetry();
     test_lu_update_storage_capacity_guard_runtime();
 
     printf("\nIntegration (A/B Comparison):\n");

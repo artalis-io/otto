@@ -481,6 +481,13 @@ typedef struct {
     int lu_mkz_profile_retry_fail_identity_sep;
     int lu_mkz_profile_retry_fail_backend_exhausted;
     int lu_mkz_profile_retry_fail_pathological;
+    uint64_t lu_mkz_primary_scan_entries;
+    uint64_t lu_mkz_rescue_scan_entries;
+    uint64_t lu_mkz_reserved_scan_entries;
+    uint64_t lu_mkz_update_existing_entries;
+    uint64_t lu_mkz_update_fill_candidates;
+    uint64_t lu_mkz_hint_fallback_scans;
+    uint64_t lu_mkz_hint_fallback_scan_entries;
     int lu_sparse_dense_fallbacks;
     int lu_used_dense_fallback_last;
     int lu_sparse_fallback_last_reason;
@@ -1452,6 +1459,13 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                     lu_tel.mkz_profile_retry_fail_backend_exhausted;
                 result.lu_mkz_profile_retry_fail_pathological =
                     lu_tel.mkz_profile_retry_fail_pathological;
+                result.lu_mkz_primary_scan_entries = lu_tel.mkz_primary_scan_entries;
+                result.lu_mkz_rescue_scan_entries = lu_tel.mkz_rescue_scan_entries;
+                result.lu_mkz_reserved_scan_entries = lu_tel.mkz_reserved_scan_entries;
+                result.lu_mkz_update_existing_entries = lu_tel.mkz_update_existing_entries;
+                result.lu_mkz_update_fill_candidates = lu_tel.mkz_update_fill_candidates;
+                result.lu_mkz_hint_fallback_scans = lu_tel.mkz_hint_fallback_scans;
+                result.lu_mkz_hint_fallback_scan_entries = lu_tel.mkz_hint_fallback_scan_entries;
                 result.lu_sparse_dense_fallbacks = lu_tel.sparse_dense_fallbacks;
                 result.lu_used_dense_fallback_last = lu_tel.used_dense_fallback_last;
                 result.lu_sparse_fallback_last_reason = lu_tel.sparse_fallback_last_reason;
@@ -3030,6 +3044,20 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_mkz_profile_retry_fail_backend_exhausted);
     fprintf(out, "    \"mkz_profile_retry_fail_pathological\": %d,\n",
             ralph->lu_mkz_profile_retry_fail_pathological);
+    fprintf(out, "    \"mkz_primary_scan_entries\": %llu,\n",
+            (unsigned long long)ralph->lu_mkz_primary_scan_entries);
+    fprintf(out, "    \"mkz_rescue_scan_entries\": %llu,\n",
+            (unsigned long long)ralph->lu_mkz_rescue_scan_entries);
+    fprintf(out, "    \"mkz_reserved_scan_entries\": %llu,\n",
+            (unsigned long long)ralph->lu_mkz_reserved_scan_entries);
+    fprintf(out, "    \"mkz_update_existing_entries\": %llu,\n",
+            (unsigned long long)ralph->lu_mkz_update_existing_entries);
+    fprintf(out, "    \"mkz_update_fill_candidates\": %llu,\n",
+            (unsigned long long)ralph->lu_mkz_update_fill_candidates);
+    fprintf(out, "    \"mkz_hint_fallback_scans\": %llu,\n",
+            (unsigned long long)ralph->lu_mkz_hint_fallback_scans);
+    fprintf(out, "    \"mkz_hint_fallback_scan_entries\": %llu,\n",
+            (unsigned long long)ralph->lu_mkz_hint_fallback_scan_entries);
     fprintf(out, "    \"sparse_dense_fallbacks\": %d,\n", ralph->lu_sparse_dense_fallbacks);
     fprintf(out, "    \"used_dense_fallback_last\": %s,\n",
             ralph->lu_used_dense_fallback_last ? "true" : "false");

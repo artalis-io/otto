@@ -244,6 +244,13 @@ typedef struct {
     int mkz_profile_retry_fail_identity_sep; /* Retry profile ended with identity-separation failure */
     int mkz_profile_retry_fail_backend_exhausted; /* Retry profile ended with backend exhaustion */
     int mkz_profile_retry_fail_pathological; /* Retry profile ended with singular/pathological failure */
+    uint64_t mkz_primary_scan_entries; /* Entries visited in primary pivot search */
+    uint64_t mkz_rescue_scan_entries;  /* Entries visited in rescue pivot scan */
+    uint64_t mkz_reserved_scan_entries; /* Entries visited in reserved-row fallback scan */
+    uint64_t mkz_update_existing_entries; /* Pass-1 row entries visited during elimination */
+    uint64_t mkz_update_fill_candidates;  /* Pass-2 pivot-row candidates visited */
+    uint64_t mkz_hint_fallback_scans;     /* Times rv_hint fell back to a full scan */
+    uint64_t mkz_hint_fallback_scan_entries; /* Entries scanned during rv_hint fallback */
 
     /* Sparse-efficient fallback telemetry */
     int sparse_dense_fallbacks;  /* lu_factorize_sparse_efficient -> lu_factorize_dense */
@@ -1399,6 +1406,13 @@ typedef struct {
     int mkz_profile_retry_fail_identity_sep;
     int mkz_profile_retry_fail_backend_exhausted;
     int mkz_profile_retry_fail_pathological;
+    uint64_t mkz_primary_scan_entries;
+    uint64_t mkz_rescue_scan_entries;
+    uint64_t mkz_reserved_scan_entries;
+    uint64_t mkz_update_existing_entries;
+    uint64_t mkz_update_fill_candidates;
+    uint64_t mkz_hint_fallback_scans;
+    uint64_t mkz_hint_fallback_scan_entries;
 
     int sparse_dense_fallbacks;
     int used_dense_fallback_last;
@@ -1900,5 +1914,13 @@ void lp_telemetry_lu_mark_mkz_profile_retry_success(LUFactorization *lu);
 void lp_telemetry_lu_mark_mkz_profile_retry_failure(LUFactorization *lu);
 void lp_telemetry_lu_mark_mkz_profile_retry_terminal_failure(LUFactorization *lu,
                                                              int reason);
+void lp_telemetry_lu_add_mkz_scan_work(LUFactorization *lu,
+                                       uint64_t primary_scan_entries,
+                                       uint64_t rescue_scan_entries,
+                                       uint64_t reserved_scan_entries,
+                                       uint64_t update_existing_entries,
+                                       uint64_t update_fill_candidates,
+                                       uint64_t hint_fallback_scans,
+                                       uint64_t hint_fallback_scan_entries);
 
 #endif /* RALPH_LP_H */

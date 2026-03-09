@@ -12,6 +12,7 @@
 #define RALPH_CORE_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -698,6 +699,13 @@ typedef struct {
     int mkz_circuit_trips;
     int mkz_circuit_skips;
     int mkz_circuit_resets;
+    uint64_t mkz_primary_scan_entries;
+    uint64_t mkz_rescue_scan_entries;
+    uint64_t mkz_reserved_scan_entries;
+    uint64_t mkz_update_existing_entries;
+    uint64_t mkz_update_fill_candidates;
+    uint64_t mkz_hint_fallback_scans;
+    uint64_t mkz_hint_fallback_scan_entries;
 
     int sparse_dense_fallbacks;
     int used_dense_fallback_last;
