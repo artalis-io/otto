@@ -2293,7 +2293,8 @@ static int mkz_compute_workspace_requirements(int init_nnz, int m, int k, int po
     size_t dbl_need = 2u * pool_cap + (size_t)k + (size_t)k + (size_t)k;
     size_t int_count = 4u * pool_cap + 6u * (size_t)k + 3u * (size_t)m
                      + (size_t)k + (size_t)k + (size_t)m + (size_t)k + (size_t)m
-                     + (size_t)k + 1u + 2u * (size_t)k;
+                     + (size_t)k + 1u + 2u * (size_t)k
+                     + 2u * ((size_t)k + 1u);
 
     if (int_count > (((size_t)-1) - (sizeof(double) - 1u)) / sizeof(int)) {
         return -1;
@@ -2492,6 +2493,8 @@ static int lu_factorize_markowitz(
      *   row_alive[m]         — 1 if row not yet eliminated
      *   dg_head[k+1]         — degree bucket heads
      *   dg_next[k], dg_prev[k] — degree bucket DLL
+     *   row_deg_hist_all[k+1] — histogram of active row degrees
+     *   row_deg_hist_nonres[k+1] — histogram of active non-reserved row degrees
      */
     size_t dbl_need = 2u * (size_t)pool_cap + (size_t)k + (size_t)k + (size_t)k;
 
@@ -2527,7 +2530,9 @@ static int lu_factorize_markowitz(
     int *col_max_dirty = ib;    ib += k;
     int *dg_head  = ib;         ib += k + 1;
     int *dg_next  = ib;         ib += k;
-    int *dg_prev  = ib;         /* ib += k; */
+    int *dg_prev  = ib;         ib += k;
+    int *row_deg_hist_all = ib; ib += k + 1;
+    int *row_deg_hist_nonres = ib; /* ib += k + 1; */
 
     /* Initialize */
     memset(flag, 0, k * sizeof(int));
@@ -2538,6 +2543,8 @@ static int lu_factorize_markowitz(
     memset(row_alive, 0, m * sizeof(int));
     memset(col_max_pos, 0xff, k * sizeof(int));
     memset(col_max_dirty, 0, k * sizeof(int));
+    memset(row_deg_hist_all, 0, (size_t)(k + 1) * sizeof(int));
+    memset(row_deg_hist_nonres, 0, (size_t)(k + 1) * sizeof(int));
 
     int L_nnz = 0, U_nnz = 0;
     uint64_t mkz_primary_scan_entries = 0;
@@ -2601,6 +2608,20 @@ static int lu_factorize_markowitz(
         int s = cv_ptr[jj], n2 = cv_len[jj];
         for (int e = 0; e < n2; e++)
             row_alive[cv_idx[s + e]] = 1;
+    }
+
+    int min_row_deg_all = k + 1;
+    int min_row_deg_nonres = k + 1;
+    for (int i = 0; i < m; i++) {
+        if (!row_alive[i]) continue;
+        int deg = row_deg[i];
+        if (deg <= 0 || deg > k) continue;
+        row_deg_hist_all[deg]++;
+        if (deg < min_row_deg_all) min_row_deg_all = deg;
+        if (!row_reserved || !row_reserved[i]) {
+            row_deg_hist_nonres[deg]++;
+            if (deg < min_row_deg_nonres) min_row_deg_nonres = deg;
+        }
     }
 
     /* Build row SVA from column SVA (transpose) */
@@ -2673,6 +2694,41 @@ static int lu_factorize_markowitz(
         dg_head[_d] = jj; \
     } while(0)
 
+    #define ADVANCE_MIN_ROW_DEG(_min_deg, _hist) do { \
+        while ((_min_deg) <= k && (_hist)[(_min_deg)] == 0) (_min_deg)++; \
+    } while (0)
+
+    #define ROW_DEG_HIST_REMOVE(_row, _old_deg) do { \
+        if ((_old_deg) > 0 && (_old_deg) <= k) { \
+            row_deg_hist_all[_old_deg]--; \
+            if ((_old_deg) == min_row_deg_all && row_deg_hist_all[_old_deg] == 0) \
+                ADVANCE_MIN_ROW_DEG(min_row_deg_all, row_deg_hist_all); \
+            if (!row_reserved || !row_reserved[_row]) { \
+                row_deg_hist_nonres[_old_deg]--; \
+                if ((_old_deg) == min_row_deg_nonres && row_deg_hist_nonres[_old_deg] == 0) \
+                    ADVANCE_MIN_ROW_DEG(min_row_deg_nonres, row_deg_hist_nonres); \
+            } \
+        } \
+    } while (0)
+
+    #define ROW_DEG_HIST_ADD(_row, _new_deg) do { \
+        if ((_new_deg) > 0 && (_new_deg) <= k) { \
+            row_deg_hist_all[_new_deg]++; \
+            if ((_new_deg) < min_row_deg_all) min_row_deg_all = (_new_deg); \
+            if (!row_reserved || !row_reserved[_row]) { \
+                row_deg_hist_nonres[_new_deg]++; \
+                if ((_new_deg) < min_row_deg_nonres) min_row_deg_nonres = (_new_deg); \
+            } \
+        } \
+    } while (0)
+
+    #define ROW_DEG_CHANGE(_row, _delta) do { \
+        int _old_deg = row_deg[_row]; \
+        ROW_DEG_HIST_REMOVE(_row, _old_deg); \
+        row_deg[_row] = _old_deg + (_delta); \
+        ROW_DEG_HIST_ADD(_row, row_deg[_row]); \
+    } while (0)
+
     /* Helper: remove entry at position e from column jj's SVA segment */
     #define CV_REMOVE(jj, e) do { \
         int _s = cv_ptr[jj]; \
@@ -2736,13 +2792,21 @@ static int lu_factorize_markowitz(
             double threshold_ratio = singular_retry_used
                 ? singular_retry_threshold
                 : threshold_ratio_base;
+            int min_row_deg_bound = reserve_non_reserved
+                ? min_row_deg_nonres
+                : min_row_deg_all;
 
-            for (int d = 1; d <= k; d++) {
-                if ((long long)(d - 1) >= best_cost && best_cost < (long long)m * m + 1)
+            for (int d = 1; d <= k && min_row_deg_bound <= k; d++) {
+                long long bucket_lower_bound = (long long)(min_row_deg_bound - 1) * (long long)(d - 1);
+                if (best_cost < (long long)m * m + 1 && bucket_lower_bound > best_cost)
                     break;
                 int cand = 0;
                 if (reserve_non_reserved && row_reserved) {
                     for (int jj = dg_head[d]; jj >= 0 && cand < max_search; jj = dg_next[jj]) {
+                        if (best_cost < (long long)m * m + 1 && bucket_lower_bound > best_cost) {
+                            cand++;
+                            continue;
+                        }
                         double max_col = col_max[jj];
                         double thr = threshold_ratio * max_col;
                         int s = cv_ptr[jj], n2 = cv_len[jj];
@@ -2768,6 +2832,16 @@ static int lu_factorize_markowitz(
                     }
                 } else {
                     for (int jj = dg_head[d]; jj >= 0 && cand < max_search; jj = dg_next[jj]) {
+                        if (best_cost < (long long)m * m + 1) {
+                            if (bucket_lower_bound > best_cost) {
+                                cand++;
+                                continue;
+                            }
+                            if (bucket_lower_bound == best_cost && col_max[jj] <= best_piv_val) {
+                                cand++;
+                                continue;
+                            }
+                        }
                         double max_col = col_max[jj];
                         double thr = threshold_ratio * max_col;
                         int s = cv_ptr[jj], n2 = cv_len[jj];
@@ -2960,6 +3034,7 @@ static int lu_factorize_markowitz(
         /* Mark eliminated */
         DG_REMOVE(piv_col);
         col_alive[piv_col] = 0;
+        ROW_DEG_HIST_REMOVE(piv_row, row_deg[piv_row]);
         row_alive[piv_row] = 0;
 
         /* === 3. Phase A: Scatter pivot row into work[]/flag[] using row SVA === */
@@ -3054,7 +3129,7 @@ static int lu_factorize_markowitz(
                           CV_REMOVE(jj, ce);
                           RV_REMOVE(row, re); re--;
                           DG_REMOVE(jj); col_deg[jj]--; DG_INSERT(jj);
-                          row_deg[row]--;
+                          ROW_DEG_CHANGE(row, -1);
                       } else {
                           cv_val[cs + ce] = new_val;
                           {
@@ -3148,7 +3223,7 @@ static int lu_factorize_markowitz(
                     rv_len[row]++;
 
                     DG_REMOVE(jj); col_deg[jj]++; DG_INSERT(jj);
-                    row_deg[row]++;
+                    ROW_DEG_CHANGE(row, +1);
                 } }
 
               /* Restore flags for next row */
@@ -3157,7 +3232,7 @@ static int lu_factorize_markowitz(
                   flag[jj] = 1;
               }
 
-              row_deg[row]--;
+              ROW_DEG_CHANGE(row, -1);
           } }
 
         /* Remove pivot-row entries from column SVAs (cleanup).
@@ -3232,6 +3307,10 @@ static int lu_factorize_markowitz(
 
     #undef DG_REMOVE
     #undef DG_INSERT
+    #undef ADVANCE_MIN_ROW_DEG
+    #undef ROW_DEG_HIST_REMOVE
+    #undef ROW_DEG_HIST_ADD
+    #undef ROW_DEG_CHANGE
     #undef CV_REMOVE
     #undef RV_REMOVE
     #undef MKZ_FLUSH_TELEMETRY

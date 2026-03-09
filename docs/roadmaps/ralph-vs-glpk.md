@@ -842,6 +842,31 @@ Status:
     - this is the first material Markowitz-kernel reduction in Week 1
     - the remaining `fit2p` cost is now in primary/update scan volume rather
       than `col_max` recomputation
+- `W1.2` fourth slice implemented
+  - added exact active-row degree histograms in `ralph/src/lu_sparse.c`
+  - primary Markowitz scan now uses a provable lower bound:
+    - if the minimum possible row degree cannot beat the current best
+      Markowitz cost, the entire candidate column is skipped
+    - in the non-reserved lane, tie-cost columns are also skipped when
+      `col_max` cannot beat the current best pivot magnitude
+  - this is exact pruning, not heuristic threshold tightening
+  - validation:
+    - `make -C ralph test-lu-markowitz`
+    - `make -C ralph test-netlib-gate-small`
+    - focused Week 1 allowlist gate
+    - `make -C ralph test-netlib-gate`
+  - measured effect:
+    - direct `fit2p.mps`:
+      - `mkz_primary_scan_entries`: about `53.56M -> 16.97M`
+      - Ralph solve time class improved from about `24.4s` to about `17.9s`
+    - focused Week 1 gate:
+      - `fit2p.mps` solved in about `17.9s`
+      - timeout-family count unchanged at `8/9`
+  - result:
+    - this is a real primary-scan reduction and a meaningful `fit2p`
+      improvement
+    - the remaining Week 1 large-basis gap is now more concentrated in
+      update-existing/fill scan volume and large supernode numeric cost
 - rejected during `W1.2`
   - stale or approximate `col_max` shortcuts and other behavior-adjacent
     Markowitz optimizations were tried and rolled back
