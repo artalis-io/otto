@@ -278,6 +278,9 @@ SGContext *sg_create(void) {
     ctx->profile_applied = 0;
     /* Construction: try all methods by default */
     ctx->construct_method = SG_CONSTRUCT_COUNT;
+    /* Generation reheat: 1.0 = no change (neutral) */
+    ctx->gen_reheat_ratio = 1.0;
+    ctx->gen_cooling_stretch = 1.0;
     return ctx;
 }
 
@@ -445,6 +448,8 @@ void sg_tune_params_default(SGTuneParams *params) {
     params->pd_shaw_randomness = SG_TUNE_SENTINEL_D;
     params->route_shaw_randomness = SG_TUNE_SENTINEL_D;
     params->string_l_max = SG_TUNE_SENTINEL_I;
+    params->gen_reheat_ratio = SG_TUNE_SENTINEL_D;
+    params->gen_cooling_stretch = SG_TUNE_SENTINEL_D;
 }
 
 SGStatus sg_set_tune_params(SGContext *ctx, const SGTuneParams *params) {

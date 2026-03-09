@@ -30,7 +30,9 @@
     .pd_shaw_randomness    = SG_TUNE_SENTINEL_D, \
     .route_shaw_randomness = SG_TUNE_SENTINEL_D, \
     .string_l_max          = SG_TUNE_SENTINEL_I, \
-    .neighbor_k            = 30 \
+    .neighbor_k            = 30, \
+    .gen_reheat_ratio      = SG_TUNE_SENTINEL_D, \
+    .gen_cooling_stretch   = SG_TUNE_SENTINEL_D \
 }
 
 /* Tuned for GH-200 scale (101-200 requests) via bench_tune all-tiers (S22).
@@ -65,7 +67,9 @@
     .pd_shaw_randomness    = 3.16, \
     .route_shaw_randomness = 10.00, \
     .string_l_max          = 8, \
-    .neighbor_k            = 20 \
+    .neighbor_k            = 20, \
+    .gen_reheat_ratio      = SG_TUNE_SENTINEL_D, \
+    .gen_cooling_stretch   = SG_TUNE_SENTINEL_D \
 }
 
 /* MEDIUM_TUNE with reduced phase1.5 for realtime profile */
@@ -96,7 +100,9 @@
     .pd_shaw_randomness    = 3.16, \
     .route_shaw_randomness = 10.00, \
     .string_l_max          = 8, \
-    .neighbor_k            = 20 \
+    .neighbor_k            = 20, \
+    .gen_reheat_ratio      = SG_TUNE_SENTINEL_D, \
+    .gen_cooling_stretch   = SG_TUNE_SENTINEL_D \
 }
 
 /* Tuned for GH-400 scale (201-400 requests) via bench_tune all-tiers (S22).
@@ -130,7 +136,9 @@
     .pd_shaw_randomness    = 3.16, \
     .route_shaw_randomness = 3.16, \
     .string_l_max          = 8, \
-    .neighbor_k            = 20 \
+    .neighbor_k            = 20, \
+    .gen_reheat_ratio      = SG_TUNE_SENTINEL_D, \
+    .gen_cooling_stretch   = SG_TUNE_SENTINEL_D \
 }
 
 /* Realtime profile: phase1.5 only 200 iters */
@@ -161,7 +169,9 @@
     .pd_shaw_randomness    = SG_TUNE_SENTINEL_D, \
     .route_shaw_randomness = SG_TUNE_SENTINEL_D, \
     .string_l_max          = SG_TUNE_SENTINEL_I, \
-    .neighbor_k            = 30 \
+    .neighbor_k            = 30, \
+    .gen_reheat_ratio      = SG_TUNE_SENTINEL_D, \
+    .gen_cooling_stretch   = SG_TUNE_SENTINEL_D \
 }
 
 /* LARGE_TUNE with reduced phase1.5 for realtime profile */
@@ -192,7 +202,9 @@
     .pd_shaw_randomness    = 3.16, \
     .route_shaw_randomness = 3.16, \
     .string_l_max          = 8, \
-    .neighbor_k            = 20 \
+    .neighbor_k            = 20, \
+    .gen_reheat_ratio      = SG_TUNE_SENTINEL_D, \
+    .gen_cooling_stretch   = SG_TUNE_SENTINEL_D \
 }
 
 /*

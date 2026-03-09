@@ -552,6 +552,10 @@ struct SGContext {
     uint8_t  has_frozen;                        /* fast-path: 1 if any request == FROZEN */
     uint32_t *frozen_vehicle_map;               /* [num_requests] rid -> designated vehicle, SG_NO_VEHICLE if not frozen */
 
+    /* Generation-aware SA reheat (set by sg_parallel.c for generations > 0) */
+    double gen_reheat_ratio;     /* SA T₀ multiplier (1.0 = no change) */
+    double gen_cooling_stretch;  /* Cooling schedule stretch (1.0 = no change) */
+
     /* Construction method override (SG_CONSTRUCT_COUNT = try all, default) */
     SGConstructMethod construct_method;
 
