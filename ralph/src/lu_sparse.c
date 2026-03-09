@@ -2290,8 +2290,8 @@ static int mkz_compute_workspace_requirements(int init_nnz, int m, int k, int po
     if (pool_cap < min_pool) pool_cap = min_pool;
     if (pool_cap > (size_t)INT_MAX) return -1;
 
-    size_t dbl_need = 2u * pool_cap + (size_t)k + (size_t)k;
-    size_t int_count = 4u * pool_cap + 4u * (size_t)k + 3u * (size_t)m
+    size_t dbl_need = 2u * pool_cap + (size_t)k + (size_t)k + (size_t)k;
+    size_t int_count = 4u * pool_cap + 6u * (size_t)k + 3u * (size_t)m
                      + (size_t)k + (size_t)k + (size_t)m + (size_t)k + (size_t)m
                      + (size_t)k + 1u + 2u * (size_t)k;
 
@@ -2473,6 +2473,7 @@ static int lu_factorize_markowitz(
      *   rv_val[pool_cap]     — row SVA values
      *   work[k]              — dense scatter buffer for pivot row values
      *   col_max[k]           — column maximum absolute value
+     *   col_max_prev[k]      — previous column max bound when a column is dirty
      *
      * INTS (packed after doubles):
      *   cv_idx[pool_cap]     — column SVA row indices
@@ -2484,13 +2485,15 @@ static int lu_factorize_markowitz(
      *   flag[k]              — dense flag for scatter/gather
      *   pivot_live_rp[k]     — row-SVA positions of live pivot-row entries
      *   col_deg[k]           — active column degree (for degree buckets)
+     *   col_max_pos[k]       — local position of current column max, -1 if unknown
+     *   col_max_dirty[k]     — 1 when col_max needs exact rescan
      *   row_deg[m]           — active row degree
      *   col_alive[k]         — 1 if column not yet eliminated
      *   row_alive[m]         — 1 if row not yet eliminated
      *   dg_head[k+1]         — degree bucket heads
      *   dg_next[k], dg_prev[k] — degree bucket DLL
      */
-    size_t dbl_need = 2u * (size_t)pool_cap + (size_t)k + (size_t)k;
+    size_t dbl_need = 2u * (size_t)pool_cap + (size_t)k + (size_t)k + (size_t)k;
 
     if (workspace_doubles < total_need)
         return MKZ_FAIL_WORKSPACE;
@@ -2500,6 +2503,7 @@ static int lu_factorize_markowitz(
     double *rv_val  = cv_val + pool_cap;
     double *work    = rv_val + pool_cap;
     double *col_max = work + k;
+    double *col_max_prev = col_max + k;
 
     /* Carve int arrays */
     int *ib = (int *)(workspace + dbl_need);
@@ -2519,6 +2523,8 @@ static int lu_factorize_markowitz(
     int *row_deg  = ib;         ib += m;
     int *col_alive = ib;        ib += k;
     int *row_alive = ib;        ib += m;
+    int *col_max_pos = ib;      ib += k;
+    int *col_max_dirty = ib;    ib += k;
     int *dg_head  = ib;         ib += k + 1;
     int *dg_next  = ib;         ib += k;
     int *dg_prev  = ib;         /* ib += k; */
@@ -2526,9 +2532,12 @@ static int lu_factorize_markowitz(
     /* Initialize */
     memset(flag, 0, k * sizeof(int));
     memset(work, 0, k * sizeof(double));
+    memset(col_max_prev, 0, k * sizeof(double));
     memset(row_deg, 0, m * sizeof(int));
     for (int jj = 0; jj < k; jj++) col_alive[jj] = 1;
     memset(row_alive, 0, m * sizeof(int));
+    memset(col_max_pos, 0xff, k * sizeof(int));
+    memset(col_max_dirty, 0, k * sizeof(int));
 
     int L_nnz = 0, U_nnz = 0;
     uint64_t mkz_primary_scan_entries = 0;
@@ -2627,12 +2636,17 @@ static int lu_factorize_markowitz(
     /* Compute column maximums */
     for (int jj = 0; jj < k; jj++) {
         double mx = 0.0;
+        int mx_pos = -1;
         int s = cv_ptr[jj], n2 = cv_len[jj];
         for (int e = 0; e < n2; e++) {
             double av = fabs(cv_val[s + e]);
-            if (av > mx) mx = av;
+            if (av > mx) {
+                mx = av;
+                mx_pos = e;
+            }
         }
         col_max[jj] = mx;
+        col_max_pos[jj] = mx_pos;
     }
 
     /* Initialize degree buckets (by column degree) */
@@ -3026,12 +3040,44 @@ static int lu_factorize_markowitz(
 
                       if (fabs(new_val) < RALPH_ZERO_TOL) {
                           /* Cancellation: remove from both SVAs */
+                          int old_cn = cn;
+                          double old_abs = fabs(cv_val[cs + ce]);
+                          if (!col_max_dirty[jj]) {
+                              if (ce == col_max_pos[jj]) {
+                                  col_max_dirty[jj] = 1;
+                                  col_max_prev[jj] = old_abs;
+                                  col_max_pos[jj] = -1;
+                              } else if (col_max_pos[jj] == old_cn - 1) {
+                                  col_max_pos[jj] = ce;
+                              }
+                          }
                           CV_REMOVE(jj, ce);
                           RV_REMOVE(row, re); re--;
                           DG_REMOVE(jj); col_deg[jj]--; DG_INSERT(jj);
                           row_deg[row]--;
                       } else {
                           cv_val[cs + ce] = new_val;
+                          {
+                              double new_abs = fabs(new_val);
+                              if (col_max_dirty[jj]) {
+                                  if (new_abs >= col_max_prev[jj]) {
+                                      col_max_dirty[jj] = 0;
+                                      col_max[jj] = new_abs;
+                                      col_max_pos[jj] = ce;
+                                  }
+                              } else if (ce == col_max_pos[jj]) {
+                                  if (new_abs >= col_max[jj]) {
+                                      col_max[jj] = new_abs;
+                                  } else {
+                                      col_max_dirty[jj] = 1;
+                                      col_max_prev[jj] = col_max[jj];
+                                      col_max_pos[jj] = -1;
+                                  }
+                              } else if (new_abs > col_max[jj]) {
+                                  col_max[jj] = new_abs;
+                                  col_max_pos[jj] = ce;
+                              }
+                          }
                       }
                   }
               }
@@ -3067,6 +3113,19 @@ static int lu_factorize_markowitz(
                     cv_val[cv_ptr[jj] + cn] = fill;
                     cv_hint[cv_ptr[jj] + cn] = rn2;
                     cv_len[jj]++;
+                    {
+                        double fill_abs = fabs(fill);
+                        if (col_max_dirty[jj]) {
+                            if (fill_abs >= col_max_prev[jj]) {
+                                col_max_dirty[jj] = 0;
+                                col_max[jj] = fill_abs;
+                                col_max_pos[jj] = cn;
+                            }
+                        } else if (fill_abs > col_max[jj]) {
+                            col_max[jj] = fill_abs;
+                            col_max_pos[jj] = cn;
+                        }
+                    }
 
                     /* Insert into row SVA */
                     if (rn2 >= rv_cap_a[row]) {
@@ -3121,6 +3180,17 @@ static int lu_factorize_markowitz(
                   if (ce < 0) continue;
                   rv_hint[rp] = ce;
               }
+              if (!col_max_dirty[jj]) {
+                  double removed_abs = fabs(cv_val[s + ce]);
+                  int old_cn = n2;
+                  if (ce == col_max_pos[jj]) {
+                      col_max_dirty[jj] = 1;
+                      col_max_prev[jj] = removed_abs;
+                      col_max_pos[jj] = -1;
+                  } else if (col_max_pos[jj] == old_cn - 1) {
+                      col_max_pos[jj] = ce;
+                  }
+              }
               CV_REMOVE(jj, ce);
               DG_REMOVE(jj); col_deg[jj]--; DG_INSERT(jj);
         }
@@ -3136,15 +3206,22 @@ static int lu_factorize_markowitz(
           uint64_t step_affected_columns = (uint64_t)pivot_live_n;
           for (int pe = 0; pe < pivot_live_n; pe++) {
               int jj = rv_idx[pivot_live_rp[pe]];
+              if (!col_max_dirty[jj]) continue;
               double mx = 0.0;
+              int mx_pos = -1;
               int s = cv_ptr[jj], n2 = cv_len[jj];
               mkz_col_max_scan_entries += (uint64_t)n2;
               for (int e = 0; e < n2; e++) {
                   if (!row_alive[cv_idx[s + e]]) continue;
                   double av = fabs(cv_val[s + e]);
-                  if (av > mx) mx = av;
+                  if (av > mx) {
+                      mx = av;
+                      mx_pos = e;
+                  }
               }
               col_max[jj] = mx;
+              col_max_pos[jj] = mx_pos;
+              col_max_dirty[jj] = 0;
           }
           mkz_affected_columns_total += step_affected_columns;
           if (step_affected_columns > mkz_affected_columns_max) {
