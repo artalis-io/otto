@@ -2291,7 +2291,7 @@ static int mkz_compute_workspace_requirements(int init_nnz, int m, int k, int po
     if (pool_cap > (size_t)INT_MAX) return -1;
 
     size_t dbl_need = 2u * pool_cap + (size_t)k + (size_t)k + (size_t)k;
-    size_t int_count = 4u * pool_cap + 6u * (size_t)k + 3u * (size_t)m
+    size_t int_count = 4u * pool_cap + 7u * (size_t)k + 3u * (size_t)m
                      + (size_t)k + (size_t)k + (size_t)m + (size_t)k + (size_t)m
                      + (size_t)k + 1u + 2u * (size_t)k
                      + 2u * ((size_t)k + 1u);
@@ -2485,6 +2485,7 @@ static int lu_factorize_markowitz(
      *   rv_ptr[m], rv_len[m], rv_cap[m]  — row SVA metadata
      *   flag[k]              — dense flag for scatter/gather
      *   pivot_live_rp[k]     — row-SVA positions of live pivot-row entries
+     *   pivot_live_col[k]    — structural column ids of live pivot-row entries
      *   col_deg[k]           — active column degree (for degree buckets)
      *   col_max_pos[k]       — local position of current column max, -1 if unknown
      *   col_max_dirty[k]     — 1 when col_max needs exact rescan
@@ -2522,6 +2523,7 @@ static int lu_factorize_markowitz(
     int *rv_cap_a = ib;         ib += m;
     int *flag     = ib;         ib += k;
     int *pivot_live_rp = ib;    ib += k;
+    int *pivot_live_col = ib;   ib += k;
     int *col_deg  = ib;         ib += k;
     int *row_deg  = ib;         ib += m;
     int *col_alive = ib;        ib += k;
@@ -3047,6 +3049,7 @@ static int lu_factorize_markowitz(
               work[jj] = rv_val[rp];
               flag[jj] = 1;
               pivot_live_rp[pivot_live_n++] = rp;
+              pivot_live_col[pivot_live_n - 1] = jj;
           } }
 
         /* === 4. Emit L diagonal + U pivot row === */
@@ -3059,7 +3062,7 @@ static int lu_factorize_markowitz(
 
         for (int pe = 0; pe < pivot_live_n; pe++) {
               int rp = pivot_live_rp[pe];
-              int jj = rv_idx[rp];
+              int jj = pivot_live_col[pe];
               if (fabs(rv_val[rp]) > RALPH_ZERO_TOL) {
                   if (U_nnz >= U_capacity) {
                       MKZ_FLUSH_TELEMETRY();
@@ -3161,7 +3164,7 @@ static int lu_factorize_markowitz(
               {
                 mkz_update_fill_candidates += (uint64_t)pivot_live_n;
                 for (int pe = 0; pe < pivot_live_n; pe++) {
-                    int jj = rv_idx[pivot_live_rp[pe]];
+                    int jj = pivot_live_col[pe];
                     if (!col_alive[jj] || !flag[jj]) continue;
                     double fill = -mult * work[jj];
                     if (fabs(fill) < RALPH_ZERO_TOL) continue;
@@ -3228,7 +3231,7 @@ static int lu_factorize_markowitz(
 
               /* Restore flags for next row */
               for (int pe = 0; pe < pivot_live_n; pe++) {
-                  int jj = rv_idx[pivot_live_rp[pe]];
+                  int jj = pivot_live_col[pe];
                   flag[jj] = 1;
               }
 
@@ -3239,7 +3242,7 @@ static int lu_factorize_markowitz(
          * Use row SVA to visit only affected columns instead of scanning all k columns. */
         for (int pe = 0; pe < pivot_live_n; pe++) {
               int rp = pivot_live_rp[pe];
-              int jj = rv_idx[rp];
+              int jj = pivot_live_col[pe];
               int s = cv_ptr[jj], n2 = cv_len[jj];
               int ce = rv_hint[rp];
               if (ce < 0 || ce >= n2 || cv_idx[s + ce] != piv_row) {
@@ -3272,7 +3275,7 @@ static int lu_factorize_markowitz(
 
         /* Phase C: Clean up scatter arrays */
         for (int pe = 0; pe < pivot_live_n; pe++) {
-              int jj = rv_idx[pivot_live_rp[pe]];
+              int jj = pivot_live_col[pe];
               work[jj] = 0.0; flag[jj] = 0;
         }
 
@@ -3280,7 +3283,7 @@ static int lu_factorize_markowitz(
         {
           uint64_t step_affected_columns = (uint64_t)pivot_live_n;
           for (int pe = 0; pe < pivot_live_n; pe++) {
-              int jj = rv_idx[pivot_live_rp[pe]];
+              int jj = pivot_live_col[pe];
               if (!col_max_dirty[jj]) continue;
               double mx = 0.0;
               int mx_pos = -1;

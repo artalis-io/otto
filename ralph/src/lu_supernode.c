@@ -501,6 +501,92 @@ static void sn_dgemm_update_scattered_rows(int panel_rows, int block_size, int u
 }
 
 /*
+ * Scattered-row/column GEMM update:
+ *   A_struct[row_perm[row_base + row_idx[i]], col_base + col_idx[j]] -= A * B
+ *
+ * Used when the supernode Schur update is sparse in either the trailing rows or
+ * trailing columns. This keeps the arithmetic exact while avoiding dense work
+ * over structurally zero update regions.
+ */
+static void sn_dgemm_update_scattered_rows_cols(int panel_rows, int block_size, int update_cols,
+                                                const double *A, int lda,
+                                                const double *B, int ldb,
+                                                double *A_struct, int k,
+                                                const int *row_perm,
+                                                const int *row_idx, int row_base,
+                                                const int *col_idx, int col_base) {
+    int i;
+    for (i = 0; i + 3 < panel_rows; i += 4) {
+        double *c0 = A_struct + (size_t)row_perm[row_base + row_idx[i + 0]] * (size_t)k + col_base;
+        double *c1 = A_struct + (size_t)row_perm[row_base + row_idx[i + 1]] * (size_t)k + col_base;
+        double *c2 = A_struct + (size_t)row_perm[row_base + row_idx[i + 2]] * (size_t)k + col_base;
+        double *c3 = A_struct + (size_t)row_perm[row_base + row_idx[i + 3]] * (size_t)k + col_base;
+        int j;
+
+        for (j = 0; j + 3 < update_cols; j += 4) {
+            int cj0 = col_idx[j + 0];
+            int cj1 = col_idx[j + 1];
+            int cj2 = col_idx[j + 2];
+            int cj3 = col_idx[j + 3];
+            double c00 = 0, c01 = 0, c02 = 0, c03 = 0;
+            double c10 = 0, c11 = 0, c12 = 0, c13 = 0;
+            double c20 = 0, c21 = 0, c22 = 0, c23 = 0;
+            double c30 = 0, c31 = 0, c32 = 0, c33 = 0;
+
+            for (int p = 0; p < block_size; p++) {
+                double a0 = A[(i + 0) * lda + p];
+                double a1 = A[(i + 1) * lda + p];
+                double a2 = A[(i + 2) * lda + p];
+                double a3 = A[(i + 3) * lda + p];
+
+                double b0 = B[p * ldb + (j + 0)];
+                double b1 = B[p * ldb + (j + 1)];
+                double b2 = B[p * ldb + (j + 2)];
+                double b3 = B[p * ldb + (j + 3)];
+
+                c00 += a0 * b0; c01 += a0 * b1; c02 += a0 * b2; c03 += a0 * b3;
+                c10 += a1 * b0; c11 += a1 * b1; c12 += a1 * b2; c13 += a1 * b3;
+                c20 += a2 * b0; c21 += a2 * b1; c22 += a2 * b2; c23 += a2 * b3;
+                c30 += a3 * b0; c31 += a3 * b1; c32 += a3 * b2; c33 += a3 * b3;
+            }
+
+            c0[cj0] -= c00; c0[cj1] -= c01; c0[cj2] -= c02; c0[cj3] -= c03;
+            c1[cj0] -= c10; c1[cj1] -= c11; c1[cj2] -= c12; c1[cj3] -= c13;
+            c2[cj0] -= c20; c2[cj1] -= c21; c2[cj2] -= c22; c2[cj3] -= c23;
+            c3[cj0] -= c30; c3[cj1] -= c31; c3[cj2] -= c32; c3[cj3] -= c33;
+        }
+
+        for (; j < update_cols; j++) {
+            int cj = col_idx[j];
+            double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+            for (int p = 0; p < block_size; p++) {
+                double b = B[p * ldb + j];
+                s0 += A[(i + 0) * lda + p] * b;
+                s1 += A[(i + 1) * lda + p] * b;
+                s2 += A[(i + 2) * lda + p] * b;
+                s3 += A[(i + 3) * lda + p] * b;
+            }
+            c0[cj] -= s0;
+            c1[cj] -= s1;
+            c2[cj] -= s2;
+            c3[cj] -= s3;
+        }
+    }
+
+    for (; i < panel_rows; i++) {
+        double *c = A_struct + (size_t)row_perm[row_base + row_idx[i]] * (size_t)k + col_base;
+        for (int j = 0; j < update_cols; j++) {
+            int cj = col_idx[j];
+            double sum = 0.0;
+            for (int p = 0; p < block_size; p++) {
+                sum += A[i * lda + p] * B[p * ldb + j];
+            }
+            c[cj] -= sum;
+        }
+    }
+}
+
+/*
  * TRSM: Solve L * X = B in-place (B overwritten with X).
  *
  * L is block_size x block_size unit lower triangular (row-major, ldl stride).
@@ -811,11 +897,52 @@ int sn_factorize(double *A_struct, int m, int k,
         int trailing_cols = k - (sn_start + sn_size);
 
         if (trailing_rows > 0 && trailing_cols > 0) {
+            int *active_rows = (int *)malloc((size_t)trailing_rows * sizeof(int));
+            int *active_cols = (int *)malloc((size_t)trailing_cols * sizeof(int));
+            if (!active_rows || !active_cols) {
+                free(active_rows);
+                free(active_cols);
+                return -1;
+            }
+
+            int active_row_count = 0;
+            for (int i = 0; i < trailing_rows; i++) {
+                int orig_row = row_perm[sn_start + sn_size + i];
+                int row_active = 0;
+                for (int j_local = 0; j_local < sn_size; j_local++) {
+                    if (fabs(A_struct[(size_t)orig_row * k + (sn_start + j_local)]) > RALPH_ZERO_TOL) {
+                        row_active = 1;
+                        break;
+                    }
+                }
+                if (row_active) active_rows[active_row_count++] = i;
+            }
+
+            int active_col_count = 0;
+            for (int jj = 0; jj < trailing_cols; jj++) {
+                int col_active = 0;
+                int col = sn_start + sn_size + jj;
+                for (int j_local = 0; j_local < sn_size; j_local++) {
+                    int piv_orig = row_perm[sn_start + j_local];
+                    if (fabs(A_struct[(size_t)piv_orig * k + col]) > RALPH_ZERO_TOL) {
+                        col_active = 1;
+                        break;
+                    }
+                }
+                if (col_active) active_cols[active_col_count++] = jj;
+            }
+
+            if (active_row_count == 0 || active_col_count == 0) {
+                free(active_rows);
+                free(active_cols);
+                continue;
+            }
+
             /* Workspace layout: [L_block | U_block]
-             * L: trailing_rows * sn_size
-             * U: sn_size * trailing_cols */
-            size_t L_sz = (size_t)trailing_rows * sn_size;
-            size_t U_sz = (size_t)sn_size * trailing_cols;
+             * L: active_rows * sn_size
+             * U: sn_size * active_cols */
+            size_t L_sz = (size_t)active_row_count * sn_size;
+            size_t U_sz = (size_t)sn_size * active_col_count;
             size_t need = L_sz + U_sz;
 
             double *L_block, *U_block;
@@ -830,32 +957,43 @@ int sn_factorize(double *A_struct, int m, int k,
                 U_block = L_block + L_sz;
             }
 
-            /* Fill L_block: row i (trailing), col j_local (within supernode) */
-            for (int i = 0; i < trailing_rows; i++) {
-                int orig_row = row_perm[sn_start + sn_size + i];
+            /* Fill compact L_block: active trailing rows by supernode columns. */
+            for (int i = 0; i < active_row_count; i++) {
+                int orig_row = row_perm[sn_start + sn_size + active_rows[i]];
                 for (int j_local = 0; j_local < sn_size; j_local++) {
                     L_block[i * sn_size + j_local] =
                         A_struct[(size_t)orig_row * k + (sn_start + j_local)];
                 }
             }
 
-            /* Fill U_block: row j_local (within supernode), col jj (trailing) */
+            /* Fill compact U_block: supernode rows by active trailing columns. */
             for (int j_local = 0; j_local < sn_size; j_local++) {
                 int piv_orig = row_perm[sn_start + j_local];
-                for (int jj = 0; jj < trailing_cols; jj++) {
-                    U_block[j_local * trailing_cols + jj] =
-                        A_struct[(size_t)piv_orig * k + (sn_start + sn_size + jj)];
+                for (int jj = 0; jj < active_col_count; jj++) {
+                    U_block[j_local * active_col_count + jj] =
+                        A_struct[(size_t)piv_orig * k + (sn_start + sn_size + active_cols[jj])];
                 }
             }
 
-            sn_dgemm_update_scattered_rows(trailing_rows, sn_size, trailing_cols,
-                                           L_block, sn_size,
-                                           U_block, trailing_cols,
-                                           A_struct, k, row_perm,
-                                           sn_start + sn_size,
-                                           sn_start + sn_size);
+            if (active_row_count == trailing_rows && active_col_count == trailing_cols) {
+                sn_dgemm_update_scattered_rows(trailing_rows, sn_size, trailing_cols,
+                                               L_block, sn_size,
+                                               U_block, trailing_cols,
+                                               A_struct, k, row_perm,
+                                               sn_start + sn_size,
+                                               sn_start + sn_size);
+            } else {
+                sn_dgemm_update_scattered_rows_cols(active_row_count, sn_size, active_col_count,
+                                                    L_block, sn_size,
+                                                    U_block, active_col_count,
+                                                    A_struct, k, row_perm,
+                                                    active_rows, sn_start + sn_size,
+                                                    active_cols, sn_start + sn_size);
+            }
 
             if (!used_work) free(L_block);
+            free(active_rows);
+            free(active_cols);
         }
     }
 
