@@ -821,10 +821,32 @@ Status:
       testable
     - default `fit2p` remains Markowitz-dominated; the next hotspot work should
       instrument Markowitz exact scan costs instead of changing pivot semantics
+- `W1.2` third slice implemented
+  - replaced full affected-column `col_max` rescans in `ralph/src/lu_sparse.c`
+    with exact incremental maintenance:
+    - track current `col_max` position
+    - mark a column dirty only when the current max can no longer be proven
+    - rescan only dirty affected columns
+  - this keeps Markowitz pivot semantics exact; it does not use stale maxima or
+    relaxed eligibility thresholds
+  - validation:
+    - `make -C ralph test-lu-markowitz`
+    - `make -C ralph test-netlib-gate-small`
+    - `make -C ralph test-netlib-gate`
+  - measured effect on `fit2p.mps`:
+    - Ralph total solve time: about `33254 ms -> 24415 ms`
+    - `mkz_col_max_scan_entries`: about `10.28B -> 47.44M`
+    - `fit2p` moved from timeout-family behavior to solved in the current full
+      gate baseline
+  - result:
+    - this is the first material Markowitz-kernel reduction in Week 1
+    - the remaining `fit2p` cost is now in primary/update scan volume rather
+      than `col_max` recomputation
 - rejected during `W1.2`
-  - incremental `col_max` caching and other behavior-adjacent Markowitz
-    shortcuts were tried and rolled back
-  - they caused `fit2p`/`bore3d` regressions and are not part of the baseline
+  - stale or approximate `col_max` shortcuts and other behavior-adjacent
+    Markowitz optimizations were tried and rolled back
+  - the accepted Week 1 `col_max` change is exact maintenance, not caching with
+    stale maxima
 
 ### Week 2: Phase-1 Recompute Suppression
 
