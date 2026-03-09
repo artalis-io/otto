@@ -1188,7 +1188,13 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ## Implementation Plan
 
-### Current Status (as of 2026-02-24)
+### Current Status (as of 2026-03-08)
+
+**Baseline**: U1-U8 + S1-S24 + all rich constraints + Instance-Adaptive Construction complete. All Tier 1 and Tier 2 production gaps closed. REST API server, WASM build, Python and Node.js bindings exist. 449 tests passing (threaded), ASAN/UBSAN clean.
+
+Implemented features: Everything in previous status plus: Instance-Adaptive Construction (S24) — feature extraction (`sg_compute_instance_features`) classifies instances by spatial CV and TW tightness, driving construction strategy ordering. Service-adjusted TW lower bound tightens vehicle count estimate. Cluster TW validation prevents oversized clusters. Post-construction route merging consolidates short routes. Cost-aware vehicle picking breaks distance ties by `fixed_cost`. `--features` flag on bench_solomon for threshold calibration. 8 new tests (441→449).
+
+#### Previous Status (as of 2026-02-24)
 
 **Baseline**: U1-U8 + S1-S12 + Disjunct TW + Depot Dock Capacity + Commodity Conflicts + Exclusion Groups + Mandatory Breaks + Multi-Trip + Multi-Threading (parallel + population) + SA cooling fix + mid-solve ejection pulse + Speed Profiles + Travel Profiles + Time-Indexed Travel Brackets + Open Start + Plan/ETA Validation + Infeasible-Space Exploration + Aggressive SISR + LIFO/FIFO PD Policy + Backhaul Constraint complete. All Tier 1 and Tier 2 production gaps closed. REST API server, WASM build, Python and Node.js bindings exist. 282 tests passing, ASAN/UBSAN clean.
 
@@ -3924,18 +3930,66 @@ sequentially. Two approaches:
 the heap repair speedup from S19. Net effect: 10-80x more ALNS iterations in the
 same time budget compared to pre-S19 baseline.
 
-### Phase S24: Instance-Adaptive Construction (Future)
+### Phase S24: Instance-Adaptive Construction ✅
 
-**Priority: Low. Incremental improvement over CFRS.**
+**Completed: 2026-03-08. Commit `6e04c64`.**
 
-CFRS (Phase S16) improved construction significantly, but all instances use the same
-multi-strategy tournament (regret-3, TW-sorted, I1, sweep, k-means). Instance features
-(spatial distribution, TW tightness, capacity utilization) could drive strategy selection.
+Instance feature extraction drives construction strategy ordering, with improved lower
+bounds, cluster TW validation, and post-construction route merging.
 
-**Approach:** Feature extraction → strategy scores from benchmark data → per-instance
-best strategy. Also: seeded insertion order based on geographic clustering (hard-to-place
-requests first).
+**Implementation:**
 
-**Expected improvement:** 1-3 fewer vehicles in initial solution for clustered instances,
-giving ALNS a head start. Most impactful for C-type instances (clustered) where the
-insertion order has outsized effect on vehicle count.
+1. **Feature extraction** (`sg_compute_instance_features`): Computes `spatial_cv`
+   (coefficient of variation of distances from centroid) and `tw_tightness`
+   (avg TW width / planning horizon). Classifies instances as clustered/random and
+   tight/wide TW. O(n + V), runs once before construction.
+
+2. **Service-adjusted lower bound** (enhanced `sg_estimate_min_vehicles`): Second
+   TW sweep with deduction = avg_service + avg_nn_dist tightens the clique bound
+   on instances where service times consume significant TW slack.
+
+3. **TW-aware cluster validation** (`sg_cluster_tw_check`): Tracks time cursor through
+   sorted requests; returns split index where accumulated service + travel makes TW
+   infeasible. Used by sweep and k-means to split oversized clusters.
+
+4. **Post-construction route merging** (`sg_construct_try_merge_routes`): Tries merging
+   short routes (≤ avg_len/2) into others using existing `sg_route_sequence_feasible_distance`.
+   Max 5 merges. Called after CFRS tournament winner selection.
+
+5. **Strategy ordering** (`sg_feature_strategy_order`): Maps (clustered, tight_tw) to
+   prioritized construction method order. All 5 strategies still compete via tournament.
+
+   | Instance Type | Strategy Order |
+   |---------------|----------------|
+   | Clustered + Tight TW | I1, Sweep, K-means, TW-sorted, Regret |
+   | Clustered + Wide TW | K-means, Sweep, I1, Regret, TW-sorted |
+   | Random + Tight TW | TW-sorted, Regret, I1, K-means, Sweep |
+   | Random + Wide TW | Regret, TW-sorted, I1, Sweep, K-means |
+
+6. **Cost-aware vehicle picking** (`sg_cfrs_pick_vehicle`): Breaks distance ties by
+   lower `fixed_cost`, ensuring CFRS heuristics respect vehicle costs.
+
+7. **`--features` CLI flag** for bench_solomon: Dumps CSV of instance features for
+   threshold calibration. Permanently available for re-calibration.
+
+**Calibration results** (Solomon-100 and GH-200):
+- `spatial_cv`: ~0.37-0.42 for all Solomon/GH types (same 100x100 coordinate space).
+  Threshold 0.60 correctly keeps all Solomon instances as "clustered". True random
+  instances (real-world) would show CV > 0.8.
+- `tw_tightness`: Cleanly separates type-1 (<0.15) from type-2 (>0.23). Threshold 0.15
+  works well. Type-1 instances (c101, r101, rc101) classified as tight; type-2 as wide.
+
+**GH-200 results (S24):** 53/60 (88%) vehicle match, +6.6% distance gap. Flat vs S22
+(same vehicle matching, +0.6pp distance). S24 targets construction quality at larger
+scales (400+), not ALNS search quality at well-optimized GH-200.
+
+**Bug fix (post-commit):** Heap-buffer-overflow in `sg_construct_try_merge_routes` at
+line 957. Used `merged_seq[sol->route_lengths[other] + si]` after route modifications;
+the live `route_lengths` could differ from the captured `other_len`. Fix: use
+`small_reqs[si]` directly. Found via ASan, confirmed crash on c1_2_9 (GH-200).
+
+**Tests:** 8 new tests (441→449). Feature extraction, cluster TW check, improved LB,
+route merging, strategy ordering for all 4 feature combinations.
+
+**Files modified:** `sg_internal.h`, `sg_construct_cfrs.c`, `sg_solve.c`, `sg_parallel.c`,
+`bench_solomon.c`, `test_surge.c`. +776 lines.

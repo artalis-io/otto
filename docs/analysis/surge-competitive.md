@@ -396,5 +396,7 @@ No other solver checks all six boxes. Individual boxes have stronger entries (HG
 quality on clean VRPTW, Ortec for enterprise constraint depth, cuOpt for GPU throughput on
 simple problems), but nobody else occupies this intersection.
 
-The remaining proof point is large-scale validation (500-5000 requests), which is a
-benchmark run, not an architecture change.
+Large-scale validation is underway: Gehring-Homberger benchmarks at 200, 400, and 800
+customers show 42-88% vehicle match with 60-120s time budgets. Instance-adaptive
+construction (S24) improves initial solutions at scale. The remaining proof point is
+1000-5000 requests, which is a benchmark run + tuning campaign, not an architecture change.

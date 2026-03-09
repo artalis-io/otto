@@ -954,7 +954,7 @@ ARStatus sg_construct_try_merge_routes(SGContext *ctx, SGRouteSolution *sol) {
                     {
                         uint32_t si;
                         for (si = 0; si < small_len; si++) {
-                            uint32_t rid = merged_seq[sol->route_lengths[other] + si];
+                            uint32_t rid = small_reqs[si];
                             int is_pd = (ctx->requests[rid].kind == SG_REQUEST_KIND_PICKUP_DELIVERY);
 
                             if (sol->base.assigned_flags[rid]) continue;
