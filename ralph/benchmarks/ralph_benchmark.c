@@ -488,6 +488,9 @@ typedef struct {
     uint64_t lu_mkz_update_fill_candidates;
     uint64_t lu_mkz_hint_fallback_scans;
     uint64_t lu_mkz_hint_fallback_scan_entries;
+    uint64_t lu_mkz_affected_columns_total;
+    uint64_t lu_mkz_affected_columns_max;
+    uint64_t lu_mkz_col_max_scan_entries;
     int lu_sparse_dense_fallbacks;
     int lu_used_dense_fallback_last;
     int lu_sparse_fallback_last_reason;
@@ -1466,6 +1469,9 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_mkz_update_fill_candidates = lu_tel.mkz_update_fill_candidates;
                 result.lu_mkz_hint_fallback_scans = lu_tel.mkz_hint_fallback_scans;
                 result.lu_mkz_hint_fallback_scan_entries = lu_tel.mkz_hint_fallback_scan_entries;
+                result.lu_mkz_affected_columns_total = lu_tel.mkz_affected_columns_total;
+                result.lu_mkz_affected_columns_max = lu_tel.mkz_affected_columns_max;
+                result.lu_mkz_col_max_scan_entries = lu_tel.mkz_col_max_scan_entries;
                 result.lu_sparse_dense_fallbacks = lu_tel.sparse_dense_fallbacks;
                 result.lu_used_dense_fallback_last = lu_tel.used_dense_fallback_last;
                 result.lu_sparse_fallback_last_reason = lu_tel.sparse_fallback_last_reason;
@@ -3058,6 +3064,12 @@ static void print_json_result(const char *problem_name, const char *source,
             (unsigned long long)ralph->lu_mkz_hint_fallback_scans);
     fprintf(out, "    \"mkz_hint_fallback_scan_entries\": %llu,\n",
             (unsigned long long)ralph->lu_mkz_hint_fallback_scan_entries);
+    fprintf(out, "    \"mkz_affected_columns_total\": %llu,\n",
+            (unsigned long long)ralph->lu_mkz_affected_columns_total);
+    fprintf(out, "    \"mkz_affected_columns_max\": %llu,\n",
+            (unsigned long long)ralph->lu_mkz_affected_columns_max);
+    fprintf(out, "    \"mkz_col_max_scan_entries\": %llu,\n",
+            (unsigned long long)ralph->lu_mkz_col_max_scan_entries);
     fprintf(out, "    \"sparse_dense_fallbacks\": %d,\n", ralph->lu_sparse_dense_fallbacks);
     fprintf(out, "    \"used_dense_fallback_last\": %s,\n",
             ralph->lu_used_dense_fallback_last ? "true" : "false");

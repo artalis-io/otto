@@ -130,6 +130,7 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     lp_telemetry_lu_record_compact_factor_ms(&lu, 0.20);
     lp_telemetry_lu_record_compact_solve_ms(&lu, 0.50);
     lp_telemetry_lu_add_mkz_scan_work(&lu, 11, 12, 13, 14, 15, 16, 17);
+    lp_telemetry_lu_add_mkz_colmax_work(&lu, 18, 19, 20);
 
     {
         LUTelemetrySnapshot snap;
@@ -179,6 +180,12 @@ static void test_lu_reset_prepare_and_snapshot(void) {
                       "lu_snapshot: mkz hint fallback scans");
         ASSERT_U64_EQ(snap.mkz_hint_fallback_scan_entries, 17,
                       "lu_snapshot: mkz hint fallback scan entries");
+        ASSERT_U64_EQ(snap.mkz_affected_columns_total, 18,
+                      "lu_snapshot: mkz affected columns total");
+        ASSERT_U64_EQ(snap.mkz_affected_columns_max, 19,
+                      "lu_snapshot: mkz affected columns max");
+        ASSERT_U64_EQ(snap.mkz_col_max_scan_entries, 20,
+                      "lu_snapshot: mkz col_max scan entries");
     }
 }
 
