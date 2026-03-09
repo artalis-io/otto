@@ -1705,6 +1705,10 @@ static void test_markowitz_scan_runtime_telemetry(void) {
            "lu mkz telemetry: update existing entries counted");
     ASSERT(snap.mkz_update_fill_candidates > 0,
            "lu mkz telemetry: update fill candidates counted");
+    ASSERT_INT_EQ((int)snap.mkz_hint_fallback_scans, 0,
+                  "lu mkz telemetry: hint fallback scans eliminated");
+    ASSERT_INT_EQ((int)snap.mkz_hint_fallback_scan_entries, 0,
+                  "lu mkz telemetry: hint fallback scan entries eliminated");
 
 cleanup:
     lu_free(lu);
