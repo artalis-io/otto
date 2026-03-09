@@ -87,19 +87,20 @@ Wide-TW categories near-optimal: C2 +0.7%, R2 +1.7%, RC2 +1.2%.
 
 ### Gehring-Homberger 400 (VRPTW, 60 instances, 60s, population)
 
-S22 LARGE_TUNE parameters:
+S22 LARGE_TUNE parameters + S24 instance-adaptive construction:
 
 | Category | Instances | BKS Veh Match | Avg Veh Gap | Avg Dist Gap |
 |----------|-----------|---------------|-------------|--------------|
-| C1_4 (clustered, tight) | 10 | 3/10 | +0.90 | +12.3% |
-| C2_4 (clustered, wide) | 10 | 3/10 | +0.70 | +4.2% |
-| R1_4 (random, tight) | 10 | 10/10 | +0.00 | +21.6% |
-| R2_4 (random, wide) | 10 | 10/10 | +0.00 | +7.9% |
-| RC1_4 (mixed, tight) | 10 | 3/10 | +0.90 | +19.1% |
-| RC2_4 (mixed, wide) | 10 | 6/10 | +0.70 | +12.5% |
-| **Overall** | **60** | **35/60 (58%)** | **+0.53** | **+12.9%** |
+| C1_4 (clustered, tight) | 10 | 5/10 | +0.90 | +11.2% |
+| C2_4 (clustered, wide) | 10 | 2/10 | +0.80 | +6.9% |
+| R1_4 (random, tight) | 10 | 8/10 | +0.20 | +25.0% |
+| R2_4 (random, wide) | 10 | 10/10 | +0.00 | +7.0% |
+| RC1_4 (mixed, tight) | 10 | 2/10 | +0.90 | +19.5% |
+| RC2_4 (mixed, wide) | 10 | 5/10 | +0.70 | +4.9% |
+| **Overall** | **60** | **32/60 (53%)** | **+0.58** | **+12.4%** |
 
-Avg runtime: 76s.
+Avg runtime: 76s. C1 gained +2 vehicle matches vs S22; RC2 distance improved -7.6pp.
+R1 regressed -2 vehicle matches. Overall: -3 matches, -0.5pp distance vs S22.
 
 ### Gehring-Homberger 800 (VRPTW, 60 instances, 120s, population)
 
@@ -123,7 +124,7 @@ Avg runtime: 215s.
 |-------|------|-----------|-------------|--------------|--------------|
 | Solomon 100 | 5s | 36/56 (64%) | +0.48 | +3.7% | FAST |
 | GH-200 | 60s | 53/60 (88%) | +0.12 | +6.6% | MEDIUM_TUNE |
-| GH-400 | 60s | 35/60 (58%) | +0.53 | +12.9% | LARGE_TUNE |
+| GH-400 | 60s | 32/60 (53%) | +0.58 | +12.4% | LARGE_TUNE |
 | GH-800 | 120s | 25/60 (42%) | +1.55 | +17.0% | LARGE_TUNE |
 
 ## Historical Progression (GH-200)
@@ -144,6 +145,7 @@ Avg runtime: 215s.
 | + Ejection Probe | Mar 2026 | 27/60 (45%) | +33.3% | Budget enforcement fix |
 | S19 Heap | Mar 2026 | 33/60 (55%) | +18.6% | Lazy heap repair |
 | S22 Tuned | Mar 2026 | 35/60 (58%) | +12.9% | Scale-tuned ALNS params |
+| S24 Adaptive | Mar 2026 | 32/60 (53%) | +12.4% | Instance-adaptive construction |
 
 ## Instance-Adaptive Construction (S24)
 
