@@ -692,6 +692,248 @@ Success criteria for promotion:
 9. `D2` Add exact mode
 10. `E1` Kernel-cost parity program
 
+## Ranked Timeout-Reduction Plan
+
+Current reference artifact:
+- `/tmp/netlib-regression-gate-20260308-181712`
+
+Current full-gate state:
+- `84` files
+- `22` timeout files
+- `0` dense fallback files
+- `0` status/objective/invalid mismatches
+
+Interpretation:
+- sparse-LU dense fallback is no longer the dominant blocker
+- the remaining timeout set splits into kernel-cost, phase-1 recomputation, and
+  degeneracy/control families
+- timeout reduction should therefore be pursued by shared mechanism, not
+  filename-specific tuning
+
+### Week 1: Large-Basis Kernel-Cost Parity
+
+Target family:
+- `pilot.mps`
+- `pilot.ja.mps`
+- `pilot.we.mps`
+- `pilot4.mps`
+- `pilot87.mps`
+- `pilotnov.mps`
+- `fit2p.mps`
+- `maros-r7.mps`
+- `d2q06c.mps`
+
+Observed pattern:
+- Ralph often takes fewer iterations than GLPK on these files, but each
+  iteration/refactor episode is much more expensive
+- this is primarily a kernel-cost gap, not a pivot-count gap
+
+Execution:
+1. reduce large-basis refactor cost in the LU/update backend path
+2. reduce sparse `FTRAN/BTRAN` cost per call and per nonzero
+3. reduce update application cost for `FT` / `BG` / `GR`
+4. add focused backend telemetry for:
+   - `ms/refactor`
+   - `ms/FTRAN`
+   - `ms/BTRAN`
+   - `ms/update`
+   - nnz in/out per solve
+5. compare `FT` vs `BG` vs `GR` on a focused gate before widening
+
+Expected payoff:
+- highest probability of retiring `6-9` timeout files per engineering week
+
+Verification:
+- focused gate: `pilot*`, `fit2p`, `maros-r7`, `d2q06c`
+- `make -C ralph test-netlib-gate-small`
+- `make -C ralph test-netlib-gate`
+
+Execution checklist (four atomic commits):
+1. `W1.1` Telemetry split only
+   - add refactor-stage and update-backend split telemetry through solver/LU
+     snapshots and benchmark JSON
+   - no behavior change
+2. `W1.2` Large-basis refactor cost reduction
+   - reduce avoidable work in refactor setup/finalize paths
+   - preserve current control policy
+3. `W1.3` Compact Schur backend caching
+   - cache BG/GR compact-system factorizations and invalidate only when the
+     update set changes
+   - no control-policy change
+4. `W1.4` Focused gates and backend invariants
+   - add backend cache/invalidation tests
+   - add a focused 9-file Week 1 gate
+   - run small/full no-regression gates before promotion
+
+Status:
+- `W1.1` implemented
+  - split `FTRAN/BTRAN` into base-vs-update-apply timing
+  - split LU update telemetry into forward/backward apply and compact-solve
+  - exposed the new counters in benchmark JSON
+- `W1.2` first slice implemented
+  - removed the temporary trailing `C_block` copy/copy-back from the supernode
+    Schur update in `ralph/src/lu_supernode.c`
+  - the update now writes directly into `A_struct` via scattered-row pointers
+  - validation:
+    - `make -C ralph test-lu-supernode`
+    - `make -C ralph test-lu-markowitz`
+    - `make -C ralph test-lp-telemetry-lu`
+    - `make -C ralph test-netlib-gate-small`
+  - measured effect on `pilot.mps`:
+    - `total_supernode_numeric_ms`: about `25989 ms -> 24490 ms`
+    - total Ralph solve time: about `26592 ms -> 25710 ms`
+  - result:
+    - this is a real improvement in the pilot-family refactor kernel
+    - it is not yet enough to retire the pilot-focus timeouts
+    - next Week 1 work should continue on large-basis numeric refactor kernels,
+      not revisit structural rebuild cost
+- `W1.2` second slice implemented
+  - reduced Markowitz pivot-row cleanup cost in `ralph/src/lu_sparse.c`
+  - cleanup now reuses the existing row-to-column local-position hint
+    (`rv_hint`) before falling back to a full column scan
+  - validation:
+    - `make -C ralph test-lu-markowitz`
+    - `make -C ralph test-lu-supernode`
+    - `make -C ralph test-lp-telemetry-lu`
+    - `make -C ralph test-netlib-gate-small`
+  - measured effect on `fit2p.mps`:
+    - Ralph total solve time: about `29070 ms -> 28984 ms`
+    - `total_markowitz_numeric_ms`: about `19408 ms -> 19041 ms`
+  - result:
+    - this is a small but real Markowitz-kernel improvement
+    - `fit2p` remains dominated by Markowitz numeric time
+- `W1.3` implemented
+  - added cached compact forward/backward factorizations for the `BG` and `GR`
+    update backends in `ralph/src/lu_update_backend.c`
+  - added compact-factor telemetry and cache-invalidation tests in:
+    - `ralph/src/lp_telemetry_lu.c`
+    - `ralph/tests/test_lp_telemetry_lu.c`
+    - `ralph/tests/test_lu_markowitz.c`
+  - switched supernode workspace growth in `ralph/src/lu_sparse.c` to
+    reusable `realloc`-backed storage instead of free/allocate churn
+  - validation:
+    - `make -C ralph test-lu-markowitz`
+    - `make -C ralph test-lp-telemetry-lu`
+    - `make -C ralph test-lu-supernode`
+    - `make -C ralph test-netlib-gate-small`
+  - result:
+    - the compact backend lane is now structurally cheaper and explicitly
+      testable
+    - default `fit2p` remains Markowitz-dominated; the next hotspot work should
+      instrument Markowitz exact scan costs instead of changing pivot semantics
+- rejected during `W1.2`
+  - incremental `col_max` caching and other behavior-adjacent Markowitz
+    shortcuts were tried and rolled back
+  - they caused `fit2p`/`bore3d` regressions and are not part of the baseline
+
+### Week 2: Phase-1 Recompute Suppression
+
+Target family:
+- `greenbeb.mps`
+- `wood1p.mps`
+- `woodw.mps`
+- `perold.mps`
+- `stocfor2.mps`
+- `cycle.mps`
+
+Observed pattern:
+- phase 1 dominates runtime
+- repeated no-progress, ratio-breakdown, and full-state recomputation consume
+  most of the budget
+
+Execution:
+1. separate "full solution recompute" from "reduced-cost refresh"
+2. preserve more incremental phase-1 state across no-progress / dir-skip loops
+3. tighten recompute triggers so instability handling does not force full
+   vector rebuilds unnecessarily
+4. add telemetry for recompute reason, full-refresh reason, and rc-only refresh
+
+Expected payoff:
+- likely retirement of `4-6` timeout files
+
+Verification:
+- focused gate: `greenbeb`, `wood1p`, `woodw`, `perold`, `stocfor2`, `cycle`
+- no regression on small/full NETLIB
+
+### Week 3: Degeneracy and Long-Run Control Quality
+
+Target family:
+- `d6cube.mps`
+- `degen3.mps`
+- `greenbea.mps`
+- `bnl1.mps`
+- `bnl2.mps`
+- `maros.mps`
+- `fffff800.mps`
+
+Observed pattern:
+- Ralph takes many more pivots than GLPK on these files
+- this is a long-run degeneracy/control gap more than a per-iteration cost gap
+
+Execution:
+1. improve pricing-weight maintenance quality on long degenerate runs
+2. revisit reinversion cadence using pivot-quality / solve-sparsity telemetry,
+   not static intervals alone
+3. reduce long-run control drift without introducing instance-specific logic
+4. compare pivot counts directly against GLPK on the focused set
+
+Expected payoff:
+- likely retirement of `3-5` timeout files
+- `d6cube` remains the hardest case and may need multiple slices
+
+Verification:
+- focused gate: `d6cube`, `degen3`, `greenbea`, `bnl1`, `bnl2`, `maros`,
+  `fffff800`
+- require no regression on the Week 1 and Week 2 families
+
+### Week 4: Capacity / Policy Decoupling
+
+Goal:
+- finish `C2` so storage pressure does not silently rewrite effective BFCP
+  policy behavior
+
+Execution:
+1. separate allocation sizing from update-policy semantics
+2. provision storage to satisfy the active strict BFCP policy where feasible
+3. fail explicitly when policy cannot be honored, rather than degrading
+   behavior silently
+4. expose capacity exhaustion and effective downgrades in telemetry
+
+Expected payoff:
+- smaller direct timeout reduction
+- larger value is runtime predictability and removal of hidden policy drift
+
+### Week 5: Numerical Certification (`xcheck`)
+
+Goal:
+- finish `D1` so hard outliers can be classified as policy failure, kernel-cost
+  failure, or genuine numerical instability
+
+Execution:
+1. add final basis residual / feasibility / complementary-slackness checks
+2. map doubtful end states explicitly instead of returning ambiguous failure
+   buckets
+3. use `xcheck` first as a strict-mode diagnostic and regression aid
+
+Expected payoff:
+- little direct timeout reduction by itself
+- high diagnostic value for the last hard outliers
+
+### Priority Order for Timeout Reduction
+
+1. Week 1: large-basis kernel-cost parity
+2. Week 2: phase-1 recompute suppression
+3. Week 3: degeneracy / long-run control quality
+4. Week 4: capacity / policy decoupling
+5. Week 5: `xcheck`
+
+### Promotion Rules for This Plan
+
+1. no filename-specific tuning
+2. every slice must keep `0` dense fallback regressions
+3. every slice must preserve small-NETLIB green status
+4. full-gate timeout reductions must persist on repeated runs before promotion
+
 ## Exit Criteria
 
 The gap is considered closed only when all of the following are true:

@@ -73,6 +73,26 @@ static int lu_strict_allow_top_level_dense_fallback(const LUFactorization *lu) {
     return lu->owner->lu_strict_allow_top_level_dense_fallback ? 1 : 0;
 }
 
+static void lu_record_ftran_base_ms(const LUFactorization *lu, double elapsed_ms) {
+    if (!lu || !lu->owner) return;
+    lp_telemetry_add_ftran_base_ms(lu->owner, elapsed_ms);
+}
+
+static void lu_record_ftran_update_apply_ms(const LUFactorization *lu, double elapsed_ms) {
+    if (!lu || !lu->owner) return;
+    lp_telemetry_add_ftran_update_apply_ms(lu->owner, elapsed_ms);
+}
+
+static void lu_record_btran_base_ms(const LUFactorization *lu, double elapsed_ms) {
+    if (!lu || !lu->owner) return;
+    lp_telemetry_add_btran_base_ms(lu->owner, elapsed_ms);
+}
+
+static void lu_record_btran_update_apply_ms(const LUFactorization *lu, double elapsed_ms) {
+    if (!lu || !lu->owner) return;
+    lp_telemetry_add_btran_update_apply_ms(lu->owner, elapsed_ms);
+}
+
 static void lu_clamp_max_updates_to_storage(LUFactorization *lu) {
     int cap;
 
@@ -412,12 +432,27 @@ LUFactorization* lu_create(int m) {
     lu->schur_values = (double**)calloc(max_upd, sizeof(double*));
     lu->schur_k = (double*)calloc((size_t)max_upd * (size_t)max_upd, sizeof(double));
     lu->schur_k_work = (double*)calloc((size_t)max_upd * (size_t)max_upd, sizeof(double));
+    lu->schur_k_t_work = (double*)calloc((size_t)max_upd * (size_t)max_upd, sizeof(double));
     lu->schur_rhs = (double*)calloc(max_upd, sizeof(double));
     lu->schur_piv = (int*)calloc(max_upd, sizeof(int));
+    lu->schur_piv_t = (int*)calloc(max_upd, sizeof(int));
+    {
+        size_t rot_cap = (max_upd > 1)
+            ? ((size_t)max_upd * (size_t)(max_upd - 1)) / 2u
+            : 1u;
+        lu->schur_rot_capacity = (int)rot_cap;
+        lu->schur_rot_fwd_c = (double*)calloc(rot_cap, sizeof(double));
+        lu->schur_rot_fwd_s = (double*)calloc(rot_cap, sizeof(double));
+        lu->schur_rot_bwd_c = (double*)calloc(rot_cap, sizeof(double));
+        lu->schur_rot_bwd_s = (double*)calloc(rot_cap, sizeof(double));
+    }
 
     if (!lu->eta_indices || !lu->eta_values ||
         !lu->schur_indices || !lu->schur_values ||
-        !lu->schur_k || !lu->schur_k_work || !lu->schur_rhs || !lu->schur_piv) {
+        !lu->schur_k || !lu->schur_k_work || !lu->schur_k_t_work ||
+        !lu->schur_rhs || !lu->schur_piv || !lu->schur_piv_t ||
+        !lu->schur_rot_fwd_c || !lu->schur_rot_fwd_s ||
+        !lu->schur_rot_bwd_c || !lu->schur_rot_bwd_s) {
         lu_free(lu);
         return NULL;
     }
@@ -649,8 +684,14 @@ void lu_free(LUFactorization *lu) {
     }
     SAFE_FREE(lu->schur_k);
     SAFE_FREE(lu->schur_k_work);
+    SAFE_FREE(lu->schur_k_t_work);
     SAFE_FREE(lu->schur_rhs);
     SAFE_FREE(lu->schur_piv);
+    SAFE_FREE(lu->schur_piv_t);
+    SAFE_FREE(lu->schur_rot_fwd_c);
+    SAFE_FREE(lu->schur_rot_fwd_s);
+    SAFE_FREE(lu->schur_rot_bwd_c);
+    SAFE_FREE(lu->schur_rot_bwd_s);
 
     /* (B4: spike compaction removed) */
 
@@ -693,8 +734,14 @@ void lu_free(LUFactorization *lu) {
     lu->schur_nnz = NULL;
     lu->schur_k = NULL;
     lu->schur_k_work = NULL;
+    lu->schur_k_t_work = NULL;
     lu->schur_rhs = NULL;
     lu->schur_piv = NULL;
+    lu->schur_piv_t = NULL;
+    lu->schur_rot_fwd_c = NULL;
+    lu->schur_rot_fwd_s = NULL;
+    lu->schur_rot_bwd_c = NULL;
+    lu->schur_rot_bwd_s = NULL;
     lu->ft_col_order = NULL;
     lu->ft_col_order_inv = NULL;
     lu->ft_spike_col = NULL;
@@ -1261,6 +1308,7 @@ static void solve_Ut(const LUFactorization *lu, const double *b, double *x) {
 /* Solve Bx = b where B = basis matrix */
 void lu_solve(const LUFactorization *lu, double *rhs, double *solution) {
     int m = lu->m;
+    double t_segment_ms;
     /* Use pre-allocated workspace (avoids malloc in hot path) */
     double *work = lu->hs_work1;
     double *work2 = lu->hs_work2;
@@ -1274,23 +1322,32 @@ void lu_solve(const LUFactorization *lu, double *rhs, double *solution) {
      */
 
     /* First: solve Ly = Pb */
+    t_segment_ms = lp_telemetry_timer_start();
     solve_L(lu, rhs, work);
 
     /* Then: solve Uz = y */
     solve_U(lu, work, work2);
+    lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 
     /* Apply updates (in step coordinates, before column permutation) */
-    (void)lu_update_backend_apply_forward(lu, work2);
+    if (lu_update_backend_has_updates(lu)) {
+        t_segment_ms = lp_telemetry_timer_start();
+        (void)lu_update_backend_apply_forward(lu, work2);
+        lu_record_ftran_update_apply_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
+    }
 
     /* Apply column permutation: x[col_perm[i]] = z[i] */
+    t_segment_ms = lp_telemetry_timer_start();
     for (int i = 0; i < m; i++) {
         solution[lu->col_perm[i]] = work2[i];
     }
+    lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 }
 
 /* Solve B'x = b (for computing row prices) */
 void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution) {
     int m = lu->m;
+    double t_segment_ms;
     /* Use pre-allocated workspace (avoids malloc in hot path) */
     double *work = lu->hs_work1;
 
@@ -1305,20 +1362,28 @@ void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution
      */
 
     /* Apply inverse column permutation: y[i] = b[col_perm[i]] */
+    t_segment_ms = lp_telemetry_timer_start();
     for (int i = 0; i < m; i++) {
         work[i] = rhs[lu->col_perm[i]];
     }
+    lu_record_btran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 
     /* Apply updates in reverse (in step coordinates) */
-    lu_update_backend_apply_backward(lu, work);
+    if (lu_update_backend_has_updates(lu)) {
+        t_segment_ms = lp_telemetry_timer_start();
+        lu_update_backend_apply_backward(lu, work);
+        lu_record_btran_update_apply_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
+    }
 
     /* Solve U'z = y */
+    t_segment_ms = lp_telemetry_timer_start();
     solve_Ut(lu, work, solution);
 
     /* Solve L'x = z and apply P' (solve_Lt handles the row permutation) */
     solve_Lt(lu, solution, work);
 
     vec_copy_data(solution, work, m);
+    lu_record_btran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 }
 
 /* ============================================================================
@@ -1343,6 +1408,7 @@ void lu_solve_sparse(const LUFactorization *lu,
     if (!lu || !solution) return;
 
     int m = lu->m;
+    double t_segment_ms;
 
     /* Use pre-allocated workspace (avoids malloc in hot path) */
     double *work = lu->hs_work1;
@@ -1357,6 +1423,7 @@ void lu_solve_sparse(const LUFactorization *lu,
      */
     if (nnz_rhs > m / 4) {
         /* Build dense RHS vector in work */
+        t_segment_ms = lp_telemetry_timer_start();
         for (int k = 0; k < nnz_rhs; k++) {
             if (rhs_idx[k] >= 0 && rhs_idx[k] < m)
                 work[rhs_idx[k]] = rhs_val[k];
@@ -1365,12 +1432,19 @@ void lu_solve_sparse(const LUFactorization *lu,
         /* Inline the dense solve: Ly=Pb, Uz=y, apply updates, apply col perm */
         solve_L(lu, work, work2);        /* work2 = L^{-1} * P * work */
         solve_U(lu, work2, work);        /* work = U^{-1} * work2 */
+        lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 
-        (void)lu_update_backend_apply_forward(lu, work);
+        if (lu_update_backend_has_updates(lu)) {
+            t_segment_ms = lp_telemetry_timer_start();
+            (void)lu_update_backend_apply_forward(lu, work);
+            lu_record_ftran_update_apply_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
+        }
 
+        t_segment_ms = lp_telemetry_timer_start();
         for (int i = 0; i < m; i++) {
             solution[lu->col_perm[i]] = work[i];
         }
+        lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
         return;
     }
 
@@ -1378,6 +1452,7 @@ void lu_solve_sparse(const LUFactorization *lu,
     memset(work2, 0, m * sizeof(double));
 
     /* Build permuted RHS and track nonzero indices */
+    t_segment_ms = lp_telemetry_timer_start();
     int *perm_rhs_idx = (int*)lu->perm_work;  /* Reuse perm_work as int array */
     int perm_rhs_nnz = 0;
     for (int k = 0; k < nnz_rhs; k++) {
@@ -1437,6 +1512,7 @@ void lu_solve_sparse(const LUFactorization *lu,
             }
         }
     }
+    lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 
     /* Clear work for non-reached indices to avoid stale values */
     for (int i = 0; i < reach_nnz; i++) {
@@ -1444,12 +1520,18 @@ void lu_solve_sparse(const LUFactorization *lu,
     }
 
     /* Apply updates */
-    (void)lu_update_backend_apply_forward(lu, work2);
+    if (lu_update_backend_has_updates(lu)) {
+        t_segment_ms = lp_telemetry_timer_start();
+        (void)lu_update_backend_apply_forward(lu, work2);
+        lu_record_ftran_update_apply_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
+    }
 
     /* Apply column permutation */
+    t_segment_ms = lp_telemetry_timer_start();
     for (int i = 0; i < m; i++) {
         solution[lu->col_perm[i]] = work2[i];
     }
+    lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 }
 
 /*
@@ -1467,6 +1549,7 @@ void lu_solve_transpose_sparse(const LUFactorization *lu,
     if (!lu || !solution) return;
 
     int m = lu->m;
+    double t_segment_ms;
 
     /* Use pre-allocated workspace (avoids malloc in hot path) */
     double *work = lu->hs_work1;
@@ -1481,6 +1564,7 @@ void lu_solve_transpose_sparse(const LUFactorization *lu,
      */
     if (nnz_rhs > m / 4) {
         /* Build dense RHS vector in work */
+        t_segment_ms = lp_telemetry_timer_start();
         for (int k = 0; k < nnz_rhs; k++) {
             if (rhs_idx[k] >= 0 && rhs_idx[k] < m)
                 work[rhs_idx[k]] = rhs_val[k];
@@ -1491,21 +1575,29 @@ void lu_solve_transpose_sparse(const LUFactorization *lu,
         for (int i = 0; i < m; i++) {
             work2[i] = work[lu->col_perm[i]];
         }
+        lu_record_btran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 
         /* Apply updates in reverse (in step coordinates) */
-        lu_update_backend_apply_backward(lu, work2);
+        if (lu_update_backend_has_updates(lu)) {
+            t_segment_ms = lp_telemetry_timer_start();
+            lu_update_backend_apply_backward(lu, work2);
+            lu_record_btran_update_apply_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
+        }
 
         /* Solve U'z = work2 */
+        t_segment_ms = lp_telemetry_timer_start();
         solve_Ut(lu, work2, work);
 
         /* Solve L'x = z and apply P' */
         solve_Lt(lu, work, work2);
 
         vec_copy_data(solution, work2, m);
+        lu_record_btran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
         return;
     }
 
     /* Sparse path: Apply inverse column permutation */
+    t_segment_ms = lp_telemetry_timer_start();
     for (int k = 0; k < nnz_rhs; k++) {
         int orig_idx = rhs_idx[k];
         if (orig_idx >= 0 && orig_idx < m) {
@@ -1514,15 +1606,22 @@ void lu_solve_transpose_sparse(const LUFactorization *lu,
             work[step_pos] = rhs_val[k];
         }
     }
+    lu_record_btran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 
     /* Apply updates in reverse */
-    lu_update_backend_apply_backward(lu, work);
+    if (lu_update_backend_has_updates(lu)) {
+        t_segment_ms = lp_telemetry_timer_start();
+        lu_update_backend_apply_backward(lu, work);
+        lu_record_btran_update_apply_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
+    }
 
     /* Solve U'z = work (U' is lower triangular) */
+    t_segment_ms = lp_telemetry_timer_start();
     solve_Ut(lu, work, work2);
 
     /* Solve L'x = z and apply P' */
     solve_Lt(lu, work2, solution);
+    lu_record_btran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 }
 
 /* ============================================================================
@@ -1822,6 +1921,7 @@ void lu_ftran_hyper_sparse(const LUFactorization *lu,
     if (!lu || !solution) return;
 
     int m = lu->m;
+    double t_segment_ms;
 
     /* Threshold: if RHS too dense, fall back to regular sparse solve */
     if (nnz_rhs > m / 8) {
@@ -1853,6 +1953,7 @@ void lu_ftran_hyper_sparse(const LUFactorization *lu,
     memset(work2, 0, m * sizeof(double));
 
     /* Step 1: Apply row permutation to RHS */
+    t_segment_ms = lp_telemetry_timer_start();
     int perm_nnz = 0;
     for (int k = 0; k < nnz_rhs; k++) {
         int orig_row = rhs_idx[k];
@@ -1877,12 +1978,15 @@ void lu_ftran_hyper_sparse(const LUFactorization *lu,
     /* U solve: L_out_idx is INPUT, reuse perm_rhs_idx as OUTPUT (safe now) */
     int U_nnz, U_reach_nnz;
     solve_U_sparse(lu, L_nnz, L_out_idx, temp_val, work2, perm_rhs_idx, &U_nnz, marked, &U_reach_nnz);
+    lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 
     /* Step 4: Apply FT/eta updates */
     int has_updates = 0;
     if (lu_update_backend_has_updates(lu)) {
         has_updates = 1;
+        t_segment_ms = lp_telemetry_timer_start();
         (void)lu_update_backend_apply_forward(lu, work2);
+        lu_record_ftran_update_apply_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
     }
 
     /* Step 5: Apply column permutation and build output.
@@ -1891,6 +1995,7 @@ void lu_ftran_hyper_sparse(const LUFactorization *lu,
     if (sol_nnz) *sol_nnz = 0;
 
     if (!has_updates) {
+        t_segment_ms = lp_telemetry_timer_start();
         for (int k = 0; k < U_nnz; k++) {
             int i = perm_rhs_idx[k];
             double xi = work2[i];
@@ -1901,9 +2006,11 @@ void lu_ftran_hyper_sparse(const LUFactorization *lu,
                 sol_idx[(*sol_nnz)++] = out_idx;
             }
         }
+        lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
         return;
     }
 
+    t_segment_ms = lp_telemetry_timer_start();
     for (int i = 0; i < m; i++) {
         double xi = work2[i];
         if (fabs(xi) <= RALPH_ZERO_TOL) continue;
@@ -1913,6 +2020,7 @@ void lu_ftran_hyper_sparse(const LUFactorization *lu,
             sol_idx[(*sol_nnz)++] = out_idx;
         }
     }
+    lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 }
 
 /* ============================================================================
@@ -2254,6 +2362,7 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
     if (!lu || !solution) return;
 
     int m = lu->m;
+    double t_segment_ms;
 
     /* Threshold for falling back to dense */
     if (nnz_rhs > m / 8) {
@@ -2287,6 +2396,7 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
     int *bt_idx = lu_mut->hs_idx;
 
     /* Step 1: Apply inverse column permutation */
+    t_segment_ms = lp_telemetry_timer_start();
     int bt_nnz = 0;
     for (int k = 0; k < nnz_rhs; k++) {
         int orig_idx = rhs_idx[k];
@@ -2299,12 +2409,15 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
             }
         }
     }
+    lu_record_btran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 
     /* Step 2: Apply updates in reverse */
     int has_updates = 0;
     if (lu_update_backend_has_updates(lu)) {
         has_updates = 1;
+        t_segment_ms = lp_telemetry_timer_start();
         lu_update_backend_apply_backward(lu, work);
+        lu_record_btran_update_apply_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
     }
 
     /* Step 3 & 4: Solve U'^{-1} and L'^{-1}
@@ -2322,6 +2435,7 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
     }
 
     int used_sparse_path = 0;
+    t_segment_ms = lp_telemetry_timer_start();
     if (lu->csr_valid && bt_nnz < m / 4) {
         /* Sparse path: reach-based forward sub on U^T, then backward sub on L^T */
         int *reach = (int*)lu_mut->perm_work;  /* Reuse as int array */
@@ -2389,6 +2503,7 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
             }
         }
     }
+    lu_record_btran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 
     /* Clear workspace */
     memset(work, 0, m * sizeof(double));

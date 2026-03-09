@@ -1587,7 +1587,77 @@ static void test_lu_gr_backend_matches_ft_invariants(void) {
 }
 
 /* ============================================================================
- * Test 25: Runtime update limit is bounded by allocated LU update storage
+ * Test 25: Compact factor cache is reused between solves for BG/GR backends
+ * ============================================================================ */
+static void run_compact_factor_cache_test(int backend, const char *label) {
+    const int m = 8;
+    double B0[64] = {0};
+    static const double entering[8] = {1.50, 0.20, 0.00, 0.00, 0.00, 0.00, 0.00, 0.00};
+    static const double rhs1[8] = {1.0, 2.0, -1.0, 0.5, 0.0, 1.0, -0.5, 2.0};
+    static const double rhs2[8] = {0.5, -1.0, 2.0, 1.5, -0.5, 0.0, 1.0, 3.0};
+    static const double rhs_t1[8] = {0.0, 1.0, 2.0, -1.0, 0.5, 0.0, 1.0, -0.5};
+    static const double rhs_t2[8] = {1.5, -0.5, 0.0, 1.0, 2.0, -1.0, 0.0, 0.5};
+    LUFactorization *lu = NULL;
+    SparseMatrix *B = NULL;
+    double x[8];
+    char msg[160];
+
+    for (int i = 0; i < m; i++) B0[i * m + i] = 1.0;
+
+    B = dense_to_csc(B0, m, m);
+    lu = lu_create(m);
+    ASSERT(lu != NULL, "lu compact cache: lu_create");
+    if (!lu || !B) goto cleanup;
+
+    ASSERT_INT_EQ(lu_factorize(lu, B), 0, "lu compact cache: factorize");
+    configure_backend_invariant_lane(lu, backend);
+    ASSERT_INT_EQ(lu_update(lu, 0, entering), 0, "lu compact cache: update");
+
+    ASSERT_INT_EQ(lu->telemetry.perf_compact_factor_calls, 0,
+                  "lu compact cache: no factor before first solve");
+
+    lu_solve(lu, (double *)rhs1, x);
+    snprintf(msg, sizeof(msg), "lu compact cache (%s): first forward factor", label);
+    ASSERT_INT_EQ(lu->telemetry.perf_compact_factor_calls, 1, msg);
+
+    lu_solve(lu, (double *)rhs2, x);
+    snprintf(msg, sizeof(msg), "lu compact cache (%s): second forward reuses factor", label);
+    ASSERT_INT_EQ(lu->telemetry.perf_compact_factor_calls, 1, msg);
+
+    lu_solve_transpose(lu, (double *)rhs_t1, x);
+    snprintf(msg, sizeof(msg), "lu compact cache (%s): first backward factor", label);
+    ASSERT_INT_EQ(lu->telemetry.perf_compact_factor_calls, 2, msg);
+
+    lu_solve_transpose(lu, (double *)rhs_t2, x);
+    snprintf(msg, sizeof(msg), "lu compact cache (%s): second backward reuses factor", label);
+    ASSERT_INT_EQ(lu->telemetry.perf_compact_factor_calls, 2, msg);
+
+    ASSERT_INT_EQ(lu_update(lu, 0, entering), 0, "lu compact cache: second update");
+    lu_solve(lu, (double *)rhs1, x);
+    snprintf(msg, sizeof(msg), "lu compact cache (%s): update invalidates forward cache", label);
+    ASSERT_INT_EQ(lu->telemetry.perf_compact_factor_calls, 3, msg);
+
+    lu_solve_transpose(lu, (double *)rhs_t1, x);
+    snprintf(msg, sizeof(msg), "lu compact cache (%s): update invalidates backward cache", label);
+    ASSERT_INT_EQ(lu->telemetry.perf_compact_factor_calls, 4, msg);
+
+cleanup:
+    lu_free(lu);
+    free_csc(B);
+}
+
+static void test_lu_bg_compact_factor_cache(void) {
+    printf("  LU: bg compact factor cache reuse...\n");
+    run_compact_factor_cache_test(LU_UPDATE_BACKEND_BG_COMPAT, "bg");
+}
+
+static void test_lu_gr_compact_factor_cache(void) {
+    printf("  LU: gr compact factor cache reuse...\n");
+    run_compact_factor_cache_test(LU_UPDATE_BACKEND_GR_COMPAT, "gr");
+}
+
+/* ============================================================================
+ * Test 26: Runtime update limit is bounded by allocated LU update storage
  * ============================================================================ */
 static void test_lu_update_storage_capacity_guard_runtime(void) {
     printf("  LU: runtime update-capacity guard...\n");
@@ -1676,6 +1746,8 @@ int main(void) {
     test_lu_strict_cgr_update_path_telemetry();
     test_lu_bg_backend_matches_ft_invariants();
     test_lu_gr_backend_matches_ft_invariants();
+    test_lu_bg_compact_factor_cache();
+    test_lu_gr_compact_factor_cache();
     test_lu_update_storage_capacity_guard_runtime();
 
     printf("\nIntegration (A/B Comparison):\n");

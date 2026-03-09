@@ -478,6 +478,12 @@ typedef struct {
     double perf_refactor_ms;
     double perf_ftran_ms;
     double perf_btran_ms;
+    double perf_ftran_base_ms;
+    double perf_ftran_update_apply_ms;
+    int perf_ftran_update_apply_calls;
+    double perf_btran_base_ms;
+    double perf_btran_update_apply_ms;
+    int perf_btran_update_apply_calls;
     double perf_lu_update_ms;
     double perf_compute_solution_ms;
     double perf_compute_rc_ms;
@@ -757,6 +763,14 @@ typedef struct {
     double perf_total_markowitz_numeric_ms;
     double perf_total_identity_placement_ms;
     double perf_total_coo_to_csc_ms;
+    int perf_update_apply_forward_calls;
+    int perf_update_apply_backward_calls;
+    int perf_compact_factor_calls;
+    int perf_compact_solve_calls;
+    double perf_total_update_apply_forward_ms;
+    double perf_total_update_apply_backward_ms;
+    double perf_total_compact_factor_ms;
+    double perf_total_compact_solve_ms;
 } RalphLUTelemetry;
 
 /* Get LP solver telemetry snapshot from the most recent solve.

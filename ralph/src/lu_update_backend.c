@@ -19,6 +19,8 @@ static int lu_update_backend_is_gr(const LUFactorization *lu) {
     return lu && lu->update_backend == LU_UPDATE_BACKEND_GR_COMPAT;
 }
 
+static void lu_invalidate_schur_factor_cache(LUFactorization *lu);
+
 int lu_update_backend_is_ft(const LUFactorization *lu) {
     if (!lu) return 1;
     return lu->update_backend == LU_UPDATE_BACKEND_FT ? 1 : 0;
@@ -60,6 +62,7 @@ static void lu_mark_bad_input_and_force_refactor(const LUFactorization *lu_const
     lu->ft_num_updates = 0;
     lu->spike_pool_used = 0;
     lu->schur_num_updates = 0;
+    lu_invalidate_schur_factor_cache(lu);
 }
 
 static void free_sparse_update_chain(int *count,
@@ -79,6 +82,12 @@ static void free_sparse_update_chain(int *count,
     *count = 0;
 }
 
+static void lu_invalidate_schur_factor_cache(LUFactorization *lu) {
+    if (!lu) return;
+    lu->schur_factor_fwd_valid = 0;
+    lu->schur_factor_bwd_valid = 0;
+}
+
 void lu_update_backend_reset(LUFactorization *lu) {
     if (!lu) return;
 
@@ -93,6 +102,10 @@ void lu_update_backend_reset(LUFactorization *lu) {
     if (lu->schur_piv && lu->schur_capacity > 0) {
         memset(lu->schur_piv, 0, (size_t)lu->schur_capacity * sizeof(int));
     }
+    if (lu->schur_piv_t && lu->schur_capacity > 0) {
+        memset(lu->schur_piv_t, 0, (size_t)lu->schur_capacity * sizeof(int));
+    }
+    lu_invalidate_schur_factor_cache(lu);
 
     for (int i = 0; i < lu->ft_num_updates; i++) {
         lu->ft_spike_nnz[i] = 0;
@@ -186,12 +199,35 @@ static void bg_build_m_times_unit_column(const LUFactorization *lu,
     }
 }
 
-static int bg_solve_dense(int n, double *A, int *piv, double *rhs) {
-    for (int i = 0; i < n; i++) piv[i] = i;
+static void schur_copy_forward_matrix(const LUFactorization *lu,
+                                      double *dst,
+                                      int n) {
+    int cap = lu->schur_capacity;
 
+    for (int row = 0; row < n; row++) {
+        memcpy(dst + (size_t)row * n,
+               lu->schur_k + (size_t)row * cap,
+               (size_t)n * sizeof(double));
+    }
+}
+
+static void schur_copy_transpose_matrix(const LUFactorization *lu,
+                                        double *dst,
+                                        int n) {
+    int cap = lu->schur_capacity;
+
+    for (int row = 0; row < n; row++) {
+        for (int col = 0; col < n; col++) {
+            dst[(size_t)row * n + col] = lu->schur_k[(size_t)col * cap + row];
+        }
+    }
+}
+
+static int bg_factor_dense(int n, double *A, int *piv) {
     for (int col = 0; col < n; col++) {
         int piv_row = col;
         double max_abs = fabs(A[(size_t)col * n + col]);
+
         for (int row = col + 1; row < n; row++) {
             double absval = fabs(A[(size_t)row * n + col]);
             if (absval > max_abs) {
@@ -200,66 +236,263 @@ static int bg_solve_dense(int n, double *A, int *piv, double *rhs) {
             }
         }
         if (max_abs < RALPH_PIVOT_TOL) return -1;
+
+        piv[col] = piv_row;
         if (piv_row != col) {
             for (int j = 0; j < n; j++) {
                 double tmp = A[(size_t)col * n + j];
                 A[(size_t)col * n + j] = A[(size_t)piv_row * n + j];
                 A[(size_t)piv_row * n + j] = tmp;
             }
-            {
-                double tmp_rhs = rhs[col];
-                rhs[col] = rhs[piv_row];
-                rhs[piv_row] = tmp_rhs;
-            }
-            {
-                int tmp_p = piv[col];
-                piv[col] = piv[piv_row];
-                piv[piv_row] = tmp_p;
-            }
         }
+
         for (int row = col + 1; row < n; row++) {
             double factor = A[(size_t)row * n + col] / A[(size_t)col * n + col];
             A[(size_t)row * n + col] = factor;
             for (int j = col + 1; j < n; j++) {
                 A[(size_t)row * n + j] -= factor * A[(size_t)col * n + j];
             }
-            rhs[row] -= factor * rhs[col];
         }
+    }
+
+    return 0;
+}
+
+static int bg_solve_factored(int n,
+                             const double *A,
+                             const int *piv,
+                             double *rhs) {
+    for (int col = 0; col < n; col++) {
+        if (piv[col] != col) {
+            double tmp = rhs[col];
+            rhs[col] = rhs[piv[col]];
+            rhs[piv[col]] = tmp;
+        }
+    }
+
+    for (int row = 0; row < n; row++) {
+        double sum = rhs[row];
+        for (int j = 0; j < row; j++) {
+            sum -= A[(size_t)row * n + j] * rhs[j];
+        }
+        rhs[row] = sum;
     }
 
     for (int row = n - 1; row >= 0; row--) {
         double sum = rhs[row];
+        double diag = A[(size_t)row * n + row];
+        if (fabs(diag) < RALPH_PIVOT_TOL) return -1;
         for (int j = row + 1; j < n; j++) {
             sum -= A[(size_t)row * n + j] * rhs[j];
         }
-        rhs[row] = sum / A[(size_t)row * n + row];
+        rhs[row] = sum / diag;
+    }
+
+    return 0;
+}
+
+static int gr_factor_dense(int n,
+                           double *A,
+                           double *rot_c,
+                           double *rot_s,
+                           int rot_cap) {
+    int rot = 0;
+
+    for (int col = 0; col < n; col++) {
+        for (int row = n - 1; row > col; row--) {
+            double a = A[(size_t)(row - 1) * n + col];
+            double b = A[(size_t)row * n + col];
+
+            if (rot >= rot_cap) return -1;
+            if (fabs(b) <= RALPH_ZERO_TOL) {
+                rot_c[rot] = 1.0;
+                rot_s[rot] = 0.0;
+                rot++;
+                continue;
+            }
+
+            double r = hypot(a, b);
+            if (r < RALPH_PIVOT_TOL) return -1;
+            double c = a / r;
+            double s = -b / r;
+
+            rot_c[rot] = c;
+            rot_s[rot] = s;
+            rot++;
+
+            for (int j = col; j < n; j++) {
+                double t0 = c * A[(size_t)(row - 1) * n + j] - s * A[(size_t)row * n + j];
+                double t1 = s * A[(size_t)(row - 1) * n + j] + c * A[(size_t)row * n + j];
+                A[(size_t)(row - 1) * n + j] = t0;
+                A[(size_t)row * n + j] = t1;
+            }
+        }
+        if (fabs(A[(size_t)col * n + col]) < RALPH_PIVOT_TOL) return -1;
+    }
+
+    return 0;
+}
+
+static void gr_apply_rotations_to_rhs(int n,
+                                      const double *rot_c,
+                                      const double *rot_s,
+                                      double *rhs) {
+    int rot = 0;
+
+    for (int col = 0; col < n; col++) {
+        for (int row = n - 1; row > col; row--) {
+            double c = rot_c[rot];
+            double s = rot_s[rot];
+            double t0 = c * rhs[row - 1] - s * rhs[row];
+            double t1 = s * rhs[row - 1] + c * rhs[row];
+            rhs[row - 1] = t0;
+            rhs[row] = t1;
+            rot++;
+        }
+    }
+}
+
+static int gr_solve_factored(int n,
+                             const double *A,
+                             const double *rot_c,
+                             const double *rot_s,
+                             double *rhs) {
+    gr_apply_rotations_to_rhs(n, rot_c, rot_s, rhs);
+
+    for (int row = n - 1; row >= 0; row--) {
+        double sum = rhs[row];
+        double diag = A[(size_t)row * n + row];
+        if (fabs(diag) < RALPH_PIVOT_TOL) return -1;
+        for (int j = row + 1; j < n; j++) {
+            sum -= A[(size_t)row * n + j] * rhs[j];
+        }
+        rhs[row] = sum / diag;
     }
     return 0;
 }
 
-static int bg_apply_forward(const LUFactorization *lu, double *x) {
+static int bg_prepare_forward_factor(LUFactorization *lu) {
     int k = lu->schur_num_updates;
-    int cap = lu->schur_capacity;
+    double t_compact_ms;
 
     if (k <= 0) return 0;
-    if (!lu->schur_k || !lu->schur_k_work || !lu->schur_rhs || !lu->schur_piv) {
+    if (lu->schur_factor_fwd_valid) return 0;
+    if (!lu->schur_k || !lu->schur_k_work || !lu->schur_piv) return -1;
+
+    schur_copy_forward_matrix(lu, lu->schur_k_work, k);
+    t_compact_ms = lp_telemetry_timer_start();
+    if (bg_factor_dense(k, lu->schur_k_work, lu->schur_piv) != 0) {
+        lp_telemetry_lu_record_compact_factor_ms(lu,
+                                                 lp_telemetry_timer_elapsed_ms(t_compact_ms));
+        lu_mark_bad_input_and_force_refactor(lu);
+        lu_invalidate_schur_factor_cache(lu);
         return -1;
     }
+    lp_telemetry_lu_record_compact_factor_ms(lu,
+                                             lp_telemetry_timer_elapsed_ms(t_compact_ms));
+    lu->schur_factor_fwd_valid = 1;
+    return 0;
+}
+
+static int bg_prepare_backward_factor(LUFactorization *lu) {
+    int k = lu->schur_num_updates;
+    double t_compact_ms;
+
+    if (k <= 0) return 0;
+    if (lu->schur_factor_bwd_valid) return 0;
+    if (!lu->schur_k || !lu->schur_k_t_work || !lu->schur_piv_t) return -1;
+
+    schur_copy_transpose_matrix(lu, lu->schur_k_t_work, k);
+    t_compact_ms = lp_telemetry_timer_start();
+    if (bg_factor_dense(k, lu->schur_k_t_work, lu->schur_piv_t) != 0) {
+        lp_telemetry_lu_record_compact_factor_ms(lu,
+                                                 lp_telemetry_timer_elapsed_ms(t_compact_ms));
+        lu_mark_bad_input_and_force_refactor(lu);
+        lu_invalidate_schur_factor_cache(lu);
+        return -1;
+    }
+    lp_telemetry_lu_record_compact_factor_ms(lu,
+                                             lp_telemetry_timer_elapsed_ms(t_compact_ms));
+    lu->schur_factor_bwd_valid = 1;
+    return 0;
+}
+
+static int gr_prepare_forward_factor(LUFactorization *lu) {
+    int k = lu->schur_num_updates;
+    double t_compact_ms;
+
+    if (k <= 0) return 0;
+    if (lu->schur_factor_fwd_valid) return 0;
+    if (!lu->schur_k || !lu->schur_k_work ||
+        !lu->schur_rot_fwd_c || !lu->schur_rot_fwd_s) return -1;
+
+    schur_copy_forward_matrix(lu, lu->schur_k_work, k);
+    t_compact_ms = lp_telemetry_timer_start();
+    if (gr_factor_dense(k, lu->schur_k_work,
+                        lu->schur_rot_fwd_c, lu->schur_rot_fwd_s,
+                        lu->schur_rot_capacity) != 0) {
+        lp_telemetry_lu_record_compact_factor_ms(lu,
+                                                 lp_telemetry_timer_elapsed_ms(t_compact_ms));
+        lu_mark_bad_input_and_force_refactor(lu);
+        lu_invalidate_schur_factor_cache(lu);
+        return -1;
+    }
+    lp_telemetry_lu_record_compact_factor_ms(lu,
+                                             lp_telemetry_timer_elapsed_ms(t_compact_ms));
+    lu->schur_factor_fwd_valid = 1;
+    return 0;
+}
+
+static int gr_prepare_backward_factor(LUFactorization *lu) {
+    int k = lu->schur_num_updates;
+    double t_compact_ms;
+
+    if (k <= 0) return 0;
+    if (lu->schur_factor_bwd_valid) return 0;
+    if (!lu->schur_k || !lu->schur_k_t_work ||
+        !lu->schur_rot_bwd_c || !lu->schur_rot_bwd_s) return -1;
+
+    schur_copy_transpose_matrix(lu, lu->schur_k_t_work, k);
+    t_compact_ms = lp_telemetry_timer_start();
+    if (gr_factor_dense(k, lu->schur_k_t_work,
+                        lu->schur_rot_bwd_c, lu->schur_rot_bwd_s,
+                        lu->schur_rot_capacity) != 0) {
+        lp_telemetry_lu_record_compact_factor_ms(lu,
+                                                 lp_telemetry_timer_elapsed_ms(t_compact_ms));
+        lu_mark_bad_input_and_force_refactor(lu);
+        lu_invalidate_schur_factor_cache(lu);
+        return -1;
+    }
+    lp_telemetry_lu_record_compact_factor_ms(lu,
+                                             lp_telemetry_timer_elapsed_ms(t_compact_ms));
+    lu->schur_factor_bwd_valid = 1;
+    return 0;
+}
+
+static int bg_apply_forward(const LUFactorization *lu, double *x) {
+    LUFactorization *lu_mut = (LUFactorization*)lu;
+    int k = lu->schur_num_updates;
+    double t_compact_ms;
+
+    if (k <= 0) return 0;
+    if (!lu->schur_rhs) return -1;
+    if (bg_prepare_forward_factor(lu_mut) != 0) return -1;
 
     for (int i = 0; i < k; i++) {
-        lu->schur_rhs[i] = x[lu->schur_col[i]];
+        lu_mut->schur_rhs[i] = x[lu->schur_col[i]];
     }
-    for (int row = 0; row < k; row++) {
-        memcpy(lu->schur_k_work + (size_t)row * k,
-               lu->schur_k + (size_t)row * cap,
-               (size_t)k * sizeof(double));
-    }
-    if (bg_solve_dense(k, lu->schur_k_work, lu->schur_piv, lu->schur_rhs) != 0) {
+    t_compact_ms = lp_telemetry_timer_start();
+    if (bg_solve_factored(k, lu->schur_k_work, lu->schur_piv, lu_mut->schur_rhs) != 0) {
+        lp_telemetry_lu_record_compact_solve_ms(lu_mut,
+                                                lp_telemetry_timer_elapsed_ms(t_compact_ms));
         lu_mark_bad_input_and_force_refactor(lu);
+        lu_invalidate_schur_factor_cache(lu_mut);
         return -1;
     }
+    lp_telemetry_lu_record_compact_solve_ms(lu_mut,
+                                            lp_telemetry_timer_elapsed_ms(t_compact_ms));
     for (int i = 0; i < k; i++) {
-        double alpha = -lu->schur_rhs[i];
+        double alpha = -lu_mut->schur_rhs[i];
         if (fabs(alpha) <= RALPH_ZERO_TOL) continue;
         sparse_column_axpy(lu->schur_indices[i], lu->schur_values[i],
                            lu->schur_nnz[i], alpha, x);
@@ -268,96 +501,62 @@ static int bg_apply_forward(const LUFactorization *lu, double *x) {
 }
 
 static int bg_apply_backward(const LUFactorization *lu, double *x) {
+    LUFactorization *lu_mut = (LUFactorization*)lu;
     int k = lu->schur_num_updates;
-    int cap = lu->schur_capacity;
+    double t_compact_ms;
 
     if (k <= 0) return 0;
-    if (!lu->schur_k || !lu->schur_k_work || !lu->schur_rhs || !lu->schur_piv) {
-        return -1;
-    }
+    if (!lu->schur_rhs) return -1;
+    if (bg_prepare_backward_factor(lu_mut) != 0) return -1;
 
     for (int i = 0; i < k; i++) {
-        lu->schur_rhs[i] = 0.0;
+        lu_mut->schur_rhs[i] = 0.0;
         for (int p = 0; p < lu->schur_nnz[i]; p++) {
-            lu->schur_rhs[i] += lu->schur_values[i][p] * x[lu->schur_indices[i][p]];
+            lu_mut->schur_rhs[i] += lu->schur_values[i][p] * x[lu->schur_indices[i][p]];
         }
     }
-    for (int row = 0; row < k; row++) {
-        for (int col = 0; col < k; col++) {
-            lu->schur_k_work[(size_t)row * k + col] = lu->schur_k[(size_t)col * cap + row];
-        }
-    }
-    if (bg_solve_dense(k, lu->schur_k_work, lu->schur_piv, lu->schur_rhs) != 0) {
+    t_compact_ms = lp_telemetry_timer_start();
+    if (bg_solve_factored(k, lu->schur_k_t_work, lu->schur_piv_t, lu_mut->schur_rhs) != 0) {
+        lp_telemetry_lu_record_compact_solve_ms(lu_mut,
+                                                lp_telemetry_timer_elapsed_ms(t_compact_ms));
         lu_mark_bad_input_and_force_refactor(lu);
+        lu_invalidate_schur_factor_cache(lu_mut);
         return -1;
     }
+    lp_telemetry_lu_record_compact_solve_ms(lu_mut,
+                                            lp_telemetry_timer_elapsed_ms(t_compact_ms));
     for (int i = 0; i < k; i++) {
-        x[lu->schur_col[i]] -= lu->schur_rhs[i];
-    }
-    return 0;
-}
-
-static int gr_solve_dense(int n, double *A, double *rhs) {
-    for (int col = 0; col < n; col++) {
-        for (int row = n - 1; row > col; row--) {
-            double a = A[(size_t)(row - 1) * n + col];
-            double b = A[(size_t)row * n + col];
-            if (fabs(b) <= RALPH_ZERO_TOL) continue;
-
-            double r = hypot(a, b);
-            if (r < RALPH_PIVOT_TOL) return -1;
-            double c = a / r;
-            double s = -b / r;
-
-            for (int j = col; j < n; j++) {
-                double t0 = c * A[(size_t)(row - 1) * n + j] - s * A[(size_t)row * n + j];
-                double t1 = s * A[(size_t)(row - 1) * n + j] + c * A[(size_t)row * n + j];
-                A[(size_t)(row - 1) * n + j] = t0;
-                A[(size_t)row * n + j] = t1;
-            }
-            {
-                double t0 = c * rhs[row - 1] - s * rhs[row];
-                double t1 = s * rhs[row - 1] + c * rhs[row];
-                rhs[row - 1] = t0;
-                rhs[row] = t1;
-            }
-        }
-        if (fabs(A[(size_t)col * n + col]) < RALPH_PIVOT_TOL) return -1;
-    }
-
-    for (int row = n - 1; row >= 0; row--) {
-        double sum = rhs[row];
-        for (int j = row + 1; j < n; j++) {
-            sum -= A[(size_t)row * n + j] * rhs[j];
-        }
-        rhs[row] = sum / A[(size_t)row * n + row];
+        x[lu->schur_col[i]] -= lu_mut->schur_rhs[i];
     }
     return 0;
 }
 
 static int gr_apply_forward(const LUFactorization *lu, double *x) {
+    LUFactorization *lu_mut = (LUFactorization*)lu;
     int k = lu->schur_num_updates;
-    int cap = lu->schur_capacity;
+    double t_compact_ms;
 
     if (k <= 0) return 0;
-    if (!lu->schur_k || !lu->schur_k_work || !lu->schur_rhs) {
-        return -1;
-    }
+    if (!lu->schur_rhs) return -1;
+    if (gr_prepare_forward_factor(lu_mut) != 0) return -1;
 
     for (int i = 0; i < k; i++) {
-        lu->schur_rhs[i] = x[lu->schur_col[i]];
+        lu_mut->schur_rhs[i] = x[lu->schur_col[i]];
     }
-    for (int row = 0; row < k; row++) {
-        memcpy(lu->schur_k_work + (size_t)row * k,
-               lu->schur_k + (size_t)row * cap,
-               (size_t)k * sizeof(double));
-    }
-    if (gr_solve_dense(k, lu->schur_k_work, lu->schur_rhs) != 0) {
+    t_compact_ms = lp_telemetry_timer_start();
+    if (gr_solve_factored(k, lu->schur_k_work,
+                          lu->schur_rot_fwd_c, lu->schur_rot_fwd_s,
+                          lu_mut->schur_rhs) != 0) {
+        lp_telemetry_lu_record_compact_solve_ms(lu_mut,
+                                                lp_telemetry_timer_elapsed_ms(t_compact_ms));
         lu_mark_bad_input_and_force_refactor(lu);
+        lu_invalidate_schur_factor_cache(lu_mut);
         return -1;
     }
+    lp_telemetry_lu_record_compact_solve_ms(lu_mut,
+                                            lp_telemetry_timer_elapsed_ms(t_compact_ms));
     for (int i = 0; i < k; i++) {
-        double alpha = -lu->schur_rhs[i];
+        double alpha = -lu_mut->schur_rhs[i];
         if (fabs(alpha) <= RALPH_ZERO_TOL) continue;
         sparse_column_axpy(lu->schur_indices[i], lu->schur_values[i],
                            lu->schur_nnz[i], alpha, x);
@@ -366,31 +565,34 @@ static int gr_apply_forward(const LUFactorization *lu, double *x) {
 }
 
 static int gr_apply_backward(const LUFactorization *lu, double *x) {
+    LUFactorization *lu_mut = (LUFactorization*)lu;
     int k = lu->schur_num_updates;
-    int cap = lu->schur_capacity;
+    double t_compact_ms;
 
     if (k <= 0) return 0;
-    if (!lu->schur_k || !lu->schur_k_work || !lu->schur_rhs) {
-        return -1;
-    }
+    if (!lu->schur_rhs) return -1;
+    if (gr_prepare_backward_factor(lu_mut) != 0) return -1;
 
     for (int i = 0; i < k; i++) {
-        lu->schur_rhs[i] = 0.0;
+        lu_mut->schur_rhs[i] = 0.0;
         for (int p = 0; p < lu->schur_nnz[i]; p++) {
-            lu->schur_rhs[i] += lu->schur_values[i][p] * x[lu->schur_indices[i][p]];
+            lu_mut->schur_rhs[i] += lu->schur_values[i][p] * x[lu->schur_indices[i][p]];
         }
     }
-    for (int row = 0; row < k; row++) {
-        for (int col = 0; col < k; col++) {
-            lu->schur_k_work[(size_t)row * k + col] = lu->schur_k[(size_t)col * cap + row];
-        }
-    }
-    if (gr_solve_dense(k, lu->schur_k_work, lu->schur_rhs) != 0) {
+    t_compact_ms = lp_telemetry_timer_start();
+    if (gr_solve_factored(k, lu->schur_k_t_work,
+                          lu->schur_rot_bwd_c, lu->schur_rot_bwd_s,
+                          lu_mut->schur_rhs) != 0) {
+        lp_telemetry_lu_record_compact_solve_ms(lu_mut,
+                                                lp_telemetry_timer_elapsed_ms(t_compact_ms));
         lu_mark_bad_input_and_force_refactor(lu);
+        lu_invalidate_schur_factor_cache(lu_mut);
         return -1;
     }
+    lp_telemetry_lu_record_compact_solve_ms(lu_mut,
+                                            lp_telemetry_timer_elapsed_ms(t_compact_ms));
     for (int i = 0; i < k; i++) {
-        x[lu->schur_col[i]] -= lu->schur_rhs[i];
+        x[lu->schur_col[i]] -= lu_mut->schur_rhs[i];
     }
     return 0;
 }
@@ -583,43 +785,69 @@ static void apply_ft_spikes_backward(const LUFactorization *lu, double *x) {
 }
 
 int lu_update_backend_apply_forward(const LUFactorization *lu, double *x) {
+    double t_apply_ms;
+    int rc;
+
     if (!lu || !x) return -1;
+    t_apply_ms = lp_telemetry_timer_start();
     if (lu_update_backend_is_ft(lu)) {
         if (lu->ft_num_updates <= 0) return 0;
-        return apply_ft_spikes_forward(lu, x);
+        rc = apply_ft_spikes_forward(lu, x);
+        lp_telemetry_lu_record_update_apply_forward_ms((LUFactorization*)lu,
+                                                       lp_telemetry_timer_elapsed_ms(t_apply_ms));
+        return rc;
     }
     if (lu_update_backend_is_bg(lu)) {
-        return bg_apply_forward(lu, x);
+        rc = bg_apply_forward(lu, x);
+        lp_telemetry_lu_record_update_apply_forward_ms((LUFactorization*)lu,
+                                                       lp_telemetry_timer_elapsed_ms(t_apply_ms));
+        return rc;
     }
     if (lu_update_backend_is_gr(lu)) {
-        return gr_apply_forward(lu, x);
+        rc = gr_apply_forward(lu, x);
+        lp_telemetry_lu_record_update_apply_forward_ms((LUFactorization*)lu,
+                                                       lp_telemetry_timer_elapsed_ms(t_apply_ms));
+        return rc;
     }
     if (lu->num_eta <= 0) return 0;
     apply_sparse_update_chain_forward(lu->num_eta, lu->eta_col,
                                       lu->eta_indices, lu->eta_values,
                                       lu->eta_nnz, x);
+    lp_telemetry_lu_record_update_apply_forward_ms((LUFactorization*)lu,
+                                                   lp_telemetry_timer_elapsed_ms(t_apply_ms));
     return 0;
 }
 
 void lu_update_backend_apply_backward(const LUFactorization *lu, double *x) {
+    double t_apply_ms;
+
     if (!lu || !x) return;
+    t_apply_ms = lp_telemetry_timer_start();
     if (lu_update_backend_is_ft(lu)) {
         if (lu->ft_num_updates <= 0) return;
         apply_ft_spikes_backward(lu, x);
+        lp_telemetry_lu_record_update_apply_backward_ms((LUFactorization*)lu,
+                                                        lp_telemetry_timer_elapsed_ms(t_apply_ms));
         return;
     }
     if (lu_update_backend_is_bg(lu)) {
         (void)bg_apply_backward(lu, x);
+        lp_telemetry_lu_record_update_apply_backward_ms((LUFactorization*)lu,
+                                                        lp_telemetry_timer_elapsed_ms(t_apply_ms));
         return;
     }
     if (lu_update_backend_is_gr(lu)) {
         (void)gr_apply_backward(lu, x);
+        lp_telemetry_lu_record_update_apply_backward_ms((LUFactorization*)lu,
+                                                        lp_telemetry_timer_elapsed_ms(t_apply_ms));
         return;
     }
     if (lu->num_eta <= 0) return;
     apply_sparse_update_chain_backward(lu->num_eta, lu->eta_col,
                                        lu->eta_indices, lu->eta_values,
                                        lu->eta_nnz, x);
+    lp_telemetry_lu_record_update_apply_backward_ms((LUFactorization*)lu,
+                                                    lp_telemetry_timer_elapsed_ms(t_apply_ms));
 }
 
 static void lu_note_update_path_telemetry(LUFactorization *lu) {
@@ -734,6 +962,7 @@ static int store_schur_update(LUFactorization *lu,
                                     step_pos);
     }
     lu->schur_k[(size_t)k * lu->schur_capacity + k] = 1.0 + u_dense[step_pos];
+    lu_invalidate_schur_factor_cache(lu);
     return LU_FAIL_NONE;
 }
 

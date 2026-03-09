@@ -423,6 +423,84 @@ void sn_dgemm_update(int panel_rows, int block_size, int update_cols,
 }
 
 /*
+ * Scattered-row GEMM update:
+ *   A_struct[row_perm[row_base + i], col_base + j] -= A * B
+ *
+ * This avoids copying the trailing Schur block into a temporary dense C block
+ * and then copying it back after the update.
+ */
+static void sn_dgemm_update_scattered_rows(int panel_rows, int block_size, int update_cols,
+                                           const double *A, int lda,
+                                           const double *B, int ldb,
+                                           double *A_struct, int k,
+                                           const int *row_perm,
+                                           int row_base, int col_base) {
+    int i;
+    for (i = 0; i + 3 < panel_rows; i += 4) {
+        double *c0 = A_struct + (size_t)row_perm[row_base + i + 0] * (size_t)k + col_base;
+        double *c1 = A_struct + (size_t)row_perm[row_base + i + 1] * (size_t)k + col_base;
+        double *c2 = A_struct + (size_t)row_perm[row_base + i + 2] * (size_t)k + col_base;
+        double *c3 = A_struct + (size_t)row_perm[row_base + i + 3] * (size_t)k + col_base;
+        int j;
+
+        for (j = 0; j + 3 < update_cols; j += 4) {
+            double c00 = 0, c01 = 0, c02 = 0, c03 = 0;
+            double c10 = 0, c11 = 0, c12 = 0, c13 = 0;
+            double c20 = 0, c21 = 0, c22 = 0, c23 = 0;
+            double c30 = 0, c31 = 0, c32 = 0, c33 = 0;
+
+            for (int p = 0; p < block_size; p++) {
+                double a0 = A[(i + 0) * lda + p];
+                double a1 = A[(i + 1) * lda + p];
+                double a2 = A[(i + 2) * lda + p];
+                double a3 = A[(i + 3) * lda + p];
+
+                double b0 = B[p * ldb + (j + 0)];
+                double b1 = B[p * ldb + (j + 1)];
+                double b2 = B[p * ldb + (j + 2)];
+                double b3 = B[p * ldb + (j + 3)];
+
+                c00 += a0 * b0; c01 += a0 * b1; c02 += a0 * b2; c03 += a0 * b3;
+                c10 += a1 * b0; c11 += a1 * b1; c12 += a1 * b2; c13 += a1 * b3;
+                c20 += a2 * b0; c21 += a2 * b1; c22 += a2 * b2; c23 += a2 * b3;
+                c30 += a3 * b0; c31 += a3 * b1; c32 += a3 * b2; c33 += a3 * b3;
+            }
+
+            c0[j + 0] -= c00; c0[j + 1] -= c01; c0[j + 2] -= c02; c0[j + 3] -= c03;
+            c1[j + 0] -= c10; c1[j + 1] -= c11; c1[j + 2] -= c12; c1[j + 3] -= c13;
+            c2[j + 0] -= c20; c2[j + 1] -= c21; c2[j + 2] -= c22; c2[j + 3] -= c23;
+            c3[j + 0] -= c30; c3[j + 1] -= c31; c3[j + 2] -= c32; c3[j + 3] -= c33;
+        }
+
+        for (; j < update_cols; j++) {
+            double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+            for (int p = 0; p < block_size; p++) {
+                double b = B[p * ldb + j];
+                s0 += A[(i + 0) * lda + p] * b;
+                s1 += A[(i + 1) * lda + p] * b;
+                s2 += A[(i + 2) * lda + p] * b;
+                s3 += A[(i + 3) * lda + p] * b;
+            }
+            c0[j] -= s0;
+            c1[j] -= s1;
+            c2[j] -= s2;
+            c3[j] -= s3;
+        }
+    }
+
+    for (; i < panel_rows; i++) {
+        double *c = A_struct + (size_t)row_perm[row_base + i] * (size_t)k + col_base;
+        for (int j = 0; j < update_cols; j++) {
+            double sum = 0.0;
+            for (int p = 0; p < block_size; p++) {
+                sum += A[i * lda + p] * B[p * ldb + j];
+            }
+            c[j] -= sum;
+        }
+    }
+}
+
+/*
  * TRSM: Solve L * X = B in-place (B overwritten with X).
  *
  * L is block_size x block_size unit lower triangular (row-major, ldl stride).
@@ -539,24 +617,15 @@ int sn_factorize(double *A_struct, int m, int k,
 
     /* Bounds-check macro for COO array writes */
     #define SN_EMIT_L(r, c, v) do { \
-        if (*L_nnz >= L_capacity) { free(pivot_indices); return -1; } \
+        if (*L_nnz >= L_capacity) { return -1; } \
         L_row[*L_nnz] = (r); L_col[*L_nnz] = (c); L_val[*L_nnz] = (v); \
         (*L_nnz)++; \
     } while(0)
     #define SN_EMIT_U(r, c, v) do { \
-        if (*U_nnz >= U_capacity) { free(pivot_indices); return -1; } \
+        if (*U_nnz >= U_capacity) { return -1; } \
         U_row[*U_nnz] = (r); U_col[*U_nnz] = (c); U_val[*U_nnz] = (v); \
         (*U_nnz)++; \
     } while(0)
-
-    /* Temporary pivot index buffer (max supernode size) */
-    int max_sn_size = 0;
-    for (int s = 0; s < num_supernodes; s++) {
-        if (supernodes[s].size > max_sn_size)
-            max_sn_size = supernodes[s].size;
-    }
-    int *pivot_indices = (int *)calloc(max_sn_size, sizeof(int));
-    if (!pivot_indices) return -1;
 
     /* Process each supernode */
     for (int s = 0; s < num_supernodes; s++) {
@@ -664,7 +733,6 @@ int sn_factorize(double *A_struct, int m, int k,
                     A_struct[(size_t)piv_orig * k + step] = 1.0;
                     max_val = 1.0;
                 } else {
-                    free(pivot_indices);
                     return -1; /* Singular, fall back */
                 }
             }
@@ -743,27 +811,23 @@ int sn_factorize(double *A_struct, int m, int k,
         int trailing_cols = k - (sn_start + sn_size);
 
         if (trailing_rows > 0 && trailing_cols > 0) {
-            /* Workspace layout: [L_block | U_block | C_block]
+            /* Workspace layout: [L_block | U_block]
              * L: trailing_rows * sn_size
-             * U: sn_size * trailing_cols
-             * C: trailing_rows * trailing_cols */
+             * U: sn_size * trailing_cols */
             size_t L_sz = (size_t)trailing_rows * sn_size;
             size_t U_sz = (size_t)sn_size * trailing_cols;
-            size_t C_sz = (size_t)trailing_rows * trailing_cols;
-            size_t need = L_sz + U_sz + C_sz;
+            size_t need = L_sz + U_sz;
 
-            double *L_block, *U_block, *C_block;
+            double *L_block, *U_block;
             int used_work = 0;
             if (work && work_capacity >= need) {
                 L_block = work;
                 U_block = work + L_sz;
-                C_block = work + L_sz + U_sz;
                 used_work = 1;
             } else {
                 L_block = (double *)calloc(need, sizeof(double));
-                if (!L_block) { free(pivot_indices); return -1; }
+                if (!L_block) { return -1; }
                 U_block = L_block + L_sz;
-                C_block = L_block + L_sz + U_sz;
             }
 
             /* Fill L_block: row i (trailing), col j_local (within supernode) */
@@ -784,35 +848,17 @@ int sn_factorize(double *A_struct, int m, int k,
                 }
             }
 
-            /* Fill C_block: trailing submatrix */
-            for (int i = 0; i < trailing_rows; i++) {
-                int orig_row = row_perm[sn_start + sn_size + i];
-                for (int jj = 0; jj < trailing_cols; jj++) {
-                    C_block[i * trailing_cols + jj] =
-                        A_struct[(size_t)orig_row * k + (sn_start + sn_size + jj)];
-                }
-            }
-
-            /* GEMM: C -= L * U */
-            sn_dgemm_update(trailing_rows, sn_size, trailing_cols,
-                           L_block, sn_size,
-                           U_block, trailing_cols,
-                           C_block, trailing_cols);
-
-            /* Write C_block back to A_struct */
-            for (int i = 0; i < trailing_rows; i++) {
-                int orig_row = row_perm[sn_start + sn_size + i];
-                for (int jj = 0; jj < trailing_cols; jj++) {
-                    A_struct[(size_t)orig_row * k + (sn_start + sn_size + jj)] =
-                        C_block[i * trailing_cols + jj];
-                }
-            }
+            sn_dgemm_update_scattered_rows(trailing_rows, sn_size, trailing_cols,
+                                           L_block, sn_size,
+                                           U_block, trailing_cols,
+                                           A_struct, k, row_perm,
+                                           sn_start + sn_size,
+                                           sn_start + sn_size);
 
             if (!used_work) free(L_block);
         }
     }
 
-    free(pivot_indices);
     #undef SN_EMIT_L
     #undef SN_EMIT_U
     return 0;

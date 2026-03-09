@@ -68,6 +68,31 @@ void lp_telemetry_add_ftran_timed(SimplexSolver *solver,
                               lp_telemetry_timer_elapsed_ms(start_ms));
 }
 
+void lp_telemetry_add_ftran_base_ms(SimplexSolver *solver,
+                                    double elapsed_ms) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_ftran_base_ms += elapsed_ms;
+}
+
+void lp_telemetry_add_ftran_base_timed(SimplexSolver *solver,
+                                       double start_ms) {
+    lp_telemetry_add_ftran_base_ms(solver,
+                                   lp_telemetry_timer_elapsed_ms(start_ms));
+}
+
+void lp_telemetry_add_ftran_update_apply_ms(SimplexSolver *solver,
+                                            double elapsed_ms) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_ftran_update_apply_ms += elapsed_ms;
+    solver->telemetry.perf_ftran_update_apply_calls++;
+}
+
+void lp_telemetry_add_ftran_update_apply_timed(SimplexSolver *solver,
+                                               double start_ms) {
+    lp_telemetry_add_ftran_update_apply_ms(solver,
+                                           lp_telemetry_timer_elapsed_ms(start_ms));
+}
+
 void lp_telemetry_add_btran_ms(SimplexSolver *solver,
                                double elapsed_ms) {
     if (!solver_telemetry_enabled(solver)) return;
@@ -79,6 +104,31 @@ void lp_telemetry_add_btran_timed(SimplexSolver *solver,
                                   double start_ms) {
     lp_telemetry_add_btran_ms(solver,
                               lp_telemetry_timer_elapsed_ms(start_ms));
+}
+
+void lp_telemetry_add_btran_base_ms(SimplexSolver *solver,
+                                    double elapsed_ms) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_btran_base_ms += elapsed_ms;
+}
+
+void lp_telemetry_add_btran_base_timed(SimplexSolver *solver,
+                                       double start_ms) {
+    lp_telemetry_add_btran_base_ms(solver,
+                                   lp_telemetry_timer_elapsed_ms(start_ms));
+}
+
+void lp_telemetry_add_btran_update_apply_ms(SimplexSolver *solver,
+                                            double elapsed_ms) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_btran_update_apply_ms += elapsed_ms;
+    solver->telemetry.perf_btran_update_apply_calls++;
+}
+
+void lp_telemetry_add_btran_update_apply_timed(SimplexSolver *solver,
+                                               double start_ms) {
+    lp_telemetry_add_btran_update_apply_ms(solver,
+                                           lp_telemetry_timer_elapsed_ms(start_ms));
 }
 
 void lp_telemetry_record_ftran_nnz(SimplexSolver *solver,

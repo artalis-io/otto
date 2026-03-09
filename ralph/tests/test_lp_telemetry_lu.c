@@ -44,6 +44,14 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     lu.telemetry.perf_factorize_calls = 9;
     lu.telemetry.sparse_dense_fallbacks = 3;
     lu.telemetry.perf_total_sparse_numeric_ms = 99.0;
+    lu.telemetry.perf_update_apply_forward_calls = 2;
+    lu.telemetry.perf_update_apply_backward_calls = 3;
+    lu.telemetry.perf_compact_factor_calls = 1;
+    lu.telemetry.perf_compact_solve_calls = 4;
+    lu.telemetry.perf_total_update_apply_forward_ms = 1.5;
+    lu.telemetry.perf_total_update_apply_backward_ms = 2.5;
+    lu.telemetry.perf_total_compact_factor_ms = 0.75;
+    lu.telemetry.perf_total_compact_solve_ms = 3.5;
     lu.telemetry.refactor_need_checks = 4;
     lu.telemetry.update_fail_max_updates = 2;
     lu.telemetry.backend_policy_cgr = 7;
@@ -59,6 +67,22 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     ASSERT_INT_EQ(lu.telemetry.perf_factorize_calls, 0, "lu_reset: factorize calls");
     ASSERT_INT_EQ(lu.telemetry.sparse_dense_fallbacks, 0, "lu_reset: sparse dense fallbacks");
     ASSERT_DBL_EQ(lu.telemetry.perf_total_sparse_numeric_ms, 0.0, "lu_reset: sparse numeric total");
+    ASSERT_INT_EQ(lu.telemetry.perf_update_apply_forward_calls, 0,
+                  "lu_reset: update apply forward calls");
+    ASSERT_INT_EQ(lu.telemetry.perf_update_apply_backward_calls, 0,
+                  "lu_reset: update apply backward calls");
+    ASSERT_INT_EQ(lu.telemetry.perf_compact_factor_calls, 0,
+                  "lu_reset: compact factor calls");
+    ASSERT_INT_EQ(lu.telemetry.perf_compact_solve_calls, 0,
+                  "lu_reset: compact solve calls");
+    ASSERT_DBL_EQ(lu.telemetry.perf_total_update_apply_forward_ms, 0.0,
+                  "lu_reset: update apply forward total");
+    ASSERT_DBL_EQ(lu.telemetry.perf_total_update_apply_backward_ms, 0.0,
+                  "lu_reset: update apply backward total");
+    ASSERT_DBL_EQ(lu.telemetry.perf_total_compact_factor_ms, 0.0,
+                  "lu_reset: compact factor total");
+    ASSERT_DBL_EQ(lu.telemetry.perf_total_compact_solve_ms, 0.0,
+                  "lu_reset: compact solve total");
     ASSERT_INT_EQ(lu.telemetry.refactor_need_checks, 0, "lu_reset: refactor need checks");
     ASSERT_INT_EQ(lu.telemetry.update_fail_max_updates, 0, "lu_reset: update fail max updates");
     ASSERT_INT_EQ(lu.telemetry.backend_policy_cgr, 0, "lu_reset: backend policy cgr count");
@@ -90,6 +114,11 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     ASSERT_INT_EQ(lu.telemetry.used_dense_fallback_last, 0, "lu_prepare: dense fallback flag reset");
     ASSERT_DBL_EQ(lu.telemetry.perf_last_symbolic_ms, 0.0, "lu_prepare: last symbolic ms reset");
 
+    lp_telemetry_lu_record_update_apply_forward_ms(&lu, 0.75);
+    lp_telemetry_lu_record_update_apply_backward_ms(&lu, 1.25);
+    lp_telemetry_lu_record_compact_factor_ms(&lu, 0.20);
+    lp_telemetry_lu_record_compact_solve_ms(&lu, 0.50);
+
     {
         LUTelemetrySnapshot snap;
         lp_telemetry_snapshot_lu(&lu, &snap);
@@ -108,6 +137,22 @@ static void test_lu_reset_prepare_and_snapshot(void) {
         ASSERT_INT_EQ(snap.last_refactor_trigger_reason,
                       LP_BFCP_REFACTOR_REASON_NONE,
                       "lu_snapshot: last refactor reason exported");
+        ASSERT_INT_EQ(snap.perf_update_apply_forward_calls, 1,
+                      "lu_snapshot: update apply forward calls");
+        ASSERT_INT_EQ(snap.perf_update_apply_backward_calls, 1,
+                      "lu_snapshot: update apply backward calls");
+        ASSERT_INT_EQ(snap.perf_compact_factor_calls, 1,
+                      "lu_snapshot: compact factor calls");
+        ASSERT_INT_EQ(snap.perf_compact_solve_calls, 1,
+                      "lu_snapshot: compact solve calls");
+        ASSERT_DBL_EQ(snap.perf_total_update_apply_forward_ms, 0.75,
+                      "lu_snapshot: update apply forward total");
+        ASSERT_DBL_EQ(snap.perf_total_update_apply_backward_ms, 1.25,
+                      "lu_snapshot: update apply backward total");
+        ASSERT_DBL_EQ(snap.perf_total_compact_factor_ms, 0.20,
+                      "lu_snapshot: compact factor total");
+        ASSERT_DBL_EQ(snap.perf_total_compact_solve_ms, 0.50,
+                      "lu_snapshot: compact solve total");
     }
 }
 
