@@ -867,6 +867,46 @@ Status:
       improvement
     - the remaining Week 1 large-basis gap is now more concentrated in
       update-existing/fill scan volume and large supernode numeric cost
+- `W1.2` fifth slice implemented
+  - cached live pivot-row structural column ids in `ralph/src/lu_sparse.c`
+  - Markowitz update/fill/cleanup loops now reuse `pivot_live_col[]` directly
+    instead of repeatedly reloading `rv_idx[pivot_live_rp[pe]]`
+  - validation:
+    - `make -C ralph test-lu-markowitz`
+    - `make -C ralph test-netlib-gate-small`
+    - focused Week 1 allowlist gate
+    - `make -C ralph test-netlib-gate`
+  - measured effect:
+    - no timeout-family count change by itself
+    - paired with the next supernode slice, `fit2p.mps` improved again in the
+      full gate:
+      - about `17.96s -> 17.47s`
+  - result:
+    - exact micro-kernel cleanup
+    - small but baseline-safe reduction in Markowitz hot-loop indirection
+- `W1.2` sixth slice implemented
+  - added exact supernode Schur-update compaction in `ralph/src/lu_supernode.c`
+  - the trailing GEMM now packs only:
+    - trailing rows with nonzero supernode multipliers
+    - trailing columns with nonzero supernode U entries
+  - dense scattered-row update remains the fallback when the packed sets are
+    full-size
+  - validation:
+    - `make -C ralph test-lu-supernode`
+    - `make -C ralph test-lu-markowitz`
+    - `make -C ralph test-netlib-gate-small`
+    - focused Week 1 allowlist gate
+    - `make -C ralph test-netlib-gate`
+  - measured effect:
+    - no new regressions
+    - `pilot*` timeout-family count unchanged
+    - direct `pilot.mps` supernode numeric stayed slightly lower than the
+      older dense-trailing path, but not enough yet to retire pilot-family
+      timeouts
+  - result:
+    - exact supernode numeric cost reduction is now structurally in place
+    - the remaining pilot-family gap is still primarily supernode numeric cost,
+      not Schur-update correctness or dense fallback
 - rejected during `W1.2`
   - stale or approximate `col_max` shortcuts and other behavior-adjacent
     Markowitz optimizations were tried and rolled back
