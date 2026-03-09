@@ -2333,6 +2333,31 @@ static int mkz_workspace_reserve(LUFactorization *lu, size_t need_doubles) {
     return 0;
 }
 
+static int sn_workspace_reserve(LUFactorization *lu, size_t need_doubles) {
+    if (!lu) return -1;
+    if (need_doubles <= lu->sn_work_capacity) return 0;
+
+    size_t new_cap = lu->sn_work_capacity ? lu->sn_work_capacity : 1024u;
+    while (new_cap < need_doubles) {
+        if (new_cap > ((size_t)-1) / 2u) {
+            new_cap = need_doubles;
+            break;
+        }
+        new_cap *= 2u;
+    }
+
+    double *new_work = (double *)realloc(lu->sn_work, new_cap * sizeof(double));
+    if (!new_work && new_cap != need_doubles) {
+        new_cap = need_doubles;
+        new_work = (double *)realloc(lu->sn_work, new_cap * sizeof(double));
+    }
+    if (!new_work) return -1;
+
+    lu->sn_work = new_work;
+    lu->sn_work_capacity = new_cap;
+    return 0;
+}
+
 static void mkz_record_failure_reason(LUFactorization *lu, int rc) {
     lp_telemetry_lu_mark_mkz_failure_reason(lu, rc);
 }
@@ -2644,32 +2669,53 @@ static int lu_factorize_markowitz(
             piv_row = -1;
             best_cost = (long long)m * m + 1;
             best_piv_val = 0.0;
+            int max_search = singular_retry_used ? k : max_search_base;
+            double threshold_ratio = singular_retry_used
+                ? singular_retry_threshold
+                : threshold_ratio_base;
 
             for (int d = 1; d <= k; d++) {
                 if ((long long)(d - 1) >= best_cost && best_cost < (long long)m * m + 1)
                     break;
                 int cand = 0;
-                int max_search = singular_retry_used ? k : max_search_base;
-                double threshold_ratio = singular_retry_used
-                    ? singular_retry_threshold
-                    : threshold_ratio_base;
-                for (int jj = dg_head[d]; jj >= 0 && cand < max_search; jj = dg_next[jj]) {
-                    double thr = threshold_ratio * col_max[jj];
-                    int s = cv_ptr[jj], n2 = cv_len[jj];
-                    for (int e = 0; e < n2; e++) {
-                        int row = cv_idx[s + e];
-                        if (!row_alive[row]) continue;
-                        if (reserve_non_reserved && row_reserved && row_reserved[row]) continue;
-                        double av = fabs(cv_val[s + e]);
-                        if (av < thr) continue;
-                        long long cost = (long long)(row_deg[row] - 1) * (col_deg[jj] - 1);
-                        if (cost < best_cost || (cost == best_cost && av > best_piv_val)) {
-                            best_cost = cost;
-                            piv_col = jj; piv_row = row; best_piv_val = av;
-                            if (cost == 0) goto pivot_found;
+                if (reserve_non_reserved && row_reserved) {
+                    for (int jj = dg_head[d]; jj >= 0 && cand < max_search; jj = dg_next[jj]) {
+                        double max_col = col_max[jj];
+                        double thr = threshold_ratio * max_col;
+                        int s = cv_ptr[jj], n2 = cv_len[jj];
+                        for (int e = 0; e < n2; e++) {
+                            int row = cv_idx[s + e];
+                            if (!row_alive[row] || row_reserved[row]) continue;
+                            double av = fabs(cv_val[s + e]);
+                            if (av < thr) continue;
+                            long long cost = (long long)(row_deg[row] - 1) * (col_deg[jj] - 1);
+                            if (cost < best_cost || (cost == best_cost && av > best_piv_val)) {
+                                best_cost = cost;
+                                piv_col = jj; piv_row = row; best_piv_val = av;
+                                if (cost == 0) goto pivot_found;
+                            }
                         }
+                        cand++;
                     }
-                    cand++;
+                } else {
+                    for (int jj = dg_head[d]; jj >= 0 && cand < max_search; jj = dg_next[jj]) {
+                        double max_col = col_max[jj];
+                        double thr = threshold_ratio * max_col;
+                        int s = cv_ptr[jj], n2 = cv_len[jj];
+                        for (int e = 0; e < n2; e++) {
+                            int row = cv_idx[s + e];
+                            if (!row_alive[row]) continue;
+                            double av = fabs(cv_val[s + e]);
+                            if (av < thr) continue;
+                            long long cost = (long long)(row_deg[row] - 1) * (col_deg[jj] - 1);
+                            if (cost < best_cost || (cost == best_cost && av > best_piv_val)) {
+                                best_cost = cost;
+                                piv_col = jj; piv_row = row; best_piv_val = av;
+                                if (cost == 0) goto pivot_found;
+                            }
+                        }
+                        cand++;
+                    }
                 }
             }
 
@@ -2919,6 +2965,7 @@ static int lu_factorize_markowitz(
                     if (!col_alive[jj] || !flag[jj]) continue;
                     double fill = -mult * work[jj];
                     if (fabs(fill) < RALPH_ZERO_TOL) continue;
+                    int rn2 = rv_len[row];
 
                     /* Insert into column SVA */
                     int cn = cv_len[jj];
@@ -2927,7 +2974,10 @@ static int lu_factorize_markowitz(
                         int new_cap = cn + MARKOWITZ_FILL_GAP + 4;
                         if (cv_used + new_cap > pool_cap) return MKZ_FAIL_POOL;
                         int ns = cv_used;
-                        for (int f = 0; f < cn; f++) { cv_idx[ns+f] = cv_idx[cv_ptr[jj]+f]; cv_val[ns+f] = cv_val[cv_ptr[jj]+f]; }
+                        for (int f = 0; f < cn; f++) {
+                            cv_idx[ns + f] = cv_idx[cv_ptr[jj] + f];
+                            cv_val[ns + f] = cv_val[cv_ptr[jj] + f];
+                        }
                         cv_ptr[jj] = ns; cv_cap_a[jj] = new_cap; cv_used += new_cap;
                     }
                     cv_idx[cv_ptr[jj] + cn] = row;
@@ -2935,7 +2985,6 @@ static int lu_factorize_markowitz(
                     cv_len[jj]++;
 
                     /* Insert into row SVA */
-                    int rn2 = rv_len[row];
                     if (rn2 >= rv_cap_a[row]) {
                         int new_cap = rn2 + MARKOWITZ_FILL_GAP + 4;
                         if (rv_used + new_cap > pool_cap) return MKZ_FAIL_POOL;
@@ -2974,13 +3023,21 @@ static int lu_factorize_markowitz(
               int jj = rv_idx[ps + pe];
               if (!col_alive[jj]) continue;
               int s = cv_ptr[jj], n2 = cv_len[jj];
-              for (int e = 0; e < n2; e++) {
-                  if (cv_idx[s + e] == piv_row) {
-                      CV_REMOVE(jj, e);
-                      DG_REMOVE(jj); col_deg[jj]--; DG_INSERT(jj);
-                      break;
+              int rp = ps + pe;
+              int ce = rv_hint[rp];
+              if (ce < 0 || ce >= n2 || cv_idx[s + ce] != piv_row) {
+                  ce = -1;
+                  for (int scan = 0; scan < n2; scan++) {
+                      if (cv_idx[s + scan] == piv_row) {
+                          ce = scan;
+                          break;
+                      }
                   }
+                  if (ce < 0) continue;
+                  rv_hint[rp] = ce;
               }
+              CV_REMOVE(jj, ce);
+              DG_REMOVE(jj); col_deg[jj]--; DG_INSERT(jj);
           } }
 
         /* Phase C: Clean up scatter arrays */
@@ -3699,11 +3756,7 @@ supernode_factorization:
                 /* Pre-allocate workspace: 3 * m * max_sn_size covers L+U+C blocks */
                 size_t sn_need = (size_t)3 * m * (sn_sym->max_supernode_size > 0 ?
                                  sn_sym->max_supernode_size : 1);
-                if (!lu->sn_work || lu->sn_work_capacity < sn_need) {
-                    free(lu->sn_work);
-                    lu->sn_work = (double *)calloc(sn_need, sizeof(double));
-                    lu->sn_work_capacity = lu->sn_work ? sn_need : 0;
-                }
+                (void)sn_workspace_reserve(lu, sn_need);
 
                 int sn_reg = 0;
                 t_stage_start_ms = lp_telemetry_timer_start();

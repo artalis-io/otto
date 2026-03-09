@@ -125,6 +125,14 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.perf_total_markowitz_numeric_ms = 0.0;
     lu->telemetry.perf_total_identity_placement_ms = 0.0;
     lu->telemetry.perf_total_coo_to_csc_ms = 0.0;
+    lu->telemetry.perf_update_apply_forward_calls = 0;
+    lu->telemetry.perf_update_apply_backward_calls = 0;
+    lu->telemetry.perf_compact_factor_calls = 0;
+    lu->telemetry.perf_compact_solve_calls = 0;
+    lu->telemetry.perf_total_update_apply_forward_ms = 0.0;
+    lu->telemetry.perf_total_update_apply_backward_ms = 0.0;
+    lu->telemetry.perf_total_compact_factor_ms = 0.0;
+    lu->telemetry.perf_total_compact_solve_ms = 0.0;
 }
 
 void lp_telemetry_prepare_lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
@@ -277,6 +285,14 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(perf_total_markowitz_numeric_ms);
     COPY_LU_TELEM_FIELD(perf_total_identity_placement_ms);
     COPY_LU_TELEM_FIELD(perf_total_coo_to_csc_ms);
+    COPY_LU_TELEM_FIELD(perf_update_apply_forward_calls);
+    COPY_LU_TELEM_FIELD(perf_update_apply_backward_calls);
+    COPY_LU_TELEM_FIELD(perf_compact_factor_calls);
+    COPY_LU_TELEM_FIELD(perf_compact_solve_calls);
+    COPY_LU_TELEM_FIELD(perf_total_update_apply_forward_ms);
+    COPY_LU_TELEM_FIELD(perf_total_update_apply_backward_ms);
+    COPY_LU_TELEM_FIELD(perf_total_compact_factor_ms);
+    COPY_LU_TELEM_FIELD(perf_total_compact_solve_ms);
 }
 #undef COPY_LU_FIELD
 #undef COPY_LU_TELEM_FIELD
@@ -292,6 +308,34 @@ void lp_telemetry_lu_record_dense_factorize_timed(LUFactorization *lu,
                                                   double start_ms) {
     lp_telemetry_lu_record_dense_factorize_ms(lu,
                                               lp_telemetry_timer_elapsed_ms(start_ms));
+}
+
+void lp_telemetry_lu_record_update_apply_forward_ms(LUFactorization *lu,
+                                                    double elapsed_ms) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.perf_update_apply_forward_calls++;
+    lu->telemetry.perf_total_update_apply_forward_ms += elapsed_ms;
+}
+
+void lp_telemetry_lu_record_update_apply_backward_ms(LUFactorization *lu,
+                                                     double elapsed_ms) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.perf_update_apply_backward_calls++;
+    lu->telemetry.perf_total_update_apply_backward_ms += elapsed_ms;
+}
+
+void lp_telemetry_lu_record_compact_factor_ms(LUFactorization *lu,
+                                              double elapsed_ms) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.perf_compact_factor_calls++;
+    lu->telemetry.perf_total_compact_factor_ms += elapsed_ms;
+}
+
+void lp_telemetry_lu_record_compact_solve_ms(LUFactorization *lu,
+                                             double elapsed_ms) {
+    if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.perf_compact_solve_calls++;
+    lu->telemetry.perf_total_compact_solve_ms += elapsed_ms;
 }
 
 void lp_telemetry_lu_record_symbolic_cache_hit(LUFactorization *lu) {

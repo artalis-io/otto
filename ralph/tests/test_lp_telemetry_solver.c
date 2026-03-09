@@ -176,6 +176,16 @@ static void test_solver_reset_and_refactor_accounting(void) {
     ASSERT_INT_EQ(solver.telemetry.perf_refactor_count, 0, "reset: refactor_count");
     ASSERT_INT_EQ(solver.telemetry.perf_ftran_calls, 0, "reset: ftran calls");
     ASSERT_INT_EQ(solver.telemetry.perf_btran_calls, 0, "reset: btran calls");
+    ASSERT_DBL_EQ(solver.telemetry.perf_ftran_base_ms, 0.0, "reset: ftran base ms");
+    ASSERT_DBL_EQ(solver.telemetry.perf_ftran_update_apply_ms, 0.0,
+                  "reset: ftran update apply ms");
+    ASSERT_INT_EQ(solver.telemetry.perf_ftran_update_apply_calls, 0,
+                  "reset: ftran update apply calls");
+    ASSERT_DBL_EQ(solver.telemetry.perf_btran_base_ms, 0.0, "reset: btran base ms");
+    ASSERT_DBL_EQ(solver.telemetry.perf_btran_update_apply_ms, 0.0,
+                  "reset: btran update apply ms");
+    ASSERT_INT_EQ(solver.telemetry.perf_btran_update_apply_calls, 0,
+                  "reset: btran update apply calls");
     ASSERT_INT_EQ(solver.telemetry.perf_ftran_nnz_samples, 0, "reset: ftran nnz samples");
     ASSERT_INT_EQ(solver.telemetry.perf_btran_nnz_samples, 0, "reset: btran nnz samples");
     ASSERT_ULL_EQ((unsigned long long)solver.telemetry.perf_ftran_rhs_nnz_total, 0ULL,
@@ -349,11 +359,25 @@ static void test_solver_reset_and_refactor_accounting(void) {
 
     lp_telemetry_add_ftran_ms(&solver, 1.25);
     lp_telemetry_add_btran_ms(&solver, 0.75);
+    lp_telemetry_add_ftran_base_ms(&solver, 0.50);
+    lp_telemetry_add_ftran_update_apply_ms(&solver, 0.20);
+    lp_telemetry_add_btran_base_ms(&solver, 0.30);
+    lp_telemetry_add_btran_update_apply_ms(&solver, 0.15);
     lp_telemetry_record_ftran_nnz(&solver, 3, 17);
     lp_telemetry_record_btran_nnz(&solver, 1, 9);
     lp_telemetry_record_ftran_nnz(&solver, -1, 4);  /* ignored invalid sample */
     ASSERT_INT_EQ(solver.telemetry.perf_ftran_calls, 1, "ftran: call count");
     ASSERT_INT_EQ(solver.telemetry.perf_btran_calls, 1, "btran: call count");
+    ASSERT_DBL_EQ(solver.telemetry.perf_ftran_base_ms, 0.50, "ftran: base ms");
+    ASSERT_DBL_EQ(solver.telemetry.perf_ftran_update_apply_ms, 0.20,
+                  "ftran: update apply ms");
+    ASSERT_INT_EQ(solver.telemetry.perf_ftran_update_apply_calls, 1,
+                  "ftran: update apply calls");
+    ASSERT_DBL_EQ(solver.telemetry.perf_btran_base_ms, 0.30, "btran: base ms");
+    ASSERT_DBL_EQ(solver.telemetry.perf_btran_update_apply_ms, 0.15,
+                  "btran: update apply ms");
+    ASSERT_INT_EQ(solver.telemetry.perf_btran_update_apply_calls, 1,
+                  "btran: update apply calls");
     ASSERT_INT_EQ(solver.telemetry.perf_ftran_nnz_samples, 1, "ftran: nnz sample count");
     ASSERT_INT_EQ(solver.telemetry.perf_btran_nnz_samples, 1, "btran: nnz sample count");
     ASSERT_INT_EQ((int)solver.telemetry.perf_ftran_rhs_nnz_total, 3, "ftran: rhs nnz total");
@@ -589,6 +613,12 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase2_ms = 42.25;
     solver.telemetry.perf_ftran_calls = 31;
     solver.telemetry.perf_btran_calls = 19;
+    solver.telemetry.perf_ftran_base_ms = 12.5;
+    solver.telemetry.perf_ftran_update_apply_ms = 3.75;
+    solver.telemetry.perf_ftran_update_apply_calls = 11;
+    solver.telemetry.perf_btran_base_ms = 8.5;
+    solver.telemetry.perf_btran_update_apply_ms = 2.25;
+    solver.telemetry.perf_btran_update_apply_calls = 9;
     solver.telemetry.perf_ftran_nnz_samples = 29;
     solver.telemetry.perf_btran_nnz_samples = 17;
     solver.telemetry.perf_ftran_rhs_nnz_total = 377;
@@ -691,6 +721,16 @@ static void test_solver_snapshot(void) {
     ASSERT_DBL_EQ(snap.perf_phase2_ms, 42.25, "solver_snapshot: phase2_ms");
     ASSERT_INT_EQ(snap.perf_ftran_calls, 31, "solver_snapshot: ftran calls");
     ASSERT_INT_EQ(snap.perf_btran_calls, 19, "solver_snapshot: btran calls");
+    ASSERT_DBL_EQ(snap.perf_ftran_base_ms, 12.5, "solver_snapshot: ftran base ms");
+    ASSERT_DBL_EQ(snap.perf_ftran_update_apply_ms, 3.75,
+                  "solver_snapshot: ftran update apply ms");
+    ASSERT_INT_EQ(snap.perf_ftran_update_apply_calls, 11,
+                  "solver_snapshot: ftran update apply calls");
+    ASSERT_DBL_EQ(snap.perf_btran_base_ms, 8.5, "solver_snapshot: btran base ms");
+    ASSERT_DBL_EQ(snap.perf_btran_update_apply_ms, 2.25,
+                  "solver_snapshot: btran update apply ms");
+    ASSERT_INT_EQ(snap.perf_btran_update_apply_calls, 9,
+                  "solver_snapshot: btran update apply calls");
     ASSERT_INT_EQ(snap.perf_ftran_nnz_samples, 29, "solver_snapshot: ftran nnz samples");
     ASSERT_INT_EQ(snap.perf_btran_nnz_samples, 17, "solver_snapshot: btran nnz samples");
     ASSERT_INT_EQ((int)snap.perf_ftran_rhs_nnz_total, 377, "solver_snapshot: ftran rhs nnz total");

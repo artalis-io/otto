@@ -209,6 +209,12 @@ typedef struct {
     double refactor_ms;
     double ftran_ms;
     double btran_ms;
+    double ftran_base_ms;
+    double ftran_update_apply_ms;
+    int ftran_update_apply_calls;
+    double btran_base_ms;
+    double btran_update_apply_ms;
+    int btran_update_apply_calls;
     int ftran_calls;
     int btran_calls;
     int ftran_nnz_samples;
@@ -565,6 +571,14 @@ typedef struct {
     double lu_total_markowitz_numeric_ms;
     double lu_total_identity_placement_ms;
     double lu_total_coo_to_csc_ms;
+    int lu_update_apply_forward_calls;
+    int lu_update_apply_backward_calls;
+    int lu_compact_factor_calls;
+    int lu_compact_solve_calls;
+    double lu_total_update_apply_forward_ms;
+    double lu_total_update_apply_backward_ms;
+    double lu_total_compact_factor_ms;
+    double lu_total_compact_solve_ms;
     double *solution;    /* Primal solution (may be NULL) */
     int solution_size;
 } SolveResult;
@@ -1072,6 +1086,12 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.refactor_ms = solver_tel.perf_refactor_ms;
             result.ftran_ms = solver_tel.perf_ftran_ms;
             result.btran_ms = solver_tel.perf_btran_ms;
+            result.ftran_base_ms = solver_tel.perf_ftran_base_ms;
+            result.ftran_update_apply_ms = solver_tel.perf_ftran_update_apply_ms;
+            result.ftran_update_apply_calls = solver_tel.perf_ftran_update_apply_calls;
+            result.btran_base_ms = solver_tel.perf_btran_base_ms;
+            result.btran_update_apply_ms = solver_tel.perf_btran_update_apply_ms;
+            result.btran_update_apply_calls = solver_tel.perf_btran_update_apply_calls;
             result.ftran_calls = solver_tel.perf_ftran_calls;
             result.btran_calls = solver_tel.perf_btran_calls;
             result.ftran_nnz_samples = solver_tel.perf_ftran_nnz_samples;
@@ -1534,6 +1554,20 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 result.lu_total_markowitz_numeric_ms = lu_tel.perf_total_markowitz_numeric_ms;
                 result.lu_total_identity_placement_ms = lu_tel.perf_total_identity_placement_ms;
                 result.lu_total_coo_to_csc_ms = lu_tel.perf_total_coo_to_csc_ms;
+                result.lu_update_apply_forward_calls =
+                    lu_tel.perf_update_apply_forward_calls;
+                result.lu_update_apply_backward_calls =
+                    lu_tel.perf_update_apply_backward_calls;
+                result.lu_compact_factor_calls = lu_tel.perf_compact_factor_calls;
+                result.lu_compact_solve_calls = lu_tel.perf_compact_solve_calls;
+                result.lu_total_update_apply_forward_ms =
+                    lu_tel.perf_total_update_apply_forward_ms;
+                result.lu_total_update_apply_backward_ms =
+                    lu_tel.perf_total_update_apply_backward_ms;
+                result.lu_total_compact_factor_ms =
+                    lu_tel.perf_total_compact_factor_ms;
+                result.lu_total_compact_solve_ms =
+                    lu_tel.perf_total_compact_solve_ms;
                 {
                     const char *reason = lu_failure_reason_string(lu_tel.last_failure_reason);
                     if (!reason) reason = "unknown";
@@ -2354,12 +2388,16 @@ static void print_json_result(const char *problem_name, const char *source,
             : 0.0;
         fprintf(out, "  \"solve_sparsity\": {\n");
         fprintf(out, "    \"ftran_calls\": %d,\n", ralph->ftran_calls);
+        fprintf(out, "    \"ftran_update_apply_calls\": %d,\n",
+                ralph->ftran_update_apply_calls);
         fprintf(out, "    \"ftran_nnz_samples\": %d,\n", ralph->ftran_nnz_samples);
         fprintf(out, "    \"ftran_rhs_nnz_total\": %lld,\n", ralph->ftran_rhs_nnz_total);
         fprintf(out, "    \"ftran_sol_nnz_total\": %lld,\n", ralph->ftran_sol_nnz_total);
         fprintf(out, "    \"ftran_avg_rhs_nnz\": %.6f,\n", ftran_avg_rhs_nnz);
         fprintf(out, "    \"ftran_avg_sol_nnz\": %.6f,\n", ftran_avg_sol_nnz);
         fprintf(out, "    \"btran_calls\": %d,\n", ralph->btran_calls);
+        fprintf(out, "    \"btran_update_apply_calls\": %d,\n",
+                ralph->btran_update_apply_calls);
         fprintf(out, "    \"btran_nnz_samples\": %d,\n", ralph->btran_nnz_samples);
         fprintf(out, "    \"btran_rhs_nnz_total\": %lld,\n", ralph->btran_rhs_nnz_total);
         fprintf(out, "    \"btran_sol_nnz_total\": %lld,\n", ralph->btran_sol_nnz_total);
@@ -2380,7 +2418,13 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"pivot_ms\": %.6f,\n", ralph->pivot_ms);
     fprintf(out, "    \"refactor_ms\": %.6f,\n", ralph->refactor_ms);
     fprintf(out, "    \"ftran_ms\": %.6f,\n", ralph->ftran_ms);
+    fprintf(out, "    \"ftran_base_ms\": %.6f,\n", ralph->ftran_base_ms);
+    fprintf(out, "    \"ftran_update_apply_ms\": %.6f,\n",
+            ralph->ftran_update_apply_ms);
     fprintf(out, "    \"btran_ms\": %.6f,\n", ralph->btran_ms);
+    fprintf(out, "    \"btran_base_ms\": %.6f,\n", ralph->btran_base_ms);
+    fprintf(out, "    \"btran_update_apply_ms\": %.6f,\n",
+            ralph->btran_update_apply_ms);
     fprintf(out, "    \"lu_update_ms\": %.6f,\n", ralph->lu_update_ms);
     fprintf(out, "    \"compute_solution_ms\": %.6f,\n", ralph->compute_solution_ms);
     fprintf(out, "    \"compute_reduced_costs_ms\": %.6f\n", ralph->compute_rc_ms);
@@ -3127,6 +3171,22 @@ static void print_json_result(const char *problem_name, const char *source,
     fprintf(out, "    \"total_markowitz_numeric_ms\": %.6f,\n", ralph->lu_total_markowitz_numeric_ms);
     fprintf(out, "    \"total_identity_placement_ms\": %.6f,\n", ralph->lu_total_identity_placement_ms);
     fprintf(out, "    \"total_coo_to_csc_ms\": %.6f,\n", ralph->lu_total_coo_to_csc_ms);
+    fprintf(out, "    \"update_apply_forward_calls\": %d,\n",
+            ralph->lu_update_apply_forward_calls);
+    fprintf(out, "    \"update_apply_backward_calls\": %d,\n",
+            ralph->lu_update_apply_backward_calls);
+    fprintf(out, "    \"compact_factor_calls\": %d,\n",
+            ralph->lu_compact_factor_calls);
+    fprintf(out, "    \"compact_solve_calls\": %d,\n",
+            ralph->lu_compact_solve_calls);
+    fprintf(out, "    \"total_update_apply_forward_ms\": %.6f,\n",
+            ralph->lu_total_update_apply_forward_ms);
+    fprintf(out, "    \"total_update_apply_backward_ms\": %.6f,\n",
+            ralph->lu_total_update_apply_backward_ms);
+    fprintf(out, "    \"total_compact_factor_ms\": %.6f,\n",
+            ralph->lu_total_compact_factor_ms);
+    fprintf(out, "    \"total_compact_solve_ms\": %.6f,\n",
+            ralph->lu_total_compact_solve_ms);
     fprintf(out, "    \"last_failure_reason_code\": %d,\n", ralph->lu_last_failure_reason_code);
     fprintf(out, "    \"last_failure_reason\": \"%s\"\n", escaped_lu_reason);
     fprintf(out, "  },\n");

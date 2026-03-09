@@ -35,6 +35,12 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_refactor_ms = 0.0;
     solver->telemetry.perf_ftran_ms = 0.0;
     solver->telemetry.perf_btran_ms = 0.0;
+    solver->telemetry.perf_ftran_base_ms = 0.0;
+    solver->telemetry.perf_ftran_update_apply_ms = 0.0;
+    solver->telemetry.perf_ftran_update_apply_calls = 0;
+    solver->telemetry.perf_btran_base_ms = 0.0;
+    solver->telemetry.perf_btran_update_apply_ms = 0.0;
+    solver->telemetry.perf_btran_update_apply_calls = 0;
     solver->telemetry.perf_ftran_calls = 0;
     solver->telemetry.perf_btran_calls = 0;
     solver->telemetry.perf_ftran_nnz_samples = 0;
@@ -438,6 +444,12 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_refactor_ms);
     COPY_SOLVER_FIELD(perf_ftran_ms);
     COPY_SOLVER_FIELD(perf_btran_ms);
+    COPY_SOLVER_FIELD(perf_ftran_base_ms);
+    COPY_SOLVER_FIELD(perf_ftran_update_apply_ms);
+    COPY_SOLVER_FIELD(perf_ftran_update_apply_calls);
+    COPY_SOLVER_FIELD(perf_btran_base_ms);
+    COPY_SOLVER_FIELD(perf_btran_update_apply_ms);
+    COPY_SOLVER_FIELD(perf_btran_update_apply_calls);
     COPY_SOLVER_FIELD(perf_ftran_calls);
     COPY_SOLVER_FIELD(perf_btran_calls);
     COPY_SOLVER_FIELD(perf_ftran_nnz_samples);

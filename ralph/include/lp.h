@@ -331,6 +331,14 @@ typedef struct {
     double perf_total_markowitz_numeric_ms;
     double perf_total_identity_placement_ms;
     double perf_total_coo_to_csc_ms;
+    int perf_update_apply_forward_calls;
+    int perf_update_apply_backward_calls;
+    int perf_compact_factor_calls;
+    int perf_compact_solve_calls;
+    double perf_total_update_apply_forward_ms;
+    double perf_total_update_apply_backward_ms;
+    double perf_total_compact_factor_ms;
+    double perf_total_compact_solve_ms;
 } LUTelemetryState;
 
 /* LU factorization of basis matrix */
@@ -370,9 +378,18 @@ typedef struct {
     double **schur_values;
     int *schur_nnz;
     double *schur_k;        /* Dense K = I + V^T U for BG backend */
-    double *schur_k_work;   /* Scratch copy for dense Schur solves */
+    double *schur_k_work;   /* Cached forward compact factorization */
+    double *schur_k_t_work; /* Cached transpose compact factorization */
     double *schur_rhs;      /* RHS/solution workspace for Schur solves */
-    int *schur_piv;         /* Pivot workspace for dense Schur solves */
+    int *schur_piv;         /* Forward pivot workspace for BG factor cache */
+    int *schur_piv_t;       /* Backward pivot workspace for BG factor cache */
+    double *schur_rot_fwd_c;/* Forward Givens c coefficients for GR cache */
+    double *schur_rot_fwd_s;/* Forward Givens s coefficients for GR cache */
+    double *schur_rot_bwd_c;/* Backward Givens c coefficients for GR cache */
+    double *schur_rot_bwd_s;/* Backward Givens s coefficients for GR cache */
+    int schur_rot_capacity; /* Max stored Givens rotations */
+    int schur_factor_fwd_valid;
+    int schur_factor_bwd_valid;
 
     /* Forrest-Tomlin update data */
     int use_ft_updates;     /* 1 to use FT updates, 0 for non-FT update lanes */
@@ -673,6 +690,12 @@ typedef struct {
     double perf_refactor_ms;       /* Refactorization time */
     double perf_ftran_ms;          /* FTRAN solve time (B^{-1} * a) */
     double perf_btran_ms;          /* BTRAN solve time (B^{-T} * e) */
+    double perf_ftran_base_ms;     /* FTRAN solve time excluding update-backend apply */
+    double perf_ftran_update_apply_ms; /* FTRAN time spent in update-backend apply */
+    int perf_ftran_update_apply_calls; /* FTRAN solves that applied backend updates */
+    double perf_btran_base_ms;     /* BTRAN solve time excluding update-backend apply */
+    double perf_btran_update_apply_ms; /* BTRAN time spent in update-backend apply */
+    int perf_btran_update_apply_calls; /* BTRAN solves that applied backend updates */
     int perf_ftran_calls;          /* Number of FTRAN solve calls */
     int perf_btran_calls;          /* Number of BTRAN solve calls */
     int perf_ftran_nnz_samples;    /* Number of FTRAN solves with nnz telemetry */
@@ -1087,6 +1110,12 @@ typedef struct {
     double perf_refactor_ms;
     double perf_ftran_ms;
     double perf_btran_ms;
+    double perf_ftran_base_ms;
+    double perf_ftran_update_apply_ms;
+    int perf_ftran_update_apply_calls;
+    double perf_btran_base_ms;
+    double perf_btran_update_apply_ms;
+    int perf_btran_update_apply_calls;
     int perf_ftran_calls;
     int perf_btran_calls;
     int perf_ftran_nnz_samples;
@@ -1462,6 +1491,14 @@ typedef struct {
     double perf_total_markowitz_numeric_ms;
     double perf_total_identity_placement_ms;
     double perf_total_coo_to_csc_ms;
+    int perf_update_apply_forward_calls;
+    int perf_update_apply_backward_calls;
+    int perf_compact_factor_calls;
+    int perf_compact_solve_calls;
+    double perf_total_update_apply_forward_ms;
+    double perf_total_update_apply_backward_ms;
+    double perf_total_compact_factor_ms;
+    double perf_total_compact_solve_ms;
 } LUTelemetrySnapshot;
 
 typedef enum {
@@ -1661,6 +1698,14 @@ void lp_telemetry_add_ftran_ms(SimplexSolver *solver,
                                double elapsed_ms);
 void lp_telemetry_add_ftran_timed(SimplexSolver *solver,
                                   double start_ms);
+void lp_telemetry_add_ftran_base_ms(SimplexSolver *solver,
+                                    double elapsed_ms);
+void lp_telemetry_add_ftran_base_timed(SimplexSolver *solver,
+                                       double start_ms);
+void lp_telemetry_add_ftran_update_apply_ms(SimplexSolver *solver,
+                                            double elapsed_ms);
+void lp_telemetry_add_ftran_update_apply_timed(SimplexSolver *solver,
+                                               double start_ms);
 void lp_telemetry_record_ftran_nnz(SimplexSolver *solver,
                                    int rhs_nnz,
                                    int sol_nnz);
@@ -1668,6 +1713,14 @@ void lp_telemetry_add_btran_ms(SimplexSolver *solver,
                                double elapsed_ms);
 void lp_telemetry_add_btran_timed(SimplexSolver *solver,
                                   double start_ms);
+void lp_telemetry_add_btran_base_ms(SimplexSolver *solver,
+                                    double elapsed_ms);
+void lp_telemetry_add_btran_base_timed(SimplexSolver *solver,
+                                       double start_ms);
+void lp_telemetry_add_btran_update_apply_ms(SimplexSolver *solver,
+                                            double elapsed_ms);
+void lp_telemetry_add_btran_update_apply_timed(SimplexSolver *solver,
+                                               double start_ms);
 void lp_telemetry_record_btran_nnz(SimplexSolver *solver,
                                    int rhs_nnz,
                                    int sol_nnz);
@@ -1773,6 +1826,14 @@ void lp_telemetry_lu_record_dense_factorize_ms(LUFactorization *lu,
                                                double elapsed_ms);
 void lp_telemetry_lu_record_dense_factorize_timed(LUFactorization *lu,
                                                   double start_ms);
+void lp_telemetry_lu_record_update_apply_forward_ms(LUFactorization *lu,
+                                                    double elapsed_ms);
+void lp_telemetry_lu_record_update_apply_backward_ms(LUFactorization *lu,
+                                                     double elapsed_ms);
+void lp_telemetry_lu_record_compact_factor_ms(LUFactorization *lu,
+                                              double elapsed_ms);
+void lp_telemetry_lu_record_compact_solve_ms(LUFactorization *lu,
+                                             double elapsed_ms);
 void lp_telemetry_lu_record_symbolic_cache_hit(LUFactorization *lu);
 void lp_telemetry_lu_record_symbolic_cache_miss(LUFactorization *lu);
 void lp_telemetry_lu_record_symbolic_call(LUFactorization *lu,
