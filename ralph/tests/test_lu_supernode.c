@@ -626,6 +626,10 @@ static void test_sn_factorize_stats_tracking(void) {
         ASSERT(stats.full_update_calls + stats.compact_update_calls > 0,
                "sn factorize stats: update path");
         ASSERT(stats.compact_triplets_total > 0, "sn factorize stats: compact triplets");
+        ASSERT(stats.compact_cols1_calls + stats.compact_cols2_calls +
+               stats.compact_cols3_calls + stats.compact_cols4_calls +
+               stats.compact_cols5p_calls == stats.compact_update_calls,
+               "sn factorize stats: compact-shape calls partition compact updates");
     }
 
     free(Lr); free(Lc); free(Lv);

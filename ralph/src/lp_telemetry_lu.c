@@ -156,6 +156,16 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.perf_sn_full_update_calls = 0;
     lu->telemetry.perf_sn_compact_update_calls = 0;
     lu->telemetry.perf_sn_skipped_update_calls = 0;
+    lu->telemetry.perf_sn_compact_cols1_calls = 0;
+    lu->telemetry.perf_sn_compact_cols1_rows_total = 0;
+    lu->telemetry.perf_sn_compact_cols2_calls = 0;
+    lu->telemetry.perf_sn_compact_cols2_rows_total = 0;
+    lu->telemetry.perf_sn_compact_cols3_calls = 0;
+    lu->telemetry.perf_sn_compact_cols3_rows_total = 0;
+    lu->telemetry.perf_sn_compact_cols4_calls = 0;
+    lu->telemetry.perf_sn_compact_cols4_rows_total = 0;
+    lu->telemetry.perf_sn_compact_cols5p_calls = 0;
+    lu->telemetry.perf_sn_compact_cols5p_rows_total = 0;
 }
 
 void lp_telemetry_prepare_lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
@@ -339,6 +349,16 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(perf_sn_full_update_calls);
     COPY_LU_TELEM_FIELD(perf_sn_compact_update_calls);
     COPY_LU_TELEM_FIELD(perf_sn_skipped_update_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_compact_cols1_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_compact_cols1_rows_total);
+    COPY_LU_TELEM_FIELD(perf_sn_compact_cols2_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_compact_cols2_rows_total);
+    COPY_LU_TELEM_FIELD(perf_sn_compact_cols3_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_compact_cols3_rows_total);
+    COPY_LU_TELEM_FIELD(perf_sn_compact_cols4_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_compact_cols4_rows_total);
+    COPY_LU_TELEM_FIELD(perf_sn_compact_cols5p_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_compact_cols5p_rows_total);
 }
 #undef COPY_LU_FIELD
 #undef COPY_LU_TELEM_FIELD
@@ -427,7 +447,17 @@ void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
                                         uint64_t compact_triplets_total,
                                         uint64_t full_update_calls,
                                         uint64_t compact_update_calls,
-                                        uint64_t skipped_update_calls) {
+                                        uint64_t skipped_update_calls,
+                                        uint64_t compact_cols1_calls,
+                                        uint64_t compact_cols1_rows_total,
+                                        uint64_t compact_cols2_calls,
+                                        uint64_t compact_cols2_rows_total,
+                                        uint64_t compact_cols3_calls,
+                                        uint64_t compact_cols3_rows_total,
+                                        uint64_t compact_cols4_calls,
+                                        uint64_t compact_cols4_rows_total,
+                                        uint64_t compact_cols5p_calls,
+                                        uint64_t compact_cols5p_rows_total) {
     if (!lu_telemetry_enabled(lu)) return;
     lu->telemetry.perf_sn_active_row_scan_entries += active_row_scan_entries;
     lu->telemetry.perf_sn_active_col_scan_entries += active_col_scan_entries;
@@ -442,6 +472,16 @@ void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
     lu->telemetry.perf_sn_full_update_calls += full_update_calls;
     lu->telemetry.perf_sn_compact_update_calls += compact_update_calls;
     lu->telemetry.perf_sn_skipped_update_calls += skipped_update_calls;
+    lu->telemetry.perf_sn_compact_cols1_calls += compact_cols1_calls;
+    lu->telemetry.perf_sn_compact_cols1_rows_total += compact_cols1_rows_total;
+    lu->telemetry.perf_sn_compact_cols2_calls += compact_cols2_calls;
+    lu->telemetry.perf_sn_compact_cols2_rows_total += compact_cols2_rows_total;
+    lu->telemetry.perf_sn_compact_cols3_calls += compact_cols3_calls;
+    lu->telemetry.perf_sn_compact_cols3_rows_total += compact_cols3_rows_total;
+    lu->telemetry.perf_sn_compact_cols4_calls += compact_cols4_calls;
+    lu->telemetry.perf_sn_compact_cols4_rows_total += compact_cols4_rows_total;
+    lu->telemetry.perf_sn_compact_cols5p_calls += compact_cols5p_calls;
+    lu->telemetry.perf_sn_compact_cols5p_rows_total += compact_cols5p_rows_total;
 }
 
 void lp_telemetry_lu_record_symbolic_cache_hit(LUFactorization *lu) {
