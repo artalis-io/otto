@@ -636,6 +636,68 @@ static void test_sn_factorize_stats_tracking(void) {
     free(Ur); free(Uc); free(Uv);
 }
 
+static void test_sn_factorize_compact_cols1_tracking(void) {
+    printf("  Phase 3: supernodal compact cols1 tracking...\n");
+
+    int m = 6, k = 6;
+    double A[36];
+    memset(A, 0, sizeof(A));
+
+    for (int i = 0; i < m; i++) {
+        A[i * k + i] = 10.0 + (double)i;
+    }
+
+    for (int i = 2; i < m; i++) {
+        A[i * k + 0] = 0.2 + 0.05 * (double)i;
+        A[i * k + 1] = -0.1 - 0.03 * (double)i;
+    }
+
+    A[0 * k + 5] = 0.8;
+    A[1 * k + 5] = -0.6;
+
+    int row_perm[6], row_pos[6];
+    for (int i = 0; i < m; i++) {
+        row_perm[i] = i;
+        row_pos[i] = i;
+    }
+
+    Supernode supernodes[3] = {
+        {0, 2}, {2, 2}, {4, 2}
+    };
+
+    int cap = m * k * 2;
+    int *Lr = (int *)calloc(cap, sizeof(int));
+    int *Lc = (int *)calloc(cap, sizeof(int));
+    double *Lv = (double *)calloc(cap, sizeof(double));
+    int *Ur = (int *)calloc(cap, sizeof(int));
+    int *Uc = (int *)calloc(cap, sizeof(int));
+    double *Uv = (double *)calloc(cap, sizeof(double));
+    int Lnnz = 0, Unnz = 0;
+    SNSupernodeWork stats;
+    memset(&stats, 0, sizeof(stats));
+
+    int rc = sn_factorize(A, m, k, row_perm, row_pos, 1e-10, NULL,
+                          supernodes, 3,
+                          NULL, 0, 0, 0, NULL,
+                          Lr, Lc, Lv, &Lnnz, cap,
+                          Ur, Uc, Uv, &Unnz, cap,
+                          NULL, 0, &stats);
+    ASSERT_INT_EQ(rc, 0, "sn factorize cols1: return code");
+    if (rc == 0) {
+        ASSERT(stats.compact_cols1_calls > 0,
+               "sn factorize cols1: compact cols1 path tracked");
+        ASSERT(stats.compact_cols1_rows_total > 0,
+               "sn factorize cols1: compact cols1 rows tracked");
+        ASSERT(stats.compact_cols1_calls + stats.compact_cols2_calls +
+               stats.compact_cols3_calls + stats.compact_cols4_calls +
+               stats.compact_cols5p_calls == stats.compact_update_calls,
+               "sn factorize cols1: compact-shape calls partition compact updates");
+    }
+
+    free(Lr); free(Lc); free(Lv);
+    free(Ur); free(Uc); free(Uv);
+}
+
 /* ============================================================================
  * Phase 4 Tests: Integration (A/B comparison with existing path)
  * ============================================================================ */
@@ -769,6 +831,7 @@ int main(void) {
     test_sn_factorize_known_matrix();
     test_sn_factorize_random();
     test_sn_factorize_stats_tracking();
+    test_sn_factorize_compact_cols1_tracking();
 
     printf("\nPhase 4: Integration (A/B Comparison)\n");
     test_integration_small_lp();
