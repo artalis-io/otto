@@ -43,6 +43,9 @@ typedef struct SNSymbolic_tag {
 typedef struct {
     int phase_timing_sampled;
     double panel_factor_ms;
+    double panel_pivot_search_ms;
+    double panel_swap_scatter_ms;
+    double panel_eliminate_ms;
     double u_emit_ms;
     double active_set_ms;
     double pack_blocks_ms;

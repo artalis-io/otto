@@ -65,6 +65,9 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     lu.telemetry.perf_total_compact_solve_ms = 3.5;
     lu.telemetry.perf_sn_phase_samples = 2;
     lu.telemetry.perf_sn_panel_factor_ms = 0.9;
+    lu.telemetry.perf_sn_panel_pivot_search_ms = 0.2;
+    lu.telemetry.perf_sn_panel_swap_scatter_ms = 0.3;
+    lu.telemetry.perf_sn_panel_eliminate_ms = 0.4;
     lu.telemetry.perf_sn_u_emit_ms = 1.1;
     lu.telemetry.perf_sn_active_set_ms = 1.3;
     lu.telemetry.perf_sn_pack_blocks_ms = 1.5;
@@ -110,6 +113,12 @@ static void test_lu_reset_prepare_and_snapshot(void) {
                   "lu_reset: supernode phase samples");
     ASSERT_DBL_EQ(lu.telemetry.perf_sn_panel_factor_ms, 0.0,
                   "lu_reset: supernode panel factor total");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_panel_pivot_search_ms, 0.0,
+                  "lu_reset: supernode panel pivot total");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_panel_swap_scatter_ms, 0.0,
+                  "lu_reset: supernode panel swap/scatter total");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_panel_eliminate_ms, 0.0,
+                  "lu_reset: supernode panel eliminate total");
     ASSERT_DBL_EQ(lu.telemetry.perf_sn_u_emit_ms, 0.0,
                   "lu_reset: supernode U emit total");
     ASSERT_DBL_EQ(lu.telemetry.perf_sn_active_set_ms, 0.0,
@@ -167,7 +176,8 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     lp_telemetry_lu_record_compact_solve_ms(&lu, 0.50);
     lp_telemetry_lu_add_mkz_scan_work(&lu, 11, 12, 13, 14, 15, 16, 17);
     lp_telemetry_lu_add_mkz_colmax_work(&lu, 18, 19, 20);
-    lp_telemetry_lu_add_supernode_work(&lu, 20, 20.1, 20.2, 20.3, 20.4, 20.5, 20.6,
+    lp_telemetry_lu_add_supernode_work(&lu, 20, 20.1, 20.15, 20.16, 20.17,
+                                       20.2, 20.3, 20.4, 20.5, 20.6,
                                        21, 22, 23, 24, 25, 26, 27, 28,
                                        29, 30, 31, 32, 33,
                                        34, 35, 35.5,
@@ -214,6 +224,12 @@ static void test_lu_reset_prepare_and_snapshot(void) {
                       "lu_snapshot: supernode phase samples");
         ASSERT_DBL_EQ(snap.perf_sn_panel_factor_ms, 20.1,
                       "lu_snapshot: supernode panel factor total");
+        ASSERT_DBL_EQ(snap.perf_sn_panel_pivot_search_ms, 20.15,
+                      "lu_snapshot: supernode panel pivot total");
+        ASSERT_DBL_EQ(snap.perf_sn_panel_swap_scatter_ms, 20.16,
+                      "lu_snapshot: supernode panel swap/scatter total");
+        ASSERT_DBL_EQ(snap.perf_sn_panel_eliminate_ms, 20.17,
+                      "lu_snapshot: supernode panel eliminate total");
         ASSERT_DBL_EQ(snap.perf_sn_u_emit_ms, 20.2,
                       "lu_snapshot: supernode U emit total");
         ASSERT_DBL_EQ(snap.perf_sn_active_set_ms, 20.3,

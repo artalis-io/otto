@@ -784,6 +784,9 @@ typedef struct {
     double perf_total_compact_solve_ms;
     uint64_t perf_sn_phase_samples;
     double perf_sn_panel_factor_ms;
+    double perf_sn_panel_pivot_search_ms;
+    double perf_sn_panel_swap_scatter_ms;
+    double perf_sn_panel_eliminate_ms;
     double perf_sn_u_emit_ms;
     double perf_sn_active_set_ms;
     double perf_sn_pack_blocks_ms;
