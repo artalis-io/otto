@@ -617,6 +617,10 @@ static void test_sn_factorize_stats_tracking(void) {
         ASSERT(stats.trailing_rows_total > 0, "sn factorize stats: trailing rows");
         ASSERT(stats.active_row_scan_entries > 0, "sn factorize stats: row scans");
         ASSERT(stats.active_col_scan_entries > 0, "sn factorize stats: col scans");
+        ASSERT(stats.active_row_scan_entries <= stats.trailing_rows_total,
+               "sn factorize stats: row scans reduced to final trailing rows");
+        ASSERT(stats.active_col_scan_entries <= stats.trailing_cols_total,
+               "sn factorize stats: col scans reduced to final trailing cols");
         ASSERT(stats.pack_l_entries_total > 0, "sn factorize stats: pack L");
         ASSERT(stats.pack_u_entries_total > 0, "sn factorize stats: pack U");
         ASSERT(stats.full_update_calls + stats.compact_update_calls > 0,
