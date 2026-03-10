@@ -782,6 +782,13 @@ typedef struct {
     double perf_total_update_apply_backward_ms;
     double perf_total_compact_factor_ms;
     double perf_total_compact_solve_ms;
+    uint64_t perf_sn_phase_samples;
+    double perf_sn_panel_factor_ms;
+    double perf_sn_u_emit_ms;
+    double perf_sn_active_set_ms;
+    double perf_sn_pack_blocks_ms;
+    double perf_sn_full_update_ms;
+    double perf_sn_compact_update_ms;
     uint64_t perf_sn_active_row_scan_entries;
     uint64_t perf_sn_active_col_scan_entries;
     uint64_t perf_sn_trailing_rows_total;

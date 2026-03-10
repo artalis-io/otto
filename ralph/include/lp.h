@@ -349,6 +349,13 @@ typedef struct {
     double perf_total_update_apply_backward_ms;
     double perf_total_compact_factor_ms;
     double perf_total_compact_solve_ms;
+    uint64_t perf_sn_phase_samples;
+    double perf_sn_panel_factor_ms;
+    double perf_sn_u_emit_ms;
+    double perf_sn_active_set_ms;
+    double perf_sn_pack_blocks_ms;
+    double perf_sn_full_update_ms;
+    double perf_sn_compact_update_ms;
     uint64_t perf_sn_active_row_scan_entries;
     uint64_t perf_sn_active_col_scan_entries;
     uint64_t perf_sn_trailing_rows_total;
@@ -1547,6 +1554,13 @@ typedef struct {
     double perf_total_update_apply_backward_ms;
     double perf_total_compact_factor_ms;
     double perf_total_compact_solve_ms;
+    uint64_t perf_sn_phase_samples;
+    double perf_sn_panel_factor_ms;
+    double perf_sn_u_emit_ms;
+    double perf_sn_active_set_ms;
+    double perf_sn_pack_blocks_ms;
+    double perf_sn_full_update_ms;
+    double perf_sn_compact_update_ms;
     uint64_t perf_sn_active_row_scan_entries;
     uint64_t perf_sn_active_col_scan_entries;
     uint64_t perf_sn_trailing_rows_total;
@@ -1989,6 +2003,13 @@ void lp_telemetry_lu_add_mkz_colmax_work(LUFactorization *lu,
                                          uint64_t affected_columns_max,
                                          uint64_t col_max_scan_entries);
 void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
+                                        uint64_t phase_samples,
+                                        double panel_factor_ms,
+                                        double u_emit_ms,
+                                        double active_set_ms,
+                                        double pack_blocks_ms,
+                                        double full_update_ms,
+                                        double compact_update_ms,
                                         uint64_t active_row_scan_entries,
                                         uint64_t active_col_scan_entries,
                                         uint64_t trailing_rows_total,

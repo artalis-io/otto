@@ -41,6 +41,13 @@ typedef struct SNSymbolic_tag {
 } SNSymbolic;
 
 typedef struct {
+    int phase_timing_sampled;
+    double panel_factor_ms;
+    double u_emit_ms;
+    double active_set_ms;
+    double pack_blocks_ms;
+    double full_update_ms;
+    double compact_update_ms;
     uint64_t active_row_scan_entries;
     uint64_t active_col_scan_entries;
     uint64_t trailing_rows_total;
