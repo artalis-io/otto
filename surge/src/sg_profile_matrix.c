@@ -108,7 +108,9 @@
 /* Tuned for GH-400 scale (201-400 requests) via bench_tune all-tiers (S22).
    Key changes from BASE_TUNE: SA much cooler (0.010 vs 0.074), Phase 2 cools
    slower (0.0063 vs 0.0001), more time on distance polish (40% vs 60% P1),
-   aggressive penalty adaptation, faster ALNS learning, smaller neighborhood. */
+   aggressive penalty adaptation, faster ALNS learning, smaller neighborhood.
+   S25: gen_reheat_ratio=2.0 — R1 grid search showed -8.5pp avg distance gap
+   (r1_4_1 +15.4→+13.2%, r1_4_10 +52.1→+32.4%, r1_4_7 +29.5→+26.3%). */
 #define LARGE_TUNE { \
     .phase1_fraction       = 0.40, \
     .phase15_iters         = 1000, \
@@ -137,7 +139,7 @@
     .route_shaw_randomness = 3.16, \
     .string_l_max          = 8, \
     .neighbor_k            = 20, \
-    .gen_reheat_ratio      = SG_TUNE_SENTINEL_D, \
+    .gen_reheat_ratio      = 2.00, \
     .gen_cooling_stretch   = SG_TUNE_SENTINEL_D \
 }
 
@@ -203,7 +205,7 @@
     .route_shaw_randomness = 3.16, \
     .string_l_max          = 8, \
     .neighbor_k            = 20, \
-    .gen_reheat_ratio      = SG_TUNE_SENTINEL_D, \
+    .gen_reheat_ratio      = 2.00, \
     .gen_cooling_stretch   = SG_TUNE_SENTINEL_D \
 }
 

@@ -29,6 +29,8 @@ static void sg_print_usage(const char *argv0) {
     printf("  --threads <n>         Thread count for population mode (default: auto)\n");
     printf("  --generations <n>     Generation count for population mode (default: 3)\n");
     printf("  --telemetry           Print per-operator telemetry after each case\n");
+    printf("  --reheat <ratio>      SA T₀ multiplier for generations > 0 (default: 1.0 = off)\n");
+    printf("  --stretch <factor>    SA cooling stretch for generations > 0 (default: 1.0 = off)\n");
     printf("  --output-csv <path>   Write results to CSV file\n");
     printf("  --features            Dump instance features CSV (spatial_cv, tw_tightness) and exit\n");
     printf("  --help                Show this help\n");
@@ -53,6 +55,8 @@ int main(int argc, char **argv) {
     int use_population = 0;
     uint32_t pop_threads = 0;
     uint32_t pop_generations = 3;
+    double gen_reheat_ratio = -1.0;   /* -1 = not set (use tune default) */
+    double gen_cooling_stretch = -1.0;
     int size_filter = 0;
     int filter_start = argc;
 
@@ -115,6 +119,12 @@ int main(int argc, char **argv) {
         }
         if (strcmp(argv[i], "--features") == 0) {
             show_features = 1; continue;
+        }
+        if (strcmp(argv[i], "--reheat") == 0 && i + 1 < argc) {
+            gen_reheat_ratio = strtod(argv[++i], NULL); continue;
+        }
+        if (strcmp(argv[i], "--stretch") == 0 && i + 1 < argc) {
+            gen_cooling_stretch = strtod(argv[++i], NULL); continue;
         }
         if (strcmp(argv[i], "--output-csv") == 0 && i + 1 < argc) {
             output_csv_path = argv[++i]; continue;
@@ -204,6 +214,11 @@ int main(int argc, char **argv) {
     if (use_population) {
         printf("  population=true threads=%u generations=%u\n", pop_threads, pop_generations);
     }
+    if (gen_reheat_ratio >= 0.0 || gen_cooling_stretch >= 0.0) {
+        printf("  reheat=%.2f stretch=%.2f\n",
+               gen_reheat_ratio >= 0.0 ? gen_reheat_ratio : 1.0,
+               gen_cooling_stretch >= 0.0 ? gen_cooling_stretch : 1.0);
+    }
     if (size_filter > 0) {
         printf("  size_filter=%d\n", size_filter);
     }
@@ -282,6 +297,11 @@ int main(int argc, char **argv) {
                 ctx->config.max_iterations = max_iterations;
             if (max_time_seconds > 0)
                 ctx->config.max_time_seconds = max_time_seconds;
+            /* Override reheat/stretch if specified on CLI */
+            if (gen_reheat_ratio >= 0.0 && ctx->tune_params)
+                ctx->tune_params->gen_reheat_ratio = gen_reheat_ratio;
+            if (gen_cooling_stretch >= 0.0 && ctx->tune_params)
+                ctx->tune_params->gen_cooling_stretch = gen_cooling_stretch;
         }
 
         start = sg_bench_now();
