@@ -1032,6 +1032,7 @@ int sn_factorize(double *A_struct, int m, int k,
                                                sn_start + sn_size,
                                                sn_start + sn_size);
             } else {
+                double t_compact_update_ms = 0.0;
                 if (stats) {
                     stats->compact_update_calls++;
                     if (active_col_count == 1) {
@@ -1050,6 +1051,7 @@ int sn_factorize(double *A_struct, int m, int k,
                         stats->compact_cols5p_calls++;
                         stats->compact_cols5p_rows_total += (uint64_t)active_row_count;
                     }
+                    t_compact_update_ms = lp_telemetry_timer_start();
                 }
                 sn_dgemm_update_scattered_rows_cols(active_row_count, sn_size, active_col_count,
                                                     L_block, sn_size,
@@ -1057,6 +1059,20 @@ int sn_factorize(double *A_struct, int m, int k,
                                                     A_struct, k, row_perm,
                                                     active_rows, sn_start + sn_size,
                                                     active_cols, sn_start + sn_size);
+                if (stats) {
+                    double compact_update_ms = lp_telemetry_timer_elapsed_ms(t_compact_update_ms);
+                    if (active_col_count == 1) {
+                        stats->compact_cols1_ms += compact_update_ms;
+                    } else if (active_col_count == 2) {
+                        stats->compact_cols2_ms += compact_update_ms;
+                    } else if (active_col_count == 3) {
+                        stats->compact_cols3_ms += compact_update_ms;
+                    } else if (active_col_count == 4) {
+                        stats->compact_cols4_ms += compact_update_ms;
+                    } else {
+                        stats->compact_cols5p_ms += compact_update_ms;
+                    }
+                }
             }
 
             if (!used_work) free(L_block);

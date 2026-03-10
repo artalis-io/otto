@@ -67,6 +67,7 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     lu.telemetry.perf_sn_full_update_calls = 2;
     lu.telemetry.perf_sn_compact_cols1_calls = 7;
     lu.telemetry.perf_sn_compact_cols1_rows_total = 70;
+    lu.telemetry.perf_sn_compact_cols1_ms = 7.5;
     lu.telemetry.refactor_need_checks = 4;
     lu.telemetry.update_fail_max_updates = 2;
     lu.telemetry.backend_policy_cgr = 7;
@@ -106,6 +107,8 @@ static void test_lu_reset_prepare_and_snapshot(void) {
                   "lu_reset: compact cols1 calls");
     ASSERT_U64_EQ(lu.telemetry.perf_sn_compact_cols1_rows_total, 0,
                   "lu_reset: compact cols1 rows");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_compact_cols1_ms, 0.0,
+                  "lu_reset: compact cols1 ms");
     ASSERT_INT_EQ(lu.telemetry.refactor_need_checks, 0, "lu_reset: refactor need checks");
     ASSERT_INT_EQ(lu.telemetry.update_fail_max_updates, 0, "lu_reset: update fail max updates");
     ASSERT_INT_EQ(lu.telemetry.backend_policy_cgr, 0, "lu_reset: backend policy cgr count");
@@ -145,7 +148,11 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     lp_telemetry_lu_add_mkz_colmax_work(&lu, 18, 19, 20);
     lp_telemetry_lu_add_supernode_work(&lu, 21, 22, 23, 24, 25, 26, 27, 28,
                                        29, 30, 31, 32, 33,
-                                       34, 35, 36, 37, 38, 39, 40, 41, 42, 43);
+                                       34, 35, 35.5,
+                                       36, 37, 37.5,
+                                       38, 39, 39.5,
+                                       40, 41, 41.5,
+                                       42, 43, 43.5);
 
     {
         LUTelemetrySnapshot snap;
@@ -231,22 +238,32 @@ static void test_lu_reset_prepare_and_snapshot(void) {
                       "lu_snapshot: compact cols1 calls");
         ASSERT_U64_EQ(snap.perf_sn_compact_cols1_rows_total, 35,
                       "lu_snapshot: compact cols1 rows");
+        ASSERT_DBL_EQ(snap.perf_sn_compact_cols1_ms, 35.5,
+                      "lu_snapshot: compact cols1 ms");
         ASSERT_U64_EQ(snap.perf_sn_compact_cols2_calls, 36,
                       "lu_snapshot: compact cols2 calls");
         ASSERT_U64_EQ(snap.perf_sn_compact_cols2_rows_total, 37,
                       "lu_snapshot: compact cols2 rows");
+        ASSERT_DBL_EQ(snap.perf_sn_compact_cols2_ms, 37.5,
+                      "lu_snapshot: compact cols2 ms");
         ASSERT_U64_EQ(snap.perf_sn_compact_cols3_calls, 38,
                       "lu_snapshot: compact cols3 calls");
         ASSERT_U64_EQ(snap.perf_sn_compact_cols3_rows_total, 39,
                       "lu_snapshot: compact cols3 rows");
+        ASSERT_DBL_EQ(snap.perf_sn_compact_cols3_ms, 39.5,
+                      "lu_snapshot: compact cols3 ms");
         ASSERT_U64_EQ(snap.perf_sn_compact_cols4_calls, 40,
                       "lu_snapshot: compact cols4 calls");
         ASSERT_U64_EQ(snap.perf_sn_compact_cols4_rows_total, 41,
                       "lu_snapshot: compact cols4 rows");
+        ASSERT_DBL_EQ(snap.perf_sn_compact_cols4_ms, 41.5,
+                      "lu_snapshot: compact cols4 ms");
         ASSERT_U64_EQ(snap.perf_sn_compact_cols5p_calls, 42,
                       "lu_snapshot: compact cols5p calls");
         ASSERT_U64_EQ(snap.perf_sn_compact_cols5p_rows_total, 43,
                       "lu_snapshot: compact cols5p rows");
+        ASSERT_DBL_EQ(snap.perf_sn_compact_cols5p_ms, 43.5,
+                      "lu_snapshot: compact cols5p ms");
     }
 }
 

@@ -605,14 +605,19 @@ typedef struct {
     uint64_t lu_sn_skipped_update_calls;
     uint64_t lu_sn_compact_cols1_calls;
     uint64_t lu_sn_compact_cols1_rows_total;
+    double lu_sn_compact_cols1_ms;
     uint64_t lu_sn_compact_cols2_calls;
     uint64_t lu_sn_compact_cols2_rows_total;
+    double lu_sn_compact_cols2_ms;
     uint64_t lu_sn_compact_cols3_calls;
     uint64_t lu_sn_compact_cols3_rows_total;
+    double lu_sn_compact_cols3_ms;
     uint64_t lu_sn_compact_cols4_calls;
     uint64_t lu_sn_compact_cols4_rows_total;
+    double lu_sn_compact_cols4_ms;
     uint64_t lu_sn_compact_cols5p_calls;
     uint64_t lu_sn_compact_cols5p_rows_total;
+    double lu_sn_compact_cols5p_ms;
     double *solution;    /* Primal solution (may be NULL) */
     int solution_size;
 } SolveResult;
@@ -1642,22 +1647,32 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                     lu_tel.perf_sn_compact_cols1_calls;
                 result.lu_sn_compact_cols1_rows_total =
                     lu_tel.perf_sn_compact_cols1_rows_total;
+                result.lu_sn_compact_cols1_ms =
+                    lu_tel.perf_sn_compact_cols1_ms;
                 result.lu_sn_compact_cols2_calls =
                     lu_tel.perf_sn_compact_cols2_calls;
                 result.lu_sn_compact_cols2_rows_total =
                     lu_tel.perf_sn_compact_cols2_rows_total;
+                result.lu_sn_compact_cols2_ms =
+                    lu_tel.perf_sn_compact_cols2_ms;
                 result.lu_sn_compact_cols3_calls =
                     lu_tel.perf_sn_compact_cols3_calls;
                 result.lu_sn_compact_cols3_rows_total =
                     lu_tel.perf_sn_compact_cols3_rows_total;
+                result.lu_sn_compact_cols3_ms =
+                    lu_tel.perf_sn_compact_cols3_ms;
                 result.lu_sn_compact_cols4_calls =
                     lu_tel.perf_sn_compact_cols4_calls;
                 result.lu_sn_compact_cols4_rows_total =
                     lu_tel.perf_sn_compact_cols4_rows_total;
+                result.lu_sn_compact_cols4_ms =
+                    lu_tel.perf_sn_compact_cols4_ms;
                 result.lu_sn_compact_cols5p_calls =
                     lu_tel.perf_sn_compact_cols5p_calls;
                 result.lu_sn_compact_cols5p_rows_total =
                     lu_tel.perf_sn_compact_cols5p_rows_total;
+                result.lu_sn_compact_cols5p_ms =
+                    lu_tel.perf_sn_compact_cols5p_ms;
                 {
                     const char *reason = lu_failure_reason_string(lu_tel.last_failure_reason);
                     if (!reason) reason = "unknown";
@@ -3327,22 +3342,32 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_sn_compact_cols1_calls);
     fprintf(out, "    \"sn_compact_cols1_rows_total\": %" PRIu64 ",\n",
             ralph->lu_sn_compact_cols1_rows_total);
+    fprintf(out, "    \"sn_compact_cols1_ms\": %.3f,\n",
+            ralph->lu_sn_compact_cols1_ms);
     fprintf(out, "    \"sn_compact_cols2_calls\": %" PRIu64 ",\n",
             ralph->lu_sn_compact_cols2_calls);
     fprintf(out, "    \"sn_compact_cols2_rows_total\": %" PRIu64 ",\n",
             ralph->lu_sn_compact_cols2_rows_total);
+    fprintf(out, "    \"sn_compact_cols2_ms\": %.3f,\n",
+            ralph->lu_sn_compact_cols2_ms);
     fprintf(out, "    \"sn_compact_cols3_calls\": %" PRIu64 ",\n",
             ralph->lu_sn_compact_cols3_calls);
     fprintf(out, "    \"sn_compact_cols3_rows_total\": %" PRIu64 ",\n",
             ralph->lu_sn_compact_cols3_rows_total);
+    fprintf(out, "    \"sn_compact_cols3_ms\": %.3f,\n",
+            ralph->lu_sn_compact_cols3_ms);
     fprintf(out, "    \"sn_compact_cols4_calls\": %" PRIu64 ",\n",
             ralph->lu_sn_compact_cols4_calls);
     fprintf(out, "    \"sn_compact_cols4_rows_total\": %" PRIu64 ",\n",
             ralph->lu_sn_compact_cols4_rows_total);
+    fprintf(out, "    \"sn_compact_cols4_ms\": %.3f,\n",
+            ralph->lu_sn_compact_cols4_ms);
     fprintf(out, "    \"sn_compact_cols5p_calls\": %" PRIu64 ",\n",
             ralph->lu_sn_compact_cols5p_calls);
     fprintf(out, "    \"sn_compact_cols5p_rows_total\": %" PRIu64 ",\n",
             ralph->lu_sn_compact_cols5p_rows_total);
+    fprintf(out, "    \"sn_compact_cols5p_ms\": %.3f,\n",
+            ralph->lu_sn_compact_cols5p_ms);
     fprintf(out, "    \"last_failure_reason_code\": %d,\n", ralph->lu_last_failure_reason_code);
     fprintf(out, "    \"last_failure_reason\": \"%s\"\n", escaped_lu_reason);
     fprintf(out, "  },\n");
