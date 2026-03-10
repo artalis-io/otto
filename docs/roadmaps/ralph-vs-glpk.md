@@ -1008,6 +1008,39 @@ Status:
   - result:
     - the next exact supernode specialization should target compact
       single-column updates first, not another broad compact-kernel rewrite
+- `W1.2` eleventh slice implemented
+  - added sampled supernode phase timing telemetry for:
+    - panel factorization
+    - right-of-supernode U emission
+    - active-set discovery
+    - compact block packing/build
+    - full update kernel
+    - compact update kernel
+  - exported sample count as `sn_phase_samples` so the phase totals are
+    interpreted as sampled diagnostic data, not full exact totals
+  - important design correction:
+    - the first exact always-on version was rejected because it inflated
+      `sn_attempt_ms` enough to perturb the supernode cost gate and regressed
+      `bore3d.mps`
+    - the kept version uses deterministic sparse sampling of supernode
+      factorization attempts to preserve baseline behavior
+  - validation:
+    - `make -C ralph test-lp-telemetry-lu`
+    - `make -C ralph test-lu-supernode`
+    - `make -C ralph test-netlib-gate-small`
+  - measured effect:
+    - direct `pilot.mps` sampled phase mix:
+      - `sn_phase_samples`: `29`
+      - `sn_panel_factor_ms`: `112.287`
+      - `sn_u_emit_ms`: `25.555`
+      - `sn_active_set_ms`: `37.236`
+      - `sn_pack_blocks_ms`: `0.528`
+      - `sn_full_update_ms`: `0.000`
+      - `sn_compact_update_ms`: `3.576`
+    - compact kernel time is not the remaining pilot-family bottleneck
+  - result:
+    - the next supernode Week 1 target should be panel factorization and
+      active-set discovery, not another compact-update specialization
 - rejected during `W1.2`
   - stale or approximate `col_max` shortcuts and other behavior-adjacent
     Markowitz optimizations were tried and rolled back

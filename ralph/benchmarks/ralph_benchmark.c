@@ -590,6 +590,13 @@ typedef struct {
     double lu_total_update_apply_backward_ms;
     double lu_total_compact_factor_ms;
     double lu_total_compact_solve_ms;
+    uint64_t lu_sn_phase_samples;
+    double lu_sn_panel_factor_ms;
+    double lu_sn_u_emit_ms;
+    double lu_sn_active_set_ms;
+    double lu_sn_pack_blocks_ms;
+    double lu_sn_full_update_ms;
+    double lu_sn_compact_update_ms;
     uint64_t lu_sn_active_row_scan_entries;
     uint64_t lu_sn_active_col_scan_entries;
     uint64_t lu_sn_trailing_rows_total;
@@ -1617,6 +1624,20 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                     lu_tel.perf_total_compact_factor_ms;
                 result.lu_total_compact_solve_ms =
                     lu_tel.perf_total_compact_solve_ms;
+                result.lu_sn_phase_samples =
+                    lu_tel.perf_sn_phase_samples;
+                result.lu_sn_panel_factor_ms =
+                    lu_tel.perf_sn_panel_factor_ms;
+                result.lu_sn_u_emit_ms =
+                    lu_tel.perf_sn_u_emit_ms;
+                result.lu_sn_active_set_ms =
+                    lu_tel.perf_sn_active_set_ms;
+                result.lu_sn_pack_blocks_ms =
+                    lu_tel.perf_sn_pack_blocks_ms;
+                result.lu_sn_full_update_ms =
+                    lu_tel.perf_sn_full_update_ms;
+                result.lu_sn_compact_update_ms =
+                    lu_tel.perf_sn_compact_update_ms;
                 result.lu_sn_active_row_scan_entries =
                     lu_tel.perf_sn_active_row_scan_entries;
                 result.lu_sn_active_col_scan_entries =
@@ -3312,6 +3333,20 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_total_compact_factor_ms);
     fprintf(out, "    \"total_compact_solve_ms\": %.6f,\n",
             ralph->lu_total_compact_solve_ms);
+    fprintf(out, "    \"sn_phase_samples\": %" PRIu64 ",\n",
+            ralph->lu_sn_phase_samples);
+    fprintf(out, "    \"sn_panel_factor_ms\": %.6f,\n",
+            ralph->lu_sn_panel_factor_ms);
+    fprintf(out, "    \"sn_u_emit_ms\": %.6f,\n",
+            ralph->lu_sn_u_emit_ms);
+    fprintf(out, "    \"sn_active_set_ms\": %.6f,\n",
+            ralph->lu_sn_active_set_ms);
+    fprintf(out, "    \"sn_pack_blocks_ms\": %.6f,\n",
+            ralph->lu_sn_pack_blocks_ms);
+    fprintf(out, "    \"sn_full_update_ms\": %.6f,\n",
+            ralph->lu_sn_full_update_ms);
+    fprintf(out, "    \"sn_compact_update_ms\": %.6f,\n",
+            ralph->lu_sn_compact_update_ms);
     fprintf(out, "    \"sn_active_row_scan_entries\": %" PRIu64 ",\n",
             ralph->lu_sn_active_row_scan_entries);
     fprintf(out, "    \"sn_active_col_scan_entries\": %" PRIu64 ",\n",

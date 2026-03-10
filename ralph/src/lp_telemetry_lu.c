@@ -143,6 +143,13 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.perf_total_update_apply_backward_ms = 0.0;
     lu->telemetry.perf_total_compact_factor_ms = 0.0;
     lu->telemetry.perf_total_compact_solve_ms = 0.0;
+    lu->telemetry.perf_sn_phase_samples = 0;
+    lu->telemetry.perf_sn_panel_factor_ms = 0.0;
+    lu->telemetry.perf_sn_u_emit_ms = 0.0;
+    lu->telemetry.perf_sn_active_set_ms = 0.0;
+    lu->telemetry.perf_sn_pack_blocks_ms = 0.0;
+    lu->telemetry.perf_sn_full_update_ms = 0.0;
+    lu->telemetry.perf_sn_compact_update_ms = 0.0;
     lu->telemetry.perf_sn_active_row_scan_entries = 0;
     lu->telemetry.perf_sn_active_col_scan_entries = 0;
     lu->telemetry.perf_sn_trailing_rows_total = 0;
@@ -341,6 +348,13 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(perf_total_update_apply_backward_ms);
     COPY_LU_TELEM_FIELD(perf_total_compact_factor_ms);
     COPY_LU_TELEM_FIELD(perf_total_compact_solve_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_phase_samples);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_factor_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_u_emit_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_active_set_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_pack_blocks_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_full_update_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_compact_update_ms);
     COPY_LU_TELEM_FIELD(perf_sn_active_row_scan_entries);
     COPY_LU_TELEM_FIELD(perf_sn_active_col_scan_entries);
     COPY_LU_TELEM_FIELD(perf_sn_trailing_rows_total);
@@ -445,6 +459,13 @@ void lp_telemetry_lu_add_mkz_colmax_work(LUFactorization *lu,
 }
 
 void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
+                                        uint64_t phase_samples,
+                                        double panel_factor_ms,
+                                        double u_emit_ms,
+                                        double active_set_ms,
+                                        double pack_blocks_ms,
+                                        double full_update_ms,
+                                        double compact_update_ms,
                                         uint64_t active_row_scan_entries,
                                         uint64_t active_col_scan_entries,
                                         uint64_t trailing_rows_total,
@@ -474,6 +495,13 @@ void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
                                         uint64_t compact_cols5p_rows_total,
                                         double compact_cols5p_ms) {
     if (!lu_telemetry_enabled(lu)) return;
+    lu->telemetry.perf_sn_phase_samples += phase_samples;
+    lu->telemetry.perf_sn_panel_factor_ms += panel_factor_ms;
+    lu->telemetry.perf_sn_u_emit_ms += u_emit_ms;
+    lu->telemetry.perf_sn_active_set_ms += active_set_ms;
+    lu->telemetry.perf_sn_pack_blocks_ms += pack_blocks_ms;
+    lu->telemetry.perf_sn_full_update_ms += full_update_ms;
+    lu->telemetry.perf_sn_compact_update_ms += compact_update_ms;
     lu->telemetry.perf_sn_active_row_scan_entries += active_row_scan_entries;
     lu->telemetry.perf_sn_active_col_scan_entries += active_col_scan_entries;
     lu->telemetry.perf_sn_trailing_rows_total += trailing_rows_total;

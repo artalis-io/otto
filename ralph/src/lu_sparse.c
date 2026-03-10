@@ -4024,7 +4024,10 @@ supernode_factorization:
 
                 int sn_reg = 0;
                 SNSupernodeWork sn_work_stats;
+                int sn_phase_timing_sampled = 0;
                 memset(&sn_work_stats, 0, sizeof(sn_work_stats));
+                sn_phase_timing_sampled = ((lu->sn_calls & 63) == 0);
+                sn_work_stats.phase_timing_sampled = sn_phase_timing_sampled;
                 t_stage_start_ms = lp_telemetry_timer_start();
                 int rc = sn_factorize(A_struct, m, k, row_perm, row_pos,
                                       lu->pivot_tol, row_is_identity,
@@ -4044,6 +4047,13 @@ supernode_factorization:
                     lu_supernode_cost_gate_note_supernode(lu, k, sn_attempt_ms);
                     lp_telemetry_lu_add_supernode_work(
                         lu,
+                        sn_phase_timing_sampled ? 1u : 0u,
+                        sn_work_stats.panel_factor_ms,
+                        sn_work_stats.u_emit_ms,
+                        sn_work_stats.active_set_ms,
+                        sn_work_stats.pack_blocks_ms,
+                        sn_work_stats.full_update_ms,
+                        sn_work_stats.compact_update_ms,
                         sn_work_stats.active_row_scan_entries,
                         sn_work_stats.active_col_scan_entries,
                         sn_work_stats.trailing_rows_total,

@@ -63,6 +63,13 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     lu.telemetry.perf_total_update_apply_backward_ms = 2.5;
     lu.telemetry.perf_total_compact_factor_ms = 0.75;
     lu.telemetry.perf_total_compact_solve_ms = 3.5;
+    lu.telemetry.perf_sn_phase_samples = 2;
+    lu.telemetry.perf_sn_panel_factor_ms = 0.9;
+    lu.telemetry.perf_sn_u_emit_ms = 1.1;
+    lu.telemetry.perf_sn_active_set_ms = 1.3;
+    lu.telemetry.perf_sn_pack_blocks_ms = 1.5;
+    lu.telemetry.perf_sn_full_update_ms = 1.7;
+    lu.telemetry.perf_sn_compact_update_ms = 1.9;
     lu.telemetry.perf_sn_active_row_scan_entries = 21;
     lu.telemetry.perf_sn_full_update_calls = 2;
     lu.telemetry.perf_sn_compact_cols1_calls = 7;
@@ -99,6 +106,20 @@ static void test_lu_reset_prepare_and_snapshot(void) {
                   "lu_reset: compact factor total");
     ASSERT_DBL_EQ(lu.telemetry.perf_total_compact_solve_ms, 0.0,
                   "lu_reset: compact solve total");
+    ASSERT_U64_EQ(lu.telemetry.perf_sn_phase_samples, 0,
+                  "lu_reset: supernode phase samples");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_panel_factor_ms, 0.0,
+                  "lu_reset: supernode panel factor total");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_u_emit_ms, 0.0,
+                  "lu_reset: supernode U emit total");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_active_set_ms, 0.0,
+                  "lu_reset: supernode active-set total");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_pack_blocks_ms, 0.0,
+                  "lu_reset: supernode pack total");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_full_update_ms, 0.0,
+                  "lu_reset: supernode full update total");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_compact_update_ms, 0.0,
+                  "lu_reset: supernode compact update total");
     ASSERT_U64_EQ(lu.telemetry.perf_sn_active_row_scan_entries, 0,
                   "lu_reset: supernode row scan entries");
     ASSERT_U64_EQ(lu.telemetry.perf_sn_full_update_calls, 0,
@@ -146,7 +167,8 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     lp_telemetry_lu_record_compact_solve_ms(&lu, 0.50);
     lp_telemetry_lu_add_mkz_scan_work(&lu, 11, 12, 13, 14, 15, 16, 17);
     lp_telemetry_lu_add_mkz_colmax_work(&lu, 18, 19, 20);
-    lp_telemetry_lu_add_supernode_work(&lu, 21, 22, 23, 24, 25, 26, 27, 28,
+    lp_telemetry_lu_add_supernode_work(&lu, 20, 20.1, 20.2, 20.3, 20.4, 20.5, 20.6,
+                                       21, 22, 23, 24, 25, 26, 27, 28,
                                        29, 30, 31, 32, 33,
                                        34, 35, 35.5,
                                        36, 37, 37.5,
@@ -188,6 +210,20 @@ static void test_lu_reset_prepare_and_snapshot(void) {
                       "lu_snapshot: compact factor total");
         ASSERT_DBL_EQ(snap.perf_total_compact_solve_ms, 0.50,
                       "lu_snapshot: compact solve total");
+        ASSERT_U64_EQ(snap.perf_sn_phase_samples, 20,
+                      "lu_snapshot: supernode phase samples");
+        ASSERT_DBL_EQ(snap.perf_sn_panel_factor_ms, 20.1,
+                      "lu_snapshot: supernode panel factor total");
+        ASSERT_DBL_EQ(snap.perf_sn_u_emit_ms, 20.2,
+                      "lu_snapshot: supernode U emit total");
+        ASSERT_DBL_EQ(snap.perf_sn_active_set_ms, 20.3,
+                      "lu_snapshot: supernode active-set total");
+        ASSERT_DBL_EQ(snap.perf_sn_pack_blocks_ms, 20.4,
+                      "lu_snapshot: supernode pack total");
+        ASSERT_DBL_EQ(snap.perf_sn_full_update_ms, 20.5,
+                      "lu_snapshot: supernode full update total");
+        ASSERT_DBL_EQ(snap.perf_sn_compact_update_ms, 20.6,
+                      "lu_snapshot: supernode compact update total");
         ASSERT_U64_EQ(snap.mkz_primary_scan_entries, 11,
                       "lu_snapshot: mkz primary scan entries");
         ASSERT_U64_EQ(snap.mkz_rescue_scan_entries, 12,

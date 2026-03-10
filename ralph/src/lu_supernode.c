@@ -692,6 +692,7 @@ int sn_factorize(double *A_struct, int m, int k,
                  int U_capacity,
                  double *work, size_t work_capacity,
                  SNSupernodeWork *stats) {
+    const int sample_phase_timing = (stats && stats->phase_timing_sampled);
     int rc = 0;
     unsigned char *row_active_orig_buf = NULL;
     unsigned char *col_active_local_buf = NULL;
@@ -740,6 +741,7 @@ int sn_factorize(double *A_struct, int m, int k,
 
     /* Process each supernode */
     for (int s = 0; s < num_supernodes; s++) {
+        double t_phase_ms = 0.0;
         int sn_start = supernodes[s].start;
         int sn_size = supernodes[s].size;
         int panel_rows = m - sn_start;
@@ -786,6 +788,7 @@ int sn_factorize(double *A_struct, int m, int k,
          * doing the GEMM update on remaining columns.
          */
 
+        if (sample_phase_timing) t_phase_ms = lp_telemetry_timer_start();
         for (int j_local = 0; j_local < sn_size; j_local++) {
             int step = sn_start + j_local;
 
@@ -914,10 +917,12 @@ int sn_factorize(double *A_struct, int m, int k,
                 }
             }
         }
+        if (sample_phase_timing) stats->panel_factor_ms += lp_telemetry_timer_elapsed_ms(t_phase_ms);
 
         /* ---- Step 2: Store U entries for columns right of supernode ---- */
         /* For each row in the supernode (step sn_start..sn_start+sn_size-1),
          * emit U entries for columns sn_start+sn_size..k-1 */
+        if (sample_phase_timing) t_phase_ms = lp_telemetry_timer_start();
         for (int j_local = 0; j_local < sn_size; j_local++) {
             int step = sn_start + j_local;
             int piv_orig = row_perm[step];
@@ -936,6 +941,7 @@ int sn_factorize(double *A_struct, int m, int k,
                 }
             }
         }
+        if (sample_phase_timing) stats->u_emit_ms += lp_telemetry_timer_elapsed_ms(t_phase_ms);
 
         /* ---- Step 3: Schur complement update using GEMM ---- */
         /* C[i, j] -= L[i, sn] * U[sn, j]
@@ -955,6 +961,7 @@ int sn_factorize(double *A_struct, int m, int k,
                 stats->trailing_cols_total += (uint64_t)trailing_cols;
             }
 
+            if (sample_phase_timing) t_phase_ms = lp_telemetry_timer_start();
             int active_row_count = 0;
             for (int i = 0; i < trailing_rows; i++) {
                 int orig_row = row_perm[sn_start + sn_size + i];
@@ -967,6 +974,7 @@ int sn_factorize(double *A_struct, int m, int k,
                 if (stats) stats->active_col_scan_entries++;
                 if (col_active_local[jj]) active_cols[active_col_count++] = jj;
             }
+            if (sample_phase_timing) stats->active_set_ms += lp_telemetry_timer_elapsed_ms(t_phase_ms);
 
             if (active_row_count == 0 || active_col_count == 0) {
                 if (stats) stats->skipped_update_calls++;
@@ -985,6 +993,8 @@ int sn_factorize(double *A_struct, int m, int k,
                 stats->compact_triplets_total +=
                     (uint64_t)active_row_count * (uint64_t)sn_size * (uint64_t)active_col_count;
             }
+
+            if (sample_phase_timing) t_phase_ms = lp_telemetry_timer_start();
 
             /* Workspace layout: [L_block | U_block]
              * L: active_rows * sn_size
@@ -1022,15 +1032,19 @@ int sn_factorize(double *A_struct, int m, int k,
                         A_struct[(size_t)piv_orig * k + (sn_start + sn_size + active_cols[jj])];
                 }
             }
+            if (sample_phase_timing) stats->pack_blocks_ms += lp_telemetry_timer_elapsed_ms(t_phase_ms);
 
             if (active_row_count == trailing_rows && active_col_count == trailing_cols) {
+                double t_full_update_ms = 0.0;
                 if (stats) stats->full_update_calls++;
+                if (sample_phase_timing) t_full_update_ms = lp_telemetry_timer_start();
                 sn_dgemm_update_scattered_rows(trailing_rows, sn_size, trailing_cols,
                                                L_block, sn_size,
                                                U_block, trailing_cols,
                                                A_struct, k, row_perm,
                                                sn_start + sn_size,
                                                sn_start + sn_size);
+                if (sample_phase_timing) stats->full_update_ms += lp_telemetry_timer_elapsed_ms(t_full_update_ms);
             } else {
                 double t_compact_update_ms = 0.0;
                 if (stats) {
@@ -1051,7 +1065,7 @@ int sn_factorize(double *A_struct, int m, int k,
                         stats->compact_cols5p_calls++;
                         stats->compact_cols5p_rows_total += (uint64_t)active_row_count;
                     }
-                    t_compact_update_ms = lp_telemetry_timer_start();
+                    if (sample_phase_timing) t_compact_update_ms = lp_telemetry_timer_start();
                 }
                 sn_dgemm_update_scattered_rows_cols(active_row_count, sn_size, active_col_count,
                                                     L_block, sn_size,
@@ -1059,8 +1073,9 @@ int sn_factorize(double *A_struct, int m, int k,
                                                     A_struct, k, row_perm,
                                                     active_rows, sn_start + sn_size,
                                                     active_cols, sn_start + sn_size);
-                if (stats) {
+                if (sample_phase_timing) {
                     double compact_update_ms = lp_telemetry_timer_elapsed_ms(t_compact_update_ms);
+                    stats->compact_update_ms += compact_update_ms;
                     if (active_col_count == 1) {
                         stats->compact_cols1_ms += compact_update_ms;
                     } else if (active_col_count == 2) {
