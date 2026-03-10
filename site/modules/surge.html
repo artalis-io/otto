@@ -704,12 +704,12 @@
             <h1>VRP optimization kernel that runs anywhere</h1>
             <p>
                 Surge is a rich Vehicle Routing Problem solver written in C11 with zero external dependencies.
-                25+ constraint types, BKS-competitive solution quality (beats published best-known average
-                distance on Solomon VRPTW), compiles to a ~200KB static library or a 361KB WebAssembly module.
-                Same solver runs in a browser, on the edge, or in a datacenter.
+                25+ constraint types, BKS-competitive solution quality across standard academic benchmarks
+                (88% vehicle match on GH-200, 62% on GH-400), compiles to a ~200KB static library or a 361KB
+                WebAssembly module. Same solver runs in a browser, on the edge, or in a datacenter.
             </p>
             <div class="badges">
-                <span class="badge green">374 tests</span>
+                <span class="badge green">454 tests</span>
                 <span class="badge blue">25+ constraints</span>
                 <span class="badge yellow">Zero deps</span>
                 <span class="badge">C11</span>
@@ -739,8 +739,8 @@
                 <div class="feature-card">
                     <div class="feature-card-title">Quality without compromise</div>
                     <div class="feature-card-desc">
-                        Population-based ALNS with infeasible-space exploration. Beats BKS average distance on Solomon VRPTW.
-                        Matches vehicle count on 45/56 instances. Not a toy &mdash; a production-grade metaheuristic.
+                        Population-based ALNS with infeasible-space exploration and generation-aware SA reheat.
+                        88% vehicle match on GH-200, 62% on GH-400. Not a toy &mdash; a production-grade metaheuristic.
                     </div>
                 </div>
                 <div class="feature-card">
@@ -846,17 +846,18 @@
             <h2>Competitive with best known solutions</h2>
 
             <p>
-                All results: population mode (3 generations, auto threads), 10,000 ALNS iterations per generation,
-                deterministic seed (42). Compared against published Best Known Solutions from the literature.
+                All results: population mode (3 generations, auto threads), scale-aware iteration caps,
+                deterministic seed (42). Scale-tuned ALNS (S22), instance-adaptive construction (S24),
+                generation SA reheat (S25). Compared against published Best Known Solutions.
             </p>
 
             <div class="stat-row">
                 <div class="stat">
-                    <div class="stat-value green">-0.1%</div>
+                    <div class="stat-value yellow">+3.7%</div>
                     <div class="stat-label">Solomon Dist Gap</div>
                 </div>
                 <div class="stat">
-                    <div class="stat-value blue">45/56</div>
+                    <div class="stat-value blue">36/56</div>
                     <div class="stat-label">Solomon Veh Match</div>
                 </div>
                 <div class="stat">
@@ -871,20 +872,20 @@
 
             <div class="stat-row">
                 <div class="stat">
-                    <div class="stat-value yellow">+7.9%</div>
+                    <div class="stat-value yellow">+6.6%</div>
                     <div class="stat-label">GH-200 Dist Gap</div>
                 </div>
                 <div class="stat">
-                    <div class="stat-value green">54/60</div>
+                    <div class="stat-value green">53/60</div>
                     <div class="stat-label">GH-200 Veh Match</div>
                 </div>
                 <div class="stat">
-                    <div class="stat-value green">+1.6%</div>
-                    <div class="stat-label">LL-200 Dist Gap</div>
+                    <div class="stat-value yellow">+12.1%</div>
+                    <div class="stat-label">GH-400 Dist Gap</div>
                 </div>
                 <div class="stat">
-                    <div class="stat-value yellow">24/60</div>
-                    <div class="stat-label">LL-200 Veh Match</div>
+                    <div class="stat-value blue">37/60</div>
+                    <div class="stat-label">GH-400 Veh Match</div>
                 </div>
             </div>
 
@@ -906,49 +907,49 @@
                         <td>9</td>
                         <td>9/9</td>
                         <td>0.00</td>
-                        <td style="color: var(--success)">+0.2%</td>
+                        <td style="color: var(--success)">-0.0%</td>
                     </tr>
                     <tr>
                         <td>C2xx (clustered, wide TW)</td>
                         <td>8</td>
                         <td>8/8</td>
                         <td>0.00</td>
-                        <td style="color: var(--success)">exact BKS</td>
+                        <td style="color: var(--success)">+0.0%</td>
                     </tr>
                     <tr>
                         <td>R1xx (random, tight TW)</td>
                         <td>12</td>
-                        <td>6/12</td>
-                        <td>+0.50</td>
-                        <td style="color: var(--warning)">-0.6% (trades +1 veh)</td>
+                        <td>7/12</td>
+                        <td>+0.75</td>
+                        <td>+5.5%</td>
                     </tr>
                     <tr>
                         <td>R2xx (random, wide TW)</td>
                         <td>11</td>
-                        <td>10/11</td>
-                        <td>+0.09</td>
-                        <td style="color: var(--success)">-0.3%</td>
+                        <td>6/11</td>
+                        <td>+0.45</td>
+                        <td style="color: var(--success)">+1.4%</td>
                     </tr>
                     <tr>
                         <td>RC1xx (mixed, tight TW)</td>
                         <td>8</td>
                         <td>4/8</td>
-                        <td>+0.50</td>
-                        <td style="color: var(--warning)">-0.6% (trades +1 veh)</td>
+                        <td>+0.63</td>
+                        <td>+3.2%</td>
                     </tr>
                     <tr>
                         <td>RC2xx (mixed, wide TW)</td>
                         <td>8</td>
-                        <td>8/8</td>
-                        <td>0.00</td>
-                        <td style="color: var(--success)">+1.3%</td>
+                        <td>2/8</td>
+                        <td>+0.50</td>
+                        <td>+3.5%</td>
                     </tr>
                     <tr class="highlight">
                         <td><strong>Overall</strong></td>
                         <td>56</td>
-                        <td><strong>45/56</strong></td>
-                        <td><strong>+0.20</strong></td>
-                        <td style="color: var(--success); font-weight: 600"><strong>-0.1%</strong></td>
+                        <td><strong>36/56 (64%)</strong></td>
+                        <td><strong>+0.48</strong></td>
+                        <td style="font-weight: 600"><strong>+3.7%</strong></td>
                     </tr>
                 </tbody>
             </table>
@@ -1020,21 +1021,19 @@
 
             <div class="callout honest">
                 <p>
-                    <strong>Honest assessment.</strong> The remaining vehicle gap is concentrated on tight-TW R1/RC1
-                    Solomon and LC1 Li-Lim instances, where Surge trades +1 vehicle for better distance
-                    (e.g. R104: +1 veh / -1.3% dist). LC1xx PDPTW is hardest (+15.6% avg dist gap).
-                    These instances likely require higher iteration budgets or specialized tight-TW operators.
-                    On wide-TW and clustered instances, Surge matches or beats BKS consistently.
-                    Large-scale results (200 customers/tasks) are below. 400+ instances
-                    need per-iteration speedups before practical benchmarking.
+                    <strong>Honest assessment.</strong> Solomon 100 uses a short 5s budget &mdash; longer runs
+                    would close the gap. The remaining vehicle gap is on tight-TW R1/RC1/RC2 instances.
+                    LC1xx PDPTW remains hardest (+15.6% avg dist gap). On wide-TW and clustered instances,
+                    Surge matches BKS consistently. At scale (200-400 customers), Surge matches 88-62% of
+                    BKS vehicle counts. Distance gaps widen with scale (6.6% at 200, 12.1% at 400) &mdash;
+                    this is typical for ALNS vs specialized solvers with months of tuning.
                 </p>
             </div>
 
             <h3>Gehring-Homberger VRPTW (60 instances, 200 customers each)</h3>
 
             <p>
-                Single-thread, 10K iterations, 60s time limit, deterministic seed 42.
-                Tuned SA parameters from hyperparameter search.
+                Population mode, 60s time limit, MEDIUM_TUNE (S22), deterministic seed 42.
             </p>
 
             <table>
@@ -1053,21 +1052,21 @@
                         <td>10</td>
                         <td>8/10</td>
                         <td>+0.20</td>
-                        <td>+7.6%</td>
+                        <td>+5.6%</td>
                     </tr>
                     <tr>
                         <td>C2_2 (clustered, wide TW)</td>
                         <td>10</td>
                         <td>10/10</td>
                         <td>0.00</td>
-                        <td style="color: var(--success)">+1.2%</td>
+                        <td style="color: var(--success)">+0.7%</td>
                     </tr>
                     <tr>
                         <td>R1_2 (random, tight TW)</td>
                         <td>10</td>
                         <td>10/10</td>
                         <td>0.00</td>
-                        <td>+7.8%</td>
+                        <td>+12.0%</td>
                     </tr>
                     <tr>
                         <td>R2_2 (random, wide TW)</td>
@@ -1079,31 +1078,31 @@
                     <tr>
                         <td>RC1_2 (mixed, tight TW)</td>
                         <td>10</td>
-                        <td>9/10</td>
-                        <td>+0.10</td>
-                        <td>+26.8%</td>
+                        <td>8/10</td>
+                        <td>+0.20</td>
+                        <td>+18.2%</td>
                     </tr>
                     <tr>
                         <td>RC2_2 (mixed, wide TW)</td>
                         <td>10</td>
                         <td>8/10</td>
                         <td>+0.20</td>
-                        <td style="color: var(--success)">+2.4%</td>
+                        <td style="color: var(--success)">+1.2%</td>
                     </tr>
                     <tr class="highlight">
                         <td><strong>Overall</strong></td>
                         <td>60</td>
-                        <td><strong>54/60 (90%)</strong></td>
-                        <td><strong>+0.10</strong></td>
-                        <td style="font-weight: 600"><strong>+7.9%</strong></td>
+                        <td><strong>53/60 (88%)</strong></td>
+                        <td><strong>+0.12</strong></td>
+                        <td style="font-weight: 600"><strong>+6.6%</strong></td>
                     </tr>
                 </tbody>
             </table>
 
-            <h3>Li &amp; Lim Extended PDPTW (60 instances, 200 tasks each)</h3>
+            <h3>Gehring-Homberger VRPTW (60 instances, 400 customers each)</h3>
 
             <p>
-                Single-thread, 10K iterations, 120s time limit, deterministic seed 42.
+                Population mode, 120s time limit, LARGE_TUNE (S22) + SA reheat 2.0&times; (S25), deterministic seed 42.
             </p>
 
             <table>
@@ -1118,53 +1117,104 @@
                 </thead>
                 <tbody>
                     <tr>
-                        <td>LC1_2 (clustered, tight TW)</td>
-                        <td>10</td>
-                        <td>4/10</td>
-                        <td>+2.10</td>
-                        <td>+17.3%</td>
-                    </tr>
-                    <tr>
-                        <td>LC2_2 (clustered, wide TW)</td>
-                        <td>10</td>
-                        <td>10/10</td>
-                        <td>0.00</td>
-                        <td style="color: var(--success)">+0.3%</td>
-                    </tr>
-                    <tr>
-                        <td>LR1_2 (random, tight TW)</td>
-                        <td>10</td>
-                        <td>0/10</td>
-                        <td>+3.30</td>
-                        <td>+5.7%</td>
-                    </tr>
-                    <tr>
-                        <td>LR2_2 (random, wide TW)</td>
+                        <td>C1_4 (clustered, tight TW)</td>
                         <td>10</td>
                         <td>5/10</td>
-                        <td>+0.50</td>
-                        <td style="color: var(--success)">-5.5%</td>
+                        <td>+1.10</td>
+                        <td>+9.6%</td>
                     </tr>
                     <tr>
-                        <td>LRC1_2 (mixed, tight TW)</td>
-                        <td>10</td>
-                        <td>1/10</td>
-                        <td>+1.20</td>
-                        <td>+0.5%</td>
-                    </tr>
-                    <tr>
-                        <td>LRC2_2 (mixed, wide TW)</td>
+                        <td>C2_4 (clustered, wide TW)</td>
                         <td>10</td>
                         <td>4/10</td>
-                        <td>+0.60</td>
-                        <td style="color: var(--success)">-8.9%</td>
+                        <td>+0.80</td>
+                        <td>+8.9%</td>
+                    </tr>
+                    <tr>
+                        <td>R1_4 (random, tight TW)</td>
+                        <td>10</td>
+                        <td style="color: var(--success)">10/10</td>
+                        <td>0.00</td>
+                        <td>+27.4%</td>
+                    </tr>
+                    <tr>
+                        <td>R2_4 (random, wide TW)</td>
+                        <td>10</td>
+                        <td style="color: var(--success)">10/10</td>
+                        <td>0.00</td>
+                        <td style="color: var(--success)">+6.4%</td>
+                    </tr>
+                    <tr>
+                        <td>RC1_4 (mixed, tight TW)</td>
+                        <td>10</td>
+                        <td>4/10</td>
+                        <td>+0.70</td>
+                        <td>+18.7%</td>
+                    </tr>
+                    <tr>
+                        <td>RC2_4 (mixed, wide TW)</td>
+                        <td>10</td>
+                        <td>4/10</td>
+                        <td>+0.70</td>
+                        <td style="color: var(--success)">+4.3%</td>
                     </tr>
                     <tr class="highlight">
                         <td><strong>Overall</strong></td>
                         <td>60</td>
-                        <td><strong>24/60 (40%)</strong></td>
-                        <td><strong>+1.28</strong></td>
-                        <td style="font-weight: 600"><strong>+1.6%</strong></td>
+                        <td><strong>37/60 (62%)</strong></td>
+                        <td><strong>+0.50</strong></td>
+                        <td style="font-weight: 600"><strong>+12.1%</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Scaling Summary</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Scale</th>
+                        <th>Time Budget</th>
+                        <th>Veh Match</th>
+                        <th>Avg Dist Gap</th>
+                        <th>Tune Profile</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Solomon 100</td>
+                        <td>5s</td>
+                        <td>36/56 (64%)</td>
+                        <td>+3.7%</td>
+                        <td>FAST</td>
+                    </tr>
+                    <tr>
+                        <td>Li &amp; Lim 100</td>
+                        <td>5s</td>
+                        <td>47/56 (84%)</td>
+                        <td>+3.3%</td>
+                        <td>FAST</td>
+                    </tr>
+                    <tr>
+                        <td>GH-200</td>
+                        <td>60s</td>
+                        <td style="color: var(--success)">53/60 (88%)</td>
+                        <td>+6.6%</td>
+                        <td>MEDIUM_TUNE</td>
+                    </tr>
+                    <tr>
+                        <td>GH-400</td>
+                        <td>120s</td>
+                        <td>37/60 (62%)</td>
+                        <td>+12.1%</td>
+                        <td>LARGE_TUNE + S25 reheat</td>
+                    </tr>
+                    <tr>
+                        <td>GH-800</td>
+                        <td>120s</td>
+                        <td>25/60 (42%)</td>
+                        <td>+17.0%</td>
+                        <td>LARGE_TUNE</td>
                     </tr>
                 </tbody>
             </table>
@@ -1182,23 +1232,23 @@
                 <tbody>
                     <tr>
                         <td>Solomon 100-customer</td>
-                        <td>~52s avg (population)</td>
-                        <td>10K iterations, 3 generations, auto threads</td>
-                    </tr>
-                    <tr>
-                        <td>Li &amp; Lim 100-request</td>
-                        <td>~29s avg (population)</td>
-                        <td>10K iterations, 3 generations, auto threads</td>
+                        <td>~5s avg (population)</td>
+                        <td>5s time limit, 3 generations, auto threads</td>
                     </tr>
                     <tr>
                         <td>GH 200-customer</td>
-                        <td>~206s avg (single-thread)</td>
-                        <td>10K iterations, 60s time limit</td>
+                        <td>~66s avg (population)</td>
+                        <td>60s time limit, MEDIUM_TUNE, auto threads</td>
                     </tr>
                     <tr>
-                        <td>LL 200-task</td>
-                        <td>~31s avg (single-thread)</td>
-                        <td>10K iterations, 120s time limit</td>
+                        <td>GH 400-customer</td>
+                        <td>~136s avg (population)</td>
+                        <td>120s time limit, LARGE_TUNE + SA reheat, auto threads</td>
+                    </tr>
+                    <tr>
+                        <td>GH 800-customer</td>
+                        <td>~215s avg (population)</td>
+                        <td>120s time limit, LARGE_TUNE, auto threads</td>
                     </tr>
                     <tr>
                         <td>Malloc in hot loop</td>
@@ -1352,7 +1402,7 @@
                     </tr>
                     <tr>
                         <td>Large-scale (200+)</td>
-                        <td class="y">90% veh match (GH-200)</td>
+                        <td class="y">88% veh match (GH-200)</td>
                         <td class="n">Degrades</td>
                         <td>Decent</td>
                         <td class="q">Opaque</td>
@@ -1797,11 +1847,11 @@ time_dim.<span class="func">CumulVar</span>(
 
             <div class="stat-row">
                 <div class="stat">
-                    <div class="stat-value">~40K</div>
+                    <div class="stat-value">~27K</div>
                     <div class="stat-label">Lines of C</div>
                 </div>
                 <div class="stat">
-                    <div class="stat-value green">374</div>
+                    <div class="stat-value green">454</div>
                     <div class="stat-label">Tests</div>
                 </div>
                 <div class="stat">
@@ -1819,7 +1869,7 @@ time_dim.<span class="func">CumulVar</span>(
             </div>
 
             <p>
-                21K lines of solver library code. A competent C developer can read the entire solver in a day.
+                27K lines of solver library code (Surge + Arbor). A competent C developer can read the entire solver in a day.
                 No metaprogramming, no templates, no macros beyond basics. Deterministic: same seed = same output.
                 ASan/UBSan clean. Per-operator telemetry built in.
             </p>
@@ -1844,7 +1894,7 @@ time_dim.<span class="func">CumulVar</span>(
 <span class="command">git clone https://github.com/ottofleet/otto.git</span>
 <span class="command">cd otto && make surge</span>
 
-<span class="comment"># Run tests (374 tests)</span>
+<span class="comment"># Run tests (454 tests)</span>
 <span class="command">make test-surge</span>
 
 <span class="comment"># Run Solomon benchmarks</span>

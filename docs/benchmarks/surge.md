@@ -3,7 +3,7 @@
 Comprehensive benchmark results for the Surge VRP/PDPTW solver across standard
 academic instance families.
 
-Last updated: 2026-03-08
+Last updated: 2026-03-10
 
 ## How to Run
 
@@ -48,11 +48,12 @@ Instance categories:
 - **C** = Clustered customers, **R** = Random, **RC** = Mixed
 - **Type 1** = Tight time windows, **Type 2** = Wide time windows
 
-## Current Best Results (S24, March 2026)
+## Current Best Results (S25, March 2026)
 
-Configuration: Population mode (3 generations, all CPU cores), 10K iterations,
-deterministic seed 42. Scale-tuned ALNS parameters (S22 profile matrix).
-Instance-adaptive construction (S24) active.
+Configuration: Population mode (3 generations, all CPU cores), scale-aware iteration
+caps (profile matrix), deterministic seed 42. Scale-tuned ALNS parameters (S22 profile
+matrix). Instance-adaptive construction (S24) active. Generation-aware SA reheat (S25)
+for LARGE/XLARGE scales.
 
 ### Solomon 100 (VRPTW, 56 instances, 5s time limit, single-thread)
 
@@ -85,22 +86,22 @@ S22 MEDIUM_TUNE parameters + S24 instance-adaptive construction:
 Avg runtime: 66.2s. 4 instances lexicographically non-worse than BKS.
 Wide-TW categories near-optimal: C2 +0.7%, R2 +1.7%, RC2 +1.2%.
 
-### Gehring-Homberger 400 (VRPTW, 60 instances, 60s, population)
+### Gehring-Homberger 400 (VRPTW, 60 instances, 120s, population)
 
-S22 LARGE_TUNE parameters + S24 instance-adaptive construction:
+S22 LARGE_TUNE + S24 instance-adaptive construction + S25 gen_reheat_ratio=2.0:
 
 | Category | Instances | BKS Veh Match | Avg Veh Gap | Avg Dist Gap |
 |----------|-----------|---------------|-------------|--------------|
-| C1_4 (clustered, tight) | 10 | 5/10 | +0.90 | +11.2% |
-| C2_4 (clustered, wide) | 10 | 2/10 | +0.80 | +6.9% |
-| R1_4 (random, tight) | 10 | 8/10 | +0.20 | +25.0% |
-| R2_4 (random, wide) | 10 | 10/10 | +0.00 | +7.0% |
-| RC1_4 (mixed, tight) | 10 | 2/10 | +0.90 | +19.5% |
-| RC2_4 (mixed, wide) | 10 | 5/10 | +0.70 | +4.9% |
-| **Overall** | **60** | **32/60 (53%)** | **+0.58** | **+12.4%** |
+| C1_4 (clustered, tight) | 10 | 5/10 | +1.10 | +9.6% |
+| C2_4 (clustered, wide) | 10 | 4/10 | +0.80 | +8.9% |
+| R1_4 (random, tight) | 10 | 10/10 | +0.00 | +27.4% |
+| R2_4 (random, wide) | 10 | 10/10 | +0.00 | +6.4% |
+| RC1_4 (mixed, tight) | 10 | 4/10 | +0.70 | +18.7% |
+| RC2_4 (mixed, wide) | 10 | 4/10 | +0.70 | +4.3% |
+| **Overall** | **60** | **37/60 (62%)** | **+0.50** | **+12.1%** |
 
-Avg runtime: 76s. C1 gained +2 vehicle matches vs S22; RC2 distance improved -7.6pp.
-R1 regressed -2 vehicle matches. Overall: -3 matches, -0.5pp distance vs S22.
+Avg runtime: 136s. S25 SA reheat (gen_reheat_ratio=2.0) gives R1 perfect 10/10 vehicle
+match (+2 vs S24). Overall: +5 matches vs S24, -0.3pp distance. R2 perfect at all scales.
 
 ### GH-400 Time Budget Analysis (selected C1/R1 instances)
 
@@ -157,7 +158,7 @@ Avg runtime: 215s.
 |-------|------|-----------|-------------|--------------|--------------|
 | Solomon 100 | 5s | 36/56 (64%) | +0.48 | +3.7% | FAST |
 | GH-200 | 60s | 53/60 (88%) | +0.12 | +6.6% | MEDIUM_TUNE |
-| GH-400 | 60s | 32/60 (53%) | +0.58 | +12.4% | LARGE_TUNE |
+| GH-400 | 120s | 37/60 (62%) | +0.50 | +12.1% | LARGE_TUNE + S25 reheat |
 | GH-800 | 120s | 25/60 (42%) | +1.55 | +17.0% | LARGE_TUNE |
 
 ## Historical Progression (GH-200)
@@ -179,6 +180,7 @@ Avg runtime: 215s.
 | S19 Heap | Mar 2026 | 33/60 (55%) | +18.6% | Lazy heap repair |
 | S22 Tuned | Mar 2026 | 35/60 (58%) | +12.9% | Scale-tuned ALNS params |
 | S24 Adaptive | Mar 2026 | 32/60 (53%) | +12.4% | Instance-adaptive construction |
+| S25 SA Reheat | Mar 2026 | 37/60 (62%) | +12.1% | Gen-aware SA reheat (2.0×), 120s budget |
 
 ## Instance-Adaptive Construction (S24)
 
@@ -233,5 +235,5 @@ type-2 with threshold 0.15.
 | Ejection chain timeout | Budget overruns | Fixed (SGBudgetProbe) |
 | SA temperature | Too hot for large instances | Tuned (S22 profile matrix) |
 | **10K iteration cap** | Solver converges before time limit | **Confirmed bottleneck** (50K shows +2v, -15pp) |
-| R1 local optima | Distance plateaus at +24-27% | Needs SA reheat / diversity injection |
+| R1 local optima | Distance plateaus at +24-27% | Improved (S25 gen reheat, +2 veh matches) |
 | Vehicle-first objective | 60s spent on vehicle elimination | Needs longer budgets + more iters |
