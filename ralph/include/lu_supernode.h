@@ -56,14 +56,19 @@ typedef struct {
     uint64_t skipped_update_calls;
     uint64_t compact_cols1_calls;
     uint64_t compact_cols1_rows_total;
+    double compact_cols1_ms;
     uint64_t compact_cols2_calls;
     uint64_t compact_cols2_rows_total;
+    double compact_cols2_ms;
     uint64_t compact_cols3_calls;
     uint64_t compact_cols3_rows_total;
+    double compact_cols3_ms;
     uint64_t compact_cols4_calls;
     uint64_t compact_cols4_rows_total;
+    double compact_cols4_ms;
     uint64_t compact_cols5p_calls;
     uint64_t compact_cols5p_rows_total;
+    double compact_cols5p_ms;
 } SNSupernodeWork;
 
 /* --- Phase 1: Elimination tree + supernode detection --- */

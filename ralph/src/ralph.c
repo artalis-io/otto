@@ -3354,14 +3354,19 @@ int ralph_core_get_last_lu_telemetry(const RalphModel *model, RalphLUTelemetry *
     RALPH_LU_TELEM_COPY(perf_sn_skipped_update_calls);
     RALPH_LU_TELEM_COPY(perf_sn_compact_cols1_calls);
     RALPH_LU_TELEM_COPY(perf_sn_compact_cols1_rows_total);
+    RALPH_LU_TELEM_COPY(perf_sn_compact_cols1_ms);
     RALPH_LU_TELEM_COPY(perf_sn_compact_cols2_calls);
     RALPH_LU_TELEM_COPY(perf_sn_compact_cols2_rows_total);
+    RALPH_LU_TELEM_COPY(perf_sn_compact_cols2_ms);
     RALPH_LU_TELEM_COPY(perf_sn_compact_cols3_calls);
     RALPH_LU_TELEM_COPY(perf_sn_compact_cols3_rows_total);
+    RALPH_LU_TELEM_COPY(perf_sn_compact_cols3_ms);
     RALPH_LU_TELEM_COPY(perf_sn_compact_cols4_calls);
     RALPH_LU_TELEM_COPY(perf_sn_compact_cols4_rows_total);
+    RALPH_LU_TELEM_COPY(perf_sn_compact_cols4_ms);
     RALPH_LU_TELEM_COPY(perf_sn_compact_cols5p_calls);
     RALPH_LU_TELEM_COPY(perf_sn_compact_cols5p_rows_total);
+    RALPH_LU_TELEM_COPY(perf_sn_compact_cols5p_ms);
 #undef RALPH_LU_TELEM_COPY
     return 0;
 }

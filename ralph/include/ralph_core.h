@@ -797,14 +797,19 @@ typedef struct {
     uint64_t perf_sn_skipped_update_calls;
     uint64_t perf_sn_compact_cols1_calls;
     uint64_t perf_sn_compact_cols1_rows_total;
+    double perf_sn_compact_cols1_ms;
     uint64_t perf_sn_compact_cols2_calls;
     uint64_t perf_sn_compact_cols2_rows_total;
+    double perf_sn_compact_cols2_ms;
     uint64_t perf_sn_compact_cols3_calls;
     uint64_t perf_sn_compact_cols3_rows_total;
+    double perf_sn_compact_cols3_ms;
     uint64_t perf_sn_compact_cols4_calls;
     uint64_t perf_sn_compact_cols4_rows_total;
+    double perf_sn_compact_cols4_ms;
     uint64_t perf_sn_compact_cols5p_calls;
     uint64_t perf_sn_compact_cols5p_rows_total;
+    double perf_sn_compact_cols5p_ms;
 } RalphLUTelemetry;
 
 /* Get LP solver telemetry snapshot from the most recent solve.

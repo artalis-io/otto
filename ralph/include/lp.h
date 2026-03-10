@@ -364,14 +364,19 @@ typedef struct {
     uint64_t perf_sn_skipped_update_calls;
     uint64_t perf_sn_compact_cols1_calls;
     uint64_t perf_sn_compact_cols1_rows_total;
+    double perf_sn_compact_cols1_ms;
     uint64_t perf_sn_compact_cols2_calls;
     uint64_t perf_sn_compact_cols2_rows_total;
+    double perf_sn_compact_cols2_ms;
     uint64_t perf_sn_compact_cols3_calls;
     uint64_t perf_sn_compact_cols3_rows_total;
+    double perf_sn_compact_cols3_ms;
     uint64_t perf_sn_compact_cols4_calls;
     uint64_t perf_sn_compact_cols4_rows_total;
+    double perf_sn_compact_cols4_ms;
     uint64_t perf_sn_compact_cols5p_calls;
     uint64_t perf_sn_compact_cols5p_rows_total;
+    double perf_sn_compact_cols5p_ms;
 } LUTelemetryState;
 
 /* LU factorization of basis matrix */
@@ -1557,14 +1562,19 @@ typedef struct {
     uint64_t perf_sn_skipped_update_calls;
     uint64_t perf_sn_compact_cols1_calls;
     uint64_t perf_sn_compact_cols1_rows_total;
+    double perf_sn_compact_cols1_ms;
     uint64_t perf_sn_compact_cols2_calls;
     uint64_t perf_sn_compact_cols2_rows_total;
+    double perf_sn_compact_cols2_ms;
     uint64_t perf_sn_compact_cols3_calls;
     uint64_t perf_sn_compact_cols3_rows_total;
+    double perf_sn_compact_cols3_ms;
     uint64_t perf_sn_compact_cols4_calls;
     uint64_t perf_sn_compact_cols4_rows_total;
+    double perf_sn_compact_cols4_ms;
     uint64_t perf_sn_compact_cols5p_calls;
     uint64_t perf_sn_compact_cols5p_rows_total;
+    double perf_sn_compact_cols5p_ms;
 } LUTelemetrySnapshot;
 
 typedef enum {
@@ -1994,13 +2004,18 @@ void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
                                         uint64_t skipped_update_calls,
                                         uint64_t compact_cols1_calls,
                                         uint64_t compact_cols1_rows_total,
+                                        double compact_cols1_ms,
                                         uint64_t compact_cols2_calls,
                                         uint64_t compact_cols2_rows_total,
+                                        double compact_cols2_ms,
                                         uint64_t compact_cols3_calls,
                                         uint64_t compact_cols3_rows_total,
+                                        double compact_cols3_ms,
                                         uint64_t compact_cols4_calls,
                                         uint64_t compact_cols4_rows_total,
+                                        double compact_cols4_ms,
                                         uint64_t compact_cols5p_calls,
-                                        uint64_t compact_cols5p_rows_total);
+                                        uint64_t compact_cols5p_rows_total,
+                                        double compact_cols5p_ms);
 
 #endif /* RALPH_LP_H */
