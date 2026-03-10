@@ -152,6 +152,31 @@ LARGE_TUNE parameters (no dedicated XLARGE tuning yet):
 
 Avg runtime: 215s.
 
+### GH-800 Extended Budget Probe (selected instances, 300s, S25 reheat)
+
+Testing S25 reheat=2.0 (baked in LARGE_TUNE) with 300s budget on one instance
+per category. Population mode, seed 42.
+
+| Instance | BKS | 120s (no reheat) | 300s (reheat=2.0) | Delta |
+|----------|-----|-------------------|---------------------|-------|
+| c1_8_1 | 80v / 25030 | +4v, ~+5% | **+0v, +0.7%** | -4 veh, -4.3pp |
+| c2_8_1 | 24v / 11662 | +1v, ~+5% | **+0v, +0.6%** | -1 veh, -4.7pp |
+| r1_8_1 | 80v / 36768 | +1v, ~+31% | +1v, +21.1% | -10.1pp |
+| r1_8_5 | 72v / 33529 | +0v, ~+43% | +0v, +45.7% | +2.7pp (plateau) |
+| rc1_8_1 | 72v / 30465 | +5v, ~+16% | +4v, +15.9% | -1 veh |
+| rc2_8_1 | 18v / 20981 | +3v, ~+4% | +3v, +4.9% | marginal |
+
+**Key findings:**
+
+1. **C1/C2 respond dramatically to reheat + budget.** c1_8_1 eliminates all 4
+   extra vehicles and lands within 0.7% of BKS distance. c2_8_1 also achieves
+   exact vehicle match. Ejection chain needs many ALNS cycles at 800 scale.
+
+2. **R1 mixed.** r1_8_1 improves -10pp but r1_8_5 plateaus (same local optima
+   pattern as GH-400 r1_4_10/r1_4_7).
+
+3. **RC categories need dedicated tuning.** Reheat alone doesn't help.
+
 ## Scaling Summary
 
 | Scale | Time | Veh Match | Avg Veh Gap | Avg Dist Gap | Tune Profile |
