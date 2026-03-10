@@ -720,8 +720,22 @@ int sn_factorize(double *A_struct, int m, int k,
         int sn_start = supernodes[s].start;
         int sn_size = supernodes[s].size;
         int panel_rows = m - sn_start;
+        int trailing_rows = m - (sn_start + sn_size);
+        int trailing_cols = k - (sn_start + sn_size);
+        unsigned char *row_active_orig = NULL;
+        unsigned char *col_active_local = NULL;
 
         if (panel_rows <= 0 || sn_size <= 0) continue;
+
+        if (trailing_rows > 0 && trailing_cols > 0) {
+            row_active_orig = (unsigned char *)calloc((size_t)m, sizeof(unsigned char));
+            col_active_local = (unsigned char *)calloc((size_t)trailing_cols, sizeof(unsigned char));
+            if (!row_active_orig || !col_active_local) {
+                free(row_active_orig);
+                free(col_active_local);
+                return -1;
+            }
+        }
 
         /* ---- Step 1: Block factor the panel ---- */
         /* The panel is A_struct[row_perm[sn_start..m-1], sn_start..sn_start+sn_size-1]
@@ -857,6 +871,7 @@ int sn_factorize(double *A_struct, int m, int k,
 
                 /* Store multiplier back in A_struct for GEMM extraction */
                 A_struct[(size_t)row_orig * k + step] = mult;
+                if (row_active_orig) row_active_orig[row_orig] = 1;
 
                 /* Store L multiplier */
                 SN_EMIT_L(row_orig, step, mult);
@@ -878,6 +893,9 @@ int sn_factorize(double *A_struct, int m, int k,
             for (int jj = sn_start + sn_size; jj < k; jj++) {
                 double val = A_struct[(size_t)piv_orig * k + jj];
                 if (fabs(val) > RALPH_ZERO_TOL) {
+                    if (col_active_local) {
+                        col_active_local[jj - (sn_start + sn_size)] = 1;
+                    }
                     SN_EMIT_U(step, jj, val);
                 }
             }
@@ -895,15 +913,14 @@ int sn_factorize(double *A_struct, int m, int k,
          * within the supernode. Columns right of the supernode still need the
          * rank-sn_size update. We do this as a GEMM.
          */
-        int trailing_rows = m - (sn_start + sn_size);
-        int trailing_cols = k - (sn_start + sn_size);
-
         if (trailing_rows > 0 && trailing_cols > 0) {
             int *active_rows = (int *)malloc((size_t)trailing_rows * sizeof(int));
             int *active_cols = (int *)malloc((size_t)trailing_cols * sizeof(int));
             if (!active_rows || !active_cols) {
                 free(active_rows);
                 free(active_cols);
+                free(row_active_orig);
+                free(col_active_local);
                 return -1;
             }
 
@@ -915,36 +932,22 @@ int sn_factorize(double *A_struct, int m, int k,
             int active_row_count = 0;
             for (int i = 0; i < trailing_rows; i++) {
                 int orig_row = row_perm[sn_start + sn_size + i];
-                int row_active = 0;
-                for (int j_local = 0; j_local < sn_size; j_local++) {
-                    if (stats) stats->active_row_scan_entries++;
-                    if (fabs(A_struct[(size_t)orig_row * k + (sn_start + j_local)]) > RALPH_ZERO_TOL) {
-                        row_active = 1;
-                        break;
-                    }
-                }
-                if (row_active) active_rows[active_row_count++] = i;
+                if (stats) stats->active_row_scan_entries++;
+                if (row_active_orig[orig_row]) active_rows[active_row_count++] = i;
             }
 
             int active_col_count = 0;
             for (int jj = 0; jj < trailing_cols; jj++) {
-                int col_active = 0;
-                int col = sn_start + sn_size + jj;
-                for (int j_local = 0; j_local < sn_size; j_local++) {
-                    int piv_orig = row_perm[sn_start + j_local];
-                    if (stats) stats->active_col_scan_entries++;
-                    if (fabs(A_struct[(size_t)piv_orig * k + col]) > RALPH_ZERO_TOL) {
-                        col_active = 1;
-                        break;
-                    }
-                }
-                if (col_active) active_cols[active_col_count++] = jj;
+                if (stats) stats->active_col_scan_entries++;
+                if (col_active_local[jj]) active_cols[active_col_count++] = jj;
             }
 
             if (active_row_count == 0 || active_col_count == 0) {
                 if (stats) stats->skipped_update_calls++;
                 free(active_rows);
                 free(active_cols);
+                free(row_active_orig);
+                free(col_active_local);
                 continue;
             }
 
@@ -1018,6 +1021,9 @@ int sn_factorize(double *A_struct, int m, int k,
             free(active_rows);
             free(active_cols);
         }
+
+        free(row_active_orig);
+        free(col_active_local);
     }
 
     #undef SN_EMIT_L

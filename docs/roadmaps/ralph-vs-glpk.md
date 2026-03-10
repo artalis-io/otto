@@ -934,6 +934,32 @@ Status:
       not the compact update arithmetic itself
     - next Week 1 supernode work should target exact active-row/active-column
       discovery reuse, not another Schur-update arithmetic tweak
+- `W1.2` eighth slice implemented
+  - replaced the Step 3 supernode active-row/active-column nested rescans with
+    exact activity marks that are populated during:
+    - Step 1 multiplier generation, keyed by original row id
+    - Step 2 trailing-column U emission, keyed by trailing-column offset
+  - Step 3 still reconstructs `active_rows` and `active_cols` in the original
+    ascending trailing order, so packed row/column construction semantics remain
+    aligned with the old path
+  - validation:
+    - `make -C ralph test-lu-supernode`
+    - `make -C ralph test-netlib-gate-small`
+    - `make -C ralph test-netlib-gate`
+  - measured effect:
+    - direct `pilot.mps`:
+      - Ralph total solve time: about `47.9s -> 25.4s`
+      - `total_supernode_numeric_ms`: about `19.9s -> 8.3s`
+      - `sn_active_row_scan_entries`: about `2.03B -> 1.72B`
+      - `sn_active_col_scan_entries`: about `2.03B -> 1.71B`
+    - isolated full NETLIB gate:
+      - timeout count stayed at `21`
+      - `fit2p.mps` remained solved and was back down to about `19.7s`
+  - result:
+    - this is the first supernode discovery reduction that stayed full-gate
+      baseline-clean
+    - pilot-family remains non-gating red, so the next Week 1 supernode work
+      still needs to reduce event cost further, but this slice is safe to keep
 - rejected during `W1.2`
   - stale or approximate `col_max` shortcuts and other behavior-adjacent
     Markowitz optimizations were tried and rolled back
