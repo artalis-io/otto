@@ -145,6 +145,9 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.perf_total_compact_solve_ms = 0.0;
     lu->telemetry.perf_sn_phase_samples = 0;
     lu->telemetry.perf_sn_panel_factor_ms = 0.0;
+    lu->telemetry.perf_sn_panel_pivot_search_ms = 0.0;
+    lu->telemetry.perf_sn_panel_swap_scatter_ms = 0.0;
+    lu->telemetry.perf_sn_panel_eliminate_ms = 0.0;
     lu->telemetry.perf_sn_u_emit_ms = 0.0;
     lu->telemetry.perf_sn_active_set_ms = 0.0;
     lu->telemetry.perf_sn_pack_blocks_ms = 0.0;
@@ -350,6 +353,9 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(perf_total_compact_solve_ms);
     COPY_LU_TELEM_FIELD(perf_sn_phase_samples);
     COPY_LU_TELEM_FIELD(perf_sn_panel_factor_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_swap_scatter_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_eliminate_ms);
     COPY_LU_TELEM_FIELD(perf_sn_u_emit_ms);
     COPY_LU_TELEM_FIELD(perf_sn_active_set_ms);
     COPY_LU_TELEM_FIELD(perf_sn_pack_blocks_ms);
@@ -461,6 +467,9 @@ void lp_telemetry_lu_add_mkz_colmax_work(LUFactorization *lu,
 void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
                                         uint64_t phase_samples,
                                         double panel_factor_ms,
+                                        double panel_pivot_search_ms,
+                                        double panel_swap_scatter_ms,
+                                        double panel_eliminate_ms,
                                         double u_emit_ms,
                                         double active_set_ms,
                                         double pack_blocks_ms,
@@ -497,6 +506,9 @@ void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
     if (!lu_telemetry_enabled(lu)) return;
     lu->telemetry.perf_sn_phase_samples += phase_samples;
     lu->telemetry.perf_sn_panel_factor_ms += panel_factor_ms;
+    lu->telemetry.perf_sn_panel_pivot_search_ms += panel_pivot_search_ms;
+    lu->telemetry.perf_sn_panel_swap_scatter_ms += panel_swap_scatter_ms;
+    lu->telemetry.perf_sn_panel_eliminate_ms += panel_eliminate_ms;
     lu->telemetry.perf_sn_u_emit_ms += u_emit_ms;
     lu->telemetry.perf_sn_active_set_ms += active_set_ms;
     lu->telemetry.perf_sn_pack_blocks_ms += pack_blocks_ms;

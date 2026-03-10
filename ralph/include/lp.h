@@ -351,6 +351,9 @@ typedef struct {
     double perf_total_compact_solve_ms;
     uint64_t perf_sn_phase_samples;
     double perf_sn_panel_factor_ms;
+    double perf_sn_panel_pivot_search_ms;
+    double perf_sn_panel_swap_scatter_ms;
+    double perf_sn_panel_eliminate_ms;
     double perf_sn_u_emit_ms;
     double perf_sn_active_set_ms;
     double perf_sn_pack_blocks_ms;
@@ -1556,6 +1559,9 @@ typedef struct {
     double perf_total_compact_solve_ms;
     uint64_t perf_sn_phase_samples;
     double perf_sn_panel_factor_ms;
+    double perf_sn_panel_pivot_search_ms;
+    double perf_sn_panel_swap_scatter_ms;
+    double perf_sn_panel_eliminate_ms;
     double perf_sn_u_emit_ms;
     double perf_sn_active_set_ms;
     double perf_sn_pack_blocks_ms;
@@ -2005,6 +2011,9 @@ void lp_telemetry_lu_add_mkz_colmax_work(LUFactorization *lu,
 void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
                                         uint64_t phase_samples,
                                         double panel_factor_ms,
+                                        double panel_pivot_search_ms,
+                                        double panel_swap_scatter_ms,
+                                        double panel_eliminate_ms,
                                         double u_emit_ms,
                                         double active_set_ms,
                                         double pack_blocks_ms,

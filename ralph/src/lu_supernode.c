@@ -791,6 +791,7 @@ int sn_factorize(double *A_struct, int m, int k,
         if (sample_phase_timing) t_phase_ms = lp_telemetry_timer_start();
         for (int j_local = 0; j_local < sn_size; j_local++) {
             int step = sn_start + j_local;
+            double t_panel_part_ms = 0.0;
 
             /* Prefer non-reserved rows, but allow reserved rows when they are
              * materially stronger pivots (numerical safety). */
@@ -799,6 +800,7 @@ int sn_factorize(double *A_struct, int m, int k,
             int alt_row = -1;
             double alt_val = 0.0;
 
+            if (sample_phase_timing) t_panel_part_ms = lp_telemetry_timer_start();
             for (int i = step; i < m; i++) {
                 int orig_row = row_perm[i];
                 double val = fabs(A_struct[(size_t)orig_row * k + step]);
@@ -855,6 +857,11 @@ int sn_factorize(double *A_struct, int m, int k,
                 }
 
                 if (can_regularize) {
+                    if (sample_phase_timing) {
+                        stats->panel_pivot_search_ms +=
+                            lp_telemetry_timer_elapsed_ms(t_panel_part_ms);
+                        t_panel_part_ms = lp_telemetry_timer_start();
+                    }
                     if (num_regularized) (*num_regularized)++;
                     if (pivot_row != step) {
                         int a = row_perm[step], b = row_perm[pivot_row];
@@ -865,22 +872,35 @@ int sn_factorize(double *A_struct, int m, int k,
                     int piv_orig = row_perm[step];
                     A_struct[(size_t)piv_orig * k + step] = 1.0;
                     max_val = 1.0;
+                    if (sample_phase_timing) {
+                        stats->panel_swap_scatter_ms +=
+                            lp_telemetry_timer_elapsed_ms(t_panel_part_ms);
+                    }
                 } else {
                     rc = -1; /* Singular, fall back */
                     goto cleanup;
                 }
+            } else if (sample_phase_timing) {
+                stats->panel_pivot_search_ms +=
+                    lp_telemetry_timer_elapsed_ms(t_panel_part_ms);
             }
 
             /* Swap rows */
             if (pivot_row != step) {
+                if (sample_phase_timing) t_panel_part_ms = lp_telemetry_timer_start();
                 int a = row_perm[step], b = row_perm[pivot_row];
                 row_perm[step] = b; row_perm[pivot_row] = a;
                 row_pos[b] = step; row_pos[a] = pivot_row;
+                if (sample_phase_timing) {
+                    stats->panel_swap_scatter_ms +=
+                        lp_telemetry_timer_elapsed_ms(t_panel_part_ms);
+                }
             }
 
             int piv_orig = row_perm[step];
             double pivot_val = A_struct[(size_t)piv_orig * k + step];
 
+            if (sample_phase_timing) t_panel_part_ms = lp_telemetry_timer_start();
             /* Store L diagonal */
             SN_EMIT_L(piv_orig, step, 1.0);
 
@@ -915,6 +935,10 @@ int sn_factorize(double *A_struct, int m, int k,
                 for (int jj = step + 1; jj < sn_start + sn_size; jj++) {
                     A_struct[(size_t)row_orig * k + jj] -= mult * A_struct[(size_t)piv_orig * k + jj];
                 }
+            }
+            if (sample_phase_timing) {
+                stats->panel_eliminate_ms +=
+                    lp_telemetry_timer_elapsed_ms(t_panel_part_ms);
             }
         }
         if (sample_phase_timing) stats->panel_factor_ms += lp_telemetry_timer_elapsed_ms(t_phase_ms);

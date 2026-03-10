@@ -592,6 +592,9 @@ typedef struct {
     double lu_total_compact_solve_ms;
     uint64_t lu_sn_phase_samples;
     double lu_sn_panel_factor_ms;
+    double lu_sn_panel_pivot_search_ms;
+    double lu_sn_panel_swap_scatter_ms;
+    double lu_sn_panel_eliminate_ms;
     double lu_sn_u_emit_ms;
     double lu_sn_active_set_ms;
     double lu_sn_pack_blocks_ms;
@@ -1628,6 +1631,12 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                     lu_tel.perf_sn_phase_samples;
                 result.lu_sn_panel_factor_ms =
                     lu_tel.perf_sn_panel_factor_ms;
+                result.lu_sn_panel_pivot_search_ms =
+                    lu_tel.perf_sn_panel_pivot_search_ms;
+                result.lu_sn_panel_swap_scatter_ms =
+                    lu_tel.perf_sn_panel_swap_scatter_ms;
+                result.lu_sn_panel_eliminate_ms =
+                    lu_tel.perf_sn_panel_eliminate_ms;
                 result.lu_sn_u_emit_ms =
                     lu_tel.perf_sn_u_emit_ms;
                 result.lu_sn_active_set_ms =
@@ -3337,6 +3346,12 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_sn_phase_samples);
     fprintf(out, "    \"sn_panel_factor_ms\": %.6f,\n",
             ralph->lu_sn_panel_factor_ms);
+    fprintf(out, "    \"sn_panel_pivot_search_ms\": %.6f,\n",
+            ralph->lu_sn_panel_pivot_search_ms);
+    fprintf(out, "    \"sn_panel_swap_scatter_ms\": %.6f,\n",
+            ralph->lu_sn_panel_swap_scatter_ms);
+    fprintf(out, "    \"sn_panel_eliminate_ms\": %.6f,\n",
+            ralph->lu_sn_panel_eliminate_ms);
     fprintf(out, "    \"sn_u_emit_ms\": %.6f,\n",
             ralph->lu_sn_u_emit_ms);
     fprintf(out, "    \"sn_active_set_ms\": %.6f,\n",

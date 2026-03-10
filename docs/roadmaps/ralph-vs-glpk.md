@@ -1041,6 +1041,32 @@ Status:
   - result:
     - the next supernode Week 1 target should be panel factorization and
       active-set discovery, not another compact-update specialization
+- `W1.2` twelfth slice implemented
+  - split sampled supernode panel timing into:
+    - pivot search
+    - row swap/scatter
+    - in-panel elimination/update
+  - kept this in the same sampled diagnostic lane as the phase timing slice,
+    so it does not perturb the supernode cost gate
+  - validation:
+    - `make -C ralph test-lp-telemetry-lu`
+    - `make -C ralph test-lu-supernode`
+    - `make -C ralph test-netlib-gate-small`
+  - measured effect:
+    - direct `pilot.mps` sampled panel split:
+      - `sn_phase_samples`: `33`
+      - `sn_panel_factor_ms`: `77.390`
+      - `sn_panel_pivot_search_ms`: `47.225`
+      - `sn_panel_swap_scatter_ms`: `0.184`
+      - `sn_panel_eliminate_ms`: `26.247`
+      - `sn_u_emit_ms`: `16.889`
+      - `sn_active_set_ms`: `28.542`
+      - `total_supernode_numeric_ms`: `7974.686`
+  - result:
+    - sampled panel factor is not the dominant remaining pilot-family cost by
+      itself
+    - inside panel factor, pivot search is the only material subphase
+    - row swap/scatter is negligible, so it should not be a Week 1 target
 - rejected during `W1.2`
   - stale or approximate `col_max` shortcuts and other behavior-adjacent
     Markowitz optimizations were tried and rolled back
