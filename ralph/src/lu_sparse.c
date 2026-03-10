@@ -4056,7 +4056,17 @@ supernode_factorization:
                         sn_work_stats.compact_triplets_total,
                         sn_work_stats.full_update_calls,
                         sn_work_stats.compact_update_calls,
-                        sn_work_stats.skipped_update_calls);
+                        sn_work_stats.skipped_update_calls,
+                        sn_work_stats.compact_cols1_calls,
+                        sn_work_stats.compact_cols1_rows_total,
+                        sn_work_stats.compact_cols2_calls,
+                        sn_work_stats.compact_cols2_rows_total,
+                        sn_work_stats.compact_cols3_calls,
+                        sn_work_stats.compact_cols3_rows_total,
+                        sn_work_stats.compact_cols4_calls,
+                        sn_work_stats.compact_cols4_rows_total,
+                        sn_work_stats.compact_cols5p_calls,
+                        sn_work_stats.compact_cols5p_rows_total);
                 }
                 if (rc == 0) {
                     lu->sn_successes++;

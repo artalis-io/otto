@@ -986,6 +986,28 @@ Status:
   - result:
     - this is a safe per-call cost reduction for the supernode compact path
     - it does not change numeric ordering or packed active-set semantics
+- `W1.2` tenth slice implemented
+  - added exact compact-update shape telemetry for supernode numeric work:
+    - compact calls with active trailing columns `1`, `2`, `3`, `4`, and `5+`
+    - total active rows seen in each bucket
+  - exported through LU telemetry and benchmark JSON
+  - validation:
+    - `make -C ralph test-lp-telemetry-lu`
+    - `make -C ralph test-lu-supernode`
+    - `make -C ralph test-netlib-gate-small`
+  - measured effect:
+    - direct `pilot.mps` shape sample:
+      - `sn_compact_update_calls`: `230691`
+      - `sn_compact_cols1_calls`: `63407`
+      - `sn_compact_cols2_calls`: `42814`
+      - `sn_compact_cols3_calls`: `18008`
+      - `sn_compact_cols4_calls`: `24933`
+      - `sn_compact_cols5p_calls`: `81529`
+    - among exact compact-column shapes, `1` active trailing column is the
+      dominant bucket on `pilot.mps`
+  - result:
+    - the next exact supernode specialization should target compact
+      single-column updates first, not another broad compact-kernel rewrite
 - rejected during `W1.2`
   - stale or approximate `col_max` shortcuts and other behavior-adjacent
     Markowitz optimizations were tried and rolled back

@@ -1032,7 +1032,25 @@ int sn_factorize(double *A_struct, int m, int k,
                                                sn_start + sn_size,
                                                sn_start + sn_size);
             } else {
-                if (stats) stats->compact_update_calls++;
+                if (stats) {
+                    stats->compact_update_calls++;
+                    if (active_col_count == 1) {
+                        stats->compact_cols1_calls++;
+                        stats->compact_cols1_rows_total += (uint64_t)active_row_count;
+                    } else if (active_col_count == 2) {
+                        stats->compact_cols2_calls++;
+                        stats->compact_cols2_rows_total += (uint64_t)active_row_count;
+                    } else if (active_col_count == 3) {
+                        stats->compact_cols3_calls++;
+                        stats->compact_cols3_rows_total += (uint64_t)active_row_count;
+                    } else if (active_col_count == 4) {
+                        stats->compact_cols4_calls++;
+                        stats->compact_cols4_rows_total += (uint64_t)active_row_count;
+                    } else {
+                        stats->compact_cols5p_calls++;
+                        stats->compact_cols5p_rows_total += (uint64_t)active_row_count;
+                    }
+                }
                 sn_dgemm_update_scattered_rows_cols(active_row_count, sn_size, active_col_count,
                                                     L_block, sn_size,
                                                     U_block, active_col_count,
