@@ -698,6 +698,74 @@ static void test_sn_factorize_compact_cols1_tracking(void) {
     free(Ur); free(Uc); free(Uv);
 }
 
+static void test_sn_factorize_reserved_pivot_choice(void) {
+    printf("  Phase 3: supernodal reserved pivot choice...\n");
+
+    int m = 3, k = 1;
+    double A[3] = {
+        10.0,
+        2.0,
+        0.5
+    };
+    int row_perm[3] = {0, 1, 2};
+    int row_pos[3] = {0, 1, 2};
+    int row_reserved[3] = {1, 0, 0};
+    Supernode supernodes[1] = {{0, 1}};
+
+    int cap = 16;
+    int Lr[16], Lc[16], Ur[16], Uc[16];
+    double Lv[16], Uv[16];
+    int Lnnz = 0, Unnz = 0;
+
+    int rc = sn_factorize(A, m, k, row_perm, row_pos, 1e-10, row_reserved,
+                          supernodes, 1,
+                          NULL, 0, 0, 0, NULL,
+                          Lr, Lc, Lv, &Lnnz, cap,
+                          Ur, Uc, Uv, &Unnz, cap,
+                          NULL, 0, NULL);
+    ASSERT_INT_EQ(rc, 0, "sn reserved pivot: return code");
+    if (rc == 0) {
+        ASSERT_INT_EQ(row_perm[0], 1,
+                      "sn reserved pivot: non-reserved pivot chosen within ratio");
+    }
+}
+
+static void test_sn_factorize_redundant_regularization_choice(void) {
+    printf("  Phase 3: supernodal redundant regularization choice...\n");
+
+    int m = 3, k = 1;
+    double A[3] = {
+        1e-12,
+        1e-13,
+        0.0
+    };
+    int row_perm[3] = {0, 1, 2};
+    int row_pos[3] = {0, 1, 2};
+    int row_reserved[3] = {1, 0, 0};
+    int redundant_rows[3] = {0, 0, 1};
+    int num_regularized = 0;
+    Supernode supernodes[1] = {{0, 1}};
+
+    int cap = 16;
+    int Lr[16], Lc[16], Ur[16], Uc[16];
+    double Lv[16], Uv[16];
+    int Lnnz = 0, Unnz = 0;
+
+    int rc = sn_factorize(A, m, k, row_perm, row_pos, 1e-9, row_reserved,
+                          supernodes, 1,
+                          redundant_rows, 1, 1, 8, &num_regularized,
+                          Lr, Lc, Lv, &Lnnz, cap,
+                          Ur, Uc, Uv, &Unnz, cap,
+                          NULL, 0, NULL);
+    ASSERT_INT_EQ(rc, 0, "sn redundant regularize: return code");
+    if (rc == 0) {
+        ASSERT_INT_EQ(row_perm[0], 2,
+                      "sn redundant regularize: first non-reserved redundant row chosen");
+        ASSERT_INT_EQ(num_regularized, 1,
+                      "sn redundant regularize: regularization counted");
+    }
+}
+
 /* ============================================================================
  * Phase 4 Tests: Integration (A/B comparison with existing path)
  * ============================================================================ */
@@ -832,6 +900,8 @@ int main(void) {
     test_sn_factorize_random();
     test_sn_factorize_stats_tracking();
     test_sn_factorize_compact_cols1_tracking();
+    test_sn_factorize_reserved_pivot_choice();
+    test_sn_factorize_redundant_regularization_choice();
 
     printf("\nPhase 4: Integration (A/B Comparison)\n");
     test_integration_small_lp();
