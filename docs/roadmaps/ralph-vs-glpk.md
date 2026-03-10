@@ -960,6 +960,32 @@ Status:
       baseline-clean
     - pilot-family remains non-gating red, so the next Week 1 supernode work
       still needs to reduce event cost further, but this slice is safe to keep
+- `W1.2` ninth slice implemented
+  - removed per-supernode helper allocation/zero-fill churn from
+    `ralph/src/lu_supernode.c`
+  - the supernode numeric path now allocates:
+    - `row_active_orig`
+    - `col_active_local`
+    - `touched_rows`
+    - `touched_cols`
+    - `active_rows`
+    - `active_cols`
+    once per factorization
+  - each supernode clears only the touched row/column marks, while keeping the
+    same final trailing-row/trailing-column reconstruction semantics
+  - validation:
+    - `make -C ralph test-lu-supernode`
+    - `make -C ralph test-netlib-gate-small`
+    - `make -C ralph test-netlib-gate`
+  - measured effect:
+    - direct `pilot.mps` stayed in the current improved band at about `25.2s`
+    - isolated full NETLIB gate:
+      - timeout count stayed at `21`
+      - `fit2p.mps` stayed solved and improved to about `17.7s`
+      - `0` dense fallback files
+  - result:
+    - this is a safe per-call cost reduction for the supernode compact path
+    - it does not change numeric ordering or packed active-set semantics
 - rejected during `W1.2`
   - stale or approximate `col_max` shortcuts and other behavior-adjacent
     Markowitz optimizations were tried and rolled back
