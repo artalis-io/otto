@@ -78,7 +78,7 @@ typedef struct {
 #define SG_DEPOT_CAPACITY_PENALTY 50000.0
 #define SG_ROUTE_MAX_REGRET_K 4
 #define SG_ROUTE_MAX_INTENSIFY_PASSES 8
-#define SG_ROUTE_MAX_INTENSIFY_PASSES_LARGE 3
+#define SG_ROUTE_MAX_INTENSIFY_PASSES_LARGE 6
 #define SG_EJECTION_MAX_DEPTH 5
 #define SG_EJECTION_BUDGET 50000
 #define SG_EJECTION_BUDGET_CAP 500000
@@ -1139,6 +1139,8 @@ ARStatus sg_route_destroy_string_split(void *op_ctx, void *solution, int count,
                                         uint32_t *removed_ids, int *removed_count);
 ARStatus sg_route_destroy_vehicle_worst_cost(void *op_ctx, void *solution, int count,
                                               uint32_t *removed_ids, int *removed_count);
+ARStatus sg_route_destroy_zone_ruin(void *op_ctx, void *solution, int count,
+                                     uint32_t *removed_ids, int *removed_count);
 
 /* sg_repair.c */
 ARStatus sg_reinsert_removed_requests(SGBootstrapSolution *sol,

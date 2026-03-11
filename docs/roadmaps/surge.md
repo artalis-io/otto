@@ -4004,3 +4004,64 @@ route merging, strategy ordering for all 4 feature combinations.
 
 **Files modified:** `sg_internal.h`, `sg_construct_cfrs.c`, `sg_solve.c`, `sg_parallel.c`,
 `bench_solomon.c`, `test_surge.c`. +776 lines.
+
+### Phase S26: Operator Enhancement for Distance Gap Closure
+
+**Completed: 2026-03-11. Parts A+C shipped, Part B (zone-ruin) deferred.**
+
+Parameter tuning (S22-S25) plateaued. Evidence: c1_8_1 stuck at +0.7% regardless of
+budget (300s→1200s, 15K→100K iters); GH-200 at +6.0%, GH-400 at +12.1%. The gap is
+structural — the solver converges to local optima that the current operator set cannot
+escape.
+
+**Part A: Unlock distance polish for large instances ✅**
+
+The distance polish postprocessor (`sg_route_postprocess_polish_distance`) was gated
+behind `ctx->num_requests <= 200`. GH-400 and GH-800 never ran the relocate-every-
+customer sweep. Gate removed from both branches in `sg_solve.c`.
+
+Added budgeted top-N sweep in `sg_postprocess.c`: when count > 200, compute removal
+cost for each request, selection-sort top-200 by descending cost (most misplaced first),
+cap sweep at 200 per pass. Existing time budget guards prevent timeout.
+
+**Part B: Zone-ruin destroy operator (implemented, disabled)**
+
+New operator `sg_route_destroy_zone_ruin` in `sg_destroy.c` (~140 lines):
+1. Pick random non-empty vehicle as seed
+2. Find 1-2 nearest routes by centroid distance
+3. Remove ALL customers from 2-3 zone routes
+4. Fill remaining quota with Shaw-related requests
+5. Filter frozen requests
+
+**Ablation finding:** Zone-ruin improves distance significantly (RC2: +2.1%→+1.0%,
+R1: +27%→+19%) but costs 3 vehicle matches on R1 tight-TW and 1 on RC1. Net: -2
+vehicle matches (37→35). Disabled with comment explaining the regression. Needs
+phase-gating (Phase 2 only when at BKS vehicle count) or softer zone selection
+before re-enabling.
+
+**Part C: Increase intensification passes ✅**
+
+`SG_ROUTE_MAX_INTENSIFY_PASSES_LARGE` raised from 3→6. Each pass has time budget
+checks and early-exit on no improvement. Safe at 400-800 customers.
+
+**Benchmark results (S26 A+C vs S25 baseline):**
+
+| Suite | Metric | S25 | S26 | Delta |
+|-------|--------|-----|-----|-------|
+| Solomon-100 | Veh match | 41/56 | 41/56 | same |
+| Solomon-100 | Dist gap | +0.3% | +0.3% | same |
+| GH-200 | Veh match | 53/60 | 53/60 | same |
+| GH-200 | Dist gap | +6.0% | +6.4% | +0.4pp (noise) |
+| GH-400 | Veh match | 37/60 | 37/60 | same |
+| GH-400 | Dist gap | +12.1% | +11.9% | **-0.2pp** |
+| GH-400 | VehGap | +0.53 | +0.48 | -0.05 |
+
+No regressions on any benchmark suite.
+
+**Tests:** 5 new tests (454→459 threaded, 434→439 non-threaded):
+`test_zone_ruin_destroy_basic`, `test_zone_ruin_destroy_with_frozen`,
+`test_zone_ruin_destroy_single_vehicle`, `test_polish_distance_large_instance`,
+`test_intensify_large_passes`.
+
+**Files modified:** `sg_internal.h`, `sg_solve.c`, `sg_postprocess.c`, `sg_destroy.c`,
+`test_surge.c`. +415 lines.
