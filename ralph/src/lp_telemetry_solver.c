@@ -191,6 +191,13 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_failed_stabilize_events = 0;
     solver->telemetry.perf_phase1_failed_stabilize_same_entering_repeats = 0;
     solver->telemetry.perf_phase1_failed_stabilize_same_entering_max_streak = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_penalty_arms = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_found = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_penalty_no_alt = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_stabilized = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_failed = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_repeats = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_max_streak = 0;
 
     solver->telemetry.perf_phase2_pricing_ms = 0.0;
     solver->telemetry.perf_phase2_ratio_ms = 0.0;
@@ -637,6 +644,13 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_events);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_same_entering_repeats);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_same_entering_max_streak);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_penalty_arms);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_penalty_alt_found);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_penalty_no_alt);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_penalty_alt_stabilized);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_penalty_alt_failed);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_penalty_same_alt_repeats);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_penalty_same_alt_max_streak);
 
     COPY_SOLVER_FIELD(perf_phase2_pricing_ms);
     COPY_SOLVER_FIELD(perf_phase2_ratio_ms);

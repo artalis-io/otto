@@ -627,6 +627,13 @@ typedef struct {
     int perf_phase1_failed_stabilize_events;
     int perf_phase1_failed_stabilize_same_entering_repeats;
     int perf_phase1_failed_stabilize_same_entering_max_streak;
+    int perf_phase1_failed_stabilize_retry_penalty_arms;
+    int perf_phase1_failed_stabilize_retry_penalty_alt_found;
+    int perf_phase1_failed_stabilize_retry_penalty_no_alt;
+    int perf_phase1_failed_stabilize_retry_penalty_alt_stabilized;
+    int perf_phase1_failed_stabilize_retry_penalty_alt_failed;
+    int perf_phase1_failed_stabilize_retry_penalty_same_alt_repeats;
+    int perf_phase1_failed_stabilize_retry_penalty_same_alt_max_streak;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
