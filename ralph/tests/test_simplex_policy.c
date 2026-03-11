@@ -108,6 +108,10 @@ int simplex_phase1_direct_dual_rescue_guard_plan_for_test(
     int rescue_fail_streak);
 int simplex_phase1_dir_skip_rescue_cadence_plan_for_test(
     int dir_skip_event_streak);
+int simplex_phase1_failed_stabilize_retry_penalty_plan_for_test(
+    int entering,
+    int last_failed_entering,
+    int same_entering_streak);
 
 int simplex_phase1_force_pivot_mode_plan_for_test(int m,
                                                    int degenerate_count,
@@ -675,6 +679,14 @@ typedef struct {
 
 typedef struct {
     const char *name;
+    int entering;
+    int last_failed_entering;
+    int same_entering_streak;
+    int expected_penalize;
+} FailedStabilizeRetryPenaltyCase;
+
+typedef struct {
+    const char *name;
     int m;
     int degenerate_count;
     int queue_force_pending;
@@ -1067,6 +1079,21 @@ static int run_dir_skip_rescue_cadence_case(const DirSkipRescueCadenceCase *tc) 
     if (due != tc->expected_due) {
         fprintf(stderr, "FAIL: %s (expected due=%d got=%d)\n",
                 tc->name, tc->expected_due, due);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_failed_stabilize_retry_penalty_case(
+    const FailedStabilizeRetryPenaltyCase *tc) {
+    int penalize = simplex_phase1_failed_stabilize_retry_penalty_plan_for_test(
+        tc->entering,
+        tc->last_failed_entering,
+        tc->same_entering_streak);
+    if (penalize != tc->expected_penalize) {
+        fprintf(stderr, "FAIL: %s (expected penalize=%d got=%d)\n",
+                tc->name, tc->expected_penalize, penalize);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -2238,6 +2265,37 @@ int main(void) {
             .expected_due = 0
         }
     };
+    const FailedStabilizeRetryPenaltyCase
+        failed_stabilize_retry_penalty_cases[] = {
+            {
+                .name = "failed-stabilize retry penalty stays off below streak trigger",
+                .entering = 17,
+                .last_failed_entering = 17,
+                .same_entering_streak = 1,
+                .expected_penalize = 0
+            },
+            {
+                .name = "failed-stabilize retry penalty stays off for different entering",
+                .entering = 17,
+                .last_failed_entering = 12,
+                .same_entering_streak = 5,
+                .expected_penalize = 0
+            },
+            {
+                .name = "failed-stabilize retry penalty arms at repeated same entering threshold",
+                .entering = 17,
+                .last_failed_entering = 17,
+                .same_entering_streak = 2,
+                .expected_penalize = 1
+            },
+            {
+                .name = "failed-stabilize retry penalty ignores invalid entering",
+                .entering = -1,
+                .last_failed_entering = 17,
+                .same_entering_streak = 8,
+                .expected_penalize = 0
+            }
+        };
     const ForcePivotModeCase force_pivot_mode_cases[] = {
         {
             .name = "force-pivot mode activates after repeated dir-skip no-recompute",
@@ -2870,6 +2928,9 @@ int main(void) {
     int total_no_pivot_ladder_guard = (int)(sizeof(no_pivot_ladder_guard_cases) / sizeof(no_pivot_ladder_guard_cases[0]));
     int total_direct_dual_rescue_guard = (int)(sizeof(direct_dual_rescue_guard_cases) / sizeof(direct_dual_rescue_guard_cases[0]));
     int total_dir_skip_rescue_cadence = (int)(sizeof(dir_skip_rescue_cadence_cases) / sizeof(dir_skip_rescue_cadence_cases[0]));
+    int total_failed_stabilize_retry_penalty =
+        (int)(sizeof(failed_stabilize_retry_penalty_cases) /
+              sizeof(failed_stabilize_retry_penalty_cases[0]));
     int total_force_pivot_mode = (int)(sizeof(force_pivot_mode_cases) / sizeof(force_pivot_mode_cases[0]));
     int total_dir_escape_gate =
         (int)(sizeof(dir_stabilize_escape_gate_cases) /
@@ -2904,6 +2965,7 @@ int main(void) {
                 total_no_pivot_ladder_guard +
                 total_direct_dual_rescue_guard +
                 total_dir_skip_rescue_cadence +
+                total_failed_stabilize_retry_penalty +
                 total_force_pivot_mode +
                 total_dir_escape_gate +
                 total_force_pivot_relax +
@@ -2964,6 +3026,10 @@ int main(void) {
     }
     for (int i = 0; i < total_dir_skip_rescue_cadence; i++) {
         pass += run_dir_skip_rescue_cadence_case(&dir_skip_rescue_cadence_cases[i]);
+    }
+    for (int i = 0; i < total_failed_stabilize_retry_penalty; i++) {
+        pass += run_failed_stabilize_retry_penalty_case(
+            &failed_stabilize_retry_penalty_cases[i]);
     }
     for (int i = 0; i < total_force_pivot_mode; i++) {
         pass += run_force_pivot_mode_case(&force_pivot_mode_cases[i]);

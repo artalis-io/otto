@@ -37,6 +37,9 @@ static void phase1_recompute_full_with_reason(SimplexSolver *solver,
                                               int *rc_only_streak,
                                               LPPhase1RecomputeReason reason);
 static void primal_remove_perturbation(SimplexTableau *tab);
+static int phase1_failed_stabilize_retry_penalty_plan(int entering,
+                                                      int last_failed_entering,
+                                                      int same_entering_streak);
 
 /* Phase-1 pivot-failure reasons used by deterministic tracing. */
 enum {
@@ -95,6 +98,7 @@ static int phase1_trace_reason_from_lu_failure(int lu_reason, int forced_refacto
 #define PHASE1_RC_ONLY_STREAK_GUARD 6
 #define PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_TRIGGER 2
 #define PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_ITERS RALPH_PHASE1_ENTERING_EXCLUDE_ITERS
+#define PHASE1_FAILED_STABILIZE_RETRY_PENALTY_TRIGGER 2
 #define PHASE1_AUTO_DANTZIG_MIN_M 700
 #define PHASE1_AUTO_DANTZIG_MAX_M 1200
 #define PHASE1_AUTO_DANTZIG_DEGEN_TRIGGER 20
@@ -1696,6 +1700,14 @@ int simplex_phase1_dir_skip_rescue_cadence_plan_for_test(
     int dir_skip_event_streak) {
     return lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(
         dir_skip_event_streak);
+}
+
+int simplex_phase1_failed_stabilize_retry_penalty_plan_for_test(
+    int entering,
+    int last_failed_entering,
+    int same_entering_streak) {
+    return phase1_failed_stabilize_retry_penalty_plan(
+        entering, last_failed_entering, same_entering_streak);
 }
 
 int simplex_phase1_force_pivot_mode_plan_for_test(int m,
@@ -4274,6 +4286,16 @@ static void phase1_note_failed_stabilize_entering(SimplexSolver *solver,
     *same_entering_streak = streak;
     lp_telemetry_record_phase1_failed_stabilize_entering(
         solver, same_entering, streak);
+}
+
+static int phase1_failed_stabilize_retry_penalty_plan(int entering,
+                                                      int last_failed_entering,
+                                                      int same_entering_streak) {
+    if (entering < 0) return 0;
+    if (same_entering_streak < PHASE1_FAILED_STABILIZE_RETRY_PENALTY_TRIGGER) {
+        return 0;
+    }
+    return (entering == last_failed_entering);
 }
 
 static void phase1_pivot_fail_recovery_maybe_exclude_entering(
@@ -7314,6 +7336,12 @@ static int simplex_phase1(SimplexSolver *solver) {
             }
             int stabilized = 0;
             int original_entering = entering;
+            int retry_penalize_original =
+                phase1_failed_stabilize_retry_penalty_plan(
+                    original_entering,
+                    phase1_last_failed_stabilize_entering,
+                    phase1_failed_stabilize_same_entering_streak);
+            int retry_consumed_alternate = 0;
             for (int stab_try = 0; stab_try < 1; stab_try++) {
                 int dir_refactor_trigger = 0;
                 if (force_dir_refactor_extreme) {
@@ -7332,6 +7360,19 @@ static int simplex_phase1(SimplexSolver *solver) {
                     break;
                 }
                 dir_stabilize_cooldown = dir_stabilize_cooldown_target;
+                if (retry_penalize_original) {
+                    int retry_entering = -1;
+                    if (pricing_bland_excluding(tab, original_entering, &retry_entering) == 0) {
+                        if (solver->verbose >= 2) {
+                            LP_LOG_STDERR("[simplex_phase1] Penalizing repeated failed-stabilize entering %d, trying alternate %d inside dir-stabilize retry\n",
+                                    original_entering, retry_entering);
+                        }
+                        entering = retry_entering;
+                        retry_consumed_alternate = 1;
+                    } else {
+                        retry_penalize_original = 0;
+                    }
+                }
                 ratio_status = primal_ratio_test_with_policy(solver,
                                                              tab,
                                                              0,
@@ -7359,6 +7400,9 @@ static int simplex_phase1(SimplexSolver *solver) {
                     break;
                 }
 
+                if (retry_consumed_alternate) {
+                    break;
+                }
                 if (pricing_bland_excluding(tab, original_entering, &entering) != 0) {
                     break;
                 }

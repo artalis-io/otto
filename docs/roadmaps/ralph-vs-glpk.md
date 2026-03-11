@@ -1119,10 +1119,9 @@ Completed slices:
      `dir_stabilize_skip_no_recompute = 77` and
      `recompute_after_dir_skip = 3469 -> 1870`
 
-Validated local slice:
 3. `W2.3` arm existing force-pivot mode from chronic extreme-direction
    refactor loops without queueing an extra forced refactor.
-   - local validation only; not yet committed or pushed
+   - committed as `5d33ff4`
    - the new path counts repeated `force_extreme_dir` refactors into the
      existing force-pivot budget instead of scheduling another immediate
      forced refactor
@@ -1139,7 +1138,7 @@ Validated local slice:
      `22` timeouts, `0` dense fallbacks, and no new mismatches
 4. `W2.4` force ratio-breakdown ladder escalation earlier on large degenerate
    runs, and add direct dual-rescue guard telemetry.
-   - local validation only; not yet committed or pushed
+   - committed as `c35c31f`
    - added direct phase-1 dual-rescue guard/attempt telemetry to separate
      direct rescue sites from ladder rescue sites
    - finding: current `greenbeb`/`wood1p` runs are still dominated by ladder
@@ -1156,6 +1155,30 @@ Validated local slice:
      `no_pivot_ladder_forced_refactors_ratio_breakdown = 20 -> 110`
    - `wood1p` stayed in the same timeout family but did not regress on the
      full gate (`3267.603 -> 3255.448 ms`)
+5. `W2.5` penalize repeated failed-stabilize enterings only inside the local
+   direction-stabilize retry path.
+   - repeated failed-stabilize telemetry showed `wood1p`/`greenbeb` were
+     dominated by retrying the same entering after direction-stabilize, not by
+     plain top-level `DIR_SKIP` reselection
+   - the new path does not change top-level phase-1 pricing or global entering
+     exclusion memory
+   - it only swaps the local post-refactor retry from the repeated unstable
+     entering to one alternate candidate after the failed-stabilize streak
+     reaches the trigger
+   - added pure-policy unit coverage in `ralph/tests/test_simplex_policy.c`
+   - validation:
+     - `make -C ralph test-simplex-policy`
+     - direct `wood1p` and `greenbeb`
+     - `make -C ralph test-netlib-gate`
+   - direct effects:
+     - `wood1p`: `3130.986 -> 2358.580 ms`
+     - `greenbeb`: `8062.355 -> 6598.889 ms`
+   - full NETLIB gate stayed baseline-clean:
+     - `84` files
+     - `22` timeouts
+     - `0` command failures
+     - `0` status/objective/invalid mismatches
+     - `0` dense fallbacks
 
 ### Week 3: Degeneracy and Long-Run Control Quality
 
