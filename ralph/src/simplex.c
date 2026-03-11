@@ -4218,6 +4218,64 @@ static void phase1_exclude_entering_var(int var,
     }
 }
 
+static void phase1_exclude_entering_var_tracked(SimplexSolver *solver,
+                                                int var,
+                                                int ttl,
+                                                int *exclude_a,
+                                                int *ttl_a,
+                                                int *exclude_b,
+                                                int *ttl_b) {
+    int repeated_slot = 0;
+
+    if (var < 0 || ttl <= 0 || !exclude_a || !ttl_a || !exclude_b || !ttl_b) return;
+    if ((*ttl_a > 0 && *exclude_a == var) || (*ttl_b > 0 && *exclude_b == var)) {
+        repeated_slot = 1;
+    }
+    phase1_exclude_entering_var(var, ttl, exclude_a, ttl_a, exclude_b, ttl_b);
+    lp_telemetry_record_phase1_entering_exclusion(solver, repeated_slot);
+}
+
+static void phase1_note_dir_skip_entering(SimplexSolver *solver,
+                                          int entering,
+                                          int *last_entering,
+                                          int *same_entering_streak) {
+    int streak = 0;
+    int same_entering = 0;
+
+    if (entering < 0 || !last_entering || !same_entering_streak) return;
+    if (*last_entering == entering) {
+        same_entering = 1;
+        streak = *same_entering_streak;
+        if (streak < INT_MAX) streak++;
+    } else {
+        *last_entering = entering;
+        streak = 1;
+    }
+    *same_entering_streak = streak;
+    lp_telemetry_record_phase1_dir_skip_entering(solver, same_entering, streak);
+}
+
+static void phase1_note_failed_stabilize_entering(SimplexSolver *solver,
+                                                  int entering,
+                                                  int *last_entering,
+                                                  int *same_entering_streak) {
+    int streak = 0;
+    int same_entering = 0;
+
+    if (entering < 0 || !last_entering || !same_entering_streak) return;
+    if (*last_entering == entering) {
+        same_entering = 1;
+        streak = *same_entering_streak;
+        if (streak < INT_MAX) streak++;
+    } else {
+        *last_entering = entering;
+        streak = 1;
+    }
+    *same_entering_streak = streak;
+    lp_telemetry_record_phase1_failed_stabilize_entering(
+        solver, same_entering, streak);
+}
+
 static void phase1_pivot_fail_recovery_maybe_exclude_entering(
     SimplexSolver *solver,
     int fail_repeat_count,
@@ -4227,12 +4285,13 @@ static void phase1_pivot_fail_recovery_maybe_exclude_entering(
     int *excluded_entering_b,
     int *excluded_entering_ttl_b) {
     if (fail_repeat_count < PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_TRIGGER) return;
-    phase1_exclude_entering_var(entering,
-                                PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_ITERS,
-                                excluded_entering_a,
-                                excluded_entering_ttl_a,
-                                excluded_entering_b,
-                                excluded_entering_ttl_b);
+    phase1_exclude_entering_var_tracked(solver,
+                                        entering,
+                                        PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_ITERS,
+                                        excluded_entering_a,
+                                        excluded_entering_ttl_a,
+                                        excluded_entering_b,
+                                        excluded_entering_ttl_b);
     lp_telemetry_record_phase1_pivot_fail_recovery_exclusion(solver);
 }
 
@@ -6233,6 +6292,10 @@ static int simplex_phase1(SimplexSolver *solver) {
     int phase1_dir_skip_event_streak = 0;
     int phase1_dir_skip_no_recompute_streak = 0;
     int phase1_dir_force_refactor_streak = 0;
+    int phase1_last_dir_skip_entering = -1;
+    int phase1_dir_skip_same_entering_streak = 0;
+    int phase1_last_failed_stabilize_entering = -1;
+    int phase1_failed_stabilize_same_entering_streak = 0;
     int phase1_dir_escape_cooldown = 0;
     int phase1_force_pivot_attempt_budget = 0;
     int periodic_policy_cooldown = 0;
@@ -6443,6 +6506,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             entering >= 0 &&
             (entering == excluded_entering_a || entering == excluded_entering_b)) {
             int alt_entering = -1;
+            int rerouted = 0;
             int exclude_a = (excluded_entering_ttl_a > 0) ? excluded_entering_a : -1;
             int exclude_b = (excluded_entering_ttl_b > 0) ? excluded_entering_b : -1;
             if (pricing_bland_excluding_two(tab, exclude_a, exclude_b, &alt_entering) == 0) {
@@ -6451,7 +6515,9 @@ static int simplex_phase1(SimplexSolver *solver) {
                             exclude_a, exclude_b, alt_entering);
                 }
                 entering = alt_entering;
+                rerouted = 1;
             }
+            lp_telemetry_record_phase1_entering_exclusion_hit(solver, rerouted);
         }
         {
             lp_telemetry_record_pricing_timed(solver, 1, t_pricing_ms);
@@ -6607,12 +6673,13 @@ static int simplex_phase1(SimplexSolver *solver) {
                         solver,
                         LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN);
                     lp_telemetry_record_phase1_ratio_breakdown_retry(solver);
-                    phase1_exclude_entering_var(entering,
-                                                RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
-                                                &excluded_entering_a,
-                                                &excluded_entering_ttl_a,
-                                                &excluded_entering_b,
-                                                &excluded_entering_ttl_b);
+                    phase1_exclude_entering_var_tracked(solver,
+                                                        entering,
+                                                        RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
+                                                        &excluded_entering_a,
+                                                        &excluded_entering_ttl_a,
+                                                        &excluded_entering_b,
+                                                        &excluded_entering_ttl_b);
                     use_bland = 1;
                     phase1_recompute_rc_only_guarded(solver,
                                                      tab,
@@ -6739,12 +6806,13 @@ static int simplex_phase1(SimplexSolver *solver) {
                 ratio_breakdown_last_entering = entering;
                 ratio_breakdown_same_entering_streak = 1;
             }
-            phase1_exclude_entering_var(entering,
-                                        RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
-                                        &excluded_entering_a,
-                                        &excluded_entering_ttl_a,
-                                        &excluded_entering_b,
-                                        &excluded_entering_ttl_b);
+            phase1_exclude_entering_var_tracked(solver,
+                                                entering,
+                                                RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
+                                                &excluded_entering_a,
+                                                &excluded_entering_ttl_a,
+                                                &excluded_entering_b,
+                                                &excluded_entering_ttl_b);
             {
                 int ratio_breakdown_limit =
                     lp_refactor_policy_phase1_ratio_breakdown_limit(
@@ -6925,12 +6993,17 @@ static int simplex_phase1(SimplexSolver *solver) {
                     LP_LOG_STDERR("[simplex_phase1] Moderate direction norm %.2e at iter %d (entering=%d), deferring one refactor and retrying pricing\n",
                             dir_inf, iter, entering);
                 }
-                phase1_exclude_entering_var(entering,
-                                            RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
-                                            &excluded_entering_a,
-                                            &excluded_entering_ttl_a,
-                                            &excluded_entering_b,
-                                            &excluded_entering_ttl_b);
+                phase1_note_dir_skip_entering(solver,
+                                              entering,
+                                              &phase1_last_dir_skip_entering,
+                                              &phase1_dir_skip_same_entering_streak);
+                phase1_exclude_entering_var_tracked(solver,
+                                                    entering,
+                                                    RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
+                                                    &excluded_entering_a,
+                                                    &excluded_entering_ttl_a,
+                                                    &excluded_entering_b,
+                                                    &excluded_entering_ttl_b);
                 if (phase1_dir_skip_event_streak < INT_MAX) {
                     phase1_dir_skip_event_streak++;
                 }
@@ -7018,12 +7091,17 @@ static int simplex_phase1(SimplexSolver *solver) {
                 if (dir_stabilize_cooldown_target > dir_stabilize_cooldown) {
                     dir_stabilize_cooldown = dir_stabilize_cooldown_target;
                 }
-                phase1_exclude_entering_var(entering,
-                                            RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
-                                            &excluded_entering_a,
-                                            &excluded_entering_ttl_a,
-                                            &excluded_entering_b,
-                                            &excluded_entering_ttl_b);
+                phase1_note_dir_skip_entering(solver,
+                                              entering,
+                                              &phase1_last_dir_skip_entering,
+                                              &phase1_dir_skip_same_entering_streak);
+                phase1_exclude_entering_var_tracked(solver,
+                                                    entering,
+                                                    RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
+                                                    &excluded_entering_a,
+                                                    &excluded_entering_ttl_a,
+                                                    &excluded_entering_b,
+                                                    &excluded_entering_ttl_b);
                 if (phase1_dir_skip_event_streak < INT_MAX) {
                     phase1_dir_skip_event_streak++;
                 }
@@ -7151,12 +7229,17 @@ static int simplex_phase1(SimplexSolver *solver) {
                     if (dir_stabilize_cooldown_target > dir_stabilize_cooldown) {
                         dir_stabilize_cooldown = dir_stabilize_cooldown_target;
                     }
-                    phase1_exclude_entering_var(entering,
-                                                RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
-                                                &excluded_entering_a,
-                                                &excluded_entering_ttl_a,
-                                                &excluded_entering_b,
-                                                &excluded_entering_ttl_b);
+                    phase1_note_dir_skip_entering(solver,
+                                                  entering,
+                                                  &phase1_last_dir_skip_entering,
+                                                  &phase1_dir_skip_same_entering_streak);
+                    phase1_exclude_entering_var_tracked(solver,
+                                                        entering,
+                                                        RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
+                                                        &excluded_entering_a,
+                                                        &excluded_entering_ttl_a,
+                                                        &excluded_entering_b,
+                                                        &excluded_entering_ttl_b);
                     if (phase1_dir_skip_event_streak < INT_MAX) {
                         phase1_dir_skip_event_streak++;
                     }
@@ -7304,12 +7387,18 @@ static int simplex_phase1(SimplexSolver *solver) {
                     LP_LOG_STDERR("[simplex_phase1] Skipping unstable entering column after stabilization attempts (iter=%d, entering=%d, dir_inf=%.2e)\n",
                             iter, entering, dir_inf);
                 }
-                phase1_exclude_entering_var(entering,
-                                            RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
-                                            &excluded_entering_a,
-                                            &excluded_entering_ttl_a,
-                                            &excluded_entering_b,
-                                            &excluded_entering_ttl_b);
+                phase1_note_failed_stabilize_entering(
+                    solver,
+                    entering,
+                    &phase1_last_failed_stabilize_entering,
+                    &phase1_failed_stabilize_same_entering_streak);
+                phase1_exclude_entering_var_tracked(solver,
+                                                    entering,
+                                                    RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
+                                                    &excluded_entering_a,
+                                                    &excluded_entering_ttl_a,
+                                                    &excluded_entering_b,
+                                                    &excluded_entering_ttl_b);
                 dir_stabilize_cooldown = dir_stabilize_cooldown_target;
                 use_bland = 1;
                 phase1_recompute_full_with_reason(
@@ -7718,6 +7807,10 @@ static int simplex_phase1(SimplexSolver *solver) {
         phase1_rc_only_streak = 0;
         phase1_dir_skip_no_recompute_streak = 0;
         phase1_dir_force_refactor_streak = 0;
+        phase1_last_dir_skip_entering = -1;
+        phase1_dir_skip_same_entering_streak = 0;
+        phase1_last_failed_stabilize_entering = -1;
+        phase1_failed_stabilize_same_entering_streak = 0;
         excluded_entering_a = -1;
         excluded_entering_ttl_a = 0;
         excluded_entering_b = -1;

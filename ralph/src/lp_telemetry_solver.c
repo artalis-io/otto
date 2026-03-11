@@ -112,6 +112,11 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_compute_rc_ctx_refactor_success = 0;
     solver->telemetry.perf_phase1_compute_rc_ctx_drift_refresh = 0;
     solver->telemetry.perf_phase1_compute_rc_ctx_dual_rescue = 0;
+    solver->telemetry.perf_phase1_entering_exclusions = 0;
+    solver->telemetry.perf_phase1_entering_exclusion_repeats = 0;
+    solver->telemetry.perf_phase1_entering_exclusion_hits = 0;
+    solver->telemetry.perf_phase1_entering_exclusion_reroutes = 0;
+    solver->telemetry.perf_phase1_entering_exclusion_no_alt = 0;
     solver->telemetry.perf_phase1_refactor_periodic_policy = 0;
     solver->telemetry.perf_phase1_refactor_periodic_lu_health = 0;
     solver->telemetry.perf_phase1_refactor_safety_forced = 0;
@@ -181,6 +186,11 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_direct_dual_rescue_guard_cooldown_blocks = 0;
     solver->telemetry.perf_phase1_direct_dual_rescue_guard_fail_cap_blocks = 0;
     solver->telemetry.perf_phase1_soft_lu_policy_cooldown_defers = 0;
+    solver->telemetry.perf_phase1_dir_skip_same_entering_repeats = 0;
+    solver->telemetry.perf_phase1_dir_skip_same_entering_max_streak = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_events = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_same_entering_repeats = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_same_entering_max_streak = 0;
 
     solver->telemetry.perf_phase2_pricing_ms = 0.0;
     solver->telemetry.perf_phase2_ratio_ms = 0.0;
@@ -548,6 +558,11 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_compute_rc_ctx_refactor_success);
     COPY_SOLVER_FIELD(perf_phase1_compute_rc_ctx_drift_refresh);
     COPY_SOLVER_FIELD(perf_phase1_compute_rc_ctx_dual_rescue);
+    COPY_SOLVER_FIELD(perf_phase1_entering_exclusions);
+    COPY_SOLVER_FIELD(perf_phase1_entering_exclusion_repeats);
+    COPY_SOLVER_FIELD(perf_phase1_entering_exclusion_hits);
+    COPY_SOLVER_FIELD(perf_phase1_entering_exclusion_reroutes);
+    COPY_SOLVER_FIELD(perf_phase1_entering_exclusion_no_alt);
     COPY_SOLVER_FIELD(perf_phase1_refactor_periodic_policy);
     COPY_SOLVER_FIELD(perf_phase1_refactor_periodic_lu_health);
     COPY_SOLVER_FIELD(perf_phase1_refactor_safety_forced);
@@ -617,6 +632,11 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_direct_dual_rescue_guard_cooldown_blocks);
     COPY_SOLVER_FIELD(perf_phase1_direct_dual_rescue_guard_fail_cap_blocks);
     COPY_SOLVER_FIELD(perf_phase1_soft_lu_policy_cooldown_defers);
+    COPY_SOLVER_FIELD(perf_phase1_dir_skip_same_entering_repeats);
+    COPY_SOLVER_FIELD(perf_phase1_dir_skip_same_entering_max_streak);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_events);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_same_entering_repeats);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_same_entering_max_streak);
 
     COPY_SOLVER_FIELD(perf_phase2_pricing_ms);
     COPY_SOLVER_FIELD(perf_phase2_ratio_ms);

@@ -548,6 +548,11 @@ typedef struct {
     int perf_phase1_compute_rc_ctx_refactor_success;
     int perf_phase1_compute_rc_ctx_drift_refresh;
     int perf_phase1_compute_rc_ctx_dual_rescue;
+    int perf_phase1_entering_exclusions;
+    int perf_phase1_entering_exclusion_repeats;
+    int perf_phase1_entering_exclusion_hits;
+    int perf_phase1_entering_exclusion_reroutes;
+    int perf_phase1_entering_exclusion_no_alt;
     int perf_phase1_refactor_periodic_policy;
     int perf_phase1_refactor_periodic_lu_health;
     int perf_phase1_refactor_safety_forced;
@@ -617,6 +622,11 @@ typedef struct {
     int perf_phase1_direct_dual_rescue_guard_cooldown_blocks;
     int perf_phase1_direct_dual_rescue_guard_fail_cap_blocks;
     int perf_phase1_soft_lu_policy_cooldown_defers;
+    int perf_phase1_dir_skip_same_entering_repeats;
+    int perf_phase1_dir_skip_same_entering_max_streak;
+    int perf_phase1_failed_stabilize_events;
+    int perf_phase1_failed_stabilize_same_entering_repeats;
+    int perf_phase1_failed_stabilize_same_entering_max_streak;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
