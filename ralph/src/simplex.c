@@ -3723,6 +3723,12 @@ int tableau_compute_solution(SimplexTableau *tab) {
 
     if (tab->owner) {
         lp_telemetry_record_compute_solution_timed(tab->owner, tab->phase, t0_ms);
+        if (tab->phase == 1) {
+            lp_telemetry_record_phase1_compute_solution_context(
+                tab->owner,
+                (LPPhase1ComputeContext)tab->phase1_compute_solution_context);
+            tab->phase1_compute_solution_context = LP_PHASE1_COMPUTE_CTX_OTHER;
+        }
     }
     return 0;
 }
@@ -3800,6 +3806,12 @@ int tableau_compute_reduced_costs(SimplexTableau *tab) {
 
     if (tab->owner) {
         lp_telemetry_record_compute_reduced_costs_timed(tab->owner, tab->phase, t0_ms);
+        if (tab->phase == 1) {
+            lp_telemetry_record_phase1_compute_rc_context(
+                tab->owner,
+                (LPPhase1ComputeContext)tab->phase1_compute_rc_context);
+            tab->phase1_compute_rc_context = LP_PHASE1_COMPUTE_CTX_OTHER;
+        }
     }
     return 0;
 }
@@ -4156,6 +4168,8 @@ static void phase1_recompute_full_with_reason(SimplexSolver *solver,
                                               int *rc_only_streak,
                                               LPPhase1RecomputeReason reason) {
     /* Full recompute is required after basis/LU/perturbation state changes. */
+    tab->phase1_compute_solution_context = LP_PHASE1_COMPUTE_CTX_RECOMPUTE_FULL;
+    tab->phase1_compute_rc_context = LP_PHASE1_COMPUTE_CTX_RECOMPUTE_FULL;
     tableau_compute_solution(tab);
     tableau_compute_reduced_costs(tab);
     if (rc_only_streak) *rc_only_streak = 0;
@@ -4165,6 +4179,10 @@ static void phase1_recompute_full_with_reason(SimplexSolver *solver,
 static void phase1_recompute_full_no_reason(SimplexSolver *solver,
                                             SimplexTableau *tab,
                                             int *rc_only_streak) {
+    tab->phase1_compute_solution_context =
+        LP_PHASE1_COMPUTE_CTX_RECOMPUTE_GUARD_FORCED_FULL;
+    tab->phase1_compute_rc_context =
+        LP_PHASE1_COMPUTE_CTX_RECOMPUTE_GUARD_FORCED_FULL;
     tableau_compute_solution(tab);
     tableau_compute_reduced_costs(tab);
     if (rc_only_streak) *rc_only_streak = 0;
@@ -4181,6 +4199,7 @@ static int phase1_recompute_rc_only_guarded(SimplexSolver *solver,
         phase1_recompute_full_no_reason(solver, tab, rc_only_streak);
         return 1;
     }
+    tab->phase1_compute_rc_context = LP_PHASE1_COMPUTE_CTX_RECOMPUTE_RC_ONLY;
     tableau_compute_reduced_costs(tab);
     lp_telemetry_record_phase1_recompute_rc_only(solver);
     if (rc_only_streak) (*rc_only_streak)++;
@@ -5947,6 +5966,7 @@ static int simplex_phase1(SimplexSolver *solver) {
 
     if (!tab->use_two_phase) {
         /* No artificials: check and restore feasibility via dual pivoting */
+        tab->phase1_compute_solution_context = LP_PHASE1_COMPUTE_CTX_INIT;
         tableau_compute_solution(tab);
 
         int infeasible = 0;
@@ -6074,6 +6094,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     }
 
     /* Compute initial solution */
+    tab->phase1_compute_solution_context = LP_PHASE1_COMPUTE_CTX_INIT;
     tableau_compute_solution(tab);
 
     /* Check if we're already feasible (all artificials at zero) */
@@ -6166,6 +6187,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     }
 
     /* Compute initial reduced costs */
+    tab->phase1_compute_rc_context = LP_PHASE1_COMPUTE_CTX_INIT;
     tableau_compute_reduced_costs(tab);
     if (phase1_pricing_strategy == 4) heap_build(tab);
     double phase1_hot_ms_prev = phase_hotpath_ms(solver, 1);
@@ -6366,6 +6388,8 @@ static int simplex_phase1(SimplexSolver *solver) {
             primal_remove_perturbation(tab);
 
             /* Recompute solution without perturbation */
+            tab->phase1_compute_solution_context =
+                LP_PHASE1_COMPUTE_CTX_NO_ENTERING_CLEANUP;
             tableau_compute_solution(tab);
 
             /* Check if all artificial variables are zero */
@@ -6384,6 +6408,10 @@ static int simplex_phase1(SimplexSolver *solver) {
                     /* Revalidate on a freshly factorized basis before certifying infeasible.
                      * This guards against RC/solution drift on numerically hard instances. */
                     if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP) == 0) {
+                        tab->phase1_compute_solution_context =
+                            LP_PHASE1_COMPUTE_CTX_INFEAS_CLEANUP;
+                        tab->phase1_compute_rc_context =
+                            LP_PHASE1_COMPUTE_CTX_INFEAS_CLEANUP;
                         tableau_compute_solution(tab);
                         tableau_compute_reduced_costs(tab);
 
@@ -7911,6 +7939,10 @@ static int simplex_phase1(SimplexSolver *solver) {
                         LP_LOG_STDERR("[simplex_phase1] Periodic refactorization failed at iter %d, continuing with existing LU\n",
                                 iter);
                     }
+                    tab->phase1_compute_solution_context =
+                        LP_PHASE1_COMPUTE_CTX_REFACTOR_FAIL_CONTINUE;
+                    tab->phase1_compute_rc_context =
+                        LP_PHASE1_COMPUTE_CTX_REFACTOR_FAIL_CONTINUE;
                     tableau_compute_solution(tab);
                     tableau_compute_reduced_costs(tab);
                     continue;
@@ -7927,6 +7959,10 @@ static int simplex_phase1(SimplexSolver *solver) {
                                 marked);
                     }
                     if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP) == 0) {
+                        tab->phase1_compute_solution_context =
+                            LP_PHASE1_COMPUTE_CTX_REFACTOR_FAILURE_RECOVERY;
+                        tab->phase1_compute_rc_context =
+                            LP_PHASE1_COMPUTE_CTX_REFACTOR_FAILURE_RECOVERY;
                         tableau_compute_solution(tab);
                         tableau_compute_reduced_costs(tab);
                         continue;
@@ -7938,6 +7974,10 @@ static int simplex_phase1(SimplexSolver *solver) {
                     if (solver->verbose) {
                         LP_LOG_STDERR("[simplex_phase1] Dual rescue recovered after refactorization failure at iter %d\n", iter);
                     }
+                    tab->phase1_compute_solution_context =
+                        LP_PHASE1_COMPUTE_CTX_REFACTOR_FAILURE_RECOVERY;
+                    tab->phase1_compute_rc_context =
+                        LP_PHASE1_COMPUTE_CTX_REFACTOR_FAILURE_RECOVERY;
                     tableau_compute_solution(tab);
                     tableau_compute_reduced_costs(tab);
                     fail_reason = PHASE1_PIVOT_FAIL_NONE;
@@ -7955,6 +7995,10 @@ static int simplex_phase1(SimplexSolver *solver) {
                     if (solver->verbose) {
                         LP_LOG_STDERR("[simplex_phase1] Basis repair recovered after refactorization failure at iter %d\n", iter);
                     }
+                    tab->phase1_compute_solution_context =
+                        LP_PHASE1_COMPUTE_CTX_REFACTOR_FAILURE_RECOVERY;
+                    tab->phase1_compute_rc_context =
+                        LP_PHASE1_COMPUTE_CTX_REFACTOR_FAILURE_RECOVERY;
                     tableau_compute_solution(tab);
                     tableau_compute_reduced_costs(tab);
                     continue;
@@ -7971,6 +8015,10 @@ static int simplex_phase1(SimplexSolver *solver) {
                 return -1;
             }
             /* Recompute primal solution and reduced costs after refactorization. */
+            tab->phase1_compute_solution_context =
+                LP_PHASE1_COMPUTE_CTX_REFACTOR_SUCCESS;
+            tab->phase1_compute_rc_context =
+                LP_PHASE1_COMPUTE_CTX_REFACTOR_SUCCESS;
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
             if (solver->pricing_strategy == 4) heap_build(tab);
@@ -7984,6 +8032,10 @@ static int simplex_phase1(SimplexSolver *solver) {
         } else if (iter > 0 && iter % RECOMPUTE_INTERVAL == 0) {
             /* Drift control even when LU updates are still accepted. */
             phase1_dir_skip_no_recompute_streak = 0;
+            tab->phase1_compute_solution_context =
+                LP_PHASE1_COMPUTE_CTX_DRIFT_REFRESH;
+            tab->phase1_compute_rc_context =
+                LP_PHASE1_COMPUTE_CTX_DRIFT_REFRESH;
             tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
             if (solver->pricing_strategy == 4) heap_build(tab);

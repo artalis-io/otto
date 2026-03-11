@@ -185,6 +185,48 @@ void lp_telemetry_record_compute_solution_timed(SimplexSolver *solver,
                                          lp_telemetry_timer_elapsed_ms(start_ms));
 }
 
+void lp_telemetry_record_phase1_compute_solution_context(SimplexSolver *solver,
+                                                         LPPhase1ComputeContext context) {
+    if (!solver_telemetry_enabled(solver)) return;
+    switch (context) {
+        case LP_PHASE1_COMPUTE_CTX_RECOMPUTE_FULL:
+            solver->telemetry.perf_phase1_compute_solution_ctx_recompute_full++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_RECOMPUTE_GUARD_FORCED_FULL:
+            solver->telemetry.perf_phase1_compute_solution_ctx_recompute_guard_forced_full++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_INIT:
+            solver->telemetry.perf_phase1_compute_solution_ctx_init++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_NO_ENTERING_CLEANUP:
+            solver->telemetry.perf_phase1_compute_solution_ctx_no_entering_cleanup++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_INFEAS_CLEANUP:
+            solver->telemetry.perf_phase1_compute_solution_ctx_infeas_cleanup++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_REFACTOR_FAIL_CONTINUE:
+            solver->telemetry.perf_phase1_compute_solution_ctx_refactor_fail_continue++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_REFACTOR_FAILURE_RECOVERY:
+            solver->telemetry.perf_phase1_compute_solution_ctx_refactor_failure_recovery++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_REFACTOR_SUCCESS:
+            solver->telemetry.perf_phase1_compute_solution_ctx_refactor_success++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_DRIFT_REFRESH:
+            solver->telemetry.perf_phase1_compute_solution_ctx_drift_refresh++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_DUAL_RESCUE:
+            solver->telemetry.perf_phase1_compute_solution_ctx_dual_rescue++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_OTHER:
+        case LP_PHASE1_COMPUTE_CTX_RECOMPUTE_RC_ONLY:
+        default:
+            solver->telemetry.perf_phase1_compute_solution_ctx_other++;
+            break;
+    }
+}
+
 void lp_telemetry_record_compute_reduced_costs(SimplexSolver *solver,
                                                int phase,
                                                double elapsed_ms) {
@@ -205,6 +247,48 @@ void lp_telemetry_record_compute_reduced_costs_timed(SimplexSolver *solver,
     lp_telemetry_record_compute_reduced_costs(solver,
                                               phase,
                                               lp_telemetry_timer_elapsed_ms(start_ms));
+}
+
+void lp_telemetry_record_phase1_compute_rc_context(SimplexSolver *solver,
+                                                   LPPhase1ComputeContext context) {
+    if (!solver_telemetry_enabled(solver)) return;
+    switch (context) {
+        case LP_PHASE1_COMPUTE_CTX_RECOMPUTE_FULL:
+            solver->telemetry.perf_phase1_compute_rc_ctx_recompute_full++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_RECOMPUTE_RC_ONLY:
+            solver->telemetry.perf_phase1_compute_rc_ctx_recompute_rc_only++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_RECOMPUTE_GUARD_FORCED_FULL:
+            solver->telemetry.perf_phase1_compute_rc_ctx_recompute_guard_forced_full++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_INIT:
+            solver->telemetry.perf_phase1_compute_rc_ctx_init++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_INFEAS_CLEANUP:
+            solver->telemetry.perf_phase1_compute_rc_ctx_infeas_cleanup++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_REFACTOR_FAIL_CONTINUE:
+            solver->telemetry.perf_phase1_compute_rc_ctx_refactor_fail_continue++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_REFACTOR_FAILURE_RECOVERY:
+            solver->telemetry.perf_phase1_compute_rc_ctx_refactor_failure_recovery++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_REFACTOR_SUCCESS:
+            solver->telemetry.perf_phase1_compute_rc_ctx_refactor_success++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_DRIFT_REFRESH:
+            solver->telemetry.perf_phase1_compute_rc_ctx_drift_refresh++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_DUAL_RESCUE:
+            solver->telemetry.perf_phase1_compute_rc_ctx_dual_rescue++;
+            break;
+        case LP_PHASE1_COMPUTE_CTX_OTHER:
+        case LP_PHASE1_COMPUTE_CTX_NO_ENTERING_CLEANUP:
+        default:
+            solver->telemetry.perf_phase1_compute_rc_ctx_other++;
+            break;
+    }
 }
 
 void lp_telemetry_record_pricing(SimplexSolver *solver,

@@ -265,6 +265,28 @@ typedef struct {
     int phase1_refactor_calls;
     int phase1_compute_solution_calls;
     int phase1_compute_rc_calls;
+    int phase1_compute_solution_ctx_other;
+    int phase1_compute_solution_ctx_recompute_full;
+    int phase1_compute_solution_ctx_recompute_guard_forced_full;
+    int phase1_compute_solution_ctx_init;
+    int phase1_compute_solution_ctx_no_entering_cleanup;
+    int phase1_compute_solution_ctx_infeas_cleanup;
+    int phase1_compute_solution_ctx_refactor_fail_continue;
+    int phase1_compute_solution_ctx_refactor_failure_recovery;
+    int phase1_compute_solution_ctx_refactor_success;
+    int phase1_compute_solution_ctx_drift_refresh;
+    int phase1_compute_solution_ctx_dual_rescue;
+    int phase1_compute_rc_ctx_other;
+    int phase1_compute_rc_ctx_recompute_full;
+    int phase1_compute_rc_ctx_recompute_rc_only;
+    int phase1_compute_rc_ctx_recompute_guard_forced_full;
+    int phase1_compute_rc_ctx_init;
+    int phase1_compute_rc_ctx_infeas_cleanup;
+    int phase1_compute_rc_ctx_refactor_fail_continue;
+    int phase1_compute_rc_ctx_refactor_failure_recovery;
+    int phase1_compute_rc_ctx_refactor_success;
+    int phase1_compute_rc_ctx_drift_refresh;
+    int phase1_compute_rc_ctx_dual_rescue;
     int phase1_refactor_periodic_policy;
     int phase1_refactor_periodic_lu_health;
     int phase1_refactor_safety_forced;
@@ -1196,6 +1218,50 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
             result.phase1_refactor_calls = solver_tel.perf_phase1_refactor_calls;
             result.phase1_compute_solution_calls = solver_tel.perf_phase1_compute_solution_calls;
             result.phase1_compute_rc_calls = solver_tel.perf_phase1_compute_rc_calls;
+            result.phase1_compute_solution_ctx_other =
+                solver_tel.perf_phase1_compute_solution_ctx_other;
+            result.phase1_compute_solution_ctx_recompute_full =
+                solver_tel.perf_phase1_compute_solution_ctx_recompute_full;
+            result.phase1_compute_solution_ctx_recompute_guard_forced_full =
+                solver_tel.perf_phase1_compute_solution_ctx_recompute_guard_forced_full;
+            result.phase1_compute_solution_ctx_init =
+                solver_tel.perf_phase1_compute_solution_ctx_init;
+            result.phase1_compute_solution_ctx_no_entering_cleanup =
+                solver_tel.perf_phase1_compute_solution_ctx_no_entering_cleanup;
+            result.phase1_compute_solution_ctx_infeas_cleanup =
+                solver_tel.perf_phase1_compute_solution_ctx_infeas_cleanup;
+            result.phase1_compute_solution_ctx_refactor_fail_continue =
+                solver_tel.perf_phase1_compute_solution_ctx_refactor_fail_continue;
+            result.phase1_compute_solution_ctx_refactor_failure_recovery =
+                solver_tel.perf_phase1_compute_solution_ctx_refactor_failure_recovery;
+            result.phase1_compute_solution_ctx_refactor_success =
+                solver_tel.perf_phase1_compute_solution_ctx_refactor_success;
+            result.phase1_compute_solution_ctx_drift_refresh =
+                solver_tel.perf_phase1_compute_solution_ctx_drift_refresh;
+            result.phase1_compute_solution_ctx_dual_rescue =
+                solver_tel.perf_phase1_compute_solution_ctx_dual_rescue;
+            result.phase1_compute_rc_ctx_other =
+                solver_tel.perf_phase1_compute_rc_ctx_other;
+            result.phase1_compute_rc_ctx_recompute_full =
+                solver_tel.perf_phase1_compute_rc_ctx_recompute_full;
+            result.phase1_compute_rc_ctx_recompute_rc_only =
+                solver_tel.perf_phase1_compute_rc_ctx_recompute_rc_only;
+            result.phase1_compute_rc_ctx_recompute_guard_forced_full =
+                solver_tel.perf_phase1_compute_rc_ctx_recompute_guard_forced_full;
+            result.phase1_compute_rc_ctx_init =
+                solver_tel.perf_phase1_compute_rc_ctx_init;
+            result.phase1_compute_rc_ctx_infeas_cleanup =
+                solver_tel.perf_phase1_compute_rc_ctx_infeas_cleanup;
+            result.phase1_compute_rc_ctx_refactor_fail_continue =
+                solver_tel.perf_phase1_compute_rc_ctx_refactor_fail_continue;
+            result.phase1_compute_rc_ctx_refactor_failure_recovery =
+                solver_tel.perf_phase1_compute_rc_ctx_refactor_failure_recovery;
+            result.phase1_compute_rc_ctx_refactor_success =
+                solver_tel.perf_phase1_compute_rc_ctx_refactor_success;
+            result.phase1_compute_rc_ctx_drift_refresh =
+                solver_tel.perf_phase1_compute_rc_ctx_drift_refresh;
+            result.phase1_compute_rc_ctx_dual_rescue =
+                solver_tel.perf_phase1_compute_rc_ctx_dual_rescue;
             result.phase1_refactor_periodic_policy = solver_tel.perf_phase1_refactor_periodic_policy;
             result.phase1_refactor_periodic_lu_health = solver_tel.perf_phase1_refactor_periodic_lu_health;
             result.phase1_refactor_safety_forced = solver_tel.perf_phase1_refactor_safety_forced;
@@ -2643,6 +2709,50 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_recompute_after_perturb);
     fprintf(out, "      \"recompute_rc_only_calls\": %d,\n",
             ralph->phase1_recompute_rc_only_calls);
+    fprintf(out, "      \"compute_solution_ctx_other\": %d,\n",
+            ralph->phase1_compute_solution_ctx_other);
+    fprintf(out, "      \"compute_solution_ctx_recompute_full\": %d,\n",
+            ralph->phase1_compute_solution_ctx_recompute_full);
+    fprintf(out, "      \"compute_solution_ctx_recompute_guard_forced_full\": %d,\n",
+            ralph->phase1_compute_solution_ctx_recompute_guard_forced_full);
+    fprintf(out, "      \"compute_solution_ctx_init\": %d,\n",
+            ralph->phase1_compute_solution_ctx_init);
+    fprintf(out, "      \"compute_solution_ctx_no_entering_cleanup\": %d,\n",
+            ralph->phase1_compute_solution_ctx_no_entering_cleanup);
+    fprintf(out, "      \"compute_solution_ctx_infeas_cleanup\": %d,\n",
+            ralph->phase1_compute_solution_ctx_infeas_cleanup);
+    fprintf(out, "      \"compute_solution_ctx_refactor_fail_continue\": %d,\n",
+            ralph->phase1_compute_solution_ctx_refactor_fail_continue);
+    fprintf(out, "      \"compute_solution_ctx_refactor_failure_recovery\": %d,\n",
+            ralph->phase1_compute_solution_ctx_refactor_failure_recovery);
+    fprintf(out, "      \"compute_solution_ctx_refactor_success\": %d,\n",
+            ralph->phase1_compute_solution_ctx_refactor_success);
+    fprintf(out, "      \"compute_solution_ctx_drift_refresh\": %d,\n",
+            ralph->phase1_compute_solution_ctx_drift_refresh);
+    fprintf(out, "      \"compute_solution_ctx_dual_rescue\": %d,\n",
+            ralph->phase1_compute_solution_ctx_dual_rescue);
+    fprintf(out, "      \"compute_reduced_costs_ctx_other\": %d,\n",
+            ralph->phase1_compute_rc_ctx_other);
+    fprintf(out, "      \"compute_reduced_costs_ctx_recompute_full\": %d,\n",
+            ralph->phase1_compute_rc_ctx_recompute_full);
+    fprintf(out, "      \"compute_reduced_costs_ctx_recompute_rc_only\": %d,\n",
+            ralph->phase1_compute_rc_ctx_recompute_rc_only);
+    fprintf(out, "      \"compute_reduced_costs_ctx_recompute_guard_forced_full\": %d,\n",
+            ralph->phase1_compute_rc_ctx_recompute_guard_forced_full);
+    fprintf(out, "      \"compute_reduced_costs_ctx_init\": %d,\n",
+            ralph->phase1_compute_rc_ctx_init);
+    fprintf(out, "      \"compute_reduced_costs_ctx_infeas_cleanup\": %d,\n",
+            ralph->phase1_compute_rc_ctx_infeas_cleanup);
+    fprintf(out, "      \"compute_reduced_costs_ctx_refactor_fail_continue\": %d,\n",
+            ralph->phase1_compute_rc_ctx_refactor_fail_continue);
+    fprintf(out, "      \"compute_reduced_costs_ctx_refactor_failure_recovery\": %d,\n",
+            ralph->phase1_compute_rc_ctx_refactor_failure_recovery);
+    fprintf(out, "      \"compute_reduced_costs_ctx_refactor_success\": %d,\n",
+            ralph->phase1_compute_rc_ctx_refactor_success);
+    fprintf(out, "      \"compute_reduced_costs_ctx_drift_refresh\": %d,\n",
+            ralph->phase1_compute_rc_ctx_drift_refresh);
+    fprintf(out, "      \"compute_reduced_costs_ctx_dual_rescue\": %d,\n",
+            ralph->phase1_compute_rc_ctx_dual_rescue);
     fprintf(out, "      \"recompute_rc_guard_forced_full\": %d,\n",
             ralph->phase1_recompute_rc_guard_forced_full);
     fprintf(out, "      \"ratio_breakdown_retries\": %d,\n",

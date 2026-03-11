@@ -28,6 +28,16 @@ int tableau_compute_solution(SimplexTableau *tab);
 int tableau_compute_reduced_costs(SimplexTableau *tab);
 void tableau_free(SimplexTableau *tab);
 
+static void phase1_rescue_compute_solution(SimplexTableau *tab) {
+    tab->phase1_compute_solution_context = LP_PHASE1_COMPUTE_CTX_DUAL_RESCUE;
+    tableau_compute_solution(tab);
+}
+
+static void phase1_rescue_compute_reduced_costs(SimplexTableau *tab) {
+    tab->phase1_compute_rc_context = LP_PHASE1_COMPUTE_CTX_DUAL_RESCUE;
+    tableau_compute_reduced_costs(tab);
+}
+
 /* Dual candidate-list pricing constants (T2.2) */
 #define DUAL_CAND_CAPACITY    200    /* Max candidates in dual hot set */
 #define DUAL_CAND_RC_THRESH   1e-4   /* |rc| threshold for candidate inclusion */
@@ -630,8 +640,8 @@ static int dual_try_one_shot_recovery(SimplexSolver *solver,
 
     tab->dse_initialized = 0;
     if (use_dse) dse_init_approx(tab);
-    tableau_compute_solution(tab);
-    tableau_compute_reduced_costs(tab);
+    phase1_rescue_compute_solution(tab);
+    phase1_rescue_compute_reduced_costs(tab);
     return 1;
 }
 
@@ -855,6 +865,61 @@ static int dual_rc_recompute_interval_for_solver(const SimplexSolver *solver,
     int requested = 20;
     if (solver) requested = solver->policy.dual_rc_recompute_interval;
     return dual_cadence_clamp_rc_interval(requested, base_interval);
+}
+
+static int dual_phase1_rescue_progress_limit(int m) {
+    int limit = m / 2;
+    if (limit < 16) limit = 16;
+    if (limit > 128) limit = 128;
+    return limit;
+}
+
+int dual_phase1_rescue_progress_limit_for_test(int m) {
+    return dual_phase1_rescue_progress_limit(m);
+}
+
+int dual_phase1_rescue_progress_update_for_test(int current_rows,
+                                                double current_max,
+                                                double current_sum,
+                                                int stall_limit,
+                                                int *best_rows_io,
+                                                double *best_max_io,
+                                                double *best_sum_io,
+                                                int *stall_count_io) {
+    int best_rows = best_rows_io ? *best_rows_io : -1;
+    double best_max = best_max_io ? *best_max_io : 0.0;
+    double best_sum = best_sum_io ? *best_sum_io : 0.0;
+    int stall_count = stall_count_io ? *stall_count_io : 0;
+    int improved = 0;
+
+    if (best_rows < 0 || current_rows < best_rows) {
+        improved = 1;
+    } else if (current_rows == best_rows) {
+        double max_tol = 1e-9 * (1.0 + fabs(best_max));
+        double sum_tol = 1e-9 * (1.0 + fabs(best_sum));
+        if (current_max < best_max - max_tol) {
+            improved = 1;
+        } else if (fabs(current_max - best_max) <= max_tol &&
+                   current_sum < best_sum - sum_tol) {
+            improved = 1;
+        }
+    }
+
+    if (improved) {
+        best_rows = current_rows;
+        best_max = current_max;
+        best_sum = current_sum;
+        stall_count = 0;
+    } else {
+        stall_count++;
+    }
+
+    if (best_rows_io) *best_rows_io = best_rows;
+    if (best_max_io) *best_max_io = best_max;
+    if (best_sum_io) *best_sum_io = best_sum;
+    if (stall_count_io) *stall_count_io = stall_count;
+
+    return (stall_limit > 0 && stall_count >= stall_limit) ? 1 : 0;
 }
 
 /* Test hook: adaptive ratio thresholds (orthogonal to simplex-policy tests). */
@@ -1896,16 +1961,16 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
     if (tableau_refactorize(tab) != 0 && solver->verbose >= 2) {
         LP_LOG_STDERR("[dual_phase1_rescue] Initial refactorization failed, trying in-place recovery pivots\n");
     }
-    tableau_compute_solution(tab);
-    tableau_compute_reduced_costs(tab);
+    phase1_rescue_compute_solution(tab);
+    phase1_rescue_compute_reduced_costs(tab);
 
     /* Try to improve dual feasibility via bound flips first. */
     int changes = make_dual_feasible(tab,
                                      solver->model ? solver->model->obj_sense : 1,
                                      dual_allow_startup_bound_flip(solver));
     if (changes > 0) {
-        tableau_compute_solution(tab);
-        tableau_compute_reduced_costs(tab);
+        phase1_rescue_compute_solution(tab);
+        phase1_rescue_compute_reduced_costs(tab);
     }
 
     unsigned char *tried_rows = (unsigned char*)calloc((size_t)tab->m, sizeof(unsigned char));
@@ -1917,10 +1982,16 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
     int refactor_failures = 0;
     int rescue_refactor_base_interval = dual_refactor_base_interval_for_solver(solver) / 2;
     int rescue_rc_recompute_interval;
+    int rescue_progress_stall_limit;
+    int rescue_progress_best_rows = -1;
+    int rescue_progress_stall_count = 0;
+    double rescue_progress_best_max = 0.0;
+    double rescue_progress_best_sum = 0.0;
     if (rescue_refactor_base_interval < 8) rescue_refactor_base_interval = 8;
     rescue_rc_recompute_interval =
         dual_rc_recompute_interval_for_solver(solver, rescue_refactor_base_interval) / 2;
     if (rescue_rc_recompute_interval < 5) rescue_rc_recompute_interval = 5;
+    rescue_progress_stall_limit = dual_phase1_rescue_progress_limit(tab->m);
     DualRefactorQualityState quality;
     dual_quality_init(&quality);
 
@@ -1929,7 +2000,7 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
             free(tried_rows);
             return 1;
         }
-        tableau_compute_solution(tab);
+        phase1_rescue_compute_solution(tab);
 
         if (phase1_rescue_has_bad_numerics(tab)) {
             if (solver->verbose >= 2) {
@@ -1938,8 +2009,8 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
             if (tableau_refactorize(tab) == 0) {
                 refactor_failures = 0;
                 dual_quality_on_refactor(&quality, iter);
-                tableau_compute_solution(tab);
-                tableau_compute_reduced_costs(tab);
+                phase1_rescue_compute_solution(tab);
+                phase1_rescue_compute_reduced_costs(tab);
                 continue;
             }
             refactor_failures++;
@@ -1954,12 +2025,25 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
         }
 
         int has_infeasible = 0;
+        int infeasible_rows = 0;
+        double max_infeas = 0.0;
+        double sum_infeas = 0.0;
         for (int k = 0; k < tab->m; k++) {
             int j = tab->basis[k];
+            double infeas = 0.0;
             if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL ||
                 tab->x[j] > tab->ub_ext[j] + RALPH_FEAS_TOL) {
                 has_infeasible = 1;
-                break;
+                if (tab->x[j] < tab->lb_ext[j] - RALPH_FEAS_TOL) {
+                    infeas = tab->lb_ext[j] - tab->x[j];
+                } else {
+                    infeas = tab->x[j] - tab->ub_ext[j];
+                }
+                infeasible_rows++;
+                sum_infeas += infeas;
+                if (infeas > max_infeas) {
+                    max_infeas = infeas;
+                }
             }
         }
         if (!has_infeasible) {
@@ -1968,6 +2052,25 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
             }
             free(tried_rows);
             return 0;
+        }
+        if (dual_phase1_rescue_progress_update_for_test(
+                infeasible_rows,
+                max_infeas,
+                sum_infeas,
+                rescue_progress_stall_limit,
+                &rescue_progress_best_rows,
+                &rescue_progress_best_max,
+                &rescue_progress_best_sum,
+                &rescue_progress_stall_count)) {
+            if (solver->verbose >= 2) {
+                LP_LOG_STDERR("[dual_phase1_rescue] Aborting after %d stalled rescue iterations without primal infeasibility progress (rows=%d max=%.3e sum=%.3e)\n",
+                        rescue_progress_stall_count,
+                        infeasible_rows,
+                        max_infeas,
+                        sum_infeas);
+            }
+            free(tried_rows);
+            return 1;
         }
 
         int leaving = -1;
@@ -2046,8 +2149,8 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
                 refactor_failures = 0;
                 dual_quality_on_refactor(&quality, iter);
             }
-            tableau_compute_solution(tab);
-            tableau_compute_reduced_costs(tab);
+            phase1_rescue_compute_solution(tab);
+            phase1_rescue_compute_reduced_costs(tab);
             continue;
         }
 
@@ -2075,10 +2178,10 @@ int dual_simplex_phase1_rescue(SimplexSolver *solver, int max_iters) {
                 refactor_failures = 0;
                 dual_quality_on_refactor(&quality, iter);
             }
-            tableau_compute_solution(tab);
-            tableau_compute_reduced_costs(tab);
+            phase1_rescue_compute_solution(tab);
+            phase1_rescue_compute_reduced_costs(tab);
         } else if (iter > 0 && iter % rescue_rc_recompute_interval == 0) {
-            tableau_compute_reduced_costs(tab);
+            phase1_rescue_compute_reduced_costs(tab);
         }
     }
 
