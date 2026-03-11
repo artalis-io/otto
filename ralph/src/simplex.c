@@ -1415,6 +1415,7 @@ static int phase1_activate_force_pivot_mode(
     SimplexSolver *solver,
     int m,
     int degenerate_count,
+    int queue_force_pending,
     int *dir_skip_event_streak_io,
     int *force_pivot_attempt_budget_io,
     int *force_pending_io,
@@ -1442,6 +1443,7 @@ static int phase1_activate_force_pivot_mode(
         degenerate_count,
         streak,
         budget,
+        queue_force_pending,
         &streak,
         &budget,
         &pending,
@@ -1631,10 +1633,12 @@ int simplex_phase1_dir_skip_rescue_cadence_plan_for_test(
 
 int simplex_phase1_force_pivot_mode_plan_for_test(int m,
                                                    int degenerate_count,
+                                                   int queue_force_pending,
                                                    int dir_skip_event_streak,
                                                    int active_budget,
                                                    int *next_streak_out,
-                                                   int *next_budget_out) {
+                                                   int *next_budget_out,
+                                                   int *next_pending_out) {
     int streak = dir_skip_event_streak;
     int budget = active_budget;
     int pending = 0;
@@ -1644,12 +1648,14 @@ int simplex_phase1_force_pivot_mode_plan_for_test(int m,
         NULL,
         m,
         degenerate_count,
+        queue_force_pending,
         &streak,
         &budget,
         &pending,
         &force_reason);
     if (next_streak_out) *next_streak_out = streak;
     if (next_budget_out) *next_budget_out = budget;
+    if (next_pending_out) *next_pending_out = pending;
     return activated;
 }
 
@@ -6159,6 +6165,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     int phase1_rc_only_streak = 0;
     int phase1_dir_skip_event_streak = 0;
     int phase1_dir_skip_no_recompute_streak = 0;
+    int phase1_dir_force_refactor_streak = 0;
     int phase1_dir_escape_cooldown = 0;
     int phase1_force_pivot_attempt_budget = 0;
     int periodic_policy_cooldown = 0;
@@ -6275,6 +6282,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 ratio_breakdown_same_entering_streak = 0;
                 phase1_dir_skip_event_streak = 0;
                 phase1_dir_skip_no_recompute_streak = 0;
+                phase1_dir_force_refactor_streak = 0;
                 phase1_dir_escape_cooldown = 0;
                 phase1_no_pivot_progress_reset(
                     &phase1_no_pivot_no_progress_streak,
@@ -6866,6 +6874,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                         solver,
                         tab->m,
                         degenerate_count,
+                        1,
                         &phase1_dir_skip_event_streak,
                         &phase1_force_pivot_attempt_budget,
                         &phase1_no_pivot_force_pending,
@@ -6958,6 +6967,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                         solver,
                         tab->m,
                         degenerate_count,
+                        1,
                         &phase1_dir_skip_event_streak,
                         &phase1_force_pivot_attempt_budget,
                         &phase1_no_pivot_force_pending,
@@ -7090,6 +7100,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                             solver,
                             tab->m,
                             degenerate_count,
+                            1,
                             &phase1_dir_skip_event_streak,
                             &phase1_force_pivot_attempt_budget,
                             &phase1_no_pivot_force_pending,
@@ -7115,6 +7126,29 @@ static int simplex_phase1(SimplexSolver *solver) {
                     solver,
                     LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
                 dir_refactor_ladder_forced = 1;
+            }
+            if (force_dir_refactor_extreme && !force_pivot_mode_active) {
+                if (phase1_dir_force_refactor_streak < INT_MAX) {
+                    phase1_dir_force_refactor_streak++;
+                }
+                if (phase1_activate_force_pivot_mode(
+                        solver,
+                        tab->m,
+                        degenerate_count,
+                        0,
+                        &phase1_dir_force_refactor_streak,
+                        &phase1_force_pivot_attempt_budget,
+                        NULL,
+                        NULL) &&
+                    solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Force-pivot mode armed after repeated extreme-direction refactors (budget=%d streak=%d)\n",
+                            phase1_force_pivot_attempt_budget,
+                            phase1_dir_force_refactor_streak);
+                }
+                force_pivot_mode_active =
+                    (phase1_force_pivot_attempt_budget > 0);
+            } else if (!force_dir_refactor_extreme) {
+                phase1_dir_force_refactor_streak = 0;
             }
             phase1_dir_skip_event_streak = 0;
             phase1_dir_escape_cooldown = 0;
@@ -7607,6 +7641,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         dir_stabilize_moderate_defer_pending = 0;
         phase1_rc_only_streak = 0;
         phase1_dir_skip_no_recompute_streak = 0;
+        phase1_dir_force_refactor_streak = 0;
         excluded_entering_a = -1;
         excluded_entering_ttl_a = 0;
         excluded_entering_b = -1;

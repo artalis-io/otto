@@ -1066,6 +1066,7 @@ int lp_refactor_policy_phase1_activate_force_pivot_mode(
     int degenerate_count,
     int dir_skip_event_streak,
     int force_pivot_attempt_budget,
+    int queue_force_pending,
     int *next_dir_skip_event_streak,
     int *next_force_pivot_attempt_budget,
     int *next_force_pending,
@@ -1096,8 +1097,8 @@ int lp_refactor_policy_phase1_activate_force_pivot_mode(
     streak = 0;
     if (next_dir_skip_event_streak) *next_dir_skip_event_streak = streak;
     if (next_force_pivot_attempt_budget) *next_force_pivot_attempt_budget = budget;
-    if (next_force_pending) *next_force_pending = 1;
-    if (next_force_reason) {
+    if (next_force_pending) *next_force_pending = queue_force_pending ? 1 : 0;
+    if (queue_force_pending && next_force_reason) {
         *next_force_reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
     }
     return 1;

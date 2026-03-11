@@ -227,6 +227,7 @@ int lp_refactor_policy_phase1_activate_force_pivot_mode(
     int degenerate_count,
     int dir_skip_event_streak,
     int force_pivot_attempt_budget,
+    int queue_force_pending,
     int *next_dir_skip_event_streak,
     int *next_force_pivot_attempt_budget,
     int *next_force_pending,
