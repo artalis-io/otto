@@ -1179,6 +1179,28 @@ Completed slices:
      - `0` command failures
      - `0` status/objective/invalid mismatches
      - `0` dense fallbacks
+6. `W2.6` instrument the local failed-stabilize retry lane before adding more
+   retry memory.
+   - added explicit telemetry for the local retry path:
+     - penalty arms
+     - alternate found vs no-alt
+     - alternate stabilized vs failed
+     - same-alternate repeat streaks
+   - validation:
+     - `make -C ralph test-lp-telemetry-solver`
+     - `make -C ralph test-simplex-policy`
+     - `make -C ralph test-netlib-gate-small`
+     - `make -C ralph test-netlib-gate`
+   - direct findings on the two target outliers:
+     - `wood1p`: all local retry-penalty counters stayed `0`
+     - `greenbeb`: all local retry-penalty counters stayed `0`
+   - implication:
+     - the current localized failed-stabilize retry penalty is not active on
+       the Week 2 outliers
+     - adding a bounded two-slot local retry memory now would be dead code for
+       those files
+     - the next Week 2 change should target why the localized retry lane is not
+       reached, rather than widening its memory
 
 ### Week 3: Degeneracy and Long-Run Control Quality
 

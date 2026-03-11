@@ -122,6 +122,13 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_failed_stabilize_events = 8;
     solver.telemetry.perf_phase1_failed_stabilize_same_entering_repeats = 5;
     solver.telemetry.perf_phase1_failed_stabilize_same_entering_max_streak = 4;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_arms = 6;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_found = 5;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_no_alt = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_stabilized = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_failed = 3;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_repeats = 4;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_max_streak = 3;
     solver.telemetry.perf_dual_bound_flip_applied = 9;
     solver.telemetry.perf_dual_bound_flip_startup = 4;
     solver.telemetry.perf_dual_bound_flip_iterative = 5;
@@ -319,6 +326,20 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 failed stabilize same-entering repeats");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_same_entering_max_streak, 0,
                   "reset: phase1 failed stabilize same-entering max streak");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_arms, 0,
+                  "reset: phase1 failed stabilize retry arms");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_found, 0,
+                  "reset: phase1 failed stabilize retry alternate found");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_no_alt, 0,
+                  "reset: phase1 failed stabilize retry no-alt");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_stabilized, 0,
+                  "reset: phase1 failed stabilize retry alternate stabilized");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_failed, 0,
+                  "reset: phase1 failed stabilize retry alternate failed");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_repeats, 0,
+                  "reset: phase1 failed stabilize retry same-alt repeats");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_max_streak, 0,
+                  "reset: phase1 failed stabilize retry same-alt max streak");
     ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_applied, 0,
                   "reset: dual bound-flip aggregate");
     ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_startup, 0,
@@ -532,6 +553,27 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 dir skip no recompute count");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_skip_guard_refresh, 1,
                   "record: phase1 dir skip guard refresh count");
+    lp_telemetry_record_phase1_failed_stabilize_retry_penalty_arm(&solver);
+    lp_telemetry_record_phase1_failed_stabilize_retry_penalty_arm(&solver);
+    lp_telemetry_record_phase1_failed_stabilize_retry_penalty_alternate(&solver, 0, 1);
+    lp_telemetry_record_phase1_failed_stabilize_retry_penalty_alternate(&solver, 1, 3);
+    lp_telemetry_record_phase1_failed_stabilize_retry_penalty_no_alt(&solver);
+    lp_telemetry_record_phase1_failed_stabilize_retry_penalty_outcome(&solver, 1);
+    lp_telemetry_record_phase1_failed_stabilize_retry_penalty_outcome(&solver, 0);
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_arms, 2,
+                  "record: phase1 failed-stabilize retry arms");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_found, 2,
+                  "record: phase1 failed-stabilize retry alternate found");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_no_alt, 1,
+                  "record: phase1 failed-stabilize retry no-alt");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_stabilized, 1,
+                  "record: phase1 failed-stabilize retry alternate stabilized");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_failed, 1,
+                  "record: phase1 failed-stabilize retry alternate failed");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_repeats, 1,
+                  "record: phase1 failed-stabilize retry same alternate repeats");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_max_streak, 3,
+                  "record: phase1 failed-stabilize retry same alternate max streak");
 
     lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
     lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
@@ -742,6 +784,13 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_failed_stabilize_events = 14;
     solver.telemetry.perf_phase1_failed_stabilize_same_entering_repeats = 8;
     solver.telemetry.perf_phase1_failed_stabilize_same_entering_max_streak = 4;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_arms = 9;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_found = 7;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_no_alt = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_stabilized = 3;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_failed = 4;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_repeats = 5;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_max_streak = 3;
     solver.telemetry.perf_dual_bound_flip_applied = 13;
     solver.telemetry.perf_dual_bound_flip_startup = 5;
     solver.telemetry.perf_dual_bound_flip_iterative = 8;
@@ -929,6 +978,20 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 failed stabilize same-entering repeats");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_same_entering_max_streak, 4,
                   "solver_snapshot: phase1 failed stabilize same-entering max streak");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_penalty_arms, 9,
+                  "solver_snapshot: phase1 failed stabilize retry arms");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_penalty_alt_found, 7,
+                  "solver_snapshot: phase1 failed stabilize retry alternate found");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_penalty_no_alt, 2,
+                  "solver_snapshot: phase1 failed stabilize retry no-alt");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_penalty_alt_stabilized, 3,
+                  "solver_snapshot: phase1 failed stabilize retry alternate stabilized");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_penalty_alt_failed, 4,
+                  "solver_snapshot: phase1 failed stabilize retry alternate failed");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_penalty_same_alt_repeats, 5,
+                  "solver_snapshot: phase1 failed stabilize retry same alternate repeats");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_penalty_same_alt_max_streak, 3,
+                  "solver_snapshot: phase1 failed stabilize retry same alternate max streak");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_applied, 13,
                   "solver_snapshot: dual bound flips aggregate");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_startup, 5,
