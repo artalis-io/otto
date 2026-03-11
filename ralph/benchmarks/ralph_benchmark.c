@@ -350,6 +350,11 @@ typedef struct {
     int phase1_no_pivot_ladder_forced_refactors_pivot_fail;
     int phase1_no_pivot_ladder_rescue_guard_cooldown_blocks;
     int phase1_no_pivot_ladder_rescue_guard_fail_cap_forces;
+    int phase1_direct_dual_rescue_attempts;
+    int phase1_direct_dual_rescue_successes;
+    int phase1_direct_dual_rescue_failures;
+    int phase1_direct_dual_rescue_guard_cooldown_blocks;
+    int phase1_direct_dual_rescue_guard_fail_cap_blocks;
     int phase1_soft_lu_policy_cooldown_defers;
 
     double phase2_pricing_ms;
@@ -1385,6 +1390,16 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_no_pivot_ladder_rescue_guard_cooldown_blocks;
             result.phase1_no_pivot_ladder_rescue_guard_fail_cap_forces =
                 solver_tel.perf_phase1_no_pivot_ladder_rescue_guard_fail_cap_forces;
+            result.phase1_direct_dual_rescue_attempts =
+                solver_tel.perf_phase1_direct_dual_rescue_attempts;
+            result.phase1_direct_dual_rescue_successes =
+                solver_tel.perf_phase1_direct_dual_rescue_successes;
+            result.phase1_direct_dual_rescue_failures =
+                solver_tel.perf_phase1_direct_dual_rescue_failures;
+            result.phase1_direct_dual_rescue_guard_cooldown_blocks =
+                solver_tel.perf_phase1_direct_dual_rescue_guard_cooldown_blocks;
+            result.phase1_direct_dual_rescue_guard_fail_cap_blocks =
+                solver_tel.perf_phase1_direct_dual_rescue_guard_fail_cap_blocks;
             result.phase1_soft_lu_policy_cooldown_defers =
                 solver_tel.perf_phase1_soft_lu_policy_cooldown_defers;
 
@@ -2811,6 +2826,16 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_no_pivot_ladder_rescue_guard_cooldown_blocks);
     fprintf(out, "      \"no_pivot_ladder_rescue_guard_fail_cap_forces\": %d,\n",
             ralph->phase1_no_pivot_ladder_rescue_guard_fail_cap_forces);
+    fprintf(out, "      \"direct_dual_rescue_attempts\": %d,\n",
+            ralph->phase1_direct_dual_rescue_attempts);
+    fprintf(out, "      \"direct_dual_rescue_successes\": %d,\n",
+            ralph->phase1_direct_dual_rescue_successes);
+    fprintf(out, "      \"direct_dual_rescue_failures\": %d,\n",
+            ralph->phase1_direct_dual_rescue_failures);
+    fprintf(out, "      \"direct_dual_rescue_guard_cooldown_blocks\": %d,\n",
+            ralph->phase1_direct_dual_rescue_guard_cooldown_blocks);
+    fprintf(out, "      \"direct_dual_rescue_guard_fail_cap_blocks\": %d,\n",
+            ralph->phase1_direct_dual_rescue_guard_fail_cap_blocks);
     fprintf(out, "      \"soft_lu_policy_cooldown_defers\": %d,\n",
             ralph->phase1_soft_lu_policy_cooldown_defers);
     fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase1_compute_solution_calls);

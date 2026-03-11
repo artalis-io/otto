@@ -106,6 +106,11 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_no_pivot_forced_ratio_breakdown = 2;
     solver.telemetry.perf_phase1_no_pivot_forced_dir_skip = 1;
     solver.telemetry.perf_phase1_no_pivot_forced_pivot_fail = 1;
+    solver.telemetry.perf_phase1_direct_dual_rescue_attempts = 6;
+    solver.telemetry.perf_phase1_direct_dual_rescue_successes = 2;
+    solver.telemetry.perf_phase1_direct_dual_rescue_failures = 4;
+    solver.telemetry.perf_phase1_direct_dual_rescue_guard_cooldown_blocks = 3;
+    solver.telemetry.perf_phase1_direct_dual_rescue_guard_fail_cap_blocks = 1;
     solver.telemetry.perf_phase1_soft_lu_policy_cooldown_defers = 5;
     solver.telemetry.perf_dual_bound_flip_applied = 9;
     solver.telemetry.perf_dual_bound_flip_startup = 4;
@@ -272,6 +277,16 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 no-pivot forced dir skip");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_no_pivot_forced_pivot_fail, 0,
                   "reset: phase1 no-pivot forced pivot fail");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_direct_dual_rescue_attempts, 0,
+                  "reset: phase1 direct dual rescue attempts");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_direct_dual_rescue_successes, 0,
+                  "reset: phase1 direct dual rescue successes");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_direct_dual_rescue_failures, 0,
+                  "reset: phase1 direct dual rescue failures");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_direct_dual_rescue_guard_cooldown_blocks, 0,
+                  "reset: phase1 direct dual rescue guard cooldown");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_direct_dual_rescue_guard_fail_cap_blocks, 0,
+                  "reset: phase1 direct dual rescue guard fail cap");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_soft_lu_policy_cooldown_defers, 0,
                   "reset: phase1 soft-lu periodic cooldown defers");
     ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_applied, 0,
@@ -681,6 +696,11 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_no_pivot_forced_ratio_breakdown = 2;
     solver.telemetry.perf_phase1_no_pivot_forced_dir_skip = 3;
     solver.telemetry.perf_phase1_no_pivot_forced_pivot_fail = 1;
+    solver.telemetry.perf_phase1_direct_dual_rescue_attempts = 7;
+    solver.telemetry.perf_phase1_direct_dual_rescue_successes = 2;
+    solver.telemetry.perf_phase1_direct_dual_rescue_failures = 5;
+    solver.telemetry.perf_phase1_direct_dual_rescue_guard_cooldown_blocks = 4;
+    solver.telemetry.perf_phase1_direct_dual_rescue_guard_fail_cap_blocks = 1;
     solver.telemetry.perf_phase1_soft_lu_policy_cooldown_defers = 4;
     solver.telemetry.perf_dual_bound_flip_applied = 13;
     solver.telemetry.perf_dual_bound_flip_startup = 5;
@@ -837,6 +857,16 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 no-pivot force dir skip");
     ASSERT_INT_EQ(snap.perf_phase1_no_pivot_forced_pivot_fail, 1,
                   "solver_snapshot: phase1 no-pivot force pivot fail");
+    ASSERT_INT_EQ(snap.perf_phase1_direct_dual_rescue_attempts, 7,
+                  "solver_snapshot: phase1 direct dual rescue attempts");
+    ASSERT_INT_EQ(snap.perf_phase1_direct_dual_rescue_successes, 2,
+                  "solver_snapshot: phase1 direct dual rescue successes");
+    ASSERT_INT_EQ(snap.perf_phase1_direct_dual_rescue_failures, 5,
+                  "solver_snapshot: phase1 direct dual rescue failures");
+    ASSERT_INT_EQ(snap.perf_phase1_direct_dual_rescue_guard_cooldown_blocks, 4,
+                  "solver_snapshot: phase1 direct dual rescue guard cooldown");
+    ASSERT_INT_EQ(snap.perf_phase1_direct_dual_rescue_guard_fail_cap_blocks, 1,
+                  "solver_snapshot: phase1 direct dual rescue guard fail cap");
     ASSERT_INT_EQ(snap.perf_phase1_soft_lu_policy_cooldown_defers, 4,
                   "solver_snapshot: phase1 soft-lu periodic cooldown defers");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_applied, 13,

@@ -103,6 +103,9 @@ int simplex_phase1_no_pivot_ladder_rescue_guard_plan_for_test(
     int ladder_step,
     int rescue_cooldown_iters,
     int rescue_fail_streak);
+int simplex_phase1_direct_dual_rescue_guard_plan_for_test(
+    int rescue_cooldown_iters,
+    int rescue_fail_streak);
 int simplex_phase1_dir_skip_rescue_cadence_plan_for_test(
     int dir_skip_event_streak);
 
@@ -659,6 +662,13 @@ typedef struct {
 
 typedef struct {
     const char *name;
+    int rescue_cooldown_iters;
+    int rescue_fail_streak;
+    int expected_step;
+} DirectDualRescueGuardCase;
+
+typedef struct {
+    const char *name;
     int dir_skip_event_streak;
     int expected_due;
 } DirSkipRescueCadenceCase;
@@ -1026,6 +1036,20 @@ static int run_no_pivot_ladder_case(const NoPivotLadderCase *tc) {
 static int run_no_pivot_ladder_guard_case(const NoPivotLadderGuardCase *tc) {
     int step = simplex_phase1_no_pivot_ladder_rescue_guard_plan_for_test(
         tc->ladder_step,
+        tc->rescue_cooldown_iters,
+        tc->rescue_fail_streak);
+    if (step != tc->expected_step) {
+        fprintf(stderr, "FAIL: %s (expected step=%d got=%d)\n",
+                tc->name, tc->expected_step, step);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_direct_dual_rescue_guard_case(
+    const DirectDualRescueGuardCase *tc) {
+    int step = simplex_phase1_direct_dual_rescue_guard_plan_for_test(
         tc->rescue_cooldown_iters,
         tc->rescue_fail_streak);
     if (step != tc->expected_step) {
@@ -2089,6 +2113,18 @@ int main(void) {
             .max_threshold = 10
         },
         {
+            .name = "phase1 no-pivot ladder forces refactor on large ratio-breakdown streak without extra no-progress",
+            .m = 1500,
+            .degenerate_count = 120,
+            .reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
+            .no_pivot_streak = 9,
+            .no_progress_streak = 0,
+            .force_pivot_mode_active = 0,
+            .expected_step = 2,
+            .min_threshold = 8,
+            .max_threshold = 10
+        },
+        {
             .name = "phase1 no-pivot ladder forces refactor on sustained no-progress",
             .m = 1500,
             .degenerate_count = 120,
@@ -2101,14 +2137,14 @@ int main(void) {
             .max_threshold = 10
         },
         {
-            .name = "phase1 no-pivot ladder can trigger rescue from no-pivot streak",
+            .name = "phase1 no-pivot ladder forces refactor from prolonged ratio-breakdown streak",
             .m = 1500,
             .degenerate_count = 120,
             .reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
             .no_pivot_streak = 12,
             .no_progress_streak = 1,
             .force_pivot_mode_active = 0,
-            .expected_step = 1,
+            .expected_step = 2,
             .min_threshold = 8,
             .max_threshold = 10
         },
@@ -2155,6 +2191,26 @@ int main(void) {
         {
             .name = "phase1 no-pivot ladder rescue guard allows rescue when clear",
             .ladder_step = 1,
+            .rescue_cooldown_iters = 0,
+            .rescue_fail_streak = 0,
+            .expected_step = 1
+        }
+    };
+    const DirectDualRescueGuardCase direct_dual_rescue_guard_cases[] = {
+        {
+            .name = "phase1 direct dual rescue guard blocks on cooldown",
+            .rescue_cooldown_iters = 3,
+            .rescue_fail_streak = 0,
+            .expected_step = 0
+        },
+        {
+            .name = "phase1 direct dual rescue guard blocks on fail cap",
+            .rescue_cooldown_iters = 0,
+            .rescue_fail_streak = 3,
+            .expected_step = 2
+        },
+        {
+            .name = "phase1 direct dual rescue guard allows rescue when clear",
             .rescue_cooldown_iters = 0,
             .rescue_fail_streak = 0,
             .expected_step = 1
@@ -2812,6 +2868,7 @@ int main(void) {
     int total_no_pivot = (int)(sizeof(no_pivot_force_cases) / sizeof(no_pivot_force_cases[0]));
     int total_no_pivot_ladder = (int)(sizeof(no_pivot_ladder_cases) / sizeof(no_pivot_ladder_cases[0]));
     int total_no_pivot_ladder_guard = (int)(sizeof(no_pivot_ladder_guard_cases) / sizeof(no_pivot_ladder_guard_cases[0]));
+    int total_direct_dual_rescue_guard = (int)(sizeof(direct_dual_rescue_guard_cases) / sizeof(direct_dual_rescue_guard_cases[0]));
     int total_dir_skip_rescue_cadence = (int)(sizeof(dir_skip_rescue_cadence_cases) / sizeof(dir_skip_rescue_cadence_cases[0]));
     int total_force_pivot_mode = (int)(sizeof(force_pivot_mode_cases) / sizeof(force_pivot_mode_cases[0]));
     int total_dir_escape_gate =
@@ -2845,6 +2902,7 @@ int main(void) {
                 total_periodic_cost_defer + total_dir_stabilize + total_dir_force +
                 total_dir_moderate + total_no_pivot + total_no_pivot_ladder +
                 total_no_pivot_ladder_guard +
+                total_direct_dual_rescue_guard +
                 total_dir_skip_rescue_cadence +
                 total_force_pivot_mode +
                 total_dir_escape_gate +
@@ -2900,6 +2958,9 @@ int main(void) {
     }
     for (int i = 0; i < total_no_pivot_ladder_guard; i++) {
         pass += run_no_pivot_ladder_guard_case(&no_pivot_ladder_guard_cases[i]);
+    }
+    for (int i = 0; i < total_direct_dual_rescue_guard; i++) {
+        pass += run_direct_dual_rescue_guard_case(&direct_dual_rescue_guard_cases[i]);
     }
     for (int i = 0; i < total_dir_skip_rescue_cadence; i++) {
         pass += run_dir_skip_rescue_cadence_case(&dir_skip_rescue_cadence_cases[i]);

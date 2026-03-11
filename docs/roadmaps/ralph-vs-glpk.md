@@ -1137,6 +1137,25 @@ Validated local slice:
    - focused `wood1p`/`greenbeb` gate and full NETLIB gate both stayed
      baseline-clean:
      `22` timeouts, `0` dense fallbacks, and no new mismatches
+4. `W2.4` force ratio-breakdown ladder escalation earlier on large degenerate
+   runs, and add direct dual-rescue guard telemetry.
+   - local validation only; not yet committed or pushed
+   - added direct phase-1 dual-rescue guard/attempt telemetry to separate
+     direct rescue sites from ladder rescue sites
+   - finding: current `greenbeb`/`wood1p` runs are still dominated by ladder
+     rescue / retry pressure, not direct rescue
+   - tightened the large-degenerate ratio-breakdown ladder so repeated
+     no-pivot ratio failures force recovery earlier without waiting for an
+     extra no-progress streak
+   - full NETLIB gate stayed baseline-clean at `22` timeouts, `0` dense
+     fallbacks, and no new mismatches
+   - `greenbeb` improved materially in the full gate:
+     `time_ms = 9224.610 -> 6528.542`,
+     `iterations = 5052 -> 1624`,
+     `ratio_breakdown_retries = 2785 -> 540`,
+     `no_pivot_ladder_forced_refactors_ratio_breakdown = 20 -> 110`
+   - `wood1p` stayed in the same timeout family but did not regress on the
+     full gate (`3267.603 -> 3255.448 ms`)
 
 ### Week 3: Degeneracy and Long-Run Control Quality
 
