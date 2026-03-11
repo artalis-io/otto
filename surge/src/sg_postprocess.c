@@ -2028,6 +2028,7 @@ ARStatus sg_route_postprocess_polish_distance(const SGContext *ctx,
     for (pass = 0; pass < 3; pass++) {
         uint32_t count = sol->base.num_assigned;
         uint32_t *requests;
+        uint32_t sweep_count;
         uint32_t i;
         int improved = 0;
 
@@ -2041,7 +2042,33 @@ ARStatus sg_route_postprocess_polish_distance(const SGContext *ctx,
         }
         memcpy(requests, sol->base.assigned_ids, (size_t)count * sizeof(uint32_t));
 
-        for (i = 0; i < count; i++) {
+        /* For large instances, sort by removal cost descending and cap sweep
+           at 200 requests per pass.  Most misplaced customers are tried first. */
+        sweep_count = count;
+        if (count > 200) {
+            double *costs = (double *)malloc((size_t)count * sizeof(double));
+            if (costs) {
+                uint32_t j, k;
+                for (j = 0; j < count; j++)
+                    costs[j] = sg_route_removal_cost((void *)ctx, (void *)sol, requests[j]);
+                /* Selection-sort top-200 by descending cost (simple, O(200*n)) */
+                for (j = 0; j < 200 && j < count; j++) {
+                    uint32_t best_idx = j;
+                    for (k = j + 1; k < count; k++) {
+                        if (costs[k] > costs[best_idx])
+                            best_idx = k;
+                    }
+                    if (best_idx != j) {
+                        double tc = costs[j]; costs[j] = costs[best_idx]; costs[best_idx] = tc;
+                        uint32_t tr = requests[j]; requests[j] = requests[best_idx]; requests[best_idx] = tr;
+                    }
+                }
+                free(costs);
+                sweep_count = 200;
+            }
+        }
+
+        for (i = 0; i < sweep_count; i++) {
             uint32_t request_id = requests[i];
             uint32_t original_vehicle;
             SGRouteSolution *backup;

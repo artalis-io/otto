@@ -816,6 +816,8 @@ static ARALNSContext *sg_create_route_alns(SGContext *ctx, ARALNSParams *params,
         ar_alns_add_destroy(alns, "string", sg_route_destroy_string, ctx, 2.0) != AR_STATUS_OK ||
         ar_alns_add_destroy(alns, "string-split", sg_route_destroy_string_split, ctx, 1.0) != AR_STATUS_OK ||
         ar_alns_add_destroy(alns, "vehicle-worst-cost", sg_route_destroy_vehicle_worst_cost, ctx, 1.0) != AR_STATUS_OK ||
+        /* zone-ruin: disabled — improves distance but costs vehicle matches on tight-TW (R1/RC1).
+           Needs phase-gating or softer zone selection before re-enabling. See S26 ablation results. */
         ar_alns_add_repair(alns, "greedy-insert", sg_route_repair_greedy, ctx, 1.0) != AR_STATUS_OK ||
         ar_alns_add_repair(alns, "regret-2", sg_route_repair_regret2, ctx, 1.0) != AR_STATUS_OK ||
         ar_alns_add_repair(alns, "regret-3", sg_route_repair_regret3, ctx, 1.0) != AR_STATUS_OK ||
@@ -1330,8 +1332,7 @@ skip_phase2:
                 (void)sg_route_postprocess_ejection_reduce(ctx, best);
             if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
                 (void)sg_route_postprocess_intensify(ctx, best);
-            if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()) &&
-                (ctx->num_requests <= 200 || phase2_iters == 0))
+            if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
                 (void)sg_route_postprocess_polish_distance(ctx, best);
         } else {
             if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
@@ -1340,8 +1341,7 @@ skip_phase2:
                 (void)sg_route_postprocess_ejection_reduce(ctx, &initial);
             if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
                 (void)sg_route_postprocess_intensify(ctx, &initial);
-            if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()) &&
-                (ctx->num_requests <= 200 || phase2_iters == 0))
+            if (!sg_time_budget_expired(&ctx->time_budget, sg_monotonic_seconds()))
                 (void)sg_route_postprocess_polish_distance(ctx, &initial);
         }
 

@@ -1279,3 +1279,186 @@ ARStatus sg_route_destroy_vehicle_worst_cost(void *op_ctx, void *solution, int c
     *removed_count = total_removed;
     return sg_route_unassign_removed_requests(ctx, sol, removed_ids, *removed_count);
 }
+
+/* Compute centroid of all requests on a vehicle's route. */
+static int sg_route_centroid(const SGContext *ctx, const SGRouteSolution *sol,
+                              uint32_t vehicle_id, double *cx_out, double *cy_out) {
+    const uint32_t *route = sg_route_vehicle_ptr_const(sol, vehicle_id);
+    uint32_t len = sol->route_lengths[vehicle_id];
+    double sx = 0.0, sy = 0.0;
+    uint32_t n = 0;
+    uint32_t i;
+    for (i = 0; i < len; i++) {
+        double rx, ry;
+        if (sg_request_centroid(ctx, route[i], &rx, &ry)) {
+            sx += rx;
+            sy += ry;
+            n++;
+        }
+    }
+    if (n == 0) return 0;
+    *cx_out = sx / (double)n;
+    *cy_out = sy / (double)n;
+    return 1;
+}
+
+/* Zone-ruin destroy: remove ALL customers from 2-3 geographically nearby
+   routes, then fill remaining quota with Shaw-related requests from
+   neighboring vehicles.  This redesigns route topology rather than just
+   shuffling customers between fixed route structures. */
+ARStatus sg_route_destroy_zone_ruin(void *op_ctx, void *solution, int count,
+                                     uint32_t *removed_ids, int *removed_count) {
+    SGContext *ctx = (SGContext *)op_ctx;
+    SGRouteSolution *sol = (SGRouteSolution *)solution;
+    uint32_t seed_vehicle = 0;
+    double seed_cx, seed_cy;
+    uint32_t zone_vehicles[3];
+    int zone_count = 1;
+    double zone_dist[2];
+    uint32_t zone_cand[2];
+    uint32_t v;
+    int total_removed = 0;
+    int target;
+    uint32_t i;
+    uint32_t num_non_empty = 0;
+
+    if (!ctx || !ctx->op_rng || !sol || !removed_count || count < 0) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    *removed_count = 0;
+    if (count == 0 || sol->base.num_assigned == 0) {
+        return AR_STATUS_OK;
+    }
+    if (!removed_ids) {
+        return AR_STATUS_INVALID_ARG;
+    }
+
+    target = count;
+    if ((uint32_t)target > sol->base.num_assigned) {
+        target = (int)sol->base.num_assigned;
+    }
+
+    /* Count non-empty vehicles */
+    for (v = 0; v < sol->num_vehicles; v++) {
+        if (sol->route_lengths[v] > 0) num_non_empty++;
+    }
+    if (num_non_empty == 0) {
+        return AR_STATUS_OK;
+    }
+
+    /* Step 1: Pick a random non-empty vehicle as seed */
+    {
+        uint32_t pick = (uint32_t)sh_rng_int_range(ctx->op_rng, 0, (int)num_non_empty - 1);
+        uint32_t seen = 0;
+        for (v = 0; v < sol->num_vehicles; v++) {
+            if (sol->route_lengths[v] > 0) {
+                if (seen == pick) { seed_vehicle = v; break; }
+                seen++;
+            }
+        }
+    }
+
+    if (!sg_route_centroid(ctx, sol, seed_vehicle, &seed_cx, &seed_cy)) {
+        zone_vehicles[0] = seed_vehicle;
+        zone_count = 1;
+        goto remove_zone;
+    }
+
+    /* Step 2: Find 1-2 nearest routes by centroid distance */
+    zone_dist[0] = INFINITY;
+    zone_dist[1] = INFINITY;
+    zone_cand[0] = UINT32_MAX;
+    zone_cand[1] = UINT32_MAX;
+    for (v = 0; v < sol->num_vehicles; v++) {
+        double vcx, vcy, d;
+        if (v == seed_vehicle || sol->route_lengths[v] == 0) continue;
+        if (!sg_route_centroid(ctx, sol, v, &vcx, &vcy)) continue;
+        d = sg_euclid(seed_cx, seed_cy, vcx, vcy);
+        if (d < zone_dist[0]) {
+            zone_dist[1] = zone_dist[0]; zone_cand[1] = zone_cand[0];
+            zone_dist[0] = d; zone_cand[0] = v;
+        } else if (d < zone_dist[1]) {
+            zone_dist[1] = d; zone_cand[1] = v;
+        }
+    }
+
+    zone_vehicles[0] = seed_vehicle;
+    zone_count = 1;
+    if (zone_cand[0] != UINT32_MAX) {
+        zone_vehicles[zone_count++] = zone_cand[0];
+    }
+    if (zone_cand[1] != UINT32_MAX && zone_count < 3) {
+        zone_vehicles[zone_count++] = zone_cand[1];
+    }
+
+remove_zone:
+    /* Step 3: Remove ALL customers from zone routes */
+    for (i = 0; i < (uint32_t)zone_count && total_removed < target; i++) {
+        const uint32_t *route = sg_route_vehicle_ptr_const(sol, zone_vehicles[i]);
+        uint32_t len = sol->route_lengths[zone_vehicles[i]];
+        uint32_t j;
+        for (j = 0; j < len && total_removed < target; j++) {
+            removed_ids[total_removed++] = route[j];
+        }
+    }
+
+    /* Step 4: Fill remaining quota with Shaw-related requests */
+    if (total_removed < target && total_removed > 0) {
+        ctx->active_solution = sol;
+        for (i = 0; i < (uint32_t)total_removed && total_removed < target; i++) {
+            uint32_t seed_id = removed_ids[i];
+            uint32_t best_id = UINT32_MAX;
+            double best_rel = INFINITY;
+            uint32_t j;
+
+            for (j = 0; j < sol->base.num_assigned; j++) {
+                uint32_t cand = sol->base.assigned_ids[j];
+                uint32_t cv = sol->request_vehicle[cand];
+                uint32_t k;
+                int already_removed = 0;
+                int is_zone_vehicle = 0;
+                double rel;
+
+                for (k = 0; k < (uint32_t)zone_count; k++) {
+                    if (cv == zone_vehicles[k]) { is_zone_vehicle = 1; break; }
+                }
+                if (is_zone_vehicle) continue;
+
+                for (k = 0; k < (uint32_t)total_removed; k++) {
+                    if (removed_ids[k] == cand) { already_removed = 1; break; }
+                }
+                if (already_removed) continue;
+
+                rel = sg_route_shaw_relatedness(ctx, seed_id, cand);
+                if (rel < best_rel) {
+                    best_rel = rel;
+                    best_id = cand;
+                }
+            }
+
+            if (best_id != UINT32_MAX) {
+                removed_ids[total_removed++] = best_id;
+            }
+        }
+        ctx->active_solution = NULL;
+    }
+
+    /* Filter out frozen requests */
+    if (ctx->has_frozen && ctx->request_locks) {
+        int w = 0;
+        for (i = 0; i < (uint32_t)total_removed; i++) {
+            if (ctx->request_locks[removed_ids[i]] < SG_LOCK_FROZEN) {
+                removed_ids[w++] = removed_ids[i];
+            }
+        }
+        total_removed = w;
+        if (total_removed == 0) {
+            *removed_count = 0;
+            return AR_STATUS_OK;
+        }
+    }
+
+    *removed_count = total_removed;
+    return sg_route_unassign_removed_requests(ctx, sol, removed_ids, *removed_count);
+}
