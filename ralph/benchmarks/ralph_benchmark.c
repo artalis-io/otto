@@ -287,6 +287,11 @@ typedef struct {
     int phase1_compute_rc_ctx_refactor_success;
     int phase1_compute_rc_ctx_drift_refresh;
     int phase1_compute_rc_ctx_dual_rescue;
+    int phase1_entering_exclusions;
+    int phase1_entering_exclusion_repeats;
+    int phase1_entering_exclusion_hits;
+    int phase1_entering_exclusion_reroutes;
+    int phase1_entering_exclusion_no_alt;
     int phase1_refactor_periodic_policy;
     int phase1_refactor_periodic_lu_health;
     int phase1_refactor_safety_forced;
@@ -356,6 +361,11 @@ typedef struct {
     int phase1_direct_dual_rescue_guard_cooldown_blocks;
     int phase1_direct_dual_rescue_guard_fail_cap_blocks;
     int phase1_soft_lu_policy_cooldown_defers;
+    int phase1_dir_skip_same_entering_repeats;
+    int phase1_dir_skip_same_entering_max_streak;
+    int phase1_failed_stabilize_events;
+    int phase1_failed_stabilize_same_entering_repeats;
+    int phase1_failed_stabilize_same_entering_max_streak;
 
     double phase2_pricing_ms;
     double phase2_ratio_ms;
@@ -1267,6 +1277,16 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_compute_rc_ctx_drift_refresh;
             result.phase1_compute_rc_ctx_dual_rescue =
                 solver_tel.perf_phase1_compute_rc_ctx_dual_rescue;
+            result.phase1_entering_exclusions =
+                solver_tel.perf_phase1_entering_exclusions;
+            result.phase1_entering_exclusion_repeats =
+                solver_tel.perf_phase1_entering_exclusion_repeats;
+            result.phase1_entering_exclusion_hits =
+                solver_tel.perf_phase1_entering_exclusion_hits;
+            result.phase1_entering_exclusion_reroutes =
+                solver_tel.perf_phase1_entering_exclusion_reroutes;
+            result.phase1_entering_exclusion_no_alt =
+                solver_tel.perf_phase1_entering_exclusion_no_alt;
             result.phase1_refactor_periodic_policy = solver_tel.perf_phase1_refactor_periodic_policy;
             result.phase1_refactor_periodic_lu_health = solver_tel.perf_phase1_refactor_periodic_lu_health;
             result.phase1_refactor_safety_forced = solver_tel.perf_phase1_refactor_safety_forced;
@@ -1402,6 +1422,16 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_direct_dual_rescue_guard_fail_cap_blocks;
             result.phase1_soft_lu_policy_cooldown_defers =
                 solver_tel.perf_phase1_soft_lu_policy_cooldown_defers;
+            result.phase1_dir_skip_same_entering_repeats =
+                solver_tel.perf_phase1_dir_skip_same_entering_repeats;
+            result.phase1_dir_skip_same_entering_max_streak =
+                solver_tel.perf_phase1_dir_skip_same_entering_max_streak;
+            result.phase1_failed_stabilize_events =
+                solver_tel.perf_phase1_failed_stabilize_events;
+            result.phase1_failed_stabilize_same_entering_repeats =
+                solver_tel.perf_phase1_failed_stabilize_same_entering_repeats;
+            result.phase1_failed_stabilize_same_entering_max_streak =
+                solver_tel.perf_phase1_failed_stabilize_same_entering_max_streak;
 
             result.phase2_pricing_ms = solver_tel.perf_phase2_pricing_ms;
             result.phase2_ratio_ms = solver_tel.perf_phase2_ratio_ms;
@@ -2768,6 +2798,16 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_compute_rc_ctx_drift_refresh);
     fprintf(out, "      \"compute_reduced_costs_ctx_dual_rescue\": %d,\n",
             ralph->phase1_compute_rc_ctx_dual_rescue);
+    fprintf(out, "      \"entering_exclusions\": %d,\n",
+            ralph->phase1_entering_exclusions);
+    fprintf(out, "      \"entering_exclusion_repeats\": %d,\n",
+            ralph->phase1_entering_exclusion_repeats);
+    fprintf(out, "      \"entering_exclusion_hits\": %d,\n",
+            ralph->phase1_entering_exclusion_hits);
+    fprintf(out, "      \"entering_exclusion_reroutes\": %d,\n",
+            ralph->phase1_entering_exclusion_reroutes);
+    fprintf(out, "      \"entering_exclusion_no_alt\": %d,\n",
+            ralph->phase1_entering_exclusion_no_alt);
     fprintf(out, "      \"recompute_rc_guard_forced_full\": %d,\n",
             ralph->phase1_recompute_rc_guard_forced_full);
     fprintf(out, "      \"ratio_breakdown_retries\": %d,\n",
@@ -2838,6 +2878,16 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_direct_dual_rescue_guard_fail_cap_blocks);
     fprintf(out, "      \"soft_lu_policy_cooldown_defers\": %d,\n",
             ralph->phase1_soft_lu_policy_cooldown_defers);
+    fprintf(out, "      \"dir_skip_same_entering_repeats\": %d,\n",
+            ralph->phase1_dir_skip_same_entering_repeats);
+    fprintf(out, "      \"dir_skip_same_entering_max_streak\": %d,\n",
+            ralph->phase1_dir_skip_same_entering_max_streak);
+    fprintf(out, "      \"failed_stabilize_events\": %d,\n",
+            ralph->phase1_failed_stabilize_events);
+    fprintf(out, "      \"failed_stabilize_same_entering_repeats\": %d,\n",
+            ralph->phase1_failed_stabilize_same_entering_repeats);
+    fprintf(out, "      \"failed_stabilize_same_entering_max_streak\": %d,\n",
+            ralph->phase1_failed_stabilize_same_entering_max_streak);
     fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase1_compute_solution_calls);
     fprintf(out, "      \"compute_reduced_costs_calls\": %d\n", ralph->phase1_compute_rc_calls);
     fprintf(out, "    },\n");

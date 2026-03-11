@@ -97,6 +97,11 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_compute_rc_ctx_recompute_rc_only = 7;
     solver.telemetry.perf_phase1_compute_rc_ctx_init = 2;
     solver.telemetry.perf_phase1_compute_rc_ctx_dual_rescue = 6;
+    solver.telemetry.perf_phase1_entering_exclusions = 9;
+    solver.telemetry.perf_phase1_entering_exclusion_repeats = 4;
+    solver.telemetry.perf_phase1_entering_exclusion_hits = 6;
+    solver.telemetry.perf_phase1_entering_exclusion_reroutes = 5;
+    solver.telemetry.perf_phase1_entering_exclusion_no_alt = 1;
     solver.telemetry.perf_phase1_recompute_rc_guard_forced_full = 4;
     solver.telemetry.perf_phase1_ratio_breakdown_retries = 6;
     solver.telemetry.perf_phase1_ratio_breakdown_escalations = 2;
@@ -112,6 +117,11 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_direct_dual_rescue_guard_cooldown_blocks = 3;
     solver.telemetry.perf_phase1_direct_dual_rescue_guard_fail_cap_blocks = 1;
     solver.telemetry.perf_phase1_soft_lu_policy_cooldown_defers = 5;
+    solver.telemetry.perf_phase1_dir_skip_same_entering_repeats = 7;
+    solver.telemetry.perf_phase1_dir_skip_same_entering_max_streak = 3;
+    solver.telemetry.perf_phase1_failed_stabilize_events = 8;
+    solver.telemetry.perf_phase1_failed_stabilize_same_entering_repeats = 5;
+    solver.telemetry.perf_phase1_failed_stabilize_same_entering_max_streak = 4;
     solver.telemetry.perf_dual_bound_flip_applied = 9;
     solver.telemetry.perf_dual_bound_flip_startup = 4;
     solver.telemetry.perf_dual_bound_flip_iterative = 5;
@@ -259,6 +269,16 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 compute_rc init ctx");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_compute_rc_ctx_dual_rescue, 0,
                   "reset: phase1 compute_rc dual rescue ctx");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_entering_exclusions, 0,
+                  "reset: phase1 entering exclusions");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_entering_exclusion_repeats, 0,
+                  "reset: phase1 entering exclusion repeats");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_entering_exclusion_hits, 0,
+                  "reset: phase1 entering exclusion hits");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_entering_exclusion_reroutes, 0,
+                  "reset: phase1 entering exclusion reroutes");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_entering_exclusion_no_alt, 0,
+                  "reset: phase1 entering exclusion no alt");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_rc_guard_forced_full, 0,
                   "reset: phase1 recompute rc-only guard forced");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_ratio_breakdown_retries, 0,
@@ -289,6 +309,16 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 direct dual rescue guard fail cap");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_soft_lu_policy_cooldown_defers, 0,
                   "reset: phase1 soft-lu periodic cooldown defers");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_skip_same_entering_repeats, 0,
+                  "reset: phase1 dir-skip same-entering repeats");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_skip_same_entering_max_streak, 0,
+                  "reset: phase1 dir-skip same-entering max streak");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_events, 0,
+                  "reset: phase1 failed stabilize events");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_same_entering_repeats, 0,
+                  "reset: phase1 failed stabilize same-entering repeats");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_same_entering_max_streak, 0,
+                  "reset: phase1 failed stabilize same-entering max streak");
     ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_applied, 0,
                   "reset: dual bound-flip aggregate");
     ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_startup, 0,
@@ -687,6 +717,11 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_compute_rc_ctx_recompute_full = 9;
     solver.telemetry.perf_phase1_compute_rc_ctx_recompute_rc_only = 11;
     solver.telemetry.perf_phase1_compute_rc_ctx_dual_rescue = 5;
+    solver.telemetry.perf_phase1_entering_exclusions = 17;
+    solver.telemetry.perf_phase1_entering_exclusion_repeats = 6;
+    solver.telemetry.perf_phase1_entering_exclusion_hits = 12;
+    solver.telemetry.perf_phase1_entering_exclusion_reroutes = 9;
+    solver.telemetry.perf_phase1_entering_exclusion_no_alt = 3;
     solver.telemetry.perf_phase1_recompute_rc_guard_forced_full = 2;
     solver.telemetry.perf_phase1_ratio_breakdown_retries = 14;
     solver.telemetry.perf_phase1_ratio_breakdown_escalations = 3;
@@ -702,6 +737,11 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_direct_dual_rescue_guard_cooldown_blocks = 4;
     solver.telemetry.perf_phase1_direct_dual_rescue_guard_fail_cap_blocks = 1;
     solver.telemetry.perf_phase1_soft_lu_policy_cooldown_defers = 4;
+    solver.telemetry.perf_phase1_dir_skip_same_entering_repeats = 15;
+    solver.telemetry.perf_phase1_dir_skip_same_entering_max_streak = 5;
+    solver.telemetry.perf_phase1_failed_stabilize_events = 14;
+    solver.telemetry.perf_phase1_failed_stabilize_same_entering_repeats = 8;
+    solver.telemetry.perf_phase1_failed_stabilize_same_entering_max_streak = 4;
     solver.telemetry.perf_dual_bound_flip_applied = 13;
     solver.telemetry.perf_dual_bound_flip_startup = 5;
     solver.telemetry.perf_dual_bound_flip_iterative = 8;
@@ -839,6 +879,16 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 compute_rc rc-only ctx");
     ASSERT_INT_EQ(snap.perf_phase1_compute_rc_ctx_dual_rescue, 5,
                   "solver_snapshot: phase1 compute_rc dual rescue ctx");
+    ASSERT_INT_EQ(snap.perf_phase1_entering_exclusions, 17,
+                  "solver_snapshot: phase1 entering exclusions");
+    ASSERT_INT_EQ(snap.perf_phase1_entering_exclusion_repeats, 6,
+                  "solver_snapshot: phase1 entering exclusion repeats");
+    ASSERT_INT_EQ(snap.perf_phase1_entering_exclusion_hits, 12,
+                  "solver_snapshot: phase1 entering exclusion hits");
+    ASSERT_INT_EQ(snap.perf_phase1_entering_exclusion_reroutes, 9,
+                  "solver_snapshot: phase1 entering exclusion reroutes");
+    ASSERT_INT_EQ(snap.perf_phase1_entering_exclusion_no_alt, 3,
+                  "solver_snapshot: phase1 entering exclusion no alt");
     ASSERT_INT_EQ(snap.perf_phase1_recompute_rc_guard_forced_full, 2,
                   "solver_snapshot: phase1 recompute rc-only guard forced");
     ASSERT_INT_EQ(snap.perf_phase1_ratio_breakdown_retries, 14,
@@ -869,6 +919,16 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 direct dual rescue guard fail cap");
     ASSERT_INT_EQ(snap.perf_phase1_soft_lu_policy_cooldown_defers, 4,
                   "solver_snapshot: phase1 soft-lu periodic cooldown defers");
+    ASSERT_INT_EQ(snap.perf_phase1_dir_skip_same_entering_repeats, 15,
+                  "solver_snapshot: phase1 dir-skip same-entering repeats");
+    ASSERT_INT_EQ(snap.perf_phase1_dir_skip_same_entering_max_streak, 5,
+                  "solver_snapshot: phase1 dir-skip same-entering max streak");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_events, 14,
+                  "solver_snapshot: phase1 failed stabilize events");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_same_entering_repeats, 8,
+                  "solver_snapshot: phase1 failed stabilize same-entering repeats");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_same_entering_max_streak, 4,
+                  "solver_snapshot: phase1 failed stabilize same-entering max streak");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_applied, 13,
                   "solver_snapshot: dual bound flips aggregate");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_startup, 5,

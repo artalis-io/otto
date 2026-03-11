@@ -291,6 +291,52 @@ void lp_telemetry_record_phase1_compute_rc_context(SimplexSolver *solver,
     }
 }
 
+void lp_telemetry_record_phase1_entering_exclusion(SimplexSolver *solver,
+                                                   int repeated_slot) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_entering_exclusions++;
+    if (repeated_slot) {
+        solver->telemetry.perf_phase1_entering_exclusion_repeats++;
+    }
+}
+
+void lp_telemetry_record_phase1_entering_exclusion_hit(SimplexSolver *solver,
+                                                       int rerouted) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_entering_exclusion_hits++;
+    if (rerouted) {
+        solver->telemetry.perf_phase1_entering_exclusion_reroutes++;
+    } else {
+        solver->telemetry.perf_phase1_entering_exclusion_no_alt++;
+    }
+}
+
+void lp_telemetry_record_phase1_dir_skip_entering(SimplexSolver *solver,
+                                                  int same_entering,
+                                                  int streak) {
+    if (!solver_telemetry_enabled(solver)) return;
+    if (same_entering) {
+        solver->telemetry.perf_phase1_dir_skip_same_entering_repeats++;
+    }
+    if (streak > solver->telemetry.perf_phase1_dir_skip_same_entering_max_streak) {
+        solver->telemetry.perf_phase1_dir_skip_same_entering_max_streak = streak;
+    }
+}
+
+void lp_telemetry_record_phase1_failed_stabilize_entering(
+    SimplexSolver *solver,
+    int same_entering,
+    int streak) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_failed_stabilize_events++;
+    if (same_entering) {
+        solver->telemetry.perf_phase1_failed_stabilize_same_entering_repeats++;
+    }
+    if (streak > solver->telemetry.perf_phase1_failed_stabilize_same_entering_max_streak) {
+        solver->telemetry.perf_phase1_failed_stabilize_same_entering_max_streak = streak;
+    }
+}
+
 void lp_telemetry_record_pricing(SimplexSolver *solver,
                                  int phase,
                                  double elapsed_ms) {
