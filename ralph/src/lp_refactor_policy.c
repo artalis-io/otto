@@ -1012,6 +1012,12 @@ int lp_refactor_policy_phase1_no_pivot_ladder_step(
          no_pivot_streak >= refactor_threshold)) {
         return 2;
     }
+    if (fast_escalation &&
+        (LPPhase1NoPivotForceReason)reason ==
+            LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN &&
+        no_pivot_streak >= refactor_threshold) {
+        return 2;
+    }
 
     if (no_progress_streak >= rescue_start &&
         rescue_period > 0 &&

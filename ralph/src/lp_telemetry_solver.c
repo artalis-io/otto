@@ -175,6 +175,11 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_no_pivot_ladder_forced_refactors_pivot_fail = 0;
     solver->telemetry.perf_phase1_no_pivot_ladder_rescue_guard_cooldown_blocks = 0;
     solver->telemetry.perf_phase1_no_pivot_ladder_rescue_guard_fail_cap_forces = 0;
+    solver->telemetry.perf_phase1_direct_dual_rescue_attempts = 0;
+    solver->telemetry.perf_phase1_direct_dual_rescue_successes = 0;
+    solver->telemetry.perf_phase1_direct_dual_rescue_failures = 0;
+    solver->telemetry.perf_phase1_direct_dual_rescue_guard_cooldown_blocks = 0;
+    solver->telemetry.perf_phase1_direct_dual_rescue_guard_fail_cap_blocks = 0;
     solver->telemetry.perf_phase1_soft_lu_policy_cooldown_defers = 0;
 
     solver->telemetry.perf_phase2_pricing_ms = 0.0;
@@ -606,6 +611,11 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_no_pivot_ladder_forced_refactors_pivot_fail);
     COPY_SOLVER_FIELD(perf_phase1_no_pivot_ladder_rescue_guard_cooldown_blocks);
     COPY_SOLVER_FIELD(perf_phase1_no_pivot_ladder_rescue_guard_fail_cap_forces);
+    COPY_SOLVER_FIELD(perf_phase1_direct_dual_rescue_attempts);
+    COPY_SOLVER_FIELD(perf_phase1_direct_dual_rescue_successes);
+    COPY_SOLVER_FIELD(perf_phase1_direct_dual_rescue_failures);
+    COPY_SOLVER_FIELD(perf_phase1_direct_dual_rescue_guard_cooldown_blocks);
+    COPY_SOLVER_FIELD(perf_phase1_direct_dual_rescue_guard_fail_cap_blocks);
     COPY_SOLVER_FIELD(perf_phase1_soft_lu_policy_cooldown_defers);
 
     COPY_SOLVER_FIELD(perf_phase2_pricing_ms);

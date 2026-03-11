@@ -1205,6 +1205,33 @@ enum {
     PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR = 2
 };
 
+static int phase1_dual_rescue_guard_step(SimplexSolver *solver,
+                                         int rescue_cooldown_iters,
+                                         int rescue_fail_streak,
+                                         int ladder_context) {
+    if (solver &&
+        !lp_glpk_strict_allow_phase1_dual_rescue(solver->glpk_strict_mode)) {
+        return PHASE1_NO_PIVOT_LADDER_STEP_RETRY;
+    }
+    if (rescue_fail_streak >= PHASE1_NO_PIVOT_LADDER_RESCUE_FAIL_CAP) {
+        if (ladder_context) {
+            lp_telemetry_record_phase1_no_pivot_ladder_rescue_guard(solver, 1);
+        } else {
+            lp_telemetry_record_phase1_direct_dual_rescue_guard(solver, 1);
+        }
+        return PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR;
+    }
+    if (rescue_cooldown_iters > 0) {
+        if (ladder_context) {
+            lp_telemetry_record_phase1_no_pivot_ladder_rescue_guard(solver, 0);
+        } else {
+            lp_telemetry_record_phase1_direct_dual_rescue_guard(solver, 0);
+        }
+        return PHASE1_NO_PIVOT_LADDER_STEP_RETRY;
+    }
+    return PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE;
+}
+
 static double phase1_artificial_abs_sum(const SimplexTableau *tab) {
     double art_sum = 0.0;
     if (!tab || tab->num_artificial <= 0 || !tab->artificial_vars || !tab->x) {
@@ -1340,23 +1367,11 @@ static int phase1_no_pivot_ladder_apply_rescue_guard(
     int ladder_step,
     int rescue_cooldown_iters,
     int rescue_fail_streak) {
-    if (solver &&
-        ladder_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE &&
-        !lp_glpk_strict_allow_phase1_dual_rescue(solver->glpk_strict_mode)) {
-        return PHASE1_NO_PIVOT_LADDER_STEP_RETRY;
-    }
     if (ladder_step != PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
         return ladder_step;
     }
-    if (rescue_fail_streak >= PHASE1_NO_PIVOT_LADDER_RESCUE_FAIL_CAP) {
-        lp_telemetry_record_phase1_no_pivot_ladder_rescue_guard(solver, 1);
-        return PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR;
-    }
-    if (rescue_cooldown_iters > 0) {
-        lp_telemetry_record_phase1_no_pivot_ladder_rescue_guard(solver, 0);
-        return PHASE1_NO_PIVOT_LADDER_STEP_RETRY;
-    }
-    return PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE;
+    return phase1_dual_rescue_guard_step(
+        solver, rescue_cooldown_iters, rescue_fail_streak, 1);
 }
 
 static int phase1_attempt_ladder_dual_rescue(
@@ -1408,6 +1423,51 @@ static int phase1_attempt_ladder_dual_rescue(
     }
     lp_telemetry_record_phase1_no_pivot_ladder_dual_rescue(
         solver, reason, 0);
+    return 0;
+}
+
+static int phase1_direct_dual_rescue_guard_plan(SimplexSolver *solver,
+                                                int rescue_cooldown_iters,
+                                                int rescue_fail_streak) {
+    return phase1_dual_rescue_guard_step(
+        solver, rescue_cooldown_iters, rescue_fail_streak, 0);
+}
+
+static int phase1_attempt_direct_dual_rescue(
+    SimplexSolver *solver,
+    SimplexTableau *tab,
+    int iter,
+    int *rescue_cooldown_io,
+    int *rescue_fail_streak_io) {
+    int rescue_status;
+    int guard_step = phase1_direct_dual_rescue_guard_plan(
+        solver,
+        rescue_cooldown_io ? *rescue_cooldown_io : 0,
+        rescue_fail_streak_io ? *rescue_fail_streak_io : 0);
+    if (guard_step != PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
+        return 0;
+    }
+
+    rescue_status = dual_simplex_phase1_rescue(
+        solver, tab->m * RALPH_PHASE1_DUAL_RESCUE_MULT);
+    if (rescue_cooldown_io) {
+        *rescue_cooldown_io = PHASE1_NO_PIVOT_LADDER_RESCUE_COOLDOWN_ITERS;
+    }
+    if (rescue_status == 0) {
+        if (rescue_fail_streak_io) *rescue_fail_streak_io = 0;
+        lp_telemetry_record_phase1_direct_dual_rescue(solver, 1);
+        return 1;
+    }
+    if (solver->status == RALPH_STATUS_TIME_LIMIT) {
+        primal_remove_perturbation(tab);
+        solver->iterations = iter;
+        phase1_trace_emit_summary(solver, RALPH_STATUS_TIME_LIMIT);
+        return -1;
+    }
+    if (rescue_fail_streak_io && *rescue_fail_streak_io < INT_MAX) {
+        (*rescue_fail_streak_io)++;
+    }
+    lp_telemetry_record_phase1_direct_dual_rescue(solver, 0);
     return 0;
 }
 
@@ -1623,6 +1683,13 @@ int simplex_phase1_no_pivot_ladder_rescue_guard_plan_for_test(
                                                      ladder_step,
                                                      rescue_cooldown_iters,
                                                      rescue_fail_streak);
+}
+
+int simplex_phase1_direct_dual_rescue_guard_plan_for_test(
+    int rescue_cooldown_iters,
+    int rescue_fail_streak) {
+    return phase1_direct_dual_rescue_guard_plan(
+        NULL, rescue_cooldown_iters, rescue_fail_streak);
 }
 
 int simplex_phase1_dir_skip_rescue_cadence_plan_for_test(
@@ -6636,8 +6703,12 @@ static int simplex_phase1(SimplexSolver *solver) {
                 }
             }
 
-            int rescue_status = dual_simplex_phase1_rescue(
-                solver, tab->m * RALPH_PHASE1_DUAL_RESCUE_MULT);
+            int rescue_status = phase1_attempt_direct_dual_rescue(
+                solver,
+                tab,
+                iter,
+                &phase1_no_pivot_ladder_rescue_cooldown,
+                &phase1_no_pivot_ladder_rescue_fail_streak);
             if (rescue_status == 0) {
                 if (solver->verbose) {
                     LP_LOG_STDERR("[simplex_phase1] Dual rescue recovered after ratio-test breakdown at iter %d\n", iter);
@@ -7583,7 +7654,12 @@ static int simplex_phase1(SimplexSolver *solver) {
 
             /* Final fallback for stuck Phase 1 states: try a bounded dual-simplex
              * rescue on the current tableau (no recursion to primal simplex). */
-            int rescue_status = dual_simplex_phase1_rescue(solver, tab->m * RALPH_PHASE1_DUAL_RESCUE_MULT);
+            int rescue_status = phase1_attempt_direct_dual_rescue(
+                solver,
+                tab,
+                iter,
+                &phase1_no_pivot_ladder_rescue_cooldown,
+                &phase1_no_pivot_ladder_rescue_fail_streak);
             if (rescue_status == 0) {
                 if (solver->verbose) {
                     LP_LOG_STDERR("[simplex_phase1] Dual rescue restored feasibility progress at iter %d\n", iter);
@@ -8005,7 +8081,12 @@ static int simplex_phase1(SimplexSolver *solver) {
                     }
                 }
 
-                int rescue_status = dual_simplex_phase1_rescue(solver, tab->m * RALPH_PHASE1_DUAL_RESCUE_MULT);
+                int rescue_status = phase1_attempt_direct_dual_rescue(
+                    solver,
+                    tab,
+                    iter,
+                    &phase1_no_pivot_ladder_rescue_cooldown,
+                    &phase1_no_pivot_ladder_rescue_fail_streak);
                 if (rescue_status == 0) {
                     if (solver->verbose) {
                         LP_LOG_STDERR("[simplex_phase1] Dual rescue recovered after refactorization failure at iter %d\n", iter);

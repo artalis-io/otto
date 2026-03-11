@@ -880,6 +880,11 @@ typedef struct {
     int perf_phase1_no_pivot_ladder_forced_refactors_pivot_fail;
     int perf_phase1_no_pivot_ladder_rescue_guard_cooldown_blocks;
     int perf_phase1_no_pivot_ladder_rescue_guard_fail_cap_forces;
+    int perf_phase1_direct_dual_rescue_attempts;
+    int perf_phase1_direct_dual_rescue_successes;
+    int perf_phase1_direct_dual_rescue_failures;
+    int perf_phase1_direct_dual_rescue_guard_cooldown_blocks;
+    int perf_phase1_direct_dual_rescue_guard_fail_cap_blocks;
     int perf_phase1_soft_lu_policy_cooldown_defers;
 
     double perf_phase2_pricing_ms;
@@ -1322,6 +1327,11 @@ typedef struct {
     int perf_phase1_no_pivot_ladder_forced_refactors_pivot_fail;
     int perf_phase1_no_pivot_ladder_rescue_guard_cooldown_blocks;
     int perf_phase1_no_pivot_ladder_rescue_guard_fail_cap_forces;
+    int perf_phase1_direct_dual_rescue_attempts;
+    int perf_phase1_direct_dual_rescue_successes;
+    int perf_phase1_direct_dual_rescue_failures;
+    int perf_phase1_direct_dual_rescue_guard_cooldown_blocks;
+    int perf_phase1_direct_dual_rescue_guard_fail_cap_blocks;
     int perf_phase1_soft_lu_policy_cooldown_defers;
 
     double perf_phase2_pricing_ms;
@@ -1965,6 +1975,11 @@ void lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
 void lp_telemetry_record_phase1_no_pivot_ladder_rescue_guard(
     SimplexSolver *solver,
     int forced_refactor);
+void lp_telemetry_record_phase1_direct_dual_rescue(SimplexSolver *solver,
+                                                   int success);
+void lp_telemetry_record_phase1_direct_dual_rescue_guard(
+    SimplexSolver *solver,
+    int fail_cap_block);
 void lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(
     SimplexSolver *solver);
 void lp_telemetry_record_dual_ratio_no_entering(SimplexSolver *solver);

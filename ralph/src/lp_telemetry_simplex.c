@@ -671,6 +671,28 @@ void lp_telemetry_record_phase1_no_pivot_ladder_rescue_guard(
     }
 }
 
+void lp_telemetry_record_phase1_direct_dual_rescue(SimplexSolver *solver,
+                                                   int success) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_direct_dual_rescue_attempts++;
+    if (success) {
+        solver->telemetry.perf_phase1_direct_dual_rescue_successes++;
+    } else {
+        solver->telemetry.perf_phase1_direct_dual_rescue_failures++;
+    }
+}
+
+void lp_telemetry_record_phase1_direct_dual_rescue_guard(
+    SimplexSolver *solver,
+    int fail_cap_block) {
+    if (!solver_telemetry_enabled(solver)) return;
+    if (fail_cap_block) {
+        solver->telemetry.perf_phase1_direct_dual_rescue_guard_fail_cap_blocks++;
+    } else {
+        solver->telemetry.perf_phase1_direct_dual_rescue_guard_cooldown_blocks++;
+    }
+}
+
 void lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(
     SimplexSolver *solver) {
     if (!solver_telemetry_enabled(solver)) return;

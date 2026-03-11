@@ -611,6 +611,11 @@ typedef struct {
     int perf_phase1_no_pivot_ladder_forced_refactors_pivot_fail;
     int perf_phase1_no_pivot_ladder_rescue_guard_cooldown_blocks;
     int perf_phase1_no_pivot_ladder_rescue_guard_fail_cap_forces;
+    int perf_phase1_direct_dual_rescue_attempts;
+    int perf_phase1_direct_dual_rescue_successes;
+    int perf_phase1_direct_dual_rescue_failures;
+    int perf_phase1_direct_dual_rescue_guard_cooldown_blocks;
+    int perf_phase1_direct_dual_rescue_guard_fail_cap_blocks;
     int perf_phase1_soft_lu_policy_cooldown_defers;
 
     double perf_phase2_pricing_ms;
