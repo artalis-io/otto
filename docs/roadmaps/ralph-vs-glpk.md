@@ -1102,6 +1102,23 @@ Verification:
 - focused gate: `greenbeb`, `wood1p`, `woodw`, `perold`, `stocfor2`, `cycle`
 - no regression on small/full NETLIB
 
+Completed slices:
+1. `W2.1` bound phase-1 dual-rescue churn.
+   - committed as `b94fe5b`
+   - added compute-context attribution for dual rescue
+   - reduced rescue-dominated recompute cost on `greenbeb` and `wood1p`
+     without changing the global timeout count
+2. `W2.2` widen phase-1 `dir_skip` rc-only / no-recompute eligibility by LP
+   width, not just basis height.
+   - small-basis but wide LPs now enter the existing `dir_skip`
+     recompute-suppression lane when `n >= 2000`
+   - focused `wood1p`/`greenbeb` gate stayed baseline-clean
+   - full NETLIB gate remained baseline-clean at `22` timeouts with `0`
+     dense fallbacks and no new mismatches
+   - direct `wood1p` now uses the intended mechanism:
+     `dir_stabilize_skip_no_recompute = 77` and
+     `recompute_after_dir_skip = 3469 -> 1870`
+
 ### Week 3: Degeneracy and Long-Run Control Quality
 
 Target family:

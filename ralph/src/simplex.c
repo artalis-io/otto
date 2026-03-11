@@ -4218,6 +4218,7 @@ static void phase1_recompute_dir_skip_safe(SimplexSolver *solver,
     }
     if (lp_refactor_policy_phase1_dir_skip_should_skip_recompute(
             tab->m,
+            tab->n,
             degenerate_count,
             no_pivot_streak,
             no_recompute_streak)) {
@@ -4232,7 +4233,7 @@ static void phase1_recompute_dir_skip_safe(SimplexSolver *solver,
         *dir_skip_no_recompute_streak = 0;
     }
     int allow_rc_only = lp_refactor_policy_phase1_dir_skip_allow_rc_only(
-        tab->m, degenerate_count, no_pivot_streak);
+        tab->m, tab->n, degenerate_count, no_pivot_streak);
     if (!allow_rc_only) {
         phase1_recompute_full_with_reason(solver,
                                           tab,

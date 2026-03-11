@@ -151,11 +151,13 @@ int lp_refactor_policy_phase1_dir_stabilize_cooldown_updates(int m,
                                                              int repeat_streak);
 
 int lp_refactor_policy_phase1_dir_skip_allow_rc_only(int m,
+                                                     int n,
                                                      int degenerate_count,
                                                      int no_pivot_streak);
 
 int lp_refactor_policy_phase1_dir_skip_should_skip_recompute(
     int m,
+    int n,
     int degenerate_count,
     int no_pivot_streak,
     int no_recompute_streak);
