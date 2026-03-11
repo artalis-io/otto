@@ -1119,6 +1119,25 @@ Completed slices:
      `dir_stabilize_skip_no_recompute = 77` and
      `recompute_after_dir_skip = 3469 -> 1870`
 
+Validated local slice:
+3. `W2.3` arm existing force-pivot mode from chronic extreme-direction
+   refactor loops without queueing an extra forced refactor.
+   - local validation only; not yet committed or pushed
+   - the new path counts repeated `force_extreme_dir` refactors into the
+     existing force-pivot budget instead of scheduling another immediate
+     forced refactor
+   - direct `wood1p` improved materially:
+     `dir_stabilize_refactor_from_force_extreme_dir = 1863 -> 416`,
+     `dir_stabilize_refactor_from_force_pivot_mode = 0 -> 34`,
+     `refactor_calls = 1952 -> 707`,
+     `recompute_after_dir_skip = 1870 -> 448`,
+     `time_ms = 3262.617 -> 2541.829`
+   - direct `greenbeb` also improved in wall time
+     (`7416.830 -> 6610.409 ms`) but remained timeout-bound
+   - focused `wood1p`/`greenbeb` gate and full NETLIB gate both stayed
+     baseline-clean:
+     `22` timeouts, `0` dense fallbacks, and no new mismatches
+
 ### Week 3: Degeneracy and Long-Run Control Quality
 
 Target family:

@@ -108,10 +108,12 @@ int simplex_phase1_dir_skip_rescue_cadence_plan_for_test(
 
 int simplex_phase1_force_pivot_mode_plan_for_test(int m,
                                                    int degenerate_count,
+                                                   int queue_force_pending,
                                                    int dir_skip_no_recompute_streak,
                                                    int active_budget,
                                                    int *next_streak_out,
-                                                   int *next_budget_out);
+                                                   int *next_budget_out,
+                                                   int *next_pending_out);
 
 int simplex_phase1_dir_stabilize_escape_gate_plan_for_test(
     int m,
@@ -665,11 +667,13 @@ typedef struct {
     const char *name;
     int m;
     int degenerate_count;
+    int queue_force_pending;
     int dir_skip_no_recompute_streak;
     int active_budget;
     int expected_activate;
     int expected_next_streak;
     int expected_next_budget;
+    int expected_next_pending;
 } ForcePivotModeCase;
 
 typedef struct {
@@ -1048,13 +1052,16 @@ static int run_dir_skip_rescue_cadence_case(const DirSkipRescueCadenceCase *tc) 
 static int run_force_pivot_mode_case(const ForcePivotModeCase *tc) {
     int next_streak = -1;
     int next_budget = -1;
+    int next_pending = -1;
     int activate = simplex_phase1_force_pivot_mode_plan_for_test(
         tc->m,
         tc->degenerate_count,
+        tc->queue_force_pending,
         tc->dir_skip_no_recompute_streak,
         tc->active_budget,
         &next_streak,
-        &next_budget);
+        &next_budget,
+        &next_pending);
     if (activate != tc->expected_activate) {
         fprintf(stderr, "FAIL: %s (expected activate=%d got=%d)\n",
                 tc->name, tc->expected_activate, activate);
@@ -1068,6 +1075,11 @@ static int run_force_pivot_mode_case(const ForcePivotModeCase *tc) {
     if (next_budget != tc->expected_next_budget) {
         fprintf(stderr, "FAIL: %s (expected next_budget=%d got=%d)\n",
                 tc->name, tc->expected_next_budget, next_budget);
+        return 0;
+    }
+    if (next_pending != tc->expected_next_pending) {
+        fprintf(stderr, "FAIL: %s (expected next_pending=%d got=%d)\n",
+                tc->name, tc->expected_next_pending, next_pending);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -2175,31 +2187,49 @@ int main(void) {
             .name = "force-pivot mode activates after repeated dir-skip no-recompute",
             .m = 1500,
             .degenerate_count = 120,
+            .queue_force_pending = 1,
             .dir_skip_no_recompute_streak = 32,
             .active_budget = 0,
             .expected_activate = 1,
             .expected_next_streak = 0,
-            .expected_next_budget = 20
+            .expected_next_budget = 20,
+            .expected_next_pending = 1
         },
         {
             .name = "force-pivot mode does not activate below threshold",
             .m = 1500,
             .degenerate_count = 120,
+            .queue_force_pending = 1,
             .dir_skip_no_recompute_streak = 31,
             .active_budget = 0,
             .expected_activate = 0,
             .expected_next_streak = 31,
-            .expected_next_budget = 0
+            .expected_next_budget = 0,
+            .expected_next_pending = 0
         },
         {
             .name = "force-pivot mode keeps active budget without re-arming",
             .m = 1500,
             .degenerate_count = 120,
+            .queue_force_pending = 1,
             .dir_skip_no_recompute_streak = 64,
             .active_budget = 3,
             .expected_activate = 0,
             .expected_next_streak = 64,
-            .expected_next_budget = 3
+            .expected_next_budget = 3,
+            .expected_next_pending = 0
+        },
+        {
+            .name = "force-pivot mode can arm without queueing an immediate forced refactor",
+            .m = 1500,
+            .degenerate_count = 120,
+            .queue_force_pending = 0,
+            .dir_skip_no_recompute_streak = 32,
+            .active_budget = 0,
+            .expected_activate = 1,
+            .expected_next_streak = 0,
+            .expected_next_budget = 20,
+            .expected_next_pending = 0
         }
     };
     const DirStabilizeEscapeGateCase dir_stabilize_escape_gate_cases[] = {
