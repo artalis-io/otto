@@ -33,6 +33,15 @@ void dual_reinvert_hard_trigger_safety_step_for_test(int iter,
                                                      int *burst_io,
                                                      int *demoted_io);
 int dual_reinvert_effective_mode_for_test(int configured_mode, int demoted);
+int dual_phase1_rescue_progress_limit_for_test(int m);
+int dual_phase1_rescue_progress_update_for_test(int current_rows,
+                                                double current_max,
+                                                double current_sum,
+                                                int stall_limit,
+                                                int *best_rows_io,
+                                                double *best_max_io,
+                                                double *best_sum_io,
+                                                int *stall_count_io);
 
 static int tests_run = 0;
 static int tests_passed = 0;
@@ -358,6 +367,60 @@ static void test_dual_reinvert_effective_mode_mapping(void) {
                 "dual reinvert effective mode keeps non-control_all modes unchanged");
 }
 
+static void test_dual_phase1_rescue_progress_limit(void) {
+    ASSERT_TRUE(dual_phase1_rescue_progress_limit_for_test(8) == 16,
+                "dual phase1 rescue progress limit clamps small systems");
+    ASSERT_TRUE(dual_phase1_rescue_progress_limit_for_test(120) == 60,
+                "dual phase1 rescue progress limit scales with system size");
+    ASSERT_TRUE(dual_phase1_rescue_progress_limit_for_test(800) == 128,
+                "dual phase1 rescue progress limit clamps large systems");
+}
+
+static void test_dual_phase1_rescue_progress_gate(void) {
+    int best_rows = -1;
+    int stall_count = 0;
+    double best_max = 0.0;
+    double best_sum = 0.0;
+
+    ASSERT_TRUE(dual_phase1_rescue_progress_update_for_test(
+                    5, 10.0, 30.0, 2,
+                    &best_rows, &best_max, &best_sum, &stall_count) == 0,
+                "dual phase1 rescue progress accepts first infeasibility sample");
+    ASSERT_TRUE(best_rows == 5 && fabs(best_max - 10.0) < 1e-12 &&
+                    fabs(best_sum - 30.0) < 1e-12 && stall_count == 0,
+                "dual phase1 rescue progress records first best sample");
+
+    ASSERT_TRUE(dual_phase1_rescue_progress_update_for_test(
+                    5, 10.0, 30.0, 2,
+                    &best_rows, &best_max, &best_sum, &stall_count) == 0,
+                "dual phase1 rescue progress tolerates one stalled sample");
+    ASSERT_TRUE(stall_count == 1,
+                "dual phase1 rescue progress increments stall count on no progress");
+
+    ASSERT_TRUE(dual_phase1_rescue_progress_update_for_test(
+                    5, 9.5, 29.0, 2,
+                    &best_rows, &best_max, &best_sum, &stall_count) == 0,
+                "dual phase1 rescue progress resets on max infeasibility improvement");
+    ASSERT_TRUE(stall_count == 0 && fabs(best_max - 9.5) < 1e-12,
+                "dual phase1 rescue progress stores improved max infeasibility");
+
+    ASSERT_TRUE(dual_phase1_rescue_progress_update_for_test(
+                    4, 9.5, 28.0, 2,
+                    &best_rows, &best_max, &best_sum, &stall_count) == 0,
+                "dual phase1 rescue progress resets on fewer infeasible rows");
+    ASSERT_TRUE(best_rows == 4 && stall_count == 0,
+                "dual phase1 rescue progress stores improved infeasible-row count");
+
+    ASSERT_TRUE(dual_phase1_rescue_progress_update_for_test(
+                    4, 9.5, 28.0, 2,
+                    &best_rows, &best_max, &best_sum, &stall_count) == 0,
+                "dual phase1 rescue progress permits first repeated stalled sample");
+    ASSERT_TRUE(dual_phase1_rescue_progress_update_for_test(
+                    4, 9.5, 28.0, 2,
+                    &best_rows, &best_max, &best_sum, &stall_count) == 1,
+                "dual phase1 rescue progress aborts after repeated stalls");
+}
+
 int main(void) {
     printf("=== Dual Ratio Flip Tests ===\n");
     test_flip_mode_applies_flip_only_step();
@@ -372,6 +435,8 @@ int main(void) {
     test_dual_reinvert_hard_trigger_demotion();
     test_dual_reinvert_hard_trigger_gap_resets_burst();
     test_dual_reinvert_effective_mode_mapping();
+    test_dual_phase1_rescue_progress_limit();
+    test_dual_phase1_rescue_progress_gate();
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
 }

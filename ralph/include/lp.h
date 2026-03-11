@@ -695,6 +695,8 @@ typedef struct {
     /* Statistics */
     int iterations;
     int phase;              /* 1 or 2 */
+    int phase1_compute_solution_context;
+    int phase1_compute_rc_context;
     int solution_last_residual_iter;            /* Last iteration with full residual/refinement check */
     int solution_last_residual_factorize_calls; /* LU factorize_calls at last residual/refinement check */
     int solution_last_residual_num_updates;     /* LU num_updates at last residual/refinement check */
@@ -793,6 +795,28 @@ typedef struct {
     int perf_phase1_refactor_calls;
     int perf_phase1_compute_solution_calls;
     int perf_phase1_compute_rc_calls;
+    int perf_phase1_compute_solution_ctx_other;
+    int perf_phase1_compute_solution_ctx_recompute_full;
+    int perf_phase1_compute_solution_ctx_recompute_guard_forced_full;
+    int perf_phase1_compute_solution_ctx_init;
+    int perf_phase1_compute_solution_ctx_no_entering_cleanup;
+    int perf_phase1_compute_solution_ctx_infeas_cleanup;
+    int perf_phase1_compute_solution_ctx_refactor_fail_continue;
+    int perf_phase1_compute_solution_ctx_refactor_failure_recovery;
+    int perf_phase1_compute_solution_ctx_refactor_success;
+    int perf_phase1_compute_solution_ctx_drift_refresh;
+    int perf_phase1_compute_solution_ctx_dual_rescue;
+    int perf_phase1_compute_rc_ctx_other;
+    int perf_phase1_compute_rc_ctx_recompute_full;
+    int perf_phase1_compute_rc_ctx_recompute_rc_only;
+    int perf_phase1_compute_rc_ctx_recompute_guard_forced_full;
+    int perf_phase1_compute_rc_ctx_init;
+    int perf_phase1_compute_rc_ctx_infeas_cleanup;
+    int perf_phase1_compute_rc_ctx_refactor_fail_continue;
+    int perf_phase1_compute_rc_ctx_refactor_failure_recovery;
+    int perf_phase1_compute_rc_ctx_refactor_success;
+    int perf_phase1_compute_rc_ctx_drift_refresh;
+    int perf_phase1_compute_rc_ctx_dual_rescue;
     int perf_phase1_refactor_periodic_policy;
     int perf_phase1_refactor_periodic_lu_health;
     int perf_phase1_refactor_safety_forced;
@@ -1213,6 +1237,28 @@ typedef struct {
     int perf_phase1_refactor_calls;
     int perf_phase1_compute_solution_calls;
     int perf_phase1_compute_rc_calls;
+    int perf_phase1_compute_solution_ctx_other;
+    int perf_phase1_compute_solution_ctx_recompute_full;
+    int perf_phase1_compute_solution_ctx_recompute_guard_forced_full;
+    int perf_phase1_compute_solution_ctx_init;
+    int perf_phase1_compute_solution_ctx_no_entering_cleanup;
+    int perf_phase1_compute_solution_ctx_infeas_cleanup;
+    int perf_phase1_compute_solution_ctx_refactor_fail_continue;
+    int perf_phase1_compute_solution_ctx_refactor_failure_recovery;
+    int perf_phase1_compute_solution_ctx_refactor_success;
+    int perf_phase1_compute_solution_ctx_drift_refresh;
+    int perf_phase1_compute_solution_ctx_dual_rescue;
+    int perf_phase1_compute_rc_ctx_other;
+    int perf_phase1_compute_rc_ctx_recompute_full;
+    int perf_phase1_compute_rc_ctx_recompute_rc_only;
+    int perf_phase1_compute_rc_ctx_recompute_guard_forced_full;
+    int perf_phase1_compute_rc_ctx_init;
+    int perf_phase1_compute_rc_ctx_infeas_cleanup;
+    int perf_phase1_compute_rc_ctx_refactor_fail_continue;
+    int perf_phase1_compute_rc_ctx_refactor_failure_recovery;
+    int perf_phase1_compute_rc_ctx_refactor_success;
+    int perf_phase1_compute_rc_ctx_drift_refresh;
+    int perf_phase1_compute_rc_ctx_dual_rescue;
     int perf_phase1_refactor_periodic_policy;
     int perf_phase1_refactor_periodic_lu_health;
     int perf_phase1_refactor_safety_forced;
@@ -1614,6 +1660,21 @@ typedef enum {
 } LPPhase1RecomputeReason;
 
 typedef enum {
+    LP_PHASE1_COMPUTE_CTX_OTHER = 0,
+    LP_PHASE1_COMPUTE_CTX_RECOMPUTE_FULL = 1,
+    LP_PHASE1_COMPUTE_CTX_RECOMPUTE_GUARD_FORCED_FULL = 2,
+    LP_PHASE1_COMPUTE_CTX_INIT = 3,
+    LP_PHASE1_COMPUTE_CTX_NO_ENTERING_CLEANUP = 4,
+    LP_PHASE1_COMPUTE_CTX_INFEAS_CLEANUP = 5,
+    LP_PHASE1_COMPUTE_CTX_REFACTOR_FAIL_CONTINUE = 6,
+    LP_PHASE1_COMPUTE_CTX_REFACTOR_FAILURE_RECOVERY = 7,
+    LP_PHASE1_COMPUTE_CTX_REFACTOR_SUCCESS = 8,
+    LP_PHASE1_COMPUTE_CTX_DRIFT_REFRESH = 9,
+    LP_PHASE1_COMPUTE_CTX_RECOMPUTE_RC_ONLY = 10,
+    LP_PHASE1_COMPUTE_CTX_DUAL_RESCUE = 11
+} LPPhase1ComputeContext;
+
+typedef enum {
     LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN = 0,
     LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN = 1,
     LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP = 2,
@@ -1833,6 +1894,10 @@ void lp_telemetry_record_compute_solution_timed(SimplexSolver *solver,
 void lp_telemetry_record_compute_reduced_costs(SimplexSolver *solver,
                                                int phase,
                                                double elapsed_ms);
+void lp_telemetry_record_phase1_compute_solution_context(SimplexSolver *solver,
+                                                         LPPhase1ComputeContext context);
+void lp_telemetry_record_phase1_compute_rc_context(SimplexSolver *solver,
+                                                   LPPhase1ComputeContext context);
 void lp_telemetry_record_compute_reduced_costs_timed(SimplexSolver *solver,
                                                      int phase,
                                                      double start_ms);

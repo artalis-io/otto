@@ -91,6 +91,12 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_recompute_after_pivot_fail_recovery = 1;
     solver.telemetry.perf_phase1_recompute_after_perturb = 5;
     solver.telemetry.perf_phase1_recompute_rc_only_calls = 9;
+    solver.telemetry.perf_phase1_compute_solution_ctx_refactor_success = 4;
+    solver.telemetry.perf_phase1_compute_solution_ctx_other = 3;
+    solver.telemetry.perf_phase1_compute_solution_ctx_dual_rescue = 8;
+    solver.telemetry.perf_phase1_compute_rc_ctx_recompute_rc_only = 7;
+    solver.telemetry.perf_phase1_compute_rc_ctx_init = 2;
+    solver.telemetry.perf_phase1_compute_rc_ctx_dual_rescue = 6;
     solver.telemetry.perf_phase1_recompute_rc_guard_forced_full = 4;
     solver.telemetry.perf_phase1_ratio_breakdown_retries = 6;
     solver.telemetry.perf_phase1_ratio_breakdown_escalations = 2;
@@ -236,6 +242,18 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 recompute perturb");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_rc_only_calls, 0,
                   "reset: phase1 recompute rc-only calls");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_compute_solution_ctx_refactor_success, 0,
+                  "reset: phase1 compute_solution refactor success ctx");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_compute_solution_ctx_other, 0,
+                  "reset: phase1 compute_solution other ctx");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_compute_solution_ctx_dual_rescue, 0,
+                  "reset: phase1 compute_solution dual rescue ctx");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_compute_rc_ctx_recompute_rc_only, 0,
+                  "reset: phase1 compute_rc rc-only ctx");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_compute_rc_ctx_init, 0,
+                  "reset: phase1 compute_rc init ctx");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_compute_rc_ctx_dual_rescue, 0,
+                  "reset: phase1 compute_rc dual rescue ctx");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_rc_guard_forced_full, 0,
                   "reset: phase1 recompute rc-only guard forced");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_ratio_breakdown_retries, 0,
@@ -648,6 +666,12 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_recompute_after_pivot_fail_recovery = 4;
     solver.telemetry.perf_phase1_recompute_after_perturb = 3;
     solver.telemetry.perf_phase1_recompute_rc_only_calls = 11;
+    solver.telemetry.perf_phase1_compute_solution_ctx_refactor_success = 6;
+    solver.telemetry.perf_phase1_compute_solution_ctx_no_entering_cleanup = 2;
+    solver.telemetry.perf_phase1_compute_solution_ctx_dual_rescue = 13;
+    solver.telemetry.perf_phase1_compute_rc_ctx_recompute_full = 9;
+    solver.telemetry.perf_phase1_compute_rc_ctx_recompute_rc_only = 11;
+    solver.telemetry.perf_phase1_compute_rc_ctx_dual_rescue = 5;
     solver.telemetry.perf_phase1_recompute_rc_guard_forced_full = 2;
     solver.telemetry.perf_phase1_ratio_breakdown_retries = 14;
     solver.telemetry.perf_phase1_ratio_breakdown_escalations = 3;
@@ -783,6 +807,18 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 recompute perturb");
     ASSERT_INT_EQ(snap.perf_phase1_recompute_rc_only_calls, 11,
                   "solver_snapshot: phase1 recompute rc-only calls");
+    ASSERT_INT_EQ(snap.perf_phase1_compute_solution_ctx_refactor_success, 6,
+                  "solver_snapshot: phase1 compute_solution refactor success ctx");
+    ASSERT_INT_EQ(snap.perf_phase1_compute_solution_ctx_no_entering_cleanup, 2,
+                  "solver_snapshot: phase1 compute_solution no-entering cleanup ctx");
+    ASSERT_INT_EQ(snap.perf_phase1_compute_solution_ctx_dual_rescue, 13,
+                  "solver_snapshot: phase1 compute_solution dual rescue ctx");
+    ASSERT_INT_EQ(snap.perf_phase1_compute_rc_ctx_recompute_full, 9,
+                  "solver_snapshot: phase1 compute_rc recompute full ctx");
+    ASSERT_INT_EQ(snap.perf_phase1_compute_rc_ctx_recompute_rc_only, 11,
+                  "solver_snapshot: phase1 compute_rc rc-only ctx");
+    ASSERT_INT_EQ(snap.perf_phase1_compute_rc_ctx_dual_rescue, 5,
+                  "solver_snapshot: phase1 compute_rc dual rescue ctx");
     ASSERT_INT_EQ(snap.perf_phase1_recompute_rc_guard_forced_full, 2,
                   "solver_snapshot: phase1 recompute rc-only guard forced");
     ASSERT_INT_EQ(snap.perf_phase1_ratio_breakdown_retries, 14,
