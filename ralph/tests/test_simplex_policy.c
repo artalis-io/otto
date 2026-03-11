@@ -590,6 +590,7 @@ typedef struct {
 typedef struct {
     const char *name;
     int m;
+    int n;
     int degenerate_count;
     int no_pivot_streak;
     int expected_allow;
@@ -598,6 +599,7 @@ typedef struct {
 typedef struct {
     const char *name;
     int m;
+    int n;
     int degenerate_count;
     int no_pivot_streak;
     int no_recompute_streak;
@@ -908,7 +910,7 @@ static int run_dir_stabilize_cooldown_case(const DirStabilizeCooldownCase *tc) {
 
 static int run_dir_skip_rc_only_case(const DirSkipRcOnlyCase *tc) {
     int allow = lp_refactor_policy_phase1_dir_skip_allow_rc_only(
-        tc->m, tc->degenerate_count, tc->no_pivot_streak);
+        tc->m, tc->n, tc->degenerate_count, tc->no_pivot_streak);
     if (allow != tc->expected_allow) {
         fprintf(stderr, "FAIL: %s (expected allow=%d got=%d)\n",
                 tc->name, tc->expected_allow, allow);
@@ -921,6 +923,7 @@ static int run_dir_skip_rc_only_case(const DirSkipRcOnlyCase *tc) {
 static int run_dir_skip_no_recompute_case(const DirSkipNoRecomputeCase *tc) {
     int skip = lp_refactor_policy_phase1_dir_skip_should_skip_recompute(
         tc->m,
+        tc->n,
         tc->degenerate_count,
         tc->no_pivot_streak,
         tc->no_recompute_streak);
@@ -1869,6 +1872,7 @@ int main(void) {
         {
             .name = "phase1 dir-skip rc-only disabled for small matrices",
             .m = 500,
+            .n = 500,
             .degenerate_count = 100,
             .no_pivot_streak = 20,
             .expected_allow = 0
@@ -1876,6 +1880,7 @@ int main(void) {
         {
             .name = "phase1 dir-skip rc-only enabled by high degeneracy on large matrix",
             .m = 900,
+            .n = 900,
             .degenerate_count = 40,
             .no_pivot_streak = 1,
             .expected_allow = 1
@@ -1883,6 +1888,7 @@ int main(void) {
         {
             .name = "phase1 dir-skip rc-only enabled by sustained no-pivot streak",
             .m = 900,
+            .n = 900,
             .degenerate_count = 5,
             .no_pivot_streak = 12,
             .expected_allow = 1
@@ -1890,15 +1896,25 @@ int main(void) {
         {
             .name = "phase1 dir-skip rc-only disabled before no-pivot threshold",
             .m = 900,
+            .n = 900,
             .degenerate_count = 5,
             .no_pivot_streak = 3,
             .expected_allow = 0
+        },
+        {
+            .name = "phase1 dir-skip rc-only enabled for wide LP despite small basis",
+            .m = 500,
+            .n = 2500,
+            .degenerate_count = 40,
+            .no_pivot_streak = 1,
+            .expected_allow = 1
         }
     };
     const DirSkipNoRecomputeCase dir_skip_no_recompute_cases[] = {
         {
             .name = "phase1 dir-skip no-recompute disabled when rc-only not allowed",
             .m = 500,
+            .n = 500,
             .degenerate_count = 100,
             .no_pivot_streak = 20,
             .no_recompute_streak = 0,
@@ -1907,6 +1923,7 @@ int main(void) {
         {
             .name = "phase1 dir-skip no-recompute allowed under guard budget",
             .m = 900,
+            .n = 900,
             .degenerate_count = 40,
             .no_pivot_streak = 1,
             .no_recompute_streak = 3,
@@ -1915,10 +1932,20 @@ int main(void) {
         {
             .name = "phase1 dir-skip no-recompute blocked at guard boundary",
             .m = 900,
+            .n = 900,
             .degenerate_count = 5,
             .no_pivot_streak = 12,
             .no_recompute_streak = 8,
             .expected_skip = 0
+        },
+        {
+            .name = "phase1 dir-skip no-recompute allowed for wide LP despite small basis",
+            .m = 500,
+            .n = 2500,
+            .degenerate_count = 40,
+            .no_pivot_streak = 1,
+            .no_recompute_streak = 3,
+            .expected_skip = 1
         }
     };
     const DirStabilizeForceCase dir_stabilize_force_cases[] = {
