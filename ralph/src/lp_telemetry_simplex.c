@@ -337,6 +337,17 @@ void lp_telemetry_record_phase1_failed_stabilize_entering(
     }
 }
 
+void lp_telemetry_record_phase1_failed_stabilize_site(
+    SimplexSolver *solver,
+    int used_alternate) {
+    if (!solver_telemetry_enabled(solver)) return;
+    if (used_alternate) {
+        solver->telemetry.perf_phase1_failed_stabilize_alternate_failures++;
+    } else {
+        solver->telemetry.perf_phase1_failed_stabilize_primary_failures++;
+    }
+}
+
 void lp_telemetry_record_phase1_failed_stabilize_retry_penalty_arm(
     SimplexSolver *solver) {
     if (!solver_telemetry_enabled(solver)) return;

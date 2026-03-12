@@ -894,6 +894,8 @@ typedef struct {
     int perf_phase1_dir_skip_same_entering_repeats;
     int perf_phase1_dir_skip_same_entering_max_streak;
     int perf_phase1_failed_stabilize_events;
+    int perf_phase1_failed_stabilize_primary_failures;
+    int perf_phase1_failed_stabilize_alternate_failures;
     int perf_phase1_failed_stabilize_same_entering_repeats;
     int perf_phase1_failed_stabilize_same_entering_max_streak;
     int perf_phase1_failed_stabilize_retry_penalty_arms;
@@ -1358,6 +1360,8 @@ typedef struct {
     int perf_phase1_dir_skip_same_entering_repeats;
     int perf_phase1_dir_skip_same_entering_max_streak;
     int perf_phase1_failed_stabilize_events;
+    int perf_phase1_failed_stabilize_primary_failures;
+    int perf_phase1_failed_stabilize_alternate_failures;
     int perf_phase1_failed_stabilize_same_entering_repeats;
     int perf_phase1_failed_stabilize_same_entering_max_streak;
     int perf_phase1_failed_stabilize_retry_penalty_arms;
@@ -1953,6 +1957,9 @@ void lp_telemetry_record_phase1_failed_stabilize_entering(
     SimplexSolver *solver,
     int same_entering,
     int streak);
+void lp_telemetry_record_phase1_failed_stabilize_site(
+    SimplexSolver *solver,
+    int used_alternate);
 void lp_telemetry_record_phase1_failed_stabilize_retry_penalty_arm(
     SimplexSolver *solver);
 void lp_telemetry_record_phase1_failed_stabilize_retry_penalty_alternate(

@@ -322,6 +322,10 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 dir-skip same-entering max streak");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_events, 0,
                   "reset: phase1 failed stabilize events");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_primary_failures, 0,
+                  "reset: phase1 failed stabilize primary failures");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_alternate_failures, 0,
+                  "reset: phase1 failed stabilize alternate failures");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_same_entering_repeats, 0,
                   "reset: phase1 failed stabilize same-entering repeats");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_same_entering_max_streak, 0,
@@ -553,6 +557,13 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 dir skip no recompute count");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_skip_guard_refresh, 1,
                   "record: phase1 dir skip guard refresh count");
+    lp_telemetry_record_phase1_failed_stabilize_site(&solver, 0);
+    lp_telemetry_record_phase1_failed_stabilize_site(&solver, 1);
+    lp_telemetry_record_phase1_failed_stabilize_site(&solver, 1);
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_primary_failures, 1,
+                  "record: phase1 failed stabilize primary failures");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_alternate_failures, 2,
+                  "record: phase1 failed stabilize alternate failures");
     lp_telemetry_record_phase1_failed_stabilize_retry_penalty_arm(&solver);
     lp_telemetry_record_phase1_failed_stabilize_retry_penalty_arm(&solver);
     lp_telemetry_record_phase1_failed_stabilize_retry_penalty_alternate(&solver, 0, 1);
@@ -782,6 +793,8 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_dir_skip_same_entering_repeats = 15;
     solver.telemetry.perf_phase1_dir_skip_same_entering_max_streak = 5;
     solver.telemetry.perf_phase1_failed_stabilize_events = 14;
+    solver.telemetry.perf_phase1_failed_stabilize_primary_failures = 6;
+    solver.telemetry.perf_phase1_failed_stabilize_alternate_failures = 8;
     solver.telemetry.perf_phase1_failed_stabilize_same_entering_repeats = 8;
     solver.telemetry.perf_phase1_failed_stabilize_same_entering_max_streak = 4;
     solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_arms = 9;
@@ -974,6 +987,10 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 dir-skip same-entering max streak");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_events, 14,
                   "solver_snapshot: phase1 failed stabilize events");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_primary_failures, 6,
+                  "solver_snapshot: phase1 failed stabilize primary failures");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_alternate_failures, 8,
+                  "solver_snapshot: phase1 failed stabilize alternate failures");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_same_entering_repeats, 8,
                   "solver_snapshot: phase1 failed stabilize same-entering repeats");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_same_entering_max_streak, 4,

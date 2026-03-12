@@ -625,6 +625,8 @@ typedef struct {
     int perf_phase1_dir_skip_same_entering_repeats;
     int perf_phase1_dir_skip_same_entering_max_streak;
     int perf_phase1_failed_stabilize_events;
+    int perf_phase1_failed_stabilize_primary_failures;
+    int perf_phase1_failed_stabilize_alternate_failures;
     int perf_phase1_failed_stabilize_same_entering_repeats;
     int perf_phase1_failed_stabilize_same_entering_max_streak;
     int perf_phase1_failed_stabilize_retry_penalty_arms;

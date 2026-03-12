@@ -364,6 +364,8 @@ typedef struct {
     int phase1_dir_skip_same_entering_repeats;
     int phase1_dir_skip_same_entering_max_streak;
     int phase1_failed_stabilize_events;
+    int phase1_failed_stabilize_primary_failures;
+    int phase1_failed_stabilize_alternate_failures;
     int phase1_failed_stabilize_same_entering_repeats;
     int phase1_failed_stabilize_same_entering_max_streak;
     int phase1_failed_stabilize_retry_penalty_arms;
@@ -1435,6 +1437,10 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_dir_skip_same_entering_max_streak;
             result.phase1_failed_stabilize_events =
                 solver_tel.perf_phase1_failed_stabilize_events;
+            result.phase1_failed_stabilize_primary_failures =
+                solver_tel.perf_phase1_failed_stabilize_primary_failures;
+            result.phase1_failed_stabilize_alternate_failures =
+                solver_tel.perf_phase1_failed_stabilize_alternate_failures;
             result.phase1_failed_stabilize_same_entering_repeats =
                 solver_tel.perf_phase1_failed_stabilize_same_entering_repeats;
             result.phase1_failed_stabilize_same_entering_max_streak =
@@ -2905,6 +2911,10 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_dir_skip_same_entering_max_streak);
     fprintf(out, "      \"failed_stabilize_events\": %d,\n",
             ralph->phase1_failed_stabilize_events);
+    fprintf(out, "      \"failed_stabilize_primary_failures\": %d,\n",
+            ralph->phase1_failed_stabilize_primary_failures);
+    fprintf(out, "      \"failed_stabilize_alternate_failures\": %d,\n",
+            ralph->phase1_failed_stabilize_alternate_failures);
     fprintf(out, "      \"failed_stabilize_same_entering_repeats\": %d,\n",
             ralph->phase1_failed_stabilize_same_entering_repeats);
     fprintf(out, "      \"failed_stabilize_same_entering_max_streak\": %d,\n",
