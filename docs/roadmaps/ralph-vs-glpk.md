@@ -1496,6 +1496,42 @@ Completed slices:
         - `0` status/objective/invalid mismatches
         - `0` dense fallbacks
 
+14. `W2.14` retarget the retry-direction guard to the catastrophic weak-pivot
+    bucket only.
+    - changed the retry-direction guard from a broad scalar pivot-ratio gate
+      (`pivot_abs / dir_inf <= 1e-5`) to the bucket boundary that actually
+      separates the Week 2 outliers:
+      - `pivot_abs / dir_inf <= 1e-8`
+    - kept the existing repeat-count, direction-scale, and direction-nnz
+      preconditions unchanged
+    - added a policy test to ensure the guard stays off on the
+      `greenbeb`-class severe-but-non-catastrophic case
+    - direct result:
+      - `wood1p`:
+        - `failed_stabilize_retry_dir_guard_arms=154`
+        - `time_ms=2364.274`
+        - `iterations=920`
+      - `greenbeb`:
+        - `failed_stabilize_retry_dir_guard_arms=0`
+        - `time_ms=6531.290`
+        - `iterations=1633`
+    - gate result:
+      - small NETLIB gate passed:
+        - `27/27`
+        - `0` timeouts
+        - `0` dense fallbacks
+      - full NETLIB gate stayed baseline-clean:
+        - `84` files
+        - `22` timeouts
+        - `0` command failures
+        - `0` status/objective/invalid mismatches
+        - `0` dense fallbacks
+    - implication:
+      - the retry-direction guard is now aligned to the observed catastrophic
+        `wood1p` tail instead of the milder `greenbeb` failure family
+      - next Week 2 work should preserve this split and focus on the remaining
+        severe-but-non-catastrophic retry directions separately
+
 ### Week 3: Degeneracy and Long-Run Control Quality
 
 Target family:
