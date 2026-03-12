@@ -1452,6 +1452,50 @@ Completed slices:
       - the next Week 2 lever should be a better direction-quality discriminator,
         not broader alternate scoring
 
+13. `W2.13` bucket retry-lane direction failures by direction scale and
+    pivot-to-direction ratio.
+    - added exact retry-direction telemetry buckets:
+      - `failed_stabilize_retry_dir_fail_inf_ratio_le_30`
+      - `failed_stabilize_retry_dir_fail_inf_ratio_le_100`
+      - `failed_stabilize_retry_dir_fail_inf_ratio_le_1000`
+      - `failed_stabilize_retry_dir_fail_inf_ratio_gt_1000`
+      - `failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_8`
+      - `failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_6`
+      - `failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_4`
+      - `failed_stabilize_retry_dir_fail_pivot_ratio_gt_1e_4`
+    - direct bucketed classification showed a real split between the two Week 2
+      outlier families:
+      - `wood1p`:
+        - `185` retry-direction failure samples
+        - `137` in `dir_inf / threshold <= 30`
+        - `21` in `<= 100`
+        - `27` in `> 1000`
+        - pivot ratio buckets:
+          - `155` in `pivot_abs / dir_inf <= 1e-8`
+          - `27` in `<= 1e-6`
+          - `3` in `<= 1e-4`
+      - `greenbeb`:
+        - `79` retry-direction failure samples
+        - all `79` in `dir_inf / threshold <= 30`
+        - all `79` in `1e-6 < pivot_abs / dir_inf <= 1e-4`
+    - implication:
+      - `greenbeb` is severe but not catastrophic on retry-direction shape
+      - `wood1p` has a distinct catastrophic weak-pivot tail that `greenbeb`
+        does not
+      - the next discriminator should use these bucket families rather than
+        another blind scalar threshold guess
+    - gate result:
+      - small NETLIB gate passed:
+        - `27/27`
+        - `0` timeouts
+        - `0` dense fallbacks
+      - full NETLIB gate stayed baseline-clean:
+        - `84` files
+        - `22` timeouts
+        - `0` command failures
+        - `0` status/objective/invalid mismatches
+        - `0` dense fallbacks
+
 ### Week 3: Degeneracy and Long-Run Control Quality
 
 Target family:
