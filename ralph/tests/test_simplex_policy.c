@@ -118,6 +118,7 @@ int simplex_phase1_failed_stabilize_retry_local_memory_plan_for_test(
     int last_retry_alt_streak,
     int retry_penalize_last_failed);
 int simplex_phase1_failed_stabilize_retry_guarded_selector_plan_for_test(
+    int retry_ratio_fail_streak,
     int last_retry_alt_streak,
     int eligible_count,
     int bland_entering,
@@ -708,6 +709,7 @@ typedef struct {
 
 typedef struct {
     const char *name;
+    int retry_ratio_fail_streak;
     int last_retry_alt_streak;
     int eligible_count;
     int bland_entering;
@@ -1152,6 +1154,7 @@ static int run_failed_stabilize_retry_guarded_selector_case(
     const FailedStabilizeRetryGuardedSelectorCase *tc) {
     int use_guarded =
         simplex_phase1_failed_stabilize_retry_guarded_selector_plan_for_test(
+            tc->retry_ratio_fail_streak,
             tc->last_retry_alt_streak,
             tc->eligible_count,
             tc->bland_entering,
@@ -2417,6 +2420,7 @@ int main(void) {
         failed_stabilize_retry_guarded_selector_cases[] = {
             {
                 .name = "failed-stabilize retry guarded selector stays off below streak trigger",
+                .retry_ratio_fail_streak = 3,
                 .last_retry_alt_streak = 3,
                 .eligible_count = 64,
                 .bland_entering = 5,
@@ -2427,6 +2431,7 @@ int main(void) {
             },
             {
                 .name = "failed-stabilize retry guarded selector stays off for small eligible pool",
+                .retry_ratio_fail_streak = 3,
                 .last_retry_alt_streak = 6,
                 .eligible_count = 8,
                 .bland_entering = 5,
@@ -2437,6 +2442,7 @@ int main(void) {
             },
             {
                 .name = "failed-stabilize retry guarded selector stays off without nonbland best",
+                .retry_ratio_fail_streak = 3,
                 .last_retry_alt_streak = 6,
                 .eligible_count = 64,
                 .bland_entering = 5,
@@ -2447,16 +2453,29 @@ int main(void) {
             },
             {
                 .name = "failed-stabilize retry guarded selector stays off below score ratio",
+                .retry_ratio_fail_streak = 3,
                 .last_retry_alt_streak = 6,
                 .eligible_count = 64,
                 .bland_entering = 5,
                 .best_entering = 19,
                 .bland_score = 2.0,
-                .best_score = 20.0,
+                .best_score = 3.0,
+                .expected_use_guarded = 0
+            },
+            {
+                .name = "failed-stabilize retry guarded selector stays off below ratio-fail trigger",
+                .retry_ratio_fail_streak = 1,
+                .last_retry_alt_streak = 6,
+                .eligible_count = 64,
+                .bland_entering = 5,
+                .best_entering = 19,
+                .bland_score = 2.0,
+                .best_score = 64.0,
                 .expected_use_guarded = 0
             },
             {
                 .name = "failed-stabilize retry guarded selector arms on repeated alternate with strong advantage",
+                .retry_ratio_fail_streak = 3,
                 .last_retry_alt_streak = 6,
                 .eligible_count = 64,
                 .bland_entering = 5,

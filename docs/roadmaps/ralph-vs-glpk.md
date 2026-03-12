@@ -1346,6 +1346,49 @@ Completed slices:
       - keeping the selector-class telemetry is useful
       - the next Week 2 move should not be a broader blind selector; it needs a
         better safety predicate or a different post-selection diagnostic
+11. `W2.11` classify retry-lane selector failures by cause and gate broader
+    selection on repeated ratio-driven failures.
+    - added exact post-selection failure telemetry by selector class:
+      - bland ratio-failed / dir-failed
+      - guarded ratio-failed / dir-failed
+      - guarded fallback-to-bland count
+    - added a safer guarded-selector lane:
+      - broader selector remains local to direction-stabilize retry
+      - if a guarded pick ever fails immediately, it can fall back to the bland
+        retry alternate inside the same retry episode
+      - broader selection is now only eligible after repeated ratio-driven retry
+        failures, not just repeated alternate reuse
+    - validation:
+      - `make -C ralph test-lp-telemetry-solver`
+      - `make -C ralph test-simplex-policy`
+      - `make -C ralph build-ralph-benchmark`
+      - direct `wood1p` / `greenbeb`
+      - `make -C ralph test-netlib-gate-small`
+      - `make -C ralph test-netlib-gate`
+    - direct findings on the target outliers:
+      - `wood1p`:
+        - `failed_stabilize_retry_selector_guarded_arms=0`
+        - `failed_stabilize_retry_selector_bland_ratio_failed=0`
+        - `failed_stabilize_retry_selector_bland_dir_failed=187`
+        - `time_ms=2379.254`, `iterations=927`
+      - `greenbeb`:
+        - `failed_stabilize_retry_selector_guarded_arms=0`
+        - `failed_stabilize_retry_selector_bland_ratio_failed=0`
+        - `failed_stabilize_retry_selector_bland_dir_failed=84`
+        - `time_ms=6566.517`, `iterations=1631`
+    - full NETLIB gate stayed baseline-clean:
+      - `84` files
+      - `22` timeouts
+      - `0` command failures
+      - `0` status/objective/invalid mismatches
+      - `0` dense fallbacks
+    - implication:
+      - the active retry-lane failures on `wood1p` / `greenbeb` are direction
+        failures, not ratio failures
+      - the broader selector is not the next real lever
+      - the next Week 2 move should instrument why these alternates keep
+        producing unstable directions after refactor, rather than widening
+        alternate scoring further
    - full NETLIB gate stayed baseline-clean:
      - `84` files
      - `22` timeouts
