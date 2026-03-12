@@ -387,6 +387,41 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_penalty_outcome(
     }
 }
 
+void lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_arm(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_local_memory_arms++;
+}
+
+void lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_alternate(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_found++;
+}
+
+void lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_no_alt(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_local_memory_no_alt++;
+}
+
+void lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_fallback_same_alt(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_local_memory_fallback_same_alt++;
+}
+
+void lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_outcome(
+    SimplexSolver *solver,
+    int stabilized) {
+    if (!solver_telemetry_enabled(solver)) return;
+    if (stabilized) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_stabilized++;
+    } else {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_failed++;
+    }
+}
+
 void lp_telemetry_record_pricing(SimplexSolver *solver,
                                  int phase,
                                  double elapsed_ms) {

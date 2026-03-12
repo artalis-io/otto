@@ -375,6 +375,12 @@ typedef struct {
     int phase1_failed_stabilize_retry_penalty_alt_failed;
     int phase1_failed_stabilize_retry_penalty_same_alt_repeats;
     int phase1_failed_stabilize_retry_penalty_same_alt_max_streak;
+    int phase1_failed_stabilize_retry_local_memory_arms;
+    int phase1_failed_stabilize_retry_local_memory_alt_found;
+    int phase1_failed_stabilize_retry_local_memory_no_alt;
+    int phase1_failed_stabilize_retry_local_memory_fallback_same_alt;
+    int phase1_failed_stabilize_retry_local_memory_alt_stabilized;
+    int phase1_failed_stabilize_retry_local_memory_alt_failed;
 
     double phase2_pricing_ms;
     double phase2_ratio_ms;
@@ -1459,6 +1465,18 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_failed_stabilize_retry_penalty_same_alt_repeats;
             result.phase1_failed_stabilize_retry_penalty_same_alt_max_streak =
                 solver_tel.perf_phase1_failed_stabilize_retry_penalty_same_alt_max_streak;
+            result.phase1_failed_stabilize_retry_local_memory_arms =
+                solver_tel.perf_phase1_failed_stabilize_retry_local_memory_arms;
+            result.phase1_failed_stabilize_retry_local_memory_alt_found =
+                solver_tel.perf_phase1_failed_stabilize_retry_local_memory_alt_found;
+            result.phase1_failed_stabilize_retry_local_memory_no_alt =
+                solver_tel.perf_phase1_failed_stabilize_retry_local_memory_no_alt;
+            result.phase1_failed_stabilize_retry_local_memory_fallback_same_alt =
+                solver_tel.perf_phase1_failed_stabilize_retry_local_memory_fallback_same_alt;
+            result.phase1_failed_stabilize_retry_local_memory_alt_stabilized =
+                solver_tel.perf_phase1_failed_stabilize_retry_local_memory_alt_stabilized;
+            result.phase1_failed_stabilize_retry_local_memory_alt_failed =
+                solver_tel.perf_phase1_failed_stabilize_retry_local_memory_alt_failed;
 
             result.phase2_pricing_ms = solver_tel.perf_phase2_pricing_ms;
             result.phase2_ratio_ms = solver_tel.perf_phase2_ratio_ms;
@@ -2933,6 +2951,18 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_failed_stabilize_retry_penalty_same_alt_repeats);
     fprintf(out, "      \"failed_stabilize_retry_penalty_same_alt_max_streak\": %d,\n",
             ralph->phase1_failed_stabilize_retry_penalty_same_alt_max_streak);
+    fprintf(out, "      \"failed_stabilize_retry_local_memory_arms\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_local_memory_arms);
+    fprintf(out, "      \"failed_stabilize_retry_local_memory_alt_found\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_local_memory_alt_found);
+    fprintf(out, "      \"failed_stabilize_retry_local_memory_no_alt\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_local_memory_no_alt);
+    fprintf(out, "      \"failed_stabilize_retry_local_memory_fallback_same_alt\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_local_memory_fallback_same_alt);
+    fprintf(out, "      \"failed_stabilize_retry_local_memory_alt_stabilized\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_local_memory_alt_stabilized);
+    fprintf(out, "      \"failed_stabilize_retry_local_memory_alt_failed\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_local_memory_alt_failed);
     fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase1_compute_solution_calls);
     fprintf(out, "      \"compute_reduced_costs_calls\": %d\n", ralph->phase1_compute_rc_calls);
     fprintf(out, "    },\n");

@@ -112,6 +112,11 @@ int simplex_phase1_failed_stabilize_retry_penalty_plan_for_test(
     int entering,
     int last_failed_entering,
     int same_entering_streak);
+int simplex_phase1_failed_stabilize_retry_local_memory_plan_for_test(
+    int original_entering,
+    int last_retry_alt,
+    int last_retry_alt_streak,
+    int retry_penalize_last_failed);
 
 int simplex_phase1_force_pivot_mode_plan_for_test(int m,
                                                    int degenerate_count,
@@ -687,6 +692,15 @@ typedef struct {
 
 typedef struct {
     const char *name;
+    int original_entering;
+    int last_retry_alt;
+    int last_retry_alt_streak;
+    int retry_penalize_last_failed;
+    int expected_use_memory;
+} FailedStabilizeRetryLocalMemoryCase;
+
+typedef struct {
+    const char *name;
     int m;
     int degenerate_count;
     int queue_force_pending;
@@ -1094,6 +1108,22 @@ static int run_failed_stabilize_retry_penalty_case(
     if (penalize != tc->expected_penalize) {
         fprintf(stderr, "FAIL: %s (expected penalize=%d got=%d)\n",
                 tc->name, tc->expected_penalize, penalize);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_failed_stabilize_retry_local_memory_case(
+    const FailedStabilizeRetryLocalMemoryCase *tc) {
+    int use_memory = simplex_phase1_failed_stabilize_retry_local_memory_plan_for_test(
+        tc->original_entering,
+        tc->last_retry_alt,
+        tc->last_retry_alt_streak,
+        tc->retry_penalize_last_failed);
+    if (use_memory != tc->expected_use_memory) {
+        fprintf(stderr, "FAIL: %s (expected use_memory=%d got=%d)\n",
+                tc->name, tc->expected_use_memory, use_memory);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -2303,6 +2333,49 @@ int main(void) {
             .expected_penalize = 0
         }
     };
+    const FailedStabilizeRetryLocalMemoryCase
+        failed_stabilize_retry_local_memory_cases[] = {
+            {
+                .name = "failed-stabilize retry local memory stays off while penalty active",
+                .original_entering = 17,
+                .last_retry_alt = 12,
+                .last_retry_alt_streak = 3,
+                .retry_penalize_last_failed = 1,
+                .expected_use_memory = 0
+            },
+            {
+                .name = "failed-stabilize retry local memory stays off without prior alternate",
+                .original_entering = 17,
+                .last_retry_alt = -1,
+                .last_retry_alt_streak = 0,
+                .retry_penalize_last_failed = 0,
+                .expected_use_memory = 0
+            },
+            {
+                .name = "failed-stabilize retry local memory stays off below repeat threshold",
+                .original_entering = 17,
+                .last_retry_alt = 12,
+                .last_retry_alt_streak = 1,
+                .retry_penalize_last_failed = 0,
+                .expected_use_memory = 0
+            },
+            {
+                .name = "failed-stabilize retry local memory stays off for same alternate as original",
+                .original_entering = 17,
+                .last_retry_alt = 17,
+                .last_retry_alt_streak = 3,
+                .retry_penalize_last_failed = 0,
+                .expected_use_memory = 0
+            },
+            {
+                .name = "failed-stabilize retry local memory arms for distinct prior alternate",
+                .original_entering = 17,
+                .last_retry_alt = 12,
+                .last_retry_alt_streak = 2,
+                .retry_penalize_last_failed = 0,
+                .expected_use_memory = 1
+            }
+        };
     const ForcePivotModeCase force_pivot_mode_cases[] = {
         {
             .name = "force-pivot mode activates after repeated dir-skip no-recompute",
@@ -2938,6 +3011,9 @@ int main(void) {
     int total_failed_stabilize_retry_penalty =
         (int)(sizeof(failed_stabilize_retry_penalty_cases) /
               sizeof(failed_stabilize_retry_penalty_cases[0]));
+    int total_failed_stabilize_retry_local_memory =
+        (int)(sizeof(failed_stabilize_retry_local_memory_cases) /
+              sizeof(failed_stabilize_retry_local_memory_cases[0]));
     int total_force_pivot_mode = (int)(sizeof(force_pivot_mode_cases) / sizeof(force_pivot_mode_cases[0]));
     int total_dir_escape_gate =
         (int)(sizeof(dir_stabilize_escape_gate_cases) /
@@ -2973,6 +3049,7 @@ int main(void) {
                 total_direct_dual_rescue_guard +
                 total_dir_skip_rescue_cadence +
                 total_failed_stabilize_retry_penalty +
+                total_failed_stabilize_retry_local_memory +
                 total_force_pivot_mode +
                 total_dir_escape_gate +
                 total_force_pivot_relax +
@@ -3037,6 +3114,10 @@ int main(void) {
     for (int i = 0; i < total_failed_stabilize_retry_penalty; i++) {
         pass += run_failed_stabilize_retry_penalty_case(
             &failed_stabilize_retry_penalty_cases[i]);
+    }
+    for (int i = 0; i < total_failed_stabilize_retry_local_memory; i++) {
+        pass += run_failed_stabilize_retry_local_memory_case(
+            &failed_stabilize_retry_local_memory_cases[i]);
     }
     for (int i = 0; i < total_force_pivot_mode; i++) {
         pass += run_force_pivot_mode_case(&force_pivot_mode_cases[i]);

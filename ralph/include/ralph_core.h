@@ -636,6 +636,12 @@ typedef struct {
     int perf_phase1_failed_stabilize_retry_penalty_alt_failed;
     int perf_phase1_failed_stabilize_retry_penalty_same_alt_repeats;
     int perf_phase1_failed_stabilize_retry_penalty_same_alt_max_streak;
+    int perf_phase1_failed_stabilize_retry_local_memory_arms;
+    int perf_phase1_failed_stabilize_retry_local_memory_alt_found;
+    int perf_phase1_failed_stabilize_retry_local_memory_no_alt;
+    int perf_phase1_failed_stabilize_retry_local_memory_fallback_same_alt;
+    int perf_phase1_failed_stabilize_retry_local_memory_alt_stabilized;
+    int perf_phase1_failed_stabilize_retry_local_memory_alt_failed;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
