@@ -940,6 +940,8 @@ typedef struct {
     int perf_phase1_failed_stabilize_retry_dir_second_chance_no_alt;
     int perf_phase1_failed_stabilize_retry_dir_second_chance_stabilized;
     int perf_phase1_failed_stabilize_retry_dir_second_chance_failed;
+    int perf_phase1_failed_stabilize_retry_dir_guard_arms;
+    int perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -1441,6 +1443,8 @@ typedef struct {
     int perf_phase1_failed_stabilize_retry_dir_second_chance_no_alt;
     int perf_phase1_failed_stabilize_retry_dir_second_chance_stabilized;
     int perf_phase1_failed_stabilize_retry_dir_second_chance_failed;
+    int perf_phase1_failed_stabilize_retry_dir_guard_arms;
+    int perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -2084,6 +2088,10 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_dir_second_chance_no_alt(
 void lp_telemetry_record_phase1_failed_stabilize_retry_dir_second_chance_outcome(
     SimplexSolver *solver,
     int stabilized);
+void lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_arm(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_original_exclusion(
+    SimplexSolver *solver);
 void lp_telemetry_record_compute_reduced_costs_timed(SimplexSolver *solver,
                                                      int phase,
                                                      double start_ms);

@@ -125,6 +125,11 @@ int simplex_phase1_failed_stabilize_retry_guarded_selector_plan_for_test(
     int best_entering,
     double bland_score,
     double best_score);
+int simplex_phase1_failed_stabilize_retry_direction_guard_plan_for_test(
+    double dir_inf,
+    int dir_nnz,
+    double pivot_abs,
+    int retry_alt_streak);
 
 int simplex_phase1_force_pivot_mode_plan_for_test(int m,
                                                    int degenerate_count,
@@ -721,6 +726,15 @@ typedef struct {
 
 typedef struct {
     const char *name;
+    double dir_inf;
+    int dir_nnz;
+    double pivot_abs;
+    int retry_alt_streak;
+    int expected_guard;
+} FailedStabilizeRetryDirectionGuardCase;
+
+typedef struct {
+    const char *name;
     int m;
     int degenerate_count;
     int queue_force_pending;
@@ -1164,6 +1178,23 @@ static int run_failed_stabilize_retry_guarded_selector_case(
     if (use_guarded != tc->expected_use_guarded) {
         fprintf(stderr, "FAIL: %s (expected use_guarded=%d got=%d)\n",
                 tc->name, tc->expected_use_guarded, use_guarded);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_failed_stabilize_retry_direction_guard_case(
+    const FailedStabilizeRetryDirectionGuardCase *tc) {
+    int use_guard =
+        simplex_phase1_failed_stabilize_retry_direction_guard_plan_for_test(
+            tc->dir_inf,
+            tc->dir_nnz,
+            tc->pivot_abs,
+            tc->retry_alt_streak);
+    if (use_guard != tc->expected_guard) {
+        fprintf(stderr, "FAIL: %s (expected guard=%d got=%d)\n",
+                tc->name, tc->expected_guard, use_guard);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -2485,6 +2516,49 @@ int main(void) {
                 .expected_use_guarded = 1
             }
         };
+    const FailedStabilizeRetryDirectionGuardCase
+        failed_stabilize_retry_direction_guard_cases[] = {
+            {
+                .name = "failed-stabilize retry dir guard stays off below repeat trigger",
+                .dir_inf = 2.0e5,
+                .dir_nnz = 96,
+                .pivot_abs = 1.0e-2,
+                .retry_alt_streak = 1,
+                .expected_guard = 0
+            },
+            {
+                .name = "failed-stabilize retry dir guard stays off below dir-inf floor",
+                .dir_inf = 5.0e4,
+                .dir_nnz = 96,
+                .pivot_abs = 1.0e-2,
+                .retry_alt_streak = 5,
+                .expected_guard = 0
+            },
+            {
+                .name = "failed-stabilize retry dir guard stays off for sparse direction",
+                .dir_inf = 2.0e5,
+                .dir_nnz = 24,
+                .pivot_abs = 1.0e-2,
+                .retry_alt_streak = 5,
+                .expected_guard = 0
+            },
+            {
+                .name = "failed-stabilize retry dir guard stays off when pivot ratio is healthy",
+                .dir_inf = 2.0e5,
+                .dir_nnz = 96,
+                .pivot_abs = 10.0,
+                .retry_alt_streak = 5,
+                .expected_guard = 0
+            },
+            {
+                .name = "failed-stabilize retry dir guard arms on catastrophic unstable retry direction",
+                .dir_inf = 2.5e5,
+                .dir_nnz = 96,
+                .pivot_abs = 1.0e-3,
+                .retry_alt_streak = 5,
+                .expected_guard = 1
+            }
+        };
     const ForcePivotModeCase force_pivot_mode_cases[] = {
         {
             .name = "force-pivot mode activates after repeated dir-skip no-recompute",
@@ -3126,6 +3200,9 @@ int main(void) {
     int total_failed_stabilize_retry_guarded_selector =
         (int)(sizeof(failed_stabilize_retry_guarded_selector_cases) /
               sizeof(failed_stabilize_retry_guarded_selector_cases[0]));
+    int total_failed_stabilize_retry_direction_guard =
+        (int)(sizeof(failed_stabilize_retry_direction_guard_cases) /
+              sizeof(failed_stabilize_retry_direction_guard_cases[0]));
     int total_force_pivot_mode = (int)(sizeof(force_pivot_mode_cases) / sizeof(force_pivot_mode_cases[0]));
     int total_dir_escape_gate =
         (int)(sizeof(dir_stabilize_escape_gate_cases) /
@@ -3163,6 +3240,7 @@ int main(void) {
                 total_failed_stabilize_retry_penalty +
                 total_failed_stabilize_retry_local_memory +
                 total_failed_stabilize_retry_guarded_selector +
+                total_failed_stabilize_retry_direction_guard +
                 total_force_pivot_mode +
                 total_dir_escape_gate +
                 total_force_pivot_relax +
@@ -3235,6 +3313,10 @@ int main(void) {
     for (int i = 0; i < total_failed_stabilize_retry_guarded_selector; i++) {
         pass += run_failed_stabilize_retry_guarded_selector_case(
             &failed_stabilize_retry_guarded_selector_cases[i]);
+    }
+    for (int i = 0; i < total_failed_stabilize_retry_direction_guard; i++) {
+        pass += run_failed_stabilize_retry_direction_guard_case(
+            &failed_stabilize_retry_direction_guard_cases[i]);
     }
     for (int i = 0; i < total_force_pivot_mode; i++) {
         pass += run_force_pivot_mode_case(&force_pivot_mode_cases[i]);

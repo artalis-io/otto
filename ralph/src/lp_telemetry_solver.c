@@ -235,6 +235,8 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_no_alt = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_stabilized = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_failed = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_guard_arms = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions = 0;
 
     solver->telemetry.perf_phase2_pricing_ms = 0.0;
     solver->telemetry.perf_phase2_ratio_ms = 0.0;
@@ -725,6 +727,8 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_dir_second_chance_no_alt);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_dir_second_chance_stabilized);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_dir_second_chance_failed);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_dir_guard_arms);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions);
 
     COPY_SOLVER_FIELD(perf_phase2_pricing_ms);
     COPY_SOLVER_FIELD(perf_phase2_ratio_ms);

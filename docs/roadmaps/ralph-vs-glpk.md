@@ -1402,6 +1402,56 @@ Completed slices:
      - the next Week 2 change should widen local alternate selection in the
        retry lane itself, while keeping top-level phase-1 pricing unchanged
 
+12. `W2.12` instrument retry-lane unstable-direction shape and gate original-entering
+    exclusion on catastrophic retry directions.
+    - added exact retry-lane direction-shape telemetry:
+      - `failed_stabilize_retry_dir_fail_shape_samples`
+      - `failed_stabilize_retry_dir_fail_nnz_total/max`
+      - `failed_stabilize_retry_dir_fail_dir_inf_total/max`
+      - `failed_stabilize_retry_dir_fail_pivot_abs_total/max`
+    - direct telemetry on the baseline telemetry-only slice showed:
+      - `wood1p` retry-lane direction failures are much more extreme than
+        `greenbeb`
+      - `wood1p`: `190` samples, `dir_inf_max=8.51e8`,
+        `pivot_abs_max=253.49`
+      - `greenbeb`: `83` samples, `dir_inf_max=2.62e5`,
+        `pivot_abs_max=0.756`
+    - tried a bounded retry-lane second-chance alternate:
+      - rejected
+      - it stayed correctness-clean but was not a good baseline:
+        - `wood1p`: `89` arms, `2` stabilized, `87` failed
+        - it re-inflated other hotspots, especially `fit2p`
+    - kept the telemetry and added a narrow direction-quality guard instead:
+      - when local retry memory is active and the retry direction is
+        catastrophically unstable, exclude the original entering for a short
+        bounded window using the existing exclusion memory
+      - predicate:
+        - repeated retry episode
+        - `dir_inf >= 10x` the direction-stabilize threshold
+        - `dir_nnz >= 64`
+        - `pivot_abs / dir_inf <= 1e-5`
+      - original-entering exclusion window: `4` iterations
+    - direct result with the kept guard:
+      - `wood1p`:
+        - `failed_stabilize_retry_dir_guard_arms=183`
+        - `time_ms=2375.085`, `iterations=925`
+      - `greenbeb`:
+        - `failed_stabilize_retry_dir_guard_arms=79`
+        - `time_ms=6456.893`, `iterations=1615`
+    - gate result:
+      - small NETLIB gate passed
+      - full NETLIB gate stayed baseline-clean:
+        - `84` files
+        - `22` timeouts
+        - `0` command failures
+        - `0` status/objective/invalid mismatches
+        - `0` dense fallbacks
+    - implication:
+      - the retry-lane direction path is now observable and lightly governed
+      - the guard is not a breakthrough, but it is a safe directional baseline
+      - the next Week 2 lever should be a better direction-quality discriminator,
+        not broader alternate scoring
+
 ### Week 3: Degeneracy and Long-Run Control Quality
 
 Target family:
