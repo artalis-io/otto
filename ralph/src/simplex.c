@@ -61,6 +61,12 @@ static int phase1_failed_stabilize_retry_find_candidates(
     int *best_entering,
     double *best_score_out,
     int *eligible_count_out);
+static void phase1_failed_stabilize_retry_direction_shape(
+    const SimplexTableau *tab,
+    int leaving,
+    double *dir_inf_out,
+    int *dir_nnz_out,
+    double *pivot_abs_out);
 
 /* Phase-1 pivot-failure reasons used by deterministic tracing. */
 enum {
@@ -4949,6 +4955,37 @@ static int phase1_failed_stabilize_retry_select_local_memory(
     return 0;
 }
 
+static void phase1_failed_stabilize_retry_direction_shape(
+    const SimplexTableau *tab,
+    int leaving,
+    double *dir_inf_out,
+    int *dir_nnz_out,
+    double *pivot_abs_out) {
+    double dir_inf = 0.0;
+    int dir_nnz = 0;
+    double pivot_abs = 0.0;
+
+    if (!tab) {
+        if (dir_inf_out) *dir_inf_out = 0.0;
+        if (dir_nnz_out) *dir_nnz_out = 0;
+        if (pivot_abs_out) *pivot_abs_out = 0.0;
+        return;
+    }
+
+    for (int k = 0; k < tab->m; k++) {
+        double absval = fabs(tab->work2[k]);
+        if (absval > RALPH_ZERO_TOL) dir_nnz++;
+        if (absval > dir_inf) dir_inf = absval;
+    }
+    if (leaving >= 0 && leaving < tab->m) {
+        pivot_abs = fabs(tab->work2[leaving]);
+    }
+
+    if (dir_inf_out) *dir_inf_out = dir_inf;
+    if (dir_nnz_out) *dir_nnz_out = dir_nnz;
+    if (pivot_abs_out) *pivot_abs_out = pivot_abs;
+}
+
 static int phase2_use_adaptive_devex_partial(const SimplexTableau *tab,
                                              int iter,
                                              int degenerate_count,
@@ -7748,6 +7785,9 @@ static int simplex_phase1(SimplexSolver *solver) {
                 }
                 retry_consumed_alternate = 1;
                 for (;;) {
+                    double retry_dir_fail_inf = 0.0;
+                    int retry_dir_fail_nnz = 0;
+                    double retry_dir_fail_pivot_abs = 0.0;
                     phase1_note_failed_stabilize_retry_alternate(
                         solver,
                         entering,
@@ -7804,6 +7844,19 @@ static int simplex_phase1(SimplexSolver *solver) {
                         }
                         stabilized = 1;
                         break;
+                    }
+                    if (retry_used_local_memory_alt) {
+                        phase1_failed_stabilize_retry_direction_shape(
+                            tab,
+                            leaving,
+                            &retry_dir_fail_inf,
+                            &retry_dir_fail_nnz,
+                            &retry_dir_fail_pivot_abs);
+                        lp_telemetry_record_phase1_failed_stabilize_retry_dir_fail_shape(
+                            solver,
+                            retry_dir_fail_inf,
+                            retry_dir_fail_nnz,
+                            retry_dir_fail_pivot_abs);
                     }
                     if (retry_local_memory_selector_tracked) {
                         phase1_failed_stabilize_retry_alt_ratio_fail_streak = 0;

@@ -399,6 +399,17 @@ typedef struct {
     int phase1_failed_stabilize_retry_selector_guarded_ratio_failed;
     int phase1_failed_stabilize_retry_selector_guarded_dir_failed;
     int phase1_failed_stabilize_retry_selector_guarded_fallback_to_bland;
+    int phase1_failed_stabilize_retry_dir_fail_shape_samples;
+    int phase1_failed_stabilize_retry_dir_fail_nnz_total;
+    int phase1_failed_stabilize_retry_dir_fail_nnz_max;
+    double phase1_failed_stabilize_retry_dir_fail_dir_inf_total;
+    double phase1_failed_stabilize_retry_dir_fail_dir_inf_max;
+    double phase1_failed_stabilize_retry_dir_fail_pivot_abs_total;
+    double phase1_failed_stabilize_retry_dir_fail_pivot_abs_max;
+    int phase1_failed_stabilize_retry_dir_second_chance_arms;
+    int phase1_failed_stabilize_retry_dir_second_chance_no_alt;
+    int phase1_failed_stabilize_retry_dir_second_chance_stabilized;
+    int phase1_failed_stabilize_retry_dir_second_chance_failed;
 
     double phase2_pricing_ms;
     double phase2_ratio_ms;
@@ -1531,6 +1542,28 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_failed_stabilize_retry_selector_guarded_dir_failed;
             result.phase1_failed_stabilize_retry_selector_guarded_fallback_to_bland =
                 solver_tel.perf_phase1_failed_stabilize_retry_selector_guarded_fallback_to_bland;
+            result.phase1_failed_stabilize_retry_dir_fail_shape_samples =
+                solver_tel.perf_phase1_failed_stabilize_retry_dir_fail_shape_samples;
+            result.phase1_failed_stabilize_retry_dir_fail_nnz_total =
+                solver_tel.perf_phase1_failed_stabilize_retry_dir_fail_nnz_total;
+            result.phase1_failed_stabilize_retry_dir_fail_nnz_max =
+                solver_tel.perf_phase1_failed_stabilize_retry_dir_fail_nnz_max;
+            result.phase1_failed_stabilize_retry_dir_fail_dir_inf_total =
+                solver_tel.perf_phase1_failed_stabilize_retry_dir_fail_dir_inf_total;
+            result.phase1_failed_stabilize_retry_dir_fail_dir_inf_max =
+                solver_tel.perf_phase1_failed_stabilize_retry_dir_fail_dir_inf_max;
+            result.phase1_failed_stabilize_retry_dir_fail_pivot_abs_total =
+                solver_tel.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_total;
+            result.phase1_failed_stabilize_retry_dir_fail_pivot_abs_max =
+                solver_tel.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_max;
+            result.phase1_failed_stabilize_retry_dir_second_chance_arms =
+                solver_tel.perf_phase1_failed_stabilize_retry_dir_second_chance_arms;
+            result.phase1_failed_stabilize_retry_dir_second_chance_no_alt =
+                solver_tel.perf_phase1_failed_stabilize_retry_dir_second_chance_no_alt;
+            result.phase1_failed_stabilize_retry_dir_second_chance_stabilized =
+                solver_tel.perf_phase1_failed_stabilize_retry_dir_second_chance_stabilized;
+            result.phase1_failed_stabilize_retry_dir_second_chance_failed =
+                solver_tel.perf_phase1_failed_stabilize_retry_dir_second_chance_failed;
 
             result.phase2_pricing_ms = solver_tel.perf_phase2_pricing_ms;
             result.phase2_ratio_ms = solver_tel.perf_phase2_ratio_ms;
@@ -3053,6 +3086,28 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_failed_stabilize_retry_selector_guarded_dir_failed);
     fprintf(out, "      \"failed_stabilize_retry_selector_guarded_fallback_to_bland\": %d,\n",
             ralph->phase1_failed_stabilize_retry_selector_guarded_fallback_to_bland);
+    fprintf(out, "      \"failed_stabilize_retry_dir_fail_shape_samples\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_dir_fail_shape_samples);
+    fprintf(out, "      \"failed_stabilize_retry_dir_fail_nnz_total\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_dir_fail_nnz_total);
+    fprintf(out, "      \"failed_stabilize_retry_dir_fail_nnz_max\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_dir_fail_nnz_max);
+    fprintf(out, "      \"failed_stabilize_retry_dir_fail_dir_inf_total\": %.6f,\n",
+            ralph->phase1_failed_stabilize_retry_dir_fail_dir_inf_total);
+    fprintf(out, "      \"failed_stabilize_retry_dir_fail_dir_inf_max\": %.6f,\n",
+            ralph->phase1_failed_stabilize_retry_dir_fail_dir_inf_max);
+    fprintf(out, "      \"failed_stabilize_retry_dir_fail_pivot_abs_total\": %.6f,\n",
+            ralph->phase1_failed_stabilize_retry_dir_fail_pivot_abs_total);
+    fprintf(out, "      \"failed_stabilize_retry_dir_fail_pivot_abs_max\": %.6f,\n",
+            ralph->phase1_failed_stabilize_retry_dir_fail_pivot_abs_max);
+    fprintf(out, "      \"failed_stabilize_retry_dir_second_chance_arms\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_dir_second_chance_arms);
+    fprintf(out, "      \"failed_stabilize_retry_dir_second_chance_no_alt\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_dir_second_chance_no_alt);
+    fprintf(out, "      \"failed_stabilize_retry_dir_second_chance_stabilized\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_dir_second_chance_stabilized);
+    fprintf(out, "      \"failed_stabilize_retry_dir_second_chance_failed\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_dir_second_chance_failed);
     fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase1_compute_solution_calls);
     fprintf(out, "      \"compute_reduced_costs_calls\": %d\n", ralph->phase1_compute_rc_calls);
     fprintf(out, "    },\n");

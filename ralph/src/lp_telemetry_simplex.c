@@ -510,6 +510,51 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_selector_guarded_fallback
     solver->telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_fallback_to_bland++;
 }
 
+void lp_telemetry_record_phase1_failed_stabilize_retry_dir_fail_shape(
+    SimplexSolver *solver,
+    double dir_inf,
+    int dir_nnz,
+    double pivot_abs) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_shape_samples++;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_nnz_total += dir_nnz;
+    if (dir_nnz > solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_nnz_max) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_nnz_max = dir_nnz;
+    }
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_dir_inf_total += dir_inf;
+    if (dir_inf > solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_dir_inf_max) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_dir_inf_max = dir_inf;
+    }
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_total += pivot_abs;
+    if (pivot_abs >
+        solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_max) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_max = pivot_abs;
+    }
+}
+
+void lp_telemetry_record_phase1_failed_stabilize_retry_dir_second_chance_arm(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_arms++;
+}
+
+void lp_telemetry_record_phase1_failed_stabilize_retry_dir_second_chance_no_alt(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_no_alt++;
+}
+
+void lp_telemetry_record_phase1_failed_stabilize_retry_dir_second_chance_outcome(
+    SimplexSolver *solver,
+    int stabilized) {
+    if (!solver_telemetry_enabled(solver)) return;
+    if (stabilized) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_stabilized++;
+    } else {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_failed++;
+    }
+}
+
 void lp_telemetry_record_pricing(SimplexSolver *solver,
                                  int phase,
                                  double elapsed_ms) {

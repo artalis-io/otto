@@ -660,6 +660,17 @@ typedef struct {
     int perf_phase1_failed_stabilize_retry_selector_guarded_ratio_failed;
     int perf_phase1_failed_stabilize_retry_selector_guarded_dir_failed;
     int perf_phase1_failed_stabilize_retry_selector_guarded_fallback_to_bland;
+    int perf_phase1_failed_stabilize_retry_dir_fail_shape_samples;
+    int perf_phase1_failed_stabilize_retry_dir_fail_nnz_total;
+    int perf_phase1_failed_stabilize_retry_dir_fail_nnz_max;
+    double perf_phase1_failed_stabilize_retry_dir_fail_dir_inf_total;
+    double perf_phase1_failed_stabilize_retry_dir_fail_dir_inf_max;
+    double perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_total;
+    double perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_max;
+    int perf_phase1_failed_stabilize_retry_dir_second_chance_arms;
+    int perf_phase1_failed_stabilize_retry_dir_second_chance_no_alt;
+    int perf_phase1_failed_stabilize_retry_dir_second_chance_stabilized;
+    int perf_phase1_failed_stabilize_retry_dir_second_chance_failed;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;

@@ -224,6 +224,17 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_ratio_failed = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_dir_failed = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_fallback_to_bland = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_shape_samples = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_nnz_total = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_nnz_max = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_dir_inf_total = 0.0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_dir_inf_max = 0.0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_total = 0.0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_max = 0.0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_arms = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_no_alt = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_stabilized = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_failed = 0;
 
     solver->telemetry.perf_phase2_pricing_ms = 0.0;
     solver->telemetry.perf_phase2_ratio_ms = 0.0;
@@ -703,6 +714,17 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_guarded_ratio_failed);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_guarded_dir_failed);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_guarded_fallback_to_bland);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_dir_fail_shape_samples);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_dir_fail_nnz_total);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_dir_fail_nnz_max);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_dir_fail_dir_inf_total);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_dir_fail_dir_inf_max);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_total);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_max);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_dir_second_chance_arms);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_dir_second_chance_no_alt);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_dir_second_chance_stabilized);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_dir_second_chance_failed);
 
     COPY_SOLVER_FIELD(perf_phase2_pricing_ms);
     COPY_SOLVER_FIELD(perf_phase2_ratio_ms);
