@@ -45,6 +45,7 @@ static int phase1_failed_stabilize_retry_local_memory_plan(int original_entering
                                                            int last_retry_alt_streak,
                                                            int retry_penalize_last_failed);
 static int phase1_failed_stabilize_retry_guarded_selector_plan(
+    int retry_ratio_fail_streak,
     int last_retry_alt_streak,
     int eligible_count,
     int bland_entering,
@@ -120,9 +121,10 @@ static int phase1_trace_reason_from_lu_failure(int lu_reason, int forced_refacto
 #define PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_ITERS RALPH_PHASE1_ENTERING_EXCLUDE_ITERS
 #define PHASE1_FAILED_STABILIZE_RETRY_PENALTY_TRIGGER 3
 #define PHASE1_FAILED_STABILIZE_RETRY_LOCAL_MEMORY_TRIGGER 2
+#define PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_RATIO_FAIL_TRIGGER 2
 #define PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_TRIGGER 4
 #define PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_MIN_ELIGIBLE 16
-#define PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_SCORE_RATIO 16.0
+#define PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_SCORE_RATIO 2.0
 #define PHASE1_AUTO_DANTZIG_MIN_M 700
 #define PHASE1_AUTO_DANTZIG_MAX_M 1200
 #define PHASE1_AUTO_DANTZIG_DEGEN_TRIGGER 20
@@ -1747,6 +1749,7 @@ int simplex_phase1_failed_stabilize_retry_local_memory_plan_for_test(
 }
 
 int simplex_phase1_failed_stabilize_retry_guarded_selector_plan_for_test(
+    int retry_ratio_fail_streak,
     int last_retry_alt_streak,
     int eligible_count,
     int bland_entering,
@@ -1754,6 +1757,7 @@ int simplex_phase1_failed_stabilize_retry_guarded_selector_plan_for_test(
     double bland_score,
     double best_score) {
     return phase1_failed_stabilize_retry_guarded_selector_plan(
+        retry_ratio_fail_streak,
         last_retry_alt_streak,
         eligible_count,
         bland_entering,
@@ -4384,12 +4388,16 @@ static int phase1_failed_stabilize_retry_local_memory_plan(int original_entering
 }
 
 static int phase1_failed_stabilize_retry_guarded_selector_plan(
+    int retry_ratio_fail_streak,
     int last_retry_alt_streak,
     int eligible_count,
     int bland_entering,
     int best_entering,
     double bland_score,
     double best_score) {
+    if (retry_ratio_fail_streak < PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_RATIO_FAIL_TRIGGER) {
+        return 0;
+    }
     if (last_retry_alt_streak < PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_TRIGGER) {
         return 0;
     }
@@ -4898,8 +4906,10 @@ static int phase1_failed_stabilize_retry_select_local_memory(
     SimplexTableau *tab,
     int original_entering,
     int last_retry_alt,
+    int retry_ratio_fail_streak,
     int last_retry_alt_streak,
     int *entering,
+    int *bland_entering_out,
     int *used_guarded_out) {
     int bland_entering = -1;
     int best_entering = -1;
@@ -4908,6 +4918,7 @@ static int phase1_failed_stabilize_retry_select_local_memory(
     double best_score = 0.0;
     int use_guarded = 0;
 
+    if (bland_entering_out) *bland_entering_out = -1;
     if (used_guarded_out) *used_guarded_out = 0;
     if (!entering) return 1;
     if (phase1_failed_stabilize_retry_find_candidates(
@@ -4923,6 +4934,7 @@ static int phase1_failed_stabilize_retry_select_local_memory(
     }
 
     use_guarded = phase1_failed_stabilize_retry_guarded_selector_plan(
+        retry_ratio_fail_streak,
         last_retry_alt_streak,
         eligible_count,
         bland_entering,
@@ -4930,6 +4942,7 @@ static int phase1_failed_stabilize_retry_select_local_memory(
         bland_score,
         best_score);
     *entering = use_guarded ? best_entering : bland_entering;
+    if (bland_entering_out) *bland_entering_out = bland_entering;
     lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
         solver, use_guarded, eligible_count);
     if (used_guarded_out) *used_guarded_out = use_guarded;
@@ -6550,6 +6563,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     int phase1_failed_stabilize_same_entering_streak = 0;
     int phase1_last_failed_stabilize_retry_alt = -1;
     int phase1_failed_stabilize_retry_alt_streak = 0;
+    int phase1_failed_stabilize_retry_alt_ratio_fail_streak = 0;
     int phase1_failed_stabilize_retry_pool_sample_counter = 0;
     int phase1_dir_escape_cooldown = 0;
     int phase1_force_pivot_attempt_budget = 0;
@@ -7578,6 +7592,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             int retry_used_local_memory_alt = 0;
             int retry_local_memory_selector_tracked = 0;
             int retry_local_memory_used_guarded_selector = 0;
+            int retry_local_memory_bland_alt = -1;
             for (int stab_try = 0; stab_try < 1; stab_try++) {
                 int dir_refactor_trigger = 0;
                 if (force_dir_refactor_extreme) {
@@ -7675,8 +7690,10 @@ static int simplex_phase1(SimplexSolver *solver) {
                                 tab,
                                 original_entering,
                                 phase1_last_failed_stabilize_retry_alt,
+                                phase1_failed_stabilize_retry_alt_ratio_fail_streak,
                                 phase1_failed_stabilize_retry_alt_streak,
                                 &entering,
+                                &retry_local_memory_bland_alt,
                                 &retry_local_memory_used_guarded_selector) == 0) {
                             retry_used_local_memory_alt = 1;
                             retry_local_memory_selector_tracked = 1;
@@ -7695,6 +7712,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                             retry_used_local_memory_alt = 1;
                             retry_local_memory_selector_tracked = 1;
                             retry_local_memory_used_guarded_selector = 0;
+                            retry_local_memory_bland_alt = entering;
                             lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
                                 solver, 0, 0);
                             lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_alternate(
@@ -7729,41 +7747,85 @@ static int simplex_phase1(SimplexSolver *solver) {
                     }
                 }
                 retry_consumed_alternate = 1;
-                phase1_note_failed_stabilize_retry_alternate(
-                    solver,
-                    entering,
-                    &phase1_last_failed_stabilize_retry_alt,
-                    &phase1_failed_stabilize_retry_alt_streak);
-                ratio_status = primal_ratio_test_with_policy(solver,
-                                                             tab,
-                                                             0,
-                                                             entering,
-                                                             &leaving,
-                                                             &theta);
-                if (ratio_status != 0) {
+                for (;;) {
+                    phase1_note_failed_stabilize_retry_alternate(
+                        solver,
+                        entering,
+                        &phase1_last_failed_stabilize_retry_alt,
+                        &phase1_failed_stabilize_retry_alt_streak);
+                    if (phase1_failed_stabilize_retry_alt_streak <= 1) {
+                        phase1_failed_stabilize_retry_alt_ratio_fail_streak = 0;
+                    }
+                    ratio_status = primal_ratio_test_with_policy(solver,
+                                                                 tab,
+                                                                 0,
+                                                                 entering,
+                                                                 &leaving,
+                                                                 &theta);
+                    if (ratio_status != 0) {
+                        if (phase1_failed_stabilize_retry_alt_ratio_fail_streak < INT_MAX) {
+                            phase1_failed_stabilize_retry_alt_ratio_fail_streak++;
+                        }
+                        if (retry_local_memory_selector_tracked) {
+                            lp_telemetry_record_phase1_failed_stabilize_retry_selector_ratio_failure(
+                                solver, retry_local_memory_used_guarded_selector);
+                            lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(
+                                solver, retry_local_memory_used_guarded_selector, 0);
+                            if (retry_local_memory_used_guarded_selector &&
+                                retry_local_memory_bland_alt >= 0 &&
+                                retry_local_memory_bland_alt != entering) {
+                                lp_telemetry_record_phase1_failed_stabilize_retry_selector_guarded_fallback(
+                                    solver);
+                                entering = retry_local_memory_bland_alt;
+                                retry_local_memory_used_guarded_selector = 0;
+                                lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
+                                    solver, 0, 0);
+                                continue;
+                            }
+                        }
+                        break;
+                    }
+                    dir_inf = vec_abs_max(tab->work2, tab->m);
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Alternate entering %d direction norm: %.2e\n",
+                                entering, dir_inf);
+                    }
+                    if (dir_inf <= RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
+                        phase1_failed_stabilize_retry_alt_ratio_fail_streak = 0;
+                        lp_telemetry_record_phase1_failed_stabilize_retry_penalty_outcome(
+                            solver, 1);
+                        if (retry_used_local_memory_alt) {
+                            lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_outcome(
+                                solver, 1);
+                        }
+                        if (retry_local_memory_selector_tracked) {
+                            lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(
+                                solver, retry_local_memory_used_guarded_selector, 1);
+                        }
+                        stabilized = 1;
+                        break;
+                    }
                     if (retry_local_memory_selector_tracked) {
+                        phase1_failed_stabilize_retry_alt_ratio_fail_streak = 0;
+                        lp_telemetry_record_phase1_failed_stabilize_retry_selector_dir_failure(
+                            solver, retry_local_memory_used_guarded_selector);
                         lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(
                             solver, retry_local_memory_used_guarded_selector, 0);
+                        if (retry_local_memory_used_guarded_selector &&
+                            retry_local_memory_bland_alt >= 0 &&
+                            retry_local_memory_bland_alt != entering) {
+                            lp_telemetry_record_phase1_failed_stabilize_retry_selector_guarded_fallback(
+                                solver);
+                            entering = retry_local_memory_bland_alt;
+                            retry_local_memory_used_guarded_selector = 0;
+                            lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
+                                solver, 0, 0);
+                            continue;
+                        }
                     }
                     break;
                 }
-                dir_inf = vec_abs_max(tab->work2, tab->m);
-                if (solver->verbose >= 2) {
-                    LP_LOG_STDERR("[simplex_phase1] Alternate entering %d direction norm: %.2e\n",
-                            entering, dir_inf);
-                }
-                if (dir_inf <= RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
-                    lp_telemetry_record_phase1_failed_stabilize_retry_penalty_outcome(
-                        solver, 1);
-                    if (retry_used_local_memory_alt) {
-                        lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_outcome(
-                            solver, 1);
-                    }
-                    if (retry_local_memory_selector_tracked) {
-                        lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(
-                            solver, retry_local_memory_used_guarded_selector, 1);
-                    }
-                    stabilized = 1;
+                if (stabilized) {
                     break;
                 }
                 lp_telemetry_record_phase1_failed_stabilize_retry_penalty_outcome(
@@ -7771,10 +7833,6 @@ static int simplex_phase1(SimplexSolver *solver) {
                 if (retry_used_local_memory_alt) {
                     lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_outcome(
                         solver, 0);
-                }
-                if (retry_local_memory_selector_tracked) {
-                    lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(
-                        solver, retry_local_memory_used_guarded_selector, 0);
                 }
             }
 
@@ -8211,6 +8269,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         phase1_failed_stabilize_same_entering_streak = 0;
         phase1_last_failed_stabilize_retry_alt = -1;
         phase1_failed_stabilize_retry_alt_streak = 0;
+        phase1_failed_stabilize_retry_alt_ratio_fail_streak = 0;
         excluded_entering_a = -1;
         excluded_entering_ttl_a = 0;
         excluded_entering_b = -1;
