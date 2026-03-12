@@ -422,6 +422,27 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_outcome(
     }
 }
 
+void lp_telemetry_record_phase1_failed_stabilize_retry_pool_sample(
+    SimplexSolver *solver,
+    int eligible_count,
+    int best_differs_from_bland) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_pool_samples++;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_pool_eligible_total +=
+        eligible_count;
+    if (eligible_count >
+        solver->telemetry.perf_phase1_failed_stabilize_retry_pool_eligible_max) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_pool_eligible_max =
+            eligible_count;
+    }
+    if (eligible_count == 1) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_pool_singleton_samples++;
+    }
+    if (best_differs_from_bland) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_pool_best_differs_samples++;
+    }
+}
+
 void lp_telemetry_record_pricing(SimplexSolver *solver,
                                  int phase,
                                  double elapsed_ms) {

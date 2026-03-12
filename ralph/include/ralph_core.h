@@ -642,6 +642,11 @@ typedef struct {
     int perf_phase1_failed_stabilize_retry_local_memory_fallback_same_alt;
     int perf_phase1_failed_stabilize_retry_local_memory_alt_stabilized;
     int perf_phase1_failed_stabilize_retry_local_memory_alt_failed;
+    int perf_phase1_failed_stabilize_retry_pool_samples;
+    int perf_phase1_failed_stabilize_retry_pool_eligible_total;
+    int perf_phase1_failed_stabilize_retry_pool_eligible_max;
+    int perf_phase1_failed_stabilize_retry_pool_singleton_samples;
+    int perf_phase1_failed_stabilize_retry_pool_best_differs_samples;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;

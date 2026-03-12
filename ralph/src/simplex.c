@@ -4756,6 +4756,39 @@ static int pricing_devex_partial(SimplexTableau *tab, int *entering) {
     return 1;
 }
 
+static void phase1_failed_stabilize_retry_sample_pool(SimplexSolver *solver,
+                                                      SimplexTableau *tab,
+                                                      int excluded_a,
+                                                      int excluded_b,
+                                                      int *sample_counter) {
+    int eligible_count = 0;
+    int first_eligible = -1;
+    int best_eligible = -1;
+    double best_score = 0.0;
+
+    if (!solver || !tab || !sample_counter) return;
+    if (((*sample_counter)++ & 15) != 0) return;
+
+    for (int j = 0; j < tab->n; j++) {
+        double score = 0.0;
+
+        if (j == excluded_a || j == excluded_b) continue;
+        if (!devex_entering_eligible(tab, j, &score)) continue;
+
+        if (first_eligible < 0) first_eligible = j;
+        eligible_count++;
+        if (best_eligible < 0 || score > best_score) {
+            best_score = score;
+            best_eligible = j;
+        }
+    }
+
+    lp_telemetry_record_phase1_failed_stabilize_retry_pool_sample(
+        solver,
+        eligible_count,
+        (best_eligible >= 0 && first_eligible >= 0 && best_eligible != first_eligible));
+}
+
 static int phase2_use_adaptive_devex_partial(const SimplexTableau *tab,
                                              int iter,
                                              int degenerate_count,
@@ -6370,6 +6403,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     int phase1_failed_stabilize_same_entering_streak = 0;
     int phase1_last_failed_stabilize_retry_alt = -1;
     int phase1_failed_stabilize_retry_alt_streak = 0;
+    int phase1_failed_stabilize_retry_pool_sample_counter = 0;
     int phase1_dir_escape_cooldown = 0;
     int phase1_force_pivot_attempt_budget = 0;
     int periodic_policy_cooldown = 0;
@@ -7451,6 +7485,12 @@ static int simplex_phase1(SimplexSolver *solver) {
                 if (retry_penalize_last_failed) {
                     lp_telemetry_record_phase1_failed_stabilize_retry_penalty_arm(
                         solver);
+                    phase1_failed_stabilize_retry_sample_pool(
+                        solver,
+                        tab,
+                        original_entering,
+                        phase1_last_failed_stabilize_entering,
+                        &phase1_failed_stabilize_retry_pool_sample_counter);
                     if (pricing_bland_excluding_two(tab,
                                                     original_entering,
                                                     phase1_last_failed_stabilize_entering,
@@ -7473,6 +7513,12 @@ static int simplex_phase1(SimplexSolver *solver) {
                     if (retry_use_local_memory) {
                         lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_arm(
                             solver);
+                        phase1_failed_stabilize_retry_sample_pool(
+                            solver,
+                            tab,
+                            original_entering,
+                            phase1_last_failed_stabilize_retry_alt,
+                            &phase1_failed_stabilize_retry_pool_sample_counter);
                         if (pricing_bland_excluding_two(tab,
                                                         original_entering,
                                                         phase1_last_failed_stabilize_retry_alt,
@@ -7495,8 +7541,16 @@ static int simplex_phase1(SimplexSolver *solver) {
                                     solver);
                             }
                         }
-                    } else if (pricing_bland_excluding(tab, original_entering, &entering) != 0) {
-                        break;
+                    } else {
+                        phase1_failed_stabilize_retry_sample_pool(
+                            solver,
+                            tab,
+                            original_entering,
+                            -1,
+                            &phase1_failed_stabilize_retry_pool_sample_counter);
+                        if (pricing_bland_excluding(tab, original_entering, &entering) != 0) {
+                            break;
+                        }
                     }
                 }
                 retry_consumed_alternate = 1;
