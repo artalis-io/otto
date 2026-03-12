@@ -1303,6 +1303,49 @@ Completed slices:
        - `failed_stabilize_retry_pool_singleton_samples=0`
        - `failed_stabilize_retry_pool_best_differs_samples=2`
        - direct time stayed in the same band: `7503.407 ms`, `1391` iterations
+10. `W2.10` add retry-lane selector-class telemetry and evaluate a guarded broader
+    alternate selector.
+    - added exact retry-lane selector telemetry:
+      - bland arms
+      - guarded arms
+      - guarded eligible-total / eligible-max
+      - bland alternate stabilized / failed
+      - guarded alternate stabilized / failed
+    - added a tightly gated broader selector only inside the local retry lane:
+      - no top-level phase-1 pricing change
+      - no global entering-exclusion change
+      - broader pool scan only when the retry alternate streak is already
+        chronic (`>= 4`)
+      - guarded pick only if the broader best candidate differs from bland and
+        clears a large score-ratio gate (`>= 16x`)
+    - validation:
+      - `make -C ralph test-lp-telemetry-solver`
+      - `make -C ralph test-simplex-policy`
+      - `make -C ralph build-ralph-benchmark`
+      - direct `wood1p` / `greenbeb`
+      - `make -C ralph test-netlib-gate-small`
+      - `make -C ralph test-netlib-gate`
+    - direct findings on the target outliers:
+      - `wood1p`:
+        - `failed_stabilize_retry_selector_bland_arms=118`
+        - `failed_stabilize_retry_selector_guarded_arms=0`
+        - direct time: `2871.742 ms`, `719` iterations
+      - `greenbeb`:
+        - `failed_stabilize_retry_selector_bland_arms=21`
+        - `failed_stabilize_retry_selector_guarded_arms=0`
+        - direct time: `8012.630 ms`, `1435` iterations
+    - full NETLIB gate stayed baseline-clean:
+      - `84` files
+      - `22` timeouts
+      - `0` command failures
+      - `0` status/objective/invalid mismatches
+      - `0` dense fallbacks
+    - implication:
+      - the broader selector is currently too conservative to activate on the
+        real Week 2 outliers
+      - keeping the selector-class telemetry is useful
+      - the next Week 2 move should not be a broader blind selector; it needs a
+        better safety predicate or a different post-selection diagnostic
    - full NETLIB gate stayed baseline-clean:
      - `84` files
      - `22` timeouts

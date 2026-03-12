@@ -44,6 +44,22 @@ static int phase1_failed_stabilize_retry_local_memory_plan(int original_entering
                                                            int last_retry_alt,
                                                            int last_retry_alt_streak,
                                                            int retry_penalize_last_failed);
+static int phase1_failed_stabilize_retry_guarded_selector_plan(
+    int last_retry_alt_streak,
+    int eligible_count,
+    int bland_entering,
+    int best_entering,
+    double bland_score,
+    double best_score);
+static int phase1_failed_stabilize_retry_find_candidates(
+    SimplexTableau *tab,
+    int excluded_a,
+    int excluded_b,
+    int *bland_entering,
+    double *bland_score_out,
+    int *best_entering,
+    double *best_score_out,
+    int *eligible_count_out);
 
 /* Phase-1 pivot-failure reasons used by deterministic tracing. */
 enum {
@@ -104,6 +120,9 @@ static int phase1_trace_reason_from_lu_failure(int lu_reason, int forced_refacto
 #define PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_ITERS RALPH_PHASE1_ENTERING_EXCLUDE_ITERS
 #define PHASE1_FAILED_STABILIZE_RETRY_PENALTY_TRIGGER 3
 #define PHASE1_FAILED_STABILIZE_RETRY_LOCAL_MEMORY_TRIGGER 2
+#define PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_TRIGGER 4
+#define PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_MIN_ELIGIBLE 16
+#define PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_SCORE_RATIO 16.0
 #define PHASE1_AUTO_DANTZIG_MIN_M 700
 #define PHASE1_AUTO_DANTZIG_MAX_M 1200
 #define PHASE1_AUTO_DANTZIG_DEGEN_TRIGGER 20
@@ -1725,6 +1744,22 @@ int simplex_phase1_failed_stabilize_retry_local_memory_plan_for_test(
         last_retry_alt,
         last_retry_alt_streak,
         retry_penalize_last_failed);
+}
+
+int simplex_phase1_failed_stabilize_retry_guarded_selector_plan_for_test(
+    int last_retry_alt_streak,
+    int eligible_count,
+    int bland_entering,
+    int best_entering,
+    double bland_score,
+    double best_score) {
+    return phase1_failed_stabilize_retry_guarded_selector_plan(
+        last_retry_alt_streak,
+        eligible_count,
+        bland_entering,
+        best_entering,
+        bland_score,
+        best_score);
 }
 
 int simplex_phase1_force_pivot_mode_plan_for_test(int m,
@@ -4348,6 +4383,30 @@ static int phase1_failed_stabilize_retry_local_memory_plan(int original_entering
     return (last_retry_alt != original_entering);
 }
 
+static int phase1_failed_stabilize_retry_guarded_selector_plan(
+    int last_retry_alt_streak,
+    int eligible_count,
+    int bland_entering,
+    int best_entering,
+    double bland_score,
+    double best_score) {
+    if (last_retry_alt_streak < PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_TRIGGER) {
+        return 0;
+    }
+    if (eligible_count < PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_MIN_ELIGIBLE) {
+        return 0;
+    }
+    if (bland_entering < 0 || best_entering < 0 || best_entering == bland_entering) {
+        return 0;
+    }
+    if (!isfinite(bland_score) || !isfinite(best_score) ||
+        bland_score <= 0.0 || best_score <= 0.0) {
+        return 0;
+    }
+    return best_score >=
+           PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_SCORE_RATIO * bland_score;
+}
+
 static void phase1_pivot_fail_recovery_maybe_exclude_entering(
     SimplexSolver *solver,
     int fail_repeat_count,
@@ -4768,6 +4827,46 @@ static void phase1_failed_stabilize_retry_sample_pool(SimplexSolver *solver,
 
     if (!solver || !tab || !sample_counter) return;
     if (((*sample_counter)++ & 15) != 0) return;
+    (void)phase1_failed_stabilize_retry_find_candidates(
+        tab,
+        excluded_a,
+        excluded_b,
+        &first_eligible,
+        NULL,
+        &best_eligible,
+        &best_score,
+        &eligible_count);
+
+    lp_telemetry_record_phase1_failed_stabilize_retry_pool_sample(
+        solver,
+        eligible_count,
+        (best_eligible >= 0 && first_eligible >= 0 && best_eligible != first_eligible));
+}
+
+static int phase1_failed_stabilize_retry_find_candidates(
+    SimplexTableau *tab,
+    int excluded_a,
+    int excluded_b,
+    int *bland_entering,
+    double *bland_score_out,
+    int *best_entering,
+    double *best_score_out,
+    int *eligible_count_out) {
+    int first_eligible = -1;
+    double first_score = 0.0;
+    int best_eligible = -1;
+    double best_score = 0.0;
+    int eligible_count = 0;
+
+    if (!tab) return 1;
+    if (bland_entering) *bland_entering = -1;
+    if (bland_score_out) *bland_score_out = 0.0;
+    if (best_entering) *best_entering = -1;
+    if (best_score_out) *best_score_out = 0.0;
+    if (eligible_count_out) *eligible_count_out = 0;
+    if (!tab->duals_valid) {
+        tableau_compute_duals(tab);
+    }
 
     for (int j = 0; j < tab->n; j++) {
         double score = 0.0;
@@ -4775,18 +4874,66 @@ static void phase1_failed_stabilize_retry_sample_pool(SimplexSolver *solver,
         if (j == excluded_a || j == excluded_b) continue;
         if (!devex_entering_eligible(tab, j, &score)) continue;
 
-        if (first_eligible < 0) first_eligible = j;
+        if (first_eligible < 0) {
+            first_eligible = j;
+            first_score = score;
+        }
         eligible_count++;
         if (best_eligible < 0 || score > best_score) {
-            best_score = score;
             best_eligible = j;
+            best_score = score;
         }
     }
 
-    lp_telemetry_record_phase1_failed_stabilize_retry_pool_sample(
-        solver,
+    if (bland_entering) *bland_entering = first_eligible;
+    if (bland_score_out) *bland_score_out = first_score;
+    if (best_entering) *best_entering = best_eligible;
+    if (best_score_out) *best_score_out = best_score;
+    if (eligible_count_out) *eligible_count_out = eligible_count;
+    return (first_eligible >= 0 && best_eligible >= 0) ? 0 : 1;
+}
+
+static int phase1_failed_stabilize_retry_select_local_memory(
+    SimplexSolver *solver,
+    SimplexTableau *tab,
+    int original_entering,
+    int last_retry_alt,
+    int last_retry_alt_streak,
+    int *entering,
+    int *used_guarded_out) {
+    int bland_entering = -1;
+    int best_entering = -1;
+    int eligible_count = 0;
+    double bland_score = 0.0;
+    double best_score = 0.0;
+    int use_guarded = 0;
+
+    if (used_guarded_out) *used_guarded_out = 0;
+    if (!entering) return 1;
+    if (phase1_failed_stabilize_retry_find_candidates(
+            tab,
+            original_entering,
+            last_retry_alt,
+            &bland_entering,
+            &bland_score,
+            &best_entering,
+            &best_score,
+            &eligible_count) != 0) {
+        return 1;
+    }
+
+    use_guarded = phase1_failed_stabilize_retry_guarded_selector_plan(
+        last_retry_alt_streak,
         eligible_count,
-        (best_eligible >= 0 && first_eligible >= 0 && best_eligible != first_eligible));
+        bland_entering,
+        best_entering,
+        bland_score,
+        best_score);
+    *entering = use_guarded ? best_entering : bland_entering;
+    lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
+        solver, use_guarded, eligible_count);
+    if (used_guarded_out) *used_guarded_out = use_guarded;
+    return 0;
 }
 
 static int phase2_use_adaptive_devex_partial(const SimplexTableau *tab,
@@ -7429,6 +7576,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                     phase1_failed_stabilize_same_entering_streak);
             int retry_consumed_alternate = 0;
             int retry_used_local_memory_alt = 0;
+            int retry_local_memory_selector_tracked = 0;
+            int retry_local_memory_used_guarded_selector = 0;
             for (int stab_try = 0; stab_try < 1; stab_try++) {
                 int dir_refactor_trigger = 0;
                 if (force_dir_refactor_extreme) {
@@ -7519,18 +7668,44 @@ static int simplex_phase1(SimplexSolver *solver) {
                             original_entering,
                             phase1_last_failed_stabilize_retry_alt,
                             &phase1_failed_stabilize_retry_pool_sample_counter);
-                        if (pricing_bland_excluding_two(tab,
-                                                        original_entering,
-                                                        phase1_last_failed_stabilize_retry_alt,
-                                                        &entering) == 0) {
+                        if (phase1_failed_stabilize_retry_alt_streak >=
+                                PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_TRIGGER &&
+                            phase1_failed_stabilize_retry_select_local_memory(
+                                solver,
+                                tab,
+                                original_entering,
+                                phase1_last_failed_stabilize_retry_alt,
+                                phase1_failed_stabilize_retry_alt_streak,
+                                &entering,
+                                &retry_local_memory_used_guarded_selector) == 0) {
                             retry_used_local_memory_alt = 1;
+                            retry_local_memory_selector_tracked = 1;
                             lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_alternate(
                                 solver);
                             if (solver->verbose >= 2) {
-                                LP_LOG_STDERR("[simplex_phase1] Avoiding repeated retry alternate %d, trying local-memory alternate %d inside dir-stabilize retry\n",
+                                LP_LOG_STDERR("[simplex_phase1] Avoiding repeated retry alternate %d, trying local-memory %s alternate %d inside dir-stabilize retry\n",
+                                        phase1_last_failed_stabilize_retry_alt,
+                                        retry_local_memory_used_guarded_selector ? "guarded" : "bland",
+                                        entering);
+                            }
+                        } else if (pricing_bland_excluding_two(tab,
+                                                               original_entering,
+                                                               phase1_last_failed_stabilize_retry_alt,
+                                                               &entering) == 0) {
+                            retry_used_local_memory_alt = 1;
+                            retry_local_memory_selector_tracked = 1;
+                            retry_local_memory_used_guarded_selector = 0;
+                            lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
+                                solver, 0, 0);
+                            lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_alternate(
+                                solver);
+                            if (solver->verbose >= 2) {
+                                LP_LOG_STDERR("[simplex_phase1] Avoiding repeated retry alternate %d, trying local-memory bland alternate %d inside dir-stabilize retry\n",
                                         phase1_last_failed_stabilize_retry_alt, entering);
                             }
                         } else {
+                            retry_local_memory_selector_tracked = 0;
+                            retry_local_memory_used_guarded_selector = 0;
                             lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_no_alt(
                                 solver);
                             if (pricing_bland_excluding(tab, original_entering, &entering) != 0) {
@@ -7566,6 +7741,10 @@ static int simplex_phase1(SimplexSolver *solver) {
                                                              &leaving,
                                                              &theta);
                 if (ratio_status != 0) {
+                    if (retry_local_memory_selector_tracked) {
+                        lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(
+                            solver, retry_local_memory_used_guarded_selector, 0);
+                    }
                     break;
                 }
                 dir_inf = vec_abs_max(tab->work2, tab->m);
@@ -7580,6 +7759,10 @@ static int simplex_phase1(SimplexSolver *solver) {
                         lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_outcome(
                             solver, 1);
                     }
+                    if (retry_local_memory_selector_tracked) {
+                        lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(
+                            solver, retry_local_memory_used_guarded_selector, 1);
+                    }
                     stabilized = 1;
                     break;
                 }
@@ -7588,6 +7771,10 @@ static int simplex_phase1(SimplexSolver *solver) {
                 if (retry_used_local_memory_alt) {
                     lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_outcome(
                         solver, 0);
+                }
+                if (retry_local_memory_selector_tracked) {
+                    lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(
+                        solver, retry_local_memory_used_guarded_selector, 0);
                 }
             }
 

@@ -117,6 +117,13 @@ int simplex_phase1_failed_stabilize_retry_local_memory_plan_for_test(
     int last_retry_alt,
     int last_retry_alt_streak,
     int retry_penalize_last_failed);
+int simplex_phase1_failed_stabilize_retry_guarded_selector_plan_for_test(
+    int last_retry_alt_streak,
+    int eligible_count,
+    int bland_entering,
+    int best_entering,
+    double bland_score,
+    double best_score);
 
 int simplex_phase1_force_pivot_mode_plan_for_test(int m,
                                                    int degenerate_count,
@@ -701,6 +708,17 @@ typedef struct {
 
 typedef struct {
     const char *name;
+    int last_retry_alt_streak;
+    int eligible_count;
+    int bland_entering;
+    int best_entering;
+    double bland_score;
+    double best_score;
+    int expected_use_guarded;
+} FailedStabilizeRetryGuardedSelectorCase;
+
+typedef struct {
+    const char *name;
     int m;
     int degenerate_count;
     int queue_force_pending;
@@ -1124,6 +1142,25 @@ static int run_failed_stabilize_retry_local_memory_case(
     if (use_memory != tc->expected_use_memory) {
         fprintf(stderr, "FAIL: %s (expected use_memory=%d got=%d)\n",
                 tc->name, tc->expected_use_memory, use_memory);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_failed_stabilize_retry_guarded_selector_case(
+    const FailedStabilizeRetryGuardedSelectorCase *tc) {
+    int use_guarded =
+        simplex_phase1_failed_stabilize_retry_guarded_selector_plan_for_test(
+            tc->last_retry_alt_streak,
+            tc->eligible_count,
+            tc->bland_entering,
+            tc->best_entering,
+            tc->bland_score,
+            tc->best_score);
+    if (use_guarded != tc->expected_use_guarded) {
+        fprintf(stderr, "FAIL: %s (expected use_guarded=%d got=%d)\n",
+                tc->name, tc->expected_use_guarded, use_guarded);
         return 0;
     }
     printf("PASS: %s\n", tc->name);
@@ -2373,7 +2410,60 @@ int main(void) {
                 .last_retry_alt = 12,
                 .last_retry_alt_streak = 2,
                 .retry_penalize_last_failed = 0,
-                .expected_use_memory = 1
+            .expected_use_memory = 1
+        }
+    };
+    const FailedStabilizeRetryGuardedSelectorCase
+        failed_stabilize_retry_guarded_selector_cases[] = {
+            {
+                .name = "failed-stabilize retry guarded selector stays off below streak trigger",
+                .last_retry_alt_streak = 3,
+                .eligible_count = 64,
+                .bland_entering = 5,
+                .best_entering = 19,
+                .bland_score = 1.0,
+                .best_score = 64.0,
+                .expected_use_guarded = 0
+            },
+            {
+                .name = "failed-stabilize retry guarded selector stays off for small eligible pool",
+                .last_retry_alt_streak = 6,
+                .eligible_count = 8,
+                .bland_entering = 5,
+                .best_entering = 19,
+                .bland_score = 1.0,
+                .best_score = 64.0,
+                .expected_use_guarded = 0
+            },
+            {
+                .name = "failed-stabilize retry guarded selector stays off without nonbland best",
+                .last_retry_alt_streak = 6,
+                .eligible_count = 64,
+                .bland_entering = 5,
+                .best_entering = 5,
+                .bland_score = 1.0,
+                .best_score = 64.0,
+                .expected_use_guarded = 0
+            },
+            {
+                .name = "failed-stabilize retry guarded selector stays off below score ratio",
+                .last_retry_alt_streak = 6,
+                .eligible_count = 64,
+                .bland_entering = 5,
+                .best_entering = 19,
+                .bland_score = 2.0,
+                .best_score = 20.0,
+                .expected_use_guarded = 0
+            },
+            {
+                .name = "failed-stabilize retry guarded selector arms on repeated alternate with strong advantage",
+                .last_retry_alt_streak = 6,
+                .eligible_count = 64,
+                .bland_entering = 5,
+                .best_entering = 19,
+                .bland_score = 2.0,
+                .best_score = 64.0,
+                .expected_use_guarded = 1
             }
         };
     const ForcePivotModeCase force_pivot_mode_cases[] = {
@@ -3014,6 +3104,9 @@ int main(void) {
     int total_failed_stabilize_retry_local_memory =
         (int)(sizeof(failed_stabilize_retry_local_memory_cases) /
               sizeof(failed_stabilize_retry_local_memory_cases[0]));
+    int total_failed_stabilize_retry_guarded_selector =
+        (int)(sizeof(failed_stabilize_retry_guarded_selector_cases) /
+              sizeof(failed_stabilize_retry_guarded_selector_cases[0]));
     int total_force_pivot_mode = (int)(sizeof(force_pivot_mode_cases) / sizeof(force_pivot_mode_cases[0]));
     int total_dir_escape_gate =
         (int)(sizeof(dir_stabilize_escape_gate_cases) /
@@ -3050,6 +3143,7 @@ int main(void) {
                 total_dir_skip_rescue_cadence +
                 total_failed_stabilize_retry_penalty +
                 total_failed_stabilize_retry_local_memory +
+                total_failed_stabilize_retry_guarded_selector +
                 total_force_pivot_mode +
                 total_dir_escape_gate +
                 total_force_pivot_relax +
@@ -3118,6 +3212,10 @@ int main(void) {
     for (int i = 0; i < total_failed_stabilize_retry_local_memory; i++) {
         pass += run_failed_stabilize_retry_local_memory_case(
             &failed_stabilize_retry_local_memory_cases[i]);
+    }
+    for (int i = 0; i < total_failed_stabilize_retry_guarded_selector; i++) {
+        pass += run_failed_stabilize_retry_guarded_selector_case(
+            &failed_stabilize_retry_guarded_selector_cases[i]);
     }
     for (int i = 0; i < total_force_pivot_mode; i++) {
         pass += run_force_pivot_mode_case(&force_pivot_mode_cases[i]);
