@@ -2551,6 +2551,14 @@ int main(void) {
                 .expected_guard = 0
             },
             {
+                .name = "failed-stabilize retry dir guard stays off on severe but non-catastrophic weak pivot",
+                .dir_inf = 2.5e5,
+                .dir_nnz = 96,
+                .pivot_abs = 0.5,
+                .retry_alt_streak = 5,
+                .expected_guard = 0
+            },
+            {
                 .name = "failed-stabilize retry dir guard arms on catastrophic unstable retry direction",
                 .dir_inf = 2.5e5,
                 .dir_nnz = 96,
