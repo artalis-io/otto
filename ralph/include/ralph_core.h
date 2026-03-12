@@ -671,6 +671,8 @@ typedef struct {
     int perf_phase1_failed_stabilize_retry_dir_second_chance_no_alt;
     int perf_phase1_failed_stabilize_retry_dir_second_chance_stabilized;
     int perf_phase1_failed_stabilize_retry_dir_second_chance_failed;
+    int perf_phase1_failed_stabilize_retry_dir_guard_arms;
+    int perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;

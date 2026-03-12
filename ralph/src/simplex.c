@@ -61,6 +61,11 @@ static int phase1_failed_stabilize_retry_find_candidates(
     int *best_entering,
     double *best_score_out,
     int *eligible_count_out);
+static int phase1_failed_stabilize_retry_direction_guard_plan(
+    double dir_inf,
+    int dir_nnz,
+    double pivot_abs,
+    int retry_alt_streak);
 static void phase1_failed_stabilize_retry_direction_shape(
     const SimplexTableau *tab,
     int leaving,
@@ -131,6 +136,11 @@ static int phase1_trace_reason_from_lu_failure(int lu_reason, int forced_refacto
 #define PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_TRIGGER 4
 #define PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_MIN_ELIGIBLE 16
 #define PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_SCORE_RATIO 2.0
+#define PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_STREAK_TRIGGER 2
+#define PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_MIN_NNZ 64
+#define PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_MIN_DIR_INF_RATIO 10.0
+#define PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_MAX_PIVOT_DIR_RATIO 1e-5
+#define PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_EXCLUDE_ITERS 4
 #define PHASE1_AUTO_DANTZIG_MIN_M 700
 #define PHASE1_AUTO_DANTZIG_MAX_M 1200
 #define PHASE1_AUTO_DANTZIG_DEGEN_TRIGGER 20
@@ -1770,6 +1780,18 @@ int simplex_phase1_failed_stabilize_retry_guarded_selector_plan_for_test(
         best_entering,
         bland_score,
         best_score);
+}
+
+int simplex_phase1_failed_stabilize_retry_direction_guard_plan_for_test(
+    double dir_inf,
+    int dir_nnz,
+    double pivot_abs,
+    int retry_alt_streak) {
+    return phase1_failed_stabilize_retry_direction_guard_plan(
+        dir_inf,
+        dir_nnz,
+        pivot_abs,
+        retry_alt_streak);
 }
 
 int simplex_phase1_force_pivot_mode_plan_for_test(int m,
@@ -4419,6 +4441,34 @@ static int phase1_failed_stabilize_retry_guarded_selector_plan(
     }
     return best_score >=
            PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_SCORE_RATIO * bland_score;
+}
+
+static int phase1_failed_stabilize_retry_direction_guard_plan(
+    double dir_inf,
+    int dir_nnz,
+    double pivot_abs,
+    int retry_alt_streak) {
+    double pivot_dir_ratio = 0.0;
+
+    if (retry_alt_streak < PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_STREAK_TRIGGER) {
+        return 0;
+    }
+    if (!isfinite(dir_inf) || dir_inf <
+            PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_MIN_DIR_INF_RATIO *
+                RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
+        return 0;
+    }
+    if (dir_nnz < PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_MIN_NNZ) {
+        return 0;
+    }
+    if (!isfinite(pivot_abs) || pivot_abs < 0.0) {
+        return 0;
+    }
+    if (dir_inf > 0.0) {
+        pivot_dir_ratio = pivot_abs / dir_inf;
+    }
+    return pivot_dir_ratio <=
+           PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_MAX_PIVOT_DIR_RATIO;
 }
 
 static void phase1_pivot_fail_recovery_maybe_exclude_entering(
@@ -7627,9 +7677,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                     phase1_failed_stabilize_same_entering_streak);
             int retry_consumed_alternate = 0;
             int retry_used_local_memory_alt = 0;
+            int retry_local_memory_repeat_streak = 0;
             int retry_local_memory_selector_tracked = 0;
             int retry_local_memory_used_guarded_selector = 0;
             int retry_local_memory_bland_alt = -1;
+            int retry_direction_guard_exclude_original = 0;
             for (int stab_try = 0; stab_try < 1; stab_try++) {
                 int dir_refactor_trigger = 0;
                 if (force_dir_refactor_extreme) {
@@ -7712,6 +7764,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                             phase1_failed_stabilize_retry_alt_streak,
                             retry_penalize_last_failed);
                     if (retry_use_local_memory) {
+                        retry_local_memory_repeat_streak =
+                            phase1_failed_stabilize_retry_alt_streak;
                         lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_arm(
                             solver);
                         phase1_failed_stabilize_retry_sample_pool(
@@ -7857,6 +7911,13 @@ static int simplex_phase1(SimplexSolver *solver) {
                             retry_dir_fail_inf,
                             retry_dir_fail_nnz,
                             retry_dir_fail_pivot_abs);
+                        if (phase1_failed_stabilize_retry_direction_guard_plan(
+                                retry_dir_fail_inf,
+                                retry_dir_fail_nnz,
+                                retry_dir_fail_pivot_abs,
+                                retry_local_memory_repeat_streak)) {
+                            retry_direction_guard_exclude_original = 1;
+                        }
                     }
                     if (retry_local_memory_selector_tracked) {
                         phase1_failed_stabilize_retry_alt_ratio_fail_streak = 0;
@@ -7893,6 +7954,26 @@ static int simplex_phase1(SimplexSolver *solver) {
                 if (solver->verbose >= 2) {
                     LP_LOG_STDERR("[simplex_phase1] Skipping unstable entering column after stabilization attempts (iter=%d, entering=%d, dir_inf=%.2e)\n",
                             iter, entering, dir_inf);
+                }
+                if (retry_direction_guard_exclude_original &&
+                    original_entering >= 0 &&
+                    original_entering != entering) {
+                    lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_arm(
+                        solver);
+                    phase1_exclude_entering_var_tracked(
+                        solver,
+                        original_entering,
+                        PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_EXCLUDE_ITERS,
+                        &excluded_entering_a,
+                        &excluded_entering_ttl_a,
+                        &excluded_entering_b,
+                        &excluded_entering_ttl_b);
+                    lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_original_exclusion(
+                        solver);
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Guard-excluding original entering %d after catastrophic retry direction for alternate %d\n",
+                                original_entering, entering);
+                    }
                 }
                 lp_telemetry_record_phase1_failed_stabilize_site(
                     solver, retry_consumed_alternate);

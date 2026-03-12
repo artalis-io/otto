@@ -555,6 +555,18 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_dir_second_chance_outcome
     }
 }
 
+void lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_arm(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_guard_arms++;
+}
+
+void lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_original_exclusion(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions++;
+}
+
 void lp_telemetry_record_pricing(SimplexSolver *solver,
                                  int phase,
                                  double elapsed_ms) {

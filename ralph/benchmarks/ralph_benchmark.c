@@ -410,6 +410,8 @@ typedef struct {
     int phase1_failed_stabilize_retry_dir_second_chance_no_alt;
     int phase1_failed_stabilize_retry_dir_second_chance_stabilized;
     int phase1_failed_stabilize_retry_dir_second_chance_failed;
+    int phase1_failed_stabilize_retry_dir_guard_arms;
+    int phase1_failed_stabilize_retry_dir_guard_original_exclusions;
 
     double phase2_pricing_ms;
     double phase2_ratio_ms;
@@ -1564,6 +1566,10 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_failed_stabilize_retry_dir_second_chance_stabilized;
             result.phase1_failed_stabilize_retry_dir_second_chance_failed =
                 solver_tel.perf_phase1_failed_stabilize_retry_dir_second_chance_failed;
+            result.phase1_failed_stabilize_retry_dir_guard_arms =
+                solver_tel.perf_phase1_failed_stabilize_retry_dir_guard_arms;
+            result.phase1_failed_stabilize_retry_dir_guard_original_exclusions =
+                solver_tel.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions;
 
             result.phase2_pricing_ms = solver_tel.perf_phase2_pricing_ms;
             result.phase2_ratio_ms = solver_tel.perf_phase2_ratio_ms;
@@ -3108,6 +3114,10 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_failed_stabilize_retry_dir_second_chance_stabilized);
     fprintf(out, "      \"failed_stabilize_retry_dir_second_chance_failed\": %d,\n",
             ralph->phase1_failed_stabilize_retry_dir_second_chance_failed);
+    fprintf(out, "      \"failed_stabilize_retry_dir_guard_arms\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_dir_guard_arms);
+    fprintf(out, "      \"failed_stabilize_retry_dir_guard_original_exclusions\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_dir_guard_original_exclusions);
     fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase1_compute_solution_calls);
     fprintf(out, "      \"compute_reduced_costs_calls\": %d\n", ralph->phase1_compute_rc_calls);
     fprintf(out, "    },\n");
