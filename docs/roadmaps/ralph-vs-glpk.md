@@ -1201,6 +1201,40 @@ Completed slices:
        those files
      - the next Week 2 change should target why the localized retry lane is not
        reached, rather than widening its memory
+7. `W2.7` retarget the localized failed-stabilize retry penalty to the actual
+   failed alternate and bound it with a higher trigger.
+   - added explicit primary-vs-alternate failed-stabilize site telemetry so the
+     retry trace distinguishes whether the final unstable candidate was the
+     original post-refactor entering or the local alternate
+   - the local retry penalty now keys off the last failed retry candidate, not
+     the pre-retry original entering
+   - kept the policy narrow by raising the arm threshold from `2` to `3`
+     repeated alternate failures; the `2`-streak version activated correctly
+     but over-fired and drove `wood1p`/`greenbeb` into much worse timeout
+     behavior
+   - validation:
+     - `make -C ralph test-lp-telemetry-solver`
+     - `make -C ralph test-simplex-policy`
+     - direct `wood1p` / `greenbeb`
+     - `make -C ralph test-netlib-gate-small`
+     - `make -C ralph test-netlib-gate`
+   - direct findings with the kept `3`-streak trigger:
+     - `wood1p`: retry lane active, `failed_stabilize_alternate_failures=569`,
+       `failed_stabilize_retry_penalty_arms=140`, `time_ms=2402.204`,
+       `iterations=927`
+     - `greenbeb`: retry lane active, `failed_stabilize_alternate_failures=246`,
+       `failed_stabilize_retry_penalty_arms=61`, `time_ms=6535.083`,
+       `iterations=1622`
+   - full NETLIB gate stayed baseline-clean:
+     - `84` files
+     - `22` timeouts
+     - `0` command failures
+     - `0` status/objective/invalid mismatches
+     - `0` dense fallbacks
+   - implication:
+     - the localized retry lane is now hitting the real failed alternate path
+     - the remaining Week 2 gap is not trigger reachability anymore; it is the
+       quality of the alternate selected once the lane is active
 
 ### Week 3: Degeneracy and Long-Run Control Quality
 

@@ -2274,28 +2274,35 @@ int main(void) {
                 .same_entering_streak = 1,
                 .expected_penalize = 0
             },
-            {
-                .name = "failed-stabilize retry penalty stays off for different entering",
-                .entering = 17,
-                .last_failed_entering = 12,
-                .same_entering_streak = 5,
-                .expected_penalize = 0
-            },
-            {
-                .name = "failed-stabilize retry penalty arms at repeated same entering threshold",
-                .entering = 17,
-                .last_failed_entering = 17,
-                .same_entering_streak = 2,
-                .expected_penalize = 1
-            },
-            {
-                .name = "failed-stabilize retry penalty ignores invalid entering",
-                .entering = -1,
-                .last_failed_entering = 17,
-                .same_entering_streak = 8,
-                .expected_penalize = 0
-            }
-        };
+        {
+            .name = "failed-stabilize retry penalty stays off for same original entering",
+            .entering = 17,
+            .last_failed_entering = 17,
+            .same_entering_streak = 5,
+            .expected_penalize = 0
+        },
+        {
+            .name = "failed-stabilize retry penalty arms for repeated alternate failure",
+            .entering = 17,
+            .last_failed_entering = 12,
+            .same_entering_streak = 3,
+            .expected_penalize = 1
+        },
+        {
+            .name = "failed-stabilize retry penalty stays off just below trigger",
+            .entering = 17,
+            .last_failed_entering = 12,
+            .same_entering_streak = 2,
+            .expected_penalize = 0
+        },
+        {
+            .name = "failed-stabilize retry penalty ignores invalid entering",
+            .entering = -1,
+            .last_failed_entering = 17,
+            .same_entering_streak = 8,
+            .expected_penalize = 0
+        }
+    };
     const ForcePivotModeCase force_pivot_mode_cases[] = {
         {
             .name = "force-pivot mode activates after repeated dir-skip no-recompute",
