@@ -1235,6 +1235,41 @@ Completed slices:
      - the localized retry lane is now hitting the real failed alternate path
      - the remaining Week 2 gap is not trigger reachability anymore; it is the
        quality of the alternate selected once the lane is active
+8. `W2.8` add repeat-aware local alternate memory inside the active retry lane.
+   - added explicit retry-lane telemetry for the local-memory mode:
+     - arms
+     - alternate found
+     - no alternate
+     - fallback to the same prior alternate
+     - alternate stabilized vs failed
+   - the improvement stays local to direction-stabilize only:
+     - top-level phase-1 pricing is unchanged
+     - global entering-exclusion memory is unchanged
+     - the new path only avoids reusing the same retry alternate after that
+       alternate has already repeated (`trigger=2`)
+   - direct effects:
+     - `wood1p`: `2402.204 -> 2335.354 ms`, `927 -> 919` iterations
+       with `failed_stabilize_retry_local_memory_arms=185`
+     - `greenbeb`: `6535.083 -> 6433.517 ms`, `1622 -> 1621` iterations
+       with `failed_stabilize_retry_local_memory_arms=81`
+   - validation:
+     - `make -C ralph test-lp-telemetry-solver`
+     - `make -C ralph test-simplex-policy`
+     - direct `wood1p` / `greenbeb`
+     - `make -C ralph test-netlib-gate-small`
+     - `make -C ralph test-netlib-gate`
+   - full NETLIB gate stayed baseline-clean:
+     - `84` files
+     - `22` timeouts
+     - `0` command failures
+     - `0` status/objective/invalid mismatches
+     - `0` dense fallbacks
+   - implication:
+     - the retry lane now distinguishes:
+       - penalty on the last failed retry candidate
+       - local-memory avoidance of a repeated retry alternate
+     - the next Week 2 question is whether alternate quality can be improved
+       further without widening the retry lane beyond these local guards
 
 ### Week 3: Degeneracy and Long-Run Control Quality
 

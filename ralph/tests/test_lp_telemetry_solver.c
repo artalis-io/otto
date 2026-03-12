@@ -129,6 +129,12 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_failed = 3;
     solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_repeats = 4;
     solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_max_streak = 3;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_arms = 4;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_found = 3;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_no_alt = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_fallback_same_alt = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_stabilized = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_failed = 2;
     solver.telemetry.perf_dual_bound_flip_applied = 9;
     solver.telemetry.perf_dual_bound_flip_startup = 4;
     solver.telemetry.perf_dual_bound_flip_iterative = 5;
@@ -344,6 +350,18 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 failed stabilize retry same-alt repeats");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_max_streak, 0,
                   "reset: phase1 failed stabilize retry same-alt max streak");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_arms, 0,
+                  "reset: phase1 failed stabilize retry local-memory arms");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_found, 0,
+                  "reset: phase1 failed stabilize retry local-memory alt found");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_no_alt, 0,
+                  "reset: phase1 failed stabilize retry local-memory no-alt");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_fallback_same_alt, 0,
+                  "reset: phase1 failed stabilize retry local-memory fallback same-alt");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_stabilized, 0,
+                  "reset: phase1 failed stabilize retry local-memory alt stabilized");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_failed, 0,
+                  "reset: phase1 failed stabilize retry local-memory alt failed");
     ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_applied, 0,
                   "reset: dual bound-flip aggregate");
     ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_startup, 0,
@@ -585,6 +603,25 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 failed-stabilize retry same alternate repeats");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_max_streak, 3,
                   "record: phase1 failed-stabilize retry same alternate max streak");
+    lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_arm(&solver);
+    lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_arm(&solver);
+    lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_alternate(&solver);
+    lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_no_alt(&solver);
+    lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_fallback_same_alt(&solver);
+    lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_outcome(&solver, 1);
+    lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_outcome(&solver, 0);
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_arms, 2,
+                  "record: phase1 failed-stabilize retry local-memory arms");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_found, 1,
+                  "record: phase1 failed-stabilize retry local-memory alt found");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_no_alt, 1,
+                  "record: phase1 failed-stabilize retry local-memory no-alt");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_fallback_same_alt, 1,
+                  "record: phase1 failed-stabilize retry local-memory fallback same-alt");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_stabilized, 1,
+                  "record: phase1 failed-stabilize retry local-memory alt stabilized");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_failed, 1,
+                  "record: phase1 failed-stabilize retry local-memory alt failed");
 
     lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
     lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
@@ -804,6 +841,12 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_failed = 4;
     solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_repeats = 5;
     solver.telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_max_streak = 3;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_arms = 6;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_found = 4;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_no_alt = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_fallback_same_alt = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_stabilized = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_failed = 3;
     solver.telemetry.perf_dual_bound_flip_applied = 13;
     solver.telemetry.perf_dual_bound_flip_startup = 5;
     solver.telemetry.perf_dual_bound_flip_iterative = 8;
@@ -1009,6 +1052,18 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 failed stabilize retry same alternate repeats");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_penalty_same_alt_max_streak, 3,
                   "solver_snapshot: phase1 failed stabilize retry same alternate max streak");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_local_memory_arms, 6,
+                  "solver_snapshot: phase1 failed stabilize retry local-memory arms");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_local_memory_alt_found, 4,
+                  "solver_snapshot: phase1 failed stabilize retry local-memory alt found");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_local_memory_no_alt, 2,
+                  "solver_snapshot: phase1 failed stabilize retry local-memory no-alt");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_local_memory_fallback_same_alt, 2,
+                  "solver_snapshot: phase1 failed stabilize retry local-memory fallback same-alt");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_local_memory_alt_stabilized, 1,
+                  "solver_snapshot: phase1 failed stabilize retry local-memory alt stabilized");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_local_memory_alt_failed, 3,
+                  "solver_snapshot: phase1 failed stabilize retry local-memory alt failed");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_applied, 13,
                   "solver_snapshot: dual bound flips aggregate");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_startup, 5,

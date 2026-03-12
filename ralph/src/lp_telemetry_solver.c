@@ -200,6 +200,12 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_failed_stabilize_retry_penalty_alt_failed = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_repeats = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_penalty_same_alt_max_streak = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_local_memory_arms = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_found = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_local_memory_no_alt = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_local_memory_fallback_same_alt = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_stabilized = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_failed = 0;
 
     solver->telemetry.perf_phase2_pricing_ms = 0.0;
     solver->telemetry.perf_phase2_ratio_ms = 0.0;
@@ -655,6 +661,12 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_penalty_alt_failed);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_penalty_same_alt_repeats);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_penalty_same_alt_max_streak);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_local_memory_arms);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_local_memory_alt_found);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_local_memory_no_alt);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_local_memory_fallback_same_alt);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_local_memory_alt_stabilized);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_local_memory_alt_failed);
 
     COPY_SOLVER_FIELD(perf_phase2_pricing_ms);
     COPY_SOLVER_FIELD(perf_phase2_ratio_ms);
