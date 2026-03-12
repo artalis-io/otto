@@ -443,6 +443,45 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_pool_sample(
     }
 }
 
+void lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
+    SimplexSolver *solver,
+    int used_guarded,
+    int eligible_count) {
+    if (!solver_telemetry_enabled(solver)) return;
+    if (used_guarded) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_arms++;
+        solver->telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total +=
+            eligible_count;
+        if (eligible_count >
+            solver->telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_max) {
+            solver->telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_max =
+                eligible_count;
+        }
+    } else {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_selector_bland_arms++;
+    }
+}
+
+void lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(
+    SimplexSolver *solver,
+    int used_guarded,
+    int stabilized) {
+    if (!solver_telemetry_enabled(solver)) return;
+    if (used_guarded) {
+        if (stabilized) {
+            solver->telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_alt_stabilized++;
+        } else {
+            solver->telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_alt_failed++;
+        }
+    } else {
+        if (stabilized) {
+            solver->telemetry.perf_phase1_failed_stabilize_retry_selector_bland_alt_stabilized++;
+        } else {
+            solver->telemetry.perf_phase1_failed_stabilize_retry_selector_bland_alt_failed++;
+        }
+    }
+}
+
 void lp_telemetry_record_pricing(SimplexSolver *solver,
                                  int phase,
                                  double elapsed_ms) {

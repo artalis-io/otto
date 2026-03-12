@@ -140,6 +140,14 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_failed_stabilize_retry_pool_eligible_max = 4;
     solver.telemetry.perf_phase1_failed_stabilize_retry_pool_singleton_samples = 2;
     solver.telemetry.perf_phase1_failed_stabilize_retry_pool_best_differs_samples = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_arms = 3;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_arms = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total = 41;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_max = 32;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_alt_stabilized = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_alt_failed = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_alt_stabilized = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_alt_failed = 1;
     solver.telemetry.perf_dual_bound_flip_applied = 9;
     solver.telemetry.perf_dual_bound_flip_startup = 4;
     solver.telemetry.perf_dual_bound_flip_iterative = 5;
@@ -377,6 +385,22 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 failed stabilize retry pool singleton samples");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_pool_best_differs_samples, 0,
                   "reset: phase1 failed stabilize retry pool best differs");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_arms, 0,
+                  "reset: phase1 failed stabilize retry selector bland arms");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_arms, 0,
+                  "reset: phase1 failed stabilize retry selector guarded arms");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total, 0,
+                  "reset: phase1 failed stabilize retry selector guarded eligible total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_max, 0,
+                  "reset: phase1 failed stabilize retry selector guarded eligible max");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_alt_stabilized, 0,
+                  "reset: phase1 failed stabilize retry selector bland stabilized");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_alt_failed, 0,
+                  "reset: phase1 failed stabilize retry selector bland failed");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_alt_stabilized, 0,
+                  "reset: phase1 failed stabilize retry selector guarded stabilized");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_alt_failed, 0,
+                  "reset: phase1 failed stabilize retry selector guarded failed");
     ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_applied, 0,
                   "reset: dual bound-flip aggregate");
     ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_startup, 0,
@@ -649,6 +673,28 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 failed-stabilize retry pool singleton samples");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_pool_best_differs_samples, 1,
                   "record: phase1 failed-stabilize retry pool best differs");
+    lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(&solver, 0, 3);
+    lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(&solver, 1, 19);
+    lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(&solver, 0, 1);
+    lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(&solver, 0, 0);
+    lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(&solver, 1, 1);
+    lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(&solver, 1, 0);
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_arms, 1,
+                  "record: phase1 failed-stabilize retry selector bland arms");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_arms, 1,
+                  "record: phase1 failed-stabilize retry selector guarded arms");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total, 19,
+                  "record: phase1 failed-stabilize retry selector guarded eligible total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_max, 19,
+                  "record: phase1 failed-stabilize retry selector guarded eligible max");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_alt_stabilized, 1,
+                  "record: phase1 failed-stabilize retry selector bland stabilized");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_alt_failed, 1,
+                  "record: phase1 failed-stabilize retry selector bland failed");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_alt_stabilized, 1,
+                  "record: phase1 failed-stabilize retry selector guarded stabilized");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_alt_failed, 1,
+                  "record: phase1 failed-stabilize retry selector guarded failed");
 
     lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
     lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
@@ -879,6 +925,14 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_failed_stabilize_retry_pool_eligible_max = 5;
     solver.telemetry.perf_phase1_failed_stabilize_retry_pool_singleton_samples = 2;
     solver.telemetry.perf_phase1_failed_stabilize_retry_pool_best_differs_samples = 3;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_arms = 6;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_arms = 4;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total = 71;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_max = 28;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_alt_stabilized = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_alt_failed = 4;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_alt_stabilized = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_alt_failed = 3;
     solver.telemetry.perf_dual_bound_flip_applied = 13;
     solver.telemetry.perf_dual_bound_flip_startup = 5;
     solver.telemetry.perf_dual_bound_flip_iterative = 8;
@@ -1106,6 +1160,22 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 failed stabilize retry pool singleton samples");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_pool_best_differs_samples, 3,
                   "solver_snapshot: phase1 failed stabilize retry pool best differs");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_selector_bland_arms, 6,
+                  "solver_snapshot: phase1 failed stabilize retry selector bland arms");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_selector_guarded_arms, 4,
+                  "solver_snapshot: phase1 failed stabilize retry selector guarded arms");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total, 71,
+                  "solver_snapshot: phase1 failed stabilize retry selector guarded eligible total");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_max, 28,
+                  "solver_snapshot: phase1 failed stabilize retry selector guarded eligible max");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_selector_bland_alt_stabilized, 2,
+                  "solver_snapshot: phase1 failed stabilize retry selector bland stabilized");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_selector_bland_alt_failed, 4,
+                  "solver_snapshot: phase1 failed stabilize retry selector bland failed");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_selector_guarded_alt_stabilized, 1,
+                  "solver_snapshot: phase1 failed stabilize retry selector guarded stabilized");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_selector_guarded_alt_failed, 3,
+                  "solver_snapshot: phase1 failed stabilize retry selector guarded failed");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_applied, 13,
                   "solver_snapshot: dual bound flips aggregate");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_startup, 5,
