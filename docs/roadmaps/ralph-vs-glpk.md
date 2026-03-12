@@ -1270,6 +1270,51 @@ Completed slices:
        - local-memory avoidance of a repeated retry alternate
      - the next Week 2 question is whether alternate quality can be improved
        further without widening the retry lane beyond these local guards
+9. `W2.9` instrument the active retry pool before widening alternate selection.
+   - first, rejected a bounded stronger-selector experiment:
+     - direct `wood1p` / `greenbeb` showed
+       `failed_stabilize_retry_stronger_selector_nonbland_picks=0`
+     - implication: a stronger selector over only the first few alternates
+       just added scan overhead; bland was already picking the same candidate in
+       that bounded local window
+   - then added sampled retry-pool telemetry for the actual active retry lane:
+     - samples
+     - eligible-total / eligible-max
+     - singleton-sample count
+     - best-differs-from-bland sample count
+   - validation:
+     - `make -C ralph test-lp-telemetry-solver`
+     - `make -C ralph test-simplex-policy`
+     - `make -C ralph build-ralph-benchmark`
+     - `make -C ralph test-netlib-gate-small`
+     - `make -C ralph test-netlib-gate`
+   - direct findings on the target outliers:
+     - `wood1p`:
+       - `failed_stabilize_retry_pool_samples=27`
+       - `failed_stabilize_retry_pool_eligible_total=29181`
+       - `failed_stabilize_retry_pool_eligible_max=1281`
+       - `failed_stabilize_retry_pool_singleton_samples=0`
+       - `failed_stabilize_retry_pool_best_differs_samples=27`
+       - direct time stayed in the same band: `2709.092 ms`, `773` iterations
+     - `greenbeb`:
+       - `failed_stabilize_retry_pool_samples=2`
+       - `failed_stabilize_retry_pool_eligible_total=2970`
+       - `failed_stabilize_retry_pool_eligible_max=1620`
+       - `failed_stabilize_retry_pool_singleton_samples=0`
+       - `failed_stabilize_retry_pool_best_differs_samples=2`
+       - direct time stayed in the same band: `7503.407 ms`, `1391` iterations
+   - full NETLIB gate stayed baseline-clean:
+     - `84` files
+     - `22` timeouts
+     - `0` command failures
+     - `0` status/objective/invalid mismatches
+     - `0` dense fallbacks
+   - implication:
+     - the retry pool is not small or singleton-limited on these outliers
+     - the remaining Week 2 gap is broader alternate-pool construction /
+       selection inside the active retry lane, not post-selection ratio work
+     - the next Week 2 change should widen local alternate selection in the
+       retry lane itself, while keeping top-level phase-1 pricing unchanged
 
 ### Week 3: Degeneracy and Long-Run Control Quality
 

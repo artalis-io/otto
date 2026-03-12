@@ -381,6 +381,11 @@ typedef struct {
     int phase1_failed_stabilize_retry_local_memory_fallback_same_alt;
     int phase1_failed_stabilize_retry_local_memory_alt_stabilized;
     int phase1_failed_stabilize_retry_local_memory_alt_failed;
+    int phase1_failed_stabilize_retry_pool_samples;
+    int phase1_failed_stabilize_retry_pool_eligible_total;
+    int phase1_failed_stabilize_retry_pool_eligible_max;
+    int phase1_failed_stabilize_retry_pool_singleton_samples;
+    int phase1_failed_stabilize_retry_pool_best_differs_samples;
 
     double phase2_pricing_ms;
     double phase2_ratio_ms;
@@ -1477,6 +1482,16 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_failed_stabilize_retry_local_memory_alt_stabilized;
             result.phase1_failed_stabilize_retry_local_memory_alt_failed =
                 solver_tel.perf_phase1_failed_stabilize_retry_local_memory_alt_failed;
+            result.phase1_failed_stabilize_retry_pool_samples =
+                solver_tel.perf_phase1_failed_stabilize_retry_pool_samples;
+            result.phase1_failed_stabilize_retry_pool_eligible_total =
+                solver_tel.perf_phase1_failed_stabilize_retry_pool_eligible_total;
+            result.phase1_failed_stabilize_retry_pool_eligible_max =
+                solver_tel.perf_phase1_failed_stabilize_retry_pool_eligible_max;
+            result.phase1_failed_stabilize_retry_pool_singleton_samples =
+                solver_tel.perf_phase1_failed_stabilize_retry_pool_singleton_samples;
+            result.phase1_failed_stabilize_retry_pool_best_differs_samples =
+                solver_tel.perf_phase1_failed_stabilize_retry_pool_best_differs_samples;
 
             result.phase2_pricing_ms = solver_tel.perf_phase2_pricing_ms;
             result.phase2_ratio_ms = solver_tel.perf_phase2_ratio_ms;
@@ -2963,6 +2978,16 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_failed_stabilize_retry_local_memory_alt_stabilized);
     fprintf(out, "      \"failed_stabilize_retry_local_memory_alt_failed\": %d,\n",
             ralph->phase1_failed_stabilize_retry_local_memory_alt_failed);
+    fprintf(out, "      \"failed_stabilize_retry_pool_samples\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_pool_samples);
+    fprintf(out, "      \"failed_stabilize_retry_pool_eligible_total\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_pool_eligible_total);
+    fprintf(out, "      \"failed_stabilize_retry_pool_eligible_max\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_pool_eligible_max);
+    fprintf(out, "      \"failed_stabilize_retry_pool_singleton_samples\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_pool_singleton_samples);
+    fprintf(out, "      \"failed_stabilize_retry_pool_best_differs_samples\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_pool_best_differs_samples);
     fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase1_compute_solution_calls);
     fprintf(out, "      \"compute_reduced_costs_calls\": %d\n", ralph->phase1_compute_rc_calls);
     fprintf(out, "    },\n");

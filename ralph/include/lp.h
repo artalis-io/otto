@@ -911,6 +911,11 @@ typedef struct {
     int perf_phase1_failed_stabilize_retry_local_memory_fallback_same_alt;
     int perf_phase1_failed_stabilize_retry_local_memory_alt_stabilized;
     int perf_phase1_failed_stabilize_retry_local_memory_alt_failed;
+    int perf_phase1_failed_stabilize_retry_pool_samples;
+    int perf_phase1_failed_stabilize_retry_pool_eligible_total;
+    int perf_phase1_failed_stabilize_retry_pool_eligible_max;
+    int perf_phase1_failed_stabilize_retry_pool_singleton_samples;
+    int perf_phase1_failed_stabilize_retry_pool_best_differs_samples;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -1383,6 +1388,11 @@ typedef struct {
     int perf_phase1_failed_stabilize_retry_local_memory_fallback_same_alt;
     int perf_phase1_failed_stabilize_retry_local_memory_alt_stabilized;
     int perf_phase1_failed_stabilize_retry_local_memory_alt_failed;
+    int perf_phase1_failed_stabilize_retry_pool_samples;
+    int perf_phase1_failed_stabilize_retry_pool_eligible_total;
+    int perf_phase1_failed_stabilize_retry_pool_eligible_max;
+    int perf_phase1_failed_stabilize_retry_pool_singleton_samples;
+    int perf_phase1_failed_stabilize_retry_pool_best_differs_samples;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -1994,6 +2004,10 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_fallback_sam
 void lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_outcome(
     SimplexSolver *solver,
     int stabilized);
+void lp_telemetry_record_phase1_failed_stabilize_retry_pool_sample(
+    SimplexSolver *solver,
+    int eligible_count,
+    int best_differs_from_bland);
 void lp_telemetry_record_compute_reduced_costs_timed(SimplexSolver *solver,
                                                      int phase,
                                                      double start_ms);

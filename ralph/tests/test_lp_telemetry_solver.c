@@ -135,6 +135,11 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_fallback_same_alt = 1;
     solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_stabilized = 1;
     solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_failed = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_pool_samples = 5;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_pool_eligible_total = 12;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_pool_eligible_max = 4;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_pool_singleton_samples = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_pool_best_differs_samples = 1;
     solver.telemetry.perf_dual_bound_flip_applied = 9;
     solver.telemetry.perf_dual_bound_flip_startup = 4;
     solver.telemetry.perf_dual_bound_flip_iterative = 5;
@@ -362,6 +367,16 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 failed stabilize retry local-memory alt stabilized");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_failed, 0,
                   "reset: phase1 failed stabilize retry local-memory alt failed");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_pool_samples, 0,
+                  "reset: phase1 failed stabilize retry pool samples");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_pool_eligible_total, 0,
+                  "reset: phase1 failed stabilize retry pool eligible total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_pool_eligible_max, 0,
+                  "reset: phase1 failed stabilize retry pool eligible max");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_pool_singleton_samples, 0,
+                  "reset: phase1 failed stabilize retry pool singleton samples");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_pool_best_differs_samples, 0,
+                  "reset: phase1 failed stabilize retry pool best differs");
     ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_applied, 0,
                   "reset: dual bound-flip aggregate");
     ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_startup, 0,
@@ -622,6 +637,18 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 failed-stabilize retry local-memory alt stabilized");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_failed, 1,
                   "record: phase1 failed-stabilize retry local-memory alt failed");
+    lp_telemetry_record_phase1_failed_stabilize_retry_pool_sample(&solver, 1, 0);
+    lp_telemetry_record_phase1_failed_stabilize_retry_pool_sample(&solver, 4, 1);
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_pool_samples, 2,
+                  "record: phase1 failed-stabilize retry pool samples");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_pool_eligible_total, 5,
+                  "record: phase1 failed-stabilize retry pool eligible total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_pool_eligible_max, 4,
+                  "record: phase1 failed-stabilize retry pool eligible max");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_pool_singleton_samples, 1,
+                  "record: phase1 failed-stabilize retry pool singleton samples");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_pool_best_differs_samples, 1,
+                  "record: phase1 failed-stabilize retry pool best differs");
 
     lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
     lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
@@ -847,6 +874,11 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_fallback_same_alt = 2;
     solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_stabilized = 1;
     solver.telemetry.perf_phase1_failed_stabilize_retry_local_memory_alt_failed = 3;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_pool_samples = 7;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_pool_eligible_total = 19;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_pool_eligible_max = 5;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_pool_singleton_samples = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_pool_best_differs_samples = 3;
     solver.telemetry.perf_dual_bound_flip_applied = 13;
     solver.telemetry.perf_dual_bound_flip_startup = 5;
     solver.telemetry.perf_dual_bound_flip_iterative = 8;
@@ -1064,6 +1096,16 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 failed stabilize retry local-memory alt stabilized");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_local_memory_alt_failed, 3,
                   "solver_snapshot: phase1 failed stabilize retry local-memory alt failed");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_pool_samples, 7,
+                  "solver_snapshot: phase1 failed stabilize retry pool samples");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_pool_eligible_total, 19,
+                  "solver_snapshot: phase1 failed stabilize retry pool eligible total");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_pool_eligible_max, 5,
+                  "solver_snapshot: phase1 failed stabilize retry pool eligible max");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_pool_singleton_samples, 2,
+                  "solver_snapshot: phase1 failed stabilize retry pool singleton samples");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_pool_best_differs_samples, 3,
+                  "solver_snapshot: phase1 failed stabilize retry pool best differs");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_applied, 13,
                   "solver_snapshot: dual bound flips aggregate");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_startup, 5,
