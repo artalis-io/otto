@@ -160,6 +160,14 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_dir_inf_max = 18000.0;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_total = 15.5;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_max = 8.0;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_30 = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_100 = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_1000 = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_gt_1000 = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_8 = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_6 = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_4 = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_gt_1e_4 = 1;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_arms = 2;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_no_alt = 1;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_stabilized = 1;
@@ -443,6 +451,22 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 failed stabilize retry dir-fail pivot abs total");
     ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_max, 0.0,
                   "reset: phase1 failed stabilize retry dir-fail pivot abs max");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_30, 0,
+                  "reset: phase1 failed stabilize retry dir-fail inf ratio <=30");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_100, 0,
+                  "reset: phase1 failed stabilize retry dir-fail inf ratio <=100");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_1000, 0,
+                  "reset: phase1 failed stabilize retry dir-fail inf ratio <=1000");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_gt_1000, 0,
+                  "reset: phase1 failed stabilize retry dir-fail inf ratio >1000");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_8, 0,
+                  "reset: phase1 failed stabilize retry dir-fail pivot ratio <=1e-8");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_6, 0,
+                  "reset: phase1 failed stabilize retry dir-fail pivot ratio <=1e-6");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_4, 0,
+                  "reset: phase1 failed stabilize retry dir-fail pivot ratio <=1e-4");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_gt_1e_4, 0,
+                  "reset: phase1 failed stabilize retry dir-fail pivot ratio >1e-4");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_arms, 0,
                   "reset: phase1 failed stabilize retry dir second-chance arms");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_no_alt, 0,
@@ -738,8 +762,8 @@ static void test_solver_reset_and_refactor_accounting(void) {
     lp_telemetry_record_phase1_failed_stabilize_retry_selector_ratio_failure(&solver, 1);
     lp_telemetry_record_phase1_failed_stabilize_retry_selector_dir_failure(&solver, 1);
     lp_telemetry_record_phase1_failed_stabilize_retry_selector_guarded_fallback(&solver);
-    lp_telemetry_record_phase1_failed_stabilize_retry_dir_fail_shape(&solver, 12000.0, 9, 2.5);
-    lp_telemetry_record_phase1_failed_stabilize_retry_dir_fail_shape(&solver, 18000.0, 11, 4.0);
+    lp_telemetry_record_phase1_failed_stabilize_retry_dir_fail_shape(&solver, 250000.0, 80, 0.75);
+    lp_telemetry_record_phase1_failed_stabilize_retry_dir_fail_shape(&solver, 25000000.0, 120, 5.0);
     lp_telemetry_record_phase1_failed_stabilize_retry_dir_second_chance_arm(&solver);
     lp_telemetry_record_phase1_failed_stabilize_retry_dir_second_chance_no_alt(&solver);
     lp_telemetry_record_phase1_failed_stabilize_retry_dir_second_chance_outcome(&solver, 1);
@@ -774,18 +798,34 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 failed-stabilize retry selector guarded fallback");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_shape_samples, 2,
                   "record: phase1 failed-stabilize retry dir-fail shape samples");
-    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_nnz_total, 20,
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_nnz_total, 200,
                   "record: phase1 failed-stabilize retry dir-fail nnz total");
-    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_nnz_max, 11,
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_nnz_max, 120,
                   "record: phase1 failed-stabilize retry dir-fail nnz max");
-    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_dir_inf_total, 30000.0,
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_dir_inf_total, 25250000.0,
                   "record: phase1 failed-stabilize retry dir-fail dir-inf total");
-    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_dir_inf_max, 18000.0,
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_dir_inf_max, 25000000.0,
                   "record: phase1 failed-stabilize retry dir-fail dir-inf max");
-    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_total, 6.5,
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_total, 5.75,
                   "record: phase1 failed-stabilize retry dir-fail pivot abs total");
-    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_max, 4.0,
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_max, 5.0,
                   "record: phase1 failed-stabilize retry dir-fail pivot abs max");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_30, 1,
+                  "record: phase1 failed-stabilize retry dir-fail inf ratio <=30");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_100, 0,
+                  "record: phase1 failed-stabilize retry dir-fail inf ratio <=100");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_1000, 0,
+                  "record: phase1 failed-stabilize retry dir-fail inf ratio <=1000");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_gt_1000, 1,
+                  "record: phase1 failed-stabilize retry dir-fail inf ratio >1000");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_8, 0,
+                  "record: phase1 failed-stabilize retry dir-fail pivot ratio <=1e-8");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_6, 1,
+                  "record: phase1 failed-stabilize retry dir-fail pivot ratio <=1e-6");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_4, 1,
+                  "record: phase1 failed-stabilize retry dir-fail pivot ratio <=1e-4");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_gt_1e_4, 0,
+                  "record: phase1 failed-stabilize retry dir-fail pivot ratio >1e-4");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_arms, 1,
                   "record: phase1 failed-stabilize retry dir second-chance arms");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_no_alt, 1,
@@ -1048,6 +1088,14 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_dir_inf_max = 21000.0;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_total = 19.0;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_max = 6.5;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_30 = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_100 = 3;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_1000 = 4;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_gt_1000 = 5;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_8 = 6;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_6 = 7;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_4 = 8;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_gt_1e_4 = 9;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_arms = 3;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_no_alt = 1;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_stabilized = 1;
@@ -1321,6 +1369,22 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 failed stabilize retry dir-fail pivot abs total");
     ASSERT_DBL_EQ(snap.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_max, 6.5,
                   "solver_snapshot: phase1 failed stabilize retry dir-fail pivot abs max");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_30, 2,
+                  "solver_snapshot: phase1 failed stabilize retry dir-fail inf ratio <=30");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_100, 3,
+                  "solver_snapshot: phase1 failed stabilize retry dir-fail inf ratio <=100");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_1000, 4,
+                  "solver_snapshot: phase1 failed stabilize retry dir-fail inf ratio <=1000");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_gt_1000, 5,
+                  "solver_snapshot: phase1 failed stabilize retry dir-fail inf ratio >1000");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_8, 6,
+                  "solver_snapshot: phase1 failed stabilize retry dir-fail pivot ratio <=1e-8");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_6, 7,
+                  "solver_snapshot: phase1 failed stabilize retry dir-fail pivot ratio <=1e-6");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_4, 8,
+                  "solver_snapshot: phase1 failed stabilize retry dir-fail pivot ratio <=1e-4");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_gt_1e_4, 9,
+                  "solver_snapshot: phase1 failed stabilize retry dir-fail pivot ratio >1e-4");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_dir_second_chance_arms, 3,
                   "solver_snapshot: phase1 failed stabilize retry dir second-chance arms");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_dir_second_chance_no_alt, 1,

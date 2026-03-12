@@ -515,6 +515,9 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_dir_fail_shape(
     double dir_inf,
     int dir_nnz,
     double pivot_abs) {
+    double inf_ratio;
+    double pivot_ratio = 0.0;
+
     if (!solver_telemetry_enabled(solver)) return;
     solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_shape_samples++;
     solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_nnz_total += dir_nnz;
@@ -529,6 +532,30 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_dir_fail_shape(
     if (pivot_abs >
         solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_max) {
         solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_abs_max = pivot_abs;
+    }
+
+    inf_ratio = dir_inf / RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER;
+    if (inf_ratio <= 30.0) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_30++;
+    } else if (inf_ratio <= 100.0) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_100++;
+    } else if (inf_ratio <= 1000.0) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_le_1000++;
+    } else {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_inf_ratio_gt_1000++;
+    }
+
+    if (dir_inf > 0.0) {
+        pivot_ratio = pivot_abs / dir_inf;
+    }
+    if (pivot_ratio <= 1e-8) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_8++;
+    } else if (pivot_ratio <= 1e-6) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_6++;
+    } else if (pivot_ratio <= 1e-4) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_le_1e_4++;
+    } else {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_dir_fail_pivot_ratio_gt_1e_4++;
     }
 }
 
