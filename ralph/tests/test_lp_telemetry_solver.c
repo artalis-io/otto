@@ -86,6 +86,16 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_dir_stabilize_skip_no_recompute = 7;
     solver.telemetry.perf_phase1_dir_stabilize_skip_guard_refresh = 3;
     solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_applied = 4;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry = 3;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue = 1;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor = 2;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_refactor_force_lu_health = 5;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_refactor_force_pivot_mode = 2;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_refactor_ladder_force = 1;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_failed_stabilize = 6;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_ratio_breakdown = 2;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_pivot_fail = 1;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_pivot_success = 3;
     solver.telemetry.perf_phase1_recompute_after_ratio_breakdown = 4;
     solver.telemetry.perf_phase1_recompute_after_dir_skip = 3;
     solver.telemetry.perf_phase1_recompute_after_dir_refactor = 2;
@@ -369,6 +379,26 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 dir skip guard refresh");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_applied, 0,
                   "reset: phase1 force extreme tiny-theta relax");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry, 0,
+                  "reset: phase1 force extreme tiny-theta relax post dir-skip retry");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue, 0,
+                  "reset: phase1 force extreme tiny-theta relax post dir-skip dual rescue");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor, 0,
+                  "reset: phase1 force extreme tiny-theta relax post dir-skip forced refactor");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_refactor_force_lu_health, 0,
+                  "reset: phase1 force extreme tiny-theta relax refactor lu health");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_refactor_force_pivot_mode, 0,
+                  "reset: phase1 force extreme tiny-theta relax refactor force pivot");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_refactor_ladder_force, 0,
+                  "reset: phase1 force extreme tiny-theta relax refactor ladder");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_failed_stabilize, 0,
+                  "reset: phase1 force extreme tiny-theta relax next failed stabilize");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_ratio_breakdown, 0,
+                  "reset: phase1 force extreme tiny-theta relax next ratio breakdown");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_pivot_fail, 0,
+                  "reset: phase1 force extreme tiny-theta relax next pivot fail");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_pivot_success, 0,
+                  "reset: phase1 force extreme tiny-theta relax next pivot success");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_ratio_breakdown, 0,
                   "reset: phase1 recompute ratio breakdown");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_dir_skip, 0,
@@ -1030,6 +1060,17 @@ static void test_solver_reset_and_refactor_accounting(void) {
         &solver, 9, 1.0e-2, 4.0e5, 80, 1.0e-2);
     lp_telemetry_record_phase1_force_extreme_followup_direction(
         &solver, 11, 1.0e-2, 5.0e5, 96, 5.0);
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax(&solver);
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry(&solver);
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue(&solver);
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(&solver);
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_refactor(&solver, 1);
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_refactor(&solver, 2);
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_refactor(&solver, 3);
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_failed_stabilize(&solver);
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_ratio_breakdown(&solver);
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_pivot_fail(&solver);
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_pivot_success(&solver);
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_arms, 1,
                   "record: phase1 failed-stabilize retry selector bland arms");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_arms, 1,
@@ -1208,6 +1249,28 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 force-extreme followup dir weak leaving");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_ftran_shape, 1,
                   "record: phase1 force-extreme followup dir ftran shape");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_applied, 1,
+                  "record: phase1 force extreme tiny-theta relax");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry, 1,
+                  "record: phase1 force extreme tiny-theta relax post dir-skip retry");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue, 1,
+                  "record: phase1 force extreme tiny-theta relax post dir-skip dual rescue");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor, 1,
+                  "record: phase1 force extreme tiny-theta relax post dir-skip forced refactor");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_refactor_force_lu_health, 1,
+                  "record: phase1 force extreme tiny-theta relax refactor lu health");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_refactor_force_pivot_mode, 1,
+                  "record: phase1 force extreme tiny-theta relax refactor force pivot");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_refactor_ladder_force, 1,
+                  "record: phase1 force extreme tiny-theta relax refactor ladder");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_failed_stabilize, 1,
+                  "record: phase1 force extreme tiny-theta relax next failed stabilize");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_ratio_breakdown, 1,
+                  "record: phase1 force extreme tiny-theta relax next ratio breakdown");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_pivot_fail, 1,
+                  "record: phase1 force extreme tiny-theta relax next pivot fail");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_pivot_success, 1,
+                  "record: phase1 force extreme tiny-theta relax next pivot success");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_nnz_total, 288,
                   "record: phase1 force-extreme followup dir nnz total");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_nnz_max, 96,
@@ -1434,6 +1497,16 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_dir_stabilize_skip_no_recompute = 12;
     solver.telemetry.perf_phase1_dir_stabilize_skip_guard_refresh = 3;
     solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_applied = 7;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry = 9;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue = 2;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor = 1;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_refactor_force_lu_health = 3;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_refactor_force_pivot_mode = 4;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_refactor_ladder_force = 5;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_failed_stabilize = 8;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_ratio_breakdown = 6;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_pivot_fail = 2;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_pivot_success = 7;
     solver.telemetry.perf_phase1_recompute_after_ratio_breakdown = 12;
     solver.telemetry.perf_phase1_recompute_after_dir_skip = 7;
     solver.telemetry.perf_phase1_recompute_after_dir_refactor = 5;
@@ -1723,6 +1796,26 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 dir skip guard refresh");
     ASSERT_INT_EQ(snap.perf_phase1_force_extreme_tiny_theta_relax_applied, 7,
                   "solver_snapshot: phase1 force extreme tiny-theta relax");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry, 9,
+                  "solver_snapshot: phase1 force extreme tiny-theta relax post dir-skip retry");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue, 2,
+                  "solver_snapshot: phase1 force extreme tiny-theta relax post dir-skip dual rescue");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor, 1,
+                  "solver_snapshot: phase1 force extreme tiny-theta relax post dir-skip forced refactor");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_tiny_theta_relax_refactor_force_lu_health, 3,
+                  "solver_snapshot: phase1 force extreme tiny-theta relax refactor lu health");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_tiny_theta_relax_refactor_force_pivot_mode, 4,
+                  "solver_snapshot: phase1 force extreme tiny-theta relax refactor force pivot");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_tiny_theta_relax_refactor_ladder_force, 5,
+                  "solver_snapshot: phase1 force extreme tiny-theta relax refactor ladder");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_tiny_theta_relax_next_failed_stabilize, 8,
+                  "solver_snapshot: phase1 force extreme tiny-theta relax next failed stabilize");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_tiny_theta_relax_next_ratio_breakdown, 6,
+                  "solver_snapshot: phase1 force extreme tiny-theta relax next ratio breakdown");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_tiny_theta_relax_next_pivot_fail, 2,
+                  "solver_snapshot: phase1 force extreme tiny-theta relax next pivot fail");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_tiny_theta_relax_next_pivot_success, 7,
+                  "solver_snapshot: phase1 force extreme tiny-theta relax next pivot success");
     ASSERT_INT_EQ(snap.perf_phase1_recompute_after_ratio_breakdown, 12,
                   "solver_snapshot: phase1 recompute ratio breakdown");
     ASSERT_INT_EQ(snap.perf_phase1_recompute_after_dir_skip, 7,

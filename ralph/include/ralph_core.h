@@ -584,6 +584,16 @@ typedef struct {
     int perf_phase1_force_pivot_relax_applied;
     int perf_phase1_force_extreme_relax_applied;
     int perf_phase1_force_extreme_tiny_theta_relax_applied;
+    int perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry;
+    int perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue;
+    int perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor;
+    int perf_phase1_force_extreme_tiny_theta_relax_refactor_force_lu_health;
+    int perf_phase1_force_extreme_tiny_theta_relax_refactor_force_pivot_mode;
+    int perf_phase1_force_extreme_tiny_theta_relax_refactor_ladder_force;
+    int perf_phase1_force_extreme_tiny_theta_relax_next_failed_stabilize;
+    int perf_phase1_force_extreme_tiny_theta_relax_next_ratio_breakdown;
+    int perf_phase1_force_extreme_tiny_theta_relax_next_pivot_fail;
+    int perf_phase1_force_extreme_tiny_theta_relax_next_pivot_success;
     int perf_phase1_recompute_after_ratio_breakdown;
     int perf_phase1_recompute_after_dir_skip;
     int perf_phase1_recompute_after_dir_refactor;

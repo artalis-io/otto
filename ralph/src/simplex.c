@@ -4663,6 +4663,48 @@ static void phase1_force_extreme_followup_consume_pivot_success(
         solver);
 }
 
+enum {
+    PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_LU_HEALTH = 1,
+    PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_FORCE_PIVOT = 2,
+    PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_LADDER = 3
+};
+
+static void phase1_force_extreme_tiny_theta_relax_consume_failed_stabilize(
+    SimplexSolver *solver,
+    int *pending) {
+    if (!pending || !*pending) return;
+    *pending = 0;
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_failed_stabilize(
+        solver);
+}
+
+static void phase1_force_extreme_tiny_theta_relax_consume_ratio_breakdown(
+    SimplexSolver *solver,
+    int *pending) {
+    if (!pending || !*pending) return;
+    *pending = 0;
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_ratio_breakdown(
+        solver);
+}
+
+static void phase1_force_extreme_tiny_theta_relax_consume_pivot_fail(
+    SimplexSolver *solver,
+    int *pending) {
+    if (!pending || !*pending) return;
+    *pending = 0;
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_pivot_fail(
+        solver);
+}
+
+static void phase1_force_extreme_tiny_theta_relax_consume_pivot_success(
+    SimplexSolver *solver,
+    int *pending) {
+    if (!pending || !*pending) return;
+    *pending = 0;
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_pivot_success(
+        solver);
+}
+
 static void phase1_force_extreme_followup_record_direction(
     SimplexSolver *solver,
     const SimplexTableau *tab,
@@ -7285,6 +7327,8 @@ static int simplex_phase1(SimplexSolver *solver) {
     int phase1_force_extreme_followup_pending = 0;
     int phase1_force_extreme_followup_direction_pending = 0;
     int phase1_force_extreme_followup_tiny_theta_streak = 0;
+    int phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+    int phase1_force_extreme_tiny_theta_relax_next_pending = 0;
     int phase1_window_pressure_events = 0;
     int phase1_window_pressure_failed_stabilize = 0;
     int phase1_window_pressure_dir_skip = 0;
@@ -7633,6 +7677,8 @@ static int simplex_phase1(SimplexSolver *solver) {
             phase1_force_extreme_followup_tiny_theta_streak = 0;
             phase1_shadow_guard_followup_consume_ratio_breakdown(
                 solver, &phase1_shadow_guard_followup_pending);
+            phase1_force_extreme_tiny_theta_relax_consume_ratio_breakdown(
+                solver, &phase1_force_extreme_tiny_theta_relax_next_pending);
             phase1_force_extreme_followup_consume_ratio_breakdown(
                 solver, &phase1_force_extreme_followup_pending);
             phase1_trace_record_no_entering(solver, iter, ratio_status);
@@ -8000,6 +8046,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                         lu_hard_trigger,
                         phase1_force_extreme_followup_tiny_theta_streak)) {
                     force_dir_refactor_extreme = 0;
+                    phase1_force_extreme_tiny_theta_relax_branch_pending = 1;
                     lp_telemetry_record_phase1_force_extreme_tiny_theta_relax(
                         solver);
                     if (solver->verbose >= 2) {
@@ -8084,6 +8131,9 @@ static int simplex_phase1(SimplexSolver *solver) {
                                                 &phase1_no_pivot_anchor_art_sum,
                                                 &phase1_no_pivot_progress_window_steps,
                                                 &phase1_no_pivot_no_progress_streak);
+                {
+                    int tiny_theta_relax_immediate_classified = 0;
+
                 lp_telemetry_record_phase1_no_pivot_ladder_retry(
                     solver,
                     LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
@@ -8097,6 +8147,13 @@ static int simplex_phase1(SimplexSolver *solver) {
                     phase1_no_pivot_force_pending = 1;
                     phase1_no_pivot_force_reason =
                         LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+                    if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
+                            solver);
+                        phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                        phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                        tiny_theta_relax_immediate_classified = 1;
+                    }
                 }
                 if (!phase1_no_pivot_force_pending &&
                     lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(phase1_dir_skip_event_streak)) {
@@ -8119,6 +8176,13 @@ static int simplex_phase1(SimplexSolver *solver) {
                             &phase1_no_pivot_prev_art_sum,
                             &phase1_no_pivot_anchor_art_sum,
                             &phase1_no_pivot_progress_window_steps);
+                        if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                            lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue(
+                                solver);
+                            phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                            phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                            tiny_theta_relax_immediate_classified = 1;
+                        }
                         if (rescue_result == 1) continue;
                         if (rescue_result < 0) return -1;
                     } else if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR) {
@@ -8128,6 +8192,21 @@ static int simplex_phase1(SimplexSolver *solver) {
                         phase1_no_pivot_force_pending = 1;
                         phase1_no_pivot_force_reason =
                             LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+                        if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                            lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
+                                solver);
+                            phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                            phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                            tiny_theta_relax_immediate_classified = 1;
+                        }
+                    }
+                }
+                    if (phase1_force_extreme_tiny_theta_relax_branch_pending &&
+                        !tiny_theta_relax_immediate_classified) {
+                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry(
+                            solver);
+                        phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                        phase1_force_extreme_tiny_theta_relax_next_pending = 1;
                     }
                 }
                 continue;
@@ -8182,6 +8261,9 @@ static int simplex_phase1(SimplexSolver *solver) {
                                                 &phase1_no_pivot_anchor_art_sum,
                                                 &phase1_no_pivot_progress_window_steps,
                                                 &phase1_no_pivot_no_progress_streak);
+                {
+                    int tiny_theta_relax_immediate_classified = 0;
+
                 lp_telemetry_record_phase1_no_pivot_ladder_retry(
                     solver,
                     LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
@@ -8195,6 +8277,13 @@ static int simplex_phase1(SimplexSolver *solver) {
                     phase1_no_pivot_force_pending = 1;
                     phase1_no_pivot_force_reason =
                         LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+                    if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
+                            solver);
+                        phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                        phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                        tiny_theta_relax_immediate_classified = 1;
+                    }
                 }
                 if (!phase1_no_pivot_force_pending &&
                     lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(phase1_dir_skip_event_streak)) {
@@ -8217,6 +8306,13 @@ static int simplex_phase1(SimplexSolver *solver) {
                             &phase1_no_pivot_prev_art_sum,
                             &phase1_no_pivot_anchor_art_sum,
                             &phase1_no_pivot_progress_window_steps);
+                        if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                            lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue(
+                                solver);
+                            phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                            phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                            tiny_theta_relax_immediate_classified = 1;
+                        }
                         if (rescue_result == 1) continue;
                         if (rescue_result < 0) return -1;
                     } else if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR) {
@@ -8226,6 +8322,21 @@ static int simplex_phase1(SimplexSolver *solver) {
                         phase1_no_pivot_force_pending = 1;
                         phase1_no_pivot_force_reason =
                             LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+                        if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                            lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
+                                solver);
+                            phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                            phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                            tiny_theta_relax_immediate_classified = 1;
+                        }
+                    }
+                }
+                    if (phase1_force_extreme_tiny_theta_relax_branch_pending &&
+                        !tiny_theta_relax_immediate_classified) {
+                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry(
+                            solver);
+                        phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                        phase1_force_extreme_tiny_theta_relax_next_pending = 1;
                     }
                 }
                 continue;
@@ -8324,6 +8435,17 @@ static int simplex_phase1(SimplexSolver *solver) {
                         phase1_no_pivot_force_pending = 1;
                         phase1_no_pivot_force_reason =
                             LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+                        if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                            lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
+                                solver);
+                            phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                            phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                        }
+                    } else if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry(
+                            solver);
+                        phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                        phase1_force_extreme_tiny_theta_relax_next_pending = 1;
                     }
                     continue;
                 }
@@ -8331,6 +8453,27 @@ static int simplex_phase1(SimplexSolver *solver) {
                     solver,
                     LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
                 dir_refactor_ladder_forced = 1;
+            }
+            if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                if (force_dir_refactor_lu_health) {
+                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_refactor(
+                        solver,
+                        PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_LU_HEALTH);
+                    phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                    phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                } else if (force_pivot_mode_active) {
+                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_refactor(
+                        solver,
+                        PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_FORCE_PIVOT);
+                    phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                    phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                } else if (dir_refactor_ladder_forced) {
+                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_refactor(
+                        solver,
+                        PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_LADDER);
+                    phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                    phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                }
             }
             if (force_dir_refactor_extreme && !force_pivot_mode_active) {
                 if (phase1_dir_force_refactor_streak < INT_MAX) {
@@ -8414,6 +8557,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                         lp_telemetry_record_phase1_force_extreme_followup_ratio_breakdown(
                             solver);
                     }
+                    phase1_force_extreme_tiny_theta_relax_consume_ratio_breakdown(
+                        solver, &phase1_force_extreme_tiny_theta_relax_next_pending);
                     if (retry_consumed_alternate) {
                         lp_telemetry_record_phase1_failed_stabilize_retry_penalty_outcome(
                             solver, 0);
@@ -8762,6 +8907,8 @@ static int simplex_phase1(SimplexSolver *solver) {
                 phase1_force_extreme_followup_direction_pending = 0;
                 phase1_shadow_guard_followup_consume_failed_stabilize(
                     solver, &phase1_shadow_guard_followup_pending);
+                phase1_force_extreme_tiny_theta_relax_consume_failed_stabilize(
+                    solver, &phase1_force_extreme_tiny_theta_relax_next_pending);
                 phase1_force_extreme_followup_consume_failed_stabilize(
                     solver, &phase1_force_extreme_followup_pending);
                 if (force_extreme_followup_tracked) {
@@ -9017,6 +9164,8 @@ static int simplex_phase1(SimplexSolver *solver) {
             phase1_force_extreme_followup_tiny_theta_streak = 0;
             phase1_shadow_guard_followup_consume_pivot_fail(
                 solver, &phase1_shadow_guard_followup_pending);
+            phase1_force_extreme_tiny_theta_relax_consume_pivot_fail(
+                solver, &phase1_force_extreme_tiny_theta_relax_next_pending);
             phase1_force_extreme_followup_consume_pivot_fail(
                 solver, &phase1_force_extreme_followup_pending);
             if (phase1_note_no_pivot_and_maybe_force(
@@ -9482,6 +9631,8 @@ static int simplex_phase1(SimplexSolver *solver) {
             phase1_force_extreme_followup_tiny_theta_streak = 0;
             phase1_shadow_guard_followup_consume_pivot_success(
                 solver, &phase1_shadow_guard_followup_pending);
+            phase1_force_extreme_tiny_theta_relax_consume_pivot_success(
+                solver, &phase1_force_extreme_tiny_theta_relax_next_pending);
             phase1_force_extreme_followup_consume_pivot_success(
                 solver, &phase1_force_extreme_followup_pending);
         }
