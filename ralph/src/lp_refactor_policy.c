@@ -93,6 +93,9 @@
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_MIN_TRIGGER 24
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_BASE_BUDGET 12
 #define PHASE1_DIR_SKIP_FORCE_PIVOT_MAX_BUDGET 32
+#define PHASE1_WINDOW_FORCE_PIVOT_BASE_TRIGGER 512
+#define PHASE1_WINDOW_FORCE_PIVOT_MIN_TRIGGER 384
+#define PHASE1_WINDOW_FORCE_PIVOT_LOCAL_FAIL_TRIGGER 64
 #define PHASE1_DIR_ESCAPE_MIN_M 200
 #define PHASE1_DIR_ESCAPE_BASE_TRIGGER 48
 #define PHASE1_DIR_ESCAPE_MIN_TRIGGER 20
@@ -1108,6 +1111,67 @@ int lp_refactor_policy_phase1_activate_force_pivot_mode(
         *next_force_reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
     }
     return 1;
+}
+
+int lp_refactor_policy_phase1_window_pressure_force_pivot_budget(
+    int m,
+    int degenerate_count,
+    int window_events,
+    int window_failed_stabilize,
+    int window_dir_skip,
+    int window_local_memory_fail,
+    int window_alternations,
+    int force_pivot_attempt_budget,
+    int *reject_reason_out) {
+    int trigger = PHASE1_WINDOW_FORCE_PIVOT_BASE_TRIGGER;
+
+    if (reject_reason_out) {
+        *reject_reason_out = LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_NONE;
+    }
+    if (force_pivot_attempt_budget > 0) return 0;
+    if (window_events < 0) window_events = 0;
+    if (window_failed_stabilize < 0) window_failed_stabilize = 0;
+    if (window_dir_skip < 0) window_dir_skip = 0;
+    if (window_local_memory_fail < 0) window_local_memory_fail = 0;
+    if (window_alternations < 0) window_alternations = 0;
+
+    if (m >= PHASE1_DEGEN_THRESHOLD_LARGE_M) trigger -= 64;
+    trigger = clamp_int_range(trigger,
+                              PHASE1_WINDOW_FORCE_PIVOT_MIN_TRIGGER,
+                              PHASE1_WINDOW_FORCE_PIVOT_BASE_TRIGGER);
+    if (window_events < trigger) {
+        if (reject_reason_out) {
+            *reject_reason_out = LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_UNDER_TRIGGER;
+        }
+        return 0;
+    }
+    if (window_failed_stabilize * 2 < window_events) {
+        if (reject_reason_out) {
+            *reject_reason_out = LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_FAILED_SHARE;
+        }
+        return 0;
+    }
+    if (window_dir_skip * 2 < window_events) {
+        if (reject_reason_out) {
+            *reject_reason_out = LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_DIR_SKIP_SHARE;
+        }
+        return 0;
+    }
+    if (window_local_memory_fail < PHASE1_WINDOW_FORCE_PIVOT_LOCAL_FAIL_TRIGGER) {
+        if (reject_reason_out) {
+            *reject_reason_out = LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_LOCAL_FAIL;
+        }
+        return 0;
+    }
+    if (window_alternations + 2 < window_events) {
+        if (reject_reason_out) {
+            *reject_reason_out = LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_ALTERNATION;
+        }
+        return 0;
+    }
+
+    return lp_refactor_policy_phase1_dir_skip_force_pivot_budget(
+        m, degenerate_count);
 }
 
 static int phase1_dir_escape_trigger_streak(int m, int degenerate_count) {

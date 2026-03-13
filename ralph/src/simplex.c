@@ -36,6 +36,10 @@ static void phase1_recompute_full_with_reason(SimplexSolver *solver,
                                               SimplexTableau *tab,
                                               int *rc_only_streak,
                                               LPPhase1RecomputeReason reason);
+
+#define PHASE1_WINDOW_PRESSURE_EVENT_NONE 0
+#define PHASE1_WINDOW_PRESSURE_EVENT_FAILED_STABILIZE 1
+#define PHASE1_WINDOW_PRESSURE_EVENT_DIR_SKIP 2
 static void primal_remove_perturbation(SimplexTableau *tab);
 static int phase1_failed_stabilize_retry_penalty_plan(int entering,
                                                       int last_failed_entering,
@@ -4449,6 +4453,79 @@ static void phase1_note_failed_stabilize_retry_alternate(SimplexSolver *solver,
         solver, same_entering, streak);
 }
 
+static void phase1_window_pressure_note_event(SimplexSolver *solver,
+                                              int event_kind,
+                                              int local_memory_fail,
+                                              int *window_events,
+                                              int *window_failed_stabilize,
+                                              int *window_dir_skip,
+                                              int *window_local_memory_fail,
+                                              int *window_alternations,
+                                              int *window_last_event_kind) {
+    int alternated = 0;
+
+    if (!window_events || !window_failed_stabilize || !window_dir_skip ||
+        !window_local_memory_fail || !window_alternations ||
+        !window_last_event_kind) {
+        return;
+    }
+    if (event_kind != PHASE1_WINDOW_PRESSURE_EVENT_FAILED_STABILIZE &&
+        event_kind != PHASE1_WINDOW_PRESSURE_EVENT_DIR_SKIP) {
+        return;
+    }
+
+    if (*window_events < INT_MAX) (*window_events)++;
+    if (event_kind == PHASE1_WINDOW_PRESSURE_EVENT_FAILED_STABILIZE) {
+        if (*window_failed_stabilize < INT_MAX) (*window_failed_stabilize)++;
+    } else if (*window_dir_skip < INT_MAX) {
+        (*window_dir_skip)++;
+    }
+    if (local_memory_fail && *window_local_memory_fail < INT_MAX) {
+        (*window_local_memory_fail)++;
+    }
+    if (*window_last_event_kind != PHASE1_WINDOW_PRESSURE_EVENT_NONE &&
+        *window_last_event_kind != event_kind) {
+        alternated = 1;
+        if (*window_alternations < INT_MAX) (*window_alternations)++;
+    }
+    *window_last_event_kind = event_kind;
+
+    lp_telemetry_record_phase1_window_pressure_event(
+        solver,
+        event_kind == PHASE1_WINDOW_PRESSURE_EVENT_FAILED_STABILIZE,
+        event_kind == PHASE1_WINDOW_PRESSURE_EVENT_DIR_SKIP,
+        local_memory_fail,
+        alternated,
+        *window_events,
+        *window_failed_stabilize,
+        *window_dir_skip,
+        *window_local_memory_fail,
+        *window_alternations);
+}
+
+static void phase1_window_pressure_progress_reset(SimplexSolver *solver,
+                                                  int *window_events,
+                                                  int *window_failed_stabilize,
+                                                  int *window_dir_skip,
+                                                  int *window_local_memory_fail,
+                                                  int *window_alternations,
+                                                  int *window_last_event_kind) {
+    if (!window_events || !window_failed_stabilize || !window_dir_skip ||
+        !window_local_memory_fail || !window_alternations ||
+        !window_last_event_kind) {
+        return;
+    }
+    if (*window_events > 0) {
+        lp_telemetry_record_phase1_window_pressure_progress_reset(solver);
+    }
+    *window_events = 0;
+    *window_failed_stabilize = 0;
+    *window_dir_skip = 0;
+    *window_local_memory_fail = 0;
+    *window_alternations = 0;
+    *window_last_event_kind = PHASE1_WINDOW_PRESSURE_EVENT_NONE;
+}
+
 static void phase1_shadow_guard_followup_consume_failed_stabilize(
     SimplexSolver *solver,
     int *pending) {
@@ -7104,6 +7181,14 @@ static int simplex_phase1(SimplexSolver *solver) {
     int phase1_failed_stabilize_retry_pool_sample_counter = 0;
     int phase1_shadow_guard_followup_pending = 0;
     int phase1_shadow_guard_followup_direction_pending = 0;
+    int phase1_window_pressure_events = 0;
+    int phase1_window_pressure_failed_stabilize = 0;
+    int phase1_window_pressure_dir_skip = 0;
+    int phase1_window_pressure_local_memory_fail = 0;
+    int phase1_window_pressure_alternations = 0;
+    int phase1_window_pressure_last_event_kind =
+        PHASE1_WINDOW_PRESSURE_EVENT_NONE;
+    int phase1_window_pressure_force_pivot_armed = 0;
     int phase1_dir_escape_cooldown = 0;
     int phase1_force_pivot_attempt_budget = 0;
     int periodic_policy_cooldown = 0;
@@ -7691,6 +7776,10 @@ static int simplex_phase1(SimplexSolver *solver) {
                         cooldown_active);
                 force_pivot_mode_active =
                     (phase1_force_pivot_attempt_budget > 0);
+                if (force_pivot_mode_active) {
+                    lp_telemetry_record_phase1_force_pivot_budget_dir_event_seen(
+                        solver);
+                }
                 force_dir_refactor_guard_trigger =
                     (force_dir_refactor_lu_health || force_pivot_mode_active);
                 suppress_lu_health = phase1_dir_stabilize_escape_gate_plan(
@@ -8512,6 +8601,16 @@ static int simplex_phase1(SimplexSolver *solver) {
                     solver, &phase1_shadow_guard_followup_pending);
                 lp_telemetry_record_phase1_failed_stabilize_site(
                     solver, retry_consumed_alternate);
+                phase1_window_pressure_note_event(
+                    solver,
+                    PHASE1_WINDOW_PRESSURE_EVENT_FAILED_STABILIZE,
+                    retry_used_local_memory_alt,
+                    &phase1_window_pressure_events,
+                    &phase1_window_pressure_failed_stabilize,
+                    &phase1_window_pressure_dir_skip,
+                    &phase1_window_pressure_local_memory_fail,
+                    &phase1_window_pressure_alternations,
+                    &phase1_window_pressure_last_event_kind);
                 phase1_note_failed_stabilize_entering(
                     solver,
                     entering,
@@ -8535,6 +8634,60 @@ static int simplex_phase1(SimplexSolver *solver) {
                     tab,
                     &phase1_rc_only_streak,
                     LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
+                phase1_window_pressure_note_event(
+                    solver,
+                    PHASE1_WINDOW_PRESSURE_EVENT_DIR_SKIP,
+                    0,
+                    &phase1_window_pressure_events,
+                    &phase1_window_pressure_failed_stabilize,
+                    &phase1_window_pressure_dir_skip,
+                    &phase1_window_pressure_local_memory_fail,
+                    &phase1_window_pressure_alternations,
+                    &phase1_window_pressure_last_event_kind);
+                if (phase1_window_pressure_force_pivot_armed) {
+                    /* Already armed in this pressure window. */
+                } else if (phase1_no_pivot_force_pending) {
+                    lp_telemetry_record_phase1_window_pressure_force_pivot_blocked_pending(
+                        solver);
+                } else if (phase1_force_pivot_attempt_budget > 0) {
+                    lp_telemetry_record_phase1_window_pressure_force_pivot_blocked_budget(
+                        solver);
+                } else {
+                    int window_force_pivot_reject_reason =
+                        LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_NONE;
+                    int window_force_pivot_budget =
+                        lp_refactor_policy_phase1_window_pressure_force_pivot_budget(
+                            tab->m,
+                            degenerate_count,
+                            phase1_window_pressure_events,
+                            phase1_window_pressure_failed_stabilize,
+                            phase1_window_pressure_dir_skip,
+                            phase1_window_pressure_local_memory_fail,
+                            phase1_window_pressure_alternations,
+                            phase1_force_pivot_attempt_budget,
+                            &window_force_pivot_reject_reason);
+                    if (window_force_pivot_budget > 0) {
+                        phase1_force_pivot_attempt_budget =
+                            window_force_pivot_budget;
+                        phase1_window_pressure_force_pivot_armed = 1;
+                        lp_telemetry_record_phase1_window_pressure_force_pivot_arm(
+                            solver);
+                        if (solver->verbose >= 2) {
+                            LP_LOG_STDERR(
+                                "[simplex_phase1] Windowed phase1 pressure armed force-pivot budget=%d (events=%d failed=%d dir_skip=%d local_fail=%d alt=%d)\n",
+                                phase1_force_pivot_attempt_budget,
+                                phase1_window_pressure_events,
+                                phase1_window_pressure_failed_stabilize,
+                                phase1_window_pressure_dir_skip,
+                                phase1_window_pressure_local_memory_fail,
+                                phase1_window_pressure_alternations);
+                        }
+                    } else {
+                        lp_telemetry_record_phase1_window_pressure_force_pivot_reject(
+                            solver,
+                            window_force_pivot_reject_reason);
+                    }
+                }
                 phase1_no_pivot_progress_update(solver,
                                                 tab,
                                                 &phase1_no_pivot_prev_art_sum,
@@ -8655,6 +8808,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         /* Perform pivot */
         int pivot_status;
         if (phase1_force_pivot_attempt_budget > 0) {
+            lp_telemetry_record_phase1_force_pivot_budget_pivot_spend(solver);
             phase1_force_pivot_attempt_budget--;
         }
         {
@@ -8950,6 +9104,15 @@ static int simplex_phase1(SimplexSolver *solver) {
             &phase1_no_pivot_prev_art_sum,
             &phase1_no_pivot_anchor_art_sum,
             &phase1_no_pivot_progress_window_steps);
+        phase1_window_pressure_progress_reset(
+            solver,
+            &phase1_window_pressure_events,
+            &phase1_window_pressure_failed_stabilize,
+            &phase1_window_pressure_dir_skip,
+            &phase1_window_pressure_local_memory_fail,
+            &phase1_window_pressure_alternations,
+            &phase1_window_pressure_last_event_kind);
+        phase1_window_pressure_force_pivot_armed = 0;
         phase1_no_pivot_ladder_rescue_cooldown = 0;
         phase1_no_pivot_ladder_rescue_fail_streak = 0;
         fail_reason = PHASE1_PIVOT_FAIL_NONE;

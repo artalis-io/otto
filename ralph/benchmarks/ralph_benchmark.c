@@ -318,6 +318,8 @@ typedef struct {
     int phase1_dir_stabilize_refactor_from_force_lu_health;
     int phase1_dir_stabilize_refactor_from_force_pivot_mode;
     int phase1_dir_stabilize_refactor_from_ladder_force;
+    int phase1_force_pivot_budget_dir_event_seen;
+    int phase1_force_pivot_budget_pivot_spend;
     int phase1_force_pivot_relax_applied;
     int phase1_force_extreme_relax_applied;
     int phase1_recompute_after_ratio_breakdown;
@@ -459,6 +461,26 @@ typedef struct {
     int phase1_failed_stabilize_retry_dir_second_chance_failed;
     int phase1_failed_stabilize_retry_dir_guard_arms;
     int phase1_failed_stabilize_retry_dir_guard_original_exclusions;
+    int phase1_window_pressure_windows_started;
+    int phase1_window_pressure_progress_resets;
+    int phase1_window_pressure_force_pivot_arms;
+    int phase1_window_pressure_force_pivot_blocked_pending;
+    int phase1_window_pressure_force_pivot_blocked_budget;
+    int phase1_window_pressure_force_pivot_reject_under_trigger;
+    int phase1_window_pressure_force_pivot_reject_failed_share;
+    int phase1_window_pressure_force_pivot_reject_dir_skip_share;
+    int phase1_window_pressure_force_pivot_reject_local_fail;
+    int phase1_window_pressure_force_pivot_reject_alternation;
+    int phase1_window_pressure_event_total;
+    int phase1_window_pressure_failed_stabilize_total;
+    int phase1_window_pressure_dir_skip_total;
+    int phase1_window_pressure_local_memory_fail_total;
+    int phase1_window_pressure_alternation_total;
+    int phase1_window_pressure_event_max;
+    int phase1_window_pressure_failed_stabilize_max;
+    int phase1_window_pressure_dir_skip_max;
+    int phase1_window_pressure_local_memory_fail_max;
+    int phase1_window_pressure_alternation_max;
 
     double phase2_pricing_ms;
     double phase2_ratio_ms;
@@ -1460,6 +1482,10 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_dir_stabilize_refactor_from_force_pivot_mode;
             result.phase1_dir_stabilize_refactor_from_ladder_force =
                 solver_tel.perf_phase1_dir_stabilize_refactor_from_ladder_force;
+            result.phase1_force_pivot_budget_dir_event_seen =
+                solver_tel.perf_phase1_force_pivot_budget_dir_event_seen;
+            result.phase1_force_pivot_budget_pivot_spend =
+                solver_tel.perf_phase1_force_pivot_budget_pivot_spend;
             result.phase1_force_pivot_relax_applied =
                 solver_tel.perf_phase1_force_pivot_relax_applied;
             result.phase1_force_extreme_relax_applied =
@@ -1742,6 +1768,46 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_failed_stabilize_retry_dir_guard_arms;
             result.phase1_failed_stabilize_retry_dir_guard_original_exclusions =
                 solver_tel.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions;
+            result.phase1_window_pressure_windows_started =
+                solver_tel.perf_phase1_window_pressure_windows_started;
+            result.phase1_window_pressure_progress_resets =
+                solver_tel.perf_phase1_window_pressure_progress_resets;
+            result.phase1_window_pressure_force_pivot_arms =
+                solver_tel.perf_phase1_window_pressure_force_pivot_arms;
+            result.phase1_window_pressure_force_pivot_blocked_pending =
+                solver_tel.perf_phase1_window_pressure_force_pivot_blocked_pending;
+            result.phase1_window_pressure_force_pivot_blocked_budget =
+                solver_tel.perf_phase1_window_pressure_force_pivot_blocked_budget;
+            result.phase1_window_pressure_force_pivot_reject_under_trigger =
+                solver_tel.perf_phase1_window_pressure_force_pivot_reject_under_trigger;
+            result.phase1_window_pressure_force_pivot_reject_failed_share =
+                solver_tel.perf_phase1_window_pressure_force_pivot_reject_failed_share;
+            result.phase1_window_pressure_force_pivot_reject_dir_skip_share =
+                solver_tel.perf_phase1_window_pressure_force_pivot_reject_dir_skip_share;
+            result.phase1_window_pressure_force_pivot_reject_local_fail =
+                solver_tel.perf_phase1_window_pressure_force_pivot_reject_local_fail;
+            result.phase1_window_pressure_force_pivot_reject_alternation =
+                solver_tel.perf_phase1_window_pressure_force_pivot_reject_alternation;
+            result.phase1_window_pressure_event_total =
+                solver_tel.perf_phase1_window_pressure_event_total;
+            result.phase1_window_pressure_failed_stabilize_total =
+                solver_tel.perf_phase1_window_pressure_failed_stabilize_total;
+            result.phase1_window_pressure_dir_skip_total =
+                solver_tel.perf_phase1_window_pressure_dir_skip_total;
+            result.phase1_window_pressure_local_memory_fail_total =
+                solver_tel.perf_phase1_window_pressure_local_memory_fail_total;
+            result.phase1_window_pressure_alternation_total =
+                solver_tel.perf_phase1_window_pressure_alternation_total;
+            result.phase1_window_pressure_event_max =
+                solver_tel.perf_phase1_window_pressure_event_max;
+            result.phase1_window_pressure_failed_stabilize_max =
+                solver_tel.perf_phase1_window_pressure_failed_stabilize_max;
+            result.phase1_window_pressure_dir_skip_max =
+                solver_tel.perf_phase1_window_pressure_dir_skip_max;
+            result.phase1_window_pressure_local_memory_fail_max =
+                solver_tel.perf_phase1_window_pressure_local_memory_fail_max;
+            result.phase1_window_pressure_alternation_max =
+                solver_tel.perf_phase1_window_pressure_alternation_max;
 
             result.phase2_pricing_ms = solver_tel.perf_phase2_pricing_ms;
             result.phase2_ratio_ms = solver_tel.perf_phase2_ratio_ms;
@@ -3079,6 +3145,10 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_dir_stabilize_refactor_from_force_pivot_mode);
     fprintf(out, "      \"dir_stabilize_refactor_from_ladder_force\": %d,\n",
             ralph->phase1_dir_stabilize_refactor_from_ladder_force);
+    fprintf(out, "      \"force_pivot_budget_dir_event_seen\": %d,\n",
+            ralph->phase1_force_pivot_budget_dir_event_seen);
+    fprintf(out, "      \"force_pivot_budget_pivot_spend\": %d,\n",
+            ralph->phase1_force_pivot_budget_pivot_spend);
     fprintf(out, "      \"force_pivot_relax_applied\": %d,\n",
             ralph->phase1_force_pivot_relax_applied);
     fprintf(out, "      \"force_extreme_relax_applied\": %d,\n",
@@ -3415,6 +3485,46 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_failed_stabilize_retry_dir_guard_arms);
     fprintf(out, "      \"failed_stabilize_retry_dir_guard_original_exclusions\": %d,\n",
             ralph->phase1_failed_stabilize_retry_dir_guard_original_exclusions);
+    fprintf(out, "      \"window_pressure_windows_started\": %d,\n",
+            ralph->phase1_window_pressure_windows_started);
+    fprintf(out, "      \"window_pressure_progress_resets\": %d,\n",
+            ralph->phase1_window_pressure_progress_resets);
+    fprintf(out, "      \"window_pressure_force_pivot_arms\": %d,\n",
+            ralph->phase1_window_pressure_force_pivot_arms);
+    fprintf(out, "      \"window_pressure_force_pivot_blocked_pending\": %d,\n",
+            ralph->phase1_window_pressure_force_pivot_blocked_pending);
+    fprintf(out, "      \"window_pressure_force_pivot_blocked_budget\": %d,\n",
+            ralph->phase1_window_pressure_force_pivot_blocked_budget);
+    fprintf(out, "      \"window_pressure_force_pivot_reject_under_trigger\": %d,\n",
+            ralph->phase1_window_pressure_force_pivot_reject_under_trigger);
+    fprintf(out, "      \"window_pressure_force_pivot_reject_failed_share\": %d,\n",
+            ralph->phase1_window_pressure_force_pivot_reject_failed_share);
+    fprintf(out, "      \"window_pressure_force_pivot_reject_dir_skip_share\": %d,\n",
+            ralph->phase1_window_pressure_force_pivot_reject_dir_skip_share);
+    fprintf(out, "      \"window_pressure_force_pivot_reject_local_fail\": %d,\n",
+            ralph->phase1_window_pressure_force_pivot_reject_local_fail);
+    fprintf(out, "      \"window_pressure_force_pivot_reject_alternation\": %d,\n",
+            ralph->phase1_window_pressure_force_pivot_reject_alternation);
+    fprintf(out, "      \"window_pressure_event_total\": %d,\n",
+            ralph->phase1_window_pressure_event_total);
+    fprintf(out, "      \"window_pressure_failed_stabilize_total\": %d,\n",
+            ralph->phase1_window_pressure_failed_stabilize_total);
+    fprintf(out, "      \"window_pressure_dir_skip_total\": %d,\n",
+            ralph->phase1_window_pressure_dir_skip_total);
+    fprintf(out, "      \"window_pressure_local_memory_fail_total\": %d,\n",
+            ralph->phase1_window_pressure_local_memory_fail_total);
+    fprintf(out, "      \"window_pressure_alternation_total\": %d,\n",
+            ralph->phase1_window_pressure_alternation_total);
+    fprintf(out, "      \"window_pressure_event_max\": %d,\n",
+            ralph->phase1_window_pressure_event_max);
+    fprintf(out, "      \"window_pressure_failed_stabilize_max\": %d,\n",
+            ralph->phase1_window_pressure_failed_stabilize_max);
+    fprintf(out, "      \"window_pressure_dir_skip_max\": %d,\n",
+            ralph->phase1_window_pressure_dir_skip_max);
+    fprintf(out, "      \"window_pressure_local_memory_fail_max\": %d,\n",
+            ralph->phase1_window_pressure_local_memory_fail_max);
+    fprintf(out, "      \"window_pressure_alternation_max\": %d,\n",
+            ralph->phase1_window_pressure_alternation_max);
     fprintf(out, "      \"compute_solution_calls\": %d,\n", ralph->phase1_compute_solution_calls);
     fprintf(out, "      \"compute_reduced_costs_calls\": %d\n", ralph->phase1_compute_rc_calls);
     fprintf(out, "    },\n");

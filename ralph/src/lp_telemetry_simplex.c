@@ -5,6 +5,7 @@
  */
 
 #include "lp.h"
+#include "lp_refactor_policy.h"
 
 #include <math.h>
 
@@ -798,6 +799,118 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_original_exclus
     solver->telemetry.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions++;
 }
 
+void lp_telemetry_record_phase1_window_pressure_event(
+    SimplexSolver *solver,
+    int failed_stabilize_event,
+    int dir_skip_event,
+    int local_memory_fail_event,
+    int alternated,
+    int window_events,
+    int window_failed_stabilize,
+    int window_dir_skip,
+    int window_local_memory_fail,
+    int window_alternations) {
+    if (!solver_telemetry_enabled(solver)) return;
+    if (window_events <= 0) return;
+
+    if (window_events == 1) {
+        solver->telemetry.perf_phase1_window_pressure_windows_started++;
+    }
+    solver->telemetry.perf_phase1_window_pressure_event_total++;
+    if (failed_stabilize_event) {
+        solver->telemetry.perf_phase1_window_pressure_failed_stabilize_total++;
+    }
+    if (dir_skip_event) {
+        solver->telemetry.perf_phase1_window_pressure_dir_skip_total++;
+    }
+    if (local_memory_fail_event) {
+        solver->telemetry.perf_phase1_window_pressure_local_memory_fail_total++;
+    }
+    if (alternated) {
+        solver->telemetry.perf_phase1_window_pressure_alternation_total++;
+    }
+
+    if (window_events >
+        solver->telemetry.perf_phase1_window_pressure_event_max) {
+        solver->telemetry.perf_phase1_window_pressure_event_max =
+            window_events;
+    }
+    if (window_failed_stabilize >
+        solver->telemetry.perf_phase1_window_pressure_failed_stabilize_max) {
+        solver->telemetry.perf_phase1_window_pressure_failed_stabilize_max =
+            window_failed_stabilize;
+    }
+    if (window_dir_skip >
+        solver->telemetry.perf_phase1_window_pressure_dir_skip_max) {
+        solver->telemetry.perf_phase1_window_pressure_dir_skip_max =
+            window_dir_skip;
+    }
+    if (window_local_memory_fail >
+        solver->telemetry.perf_phase1_window_pressure_local_memory_fail_max) {
+        solver->telemetry.perf_phase1_window_pressure_local_memory_fail_max =
+            window_local_memory_fail;
+    }
+    if (window_alternations >
+        solver->telemetry.perf_phase1_window_pressure_alternation_max) {
+        solver->telemetry.perf_phase1_window_pressure_alternation_max =
+            window_alternations;
+    }
+}
+
+void lp_telemetry_record_phase1_window_pressure_progress_reset(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_window_pressure_progress_resets++;
+}
+
+void lp_telemetry_record_phase1_window_pressure_force_pivot_arm(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_window_pressure_force_pivot_arms++;
+}
+
+void lp_telemetry_record_phase1_window_pressure_force_pivot_reject(
+    SimplexSolver *solver,
+    int reject_reason) {
+    if (!solver_telemetry_enabled(solver)) return;
+    switch (reject_reason) {
+        case LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_UNDER_TRIGGER:
+            solver->telemetry
+                .perf_phase1_window_pressure_force_pivot_reject_under_trigger++;
+            break;
+        case LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_FAILED_SHARE:
+            solver->telemetry
+                .perf_phase1_window_pressure_force_pivot_reject_failed_share++;
+            break;
+        case LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_DIR_SKIP_SHARE:
+            solver->telemetry
+                .perf_phase1_window_pressure_force_pivot_reject_dir_skip_share++;
+            break;
+        case LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_LOCAL_FAIL:
+            solver->telemetry
+                .perf_phase1_window_pressure_force_pivot_reject_local_fail++;
+            break;
+        case LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_ALTERNATION:
+            solver->telemetry
+                .perf_phase1_window_pressure_force_pivot_reject_alternation++;
+            break;
+        default:
+            break;
+    }
+}
+
+void lp_telemetry_record_phase1_window_pressure_force_pivot_blocked_pending(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_window_pressure_force_pivot_blocked_pending++;
+}
+
+void lp_telemetry_record_phase1_window_pressure_force_pivot_blocked_budget(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_window_pressure_force_pivot_blocked_budget++;
+}
+
 void lp_telemetry_record_phase2_pivot_geometry(SimplexSolver *solver,
                                                double theta,
                                                double dir_inf,
@@ -1063,6 +1176,18 @@ void lp_telemetry_record_phase1_dir_stabilize_refactor_trigger(
         default:
             break;
     }
+}
+
+void lp_telemetry_record_phase1_force_pivot_budget_dir_event_seen(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_force_pivot_budget_dir_event_seen++;
+}
+
+void lp_telemetry_record_phase1_force_pivot_budget_pivot_spend(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_force_pivot_budget_pivot_spend++;
 }
 
 void lp_telemetry_record_phase1_force_pivot_relax(SimplexSolver *solver) {
