@@ -647,6 +647,12 @@ typedef struct {
     int perf_phase1_failed_stabilize_retry_pool_eligible_max;
     int perf_phase1_failed_stabilize_retry_pool_singleton_samples;
     int perf_phase1_failed_stabilize_retry_pool_best_differs_samples;
+    int perf_phase1_failed_stabilize_retry_selector_eval_samples;
+    int perf_phase1_failed_stabilize_retry_selector_eval_best_differs_samples;
+    double perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_total;
+    double perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_max;
+    int perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_2;
+    int perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4;
     int perf_phase1_failed_stabilize_retry_selector_bland_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total;

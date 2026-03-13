@@ -4989,6 +4989,12 @@ static int phase1_failed_stabilize_retry_select_local_memory(
         return 1;
     }
 
+    lp_telemetry_record_phase1_failed_stabilize_retry_selector_eval(
+        solver,
+        best_entering >= 0 && bland_entering >= 0 && best_entering != bland_entering,
+        bland_score,
+        best_score);
+
     use_guarded = phase1_failed_stabilize_retry_guarded_selector_plan(
         retry_ratio_fail_streak,
         last_retry_alt_streak,
@@ -5003,6 +5009,37 @@ static int phase1_failed_stabilize_retry_select_local_memory(
         solver, use_guarded, eligible_count);
     if (used_guarded_out) *used_guarded_out = use_guarded;
     return 0;
+}
+
+static void phase1_failed_stabilize_retry_record_selector_eval(
+    SimplexSolver *solver,
+    SimplexTableau *tab,
+    int excluded_a,
+    int excluded_b) {
+    int bland_entering = -1;
+    int best_entering = -1;
+    int eligible_count = 0;
+    double bland_score = 0.0;
+    double best_score = 0.0;
+
+    if (!solver || !tab) return;
+    if (phase1_failed_stabilize_retry_find_candidates(
+            tab,
+            excluded_a,
+            excluded_b,
+            &bland_entering,
+            &bland_score,
+            &best_entering,
+            &best_score,
+            &eligible_count) != 0) {
+        return;
+    }
+    (void)eligible_count;
+    lp_telemetry_record_phase1_failed_stabilize_retry_selector_eval(
+        solver,
+        best_entering >= 0 && bland_entering >= 0 && best_entering != bland_entering,
+        bland_score,
+        best_score);
 }
 
 static void phase1_failed_stabilize_retry_direction_shape(
@@ -7800,6 +7837,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                                                                original_entering,
                                                                phase1_last_failed_stabilize_retry_alt,
                                                                &entering) == 0) {
+                            phase1_failed_stabilize_retry_record_selector_eval(
+                                solver,
+                                tab,
+                                original_entering,
+                                phase1_last_failed_stabilize_retry_alt);
                             retry_used_local_memory_alt = 1;
                             retry_local_memory_selector_tracked = 1;
                             retry_local_memory_used_guarded_selector = 0;

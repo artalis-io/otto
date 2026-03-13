@@ -211,6 +211,12 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_failed_stabilize_retry_pool_eligible_max = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_pool_singleton_samples = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_pool_best_differs_samples = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_selector_eval_samples = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_selector_eval_best_differs_samples = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_total = 0.0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_max = 0.0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_2 = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4 = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_selector_bland_arms = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_arms = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total = 0;
@@ -711,6 +717,12 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_pool_eligible_max);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_pool_singleton_samples);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_pool_best_differs_samples);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_eval_samples);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_eval_best_differs_samples);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_total);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_max);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_2);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_bland_arms);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_guarded_arms);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total);

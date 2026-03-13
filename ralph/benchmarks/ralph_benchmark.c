@@ -386,6 +386,12 @@ typedef struct {
     int phase1_failed_stabilize_retry_pool_eligible_max;
     int phase1_failed_stabilize_retry_pool_singleton_samples;
     int phase1_failed_stabilize_retry_pool_best_differs_samples;
+    int phase1_failed_stabilize_retry_selector_eval_samples;
+    int phase1_failed_stabilize_retry_selector_eval_best_differs_samples;
+    double phase1_failed_stabilize_retry_selector_eval_score_ratio_total;
+    double phase1_failed_stabilize_retry_selector_eval_score_ratio_max;
+    int phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_2;
+    int phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4;
     int phase1_failed_stabilize_retry_selector_bland_arms;
     int phase1_failed_stabilize_retry_selector_guarded_arms;
     int phase1_failed_stabilize_retry_selector_guarded_eligible_total;
@@ -1526,6 +1532,18 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_failed_stabilize_retry_pool_singleton_samples;
             result.phase1_failed_stabilize_retry_pool_best_differs_samples =
                 solver_tel.perf_phase1_failed_stabilize_retry_pool_best_differs_samples;
+            result.phase1_failed_stabilize_retry_selector_eval_samples =
+                solver_tel.perf_phase1_failed_stabilize_retry_selector_eval_samples;
+            result.phase1_failed_stabilize_retry_selector_eval_best_differs_samples =
+                solver_tel.perf_phase1_failed_stabilize_retry_selector_eval_best_differs_samples;
+            result.phase1_failed_stabilize_retry_selector_eval_score_ratio_total =
+                solver_tel.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_total;
+            result.phase1_failed_stabilize_retry_selector_eval_score_ratio_max =
+                solver_tel.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_max;
+            result.phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_2 =
+                solver_tel.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_2;
+            result.phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4 =
+                solver_tel.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4;
             result.phase1_failed_stabilize_retry_selector_bland_arms =
                 solver_tel.perf_phase1_failed_stabilize_retry_selector_bland_arms;
             result.phase1_failed_stabilize_retry_selector_guarded_arms =
@@ -3090,6 +3108,18 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_failed_stabilize_retry_pool_singleton_samples);
     fprintf(out, "      \"failed_stabilize_retry_pool_best_differs_samples\": %d,\n",
             ralph->phase1_failed_stabilize_retry_pool_best_differs_samples);
+    fprintf(out, "      \"failed_stabilize_retry_selector_eval_samples\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_selector_eval_samples);
+    fprintf(out, "      \"failed_stabilize_retry_selector_eval_best_differs_samples\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_selector_eval_best_differs_samples);
+    fprintf(out, "      \"failed_stabilize_retry_selector_eval_score_ratio_total\": %.6f,\n",
+            ralph->phase1_failed_stabilize_retry_selector_eval_score_ratio_total);
+    fprintf(out, "      \"failed_stabilize_retry_selector_eval_score_ratio_max\": %.6f,\n",
+            ralph->phase1_failed_stabilize_retry_selector_eval_score_ratio_max);
+    fprintf(out, "      \"failed_stabilize_retry_selector_eval_score_ratio_ge_2\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_2);
+    fprintf(out, "      \"failed_stabilize_retry_selector_eval_score_ratio_ge_4\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4);
     fprintf(out, "      \"failed_stabilize_retry_selector_bland_arms\": %d,\n",
             ralph->phase1_failed_stabilize_retry_selector_bland_arms);
     fprintf(out, "      \"failed_stabilize_retry_selector_guarded_arms\": %d,\n",
