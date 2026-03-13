@@ -1628,6 +1628,74 @@ Completed slices:
       - the remaining Week 2 problem is the direction pathology itself, not
         selector breadth
 
+18. `W2.18` classify the post-shadow-toxic follow-up path.
+    - added telemetry for two separate views of a shadow-toxic episode:
+      - immediate post-shadow `DIR_SKIP` ladder outcome:
+        - plain retry
+        - dual-rescue attempt
+        - forced-refactor path
+      - next later event after the shadow-toxic episode:
+        - another failed-stabilize
+        - ratio breakdown
+        - pivot failure
+        - pivot success
+    - focused result:
+      - `wood1p`:
+        - `failed_stabilize_retry_shadow_guard_arms=27`
+        - `failed_stabilize_retry_shadow_post_dir_skip_retry=27`
+        - `failed_stabilize_retry_shadow_post_dir_skip_dual_rescue=0`
+        - `failed_stabilize_retry_shadow_post_dir_skip_forced_refactor=0`
+        - `failed_stabilize_retry_shadow_next_failed_stabilize=27`
+        - `failed_stabilize_retry_shadow_next_ratio_breakdown=0`
+        - `failed_stabilize_retry_shadow_next_pivot_fail=0`
+        - `failed_stabilize_retry_shadow_next_pivot_success=0`
+        - `time_ms=2391.901`
+        - `iterations=926`
+      - `greenbeb`:
+        - `failed_stabilize_retry_shadow_guard_arms=72`
+        - `failed_stabilize_retry_shadow_post_dir_skip_retry=70`
+        - `failed_stabilize_retry_shadow_post_dir_skip_dual_rescue=0`
+        - `failed_stabilize_retry_shadow_post_dir_skip_forced_refactor=2`
+        - `failed_stabilize_retry_shadow_next_failed_stabilize=72`
+        - `failed_stabilize_retry_shadow_next_ratio_breakdown=0`
+        - `failed_stabilize_retry_shadow_next_pivot_fail=0`
+        - `failed_stabilize_retry_shadow_next_pivot_success=0`
+        - `time_ms=6287.647`
+        - `iterations=1594`
+    - gate result:
+      - small NETLIB gate passed:
+        - artifact: `/tmp/netlib-regression-gate-20260313-095342`
+        - `27/27`
+        - `0` timeouts
+        - `0` dense fallbacks
+      - full NETLIB gate stayed baseline-clean:
+        - artifact: `/tmp/netlib-regression-gate-20260313-095348`
+        - `84` files
+        - `22` timeouts
+        - `0` status/objective/invalid mismatches
+        - `0` dense fallbacks
+    - implication:
+      - the dominant `greenbeb`/`wood1p` loop is now explicit:
+        - shadow-toxic exclusion
+        - immediate plain `DIR_SKIP` retry
+        - return to another failed-stabilize event
+      - the remaining Week 2 lever is retry-direction quality after the
+        `DIR_SKIP` recompute, not exclusion length, ratio-breakdown handling,
+        pivot-failure handling, or broader selector scoring
+
+19. Rejected after `W2.18`: one-shot post-shadow non-Bland pricing override.
+    - tried a bounded immediate follow-up that bypassed one forced Bland
+      pricing step after a shadow-toxic exclusion
+    - result:
+      - `wood1p` worsened materially:
+        - about `2391.901 ms`, `926` iterations -> `2360.996 ms`, `3535` iterations
+      - `greenbeb` did not improve enough to justify the change:
+        - about `6287.647 ms`, `1594` iterations -> `6504.324 ms`, `1615` iterations
+    - conclusion:
+      - immediate post-shadow pricing mode is not the right Week 2 lever
+      - the remaining issue is still retry-direction quality, not lack of a
+        stronger entering score on the next priced iteration
+
 ### Week 3: Degeneracy and Long-Run Control Quality
 
 Target family:

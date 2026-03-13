@@ -192,6 +192,13 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions = 2;
     solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_arms = 2;
     solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry = 5;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue = 3;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_next_failed_stabilize = 4;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_next_ratio_breakdown = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_next_pivot_fail = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_next_pivot_success = 6;
     solver.telemetry.perf_dual_bound_flip_applied = 9;
     solver.telemetry.perf_dual_bound_flip_startup = 4;
     solver.telemetry.perf_dual_bound_flip_iterative = 5;
@@ -863,6 +870,13 @@ static void test_solver_reset_and_refactor_accounting(void) {
     lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_original_exclusion(&solver);
     lp_telemetry_record_phase1_failed_stabilize_retry_shadow_guard_arm(&solver);
     lp_telemetry_record_phase1_failed_stabilize_retry_shadow_guard_original_exclusion(&solver);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry(&solver);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue(&solver);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor(&solver);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_failed_stabilize(&solver);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_ratio_breakdown(&solver);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_pivot_fail(&solver);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_pivot_success(&solver);
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_arms, 1,
                   "record: phase1 failed-stabilize retry selector bland arms");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_arms, 1,
@@ -935,6 +949,20 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 failed-stabilize retry shadow guard arms");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions, 1,
                   "record: phase1 failed-stabilize retry shadow guard original exclusions");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry, 1,
+                  "record: phase1 shadow post dir-skip retry");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue, 1,
+                  "record: phase1 shadow post dir-skip dual rescue");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor, 1,
+                  "record: phase1 shadow post dir-skip forced refactor");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_next_failed_stabilize, 1,
+                  "record: phase1 shadow next failed-stabilize");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_next_ratio_breakdown, 1,
+                  "record: phase1 shadow next ratio breakdown");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_next_pivot_fail, 1,
+                  "record: phase1 shadow next pivot fail");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_next_pivot_success, 1,
+                  "record: phase1 shadow next pivot success");
 
     lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
     lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
@@ -1217,6 +1245,13 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions = 3;
     solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_arms = 2;
     solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry = 8;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue = 3;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_next_failed_stabilize = 7;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_next_ratio_breakdown = 4;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_next_pivot_fail = 3;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_next_pivot_success = 5;
     solver.telemetry.perf_dual_bound_flip_applied = 13;
     solver.telemetry.perf_dual_bound_flip_startup = 5;
     solver.telemetry.perf_dual_bound_flip_iterative = 8;
@@ -1548,6 +1583,20 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 failed stabilize retry shadow guard arms");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions, 1,
                   "solver_snapshot: phase1 failed stabilize retry shadow guard original exclusions");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry, 8,
+                  "solver_snapshot: phase1 shadow post dir-skip retry");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue, 3,
+                  "solver_snapshot: phase1 shadow post dir-skip dual rescue");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor, 2,
+                  "solver_snapshot: phase1 shadow post dir-skip forced refactor");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_next_failed_stabilize, 7,
+                  "solver_snapshot: phase1 shadow next failed-stabilize");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_next_ratio_breakdown, 4,
+                  "solver_snapshot: phase1 shadow next ratio breakdown");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_next_pivot_fail, 3,
+                  "solver_snapshot: phase1 shadow next pivot fail");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_next_pivot_success, 5,
+                  "solver_snapshot: phase1 shadow next pivot success");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_applied, 13,
                   "solver_snapshot: dual bound flips aggregate");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_startup, 5,
