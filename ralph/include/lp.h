@@ -1005,6 +1005,37 @@ typedef struct {
     int perf_phase2_refactor_periodic_policy;
     int perf_phase2_refactor_periodic_lu_health;
     int perf_phase2_refactor_safety_forced;
+    int perf_phase2_degenerate_episodes;
+    int perf_phase2_degenerate_streak_max;
+    int perf_phase2_theta_le_1e_9;
+    int perf_phase2_theta_le_1e_6;
+    int perf_phase2_theta_le_1e_3;
+    int perf_phase2_theta_gt_1e_3;
+    int perf_phase2_weak_pivot_samples;
+    double perf_phase2_weak_pivot_ratio_total;
+    double perf_phase2_weak_pivot_ratio_min;
+    int perf_phase2_weak_pivot_ratio_le_1e_8;
+    int perf_phase2_weak_pivot_ratio_le_1e_6;
+    int perf_phase2_weak_pivot_ratio_le_1e_4;
+    int perf_phase2_weak_pivot_ratio_gt_1e_4;
+    int perf_phase2_repeat_entering_events;
+    int perf_phase2_repeat_entering_max_streak;
+    int perf_phase2_repeat_leaving_events;
+    int perf_phase2_repeat_leaving_max_streak;
+    int perf_phase2_bland_pricing_iters;
+    int perf_phase2_adaptive_devex_partial_iters;
+    int perf_phase2_bland_enter_episodes;
+    int perf_phase2_bland_exit_episodes;
+    int perf_phase2_perturb_applied;
+    int perf_phase2_devex_reset_count;
+    int perf_phase2_devex_age_max;
+    int perf_phase2_degen_refactor_calls;
+    int perf_phase2_degen_refactor_ratio_recovery;
+    int perf_phase2_degen_refactor_pivot_recovery;
+    int perf_phase2_degen_refactor_periodic_policy;
+    int perf_phase2_degen_refactor_periodic_lu_health;
+    int perf_phase2_degen_refactor_safety_forced;
+    int perf_phase2_degen_escape_triggers;
     int perf_dual_ratio_no_entering;   /* dual ratio test failed to find entering variable */
     int perf_dual_theta_nonpositive;   /* dual ratio test returned theta <= 0 */
     int perf_dual_pivot_reject_small;  /* dual pivot rejected on small/non-finite pivot */
@@ -1555,6 +1586,37 @@ typedef struct {
     int perf_phase2_refactor_periodic_policy;
     int perf_phase2_refactor_periodic_lu_health;
     int perf_phase2_refactor_safety_forced;
+    int perf_phase2_degenerate_episodes;
+    int perf_phase2_degenerate_streak_max;
+    int perf_phase2_theta_le_1e_9;
+    int perf_phase2_theta_le_1e_6;
+    int perf_phase2_theta_le_1e_3;
+    int perf_phase2_theta_gt_1e_3;
+    int perf_phase2_weak_pivot_samples;
+    double perf_phase2_weak_pivot_ratio_total;
+    double perf_phase2_weak_pivot_ratio_min;
+    int perf_phase2_weak_pivot_ratio_le_1e_8;
+    int perf_phase2_weak_pivot_ratio_le_1e_6;
+    int perf_phase2_weak_pivot_ratio_le_1e_4;
+    int perf_phase2_weak_pivot_ratio_gt_1e_4;
+    int perf_phase2_repeat_entering_events;
+    int perf_phase2_repeat_entering_max_streak;
+    int perf_phase2_repeat_leaving_events;
+    int perf_phase2_repeat_leaving_max_streak;
+    int perf_phase2_bland_pricing_iters;
+    int perf_phase2_adaptive_devex_partial_iters;
+    int perf_phase2_bland_enter_episodes;
+    int perf_phase2_bland_exit_episodes;
+    int perf_phase2_perturb_applied;
+    int perf_phase2_devex_reset_count;
+    int perf_phase2_devex_age_max;
+    int perf_phase2_degen_refactor_calls;
+    int perf_phase2_degen_refactor_ratio_recovery;
+    int perf_phase2_degen_refactor_pivot_recovery;
+    int perf_phase2_degen_refactor_periodic_policy;
+    int perf_phase2_degen_refactor_periodic_lu_health;
+    int perf_phase2_degen_refactor_safety_forced;
+    int perf_phase2_degen_escape_triggers;
     int perf_dual_ratio_no_entering;
     int perf_dual_theta_nonpositive;
     int perf_dual_pivot_reject_small;
@@ -2223,6 +2285,16 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_arm(
     SimplexSolver *solver);
 void lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_original_exclusion(
     SimplexSolver *solver);
+void lp_telemetry_record_phase2_pivot_geometry(SimplexSolver *solver,
+                                               double theta,
+                                               double dir_inf,
+                                               double pivot_abs);
+void lp_telemetry_record_phase2_devex_reset(SimplexSolver *solver,
+                                            int devex_age);
+void lp_telemetry_record_phase2_degenerate_refactor(SimplexSolver *solver,
+                                                    int reason,
+                                                    int lu_health_triggered,
+                                                    int safety_forced);
 void lp_telemetry_record_compute_reduced_costs_timed(SimplexSolver *solver,
                                                      int phase,
                                                      double start_ms);

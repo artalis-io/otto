@@ -1788,12 +1788,89 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: shadow disagree primal refactor");
 }
 
+static void test_phase2_degeneracy_helpers(void) {
+    printf("  telemetry/solver: phase2 degeneracy helpers...\n");
+
+    SimplexSolver solver;
+    LPSolverTelemetrySnapshot snap;
+    memset(&solver, 0, sizeof(solver));
+    solver.telemetry_enabled = 1;
+
+    lp_telemetry_record_phase2_pivot_geometry(&solver, 1e-10, 1000.0, 1e-7);
+    lp_telemetry_record_phase2_pivot_geometry(&solver, 1e-5, 100.0, 1e-4);
+    lp_telemetry_record_phase2_devex_reset(&solver, 17);
+    lp_telemetry_record_phase2_devex_reset(&solver, 9);
+    lp_telemetry_record_phase2_degenerate_refactor(
+        &solver, RALPH_REFACTOR_REASON_PERIODIC, 1, 0);
+    lp_telemetry_record_phase2_degenerate_refactor(
+        &solver, RALPH_REFACTOR_REASON_PIVOT_RECOVERY, 0, 1);
+
+    solver.telemetry.perf_phase2_repeat_entering_events = 5;
+    solver.telemetry.perf_phase2_repeat_entering_max_streak = 3;
+    solver.telemetry.perf_phase2_repeat_leaving_events = 4;
+    solver.telemetry.perf_phase2_repeat_leaving_max_streak = 2;
+    solver.telemetry.perf_phase2_bland_pricing_iters = 7;
+    solver.telemetry.perf_phase2_adaptive_devex_partial_iters = 11;
+    solver.telemetry.perf_phase2_bland_enter_episodes = 2;
+    solver.telemetry.perf_phase2_bland_exit_episodes = 1;
+    solver.telemetry.perf_phase2_perturb_applied = 3;
+    solver.telemetry.perf_phase2_degenerate_episodes = 4;
+    solver.telemetry.perf_phase2_degenerate_streak_max = 12;
+    solver.telemetry.perf_phase2_degen_escape_triggers = 2;
+
+    ASSERT_INT_EQ(solver.telemetry.perf_phase2_theta_le_1e_9, 1,
+                  "phase2 helpers: theta <= 1e-9");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase2_theta_le_1e_6, 0,
+                  "phase2 helpers: theta <= 1e-6");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase2_theta_le_1e_3, 1,
+                  "phase2 helpers: theta <= 1e-3");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase2_weak_pivot_samples, 2,
+                  "phase2 helpers: weak pivot samples");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase2_weak_pivot_ratio_min, 1e-10,
+                  "phase2 helpers: weak pivot ratio min");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase2_weak_pivot_ratio_le_1e_8, 1,
+                  "phase2 helpers: weak pivot ratio <= 1e-8");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase2_weak_pivot_ratio_le_1e_6, 1,
+                  "phase2 helpers: weak pivot ratio <= 1e-6");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase2_devex_reset_count, 2,
+                  "phase2 helpers: devex reset count");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase2_devex_age_max, 17,
+                  "phase2 helpers: devex age max");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase2_degen_refactor_calls, 2,
+                  "phase2 helpers: degenerate refactor calls");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase2_degen_refactor_periodic_lu_health, 1,
+                  "phase2 helpers: degenerate periodic lu-health refactor");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase2_degen_refactor_pivot_recovery, 1,
+                  "phase2 helpers: degenerate pivot recovery refactor");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase2_degen_refactor_safety_forced, 1,
+                  "phase2 helpers: degenerate safety-forced refactor");
+
+    lp_telemetry_snapshot_solver(&solver, &snap);
+    ASSERT_INT_EQ(snap.perf_phase2_repeat_entering_events, 5,
+                  "phase2 snapshot: repeat entering events");
+    ASSERT_INT_EQ(snap.perf_phase2_repeat_leaving_max_streak, 2,
+                  "phase2 snapshot: repeat leaving max streak");
+    ASSERT_INT_EQ(snap.perf_phase2_bland_pricing_iters, 7,
+                  "phase2 snapshot: bland pricing iterations");
+    ASSERT_INT_EQ(snap.perf_phase2_adaptive_devex_partial_iters, 11,
+                  "phase2 snapshot: adaptive devex partial iterations");
+    ASSERT_INT_EQ(snap.perf_phase2_degenerate_episodes, 4,
+                  "phase2 snapshot: degenerate episodes");
+    ASSERT_INT_EQ(snap.perf_phase2_degenerate_streak_max, 12,
+                  "phase2 snapshot: degenerate streak max");
+    ASSERT_INT_EQ(snap.perf_phase2_perturb_applied, 3,
+                  "phase2 snapshot: perturb applied");
+    ASSERT_INT_EQ(snap.perf_phase2_degen_escape_triggers, 2,
+                  "phase2 snapshot: degen escape triggers");
+}
+
 int main(void) {
     printf("=== LP Telemetry Solver Tests ===\n");
 
     test_solver_reset_and_refactor_accounting();
     test_refactor_reason_classifier();
     test_solver_snapshot();
+    test_phase2_degeneracy_helpers();
 
     printf("Passed %d/%d tests\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;

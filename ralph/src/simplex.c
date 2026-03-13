@@ -6276,6 +6276,10 @@ basis_update_done:
 
         /* Periodic reference reset: recalculate weights from column norms */
         if (tab->devex_refcount >= 2 * tab->n) {
+            if (tab->phase == 2 && tab->owner) {
+                lp_telemetry_record_phase2_devex_reset(tab->owner,
+                                                       tab->devex_refcount);
+            }
             for (int j = 0; j < tab->n; j++) {
                 double col_norm_sq = 0.0;
                 for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
@@ -9800,6 +9804,10 @@ static int simplex_phase2(SimplexSolver *solver) {
     const int P2_STALL_THRESHOLD = 50;
     int perturb_attempts_p2 = 0;
     const int P2_MAX_PERTURB_ATTEMPTS = 15;
+    int last_entering = -1;
+    int last_leaving = -1;
+    int repeat_entering_streak = 0;
+    int repeat_leaving_streak = 0;
 
     /* For two-phase problems after transition, start with Bland's rule for the first
      * few pivots to avoid numerical issues with the post-transition basis.
@@ -9819,6 +9827,9 @@ static int simplex_phase2(SimplexSolver *solver) {
     } else {
         tableau_compute_reduced_costs(tab);
         if (solver->pricing_strategy == 4) heap_build(tab);
+    }
+    if (perturbation_active && solver->telemetry_enabled) {
+        solver->telemetry.perf_phase2_perturb_applied++;
     }
     double phase2_hot_ms_prev = phase_hotpath_ms(solver, 2);
 
@@ -9864,6 +9875,15 @@ static int simplex_phase2(SimplexSolver *solver) {
                                               degenerate_count,
                                               (use_bland || iter < bland_start_iters),
                                               solver->pricing_strategy);
+        if (solver->telemetry_enabled) {
+            if (use_bland || iter < bland_start_iters) {
+                solver->telemetry.perf_phase2_bland_pricing_iters++;
+            } else if (solver->pricing_strategy == 2 &&
+                       adaptive_devex_partial &&
+                       (iter & DEVEX_PARTIAL_FULL_RESCAN_MASK) != 0) {
+                solver->telemetry.perf_phase2_adaptive_devex_partial_iters++;
+            }
+        }
 
         if (use_bland || iter < bland_start_iters) {
             /* Use Bland's rule to prevent cycling or for initial stability */
@@ -9927,10 +9947,20 @@ static int simplex_phase2(SimplexSolver *solver) {
              * Stale LU factors can produce spurious theta=inf (e.g., lotfi).
              * Refactorize and retry once before declaring UNBOUNDED. */
             int refactor_rc;
+            int degen_episode =
+                (degenerate_count > 0 || use_bland || perturbation_active);
             {
                 double t_refactor_ms = lp_telemetry_timer_start();
                 refactor_rc = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_RATIO_RECOVERY);
                 lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+            }
+            if (degen_episode) {
+                lp_telemetry_record_phase2_degenerate_refactor(
+                    solver,
+                    RALPH_REFACTOR_REASON_RATIO_RECOVERY,
+                    0,
+                    lp_telemetry_refactor_reason_is_safety_forced(
+                        RALPH_REFACTOR_REASON_RATIO_RECOVERY));
             }
             if (refactor_rc == 0) {
                 tableau_compute_solution(tab);
@@ -10003,6 +10033,52 @@ static int simplex_phase2(SimplexSolver *solver) {
             /* Recovery succeeded — fall through to pivot */
         }
 
+        {
+            double phase2_dir_inf = 0.0;
+            int phase2_dir_nnz = 0;
+            double phase2_pivot_abs = 0.0;
+
+            phase1_direction_shape_from_vector(
+                tab->work2,
+                tab->m,
+                leaving,
+                &phase2_dir_inf,
+                &phase2_dir_nnz,
+                &phase2_pivot_abs);
+            lp_telemetry_record_phase2_pivot_geometry(
+                solver,
+                theta,
+                phase2_dir_inf,
+                phase2_pivot_abs);
+        }
+        if (solver->telemetry_enabled) {
+            if (entering == last_entering) {
+                repeat_entering_streak++;
+                solver->telemetry.perf_phase2_repeat_entering_events++;
+                if (repeat_entering_streak >
+                    solver->telemetry.perf_phase2_repeat_entering_max_streak) {
+                    solver->telemetry.perf_phase2_repeat_entering_max_streak =
+                        repeat_entering_streak;
+                }
+            } else {
+                repeat_entering_streak = 0;
+            }
+            last_entering = entering;
+
+            if (leaving >= 0 && leaving == last_leaving) {
+                repeat_leaving_streak++;
+                solver->telemetry.perf_phase2_repeat_leaving_events++;
+                if (repeat_leaving_streak >
+                    solver->telemetry.perf_phase2_repeat_leaving_max_streak) {
+                    solver->telemetry.perf_phase2_repeat_leaving_max_streak =
+                        repeat_leaving_streak;
+                }
+            } else {
+                repeat_leaving_streak = 0;
+            }
+            last_leaving = (leaving >= 0) ? leaving : -1;
+        }
+
         /* Track degenerate/near-degenerate pivots for cycling prevention
          *
          * Strategy:
@@ -10015,13 +10091,23 @@ static int simplex_phase2(SimplexSolver *solver) {
         const int PERTURB_THRESHOLD = 30;
 
         if (theta < NEAR_DEGEN_TOL) {
+            if (solver->telemetry_enabled && degenerate_count == 0) {
+                solver->telemetry.perf_phase2_degenerate_episodes++;
+            }
             degenerate_count++;
+            if (solver->telemetry_enabled &&
+                degenerate_count > solver->telemetry.perf_phase2_degenerate_streak_max) {
+                solver->telemetry.perf_phase2_degenerate_streak_max = degenerate_count;
+            }
             non_degen_streak = 0;
 
             /* First try perturbation */
             if (degenerate_count >= PERTURB_THRESHOLD && !perturbation_active && !use_bland) {
                 primal_apply_perturbation(tab);
                 perturbation_active = 1;
+                if (solver->telemetry_enabled) {
+                    solver->telemetry.perf_phase2_perturb_applied++;
+                }
                 if (solver->verbose) {
                     LP_LOG_STDOUT("Iter %d: Applying perturbation due to degeneracy\n", iter);
                 }
@@ -10030,6 +10116,9 @@ static int simplex_phase2(SimplexSolver *solver) {
             /* If still cycling after perturbation, use Bland's rule */
             if (degenerate_count >= DEGEN_THRESHOLD && !use_bland) {
                 use_bland = 1;
+                if (solver->telemetry_enabled) {
+                    solver->telemetry.perf_phase2_bland_enter_episodes++;
+                }
                 if (solver->verbose) {
                     LP_LOG_STDOUT("Iter %d: Switching to Bland's rule due to potential cycling\n", iter);
                 }
@@ -10040,6 +10129,9 @@ static int simplex_phase2(SimplexSolver *solver) {
             degenerate_count = 0;
             if (use_bland && non_degen_streak >= NON_DEGEN_THRESHOLD) {
                 use_bland = 0;
+                if (solver->telemetry_enabled) {
+                    solver->telemetry.perf_phase2_bland_exit_episodes++;
+                }
                 non_degen_streak = 0;
                 if (solver->verbose) {
                     LP_LOG_STDOUT("Iter %d: Turning off Bland's rule after %d non-degenerate pivots\n",
@@ -10064,10 +10156,20 @@ static int simplex_phase2(SimplexSolver *solver) {
             /* Pivot failed - the basis was partially updated in simplex_pivot.
              * Try to recover by refactorizing the current (post-pivot) basis. */
             int rc_refactor;
+            int degen_episode =
+                (degenerate_count > 0 || use_bland || perturbation_active);
             {
                 double t_refactor_ms = lp_telemetry_timer_start();
                 rc_refactor = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY);
                 lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+            }
+            if (degen_episode) {
+                lp_telemetry_record_phase2_degenerate_refactor(
+                    solver,
+                    RALPH_REFACTOR_REASON_PIVOT_RECOVERY,
+                    0,
+                    lp_telemetry_refactor_reason_is_safety_forced(
+                        RALPH_REFACTOR_REASON_PIVOT_RECOVERY));
             }
             if (rc_refactor == 0) {
                 /* Refactorization succeeded - recompute and continue */
@@ -10343,11 +10445,21 @@ static int simplex_phase2(SimplexSolver *solver) {
             runtime_record_periodic_refactor_trigger(solver, 2, lu_refactor_needed);
             int rc_refactor;
             double refactor_elapsed_ms = 0.0;
+            int degen_episode =
+                (degenerate_count > 0 || use_bland || perturbation_active);
             {
                 double t_refactor_ms = lp_telemetry_timer_start();
                 rc_refactor = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PERIODIC);
                 refactor_elapsed_ms = lp_telemetry_timer_elapsed_ms(t_refactor_ms);
                 lp_telemetry_add_refactor_runtime_ms(solver, refactor_elapsed_ms);
+            }
+            if (degen_episode) {
+                lp_telemetry_record_phase2_degenerate_refactor(
+                    solver,
+                    RALPH_REFACTOR_REASON_PERIODIC,
+                    lu_refactor_needed,
+                    lp_telemetry_refactor_reason_is_safety_forced(
+                        RALPH_REFACTOR_REASON_PERIODIC));
             }
             if (rc_refactor == 0) {
                 soft_lu_record_refactor_cost(solver, 2, refactor_elapsed_ms);
@@ -10454,6 +10566,13 @@ static int simplex_phase2(SimplexSolver *solver) {
                 double scale = 4.0 + 2.0 * (double)perturb_attempts_p2;
                 primal_apply_perturbation_scaled(tab, scale);
                 perturbation_active = 1;
+                if (solver->telemetry_enabled) {
+                    solver->telemetry.perf_phase2_degen_escape_triggers++;
+                    solver->telemetry.perf_phase2_perturb_applied++;
+                    if (!use_bland) {
+                        solver->telemetry.perf_phase2_bland_enter_episodes++;
+                    }
+                }
                 use_bland = 1;
                 degenerate_count = 0;
                 /* Keep Bland active briefly before allowing fast pricing again. */
@@ -10478,6 +10597,12 @@ static int simplex_phase2(SimplexSolver *solver) {
                     double scale = 1.0 + 2.0 * perturb_attempts_p2;
                     primal_apply_perturbation_scaled(tab, scale);
                     perturbation_active = 1;
+                    if (solver->telemetry_enabled) {
+                        solver->telemetry.perf_phase2_perturb_applied++;
+                        if (use_bland) {
+                            solver->telemetry.perf_phase2_bland_exit_episodes++;
+                        }
+                    }
                     /* Reset Bland's rule — fresh perturbation should break the
                      * cycle, allowing faster pricing to make progress again */
                     use_bland = 0;
