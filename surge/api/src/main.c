@@ -66,6 +66,9 @@ static ShCorsConfig s_cors;
 
 static volatile sig_atomic_t s_signo = 0;
 
+/* Transport-agnostic API context */
+static SGAPIContext *s_api_ctx = NULL;
+
 /* Rate limiter instance */
 static ShRateLimiter *s_rate_limiter = NULL;
 
@@ -353,6 +356,18 @@ static void handle_solve(struct mg_connection *c, struct mg_http_message *hm) {
     }
 }
 
+static void handle_stats(struct mg_connection *c, struct mg_http_message *hm) {
+    SGAPIRequest req = { .path = "/api/v1/stats" };
+    SGAPIResponse resp = {0};
+
+    if (sg_api_handle(s_api_ctx, &req, &resp) == 0 && resp.body) {
+        send_json_cors(c, hm, resp.status_code, resp.body);
+    } else {
+        send_error_cors(c, hm, 500, "Failed to generate stats response");
+    }
+    sg_api_response_free(&resp);
+}
+
 static void handle_metrics(struct mg_connection *c) {
     sh_mg_handle_metrics(c);
 }
@@ -402,6 +417,10 @@ static void handle_request(struct mg_connection *c, int ev, void *ev_data) {
             handle_version(c, hm);
             sh_metrics_counter_inc("http_requests_total", 1,
                                    "status:200", "endpoint:version", NULL);
+        } else if (mg_match(hm->uri, mg_str("/api/v1/stats"), NULL)) {
+            handle_stats(c, hm);
+            sh_metrics_counter_inc("http_requests_total", 1,
+                                   "status:200", "endpoint:stats", NULL);
         } else if (mg_match(hm->uri, mg_str("/api/v1/solve"), NULL)) {
             handle_solve(c, hm);
             sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
@@ -477,6 +496,13 @@ int main(int argc, char *argv[]) {
             print_usage(argv[0]);
             return 0;
         }
+    }
+
+    /* Initialize API context */
+    s_api_ctx = sg_api_create();
+    if (!s_api_ctx) {
+        fprintf(stderr, "Error: Failed to create API context\n");
+        return 1;
     }
 
     /* Initialize rate limiter */
@@ -571,6 +597,7 @@ int main(int argc, char *argv[]) {
     printf("  POST /api/v1/solve     - Solve VRP problem\n");
     printf("  GET  /api/v1/health    - Health check\n");
     printf("  GET  /api/v1/version   - Version info\n");
+    printf("  GET  /api/v1/stats     - Statistics\n");
     printf("  GET  /metrics          - Prometheus metrics\n");
     printf("\nPress Ctrl+C to stop.\n\n");
 
@@ -612,6 +639,7 @@ int main(int argc, char *argv[]) {
     sh_worker_pool_free(s_worker_pool);
     sh_workqueue_free(s_work_queue);
     sh_ratelimit_free(s_rate_limiter);
+    sg_api_free(s_api_ctx);
 
     SH_LOG_INFO("Server shutdown complete");
     sh_metrics_shutdown();

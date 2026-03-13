@@ -14,6 +14,22 @@
 #include <string.h>
 
 /* ============================================================================
+ * API Context (stateless — reserved for future use)
+ * ============================================================================ */
+
+struct SGAPIContext {
+    int _unused;
+};
+
+SGAPIContext *sg_api_create(void) {
+    return calloc(1, sizeof(SGAPIContext));
+}
+
+void sg_api_free(SGAPIContext *ctx) {
+    free(ctx);
+}
+
+/* ============================================================================
  * JSON Error Response Helper
  * ============================================================================ */
 
@@ -2156,10 +2172,40 @@ char *sg_api_version(size_t *out_len) {
 }
 
 /* ============================================================================
+ * Stats Handler
+ * ============================================================================ */
+
+static char *sg_api_stats(size_t *out_len) {
+    ShJsonBuf jb;
+    ShJsonWriter w;
+
+    sh_json_buf_init(&jb);
+    sh_json_writer_init(&w, sh_json_buf_write, &jb);
+
+    sh_json_write_object_start(&w);
+    sh_json_write_kv_string(&w, "service", "surge");
+    sh_json_write_kv_string(&w, "version", sg_version());
+    sh_json_write_kv_string(&w, "status", "ok");
+    sh_json_write_object_end(&w);
+
+    if (sh_json_writer_error(&w) || !jb.buf) {
+        sh_json_buf_free(&jb);
+        return NULL;
+    }
+
+    if (out_len) {
+        *out_len = jb.len;
+    }
+    return sh_json_buf_take(&jb);
+}
+
+/* ============================================================================
  * Router
  * ============================================================================ */
 
-int sg_api_handle(const SGAPIRequest *req, SGAPIResponse *resp) {
+int sg_api_handle(SGAPIContext *ctx, const SGAPIRequest *req, SGAPIResponse *resp) {
+    (void)ctx;
+
     if (!req || !resp || !req->path) {
         return -1;
     }
@@ -2176,6 +2222,9 @@ int sg_api_handle(const SGAPIRequest *req, SGAPIResponse *resp) {
         resp->status_code = resp->body ? 200 : 500;
     } else if (strcmp(req->path, "/api/v1/version") == 0) {
         resp->body = sg_api_version(&resp->body_len);
+        resp->status_code = resp->body ? 200 : 500;
+    } else if (strcmp(req->path, "/api/v1/stats") == 0) {
+        resp->body = sg_api_stats(&resp->body_len);
         resp->status_code = resp->body ? 200 : 500;
     } else {
         resp->body = make_error_json(404, "not found", &resp->body_len);
