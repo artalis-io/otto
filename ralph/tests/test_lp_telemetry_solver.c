@@ -85,6 +85,7 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_dir_stabilize_skip_full = 2;
     solver.telemetry.perf_phase1_dir_stabilize_skip_no_recompute = 7;
     solver.telemetry.perf_phase1_dir_stabilize_skip_guard_refresh = 3;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_applied = 4;
     solver.telemetry.perf_phase1_recompute_after_ratio_breakdown = 4;
     solver.telemetry.perf_phase1_recompute_after_dir_skip = 3;
     solver.telemetry.perf_phase1_recompute_after_dir_refactor = 2;
@@ -229,6 +230,20 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_force_extreme_followup_next_ratio_breakdown = 3;
     solver.telemetry.perf_phase1_force_extreme_followup_next_pivot_fail = 2;
     solver.telemetry.perf_phase1_force_extreme_followup_next_pivot_success = 8;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_samples = 4;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_bound_geometry = 1;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_bound_flip = 1;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_tiny_theta = 0;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_weak_leaving = 2;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_ftran_shape = 1;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_nnz_total = 77;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_nnz_max = 31;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_inf_total = 12345.0;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_inf_max = 6789.0;
+    solver.telemetry.perf_phase1_force_extreme_followup_pivot_abs_total = 9.75;
+    solver.telemetry.perf_phase1_force_extreme_followup_pivot_abs_max = 6.5;
+    solver.telemetry.perf_phase1_force_extreme_followup_theta_total = 0.015;
+    solver.telemetry.perf_phase1_force_extreme_followup_theta_max = 0.01;
     solver.telemetry.perf_dual_bound_flip_applied = 9;
     solver.telemetry.perf_dual_bound_flip_startup = 4;
     solver.telemetry.perf_dual_bound_flip_iterative = 5;
@@ -352,6 +367,8 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 dir skip no recompute");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_dir_stabilize_skip_guard_refresh, 0,
                   "reset: phase1 dir skip guard refresh");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_applied, 0,
+                  "reset: phase1 force extreme tiny-theta relax");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_ratio_breakdown, 0,
                   "reset: phase1 recompute ratio breakdown");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_recompute_after_dir_skip, 0,
@@ -630,6 +647,34 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 force-extreme next pivot fail");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_next_pivot_success, 0,
                   "reset: phase1 force-extreme next pivot success");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_samples, 0,
+                  "reset: phase1 force-extreme followup dir samples");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_bound_geometry, 0,
+                  "reset: phase1 force-extreme followup dir bound geometry");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_bound_flip, 0,
+                  "reset: phase1 force-extreme followup dir bound flip");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_tiny_theta, 0,
+                  "reset: phase1 force-extreme followup dir tiny theta");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_weak_leaving, 0,
+                  "reset: phase1 force-extreme followup dir weak leaving");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_ftran_shape, 0,
+                  "reset: phase1 force-extreme followup dir ftran shape");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_nnz_total, 0,
+                  "reset: phase1 force-extreme followup dir nnz total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_nnz_max, 0,
+                  "reset: phase1 force-extreme followup dir nnz max");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_inf_total, 0.0,
+                  "reset: phase1 force-extreme followup dir inf total");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_inf_max, 0.0,
+                  "reset: phase1 force-extreme followup dir inf max");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_force_extreme_followup_pivot_abs_total, 0.0,
+                  "reset: phase1 force-extreme followup pivot abs total");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_force_extreme_followup_pivot_abs_max, 0.0,
+                  "reset: phase1 force-extreme followup pivot abs max");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_force_extreme_followup_theta_total, 0.0,
+                  "reset: phase1 force-extreme followup theta total");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_force_extreme_followup_theta_max, 0.0,
+                  "reset: phase1 force-extreme followup theta max");
     ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_applied, 0,
                   "reset: dual bound-flip aggregate");
     ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_startup, 0,
@@ -977,6 +1022,14 @@ static void test_solver_reset_and_refactor_accounting(void) {
     lp_telemetry_record_phase1_force_extreme_followup_next_ratio_breakdown(&solver);
     lp_telemetry_record_phase1_force_extreme_followup_next_pivot_fail(&solver);
     lp_telemetry_record_phase1_force_extreme_followup_next_pivot_success(&solver);
+    lp_telemetry_record_phase1_force_extreme_followup_direction(
+        &solver, -2, 1.0e-2, 2.0e5, 48, 2.0e-2);
+    lp_telemetry_record_phase1_force_extreme_followup_direction(
+        &solver, 7, 1.0e-2, 3.0e5, 64, 3.0e-2);
+    lp_telemetry_record_phase1_force_extreme_followup_direction(
+        &solver, 9, 1.0e-2, 4.0e5, 80, 1.0e-2);
+    lp_telemetry_record_phase1_force_extreme_followup_direction(
+        &solver, 11, 1.0e-2, 5.0e5, 96, 5.0);
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_arms, 1,
                   "record: phase1 failed-stabilize retry selector bland arms");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_arms, 1,
@@ -1143,6 +1196,34 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 force-extreme next pivot fail");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_next_pivot_success, 1,
                   "record: phase1 force-extreme next pivot success");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_samples, 4,
+                  "record: phase1 force-extreme followup dir samples");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_bound_geometry, 1,
+                  "record: phase1 force-extreme followup dir bound geometry");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_bound_flip, 1,
+                  "record: phase1 force-extreme followup dir bound flip");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_tiny_theta, 0,
+                  "record: phase1 force-extreme followup dir tiny theta");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_weak_leaving, 2,
+                  "record: phase1 force-extreme followup dir weak leaving");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_ftran_shape, 1,
+                  "record: phase1 force-extreme followup dir ftran shape");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_nnz_total, 288,
+                  "record: phase1 force-extreme followup dir nnz total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_nnz_max, 96,
+                  "record: phase1 force-extreme followup dir nnz max");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_inf_total, 1400000.0,
+                  "record: phase1 force-extreme followup dir inf total");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_force_extreme_followup_dir_inf_max, 500000.0,
+                  "record: phase1 force-extreme followup dir inf max");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_force_extreme_followup_pivot_abs_total, 5.06,
+                  "record: phase1 force-extreme followup pivot abs total");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_force_extreme_followup_pivot_abs_max, 5.0,
+                  "record: phase1 force-extreme followup pivot abs max");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_force_extreme_followup_theta_total, 0.04,
+                  "record: phase1 force-extreme followup theta total");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_force_extreme_followup_theta_max, 0.01,
+                  "record: phase1 force-extreme followup theta max");
     lp_telemetry_record_phase1_failed_stabilize_retry_shadow_followup_direction(
         &solver, -2, 1.0e-9, 2.0e5, 48, 2.0e-2);
     lp_telemetry_record_phase1_failed_stabilize_retry_shadow_followup_direction(
@@ -1352,6 +1433,7 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_dir_stabilize_skip_full = 4;
     solver.telemetry.perf_phase1_dir_stabilize_skip_no_recompute = 12;
     solver.telemetry.perf_phase1_dir_stabilize_skip_guard_refresh = 3;
+    solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_applied = 7;
     solver.telemetry.perf_phase1_recompute_after_ratio_breakdown = 12;
     solver.telemetry.perf_phase1_recompute_after_dir_skip = 7;
     solver.telemetry.perf_phase1_recompute_after_dir_refactor = 5;
@@ -1498,6 +1580,20 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_force_extreme_followup_next_ratio_breakdown = 6;
     solver.telemetry.perf_phase1_force_extreme_followup_next_pivot_fail = 1;
     solver.telemetry.perf_phase1_force_extreme_followup_next_pivot_success = 7;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_samples = 12;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_bound_geometry = 3;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_bound_flip = 1;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_tiny_theta = 2;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_weak_leaving = 5;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_ftran_shape = 4;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_nnz_total = 155;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_nnz_max = 44;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_inf_total = 830000.0;
+    solver.telemetry.perf_phase1_force_extreme_followup_dir_inf_max = 410000.0;
+    solver.telemetry.perf_phase1_force_extreme_followup_pivot_abs_total = 13.5;
+    solver.telemetry.perf_phase1_force_extreme_followup_pivot_abs_max = 6.75;
+    solver.telemetry.perf_phase1_force_extreme_followup_theta_total = 0.024;
+    solver.telemetry.perf_phase1_force_extreme_followup_theta_max = 0.008;
     solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_samples = 6;
     solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_bound_geometry = 2;
     solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_bound_flip = 1;
@@ -1625,6 +1721,8 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 dir skip no recompute");
     ASSERT_INT_EQ(snap.perf_phase1_dir_stabilize_skip_guard_refresh, 3,
                   "solver_snapshot: phase1 dir skip guard refresh");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_tiny_theta_relax_applied, 7,
+                  "solver_snapshot: phase1 force extreme tiny-theta relax");
     ASSERT_INT_EQ(snap.perf_phase1_recompute_after_ratio_breakdown, 12,
                   "solver_snapshot: phase1 recompute ratio breakdown");
     ASSERT_INT_EQ(snap.perf_phase1_recompute_after_dir_skip, 7,
@@ -1917,6 +2015,34 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 force-extreme next pivot fail");
     ASSERT_INT_EQ(snap.perf_phase1_force_extreme_followup_next_pivot_success, 7,
                   "solver_snapshot: phase1 force-extreme next pivot success");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_followup_dir_samples, 12,
+                  "solver_snapshot: phase1 force-extreme followup dir samples");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_followup_dir_bound_geometry, 3,
+                  "solver_snapshot: phase1 force-extreme followup dir bound geometry");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_followup_dir_bound_flip, 1,
+                  "solver_snapshot: phase1 force-extreme followup dir bound flip");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_followup_dir_tiny_theta, 2,
+                  "solver_snapshot: phase1 force-extreme followup dir tiny theta");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_followup_dir_weak_leaving, 5,
+                  "solver_snapshot: phase1 force-extreme followup dir weak leaving");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_followup_dir_ftran_shape, 4,
+                  "solver_snapshot: phase1 force-extreme followup dir ftran shape");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_followup_dir_nnz_total, 155,
+                  "solver_snapshot: phase1 force-extreme followup dir nnz total");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_followup_dir_nnz_max, 44,
+                  "solver_snapshot: phase1 force-extreme followup dir nnz max");
+    ASSERT_DBL_EQ(snap.perf_phase1_force_extreme_followup_dir_inf_total, 830000.0,
+                  "solver_snapshot: phase1 force-extreme followup dir inf total");
+    ASSERT_DBL_EQ(snap.perf_phase1_force_extreme_followup_dir_inf_max, 410000.0,
+                  "solver_snapshot: phase1 force-extreme followup dir inf max");
+    ASSERT_DBL_EQ(snap.perf_phase1_force_extreme_followup_pivot_abs_total, 13.5,
+                  "solver_snapshot: phase1 force-extreme followup pivot abs total");
+    ASSERT_DBL_EQ(snap.perf_phase1_force_extreme_followup_pivot_abs_max, 6.75,
+                  "solver_snapshot: phase1 force-extreme followup pivot abs max");
+    ASSERT_DBL_EQ(snap.perf_phase1_force_extreme_followup_theta_total, 0.024,
+                  "solver_snapshot: phase1 force-extreme followup theta total");
+    ASSERT_DBL_EQ(snap.perf_phase1_force_extreme_followup_theta_max, 0.008,
+                  "solver_snapshot: phase1 force-extreme followup theta max");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_followup_dir_samples, 6,
                   "solver_snapshot: phase1 shadow followup dir samples");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_followup_dir_bound_geometry, 2,
