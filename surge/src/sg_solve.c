@@ -883,6 +883,13 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
                          ctx->tune_params ? ctx->tune_params->neighbor_k : SG_TUNE_SENTINEL_I,
                          30));
 
+    /* Allocate modified-vehicles bitset for education (S27a) */
+    {
+        uint32_t words = (ctx->num_vehicles + 63) / 64;
+        ctx->modified_vehicles = (uint64_t *)calloc((size_t)words, sizeof(uint64_t));
+        ctx->modified_vehicles_words = ctx->modified_vehicles ? words : 0;
+    }
+
     sg_phase_start(ctx, SG_PHASE_CONSTRUCTION, 0.0, 0, ctx->num_requests);
     if (ctx->num_initial_routes > 0) {
         init_status = sg_route_construct_from_warm_start(ctx, &initial);
@@ -911,6 +918,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
     }
     if (init_status != AR_STATUS_OK) {
         free(ctx->frozen_vehicle_map); ctx->frozen_vehicle_map = NULL;
+        free(ctx->modified_vehicles); ctx->modified_vehicles = NULL;
         sg_scratch_free(ctx);
         sg_route_solution_reset(&initial);
         return init_status == AR_STATUS_OUT_OF_MEMORY ? SG_STATUS_OUT_OF_MEMORY
@@ -1029,6 +1037,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         if (!alns) {
             sg_penalty_free(&ctx->penalty);
             free(ctx->frozen_vehicle_map); ctx->frozen_vehicle_map = NULL;
+            free(ctx->modified_vehicles); ctx->modified_vehicles = NULL;
             sg_scratch_free(ctx);
             sg_route_solution_reset(&initial);
             return SG_STATUS_OUT_OF_MEMORY;
@@ -1053,6 +1062,7 @@ static SGStatus sg_solve_route_model(SGContext *ctx) {
         if (ar_status != AR_STATUS_OK && ar_status != AR_STATUS_LIMIT) {
             sg_penalty_free(&ctx->penalty);
             free(ctx->frozen_vehicle_map); ctx->frozen_vehicle_map = NULL;
+            free(ctx->modified_vehicles); ctx->modified_vehicles = NULL;
             sg_scratch_free(ctx);
             sg_route_solution_reset(&initial);
             ar_alns_free(alns);
@@ -1267,11 +1277,15 @@ skip_phase15:
         if (!alns) {
             sg_penalty_free(&ctx->penalty);
             free(ctx->frozen_vehicle_map); ctx->frozen_vehicle_map = NULL;
+            free(ctx->modified_vehicles); ctx->modified_vehicles = NULL;
             sg_scratch_free(ctx);
             sg_route_solution_reset(&initial);
             sg_route_solution_free(p1_best, NULL);
             return SG_STATUS_OUT_OF_MEMORY;
         }
+
+        /* S27d: Zone-ruin only in Phase 2 — disrupts vehicle minimization in P1 */
+        ar_alns_add_destroy(alns, "zone-ruin", sg_route_destroy_zone_ruin, ctx, 1.0);
 
         if (ctx->config.deterministic) {
             ar_alns_set_seed(alns, ctx->config.seed + 1);
@@ -1288,6 +1302,7 @@ skip_phase15:
         if (ar_status != AR_STATUS_OK && ar_status != AR_STATUS_LIMIT) {
             sg_penalty_free(&ctx->penalty);
             free(ctx->frozen_vehicle_map); ctx->frozen_vehicle_map = NULL;
+            free(ctx->modified_vehicles); ctx->modified_vehicles = NULL;
             sg_scratch_free(ctx);
             sg_route_solution_reset(&initial);
             sg_route_solution_free(p1_best, NULL);
@@ -1447,6 +1462,8 @@ skip_phase2:
     }
     sg_penalty_free(&ctx->penalty);
     free(ctx->frozen_vehicle_map); ctx->frozen_vehicle_map = NULL;
+    free(ctx->modified_vehicles); ctx->modified_vehicles = NULL;
+    ctx->modified_vehicles_words = 0;
     sg_neighbor_free(&ctx->neighbor_index);
     sg_scratch_free(ctx);
     sg_route_solution_reset(&initial);

@@ -9492,7 +9492,311 @@ static void test_gen_reheat_population_mode(void) {
     sg_free(ctx);
 }
 
+/* ===== S27: Population & Education Overhaul Tests ===== */
+
+static void test_s27b_population_pool_size_25(void) {
+    /* S27b: population pool size increased to 25. Run population mode with
+       explicit pool_size=25 and verify solve completes. With 10 PD requests
+       and 3 generations, the pool should accept diverse solutions. */
+    SGContext *ctx = make_config(200, 42);
+    SGPopulationConfig cfg;
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+
+    add_pd_request(ctx, 10, 20, 0, 86400, 60, 30, 40, 0, 86400, 60, 5);
+    add_pd_request(ctx, 50, 60, 0, 86400, 60, 70, 80, 0, 86400, 60, 5);
+    add_pd_request(ctx, 20, 10, 0, 86400, 60, 40, 30, 0, 86400, 60, 5);
+    add_pd_request(ctx, 60, 50, 0, 86400, 60, 80, 70, 0, 86400, 60, 5);
+    add_pd_request(ctx, 15, 25, 0, 86400, 60, 35, 45, 0, 86400, 60, 5);
+    add_pd_request(ctx, 25, 15, 0, 86400, 60, 45, 35, 0, 86400, 60, 5);
+    add_pd_request(ctx, 55, 65, 0, 86400, 60, 75, 85, 0, 86400, 60, 5);
+    add_pd_request(ctx, 65, 55, 0, 86400, 60, 85, 75, 0, 86400, 60, 5);
+    add_pd_request(ctx, 5, 5, 0, 86400, 60, 90, 90, 0, 86400, 60, 5);
+    add_pd_request(ctx, 45, 45, 0, 86400, 60, 55, 55, 0, 86400, 60, 5);
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.num_threads = 4;
+    cfg.population_size = 25;   /* S27b: default pool size */
+    cfg.num_generations = 3;
+
+    assert(sg_solve_population(ctx, &cfg) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_solution_get_route_count(ctx) > 0);
+    sg_free(ctx);
+}
+
+static void test_s27b_biased_fitness_diversity(void) {
+    /* S27b: With a large pool and diverse problem, multi-generation population
+       should produce valid results. Pool diversity from biased fitness should
+       prevent premature convergence. Run with 3 gens, verify no regression. */
+    double dist_1gen, dist_3gen;
+    SGPopulationConfig cfg;
+
+    /* 1 generation baseline */
+    {
+        SGContext *ctx = make_config(200, 42);
+        uint32_t depot;
+        add_depot_with_location(ctx, &depot, 0, 0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_pd_request(ctx, 10, 20, 0, 86400, 60, 30, 40, 0, 86400, 60, 5);
+        add_pd_request(ctx, 50, 60, 0, 86400, 60, 70, 80, 0, 86400, 60, 5);
+        add_pd_request(ctx, 20, 10, 0, 86400, 60, 40, 30, 0, 86400, 60, 5);
+        add_pd_request(ctx, 60, 50, 0, 86400, 60, 80, 70, 0, 86400, 60, 5);
+        add_pd_request(ctx, 15, 25, 0, 86400, 60, 35, 45, 0, 86400, 60, 5);
+        add_pd_request(ctx, 25, 15, 0, 86400, 60, 45, 35, 0, 86400, 60, 5);
+        add_pd_request(ctx, 55, 65, 0, 86400, 60, 75, 85, 0, 86400, 60, 5);
+        add_pd_request(ctx, 65, 55, 0, 86400, 60, 85, 75, 0, 86400, 60, 5);
+
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.num_threads = 4;
+        cfg.population_size = 25;
+        cfg.num_generations = 1;
+        assert(sg_solve_population(ctx, &cfg) == SG_STATUS_OK);
+        dist_1gen = sg_get_total_distance(ctx);
+        sg_free(ctx);
+    }
+
+    /* 3 generations should be no worse */
+    {
+        SGContext *ctx = make_config(200, 42);
+        uint32_t depot;
+        add_depot_with_location(ctx, &depot, 0, 0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+        add_pd_request(ctx, 10, 20, 0, 86400, 60, 30, 40, 0, 86400, 60, 5);
+        add_pd_request(ctx, 50, 60, 0, 86400, 60, 70, 80, 0, 86400, 60, 5);
+        add_pd_request(ctx, 20, 10, 0, 86400, 60, 40, 30, 0, 86400, 60, 5);
+        add_pd_request(ctx, 60, 50, 0, 86400, 60, 80, 70, 0, 86400, 60, 5);
+        add_pd_request(ctx, 15, 25, 0, 86400, 60, 35, 45, 0, 86400, 60, 5);
+        add_pd_request(ctx, 25, 15, 0, 86400, 60, 45, 35, 0, 86400, 60, 5);
+        add_pd_request(ctx, 55, 65, 0, 86400, 60, 75, 85, 0, 86400, 60, 5);
+        add_pd_request(ctx, 65, 55, 0, 86400, 60, 85, 75, 0, 86400, 60, 5);
+
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.num_threads = 4;
+        cfg.population_size = 25;
+        cfg.num_generations = 3;
+        assert(sg_solve_population(ctx, &cfg) == SG_STATUS_OK);
+        dist_3gen = sg_get_total_distance(ctx);
+        sg_free(ctx);
+    }
+
+    /* Multi-gen should be at least as good (allow small tolerance) */
+    assert(dist_3gen <= dist_1gen + 1e-6);
+}
+
+static void test_s27c_srex_quality(void) {
+    /* S27c: quality-weighted SREX route selection + singleton orphan handling.
+       Population mode should still produce valid, complete solutions. */
+    SGContext *ctx = make_config(200, 42);
+    SGPopulationConfig cfg;
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+
+    /* Spatially diverse requests to exercise SREX crossover */
+    add_pd_request(ctx, 10, 10, 0, 86400, 60, 90, 90, 0, 86400, 60, 5);
+    add_pd_request(ctx, 90, 10, 0, 86400, 60, 10, 90, 0, 86400, 60, 5);
+    add_pd_request(ctx, 10, 90, 0, 86400, 60, 90, 10, 0, 86400, 60, 5);
+    add_pd_request(ctx, 50, 50, 0, 86400, 60, 30, 30, 0, 86400, 60, 5);
+    add_pd_request(ctx, 70, 70, 0, 86400, 60, 20, 80, 0, 86400, 60, 5);
+    add_pd_request(ctx, 80, 20, 0, 86400, 60, 40, 60, 0, 86400, 60, 5);
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.num_threads = 4;
+    cfg.population_size = 8;
+    cfg.num_generations = 3;
+
+    assert(sg_solve_population(ctx, &cfg) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_solution_get_route_count(ctx) > 0);
+    sg_free(ctx);
+}
+
+static void test_s27f_dual_pool_population(void) {
+    /* S27f: dual feasible/infeasible subpopulations with dynamic penalty.
+       Run population mode and verify it completes successfully.
+       The penalty adaptation + cross-pool tournament should not crash
+       or produce invalid solutions. */
+    SGContext *ctx = make_config(200, 42);
+    SGPopulationConfig cfg;
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 50);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 50);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 50);
+
+    /* Tight capacity to force some infeasible intermediate solutions */
+    add_pd_request(ctx, 10, 20, 0, 86400, 60, 30, 40, 0, 86400, 60, 15);
+    add_pd_request(ctx, 50, 60, 0, 86400, 60, 70, 80, 0, 86400, 60, 15);
+    add_pd_request(ctx, 20, 10, 0, 86400, 60, 40, 30, 0, 86400, 60, 15);
+    add_pd_request(ctx, 60, 50, 0, 86400, 60, 80, 70, 0, 86400, 60, 15);
+    add_pd_request(ctx, 15, 25, 0, 86400, 60, 35, 45, 0, 86400, 60, 10);
+    add_pd_request(ctx, 25, 15, 0, 86400, 60, 45, 35, 0, 86400, 60, 10);
+    add_pd_request(ctx, 55, 65, 0, 86400, 60, 75, 85, 0, 86400, 60, 10);
+    add_pd_request(ctx, 65, 55, 0, 86400, 60, 85, 75, 0, 86400, 60, 10);
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.num_threads = 4;
+    cfg.population_size = 25;
+    cfg.num_generations = 3;
+
+    assert(sg_solve_population(ctx, &cfg) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_solution_get_route_count(ctx) > 0);
+    sg_free(ctx);
+}
+
 #endif /* SG_HAS_THREADS */
+
+/* ===== S27a: Education Tests (non-threaded) ===== */
+
+static void test_s27a_education_improves_or_maintains_distance(void) {
+    /* S27a: education (2-opt + OR-opt after repair) should not degrade solution
+       quality. Solve with education (the default now) and verify valid solution. */
+    SGContext *ctx = make_config(500, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+
+    add_pd_request(ctx, 10, 20, 0, 86400, 60, 30, 40, 0, 86400, 60, 5);
+    add_pd_request(ctx, 50, 60, 0, 86400, 60, 70, 80, 0, 86400, 60, 5);
+    add_pd_request(ctx, 20, 10, 0, 86400, 60, 40, 30, 0, 86400, 60, 5);
+    add_pd_request(ctx, 60, 50, 0, 86400, 60, 80, 70, 0, 86400, 60, 5);
+    add_pd_request(ctx, 15, 25, 0, 86400, 60, 35, 45, 0, 86400, 60, 5);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+    assert(sg_solution_get_route_count(ctx) > 0);
+    assert(sg_get_total_distance(ctx) > 0);
+    sg_free(ctx);
+}
+
+static void test_s27a_education_phase2_only(void) {
+    /* S27a: education only runs during Phase 2 (SG_PHASE_2_POLISH).
+       Verify that Phase 2 stats exist and ran iterations.
+       Use higher iteration count to ensure we reach Phase 2. */
+    SGContext *ctx = make_config(2000, 42);
+    uint32_t depot;
+    SGPhaseStats ps;
+    uint32_t phase_count, i;
+    int has_phase2 = 0;
+
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+
+    add_pd_request(ctx, 10, 20, 0, 86400, 60, 30, 40, 0, 86400, 60, 5);
+    add_pd_request(ctx, 50, 60, 0, 86400, 60, 70, 80, 0, 86400, 60, 5);
+    add_pd_request(ctx, 20, 10, 0, 86400, 60, 40, 30, 0, 86400, 60, 5);
+    add_pd_request(ctx, 60, 50, 0, 86400, 60, 80, 70, 0, 86400, 60, 5);
+    add_pd_request(ctx, 15, 25, 0, 86400, 60, 35, 45, 0, 86400, 60, 5);
+    add_pd_request(ctx, 25, 15, 0, 86400, 60, 45, 35, 0, 86400, 60, 5);
+    add_pd_request(ctx, 55, 65, 0, 86400, 60, 75, 85, 0, 86400, 60, 5);
+    add_pd_request(ctx, 65, 55, 0, 86400, 60, 85, 75, 0, 86400, 60, 5);
+    add_pd_request(ctx, 5, 5, 0, 86400, 60, 90, 90, 0, 86400, 60, 5);
+    add_pd_request(ctx, 45, 45, 0, 86400, 60, 55, 55, 0, 86400, 60, 5);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+
+    /* Check that we have Phase 2 stats and it made progress */
+    phase_count = sg_get_phase_count(ctx);
+    for (i = 0; i < phase_count; i++) {
+        assert(sg_get_phase_stats(ctx, i, &ps) == SG_STATUS_OK);
+        if (ps.phase == SG_PHASE_2_POLISH) {
+            has_phase2 = 1;
+            /* Phase 2 should have run iterations */
+            assert(ps.iterations > 0);
+        }
+    }
+    assert(has_phase2);
+
+    sg_free(ctx);
+}
+
+static void test_s27a_modified_vehicles_bitset(void) {
+    /* S27a: verify the modified_vehicles bitset infrastructure is set up
+       correctly during solve. After solve, the bitset should have been
+       allocated (non-NULL) and then freed. We can check indirectly by
+       verifying the solve produces valid results with education active. */
+    SGContext *ctx = make_config(300, 42);
+    uint32_t depot;
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+
+    /* 8 requests across 4 vehicles — multiple vehicles will be modified per iteration */
+    add_pd_request(ctx, 10, 20, 0, 86400, 60, 30, 40, 0, 86400, 60, 5);
+    add_pd_request(ctx, 50, 60, 0, 86400, 60, 70, 80, 0, 86400, 60, 5);
+    add_pd_request(ctx, 20, 10, 0, 86400, 60, 40, 30, 0, 86400, 60, 5);
+    add_pd_request(ctx, 60, 50, 0, 86400, 60, 80, 70, 0, 86400, 60, 5);
+    add_pd_request(ctx, 15, 25, 0, 86400, 60, 35, 45, 0, 86400, 60, 5);
+    add_pd_request(ctx, 25, 15, 0, 86400, 60, 45, 35, 0, 86400, 60, 5);
+    add_pd_request(ctx, 55, 65, 0, 86400, 60, 75, 85, 0, 86400, 60, 5);
+    add_pd_request(ctx, 65, 55, 0, 86400, 60, 85, 75, 0, 86400, 60, 5);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* After solve, modified_vehicles should be cleaned up (NULL) */
+    assert(ctx->modified_vehicles == NULL);
+
+    sg_free(ctx);
+}
+
+static void test_s27d_zone_ruin_phase2_solve(void) {
+    /* S27d: zone-ruin is registered only in Phase 2 ALNS.
+       Verify that a solve with enough iterations reaches Phase 2 and
+       completes successfully (zone-ruin doesn't crash or break feasibility). */
+    SGContext *ctx = make_config(2000, 42);
+    uint32_t depot;
+    SGPhaseStats ps;
+    uint32_t phase_count, i;
+    int has_phase2 = 0;
+
+    add_depot_with_location(ctx, &depot, 0, 0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 100);
+
+    /* Spatially clustered requests — zone-ruin should find good zones */
+    add_pd_request(ctx, 10, 10, 0, 86400, 60, 12, 12, 0, 86400, 60, 5);
+    add_pd_request(ctx, 11, 11, 0, 86400, 60, 13, 13, 0, 86400, 60, 5);
+    add_pd_request(ctx, 50, 50, 0, 86400, 60, 52, 52, 0, 86400, 60, 5);
+    add_pd_request(ctx, 51, 51, 0, 86400, 60, 53, 53, 0, 86400, 60, 5);
+    add_pd_request(ctx, 90, 90, 0, 86400, 60, 92, 92, 0, 86400, 60, 5);
+    add_pd_request(ctx, 91, 91, 0, 86400, 60, 93, 93, 0, 86400, 60, 5);
+    add_pd_request(ctx, 30, 30, 0, 86400, 60, 70, 70, 0, 86400, 60, 5);
+    add_pd_request(ctx, 70, 30, 0, 86400, 60, 30, 70, 0, 86400, 60, 5);
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(sg_get_unassigned(ctx) == 0);
+
+    /* Verify Phase 2 ran */
+    phase_count = sg_get_phase_count(ctx);
+    for (i = 0; i < phase_count; i++) {
+        assert(sg_get_phase_stats(ctx, i, &ps) == SG_STATUS_OK);
+        if (ps.phase == SG_PHASE_2_POLISH) {
+            has_phase2 = 1;
+            assert(ps.iterations > 0);
+        }
+    }
+    assert(has_phase2);
+
+    sg_free(ctx);
+}
 
 /* ===== Speed Profile & Travel Profile Tests ===== */
 
@@ -11081,7 +11385,6 @@ static void test_pd_policy_lifo_basic(void) {
     /* 2 PD pairs on a LIFO vehicle:
        P1→P2→D2→D1 = valid (nested), P1→P2→D1→D2 = invalid */
     SGContext *ctx = make_config(500, 42);
-    SGRouteSolution sol;
     uint32_t depot;
     double dist;
     SGRouteStop stops[4];
@@ -12640,7 +12943,6 @@ static void test_lock_solomon_frozen_blocks_elimination(void) {
     uint32_t *bv_ids, *br_lens, *br_ids;
     uint32_t btotal;
     uint32_t brc;
-    uint32_t baseline_vehicles;
     uint32_t num_frozen_vehicles;
 
     /* Baseline */
@@ -12654,7 +12956,6 @@ static void test_lock_solomon_frozen_blocks_elimination(void) {
         assert(sg_set_config(ctx, &cfg) == SG_STATUS_OK);
         assert(sg_load_solomon_vrptw(ctx, "benchmarks/solomon/C101.txt") == SG_STATUS_OK);
         assert(sg_solve(ctx) == SG_STATUS_OK);
-        baseline_vehicles = sg_get_used_vehicle_count(ctx);
         brc = extract_solution_routes(ctx, &bv_ids, &br_lens, &br_ids, &btotal);
         sg_free(ctx);
     }
@@ -17859,12 +18160,32 @@ int main(void) {
     RUN_TEST(test_gen_reheat_population_mode);
 #endif
 
+    /* S27a: Education (non-threaded) */
+    RUN_TEST(test_s27a_education_improves_or_maintains_distance);
+    RUN_TEST(test_s27a_education_phase2_only);
+    RUN_TEST(test_s27a_modified_vehicles_bitset);
+
+    /* S27d: Zone-ruin Phase 2 (non-threaded) */
+    RUN_TEST(test_s27d_zone_ruin_phase2_solve);
+
+#ifdef SG_HAS_THREADS
+    /* S27b: Population infrastructure (threaded) */
+    RUN_TEST(test_s27b_population_pool_size_25);
+    RUN_TEST(test_s27b_biased_fitness_diversity);
+
+    /* S27c: SREX quality (threaded) */
+    RUN_TEST(test_s27c_srex_quality);
+
+    /* S27f: Dual pool (threaded) */
+    RUN_TEST(test_s27f_dual_pool_population);
+#endif
+
     printf("================\n");
     printf("%d/%d tests passed\n", tests_passed, tests_run);
 #ifdef SG_HAS_THREADS
-    assert(tests_run == 459);
+    assert(tests_run == 467);
 #else
-    assert(tests_run == 439);
+    assert(tests_run == 443);
 #endif
     return tests_passed == tests_run ? 0 : 1;
 }

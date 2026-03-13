@@ -552,6 +552,12 @@ struct SGContext {
     uint8_t  has_frozen;                        /* fast-path: 1 if any request == FROZEN */
     uint32_t *frozen_vehicle_map;               /* [num_requests] rid -> designated vehicle, SG_NO_VEHICLE if not frozen */
 
+    /* Modified-vehicles bitset for education (Phase 2 only).
+       Set when a vehicle receives an insertion or loses a request.
+       Cleared at start of each repair call. */
+    uint64_t *modified_vehicles;     /* [(num_vehicles + 63) / 64] words, NULL if not allocated */
+    uint32_t  modified_vehicles_words;
+
     /* Generation-aware SA reheat (set by sg_parallel.c for generations > 0) */
     double gen_reheat_ratio;     /* SA T₀ multiplier (1.0 = no change) */
     double gen_cooling_stretch;  /* Cooling schedule stretch (1.0 = no change) */
@@ -587,6 +593,21 @@ struct SGContext {
     uint32_t num_phase_stats;
     SGPenaltySnapshot penalty_snapshot;       /* copied before sg_penalty_free */
 };
+
+/* Modified-vehicles bitset helpers (for education phase) */
+static inline void sg_modified_vehicles_clear(SGContext *ctx) {
+    if (ctx->modified_vehicles)
+        memset(ctx->modified_vehicles, 0,
+               (size_t)ctx->modified_vehicles_words * sizeof(uint64_t));
+}
+static inline void sg_modified_vehicles_set(SGContext *ctx, uint32_t v) {
+    if (ctx->modified_vehicles)
+        ctx->modified_vehicles[v >> 6] |= (1ULL << (v & 63));
+}
+static inline int sg_modified_vehicles_test(const SGContext *ctx, uint32_t v) {
+    if (!ctx->modified_vehicles) return 0;
+    return (ctx->modified_vehicles[v >> 6] >> (v & 63)) & 1;
+}
 
 /* sg_neighbor.c — k-nearest location pruning for insertion repair */
 void sg_neighbor_init(SGNeighborIndex *idx, const SGContext *ctx, uint32_t k);
@@ -1182,6 +1203,7 @@ int sg_route_rank_insertions_for_request(SGContext *ctx, const SGRouteSolution *
                                          double *best_route_distance_out);
 
 /* sg_postprocess.c */
+void sg_route_educate(SGContext *ctx, SGRouteSolution *sol);
 ARStatus sg_route_postprocess_reduce_vehicles(const SGContext *ctx, SGRouteSolution *sol);
 ARStatus sg_route_postprocess_reduce_vehicles_relaxed(const SGContext *ctx,
                                                        SGRouteSolution *sol,

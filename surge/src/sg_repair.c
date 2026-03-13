@@ -1080,17 +1080,35 @@ static void sg_repair_ejection_fallback(SGContext *ctx, SGRouteSolution *sol) {
     free(snapshot);
 }
 
+/* After repair fill + ejection, mark vehicles whose route length changed as modified
+   and run education (Phase 2 only). */
+static void sg_repair_mark_and_educate(SGContext *ctx, SGRouteSolution *sol,
+                                        const uint32_t *snapshot, uint32_t nv) {
+    uint32_t v;
+    if (!ctx->modified_vehicles) return;
+    for (v = 0; v < nv; v++) {
+        if (sol->route_lengths[v] != snapshot[v])
+            sg_modified_vehicles_set(ctx, v);
+    }
+    sg_route_educate(ctx, sol);
+}
+
 ARStatus sg_route_repair_greedy(void *op_ctx, void *solution,
                                 const uint32_t *removed_ids, int removed_count) {
     SGContext *ctx = (SGContext *)op_ctx;
     SGRouteSolution *sol = (SGRouteSolution *)solution;
+    uint32_t snapshot[2048];
+    uint32_t nv = sol->num_vehicles < 2048 ? sol->num_vehicles : 2048;
     (void)removed_ids;
     (void)removed_count;
+    sg_modified_vehicles_clear(ctx);
+    memcpy(snapshot, sol->route_lengths, (size_t)nv * sizeof(uint32_t));
     {
         ARStatus s = sg_route_repair_fill_greedy(ctx, sol, 0.0);
         if (s != AR_STATUS_OK) return s;
     }
     sg_repair_ejection_fallback(ctx, sol);
+    sg_repair_mark_and_educate(ctx, sol, snapshot, nv);
     return AR_STATUS_OK;
 }
 
@@ -1098,13 +1116,18 @@ ARStatus sg_route_repair_regret2(void *op_ctx, void *solution,
                                  const uint32_t *removed_ids, int removed_count) {
     SGContext *ctx = (SGContext *)op_ctx;
     SGRouteSolution *sol = (SGRouteSolution *)solution;
+    uint32_t snapshot[2048];
+    uint32_t nv = sol->num_vehicles < 2048 ? sol->num_vehicles : 2048;
     (void)removed_ids;
     (void)removed_count;
+    sg_modified_vehicles_clear(ctx);
+    memcpy(snapshot, sol->route_lengths, (size_t)nv * sizeof(uint32_t));
     {
         ARStatus s = sg_route_repair_fill_regret(ctx, sol, 2, 0.0);
         if (s != AR_STATUS_OK) return s;
     }
     sg_repair_ejection_fallback(ctx, sol);
+    sg_repair_mark_and_educate(ctx, sol, snapshot, nv);
     return AR_STATUS_OK;
 }
 
@@ -1112,13 +1135,18 @@ ARStatus sg_route_repair_regret3(void *op_ctx, void *solution,
                                  const uint32_t *removed_ids, int removed_count) {
     SGContext *ctx = (SGContext *)op_ctx;
     SGRouteSolution *sol = (SGRouteSolution *)solution;
+    uint32_t snapshot[2048];
+    uint32_t nv = sol->num_vehicles < 2048 ? sol->num_vehicles : 2048;
     (void)removed_ids;
     (void)removed_count;
+    sg_modified_vehicles_clear(ctx);
+    memcpy(snapshot, sol->route_lengths, (size_t)nv * sizeof(uint32_t));
     {
         ARStatus s = sg_route_repair_fill_regret(ctx, sol, 3, 0.0);
         if (s != AR_STATUS_OK) return s;
     }
     sg_repair_ejection_fallback(ctx, sol);
+    sg_repair_mark_and_educate(ctx, sol, snapshot, nv);
     return AR_STATUS_OK;
 }
 
@@ -1126,13 +1154,18 @@ ARStatus sg_route_repair_regret4(void *op_ctx, void *solution,
                                  const uint32_t *removed_ids, int removed_count) {
     SGContext *ctx = (SGContext *)op_ctx;
     SGRouteSolution *sol = (SGRouteSolution *)solution;
+    uint32_t snapshot[2048];
+    uint32_t nv = sol->num_vehicles < 2048 ? sol->num_vehicles : 2048;
     (void)removed_ids;
     (void)removed_count;
+    sg_modified_vehicles_clear(ctx);
+    memcpy(snapshot, sol->route_lengths, (size_t)nv * sizeof(uint32_t));
     {
         ARStatus s = sg_route_repair_fill_regret(ctx, sol, 4, 0.0);
         if (s != AR_STATUS_OK) return s;
     }
     sg_repair_ejection_fallback(ctx, sol);
+    sg_repair_mark_and_educate(ctx, sol, snapshot, nv);
     return AR_STATUS_OK;
 }
 
@@ -1140,13 +1173,18 @@ ARStatus sg_route_repair_noise_regret(void *op_ctx, void *solution,
                                       const uint32_t *removed_ids, int removed_count) {
     SGContext *ctx = (SGContext *)op_ctx;
     SGRouteSolution *sol = (SGRouteSolution *)solution;
+    uint32_t snapshot[2048];
+    uint32_t nv = sol->num_vehicles < 2048 ? sol->num_vehicles : 2048;
     (void)removed_ids;
     (void)removed_count;
+    sg_modified_vehicles_clear(ctx);
+    memcpy(snapshot, sol->route_lengths, (size_t)nv * sizeof(uint32_t));
     {
         ARStatus s = sg_route_repair_fill_regret(ctx, sol, 3, SG_NOISE_REGRET_SCALE);
         if (s != AR_STATUS_OK) return s;
     }
     sg_repair_ejection_fallback(ctx, sol);
+    sg_repair_mark_and_educate(ctx, sol, snapshot, nv);
     return AR_STATUS_OK;
 }
 
@@ -1154,12 +1192,17 @@ ARStatus sg_route_repair_pair_sync(void *op_ctx, void *solution,
                                    const uint32_t *removed_ids, int removed_count) {
     SGContext *ctx = (SGContext *)op_ctx;
     SGRouteSolution *sol = (SGRouteSolution *)solution;
+    uint32_t snapshot[2048];
+    uint32_t nv = sol->num_vehicles < 2048 ? sol->num_vehicles : 2048;
     (void)removed_ids;
     (void)removed_count;
+    sg_modified_vehicles_clear(ctx);
+    memcpy(snapshot, sol->route_lengths, (size_t)nv * sizeof(uint32_t));
     {
         ARStatus s = sg_route_repair_fill_greedy(ctx, sol, 0.0);
         if (s != AR_STATUS_OK) return s;
     }
     sg_repair_ejection_fallback(ctx, sol);
+    sg_repair_mark_and_educate(ctx, sol, snapshot, nv);
     return AR_STATUS_OK;
 }
