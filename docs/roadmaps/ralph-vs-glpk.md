@@ -1586,6 +1586,45 @@ Completed slices:
       - broader retry-lane alternate scoring is not the next Week 2 lever
       - even the best-scored alternate in the retry pool still yields an
         unstable post-refactor direction on these outliers
+
+17. `W2.17` guard severe retry-lane directions when the shadow-best alternate
+    is provably even more toxic.
+    - added a retry-lane shadow-toxic guard:
+      - only after repeated local retry episodes
+      - only for severe-but-non-catastrophic actual retry directions
+      - only when the shadow-best alternate passes the ratio test but projects
+        a much larger direction and a much weaker pivot ratio
+      - action stays local and conservative: briefly exclude the original
+        entering through the existing exclusion memory
+    - added explicit telemetry:
+      - shadow guard arms
+      - shadow guard original-entering exclusions
+    - direct result:
+      - `wood1p`:
+        - `time_ms=2285.335`
+        - `iterations=906`
+        - `failed_stabilize_retry_shadow_guard_arms=27`
+      - `greenbeb`:
+        - `time_ms=6217.478`
+        - `iterations=1613`
+        - `failed_stabilize_retry_shadow_guard_arms=78`
+    - gate result:
+      - small NETLIB gate passed:
+        - `27/27`
+        - `0` timeouts
+        - `0` dense fallbacks
+      - full NETLIB gate stayed baseline-clean:
+        - `84` files
+        - `22` timeouts
+        - `0` status/objective/invalid mismatches
+        - `0` dense fallbacks
+    - implication:
+      - the retry-lane pathology is now split three ways:
+        - catastrophic weak-pivot tail (`wood1p`-class)
+        - severe-but-non-catastrophic shadow-toxic tail (`greenbeb`-class)
+        - everything else
+      - this is a safe Week 2 baseline, but it is still a modest behavior win,
+        not the timeout-count breakthrough
       - the remaining Week 2 problem is the direction pathology itself, not
         selector breadth
 

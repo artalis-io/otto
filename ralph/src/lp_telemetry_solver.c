@@ -227,6 +227,8 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_inf_max = 0.0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_total = 0.0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max = 0.0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_arms = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_selector_bland_arms = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_arms = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total = 0;
@@ -743,6 +745,8 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_shadow_dir_inf_max);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_shadow_pivot_abs_total);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_shadow_guard_arms);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_bland_arms);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_guarded_arms);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total);

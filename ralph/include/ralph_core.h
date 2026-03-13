@@ -663,6 +663,8 @@ typedef struct {
     double perf_phase1_failed_stabilize_retry_shadow_dir_inf_max;
     double perf_phase1_failed_stabilize_retry_shadow_pivot_abs_total;
     double perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max;
+    int perf_phase1_failed_stabilize_retry_shadow_guard_arms;
+    int perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions;
     int perf_phase1_failed_stabilize_retry_selector_bland_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total;

@@ -66,6 +66,15 @@ static int phase1_failed_stabilize_retry_direction_guard_plan(
     int dir_nnz,
     double pivot_abs,
     int retry_alt_streak);
+static int phase1_failed_stabilize_retry_shadow_guard_plan(
+    double actual_dir_inf,
+    int actual_dir_nnz,
+    double actual_pivot_abs,
+    int shadow_ratio_success,
+    double shadow_dir_inf,
+    int shadow_dir_nnz,
+    double shadow_pivot_abs,
+    int retry_alt_streak);
 static void phase1_failed_stabilize_retry_direction_shape(
     const SimplexTableau *tab,
     int leaving,
@@ -141,6 +150,15 @@ static int phase1_trace_reason_from_lu_failure(int lu_reason, int forced_refacto
 #define PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_MIN_DIR_INF_RATIO 10.0
 #define PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_MAX_PIVOT_DIR_RATIO 1e-8
 #define PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_EXCLUDE_ITERS 4
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_STREAK_TRIGGER 2
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_NNZ 64
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_DIR_INF_RATIO 10.0
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_SHADOW_DIR_MULT 100.0
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_SHADOW_DIR_RATIO 1e3
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_ACTUAL_PIVOT_DIR_RATIO 1e-8
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MAX_ACTUAL_PIVOT_DIR_RATIO 1e-4
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MAX_SHADOW_PIVOT_DIR_RATIO 1e-6
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_EXCLUDE_ITERS 4
 #define PHASE1_AUTO_DANTZIG_MIN_M 700
 #define PHASE1_AUTO_DANTZIG_MAX_M 1200
 #define PHASE1_AUTO_DANTZIG_DEGEN_TRIGGER 20
@@ -1791,6 +1809,26 @@ int simplex_phase1_failed_stabilize_retry_direction_guard_plan_for_test(
         dir_inf,
         dir_nnz,
         pivot_abs,
+        retry_alt_streak);
+}
+
+int simplex_phase1_failed_stabilize_retry_shadow_guard_plan_for_test(
+    double actual_dir_inf,
+    int actual_dir_nnz,
+    double actual_pivot_abs,
+    int shadow_ratio_success,
+    double shadow_dir_inf,
+    int shadow_dir_nnz,
+    double shadow_pivot_abs,
+    int retry_alt_streak) {
+    return phase1_failed_stabilize_retry_shadow_guard_plan(
+        actual_dir_inf,
+        actual_dir_nnz,
+        actual_pivot_abs,
+        shadow_ratio_success,
+        shadow_dir_inf,
+        shadow_dir_nnz,
+        shadow_pivot_abs,
         retry_alt_streak);
 }
 
@@ -4471,6 +4509,69 @@ static int phase1_failed_stabilize_retry_direction_guard_plan(
            PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_MAX_PIVOT_DIR_RATIO;
 }
 
+static int phase1_failed_stabilize_retry_shadow_guard_plan(
+    double actual_dir_inf,
+    int actual_dir_nnz,
+    double actual_pivot_abs,
+    int shadow_ratio_success,
+    double shadow_dir_inf,
+    int shadow_dir_nnz,
+    double shadow_pivot_abs,
+    int retry_alt_streak) {
+    double actual_pivot_dir_ratio = 0.0;
+    double shadow_pivot_dir_ratio = 0.0;
+
+    if (retry_alt_streak < PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_STREAK_TRIGGER) {
+        return 0;
+    }
+    if (!isfinite(actual_dir_inf) || actual_dir_inf <
+            PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_DIR_INF_RATIO *
+                RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
+        return 0;
+    }
+    if (actual_dir_nnz < PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_NNZ) {
+        return 0;
+    }
+    if (!isfinite(actual_pivot_abs) || actual_pivot_abs < 0.0) {
+        return 0;
+    }
+    if (actual_dir_inf > 0.0) {
+        actual_pivot_dir_ratio = actual_pivot_abs / actual_dir_inf;
+    }
+    if (actual_pivot_dir_ratio <=
+            PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_ACTUAL_PIVOT_DIR_RATIO ||
+        actual_pivot_dir_ratio >
+            PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MAX_ACTUAL_PIVOT_DIR_RATIO) {
+        return 0;
+    }
+    if (!shadow_ratio_success) {
+        return 0;
+    }
+    if (!isfinite(shadow_dir_inf) ||
+        shadow_dir_inf <
+            PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_SHADOW_DIR_RATIO *
+                RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
+        return 0;
+    }
+    if (shadow_dir_inf <
+        PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_SHADOW_DIR_MULT *
+            actual_dir_inf) {
+        return 0;
+    }
+    if (shadow_dir_nnz < actual_dir_nnz ||
+        shadow_dir_nnz < PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_NNZ) {
+        return 0;
+    }
+    if (!isfinite(shadow_pivot_abs) || shadow_pivot_abs < 0.0) {
+        return 0;
+    }
+    if (shadow_dir_inf > 0.0) {
+        shadow_pivot_dir_ratio = shadow_pivot_abs / shadow_dir_inf;
+    }
+    return shadow_pivot_dir_ratio <=
+           PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MAX_SHADOW_PIVOT_DIR_RATIO;
+}
+
 static void phase1_pivot_fail_recovery_maybe_exclude_entering(
     SimplexSolver *solver,
     int fail_repeat_count,
@@ -5256,7 +5357,12 @@ static int phase1_ratio_test_harris_on_direction(const SimplexTableau *tab,
 static void phase1_failed_stabilize_retry_shadow_direction_proxy(
     SimplexSolver *solver,
     SimplexTableau *tab,
-    int entering) {
+    int entering,
+    int *ratio_success_out,
+    int *dir_stable_out,
+    double *dir_inf_out,
+    int *dir_nnz_out,
+    double *pivot_abs_out) {
     int leaving = -1;
     int ratio_status = -1;
     int dir_nnz = 0;
@@ -5268,6 +5374,11 @@ static void phase1_failed_stabilize_retry_shadow_direction_proxy(
     const int *col_idx = NULL;
     const double *col_val = NULL;
 
+    if (ratio_success_out) *ratio_success_out = 0;
+    if (dir_stable_out) *dir_stable_out = 0;
+    if (dir_inf_out) *dir_inf_out = 0.0;
+    if (dir_nnz_out) *dir_nnz_out = 0;
+    if (pivot_abs_out) *pivot_abs_out = 0.0;
     if (!solver || !tab || entering < 0 || !tab->work4) return;
     sparse_get_column_sparse(tab->A_ext, entering, &col_nnz, &col_idx, &col_val);
     lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work4, NULL, NULL);
@@ -5284,6 +5395,11 @@ static void phase1_failed_stabilize_retry_shadow_direction_proxy(
         dir_inf,
         dir_nnz,
         pivot_abs);
+    if (ratio_success_out) *ratio_success_out = (ratio_status == 0);
+    if (dir_stable_out) *dir_stable_out = dir_stable;
+    if (dir_inf_out) *dir_inf_out = dir_inf;
+    if (dir_nnz_out) *dir_nnz_out = dir_nnz;
+    if (pivot_abs_out) *pivot_abs_out = pivot_abs;
     (void)theta;
 }
 
@@ -7934,6 +8050,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             int retry_local_memory_bland_alt = -1;
             int retry_shadow_best_alt = -1;
             int retry_direction_guard_exclude_original = 0;
+            int retry_shadow_guard_exclude_original = 0;
             for (int stab_try = 0; stab_try < 1; stab_try++) {
                 int dir_refactor_trigger = 0;
                 if (force_dir_refactor_extreme) {
@@ -8171,6 +8288,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                         break;
                     }
                     if (retry_used_local_memory_alt) {
+                        int retry_shadow_ratio_success = 0;
+                        int retry_shadow_dir_stable = 0;
+                        int retry_shadow_dir_nnz = 0;
+                        double retry_shadow_dir_inf = 0.0;
+                        double retry_shadow_pivot_abs = 0.0;
                         phase1_failed_stabilize_retry_direction_shape(
                             tab,
                             leaving,
@@ -8195,7 +8317,23 @@ static int simplex_phase1(SimplexSolver *solver) {
                             phase1_failed_stabilize_retry_shadow_direction_proxy(
                                 solver,
                                 tab,
-                                retry_shadow_best_alt);
+                                retry_shadow_best_alt,
+                                &retry_shadow_ratio_success,
+                                &retry_shadow_dir_stable,
+                                &retry_shadow_dir_inf,
+                                &retry_shadow_dir_nnz,
+                                &retry_shadow_pivot_abs);
+                            if (phase1_failed_stabilize_retry_shadow_guard_plan(
+                                    retry_dir_fail_inf,
+                                    retry_dir_fail_nnz,
+                                    retry_dir_fail_pivot_abs,
+                                    retry_shadow_ratio_success,
+                                    retry_shadow_dir_inf,
+                                    retry_shadow_dir_nnz,
+                                    retry_shadow_pivot_abs,
+                                    retry_local_memory_repeat_streak)) {
+                                retry_shadow_guard_exclude_original = 1;
+                            }
                         }
                     }
                     if (retry_local_memory_selector_tracked) {
@@ -8234,24 +8372,41 @@ static int simplex_phase1(SimplexSolver *solver) {
                     LP_LOG_STDERR("[simplex_phase1] Skipping unstable entering column after stabilization attempts (iter=%d, entering=%d, dir_inf=%.2e)\n",
                             iter, entering, dir_inf);
                 }
-                if (retry_direction_guard_exclude_original &&
+                if ((retry_direction_guard_exclude_original ||
+                     retry_shadow_guard_exclude_original) &&
                     original_entering >= 0 &&
                     original_entering != entering) {
-                    lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_arm(
-                        solver);
+                    int exclude_iters = PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_EXCLUDE_ITERS;
+                    if (retry_direction_guard_exclude_original) {
+                        lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_arm(
+                            solver);
+                    } else {
+                        lp_telemetry_record_phase1_failed_stabilize_retry_shadow_guard_arm(
+                            solver);
+                        exclude_iters =
+                            PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_EXCLUDE_ITERS;
+                    }
                     phase1_exclude_entering_var_tracked(
                         solver,
                         original_entering,
-                        PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_EXCLUDE_ITERS,
+                        exclude_iters,
                         &excluded_entering_a,
                         &excluded_entering_ttl_a,
                         &excluded_entering_b,
                         &excluded_entering_ttl_b);
-                    lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_original_exclusion(
-                        solver);
+                    if (retry_direction_guard_exclude_original) {
+                        lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_original_exclusion(
+                            solver);
+                    } else {
+                        lp_telemetry_record_phase1_failed_stabilize_retry_shadow_guard_original_exclusion(
+                            solver);
+                    }
                     if (solver->verbose >= 2) {
-                        LP_LOG_STDERR("[simplex_phase1] Guard-excluding original entering %d after catastrophic retry direction for alternate %d\n",
-                                original_entering, entering);
+                        LP_LOG_STDERR(
+                            "[simplex_phase1] Guard-excluding original entering %d after %s retry direction for alternate %d\n",
+                            original_entering,
+                            retry_direction_guard_exclude_original ? "catastrophic" : "shadow-toxic",
+                            entering);
                     }
                 }
                 lp_telemetry_record_phase1_failed_stabilize_site(

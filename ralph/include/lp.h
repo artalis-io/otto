@@ -932,6 +932,8 @@ typedef struct {
     double perf_phase1_failed_stabilize_retry_shadow_dir_inf_max;
     double perf_phase1_failed_stabilize_retry_shadow_pivot_abs_total;
     double perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max;
+    int perf_phase1_failed_stabilize_retry_shadow_guard_arms;
+    int perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions;
     int perf_phase1_failed_stabilize_retry_selector_bland_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total;
@@ -1459,6 +1461,8 @@ typedef struct {
     double perf_phase1_failed_stabilize_retry_shadow_dir_inf_max;
     double perf_phase1_failed_stabilize_retry_shadow_pivot_abs_total;
     double perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max;
+    int perf_phase1_failed_stabilize_retry_shadow_guard_arms;
+    int perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions;
     int perf_phase1_failed_stabilize_retry_selector_bland_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total;
@@ -2120,6 +2124,10 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_shadow(
     double dir_inf,
     int dir_nnz,
     double pivot_abs);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_guard_arm(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_guard_original_exclusion(
+    SimplexSolver *solver);
 void lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
     SimplexSolver *solver,
     int used_guarded,
