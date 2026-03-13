@@ -41,7 +41,7 @@ static char *make_error_json(int status_code, const char *message, size_t *out_l
     sh_json_writer_init(&w, sh_json_buf_write, &jb);
 
     sh_json_write_object_start(&w);
-    sh_json_write_kv_string(&w, "status", "error");
+    sh_json_write_kv_string(&w, "status", "ERROR");
     sh_json_write_kv_int(&w, "code", status_code);
     sh_json_write_kv_string(&w, "error", message);
     sh_json_write_object_end(&w);
@@ -1472,7 +1472,7 @@ static const char *violation_type_name(SGViolationType type) {
         case SG_VIOLATION_QUALIFICATION:     return "qualification";
         case SG_VIOLATION_UNKNOWN_TASK:      return "unknown_task";
         case SG_VIOLATION_DUPLICATE_TASK:    return "duplicate_task";
-        default:                             return "unknown";
+        default:                             return "UNKNOWN";
     }
 }
 
@@ -1590,7 +1590,7 @@ SGStatus sg_api_write_solution(const SGContext *ctx, ShJsonWriter *w,
         sg_get_stats(ctx, &stats);
 
         sh_json_write_kv_string(w, "status",
-                                solve_status == SG_STATUS_OK ? "ok" : "limit");
+                                solve_status == SG_STATUS_OK ? "OK" : "LIMIT");
 
         /* Stats */
         sh_json_write_key(w, "stats");
@@ -1863,9 +1863,9 @@ SGStatus sg_api_write_solution(const SGContext *ctx, ShJsonWriter *w,
         }
         sh_json_write_array_end(w);
     } else if (solve_status == SG_STATUS_INFEASIBLE) {
-        sh_json_write_kv_string(w, "status", "infeasible");
+        sh_json_write_kv_string(w, "status", "INFEASIBLE");
     } else {
-        sh_json_write_kv_string(w, "status", "error");
+        sh_json_write_kv_string(w, "status", "ERROR");
     }
 
     /* Error string (always present, empty on success) */
@@ -1985,7 +1985,7 @@ char *sg_api_solve(const char *json_body, size_t body_len,
                 uint32_t route_count, ri, unassigned_count;
 
                 sg_get_stats(ctx, &stats);
-                sh_json_write_kv_string(&w, "status", "ok");
+                sh_json_write_kv_string(&w, "status", "OK");
 
                 sh_json_write_key(&w, "stats");
                 sh_json_write_object_start(&w);
@@ -2052,7 +2052,7 @@ char *sg_api_solve(const char *json_body, size_t body_len,
                 }
                 sh_json_write_array_end(&w);
             } else {
-                sh_json_write_kv_string(&w, "status", "error");
+                sh_json_write_kv_string(&w, "status", "ERROR");
             }
 
             /* Violations array */
@@ -2185,7 +2185,7 @@ static char *sg_api_stats(size_t *out_len) {
     sh_json_write_object_start(&w);
     sh_json_write_kv_string(&w, "service", "surge");
     sh_json_write_kv_string(&w, "version", sg_version());
-    sh_json_write_kv_string(&w, "status", "ok");
+    sh_json_write_kv_string(&w, "status", "OK");
     sh_json_write_object_end(&w);
 
     if (sh_json_writer_error(&w) || !jb.buf) {

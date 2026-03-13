@@ -56,7 +56,7 @@ extern "C" {
  *
  * @response_json
  * {
- *   "status": "ok",
+ *   "status": "OK",
  *   "stats": {
  *     "iterations": 1000,
  *     "total_cost": 12345.67,
@@ -105,7 +105,7 @@ extern "C" {
  * {
  *   "service": "surge",
  *   "version": "0.1.0-dev",
- *   "status": "ok"
+ *   "status": "OK"
  * }
  *
  * @example
