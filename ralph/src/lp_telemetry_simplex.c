@@ -798,6 +798,76 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_original_exclus
     solver->telemetry.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions++;
 }
 
+void lp_telemetry_record_phase2_pivot_geometry(SimplexSolver *solver,
+                                               double theta,
+                                               double dir_inf,
+                                               double pivot_abs) {
+    double pivot_ratio = 0.0;
+
+    if (!solver_telemetry_enabled(solver)) return;
+
+    if (theta <= 1e-9) {
+        solver->telemetry.perf_phase2_theta_le_1e_9++;
+    } else if (theta <= 1e-6) {
+        solver->telemetry.perf_phase2_theta_le_1e_6++;
+    } else if (theta <= 1e-3) {
+        solver->telemetry.perf_phase2_theta_le_1e_3++;
+    } else {
+        solver->telemetry.perf_phase2_theta_gt_1e_3++;
+    }
+
+    solver->telemetry.perf_phase2_weak_pivot_samples++;
+    if (dir_inf > 0.0) {
+        pivot_ratio = pivot_abs / dir_inf;
+    }
+    solver->telemetry.perf_phase2_weak_pivot_ratio_total += pivot_ratio;
+    if (solver->telemetry.perf_phase2_weak_pivot_samples == 1 ||
+        pivot_ratio < solver->telemetry.perf_phase2_weak_pivot_ratio_min) {
+        solver->telemetry.perf_phase2_weak_pivot_ratio_min = pivot_ratio;
+    }
+
+    if (pivot_ratio <= 1e-8) {
+        solver->telemetry.perf_phase2_weak_pivot_ratio_le_1e_8++;
+    } else if (pivot_ratio <= 1e-6) {
+        solver->telemetry.perf_phase2_weak_pivot_ratio_le_1e_6++;
+    } else if (pivot_ratio <= 1e-4) {
+        solver->telemetry.perf_phase2_weak_pivot_ratio_le_1e_4++;
+    } else {
+        solver->telemetry.perf_phase2_weak_pivot_ratio_gt_1e_4++;
+    }
+}
+
+void lp_telemetry_record_phase2_devex_reset(SimplexSolver *solver,
+                                            int devex_age) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase2_devex_reset_count++;
+    if (devex_age > solver->telemetry.perf_phase2_devex_age_max) {
+        solver->telemetry.perf_phase2_devex_age_max = devex_age;
+    }
+}
+
+void lp_telemetry_record_phase2_degenerate_refactor(SimplexSolver *solver,
+                                                    int reason,
+                                                    int lu_health_triggered,
+                                                    int safety_forced) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase2_degen_refactor_calls++;
+    if (reason == RALPH_REFACTOR_REASON_RATIO_RECOVERY) {
+        solver->telemetry.perf_phase2_degen_refactor_ratio_recovery++;
+    } else if (reason == RALPH_REFACTOR_REASON_PIVOT_RECOVERY) {
+        solver->telemetry.perf_phase2_degen_refactor_pivot_recovery++;
+    } else if (reason == RALPH_REFACTOR_REASON_PERIODIC) {
+        if (lu_health_triggered) {
+            solver->telemetry.perf_phase2_degen_refactor_periodic_lu_health++;
+        } else {
+            solver->telemetry.perf_phase2_degen_refactor_periodic_policy++;
+        }
+    }
+    if (safety_forced) {
+        solver->telemetry.perf_phase2_degen_refactor_safety_forced++;
+    }
+}
+
 void lp_telemetry_record_pricing(SimplexSolver *solver,
                                  int phase,
                                  double elapsed_ms) {

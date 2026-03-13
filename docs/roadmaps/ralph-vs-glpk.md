@@ -1787,6 +1787,81 @@ Verification:
   `fffff800`
 - require no regression on the Week 1 and Week 2 families
 
+Progress:
+- `W3.1` phase-2 degeneracy telemetry baseline is now in the solver.
+- Added measurement-only counters for:
+  - degenerate episode count / max streak
+  - theta severity buckets
+  - weak-pivot ratio buckets
+  - repeated entering / leaving streaks
+  - Bland pricing iterations and enter/exit episodes
+  - adaptive Devex-partial iterations
+  - perturb applications
+  - Devex reset count / max age
+  - refactors that occur while already inside a degenerate episode
+- Validation:
+  - `make -C ralph test-lp-telemetry-solver` passed
+  - `make -C ralph build-ralph-benchmark` passed
+  - `make -C ralph test-netlib-gate-small` passed
+    - artifact: `/tmp/netlib-regression-gate-20260313-160703`
+  - `make -C ralph test-netlib-gate` passed baseline-clean
+    - `84` files
+    - `22` timeouts
+    - `0` status/objective/invalid mismatches
+    - `0` dense fallback files
+    - artifact: `/tmp/netlib-regression-gate-20260313-160716`
+
+Focused Week 3 finding:
+- the current Week 3 timeout family does **not** yet reach phase 2 on the
+  current baseline
+- direct focused runs:
+  - `bnl1.mps`: `1083.956 ms`, `4016` iterations, `phase1.refactor_calls=647`,
+    `phase2.pivot_calls=0`
+  - `bnl2.mps`: `4238.978 ms`, `9831` iterations, `phase1.refactor_calls=287`,
+    `phase2.pivot_calls=0`
+  - `d6cube.mps`: `25534.024 ms`, `14044` iterations,
+    `phase1.refactor_calls=11124`,
+    `phase1.failed_stabilize_events=11004`,
+    `phase1.dir_stabilize_refactor_from_force_extreme_dir=11005`,
+    `phase2.pivot_calls=0`
+  - `degen3.mps`: `4072.026 ms`, `19700` iterations, `phase1.refactor_calls=275`,
+    `phase2.pivot_calls=0`
+  - `fffff800.mps`: `3745.625 ms`, `1099` iterations, `phase1.refactor_calls=235`,
+    `phase2.pivot_calls=0`
+  - `greenbea.mps`: `8726.209 ms`, `27301` iterations,
+    `phase1.refactor_calls=697`,
+    `phase1.failed_stabilize_events=246`,
+    `phase2.pivot_calls=0`
+  - `maros.mps`: `1141.091 ms`, `3747` iterations,
+    `phase1.refactor_calls=388`,
+    `phase1.failed_stabilize_events=189`,
+    `phase2.pivot_calls=0`
+- focused summary TSV:
+  - `/tmp/w3_phase3/summary.tsv`
+
+Sanity check on solved phase-2-degenerate cases:
+- the new phase-2 counters are live; the timeout family above is simply not in
+  phase 2 yet
+- `25fv47.mps`: optimal, `1587.777 ms`, `5021` phase-2 pivots,
+  `degenerate_episodes=527`, `degenerate_streak_max=9`,
+  `devex_reset_count=2`, `degen_refactor_calls=136`
+- `scagr25.mps`: optimal, `43.423 ms`, `250` phase-2 pivots,
+  `degenerate_episodes=8`, `degenerate_streak_max=8`,
+  `weak_pivot_ratio_le_1e_8=3`, `degen_refactor_calls=1`
+
+Conclusion:
+- Week 3 needs to split into two tracks:
+  1. current timeout family: phase-1 degenerate treadmill work first
+  2. later phase-2 long-run control work on cases that actually reach phase 2
+- The immediate next Week 3 slice should therefore **not** start with Devex
+  weight maintenance in phase 2 for the timeout22 family.
+- It should target the phase-1 degenerate treadmill on
+  `d6cube` / `greenbea` / `maros`-class cases:
+  - repeated `force_extreme_dir` refactors
+  - repeated failed-stabilize alternates
+  - no-pivot ladder churn
+  - safety-refactor loops
+
 ### Week 4: Capacity / Policy Decoupling
 
 Goal:
