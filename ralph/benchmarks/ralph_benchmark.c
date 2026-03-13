@@ -411,6 +411,20 @@ typedef struct {
     int phase1_failed_stabilize_retry_shadow_next_ratio_breakdown;
     int phase1_failed_stabilize_retry_shadow_next_pivot_fail;
     int phase1_failed_stabilize_retry_shadow_next_pivot_success;
+    int phase1_failed_stabilize_retry_shadow_followup_dir_samples;
+    int phase1_failed_stabilize_retry_shadow_followup_dir_bound_geometry;
+    int phase1_failed_stabilize_retry_shadow_followup_dir_bound_flip;
+    int phase1_failed_stabilize_retry_shadow_followup_dir_tiny_theta;
+    int phase1_failed_stabilize_retry_shadow_followup_dir_weak_leaving;
+    int phase1_failed_stabilize_retry_shadow_followup_dir_ftran_shape;
+    int phase1_failed_stabilize_retry_shadow_followup_dir_nnz_total;
+    int phase1_failed_stabilize_retry_shadow_followup_dir_nnz_max;
+    double phase1_failed_stabilize_retry_shadow_followup_dir_inf_total;
+    double phase1_failed_stabilize_retry_shadow_followup_dir_inf_max;
+    double phase1_failed_stabilize_retry_shadow_followup_pivot_abs_total;
+    double phase1_failed_stabilize_retry_shadow_followup_pivot_abs_max;
+    double phase1_failed_stabilize_retry_shadow_followup_theta_total;
+    double phase1_failed_stabilize_retry_shadow_followup_theta_max;
     int phase1_failed_stabilize_retry_selector_bland_arms;
     int phase1_failed_stabilize_retry_selector_guarded_arms;
     int phase1_failed_stabilize_retry_selector_guarded_eligible_total;
@@ -1601,6 +1615,34 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_failed_stabilize_retry_shadow_next_pivot_fail;
             result.phase1_failed_stabilize_retry_shadow_next_pivot_success =
                 solver_tel.perf_phase1_failed_stabilize_retry_shadow_next_pivot_success;
+            result.phase1_failed_stabilize_retry_shadow_followup_dir_samples =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_followup_dir_samples;
+            result.phase1_failed_stabilize_retry_shadow_followup_dir_bound_geometry =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_followup_dir_bound_geometry;
+            result.phase1_failed_stabilize_retry_shadow_followup_dir_bound_flip =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_followup_dir_bound_flip;
+            result.phase1_failed_stabilize_retry_shadow_followup_dir_tiny_theta =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_followup_dir_tiny_theta;
+            result.phase1_failed_stabilize_retry_shadow_followup_dir_weak_leaving =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_followup_dir_weak_leaving;
+            result.phase1_failed_stabilize_retry_shadow_followup_dir_ftran_shape =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_followup_dir_ftran_shape;
+            result.phase1_failed_stabilize_retry_shadow_followup_dir_nnz_total =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_followup_dir_nnz_total;
+            result.phase1_failed_stabilize_retry_shadow_followup_dir_nnz_max =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_followup_dir_nnz_max;
+            result.phase1_failed_stabilize_retry_shadow_followup_dir_inf_total =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_followup_dir_inf_total;
+            result.phase1_failed_stabilize_retry_shadow_followup_dir_inf_max =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_followup_dir_inf_max;
+            result.phase1_failed_stabilize_retry_shadow_followup_pivot_abs_total =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_followup_pivot_abs_total;
+            result.phase1_failed_stabilize_retry_shadow_followup_pivot_abs_max =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_followup_pivot_abs_max;
+            result.phase1_failed_stabilize_retry_shadow_followup_theta_total =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_followup_theta_total;
+            result.phase1_failed_stabilize_retry_shadow_followup_theta_max =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_followup_theta_max;
             result.phase1_failed_stabilize_retry_selector_bland_arms =
                 solver_tel.perf_phase1_failed_stabilize_retry_selector_bland_arms;
             result.phase1_failed_stabilize_retry_selector_guarded_arms =
@@ -3215,6 +3257,34 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_failed_stabilize_retry_shadow_next_pivot_fail);
     fprintf(out, "      \"failed_stabilize_retry_shadow_next_pivot_success\": %d,\n",
             ralph->phase1_failed_stabilize_retry_shadow_next_pivot_success);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_followup_dir_samples\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_followup_dir_samples);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_followup_dir_bound_geometry\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_followup_dir_bound_geometry);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_followup_dir_bound_flip\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_followup_dir_bound_flip);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_followup_dir_tiny_theta\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_followup_dir_tiny_theta);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_followup_dir_weak_leaving\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_followup_dir_weak_leaving);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_followup_dir_ftran_shape\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_followup_dir_ftran_shape);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_followup_dir_nnz_total\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_followup_dir_nnz_total);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_followup_dir_nnz_max\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_followup_dir_nnz_max);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_followup_dir_inf_total\": %.6f,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_followup_dir_inf_total);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_followup_dir_inf_max\": %.6f,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_followup_dir_inf_max);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_followup_pivot_abs_total\": %.6f,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_followup_pivot_abs_total);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_followup_pivot_abs_max\": %.6f,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_followup_pivot_abs_max);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_followup_theta_total\": %.6f,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_followup_theta_total);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_followup_theta_max\": %.6f,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_followup_theta_max);
     fprintf(out, "      \"failed_stabilize_retry_selector_bland_arms\": %d,\n",
             ralph->phase1_failed_stabilize_retry_selector_bland_arms);
     fprintf(out, "      \"failed_stabilize_retry_selector_guarded_arms\": %d,\n",

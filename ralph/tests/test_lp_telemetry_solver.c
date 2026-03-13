@@ -963,6 +963,42 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 shadow next pivot fail");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_next_pivot_success, 1,
                   "record: phase1 shadow next pivot success");
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_followup_direction(
+        &solver, -2, 1.0e-9, 2.0e5, 48, 2.0e-2);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_followup_direction(
+        &solver, 7, 1.0e-9, 3.0e5, 64, 3.0e-2);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_followup_direction(
+        &solver, 9, 1.0e-3, 4.0e5, 80, 1.0e-2);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_followup_direction(
+        &solver, 11, 1.0e-2, 5.0e5, 96, 5.0);
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_samples, 4,
+                  "record: phase1 shadow followup dir samples");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_bound_geometry, 2,
+                  "record: phase1 shadow followup dir bound geometry");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_bound_flip, 1,
+                  "record: phase1 shadow followup dir bound flip");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_tiny_theta, 2,
+                  "record: phase1 shadow followup dir tiny theta");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_weak_leaving, 1,
+                  "record: phase1 shadow followup dir weak leaving");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_ftran_shape, 1,
+                  "record: phase1 shadow followup dir ftran shape");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_nnz_total, 288,
+                  "record: phase1 shadow followup dir nnz total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_nnz_max, 96,
+                  "record: phase1 shadow followup dir nnz max");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_inf_total, 1400000.0,
+                  "record: phase1 shadow followup dir inf total");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_inf_max, 500000.0,
+                  "record: phase1 shadow followup dir inf max");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_pivot_abs_total, 5.06,
+                  "record: phase1 shadow followup pivot abs total");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_pivot_abs_max, 5.0,
+                  "record: phase1 shadow followup pivot abs max");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_theta_total, 0.011000002,
+                  "record: phase1 shadow followup theta total");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_theta_max, 0.01,
+                  "record: phase1 shadow followup theta max");
 
     lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
     lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
@@ -1252,6 +1288,20 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_next_ratio_breakdown = 4;
     solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_next_pivot_fail = 3;
     solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_next_pivot_success = 5;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_samples = 6;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_bound_geometry = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_bound_flip = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_tiny_theta = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_weak_leaving = 3;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_ftran_shape = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_nnz_total = 81;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_nnz_max = 21;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_inf_total = 915000.0;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_inf_max = 410000.0;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_pivot_abs_total = 8.75;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_pivot_abs_max = 4.5;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_theta_total = 0.0065;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_theta_max = 0.0030;
     solver.telemetry.perf_dual_bound_flip_applied = 13;
     solver.telemetry.perf_dual_bound_flip_startup = 5;
     solver.telemetry.perf_dual_bound_flip_iterative = 8;
@@ -1597,6 +1647,34 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 shadow next pivot fail");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_next_pivot_success, 5,
                   "solver_snapshot: phase1 shadow next pivot success");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_followup_dir_samples, 6,
+                  "solver_snapshot: phase1 shadow followup dir samples");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_followup_dir_bound_geometry, 2,
+                  "solver_snapshot: phase1 shadow followup dir bound geometry");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_followup_dir_bound_flip, 1,
+                  "solver_snapshot: phase1 shadow followup dir bound flip");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_followup_dir_tiny_theta, 2,
+                  "solver_snapshot: phase1 shadow followup dir tiny theta");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_followup_dir_weak_leaving, 3,
+                  "solver_snapshot: phase1 shadow followup dir weak leaving");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_followup_dir_ftran_shape, 1,
+                  "solver_snapshot: phase1 shadow followup dir ftran shape");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_followup_dir_nnz_total, 81,
+                  "solver_snapshot: phase1 shadow followup dir nnz total");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_followup_dir_nnz_max, 21,
+                  "solver_snapshot: phase1 shadow followup dir nnz max");
+    ASSERT_DBL_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_followup_dir_inf_total, 915000.0,
+                  "solver_snapshot: phase1 shadow followup dir inf total");
+    ASSERT_DBL_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_followup_dir_inf_max, 410000.0,
+                  "solver_snapshot: phase1 shadow followup dir inf max");
+    ASSERT_DBL_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_followup_pivot_abs_total, 8.75,
+                  "solver_snapshot: phase1 shadow followup pivot abs total");
+    ASSERT_DBL_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_followup_pivot_abs_max, 4.5,
+                  "solver_snapshot: phase1 shadow followup pivot abs max");
+    ASSERT_DBL_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_followup_theta_total, 0.0065,
+                  "solver_snapshot: phase1 shadow followup theta total");
+    ASSERT_DBL_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_followup_theta_max, 0.0030,
+                  "solver_snapshot: phase1 shadow followup theta max");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_applied, 13,
                   "solver_snapshot: dual bound flips aggregate");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_startup, 5,
