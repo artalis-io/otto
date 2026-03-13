@@ -1927,6 +1927,75 @@ Next Week 3 target:
 - in other words: the next causal question is about the effectiveness of the
   `force_extreme_dir` branch, not about whether the branch activates
 
+### `W3.3` post-`force_extreme_dir` follow-up classification
+
+Status:
+- landed as a telemetry-only baseline
+- full gate stayed baseline-clean
+
+What was added:
+- exact phase-1 telemetry for what happens immediately after a
+  `force_extreme_dir` refactor:
+  - immediate stabilize
+  - immediate ratio breakdown
+  - immediate failed-stabilize
+  - post-`DIR_SKIP` retry / dual-rescue / forced-refactor
+  - next event after that follow-up:
+    failed-stabilize / ratio breakdown / pivot fail / pivot success
+
+Validation:
+- `make -C ralph test-lp-telemetry-solver` passed (`695/695`)
+- `make -C ralph test-simplex-policy` passed (`158/158`)
+- `make -C ralph build-ralph-benchmark` passed
+- `make -C ralph test-netlib-gate-small` passed
+  - artifact: `/tmp/netlib-regression-gate-20260313-195154`
+- `make -C ralph test-netlib-gate` passed baseline-clean
+  - `84` files
+  - `22` timeouts
+  - `0` status/objective/invalid mismatches
+  - `0` dense fallback files
+  - artifact: `/tmp/netlib-regression-gate-20260313-195241`
+
+Focused findings:
+- `d6cube.mps`
+  - `dir_stabilize_refactor_from_force_extreme_dir=9222`
+  - `force_extreme_followup_stabilized=1`
+  - `force_extreme_followup_failed_stabilize=9221`
+  - `force_extreme_followup_post_dir_skip_retry=9221`
+  - `force_extreme_followup_next_failed_stabilize=9219`
+  - `force_extreme_followup_next_pivot_success=1`
+- `greenbea.mps`
+  - `dir_stabilize_refactor_from_force_extreme_dir=250`
+  - `force_extreme_followup_stabilized=0`
+  - `force_extreme_followup_failed_stabilize=250`
+  - `force_extreme_followup_post_dir_skip_retry=240`
+  - `force_extreme_followup_post_dir_skip_forced_refactor=10`
+  - `force_extreme_followup_next_failed_stabilize=249`
+- `maros.mps`
+  - `dir_stabilize_refactor_from_force_extreme_dir=193`
+  - `force_extreme_followup_stabilized=0`
+  - `force_extreme_followup_failed_stabilize=193`
+  - `force_extreme_followup_post_dir_skip_retry=189`
+  - `force_extreme_followup_post_dir_skip_forced_refactor=4`
+  - `force_extreme_followup_next_failed_stabilize=190`
+  - `force_extreme_followup_next_pivot_success=2`
+
+Conclusion:
+- the Week 3 treadmill is not mainly “refactor and recover”
+- on the hard family, `force_extreme_dir` almost never stabilizes the search
+  direction
+- it overwhelmingly feeds:
+  `force_extreme_dir -> failed_stabilize -> DIR_SKIP -> next_failed_stabilize`
+- so the next Week 3 lever should target the effectiveness of the
+  `force_extreme_dir` branch itself, not force-pivot budget and not broader
+  retry-lane alternate scoring
+
+Next Week 3 target:
+- classify the `force_extreme_dir` failed-stabilize tail by direction shape
+  and leaving geometry, then decide whether the right fix is:
+  - less eager `force_extreme_dir` entry on the treadmill
+  - or a different post-refactor stabilization path for that branch
+
 ### Week 4: Capacity / Policy Decoupling
 
 Goal:

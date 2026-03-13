@@ -413,6 +413,16 @@ typedef struct {
     int phase1_failed_stabilize_retry_shadow_next_ratio_breakdown;
     int phase1_failed_stabilize_retry_shadow_next_pivot_fail;
     int phase1_failed_stabilize_retry_shadow_next_pivot_success;
+    int phase1_force_extreme_followup_stabilized;
+    int phase1_force_extreme_followup_ratio_breakdown;
+    int phase1_force_extreme_followup_failed_stabilize;
+    int phase1_force_extreme_followup_post_dir_skip_retry;
+    int phase1_force_extreme_followup_post_dir_skip_dual_rescue;
+    int phase1_force_extreme_followup_post_dir_skip_forced_refactor;
+    int phase1_force_extreme_followup_next_failed_stabilize;
+    int phase1_force_extreme_followup_next_ratio_breakdown;
+    int phase1_force_extreme_followup_next_pivot_fail;
+    int phase1_force_extreme_followup_next_pivot_success;
     int phase1_failed_stabilize_retry_shadow_followup_dir_samples;
     int phase1_failed_stabilize_retry_shadow_followup_dir_bound_geometry;
     int phase1_failed_stabilize_retry_shadow_followup_dir_bound_flip;
@@ -1672,6 +1682,26 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_failed_stabilize_retry_shadow_next_pivot_fail;
             result.phase1_failed_stabilize_retry_shadow_next_pivot_success =
                 solver_tel.perf_phase1_failed_stabilize_retry_shadow_next_pivot_success;
+            result.phase1_force_extreme_followup_stabilized =
+                solver_tel.perf_phase1_force_extreme_followup_stabilized;
+            result.phase1_force_extreme_followup_ratio_breakdown =
+                solver_tel.perf_phase1_force_extreme_followup_ratio_breakdown;
+            result.phase1_force_extreme_followup_failed_stabilize =
+                solver_tel.perf_phase1_force_extreme_followup_failed_stabilize;
+            result.phase1_force_extreme_followup_post_dir_skip_retry =
+                solver_tel.perf_phase1_force_extreme_followup_post_dir_skip_retry;
+            result.phase1_force_extreme_followup_post_dir_skip_dual_rescue =
+                solver_tel.perf_phase1_force_extreme_followup_post_dir_skip_dual_rescue;
+            result.phase1_force_extreme_followup_post_dir_skip_forced_refactor =
+                solver_tel.perf_phase1_force_extreme_followup_post_dir_skip_forced_refactor;
+            result.phase1_force_extreme_followup_next_failed_stabilize =
+                solver_tel.perf_phase1_force_extreme_followup_next_failed_stabilize;
+            result.phase1_force_extreme_followup_next_ratio_breakdown =
+                solver_tel.perf_phase1_force_extreme_followup_next_ratio_breakdown;
+            result.phase1_force_extreme_followup_next_pivot_fail =
+                solver_tel.perf_phase1_force_extreme_followup_next_pivot_fail;
+            result.phase1_force_extreme_followup_next_pivot_success =
+                solver_tel.perf_phase1_force_extreme_followup_next_pivot_success;
             result.phase1_failed_stabilize_retry_shadow_followup_dir_samples =
                 solver_tel.perf_phase1_failed_stabilize_retry_shadow_followup_dir_samples;
             result.phase1_failed_stabilize_retry_shadow_followup_dir_bound_geometry =
@@ -3389,6 +3419,26 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_failed_stabilize_retry_shadow_next_pivot_fail);
     fprintf(out, "      \"failed_stabilize_retry_shadow_next_pivot_success\": %d,\n",
             ralph->phase1_failed_stabilize_retry_shadow_next_pivot_success);
+    fprintf(out, "      \"force_extreme_followup_stabilized\": %d,\n",
+            ralph->phase1_force_extreme_followup_stabilized);
+    fprintf(out, "      \"force_extreme_followup_ratio_breakdown\": %d,\n",
+            ralph->phase1_force_extreme_followup_ratio_breakdown);
+    fprintf(out, "      \"force_extreme_followup_failed_stabilize\": %d,\n",
+            ralph->phase1_force_extreme_followup_failed_stabilize);
+    fprintf(out, "      \"force_extreme_followup_post_dir_skip_retry\": %d,\n",
+            ralph->phase1_force_extreme_followup_post_dir_skip_retry);
+    fprintf(out, "      \"force_extreme_followup_post_dir_skip_dual_rescue\": %d,\n",
+            ralph->phase1_force_extreme_followup_post_dir_skip_dual_rescue);
+    fprintf(out, "      \"force_extreme_followup_post_dir_skip_forced_refactor\": %d,\n",
+            ralph->phase1_force_extreme_followup_post_dir_skip_forced_refactor);
+    fprintf(out, "      \"force_extreme_followup_next_failed_stabilize\": %d,\n",
+            ralph->phase1_force_extreme_followup_next_failed_stabilize);
+    fprintf(out, "      \"force_extreme_followup_next_ratio_breakdown\": %d,\n",
+            ralph->phase1_force_extreme_followup_next_ratio_breakdown);
+    fprintf(out, "      \"force_extreme_followup_next_pivot_fail\": %d,\n",
+            ralph->phase1_force_extreme_followup_next_pivot_fail);
+    fprintf(out, "      \"force_extreme_followup_next_pivot_success\": %d,\n",
+            ralph->phase1_force_extreme_followup_next_pivot_success);
     fprintf(out, "      \"failed_stabilize_retry_shadow_followup_dir_samples\": %d,\n",
             ralph->phase1_failed_stabilize_retry_shadow_followup_dir_samples);
     fprintf(out, "      \"failed_stabilize_retry_shadow_followup_dir_bound_geometry\": %d,\n",
