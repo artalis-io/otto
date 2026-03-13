@@ -7962,8 +7962,8 @@ static void test_json_api_solve_basic(void) {
     char *resp = sg_api_solve(json, strlen(json), &status_code, &out_len);
     assert(resp != NULL);
     assert(status_code == 200);
-    assert(strstr(resp, "\"status\":\"ok\"") != NULL ||
-           strstr(resp, "\"status\":\"limit\"") != NULL);
+    assert(strstr(resp, "\"status\":\"OK\"") != NULL ||
+           strstr(resp, "\"status\":\"LIMIT\"") != NULL);
     /* Should have routes array */
     assert(strstr(resp, "\"routes\"") != NULL);
     /* Should have stops */
@@ -10736,8 +10736,8 @@ static void test_time_bracket_json_roundtrip(void) {
     assert(result != NULL);
     assert(status_code == 200);
     /* Parse response to verify it solved */
-    assert(strstr(result, "\"status\":\"ok\"") != NULL ||
-           strstr(result, "\"status\": \"ok\"") != NULL);
+    assert(strstr(result, "\"status\":\"OK\"") != NULL ||
+           strstr(result, "\"status\": \"OK\"") != NULL);
     free(result);
 }
 
@@ -10772,8 +10772,8 @@ static void test_time_bracket_profile_json(void) {
     char *result = sg_api_solve(json, strlen(json), &status_code, &out_len);
     assert(result != NULL);
     assert(status_code == 200);
-    assert(strstr(result, "\"status\":\"ok\"") != NULL ||
-           strstr(result, "\"status\": \"ok\"") != NULL);
+    assert(strstr(result, "\"status\":\"OK\"") != NULL ||
+           strstr(result, "\"status\": \"OK\"") != NULL);
     free(result);
 }
 
@@ -11036,8 +11036,8 @@ static void test_validate_plan_json(void) {
     assert(strstr(resp, "\"violations\"") != NULL);
     assert(strstr(resp, "\"routes\"") != NULL);
     assert(strstr(resp, "\"arrival\"") != NULL);
-    assert(strstr(resp, "\"status\":\"ok\"") != NULL ||
-           strstr(resp, "\"status\": \"ok\"") != NULL);
+    assert(strstr(resp, "\"status\":\"OK\"") != NULL ||
+           strstr(resp, "\"status\": \"OK\"") != NULL);
 
     free(resp);
 }
@@ -12259,8 +12259,8 @@ static void test_lock_json(void) {
     char *resp = sg_api_solve(json, strlen(json), &status_code, &out_len);
     assert(resp != NULL);
     assert(status_code == 200);
-    assert(strstr(resp, "\"status\":\"ok\"") != NULL ||
-           strstr(resp, "\"status\": \"ok\"") != NULL);
+    assert(strstr(resp, "\"status\":\"OK\"") != NULL ||
+           strstr(resp, "\"status\": \"OK\"") != NULL);
     /* All 3 requests should be assigned */
     assert(strstr(resp, "\"unassigned\":0") != NULL ||
            strstr(resp, "\"unassigned\": 0") != NULL);

@@ -427,7 +427,7 @@ test.describe('WASM API Demos', () => {
 
       expect(result.status).toBe(200);
       expect(result.body.service).toBe('surge');
-      expect(result.body.status).toBe('ok');
+      expect(result.body.status).toBe('OK');
     });
 
     test('solve endpoint returns valid solution with routes', async ({ page }) => {
@@ -460,7 +460,7 @@ test.describe('WASM API Demos', () => {
       });
 
       expect(result.status).toBe(200);
-      expect(result.body.status).toBe('ok');
+      expect(result.body.status).toBe('OK');
       expect(result.body.stats).toBeDefined();
       expect(result.body.stats.vehicles_used).toBeGreaterThan(0);
       expect(result.body.stats.total_distance).toBeGreaterThan(0);
