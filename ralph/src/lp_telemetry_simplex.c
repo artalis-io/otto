@@ -6,6 +6,8 @@
 
 #include "lp.h"
 
+#include <math.h>
+
 static int solver_telemetry_enabled(const SimplexSolver *solver) {
     return solver && solver->telemetry_enabled;
 }
@@ -440,6 +442,38 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_pool_sample(
     }
     if (best_differs_from_bland) {
         solver->telemetry.perf_phase1_failed_stabilize_retry_pool_best_differs_samples++;
+    }
+}
+
+void lp_telemetry_record_phase1_failed_stabilize_retry_selector_eval(
+    SimplexSolver *solver,
+    int best_differs_from_bland,
+    double bland_score,
+    double best_score) {
+    double score_ratio = 0.0;
+
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_selector_eval_samples++;
+    if (best_differs_from_bland) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_selector_eval_best_differs_samples++;
+    }
+    if (!isfinite(bland_score) || !isfinite(best_score) ||
+        bland_score <= 0.0 || best_score <= 0.0) {
+        return;
+    }
+    score_ratio = best_score / bland_score;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_total +=
+        score_ratio;
+    if (score_ratio >
+        solver->telemetry.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_max) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_max =
+            score_ratio;
+    }
+    if (score_ratio >= 2.0) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_2++;
+    }
+    if (score_ratio >= 4.0) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4++;
     }
 }
 

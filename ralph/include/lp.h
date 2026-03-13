@@ -916,6 +916,12 @@ typedef struct {
     int perf_phase1_failed_stabilize_retry_pool_eligible_max;
     int perf_phase1_failed_stabilize_retry_pool_singleton_samples;
     int perf_phase1_failed_stabilize_retry_pool_best_differs_samples;
+    int perf_phase1_failed_stabilize_retry_selector_eval_samples;
+    int perf_phase1_failed_stabilize_retry_selector_eval_best_differs_samples;
+    double perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_total;
+    double perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_max;
+    int perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_2;
+    int perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4;
     int perf_phase1_failed_stabilize_retry_selector_bland_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total;
@@ -1427,6 +1433,12 @@ typedef struct {
     int perf_phase1_failed_stabilize_retry_pool_eligible_max;
     int perf_phase1_failed_stabilize_retry_pool_singleton_samples;
     int perf_phase1_failed_stabilize_retry_pool_best_differs_samples;
+    int perf_phase1_failed_stabilize_retry_selector_eval_samples;
+    int perf_phase1_failed_stabilize_retry_selector_eval_best_differs_samples;
+    double perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_total;
+    double perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_max;
+    int perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_2;
+    int perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4;
     int perf_phase1_failed_stabilize_retry_selector_bland_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total;
@@ -2076,6 +2088,11 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_pool_sample(
     SimplexSolver *solver,
     int eligible_count,
     int best_differs_from_bland);
+void lp_telemetry_record_phase1_failed_stabilize_retry_selector_eval(
+    SimplexSolver *solver,
+    int best_differs_from_bland,
+    double bland_score,
+    double best_score);
 void lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
     SimplexSolver *solver,
     int used_guarded,
