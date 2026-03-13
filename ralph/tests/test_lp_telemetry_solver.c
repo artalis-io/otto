@@ -190,6 +190,26 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_failed = 1;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_guard_arms = 3;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions = 2;
+    solver.telemetry.perf_phase1_window_pressure_windows_started = 4;
+    solver.telemetry.perf_phase1_window_pressure_progress_resets = 3;
+    solver.telemetry.perf_phase1_window_pressure_force_pivot_arms = 2;
+    solver.telemetry.perf_phase1_window_pressure_force_pivot_blocked_pending = 1;
+    solver.telemetry.perf_phase1_window_pressure_force_pivot_blocked_budget = 2;
+    solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_under_trigger = 3;
+    solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_failed_share = 4;
+    solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_dir_skip_share = 5;
+    solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_local_fail = 6;
+    solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_alternation = 7;
+    solver.telemetry.perf_phase1_window_pressure_event_total = 17;
+    solver.telemetry.perf_phase1_window_pressure_failed_stabilize_total = 9;
+    solver.telemetry.perf_phase1_window_pressure_dir_skip_total = 8;
+    solver.telemetry.perf_phase1_window_pressure_local_memory_fail_total = 6;
+    solver.telemetry.perf_phase1_window_pressure_alternation_total = 11;
+    solver.telemetry.perf_phase1_window_pressure_event_max = 7;
+    solver.telemetry.perf_phase1_window_pressure_failed_stabilize_max = 4;
+    solver.telemetry.perf_phase1_window_pressure_dir_skip_max = 3;
+    solver.telemetry.perf_phase1_window_pressure_local_memory_fail_max = 2;
+    solver.telemetry.perf_phase1_window_pressure_alternation_max = 5;
     solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_arms = 2;
     solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions = 1;
     solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry = 5;
@@ -536,6 +556,46 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 failed stabilize retry dir guard arms");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions, 0,
                   "reset: phase1 failed stabilize retry dir guard original exclusions");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_windows_started, 0,
+                  "reset: phase1 window pressure windows started");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_progress_resets, 0,
+                  "reset: phase1 window pressure progress resets");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_force_pivot_arms, 0,
+                  "reset: phase1 window pressure force-pivot arms");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_force_pivot_blocked_pending, 0,
+                  "reset: phase1 window pressure force-pivot blocked pending");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_force_pivot_blocked_budget, 0,
+                  "reset: phase1 window pressure force-pivot blocked budget");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_under_trigger, 0,
+                  "reset: phase1 window pressure force-pivot reject under trigger");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_failed_share, 0,
+                  "reset: phase1 window pressure force-pivot reject failed share");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_dir_skip_share, 0,
+                  "reset: phase1 window pressure force-pivot reject dir-skip share");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_local_fail, 0,
+                  "reset: phase1 window pressure force-pivot reject local fail");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_alternation, 0,
+                  "reset: phase1 window pressure force-pivot reject alternation");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_event_total, 0,
+                  "reset: phase1 window pressure event total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_failed_stabilize_total, 0,
+                  "reset: phase1 window pressure failed-stabilize total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_dir_skip_total, 0,
+                  "reset: phase1 window pressure dir-skip total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_local_memory_fail_total, 0,
+                  "reset: phase1 window pressure local-memory-fail total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_alternation_total, 0,
+                  "reset: phase1 window pressure alternation total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_event_max, 0,
+                  "reset: phase1 window pressure event max");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_failed_stabilize_max, 0,
+                  "reset: phase1 window pressure failed-stabilize max");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_dir_skip_max, 0,
+                  "reset: phase1 window pressure dir-skip max");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_local_memory_fail_max, 0,
+                  "reset: phase1 window pressure local-memory-fail max");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_alternation_max, 0,
+                  "reset: phase1 window pressure alternation max");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_arms, 0,
                   "reset: phase1 failed stabilize retry shadow guard arms");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions, 0,
@@ -945,6 +1005,66 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 failed-stabilize retry dir guard arms");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions, 1,
                   "record: phase1 failed-stabilize retry dir guard original exclusions");
+    lp_telemetry_record_phase1_window_pressure_event(
+        &solver, 1, 0, 1, 0, 1, 1, 0, 1, 0);
+    lp_telemetry_record_phase1_window_pressure_event(
+        &solver, 0, 1, 0, 1, 2, 1, 1, 1, 1);
+    lp_telemetry_record_phase1_window_pressure_event(
+        &solver, 1, 0, 0, 1, 3, 2, 1, 1, 2);
+    lp_telemetry_record_phase1_window_pressure_progress_reset(&solver);
+    lp_telemetry_record_phase1_window_pressure_force_pivot_arm(&solver);
+    lp_telemetry_record_phase1_window_pressure_force_pivot_blocked_pending(&solver);
+    lp_telemetry_record_phase1_window_pressure_force_pivot_blocked_budget(&solver);
+    lp_telemetry_record_phase1_window_pressure_force_pivot_reject(
+        &solver, LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_UNDER_TRIGGER);
+    lp_telemetry_record_phase1_window_pressure_force_pivot_reject(
+        &solver, LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_FAILED_SHARE);
+    lp_telemetry_record_phase1_window_pressure_force_pivot_reject(
+        &solver, LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_DIR_SKIP_SHARE);
+    lp_telemetry_record_phase1_window_pressure_force_pivot_reject(
+        &solver, LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_LOCAL_FAIL);
+    lp_telemetry_record_phase1_window_pressure_force_pivot_reject(
+        &solver, LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_ALTERNATION);
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_windows_started, 1,
+                  "record: phase1 window pressure windows started");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_progress_resets, 1,
+                  "record: phase1 window pressure progress resets");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_force_pivot_arms, 1,
+                  "record: phase1 window pressure force-pivot arms");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_force_pivot_blocked_pending, 1,
+                  "record: phase1 window pressure force-pivot blocked pending");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_force_pivot_blocked_budget, 1,
+                  "record: phase1 window pressure force-pivot blocked budget");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_under_trigger, 1,
+                  "record: phase1 window pressure force-pivot reject under trigger");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_failed_share, 1,
+                  "record: phase1 window pressure force-pivot reject failed share");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_dir_skip_share, 1,
+                  "record: phase1 window pressure force-pivot reject dir-skip share");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_local_fail, 1,
+                  "record: phase1 window pressure force-pivot reject local fail");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_alternation, 1,
+                  "record: phase1 window pressure force-pivot reject alternation");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_event_total, 3,
+                  "record: phase1 window pressure event total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_failed_stabilize_total, 2,
+                  "record: phase1 window pressure failed-stabilize total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_dir_skip_total, 1,
+                  "record: phase1 window pressure dir-skip total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_local_memory_fail_total, 1,
+                  "record: phase1 window pressure local-memory-fail total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_alternation_total, 2,
+                  "record: phase1 window pressure alternation total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_event_max, 3,
+                  "record: phase1 window pressure event max");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_failed_stabilize_max, 2,
+                  "record: phase1 window pressure failed-stabilize max");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_dir_skip_max, 1,
+                  "record: phase1 window pressure dir-skip max");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_local_memory_fail_max, 1,
+                  "record: phase1 window pressure local-memory-fail max");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_window_pressure_alternation_max, 2,
+                  "record: phase1 window pressure alternation max");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_arms, 1,
                   "record: phase1 failed-stabilize retry shadow guard arms");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions, 1,
@@ -1279,6 +1399,26 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_failed = 2;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_guard_arms = 4;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions = 3;
+    solver.telemetry.perf_phase1_window_pressure_windows_started = 8;
+    solver.telemetry.perf_phase1_window_pressure_progress_resets = 6;
+    solver.telemetry.perf_phase1_window_pressure_force_pivot_arms = 4;
+    solver.telemetry.perf_phase1_window_pressure_force_pivot_blocked_pending = 2;
+    solver.telemetry.perf_phase1_window_pressure_force_pivot_blocked_budget = 3;
+    solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_under_trigger = 4;
+    solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_failed_share = 5;
+    solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_dir_skip_share = 6;
+    solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_local_fail = 7;
+    solver.telemetry.perf_phase1_window_pressure_force_pivot_reject_alternation = 8;
+    solver.telemetry.perf_phase1_window_pressure_event_total = 29;
+    solver.telemetry.perf_phase1_window_pressure_failed_stabilize_total = 15;
+    solver.telemetry.perf_phase1_window_pressure_dir_skip_total = 14;
+    solver.telemetry.perf_phase1_window_pressure_local_memory_fail_total = 9;
+    solver.telemetry.perf_phase1_window_pressure_alternation_total = 18;
+    solver.telemetry.perf_phase1_window_pressure_event_max = 11;
+    solver.telemetry.perf_phase1_window_pressure_failed_stabilize_max = 6;
+    solver.telemetry.perf_phase1_window_pressure_dir_skip_max = 5;
+    solver.telemetry.perf_phase1_window_pressure_local_memory_fail_max = 4;
+    solver.telemetry.perf_phase1_window_pressure_alternation_max = 9;
     solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_arms = 2;
     solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions = 1;
     solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry = 8;
@@ -1629,6 +1769,46 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 failed stabilize retry dir guard arms");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions, 3,
                   "solver_snapshot: phase1 failed stabilize retry dir guard original exclusions");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_windows_started, 8,
+                  "solver_snapshot: phase1 window pressure windows started");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_progress_resets, 6,
+                  "solver_snapshot: phase1 window pressure progress resets");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_force_pivot_arms, 4,
+                  "solver_snapshot: phase1 window pressure force-pivot arms");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_force_pivot_blocked_pending, 2,
+                  "solver_snapshot: phase1 window pressure force-pivot blocked pending");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_force_pivot_blocked_budget, 3,
+                  "solver_snapshot: phase1 window pressure force-pivot blocked budget");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_force_pivot_reject_under_trigger, 4,
+                  "solver_snapshot: phase1 window pressure force-pivot reject under trigger");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_force_pivot_reject_failed_share, 5,
+                  "solver_snapshot: phase1 window pressure force-pivot reject failed share");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_force_pivot_reject_dir_skip_share, 6,
+                  "solver_snapshot: phase1 window pressure force-pivot reject dir-skip share");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_force_pivot_reject_local_fail, 7,
+                  "solver_snapshot: phase1 window pressure force-pivot reject local fail");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_force_pivot_reject_alternation, 8,
+                  "solver_snapshot: phase1 window pressure force-pivot reject alternation");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_event_total, 29,
+                  "solver_snapshot: phase1 window pressure event total");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_failed_stabilize_total, 15,
+                  "solver_snapshot: phase1 window pressure failed-stabilize total");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_dir_skip_total, 14,
+                  "solver_snapshot: phase1 window pressure dir-skip total");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_local_memory_fail_total, 9,
+                  "solver_snapshot: phase1 window pressure local-memory-fail total");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_alternation_total, 18,
+                  "solver_snapshot: phase1 window pressure alternation total");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_event_max, 11,
+                  "solver_snapshot: phase1 window pressure event max");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_failed_stabilize_max, 6,
+                  "solver_snapshot: phase1 window pressure failed-stabilize max");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_dir_skip_max, 5,
+                  "solver_snapshot: phase1 window pressure dir-skip max");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_local_memory_fail_max, 4,
+                  "solver_snapshot: phase1 window pressure local-memory-fail max");
+    ASSERT_INT_EQ(snap.perf_phase1_window_pressure_alternation_max, 9,
+                  "solver_snapshot: phase1 window pressure alternation max");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_guard_arms, 2,
                   "solver_snapshot: phase1 failed stabilize retry shadow guard arms");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions, 1,

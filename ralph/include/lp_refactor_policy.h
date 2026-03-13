@@ -233,6 +233,24 @@ int lp_refactor_policy_phase1_activate_force_pivot_mode(
     int *next_force_pending,
     int *next_force_reason);
 
+int lp_refactor_policy_phase1_window_pressure_force_pivot_budget(
+    int m,
+    int degenerate_count,
+    int window_events,
+    int window_failed_stabilize,
+    int window_dir_skip,
+    int window_local_memory_fail,
+    int window_alternations,
+    int force_pivot_attempt_budget,
+    int *reject_reason_out);
+
+#define LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_NONE 0
+#define LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_UNDER_TRIGGER 1
+#define LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_FAILED_SHARE 2
+#define LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_DIR_SKIP_SHARE 3
+#define LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_LOCAL_FAIL 4
+#define LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_ALTERNATION 5
+
 int lp_refactor_policy_phase1_dir_stabilize_escape_gate_plan(
     int m,
     int degenerate_count,

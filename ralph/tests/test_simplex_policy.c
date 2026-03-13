@@ -1281,6 +1281,68 @@ static int run_force_pivot_mode_case(const ForcePivotModeCase *tc) {
     return 1;
 }
 
+static int test_phase1_window_pressure_force_pivot_budget(void) {
+    int expected_budget =
+        lp_refactor_policy_phase1_dir_skip_force_pivot_budget(1200, 200);
+    int reject_reason = -1;
+    int budget = lp_refactor_policy_phase1_window_pressure_force_pivot_budget(
+        1200, 200, 17234, 8617, 8617, 2871, 17232, 0, &reject_reason);
+    if (budget != expected_budget) {
+        fprintf(stderr,
+                "FAIL: phase1 window pressure force-pivot budget qualifying "
+                "(expected=%d got=%d)\n",
+                expected_budget, budget);
+        return 0;
+    }
+    if (reject_reason != LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_NONE) {
+        fprintf(stderr,
+                "FAIL: phase1 window pressure force-pivot budget qualifying "
+                "reason (expected=%d got=%d)\n",
+                LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_NONE,
+                reject_reason);
+        return 0;
+    }
+
+    budget = lp_refactor_policy_phase1_window_pressure_force_pivot_budget(
+        700, 120, 336, 168, 168, 55, 333, 0, &reject_reason);
+    if (budget != 0) {
+        fprintf(stderr,
+                "FAIL: phase1 window pressure force-pivot budget below trigger "
+                "(expected=0 got=%d)\n",
+                budget);
+        return 0;
+    }
+    if (reject_reason != LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_UNDER_TRIGGER) {
+        fprintf(stderr,
+                "FAIL: phase1 window pressure force-pivot budget below trigger "
+                "reason (expected=%d got=%d)\n",
+                LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_UNDER_TRIGGER,
+                reject_reason);
+        return 0;
+    }
+
+    budget = lp_refactor_policy_phase1_window_pressure_force_pivot_budget(
+        1200, 200, 17234, 8617, 8617, 2871, 17232, 12, &reject_reason);
+    if (budget != 0) {
+        fprintf(stderr,
+                "FAIL: phase1 window pressure force-pivot budget active budget "
+                "(expected=0 got=%d)\n",
+                budget);
+        return 0;
+    }
+    if (reject_reason != LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_NONE) {
+        fprintf(stderr,
+                "FAIL: phase1 window pressure force-pivot budget active budget "
+                "reason (expected=%d got=%d)\n",
+                LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_NONE,
+                reject_reason);
+        return 0;
+    }
+
+    printf("PASS: phase1 window pressure force-pivot budget\n");
+    return 1;
+}
+
 static int run_dir_stabilize_escape_gate_case(
     const DirStabilizeEscapeGateCase *tc) {
     int next_cooldown = -1;
@@ -3336,6 +3398,7 @@ int main(void) {
     int total_reinvert_demotion_sequence = 1;
     int total_phase1_stagnation =
         (int)(sizeof(phase1_stagnation_cases) / sizeof(phase1_stagnation_cases[0]));
+    int total_window_pressure_force_pivot = 1;
     int total = total_policy + total_sched + total_lu_health + total_soft_lu_defer +
                 total_periodic_cost_defer + total_dir_stabilize + total_dir_force +
                 total_dir_moderate + total_no_pivot + total_no_pivot_ladder +
@@ -3362,6 +3425,7 @@ int main(void) {
     total += total_reinvert_demotion_control;
     total += total_reinvert_demotion_sequence;
     total += total_phase1_stagnation;
+    total += total_window_pressure_force_pivot;
 
     for (int i = 0; i < total_policy; i++) {
         pass += run_case(&cases[i]);
@@ -3467,6 +3531,7 @@ int main(void) {
     for (int i = 0; i < total_phase1_stagnation; i++) {
         pass += run_phase1_stagnation_case(&phase1_stagnation_cases[i]);
     }
+    pass += test_phase1_window_pressure_force_pivot_budget();
 
     printf("\nPolicy cases passed: %d/%d\n", pass, total);
     return (pass == total) ? 0 : 1;

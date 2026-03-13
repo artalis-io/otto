@@ -1862,6 +1862,71 @@ Conclusion:
   - no-pivot ladder churn
   - safety-refactor loops
 
+### `W3.2` giant-window pressure diagnostics on the phase-1 treadmill
+
+Status:
+- landed as a diagnostic baseline
+- full gate stayed baseline-clean
+
+What was added:
+- phase-1 window-pressure telemetry now classifies:
+  - giant alternating failed-stabilize / `DIR_SKIP` windows
+  - why the Week 3 force-pivot window hook did not arm
+  - whether active force-pivot budget is seen on unstable-direction events
+  - whether that same budget is spent on ordinary pivots
+
+Validation:
+- `make -C ralph test-simplex-policy` passed
+- `make -C ralph test-lp-telemetry-solver` passed
+- `make -C ralph test-netlib-gate-small` passed
+  - artifact: `/tmp/netlib-regression-gate-20260313-183635`
+- `make -C ralph test-netlib-gate` passed baseline-clean
+  - `84` files
+  - `22` timeouts
+  - `0` status/objective/invalid mismatches
+  - `0` dense fallback files
+  - artifact: `/tmp/netlib-regression-gate-20260313-183734`
+
+Focused findings:
+- `d6cube.mps`
+  - `window_pressure_force_pivot_arms=0`
+  - `window_pressure_force_pivot_blocked_budget=9268`
+  - `force_pivot_budget_dir_event_seen=9267`
+  - `force_pivot_budget_pivot_spend=0`
+  - `dir_stabilize_refactor_from_force_extreme_dir=9317`
+  - `dir_stabilize_refactor_from_force_pivot_mode=0`
+- `greenbea.mps`
+  - `window_pressure_force_pivot_arms=0`
+  - `window_pressure_force_pivot_blocked_budget=194`
+  - `force_pivot_budget_dir_event_seen=193`
+  - `force_pivot_budget_pivot_spend=0`
+  - `dir_stabilize_refactor_from_force_extreme_dir=240`
+  - `dir_stabilize_refactor_from_force_pivot_mode=0`
+- `maros.mps`
+  - same pattern at smaller scale:
+    active force-pivot budget is present on unstable-direction events, but the
+    path still goes through `force_extreme_dir`
+
+Conclusion:
+- the Week 3 gap is **not** that the solver fails to arm force-pivot mode
+  inside the giant treadmill windows
+- the solver is already carrying active force-pivot budget on those events
+- the real issue is that the same events are still classified into the
+  `force_extreme_dir` refactor path
+- a direct override experiment was tested locally and rejected:
+  - it shifted many `d6cube` events from `force_extreme_dir` to
+    `force_pivot_mode`
+  - but wall time did not improve materially
+  - therefore the next Week 3 lever is **not** another budget arm or simple
+    force-pivot override
+
+Next Week 3 target:
+- instrument the post-`force_extreme_dir` follow-up itself:
+  - whether those extreme-direction refactors actually stabilize
+  - or simply feed another failed-stabilize / `DIR_SKIP` alternation
+- in other words: the next causal question is about the effectiveness of the
+  `force_extreme_dir` branch, not about whether the branch activates
+
 ### Week 4: Capacity / Policy Decoupling
 
 Goal:

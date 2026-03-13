@@ -848,6 +848,8 @@ typedef struct {
     int perf_phase1_dir_stabilize_refactor_from_force_lu_health;
     int perf_phase1_dir_stabilize_refactor_from_force_pivot_mode;
     int perf_phase1_dir_stabilize_refactor_from_ladder_force;
+    int perf_phase1_force_pivot_budget_dir_event_seen;
+    int perf_phase1_force_pivot_budget_pivot_spend;
     int perf_phase1_force_pivot_relax_applied;
     int perf_phase1_force_extreme_relax_applied;
     int perf_phase1_recompute_after_ratio_breakdown;
@@ -989,6 +991,26 @@ typedef struct {
     int perf_phase1_failed_stabilize_retry_dir_second_chance_failed;
     int perf_phase1_failed_stabilize_retry_dir_guard_arms;
     int perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions;
+    int perf_phase1_window_pressure_windows_started;
+    int perf_phase1_window_pressure_progress_resets;
+    int perf_phase1_window_pressure_force_pivot_arms;
+    int perf_phase1_window_pressure_force_pivot_blocked_pending;
+    int perf_phase1_window_pressure_force_pivot_blocked_budget;
+    int perf_phase1_window_pressure_force_pivot_reject_under_trigger;
+    int perf_phase1_window_pressure_force_pivot_reject_failed_share;
+    int perf_phase1_window_pressure_force_pivot_reject_dir_skip_share;
+    int perf_phase1_window_pressure_force_pivot_reject_local_fail;
+    int perf_phase1_window_pressure_force_pivot_reject_alternation;
+    int perf_phase1_window_pressure_event_total;
+    int perf_phase1_window_pressure_failed_stabilize_total;
+    int perf_phase1_window_pressure_dir_skip_total;
+    int perf_phase1_window_pressure_local_memory_fail_total;
+    int perf_phase1_window_pressure_alternation_total;
+    int perf_phase1_window_pressure_event_max;
+    int perf_phase1_window_pressure_failed_stabilize_max;
+    int perf_phase1_window_pressure_dir_skip_max;
+    int perf_phase1_window_pressure_local_memory_fail_max;
+    int perf_phase1_window_pressure_alternation_max;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -1429,6 +1451,8 @@ typedef struct {
     int perf_phase1_dir_stabilize_refactor_from_force_lu_health;
     int perf_phase1_dir_stabilize_refactor_from_force_pivot_mode;
     int perf_phase1_dir_stabilize_refactor_from_ladder_force;
+    int perf_phase1_force_pivot_budget_dir_event_seen;
+    int perf_phase1_force_pivot_budget_pivot_spend;
     int perf_phase1_force_pivot_relax_applied;
     int perf_phase1_force_extreme_relax_applied;
     int perf_phase1_recompute_after_ratio_breakdown;
@@ -1570,6 +1594,26 @@ typedef struct {
     int perf_phase1_failed_stabilize_retry_dir_second_chance_failed;
     int perf_phase1_failed_stabilize_retry_dir_guard_arms;
     int perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions;
+    int perf_phase1_window_pressure_windows_started;
+    int perf_phase1_window_pressure_progress_resets;
+    int perf_phase1_window_pressure_force_pivot_arms;
+    int perf_phase1_window_pressure_force_pivot_blocked_pending;
+    int perf_phase1_window_pressure_force_pivot_blocked_budget;
+    int perf_phase1_window_pressure_force_pivot_reject_under_trigger;
+    int perf_phase1_window_pressure_force_pivot_reject_failed_share;
+    int perf_phase1_window_pressure_force_pivot_reject_dir_skip_share;
+    int perf_phase1_window_pressure_force_pivot_reject_local_fail;
+    int perf_phase1_window_pressure_force_pivot_reject_alternation;
+    int perf_phase1_window_pressure_event_total;
+    int perf_phase1_window_pressure_failed_stabilize_total;
+    int perf_phase1_window_pressure_dir_skip_total;
+    int perf_phase1_window_pressure_local_memory_fail_total;
+    int perf_phase1_window_pressure_alternation_total;
+    int perf_phase1_window_pressure_event_max;
+    int perf_phase1_window_pressure_failed_stabilize_max;
+    int perf_phase1_window_pressure_dir_skip_max;
+    int perf_phase1_window_pressure_local_memory_fail_max;
+    int perf_phase1_window_pressure_alternation_max;
 
     double perf_phase2_pricing_ms;
     double perf_phase2_ratio_ms;
@@ -2285,6 +2329,28 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_arm(
     SimplexSolver *solver);
 void lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_original_exclusion(
     SimplexSolver *solver);
+void lp_telemetry_record_phase1_window_pressure_event(
+    SimplexSolver *solver,
+    int failed_stabilize_event,
+    int dir_skip_event,
+    int local_memory_fail_event,
+    int alternated,
+    int window_events,
+    int window_failed_stabilize,
+    int window_dir_skip,
+    int window_local_memory_fail,
+    int window_alternations);
+void lp_telemetry_record_phase1_window_pressure_progress_reset(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_window_pressure_force_pivot_arm(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_window_pressure_force_pivot_reject(
+    SimplexSolver *solver,
+    int reject_reason);
+void lp_telemetry_record_phase1_window_pressure_force_pivot_blocked_pending(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_window_pressure_force_pivot_blocked_budget(
+    SimplexSolver *solver);
 void lp_telemetry_record_phase2_pivot_geometry(SimplexSolver *solver,
                                                double theta,
                                                double dir_inf,
@@ -2337,6 +2403,10 @@ void lp_telemetry_record_phase1_dir_stabilize_escape_gate(
 void lp_telemetry_record_phase1_dir_stabilize_refactor_trigger(
     SimplexSolver *solver,
     int trigger);
+void lp_telemetry_record_phase1_force_pivot_budget_dir_event_seen(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_force_pivot_budget_pivot_spend(
+    SimplexSolver *solver);
 void lp_telemetry_record_phase1_force_pivot_relax(SimplexSolver *solver);
 void lp_telemetry_record_phase1_force_extreme_relax(SimplexSolver *solver);
 void lp_telemetry_record_phase1_recompute(SimplexSolver *solver,
