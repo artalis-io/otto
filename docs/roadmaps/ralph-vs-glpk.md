@@ -2100,6 +2100,47 @@ Conclusion:
 - this is worth keeping as a cleaner Week 3 baseline because it is generic,
   testable, and no-regression clean
 
+### `W3.6` post-relax follow-up telemetry baseline
+
+Status:
+- landed as a telemetry-only baseline
+- the attempted severity split on the relax helper was rejected
+
+What was added:
+- exact post-arm telemetry for `phase1_force_extreme_tiny_theta_relax_applied`
+  follow-up branches:
+  - post-`DIR_SKIP` retry / dual rescue / forced refactor
+  - immediate refactor cause: LU health / force-pivot / ladder force
+  - next event: failed-stabilize / ratio breakdown / pivot fail / pivot success
+
+Validation:
+- `make -C ralph test-simplex-policy` passed
+- `make -C ralph test-lp-telemetry-solver` passed
+- `make -C ralph build-ralph-benchmark` passed
+
+Focused finding:
+- the immediate branch mix is almost the same on the Week 3 family:
+  - `d6cube`, `greenbea`, and `maros` all mostly go
+    `post_dir_skip_retry`, with a small `post_dir_skip_dual_rescue` tail
+  - they are not splitting by immediate branch type
+- the real split is severity and follow-up geometry:
+  - `d6cube`: tiny-theta dominant and far milder
+  - `greenbea`: bound-flip dominant and catastrophic
+  - `maros`: tiny-theta, but still catastrophic-scale compared with `d6cube`
+
+Rejected experiment:
+- a ratio-gated split helper on the tiny-theta relax path was A/B tested and
+  reverted
+- it was not a net win on the direct Week 3 files:
+  - `d6cube` got slightly worse
+  - `greenbea` was flat/slightly worse
+  - `maros` did not improve materially
+
+Conclusion:
+- do not widen or split the tiny-theta relax helper blindly
+- the next useful Week 3 work should target the catastrophic follow-up
+  geometry directly, not the arm type
+
 ### Week 4: Capacity / Policy Decoupling
 
 Goal:

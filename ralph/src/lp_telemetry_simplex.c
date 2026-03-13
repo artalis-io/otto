@@ -1340,6 +1340,73 @@ void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax(
     solver->telemetry.perf_phase1_force_extreme_tiny_theta_relax_applied++;
 }
 
+enum {
+    LP_PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_LU_HEALTH = 1,
+    LP_PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_FORCE_PIVOT = 2,
+    LP_PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_LADDER = 3
+};
+
+void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry++;
+}
+
+void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue++;
+}
+
+void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor++;
+}
+
+void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_refactor(
+    SimplexSolver *solver,
+    int reason) {
+    if (!solver_telemetry_enabled(solver)) return;
+    switch (reason) {
+        case LP_PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_LU_HEALTH:
+            solver->telemetry.perf_phase1_force_extreme_tiny_theta_relax_refactor_force_lu_health++;
+            break;
+        case LP_PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_FORCE_PIVOT:
+            solver->telemetry.perf_phase1_force_extreme_tiny_theta_relax_refactor_force_pivot_mode++;
+            break;
+        case LP_PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_LADDER:
+            solver->telemetry.perf_phase1_force_extreme_tiny_theta_relax_refactor_ladder_force++;
+            break;
+        default:
+            break;
+    }
+}
+
+void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_failed_stabilize(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_failed_stabilize++;
+}
+
+void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_ratio_breakdown(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_ratio_breakdown++;
+}
+
+void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_pivot_fail(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_pivot_fail++;
+}
+
+void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_pivot_success(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_force_extreme_tiny_theta_relax_next_pivot_success++;
+}
+
 void lp_telemetry_record_phase1_recompute(SimplexSolver *solver,
                                           LPPhase1RecomputeReason reason) {
     if (!solver_telemetry_enabled(solver)) return;
