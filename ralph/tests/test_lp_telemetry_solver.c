@@ -190,6 +190,8 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_failed = 1;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_guard_arms = 3;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_arms = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions = 1;
     solver.telemetry.perf_dual_bound_flip_applied = 9;
     solver.telemetry.perf_dual_bound_flip_startup = 4;
     solver.telemetry.perf_dual_bound_flip_iterative = 5;
@@ -527,6 +529,10 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 failed stabilize retry dir guard arms");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions, 0,
                   "reset: phase1 failed stabilize retry dir guard original exclusions");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_arms, 0,
+                  "reset: phase1 failed stabilize retry shadow guard arms");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions, 0,
+                  "reset: phase1 failed stabilize retry shadow guard original exclusions");
     ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_applied, 0,
                   "reset: dual bound-flip aggregate");
     ASSERT_INT_EQ(solver.telemetry.perf_dual_bound_flip_startup, 0,
@@ -855,6 +861,8 @@ static void test_solver_reset_and_refactor_accounting(void) {
     lp_telemetry_record_phase1_failed_stabilize_retry_dir_second_chance_outcome(&solver, 0);
     lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_arm(&solver);
     lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_original_exclusion(&solver);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_guard_arm(&solver);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_guard_original_exclusion(&solver);
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_arms, 1,
                   "record: phase1 failed-stabilize retry selector bland arms");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_arms, 1,
@@ -923,6 +931,10 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 failed-stabilize retry dir guard arms");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions, 1,
                   "record: phase1 failed-stabilize retry dir guard original exclusions");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_arms, 1,
+                  "record: phase1 failed-stabilize retry shadow guard arms");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions, 1,
+                  "record: phase1 failed-stabilize retry shadow guard original exclusions");
 
     lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
     lp_telemetry_record_phase1_recompute(&solver, LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
@@ -1203,6 +1215,8 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_second_chance_failed = 2;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_guard_arms = 4;
     solver.telemetry.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions = 3;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_arms = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions = 1;
     solver.telemetry.perf_dual_bound_flip_applied = 13;
     solver.telemetry.perf_dual_bound_flip_startup = 5;
     solver.telemetry.perf_dual_bound_flip_iterative = 8;
@@ -1530,6 +1544,10 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 failed stabilize retry dir guard arms");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_dir_guard_original_exclusions, 3,
                   "solver_snapshot: phase1 failed stabilize retry dir guard original exclusions");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_guard_arms, 2,
+                  "solver_snapshot: phase1 failed stabilize retry shadow guard arms");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions, 1,
+                  "solver_snapshot: phase1 failed stabilize retry shadow guard original exclusions");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_applied, 13,
                   "solver_snapshot: dual bound flips aggregate");
     ASSERT_INT_EQ(snap.perf_dual_bound_flip_startup, 5,

@@ -130,6 +130,15 @@ int simplex_phase1_failed_stabilize_retry_direction_guard_plan_for_test(
     int dir_nnz,
     double pivot_abs,
     int retry_alt_streak);
+int simplex_phase1_failed_stabilize_retry_shadow_guard_plan_for_test(
+    double actual_dir_inf,
+    int actual_dir_nnz,
+    double actual_pivot_abs,
+    int shadow_ratio_success,
+    double shadow_dir_inf,
+    int shadow_dir_nnz,
+    double shadow_pivot_abs,
+    int retry_alt_streak);
 
 int simplex_phase1_force_pivot_mode_plan_for_test(int m,
                                                    int degenerate_count,
@@ -735,6 +744,19 @@ typedef struct {
 
 typedef struct {
     const char *name;
+    double actual_dir_inf;
+    int actual_dir_nnz;
+    double actual_pivot_abs;
+    int shadow_ratio_success;
+    double shadow_dir_inf;
+    int shadow_dir_nnz;
+    double shadow_pivot_abs;
+    int retry_alt_streak;
+    int expected_guard;
+} FailedStabilizeRetryShadowGuardCase;
+
+typedef struct {
+    const char *name;
     int m;
     int degenerate_count;
     int queue_force_pending;
@@ -1191,6 +1213,27 @@ static int run_failed_stabilize_retry_direction_guard_case(
             tc->dir_inf,
             tc->dir_nnz,
             tc->pivot_abs,
+            tc->retry_alt_streak);
+    if (use_guard != tc->expected_guard) {
+        fprintf(stderr, "FAIL: %s (expected guard=%d got=%d)\n",
+                tc->name, tc->expected_guard, use_guard);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_failed_stabilize_retry_shadow_guard_case(
+    const FailedStabilizeRetryShadowGuardCase *tc) {
+    int use_guard =
+        simplex_phase1_failed_stabilize_retry_shadow_guard_plan_for_test(
+            tc->actual_dir_inf,
+            tc->actual_dir_nnz,
+            tc->actual_pivot_abs,
+            tc->shadow_ratio_success,
+            tc->shadow_dir_inf,
+            tc->shadow_dir_nnz,
+            tc->shadow_pivot_abs,
             tc->retry_alt_streak);
     if (use_guard != tc->expected_guard) {
         fprintf(stderr, "FAIL: %s (expected guard=%d got=%d)\n",
@@ -2567,6 +2610,57 @@ int main(void) {
                 .expected_guard = 1
             }
         };
+    const FailedStabilizeRetryShadowGuardCase
+        failed_stabilize_retry_shadow_guard_cases[] = {
+            {
+                .name = "failed-stabilize retry shadow guard stays off below repeat trigger",
+                .actual_dir_inf = 2.5e5,
+                .actual_dir_nnz = 80,
+                .actual_pivot_abs = 0.5,
+                .shadow_ratio_success = 1,
+                .shadow_dir_inf = 3.0e8,
+                .shadow_dir_nnz = 160,
+                .shadow_pivot_abs = 50.0,
+                .retry_alt_streak = 1,
+                .expected_guard = 0
+            },
+            {
+                .name = "failed-stabilize retry shadow guard stays off on catastrophic actual direction",
+                .actual_dir_inf = 2.5e5,
+                .actual_dir_nnz = 96,
+                .actual_pivot_abs = 1.0e-3,
+                .shadow_ratio_success = 1,
+                .shadow_dir_inf = 3.0e8,
+                .shadow_dir_nnz = 160,
+                .shadow_pivot_abs = 50.0,
+                .retry_alt_streak = 5,
+                .expected_guard = 0
+            },
+            {
+                .name = "failed-stabilize retry shadow guard stays off without much worse shadow direction",
+                .actual_dir_inf = 2.5e5,
+                .actual_dir_nnz = 80,
+                .actual_pivot_abs = 0.5,
+                .shadow_ratio_success = 1,
+                .shadow_dir_inf = 5.0e6,
+                .shadow_dir_nnz = 120,
+                .shadow_pivot_abs = 10.0,
+                .retry_alt_streak = 5,
+                .expected_guard = 0
+            },
+            {
+                .name = "failed-stabilize retry shadow guard arms on toxic broader retry direction",
+                .actual_dir_inf = 2.5e5,
+                .actual_dir_nnz = 80,
+                .actual_pivot_abs = 0.5,
+                .shadow_ratio_success = 1,
+                .shadow_dir_inf = 3.0e8,
+                .shadow_dir_nnz = 160,
+                .shadow_pivot_abs = 50.0,
+                .retry_alt_streak = 5,
+                .expected_guard = 1
+            }
+        };
     const ForcePivotModeCase force_pivot_mode_cases[] = {
         {
             .name = "force-pivot mode activates after repeated dir-skip no-recompute",
@@ -3211,6 +3305,9 @@ int main(void) {
     int total_failed_stabilize_retry_direction_guard =
         (int)(sizeof(failed_stabilize_retry_direction_guard_cases) /
               sizeof(failed_stabilize_retry_direction_guard_cases[0]));
+    int total_failed_stabilize_retry_shadow_guard =
+        (int)(sizeof(failed_stabilize_retry_shadow_guard_cases) /
+              sizeof(failed_stabilize_retry_shadow_guard_cases[0]));
     int total_force_pivot_mode = (int)(sizeof(force_pivot_mode_cases) / sizeof(force_pivot_mode_cases[0]));
     int total_dir_escape_gate =
         (int)(sizeof(dir_stabilize_escape_gate_cases) /
@@ -3249,6 +3346,7 @@ int main(void) {
                 total_failed_stabilize_retry_local_memory +
                 total_failed_stabilize_retry_guarded_selector +
                 total_failed_stabilize_retry_direction_guard +
+                total_failed_stabilize_retry_shadow_guard +
                 total_force_pivot_mode +
                 total_dir_escape_gate +
                 total_force_pivot_relax +
@@ -3325,6 +3423,10 @@ int main(void) {
     for (int i = 0; i < total_failed_stabilize_retry_direction_guard; i++) {
         pass += run_failed_stabilize_retry_direction_guard_case(
             &failed_stabilize_retry_direction_guard_cases[i]);
+    }
+    for (int i = 0; i < total_failed_stabilize_retry_shadow_guard; i++) {
+        pass += run_failed_stabilize_retry_shadow_guard_case(
+            &failed_stabilize_retry_shadow_guard_cases[i]);
     }
     for (int i = 0; i < total_force_pivot_mode; i++) {
         pass += run_force_pivot_mode_case(&force_pivot_mode_cases[i]);

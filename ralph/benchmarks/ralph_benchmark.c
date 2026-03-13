@@ -402,6 +402,8 @@ typedef struct {
     double phase1_failed_stabilize_retry_shadow_dir_inf_max;
     double phase1_failed_stabilize_retry_shadow_pivot_abs_total;
     double phase1_failed_stabilize_retry_shadow_pivot_abs_max;
+    int phase1_failed_stabilize_retry_shadow_guard_arms;
+    int phase1_failed_stabilize_retry_shadow_guard_original_exclusions;
     int phase1_failed_stabilize_retry_selector_bland_arms;
     int phase1_failed_stabilize_retry_selector_guarded_arms;
     int phase1_failed_stabilize_retry_selector_guarded_eligible_total;
@@ -1574,6 +1576,10 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_total;
             result.phase1_failed_stabilize_retry_shadow_pivot_abs_max =
                 solver_tel.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max;
+            result.phase1_failed_stabilize_retry_shadow_guard_arms =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_guard_arms;
+            result.phase1_failed_stabilize_retry_shadow_guard_original_exclusions =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions;
             result.phase1_failed_stabilize_retry_selector_bland_arms =
                 solver_tel.perf_phase1_failed_stabilize_retry_selector_bland_arms;
             result.phase1_failed_stabilize_retry_selector_guarded_arms =
@@ -3170,6 +3176,10 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_failed_stabilize_retry_shadow_pivot_abs_total);
     fprintf(out, "      \"failed_stabilize_retry_shadow_pivot_abs_max\": %.6f,\n",
             ralph->phase1_failed_stabilize_retry_shadow_pivot_abs_max);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_guard_arms\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_guard_arms);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_guard_original_exclusions\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_guard_original_exclusions);
     fprintf(out, "      \"failed_stabilize_retry_selector_bland_arms\": %d,\n",
             ralph->phase1_failed_stabilize_retry_selector_bland_arms);
     fprintf(out, "      \"failed_stabilize_retry_selector_guarded_arms\": %d,\n",
