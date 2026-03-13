@@ -96,6 +96,23 @@ extern "C" {
  */
 
 /*@api
+ * GET /api/v1/stats
+ * Statistics and status
+ *
+ * @returns application/json Service status with version
+ *
+ * @response_json
+ * {
+ *   "service": "surge",
+ *   "version": "0.1.0-dev",
+ *   "status": "ok"
+ * }
+ *
+ * @example
+ * curl http://localhost:8085/api/v1/stats
+ */
+
+/*@api
  * GET /api/v1/version
  * Version information
  *
@@ -126,6 +143,30 @@ extern "C" {
  */
 
 /* ============================================================================
+ * API Context
+ * ============================================================================ */
+
+/**
+ * Opaque API context.
+ * Currently stateless, but provided for transport-agnostic conformance.
+ */
+typedef struct SGAPIContext SGAPIContext;
+
+/**
+ * Create an API context.
+ *
+ * @return New context, or NULL on error. Caller must free with sg_api_free().
+ */
+SGAPIContext *sg_api_create(void);
+
+/**
+ * Free an API context.
+ *
+ * @param ctx Context to free (can be NULL)
+ */
+void sg_api_free(SGAPIContext *ctx);
+
+/* ============================================================================
  * Request/Response
  * ============================================================================ */
 
@@ -134,6 +175,7 @@ typedef struct {
     const char *query;      /* Query string without '?' (optional, NULL ok) */
     const char *body;       /* Request body (optional, NULL ok for GET) */
     size_t body_len;        /* Body length in bytes */
+    const char *host;       /* Optional: host for URL generation */
 } SGAPIRequest;
 
 typedef struct {
@@ -161,7 +203,7 @@ typedef struct {
  *
  * Returns 0 on success (response filled in), -1 on internal error.
  */
-int sg_api_handle(const SGAPIRequest *req, SGAPIResponse *resp);
+int sg_api_handle(SGAPIContext *ctx, const SGAPIRequest *req, SGAPIResponse *resp);
 
 /*
  * Free response body.

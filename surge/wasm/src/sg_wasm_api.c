@@ -23,6 +23,9 @@
 #define WASM_EXPORT
 #endif
 
+/* API context */
+static SGAPIContext *g_ctx = NULL;
+
 /* Response state (single-threaded WASM, no concurrency) */
 static char *g_response_buf = NULL;
 static size_t g_response_len = 0;
@@ -41,7 +44,8 @@ static const char *g_response_content_type = "application/json";
  */
 WASM_EXPORT
 int surge_api_init(void) {
-    return 0;
+    g_ctx = sg_api_create();
+    return g_ctx ? 0 : -1;
 }
 
 /**
@@ -49,6 +53,8 @@ int surge_api_init(void) {
  */
 WASM_EXPORT
 void surge_api_free(void) {
+    sg_api_free(g_ctx);
+    g_ctx = NULL;
     free(g_response_buf);
     g_response_buf = NULL;
     g_response_len = 0;
@@ -149,30 +155,27 @@ int surge_api_solve(const char *body, size_t body_len) {
 WASM_EXPORT
 int surge_api_handle(const char *path, const char *query,
                      const char *body, size_t body_len) {
-    (void)query;
+    SGAPIRequest req = {
+        .path = path,
+        .query = query,
+        .body = body,
+        .body_len = body_len,
+        .host = NULL
+    };
+    SGAPIResponse resp = {0};
 
-    g_response_content_type = "application/json";
+    int rc = sg_api_handle(g_ctx, &req, &resp);
 
-    if (strcmp(path, "/api/v1/solve") == 0) {
-        return surge_api_solve(body, body_len);
-    } else if (strcmp(path, "/api/v1/health") == 0) {
-        size_t out_len;
-        char *json = sg_api_health(&out_len);
-        if (json) {
-            set_response(200, json, out_len);
-        } else {
-            set_error(500, "Internal error");
-        }
-    } else if (strcmp(path, "/api/v1/version") == 0) {
-        size_t out_len;
-        char *json = sg_api_version(&out_len);
-        if (json) {
-            set_response(200, json, out_len);
-        } else {
-            set_error(500, "Internal error");
-        }
+    if (rc == 0 && resp.body) {
+        /* Transfer ownership from sg_api_handle response */
+        free(g_response_buf);
+        g_response_buf = resp.body;
+        g_response_len = resp.body_len;
+        g_response_status = resp.status_code;
+        g_response_content_type = resp.content_type;
     } else {
-        set_error(404, "Not found");
+        set_error(resp.status_code ? resp.status_code : 500, "Internal error");
+        sg_api_response_free(&resp);
     }
 
     return 0;
