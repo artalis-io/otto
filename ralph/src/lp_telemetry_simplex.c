@@ -477,6 +477,48 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_selector_eval(
     }
 }
 
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow(
+    SimplexSolver *solver,
+    int ratio_success,
+    int dir_stable,
+    double dir_inf,
+    int dir_nnz,
+    double pivot_abs) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_samples++;
+    if (!ratio_success) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_ratio_failed++;
+        return;
+    }
+    if (dir_stable) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_stable++;
+    } else {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_failed++;
+    }
+    if (dir_nnz > 0) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_nnz_total += dir_nnz;
+        if (dir_nnz >
+            solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_nnz_max) {
+            solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_nnz_max = dir_nnz;
+        }
+    }
+    if (isfinite(dir_inf) && dir_inf >= 0.0) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_inf_total += dir_inf;
+        if (dir_inf >
+            solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_inf_max) {
+            solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_inf_max = dir_inf;
+        }
+    }
+    if (isfinite(pivot_abs) && pivot_abs >= 0.0) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_total += pivot_abs;
+        if (pivot_abs >
+            solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max) {
+            solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max =
+                pivot_abs;
+        }
+    }
+}
+
 void lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
     SimplexSolver *solver,
     int used_guarded,
