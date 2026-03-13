@@ -1996,6 +1996,110 @@ Next Week 3 target:
   - less eager `force_extreme_dir` entry on the treadmill
   - or a different post-refactor stabilization path for that branch
 
+### `W3.4` `force_extreme_dir` follow-up direction classification
+
+Status:
+- landed as a telemetry-only baseline
+- small gate stayed green
+- full gate stayed baseline-clean
+
+What was added:
+- exact post-`force_extreme_dir` follow-up direction classification:
+  - bound geometry
+  - bound flip
+  - tiny theta
+  - weak leaving
+  - generic FTRAN shape
+
+Validation:
+- `make -C ralph test-lp-telemetry-solver` passed (`737/737`)
+- `make -C ralph test-simplex-policy` passed (`158/158`)
+- `make -C ralph build-ralph-benchmark` passed
+- `make -C ralph test-netlib-gate-small` passed
+  - artifact: `/tmp/netlib-regression-gate-20260313-201320`
+
+Focused findings:
+- `d6cube.mps`
+  - `force_extreme_followup_dir_samples=9167`
+  - `force_extreme_followup_dir_bound_geometry=9167`
+  - `force_extreme_followup_dir_tiny_theta=9166`
+  - `force_extreme_followup_dir_bound_flip=1`
+  - `force_extreme_followup_dir_weak_leaving=0`
+  - `force_extreme_followup_dir_ftran_shape=0`
+- `greenbea.mps`
+  - `force_extreme_followup_dir_samples=240`
+  - `force_extreme_followup_dir_bound_geometry=240`
+  - `force_extreme_followup_dir_tiny_theta=240`
+  - `force_extreme_followup_dir_bound_flip=0`
+  - `force_extreme_followup_dir_weak_leaving=0`
+  - `force_extreme_followup_dir_ftran_shape=0`
+- `maros.mps`
+  - `force_extreme_followup_dir_samples=190`
+  - `force_extreme_followup_dir_bound_geometry=190`
+  - `force_extreme_followup_dir_tiny_theta=190`
+  - `force_extreme_followup_dir_bound_flip=0`
+  - `force_extreme_followup_dir_weak_leaving=0`
+  - `force_extreme_followup_dir_ftran_shape=0`
+
+Conclusion:
+- the Week 3 treadmill is overwhelmingly a bound-geometry / tiny-theta
+  treadmill
+- it is not a weak-leaving or generic FTRAN-shape problem
+- the next useful fix is to make repeated `force_extreme_dir` entry less eager
+  on that tiny-theta treadmill
+
+### `W3.5` chronic tiny-theta `force_extreme_dir` relax
+
+Status:
+- landed as a policy baseline
+- small gate stayed green
+- full gate stayed baseline-clean
+- timeout count did not drop yet
+
+What was added:
+- a new narrow phase-1 policy helper that relaxes repeated
+  `force_extreme_dir` entry after a chronic tiny-theta follow-up streak
+- kept LU hard triggers and LU-health overrides intact
+- added a dedicated telemetry counter:
+  `phase1_force_extreme_tiny_theta_relax_applied`
+
+Validation:
+- `make -C ralph test-simplex-policy` passed (`162/162`)
+- `make -C ralph test-lp-telemetry-solver` passed (`739/739`)
+- `make -C ralph build-ralph-benchmark` passed
+- `make -C ralph test-netlib-gate-small` passed
+  - artifact: `/tmp/netlib-regression-gate-20260313-214845`
+- `make -C ralph test-netlib-gate` passed baseline-clean
+  - `84` files
+  - `22` timeouts
+  - `0` status/objective/invalid mismatches
+  - `0` dense fallback files
+  - artifact: `/tmp/netlib-regression-gate-20260313-214858`
+
+Focused effect:
+- `d6cube.mps`
+  - before policy: about `21216 ms`, `12069` iterations,
+    `phase1_force_extreme_tiny_theta_relax_applied=0`
+  - after policy: about `21214 ms`, `7982` iterations,
+    `phase1_force_extreme_tiny_theta_relax_applied=28`
+- `greenbea.mps`
+  - about `8747 ms / 27296 iters` on the telemetry-only baseline
+  - about `8921 ms / 27330 iters` with the new policy
+  - `phase1_force_extreme_tiny_theta_relax_applied=11`
+- `maros.mps`
+  - about `1141 ms / 3753 iters` on the telemetry-only baseline
+  - about `1144 ms / 3769 iters` with the new policy
+  - `phase1_force_extreme_tiny_theta_relax_applied=16`
+
+Conclusion:
+- the new helper is active on the intended Week 3 path
+- it substantially reduces `d6cube` treadmill iterations inside the same
+  hard-cap window
+- it does not yet retire a full-gate timeout file, and it is roughly flat on
+  `greenbea` / `maros`
+- this is worth keeping as a cleaner Week 3 baseline because it is generic,
+  testable, and no-regression clean
+
 ### Week 4: Capacity / Policy Decoupling
 
 Goal:

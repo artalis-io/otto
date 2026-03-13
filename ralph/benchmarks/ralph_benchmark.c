@@ -322,6 +322,7 @@ typedef struct {
     int phase1_force_pivot_budget_pivot_spend;
     int phase1_force_pivot_relax_applied;
     int phase1_force_extreme_relax_applied;
+    int phase1_force_extreme_tiny_theta_relax_applied;
     int phase1_recompute_after_ratio_breakdown;
     int phase1_recompute_after_dir_skip;
     int phase1_recompute_after_dir_refactor;
@@ -423,6 +424,20 @@ typedef struct {
     int phase1_force_extreme_followup_next_ratio_breakdown;
     int phase1_force_extreme_followup_next_pivot_fail;
     int phase1_force_extreme_followup_next_pivot_success;
+    int phase1_force_extreme_followup_dir_samples;
+    int phase1_force_extreme_followup_dir_bound_geometry;
+    int phase1_force_extreme_followup_dir_bound_flip;
+    int phase1_force_extreme_followup_dir_tiny_theta;
+    int phase1_force_extreme_followup_dir_weak_leaving;
+    int phase1_force_extreme_followup_dir_ftran_shape;
+    int phase1_force_extreme_followup_dir_nnz_total;
+    int phase1_force_extreme_followup_dir_nnz_max;
+    double phase1_force_extreme_followup_dir_inf_total;
+    double phase1_force_extreme_followup_dir_inf_max;
+    double phase1_force_extreme_followup_pivot_abs_total;
+    double phase1_force_extreme_followup_pivot_abs_max;
+    double phase1_force_extreme_followup_theta_total;
+    double phase1_force_extreme_followup_theta_max;
     int phase1_failed_stabilize_retry_shadow_followup_dir_samples;
     int phase1_failed_stabilize_retry_shadow_followup_dir_bound_geometry;
     int phase1_failed_stabilize_retry_shadow_followup_dir_bound_flip;
@@ -1500,6 +1515,8 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_force_pivot_relax_applied;
             result.phase1_force_extreme_relax_applied =
                 solver_tel.perf_phase1_force_extreme_relax_applied;
+            result.phase1_force_extreme_tiny_theta_relax_applied =
+                solver_tel.perf_phase1_force_extreme_tiny_theta_relax_applied;
             result.phase1_recompute_after_ratio_breakdown =
                 solver_tel.perf_phase1_recompute_after_ratio_breakdown;
             result.phase1_recompute_after_dir_skip =
@@ -1702,6 +1719,34 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_force_extreme_followup_next_pivot_fail;
             result.phase1_force_extreme_followup_next_pivot_success =
                 solver_tel.perf_phase1_force_extreme_followup_next_pivot_success;
+            result.phase1_force_extreme_followup_dir_samples =
+                solver_tel.perf_phase1_force_extreme_followup_dir_samples;
+            result.phase1_force_extreme_followup_dir_bound_geometry =
+                solver_tel.perf_phase1_force_extreme_followup_dir_bound_geometry;
+            result.phase1_force_extreme_followup_dir_bound_flip =
+                solver_tel.perf_phase1_force_extreme_followup_dir_bound_flip;
+            result.phase1_force_extreme_followup_dir_tiny_theta =
+                solver_tel.perf_phase1_force_extreme_followup_dir_tiny_theta;
+            result.phase1_force_extreme_followup_dir_weak_leaving =
+                solver_tel.perf_phase1_force_extreme_followup_dir_weak_leaving;
+            result.phase1_force_extreme_followup_dir_ftran_shape =
+                solver_tel.perf_phase1_force_extreme_followup_dir_ftran_shape;
+            result.phase1_force_extreme_followup_dir_nnz_total =
+                solver_tel.perf_phase1_force_extreme_followup_dir_nnz_total;
+            result.phase1_force_extreme_followup_dir_nnz_max =
+                solver_tel.perf_phase1_force_extreme_followup_dir_nnz_max;
+            result.phase1_force_extreme_followup_dir_inf_total =
+                solver_tel.perf_phase1_force_extreme_followup_dir_inf_total;
+            result.phase1_force_extreme_followup_dir_inf_max =
+                solver_tel.perf_phase1_force_extreme_followup_dir_inf_max;
+            result.phase1_force_extreme_followup_pivot_abs_total =
+                solver_tel.perf_phase1_force_extreme_followup_pivot_abs_total;
+            result.phase1_force_extreme_followup_pivot_abs_max =
+                solver_tel.perf_phase1_force_extreme_followup_pivot_abs_max;
+            result.phase1_force_extreme_followup_theta_total =
+                solver_tel.perf_phase1_force_extreme_followup_theta_total;
+            result.phase1_force_extreme_followup_theta_max =
+                solver_tel.perf_phase1_force_extreme_followup_theta_max;
             result.phase1_failed_stabilize_retry_shadow_followup_dir_samples =
                 solver_tel.perf_phase1_failed_stabilize_retry_shadow_followup_dir_samples;
             result.phase1_failed_stabilize_retry_shadow_followup_dir_bound_geometry =
@@ -3183,6 +3228,8 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_force_pivot_relax_applied);
     fprintf(out, "      \"force_extreme_relax_applied\": %d,\n",
             ralph->phase1_force_extreme_relax_applied);
+    fprintf(out, "      \"force_extreme_tiny_theta_relax_applied\": %d,\n",
+            ralph->phase1_force_extreme_tiny_theta_relax_applied);
     fprintf(out, "      \"recompute_after_ratio_breakdown\": %d,\n",
             ralph->phase1_recompute_after_ratio_breakdown);
     fprintf(out, "      \"recompute_after_dir_skip\": %d,\n",
@@ -3439,6 +3486,34 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_force_extreme_followup_next_pivot_fail);
     fprintf(out, "      \"force_extreme_followup_next_pivot_success\": %d,\n",
             ralph->phase1_force_extreme_followup_next_pivot_success);
+    fprintf(out, "      \"force_extreme_followup_dir_samples\": %d,\n",
+            ralph->phase1_force_extreme_followup_dir_samples);
+    fprintf(out, "      \"force_extreme_followup_dir_bound_geometry\": %d,\n",
+            ralph->phase1_force_extreme_followup_dir_bound_geometry);
+    fprintf(out, "      \"force_extreme_followup_dir_bound_flip\": %d,\n",
+            ralph->phase1_force_extreme_followup_dir_bound_flip);
+    fprintf(out, "      \"force_extreme_followup_dir_tiny_theta\": %d,\n",
+            ralph->phase1_force_extreme_followup_dir_tiny_theta);
+    fprintf(out, "      \"force_extreme_followup_dir_weak_leaving\": %d,\n",
+            ralph->phase1_force_extreme_followup_dir_weak_leaving);
+    fprintf(out, "      \"force_extreme_followup_dir_ftran_shape\": %d,\n",
+            ralph->phase1_force_extreme_followup_dir_ftran_shape);
+    fprintf(out, "      \"force_extreme_followup_dir_nnz_total\": %d,\n",
+            ralph->phase1_force_extreme_followup_dir_nnz_total);
+    fprintf(out, "      \"force_extreme_followup_dir_nnz_max\": %d,\n",
+            ralph->phase1_force_extreme_followup_dir_nnz_max);
+    fprintf(out, "      \"force_extreme_followup_dir_inf_total\": %.9g,\n",
+            ralph->phase1_force_extreme_followup_dir_inf_total);
+    fprintf(out, "      \"force_extreme_followup_dir_inf_max\": %.9g,\n",
+            ralph->phase1_force_extreme_followup_dir_inf_max);
+    fprintf(out, "      \"force_extreme_followup_pivot_abs_total\": %.9g,\n",
+            ralph->phase1_force_extreme_followup_pivot_abs_total);
+    fprintf(out, "      \"force_extreme_followup_pivot_abs_max\": %.9g,\n",
+            ralph->phase1_force_extreme_followup_pivot_abs_max);
+    fprintf(out, "      \"force_extreme_followup_theta_total\": %.9g,\n",
+            ralph->phase1_force_extreme_followup_theta_total);
+    fprintf(out, "      \"force_extreme_followup_theta_max\": %.9g,\n",
+            ralph->phase1_force_extreme_followup_theta_max);
     fprintf(out, "      \"failed_stabilize_retry_shadow_followup_dir_samples\": %d,\n",
             ralph->phase1_failed_stabilize_retry_shadow_followup_dir_samples);
     fprintf(out, "      \"failed_stabilize_retry_shadow_followup_dir_bound_geometry\": %d,\n",
@@ -3717,6 +3792,8 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_force_pivot_relax_applied);
     fprintf(out, "    \"phase1_force_extreme_relax_applied\": %d,\n",
             ralph->phase1_force_extreme_relax_applied);
+    fprintf(out, "    \"phase1_force_extreme_tiny_theta_relax_applied\": %d,\n",
+            ralph->phase1_force_extreme_tiny_theta_relax_applied);
     fprintf(out, "    \"phase1_recompute_after_ratio_breakdown\": %d,\n",
             ralph->phase1_recompute_after_ratio_breakdown);
     fprintf(out, "    \"phase1_recompute_after_dir_skip\": %d,\n",

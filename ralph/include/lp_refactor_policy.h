@@ -288,6 +288,16 @@ int lp_refactor_policy_phase1_force_extreme_refactor_relax_plan(
     int dual_rescue_successes,
     int dual_rescue_fail_streak);
 
+int lp_refactor_policy_phase1_force_extreme_tiny_theta_relax_plan(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int tiny_theta_followup_streak);
+
 int lp_refactor_policy_phase1_soft_lu_policy_cooldown_updates(
     int m,
     int degenerate_count,
