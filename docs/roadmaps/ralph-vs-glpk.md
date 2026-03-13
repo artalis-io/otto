@@ -1532,6 +1532,63 @@ Completed slices:
       - next Week 2 work should preserve this split and focus on the remaining
         severe-but-non-catastrophic retry directions separately
 
+15. `W2.15` measure retry-lane selector score gaps on the active local-memory
+    path instead of only on the dormant guarded-selector branch.
+    - added exact selector-eval telemetry for the active retry lane:
+      - eval samples
+      - best-differs samples
+      - score-ratio total / max
+      - score-ratio `>=2` / `>=4`
+    - direct result:
+      - `greenbeb`:
+        - `failed_stabilize_retry_selector_eval_samples=82`
+        - `failed_stabilize_retry_selector_eval_best_differs_samples=82`
+      - `wood1p`:
+        - `failed_stabilize_retry_selector_eval_samples=186`
+        - `failed_stabilize_retry_selector_eval_best_differs_samples=186`
+    - implication:
+      - materially better devex-scored retry alternates do exist on both
+        Week 2 outliers
+      - the gap is not “no better candidate exists”; it is using that
+        information safely
+
+16. `W2.16` add a shadow-only retry-lane broad-alternate comparison that
+    records the best-scored alternate's post-selection direction proxy without
+    changing any pivot decisions.
+    - added shadow retry telemetry:
+      - shadow samples
+      - ratio-failed samples
+      - direction-stable vs direction-failed samples
+      - shadow direction nnz / inf-norm / pivot-abs totals and maxima
+    - direct result:
+      - `greenbeb`:
+        - `failed_stabilize_retry_shadow_samples=75`
+        - `failed_stabilize_retry_shadow_ratio_failed=0`
+        - `failed_stabilize_retry_shadow_dir_stable=0`
+        - `failed_stabilize_retry_shadow_dir_failed=75`
+      - `wood1p`:
+        - `failed_stabilize_retry_shadow_samples=205`
+        - `failed_stabilize_retry_shadow_ratio_failed=0`
+        - `failed_stabilize_retry_shadow_dir_stable=0`
+        - `failed_stabilize_retry_shadow_dir_failed=205`
+    - gate result:
+      - small NETLIB gate passed:
+        - `27/27`
+        - `0` timeouts
+        - `0` dense fallbacks
+      - full NETLIB gate stayed baseline-clean:
+        - `84` files
+        - `22` timeouts
+        - `0` command failures
+        - `0` status/objective/invalid mismatches
+        - `0` dense fallbacks
+    - implication:
+      - broader retry-lane alternate scoring is not the next Week 2 lever
+      - even the best-scored alternate in the retry pool still yields an
+        unstable post-refactor direction on these outliers
+      - the remaining Week 2 problem is the direction pathology itself, not
+        selector breadth
+
 ### Week 3: Degeneracy and Long-Run Control Quality
 
 Target family:

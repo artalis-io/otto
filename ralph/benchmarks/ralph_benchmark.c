@@ -392,6 +392,16 @@ typedef struct {
     double phase1_failed_stabilize_retry_selector_eval_score_ratio_max;
     int phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_2;
     int phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4;
+    int phase1_failed_stabilize_retry_shadow_samples;
+    int phase1_failed_stabilize_retry_shadow_ratio_failed;
+    int phase1_failed_stabilize_retry_shadow_dir_stable;
+    int phase1_failed_stabilize_retry_shadow_dir_failed;
+    int phase1_failed_stabilize_retry_shadow_dir_nnz_total;
+    int phase1_failed_stabilize_retry_shadow_dir_nnz_max;
+    double phase1_failed_stabilize_retry_shadow_dir_inf_total;
+    double phase1_failed_stabilize_retry_shadow_dir_inf_max;
+    double phase1_failed_stabilize_retry_shadow_pivot_abs_total;
+    double phase1_failed_stabilize_retry_shadow_pivot_abs_max;
     int phase1_failed_stabilize_retry_selector_bland_arms;
     int phase1_failed_stabilize_retry_selector_guarded_arms;
     int phase1_failed_stabilize_retry_selector_guarded_eligible_total;
@@ -1544,6 +1554,26 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_2;
             result.phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4 =
                 solver_tel.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4;
+            result.phase1_failed_stabilize_retry_shadow_samples =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_samples;
+            result.phase1_failed_stabilize_retry_shadow_ratio_failed =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_ratio_failed;
+            result.phase1_failed_stabilize_retry_shadow_dir_stable =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_dir_stable;
+            result.phase1_failed_stabilize_retry_shadow_dir_failed =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_dir_failed;
+            result.phase1_failed_stabilize_retry_shadow_dir_nnz_total =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_dir_nnz_total;
+            result.phase1_failed_stabilize_retry_shadow_dir_nnz_max =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_dir_nnz_max;
+            result.phase1_failed_stabilize_retry_shadow_dir_inf_total =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_dir_inf_total;
+            result.phase1_failed_stabilize_retry_shadow_dir_inf_max =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_dir_inf_max;
+            result.phase1_failed_stabilize_retry_shadow_pivot_abs_total =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_total;
+            result.phase1_failed_stabilize_retry_shadow_pivot_abs_max =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max;
             result.phase1_failed_stabilize_retry_selector_bland_arms =
                 solver_tel.perf_phase1_failed_stabilize_retry_selector_bland_arms;
             result.phase1_failed_stabilize_retry_selector_guarded_arms =
@@ -3120,6 +3150,26 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_2);
     fprintf(out, "      \"failed_stabilize_retry_selector_eval_score_ratio_ge_4\": %d,\n",
             ralph->phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_samples\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_samples);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_ratio_failed\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_ratio_failed);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_dir_stable\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_dir_stable);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_dir_failed\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_dir_failed);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_dir_nnz_total\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_dir_nnz_total);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_dir_nnz_max\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_dir_nnz_max);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_dir_inf_total\": %.6f,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_dir_inf_total);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_dir_inf_max\": %.6f,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_dir_inf_max);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_pivot_abs_total\": %.6f,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_pivot_abs_total);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_pivot_abs_max\": %.6f,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_pivot_abs_max);
     fprintf(out, "      \"failed_stabilize_retry_selector_bland_arms\": %d,\n",
             ralph->phase1_failed_stabilize_retry_selector_bland_arms);
     fprintf(out, "      \"failed_stabilize_retry_selector_guarded_arms\": %d,\n",

@@ -4966,6 +4966,7 @@ static int phase1_failed_stabilize_retry_select_local_memory(
     int last_retry_alt_streak,
     int *entering,
     int *bland_entering_out,
+    int *best_entering_out,
     int *used_guarded_out) {
     int bland_entering = -1;
     int best_entering = -1;
@@ -4975,6 +4976,7 @@ static int phase1_failed_stabilize_retry_select_local_memory(
     int use_guarded = 0;
 
     if (bland_entering_out) *bland_entering_out = -1;
+    if (best_entering_out) *best_entering_out = -1;
     if (used_guarded_out) *used_guarded_out = 0;
     if (!entering) return 1;
     if (phase1_failed_stabilize_retry_find_candidates(
@@ -5005,24 +5007,35 @@ static int phase1_failed_stabilize_retry_select_local_memory(
         best_score);
     *entering = use_guarded ? best_entering : bland_entering;
     if (bland_entering_out) *bland_entering_out = bland_entering;
+    if (best_entering_out) *best_entering_out = best_entering;
     lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
         solver, use_guarded, eligible_count);
     if (used_guarded_out) *used_guarded_out = use_guarded;
     return 0;
 }
 
-static void phase1_failed_stabilize_retry_record_selector_eval(
+static int phase1_failed_stabilize_retry_eval_candidates(
     SimplexSolver *solver,
     SimplexTableau *tab,
     int excluded_a,
-    int excluded_b) {
+    int excluded_b,
+    int *bland_entering_out,
+    double *bland_score_out,
+    int *best_entering_out,
+    double *best_score_out,
+    int *eligible_count_out) {
     int bland_entering = -1;
     int best_entering = -1;
     int eligible_count = 0;
     double bland_score = 0.0;
     double best_score = 0.0;
 
-    if (!solver || !tab) return;
+    if (bland_entering_out) *bland_entering_out = -1;
+    if (bland_score_out) *bland_score_out = 0.0;
+    if (best_entering_out) *best_entering_out = -1;
+    if (best_score_out) *best_score_out = 0.0;
+    if (eligible_count_out) *eligible_count_out = 0;
+    if (!solver || !tab) return 1;
     if (phase1_failed_stabilize_retry_find_candidates(
             tab,
             excluded_a,
@@ -5032,18 +5045,24 @@ static void phase1_failed_stabilize_retry_record_selector_eval(
             &best_entering,
             &best_score,
             &eligible_count) != 0) {
-        return;
+        return 1;
     }
-    (void)eligible_count;
+    if (bland_entering_out) *bland_entering_out = bland_entering;
+    if (bland_score_out) *bland_score_out = bland_score;
+    if (best_entering_out) *best_entering_out = best_entering;
+    if (best_score_out) *best_score_out = best_score;
+    if (eligible_count_out) *eligible_count_out = eligible_count;
     lp_telemetry_record_phase1_failed_stabilize_retry_selector_eval(
         solver,
         best_entering >= 0 && bland_entering >= 0 && best_entering != bland_entering,
         bland_score,
         best_score);
+    return 0;
 }
 
-static void phase1_failed_stabilize_retry_direction_shape(
-    const SimplexTableau *tab,
+static void phase1_direction_shape_from_vector(
+    const double *dirvec,
+    int m,
     int leaving,
     double *dir_inf_out,
     int *dir_nnz_out,
@@ -5052,25 +5071,220 @@ static void phase1_failed_stabilize_retry_direction_shape(
     int dir_nnz = 0;
     double pivot_abs = 0.0;
 
-    if (!tab) {
+    if (!dirvec || m <= 0) {
         if (dir_inf_out) *dir_inf_out = 0.0;
         if (dir_nnz_out) *dir_nnz_out = 0;
         if (pivot_abs_out) *pivot_abs_out = 0.0;
         return;
     }
 
-    for (int k = 0; k < tab->m; k++) {
-        double absval = fabs(tab->work2[k]);
+    for (int k = 0; k < m; k++) {
+        double absval = fabs(dirvec[k]);
         if (absval > RALPH_ZERO_TOL) dir_nnz++;
         if (absval > dir_inf) dir_inf = absval;
     }
-    if (leaving >= 0 && leaving < tab->m) {
-        pivot_abs = fabs(tab->work2[leaving]);
+    if (leaving >= 0 && leaving < m) {
+        pivot_abs = fabs(dirvec[leaving]);
     }
 
     if (dir_inf_out) *dir_inf_out = dir_inf;
     if (dir_nnz_out) *dir_nnz_out = dir_nnz;
     if (pivot_abs_out) *pivot_abs_out = pivot_abs;
+}
+
+static void phase1_failed_stabilize_retry_direction_shape(
+    const SimplexTableau *tab,
+    int leaving,
+    double *dir_inf_out,
+    int *dir_nnz_out,
+    double *pivot_abs_out) {
+    if (!tab) {
+        if (dir_inf_out) *dir_inf_out = 0.0;
+        if (dir_nnz_out) *dir_nnz_out = 0;
+        if (pivot_abs_out) *pivot_abs_out = 0.0;
+        return;
+    }
+    phase1_direction_shape_from_vector(
+        tab->work2,
+        tab->m,
+        leaving,
+        dir_inf_out,
+        dir_nnz_out,
+        pivot_abs_out);
+}
+
+static void phase1_zero_redundant_direction_entries(const SimplexTableau *tab,
+                                                    double *dirvec) {
+    if (!tab || !dirvec || tab->num_redundant <= 0) return;
+    for (int a = 0; a < tab->num_artificial; a++) {
+        int art_j = tab->artificial_vars[a];
+        if (tab->var_status[art_j] == RALPH_BASIC) {
+            int pos = tab->basis_pos[art_j];
+            if (pos >= 0 && pos < tab->m) {
+                dirvec[pos] = 0.0;
+            }
+        }
+    }
+}
+
+static int phase1_ratio_test_harris_on_direction(const SimplexTableau *tab,
+                                                 int entering,
+                                                 const double *dirvec,
+                                                 int *leaving,
+                                                 double *theta) {
+    double dir = 1.0;
+    double max_abs_dk = 0.0;
+    double theta_max = RALPH_INFINITY;
+    double best_pivot = 0.0;
+    int best_is_degen = 1;
+
+    if (!tab || !dirvec || !leaving || !theta) return -1;
+    if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
+        dir = -1.0;
+    }
+
+    for (int k = 0; k < tab->m; k++) {
+        double dk = (dir > 0.0) ? dirvec[k] : -dirvec[k];
+        double abs_dk = fabs(dk);
+        if (abs_dk > max_abs_dk) max_abs_dk = abs_dk;
+    }
+
+    *leaving = -1;
+    *theta = RALPH_INFINITY;
+    if (tab->ub_ext[entering] - tab->lb_ext[entering] < RALPH_INFINITY / 2) {
+        theta_max = tab->ub_ext[entering] - tab->lb_ext[entering];
+    }
+
+    {
+        double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
+        for (int k = 0; k < tab->m; k++) {
+            double dk = (dir > 0.0) ? dirvec[k] : -dirvec[k];
+            double ratio_harris;
+            double ratio_exact;
+            int j;
+            double xj;
+            int is_degen;
+            double pivot_size;
+            int select = 0;
+
+            if (fabs(dk) < pivot_tol) continue;
+            j = tab->basis[k];
+            xj = tab->x[j];
+            if (dk > 0.0) {
+                double slack = xj - tab->lb_ext[j];
+                ratio_harris = (slack + RALPH_FEAS_TOL) / dk;
+                ratio_exact = slack / dk;
+            } else {
+                double slack = tab->ub_ext[j] - xj;
+                ratio_harris = (slack + RALPH_FEAS_TOL) / (-dk);
+                ratio_exact = slack / (-dk);
+            }
+            if (ratio_harris < theta_max) theta_max = ratio_harris;
+            if (ratio_exact > theta_max + RALPH_FEAS_TOL) continue;
+
+            is_degen = (ratio_exact < 1e-8);
+            pivot_size = fabs(dk);
+            if (*leaving < 0) {
+                select = 1;
+            } else if (!is_degen && best_is_degen) {
+                select = 1;
+            } else if (is_degen == best_is_degen && pivot_size > best_pivot * 1.1) {
+                select = 1;
+            }
+            if (!select) continue;
+            best_pivot = pivot_size;
+            best_is_degen = is_degen;
+            *leaving = k;
+            *theta = ratio_exact > 0.0 ? ratio_exact : 0.0;
+        }
+
+        if (*leaving >= 0 && *theta > theta_max + RALPH_FEAS_TOL) {
+            best_pivot = 0.0;
+            best_is_degen = 1;
+            *leaving = -1;
+            *theta = RALPH_INFINITY;
+            for (int k = 0; k < tab->m; k++) {
+                double dk = (dir > 0.0) ? dirvec[k] : -dirvec[k];
+                double ratio_exact;
+                int j;
+                double xj;
+                int is_degen;
+                double pivot_size;
+                int select = 0;
+
+                if (fabs(dk) < pivot_tol) continue;
+                j = tab->basis[k];
+                xj = tab->x[j];
+                if (dk > 0.0) {
+                    ratio_exact = (xj - tab->lb_ext[j]) / dk;
+                } else {
+                    ratio_exact = (tab->ub_ext[j] - xj) / (-dk);
+                }
+                if (ratio_exact > theta_max + RALPH_FEAS_TOL) continue;
+                is_degen = (ratio_exact < 1e-8);
+                pivot_size = fabs(dk);
+                if (*leaving < 0) {
+                    select = 1;
+                } else if (!is_degen && best_is_degen) {
+                    select = 1;
+                } else if (is_degen == best_is_degen && pivot_size > best_pivot * 1.1) {
+                    select = 1;
+                }
+                if (!select) continue;
+                best_pivot = pivot_size;
+                best_is_degen = is_degen;
+                *leaving = k;
+                *theta = ratio_exact > 0.0 ? ratio_exact : 0.0;
+            }
+        }
+    }
+
+    if (theta_max >= RALPH_INFINITY / 2) {
+        *theta = RALPH_INFINITY;
+        return -1;
+    }
+    if (tab->ub_ext[entering] - tab->lb_ext[entering] <= theta_max &&
+        tab->ub_ext[entering] - tab->lb_ext[entering] < RALPH_INFINITY / 2) {
+        if (*leaving < 0 || tab->ub_ext[entering] - tab->lb_ext[entering] < *theta) {
+            *theta = tab->ub_ext[entering] - tab->lb_ext[entering];
+            *leaving = -2;
+        }
+    }
+    return (*leaving >= 0 || *leaving == -2) ? 0 : -1;
+}
+
+static void phase1_failed_stabilize_retry_shadow_direction_proxy(
+    SimplexSolver *solver,
+    SimplexTableau *tab,
+    int entering) {
+    int leaving = -1;
+    int ratio_status = -1;
+    int dir_nnz = 0;
+    double theta = RALPH_INFINITY;
+    double dir_inf = 0.0;
+    double pivot_abs = 0.0;
+    int dir_stable = 0;
+    int col_nnz = 0;
+    const int *col_idx = NULL;
+    const double *col_val = NULL;
+
+    if (!solver || !tab || entering < 0 || !tab->work4) return;
+    sparse_get_column_sparse(tab->A_ext, entering, &col_nnz, &col_idx, &col_val);
+    lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work4, NULL, NULL);
+    phase1_zero_redundant_direction_entries(tab, tab->work4);
+    ratio_status = phase1_ratio_test_harris_on_direction(
+        tab, entering, tab->work4, &leaving, &theta);
+    phase1_direction_shape_from_vector(
+        tab->work4, tab->m, leaving, &dir_inf, &dir_nnz, &pivot_abs);
+    dir_stable = (ratio_status == 0 && dir_inf <= RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow(
+        solver,
+        ratio_status == 0,
+        dir_stable,
+        dir_inf,
+        dir_nnz,
+        pivot_abs);
+    (void)theta;
 }
 
 static int phase2_use_adaptive_devex_partial(const SimplexTableau *tab,
@@ -7718,6 +7932,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             int retry_local_memory_selector_tracked = 0;
             int retry_local_memory_used_guarded_selector = 0;
             int retry_local_memory_bland_alt = -1;
+            int retry_shadow_best_alt = -1;
             int retry_direction_guard_exclude_original = 0;
             for (int stab_try = 0; stab_try < 1; stab_try++) {
                 int dir_refactor_trigger = 0;
@@ -7822,7 +8037,11 @@ static int simplex_phase1(SimplexSolver *solver) {
                                 phase1_failed_stabilize_retry_alt_streak,
                                 &entering,
                                 &retry_local_memory_bland_alt,
+                                &retry_shadow_best_alt,
                                 &retry_local_memory_used_guarded_selector) == 0) {
+                            if (retry_shadow_best_alt == retry_local_memory_bland_alt) {
+                                retry_shadow_best_alt = -1;
+                            }
                             retry_used_local_memory_alt = 1;
                             retry_local_memory_selector_tracked = 1;
                             lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_alternate(
@@ -7837,11 +8056,21 @@ static int simplex_phase1(SimplexSolver *solver) {
                                                                original_entering,
                                                                phase1_last_failed_stabilize_retry_alt,
                                                                &entering) == 0) {
-                            phase1_failed_stabilize_retry_record_selector_eval(
+                            if (phase1_failed_stabilize_retry_eval_candidates(
                                 solver,
                                 tab,
                                 original_entering,
-                                phase1_last_failed_stabilize_retry_alt);
+                                phase1_last_failed_stabilize_retry_alt,
+                                NULL,
+                                NULL,
+                                &retry_shadow_best_alt,
+                                NULL,
+                                NULL) != 0) {
+                                retry_shadow_best_alt = -1;
+                            }
+                            if (retry_shadow_best_alt == entering) {
+                                retry_shadow_best_alt = -1;
+                            }
                             retry_used_local_memory_alt = 1;
                             retry_local_memory_selector_tracked = 1;
                             retry_local_memory_used_guarded_selector = 0;
@@ -7959,6 +8188,14 @@ static int simplex_phase1(SimplexSolver *solver) {
                                 retry_dir_fail_pivot_abs,
                                 retry_local_memory_repeat_streak)) {
                             retry_direction_guard_exclude_original = 1;
+                        }
+                        if (!retry_local_memory_used_guarded_selector &&
+                            retry_shadow_best_alt >= 0 &&
+                            retry_shadow_best_alt != entering) {
+                            phase1_failed_stabilize_retry_shadow_direction_proxy(
+                                solver,
+                                tab,
+                                retry_shadow_best_alt);
                         }
                     }
                     if (retry_local_memory_selector_tracked) {

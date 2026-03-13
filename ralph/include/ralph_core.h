@@ -653,6 +653,16 @@ typedef struct {
     double perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_max;
     int perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_2;
     int perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4;
+    int perf_phase1_failed_stabilize_retry_shadow_samples;
+    int perf_phase1_failed_stabilize_retry_shadow_ratio_failed;
+    int perf_phase1_failed_stabilize_retry_shadow_dir_stable;
+    int perf_phase1_failed_stabilize_retry_shadow_dir_failed;
+    int perf_phase1_failed_stabilize_retry_shadow_dir_nnz_total;
+    int perf_phase1_failed_stabilize_retry_shadow_dir_nnz_max;
+    double perf_phase1_failed_stabilize_retry_shadow_dir_inf_total;
+    double perf_phase1_failed_stabilize_retry_shadow_dir_inf_max;
+    double perf_phase1_failed_stabilize_retry_shadow_pivot_abs_total;
+    double perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max;
     int perf_phase1_failed_stabilize_retry_selector_bland_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total;

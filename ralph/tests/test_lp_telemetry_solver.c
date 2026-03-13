@@ -146,6 +146,16 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_max = 4.0;
     solver.telemetry.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_2 = 2;
     solver.telemetry.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4 = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_samples = 4;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_ratio_failed = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_stable = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_failed = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_nnz_total = 25;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_nnz_max = 11;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_inf_total = 15.0;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_inf_max = 8.0;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_total = 4.5;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max = 2.5;
     solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_arms = 3;
     solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_arms = 2;
     solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total = 41;
@@ -429,6 +439,26 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 failed stabilize retry selector eval score ratio >=2");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4, 0,
                   "reset: phase1 failed stabilize retry selector eval score ratio >=4");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_samples, 0,
+                  "reset: phase1 failed stabilize retry shadow samples");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_ratio_failed, 0,
+                  "reset: phase1 failed stabilize retry shadow ratio failed");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_stable, 0,
+                  "reset: phase1 failed stabilize retry shadow dir stable");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_failed, 0,
+                  "reset: phase1 failed stabilize retry shadow dir failed");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_nnz_total, 0,
+                  "reset: phase1 failed stabilize retry shadow dir nnz total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_nnz_max, 0,
+                  "reset: phase1 failed stabilize retry shadow dir nnz max");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_inf_total, 0.0,
+                  "reset: phase1 failed stabilize retry shadow dir inf total");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_inf_max, 0.0,
+                  "reset: phase1 failed stabilize retry shadow dir inf max");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_total, 0.0,
+                  "reset: phase1 failed stabilize retry shadow pivot abs total");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max, 0.0,
+                  "reset: phase1 failed stabilize retry shadow pivot abs max");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_arms, 0,
                   "reset: phase1 failed stabilize retry selector bland arms");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_arms, 0,
@@ -783,6 +813,29 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 failed-stabilize retry selector eval score ratio >=2");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4, 1,
                   "record: phase1 failed-stabilize retry selector eval score ratio >=4");
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow(&solver, 0, 0, 0.0, 0, 0.0);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow(&solver, 1, 1, 3.0, 7, 0.5);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow(&solver, 1, 0, 9.0, 11, 0.25);
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_samples, 3,
+                  "record: phase1 failed-stabilize retry shadow samples");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_ratio_failed, 1,
+                  "record: phase1 failed-stabilize retry shadow ratio failed");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_stable, 1,
+                  "record: phase1 failed-stabilize retry shadow dir stable");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_failed, 1,
+                  "record: phase1 failed-stabilize retry shadow dir failed");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_nnz_total, 18,
+                  "record: phase1 failed-stabilize retry shadow dir nnz total");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_nnz_max, 11,
+                  "record: phase1 failed-stabilize retry shadow dir nnz max");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_inf_total, 12.0,
+                  "record: phase1 failed-stabilize retry shadow dir inf total");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_inf_max, 9.0,
+                  "record: phase1 failed-stabilize retry shadow dir inf max");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_total, 0.75,
+                  "record: phase1 failed-stabilize retry shadow pivot abs total");
+    ASSERT_DBL_EQ(solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max, 0.5,
+                  "record: phase1 failed-stabilize retry shadow pivot abs max");
     lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(&solver, 0, 3);
     lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(&solver, 1, 19);
     lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(&solver, 0, 1);
@@ -1106,6 +1159,16 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_max = 5.0;
     solver.telemetry.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_2 = 3;
     solver.telemetry.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4 = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_samples = 6;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_ratio_failed = 2;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_stable = 3;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_failed = 1;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_nnz_total = 44;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_nnz_max = 17;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_inf_total = 29.0;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_dir_inf_max = 12.0;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_total = 7.0;
+    solver.telemetry.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max = 3.0;
     solver.telemetry.perf_phase1_failed_stabilize_retry_selector_bland_arms = 6;
     solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_arms = 4;
     solver.telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total = 71;
@@ -1379,6 +1442,26 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 failed stabilize retry selector eval score ratio >=2");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_selector_eval_score_ratio_ge_4, 1,
                   "solver_snapshot: phase1 failed stabilize retry selector eval score ratio >=4");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_samples, 6,
+                  "solver_snapshot: phase1 failed stabilize retry shadow samples");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_ratio_failed, 2,
+                  "solver_snapshot: phase1 failed stabilize retry shadow ratio failed");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_dir_stable, 3,
+                  "solver_snapshot: phase1 failed stabilize retry shadow dir stable");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_dir_failed, 1,
+                  "solver_snapshot: phase1 failed stabilize retry shadow dir failed");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_dir_nnz_total, 44,
+                  "solver_snapshot: phase1 failed stabilize retry shadow dir nnz total");
+    ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_dir_nnz_max, 17,
+                  "solver_snapshot: phase1 failed stabilize retry shadow dir nnz max");
+    ASSERT_DBL_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_dir_inf_total, 29.0,
+                  "solver_snapshot: phase1 failed stabilize retry shadow dir inf total");
+    ASSERT_DBL_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_dir_inf_max, 12.0,
+                  "solver_snapshot: phase1 failed stabilize retry shadow dir inf max");
+    ASSERT_DBL_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_total, 7.0,
+                  "solver_snapshot: phase1 failed stabilize retry shadow pivot abs total");
+    ASSERT_DBL_EQ(snap.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max, 3.0,
+                  "solver_snapshot: phase1 failed stabilize retry shadow pivot abs max");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_selector_bland_arms, 6,
                   "solver_snapshot: phase1 failed stabilize retry selector bland arms");
     ASSERT_INT_EQ(snap.perf_phase1_failed_stabilize_retry_selector_guarded_arms, 4,
