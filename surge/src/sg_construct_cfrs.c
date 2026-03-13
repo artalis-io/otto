@@ -814,7 +814,6 @@ uint32_t sg_cluster_tw_check(const SGContext *ctx, const uint32_t *requests,
     {
         int32_t early = 0, late = 0;
         const SGRequestRecord *req;
-        uint32_t loc_id;
 
         if (!sg_request_time_window_bounds(ctx, requests[0], &early, &late))
             return count;  /* no TW info → can't validate */

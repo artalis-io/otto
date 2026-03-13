@@ -417,6 +417,82 @@ static void test_increasing_time_with_scale(void) {
     }
 }
 
+/* ---- S27e: XLARGE_TUNE Tests ---- */
+
+static void test_xlarge_tune_applied(void) {
+    /* XLARGE column should use XLARGE_TUNE (sa_accept_pct=0.005, neighbor_k=25,
+       phase1_fraction=0.35, gen_reheat_ratio=2.50) — distinct from LARGE_TUNE. */
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    assert(sg_profile_matrix_apply(ctx, SG_PROFILE_FAST, SG_SCALE_XLARGE) == SG_STATUS_OK);
+    assert(ctx->tune_params != NULL);
+
+    /* XLARGE_TUNE distinguishers vs LARGE_TUNE */
+    assert(ctx->tune_params->sa_accept_pct == 0.005);      /* LARGE=0.010 */
+    assert(ctx->tune_params->neighbor_k == 25);             /* LARGE=20 */
+    assert(ctx->tune_params->phase1_fraction == 0.35);      /* LARGE=0.40 */
+    assert(ctx->tune_params->gen_reheat_ratio == 2.50);     /* LARGE=2.00 */
+
+    /* Iteration/time budgets for FAST×XLARGE */
+    assert(ctx->config.max_iterations == 1500);
+    assert(ctx->config.max_time_seconds == 60);
+
+    sg_free(ctx);
+}
+
+static void test_xlarge_tune_near_optimal(void) {
+    /* NEAR_OPTIMAL × XLARGE should have S27e raised iteration cap (20K) */
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    assert(sg_profile_matrix_apply(ctx, SG_PROFILE_NEAR_OPTIMAL, SG_SCALE_XLARGE) == SG_STATUS_OK);
+    assert(ctx->config.max_iterations == 20000);   /* S27e: was 15K */
+    assert(ctx->config.max_time_seconds == 300);
+    assert(ctx->tune_params->sa_accept_pct == 0.005);  /* XLARGE_TUNE */
+
+    sg_free(ctx);
+}
+
+static void test_xlarge_tune_best(void) {
+    /* BEST × XLARGE should have S27e raised iteration cap (50K) */
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    assert(sg_profile_matrix_apply(ctx, SG_PROFILE_BEST, SG_SCALE_XLARGE) == SG_STATUS_OK);
+    assert(ctx->config.max_iterations == 50000);   /* S27e: was 30K */
+    assert(ctx->config.max_time_seconds == 1200);
+    assert(ctx->tune_params->neighbor_k == 25);    /* XLARGE_TUNE */
+
+    sg_free(ctx);
+}
+
+static void test_xlarge_tune_rt_variant(void) {
+    /* REALTIME × XLARGE should use RT_XLARGE_TUNE (phase1.5 only 200 iters) */
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    assert(sg_profile_matrix_apply(ctx, SG_PROFILE_REALTIME, SG_SCALE_XLARGE) == SG_STATUS_OK);
+    assert(ctx->tune_params->phase15_iters == 200);     /* RT variant */
+    assert(ctx->tune_params->sa_accept_pct == 0.005);   /* Still XLARGE_TUNE base */
+    assert(ctx->tune_params->neighbor_k == 25);
+    assert(ctx->config.max_iterations == 250);
+
+    sg_free(ctx);
+}
+
+static void test_large_vs_xlarge_tune_differ(void) {
+    /* LARGE_TUNE and XLARGE_TUNE must differ on key parameters */
+    const SGProfileCell *large = &k_profile_matrix[SG_PROFILE_FAST][SG_SCALE_LARGE];
+    const SGProfileCell *xlarge = &k_profile_matrix[SG_PROFILE_FAST][SG_SCALE_XLARGE];
+
+    /* XLARGE has colder SA, broader neighborhood, less Phase 1, higher reheat */
+    assert(xlarge->tune.sa_accept_pct < large->tune.sa_accept_pct);
+    assert(xlarge->tune.neighbor_k > large->tune.neighbor_k);
+    assert(xlarge->tune.phase1_fraction < large->tune.phase1_fraction);
+    assert(xlarge->tune.gen_reheat_ratio > large->tune.gen_reheat_ratio);
+}
+
 /* ---- Main ---- */
 
 int main(void) {
@@ -439,6 +515,13 @@ int main(void) {
     RUN_TEST(test_solve_twice_profile_applied_once);
     RUN_TEST(test_all_profiles_resolve);
     RUN_TEST(test_increasing_time_with_scale);
+
+    /* S27e: XLARGE_TUNE */
+    RUN_TEST(test_xlarge_tune_applied);
+    RUN_TEST(test_xlarge_tune_near_optimal);
+    RUN_TEST(test_xlarge_tune_best);
+    RUN_TEST(test_xlarge_tune_rt_variant);
+    RUN_TEST(test_large_vs_xlarge_tune_differ);
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);
     return tests_passed == tests_run ? 0 : 1;

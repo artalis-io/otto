@@ -76,6 +76,191 @@ static void sg_route_recompute_compat_tracking(const SGContext *ctx,
     }
 }
 
+/* ──────────────────────────────────────────────────────────────────────────
+ * S27a Education: intra-route 2-opt + OR-opt on a single vehicle.
+ * Called after repair in Phase 2 to improve route quality inside the ALNS loop.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/* Per-vehicle 2-opt intra: try all (i,j) reversals, apply first improving. */
+static int sg_educate_2opt_intra(const SGContext *ctx, SGRouteSolution *sol, uint32_t v) {
+    uint32_t stop_len = sol->route_stop_lengths[v];
+    const SGRouteStop *stops = sg_route_vehicle_stop_ptr_const(sol, v);
+    SGRouteStop *candidate;
+    uint32_t i, j, k;
+
+    if (stop_len < 4) return 0;
+
+    candidate = (SGRouteStop *)malloc((size_t)stop_len * sizeof(SGRouteStop));
+    if (!candidate) return 0;
+
+    for (i = 0; i + 2 < stop_len; i++) {
+        for (j = i + 2; j < stop_len; j++) {
+            double new_dist = 0.0;
+
+            /* PD safety: check reversal doesn't violate pickup-before-delivery */
+            if (ctx->has_pd_requests) {
+                int pd_safe = 1;
+                for (k = i + 1; k <= j && pd_safe; k++) {
+                    uint32_t req = stops[k].request_id;
+                    if (ctx->requests[req].kind == SG_REQUEST_KIND_PICKUP_DELIVERY) {
+                        uint32_t pp = sol->request_pickup_stop_pos[req];
+                        uint32_t dp = sol->request_delivery_stop_pos[req];
+                        uint32_t new_pp = pp, new_dp = dp;
+                        if (pp >= i + 1 && pp <= j) new_pp = i + 1 + (j - pp);
+                        if (dp >= i + 1 && dp <= j) new_dp = i + 1 + (j - dp);
+                        if (new_pp >= new_dp) pd_safe = 0;
+                    }
+                }
+                if (!pd_safe) continue;
+            }
+
+            /* O(1) concat pre-filter */
+            {
+                double concat_dist;
+                if (sg_concat_eval_2opt_intra(ctx, sol, v, i + 1, j, &concat_dist) &&
+                    concat_dist >= sol->route_distance[v] - 1e-9) {
+                    continue;
+                }
+            }
+
+            /* Build candidate: stops[0..i] + reverse(stops[i+1..j]) + stops[j+1..end] */
+            memcpy(candidate, stops, (size_t)(i + 1) * sizeof(SGRouteStop));
+            for (k = i + 1; k <= j; k++)
+                candidate[k] = stops[i + 1 + (j - k)];
+            if (j + 1 < stop_len)
+                memcpy(&candidate[j + 1], &stops[j + 1],
+                       (size_t)(stop_len - j - 1) * sizeof(SGRouteStop));
+
+            if (!sg_route_stop_sequence_feasible(ctx, v, candidate, stop_len, &new_dist))
+                continue;
+            if (new_dist >= sol->route_distance[v] - 1e-9)
+                continue;
+
+            /* Apply: copy stops, update positions and timing */
+            memcpy(sg_route_vehicle_stop_ptr(sol, v), candidate,
+                   (size_t)stop_len * sizeof(SGRouteStop));
+            for (k = 0; k < stop_len; k++) {
+                uint32_t req = candidate[k].request_id;
+                if (candidate[k].is_pickup)
+                    sol->request_pickup_stop_pos[req] = k;
+                else
+                    sol->request_delivery_stop_pos[req] = k;
+            }
+            sol->total_distance += (new_dist - sol->route_distance[v]);
+            sol->route_distance[v] = new_dist;
+            sg_route_update_timing(ctx, sol, v);
+
+            free(candidate);
+            return 1;
+        }
+    }
+
+    free(candidate);
+    return 0;
+}
+
+/* Per-vehicle OR-opt intra: relocate 1-3 consecutive stops within the same route. */
+static int sg_educate_or_opt_intra(const SGContext *ctx, SGRouteSolution *sol, uint32_t v) {
+    uint32_t stop_len = sol->route_stop_lengths[v];
+    const SGRouteStop *stops;
+    SGRouteStop *candidate;
+    int seg_k;
+
+    if (stop_len < 3) return 0;
+
+    candidate = (SGRouteStop *)malloc((size_t)stop_len * sizeof(SGRouteStop));
+    if (!candidate) return 0;
+
+    stops = sg_route_vehicle_stop_ptr_const(sol, v);
+
+    for (seg_k = 1; seg_k <= 3 && (uint32_t)seg_k < stop_len; seg_k++) {
+        uint32_t start;
+        for (start = 0; start + (uint32_t)seg_k <= stop_len; start++) {
+            uint32_t ins;
+
+            /* Build route without segment: stops minus stops[start..start+seg_k) */
+            uint32_t reduced_len = stop_len - (uint32_t)seg_k;
+
+            for (ins = 0; ins <= reduced_len; ins++) {
+                double new_dist = 0.0;
+                uint32_t r, dst;
+
+                /* Skip identity move */
+                if (ins == start || ins == start + 1) continue;
+                /* Adjust insertion position for the gap */
+                uint32_t adj_ins = (ins > start) ? ins + (uint32_t)seg_k : ins;
+                if (adj_ins == start) continue;
+
+                /* Build candidate: remove segment, then insert at position */
+                dst = 0;
+                for (r = 0; r < stop_len; r++) {
+                    if (r >= start && r < start + (uint32_t)seg_k) continue;
+                    candidate[dst++] = stops[r];
+                }
+                /* Now insert segment at ins */
+                {
+                    SGRouteStop *final_cand = (SGRouteStop *)malloc(
+                        (size_t)stop_len * sizeof(SGRouteStop));
+                    if (!final_cand) { free(candidate); return 0; }
+
+                    if (ins > 0)
+                        memcpy(final_cand, candidate, (size_t)ins * sizeof(SGRouteStop));
+                    memcpy(&final_cand[ins], &stops[start],
+                           (size_t)seg_k * sizeof(SGRouteStop));
+                    if (ins < reduced_len)
+                        memcpy(&final_cand[ins + seg_k], &candidate[ins],
+                               (size_t)(reduced_len - ins) * sizeof(SGRouteStop));
+
+                    if (!sg_route_stop_sequence_feasible(ctx, v, final_cand, stop_len, &new_dist) ||
+                        new_dist >= sol->route_distance[v] - 1e-9) {
+                        free(final_cand);
+                        continue;
+                    }
+
+                    /* Apply */
+                    memcpy(sg_route_vehicle_stop_ptr(sol, v), final_cand,
+                           (size_t)stop_len * sizeof(SGRouteStop));
+                    for (r = 0; r < stop_len; r++) {
+                        uint32_t req = final_cand[r].request_id;
+                        if (final_cand[r].is_pickup)
+                            sol->request_pickup_stop_pos[req] = r;
+                        else
+                            sol->request_delivery_stop_pos[req] = r;
+                    }
+                    sol->total_distance += (new_dist - sol->route_distance[v]);
+                    sol->route_distance[v] = new_dist;
+                    sg_route_update_timing(ctx, sol, v);
+
+                    free(final_cand);
+                    free(candidate);
+                    return 1;
+                }
+            }
+        }
+    }
+
+    free(candidate);
+    return 0;
+}
+
+/* Education: run intra-route LS on modified vehicles only (Phase 2). */
+void sg_route_educate(SGContext *ctx, SGRouteSolution *sol) {
+    uint32_t v;
+
+    if (!ctx || !sol) return;
+    if (ctx->current_phase != SG_PHASE_2_POLISH) return;
+    if (!ctx->modified_vehicles) return;
+
+    for (v = 0; v < sol->num_vehicles; v++) {
+        if (!sg_modified_vehicles_test(ctx, v)) continue;
+        if (sol->route_stop_lengths[v] < 3) continue;
+
+        /* Single pass: try 2-opt, then OR-opt */
+        if (!sg_educate_2opt_intra(ctx, sol, v))
+            sg_educate_or_opt_intra(ctx, sol, v);
+    }
+}
+
 static ARStatus sg_route_try_eliminate_vehicle(const SGContext *ctx,
                                                SGRouteSolution *sol,
                                                uint32_t vehicle_id,

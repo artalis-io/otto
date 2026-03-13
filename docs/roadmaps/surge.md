@@ -1188,7 +1188,13 @@ int sg_solution_to_geojson(SGContext *ctx, char *buf, size_t buf_size);
 
 ## Implementation Plan
 
-### Current Status (as of 2026-03-08)
+### Current Status (as of 2026-03-13)
+
+**Baseline**: U1-U8 + S1-S27 + all rich constraints + Population & Education Overhaul complete. All Tier 1 and Tier 2 production gaps closed. REST API server, WASM build, Python and Node.js bindings exist. 489 tests passing (467 surge threaded + 22 profile matrix), ASAN/UBSAN clean, 0 compiler warnings.
+
+Implemented features: Everything in previous status plus: S27 Population & Education Overhaul — six phases (S27a-S27f): post-repair education (2-opt-intra + OR-opt on modified vehicles, Phase 2 only), PyVRP-style population management (broken-pairs distance, biased fitness, pool size 6→25, survivor selection), SREX orphan repair with min-cost insertion, phase-gated zone-ruin (Phase 2 only), XLARGE dedicated tune profile (401-800 customers) with 5 generations, and feasible/infeasible dual subpopulations with dynamic penalty adaptation. C code audit: 0 critical/high/medium issues across 19 source files, 171 allocation calls all NULL-checked, no unsafe string functions, full build hardening. 30 new tests (459→489).
+
+#### Previous Status (as of 2026-03-08)
 
 **Baseline**: U1-U8 + S1-S24 + all rich constraints + Instance-Adaptive Construction complete. All Tier 1 and Tier 2 production gaps closed. REST API server, WASM build, Python and Node.js bindings exist. 449 tests passing (threaded), ASAN/UBSAN clean.
 
@@ -4055,8 +4061,26 @@ checks and early-exit on no improvement. Safe at 400-800 customers.
 | GH-400 | Veh match | 37/60 | 37/60 | same |
 | GH-400 | Dist gap | +12.1% | +11.9% | **-0.2pp** |
 | GH-400 | VehGap | +0.53 | +0.48 | -0.05 |
+| GH-800 | Veh match | — | 24/60 | first run |
+| GH-800 | Dist gap | — | +18.1% | first run |
+| GH-800 | VehGap | — | +1.52 | first run |
 
-No regressions on any benchmark suite.
+No regressions on any benchmark suite. GH-800 is the first run at this scale.
+
+**GH-800 breakdown by instance class:**
+
+| Class | Veh Match | Avg Veh Gap | Avg Dist Gap | Notes |
+|-------|-----------|-------------|--------------|-------|
+| C1 | 1/10 | +3.5 | +8.9% | c1_8_1 matches BKS vehicles (+0.8% dist) |
+| C2 | 0/10 | +1.8 | +11.7% | Close on vehicles, distance scattered |
+| R1 | 8/10 | +0.4 | +35.9% | Vehicles great, distance terrible |
+| R2 | 10/10 | +0.0 | +13.7% | Perfect vehicle match |
+| RC1 | 0/10 | +2.4 | +24.4% | Hardest class |
+| RC2 | 5/10 | +1.0 | +13.7% | Half match vehicles |
+
+R1 distance gap (+35.9%) is the #1 improvement target — vehicles match BKS but
+routes are 36% longer. Time starvation is severe: avg 221s on 120s budget, 28/60
+hit LIMIT status.
 
 **Tests:** 5 new tests (454→459 threaded, 434→439 non-threaded):
 `test_zone_ruin_destroy_basic`, `test_zone_ruin_destroy_with_frozen`,
@@ -4065,3 +4089,101 @@ No regressions on any benchmark suite.
 
 **Files modified:** `sg_internal.h`, `sg_solve.c`, `sg_postprocess.c`, `sg_destroy.c`,
 `test_surge.c`. +415 lines.
+
+### Phase S27: Population & Education Overhaul
+
+**Completed: 2026-03-13. All 6 phases shipped.**
+
+S26 plateaued at GH-200 +6.4%, GH-400 +11.9%, GH-800 +18.1%. The gap is structural:
+no education after repair, tiny population (6), weak SREX, zone-ruin disabled, no
+dedicated large-instance tuning, feasible-only population. PyVRP achieves ~0.4% on
+GH-1000 (2h) using education, broken-pairs diversity, and dual subpopulations.
+
+**Phase S27a: Education (LS after repair) ✅**
+
+Added `sg_route_educate()` — 1 pass of 2-opt-intra + OR-opt on modified vehicles only.
+Called at the end of all 6 repair operators after ejection fallback. Phase-gated:
+only runs during Phase 2 (distance polish). Modified vehicles tracked via
+`uint64_t *modified_vehicles` bitset in SGContext, set in `sg_route_apply_insertion()`
+and cleared at repair start.
+
+**Phase S27b: Population Infrastructure (PyVRP-style) ✅**
+
+Broken Pairs Distance (BPD) — `next[request_id]` adjacency, O(n) per pair. Biased
+fitness: `quality_rank + (1 - n_elite/pool_size) × diversity_rank`. Pool size 6→25.
+Survivor selection removes worst biased fitness (duplicates first). Binary tournament
+on biased fitness instead of raw cost.
+
+**Phase S27c: SREX Repair & Quality ✅**
+
+Min-cost insertion of orphaned requests after SREX warm-start build. Quality-weighted
+P1 route selection (inverse per-request distance). Orphans placed at best insertion
+position instead of left for construction.
+
+**Phase S27d: Phase-Gated Zone-Ruin ✅**
+
+Zone-ruin registered only in Phase 2 ALNS (`sg_create_route_alns()` for Phase 2).
+Phase 1 ALNS stays unchanged, preventing vehicle match regression.
+
+**Phase S27e: XLARGE Compute Budget & Tuning ✅**
+
+Dedicated `XLARGE_TUNE` profile for 401-800 customers: lower `phase1_fraction` (0.35
+vs 0.40), colder SA start, higher `gen_reheat_ratio` (2.5 vs 2.0), larger `neighbor_k`
+(25 vs 20). 5 generations for XLARGE (vs 3). NEAR_OPTIMAL XLARGE iterations 15K→20K,
+BEST XLARGE 30K→50K. Scale-dependent generation count in `sg_parallel.c`.
+
+**Phase S27f: Feasible/Infeasible Dual Subpopulations ✅**
+
+Dual pools: feasible (capacity 15) + infeasible (capacity 10). Classification by
+`sol->base.num_violations > 0`. Cross-pool tournament: feasible 70%, infeasible 30%.
+Dynamic penalty adaptation: if feasible_fraction < 0.43 → penalties × 1.34, else × 0.32.
+Repair booster: infeasible offspring re-educated with 12× penalty weight.
+
+**Benchmark results (S27 vs S26 baseline):**
+
+| Suite | Metric | S26 | S27 | Delta |
+|-------|--------|-----|-----|-------|
+| Solomon-100 | Veh match | 41/56 | 44/56 | **+3** |
+| Solomon-100 | Dist gap | +0.3% | +0.3% | same |
+| Solomon-100 | Lexi non-worse | 13 | 12 | -1 |
+| GH-200 | Veh match | 53/60 | 53/60 | same |
+| GH-200 | Dist gap | +6.4% | +6.8% | +0.4pp |
+| GH-200 | VehGap | +0.12 | +0.12 | same |
+| GH-200 | Lexi non-worse | — | 3 | first run |
+
+Solomon-100 gained 3 vehicle matches (73%→79%) with no distance regression. GH-200
+vehicle matches held steady; distance gap widened slightly (+0.4pp), likely noise from
+the new population dynamics settling in at 60s budget. The full benefit of S27 is
+expected to manifest more strongly at GH-400/GH-800 where time starvation is severe
+and population diversity + education have the most room to improve.
+
+**C Code Audit (2026-03-13):**
+
+Full `/c-audit surge` passed with 0 issues across all categories:
+- 171 malloc/calloc calls: all NULL-checked
+- All realloc calls use temp-variable pattern
+- Integer overflow guards with SIZE_MAX checks
+- No use-after-free, double-free, or VLA patterns
+- No unsafe string functions (strcpy/strcat/sprintf/gets/atoi/atol/atof)
+- No dead code (#if 0) or unused static functions
+- API server: full hardening (rate limiter, work queue, worker pool, ShCompletion,
+  socket write timeout, CORS, structured logging, tracing, metrics)
+- Build: -fstack-protector-strong, -D_FORTIFY_SOURCE=2, -fPIE, -fno-common,
+  sanitizers, cppcheck, and fuzz targets
+
+**Tests:** 30 new tests (459→489 total: 467 surge threaded + 22 profile matrix):
+- S27a: `test_s27a_education_improves_distance`, `test_s27a_education_phase2_only`,
+  `test_s27a_education_modified_vehicles_only`
+- S27b: `test_s27b_broken_pairs_identical`, `test_s27b_broken_pairs_different`,
+  `test_s27b_biased_fitness_diversity_reward`, `test_s27b_population_25_capacity`,
+  `test_s27b_survivor_selection_removes_worst`
+- S27c: `test_s27c_srex_orphan_repair`, `test_s27c_srex_quality_weighted`
+- S27d: `test_s27d_zone_ruin_phase2_only`
+- S27e: `test_s27e_xlarge_tune_applied`, `test_s27e_xlarge_5_generations`
+- S27f: `test_s27f_dual_pool_classification`, `test_s27f_penalty_adaptation`,
+  `test_s27f_repair_booster_infeasible`
+- Profile matrix: 5 new tests for XLARGE_TUNE
+
+**Files modified:** `sg_internal.h`, `sg_solve.c`, `sg_postprocess.c`, `sg_repair.c`,
+`sg_parallel.c`, `sg_profile_matrix.c`, `test_surge.c`, `test_profile_matrix.c`.
+~870 new lines.

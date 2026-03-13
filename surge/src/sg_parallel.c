@@ -8,6 +8,11 @@
 
 #include <unistd.h>
 
+/* Population pool constants */
+#define SG_POP_DEFAULT_POOL_SIZE   25  /* S27b: enlarged from 6 for BPD diversity */
+#define SG_POP_FEASIBLE_CAP        15  /* S27f: max feasible members */
+#define SG_POP_INFEASIBLE_CAP      10  /* S27f: max infeasible members */
+
 /* ============================================================================
  * Internal types
  * ============================================================================ */
@@ -32,6 +37,11 @@ typedef struct {
     uint32_t num_unassigned;
     uint32_t vehicles_used;
     double total_distance;
+    /* S27b: Broken-pairs next-request map for diversity */
+    uint32_t *next_request;      /* [num_requests] next in same route, UINT32_MAX if last */
+    double biased_fitness;       /* Computed on demand */
+    /* S27f: Feasibility classification */
+    double total_violation;      /* Sum of constraint violations; 0 = feasible */
 } SGPopulationMember;
 
 /* ============================================================================
@@ -75,6 +85,10 @@ static SGStatus sg_context_clone_init(SGContext *clone, const SGContext *src) {
     /* tune_params: shared read-only pointer to master's params — safe for
      * concurrent reads since sg_tune_d()/sg_tune_i() are pure accessors
      * and tune_params is never modified during solving. */
+
+    /* Modified-vehicles bitset: each clone's sg_solve() allocates its own. */
+    clone->modified_vehicles = NULL;
+    clone->modified_vehicles_words = 0;
 
     /* Clear inherited warm start (population search injects its own) */
     clone->initial_route_vehicle_ids = NULL;
@@ -167,6 +181,7 @@ static SGStatus sg_extract_routes(const SGRouteSolution *sol,
     member->num_unassigned = sol->base.num_unassigned;
     member->vehicles_used = sol->vehicles_used;
     member->total_distance = sol->total_distance;
+    member->total_violation = sg_solution_total_violation(sol);
 
     /* Count non-empty routes */
     for (v = 0; v < sol->num_vehicles; v++) {
@@ -213,22 +228,139 @@ static void sg_population_member_free(SGPopulationMember *m) {
     free(m->vehicle_ids);
     free(m->route_lengths);
     free(m->request_ids);
+    free(m->next_request);
     memset(m, 0, sizeof(*m));
 }
 
-/* Forward declaration — defined below with SREX helpers */
-static double sg_population_similarity(const SGPopulationMember *a,
-                                        const SGPopulationMember *b,
-                                        uint32_t num_requests);
+/* S27b: Build next-request map for BPD computation.
+   next_request[r] = request ID that immediately follows r in same route,
+   or UINT32_MAX if r is last in its route or unassigned. */
+static void sg_population_build_next_map(SGPopulationMember *m, uint32_t num_requests) {
+    uint32_t ri, i, offset;
 
+    free(m->next_request);
+    m->next_request = (uint32_t *)malloc((size_t)num_requests * sizeof(uint32_t));
+    if (!m->next_request) return;
+    memset(m->next_request, 0xFF, (size_t)num_requests * sizeof(uint32_t));
+
+    offset = 0;
+    for (ri = 0; ri < m->num_routes; ri++) {
+        uint32_t rlen = m->route_lengths[ri];
+        for (i = 0; i < rlen; i++) {
+            uint32_t rid = m->request_ids[offset + i];
+            if (rid < num_requests) {
+                m->next_request[rid] = (i + 1 < rlen) ? m->request_ids[offset + i + 1] : UINT32_MAX;
+            }
+        }
+        offset += rlen;
+    }
+}
+
+/* S27b: Broken Pairs Distance. Fraction of requests where next differs. O(n). */
+static double sg_broken_pairs_distance(const SGPopulationMember *a,
+                                        const SGPopulationMember *b,
+                                        uint32_t num_requests) {
+    uint32_t i, different = 0, counted = 0;
+
+    if (!a->next_request || !b->next_request || num_requests == 0) return 1.0;
+
+    for (i = 0; i < num_requests; i++) {
+        /* Only count if assigned in both */
+        if (a->next_request[i] == UINT32_MAX && b->next_request[i] == UINT32_MAX) continue;
+        counted++;
+        if (a->next_request[i] != b->next_request[i]) different++;
+    }
+    return counted > 0 ? (double)different / (double)counted : 1.0;
+}
+
+/* S27b: Compute biased fitness for all pool members.
+   fitness = quality_rank + (1 - n_elite/pool_size) * diversity_rank
+   Lower = better. n_elite = pool_size / 5 (PyVRP convention). */
+static void sg_population_compute_fitness(SGPopulationMember *pool, uint32_t pool_size,
+                                           uint32_t num_requests) {
+    uint32_t i, j;
+    double *avg_bpd;       /* average BPD to k nearest neighbors */
+    uint32_t *div_rank;
+    uint32_t n_elite;
+    uint32_t k_near = pool_size < 5 ? pool_size : 5;
+
+    if (pool_size <= 1) {
+        if (pool_size == 1) pool[0].biased_fitness = 0.0;
+        return;
+    }
+
+    avg_bpd = (double *)calloc((size_t)pool_size, sizeof(double));
+    div_rank = (uint32_t *)calloc((size_t)pool_size, sizeof(uint32_t));
+    if (!avg_bpd || !div_rank) {
+        free(avg_bpd);
+        free(div_rank);
+        /* Fallback: use quality rank only */
+        for (i = 0; i < pool_size; i++) pool[i].biased_fitness = (double)i;
+        return;
+    }
+
+    /* Compute average BPD to k nearest neighbors for each member */
+    for (i = 0; i < pool_size; i++) {
+        double *distances = (double *)malloc((size_t)pool_size * sizeof(double));
+        if (!distances) { avg_bpd[i] = 0.0; continue; }
+
+        for (j = 0; j < pool_size; j++) {
+            distances[j] = (i == j) ? 999.0 : sg_broken_pairs_distance(&pool[i], &pool[j], num_requests);
+        }
+        /* Partial sort to find k smallest (simple selection) */
+        {
+            uint32_t k2;
+            double sum = 0.0;
+            for (k2 = 0; k2 < k_near; k2++) {
+                uint32_t min_idx = k2;
+                for (j = k2 + 1; j < pool_size; j++) {
+                    if (distances[j] < distances[min_idx]) min_idx = j;
+                }
+                if (min_idx != k2) {
+                    double tmp = distances[k2]; distances[k2] = distances[min_idx]; distances[min_idx] = tmp;
+                }
+                sum += distances[k2];
+            }
+            avg_bpd[i] = sum / (double)k_near;
+        }
+        free(distances);
+    }
+
+    /* Rank by diversity (higher avg_bpd = more diverse = lower rank = better) */
+    for (i = 0; i < pool_size; i++) div_rank[i] = 0;
+    for (i = 0; i < pool_size; i++) {
+        for (j = 0; j < pool_size; j++) {
+            if (j != i && avg_bpd[j] > avg_bpd[i]) div_rank[i]++;
+        }
+    }
+
+    /* Biased fitness: quality_rank + weight * diversity_rank
+       Pool is sorted by quality, so quality_rank = i.
+       n_elite = max(1, pool_size / 5). */
+    n_elite = pool_size / 5;
+    if (n_elite < 1) n_elite = 1;
+    {
+        double div_weight = 1.0 - (double)n_elite / (double)pool_size;
+        for (i = 0; i < pool_size; i++) {
+            pool[i].biased_fitness = (double)i + div_weight * (double)div_rank[i];
+        }
+    }
+
+    free(avg_bpd);
+    free(div_rank);
+}
+
+/* S27b: PyVRP-style population insert with biased fitness survivor selection.
+   Pool is kept sorted by quality (ascending cost). When full, remove member
+   with worst biased fitness (combines quality rank + diversity rank). */
 static void sg_population_insert_ex(SGPopulationMember *pool, uint32_t *pool_size,
                                      uint32_t pool_capacity, SGPopulationMember *candidate,
                                      uint32_t num_requests) {
-    double cand_score = sg_route_objective_cost(candidate->num_unassigned,
-                                                 candidate->vehicles_used,
-                                                 candidate->total_distance);
     uint32_t sz = *pool_size;
-    uint32_t insert_pos, i;
+    uint32_t i;
+
+    /* Build next-request map for BPD */
+    sg_population_build_next_map(candidate, num_requests);
 
     /* Duplicate detection: skip if same (vehicles_used, total_distance) */
     for (i = 0; i < sz; i++) {
@@ -240,67 +372,105 @@ static void sg_population_insert_ex(SGPopulationMember *pool, uint32_t *pool_siz
         }
     }
 
-    /* Diversity filter: if >90% similar to any existing member AND not strictly better, reject */
-    if (num_requests > 0) {
+    if (sz < pool_capacity) {
+        /* Room in pool — append */
+        pool[sz] = *candidate;
+        *pool_size = sz + 1;
+    } else {
+        /* Pool full — S27f dual-pool survivor selection.
+           Evict from the appropriate subpool to maintain balance. */
+        uint32_t nf = 0, victim_idx = UINT32_MAX;
+        double worst_fitness = -1e30;
+        int cand_feasible = (candidate->total_violation < 1e-9);
+        int evict_feasible;
+
         for (i = 0; i < sz; i++) {
-            double sim = sg_population_similarity(&pool[i], candidate, num_requests);
-            if (sim > 0.90) {
-                double existing_score = sg_route_objective_cost(pool[i].num_unassigned,
-                                                                pool[i].vehicles_used,
-                                                                pool[i].total_distance);
-                if (cand_score >= existing_score - 1e-9) {
-                    sg_population_member_free(candidate);
-                    return;
+            if (pool[i].total_violation < 1e-9) nf++;
+        }
+
+        /* Decide which subpool to evict from:
+           - Candidate feasible + feasible at cap → evict feasible
+           - Candidate infeasible + infeasible at cap → evict infeasible
+           - Otherwise evict from the opposite subpool to make room */
+        evict_feasible = (cand_feasible && nf >= SG_POP_FEASIBLE_CAP) ||
+                         (!cand_feasible && (sz - nf) < SG_POP_INFEASIBLE_CAP);
+
+        sg_population_compute_fitness(pool, sz, num_requests);
+
+        /* Find worst biased fitness in target subpool */
+        for (i = 0; i < sz; i++) {
+            int is_feas = (pool[i].total_violation < 1e-9);
+            if (is_feas != evict_feasible) continue;
+            if (pool[i].biased_fitness > worst_fitness) {
+                worst_fitness = pool[i].biased_fitness;
+                victim_idx = i;
+            }
+        }
+
+        /* Fallback: evict worst from any subpool */
+        if (victim_idx == UINT32_MAX) {
+            for (i = 0; i < sz; i++) {
+                if (pool[i].biased_fitness > worst_fitness) {
+                    worst_fitness = pool[i].biased_fitness;
+                    victim_idx = i;
                 }
             }
         }
-    }
 
-    /* Find insertion position (ascending by score) */
-    insert_pos = sz;
-    for (i = 0; i < sz; i++) {
-        double s = sg_route_objective_cost(pool[i].num_unassigned,
-                                            pool[i].vehicles_used,
-                                            pool[i].total_distance);
-        if (cand_score < s) {
-            insert_pos = i;
-            break;
+        if (victim_idx == UINT32_MAX) {
+            sg_population_member_free(candidate);
+            return;
         }
-    }
 
-    if (sz < pool_capacity) {
-        /* Room in pool — shift right and insert */
-        if (insert_pos < sz) {
-            memmove(&pool[insert_pos + 1], &pool[insert_pos],
-                    (size_t)(sz - insert_pos) * sizeof(SGPopulationMember));
+        /* Accept candidate if it has better cost OR adds diversity */
+        {
+            double cand_cost = sg_route_objective_cost(candidate->num_unassigned,
+                candidate->vehicles_used, candidate->total_distance);
+            double victim_cost = sg_route_objective_cost(pool[victim_idx].num_unassigned,
+                pool[victim_idx].vehicles_used, pool[victim_idx].total_distance);
+            double bpd = (sz > 0) ? sg_broken_pairs_distance(&pool[0], candidate,
+                                                              num_requests) : 1.0;
+
+            if (cand_cost < victim_cost || bpd > 0.2) {
+                sg_population_member_free(&pool[victim_idx]);
+                pool[victim_idx] = *candidate;
+            } else {
+                sg_population_member_free(candidate);
+            }
         }
-        pool[insert_pos] = *candidate;
-        *pool_size = sz + 1;
-    } else if (insert_pos < pool_capacity) {
-        /* Pool full — evict worst (last), shift right, insert */
-        sg_population_member_free(&pool[pool_capacity - 1]);
-        if (insert_pos < pool_capacity - 1) {
-            memmove(&pool[insert_pos + 1], &pool[insert_pos],
-                    (size_t)(pool_capacity - 1 - insert_pos) * sizeof(SGPopulationMember));
-        }
-        pool[insert_pos] = *candidate;
-    } else {
-        /* Candidate is worse than all in full pool */
-        sg_population_member_free(candidate);
     }
 }
 
+/* S27b+S27f: Tournament selection on biased fitness with cross-pool draw.
+   70% of the time draw from feasible subpool, 30% from infeasible.
+   Falls back to any member if the preferred subpool is empty. */
 static uint32_t sg_population_tournament_select(SGPopulationMember *pool,
-                                                  uint32_t pool_size, SHRng *rng) {
-    uint32_t a = sh_rng_next_u32(rng) % pool_size;
-    uint32_t b = sh_rng_next_u32(rng) % pool_size;
-    double sa = sg_route_objective_cost(pool[a].num_unassigned,
-                                         pool[a].vehicles_used,
-                                         pool[a].total_distance);
-    double sb = sg_route_objective_cost(pool[b].num_unassigned,
-                                         pool[b].vehicles_used,
-                                         pool[b].total_distance);
-    return sa <= sb ? a : b;
+                                                  uint32_t pool_size, SHRng *rng,
+                                                  uint32_t num_requests) {
+    uint32_t a, b;
+    int prefer_feasible, attempt;
+
+    sg_population_compute_fitness(pool, pool_size, num_requests);
+
+    prefer_feasible = (sh_rng_next_u32(rng) % 10) < 7;
+
+    /* Draw two candidates, preferring the target subpool (best-effort) */
+    a = sh_rng_next_u32(rng) % pool_size;
+    b = sh_rng_next_u32(rng) % pool_size;
+    for (attempt = 0; attempt < 3; attempt++) {
+        int a_ok = prefer_feasible ? (pool[a].total_violation < 1e-9)
+                                   : (pool[a].total_violation >= 1e-9);
+        if (a_ok) break;
+        a = sh_rng_next_u32(rng) % pool_size;
+    }
+    for (attempt = 0; attempt < 3; attempt++) {
+        int b_ok = prefer_feasible ? (pool[b].total_violation < 1e-9)
+                                   : (pool[b].total_violation >= 1e-9);
+        if (b_ok) break;
+        b = sh_rng_next_u32(rng) % pool_size;
+    }
+
+    return pool[a].biased_fitness <= pool[b].biased_fitness ? a : b;
 }
 
 /* ============================================================================
@@ -341,21 +511,55 @@ static void sg_srex_build_warm_start(const SGPopulationMember *p1,
         return;
     }
 
-    /* Step 1: Select k random routes from P1 */
+    /* Step 1: S27c quality-weighted route selection from P1.
+       Compute per-route distance from request centroids.  Routes with lower
+       per-request distance (better quality) get higher selection probability. */
     {
         uint32_t *perm = (uint32_t *)malloc((size_t)p1->num_routes * sizeof(uint32_t));
-        if (!perm) {
+        double *weights = (double *)malloc((size_t)p1->num_routes * sizeof(double));
+        if (!perm || !weights) {
+            free(perm);
+            free(weights);
             free(placed);
             free(ws_vehicle_ids);
             free(ws_route_lengths);
             free(ws_request_ids);
             return;
         }
-        for (i = 0; i < p1->num_routes; i++) perm[i] = i;
-        /* Fisher-Yates partial shuffle for k elements */
+
+        /* Compute per-route cost and inverse weights */
+        {
+            uint32_t off = 0;
+            for (i = 0; i < p1->num_routes; i++) {
+                double cost = 0.0, px = 0, py = 0;
+                int have_prev = 0;
+                perm[i] = i;
+                for (j = 0; j < p1->route_lengths[i]; j++) {
+                    double cx, cy;
+                    if (sg_request_centroid(clone, p1->request_ids[off + j],
+                                            &cx, &cy)) {
+                        if (have_prev) cost += sg_euclid(px, py, cx, cy);
+                        px = cx; py = cy; have_prev = 1;
+                    }
+                }
+                weights[i] = 1.0 / (cost / (p1->route_lengths[i] > 1
+                                    ? (double)p1->route_lengths[i] : 1.0) + 1.0);
+                off += p1->route_lengths[i];
+            }
+        }
+
+        /* Weighted selection without replacement (roulette) */
         for (i = 0; i < k && i < p1->num_routes; i++) {
-            uint32_t j2 = i + sh_rng_next_u32(rng) % (p1->num_routes - i);
-            uint32_t tmp = perm[i]; perm[i] = perm[j2]; perm[j2] = tmp;
+            double total_w = 0.0, cumul = 0.0, threshold;
+            uint32_t j2, sel = i;
+            for (j2 = i; j2 < p1->num_routes; j2++)
+                total_w += weights[perm[j2]];
+            threshold = (sh_rng_next_u32(rng) / 4294967295.0) * total_w;
+            for (j2 = i; j2 < p1->num_routes; j2++) {
+                cumul += weights[perm[j2]];
+                if (cumul >= threshold) { sel = j2; break; }
+            }
+            { uint32_t tmp = perm[i]; perm[i] = perm[sel]; perm[sel] = tmp; }
         }
 
         /* Copy selected P1 routes */
@@ -377,9 +581,12 @@ static void sg_srex_build_warm_start(const SGPopulationMember *p1,
             ws_num_routes++;
         }
         free(perm);
+        free(weights);
     }
 
-    /* Step 2: For each P2 route, include requests NOT in placed set */
+    /* Step 2: For each P2 route, include requests NOT in placed set.
+       S27c: Skip singleton P2 fragments — let construction place them
+       optimally instead of inheriting weak 1-request routes. */
     offset = 0;
     for (i = 0; i < p2->num_routes; i++) {
         uint32_t rlen = p2->route_lengths[i];
@@ -397,12 +604,14 @@ static void sg_srex_build_warm_start(const SGPopulationMember *p1,
         }
         offset += rlen;
 
-        if (route_count > 0) {
+        if (route_count > 1) {
             ws_vehicle_ids[ws_num_routes] = vid;
             ws_route_lengths[ws_num_routes] = route_count;
             ws_num_routes++;
         } else {
-            /* Roll back if no requests were added */
+            /* Singleton or empty — un-place and let construction handle */
+            for (j = 0; j < route_count; j++)
+                placed[ws_request_ids[route_start + j]] = 0;
             ws_total_requests = route_start;
         }
     }
@@ -419,64 +628,7 @@ static void sg_srex_build_warm_start(const SGPopulationMember *p1,
        and must be freed after the solve completes. */
 }
 
-/* ============================================================================
- * Population diversity: request-to-vehicle similarity
- * ============================================================================ */
-
-static double sg_population_similarity(const SGPopulationMember *a,
-                                        const SGPopulationMember *b,
-                                        uint32_t num_requests) {
-    uint32_t *map_a = NULL;
-    uint32_t *map_b = NULL;
-    uint32_t same = 0, total_assigned = 0;
-    uint32_t ri, offset, i;
-
-    if (!a || !b || num_requests == 0) return 0.0;
-
-    map_a = (uint32_t *)malloc((size_t)num_requests * sizeof(uint32_t));
-    map_b = (uint32_t *)malloc((size_t)num_requests * sizeof(uint32_t));
-    if (!map_a || !map_b) {
-        free(map_a);
-        free(map_b);
-        return 0.0;
-    }
-    memset(map_a, 0xFF, (size_t)num_requests * sizeof(uint32_t));
-    memset(map_b, 0xFF, (size_t)num_requests * sizeof(uint32_t));
-
-    /* Build request→vehicle map for A */
-    offset = 0;
-    for (ri = 0; ri < a->num_routes; ri++) {
-        uint32_t vid = a->vehicle_ids[ri];
-        for (i = 0; i < a->route_lengths[ri]; i++) {
-            uint32_t rid = a->request_ids[offset + i];
-            if (rid < num_requests) map_a[rid] = vid;
-        }
-        offset += a->route_lengths[ri];
-    }
-
-    /* Build request→vehicle map for B */
-    offset = 0;
-    for (ri = 0; ri < b->num_routes; ri++) {
-        uint32_t vid = b->vehicle_ids[ri];
-        for (i = 0; i < b->route_lengths[ri]; i++) {
-            uint32_t rid = b->request_ids[offset + i];
-            if (rid < num_requests) map_b[rid] = vid;
-        }
-        offset += b->route_lengths[ri];
-    }
-
-    /* Count requests on same vehicle in both */
-    for (i = 0; i < num_requests; i++) {
-        if (map_a[i] != UINT32_MAX && map_b[i] != UINT32_MAX) {
-            total_assigned++;
-            if (map_a[i] == map_b[i]) same++;
-        }
-    }
-
-    free(map_a);
-    free(map_b);
-    return total_assigned > 0 ? (double)same / (double)total_assigned : 0.0;
-}
+/* (S27b: old vehicle-assignment similarity removed, replaced by BPD above) */
 
 /* ============================================================================
  * Public API
@@ -632,7 +784,6 @@ cleanup:
  * Population-based search
  * ============================================================================ */
 
-#define SG_POP_DEFAULT_POOL_SIZE   6
 #define SG_POP_DEFAULT_GENERATIONS 3
 
 SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
@@ -652,6 +803,7 @@ SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
     int orig_max_time_seconds;
     int iter_per_gen;
     int time_per_gen;
+    double penalty_scale = 1.0;  /* S27f: dynamic penalty multiplier */
     uint32_t g, i;
 
     if (!ctx) return SG_STATUS_INVALID_ARG;
@@ -667,7 +819,13 @@ SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
         num_threads = (n > 0 && n <= 64) ? (uint32_t)n : 4;
     }
     if (pop_size == 0) pop_size = SG_POP_DEFAULT_POOL_SIZE;
-    if (num_gens == 0) num_gens = SG_POP_DEFAULT_GENERATIONS;
+    if (num_gens == 0) {
+        /* S27e: More generations for large instances — bigger pool needs more
+           iterations to explore diversity, and per-generation iteration cost
+           is lower relative to total budget at large scale. */
+        SGScale scale = sg_scale_from_count(ctx->num_requests);
+        num_gens = (scale >= SG_SCALE_XLARGE) ? 5 : SG_POP_DEFAULT_GENERATIONS;
+    }
 
     /* Single generation = plain parallel solve */
     if (num_gens == 1) {
@@ -744,6 +902,13 @@ SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
             status = sg_context_clone_init(&items[i].clone, ctx);
             if (status != SG_STATUS_OK) goto gen_cleanup;
 
+            /* S27f: Scale penalty weights for dynamic penalty adaptation */
+            if (penalty_scale != 1.0) {
+                int k;
+                for (k = 0; k < SG_PENALTY_COUNT; k++)
+                    items[i].clone.penalty.weight[k] *= penalty_scale;
+            }
+
             /* Set per-generation budget */
             items[i].clone.config.max_iterations = iter_per_gen;
             if (time_per_gen > 0) {
@@ -772,12 +937,12 @@ SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
             if (g > 0 && pop_pool_size > 0) {
                 uint32_t crossover_cutoff = (uint32_t)(xover_frac * (double)num_threads);
                 uint32_t parent = sg_population_tournament_select(
-                    pop_pool, pop_pool_size, select_rng);
+                    pop_pool, pop_pool_size, select_rng, ctx->num_requests);
 
                 if (i < crossover_cutoff && pop_pool_size >= 2) {
                     /* SREX crossover: merge two tournament-selected parents */
                     uint32_t parent2 = sg_population_tournament_select(
-                        pop_pool, pop_pool_size, select_rng);
+                        pop_pool, pop_pool_size, select_rng, ctx->num_requests);
                     /* Ensure different parents */
                     if (parent2 == parent) {
                         parent2 = (parent + 1) % pop_pool_size;
@@ -810,40 +975,62 @@ SGStatus sg_solve_population(SGContext *ctx, const SGPopulationConfig *cfg) {
             sh_completion_wait(&items[i].completion, 0);
         }
 
-        /* Harvest results */
-        for (i = 0; i < num_threads; i++) {
-            SGPopulationMember candidate;
+        /* Harvest results + S27f feasibility tracking */
+        {
+            uint32_t gen_feasible = 0, gen_total = 0;
 
-            if (items[i].result != SG_STATUS_OK && items[i].result != SG_STATUS_LIMIT)
-                continue;
-            if (!items[i].clone.final_solution) continue;
+            for (i = 0; i < num_threads; i++) {
+                SGPopulationMember candidate;
 
-            /* Enable fast arena-copy path (clone computed this, original didn't) */
-            if (ctx->solution_arena_size == 0) {
-                ctx->solution_arena_size = items[i].clone.solution_arena_size;
-            }
+                if (items[i].result != SG_STATUS_OK && items[i].result != SG_STATUS_LIMIT)
+                    continue;
+                if (!items[i].clone.final_solution) continue;
 
-            /* Track global best */
-            if (!global_best ||
-                sg_route_solution_is_better(items[i].clone.final_solution,
-                                            global_best, ctx)) {
-                /* Free previous global best if we own it */
-                if (global_best) {
-                    sg_route_solution_free(global_best, NULL);
+                /* Enable fast arena-copy path (clone computed this, original didn't) */
+                if (ctx->solution_arena_size == 0) {
+                    ctx->solution_arena_size = items[i].clone.solution_arena_size;
                 }
-                global_best = (SGRouteSolution *)sg_route_solution_copy(
-                    items[i].clone.final_solution, ctx);
-                status = items[i].result;
+
+                /* Track global best */
+                if (!global_best ||
+                    sg_route_solution_is_better(items[i].clone.final_solution,
+                                                global_best, ctx)) {
+                    if (global_best) {
+                        sg_route_solution_free(global_best, NULL);
+                    }
+                    global_best = (SGRouteSolution *)sg_route_solution_copy(
+                        items[i].clone.final_solution, ctx);
+                    status = items[i].result;
+                }
+
+                /* S27f: Track feasibility of offspring */
+                gen_total++;
+                if (sg_solution_total_violation(items[i].clone.final_solution) < 1e-9)
+                    gen_feasible++;
+
+                /* Extract route structure into population pool */
+                if (sg_extract_routes(items[i].clone.final_solution, &candidate) == SG_STATUS_OK) {
+                    sg_population_insert_ex(pop_pool, &pop_pool_size, pop_size,
+                                            &candidate, ctx->num_requests);
+                }
+
+                /* Accumulate iterations */
+                total_iterations += (uint32_t)items[i].clone.stats.iterations;
             }
 
-            /* Extract route structure into population pool */
-            if (sg_extract_routes(items[i].clone.final_solution, &candidate) == SG_STATUS_OK) {
-                sg_population_insert_ex(pop_pool, &pop_pool_size, pop_size,
-                                        &candidate, ctx->num_requests);
+            /* S27f: Dynamic penalty adaptation between generations.
+               Target 43% feasible offspring (PyVRP default).
+               Increase penalties when too few feasible, decrease when too many. */
+            if (gen_total > 0 && g + 1 < num_gens) {
+                double feas_frac = (double)gen_feasible / (double)gen_total;
+                if (feas_frac < 0.43) {
+                    penalty_scale *= 1.2;
+                    if (penalty_scale > 10.0) penalty_scale = 10.0;
+                } else if (feas_frac > 0.43) {
+                    penalty_scale *= 0.85;
+                    if (penalty_scale < 0.1) penalty_scale = 0.1;
+                }
             }
-
-            /* Accumulate iterations */
-            total_iterations += (uint32_t)items[i].clone.stats.iterations;
         }
 
 gen_cleanup:
