@@ -93,6 +93,11 @@ static void phase1_shadow_guard_followup_consume_pivot_fail(
 static void phase1_shadow_guard_followup_consume_pivot_success(
     SimplexSolver *solver,
     int *pending);
+static void phase1_shadow_guard_followup_record_direction(
+    SimplexSolver *solver,
+    const SimplexTableau *tab,
+    int leaving,
+    double theta);
 
 /* Phase-1 pivot-failure reasons used by deterministic tracing. */
 enum {
@@ -4480,6 +4485,31 @@ static void phase1_shadow_guard_followup_consume_pivot_success(
         solver);
 }
 
+static void phase1_shadow_guard_followup_record_direction(
+    SimplexSolver *solver,
+    const SimplexTableau *tab,
+    int leaving,
+    double theta) {
+    double dir_inf = 0.0;
+    int dir_nnz = 0;
+    double pivot_abs = 0.0;
+
+    if (!solver || !tab) return;
+    phase1_failed_stabilize_retry_direction_shape(
+        tab,
+        leaving,
+        &dir_inf,
+        &dir_nnz,
+        &pivot_abs);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_followup_direction(
+        solver,
+        leaving,
+        theta,
+        dir_inf,
+        dir_nnz,
+        pivot_abs);
+}
+
 static int phase1_failed_stabilize_retry_penalty_plan(int original_entering,
                                                       int last_failed_entering,
                                                       int same_entering_streak) {
@@ -7069,6 +7099,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     int phase1_failed_stabilize_retry_alt_ratio_fail_streak = 0;
     int phase1_failed_stabilize_retry_pool_sample_counter = 0;
     int phase1_shadow_guard_followup_pending = 0;
+    int phase1_shadow_guard_followup_direction_pending = 0;
     int phase1_dir_escape_cooldown = 0;
     int phase1_force_pivot_attempt_budget = 0;
     int periodic_policy_cooldown = 0;
@@ -7404,6 +7435,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         }
 
         if (ratio_status != 0) {
+            phase1_shadow_guard_followup_direction_pending = 0;
             phase1_shadow_guard_followup_consume_ratio_breakdown(
                 solver, &phase1_shadow_guard_followup_pending);
             phase1_trace_record_no_entering(solver, iter, ratio_status);
@@ -7624,6 +7656,14 @@ static int simplex_phase1(SimplexSolver *solver) {
         /* Guard against numerically explosive search directions before pivoting.
          * Re-factorize and recompute ratio test from the same entering column. */
         double dir_inf = vec_abs_max(tab->work2, tab->m);
+        if (phase1_shadow_guard_followup_direction_pending) {
+            phase1_shadow_guard_followup_record_direction(
+                solver,
+                tab,
+                leaving,
+                theta);
+            phase1_shadow_guard_followup_direction_pending = 0;
+        }
         if (dir_inf > RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
             double dir_inf_ratio =
                 dir_inf / RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER;
@@ -8463,6 +8503,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                             entering);
                     }
                 }
+                phase1_shadow_guard_followup_direction_pending = 0;
                 phase1_shadow_guard_followup_consume_failed_stabilize(
                     solver, &phase1_shadow_guard_followup_pending);
                 lp_telemetry_record_phase1_failed_stabilize_site(
@@ -8481,6 +8522,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                                                     &excluded_entering_ttl_b);
                 if (arm_shadow_guard_followup_pending) {
                     phase1_shadow_guard_followup_pending = 1;
+                    phase1_shadow_guard_followup_direction_pending = 1;
                 }
                 dir_stabilize_cooldown = dir_stabilize_cooldown_target;
                 use_bland = 1;
@@ -8617,6 +8659,7 @@ static int simplex_phase1(SimplexSolver *solver) {
             lp_telemetry_record_pivot_timed(solver, 1, t_pivot_ms);
         }
         if (pivot_status != 0) {
+            phase1_shadow_guard_followup_direction_pending = 0;
             phase1_shadow_guard_followup_consume_pivot_fail(
                 solver, &phase1_shadow_guard_followup_pending);
             if (phase1_note_no_pivot_and_maybe_force(
@@ -9068,6 +9111,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                 }
             }
         } else {
+            phase1_shadow_guard_followup_direction_pending = 0;
             phase1_shadow_guard_followup_consume_pivot_success(
                 solver, &phase1_shadow_guard_followup_pending);
         }

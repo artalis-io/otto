@@ -573,6 +573,80 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_pivot_success
     solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_next_pivot_success++;
 }
 
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_followup_direction(
+    SimplexSolver *solver,
+    int leaving,
+    double theta,
+    double dir_inf,
+    int dir_nnz,
+    double pivot_abs) {
+    double pivot_ratio = 0.0;
+    int bound_geometry = 0;
+
+    if (!solver_telemetry_enabled(solver)) return;
+
+    solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_samples++;
+
+    if (dir_nnz > 0) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_nnz_total +=
+            dir_nnz;
+        if (dir_nnz >
+            solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_nnz_max) {
+            solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_nnz_max =
+                dir_nnz;
+        }
+    }
+    if (isfinite(dir_inf) && dir_inf >= 0.0) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_inf_total +=
+            dir_inf;
+        if (dir_inf >
+            solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_inf_max) {
+            solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_inf_max =
+                dir_inf;
+        }
+    }
+    if (isfinite(pivot_abs) && pivot_abs >= 0.0) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_pivot_abs_total +=
+            pivot_abs;
+        if (pivot_abs >
+            solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_pivot_abs_max) {
+            solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_pivot_abs_max =
+                pivot_abs;
+        }
+    }
+    if (isfinite(theta) && theta >= 0.0) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_theta_total +=
+            theta;
+        if (theta >
+            solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_theta_max) {
+            solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_theta_max =
+                theta;
+        }
+    }
+
+    if (leaving == -2) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_bound_flip++;
+        bound_geometry = 1;
+    }
+    if (isfinite(theta) && theta <= RALPH_FEAS_TOL) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_tiny_theta++;
+        bound_geometry = 1;
+    }
+    if (bound_geometry) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_bound_geometry++;
+        return;
+    }
+
+    if (isfinite(dir_inf) && dir_inf > 0.0) {
+        pivot_ratio = pivot_abs / dir_inf;
+    }
+    if (pivot_ratio <= 1e-6) {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_weak_leaving++;
+    } else {
+        solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_followup_dir_ftran_shape++;
+    }
+}
+
 void lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
     SimplexSolver *solver,
     int used_guarded,

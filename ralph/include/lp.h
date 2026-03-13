@@ -941,6 +941,20 @@ typedef struct {
     int perf_phase1_failed_stabilize_retry_shadow_next_ratio_breakdown;
     int perf_phase1_failed_stabilize_retry_shadow_next_pivot_fail;
     int perf_phase1_failed_stabilize_retry_shadow_next_pivot_success;
+    int perf_phase1_failed_stabilize_retry_shadow_followup_dir_samples;
+    int perf_phase1_failed_stabilize_retry_shadow_followup_dir_bound_geometry;
+    int perf_phase1_failed_stabilize_retry_shadow_followup_dir_bound_flip;
+    int perf_phase1_failed_stabilize_retry_shadow_followup_dir_tiny_theta;
+    int perf_phase1_failed_stabilize_retry_shadow_followup_dir_weak_leaving;
+    int perf_phase1_failed_stabilize_retry_shadow_followup_dir_ftran_shape;
+    int perf_phase1_failed_stabilize_retry_shadow_followup_dir_nnz_total;
+    int perf_phase1_failed_stabilize_retry_shadow_followup_dir_nnz_max;
+    double perf_phase1_failed_stabilize_retry_shadow_followup_dir_inf_total;
+    double perf_phase1_failed_stabilize_retry_shadow_followup_dir_inf_max;
+    double perf_phase1_failed_stabilize_retry_shadow_followup_pivot_abs_total;
+    double perf_phase1_failed_stabilize_retry_shadow_followup_pivot_abs_max;
+    double perf_phase1_failed_stabilize_retry_shadow_followup_theta_total;
+    double perf_phase1_failed_stabilize_retry_shadow_followup_theta_max;
     int perf_phase1_failed_stabilize_retry_selector_bland_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total;
@@ -1477,6 +1491,20 @@ typedef struct {
     int perf_phase1_failed_stabilize_retry_shadow_next_ratio_breakdown;
     int perf_phase1_failed_stabilize_retry_shadow_next_pivot_fail;
     int perf_phase1_failed_stabilize_retry_shadow_next_pivot_success;
+    int perf_phase1_failed_stabilize_retry_shadow_followup_dir_samples;
+    int perf_phase1_failed_stabilize_retry_shadow_followup_dir_bound_geometry;
+    int perf_phase1_failed_stabilize_retry_shadow_followup_dir_bound_flip;
+    int perf_phase1_failed_stabilize_retry_shadow_followup_dir_tiny_theta;
+    int perf_phase1_failed_stabilize_retry_shadow_followup_dir_weak_leaving;
+    int perf_phase1_failed_stabilize_retry_shadow_followup_dir_ftran_shape;
+    int perf_phase1_failed_stabilize_retry_shadow_followup_dir_nnz_total;
+    int perf_phase1_failed_stabilize_retry_shadow_followup_dir_nnz_max;
+    double perf_phase1_failed_stabilize_retry_shadow_followup_dir_inf_total;
+    double perf_phase1_failed_stabilize_retry_shadow_followup_dir_inf_max;
+    double perf_phase1_failed_stabilize_retry_shadow_followup_pivot_abs_total;
+    double perf_phase1_failed_stabilize_retry_shadow_followup_pivot_abs_max;
+    double perf_phase1_failed_stabilize_retry_shadow_followup_theta_total;
+    double perf_phase1_failed_stabilize_retry_shadow_followup_theta_max;
     int perf_phase1_failed_stabilize_retry_selector_bland_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total;
@@ -2156,6 +2184,13 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_pivot_fail(
     SimplexSolver *solver);
 void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_pivot_success(
     SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_followup_direction(
+    SimplexSolver *solver,
+    int leaving,
+    double theta,
+    double dir_inf,
+    int dir_nnz,
+    double pivot_abs);
 void lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
     SimplexSolver *solver,
     int used_guarded,

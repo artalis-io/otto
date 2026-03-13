@@ -1683,7 +1683,67 @@ Completed slices:
         `DIR_SKIP` recompute, not exclusion length, ratio-breakdown handling,
         pivot-failure handling, or broader selector scoring
 
-19. Rejected after `W2.18`: one-shot post-shadow non-Bland pricing override.
+19. `W2.19` classify the post-shadow follow-up direction after recompute.
+    - added telemetry for the first post-shadow follow-up direction:
+      - sample count
+      - direction nnz total/max
+      - direction inf-norm total/max
+      - leaving pivot abs total/max
+      - theta total/max
+      - follow-up class:
+        - bound geometry
+        - bound flip
+        - tiny theta
+        - weak leaving
+        - FTRAN-shape remainder
+    - focused result:
+      - `wood1p`:
+        - `failed_stabilize_retry_shadow_followup_dir_samples=27`
+        - `failed_stabilize_retry_shadow_followup_dir_bound_geometry=27`
+        - `failed_stabilize_retry_shadow_followup_dir_bound_flip=27`
+        - `failed_stabilize_retry_shadow_followup_dir_tiny_theta=0`
+        - `failed_stabilize_retry_shadow_followup_dir_weak_leaving=0`
+        - `failed_stabilize_retry_shadow_followup_dir_ftran_shape=0`
+        - `failed_stabilize_retry_shadow_followup_dir_nnz_max=117`
+        - `failed_stabilize_retry_shadow_followup_dir_inf_max=28474280.162531`
+        - `failed_stabilize_retry_shadow_followup_theta_max=5.623474`
+        - `time_ms=2389.020`
+        - `iterations=925`
+        - artifact: `/tmp/wood1p_shadow_followup_dirclass.json`
+      - `greenbeb`:
+        - `failed_stabilize_retry_shadow_followup_dir_samples=83`
+        - `failed_stabilize_retry_shadow_followup_dir_bound_geometry=83`
+        - `failed_stabilize_retry_shadow_followup_dir_bound_flip=0`
+        - `failed_stabilize_retry_shadow_followup_dir_tiny_theta=83`
+        - `failed_stabilize_retry_shadow_followup_dir_weak_leaving=0`
+        - `failed_stabilize_retry_shadow_followup_dir_ftran_shape=0`
+        - `failed_stabilize_retry_shadow_followup_dir_nnz_max=233`
+        - `failed_stabilize_retry_shadow_followup_dir_inf_max=10291472.664632`
+        - `failed_stabilize_retry_shadow_followup_theta_max=0.000000`
+        - `time_ms=6468.134`
+        - `iterations=1628`
+        - artifact: `/tmp/greenbeb_shadow_followup_dirclass.json`
+    - gate result:
+      - small NETLIB gate passed:
+        - artifact: `/tmp/netlib-regression-gate-20260313-103210`
+        - `27/27`
+        - `0` timeouts
+        - `0` dense fallbacks
+      - full NETLIB gate stayed baseline-clean:
+        - artifact: `/tmp/netlib-regression-gate-20260313-103228`
+        - `84` files
+        - `22` timeouts
+        - `0` status/objective/invalid mismatches
+        - `0` dense fallbacks
+    - implication:
+      - the post-shadow follow-up path now separates cleanly:
+        - `wood1p` is a bound-flip follow-up problem
+        - `greenbeb` is a tiny-theta follow-up problem
+      - neither file is primarily a weak-leaving or generic FTRAN-shape case
+      - the next Week 2 lever should split these two follow-up geometries
+        instead of widening retry-lane scoring again
+
+20. Rejected after `W2.18`: one-shot post-shadow non-Bland pricing override.
     - tried a bounded immediate follow-up that bypassed one forced Bland
       pricing step after a shadow-toxic exclusion
     - result:
