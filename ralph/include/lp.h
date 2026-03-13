@@ -934,6 +934,13 @@ typedef struct {
     double perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max;
     int perf_phase1_failed_stabilize_retry_shadow_guard_arms;
     int perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions;
+    int perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry;
+    int perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue;
+    int perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor;
+    int perf_phase1_failed_stabilize_retry_shadow_next_failed_stabilize;
+    int perf_phase1_failed_stabilize_retry_shadow_next_ratio_breakdown;
+    int perf_phase1_failed_stabilize_retry_shadow_next_pivot_fail;
+    int perf_phase1_failed_stabilize_retry_shadow_next_pivot_success;
     int perf_phase1_failed_stabilize_retry_selector_bland_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total;
@@ -1463,6 +1470,13 @@ typedef struct {
     double perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max;
     int perf_phase1_failed_stabilize_retry_shadow_guard_arms;
     int perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions;
+    int perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry;
+    int perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue;
+    int perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor;
+    int perf_phase1_failed_stabilize_retry_shadow_next_failed_stabilize;
+    int perf_phase1_failed_stabilize_retry_shadow_next_ratio_breakdown;
+    int perf_phase1_failed_stabilize_retry_shadow_next_pivot_fail;
+    int perf_phase1_failed_stabilize_retry_shadow_next_pivot_success;
     int perf_phase1_failed_stabilize_retry_selector_bland_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_arms;
     int perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total;
@@ -2127,6 +2141,20 @@ void lp_telemetry_record_phase1_failed_stabilize_retry_shadow(
 void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_guard_arm(
     SimplexSolver *solver);
 void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_guard_original_exclusion(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_failed_stabilize(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_ratio_breakdown(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_pivot_fail(
+    SimplexSolver *solver);
+void lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_pivot_success(
     SimplexSolver *solver);
 void lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
     SimplexSolver *solver,

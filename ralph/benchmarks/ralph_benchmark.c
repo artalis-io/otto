@@ -404,6 +404,13 @@ typedef struct {
     double phase1_failed_stabilize_retry_shadow_pivot_abs_max;
     int phase1_failed_stabilize_retry_shadow_guard_arms;
     int phase1_failed_stabilize_retry_shadow_guard_original_exclusions;
+    int phase1_failed_stabilize_retry_shadow_post_dir_skip_retry;
+    int phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue;
+    int phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor;
+    int phase1_failed_stabilize_retry_shadow_next_failed_stabilize;
+    int phase1_failed_stabilize_retry_shadow_next_ratio_breakdown;
+    int phase1_failed_stabilize_retry_shadow_next_pivot_fail;
+    int phase1_failed_stabilize_retry_shadow_next_pivot_success;
     int phase1_failed_stabilize_retry_selector_bland_arms;
     int phase1_failed_stabilize_retry_selector_guarded_arms;
     int phase1_failed_stabilize_retry_selector_guarded_eligible_total;
@@ -1580,6 +1587,20 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_failed_stabilize_retry_shadow_guard_arms;
             result.phase1_failed_stabilize_retry_shadow_guard_original_exclusions =
                 solver_tel.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions;
+            result.phase1_failed_stabilize_retry_shadow_post_dir_skip_retry =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry;
+            result.phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue;
+            result.phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor;
+            result.phase1_failed_stabilize_retry_shadow_next_failed_stabilize =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_next_failed_stabilize;
+            result.phase1_failed_stabilize_retry_shadow_next_ratio_breakdown =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_next_ratio_breakdown;
+            result.phase1_failed_stabilize_retry_shadow_next_pivot_fail =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_next_pivot_fail;
+            result.phase1_failed_stabilize_retry_shadow_next_pivot_success =
+                solver_tel.perf_phase1_failed_stabilize_retry_shadow_next_pivot_success;
             result.phase1_failed_stabilize_retry_selector_bland_arms =
                 solver_tel.perf_phase1_failed_stabilize_retry_selector_bland_arms;
             result.phase1_failed_stabilize_retry_selector_guarded_arms =
@@ -3180,6 +3201,20 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_failed_stabilize_retry_shadow_guard_arms);
     fprintf(out, "      \"failed_stabilize_retry_shadow_guard_original_exclusions\": %d,\n",
             ralph->phase1_failed_stabilize_retry_shadow_guard_original_exclusions);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_post_dir_skip_retry\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_post_dir_skip_retry);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_post_dir_skip_dual_rescue\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_post_dir_skip_forced_refactor\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_next_failed_stabilize\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_next_failed_stabilize);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_next_ratio_breakdown\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_next_ratio_breakdown);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_next_pivot_fail\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_next_pivot_fail);
+    fprintf(out, "      \"failed_stabilize_retry_shadow_next_pivot_success\": %d,\n",
+            ralph->phase1_failed_stabilize_retry_shadow_next_pivot_success);
     fprintf(out, "      \"failed_stabilize_retry_selector_bland_arms\": %d,\n",
             ralph->phase1_failed_stabilize_retry_selector_bland_arms);
     fprintf(out, "      \"failed_stabilize_retry_selector_guarded_arms\": %d,\n",

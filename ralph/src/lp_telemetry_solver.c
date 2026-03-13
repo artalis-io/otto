@@ -229,6 +229,13 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max = 0.0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_arms = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_next_failed_stabilize = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_next_ratio_breakdown = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_next_pivot_fail = 0;
+    solver->telemetry.perf_phase1_failed_stabilize_retry_shadow_next_pivot_success = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_selector_bland_arms = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_arms = 0;
     solver->telemetry.perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total = 0;
@@ -747,6 +754,13 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_shadow_pivot_abs_max);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_shadow_guard_arms);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_shadow_guard_original_exclusions);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_shadow_next_failed_stabilize);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_shadow_next_ratio_breakdown);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_shadow_next_pivot_fail);
+    COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_shadow_next_pivot_success);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_bland_arms);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_guarded_arms);
     COPY_SOLVER_FIELD(perf_phase1_failed_stabilize_retry_selector_guarded_eligible_total);
