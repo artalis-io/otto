@@ -583,6 +583,7 @@ typedef struct {
     int perf_phase1_force_pivot_budget_pivot_spend;
     int perf_phase1_force_pivot_relax_applied;
     int perf_phase1_force_extreme_relax_applied;
+    int perf_phase1_force_extreme_bound_flip_relax_applied;
     int perf_phase1_force_extreme_tiny_theta_relax_applied;
     int perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry;
     int perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue;

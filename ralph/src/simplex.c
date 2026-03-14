@@ -1699,6 +1699,26 @@ static int phase1_force_extreme_tiny_theta_relax_plan(
         tiny_theta_followup_streak);
 }
 
+static int phase1_force_extreme_bound_flip_relax_plan(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int bound_flip_followup_streak) {
+    return lp_refactor_policy_phase1_force_extreme_bound_flip_relax_plan(
+        m,
+        degenerate_count,
+        no_progress_streak,
+        dir_inf_ratio,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        bound_flip_followup_streak);
+}
+
 static int phase1_note_no_pivot_and_maybe_force(SimplexSolver *solver,
                                                 int m,
                                                 int degenerate_count,
@@ -1994,6 +2014,26 @@ int simplex_phase1_force_extreme_tiny_theta_relax_plan_for_test(
         force_lu_health,
         lu_hard_trigger,
         tiny_theta_followup_streak);
+}
+
+int simplex_phase1_force_extreme_bound_flip_relax_plan_for_test(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int bound_flip_followup_streak) {
+    return phase1_force_extreme_bound_flip_relax_plan(
+        m,
+        degenerate_count,
+        no_progress_streak,
+        dir_inf_ratio,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        bound_flip_followup_streak);
 }
 
 int simplex_phase1_soft_lu_policy_cooldown_plan_for_test(
@@ -7326,6 +7366,7 @@ static int simplex_phase1(SimplexSolver *solver) {
     int phase1_shadow_guard_followup_direction_pending = 0;
     int phase1_force_extreme_followup_pending = 0;
     int phase1_force_extreme_followup_direction_pending = 0;
+    int phase1_force_extreme_followup_bound_flip_streak = 0;
     int phase1_force_extreme_followup_tiny_theta_streak = 0;
     int phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
     int phase1_force_extreme_tiny_theta_relax_next_pending = 0;
@@ -7674,6 +7715,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         if (ratio_status != 0) {
             phase1_shadow_guard_followup_direction_pending = 0;
             phase1_force_extreme_followup_direction_pending = 0;
+            phase1_force_extreme_followup_bound_flip_streak = 0;
             phase1_force_extreme_followup_tiny_theta_streak = 0;
             phase1_shadow_guard_followup_consume_ratio_breakdown(
                 solver, &phase1_shadow_guard_followup_pending);
@@ -7913,11 +7955,18 @@ static int simplex_phase1(SimplexSolver *solver) {
                 tab,
                 leaving,
                 theta);
-            if (leaving != -2 && theta <= RALPH_FEAS_TOL) {
+            if (leaving == -2) {
+                if (phase1_force_extreme_followup_bound_flip_streak < INT_MAX) {
+                    phase1_force_extreme_followup_bound_flip_streak++;
+                }
+                phase1_force_extreme_followup_tiny_theta_streak = 0;
+            } else if (theta <= RALPH_FEAS_TOL) {
                 if (phase1_force_extreme_followup_tiny_theta_streak < INT_MAX) {
                     phase1_force_extreme_followup_tiny_theta_streak++;
                 }
+                phase1_force_extreme_followup_bound_flip_streak = 0;
             } else {
+                phase1_force_extreme_followup_bound_flip_streak = 0;
                 phase1_force_extreme_followup_tiny_theta_streak = 0;
             }
             phase1_force_extreme_followup_direction_pending = 0;
@@ -8034,6 +8083,26 @@ static int simplex_phase1(SimplexSolver *solver) {
                                 entering,
                                 dir_inf_ratio,
                                 phase1_no_pivot_no_progress_streak);
+                    }
+                }
+                if (phase1_force_extreme_bound_flip_relax_plan(
+                        tab->m,
+                        degenerate_count,
+                        phase1_no_pivot_no_progress_streak,
+                        dir_inf_ratio,
+                        force_dir_refactor_extreme,
+                        force_dir_refactor_lu_health,
+                        lu_hard_trigger,
+                        phase1_force_extreme_followup_bound_flip_streak)) {
+                    force_dir_refactor_extreme = 0;
+                    lp_telemetry_record_phase1_force_extreme_bound_flip_relax(
+                        solver);
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Relaxed extreme-direction refactor on repeated bound-flip follow-up treadmill (iter=%d entering=%d ratio=%.2f streak=%d)\n",
+                                iter,
+                                entering,
+                                dir_inf_ratio,
+                                phase1_force_extreme_followup_bound_flip_streak);
                     }
                 }
                 if (phase1_force_extreme_tiny_theta_relax_plan(
@@ -8582,6 +8651,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                     if (force_extreme_followup_tracked) {
                         lp_telemetry_record_phase1_force_extreme_followup_stabilized(
                             solver);
+                        phase1_force_extreme_followup_bound_flip_streak = 0;
                         phase1_force_extreme_followup_tiny_theta_streak = 0;
                     }
                     if (retry_used_local_memory_alt) {
@@ -8764,6 +8834,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                         if (force_extreme_followup_tracked) {
                             lp_telemetry_record_phase1_force_extreme_followup_stabilized(
                                 solver);
+                            phase1_force_extreme_followup_bound_flip_streak = 0;
                             phase1_force_extreme_followup_tiny_theta_streak = 0;
                         }
                         phase1_failed_stabilize_retry_alt_ratio_fail_streak = 0;
@@ -9161,6 +9232,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         if (pivot_status != 0) {
             phase1_shadow_guard_followup_direction_pending = 0;
             phase1_force_extreme_followup_direction_pending = 0;
+            phase1_force_extreme_followup_bound_flip_streak = 0;
             phase1_force_extreme_followup_tiny_theta_streak = 0;
             phase1_shadow_guard_followup_consume_pivot_fail(
                 solver, &phase1_shadow_guard_followup_pending);
@@ -9628,6 +9700,7 @@ static int simplex_phase1(SimplexSolver *solver) {
         } else {
             phase1_shadow_guard_followup_direction_pending = 0;
             phase1_force_extreme_followup_direction_pending = 0;
+            phase1_force_extreme_followup_bound_flip_streak = 0;
             phase1_force_extreme_followup_tiny_theta_streak = 0;
             phase1_shadow_guard_followup_consume_pivot_success(
                 solver, &phase1_shadow_guard_followup_pending);

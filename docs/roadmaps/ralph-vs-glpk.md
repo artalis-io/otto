@@ -2141,6 +2141,58 @@ Conclusion:
 - the next useful Week 3 work should target the catastrophic follow-up
   geometry directly, not the arm type
 
+### `W3.7` large-basis bound-flip `force_extreme_dir` relax split
+
+Status:
+- landed as a policy baseline
+- small gate stayed green
+- full gate stayed baseline-clean
+- timeout count did not drop yet
+
+What was added:
+- a separate narrow phase-1 helper for repeated bound-flip follow-up on the
+  `force_extreme_dir` treadmill
+- unlike the tiny-theta helper, this split is limited to larger bases only
+  (`m >= 700`) so it does not arm on the smaller mixed-geometry `wood1p` path
+- added a dedicated telemetry counter:
+  `phase1_force_extreme_bound_flip_relax_applied`
+
+Validation:
+- `make -C ralph test-simplex-policy` passed (`167/167`)
+- `make -C ralph test-lp-telemetry-solver` passed (`773/773`)
+- `make -C ralph build-ralph-benchmark` passed
+- `make -C ralph test-netlib-gate-small` passed
+  - artifact: `/tmp/netlib-regression-gate-20260314-102402`
+- `make -C ralph test-netlib-gate` passed baseline-clean
+  - `84` files
+  - `22` timeouts
+  - `0` status/objective/invalid mismatches
+  - `0` dense fallback files
+  - artifact: `/tmp/netlib-regression-gate-20260314-102407`
+
+Focused effect:
+- `wood1p.mps`
+  - about `2454 ms / 1110 iters`
+  - `phase1_force_extreme_bound_flip_relax_applied=0`
+  - mixed bound-flip / tiny-theta path remains on the existing logic
+- `greenbea.mps`
+  - about `12182 ms / 16054 iters` on the telemetry-only baseline
+  - about `9014 ms / 27339 iters` with the new split helper
+  - `phase1_force_extreme_bound_flip_relax_applied=24`
+- `maros.mps`
+  - about `1329 ms / 3046 iters` on the telemetry-only baseline
+  - about `1143 ms / 3769 iters` with the new split helper
+  - `phase1_force_extreme_bound_flip_relax_applied=0`
+- `d6cube.mps`
+  - about `21214 ms / 7933 iters`
+  - `phase1_force_extreme_bound_flip_relax_applied=0`
+
+Conclusion:
+- the bound-flip split now stays off the small mixed-geometry `wood1p` path
+- it is only active on the large bound-flip family and is no-regression clean
+- it materially improves `greenbea` wall time inside the same hard-cap window
+- it also leaves the existing `d6cube` tiny-theta path untouched
+
 ### Week 4: Capacity / Policy Decoupling
 
 Goal:

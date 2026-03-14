@@ -147,6 +147,7 @@ void lp_telemetry_reset_solver(SimplexSolver *solver) {
     solver->telemetry.perf_phase1_force_pivot_budget_pivot_spend = 0;
     solver->telemetry.perf_phase1_force_pivot_relax_applied = 0;
     solver->telemetry.perf_phase1_force_extreme_relax_applied = 0;
+    solver->telemetry.perf_phase1_force_extreme_bound_flip_relax_applied = 0;
     solver->telemetry.perf_phase1_force_extreme_tiny_theta_relax_applied = 0;
     solver->telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry = 0;
     solver->telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue = 0;
@@ -774,6 +775,7 @@ void lp_telemetry_snapshot_solver(const SimplexSolver *solver,
     COPY_SOLVER_FIELD(perf_phase1_force_pivot_budget_pivot_spend);
     COPY_SOLVER_FIELD(perf_phase1_force_pivot_relax_applied);
     COPY_SOLVER_FIELD(perf_phase1_force_extreme_relax_applied);
+    COPY_SOLVER_FIELD(perf_phase1_force_extreme_bound_flip_relax_applied);
     COPY_SOLVER_FIELD(perf_phase1_force_extreme_tiny_theta_relax_applied);
     COPY_SOLVER_FIELD(perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry);
     COPY_SOLVER_FIELD(perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue);

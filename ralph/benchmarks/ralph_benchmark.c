@@ -322,6 +322,7 @@ typedef struct {
     int phase1_force_pivot_budget_pivot_spend;
     int phase1_force_pivot_relax_applied;
     int phase1_force_extreme_relax_applied;
+    int phase1_force_extreme_bound_flip_relax_applied;
     int phase1_force_extreme_tiny_theta_relax_applied;
     int phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry;
     int phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue;
@@ -1525,6 +1526,8 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                 solver_tel.perf_phase1_force_pivot_relax_applied;
             result.phase1_force_extreme_relax_applied =
                 solver_tel.perf_phase1_force_extreme_relax_applied;
+            result.phase1_force_extreme_bound_flip_relax_applied =
+                solver_tel.perf_phase1_force_extreme_bound_flip_relax_applied;
             result.phase1_force_extreme_tiny_theta_relax_applied =
                 solver_tel.perf_phase1_force_extreme_tiny_theta_relax_applied;
             result.phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry =
@@ -3258,6 +3261,8 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->phase1_force_pivot_relax_applied);
     fprintf(out, "      \"force_extreme_relax_applied\": %d,\n",
             ralph->phase1_force_extreme_relax_applied);
+    fprintf(out, "      \"force_extreme_bound_flip_relax_applied\": %d,\n",
+            ralph->phase1_force_extreme_bound_flip_relax_applied);
     fprintf(out, "      \"force_extreme_tiny_theta_relax_applied\": %d,\n",
             ralph->phase1_force_extreme_tiny_theta_relax_applied);
     fprintf(out, "      \"force_extreme_tiny_theta_relax_post_dir_skip_retry\": %d,\n",
