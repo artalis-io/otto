@@ -1719,6 +1719,28 @@ static int phase1_force_extreme_bound_flip_relax_plan(
         bound_flip_followup_streak);
 }
 
+static int phase1_force_extreme_catastrophic_tiny_theta_relax_plan(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int tiny_theta_followup_streak,
+    double pivot_ratio) {
+    return lp_refactor_policy_phase1_force_extreme_catastrophic_tiny_theta_relax_plan(
+        m,
+        degenerate_count,
+        no_progress_streak,
+        dir_inf_ratio,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        tiny_theta_followup_streak,
+        pivot_ratio);
+}
+
 static int phase1_note_no_pivot_and_maybe_force(SimplexSolver *solver,
                                                 int m,
                                                 int degenerate_count,
@@ -2034,6 +2056,28 @@ int simplex_phase1_force_extreme_bound_flip_relax_plan_for_test(
         force_lu_health,
         lu_hard_trigger,
         bound_flip_followup_streak);
+}
+
+int simplex_phase1_force_extreme_catastrophic_tiny_theta_relax_plan_for_test(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int tiny_theta_followup_streak,
+    double pivot_ratio) {
+    return phase1_force_extreme_catastrophic_tiny_theta_relax_plan(
+        m,
+        degenerate_count,
+        no_progress_streak,
+        dir_inf_ratio,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        tiny_theta_followup_streak,
+        pivot_ratio);
 }
 
 int simplex_phase1_soft_lu_policy_cooldown_plan_for_test(
@@ -7974,6 +8018,8 @@ static int simplex_phase1(SimplexSolver *solver) {
         if (dir_inf > RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
             double dir_inf_ratio =
                 dir_inf / RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER;
+            double current_pivot_ratio = 0.0;
+            double current_pivot_abs = 0.0;
             int cooldown_active = (dir_stabilize_cooldown > 0);
             int dir_stabilize_cooldown_target;
             int force_dir_refactor_extreme = 0;
@@ -7986,6 +8032,15 @@ static int simplex_phase1(SimplexSolver *solver) {
             int escape_triggered = 0;
             int escape_hard_bypass = 0;
             int suppress_lu_health = 0;
+            phase1_failed_stabilize_retry_direction_shape(
+                tab,
+                leaving,
+                NULL,
+                NULL,
+                &current_pivot_abs);
+            if (current_pivot_abs > 0.0 && dir_inf > 0.0) {
+                current_pivot_ratio = current_pivot_abs / dir_inf;
+            }
             if (lp_glpk_strict_allow_phase1_dir_stabilize_force(
                     solver->glpk_strict_mode)) {
                 force_dir_refactor_extreme =
@@ -8103,6 +8158,28 @@ static int simplex_phase1(SimplexSolver *solver) {
                                 entering,
                                 dir_inf_ratio,
                                 phase1_force_extreme_followup_bound_flip_streak);
+                    }
+                }
+                if (phase1_force_extreme_catastrophic_tiny_theta_relax_plan(
+                        tab->m,
+                        degenerate_count,
+                        phase1_no_pivot_no_progress_streak,
+                        dir_inf_ratio,
+                        force_dir_refactor_extreme,
+                        force_dir_refactor_lu_health,
+                        lu_hard_trigger,
+                        phase1_force_extreme_followup_tiny_theta_streak,
+                        current_pivot_ratio)) {
+                    force_dir_refactor_extreme = 0;
+                    lp_telemetry_record_phase1_force_extreme_catastrophic_tiny_theta_relax(
+                        solver);
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Relaxed extreme-direction refactor on catastrophic tiny-theta follow-up treadmill (iter=%d entering=%d ratio=%.2f streak=%d pivot_ratio=%.3e)\n",
+                                iter,
+                                entering,
+                                dir_inf_ratio,
+                                phase1_force_extreme_followup_tiny_theta_streak,
+                                current_pivot_ratio);
                     }
                 }
                 if (phase1_force_extreme_tiny_theta_relax_plan(

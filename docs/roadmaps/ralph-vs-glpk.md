@@ -2193,6 +2193,60 @@ Conclusion:
 - it materially improves `greenbea` wall time inside the same hard-cap window
 - it also leaves the existing `d6cube` tiny-theta path untouched
 
+### `W3.8` catastrophic tiny-theta split from the mild `d6cube` path
+
+Status:
+- landed as a policy baseline
+- small gate stayed green
+- full gate stayed baseline-clean
+- timeout count did not drop yet
+
+What was added:
+- a separate catastrophic tiny-theta `force_extreme_dir` relax helper
+- unlike the older mild helper, this split requires:
+  - larger bases (`m >= 700`)
+  - repeated tiny-theta follow-up
+  - a catastrophically weak current pivot ratio
+- added a dedicated telemetry counter:
+  `phase1_force_extreme_catastrophic_tiny_theta_relax_applied`
+
+Validation:
+- `make -C ralph test-simplex-policy` passed (`172/172`)
+- `make -C ralph test-lp-telemetry-solver` passed (`776/776`)
+- `make -C ralph build-ralph-benchmark` passed
+- `make -C ralph test-netlib-gate-small` passed
+  - artifact: `/tmp/netlib-regression-gate-20260314-151631`
+- `make -C ralph test-netlib-gate` passed baseline-clean
+  - `84` files
+  - `22` timeouts
+  - `0` status/objective/invalid mismatches
+  - `0` dense fallback files
+  - artifact: `/tmp/netlib-regression-gate-20260314-151654`
+
+Focused effect:
+- `maros.mps`
+  - about `1141 ms / 3797 iters` on the previous baseline
+  - about `1144 ms / 3822 iters` with the new split
+  - `phase1_force_extreme_catastrophic_tiny_theta_relax_applied=44`
+  - `phase1_force_extreme_tiny_theta_relax_applied=0`
+- `d6cube.mps`
+  - about `21258 ms / 7982 iters`
+  - `phase1_force_extreme_catastrophic_tiny_theta_relax_applied=0`
+  - stays on the older mild tiny-theta helper
+- `greenbea.mps`
+  - about `8844 ms / 27318 iters`
+  - `phase1_force_extreme_catastrophic_tiny_theta_relax_applied=8`
+  - `phase1_force_extreme_bound_flip_relax_applied=24`
+- `wood1p.mps`
+  - about `2357 ms / 1074 iters`
+  - `phase1_force_extreme_catastrophic_tiny_theta_relax_applied=0`
+
+Conclusion:
+- the `maros`-class path is now cleanly separated from the mild `d6cube` path
+- the split stays off `wood1p`
+- the direct speed effect is modest, but the policy is now orthogonal and
+  measurable instead of folding all tiny-theta behavior into one helper
+
 ### Week 4: Capacity / Policy Decoupling
 
 Goal:

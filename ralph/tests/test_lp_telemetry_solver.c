@@ -86,6 +86,7 @@ static void test_solver_reset_and_refactor_accounting(void) {
     solver.telemetry.perf_phase1_dir_stabilize_skip_no_recompute = 7;
     solver.telemetry.perf_phase1_dir_stabilize_skip_guard_refresh = 3;
     solver.telemetry.perf_phase1_force_extreme_bound_flip_relax_applied = 5;
+    solver.telemetry.perf_phase1_force_extreme_catastrophic_tiny_theta_relax_applied = 6;
     solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_applied = 4;
     solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry = 3;
     solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue = 1;
@@ -380,6 +381,8 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "reset: phase1 dir skip guard refresh");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_bound_flip_relax_applied, 0,
                   "reset: phase1 force extreme bound-flip relax");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_catastrophic_tiny_theta_relax_applied, 0,
+                  "reset: phase1 force extreme catastrophic tiny-theta relax");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_applied, 0,
                   "reset: phase1 force extreme tiny-theta relax");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry, 0,
@@ -1064,6 +1067,7 @@ static void test_solver_reset_and_refactor_accounting(void) {
     lp_telemetry_record_phase1_force_extreme_followup_direction(
         &solver, 11, 1.0e-2, 5.0e5, 96, 5.0);
     lp_telemetry_record_phase1_force_extreme_bound_flip_relax(&solver);
+    lp_telemetry_record_phase1_force_extreme_catastrophic_tiny_theta_relax(&solver);
     lp_telemetry_record_phase1_force_extreme_tiny_theta_relax(&solver);
     lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry(&solver);
     lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue(&solver);
@@ -1255,6 +1259,8 @@ static void test_solver_reset_and_refactor_accounting(void) {
                   "record: phase1 force-extreme followup dir ftran shape");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_bound_flip_relax_applied, 1,
                   "record: phase1 force extreme bound-flip relax");
+    ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_catastrophic_tiny_theta_relax_applied, 1,
+                  "record: phase1 force extreme catastrophic tiny-theta relax");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_applied, 1,
                   "record: phase1 force extreme tiny-theta relax");
     ASSERT_INT_EQ(solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry, 1,
@@ -1503,6 +1509,7 @@ static void test_solver_snapshot(void) {
     solver.telemetry.perf_phase1_dir_stabilize_skip_no_recompute = 12;
     solver.telemetry.perf_phase1_dir_stabilize_skip_guard_refresh = 3;
     solver.telemetry.perf_phase1_force_extreme_bound_flip_relax_applied = 6;
+    solver.telemetry.perf_phase1_force_extreme_catastrophic_tiny_theta_relax_applied = 8;
     solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_applied = 7;
     solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry = 9;
     solver.telemetry.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue = 2;
@@ -1803,6 +1810,8 @@ static void test_solver_snapshot(void) {
                   "solver_snapshot: phase1 dir skip guard refresh");
     ASSERT_INT_EQ(snap.perf_phase1_force_extreme_bound_flip_relax_applied, 6,
                   "solver_snapshot: phase1 force extreme bound-flip relax");
+    ASSERT_INT_EQ(snap.perf_phase1_force_extreme_catastrophic_tiny_theta_relax_applied, 8,
+                  "solver_snapshot: phase1 force extreme catastrophic tiny-theta relax");
     ASSERT_INT_EQ(snap.perf_phase1_force_extreme_tiny_theta_relax_applied, 7,
                   "solver_snapshot: phase1 force extreme tiny-theta relax");
     ASSERT_INT_EQ(snap.perf_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry, 9,
