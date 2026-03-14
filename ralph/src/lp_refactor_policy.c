@@ -115,6 +115,9 @@
 #define PHASE1_FORCE_EXTREME_RELAX_MAX_RATIO 300.0
 #define PHASE1_FORCE_EXTREME_BOUND_FLIP_RELAX_MIN_M 700
 #define PHASE1_FORCE_EXTREME_BOUND_FLIP_RELAX_MIN_STREAK 16
+#define PHASE1_FORCE_EXTREME_CATA_TINY_THETA_RELAX_MIN_M 700
+#define PHASE1_FORCE_EXTREME_CATA_TINY_THETA_RELAX_MIN_STREAK 16
+#define PHASE1_FORCE_EXTREME_CATA_TINY_THETA_RELAX_MAX_PIVOT_RATIO 1e-5
 #define PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_MIN_M 200
 #define PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_MIN_STREAK 32
 #define PHASE1_SOFT_LU_POLICY_COOLDOWN_MIN_M 700
@@ -1346,6 +1349,31 @@ int lp_refactor_policy_phase1_force_extreme_bound_flip_relax_plan(
     (void)no_progress_streak;
     if (bound_flip_followup_streak <
         PHASE1_FORCE_EXTREME_BOUND_FLIP_RELAX_MIN_STREAK) return 0;
+    return 1;
+}
+
+int lp_refactor_policy_phase1_force_extreme_catastrophic_tiny_theta_relax_plan(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int tiny_theta_followup_streak,
+    double pivot_ratio) {
+    if (!force_extreme_dir) return 0;
+    if (force_lu_health || lu_hard_trigger) return 0;
+    if (!(dir_inf_ratio > 0.0)) return 0;
+    if (!(pivot_ratio > 0.0)) return 0;
+    if (pivot_ratio > PHASE1_FORCE_EXTREME_CATA_TINY_THETA_RELAX_MAX_PIVOT_RATIO) {
+        return 0;
+    }
+    if (m < PHASE1_FORCE_EXTREME_CATA_TINY_THETA_RELAX_MIN_M) return 0;
+    (void)degenerate_count;
+    (void)no_progress_streak;
+    if (tiny_theta_followup_streak <
+        PHASE1_FORCE_EXTREME_CATA_TINY_THETA_RELAX_MIN_STREAK) return 0;
     return 1;
 }
 

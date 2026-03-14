@@ -1340,6 +1340,13 @@ void lp_telemetry_record_phase1_force_extreme_bound_flip_relax(
     solver->telemetry.perf_phase1_force_extreme_bound_flip_relax_applied++;
 }
 
+void lp_telemetry_record_phase1_force_extreme_catastrophic_tiny_theta_relax(
+    SimplexSolver *solver) {
+    if (!solver_telemetry_enabled(solver)) return;
+    solver->telemetry
+        .perf_phase1_force_extreme_catastrophic_tiny_theta_relax_applied++;
+}
+
 void lp_telemetry_record_phase1_force_extreme_tiny_theta_relax(
     SimplexSolver *solver) {
     if (!solver_telemetry_enabled(solver)) return;
