@@ -195,6 +195,15 @@ int simplex_phase1_force_extreme_tiny_theta_relax_plan_for_test(
     int force_lu_health,
     int lu_hard_trigger,
     int tiny_theta_followup_streak);
+int simplex_phase1_force_extreme_bound_flip_relax_plan_for_test(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int bound_flip_followup_streak);
 
 int simplex_phase1_soft_lu_policy_cooldown_plan_for_test(
     int m,
@@ -841,6 +850,19 @@ typedef struct {
     const char *name;
     int m;
     int degenerate_count;
+    int no_progress_streak;
+    double dir_inf_ratio;
+    int force_extreme_dir;
+    int force_lu_health;
+    int lu_hard_trigger;
+    int bound_flip_followup_streak;
+    int expected_relax;
+} ForceExtremeBoundFlipRelaxCase;
+
+typedef struct {
+    const char *name;
+    int m;
+    int degenerate_count;
     int periodic_interval;
     int lu_soft_cost_deferred;
     int periodic_policy_cooldown;
@@ -1460,6 +1482,26 @@ static int run_force_extreme_tiny_theta_relax_case(
         tc->force_lu_health,
         tc->lu_hard_trigger,
         tc->tiny_theta_followup_streak);
+    if (relax != tc->expected_relax) {
+        fprintf(stderr, "FAIL: %s (expected relax=%d got=%d)\n",
+                tc->name, tc->expected_relax, relax);
+        return 0;
+    }
+    printf("PASS: %s\n", tc->name);
+    return 1;
+}
+
+static int run_force_extreme_bound_flip_relax_case(
+    const ForceExtremeBoundFlipRelaxCase *tc) {
+    int relax = simplex_phase1_force_extreme_bound_flip_relax_plan_for_test(
+        tc->m,
+        tc->degenerate_count,
+        tc->no_progress_streak,
+        tc->dir_inf_ratio,
+        tc->force_extreme_dir,
+        tc->force_lu_health,
+        tc->lu_hard_trigger,
+        tc->bound_flip_followup_streak);
     if (relax != tc->expected_relax) {
         fprintf(stderr, "FAIL: %s (expected relax=%d got=%d)\n",
                 tc->name, tc->expected_relax, relax);
@@ -3087,6 +3129,68 @@ int main(void) {
             .expected_relax = 0
         }
     };
+    const ForceExtremeBoundFlipRelaxCase force_extreme_bound_flip_relax_cases[] = {
+        {
+            .name = "force-extreme bound-flip relax applies on chronic bound-flip treadmill",
+            .m = 1500,
+            .degenerate_count = 120,
+            .no_progress_streak = 6,
+            .dir_inf_ratio = 1400.0,
+            .force_extreme_dir = 1,
+            .force_lu_health = 0,
+            .lu_hard_trigger = 0,
+            .bound_flip_followup_streak = 20,
+            .expected_relax = 1
+        },
+        {
+            .name = "force-extreme bound-flip relax blocked before treadmill streak matures",
+            .m = 1500,
+            .degenerate_count = 120,
+            .no_progress_streak = 6,
+            .dir_inf_ratio = 1400.0,
+            .force_extreme_dir = 1,
+            .force_lu_health = 0,
+            .lu_hard_trigger = 0,
+            .bound_flip_followup_streak = 8,
+            .expected_relax = 0
+        },
+        {
+            .name = "force-extreme bound-flip relax blocked on small matrices",
+            .m = 100,
+            .degenerate_count = 120,
+            .no_progress_streak = 6,
+            .dir_inf_ratio = 1400.0,
+            .force_extreme_dir = 1,
+            .force_lu_health = 0,
+            .lu_hard_trigger = 0,
+            .bound_flip_followup_streak = 20,
+            .expected_relax = 0
+        },
+        {
+            .name = "force-extreme bound-flip relax blocked on wood1p-scale mixed basis",
+            .m = 243,
+            .degenerate_count = 120,
+            .no_progress_streak = 6,
+            .dir_inf_ratio = 1400.0,
+            .force_extreme_dir = 1,
+            .force_lu_health = 0,
+            .lu_hard_trigger = 0,
+            .bound_flip_followup_streak = 20,
+            .expected_relax = 0
+        },
+        {
+            .name = "force-extreme bound-flip relax blocked by LU-health hard path",
+            .m = 1500,
+            .degenerate_count = 120,
+            .no_progress_streak = 6,
+            .dir_inf_ratio = 220.0,
+            .force_extreme_dir = 1,
+            .force_lu_health = 1,
+            .lu_hard_trigger = 0,
+            .bound_flip_followup_streak = 20,
+            .expected_relax = 0
+        }
+    };
     const SoftLUPolicyCooldownCase soft_lu_policy_cooldown_cases[] = {
         {
             .name = "phase1 soft-lu defer applies periodic cooldown on large degenerate run",
@@ -3476,6 +3580,9 @@ int main(void) {
     int total_force_extreme_tiny_theta_relax =
         (int)(sizeof(force_extreme_tiny_theta_relax_cases) /
               sizeof(force_extreme_tiny_theta_relax_cases[0]));
+    int total_force_extreme_bound_flip_relax =
+        (int)(sizeof(force_extreme_bound_flip_relax_cases) /
+              sizeof(force_extreme_bound_flip_relax_cases[0]));
     int total_soft_lu_policy_cd = (int)(sizeof(soft_lu_policy_cooldown_cases) / sizeof(soft_lu_policy_cooldown_cases[0]));
     int total_phase2_recompute_interval =
         (int)(sizeof(phase2_recompute_interval_cases) /
@@ -3511,6 +3618,7 @@ int main(void) {
                 total_force_pivot_relax +
                 total_force_extreme_relax +
                 total_force_extreme_tiny_theta_relax +
+                total_force_extreme_bound_flip_relax +
                 total_soft_lu_policy_cd +
                 total_phase2_recompute_interval;
     total += total_dir_skip_rc_only;
@@ -3604,6 +3712,10 @@ int main(void) {
     for (int i = 0; i < total_force_extreme_tiny_theta_relax; i++) {
         pass += run_force_extreme_tiny_theta_relax_case(
             &force_extreme_tiny_theta_relax_cases[i]);
+    }
+    for (int i = 0; i < total_force_extreme_bound_flip_relax; i++) {
+        pass += run_force_extreme_bound_flip_relax_case(
+            &force_extreme_bound_flip_relax_cases[i]);
     }
     for (int i = 0; i < total_soft_lu_policy_cd; i++) {
         pass += run_soft_lu_policy_cooldown_case(&soft_lu_policy_cooldown_cases[i]);
