@@ -1040,23 +1040,43 @@ int sn_factorize(double *A_struct, int m, int k,
         for (int j_local = 0; j_local < sn_size; j_local++) {
             int step = sn_start + j_local;
             int piv_orig = row_perm[step];
+            int trailing_start = sn_start + sn_size;
+            double *u_row = &A_struct[(size_t)piv_orig * k + trailing_start];
 
-            double *u_row = &A_struct[(size_t)piv_orig * k + (sn_start + sn_size)];
-            for (int jj = sn_start + sn_size; jj < k; jj++) {
-                double val = u_row[jj - (sn_start + sn_size)];
-                if (fabs(val) > RALPH_ZERO_TOL) {
-                    if (col_active_local) {
-                        int col_local = jj - (sn_start + sn_size);
-                        if (sn_size == 1) {
-                            /* Width-1 panels visit each trailing column once. */
-                            col_active_local[col_local] = 1;
-                            touched_cols[touched_col_count++] = col_local;
-                        } else if (!col_active_local[col_local]) {
-                            col_active_local[col_local] = 1;
-                            touched_cols[touched_col_count++] = col_local;
+            if (sn_size == 1 && col_active_local &&
+                *U_nnz <= U_capacity - trailing_cols) {
+                /* Width-1 panels have at most one visit per trailing column, so
+                 * when worst-case U capacity is already available we can write
+                 * directly without the generic per-entry capacity/macro path. */
+                int u_nnz = *U_nnz;
+                for (int col_local = 0; col_local < trailing_cols; col_local++) {
+                    double val = u_row[col_local];
+                    if (fabs(val) <= RALPH_ZERO_TOL) continue;
+                    col_active_local[col_local] = 1;
+                    touched_cols[touched_col_count++] = col_local;
+                    U_row[u_nnz] = step;
+                    U_col[u_nnz] = trailing_start + col_local;
+                    U_val[u_nnz] = val;
+                    u_nnz++;
+                }
+                *U_nnz = u_nnz;
+            } else {
+                for (int jj = trailing_start; jj < k; jj++) {
+                    double val = u_row[jj - trailing_start];
+                    if (fabs(val) > RALPH_ZERO_TOL) {
+                        if (col_active_local) {
+                            int col_local = jj - trailing_start;
+                            if (sn_size == 1) {
+                                /* Width-1 panels visit each trailing column once. */
+                                col_active_local[col_local] = 1;
+                                touched_cols[touched_col_count++] = col_local;
+                            } else if (!col_active_local[col_local]) {
+                                col_active_local[col_local] = 1;
+                                touched_cols[touched_col_count++] = col_local;
+                            }
                         }
+                        SN_EMIT_U(step, jj, val);
                     }
-                    SN_EMIT_U(step, jj, val);
                 }
             }
         }

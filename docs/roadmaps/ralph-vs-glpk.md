@@ -1148,6 +1148,43 @@ Status:
       is now largely retired
     - the next exact target should be width-1 trailing-U emit before revisiting
       broader supernode work
+- `W1.2` fifteenth slice implemented
+  - added a width-1 trailing-U emit fast path inside the existing Step 2
+    generic path in `ralph/src/lu_supernode.c`
+  - when worst-case `U` capacity is already available, the width-1 path now
+    writes emitted `U` entries directly instead of paying the generic
+    per-entry macro/capacity branch on every nonzero
+  - validation:
+    - `make -C ralph test-lu-supernode`
+    - `make -C ralph build-ralph-benchmark`
+    - `make -C ralph test-netlib-gate-small`
+    - `make -C ralph test-netlib-gate`
+  - measured effect:
+    - direct `pilot.mps`
+      - `ralph.time_ms: 26379.637 -> 26199.571`
+      - iterations before timeout: `3485 -> 3564`
+      - `total_supernode_numeric_ms: 13766.775 -> 13463.935`
+    - direct `pilot87.mps`
+      - `ralph.time_ms: 63753.021 -> 63745.360`
+      - iterations before timeout: `5703 -> 6017`
+      - `total_supernode_numeric_ms: 45075.349 -> 44501.864`
+    - direct `d2q06c.mps`
+      - `ralph.time_ms: 24280.165 -> 24130.982`
+      - iterations before timeout: `9383 -> 9415`
+      - `total_supernode_numeric_ms: 9602.733 -> 9327.972`
+  - full-gate result:
+    - baseline-clean
+    - `84` files
+    - `22` timeouts
+    - `0` status/objective/invalid mismatches
+    - `0` dense fallback files
+  - result:
+    - this is another safe pilot-family throughput improvement
+    - width-1 trailing update scan and width-1 trailing-U emit are both now
+      partially retired
+    - the next exact supernode target should move to the remaining generic
+      width-1 trailing/update scaffolding rather than another broad panel or
+      dedicated-width rewrite
 - rejected during `W1.2`
   - stale or approximate `col_max` shortcuts and other behavior-adjacent
     Markowitz optimizations were tried and rolled back
