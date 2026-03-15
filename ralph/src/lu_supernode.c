@@ -792,6 +792,11 @@ int sn_factorize(double *A_struct, int m, int k,
         for (int j_local = 0; j_local < sn_size; j_local++) {
             int step = sn_start + j_local;
             double t_panel_part_ms = 0.0;
+            uint64_t pivot_search_entries = (uint64_t)(m - step);
+            uint64_t *size_bucket_calls = NULL;
+            double *size_bucket_ms = NULL;
+            int reserved_present = 0;
+            int reserved_alt_chosen = 0;
 
             /* Prefer non-reserved rows, but allow reserved rows when they are
              * materially stronger pivots (numerical safety). */
@@ -799,6 +804,28 @@ int sn_factorize(double *A_struct, int m, int k,
             double max_val = 0.0;
             int alt_row = -1;
             double alt_val = 0.0;
+
+            if (stats) {
+                stats->panel_pivot_search_calls++;
+                stats->panel_pivot_search_entries_total += pivot_search_entries;
+                if (sn_size <= 1) {
+                    size_bucket_calls = &stats->panel_pivot_search_size1_calls;
+                    size_bucket_ms = &stats->panel_pivot_search_size1_ms;
+                } else if (sn_size == 2) {
+                    size_bucket_calls = &stats->panel_pivot_search_size2_calls;
+                    size_bucket_ms = &stats->panel_pivot_search_size2_ms;
+                } else if (sn_size <= 4) {
+                    size_bucket_calls = &stats->panel_pivot_search_size3_4_calls;
+                    size_bucket_ms = &stats->panel_pivot_search_size3_4_ms;
+                } else if (sn_size <= 8) {
+                    size_bucket_calls = &stats->panel_pivot_search_size5_8_calls;
+                    size_bucket_ms = &stats->panel_pivot_search_size5_8_ms;
+                } else {
+                    size_bucket_calls = &stats->panel_pivot_search_size9p_calls;
+                    size_bucket_ms = &stats->panel_pivot_search_size9p_ms;
+                }
+                if (size_bucket_calls) (*size_bucket_calls)++;
+            }
 
             if (sample_phase_timing) t_panel_part_ms = lp_telemetry_timer_start();
             for (int i = step; i < m; i++) {
@@ -808,13 +835,25 @@ int sn_factorize(double *A_struct, int m, int k,
                     max_val = val;
                     pivot_row = i;
                 }
-                if (row_reserved && row_reserved[orig_row]) continue;
+                if (row_reserved && row_reserved[orig_row]) {
+                    reserved_present = 1;
+                    continue;
+                }
                 if (val > alt_val) {
                     alt_val = val;
                     alt_row = i;
                 }
             }
+            if (reserved_present && stats) {
+                stats->panel_pivot_search_reserved_present_calls++;
+                stats->panel_pivot_search_reserved_present_entries +=
+                    pivot_search_entries;
+            }
             if (alt_row >= 0 && alt_val >= 0.1 * max_val) {
+                if (row_reserved && pivot_row >= 0 &&
+                    row_reserved[row_perm[pivot_row]] && alt_row != pivot_row) {
+                    reserved_alt_chosen = 1;
+                }
                 pivot_row = alt_row;
                 max_val = alt_val;
             }
@@ -858,9 +897,22 @@ int sn_factorize(double *A_struct, int m, int k,
 
                 if (can_regularize) {
                     if (sample_phase_timing) {
-                        stats->panel_pivot_search_ms +=
+                        double panel_search_ms =
                             lp_telemetry_timer_elapsed_ms(t_panel_part_ms);
+                        stats->panel_pivot_search_ms += panel_search_ms;
+                        if (size_bucket_ms) (*size_bucket_ms) += panel_search_ms;
+                        if (reserved_present) {
+                            stats->panel_pivot_search_reserved_present_ms +=
+                                panel_search_ms;
+                        }
+                        if (reserved_alt_chosen) {
+                            stats->panel_pivot_search_reserved_alt_chosen_calls++;
+                            stats->panel_pivot_search_reserved_alt_chosen_ms +=
+                                panel_search_ms;
+                        }
                         t_panel_part_ms = lp_telemetry_timer_start();
+                    } else if (stats && reserved_alt_chosen) {
+                        stats->panel_pivot_search_reserved_alt_chosen_calls++;
                     }
                     if (num_regularized) (*num_regularized)++;
                     if (pivot_row != step) {
@@ -877,12 +929,44 @@ int sn_factorize(double *A_struct, int m, int k,
                             lp_telemetry_timer_elapsed_ms(t_panel_part_ms);
                     }
                 } else {
+                    if (sample_phase_timing) {
+                        double panel_search_ms =
+                            lp_telemetry_timer_elapsed_ms(t_panel_part_ms);
+                        stats->panel_pivot_search_ms += panel_search_ms;
+                        if (size_bucket_ms) (*size_bucket_ms) += panel_search_ms;
+                        if (reserved_present) {
+                            stats->panel_pivot_search_reserved_present_ms +=
+                                panel_search_ms;
+                        }
+                        if (reserved_alt_chosen) {
+                            stats->panel_pivot_search_reserved_alt_chosen_calls++;
+                            stats->panel_pivot_search_reserved_alt_chosen_ms +=
+                                panel_search_ms;
+                        }
+                    } else if (stats && reserved_alt_chosen) {
+                        stats->panel_pivot_search_reserved_alt_chosen_calls++;
+                    }
                     rc = -1; /* Singular, fall back */
                     goto cleanup;
                 }
-            } else if (sample_phase_timing) {
-                stats->panel_pivot_search_ms +=
-                    lp_telemetry_timer_elapsed_ms(t_panel_part_ms);
+            } else {
+                if (sample_phase_timing) {
+                    double panel_search_ms =
+                        lp_telemetry_timer_elapsed_ms(t_panel_part_ms);
+                    stats->panel_pivot_search_ms += panel_search_ms;
+                    if (size_bucket_ms) (*size_bucket_ms) += panel_search_ms;
+                    if (reserved_present) {
+                        stats->panel_pivot_search_reserved_present_ms +=
+                            panel_search_ms;
+                    }
+                    if (reserved_alt_chosen) {
+                        stats->panel_pivot_search_reserved_alt_chosen_calls++;
+                        stats->panel_pivot_search_reserved_alt_chosen_ms +=
+                            panel_search_ms;
+                    }
+                } else if (stats && reserved_alt_chosen) {
+                    stats->panel_pivot_search_reserved_alt_chosen_calls++;
+                }
             }
 
             /* Swap rows */
@@ -923,9 +1007,15 @@ int sn_factorize(double *A_struct, int m, int k,
 
                 /* Store multiplier back in A_struct for GEMM extraction */
                 A_struct[(size_t)row_orig * k + step] = mult;
-                if (row_active_orig && !row_active_orig[row_orig]) {
-                    row_active_orig[row_orig] = 1;
-                    touched_rows[touched_row_count++] = row_orig;
+                if (row_active_orig) {
+                    if (sn_size == 1) {
+                        /* Width-1 panels touch each trailing row at most once. */
+                        row_active_orig[row_orig] = 1;
+                        touched_rows[touched_row_count++] = row_orig;
+                    } else if (!row_active_orig[row_orig]) {
+                        row_active_orig[row_orig] = 1;
+                        touched_rows[touched_row_count++] = row_orig;
+                    }
                 }
 
                 /* Store L multiplier */
@@ -951,12 +1041,17 @@ int sn_factorize(double *A_struct, int m, int k,
             int step = sn_start + j_local;
             int piv_orig = row_perm[step];
 
+            double *u_row = &A_struct[(size_t)piv_orig * k + (sn_start + sn_size)];
             for (int jj = sn_start + sn_size; jj < k; jj++) {
-                double val = A_struct[(size_t)piv_orig * k + jj];
+                double val = u_row[jj - (sn_start + sn_size)];
                 if (fabs(val) > RALPH_ZERO_TOL) {
                     if (col_active_local) {
                         int col_local = jj - (sn_start + sn_size);
-                        if (!col_active_local[col_local]) {
+                        if (sn_size == 1) {
+                            /* Width-1 panels visit each trailing column once. */
+                            col_active_local[col_local] = 1;
+                            touched_cols[touched_col_count++] = col_local;
+                        } else if (!col_active_local[col_local]) {
                             col_active_local[col_local] = 1;
                             touched_cols[touched_col_count++] = col_local;
                         }
@@ -965,7 +1060,16 @@ int sn_factorize(double *A_struct, int m, int k,
                 }
             }
         }
-        if (sample_phase_timing) stats->u_emit_ms += lp_telemetry_timer_elapsed_ms(t_phase_ms);
+        if (sample_phase_timing) {
+            double u_emit_ms = lp_telemetry_timer_elapsed_ms(t_phase_ms);
+            stats->u_emit_ms += u_emit_ms;
+            if (sn_size == 1 && trailing_cols > 0) {
+                stats->size1_u_emit_calls++;
+                stats->size1_u_emit_ms += u_emit_ms;
+            }
+        } else if (stats && sn_size == 1 && trailing_cols > 0) {
+            stats->size1_u_emit_calls++;
+        }
 
         /* ---- Step 3: Schur complement update using GEMM ---- */
         /* C[i, j] -= L[i, sn] * U[sn, j]
@@ -987,18 +1091,42 @@ int sn_factorize(double *A_struct, int m, int k,
 
             if (sample_phase_timing) t_phase_ms = lp_telemetry_timer_start();
             int active_row_count = 0;
-            for (int i = 0; i < trailing_rows; i++) {
-                int orig_row = row_perm[sn_start + sn_size + i];
-                if (stats) stats->active_row_scan_entries++;
-                if (row_active_orig[orig_row]) active_rows[active_row_count++] = i;
-            }
-
             int active_col_count = 0;
-            for (int jj = 0; jj < trailing_cols; jj++) {
-                if (stats) stats->active_col_scan_entries++;
-                if (col_active_local[jj]) active_cols[active_col_count++] = jj;
+            if (sn_size == 1) {
+                for (int i = 0; i < touched_row_count; i++) {
+                    int orig_row = touched_rows[i];
+                    int logical_row = row_pos[orig_row] - (sn_start + sn_size);
+                    if (stats) stats->active_row_scan_entries++;
+                    if (logical_row >= 0 && logical_row < trailing_rows) {
+                        active_rows[active_row_count++] = logical_row;
+                    }
+                }
+                for (int jj = 0; jj < touched_col_count; jj++) {
+                    if (stats) stats->active_col_scan_entries++;
+                    active_cols[active_col_count++] = touched_cols[jj];
+                }
+            } else {
+                for (int i = 0; i < trailing_rows; i++) {
+                    int orig_row = row_perm[sn_start + sn_size + i];
+                    if (stats) stats->active_row_scan_entries++;
+                    if (row_active_orig[orig_row]) active_rows[active_row_count++] = i;
+                }
+
+                for (int jj = 0; jj < trailing_cols; jj++) {
+                    if (stats) stats->active_col_scan_entries++;
+                    if (col_active_local[jj]) active_cols[active_col_count++] = jj;
+                }
             }
-            if (sample_phase_timing) stats->active_set_ms += lp_telemetry_timer_elapsed_ms(t_phase_ms);
+            if (sample_phase_timing) {
+                double active_set_ms = lp_telemetry_timer_elapsed_ms(t_phase_ms);
+                stats->active_set_ms += active_set_ms;
+                if (sn_size == 1) {
+                    stats->size1_update_scan_calls++;
+                    stats->size1_update_scan_ms += active_set_ms;
+                }
+            } else if (stats && sn_size == 1) {
+                stats->size1_update_scan_calls++;
+            }
 
             if (active_row_count == 0 || active_col_count == 0) {
                 if (stats) stats->skipped_update_calls++;
@@ -1068,7 +1196,17 @@ int sn_factorize(double *A_struct, int m, int k,
                                                A_struct, k, row_perm,
                                                sn_start + sn_size,
                                                sn_start + sn_size);
-                if (sample_phase_timing) stats->full_update_ms += lp_telemetry_timer_elapsed_ms(t_full_update_ms);
+                if (sample_phase_timing) {
+                    double full_update_ms =
+                        lp_telemetry_timer_elapsed_ms(t_full_update_ms);
+                    stats->full_update_ms += full_update_ms;
+                    if (sn_size == 1) {
+                        stats->size1_update_apply_calls++;
+                        stats->size1_update_apply_ms += full_update_ms;
+                    }
+                } else if (stats && sn_size == 1) {
+                    stats->size1_update_apply_calls++;
+                }
             } else {
                 double t_compact_update_ms = 0.0;
                 if (stats) {
@@ -1100,6 +1238,10 @@ int sn_factorize(double *A_struct, int m, int k,
                 if (sample_phase_timing) {
                     double compact_update_ms = lp_telemetry_timer_elapsed_ms(t_compact_update_ms);
                     stats->compact_update_ms += compact_update_ms;
+                    if (sn_size == 1) {
+                        stats->size1_update_apply_calls++;
+                        stats->size1_update_apply_ms += compact_update_ms;
+                    }
                     if (active_col_count == 1) {
                         stats->compact_cols1_ms += compact_update_ms;
                     } else if (active_col_count == 2) {
@@ -1111,6 +1253,8 @@ int sn_factorize(double *A_struct, int m, int k,
                     } else {
                         stats->compact_cols5p_ms += compact_update_ms;
                     }
+                } else if (stats && sn_size == 1) {
+                    stats->size1_update_apply_calls++;
                 }
             }
 

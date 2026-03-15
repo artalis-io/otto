@@ -148,6 +148,29 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.perf_sn_panel_pivot_search_ms = 0.0;
     lu->telemetry.perf_sn_panel_swap_scatter_ms = 0.0;
     lu->telemetry.perf_sn_panel_eliminate_ms = 0.0;
+    lu->telemetry.perf_sn_panel_pivot_search_calls = 0;
+    lu->telemetry.perf_sn_panel_pivot_search_entries_total = 0;
+    lu->telemetry.perf_sn_panel_pivot_search_size1_calls = 0;
+    lu->telemetry.perf_sn_panel_pivot_search_size1_ms = 0.0;
+    lu->telemetry.perf_sn_panel_pivot_search_size2_calls = 0;
+    lu->telemetry.perf_sn_panel_pivot_search_size2_ms = 0.0;
+    lu->telemetry.perf_sn_panel_pivot_search_size3_4_calls = 0;
+    lu->telemetry.perf_sn_panel_pivot_search_size3_4_ms = 0.0;
+    lu->telemetry.perf_sn_panel_pivot_search_size5_8_calls = 0;
+    lu->telemetry.perf_sn_panel_pivot_search_size5_8_ms = 0.0;
+    lu->telemetry.perf_sn_panel_pivot_search_size9p_calls = 0;
+    lu->telemetry.perf_sn_panel_pivot_search_size9p_ms = 0.0;
+    lu->telemetry.perf_sn_panel_pivot_search_reserved_present_calls = 0;
+    lu->telemetry.perf_sn_panel_pivot_search_reserved_present_entries = 0;
+    lu->telemetry.perf_sn_panel_pivot_search_reserved_present_ms = 0.0;
+    lu->telemetry.perf_sn_panel_pivot_search_reserved_alt_chosen_calls = 0;
+    lu->telemetry.perf_sn_panel_pivot_search_reserved_alt_chosen_ms = 0.0;
+    lu->telemetry.perf_sn_size1_u_emit_calls = 0;
+    lu->telemetry.perf_sn_size1_u_emit_ms = 0.0;
+    lu->telemetry.perf_sn_size1_update_scan_calls = 0;
+    lu->telemetry.perf_sn_size1_update_scan_ms = 0.0;
+    lu->telemetry.perf_sn_size1_update_apply_calls = 0;
+    lu->telemetry.perf_sn_size1_update_apply_ms = 0.0;
     lu->telemetry.perf_sn_u_emit_ms = 0.0;
     lu->telemetry.perf_sn_active_set_ms = 0.0;
     lu->telemetry.perf_sn_pack_blocks_ms = 0.0;
@@ -356,6 +379,29 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_ms);
     COPY_LU_TELEM_FIELD(perf_sn_panel_swap_scatter_ms);
     COPY_LU_TELEM_FIELD(perf_sn_panel_eliminate_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_entries_total);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_size1_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_size1_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_size2_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_size2_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_size3_4_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_size3_4_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_size5_8_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_size5_8_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_size9p_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_size9p_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_reserved_present_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_reserved_present_entries);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_reserved_present_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_reserved_alt_chosen_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_panel_pivot_search_reserved_alt_chosen_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_size1_u_emit_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_size1_u_emit_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_size1_update_scan_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_size1_update_scan_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_size1_update_apply_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_size1_update_apply_ms);
     COPY_LU_TELEM_FIELD(perf_sn_u_emit_ms);
     COPY_LU_TELEM_FIELD(perf_sn_active_set_ms);
     COPY_LU_TELEM_FIELD(perf_sn_pack_blocks_ms);
@@ -470,6 +516,29 @@ void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
                                         double panel_pivot_search_ms,
                                         double panel_swap_scatter_ms,
                                         double panel_eliminate_ms,
+                                        uint64_t panel_pivot_search_calls,
+                                        uint64_t panel_pivot_search_entries_total,
+                                        uint64_t panel_pivot_search_size1_calls,
+                                        double panel_pivot_search_size1_ms,
+                                        uint64_t panel_pivot_search_size2_calls,
+                                        double panel_pivot_search_size2_ms,
+                                        uint64_t panel_pivot_search_size3_4_calls,
+                                        double panel_pivot_search_size3_4_ms,
+                                        uint64_t panel_pivot_search_size5_8_calls,
+                                        double panel_pivot_search_size5_8_ms,
+                                        uint64_t panel_pivot_search_size9p_calls,
+                                        double panel_pivot_search_size9p_ms,
+                                        uint64_t panel_pivot_search_reserved_present_calls,
+                                        uint64_t panel_pivot_search_reserved_present_entries,
+                                        double panel_pivot_search_reserved_present_ms,
+                                        uint64_t panel_pivot_search_reserved_alt_chosen_calls,
+                                        double panel_pivot_search_reserved_alt_chosen_ms,
+                                        uint64_t size1_u_emit_calls,
+                                        double size1_u_emit_ms,
+                                        uint64_t size1_update_scan_calls,
+                                        double size1_update_scan_ms,
+                                        uint64_t size1_update_apply_calls,
+                                        double size1_update_apply_ms,
                                         double u_emit_ms,
                                         double active_set_ms,
                                         double pack_blocks_ms,
@@ -509,6 +578,45 @@ void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
     lu->telemetry.perf_sn_panel_pivot_search_ms += panel_pivot_search_ms;
     lu->telemetry.perf_sn_panel_swap_scatter_ms += panel_swap_scatter_ms;
     lu->telemetry.perf_sn_panel_eliminate_ms += panel_eliminate_ms;
+    lu->telemetry.perf_sn_panel_pivot_search_calls += panel_pivot_search_calls;
+    lu->telemetry.perf_sn_panel_pivot_search_entries_total +=
+        panel_pivot_search_entries_total;
+    lu->telemetry.perf_sn_panel_pivot_search_size1_calls +=
+        panel_pivot_search_size1_calls;
+    lu->telemetry.perf_sn_panel_pivot_search_size1_ms +=
+        panel_pivot_search_size1_ms;
+    lu->telemetry.perf_sn_panel_pivot_search_size2_calls +=
+        panel_pivot_search_size2_calls;
+    lu->telemetry.perf_sn_panel_pivot_search_size2_ms +=
+        panel_pivot_search_size2_ms;
+    lu->telemetry.perf_sn_panel_pivot_search_size3_4_calls +=
+        panel_pivot_search_size3_4_calls;
+    lu->telemetry.perf_sn_panel_pivot_search_size3_4_ms +=
+        panel_pivot_search_size3_4_ms;
+    lu->telemetry.perf_sn_panel_pivot_search_size5_8_calls +=
+        panel_pivot_search_size5_8_calls;
+    lu->telemetry.perf_sn_panel_pivot_search_size5_8_ms +=
+        panel_pivot_search_size5_8_ms;
+    lu->telemetry.perf_sn_panel_pivot_search_size9p_calls +=
+        panel_pivot_search_size9p_calls;
+    lu->telemetry.perf_sn_panel_pivot_search_size9p_ms +=
+        panel_pivot_search_size9p_ms;
+    lu->telemetry.perf_sn_panel_pivot_search_reserved_present_calls +=
+        panel_pivot_search_reserved_present_calls;
+    lu->telemetry.perf_sn_panel_pivot_search_reserved_present_entries +=
+        panel_pivot_search_reserved_present_entries;
+    lu->telemetry.perf_sn_panel_pivot_search_reserved_present_ms +=
+        panel_pivot_search_reserved_present_ms;
+    lu->telemetry.perf_sn_panel_pivot_search_reserved_alt_chosen_calls +=
+        panel_pivot_search_reserved_alt_chosen_calls;
+    lu->telemetry.perf_sn_panel_pivot_search_reserved_alt_chosen_ms +=
+        panel_pivot_search_reserved_alt_chosen_ms;
+    lu->telemetry.perf_sn_size1_u_emit_calls += size1_u_emit_calls;
+    lu->telemetry.perf_sn_size1_u_emit_ms += size1_u_emit_ms;
+    lu->telemetry.perf_sn_size1_update_scan_calls += size1_update_scan_calls;
+    lu->telemetry.perf_sn_size1_update_scan_ms += size1_update_scan_ms;
+    lu->telemetry.perf_sn_size1_update_apply_calls += size1_update_apply_calls;
+    lu->telemetry.perf_sn_size1_update_apply_ms += size1_update_apply_ms;
     lu->telemetry.perf_sn_u_emit_ms += u_emit_ms;
     lu->telemetry.perf_sn_active_set_ms += active_set_ms;
     lu->telemetry.perf_sn_pack_blocks_ms += pack_blocks_ms;

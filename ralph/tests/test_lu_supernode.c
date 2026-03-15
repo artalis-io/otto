@@ -47,6 +47,17 @@ static int tests_passed = 0;
     } \
 } while(0)
 
+#define ASSERT_U64_EQ(a, b, msg) do { \
+    tests_run++; \
+    if ((uint64_t)(a) == (uint64_t)(b)) { \
+        tests_passed++; \
+    } else { \
+        printf("  FAIL: %s (%llu != %llu)\n", msg, \
+               (unsigned long long)(uint64_t)(a), \
+               (unsigned long long)(uint64_t)(b)); \
+    } \
+} while(0)
+
 /* ============================================================================
  * Phase 1 Tests: Elimination Tree + Supernode Detection
  * ============================================================================ */
@@ -614,6 +625,12 @@ static void test_sn_factorize_stats_tracking(void) {
                           NULL, 0, &stats);
     ASSERT_INT_EQ(rc, 0, "sn factorize stats: return code");
     if (rc == 0) {
+        ASSERT(stats.panel_pivot_search_calls > 0,
+               "sn factorize stats: panel pivot searches");
+        ASSERT(stats.panel_pivot_search_entries_total > 0,
+               "sn factorize stats: panel pivot search entries");
+        ASSERT(stats.panel_pivot_search_size2_calls == stats.panel_pivot_search_calls,
+               "sn factorize stats: size2 bucket partitions panel pivot searches");
         ASSERT(stats.trailing_rows_total > 0, "sn factorize stats: trailing rows");
         ASSERT(stats.active_row_scan_entries > 0, "sn factorize stats: row scans");
         ASSERT(stats.active_col_scan_entries > 0, "sn factorize stats: col scans");
@@ -716,17 +733,29 @@ static void test_sn_factorize_reserved_pivot_choice(void) {
     int Lr[16], Lc[16], Ur[16], Uc[16];
     double Lv[16], Uv[16];
     int Lnnz = 0, Unnz = 0;
+    SNSupernodeWork stats;
+    memset(&stats, 0, sizeof(stats));
 
     int rc = sn_factorize(A, m, k, row_perm, row_pos, 1e-10, row_reserved,
                           supernodes, 1,
                           NULL, 0, 0, 0, NULL,
                           Lr, Lc, Lv, &Lnnz, cap,
                           Ur, Uc, Uv, &Unnz, cap,
-                          NULL, 0, NULL);
+                          NULL, 0, &stats);
     ASSERT_INT_EQ(rc, 0, "sn reserved pivot: return code");
     if (rc == 0) {
         ASSERT_INT_EQ(row_perm[0], 1,
                       "sn reserved pivot: non-reserved pivot chosen within ratio");
+        ASSERT_U64_EQ(stats.panel_pivot_search_calls, 1,
+                      "sn reserved pivot: panel pivot search calls");
+        ASSERT_U64_EQ(stats.panel_pivot_search_size1_calls, 1,
+                      "sn reserved pivot: size1 bucket");
+        ASSERT_U64_EQ(stats.panel_pivot_search_reserved_present_calls, 1,
+                      "sn reserved pivot: reserved rows seen");
+        ASSERT_U64_EQ(stats.panel_pivot_search_reserved_present_entries, 3,
+                      "sn reserved pivot: reserved rows entry count");
+        ASSERT_U64_EQ(stats.panel_pivot_search_reserved_alt_chosen_calls, 1,
+                      "sn reserved pivot: reserved alternative chosen");
     }
 }
 

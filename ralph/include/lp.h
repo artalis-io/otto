@@ -354,6 +354,29 @@ typedef struct {
     double perf_sn_panel_pivot_search_ms;
     double perf_sn_panel_swap_scatter_ms;
     double perf_sn_panel_eliminate_ms;
+    uint64_t perf_sn_panel_pivot_search_calls;
+    uint64_t perf_sn_panel_pivot_search_entries_total;
+    uint64_t perf_sn_panel_pivot_search_size1_calls;
+    double perf_sn_panel_pivot_search_size1_ms;
+    uint64_t perf_sn_panel_pivot_search_size2_calls;
+    double perf_sn_panel_pivot_search_size2_ms;
+    uint64_t perf_sn_panel_pivot_search_size3_4_calls;
+    double perf_sn_panel_pivot_search_size3_4_ms;
+    uint64_t perf_sn_panel_pivot_search_size5_8_calls;
+    double perf_sn_panel_pivot_search_size5_8_ms;
+    uint64_t perf_sn_panel_pivot_search_size9p_calls;
+    double perf_sn_panel_pivot_search_size9p_ms;
+    uint64_t perf_sn_panel_pivot_search_reserved_present_calls;
+    uint64_t perf_sn_panel_pivot_search_reserved_present_entries;
+    double perf_sn_panel_pivot_search_reserved_present_ms;
+    uint64_t perf_sn_panel_pivot_search_reserved_alt_chosen_calls;
+    double perf_sn_panel_pivot_search_reserved_alt_chosen_ms;
+    uint64_t perf_sn_size1_u_emit_calls;
+    double perf_sn_size1_u_emit_ms;
+    uint64_t perf_sn_size1_update_scan_calls;
+    double perf_sn_size1_update_scan_ms;
+    uint64_t perf_sn_size1_update_apply_calls;
+    double perf_sn_size1_update_apply_ms;
     double perf_sn_u_emit_ms;
     double perf_sn_active_set_ms;
     double perf_sn_pack_blocks_ms;
@@ -2004,6 +2027,29 @@ typedef struct {
     double perf_sn_panel_pivot_search_ms;
     double perf_sn_panel_swap_scatter_ms;
     double perf_sn_panel_eliminate_ms;
+    uint64_t perf_sn_panel_pivot_search_calls;
+    uint64_t perf_sn_panel_pivot_search_entries_total;
+    uint64_t perf_sn_panel_pivot_search_size1_calls;
+    double perf_sn_panel_pivot_search_size1_ms;
+    uint64_t perf_sn_panel_pivot_search_size2_calls;
+    double perf_sn_panel_pivot_search_size2_ms;
+    uint64_t perf_sn_panel_pivot_search_size3_4_calls;
+    double perf_sn_panel_pivot_search_size3_4_ms;
+    uint64_t perf_sn_panel_pivot_search_size5_8_calls;
+    double perf_sn_panel_pivot_search_size5_8_ms;
+    uint64_t perf_sn_panel_pivot_search_size9p_calls;
+    double perf_sn_panel_pivot_search_size9p_ms;
+    uint64_t perf_sn_panel_pivot_search_reserved_present_calls;
+    uint64_t perf_sn_panel_pivot_search_reserved_present_entries;
+    double perf_sn_panel_pivot_search_reserved_present_ms;
+    uint64_t perf_sn_panel_pivot_search_reserved_alt_chosen_calls;
+    double perf_sn_panel_pivot_search_reserved_alt_chosen_ms;
+    uint64_t perf_sn_size1_u_emit_calls;
+    double perf_sn_size1_u_emit_ms;
+    uint64_t perf_sn_size1_update_scan_calls;
+    double perf_sn_size1_update_scan_ms;
+    uint64_t perf_sn_size1_update_apply_calls;
+    double perf_sn_size1_update_apply_ms;
     double perf_sn_u_emit_ms;
     double perf_sn_active_set_ms;
     double perf_sn_pack_blocks_ms;
@@ -2675,6 +2721,29 @@ void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
                                         double panel_pivot_search_ms,
                                         double panel_swap_scatter_ms,
                                         double panel_eliminate_ms,
+                                        uint64_t panel_pivot_search_calls,
+                                        uint64_t panel_pivot_search_entries_total,
+                                        uint64_t panel_pivot_search_size1_calls,
+                                        double panel_pivot_search_size1_ms,
+                                        uint64_t panel_pivot_search_size2_calls,
+                                        double panel_pivot_search_size2_ms,
+                                        uint64_t panel_pivot_search_size3_4_calls,
+                                        double panel_pivot_search_size3_4_ms,
+                                        uint64_t panel_pivot_search_size5_8_calls,
+                                        double panel_pivot_search_size5_8_ms,
+                                        uint64_t panel_pivot_search_size9p_calls,
+                                        double panel_pivot_search_size9p_ms,
+                                        uint64_t panel_pivot_search_reserved_present_calls,
+                                        uint64_t panel_pivot_search_reserved_present_entries,
+                                        double panel_pivot_search_reserved_present_ms,
+                                        uint64_t panel_pivot_search_reserved_alt_chosen_calls,
+                                        double panel_pivot_search_reserved_alt_chosen_ms,
+                                        uint64_t size1_u_emit_calls,
+                                        double size1_u_emit_ms,
+                                        uint64_t size1_update_scan_calls,
+                                        double size1_update_scan_ms,
+                                        uint64_t size1_update_apply_calls,
+                                        double size1_update_apply_ms,
                                         double u_emit_ms,
                                         double active_set_ms,
                                         double pack_blocks_ms,
