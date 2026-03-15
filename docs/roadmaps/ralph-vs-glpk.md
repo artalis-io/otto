@@ -1067,6 +1067,87 @@ Status:
       itself
     - inside panel factor, pivot search is the only material subphase
     - row swap/scatter is negligible, so it should not be a Week 1 target
+- `W1.2` thirteenth slice implemented
+  - added exact generic `sn_size == 1` supernode telemetry for:
+    - trailing-U emit
+    - trailing update scan
+    - trailing update apply
+  - validation:
+    - `make -C ralph test-lp-telemetry-lu`
+    - `make -C ralph test-lu-supernode`
+    - `make -C ralph build-ralph-benchmark`
+    - `make -C ralph test-netlib-gate-small`
+  - measured effect:
+    - direct `pilot.mps`
+      - `ralph.time_ms = 25965.288`
+      - `total_supernode_numeric_ms = 13882.359`
+      - `solver_ftran_btran_total_ms = 2209.740`
+      - `sn_panel_pivot_search_size1_ms = 51.020`
+      - `sn_size1_u_emit_ms = 18.394`
+      - `sn_size1_update_scan_ms = 42.069`
+      - `sn_size1_update_apply_ms = 7.562`
+    - direct `pilot87.mps`
+      - `ralph.time_ms = 63740.109`
+      - `total_supernode_numeric_ms = 45555.898`
+      - `solver_ftran_btran_total_ms = 2468.509`
+      - `sn_panel_pivot_search_size1_ms = 157.083`
+      - `sn_size1_u_emit_ms = 58.839`
+      - `sn_size1_update_scan_ms = 139.200`
+      - `sn_size1_update_apply_ms = 30.273`
+    - direct `d2q06c.mps`
+      - `ralph.time_ms = 24004.212`
+      - `total_supernode_numeric_ms = 9168.215`
+      - `solver_ftran_btran_total_ms = 2395.078`
+      - `sn_panel_pivot_search_size1_ms = 48.424`
+      - `sn_size1_u_emit_ms = 15.659`
+      - `sn_size1_update_scan_ms = 34.396`
+      - `sn_size1_update_apply_ms = 0.702`
+  - rejected during this slice:
+    - an exact full `sn_size == 1` supernode lane
+    - an exact unreserved `sn_size == 1` panel-search fast lane
+    - both stayed correctness-clean but were not meaningful wins on
+      `pilot*` / `d2q06c`
+  - result:
+    - the next kernel target is still inside `ralph/src/lu_supernode.c`, not
+      solver-side `FTRAN/BTRAN`
+    - `pilot*` remains dominated by supernode numeric cost
+    - the next promising hotspot is generic `sn_size == 1` trailing work inside
+      the existing path, not another panel-search-only or dedicated-size1 lane
+- `W1.2` fourteenth slice implemented
+  - narrowed the generic `sn_size == 1` path in `ralph/src/lu_supernode.c`:
+    - touched trailing rows/columns are now reused directly for active-set
+      reconstruction
+    - duplicate-impossible row/column active marking branches are removed for
+      width-1 panels only
+  - validation:
+    - `make -C ralph test-lu-supernode`
+    - `make -C ralph build-ralph-benchmark`
+    - `make -C ralph test-netlib-gate-small`
+    - `make -C ralph test-netlib-gate`
+  - measured effect:
+    - direct `pilot.mps`
+      - `sn_size1_update_scan_ms: 42.069 -> 2.301`
+      - `total_supernode_numeric_ms: 13882.359 -> 13766.775`
+      - iterations before timeout: `3358 -> 3485`
+    - direct `pilot87.mps`
+      - `sn_size1_update_scan_ms: 139.200 -> 6.146`
+      - `total_supernode_numeric_ms: 45555.898 -> 45075.349`
+      - iterations before timeout: `5690 -> 5703`
+    - direct `d2q06c.mps`
+      - `sn_size1_update_scan_ms: 34.396 -> 0.879`
+      - iterations before timeout: `8901 -> 9383`
+  - full-gate result:
+    - baseline-clean
+    - `84` files
+    - `22` timeouts
+    - `0` status/objective/invalid mismatches
+    - `0` dense fallback files
+  - result:
+    - this is a safe throughput improvement for the pilot-family kernel path
+    - the next hotspot remains generic width-1 trailing work, but the scan leg
+      is now largely retired
+    - the next exact target should be width-1 trailing-U emit before revisiting
+      broader supernode work
 - rejected during `W1.2`
   - stale or approximate `col_max` shortcuts and other behavior-adjacent
     Markowitz optimizations were tried and rolled back

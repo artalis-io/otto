@@ -815,6 +815,29 @@ typedef struct {
     double lu_sn_panel_pivot_search_ms;
     double lu_sn_panel_swap_scatter_ms;
     double lu_sn_panel_eliminate_ms;
+    uint64_t lu_sn_panel_pivot_search_calls;
+    uint64_t lu_sn_panel_pivot_search_entries_total;
+    uint64_t lu_sn_panel_pivot_search_size1_calls;
+    double lu_sn_panel_pivot_search_size1_ms;
+    uint64_t lu_sn_panel_pivot_search_size2_calls;
+    double lu_sn_panel_pivot_search_size2_ms;
+    uint64_t lu_sn_panel_pivot_search_size3_4_calls;
+    double lu_sn_panel_pivot_search_size3_4_ms;
+    uint64_t lu_sn_panel_pivot_search_size5_8_calls;
+    double lu_sn_panel_pivot_search_size5_8_ms;
+    uint64_t lu_sn_panel_pivot_search_size9p_calls;
+    double lu_sn_panel_pivot_search_size9p_ms;
+    uint64_t lu_sn_panel_pivot_search_reserved_present_calls;
+    uint64_t lu_sn_panel_pivot_search_reserved_present_entries;
+    double lu_sn_panel_pivot_search_reserved_present_ms;
+    uint64_t lu_sn_panel_pivot_search_reserved_alt_chosen_calls;
+    double lu_sn_panel_pivot_search_reserved_alt_chosen_ms;
+    uint64_t lu_sn_size1_u_emit_calls;
+    double lu_sn_size1_u_emit_ms;
+    uint64_t lu_sn_size1_update_scan_calls;
+    double lu_sn_size1_update_scan_ms;
+    uint64_t lu_sn_size1_update_apply_calls;
+    double lu_sn_size1_update_apply_ms;
     double lu_sn_u_emit_ms;
     double lu_sn_active_set_ms;
     double lu_sn_pack_blocks_ms;
@@ -2266,6 +2289,52 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                     lu_tel.perf_sn_panel_swap_scatter_ms;
                 result.lu_sn_panel_eliminate_ms =
                     lu_tel.perf_sn_panel_eliminate_ms;
+                result.lu_sn_panel_pivot_search_calls =
+                    lu_tel.perf_sn_panel_pivot_search_calls;
+                result.lu_sn_panel_pivot_search_entries_total =
+                    lu_tel.perf_sn_panel_pivot_search_entries_total;
+                result.lu_sn_panel_pivot_search_size1_calls =
+                    lu_tel.perf_sn_panel_pivot_search_size1_calls;
+                result.lu_sn_panel_pivot_search_size1_ms =
+                    lu_tel.perf_sn_panel_pivot_search_size1_ms;
+                result.lu_sn_panel_pivot_search_size2_calls =
+                    lu_tel.perf_sn_panel_pivot_search_size2_calls;
+                result.lu_sn_panel_pivot_search_size2_ms =
+                    lu_tel.perf_sn_panel_pivot_search_size2_ms;
+                result.lu_sn_panel_pivot_search_size3_4_calls =
+                    lu_tel.perf_sn_panel_pivot_search_size3_4_calls;
+                result.lu_sn_panel_pivot_search_size3_4_ms =
+                    lu_tel.perf_sn_panel_pivot_search_size3_4_ms;
+                result.lu_sn_panel_pivot_search_size5_8_calls =
+                    lu_tel.perf_sn_panel_pivot_search_size5_8_calls;
+                result.lu_sn_panel_pivot_search_size5_8_ms =
+                    lu_tel.perf_sn_panel_pivot_search_size5_8_ms;
+                result.lu_sn_panel_pivot_search_size9p_calls =
+                    lu_tel.perf_sn_panel_pivot_search_size9p_calls;
+                result.lu_sn_panel_pivot_search_size9p_ms =
+                    lu_tel.perf_sn_panel_pivot_search_size9p_ms;
+                result.lu_sn_panel_pivot_search_reserved_present_calls =
+                    lu_tel.perf_sn_panel_pivot_search_reserved_present_calls;
+                result.lu_sn_panel_pivot_search_reserved_present_entries =
+                    lu_tel.perf_sn_panel_pivot_search_reserved_present_entries;
+                result.lu_sn_panel_pivot_search_reserved_present_ms =
+                    lu_tel.perf_sn_panel_pivot_search_reserved_present_ms;
+                result.lu_sn_panel_pivot_search_reserved_alt_chosen_calls =
+                    lu_tel.perf_sn_panel_pivot_search_reserved_alt_chosen_calls;
+                result.lu_sn_panel_pivot_search_reserved_alt_chosen_ms =
+                    lu_tel.perf_sn_panel_pivot_search_reserved_alt_chosen_ms;
+                result.lu_sn_size1_u_emit_calls =
+                    lu_tel.perf_sn_size1_u_emit_calls;
+                result.lu_sn_size1_u_emit_ms =
+                    lu_tel.perf_sn_size1_u_emit_ms;
+                result.lu_sn_size1_update_scan_calls =
+                    lu_tel.perf_sn_size1_update_scan_calls;
+                result.lu_sn_size1_update_scan_ms =
+                    lu_tel.perf_sn_size1_update_scan_ms;
+                result.lu_sn_size1_update_apply_calls =
+                    lu_tel.perf_sn_size1_update_apply_calls;
+                result.lu_sn_size1_update_apply_ms =
+                    lu_tel.perf_sn_size1_update_apply_ms;
                 result.lu_sn_u_emit_ms =
                     lu_tel.perf_sn_u_emit_ms;
                 result.lu_sn_active_set_ms =
@@ -4389,6 +4458,52 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_sn_panel_factor_ms);
     fprintf(out, "    \"sn_panel_pivot_search_ms\": %.6f,\n",
             ralph->lu_sn_panel_pivot_search_ms);
+    fprintf(out, "    \"sn_panel_pivot_search_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_panel_pivot_search_calls);
+    fprintf(out, "    \"sn_panel_pivot_search_entries_total\": %" PRIu64 ",\n",
+            ralph->lu_sn_panel_pivot_search_entries_total);
+    fprintf(out, "    \"sn_panel_pivot_search_size1_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_panel_pivot_search_size1_calls);
+    fprintf(out, "    \"sn_panel_pivot_search_size1_ms\": %.6f,\n",
+            ralph->lu_sn_panel_pivot_search_size1_ms);
+    fprintf(out, "    \"sn_panel_pivot_search_size2_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_panel_pivot_search_size2_calls);
+    fprintf(out, "    \"sn_panel_pivot_search_size2_ms\": %.6f,\n",
+            ralph->lu_sn_panel_pivot_search_size2_ms);
+    fprintf(out, "    \"sn_panel_pivot_search_size3_4_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_panel_pivot_search_size3_4_calls);
+    fprintf(out, "    \"sn_panel_pivot_search_size3_4_ms\": %.6f,\n",
+            ralph->lu_sn_panel_pivot_search_size3_4_ms);
+    fprintf(out, "    \"sn_panel_pivot_search_size5_8_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_panel_pivot_search_size5_8_calls);
+    fprintf(out, "    \"sn_panel_pivot_search_size5_8_ms\": %.6f,\n",
+            ralph->lu_sn_panel_pivot_search_size5_8_ms);
+    fprintf(out, "    \"sn_panel_pivot_search_size9p_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_panel_pivot_search_size9p_calls);
+    fprintf(out, "    \"sn_panel_pivot_search_size9p_ms\": %.6f,\n",
+            ralph->lu_sn_panel_pivot_search_size9p_ms);
+    fprintf(out, "    \"sn_panel_pivot_search_reserved_present_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_panel_pivot_search_reserved_present_calls);
+    fprintf(out, "    \"sn_panel_pivot_search_reserved_present_entries\": %" PRIu64 ",\n",
+            ralph->lu_sn_panel_pivot_search_reserved_present_entries);
+    fprintf(out, "    \"sn_panel_pivot_search_reserved_present_ms\": %.6f,\n",
+            ralph->lu_sn_panel_pivot_search_reserved_present_ms);
+    fprintf(out, "    \"sn_panel_pivot_search_reserved_alt_chosen_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_panel_pivot_search_reserved_alt_chosen_calls);
+    fprintf(out, "    \"sn_panel_pivot_search_reserved_alt_chosen_ms\": %.6f,\n",
+            ralph->lu_sn_panel_pivot_search_reserved_alt_chosen_ms);
+    fprintf(out, "    \"sn_size1_u_emit_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_size1_u_emit_calls);
+    fprintf(out, "    \"sn_size1_u_emit_ms\": %.6f,\n",
+            ralph->lu_sn_size1_u_emit_ms);
+    fprintf(out, "    \"sn_size1_update_scan_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_size1_update_scan_calls);
+    fprintf(out, "    \"sn_size1_update_scan_ms\": %.6f,\n",
+            ralph->lu_sn_size1_update_scan_ms);
+    fprintf(out, "    \"sn_size1_update_apply_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_size1_update_apply_calls);
+    fprintf(out, "    \"sn_size1_update_apply_ms\": %.6f,\n",
+            ralph->lu_sn_size1_update_apply_ms);
     fprintf(out, "    \"sn_panel_swap_scatter_ms\": %.6f,\n",
             ralph->lu_sn_panel_swap_scatter_ms);
     fprintf(out, "    \"sn_panel_eliminate_ms\": %.6f,\n",
