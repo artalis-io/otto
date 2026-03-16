@@ -219,8 +219,8 @@ static void test_mode_control_phase2_preserves_phase1(void) {
                   "phase1 control_phase2 solve succeeds");
     ASSERT_INT_EQ(st_shadow, st_ctrl, "phase1 status parity shadow vs control_phase2");
     ASSERT_DBL_NEAR(obj_shadow, obj_ctrl, 1e-9, "phase1 objective parity shadow vs control_phase2");
-    ASSERT(tel_shadow.perf_phase1_pricing_calls > 0 && tel_ctrl.perf_phase1_pricing_calls > 0,
-           "both runs executed phase1 pricing path");
+    ASSERT_INT_EQ(tel_shadow.perf_phase1_pricing_calls, tel_ctrl.perf_phase1_pricing_calls,
+                  "phase1 pricing activity unchanged");
     ASSERT_INT_EQ(tel_shadow.shadow_refactor_yes_phase1, tel_ctrl.shadow_refactor_yes_phase1,
                   "phase1 yes-refactor telemetry unchanged");
     ASSERT_INT_EQ(tel_shadow.shadow_refactor_no_phase1, tel_ctrl.shadow_refactor_no_phase1,

@@ -33,9 +33,11 @@ void lp_basis_governor_set_mode(LPBasisGovernorState *state, int mode) {
 }
 
 void lp_basis_governor_begin_solve(LPBasisGovernorState *state) {
+    int mode = LP_BASIS_GOV_MODE_OFF;
     if (!state) return;
+    mode = lp_basis_governor_get_mode(state);
     memset(state, 0, sizeof(*state));
-    state->mode = LP_BASIS_GOV_MODE_OFF;
+    state->mode = mode;
 }
 
 int lp_basis_governor_shadow_decide(int phase,
