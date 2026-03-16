@@ -23,10 +23,11 @@
 static void mip_apply_dual_flags(MIPSolver *solver) {
     if (!solver->lp_solver) return;
     solver->lp_solver->telemetry_enabled = solver->telemetry ? 1 : 0;
-    if (solver->dual_bound_flip >= 0)
-        solver->lp_solver->use_dual_bound_flip = solver->dual_bound_flip;
-    if (solver->dual_steepest_edge >= 0)
-        solver->lp_solver->use_dual_steepest_edge = solver->dual_steepest_edge;
+    /* Keep node LP re-optimization on the stable dual path.
+     * The LP-only P5/P6 flags are not correctness-clean under branch-and-bound yet,
+     * so MIP pins them off until that gap is closed. */
+    solver->lp_solver->use_dual_bound_flip = 0;
+    solver->lp_solver->use_dual_steepest_edge = 0;
     /* Cap iteration limit for MIP LP solves.  The old dual_reopt had a 500-pivot
      * budget; if dual v2 hasn't converged in 500 iterations, fall back to primal.
      * This prevents stall-detection-fooling cycling from burning minutes. */

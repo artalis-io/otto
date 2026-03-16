@@ -438,7 +438,7 @@ int main(void) {
         int next_pending = 0;
         int next_reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
         int activated = lp_refactor_policy_phase1_activate_force_pivot_mode(
-            1300, 120, 40, 0, &next_streak, &next_budget, &next_pending, &next_reason);
+            1300, 120, 40, 0, 1, &next_streak, &next_budget, &next_pending, &next_reason);
         TEST(activated == 1, "force-pivot activation: triggers above threshold");
         TEST(next_streak == 0 && next_budget == 20,
              "force-pivot activation: resets streak and arms budget");
@@ -452,7 +452,7 @@ int main(void) {
         int next_pending = 0;
         int next_reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
         int activated = lp_refactor_policy_phase1_activate_force_pivot_mode(
-            1300, 120, 20, 5, &next_streak, &next_budget, &next_pending, &next_reason);
+            1300, 120, 20, 5, 1, &next_streak, &next_budget, &next_pending, &next_reason);
         TEST(activated == 0, "force-pivot activation: blocked by active budget");
         TEST(next_streak == 20 && next_budget == 5,
              "force-pivot activation: preserves state when blocked");

@@ -3221,6 +3221,19 @@ int ralph_core_get_last_lp_telemetry(const RalphModel *model, RalphLPSolverTelem
     size_t copy_n = sizeof(*telemetry);
     if (copy_n > sizeof(snapshot)) copy_n = sizeof(snapshot);
     memcpy(telemetry, &snapshot, copy_n);
+    telemetry->basis_governor_mode = snapshot.basis_governor_mode;
+    telemetry->shadow_refactor_yes_phase1 = snapshot.shadow_refactor_yes_phase1;
+    telemetry->shadow_refactor_yes_phase2 = snapshot.shadow_refactor_yes_phase2;
+    telemetry->shadow_refactor_yes_dual = snapshot.shadow_refactor_yes_dual;
+    telemetry->shadow_refactor_no_phase1 = snapshot.shadow_refactor_no_phase1;
+    telemetry->shadow_refactor_no_phase2 = snapshot.shadow_refactor_no_phase2;
+    telemetry->shadow_refactor_no_dual = snapshot.shadow_refactor_no_dual;
+    telemetry->shadow_backend_pick_markowitz = snapshot.shadow_backend_pick_markowitz;
+    telemetry->shadow_backend_pick_supernode = snapshot.shadow_backend_pick_supernode;
+    telemetry->shadow_backend_pick_dense = snapshot.shadow_backend_pick_dense;
+    telemetry->shadow_disagree_primal_refactor = snapshot.shadow_disagree_primal_refactor;
+    telemetry->shadow_disagree_dual_refactor = snapshot.shadow_disagree_dual_refactor;
+    telemetry->shadow_disagree_lu_backend = snapshot.shadow_disagree_lu_backend;
     return 0;
 }
 

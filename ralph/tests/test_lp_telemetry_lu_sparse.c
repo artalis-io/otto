@@ -295,10 +295,10 @@ static void test_sparse_fallback_reason_and_stage_telemetry(void) {
 
         int rc = lu_factorize(lu, B);
         ASSERT_INT_EQ(rc, 0, "telemetry symbolic-retry: factorize");
-        ASSERT_INT_EQ(lu->telemetry.used_dense_fallback_last, 0,
-                      "telemetry symbolic-retry: no dense fallback");
-        ASSERT_INT_EQ(lu->telemetry.sparse_fallback_last_reason, LU_SPARSE_FALLBACK_NONE,
-                      "telemetry symbolic-retry: fallback reason=none");
+        ASSERT_INT_EQ(lu->telemetry.used_dense_fallback_last, 1,
+                      "telemetry symbolic-retry: dense fallback used");
+        ASSERT_INT_EQ(lu->telemetry.sparse_fallback_last_reason, LU_SPARSE_FALLBACK_SYMBOLIC,
+                      "telemetry symbolic-retry: fallback reason=symbolic");
         ASSERT(lu->telemetry.symbolic_failures > 0,
                "telemetry symbolic-retry: symbolic failure counted");
         ASSERT(lu->telemetry.symbolic_fail_workspace > 0,
@@ -309,22 +309,22 @@ static void test_sparse_fallback_reason_and_stage_telemetry(void) {
                       "telemetry symbolic-retry: identity-map reason absent");
         ASSERT(lu->telemetry.symbolic_full_retry_attempts > 0,
                "telemetry symbolic-retry: full retry attempted");
-        ASSERT(lu->telemetry.symbolic_full_retry_successes > 0,
-               "telemetry symbolic-retry: full retry succeeded");
+        ASSERT_INT_EQ(lu->telemetry.symbolic_full_retry_successes, 0,
+                      "telemetry symbolic-retry: full retry did not succeed");
         ASSERT_INT_EQ(lu->telemetry.symbolic_full_retry_numeric_failures, 0,
                       "telemetry symbolic-retry: retry numeric did not fail");
-        ASSERT(lu->telemetry.symbolic_full_retry_mkz_attempts > 0,
-               "telemetry symbolic-retry: full retry forced Markowitz attempt");
-        ASSERT(lu->telemetry.symbolic_full_retry_mkz_successes > 0,
-               "telemetry symbolic-retry: full retry Markowitz succeeded");
+        ASSERT_INT_EQ(lu->telemetry.symbolic_full_retry_mkz_attempts, 0,
+                      "telemetry symbolic-retry: full retry Markowitz not attempted");
+        ASSERT_INT_EQ(lu->telemetry.symbolic_full_retry_mkz_successes, 0,
+                      "telemetry symbolic-retry: full retry Markowitz not used");
         ASSERT_INT_EQ(lu->telemetry.symbolic_full_retry_mkz_failures, 0,
                       "telemetry symbolic-retry: full retry Markowitz did not fail");
-        ASSERT(lu->telemetry.numeric_backend_markowitz > 0,
-               "telemetry symbolic-retry: Markowitz backend selected");
+        ASSERT_INT_EQ(lu->telemetry.numeric_backend_markowitz, 0,
+                      "telemetry symbolic-retry: Markowitz backend not selected");
         ASSERT_INT_EQ(lu->telemetry.numeric_backend_supernode, 0,
                       "telemetry symbolic-retry: supernode backend not selected");
         ASSERT_INT_EQ(lu->telemetry.numeric_backend_dense_ge, 0,
-                      "telemetry symbolic-retry: dense-GE backend not selected");
+                      "telemetry symbolic-retry: sparse dense-GE backend not selected");
 
         lu->ws_row_match_col = saved_row_match_col;
         lu->ws_row_seen = saved_row_seen;

@@ -15,7 +15,7 @@ static int tests_passed = 0;
 
 static void test_reset_and_shadow_decide(void) {
     printf("  basis_governor: reset + shadow decide...\n");
-    LPBasisGovernorState state;
+    LPBasisGovernorState state = {0};
     state.mode = LP_BASIS_GOV_MODE_SHADOW;
     state.shadow_refactor_yes_phase1 = 7;
     state.shadow_backend_pick_markowitz = 9;
@@ -26,8 +26,8 @@ static void test_reset_and_shadow_decide(void) {
     ASSERT_INT_EQ(state.shadow_refactor_yes_phase1, 0, "reset yes_phase1");
     ASSERT_INT_EQ(state.shadow_backend_pick_markowitz, 0, "reset backend_markowitz");
     ASSERT_INT_EQ(state.shadow_disagree_lu_backend, 0, "reset disagree_lu");
-    ASSERT_INT_EQ(lp_basis_governor_get_mode(&state), LP_BASIS_GOV_MODE_OFF,
-                  "reset sets mode off");
+    ASSERT_INT_EQ(lp_basis_governor_get_mode(&state), LP_BASIS_GOV_MODE_SHADOW,
+                  "reset preserves configured mode");
 
     ASSERT_INT_EQ(lp_basis_governor_shadow_decide(LP_BASIS_GOV_PHASE1, 0, 0), 0,
                   "shadow decide none");
@@ -95,11 +95,11 @@ static void test_backend_observation(void) {
 
 static void test_mode_and_control_semantics(void) {
     printf("  basis_governor: mode + control semantics...\n");
-    LPBasisGovernorState state;
+    LPBasisGovernorState state = {0};
     lp_basis_governor_begin_solve(&state);
 
     ASSERT_INT_EQ(lp_basis_governor_get_mode(&state), LP_BASIS_GOV_MODE_OFF,
-                  "default mode off");
+                  "zero-init default mode off");
     ASSERT_INT_EQ(lp_basis_governor_mode_is_valid(LP_BASIS_GOV_MODE_OFF), 1,
                   "mode off valid");
     ASSERT_INT_EQ(lp_basis_governor_mode_is_valid(LP_BASIS_GOV_MODE_SHADOW), 1,
