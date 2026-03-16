@@ -1,0 +1,7 @@
+# NETLIB crash repro harness for explicit norelax/noflip mode.
+fit1d
+fit2d
+grow7
+share1b
+share2b
+stocfor1

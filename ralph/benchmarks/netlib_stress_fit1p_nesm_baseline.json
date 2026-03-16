@@ -1,0 +1,28 @@
+{
+  "source_commit": "c0f59aa",
+  "description": "fit1p/nesm stress diagnostics baseline (promote to gating when stable).",
+  "defaults": {
+    "hard_cap_sec": 20,
+    "outer_timeout_sec": 50,
+    "time_multiplier": 20,
+    "random_seed": 0,
+    "lp_reinvert_controller_mode": 1,
+    "required_pass_timeout_retries": 1,
+    "required_pass_timeout_near_cap_ratio": 0.98,
+    "required_pass_timeout_min_ms": 1000
+  },
+  "known_status_mismatch": [],
+  "known_objective_mismatch": [],
+  "known_solution_invalid": [],
+  "required_pass": [
+    "fit1p.mps",
+    "nesm.mps"
+  ],
+  "required_coverage": [
+    "fit1p.mps",
+    "nesm.mps"
+  ],
+  "known_timeouts": [],
+  "problem_overrides": {},
+  "require_zero_dense_fallback": true
+}

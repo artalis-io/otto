@@ -21,6 +21,16 @@ extern "C" {
 #endif
 
 /* ============================================================================
+ * Solver Type Enumeration
+ * ============================================================================ */
+
+typedef enum {
+    FW_SOLVER_LP = 0,       /* Pure LP (no stop costs) */
+    FW_SOLVER_MILP = 1,     /* Branch and bound MILP */
+    FW_SOLVER_BENDERS = 2   /* Benders decomposition */
+} FWSolverType;
+
+/* ============================================================================
  * Problem Generation Configuration
  * ============================================================================ */
 
@@ -48,6 +58,7 @@ typedef struct {
     /* Fuel parameters */
     double min_fuel_l;              /* Minimum fuel level to maintain */
     double min_purchase_l;          /* Minimum purchase per stop (0 = LP, >0 = MILP) */
+    double stop_cost;               /* Fixed cost per stop (0 = no stop penalty) */
     double start_fuel_fraction;     /* Starting fuel as fraction of tank (0.3-0.8) */
 
     /* Price distribution (AR(1) spatial correlation model)
@@ -64,6 +75,9 @@ typedef struct {
 
     /* Unit system (for display/reporting only - internal always metric) */
     SHUnitSystem units;             /* Default: SH_UNITS_METRIC */
+
+    /* GLPK comparison mode (bench-only) */
+    int glpk_compare;               /* 1 to enable GLPK comparison */
 } FWBenchConfig;
 
 /* ============================================================================
@@ -129,6 +143,21 @@ typedef struct {
     double cost_min;
     double cost_max;
     double stops_avg;
+
+    /* GLPK comparison (only populated when glpk_compare enabled) */
+    int glpk_enabled;
+    int glpk_num_solved;
+    int glpk_num_match;             /* Objectives match within tolerance */
+    double glpk_solve_time_avg;
+    double glpk_solve_time_min;
+    double glpk_solve_time_max;
+    double glpk_speedup_avg;        /* GLPK time / Ralph time (> 1 means Ralph faster) */
+
+    /* Objective gap vs GLPK: (ralph_obj - glpk_obj) / glpk_obj * 100 */
+    double glpk_gap_min_pct;        /* Best case (smallest gap) */
+    double glpk_gap_avg_pct;        /* Average gap */
+    double glpk_gap_max_pct;        /* Worst case (largest gap) */
+    int glpk_gap_count;             /* Number of instances with valid gap */
 } FWBenchResults;
 
 /* ============================================================================
@@ -176,6 +205,19 @@ FWBenchConfig fw_bench_config_tight_margins(void);
 /* US Interstate: 2000 miles, Class 8 truck (imperial units) */
 FWBenchConfig fw_bench_config_us_interstate(void);
 
+/* Benders benchmarks: fixed station counts for scalability testing */
+FWBenchConfig fw_bench_config_benders_30(void);   /* 30 stations */
+FWBenchConfig fw_bench_config_benders_50(void);   /* 50 stations */
+FWBenchConfig fw_bench_config_benders_100(void);  /* 100 stations */
+
+/* MIP benchmarks: stop_cost + min_purchase, scaling from trivial to stress */
+FWBenchConfig fw_bench_config_milp_15(void);      /* ~15 stations, sub-ms sanity */
+FWBenchConfig fw_bench_config_milp_30(void);      /* ~30 stations, high stop cost */
+FWBenchConfig fw_bench_config_milp_50(void);      /* ~50 stations, high price variance */
+FWBenchConfig fw_bench_config_milp_75(void);      /* ~75 stations, tight tank (reach cuts) */
+FWBenchConfig fw_bench_config_milp_100(void);     /* ~100 stations, scalability */
+FWBenchConfig fw_bench_config_milp_200(void);     /* ~200 stations, stress test */
+
 /* ============================================================================
  * Validation API
  * ============================================================================ */
@@ -214,7 +256,7 @@ int fw_validate_solution(
  * Parameters:
  *   config      - Problem generation config
  *   num_runs    - Number of problems to generate and solve
- *   use_milp    - 1 for MILP solver, 0 for LP
+ *   solver_type - Which solver to use (LP, MILP, or Benders)
  *   results     - Output: benchmark statistics
  *
  * Returns:
@@ -223,7 +265,7 @@ int fw_validate_solution(
 int fw_bench_run(
     const FWBenchConfig *config,
     int num_runs,
-    int use_milp,
+    FWSolverType solver_type,
     FWBenchResults *results
 );
 

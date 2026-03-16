@@ -8,7 +8,7 @@
 
 ```bash
 make          # Build libralph.a
-make test     # Run tests (73/73 should pass)
+make test     # Run tests (378/378 should pass)
 make test-lap # Run LAP tests (358/358 should pass)
 make test-netflow # Run Network Flow tests (153/153 should pass)
 ```
@@ -17,7 +17,9 @@ make test-netflow # Run Network Flow tests (153/153 should pass)
 
 | File | Purpose |
 |------|---------|
-| `include/ralph.h` | Public API - start here |
+| `include/ralph_lp.h` | LP public API - start here |
+| `include/ralph_mip.h` | MIP public API |
+| `include/ralph_core.h` | Internal core API (non-public) |
 | `include/lap.h` | LAP solver API |
 | `include/netflow.h` | Network Flow solver API |
 | `include/detect.h` | Problem structure detection |
@@ -59,7 +61,7 @@ Model Building (model.c)
 1. **CSC format**: Sparse matrices are column-major
 2. **LU eta-file**: Updates must modify all components
 3. **Constraint normalization**: RHS must be non-negative
-4. **Big-M method**: Artificial variable cost is 1e8
+4. **Two-phase simplex**: Artificial variables use Phase 1 (cost=1.0), no Big-M
 5. **LAP costs**: Row-major n×n matrix, use RALPH_LAP_INFINITY for forbidden
 
 ## LAP Solver Features
@@ -384,7 +386,6 @@ make bench-netflow    # Network Flow benchmarks (size, warm start, bottleneck)
 /* General */
 #define TOLERANCE 1e-9      // General numerical tolerance
 #define PIVOT_TOL 1e-10     // Minimum pivot value
-#define BIG_M 1e8           // Artificial variable cost
 
 /* Network Flow */
 #define RALPH_NETFLOW_TOLERANCE 1e-9   // Flow/cost tolerance
@@ -461,8 +462,8 @@ if (row < 0 || row >= nrows || col < 0 || col >= ncols) {
 ### Constants Over Magic Numbers
 ```c
 /* Good - use defined constants */
-tab->c_ext[j] = RALPH_BIG_M;
+if (infeas > RALPH_FEAS_TOL) { ... }
 
 /* Bad - magic numbers */
-tab->c_ext[j] = 1e8;
+if (infeas > 1e-6) { ... }
 ```

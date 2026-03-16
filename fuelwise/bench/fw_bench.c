@@ -12,7 +12,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <time.h>
+
+/* GLPK comparison helper (fw_glpk.c) */
+typedef struct {
+    int solved;
+    double objective;
+    double solve_time_ms;
+} FWGlpkResult;
+int fw_glpk_solve(const FWRefuelProblem *problem, FWGlpkResult *result);
 
 /* ============================================================================
  * Timing Utilities
@@ -32,7 +41,7 @@ static double get_time_ms(void)
 int fw_bench_run(
     const FWBenchConfig *config,
     int num_runs,
-    int use_milp,
+    FWSolverType solver_type,
     FWBenchResults *results)
 {
     if (!config || !results || num_runs <= 0) return -1;
@@ -41,6 +50,16 @@ int fw_bench_run(
     results->num_runs = num_runs;
     results->solve_time_min = 1e9;
     results->cost_min = 1e9;
+
+    /* GLPK comparison tracking */
+    int glpk_compare = config->glpk_compare;
+    if (glpk_compare) {
+        results->glpk_enabled = 1;
+        results->glpk_solve_time_min = 1e9;
+    }
+    double total_glpk_time = 0;
+    double total_speedup = 0;
+    double total_gap_pct = 0;
 
     double total_solve_time = 0;
     double total_validate_time = 0;
@@ -71,14 +90,26 @@ int fw_bench_run(
 
         double t0 = get_time_ms();
 
-        /* Use MILP if explicitly requested or if min_purchase is set */
-        int needs_milp = use_milp || (instance.problem.min_purchase > 0.01);
+        /* Select solver based on type and problem characteristics */
+        FWSolverType effective_solver = solver_type;
+
+        /* Force MILP/Benders if min_purchase requires binary decisions */
+        if (effective_solver == FW_SOLVER_LP && instance.problem.min_purchase > 0.01) {
+            effective_solver = FW_SOLVER_MILP;
+        }
 
         int rc;
-        if (needs_milp) {
-            rc = fw_solve_refuel_milp(&instance.problem, &solution);
-        } else {
-            rc = fw_solve_refuel_lp(&instance.problem, &solution);
+        switch (effective_solver) {
+            case FW_SOLVER_BENDERS:
+                rc = fw_solve_refuel_benders(&instance.problem, &solution);
+                break;
+            case FW_SOLVER_MILP:
+                rc = fw_solve_refuel_milp(&instance.problem, &solution);
+                break;
+            case FW_SOLVER_LP:
+            default:
+                rc = fw_solve_refuel_lp(&instance.problem, &solution);
+                break;
         }
 
         double solve_time = get_time_ms() - t0;
@@ -134,6 +165,55 @@ int fw_bench_run(
             }
         }
 
+        /* GLPK comparison (if enabled and Ralph solved successfully) */
+        if (glpk_compare && feasible) {
+            FWGlpkResult glpk_result;
+            if (fw_glpk_solve(&instance.problem, &glpk_result) == 0 &&
+                glpk_result.solved) {
+                results->glpk_num_solved++;
+                total_glpk_time += glpk_result.solve_time_ms;
+
+                if (glpk_result.solve_time_ms < results->glpk_solve_time_min) {
+                    results->glpk_solve_time_min = glpk_result.solve_time_ms;
+                }
+                if (glpk_result.solve_time_ms > results->glpk_solve_time_max) {
+                    results->glpk_solve_time_max = glpk_result.solve_time_ms;
+                }
+
+                /* Speedup: GLPK time / Ralph time (> 1 means Ralph faster) */
+                if (solve_time > 1e-6) {
+                    total_speedup += glpk_result.solve_time_ms / solve_time;
+                }
+
+                /* Compare objectives (tolerance: 0.01% relative difference) */
+                double ralph_obj = solution.total_cost;
+                double glpk_obj = glpk_result.objective;
+                double rel_diff = 0;
+                if (fabs(glpk_obj) > 1e-10) {
+                    rel_diff = fabs(ralph_obj - glpk_obj) / fabs(glpk_obj);
+                } else if (fabs(ralph_obj) > 1e-10) {
+                    rel_diff = 1.0;  /* One zero, one not */
+                }
+                if (rel_diff < 0.0001) {
+                    results->glpk_num_match++;
+                }
+
+                /* Track objective gap: (ralph - glpk) / glpk * 100 */
+                if (fabs(glpk_obj) > 1e-10) {
+                    double gap_pct = (ralph_obj - glpk_obj) / fabs(glpk_obj) * 100.0;
+                    if (results->glpk_gap_count == 0) {
+                        results->glpk_gap_min_pct = gap_pct;
+                        results->glpk_gap_max_pct = gap_pct;
+                    } else {
+                        if (gap_pct < results->glpk_gap_min_pct) results->glpk_gap_min_pct = gap_pct;
+                        if (gap_pct > results->glpk_gap_max_pct) results->glpk_gap_max_pct = gap_pct;
+                    }
+                    total_gap_pct += gap_pct;
+                    results->glpk_gap_count++;
+                }
+            }
+        }
+
         fw_free_solution(&solution);
         fw_bench_free_instance(&instance);
     }
@@ -147,6 +227,15 @@ int fw_bench_run(
     if (results->num_feasible > 0) {
         results->cost_avg = total_cost / results->num_feasible;
         results->stops_avg = total_stops / results->num_feasible;
+    }
+
+    /* GLPK comparison averages */
+    if (results->glpk_num_solved > 0) {
+        results->glpk_solve_time_avg = total_glpk_time / results->glpk_num_solved;
+        results->glpk_speedup_avg = total_speedup / results->glpk_num_solved;
+    }
+    if (results->glpk_gap_count > 0) {
+        results->glpk_gap_avg_pct = total_gap_pct / results->glpk_gap_count;
     }
 
     return 0;
@@ -192,7 +281,22 @@ void fw_bench_print_results(
         printf("      \"max\": %.2f\n", results->cost_max);
         printf("    },\n");
         printf("    \"stops_avg\": %.1f\n", results->stops_avg);
-        printf("  }\n");
+        printf("  }");
+        if (results->glpk_enabled) {
+            printf(",\n");
+            printf("  \"glpk\": {\n");
+            printf("    \"solved\": %d,\n", results->glpk_num_solved);
+            printf("    \"objective_match\": %d,\n", results->glpk_num_match);
+            printf("    \"solve_time_ms\": {\n");
+            printf("      \"avg\": %.2f,\n", results->glpk_solve_time_avg);
+            printf("      \"min\": %.2f,\n", results->glpk_solve_time_min);
+            printf("      \"max\": %.2f\n", results->glpk_solve_time_max);
+            printf("    },\n");
+            printf("    \"speedup\": %.1f\n", results->glpk_speedup_avg);
+            printf("  }\n");
+        } else {
+            printf("\n");
+        }
         printf("}\n");
     } else {
         /* Determine units for display */
@@ -240,5 +344,28 @@ void fw_bench_print_results(
                results->cost_avg, results->cost_min, results->cost_max);
         printf("  Stops: %.1f avg\n", results->stops_avg);
         printf("\n");
+
+        /* GLPK comparison section */
+        if (results->glpk_enabled) {
+            printf("GLPK Comparison:\n");
+            printf("  GLPK solved: %d/%d\n",
+                   results->glpk_num_solved, results->num_feasible);
+            printf("  GLPK time: %.2f ms avg (%.2f - %.2f ms)\n",
+                   results->glpk_solve_time_avg,
+                   results->glpk_solve_time_min,
+                   results->glpk_solve_time_max);
+            printf("  Ralph time: %.2f ms avg\n", results->solve_time_avg);
+            printf("  Speedup: %.1fx (Ralph faster)\n",
+                   results->glpk_speedup_avg);
+            printf("  Objective match: %d/%d (tolerance: 0.01%%)\n",
+                   results->glpk_num_match, results->glpk_num_solved);
+            if (results->glpk_gap_count > 0) {
+                printf("  Objective gap vs GLPK: %.2f%% avg (%.2f%% - %.2f%%)\n",
+                       results->glpk_gap_avg_pct,
+                       results->glpk_gap_min_pct,
+                       results->glpk_gap_max_pct);
+            }
+            printf("\n");
+        }
     }
 }

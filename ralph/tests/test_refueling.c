@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 #define TOLERANCE 1e-4
 #define COST_TOLERANCE 0.01
@@ -160,10 +160,10 @@ static int solve_refueling_lp(RefuelingTestCase *tc, double *purchases, double *
     int k = tc->num_stations;
     int num_vars = 2 * k;
 
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return -1;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
 
     int x_start = 0;
     int y_start = k;
@@ -182,13 +182,13 @@ static int solve_refueling_lp(RefuelingTestCase *tc, double *purchases, double *
     double est_price = tc->fuel_price_estimated_avg_near_term;
     for (int i = 0; i < k; i++) {
         double obj_coeff = tc->station_prices[i] - est_price;
-        ralph_add_var(model, 0.0, tc->fuel_level_maximum, obj_coeff, RALPH_CONTINUOUS);
+        ralph_test_add_var(model, 0.0, tc->fuel_level_maximum, obj_coeff, RALPH_CONTINUOUS);
     }
 
     /* Add y[i] variables - cumulative fuel before arriving */
     double y_upper = tc->fuel_level_current + k * tc->fuel_level_maximum;
     for (int i = 0; i < k; i++) {
-        ralph_add_var(model, 0.0, y_upper, 0.0, RALPH_CONTINUOUS);
+        ralph_test_add_var(model, 0.0, y_upper, 0.0, RALPH_CONTINUOUS);
     }
 
     /* Constraint: Fuel balance - y[i] = fuel_current + sum(x[j] for j < i) */
@@ -205,7 +205,7 @@ static int solve_refueling_lp(RefuelingTestCase *tc, double *purchases, double *
             values[1 + j] = -1.0;
         }
 
-        ralph_add_constraint(model, nnz, indices, values, RALPH_EQUAL, tc->fuel_level_current);
+        ralph_test_add_constraint(model, nnz, indices, values, RALPH_EQUAL, tc->fuel_level_current);
         free(indices);
         free(values);
     }
@@ -220,7 +220,7 @@ static int solve_refueling_lp(RefuelingTestCase *tc, double *purchases, double *
         double fuel_consumed = calc_fuel_consumed(tc, 0, tc->station_distances[i]);
         double rhs = tc->fuel_level_minimum + fuel_consumed;
 
-        ralph_add_constraint(model, 1, indices, values, RALPH_GREATER_EQUAL, rhs);
+        ralph_test_add_constraint(model, 1, indices, values, RALPH_GREATER_EQUAL, rhs);
     }
 
     /* Constraint: Tank capacity after refueling
@@ -233,7 +233,7 @@ static int solve_refueling_lp(RefuelingTestCase *tc, double *purchases, double *
         double fuel_consumed = calc_fuel_consumed(tc, 0, tc->station_distances[i]);
         double rhs = tc->fuel_level_maximum + fuel_consumed;
 
-        ralph_add_constraint(model, 2, indices, values, RALPH_LESS_EQUAL, rhs);
+        ralph_test_add_constraint(model, 2, indices, values, RALPH_LESS_EQUAL, rhs);
     }
 
     /* Constraint: Must reach destination with minimum fuel at end */
@@ -252,7 +252,7 @@ static int solve_refueling_lp(RefuelingTestCase *tc, double *purchases, double *
         double rhs = min_end + total_fuel_needed - tc->fuel_level_current;
 
         if (rhs > 0) {
-            ralph_add_constraint(model, k, indices, values, RALPH_GREATER_EQUAL, rhs);
+            ralph_test_add_constraint(model, k, indices, values, RALPH_GREATER_EQUAL, rhs);
         }
 
         free(indices);
@@ -260,13 +260,13 @@ static int solve_refueling_lp(RefuelingTestCase *tc, double *purchases, double *
     }
 
     /* Solve */
-    ralph_set_int_param(model, "verbose", 0);
-    int ret = ralph_optimize(model);
-    RalphStatus status = ralph_get_status(model);
+    ralph_test_set_int_param(model, "verbose", 0);
+    int ret = ralph_test_optimize(model);
+    RalphStatus status = ralph_test_get_status(model);
 
     if (ret == 0 && status == RALPH_STATUS_OPTIMAL) {
         double *x = malloc(num_vars * sizeof(double));
-        ralph_get_solution(model, x);
+        ralph_test_get_solution(model, x);
 
         for (int i = 0; i < k; i++) {
             purchases[i] = x[x_start + i];
@@ -298,11 +298,11 @@ static int solve_refueling_lp(RefuelingTestCase *tc, double *purchases, double *
         }
 
         free(x);
-        ralph_free(model);
+        ralph_test_free(model);
         return 0;
     }
 
-    ralph_free(model);
+    ralph_test_free(model);
     return -1;
 }
 
@@ -321,10 +321,10 @@ static int solve_refueling_milp(RefuelingTestCase *tc, double *purchases, double
     int k = tc->num_stations;
     int num_vars = 3 * k;
 
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
     if (!model) return -1;
 
-    ralph_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
 
     int x_start = 0;
     int y_start = k;
@@ -335,18 +335,18 @@ static int solve_refueling_milp(RefuelingTestCase *tc, double *purchases, double
     double est_price = tc->fuel_price_estimated_avg_near_term;
     for (int i = 0; i < k; i++) {
         double obj_coeff = tc->station_prices[i] - est_price;
-        ralph_add_var(model, 0.0, tc->fuel_level_maximum, obj_coeff, RALPH_CONTINUOUS);
+        ralph_test_add_var(model, 0.0, tc->fuel_level_maximum, obj_coeff, RALPH_CONTINUOUS);
     }
 
     /* Add y[i] variables - cumulative fuel before arriving */
     double y_upper = tc->fuel_level_current + k * tc->fuel_level_maximum;
     for (int i = 0; i < k; i++) {
-        ralph_add_var(model, 0.0, y_upper, 0.0, RALPH_CONTINUOUS);
+        ralph_test_add_var(model, 0.0, y_upper, 0.0, RALPH_CONTINUOUS);
     }
 
     /* Add z[i] variables - binary stop indicators with stop_cost in objective */
     for (int i = 0; i < k; i++) {
-        ralph_add_var(model, 0.0, 1.0, tc->stop_cost, RALPH_BINARY);
+        ralph_test_add_var(model, 0.0, 1.0, tc->stop_cost, RALPH_BINARY);
     }
 
     /* Constraint: Fuel balance */
@@ -363,7 +363,7 @@ static int solve_refueling_milp(RefuelingTestCase *tc, double *purchases, double
             values[1 + j] = -1.0;
         }
 
-        ralph_add_constraint(model, nnz, indices, values, RALPH_EQUAL, tc->fuel_level_current);
+        ralph_test_add_constraint(model, nnz, indices, values, RALPH_EQUAL, tc->fuel_level_current);
         free(indices);
         free(values);
     }
@@ -375,7 +375,7 @@ static int solve_refueling_milp(RefuelingTestCase *tc, double *purchases, double
         double fuel_consumed = calc_fuel_consumed(tc, 0, tc->station_distances[i]);
         double rhs = tc->fuel_level_minimum + fuel_consumed;
 
-        ralph_add_constraint(model, 1, indices, values, RALPH_GREATER_EQUAL, rhs);
+        ralph_test_add_constraint(model, 1, indices, values, RALPH_GREATER_EQUAL, rhs);
     }
 
     /* Constraint: Tank capacity after refueling */
@@ -385,7 +385,7 @@ static int solve_refueling_milp(RefuelingTestCase *tc, double *purchases, double
         double fuel_consumed = calc_fuel_consumed(tc, 0, tc->station_distances[i]);
         double rhs = tc->fuel_level_maximum + fuel_consumed;
 
-        ralph_add_constraint(model, 2, indices, values, RALPH_LESS_EQUAL, rhs);
+        ralph_test_add_constraint(model, 2, indices, values, RALPH_LESS_EQUAL, rhs);
     }
 
     /* Constraint: Link x[i] to z[i] - x[i] <= max * z[i] */
@@ -393,7 +393,7 @@ static int solve_refueling_milp(RefuelingTestCase *tc, double *purchases, double
         int indices[2] = {x_start + i, z_start + i};
         double values[2] = {1.0, -tc->fuel_level_maximum};
 
-        ralph_add_constraint(model, 2, indices, values, RALPH_LESS_EQUAL, 0.0);
+        ralph_test_add_constraint(model, 2, indices, values, RALPH_LESS_EQUAL, 0.0);
     }
 
     /* Constraint: Minimum purchase if stopping - x[i] >= min_purchase * z[i] */
@@ -402,7 +402,7 @@ static int solve_refueling_milp(RefuelingTestCase *tc, double *purchases, double
             int indices[2] = {x_start + i, z_start + i};
             double values[2] = {1.0, -tc->min_purchase};
 
-            ralph_add_constraint(model, 2, indices, values, RALPH_GREATER_EQUAL, 0.0);
+            ralph_test_add_constraint(model, 2, indices, values, RALPH_GREATER_EQUAL, 0.0);
         }
     }
 
@@ -422,7 +422,7 @@ static int solve_refueling_milp(RefuelingTestCase *tc, double *purchases, double
         double rhs = min_end + total_fuel_needed - tc->fuel_level_current;
 
         if (rhs > 0) {
-            ralph_add_constraint(model, k, indices, values, RALPH_GREATER_EQUAL, rhs);
+            ralph_test_add_constraint(model, k, indices, values, RALPH_GREATER_EQUAL, rhs);
         }
 
         free(indices);
@@ -430,13 +430,13 @@ static int solve_refueling_milp(RefuelingTestCase *tc, double *purchases, double
     }
 
     /* Solve */
-    ralph_set_int_param(model, "verbose", 0);
-    int ret = ralph_optimize(model);
-    RalphStatus status = ralph_get_status(model);
+    ralph_test_set_int_param(model, "verbose", 0);
+    int ret = ralph_test_optimize(model);
+    RalphStatus status = ralph_test_get_status(model);
 
     if (ret == 0 && status == RALPH_STATUS_OPTIMAL) {
         double *x = malloc(num_vars * sizeof(double));
-        ralph_get_solution(model, x);
+        ralph_test_get_solution(model, x);
 
         for (int i = 0; i < k; i++) {
             purchases[i] = x[x_start + i];
@@ -462,11 +462,11 @@ static int solve_refueling_milp(RefuelingTestCase *tc, double *purchases, double
         }
 
         free(x);
-        ralph_free(model);
+        ralph_test_free(model);
         return 0;
     }
 
-    ralph_free(model);
+    ralph_test_free(model);
     return -1;
 }
 

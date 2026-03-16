@@ -14,7 +14,7 @@
 #include <time.h>
 #include "lap.h"
 #include "detect.h"
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 #define TOLERANCE 1e-4
 
@@ -2128,58 +2128,58 @@ static void test_detect_lap_solve(void) {
     printf("\n=== Test: LAP Detection - Solve via Ralph ===\n");
 
     /*
-     * Build a 3x3 LAP and solve via ralph_optimize()
+     * Build a 3x3 LAP and solve via ralph_test_optimize()
      * Cost matrix:
      *   4  2  8
      *   6  3  7
      *   1  5  9
      * Optimal: 0->1=2, 1->2=7, 2->0=1 = 10
      */
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
 
     /* Add 9 variables */
     double costs[9] = {4, 2, 8, 6, 3, 7, 1, 5, 9};
     for (int i = 0; i < 9; i++) {
-        ralph_add_var(model, 0.0, 1.0, costs[i], RALPH_CONTINUOUS);
+        ralph_test_add_var(model, 0.0, 1.0, costs[i], RALPH_CONTINUOUS);
     }
 
     /* Row constraints */
     int row0_vars[3] = {0, 1, 2};
     double row0_coefs[3] = {1, 1, 1};
-    ralph_add_constraint(model, 3, row0_vars, row0_coefs, RALPH_EQUAL, 1.0);
+    ralph_test_add_constraint(model, 3, row0_vars, row0_coefs, RALPH_EQUAL, 1.0);
 
     int row1_vars[3] = {3, 4, 5};
     double row1_coefs[3] = {1, 1, 1};
-    ralph_add_constraint(model, 3, row1_vars, row1_coefs, RALPH_EQUAL, 1.0);
+    ralph_test_add_constraint(model, 3, row1_vars, row1_coefs, RALPH_EQUAL, 1.0);
 
     int row2_vars[3] = {6, 7, 8};
     double row2_coefs[3] = {1, 1, 1};
-    ralph_add_constraint(model, 3, row2_vars, row2_coefs, RALPH_EQUAL, 1.0);
+    ralph_test_add_constraint(model, 3, row2_vars, row2_coefs, RALPH_EQUAL, 1.0);
 
     /* Column constraints */
     int col0_vars[3] = {0, 3, 6};
     double col0_coefs[3] = {1, 1, 1};
-    ralph_add_constraint(model, 3, col0_vars, col0_coefs, RALPH_EQUAL, 1.0);
+    ralph_test_add_constraint(model, 3, col0_vars, col0_coefs, RALPH_EQUAL, 1.0);
 
     int col1_vars[3] = {1, 4, 7};
     double col1_coefs[3] = {1, 1, 1};
-    ralph_add_constraint(model, 3, col1_vars, col1_coefs, RALPH_EQUAL, 1.0);
+    ralph_test_add_constraint(model, 3, col1_vars, col1_coefs, RALPH_EQUAL, 1.0);
 
     int col2_vars[3] = {2, 5, 8};
     double col2_coefs[3] = {1, 1, 1};
-    ralph_add_constraint(model, 3, col2_vars, col2_coefs, RALPH_EQUAL, 1.0);
+    ralph_test_add_constraint(model, 3, col2_vars, col2_coefs, RALPH_EQUAL, 1.0);
 
     /* Solve */
-    ralph_optimize(model);
-    RalphStatus status = ralph_get_status(model);
+    ralph_test_optimize(model);
+    RalphStatus status = ralph_test_get_status(model);
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Solve status OPTIMAL");
 
-    double obj = ralph_get_objval(model);
+    double obj = ralph_test_get_objval(model);
     ASSERT_NEAR(obj, 10.0, 0.001, "Optimal value = 10");
 
     /* Verify solution is integral and valid assignment */
     double sol[9];
-    ralph_get_solution(model, sol);
+    ralph_test_get_solution(model, sol);
     int assignments[3] = {-1, -1, -1};
     int num_ones = 0;
     for (int i = 0; i < 9; i++) {
@@ -2204,7 +2204,7 @@ static void test_detect_lap_solve(void) {
     }
     ASSERT(valid, "Valid assignment (no duplicates)");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 /* ============================================================================
@@ -2219,24 +2219,24 @@ static void test_detect_lap_non_lap(void) {
      * s.t. x + y >= 1
      *      x, y >= 0
      */
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
 
-    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
-    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_CONTINUOUS);
 
     int vars[2] = {0, 1};
     double coefs[2] = {1, 1};
-    ralph_add_constraint(model, 2, vars, coefs, RALPH_GREATER_EQUAL, 1.0);
+    ralph_test_add_constraint(model, 2, vars, coefs, RALPH_GREATER_EQUAL, 1.0);
 
     /* Solve - should use regular simplex, not LAP */
-    ralph_optimize(model);
-    RalphStatus status = ralph_get_status(model);
+    ralph_test_optimize(model);
+    RalphStatus status = ralph_test_get_status(model);
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Solve status OPTIMAL");
 
-    double obj = ralph_get_objval(model);
+    double obj = ralph_test_get_objval(model);
     ASSERT_NEAR(obj, 1.0, 0.001, "Optimal value = 1");
 
-    ralph_free(model);
+    ralph_test_free(model);
     printf("  (Non-LAP problem solved via regular simplex)\n");
 }
 
@@ -2266,57 +2266,57 @@ static void test_detect_lap_maximize(void) {
     printf("\n=== Test: LAP Detection - Maximize ===\n");
 
     /*
-     * Build a 3x3 LAP (maximize) and solve via ralph_optimize()
+     * Build a 3x3 LAP (maximize) and solve via ralph_test_optimize()
      * Cost matrix:
      *   4  2  8
      *   6  3  7
      *   1  5  9
      * Maximum: 0->2=8, 1->0=6, 2->1=5 = 19
      */
-    RalphModel *model = ralph_create();
-    ralph_set_obj_sense(model, RALPH_MAXIMIZE);
+    RalphModel *model = ralph_test_create();
+    ralph_test_set_obj_sense(model, RALPH_MAXIMIZE);
 
     /* Add 9 variables */
     double costs[9] = {4, 2, 8, 6, 3, 7, 1, 5, 9};
     for (int i = 0; i < 9; i++) {
-        ralph_add_var(model, 0.0, 1.0, costs[i], RALPH_CONTINUOUS);
+        ralph_test_add_var(model, 0.0, 1.0, costs[i], RALPH_CONTINUOUS);
     }
 
     /* Row constraints */
     int row0_vars[3] = {0, 1, 2};
     double row0_coefs[3] = {1, 1, 1};
-    ralph_add_constraint(model, 3, row0_vars, row0_coefs, RALPH_EQUAL, 1.0);
+    ralph_test_add_constraint(model, 3, row0_vars, row0_coefs, RALPH_EQUAL, 1.0);
 
     int row1_vars[3] = {3, 4, 5};
     double row1_coefs[3] = {1, 1, 1};
-    ralph_add_constraint(model, 3, row1_vars, row1_coefs, RALPH_EQUAL, 1.0);
+    ralph_test_add_constraint(model, 3, row1_vars, row1_coefs, RALPH_EQUAL, 1.0);
 
     int row2_vars[3] = {6, 7, 8};
     double row2_coefs[3] = {1, 1, 1};
-    ralph_add_constraint(model, 3, row2_vars, row2_coefs, RALPH_EQUAL, 1.0);
+    ralph_test_add_constraint(model, 3, row2_vars, row2_coefs, RALPH_EQUAL, 1.0);
 
     /* Column constraints */
     int col0_vars[3] = {0, 3, 6};
     double col0_coefs[3] = {1, 1, 1};
-    ralph_add_constraint(model, 3, col0_vars, col0_coefs, RALPH_EQUAL, 1.0);
+    ralph_test_add_constraint(model, 3, col0_vars, col0_coefs, RALPH_EQUAL, 1.0);
 
     int col1_vars[3] = {1, 4, 7};
     double col1_coefs[3] = {1, 1, 1};
-    ralph_add_constraint(model, 3, col1_vars, col1_coefs, RALPH_EQUAL, 1.0);
+    ralph_test_add_constraint(model, 3, col1_vars, col1_coefs, RALPH_EQUAL, 1.0);
 
     int col2_vars[3] = {2, 5, 8};
     double col2_coefs[3] = {1, 1, 1};
-    ralph_add_constraint(model, 3, col2_vars, col2_coefs, RALPH_EQUAL, 1.0);
+    ralph_test_add_constraint(model, 3, col2_vars, col2_coefs, RALPH_EQUAL, 1.0);
 
     /* Solve */
-    ralph_optimize(model);
-    RalphStatus status = ralph_get_status(model);
+    ralph_test_optimize(model);
+    RalphStatus status = ralph_test_get_status(model);
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Solve status OPTIMAL");
 
-    double obj = ralph_get_objval(model);
+    double obj = ralph_test_get_objval(model);
     ASSERT_NEAR(obj, 19.0, 0.001, "Optimal value = 19");
 
-    ralph_free(model);
+    ralph_test_free(model);
 }
 
 /* ============================================================================

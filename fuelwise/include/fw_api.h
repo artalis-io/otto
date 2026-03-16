@@ -113,12 +113,12 @@ int fw_api_handle(FWAPIContext *ctx,
  * Given a set of fuel stations along a route, finds the minimum-cost
  * refueling plan that satisfies tank capacity and minimum fuel constraints.
  *
- * @body total_distance:number Total route distance in miles
- * @body tank_capacity:number Tank capacity in gallons
- * @body current_fuel:number Current fuel level in gallons
- * @body consumption_mpg:number:6.5 Base fuel consumption in miles per gallon
- * @body minimum_fuel:number:25 Minimum fuel level to maintain
- * @body min_purchase:number:0 Minimum gallons per stop (0 = no minimum, triggers MILP)
+ * @body total_distance:number Total route distance in meters
+ * @body tank_capacity:number Tank capacity in liters
+ * @body current_fuel:number Current fuel level in liters
+ * @body consumption:number:36.19 Base fuel consumption in L/100km
+ * @body minimum_fuel:number:25 Minimum fuel level to maintain (liters)
+ * @body min_purchase:number:0 Minimum liters per stop (0 = no minimum, triggers MILP)
  * @body stop_cost:number:0 Fixed cost per fuel stop (0 = no cost, triggers MILP)
  * @body stations:array Array of stations with id, distance, and price
  * @body segments:array:[] Optional variable consumption segments
@@ -133,7 +133,7 @@ int fw_api_handle(FWAPIContext *ctx,
  *   "total_distance": 1000,
  *   "tank_capacity": 100,
  *   "current_fuel": 50,
- *   "consumption_mpg": 10,
+ *   "consumption": 23.52,
  *   "minimum_fuel": 10,
  *   "stations": [
  *     {"id": 1, "distance": 200, "price": 1.20},
@@ -150,15 +150,15 @@ int fw_api_handle(FWAPIContext *ctx,
  *   "gross_cost": 68.00,
  *   "remaining_fuel": 10.00,
  *   "stops": [
- *     {"station_id": 1, "gallons": 30.00, "cost": 36.00},
- *     {"station_id": 2, "gallons": 30.00, "cost": 30.00}
+ *     {"station_id": 1, "purchase": 30.00, "cost": 36.00},
+ *     {"station_id": 2, "purchase": 30.00, "cost": 30.00}
  *   ]
  * }
  *
  * @example
  * curl -X POST http://localhost:8080/api/v1/solve \
  *   -H "Content-Type: application/json" \
- *   -d '{"total_distance":500,"tank_capacity":100,"current_fuel":30,"consumption_mpg":6.5,"minimum_fuel":25,"stations":[{"id":1,"distance":100,"price":3.50},{"id":2,"distance":250,"price":3.25}]}'
+ *   -d '{"total_distance":500000,"tank_capacity":400,"current_fuel":120,"consumption":36.19,"minimum_fuel":100,"stations":[{"id":1,"distance":100000,"price":1.20},{"id":2,"distance":250000,"price":1.00}]}'
  *
  * @demo json
  * @demo_title Solve a refueling problem using LP optimization in WASM. No server required.
@@ -174,7 +174,7 @@ int fw_api_handle(FWAPIContext *ctx,
  *
  * @body stations:array Array of stations with lat, lon, price, and optional id
  * @body route:array Route polyline as [[lat, lon], [lat, lon], ...]
- * @body max_distance:number:5 Maximum perpendicular distance in miles
+ * @body max_distance:number:5000 Maximum perpendicular distance in meters
  *
  * @returns application/json Filtered and snapped stations
  * @error 400 Invalid request format
@@ -188,7 +188,7 @@ int fw_api_handle(FWAPIContext *ctx,
  *       "station_id": 1,
  *       "distance_from_start": 45.2,
  *       "perpendicular_distance": 0.8,
- *       "price_per_gallon": 3.45,
+ *       "price": 0.912,
  *       "snap_point": [34.0522, -118.2437]
  *     }
  *   ]
@@ -210,12 +210,12 @@ int fw_api_handle(FWAPIContext *ctx,
  *
  * @body stations:array Array of stations with lat, lon, price, and optional id
  * @body route:array Route polyline as [[lat, lon], [lat, lon], ...]
- * @body tank_capacity:number:100 Tank capacity in gallons
- * @body current_fuel:number:50 Current fuel level in gallons
- * @body consumption_mpg:number:6.5 Base fuel consumption in miles per gallon
- * @body minimum_fuel:number:25 Minimum fuel level to maintain
- * @body max_distance:number:5 Maximum perpendicular distance for filtering
- * @body min_purchase:number:0 Minimum gallons per stop (triggers MILP)
+ * @body tank_capacity:number:400 Tank capacity in liters
+ * @body current_fuel:number:200 Current fuel level in liters
+ * @body consumption:number:36.19 Base fuel consumption in L/100km
+ * @body minimum_fuel:number:100 Minimum fuel level to maintain (liters)
+ * @body max_distance:number:5000 Maximum perpendicular distance for filtering (meters)
+ * @body min_purchase:number:0 Minimum liters per stop (triggers MILP)
  * @body stop_cost:number:0 Fixed cost per fuel stop (triggers MILP)
  * @body segments:array:[] Optional variable consumption segments
  *
@@ -234,8 +234,8 @@ int fw_api_handle(FWAPIContext *ctx,
  *   "gross_cost": 245.50,
  *   "remaining_fuel": 28.3,
  *   "stops": [
- *     {"station_id": 3, "distance_from_start": 125.4, "gallons": 42.0, "cost": 142.80},
- *     {"station_id": 7, "distance_from_start": 356.2, "gallons": 35.5, "cost": 102.70}
+ *     {"station_id": 3, "distance_from_start": 125400, "purchase": 42.0, "cost": 142.80},
+ *     {"station_id": 7, "distance_from_start": 356200, "purchase": 35.5, "cost": 102.70}
  *   ]
  * }
  *

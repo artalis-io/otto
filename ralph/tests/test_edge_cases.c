@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 static unsigned int seed;
 static double randf(double lo, double hi) {
@@ -38,8 +38,8 @@ int test_50x25_geq_constraints(void) {
     int n = 50, m = 25;
     double density = 0.3;
 
-    RalphModel *model = ralph_create();
-    ralph_set_int_param(model, "verbose", 0);
+    RalphModel *model = ralph_test_create();
+    ralph_test_set_int_param(model, "verbose", 0);
 
     /* Store problem data for verification */
     double costs[50];
@@ -50,7 +50,7 @@ int test_50x25_geq_constraints(void) {
     /* Add vars */
     for (int j = 0; j < n; j++) {
         costs[j] = randf(1, 10);
-        ralph_add_var(model, 0.0, 100.0, costs[j], 'C');
+        ralph_test_add_var(model, 0.0, 100.0, costs[j], 'C');
     }
 
     int *idx = malloc(n * sizeof(int));
@@ -69,17 +69,17 @@ int test_50x25_geq_constraints(void) {
         }
         if (nnz == 0) { idx[0] = 0; val[0] = 1.0; coefs[i][0] = 1.0; nnz = 1; }
         rhs[i] = randf(50, 200);
-        ralph_add_constraint(model, nnz, idx, val, 'G', rhs[i]);
+        ralph_test_add_constraint(model, nnz, idx, val, 'G', rhs[i]);
     }
 
-    ralph_optimize(model);
+    ralph_test_optimize(model);
 
-    int status = ralph_get_status(model);
-    double obj = ralph_get_objval(model);
+    int status = ralph_test_get_status(model);
+    double obj = ralph_test_get_objval(model);
 
     /* Get solution and verify feasibility */
     double x[50];
-    ralph_get_solution(model, x);
+    ralph_test_get_solution(model, x);
 
     /* Check constraints */
     int feasible = 1;
@@ -105,7 +105,7 @@ int test_50x25_geq_constraints(void) {
 
     free(idx);
     free(val);
-    ralph_free(model);
+    ralph_test_free(model);
 
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Expected OPTIMAL status");
     ASSERT(feasible, "Solution must be feasible");
@@ -126,12 +126,12 @@ int test_degenerate_problem(void) {
     seed = 123;
     int n = 30, m = 15;
 
-    RalphModel *model = ralph_create();
-    ralph_set_int_param(model, "verbose", 0);
+    RalphModel *model = ralph_test_create();
+    ralph_test_set_int_param(model, "verbose", 0);
 
     /* Create a problem with many degenerate vertices */
     for (int j = 0; j < n; j++) {
-        ralph_add_var(model, 0.0, 10.0, randf(1, 5), 'C');
+        ralph_test_add_var(model, 0.0, 10.0, randf(1, 5), 'C');
     }
 
     int idx[30];
@@ -148,14 +148,14 @@ int test_degenerate_problem(void) {
             }
         }
         if (nnz == 0) { idx[0] = 0; val[0] = 1.0; nnz = 1; }
-        ralph_add_constraint(model, nnz, idx, val, 'L', randf(5, 20));
+        ralph_test_add_constraint(model, nnz, idx, val, 'L', randf(5, 20));
     }
 
-    ralph_optimize(model);
-    int status = ralph_get_status(model);
-    double obj = ralph_get_objval(model);
+    ralph_test_optimize(model);
+    int status = ralph_test_get_status(model);
+    double obj = ralph_test_get_objval(model);
 
-    ralph_free(model);
+    ralph_test_free(model);
 
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Expected OPTIMAL status");
 
@@ -170,14 +170,14 @@ int test_mixed_constraints(void) {
     printf("Test: Mixed constraint types (<=, =, >=)... ");
     fflush(stdout);
 
-    RalphModel *model = ralph_create();
-    ralph_set_int_param(model, "verbose", 0);
-    ralph_set_obj_sense(model, RALPH_MAXIMIZE);
+    RalphModel *model = ralph_test_create();
+    ralph_test_set_int_param(model, "verbose", 0);
+    ralph_test_set_obj_sense(model, RALPH_MAXIMIZE);
 
     /* Variables */
-    ralph_add_var(model, 0.0, RALPH_INFINITY, 3.0, 'C');  /* x0 */
-    ralph_add_var(model, 0.0, RALPH_INFINITY, 2.0, 'C');  /* x1 */
-    ralph_add_var(model, 0.0, RALPH_INFINITY, 1.0, 'C');  /* x2 */
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, 3.0, 'C');  /* x0 */
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, 2.0, 'C');  /* x1 */
+    ralph_test_add_var(model, 0.0, RALPH_INFINITY, 1.0, 'C');  /* x2 */
 
     int idx[3];
     double val[3];
@@ -185,23 +185,23 @@ int test_mixed_constraints(void) {
     /* x0 + x1 <= 10 */
     idx[0] = 0; idx[1] = 1;
     val[0] = 1.0; val[1] = 1.0;
-    ralph_add_constraint(model, 2, idx, val, 'L', 10.0);
+    ralph_test_add_constraint(model, 2, idx, val, 'L', 10.0);
 
     /* x1 + x2 = 5 */
     idx[0] = 1; idx[1] = 2;
     val[0] = 1.0; val[1] = 1.0;
-    ralph_add_constraint(model, 2, idx, val, 'E', 5.0);
+    ralph_test_add_constraint(model, 2, idx, val, 'E', 5.0);
 
     /* x0 + x2 >= 3 */
     idx[0] = 0; idx[1] = 2;
     val[0] = 1.0; val[1] = 1.0;
-    ralph_add_constraint(model, 2, idx, val, 'G', 3.0);
+    ralph_test_add_constraint(model, 2, idx, val, 'G', 3.0);
 
-    ralph_optimize(model);
-    int status = ralph_get_status(model);
-    double obj = ralph_get_objval(model);
+    ralph_test_optimize(model);
+    int status = ralph_test_get_status(model);
+    double obj = ralph_test_get_objval(model);
 
-    ralph_free(model);
+    ralph_test_free(model);
 
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Expected OPTIMAL status");
     /* Optimal: x0=10, x1=0, x2=5 gives obj=35 */
@@ -222,11 +222,11 @@ int test_20x10_glpk_verified(void) {
     int n = 20, m = 10;
     double density = 0.3;
 
-    RalphModel *model = ralph_create();
-    ralph_set_int_param(model, "verbose", 0);
+    RalphModel *model = ralph_test_create();
+    ralph_test_set_int_param(model, "verbose", 0);
 
     for (int j = 0; j < n; j++) {
-        ralph_add_var(model, 0.0, 100.0, randf(1, 10), 'C');
+        ralph_test_add_var(model, 0.0, 100.0, randf(1, 10), 'C');
     }
 
     int *idx = malloc(n * sizeof(int));
@@ -242,16 +242,16 @@ int test_20x10_glpk_verified(void) {
             }
         }
         if (nnz == 0) { idx[0] = 0; val[0] = 1.0; nnz = 1; }
-        ralph_add_constraint(model, nnz, idx, val, 'G', randf(50, 200));
+        ralph_test_add_constraint(model, nnz, idx, val, 'G', randf(50, 200));
     }
 
-    ralph_optimize(model);
-    int status = ralph_get_status(model);
-    double obj = ralph_get_objval(model);
+    ralph_test_optimize(model);
+    int status = ralph_test_get_status(model);
+    double obj = ralph_test_get_objval(model);
 
     free(idx);
     free(val);
-    ralph_free(model);
+    ralph_test_free(model);
 
     ASSERT(status == RALPH_STATUS_OPTIMAL, "Expected OPTIMAL status");
     /* GLPK gets 606.0002261 for this problem */

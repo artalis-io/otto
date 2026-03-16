@@ -1,0 +1,190 @@
+/*
+ * Ralph - Supernodal LU Factorization (T2.1)
+ *
+ * Groups consecutive columns with similar sparsity into "supernodes",
+ * then applies GEMM-like dense operations instead of rank-1 updates.
+ * Converts scattered memory accesses into cache-friendly block operations.
+ *
+ * Builds on top of T1.4 symbolic/numeric separation — replaces only
+ * the inner GE loop while reusing identity detection, fingerprint caching,
+ * COO->CSC conversion, and all workspace arrays.
+ */
+
+#ifndef RALPH_LU_SUPERNODE_H
+#define RALPH_LU_SUPERNODE_H
+
+#include <stdlib.h>
+#include <stdint.h>
+
+/* Supernodal constants */
+#define SN_MIN_K          64    /* Minimum structural columns to use supernodal */
+#define SN_BLOCK_SIZE     4     /* Micro-kernel tile size */
+#define SN_RELAX_ZEROS    4     /* Max extra zeros allowed when merging supernodes */
+#define SN_MAX_BLOCK      16    /* Maximum supernode width */
+
+/* A supernode: a contiguous group of columns with similar L-pattern */
+typedef struct {
+    int start;   /* First column index (in structural ordering) */
+    int size;    /* Number of columns in this supernode */
+} Supernode;
+
+/* Symbolic analysis result for supernodal factorization */
+typedef struct SNSymbolic_tag {
+    int k;                   /* Number of structural columns */
+    int m;                   /* Total rows */
+    int *etree_parent;       /* [k] elimination tree parent */
+    int *etree_postorder;    /* [k] postorder traversal */
+    Supernode *supernodes;   /* [num_supernodes] */
+    int num_supernodes;
+    int max_supernode_size;  /* For workspace sizing */
+    int max_panel_rows;      /* For workspace sizing */
+} SNSymbolic;
+
+typedef struct {
+    int phase_timing_sampled;
+    double panel_factor_ms;
+    double panel_pivot_search_ms;
+    double panel_swap_scatter_ms;
+    double panel_eliminate_ms;
+    uint64_t panel_pivot_search_calls;
+    uint64_t panel_pivot_search_entries_total;
+    uint64_t panel_pivot_search_size1_calls;
+    double panel_pivot_search_size1_ms;
+    uint64_t panel_pivot_search_size2_calls;
+    double panel_pivot_search_size2_ms;
+    uint64_t panel_pivot_search_size3_4_calls;
+    double panel_pivot_search_size3_4_ms;
+    uint64_t panel_pivot_search_size5_8_calls;
+    double panel_pivot_search_size5_8_ms;
+    uint64_t panel_pivot_search_size9p_calls;
+    double panel_pivot_search_size9p_ms;
+    uint64_t panel_pivot_search_reserved_present_calls;
+    uint64_t panel_pivot_search_reserved_present_entries;
+    double panel_pivot_search_reserved_present_ms;
+    uint64_t panel_pivot_search_reserved_alt_chosen_calls;
+    double panel_pivot_search_reserved_alt_chosen_ms;
+    uint64_t size1_u_emit_calls;
+    double size1_u_emit_ms;
+    uint64_t size1_update_scan_calls;
+    double size1_update_scan_ms;
+    uint64_t size1_update_apply_calls;
+    double size1_update_apply_ms;
+    double size1_update_row_gather_ms;
+    double size1_update_col_indirection_ms;
+    double size1_update_outer_product_ms;
+    uint64_t size1_update_full_calls;
+    double size1_update_full_ms;
+    uint64_t size1_update_cols1_calls;
+    double size1_update_cols1_ms;
+    uint64_t size1_update_cols2_calls;
+    double size1_update_cols2_ms;
+    uint64_t size1_update_cols3_calls;
+    double size1_update_cols3_ms;
+    uint64_t size1_update_cols4_calls;
+    double size1_update_cols4_ms;
+    uint64_t size1_update_cols5p_calls;
+    double size1_update_cols5p_ms;
+    uint64_t size1_update_cols5p_rows1_8_calls;
+    double size1_update_cols5p_rows1_8_ms;
+    uint64_t size1_update_cols5p_rows9_32_calls;
+    double size1_update_cols5p_rows9_32_ms;
+    uint64_t size1_update_cols5p_rows33_128_calls;
+    double size1_update_cols5p_rows33_128_ms;
+    uint64_t size1_update_cols5p_rows129p_calls;
+    double size1_update_cols5p_rows129p_ms;
+    double u_emit_ms;
+    double active_set_ms;
+    double pack_blocks_ms;
+    double full_update_ms;
+    double compact_update_ms;
+    uint64_t active_row_scan_entries;
+    uint64_t active_col_scan_entries;
+    uint64_t trailing_rows_total;
+    uint64_t trailing_cols_total;
+    uint64_t active_rows_total;
+    uint64_t active_cols_total;
+    uint64_t pack_l_entries_total;
+    uint64_t pack_u_entries_total;
+    uint64_t dense_triplets_total;
+    uint64_t compact_triplets_total;
+    uint64_t full_update_calls;
+    uint64_t compact_update_calls;
+    uint64_t skipped_update_calls;
+    uint64_t compact_cols1_calls;
+    uint64_t compact_cols1_rows_total;
+    double compact_cols1_ms;
+    uint64_t compact_cols2_calls;
+    uint64_t compact_cols2_rows_total;
+    double compact_cols2_ms;
+    uint64_t compact_cols3_calls;
+    uint64_t compact_cols3_rows_total;
+    double compact_cols3_ms;
+    uint64_t compact_cols4_calls;
+    uint64_t compact_cols4_rows_total;
+    double compact_cols4_ms;
+    uint64_t compact_cols5p_calls;
+    uint64_t compact_cols5p_rows_total;
+    double compact_cols5p_ms;
+} SNSupernodeWork;
+
+/* --- Phase 1: Elimination tree + supernode detection --- */
+
+/* Build column etree from row-major m x k dense matrix with row permutation */
+int sn_build_etree(const double *A_struct, int m, int k,
+                   const int *row_perm, int *etree_parent);
+
+/* Postorder traversal of etree (children before parent) */
+int sn_etree_postorder(const int *etree_parent, int k, int *postorder);
+
+/* Detect supernodes: consecutive cols with similar L-pattern, relaxed merging */
+int sn_detect_supernodes(const double *A_struct, int m, int k,
+                         const int *row_perm, const int *etree_parent,
+                         const int *postorder,
+                         Supernode **out, int *num_out);
+
+/* Top-level symbolic: etree + postorder + detection */
+SNSymbolic *sn_analyze(const double *A_struct, int m, int k,
+                       const int *row_perm);
+
+void sn_symbolic_free(SNSymbolic *sym);
+
+/* --- Phase 2: Dense micro-kernels (WASM-safe, no SIMD intrinsics) --- */
+
+/* C -= A * B via 4x4 tiled micro-kernel (row-major) */
+void sn_dgemm_update(int panel_rows, int block_size, int update_cols,
+                     const double *A, int lda,
+                     const double *B, int ldb,
+                     double *C, int ldc);
+
+/* Solve L * X = B in-place (unit lower triangular, row-major) */
+void sn_dtrsm_lower(int block_size, int ncols,
+                    const double *L, int ldl, double *B, int ldb);
+
+/* Factor panel_rows x block_size panel: partial pivoting -> L + U blocks
+ * Returns 0 on success, -1 on singular pivot (below pivot_tol) */
+int sn_block_factor(int panel_rows, int block_size,
+                    double *panel, int ldp,
+                    int *pivot_indices, double pivot_tol);
+
+/* --- Phase 3: Supernodal numeric factorization --- */
+
+/* Factorize using supernodal method, producing COO L/U entries.
+ * L_capacity/U_capacity: allocated size of COO arrays (bounds-checked).
+ * work/work_capacity: pre-allocated workspace (doubles). If NULL or too small,
+ * will allocate internally. Caller should pre-size to 3*m*max_sn_size.
+ * Returns 0 on success, -1 on failure (falls back to column-by-column GE). */
+int sn_factorize(double *A_struct, int m, int k,
+                 int *row_perm, int *row_pos, double pivot_tol,
+                 const int *row_reserved,
+                 const Supernode *supernodes, int num_supernodes,
+                 const int *redundant_rows, int num_redundant,
+                 int allow_regularization, int max_regularizations,
+                 int *num_regularized,
+                 int *L_row, int *L_col, double *L_val, int *L_nnz,
+                 int L_capacity,
+                 int *U_row, int *U_col, double *U_val, int *U_nnz,
+                 int U_capacity,
+                 double *work, size_t work_capacity,
+                 SNSupernodeWork *stats);
+
+#endif /* RALPH_LU_SUPERNODE_H */

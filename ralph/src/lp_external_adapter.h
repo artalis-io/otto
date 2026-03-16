@@ -1,0 +1,60 @@
+#ifndef LP_EXTERNAL_ADAPTER_H
+#define LP_EXTERNAL_ADAPTER_H
+
+#include "lp.h"
+
+#define LP_EXTERNAL_ADAPTER_ABI_VERSION 1
+
+typedef enum {
+    LP_EXTERNAL_PROVIDER_NONE = 0,
+    LP_EXTERNAL_PROVIDER_GLPK = 1,
+    LP_EXTERNAL_PROVIDER_HIGHS = 2,
+    LP_EXTERNAL_PROVIDER_CLP = 3,
+    LP_EXTERNAL_PROVIDER_CPLEX = 4,
+    LP_EXTERNAL_PROVIDER_GUROBI = 5,
+    LP_EXTERNAL_PROVIDER_GLOP = 6
+} LPExternalProvider;
+
+typedef enum {
+    LP_EXTERNAL_BACKEND_SIMPLEX = 0,
+    LP_EXTERNAL_BACKEND_DUAL_SIMPLEX = 1,
+    LP_EXTERNAL_BACKEND_BARRIER = 2
+} LPExternalBackendKind;
+
+typedef struct {
+    int supports_simplex;
+    int supports_dual_simplex;
+    int supports_barrier;
+    int supports_crossover;
+} LPExternalCapabilities;
+
+typedef void (*LPExternalUserDataDestroyFn)(void *user_data);
+
+typedef struct {
+    int abi_version;
+    LPExternalProvider provider;
+    const char *provider_name;  /* Optional override; may be NULL. */
+    int (*get_capabilities)(LPExternalCapabilities *caps, void *user_data);
+    int (*solve)(LPExternalBackendKind backend, SimplexSolver *solver, void *user_data);
+    void *user_data;
+    LPExternalUserDataDestroyFn destroy_user_data;  /* Optional lifecycle hook on unregister/replace. */
+} LPExternalAdapter;
+
+const char* lp_external_provider_name(LPExternalProvider provider);
+
+int lp_external_adapter_register(const LPExternalAdapter *adapter);
+int lp_external_adapter_unregister(LPExternalProvider provider);
+void lp_external_adapter_unregister_all(void);
+int lp_external_adapter_is_registered(LPExternalProvider provider);
+const char* lp_external_adapter_registered_name(LPExternalProvider provider);
+int lp_external_adapter_list_registered(LPExternalProvider *providers,
+                                        int capacity,
+                                        int *count);
+
+int lp_external_adapter_get_capabilities(LPExternalProvider provider,
+                                         LPExternalCapabilities *caps);
+int lp_external_adapter_solve(LPExternalProvider provider,
+                              LPExternalBackendKind backend,
+                              SimplexSolver *solver);
+
+#endif

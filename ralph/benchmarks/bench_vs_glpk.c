@@ -22,10 +22,12 @@
 #include <math.h>
 
 /* Ralph headers */
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
-/* GLPK header */
-#include <glpk.h>
+static int glpsol_available(void) {
+    int rc = system("which glpsol >/dev/null 2>&1");
+    return rc == 0 ? 1 : 0;
+}
 
 /* ============================================================================
  * Random number generator (deterministic for reproducibility)
@@ -178,27 +180,33 @@ typedef struct {
     int status;  /* 0 = optimal, 1 = infeasible, 2 = unbounded, 3 = error */
 } SolveResult;
 
-static SolveResult solve_with_ralph(TestProblem *prob) {
-    SolveResult result = {0};
-
-    RalphModel *model = ralph_create();
-    if (!model) {
-        result.status = 3;
-        return result;
-    }
-
-    /* Suppress output */
-    ralph_set_int_param(model, "verbose", 0);
-    ralph_set_int_param(model, "max_iterations", 100000);
-    /* Note: method=2 (dual simplex) has stability issues, use primal (default) */
+static RalphModel* build_ralph_model_from_problem(const TestProblem *prob) {
+    RalphModel *model = ralph_test_create();
+    int *row_start = NULL;
+    int *row_idx = NULL;
+    double *row_val = NULL;
+    int *row_pos = NULL;
+    if (!model) return NULL;
 
     /* Add variables */
     for (int j = 0; j < prob->num_vars; j++) {
-        ralph_add_var(model, prob->lb[j], prob->ub[j], prob->obj[j], 'C');
+        ralph_test_add_var(model, prob->lb[j], prob->ub[j], prob->obj[j], 'C');
     }
 
     /* Build constraint arrays per row */
-    int *row_start = (int*)calloc(prob->num_cons + 1, sizeof(int));
+    row_start = (int*)calloc((size_t)prob->num_cons + 1, sizeof(int));
+    row_idx = (int*)malloc((size_t)prob->nnz * sizeof(int));
+    row_val = (double*)malloc((size_t)prob->nnz * sizeof(double));
+    row_pos = (int*)malloc((size_t)prob->num_cons * sizeof(int));
+    if (!row_start || !row_idx || !row_val || !row_pos) {
+        free(row_start);
+        free(row_idx);
+        free(row_val);
+        free(row_pos);
+        ralph_test_free(model);
+        return NULL;
+    }
+
     for (int k = 0; k < prob->nnz; k++) {
         row_start[prob->con_row[k] + 1]++;
     }
@@ -206,10 +214,7 @@ static SolveResult solve_with_ralph(TestProblem *prob) {
         row_start[i + 1] += row_start[i];
     }
 
-    int *row_idx = (int*)malloc(prob->nnz * sizeof(int));
-    double *row_val = (double*)malloc(prob->nnz * sizeof(double));
-    int *row_pos = (int*)malloc(prob->num_cons * sizeof(int));
-    memcpy(row_pos, row_start, prob->num_cons * sizeof(int));
+    memcpy(row_pos, row_start, (size_t)prob->num_cons * sizeof(int));
 
     for (int k = 0; k < prob->nnz; k++) {
         int i = prob->con_row[k];
@@ -221,7 +226,7 @@ static SolveResult solve_with_ralph(TestProblem *prob) {
     /* Add constraints */
     for (int i = 0; i < prob->num_cons; i++) {
         int nnz = row_start[i + 1] - row_start[i];
-        ralph_add_constraint(model, nnz, &row_idx[row_start[i]],
+        ralph_test_add_constraint(model, nnz, &row_idx[row_start[i]],
                             &row_val[row_start[i]], prob->sense[i], prob->rhs[i]);
     }
 
@@ -229,34 +234,54 @@ static SolveResult solve_with_ralph(TestProblem *prob) {
     free(row_idx);
     free(row_val);
     free(row_pos);
+    return model;
+}
+
+static void map_ralph_status(SolveResult *result, RalphStatus status) {
+    if (!result) return;
+    switch (status) {
+        case RALPH_STATUS_OPTIMAL:
+        case RALPH_STATUS_IMPRECISE:
+        case RALPH_STATUS_OBJ_LIMIT:
+            result->status = 0;
+            break;
+        case RALPH_STATUS_INFEASIBLE:
+            result->status = 1;
+            break;
+        case RALPH_STATUS_UNBOUNDED:
+        case RALPH_STATUS_INF_OR_UNBD:
+            result->status = 2;
+            break;
+        default:
+            result->status = 3;
+            break;
+    }
+}
+
+static SolveResult solve_with_ralph(TestProblem *prob) {
+    SolveResult result = {0};
+    RalphModel *model = build_ralph_model_from_problem(prob);
+    if (!model) {
+        result.status = 3;
+        return result;
+    }
+
+    ralph_core_set_int_param_id(model, RALPH_PARAM_VERBOSE, 0);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_MAX_ITERATIONS, 100000);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+                           (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX);
 
     /* Solve and time */
     clock_t start = clock();
-    int status = ralph_optimize(model);
+    (void)ralph_test_optimize_lp(model);
     clock_t end = clock();
 
     result.solve_time = (double)(end - start) / CLOCKS_PER_SEC;
+    result.iterations = ralph_test_get_iterations(model);
+    result.objective = ralph_test_get_objval(model);
+    map_ralph_status(&result, ralph_test_get_status(model));
 
-    /* Get results */
-    result.iterations = ralph_get_iterations(model);
-    result.objective = ralph_get_objval(model);
-
-    /* Map Ralph status codes:
-     * RALPH_STATUS_OPTIMAL = 1
-     * RALPH_STATUS_INFEASIBLE = 2
-     * RALPH_STATUS_UNBOUNDED = 3
-     */
-    if (status == RALPH_STATUS_OPTIMAL) {
-        result.status = 0;  /* Optimal */
-    } else if (status == RALPH_STATUS_INFEASIBLE) {
-        result.status = 1;  /* Infeasible */
-    } else if (status == RALPH_STATUS_UNBOUNDED) {
-        result.status = 2;  /* Unbounded */
-    } else {
-        result.status = status;  /* Keep original for debugging */
-    }
-
-    ralph_free(model);
+    ralph_test_free(model);
     return result;
 }
 
@@ -266,83 +291,30 @@ static SolveResult solve_with_ralph(TestProblem *prob) {
 
 static SolveResult solve_with_glpk(TestProblem *prob) {
     SolveResult result = {0};
-
-    glp_prob *lp = glp_create_prob();
-    if (!lp) {
+    RalphModel *model = build_ralph_model_from_problem(prob);
+    if (!model) {
         result.status = 3;
         return result;
     }
 
-    glp_set_obj_dir(lp, GLP_MIN);
-
-    /* Add rows (constraints) */
-    glp_add_rows(lp, prob->num_cons);
-    for (int i = 0; i < prob->num_cons; i++) {
-        if (prob->sense[i] == 'L') {
-            glp_set_row_bnds(lp, i + 1, GLP_UP, 0.0, prob->rhs[i]);
-        } else if (prob->sense[i] == 'G') {
-            glp_set_row_bnds(lp, i + 1, GLP_LO, prob->rhs[i], 0.0);
-        } else {
-            glp_set_row_bnds(lp, i + 1, GLP_FX, prob->rhs[i], prob->rhs[i]);
-        }
-    }
-
-    /* Add columns (variables) */
-    glp_add_cols(lp, prob->num_vars);
-    for (int j = 0; j < prob->num_vars; j++) {
-        /* Set double bounds: lb <= x <= ub */
-        glp_set_col_bnds(lp, j + 1, GLP_DB, prob->lb[j], prob->ub[j]);
-        glp_set_obj_coef(lp, j + 1, prob->obj[j]);
-    }
-
-    /* Load constraint matrix (GLPK uses 1-based indexing) */
-    int *ia = (int*)malloc((prob->nnz + 1) * sizeof(int));
-    int *ja = (int*)malloc((prob->nnz + 1) * sizeof(int));
-    double *ar = (double*)malloc((prob->nnz + 1) * sizeof(double));
-
-    for (int k = 0; k < prob->nnz; k++) {
-        ia[k + 1] = prob->con_row[k] + 1;
-        ja[k + 1] = prob->con_col[k] + 1;
-        ar[k + 1] = prob->con_val[k];
-    }
-
-    glp_load_matrix(lp, prob->nnz, ia, ja, ar);
-
-    free(ia);
-    free(ja);
-    free(ar);
-
-    /* Set solver parameters */
-    glp_smcp parm;
-    glp_init_smcp(&parm);
-    parm.msg_lev = GLP_MSG_OFF;  /* Suppress output */
-    parm.meth = GLP_PRIMAL;      /* Use primal simplex for fair comparison */
-    parm.pricing = GLP_PT_STD;   /* Standard pricing (Dantzig) */
-    parm.it_lim = 100000;
+    ralph_core_set_int_param_id(model, RALPH_PARAM_VERBOSE, 0);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_MAX_ITERATIONS, 100000);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+                           (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 1);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+                           (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL);
 
     /* Solve and time */
     clock_t start = clock();
-    (void)glp_simplex(lp, &parm);
+    (void)ralph_test_optimize_lp(model);
     clock_t end = clock();
 
     result.solve_time = (double)(end - start) / CLOCKS_PER_SEC;
-
-    /* Get results */
-    result.iterations = glp_get_it_cnt(lp);
-
-    int glp_status = glp_get_status(lp);
-    if (glp_status == GLP_OPT) {
-        result.status = 0;
-        result.objective = glp_get_obj_val(lp);
-    } else if (glp_status == GLP_INFEAS || glp_status == GLP_NOFEAS) {
-        result.status = 1;
-    } else if (glp_status == GLP_UNBND) {
-        result.status = 2;
-    } else {
-        result.status = 3;
-    }
-
-    glp_delete_prob(lp);
+    result.iterations = ralph_test_get_iterations(model);
+    result.objective = ralph_test_get_objval(model);
+    map_ralph_status(&result, ralph_test_get_status(model));
+    ralph_test_free(model);
     return result;
 }
 
@@ -473,8 +445,8 @@ static void print_header(void) {
     printf("║                    Ralph vs GLPK Benchmark Suite                             ║\n");
     printf("╚══════════════════════════════════════════════════════════════════════════════╝\n");
     printf("\n");
-    printf("Comparing Ralph %s against GLPK %d.%d\n",
-           ralph_version(), GLP_MAJOR_VERSION, GLP_MINOR_VERSION);
+    printf("Comparing Ralph %s against GLPK (out-of-process adapter via glpsol)\n",
+           ralph_test_version());
     printf("\n");
 }
 
@@ -489,6 +461,16 @@ static void print_usage(const char *prog) {
 
 int main(int argc, char **argv) {
     print_header();
+
+    if (!glpsol_available()) {
+        fprintf(stderr, "Error: glpsol not found in PATH\n");
+        return 1;
+    }
+    ralph_lp_external_unregister_all_adapters();
+    if (ralph_lp_external_register_glpk_oop(NULL) != 0) {
+        fprintf(stderr, "Error: failed to register GLPK out-of-process adapter\n");
+        return 1;
+    }
 
     /* Parse command line */
     int quick_mode = 0;
@@ -548,5 +530,6 @@ int main(int argc, char **argv) {
     printf("  Benchmark Complete\n");
     printf("================================================================================\n\n");
 
+    ralph_lp_external_unregister_all_adapters();
     return 0;
 }

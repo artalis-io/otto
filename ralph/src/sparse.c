@@ -196,23 +196,53 @@ SparseMatrix* triplets_to_csc(SparseTriplets *trips) {
     /* Sort keys by (col, row) - no global state needed */
     qsort(keys, trips->nnz, sizeof(TripletSortKey), triplet_key_cmp);
 
-    SparseMatrix *mat = sparse_create(trips->nrows, trips->ncols, trips->nnz);
-    if (!mat) {
+    /* Merge duplicate (col, row) entries by summing values.
+     * MPS format allows the same matrix element across multiple lines.
+     * After sorting, duplicates are consecutive.
+     * Merged values go into a separate array to avoid clobbering
+     * unread entries whose orig_idx < the write position. */
+    double *merged_vals = (double*)malloc(trips->nnz * sizeof(double));
+    if (!merged_vals) {
         free(keys);
         return NULL;
     }
+    int deduped_nnz = 0;
+    for (int k = 0; k < trips->nnz; k++) {
+        double val = trips->val[keys[k].orig_idx];
 
-    /* Build CSC format */
+        /* Sum consecutive entries with same (col, row) */
+        while (k + 1 < trips->nnz &&
+               keys[k + 1].col == keys[k].col &&
+               keys[k + 1].row == keys[k].row) {
+            k++;
+            val += trips->val[keys[k].orig_idx];
+        }
+
+        keys[deduped_nnz].col = keys[k].col;
+        keys[deduped_nnz].row = keys[k].row;
+        merged_vals[deduped_nnz] = val;
+        deduped_nnz++;
+    }
+
+    SparseMatrix *mat = sparse_create(trips->nrows, trips->ncols, deduped_nnz);
+    if (!mat) {
+        free(keys);
+        free(merged_vals);
+        return NULL;
+    }
+
+    /* Build CSC format from deduplicated entries */
     int *col_counts = (int*)calloc(trips->ncols, sizeof(int));
     if (!col_counts) {
         free(keys);
+        free(merged_vals);
         sparse_free(mat);
         return NULL;
     }
 
     /* Count entries per column */
-    for (int i = 0; i < trips->nnz; i++) {
-        col_counts[trips->col[i]]++;
+    for (int k = 0; k < deduped_nnz; k++) {
+        col_counts[keys[k].col]++;
     }
 
     /* Compute column pointers */
@@ -221,17 +251,17 @@ SparseMatrix* triplets_to_csc(SparseTriplets *trips) {
         mat->colptr[j + 1] = mat->colptr[j] + col_counts[j];
     }
 
-    /* Fill in values (using sorted order from keys) */
+    /* Fill in values (using deduplicated sorted order) */
     int idx = 0;
-    for (int k = 0; k < trips->nnz; k++) {
-        int orig = keys[k].orig_idx;
-        mat->rowidx[idx] = trips->row[orig];
-        mat->values[idx] = trips->val[orig];
+    for (int k = 0; k < deduped_nnz; k++) {
+        mat->rowidx[idx] = keys[k].row;
+        mat->values[idx] = merged_vals[k];
         idx++;
     }
-    mat->nnz = trips->nnz;
+    mat->nnz = deduped_nnz;
 
     free(keys);
+    free(merged_vals);
     free(col_counts);
 
     return mat;

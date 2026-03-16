@@ -3,7 +3,7 @@
 CC = gcc
 
 # Production build (with hardening)
-CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math \
+CFLAGS = -Wall -Wextra -O3 -march=native -ffast-math -fno-finite-math-only \
          -fstack-protector-strong -D_FORTIFY_SOURCE=2 -fPIE -fno-common
 
 # OpenMP SIMD support (portable vectorization)
@@ -38,20 +38,49 @@ TEST_DIR = tests
 SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/model.c \
           $(SRC_DIR)/lu.c \
+          $(SRC_DIR)/lu_update_backend.c \
           $(SRC_DIR)/lu_sparse.c \
+          $(SRC_DIR)/lu_supernode.c \
+          $(SRC_DIR)/lp_log.c \
+          $(SRC_DIR)/lp_determinism.c \
+          $(SRC_DIR)/lp_refactor_policy.c \
+          $(SRC_DIR)/lp_reinvert_controller.c \
+          $(SRC_DIR)/lp_basis_governor.c \
+          $(SRC_DIR)/lp_policy_glpk_compat.c \
+          $(SRC_DIR)/lp_glpk_strict.c \
+          $(SRC_DIR)/lp_glpk_strict_bfcp.c \
+          $(SRC_DIR)/lp_bfcp_policy.c \
+          $(SRC_DIR)/lp_backend.c \
+          $(SRC_DIR)/lp_external_adapter.c \
+          $(SRC_DIR)/lp_external_oop.c \
+          $(SRC_DIR)/lp_external_glpk_oop.c \
+          $(SRC_DIR)/lp_dispatch.c \
+          $(SRC_DIR)/lp_conflict.c \
+          $(SRC_DIR)/lp_sensitivity.c \
+          $(SRC_DIR)/lp_error.c \
           $(SRC_DIR)/simplex.c \
+          $(SRC_DIR)/lp_telemetry_core.c \
+          $(SRC_DIR)/lp_telemetry_solver.c \
+          $(SRC_DIR)/lp_telemetry_simplex.c \
+          $(SRC_DIR)/lp_telemetry_lu.c \
+          $(SRC_DIR)/lp_telemetry_lu_sparse.c \
           $(SRC_DIR)/dual_simplex.c \
           $(SRC_DIR)/presolve.c \
           $(SRC_DIR)/branch_bound.c \
+          $(SRC_DIR)/mip_lp_adapter.c \
           $(SRC_DIR)/cuts.c \
           $(SRC_DIR)/mip.c \
           $(SRC_DIR)/mps_reader.c \
           $(SRC_DIR)/lp_reader.c \
           $(SRC_DIR)/lp_writer.c \
           $(SRC_DIR)/ralph.c \
+          $(SRC_DIR)/ralph_test_mod_api.c \
+          $(SRC_DIR)/ralph_lp_public.c \
+          $(SRC_DIR)/ralph_mip_public.c \
           $(SRC_DIR)/lap.c \
           $(SRC_DIR)/detect.c \
           $(SRC_DIR)/netflow.c \
+          $(SRC_DIR)/benders.c \
           $(SRC_DIR)/ralph_api.c \
           $(SRC_DIR)/ralph_parse_lp.c \
           $(SRC_DIR)/optim/subgradient.c \
@@ -59,6 +88,8 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/optim/lagrangian_scp.c
 
 OBJECTS = $(SOURCES:.c=.o)
+DEPS = $(OBJECTS:.o=.d)
+DEPFLAGS = -MMD -MP
 
 # Library
 LIB_NAME = libralph.a
@@ -91,9 +122,149 @@ OPTIM_TEST_EXEC = test_optim
 LP_TEST_SOURCES = $(TEST_DIR)/test_lp.c
 LP_TEST_EXEC = test_lp
 
+# NETLIB MPS parser regression tests
+MPS_PARSER_TEST_SOURCES = $(TEST_DIR)/test_mps_parser_netlib.c
+MPS_PARSER_TEST_EXEC = test_mps_parser_netlib
+
 # API tests
 API_TEST_SOURCES = $(TEST_DIR)/test_api.c
 API_TEST_EXEC = test_api
+
+# Benders tests
+BENDERS_TEST_SOURCES = $(TEST_DIR)/test_benders.c
+BENDERS_TEST_EXEC = test_benders
+BENDERS_DEBUG_TEST_SOURCES = $(TEST_DIR)/test_benders_debug.c
+BENDERS_DEBUG_TEST_EXEC = test_benders_debug
+BENDERS_WARMSTART_TEST_SOURCES = $(TEST_DIR)/test_benders_warmstart.c
+BENDERS_WARMSTART_TEST_EXEC = test_benders_warmstart
+MIP_WARMSTART_TEST_SOURCES = $(TEST_DIR)/test_mip_warmstart.c
+MIP_WARMSTART_TEST_EXEC = test_mip_warmstart
+MIP_LP_RECOVERY_TEST_SOURCES = $(TEST_DIR)/test_mip_lp_recovery.c
+MIP_LP_RECOVERY_TEST_EXEC = test_mip_lp_recovery
+MIP_START_SPARSE_TEST_SOURCES = $(TEST_DIR)/test_mip_start_sparse.c
+MIP_START_SPARSE_TEST_EXEC = test_mip_start_sparse
+MIP_START_REPAIR_TEST_SOURCES = $(TEST_DIR)/test_mip_start_repair.c
+MIP_START_REPAIR_TEST_EXEC = test_mip_start_repair
+MIP_BUG_TEST_SOURCES = $(TEST_DIR)/test_mip_bug.c
+MIP_BUG_TEST_EXEC = test_mip_bug
+BENDERS_MASTER_START_TEST_SOURCES = $(TEST_DIR)/test_benders_master_start.c
+BENDERS_MASTER_START_TEST_EXEC = test_benders_master_start
+WARMSTART_SERDE_TEST_SOURCES = $(TEST_DIR)/test_warmstart_serde.c
+WARMSTART_SERDE_TEST_EXEC = test_warmstart_serde
+
+# Presolve unit tests
+PRESOLVE_TEST_SOURCES = $(TEST_DIR)/test_presolve.c
+PRESOLVE_TEST_EXEC = test_presolve
+
+# Beaconfd numerical-regression test
+BEACONFD_TEST_SOURCES = $(TEST_DIR)/test_presolve_beaconfd.c
+BEACONFD_TEST_EXEC = test_presolve_beaconfd
+
+# NETLIB regression tests (bandm, blend, lotfi)
+BANDM_TEST_SOURCES = $(TEST_DIR)/test_presolve_bandm.c
+BANDM_TEST_EXEC = test_presolve_bandm
+BLEND_TEST_SOURCES = $(TEST_DIR)/test_presolve_blend.c
+BLEND_TEST_EXEC = test_presolve_blend
+LOTFI_TEST_SOURCES = $(TEST_DIR)/test_presolve_lotfi.c
+LOTFI_TEST_EXEC = test_presolve_lotfi
+
+# LU Markowitz tests
+LU_MARKOWITZ_TEST_SOURCES = $(TEST_DIR)/test_lu_markowitz.c
+LU_MARKOWITZ_TEST_EXEC = test_lu_markowitz
+
+# LU supernode tests
+LU_SUPERNODE_TEST_SOURCES = $(TEST_DIR)/test_lu_supernode.c
+LU_SUPERNODE_TEST_EXEC = test_lu_supernode
+
+# Beaconfd Phase-1 failure-trace regression test
+BEACONFD_TRACE_TEST_SOURCES = $(TEST_DIR)/test_beaconfd_phase1_trace.c
+BEACONFD_TRACE_TEST_EXEC = test_beaconfd_phase1_trace
+
+# Simplex basis-action policy test
+SIMPLEX_POLICY_TEST_SOURCES = $(TEST_DIR)/test_simplex_policy.c
+SIMPLEX_POLICY_TEST_EXEC = test_simplex_policy
+
+# Dual ratio flip-mode tests
+DUAL_RATIO_FLIP_TEST_SOURCES = $(TEST_DIR)/test_dual_ratio_flip.c
+DUAL_RATIO_FLIP_TEST_EXEC = test_dual_ratio_flip
+
+# LP refactor-policy module tests (orthogonal pure-policy unit tests)
+LP_REFACTOR_POLICY_TEST_SOURCES = $(TEST_DIR)/test_lp_refactor_policy.c
+LP_REFACTOR_POLICY_TEST_EXEC = test_lp_refactor_policy
+LP_REINVERT_CONTROLLER_TEST_SOURCES = $(TEST_DIR)/test_lp_reinvert_controller.c
+LP_REINVERT_CONTROLLER_TEST_EXEC = test_lp_reinvert_controller
+
+# LP basis-governor module tests (shadow policy module)
+LP_BASIS_GOVERNOR_TEST_SOURCES = $(TEST_DIR)/test_lp_basis_governor.c
+LP_BASIS_GOVERNOR_TEST_EXEC = test_lp_basis_governor
+LP_BASIS_GOVERNOR_RUNTIME_TEST_SOURCES = $(TEST_DIR)/test_lp_basis_governor_runtime.c
+LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC = test_lp_basis_governor_runtime
+
+# LP determinism tests (orthogonal to telemetry/logging)
+LP_DETERMINISM_TEST_SOURCES = $(TEST_DIR)/test_lp_determinism.c
+LP_DETERMINISM_TEST_EXEC = test_lp_determinism
+
+# LP sensitivity/ranging tests (orthogonal to telemetry/logging)
+LP_SENSITIVITY_TEST_SOURCES = $(TEST_DIR)/test_lp_sensitivity.c
+LP_SENSITIVITY_TEST_EXEC = test_lp_sensitivity
+
+# LP conflict/IIS tests (orthogonal to telemetry/logging)
+LP_CONFLICT_TEST_SOURCES = $(TEST_DIR)/test_lp_conflict.c
+LP_CONFLICT_TEST_EXEC = test_lp_conflict
+
+# LP algorithm/capability API tests (orthogonal to telemetry/logging)
+LP_ALGORITHM_API_TEST_SOURCES = $(TEST_DIR)/test_lp_algorithm_api.c
+LP_ALGORITHM_API_TEST_EXEC = test_lp_algorithm_api
+LP_POLICY_GLPK_COMPAT_TEST_SOURCES = $(TEST_DIR)/test_lp_policy_glpk_compat.c
+LP_POLICY_GLPK_COMPAT_TEST_EXEC = test_lp_policy_glpk_compat
+LP_GLPK_STRICT_TEST_SOURCES = $(TEST_DIR)/test_lp_glpk_strict.c
+LP_GLPK_STRICT_TEST_EXEC = test_lp_glpk_strict
+LP_GLPK_STRICT_BFCP_TEST_SOURCES = $(TEST_DIR)/test_lp_glpk_strict_bfcp.c
+LP_GLPK_STRICT_BFCP_TEST_EXEC = test_lp_glpk_strict_bfcp
+LP_BFCP_POLICY_TEST_SOURCES = $(TEST_DIR)/test_lp_bfcp_policy.c
+LP_BFCP_POLICY_TEST_EXEC = test_lp_bfcp_policy
+
+# Internal LP dispatch module tests (orthogonal to public API tests)
+LP_DISPATCH_TEST_SOURCES = $(TEST_DIR)/test_lp_dispatch.c
+LP_DISPATCH_TEST_EXEC = test_lp_dispatch
+
+# Internal LP external adapter module tests (orthogonal to dispatch/api tests)
+LP_EXTERNAL_ADAPTER_TEST_SOURCES = $(TEST_DIR)/test_lp_external_adapter.c
+LP_EXTERNAL_ADAPTER_TEST_EXEC = test_lp_external_adapter
+LP_EXTERNAL_ADAPTER_API_TEST_SOURCES = $(TEST_DIR)/test_lp_external_adapter_api.c
+LP_EXTERNAL_ADAPTER_API_TEST_EXEC = test_lp_external_adapter_api
+LP_EXTERNAL_INTROSPECTION_API_TEST_SOURCES = $(TEST_DIR)/test_lp_external_introspection_api.c
+LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC = test_lp_external_introspection_api
+LP_EXTERNAL_FAILURE_API_TEST_SOURCES = $(TEST_DIR)/test_lp_external_failure_api.c
+LP_EXTERNAL_FAILURE_API_TEST_EXEC = test_lp_external_failure_api
+LP_EXTERNAL_OOP_RUNNER_TEST_SOURCES = $(TEST_DIR)/test_lp_external_oop_runner.c
+LP_EXTERNAL_OOP_RUNNER_TEST_EXEC = test_lp_external_oop_runner
+LP_EXTERNAL_GLPK_OOP_TEST_SOURCES = $(TEST_DIR)/test_lp_external_glpk_oop.c
+LP_EXTERNAL_GLPK_OOP_TEST_EXEC = test_lp_external_glpk_oop
+LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_SOURCES = $(TEST_DIR)/test_lp_external_glpk_oop_integration.c
+LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_EXEC = test_lp_external_glpk_oop_integration
+
+# LP telemetry module tests (split by telemetry domain)
+LP_TELEMETRY_SOLVER_TEST_SOURCES = $(TEST_DIR)/test_lp_telemetry_solver.c
+LP_TELEMETRY_SOLVER_TEST_EXEC = test_lp_telemetry_solver
+LP_TELEMETRY_LU_TEST_SOURCES = $(TEST_DIR)/test_lp_telemetry_lu.c
+LP_TELEMETRY_LU_TEST_EXEC = test_lp_telemetry_lu
+LP_TELEMETRY_GATE_TEST_SOURCES = $(TEST_DIR)/test_lp_telemetry_runtime_gate.c
+LP_TELEMETRY_GATE_TEST_EXEC = test_lp_telemetry_runtime_gate
+LP_TELEMETRY_LU_SPARSE_TEST_SOURCES = $(TEST_DIR)/test_lp_telemetry_lu_sparse.c
+LP_TELEMETRY_LU_SPARSE_TEST_EXEC = test_lp_telemetry_lu_sparse
+LP_TELEMETRY_TEST_EXECS = $(LP_TELEMETRY_SOLVER_TEST_EXEC) \
+                          $(LP_TELEMETRY_LU_TEST_EXEC) \
+                          $(LP_TELEMETRY_GATE_TEST_EXEC) \
+                          $(LP_TELEMETRY_LU_SPARSE_TEST_EXEC)
+
+# Modular public API split tests (LP/MIP orthogonal headers)
+LP_PUBLIC_API_SPLIT_TEST_SOURCES = $(TEST_DIR)/test_lp_public_api_split.c
+LP_PUBLIC_API_SPLIT_TEST_EXEC = test_lp_public_api_split
+MIP_PUBLIC_API_SPLIT_TEST_SOURCES = $(TEST_DIR)/test_mip_public_api_split.c
+MIP_PUBLIC_API_SPLIT_TEST_EXEC = test_mip_public_api_split
+LP_ERROR_API_TEST_SOURCES = $(TEST_DIR)/test_lp_error_api.c
+LP_ERROR_API_TEST_EXEC = test_lp_error_api
 
 # Benchmarks
 BENCH_DIR = benchmarks
@@ -112,6 +283,7 @@ GLPK_PREFIX = $(shell brew --prefix glpk 2>/dev/null || echo "/opt/homebrew/opt/
 GLPK_INCLUDES = -I$(GLPK_PREFIX)/include
 GLPK_LIBS = -L$(GLPK_PREFIX)/lib -lglpk
 
+
 # Default target
 all: $(SHARED_LIB) lib $(TEST_EXEC)
 
@@ -123,15 +295,16 @@ $(SHARED_LIB):
 	$(MAKE) -C ../shared lib
 
 $(LIB_NAME): $(OBJECTS)
+	rm -f $@
 	ar rcs $@ $^
 
 # Build object files
 $(SRC_DIR)/%.o: $(SRC_DIR)/%.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $(DEPFLAGS) -c $< -o $@
 
 # Build optim submodule object files
 $(SRC_DIR)/optim/%.o: $(SRC_DIR)/optim/%.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $(DEPFLAGS) -c $< -o $@
 
 # Build test executable
 $(TEST_EXEC): $(TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
@@ -143,8 +316,53 @@ debug: LDFLAGS += $(DEBUG_LDFLAGS)
 debug: clean all
 
 # Run tests
-test: $(TEST_EXEC)
+test: $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(BANDM_TEST_EXEC) $(BLEND_TEST_EXEC) $(LOTFI_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(DUAL_RATIO_FLIP_TEST_EXEC) $(LP_REFACTOR_POLICY_TEST_EXEC) $(LP_REINVERT_CONTROLLER_TEST_EXEC) $(LP_BASIS_GOVERNOR_TEST_EXEC) $(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC) $(LP_DETERMINISM_TEST_EXEC) $(LP_SENSITIVITY_TEST_EXEC) $(LP_CONFLICT_TEST_EXEC) $(LP_ALGORITHM_API_TEST_EXEC) $(LP_POLICY_GLPK_COMPAT_TEST_EXEC) $(LP_GLPK_STRICT_TEST_EXEC) $(LP_BFCP_POLICY_TEST_EXEC) $(LP_DISPATCH_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC) $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC) $(LP_EXTERNAL_FAILURE_API_TEST_EXEC) $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(LP_PUBLIC_API_SPLIT_TEST_EXEC) $(MIP_PUBLIC_API_SPLIT_TEST_EXEC) $(LP_ERROR_API_TEST_EXEC) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(MIP_WARMSTART_TEST_EXEC) $(MIP_LP_RECOVERY_TEST_EXEC) $(MIP_START_SPARSE_TEST_EXEC) $(MIP_START_REPAIR_TEST_EXEC) $(MIP_BUG_TEST_EXEC) $(WARMSTART_SERDE_TEST_EXEC)
 	./$(TEST_EXEC)
+	./$(PRESOLVE_TEST_EXEC)
+	./$(BANDM_TEST_EXEC)
+	./$(BLEND_TEST_EXEC)
+	./$(LOTFI_TEST_EXEC)
+	./$(SIMPLEX_POLICY_TEST_EXEC)
+	./$(DUAL_RATIO_FLIP_TEST_EXEC)
+	./$(LP_REFACTOR_POLICY_TEST_EXEC)
+	./$(LP_REINVERT_CONTROLLER_TEST_EXEC)
+	./$(LP_BASIS_GOVERNOR_TEST_EXEC)
+	./$(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC)
+	./$(LP_DETERMINISM_TEST_EXEC)
+	./$(LP_SENSITIVITY_TEST_EXEC)
+	./$(LP_CONFLICT_TEST_EXEC)
+	./$(LP_ALGORITHM_API_TEST_EXEC)
+	./$(LP_POLICY_GLPK_COMPAT_TEST_EXEC)
+	./$(LP_GLPK_STRICT_TEST_EXEC)
+	./$(LP_BFCP_POLICY_TEST_EXEC)
+	./$(LP_DISPATCH_TEST_EXEC)
+	./$(LP_EXTERNAL_ADAPTER_TEST_EXEC)
+	./$(LP_EXTERNAL_ADAPTER_API_TEST_EXEC)
+	./$(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC)
+	./$(LP_EXTERNAL_FAILURE_API_TEST_EXEC)
+	./$(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC)
+	./$(LP_EXTERNAL_GLPK_OOP_TEST_EXEC)
+	./$(LP_TELEMETRY_SOLVER_TEST_EXEC)
+	./$(LP_TELEMETRY_LU_TEST_EXEC)
+	./$(LP_TELEMETRY_GATE_TEST_EXEC)
+	./$(LP_TELEMETRY_LU_SPARSE_TEST_EXEC)
+	./$(LP_PUBLIC_API_SPLIT_TEST_EXEC)
+	./$(MIP_PUBLIC_API_SPLIT_TEST_EXEC)
+	./$(LP_ERROR_API_TEST_EXEC)
+	./$(MPS_PARSER_TEST_EXEC)
+	./$(API_TEST_EXEC)
+	./$(MIP_WARMSTART_TEST_EXEC)
+	./$(MIP_LP_RECOVERY_TEST_EXEC)
+	./$(MIP_START_SPARSE_TEST_EXEC)
+	./$(MIP_START_REPAIR_TEST_EXEC)
+	./$(MIP_BUG_TEST_EXEC)
+	./$(WARMSTART_SERDE_TEST_EXEC)
+
+# Known regression tests (beaconfd — Phase 2 pivot failure, degenerate theta=0)
+# Run separately; not in the main test gate until ratio test pivot threshold is fixed.
+test-beaconfd: $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC)
+	./$(BEACONFD_TEST_EXEC)
+	./$(BEACONFD_TRACE_TEST_EXEC)
 
 # Build edge case tests
 $(EDGE_TEST_EXEC): $(EDGE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
@@ -190,6 +408,14 @@ $(LP_TEST_EXEC): $(LP_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
 test-lp: $(LP_TEST_EXEC)
 	./$(LP_TEST_EXEC)
 
+# Build NETLIB MPS parser regression tests
+$(MPS_PARSER_TEST_EXEC): $(MPS_PARSER_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run NETLIB MPS parser regression tests
+test-mps-parser: $(MPS_PARSER_TEST_EXEC)
+	./$(MPS_PARSER_TEST_EXEC)
+
 # Build API tests
 $(API_TEST_EXEC): $(API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
 	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
@@ -197,6 +423,396 @@ $(API_TEST_EXEC): $(API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
 # Run API tests
 test-api: $(API_TEST_EXEC)
 	./$(API_TEST_EXEC)
+
+# Build Benders tests
+$(BENDERS_TEST_EXEC): $(BENDERS_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run Benders tests
+test-benders: $(BENDERS_TEST_EXEC)
+	./$(BENDERS_TEST_EXEC)
+
+# Build Benders debug harness (investigative, not part of main test gate)
+$(BENDERS_DEBUG_TEST_EXEC): $(BENDERS_DEBUG_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run Benders debug harness
+test-benders-debug: $(BENDERS_DEBUG_TEST_EXEC)
+	./$(BENDERS_DEBUG_TEST_EXEC)
+
+# Known Benders regressions (non-gating until fixed).
+test-benders-known-regression: $(BENDERS_WARMSTART_TEST_EXEC) $(BENDERS_MASTER_START_TEST_EXEC) $(BENDERS_DEBUG_TEST_EXEC)
+	@echo "Running known-regression Benders tests (non-gating)..."
+	@status=0; \
+	./$(BENDERS_WARMSTART_TEST_EXEC) || status=1; \
+	./$(BENDERS_MASTER_START_TEST_EXEC) || status=1; \
+	./$(BENDERS_DEBUG_TEST_EXEC) || status=1; \
+	if [ $$status -ne 0 ]; then \
+		echo "Known Benders regressions reproduced (expected while non-gating)."; \
+	else \
+		echo "Benders known-regression tests now pass; consider promoting to gating."; \
+	fi
+
+# Build focused Benders warm-start tests
+$(BENDERS_WARMSTART_TEST_EXEC): $(BENDERS_WARMSTART_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run focused Benders warm-start tests
+test-benders-warmstart: $(BENDERS_WARMSTART_TEST_EXEC)
+	./$(BENDERS_WARMSTART_TEST_EXEC)
+
+# Build focused MIP warm-start tests
+$(MIP_WARMSTART_TEST_EXEC): $(MIP_WARMSTART_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run focused MIP warm-start tests
+test-mip-warmstart: $(MIP_WARMSTART_TEST_EXEC)
+	./$(MIP_WARMSTART_TEST_EXEC)
+
+# Build focused MIP/LP recovery-contract tests
+$(MIP_LP_RECOVERY_TEST_EXEC): $(MIP_LP_RECOVERY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run focused MIP/LP recovery-contract tests
+test-mip-lp-recovery: $(MIP_LP_RECOVERY_TEST_EXEC)
+	./$(MIP_LP_RECOVERY_TEST_EXEC)
+
+# Build sparse/partial MIP-start tests
+$(MIP_START_SPARSE_TEST_EXEC): $(MIP_START_SPARSE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run sparse/partial MIP-start tests
+test-mip-start-sparse: $(MIP_START_SPARSE_TEST_EXEC)
+	./$(MIP_START_SPARSE_TEST_EXEC)
+
+# Build MIP-start repair-mode tests
+$(MIP_START_REPAIR_TEST_EXEC): $(MIP_START_REPAIR_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run MIP-start repair-mode tests
+test-mip-start-repair: $(MIP_START_REPAIR_TEST_EXEC)
+	./$(MIP_START_REPAIR_TEST_EXEC)
+
+# Build MIP regression reproducer test
+$(MIP_BUG_TEST_EXEC): $(MIP_BUG_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run MIP regression reproducer test
+test-mip-bug: $(MIP_BUG_TEST_EXEC)
+	./$(MIP_BUG_TEST_EXEC)
+
+# Build Benders initial master-start tests
+$(BENDERS_MASTER_START_TEST_EXEC): $(BENDERS_MASTER_START_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run Benders initial master-start tests
+test-benders-master-start: $(BENDERS_MASTER_START_TEST_EXEC)
+	./$(BENDERS_MASTER_START_TEST_EXEC)
+
+# Build warm-start serialization tests
+$(WARMSTART_SERDE_TEST_EXEC): $(WARMSTART_SERDE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run warm-start serialization tests
+test-warmstart-serde: $(WARMSTART_SERDE_TEST_EXEC)
+	./$(WARMSTART_SERDE_TEST_EXEC)
+
+# Build presolve unit tests
+$(PRESOLVE_TEST_EXEC): $(PRESOLVE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run presolve unit tests
+test-presolve: $(PRESOLVE_TEST_EXEC)
+	./$(PRESOLVE_TEST_EXEC)
+
+# Build beaconfd numerical-regression test
+$(BEACONFD_TEST_EXEC): $(BEACONFD_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# test-beaconfd target is defined above (known regression, not in main gate)
+
+# Build NETLIB regression tests (bandm, blend, lotfi)
+$(BANDM_TEST_EXEC): $(BANDM_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+$(BLEND_TEST_EXEC): $(BLEND_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+$(LOTFI_TEST_EXEC): $(LOTFI_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run NETLIB regression tests individually
+test-bandm: $(BANDM_TEST_EXEC)
+	./$(BANDM_TEST_EXEC)
+
+test-blend: $(BLEND_TEST_EXEC)
+	./$(BLEND_TEST_EXEC)
+
+test-lotfi: $(LOTFI_TEST_EXEC)
+	./$(LOTFI_TEST_EXEC)
+
+# Build beaconfd phase-1 trace regression test
+$(BEACONFD_TRACE_TEST_EXEC): $(BEACONFD_TRACE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run beaconfd phase-1 trace regression test
+test-beaconfd-trace: $(BEACONFD_TRACE_TEST_EXEC)
+	./$(BEACONFD_TRACE_TEST_EXEC)
+
+# Build simplex basis-action policy test
+$(SIMPLEX_POLICY_TEST_EXEC): $(SIMPLEX_POLICY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run simplex basis-action policy test
+test-simplex-policy: $(SIMPLEX_POLICY_TEST_EXEC)
+	./$(SIMPLEX_POLICY_TEST_EXEC)
+
+# Build LP refactor-policy module test
+$(LP_REFACTOR_POLICY_TEST_EXEC): $(LP_REFACTOR_POLICY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP refactor-policy module test
+test-lp-refactor-policy: $(LP_REFACTOR_POLICY_TEST_EXEC)
+	./$(LP_REFACTOR_POLICY_TEST_EXEC)
+
+# Build LP reinvert-controller module test
+$(LP_REINVERT_CONTROLLER_TEST_EXEC): $(LP_REINVERT_CONTROLLER_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP reinvert-controller module test
+test-lp-reinvert-controller: $(LP_REINVERT_CONTROLLER_TEST_EXEC)
+	./$(LP_REINVERT_CONTROLLER_TEST_EXEC)
+
+# Build LP basis-governor module test
+$(LP_BASIS_GOVERNOR_TEST_EXEC): $(LP_BASIS_GOVERNOR_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP basis-governor module test
+test-lp-basis-governor: $(LP_BASIS_GOVERNOR_TEST_EXEC)
+	./$(LP_BASIS_GOVERNOR_TEST_EXEC)
+
+# Build LP basis-governor runtime test
+$(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC): $(LP_BASIS_GOVERNOR_RUNTIME_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP basis-governor runtime test
+test-lp-basis-governor-runtime: $(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC)
+	./$(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC)
+
+# Build LP determinism tests
+$(LP_DETERMINISM_TEST_EXEC): $(LP_DETERMINISM_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP determinism tests
+test-lp-determinism: $(LP_DETERMINISM_TEST_EXEC)
+	./$(LP_DETERMINISM_TEST_EXEC)
+
+# Build LP sensitivity tests
+$(LP_SENSITIVITY_TEST_EXEC): $(LP_SENSITIVITY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP sensitivity tests
+test-lp-sensitivity: $(LP_SENSITIVITY_TEST_EXEC)
+	./$(LP_SENSITIVITY_TEST_EXEC)
+
+# Build LP conflict tests
+$(LP_CONFLICT_TEST_EXEC): $(LP_CONFLICT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP conflict tests
+test-lp-conflict: $(LP_CONFLICT_TEST_EXEC)
+	./$(LP_CONFLICT_TEST_EXEC)
+
+# Build LP algorithm API tests
+$(LP_ALGORITHM_API_TEST_EXEC): $(LP_ALGORITHM_API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP algorithm API tests
+test-lp-algorithm-api: $(LP_ALGORITHM_API_TEST_EXEC)
+	./$(LP_ALGORITHM_API_TEST_EXEC)
+
+# Build LP GLPK-compatible policy module tests
+$(LP_POLICY_GLPK_COMPAT_TEST_EXEC): $(LP_POLICY_GLPK_COMPAT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP GLPK-compatible policy module tests
+test-lp-policy-glpk-compat: $(LP_POLICY_GLPK_COMPAT_TEST_EXEC)
+	./$(LP_POLICY_GLPK_COMPAT_TEST_EXEC)
+
+# Build LP GLPK strict-mode gate tests
+$(LP_GLPK_STRICT_TEST_EXEC): $(LP_GLPK_STRICT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP GLPK strict-mode gate tests
+test-lp-glpk-strict: $(LP_GLPK_STRICT_TEST_EXEC)
+	./$(LP_GLPK_STRICT_TEST_EXEC)
+
+# Build LP GLPK strict BFCP dispatch tests
+$(LP_GLPK_STRICT_BFCP_TEST_EXEC): $(LP_GLPK_STRICT_BFCP_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP GLPK strict BFCP dispatch tests
+test-lp-glpk-strict-bfcp: $(LP_GLPK_STRICT_BFCP_TEST_EXEC)
+	./$(LP_GLPK_STRICT_BFCP_TEST_EXEC)
+
+# Build LP BFCP policy module tests
+$(LP_BFCP_POLICY_TEST_EXEC): $(LP_BFCP_POLICY_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP BFCP policy module tests
+test-lp-bfcp-policy: $(LP_BFCP_POLICY_TEST_EXEC)
+	./$(LP_BFCP_POLICY_TEST_EXEC)
+
+# Build LP dispatch module tests
+$(LP_DISPATCH_TEST_EXEC): $(LP_DISPATCH_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP dispatch module tests
+test-lp-dispatch: $(LP_DISPATCH_TEST_EXEC)
+	./$(LP_DISPATCH_TEST_EXEC)
+
+# Build LP external adapter module tests
+$(LP_EXTERNAL_ADAPTER_TEST_EXEC): $(LP_EXTERNAL_ADAPTER_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP external adapter module tests
+test-lp-external-adapter: $(LP_EXTERNAL_ADAPTER_TEST_EXEC)
+	./$(LP_EXTERNAL_ADAPTER_TEST_EXEC)
+
+# Build public LP external adapter API tests
+$(LP_EXTERNAL_ADAPTER_API_TEST_EXEC): $(LP_EXTERNAL_ADAPTER_API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run public LP external adapter API tests
+test-lp-external-adapter-api: $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC)
+	./$(LP_EXTERNAL_ADAPTER_API_TEST_EXEC)
+
+# Build LP external introspection API tests
+$(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC): $(LP_EXTERNAL_INTROSPECTION_API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP external introspection API tests
+test-lp-external-introspection-api: $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC)
+	./$(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC)
+
+# Build LP external failure mapping API tests
+$(LP_EXTERNAL_FAILURE_API_TEST_EXEC): $(LP_EXTERNAL_FAILURE_API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP external failure mapping API tests
+test-lp-external-failure-api: $(LP_EXTERNAL_FAILURE_API_TEST_EXEC)
+	./$(LP_EXTERNAL_FAILURE_API_TEST_EXEC)
+
+# Build LP external generic OOP runner tests
+$(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC): $(LP_EXTERNAL_OOP_RUNNER_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP external generic OOP runner tests
+test-lp-external-oop-runner: $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC)
+	./$(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC)
+
+# Build LP external GLPK out-of-process adapter tests
+$(LP_EXTERNAL_GLPK_OOP_TEST_EXEC): $(LP_EXTERNAL_GLPK_OOP_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP external GLPK out-of-process adapter tests
+test-lp-external-glpk-oop: $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC)
+	./$(LP_EXTERNAL_GLPK_OOP_TEST_EXEC)
+
+# Build optional real-GLPK integration test (self-skips when glpsol absent)
+$(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_EXEC): $(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run optional real-GLPK integration test
+test-lp-external-glpk-oop-integration: $(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_EXEC)
+	./$(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_EXEC)
+
+# Build LP telemetry solver tests
+$(LP_TELEMETRY_SOLVER_TEST_EXEC): $(LP_TELEMETRY_SOLVER_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Build LP telemetry LU tests
+$(LP_TELEMETRY_LU_TEST_EXEC): $(LP_TELEMETRY_LU_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Build LP telemetry runtime gate tests
+$(LP_TELEMETRY_GATE_TEST_EXEC): $(LP_TELEMETRY_GATE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Build LP telemetry sparse-LU tests
+$(LP_TELEMETRY_LU_SPARSE_TEST_EXEC): $(LP_TELEMETRY_LU_SPARSE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LP telemetry solver tests
+test-lp-telemetry-solver: $(LP_TELEMETRY_SOLVER_TEST_EXEC)
+	./$(LP_TELEMETRY_SOLVER_TEST_EXEC)
+
+# Run LP telemetry LU tests
+test-lp-telemetry-lu: $(LP_TELEMETRY_LU_TEST_EXEC)
+	./$(LP_TELEMETRY_LU_TEST_EXEC)
+
+# Run LP telemetry runtime gate tests
+test-lp-telemetry-gate: $(LP_TELEMETRY_GATE_TEST_EXEC)
+	./$(LP_TELEMETRY_GATE_TEST_EXEC)
+
+# Run LP telemetry sparse-LU tests
+test-lp-telemetry-lu-sparse: $(LP_TELEMETRY_LU_SPARSE_TEST_EXEC)
+	./$(LP_TELEMETRY_LU_SPARSE_TEST_EXEC)
+
+# Run all LP telemetry tests
+test-lp-telemetry: $(LP_TELEMETRY_TEST_EXECS)
+	./$(LP_TELEMETRY_SOLVER_TEST_EXEC)
+	./$(LP_TELEMETRY_LU_TEST_EXEC)
+	./$(LP_TELEMETRY_GATE_TEST_EXEC)
+	./$(LP_TELEMETRY_LU_SPARSE_TEST_EXEC)
+
+# Build modular LP public API split tests
+$(LP_PUBLIC_API_SPLIT_TEST_EXEC): $(LP_PUBLIC_API_SPLIT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run modular LP public API split tests
+test-lp-public-api-split: $(LP_PUBLIC_API_SPLIT_TEST_EXEC)
+	./$(LP_PUBLIC_API_SPLIT_TEST_EXEC)
+
+# Build modular MIP public API split tests
+$(MIP_PUBLIC_API_SPLIT_TEST_EXEC): $(MIP_PUBLIC_API_SPLIT_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run modular MIP public API split tests
+test-mip-public-api-split: $(MIP_PUBLIC_API_SPLIT_TEST_EXEC)
+	./$(MIP_PUBLIC_API_SPLIT_TEST_EXEC)
+
+# Build structured API error mapping tests
+$(LP_ERROR_API_TEST_EXEC): $(LP_ERROR_API_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run structured API error mapping tests
+test-lp-error-api: $(LP_ERROR_API_TEST_EXEC)
+	./$(LP_ERROR_API_TEST_EXEC)
+
+# Build LU Markowitz tests
+$(LU_MARKOWITZ_TEST_EXEC): $(LU_MARKOWITZ_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LU Markowitz tests
+test-lu-markowitz: $(LU_MARKOWITZ_TEST_EXEC)
+	./$(LU_MARKOWITZ_TEST_EXEC)
+
+# Build dual ratio flip-mode tests
+$(DUAL_RATIO_FLIP_TEST_EXEC): $(DUAL_RATIO_FLIP_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run dual ratio flip-mode tests
+test-dual-ratio-flip: $(DUAL_RATIO_FLIP_TEST_EXEC)
+	./$(DUAL_RATIO_FLIP_TEST_EXEC)
+
+# Build LU supernode tests
+$(LU_SUPERNODE_TEST_EXEC): $(LU_SUPERNODE_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run LU supernode tests
+test-lu-supernode: $(LU_SUPERNODE_TEST_EXEC)
+	./$(LU_SUPERNODE_TEST_EXEC)
 
 # Run optimization module tests
 test-optim: $(OPTIM_TEST_EXEC)
@@ -218,9 +834,9 @@ $(COMPARE_GLPK_EXEC): $(BENCH_DIR)/compare_glpk.c $(LIB_NAME) $(SHARED_LIB)
 compare-glpk: $(COMPARE_GLPK_EXEC)
 	./$(COMPARE_GLPK_EXEC)
 
-# Build Ralph vs GLPK benchmark (direct library comparison)
+# Build Ralph vs GLPK benchmark (GLPK routed through external OOP adapter)
 $(BENCH_VS_GLPK_EXEC): $(BENCH_DIR)/bench_vs_glpk.c $(LIB_NAME) $(SHARED_LIB)
-	$(CC) $(CFLAGS) $(INCLUDES) $(GLPK_INCLUDES) $< -L. -lralph -L../shared -lshared $(GLPK_LIBS) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
 
 # Run Ralph vs GLPK benchmark
 bench-glpk: $(BENCH_VS_GLPK_EXEC)
@@ -287,19 +903,83 @@ build-ralph-benchmark: $(RALPH_BENCHMARK_EXEC)
 	@echo "Built: ./ralph-benchmark"
 	@echo "Run: ./ralph-benchmark --help"
 
+# Fast NETLIB correctness test (tiers 0-1)
+test-netlib: $(RALPH_BENCHMARK_EXEC)
+	cd $(CURDIR) && ./$(RALPH_BENCHMARK_EXEC) --test fast
+
+# Full NETLIB correctness test (all tiers)
+test-netlib-full: $(RALPH_BENCHMARK_EXEC)
+	cd $(CURDIR) && ./$(RALPH_BENCHMARK_EXEC) --test full
+
+# Deterministic NETLIB no-regression gate (baseline-locked)
+test-netlib-gate: $(RALPH_BENCHMARK_EXEC)
+	cd $(CURDIR) && bash benchmarks/netlib_regression_gate.sh --bench "$(CURDIR)/$(RALPH_BENCHMARK_EXEC)"
+
+# Deterministic NETLIB small-canary gate (tiers 0-1 + beaconfd)
+test-netlib-gate-small: $(RALPH_BENCHMARK_EXEC)
+	cd $(CURDIR) && bash benchmarks/netlib_regression_gate.sh --bench "$(CURDIR)/$(RALPH_BENCHMARK_EXEC)" --allowlist "$(CURDIR)/benchmarks/netlib_small_canary.txt"
+
+# Deterministic NETLIB fit1p/nesm stress gate (promoted: gating)
+test-netlib-gate-stress-fit1p-nesm: $(RALPH_BENCHMARK_EXEC)
+	cd $(CURDIR) && bash benchmarks/netlib_regression_gate.sh --bench "$(CURDIR)/$(RALPH_BENCHMARK_EXEC)" --baseline "$(CURDIR)/benchmarks/netlib_stress_fit1p_nesm_baseline.json" --allowlist "$(CURDIR)/benchmarks/netlib_stress_fit1p_nesm.txt"
+
+# Deterministic NETLIB fit1p/nesm stress gate (legacy explicit gating alias)
+test-netlib-gate-stress-fit1p-nesm-gating: $(RALPH_BENCHMARK_EXEC)
+	cd $(CURDIR) && bash benchmarks/netlib_regression_gate.sh --bench "$(CURDIR)/$(RALPH_BENCHMARK_EXEC)" --baseline "$(CURDIR)/benchmarks/netlib_stress_fit1p_nesm_baseline.json" --allowlist "$(CURDIR)/benchmarks/netlib_stress_fit1p_nesm.txt"
+
+# Deterministic NETLIB fit1p/nesm stress gate (optional non-gating diagnostics)
+test-netlib-gate-stress-fit1p-nesm-non-gating: $(RALPH_BENCHMARK_EXEC)
+	cd $(CURDIR) && bash benchmarks/netlib_regression_gate.sh --bench "$(CURDIR)/$(RALPH_BENCHMARK_EXEC)" --baseline "$(CURDIR)/benchmarks/netlib_stress_fit1p_nesm_baseline.json" --allowlist "$(CURDIR)/benchmarks/netlib_stress_fit1p_nesm.txt" || { rc=$$?; echo "NOTE: non-gating fit1p/nesm stress gate failed (rc=$$rc)"; exit 0; }
+
+# Deterministic NETLIB pilot-family focus gate (non-gating diagnostics)
+test-netlib-gate-pilot-focus: $(RALPH_BENCHMARK_EXEC)
+	cd $(CURDIR) && bash benchmarks/netlib_regression_gate.sh --bench "$(CURDIR)/$(RALPH_BENCHMARK_EXEC)" --allowlist "$(CURDIR)/benchmarks/netlib_pilot_focus.txt" --baseline "$(CURDIR)/benchmarks/netlib_pilot_focus_baseline.json" || { rc=$$?; echo "NOTE: non-gating pilot focus gate failed (rc=$$rc)"; exit 0; }
+
+# Deterministic NETLIB timeout22 outlier gate (diagnostics baseline)
+test-netlib-gate-timeout22: $(RALPH_BENCHMARK_EXEC)
+	cd $(CURDIR) && bash benchmarks/netlib_regression_gate.sh --bench "$(CURDIR)/$(RALPH_BENCHMARK_EXEC)" --allowlist "$(CURDIR)/benchmarks/netlib_timeout22.txt" --baseline "$(CURDIR)/benchmarks/netlib_timeout22_baseline.json"
+
+# Deterministic NETLIB crash6 explicit norelax/noflip harness (non-gating diagnostics)
+test-netlib-gate-crash6-norelax-noflip: $(RALPH_BENCHMARK_EXEC)
+	cd $(CURDIR) && chmod +x benchmarks/ralph_benchmark_norelax_noflip.sh && bash benchmarks/netlib_regression_gate.sh --bench "$(CURDIR)/benchmarks/ralph_benchmark_norelax_noflip.sh" --allowlist "$(CURDIR)/benchmarks/netlib_crash6.txt" --baseline "$(CURDIR)/benchmarks/netlib_crash6_baseline.json" --bfcp-backend 0 || { rc=$$?; echo "NOTE: non-gating crash6 norelax/noflip gate failed (rc=$$rc)"; exit 0; }
+
+# Deterministic NETLIB full canary with reinvert control_all (non-gating diagnostics)
+test-netlib-gate-control-all-canary: $(RALPH_BENCHMARK_EXEC)
+	cd $(CURDIR) && bash benchmarks/netlib_regression_gate.sh --bench "$(CURDIR)/$(RALPH_BENCHMARK_EXEC)" --lp-reinvert-controller-mode 3 || { rc=$$?; echo "NOTE: non-gating control_all canary failed (rc=$$rc)"; exit 0; }
+
+# Ordered GLPK-strict execution tracker
+glpk-strict-plan-init:
+	cd $(CURDIR) && bash benchmarks/glpk_strict_plan.sh init
+
+glpk-strict-plan-status:
+	cd $(CURDIR) && bash benchmarks/glpk_strict_plan.sh status
+
+glpk-strict-plan-next:
+	cd $(CURDIR) && bash benchmarks/glpk_strict_plan.sh next
+
+glpk-strict-plan-phase1:
+	cd $(CURDIR) && bash benchmarks/glpk_strict_plan.sh run-phase 1
+
+glpk-strict-plan-phase2:
+	cd $(CURDIR) && bash benchmarks/glpk_strict_plan.sh run-phase 2
+
+glpk-strict-plan-phase3:
+	cd $(CURDIR) && bash benchmarks/glpk_strict_plan.sh run-phase 3
+
 # Download NETLIB problems
 download-netlib:
 	cd $(BENCH_DIR) && bash download_netlib.sh
 
 # Clean
 clean:
-	rm -f $(OBJECTS) $(LIB_NAME) $(TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(API_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC)
+	rm -f $(OBJECTS) $(DEPS) $(SRC_DIR)/lp_telemetry.o $(LIB_NAME) $(TEST_EXEC) $(PRESOLVE_TEST_EXEC) $(EDGE_TEST_EXEC) $(LAP_TEST_EXEC) $(NETFLOW_TEST_EXEC) $(DETECT_TEST_EXEC) $(OPTIM_TEST_EXEC) $(LP_TEST_EXEC) $(MPS_PARSER_TEST_EXEC) $(API_TEST_EXEC) $(BENDERS_TEST_EXEC) $(BENDERS_DEBUG_TEST_EXEC) $(BENDERS_WARMSTART_TEST_EXEC) $(MIP_WARMSTART_TEST_EXEC) $(MIP_LP_RECOVERY_TEST_EXEC) $(MIP_START_SPARSE_TEST_EXEC) $(MIP_START_REPAIR_TEST_EXEC) $(MIP_BUG_TEST_EXEC) $(BENDERS_MASTER_START_TEST_EXEC) $(WARMSTART_SERDE_TEST_EXEC) $(BEACONFD_TEST_EXEC) $(BEACONFD_TRACE_TEST_EXEC) $(SIMPLEX_POLICY_TEST_EXEC) $(DUAL_RATIO_FLIP_TEST_EXEC) $(LP_REFACTOR_POLICY_TEST_EXEC) $(LP_REINVERT_CONTROLLER_TEST_EXEC) $(LP_BASIS_GOVERNOR_TEST_EXEC) $(LP_BASIS_GOVERNOR_RUNTIME_TEST_EXEC) $(LP_DETERMINISM_TEST_EXEC) $(LP_SENSITIVITY_TEST_EXEC) $(LP_CONFLICT_TEST_EXEC) $(LP_ALGORITHM_API_TEST_EXEC) $(LP_POLICY_GLPK_COMPAT_TEST_EXEC) $(LP_BFCP_POLICY_TEST_EXEC) $(LP_DISPATCH_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_TEST_EXEC) $(LP_EXTERNAL_ADAPTER_API_TEST_EXEC) $(LP_EXTERNAL_INTROSPECTION_API_TEST_EXEC) $(LP_EXTERNAL_FAILURE_API_TEST_EXEC) $(LP_EXTERNAL_OOP_RUNNER_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_TEST_EXEC) $(LP_EXTERNAL_GLPK_OOP_INTEGRATION_TEST_EXEC) $(LP_TELEMETRY_TEST_EXECS) $(LP_PUBLIC_API_SPLIT_TEST_EXEC) $(MIP_PUBLIC_API_SPLIT_TEST_EXEC) $(LP_ERROR_API_TEST_EXEC) $(LU_MARKOWITZ_TEST_EXEC) $(LU_SUPERNODE_TEST_EXEC) $(BENCH_SIZES_EXEC) $(COMPARE_GLPK_EXEC) $(BENCH_VS_GLPK_EXEC) $(BENCH_MIP_EXEC) $(PROFILE_BENCH_EXEC) $(BENCH_LAP_EXEC) $(BENCH_LAP_PERF_EXEC) $(BENCH_NETFLOW_EXEC) $(RALPH_BENCHMARK_EXEC)
 
 # Install headers and library
 install: $(LIB_NAME)
 	mkdir -p /usr/local/include/ralph
 	mkdir -p /usr/local/lib
-	cp $(INCLUDE_DIR)/ralph.h /usr/local/include/ralph/
+	cp $(INCLUDE_DIR)/ralph_lp.h /usr/local/include/ralph/
+	cp $(INCLUDE_DIR)/ralph_mip.h /usr/local/include/ralph/
 	cp $(LIB_NAME) /usr/local/lib/
 
 # Uninstall
@@ -307,7 +987,7 @@ uninstall:
 	rm -rf /usr/local/include/ralph
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
+.PHONY: all lib clean debug test test-edge test-lap test-netflow test-detect test-optim test-api test-benders test-benders-debug test-benders-known-regression test-benders-warmstart test-mip-bug test-mip-warmstart test-mip-start-sparse test-mip-start-repair test-benders-master-start test-warmstart-serde test-beaconfd test-beaconfd-trace test-simplex-policy test-dual-ratio-flip test-lp-refactor-policy test-lp-reinvert-controller test-lp-basis-governor test-lp-basis-governor-runtime test-lp-determinism test-lp-sensitivity test-lp-conflict test-lp-algorithm-api test-lp-policy-glpk-compat test-lp-glpk-strict test-lp-bfcp-policy test-lp-dispatch test-lp-telemetry test-lp-telemetry-solver test-lp-telemetry-lu test-lp-telemetry-gate test-lp-telemetry-lu-sparse test-lp-public-api-split test-mip-public-api-split test-lp-error-api test-lu-markowitz test-lu-supernode test-netlib test-netlib-full test-netlib-gate test-netlib-gate-small test-netlib-gate-stress-fit1p-nesm test-netlib-gate-stress-fit1p-nesm-gating test-netlib-gate-stress-fit1p-nesm-non-gating test-netlib-gate-pilot-focus test-netlib-gate-timeout22 test-netlib-gate-crash6-norelax-noflip test-netlib-gate-control-all-canary glpk-strict-plan-init glpk-strict-plan-status glpk-strict-plan-next glpk-strict-plan-phase1 glpk-strict-plan-phase2 glpk-strict-plan-phase3 bench bench-lap bench-lap-perf bench-lap-perf-quick bench-netflow compare-glpk bench-glpk bench-glpk-quick bench-mip bench-mip-quick bench-mip-specialized bench-mip-compare profile-bench build-ralph-benchmark download-netlib install uninstall help
 
 # MIP benchmark with specialized solvers (LAP, Network, SCP)
 bench-mip-specialized: $(BENCH_MIP_EXEC)
@@ -337,6 +1017,22 @@ help:
 	@echo "  test-netflow - Run network flow tests"
 	@echo "  test-detect - Run network detection tests"
 	@echo "  test-optim  - Run optimization module tests"
+	@echo "  test-benders-known-regression - Run Benders known regressions (non-gating)"
+	@echo "  test-beaconfd - Run beaconfd numerical-regression test"
+	@echo "  test-simplex-policy - Run simplex basis-action policy tests"
+	@echo "  test-lp-reinvert-controller - Run LP reinvert-controller module tests"
+	@echo "  test-lp-basis-governor - Run LP basis-governor shadow-module tests"
+	@echo "  test-lp-basis-governor-runtime - Run LP basis-governor runtime mode tests"
+	@echo "  test-lp-determinism - Run LP determinism module tests"
+	@echo "  test-lp-sensitivity - Run LP sensitivity/ranging module tests"
+	@echo "  test-lp-conflict - Run LP conflict/IIS refinement module tests"
+	@echo "  test-lp-algorithm-api - Run LP algorithm/capability API tests"
+	@echo "  test-lp-policy-glpk-compat - Run GLPK-compat policy module tests"
+	@echo "  test-lp-bfcp-policy - Run BFCP runtime policy module tests"
+	@echo "  test-lp-dispatch - Run internal LP backend dispatch module tests"
+	@echo "  test-lp-telemetry - Run LP telemetry module tests"
+	@echo "  test-lp-public-api-split - Run modular LP public API split tests"
+	@echo "  test-mip-public-api-split - Run modular MIP public API split tests"
 	@echo "  bench      - Run size scaling benchmark"
 	@echo "  bench-lap  - Run LAP benchmark (JVC vs LP)"
 	@echo "  bench-netflow - Run network flow benchmark"
@@ -352,11 +1048,32 @@ help:
 	@echo "Quick benchmark variants (smaller problem sizes):"
 	@echo "  bench-mip-quick, bench-mip-specialized-quick, bench-mip-compare-quick"
 	@echo ""
+	@echo "NETLIB Correctness Tests:"
+	@echo "  test-netlib            - Fast test (tiers 0-1, ~30s)"
+	@echo "  test-netlib-full       - Full test (all tiers, ~10min)"
+	@echo "  test-netlib-gate       - Baseline-locked no-regression NETLIB gate"
+	@echo "  test-netlib-gate-small - NETLIB small-canary gate (27 cases incl. beaconfd)"
+	@echo "  test-netlib-gate-stress-fit1p-nesm - fit1p/nesm stress gate (promoted, gating)"
+	@echo "  test-netlib-gate-stress-fit1p-nesm-gating - fit1p/nesm stress gate (explicit gating alias)"
+	@echo "  test-netlib-gate-stress-fit1p-nesm-non-gating - fit1p/nesm stress diagnostics (optional)"
+	@echo "  test-netlib-gate-pilot-focus - NETLIB pilot-family focus gate (non-gating diagnostics)"
+	@echo "  test-netlib-gate-timeout22 - NETLIB timeout22 outlier gate (diagnostics baseline)"
+	@echo "  test-netlib-gate-crash6-norelax-noflip - NETLIB crash6 explicit norelax/noflip harness (non-gating diagnostics)"
+	@echo "  test-netlib-gate-control-all-canary - Full NETLIB control_all canary (non-gating diagnostics)"
+	@echo "  glpk-strict-plan-init   - Initialize GLPK-strict ordered phase tracker"
+	@echo "  glpk-strict-plan-status - Show GLPK-strict phase tracker status"
+	@echo "  glpk-strict-plan-next   - Show next GLPK-strict phase"
+	@echo "  glpk-strict-plan-phase1 - Run ordered phase 1 with gates and mark completion"
+	@echo "  glpk-strict-plan-phase2 - Run ordered phase 2 with gates and mark completion"
+	@echo "  glpk-strict-plan-phase3 - Run ordered phase 3 with gates and mark completion"
+	@echo "  download-netlib        - Download all NETLIB problems"
+	@echo ""
 	@echo "NETLIB Benchmark Tool:"
 	@echo "  build-ralph-benchmark  - Build the benchmark tool"
-	@echo "  download-netlib        - Download NETLIB LP problems"
 	@echo ""
-	@echo "  ./ralph-benchmark --help              # Show benchmark options"
-	@echo "  ./ralph-benchmark --download-netlib   # Download problems"
-	@echo "  ./ralph-benchmark --suite tiny        # Quick smoke test"
+	@echo "  ./ralph-benchmark --test              # Correctness test (fast)"
+	@echo "  ./ralph-benchmark --test full          # Correctness test (all)"
+	@echo "  ./ralph-benchmark --suite tiny -v     # GLPK comparison"
 	@echo "  ./ralph-benchmark --netlib afiro -v   # Single problem"
+
+-include $(DEPS)

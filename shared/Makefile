@@ -47,6 +47,7 @@ SRCS = src/sh_geo.c \
        src/sh_backoff.c \
        src/sh_retry.c \
        src/sh_cors.c \
+       src/sh_perf.c \
        src/sh_log.c \
        src/sh_trace.c \
        src/sh_metrics.c \
@@ -250,6 +251,7 @@ src/sh_circuit.o: include/sh_circuit.h
 src/sh_backoff.o: include/sh_backoff.h
 src/sh_retry.o: include/sh_retry.h include/sh_circuit.h include/sh_backoff.h
 src/sh_cors.o: include/sh_cors.h
+src/sh_perf.o: include/sh_perf.h
 src/sh_log.o: include/sh_log.h
 src/sh_trace.o: include/sh_trace.h include/sh_log.h
 src/sh_metrics.o: include/sh_metrics.h

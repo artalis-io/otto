@@ -1,0 +1,4 @@
+# NETLIB stress gate (fit1p + nesm).
+# Non-gating by default; promote to gating once consistently green.
+fit1p
+nesm

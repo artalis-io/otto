@@ -13,7 +13,9 @@
 #include <math.h>
 #include <time.h>
 #include <stdint.h>
+#include <limits.h>
 #include "mip.h"
+#include "mip_lp_adapter.h"
 
 /* ============================================================================
  * Node Priority Queue
@@ -27,6 +29,7 @@ NodeQueue* node_queue_create(int capacity, NodeSelectStrategy strategy, int obj_
     queue->size = 0;
     queue->strategy = strategy;
     queue->obj_sense = obj_sense;
+    queue->has_incumbent = 0;
 
     queue->nodes = (BBNode**)calloc(queue->capacity, sizeof(BBNode*));
     if (!queue->nodes) {
@@ -52,7 +55,9 @@ void node_queue_free_with_pool(NodeQueue *queue, BBNodePool *pool) {
 }
 
 /* Compare nodes based on strategy */
-static int node_compare(const BBNode *a, const BBNode *b, NodeSelectStrategy strategy, int obj_sense) {
+static int node_compare(const BBNode *a, const BBNode *b,
+                        NodeSelectStrategy strategy, int obj_sense,
+                        int has_incumbent) {
     switch (strategy) {
         case NODE_SELECT_BEST_FIRST:
             /* Lower bound is better for minimization */
@@ -75,16 +80,21 @@ static int node_compare(const BBNode *a, const BBNode *b, NodeSelectStrategy str
             }
 
         case NODE_SELECT_HYBRID:
-            /* Depth-first until first solution, then best-first */
-            /* Handled in pop by checking has_incumbent */
-            if (a->depth != b->depth) {
-                return (a->depth > b->depth) ? -1 : 1;
+            if (!has_incumbent) {
+                /* Pre-incumbent: depth-first to find feasible solution fast */
+                if (a->depth != b->depth)
+                    return (a->depth > b->depth) ? -1 : 1;
+                /* Tiebreak by LP bound */
+                if (obj_sense == 1)
+                    return (a->lp_bound < b->lp_bound) ? -1 : 1;
+                else
+                    return (a->lp_bound > b->lp_bound) ? -1 : 1;
             }
-            if (obj_sense == 1) {
+            /* Post-incumbent: best-first to close gap efficiently */
+            if (obj_sense == 1)
                 return (a->lp_bound < b->lp_bound) ? -1 : 1;
-            } else {
+            else
                 return (a->lp_bound > b->lp_bound) ? -1 : 1;
-            }
 
         default:
             return 0;
@@ -96,7 +106,8 @@ static void heapify_up(NodeQueue *queue, int idx) {
     while (idx > 0) {
         int parent = (idx - 1) / 2;
         if (node_compare(queue->nodes[idx], queue->nodes[parent],
-                        queue->strategy, queue->obj_sense) < 0) {
+                        queue->strategy, queue->obj_sense,
+                        queue->has_incumbent) < 0) {
             BBNode *tmp = queue->nodes[idx];
             queue->nodes[idx] = queue->nodes[parent];
             queue->nodes[parent] = tmp;
@@ -117,12 +128,14 @@ static void heapify_down(NodeQueue *queue, int idx) {
 
         if (left < size &&
             node_compare(queue->nodes[left], queue->nodes[smallest],
-                        queue->strategy, queue->obj_sense) < 0) {
+                        queue->strategy, queue->obj_sense,
+                        queue->has_incumbent) < 0) {
             smallest = left;
         }
         if (right < size &&
             node_compare(queue->nodes[right], queue->nodes[smallest],
-                        queue->strategy, queue->obj_sense) < 0) {
+                        queue->strategy, queue->obj_sense,
+                        queue->has_incumbent) < 0) {
             smallest = right;
         }
 
@@ -226,6 +239,17 @@ double node_queue_best_bound(const NodeQueue *queue) {
         }
     }
     return best;
+}
+
+/* Notify queue that an incumbent was found (for HYBRID strategy switch) */
+void node_queue_set_incumbent_found(NodeQueue *queue) {
+    if (!queue || queue->has_incumbent) return;
+    queue->has_incumbent = 1;
+    /* HYBRID ordering changes — rebuild heap */
+    if (queue->strategy == NODE_SELECT_HYBRID && queue->size > 1) {
+        for (int i = queue->size / 2 - 1; i >= 0; i--)
+            heapify_down(queue, i);
+    }
 }
 
 /* ============================================================================
@@ -493,6 +517,9 @@ BBNode* bb_node_pool_copy(BBNodePool *pool, const BBNode *src, int num_vars) {
  * Variable Selection for Branching
  * ============================================================================ */
 
+/* Forward declarations for priority-aware variants */
+static int select_most_infeasible_with_priority(MIPSolver *solver, const double *solution, int max_prio);
+
 /*
  * Most infeasible variable selection.
  *
@@ -505,9 +532,13 @@ static int select_most_infeasible(MIPSolver *solver, const double *solution) {
 
     const int * restrict int_vars = solver->integer_vars;
     const int num_int = solver->num_integers;
+    const LPModel *wm = solver->working_model;
+    const double *lb = wm ? wm->lb : NULL;
+    const double *ub = wm ? wm->ub : NULL;
 
     for (int k = 0; k < num_int; k++) {
         int j = int_vars[k];
+        if (lb && ub && ub[j] - lb[j] <= RALPH_INT_TOL) continue;
         double val = solution[j];
         /* Use subtraction from truncated value - faster than floor() on some systems */
         double frac = val - (double)(long)val;
@@ -537,9 +568,13 @@ static int select_pseudo_cost(MIPSolver *solver, const double *solution) {
     const double * restrict pc_down = solver->pseudo_cost_down;
     const double * restrict pc_up = solver->pseudo_cost_up;
     const int num_int = solver->num_integers;
+    const LPModel *wm = solver->working_model;
+    const double *lb = wm ? wm->lb : NULL;
+    const double *ub = wm ? wm->ub : NULL;
 
     for (int k = 0; k < num_int; k++) {
         int j = int_vars[k];
+        if (lb && ub && ub[j] - lb[j] <= RALPH_INT_TOL) continue;
         double val = solution[j];
         double frac = val - (double)(long)val;
         if (frac < 0.0) frac += 1.0;
@@ -567,133 +602,170 @@ static int select_pseudo_cost(MIPSolver *solver, const double *solution) {
     return best_var;
 }
 
-/* Strong branching - solve LP relaxations to evaluate branching choices
- *
- * IMPORTANT: dual_simplex_solve can fall back to simplex_solve, which may
- * free and recreate the tableau. We track if the tableau pointer changes
- * and abort restoration if it does (saved basis is incompatible).
+/* Strong branching - solve LP relaxations to evaluate branching choices.
+ * Uses the MIP/LP adapter so probing/recovery flows through one LP-state API.
  */
 int strong_branch(MIPSolver *solver, int var, double val,
                   double *down_obj, double *up_obj, int max_iter) {
+    int recovered = 0;
+
+    *down_obj = RALPH_INFINITY;
+    *up_obj = RALPH_INFINITY;
+
+    if (!solver || !solver->working_model || !solver->lp_solver || !solver->lp_solver->tableau) {
+        return -1;
+    }
+
     SimplexSolver *lp = solver->lp_solver;
-    if (!lp || !lp->tableau) {
-        *down_obj = RALPH_INFINITY;
-        *up_obj = RALPH_INFINITY;
-        return -1;
-    }
     SimplexTableau *tab = lp->tableau;
-    SimplexTableau *original_tab = tab;  /* Track if tableau gets replaced */
+    int num_struct = solver->working_model->num_vars;
+    if (var < 0 || var >= num_struct || num_struct <= 0) return -1;
+    if (!tab->lb_ext || !tab->ub_ext || !tab->basis || !tab->var_status) return -1;
+    solver->strong_branch_probes++;
 
-    if (!tab->lb_ext || !tab->ub_ext || !tab->basis || !tab->var_status || !tab->basis_pos) {
-        *down_obj = RALPH_INFINITY;
-        *up_obj = RALPH_INFINITY;
-        return -1;
-    }
-
-    double orig_lb = tab->lb_ext[var];
-    double orig_ub = tab->ub_ext[var];
-    int save_max_iter = lp->max_iterations;
-    lp->max_iterations = max_iter;
-
-    /* Save original basis for restoration */
     int m = tab->m;
     int n = tab->n;
-    int *save_basis = (int*)calloc(m, sizeof(int));
-    int *save_var_status = (int*)calloc(n, sizeof(int));
-    if (!save_basis || !save_var_status) {
+    int *save_basis = (int*)calloc((size_t)m, sizeof(int));
+    VarStatus *save_var_status = (VarStatus*)calloc((size_t)n, sizeof(VarStatus));
+    double *probe_lb = (double*)calloc((size_t)num_struct, sizeof(double));
+    double *probe_ub = (double*)calloc((size_t)num_struct, sizeof(double));
+    if (!save_basis || !save_var_status || !probe_lb || !probe_ub) {
         free(save_basis);
         free(save_var_status);
-        *down_obj = RALPH_INFINITY;
-        *up_obj = RALPH_INFINITY;
-        lp->max_iterations = save_max_iter;
+        free(probe_lb);
+        free(probe_ub);
         return -1;
     }
-    memcpy(save_basis, tab->basis, m * sizeof(int));
-    memcpy(save_var_status, tab->var_status, n * sizeof(int));
+
+    memcpy(save_basis, tab->basis, (size_t)m * sizeof(int));
+    memcpy(save_var_status, tab->var_status, (size_t)n * sizeof(VarStatus));
+    memcpy(probe_lb, tab->lb_ext, (size_t)num_struct * sizeof(double));
+    memcpy(probe_ub, tab->ub_ext, (size_t)num_struct * sizeof(double));
+    double orig_lb = probe_lb[var];
+    double orig_ub = probe_ub[var];
 
     /* Try branching down */
-    tab->ub_ext[var] = floor(val);
-    tableau_compute_solution(tab);
-    dual_simplex_solve(lp);
+    probe_ub[var] = floor(val);
+    if (mip_lp_apply_structural_bounds(tab, num_struct, probe_lb, probe_ub) != 0 ||
+        mip_lp_recompute(tab) != 0 ||
+        mip_lp_dual_reopt(lp, max_iter, NULL) != 0 ||
+        !lp->tableau || !lp->solution || lp->tableau != tab) {
+        goto strong_fail;
+    }
     *down_obj = (lp->status == RALPH_STATUS_OPTIMAL) ? lp->obj_value : RALPH_INFINITY;
 
-    /* Check if tableau was replaced by dual_simplex falling back to primal */
-    if (lp->tableau != original_tab) {
-        /* Tableau was replaced - saved basis is incompatible, must abort */
-        free(save_basis);
-        free(save_var_status);
-        lp->max_iterations = save_max_iter;
-        *up_obj = RALPH_INFINITY;
-        return -1;
-    }
-
-    /* Restore basis before trying up branch */
-    memcpy(tab->basis, save_basis, m * sizeof(int));
-    memcpy(tab->var_status, save_var_status, n * sizeof(int));
-    for (int i = 0; i < m; i++) {
-        tab->basis_pos[tab->basis[i]] = i;
-    }
-    for (int j = 0; j < n; j++) {
-        if (tab->var_status[j] != RALPH_BASIC) {
-            tab->basis_pos[j] = -1;
-        }
+    if (mip_lp_restore_warm_basis(lp, m, n, save_basis, save_var_status) != 0 ||
+        !lp->tableau || !lp->solution || lp->tableau != tab) {
+        goto strong_fail;
     }
 
     /* Try branching up */
-    tab->ub_ext[var] = orig_ub;
-    tab->lb_ext[var] = ceil(val);
-    tableau_compute_solution(tab);
-    dual_simplex_solve(lp);
+    probe_ub[var] = orig_ub;
+    probe_lb[var] = ceil(val);
+    if (mip_lp_apply_structural_bounds(tab, num_struct, probe_lb, probe_ub) != 0 ||
+        mip_lp_recompute(tab) != 0 ||
+        mip_lp_dual_reopt(lp, max_iter, NULL) != 0 ||
+        !lp->tableau || !lp->solution || lp->tableau != tab) {
+        goto strong_fail;
+    }
     *up_obj = (lp->status == RALPH_STATUS_OPTIMAL) ? lp->obj_value : RALPH_INFINITY;
 
-    /* Check if tableau was replaced again */
-    if (lp->tableau != original_tab) {
-        /* Tableau was replaced - can't restore original state */
-        free(save_basis);
-        free(save_var_status);
-        lp->max_iterations = save_max_iter;
-        return -1;
-    }
-
     /* Restore original bounds and basis */
-    tab->lb_ext[var] = orig_lb;
-    tab->ub_ext[var] = orig_ub;
-    memcpy(tab->basis, save_basis, m * sizeof(int));
-    memcpy(tab->var_status, save_var_status, n * sizeof(int));
-    for (int i = 0; i < m; i++) {
-        tab->basis_pos[tab->basis[i]] = i;
+    probe_lb[var] = orig_lb;
+    probe_ub[var] = orig_ub;
+    if (mip_lp_apply_structural_bounds(tab, num_struct, probe_lb, probe_ub) != 0 ||
+        mip_lp_restore_warm_basis(lp, m, n, save_basis, save_var_status) != 0 ||
+        !lp->tableau || !lp->solution || lp->tableau != tab) {
+        goto strong_fail;
     }
-    for (int j = 0; j < n; j++) {
-        if (tab->var_status[j] != RALPH_BASIC) {
-            tab->basis_pos[j] = -1;
-        }
-    }
-
-    /* Recompute solution with restored basis */
-    if (tableau_refactorize(tab) == 0) {
-        tableau_compute_solution(tab);
-        tableau_compute_reduced_costs(tab);
-        lp->status = RALPH_STATUS_OPTIMAL;
-    }
+    lp->status = RALPH_STATUS_OPTIMAL;
 
     free(save_basis);
     free(save_var_status);
-    lp->max_iterations = save_max_iter;
-
+    free(probe_lb);
+    free(probe_ub);
     return 0;
+
+strong_fail:
+    /* Explicit LP-state recovery contract for probing:
+     * leave the caller with a usable (tableau+solution) LP state. */
+    solver->strong_branch_failures++;
+    if (lp->tableau) {
+        probe_lb[var] = orig_lb;
+        probe_ub[var] = orig_ub;
+        if (mip_lp_apply_structural_bounds(lp->tableau, num_struct, probe_lb, probe_ub) == 0 &&
+            mip_lp_restore_warm_basis(lp, m, n, save_basis, save_var_status) == 0 &&
+            lp->tableau && lp->solution) {
+            recovered = 1;
+        }
+    }
+    if (!recovered && mip_lp_recover_state(lp) == 0 && lp->tableau && lp->solution) {
+        recovered = 1;
+    }
+    if (recovered) solver->strong_branch_recoveries++;
+
+    free(save_basis);
+    free(save_var_status);
+    free(probe_lb);
+    free(probe_ub);
+    return -1;
 }
 
-/* Reliability branching - hybrid of pseudo-cost and strong branching */
-static int select_reliability_branch(MIPSolver *solver, const double *solution) {
+/* Adaptive reliability probing for deep no-incumbent trees.
+ * Early search keeps full probing quality; late no-incumbent search
+ * downshifts probe cost to avoid spending most wall time on probing. */
+static int reliability_strong_probe_limit(const MIPSolver *solver) {
+    if (!solver) return MIP_RELIABILITY_MAX_STRONG;
+    if (solver->has_incumbent) return MIP_RELIABILITY_MAX_STRONG;
+    if (solver->nodes_explored >= MIP_RELIABILITY_NO_INCUMBENT_DISABLE_AFTER) return 0;
+    if (solver->nodes_explored >= MIP_RELIABILITY_NO_INCUMBENT_TAPER_AFTER) return 1;
+    return MIP_RELIABILITY_MAX_STRONG;
+}
+
+static int reliability_probe_pivot_budget(const MIPSolver *solver) {
+    if (!solver) return MIP_RELIABILITY_PIVOT_BUDGET;
+    if (solver->has_incumbent) return MIP_RELIABILITY_PIVOT_BUDGET;
+    if (solver->nodes_explored >= MIP_RELIABILITY_NO_INCUMBENT_TAPER_AFTER) {
+        return MIP_RELIABILITY_NO_INCUMBENT_PIVOT_BUDGET;
+    }
+    return MIP_RELIABILITY_PIVOT_BUDGET;
+}
+
+/*
+ * Reliability branching core - hybrid of pseudo-cost and strong branching.
+ *
+ * If max_prio > INT_MIN and priorities are set, only considers variables
+ * at the maximum priority level (matching select_pseudo_cost_with_priority).
+ * Otherwise, considers all fractional integer variables.
+ */
+static int select_reliability_branch_impl(MIPSolver *solver, const double *solution,
+                                           int use_priorities, int max_prio) {
     int best_var = -1;
     double best_score = -1.0;
-    int reliability_threshold = 8;  /* Strong branch until this many observations */
-    int max_strong = 5;             /* Max strong branching evaluations per node */
-
     int strong_count = 0;
+    int strong_limit = reliability_strong_probe_limit(solver);
+    int strong_pivot_budget = reliability_probe_pivot_budget(solver);
+    int strong_failed = 0;  /* Stop strong branching if LP state corrupted */
 
-    for (int k = 0; k < solver->num_integers; k++) {
-        int j = solver->integer_vars[k];
+    const int * restrict int_vars = solver->integer_vars;
+    const int * restrict prios = solver->branch_priorities;
+    const int num_int = solver->num_integers;
+    const LPModel *wm = solver->working_model;
+    const double *lb = wm ? wm->lb : NULL;
+    const double *ub = wm ? wm->ub : NULL;
+
+    for (int k = 0; k < num_int; k++) {
+        if (solver->lp_solver && solver->lp_solver->solution) {
+            solution = solver->lp_solver->solution;
+        }
+        if (!solution) break;
+
+        int j = int_vars[k];
+        if (lb && ub && ub[j] - lb[j] <= RALPH_INT_TOL) continue;
+
+        /* Priority filter: skip if not at max priority */
+        if (use_priorities && prios && prios[j] < max_prio) continue;
+
         double val = solution[j];
         double frac = val - floor(val);
 
@@ -702,25 +774,40 @@ static int select_reliability_branch(MIPSolver *solver, const double *solution) 
         double down_est, up_est;
 
         /* Check if we need strong branching */
-        int need_strong = (solver->pseudo_count_down[j] < reliability_threshold ||
-                          solver->pseudo_count_up[j] < reliability_threshold);
+        int need_strong = !strong_failed &&
+                          (solver->pseudo_count_down[j] < MIP_RELIABILITY_THRESHOLD ||
+                           solver->pseudo_count_up[j] < MIP_RELIABILITY_THRESHOLD);
 
-        if (need_strong && strong_count < max_strong) {
+        if (need_strong && strong_limit > 0 &&
+            strong_count < strong_limit &&
+            solver->lp_solver && solver->lp_solver->tableau) {
             double down_obj, up_obj;
-            strong_branch(solver, j, val, &down_obj, &up_obj, 100);
+            int sb_result = strong_branch(solver, j, val, &down_obj, &up_obj,
+                                          strong_pivot_budget);
 
-            /* Update pseudo-costs */
-            double parent_obj = solver->lp_solver->obj_value;
-            if (down_obj < RALPH_INFINITY/2) {
-                update_pseudo_costs(solver, j, val, parent_obj, down_obj, BRANCH_DOWN);
+            /* Re-read solution pointer: strong_branch() may recover LP state. */
+            if (solver->lp_solver) {
+                solution = solver->lp_solver->solution;
             }
-            if (up_obj < RALPH_INFINITY/2) {
-                update_pseudo_costs(solver, j, val, parent_obj, up_obj, BRANCH_UP);
+            if (!solution) break;  /* LP state lost, recovery handled below */
+
+            if (sb_result == 0) {
+                /* Update pseudo-costs */
+                double parent_obj = solver->lp_solver->obj_value;
+                if (down_obj < RALPH_INFINITY/2) {
+                    update_pseudo_costs(solver, j, val, parent_obj, down_obj, BRANCH_DOWN);
+                }
+                if (up_obj < RALPH_INFINITY/2) {
+                    update_pseudo_costs(solver, j, val, parent_obj, up_obj, BRANCH_UP);
+                }
+                strong_count++;
+            } else {
+                /* Strong branching failed (tableau replaced) - stop probing */
+                strong_failed = 1;
             }
 
             down_est = frac * solver->pseudo_cost_down[j];
             up_est = (1.0 - frac) * solver->pseudo_cost_up[j];
-            strong_count++;
         } else {
             down_est = frac * solver->pseudo_cost_down[j];
             up_est = (1.0 - frac) * solver->pseudo_cost_up[j];
@@ -734,24 +821,209 @@ static int select_reliability_branch(MIPSolver *solver, const double *solution) 
         }
     }
 
+    /* If strong branching corrupted the LP state, re-solve to restore it.
+     * This ensures the solution array is valid for compute_branch_children. */
+    if (strong_failed && solver->lp_solver) {
+        if (!solver->lp_solver->solution || !solver->lp_solver->tableau)
+            (void)mip_lp_recover_state(solver->lp_solver);
+        /* Refresh solution pointer after recovery */
+        solution = solver->lp_solver->solution;
+    }
+
+    if (best_var < 0 && solution) {
+        if (use_priorities) {
+            best_var = select_most_infeasible_with_priority(solver, solution, max_prio);
+        } else {
+            best_var = select_most_infeasible(solver, solution);
+        }
+    }
+
+    return best_var;
+}
+
+/* Reliability branching without priority filtering */
+static int select_reliability_branch(MIPSolver *solver, const double *solution) {
+    return select_reliability_branch_impl(solver, solution, 0, 0);
+}
+
+/* Reliability branching with priority filtering */
+static int select_reliability_branch_with_priority(MIPSolver *solver, const double *solution,
+                                                     int max_prio) {
+    return select_reliability_branch_impl(solver, solution, 1, max_prio);
+}
+
+/*
+ * Find the maximum priority among fractional integer variables.
+ * Returns the max priority, or 0 if no fractional variables exist.
+ */
+static int find_max_priority(MIPSolver *solver, const double *solution) {
+    if (!solver->branch_priorities) return 0;  /* All equal priority */
+
+    int max_prio = INT_MIN;
+    const int * restrict int_vars = solver->integer_vars;
+    const int num_int = solver->num_integers;
+    const int * restrict prios = solver->branch_priorities;
+    const int num_vars = solver->original_model->num_vars;
+    const LPModel *wm = solver->working_model;
+    const double *lb = wm ? wm->lb : NULL;
+    const double *ub = wm ? wm->ub : NULL;
+
+    for (int k = 0; k < num_int; k++) {
+        int j = int_vars[k];
+        if (j < 0 || j >= num_vars) continue;
+        if (lb && ub && ub[j] - lb[j] <= RALPH_INT_TOL) continue;
+        double val = solution[j];
+        double frac = val - (double)(long)val;
+        if (frac < 0.0) frac += 1.0;
+
+        if (frac > RALPH_INT_TOL && frac < 1.0 - RALPH_INT_TOL) {
+            if (prios[j] > max_prio) {
+                max_prio = prios[j];
+            }
+        }
+    }
+    return (max_prio == INT_MIN) ? 0 : max_prio;
+}
+
+/*
+ * Most infeasible selection with priority filtering.
+ * Only considers variables at the maximum priority level.
+ */
+static int select_most_infeasible_with_priority(MIPSolver *solver, const double *solution, int max_prio) {
+    int best_var = -1;
+    double best_infeas = RALPH_INT_TOL;
+
+    const int * restrict int_vars = solver->integer_vars;
+    const int num_int = solver->num_integers;
+    const int * restrict prios = solver->branch_priorities;
+    const LPModel *wm = solver->working_model;
+    const double *lb = wm ? wm->lb : NULL;
+    const double *ub = wm ? wm->ub : NULL;
+
+    for (int k = 0; k < num_int; k++) {
+        int j = int_vars[k];
+
+        /* Skip if not at max priority */
+        if (prios && prios[j] < max_prio) continue;
+        if (lb && ub && ub[j] - lb[j] <= RALPH_INT_TOL) continue;
+
+        double val = solution[j];
+        double frac = val - (double)(long)val;
+        if (frac < 0.0) frac += 1.0;
+        double infeas = (frac <= 0.5) ? frac : (1.0 - frac);
+
+        if (infeas > best_infeas) {
+            best_infeas = infeas;
+            best_var = j;
+        }
+    }
+
+    return best_var;
+}
+
+/*
+ * Pseudo-cost selection with priority filtering.
+ */
+static int select_pseudo_cost_with_priority(MIPSolver *solver, const double *solution, int max_prio) {
+    int best_var = -1;
+    double best_score = -1.0;
+
+    const int * restrict int_vars = solver->integer_vars;
+    const double * restrict pc_down = solver->pseudo_cost_down;
+    const double * restrict pc_up = solver->pseudo_cost_up;
+    const int num_int = solver->num_integers;
+    const int * restrict prios = solver->branch_priorities;
+    const int num_vars = solver->original_model->num_vars;
+    const LPModel *wm = solver->working_model;
+    const double *lb = wm ? wm->lb : NULL;
+    const double *ub = wm ? wm->ub : NULL;
+
+    for (int k = 0; k < num_int; k++) {
+        int j = int_vars[k];
+        if (j < 0 || j >= num_vars) continue;
+        if (lb && ub && ub[j] - lb[j] <= RALPH_INT_TOL) continue;
+
+        /* Skip if not at max priority */
+        if (prios && prios[j] < max_prio) continue;
+
+        double val = solution[j];
+        double frac = val - (double)(long)val;
+        if (frac < 0.0) frac += 1.0;
+
+        if (frac < RALPH_INT_TOL || frac > 1.0 - RALPH_INT_TOL) continue;
+
+        double down_est = frac * pc_down[j];
+        double up_est = (1.0 - frac) * pc_up[j];
+        double score = fmax(down_est, RALPH_ZERO_TOL) * fmax(up_est, RALPH_ZERO_TOL);
+
+        if (score > best_score) {
+            best_score = score;
+            best_var = j;
+        }
+    }
+
     if (best_var < 0) {
-        best_var = select_most_infeasible(solver, solution);
+        best_var = select_most_infeasible_with_priority(solver, solution, max_prio);
     }
 
     return best_var;
 }
 
 int select_branch_variable(MIPSolver *solver, const double *solution, int *branch_var) {
+    /* Try user-provided branching callback first */
+    if (solver->has_branch_callback && solver->branch_callback.select_branch_var) {
+        LPModel *model = solver->original_model;
+        int user_var = solver->branch_callback.select_branch_var(
+            solver->branch_callback.user_data,
+            solution,
+            model->num_vars,
+            solver->is_integer,
+            model->lb,
+            model->ub
+        );
+
+        /* If user returns valid variable index, use it */
+        if (user_var >= 0 && user_var < model->num_vars) {
+            LPModel *wm = solver->working_model ? solver->working_model : model;
+            /* Verify it's actually fractional and branchable at current node */
+            if (solver->is_integer[user_var] &&
+                wm->ub[user_var] - wm->lb[user_var] > RALPH_INT_TOL) {
+                double val = solution[user_var];
+                double frac = val - floor(val);
+                if (frac > RALPH_INT_TOL && frac < 1.0 - RALPH_INT_TOL) {
+                    *branch_var = user_var;
+                    return 0;
+                }
+            }
+        }
+        /* If user returns -1 or invalid variable, fall through to default */
+    }
+
+    /* Find max priority among fractional variables */
+    int max_prio = find_max_priority(solver, solution);
+
     switch (solver->var_select) {
         case VAR_SELECT_MAX_INFEAS:
-            *branch_var = select_most_infeasible(solver, solution);
+            if (solver->branch_priorities) {
+                *branch_var = select_most_infeasible_with_priority(solver, solution, max_prio);
+            } else {
+                *branch_var = select_most_infeasible(solver, solution);
+            }
             break;
         case VAR_SELECT_PSEUDO_COST:
-            *branch_var = select_pseudo_cost(solver, solution);
+            if (solver->branch_priorities) {
+                *branch_var = select_pseudo_cost_with_priority(solver, solution, max_prio);
+            } else {
+                *branch_var = select_pseudo_cost(solver, solution);
+            }
             break;
         case VAR_SELECT_STRONG_BRANCH:
         case VAR_SELECT_RELIABILITY:
-            *branch_var = select_reliability_branch(solver, solution);
+            if (solver->branch_priorities) {
+                *branch_var = select_reliability_branch_with_priority(solver, solution, max_prio);
+            } else {
+                *branch_var = select_reliability_branch(solver, solution);
+            }
             break;
         case VAR_SELECT_SCP: {
             /* SCP constraint branching */
@@ -818,30 +1090,68 @@ double estimate_branch_obj(MIPSolver *solver, int var, double val, BranchDir dir
 void compute_branch_children(MIPSolver *solver, BBNode *parent, int branch_var,
                             BBNode **child_down, BBNode **child_up) {
     int num_vars = solver->original_model->num_vars;
+    if (!solver->lp_solver || !solver->lp_solver->solution) {
+        *child_down = NULL;
+        *child_up = NULL;
+        return;
+    }
+
+    if (branch_var < 0 || branch_var >= num_vars) {
+        *child_down = NULL;
+        *child_up = NULL;
+        return;
+    }
+
     double val = solver->lp_solver->solution[branch_var];
+    double down_ub = floor(val);
+    double up_lb = ceil(val);
+
+    int can_down = (down_ub < parent->ub[branch_var] - RALPH_INT_TOL) &&
+                   (down_ub >= parent->lb[branch_var] - RALPH_INT_TOL);
+    int can_up = (up_lb > parent->lb[branch_var] + RALPH_INT_TOL) &&
+                 (up_lb <= parent->ub[branch_var] + RALPH_INT_TOL);
+
+    *child_down = NULL;
+    *child_up = NULL;
+    if (!can_down && !can_up) return;
 
     /* Create down child (x <= floor(val)) using pool if available */
-    *child_down = bb_node_pool_copy(solver->node_pool, parent, num_vars);
-    if (*child_down) {
+    if (can_down) *child_down = bb_node_pool_copy(solver->node_pool, parent, num_vars);
+    if (can_down && *child_down) {
         (*child_down)->depth = parent->depth + 1;
         (*child_down)->parent_id = parent->id;
         (*child_down)->branch_var = branch_var;
         (*child_down)->branch_val = val;
         (*child_down)->branch_dir = BRANCH_DOWN;
-        (*child_down)->ub[branch_var] = floor(val);
+        (*child_down)->ub[branch_var] = down_ub;
         (*child_down)->estimate = estimate_branch_obj(solver, branch_var, val, BRANCH_DOWN);
     }
 
     /* Create up child (x >= ceil(val)) using pool if available */
-    *child_up = bb_node_pool_copy(solver->node_pool, parent, num_vars);
-    if (*child_up) {
+    if (can_up) *child_up = bb_node_pool_copy(solver->node_pool, parent, num_vars);
+    if (can_up && *child_up) {
         (*child_up)->depth = parent->depth + 1;
         (*child_up)->parent_id = parent->id;
         (*child_up)->branch_var = branch_var;
         (*child_up)->branch_val = val;
         (*child_up)->branch_dir = BRANCH_UP;
-        (*child_up)->lb[branch_var] = ceil(val);
+        (*child_up)->lb[branch_var] = up_lb;
         (*child_up)->estimate = estimate_branch_obj(solver, branch_var, val, BRANCH_UP);
+    }
+
+    /* Apply preferred branch direction by swapping if needed.
+     * The first child (child_down in original output slot) is explored first
+     * in depth-first search. By swapping, we control which direction is tried first.
+     */
+    if (solver->branch_directions &&
+        branch_var >= 0 && branch_var < solver->original_model->num_vars) {
+        int pref = solver->branch_directions[branch_var];
+        if (pref > 0) {  /* RALPH_BRANCH_UP: prefer up first */
+            BBNode *tmp = *child_down;
+            *child_down = *child_up;
+            *child_up = tmp;
+        }
+        /* pref < 0 (RALPH_BRANCH_DOWN) or pref == 0 (AUTO): keep default order */
     }
 }
 
