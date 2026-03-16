@@ -587,6 +587,65 @@ static void sn_dgemm_update_scattered_rows_cols(int panel_rows, int block_size, 
 }
 
 /*
+ * Exact compact rank-1 update for width-1 supernodes with a nontrivial active
+ * trailing-column set. This preserves the generic scattered row/column update
+ * traversal order while removing the dynamic block-size loop.
+ */
+static void sn_dgemm_update_scattered_rows_cols_width1_cols5p(int panel_rows, int update_cols,
+                                                              const double *A,
+                                                              const double *B,
+                                                              double *A_struct, int k,
+                                                              const int *row_perm,
+                                                              const int *row_idx, int row_base,
+                                                              const int *col_idx, int col_base) {
+    int i;
+    for (i = 0; i + 3 < panel_rows; i += 4) {
+        double *c0 = A_struct + (size_t)row_perm[row_base + row_idx[i + 0]] * (size_t)k + col_base;
+        double *c1 = A_struct + (size_t)row_perm[row_base + row_idx[i + 1]] * (size_t)k + col_base;
+        double *c2 = A_struct + (size_t)row_perm[row_base + row_idx[i + 2]] * (size_t)k + col_base;
+        double *c3 = A_struct + (size_t)row_perm[row_base + row_idx[i + 3]] * (size_t)k + col_base;
+        double a0 = A[i + 0];
+        double a1 = A[i + 1];
+        double a2 = A[i + 2];
+        double a3 = A[i + 3];
+        int j;
+
+        for (j = 0; j + 3 < update_cols; j += 4) {
+            int cj0 = col_idx[j + 0];
+            int cj1 = col_idx[j + 1];
+            int cj2 = col_idx[j + 2];
+            int cj3 = col_idx[j + 3];
+            double b0 = B[j + 0];
+            double b1 = B[j + 1];
+            double b2 = B[j + 2];
+            double b3 = B[j + 3];
+
+            c0[cj0] -= a0 * b0; c0[cj1] -= a0 * b1; c0[cj2] -= a0 * b2; c0[cj3] -= a0 * b3;
+            c1[cj0] -= a1 * b0; c1[cj1] -= a1 * b1; c1[cj2] -= a1 * b2; c1[cj3] -= a1 * b3;
+            c2[cj0] -= a2 * b0; c2[cj1] -= a2 * b1; c2[cj2] -= a2 * b2; c2[cj3] -= a2 * b3;
+            c3[cj0] -= a3 * b0; c3[cj1] -= a3 * b1; c3[cj2] -= a3 * b2; c3[cj3] -= a3 * b3;
+        }
+
+        for (; j < update_cols; j++) {
+            int cj = col_idx[j];
+            double b = B[j];
+            c0[cj] -= a0 * b;
+            c1[cj] -= a1 * b;
+            c2[cj] -= a2 * b;
+            c3[cj] -= a3 * b;
+        }
+    }
+
+    for (; i < panel_rows; i++) {
+        double *c = A_struct + (size_t)row_perm[row_base + row_idx[i]] * (size_t)k + col_base;
+        double a = A[i];
+        for (int j = 0; j < update_cols; j++) {
+            c[col_idx[j]] -= a * B[j];
+        }
+    }
+}
+
+/*
  * TRSM: Solve L * X = B in-place (B overwritten with X).
  *
  * L is block_size x block_size unit lower triangular (row-major, ldl stride).
@@ -1223,9 +1282,12 @@ int sn_factorize(double *A_struct, int m, int k,
                     if (sn_size == 1) {
                         stats->size1_update_apply_calls++;
                         stats->size1_update_apply_ms += full_update_ms;
+                        stats->size1_update_full_calls++;
+                        stats->size1_update_full_ms += full_update_ms;
                     }
                 } else if (stats && sn_size == 1) {
                     stats->size1_update_apply_calls++;
+                    stats->size1_update_full_calls++;
                 }
             } else {
                 double t_compact_update_ms = 0.0;
@@ -1249,18 +1311,44 @@ int sn_factorize(double *A_struct, int m, int k,
                     }
                     if (sample_phase_timing) t_compact_update_ms = lp_telemetry_timer_start();
                 }
-                sn_dgemm_update_scattered_rows_cols(active_row_count, sn_size, active_col_count,
-                                                    L_block, sn_size,
-                                                    U_block, active_col_count,
-                                                    A_struct, k, row_perm,
-                                                    active_rows, sn_start + sn_size,
-                                                    active_cols, sn_start + sn_size);
+                if (sn_size == 1 && active_col_count >= 5) {
+                    sn_dgemm_update_scattered_rows_cols_width1_cols5p(
+                        active_row_count, active_col_count,
+                        L_block,
+                        U_block,
+                        A_struct, k, row_perm,
+                        active_rows, sn_start + sn_size,
+                        active_cols, sn_start + sn_size);
+                } else {
+                    sn_dgemm_update_scattered_rows_cols(active_row_count, sn_size, active_col_count,
+                                                        L_block, sn_size,
+                                                        U_block, active_col_count,
+                                                        A_struct, k, row_perm,
+                                                        active_rows, sn_start + sn_size,
+                                                        active_cols, sn_start + sn_size);
+                }
                 if (sample_phase_timing) {
                     double compact_update_ms = lp_telemetry_timer_elapsed_ms(t_compact_update_ms);
                     stats->compact_update_ms += compact_update_ms;
                     if (sn_size == 1) {
                         stats->size1_update_apply_calls++;
                         stats->size1_update_apply_ms += compact_update_ms;
+                        if (active_col_count == 1) {
+                            stats->size1_update_cols1_calls++;
+                            stats->size1_update_cols1_ms += compact_update_ms;
+                        } else if (active_col_count == 2) {
+                            stats->size1_update_cols2_calls++;
+                            stats->size1_update_cols2_ms += compact_update_ms;
+                        } else if (active_col_count == 3) {
+                            stats->size1_update_cols3_calls++;
+                            stats->size1_update_cols3_ms += compact_update_ms;
+                        } else if (active_col_count == 4) {
+                            stats->size1_update_cols4_calls++;
+                            stats->size1_update_cols4_ms += compact_update_ms;
+                        } else {
+                            stats->size1_update_cols5p_calls++;
+                            stats->size1_update_cols5p_ms += compact_update_ms;
+                        }
                     }
                     if (active_col_count == 1) {
                         stats->compact_cols1_ms += compact_update_ms;
@@ -1275,6 +1363,17 @@ int sn_factorize(double *A_struct, int m, int k,
                     }
                 } else if (stats && sn_size == 1) {
                     stats->size1_update_apply_calls++;
+                    if (active_col_count == 1) {
+                        stats->size1_update_cols1_calls++;
+                    } else if (active_col_count == 2) {
+                        stats->size1_update_cols2_calls++;
+                    } else if (active_col_count == 3) {
+                        stats->size1_update_cols3_calls++;
+                    } else if (active_col_count == 4) {
+                        stats->size1_update_cols4_calls++;
+                    } else {
+                        stats->size1_update_cols5p_calls++;
+                    }
                 }
             }
 

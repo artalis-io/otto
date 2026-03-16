@@ -838,6 +838,21 @@ typedef struct {
     double lu_sn_size1_update_scan_ms;
     uint64_t lu_sn_size1_update_apply_calls;
     double lu_sn_size1_update_apply_ms;
+    double lu_sn_size1_update_row_gather_ms;
+    double lu_sn_size1_update_col_indirection_ms;
+    double lu_sn_size1_update_outer_product_ms;
+    uint64_t lu_sn_size1_update_full_calls;
+    double lu_sn_size1_update_full_ms;
+    uint64_t lu_sn_size1_update_cols1_calls;
+    double lu_sn_size1_update_cols1_ms;
+    uint64_t lu_sn_size1_update_cols2_calls;
+    double lu_sn_size1_update_cols2_ms;
+    uint64_t lu_sn_size1_update_cols3_calls;
+    double lu_sn_size1_update_cols3_ms;
+    uint64_t lu_sn_size1_update_cols4_calls;
+    double lu_sn_size1_update_cols4_ms;
+    uint64_t lu_sn_size1_update_cols5p_calls;
+    double lu_sn_size1_update_cols5p_ms;
     double lu_sn_u_emit_ms;
     double lu_sn_active_set_ms;
     double lu_sn_pack_blocks_ms;
@@ -2335,6 +2350,36 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                     lu_tel.perf_sn_size1_update_apply_calls;
                 result.lu_sn_size1_update_apply_ms =
                     lu_tel.perf_sn_size1_update_apply_ms;
+                result.lu_sn_size1_update_row_gather_ms =
+                    lu_tel.perf_sn_size1_update_row_gather_ms;
+                result.lu_sn_size1_update_col_indirection_ms =
+                    lu_tel.perf_sn_size1_update_col_indirection_ms;
+                result.lu_sn_size1_update_outer_product_ms =
+                    lu_tel.perf_sn_size1_update_outer_product_ms;
+                result.lu_sn_size1_update_full_calls =
+                    lu_tel.perf_sn_size1_update_full_calls;
+                result.lu_sn_size1_update_full_ms =
+                    lu_tel.perf_sn_size1_update_full_ms;
+                result.lu_sn_size1_update_cols1_calls =
+                    lu_tel.perf_sn_size1_update_cols1_calls;
+                result.lu_sn_size1_update_cols1_ms =
+                    lu_tel.perf_sn_size1_update_cols1_ms;
+                result.lu_sn_size1_update_cols2_calls =
+                    lu_tel.perf_sn_size1_update_cols2_calls;
+                result.lu_sn_size1_update_cols2_ms =
+                    lu_tel.perf_sn_size1_update_cols2_ms;
+                result.lu_sn_size1_update_cols3_calls =
+                    lu_tel.perf_sn_size1_update_cols3_calls;
+                result.lu_sn_size1_update_cols3_ms =
+                    lu_tel.perf_sn_size1_update_cols3_ms;
+                result.lu_sn_size1_update_cols4_calls =
+                    lu_tel.perf_sn_size1_update_cols4_calls;
+                result.lu_sn_size1_update_cols4_ms =
+                    lu_tel.perf_sn_size1_update_cols4_ms;
+                result.lu_sn_size1_update_cols5p_calls =
+                    lu_tel.perf_sn_size1_update_cols5p_calls;
+                result.lu_sn_size1_update_cols5p_ms =
+                    lu_tel.perf_sn_size1_update_cols5p_ms;
                 result.lu_sn_u_emit_ms =
                     lu_tel.perf_sn_u_emit_ms;
                 result.lu_sn_active_set_ms =
@@ -4504,6 +4549,36 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_sn_size1_update_apply_calls);
     fprintf(out, "    \"sn_size1_update_apply_ms\": %.6f,\n",
             ralph->lu_sn_size1_update_apply_ms);
+    fprintf(out, "    \"sn_size1_update_row_gather_ms\": %.6f,\n",
+            ralph->lu_sn_size1_update_row_gather_ms);
+    fprintf(out, "    \"sn_size1_update_col_indirection_ms\": %.6f,\n",
+            ralph->lu_sn_size1_update_col_indirection_ms);
+    fprintf(out, "    \"sn_size1_update_outer_product_ms\": %.6f,\n",
+            ralph->lu_sn_size1_update_outer_product_ms);
+    fprintf(out, "    \"sn_size1_update_full_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_size1_update_full_calls);
+    fprintf(out, "    \"sn_size1_update_full_ms\": %.6f,\n",
+            ralph->lu_sn_size1_update_full_ms);
+    fprintf(out, "    \"sn_size1_update_cols1_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_size1_update_cols1_calls);
+    fprintf(out, "    \"sn_size1_update_cols1_ms\": %.6f,\n",
+            ralph->lu_sn_size1_update_cols1_ms);
+    fprintf(out, "    \"sn_size1_update_cols2_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_size1_update_cols2_calls);
+    fprintf(out, "    \"sn_size1_update_cols2_ms\": %.6f,\n",
+            ralph->lu_sn_size1_update_cols2_ms);
+    fprintf(out, "    \"sn_size1_update_cols3_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_size1_update_cols3_calls);
+    fprintf(out, "    \"sn_size1_update_cols3_ms\": %.6f,\n",
+            ralph->lu_sn_size1_update_cols3_ms);
+    fprintf(out, "    \"sn_size1_update_cols4_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_size1_update_cols4_calls);
+    fprintf(out, "    \"sn_size1_update_cols4_ms\": %.6f,\n",
+            ralph->lu_sn_size1_update_cols4_ms);
+    fprintf(out, "    \"sn_size1_update_cols5p_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_size1_update_cols5p_calls);
+    fprintf(out, "    \"sn_size1_update_cols5p_ms\": %.6f,\n",
+            ralph->lu_sn_size1_update_cols5p_ms);
     fprintf(out, "    \"sn_panel_swap_scatter_ms\": %.6f,\n",
             ralph->lu_sn_panel_swap_scatter_ms);
     fprintf(out, "    \"sn_panel_eliminate_ms\": %.6f,\n",
