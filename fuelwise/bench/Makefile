@@ -20,7 +20,7 @@ endif
 LDFLAGS = -L.. -L../../shared -L../../ralph -lfuelwise -lralph -lshared -lm -lpthread $(OMP_LDFLAGS)
 
 # Source files
-SRCS = main.c fw_bench.c fw_gen.c fw_validate.c
+SRCS = main.c fw_bench.c fw_gen.c fw_validate.c fw_glpk.c
 OBJS = $(SRCS:.c=.o)
 
 # Target binary
@@ -28,7 +28,7 @@ TARGET = fuelwise-bench
 
 # Validator test binary
 TEST_VALIDATOR = test_validator
-TEST_VALIDATOR_OBJS = test_validator.o fw_bench.o fw_gen.o fw_validate.o
+TEST_VALIDATOR_OBJS = test_validator.o fw_bench.o fw_gen.o fw_validate.o fw_glpk.o
 
 .PHONY: all clean test quick validator-test
 
@@ -47,6 +47,7 @@ $(TEST_VALIDATOR): $(TEST_VALIDATOR_OBJS) ../libfuelwise.a ../../shared/libshare
 fw_bench.o: fw_bench.c fw_bench.h
 fw_gen.o: fw_gen.c fw_bench.h
 fw_validate.o: fw_validate.c fw_bench.h
+fw_glpk.o: fw_glpk.c fw_bench.h
 main.o: main.c fw_bench.h
 
 # Ensure libraries are built

@@ -18,6 +18,29 @@ extern "C" {
 #define RALPH_DEFAULT_ABS_MIP_GAP 1e-6  /* 1e-6 absolute gap */
 #define RALPH_DEFAULT_CUTOFF RALPH_INFINITY
 
+/* Reliability branching parameters */
+#define MIP_RELIABILITY_THRESHOLD   8    /* Strong-branch until this many observations */
+#define MIP_RELIABILITY_MAX_STRONG  5    /* Max strong-branch evaluations per node */
+#define MIP_RELIABILITY_PIVOT_BUDGET 100 /* Dual pivots per strong-branch probe */
+#define MIP_RELIABILITY_NO_INCUMBENT_TAPER_AFTER 1024   /* Explored nodes before pre-incumbent taper */
+#define MIP_RELIABILITY_NO_INCUMBENT_DISABLE_AFTER 4096 /* Explored nodes before pre-incumbent strong-branch off */
+#define MIP_RELIABILITY_NO_INCUMBENT_PIVOT_BUDGET 48    /* Reduced pivot budget in tapered pre-incumbent mode */
+
+/* Cut quality filter parameters */
+#define MIP_CUT_MIN_VIOLATION  1e-4   /* Minimum violation to apply a cut */
+#define MIP_CUT_MAX_DYNAMISM   1e6    /* Max coefficient ratio max|a|/min|a| */
+#define MIP_CUT_PARALLEL_TOL   0.999  /* Cosine similarity threshold for parallel cuts */
+
+/* Reduced-cost fixing parameters */
+#define MIP_RC_FIX_MIN_GAP     1e-4   /* Don't fix when gap is numerically tiny */
+
+/* RINS (Relaxation Induced Neighborhood Search) parameters */
+#define MIP_RINS_INTERVAL       100   /* Nodes between RINS calls */
+#define MIP_RINS_INTERVAL_SMALL  50   /* For problems with < 50 integers */
+#define MIP_RINS_MAX_DIVE        30   /* Max dive depth in RINS */
+#define MIP_RINS_MIN_FREE_PCT   0.1   /* Skip if < 10% integers free */
+#define MIP_RINS_LP_ITER_LIMIT  200   /* LP iterations per RINS dive step */
+
 /* Node selection strategy */
 typedef enum {
     NODE_SELECT_BEST_FIRST = 0,
@@ -120,6 +143,7 @@ typedef struct {
     BBNode **nodes;
     NodeSelectStrategy strategy;
     int obj_sense;      /* For comparison direction */
+    int has_incumbent;  /* For HYBRID: 0=depth-first phase, 1=best-first phase */
 } NodeQueue;
 
 /* MIP solver state */
@@ -139,6 +163,15 @@ typedef struct {
     double *best_solution;  /* Best integer solution found */
     int has_incumbent;
 
+    /* User-provided MIP incumbent start (full vector, original model space) */
+    double *mip_start;
+    int *mip_start_mask;     /* 1=specified by user, 0=imputed/default */
+    int mip_start_n;
+    int mip_start_nnz;
+    int mip_start_repair_mode; /* RalphMIPStartRepairMode */
+    int mip_start_attempted;
+    int mip_start_accepted;
+
     /* Node management */
     NodeQueue *node_queue;
     BBNodePool *node_pool;  /* Memory pool for node allocation */
@@ -157,6 +190,18 @@ typedef struct {
     int *pseudo_count_down;
     int *pseudo_count_up;
 
+    /* User-provided branching control */
+    int *branch_priorities;     /* Priority for each variable (higher = branch first) */
+    int *branch_directions;     /* Preferred direction: -1=down, 0=auto, 1=up */
+
+    /* User-provided cut callback */
+    RalphCutCallback cut_callback;
+    int has_cut_callback;
+
+    /* User-provided branching callback */
+    RalphBranchCallback branch_callback;
+    int has_branch_callback;
+
     /* Parameters */
     int max_nodes;
     double time_limit;
@@ -168,6 +213,10 @@ typedef struct {
     int max_cuts_per_round;
     int max_cut_rounds;
     int verbose;
+    int telemetry;          /* 1 = collect LP/LU telemetry in node relaxations */
+    int dual_bound_flip;    /* -1=default(on), 0=off, 1=on */
+    int dual_steepest_edge; /* -1=default(on), 0=off, 1=on */
+    int lu_supernode;       /* 0=off, 1=enable supernodal LU (T2.1) */
 
     /* Statistics */
     RalphStatus status;
@@ -180,6 +229,23 @@ typedef struct {
     MIPLAPSignature *lap_sig;    /* LAP signature for LP relaxations */
     int lap_nodes_solved;        /* Number of nodes solved with LAP */
     int simplex_nodes_solved;    /* Number of nodes solved with simplex */
+    int last_solved_node_id;     /* ID of last node whose LP was solved (for child detection) */
+    int node_basis_warm_attempts; /* Live node-basis warm restore attempts */
+    int node_basis_warm_applied;  /* Live node-basis warm restores applied */
+    int node_basis_warm_rejected; /* Live node-basis restores rejected/fallback */
+    int node_basis_staged;        /* Cold starts that staged node basis via LP warm API */
+    int node_basis_stage_cooldown; /* Nodes to skip staged warm-basis after repeated rejection */
+    int strong_branch_probes;      /* Strong-branch probe calls */
+    int strong_branch_failures;    /* Strong-branch probe calls that failed */
+    int strong_branch_recoveries;  /* Failed probes that recovered LP state */
+    int cut_recovery_attempts;     /* Root cut-loop LP recovery attempts */
+    int cut_recovery_success;      /* Root cut-loop recoveries that succeeded */
+    int cut_recovery_failures;     /* Root cut-loop recoveries that failed */
+
+    /* Reduced-cost fixing + RINS statistics */
+    int rc_fixings;              /* Total variables fixed by reduced-cost fixing */
+    int rins_calls;              /* Number of RINS heuristic invocations */
+    int rins_found;              /* Number of incumbents found by RINS */
 
     /* SCP-specific optimizations (for set covering/partitioning MIPs) */
     int use_scp_solver;          /* 1 if SCP structure detected and enabled */
@@ -192,6 +258,16 @@ typedef struct {
 MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity);
 void mip_free(MIPSolver *solver);
 int mip_solve(MIPSolver *solver);
+int mip_set_start(MIPSolver *solver, const double *x, int n);
+int mip_set_start_ex(MIPSolver *solver, const double *x, const int *mask,
+                     int n, int repair_mode);
+
+/* Recover root LP relaxation state from the original model.
+ * Contract:
+ * - Rebuilds working model from original model copy.
+ * - Recreates and resolves LP solver on rebuilt working model.
+ * - Returns 0 only if rebuilt root LP is OPTIMAL and LP state is usable. */
+int mip_recover_root_relaxation(MIPSolver *solver);
 
 /* Node management */
 NodeQueue* node_queue_create(int capacity, NodeSelectStrategy strategy, int obj_sense);
@@ -203,6 +279,7 @@ int node_queue_is_empty(const NodeQueue *queue);
 void node_queue_update_bound(NodeQueue *queue, double cutoff);
 void node_queue_update_bound_with_pool(NodeQueue *queue, double cutoff, BBNodePool *pool);
 double node_queue_best_bound(const NodeQueue *queue);
+void node_queue_set_incumbent_found(NodeQueue *queue);
 
 BBNode* bb_node_create(int num_vars);
 void bb_node_free(BBNode *node);

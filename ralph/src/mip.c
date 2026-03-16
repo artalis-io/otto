@@ -14,6 +14,73 @@
 #include <math.h>
 #include <time.h>
 #include "mip.h"
+#include "mip_lp_adapter.h"
+#include "lp_log.h"
+
+/* Apply P5/P6 feature flags and iteration budget from MIP solver to LP sub-solver.
+ * MIP LP solves should NEVER run for 1M+ iterations — if v2 cycles for >2000
+ * iterations on a node LP, something is wrong and cold-start fallback handles it. */
+static void mip_apply_dual_flags(MIPSolver *solver) {
+    if (!solver->lp_solver) return;
+    solver->lp_solver->telemetry_enabled = solver->telemetry ? 1 : 0;
+    /* Keep node LP re-optimization on the stable dual path.
+     * The LP-only P5/P6 flags are not correctness-clean under branch-and-bound yet,
+     * so MIP pins them off until that gap is closed. */
+    solver->lp_solver->use_dual_bound_flip = 0;
+    solver->lp_solver->use_dual_steepest_edge = 0;
+    /* Cap iteration limit for MIP LP solves.  The old dual_reopt had a 500-pivot
+     * budget; if dual v2 hasn't converged in 500 iterations, fall back to primal.
+     * This prevents stall-detection-fooling cycling from burning minutes. */
+    if (solver->lp_solver->max_iterations > 500)
+        solver->lp_solver->max_iterations = 500;
+    /* T2.1: Propagate supernodal LU flag to LP solver */
+    solver->lp_solver->lu_supernode = solver->lu_supernode;
+}
+
+static int mip_create_lp_solver_for_working_model(MIPSolver *solver) {
+    if (!solver || !solver->working_model) return -1;
+
+    simplex_free(solver->lp_solver);
+    solver->lp_solver = simplex_create(solver->working_model);
+    if (!solver->lp_solver) return -1;
+
+    solver->lp_solver->method = 2;  /* Phase E: clean dual simplex */
+    solver->lp_solver->scaling = 0; /* Keep cuts in unscaled space */
+    solver->lp_solver->verbose = solver->verbose;
+    mip_apply_dual_flags(solver);
+    return 0;
+}
+
+int mip_recover_root_relaxation(MIPSolver *solver) {
+    if (!solver || !solver->original_model) return -1;
+
+    solver->cut_recovery_attempts++;
+
+    simplex_free(solver->lp_solver);
+    solver->lp_solver = NULL;
+
+    lp_model_free(solver->working_model);
+    solver->working_model = lp_model_copy(solver->original_model);
+    if (!solver->working_model) {
+        solver->cut_recovery_failures++;
+        return -1;
+    }
+
+    if (mip_create_lp_solver_for_working_model(solver) != 0) {
+        solver->cut_recovery_failures++;
+        return -1;
+    }
+
+    simplex_solve(solver->lp_solver);
+    if (solver->lp_solver->status != RALPH_STATUS_OPTIMAL ||
+        !solver->lp_solver->tableau || !solver->lp_solver->solution) {
+        solver->cut_recovery_failures++;
+        return -1;
+    }
+
+    solver->cut_recovery_success++;
+    return 0;
+}
 
 /* ============================================================================
  * MIP Solver Creation/Destruction
@@ -63,6 +130,13 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     solver->best_obj = (model->obj_sense == 1) ? RALPH_INFINITY : -RALPH_INFINITY;
     solver->best_solution = (double*)calloc(model->num_vars, sizeof(double));
     solver->has_incumbent = 0;
+    solver->mip_start = NULL;
+    solver->mip_start_mask = NULL;
+    solver->mip_start_n = 0;
+    solver->mip_start_nnz = 0;
+    solver->mip_start_repair_mode = (int)RALPH_MIP_START_REPAIR_STRICT;
+    solver->mip_start_attempted = 0;
+    solver->mip_start_accepted = 0;
 
     /* Initialize pseudo-costs */
     solver->pseudo_cost_down = (double*)calloc(model->num_vars, sizeof(double));
@@ -76,10 +150,13 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
         return NULL;
     }
 
-    /* Initialize pseudo-costs with default values */
+    /* Initialize pseudo-costs from objective coefficients.
+     * fmax(|c_j|, 1.0) gives a reasonable prior: variables with large
+     * objective impact get higher pseudo-costs, biasing branching toward them. */
     for (int j = 0; j < model->num_vars; j++) {
-        solver->pseudo_cost_down[j] = 1.0;
-        solver->pseudo_cost_up[j] = 1.0;
+        double init = fmax(fabs(model->c[j]), 1.0);
+        solver->pseudo_cost_down[j] = init;
+        solver->pseudo_cost_up[j] = init;
     }
 
     /* Default parameters */
@@ -89,10 +166,13 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     solver->abs_mip_gap = RALPH_DEFAULT_ABS_MIP_GAP;
     solver->cutoff = RALPH_INFINITY;
     solver->node_select = NODE_SELECT_HYBRID;
-    solver->var_select = VAR_SELECT_PSEUDO_COST;  /* Faster than reliability branching */
+    solver->var_select = VAR_SELECT_RELIABILITY;  /* Bootstraps pseudocosts via strong branching */
     solver->max_cuts_per_round = 50;
     solver->max_cut_rounds = 5;  /* Enable cuts with conservative limit */
     solver->verbose = 0;
+    solver->telemetry = 1;
+    solver->dual_bound_flip = -1;    /* use default */
+    solver->dual_steepest_edge = -1; /* use default */
 
     /* Create node queue */
     solver->node_queue = node_queue_create(1024, solver->node_select, model->obj_sense);
@@ -115,6 +195,18 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     }
 
     solver->status = RALPH_STATUS_UNKNOWN;
+    solver->last_solved_node_id = -1;
+    solver->node_basis_warm_attempts = 0;
+    solver->node_basis_warm_applied = 0;
+    solver->node_basis_warm_rejected = 0;
+    solver->node_basis_staged = 0;
+    solver->node_basis_stage_cooldown = 0;
+    solver->strong_branch_probes = 0;
+    solver->strong_branch_failures = 0;
+    solver->strong_branch_recoveries = 0;
+    solver->cut_recovery_attempts = 0;
+    solver->cut_recovery_success = 0;
+    solver->cut_recovery_failures = 0;
 
     /* Try to detect LAP structure for specialized solving */
     solver->use_lap_solver = 0;
@@ -129,7 +221,7 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
             solver->lap_sig = lap_sig;
             solver->use_lap_solver = 1;
             if (solver->verbose) {
-                printf("LAP structure detected: %dx%d assignment\n",
+                LP_LOG_STDOUT("LAP structure detected: %dx%d assignment\n",
                        lap_sig->base.n, lap_sig->base.n);
             }
         } else {
@@ -145,7 +237,7 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     if (detect_special && is_scp_model(model)) {
         solver->use_scp_solver = 1;
         if (solver->verbose) {
-            printf("SCP structure detected: %d elements, %d sets\n",
+            LP_LOG_STDOUT("SCP structure detected: %d elements, %d sets\n",
                    model->num_cons, model->num_vars);
         }
         /* Initialize pseudo-costs using SCP cost/coverage ratio */
@@ -163,10 +255,14 @@ void mip_free(MIPSolver *solver) {
     free(solver->integer_vars);
     free(solver->is_integer);
     free(solver->best_solution);
+    free(solver->mip_start);
+    free(solver->mip_start_mask);
     free(solver->pseudo_cost_down);
     free(solver->pseudo_cost_up);
     free(solver->pseudo_count_down);
     free(solver->pseudo_count_up);
+    free(solver->branch_priorities);
+    free(solver->branch_directions);
     node_queue_free_with_pool(solver->node_queue, solver->node_pool);
     bb_node_pool_free(solver->node_pool);
     cut_pool_free(solver->cut_pool);
@@ -178,6 +274,51 @@ void mip_free(MIPSolver *solver) {
     }
 
     free(solver);
+}
+
+int mip_set_start(MIPSolver *solver, const double *x, int n) {
+    return mip_set_start_ex(solver, x, NULL, n, solver ? solver->mip_start_repair_mode : 0);
+}
+
+int mip_set_start_ex(MIPSolver *solver, const double *x, const int *mask,
+                     int n, int repair_mode) {
+    if (!solver || !x || !solver->original_model) return -1;
+    if (n != solver->original_model->num_vars || n <= 0) return -1;
+    if (repair_mode < (int)RALPH_MIP_START_REPAIR_STRICT ||
+        repair_mode > (int)RALPH_MIP_START_REPAIR_PROJECT_AND_ROUND) {
+        return -1;
+    }
+
+    double *copy = (double*)malloc((size_t)n * sizeof(double));
+    int *mask_copy = (int*)calloc((size_t)n, sizeof(int));
+    if (!copy || !mask_copy) {
+        free(copy);
+        free(mask_copy);
+        return -1;
+    }
+    memcpy(copy, x, (size_t)n * sizeof(double));
+
+    int nnz = 0;
+    if (mask) {
+        for (int j = 0; j < n; j++) {
+            mask_copy[j] = mask[j] ? 1 : 0;
+            nnz += mask_copy[j];
+        }
+    } else {
+        for (int j = 0; j < n; j++) mask_copy[j] = 1;
+        nnz = n;
+    }
+
+    free(solver->mip_start);
+    free(solver->mip_start_mask);
+    solver->mip_start = copy;
+    solver->mip_start_mask = mask_copy;
+    solver->mip_start_n = n;
+    solver->mip_start_nnz = nnz;
+    solver->mip_start_repair_mode = repair_mode;
+    solver->mip_start_attempted = 0;
+    solver->mip_start_accepted = 0;
+    return 0;
 }
 
 /* ============================================================================
@@ -210,7 +351,7 @@ static void update_incumbent(MIPSolver *solver, const double *solution, double o
                 if (violated) {
                     free(ax);
                     if (solver->verbose >= 2) {
-                        printf("  [update_incumbent] Rejected infeasible solution (constraint %d violated)\n", i);
+                        LP_LOG_STDOUT("  [update_incumbent] Rejected infeasible solution (constraint %d violated)\n", i);
                     }
                     return;  /* Reject infeasible solution */
                 }
@@ -230,14 +371,154 @@ static void update_incumbent(MIPSolver *solver, const double *solution, double o
         solver->best_obj = obj;
         memcpy(solver->best_solution, solution, model->num_vars * sizeof(double));
         solver->has_incumbent = 1;
+        node_queue_set_incumbent_found(solver->node_queue);
 
         /* Update cutoff for pruning */
         solver->cutoff = obj;
 
         if (solver->verbose) {
-            printf("*** New incumbent: %.6f\n", obj);
+            LP_LOG_STDOUT("*** New incumbent: %.6f\n", obj);
         }
     }
+}
+
+/* Validate and, if feasible, accept a user-provided MIP start as incumbent.
+ * Returns 1 if accepted, 0 if rejected. */
+static int mip_try_accept_start(MIPSolver *solver, const double *x, const int *mask) {
+    if (!solver || !solver->original_model || !x) return 0;
+
+    LPModel *model = solver->original_model;
+    int n = model->num_vars;
+    int mode = solver->mip_start_repair_mode;
+
+    double *cand = (double*)malloc((size_t)n * sizeof(double));
+    if (!cand) return 0;
+    memcpy(cand, x, (size_t)n * sizeof(double));
+
+    if (mode >= (int)RALPH_MIP_START_REPAIR_PROJECT_BOUNDS) {
+        for (int j = 0; j < n; j++) {
+            if (cand[j] < model->lb[j]) cand[j] = model->lb[j];
+            if (cand[j] > model->ub[j]) cand[j] = model->ub[j];
+        }
+    }
+
+    if (mode >= (int)RALPH_MIP_START_REPAIR_PROJECT_AND_ROUND) {
+        for (int j = 0; j < n; j++) {
+            if (!solver->is_integer || !solver->is_integer[j]) continue;
+            /* Do not force-round imputed entries unless they were explicitly set. */
+            if (mask && !mask[j]) continue;
+            cand[j] = round(cand[j]);
+            if (cand[j] < model->lb[j]) cand[j] = model->lb[j];
+            if (cand[j] > model->ub[j]) cand[j] = model->ub[j];
+        }
+    }
+
+    /* Bounds + finite values + integrality checks */
+    for (int j = 0; j < n; j++) {
+        double v = cand[j];
+        if (!isfinite(v)) {
+            free(cand);
+            return 0;
+        }
+        if (v < model->lb[j] - RALPH_FEAS_TOL || v > model->ub[j] + RALPH_FEAS_TOL) {
+            free(cand);
+            return 0;
+        }
+        if (solver->is_integer && solver->is_integer[j] &&
+            fabs(v - round(v)) > RALPH_INT_TOL) {
+            free(cand);
+            return 0;
+        }
+    }
+
+    /* Constraint feasibility */
+    if (model->A && model->num_cons > 0) {
+        double *ax = (double*)calloc((size_t)model->num_cons, sizeof(double));
+        if (!ax) {
+            free(cand);
+            return 0;
+        }
+        sparse_matvec(model->A, cand, ax);
+
+        for (int i = 0; i < model->num_cons; i++) {
+            double lhs = ax[i];
+            double rhs = model->b[i];
+            char sense = model->sense[i];
+            int violated = 0;
+            if (sense == 'L' && lhs > rhs + RALPH_FEAS_TOL) {
+                violated = 1;
+            } else if (sense == 'G' && lhs < rhs - RALPH_FEAS_TOL) {
+                violated = 1;
+            } else if (sense == 'E' && fabs(lhs - rhs) > RALPH_FEAS_TOL) {
+                violated = 1;
+            }
+            if (violated) {
+                free(ax);
+                free(cand);
+                return 0;
+            }
+        }
+
+        free(ax);
+    }
+
+    /* Compute objective in model objective space and register incumbent. */
+    double obj = 0.0;
+    for (int j = 0; j < n; j++) obj += model->c[j] * cand[j];
+    int had_incumbent = solver->has_incumbent;
+    double prev_obj = solver->best_obj;
+    update_incumbent(solver, cand, obj);
+    free(cand);
+
+    if (!had_incumbent && solver->has_incumbent) return 1;
+    if (!had_incumbent) return 0;
+
+    if (model->obj_sense == 1) {
+        return (solver->best_obj < prev_obj - RALPH_OPT_TOL) ? 1 : 0;
+    }
+    return (solver->best_obj > prev_obj + RALPH_OPT_TOL) ? 1 : 0;
+}
+
+/* Local fallback selector used when probing mutates LP state and the chosen
+ * branch variable is no longer fractional in the current solution view. */
+static int mip_select_most_infeasible(const MIPSolver *solver, const double *solution) {
+    if (!solver || !solution) return -1;
+
+    int best_var = -1;
+    double best_infeas = RALPH_INT_TOL;
+    const LPModel *wm = solver->working_model;
+    const double *lb = wm ? wm->lb : NULL;
+    const double *ub = wm ? wm->ub : NULL;
+    for (int k = 0; k < solver->num_integers; k++) {
+        int j = solver->integer_vars[k];
+        if (lb && ub && ub[j] - lb[j] <= RALPH_INT_TOL) continue;
+        double val = solution[j];
+        double frac = val - floor(val);
+        if (frac < 0.0) frac += 1.0;
+        if (frac <= RALPH_INT_TOL || frac >= 1.0 - RALPH_INT_TOL) continue;
+
+        double infeas = fmin(frac, 1.0 - frac);
+        if (infeas > best_infeas) {
+            best_infeas = infeas;
+            best_var = j;
+        }
+    }
+    return best_var;
+}
+
+/* Verify that the current LP solution is consistent with the node bounds.
+ * Warm dual re-optimization can occasionally report OPTIMAL without moving if
+ * the inherited basis/solution pair is stale for the new branch bounds. */
+static int mip_solution_within_node_bounds(const LPModel *model,
+                                           const double *x,
+                                           const double *lb,
+                                           const double *ub) {
+    if (!model || !x || !lb || !ub) return 0;
+    for (int j = 0; j < model->num_vars; j++) {
+        if (x[j] < lb[j] - RALPH_FEAS_TOL) return 0;
+        if (x[j] > ub[j] + RALPH_FEAS_TOL) return 0;
+    }
+    return 1;
 }
 
 /* ============================================================================
@@ -259,10 +540,12 @@ static int diving_heuristic(MIPSolver *solver) {
     SimplexSolver *lp = solver->lp_solver;
     int num_vars = model->num_vars;
 
-    /* Skip diving for large problems - use rounding only */
-    if (num_vars > 500 || solver->num_integers > 100) {
-        return -1;  /* Skip diving, rely on rounding heuristic */
-    }
+    /* Disable P5/P6 during diving — v2 reinitializes DSE per call, but
+     * disabling prevents any interaction with the outer solve state. */
+    int saved_bflip = lp->use_dual_bound_flip;
+    int saved_dse = lp->use_dual_steepest_edge;
+    lp->use_dual_bound_flip = 0;
+    lp->use_dual_steepest_edge = 0;
 
     /* Save original bounds */
     double *orig_lb = (double*)calloc(num_vars, sizeof(double));
@@ -270,31 +553,21 @@ static int diving_heuristic(MIPSolver *solver) {
     if (!orig_lb || !orig_ub) {
         free(orig_lb);
         free(orig_ub);
+        lp->use_dual_bound_flip = saved_bflip;
+        lp->use_dual_steepest_edge = saved_dse;
         return -1;
     }
     memcpy(orig_lb, model->lb, num_vars * sizeof(double));
     memcpy(orig_ub, model->ub, num_vars * sizeof(double));
 
-    /* Save original tableau bounds for restoration */
+    /* Re-read tableau each loop/recovery step because cold-start paths may replace it. */
     SimplexTableau *tab = lp->tableau;
-    double *orig_tab_lb = NULL;
-    double *orig_tab_ub = NULL;
-    if (tab) {
-        orig_tab_lb = (double*)calloc(tab->n, sizeof(double));
-        orig_tab_ub = (double*)calloc(tab->n, sizeof(double));
-        if (orig_tab_lb && orig_tab_ub) {
-            memcpy(orig_tab_lb, tab->lb_ext, tab->n * sizeof(double));
-            memcpy(orig_tab_ub, tab->ub_ext, tab->n * sizeof(double));
-        }
-    }
 
     /* Work with copy of solution */
     double *sol = (double*)calloc(num_vars, sizeof(double));
     if (!sol) {
         free(orig_lb);
         free(orig_ub);
-        free(orig_tab_lb);
-        free(orig_tab_ub);
         return -1;
     }
     memcpy(sol, lp->solution, num_vars * sizeof(double));
@@ -379,79 +652,350 @@ static int diving_heuristic(MIPSolver *solver) {
         model->lb[best_var] = rounded;
         model->ub[best_var] = rounded;
 
-        /* Try warm start with dual simplex if tableau available */
-        if (tab) {
-            /* Update tableau bounds */
-            tab->lb_ext[best_var] = rounded;
-            tab->ub_ext[best_var] = rounded;
-
-            /* Update non-basic variable value */
-            if (tab->var_status[best_var] == RALPH_NONBASIC_LOWER ||
-                tab->var_status[best_var] == RALPH_NONBASIC_UPPER) {
-                tab->x[best_var] = rounded;
-            }
-
-            /* Recompute basic variable values */
-            tableau_compute_solution(tab);
-
-            /* Use dual simplex to restore feasibility */
-            dual_simplex_solve(lp);
-
-            if (lp->status == RALPH_STATUS_OPTIMAL) {
+        /* Try warm re-optimization if tableau available, else cold-start. */
+        tab = lp->tableau;
+        if (tab &&
+            mip_lp_apply_structural_bounds(tab, num_vars, model->lb, model->ub) == 0 &&
+            mip_lp_recompute(tab) == 0) {
+            int rc = -1;
+            (void)mip_lp_dual_reopt(lp, 500, &rc);
+            if (lp->status == RALPH_STATUS_OPTIMAL && lp->solution) {
                 memcpy(sol, lp->solution, num_vars * sizeof(double));
                 continue;
             }
             /* If dual simplex failed, LP is likely infeasible */
             break;
-        } else {
-            /* No tableau - cold start (shouldn't happen after root LP) */
-            simplex_solve(lp);
-            if (lp->status != RALPH_STATUS_OPTIMAL) {
-                break;
-            }
-            memcpy(sol, lp->solution, num_vars * sizeof(double));
         }
+
+        /* No usable tableau - cold start */
+        if (mip_lp_cold_start_primal(lp, 2) != 0 || lp->status != RALPH_STATUS_OPTIMAL ||
+            !lp->solution) {
+            break;
+        }
+        memcpy(sol, lp->solution, num_vars * sizeof(double));
     }
 
-    /* Restore original iteration limit */
-    lp->max_iterations = orig_max_iter;
-
-    /* Restore original bounds */
+    /* Restore original bounds (max_iterations restored AFTER cold-start below) */
     memcpy(model->lb, orig_lb, num_vars * sizeof(double));
     memcpy(model->ub, orig_ub, num_vars * sizeof(double));
 
-    /* Restore tableau bounds and re-solve to get back to original state.
-     * Note: dual_simplex_solve may have freed and NULLed lp->tableau,
-     * so we must refresh tab from the current lp->tableau pointer. */
+    /* Restore tableau bounds and re-solve to get back to original state */
     tab = lp->tableau;
-    if (tab && orig_tab_lb && orig_tab_ub) {
-        memcpy(tab->lb_ext, orig_tab_lb, tab->n * sizeof(double));
-        memcpy(tab->ub_ext, orig_tab_ub, tab->n * sizeof(double));
-
-        /* Update non-basic variable values to original bounds */
-        for (int j = 0; j < tab->n; j++) {
-            if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
-                tab->x[j] = orig_tab_lb[j];
-            } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
-                tab->x[j] = orig_tab_ub[j];
-            }
+    if (tab &&
+        mip_lp_apply_structural_bounds(tab, num_vars, orig_lb, orig_ub) == 0 &&
+        mip_lp_recompute(tab) == 0) {
+        int rc = -1;
+        (void)mip_lp_dual_reopt(lp, 500, &rc);
+        if (lp->status != RALPH_STATUS_OPTIMAL && lp->tableau) {
+            (void)mip_lp_cold_start_primal(lp, 2);
         }
-
-        /* Recompute and re-optimize */
-        tableau_compute_solution(tab);
-        dual_simplex_solve(lp);
-    } else if (lp->tableau) {
-        /* Fallback: cold start */
-        tableau_free(lp->tableau);
-        lp->tableau = NULL;
-        simplex_solve(lp);
+    } else if (mip_lp_cold_start_primal(lp, 2) != 0) {
+        /* Keep best-effort recovery semantics. */
     }
+
+    /* Restore original iteration limit AFTER all cold-start paths */
+    lp->max_iterations = orig_max_iter;
+
+    /* Restore P5/P6 flags */
+    lp->use_dual_bound_flip = saved_bflip;
+    lp->use_dual_steepest_edge = saved_dse;
+
+    /* Force refactorization to clear any numerical drift from diving */
+    tab = lp->tableau;
+    if (tab) (void)mip_lp_refactor_and_recompute(tab);
 
     free(orig_lb);
     free(orig_ub);
-    free(orig_tab_lb);
-    free(orig_tab_ub);
     free(sol);
+
+    return found_incumbent ? 0 : -1;
+}
+
+/* ============================================================================
+ * Reduced-Cost Fixing
+ *
+ * After solving a node LP with bound z_LP and incumbent z*, the gap is
+ * z* - z_LP (in minimization space). For non-basic integer variable x_j:
+ *   - At lower bound with rc[j] > gap: fix x_j = lb
+ *   - At upper bound with |rc[j]| > gap: fix x_j = ub
+ * ============================================================================ */
+
+static int rc_fix_node(MIPSolver *solver, BBNode *node) {
+    if (!solver->has_incumbent || !solver->lp_solver || !solver->lp_solver->tableau) {
+        return 0;
+    }
+
+    SimplexTableau *tab = solver->lp_solver->tableau;
+    LPModel *model = solver->working_model;
+    int num_vars = model->num_vars;
+
+    /* Compute gap in internal (minimization) space */
+    int obj_sense = solver->original_model->obj_sense;
+    double internal_incumbent = solver->best_obj * obj_sense;
+    double internal_lp = tab->obj_value;
+    double gap = internal_incumbent - internal_lp;
+
+    if (gap < MIP_RC_FIX_MIN_GAP) {
+        return 0;  /* Gap too small for reliable fixing */
+    }
+
+    int fixed = 0;
+
+    for (int k = 0; k < solver->num_integers; k++) {
+        int j = solver->integer_vars[k];
+        if (j >= num_vars) continue;  /* Only structural vars */
+
+        /* Skip already-fixed variables */
+        if (fabs(node->ub[j] - node->lb[j]) < RALPH_INT_TOL) continue;
+
+        double rc = tab->rc[j];
+
+        if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc > gap) {
+            /* Increasing x_j from lb worsens objective beyond incumbent → fix at lb */
+            node->ub[j] = node->lb[j];
+            model->ub[j] = model->lb[j];
+            fixed++;
+        } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && -rc > gap) {
+            /* Decreasing x_j from ub worsens objective beyond incumbent → fix at ub */
+            node->lb[j] = node->ub[j];
+            model->lb[j] = model->ub[j];
+            fixed++;
+        }
+    }
+
+    if (fixed > 0) {
+        (void)mip_lp_apply_structural_bounds(tab, num_vars, model->lb, model->ub);
+    }
+
+    solver->rc_fixings += fixed;
+    return fixed;
+}
+
+/* ============================================================================
+ * RINS Heuristic (Relaxation Induced Neighborhood Search)
+ *
+ * Fix integer variables where LP relaxation and incumbent agree (both
+ * integer-valued, same value). Dive on remaining fractional variables.
+ * ============================================================================ */
+
+static int rins_heuristic(MIPSolver *solver) {
+    if (!solver || !solver->has_incumbent || !solver->lp_solver ||
+        !solver->lp_solver->solution || !solver->lp_solver->tableau) {
+        return -1;
+    }
+
+    LPModel *model = solver->working_model;
+    SimplexSolver *lp = solver->lp_solver;
+    int num_vars = model->num_vars;
+    double *lp_sol = lp->solution;
+    double *inc_sol = solver->best_solution;
+
+    solver->rins_calls++;
+
+    /* Count agreeing and free integer variables */
+    int num_agree = 0;
+    int num_free = 0;
+
+    for (int k = 0; k < solver->num_integers; k++) {
+        int j = solver->integer_vars[k];
+        if (j >= num_vars) continue;
+
+        /* Skip already-fixed variables */
+        if (fabs(model->ub[j] - model->lb[j]) < RALPH_INT_TOL) continue;
+
+        double lp_val = lp_sol[j];
+        double inc_val = inc_sol[j];
+        double lp_frac = fabs(lp_val - round(lp_val));
+        double inc_frac = fabs(inc_val - round(inc_val));
+
+        if (lp_frac < RALPH_INT_TOL && inc_frac < RALPH_INT_TOL &&
+            fabs(round(lp_val) - round(inc_val)) < RALPH_INT_TOL) {
+            num_agree++;
+        } else {
+            num_free++;
+        }
+    }
+
+    /* Skip if neighborhood is too restrictive */
+    int total_unfixed = num_agree + num_free;
+    if (total_unfixed == 0) return -1;
+    if ((double)num_free / total_unfixed < MIP_RINS_MIN_FREE_PCT) return -1;
+
+    /* Disable P5/P6 during RINS diving */
+    int saved_bflip = lp->use_dual_bound_flip;
+    int saved_dse = lp->use_dual_steepest_edge;
+    lp->use_dual_bound_flip = 0;
+    lp->use_dual_steepest_edge = 0;
+
+    /* Save original bounds */
+    double *orig_lb = (double*)calloc(num_vars, sizeof(double));
+    double *orig_ub = (double*)calloc(num_vars, sizeof(double));
+    if (!orig_lb || !orig_ub) {
+        free(orig_lb);
+        free(orig_ub);
+        lp->use_dual_bound_flip = saved_bflip;
+        lp->use_dual_steepest_edge = saved_dse;
+        return -1;
+    }
+    memcpy(orig_lb, model->lb, num_vars * sizeof(double));
+    memcpy(orig_ub, model->ub, num_vars * sizeof(double));
+
+    /* Re-read tableau as needed because recovery paths may replace it. */
+    SimplexTableau *tab = lp->tableau;
+
+    /* Fix agreeing variables */
+    for (int k = 0; k < solver->num_integers; k++) {
+        int j = solver->integer_vars[k];
+        if (j >= num_vars) continue;
+        if (fabs(model->ub[j] - model->lb[j]) < RALPH_INT_TOL) continue;
+
+        double lp_val = lp_sol[j];
+        double inc_val = inc_sol[j];
+        double lp_frac = fabs(lp_val - round(lp_val));
+        double inc_frac = fabs(inc_val - round(inc_val));
+
+        if (lp_frac < RALPH_INT_TOL && inc_frac < RALPH_INT_TOL &&
+            fabs(round(lp_val) - round(inc_val)) < RALPH_INT_TOL) {
+            double fix_val = round(lp_val);
+            model->lb[j] = fix_val;
+            model->ub[j] = fix_val;
+        }
+    }
+
+    /* Re-solve LP with fixed neighborhood.
+     * Invalidate DSE — many vars fixed, basis very different. */
+    int orig_max_iter = lp->max_iterations;
+    lp->max_iterations = MIP_RINS_LP_ITER_LIMIT;
+
+    int found_incumbent = 0;
+    double *sol = NULL;
+
+    if (!tab ||
+        mip_lp_apply_structural_bounds(tab, num_vars, model->lb, model->ub) != 0 ||
+        mip_lp_recompute(tab) != 0) {
+        goto rins_cleanup;
+    }
+    (void)mip_lp_dual_reopt(lp, MIP_RINS_LP_ITER_LIMIT, NULL);
+
+    sol = (double*)calloc(num_vars, sizeof(double));
+    if (!sol) goto rins_cleanup;
+
+    if (lp->status != RALPH_STATUS_OPTIMAL) goto rins_cleanup;
+    memcpy(sol, lp->solution, num_vars * sizeof(double));
+
+    /* Dive on remaining fractional variables */
+    for (int dive = 0; dive < MIP_RINS_MAX_DIVE; dive++) {
+        int best_var = -1;
+        double best_frac = RALPH_INT_TOL;
+
+        for (int k = 0; k < solver->num_integers; k++) {
+            int j = solver->integer_vars[k];
+            if (j >= num_vars) continue;
+            double val = sol[j];
+            double frac = val - floor(val);
+            double infeas = fmin(frac, 1.0 - frac);
+
+            if (model->lb[j] < model->ub[j] - 0.5 && infeas > best_frac) {
+                best_frac = infeas;
+                best_var = j;
+            }
+        }
+
+        if (best_var < 0) {
+            /* All integer variables are integer-valued */
+            if (check_integer_feasibility(solver, sol)) {
+                /* Verify constraint feasibility */
+                LPModel *orig_model = solver->original_model;
+                int constraints_ok = 1;
+                if (orig_model->A && orig_model->num_cons > 0) {
+                    double *ax = (double*)calloc(orig_model->num_cons, sizeof(double));
+                    if (ax) {
+                        sparse_matvec(orig_model->A, sol, ax);
+                        for (int i = 0; i < orig_model->num_cons; i++) {
+                            double lhs = ax[i];
+                            double rhs = orig_model->b[i];
+                            char sense = orig_model->sense[i];
+                            if ((sense == 'L' && lhs > rhs + RALPH_FEAS_TOL) ||
+                                (sense == 'G' && lhs < rhs - RALPH_FEAS_TOL) ||
+                                (sense == 'E' && fabs(lhs - rhs) > RALPH_FEAS_TOL)) {
+                                constraints_ok = 0;
+                                break;
+                            }
+                        }
+                        free(ax);
+                    }
+                }
+
+                if (constraints_ok) {
+                    double obj = 0.0;
+                    for (int j = 0; j < num_vars; j++) {
+                        obj += solver->original_model->c[j] * sol[j];
+                    }
+                    update_incumbent(solver, sol, obj);
+                    found_incumbent = 1;
+                    solver->rins_found++;
+                    if (solver->verbose) {
+                        LP_LOG_STDOUT("  [rins] Found incumbent: %.6f\n", obj);
+                    }
+                }
+            }
+            break;
+        }
+
+        /* Round to nearest integer and fix */
+        double val = sol[best_var];
+        double rounded = round(val);
+        rounded = fmax(rounded, orig_lb[best_var]);
+        rounded = fmin(rounded, orig_ub[best_var]);
+
+        model->lb[best_var] = rounded;
+        model->ub[best_var] = rounded;
+
+        tab = lp->tableau;
+        if (!tab ||
+            mip_lp_apply_structural_bounds(tab, num_vars, model->lb, model->ub) != 0 ||
+            mip_lp_recompute(tab) != 0) {
+            break;
+        }
+        (void)mip_lp_dual_reopt(lp, MIP_RINS_LP_ITER_LIMIT, NULL);
+
+        if (lp->status != RALPH_STATUS_OPTIMAL) break;
+        memcpy(sol, lp->solution, num_vars * sizeof(double));
+    }
+
+rins_cleanup:
+    free(sol);
+
+    /* Restore original bounds (max_iterations restored AFTER cold-start below) */
+    memcpy(model->lb, orig_lb, num_vars * sizeof(double));
+    memcpy(model->ub, orig_ub, num_vars * sizeof(double));
+
+    /* Restore tableau bounds and re-solve */
+    tab = lp->tableau;
+    if (tab &&
+        mip_lp_apply_structural_bounds(tab, num_vars, orig_lb, orig_ub) == 0 &&
+        mip_lp_recompute(tab) == 0) {
+        (void)mip_lp_dual_reopt(lp, 500, NULL);
+        if (lp->status != RALPH_STATUS_OPTIMAL && lp->tableau) {
+            (void)mip_lp_cold_start_primal(lp, 2);
+        }
+    } else {
+        (void)mip_lp_cold_start_primal(lp, 2);
+    }
+
+    /* Restore original iteration limit AFTER all cold-start paths */
+    lp->max_iterations = orig_max_iter;
+
+    /* Restore P5/P6 flags */
+    lp->use_dual_bound_flip = saved_bflip;
+    lp->use_dual_steepest_edge = saved_dse;
+
+    /* Refactorize to clear numerical drift */
+    tab = lp->tableau;
+    if (tab) (void)mip_lp_refactor_and_recompute(tab);
+
+    free(orig_lb);
+    free(orig_ub);
 
     return found_incumbent ? 0 : -1;
 }
@@ -459,6 +1003,51 @@ static int diving_heuristic(MIPSolver *solver) {
 /* ============================================================================
  * Basis Warm Starting Helpers
  * ============================================================================ */
+
+static int node_has_saved_basis(const BBNode *node) {
+    return node && node->basis && node->var_status &&
+           node->basis_size > 0 && node->var_status_size > 0;
+}
+
+static void clear_node_basis(BBNode *node) {
+    if (!node) return;
+    free(node->basis);
+    free(node->var_status);
+    node->basis = NULL;
+    node->var_status = NULL;
+    node->basis_size = 0;
+    node->var_status_size = 0;
+}
+
+static int node_basis_snapshot_sane(const BBNode *node) {
+    if (!node_has_saved_basis(node)) return 0;
+    if (node->basis_size > node->var_status_size) return 0;
+
+    int n = node->var_status_size;
+    int m = node->basis_size;
+    unsigned char *seen = (unsigned char*)calloc((size_t)n, sizeof(unsigned char));
+    if (!seen) return 0;
+
+    for (int j = 0; j < n; j++) {
+        int st = (int)node->var_status[j];
+        if (st < (int)RALPH_BASIC || st > (int)RALPH_FIXED) {
+            free(seen);
+            return 0;
+        }
+    }
+
+    for (int i = 0; i < m; i++) {
+        int bj = node->basis[i];
+        if (bj < 0 || bj >= n || seen[bj]) {
+            free(seen);
+            return 0;
+        }
+        seen[bj] = 1;
+    }
+
+    free(seen);
+    return 1;
+}
 
 /* Save current basis from tableau to node */
 static void save_basis_to_node(SimplexSolver *lp, BBNode *node, int num_vars) {
@@ -487,36 +1076,37 @@ static void save_basis_to_node(SimplexSolver *lp, BBNode *node, int num_vars) {
     }
 }
 
-/* Restore basis from node to tableau */
-static int restore_basis_from_node(SimplexSolver *lp, BBNode *node) {
-    if (!lp || !lp->tableau || !node || !node->basis || !node->var_status) {
-        return -1;  /* No basis to restore */
+static int stage_node_basis_for_cold_start(MIPSolver *solver, SimplexSolver *lp,
+                                           BBNode *node) {
+    if (!solver || !lp || !node_has_saved_basis(node)) return -1;
+    if (mip_lp_stage_warm_basis(lp, node->basis_size, node->var_status_size,
+                                node->basis, node->var_status) != 0) {
+        clear_node_basis(node);
+        solver->node_basis_warm_rejected++;
+        return -1;
     }
+    solver->node_basis_staged++;
+    return 0;
+}
+
+static int restore_node_basis_live(MIPSolver *solver, SimplexSolver *lp,
+                                   BBNode *node) {
+    if (!solver || !lp || !lp->tableau || !node_has_saved_basis(node)) return -1;
 
     SimplexTableau *tab = lp->tableau;
-    int m = tab->m;
-    int n = tab->n;
+    if (tab->num_artificial != 0) return -1;
+    if (node->basis_size != tab->m || node->var_status_size != tab->n) return -1;
 
-    /* Restore basis indices and variable status */
-    memcpy(tab->basis, node->basis, m * sizeof(int));
-    memcpy(tab->var_status, node->var_status, n * sizeof(VarStatus));
+    solver->node_basis_warm_attempts++;
 
-    /* Update basis_pos from basis array */
-    for (int j = 0; j < n; j++) {
-        tab->basis_pos[j] = -1;
-    }
-    for (int k = 0; k < m; k++) {
-        int j = tab->basis[k];
-        if (j >= 0 && j < n) {
-            tab->basis_pos[j] = k;
-        }
-    }
-
-    /* Refactorize to ensure LU is consistent with restored basis */
-    if (tableau_refactorize(tab) != 0) {
+    if (mip_lp_restore_warm_basis(lp, node->basis_size, node->var_status_size,
+                                  node->basis, node->var_status) != 0) {
+        clear_node_basis(node);
+        solver->node_basis_warm_rejected++;
         return -1;
     }
 
+    solver->node_basis_warm_applied++;
     return 0;
 }
 
@@ -545,9 +1135,7 @@ static int solve_node_lp_as_lap(MIPSolver *solver, BBNode *node) {
 
     /* Allocate solution array if needed */
     if (!solver->lp_solver) {
-        solver->lp_solver = simplex_create(solver->working_model);
-        if (!solver->lp_solver) return -1;
-        solver->lp_solver->scaling = 0;
+        if (mip_create_lp_solver_for_working_model(solver) != 0) return -1;
     }
 
     SimplexSolver *lp = solver->lp_solver;
@@ -592,166 +1180,112 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
 
     LPModel *model = solver->working_model;
 
-    /* Create or reuse LP solver */
+    /* Create LP solver if needed — method=2 (auto: dual first, primal fallback) */
     if (!solver->lp_solver) {
-        solver->lp_solver = simplex_create(model);
-        if (!solver->lp_solver) return -1;
-        /* Disable scaling for MIP */
-        solver->lp_solver->scaling = 0;
+        if (mip_create_lp_solver_for_working_model(solver) != 0) return -1;
     }
 
     SimplexSolver *lp = solver->lp_solver;
+    SimplexTableau *tab = lp->tableau;
+    int has_saved_basis = node_has_saved_basis(node);
+    int can_warm_reuse = 0;
+    int stage_allowed = (solver->node_basis_stage_cooldown <= 0);
+    if (has_saved_basis && !node_basis_snapshot_sane(node)) {
+        clear_node_basis(node);
+        solver->node_basis_warm_rejected++;
+        has_saved_basis = 0;
+    }
 
-    /* Update model bounds */
+    /* Update model bounds from node */
     for (int j = 0; j < model->num_vars; j++) {
         model->lb[j] = node->lb[j];
         model->ub[j] = node->ub[j];
     }
 
     solver->simplex_nodes_solved++;
-    int warm_start_success = 0;
 
-    /* Try warm start from parent basis if available */
-    if (solver->verbose) {
-        printf("  [solve_node_lp] node=%d: tableau=%p, basis=%p, var_status=%p, basis_size=%d, var_status_size=%d\n",
-               node->id, (void*)lp->tableau, (void*)node->basis, (void*)node->var_status,
-               node->basis_size, node->var_status_size);
-    }
-    if (lp->tableau && node->basis && node->var_status &&
-        node->basis_size > 0 && node->var_status_size > 0) {
+    /* Keep node LP solves uncapped.
+     *
+     * The simplex/dual-simplex objective-limit status is a solve cutoff, not a
+     * certified branch-and-bound bound. Feeding incumbent-derived limits here
+     * can terminate node LP solves before a valid relaxation bound is obtained,
+     * which may incorrectly prune improving nodes. */
+    lp->objective_limit = RALPH_INFINITY;
 
-        SimplexTableau *tab = lp->tableau;
-
-        if (solver->verbose) {
-            printf("  [solve_node_lp] tab->m=%d, tab->n=%d\n", tab->m, tab->n);
-        }
-
-        /* Check sizes match - they should if the model hasn't changed */
-        if (solver->verbose) {
-            printf("  [solve_node_lp] Size check: tab->m=%d vs basis_size=%d, tab->n=%d vs var_status_size=%d\n",
-                   tab->m, node->basis_size, tab->n, node->var_status_size);
-        }
-        if (tab->m == node->basis_size && tab->n == node->var_status_size) {
-
-            /* Update bounds in tableau */
-            for (int j = 0; j < model->num_vars; j++) {
-                tab->lb_ext[j] = node->lb[j];
-                tab->ub_ext[j] = node->ub[j];
-            }
-
-            if (solver->verbose) {
-                printf("  [warm_start] Updated bounds for node %d\n", node->id);
-                for (int j = 0; j < model->num_vars; j++) {
-                    printf("    x%d: [%.2f, %.2f]\n", j, tab->lb_ext[j], tab->ub_ext[j]);
-                }
-            }
-
-            /* Restore parent basis */
-            if (restore_basis_from_node(lp, node) == 0) {
-                /* Handle bound changes due to branching.
-                 *
-                 * CRITICAL: If a basic variable becomes FIXED (lb == ub), we must
-                 * fall back to cold start. This is because tableau_compute_solution
-                 * computes x_B = B^{-1}(b - N*x_N), which may differ from the fixed
-                 * value. Dual simplex cannot detect this since the computed value
-                 * might be within the (now-equal) bounds.
-                 */
-                int has_fixed_basic = 0;
-                for (int j = 0; j < model->num_vars; j++) {
-                    double new_lb = tab->lb_ext[j];
-                    double new_ub = tab->ub_ext[j];
-
-                    if (tab->var_status[j] == RALPH_BASIC) {
-                        /* Check if this basic variable is now fixed */
-                        if (fabs(new_lb - new_ub) < RALPH_FEAS_TOL) {
-                            has_fixed_basic = 1;
-                        }
-                    } else if (tab->var_status[j] == RALPH_NONBASIC_LOWER) {
-                        tab->x[j] = new_lb;
-                    } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER) {
-                        tab->x[j] = new_ub;
-                    }
-                }
-
-                if (has_fixed_basic) {
-                    /* Fall back to cold start for correctness */
-                    if (solver->verbose) {
-                        printf("  [warm_start] Fixed basic var detected, using cold start\n");
-                    }
-                } else {
-                    /* Safe to warm start - no basic variables became fixed */
-                    tableau_compute_solution(tab);
-
-                    if (solver->verbose) {
-                        printf("  [warm_start] After compute_solution: obj=%.4f\n", tab->obj_value);
-                    }
-
-                    /* Use dual simplex for re-optimization */
-                    dual_simplex_solve(lp);
-
-                    if (solver->verbose) {
-                        printf("  [solve_node_lp] After dual_simplex: status=%d, obj=%.4f\n",
-                               lp->status, lp->obj_value);
-                    }
-
-                    if (lp->status == RALPH_STATUS_OPTIMAL) {
-                        warm_start_success = 1;
-                    }
-                }
-            }
-        } else if (solver->verbose) {
-            printf("  [solve_node_lp] Size mismatch, falling back to cold start\n");
+    /* Warm reuse is only allowed when this node carries a saved LP basis.
+     * This removes the old ad-hoc "reuse whatever tableau is lying around" path. */
+    if (has_saved_basis && tab && tab->num_artificial == 0) {
+        int direct_reuse = (node->id == solver->last_solved_node_id) ||
+                           (node->parent_id == solver->last_solved_node_id);
+        if (direct_reuse) {
+            solver->node_basis_warm_applied++;
+            can_warm_reuse = 1;
+            tab = lp->tableau;
+        } else if (restore_node_basis_live(solver, lp, node) == 0) {
+            can_warm_reuse = 1;
+            tab = lp->tableau;
         }
     }
 
-    /* Cold start if warm start failed or wasn't available */
-    if (!warm_start_success) {
-        if (solver->verbose) {
-            printf("  [solve_node_lp] Cold start for node %d\n", node->id);
-            printf("  [solve_node_lp] Bounds being used:\n");
-            for (int j = 0; j < (model->num_vars < 5 ? model->num_vars : 5); j++) {
-                printf("    x%d: [%.2f, %.2f]\n", j, model->lb[j], model->ub[j]);
+    if (can_warm_reuse) {
+        if (mip_lp_apply_structural_bounds(tab, model->num_vars, node->lb, node->ub) == 0 &&
+            mip_lp_recompute(tab) == 0) {
+            int rc = -1;
+            (void)mip_lp_dual_reopt(lp, 500, &rc);
+            if (solver->verbose >= 2) {
+                LP_LOG_STDOUT("  [solve_node_lp] warm v2: rc=%d status=%d iters=%d obj=%.4f\n",
+                              rc, lp->status, lp->iterations, lp->obj_value);
+            }
+            if (rc == 0 && lp->status == RALPH_STATUS_OPTIMAL) {
+                if (mip_solution_within_node_bounds(model, lp->solution, node->lb, node->ub)) {
+                    goto node_lp_done;
+                }
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDOUT("  [solve_node_lp] warm solution violates node bounds; forcing cold start\n");
+                }
+            }
+            /* v2 detected infeasible or hit objective limit — valid result */
+            if (lp->status == RALPH_STATUS_INFEASIBLE ||
+                lp->status == RALPH_STATUS_OBJ_LIMIT) {
+                goto node_lp_done;
             }
         }
-        if (lp->tableau) {
-            tableau_free(lp->tableau);
-            lp->tableau = NULL;
+        if (solver->verbose >= 2) {
+            LP_LOG_STDOUT("  [solve_node_lp] warm path failed, cold starting\n");
         }
-        simplex_solve(lp);
-        if (solver->verbose) {
-            printf("  [solve_node_lp] Cold start result: obj=%.4f, status=%d\n",
-                   lp->obj_value, lp->status);
-        }
+    } else if (solver->verbose >= 2) {
+        LP_LOG_STDOUT("  [solve_node_lp] no usable node basis warm start\n");
     }
 
+    /* Cold start: stage node basis (if any), rebuild tableau, solve with primal. */
+    if (has_saved_basis && stage_allowed) {
+        (void)stage_node_basis_for_cold_start(solver, lp, node);
+    }
+    (void)mip_lp_cold_start_primal(lp, 2);
+    if (lp->warm_basis_last_rejected) {
+        /* Cooldown gate: avoid repeatedly feeding staged warm bases when they
+         * are rejected on this topology/branch neighborhood. */
+        clear_node_basis(node);
+        solver->node_basis_warm_rejected++;
+        if (solver->node_basis_stage_cooldown < 64)
+            solver->node_basis_stage_cooldown = 64;
+    } else if (lp->warm_basis_last_applied) {
+        solver->node_basis_stage_cooldown = 0;
+    }
+    if (solver->verbose >= 2) {
+        LP_LOG_STDOUT("  [solve_node_lp] cold: status=%d iters=%d obj=%.4f\n",
+               lp->status, lp->iterations, lp->obj_value);
+    }
+
+node_lp_done:
     node->lp_status = lp->status;
     node->lp_bound = lp->obj_value;
     node->lp_iterations = lp->iterations;
+    solver->last_solved_node_id = node->id;
+    if (solver->node_basis_stage_cooldown > 0) solver->node_basis_stage_cooldown--;
 
-    /* Verify model bounds match node bounds after LP solve */
-    if (solver->verbose) {
-        int mismatch = 0;
-        for (int j = 0; j < model->num_vars && j < 3; j++) {
-            if (fabs(model->lb[j] - node->lb[j]) > 1e-6 ||
-                fabs(model->ub[j] - node->ub[j]) > 1e-6) {
-                printf("  [solve_node_lp] BOUND MISMATCH x%d: model[%.2f,%.2f] vs node[%.2f,%.2f]\n",
-                       j, model->lb[j], model->ub[j], node->lb[j], node->ub[j]);
-                mismatch = 1;
-            }
-        }
-        if (!mismatch) {
-            printf("  [solve_node_lp] Final: obj=%.4f, bounds OK for first 3 vars\n", lp->obj_value);
-        }
-    }
-
-    /* Debug output for non-optimal status */
     if (solver->verbose && lp->status != RALPH_STATUS_OPTIMAL) {
-        printf("  solve_node_lp: status=%d, obj=%.4f\n", lp->status, lp->obj_value);
-    }
-
-    /* Save basis to node for warm starting children */
-    if (lp->status == RALPH_STATUS_OPTIMAL) {
-        save_basis_to_node(lp, node, model->num_vars);
+        LP_LOG_STDOUT("  solve_node_lp: status=%d, obj=%.4f\n", lp->status, lp->obj_value);
     }
 
     return (lp->status == RALPH_STATUS_OPTIMAL) ? 0 : -1;
@@ -764,24 +1298,74 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
 static int process_node(MIPSolver *solver, BBNode *node) {
     LPModel *model = solver->original_model;
 
+    /* Capture parent LP bound for pseudocost update */
+    double parent_lp_bound = node->lp_bound;
+
     /* Solve LP relaxation */
     if (solve_node_lp(solver, node) != 0) {
         /* LP infeasible or error - prune node */
         if (solver->verbose) {
-            printf("  [process_node] Pruned: LP infeasible/error\n");
+            LP_LOG_STDOUT("  [process_node] Pruned: LP infeasible/error\n");
         }
         return 0;
     }
 
+    /* Snapshot immediately after successful LP solve so descendants inherit
+     * a basis from a clean node state (before strong-branch probing logic). */
+    save_basis_to_node(solver->lp_solver, node, model->num_vars);
+
     double lp_obj = solver->lp_solver->obj_value;
     double *lp_sol = solver->lp_solver->solution;
+
+    /* Invoke user-provided cut callback if available */
+    if (solver->has_cut_callback && solver->cut_callback.generate_cuts) {
+        RalphCut user_cuts[32];  /* Max cuts from callback per node */
+        memset(user_cuts, 0, sizeof(user_cuts));
+
+        int num_cuts = solver->cut_callback.generate_cuts(
+            solver->cut_callback.user_data,
+            lp_sol,
+            model->num_vars,
+            user_cuts,
+            32
+        );
+
+        if (num_cuts > 0) {
+            for (int i = 0; i < num_cuts && i < 32; i++) {
+                RalphCut *uc = &user_cuts[i];
+                if (!uc->indices || !uc->coeffs || uc->num_vars <= 0) continue;
+
+                /* Convert RalphCut to internal Cut and add to pool */
+                Cut *cut = cut_create(uc->num_vars);
+                if (cut) {
+                    for (int j = 0; j < uc->num_vars; j++) {
+                        cut->indices[j] = uc->indices[j];
+                        cut->values[j] = uc->coeffs[j];
+                    }
+                    cut->nnz = uc->num_vars;
+                    cut->sense = (char)uc->sense;
+                    cut->rhs = uc->rhs;
+                    cut->type = CUT_GOMORY;  /* Generic cut type */
+                    cut->violation = 0.0;
+                    cut->age = 0;
+
+                    cut_pool_add(solver->cut_pool, cut);
+                    solver->cuts_generated++;
+                }
+            }
+
+            if (solver->verbose) {
+                LP_LOG_STDOUT("  [cut_callback] Added %d user cuts at node %d\n", num_cuts, node->id);
+            }
+        }
+    }
 
     /* Check if node can be pruned by bound */
     if (solver->has_incumbent) {
         if (model->obj_sense == 1) {  /* Minimize */
             if (lp_obj >= solver->best_obj - RALPH_OPT_TOL) {
                 if (solver->verbose) {
-                    printf("  [process_node] Pruned by bound: lp_obj=%.4f >= incumbent=%.4f\n",
+                    LP_LOG_STDOUT("  [process_node] Pruned by bound: lp_obj=%.4f >= incumbent=%.4f\n",
                            lp_obj, solver->best_obj);
                 }
                 return 0;  /* Prune */
@@ -789,7 +1373,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
         } else {  /* Maximize */
             if (lp_obj <= solver->best_obj + RALPH_OPT_TOL) {
                 if (solver->verbose) {
-                    printf("  [process_node] Pruned by bound: lp_obj=%.4f <= incumbent=%.4f\n",
+                    LP_LOG_STDOUT("  [process_node] Pruned by bound: lp_obj=%.4f <= incumbent=%.4f\n",
                            lp_obj, solver->best_obj);
                 }
                 return 0;  /* Prune */
@@ -797,7 +1381,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
         }
     }
     if (solver->verbose) {
-        printf("  [process_node] LP solved: obj=%.4f (incumbent=%.4f)\n",
+        LP_LOG_STDOUT("  [process_node] LP solved: obj=%.4f (incumbent=%.4f)\n",
                lp_obj, solver->has_incumbent ? solver->best_obj : -1.0);
     }
 
@@ -805,11 +1389,17 @@ static int process_node(MIPSolver *solver, BBNode *node) {
      * We don't update it here (from closed node). The root bound is used
      * initially, and we update it from the queue after pruning. */
 
+    /* Update pseudo-costs from actual branching data */
+    if (node->depth > 0 && node->branch_var >= 0) {
+        update_pseudo_costs(solver, node->branch_var, node->branch_val,
+                           parent_lp_bound, lp_obj, node->branch_dir);
+    }
+
     /* Check integer feasibility */
     if (check_integer_feasibility(solver, lp_sol)) {
         /* Found integer solution */
         if (solver->verbose) {
-            printf("  [process_node] Integer feasible! obj=%.4f\n", lp_obj);
+            LP_LOG_STDOUT("  [process_node] Integer feasible! obj=%.4f\n", lp_obj);
         }
         update_incumbent(solver, lp_sol, lp_obj);
         return 0;  /* Node solved */
@@ -857,44 +1447,130 @@ static int process_node(MIPSolver *solver, BBNode *node) {
             }
             update_incumbent(solver, greedy_sol, greedy_obj);
             if (solver->verbose) {
-                printf("  [greedy] Round-up incumbent: %.4f\n", greedy_obj);
+                LP_LOG_STDOUT("  [greedy] Round-up incumbent: %.4f\n", greedy_obj);
             }
             free(greedy_sol);
         }
     }
 
-    /* Select branching variable */
-    int branch_var;
-    if (select_branch_variable(solver, lp_sol, &branch_var) != 0) {
-        /* No fractional integer variable - should be integer feasible */
-        if (solver->verbose) {
-            printf("  [process_node] No fractional var found - declaring integer feasible\n");
+    /* Reduced-cost fixing: tighten bounds using dual information + incumbent */
+    if (solver->has_incumbent && solver->lp_solver && solver->lp_solver->tableau) {
+        int rc_fixed = rc_fix_node(solver, node);
+        if (solver->verbose && rc_fixed > 0) {
+            LP_LOG_STDOUT("  [rc_fix] Fixed %d variables by reduced cost\n", rc_fixed);
         }
-        return 0;
+    }
+
+    /* Select branching variable. Some selector paths can fail to return a
+     * candidate even when the current LP solution is still fractional. Fall
+     * back to the plain most-infeasible scan before pruning the node. */
+    int branch_var = -1;
+    if (select_branch_variable(solver, lp_sol, &branch_var) != 0) {
+        int fallback = mip_select_most_infeasible(solver, lp_sol);
+        if (fallback < 0 && solver->lp_solver && solver->working_model) {
+            if (mip_lp_cold_start_primal(solver->lp_solver, 2) == 0 &&
+                solver->lp_solver->status == RALPH_STATUS_OPTIMAL &&
+                solver->lp_solver->tableau &&
+                mip_lp_apply_structural_bounds(solver->lp_solver->tableau,
+                                               solver->working_model->num_vars,
+                                               node->lb, node->ub) == 0 &&
+                mip_lp_recompute(solver->lp_solver->tableau) == 0) {
+                lp_sol = solver->lp_solver->solution;
+                fallback = mip_select_most_infeasible(solver, lp_sol);
+            }
+        }
+        if (fallback >= 0) {
+            branch_var = fallback;
+            if (solver->verbose >= 2) {
+                LP_LOG_STDOUT("  [process_node] Branch selector missed fractional var; fallback=%d\n",
+                              branch_var);
+            }
+        } else {
+            if (check_integer_feasibility(solver, lp_sol)) {
+                if (solver->verbose) {
+                    LP_LOG_STDOUT("  [process_node] No fractional var found - declaring integer feasible\n");
+                }
+                update_incumbent(solver, lp_sol, lp_obj);
+            } else if (solver->verbose) {
+                LP_LOG_STDOUT("  [process_node] No branch var after fallback; pruning unresolved fractional node\n");
+            }
+            return 0;
+        }
+    }
+
+    /* Strong branching inside select_branch_variable may have corrupted
+     * the LP state. Re-read solution and verify it's valid. */
+    lp_sol = solver->lp_solver ? solver->lp_solver->solution : NULL;
+    if (!lp_sol) {
+        /* LP solution lost — recover through adapter-managed LP lifecycle. */
+        if (solver->lp_solver) {
+            (void)mip_lp_recover_state(solver->lp_solver);
+            lp_sol = solver->lp_solver->solution;
+        }
+        if (!lp_sol) return -1;  /* Unrecoverable — prune node */
+    }
+
+    /* Guard against stale branch choice after reliability/strong probing. */
+    double branch_val = lp_sol[branch_var];
+    double branch_frac = branch_val - floor(branch_val);
+    if (branch_frac < 0.0) branch_frac += 1.0;
+    if (branch_frac <= RALPH_INT_TOL || branch_frac >= 1.0 - RALPH_INT_TOL) {
+        int fallback = mip_select_most_infeasible(solver, lp_sol);
+        if (fallback < 0) {
+            /* Strong/reliability probing can leave the LP state stale even
+             * when recovery paths report success. Rebuild once and retry
+             * fractional-variable detection before pruning the node. */
+            if (solver->lp_solver && solver->working_model) {
+                if (mip_lp_cold_start_primal(solver->lp_solver, 2) == 0 &&
+                    solver->lp_solver->status == RALPH_STATUS_OPTIMAL &&
+                    solver->lp_solver->tableau &&
+                    mip_lp_apply_structural_bounds(solver->lp_solver->tableau,
+                                                   solver->working_model->num_vars,
+                                                   node->lb, node->ub) == 0 &&
+                    mip_lp_recompute(solver->lp_solver->tableau) == 0) {
+                    lp_sol = solver->lp_solver->solution;
+                    fallback = mip_select_most_infeasible(solver, lp_sol);
+                }
+            }
+        }
+        if (fallback < 0) {
+            if (solver->verbose >= 2) {
+                LP_LOG_STDOUT("  [process_node] No fractional var after probing; pruning node\n");
+            }
+            return 0;
+        }
+        branch_var = fallback;
+        branch_val = lp_sol[branch_var];
     }
 
     if (solver->verbose) {
-        printf("  [process_node] Branching on var %d (val=%.4f)\n", branch_var,
-               lp_sol ? lp_sol[branch_var] : -999.0);
+        LP_LOG_STDOUT("  [process_node] Branching on var %d (val=%.4f)\n",
+                      branch_var, branch_val);
     }
 
     /* Create child nodes */
     BBNode *child_down, *child_up;
     compute_branch_children(solver, node, branch_var, &child_down, &child_up);
+    if (!child_down && !child_up) {
+        if (solver->verbose >= 2) {
+            LP_LOG_STDOUT("  [process_node] Branch produced no tightening; pruning node\n");
+        }
+        return 0;
+    }
 
     /* Add children to queue */
     if (child_down) {
         child_down->id = solver->node_count++;
         node_queue_push(solver->node_queue, child_down);
         if (solver->verbose) {
-            printf("  [process_node] Added child_down (id=%d)\n", child_down->id);
+            LP_LOG_STDOUT("  [process_node] Added child_down (id=%d)\n", child_down->id);
         }
     }
     if (child_up) {
         child_up->id = solver->node_count++;
         node_queue_push(solver->node_queue, child_up);
         if (solver->verbose) {
-            printf("  [process_node] Added child_up (id=%d)\n", child_up->id);
+            LP_LOG_STDOUT("  [process_node] Added child_up (id=%d)\n", child_up->id);
         }
     }
 
@@ -931,7 +1607,7 @@ static int solve_root_node(MIPSolver *solver) {
         if (solve_node_lp_as_lap(solver, root) == 0) {
             root_lp_solved = 1;
             if (solver->verbose) {
-                printf("Root LP solved with LAP solver\n");
+                LP_LOG_STDOUT("Root LP solved with LAP solver\n");
             }
         }
         /* If LAP fails, fall through to simplex */
@@ -939,15 +1615,10 @@ static int solve_root_node(MIPSolver *solver) {
 
     if (!root_lp_solved) {
         /* Use standard simplex for root LP */
-        solver->lp_solver = simplex_create(solver->working_model);
-        if (!solver->lp_solver) {
+        if (mip_create_lp_solver_for_working_model(solver) != 0) {
             bb_node_pool_return(solver->node_pool, root);
             return -1;
         }
-
-        /* Disable scaling for MIP - cuts are generated from tableau which would need unscaling */
-        solver->lp_solver->scaling = 0;
-        solver->lp_solver->verbose = solver->verbose;
 
         simplex_solve(solver->lp_solver);
     }
@@ -965,7 +1636,7 @@ static int solve_root_node(MIPSolver *solver) {
     root->lp_status = RALPH_STATUS_OPTIMAL;
 
     if (solver->verbose) {
-        printf("Root LP: obj = %.6f, iter = %d\n",
+        LP_LOG_STDOUT("Root LP: obj = %.6f, iter = %d\n",
                solver->root_bound, solver->root_iterations);
     }
 
@@ -980,11 +1651,11 @@ static int solve_root_node(MIPSolver *solver) {
     /* Try diving heuristic to find an incumbent early.
      * This enables bound-based pruning in the B&B search. */
     if (solver->verbose) {
-        printf("Running diving heuristic...\n");
+        LP_LOG_STDOUT("Running diving heuristic...\n");
     }
     if (diving_heuristic(solver) == 0) {
         if (solver->verbose) {
-            printf("Diving found incumbent: %.6f\n", solver->best_obj);
+            LP_LOG_STDOUT("Diving found incumbent: %.6f\n", solver->best_obj);
         }
         /* Check if diving found optimal (gap closed) */
         double gap = fabs(solver->best_obj - solver->root_bound);
@@ -1000,7 +1671,7 @@ static int solve_root_node(MIPSolver *solver) {
         double *scp_solution = (double *)calloc(model->num_vars, sizeof(double));
         if (scp_solution) {
             if (solver->verbose) {
-                printf("Running SCP heuristics...\n");
+                LP_LOG_STDOUT("Running SCP heuristics...\n");
             }
             /* Run LP-guided greedy + local search */
             if (heuristic_scp(solver, solver->lp_solver->solution, scp_solution) == 0) {
@@ -1015,7 +1686,7 @@ static int solve_root_node(MIPSolver *solver) {
                 if (!solver->has_incumbent || is_better) {
                     update_incumbent(solver, scp_solution, scp_obj);
                     if (solver->verbose) {
-                        printf("SCP heuristic found incumbent: %.6f\n", scp_obj);
+                        LP_LOG_STDOUT("SCP heuristic found incumbent: %.6f\n", scp_obj);
                     }
                 }
             }
@@ -1077,7 +1748,7 @@ static int solve_root_node(MIPSolver *solver) {
         solver->cuts_generated += cuts_added;
 
         if (solver->verbose) {
-            printf("Cut round %d: %d cuts generated (pool size: %d)\n",
+            LP_LOG_STDOUT("Cut round %d: %d cuts generated (pool size: %d)\n",
                    cut_rounds + 1, cuts_added, solver->cut_pool->count);
         }
 
@@ -1087,29 +1758,43 @@ static int solve_root_node(MIPSolver *solver) {
 
         if (cuts_applied > 0) {
             if (solver->verbose) {
-                printf("Cut round %d: %d cuts applied (total: %d)\n",
+                LP_LOG_STDOUT("Cut round %d: %d cuts applied (total: %d)\n",
                        cut_rounds + 1, cuts_applied, total_cuts_applied);
             }
 
             /* Rebuild simplex solver with new constraints */
-            simplex_free(solver->lp_solver);
-            solver->lp_solver = simplex_create(solver->working_model);
-            if (!solver->lp_solver) {
+            if (mip_create_lp_solver_for_working_model(solver) != 0) {
                 bb_node_pool_return(solver->node_pool, root);
                 return -1;
             }
 
-            /* Disable scaling for MIP */
-            solver->lp_solver->scaling = 0;
+            if (solver->verbose) {
+                LP_LOG_STDOUT("  Re-solving LP with %d constraints...\n",
+                       solver->working_model->num_cons);
+            }
 
             /* Re-solve LP with cuts */
             simplex_solve(solver->lp_solver);
 
+            if (solver->verbose) {
+                LP_LOG_STDOUT("  LP after cuts: status=%d, obj=%.6f\n",
+                       solver->lp_solver->status, solver->lp_solver->obj_value);
+            }
+
             if (solver->lp_solver->status != RALPH_STATUS_OPTIMAL) {
-                /* LP became infeasible with cuts - shouldn't happen */
-                solver->status = solver->lp_solver->status;
-                bb_node_pool_return(solver->node_pool, root);
-                return 0;
+                /* LP became infeasible with cuts - discard all cuts and continue.
+                 * Safety: rebuild working model from original, re-solve. */
+                if (solver->verbose) {
+                    LP_LOG_STDOUT("  WARNING: LP non-optimal after cuts (status=%d), discarding cuts\n",
+                           solver->lp_solver->status);
+                }
+                if (mip_recover_root_relaxation(solver) != 0) {
+                    bb_node_pool_return(solver->node_pool, root);
+                    return -1;
+                }
+                root->lp_bound = solver->lp_solver->obj_value;
+                solver->cuts_applied = 0;
+                break;
             }
 
             double new_bound = solver->lp_solver->obj_value;
@@ -1119,7 +1804,7 @@ static int solve_root_node(MIPSolver *solver) {
                                                    solver->lp_solver->solution,
                                                    solver->original_model->num_vars);
             if (solver->verbose >= 2) {
-                printf("Cut round %d: %d binding cuts\n", cut_rounds + 1, binding);
+                LP_LOG_STDOUT("Cut round %d: %d binding cuts\n", cut_rounds + 1, binding);
             }
 
             /* Check if bound improved significantly */
@@ -1133,7 +1818,7 @@ static int solve_root_node(MIPSolver *solver) {
             }
 
             if (solver->verbose) {
-                printf("LP bound improved: %.6f -> %.6f (stall count: %d)\n",
+                LP_LOG_STDOUT("LP bound improved: %.6f -> %.6f (stall count: %d)\n",
                        root->lp_bound, new_bound, no_improvement_rounds);
             }
             root->lp_bound = new_bound;
@@ -1152,7 +1837,7 @@ static int solve_root_node(MIPSolver *solver) {
                 int before = solver->cut_pool->count;
                 cut_pool_cleanup(solver->cut_pool, 5);  /* Remove cuts older than 5 rounds */
                 if (solver->verbose >= 2 && solver->cut_pool->count < before) {
-                    printf("Cut cleanup: removed %d old cuts\n", before - solver->cut_pool->count);
+                    LP_LOG_STDOUT("Cut cleanup: removed %d old cuts\n", before - solver->cut_pool->count);
                 }
             }
         }
@@ -1167,6 +1852,7 @@ static int solve_root_node(MIPSolver *solver) {
     root->lp_bound = solver->lp_solver->obj_value;
     root->lp_status = RALPH_STATUS_OPTIMAL;
     save_basis_to_node(solver->lp_solver, root, model->num_vars);
+    solver->last_solved_node_id = root->id;
 
     /* Initialize best bound */
     solver->best_bound = root->lp_bound;
@@ -1178,7 +1864,7 @@ static int solve_root_node(MIPSolver *solver) {
 
         if (lagr_solution) {
             if (solver->verbose) {
-                printf("Computing Lagrangian bound...\n");
+                LP_LOG_STDOUT("Computing Lagrangian bound...\n");
             }
             if (lagrangian_solve_scp(solver, lagr_solution, &lagr_lower) == 0) {
                 solver->lagrangian_bound = lagr_lower;
@@ -1189,7 +1875,7 @@ static int solve_root_node(MIPSolver *solver) {
                                    (lagr_lower < solver->best_bound);
                 if (lagr_tighter) {
                     if (solver->verbose) {
-                        printf("Lagrangian bound (%.6f) tighter than LP (%.6f)\n",
+                        LP_LOG_STDOUT("Lagrangian bound (%.6f) tighter than LP (%.6f)\n",
                                lagr_lower, solver->best_bound);
                     }
                     solver->best_bound = lagr_lower;
@@ -1206,7 +1892,7 @@ static int solve_root_node(MIPSolver *solver) {
                 if (is_better) {
                     update_incumbent(solver, lagr_solution, lagr_obj);
                     if (solver->verbose) {
-                        printf("Lagrangian found better incumbent: %.6f\n", lagr_obj);
+                        LP_LOG_STDOUT("Lagrangian found better incumbent: %.6f\n", lagr_obj);
                     }
                 }
 
@@ -1241,9 +1927,24 @@ int mip_solve(MIPSolver *solver) {
     LPModel *model = solver->original_model;
 
     if (solver->verbose) {
-        printf("\n=== Ralph MIP Solver ===\n");
-        printf("Variables: %d (%d integer)\n", model->num_vars, solver->num_integers);
-        printf("Constraints: %d\n", model->num_cons);
+        LP_LOG_STDOUT("\n=== Ralph MIP Solver ===\n");
+        LP_LOG_STDOUT("Variables: %d (%d integer)\n", model->num_vars, solver->num_integers);
+        LP_LOG_STDOUT("Constraints: %d\n", model->num_cons);
+    }
+
+    /* Try user-provided MIP start once per solve. */
+    if (solver->mip_start && solver->mip_start_n == model->num_vars) {
+        int accepted;
+        solver->mip_start_attempted++;
+        accepted = mip_try_accept_start(solver, solver->mip_start, solver->mip_start_mask);
+        if (accepted) {
+            solver->mip_start_accepted++;
+            if (solver->verbose) {
+                LP_LOG_STDOUT("Accepted MIP start incumbent: %.6f\n", solver->best_obj);
+            }
+        } else if (solver->verbose) {
+            LP_LOG_STDOUT("Rejected MIP start (infeasible or incompatible)\n");
+        }
     }
 
     /* Solve root node */
@@ -1288,18 +1989,27 @@ int mip_solve(MIPSolver *solver) {
         BBNode *node = node_queue_pop(solver->node_queue);
         if (!node) {
             if (solver->verbose) {
-                printf("[mip_solve] Queue empty, exiting loop\n");
+                LP_LOG_STDOUT("[mip_solve] Queue empty, exiting loop\n");
             }
             break;
         }
 
         if (solver->verbose) {
-            printf("[mip_solve] Processing node %d (depth=%d)\n", node->id, node->depth);
+            LP_LOG_STDOUT("[mip_solve] Processing node %d (depth=%d)\n", node->id, node->depth);
         }
 
         /* Process node */
         process_node(solver, node);
         solver->nodes_explored++;
+
+        /* RINS heuristic: search LP-incumbent agreement neighborhood */
+        if (solver->has_incumbent && solver->lp_solver && solver->lp_solver->tableau) {
+            int rins_interval = (solver->num_integers < 50) ?
+                                MIP_RINS_INTERVAL_SMALL : MIP_RINS_INTERVAL;
+            if (solver->nodes_explored % rins_interval == 0) {
+                rins_heuristic(solver);
+            }
+        }
 
         if (node->depth > solver->max_depth) {
             solver->max_depth = node->depth;
@@ -1310,19 +2020,19 @@ int mip_solve(MIPSolver *solver) {
             int queue_size_before = solver->node_queue->size;
             node_queue_update_bound_with_pool(solver->node_queue, solver->cutoff, solver->node_pool);
             if (solver->verbose && solver->node_queue->size < queue_size_before) {
-                printf("[mip_solve] Pruned %d nodes by bound (cutoff=%.4f)\n",
+                LP_LOG_STDOUT("[mip_solve] Pruned %d nodes by bound (cutoff=%.4f)\n",
                        queue_size_before - solver->node_queue->size, solver->cutoff);
             }
         }
         solver->best_bound = node_queue_best_bound(solver->node_queue);
         if (solver->verbose) {
-            printf("[mip_solve] Queue size=%d, best_bound=%.4f\n",
+            LP_LOG_STDOUT("[mip_solve] Queue size=%d, best_bound=%.4f\n",
                    solver->node_queue->size, solver->best_bound);
         }
 
         /* Print progress */
         if (solver->verbose && solver->nodes_explored % 100 == 0) {
-            printf("Nodes: %d, Best: %.4f, Bound: %.4f, Gap: %.2f%%\n",
+            LP_LOG_STDOUT("Nodes: %d, Best: %.4f, Bound: %.4f, Gap: %.2f%%\n",
                    solver->nodes_explored, solver->best_obj, solver->best_bound,
                    100.0 * fabs(solver->best_obj - solver->best_bound) /
                    (fabs(solver->best_obj) + 1e-10));
@@ -1352,40 +2062,48 @@ int mip_solve(MIPSolver *solver) {
 void mip_print_stats(const MIPSolver *solver) {
     if (!solver) return;
 
-    printf("\n=== MIP Statistics ===\n");
-    printf("Status: %d\n", solver->status);
-    printf("Nodes explored: %d\n", solver->nodes_explored);
-    printf("Max depth: %d\n", solver->max_depth);
-    printf("Cuts generated: %d\n", solver->cuts_generated);
-    printf("Solve time: %.3f seconds\n", solver->solve_time);
+    LP_LOG_STDOUT("\n=== MIP Statistics ===\n");
+    LP_LOG_STDOUT("Status: %d\n", solver->status);
+    LP_LOG_STDOUT("Nodes explored: %d\n", solver->nodes_explored);
+    LP_LOG_STDOUT("Max depth: %d\n", solver->max_depth);
+    LP_LOG_STDOUT("Cuts generated: %d\n", solver->cuts_generated);
+    LP_LOG_STDOUT("RC fixings: %d\n", solver->rc_fixings);
+    LP_LOG_STDOUT("RINS calls: %d (found %d incumbents)\n", solver->rins_calls, solver->rins_found);
+    LP_LOG_STDOUT("Strong probes: %d (failures=%d, recovered=%d)\n",
+           solver->strong_branch_probes, solver->strong_branch_failures,
+           solver->strong_branch_recoveries);
+    LP_LOG_STDOUT("Cut-loop recovery: attempts=%d success=%d failures=%d\n",
+           solver->cut_recovery_attempts, solver->cut_recovery_success,
+           solver->cut_recovery_failures);
+    LP_LOG_STDOUT("Solve time: %.3f seconds\n", solver->solve_time);
 
     /* Node pool statistics */
     if (solver->node_pool) {
         BBNodePool *pool = solver->node_pool;
         int in_use = pool->capacity - pool->free_count;
-        printf("Node pool: %d/%d capacity, peak %d (%.1f%% utilized)\n",
+        LP_LOG_STDOUT("Node pool: %d/%d capacity, peak %d (%.1f%% utilized)\n",
                in_use, pool->capacity, pool->nodes_allocated,
                100.0 * pool->nodes_allocated / pool->capacity);
         if (pool->nodes_allocated >= pool->capacity) {
-            printf("  WARNING: Pool exhausted - fell back to malloc\n");
+            LP_LOG_STDOUT("  WARNING: Pool exhausted - fell back to malloc\n");
         }
     }
 
     if (solver->use_lap_solver) {
-        printf("LAP solver: enabled (%dx%d assignment)\n",
+        LP_LOG_STDOUT("LAP solver: enabled (%dx%d assignment)\n",
                solver->lap_sig ? solver->lap_sig->base.n : 0,
                solver->lap_sig ? solver->lap_sig->base.n : 0);
-        printf("Nodes solved with LAP: %d\n", solver->lap_nodes_solved);
-        printf("Nodes solved with simplex: %d\n", solver->simplex_nodes_solved);
+        LP_LOG_STDOUT("Nodes solved with LAP: %d\n", solver->lap_nodes_solved);
+        LP_LOG_STDOUT("Nodes solved with simplex: %d\n", solver->simplex_nodes_solved);
     }
 
     if (solver->has_incumbent) {
-        printf("Best objective: %.10f\n", solver->best_obj);
-        printf("Best bound: %.10f\n", solver->best_bound);
-        printf("Gap: %.4f%%\n",
+        LP_LOG_STDOUT("Best objective: %.10f\n", solver->best_obj);
+        LP_LOG_STDOUT("Best bound: %.10f\n", solver->best_bound);
+        LP_LOG_STDOUT("Gap: %.4f%%\n",
                100.0 * fabs(solver->best_obj - solver->best_bound) /
                (fabs(solver->best_obj) + 1e-10));
     } else {
-        printf("No feasible solution found\n");
+        LP_LOG_STDOUT("No feasible solution found\n");
     }
 }

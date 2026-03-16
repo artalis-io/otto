@@ -1,5 +1,5 @@
 /*
- * Test presolve on beaconfd - a numerically challenging NETLIB problem.
+ * Regression test for beaconfd - a numerically challenging NETLIB problem.
  *
  * beaconfd has 173 constraints with 140 equalities (81% equality constraints).
  * This makes it numerically challenging for simplex methods.
@@ -7,22 +7,26 @@
  * Current status (Feb 2026):
  * - Presolve successfully reduces: 262 vars -> 148 vars, 173 cons -> 87 cons
  * - Redundant row detection finds rank=87 (full rank after reduction)
- * - Simplex fails at iteration 20 due to LU refactorization failure
+ * - Simplex remains numerically challenging and may stop before OPTIMAL
+ * - Regression guard: no-presolve path should progress beyond the old
+ *   Phase-1 refactorization stall around iteration 120
  * - Additional numerical stability improvements needed:
  *   1. Better pivot selection in LU factorization
  *   2. Iterative refinement for ill-conditioned bases
  *   3. More aggressive problem scaling
  *
- * This test verifies that presolve runs without crashing and reduces
- * the problem size. Solving beaconfd correctly requires the above
- * numerical improvements, which are tracked separately.
+ * This test is intended to be stable in CI:
+ * - It verifies load + solve paths are exercised for beaconfd.
+ * - It accepts the current non-optimal behavior while guarding against
+ *   hard solver failures and crashes.
+ * - Once numerical stability is improved, tighten this test to require OPTIMAL.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 /* Expected optimal objective for beaconfd (for when we fix numerical issues) */
 #define BEACONFD_OPT 33592.4858072
@@ -41,24 +45,24 @@ int main(void) {
 
     /* Create model and load beaconfd from MPS file */
     const char *mps_path = "benchmarks/netlib/beaconfd.mps";
-    RalphModel *model = ralph_create();
+    RalphModel *model = ralph_test_create();
 
     if (!model) {
         printf("Failed to create model\n");
         return 1;
     }
 
-    int load_ret = ralph_read_mps(model, mps_path);
+    int load_ret = ralph_test_read_mps(model, mps_path);
     if (load_ret != 0) {
         printf("Failed to load %s (error %d)\n", mps_path, load_ret);
-        ralph_free(model);
+        ralph_test_free(model);
         return 1;
     }
 
     TEST(load_ret == 0, "Loaded beaconfd.mps successfully");
 
-    int orig_vars = ralph_get_num_vars(model);
-    int orig_cons = ralph_get_num_cons(model);
+    int orig_vars = ralph_test_get_num_vars(model);
+    int orig_cons = ralph_test_get_num_cons(model);
     printf("\nOriginal problem:\n");
     printf("  Variables: %d\n", orig_vars);
     printf("  Constraints: %d\n", orig_cons);
@@ -68,45 +72,56 @@ int main(void) {
 
     /* Test WITHOUT presolve - expected to fail */
     printf("\n--- Test 1: Solve WITHOUT presolve (expect failure) ---\n");
-    ralph_set_int_param(model, "presolve", 0);
-    ralph_set_int_param(model, "verbose", 0);
+    ralph_test_set_int_param(model, "presolve", 0);
+    ralph_test_set_int_param(model, "verbose", 0);
 
-    ralph_optimize(model);
-    RalphStatus status_no_presolve = ralph_get_status(model);
-    printf("Status without presolve: %s\n", ralph_status_string(status_no_presolve));
+    ralph_test_optimize(model);
+    RalphStatus status_no_presolve = ralph_test_get_status(model);
+    int iters_no_presolve = ralph_test_get_iterations(model);
+    printf("Status without presolve: %s\n", ralph_test_status_string(status_no_presolve));
+    printf("Iterations without presolve: %d\n", iters_no_presolve);
 
-    /* Without presolve, beaconfd typically fails due to numerical issues */
-    TEST(status_no_presolve != RALPH_STATUS_OPTIMAL,
-         "Without presolve, problem fails (expected - numerically challenging)");
+    /* beaconfd was originally numerically challenging without presolve,
+     * but solver improvements (dual rescue, basis stabilization) now
+     * allow it to solve. Accept OPTIMAL or non-stall (>120 iters). */
+    TEST(status_no_presolve == RALPH_STATUS_OPTIMAL || iters_no_presolve > 120,
+         "No-presolve path solves or progresses beyond old Phase-1 stall (~120 iterations)");
 
     /* Test WITH presolve */
     printf("\n--- Test 2: Solve WITH presolve ---\n");
 
     /* Need to reload the model since solve may have modified state */
-    ralph_free(model);
-    model = ralph_create();
-    if (!model || ralph_read_mps(model, mps_path) != 0) {
+    ralph_test_free(model);
+    model = ralph_test_create();
+    if (!model || ralph_test_read_mps(model, mps_path) != 0) {
         printf("Failed to reload model\n");
         return 1;
     }
 
-    ralph_set_int_param(model, "presolve", 1);
-    ralph_set_int_param(model, "verbose", 0);
+    ralph_test_set_int_param(model, "presolve", 1);
+    ralph_test_set_int_param(model, "verbose", 0);
 
-    ralph_optimize(model);
-    RalphStatus status_presolve = ralph_get_status(model);
-    printf("Status with presolve: %s\n", ralph_status_string(status_presolve));
+    ralph_test_optimize(model);
+    RalphStatus status_presolve = ralph_test_get_status(model);
+    int iters_presolve = ralph_test_get_iterations(model);
+    printf("Status with presolve: %s\n", ralph_test_status_string(status_presolve));
+    printf("Iterations with presolve: %d\n", iters_presolve);
 
-    /* Currently presolve reduces but doesn't fully solve due to numerical issues */
+    TEST(status_presolve != RALPH_STATUS_ERROR,
+         "With presolve, solver does not return hard ERROR");
+    TEST(status_presolve != RALPH_STATUS_UNKNOWN,
+         "With presolve, solver returns a terminal status");
+
+    /* Currently presolve improves robustness but may still miss OPTIMAL due to numerics. */
     if (status_presolve == RALPH_STATUS_OPTIMAL) {
-        double obj = ralph_get_objval(model);
+        double obj = ralph_test_get_objval(model);
         printf("Objective: %.6f (expected: %.6f)\n", obj, BEACONFD_OPT);
 
         /* Debug: check for NaN/Inf in solution */
-        int n = ralph_get_num_vars(model);
+        int n = ralph_test_get_num_vars(model);
         double *sol = (double*)malloc(n * sizeof(double));
         if (sol) {
-            ralph_get_solution(model, sol);
+            ralph_test_get_solution(model, sol);
             int nan_count = 0, inf_count = 0;
             for (int j = 0; j < n; j++) {
                 if (isnan(sol[j])) nan_count++;
@@ -122,14 +137,14 @@ int main(void) {
         printf("Relative error: %.6f%%\n", rel_err * 100);
         TEST(!isnan(obj) && rel_err < 0.01, "Objective within 1% of expected");
     } else {
-        printf("Note: Presolve reduces problem but numerical issues remain.\n");
-        printf("      Additional LU stability improvements needed.\n");
-        /* For now, we just verify presolve doesn't crash */
-        TEST(1, "Presolve completed without crash");
+        printf("Note: Numerical instability remains (TODO: reach OPTIMAL).\n");
+        TEST(status_presolve == RALPH_STATUS_INFEASIBLE ||
+             status_presolve == RALPH_STATUS_ITERATION_LIMIT,
+             "Known non-optimal terminal status is reproduced");
     }
 
     /* Cleanup */
-    ralph_free(model);
+    ralph_test_free(model);
 
     printf("\n══════════════════════════════════════════════════════════\n");
     printf("Test Summary: %d/%d passed (%.1f%%)\n", pass_count, test_count,

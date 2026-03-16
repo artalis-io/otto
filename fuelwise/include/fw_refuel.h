@@ -90,7 +90,7 @@ int fw_solve_refuel_milp(
  *   - Subproblem: continuous x[i], y[i] given fixed z
  *
  * When the subproblem is infeasible for a given z, a Farkas feasibility
- * cut is added to the master problem using ralph_get_farkas_ray().
+ * cut is added to the master problem.
  *
  * This approach can be faster than full MILP for problems with many
  * integer variables but relatively simple continuous structure.
@@ -105,6 +105,67 @@ int fw_solve_refuel_milp(
 int fw_solve_refuel_benders(
     const FWRefuelProblem *problem,
     FWRefuelSolution *solution
+);
+
+/*
+ * Set the threshold for using Benders decomposition.
+ *
+ * If num_stations > threshold, use Benders; otherwise use MILP.
+ * Default is 0, meaning always use Benders decomposition.
+ *
+ * Parameters:
+ *   threshold - Station count threshold (0 = always use Benders)
+ */
+void fw_set_benders_threshold(int threshold);
+
+/*
+ * Get the current Benders threshold.
+ *
+ * Returns:
+ *   Current threshold value
+ */
+int fw_get_benders_threshold(void);
+
+/* ============================================================================
+ * MIP Hint Flags
+ *
+ * Control which domain-specific MIP enhancements are active.
+ * Default (0) enables all hints. Set flags to disable specific hints.
+ * Useful for benchmarking the impact of individual optimizations.
+ * NOT thread-safe if modified concurrently with solving.
+ * ============================================================================ */
+
+#define FW_HINT_NO_PRIORITIES     (1 << 0)  /* Disable branching priorities */
+#define FW_HINT_NO_DIRECTIONS     (1 << 1)  /* Disable branching directions */
+#define FW_HINT_NO_REACH_CUTS     (1 << 2)  /* Disable reach-cut callback */
+#define FW_HINT_NO_MANDATORY_FIX  (1 << 3)  /* Disable mandatory station fixing */
+#define FW_HINT_NO_DOMINATED_ELIM (1 << 4)  /* Disable dominated station elimination */
+#define FW_HINT_NO_SYMMETRY_BREAK (1 << 5)  /* Disable symmetry-breaking constraints */
+
+/* Disable all hints (raw MILP, no domain intelligence) */
+#define FW_HINT_NONE              (0x3F)
+
+void fw_set_mip_hint_flags(int flags);
+int fw_get_mip_hint_flags(void);
+void fw_set_presolve(int enable, unsigned int mask);
+
+/*
+ * Export the MILP model as an LP file (without domain hints).
+ *
+ * Builds the raw MILP formulation and writes it in CPLEX LP format.
+ * The exported model does not include reach cuts, branching priorities,
+ * or directions — suitable for solving with external solvers like GLPK.
+ *
+ * Parameters:
+ *   problem - The refueling problem definition
+ *   path    - Output file path (.lp)
+ *
+ * Returns:
+ *   0 on success, -1 on error
+ */
+int fw_export_milp_lp(
+    const FWRefuelProblem *problem,
+    const char *path
 );
 
 /*
@@ -126,11 +187,11 @@ void fw_free_solution(FWRefuelSolution *solution);
  *
  * Parameters:
  *   problem       - The refueling problem (for consumption rates)
- *   from_distance - Starting distance in miles
- *   to_distance   - Ending distance in miles
+ *   from_distance - Starting distance in meters
+ *   to_distance   - Ending distance in meters
  *
  * Returns:
- *   Fuel consumed in gallons
+ *   Fuel consumed in liters
  */
 double fw_calc_fuel_consumed(
     const FWRefuelProblem *problem,
@@ -145,7 +206,7 @@ double fw_calc_fuel_consumed(
  *   problem - The refueling problem
  *
  * Returns:
- *   Total fuel consumed in gallons
+ *   Total fuel consumed in liters
  */
 double fw_calc_total_fuel_consumed(const FWRefuelProblem *problem);
 

@@ -2,43 +2,83 @@
 
 ## Overview
 
-Ralph is a complete LP (Linear Programming) and MIP (Mixed Integer Programming) solver implementing industrial-strength algorithms. This document describes the high-level architecture and how the components interact.
+Ralph is a complete LP (Linear Programming) and MIP (Mixed Integer Programming) solver.
+This document describes the high-level architecture and current API/dispatch boundaries.
+
+## API Design Philosophy (Feb 2026 Baseline)
+
+- LP and MIP entry points are explicit (`ralph_optimize_lp`, `ralph_optimize_mip`).
+- `ralph_optimize` remains as a compatibility dispatcher for legacy callers.
+- Parameter contracts are typed and scope-aware first (LP-only, MIP-only, shared),
+  with string-name APIs preserved as wrappers.
+- LP algorithm routing (requested vs effective algorithm/crossover and fallback reason)
+  is explicit and reportable.
+- LP external backend selection is explicit-only: internal `primal`/`dual`/`auto` remain
+  internal by default; external routing requires an explicit external algorithm request plus
+  matching `lp_external_provider` ID for a registered adapter.
+- Internal modules are kept orthogonal: API facade, LP dispatch, MIP↔LP adapter,
+  diagnostics/telemetry, and solver kernels.
 
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Public API (ralph.h)                      │
-│  ralph_create, ralph_add_var, ralph_add_constraint, ralph_solve  │
-└─────────────────────────────────────────────────────────────────┘
-                                 │
-                                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Model Layer (model.c)                       │
-│         LPModel: variables, constraints, bounds, objective       │
-└─────────────────────────────────────────────────────────────────┘
-                                 │
-                    ┌────────────┴────────────┐
-                    ▼                         ▼
-┌──────────────────────────┐    ┌──────────────────────────┐
-│   LP Solver (simplex.c)   │    │   MIP Solver (mip.c)     │
-│   Revised Simplex Method  │◄───│   Branch and Bound       │
-└──────────────────────────┘    └──────────────────────────┘
-            │                              │
-            ▼                              ▼
-┌──────────────────────────┐    ┌──────────────────────────┐
-│  LU Factorization (lu.c)  │    │  Cutting Planes (cuts.c) │
-│  Basis matrix operations  │    │  Gomory, MIR cuts        │
-└──────────────────────────┘    └──────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│             Public API (ralph_lp.h + ralph_mip.h)                    │
+│  Model build/edit/query + solve APIs + params + diagnostics         │
+│  ralph_optimize_lp / ralph_optimize_mip / ralph_optimize (compat)   │
+└─────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                       API Facade Layer (ralph.c)                    │
+│  Compatibility wrappers, parameter routing, solve orchestration      │
+└─────────────────────────────────────────────────────────────────────┘
+                     │                               │
+                     ▼                               ▼
+┌───────────────────────────────────┐   ┌────────────────────────────────┐
+│ LP Dispatch (lp_dispatch.c/.h)    │   │ MIP↔LP Adapter (mip_lp_adapter)│
+│ LP algorithm/backend plan/fallback│   │ Node/probe/recovery boundaries │
+└───────────────────────────────────┘   └────────────────────────────────┘
+                     │                               │
+                     │             ┌────────────────────────────────────┐
+                     ├────────────►│ LP External Adapter Registry       │
+                     │             │ (lp_external_adapter.c/.h, internal│
+                     │             │  contract, provider-scoped)        │
+                     │             └────────────────────────────────────┘
+                     └───────────────┬───────────────┘
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                          Model Layer (model.c)                      │
+│          LPModel: variables, constraints, bounds, objective         │
+└─────────────────────────────────────────────────────────────────────┘
+                     │                               │
+                     ▼                               ▼
+┌──────────────────────────┐           ┌──────────────────────────┐
+│ LP Solver (simplex/dual) │◄──────────│   MIP Solver (mip.c)     │
+│ Revised simplex + dual   │           │ Branch-and-bound + cuts  │
+└──────────────────────────┘           └──────────────────────────┘
             │
             ▼
 ┌──────────────────────────┐
-│  Sparse Matrix (sparse.c) │
-│  CSC format operations    │
+│ LU + Sparse Kernels       │
+│ lu.c / lu_sparse.c / CSC  │
 └──────────────────────────┘
 ```
 
 ## Core Components
+
+### External LP Backend Dispatch Contract (Feb 2026)
+
+- `lp_algorithm` supports explicit external modes:
+  `PRIMAL_SIMPLEX_EXTERNAL`, `DUAL_SIMPLEX_EXTERNAL`, `BARRIER_EXTERNAL`.
+- `lp_external_provider` selects the required provider ID
+  (`NONE`, `GLPK`, `HiGHS`, `CLP`, `CPLEX`, `Gurobi`, `GLOP`).
+- Dispatch rules:
+  - `PRIMAL_SIMPLEX`, `DUAL_SIMPLEX`, `AUTO` always select internal simplex backends.
+  - External backends are selected only for explicit external algorithms and only when
+    provider ID matches the registered external adapter.
+  - On mismatch/unavailability, dispatch falls back to internal simplex and reports
+    `RALPH_LP_FALLBACK_EXTERNAL_UNAVAILABLE`.
 
 ### 1. Sparse Matrix Layer (`sparse.c`, `sparse.h`)
 
@@ -137,6 +177,108 @@ typedef struct {
 - **Branching:** Select fractional variable, create child nodes
 - **Bounding:** Solve LP relaxation at each node
 - **Pruning:** Discard nodes that can't improve incumbent
+- **Cut Callbacks:** User-provided cut generation at each node
+- **Branch Callbacks:** User-provided variable selection override
+
+**MIP Infrastructure (Feb 2026):**
+
+The solver supports domain-specific customization via callbacks and priorities:
+
+```c
+/* Branching control */
+void ralph_set_branch_priorities(RalphModel *m, const int *priorities);
+void ralph_set_branch_directions(RalphModel *m, const int *directions);
+
+/* Warm start for re-optimization */
+RalphBasis* ralph_save_basis(const RalphModel *m);
+int ralph_load_basis(RalphModel *m, const RalphBasis *basis);
+void ralph_free_basis(RalphBasis *basis);
+
+/* Cut callback - invoked at each B&B node */
+typedef struct {
+    int (*generate_cuts)(void *user_data, const double *x_relaxation,
+                         int num_vars, RalphCut *cuts, int max_cuts);
+    void *user_data;
+} RalphCutCallback;
+void ralph_set_cut_callback(RalphModel *m, const RalphCutCallback *cb);
+
+/* Branch callback - custom variable selection */
+typedef struct {
+    int (*select_branch_var)(void *user_data, const double *x_relaxation,
+                              int num_vars, const int *is_integer,
+                              const double *lb, const double *ub);
+    void *user_data;
+} RalphBranchCallback;
+void ralph_set_branch_callback(RalphModel *m, const RalphBranchCallback *cb);
+
+/* Lazy constraints - add cuts and re-solve */
+int ralph_add_lazy_constraint(RalphModel *m, const RalphCut *cut);
+int ralph_add_lazy_constraints(RalphModel *m, const RalphCut *cuts, int count);
+```
+
+**Use cases:**
+- **FuelWise:** Reach cuts for reachability constraints, Benders decomposition
+- **HoSE:** Driving capacity cuts (11h limit), mandatory break cuts (8h)
+- **General:** Custom branching priorities, domain-specific cut generation
+
+### 6. Benders Decomposition (`benders.c`)
+
+**Purpose:** Solve problems with complicating variables via master/subproblem decomposition.
+
+**Algorithm:**
+1. Partition model: master vars (integer/binary) vs subproblem vars (continuous)
+2. Detect linking constraints (constraints involving both)
+3. Solve master MIP with theta variable for recourse cost
+4. Fix master solution, solve subproblem LP
+5. Generate cuts from subproblem duals (optimality) or Farkas rays (feasibility)
+6. Repeat until convergence
+
+**Data Structures:**
+```c
+typedef struct {
+    int *master_var_indices;    /* Which vars go to master */
+    int num_master_vars;
+    int theta_var;              /* Recourse cost variable (-1 = auto) */
+    int num_scenarios;          /* 1 for deterministic */
+    double *scenario_probs;     /* Weights for stochastic */
+    double gap_tolerance;       /* Convergence criterion */
+    int max_iterations;
+    int cuts_at_lp_nodes;       /* 1 = modern B&B&C (not yet implemented) */
+    int warm_start_subproblems; /* Reuse subproblem basis */
+} RalphBendersConfig;
+
+typedef struct {
+    int status;                 /* OPTIMAL, INFEASIBLE, etc. */
+    double objective;
+    int iterations;
+    int optimality_cuts;        /* Cuts generated */
+    int feasibility_cuts;
+} RalphBendersResult;
+```
+
+**Internal Context:**
+```c
+typedef struct {
+    LPModel *master_model;      /* Master MIP */
+    LPModel *sub_model;         /* Subproblem LP */
+    int *master_to_orig;        /* Variable mapping */
+    int *sub_to_orig;
+    LinkingConstraint *linking; /* Constraints coupling master↔sub */
+    int num_linking;
+    double *master_solution;    /* Current master solution */
+    BendersCut *cuts;           /* Accumulated cuts */
+    int num_cuts;
+} BendersContext;
+```
+
+**Cut Generation:**
+- **Optimality cut:** `θ >= π'(h - Tx)` where π = subproblem duals
+- **Feasibility cut:** `0 >= y'(h - Tx)` where y = Farkas ray
+
+**Key Implementation Details:**
+- Model finalization: After adding cuts, must re-finalize master (rebuilds sparse matrix)
+- Numerical stability: Avoid RALPH_INFINITY bounds on theta; use domain-appropriate limits
+- Linking detection: Scans constraint matrix for mixed master/sub variable references
 
 ## Algorithm Details
 

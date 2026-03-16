@@ -12,6 +12,10 @@
 #include <math.h>
 #include <limits.h>
 #include "lp.h"
+#include "lp_bfcp_policy.h"
+#include "lp_glpk_strict.h"
+#include "lu_update_backend.h"
+#include "lu_supernode.h"
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -19,6 +23,14 @@
 
 /* Refactorize when spike pool exceeds this percentage of capacity */
 #define RALPH_SPIKE_POOL_WARN_PCT 85
+/* Reject extremely dense FT updates on large bases; they poison sparse solve cost. */
+#define RALPH_SPIKE_DENSE_REJECT_M_MIN 300
+#define RALPH_SPIKE_DENSE_REJECT_MIN_UPDATES 8
+#define RALPH_SPIKE_DENSE_BASE_RATIO 0.70
+#define RALPH_SPIKE_DENSE_AGED_RATIO 0.55
+/* Early reinversion when average stored spike density drifts too high. */
+#define RALPH_SPIKE_AVG_REFACTOR_RATIO 0.45
+#define RALPH_SPIKE_AVG_REFACTOR_AGED_RATIO 0.35
 
 /* Forward declarations for reach computation (used by sparse solves) */
 static void compute_reach_L(const LUFactorization *lu,
@@ -29,6 +41,315 @@ static void compute_reach_U(const LUFactorization *lu,
                             int nnz_rhs, const int *rhs_idx,
                             int *reach_out, int *reach_nnz,
                             int *marked);
+/* W1: Forward declaration for sparse BTRAN support */
+static void build_csr_transpose(LUFactorization *lu);
+
+static int lu_default_max_updates_for_m(int m) {
+    return (m < 100) ? 50 : (m < 500) ? m / 2 : (m < 1000) ? 100 : 120;
+}
+
+static int lu_cgr_max_updates_for_base(int base_updates) {
+    int cgr_updates;
+
+    if (base_updates <= 0) return 0;
+    cgr_updates = (base_updates * 5) / 4;
+    if (cgr_updates > 256) cgr_updates = 256;
+    if (cgr_updates < 32) cgr_updates = 32;
+    return cgr_updates;
+}
+
+static int lu_glpk_strict_mode(const LUFactorization *lu) {
+    if (!lu || !lu->owner) return 0;
+    return lp_glpk_strict_mode_enabled(lu->owner->glpk_strict_mode);
+}
+
+static int lu_strict_lane_active(const LUFactorization *lu) {
+    if (!lu || !lu->owner) return 0;
+    return lu->owner->lu_strict_lane_active ? 1 : 0;
+}
+
+static int lu_strict_allow_top_level_dense_fallback(const LUFactorization *lu) {
+    if (!lu || !lu->owner) return 1;
+    return lu->owner->lu_strict_allow_top_level_dense_fallback ? 1 : 0;
+}
+
+static void lu_record_ftran_base_ms(const LUFactorization *lu, double elapsed_ms) {
+    if (!lu || !lu->owner) return;
+    lp_telemetry_add_ftran_base_ms(lu->owner, elapsed_ms);
+}
+
+static void lu_record_ftran_update_apply_ms(const LUFactorization *lu, double elapsed_ms) {
+    if (!lu || !lu->owner) return;
+    lp_telemetry_add_ftran_update_apply_ms(lu->owner, elapsed_ms);
+}
+
+static void lu_record_btran_base_ms(const LUFactorization *lu, double elapsed_ms) {
+    if (!lu || !lu->owner) return;
+    lp_telemetry_add_btran_base_ms(lu->owner, elapsed_ms);
+}
+
+static void lu_record_btran_update_apply_ms(const LUFactorization *lu, double elapsed_ms) {
+    if (!lu || !lu->owner) return;
+    lp_telemetry_add_btran_update_apply_ms(lu->owner, elapsed_ms);
+}
+
+static void lu_clamp_max_updates_to_storage(LUFactorization *lu) {
+    int cap;
+
+    if (!lu) return;
+    cap = lu_update_backend_storage_capacity(lu);
+    if (cap > 0 && lu->max_updates > cap) {
+        lu->max_updates = cap;
+    }
+}
+
+static int lu_normalize_backend_policy(int backend_policy) {
+    if (backend_policy == LP_LU_BACKEND_POLICY_AUTO) {
+        return LP_LU_BACKEND_POLICY_LUF_FT;
+    }
+    if (backend_policy < LP_LU_BACKEND_POLICY_LUF_FT ||
+        backend_policy > LP_LU_BACKEND_POLICY_CGR) {
+        return LP_LU_BACKEND_POLICY_LUF_FT;
+    }
+    return backend_policy;
+}
+
+void lu_apply_backend_policy(LUFactorization *lu, int backend_policy) {
+    int effective;
+    int base_updates;
+    int strict_mode;
+
+    if (!lu) return;
+
+    effective = lu_normalize_backend_policy(backend_policy);
+    base_updates = lu_default_max_updates_for_m(lu->m);
+    strict_mode = lu_glpk_strict_mode(lu);
+
+    lu->backend_policy = effective;
+    lu->update_backend = LU_UPDATE_BACKEND_FT;
+    lu->pivot_tol = RALPH_PIVOT_TOL;
+    lu->growth_refactor_threshold = RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
+    lu->max_updates = base_updates;
+    lu->use_ft_updates = 1;
+
+    switch (effective) {
+        case LP_LU_BACKEND_POLICY_CBG:
+            /* CBG: conservative stability posture. */
+            lu->update_backend = LU_UPDATE_BACKEND_BG_COMPAT;
+            lu->use_ft_updates = 0;
+            lu->max_updates = (base_updates * 3) / 4;
+            if (lu->max_updates < 24) lu->max_updates = 24;
+            lu->pivot_tol = RALPH_PIVOT_TOL * 1.5;
+            lu->growth_refactor_threshold = RALPH_LU_GROWTH_REFACTOR_THRESHOLD * 0.5;
+            break;
+        case LP_LU_BACKEND_POLICY_CGR:
+            /* CGR: aggressive posture. Strict GLPK-like mode keeps this off
+             * the FT lane until a real GR Schur-complement update exists. */
+            lu->update_backend = strict_mode
+                ? LU_UPDATE_BACKEND_GR_COMPAT
+                : LU_UPDATE_BACKEND_FT;
+            lu->use_ft_updates = strict_mode ? 0 : 1;
+            lu->max_updates = lu_cgr_max_updates_for_base(base_updates);
+            lu->pivot_tol = RALPH_PIVOT_TOL * 0.75;
+            lu->growth_refactor_threshold = RALPH_LU_GROWTH_REFACTOR_THRESHOLD * 1.5;
+            break;
+        case LP_LU_BACKEND_POLICY_LUF_FT:
+        default:
+            break;
+    }
+
+    if (lu->telemetry_enabled) {
+        lu->telemetry.backend_policy_last = effective;
+        if (effective == LP_LU_BACKEND_POLICY_LUF_FT) {
+            lu->telemetry.backend_policy_luf_ft++;
+        } else if (effective == LP_LU_BACKEND_POLICY_CBG) {
+            lu->telemetry.backend_policy_cbg++;
+        } else if (effective == LP_LU_BACKEND_POLICY_CGR) {
+            lu->telemetry.backend_policy_cgr++;
+        }
+    }
+}
+
+static void lu_set_failure(LUFactorization *lu, int reason) {
+    if (lu) {
+        lu->last_failure_reason = reason;
+    }
+}
+
+static void lu_mark_update_failure(LUFactorization *lu, int reason) {
+    if (!lu || !lu->telemetry_enabled) return;
+    switch ((LUFailureReason)reason) {
+        case LU_FAIL_BAD_INPUT:
+            lu->telemetry.update_fail_bad_input++;
+            break;
+        case LU_FAIL_MAX_UPDATES:
+            lu->telemetry.update_fail_max_updates++;
+            break;
+        case LU_FAIL_SINGULAR_UPDATE:
+            lu->telemetry.update_fail_singular_update++;
+            break;
+        case LU_FAIL_UPDATE_PIVOT_TOO_SMALL:
+            lu->telemetry.update_fail_update_pivot_too_small++;
+            break;
+        case LU_FAIL_SPIKE_POOL_FULL:
+            lu->telemetry.update_fail_spike_pool_full++;
+            break;
+        case LU_FAIL_ETA_ALLOC:
+            lu->telemetry.update_fail_eta_alloc++;
+            break;
+        default:
+            break;
+    }
+}
+
+static void lu_mark_refactor_need(LUFactorization *lu, int reason) {
+    if (!lu || !lu->telemetry_enabled) return;
+    lu->telemetry.refactor_need_checks++;
+    lu->telemetry.refactor_need_last_reason = reason;
+    if (reason == LP_BFCP_REFACTOR_REASON_NONE) return;
+    lu->telemetry.refactor_need_triggers++;
+    switch ((LPBFCPRefactorReason)reason) {
+        case LP_BFCP_REFACTOR_REASON_MAX_UPDATES:
+            lu->telemetry.refactor_need_reason_max_updates++;
+            break;
+        case LP_BFCP_REFACTOR_REASON_GROWTH_GUARD:
+            lu->telemetry.refactor_need_reason_growth_guard++;
+            break;
+        case LP_BFCP_REFACTOR_REASON_AVG_SPIKE_DENSITY:
+            lu->telemetry.refactor_need_reason_avg_spike_density++;
+            break;
+        case LP_BFCP_REFACTOR_REASON_COND_SEVERE:
+            lu->telemetry.refactor_need_reason_cond_severe++;
+            break;
+        case LP_BFCP_REFACTOR_REASON_COND_ADAPTIVE_LIMIT:
+            lu->telemetry.refactor_need_reason_cond_adaptive_limit++;
+            break;
+        case LP_BFCP_REFACTOR_REASON_SPIKE_POOL_WARN:
+            lu->telemetry.refactor_need_reason_spike_pool_warn++;
+            break;
+        case LP_BFCP_REFACTOR_REASON_SPIKE_WORK:
+            lu->telemetry.refactor_need_reason_spike_work++;
+            break;
+        default:
+            break;
+    }
+}
+
+static int lu_update_is_aged(const LUFactorization *lu) {
+    if (!lu) return 0;
+    if (lu->max_updates > 0) {
+        return (2 * lu->num_updates >= lu->max_updates);
+    }
+    return lu->num_updates >= 40;
+}
+
+static void lu_fill_bfcp_signals(const LUFactorization *lu,
+                                 LPBFCPRefactorSignals *sig) {
+    if (!lu || !sig) return;
+
+    lp_bfcp_policy_refactor_signals_init(sig);
+    sig->strict_mode = lu_glpk_strict_mode(lu);
+    sig->num_updates = lu->num_updates;
+    sig->max_updates = lu->max_updates;
+    sig->growth_factor = lu->growth_factor;
+    sig->growth_guard_threshold = (lu->growth_refactor_threshold > 0.0)
+        ? lu->growth_refactor_threshold
+        : RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
+    sig->use_ft_updates = lu_update_backend_is_ft(lu);
+    sig->m = lu->m;
+    sig->ft_num_updates = lu->ft_num_updates;
+    sig->spike_pool_used = lu->spike_pool_used;
+    sig->spike_pool_capacity = lu->spike_pool_capacity;
+    sig->update_aged = lu_update_is_aged(lu);
+    sig->min_ft_updates_for_avg_density = RALPH_SPIKE_DENSE_REJECT_MIN_UPDATES;
+    sig->spike_dense_reject_m_min = RALPH_SPIKE_DENSE_REJECT_M_MIN;
+    sig->spike_avg_refactor_ratio = RALPH_SPIKE_AVG_REFACTOR_RATIO;
+    sig->spike_avg_refactor_aged_ratio = RALPH_SPIKE_AVG_REFACTOR_AGED_RATIO;
+    sig->spike_pool_warn_pct = RALPH_SPIKE_POOL_WARN_PCT;
+    sig->spike_work_multiplier = 8;
+    sig->cond_min_updates = 10;
+    sig->cond_estimate = lu->cond_estimate;
+    sig->cond_severe_ratio = 1e10;
+    sig->cond_adaptive_hi = 1e8;
+    sig->cond_adaptive_mid = 1e6;
+}
+
+static double lu_dense_spike_reject_ratio(const LUFactorization *lu) {
+    double ratio = RALPH_SPIKE_DENSE_BASE_RATIO;
+    int backend_policy = LP_LU_BACKEND_POLICY_LUF_FT;
+    if (!lp_glpk_strict_allow_lu_update_adaptive_thresholds(
+            lu ? lu_glpk_strict_mode(lu) : 0)) {
+        return 1.0;
+    }
+    if (!lu) return ratio;
+    backend_policy = lu_normalize_backend_policy(lu->backend_policy);
+
+    if (lu_update_is_aged(lu) ||
+        lu->cond_estimate > 1e7 ||
+        lu->growth_factor > 1e3) {
+        ratio = RALPH_SPIKE_DENSE_AGED_RATIO;
+    }
+
+    if (backend_policy == LP_LU_BACKEND_POLICY_CBG) {
+        ratio *= 0.9;
+    } else if (backend_policy == LP_LU_BACKEND_POLICY_CGR) {
+        ratio *= 1.1;
+    }
+    if (ratio < 0.25) ratio = 0.25;
+    if (ratio > 0.90) ratio = 0.90;
+    return ratio;
+}
+
+static double lu_update_pivot_ratio_threshold(const LUFactorization *lu) {
+    double threshold = RALPH_LU_UPDATE_PIVOT_THRESHOLD;
+    double update_ratio = 0.0;
+    int backend_policy = LP_LU_BACKEND_POLICY_LUF_FT;
+    if (!lp_glpk_strict_allow_lu_update_adaptive_thresholds(
+            lu ? lu_glpk_strict_mode(lu) : 0)) {
+        return threshold;
+    }
+    if (!lu) return threshold;
+    backend_policy = lu_normalize_backend_policy(lu->backend_policy);
+
+    if (lu->max_updates > 0) {
+        update_ratio = (double)lu->num_updates / (double)lu->max_updates;
+        if (update_ratio < 0.25) {
+            threshold *= 0.5;
+        } else if (update_ratio < 0.50) {
+            threshold *= 0.75;
+        }
+    }
+
+    if (lu->cond_estimate <= 1e4 && lu->growth_factor <= 10.0) {
+        threshold *= 0.25;
+    } else if (lu->cond_estimate <= 1e6 && lu->growth_factor <= 100.0) {
+        threshold *= 0.5;
+    } else if (lu->cond_estimate >= 1e8 || lu->growth_factor >= 1e4) {
+        threshold *= 2.0;
+    }
+
+    if (backend_policy == LP_LU_BACKEND_POLICY_CBG) {
+        threshold *= 1.25;
+    } else if (backend_policy == LP_LU_BACKEND_POLICY_CGR) {
+        threshold *= 0.85;
+    }
+
+    if (threshold < 1e-5) threshold = 1e-5;
+    if (threshold > 5e-4) threshold = 5e-4;
+    return threshold;
+}
+
+double lu_update_pivot_ratio_threshold_for_test(int num_updates,
+                                                int max_updates,
+                                                double cond_estimate,
+                                                double growth_factor) {
+    LUFactorization probe = {0};
+    probe.num_updates = num_updates;
+    probe.max_updates = max_updates;
+    probe.cond_estimate = cond_estimate;
+    probe.growth_factor = growth_factor;
+    return lu_update_pivot_ratio_threshold(&probe);
+}
 
 /* ============================================================================
  * LU Factorization Creation/Destruction
@@ -36,36 +357,39 @@ static void compute_reach_U(const LUFactorization *lu,
 
 LUFactorization* lu_create(int m) {
     LUFactorization *lu = (LUFactorization*)calloc(1, sizeof(LUFactorization));
+    int max_upd;
     if (!lu) return NULL;
 
     lu->m = m;
-
-    /* Refactorization threshold based on problem size.
-     * With Forrest-Tomlin updates, spike application cost is O(num_spikes * avg_nnz).
-     * Profiling shows: too few updates = excessive refactorization (60% of time),
-     * too many updates = excessive spike application.
-     * Optimal balance: around 150-200 updates for large problems.
-     * Rule: m/5 for small, m/10 for medium, ~150 for large (capped). */
-    lu->max_updates = (m < 100) ? 50 : (m < 500) ? m/5 : 200;
-    int max_upd = lu->max_updates;
+    lu->telemetry_enabled = 1;
+    lu_apply_backend_policy(lu, LP_LU_BACKEND_POLICY_LUF_FT);
+    max_upd = lu->max_updates;
 
     /* Calculate arena size for fixed-size arrays (with 8-byte alignment padding).
      * Arena contains: permutation arrays, FT column order, spike metadata,
-     * eta metadata, and hyper-sparse workspace arrays.
-     * 20 arrays total, add 20*8=160 bytes for alignment padding. */
+     * eta metadata, BG/GR compatibility metadata, and hyper-sparse workspace
+     * arrays. */
     size_t arena_size =
         /* int arrays of size m: perm, perm_inv, col_perm, col_perm_inv,
          * ft_col_order, ft_col_order_inv, hs_marked, hs_idx, hs_stack (9 arrays) */
         9 * (size_t)m * sizeof(int) +
         /* double arrays of size m: U_diag, hs_work1, hs_work2, hs_val, perm_work (5 arrays) */
         5 * (size_t)m * sizeof(double) +
-        /* int arrays of size max_updates: eta_col, eta_nnz,
-         * ft_spike_col, ft_spike_nnz, ft_spike_start (5 arrays) */
-        5 * (size_t)max_upd * sizeof(int) +
+        /* int arrays of size max_updates: eta_col, eta_nnz, schur_col,
+         * schur_nnz, ft_spike_col, ft_spike_nnz, ft_spike_start (7 arrays) */
+        7 * (size_t)max_upd * sizeof(int) +
         /* double array of size max_updates: ft_spike_diag (1 array) */
         (size_t)max_upd * sizeof(double) +
+        /* T1.4: workspace for sparse-efficient factorization
+         * int arrays of size m: ws_is_identity, ws_identity_row, ws_row_used,
+         * ws_col_order, ws_col_order_inv, ws_row_perm, ws_L_pos, ws_U_pos,
+         * ws_row_pos, ws_struct_nnz, ws_row_identity_col, ws_row_match_col,
+         * ws_row_seen (13 arrays) */
+        13 * (size_t)m * sizeof(int) +
+        /* double array of size m: ws_identity_val (1 array) */
+        1 * (size_t)m * sizeof(double) +
         /* Alignment padding */
-        160;
+        320;
 
     lu->arena = sh_arena_create(arena_size);
     if (!lu->arena) {
@@ -95,13 +419,40 @@ LUFactorization* lu_create(int m) {
     lu->num_eta = 0;
     lu->eta_col = (int*)sh_arena_alloc(lu->arena, max_upd * sizeof(int));
     lu->eta_nnz = (int*)sh_arena_alloc(lu->arena, max_upd * sizeof(int));
+    lu->schur_capacity = max_upd;
+    lu->schur_num_updates = 0;
+    lu->schur_col = (int*)sh_arena_alloc(lu->arena, max_upd * sizeof(int));
+    lu->schur_nnz = (int*)sh_arena_alloc(lu->arena, max_upd * sizeof(int));
 
     /* eta_indices and eta_values are arrays of pointers - allocated separately
      * because their contents are dynamically allocated during updates */
     lu->eta_indices = (int**)calloc(max_upd, sizeof(int*));
     lu->eta_values = (double**)calloc(max_upd, sizeof(double*));
+    lu->schur_indices = (int**)calloc(max_upd, sizeof(int*));
+    lu->schur_values = (double**)calloc(max_upd, sizeof(double*));
+    lu->schur_k = (double*)calloc((size_t)max_upd * (size_t)max_upd, sizeof(double));
+    lu->schur_k_work = (double*)calloc((size_t)max_upd * (size_t)max_upd, sizeof(double));
+    lu->schur_k_t_work = (double*)calloc((size_t)max_upd * (size_t)max_upd, sizeof(double));
+    lu->schur_rhs = (double*)calloc(max_upd, sizeof(double));
+    lu->schur_piv = (int*)calloc(max_upd, sizeof(int));
+    lu->schur_piv_t = (int*)calloc(max_upd, sizeof(int));
+    {
+        size_t rot_cap = (max_upd > 1)
+            ? ((size_t)max_upd * (size_t)(max_upd - 1)) / 2u
+            : 1u;
+        lu->schur_rot_capacity = (int)rot_cap;
+        lu->schur_rot_fwd_c = (double*)calloc(rot_cap, sizeof(double));
+        lu->schur_rot_fwd_s = (double*)calloc(rot_cap, sizeof(double));
+        lu->schur_rot_bwd_c = (double*)calloc(rot_cap, sizeof(double));
+        lu->schur_rot_bwd_s = (double*)calloc(rot_cap, sizeof(double));
+    }
 
-    if (!lu->eta_indices || !lu->eta_values) {
+    if (!lu->eta_indices || !lu->eta_values ||
+        !lu->schur_indices || !lu->schur_values ||
+        !lu->schur_k || !lu->schur_k_work || !lu->schur_k_t_work ||
+        !lu->schur_rhs || !lu->schur_piv || !lu->schur_piv_t ||
+        !lu->schur_rot_fwd_c || !lu->schur_rot_fwd_s ||
+        !lu->schur_rot_bwd_c || !lu->schur_rot_bwd_s) {
         lu_free(lu);
         return NULL;
     }
@@ -110,10 +461,13 @@ LUFactorization* lu_create(int m) {
         lu->eta_indices[i] = NULL;
         lu->eta_values[i] = NULL;
         lu->eta_nnz[i] = 0;
+        lu->schur_indices[i] = NULL;
+        lu->schur_values[i] = NULL;
+        lu->schur_nnz[i] = 0;
     }
 
-    /* Forrest-Tomlin update structures from arena */
-    lu->use_ft_updates = 1;
+    /* Update structures from arena. Runtime update kernel mode (FT vs ETA)
+     * is selected by backend policy and may change per solve. */
     lu->ft_num_updates = 0;
     lu->ft_col_order = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
     lu->ft_col_order_inv = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
@@ -145,13 +499,35 @@ LUFactorization* lu_create(int m) {
     lu->hs_stack = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
     lu->perm_work = (double*)sh_arena_alloc(lu->arena, m * sizeof(double));
 
+    /* T1.4: Sparse-efficient factorization workspace */
+    lu->ws_is_identity = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_identity_row = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_identity_val = (double*)sh_arena_alloc(lu->arena, m * sizeof(double));
+    lu->ws_row_used = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_col_order = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_col_order_inv = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_row_perm = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_L_pos = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_U_pos = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_row_pos = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_struct_nnz = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_row_identity_col = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_row_match_col = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+    lu->ws_row_seen = (int*)sh_arena_alloc(lu->arena, m * sizeof(int));
+
     /* Single check for all arena allocations */
     if (!lu->perm || !lu->perm_inv || !lu->col_perm || !lu->col_perm_inv ||
         !lu->U_diag || !lu->eta_col || !lu->eta_nnz ||
+        !lu->schur_col || !lu->schur_nnz ||
         !lu->ft_col_order || !lu->ft_col_order_inv ||
         !lu->ft_spike_col || !lu->ft_spike_diag || !lu->ft_spike_nnz || !lu->ft_spike_start ||
         !lu->hs_work1 || !lu->hs_work2 || !lu->hs_marked ||
-        !lu->hs_idx || !lu->hs_val || !lu->hs_stack || !lu->perm_work) {
+        !lu->hs_idx || !lu->hs_val || !lu->hs_stack || !lu->perm_work ||
+        !lu->ws_is_identity || !lu->ws_identity_row || !lu->ws_identity_val ||
+        !lu->ws_row_used || !lu->ws_col_order || !lu->ws_col_order_inv ||
+        !lu->ws_row_perm || !lu->ws_L_pos || !lu->ws_U_pos || !lu->ws_row_pos ||
+        !lu->ws_struct_nnz || !lu->ws_row_identity_col || !lu->ws_row_match_col ||
+        !lu->ws_row_seen) {
         lu_free(lu);
         return NULL;
     }
@@ -175,11 +551,7 @@ LUFactorization* lu_create(int m) {
         return NULL;
     }
 
-    /* Spike compaction settings */
-    lu->ft_compact_interval = 300;
-    lu->ft_num_compacted = 0;
-    lu->ft_compact_matrix = NULL;  /* Allocated lazily if needed */
-    lu->ft_compact_valid = 0;
+    /* (B4: spike compaction removed) */
 
     /* Initialize condition number tracking */
     lu->min_diag_U = RALPH_INFINITY;
@@ -193,15 +565,75 @@ LUFactorization* lu_create(int m) {
     lu->allow_regularization = 0;
     lu->max_regularizations = 0;
     lu->num_regularized = 0;
+    lu->last_failure_reason = LU_FAIL_NONE;
+    lu->last_refactor_trigger_reason = LP_BFCP_REFACTOR_REASON_NONE;
 
     /* Pre-allocate dense workspace for fallback factorization (m×m matrix)
      * Allocated separately due to large size O(m²) */
     lu->dense_work = (double*)calloc((size_t)m * (size_t)m, sizeof(double));
+    lu->mkz_work = NULL;
+    lu->mkz_work_capacity = 0;
 
     if (!lu->dense_work) {
         lu_free(lu);
         return NULL;
     }
+
+    /* T1.4: Pre-allocate L/U output arrays with initial capacity.
+     * Capacity grows as needed; after 1-2 factorizations it stabilizes. */
+    lu->LU_out_capacity = m * 4;
+    lu->L_colptr = (int*)calloc(m + 1, sizeof(int));
+    lu->L_rowidx = (int*)calloc(lu->LU_out_capacity, sizeof(int));
+    lu->L_values = (double*)calloc(lu->LU_out_capacity, sizeof(double));
+    lu->U_colptr = (int*)calloc(m + 1, sizeof(int));
+    lu->U_rowidx = (int*)calloc(lu->LU_out_capacity, sizeof(int));
+    lu->U_values = (double*)calloc(lu->LU_out_capacity, sizeof(double));
+
+    if (!lu->L_colptr || !lu->L_rowidx || !lu->L_values ||
+        !lu->U_colptr || !lu->U_rowidx || !lu->U_values) {
+        lu_free(lu);
+        return NULL;
+    }
+
+    /* T1.4 full: Pre-allocate COO arrays for sparse-efficient factorization.
+     * These replace per-call malloc/free of 6 arrays (L_row/col/val, U_row/col/val).
+     * Initial capacity m*4; grows as needed, stabilizes after 1-2 factorizations. */
+    lu->coo_capacity = m * 4;
+    lu->coo_L_row = (int*)calloc(lu->coo_capacity, sizeof(int));
+    lu->coo_L_col = (int*)calloc(lu->coo_capacity, sizeof(int));
+    lu->coo_L_val = (double*)calloc(lu->coo_capacity, sizeof(double));
+    lu->coo_U_row = (int*)calloc(lu->coo_capacity, sizeof(int));
+    lu->coo_U_col = (int*)calloc(lu->coo_capacity, sizeof(int));
+    lu->coo_U_val = (double*)calloc(lu->coo_capacity, sizeof(double));
+
+    if (!lu->coo_L_row || !lu->coo_L_col || !lu->coo_L_val ||
+        !lu->coo_U_row || !lu->coo_U_col || !lu->coo_U_val) {
+        lu_free(lu);
+        return NULL;
+    }
+
+    /* T1.4 full: Symbolic cache starts invalid */
+    lu->sym_valid = 0;
+    lu->sym_fingerprint = 0;
+
+    /* W1: CSR transpose arrays start invalid (built after first factorization) */
+    lu->csr_valid = 0;
+
+    /* Sparse Markowitz LU (default on for k >= MARKOWITZ_MIN_K) */
+    lu->mkz_enabled = 1;
+    lu->mkz_pool_mult_hint = 4;
+    lu->mkz_circuit_fingerprint = 0;
+    lu->mkz_circuit_bad_streak = 0;
+    lu->mkz_circuit_skip_budget = 0;
+    lu->mkz_global_singular_streak = 0;
+    lu->mkz_global_skip_budget = 0;
+    lu->idsep_retry_fingerprint = 0;
+    lu->idsep_retry_streak = 0;
+    lp_telemetry_reset_lu(lu);
+
+    /* T2.1: Supernodal LU (default off, opt-in via lu_supernode param) */
+    lu->sn_enabled = 0;
+    lu->sn_symbolic = NULL;
 
     return lu;
 }
@@ -217,6 +649,14 @@ void lu_free(LUFactorization *lu) {
     SAFE_FREE(lu->U_rowidx);
     SAFE_FREE(lu->U_values);
 
+    /* Free COO arrays (T1.4 full: pre-allocated, not in arena) */
+    SAFE_FREE(lu->coo_L_row);
+    SAFE_FREE(lu->coo_L_col);
+    SAFE_FREE(lu->coo_L_val);
+    SAFE_FREE(lu->coo_U_row);
+    SAFE_FREE(lu->coo_U_col);
+    SAFE_FREE(lu->coo_U_val);
+
     /* Free eta file contents (dynamically allocated during updates) */
     if (lu->eta_indices) {
         for (int i = 0; i < lu->eta_capacity; i++) {
@@ -230,9 +670,30 @@ void lu_free(LUFactorization *lu) {
         }
         SAFE_FREE(lu->eta_values);
     }
+    if (lu->schur_indices) {
+        for (int i = 0; i < lu->schur_capacity; i++) {
+            SAFE_FREE(lu->schur_indices[i]);
+        }
+        SAFE_FREE(lu->schur_indices);
+    }
+    if (lu->schur_values) {
+        for (int i = 0; i < lu->schur_capacity; i++) {
+            SAFE_FREE(lu->schur_values[i]);
+        }
+        SAFE_FREE(lu->schur_values);
+    }
+    SAFE_FREE(lu->schur_k);
+    SAFE_FREE(lu->schur_k_work);
+    SAFE_FREE(lu->schur_k_t_work);
+    SAFE_FREE(lu->schur_rhs);
+    SAFE_FREE(lu->schur_piv);
+    SAFE_FREE(lu->schur_piv_t);
+    SAFE_FREE(lu->schur_rot_fwd_c);
+    SAFE_FREE(lu->schur_rot_fwd_s);
+    SAFE_FREE(lu->schur_rot_bwd_c);
+    SAFE_FREE(lu->schur_rot_bwd_s);
 
-    /* Free compact matrix (allocated lazily, not in arena) */
-    SAFE_FREE(lu->ft_compact_matrix);
+    /* (B4: spike compaction removed) */
 
     /* Free spike pool (large variable-size arrays, not in arena) */
     SAFE_FREE(lu->spike_pool_idx);
@@ -240,6 +701,16 @@ void lu_free(LUFactorization *lu) {
 
     /* Free dense workspace (O(m²), not in arena) */
     SAFE_FREE(lu->dense_work);
+    SAFE_FREE(lu->mkz_work);
+    lu->mkz_work_capacity = 0;
+
+    /* T2.1: Free cached supernodal symbolic analysis */
+    if (lu->sn_symbolic) {
+        sn_symbolic_free((SNSymbolic *)lu->sn_symbolic);
+        lu->sn_symbolic = NULL;
+    }
+    SAFE_FREE(lu->sn_work);
+    lu->sn_work_capacity = 0;
 
     /* Free arena (frees all fixed-size arrays in one call:
      * perm, perm_inv, col_perm, col_perm_inv, U_diag,
@@ -257,6 +728,20 @@ void lu_free(LUFactorization *lu) {
     lu->U_diag = NULL;
     lu->eta_col = NULL;
     lu->eta_nnz = NULL;
+    lu->schur_indices = NULL;
+    lu->schur_values = NULL;
+    lu->schur_col = NULL;
+    lu->schur_nnz = NULL;
+    lu->schur_k = NULL;
+    lu->schur_k_work = NULL;
+    lu->schur_k_t_work = NULL;
+    lu->schur_rhs = NULL;
+    lu->schur_piv = NULL;
+    lu->schur_piv_t = NULL;
+    lu->schur_rot_fwd_c = NULL;
+    lu->schur_rot_fwd_s = NULL;
+    lu->schur_rot_bwd_c = NULL;
+    lu->schur_rot_bwd_s = NULL;
     lu->ft_col_order = NULL;
     lu->ft_col_order_inv = NULL;
     lu->ft_spike_col = NULL;
@@ -270,6 +755,20 @@ void lu_free(LUFactorization *lu) {
     lu->hs_val = NULL;
     lu->hs_stack = NULL;
     lu->perm_work = NULL;
+    lu->ws_is_identity = NULL;
+    lu->ws_identity_row = NULL;
+    lu->ws_identity_val = NULL;
+    lu->ws_row_used = NULL;
+    lu->ws_col_order = NULL;
+    lu->ws_col_order_inv = NULL;
+    lu->ws_row_perm = NULL;
+    lu->ws_L_pos = NULL;
+    lu->ws_U_pos = NULL;
+    lu->ws_row_pos = NULL;
+    lu->ws_struct_nnz = NULL;
+    lu->ws_row_identity_col = NULL;
+    lu->ws_row_match_col = NULL;
+    lu->ws_row_seen = NULL;
 
     free(lu);
 }
@@ -277,6 +776,7 @@ void lu_free(LUFactorization *lu) {
 /* External sparse factorization (from lu_sparse.c) */
 int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B);
 int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B);
+int lu_factorize_sparse_strict_dispatch(LUFactorization *lu, const SparseMatrix *B);
 
 /* ============================================================================
  * Main LU Factorization Entry Point
@@ -288,12 +788,37 @@ int lu_factorize_sparse_efficient(LUFactorization *lu, const SparseMatrix *B);
  * reduction. Falls back to dense if sparse fails.
  */
 int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
-    /* Try efficient sparse factorization first */
-    int result = lu_factorize_sparse_efficient(lu, B);
-    if (result == 0) return 0;
+    if (!lu || !B) {
+        lu_set_failure(lu, LU_FAIL_BAD_INPUT);
+        return -1;
+    }
+    lu_set_failure(lu, LU_FAIL_NONE);
+    lu->last_refactor_trigger_reason = LP_BFCP_REFACTOR_REASON_NONE;
+    lp_telemetry_prepare_lu_factorize(lu, B);
+
+    /* Try sparse factorization first. Strict GLPK-like lane uses a dedicated
+     * one-shot dispatch path rather than the adaptive default sparse retries. */
+    int result = lu_strict_lane_active(lu)
+        ? lu_factorize_sparse_strict_dispatch(lu, B)
+        : lu_factorize_sparse_efficient(lu, B);
+    if (result == 0) {
+        build_csr_transpose(lu);  /* W1: CSR transposes for sparse BTRAN */
+        lu_set_failure(lu, LU_FAIL_NONE);
+        return 0;
+    }
+
+    if (!lu_strict_allow_top_level_dense_fallback(lu)) {
+        return result;
+    }
 
     /* Fall back to dense */
-    return lu_factorize_dense(lu, B);
+    result = lu_factorize_dense(lu, B);
+    if (result == 0) {
+        build_csr_transpose(lu);  /* W1: CSR transposes for sparse BTRAN */
+        lu_set_failure(lu, LU_FAIL_NONE);
+        lp_telemetry_lu_mark_dense_fallback(lu);
+    }
+    return result;
 }
 
 /* ============================================================================
@@ -302,14 +827,29 @@ int lu_factorize(LUFactorization *lu, const SparseMatrix *B) {
 
 /* Perform LU factorization: PA = LU using partial pivoting */
 int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
-    if (!lu || !B) return -1;
-    if (B->nrows != B->ncols || B->nrows != lu->m) return -1;
+    if (!lu || !B) {
+        lu_set_failure(lu, LU_FAIL_BAD_INPUT);
+        return -1;
+    }
+    double t_dense_start_ms = lp_telemetry_timer_start();
+#define DENSE_RETURN(code) do { \
+    lp_telemetry_lu_record_dense_factorize_timed(lu, t_dense_start_ms); \
+    return (code); \
+} while (0)
+    lu_set_failure(lu, LU_FAIL_NONE);
+    if (B->nrows != B->ncols || B->nrows != lu->m) {
+        lu_set_failure(lu, LU_FAIL_BAD_INPUT);
+        DENSE_RETURN(-1);
+    }
 
     int m = lu->m;
 
     /* Use pre-allocated dense workspace (m×m matrix) */
     double *A = lu->dense_work;
-    if (!A) return -1;
+    if (!A) {
+        lu_set_failure(lu, LU_FAIL_FACTOR_ALLOC);
+        DENSE_RETURN(-1);
+    }
 
     /* Zero the workspace */
     memset(A, 0, (size_t)m * (size_t)m * sizeof(double));
@@ -321,9 +861,15 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
         }
     }
 
-    /* Initialize permutation to identity */
+    /* Initialize permutations to identity.
+     * col_perm MUST be reset here: when lu_factorize_sparse_efficient fails
+     * and falls back to dense, col_perm retains the non-trivial column ordering
+     * from a previous sparse factorization. Dense LU uses no column pivoting,
+     * so col_perm must be identity for lu_solve to produce correct results. */
     for (int i = 0; i < m; i++) {
         lu->perm[i] = i;
+        lu->col_perm[i] = i;
+        lu->col_perm_inv[i] = i;
     }
 
     /* Gaussian elimination with partial pivoting */
@@ -341,7 +887,7 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
         }
 
         /* Check for singular matrix */
-        if (max_val < RALPH_PIVOT_TOL) {
+        if (max_val < lu->pivot_tol) {
             /* Check if this row corresponds to a redundant constraint.
              * For two-phase simplex, redundant rows (with stuck artificials)
              * cause singularity but can be safely regularized.
@@ -401,7 +947,8 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
                         k, max_val, (void*)lu->redundant_rows, lu->num_redundant,
                         lu->allow_regularization, lu->max_regularizations);
 #endif
-                return -1;  /* Truly singular, no redundant row to help */
+                lu_set_failure(lu, LU_FAIL_FACTOR_SINGULAR);
+                DENSE_RETURN(-1);  /* Truly singular, no redundant row to help */
             }
         }
 
@@ -449,26 +996,24 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
     /* Add diagonal of L (implicit ones) */
     nnz_L += m;
 
-    /* Free old storage */
-    free(lu->L_colptr);
-    free(lu->L_rowidx);
-    free(lu->L_values);
-    free(lu->U_colptr);
-    free(lu->U_rowidx);
-    free(lu->U_values);
-
-    /* Allocate new storage */
-    lu->L_colptr = (int*)calloc((m + 1), sizeof(int));
-    lu->L_rowidx = (int*)calloc(nnz_L, sizeof(int));
-    lu->L_values = (double*)calloc(nnz_L, sizeof(double));
-    lu->U_colptr = (int*)calloc((m + 1), sizeof(int));
-    lu->U_rowidx = (int*)calloc(nnz_U, sizeof(int));
-    lu->U_values = (double*)calloc(nnz_U, sizeof(double));
-
-    if (!lu->L_colptr || !lu->L_rowidx || !lu->L_values ||
-        !lu->U_colptr || !lu->U_rowidx || !lu->U_values) {
-        return -1;
+    /* T1.4: Reuse pre-allocated L/U arrays, grow only if needed */
+    int needed = nnz_L > nnz_U ? nnz_L : nnz_U;
+    if (needed > lu->LU_out_capacity) {
+        int new_cap = needed * 2;
+        SAFE_FREE(lu->L_rowidx); SAFE_FREE(lu->L_values);
+        SAFE_FREE(lu->U_rowidx); SAFE_FREE(lu->U_values);
+        lu->L_rowidx = (int*)calloc(new_cap, sizeof(int));
+        lu->L_values = (double*)calloc(new_cap, sizeof(double));
+        lu->U_rowidx = (int*)calloc(new_cap, sizeof(int));
+        lu->U_values = (double*)calloc(new_cap, sizeof(double));
+        lu->LU_out_capacity = new_cap;
+        if (!lu->L_rowidx || !lu->L_values || !lu->U_rowidx || !lu->U_values) {
+            lu_set_failure(lu, LU_FAIL_FACTOR_ALLOC);
+            DENSE_RETURN(-1);
+        }
     }
+    memset(lu->L_colptr, 0, (m + 1) * sizeof(int));
+    memset(lu->U_colptr, 0, (m + 1) * sizeof(int));
 
     /* Fill L (unit lower triangular stored with explicit diagonal) */
     int idx = 0;
@@ -507,30 +1052,7 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
     lu->U_colptr[m] = idx;
     lu->nnz_U = idx;
 
-    /* Clear sparse eta file */
-    for (int i = 0; i < lu->num_eta; i++) {
-        free(lu->eta_indices[i]);
-        free(lu->eta_values[i]);
-        lu->eta_indices[i] = NULL;
-        lu->eta_values[i] = NULL;
-        lu->eta_nnz[i] = 0;
-    }
-    lu->num_eta = 0;
-
-    /* Clear Forrest-Tomlin spikes - contiguous pool storage, just reset counters */
-    for (int i = 0; i < lu->ft_num_updates; i++) {
-        lu->ft_spike_nnz[i] = 0;
-        lu->ft_spike_diag[i] = 0.0;
-        lu->ft_spike_start[i] = 0;
-    }
-    lu->ft_num_updates = 0;
-    lu->ft_num_compacted = 0;
-    lu->ft_compact_valid = 0;
-    lu->spike_pool_used = 0;  /* Reset contiguous pool */
-    for (int i = 0; i < m; i++) {
-        lu->ft_col_order[i] = i;
-        lu->ft_col_order_inv[i] = i;
-    }
+    lu_update_backend_reset(lu);
 
     lu->num_updates = 0;
 
@@ -558,20 +1080,120 @@ int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B) {
     lu->growth_factor = 1.0;
 
     /* Note: A is pre-allocated lu->dense_work, no free needed */
-    return 0;
+    lu_set_failure(lu, LU_FAIL_NONE);
+    DENSE_RETURN(0);
+#undef DENSE_RETURN
 }
 
 /* ============================================================================
  * Solve Systems Using LU Factorization
  * ============================================================================ */
 
-/* Forward declarations for Forrest-Tomlin spike functions */
-static void apply_ft_spikes_forward(const LUFactorization *lu, double *x);
-static void apply_ft_spikes_backward(const LUFactorization *lu, double *x);
+/* Triangular-solve micro-kernels shared by dense/sparse variants.
+ * Keep these simple and branch-light so the hot inner loops stay predictable. */
+static inline void tri_scatter_sub(const int *idx, const double *val,
+                                   int nnz, double alpha, double *x) {
+    int p = 0;
+    int nnz4 = nnz & ~3;
+    for (; p < nnz4; p += 4) {
+        x[idx[p]]     -= val[p] * alpha;
+        x[idx[p + 1]] -= val[p + 1] * alpha;
+        x[idx[p + 2]] -= val[p + 2] * alpha;
+        x[idx[p + 3]] -= val[p + 3] * alpha;
+    }
+    for (; p < nnz; p++) {
+        x[idx[p]] -= val[p] * alpha;
+    }
+}
+
+static inline void tri_scatter_sub_lt(const int *idx, const double *val,
+                                      int nnz, int limit, double alpha, double *x) {
+    int p = 0;
+    int nnz4 = nnz & ~3;
+    for (; p < nnz4; p += 4) {
+        int i0 = idx[p];
+        int i1 = idx[p + 1];
+        int i2 = idx[p + 2];
+        int i3 = idx[p + 3];
+        if (i0 < limit) x[i0] -= val[p] * alpha;
+        if (i1 < limit) x[i1] -= val[p + 1] * alpha;
+        if (i2 < limit) x[i2] -= val[p + 2] * alpha;
+        if (i3 < limit) x[i3] -= val[p + 3] * alpha;
+    }
+    for (; p < nnz; p++) {
+        int i = idx[p];
+        if (i < limit) x[i] -= val[p] * alpha;
+    }
+}
+
+static inline double tri_dot(const int *idx, const double *val,
+                             int nnz, const double *x) {
+    double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+    int p = 0;
+    int nnz4 = nnz & ~3;
+    for (; p < nnz4; p += 4) {
+        s0 += val[p] * x[idx[p]];
+        s1 += val[p + 1] * x[idx[p + 1]];
+        s2 += val[p + 2] * x[idx[p + 2]];
+        s3 += val[p + 3] * x[idx[p + 3]];
+    }
+    double sum = s0 + s1 + s2 + s3;
+    for (; p < nnz; p++) {
+        sum += val[p] * x[idx[p]];
+    }
+    return sum;
+}
+
+static inline double tri_dot_lt(const int *idx, const double *val,
+                                int nnz, int limit, const double *x) {
+    double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+    int p = 0;
+    int nnz4 = nnz & ~3;
+    for (; p < nnz4; p += 4) {
+        int i0 = idx[p];
+        int i1 = idx[p + 1];
+        int i2 = idx[p + 2];
+        int i3 = idx[p + 3];
+        if (i0 < limit) s0 += val[p] * x[i0];
+        if (i1 < limit) s1 += val[p + 1] * x[i1];
+        if (i2 < limit) s2 += val[p + 2] * x[i2];
+        if (i3 < limit) s3 += val[p + 3] * x[i3];
+    }
+    double sum = s0 + s1 + s2 + s3;
+    for (; p < nnz; p++) {
+        int i = idx[p];
+        if (i < limit) sum += val[p] * x[i];
+    }
+    return sum;
+}
+
+static inline double tri_dot_masked(const int *idx, const double *val,
+                                    int nnz, const double *x, const int *mask) {
+    double sum = 0.0;
+    for (int p = 0; p < nnz; p++) {
+        int i = idx[p];
+        if (mask[i]) sum += val[p] * x[i];
+    }
+    return sum;
+}
+
+static inline double tri_dot_lt_masked(const int *idx, const double *val,
+                                       int nnz, int limit,
+                                       const double *x, const int *mask) {
+    double sum = 0.0;
+    for (int p = 0; p < nnz; p++) {
+        int i = idx[p];
+        if (i < limit && mask[i]) sum += val[p] * x[i];
+    }
+    return sum;
+}
 
 /* Solve Lx = b (forward substitution) */
 static void solve_L(const LUFactorization *lu, const double *b, double *x) {
     int m = lu->m;
+    const int *L_colptr = lu->L_colptr;
+    const int *L_rowidx = lu->L_rowidx;
+    const double *L_values = lu->L_values;
 
     /* Apply row permutation */
     for (int i = 0; i < m; i++) {
@@ -582,18 +1204,21 @@ static void solve_L(const LUFactorization *lu, const double *b, double *x) {
     for (int j = 0; j < m; j++) {
         /* x[j] already has the right value (L[j,j] = 1) */
         double xj = x[j];
+        if (fabs(xj) <= RALPH_ZERO_TOL) continue;
 
         /* Update remaining elements */
-        for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
-            int i = lu->L_rowidx[p];
-            x[i] -= lu->L_values[p] * xj;
-        }
+        int p0 = L_colptr[j] + 1;
+        int p1 = L_colptr[j + 1];
+        tri_scatter_sub(L_rowidx + p0, L_values + p0, p1 - p0, xj, x);
     }
 }
 
 /* Solve Ux = b (backward substitution) */
 static void solve_U(const LUFactorization *lu, const double *b, double *x) {
     int m = lu->m;
+    const int *U_colptr = lu->U_colptr;
+    const int *U_rowidx = lu->U_rowidx;
+    const double *U_values = lu->U_values;
     const double *U_diag = lu->U_diag;
 
     vec_copy_data(x, b, m);
@@ -609,30 +1234,29 @@ static void solve_U(const LUFactorization *lu, const double *b, double *x) {
 
         x[j] /= diag;
         double xj = x[j];
+        if (fabs(xj) <= RALPH_ZERO_TOL) continue;
 
         /* Update remaining elements (off-diagonal) */
-        for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
-            int i = lu->U_rowidx[p];
-            if (i < j) {
-                x[i] -= lu->U_values[p] * xj;
-            }
-        }
+        int p0 = U_colptr[j];
+        int p1 = U_colptr[j + 1];
+        tri_scatter_sub_lt(U_rowidx + p0, U_values + p0, p1 - p0, j, xj, x);
     }
 }
 
 /* Solve L'x = b (backward substitution with L transpose) */
 static void solve_Lt(const LUFactorization *lu, const double *b, double *x) {
     int m = lu->m;
+    const int *L_colptr = lu->L_colptr;
+    const int *L_rowidx = lu->L_rowidx;
+    const double *L_values = lu->L_values;
 
     vec_copy_data(x, b, m);
 
     /* Backward substitution with L transpose */
     for (int j = m - 1; j >= 0; j--) {
-        double sum = 0.0;
-        for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
-            int i = lu->L_rowidx[p];
-            sum += lu->L_values[p] * x[i];
-        }
+        int p0 = L_colptr[j] + 1;
+        int p1 = L_colptr[j + 1];
+        double sum = tri_dot(L_rowidx + p0, L_values + p0, p1 - p0, x);
         x[j] -= sum;
         /* L[j,j] = 1, so no division needed */
     }
@@ -648,6 +1272,9 @@ static void solve_Lt(const LUFactorization *lu, const double *b, double *x) {
 /* Solve U'x = b (forward substitution with U transpose) */
 static void solve_Ut(const LUFactorization *lu, const double *b, double *x) {
     int m = lu->m;
+    const int *U_colptr = lu->U_colptr;
+    const int *U_rowidx = lu->U_rowidx;
+    const double *U_values = lu->U_values;
     const double *U_diag = lu->U_diag;
 
     vec_copy_data(x, b, m);
@@ -663,14 +1290,9 @@ static void solve_Ut(const LUFactorization *lu, const double *b, double *x) {
          * sum of U'[i,j] * x[j] = U[j,i] * x[j] for j < i
          * U[j,i] is in COLUMN i (not column j!) at ROW j
          */
-        double sum = 0.0;
-        for (int p = lu->U_colptr[i]; p < lu->U_colptr[i + 1]; p++) {
-            int j = lu->U_rowidx[p];  /* row index j */
-            if (j < i) {
-                /* This is U[j,i] = U'[i,j] */
-                sum += lu->U_values[p] * x[j];
-            }
-        }
+        int p0 = U_colptr[i];
+        int p1 = U_colptr[i + 1];
+        double sum = tri_dot_lt(U_rowidx + p0, U_values + p0, p1 - p0, i, x);
 
         double diag = U_diag[i];
 
@@ -683,55 +1305,10 @@ static void solve_Ut(const LUFactorization *lu, const double *b, double *x) {
     }
 }
 
-/* Apply eta updates: E_n^-1 * ... * E_1^-1 * x
- * Each E^-1 is identity except column 'col' which contains the eta vector.
- * E^-1 * x: x[i] += eta[i] * x[col] for i != col, x[col] = eta[col] * x[col]
- * Now uses sparse eta storage for O(nnz) instead of O(m).
- */
-static void apply_eta_forward(const LUFactorization *lu, double *x) {
-    for (int k = 0; k < lu->num_eta; k++) {
-        int col = lu->eta_col[k];
-        int *indices = lu->eta_indices[k];
-        double *values = lu->eta_values[k];
-        int nnz = lu->eta_nnz[k];
-        double xc = x[col];  /* Save original x[col] before modifying */
-
-        /* Update only non-zero components */
-        for (int p = 0; p < nnz; p++) {
-            int i = indices[p];
-            if (i == col) {
-                x[i] = values[p] * xc;
-            } else {
-                x[i] += values[p] * xc;
-            }
-        }
-    }
-}
-
-/* Apply eta updates transpose: (E_1^-1)' * ... * (E_n^-1)' * x
- * Applied in reverse order for the transpose solve.
- * (E^-1)' * x: x[col] = eta' * x, other components unchanged.
- * Now uses sparse eta storage for O(nnz) instead of O(m).
- */
-static void apply_eta_backward(const LUFactorization *lu, double *x) {
-    for (int k = lu->num_eta - 1; k >= 0; k--) {
-        int col = lu->eta_col[k];
-        int *indices = lu->eta_indices[k];
-        double *values = lu->eta_values[k];
-        int nnz = lu->eta_nnz[k];
-
-        /* Compute new x[col] = eta' * x (sparse dot product) */
-        double xc = 0.0;
-        for (int p = 0; p < nnz; p++) {
-            xc += values[p] * x[indices[p]];
-        }
-        x[col] = xc;
-    }
-}
-
 /* Solve Bx = b where B = basis matrix */
 void lu_solve(const LUFactorization *lu, double *rhs, double *solution) {
     int m = lu->m;
+    double t_segment_ms;
     /* Use pre-allocated workspace (avoids malloc in hot path) */
     double *work = lu->hs_work1;
     double *work2 = lu->hs_work2;
@@ -745,27 +1322,32 @@ void lu_solve(const LUFactorization *lu, double *rhs, double *solution) {
      */
 
     /* First: solve Ly = Pb */
+    t_segment_ms = lp_telemetry_timer_start();
     solve_L(lu, rhs, work);
 
     /* Then: solve Uz = y */
     solve_U(lu, work, work2);
+    lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 
     /* Apply updates (in step coordinates, before column permutation) */
-    if (lu->use_ft_updates && lu->ft_num_updates > 0) {
-        apply_ft_spikes_forward(lu, work2);
-    } else if (lu->num_eta > 0) {
-        apply_eta_forward(lu, work2);
+    if (lu_update_backend_has_updates(lu)) {
+        t_segment_ms = lp_telemetry_timer_start();
+        (void)lu_update_backend_apply_forward(lu, work2);
+        lu_record_ftran_update_apply_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
     }
 
     /* Apply column permutation: x[col_perm[i]] = z[i] */
+    t_segment_ms = lp_telemetry_timer_start();
     for (int i = 0; i < m; i++) {
         solution[lu->col_perm[i]] = work2[i];
     }
+    lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 }
 
 /* Solve B'x = b (for computing row prices) */
 void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution) {
     int m = lu->m;
+    double t_segment_ms;
     /* Use pre-allocated workspace (avoids malloc in hot path) */
     double *work = lu->hs_work1;
 
@@ -780,24 +1362,28 @@ void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution
      */
 
     /* Apply inverse column permutation: y[i] = b[col_perm[i]] */
+    t_segment_ms = lp_telemetry_timer_start();
     for (int i = 0; i < m; i++) {
         work[i] = rhs[lu->col_perm[i]];
     }
+    lu_record_btran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 
     /* Apply updates in reverse (in step coordinates) */
-    if (lu->use_ft_updates && lu->ft_num_updates > 0) {
-        apply_ft_spikes_backward(lu, work);
-    } else if (lu->num_eta > 0) {
-        apply_eta_backward(lu, work);
+    if (lu_update_backend_has_updates(lu)) {
+        t_segment_ms = lp_telemetry_timer_start();
+        lu_update_backend_apply_backward(lu, work);
+        lu_record_btran_update_apply_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
     }
 
     /* Solve U'z = y */
+    t_segment_ms = lp_telemetry_timer_start();
     solve_Ut(lu, work, solution);
 
     /* Solve L'x = z and apply P' (solve_Lt handles the row permutation) */
     solve_Lt(lu, solution, work);
 
     vec_copy_data(solution, work, m);
+    lu_record_btran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 }
 
 /* ============================================================================
@@ -822,6 +1408,7 @@ void lu_solve_sparse(const LUFactorization *lu,
     if (!lu || !solution) return;
 
     int m = lu->m;
+    double t_segment_ms;
 
     /* Use pre-allocated workspace (avoids malloc in hot path) */
     double *work = lu->hs_work1;
@@ -836,6 +1423,7 @@ void lu_solve_sparse(const LUFactorization *lu,
      */
     if (nnz_rhs > m / 4) {
         /* Build dense RHS vector in work */
+        t_segment_ms = lp_telemetry_timer_start();
         for (int k = 0; k < nnz_rhs; k++) {
             if (rhs_idx[k] >= 0 && rhs_idx[k] < m)
                 work[rhs_idx[k]] = rhs_val[k];
@@ -844,16 +1432,19 @@ void lu_solve_sparse(const LUFactorization *lu,
         /* Inline the dense solve: Ly=Pb, Uz=y, apply updates, apply col perm */
         solve_L(lu, work, work2);        /* work2 = L^{-1} * P * work */
         solve_U(lu, work2, work);        /* work = U^{-1} * work2 */
+        lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 
-        if (lu->use_ft_updates && lu->ft_num_updates > 0) {
-            apply_ft_spikes_forward(lu, work);
-        } else if (lu->num_eta > 0) {
-            apply_eta_forward(lu, work);
+        if (lu_update_backend_has_updates(lu)) {
+            t_segment_ms = lp_telemetry_timer_start();
+            (void)lu_update_backend_apply_forward(lu, work);
+            lu_record_ftran_update_apply_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
         }
 
+        t_segment_ms = lp_telemetry_timer_start();
         for (int i = 0; i < m; i++) {
             solution[lu->col_perm[i]] = work[i];
         }
+        lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
         return;
     }
 
@@ -861,6 +1452,7 @@ void lu_solve_sparse(const LUFactorization *lu,
     memset(work2, 0, m * sizeof(double));
 
     /* Build permuted RHS and track nonzero indices */
+    t_segment_ms = lp_telemetry_timer_start();
     int *perm_rhs_idx = (int*)lu->perm_work;  /* Reuse perm_work as int array */
     int perm_rhs_nnz = 0;
     for (int k = 0; k < nnz_rhs; k++) {
@@ -920,6 +1512,7 @@ void lu_solve_sparse(const LUFactorization *lu,
             }
         }
     }
+    lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 
     /* Clear work for non-reached indices to avoid stale values */
     for (int i = 0; i < reach_nnz; i++) {
@@ -927,16 +1520,18 @@ void lu_solve_sparse(const LUFactorization *lu,
     }
 
     /* Apply updates */
-    if (lu->use_ft_updates && lu->ft_num_updates > 0) {
-        apply_ft_spikes_forward(lu, work2);
-    } else if (lu->num_eta > 0) {
-        apply_eta_forward(lu, work2);
+    if (lu_update_backend_has_updates(lu)) {
+        t_segment_ms = lp_telemetry_timer_start();
+        (void)lu_update_backend_apply_forward(lu, work2);
+        lu_record_ftran_update_apply_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
     }
 
     /* Apply column permutation */
+    t_segment_ms = lp_telemetry_timer_start();
     for (int i = 0; i < m; i++) {
         solution[lu->col_perm[i]] = work2[i];
     }
+    lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 }
 
 /*
@@ -954,6 +1549,7 @@ void lu_solve_transpose_sparse(const LUFactorization *lu,
     if (!lu || !solution) return;
 
     int m = lu->m;
+    double t_segment_ms;
 
     /* Use pre-allocated workspace (avoids malloc in hot path) */
     double *work = lu->hs_work1;
@@ -968,6 +1564,7 @@ void lu_solve_transpose_sparse(const LUFactorization *lu,
      */
     if (nnz_rhs > m / 4) {
         /* Build dense RHS vector in work */
+        t_segment_ms = lp_telemetry_timer_start();
         for (int k = 0; k < nnz_rhs; k++) {
             if (rhs_idx[k] >= 0 && rhs_idx[k] < m)
                 work[rhs_idx[k]] = rhs_val[k];
@@ -978,25 +1575,29 @@ void lu_solve_transpose_sparse(const LUFactorization *lu,
         for (int i = 0; i < m; i++) {
             work2[i] = work[lu->col_perm[i]];
         }
+        lu_record_btran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 
         /* Apply updates in reverse (in step coordinates) */
-        if (lu->use_ft_updates && lu->ft_num_updates > 0) {
-            apply_ft_spikes_backward(lu, work2);
-        } else if (lu->num_eta > 0) {
-            apply_eta_backward(lu, work2);
+        if (lu_update_backend_has_updates(lu)) {
+            t_segment_ms = lp_telemetry_timer_start();
+            lu_update_backend_apply_backward(lu, work2);
+            lu_record_btran_update_apply_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
         }
 
         /* Solve U'z = work2 */
+        t_segment_ms = lp_telemetry_timer_start();
         solve_Ut(lu, work2, work);
 
         /* Solve L'x = z and apply P' */
         solve_Lt(lu, work, work2);
 
         vec_copy_data(solution, work2, m);
+        lu_record_btran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
         return;
     }
 
     /* Sparse path: Apply inverse column permutation */
+    t_segment_ms = lp_telemetry_timer_start();
     for (int k = 0; k < nnz_rhs; k++) {
         int orig_idx = rhs_idx[k];
         if (orig_idx >= 0 && orig_idx < m) {
@@ -1005,19 +1606,22 @@ void lu_solve_transpose_sparse(const LUFactorization *lu,
             work[step_pos] = rhs_val[k];
         }
     }
+    lu_record_btran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 
     /* Apply updates in reverse */
-    if (lu->use_ft_updates && lu->ft_num_updates > 0) {
-        apply_ft_spikes_backward(lu, work);
-    } else if (lu->num_eta > 0) {
-        apply_eta_backward(lu, work);
+    if (lu_update_backend_has_updates(lu)) {
+        t_segment_ms = lp_telemetry_timer_start();
+        lu_update_backend_apply_backward(lu, work);
+        lu_record_btran_update_apply_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
     }
 
     /* Solve U'z = work (U' is lower triangular) */
+    t_segment_ms = lp_telemetry_timer_start();
     solve_Ut(lu, work, work2);
 
     /* Solve L'x = z and apply P' */
     solve_Lt(lu, work2, solution);
+    lu_record_btran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 }
 
 /* ============================================================================
@@ -1181,6 +1785,9 @@ static void solve_L_sparse(const LUFactorization *lu,
                            int *marked,
                            int *reach_nnz_out) {
     int m = lu->m;
+    const int *L_colptr = lu->L_colptr;
+    const int *L_rowidx = lu->L_rowidx;
+    const double *L_values = lu->L_values;
 
     /* Compute reach - stored in x_idx */
     int *reach = x_idx;
@@ -1205,13 +1812,12 @@ static void solve_L_sparse(const LUFactorization *lu,
         int j = reach[k];
         double xj = x[j];  /* L[j,j] = 1, so no division needed */
 
-        if (fabs(xj) > RALPH_ZERO_TOL) {
-            /* Update successors */
-            for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
-                int i = lu->L_rowidx[p];
-                x[i] -= lu->L_values[p] * xj;
-            }
-        }
+        if (fabs(xj) <= RALPH_ZERO_TOL) continue;
+
+        /* Update successors */
+        int p0 = L_colptr[j] + 1;
+        int p1 = L_colptr[j + 1];
+        tri_scatter_sub(L_rowidx + p0, L_values + p0, p1 - p0, xj, x);
     }
 
     /* Return reach size for caller to use for cleanup */
@@ -1240,6 +1846,9 @@ static void solve_U_sparse(const LUFactorization *lu,
                            int *marked,
                            int *reach_nnz_out) {
     int m = lu->m;
+    const int *U_colptr = lu->U_colptr;
+    const int *U_rowidx = lu->U_rowidx;
+    const double *U_values = lu->U_values;
 
     /* Compute reach */
     int *reach = x_idx;
@@ -1274,15 +1883,12 @@ static void solve_U_sparse(const LUFactorization *lu,
         x[j] /= diag;
         double xj = x[j];
 
-        if (fabs(xj) > RALPH_ZERO_TOL) {
-            /* Update predecessors */
-            for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
-                int i = lu->U_rowidx[p];
-                if (i < j) {
-                    x[i] -= lu->U_values[p] * xj;
-                }
-            }
-        }
+        if (fabs(xj) <= RALPH_ZERO_TOL) continue;
+
+        /* Update predecessors */
+        int p0 = U_colptr[j];
+        int p1 = U_colptr[j + 1];
+        tri_scatter_sub_lt(U_rowidx + p0, U_values + p0, p1 - p0, j, xj, x);
     }
 
     /* Return reach size for caller to use for cleanup */
@@ -1315,6 +1921,7 @@ void lu_ftran_hyper_sparse(const LUFactorization *lu,
     if (!lu || !solution) return;
 
     int m = lu->m;
+    double t_segment_ms;
 
     /* Threshold: if RHS too dense, fall back to regular sparse solve */
     if (nnz_rhs > m / 8) {
@@ -1346,6 +1953,7 @@ void lu_ftran_hyper_sparse(const LUFactorization *lu,
     memset(work2, 0, m * sizeof(double));
 
     /* Step 1: Apply row permutation to RHS */
+    t_segment_ms = lp_telemetry_timer_start();
     int perm_nnz = 0;
     for (int k = 0; k < nnz_rhs; k++) {
         int orig_row = rhs_idx[k];
@@ -1370,33 +1978,376 @@ void lu_ftran_hyper_sparse(const LUFactorization *lu,
     /* U solve: L_out_idx is INPUT, reuse perm_rhs_idx as OUTPUT (safe now) */
     int U_nnz, U_reach_nnz;
     solve_U_sparse(lu, L_nnz, L_out_idx, temp_val, work2, perm_rhs_idx, &U_nnz, marked, &U_reach_nnz);
+    lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 
     /* Step 4: Apply FT/eta updates */
-    if (lu->use_ft_updates && lu->ft_num_updates > 0) {
-        apply_ft_spikes_forward(lu, work2);
-    } else if (lu->num_eta > 0) {
-        apply_eta_forward(lu, work2);
+    int has_updates = 0;
+    if (lu_update_backend_has_updates(lu)) {
+        has_updates = 1;
+        t_segment_ms = lp_telemetry_timer_start();
+        (void)lu_update_backend_apply_forward(lu, work2);
+        lu_record_ftran_update_apply_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
     }
 
-    /* Step 5: Apply column permutation and build output */
+    /* Step 5: Apply column permutation and build output.
+     * No-update fast path avoids an O(m) scan of work2. */
     memset(solution, 0, m * sizeof(double));
     if (sol_nnz) *sol_nnz = 0;
 
-    for (int i = 0; i < m; i++) {
-        if (fabs(work2[i]) > RALPH_ZERO_TOL) {
+    if (!has_updates) {
+        t_segment_ms = lp_telemetry_timer_start();
+        for (int k = 0; k < U_nnz; k++) {
+            int i = perm_rhs_idx[k];
+            double xi = work2[i];
+            if (fabs(xi) <= RALPH_ZERO_TOL) continue;
             int out_idx = lu->col_perm[i];
-            solution[out_idx] = work2[i];
+            solution[out_idx] = xi;
             if (sol_idx && sol_nnz) {
                 sol_idx[(*sol_nnz)++] = out_idx;
             }
         }
+        lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
+        return;
     }
 
-    /* Clear workspace - FT updates may touch all entries so full clear needed */
+    t_segment_ms = lp_telemetry_timer_start();
     for (int i = 0; i < m; i++) {
-        work2[i] = 0.0;
+        double xi = work2[i];
+        if (fabs(xi) <= RALPH_ZERO_TOL) continue;
+        int out_idx = lu->col_perm[i];
+        solution[out_idx] = xi;
+        if (sol_idx && sol_nnz) {
+            sol_idx[(*sol_nnz)++] = out_idx;
+        }
     }
-    /* work is cleared by next solve_L_sparse call, no action needed here */
+    lu_record_ftran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
+}
+
+/* ============================================================================
+ * Sparse BTRAN Support (W1: Sparse BTRAN for LP speedup)
+ *
+ * Build CSR transposes of L and U for efficient DFS reach computation
+ * on L^T and U^T. This enables sparse forward/backward substitution
+ * on the transpose system, reducing BTRAN from O(m²) to O(reach).
+ * ============================================================================ */
+
+/*
+ * Mark L/U CSC data as valid for sparse BTRAN reach computation.
+ * The reach functions (compute_reach_Ut_forward, compute_reach_Lt_backward)
+ * use the CSC of U and L directly — no separate CSR transpose is needed.
+ * Called after every refactorization.
+ */
+static void build_csr_transpose(LUFactorization *lu) {
+    lu->csr_valid = 1;
+}
+
+/*
+ * Compute reach of sparse RHS through U^T (lower triangular) using DFS.
+ * U^T is lower triangular: U^T[i,j] = U[j,i] exists for j <= i.
+ * From index j, successors are all i > j where U^T[i,j] != 0.
+ * In CSR for U^T: Ut_rowptr[j] gives entries where U^T[j,col] != 0,
+ * i.e. the columns col that have U[col,j] != 0.
+ *
+ * But we want: given RHS nonzero at j, who gets affected?
+ * U^T x = b: forward sub, ascending j. x[j] depends on x[i] for i < j.
+ * Reach: all j reachable from RHS by following U^T edges downward.
+ * U^T[i,j] != 0 for j >= i (U^T is lower triangular).
+ * Edge from source i: go to rows j > i where U^T[j,i] != 0, i.e. U[i,j] != 0.
+ * In CSR of U^T: row i has columns col where U^T[i,col] != 0.
+ * But we need rows j where U^T[j,i] != 0 — that's column i of U^T = row i of U.
+ * In CSC of U: column i has entries at rows j where U[j,i] != 0.
+ * For upper triangular U: j <= i. So U^T[i,j] != 0 means j <= i (i >= j).
+ *
+ * Actually for forward sub on U^T (lower tri):
+ * x[i] = (b[i] - Σ_{j<i} U^T[i,j] * x[j]) / U^T[i,i]
+ * So x[i] depends on x[j] for j < i where U^T[i,j] != 0.
+ * If x[j] is nonzero, it can make x[i] nonzero for all i > j with U^T[i,j] != 0.
+ * U^T[i,j] = U[j,i]. For j < i: U[j,i] is in column i of U, row j.
+ *
+ * Reach from source j: find all i where U^T[i,j] != 0 and i > j.
+ * This is: find all i where U[j,i] != 0 and i > j.
+ * In CSR of U^T: row j has columns that equal row indices of col j in U.
+ * We need the CSR row j of U: entries at columns i where U[j,i] != 0.
+ * Ut_rowptr[j]..Ut_rowptr[j+1] gives us columns col where U^T[j,col] != 0,
+ * i.e. U[col,j] != 0 (col <= j since U is upper tri).
+ * That's the WRONG direction — those are predecessors, not successors!
+ *
+ * For successors of j in U^T forward sub:
+ * We need rows i > j where U^T[i,j] != 0 = U[j,i] != 0.
+ * U[j,i] != 0 means entry in row j, column i of U.
+ * In CSC of U: column i has rowidx entries, look for row j.
+ * That's O(nnz) per query — too expensive.
+ *
+ * Alternative: use CSR of U directly (= CSC of U^T).
+ * U CSR: row j has columns i where U[j,i] != 0, with i >= j (upper tri).
+ * Successors of j in U^T: all i > j where U[j,i] != 0.
+ * Perfect! Ut_rowptr/Ut_colidx give us row j of U^T, but we need
+ * "who does j feed into" = columns i > j in row j of U.
+ *
+ * Wait — Ut_rowptr[j] gives ROW j of U^T. Entries are columns col
+ * where U^T[j,col] != 0 = U[col,j] != 0. For upper tri U: col <= j.
+ * These are predecessors of j, not successors.
+ *
+ * We actually want the CSR of U (NOT U^T) for forward traversal on U^T.
+ * CSR of U = CSC of U^T. Row j of U has columns i >= j.
+ * Successors of j in U^T forward sub: columns i > j in row j of U.
+ *
+ * So build_csr_transpose should build CSR of U for this purpose.
+ * But we already built CSR of U^T. Let me reconsider...
+ *
+ * Actually, let's just use the CSC of U directly:
+ * For U^T forward sub, reach from j: find all columns i > j where U[j,i] != 0.
+ * CSC of U: scan columns i > j, check if row j appears.
+ * This is O(m * avg_col_nnz) in worst case — not better than dense.
+ *
+ * The correct approach is to build CSR of U (row-oriented U, not U^T).
+ * Row j of U: columns i >= j. Successors: all i > j in that row.
+ * This IS what we need. Let me rename: Ut_rowptr is actually U_rowptr (CSR of U).
+ *
+ * OK, I realize the naming was confusing. Let me redefine:
+ * - For sparse BTRAN on U^T (forward sub, ascending):
+ *   Need CSR of U (= row-oriented U) to find successors
+ * - For sparse BTRAN on L^T (backward sub, descending):
+ *   Need CSR of L (= row-oriented L) to find predecessors
+ *
+ * But we already built CSR of U^T and L^T above. Let me fix this.
+ * Actually, the CSR of U^T = transposed CSC of U, gives us:
+ * Row i of U^T: columns j where U^T[i,j] != 0, i.e. U[j,i] != 0.
+ * For upper tri U: j <= i. So these are entries above diagonal in U.
+ * These tell us: x[i] depends on x[j] for j < i — PREDECESSORS.
+ *
+ * For DFS reach, we need both directions. Actually for topological ordering,
+ * we can DFS from sources following predecessors then reverse.
+ * But the simpler approach: mark + ascending scan (like compute_reach_L).
+ *
+ * Simplest correct approach: DFS following successors.
+ * Successors of j: all i > j affected by x[j] being nonzero.
+ * U^T[i,j] != 0 ⟺ U[j,i] != 0.
+ * Need: for each j, find all i > j with U[j,i] != 0.
+ * This requires CSR of U (row j → columns i ≥ j).
+ *
+ * So let's rebuild: Ut_rowptr/Ut_colidx = CSR of U (not U^T).
+ * Similarly, Lt_rowptr/Lt_colidx = CSR of L (not L^T).
+ *
+ * Actually, what we built IS CSR of U^T and L^T. Let's just use a different
+ * approach for the reach: mark-and-sweep with the CSC of U directly.
+ */
+
+/*
+ * Compute reach for sparse forward sub on U^T (lower triangular).
+ * Returns indices in ascending topological order.
+ *
+ * U^T forward sub: x[j] = (b[j] - Σ_{r<j} U^T[j,r]*x[r]) / U^T[j,j]
+ * If x[r] is nonzero, it feeds into x[j] for all j > r where U^T[j,r] != 0.
+ * U^T[j,r] = U[r,j] — entry in column j of U at row r (upper tri: r <= j).
+ *
+ * Ascending mark propagation: for each column j, if any marked r < j has
+ * U[r,j] != 0, then j gets marked.
+ */
+static void compute_reach_Ut_forward(const LUFactorization *lu,
+                                      int nnz_rhs, const int *rhs_idx,
+                                      int *reach_out, int *reach_nnz,
+                                      int *marked) {
+    int m = lu->m;
+    *reach_nnz = 0;
+    if (nnz_rhs <= 0) return;
+
+    /* Mark all RHS indices */
+    int min_rhs = m;
+    for (int k = 0; k < nnz_rhs; k++) {
+        int j = rhs_idx[k];
+        if (j >= 0 && j < m) {
+            marked[j] = 1;
+            if (j < min_rhs) min_rhs = j;
+        }
+    }
+    if (min_rhs >= m) return;
+
+    /* Ascending propagation using CSC of U:
+     * Column j of U has entries U[r,j] for r <= j.
+     * If any r < j is marked, mark j (nonzero propagates forward). */
+    for (int j = min_rhs; j < m; j++) {
+        if (!marked[j]) {
+            for (int p = lu->U_colptr[j]; p < lu->U_colptr[j + 1]; p++) {
+                int r = lu->U_rowidx[p];
+                if (r < j && marked[r]) {
+                    marked[j] = 1;
+                    break;
+                }
+            }
+        }
+        if (marked[j]) {
+            reach_out[(*reach_nnz)++] = j;
+        }
+    }
+
+    /* Clear marks */
+    for (int k = 0; k < *reach_nnz; k++) {
+        marked[reach_out[k]] = 0;
+    }
+}
+
+/*
+ * Compute reach for sparse backward sub on L^T (upper triangular).
+ * Returns indices in descending topological order.
+ *
+ * L^T backward sub: x[j] = b[j] - Σ_{r>j} L^T[j,r]*x[r], descending j.
+ * If x[r] is nonzero, it feeds into x[j] for all j < r where L^T[j,r] != 0.
+ * L^T[j,r] = L[r,j] — entry in column j of L at row r (lower tri: r >= j).
+ *
+ * Descending mark propagation: for each column j, if any marked r > j has
+ * L[r,j] != 0 (below diagonal of L), then j gets marked.
+ */
+static void compute_reach_Lt_backward(const LUFactorization *lu,
+                                       int nnz_rhs, const int *rhs_idx,
+                                       int *reach_out, int *reach_nnz,
+                                       int *marked) {
+    int m = lu->m;
+    *reach_nnz = 0;
+    if (nnz_rhs <= 0) return;
+
+    /* Mark all RHS indices */
+    int max_rhs = -1;
+    for (int k = 0; k < nnz_rhs; k++) {
+        int j = rhs_idx[k];
+        if (j >= 0 && j < m) {
+            marked[j] = 1;
+            if (j > max_rhs) max_rhs = j;
+        }
+    }
+    if (max_rhs < 0) return;
+
+    /* Descending propagation using CSC of L:
+     * Column j of L has entries L[r,j] for r > j (below diagonal).
+     * If any r > j is marked, mark j (nonzero propagates backward). */
+    for (int j = max_rhs; j >= 0; j--) {
+        if (!marked[j]) {
+            for (int p = lu->L_colptr[j] + 1; p < lu->L_colptr[j + 1]; p++) {
+                int r = lu->L_rowidx[p];
+                if (marked[r]) {
+                    marked[j] = 1;
+                    break;
+                }
+            }
+        }
+        if (marked[j]) {
+            reach_out[(*reach_nnz)++] = j;  /* Collected in descending order */
+        }
+    }
+
+    /* Clear marks */
+    for (int k = 0; k < *reach_nnz; k++) {
+        marked[reach_out[k]] = 0;
+    }
+}
+
+/*
+ * Sparse forward sub on U^T: solve U^T x = b, restricted to reach indices.
+ * x is a dense workspace (input b, output x in-place).
+ * Reach must be in ascending order.
+ *
+ * U^T[i,j] = U[j,i]. For forward sub (ascending i):
+ * x[i] = (b[i] - Σ_{j<i} U^T[i,j] * x[j]) / U^T[i,i]
+ *       = (b[i] - Σ_{j<i} U[j,i] * x[j]) / U[i,i]
+ *
+ * In CSC of U: column i has entries U[r,i] for r <= i.
+ * U^T[i,r] = U[r,i] for r < i — these are the contributions.
+ */
+static void solve_Ut_sparse_reach(const LUFactorization *lu,
+                                   int reach_nnz, const int *reach,
+                                   double *x, const int *reach_mask,
+                                   int use_reach_mask) {
+    const int *U_colptr = lu->U_colptr;
+    const int *U_rowidx = lu->U_rowidx;
+    const double *U_values = lu->U_values;
+    const double *U_diag = lu->U_diag;
+
+    if (use_reach_mask) {
+        for (int k = 0; k < reach_nnz; k++) {
+            int i = reach[k];
+            int p0 = U_colptr[i];
+            int p1 = U_colptr[i + 1];
+            double sum = tri_dot_lt_masked(U_rowidx + p0, U_values + p0, p1 - p0,
+                                           i, x, reach_mask);
+
+            double diag = U_diag[i];
+            if (fabs(diag) < RALPH_PIVOT_TOL) {
+                x[i] = 0.0;
+            } else {
+                x[i] = (x[i] - sum) / diag;
+            }
+        }
+        return;
+    }
+
+    for (int k = 0; k < reach_nnz; k++) {
+        int i = reach[k];
+        int p0 = U_colptr[i];
+        int p1 = U_colptr[i + 1];
+        double sum = tri_dot_lt(U_rowidx + p0, U_values + p0, p1 - p0, i, x);
+
+        double diag = U_diag[i];
+        if (fabs(diag) < RALPH_PIVOT_TOL) {
+            x[i] = 0.0;
+        } else {
+            x[i] = (x[i] - sum) / diag;
+        }
+    }
+}
+
+/*
+ * Sparse backward sub on L^T: solve L^T x = b, restricted to reach indices.
+ * Reach must be in descending order. Includes inverse row permutation.
+ *
+ * L^T[j,i] = L[i,j]. For backward sub (descending j):
+ * x[j] = b[j] - Σ_{i>j} L^T[j,i] * x[i]
+ *       = b[j] - Σ_{i>j} L[i,j] * x[i]
+ * L[j,j] = 1, so no division needed.
+ *
+ * In CSC of L: column j has entries L[i,j] for i > j (below diagonal).
+ * These are exactly L^T[j,i] = L[i,j] for the backward sub sum.
+ */
+static void solve_Lt_sparse_reach(const LUFactorization *lu,
+                                   int reach_nnz, const int *reach,
+                                   double *x, double *solution,
+                                   int *sol_idx, int *sol_nnz,
+                                   const int *reach_mask,
+                                   int use_reach_mask) {
+    const int *L_colptr = lu->L_colptr;
+    const int *L_rowidx = lu->L_rowidx;
+    const double *L_values = lu->L_values;
+
+    if (use_reach_mask) {
+        for (int k = 0; k < reach_nnz; k++) {
+            int j = reach[k];  /* Descending order */
+            int p0 = L_colptr[j] + 1;
+            int p1 = L_colptr[j + 1];
+            double sum = tri_dot_masked(L_rowidx + p0, L_values + p0, p1 - p0, x, reach_mask);
+            x[j] -= sum;
+        }
+    } else {
+        for (int k = 0; k < reach_nnz; k++) {
+            int j = reach[k];  /* Descending order */
+            int p0 = L_colptr[j] + 1;
+            int p1 = L_colptr[j + 1];
+            double sum = tri_dot(L_rowidx + p0, L_values + p0, p1 - p0, x);
+            x[j] -= sum;
+            /* L[j,j] = 1, so no division needed */
+        }
+    }
+
+    /* Apply inverse row permutation on the reached subset only. */
+    int out_nnz = 0;
+    for (int k = 0; k < reach_nnz; k++) {
+        int i = reach[k];
+        double xi = x[i];
+        if (fabs(xi) <= RALPH_ZERO_TOL) continue;
+        int out = lu->perm[i];
+        solution[out] = xi;
+        if (sol_idx) sol_idx[out_nnz] = out;
+        out_nnz++;
+    }
+    if (sol_nnz) *sol_nnz = out_nnz;
 }
 
 /*
@@ -1411,6 +2362,7 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
     if (!lu || !solution) return;
 
     int m = lu->m;
+    double t_segment_ms;
 
     /* Threshold for falling back to dense */
     if (nnz_rhs > m / 8) {
@@ -1441,29 +2393,109 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
     LUFactorization *lu_mut = (LUFactorization*)lu;
     double *work = lu_mut->hs_work1;
     double *work2 = lu_mut->hs_work2;
+    int *bt_idx = lu_mut->hs_idx;
 
     /* Step 1: Apply inverse column permutation */
+    t_segment_ms = lp_telemetry_timer_start();
+    int bt_nnz = 0;
     for (int k = 0; k < nnz_rhs; k++) {
         int orig_idx = rhs_idx[k];
         if (orig_idx >= 0 && orig_idx < m) {
             int step_pos = lu->col_perm_inv[orig_idx];
-            work[step_pos] = rhs_val[k];
+            double v = rhs_val[k];
+            work[step_pos] = v;
+            if (fabs(v) > RALPH_ZERO_TOL) {
+                bt_idx[bt_nnz++] = step_pos;
+            }
+        }
+    }
+    lu_record_btran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
+
+    /* Step 2: Apply updates in reverse */
+    int has_updates = 0;
+    if (lu_update_backend_has_updates(lu)) {
+        has_updates = 1;
+        t_segment_ms = lp_telemetry_timer_start();
+        lu_update_backend_apply_backward(lu, work);
+        lu_record_btran_update_apply_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
+    }
+
+    /* Step 3 & 4: Solve U'^{-1} and L'^{-1}
+     * W1: Use sparse reach-based solve when CSR transposes are available
+     * and the post-update RHS is sparse enough. */
+
+    /* If updates were applied, rebuild sparse RHS pattern (updates may densify). */
+    if (has_updates) {
+        bt_nnz = 0;
+        for (int j = 0; j < m; j++) {
+            if (fabs(work[j]) > RALPH_ZERO_TOL) {
+                bt_idx[bt_nnz++] = j;
+            }
         }
     }
 
-    /* Step 2: Apply updates in reverse */
-    if (lu->use_ft_updates && lu->ft_num_updates > 0) {
-        apply_ft_spikes_backward(lu, work);
-    } else if (lu->num_eta > 0) {
-        apply_eta_backward(lu, work);
+    int used_sparse_path = 0;
+    t_segment_ms = lp_telemetry_timer_start();
+    if (lu->csr_valid && bt_nnz < m / 4) {
+        /* Sparse path: reach-based forward sub on U^T, then backward sub on L^T */
+        int *reach = (int*)lu_mut->perm_work;  /* Reuse as int array */
+        int *reach_mark = lu_mut->hs_marked;
+        int reach_nnz;
+        used_sparse_path = 1;
+
+        /* Forward sub on U^T: solve U^T work = work (in-place) */
+        compute_reach_Ut_forward(lu, bt_nnz, bt_idx, reach, &reach_nnz, lu_mut->hs_marked);
+        int use_reach_mask_ut = (reach_nnz > 0 &&
+                                 bt_nnz > 0 &&
+                                 reach_nnz <= 2 * bt_nnz &&
+                                 reach_nnz < m / 2);
+        if (use_reach_mask_ut) {
+            for (int k = 0; k < reach_nnz; k++) {
+                reach_mark[reach[k]] = 1;
+            }
+        }
+        solve_Ut_sparse_reach(lu, reach_nnz, reach, work, reach_mark, use_reach_mask_ut);
+        if (use_reach_mask_ut) {
+            for (int k = 0; k < reach_nnz; k++) {
+                reach_mark[reach[k]] = 0;
+            }
+        }
+
+        /* Gather nonzeros after U^T solve for L^T reach */
+        int ut_nnz = 0;
+        for (int k = 0; k < reach_nnz; k++) {
+            if (fabs(work[reach[k]]) > RALPH_ZERO_TOL) {
+                bt_idx[ut_nnz++] = reach[k];
+            }
+        }
+
+        /* Backward sub on L^T in-place on work, then permute to solution */
+        compute_reach_Lt_backward(lu, ut_nnz, bt_idx, reach, &reach_nnz, lu_mut->hs_marked);
+        memset(solution, 0, m * sizeof(double));
+        int use_reach_mask_lt = (reach_nnz > 0 &&
+                                 ut_nnz > 0 &&
+                                 reach_nnz <= 2 * ut_nnz &&
+                                 reach_nnz < m / 2);
+        if (use_reach_mask_lt) {
+            for (int k = 0; k < reach_nnz; k++) {
+                reach_mark[reach[k]] = 1;
+            }
+        }
+        solve_Lt_sparse_reach(lu, reach_nnz, reach, work, solution, sol_idx, sol_nnz,
+                              reach_mark, use_reach_mask_lt);
+        if (use_reach_mask_lt) {
+            for (int k = 0; k < reach_nnz; k++) {
+                reach_mark[reach[k]] = 0;
+            }
+        }
+    } else {
+        /* Dense fallback */
+        solve_Ut(lu, work, work2);
+        solve_Lt(lu, work2, solution);
     }
 
-    /* Step 3 & 4: Solve U' and L' (use dense for now - transpose sparsity is different) */
-    solve_Ut(lu, work, work2);
-    solve_Lt(lu, work2, solution);
-
     /* Build sparse output */
-    if (sol_idx && sol_nnz) {
+    if (!used_sparse_path && sol_idx && sol_nnz) {
         *sol_nnz = 0;
         for (int j = 0; j < m; j++) {
             if (fabs(solution[j]) > RALPH_ZERO_TOL) {
@@ -1471,6 +2503,7 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
             }
         }
     }
+    lu_record_btran_base_ms(lu, lp_telemetry_timer_elapsed_ms(t_segment_ms));
 
     /* Clear workspace */
     memset(work, 0, m * sizeof(double));
@@ -1478,238 +2511,40 @@ void lu_btran_hyper_sparse(const LUFactorization *lu,
 }
 
 /* ============================================================================
- * Basis Updates - Forrest-Tomlin and Eta File Methods
- * ============================================================================ */
-
-/*
- * Forrest-Tomlin update: maintains sparsity better than eta-file.
+ * Basis Updates
+ * ============================================================================
  *
- * When column k of B is replaced by entering column a_q:
- * 1. Compute spike s = U^{-1} * L^{-1} * P * a_q
- * 2. s[k] is the pivot (must be non-zero)
- * 3. Move column k to the end of the factorization order
- * 4. Store the spike for use in future solves
- *
- * Benefit: Spikes are stored sparsely and don't accumulate fill-in
- * the way eta matrices do.
+ * Update application/storage is backend-owned in `lu_update_backend.c`.
+ * This keeps FT, eta, and the emerging BG/GR Schur-compat lane orthogonal.
  */
-
-/*
- * Compact multiple FT spikes into a dense matrix for faster application.
- * The product M = E_N * ... * E_1 is computed and stored.
- * This is O(N * m) but applying M is just O(m²) instead of O(N * nnz).
- */
-static void compact_ft_spikes(LUFactorization *lu, int start, int end) {
-    int m = lu->m;
-
-    /* Allocate compact matrix if needed (stored row-major for cache efficiency) */
-    if (!lu->ft_compact_matrix) {
-        lu->ft_compact_matrix = (double*)calloc((size_t)m * m, sizeof(double));
-        if (!lu->ft_compact_matrix) return;
-    }
-
-    double *M = lu->ft_compact_matrix;
-
-    /* Initialize to identity */
-    memset(M, 0, m * m * sizeof(double));
-    for (int i = 0; i < m; i++) {
-        M[i * m + i] = 1.0;
-    }
-
-    /* Apply spikes to M: M = E_k * M for k = start..end-1
-     * E_k * M:
-     *   row[col] = diag * row[col]
-     *   row[i] = row[i] + spike[i] * row[col]  (for i in off-diag)
-     * IMPORTANT: Must use original row[col] for off-diag updates!
-     */
-    double *row_copy = lu->perm_work;  /* Temporary for row copy */
-
-    for (int k = start; k < end; k++) {
-        int col = lu->ft_spike_col[k];
-        double diag = lu->ft_spike_diag[k];
-        int spike_start = lu->ft_spike_start[k];
-        int nnz = lu->ft_spike_nnz[k];
-
-        double *row_col = &M[col * m];
-
-        /* Save original row[col] for off-diagonal updates */
-        memcpy(row_copy, row_col, m * sizeof(double));
-
-        /* Scale row[col] by diag */
-        for (int j = 0; j < m; j++) {
-            row_col[j] *= diag;
-        }
-
-        /* Update other affected rows using ORIGINAL row[col] values */
-        for (int p = 0; p < nnz; p++) {
-            int i = lu->spike_pool_idx[spike_start + p];
-            double v = lu->spike_pool_val[spike_start + p];
-            double *row_i = &M[i * m];
-            for (int j = 0; j < m; j++) {
-                row_i[j] += v * row_copy[j];
-            }
-        }
-    }
-
-    lu->ft_num_compacted = end;
-    lu->ft_compact_valid = 1;
-}
-
-/* Apply compacted matrix M to x: x = M * x */
-static void apply_compacted_matrix(const LUFactorization *lu, double *x) {
-    int m = lu->m;
-    const double *M = lu->ft_compact_matrix;
-    double *work = lu->perm_work;  /* Temporary storage */
-
-    /* Dense matrix-vector multiply with SIMD */
-    for (int i = 0; i < m; i++) {
-        double sum = 0.0;
-        const double *row = &M[i * m];
-        #pragma omp simd reduction(+:sum)
-        for (int j = 0; j < m; j++) {
-            sum += row[j] * x[j];
-        }
-        work[i] = sum;
-    }
-
-    /* Copy result back */
-    memcpy(x, work, m * sizeof(double));
-}
-
-/* Apply Forrest-Tomlin spikes during forward solve
- * FT spikes are stored with the same format as eta matrices:
- * spike[col] = 1/pivot, spike[i] = -original_spike[i]/pivot for i != col
- *
- * Application is identical to eta-file:
- * x[col] = spike[col] * x_old[col]
- * x[i] += spike[i] * x_old[col] for i != col
- */
-static void apply_ft_spikes_forward(const LUFactorization *lu, double *x) {
-    const int n = lu->ft_num_updates;
-
-    /* If we have compacted spikes, apply the compacted matrix first */
-    if (lu->ft_compact_valid && lu->ft_num_compacted > 0) {
-        apply_compacted_matrix(lu, x);
-
-        /* Apply only the non-compacted spikes from contiguous pool */
-        const int start_spike = lu->ft_num_compacted;
-        const int *cols = lu->ft_spike_col;
-        const double *diags = lu->ft_spike_diag;
-        const int *starts = lu->ft_spike_start;
-        const int *nnzs = lu->ft_spike_nnz;
-        const int *pool_idx = lu->spike_pool_idx;
-        const double *pool_val = lu->spike_pool_val;
-
-        for (int k = start_spike; k < n; k++) {
-            int col = cols[k];
-            double xc = x[col];
-            if (fabs(xc) < RALPH_ZERO_TOL) continue;
-            x[col] = diags[k] * xc;
-            int start = starts[k];
-            int nnz = nnzs[k];
-            const int *idx = pool_idx + start;
-            const double *val = pool_val + start;
-            for (int p = 0; p < nnz; p++) {
-                x[idx[p]] += val[p] * xc;
-            }
-        }
-        return;
-    }
-
-    /* No compaction - apply all spikes individually using contiguous pool */
-    const int *cols = lu->ft_spike_col;
-    const double *diags = lu->ft_spike_diag;
-    const int *starts = lu->ft_spike_start;
-    const int *nnzs = lu->ft_spike_nnz;
-    const int *pool_idx = lu->spike_pool_idx;
-    const double *pool_val = lu->spike_pool_val;
-
-    for (int k = 0; k < n; k++) {
-        int col = cols[k];
-        double xc = x[col];  /* Save original x[col] */
-
-        /* Skip if xc is zero - no update needed */
-        if (fabs(xc) < RALPH_ZERO_TOL) continue;
-
-        /* Update diagonal (branchless) */
-        x[col] = diags[k] * xc;
-
-        /* Update off-diagonal entries from contiguous pool
-         * Use local pointers for better cache access */
-        int start = starts[k];
-        int nnz = nnzs[k];
-        const int *idx = pool_idx + start;
-        const double *val = pool_val + start;
-
-        for (int p = 0; p < nnz; p++) {
-            x[idx[p]] += val[p] * xc;
-        }
-    }
-}
-
-/* Apply compacted matrix transpose M' to x: x = M' * x */
-static void apply_compacted_matrix_transpose(const LUFactorization *lu, double *x) {
-    int m = lu->m;
-    const double *M = lu->ft_compact_matrix;
-    double *work = lu->perm_work;
-
-    /* Dense matrix-vector multiply with M' (column-major access of row-major M)
-     * Note: Strided access (stride=m) is less SIMD-friendly but still benefits */
-    for (int j = 0; j < m; j++) {
-        double sum = 0.0;
-        #pragma omp simd reduction(+:sum)
-        for (int i = 0; i < m; i++) {
-            sum += M[i * m + j] * x[i];  /* M'[j,i] = M[i,j] */
-        }
-        work[j] = sum;
-    }
-
-    memcpy(x, work, m * sizeof(double));
-}
-
-/* Apply Forrest-Tomlin spikes during backward solve (transpose)
- * For transpose: (E^-1)' * x computes x[col] = spike' * x = sum_i spike[i] * x[i]
- * Applied in reverse order.
- */
-static void apply_ft_spikes_backward(const LUFactorization *lu, double *x) {
-    const int n = lu->ft_num_updates;
-    const int *cols = lu->ft_spike_col;
-    const double *diags = lu->ft_spike_diag;
-    const int *starts = lu->ft_spike_start;
-    const int *nnzs = lu->ft_spike_nnz;
-    const int *pool_idx = lu->spike_pool_idx;
-    const double *pool_val = lu->spike_pool_val;
-
-    /* Apply non-compacted spikes first (in reverse order) */
-    int start_spike = lu->ft_compact_valid ? lu->ft_num_compacted : 0;
-
-    for (int k = n - 1; k >= start_spike; k--) {
-        int col = cols[k];
-        int start = starts[k];
-        int nnz = nnzs[k];
-
-        /* Compute new x[col] = diag * x[col] + sum(off_diag * x)
-         * SIMD reduction on the sparse dot product */
-        double xc = diags[k] * x[col];
-        const int *idx = pool_idx + start;
-        const double *val = pool_val + start;
-        #pragma omp simd reduction(+:xc)
-        for (int p = 0; p < nnz; p++) {
-            xc += val[p] * x[idx[p]];
-        }
-        x[col] = xc;
-    }
-
-    /* Then apply compacted matrix transpose if available */
-    if (lu->ft_compact_valid && lu->ft_num_compacted > 0) {
-        apply_compacted_matrix_transpose(lu, x);
-    }
-}
 
 /* Update factorization when basis column changes */
 int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) {
-    if (!lu || !entering_col) return -1;
-    if (lu->num_updates >= lu->max_updates) return -1;  /* Need refactorization */
+    LPBFCPRefactorSignals sig;
+    int effective_update_limit;
+    int storage_cap;
+
+    if (!lu || !entering_col) {
+        lu_set_failure(lu, LU_FAIL_BAD_INPUT);
+        lu_mark_update_failure(lu, LU_FAIL_BAD_INPUT);
+        return -1;
+    }
+    lu_clamp_max_updates_to_storage(lu);
+    lu_set_failure(lu, LU_FAIL_NONE);
+    lu_fill_bfcp_signals(lu, &sig);
+    effective_update_limit = lp_bfcp_policy_effective_update_limit(&sig);
+    if (effective_update_limit <= 0) {
+        effective_update_limit = lu->max_updates;
+    }
+    if (effective_update_limit > 0 && lu->num_updates >= effective_update_limit) {
+        lu->last_refactor_trigger_reason =
+            (effective_update_limit < lu->max_updates)
+                ? LP_BFCP_REFACTOR_REASON_COND_ADAPTIVE_LIMIT
+                : LP_BFCP_REFACTOR_REASON_MAX_UPDATES;
+        lu_set_failure(lu, LU_FAIL_MAX_UPDATES);
+        lu_mark_update_failure(lu, LU_FAIL_MAX_UPDATES);
+        return -1;  /* Need refactorization */
+    }
 
     int m = lu->m;
 
@@ -1720,50 +2555,47 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
      * Use pre-allocated workspaces to avoid malloc in hot path */
     double *work = lu->hs_work1;
     double *spike = lu->hs_work2;
+    double *base_spike = lu->hs_val;
 
     /* Solve L * y = P * entering_col */
     solve_L(lu, entering_col, work);
 
     /* Solve U * spike = y */
     solve_U(lu, work, spike);
+    memcpy(base_spike, spike, (size_t)m * sizeof(double));
 
     /* Apply existing updates (FT spikes or eta matrices) */
-    if (lu->use_ft_updates && lu->ft_num_updates > 0) {
-        apply_ft_spikes_forward(lu, spike);
-    } else {
-        apply_eta_forward(lu, spike);
+    if (lu_update_backend_apply_forward(lu, spike) != 0) {
+        return -1;
     }
 
     /* Check pivot element (in step coordinates) */
     if (fabs(spike[step_pos]) < RALPH_PIVOT_TOL) {
+        lu_set_failure(lu, LU_FAIL_SINGULAR_UPDATE);
+        lu_mark_update_failure(lu, LU_FAIL_SINGULAR_UPDATE);
         return -1;  /* Singular update */
     }
 
     /* Threshold pivoting for updates: check if pivot is too small relative to
-     * the maximum element in the spike column. This prevents accumulation of
-     * numerical error from ill-conditioned pivots and forces refactorization
-     * before stability degrades.
+     * the maximum element in the spike column.
      *
-     * Threshold = 0.001 (0.1%) is less aggressive than MARKOWITZ_THRESHOLD (10%)
-     * to avoid excessive refactorization while still catching very bad pivots.
-     * This is more conservative than RALPH_PIVOT_TOL (1e-10) alone. */
-/* Threshold for accepting pivots during LU updates.
- * Lower values allow more updates (fewer refactorizations) but may accumulate error.
- * Higher values force more refactorizations but maintain better stability.
- * Original: 0.001 (0.1%) caused issues with highly degenerate problems like beaconfd
- * Current: 1e-4 (0.01%) - moderate compromise */
-#define RALPH_UPDATE_PIVOT_THRESHOLD 1e-4
-
+     * The ratio threshold is health-adaptive: early/healthy update runs allow
+     * slightly smaller pivots to avoid unnecessary reinversions, while poor
+     * cond/growth states tighten the threshold to preserve stability. */
     double max_abs_spike = fabs(spike[step_pos]);
     for (int i = 0; i < m; i++) {
         double absval = fabs(spike[i]);
         if (absval > max_abs_spike) max_abs_spike = absval;
     }
-
-    if (fabs(spike[step_pos]) < RALPH_UPDATE_PIVOT_THRESHOLD * max_abs_spike) {
-        /* Pivot is too small relative to column magnitude.
-         * Force refactorization to get a more stable basis representation. */
-        return -1;
+    {
+        double pivot_ratio_threshold = lu_update_pivot_ratio_threshold(lu);
+        if (fabs(spike[step_pos]) < pivot_ratio_threshold * max_abs_spike) {
+            /* Pivot is too small relative to column magnitude.
+             * Force refactorization to get a more stable basis representation. */
+            lu_set_failure(lu, LU_FAIL_UPDATE_PIVOT_TOO_SMALL);
+            lu_mark_update_failure(lu, LU_FAIL_UPDATE_PIVOT_TOO_SMALL);
+            return -1;
+        }
     }
 
     /* Normalize spike column and count OFF-DIAGONAL non-zeros */
@@ -1782,99 +2614,95 @@ int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col) 
     }
     spike[step_pos] = diag_val;  /* For eta-file compatibility */
 
-    /* Store as Forrest-Tomlin spike or eta-file update */
-    if (lu->use_ft_updates) {
-        /* Check if pool has room for this spike */
-        if (lu->spike_pool_used + off_diag_nnz > lu->spike_pool_capacity) {
-            return -1;  /* Pool full - need refactorization */
-        }
-
-        /* Store FT spike with contiguous pool storage */
-        int k = lu->ft_num_updates;
-        lu->ft_spike_col[k] = step_pos;
-        lu->ft_spike_diag[k] = diag_val;
-        lu->ft_spike_start[k] = lu->spike_pool_used;
-        lu->ft_spike_nnz[k] = off_diag_nnz;
-
-        /* Copy off-diagonal entries to contiguous pool */
-        if (off_diag_nnz > 0) {
-            int p = 0;
-            for (int i = 0; i < m; i++) {
-                if (i != step_pos && fabs(spike[i]) > RALPH_ZERO_TOL) {
-                    lu->spike_pool_idx[lu->spike_pool_used + p] = i;
-                    lu->spike_pool_val[lu->spike_pool_used + p] = spike[i];
-                    p++;
-                }
-            }
-            lu->spike_pool_used += off_diag_nnz;
-        }
-
-        lu->ft_num_updates++;
-    } else {
-        /* Store as eta-file update (includes diagonal) - still uses malloc */
-        int total_nnz = off_diag_nnz + 1;  /* +1 for diagonal */
-        int *indices = (int*)calloc(total_nnz, sizeof(int));
-        double *values = (double*)calloc(total_nnz, sizeof(double));
-        if (!indices || !values) {
-            free(indices);
-            free(values);
+    /* Dense spike guard: very dense updates make every future FTRAN/BTRAN expensive.
+     * Keep an initial warmup window so updates do not immediately collapse into
+     * update-fail -> reinvert loops before density policy can react. */
+    if (lu_update_backend_is_ft(lu) &&
+        lu->ft_num_updates >= RALPH_SPIKE_DENSE_REJECT_MIN_UPDATES &&
+        m >= RALPH_SPIKE_DENSE_REJECT_M_MIN &&
+        m > 1) {
+        double spike_ratio = (double)off_diag_nnz / (double)(m - 1);
+        double reject_ratio = lu_dense_spike_reject_ratio(lu);
+        if (spike_ratio > reject_ratio) {
+            lu_set_failure(lu, LU_FAIL_SPIKE_POOL_FULL);
+            lu_mark_update_failure(lu, LU_FAIL_SPIKE_POOL_FULL);
             return -1;
         }
+    }
 
-        int p = 0;
-        for (int i = 0; i < m; i++) {
-            if (fabs(spike[i]) > RALPH_ZERO_TOL) {
-                indices[p] = i;
-                values[p] = spike[i];
-                p++;
-            }
-        }
-
-        lu->eta_col[lu->num_eta] = step_pos;
-        lu->eta_indices[lu->num_eta] = indices;
-        lu->eta_values[lu->num_eta] = values;
-        lu->eta_nnz[lu->num_eta] = total_nnz;
-        lu->num_eta++;
+    if (lu_update_backend_store(lu, step_pos, base_spike, spike, off_diag_nnz) != 0) {
+        return -1;
     }
     lu->num_updates++;
+    storage_cap = lu_update_backend_storage_capacity(lu);
+    if (storage_cap > 0 && lu->num_updates > storage_cap) {
+        lu->num_updates = storage_cap;
+    }
 
     /* Track growth factor */
     if (max_spike > lu->growth_factor) {
         lu->growth_factor = max_spike;
     }
 
-    /* Trigger spike compaction if interval reached and using FT updates */
-    if (lu->use_ft_updates && lu->ft_compact_interval > 0) {
-        int uncompacted = lu->ft_num_updates - lu->ft_num_compacted;
-        if (uncompacted >= lu->ft_compact_interval) {
-            compact_ft_spikes(lu, 0, lu->ft_num_updates);
-        }
-    }
+    /* T3.2: Update condition estimate from new pivot diagonal.
+     * The diagonal of the updated U matrix is approximated by 1/pivot.
+     * Track min/max to estimate condition degradation during updates. */
+    double abs_diag = fabs(diag_val);
+    if (abs_diag > 0 && abs_diag < lu->min_diag_U) lu->min_diag_U = abs_diag;
+    if (abs_diag > lu->max_diag_U) lu->max_diag_U = abs_diag;
+    if (lu->min_diag_U > RALPH_ZERO_TOL)
+        lu->cond_estimate = lu->max_diag_U / lu->min_diag_U;
 
+    /* (B4: spike compaction removed — refactorization handles accumulated fill) */
+
+    lu_set_failure(lu, LU_FAIL_NONE);
     return 0;
 }
 
-int lu_needs_refactorization(const LUFactorization *lu) {
+int lu_needs_refactorization(LUFactorization *lu) {
+    LPBFCPRefactorSignals sig;
+    int reason;
+
     if (!lu) return 0;
 
-    /* Refactorize if max updates reached */
-    if (lu->num_updates >= lu->max_updates) return 1;
+    lu_fill_bfcp_signals(lu, &sig);
 
-    /* Refactorize early if condition has degraded significantly */
-    if (lu->growth_factor > 1e6) return 1;
+    reason = lp_bfcp_policy_refactor_reason(&sig);
+    lu->last_refactor_trigger_reason = reason;
+    lu_mark_refactor_need(lu, reason);
+    return reason != LP_BFCP_REFACTOR_REASON_NONE;
+}
 
-    /* Refactorize early if spike pool is nearly full
-     * This prevents update failures when spike density is higher than expected */
-    if (lu->use_ft_updates && lu->spike_pool_capacity > 0) {
-        if (lu->spike_pool_used > lu->spike_pool_capacity * RALPH_SPIKE_POOL_WARN_PCT / 100) return 1;
-    }
+int lu_refactor_hard_trigger(const LUFactorization *lu) {
+    LPBFCPRefactorSignals sig;
 
-    return 0;
+    if (!lu) return 0;
+    lu_fill_bfcp_signals(lu, &sig);
+    return lp_bfcp_policy_refactor_hard_trigger(&sig);
 }
 
 /* ============================================================================
  * Utility
  * ============================================================================ */
+
+const char* lu_failure_reason_string(int reason) {
+    switch ((LUFailureReason)reason) {
+        case LU_FAIL_NONE: return "none";
+        case LU_FAIL_BAD_INPUT: return "bad_input";
+        case LU_FAIL_MAX_UPDATES: return "max_updates";
+        case LU_FAIL_SINGULAR_UPDATE: return "singular_update";
+        case LU_FAIL_UPDATE_PIVOT_TOO_SMALL: return "update_pivot_too_small";
+        case LU_FAIL_SPIKE_POOL_FULL: return "spike_pool_full";
+        case LU_FAIL_ETA_ALLOC: return "eta_alloc";
+        case LU_FAIL_FACTOR_SINGULAR: return "factor_singular";
+        case LU_FAIL_FACTOR_ALLOC: return "factor_alloc";
+        default: return "unknown";
+    }
+}
+
+const char* lu_refactor_trigger_reason_string(int reason) {
+    return lp_bfcp_policy_refactor_reason_string(reason);
+}
 
 void lu_print(const LUFactorization *lu) {
     if (!lu) {

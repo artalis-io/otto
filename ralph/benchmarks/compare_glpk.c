@@ -10,12 +10,31 @@
 #include <string.h>
 #include <time.h>
 #include <math.h>
-#include "ralph.h"
+#include "ralph_test_mod_api.h"
 
 static unsigned int seed;
 static double randf(double lo, double hi) {
     seed = seed * 1103515245 + 12345;
     return lo + (seed % 10000) / 10000.0 * (hi - lo);
+}
+
+static int glpsol_available(void) {
+    int rc = system("which glpsol >/dev/null 2>&1");
+    return rc == 0 ? 1 : 0;
+}
+
+static RalphModel* build_model(int n, int m, const double *costs, const double *rhs,
+                               int **con_idx, double **con_val, const int *con_nnz) {
+    RalphModel *model = ralph_test_create();
+    if (!model) return NULL;
+    ralph_test_set_obj_sense(model, RALPH_MAXIMIZE);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_VERBOSE, 0);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_MAX_ITERATIONS, 100000);
+    for (int j = 0; j < n; j++) ralph_test_add_var(model, 0.0, 100.0, costs[j], 'C');
+    for (int i = 0; i < m; i++) {
+        ralph_test_add_constraint(model, con_nnz[i], con_idx[i], con_val[i], 'L', rhs[i]);
+    }
+    return model;
 }
 
 void run_comparison(int n, int m, double density, unsigned int s) {
@@ -45,82 +64,39 @@ void run_comparison(int n, int m, double density, unsigned int s) {
         con_nnz[i] = nnz;
     }
 
-    /* Write LP file for GLPK */
-    char filename[64];
-    snprintf(filename, sizeof(filename), "/tmp/ralph_bench_%dx%d.lp", n, m);
-    FILE *f = fopen(filename, "w");
-    fprintf(f, "Maximize\n obj: ");
-    for (int j = 0; j < n; j++) {
-        if (j > 0) fprintf(f, " + ");
-        fprintf(f, "%.10f x%d", costs[j], j);
+    /* Solve with Ralph internal primal simplex */
+    RalphModel *model = build_model(n, m, costs, rhs, con_idx, con_val, con_nnz);
+    if (!model) {
+        fprintf(stderr, "Failed to build internal model\n");
+        goto cleanup;
     }
-    fprintf(f, "\nSubject To\n");
-    for (int i = 0; i < m; i++) {
-        fprintf(f, " c%d: ", i);
-        for (int k = 0; k < con_nnz[i]; k++) {
-            if (k > 0) fprintf(f, " + ");
-            fprintf(f, "%.10f x%d", con_val[i][k], con_idx[i][k]);
-        }
-        fprintf(f, " <= %.10f\n", rhs[i]);
-    }
-    fprintf(f, "Bounds\n");
-    for (int j = 0; j < n; j++) fprintf(f, " 0 <= x%d <= 100\n", j);
-    fprintf(f, "End\n");
-    fclose(f);
-
-    /* Solve with Ralph */
-    RalphModel *model = ralph_create();
-    ralph_set_int_param(model, "verbose", 0);
-    ralph_set_obj_sense(model, RALPH_MAXIMIZE);
-    for (int j = 0; j < n; j++) ralph_add_var(model, 0.0, 100.0, costs[j], 'C');
-    for (int i = 0; i < m; i++) {
-        ralph_add_constraint(model, con_nnz[i], con_idx[i], con_val[i], 'L', rhs[i]);
-    }
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+                           (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX);
 
     clock_t start = clock();
-    ralph_optimize(model);
+    (void)ralph_test_optimize_lp(model);
     double ralph_time = (double)(clock() - start) / CLOCKS_PER_SEC;
-    double ralph_obj = ralph_get_objval(model);
-    const char *ralph_status = ralph_status_string(ralph_get_status(model));
-    ralph_free(model);
+    double ralph_obj = ralph_test_get_objval(model);
+    const char *ralph_status = ralph_test_status_string(ralph_test_get_status(model));
+    ralph_test_free(model);
 
-    /* Solve with GLPK - capture timing from output */
-    char cmd[256], solfile[64];
-    snprintf(solfile, sizeof(solfile), "/tmp/ralph_bench_%dx%d.sol", n, m);
-    snprintf(cmd, sizeof(cmd), "glpsol --lp %s -o %s 2>&1", filename, solfile);
-
-    FILE *glpk_pipe = popen(cmd, "r");
-    double glpk_time = 0;
-    int ret = 0;
-    if (glpk_pipe) {
-        char line[256];
-        while (fgets(line, sizeof(line), glpk_pipe)) {
-            if (strstr(line, "Time used:")) {
-                sscanf(line, "Time used: %lf", &glpk_time);
-            }
-        }
-        ret = pclose(glpk_pipe);
+    /* Solve with GLPK via Ralph out-of-process external adapter */
+    model = build_model(n, m, costs, rhs, con_idx, con_val, con_nnz);
+    if (!model) {
+        fprintf(stderr, "Failed to build external model\n");
+        goto cleanup;
     }
-
-    /* Parse GLPK result */
-    double glpk_obj = 0;
-    char glpk_status[32] = "UNKNOWN";
-    if (ret == 0) {
-        f = fopen(solfile, "r");
-        if (f) {
-            char line[256];
-            while (fgets(line, sizeof(line), f)) {
-                if (strstr(line, "Status:")) {
-                    sscanf(line, "Status: %31s", glpk_status);
-                }
-                if (strstr(line, "Objective:")) {
-                    char *p = strstr(line, "=");
-                    if (p) glpk_obj = atof(p + 1);
-                }
-            }
-            fclose(f);
-        }
-    }
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_PROVIDER,
+                           (int)RALPH_LP_EXTERNAL_PROVIDER_GLPK);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_EXTERNAL_STRICT, 1);
+    ralph_core_set_int_param_id(model, RALPH_PARAM_LP_ALGORITHM,
+                           (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX_EXTERNAL);
+    start = clock();
+    (void)ralph_test_optimize_lp(model);
+    double glpk_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+    double glpk_obj = ralph_test_get_objval(model);
+    const char *glpk_status = ralph_test_status_string(ralph_test_get_status(model));
+    ralph_test_free(model);
 
     /* Report results */
     double diff_pct = (glpk_obj != 0) ? 100.0 * (ralph_obj - glpk_obj) / glpk_obj : 0;
@@ -132,10 +108,10 @@ void run_comparison(int n, int m, double density, unsigned int s) {
     }
 
     printf("  Ralph: %8.4fs  %-8s  obj=%12.2f\n", ralph_time, ralph_status, ralph_obj);
-    printf("  GLPK:  %8.4fs  %-8s  obj=%12.2f\n", glpk_time, glpk_status, glpk_obj);
+    printf("  GLPK* (oop): %8.4fs  %-8s  obj=%12.2f\n", glpk_time, glpk_status, glpk_obj);
     printf("  Match: %s\n", match);
 
-    /* Cleanup */
+cleanup:
     free(costs); free(rhs); free(con_nnz);
     for (int i = 0; i < m; i++) { free(con_idx[i]); free(con_val[i]); }
     free(con_idx); free(con_val);
@@ -145,9 +121,13 @@ int main(int argc, char **argv) {
     printf("Ralph vs GLPK Comparison\n");
     printf("========================\n\n");
 
-    /* Check if GLPK is available */
-    if (system("which glpsol >/dev/null 2>&1") != 0) {
+    if (!glpsol_available()) {
         printf("Error: glpsol not found. Install GLPK to run this benchmark.\n");
+        return 1;
+    }
+    ralph_lp_external_unregister_all_adapters();
+    if (ralph_lp_external_register_glpk_oop(NULL) != 0) {
+        printf("Error: failed to register GLPK out-of-process adapter.\n");
         return 1;
     }
 
@@ -171,5 +151,6 @@ int main(int argc, char **argv) {
         printf("\n");
     }
 
+    ralph_lp_external_unregister_all_adapters();
     return 0;
 }

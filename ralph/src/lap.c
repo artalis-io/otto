@@ -16,7 +16,7 @@
  */
 
 #include "lap.h"
-#include "ralph.h"
+#include "ralph_lp.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -2124,7 +2124,7 @@ RalphLapStatus ralph_lap_solve_lp(
      *   x[i][j] >= 0
      */
 
-    RalphModel *model = ralph_create();
+    RalphLPModel *model = ralph_lp_create();
     if (!model) {
         return RALPH_LAP_MEMORY_ERROR;
     }
@@ -2132,8 +2132,8 @@ RalphLapStatus ralph_lap_solve_lp(
     RalphLapStatus status = RALPH_LAP_SUCCESS;
 
     /* Set objective sense */
-    ralph_set_obj_sense(model, objective == RALPH_LAP_MAXIMIZE ?
-                        RALPH_MAXIMIZE : RALPH_MINIMIZE);
+    ralph_lp_set_obj_sense(model, objective == RALPH_LAP_MAXIMIZE ?
+                           RALPH_LP_OBJ_MAXIMIZE : RALPH_LP_OBJ_MINIMIZE);
 
     /* Add n^2 variables with objective coefficients from cost matrix */
     for (int i = 0; i < n; i++) {
@@ -2143,7 +2143,7 @@ RalphLapStatus ralph_lap_solve_lp(
             if (is_infinite(c)) {
                 c = RALPH_LAP_INFINITY;
             }
-            ralph_add_var(model, 0.0, 1.0, c, RALPH_CONTINUOUS);
+            ralph_lp_add_var(model, 0.0, 1.0, c, RALPH_LP_VAR_CONTINUOUS);
         }
     }
 
@@ -2153,7 +2153,7 @@ RalphLapStatus ralph_lap_solve_lp(
     if (!indices || !values) {
         free(indices);
         free(values);
-        ralph_free(model);
+        ralph_lp_free(model);
         return RALPH_LAP_MEMORY_ERROR;
     }
 
@@ -2166,7 +2166,7 @@ RalphLapStatus ralph_lap_solve_lp(
         for (int j = 0; j < n; j++) {
             indices[j] = i * n + j;
         }
-        ralph_add_constraint(model, n, indices, values, RALPH_EQUAL, 1.0);
+        ralph_lp_add_constraint(model, n, indices, values, RALPH_LP_SENSE_EQUAL, 1.0);
     }
 
     /* Column assignment constraints: sum_i x[i][j] = 1 */
@@ -2174,28 +2174,28 @@ RalphLapStatus ralph_lap_solve_lp(
         for (int i = 0; i < n; i++) {
             indices[i] = i * n + j;
         }
-        ralph_add_constraint(model, n, indices, values, RALPH_EQUAL, 1.0);
+        ralph_lp_add_constraint(model, n, indices, values, RALPH_LP_SENSE_EQUAL, 1.0);
     }
 
     free(indices);
     free(values);
 
     /* Solve */
-    ralph_optimize(model);
+    ralph_lp_optimize(model);
 
-    if (ralph_get_status(model) != RALPH_STATUS_OPTIMAL) {
-        ralph_free(model);
+    if (ralph_lp_get_status(model) != RALPH_LP_STATUS_OPTIMAL) {
+        ralph_lp_free(model);
         return RALPH_LAP_INFEASIBLE;
     }
 
     /* Extract solution */
     double *x = (double *)calloc((size_t)n * n, sizeof(double));
     if (!x) {
-        ralph_free(model);
+        ralph_lp_free(model);
         return RALPH_LAP_MEMORY_ERROR;
     }
 
-    ralph_get_solution(model, x);
+    ralph_lp_get_solution(model, x);
 
     /* Convert continuous solution to assignment (pick highest value in each row) */
     for (int i = 0; i < n; i++) {
@@ -2212,11 +2212,11 @@ RalphLapStatus ralph_lap_solve_lp(
 
     /* Get total cost */
     if (total_cost) {
-        *total_cost = ralph_get_objval(model);
+        *total_cost = ralph_lp_get_objval(model);
     }
 
     free(x);
-    ralph_free(model);
+    ralph_lp_free(model);
     return status;
 }
 

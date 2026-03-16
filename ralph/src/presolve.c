@@ -15,6 +15,9 @@
 #include <math.h>
 #include "presolve.h"
 
+/* Forward declarations */
+static int postsolve_push(PresolveResult *result, PostsolveOp op);
+
 /* ============================================================================
  * Presolve Context Creation/Destruction
  * ============================================================================ */
@@ -39,11 +42,12 @@ static PresolveContext* presolve_context_create(LPModel *model) {
     ctx->remove_singleton_cols = 1;
     ctx->remove_forcing_cons = 1;
     ctx->bound_tightening = 1;
-    ctx->coefficient_reduction = 0; /* Can be expensive */
     ctx->probing = 0;               /* MIP only */
     ctx->detect_redundant_rows = 1; /* Only removes redundant equality constraints */
 
-    ctx->max_rounds = 1;  /* Single round to avoid error accumulation */
+    ctx->technique_mask = 0xFFFF;  /* All techniques enabled by default */
+
+    ctx->max_rounds = 20;  /* Multiple rounds for fixed-point convergence (GLOP uses 20) */
     ctx->current_round = 0;
 
     /* Redundant row detection stats */
@@ -85,6 +89,60 @@ static void presolve_context_free(PresolveContext *ctx) {
 }
 
 /* ============================================================================
+ * Row Activity Bounds (shared primitive)
+ * ============================================================================ */
+
+void compute_row_bounds(const double *row, int n,
+                        const double *var_lb, const double *var_ub,
+                        const int *col_deleted, RowBounds *out) {
+    out->lb = 0.0;
+    out->ub = 0.0;
+    out->abs_sum = 0.0;
+    out->lb_finite = 1;
+    out->ub_finite = 1;
+
+    for (int j = 0; j < n; j++) {
+        if (col_deleted && col_deleted[j]) continue;
+        double aij = row[j];
+        if (fabs(aij) < RALPH_ZERO_TOL) continue;
+
+        if (aij > 0) {
+            if (var_lb[j] <= -RALPH_INFINITY/2) {
+                out->lb_finite = 0;
+            } else {
+                double contrib = aij * var_lb[j];
+                out->lb += contrib;
+                out->abs_sum += fabs(contrib);
+            }
+            if (var_ub[j] >= RALPH_INFINITY/2) {
+                out->ub_finite = 0;
+            } else {
+                double contrib = aij * var_ub[j];
+                out->ub += contrib;
+            }
+        } else {
+            if (var_ub[j] >= RALPH_INFINITY/2) {
+                out->lb_finite = 0;
+            } else {
+                double contrib = aij * var_ub[j];
+                out->lb += contrib;
+                out->abs_sum += fabs(contrib);
+            }
+            if (var_lb[j] <= -RALPH_INFINITY/2) {
+                out->ub_finite = 0;
+            } else {
+                double contrib = aij * var_lb[j];
+                out->ub += contrib;
+            }
+        }
+    }
+
+    /* Map non-finite accumulations to infinity sentinels */
+    if (!out->lb_finite) out->lb = -RALPH_INFINITY;
+    if (!out->ub_finite) out->ub = RALPH_INFINITY;
+}
+
+/* ============================================================================
  * Implied Bounds Computation
  * ============================================================================ */
 
@@ -92,53 +150,19 @@ void presolve_compute_implied_bounds(PresolveContext *ctx) {
     LPModel *model = ctx->working;
     int n = model->num_vars;
 
-    /* Allocate dense row buffer once */
     double *row = (double*)calloc(n, sizeof(double));
     if (!row) return;
 
     for (int i = 0; i < model->num_cons; i++) {
         if (ctx->row_deleted[i]) continue;
 
-        /* Extract row once instead of O(n) element accesses */
         sparse_get_row(model->A, i, row);
 
-        double lb = 0.0;
-        double ub = 0.0;
+        RowBounds rb;
+        compute_row_bounds(row, n, model->lb, model->ub, ctx->col_deleted, &rb);
 
-        /* Compute implied bounds: lb <= a'x <= ub based on variable bounds */
-        for (int j = 0; j < n; j++) {
-            if (ctx->col_deleted[j]) continue;
-
-            double aij = row[j];
-            if (fabs(aij) < RALPH_ZERO_TOL) continue;
-
-            if (aij > 0) {
-                if (model->lb[j] > -RALPH_INFINITY/2) {
-                    lb += aij * model->lb[j];
-                } else {
-                    lb = -RALPH_INFINITY;
-                }
-                if (model->ub[j] < RALPH_INFINITY/2) {
-                    ub += aij * model->ub[j];
-                } else {
-                    ub = RALPH_INFINITY;
-                }
-            } else {
-                if (model->ub[j] < RALPH_INFINITY/2) {
-                    lb += aij * model->ub[j];
-                } else {
-                    lb = -RALPH_INFINITY;
-                }
-                if (model->lb[j] > -RALPH_INFINITY/2) {
-                    ub += aij * model->lb[j];
-                } else {
-                    ub = RALPH_INFINITY;
-                }
-            }
-        }
-
-        ctx->row_lb[i] = lb;
-        ctx->row_ub[i] = ub;
+        ctx->row_lb[i] = rb.lb;
+        ctx->row_ub[i] = rb.ub;
     }
 
     free(row);
@@ -322,34 +346,42 @@ int presolve_singleton_rows(PresolveContext *ctx) {
 
         if (nnz == 1 && singleton_col >= 0) {
             /* Row i is: a_ij * x_j (sense) b_i
-             * CONSERVATIVE APPROACH: Only delete the row if the existing bounds
-             * already guarantee the constraint is satisfied. Do NOT tighten bounds.
-             * This avoids numerical precision issues with bnl1 and similar problems.
-             *
-             * We can only delete if the constraint is REDUNDANT given current bounds,
-             * not if it COULD be satisfied - that would require bound tightening. */
+             * For inequality constraints: derive implied bound, tighten, delete.
+             * For equality constraints: only delete if already redundant
+             * (equalities are better handled by Gaussian elimination to
+             * avoid creating ill-conditioned reduced models). */
             double rhs = model->b[i];
             double implied_val = rhs / singleton_val;
-            double lb = model->lb[singleton_col];
-            double ub = model->ub[singleton_col];
+            int j = singleton_col;
+            double lb = model->lb[j];
+            double ub = model->ub[j];
             int can_delete = 0;
 
             if (model->sense[i] == 'E') {
-                /* x_j = implied_val: row is redundant only if bounds force this value */
-                /* This is rare (lb == implied_val == ub), so usually can't delete */
+                /* Conservative for equality: only delete if bounds force the value */
                 if (fabs(lb - implied_val) <= RALPH_FEAS_TOL &&
                     fabs(ub - implied_val) <= RALPH_FEAS_TOL) {
                     can_delete = 1;
                 }
             } else if ((model->sense[i] == 'L' && singleton_val > 0) ||
                        (model->sense[i] == 'G' && singleton_val < 0)) {
-                /* x_j <= implied_val: row is redundant if ub <= implied_val */
+                /* Implies x_j <= implied_val */
                 if (ub <= implied_val + RALPH_FEAS_TOL) {
+                    can_delete = 1;  /* Already redundant */
+                } else if (fabs(singleton_val) >= RALPH_PIVOT_TOL &&
+                           implied_val >= lb - RALPH_FEAS_TOL) {
+                    /* Tighten upper bound and delete */
+                    model->ub[j] = implied_val;
                     can_delete = 1;
                 }
             } else {
-                /* x_j >= implied_val: row is redundant if lb >= implied_val */
+                /* Implies x_j >= implied_val */
                 if (lb >= implied_val - RALPH_FEAS_TOL) {
+                    can_delete = 1;  /* Already redundant */
+                } else if (fabs(singleton_val) >= RALPH_PIVOT_TOL &&
+                           implied_val <= ub + RALPH_FEAS_TOL) {
+                    /* Tighten lower bound and delete */
+                    model->lb[j] = implied_val;
                     can_delete = 1;
                 }
             }
@@ -474,6 +506,377 @@ int presolve_singleton_cols(PresolveContext *ctx) {
     return count;
 }
 
+/* ============================================================================
+ * Doubleton Equality Elimination
+ * ============================================================================ */
+
+/*
+ * For equality constraints with exactly 2 non-zeros:
+ *   a_j * x_j + a_k * x_k = b_i
+ * Solve for one variable (the "eliminated" one):
+ *   x_j = (b_i - a_k * x_k) / a_j = offset + factor * x_k
+ * where offset = b_i / a_j, factor = -a_k / a_j
+ *
+ * Substitute into all other constraints and the objective, then remove
+ * row i and column j. Record substitution for postsolve.
+ *
+ * Choice of which variable to eliminate:
+ *   - Prefer the one with the larger absolute coefficient (pivot stability)
+ *   - Never eliminate integer/binary variables
+ *   - Prefer eliminating free variables (no bounds)
+ */
+int presolve_doubleton_equality(PresolveContext *ctx, PresolveResult *result) {
+    LPModel *model = ctx->working;
+    int n = model->num_vars;
+    int m = model->num_cons;
+    int count = 0;
+
+    /* Allocate dense row buffer */
+    double *row = (double*)calloc(n, sizeof(double));
+    if (!row) return 0;
+
+    for (int i = 0; i < m; i++) {
+        if (ctx->row_deleted[i]) continue;
+        if (model->sense[i] != 'E') continue;  /* Only equality constraints */
+
+        /* Extract row and find exactly 2 non-zeros */
+        sparse_get_row(model->A, i, row);
+        int col1 = -1, col2 = -1;
+        double val1 = 0.0, val2 = 0.0;
+        int nnz = 0;
+
+        for (int j = 0; j < n; j++) {
+            if (ctx->col_deleted[j]) continue;
+            if (fabs(row[j]) > RALPH_ZERO_TOL) {
+                nnz++;
+                if (nnz == 1) { col1 = j; val1 = row[j]; }
+                else if (nnz == 2) { col2 = j; val2 = row[j]; }
+                else break;
+            }
+        }
+        if (nnz != 2) continue;
+
+        double rhs = model->b[i];
+
+        /* Decide which variable to eliminate.
+         * Prefer: (1) continuous over integer, (2) larger coefficient */
+        int elim, remain;
+        double a_elim, a_remain;
+
+        int col1_integer = (model->var_type[col1] == 'I' || model->var_type[col1] == 'B');
+        int col2_integer = (model->var_type[col2] == 'I' || model->var_type[col2] == 'B');
+
+        /* Never eliminate integer/binary variables */
+        if (col1_integer && col2_integer) continue;
+
+        if (col1_integer) {
+            /* Must eliminate col2 */
+            elim = col2; a_elim = val2;
+            remain = col1; a_remain = val1;
+        } else if (col2_integer) {
+            /* Must eliminate col1 */
+            elim = col1; a_elim = val1;
+            remain = col2; a_remain = val2;
+        } else {
+            /* Both continuous: eliminate the one with larger coefficient */
+            if (fabs(val1) >= fabs(val2)) {
+                elim = col1; a_elim = val1;
+                remain = col2; a_remain = val2;
+            } else {
+                elim = col2; a_elim = val2;
+                remain = col1; a_remain = val1;
+            }
+        }
+
+        /* Skip if pivot coefficient is too small */
+        if (fabs(a_elim) < RALPH_PIVOT_TOL) continue;
+
+        /* x_elim = (rhs - a_remain * x_remain) / a_elim
+         *        = rhs/a_elim + (-a_remain/a_elim) * x_remain
+         *        = offset + factor * x_remain */
+        double offset = rhs / a_elim;
+        double factor = -a_remain / a_elim;
+
+        /* Check that eliminated variable's bounds are satisfied:
+         * lb_elim <= offset + factor * x_remain <= ub_elim
+         * This imposes additional bounds on x_remain.
+         * We propagate these bounds now. */
+        double lb_e = model->lb[elim];
+        double ub_e = model->ub[elim];
+        int bounds_ok = 1;
+
+        if (lb_e > -RALPH_INFINITY/2) {
+            /* offset + factor * x_remain >= lb_e */
+            if (fabs(factor) > RALPH_ZERO_TOL) {
+                double bound = (lb_e - offset) / factor;
+                if (factor > 0) {
+                    /* x_remain >= bound */
+                    if (bound > model->ub[remain] + RALPH_FEAS_TOL) { bounds_ok = 0; }
+                    else if (bound > model->lb[remain] + RALPH_FEAS_TOL) {
+                        model->lb[remain] = bound;
+                    }
+                } else {
+                    /* x_remain <= bound */
+                    if (bound < model->lb[remain] - RALPH_FEAS_TOL) { bounds_ok = 0; }
+                    else if (bound < model->ub[remain] - RALPH_FEAS_TOL) {
+                        model->ub[remain] = bound;
+                    }
+                }
+            } else {
+                /* factor ≈ 0: x_elim ≈ offset, check directly */
+                if (offset < lb_e - RALPH_FEAS_TOL) { bounds_ok = 0; }
+            }
+        }
+        if (ub_e < RALPH_INFINITY/2 && bounds_ok) {
+            /* offset + factor * x_remain <= ub_e */
+            if (fabs(factor) > RALPH_ZERO_TOL) {
+                double bound = (ub_e - offset) / factor;
+                if (factor > 0) {
+                    /* x_remain <= bound */
+                    if (bound < model->lb[remain] - RALPH_FEAS_TOL) { bounds_ok = 0; }
+                    else if (bound < model->ub[remain] - RALPH_FEAS_TOL) {
+                        model->ub[remain] = bound;
+                    }
+                } else {
+                    /* x_remain >= bound */
+                    if (bound > model->ub[remain] + RALPH_FEAS_TOL) { bounds_ok = 0; }
+                    else if (bound > model->lb[remain] + RALPH_FEAS_TOL) {
+                        model->lb[remain] = bound;
+                    }
+                }
+            } else {
+                if (offset > ub_e + RALPH_FEAS_TOL) { bounds_ok = 0; }
+            }
+        }
+        if (!bounds_ok) continue;  /* Skip — bound propagation failed */
+
+        /* Pre-check: verify x_remain exists in every active row that
+         * contains x_elim. CSC doesn't support insertion, so we must
+         * skip if any row lacks x_remain (fill-in would require rebuild). */
+        int can_substitute = 1;
+        for (int p = model->A->colptr[elim]; p < model->A->colptr[elim + 1]; p++) {
+            int k = model->A->rowidx[p];
+            if (ctx->row_deleted[k] || k == i) continue;
+            if (fabs(model->A->values[p]) < RALPH_ZERO_TOL) continue;
+
+            /* Check if x_remain has an entry in row k */
+            int found = 0;
+            for (int q = model->A->colptr[remain]; q < model->A->colptr[remain + 1]; q++) {
+                if (model->A->rowidx[q] == k) { found = 1; break; }
+            }
+            if (!found) { can_substitute = 0; break; }
+        }
+        if (!can_substitute) continue;
+
+        /* Record substitution for postsolve */
+        PostsolveOp op = {
+            .type = POSTSOLVE_SUBSTITUTION,
+            .var = elim,
+            .var2 = remain,
+            .value = offset,
+            .factor = factor,
+        };
+        if (postsolve_push(result, op) < 0) continue;
+
+        /* Substitute x_elim into objective:
+         * c_elim * x_elim = c_elim * (offset + factor * x_remain) */
+        model->obj_offset += model->c[elim] * offset;
+        model->c[remain] += model->c[elim] * factor;
+        model->c[elim] = 0.0;
+
+        /* Substitute into all other constraints containing x_elim.
+         * For each constraint row_k with coefficient a_ke for x_elim:
+         *   a_ke * x_elim = a_ke * (offset + factor * x_remain)
+         * Replace: a_ke → 0, a_kr += a_ke * factor, b_k -= a_ke * offset */
+        for (int p = model->A->colptr[elim]; p < model->A->colptr[elim + 1]; p++) {
+            int k = model->A->rowidx[p];
+            if (ctx->row_deleted[k] || k == i) continue;
+
+            double a_ke = model->A->values[p];
+            if (fabs(a_ke) < RALPH_ZERO_TOL) continue;
+
+            /* Update RHS */
+            model->b[k] -= a_ke * offset;
+
+            /* Update coefficient of x_remain in row k */
+            for (int q = model->A->colptr[remain]; q < model->A->colptr[remain + 1]; q++) {
+                if (model->A->rowidx[q] == k) {
+                    model->A->values[q] += a_ke * factor;
+                    break;
+                }
+            }
+        }
+
+        /* Zero out the eliminated variable's column entries */
+        for (int p = model->A->colptr[elim]; p < model->A->colptr[elim + 1]; p++) {
+            model->A->values[p] = 0.0;
+        }
+
+        /* Mark row and column as deleted */
+        ctx->row_deleted[i] = 1;
+        ctx->col_deleted[elim] = 1;
+        count++;
+    }
+
+    free(row);
+    return count;
+}
+
+/* ============================================================================
+ * Implied Free Variable Detection
+ * ============================================================================ */
+
+/*
+ * A variable x_j is "implied free" if its explicit bounds [lb_j, ub_j] are
+ * never binding — the constraints alone restrict x_j to within [lb_j, ub_j].
+ *
+ * For each constraint i containing x_j with coefficient a_ij:
+ *   Compute the implied range of x_j from that constraint given the bounds
+ *   of all other variables. The intersection of all implied ranges gives
+ *   the tightest constraint-implied bounds on x_j.
+ *
+ * If this intersection contains [lb_j, ub_j], the bounds are redundant.
+ * Removing them simplifies the simplex (free variables don't need bound
+ * flipping) and enables more doubleton equality eliminations.
+ */
+int presolve_implied_free(PresolveContext *ctx) {
+    LPModel *model = ctx->working;
+    int n = model->num_vars;
+    int m = model->num_cons;
+    int count = 0;
+
+    double *row = (double*)calloc(n, sizeof(double));
+    if (!row) return 0;
+
+    for (int j = 0; j < n; j++) {
+        if (ctx->col_deleted[j]) continue;
+
+        /* Skip already-free variables */
+        if (model->lb[j] <= -RALPH_INFINITY/2 && model->ub[j] >= RALPH_INFINITY/2) continue;
+
+        /* Skip integer/binary (bounds are essential for integrality) */
+        if (model->var_type[j] == 'I' || model->var_type[j] == 'B') continue;
+
+        /* Compute tightest implied bounds on x_j from all constraints */
+        double implied_lb = -RALPH_INFINITY;
+        double implied_ub = RALPH_INFINITY;
+        int bounded = 1;
+
+        for (int i = 0; i < m && bounded; i++) {
+            if (ctx->row_deleted[i]) continue;
+
+            /* Get coefficient of x_j in row i from column storage */
+            double a_ij = 0.0;
+            for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
+                if (model->A->rowidx[p] == i) {
+                    a_ij = model->A->values[p];
+                    break;
+                }
+            }
+            if (fabs(a_ij) < RALPH_ZERO_TOL) continue;
+
+            /* Extract full row for computing other variables' contributions */
+            sparse_get_row(model->A, i, row);
+
+            /* Compute sum of other variables at their bounds */
+            double other_lb = 0.0, other_ub = 0.0;
+            int other_lb_finite = 1, other_ub_finite = 1;
+
+            for (int k = 0; k < n; k++) {
+                if (k == j || ctx->col_deleted[k]) continue;
+                double a_ik = row[k];
+                if (fabs(a_ik) < RALPH_ZERO_TOL) continue;
+
+                if (a_ik > 0) {
+                    if (model->lb[k] <= -RALPH_INFINITY/2) other_lb_finite = 0;
+                    else other_lb += a_ik * model->lb[k];
+                    if (model->ub[k] >= RALPH_INFINITY/2) other_ub_finite = 0;
+                    else other_ub += a_ik * model->ub[k];
+                } else {
+                    if (model->ub[k] >= RALPH_INFINITY/2) other_lb_finite = 0;
+                    else other_lb += a_ik * model->ub[k];
+                    if (model->lb[k] <= -RALPH_INFINITY/2) other_ub_finite = 0;
+                    else other_ub += a_ik * model->lb[k];
+                }
+            }
+
+            double rhs = model->b[i];
+
+            /* Derive bounds on x_j from this constraint:
+             * For <= : a_ij * x_j + other <= rhs
+             * For >= : a_ij * x_j + other >= rhs
+             * For =  : a_ij * x_j + other = rhs → both */
+            if (model->sense[i] == 'L' || model->sense[i] == 'E') {
+                /* a_ij * x_j <= rhs - other_lb */
+                if (other_lb_finite) {
+                    double bound = (rhs - other_lb) / a_ij;
+                    if (a_ij > 0) {
+                        /* x_j <= bound */
+                        if (bound < implied_ub) implied_ub = bound;
+                    } else {
+                        /* x_j >= bound */
+                        if (bound > implied_lb) implied_lb = bound;
+                    }
+                }
+            }
+            if (model->sense[i] == 'G' || model->sense[i] == 'E') {
+                /* a_ij * x_j >= rhs - other_ub */
+                if (other_ub_finite) {
+                    double bound = (rhs - other_ub) / a_ij;
+                    if (a_ij > 0) {
+                        /* x_j >= bound */
+                        if (bound > implied_lb) implied_lb = bound;
+                    } else {
+                        /* x_j <= bound */
+                        if (bound < implied_ub) implied_ub = bound;
+                    }
+                }
+            }
+
+            /* If implied bounds already narrower than explicit, stop early */
+            if (implied_lb > implied_ub + RALPH_FEAS_TOL) {
+                bounded = 0;
+            }
+        }
+
+        if (!bounded) continue;
+
+        /* Check if explicit bounds are implied (redundant).
+         * lb is redundant if constraints already force x_j >= lb_j
+         * (i.e., implied_lb >= lb_j).
+         * ub is redundant if constraints already force x_j <= ub_j
+         * (i.e., implied_ub <= ub_j). */
+        double margin = RALPH_FEAS_TOL;
+        int lb_implied = (model->lb[j] <= -RALPH_INFINITY/2) ||
+                         (implied_lb >= model->lb[j] - margin);
+        int ub_implied = (model->ub[j] >= RALPH_INFINITY/2) ||
+                         (implied_ub <= model->ub[j] + margin);
+
+        if (lb_implied && ub_implied) {
+            /* Both bounds are implied by constraints — tighten to implied range.
+             * We use the finite implied bounds rather than ±RALPH_INFINITY to avoid
+             * breaking the Big-M method in the simplex (which can't handle ±1e30). */
+            int changed = 0;
+            if (implied_lb > -RALPH_INFINITY/2 && implied_lb < model->ub[j]) {
+                if (implied_lb > model->lb[j] + RALPH_FEAS_TOL) {
+                    model->lb[j] = implied_lb;
+                    changed = 1;
+                }
+            }
+            if (implied_ub < RALPH_INFINITY/2 && implied_ub > model->lb[j]) {
+                if (implied_ub < model->ub[j] - RALPH_FEAS_TOL) {
+                    model->ub[j] = implied_ub;
+                    changed = 1;
+                }
+            }
+            if (changed) count++;
+        }
+    }
+
+    free(row);
+    return count;
+}
+
 /* Detect and handle forcing constraints */
 int presolve_forcing_constraints(PresolveContext *ctx) {
     LPModel *model = ctx->working;
@@ -562,42 +965,11 @@ int presolve_bound_tightening(PresolveContext *ctx) {
         /* Extract row once (O(nnz) instead of O(n²) element accesses) */
         sparse_get_row(model->A, i, row);
 
-        /* First pass: compute total row_lb, row_ub, and sum of absolute contributions
-         * The abs_sum helps us detect when cancellation risk is high */
-        double row_lb = 0.0, row_ub = 0.0, abs_sum = 0.0;
-        int row_lb_finite = 1, row_ub_finite = 1;
-
-        for (int j = 0; j < n; j++) {
-            if (ctx->col_deleted[j]) continue;
-            double aij = row[j];
-            if (fabs(aij) < RALPH_ZERO_TOL) continue;
-
-            if (aij > 0) {
-                if (model->lb[j] <= -RALPH_INFINITY/2) row_lb_finite = 0;
-                else {
-                    double contrib = aij * model->lb[j];
-                    row_lb += contrib;
-                    abs_sum += fabs(contrib);
-                }
-                if (model->ub[j] >= RALPH_INFINITY/2) row_ub_finite = 0;
-                else {
-                    double contrib = aij * model->ub[j];
-                    row_ub += contrib;
-                }
-            } else {
-                if (model->ub[j] >= RALPH_INFINITY/2) row_lb_finite = 0;
-                else {
-                    double contrib = aij * model->ub[j];
-                    row_lb += contrib;
-                    abs_sum += fabs(contrib);
-                }
-                if (model->lb[j] <= -RALPH_INFINITY/2) row_ub_finite = 0;
-                else {
-                    double contrib = aij * model->lb[j];
-                    row_ub += contrib;
-                }
-            }
-        }
+        /* First pass: compute total row activity bounds */
+        RowBounds rb;
+        compute_row_bounds(row, n, model->lb, model->ub, ctx->col_deleted, &rb);
+        double row_lb = rb.lb, row_ub = rb.ub, abs_sum = rb.abs_sum;
+        int row_lb_finite = rb.lb_finite, row_ub_finite = rb.ub_finite;
 
         /* Second pass: derive bounds for each variable */
         for (int j = 0; j < n; j++) {
@@ -708,6 +1080,341 @@ int presolve_bound_tightening(PresolveContext *ctx) {
 }
 
 /* ============================================================================
+ * Proportional Row Detection
+ * ============================================================================ */
+
+/*
+ * Detect and remove proportional (parallel) rows.
+ *
+ * Two rows i and j are proportional if row_i = k * row_j for some scalar k.
+ * For <= constraints: keep the tighter one.
+ * For = constraints: check RHS consistency (else infeasible).
+ *
+ * Algorithm: For each pair of rows with the same sparsity pattern,
+ * check if coefficients are proportional.
+ */
+int presolve_proportional_rows(PresolveContext *ctx) {
+    LPModel *model = ctx->working;
+    int m = model->num_cons;
+    int n = model->num_vars;
+    int count = 0;
+
+    /* Allocate two dense row buffers */
+    double *row_i = (double*)calloc(n, sizeof(double));
+    double *row_j = (double*)calloc(n, sizeof(double));
+    if (!row_i || !row_j) {
+        free(row_i);
+        free(row_j);
+        return 0;
+    }
+
+    for (int i = 0; i < m; i++) {
+        if (ctx->row_deleted[i]) continue;
+
+        sparse_get_row(model->A, i, row_i);
+
+        /* Find first non-zero for normalization */
+        int first_nz_i = -1;
+        for (int k = 0; k < n; k++) {
+            if (!ctx->col_deleted[k] && fabs(row_i[k]) > RALPH_ZERO_TOL) {
+                first_nz_i = k;
+                break;
+            }
+        }
+        if (first_nz_i < 0) continue;  /* Empty row handled elsewhere */
+
+        for (int j = i + 1; j < m; j++) {
+            if (ctx->row_deleted[j]) continue;
+
+            sparse_get_row(model->A, j, row_j);
+
+            /* Check first non-zero of row j */
+            double val_i = row_i[first_nz_i];
+            double val_j = row_j[first_nz_i];
+            if (fabs(val_j) < RALPH_ZERO_TOL) continue;  /* Different sparsity */
+
+            double ratio = val_i / val_j;
+
+            /* Check proportionality: row_i[k] == ratio * row_j[k] for all k */
+            int proportional = 1;
+            for (int k = 0; k < n && proportional; k++) {
+                if (ctx->col_deleted[k]) continue;
+                double diff = row_i[k] - ratio * row_j[k];
+                double scale = fmax(fabs(row_i[k]), fabs(row_j[k]));
+                double tol = fmax(RALPH_FEAS_TOL, RALPH_FEAS_TOL * scale);
+                if (fabs(diff) > tol) proportional = 0;
+            }
+            if (!proportional) continue;
+
+            /* Rows i and j are proportional: row_i = ratio * row_j
+             * Normalize both: row_i (sense_i) rhs_i  and  ratio*row_j (sense_j) ratio*rhs_j */
+            double rhs_i = model->b[i];
+            double rhs_j_scaled = ratio * model->b[j];
+
+            if (model->sense[i] == 'E' && model->sense[j] == 'E') {
+                /* Both equalities: must have same RHS (after scaling) */
+                if (fabs(rhs_i - rhs_j_scaled) > RALPH_FEAS_TOL * fmax(1.0, fabs(rhs_i))) {
+                    free(row_i);
+                    free(row_j);
+                    return -1;  /* Infeasible: inconsistent equalities */
+                }
+                /* Remove duplicate */
+                ctx->row_deleted[j] = 1;
+                count++;
+            } else if (model->sense[i] == 'L' && model->sense[j] == 'L') {
+                /* Both <=: keep the tighter one */
+                if (ratio > 0) {
+                    /* Same direction: row_i <= rhs_i, row_j <= rhs_j
+                     * After scaling: row_i <= rhs_i and row_i <= ratio*rhs_j
+                     * Keep the one with smaller RHS */
+                    if (rhs_i <= rhs_j_scaled + RALPH_FEAS_TOL) {
+                        ctx->row_deleted[j] = 1;  /* i is tighter */
+                    } else {
+                        ctx->row_deleted[i] = 1;  /* j is tighter */
+                    }
+                    count++;
+                } else {
+                    /* Opposite direction after scaling — not truly parallel for <= */
+                    /* ratio < 0 means row_i = ratio*row_j with sign flip.
+                     * row_j <= rhs_j becomes -row_j >= -rhs_j, i.e., (row_i/ratio) >= -rhs_j
+                     * This gives us a bound pair, not a redundancy. Skip. */
+                }
+            } else if (model->sense[i] == 'G' && model->sense[j] == 'G') {
+                /* Both >=: keep the tighter one */
+                if (ratio > 0) {
+                    if (rhs_i >= rhs_j_scaled - RALPH_FEAS_TOL) {
+                        ctx->row_deleted[j] = 1;  /* i is tighter */
+                    } else {
+                        ctx->row_deleted[i] = 1;  /* j is tighter */
+                    }
+                    count++;
+                }
+            }
+            /* Mixed sense (L/G, L/E, G/E): more complex, skip for now */
+
+            if (ctx->row_deleted[i]) break;  /* Row i was removed, move on */
+        }
+    }
+
+    free(row_i);
+    free(row_j);
+    return count;
+}
+
+/* ============================================================================
+ * Proportional Column Detection
+ * ============================================================================ */
+
+/*
+ * Detect proportional (parallel) columns for continuous variables.
+ *
+ * Two columns j and k are proportional if A[*,j] = r * A[*,k] for some r > 0.
+ * If c[j]/r >= c[k] (cost per unit of j is no better than k), then j is
+ * dominated: we can substitute x_j out (set to its bound that helps the
+ * objective most) and keep only x_k.
+ *
+ * For minimization with positive ratio r > 0:
+ *   If c[j] >= r * c[k], then column k dominates j.
+ *   Fix x_j at its lower bound (for positive obj coeff) or upper bound.
+ */
+int presolve_proportional_cols(PresolveContext *ctx) {
+    LPModel *model = ctx->working;
+    int n = model->num_vars;
+    int count = 0;
+
+    for (int j = 0; j < n; j++) {
+        if (ctx->col_deleted[j]) continue;
+        /* Only continuous variables */
+        if (model->var_type[j] == 'I' || model->var_type[j] == 'B') continue;
+
+        /* Get column j non-zeros */
+        int nnz_j = 0;
+        for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
+            if (!ctx->row_deleted[model->A->rowidx[p]] &&
+                fabs(model->A->values[p]) > RALPH_ZERO_TOL) {
+                nnz_j++;
+            }
+        }
+        if (nnz_j == 0) continue;
+
+        for (int k = j + 1; k < n; k++) {
+            if (ctx->col_deleted[k]) continue;
+            if (model->var_type[k] == 'I' || model->var_type[k] == 'B') continue;
+
+            /* Quick check: same number of active non-zeros */
+            int nnz_k = 0;
+            for (int p = model->A->colptr[k]; p < model->A->colptr[k + 1]; p++) {
+                if (!ctx->row_deleted[model->A->rowidx[p]] &&
+                    fabs(model->A->values[p]) > RALPH_ZERO_TOL) {
+                    nnz_k++;
+                }
+            }
+            if (nnz_k != nnz_j) continue;
+
+            /* Check proportionality by walking both columns */
+            double ratio = 0.0;
+            int proportional = 1;
+            int pj = model->A->colptr[j];
+            int pk = model->A->colptr[k];
+            int pj_end = model->A->colptr[j + 1];
+            int pk_end = model->A->colptr[k + 1];
+
+            while (pj < pj_end && pk < pk_end && proportional) {
+                /* Skip deleted rows */
+                while (pj < pj_end && (ctx->row_deleted[model->A->rowidx[pj]] ||
+                       fabs(model->A->values[pj]) < RALPH_ZERO_TOL)) pj++;
+                while (pk < pk_end && (ctx->row_deleted[model->A->rowidx[pk]] ||
+                       fabs(model->A->values[pk]) < RALPH_ZERO_TOL)) pk++;
+
+                if (pj >= pj_end && pk >= pk_end) break;
+                if (pj >= pj_end || pk >= pk_end) { proportional = 0; break; }
+
+                int rj = model->A->rowidx[pj];
+                int rk = model->A->rowidx[pk];
+                if (rj != rk) { proportional = 0; break; }
+
+                double vj = model->A->values[pj];
+                double vk = model->A->values[pk];
+
+                if (ratio == 0.0) {
+                    ratio = vj / vk;
+                } else {
+                    double expected = ratio * vk;
+                    double tol = fmax(RALPH_FEAS_TOL, RALPH_FEAS_TOL * fabs(expected));
+                    if (fabs(vj - expected) > tol) proportional = 0;
+                }
+                pj++; pk++;
+            }
+            /* Check remaining entries */
+            while (pj < pj_end && proportional) {
+                if (!ctx->row_deleted[model->A->rowidx[pj]] &&
+                    fabs(model->A->values[pj]) > RALPH_ZERO_TOL) proportional = 0;
+                pj++;
+            }
+            while (pk < pk_end && proportional) {
+                if (!ctx->row_deleted[model->A->rowidx[pk]] &&
+                    fabs(model->A->values[pk]) > RALPH_ZERO_TOL) proportional = 0;
+                pk++;
+            }
+            if (!proportional || ratio == 0.0) continue;
+
+            /* Only handle positive ratio (same-direction columns).
+             * Negative ratio means opposite constraint contributions — skip. */
+            if (ratio < 0.0) continue;
+
+            /* Columns j and k are proportional: A[*,j] = ratio * A[*,k]
+             * For the internal minimizer: effective cost of j per unit of
+             * constraint contribution is c[j]*obj_sense vs ratio*c[k]*obj_sense.
+             * If cj_eff >= ck_eff, then j is dominated by k. */
+            double cj_eff = model->c[j] * model->obj_sense;
+            double ck_eff = model->c[k] * model->obj_sense * ratio;
+
+            int dominated = -1;  /* Which column to fix */
+            if (cj_eff >= ck_eff - RALPH_FEAS_TOL) {
+                dominated = j;  /* j is dominated by k */
+            } else {
+                dominated = k;  /* k is dominated by j */
+            }
+
+            if (dominated >= 0) {
+                /* Fix dominated variable at lower bound.
+                 * The non-dominated column can substitute more efficiently. */
+                if (model->lb[dominated] <= -RALPH_INFINITY/2) continue;
+
+                int non_dom = (dominated == j) ? k : j;
+                double dom_range = model->ub[dominated] - model->lb[dominated];
+
+                /* When the dominated var has range and the non-dominated var has
+                 * a finite upper bound, fixing at lb shrinks the feasible region.
+                 * The correct fix is bound expansion (ub += ratio * range) plus
+                 * a custom postsolve op.  For now, skip these cases. */
+                if (dom_range > RALPH_ZERO_TOL &&
+                    model->ub[non_dom] < RALPH_INFINITY / 2) {
+                    continue;
+                }
+
+                double fixed_val = model->lb[dominated];
+                model->lb[dominated] = fixed_val;
+                model->ub[dominated] = fixed_val;
+                count++;
+
+                if (dominated == j) break;  /* j will be fixed next round */
+            }
+        }
+    }
+
+    return count;
+}
+
+/* ============================================================================
+ * Shift Variable Bounds
+ * ============================================================================ */
+
+/*
+ * Shift variables so that lower bound is zero: x' = x - lb.
+ *
+ * This simplifies the simplex (fewer bound flips) and can help with
+ * numerical conditioning. Only shifts continuous variables with finite,
+ * non-zero lower bounds.
+ *
+ * After shift:
+ *   - lb' = 0, ub' = ub - lb
+ *   - Constraint coefficients unchanged
+ *   - RHS: b_i -= a_ij * lb_j for each constraint
+ *   - Objective offset: obj_offset += c_j * lb_j
+ *
+ * Postsolve: x_j = x'_j + lb_j (original lower bound)
+ */
+int presolve_shift_bounds(PresolveContext *ctx, PresolveResult *result) {
+    LPModel *model = ctx->working;
+    int n = model->num_vars;
+    int count = 0;
+
+    for (int j = 0; j < n; j++) {
+        if (ctx->col_deleted[j]) continue;
+
+        double lb = model->lb[j];
+
+        /* Only shift if lb is finite and non-zero */
+        if (fabs(lb) < RALPH_ZERO_TOL) continue;
+        if (lb <= -RALPH_INFINITY/2) continue;
+
+        /* Don't shift integer/binary variables (changes integrality) */
+        if (model->var_type[j] == 'I' || model->var_type[j] == 'B') continue;
+
+        /* Record shift for postsolve: x_orig = x_shifted + lb */
+        if (result) {
+            PostsolveOp op = {
+                .type = POSTSOLVE_SHIFT,
+                .var = j,
+                .var2 = -1,
+                .value = lb,
+                .factor = 0.0,
+            };
+            if (postsolve_push(result, op) < 0) continue;
+        }
+
+        /* Update RHS for all constraints */
+        for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
+            int i = model->A->rowidx[p];
+            if (!ctx->row_deleted[i]) {
+                model->b[i] -= model->A->values[p] * lb;
+            }
+        }
+
+        /* Update objective offset */
+        model->obj_offset += model->c[j] * lb;
+
+        /* Shift bounds */
+        model->ub[j] -= lb;
+        model->lb[j] = 0.0;
+        count++;
+    }
+
+    return count;
+}
+
+/* ============================================================================
  * Redundant Row Detection via Gaussian Elimination
  * ============================================================================ */
 
@@ -730,24 +1437,29 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
     int m_orig = model->num_cons;
     int n_orig = model->num_vars;
 
-    /* Count active rows and columns */
-    int m_active = 0, n_active = 0;
+    /* Count active EQUALITY rows and active columns.
+     * Only equality rows participate in redundancy detection.
+     * An equality row is redundant only if it's a linear combination of
+     * OTHER equality rows. Mixing inequalities is wrong — an equality
+     * in the span of inequalities is NOT redundant (inequalities only
+     * imply one direction, not the equality). */
+    int m_eq = 0, n_active = 0;
     for (int i = 0; i < m_orig; i++) {
-        if (!ctx->row_deleted[i]) m_active++;
+        if (!ctx->row_deleted[i] && model->sense[i] == 'E') m_eq++;
     }
     for (int j = 0; j < n_orig; j++) {
         if (!ctx->col_deleted[j]) n_active++;
     }
 
-    if (m_active == 0 || n_active == 0) {
+    if (m_eq == 0 || n_active == 0) {
         ctx->matrix_rank = 0;
         return 0;
     }
 
-    /* Build mapping from active indices to dense indices */
+    /* Build mapping from active equality indices to dense indices */
     int *row_to_dense = (int *)malloc((size_t)m_orig * sizeof(int));
     int *col_to_dense = (int *)malloc((size_t)n_orig * sizeof(int));
-    int *dense_to_row = (int *)malloc((size_t)m_active * sizeof(int));
+    int *dense_to_row = (int *)malloc((size_t)m_eq * sizeof(int));
 
     if (!row_to_dense || !col_to_dense || !dense_to_row) {
         free(row_to_dense);
@@ -758,7 +1470,7 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
 
     int dense_row = 0;
     for (int i = 0; i < m_orig; i++) {
-        if (!ctx->row_deleted[i]) {
+        if (!ctx->row_deleted[i] && model->sense[i] == 'E') {
             row_to_dense[i] = dense_row;
             dense_to_row[dense_row] = i;
             dense_row++;
@@ -778,10 +1490,10 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
     }
 
     /* Allocate dense augmented matrix [A | b] in column-major order
-     * Size: m_active rows x (n_active + 1) columns */
+     * Size: m_eq rows x (n_active + 1) columns */
     size_t aug_cols = (size_t)n_active + 1;
-    double *A = (double *)calloc((size_t)m_active * aug_cols, sizeof(double));
-    int *pivot_col = (int *)malloc((size_t)m_active * sizeof(int));
+    double *A = (double *)calloc((size_t)m_eq * aug_cols, sizeof(double));
+    int *pivot_col = (int *)malloc((size_t)m_eq * sizeof(int));
 
     if (!A || !pivot_col) {
         free(row_to_dense);
@@ -792,29 +1504,46 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
         return 0;
     }
 
-    /* Fill the dense matrix from sparse CSC */
+    /* Fill the dense matrix from sparse CSC (only equality rows) */
     for (int j = 0; j < n_orig; j++) {
         if (ctx->col_deleted[j]) continue;
         int dc = col_to_dense[j];
 
         for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
             int i = model->A->rowidx[p];
-            if (ctx->row_deleted[i]) continue;
-            int dr = row_to_dense[i];
-            A[dr + (size_t)dc * m_active] = model->A->values[p];
+            int dr = row_to_dense[i];  /* -1 for non-equality or deleted rows */
+            if (dr < 0) continue;
+            A[dr + (size_t)dc * m_eq] = model->A->values[p];
         }
     }
 
     /* Fill the RHS column (last column of augmented matrix) */
     for (int i = 0; i < m_orig; i++) {
-        if (ctx->row_deleted[i]) continue;
         int dr = row_to_dense[i];
-        A[dr + (size_t)n_active * m_active] = model->b[i];
+        if (dr < 0) continue;
+        A[dr + (size_t)n_active * m_eq] = model->b[i];
     }
+
+    /* Compute matrix infinity norm for relative pivot threshold.
+     * Using absolute thresholds (like 1e-6) causes false rank deficiency
+     * on ill-conditioned matrices where valid pivots are small. */
+    double anorm = 0.0;
+    for (int i = 0; i < m_eq; i++) {
+        double row_sum = 0.0;
+        for (int j = 0; j < n_active; j++) {
+            row_sum += fabs(A[i + (size_t)j * m_eq]);
+        }
+        if (row_sum > anorm) anorm = row_sum;
+    }
+    /* Pivot threshold: relative to matrix norm, scaled by dimension.
+     * This accounts for O(n) growth in Gaussian elimination. */
+    int max_dim = (m_eq > n_active) ? m_eq : n_active;
+    double pivot_tol = anorm * max_dim * 1e-13;
+    if (pivot_tol < 1e-15) pivot_tol = 1e-15;  /* Floor for zero matrices */
 
     /* Gaussian elimination with partial pivoting */
     int rank = 0;
-    int min_dim = (m_active < n_active) ? m_active : n_active;
+    int min_dim = (m_eq < n_active) ? m_eq : n_active;
 
     for (int k = 0; k < min_dim; k++) {
         pivot_col[k] = -1;
@@ -824,10 +1553,10 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
     for (int k = 0; k < min_dim && col < n_active; ) {
         /* Find pivot: largest absolute value in column 'col' from row k onwards */
         int best_row = -1;
-        double best_val = RALPH_PIVOT_TOL;
+        double best_val = pivot_tol;
 
-        for (int i = k; i < m_active; i++) {
-            double val = fabs(A[i + (size_t)col * m_active]);
+        for (int i = k; i < m_eq; i++) {
+            double val = fabs(A[i + (size_t)col * m_eq]);
             if (val > best_val) {
                 best_val = val;
                 best_row = i;
@@ -843,9 +1572,9 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
         /* Swap rows k and best_row */
         if (best_row != k) {
             for (int j = col; j <= n_active; j++) {  /* Include RHS column */
-                double tmp = A[k + (size_t)j * m_active];
-                A[k + (size_t)j * m_active] = A[best_row + (size_t)j * m_active];
-                A[best_row + (size_t)j * m_active] = tmp;
+                double tmp = A[k + (size_t)j * m_eq];
+                A[k + (size_t)j * m_eq] = A[best_row + (size_t)j * m_eq];
+                A[best_row + (size_t)j * m_eq] = tmp;
             }
             /* Swap in dense_to_row mapping too */
             int tmp_idx = dense_to_row[k];
@@ -854,14 +1583,14 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
         }
 
         /* Eliminate below pivot */
-        double pivot = A[k + (size_t)col * m_active];
-        for (int i = k + 1; i < m_active; i++) {
-            double factor = A[i + (size_t)col * m_active] / pivot;
+        double pivot = A[k + (size_t)col * m_eq];
+        for (int i = k + 1; i < m_eq; i++) {
+            double factor = A[i + (size_t)col * m_eq] / pivot;
             if (fabs(factor) < RALPH_ZERO_TOL) continue;
 
-            A[i + (size_t)col * m_active] = 0.0;  /* Exact zero */
+            A[i + (size_t)col * m_eq] = 0.0;  /* Exact zero */
             for (int j = col + 1; j <= n_active; j++) {  /* Include RHS */
-                A[i + (size_t)j * m_active] -= factor * A[k + (size_t)j * m_active];
+                A[i + (size_t)j * m_eq] -= factor * A[k + (size_t)j * m_eq];
             }
         }
 
@@ -873,53 +1602,36 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
 
     ctx->matrix_rank = rank;
 
-    /* Check rows rank..m_active-1 for redundancy/infeasibility */
+    /* Check rows rank..m_eq-1 for redundancy/infeasibility */
     int count = 0;
     int infeasible = 0;
 
-    for (int k = rank; k < m_active; k++) {
-        /* Row k should be all zeros in A part */
+    /* Zero-row tolerance: scale with matrix norm and dimension.
+     * After elimination, residuals from rounding are O(anorm * n * eps). */
+    double zero_tol = anorm * max_dim * 1e-12;
+    if (zero_tol < RALPH_ZERO_TOL) zero_tol = RALPH_ZERO_TOL;
+
+    for (int k = rank; k < m_eq; k++) {
+        /* Row k should be all zeros in A part (all rows are equalities) */
         int is_zero_row = 1;
         for (int j = 0; j < n_active; j++) {
-            if (fabs(A[k + (size_t)j * m_active]) > RALPH_ZERO_TOL) {
+            if (fabs(A[k + (size_t)j * m_eq]) > zero_tol) {
                 is_zero_row = 0;
                 break;
             }
         }
 
         if (is_zero_row) {
-            /* Check RHS */
-            double rhs = A[k + (size_t)n_active * m_active];
+            double rhs_val = A[k + (size_t)n_active * m_eq];
             int orig_row = dense_to_row[k];
-            char sense = model->sense[orig_row];
-
-            if (sense == 'E') {
-                /* Equality: 0 = rhs must have rhs = 0 */
-                if (fabs(rhs) > RALPH_FEAS_TOL) {
-                    infeasible = 1;
-                    break;
-                }
-                /* Equality row is redundant - mark for deletion */
-                ctx->row_deleted[orig_row] = 1;
-                count++;
-            } else if (sense == 'L') {
-                /* 0 <= rhs: check for infeasibility only
-                 * NOTE: We do NOT mark 'L' rows as redundant because
-                 * a row being a linear combination of others doesn't
-                 * mean the inequality is redundant - it could be tighter.
-                 * This fixes the bnl1 bug where inequalities were incorrectly
-                 * removed, changing the optimal solution. */
-                if (rhs < -RALPH_FEAS_TOL) {
-                    infeasible = 1;
-                    break;
-                }
-            } else if (sense == 'G') {
-                /* 0 >= rhs: check for infeasibility only (same reasoning) */
-                if (rhs > RALPH_FEAS_TOL) {
-                    infeasible = 1;
-                    break;
-                }
+            /* Equality: 0x = rhs must have rhs = 0 for redundancy */
+            if (fabs(rhs_val) > zero_tol) {
+                infeasible = 1;
+                break;
             }
+            /* Equality row is redundant - mark for deletion */
+            ctx->row_deleted[orig_row] = 1;
+            count++;
         }
     }
 
@@ -940,37 +1652,49 @@ int presolve_detect_redundant_rows(PresolveContext *ctx) {
 }
 
 /* ============================================================================
- * MIP-Specific Presolve: Probing
+ * MIP-Specific Presolve: Probing with Implication Propagation
  * ============================================================================ */
 
 /*
- * Probing: Fix binary variables by checking if fixing to 0 or 1 leads to
- * infeasibility. Also tighten bounds by computing implied bounds when
- * a binary is set to each value.
+ * Probing with implication propagation.
+ *
+ * For each binary variable x_j:
+ * 1. Fix x_j = 0, run presolve_bound_tightening (multi-pass)
+ * 2. Fix x_j = 1, run presolve_bound_tightening (multi-pass)
+ * 3. If one setting is infeasible, fix x_j to the other
+ * 4. If both feasible, intersect implied bounds: any bound that is tighter
+ *    in BOTH probes is globally valid and can be applied permanently
+ *
+ * Reuses the existing presolve_bound_tightening rather than reimplementing
+ * constraint-based bound propagation.  Probing is the orchestrator; bound
+ * tightening is the shared primitive.
  */
 int presolve_probing(PresolveContext *ctx) {
     LPModel *model = ctx->working;
     int n = model->num_vars;
     int count = 0;
 
-    /* Allocate working arrays for implied bounds */
-    double *implied_lb0 = (double*)calloc(n, sizeof(double));
-    double *implied_ub0 = (double*)calloc(n, sizeof(double));
-    double *implied_lb1 = (double*)calloc(n, sizeof(double));
-    double *implied_ub1 = (double*)calloc(n, sizeof(double));
-    double *row = (double*)calloc(n, sizeof(double));
+    /* Save original bounds — restored after each probe */
+    double *saved_lb = (double*)malloc(n * sizeof(double));
+    double *saved_ub = (double*)malloc(n * sizeof(double));
+    /* Capture implied bounds after each probe */
+    double *implied_lb0 = (double*)malloc(n * sizeof(double));
+    double *implied_ub0 = (double*)malloc(n * sizeof(double));
 
-    if (!implied_lb0 || !implied_ub0 || !implied_lb1 || !implied_ub1 || !row) {
+    if (!saved_lb || !saved_ub || !implied_lb0 || !implied_ub0) {
+        free(saved_lb);
+        free(saved_ub);
         free(implied_lb0);
         free(implied_ub0);
-        free(implied_lb1);
-        free(implied_ub1);
-        free(row);
         return 0;
     }
 
-    /* Limit probing iterations to avoid expensive O(n*m*n) worst case */
+    memcpy(saved_lb, model->lb, n * sizeof(double));
+    memcpy(saved_ub, model->ub, n * sizeof(double));
+
+    /* Limit probing to avoid expensive O(n * passes * m * n) worst case */
     int max_probe_vars = 100;
+    int max_propagation_passes = 3;
     int probed = 0;
 
     for (int j = 0; j < n && probed < max_probe_vars; j++) {
@@ -978,149 +1702,113 @@ int presolve_probing(PresolveContext *ctx) {
 
         /* Only probe binary variables */
         if (model->var_type[j] != 'B') continue;
-        if (model->lb[j] > 0.5 || model->ub[j] < 0.5) continue;  /* Already fixed */
+        if (saved_lb[j] > 0.5 || saved_ub[j] < 0.5) continue;  /* Already fixed */
 
         probed++;
 
-        /* Initialize implied bounds for both settings */
-        for (int k = 0; k < n; k++) {
-            implied_lb0[k] = model->lb[k];
-            implied_ub0[k] = model->ub[k];
-            implied_lb1[k] = model->lb[k];
-            implied_ub1[k] = model->ub[k];
-        }
+        /* --- Probe x_j = 0 --- */
+        memcpy(model->lb, saved_lb, n * sizeof(double));
+        memcpy(model->ub, saved_ub, n * sizeof(double));
+        model->lb[j] = 0.0;
+        model->ub[j] = 0.0;
 
-        /* Try x_j = 0 */
-        implied_lb0[j] = 0.0;
-        implied_ub0[j] = 0.0;
         int infeas_0 = 0;
-
-        /* Propagate bounds when x_j = 0 */
-        for (int i = 0; i < model->num_cons && !infeas_0; i++) {
-            if (ctx->row_deleted[i]) continue;
-
-            sparse_get_row(model->A, i, row);
-            double a_j = row[j];
-            if (fabs(a_j) < RALPH_ZERO_TOL) continue;
-
-            double rhs = model->b[i];
-
-            /* Compute row activity bounds with x_j = 0 */
-            double row_lb = 0.0, row_ub = 0.0;
-            int row_lb_finite = 1, row_ub_finite = 1;
-
-            for (int k = 0; k < n; k++) {
-                if (ctx->col_deleted[k]) continue;
-                double a_k = row[k];
-                if (fabs(a_k) < RALPH_ZERO_TOL) continue;
-
-                double lb_k = (k == j) ? 0.0 : implied_lb0[k];
-                double ub_k = (k == j) ? 0.0 : implied_ub0[k];
-
-                if (a_k > 0) {
-                    if (lb_k <= -RALPH_INFINITY/2) row_lb_finite = 0;
-                    else row_lb += a_k * lb_k;
-                    if (ub_k >= RALPH_INFINITY/2) row_ub_finite = 0;
-                    else row_ub += a_k * ub_k;
-                } else {
-                    if (ub_k >= RALPH_INFINITY/2) row_lb_finite = 0;
-                    else row_lb += a_k * ub_k;
-                    if (lb_k <= -RALPH_INFINITY/2) row_ub_finite = 0;
-                    else row_ub += a_k * lb_k;
-                }
-            }
-
-            /* Check feasibility */
-            if (model->sense[i] == 'L') {
-                if (row_lb_finite && row_lb > rhs + RALPH_FEAS_TOL) infeas_0 = 1;
-            } else if (model->sense[i] == 'G') {
-                if (row_ub_finite && row_ub < rhs - RALPH_FEAS_TOL) infeas_0 = 1;
-            } else {  /* 'E' */
-                if (row_lb_finite && row_lb > rhs + RALPH_FEAS_TOL) infeas_0 = 1;
-                if (row_ub_finite && row_ub < rhs - RALPH_FEAS_TOL) infeas_0 = 1;
-            }
+        for (int pass = 0; pass < max_propagation_passes; pass++) {
+            int r = presolve_bound_tightening(ctx);
+            if (r < 0) { infeas_0 = 1; break; }
+            if (r == 0) break;  /* Converged */
         }
 
-        /* Try x_j = 1 */
-        implied_lb1[j] = 1.0;
-        implied_ub1[j] = 1.0;
+        /* Capture probe-0 implied bounds */
+        memcpy(implied_lb0, model->lb, n * sizeof(double));
+        memcpy(implied_ub0, model->ub, n * sizeof(double));
+
+        /* --- Probe x_j = 1 --- */
+        memcpy(model->lb, saved_lb, n * sizeof(double));
+        memcpy(model->ub, saved_ub, n * sizeof(double));
+        model->lb[j] = 1.0;
+        model->ub[j] = 1.0;
+
         int infeas_1 = 0;
-
-        /* Propagate bounds when x_j = 1 */
-        for (int i = 0; i < model->num_cons && !infeas_1; i++) {
-            if (ctx->row_deleted[i]) continue;
-
-            sparse_get_row(model->A, i, row);
-            double a_j = row[j];
-            if (fabs(a_j) < RALPH_ZERO_TOL) continue;
-
-            double rhs = model->b[i];
-
-            /* Compute row activity bounds with x_j = 1 */
-            double row_lb = 0.0, row_ub = 0.0;
-            int row_lb_finite = 1, row_ub_finite = 1;
-
-            for (int k = 0; k < n; k++) {
-                if (ctx->col_deleted[k]) continue;
-                double a_k = row[k];
-                if (fabs(a_k) < RALPH_ZERO_TOL) continue;
-
-                double lb_k = (k == j) ? 1.0 : implied_lb1[k];
-                double ub_k = (k == j) ? 1.0 : implied_ub1[k];
-
-                if (a_k > 0) {
-                    if (lb_k <= -RALPH_INFINITY/2) row_lb_finite = 0;
-                    else row_lb += a_k * lb_k;
-                    if (ub_k >= RALPH_INFINITY/2) row_ub_finite = 0;
-                    else row_ub += a_k * ub_k;
-                } else {
-                    if (ub_k >= RALPH_INFINITY/2) row_lb_finite = 0;
-                    else row_lb += a_k * ub_k;
-                    if (lb_k <= -RALPH_INFINITY/2) row_ub_finite = 0;
-                    else row_ub += a_k * lb_k;
-                }
-            }
-
-            /* Check feasibility */
-            if (model->sense[i] == 'L') {
-                if (row_lb_finite && row_lb > rhs + RALPH_FEAS_TOL) infeas_1 = 1;
-            } else if (model->sense[i] == 'G') {
-                if (row_ub_finite && row_ub < rhs - RALPH_FEAS_TOL) infeas_1 = 1;
-            } else {  /* 'E' */
-                if (row_lb_finite && row_lb > rhs + RALPH_FEAS_TOL) infeas_1 = 1;
-                if (row_ub_finite && row_ub < rhs - RALPH_FEAS_TOL) infeas_1 = 1;
-            }
+        for (int pass = 0; pass < max_propagation_passes; pass++) {
+            int r = presolve_bound_tightening(ctx);
+            if (r < 0) { infeas_1 = 1; break; }
+            if (r == 0) break;  /* Converged */
         }
+        /* model->lb/ub now hold probe-1 implied bounds.
+         * implied_lb0/ub0 hold probe-0 implied bounds.
+         * Analyze results and apply before restoring. */
 
-        /* Analyze probing results */
         if (infeas_0 && infeas_1) {
-            /* Both settings infeasible - problem is infeasible */
+            memcpy(model->lb, saved_lb, n * sizeof(double));
+            memcpy(model->ub, saved_ub, n * sizeof(double));
+            free(saved_lb);
+            free(saved_ub);
             free(implied_lb0);
             free(implied_ub0);
-            free(implied_lb1);
-            free(implied_ub1);
-            free(row);
-            return -1;  /* Infeasible */
-        } else if (infeas_0) {
-            /* x_j = 0 infeasible -> fix x_j = 1 */
+            return -1;
+        }
+
+        if (infeas_0) {
+            /* x_j = 0 infeasible → fix x_j = 1 */
+            memcpy(model->lb, saved_lb, n * sizeof(double));
+            memcpy(model->ub, saved_ub, n * sizeof(double));
             model->lb[j] = 1.0;
             model->ub[j] = 1.0;
+            saved_lb[j] = 1.0;
+            saved_ub[j] = 1.0;
             count++;
         } else if (infeas_1) {
-            /* x_j = 1 infeasible -> fix x_j = 0 */
+            /* x_j = 1 infeasible → fix x_j = 0 */
+            memcpy(model->lb, saved_lb, n * sizeof(double));
+            memcpy(model->ub, saved_ub, n * sizeof(double));
             model->lb[j] = 0.0;
             model->ub[j] = 0.0;
+            saved_lb[j] = 0.0;
+            saved_ub[j] = 0.0;
             count++;
+        } else {
+            /* Both feasible: intersect implied bounds.
+             * x_j ∈ {0,1}, so a bound valid in BOTH probes is globally valid.
+             * Take the weaker (more conservative) of the two:
+             *   global lb = min(lb_probe0, lb_probe1)
+             *   global ub = max(ub_probe0, ub_probe1)
+             *
+             * model->lb/ub still hold probe-1 bounds; read before restoring. */
+            for (int k = 0; k < n; k++) {
+                if (ctx->col_deleted[k] || k == j) continue;
+
+                double new_lb = fmin(implied_lb0[k], model->lb[k]);
+                double new_ub = fmax(implied_ub0[k], model->ub[k]);
+
+                /* Apply to saved_lb/ub so subsequent probes see the tightening */
+                if (new_lb > saved_lb[k] + RALPH_FEAS_TOL) {
+                    saved_lb[k] = new_lb;
+                    count++;
+                }
+                if (new_ub < saved_ub[k] - RALPH_FEAS_TOL) {
+                    saved_ub[k] = new_ub;
+                    count++;
+                }
+
+                /* Snap to fixed if bounds converged */
+                if (saved_lb[k] > saved_ub[k] - RALPH_FEAS_TOL) {
+                    double avg = (saved_lb[k] + saved_ub[k]) / 2.0;
+                    saved_lb[k] = avg;
+                    saved_ub[k] = avg;
+                }
+            }
+
+            /* Restore from (possibly tightened) saved bounds */
+            memcpy(model->lb, saved_lb, n * sizeof(double));
+            memcpy(model->ub, saved_ub, n * sizeof(double));
         }
-        /* If neither infeasible, we could derive tighter bounds on other variables
-         * by taking the intersection, but we skip this for simplicity */
     }
 
+    free(saved_lb);
+    free(saved_ub);
     free(implied_lb0);
     free(implied_ub0);
-    free(implied_lb1);
-    free(implied_ub1);
-    free(row);
     return count;
 }
 
@@ -1545,6 +2233,13 @@ static LPModel* build_reduced_model(PresolveContext *ctx,
 
     /* If no reduction, just return a copy of the working model */
     if (n_new == n_orig && m_new == m_orig) {
+        /* Still need to populate identity mappings */
+        if (var_map) {
+            for (int j = 0; j < n_orig; j++) var_map[j] = j;
+        }
+        if (con_map) {
+            for (int i = 0; i < m_orig; i++) con_map[i] = i;
+        }
         return lp_model_copy(orig);
     }
 
@@ -1656,9 +2351,6 @@ static LPModel* build_reduced_model(PresolveContext *ctx,
 
     /* Check if original matrix exists and has data */
     if (!orig->A || !orig->A->colptr || !orig->A->rowidx || !orig->A->values) {
-        fprintf(stderr, "build_reduced_model: orig->A is NULL or incomplete!\n");
-        fprintf(stderr, "  orig->A=%p, num_elements=%d\n",
-                (void*)orig->A, orig->num_elements);
         /* Fall back to empty matrix */
     } else {
         for (int j = 0; j < n_orig; j++) {
@@ -1753,10 +2445,16 @@ static LPModel* build_reduced_model(PresolveContext *ctx,
  * ============================================================================ */
 
 PresolveResult* presolve(LPModel *model) {
+    return presolve_with_mask(model, PRESOLVE_ALL);
+}
+
+PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask) {
     if (!model) return NULL;
 
     PresolveContext *ctx = presolve_context_create(model);
     if (!ctx) return NULL;
+
+    ctx->technique_mask = technique_mask;
 
     /* Enable probing for MIP (models with binary variables) */
     if (model->num_binary > 0) {
@@ -1773,76 +2471,110 @@ PresolveResult* presolve(LPModel *model) {
     int changed = 1;
     int status = 0;
 
+    unsigned int mask = ctx->technique_mask;
+
     while (changed && ctx->current_round < ctx->max_rounds && status >= 0) {
         changed = 0;
         ctx->current_round++;
 
-        if (ctx->remove_fixed_vars) {
+        if (ctx->remove_fixed_vars && (mask & PRESOLVE_FIXED_VARS)) {
             int n = presolve_remove_fixed_vars(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
             result->vars_removed += n;
         }
 
-        if (ctx->remove_empty_rows) {
+        if (ctx->remove_empty_rows && (mask & PRESOLVE_EMPTY_ROWS)) {
             int n = presolve_remove_empty_rows(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
             result->cons_removed += n;
         }
 
-        if (ctx->remove_empty_cols) {
+        if (ctx->remove_empty_cols && (mask & PRESOLVE_EMPTY_COLS)) {
             int n = presolve_remove_empty_cols(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
             result->vars_removed += n;
         }
 
-        if (ctx->remove_singleton_rows) {
+        if (ctx->remove_singleton_rows && (mask & PRESOLVE_SINGLETON_ROWS)) {
             int n = presolve_singleton_rows(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
             result->cons_removed += n;
         }
 
-        if (ctx->remove_singleton_cols) {
+        if (ctx->remove_singleton_cols && (mask & PRESOLVE_SINGLETON_COLS)) {
             int n = presolve_singleton_cols(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
             result->bounds_tightened += n;
         }
 
-        if (ctx->remove_forcing_cons) {
+        if (mask & PRESOLVE_IMPLIED_FREE) {
+            int n = presolve_implied_free(ctx);
+            if (n < 0) { status = -1; break; }
+            changed += n;
+            result->bounds_tightened += n;
+        }
+
+        if (mask & PRESOLVE_DOUBLETON_EQ) {
+            int n = presolve_doubleton_equality(ctx, result);
+            if (n < 0) { status = -1; break; }
+            changed += n;
+            result->vars_removed += n;
+            result->cons_removed += n;
+        }
+
+        if (ctx->remove_forcing_cons && (mask & PRESOLVE_FORCING)) {
             int n = presolve_forcing_constraints(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
             result->cons_removed += n;
         }
 
-        if (ctx->bound_tightening) {
+        if (ctx->bound_tightening && (mask & PRESOLVE_BOUND_TIGHTENING)) {
             int n = presolve_bound_tightening(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
             result->bounds_tightened += n;
         }
 
-        /* MIP-specific: probing for binary variables */
-        if (ctx->probing && model->num_binary > 0) {
+        if (mask & PRESOLVE_PROPORTIONAL_ROWS) {
+            int n = presolve_proportional_rows(ctx);
+            if (n < 0) { status = -1; break; }
+            changed += n;
+            result->cons_removed += n;
+        }
+
+        if (mask & PRESOLVE_PROPORTIONAL_COLS) {
+            int n = presolve_proportional_cols(ctx);
+            if (n < 0) { status = -1; break; }
+            changed += n;
+            result->vars_removed += n;
+        }
+
+        if (ctx->probing && model->num_binary > 0 && (mask & PRESOLVE_PROBING)) {
             int n = presolve_probing(ctx);
             if (n < 0) { status = -1; break; }
             changed += n;
-            result->vars_removed += n;  /* Probing fixes variables */
+            result->vars_removed += n;
         }
     }
+    result->rounds = ctx->current_round;
 
-    /* Redundant row detection via rank computation.
-     * This is expensive O(m*n*min(m,n)) so we do it once AFTER other
-     * reductions have stabilized. Critical for equality-heavy problems
-     * like beaconfd (140 equalities out of 173 constraints). */
-    if (status >= 0 && ctx->detect_redundant_rows) {
+    /* Shift variable bounds (one-time, after main loop stabilizes) */
+    if (status >= 0 && (mask & PRESOLVE_SHIFT_BOUNDS)) {
+        int n = presolve_shift_bounds(ctx, result);
+        result->bounds_tightened += n;
+    }
+
+    /* Redundant row detection via rank computation */
+    if (status >= 0 && ctx->detect_redundant_rows && (mask & PRESOLVE_REDUNDANT_ROWS)) {
         int n = presolve_detect_redundant_rows(ctx);
         if (n < 0) {
-            status = -1;  /* Inconsistent system detected */
+            status = -1;
         } else {
             result->cons_removed += n;
             result->matrix_rank = ctx->matrix_rank;
@@ -1855,6 +2587,34 @@ PresolveResult* presolve(LPModel *model) {
         free(result);
         presolve_context_free(ctx);
         return NULL;
+    }
+
+    /* Record all fixed (deleted) variables for postsolve recovery.
+     * Variables get fixed by remove_fixed_vars, remove_empty_cols,
+     * proportional_cols (via remove_fixed_vars), etc. None of these
+     * push postsolve ops, so we do a sweep here to ensure every fixed
+     * variable's value is recoverable during postsolve.
+     * Push POSTSOLVE_FIXED_VAR for each col_deleted variable with lb==ub.
+     * These must be pushed AFTER shift_bounds so they're replayed BEFORE
+     * shifts in the LIFO postsolve order.
+     * IMPORTANT: Use ctx->working (not parameter 'model') since presolve
+     * operations modify the working copy's bounds. */
+    {
+        LPModel *working = ctx->working;
+        for (int j = 0; j < working->num_vars; j++) {
+            if (ctx->col_deleted[j]) {
+                if (fabs(working->lb[j] - working->ub[j]) < RALPH_ZERO_TOL) {
+                    PostsolveOp op = {
+                        .type = POSTSOLVE_FIXED_VAR,
+                        .var = j,
+                        .var2 = -1,
+                        .value = working->lb[j],
+                        .factor = 0.0,
+                    };
+                    if (postsolve_push(result, op) < 0) continue;
+                }
+            }
+        }
     }
 
     /* Preserve original variable types for MIP */
@@ -1917,6 +2677,20 @@ PresolveResult* presolve(LPModel *model) {
     return result;
 }
 
+/* Push an operation onto the postsolve stack */
+static int postsolve_push(PresolveResult *result, PostsolveOp op) {
+    if (result->num_postsolve_ops >= result->postsolve_capacity) {
+        int new_cap = result->postsolve_capacity == 0 ? 32 : result->postsolve_capacity * 2;
+        PostsolveOp *new_stack = (PostsolveOp*)realloc(
+            result->postsolve_stack, (size_t)new_cap * sizeof(PostsolveOp));
+        if (!new_stack) return -1;
+        result->postsolve_stack = new_stack;
+        result->postsolve_capacity = new_cap;
+    }
+    result->postsolve_stack[result->num_postsolve_ops++] = op;
+    return 0;
+}
+
 void presolve_free(PresolveResult *result) {
     if (!result) return;
 
@@ -1933,6 +2707,7 @@ void presolve_free(PresolveResult *result) {
     SAFE_FREE(result->bound_change_vars);
     SAFE_FREE(result->old_lb);
     SAFE_FREE(result->old_ub);
+    SAFE_FREE(result->postsolve_stack);
     free(result);
 }
 
@@ -1956,6 +2731,25 @@ int postsolve(const PresolveResult *result, const double *reduced_solution,
             if (orig_idx >= 0) {
                 original_solution[orig_idx] = reduced_solution[j];
             }
+        }
+    }
+
+    /* Replay postsolve stack in reverse (LIFO) order */
+    for (int k = result->num_postsolve_ops - 1; k >= 0; k--) {
+        const PostsolveOp *op = &result->postsolve_stack[k];
+        switch (op->type) {
+            case POSTSOLVE_FIXED_VAR:
+                original_solution[op->var] = op->value;
+                break;
+            case POSTSOLVE_SUBSTITUTION:
+                /* x_elim = offset + factor * x_remain */
+                original_solution[op->var] =
+                    op->value + op->factor * original_solution[op->var2];
+                break;
+            case POSTSOLVE_SHIFT:
+                /* x_orig = x_shifted + shift_amount */
+                original_solution[op->var] += op->value;
+                break;
         }
     }
 

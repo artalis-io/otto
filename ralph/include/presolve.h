@@ -7,6 +7,46 @@
 
 #include "lp.h"
 
+/* Presolve technique bitmask (for selective enable/disable) */
+#define PRESOLVE_FIXED_VARS        (1u << 0)
+#define PRESOLVE_EMPTY_ROWS        (1u << 1)
+#define PRESOLVE_EMPTY_COLS        (1u << 2)
+#define PRESOLVE_SINGLETON_ROWS    (1u << 3)
+#define PRESOLVE_SINGLETON_COLS    (1u << 4)
+#define PRESOLVE_IMPLIED_FREE      (1u << 5)
+#define PRESOLVE_DOUBLETON_EQ      (1u << 6)
+#define PRESOLVE_FORCING           (1u << 7)
+#define PRESOLVE_BOUND_TIGHTENING  (1u << 8)
+#define PRESOLVE_PROPORTIONAL_ROWS (1u << 9)
+#define PRESOLVE_PROPORTIONAL_COLS (1u << 10)
+#define PRESOLVE_PROBING           (1u << 11)
+#define PRESOLVE_SHIFT_BOUNDS      (1u << 12)
+#define PRESOLVE_REDUNDANT_ROWS    (1u << 13)
+/* Safe presolve mask: lightweight techniques that are numerically reliable.
+ * FIXED_VARS + EMPTY_ROWS + EMPTY_COLS + SINGLETON_ROWS + BOUND_TIGHTENING
+ * + SHIFT_BOUNDS + REDUNDANT_ROWS (equality-only, safe after fix) */
+#define PRESOLVE_SAFE              0x310Fu
+
+/* PRESOLVE_ALL includes all techniques. Use with caution — some combinations
+ * (IMPLIED_FREE, PROPORTIONAL_COLS) have known correctness issues on certain
+ * problem classes. */
+#define PRESOLVE_ALL               0xFFFFu
+
+/* Postsolve operation types for LIFO replay */
+typedef enum {
+    POSTSOLVE_FIXED_VAR,       /* Variable fixed to a value */
+    POSTSOLVE_SUBSTITUTION,    /* x_elim = offset + factor * x_remain */
+    POSTSOLVE_SHIFT,           /* x_orig = x_shifted + value (bound shift) */
+} PostsolveOpType;
+
+typedef struct {
+    PostsolveOpType type;
+    int var;                   /* Primary variable (original index) */
+    int var2;                  /* Secondary variable (for substitution, original index) */
+    double value;              /* Fixed value or offset */
+    double factor;             /* Multiplication factor (for substitution) */
+} PostsolveOp;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -39,11 +79,16 @@ typedef struct {
     double *old_lb;
     double *old_ub;
 
+    /* Postsolve stack (LIFO — replay in reverse order) */
+    int num_postsolve_ops;
+    int postsolve_capacity;
+    PostsolveOp *postsolve_stack;
+
     /* Statistics */
+    int rounds;                 /* Number of presolve rounds executed */
     int vars_removed;
     int cons_removed;
     int bounds_tightened;
-    int coefficients_reduced;
     int matrix_rank;            /* Computed rank of constraint matrix (0 if not computed) */
     int redundant_rows_found;   /* Count of linearly dependent rows removed */
 
@@ -62,9 +107,9 @@ typedef struct {
     int remove_singleton_cols;
     int remove_forcing_cons;
     int bound_tightening;
-    int coefficient_reduction;
     int probing;                /* For MIP only */
     int detect_redundant_rows;  /* Detect linearly dependent rows via rank */
+    unsigned int technique_mask; /* Bitmask controlling individual techniques (0xFFFF=all) */
 
     /* Iteration control */
     int max_rounds;
@@ -84,6 +129,7 @@ typedef struct {
 
 /* Main presolve interface */
 PresolveResult* presolve(LPModel *model);
+PresolveResult* presolve_with_mask(LPModel *model, unsigned int technique_mask);
 void presolve_free(PresolveResult *result);
 
 /* Postsolve: recover original solution from presolved solution */
@@ -98,7 +144,14 @@ int presolve_singleton_rows(PresolveContext *ctx);
 int presolve_singleton_cols(PresolveContext *ctx);
 int presolve_forcing_constraints(PresolveContext *ctx);
 int presolve_bound_tightening(PresolveContext *ctx);
-int presolve_coefficient_reduction(PresolveContext *ctx);
+/* Proportional row detection: remove duplicate/dominated parallel rows */
+int presolve_proportional_rows(PresolveContext *ctx);
+
+/* Proportional column detection: fix dominated parallel columns */
+int presolve_proportional_cols(PresolveContext *ctx);
+
+/* Shift variable bounds: x' = x - lb so all lower bounds are zero */
+int presolve_shift_bounds(PresolveContext *ctx, PresolveResult *result);
 
 /*
  * Detect and remove linearly dependent (redundant) rows.
@@ -125,9 +178,14 @@ int presolve_coefficient_reduction(PresolveContext *ctx);
  */
 int presolve_detect_redundant_rows(PresolveContext *ctx);
 
+/* Doubleton equality elimination: a*x + b*y = c → substitute one variable */
+int presolve_doubleton_equality(PresolveContext *ctx, PresolveResult *result);
+
+/* Implied free variable detection: remove redundant variable bounds */
+int presolve_implied_free(PresolveContext *ctx);
+
 /* MIP-specific presolve */
 int presolve_probing(PresolveContext *ctx);
-int presolve_clique_detection(PresolveContext *ctx);
 
 /* Set covering/partitioning specific presolve */
 
@@ -195,6 +253,30 @@ int presolve_scp_column_dominance(PresolveContext *ctx);
  *   Total reductions made, or -1 if infeasible.
  */
 int presolve_scp(PresolveContext *ctx);
+
+/* Row activity bounds result */
+typedef struct {
+    double lb;           /* Lower bound on a'x */
+    double ub;           /* Upper bound on a'x */
+    double abs_sum;      /* Sum of |contributions| for cancellation detection */
+    int lb_finite;       /* All lower bound contributions were finite */
+    int ub_finite;       /* All upper bound contributions were finite */
+} RowBounds;
+
+/*
+ * Compute row activity bounds: lb <= a'x <= ub given variable bounds.
+ *
+ * For each variable j with coefficient a_ij:
+ *   - If a_ij > 0: contributes a_ij*lb_j to row lb, a_ij*ub_j to row ub
+ *   - If a_ij < 0: contributes a_ij*ub_j to row lb, a_ij*lb_j to row ub
+ *
+ * Tracks finiteness flags and absolute contribution sum for cancellation
+ * detection. This is the shared primitive used by forcing constraints,
+ * bound tightening, and implied free detection.
+ */
+void compute_row_bounds(const double *row, int n,
+                        const double *var_lb, const double *var_ub,
+                        const int *col_deleted, RowBounds *out);
 
 /* Utility */
 void presolve_compute_implied_bounds(PresolveContext *ctx);

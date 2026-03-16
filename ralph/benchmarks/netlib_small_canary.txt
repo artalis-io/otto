@@ -1,0 +1,29 @@
+# NETLIB small-canary suite (tiers 0-1 plus beaconfd regression)
+# One problem basename per line (".mps" optional).
+afiro
+sc50a
+sc50b
+kb2
+sc105
+blend
+share2b
+recipe
+adlittle
+lotfi
+scagr7
+israel
+scorpion
+brandy
+bandm
+beaconfd
+e226
+stocfor1
+sc205
+agg
+agg2
+agg3
+bore3d
+capri
+share1b
+scagr25
+25fv47

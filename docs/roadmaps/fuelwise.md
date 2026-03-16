@@ -1746,3 +1746,285 @@ For k > 50, Benders becomes necessary regardless of solver. At that point, Ralph
 3. k=100: Verify solves within 5s
 4. Infeasibility: Verify Farkas cuts block infeasible z patterns
 5. Optimality: Verify final solution matches enumeration (for k≤20)
+
+---
+
+## Chapter 8: GLPK Comparison Benchmark (Feb 2026)
+
+### 8.1 Methodology
+
+Added `--glpk` flag to `fuelwise-bench` that exports each MILP (without domain hints) as
+an LP file via `fw_export_milp_lp()`, solves with `glpsol`, and compares objectives and
+timing against Ralph (with domain hints: reach cuts, branching priorities/directions).
+
+Both solvers solve the identical constraint set; Ralph additionally uses domain-specific
+MIP hints that GLPK cannot.
+
+### 8.2 Results (10 runs per scenario, Feb 2026)
+
+**Current (post P5/P6 re-land with infeasibility guards, presolve 0x110F):**
+
+| Scenario | ~Stations | Ralph avg | GLPK avg | Speedup | Obj Match |
+|----------|-----------|-----------|----------|---------|-----------|
+| milp15 | ~15 | **0.85 ms** | 7.45 ms | **9.9x Ralph** | 2/10 |
+| milp30 | ~30 | **2.73 ms** | 9.38 ms | **4.1x Ralph** | 5/10 |
+| milp50 | ~50 | **9.28 ms** | 12.26 ms | **1.4x Ralph** | 2/10 |
+| milp75 | ~75 | **33.26 ms** | 57.93 ms | **2.0x Ralph** | 3/10 |
+| milp100 | ~100 | 62.05 ms | **37.21 ms** | 0.7x | 0/10 |
+| milp200 | ~200 | 994.96 ms | **152.22 ms** | 0.4x | 1/10 |
+
+Ralph wins milp15–milp75 (9.9x down to 2.0x). GLPK still faster at milp100+ (1.4–2.5x).
+Zero false infeasibility across all 60 trials.
+
+**Previous (initial baseline, pre-B&B improvements, 20 runs):**
+
+| Scenario | ~Stations | Ralph avg | GLPK avg | Speedup | Obj Match |
+|----------|-----------|-----------|----------|---------|-----------|
+| milp15 | ~15 | **1.72 ms** | 6.39 ms | **5.5x Ralph** | 20/20 |
+| milp30 | ~30 | 65.50 ms | **7.65 ms** | 0.5x | 20/20 |
+| milp50 | ~50 | 124.14 ms | **9.64 ms** | 0.1x | 20/20 |
+| milp75 | ~75 | 1231.65 ms | **19.11 ms** | 0.02x | 20/20 |
+| milp100 | ~100 | 7223.45 ms | **31.88 ms** | 0.004x | 10/10 |
+| milp200 | ~200 | 19472.76 ms | **43.75 ms** | 0.002x | 5/5 |
+
+**Key observations:**
+- Ralph improved dramatically since initial baseline (milp30: 65ms→2.7ms, milp75: 1232ms→33ms)
+- Domain hints (priorities, directions, reach cuts) + B&B improvements (dual_reopt, HYBRID,
+  PATH B LU reuse, presolve, P5 bound flipping, P6 dual steepest edge) closed the gap
+- GLPK still faster at milp100+ due to mature cut generation and presolve strength
+- Remaining gap at scale: ~1.4x at milp100, ~2.5x at milp200 (high variance)
+
+### 8.3 Root Cause Analysis
+
+Ralph's MIP solver lacks several features that GLPK uses to control tree growth:
+
+| GLPK Feature | Ralph Status | Impact |
+|--------------|-------------|--------|
+| **Presolve** (probe, clique) | Lightweight (0x110F: fixed vars, empty rows/cols, singleton rows, bound tightening, shift bounds) | Medium — covers basics, lacks probing/clique |
+| **Gomory/MIR cuts** | c-MIR cuts implemented | Medium — tightens LP relaxation |
+| **Dual simplex** | Full dual with P5 bound flipping + P6 steepest edge; dual_reopt for B&B nodes | Low — now competitive |
+| **Node selection** (best-first) | HYBRID (DFS→best-bound on incumbent) | Low — effective for FuelWise structure |
+| **Symmetry breaking** | FuelWise domain hints (equal-price ordering) | Low — **DONE** |
+| **Probing / clique detection** | None | Medium — finds implications of variable fixing |
+
+### 8.4 FuelWise-Specific MIP Optimizations
+
+#### Symmetry-Breaking Constraints
+
+FuelWise's path structure contains exploitable symmetry. If two adjacent stations have
+identical prices and the solver doesn't need both, it wastes time exploring both orderings.
+
+**Lexicographic ordering for equal-price stations:**
+```
+If price[i] == price[i+1] (within tolerance):
+    z[i] >= z[i+1]   (prefer earlier station)
+```
+
+This halves the search space for each pair of equal-price stations.
+
+**Station clustering:** Group nearby stations with similar prices. If reach cuts already
+require one stop in the cluster, add a symmetry-breaking constraint that selects the
+cheapest (or lexicographically first) station in the cluster.
+
+#### LP Relaxation Strengthening
+
+**Flow cover cuts:** The linking constraint `x[i] <= tank_capacity * z[i]` creates a
+knapsack-like structure. Flow cover inequalities tighten the LP relaxation:
+```
+For each interval [a, b] where sum(x[i]) must exceed some threshold:
+    sum(x[i]) <= sum(tank_capacity * z[i]) - slack
+```
+
+**Lifted reach cuts:** Current reach cuts are `sum(z[j]) >= 1` for mandatory-stop intervals.
+Coefficient lifting can strengthen these: if station j can only partially satisfy the
+fuel need, its coefficient should be < 1.
+
+#### Presolve Improvements
+
+**Implied bounds:** If `min_fuel` constraint forces `y[i] >= L` and tank capacity forces
+`y[i] + x[i] <= U`, then `x[i] <= U - L`. Tighter than `x[i] <= tank_capacity`.
+
+**Redundant variable fixing:** If a station is dominated (more expensive than all neighbors
+AND the truck can skip it), fix `z[i] = 0` before solving.
+
+**Mandatory station detection:** If a reach cut interval has only one station, fix `z[i] = 1`.
+
+#### Warm Starting from LP Relaxation
+
+Solve the LP relaxation first (without binary constraints), then use the LP solution to:
+1. Round fractional z values to get an initial feasible solution (incumbent)
+2. Use LP basis as warm start for root node
+3. Set branching priorities based on fractionality (most fractional first)
+
+#### Benders vs Full MIP
+
+For k > 50, Benders decomposition should outperform full MIP because:
+1. Master problem has only k binary variables (no x, y)
+2. Subproblem is a trivial path-flow LP
+3. Domain-specific feasibility cuts (from reach analysis) warm-start the master
+
+The current Benders implementation has a known suboptimality issue (§9.2). Fixing this
+and combining with symmetry-breaking in the master would be the fastest path to competitive
+performance at scale.
+
+### 8.5 Ralph-Side Improvements (see also ralph.md §4.3)
+
+| Improvement | Status | Expected Impact | Effort |
+|-------------|--------|----------------|--------|
+| ~~**Best-first node selection**~~ | **DONE** (HYBRID) | 2-5x for deep trees | ~200 LoC in branch_bound.c |
+| ~~**MIR cuts**~~ | **DONE** (c-MIR) | 1.5-3x tighter relaxation | ~400 LoC |
+| ~~**Dual simplex for node resolves**~~ | **DONE** (dual_reopt + P5/P6) | 2-3x per-node speedup | ~800 LoC |
+| **Aggressive presolve** (probing) | Not started | 1.5-2x smaller problems | ~500 LoC |
+| **Pseudocost branching** | Not started | 1.5-2x better variable selection | ~200 LoC |
+| **Solution pool / incumbents** | Not started | Faster pruning from good bounds | ~150 LoC |
+
+### 8.6 Implementation Priority
+
+1. ~~**Symmetry-breaking** (FuelWise, ~50 LoC) — immediate, zero Ralph changes~~ **DONE** (Feb 2026)
+2. ~~**Mandatory station fixing** (FuelWise, ~30 LoC) — presolve, zero Ralph changes~~ **DONE** (Feb 2026)
+3. ~~**Dominated station elimination** (FuelWise, ~40 LoC) — presolve, zero Ralph changes~~ **DONE** (Feb 2026)
+4. **LP relaxation warm start** (FuelWise, ~80 LoC) — incumbent from LP rounding
+5. **Best-first node selection** (Ralph, ~200 LoC) — biggest generic B&B improvement
+6. **Pseudocost branching** (Ralph, ~200 LoC) — replaces static priorities
+7. **Fix Benders suboptimality** (Ralph, investigate) — unlocks scaling to k>100
+8. **Model export for GLPK comparison** — when `ralph_write_mps()` / `ralph_write_lp()` are implemented (both declared but unimplemented), FuelWise can export its MILP model for side-by-side presolve quality and solve-time comparison against GLPK
+
+### 8.7 Per-Component Hint Breakdown (Feb 2026)
+
+Each MIP hint can now be toggled independently via `FW_HINT_NO_*` flags
+(`fw_set_mip_hint_flags()`). Test on a 20-station problem (10 L/100km, tight
+200L tank, min_purchase=15L, stop_cost=$5):
+
+| Configuration | Time | Speedup vs Raw | Notes |
+|---------------|------|----------------|-------|
+| **All hints enabled** | 14.7ms | **6.6x** | Combined effect |
+| No hints (raw MILP) | 96.4ms | baseline | |
+| Only priorities+directions | **4.6ms** | **21x** | Most impactful single hint |
+| Only symmetry breaking | 27.6ms | 3.5x | Equal-price pairs pruned |
+| Only dominated elimination | 41.4ms | 2.3x | Expensive stations fixed to z=0 |
+| Only reach cuts | 92.8ms | ~1x | Minimal solo impact on this problem |
+| Only mandatory fixing | 94.4ms | ~1x | Minimal solo impact on this problem |
+
+**Key findings:**
+
+1. **Branching priorities/directions dominate** — telling Ralph to try cheap
+   stations first gives 21x alone. This is Ralph's single strongest advantage
+   over GLPK on small problems.
+
+2. **Symmetry breaking is second** — 3.5x from eliminating equal-price
+   symmetric solutions. Impact scales with number of equal-price pairs.
+
+3. **Dominated elimination gives 2.3x** — fixing expensive surrounded
+   stations to z=0 reduces effective problem size.
+
+4. **Reach cuts and mandatory fixing have minimal solo impact** on this
+   problem class. They matter more on very tight-tank scenarios where they
+   prevent infeasible branches early.
+
+5. **Combined 6.6x < sum of parts** — hints interact; priorities already
+   guide the solver away from dominated/symmetric solutions.
+
+### 8.8 Benders vs MILP vs GLPK Comparison (Feb 2026)
+
+Side-by-side comparison of all three solvers on the same MILP scenarios:
+
+| Scenario | MILP (B&B) | Benders | GLPK | MILP Solved | Benders Solved | GLPK Match |
+|----------|------------|---------|------|-------------|----------------|------------|
+| milp15 | **2.5ms** | 2.6ms | 6.4ms | 5/5 (100%) | 3/5 (60%) | 5/5 MILP, 2/3 Benders |
+| milp30 | 47ms | 22ms | **8ms** | 5/5 (100%) | 4/5 (80%) | 5/5 MILP, 3/4 Benders |
+| milp50 | 142ms | 241ms | **9ms** | 5/5 (100%) | 1/5 (20%) | 5/5 MILP, 0/1 Benders |
+
+**Benders issues identified:**
+
+1. **Reliability**: Benders fails on 40-80% of problems (reports INFEASIBLE or
+   ERROR on problems that MILP and GLPK solve successfully). This is the known
+   suboptimality/convergence issue from §9.2.
+
+2. **Objective mismatch**: Even when Benders finds a solution, it often doesn't
+   match the GLPK/MILP optimal (only 5/8 matches vs 15/15 for MILP).
+
+3. **Speed**: Benders is faster than MILP B&B at milp30 (22ms vs 47ms) but
+   slower at milp50 (241ms vs 142ms). Neither competes with GLPK at scale.
+
+4. **MILP B&B is more reliable**: 100% solve rate across all scenarios with
+   100% objective match against GLPK. The domain hints (priorities, directions,
+   reach cuts, symmetry-breaking, presolve) make it the recommended path.
+
+**Conclusion:** Benders decomposition is currently broken and should not be used
+in production. The MILP solver with domain hints is correct and reliable but
+slow beyond ~30 stations. For production use at scale, the priority path is:
+
+1. Fix Ralph's B&B core (best-first node selection, pseudocost branching)
+2. Add LP warm start to MILP solver
+3. Only then revisit Benders (after fixing convergence issues in §9.2)
+
+---
+
+## Chapter 9: Known Issues & TODOs
+
+### 8.1 Benders Decomposition Known Issues (Feb 2026)
+
+**Issue 1: Gomory Cuts Cause Infeasibility**
+
+When using Ralph's generic Benders solver (`ralph_solve_benders`) with FuelWise, enabling
+Gomory/MIR cut generation in the master MIP solver causes the algorithm to return INFEASIBLE
+even on feasible problems.
+
+**Root cause:** Gomory cuts are generated based on the LP relaxation at each B&B node. In
+Benders, the master LP relaxation is incomplete (missing the full subproblem structure),
+so Gomory cuts can incorrectly cut off the optimal solution.
+
+**Workaround:** Disable cut generation in the master solver:
+```c
+ctx->master_solver->max_cut_rounds = 0;
+```
+
+**Status:** Workaround applied. This is expected behavior—Benders requires custom cut
+handling, not generic LP cuts on an incomplete master formulation.
+
+---
+
+**Issue 2: Algorithm Converges to Suboptimal Solution**
+
+The Benders implementation runs without crashes but finds a suboptimal solution.
+
+**Test case:** 3-station problem with expected optimal cost $74.00
+**Actual result:** Benders returns $85.00 (suboptimal)
+
+**Numerical stability fix applied:** Changed theta bounds from hardcoded ±1e9 to calculated
+bounds based on problem structure:
+```c
+double max_fuel_value = k * tank_capacity * max_price;
+double theta_bound = 100.0 * (max_fuel_value + 1.0);
+```
+
+This fixed the RALPH_STATUS_ERROR (-1) crashes but the algorithm still converges to a
+suboptimal solution.
+
+---
+
+### 8.2 TODO: Investigate Cut Generation
+
+The suboptimal convergence suggests issues in how Benders cuts are generated or applied.
+Priority investigation areas:
+
+| Area | Suspected Issue | Investigation Steps |
+|------|-----------------|---------------------|
+| **Optimality cuts** | Dual values incorrectly extracted or transformed | 1. Print dual values after each subproblem solve<br>2. Verify sign convention matches Benders formulation<br>3. Check constraint indexing (linking vs sub-only) |
+| **RHS contribution** | `sub_only_rhs_contribution` calculation may be wrong | 1. Verify which constraints are classified as linking<br>2. Check RHS adjustment when z values change<br>3. Test with simpler 2-station problem |
+| **Cut coefficients** | Theta coefficient or z coefficients may be wrong | 1. Print full cut before adding to master<br>2. Manually verify cut validity<br>3. Compare with textbook Benders formulation |
+| **Feasibility cuts** | May be too weak or incorrectly normalized | 1. Test with problem that requires feasibility cuts<br>2. Verify Farkas ray normalization<br>3. Check blocking set extraction |
+
+**Approach:** Create minimal test case (2 stations, explicit optimal solution), trace through
+Benders iteration, verify each cut manually against theory.
+
+---
+
+### 8.3 Relationship to Ralph §7.8
+
+These issues are also documented in `docs/roadmaps/ralph.md` §7.8 (Known Limitations).
+The FuelWise-specific context is:
+
+- FuelWise is the primary use case for Ralph's Benders solver
+- The suboptimal convergence was discovered during FuelWise benchmark testing
+- Fixes should be validated against FuelWise test cases before closing

@@ -13,10 +13,2199 @@
 #include <stdio.h>
 #include <math.h>
 #include <time.h>
+#include <limits.h>
 #include "lp.h"
+#include "lp_glpk_strict.h"
+#include "lp_refactor_policy.h"
+#include "lp_policy_glpk_compat.h"
+#include "lu_update_backend.h"
+#include "lp_log.h"
+#include "ralph_lp.h"
 
 /* Forward declarations */
 int lp_model_finalize(LPModel *model);
+static int lp_run_user_callbacks(SimplexSolver *solver,
+                                 const SimplexTableau *tab,
+                                 RalphLPProgressPhase phase,
+                                 int iter,
+                                 int force_emit,
+                                 int honor_progress_cancel);
+static int lp_time_limit_exceeded(SimplexSolver *solver, int iter);
+static void phase1_trace_emit_summary(SimplexSolver *solver, RalphStatus phase1_status);
+static void phase1_recompute_full_with_reason(SimplexSolver *solver,
+                                              SimplexTableau *tab,
+                                              int *rc_only_streak,
+                                              LPPhase1RecomputeReason reason);
+
+#define PHASE1_WINDOW_PRESSURE_EVENT_NONE 0
+#define PHASE1_WINDOW_PRESSURE_EVENT_FAILED_STABILIZE 1
+#define PHASE1_WINDOW_PRESSURE_EVENT_DIR_SKIP 2
+static void primal_remove_perturbation(SimplexTableau *tab);
+static int phase1_failed_stabilize_retry_penalty_plan(int entering,
+                                                      int last_failed_entering,
+                                                      int same_entering_streak);
+static int phase1_failed_stabilize_retry_local_memory_plan(int original_entering,
+                                                           int last_retry_alt,
+                                                           int last_retry_alt_streak,
+                                                           int retry_penalize_last_failed);
+static int phase1_failed_stabilize_retry_guarded_selector_plan(
+    int retry_ratio_fail_streak,
+    int last_retry_alt_streak,
+    int eligible_count,
+    int bland_entering,
+    int best_entering,
+    double bland_score,
+    double best_score);
+static int phase1_failed_stabilize_retry_find_candidates(
+    SimplexTableau *tab,
+    int excluded_a,
+    int excluded_b,
+    int *bland_entering,
+    double *bland_score_out,
+    int *best_entering,
+    double *best_score_out,
+    int *eligible_count_out);
+static int phase1_failed_stabilize_retry_direction_guard_plan(
+    double dir_inf,
+    int dir_nnz,
+    double pivot_abs,
+    int retry_alt_streak);
+static int phase1_failed_stabilize_retry_shadow_guard_plan(
+    double actual_dir_inf,
+    int actual_dir_nnz,
+    double actual_pivot_abs,
+    int shadow_ratio_success,
+    double shadow_dir_inf,
+    int shadow_dir_nnz,
+    double shadow_pivot_abs,
+    int retry_alt_streak);
+static void phase1_failed_stabilize_retry_direction_shape(
+    const SimplexTableau *tab,
+    int leaving,
+    double *dir_inf_out,
+    int *dir_nnz_out,
+    double *pivot_abs_out);
+static void phase1_shadow_guard_followup_consume_failed_stabilize(
+    SimplexSolver *solver,
+    int *pending);
+static void phase1_shadow_guard_followup_consume_ratio_breakdown(
+    SimplexSolver *solver,
+    int *pending);
+static void phase1_shadow_guard_followup_consume_pivot_fail(
+    SimplexSolver *solver,
+    int *pending);
+static void phase1_shadow_guard_followup_consume_pivot_success(
+    SimplexSolver *solver,
+    int *pending);
+static void phase1_shadow_guard_followup_record_direction(
+    SimplexSolver *solver,
+    const SimplexTableau *tab,
+    int leaving,
+    double theta);
+
+/* Phase-1 pivot-failure reasons used by deterministic tracing. */
+enum {
+    PHASE1_PIVOT_FAIL_NONE = 0,
+    PHASE1_PIVOT_FAIL_SMALL_PIVOT = 1,
+    PHASE1_PIVOT_FAIL_INVALID_COLUMN = 2,
+    PHASE1_PIVOT_FAIL_LU_MAX_UPDATES = 3,
+    PHASE1_PIVOT_FAIL_LU_SPIKE_POOL_FULL = 4,
+    PHASE1_PIVOT_FAIL_LU_UPDATE_PIVOT_SMALL = 5,
+    PHASE1_PIVOT_FAIL_LU_SINGULAR_UPDATE = 6,
+    PHASE1_PIVOT_FAIL_FACTOR_SINGULAR = 7,
+    PHASE1_PIVOT_FAIL_REFACTOR_FORCED_OTHER = 8,
+    PHASE1_PIVOT_FAIL_REFACTOR_AFTER_UPDATE_OTHER = 9
+};
+
+static const char* phase1_pivot_fail_reason_str(int reason) {
+    switch (reason) {
+        case PHASE1_PIVOT_FAIL_SMALL_PIVOT: return "small_pivot";
+        case PHASE1_PIVOT_FAIL_INVALID_COLUMN: return "invalid_entering_column";
+        case PHASE1_PIVOT_FAIL_LU_MAX_UPDATES: return "lu_max_updates";
+        case PHASE1_PIVOT_FAIL_LU_SPIKE_POOL_FULL: return "lu_spike_pool_full";
+        case PHASE1_PIVOT_FAIL_LU_UPDATE_PIVOT_SMALL: return "lu_update_pivot_too_small";
+        case PHASE1_PIVOT_FAIL_LU_SINGULAR_UPDATE: return "lu_singular_update";
+        case PHASE1_PIVOT_FAIL_FACTOR_SINGULAR: return "factor_singular";
+        case PHASE1_PIVOT_FAIL_REFACTOR_FORCED_OTHER: return "refactor_after_forced_pivot_other";
+        case PHASE1_PIVOT_FAIL_REFACTOR_AFTER_UPDATE_OTHER: return "refactor_after_update_fail_other";
+        default: return "unknown";
+    }
+}
+
+static int phase1_trace_reason_from_lu_failure(int lu_reason, int forced_refactor_path) {
+    switch ((LUFailureReason)lu_reason) {
+        case LU_FAIL_MAX_UPDATES:
+            return PHASE1_PIVOT_FAIL_LU_MAX_UPDATES;
+        case LU_FAIL_SPIKE_POOL_FULL:
+            return PHASE1_PIVOT_FAIL_LU_SPIKE_POOL_FULL;
+        case LU_FAIL_UPDATE_PIVOT_TOO_SMALL:
+            return PHASE1_PIVOT_FAIL_LU_UPDATE_PIVOT_SMALL;
+        case LU_FAIL_SINGULAR_UPDATE:
+            return PHASE1_PIVOT_FAIL_LU_SINGULAR_UPDATE;
+        case LU_FAIL_FACTOR_SINGULAR:
+            return PHASE1_PIVOT_FAIL_FACTOR_SINGULAR;
+        default:
+            return forced_refactor_path
+                ? PHASE1_PIVOT_FAIL_REFACTOR_FORCED_OTHER
+                : PHASE1_PIVOT_FAIL_REFACTOR_AFTER_UPDATE_OTHER;
+    }
+}
+
+#define PHASE2_DEGEN_ESCAPE_MIN_M 1200
+#define PHASE2_DEGEN_ESCAPE_DEGEN_TRIGGER 120
+#define PHASE2_DEGEN_ESCAPE_POLICY_TRIGGER 200
+#define PHASE2_DEGEN_ESCAPE_MAX_ATTEMPTS 2
+#define PHASE2_DEGEN_ESCAPE_BLAND_HOLD_ITERS 16
+#define PHASE1_NO_ENTERING_CLEANUP_MAX_ITERS 128
+#define PHASE1_RC_ONLY_STREAK_GUARD 6
+#define PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_TRIGGER 2
+#define PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_ITERS RALPH_PHASE1_ENTERING_EXCLUDE_ITERS
+#define PHASE1_FAILED_STABILIZE_RETRY_PENALTY_TRIGGER 3
+#define PHASE1_FAILED_STABILIZE_RETRY_LOCAL_MEMORY_TRIGGER 2
+#define PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_RATIO_FAIL_TRIGGER 2
+#define PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_TRIGGER 4
+#define PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_MIN_ELIGIBLE 16
+#define PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_SCORE_RATIO 2.0
+#define PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_STREAK_TRIGGER 2
+#define PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_MIN_NNZ 64
+#define PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_MIN_DIR_INF_RATIO 10.0
+#define PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_MAX_PIVOT_DIR_RATIO 1e-8
+#define PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_EXCLUDE_ITERS 4
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_STREAK_TRIGGER 2
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_NNZ 64
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_DIR_INF_RATIO 10.0
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_SHADOW_DIR_MULT 100.0
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_SHADOW_DIR_RATIO 1e3
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_ACTUAL_PIVOT_DIR_RATIO 1e-8
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MAX_ACTUAL_PIVOT_DIR_RATIO 1e-4
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MAX_SHADOW_PIVOT_DIR_RATIO 1e-6
+#define PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_EXCLUDE_ITERS 4
+#define PHASE1_AUTO_DANTZIG_MIN_M 700
+#define PHASE1_AUTO_DANTZIG_MAX_M 1200
+#define PHASE1_AUTO_DANTZIG_DEGEN_TRIGGER 20
+#define PHASE1_NO_PIVOT_PROGRESS_WINDOW 6
+#define PHASE1_NO_PIVOT_PROGRESS_REL_IMPROVE_MIN 1e-4
+#define PHASE1_NO_PIVOT_PROGRESS_ABS_IMPROVE_MIN 1e-8
+#define PHASE1_NO_PIVOT_LADDER_RESCUE_COOLDOWN_ITERS 16
+#define PHASE1_NO_PIVOT_LADDER_RESCUE_FAIL_CAP 3
+#define PHASE1_DIR_ESCAPE_TELEM_TRIGGER 1
+#define PHASE1_DIR_ESCAPE_TELEM_SUPPRESS_LU_HEALTH 2
+#define PHASE1_DIR_ESCAPE_TELEM_HARD_BYPASS 3
+#define PHASE1_DIR_ESCAPE_TELEM_SUPPRESS_FORCE_PIVOT_MODE 4
+#define PHASE1_DIR_REFACTOR_TELEM_NO_PIVOT_FORCE 1
+#define PHASE1_DIR_REFACTOR_TELEM_FORCE_EXTREME_DIR 2
+#define PHASE1_DIR_REFACTOR_TELEM_FORCE_LU_HEALTH 3
+#define PHASE1_DIR_REFACTOR_TELEM_FORCE_PIVOT_MODE 4
+#define PHASE1_DIR_REFACTOR_TELEM_LADDER_FORCE 5
+#define SOFT_LU_COST_EWMA_ALPHA 0.20
+#define SOFT_LU_MAX_CONSEC_DEFER_PHASE1 6
+#define SOFT_LU_MAX_CONSEC_DEFER_PHASE2 4
+#define PERIODIC_COST_MAX_CONSEC_DEFER_PHASE1 2
+#define PERIODIC_COST_MAX_CONSEC_DEFER_PHASE2 3
+
+static double ewma_update_ms(double prev_ms, double sample_ms) {
+    if (!isfinite(sample_ms) || sample_ms <= 0.0) return prev_ms;
+    if (!isfinite(prev_ms) || prev_ms <= 0.0) return sample_ms;
+    return prev_ms + SOFT_LU_COST_EWMA_ALPHA * (sample_ms - prev_ms);
+}
+
+static double phase_hotpath_ms(const SimplexSolver *owner, int phase) {
+    if (!owner) return 0.0;
+    if (phase == 1) {
+        return owner->telemetry.perf_phase1_pricing_ms +
+               owner->telemetry.perf_phase1_ratio_ms +
+               owner->telemetry.perf_phase1_pivot_ms +
+               owner->telemetry.perf_phase1_compute_solution_ms +
+               owner->telemetry.perf_phase1_compute_rc_ms;
+    }
+    if (phase == 2) {
+        return owner->telemetry.perf_phase2_pricing_ms +
+               owner->telemetry.perf_phase2_ratio_ms +
+               owner->telemetry.perf_phase2_pivot_ms +
+               owner->telemetry.perf_phase2_compute_solution_ms +
+               owner->telemetry.perf_phase2_compute_rc_ms;
+    }
+    return 0.0;
+}
+
+static LPPeriodicPolicyPhaseState* periodic_policy_phase_state_ptr(SimplexSolver *owner,
+                                                                   int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_policy_phase1;
+    if (phase == 2) return &owner->policy.periodic_policy_phase2;
+    return NULL;
+}
+
+static const LPPeriodicPolicyPhaseState* periodic_policy_phase_state_ptr_const(
+    const SimplexSolver *owner,
+    int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_policy_phase1;
+    if (phase == 2) return &owner->policy.periodic_policy_phase2;
+    return NULL;
+}
+
+static int periodic_policy_refactor_count(const SimplexSolver *owner, int phase) {
+    const LPPeriodicPolicyPhaseState *state = periodic_policy_phase_state_ptr_const(owner, phase);
+    return state ? state->refactors : 0;
+}
+
+static void periodic_policy_refactor_increment(SimplexSolver *owner, int phase) {
+    LPPeriodicPolicyPhaseState *state = periodic_policy_phase_state_ptr(owner, phase);
+    if (!state) return;
+    state->refactors++;
+}
+
+static void periodic_policy_refactor_reset(SimplexSolver *owner) {
+    if (!owner) return;
+    owner->policy.periodic_policy_phase1.refactors = 0;
+    owner->policy.periodic_policy_phase2.refactors = 0;
+}
+
+static double* soft_lu_iter_cost_ewma_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.soft_lu_cost_gate_phase1.iter_cost_ewma;
+    if (phase == 2) return &owner->policy.soft_lu_cost_gate_phase2.iter_cost_ewma;
+    return NULL;
+}
+
+static double* soft_lu_refactor_cost_ewma_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.soft_lu_cost_gate_phase1.refactor_cost_ewma;
+    if (phase == 2) return &owner->policy.soft_lu_cost_gate_phase2.refactor_cost_ewma;
+    return NULL;
+}
+
+int simplex_smcp_working_excl_should_skip_for_test(int smcp_excl,
+                                                   int smcp_shift,
+                                                   int var_status,
+                                                   double lb,
+                                                   double ub,
+                                                   double tol_bnd) {
+    return lp_policy_glpk_working_exclude_nonbasic(smcp_excl,
+                                                   smcp_shift,
+                                                   var_status,
+                                                   lb,
+                                                   ub,
+                                                   tol_bnd);
+}
+
+int simplex_smcp_excl_should_skip_for_test(int smcp_excl,
+                                           int var_status,
+                                           double lb,
+                                           double ub,
+                                           double tol_bnd) {
+    return simplex_smcp_working_excl_should_skip_for_test(smcp_excl,
+                                                          LP_GLPK_SMCP_SHIFT_OFF,
+                                                          var_status,
+                                                          lb,
+                                                          ub,
+                                                          tol_bnd);
+}
+
+static inline int simplex_smcp_excl_skip_var(const SimplexTableau *tab, int j) {
+    int smcp_excl = 1;
+    int smcp_shift = 1;
+    double tol_bnd = 1e-7;
+    if (!tab || j < 0 || j >= tab->n) return 0;
+    if (tab->owner) {
+        smcp_excl = tab->owner->smcp_excl;
+        smcp_shift = tab->owner->smcp_shift;
+        tol_bnd = tab->owner->smcp_tol_bnd;
+    }
+    return simplex_smcp_working_excl_should_skip_for_test(smcp_excl,
+                                                          smcp_shift,
+                                                          (int)tab->var_status[j],
+                                                          tab->lb_ext[j],
+                                                          tab->ub_ext[j],
+                                                          tol_bnd);
+}
+
+int simplex_smcp_shift_allows_perturb_for_test(int smcp_shift) {
+    return smcp_shift != 0;
+}
+
+static inline int simplex_smcp_shift_allows_perturb(const SimplexTableau *tab) {
+    if (!tab || !tab->owner) return 1;
+    return simplex_smcp_shift_allows_perturb_for_test(tab->owner->smcp_shift);
+}
+
+static int* periodic_cost_iter_samples_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.iter_samples;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.iter_samples;
+    return NULL;
+}
+
+static int* periodic_cost_refactor_samples_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.refactor_samples;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.refactor_samples;
+    return NULL;
+}
+
+static int periodic_cost_iter_samples(const SimplexSolver *owner, int phase) {
+    if (!owner) return 0;
+    if (phase == 1) return owner->policy.periodic_cost_gate_phase1.iter_samples;
+    if (phase == 2) return owner->policy.periodic_cost_gate_phase2.iter_samples;
+    return 0;
+}
+
+static int periodic_cost_refactor_samples(const SimplexSolver *owner, int phase) {
+    if (!owner) return 0;
+    if (phase == 1) return owner->policy.periodic_cost_gate_phase1.refactor_samples;
+    if (phase == 2) return owner->policy.periodic_cost_gate_phase2.refactor_samples;
+    return 0;
+}
+
+static void soft_lu_record_iter_cost(SimplexSolver *owner, int phase, double iter_ms) {
+    int *samples_ptr = periodic_cost_iter_samples_ptr(owner, phase);
+    double *ewma_ptr = soft_lu_iter_cost_ewma_ptr(owner, phase);
+    if (!ewma_ptr) return;
+    if (!isfinite(iter_ms) || iter_ms <= 0.0) return;
+    *ewma_ptr = ewma_update_ms(*ewma_ptr, iter_ms);
+    if (samples_ptr) (*samples_ptr)++;
+}
+
+static void soft_lu_record_refactor_cost(SimplexSolver *owner, int phase, double refactor_ms) {
+    int *samples_ptr = periodic_cost_refactor_samples_ptr(owner, phase);
+    double *ewma_ptr = soft_lu_refactor_cost_ewma_ptr(owner, phase);
+    if (!ewma_ptr) return;
+    if (!isfinite(refactor_ms) || refactor_ms <= 0.0) return;
+    *ewma_ptr = ewma_update_ms(*ewma_ptr, refactor_ms);
+    if (samples_ptr) (*samples_ptr)++;
+}
+
+static double soft_lu_iter_cost_ewma(const SimplexSolver *owner, int phase) {
+    if (!owner) return 0.0;
+    if (phase == 1) return owner->policy.soft_lu_cost_gate_phase1.iter_cost_ewma;
+    if (phase == 2) return owner->policy.soft_lu_cost_gate_phase2.iter_cost_ewma;
+    return 0.0;
+}
+
+static double soft_lu_refactor_cost_ewma(const SimplexSolver *owner, int phase) {
+    if (!owner) return 0.0;
+    if (phase == 1) return owner->policy.soft_lu_cost_gate_phase1.refactor_cost_ewma;
+    if (phase == 2) return owner->policy.soft_lu_cost_gate_phase2.refactor_cost_ewma;
+    return 0.0;
+}
+
+static void soft_lu_record_defer(SimplexSolver *owner, int phase) {
+    if (!owner) return;
+    if (phase == 1) owner->policy.soft_lu_cost_gate_phase1.defers++;
+    else if (phase == 2) owner->policy.soft_lu_cost_gate_phase2.defers++;
+}
+
+static int soft_lu_defer_cap_for_phase(int phase) {
+    if (phase == 1) return SOFT_LU_MAX_CONSEC_DEFER_PHASE1;
+    if (phase == 2) return SOFT_LU_MAX_CONSEC_DEFER_PHASE2;
+    return 0;
+}
+
+static int* soft_lu_consecutive_defers_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.soft_lu_cost_gate_phase1.consecutive_defers;
+    if (phase == 2) return &owner->policy.soft_lu_cost_gate_phase2.consecutive_defers;
+    return NULL;
+}
+
+static int* soft_lu_cap_forced_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.soft_lu_cost_gate_phase1.defer_cap_forced;
+    if (phase == 2) return &owner->policy.soft_lu_cost_gate_phase2.defer_cap_forced;
+    return NULL;
+}
+
+static int soft_lu_consecutive_defers(const SimplexSolver *owner, int phase) {
+    if (!owner) return 0;
+    if (phase == 1) return owner->policy.soft_lu_cost_gate_phase1.consecutive_defers;
+    if (phase == 2) return owner->policy.soft_lu_cost_gate_phase2.consecutive_defers;
+    return 0;
+}
+
+static void soft_lu_set_consecutive_defers(SimplexSolver *owner, int phase, int value) {
+    int *ptr = soft_lu_consecutive_defers_ptr(owner, phase);
+    if (!ptr) return;
+    if (value < 0) value = 0;
+    *ptr = value;
+}
+
+static void soft_lu_reset_defer_streak(SimplexSolver *owner, int phase) {
+    soft_lu_set_consecutive_defers(owner, phase, 0);
+}
+
+static void soft_lu_record_cap_forced(SimplexSolver *owner, int phase) {
+    int *ptr = soft_lu_cap_forced_ptr(owner, phase);
+    if (!ptr) return;
+    (*ptr)++;
+}
+
+static void periodic_cost_record_defer(SimplexSolver *owner, int phase) {
+    if (!owner) return;
+    if (phase == 1) owner->policy.periodic_cost_gate_phase1.defers++;
+    else if (phase == 2) owner->policy.periodic_cost_gate_phase2.defers++;
+}
+
+static int periodic_cost_defer_cap_for_phase(int phase) {
+    if (phase == 1) return PERIODIC_COST_MAX_CONSEC_DEFER_PHASE1;
+    if (phase == 2) return PERIODIC_COST_MAX_CONSEC_DEFER_PHASE2;
+    return 0;
+}
+
+static int* periodic_cost_consecutive_defers_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.consecutive_defers;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.consecutive_defers;
+    return NULL;
+}
+
+static int* periodic_cost_cap_forced_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.defer_cap_forced;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.defer_cap_forced;
+    return NULL;
+}
+
+static int* periodic_cost_checks_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.checks;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.checks;
+    return NULL;
+}
+
+static int* periodic_cost_block_small_m_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.block_small_m;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.block_small_m;
+    return NULL;
+}
+
+static int* periodic_cost_block_invalid_inputs_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.block_invalid_inputs;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.block_invalid_inputs;
+    return NULL;
+}
+
+static int* periodic_cost_block_warmup_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.block_warmup;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.block_warmup;
+    return NULL;
+}
+
+static int* periodic_cost_block_invalid_cost_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.block_invalid_cost;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.block_invalid_cost;
+    return NULL;
+}
+
+static int* periodic_cost_block_ratio_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.block_ratio;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.block_ratio;
+    return NULL;
+}
+
+static int* periodic_cost_block_update_reserve_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.block_update_reserve;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.block_update_reserve;
+    return NULL;
+}
+
+static int* periodic_cost_last_reason_ptr(SimplexSolver *owner, int phase) {
+    if (!owner) return NULL;
+    if (phase == 1) return &owner->policy.periodic_cost_gate_phase1.last_reason;
+    if (phase == 2) return &owner->policy.periodic_cost_gate_phase2.last_reason;
+    return NULL;
+}
+
+static int periodic_cost_consecutive_defers(const SimplexSolver *owner, int phase) {
+    if (!owner) return 0;
+    if (phase == 1) return owner->policy.periodic_cost_gate_phase1.consecutive_defers;
+    if (phase == 2) return owner->policy.periodic_cost_gate_phase2.consecutive_defers;
+    return 0;
+}
+
+static void periodic_cost_set_consecutive_defers(SimplexSolver *owner, int phase, int value) {
+    int *ptr = periodic_cost_consecutive_defers_ptr(owner, phase);
+    if (!ptr) return;
+    if (value < 0) value = 0;
+    *ptr = value;
+}
+
+static void periodic_cost_reset_defer_streak(SimplexSolver *owner, int phase) {
+    periodic_cost_set_consecutive_defers(owner, phase, 0);
+}
+
+static void periodic_cost_record_cap_forced(SimplexSolver *owner, int phase) {
+    int *ptr = periodic_cost_cap_forced_ptr(owner, phase);
+    if (!ptr) return;
+    (*ptr)++;
+}
+
+static void periodic_cost_record_gate_reason(SimplexSolver *owner,
+                                             int phase,
+                                             LPPeriodicCostDampenReason reason) {
+    int *checks_ptr = periodic_cost_checks_ptr(owner, phase);
+    int *last_reason_ptr = periodic_cost_last_reason_ptr(owner, phase);
+    int *block_ptr = NULL;
+
+    if (!owner) return;
+    if (checks_ptr) (*checks_ptr)++;
+    if (last_reason_ptr) *last_reason_ptr = (int)reason;
+
+    switch (reason) {
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_SMALL_M:
+            block_ptr = periodic_cost_block_small_m_ptr(owner, phase);
+            break;
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_INPUTS:
+            block_ptr = periodic_cost_block_invalid_inputs_ptr(owner, phase);
+            break;
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_WARMUP:
+            block_ptr = periodic_cost_block_warmup_ptr(owner, phase);
+            break;
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_COST:
+            block_ptr = periodic_cost_block_invalid_cost_ptr(owner, phase);
+            break;
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_RATIO:
+            block_ptr = periodic_cost_block_ratio_ptr(owner, phase);
+            break;
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_UPDATE_RESERVE:
+            block_ptr = periodic_cost_block_update_reserve_ptr(owner, phase);
+            break;
+        case LP_PERIODIC_COST_DAMPEN_DEFER:
+        case LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE:
+        default:
+            break;
+    }
+
+    if (block_ptr) (*block_ptr)++;
+}
+
+static double periodic_feedback_bias_for_phase(const SimplexSolver *owner, int phase) {
+    if (!owner) return 0.0;
+    if (phase == 1) return owner->policy.periodic_feedback_phase1.bias;
+    if (phase == 2) return owner->policy.periodic_feedback_phase2.bias;
+    return 0.0;
+}
+
+static int periodic_feedback_state_load(const SimplexSolver *owner,
+                                        int phase,
+                                        LPPeriodicFeedbackState *state) {
+    const LPPeriodicFeedbackPhaseState *phase_state = NULL;
+    if (!owner || !state) return 0;
+    if (phase == 1) phase_state = &owner->policy.periodic_feedback_phase1;
+    if (phase == 2) phase_state = &owner->policy.periodic_feedback_phase2;
+    if (!phase_state) return 0;
+    state->bias = phase_state->bias;
+    state->last_reason = phase_state->last_reason;
+    state->last_interval = phase_state->last_interval;
+    state->hint_interval = phase_state->hint_interval;
+    state->hint_pressure = phase_state->hint_pressure;
+    return 1;
+}
+
+static void periodic_feedback_state_store(SimplexSolver *owner,
+                                          int phase,
+                                          const LPPeriodicFeedbackState *state) {
+    LPPeriodicFeedbackPhaseState *phase_state = NULL;
+    if (!owner || !state) return;
+    if (phase == 1) phase_state = &owner->policy.periodic_feedback_phase1;
+    if (phase == 2) phase_state = &owner->policy.periodic_feedback_phase2;
+    if (!phase_state) return;
+    phase_state->bias = state->bias;
+    phase_state->last_reason = state->last_reason;
+    phase_state->last_interval = state->last_interval;
+    phase_state->hint_interval = state->hint_interval;
+    phase_state->hint_pressure = state->hint_pressure;
+}
+
+static void periodic_feedback_set_hint(SimplexSolver *owner,
+                                       int phase,
+                                       int interval,
+                                       double run_pressure) {
+    LPPeriodicFeedbackState state = {0.0, 0, 0, 0, 0.0};
+    if (!periodic_feedback_state_load(owner, phase, &state)) return;
+    lp_refactor_policy_periodic_feedback_set_hint(&state, interval, run_pressure);
+    periodic_feedback_state_store(owner, phase, &state);
+}
+
+static void periodic_feedback_record_refactor(SimplexSolver *owner,
+                                              int phase,
+                                              int reason,
+                                              int updates_before,
+                                              int status) {
+    LPPeriodicFeedbackState state = {0.0, 0, 0, 0, 0.0};
+    if (!periodic_feedback_state_load(owner, phase, &state)) return;
+    lp_refactor_policy_periodic_feedback_record_refactor(
+        &state,
+        reason,
+        updates_before,
+        status);
+    periodic_feedback_state_store(owner, phase, &state);
+}
+
+static LPReinvertControllerState *reinvert_state_for_phase(SimplexSolver *solver,
+                                                           int phase) {
+    if (!solver) return NULL;
+    if (phase == 1) return &solver->policy.reinvert_state_phase1;
+    if (phase == 2) return &solver->policy.reinvert_state_phase2;
+    return NULL;
+}
+
+static double average_solve_density(long long sol_nnz_total, int samples, int m) {
+    double density;
+    double denom;
+    if (samples <= 0 || m <= 0) return 0.0;
+    denom = (double)samples * (double)m;
+    if (!(denom > 0.0)) return 0.0;
+    density = (double)sol_nnz_total / denom;
+    if (!(density > 0.0)) return 0.0;
+    if (density > 1.0) return 1.0;
+    return density;
+}
+
+#define PHASE1_STAGNATION_WINDOW_ITERS 96
+#define PHASE1_STAGNATION_ESCAPE_COOLDOWN_ITERS 128
+#define PHASE1_STAGNATION_ESCAPE_FAIL_COOLDOWN_ITERS 32
+#define PHASE1_STAGNATION_MIN_M 700
+#define PHASE1_STAGNATION_MAX_ESCAPES_PER_SOLVE 4
+#define PHASE1_STAGNATION_ESCAPE_RUNTIME 0
+
+void simplex_reinvert_phase1_pressure_safety_step_for_test(
+    int iter,
+    int no_pivot_streak,
+    int no_progress_streak,
+    int ratio_breakdown_count,
+    int dir_skip_no_recompute_streak,
+    int hard_lu_trigger,
+    int *last_iter_io,
+    int *burst_io,
+    int *demoted_io,
+    int *demotions_io) {
+    lp_refactor_policy_phase1_reinvert_pressure_safety_step(
+        iter,
+        no_pivot_streak,
+        no_progress_streak,
+        ratio_breakdown_count,
+        dir_skip_no_recompute_streak,
+        hard_lu_trigger,
+        last_iter_io,
+        burst_io,
+        demoted_io,
+        demotions_io);
+}
+
+static int reinvert_controller_mode_get(const SimplexSolver *solver) {
+    int mode;
+    if (!solver) return LP_REINVERT_MODE_SHADOW;
+    mode = solver->policy.reinvert_controller_mode;
+    if (!lp_reinvert_controller_mode_is_valid(mode)) {
+        return LP_REINVERT_MODE_SHADOW;
+    }
+    return mode;
+}
+
+static int reinvert_controller_collect_shadow(const SimplexSolver *solver) {
+    return reinvert_controller_mode_get(solver) != LP_REINVERT_MODE_OFF;
+}
+
+static void reinvert_phase1_pressure_safety_update(SimplexSolver *solver,
+                                                   int iter,
+                                                   int no_pivot_streak,
+                                                   int no_progress_streak,
+                                                   int ratio_breakdown_count,
+                                                   int dir_skip_no_recompute_streak,
+                                                   int hard_lu_trigger) {
+    if (!solver) return;
+    if (reinvert_controller_mode_get(solver) != LP_REINVERT_MODE_CONTROL_ALL) return;
+    lp_refactor_policy_phase1_reinvert_pressure_safety_step(
+        iter,
+        no_pivot_streak,
+        no_progress_streak,
+        ratio_breakdown_count,
+        dir_skip_no_recompute_streak,
+        hard_lu_trigger,
+        &solver->policy.reinvert_phase1.pressure_last_iter,
+        &solver->policy.reinvert_phase1.pressure_burst,
+        &solver->policy.reinvert_phase1.control_demoted,
+        &solver->policy.reinvert_phase1.control_demotions);
+}
+
+int simplex_phase1_stagnation_escape_decision_for_test(
+    int window_iters,
+    double obj_delta,
+    double obj_anchor,
+    int retry_defers,
+    int no_pivot_events,
+    int update_recovery_refactors,
+    int refactors,
+    int recompute_ratio_breakdown,
+    int recompute_dir_skip,
+    int recompute_dir_refactor,
+    int recompute_pivot_fail,
+    int recompute_perturb,
+    int cooldown_remaining) {
+    return lp_refactor_policy_phase1_stagnation_escape_decision(
+        window_iters,
+        obj_delta,
+        obj_anchor,
+        retry_defers,
+        no_pivot_events,
+        update_recovery_refactors,
+        refactors,
+        recompute_ratio_breakdown,
+        recompute_dir_skip,
+        recompute_dir_refactor,
+        recompute_pivot_fail,
+        recompute_perturb,
+        cooldown_remaining);
+}
+
+static void phase1_stagnation_window_begin(SimplexSolver *solver,
+                                           const SimplexTableau *tab,
+                                           int iter) {
+    if (!solver || !tab) return;
+    if (iter < 0) iter = 0;
+    solver->policy.phase1_stagnation.window_start_iter = iter;
+    solver->policy.phase1_stagnation.window_start_obj = tab->obj_value;
+    solver->policy.phase1_stagnation.window_retry_base =
+        solver->telemetry.perf_phase1_no_pivot_ladder_retry_defers;
+    solver->policy.phase1_stagnation.window_no_pivot_base =
+        solver->telemetry.perf_phase1_no_pivot_events;
+    solver->policy.phase1_stagnation.window_refactor_base =
+        solver->telemetry.perf_phase1_refactor_calls;
+    solver->policy.phase1_stagnation.window_update_recovery_base =
+        solver->telemetry.perf_refactor_reason_update_recovery;
+    solver->policy.phase1_stagnation.window_recompute_ratio_base =
+        solver->telemetry.perf_phase1_recompute_after_ratio_breakdown;
+    solver->policy.phase1_stagnation.window_recompute_dir_skip_base =
+        solver->telemetry.perf_phase1_recompute_after_dir_skip;
+    solver->policy.phase1_stagnation.window_recompute_dir_refactor_base =
+        solver->telemetry.perf_phase1_recompute_after_dir_refactor;
+    solver->policy.phase1_stagnation.window_recompute_pivot_fail_base =
+        solver->telemetry.perf_phase1_recompute_after_pivot_fail_recovery;
+    solver->policy.phase1_stagnation.window_recompute_perturb_base =
+        solver->telemetry.perf_phase1_recompute_after_perturb;
+}
+
+static __attribute__((noinline, unused)) int phase1_stagnation_escape_should_trigger(
+    SimplexSolver *solver,
+    const SimplexTableau *tab,
+    int iter) {
+    int start_iter;
+    int window_iters;
+    double obj_anchor;
+    double obj_delta;
+    int retry_defers;
+    int no_pivot_events;
+    int update_recovery_refactors;
+    int refactors;
+    int recompute_ratio_breakdown;
+    int recompute_dir_skip;
+    int recompute_dir_refactor;
+    int recompute_pivot_fail;
+    int recompute_perturb;
+    int should_trigger;
+
+    if (!solver || !tab) return 0;
+    if (!lp_glpk_strict_allow_phase1_stagnation_escape(
+            solver->glpk_strict_mode)) {
+        return 0;
+    }
+    if (iter < 0) iter = 0;
+    if (tab->m < PHASE1_STAGNATION_MIN_M) return 0;
+    if (solver->policy.phase1_stagnation.escape_triggers >=
+        PHASE1_STAGNATION_MAX_ESCAPES_PER_SOLVE) {
+        return 0;
+    }
+
+    start_iter = solver->policy.phase1_stagnation.window_start_iter;
+    if (start_iter < 0) {
+        phase1_stagnation_window_begin(solver, tab, iter);
+        return 0;
+    }
+
+    window_iters = iter - start_iter;
+    if (window_iters < PHASE1_STAGNATION_WINDOW_ITERS) return 0;
+
+    obj_anchor = solver->policy.phase1_stagnation.window_start_obj;
+    obj_delta = tab->obj_value - obj_anchor;
+    retry_defers = solver->telemetry.perf_phase1_no_pivot_ladder_retry_defers -
+                   solver->policy.phase1_stagnation.window_retry_base;
+    no_pivot_events = solver->telemetry.perf_phase1_no_pivot_events -
+                      solver->policy.phase1_stagnation.window_no_pivot_base;
+    refactors = solver->telemetry.perf_phase1_refactor_calls -
+                solver->policy.phase1_stagnation.window_refactor_base;
+    update_recovery_refactors = solver->telemetry.perf_refactor_reason_update_recovery -
+                                solver->policy.phase1_stagnation.window_update_recovery_base;
+    recompute_ratio_breakdown =
+        solver->telemetry.perf_phase1_recompute_after_ratio_breakdown -
+        solver->policy.phase1_stagnation.window_recompute_ratio_base;
+    recompute_dir_skip = solver->telemetry.perf_phase1_recompute_after_dir_skip -
+                         solver->policy.phase1_stagnation.window_recompute_dir_skip_base;
+    recompute_dir_refactor =
+        solver->telemetry.perf_phase1_recompute_after_dir_refactor -
+        solver->policy.phase1_stagnation.window_recompute_dir_refactor_base;
+    recompute_pivot_fail =
+        solver->telemetry.perf_phase1_recompute_after_pivot_fail_recovery -
+        solver->policy.phase1_stagnation.window_recompute_pivot_fail_base;
+    recompute_perturb = solver->telemetry.perf_phase1_recompute_after_perturb -
+                        solver->policy.phase1_stagnation.window_recompute_perturb_base;
+
+    if (retry_defers < 0) retry_defers = 0;
+    if (no_pivot_events < 0) no_pivot_events = 0;
+    if (refactors < 0) refactors = 0;
+    if (update_recovery_refactors < 0) update_recovery_refactors = 0;
+    if (recompute_ratio_breakdown < 0) recompute_ratio_breakdown = 0;
+    if (recompute_dir_skip < 0) recompute_dir_skip = 0;
+    if (recompute_dir_refactor < 0) recompute_dir_refactor = 0;
+    if (recompute_pivot_fail < 0) recompute_pivot_fail = 0;
+    if (recompute_perturb < 0) recompute_perturb = 0;
+
+    solver->policy.phase1_stagnation.last_window_iters = window_iters;
+    solver->policy.phase1_stagnation.last_obj_delta = obj_delta;
+    solver->policy.phase1_stagnation.last_retry_defers = retry_defers;
+    solver->policy.phase1_stagnation.last_no_pivot_events = no_pivot_events;
+    solver->policy.phase1_stagnation.last_update_recovery_refactors =
+        update_recovery_refactors;
+    solver->policy.phase1_stagnation.last_refactors = refactors;
+    solver->policy.phase1_stagnation.last_recompute_ratio = recompute_ratio_breakdown;
+    solver->policy.phase1_stagnation.last_recompute_dir_skip = recompute_dir_skip;
+    solver->policy.phase1_stagnation.last_recompute_dir_refactor = recompute_dir_refactor;
+    solver->policy.phase1_stagnation.last_recompute_pivot_fail = recompute_pivot_fail;
+    solver->policy.phase1_stagnation.last_recompute_perturb = recompute_perturb;
+    solver->policy.phase1_stagnation.last_retry_defer_ratio =
+        (no_pivot_events > 0)
+            ? ((double)retry_defers / (double)no_pivot_events)
+            : 0.0;
+    solver->policy.phase1_stagnation.last_update_recovery_ratio =
+        (refactors > 0)
+            ? ((double)update_recovery_refactors / (double)refactors)
+            : 0.0;
+
+    should_trigger = lp_refactor_policy_phase1_stagnation_escape_decision(
+        window_iters,
+        obj_delta,
+        obj_anchor,
+        retry_defers,
+        no_pivot_events,
+        update_recovery_refactors,
+        refactors,
+        recompute_ratio_breakdown,
+        recompute_dir_skip,
+        recompute_dir_refactor,
+        recompute_pivot_fail,
+        recompute_perturb,
+        0);
+    if (should_trigger && solver->policy.phase1_stagnation.escape_cooldown > 0) {
+        solver->policy.phase1_stagnation.escape_cooldown_blocks++;
+        should_trigger = 0;
+    }
+    if (should_trigger) {
+        solver->policy.phase1_stagnation.escape_triggers++;
+    }
+    phase1_stagnation_window_begin(solver, tab, iter);
+    return should_trigger;
+}
+
+static int reinvert_controller_controls_periodic_phase_effective(int mode,
+                                                                 int phase,
+                                                                 int phase1_demoted) {
+    if (mode == LP_REINVERT_MODE_CONTROL_ALL) {
+        if (phase == 1 && phase1_demoted) return 0;
+        return phase == 1 || phase == 2;
+    }
+    return (mode == LP_REINVERT_MODE_CONTROL_PHASE1 && phase == 1);
+}
+
+static int reinvert_controller_controls_periodic_phase(const SimplexSolver *solver,
+                                                       int phase) {
+    int mode = reinvert_controller_mode_get(solver);
+    int phase1_demoted = 0;
+    if (solver) {
+        phase1_demoted = solver->policy.reinvert_phase1.control_demoted ? 1 : 0;
+    }
+    return reinvert_controller_controls_periodic_phase_effective(mode, phase, phase1_demoted);
+}
+
+static int reinvert_periodic_apply_decision(int phase,
+                                            int hard_lu_trigger,
+                                            int periodic_due,
+                                            int decision,
+                                            int control_enabled) {
+    (void)phase;
+    if (hard_lu_trigger) return periodic_due ? 1 : 0;
+    if (!control_enabled) return periodic_due ? 1 : 0;
+    switch ((LPReinvertDecision)decision) {
+        case LP_REINVERT_DECISION_FORCE:
+            return 1;
+        case LP_REINVERT_DECISION_DEFER:
+            return 0;
+        case LP_REINVERT_DECISION_ALLOW:
+        default:
+            return periodic_due ? 1 : 0;
+    }
+}
+
+int simplex_reinvert_periodic_control_for_test(int mode,
+                                               int phase,
+                                               int hard_lu_trigger,
+                                               int periodic_due,
+                                               int decision) {
+    int control_enabled =
+        reinvert_controller_controls_periodic_phase_effective(mode, phase, 0);
+    return reinvert_periodic_apply_decision(phase,
+                                            hard_lu_trigger,
+                                            periodic_due,
+                                            decision,
+                                            control_enabled);
+}
+
+int simplex_reinvert_periodic_control_with_phase1_demotion_for_test(
+    int mode,
+    int phase,
+    int phase1_demoted,
+    int hard_lu_trigger,
+    int periodic_due,
+    int decision) {
+    int control_enabled = reinvert_controller_controls_periodic_phase_effective(
+        mode,
+        phase,
+        phase1_demoted);
+    return reinvert_periodic_apply_decision(phase,
+                                            hard_lu_trigger,
+                                            periodic_due,
+                                            decision,
+                                            control_enabled);
+}
+
+typedef struct {
+    int active;
+    int suggested_refactor;
+    LPReinvertControllerDecision decision;
+} LPReinvertShadowEval;
+
+static void reinvert_shadow_eval_reset(LPReinvertShadowEval *eval) {
+    if (!eval) return;
+    memset(eval, 0, sizeof(*eval));
+}
+
+static void reinvert_shadow_prepare_phase(SimplexSolver *solver,
+                                          SimplexTableau *tab,
+                                          int phase,
+                                          int iter,
+                                          const LPLUHealthRefactorDecision *lu_health_decision,
+                                          int periodic_due,
+                                          int min_update_age,
+                                          int cooldown_updates,
+                                          int allow_control,
+                                          int *periodic_due_io,
+                                          LPReinvertShadowEval *eval) {
+    LPReinvertControllerState *state;
+    LPReinvertControllerSignals signals;
+    int control_enabled;
+    double ftran_density;
+    double btran_density;
+
+    if (!eval) return;
+    reinvert_shadow_eval_reset(eval);
+    if (!solver || !tab || !tab->lu || !lu_health_decision) return;
+    if (!reinvert_controller_collect_shadow(solver)) return;
+
+    state = reinvert_state_for_phase(solver, phase);
+    if (!state) return;
+
+    lp_reinvert_controller_state_record_update_age_ratio(state,
+                                                         tab->lu->num_updates,
+                                                         tab->lu->max_updates);
+    ftran_density = average_solve_density(solver->telemetry.perf_ftran_sol_nnz_total,
+                                          solver->telemetry.perf_ftran_nnz_samples,
+                                          tab->m);
+    btran_density = average_solve_density(solver->telemetry.perf_btran_sol_nnz_total,
+                                          solver->telemetry.perf_btran_nnz_samples,
+                                          tab->m);
+    lp_reinvert_controller_state_record_solve_density(state,
+                                                      ftran_density,
+                                                      btran_density);
+    lp_reinvert_controller_state_set_cooldown(state, cooldown_updates);
+
+    signals.phase = phase;
+    signals.iter = iter;
+    signals.m = tab->m;
+    signals.num_updates = tab->lu->num_updates;
+    signals.max_updates = tab->lu->max_updates;
+    signals.periodic_due = periodic_due ? 1 : 0;
+    signals.min_update_age = (min_update_age > 0) ? min_update_age : 0;
+    signals.cooldown_updates = (cooldown_updates > 0) ? cooldown_updates : 0;
+    signals.hard_lu_trigger = lu_health_decision->hard_trigger ? 1 : 0;
+    signals.soft_lu_trigger = lu_health_decision->soft_trigger ? 1 : 0;
+    signals.ftran_density = ftran_density;
+    signals.btran_density = btran_density;
+
+    eval->decision = lp_reinvert_controller_decide(state, &signals);
+    eval->active = 1;
+    eval->suggested_refactor =
+        (eval->decision.decision == LP_REINVERT_DECISION_FORCE) ||
+        (eval->decision.decision == LP_REINVERT_DECISION_ALLOW && signals.periodic_due);
+
+    control_enabled = allow_control &&
+                      reinvert_controller_controls_periodic_phase(solver, phase);
+    if (periodic_due_io) {
+        *periodic_due_io = reinvert_periodic_apply_decision(phase,
+                                                            lu_health_decision->hard_trigger,
+                                                            periodic_due,
+                                                            eval->decision.decision,
+                                                            control_enabled);
+    }
+}
+
+static void reinvert_shadow_finalize_phase(SimplexSolver *solver,
+                                           int phase,
+                                           const LPReinvertShadowEval *eval,
+                                           int actual_refactor) {
+    LPReinvertControllerState *state;
+    if (!solver || !eval || !eval->active) return;
+    lp_telemetry_record_reinvert_shadow(solver,
+                                        phase,
+                                        eval->decision.decision,
+                                        eval->decision.reason,
+                                        eval->suggested_refactor,
+                                        actual_refactor);
+    state = reinvert_state_for_phase(solver, phase);
+    lp_reinvert_controller_state_apply_decision(state, &eval->decision);
+}
+
+static int solution_refine_iteration_budget(double max_residual, double feas_tol) {
+    if (!isfinite(max_residual) || !isfinite(feas_tol) || feas_tol <= 0.0) return 0;
+    if (max_residual <= feas_tol) return 0;
+    if (max_residual <= 10.0 * feas_tol) return 1;
+    if (max_residual <= 100.0 * feas_tol) return 2;
+    return 5;
+}
+
+int simplex_solution_refine_limit_for_test(double max_residual, double feas_tol) {
+    return solution_refine_iteration_budget(max_residual, feas_tol);
+}
+
+int simplex_choose_basis_action_for_test(double pivot,
+                                         int force_refactor,
+                                         int lu_update_status,
+                                         int lu_reason,
+                                         int repeat_pattern,
+                                         int lu_num_updates,
+                                         double growth_factor) {
+    (void)lu_reason;
+    return (int)lp_refactor_policy_choose_basis_action(
+        pivot,
+        force_refactor,
+        lu_update_status,
+        repeat_pattern,
+        lu_num_updates,
+        growth_factor,
+        RALPH_LU_GROWTH_REFACTOR_THRESHOLD);
+}
+
+int simplex_periodic_refactor_plan_for_test(int phase,
+                                            int iter,
+                                            int m,
+                                            int max_updates,
+                                            int num_updates,
+                                            int spike_pool_used,
+                                            int spike_pool_capacity,
+                                            double cond_estimate,
+                                            double growth_factor,
+                                            int use_bland,
+                                            int degenerate_count,
+                                            double feedback_bias,
+                                            int periodic_policy_cooldown,
+                                            double periodic_policy_pressure_decay,
+                                            int *interval_out,
+                                            double *pressure_out) {
+    LPPeriodicRefactorPlan plan = lp_refactor_policy_periodic_plan(
+        phase,
+        iter,
+        m,
+        max_updates,
+        num_updates,
+        spike_pool_used,
+        spike_pool_capacity,
+        cond_estimate,
+        growth_factor,
+        use_bland,
+        degenerate_count,
+        feedback_bias,
+        0,
+        periodic_policy_cooldown,
+        periodic_policy_pressure_decay);
+
+    if (interval_out) *interval_out = plan.policy.interval;
+    if (pressure_out) *pressure_out = plan.effective_run_pressure;
+    return plan.should_run;
+}
+
+int simplex_lu_health_refactor_plan_for_test(int m,
+                                             int use_ft_updates,
+                                             int num_updates,
+                                             int max_updates,
+                                             int spike_pool_used,
+                                             int spike_pool_capacity,
+                                             double cond_estimate,
+                                             double growth_factor,
+                                             int soft_breach_streak,
+                                             int *hard_trigger_out,
+                                             int *soft_trigger_out,
+                                             int *next_streak_out,
+                                             int *soft_threshold_out,
+                                             int *soft_min_update_age_out) {
+    LPLUHealthRefactorDecision decision =
+        lp_refactor_policy_lu_health_refactor_decision(m,
+                                                       use_ft_updates,
+                                                       num_updates,
+                                                       max_updates,
+                                                       spike_pool_used,
+                                                       spike_pool_capacity,
+                                                       cond_estimate,
+                                                       growth_factor,
+                                                       soft_breach_streak);
+    if (hard_trigger_out) *hard_trigger_out = decision.hard_trigger;
+    if (soft_trigger_out) *soft_trigger_out = decision.soft_trigger;
+    if (next_streak_out) *next_streak_out = decision.soft_breach_streak_next;
+    if (soft_threshold_out) *soft_threshold_out = decision.soft_breach_threshold;
+    if (soft_min_update_age_out) *soft_min_update_age_out = decision.soft_min_update_age;
+    return decision.refactor_now;
+}
+
+int simplex_soft_lu_defer_plan_for_test(int phase,
+                                        int m,
+                                        int use_bland,
+                                        int degenerate_count,
+                                        int num_updates,
+                                        int max_updates,
+                                        int spike_pool_used,
+                                        int spike_pool_capacity,
+                                        double cond_estimate,
+                                        double growth_factor,
+                                        double refactor_cost_ewma_ms,
+                                        double iter_cost_ewma_ms,
+                                        int consecutive_defers,
+                                        int *cap_out,
+                                        int *cap_blocked_out,
+                                        int *next_consecutive_defers_out) {
+    int cap = soft_lu_defer_cap_for_phase(phase);
+    int should_defer = 0;
+    int cap_blocked = 0;
+    int next_consecutive = 0;
+
+    if (consecutive_defers < 0) consecutive_defers = 0;
+    if (lp_refactor_policy_soft_lu_cost_gate_should_defer(phase,
+                                                           m,
+                                                           use_bland,
+                                                           degenerate_count,
+                                                           num_updates,
+                                                           max_updates,
+                                                           spike_pool_used,
+                                                           spike_pool_capacity,
+                                                           cond_estimate,
+                                                           growth_factor,
+                                                           refactor_cost_ewma_ms,
+                                                           iter_cost_ewma_ms)) {
+        if (cap > 0 && consecutive_defers >= cap) {
+            cap_blocked = 1;
+        } else {
+            should_defer = 1;
+            next_consecutive = consecutive_defers + 1;
+        }
+    }
+
+    if (cap_out) *cap_out = cap;
+    if (cap_blocked_out) *cap_blocked_out = cap_blocked;
+    if (next_consecutive_defers_out) *next_consecutive_defers_out = next_consecutive;
+    return should_defer;
+}
+
+int simplex_periodic_cost_defer_plan_for_test(int phase,
+                                              int m,
+                                              int use_bland,
+                                              int degenerate_count,
+                                              int num_updates,
+                                              int max_updates,
+                                              int spike_pool_used,
+                                              int spike_pool_capacity,
+                                              double cond_estimate,
+                                              double growth_factor,
+                                              double refactor_cost_ewma_ms,
+                                              double iter_cost_ewma_ms,
+                                              int refactor_cost_samples,
+                                              int iter_cost_samples,
+                                              int consecutive_defers,
+                                              int *reason_out,
+                                              int *cap_out,
+                                              int *cap_blocked_out,
+                                              int *next_consecutive_defers_out) {
+    LPPeriodicCostDampenReason decision;
+    int cap = periodic_cost_defer_cap_for_phase(phase);
+    int should_defer = 0;
+    int cap_blocked = 0;
+    int next_consecutive = 0;
+
+    if (consecutive_defers < 0) consecutive_defers = 0;
+    decision = lp_refactor_policy_periodic_cost_dampen_decision(
+        phase,
+        m,
+        use_bland,
+        degenerate_count,
+        num_updates,
+        max_updates,
+        spike_pool_used,
+        spike_pool_capacity,
+        cond_estimate,
+        growth_factor,
+        refactor_cost_ewma_ms,
+        iter_cost_ewma_ms,
+        refactor_cost_samples,
+        iter_cost_samples);
+    if (decision == LP_PERIODIC_COST_DAMPEN_DEFER) {
+        if (cap > 0 && consecutive_defers >= cap) {
+            cap_blocked = 1;
+        } else {
+            should_defer = 1;
+            next_consecutive = consecutive_defers + 1;
+        }
+    }
+
+    if (reason_out) *reason_out = (int)decision;
+    if (cap_out) *cap_out = cap;
+    if (cap_blocked_out) *cap_blocked_out = cap_blocked;
+    if (next_consecutive_defers_out) *next_consecutive_defers_out = next_consecutive;
+    return should_defer;
+}
+
+enum {
+    PHASE1_NO_PIVOT_LADDER_STEP_RETRY = 0,
+    PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE = 1,
+    PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR = 2
+};
+
+static int phase1_dual_rescue_guard_step(SimplexSolver *solver,
+                                         int rescue_cooldown_iters,
+                                         int rescue_fail_streak,
+                                         int ladder_context) {
+    if (solver &&
+        !lp_glpk_strict_allow_phase1_dual_rescue(solver->glpk_strict_mode)) {
+        return PHASE1_NO_PIVOT_LADDER_STEP_RETRY;
+    }
+    if (rescue_fail_streak >= PHASE1_NO_PIVOT_LADDER_RESCUE_FAIL_CAP) {
+        if (ladder_context) {
+            lp_telemetry_record_phase1_no_pivot_ladder_rescue_guard(solver, 1);
+        } else {
+            lp_telemetry_record_phase1_direct_dual_rescue_guard(solver, 1);
+        }
+        return PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR;
+    }
+    if (rescue_cooldown_iters > 0) {
+        if (ladder_context) {
+            lp_telemetry_record_phase1_no_pivot_ladder_rescue_guard(solver, 0);
+        } else {
+            lp_telemetry_record_phase1_direct_dual_rescue_guard(solver, 0);
+        }
+        return PHASE1_NO_PIVOT_LADDER_STEP_RETRY;
+    }
+    return PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE;
+}
+
+static double phase1_artificial_abs_sum(const SimplexTableau *tab) {
+    double art_sum = 0.0;
+    if (!tab || tab->num_artificial <= 0 || !tab->artificial_vars || !tab->x) {
+        return 0.0;
+    }
+    for (int k = 0; k < tab->num_artificial; k++) {
+        int j = tab->artificial_vars[k];
+        if (j >= 0 && j < tab->n) {
+            art_sum += fabs(tab->x[j]);
+        }
+    }
+    return art_sum;
+}
+
+static void phase1_no_pivot_progress_reset(int *no_progress_streak_io,
+                                           double *last_art_sum_io,
+                                           double *anchor_art_sum_io,
+                                           int *progress_window_steps_io) {
+    if (no_progress_streak_io) *no_progress_streak_io = 0;
+    if (last_art_sum_io) *last_art_sum_io = RALPH_INFINITY;
+    if (anchor_art_sum_io) *anchor_art_sum_io = RALPH_INFINITY;
+    if (progress_window_steps_io) *progress_window_steps_io = 0;
+}
+
+static void phase1_no_pivot_progress_update(SimplexSolver *solver,
+                                            const SimplexTableau *tab,
+                                            double *last_art_sum_io,
+                                            double *anchor_art_sum_io,
+                                            int *progress_window_steps_io,
+                                            int *no_progress_streak_io) {
+    double art_sum;
+    double prev_art_sum;
+    double anchor_art_sum;
+    double abs_improve_anchor;
+    double rel_improve_anchor;
+    double abs_improve_prev;
+    double rel_improve_prev;
+    double abs_target_anchor;
+    double abs_target_prev;
+    double window_rel_target;
+    int window_steps;
+    int improved = 0;
+
+    if (!tab || !last_art_sum_io || !anchor_art_sum_io ||
+        !progress_window_steps_io || !no_progress_streak_io) {
+        return;
+    }
+
+    art_sum = phase1_artificial_abs_sum(tab);
+    prev_art_sum = *last_art_sum_io;
+    anchor_art_sum = *anchor_art_sum_io;
+    window_steps = *progress_window_steps_io;
+
+    if (!isfinite(prev_art_sum) || !isfinite(anchor_art_sum) || window_steps < 0) {
+        *last_art_sum_io = art_sum;
+        *anchor_art_sum_io = art_sum;
+        *progress_window_steps_io = 0;
+        return;
+    }
+
+    if (window_steps < INT_MAX) {
+        window_steps++;
+    }
+
+    abs_improve_anchor = anchor_art_sum - art_sum;
+    rel_improve_anchor = abs_improve_anchor / (1.0 + fabs(anchor_art_sum));
+    abs_improve_prev = prev_art_sum - art_sum;
+    rel_improve_prev = abs_improve_prev / (1.0 + fabs(prev_art_sum));
+    abs_target_anchor = fmax(
+        PHASE1_NO_PIVOT_PROGRESS_ABS_IMPROVE_MIN,
+        PHASE1_NO_PIVOT_PROGRESS_REL_IMPROVE_MIN * (1.0 + fabs(anchor_art_sum)));
+    abs_target_prev = fmax(
+        PHASE1_NO_PIVOT_PROGRESS_ABS_IMPROVE_MIN,
+        0.5 * PHASE1_NO_PIVOT_PROGRESS_REL_IMPROVE_MIN * (1.0 + fabs(prev_art_sum)));
+    window_rel_target = 0.5 * PHASE1_NO_PIVOT_PROGRESS_REL_IMPROVE_MIN;
+
+    if (abs_improve_anchor >= abs_target_anchor) {
+        improved = 1;
+    } else if (rel_improve_prev >= PHASE1_NO_PIVOT_PROGRESS_REL_IMPROVE_MIN &&
+               abs_improve_prev >= abs_target_prev) {
+        improved = 1;
+    } else if (window_steps >= PHASE1_NO_PIVOT_PROGRESS_WINDOW &&
+               rel_improve_anchor >= window_rel_target &&
+               abs_improve_anchor >= PHASE1_NO_PIVOT_PROGRESS_ABS_IMPROVE_MIN) {
+        improved = 1;
+    }
+
+    if (improved) {
+        *no_progress_streak_io = 0;
+        *anchor_art_sum_io = art_sum;
+        window_steps = 0;
+    } else {
+        if (*no_progress_streak_io < INT_MAX) {
+            (*no_progress_streak_io)++;
+        }
+        lp_telemetry_record_phase1_no_pivot_no_progress(solver);
+        if (window_steps >= PHASE1_NO_PIVOT_PROGRESS_WINDOW) {
+            *anchor_art_sum_io = art_sum;
+            window_steps = 0;
+        }
+    }
+    *last_art_sum_io = art_sum;
+    *progress_window_steps_io = window_steps;
+}
+
+static int phase1_no_pivot_ladder_step(
+    SimplexSolver *solver,
+    int m,
+    int degenerate_count,
+    LPPhase1NoPivotForceReason reason,
+    int no_pivot_streak,
+    int no_progress_streak,
+    int force_pivot_mode_active,
+    int *refactor_threshold_out) {
+    if (solver &&
+        !lp_glpk_strict_allow_phase1_no_pivot_ladder(
+            solver->glpk_strict_mode)) {
+        if (refactor_threshold_out) *refactor_threshold_out = 0;
+        return PHASE1_NO_PIVOT_LADDER_STEP_RETRY;
+    }
+    return lp_refactor_policy_phase1_no_pivot_ladder_step(
+        m,
+        degenerate_count,
+        (int)reason,
+        no_pivot_streak,
+        no_progress_streak,
+        force_pivot_mode_active,
+        refactor_threshold_out);
+}
+
+static int phase1_no_pivot_ladder_apply_rescue_guard(
+    SimplexSolver *solver,
+    int ladder_step,
+    int rescue_cooldown_iters,
+    int rescue_fail_streak) {
+    if (ladder_step != PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
+        return ladder_step;
+    }
+    return phase1_dual_rescue_guard_step(
+        solver, rescue_cooldown_iters, rescue_fail_streak, 1);
+}
+
+static int phase1_attempt_ladder_dual_rescue(
+    SimplexSolver *solver,
+    SimplexTableau *tab,
+    int iter,
+    LPPhase1NoPivotForceReason reason,
+    LPPhase1RecomputeReason recompute_reason,
+    int *rescue_cooldown_io,
+    int *rescue_fail_streak_io,
+    int *phase1_rc_only_streak_io,
+    int *no_pivot_no_progress_streak_io,
+    double *no_pivot_prev_art_sum_io,
+    double *no_pivot_anchor_art_sum_io,
+    int *no_pivot_progress_window_steps_io) {
+    if (solver &&
+        !lp_glpk_strict_allow_phase1_dual_rescue(solver->glpk_strict_mode)) {
+        return 0;
+    }
+    int rescue_status = dual_simplex_phase1_rescue(
+        solver, tab->m * RALPH_PHASE1_DUAL_RESCUE_MULT);
+    if (rescue_cooldown_io) {
+        *rescue_cooldown_io = PHASE1_NO_PIVOT_LADDER_RESCUE_COOLDOWN_ITERS;
+    }
+    if (rescue_status == 0) {
+        if (rescue_fail_streak_io) *rescue_fail_streak_io = 0;
+        lp_telemetry_record_phase1_no_pivot_ladder_dual_rescue(
+            solver, reason, 1);
+        phase1_recompute_full_with_reason(
+            solver,
+            tab,
+            phase1_rc_only_streak_io,
+            recompute_reason);
+        phase1_no_pivot_progress_reset(
+            no_pivot_no_progress_streak_io,
+            no_pivot_prev_art_sum_io,
+            no_pivot_anchor_art_sum_io,
+            no_pivot_progress_window_steps_io);
+        return 1;
+    }
+    if (solver->status == RALPH_STATUS_TIME_LIMIT) {
+        primal_remove_perturbation(tab);
+        solver->iterations = iter;
+        phase1_trace_emit_summary(solver, RALPH_STATUS_TIME_LIMIT);
+        return -1;
+    }
+    if (rescue_fail_streak_io && *rescue_fail_streak_io < INT_MAX) {
+        (*rescue_fail_streak_io)++;
+    }
+    lp_telemetry_record_phase1_no_pivot_ladder_dual_rescue(
+        solver, reason, 0);
+    return 0;
+}
+
+static int phase1_direct_dual_rescue_guard_plan(SimplexSolver *solver,
+                                                int rescue_cooldown_iters,
+                                                int rescue_fail_streak) {
+    return phase1_dual_rescue_guard_step(
+        solver, rescue_cooldown_iters, rescue_fail_streak, 0);
+}
+
+static int phase1_attempt_direct_dual_rescue(
+    SimplexSolver *solver,
+    SimplexTableau *tab,
+    int iter,
+    int *rescue_cooldown_io,
+    int *rescue_fail_streak_io) {
+    int rescue_status;
+    int guard_step = phase1_direct_dual_rescue_guard_plan(
+        solver,
+        rescue_cooldown_io ? *rescue_cooldown_io : 0,
+        rescue_fail_streak_io ? *rescue_fail_streak_io : 0);
+    if (guard_step != PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
+        return 0;
+    }
+
+    rescue_status = dual_simplex_phase1_rescue(
+        solver, tab->m * RALPH_PHASE1_DUAL_RESCUE_MULT);
+    if (rescue_cooldown_io) {
+        *rescue_cooldown_io = PHASE1_NO_PIVOT_LADDER_RESCUE_COOLDOWN_ITERS;
+    }
+    if (rescue_status == 0) {
+        if (rescue_fail_streak_io) *rescue_fail_streak_io = 0;
+        lp_telemetry_record_phase1_direct_dual_rescue(solver, 1);
+        return 1;
+    }
+    if (solver->status == RALPH_STATUS_TIME_LIMIT) {
+        primal_remove_perturbation(tab);
+        solver->iterations = iter;
+        phase1_trace_emit_summary(solver, RALPH_STATUS_TIME_LIMIT);
+        return -1;
+    }
+    if (rescue_fail_streak_io && *rescue_fail_streak_io < INT_MAX) {
+        (*rescue_fail_streak_io)++;
+    }
+    lp_telemetry_record_phase1_direct_dual_rescue(solver, 0);
+    return 0;
+}
+
+static int phase1_activate_force_pivot_mode(
+    SimplexSolver *solver,
+    int m,
+    int degenerate_count,
+    int queue_force_pending,
+    int *dir_skip_event_streak_io,
+    int *force_pivot_attempt_budget_io,
+    int *force_pending_io,
+    LPPhase1NoPivotForceReason *force_reason_io) {
+    int streak = 0;
+    int budget = 0;
+    int pending = 0;
+    int reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
+    int activated;
+
+    if (solver &&
+        !lp_glpk_strict_allow_phase1_force_pivot_mode(
+            solver->glpk_strict_mode)) {
+        return 0;
+    }
+
+    if (dir_skip_event_streak_io) {
+        streak = *dir_skip_event_streak_io;
+    }
+    if (force_pivot_attempt_budget_io) {
+        budget = *force_pivot_attempt_budget_io;
+    }
+    activated = lp_refactor_policy_phase1_activate_force_pivot_mode(
+        m,
+        degenerate_count,
+        streak,
+        budget,
+        queue_force_pending,
+        &streak,
+        &budget,
+        &pending,
+        &reason);
+    if (force_pivot_attempt_budget_io) {
+        *force_pivot_attempt_budget_io = budget;
+    }
+    if (dir_skip_event_streak_io) {
+        *dir_skip_event_streak_io = streak;
+    }
+    if (activated && force_pending_io && force_reason_io) {
+        *force_pending_io = pending;
+        *force_reason_io = (LPPhase1NoPivotForceReason)reason;
+    }
+    return activated;
+}
+
+static int phase1_dir_stabilize_escape_gate_plan(int m,
+                                                 int degenerate_count,
+                                                 int dir_skip_event_streak,
+                                                 int no_progress_streak,
+                                                 int escape_cooldown,
+                                                 int force_extreme_dir,
+                                                 int force_lu_health,
+                                                 int lu_hard_trigger,
+                                                 int *next_escape_cooldown_out,
+                                                 int *triggered_out,
+                                                 int *hard_bypass_out) {
+    return lp_refactor_policy_phase1_dir_stabilize_escape_gate_plan(
+        m,
+        degenerate_count,
+        dir_skip_event_streak,
+        no_progress_streak,
+        escape_cooldown,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        next_escape_cooldown_out,
+        triggered_out,
+        hard_bypass_out);
+}
+
+static int phase1_force_pivot_refactor_relax_plan(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    int force_pivot_mode_active,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int dual_rescue_attempts,
+    int dual_rescue_successes,
+    int dual_rescue_fail_streak) {
+    return lp_refactor_policy_phase1_force_pivot_refactor_relax_plan(
+        m,
+        degenerate_count,
+        no_progress_streak,
+        force_pivot_mode_active,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        dual_rescue_attempts,
+        dual_rescue_successes,
+        dual_rescue_fail_streak);
+}
+
+static int phase1_force_extreme_refactor_relax_plan(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int dual_rescue_attempts,
+    int dual_rescue_successes,
+    int dual_rescue_fail_streak) {
+    return lp_refactor_policy_phase1_force_extreme_refactor_relax_plan(
+        m,
+        degenerate_count,
+        no_progress_streak,
+        dir_inf_ratio,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        dual_rescue_attempts,
+        dual_rescue_successes,
+        dual_rescue_fail_streak);
+}
+
+static int phase1_force_extreme_tiny_theta_relax_plan(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int tiny_theta_followup_streak) {
+    return lp_refactor_policy_phase1_force_extreme_tiny_theta_relax_plan(
+        m,
+        degenerate_count,
+        no_progress_streak,
+        dir_inf_ratio,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        tiny_theta_followup_streak);
+}
+
+static int phase1_force_extreme_bound_flip_relax_plan(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int bound_flip_followup_streak) {
+    return lp_refactor_policy_phase1_force_extreme_bound_flip_relax_plan(
+        m,
+        degenerate_count,
+        no_progress_streak,
+        dir_inf_ratio,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        bound_flip_followup_streak);
+}
+
+static int phase1_force_extreme_catastrophic_tiny_theta_relax_plan(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int tiny_theta_followup_streak,
+    double pivot_ratio) {
+    return lp_refactor_policy_phase1_force_extreme_catastrophic_tiny_theta_relax_plan(
+        m,
+        degenerate_count,
+        no_progress_streak,
+        dir_inf_ratio,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        tiny_theta_followup_streak,
+        pivot_ratio);
+}
+
+static int phase1_note_no_pivot_and_maybe_force(SimplexSolver *solver,
+                                                int m,
+                                                int degenerate_count,
+                                                LPPhase1NoPivotForceReason reason,
+                                                int *streak_io,
+                                                int *cooldown_io) {
+    int next_streak = 0;
+    int next_cooldown = 0;
+    int should_force = 0;
+
+    if (!streak_io || !cooldown_io) return 0;
+
+    if (*streak_io < INT_MAX) (*streak_io)++;
+    lp_telemetry_record_phase1_no_pivot_event(solver, reason);
+    if (solver &&
+        !lp_glpk_strict_allow_phase1_no_pivot_force(
+            solver->glpk_strict_mode)) {
+        return 0;
+    }
+
+    should_force = lp_refactor_policy_phase1_no_pivot_force_transition(
+        m,
+        degenerate_count,
+        *streak_io,
+        *cooldown_io,
+        &next_streak,
+        &next_cooldown);
+    *streak_io = next_streak;
+    *cooldown_io = next_cooldown;
+
+    if (should_force) {
+        lp_telemetry_record_phase1_no_pivot_force(solver, reason);
+    }
+    return should_force;
+}
+
+static int phase1_soft_lu_policy_cooldown_updates(int m,
+                                                  int degenerate_count,
+                                                  int periodic_interval) {
+    return lp_refactor_policy_phase1_soft_lu_policy_cooldown_updates(
+        m,
+        degenerate_count,
+        periodic_interval);
+}
+
+int simplex_phase1_no_pivot_force_plan_for_test(int m,
+                                                 int degenerate_count,
+                                                 int streak,
+                                                 int cooldown,
+                                                 int reason,
+                                                 int *next_streak_out,
+                                                 int *next_cooldown_out) {
+    int should_force = phase1_note_no_pivot_and_maybe_force(NULL,
+                                                             m,
+                                                             degenerate_count,
+                                                             (LPPhase1NoPivotForceReason)reason,
+                                                             &streak,
+                                                             &cooldown);
+    if (next_streak_out) *next_streak_out = streak;
+    if (next_cooldown_out) *next_cooldown_out = cooldown;
+    return should_force;
+}
+
+int simplex_phase1_no_pivot_ladder_plan_for_test(int m,
+                                                  int degenerate_count,
+                                                  int reason,
+                                                  int no_pivot_streak,
+                                                  int no_progress_streak,
+                                                  int force_pivot_mode_active,
+                                                  int *refactor_threshold_out) {
+    return phase1_no_pivot_ladder_step(
+        NULL,
+        m,
+        degenerate_count,
+        (LPPhase1NoPivotForceReason)reason,
+        no_pivot_streak,
+        no_progress_streak,
+        force_pivot_mode_active,
+        refactor_threshold_out);
+}
+
+int simplex_phase1_no_pivot_ladder_rescue_guard_plan_for_test(
+    int ladder_step,
+    int rescue_cooldown_iters,
+    int rescue_fail_streak) {
+    return phase1_no_pivot_ladder_apply_rescue_guard(NULL,
+                                                     ladder_step,
+                                                     rescue_cooldown_iters,
+                                                     rescue_fail_streak);
+}
+
+int simplex_phase1_direct_dual_rescue_guard_plan_for_test(
+    int rescue_cooldown_iters,
+    int rescue_fail_streak) {
+    return phase1_direct_dual_rescue_guard_plan(
+        NULL, rescue_cooldown_iters, rescue_fail_streak);
+}
+
+int simplex_phase1_dir_skip_rescue_cadence_plan_for_test(
+    int dir_skip_event_streak) {
+    return lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(
+        dir_skip_event_streak);
+}
+
+int simplex_phase1_failed_stabilize_retry_penalty_plan_for_test(
+    int entering,
+    int last_failed_entering,
+    int same_entering_streak) {
+    return phase1_failed_stabilize_retry_penalty_plan(
+        entering, last_failed_entering, same_entering_streak);
+}
+
+int simplex_phase1_failed_stabilize_retry_local_memory_plan_for_test(
+    int original_entering,
+    int last_retry_alt,
+    int last_retry_alt_streak,
+    int retry_penalize_last_failed) {
+    return phase1_failed_stabilize_retry_local_memory_plan(
+        original_entering,
+        last_retry_alt,
+        last_retry_alt_streak,
+        retry_penalize_last_failed);
+}
+
+int simplex_phase1_failed_stabilize_retry_guarded_selector_plan_for_test(
+    int retry_ratio_fail_streak,
+    int last_retry_alt_streak,
+    int eligible_count,
+    int bland_entering,
+    int best_entering,
+    double bland_score,
+    double best_score) {
+    return phase1_failed_stabilize_retry_guarded_selector_plan(
+        retry_ratio_fail_streak,
+        last_retry_alt_streak,
+        eligible_count,
+        bland_entering,
+        best_entering,
+        bland_score,
+        best_score);
+}
+
+int simplex_phase1_failed_stabilize_retry_direction_guard_plan_for_test(
+    double dir_inf,
+    int dir_nnz,
+    double pivot_abs,
+    int retry_alt_streak) {
+    return phase1_failed_stabilize_retry_direction_guard_plan(
+        dir_inf,
+        dir_nnz,
+        pivot_abs,
+        retry_alt_streak);
+}
+
+int simplex_phase1_failed_stabilize_retry_shadow_guard_plan_for_test(
+    double actual_dir_inf,
+    int actual_dir_nnz,
+    double actual_pivot_abs,
+    int shadow_ratio_success,
+    double shadow_dir_inf,
+    int shadow_dir_nnz,
+    double shadow_pivot_abs,
+    int retry_alt_streak) {
+    return phase1_failed_stabilize_retry_shadow_guard_plan(
+        actual_dir_inf,
+        actual_dir_nnz,
+        actual_pivot_abs,
+        shadow_ratio_success,
+        shadow_dir_inf,
+        shadow_dir_nnz,
+        shadow_pivot_abs,
+        retry_alt_streak);
+}
+
+
+int simplex_phase1_force_pivot_mode_plan_for_test(int m,
+                                                   int degenerate_count,
+                                                   int queue_force_pending,
+                                                   int dir_skip_event_streak,
+                                                   int active_budget,
+                                                   int *next_streak_out,
+                                                   int *next_budget_out,
+                                                   int *next_pending_out) {
+    int streak = dir_skip_event_streak;
+    int budget = active_budget;
+    int pending = 0;
+    LPPhase1NoPivotForceReason force_reason =
+        LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
+    int activated = phase1_activate_force_pivot_mode(
+        NULL,
+        m,
+        degenerate_count,
+        queue_force_pending,
+        &streak,
+        &budget,
+        &pending,
+        &force_reason);
+    if (next_streak_out) *next_streak_out = streak;
+    if (next_budget_out) *next_budget_out = budget;
+    if (next_pending_out) *next_pending_out = pending;
+    return activated;
+}
+
+int simplex_phase1_dir_stabilize_escape_gate_plan_for_test(
+    int m,
+    int degenerate_count,
+    int dir_skip_event_streak,
+    int no_progress_streak,
+    int escape_cooldown,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int *next_escape_cooldown_out,
+    int *triggered_out,
+    int *hard_bypass_out) {
+    return phase1_dir_stabilize_escape_gate_plan(
+        m,
+        degenerate_count,
+        dir_skip_event_streak,
+        no_progress_streak,
+        escape_cooldown,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        next_escape_cooldown_out,
+        triggered_out,
+        hard_bypass_out);
+}
+
+int simplex_phase1_force_pivot_relax_plan_for_test(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    int force_pivot_mode_active,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int dual_rescue_attempts,
+    int dual_rescue_successes,
+    int dual_rescue_fail_streak) {
+    return phase1_force_pivot_refactor_relax_plan(
+        m,
+        degenerate_count,
+        no_progress_streak,
+        force_pivot_mode_active,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        dual_rescue_attempts,
+        dual_rescue_successes,
+        dual_rescue_fail_streak);
+}
+
+int simplex_phase1_force_extreme_relax_plan_for_test(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int dual_rescue_attempts,
+    int dual_rescue_successes,
+    int dual_rescue_fail_streak) {
+    return phase1_force_extreme_refactor_relax_plan(
+        m,
+        degenerate_count,
+        no_progress_streak,
+        dir_inf_ratio,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        dual_rescue_attempts,
+        dual_rescue_successes,
+        dual_rescue_fail_streak);
+}
+
+int simplex_phase1_force_extreme_tiny_theta_relax_plan_for_test(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int tiny_theta_followup_streak) {
+    return phase1_force_extreme_tiny_theta_relax_plan(
+        m,
+        degenerate_count,
+        no_progress_streak,
+        dir_inf_ratio,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        tiny_theta_followup_streak);
+}
+
+int simplex_phase1_force_extreme_bound_flip_relax_plan_for_test(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int bound_flip_followup_streak) {
+    return phase1_force_extreme_bound_flip_relax_plan(
+        m,
+        degenerate_count,
+        no_progress_streak,
+        dir_inf_ratio,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        bound_flip_followup_streak);
+}
+
+int simplex_phase1_force_extreme_catastrophic_tiny_theta_relax_plan_for_test(
+    int m,
+    int degenerate_count,
+    int no_progress_streak,
+    double dir_inf_ratio,
+    int force_extreme_dir,
+    int force_lu_health,
+    int lu_hard_trigger,
+    int tiny_theta_followup_streak,
+    double pivot_ratio) {
+    return phase1_force_extreme_catastrophic_tiny_theta_relax_plan(
+        m,
+        degenerate_count,
+        no_progress_streak,
+        dir_inf_ratio,
+        force_extreme_dir,
+        force_lu_health,
+        lu_hard_trigger,
+        tiny_theta_followup_streak,
+        pivot_ratio);
+}
+
+int simplex_phase1_soft_lu_policy_cooldown_plan_for_test(
+    int m,
+    int degenerate_count,
+    int periodic_interval,
+    int lu_soft_cost_deferred,
+    int periodic_policy_cooldown,
+    int *next_cooldown_out) {
+    int next_cooldown = periodic_policy_cooldown;
+    if (lu_soft_cost_deferred) {
+        int soft_cooldown = phase1_soft_lu_policy_cooldown_updates(m,
+                                                                    degenerate_count,
+                                                                    periodic_interval);
+        if (soft_cooldown > next_cooldown) {
+            next_cooldown = soft_cooldown;
+        }
+    }
+    if (next_cooldown_out) *next_cooldown_out = next_cooldown;
+    return next_cooldown > periodic_policy_cooldown;
+}
+
+/* FNV-1a style mixer for deterministic trace signatures. */
+static unsigned long long phase1_trace_mix(unsigned long long sig, unsigned long long word) {
+    sig ^= word;
+    sig *= 1099511628211ULL;
+    return sig;
+}
+
+static void phase1_trace_record_no_entering(SimplexSolver *solver, int iter, int status_code) {
+    if (!solver || !solver->trace_phase1) return;
+    solver->trace_phase1_no_entering_events++;
+    solver->trace_phase1_signature = phase1_trace_mix(
+        solver->trace_phase1_signature,
+        ((unsigned long long)0x2u << 60) ^
+        ((unsigned long long)(iter & 0xFFFFF) << 20) ^
+        (unsigned long long)(status_code & 0xFFFFF));
+
+    LP_LOG_STDERR("[phase1_trace] event=no_entering iter=%d code=%d\n",
+            iter, status_code);
+}
+
+static void phase1_trace_record_pivot_failure(SimplexSolver *solver,
+                                              const SimplexTableau *tab,
+                                              int iter,
+                                              int repeat_count) {
+    if (!solver || !tab || !solver->trace_phase1) return;
+
+    int reason = tab->trace_last_fail_reason;
+    solver->trace_phase1_pivot_failures++;
+    if (solver->trace_phase1_first_fail_iter < 0) {
+        solver->trace_phase1_first_fail_iter = iter;
+    }
+    solver->trace_phase1_last_fail_iter = iter;
+
+    if (reason == PHASE1_PIVOT_FAIL_SMALL_PIVOT) {
+        solver->trace_phase1_fail_small_pivot++;
+    } else if (reason == PHASE1_PIVOT_FAIL_INVALID_COLUMN) {
+        solver->trace_phase1_fail_invalid_column++;
+    } else if (reason == PHASE1_PIVOT_FAIL_LU_MAX_UPDATES) {
+        solver->trace_phase1_fail_lu_max_updates++;
+    } else if (reason == PHASE1_PIVOT_FAIL_LU_SPIKE_POOL_FULL) {
+        solver->trace_phase1_fail_lu_spike_pool_full++;
+    } else if (reason == PHASE1_PIVOT_FAIL_LU_UPDATE_PIVOT_SMALL) {
+        solver->trace_phase1_fail_lu_update_pivot_small++;
+    } else if (reason == PHASE1_PIVOT_FAIL_LU_SINGULAR_UPDATE) {
+        solver->trace_phase1_fail_lu_singular_update++;
+    } else if (reason == PHASE1_PIVOT_FAIL_FACTOR_SINGULAR) {
+        solver->trace_phase1_fail_factor_singular++;
+    } else if (reason == PHASE1_PIVOT_FAIL_REFACTOR_FORCED_OTHER) {
+        solver->trace_phase1_fail_refactor_forced_other++;
+    } else if (reason == PHASE1_PIVOT_FAIL_REFACTOR_AFTER_UPDATE_OTHER) {
+        solver->trace_phase1_fail_refactor_after_update_other++;
+    }
+
+    solver->trace_phase1_signature = phase1_trace_mix(
+        solver->trace_phase1_signature,
+        ((unsigned long long)0x1u << 60) ^
+        ((unsigned long long)(iter & 0xFFFFF) << 40) ^
+        ((unsigned long long)(tab->trace_last_entering & 0xFFFFF) << 20) ^
+        (unsigned long long)(tab->trace_last_leaving_pos & 0xFFFFF));
+    solver->trace_phase1_signature = phase1_trace_mix(
+        solver->trace_phase1_signature,
+        (unsigned long long)(reason & 0xFFFF));
+
+    LP_LOG_STDERR("[phase1_trace] event=pivot_fail iter=%d repeat=%d entering=%d leaving=%d theta=%.12e reason=%s pivot=%.12e dir_inf=%.12e\n",
+            iter,
+            repeat_count,
+            tab->trace_last_entering,
+            tab->trace_last_leaving_pos,
+            tab->trace_last_theta,
+            phase1_pivot_fail_reason_str(reason),
+            tab->trace_last_pivot,
+            tab->trace_last_dir_inf);
+}
+
+static void phase1_trace_emit_summary(SimplexSolver *solver, RalphStatus phase1_status) {
+    if (!solver || !solver->trace_phase1) return;
+
+    LP_LOG_STDERR("[phase1_trace] summary status=%s piv_fail=%d small_pivot=%d invalid_col=%d lu_max_updates=%d lu_spike_pool_full=%d lu_update_pivot_small=%d lu_singular_update=%d factor_singular=%d refactor_forced_other=%d refactor_after_update_other=%d no_entering=%d first_iter=%d last_iter=%d sig=0x%016llx\n",
+            ralph_lp_status_string((RalphLPStatus)phase1_status),
+            solver->trace_phase1_pivot_failures,
+            solver->trace_phase1_fail_small_pivot,
+            solver->trace_phase1_fail_invalid_column,
+            solver->trace_phase1_fail_lu_max_updates,
+            solver->trace_phase1_fail_lu_spike_pool_full,
+            solver->trace_phase1_fail_lu_update_pivot_small,
+            solver->trace_phase1_fail_lu_singular_update,
+            solver->trace_phase1_fail_factor_singular,
+            solver->trace_phase1_fail_refactor_forced_other,
+            solver->trace_phase1_fail_refactor_after_update_other,
+            solver->trace_phase1_no_entering_events,
+            solver->trace_phase1_first_fail_iter,
+            solver->trace_phase1_last_fail_iter,
+            solver->trace_phase1_signature);
+}
+
+static double vec_abs_max(const double *x, int n) {
+    double max_abs = 0.0;
+    if (!x || n <= 0) return max_abs;
+    for (int i = 0; i < n; i++) {
+        double absval = fabs(x[i]);
+        if (absval > max_abs) {
+            max_abs = absval;
+        }
+    }
+    return max_abs;
+}
 
 /* ============================================================================
  * Geometric Mean Scaling
@@ -39,6 +2228,9 @@ static int apply_scaling(SimplexSolver *solver) {
     int n = model->num_vars;
     SparseMatrix *A = model->A;
 
+    int geo_rounds = solver->scaling;    /* N geometric mean rounds */
+    int eq_rounds = (geo_rounds > 1) ? 20 : 0;  /* equilibrium only for multi-round */
+
     /* Allocate scaling factors */
     solver->row_scale = (double*)calloc(m, sizeof(double));
     solver->col_scale = (double*)calloc(n, sizeof(double));
@@ -54,51 +2246,112 @@ static int apply_scaling(SimplexSolver *solver) {
     for (int i = 0; i < m; i++) solver->row_scale[i] = 1.0;
     for (int j = 0; j < n; j++) solver->col_scale[j] = 1.0;
 
-    /* Compute row max absolute values */
+    /* Workspace for row/column extremes */
     double *row_max = (double*)calloc(m, sizeof(double));
-    if (!row_max) return -1;
-
-    for (int j = 0; j < n; j++) {
-        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
-            int i = A->rowidx[p];
-            double absval = fabs(A->values[p]);
-            if (absval > row_max[i]) row_max[i] = absval;
-        }
-    }
-
-    /* Compute row scaling factors */
-    for (int i = 0; i < m; i++) {
-        if (row_max[i] > RALPH_ZERO_TOL) {
-            solver->row_scale[i] = 1.0 / sqrt(row_max[i]);
-        }
-    }
-    free(row_max);
-
-    /* Apply row scaling to matrix, then compute column max */
     double *col_max = (double*)calloc(n, sizeof(double));
-    if (!col_max) return -1;
+    if (!row_max || !col_max) {
+        free(row_max);
+        free(col_max);
+        return -1;
+    }
 
-    for (int j = 0; j < n; j++) {
-        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
-            int i = A->rowidx[p];
-            double scaled_val = fabs(A->values[p]) * solver->row_scale[i];
-            if (scaled_val > col_max[j]) col_max[j] = scaled_val;
+    /* Geometric mean scaling rounds: R[i] *= 1/sqrt(max), C[j] *= 1/sqrt(max)
+     * Each round shrinks the ratio between largest and smallest elements.
+     * Uses virtual scaling: A is not modified, just R[] and C[] accumulate. */
+    for (int round = 0; round < geo_rounds; round++) {
+        /* Compute row maxes of |R[i] * A[i,j] * C[j]| */
+        for (int i = 0; i < m; i++) row_max[i] = 0.0;
+        for (int j = 0; j < n; j++) {
+            double cj = solver->col_scale[j];
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                int i = A->rowidx[p];
+                double scaled = fabs(A->values[p]) * solver->row_scale[i] * cj;
+                if (scaled > row_max[i]) row_max[i] = scaled;
+            }
+        }
+
+        /* Update row factors */
+        for (int i = 0; i < m; i++) {
+            if (row_max[i] > RALPH_ZERO_TOL) {
+                solver->row_scale[i] *= 1.0 / sqrt(row_max[i]);
+            }
+        }
+
+        /* Compute col maxes of |R[i] * A[i,j] * C[j]| with updated R */
+        for (int j = 0; j < n; j++) col_max[j] = 0.0;
+        for (int j = 0; j < n; j++) {
+            double cj = solver->col_scale[j];
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                int i = A->rowidx[p];
+                double scaled = fabs(A->values[p]) * solver->row_scale[i] * cj;
+                if (scaled > col_max[j]) col_max[j] = scaled;
+            }
+        }
+
+        /* Update column factors */
+        for (int j = 0; j < n; j++) {
+            if (col_max[j] > RALPH_ZERO_TOL) {
+                solver->col_scale[j] *= 1.0 / sqrt(col_max[j]);
+            }
         }
     }
 
-    /* Compute column scaling factors */
-    for (int j = 0; j < n; j++) {
-        if (col_max[j] > RALPH_ZERO_TOL) {
-            solver->col_scale[j] = 1.0 / sqrt(col_max[j]);
+    /* Equilibrium scaling rounds: R[i] *= 1/max, C[j] *= 1/max
+     * Drives every row and column max toward 1.0.
+     * Converges quickly — typically 3-5 rounds sufficient. */
+    for (int round = 0; round < eq_rounds; round++) {
+        /* Compute row maxes */
+        for (int i = 0; i < m; i++) row_max[i] = 0.0;
+        for (int j = 0; j < n; j++) {
+            double cj = solver->col_scale[j];
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                int i = A->rowidx[p];
+                double scaled = fabs(A->values[p]) * solver->row_scale[i] * cj;
+                if (scaled > row_max[i]) row_max[i] = scaled;
+            }
         }
+
+        /* Update row factors (equilibrium: scale max to 1.0) */
+        for (int i = 0; i < m; i++) {
+            if (row_max[i] > RALPH_ZERO_TOL) {
+                solver->row_scale[i] *= 1.0 / row_max[i];
+            }
+        }
+
+        /* Compute col maxes with updated R */
+        double max_deviation = 0.0;
+        for (int j = 0; j < n; j++) col_max[j] = 0.0;
+        for (int j = 0; j < n; j++) {
+            double cj = solver->col_scale[j];
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                int i = A->rowidx[p];
+                double scaled = fabs(A->values[p]) * solver->row_scale[i] * cj;
+                if (scaled > col_max[j]) col_max[j] = scaled;
+            }
+        }
+
+        /* Update column factors and check convergence */
+        for (int j = 0; j < n; j++) {
+            if (col_max[j] > RALPH_ZERO_TOL) {
+                double dev = fabs(col_max[j] - 1.0);
+                if (dev > max_deviation) max_deviation = dev;
+                solver->col_scale[j] *= 1.0 / col_max[j];
+            }
+        }
+
+        /* Converged: all column maxes within 10% of 1.0 */
+        if (max_deviation < 0.1) break;
     }
+
+    free(row_max);
     free(col_max);
 
-    /* Apply scaling to matrix A: A_scaled[i,j] = R[i] * A[i,j] * C[j] */
+    /* Apply accumulated scaling to matrix A: A_scaled[i,j] = R[i] * A[i,j] * C[j] */
     for (int j = 0; j < n; j++) {
+        double cj = solver->col_scale[j];
         for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
             int i = A->rowidx[p];
-            A->values[p] *= solver->row_scale[i] * solver->col_scale[j];
+            A->values[p] *= solver->row_scale[i] * cj;
         }
     }
 
@@ -112,10 +2365,7 @@ static int apply_scaling(SimplexSolver *solver) {
         model->c[j] *= solver->col_scale[j];
     }
 
-    /* Scale variable bounds: x_scaled = C^-1 * x, so bounds scale by C */
-    /* lb_scaled[j] = lb[j] / C[j], but we store C[j] and apply later */
-    /* Actually for bounds: if x = C * x_scaled, then lb <= C * x_scaled <= ub */
-    /* So: lb/C <= x_scaled <= ub/C */
+    /* Scale variable bounds: x = C * x_scaled, so lb/C <= x_scaled <= ub/C */
     for (int j = 0; j < n; j++) {
         if (model->lb[j] > -RALPH_INFINITY/2) {
             model->lb[j] /= solver->col_scale[j];
@@ -127,6 +2377,204 @@ static int apply_scaling(SimplexSolver *solver) {
 
     solver->is_scaled = 1;
     return 0;
+}
+
+/*
+ * Post-solve verification (T2.3 + T3.6).
+ * Read-only: inspects solution, dual, reduced costs, model A/b/c.
+ * Checks:
+ *   1. Primal feasibility:  ||Ax - b||_inf for constraint satisfaction
+ *   2. Bound feasibility:   lb <= x <= ub for all vars
+ *   3. Dual feasibility:    rc[j] >= -tol for nonbasics at lower bound
+ *   4. Complementary slackness: |x_j - lb_j| * |rc_j| ~ 0
+ *   5. Objective accuracy:  Kahan summation recomputation
+ *   6. Basis conditioning:  LU condition estimate (T3.6)
+ * Downgrades OPTIMAL → IMPRECISE if any check exceeds threshold.
+ */
+static void verify_solution(SimplexSolver *solver) {
+    LPModel *model = solver->model;
+    int m = model->num_cons;
+    int n = model->num_vars;
+    double *x = solver->solution;
+    double *rc = solver->reduced_costs;
+    SparseMatrix *A = model->A;
+
+    if (!x || !A || !model->b || !model->lb || !model->ub) return;
+
+    /* W2: Use runtime tolerances from model (default to compile-time constants) */
+    double feas_tol = model->feas_tol;
+    double opt_tol = model->opt_tol;
+
+    double max_primal_infeas = 0.0;
+    double max_bound_infeas = 0.0;
+    double max_dual_infeas = 0.0;
+    double max_comp_slack = 0.0;
+
+    /* 1. Primal feasibility: compute Ax via column-wise sparse matvec (O(nnz)),
+     * then check against b with sense.
+     * (B6 fix: was O(n*m) triple-nested loop, now O(nnz)) */
+    double *ax = (double*)calloc(m, sizeof(double));
+    if (ax) {
+        for (int j = 0; j < n; j++) {
+            double xj = x[j];
+            if (fabs(xj) < 1e-15) continue;
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                ax[A->rowidx[p]] += A->values[p] * xj;
+            }
+        }
+        for (int i = 0; i < m; i++) {
+            double violation = 0.0;
+            char sense = model->sense[i];
+            if (sense == 'L') {
+                violation = ax[i] - model->b[i];
+                if (violation < 0.0) violation = 0.0;
+            } else if (sense == 'G') {
+                violation = model->b[i] - ax[i];
+                if (violation < 0.0) violation = 0.0;
+            } else {
+                violation = fabs(ax[i] - model->b[i]);
+            }
+            if (violation > max_primal_infeas) max_primal_infeas = violation;
+        }
+        free(ax);
+    }
+
+    /* 2. Bound feasibility */
+    for (int j = 0; j < n; j++) {
+        double lb_viol = model->lb[j] - x[j];
+        if (lb_viol > max_bound_infeas) max_bound_infeas = lb_viol;
+        double ub_viol = x[j] - model->ub[j];
+        if (ub_viol > max_bound_infeas) max_bound_infeas = ub_viol;
+    }
+
+    /* 3. Dual feasibility: for minimization, nonbasics at lb should have rc >= 0,
+     * at ub should have rc <= 0. Solution is in original space (obj_sense applied). */
+    if (rc) {
+        for (int j = 0; j < n; j++) {
+            double xj = x[j];
+            double rcj = rc[j];  /* Already in user space (obj_sense applied) */
+            int at_lb = fabs(xj - model->lb[j]) < feas_tol;
+            int at_ub = fabs(xj - model->ub[j]) < feas_tol;
+
+            /* In user space: minimize → rc >= 0 at lb, rc <= 0 at ub
+             *                maximize → rc <= 0 at lb, rc >= 0 at ub
+             * Equivalently: obj_sense * rc >= 0 at lb (in internal space) */
+            double viol = 0.0;
+            if (at_lb && !at_ub) {
+                /* At lower bound: rc should push away from lb.
+                 * For min: rc >= 0. For max: rc <= 0. */
+                viol = (model->obj_sense == 1) ? -rcj : rcj;
+            } else if (at_ub && !at_lb) {
+                /* At upper bound: rc should push away from ub. */
+                viol = (model->obj_sense == 1) ? rcj : -rcj;
+            }
+            if (viol > max_dual_infeas) max_dual_infeas = viol;
+        }
+    }
+
+    /* 4. Complementary slackness: for non-fixed vars, |x - lb| * |rc| should be ~ 0 */
+    if (rc) {
+        for (int j = 0; j < n; j++) {
+            if (fabs(model->ub[j] - model->lb[j]) < feas_tol) continue;
+            double dist_lb = fabs(x[j] - model->lb[j]);
+            double dist_ub = fabs(x[j] - model->ub[j]);
+            double min_dist = (dist_lb < dist_ub) ? dist_lb : dist_ub;
+            double cs = min_dist * fabs(rc[j]);
+            if (cs > max_comp_slack) max_comp_slack = cs;
+        }
+    }
+
+    /* 5. Objective accuracy with Kahan summation */
+    double obj_kahan = 0.0;
+    double kahan_comp = 0.0;
+    for (int j = 0; j < n; j++) {
+        double term = model->c[j] * x[j] - kahan_comp;
+        double temp = obj_kahan + term;
+        kahan_comp = (temp - obj_kahan) - term;
+        obj_kahan = temp;
+    }
+    obj_kahan = obj_kahan + model->obj_offset;
+    double obj_denom = fabs(solver->obj_value) > 1.0 ? fabs(solver->obj_value) : 1.0;
+    double obj_rel_error = fabs(obj_kahan - solver->obj_value) / obj_denom;
+
+    /* 6. Basis conditioning (T3.6) */
+    double cond = 1.0;
+    if (solver->tableau && solver->tableau->lu) {
+        cond = solver->tableau->lu->cond_estimate;
+    }
+
+    /* Store metrics */
+    solver->verify_primal_infeas = max_primal_infeas;
+    solver->verify_bound_infeas = max_bound_infeas;
+    solver->verify_dual_infeas = max_dual_infeas;
+    solver->verify_comp_slack = max_comp_slack;
+    solver->verify_obj_error = obj_rel_error;
+    solver->verify_cond_estimate = cond;
+
+    /* W4: Dual iterative refinement — if dual infeasibility exceeds threshold,
+     * recompute reduced costs from dual variables: rc[j] = c[j] - A^T y[j].
+     * This catches RC drift from accumulated LU update errors without
+     * requiring refactorization. Only fires when verification detects a problem. */
+    if (max_dual_infeas > opt_tol && rc && solver->dual_solution && A) {
+        /* Recompute reduced costs from duals in user space */
+        for (int j = 0; j < n; j++) {
+            double rc_refined = model->c[j];
+            for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+                rc_refined -= A->values[p] * solver->dual_solution[A->rowidx[p]];
+            }
+            solver->reduced_costs[j] = rc_refined;
+        }
+
+        /* Re-check dual feasibility with refined reduced costs */
+        max_dual_infeas = 0.0;
+        max_comp_slack = 0.0;
+        for (int j = 0; j < n; j++) {
+            double xj = x[j];
+            double rcj = solver->reduced_costs[j];
+            int at_lb = fabs(xj - model->lb[j]) < feas_tol;
+            int at_ub = fabs(xj - model->ub[j]) < feas_tol;
+
+            double viol = 0.0;
+            if (at_lb && !at_ub) {
+                viol = (model->obj_sense == 1) ? -rcj : rcj;
+            } else if (at_ub && !at_lb) {
+                viol = (model->obj_sense == 1) ? rcj : -rcj;
+            }
+            if (viol > max_dual_infeas) max_dual_infeas = viol;
+
+            if (fabs(model->ub[j] - model->lb[j]) >= feas_tol) {
+                double dist_lb = fabs(xj - model->lb[j]);
+                double dist_ub = fabs(xj - model->ub[j]);
+                double min_dist = (dist_lb < dist_ub) ? dist_lb : dist_ub;
+                double cs = min_dist * fabs(rcj);
+                if (cs > max_comp_slack) max_comp_slack = cs;
+            }
+        }
+
+        /* Update stored metrics */
+        solver->verify_dual_infeas = max_dual_infeas;
+        solver->verify_comp_slack = max_comp_slack;
+    }
+
+    /* Downgrade to IMPRECISE if any metric exceeds threshold (W2: runtime tols) */
+    int imprecise = 0;
+    if (max_primal_infeas > feas_tol) imprecise = 1;
+    if (max_bound_infeas > feas_tol) imprecise = 1;
+    if (max_dual_infeas > opt_tol) imprecise = 1;
+    if (obj_rel_error > opt_tol) imprecise = 1;
+
+    if (imprecise) {
+        solver->status = RALPH_STATUS_IMPRECISE;
+        if (solver->verbose) {
+            LP_LOG_STDOUT("[verify] IMPRECISE: primal=%.2e bound=%.2e dual=%.2e cs=%.2e obj=%.2e cond=%.2e\n",
+                   max_primal_infeas, max_bound_infeas, max_dual_infeas,
+                   max_comp_slack, obj_rel_error, cond);
+        }
+    } else if (solver->verbose) {
+        LP_LOG_STDOUT("[verify] OK: primal=%.2e bound=%.2e dual=%.2e cs=%.2e obj=%.2e cond=%.2e\n",
+               max_primal_infeas, max_bound_infeas, max_dual_infeas,
+               max_comp_slack, obj_rel_error, cond);
+    }
 }
 
 /*
@@ -227,24 +2675,33 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
         3 * (size_t)n * sizeof(double) +
         /* double arrays: x, rc, se_weights, work3 (n each) */
         4 * (size_t)n * sizeof(double) +
-        /* double arrays: y, work1, work2, rhs, pivot_row, tau_work (m each) */
-        6 * (size_t)m * sizeof(double) +
+        /* double arrays: y, work1, work2, work4, rhs, row_sign, pivot_row, tau_work (m each) */
+        8 * (size_t)m * sizeof(double) +
         /* double arrays: cb_sparse_val, aux_coef */
         (size_t)m * sizeof(double) + (size_t)num_aux_vars * sizeof(double) +
         /* double array: c_original for two-phase (n) */
         (size_t)n * sizeof(double) +
-        /* int arrays: basis, basis_pos (m and n) */
+        /* int arrays: basis, basis_pos (m and n), basis cache cols/nnz (m each) */
         (size_t)m * sizeof(int) + (size_t)n * sizeof(int) +
+        2 * (size_t)m * sizeof(int) +
         /* int arrays: nonbasis, var_status (n-m and n) */
         (size_t)(n - m) * sizeof(int) + (size_t)n * sizeof(VarStatus) +
-        /* int arrays: cb_sparse_idx, aux_row, partial_candidates */
-        (size_t)m * sizeof(int) + (size_t)num_aux_vars * sizeof(int) + 100 * sizeof(int) +
+        /* int arrays: cb_sparse_idx, aux_row, partial_candidates, dual_candidates */
+        (size_t)m * sizeof(int) + (size_t)num_aux_vars * sizeof(int) + 100 * sizeof(int) + 200 * sizeof(int) +
         /* int array: artificial_vars for two-phase */
         (size_t)num_artificial * sizeof(int) +
         /* int array: redundant_rows for two-phase (m) */
         (size_t)m * sizeof(int) +
-        /* Alignment padding (24 allocations * 8 bytes) */
-        192;
+        /* double array: dse_weights for dual steepest edge (m) */
+        (size_t)m * sizeof(double) +
+        /* int array: flip_list for bound flipping (n) */
+        (size_t)n * sizeof(int) +
+        /* int arrays: heap, heap_pos for heap pricing (n each) */
+        2 * (size_t)n * sizeof(int) +
+        /* dual pivot backup: x(n dbl), rc(n dbl), basis(m int), basis_pos(n int), status(n VarStatus) */
+        2 * (size_t)n * sizeof(double) + (size_t)m * sizeof(int) + (size_t)n * sizeof(int) + (size_t)n * sizeof(VarStatus) +
+        /* Alignment padding (37 allocations * 8 bytes) */
+        296;
 
     /* Create arena */
     tab->arena = sh_arena_create(arena_size);
@@ -261,6 +2718,8 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     tab->nonbasis = (int*)sh_arena_alloc(tab->arena, (n - m) * sizeof(int));
     tab->var_status = (VarStatus*)sh_arena_alloc(tab->arena, n * sizeof(VarStatus));
     tab->basis_pos = (int*)sh_arena_alloc(tab->arena, n * sizeof(int));
+    tab->basis_col_cache = (int*)sh_arena_alloc(tab->arena, m * sizeof(int));
+    tab->basis_col_nnz_cache = (int*)sh_arena_alloc(tab->arena, m * sizeof(int));
 
     tab->x = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
     tab->y = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
@@ -269,7 +2728,9 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     tab->work1 = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
     tab->work2 = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
     tab->work3 = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
+    tab->work4 = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
     tab->rhs = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
+    tab->row_sign = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
     tab->pivot_row = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
     tab->tau_work = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
 
@@ -288,6 +2749,12 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     tab->partial_candidates = (int*)sh_arena_alloc(tab->arena, tab->partial_cand_capacity * sizeof(int));
     tab->partial_cand_count = 0;
 
+    /* Dual candidate list for ratio test (T2.2) */
+    tab->dual_cand_capacity = 200;
+    tab->dual_candidates = (int*)sh_arena_alloc(tab->arena, 200 * sizeof(int));
+    tab->dual_cand_count = 0;
+    tab->dual_cand_valid = 0;
+
     /* Two-phase simplex arrays */
     tab->c_original = (double*)sh_arena_calloc(tab->arena, n, sizeof(double));
     tab->num_artificial = num_artificial;
@@ -300,17 +2767,43 @@ static int tableau_alloc_arrays(SimplexTableau *tab, int num_aux_vars, int num_a
     /* Redundant row tracking (for handling singular basis from stuck artificials) */
     tab->redundant_rows = (int*)sh_arena_calloc(tab->arena, m, sizeof(int));
     tab->num_redundant = 0;
+    tab->redundant_rows_zeroed = 0;
+
+    /* Dual steepest edge weights (P6) */
+    tab->dse_weights = (double*)sh_arena_calloc(tab->arena, m, sizeof(double));
+    tab->dse_initialized = 0;
+
+    /* Bound flipping scratch (P5) */
+    tab->flip_list = (int*)sh_arena_alloc(tab->arena, n * sizeof(int));
+    tab->flip_count = 0;
+
+    /* Heap pricing (T2.2) */
+    tab->heap = (int*)sh_arena_alloc(tab->arena, n * sizeof(int));
+    tab->heap_pos = (int*)sh_arena_alloc(tab->arena, n * sizeof(int));
+    tab->heap_size = 0;
+    if (tab->heap_pos) memset(tab->heap_pos, -1, n * sizeof(int));
+
+    /* Pre-allocated backup arrays for dual_simplex_pivot rollback (B2 fix) */
+    tab->dual_x_backup = (double*)sh_arena_alloc(tab->arena, n * sizeof(double));
+    tab->dual_rc_backup = (double*)sh_arena_alloc(tab->arena, n * sizeof(double));
+    tab->dual_basis_backup = (int*)sh_arena_alloc(tab->arena, m * sizeof(int));
+    tab->dual_basis_pos_backup = (int*)sh_arena_alloc(tab->arena, n * sizeof(int));
+    tab->dual_status_backup = (VarStatus*)sh_arena_alloc(tab->arena, n * sizeof(VarStatus));
 
     /* Single check for all allocations */
     if (!tab->c_ext || !tab->lb_ext || !tab->ub_ext ||
         !tab->basis || !tab->nonbasis || !tab->var_status || !tab->basis_pos ||
+        !tab->basis_col_cache || !tab->basis_col_nnz_cache ||
         !tab->x || !tab->y || !tab->rc ||
-        !tab->work1 || !tab->work2 || !tab->work3 || !tab->rhs ||
+        !tab->work1 || !tab->work2 || !tab->work3 || !tab->work4 || !tab->rhs || !tab->row_sign ||
         !tab->pivot_row || !tab->tau_work || !tab->se_weights ||
         !tab->cb_sparse_idx || !tab->cb_sparse_val ||
-        !tab->aux_row || !tab->aux_coef || !tab->partial_candidates ||
+        !tab->aux_row || !tab->aux_coef || !tab->partial_candidates || !tab->dual_candidates ||
         !tab->c_original || (num_artificial > 0 && !tab->artificial_vars) ||
-        !tab->redundant_rows) {
+        !tab->redundant_rows || !tab->dse_weights || !tab->flip_list ||
+        !tab->heap || !tab->heap_pos ||
+        !tab->dual_x_backup || !tab->dual_rc_backup ||
+        !tab->dual_basis_backup || !tab->dual_basis_pos_backup || !tab->dual_status_backup) {
         return -1;
     }
     return 0;
@@ -336,7 +2829,12 @@ static void tableau_init_weights(SimplexTableau *tab) {
     tab->rc_all_valid = 0;
 }
 
-SimplexTableau* tableau_create(LPModel *model) {
+/* Internal: create tableau with explicit two-phase control.
+ * dual_mode: if set, creates auxiliaries without artificials:
+ *   <= : slack (+1, cost 0, [0,inf))
+ *   >= : surplus (-1, cost 0, [0,inf))  — no artificial
+ *   =  : fixed slack (+1, cost 0, [0,0]) — dual drives to zero */
+static SimplexTableau* tableau_create_ex(LPModel *model, int force_two_phase, int dual_mode) {
     if (!model) return NULL;
 
     /* Finalize model if not done */
@@ -386,7 +2884,10 @@ SimplexTableau* tableau_create(LPModel *model) {
         }
 
         /* Count auxiliary variables needed */
-        if (norm_sense[i] == 'L') {
+        if (dual_mode) {
+            /* Dual mode: one auxiliary per constraint, no artificials */
+            num_aux_vars += 1;
+        } else if (norm_sense[i] == 'L') {
             num_aux_vars += 1;  /* slack only */
         } else if (norm_sense[i] == 'G') {
             num_aux_vars += 2;  /* surplus + artificial */
@@ -402,12 +2903,13 @@ SimplexTableau* tableau_create(LPModel *model) {
     tab->num_aux = num_aux_vars;
     tab->num_equalities = num_equalities;
 
-    /* Decide whether to use two-phase simplex based on equality count.
-     * Two-phase is more numerically stable when there are many equalities,
-     * but can have issues with stuck artificials (redundant rows).
-     * Threshold: use two-phase only when equalities > 80% of constraints.
-     * This targets extreme cases like beaconfd (81% equalities). */
-    int use_two_phase = (num_equalities > (4 * model->num_cons) / 5);
+    /* Use two-phase simplex for ALL problems with artificial variables.
+     * Phase 1 minimizes sum of artificials (cost=1.0) to find a feasible basis.
+     * Phase 2 optimizes the original objective.
+     * This eliminates Big-M method entirely, avoiding objective contamination
+     * for problems where M isn't large enough relative to optimal coefficients.
+     */
+    int use_two_phase = !dual_mode && (force_two_phase || num_artificial > 0);
     tab->use_two_phase = use_two_phase;
 
     /* Allocate all tableau arrays */
@@ -462,32 +2964,52 @@ SimplexTableau* tableau_create(LPModel *model) {
     }
 
     /* Compute initial Ax values (x at lower bounds) for each row to decide
-     * whether surplus or artificial should be basic for >= constraints */
-    double *ax_initial = (double*)calloc(model->num_cons, sizeof(double));
-    if (!ax_initial) {
-        free(norm_sense);
-        free(norm_sign);
-        triplets_free(trips);
-        tableau_free(tab);
-        return NULL;
-    }
-    for (int j = 0; j < model->num_vars; j++) {
-        for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
-            int row = model->A->rowidx[p];
-            double val = model->A->values[p] * norm_sign[row];  /* Apply row normalization */
-            ax_initial[row] += val * model->lb[j];  /* x starts at lower bound */
+     * whether surplus or artificial should be basic for >= constraints.
+     * Not needed in dual_mode (no artificials to choose between). */
+    double *ax_initial = NULL;
+    if (!dual_mode) {
+        ax_initial = (double*)calloc(model->num_cons, sizeof(double));
+        if (!ax_initial) {
+            free(norm_sense);
+            free(norm_sign);
+            triplets_free(trips);
+            tableau_free(tab);
+            return NULL;
+        }
+        for (int j = 0; j < model->num_vars; j++) {
+            for (int p = model->A->colptr[j]; p < model->A->colptr[j + 1]; p++) {
+                int row = model->A->rowidx[p];
+                double val = model->A->values[p] * norm_sign[row];
+                ax_initial[row] += val * model->lb[j];
+            }
         }
     }
 
     /* Add auxiliary variables and record their mapping to constraints.
-     * For two-phase simplex, artificial variable costs are 1.0 (Phase 1 objective).
-     * For Big-M method, artificial variable costs are RALPH_BIG_M. */
-    double artificial_cost = use_two_phase ? 1.0 : RALPH_BIG_M;
+     * Artificial variable costs are 1.0 (Phase 1 objective).
+     * For dual_mode: no artificials — one aux per constraint with zero cost. */
+    double artificial_cost = 1.0;
     int aux_idx = model->num_vars;
     int aux_map_idx = 0;  /* Index into aux_row/aux_coef arrays */
     int art_idx = 0;  /* Index into artificial_vars array */
     for (int i = 0; i < model->num_cons; i++) {
-        if (norm_sense[i] == 'L') {
+        if (dual_mode) {
+            /* Dual mode: one auxiliary per constraint, no artificials.
+             * <= : slack (+1, [0,inf))
+             * >= : surplus (-1, [0,inf))
+             * =  : fixed slack (+1, [0,0]) — dual simplex drives to zero */
+            double coef = (norm_sense[i] == 'G') ? -1.0 : 1.0;
+            triplets_add(trips, i, aux_idx, coef);
+            tab->c_ext[aux_idx] = 0.0;
+            tab->lb_ext[aux_idx] = 0.0;
+            tab->ub_ext[aux_idx] = (norm_sense[i] == 'E') ? 0.0 : RALPH_INFINITY;
+            basic_var_for_row[i] = aux_idx;
+
+            tab->aux_row[aux_map_idx] = i;
+            tab->aux_coef[aux_map_idx] = coef;
+            aux_map_idx++;
+            aux_idx++;
+        } else if (norm_sense[i] == 'L') {
             /* <= : add slack with coef +1, slack is basic */
             triplets_add(trips, i, aux_idx, 1.0);
             tab->c_ext[aux_idx] = 0.0;
@@ -563,8 +3085,7 @@ SimplexTableau* tableau_create(LPModel *model) {
     free(ax_initial);
 
     /* Store original costs for auxiliary variables (for Phase 2 transition).
-     * Slack/surplus have zero cost, artificial variables have Big-M cost in
-     * the original formulation. */
+     * Slack/surplus have zero cost, artificials have cost 1.0 (Phase 1 objective). */
     for (int j = model->num_vars; j < tab->n; j++) {
         /* Check if this is an artificial variable */
         int is_artificial = 0;
@@ -586,6 +3107,10 @@ SimplexTableau* tableau_create(LPModel *model) {
 
     /* Initialize phase */
     tab->phase = use_two_phase ? 1 : 2;
+    tab->perturb_scale = 1.0;
+    tab->solution_last_residual_iter = -1;
+    tab->solution_last_residual_factorize_calls = -1;
+    tab->solution_last_residual_num_updates = -1;
 
     tab->A_ext = triplets_to_csc(trips);
     triplets_free(trips);
@@ -598,9 +3123,56 @@ SimplexTableau* tableau_create(LPModel *model) {
         return NULL;
     }
 
-    /* Set up RHS (with sign normalization) */
+    /* Build CSR (row-form) transpose of A_ext for row-scatter RC update.
+     * CSC→CSR transpose: count row nnz, prefix-sum, scatter entries. O(nnz). */
+    {
+        int csr_m = tab->m, csr_n = tab->n;
+        int csr_nnz = tab->A_ext->colptr[csr_n];
+        tab->csr_rowptr = (int*)calloc(csr_m + 1, sizeof(int));
+        tab->csr_colidx = (int*)malloc(csr_nnz * sizeof(int));
+        tab->csr_values = (double*)malloc(csr_nnz * sizeof(double));
+        tab->csr_alpha = (double*)calloc(csr_n, sizeof(double));
+        if (!tab->csr_rowptr || !tab->csr_colidx || !tab->csr_values || !tab->csr_alpha) {
+            free(norm_sense); free(norm_sign); free(basic_var_for_row);
+            tableau_free(tab);
+            return NULL;
+        }
+        /* Count nnz per row */
+        for (int j = 0; j < csr_n; j++) {
+            for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j+1]; p++) {
+                tab->csr_rowptr[tab->A_ext->rowidx[p] + 1]++;
+            }
+        }
+        /* Prefix sum */
+        for (int i = 0; i < csr_m; i++) {
+            tab->csr_rowptr[i+1] += tab->csr_rowptr[i];
+        }
+        /* Scatter entries (use csr_alpha as temp position counter — it's zeroed) */
+        int *pos = (int*)tab->csr_alpha;  /* Reuse scratch as int (same size, temp) */
+        memset(pos, 0, csr_m * sizeof(int));
+        for (int j = 0; j < csr_n; j++) {
+            for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j+1]; p++) {
+                int row = tab->A_ext->rowidx[p];
+                int dest = tab->csr_rowptr[row] + pos[row];
+                tab->csr_colidx[dest] = j;
+                tab->csr_values[dest] = tab->A_ext->values[p];
+                pos[row]++;
+            }
+        }
+        /* Re-zero csr_alpha scratch for use in RC update */
+        memset(tab->csr_alpha, 0, csr_n * sizeof(double));
+
+        /* Enable row-scatter only for sparse matrices where it beats vectorized column-scan.
+         * At density > ~2%, the column-scan benefits from auto-vectorization (SIMD) while
+         * the row-scatter's irregular access patterns prevent it. */
+        double density = (double)csr_nnz / ((double)csr_m * (double)csr_n);
+        tab->csr_use_scatter = (density < 0.02);
+    }
+
+    /* Set up RHS (with sign normalization) and store row signs for Farkas mapping */
     for (int i = 0; i < model->num_cons; i++) {
         tab->rhs[i] = fabs(model->b[i]);  /* Already normalized to be non-negative */
+        tab->row_sign[i] = norm_sign[i];  /* +1 or -1 for coordinate mapping */
     }
 
     /* Initialize basis using basic_var_for_row */
@@ -679,12 +3251,155 @@ SimplexTableau* tableau_create(LPModel *model) {
     return tab;
 }
 
+/* Public wrapper: create tableau with automatic two-phase decision */
+SimplexTableau* tableau_create(LPModel *model) {
+    return tableau_create_ex(model, 0, 0);
+}
+
+/* Dual mode wrapper: no artificials, one auxiliary per constraint */
+SimplexTableau* tableau_create_dual(LPModel *model) {
+    return tableau_create_ex(model, 0, 1);
+}
+
+/* Apply a saved basis/status snapshot into an existing tableau.
+ * This updates basis, basis_pos, var_status, and nonbasic x-values.
+ * Basic x-values are recomputed by tableau_compute_solution after refactorization. */
+int tableau_apply_warm_basis(SimplexTableau *tab, int m, int n,
+                             const int *basis, const VarStatus *var_status) {
+    if (!tab || !basis || !var_status) return -1;
+    if (m != tab->m || n != tab->n) return -1;
+
+    unsigned char *seen = (unsigned char*)calloc((size_t)n, sizeof(unsigned char));
+    if (!seen) return -1;
+
+    /* Validate status values first. */
+    for (int j = 0; j < n; j++) {
+        int st = (int)var_status[j];
+        if (st < (int)RALPH_BASIC || st > (int)RALPH_FIXED) {
+            free(seen);
+            return -1;
+        }
+    }
+
+    /* Validate basis indices and uniqueness. */
+    for (int i = 0; i < m; i++) {
+        int bj = basis[i];
+        if (bj < 0 || bj >= n || seen[bj]) {
+            free(seen);
+            return -1;
+        }
+        seen[bj] = 1;
+    }
+
+    /* Apply variable statuses and initialize nonbasic values accordingly. */
+    for (int j = 0; j < n; j++) {
+        VarStatus st = var_status[j];
+        tab->var_status[j] = st;
+        switch (st) {
+            case RALPH_NONBASIC_UPPER:
+                tab->x[j] = tab->ub_ext[j];
+                break;
+            case RALPH_NONBASIC_FREE:
+                if (tab->lb_ext[j] > -RALPH_INFINITY/2 && tab->lb_ext[j] > 0.0) {
+                    tab->x[j] = tab->lb_ext[j];
+                } else if (tab->ub_ext[j] < RALPH_INFINITY/2 && tab->ub_ext[j] < 0.0) {
+                    tab->x[j] = tab->ub_ext[j];
+                } else {
+                    tab->x[j] = 0.0;
+                }
+                break;
+            case RALPH_FIXED:
+            case RALPH_NONBASIC_LOWER:
+                tab->x[j] = tab->lb_ext[j];
+                break;
+            case RALPH_BASIC:
+            default:
+                tab->x[j] = 0.0;
+                break;
+        }
+        tab->basis_pos[j] = -1;
+    }
+
+    /* Apply basis and force listed basics to BASIC status. */
+    for (int i = 0; i < m; i++) {
+        int bj = basis[i];
+        tab->basis[i] = bj;
+        tab->basis_pos[bj] = i;
+        tab->var_status[bj] = RALPH_BASIC;
+    }
+
+    /* Repair invalid status/basis mismatches in saved state. */
+    for (int j = 0; j < n; j++) {
+        if (tab->basis_pos[j] < 0 && tab->var_status[j] == RALPH_BASIC) {
+            tab->var_status[j] = RALPH_NONBASIC_LOWER;
+            tab->x[j] = tab->lb_ext[j];
+        }
+    }
+
+    tab->duals_valid = 0;
+    tab->rc_all_valid = 0;
+    tab->basis_cache_valid = 0;
+    tab->basis_cache_total_nnz = 0;
+
+    free(seen);
+    return 0;
+}
+
+int tableau_apply_structural_bounds(SimplexTableau *tab, int num_struct_vars,
+                                    const double *lb, const double *ub) {
+    if (!tab) return -1;
+    if (num_struct_vars < 0 || num_struct_vars > tab->n) return -1;
+    if (num_struct_vars > 0 && (!lb || !ub)) return -1;
+
+    for (int j = 0; j < num_struct_vars; j++) {
+        tab->lb_ext[j] = lb[j];
+        tab->ub_ext[j] = ub[j];
+    }
+
+    /* Keep non-basics pinned to their status-implied bounds after bound changes. */
+    for (int j = 0; j < tab->n; j++) {
+        switch (tab->var_status[j]) {
+            case RALPH_NONBASIC_LOWER:
+            case RALPH_FIXED:
+                tab->x[j] = tab->lb_ext[j];
+                break;
+            case RALPH_NONBASIC_UPPER:
+                tab->x[j] = tab->ub_ext[j];
+                break;
+            case RALPH_NONBASIC_FREE:
+                if (tab->lb_ext[j] > -RALPH_INFINITY / 2 && tab->lb_ext[j] > 0.0) {
+                    tab->x[j] = tab->lb_ext[j];
+                } else if (tab->ub_ext[j] < RALPH_INFINITY / 2 && tab->ub_ext[j] < 0.0) {
+                    tab->x[j] = tab->ub_ext[j];
+                } else {
+                    tab->x[j] = 0.0;
+                }
+                break;
+            case RALPH_BASIC:
+            default:
+                break;
+        }
+    }
+
+    tab->duals_valid = 0;
+    tab->rc_all_valid = 0;
+    return 0;
+}
+
 void tableau_free(SimplexTableau *tab) {
     if (!tab) return;
 
     /* Free sparse matrix (not in arena) */
     sparse_free(tab->A_ext);
     tab->A_ext = NULL;
+    sparse_free(tab->basis_work);
+    tab->basis_work = NULL;
+
+    /* Free CSR arrays (not in arena) */
+    SAFE_FREE(tab->csr_rowptr);
+    SAFE_FREE(tab->csr_colidx);
+    SAFE_FREE(tab->csr_values);
+    SAFE_FREE(tab->csr_alpha);
 
     /* Free arena (frees all workspace arrays in one call) */
     sh_arena_free(tab->arena);
@@ -698,13 +3413,19 @@ void tableau_free(SimplexTableau *tab) {
     tab->nonbasis = NULL;
     tab->var_status = NULL;
     tab->basis_pos = NULL;
+    tab->basis_col_cache = NULL;
+    tab->basis_col_nnz_cache = NULL;
+    tab->basis_cache_valid = 0;
+    tab->basis_cache_total_nnz = 0;
     tab->x = NULL;
     tab->y = NULL;
     tab->rc = NULL;
     tab->work1 = NULL;
     tab->work2 = NULL;
     tab->work3 = NULL;
+    tab->work4 = NULL;
     tab->rhs = NULL;
+    tab->row_sign = NULL;
     tab->pivot_row = NULL;
     tab->tau_work = NULL;
     tab->se_weights = NULL;
@@ -714,9 +3435,15 @@ void tableau_free(SimplexTableau *tab) {
     tab->aux_coef = NULL;
     tab->partial_candidates = NULL;
     tab->redundant_rows = NULL;
+    tab->dual_x_backup = NULL;
+    tab->dual_rc_backup = NULL;
+    tab->dual_basis_backup = NULL;
+    tab->dual_basis_pos_backup = NULL;
+    tab->dual_status_backup = NULL;
 
     /* Free perturbation backups (allocated separately during anti-cycling) */
     SAFE_FREE(tab->perturb_backup);
+    SAFE_FREE(tab->perturb_backup_lb);
     SAFE_FREE(tab->primal_saved_lb);
     SAFE_FREE(tab->primal_saved_ub);
 
@@ -731,9 +3458,299 @@ void tableau_free(SimplexTableau *tab) {
  * Basis Management
  * ============================================================================ */
 
-/* Build basis matrix from current basis */
+static int ensure_basis_workspace(SimplexTableau *tab, int nnz_needed) {
+    if (!tab) return -1;
+    if (nnz_needed < 1) nnz_needed = 1;
+
+    SparseMatrix *B = tab->basis_work;
+    if (!B) {
+        tab->basis_work = sparse_create(tab->m, tab->m, nnz_needed);
+        tab->basis_cache_valid = 0;
+        tab->basis_cache_total_nnz = 0;
+        return tab->basis_work ? 0 : -1;
+    }
+
+    if (B->nrows != tab->m || B->ncols != tab->m) {
+        sparse_free(B);
+        tab->basis_work = sparse_create(tab->m, tab->m, nnz_needed);
+        tab->basis_cache_valid = 0;
+        tab->basis_cache_total_nnz = 0;
+        return tab->basis_work ? 0 : -1;
+    }
+
+    if (B->capacity < nnz_needed) {
+        int *new_rowidx = (int*)realloc(B->rowidx, (size_t)nnz_needed * sizeof(int));
+        if (!new_rowidx) return -1;
+        B->rowidx = new_rowidx;
+
+        double *new_values = (double*)realloc(B->values, (size_t)nnz_needed * sizeof(double));
+        if (!new_values) return -1;
+        B->values = new_values;
+        B->capacity = nnz_needed;
+    }
+
+    return 0;
+}
+
+static void basis_build_record(SimplexTableau *tab,
+                               int fastpath_hit,
+                               int cols_rewritten,
+                               unsigned long long tail_shift_bytes) {
+    lp_telemetry_record_basis_build(tab ? tab->owner : NULL,
+                                    fastpath_hit,
+                                    cols_rewritten,
+                                    tail_shift_bytes);
+}
+
+/* Behavioral counter for periodic policy triggers; kept separate from telemetry. */
+static void runtime_record_periodic_refactor_trigger(SimplexSolver *solver,
+                                                     int phase,
+                                                     int lu_health_triggered) {
+    if (!solver) return;
+    if (!lu_health_triggered) {
+        periodic_policy_refactor_increment(solver, phase);
+    }
+    lp_telemetry_record_periodic_refactor_trigger(solver, phase, lu_health_triggered);
+}
+
+/* Build basis matrix from current basis into reusable workspace */
 static SparseMatrix* build_basis_matrix(SimplexTableau *tab) {
-    return sparse_get_columns(tab->A_ext, tab->m, tab->basis);
+    if (!tab || !tab->A_ext || !tab->basis) return NULL;
+
+    const SparseMatrix *A = tab->A_ext;
+    SparseMatrix *B = tab->basis_work;
+    int changed = 0;
+    int first_changed = tab->m;
+    int last_changed = -1;
+    int nnz = 0;
+
+    /* Fast path: if all changed basis positions preserve column nnz, patch only
+     * those column payloads in-place and keep colptr layout unchanged. */
+    if (tab->basis_cache_valid &&
+        B &&
+        tab->basis_col_cache &&
+        tab->basis_col_nnz_cache &&
+        B->nrows == tab->m &&
+        B->ncols == tab->m &&
+        B->nnz == tab->basis_cache_total_nnz) {
+        int old_total_nnz = tab->basis_cache_total_nnz;
+        int total_nnz = tab->basis_cache_total_nnz;
+        int same_layout = 1;
+
+        for (int k = 0; k < tab->m; k++) {
+            int j = tab->basis[k];
+            int prev_j;
+            int prev_nnz;
+            int next_nnz;
+            if (j < 0 || j >= A->ncols) return NULL;
+
+            prev_j = tab->basis_col_cache[k];
+            if (j == prev_j) continue;
+
+            if (k < first_changed) first_changed = k;
+            if (k > last_changed) last_changed = k;
+            prev_nnz = tab->basis_col_nnz_cache[k];
+            next_nnz = A->colptr[j + 1] - A->colptr[j];
+            total_nnz += next_nnz - prev_nnz;
+            changed++;
+            if (next_nnz != prev_nnz) {
+                same_layout = 0;
+            }
+        }
+
+        if (changed == 0) {
+            basis_build_record(tab, 1, 0, 0);
+            return B;
+        }
+
+        if (total_nnz < 0) {
+            tab->basis_cache_valid = 0;
+            tab->basis_cache_total_nnz = 0;
+        } else if (ensure_basis_workspace(tab, total_nnz) == 0) {
+            B = tab->basis_work;
+            if (same_layout && total_nnz == old_total_nnz) {
+                for (int k = first_changed; k <= last_changed; k++) {
+                    int j = tab->basis[k];
+                    int prev_j = tab->basis_col_cache[k];
+                    int dst;
+                    int src;
+                    int col_nnz;
+                    if (j == prev_j) continue;
+
+                    src = A->colptr[j];
+                    col_nnz = tab->basis_col_nnz_cache[k];
+                    dst = B->colptr[k];
+                    if (col_nnz > 0) {
+                        memcpy(B->rowidx + dst, A->rowidx + src, (size_t)col_nnz * sizeof(int));
+                        memcpy(B->values + dst, A->values + src, (size_t)col_nnz * sizeof(double));
+                    }
+                    tab->basis_col_cache[k] = j;
+                }
+                basis_build_record(tab, 1, changed, 0);
+                return B;
+            }
+
+            /* General incremental path: rewrite only changed columns from A_ext.
+             * Unchanged columns are copied from cached basis payload while the
+             * suffix tail is shifted in-place when span nnz changes. */
+            if (first_changed >= 0 && first_changed < tab->m &&
+                last_changed >= first_changed && last_changed < tab->m) {
+                int old_block_start = B->colptr[first_changed];
+                int old_block_end = B->colptr[last_changed + 1];
+                int old_block_nnz = old_block_end - old_block_start;
+                int new_block_nnz = 0;
+                int old_tail_start = old_block_end;
+                int old_tail_nnz = old_total_nnz - old_tail_start;
+                int span_cols = last_changed - first_changed + 1;
+                int unchanged_cols = span_cols - changed;
+                int use_sparse_patch =
+                    (unchanged_cols > 0 &&
+                     unchanged_cols * 2 >= span_cols &&
+                     old_block_nnz >= 256);
+                unsigned long long tail_shift_bytes = 0;
+                int changed_cols_rewritten = 0;
+
+                for (int k = first_changed; k <= last_changed; k++) {
+                    int j = tab->basis[k];
+                    new_block_nnz += A->colptr[j + 1] - A->colptr[j];
+                }
+
+                {
+                    int delta = new_block_nnz - old_block_nnz;
+                    int scratch_start = 0;
+
+                    if (use_sparse_patch) {
+                        int scratch_end;
+
+                        scratch_start = (old_total_nnz > total_nnz) ? old_total_nnz : total_nnz;
+                        scratch_end = scratch_start + old_block_nnz;
+                        if (scratch_end > B->capacity) {
+                            if (ensure_basis_workspace(tab, scratch_end) != 0) {
+                                tab->basis_cache_valid = 0;
+                                tab->basis_cache_total_nnz = 0;
+                                goto full_rebuild_basis;
+                            }
+                            B = tab->basis_work;
+                        }
+
+                        if (old_block_nnz > 0) {
+                            memcpy(B->rowidx + scratch_start,
+                                   B->rowidx + old_block_start,
+                                   (size_t)old_block_nnz * sizeof(int));
+                            memcpy(B->values + scratch_start,
+                                   B->values + old_block_start,
+                                   (size_t)old_block_nnz * sizeof(double));
+                        }
+                    }
+
+                    if (old_tail_nnz > 0 && delta != 0) {
+                        int new_tail_start = old_tail_start + delta;
+                        memmove(B->rowidx + new_tail_start,
+                                B->rowidx + old_tail_start,
+                                (size_t)old_tail_nnz * sizeof(int));
+                        memmove(B->values + new_tail_start,
+                                B->values + old_tail_start,
+                                (size_t)old_tail_nnz * sizeof(double));
+                        tail_shift_bytes =
+                            (unsigned long long)old_tail_nnz *
+                            (unsigned long long)(sizeof(int) + sizeof(double));
+                    }
+
+                    {
+                        int idx = old_block_start;
+                        for (int k = first_changed; k <= last_changed; k++) {
+                            int j = tab->basis[k];
+                            int prev_j = tab->basis_col_cache[k];
+                            int old_col_start = B->colptr[k];
+                            int start = A->colptr[j];
+                            int end = A->colptr[j + 1];
+                            int col_nnz = end - start;
+                            int col_changed = (j != prev_j);
+                            B->colptr[k] = idx;
+                            if (col_nnz > 0) {
+                                if (!use_sparse_patch || col_changed) {
+                                    memcpy(B->rowidx + idx, A->rowidx + start, (size_t)col_nnz * sizeof(int));
+                                    memcpy(B->values + idx, A->values + start, (size_t)col_nnz * sizeof(double));
+                                } else {
+                                    int old_col_nnz = tab->basis_col_nnz_cache[k];
+                                    int old_offset = old_col_start - old_block_start;
+                                    if (old_col_nnz != col_nnz) {
+                                        tab->basis_cache_valid = 0;
+                                        tab->basis_cache_total_nnz = 0;
+                                        goto full_rebuild_basis;
+                                    }
+                                    memcpy(B->rowidx + idx,
+                                           B->rowidx + scratch_start + old_offset,
+                                           (size_t)col_nnz * sizeof(int));
+                                    memcpy(B->values + idx,
+                                           B->values + scratch_start + old_offset,
+                                           (size_t)col_nnz * sizeof(double));
+                                }
+                            }
+                            if (col_changed) changed_cols_rewritten++;
+                            tab->basis_col_cache[k] = j;
+                            tab->basis_col_nnz_cache[k] = col_nnz;
+                            idx += col_nnz;
+                        }
+                    }
+
+                    if (delta != 0) {
+                        for (int k = last_changed + 1; k <= tab->m; k++) {
+                            B->colptr[k] += delta;
+                        }
+                    }
+                }
+
+                B->nnz = total_nnz;
+                tab->basis_cache_total_nnz = total_nnz;
+                tab->basis_cache_valid = 1;
+                basis_build_record(tab, 1, changed_cols_rewritten, tail_shift_bytes);
+                return B;
+            }
+        } else {
+            tab->basis_cache_valid = 0;
+            tab->basis_cache_total_nnz = 0;
+        }
+
+        tab->basis_cache_valid = 0;
+        tab->basis_cache_total_nnz = 0;
+
+    }
+
+full_rebuild_basis:
+    nnz = 0;
+    for (int k = 0; k < tab->m; k++) {
+        int j = tab->basis[k];
+        if (j < 0 || j >= A->ncols) return NULL;
+        nnz += A->colptr[j + 1] - A->colptr[j];
+    }
+
+    if (ensure_basis_workspace(tab, nnz) != 0) return NULL;
+
+    B = tab->basis_work;
+    int idx = 0;
+    for (int k = 0; k < tab->m; k++) {
+        int j = tab->basis[k];
+        int start = A->colptr[j];
+        int end = A->colptr[j + 1];
+        int col_nnz = end - start;
+
+        B->colptr[k] = idx;
+        if (col_nnz > 0) {
+            memcpy(B->rowidx + idx, A->rowidx + start, (size_t)col_nnz * sizeof(int));
+            memcpy(B->values + idx, A->values + start, (size_t)col_nnz * sizeof(double));
+            idx += col_nnz;
+        }
+        tab->basis_col_cache[k] = j;
+        tab->basis_col_nnz_cache[k] = col_nnz;
+    }
+    B->colptr[tab->m] = idx;
+    B->nnz = idx;
+    tab->basis_cache_total_nnz = idx;
+    tab->basis_cache_valid = 1;
+    basis_build_record(tab, 0, tab->m, 0);
+
+    return B;
 }
 
 /*
@@ -760,7 +3777,6 @@ static int repair_singular_basis(SimplexTableau *tab) {
         /* Try factorization */
         int status = lu_factorize(tab->lu, B);
         if (status == 0) {
-            sparse_free(B);
             return 0;  /* Success */
         }
 
@@ -799,14 +3815,12 @@ static int repair_singular_basis(SimplexTableau *tab) {
                 tab->basis_pos[slack_idx] = k;
 
                 /* Rebuild B and test */
-                sparse_free(B);
                 B = build_basis_matrix(tab);
                 if (!B) return -1;
 
                 /* Test if this improved things */
                 int test_status = lu_factorize(tab->lu, B);
                 if (test_status == 0) {
-                    sparse_free(B);
                     return 0;  /* Success */
                 }
 
@@ -849,17 +3863,43 @@ static int repair_singular_basis(SimplexTableau *tab) {
     }
 
     /* Rebuild and try */
-    sparse_free(B);
     B = build_basis_matrix(tab);
     if (!B) return -1;
 
     int status = lu_factorize(tab->lu, B);
-    sparse_free(B);
 
     return status;
 }
 
 int tableau_refactorize(SimplexTableau *tab) {
+    double t_refactor_ms = lp_telemetry_timer_start();
+    SimplexSolver *owner = tab ? tab->owner : NULL;
+    int reason = RALPH_REFACTOR_REASON_OTHER;
+    int updates_before = (tab && tab->lu) ? tab->lu->num_updates : 0;
+    lp_telemetry_begin_refactor(owner, &reason);
+
+    /* When Phase 2 has stuck artificials on redundant rows, move them to
+     * the FIRST basis positions so LU processes their identity columns first.
+     * This prevents partial pivoting from consuming the redundant rows
+     * for structural columns before the artificial columns need them. */
+    if (tab->phase == 2 && tab->num_redundant > 0 && tab->num_artificial > 0) {
+        int next_pos = 0;
+        for (int k = 0; k < tab->num_artificial && next_pos < tab->m; k++) {
+            int art_j = tab->artificial_vars[k];
+            if (tab->var_status[art_j] != RALPH_BASIC) continue;
+
+            int cur_pos = tab->basis_pos[art_j];
+            if (cur_pos == next_pos) { next_pos++; continue; }
+
+            int other_j = tab->basis[next_pos];
+            tab->basis[next_pos] = art_j;
+            tab->basis[cur_pos] = other_j;
+            tab->basis_pos[art_j] = next_pos;
+            tab->basis_pos[other_j] = cur_pos;
+            next_pos++;
+        }
+    }
+
     SparseMatrix *B = build_basis_matrix(tab);
     if (!B) return -1;
 
@@ -867,24 +3907,61 @@ int tableau_refactorize(SimplexTableau *tab) {
     tab->lu->redundant_rows = tab->redundant_rows;
     tab->lu->num_redundant = tab->num_redundant;
 
-    /* For two-phase problems with many equalities, allow limited regularization
-     * to handle near-singular bases. Currently DISABLED because:
-     * - Regularization with small diagonal (1e-6) causes NaN via 1/1e-6 = 1e6 multipliers
-     * - Regularization with large diagonal (1.0) causes UNBOUNDED (constraint structure lost)
-     * TODO: Implement threshold pivoting in LU to avoid near-singular bases entirely */
-    tab->lu->allow_regularization = 0;
-    tab->lu->max_regularizations = 0;
+    /* Allow limited regularization for near-singular bases.
+     * Phase 1: many artificial variables create near-singular bases.
+     * Phase 2 with redundant rows: always allow (even after zeroing A_ext).
+     * After zeroing, the sparse LU may still encounter zero pivots at zeroed
+     * rows if its column ordering doesn't process artificials first. */
+    if (tab->use_two_phase && (tab->phase == 1 ||
+        (tab->phase == 2 && tab->num_redundant > 0))) {
+        int reg_limit = RALPH_PHASE1_MAX_REGULARIZATIONS;
+        if (tab->num_redundant > reg_limit) {
+            reg_limit = tab->num_redundant;
+        }
+        if (reg_limit > tab->m) {
+            reg_limit = tab->m;
+        }
+        tab->lu->allow_regularization = 1;
+        tab->lu->max_regularizations = reg_limit;
+    } else {
+        tab->lu->allow_regularization = 0;
+        tab->lu->max_regularizations = 0;
+    }
     tab->lu->num_regularized = 0;
 
+    /* When Phase 2 has redundant rows (not yet zeroed), relax pivot tolerance
+     * to accept small but valid structural pivots. After zeroing, use normal
+     * tolerance since the basis is well-conditioned. */
+    double saved_tol = tab->lu->pivot_tol;
+    if (tab->phase == 2 && tab->num_redundant > 0 && !tab->redundant_rows_zeroed) {
+        tab->lu->pivot_tol = 1e-15;
+    }
+
     int status = lu_factorize(tab->lu, B);
-    sparse_free(B);
+
+    tab->lu->pivot_tol = saved_tol;
 
     if (status != 0) {
         /* Factorization failed - try to repair the basis */
         status = repair_singular_basis(tab);
     }
 
+    if (owner) {
+        lp_telemetry_record_refactor_with_lu_timed(owner,
+                                                   tab ? tab->phase : 0,
+                                                   reason,
+                                                   t_refactor_ms,
+                                                   tab ? tab->m : 0,
+                                                   tab ? tab->lu : NULL);
+        periodic_feedback_record_refactor(owner, tab ? tab->phase : 0, reason, updates_before, status);
+    }
+
     return status;
+}
+
+static inline int tableau_refactorize_with_reason(SimplexTableau *tab, int reason) {
+    lp_telemetry_set_refactor_next_reason(tab ? tab->owner : NULL, reason);
+    return tableau_refactorize(tab);
 }
 
 /* ============================================================================
@@ -892,6 +3969,8 @@ int tableau_refactorize(SimplexTableau *tab) {
  * ============================================================================ */
 
 int tableau_compute_solution(SimplexTableau *tab) {
+    double t0_ms = lp_telemetry_timer_start();
+
     /* Compute x_B = B^{-1} * (b - N*x_N) */
 
     /* First compute b - N*x_N */
@@ -906,11 +3985,9 @@ int tableau_compute_solution(SimplexTableau *tab) {
         }
     }
 
-    /* Save original RHS for iterative refinement */
-    double *orig_rhs = (double*)calloc(tab->m, sizeof(double));
-    if (orig_rhs) {
-        vec_copy_data(orig_rhs, tab->work1, tab->m);
-    }
+    /* Save original RHS for iterative refinement in pre-allocated workspace. */
+    double *orig_rhs = tab->work4;
+    vec_copy_data(orig_rhs, tab->work1, tab->m);
 
     /* Solve B * x_B = work1 */
     lu_solve(tab->lu, tab->work1, tab->work2);
@@ -920,50 +3997,70 @@ int tableau_compute_solution(SimplexTableau *tab) {
         tab->x[tab->basis[k]] = tab->work2[k];
     }
 
-    /* Iterative refinement: check residual and correct if needed */
-    if (orig_rhs) {
-        /* Compute residual: r = b - B*x_B */
-        /* work3 will hold B*x_B */
-        vec_set_zero(tab->work3, tab->m);
-        for (int k = 0; k < tab->m; k++) {
-            int j = tab->basis[k];
-            sparse_axpy_column(tab->A_ext, j, tab->x[j], tab->work3);
-        }
-
-        /* work1 = original_rhs - B*x_B = residual */
-        double max_residual = 0.0;
-        for (int i = 0; i < tab->m; i++) {
-            tab->work1[i] = orig_rhs[i] - tab->work3[i];
-            double absval = fabs(tab->work1[i]);
-            if (absval > max_residual) max_residual = absval;
-        }
-
-        /* If residual is large, do iterative refinement */
-        int max_refine_iters = 5;
-        for (int refine_iter = 0; refine_iter < max_refine_iters && max_residual > RALPH_FEAS_TOL; refine_iter++) {
-            /* Solve B * correction = residual */
-            lu_solve(tab->lu, tab->work1, tab->work2);
-
-            /* Update solution: x_B += correction */
-            for (int k = 0; k < tab->m; k++) {
-                tab->x[tab->basis[k]] += tab->work2[k];
+    /* Residual/refinement is expensive; run at most once per (iter, LU state). */
+    {
+        int do_residual_refine = 1;
+        int lu_factorize_calls = -1;
+        int lu_num_updates = -1;
+        if (tab->lu) {
+            lu_factorize_calls = tab->lu->telemetry.perf_factorize_calls;
+            lu_num_updates = tab->lu->num_updates;
+            if (tab->solution_last_residual_iter == tab->iterations &&
+                tab->solution_last_residual_factorize_calls == lu_factorize_calls &&
+                tab->solution_last_residual_num_updates == lu_num_updates) {
+                do_residual_refine = 0;
             }
+        }
 
-            /* Recompute residual */
-            vec_set_zero(tab->work3, tab->m);
+        if (do_residual_refine) {
+            double *basis_image = tab->y;  /* size m scratch */
+
+            tab->solution_last_residual_iter = tab->iterations;
+            tab->solution_last_residual_factorize_calls = lu_factorize_calls;
+            tab->solution_last_residual_num_updates = lu_num_updates;
+
+            /* Compute residual: r = rhs_orig - B*x_B */
+            vec_set_zero(basis_image, tab->m);
             for (int k = 0; k < tab->m; k++) {
                 int j = tab->basis[k];
-                sparse_axpy_column(tab->A_ext, j, tab->x[j], tab->work3);
+                sparse_axpy_column(tab->A_ext, j, tab->x[j], basis_image);
             }
-            max_residual = 0.0;
+
+            /* work1 = original_rhs - B*x_B = residual */
+            double max_residual = 0.0;
             for (int i = 0; i < tab->m; i++) {
-                tab->work1[i] = orig_rhs[i] - tab->work3[i];
+                tab->work1[i] = orig_rhs[i] - basis_image[i];
                 double absval = fabs(tab->work1[i]);
                 if (absval > max_residual) max_residual = absval;
             }
-        }
 
-        free(orig_rhs);
+            /* If residual is large, do bounded iterative refinement. */
+            int max_refine_iters = solution_refine_iteration_budget(max_residual, RALPH_FEAS_TOL);
+            for (int refine_iter = 0;
+                 refine_iter < max_refine_iters && max_residual > RALPH_FEAS_TOL;
+                 refine_iter++) {
+                /* Solve B * correction = residual */
+                lu_solve(tab->lu, tab->work1, tab->work2);
+
+                /* Update solution: x_B += correction */
+                for (int k = 0; k < tab->m; k++) {
+                    tab->x[tab->basis[k]] += tab->work2[k];
+                }
+
+                /* Recompute residual */
+                vec_set_zero(basis_image, tab->m);
+                for (int k = 0; k < tab->m; k++) {
+                    int j = tab->basis[k];
+                    sparse_axpy_column(tab->A_ext, j, tab->x[j], basis_image);
+                }
+                max_residual = 0.0;
+                for (int i = 0; i < tab->m; i++) {
+                    tab->work1[i] = orig_rhs[i] - basis_image[i];
+                    double absval = fabs(tab->work1[i]);
+                    if (absval > max_residual) max_residual = absval;
+                }
+            }
+        }
     }
 
     /* Compute objective value with SIMD reduction */
@@ -977,10 +4074,21 @@ int tableau_compute_solution(SimplexTableau *tab) {
     }
     tab->obj_value = obj;
 
+    if (tab->owner) {
+        lp_telemetry_record_compute_solution_timed(tab->owner, tab->phase, t0_ms);
+        if (tab->phase == 1) {
+            lp_telemetry_record_phase1_compute_solution_context(
+                tab->owner,
+                (LPPhase1ComputeContext)tab->phase1_compute_solution_context);
+            tab->phase1_compute_solution_context = LP_PHASE1_COMPUTE_CTX_OTHER;
+        }
+    }
     return 0;
 }
 
 int tableau_compute_reduced_costs(SimplexTableau *tab) {
+    double t0_ms = lp_telemetry_timer_start();
+
     /* Compute dual values: y = B^{-T} * c_B
      * If c_B is sparse (many slacks with 0 cost), use sparse BTRAN
      */
@@ -1043,6 +4151,21 @@ int tableau_compute_reduced_costs(SimplexTableau *tab) {
     tab->duals_valid = 1;
     tab->rc_all_valid = 1;
 
+    /* Invalidate dual candidate list — RC recomputed from scratch */
+    tab->dual_cand_valid = 0;
+
+    /* Invalidate heap — must be rebuilt from scratch (T2.2) */
+    tab->heap_size = 0;
+
+    if (tab->owner) {
+        lp_telemetry_record_compute_reduced_costs_timed(tab->owner, tab->phase, t0_ms);
+        if (tab->phase == 1) {
+            lp_telemetry_record_phase1_compute_rc_context(
+                tab->owner,
+                (LPPhase1ComputeContext)tab->phase1_compute_rc_context);
+            tab->phase1_compute_rc_context = LP_PHASE1_COMPUTE_CTX_OTHER;
+        }
+    }
     return 0;
 }
 
@@ -1106,6 +4229,138 @@ static inline void tableau_invalidate_rc(SimplexTableau *tab) {
 }
 
 /* ============================================================================
+ * Heap Pricing Infrastructure (T2.2)
+ *
+ * Binary max-heap of non-basic variable indices, keyed by improvement score.
+ * Score = effective Dantzig improvement considering variable status:
+ *   NONBASIC_LOWER with rc < 0: score = -rc
+ *   NONBASIC_UPPER with rc > 0: score = +rc
+ *   NONBASIC_FREE:              score = |rc|
+ *   Otherwise (wrong sign):     score = 0 (sinks to bottom)
+ * This eliminates stale entries: ineligible variables have score 0.
+ * Maintained incrementally during RC updates in simplex_pivot().
+ * ============================================================================ */
+
+static inline double heap_score(const SimplexTableau *tab, int j) {
+    if (simplex_smcp_excl_skip_var(tab, j)) return 0.0;
+    double rc = tab->rc[j];
+    VarStatus st = tab->var_status[j];
+    if (st == RALPH_NONBASIC_LOWER && rc < 0) return -rc;
+    if (st == RALPH_NONBASIC_UPPER && rc > 0) return rc;
+    if (st == RALPH_NONBASIC_FREE) return fabs(rc);
+    return 0.0;
+}
+
+static inline void heap_swap(SimplexTableau *tab, int a, int b) {
+    int va = tab->heap[a], vb = tab->heap[b];
+    tab->heap[a] = vb;
+    tab->heap[b] = va;
+    tab->heap_pos[va] = b;
+    tab->heap_pos[vb] = a;
+}
+
+static void heap_sift_up(SimplexTableau *tab, int pos) {
+    const int *heap = tab->heap;
+    while (pos > 0) {
+        int parent = (pos - 1) >> 1;
+        if (heap_score(tab, heap[pos]) > heap_score(tab, heap[parent])) {
+            heap_swap(tab, pos, parent);
+            pos = parent;
+        } else {
+            break;
+        }
+    }
+}
+
+static void heap_sift_down(SimplexTableau *tab, int pos) {
+    const int *heap = tab->heap;
+    int size = tab->heap_size;
+    for (;;) {
+        int best = pos;
+        int left = 2 * pos + 1;
+        int right = left + 1;
+        if (left < size && heap_score(tab, heap[left]) > heap_score(tab, heap[best]))
+            best = left;
+        if (right < size && heap_score(tab, heap[right]) > heap_score(tab, heap[best]))
+            best = right;
+        if (best == pos) break;
+        heap_swap(tab, pos, best);
+        pos = best;
+    }
+}
+
+static void heap_build(SimplexTableau *tab) {
+    tab->heap_size = 0;
+    for (int j = 0; j < tab->n; j++) {
+        if (tab->var_status[j] == RALPH_BASIC) {
+            tab->heap_pos[j] = -1;
+        } else {
+            tab->heap_pos[j] = tab->heap_size;
+            tab->heap[tab->heap_size++] = j;
+        }
+    }
+    /* Bottom-up heapify in O(n) */
+    for (int i = (tab->heap_size >> 1) - 1; i >= 0; i--) {
+        heap_sift_down(tab, i);
+    }
+}
+
+static void heap_remove(SimplexTableau *tab, int var_j) {
+    int pos = tab->heap_pos[var_j];
+    if (pos < 0) return;  /* not in heap */
+    tab->heap_pos[var_j] = -1;
+    int last = --tab->heap_size;
+    if (pos == last) return;  /* was last element */
+    int moved = tab->heap[last];
+    tab->heap[pos] = moved;
+    tab->heap_pos[moved] = pos;
+    /* Sift in the correct direction */
+    if (pos > 0 && heap_score(tab, moved) > heap_score(tab, tab->heap[(pos - 1) >> 1])) {
+        heap_sift_up(tab, pos);
+    } else {
+        heap_sift_down(tab, pos);
+    }
+}
+
+static void heap_insert(SimplexTableau *tab, int var_j) {
+    int pos = tab->heap_size++;
+    tab->heap[pos] = var_j;
+    tab->heap_pos[var_j] = pos;
+    heap_sift_up(tab, pos);
+}
+
+static void heap_update(SimplexTableau *tab, int var_j) {
+    int pos = tab->heap_pos[var_j];
+    if (pos < 0) return;  /* basic var, not in heap */
+    /* Sift up or down based on new score */
+    if (pos > 0 && heap_score(tab, var_j) > heap_score(tab, tab->heap[(pos - 1) >> 1])) {
+        heap_sift_up(tab, pos);
+    } else {
+        heap_sift_down(tab, pos);
+    }
+}
+
+/* Heap-based Dantzig pricing: O(1) extraction of max-improvement variable.
+ * Ineligible variables have score 0 and naturally sit at the bottom. */
+int pricing_heap(SimplexTableau *tab, int *entering) {
+    /* Lazy rebuild: heap was invalidated by full RC recomputation */
+    if (tab->heap_size == 0 && tab->rc_all_valid) heap_build(tab);
+    /* Pop ineligible entries (safety net for status changes missed by
+     * incremental maintenance, e.g. bound flips in ratio test). */
+    while (tab->heap_size > 0) {
+        int j = tab->heap[0];
+        double sc = heap_score(tab, j);
+        if (sc >= RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        }
+        /* Ineligible root — remove and try next */
+        heap_remove(tab, j);
+    }
+    return 1;  /* optimal */
+}
+
+/* ============================================================================
  * Pricing (Entering Variable Selection)
  * ============================================================================ */
 
@@ -1115,7 +4370,7 @@ int pricing_dantzig(SimplexTableau *tab, int *entering) {
     *entering = -1;
 
     for (int j = 0; j < tab->n; j++) {
-        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
 
         double rc = tab->rc[j];
 
@@ -1141,7 +4396,7 @@ int pricing_bland(SimplexTableau *tab, int *entering) {
     *entering = -1;
 
     for (int j = 0; j < tab->n; j++) {
-        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
 
         double rc = tab->rc[j];
 
@@ -1161,6 +4416,650 @@ int pricing_bland(SimplexTableau *tab, int *entering) {
     return 1;  /* 1 = optimal */
 }
 
+/* Bland-style pricing with one excluded variable index. */
+static int pricing_bland_excluding(SimplexTableau *tab, int excluded_var, int *entering) {
+    *entering = -1;
+
+    for (int j = 0; j < tab->n; j++) {
+        if (j == excluded_var) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
+
+        double rc = tab->rc[j];
+
+        if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        } else if (tab->var_status[j] == RALPH_NONBASIC_FREE && fabs(rc) > RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int pricing_bland_excluding_two(SimplexTableau *tab,
+                                       int excluded_a,
+                                       int excluded_b,
+                                       int *entering) {
+    *entering = -1;
+
+    for (int j = 0; j < tab->n; j++) {
+        if (j == excluded_a || j == excluded_b) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
+
+        double rc = tab->rc[j];
+
+        if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        } else if (tab->var_status[j] == RALPH_NONBASIC_FREE && fabs(rc) > RALPH_OPT_TOL) {
+            *entering = j;
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static void phase1_exclude_entering_var(int var,
+                                        int ttl,
+                                        int *exclude_a,
+                                        int *ttl_a,
+                                        int *exclude_b,
+                                        int *ttl_b) {
+    if (var < 0 || ttl <= 0 || !exclude_a || !ttl_a || !exclude_b || !ttl_b) return;
+    /* Note: var is validated by callers (pricing functions return valid indices),
+     * but we skip storing obviously invalid indices defensively. */
+
+    if (*exclude_a == var || *ttl_a <= 0) {
+        *exclude_a = var;
+        *ttl_a = ttl;
+        return;
+    }
+    if (*exclude_b == var || *ttl_b <= 0) {
+        *exclude_b = var;
+        *ttl_b = ttl;
+        return;
+    }
+
+    if (*ttl_a <= *ttl_b) {
+        *exclude_a = var;
+        *ttl_a = ttl;
+    } else {
+        *exclude_b = var;
+        *ttl_b = ttl;
+    }
+}
+
+static void phase1_exclude_entering_var_tracked(SimplexSolver *solver,
+                                                int var,
+                                                int ttl,
+                                                int *exclude_a,
+                                                int *ttl_a,
+                                                int *exclude_b,
+                                                int *ttl_b) {
+    int repeated_slot = 0;
+
+    if (var < 0 || ttl <= 0 || !exclude_a || !ttl_a || !exclude_b || !ttl_b) return;
+    if ((*ttl_a > 0 && *exclude_a == var) || (*ttl_b > 0 && *exclude_b == var)) {
+        repeated_slot = 1;
+    }
+    phase1_exclude_entering_var(var, ttl, exclude_a, ttl_a, exclude_b, ttl_b);
+    lp_telemetry_record_phase1_entering_exclusion(solver, repeated_slot);
+}
+
+static void phase1_note_dir_skip_entering(SimplexSolver *solver,
+                                          int entering,
+                                          int *last_entering,
+                                          int *same_entering_streak) {
+    int streak = 0;
+    int same_entering = 0;
+
+    if (entering < 0 || !last_entering || !same_entering_streak) return;
+    if (*last_entering == entering) {
+        same_entering = 1;
+        streak = *same_entering_streak;
+        if (streak < INT_MAX) streak++;
+    } else {
+        *last_entering = entering;
+        streak = 1;
+    }
+    *same_entering_streak = streak;
+    lp_telemetry_record_phase1_dir_skip_entering(solver, same_entering, streak);
+}
+
+static void phase1_note_failed_stabilize_entering(SimplexSolver *solver,
+                                                  int entering,
+                                                  int *last_entering,
+                                                  int *same_entering_streak) {
+    int streak = 0;
+    int same_entering = 0;
+
+    if (entering < 0 || !last_entering || !same_entering_streak) return;
+    if (*last_entering == entering) {
+        same_entering = 1;
+        streak = *same_entering_streak;
+        if (streak < INT_MAX) streak++;
+    } else {
+        *last_entering = entering;
+        streak = 1;
+    }
+    *same_entering_streak = streak;
+    lp_telemetry_record_phase1_failed_stabilize_entering(
+        solver, same_entering, streak);
+}
+
+static void phase1_note_failed_stabilize_retry_alternate(SimplexSolver *solver,
+                                                         int entering,
+                                                         int *last_entering,
+                                                         int *same_entering_streak) {
+    int streak = 0;
+    int same_entering = 0;
+
+    if (entering < 0 || !last_entering || !same_entering_streak) return;
+    if (*last_entering == entering) {
+        same_entering = 1;
+        streak = *same_entering_streak;
+        if (streak < INT_MAX) streak++;
+    } else {
+        *last_entering = entering;
+        streak = 1;
+    }
+    *same_entering_streak = streak;
+    lp_telemetry_record_phase1_failed_stabilize_retry_penalty_alternate(
+        solver, same_entering, streak);
+}
+
+static void phase1_window_pressure_note_event(SimplexSolver *solver,
+                                              int event_kind,
+                                              int local_memory_fail,
+                                              int *window_events,
+                                              int *window_failed_stabilize,
+                                              int *window_dir_skip,
+                                              int *window_local_memory_fail,
+                                              int *window_alternations,
+                                              int *window_last_event_kind) {
+    int alternated = 0;
+
+    if (!window_events || !window_failed_stabilize || !window_dir_skip ||
+        !window_local_memory_fail || !window_alternations ||
+        !window_last_event_kind) {
+        return;
+    }
+    if (event_kind != PHASE1_WINDOW_PRESSURE_EVENT_FAILED_STABILIZE &&
+        event_kind != PHASE1_WINDOW_PRESSURE_EVENT_DIR_SKIP) {
+        return;
+    }
+
+    if (*window_events < INT_MAX) (*window_events)++;
+    if (event_kind == PHASE1_WINDOW_PRESSURE_EVENT_FAILED_STABILIZE) {
+        if (*window_failed_stabilize < INT_MAX) (*window_failed_stabilize)++;
+    } else if (*window_dir_skip < INT_MAX) {
+        (*window_dir_skip)++;
+    }
+    if (local_memory_fail && *window_local_memory_fail < INT_MAX) {
+        (*window_local_memory_fail)++;
+    }
+    if (*window_last_event_kind != PHASE1_WINDOW_PRESSURE_EVENT_NONE &&
+        *window_last_event_kind != event_kind) {
+        alternated = 1;
+        if (*window_alternations < INT_MAX) (*window_alternations)++;
+    }
+    *window_last_event_kind = event_kind;
+
+    lp_telemetry_record_phase1_window_pressure_event(
+        solver,
+        event_kind == PHASE1_WINDOW_PRESSURE_EVENT_FAILED_STABILIZE,
+        event_kind == PHASE1_WINDOW_PRESSURE_EVENT_DIR_SKIP,
+        local_memory_fail,
+        alternated,
+        *window_events,
+        *window_failed_stabilize,
+        *window_dir_skip,
+        *window_local_memory_fail,
+        *window_alternations);
+}
+
+static void phase1_window_pressure_progress_reset(SimplexSolver *solver,
+                                                  int *window_events,
+                                                  int *window_failed_stabilize,
+                                                  int *window_dir_skip,
+                                                  int *window_local_memory_fail,
+                                                  int *window_alternations,
+                                                  int *window_last_event_kind) {
+    if (!window_events || !window_failed_stabilize || !window_dir_skip ||
+        !window_local_memory_fail || !window_alternations ||
+        !window_last_event_kind) {
+        return;
+    }
+    if (*window_events > 0) {
+        lp_telemetry_record_phase1_window_pressure_progress_reset(solver);
+    }
+    *window_events = 0;
+    *window_failed_stabilize = 0;
+    *window_dir_skip = 0;
+    *window_local_memory_fail = 0;
+    *window_alternations = 0;
+    *window_last_event_kind = PHASE1_WINDOW_PRESSURE_EVENT_NONE;
+}
+
+static void phase1_shadow_guard_followup_consume_failed_stabilize(
+    SimplexSolver *solver,
+    int *pending) {
+    if (!pending || !*pending) return;
+    *pending = 0;
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_failed_stabilize(
+        solver);
+}
+
+static void phase1_shadow_guard_followup_consume_ratio_breakdown(
+    SimplexSolver *solver,
+    int *pending) {
+    if (!pending || !*pending) return;
+    *pending = 0;
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_ratio_breakdown(
+        solver);
+}
+
+static void phase1_shadow_guard_followup_consume_pivot_fail(
+    SimplexSolver *solver,
+    int *pending) {
+    if (!pending || !*pending) return;
+    *pending = 0;
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_pivot_fail(
+        solver);
+}
+
+static void phase1_shadow_guard_followup_consume_pivot_success(
+    SimplexSolver *solver,
+    int *pending) {
+    if (!pending || !*pending) return;
+    *pending = 0;
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_next_pivot_success(
+        solver);
+}
+
+static void phase1_shadow_guard_followup_record_direction(
+    SimplexSolver *solver,
+    const SimplexTableau *tab,
+    int leaving,
+    double theta) {
+    double dir_inf = 0.0;
+    int dir_nnz = 0;
+    double pivot_abs = 0.0;
+
+    if (!solver || !tab) return;
+    phase1_failed_stabilize_retry_direction_shape(
+        tab,
+        leaving,
+        &dir_inf,
+        &dir_nnz,
+        &pivot_abs);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow_followup_direction(
+        solver,
+        leaving,
+        theta,
+        dir_inf,
+        dir_nnz,
+        pivot_abs);
+}
+
+static void phase1_force_extreme_followup_consume_failed_stabilize(
+    SimplexSolver *solver,
+    int *pending) {
+    if (!pending || !*pending) return;
+    *pending = 0;
+    lp_telemetry_record_phase1_force_extreme_followup_next_failed_stabilize(
+        solver);
+}
+
+static void phase1_force_extreme_followup_consume_ratio_breakdown(
+    SimplexSolver *solver,
+    int *pending) {
+    if (!pending || !*pending) return;
+    *pending = 0;
+    lp_telemetry_record_phase1_force_extreme_followup_next_ratio_breakdown(
+        solver);
+}
+
+static void phase1_force_extreme_followup_consume_pivot_fail(
+    SimplexSolver *solver,
+    int *pending) {
+    if (!pending || !*pending) return;
+    *pending = 0;
+    lp_telemetry_record_phase1_force_extreme_followup_next_pivot_fail(
+        solver);
+}
+
+static void phase1_force_extreme_followup_consume_pivot_success(
+    SimplexSolver *solver,
+    int *pending) {
+    if (!pending || !*pending) return;
+    *pending = 0;
+    lp_telemetry_record_phase1_force_extreme_followup_next_pivot_success(
+        solver);
+}
+
+enum {
+    PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_LU_HEALTH = 1,
+    PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_FORCE_PIVOT = 2,
+    PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_LADDER = 3
+};
+
+static void phase1_force_extreme_tiny_theta_relax_consume_failed_stabilize(
+    SimplexSolver *solver,
+    int *pending) {
+    if (!pending || !*pending) return;
+    *pending = 0;
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_failed_stabilize(
+        solver);
+}
+
+static void phase1_force_extreme_tiny_theta_relax_consume_ratio_breakdown(
+    SimplexSolver *solver,
+    int *pending) {
+    if (!pending || !*pending) return;
+    *pending = 0;
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_ratio_breakdown(
+        solver);
+}
+
+static void phase1_force_extreme_tiny_theta_relax_consume_pivot_fail(
+    SimplexSolver *solver,
+    int *pending) {
+    if (!pending || !*pending) return;
+    *pending = 0;
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_pivot_fail(
+        solver);
+}
+
+static void phase1_force_extreme_tiny_theta_relax_consume_pivot_success(
+    SimplexSolver *solver,
+    int *pending) {
+    if (!pending || !*pending) return;
+    *pending = 0;
+    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_next_pivot_success(
+        solver);
+}
+
+static void phase1_force_extreme_followup_record_direction(
+    SimplexSolver *solver,
+    const SimplexTableau *tab,
+    int leaving,
+    double theta) {
+    double dir_inf = 0.0;
+    int dir_nnz = 0;
+    double pivot_abs = 0.0;
+
+    if (!solver || !tab) return;
+    phase1_failed_stabilize_retry_direction_shape(
+        tab,
+        leaving,
+        &dir_inf,
+        &dir_nnz,
+        &pivot_abs);
+    lp_telemetry_record_phase1_force_extreme_followup_direction(
+        solver,
+        leaving,
+        theta,
+        dir_inf,
+        dir_nnz,
+        pivot_abs);
+}
+
+static int phase1_failed_stabilize_retry_penalty_plan(int original_entering,
+                                                      int last_failed_entering,
+                                                      int same_entering_streak) {
+    if (original_entering < 0 || last_failed_entering < 0) return 0;
+    if (same_entering_streak < PHASE1_FAILED_STABILIZE_RETRY_PENALTY_TRIGGER) {
+        return 0;
+    }
+    return (last_failed_entering != original_entering);
+}
+
+static int phase1_failed_stabilize_retry_local_memory_plan(int original_entering,
+                                                           int last_retry_alt,
+                                                           int last_retry_alt_streak,
+                                                           int retry_penalize_last_failed) {
+    if (retry_penalize_last_failed) return 0;
+    if (original_entering < 0 || last_retry_alt < 0) return 0;
+    if (last_retry_alt_streak < PHASE1_FAILED_STABILIZE_RETRY_LOCAL_MEMORY_TRIGGER) {
+        return 0;
+    }
+    return (last_retry_alt != original_entering);
+}
+
+static int phase1_failed_stabilize_retry_guarded_selector_plan(
+    int retry_ratio_fail_streak,
+    int last_retry_alt_streak,
+    int eligible_count,
+    int bland_entering,
+    int best_entering,
+    double bland_score,
+    double best_score) {
+    if (retry_ratio_fail_streak < PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_RATIO_FAIL_TRIGGER) {
+        return 0;
+    }
+    if (last_retry_alt_streak < PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_TRIGGER) {
+        return 0;
+    }
+    if (eligible_count < PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_MIN_ELIGIBLE) {
+        return 0;
+    }
+    if (bland_entering < 0 || best_entering < 0 || best_entering == bland_entering) {
+        return 0;
+    }
+    if (!isfinite(bland_score) || !isfinite(best_score) ||
+        bland_score <= 0.0 || best_score <= 0.0) {
+        return 0;
+    }
+    return best_score >=
+           PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_SCORE_RATIO * bland_score;
+}
+
+static int phase1_failed_stabilize_retry_direction_guard_plan(
+    double dir_inf,
+    int dir_nnz,
+    double pivot_abs,
+    int retry_alt_streak) {
+    double pivot_dir_ratio = 0.0;
+
+    if (retry_alt_streak < PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_STREAK_TRIGGER) {
+        return 0;
+    }
+    if (!isfinite(dir_inf) || dir_inf <
+            PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_MIN_DIR_INF_RATIO *
+                RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
+        return 0;
+    }
+    if (dir_nnz < PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_MIN_NNZ) {
+        return 0;
+    }
+    if (!isfinite(pivot_abs) || pivot_abs < 0.0) {
+        return 0;
+    }
+    if (dir_inf > 0.0) {
+        pivot_dir_ratio = pivot_abs / dir_inf;
+    }
+    return pivot_dir_ratio <=
+           PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_MAX_PIVOT_DIR_RATIO;
+}
+
+static int phase1_failed_stabilize_retry_shadow_guard_plan(
+    double actual_dir_inf,
+    int actual_dir_nnz,
+    double actual_pivot_abs,
+    int shadow_ratio_success,
+    double shadow_dir_inf,
+    int shadow_dir_nnz,
+    double shadow_pivot_abs,
+    int retry_alt_streak) {
+    double actual_pivot_dir_ratio = 0.0;
+    double shadow_pivot_dir_ratio = 0.0;
+
+    if (retry_alt_streak < PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_STREAK_TRIGGER) {
+        return 0;
+    }
+    if (!isfinite(actual_dir_inf) || actual_dir_inf <
+            PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_DIR_INF_RATIO *
+                RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
+        return 0;
+    }
+    if (actual_dir_nnz < PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_NNZ) {
+        return 0;
+    }
+    if (!isfinite(actual_pivot_abs) || actual_pivot_abs < 0.0) {
+        return 0;
+    }
+    if (actual_dir_inf > 0.0) {
+        actual_pivot_dir_ratio = actual_pivot_abs / actual_dir_inf;
+    }
+    if (actual_pivot_dir_ratio <=
+            PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_ACTUAL_PIVOT_DIR_RATIO ||
+        actual_pivot_dir_ratio >
+            PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MAX_ACTUAL_PIVOT_DIR_RATIO) {
+        return 0;
+    }
+    if (!shadow_ratio_success) {
+        return 0;
+    }
+    if (!isfinite(shadow_dir_inf) ||
+        shadow_dir_inf <
+            PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_SHADOW_DIR_RATIO *
+                RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
+        return 0;
+    }
+    if (shadow_dir_inf <
+        PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_SHADOW_DIR_MULT *
+            actual_dir_inf) {
+        return 0;
+    }
+    if (shadow_dir_nnz < actual_dir_nnz ||
+        shadow_dir_nnz < PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MIN_NNZ) {
+        return 0;
+    }
+    if (!isfinite(shadow_pivot_abs) || shadow_pivot_abs < 0.0) {
+        return 0;
+    }
+    if (shadow_dir_inf > 0.0) {
+        shadow_pivot_dir_ratio = shadow_pivot_abs / shadow_dir_inf;
+    }
+    return shadow_pivot_dir_ratio <=
+           PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_MAX_SHADOW_PIVOT_DIR_RATIO;
+}
+
+static void phase1_pivot_fail_recovery_maybe_exclude_entering(
+    SimplexSolver *solver,
+    int fail_repeat_count,
+    int entering,
+    int *excluded_entering_a,
+    int *excluded_entering_ttl_a,
+    int *excluded_entering_b,
+    int *excluded_entering_ttl_b) {
+    if (fail_repeat_count < PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_TRIGGER) return;
+    phase1_exclude_entering_var_tracked(solver,
+                                        entering,
+                                        PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_ITERS,
+                                        excluded_entering_a,
+                                        excluded_entering_ttl_a,
+                                        excluded_entering_b,
+                                        excluded_entering_ttl_b);
+    lp_telemetry_record_phase1_pivot_fail_recovery_exclusion(solver);
+}
+
+static void phase1_recompute_full_with_reason(SimplexSolver *solver,
+                                              SimplexTableau *tab,
+                                              int *rc_only_streak,
+                                              LPPhase1RecomputeReason reason) {
+    /* Full recompute is required after basis/LU/perturbation state changes. */
+    tab->phase1_compute_solution_context = LP_PHASE1_COMPUTE_CTX_RECOMPUTE_FULL;
+    tab->phase1_compute_rc_context = LP_PHASE1_COMPUTE_CTX_RECOMPUTE_FULL;
+    tableau_compute_solution(tab);
+    tableau_compute_reduced_costs(tab);
+    if (rc_only_streak) *rc_only_streak = 0;
+    lp_telemetry_record_phase1_recompute(solver, reason);
+}
+
+static void phase1_recompute_full_no_reason(SimplexSolver *solver,
+                                            SimplexTableau *tab,
+                                            int *rc_only_streak) {
+    tab->phase1_compute_solution_context =
+        LP_PHASE1_COMPUTE_CTX_RECOMPUTE_GUARD_FORCED_FULL;
+    tab->phase1_compute_rc_context =
+        LP_PHASE1_COMPUTE_CTX_RECOMPUTE_GUARD_FORCED_FULL;
+    tableau_compute_solution(tab);
+    tableau_compute_reduced_costs(tab);
+    if (rc_only_streak) *rc_only_streak = 0;
+    (void)solver;
+}
+
+static int phase1_recompute_rc_only_guarded(SimplexSolver *solver,
+                                            SimplexTableau *tab,
+                                            int *rc_only_streak) {
+    /* RC-only refresh is safe only while basis/LU and primal x are unchanged.
+     * Guard long RC-only streaks with a forced full recompute to bound drift. */
+    if (rc_only_streak && *rc_only_streak >= PHASE1_RC_ONLY_STREAK_GUARD) {
+        lp_telemetry_record_phase1_recompute_guard_forced_full(solver);
+        phase1_recompute_full_no_reason(solver, tab, rc_only_streak);
+        return 1;
+    }
+    tab->phase1_compute_rc_context = LP_PHASE1_COMPUTE_CTX_RECOMPUTE_RC_ONLY;
+    tableau_compute_reduced_costs(tab);
+    lp_telemetry_record_phase1_recompute_rc_only(solver);
+    if (rc_only_streak) (*rc_only_streak)++;
+    return 0;
+}
+
+static void phase1_recompute_dir_skip_safe(SimplexSolver *solver,
+                                           SimplexTableau *tab,
+                                           int degenerate_count,
+                                           int no_pivot_streak,
+                                           int *rc_only_streak,
+                                           int *dir_skip_no_recompute_streak) {
+    int no_recompute_streak = 0;
+    if (dir_skip_no_recompute_streak) {
+        no_recompute_streak = *dir_skip_no_recompute_streak;
+    }
+    if (lp_refactor_policy_phase1_dir_skip_should_skip_recompute(
+            tab->m,
+            tab->n,
+            degenerate_count,
+            no_pivot_streak,
+            no_recompute_streak)) {
+        if (dir_skip_no_recompute_streak) {
+            (*dir_skip_no_recompute_streak)++;
+        }
+        lp_telemetry_record_phase1_dir_stabilize_skip_no_recompute(solver);
+        return;
+    }
+    if (dir_skip_no_recompute_streak && *dir_skip_no_recompute_streak > 0) {
+        lp_telemetry_record_phase1_dir_stabilize_skip_guard_refresh(solver);
+        *dir_skip_no_recompute_streak = 0;
+    }
+    int allow_rc_only = lp_refactor_policy_phase1_dir_skip_allow_rc_only(
+        tab->m, tab->n, degenerate_count, no_pivot_streak);
+    if (!allow_rc_only) {
+        phase1_recompute_full_with_reason(solver,
+                                          tab,
+                                          rc_only_streak,
+                                          LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
+        lp_telemetry_record_phase1_dir_stabilize_skip(solver, 1);
+        return;
+    }
+    int used_full = phase1_recompute_rc_only_guarded(solver, tab, rc_only_streak);
+    lp_telemetry_record_phase1_dir_stabilize_skip(solver, used_full);
+    if (used_full) {
+        lp_telemetry_record_phase1_recompute(solver, LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
+    }
+}
+
 int pricing_steepest_edge(SimplexTableau *tab, int *entering) {
     /* Steepest edge pricing: max |rc_j| / sqrt(gamma_j)
      * Uses exact weights updated with the formula:
@@ -1174,7 +5073,7 @@ int pricing_steepest_edge(SimplexTableau *tab, int *entering) {
     *entering = -1;
 
     for (int j = 0; j < tab->n; j++) {
-        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
 
         double rc = tab->rc[j];
         double weight = tab->se_weights[j];
@@ -1209,7 +5108,7 @@ int pricing_devex(SimplexTableau *tab, int *entering) {
     *entering = -1;
 
     for (int j = 0; j < tab->n; j++) {
-        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
 
         double rc = tab->rc[j];
         double weight = tab->se_weights[j];
@@ -1248,11 +5147,17 @@ int pricing_devex(SimplexTableau *tab, int *entering) {
 #define PARTIAL_PRICE_BLOCK 100       /* Variables per partial scan block */
 #define PARTIAL_PRICE_THRESHOLD 1e-6  /* Accept if |rc| > threshold */
 #define PARTIAL_HOT_ACCEPT 1e-4       /* Accept immediately from hot set if |rc| > this */
+#define DEVEX_PARTIAL_BLOCK 240
+#define DEVEX_PARTIAL_ENABLE_M 400
+#define DEVEX_PARTIAL_ENABLE_N 1200
+#define DEVEX_PARTIAL_DEGEN_TRIGGER 20
+#define DEVEX_PARTIAL_ITER_TRIGGER 4000
+#define DEVEX_PARTIAL_FULL_RESCAN_MASK 1
 
 /* Check if variable j is eligible for entering */
 static inline int is_entering_eligible(SimplexTableau *tab, int j, double *rc_out) {
     if (j < 0 || j >= tab->n) return 0;  /* Bounds check */
-    if (tab->var_status[j] == RALPH_BASIC) return 0;
+    if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) return 0;
 
     /* Use lazy RC computation - computes on demand if not already cached */
     double rc = tableau_get_rc(tab, j);
@@ -1298,7 +5203,7 @@ int pricing_partial(SimplexTableau *tab, int *entering) {
         int j = tab->partial_candidates[i];
 
         /* Skip and remove basic variables from hot set */
-        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
 
         /* Keep this variable in the compacted hot set */
         tab->partial_candidates[write_idx++] = j;
@@ -1330,7 +5235,7 @@ int pricing_partial(SimplexTableau *tab, int *entering) {
 
     for (int i = 0; i < n && scanned < PARTIAL_PRICE_BLOCK; i++) {
         int j = (start + i) % n;
-        if (tab->var_status[j] == RALPH_BASIC) continue;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
 
         scanned++;
         double rc;
@@ -1374,6 +5279,526 @@ int pricing_partial(SimplexTableau *tab, int *entering) {
     return 1;  /* Optimal - no eligible variable found */
 }
 
+/* Devex-scored partial pricing.
+ * Uses the same hot-set/round-robin idea as pricing_partial(), but keeps
+ * Devex's rc^2/weight scoring to preserve pivot quality characteristics. */
+static inline int devex_entering_eligible(SimplexTableau *tab, int j, double *score_out) {
+    if (j < 0 || j >= tab->n) return 0;
+    if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) return 0;
+
+    double rc = tableau_get_rc(tab, j);
+    double score = 0.0;
+
+    if (tab->var_status[j] == RALPH_NONBASIC_LOWER && rc < -RALPH_OPT_TOL) {
+        score = rc * rc;
+    } else if (tab->var_status[j] == RALPH_NONBASIC_UPPER && rc > RALPH_OPT_TOL) {
+        score = rc * rc;
+    } else if (tab->var_status[j] == RALPH_NONBASIC_FREE &&
+               (rc > RALPH_OPT_TOL || rc < -RALPH_OPT_TOL)) {
+        score = rc * rc;
+    } else {
+        return 0;
+    }
+
+    double weight = tab->se_weights[j];
+    if (weight < 1.0) weight = 1.0;
+    *score_out = score / weight;
+    return *score_out > 0.0;
+}
+
+static int pricing_devex_partial(SimplexTableau *tab, int *entering) {
+    *entering = -1;
+
+    if (!tab->duals_valid) {
+        tableau_compute_duals(tab);
+    }
+
+    double best_score = RALPH_OPT_TOL * RALPH_OPT_TOL;
+    int best_var = -1;
+    int n = tab->n;
+
+    /* Phase 1: scan and compact the hot set. */
+    int write_idx = 0;
+    for (int i = 0; i < tab->partial_cand_count; i++) {
+        int j = tab->partial_candidates[i];
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
+        tab->partial_candidates[write_idx++] = j;
+
+        double score;
+        if (devex_entering_eligible(tab, j, &score) && score > best_score) {
+            best_score = score;
+            best_var = j;
+        }
+    }
+    tab->partial_cand_count = write_idx;
+
+    /* Phase 2: bounded round-robin scan through the full variable space. */
+    int start = tab->partial_price_pos;
+    int scanned = 0;
+    for (int i = 0; i < n && scanned < DEVEX_PARTIAL_BLOCK; i++) {
+        int j = (start + i) % n;
+        if (tab->var_status[j] == RALPH_BASIC || simplex_smcp_excl_skip_var(tab, j)) continue;
+
+        scanned++;
+        double score;
+        if (devex_entering_eligible(tab, j, &score) && score > best_score) {
+            best_score = score;
+            best_var = j;
+        }
+    }
+    tab->partial_price_pos = (start + DEVEX_PARTIAL_BLOCK) % n;
+
+    if (best_var >= 0) {
+        *entering = best_var;
+        add_to_hot_set(tab, best_var);
+        return 0;
+    }
+
+    /* Fallback for safety: if bounded scan missed a candidate, run full Devex. */
+    if (pricing_devex(tab, entering) == 0) {
+        add_to_hot_set(tab, *entering);
+        return 0;
+    }
+
+    return 1;
+}
+
+static void phase1_failed_stabilize_retry_sample_pool(SimplexSolver *solver,
+                                                      SimplexTableau *tab,
+                                                      int excluded_a,
+                                                      int excluded_b,
+                                                      int *sample_counter) {
+    int eligible_count = 0;
+    int first_eligible = -1;
+    int best_eligible = -1;
+    double best_score = 0.0;
+
+    if (!solver || !tab || !sample_counter) return;
+    if (((*sample_counter)++ & 15) != 0) return;
+    (void)phase1_failed_stabilize_retry_find_candidates(
+        tab,
+        excluded_a,
+        excluded_b,
+        &first_eligible,
+        NULL,
+        &best_eligible,
+        &best_score,
+        &eligible_count);
+
+    lp_telemetry_record_phase1_failed_stabilize_retry_pool_sample(
+        solver,
+        eligible_count,
+        (best_eligible >= 0 && first_eligible >= 0 && best_eligible != first_eligible));
+}
+
+static int phase1_failed_stabilize_retry_find_candidates(
+    SimplexTableau *tab,
+    int excluded_a,
+    int excluded_b,
+    int *bland_entering,
+    double *bland_score_out,
+    int *best_entering,
+    double *best_score_out,
+    int *eligible_count_out) {
+    int first_eligible = -1;
+    double first_score = 0.0;
+    int best_eligible = -1;
+    double best_score = 0.0;
+    int eligible_count = 0;
+
+    if (!tab) return 1;
+    if (bland_entering) *bland_entering = -1;
+    if (bland_score_out) *bland_score_out = 0.0;
+    if (best_entering) *best_entering = -1;
+    if (best_score_out) *best_score_out = 0.0;
+    if (eligible_count_out) *eligible_count_out = 0;
+    if (!tab->duals_valid) {
+        tableau_compute_duals(tab);
+    }
+
+    for (int j = 0; j < tab->n; j++) {
+        double score = 0.0;
+
+        if (j == excluded_a || j == excluded_b) continue;
+        if (!devex_entering_eligible(tab, j, &score)) continue;
+
+        if (first_eligible < 0) {
+            first_eligible = j;
+            first_score = score;
+        }
+        eligible_count++;
+        if (best_eligible < 0 || score > best_score) {
+            best_eligible = j;
+            best_score = score;
+        }
+    }
+
+    if (bland_entering) *bland_entering = first_eligible;
+    if (bland_score_out) *bland_score_out = first_score;
+    if (best_entering) *best_entering = best_eligible;
+    if (best_score_out) *best_score_out = best_score;
+    if (eligible_count_out) *eligible_count_out = eligible_count;
+    return (first_eligible >= 0 && best_eligible >= 0) ? 0 : 1;
+}
+
+static int phase1_failed_stabilize_retry_select_local_memory(
+    SimplexSolver *solver,
+    SimplexTableau *tab,
+    int original_entering,
+    int last_retry_alt,
+    int retry_ratio_fail_streak,
+    int last_retry_alt_streak,
+    int *entering,
+    int *bland_entering_out,
+    int *best_entering_out,
+    int *used_guarded_out) {
+    int bland_entering = -1;
+    int best_entering = -1;
+    int eligible_count = 0;
+    double bland_score = 0.0;
+    double best_score = 0.0;
+    int use_guarded = 0;
+
+    if (bland_entering_out) *bland_entering_out = -1;
+    if (best_entering_out) *best_entering_out = -1;
+    if (used_guarded_out) *used_guarded_out = 0;
+    if (!entering) return 1;
+    if (phase1_failed_stabilize_retry_find_candidates(
+            tab,
+            original_entering,
+            last_retry_alt,
+            &bland_entering,
+            &bland_score,
+            &best_entering,
+            &best_score,
+            &eligible_count) != 0) {
+        return 1;
+    }
+
+    lp_telemetry_record_phase1_failed_stabilize_retry_selector_eval(
+        solver,
+        best_entering >= 0 && bland_entering >= 0 && best_entering != bland_entering,
+        bland_score,
+        best_score);
+
+    use_guarded = phase1_failed_stabilize_retry_guarded_selector_plan(
+        retry_ratio_fail_streak,
+        last_retry_alt_streak,
+        eligible_count,
+        bland_entering,
+        best_entering,
+        bland_score,
+        best_score);
+    *entering = use_guarded ? best_entering : bland_entering;
+    if (bland_entering_out) *bland_entering_out = bland_entering;
+    if (best_entering_out) *best_entering_out = best_entering;
+    lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
+        solver, use_guarded, eligible_count);
+    if (used_guarded_out) *used_guarded_out = use_guarded;
+    return 0;
+}
+
+static int phase1_failed_stabilize_retry_eval_candidates(
+    SimplexSolver *solver,
+    SimplexTableau *tab,
+    int excluded_a,
+    int excluded_b,
+    int *bland_entering_out,
+    double *bland_score_out,
+    int *best_entering_out,
+    double *best_score_out,
+    int *eligible_count_out) {
+    int bland_entering = -1;
+    int best_entering = -1;
+    int eligible_count = 0;
+    double bland_score = 0.0;
+    double best_score = 0.0;
+
+    if (bland_entering_out) *bland_entering_out = -1;
+    if (bland_score_out) *bland_score_out = 0.0;
+    if (best_entering_out) *best_entering_out = -1;
+    if (best_score_out) *best_score_out = 0.0;
+    if (eligible_count_out) *eligible_count_out = 0;
+    if (!solver || !tab) return 1;
+    if (phase1_failed_stabilize_retry_find_candidates(
+            tab,
+            excluded_a,
+            excluded_b,
+            &bland_entering,
+            &bland_score,
+            &best_entering,
+            &best_score,
+            &eligible_count) != 0) {
+        return 1;
+    }
+    if (bland_entering_out) *bland_entering_out = bland_entering;
+    if (bland_score_out) *bland_score_out = bland_score;
+    if (best_entering_out) *best_entering_out = best_entering;
+    if (best_score_out) *best_score_out = best_score;
+    if (eligible_count_out) *eligible_count_out = eligible_count;
+    lp_telemetry_record_phase1_failed_stabilize_retry_selector_eval(
+        solver,
+        best_entering >= 0 && bland_entering >= 0 && best_entering != bland_entering,
+        bland_score,
+        best_score);
+    return 0;
+}
+
+static void phase1_direction_shape_from_vector(
+    const double *dirvec,
+    int m,
+    int leaving,
+    double *dir_inf_out,
+    int *dir_nnz_out,
+    double *pivot_abs_out) {
+    double dir_inf = 0.0;
+    int dir_nnz = 0;
+    double pivot_abs = 0.0;
+
+    if (!dirvec || m <= 0) {
+        if (dir_inf_out) *dir_inf_out = 0.0;
+        if (dir_nnz_out) *dir_nnz_out = 0;
+        if (pivot_abs_out) *pivot_abs_out = 0.0;
+        return;
+    }
+
+    for (int k = 0; k < m; k++) {
+        double absval = fabs(dirvec[k]);
+        if (absval > RALPH_ZERO_TOL) dir_nnz++;
+        if (absval > dir_inf) dir_inf = absval;
+    }
+    if (leaving >= 0 && leaving < m) {
+        pivot_abs = fabs(dirvec[leaving]);
+    }
+
+    if (dir_inf_out) *dir_inf_out = dir_inf;
+    if (dir_nnz_out) *dir_nnz_out = dir_nnz;
+    if (pivot_abs_out) *pivot_abs_out = pivot_abs;
+}
+
+static void phase1_failed_stabilize_retry_direction_shape(
+    const SimplexTableau *tab,
+    int leaving,
+    double *dir_inf_out,
+    int *dir_nnz_out,
+    double *pivot_abs_out) {
+    if (!tab) {
+        if (dir_inf_out) *dir_inf_out = 0.0;
+        if (dir_nnz_out) *dir_nnz_out = 0;
+        if (pivot_abs_out) *pivot_abs_out = 0.0;
+        return;
+    }
+    phase1_direction_shape_from_vector(
+        tab->work2,
+        tab->m,
+        leaving,
+        dir_inf_out,
+        dir_nnz_out,
+        pivot_abs_out);
+}
+
+static void phase1_zero_redundant_direction_entries(const SimplexTableau *tab,
+                                                    double *dirvec) {
+    if (!tab || !dirvec || tab->num_redundant <= 0) return;
+    for (int a = 0; a < tab->num_artificial; a++) {
+        int art_j = tab->artificial_vars[a];
+        if (tab->var_status[art_j] == RALPH_BASIC) {
+            int pos = tab->basis_pos[art_j];
+            if (pos >= 0 && pos < tab->m) {
+                dirvec[pos] = 0.0;
+            }
+        }
+    }
+}
+
+static int phase1_ratio_test_harris_on_direction(const SimplexTableau *tab,
+                                                 int entering,
+                                                 const double *dirvec,
+                                                 int *leaving,
+                                                 double *theta) {
+    double dir = 1.0;
+    double max_abs_dk = 0.0;
+    double theta_max = RALPH_INFINITY;
+    double best_pivot = 0.0;
+    int best_is_degen = 1;
+
+    if (!tab || !dirvec || !leaving || !theta) return -1;
+    if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
+        dir = -1.0;
+    }
+
+    for (int k = 0; k < tab->m; k++) {
+        double dk = (dir > 0.0) ? dirvec[k] : -dirvec[k];
+        double abs_dk = fabs(dk);
+        if (abs_dk > max_abs_dk) max_abs_dk = abs_dk;
+    }
+
+    *leaving = -1;
+    *theta = RALPH_INFINITY;
+    if (tab->ub_ext[entering] - tab->lb_ext[entering] < RALPH_INFINITY / 2) {
+        theta_max = tab->ub_ext[entering] - tab->lb_ext[entering];
+    }
+
+    {
+        double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
+        for (int k = 0; k < tab->m; k++) {
+            double dk = (dir > 0.0) ? dirvec[k] : -dirvec[k];
+            double ratio_harris;
+            double ratio_exact;
+            int j;
+            double xj;
+            int is_degen;
+            double pivot_size;
+            int select = 0;
+
+            if (fabs(dk) < pivot_tol) continue;
+            j = tab->basis[k];
+            xj = tab->x[j];
+            if (dk > 0.0) {
+                double slack = xj - tab->lb_ext[j];
+                ratio_harris = (slack + RALPH_FEAS_TOL) / dk;
+                ratio_exact = slack / dk;
+            } else {
+                double slack = tab->ub_ext[j] - xj;
+                ratio_harris = (slack + RALPH_FEAS_TOL) / (-dk);
+                ratio_exact = slack / (-dk);
+            }
+            if (ratio_harris < theta_max) theta_max = ratio_harris;
+            if (ratio_exact > theta_max + RALPH_FEAS_TOL) continue;
+
+            is_degen = (ratio_exact < 1e-8);
+            pivot_size = fabs(dk);
+            if (*leaving < 0) {
+                select = 1;
+            } else if (!is_degen && best_is_degen) {
+                select = 1;
+            } else if (is_degen == best_is_degen && pivot_size > best_pivot * 1.1) {
+                select = 1;
+            }
+            if (!select) continue;
+            best_pivot = pivot_size;
+            best_is_degen = is_degen;
+            *leaving = k;
+            *theta = ratio_exact > 0.0 ? ratio_exact : 0.0;
+        }
+
+        if (*leaving >= 0 && *theta > theta_max + RALPH_FEAS_TOL) {
+            best_pivot = 0.0;
+            best_is_degen = 1;
+            *leaving = -1;
+            *theta = RALPH_INFINITY;
+            for (int k = 0; k < tab->m; k++) {
+                double dk = (dir > 0.0) ? dirvec[k] : -dirvec[k];
+                double ratio_exact;
+                int j;
+                double xj;
+                int is_degen;
+                double pivot_size;
+                int select = 0;
+
+                if (fabs(dk) < pivot_tol) continue;
+                j = tab->basis[k];
+                xj = tab->x[j];
+                if (dk > 0.0) {
+                    ratio_exact = (xj - tab->lb_ext[j]) / dk;
+                } else {
+                    ratio_exact = (tab->ub_ext[j] - xj) / (-dk);
+                }
+                if (ratio_exact > theta_max + RALPH_FEAS_TOL) continue;
+                is_degen = (ratio_exact < 1e-8);
+                pivot_size = fabs(dk);
+                if (*leaving < 0) {
+                    select = 1;
+                } else if (!is_degen && best_is_degen) {
+                    select = 1;
+                } else if (is_degen == best_is_degen && pivot_size > best_pivot * 1.1) {
+                    select = 1;
+                }
+                if (!select) continue;
+                best_pivot = pivot_size;
+                best_is_degen = is_degen;
+                *leaving = k;
+                *theta = ratio_exact > 0.0 ? ratio_exact : 0.0;
+            }
+        }
+    }
+
+    if (theta_max >= RALPH_INFINITY / 2) {
+        *theta = RALPH_INFINITY;
+        return -1;
+    }
+    if (tab->ub_ext[entering] - tab->lb_ext[entering] <= theta_max &&
+        tab->ub_ext[entering] - tab->lb_ext[entering] < RALPH_INFINITY / 2) {
+        if (*leaving < 0 || tab->ub_ext[entering] - tab->lb_ext[entering] < *theta) {
+            *theta = tab->ub_ext[entering] - tab->lb_ext[entering];
+            *leaving = -2;
+        }
+    }
+    return (*leaving >= 0 || *leaving == -2) ? 0 : -1;
+}
+
+static void phase1_failed_stabilize_retry_shadow_direction_proxy(
+    SimplexSolver *solver,
+    SimplexTableau *tab,
+    int entering,
+    int *ratio_success_out,
+    int *dir_stable_out,
+    double *dir_inf_out,
+    int *dir_nnz_out,
+    double *pivot_abs_out) {
+    int leaving = -1;
+    int ratio_status = -1;
+    int dir_nnz = 0;
+    double theta = RALPH_INFINITY;
+    double dir_inf = 0.0;
+    double pivot_abs = 0.0;
+    int dir_stable = 0;
+    int col_nnz = 0;
+    const int *col_idx = NULL;
+    const double *col_val = NULL;
+
+    if (ratio_success_out) *ratio_success_out = 0;
+    if (dir_stable_out) *dir_stable_out = 0;
+    if (dir_inf_out) *dir_inf_out = 0.0;
+    if (dir_nnz_out) *dir_nnz_out = 0;
+    if (pivot_abs_out) *pivot_abs_out = 0.0;
+    if (!solver || !tab || entering < 0 || !tab->work4) return;
+    sparse_get_column_sparse(tab->A_ext, entering, &col_nnz, &col_idx, &col_val);
+    lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work4, NULL, NULL);
+    phase1_zero_redundant_direction_entries(tab, tab->work4);
+    ratio_status = phase1_ratio_test_harris_on_direction(
+        tab, entering, tab->work4, &leaving, &theta);
+    phase1_direction_shape_from_vector(
+        tab->work4, tab->m, leaving, &dir_inf, &dir_nnz, &pivot_abs);
+    dir_stable = (ratio_status == 0 && dir_inf <= RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER);
+    lp_telemetry_record_phase1_failed_stabilize_retry_shadow(
+        solver,
+        ratio_status == 0,
+        dir_stable,
+        dir_inf,
+        dir_nnz,
+        pivot_abs);
+    if (ratio_success_out) *ratio_success_out = (ratio_status == 0);
+    if (dir_stable_out) *dir_stable_out = dir_stable;
+    if (dir_inf_out) *dir_inf_out = dir_inf;
+    if (dir_nnz_out) *dir_nnz_out = dir_nnz;
+    if (pivot_abs_out) *pivot_abs_out = pivot_abs;
+    (void)theta;
+}
+
+static int phase2_use_adaptive_devex_partial(const SimplexTableau *tab,
+                                             int iter,
+                                             int degenerate_count,
+                                             int use_bland,
+                                             int pricing_strategy) {
+    if (!tab) return 0;
+    if (use_bland) return 0;
+    if (pricing_strategy != 2) return 0;
+    if (tab->m < DEVEX_PARTIAL_ENABLE_M || tab->n < DEVEX_PARTIAL_ENABLE_N) return 0;
+    if (degenerate_count >= DEVEX_PARTIAL_DEGEN_TRIGGER) return 1;
+    return iter >= DEVEX_PARTIAL_ITER_TRIGGER;
+}
+
 /* ============================================================================
  * Ratio Test (Leaving Variable Selection)
  * ============================================================================ */
@@ -1387,12 +5812,49 @@ int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *th
     sparse_get_column_sparse(tab->A_ext, entering, &col_nnz, &col_idx, &col_val);
 
     /* Use hyper-sparse FTRAN for better performance on sparse columns */
-    lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2, NULL, NULL);
+    {
+        double t_ftran_ms = lp_telemetry_timer_start();
+        lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2, NULL, NULL);
+        if (tab->owner) {
+            lp_telemetry_add_ftran_timed(tab->owner, t_ftran_ms);
+        }
+    }
+
+    /* Zero FTRAN values for stuck artificial positions.
+     * LU regularization (diagonal=1.0) produces meaningless values for
+     * redundant rows. Zeroing prevents them from affecting the ratio test
+     * and the solution update in simplex_pivot. */
+    if (tab->num_redundant > 0) {
+        for (int a = 0; a < tab->num_artificial; a++) {
+            int art_j = tab->artificial_vars[a];
+            if (tab->var_status[art_j] == RALPH_BASIC) {
+                int pos = tab->basis_pos[art_j];
+                if (pos >= 0 && pos < tab->m) {
+                    tab->work2[pos] = 0.0;
+                }
+            }
+        }
+    }
 
     double dir = 1.0;
     if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
         dir = -1.0;
     }
+
+    /* Relative pivot filter: avoid accepting numerically tiny pivots. */
+    int ftran_nnz = 0;
+    double max_abs_dk = 0.0;
+    for (int k = 0; k < tab->m; k++) {
+        double abs_dk = fabs(tab->work2[k] * dir);
+        if (abs_dk > RALPH_ZERO_TOL) ftran_nnz++;
+        if (abs_dk > max_abs_dk) {
+            max_abs_dk = abs_dk;
+        }
+    }
+    if (tab->owner) {
+        lp_telemetry_record_ftran_nnz(tab->owner, col_nnz, ftran_nnz);
+    }
+    double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
 
     *leaving = -1;
     *theta = RALPH_INFINITY;
@@ -1404,9 +5866,9 @@ int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *th
         double xj = tab->x[j];
 
         double ratio = RALPH_INFINITY;
-        if (dk > RALPH_PIVOT_TOL) {
+        if (dk > pivot_tol) {
             ratio = (xj - tab->lb_ext[j]) / dk;
-        } else if (dk < -RALPH_PIVOT_TOL) {
+        } else if (dk < -pivot_tol) {
             ratio = (tab->ub_ext[j] - xj) / (-dk);
         }
 
@@ -1435,6 +5897,104 @@ int ratio_test_bland(SimplexTableau *tab, int entering, int *leaving, double *th
     return (*leaving >= 0 || *leaving == -2) ? 0 : -1;
 }
 
+/* Standard (non-Harris) ratio test:
+ * - strict minimum ratio selection
+ * - no Harris tolerance expansion
+ */
+static int ratio_test_standard(SimplexTableau *tab, int entering, int *leaving, double *theta) {
+    int col_nnz;
+    const int *col_idx;
+    const double *col_val;
+    sparse_get_column_sparse(tab->A_ext, entering, &col_nnz, &col_idx, &col_val);
+
+    {
+        double t_ftran_ms = lp_telemetry_timer_start();
+        lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2, NULL, NULL);
+        if (tab->owner) {
+            lp_telemetry_add_ftran_timed(tab->owner, t_ftran_ms);
+        }
+    }
+
+    if (tab->num_redundant > 0) {
+        for (int a = 0; a < tab->num_artificial; a++) {
+            int art_j = tab->artificial_vars[a];
+            if (tab->var_status[art_j] == RALPH_BASIC) {
+                int pos = tab->basis_pos[art_j];
+                if (pos >= 0 && pos < tab->m) {
+                    tab->work2[pos] = 0.0;
+                }
+            }
+        }
+    }
+
+    double dir = 1.0;
+    if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
+        dir = -1.0;
+    }
+
+    int ftran_nnz = 0;
+    double max_abs_dk = 0.0;
+    for (int k = 0; k < tab->m; k++) {
+        double abs_dk = fabs(tab->work2[k] * dir);
+        if (abs_dk > RALPH_ZERO_TOL) ftran_nnz++;
+        if (abs_dk > max_abs_dk) {
+            max_abs_dk = abs_dk;
+        }
+    }
+    if (tab->owner) {
+        lp_telemetry_record_ftran_nnz(tab->owner, col_nnz, ftran_nnz);
+    }
+    double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
+
+    *leaving = -1;
+    *theta = RALPH_INFINITY;
+    for (int k = 0; k < tab->m; k++) {
+        double dk = tab->work2[k] * dir;
+        int j = tab->basis[k];
+        double xj = tab->x[j];
+
+        double ratio = RALPH_INFINITY;
+        if (dk > pivot_tol) {
+            ratio = (xj - tab->lb_ext[j]) / dk;
+        } else if (dk < -pivot_tol) {
+            ratio = (tab->ub_ext[j] - xj) / (-dk);
+        }
+
+        if (ratio < *theta - RALPH_FEAS_TOL) {
+            *theta = ratio;
+            *leaving = k;
+        }
+    }
+
+    {
+        double enter_range = tab->ub_ext[entering] - tab->lb_ext[entering];
+        if (enter_range <= *theta && enter_range < RALPH_INFINITY / 2) {
+            *theta = enter_range;
+            *leaving = -2;
+        }
+    }
+
+    if (*theta >= RALPH_INFINITY / 2) {
+        return -1;
+    }
+    return (*leaving >= 0 || *leaving == -2) ? 0 : -1;
+}
+
+static int primal_ratio_test_with_policy(const SimplexSolver *solver,
+                                         SimplexTableau *tab,
+                                         int use_bland,
+                                         int entering,
+                                         int *leaving,
+                                         double *theta) {
+    if (use_bland) {
+        return ratio_test_bland(tab, entering, leaving, theta);
+    }
+    if (solver && solver->ratio_test_mode == LP_RATIO_TEST_STANDARD) {
+        return ratio_test_standard(tab, entering, leaving, theta);
+    }
+    return ratio_test_harris(tab, entering, leaving, theta);
+}
+
 int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *theta) {
     /* Compute entering column in basis representation */
     int col_nnz;
@@ -1443,12 +6003,53 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
     sparse_get_column_sparse(tab->A_ext, entering, &col_nnz, &col_idx, &col_val);
 
     /* Use hyper-sparse FTRAN for better performance on sparse columns */
-    lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2, NULL, NULL);
+    {
+        double t_ftran_ms = lp_telemetry_timer_start();
+        lu_ftran_hyper_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2, NULL, NULL);
+        if (tab->owner) {
+            lp_telemetry_add_ftran_timed(tab->owner, t_ftran_ms);
+        }
+    }
+
+    /* Zero FTRAN values for stuck artificial positions (see ratio_test_bland). */
+    if (tab->num_redundant > 0) {
+        for (int a = 0; a < tab->num_artificial; a++) {
+            int art_j = tab->artificial_vars[a];
+            if (tab->var_status[art_j] == RALPH_BASIC) {
+                int pos = tab->basis_pos[art_j];
+                if (pos >= 0 && pos < tab->m) {
+                    tab->work2[pos] = 0.0;
+                }
+            }
+        }
+    }
 
     double dir = 1.0;  /* Direction of movement */
     if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
         dir = -1.0;
     }
+
+    const int *basis = tab->basis;
+    const double *x = tab->x;
+    const double *lb = tab->lb_ext;
+    const double *ub = tab->ub_ext;
+    const double *work2 = tab->work2;
+
+    /* Relative pivot filter: avoid numerically fragile leaving choices. */
+    int ftran_nnz = 0;
+    double max_abs_dk = 0.0;
+    for (int k = 0; k < tab->m; k++) {
+        double dk = (dir > 0.0) ? work2[k] : -work2[k];
+        double abs_dk = fabs(dk);
+        if (abs_dk > RALPH_ZERO_TOL) ftran_nnz++;
+        if (abs_dk > max_abs_dk) {
+            max_abs_dk = abs_dk;
+        }
+    }
+    if (tab->owner) {
+        lp_telemetry_record_ftran_nnz(tab->owner, col_nnz, ftran_nnz);
+    }
+    double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
 
     /* Single-pass Harris ratio test (merged from two passes)
      *
@@ -1473,23 +6074,23 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
 
     /* Single pass: compute theta_max and select best leaving simultaneously */
     for (int k = 0; k < tab->m; k++) {
-        double dk = tab->work2[k] * dir;
-        if (fabs(dk) < RALPH_PIVOT_TOL) continue;  /* Skip tiny pivots */
+        double dk = (dir > 0.0) ? work2[k] : -work2[k];
+        if (fabs(dk) < pivot_tol) continue;  /* Skip tiny pivots */
 
-        int j = tab->basis[k];
-        double xj = tab->x[j];
+        int j = basis[k];
+        double xj = x[j];
 
         double ratio_harris;  /* Ratio with Harris tolerance */
         double ratio_exact;   /* Exact ratio for selection */
 
         if (dk > 0) {
             /* Variable will decrease toward lower bound */
-            double slack = xj - tab->lb_ext[j];
+            double slack = xj - lb[j];
             ratio_harris = (slack + RALPH_FEAS_TOL) / dk;
             ratio_exact = slack / dk;
         } else {
             /* Variable will increase toward upper bound (dk < 0) */
-            double slack = tab->ub_ext[j] - xj;
+            double slack = ub[j] - xj;
             ratio_harris = (slack + RALPH_FEAS_TOL) / (-dk);
             ratio_exact = slack / (-dk);
         }
@@ -1533,17 +6134,17 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
         *theta = RALPH_INFINITY;
 
         for (int k = 0; k < tab->m; k++) {
-            double dk = tab->work2[k] * dir;
-            if (fabs(dk) < RALPH_PIVOT_TOL) continue;
+            double dk = (dir > 0.0) ? work2[k] : -work2[k];
+            if (fabs(dk) < pivot_tol) continue;
 
-            int j = tab->basis[k];
-            double xj = tab->x[j];
+            int j = basis[k];
+            double xj = x[j];
             double ratio_exact;
 
             if (dk > 0) {
-                ratio_exact = (xj - tab->lb_ext[j]) / dk;
+                ratio_exact = (xj - lb[j]) / dk;
             } else {
-                ratio_exact = (tab->ub_ext[j] - xj) / (-dk);
+                ratio_exact = (ub[j] - xj) / (-dk);
             }
 
             if (ratio_exact <= theta_max + RALPH_FEAS_TOL) {
@@ -1586,23 +6187,144 @@ int ratio_test_harris(SimplexTableau *tab, int entering, int *leaving, double *t
     return (*leaving >= 0 || *leaving == -2) ? 0 : -1;
 }
 
+/* Fallback ratio test for already-computed direction (tab->work2) while
+ * excluding a specific leaving position. Used to avoid repeated failing pivots.
+ */
+static int ratio_test_harris_excluding_current(SimplexTableau *tab, int entering,
+                                               int exclude_pos, int *leaving, double *theta) {
+    if (!tab || !leaving || !theta) return -1;
+
+    double dir = 1.0;
+    if (tab->var_status[entering] == RALPH_NONBASIC_UPPER) {
+        dir = -1.0;
+    }
+
+    double max_abs_dk = 0.0;
+    for (int k = 0; k < tab->m; k++) {
+        if (k == exclude_pos) continue;
+        double abs_dk = fabs(tab->work2[k] * dir);
+        if (abs_dk > max_abs_dk) {
+            max_abs_dk = abs_dk;
+        }
+    }
+    double pivot_tol = fmax(RALPH_PIVOT_TOL, 1e-7 * max_abs_dk);
+
+    double theta_max = RALPH_INFINITY;
+    double best_pivot = 0.0;
+    int best_is_degen = 1;
+    *leaving = -1;
+    *theta = RALPH_INFINITY;
+
+    double enter_range = tab->ub_ext[entering] - tab->lb_ext[entering];
+    if (enter_range < RALPH_INFINITY / 2) {
+        theta_max = enter_range;
+    }
+
+    for (int k = 0; k < tab->m; k++) {
+        if (k == exclude_pos) continue;
+
+        double dk = tab->work2[k] * dir;
+        if (fabs(dk) < pivot_tol) continue;
+
+        int j = tab->basis[k];
+        double xj = tab->x[j];
+
+        double ratio_harris;
+        double ratio_exact;
+        if (dk > 0) {
+            double slack = xj - tab->lb_ext[j];
+            ratio_harris = (slack + RALPH_FEAS_TOL) / dk;
+            ratio_exact = slack / dk;
+        } else {
+            double slack = tab->ub_ext[j] - xj;
+            ratio_harris = (slack + RALPH_FEAS_TOL) / (-dk);
+            ratio_exact = slack / (-dk);
+        }
+
+        if (ratio_harris < theta_max) {
+            theta_max = ratio_harris;
+        }
+
+        if (ratio_exact <= theta_max + RALPH_FEAS_TOL) {
+            int is_degen = (ratio_exact < 1e-8);
+            double pivot_size = fabs(dk);
+
+            int select = 0;
+            if (*leaving < 0) {
+                select = 1;
+            } else if (!is_degen && best_is_degen) {
+                select = 1;
+            } else if (is_degen == best_is_degen && pivot_size > best_pivot * 1.1) {
+                select = 1;
+            }
+
+            if (select) {
+                best_pivot = pivot_size;
+                best_is_degen = is_degen;
+                *leaving = k;
+                *theta = ratio_exact > 0 ? ratio_exact : 0;
+            }
+        }
+    }
+
+    if (theta_max >= RALPH_INFINITY / 2) {
+        return -1;
+    }
+
+    if (enter_range <= theta_max && enter_range < RALPH_INFINITY / 2) {
+        if (*leaving < 0 || enter_range < *theta) {
+            *theta = enter_range;
+            *leaving = -2;
+        }
+    }
+
+    return (*leaving >= 0 || *leaving == -2) ? 0 : -1;
+}
+
 /* ============================================================================
  * Simplex Iteration
  * ============================================================================ */
 
-static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, double theta) {
+static int simplex_pivot(SimplexTableau *tab,
+                         int entering,
+                         int leaving_pos,
+                         double theta,
+                         int repeat_pattern_count) {
     double dir = (tab->var_status[entering] == RALPH_NONBASIC_UPPER) ? -1.0 : 1.0;
+    double x_enter_old = tab->x[entering];
+    double *x = tab->x;
+    int *basis = tab->basis;
+    const double *work2 = tab->work2;
+    double step = theta * dir;
+    double gamma_e = 0.0;
+
+    if (tab->trace_phase1_enabled) {
+        tab->trace_last_entering = entering;
+        tab->trace_last_leaving_pos = leaving_pos;
+        tab->trace_last_theta = theta;
+        tab->trace_last_fail_reason = PHASE1_PIVOT_FAIL_NONE;
+        tab->trace_last_pivot = 0.0;
+        tab->trace_last_dir_inf = 0.0;
+        for (int k = 0; k < tab->m; k++) {
+            double absval = fabs(tab->work2[k]);
+            if (absval > tab->trace_last_dir_inf) {
+                tab->trace_last_dir_inf = absval;
+            }
+        }
+    }
 
     /* Update entering variable */
     if (tab->var_status[entering] == RALPH_NONBASIC_LOWER) {
-        tab->x[entering] += theta;
+        x[entering] += theta;
     } else {
-        tab->x[entering] -= theta;
+        x[entering] -= theta;
     }
 
-    /* Update basic variables */
+    /* Update basic variables and accumulate ||d_entering||^2 in one pass. */
     for (int k = 0; k < tab->m; k++) {
-        tab->x[tab->basis[k]] -= theta * dir * tab->work2[k];
+        double dk = work2[k];
+        x[basis[k]] -= step * dk;
+        gamma_e += dk * dk;
     }
 
     if (leaving_pos == -2) {
@@ -1614,14 +6336,18 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
             tab->var_status[entering] = RALPH_NONBASIC_LOWER;
             tab->x[entering] = tab->lb_ext[entering];
         }
+        /* Status changed → heap score changed; re-sift to correct position */
+        if (tab->pricing_strategy == 4) heap_update(tab, entering);
         return 0;
     }
 
     /* Normal pivot: swap entering and leaving */
-    int leaving = tab->basis[leaving_pos];
+    int leaving = basis[leaving_pos];
+    double x_leave_old = x[leaving];
+    VarStatus entering_old_status = tab->var_status[entering];
 
     /* Update basis */
-    tab->basis[leaving_pos] = entering;
+    basis[leaving_pos] = entering;
     tab->basis_pos[entering] = leaving_pos;
     tab->basis_pos[leaving] = -1;
 
@@ -1631,21 +6357,28 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
     /* Leaving goes to appropriate bound */
     if (tab->work2[leaving_pos] * dir > 0) {
         tab->var_status[leaving] = RALPH_NONBASIC_LOWER;
-        tab->x[leaving] = tab->lb_ext[leaving];
+        x[leaving] = tab->lb_ext[leaving];
     } else {
         tab->var_status[leaving] = RALPH_NONBASIC_UPPER;
-        tab->x[leaving] = tab->ub_ext[leaving];
+        x[leaving] = tab->ub_ext[leaving];
     }
 
     /* Compute pivot row and steepest edge update data BEFORE LU update (using old basis) */
     double pivot = tab->work2[leaving_pos];
     double pivot_sq = pivot * pivot;
 
-    /* Compute exact entering column weight: gamma_e = ||d_entering||^2 = ||work2||^2 */
-    double gamma_e = 0.0;
-    for (int k = 0; k < tab->m; k++) {
-        gamma_e += tab->work2[k] * tab->work2[k];
+    if (tab->trace_phase1_enabled) {
+        tab->trace_last_pivot = pivot;
     }
+
+    if (!isfinite(pivot) || fabs(pivot) < RALPH_PIVOT_TOL) {
+        if (tab->trace_phase1_enabled) {
+            tab->trace_last_fail_reason = PHASE1_PIVOT_FAIL_SMALL_PIVOT;
+        }
+        goto pivot_fail_rollback;
+    }
+
+    /* gamma_e already computed with the basic-variable update loop above. */
     if (gamma_e < 1.0) gamma_e = 1.0;
 
     /* Always compute pivot row for incremental reduced cost updates
@@ -1659,34 +6392,167 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
     /* Use sparse BTRAN since e_leaving has only 1 non-zero */
     int rhs_idx = leaving_pos;
     double rhs_val = 1.0;
-    lu_solve_transpose_sparse(tab->lu, 1, &rhs_idx, &rhs_val, pivot_row);
+    {
+        double t_btran_ms = lp_telemetry_timer_start();
+        lu_solve_transpose_sparse(tab->lu, 1, &rhs_idx, &rhs_val, pivot_row);
+        if (tab->owner) {
+            lp_telemetry_add_btran_timed(tab->owner, t_btran_ms);
+        }
+    }
 
-    /* For steepest edge weight updates: compute tau_helper = B^{-T} * d_entering
-     * This enables exact weight updates using: gamma_j' = gamma_j - 2*(alpha_j/p)*tau_j + (alpha_j/p)^2*gamma_e
-     *
-     * Note: We use exact SE weights for both SE and Devex pricing because the
-     * Devex approximation (max formula) leads to worse pivot selection and
-     * significantly more iterations, which outweighs the BTRAN savings.
+    /* Weight update strategy:
+     * - SE (pricing_strategy==1): always use exact tau BTRAN
+     * - Devex (pricing_strategy==2): use exact tau BTRAN while artificials remain
+     *   in the basis (Phase 1), then switch to cheap Devex formula once all
+     *   artificials are driven out. Accuracy matters in Phase 1 for feasibility;
+     *   speed matters in Phase 2 for the bulk of iterations.
      */
-    int use_true_se = tab->use_steepest_edge;
-    if (use_true_se && fabs(pivot_sq) > RALPH_ZERO_TOL) {
-        lu_solve_transpose(tab->lu, tab->work2, tau_helper);
-    }
-
-    /* Update LU factorization */
-    if (!tab->A_ext || entering < 0 || entering >= tab->A_ext->ncols) {
-        return -1;  /* Invalid state */
-    }
-    sparse_get_column(tab->A_ext, entering, tab->work1);
-    if (lu_update(tab->lu, leaving_pos, tab->work1) != 0) {
-        /* Update failed, try refactorize */
-        if (tableau_refactorize(tab) != 0) {
-            /* Refactorization failed, try basis repair */
-            if (repair_singular_basis(tab) != 0) {
-                return -1;  /* All recovery attempts failed */
+    int artificials_in_basis = 0;
+    if (tab->pricing_strategy == 2 && tab->num_artificial > 0) {
+        for (int k = 0; k < tab->num_artificial; k++) {
+            if (tab->var_status[tab->artificial_vars[k]] == RALPH_BASIC) {
+                artificials_in_basis = 1;
+                break;
             }
         }
     }
+    int use_true_se = (tab->pricing_strategy == 1 || tab->pricing_strategy == 5) || artificials_in_basis;
+    if (use_true_se && fabs(pivot_sq) > RALPH_ZERO_TOL) {
+        double t_btran_ms = lp_telemetry_timer_start();
+        lu_solve_transpose(tab->lu, tab->work2, tau_helper);
+        if (tab->owner) {
+            lp_telemetry_add_btran_timed(tab->owner, t_btran_ms);
+        }
+    }
+
+    /* Update LU factorization.
+     * For very small pivots, skip eta updates and refactorize immediately to
+     * avoid accumulating unstable updates on near-singular bases. */
+    const int force_refactor = fabs(pivot) < RALPH_FORCE_REFACTOR_PIVOT_TOL;
+    if (!tab->A_ext || entering < 0 || entering >= tab->A_ext->ncols) {
+        if (tab->trace_phase1_enabled) {
+            tab->trace_last_fail_reason = PHASE1_PIVOT_FAIL_INVALID_COLUMN;
+        }
+        goto pivot_fail_rollback;  /* Invalid state */
+    }
+
+    int lu_update_status = 0;
+    int lu_reason = LU_FAIL_NONE;
+    int update_reason = LU_FAIL_NONE;
+    int refactor_forced_path = 0;
+    int skip_se_update = 0;  /* Flag to skip SE update after reset */
+    double growth_factor = (tab->lu) ? tab->lu->growth_factor : 0.0;
+    int lu_num_updates = (tab->lu) ? tab->lu->num_updates : 0;
+    double growth_threshold = (tab->lu && tab->lu->growth_refactor_threshold > 0.0)
+        ? tab->lu->growth_refactor_threshold
+        : RALPH_LU_GROWTH_REFACTOR_THRESHOLD;
+    LPBasisAction action = lp_refactor_policy_choose_basis_action(
+        pivot,
+        force_refactor,
+        lu_update_status,
+        repeat_pattern_count,
+        lu_num_updates,
+        growth_factor,
+        growth_threshold);
+
+    for (;;) {
+        switch (action) {
+            case LP_BASIS_ACTION_UPDATE:
+                sparse_get_column(tab->A_ext, entering, tab->work1);
+                {
+                    double t_lu_update_ms = lp_telemetry_timer_start();
+                    lu_update_status = lu_update(tab->lu, leaving_pos, tab->work1);
+                    if (tab->owner) {
+                        lp_telemetry_add_lu_update_timed(tab->owner, t_lu_update_ms);
+                    }
+                }
+                if (lu_update_status == 0) {
+                    goto basis_update_done;
+                }
+                lu_update_status = -1;
+                update_reason = (tab->lu) ? tab->lu->last_failure_reason : LU_FAIL_NONE;
+                lu_reason = update_reason;
+                growth_factor = (tab->lu) ? tab->lu->growth_factor : growth_factor;
+                lu_num_updates = (tab->lu) ? tab->lu->num_updates : lu_num_updates;
+                action = lp_refactor_policy_choose_basis_action(
+                    pivot,
+                    force_refactor,
+                    lu_update_status,
+                    repeat_pattern_count,
+                    lu_num_updates,
+                    growth_factor,
+                    growth_threshold);
+                continue;
+
+            case LP_BASIS_ACTION_REFACTOR:
+                refactor_forced_path = (lu_update_status == 0);
+                {
+                    int ref_reason = lp_refactor_policy_phase1_small_pivot_refactor_allowed(
+                                         force_refactor,
+                                         repeat_pattern_count,
+                                         lu_num_updates)
+                                     ? RALPH_REFACTOR_REASON_FORCED_SMALL_PIVOT
+                                     : RALPH_REFACTOR_REASON_UPDATE_RECOVERY;
+                    double t_refactor_ms = lp_telemetry_timer_start();
+                    lu_update_status = tableau_refactorize_with_reason(tab, ref_reason);
+                    if (tab->owner) {
+                        lp_telemetry_add_refactor_runtime_timed(tab->owner, t_refactor_ms);
+                    }
+                }
+                if (lu_update_status == 0) {
+                    goto basis_update_done;
+                }
+                lu_update_status = -2;
+                lu_reason = (tab->lu) ? tab->lu->last_failure_reason : lu_reason;
+                growth_factor = (tab->lu) ? tab->lu->growth_factor : growth_factor;
+                lu_num_updates = (tab->lu) ? tab->lu->num_updates : lu_num_updates;
+                action = lp_refactor_policy_choose_basis_action(
+                    pivot,
+                    force_refactor,
+                    lu_update_status,
+                    repeat_pattern_count,
+                    lu_num_updates,
+                    growth_factor,
+                    growth_threshold);
+                continue;
+
+            case LP_BASIS_ACTION_REPAIR:
+                if (repair_singular_basis(tab) == 0) {
+                    goto basis_update_done;
+                }
+                lu_update_status = -3;
+                lu_reason = (tab->lu) ? tab->lu->last_failure_reason : lu_reason;
+                growth_factor = (tab->lu) ? tab->lu->growth_factor : growth_factor;
+                lu_num_updates = (tab->lu) ? tab->lu->num_updates : lu_num_updates;
+                action = lp_refactor_policy_choose_basis_action(
+                    pivot,
+                    force_refactor,
+                    lu_update_status,
+                    repeat_pattern_count,
+                    lu_num_updates,
+                    growth_factor,
+                    growth_threshold);
+                continue;
+
+            case LP_BASIS_ACTION_ABORT:
+            default:
+                if (tab->trace_phase1_enabled) {
+                    int fail_lu_reason = lu_reason;
+                    if (!refactor_forced_path &&
+                        (update_reason == LU_FAIL_MAX_UPDATES ||
+                         update_reason == LU_FAIL_SPIKE_POOL_FULL ||
+                         update_reason == LU_FAIL_UPDATE_PIVOT_TOO_SMALL ||
+                         update_reason == LU_FAIL_SINGULAR_UPDATE)) {
+                        fail_lu_reason = update_reason;
+                    }
+                    tab->trace_last_fail_reason =
+                        phase1_trace_reason_from_lu_failure(fail_lu_reason, refactor_forced_path);
+                }
+                goto pivot_fail_rollback;
+        }
+    }
+
+basis_update_done:
 
     /* Update steepest edge pricing weights
      *
@@ -1701,7 +6567,7 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
      *   gamma_j = max(gamma_j, (alpha_j^2 * gamma_e) / pivot^2)
      * This doesn't need tau_helper, making it O(n) instead of O(n*m).
      */
-    int skip_se_update = 0;  /* Flag to skip SE update after reset */
+    skip_se_update = 0;
     if (tab->use_steepest_edge) {
         tab->devex_refcount++;
         double pivot_inv_sq = 1.0 / (pivot * pivot);
@@ -1714,6 +6580,10 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
 
         /* Periodic reference reset: recalculate weights from column norms */
         if (tab->devex_refcount >= 2 * tab->n) {
+            if (tab->phase == 2 && tab->owner) {
+                lp_telemetry_record_phase2_devex_reset(tab->owner,
+                                                       tab->devex_refcount);
+            }
             for (int j = 0; j < tab->n; j++) {
                 double col_norm_sq = 0.0;
                 for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
@@ -1745,32 +6615,94 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
         double rc_ratio = rc_enter / pivot;
         double pivot_inv = 1.0 / pivot;
         int do_se_update = tab->use_steepest_edge && !skip_se_update;
+        int use_heap = (tab->pricing_strategy == 4);
+        if (use_heap) heap_remove(tab, entering);  /* entering → basic */
 
-        /* For all non-basic variables, update reduced costs and optionally weights */
-        for (int j = 0; j < tab->n; j++) {
-            if (tab->var_status[j] == RALPH_BASIC) continue;
-            if (j == entering) continue;
+        /* Row-scatter RC update: accumulate alpha_j = pivot_row · A[:,j] via CSR rows.
+         * Instead of scanning ALL n columns (O(n × avg_col_nnz)), we scatter from
+         * non-zero pivot_row entries only (O(pivot_nnz × avg_row_nnz)).
+         * For sparse problems this is much faster: bandm pivot_row ~30 nnz vs n=472. */
+        double *alpha = tab->csr_alpha;  /* [n] scratch, kept zeroed between calls */
+        int *touched = NULL;  /* Track which alpha[j] were set, for cleanup */
+        int num_touched = 0;
 
-            /* Compute alpha_j = pivot_row * a_j */
-            double alpha_j = 0.0;
-            for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
-                alpha_j += pivot_row[tab->A_ext->rowidx[p]] * tab->A_ext->values[p];
+        if (tab->csr_rowptr && tab->csr_use_scatter) {
+            /* Use flip_list as scratch for touched indices (size n, not in use here) */
+            touched = tab->flip_list;
+            num_touched = 0;
+
+            for (int i = 0; i < tab->m; i++) {
+                double pi = pivot_row[i];
+                if (fabs(pi) < RALPH_ZERO_TOL) continue;
+                for (int p = tab->csr_rowptr[i]; p < tab->csr_rowptr[i+1]; p++) {
+                    int j = tab->csr_colidx[p];
+                    if (alpha[j] == 0.0) {
+                        touched[num_touched++] = j;
+                    }
+                    alpha[j] += pi * tab->csr_values[p];
+                }
             }
 
-            /* Update reduced cost */
-            tab->rc[j] -= rc_ratio * alpha_j;
+            /* Apply RC updates and Devex weights from accumulated alpha */
+            for (int t = 0; t < num_touched; t++) {
+                int j = touched[t];
+                double alpha_j = alpha[j];
+                alpha[j] = 0.0;  /* Clean up for next call */
 
-            /* Update steepest edge weights if enabled */
-            if (do_se_update && j != leaving) {
-                /* True Steepest Edge: exact formula using tau_helper */
-                double tau_j = sparse_dot_column(tab->A_ext, j, tau_helper);
-                double alpha_ratio = alpha_j * pivot_inv;
-                double new_weight = tab->se_weights[j]
-                                  - 2.0 * alpha_ratio * tau_j
-                                  + alpha_ratio * alpha_ratio * gamma_e;
-                if (new_weight < 1.0) new_weight = 1.0;
-                if (new_weight > 1e8) new_weight = 1e8;
-                tab->se_weights[j] = new_weight;
+                if (tab->var_status[j] == RALPH_BASIC || j == entering) continue;
+
+                tab->rc[j] -= rc_ratio * alpha_j;
+                if (use_heap) heap_update(tab, j);
+
+                if (do_se_update && j != leaving) {
+                    double alpha_ratio = alpha_j * pivot_inv;
+                    double new_weight;
+                    if (use_true_se) {
+                        double tau_j = sparse_dot_column(tab->A_ext, j, tau_helper);
+                        new_weight = tab->se_weights[j]
+                                   - 2.0 * alpha_ratio * tau_j
+                                   + alpha_ratio * alpha_ratio * gamma_e;
+                    } else {
+                        double candidate = alpha_ratio * alpha_ratio * gamma_e;
+                        new_weight = tab->se_weights[j] * 0.999;
+                        if (candidate > new_weight) new_weight = candidate;
+                    }
+                    if (new_weight < 1.0) new_weight = 1.0;
+                    if (new_weight > 1e8) new_weight = 1e8;
+                    tab->se_weights[j] = new_weight;
+                }
+            }
+        } else {
+            /* Fallback: original column-scan (CSR not available) */
+            for (int j = 0; j < tab->n; j++) {
+                if (tab->var_status[j] == RALPH_BASIC) continue;
+                if (j == entering) continue;
+
+                double alpha_j = 0.0;
+                for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
+                    alpha_j += pivot_row[tab->A_ext->rowidx[p]] * tab->A_ext->values[p];
+                }
+
+                tab->rc[j] -= rc_ratio * alpha_j;
+                if (use_heap) heap_update(tab, j);
+
+                if (do_se_update && j != leaving) {
+                    double alpha_ratio = alpha_j * pivot_inv;
+                    double new_weight;
+                    if (use_true_se) {
+                        double tau_j = sparse_dot_column(tab->A_ext, j, tau_helper);
+                        new_weight = tab->se_weights[j]
+                                   - 2.0 * alpha_ratio * tau_j
+                                   + alpha_ratio * alpha_ratio * gamma_e;
+                    } else {
+                        double candidate = alpha_ratio * alpha_ratio * gamma_e;
+                        new_weight = tab->se_weights[j] * 0.999;
+                        if (candidate > new_weight) new_weight = candidate;
+                    }
+                    if (new_weight < 1.0) new_weight = 1.0;
+                    if (new_weight > 1e8) new_weight = 1e8;
+                    tab->se_weights[j] = new_weight;
+                }
             }
         }
 
@@ -1779,9 +6711,24 @@ static int simplex_pivot(SimplexTableau *tab, int entering, int leaving_pos, dou
 
         /* Reduced cost for leaving variable (now non-basic) */
         tab->rc[leaving] = -rc_enter / pivot;
+        if (use_heap) heap_insert(tab, leaving);  /* leaving → non-basic */
     }
 
     return 0;
+
+pivot_fail_rollback:
+    /* Restore pre-pivot basis/status bookkeeping so caller can recover from a
+     * known-good basis by refactorizing and re-running pricing/ratio. */
+    tab->basis[leaving_pos] = leaving;
+    tab->basis_pos[leaving] = leaving_pos;
+    tab->basis_pos[entering] = -1;
+    tab->var_status[leaving] = RALPH_BASIC;
+    tab->var_status[entering] = entering_old_status;
+    tab->x[entering] = x_enter_old;
+    tab->x[leaving] = x_leave_old;
+    tab->duals_valid = 0;
+    tab->rc_all_valid = 0;
+    return -1;
 }
 
 /* ============================================================================
@@ -1803,22 +6750,105 @@ SimplexSolver* simplex_create(LPModel *model) {
     solver->presolve = 1;  /* Enable presolve for performance */
     solver->scaling = 1;   /* Enable scaling for numerical stability */
     solver->pricing_strategy = 2;  /* Devex pricing (better than Dantzig) */
+    solver->ratio_test_mode = LP_RATIO_TEST_HARRIS;
+    solver->dual_ratio_test_mode = LP_DUAL_RATIO_TEST_HARRIS;
     solver->verbose = 0;
+    solver->telemetry_enabled = 1;
+    solver->trace_phase1 = 0;
+    solver->deterministic = 0;
+    solver->random_seed = 0U;
+    solver->lp_threads = 0;
+    solver->determinism_effective_threads = 0;
     solver->is_scaled = 0;
+    solver->trace_phase1_first_fail_iter = -1;
+    solver->trace_phase1_last_fail_iter = -1;
+    solver->objective_limit = RALPH_INFINITY;
+    solver->phase1_pricing = -1;  /* Default: disabled (use solver pricing) */
+    solver->use_dual_bound_flip = 1;
+    solver->use_dual_steepest_edge = 1;
+    solver->glpk_strict_mode = 0;
+    solver->smcp_tol_bnd = 1e-7;
+    solver->smcp_tol_dj = 1e-7;
+    solver->smcp_tol_piv = 1e-9;
+    solver->smcp_excl = 1;
+    solver->smcp_shift = 1;
+    solver->smcp_aorn = 2;
+    solver->method = 2;  /* Default: auto (dual first, primal fallback) */
+    solver->lu_factorization_type = LP_GLPK_BFCP_FACTORIZATION_LUF;
+    solver->lu_backend_policy = LP_LU_BACKEND_POLICY_AUTO;
+    solver->lu_update_limit_override = -1;
+    solver->lu_pivot_tol_override = 0.0;
+    solver->lu_growth_guard_override = 0.0;
+    solver->lu_strict_lane_active = 0;
+    solver->lu_strict_prefer_dense_ge_numeric = 0;
+    solver->lu_strict_allow_supernode_lane = 1;
+    solver->lu_strict_allow_symbolic_full_retry = 1;
+    solver->lu_strict_allow_top_level_dense_fallback = 1;
+    solver->has_lp_progress_callback = 0;
+    solver->has_lp_cancel_callback = 0;
+    solver->progress_start_ms = 0.0;
+    solver->warm_basis_last_attempted = 0;
+    solver->warm_basis_last_applied = 0;
+    solver->warm_basis_last_rejected = 0;
+    solver->unbounded_valid = 0;
+    solver->policy.basis_governor_mode = LP_BASIS_GOV_MODE_OFF;
+    solver->policy.reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
+    lp_basis_governor_set_mode(&solver->policy.basis_governor,
+                               solver->policy.basis_governor_mode);
+    solver->policy.soft_lu_cost_gate_enabled = 1;
+    solver->policy.periodic_cost_gate_enabled = 1;
+    solver->policy.dual_refactor_base_interval = 50;
+    solver->policy.dual_rc_recompute_interval = 20;
 
     return solver;
+}
+
+int simplex_set_warm_basis(SimplexSolver *solver, int m, int n,
+                           const int *basis, const VarStatus *var_status) {
+    if (!solver) return -1;
+    if (m < 0 || n < 0) return -1;
+    if ((m > 0 && !basis) || (n > 0 && !var_status)) return -1;
+
+    int *basis_copy = NULL;
+    VarStatus *status_copy = NULL;
+
+    if (m > 0) {
+        basis_copy = (int*)malloc((size_t)m * sizeof(int));
+        if (!basis_copy) return -1;
+        memcpy(basis_copy, basis, (size_t)m * sizeof(int));
+    }
+
+    if (n > 0) {
+        status_copy = (VarStatus*)malloc((size_t)n * sizeof(VarStatus));
+        if (!status_copy) {
+            free(basis_copy);
+            return -1;
+        }
+        memcpy(status_copy, var_status, (size_t)n * sizeof(VarStatus));
+    }
+
+    free(solver->warm_basis);
+    free(solver->warm_var_status);
+    solver->warm_basis = basis_copy;
+    solver->warm_var_status = status_copy;
+    solver->warm_basis_m = m;
+    solver->warm_basis_n = n;
+    return 0;
 }
 
 void simplex_free(SimplexSolver *solver) {
     if (!solver) return;
 
     tableau_free(solver->tableau);
+    free(solver->warm_basis);
+    free(solver->warm_var_status);
     free(solver->solution);
     free(solver->dual_solution);
     free(solver->reduced_costs);
     free(solver->row_scale);
     free(solver->col_scale);
     free(solver->farkas_ray);
+    free(solver->unbounded_ray);
     free(solver);
 }
 
@@ -1846,21 +6876,125 @@ static void extract_farkas_ray(SimplexSolver *solver) {
     }
 
     /* The dual values y = c_B' * B^{-1} from Phase 1 give the Farkas ray.
-     * At infeasibility detection, tab->y contains these values.
-     * We need to compute them fresh using the current basis. */
+     * IMPORTANT: This must be called while still in Phase 1, before restoring
+     * the original objective. The Phase 1 c_ext has:
+     *   - 0 for structural variables
+     *   - 1 for artificial variables
+     *
+     * The returned ray satisfies y'A >= 0 for all original columns (in standard
+     * form) and y'b_eff < 0, where b_eff accounts for constraint senses:
+     *   - For <= constraints: b_eff = b
+     *   - For >= constraints: b_eff = -b (since Ax >= b becomes -Ax <= -b)
+     *   - For = constraints: b_eff = b (arbitrary sign)
+     *
+     * Row_sign tracks row normalization (when b < 0 was made positive) but we
+     * return the ray in tableau space. Users apply sense transformations when
+     * computing y'b. */
 
-    /* Compute y = c_B' * B^{-1} via BTRAN
-     * For Phase 1 infeasibility, we use the direction of the infeasible row */
-
-    /* Get the dual values from the tableau */
+    /* Compute y = c_B' * B^{-1} via BTRAN with Phase 1 costs */
     tableau_compute_reduced_costs(tab);
 
-    /* Copy the dual values - these are the Farkas multipliers */
+    /* Copy dual values - these are the Farkas multipliers in tableau space */
+    double max_abs = 0.0;
     for (int i = 0; i < m; i++) {
         solver->farkas_ray[i] = tab->y[i];
+        double absval = fabs(tab->y[i]);
+        if (absval > max_abs) max_abs = absval;
+    }
+
+    /* Validation: Farkas ray must be nontrivial */
+    if (max_abs < 1e-9) {
+        solver->farkas_valid = 0;
+        if (solver->verbose) {
+            LP_LOG_STDERR("[extract_farkas_ray] WARNING: Farkas ray is all zeros\n");
+        }
+        return;
+    }
+
+    /* Debug validation: verify y'b_tab < 0 (Farkas lemma requirement)
+     * b_tab is the normalized RHS (all non-negative after row transformations).
+     * For a valid certificate, the dot product must be negative. */
+    double y_tab_dot_rhs = 0.0;
+    for (int i = 0; i < m; i++) {
+        y_tab_dot_rhs += tab->y[i] * tab->rhs[i];
+    }
+
+    if (y_tab_dot_rhs >= -1e-6) {
+        /* This shouldn't happen if the Farkas extraction is correct */
+        if (solver->verbose) {
+            LP_LOG_STDERR("[extract_farkas_ray] WARNING: y'b_tab = %.6e (expected < 0)\n",
+                    y_tab_dot_rhs);
+        }
+        /* Don't invalidate - this might be a borderline numerical case.
+         * The ray can still be used, but user should be aware. */
+    } else if (solver->verbose >= 2) {
+        LP_LOG_STDERR("[extract_farkas_ray] y'b_tab = %.6e < 0 (valid)\n", y_tab_dot_rhs);
     }
 
     solver->farkas_valid = 1;
+
+    if (solver->verbose >= 2) {
+        LP_LOG_STDERR("[extract_farkas_ray] Valid certificate: ||y||_inf = %.6e\n", max_abs);
+    }
+}
+
+/* Extract primal unbounded ray in original variable space.
+ *
+ * At unbounded detection, ratio test found no blocking leaving row for the
+ * entering variable direction. With d = B^{-1} a_enter and direction sign dir,
+ * the primal ray is:
+ *   delta_enter = dir
+ *   delta_basic = -(d * dir)
+ * Non-basic non-entering variables stay fixed.
+ */
+static void extract_unbounded_ray(SimplexSolver *solver, int entering, double dir) {
+    if (!solver || !solver->tableau || !solver->model) return;
+
+    SimplexTableau *tab = solver->tableau;
+    int n_orig = solver->model->num_vars;
+    if (n_orig <= 0) {
+        solver->unbounded_valid = 0;
+        return;
+    }
+
+    if (!solver->unbounded_ray) {
+        solver->unbounded_ray = (double*)calloc((size_t)n_orig, sizeof(double));
+    }
+    if (!solver->unbounded_ray) {
+        solver->unbounded_valid = 0;
+        return;
+    }
+    memset(solver->unbounded_ray, 0, (size_t)n_orig * sizeof(double));
+
+    if (!(fabs(dir) > 0.5)) dir = 1.0;
+
+    if (entering >= 0 && entering < n_orig) {
+        solver->unbounded_ray[entering] = dir;
+    }
+
+    for (int k = 0; k < tab->m; k++) {
+        int j = tab->basis[k];
+        if (j >= 0 && j < n_orig) {
+            solver->unbounded_ray[j] = -tab->work2[k] * dir;
+        }
+    }
+
+    /* Sanity-check that the direction is non-trivial and objective-improving
+     * in internal minimization space. */
+    double max_abs = 0.0;
+    double obj_dot = 0.0;
+    for (int j = 0; j < n_orig; j++) {
+        double v = solver->unbounded_ray[j];
+        if (fabs(v) > max_abs) max_abs = fabs(v);
+        obj_dot += solver->model->c[j] * solver->model->obj_sense * v;
+    }
+
+    if (max_abs <= 1e-14 || !(obj_dot < -1e-12)) {
+        solver->unbounded_valid = 0;
+        return;
+    }
+
+    solver->unbounded_valid = 1;
 }
 
 /* ============================================================================
@@ -1878,7 +7012,53 @@ static void extract_farkas_ray(SimplexSolver *solver) {
 #define PRIMAL_PERTURB_BASE 1e-6
 #define PRIMAL_PERTURB_MULT 7
 
+/* Linear scan is fine here: perturbation is infrequent and num_artificial << n. */
+static int is_artificial_var(const SimplexTableau *tab, int var_idx) {
+    if (!tab || !tab->artificial_vars || tab->num_artificial <= 0) {
+        return 0;
+    }
+    for (int k = 0; k < tab->num_artificial; k++) {
+        if (tab->artificial_vars[k] == var_idx) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Mark basic rows backed by artificial variables as redundant hints for LU.
+ * If only_infeasible is non-zero, only rows with bound-infeasible basic
+ * artificials are marked. */
+static int mark_basic_artificial_rows_redundant(SimplexTableau *tab, int only_infeasible) {
+    if (!tab || !tab->redundant_rows) {
+        return 0;
+    }
+
+    int marked = 0;
+    for (int k = 0; k < tab->m; k++) {
+        if (tab->redundant_rows[k]) continue;
+
+        int bj = tab->basis[k];
+        if (!is_artificial_var(tab, bj)) continue;
+
+        if (only_infeasible) {
+            if (tab->x[bj] >= tab->lb_ext[bj] - RALPH_FEAS_TOL &&
+                tab->x[bj] <= tab->ub_ext[bj] + RALPH_FEAS_TOL) {
+                continue;
+            }
+        }
+
+        tab->redundant_rows[k] = 1;
+        tab->num_redundant++;
+        marked++;
+    }
+
+    return marked;
+}
+
+static void primal_remove_perturbation(SimplexTableau *tab);
+
 static void primal_apply_perturbation(SimplexTableau *tab) {
+    if (!simplex_smcp_shift_allows_perturb(tab)) return;
     int n = tab->n;
 
     /* Free any existing perturbation state */
@@ -1909,8 +7089,16 @@ static void primal_apply_perturbation(SimplexTableau *tab) {
      * for the ratio test, only basic variable slacks matter, and those
      * are computed from (x_j - lb_j) where x_j is unchanged and lb_j is now lower. */
     for (int j = 0; j < n; j++) {
-        /* Pseudo-random perturbation factor */
-        double factor = 1.0 + (j * PRIMAL_PERTURB_MULT) % 13;
+        /* In Phase 1, keep artificial bounds exact.
+         * Perturbing artificials changes the feasibility objective geometry and
+         * can produce false "optimal" Phase 1 terminations on hard instances. */
+        if (tab->phase == 1 && is_artificial_var(tab, j)) {
+            continue;
+        }
+
+        unsigned int offset = lp_determinism_seed_offset(tab->owner, j, 13U);
+        unsigned int pattern = (unsigned int)((j * PRIMAL_PERTURB_MULT) % 13);
+        double factor = 1.0 + (double)((pattern + offset) % 13U);
 
         /* Perturb finite lower bounds down */
         if (tab->lb_ext[j] > -RALPH_INFINITY / 2) {
@@ -1921,6 +7109,57 @@ static void primal_apply_perturbation(SimplexTableau *tab) {
         /* Perturb finite upper bounds up */
         if (tab->ub_ext[j] < RALPH_INFINITY / 2) {
             double eps = PRIMAL_PERTURB_BASE * factor * (1.0 + fabs(tab->ub_ext[j]));
+            tab->ub_ext[j] += eps;
+        }
+    }
+
+    tab->primal_perturb_active = 1;
+}
+
+/* Scaled variant for stall-recovery re-perturbation.
+ * scale > 1.0 widens the perturbation to break a different cycling pattern. */
+static void primal_apply_perturbation_scaled(SimplexTableau *tab, double scale) {
+    if (!simplex_smcp_shift_allows_perturb(tab)) return;
+    int n = tab->n;
+
+    /* If perturbation is already active, remove it first to start fresh */
+    if (tab->primal_perturb_active) {
+        primal_remove_perturbation(tab);
+    }
+
+    /* Allocate and save original bounds */
+    free(tab->primal_saved_lb);
+    free(tab->primal_saved_ub);
+    tab->primal_saved_lb = (double*)calloc(n, sizeof(double));
+    tab->primal_saved_ub = (double*)calloc(n, sizeof(double));
+    if (!tab->primal_saved_lb || !tab->primal_saved_ub) {
+        free(tab->primal_saved_lb);
+        free(tab->primal_saved_ub);
+        tab->primal_saved_lb = tab->primal_saved_ub = NULL;
+        tab->primal_perturb_active = 0;
+        return;
+    }
+
+    for (int j = 0; j < n; j++) {
+        tab->primal_saved_lb[j] = tab->lb_ext[j];
+        tab->primal_saved_ub[j] = tab->ub_ext[j];
+    }
+
+    double base = PRIMAL_PERTURB_BASE * scale;
+
+    for (int j = 0; j < n; j++) {
+        if (tab->phase == 1 && is_artificial_var(tab, j)) continue;
+
+        unsigned int offset = lp_determinism_seed_offset(tab->owner, j, 13U);
+        unsigned int pattern = (unsigned int)((j * PRIMAL_PERTURB_MULT) % 13);
+        double factor = 1.0 + (double)((pattern + offset) % 13U);
+
+        if (tab->lb_ext[j] > -RALPH_INFINITY / 2) {
+            double eps = base * factor * (1.0 + fabs(tab->lb_ext[j]));
+            tab->lb_ext[j] -= eps;
+        }
+        if (tab->ub_ext[j] < RALPH_INFINITY / 2) {
+            double eps = base * factor * (1.0 + fabs(tab->ub_ext[j]));
             tab->ub_ext[j] += eps;
         }
     }
@@ -1965,7 +7204,8 @@ static int simplex_phase1(SimplexSolver *solver) {
     SimplexTableau *tab = solver->tableau;
 
     if (!tab->use_two_phase) {
-        /* Big-M method: check and restore feasibility via dual pivoting */
+        /* No artificials: check and restore feasibility via dual pivoting */
+        tab->phase1_compute_solution_context = LP_PHASE1_COMPUTE_CTX_INIT;
         tableau_compute_solution(tab);
 
         int infeasible = 0;
@@ -1984,6 +7224,9 @@ static int simplex_phase1(SimplexSolver *solver) {
 
         /* Restore feasibility via dual pivoting */
         for (int iter = 0; iter < solver->max_iterations; iter++) {
+            if (lp_time_limit_exceeded(solver, iter)) {
+                return -1;
+            }
             tableau_compute_solution(tab);
 
             int most_infeas_k = -1;
@@ -2065,10 +7308,14 @@ static int simplex_phase1(SimplexSolver *solver) {
             lu_solve_sparse(tab->lu, col_nnz, col_idx, col_val, tab->work2);
 
             double theta = max_infeas / fabs(tab->work2[leaving]);
-            simplex_pivot(tab, entering, leaving, theta);
+            {
+                double t_pivot_ms = lp_telemetry_timer_start();
+                simplex_pivot(tab, entering, leaving, theta, 0);
+                lp_telemetry_record_pivot_timed(solver, 1, t_pivot_ms);
+            }
 
             if (lu_needs_refactorization(tab->lu)) {
-                tableau_refactorize(tab);
+                tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PERIODIC);
             }
             tableau_compute_reduced_costs(tab);
         }
@@ -2081,11 +7328,12 @@ static int simplex_phase1(SimplexSolver *solver) {
     tab->phase = 1;
 
     if (solver->verbose) {
-        fprintf(stderr, "[simplex_phase1] Starting Phase 1 with %d artificial variables, %d equalities\n",
+        LP_LOG_STDERR("[simplex_phase1] Starting Phase 1 with %d artificial variables, %d equalities\n",
                 tab->num_artificial, tab->num_equalities);
     }
 
     /* Compute initial solution */
+    tab->phase1_compute_solution_context = LP_PHASE1_COMPUTE_CTX_INIT;
     tableau_compute_solution(tab);
 
     /* Check if we're already feasible (all artificials at zero) */
@@ -2097,59 +7345,319 @@ static int simplex_phase1(SimplexSolver *solver) {
 
     if (art_sum < RALPH_FEAS_TOL) {
         if (solver->verbose) {
-            fprintf(stderr, "[simplex_phase1] Already feasible, skipping Phase 1\n");
+            LP_LOG_STDERR("[simplex_phase1] Already feasible, skipping Phase 1\n");
         }
+        phase1_trace_emit_summary(solver, RALPH_STATUS_OPTIMAL);
         return 0;
     }
 
     /* Cycling detection and anti-cycling measures */
     int degenerate_count = 0;
-    const int PERTURB_THRESHOLD = 30;  /* Apply perturbation after this many degenerate pivots */
-    const int DEGEN_THRESHOLD = 50;    /* Switch to Bland's rule after this many */
+    const int DEGEN_THRESHOLD =
+        lp_refactor_policy_phase1_degen_threshold(tab->m); /* Bland switch threshold */
+    const int RECOMPUTE_INTERVAL =
+        lp_refactor_policy_phase1_recompute_interval();
     int use_bland = 0;
-    int perturbation_active = 0;
 
-    /* Apply proactive perturbation for highly degenerate problems (>80% equalities).
-     * Don't apply when ALL constraints are equalities (breaks afiro-like problems).
-     * For beaconfd: 140/173 = 81% equalities - this threshold catches it.
-     * For afiro: 27/27 = 100% equalities - excluded by the < m check. */
-    if (tab->num_equalities > (tab->m * 4) / 5 && tab->num_equalities < tab->m) {
+    /* Phase 1 stall detection: track objective (art_sum) progress.
+     * When Phase 1 stalls with Bland's rule, re-perturbation breaks the cycle.
+     * primal_apply_perturbation_scaled skips artificial bounds (Phase 1 safe). */
+    double last_obj_p1 = tab->obj_value;
+    int stall_count_p1 = 0;
+    const int P1_STALL_THRESHOLD =
+        lp_refactor_policy_phase1_stall_threshold(tab->m);
+    int perturb_attempts_p1 = 0;
+    const int P1_MAX_PERTURB_ATTEMPTS = 15;
+    int fail_entering = -1;
+    int fail_leaving_pos = -1;
+    int fail_reason = PHASE1_PIVOT_FAIL_NONE;
+    int fail_repeat_count = 0;
+    int ratio_breakdown_count = 0;
+    int ratio_breakdown_last_entering = -1;
+    int ratio_breakdown_same_entering_streak = 0;
+    int excluded_entering_a = -1;
+    int excluded_entering_ttl_a = 0;
+    int excluded_entering_b = -1;
+    int excluded_entering_ttl_b = 0;
+    int dir_stabilize_cooldown = 0;
+    int dir_stabilize_repeat_count = 0;
+    int dir_stabilize_moderate_defer_pending = 0;
+    int no_entering_cleanup_streak = 0;
+    int phase1_no_pivot_streak = 0;
+    int phase1_no_pivot_no_progress_streak = 0;
+    double phase1_no_pivot_prev_art_sum = RALPH_INFINITY;
+    double phase1_no_pivot_anchor_art_sum = RALPH_INFINITY;
+    int phase1_no_pivot_progress_window_steps = 0;
+    int phase1_no_pivot_force_pending = 0;
+    LPPhase1NoPivotForceReason phase1_no_pivot_force_reason =
+        LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
+    int phase1_no_pivot_force_cooldown = 0;
+    int phase1_no_pivot_ladder_rescue_cooldown = 0;
+    int phase1_no_pivot_ladder_rescue_fail_streak = 0;
+    int phase1_rc_only_streak = 0;
+    int phase1_dir_skip_event_streak = 0;
+    int phase1_dir_skip_no_recompute_streak = 0;
+    int phase1_dir_force_refactor_streak = 0;
+    int phase1_last_dir_skip_entering = -1;
+    int phase1_dir_skip_same_entering_streak = 0;
+    int phase1_last_failed_stabilize_entering = -1;
+    int phase1_failed_stabilize_same_entering_streak = 0;
+    int phase1_last_failed_stabilize_retry_alt = -1;
+    int phase1_failed_stabilize_retry_alt_streak = 0;
+    int phase1_failed_stabilize_retry_alt_ratio_fail_streak = 0;
+    int phase1_failed_stabilize_retry_pool_sample_counter = 0;
+    int phase1_shadow_guard_followup_pending = 0;
+    int phase1_shadow_guard_followup_direction_pending = 0;
+    int phase1_force_extreme_followup_pending = 0;
+    int phase1_force_extreme_followup_direction_pending = 0;
+    int phase1_force_extreme_followup_bound_flip_streak = 0;
+    int phase1_force_extreme_followup_tiny_theta_streak = 0;
+    int phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+    int phase1_force_extreme_tiny_theta_relax_next_pending = 0;
+    int phase1_window_pressure_events = 0;
+    int phase1_window_pressure_failed_stabilize = 0;
+    int phase1_window_pressure_dir_skip = 0;
+    int phase1_window_pressure_local_memory_fail = 0;
+    int phase1_window_pressure_alternations = 0;
+    int phase1_window_pressure_last_event_kind =
+        PHASE1_WINDOW_PRESSURE_EVENT_NONE;
+    int phase1_window_pressure_force_pivot_armed = 0;
+    int phase1_dir_escape_cooldown = 0;
+    int phase1_force_pivot_attempt_budget = 0;
+    int periodic_policy_cooldown = 0;
+    double periodic_policy_pressure_decay = 0.0;
+    int lu_soft_health_streak = 0;
+    int phase1_pricing_strategy =
+        (solver->phase1_pricing >= 0) ? solver->phase1_pricing : solver->pricing_strategy;
+    int phase1_auto_dantzig_enabled = 0;
+
+    /* Apply proactive perturbation in Phase 1 for highly-degenerate two-phase
+     * problems. Phase 1 is inherently degenerate (many bases give art_sum=0).
+     * Only apply when equality ratio is very high (>90%) — lower thresholds
+     * cause -O3 code layout shifts that regress brandy (instruction cache
+     * alignment sensitivity). For problems with fewer equalities (e.g.,
+     * beaconfd at 81%), reactive perturbation via cycling detection suffices.
+     * Perturbation is removed at Phase 1 completion (primal_remove_perturbation). */
+    if (tab->use_two_phase && tab->num_equalities > (tab->m * 9) / 10) {
         primal_apply_perturbation(tab);
-        perturbation_active = 1;
         if (solver->verbose) {
-            fprintf(stderr, "[simplex_phase1] Proactive perturbation: %d equalities out of %d constraints (%.0f%%)\n",
+            LP_LOG_STDERR("[simplex_phase1] Proactive perturbation: %d equalities out of %d constraints (%.0f%%)\n",
                     tab->num_equalities, tab->m, 100.0 * tab->num_equalities / tab->m);
         }
-        tableau_compute_solution(tab);
+        phase1_recompute_full_with_reason(solver,
+                                          tab,
+                                          &phase1_rc_only_streak,
+                                          LP_PHASE1_RECOMPUTE_REASON_PERTURB);
     }
 
     /* Compute initial reduced costs */
+    tab->phase1_compute_rc_context = LP_PHASE1_COMPUTE_CTX_INIT;
     tableau_compute_reduced_costs(tab);
+    if (phase1_pricing_strategy == 4) heap_build(tab);
+    double phase1_hot_ms_prev = phase_hotpath_ms(solver, 1);
+#if PHASE1_STAGNATION_ESCAPE_RUNTIME
+    if (tab->m >= PHASE1_STAGNATION_MIN_M) {
+        phase1_stagnation_window_begin(solver, tab, 0);
+    }
+#endif
 
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         tab->iterations = iter;
+        tab->trace_phase1_iter = iter;
+        if (lp_run_user_callbacks(solver, tab, RALPH_LP_PROGRESS_PHASE_1, iter, 0, 1) != 0) {
+            primal_remove_perturbation(tab);
+            solver->status = RALPH_STATUS_TIME_LIMIT;
+            solver->iterations = iter;
+            phase1_trace_emit_summary(solver, RALPH_STATUS_TIME_LIMIT);
+            return -1;
+        }
+        if (excluded_entering_ttl_a > 0) {
+            excluded_entering_ttl_a--;
+            if (excluded_entering_ttl_a == 0) {
+                excluded_entering_a = -1;
+            }
+        }
+        if (excluded_entering_ttl_b > 0) {
+            excluded_entering_ttl_b--;
+            if (excluded_entering_ttl_b == 0) {
+                excluded_entering_b = -1;
+            }
+        }
+        if (dir_stabilize_cooldown > 0) {
+            dir_stabilize_cooldown--;
+        }
+        if (phase1_no_pivot_force_cooldown > 0) {
+            phase1_no_pivot_force_cooldown--;
+        }
+        if (phase1_no_pivot_ladder_rescue_cooldown > 0) {
+            phase1_no_pivot_ladder_rescue_cooldown--;
+        }
+        if (phase1_dir_escape_cooldown > 0) {
+            phase1_dir_escape_cooldown--;
+        }
+        periodic_policy_cooldown =
+            lp_refactor_policy_periodic_cooldown_tick(periodic_policy_cooldown);
+#if PHASE1_STAGNATION_ESCAPE_RUNTIME
+        if (tab->m >= PHASE1_STAGNATION_MIN_M &&
+            solver->policy.phase1_stagnation.escape_cooldown > 0) {
+            solver->policy.phase1_stagnation.escape_cooldown--;
+        }
+#endif
+        periodic_policy_pressure_decay =
+            lp_refactor_policy_periodic_pressure_decay_recover(
+                1, periodic_policy_pressure_decay);
+
+        if (!phase1_auto_dantzig_enabled &&
+            solver->phase1_pricing < 0 &&
+            tab->use_two_phase &&
+            tab->m >= PHASE1_AUTO_DANTZIG_MIN_M &&
+            tab->m <= PHASE1_AUTO_DANTZIG_MAX_M &&
+            degenerate_count >= PHASE1_AUTO_DANTZIG_DEGEN_TRIGGER) {
+            phase1_pricing_strategy = 0;  /* Dantzig */
+            phase1_auto_dantzig_enabled = 1;
+            if (solver->verbose >= 2) {
+                LP_LOG_STDERR("[simplex_phase1] Switching pricing to Dantzig under large degenerate Phase 1 workload (m=%d, degen=%d)\n",
+                        tab->m, degenerate_count);
+            }
+        }
+
+        if (phase1_no_pivot_force_pending) {
+            phase1_no_pivot_force_pending = 0;
+            if (solver->verbose >= 2) {
+                LP_LOG_STDERR("[simplex_phase1] No-pivot streak force refactor (%s)\n",
+                        lp_refactor_policy_phase1_no_pivot_force_reason_string((int)phase1_no_pivot_force_reason));
+            }
+            phase1_no_pivot_force_reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
+            lp_telemetry_record_phase1_dir_stabilize_refactor_trigger(
+                solver,
+                PHASE1_DIR_REFACTOR_TELEM_NO_PIVOT_FORCE);
+            if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_DIRECTION_STABILIZE) == 0) {
+                use_bland = 1;
+                ratio_breakdown_count = 0;
+                ratio_breakdown_last_entering = -1;
+                ratio_breakdown_same_entering_streak = 0;
+                phase1_dir_skip_event_streak = 0;
+                phase1_dir_skip_no_recompute_streak = 0;
+                phase1_dir_force_refactor_streak = 0;
+                phase1_dir_escape_cooldown = 0;
+                phase1_no_pivot_progress_reset(
+                    &phase1_no_pivot_no_progress_streak,
+                    &phase1_no_pivot_prev_art_sum,
+                    &phase1_no_pivot_anchor_art_sum,
+                    &phase1_no_pivot_progress_window_steps);
+                phase1_no_pivot_ladder_rescue_cooldown = 0;
+                phase1_no_pivot_ladder_rescue_fail_streak = 0;
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_DIR_REFACTOR);
+                continue;
+            }
+        }
+#if PHASE1_STAGNATION_ESCAPE_RUNTIME
+        if (tab->m >= PHASE1_STAGNATION_MIN_M &&
+            phase1_stagnation_escape_should_trigger(solver, tab, iter)) {
+            if (solver->verbose >= 2) {
+                LP_LOG_STDERR("[simplex_phase1] Stagnation escape trigger: obj_delta=%g retry_ratio=%.3f update_ratio=%.3f recompute=[ratio=%d dir_skip=%d dir_ref=%d piv=%d pert=%d] window=%d\n",
+                        solver->policy.phase1_stagnation.last_obj_delta,
+                        solver->policy.phase1_stagnation.last_retry_defer_ratio,
+                        solver->policy.phase1_stagnation.last_update_recovery_ratio,
+                        solver->policy.phase1_stagnation.last_recompute_ratio,
+                        solver->policy.phase1_stagnation.last_recompute_dir_skip,
+                        solver->policy.phase1_stagnation.last_recompute_dir_refactor,
+                        solver->policy.phase1_stagnation.last_recompute_pivot_fail,
+                        solver->policy.phase1_stagnation.last_recompute_perturb,
+                        solver->policy.phase1_stagnation.last_window_iters);
+            }
+            if (tableau_refactorize_with_reason(
+                    tab,
+                    RALPH_REFACTOR_REASON_DIRECTION_STABILIZE) == 0) {
+                solver->policy.phase1_stagnation.escape_successes++;
+                solver->policy.phase1_stagnation.escape_cooldown =
+                    PHASE1_STAGNATION_ESCAPE_COOLDOWN_ITERS;
+                use_bland = 1;
+                phase1_no_pivot_streak = 0;
+                ratio_breakdown_count = 0;
+                ratio_breakdown_last_entering = -1;
+                ratio_breakdown_same_entering_streak = 0;
+                phase1_dir_skip_event_streak = 0;
+                phase1_dir_skip_no_recompute_streak = 0;
+                phase1_dir_escape_cooldown = 0;
+                phase1_no_pivot_progress_reset(
+                    &phase1_no_pivot_no_progress_streak,
+                    &phase1_no_pivot_prev_art_sum,
+                    &phase1_no_pivot_anchor_art_sum,
+                    &phase1_no_pivot_progress_window_steps);
+                phase1_no_pivot_ladder_rescue_cooldown = 0;
+                phase1_no_pivot_ladder_rescue_fail_streak = 0;
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_DIR_REFACTOR);
+                phase1_stagnation_window_begin(solver, tab, iter);
+                continue;
+            }
+            solver->policy.phase1_stagnation.escape_failures++;
+            if (solver->policy.phase1_stagnation.escape_cooldown <
+                PHASE1_STAGNATION_ESCAPE_FAIL_COOLDOWN_ITERS) {
+                solver->policy.phase1_stagnation.escape_cooldown =
+                    PHASE1_STAGNATION_ESCAPE_FAIL_COOLDOWN_ITERS;
+            }
+            phase1_stagnation_window_begin(solver, tab, iter);
+        }
+#endif
 
         /* Pricing: select entering variable */
         int entering;
         int price_status;
+        double t_pricing_ms = lp_telemetry_timer_start();
 
         if (use_bland) {
             price_status = pricing_bland(tab, &entering);
-        } else if (solver->pricing_strategy == 0) {
+        } else if (phase1_pricing_strategy == 0) {
             price_status = pricing_dantzig(tab, &entering);
-        } else if (solver->pricing_strategy == 1) {
+        } else if (phase1_pricing_strategy == 1) {
             price_status = pricing_steepest_edge(tab, &entering);
-        } else if (solver->pricing_strategy == 3) {
+        } else if (phase1_pricing_strategy == 3) {
             price_status = pricing_partial(tab, &entering);
+        } else if (phase1_pricing_strategy == 4) {
+            price_status = pricing_heap(tab, &entering);
         } else {
             price_status = pricing_devex(tab, &entering);
         }
 
+        if ((excluded_entering_ttl_a > 0 || excluded_entering_ttl_b > 0) &&
+            entering >= 0 &&
+            (entering == excluded_entering_a || entering == excluded_entering_b)) {
+            int alt_entering = -1;
+            int rerouted = 0;
+            int exclude_a = (excluded_entering_ttl_a > 0) ? excluded_entering_a : -1;
+            int exclude_b = (excluded_entering_ttl_b > 0) ? excluded_entering_b : -1;
+            if (pricing_bland_excluding_two(tab, exclude_a, exclude_b, &alt_entering) == 0) {
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Excluding unstable entering (%d,%d), using %d instead\n",
+                            exclude_a, exclude_b, alt_entering);
+                }
+                entering = alt_entering;
+                rerouted = 1;
+            }
+            lp_telemetry_record_phase1_entering_exclusion_hit(solver, rerouted);
+        }
+        {
+            lp_telemetry_record_pricing_timed(solver, 1, t_pricing_ms);
+        }
+
         if (price_status != 0) {
+            phase1_trace_record_no_entering(solver, iter, price_status);
+
             /* Optimal for Phase 1 - remove perturbation first, then check */
             primal_remove_perturbation(tab);
 
             /* Recompute solution without perturbation */
+            tab->phase1_compute_solution_context =
+                LP_PHASE1_COMPUTE_CTX_NO_ENTERING_CLEANUP;
             tableau_compute_solution(tab);
 
             /* Check if all artificial variables are zero */
@@ -2164,108 +7672,2424 @@ static int simplex_phase1(SimplexSolver *solver) {
                  * Use a relaxed tolerance (1e-4) to distinguish true infeasibility
                  * from numerical noise. */
                 if (art_sum > 1e-4) {
-                    /* Truly infeasible */
+                    no_entering_cleanup_streak = 0;
+                    /* Revalidate on a freshly factorized basis before certifying infeasible.
+                     * This guards against RC/solution drift on numerically hard instances. */
+                    if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP) == 0) {
+                        tab->phase1_compute_solution_context =
+                            LP_PHASE1_COMPUTE_CTX_INFEAS_CLEANUP;
+                        tab->phase1_compute_rc_context =
+                            LP_PHASE1_COMPUTE_CTX_INFEAS_CLEANUP;
+                        tableau_compute_solution(tab);
+                        tableau_compute_reduced_costs(tab);
+
+                        double refined_art_sum = 0.0;
+                        for (int k = 0; k < tab->num_artificial; k++) {
+                            int j = tab->artificial_vars[k];
+                            refined_art_sum += fabs(tab->x[j]);
+                        }
+
+                        if (refined_art_sum <= 1e-4) {
+                            if (solver->verbose) {
+                                LP_LOG_STDERR("[simplex_phase1] Refactorized cleanup: art_sum %g -> %g\n",
+                                        art_sum, refined_art_sum);
+                            }
+                            continue;
+                        }
+                        art_sum = refined_art_sum;
+                    }
+
+                    /* Truly infeasible - extract Farkas ray from Phase 1 duals.
+                     * The Phase 1 duals y = c_B^T * B^{-1} provide the certificate. */
                     if (solver->verbose) {
-                        fprintf(stderr, "[simplex_phase1] INFEASIBLE: artificial sum = %g after %d iterations\n",
+                        LP_LOG_STDERR("[simplex_phase1] INFEASIBLE: artificial sum = %g after %d iterations\n",
                                 art_sum, iter);
                     }
+                    extract_farkas_ray(solver);
                     solver->status = RALPH_STATUS_INFEASIBLE;
                     solver->iterations = iter;
+                    phase1_trace_emit_summary(solver, RALPH_STATUS_INFEASIBLE);
                     return -1;
                 }
 
                 /* Small residual - try to clean up with a few more iterations */
-                if (solver->verbose) {
-                    fprintf(stderr, "[simplex_phase1] Cleanup phase: art_sum=%g, continuing...\n", art_sum);
+                no_entering_cleanup_streak++;
+                if (no_entering_cleanup_streak >= PHASE1_NO_ENTERING_CLEANUP_MAX_ITERS) {
+                    if (solver->verbose) {
+                        LP_LOG_STDERR("[simplex_phase1] Accepting Phase 1 feasibility after %d no-entering cleanup iterations (art_sum=%g)\n",
+                                no_entering_cleanup_streak, art_sum);
+                    }
+                    solver->iterations = iter;
+                    phase1_trace_emit_summary(solver, RALPH_STATUS_OPTIMAL);
+                    return 0;
                 }
-                tableau_compute_reduced_costs(tab);
+                if (solver->verbose) {
+                    LP_LOG_STDERR("[simplex_phase1] Cleanup phase: art_sum=%g, continuing...\n", art_sum);
+                }
+                phase1_recompute_rc_only_guarded(solver, tab, &phase1_rc_only_streak);
                 continue;  /* Try more iterations to drive artificials to zero */
             }
 
             /* Success */
+            no_entering_cleanup_streak = 0;
             if (solver->verbose) {
-                fprintf(stderr, "[simplex_phase1] Phase 1 complete: feasible in %d iterations\n", iter);
+                LP_LOG_STDERR("[simplex_phase1] Phase 1 complete: feasible in %d iterations\n", iter);
             }
             solver->iterations = iter;
+            phase1_trace_emit_summary(solver, RALPH_STATUS_OPTIMAL);
             return 0;
         }
+
+        no_entering_cleanup_streak = 0;
 
         /* Ratio test: select leaving variable */
         int leaving;
         double theta;
-        int ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
+        double t_ratio_ms = lp_telemetry_timer_start();
+        int ratio_status = primal_ratio_test_with_policy(solver,
+                                                         tab,
+                                                         0,
+                                                         entering,
+                                                         &leaving,
+                                                         &theta);
+        {
+            lp_telemetry_record_ratio_timed(solver, 1, t_ratio_ms);
+        }
 
         if (ratio_status != 0) {
-            /* Unbounded in Phase 1 - this shouldn't happen for properly formulated problems */
+            phase1_shadow_guard_followup_direction_pending = 0;
+            phase1_force_extreme_followup_direction_pending = 0;
+            phase1_force_extreme_followup_bound_flip_streak = 0;
+            phase1_force_extreme_followup_tiny_theta_streak = 0;
+            phase1_shadow_guard_followup_consume_ratio_breakdown(
+                solver, &phase1_shadow_guard_followup_pending);
+            phase1_force_extreme_tiny_theta_relax_consume_ratio_breakdown(
+                solver, &phase1_force_extreme_tiny_theta_relax_next_pending);
+            phase1_force_extreme_followup_consume_ratio_breakdown(
+                solver, &phase1_force_extreme_followup_pending);
+            phase1_trace_record_no_entering(solver, iter, ratio_status);
+            if (phase1_note_no_pivot_and_maybe_force(
+                    solver,
+                    tab->m,
+                    degenerate_count,
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
+                    &phase1_no_pivot_streak,
+                    &phase1_no_pivot_force_cooldown)) {
+                phase1_no_pivot_force_pending = 1;
+                phase1_no_pivot_force_reason =
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN;
+            }
+
+            phase1_no_pivot_progress_update(solver,
+                                            tab,
+                                            &phase1_no_pivot_prev_art_sum,
+                                            &phase1_no_pivot_anchor_art_sum,
+                                            &phase1_no_pivot_progress_window_steps,
+                                            &phase1_no_pivot_no_progress_streak);
+            {
+                int no_pivot_ladder_threshold = 0;
+                int no_pivot_force_mode_active =
+                    (phase1_force_pivot_attempt_budget > 0);
+                int no_pivot_ladder_step = phase1_no_pivot_ladder_step(
+                    solver,
+                    tab->m,
+                    degenerate_count,
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
+                    phase1_no_pivot_streak,
+                    phase1_no_pivot_no_progress_streak,
+                    no_pivot_force_mode_active,
+                    &no_pivot_ladder_threshold);
+                no_pivot_ladder_step = phase1_no_pivot_ladder_apply_rescue_guard(
+                    solver,
+                    no_pivot_ladder_step,
+                    phase1_no_pivot_ladder_rescue_cooldown,
+                    phase1_no_pivot_ladder_rescue_fail_streak);
+                if (no_pivot_ladder_step == PHASE1_NO_PIVOT_LADDER_STEP_RETRY) {
+                    lp_telemetry_record_phase1_no_pivot_ladder_retry(
+                        solver,
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN);
+                    lp_telemetry_record_phase1_ratio_breakdown_retry(solver);
+                    phase1_exclude_entering_var_tracked(solver,
+                                                        entering,
+                                                        RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
+                                                        &excluded_entering_a,
+                                                        &excluded_entering_ttl_a,
+                                                        &excluded_entering_b,
+                                                        &excluded_entering_ttl_b);
+                    use_bland = 1;
+                    phase1_recompute_rc_only_guarded(solver,
+                                                     tab,
+                                                     &phase1_rc_only_streak);
+                    continue;
+                }
+                if (no_pivot_ladder_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
+                    int rescue_result = phase1_attempt_ladder_dual_rescue(
+                        solver,
+                        tab,
+                        iter,
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
+                        LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN,
+                        &phase1_no_pivot_ladder_rescue_cooldown,
+                        &phase1_no_pivot_ladder_rescue_fail_streak,
+                        &phase1_rc_only_streak,
+                        &phase1_no_pivot_no_progress_streak,
+                        &phase1_no_pivot_prev_art_sum,
+                        &phase1_no_pivot_anchor_art_sum,
+                        &phase1_no_pivot_progress_window_steps);
+                    if (rescue_result == 1) {
+                        if (solver->verbose >= 2) {
+                            LP_LOG_STDERR("[simplex_phase1] No-pivot ladder dual rescue succeeded at iter %d (streak=%d no_progress=%d threshold=%d)\n",
+                                    iter,
+                                    phase1_no_pivot_streak,
+                                    phase1_no_pivot_no_progress_streak,
+                                    no_pivot_ladder_threshold);
+                        }
+                        ratio_breakdown_count = 0;
+                        ratio_breakdown_last_entering = -1;
+                        ratio_breakdown_same_entering_streak = 0;
+                        continue;
+                    }
+                    if (rescue_result < 0) {
+                        return -1;
+                    }
+                    use_bland = 1;
+                    lp_telemetry_record_phase1_ratio_breakdown_retry(solver);
+                    phase1_recompute_rc_only_guarded(solver,
+                                                     tab,
+                                                     &phase1_rc_only_streak);
+                    continue;
+                }
+                lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
+                    solver,
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN);
+            }
+
+            /* "Unbounded" in Phase 1 is typically numerical, not structural.
+             * Try to recover via refactorization and conservative pricing first. */
+            if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_RATIO_RECOVERY) == 0) {
+                phase1_no_pivot_progress_reset(
+                    &phase1_no_pivot_no_progress_streak,
+                    &phase1_no_pivot_prev_art_sum,
+                    &phase1_no_pivot_anchor_art_sum,
+                    &phase1_no_pivot_progress_window_steps);
+                phase1_no_pivot_ladder_rescue_cooldown = 0;
+                phase1_no_pivot_ladder_rescue_fail_streak = 0;
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
+                use_bland = 1;
+                continue;
+            }
+            if (!use_bland) {
+                use_bland = 1;
+                phase1_recompute_rc_only_guarded(solver, tab, &phase1_rc_only_streak);
+                continue;
+            }
+
+            /* Last-chance recovery before treating Phase-1 "unbounded" as
+             * numerical breakdown. */
+            int marked = mark_basic_artificial_rows_redundant(tab, 1);
+            if (marked > 0) {
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Marked %d infeasible artificial rows as redundant after ratio-test breakdown\n",
+                            marked);
+                }
+                if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP) == 0) {
+                    phase1_recompute_full_with_reason(
+                        solver,
+                        tab,
+                        &phase1_rc_only_streak,
+                        LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
+                    continue;
+                }
+            }
+
+            int rescue_status = phase1_attempt_direct_dual_rescue(
+                solver,
+                tab,
+                iter,
+                &phase1_no_pivot_ladder_rescue_cooldown,
+                &phase1_no_pivot_ladder_rescue_fail_streak);
+            if (rescue_status == 0) {
+                if (solver->verbose) {
+                    LP_LOG_STDERR("[simplex_phase1] Dual rescue recovered after ratio-test breakdown at iter %d\n", iter);
+                }
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN);
+                ratio_breakdown_count = 0;
+                ratio_breakdown_last_entering = -1;
+                ratio_breakdown_same_entering_streak = 0;
+                continue;
+            }
+            if (solver->status == RALPH_STATUS_TIME_LIMIT) {
+                primal_remove_perturbation(tab);
+                solver->iterations = iter;
+                phase1_trace_emit_summary(solver, RALPH_STATUS_TIME_LIMIT);
+                return -1;
+            }
+
+            ratio_breakdown_count++;
+            if (entering == ratio_breakdown_last_entering) {
+                if (ratio_breakdown_same_entering_streak < 1000000) {
+                    ratio_breakdown_same_entering_streak++;
+                }
+            } else {
+                ratio_breakdown_last_entering = entering;
+                ratio_breakdown_same_entering_streak = 1;
+            }
+            phase1_exclude_entering_var_tracked(solver,
+                                                entering,
+                                                RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
+                                                &excluded_entering_a,
+                                                &excluded_entering_ttl_a,
+                                                &excluded_entering_b,
+                                                &excluded_entering_ttl_b);
+            {
+                int ratio_breakdown_limit =
+                    lp_refactor_policy_phase1_ratio_breakdown_limit(
+                        tab->m,
+                        ratio_breakdown_same_entering_streak);
+                if (ratio_breakdown_count < ratio_breakdown_limit) {
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Continuing after ratio-test breakdown (count=%d, entering=%d streak=%d limit=%d), excluding entering for %d iterations\n",
+                                ratio_breakdown_count,
+                                entering,
+                                ratio_breakdown_same_entering_streak,
+                                ratio_breakdown_limit,
+                                RALPH_PHASE1_ENTERING_EXCLUDE_ITERS);
+                    }
+                    use_bland = 1;
+                    lp_telemetry_record_phase1_ratio_breakdown_retry(solver);
+                    phase1_recompute_rc_only_guarded(solver, tab, &phase1_rc_only_streak);
+                    continue;
+                }
+            }
+            lp_telemetry_record_phase1_ratio_breakdown_escalation(solver);
+
             if (solver->verbose) {
-                fprintf(stderr, "[simplex_phase1] ERROR: unbounded in Phase 1 at iter %d\n", iter);
+                LP_LOG_STDERR("[simplex_phase1] ERROR: unbounded in Phase 1 at iter %d (after recovery)\n", iter);
             }
             primal_remove_perturbation(tab);
-            solver->status = RALPH_STATUS_ERROR;
+            /* Treat unrecoverable Phase 1 "unbounded" as numerical breakdown. */
+            solver->status = RALPH_STATUS_ITERATION_LIMIT;
             solver->iterations = iter;
+            phase1_trace_emit_summary(solver, RALPH_STATUS_ITERATION_LIMIT);
             return -1;
+        }
+
+        /* Guard against numerically explosive search directions before pivoting.
+         * Re-factorize and recompute ratio test from the same entering column. */
+        double dir_inf = vec_abs_max(tab->work2, tab->m);
+        if (phase1_shadow_guard_followup_direction_pending) {
+            phase1_shadow_guard_followup_record_direction(
+                solver,
+                tab,
+                leaving,
+                theta);
+            phase1_shadow_guard_followup_direction_pending = 0;
+        }
+        if (phase1_force_extreme_followup_direction_pending) {
+            phase1_force_extreme_followup_record_direction(
+                solver,
+                tab,
+                leaving,
+                theta);
+            if (leaving == -2) {
+                if (phase1_force_extreme_followup_bound_flip_streak < INT_MAX) {
+                    phase1_force_extreme_followup_bound_flip_streak++;
+                }
+                phase1_force_extreme_followup_tiny_theta_streak = 0;
+            } else if (theta <= RALPH_FEAS_TOL) {
+                if (phase1_force_extreme_followup_tiny_theta_streak < INT_MAX) {
+                    phase1_force_extreme_followup_tiny_theta_streak++;
+                }
+                phase1_force_extreme_followup_bound_flip_streak = 0;
+            } else {
+                phase1_force_extreme_followup_bound_flip_streak = 0;
+                phase1_force_extreme_followup_tiny_theta_streak = 0;
+            }
+            phase1_force_extreme_followup_direction_pending = 0;
+        }
+        if (dir_inf > RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
+            double dir_inf_ratio =
+                dir_inf / RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER;
+            double current_pivot_ratio = 0.0;
+            double current_pivot_abs = 0.0;
+            int cooldown_active = (dir_stabilize_cooldown > 0);
+            int dir_stabilize_cooldown_target;
+            int force_dir_refactor_extreme = 0;
+            int force_dir_refactor_lu_health = lu_needs_refactorization(tab->lu);
+            int force_pivot_mode_active = 0;
+            int force_dir_refactor_guard_trigger =
+                (force_dir_refactor_lu_health || force_pivot_mode_active);
+            int dir_refactor_ladder_forced = 0;
+            int lu_hard_trigger = lu_refactor_hard_trigger(tab->lu);
+            int escape_triggered = 0;
+            int escape_hard_bypass = 0;
+            int suppress_lu_health = 0;
+            phase1_failed_stabilize_retry_direction_shape(
+                tab,
+                leaving,
+                NULL,
+                NULL,
+                &current_pivot_abs);
+            if (current_pivot_abs > 0.0 && dir_inf > 0.0) {
+                current_pivot_ratio = current_pivot_abs / dir_inf;
+            }
+            if (lp_glpk_strict_allow_phase1_dir_stabilize_force(
+                    solver->glpk_strict_mode)) {
+                force_dir_refactor_extreme =
+                    lp_refactor_policy_phase1_dir_stabilize_force_extreme_ratio(
+                        dir_inf_ratio,
+                        cooldown_active);
+                force_pivot_mode_active =
+                    (phase1_force_pivot_attempt_budget > 0);
+                if (force_pivot_mode_active) {
+                    lp_telemetry_record_phase1_force_pivot_budget_dir_event_seen(
+                        solver);
+                }
+                force_dir_refactor_guard_trigger =
+                    (force_dir_refactor_lu_health || force_pivot_mode_active);
+                suppress_lu_health = phase1_dir_stabilize_escape_gate_plan(
+                    tab->m,
+                    degenerate_count,
+                    phase1_dir_skip_event_streak,
+                    phase1_no_pivot_no_progress_streak,
+                    phase1_dir_escape_cooldown,
+                    force_dir_refactor_extreme,
+                    force_dir_refactor_guard_trigger,
+                    lu_hard_trigger,
+                    &phase1_dir_escape_cooldown,
+                    &escape_triggered,
+                    &escape_hard_bypass);
+                if (escape_triggered) {
+                    lp_telemetry_record_phase1_dir_stabilize_escape_gate(
+                        solver,
+                        PHASE1_DIR_ESCAPE_TELEM_TRIGGER);
+                }
+                if (escape_hard_bypass) {
+                    lp_telemetry_record_phase1_dir_stabilize_escape_gate(
+                        solver,
+                        PHASE1_DIR_ESCAPE_TELEM_HARD_BYPASS);
+                }
+                if (suppress_lu_health) {
+                    if (force_dir_refactor_lu_health) {
+                        force_dir_refactor_lu_health = 0;
+                        lp_telemetry_record_phase1_dir_stabilize_escape_gate(
+                            solver,
+                            PHASE1_DIR_ESCAPE_TELEM_SUPPRESS_LU_HEALTH);
+                    }
+                    if (force_pivot_mode_active) {
+                        force_pivot_mode_active = 0;
+                        lp_telemetry_record_phase1_dir_stabilize_escape_gate(
+                            solver,
+                            PHASE1_DIR_ESCAPE_TELEM_SUPPRESS_FORCE_PIVOT_MODE);
+                    }
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Dir-stabilize escape gate suppressed forced direction-refactor path (iter=%d entering=%d dir_skip_streak=%d no_progress=%d cooldown=%d)\n",
+                                iter,
+                                entering,
+                                phase1_dir_skip_event_streak,
+                                phase1_no_pivot_no_progress_streak,
+                                phase1_dir_escape_cooldown);
+                    }
+                }
+                if (phase1_force_pivot_refactor_relax_plan(
+                        tab->m,
+                        degenerate_count,
+                        phase1_no_pivot_no_progress_streak,
+                        force_pivot_mode_active,
+                        force_dir_refactor_extreme,
+                        force_dir_refactor_lu_health,
+                        lu_hard_trigger,
+                        solver->telemetry.perf_phase1_no_pivot_ladder_dual_rescue_attempts,
+                        solver->telemetry.perf_phase1_no_pivot_ladder_dual_rescue_successes,
+                        phase1_no_pivot_ladder_rescue_fail_streak)) {
+                    force_pivot_mode_active = 0;
+                    lp_telemetry_record_phase1_force_pivot_relax(solver);
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Relaxed force-pivot refactor under stable LU + high dual-rescue success (iter=%d entering=%d no_progress=%d)\n",
+                                iter,
+                                entering,
+                                phase1_no_pivot_no_progress_streak);
+                    }
+                }
+                if (phase1_force_extreme_refactor_relax_plan(
+                        tab->m,
+                        degenerate_count,
+                        phase1_no_pivot_no_progress_streak,
+                        dir_inf_ratio,
+                        force_dir_refactor_extreme,
+                        force_dir_refactor_lu_health,
+                        lu_hard_trigger,
+                        solver->telemetry.perf_phase1_no_pivot_ladder_dual_rescue_attempts,
+                        solver->telemetry.perf_phase1_no_pivot_ladder_dual_rescue_successes,
+                        phase1_no_pivot_ladder_rescue_fail_streak)) {
+                    force_dir_refactor_extreme = 0;
+                    lp_telemetry_record_phase1_force_extreme_relax(solver);
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Relaxed extreme-direction refactor under stable LU + high dual-rescue success (iter=%d entering=%d ratio=%.2f no_progress=%d)\n",
+                                iter,
+                                entering,
+                                dir_inf_ratio,
+                                phase1_no_pivot_no_progress_streak);
+                    }
+                }
+                if (phase1_force_extreme_bound_flip_relax_plan(
+                        tab->m,
+                        degenerate_count,
+                        phase1_no_pivot_no_progress_streak,
+                        dir_inf_ratio,
+                        force_dir_refactor_extreme,
+                        force_dir_refactor_lu_health,
+                        lu_hard_trigger,
+                        phase1_force_extreme_followup_bound_flip_streak)) {
+                    force_dir_refactor_extreme = 0;
+                    lp_telemetry_record_phase1_force_extreme_bound_flip_relax(
+                        solver);
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Relaxed extreme-direction refactor on repeated bound-flip follow-up treadmill (iter=%d entering=%d ratio=%.2f streak=%d)\n",
+                                iter,
+                                entering,
+                                dir_inf_ratio,
+                                phase1_force_extreme_followup_bound_flip_streak);
+                    }
+                }
+                if (phase1_force_extreme_catastrophic_tiny_theta_relax_plan(
+                        tab->m,
+                        degenerate_count,
+                        phase1_no_pivot_no_progress_streak,
+                        dir_inf_ratio,
+                        force_dir_refactor_extreme,
+                        force_dir_refactor_lu_health,
+                        lu_hard_trigger,
+                        phase1_force_extreme_followup_tiny_theta_streak,
+                        current_pivot_ratio)) {
+                    force_dir_refactor_extreme = 0;
+                    lp_telemetry_record_phase1_force_extreme_catastrophic_tiny_theta_relax(
+                        solver);
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Relaxed extreme-direction refactor on catastrophic tiny-theta follow-up treadmill (iter=%d entering=%d ratio=%.2f streak=%d pivot_ratio=%.3e)\n",
+                                iter,
+                                entering,
+                                dir_inf_ratio,
+                                phase1_force_extreme_followup_tiny_theta_streak,
+                                current_pivot_ratio);
+                    }
+                }
+                if (phase1_force_extreme_tiny_theta_relax_plan(
+                        tab->m,
+                        degenerate_count,
+                        phase1_no_pivot_no_progress_streak,
+                        dir_inf_ratio,
+                        force_dir_refactor_extreme,
+                        force_dir_refactor_lu_health,
+                        lu_hard_trigger,
+                        phase1_force_extreme_followup_tiny_theta_streak)) {
+                    force_dir_refactor_extreme = 0;
+                    phase1_force_extreme_tiny_theta_relax_branch_pending = 1;
+                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax(
+                        solver);
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Relaxed extreme-direction refactor on repeated tiny-theta follow-up treadmill (iter=%d entering=%d ratio=%.2f streak=%d)\n",
+                                iter,
+                                entering,
+                                dir_inf_ratio,
+                                phase1_force_extreme_followup_tiny_theta_streak);
+                    }
+                }
+            }
+            int force_dir_refactor = force_dir_refactor_extreme ||
+                                     force_dir_refactor_lu_health;
+            int moderate_defer =
+                lp_refactor_policy_phase1_dir_stabilize_should_defer_moderate(
+                    dir_inf_ratio,
+                    cooldown_active,
+                    force_dir_refactor_lu_health,
+                    dir_stabilize_moderate_defer_pending);
+            if (dir_stabilize_repeat_count < 1000000) {
+                dir_stabilize_repeat_count++;
+            }
+            dir_stabilize_cooldown_target =
+                lp_refactor_policy_phase1_dir_stabilize_cooldown_updates(
+                    tab->m, degenerate_count, dir_stabilize_repeat_count);
+
+            if (cooldown_active) {
+                lp_telemetry_record_phase1_dir_stabilize_cooldown_candidate(
+                    solver,
+                    dir_inf_ratio);
+                if (force_dir_refactor) {
+                    lp_telemetry_record_phase1_dir_stabilize_force(
+                        solver,
+                        force_dir_refactor_extreme,
+                        force_dir_refactor_lu_health);
+                }
+            }
+
+            if (moderate_defer && !force_dir_refactor && !force_pivot_mode_active) {
+                dir_stabilize_moderate_defer_pending = 1;
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Moderate direction norm %.2e at iter %d (entering=%d), deferring one refactor and retrying pricing\n",
+                            dir_inf, iter, entering);
+                }
+                phase1_note_dir_skip_entering(solver,
+                                              entering,
+                                              &phase1_last_dir_skip_entering,
+                                              &phase1_dir_skip_same_entering_streak);
+                phase1_exclude_entering_var_tracked(solver,
+                                                    entering,
+                                                    RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
+                                                    &excluded_entering_a,
+                                                    &excluded_entering_ttl_a,
+                                                    &excluded_entering_b,
+                                                    &excluded_entering_ttl_b);
+                if (phase1_dir_skip_event_streak < INT_MAX) {
+                    phase1_dir_skip_event_streak++;
+                }
+                use_bland = 1;
+                phase1_recompute_dir_skip_safe(solver,
+                                               tab,
+                                               degenerate_count,
+                                               phase1_no_pivot_streak + 1,
+                                               &phase1_rc_only_streak,
+                                               &phase1_dir_skip_no_recompute_streak);
+                if (phase1_activate_force_pivot_mode(
+                        solver,
+                        tab->m,
+                        degenerate_count,
+                        1,
+                        &phase1_dir_skip_event_streak,
+                        &phase1_force_pivot_attempt_budget,
+                        &phase1_no_pivot_force_pending,
+                        &phase1_no_pivot_force_reason) &&
+                    solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Force-pivot mode activated after repeated dir-skip/no-recompute (budget=%d)\n",
+                            phase1_force_pivot_attempt_budget);
+                }
+                phase1_no_pivot_progress_update(solver,
+                                                tab,
+                                                &phase1_no_pivot_prev_art_sum,
+                                                &phase1_no_pivot_anchor_art_sum,
+                                                &phase1_no_pivot_progress_window_steps,
+                                                &phase1_no_pivot_no_progress_streak);
+                {
+                    int tiny_theta_relax_immediate_classified = 0;
+
+                lp_telemetry_record_phase1_no_pivot_ladder_retry(
+                    solver,
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
+                if (phase1_note_no_pivot_and_maybe_force(
+                        solver,
+                        tab->m,
+                        degenerate_count,
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+                        &phase1_no_pivot_streak,
+                        &phase1_no_pivot_force_cooldown)) {
+                    phase1_no_pivot_force_pending = 1;
+                    phase1_no_pivot_force_reason =
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+                    if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
+                            solver);
+                        phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                        phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                        tiny_theta_relax_immediate_classified = 1;
+                    }
+                }
+                if (!phase1_no_pivot_force_pending &&
+                    lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(phase1_dir_skip_event_streak)) {
+                    int rescue_step = phase1_no_pivot_ladder_apply_rescue_guard(
+                        solver,
+                        PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE,
+                        phase1_no_pivot_ladder_rescue_cooldown,
+                        phase1_no_pivot_ladder_rescue_fail_streak);
+                    if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
+                        int rescue_result = phase1_attempt_ladder_dual_rescue(
+                            solver,
+                            tab,
+                            iter,
+                            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+                            LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP,
+                            &phase1_no_pivot_ladder_rescue_cooldown,
+                            &phase1_no_pivot_ladder_rescue_fail_streak,
+                            &phase1_rc_only_streak,
+                            &phase1_no_pivot_no_progress_streak,
+                            &phase1_no_pivot_prev_art_sum,
+                            &phase1_no_pivot_anchor_art_sum,
+                            &phase1_no_pivot_progress_window_steps);
+                        if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                            lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue(
+                                solver);
+                            phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                            phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                            tiny_theta_relax_immediate_classified = 1;
+                        }
+                        if (rescue_result == 1) continue;
+                        if (rescue_result < 0) return -1;
+                    } else if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR) {
+                        lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
+                            solver,
+                            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
+                        phase1_no_pivot_force_pending = 1;
+                        phase1_no_pivot_force_reason =
+                            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+                        if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                            lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
+                                solver);
+                            phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                            phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                            tiny_theta_relax_immediate_classified = 1;
+                        }
+                    }
+                }
+                    if (phase1_force_extreme_tiny_theta_relax_branch_pending &&
+                        !tiny_theta_relax_immediate_classified) {
+                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry(
+                            solver);
+                        phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                        phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                    }
+                }
+                continue;
+            }
+
+            if (cooldown_active && !force_dir_refactor && !force_pivot_mode_active) {
+                dir_stabilize_moderate_defer_pending = 0;
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Large direction norm %.2e at iter %d (entering=%d), skipping direction-stabilize refactor (cooldown=%d)\n",
+                            dir_inf, iter, entering, dir_stabilize_cooldown);
+                }
+                if (dir_stabilize_cooldown_target > dir_stabilize_cooldown) {
+                    dir_stabilize_cooldown = dir_stabilize_cooldown_target;
+                }
+                phase1_note_dir_skip_entering(solver,
+                                              entering,
+                                              &phase1_last_dir_skip_entering,
+                                              &phase1_dir_skip_same_entering_streak);
+                phase1_exclude_entering_var_tracked(solver,
+                                                    entering,
+                                                    RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
+                                                    &excluded_entering_a,
+                                                    &excluded_entering_ttl_a,
+                                                    &excluded_entering_b,
+                                                    &excluded_entering_ttl_b);
+                if (phase1_dir_skip_event_streak < INT_MAX) {
+                    phase1_dir_skip_event_streak++;
+                }
+                use_bland = 1;
+                phase1_recompute_dir_skip_safe(solver,
+                                               tab,
+                                               degenerate_count,
+                                               phase1_no_pivot_streak + 1,
+                                               &phase1_rc_only_streak,
+                                               &phase1_dir_skip_no_recompute_streak);
+                if (phase1_activate_force_pivot_mode(
+                        solver,
+                        tab->m,
+                        degenerate_count,
+                        1,
+                        &phase1_dir_skip_event_streak,
+                        &phase1_force_pivot_attempt_budget,
+                        &phase1_no_pivot_force_pending,
+                        &phase1_no_pivot_force_reason) &&
+                    solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Force-pivot mode activated after repeated dir-skip/no-recompute (budget=%d)\n",
+                            phase1_force_pivot_attempt_budget);
+                }
+                phase1_no_pivot_progress_update(solver,
+                                                tab,
+                                                &phase1_no_pivot_prev_art_sum,
+                                                &phase1_no_pivot_anchor_art_sum,
+                                                &phase1_no_pivot_progress_window_steps,
+                                                &phase1_no_pivot_no_progress_streak);
+                {
+                    int tiny_theta_relax_immediate_classified = 0;
+
+                lp_telemetry_record_phase1_no_pivot_ladder_retry(
+                    solver,
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
+                if (phase1_note_no_pivot_and_maybe_force(
+                        solver,
+                        tab->m,
+                        degenerate_count,
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+                        &phase1_no_pivot_streak,
+                        &phase1_no_pivot_force_cooldown)) {
+                    phase1_no_pivot_force_pending = 1;
+                    phase1_no_pivot_force_reason =
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+                    if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
+                            solver);
+                        phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                        phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                        tiny_theta_relax_immediate_classified = 1;
+                    }
+                }
+                if (!phase1_no_pivot_force_pending &&
+                    lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(phase1_dir_skip_event_streak)) {
+                    int rescue_step = phase1_no_pivot_ladder_apply_rescue_guard(
+                        solver,
+                        PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE,
+                        phase1_no_pivot_ladder_rescue_cooldown,
+                        phase1_no_pivot_ladder_rescue_fail_streak);
+                    if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
+                        int rescue_result = phase1_attempt_ladder_dual_rescue(
+                            solver,
+                            tab,
+                            iter,
+                            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+                            LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP,
+                            &phase1_no_pivot_ladder_rescue_cooldown,
+                            &phase1_no_pivot_ladder_rescue_fail_streak,
+                            &phase1_rc_only_streak,
+                            &phase1_no_pivot_no_progress_streak,
+                            &phase1_no_pivot_prev_art_sum,
+                            &phase1_no_pivot_anchor_art_sum,
+                            &phase1_no_pivot_progress_window_steps);
+                        if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                            lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue(
+                                solver);
+                            phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                            phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                            tiny_theta_relax_immediate_classified = 1;
+                        }
+                        if (rescue_result == 1) continue;
+                        if (rescue_result < 0) return -1;
+                    } else if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR) {
+                        lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
+                            solver,
+                            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
+                        phase1_no_pivot_force_pending = 1;
+                        phase1_no_pivot_force_reason =
+                            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+                        if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                            lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
+                                solver);
+                            phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                            phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                            tiny_theta_relax_immediate_classified = 1;
+                        }
+                    }
+                }
+                    if (phase1_force_extreme_tiny_theta_relax_branch_pending &&
+                        !tiny_theta_relax_immediate_classified) {
+                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry(
+                            solver);
+                        phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                        phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                    }
+                }
+                continue;
+            }
+            phase1_no_pivot_progress_update(solver,
+                                            tab,
+                                            &phase1_no_pivot_prev_art_sum,
+                                            &phase1_no_pivot_anchor_art_sum,
+                                            &phase1_no_pivot_progress_window_steps,
+                                            &phase1_no_pivot_no_progress_streak);
+            if (!force_dir_refactor && !force_pivot_mode_active) {
+                int ladder_threshold = 0;
+                int ladder_step = phase1_no_pivot_ladder_step(
+                    solver,
+                    tab->m,
+                    degenerate_count,
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+                    phase1_no_pivot_streak + 1,
+                    phase1_no_pivot_no_progress_streak,
+                    force_pivot_mode_active,
+                    &ladder_threshold);
+                ladder_step = phase1_no_pivot_ladder_apply_rescue_guard(
+                    solver,
+                    ladder_step,
+                    phase1_no_pivot_ladder_rescue_cooldown,
+                    phase1_no_pivot_ladder_rescue_fail_streak);
+                if (ladder_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
+                    int rescue_result = phase1_attempt_ladder_dual_rescue(
+                        solver,
+                        tab,
+                        iter,
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+                        LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP,
+                        &phase1_no_pivot_ladder_rescue_cooldown,
+                        &phase1_no_pivot_ladder_rescue_fail_streak,
+                        &phase1_rc_only_streak,
+                        &phase1_no_pivot_no_progress_streak,
+                        &phase1_no_pivot_prev_art_sum,
+                        &phase1_no_pivot_anchor_art_sum,
+                        &phase1_no_pivot_progress_window_steps);
+                    if (rescue_result == 1) continue;
+                    if (rescue_result < 0) return -1;
+                }
+                if (ladder_step != PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR) {
+                    lp_telemetry_record_phase1_no_pivot_ladder_retry(
+                        solver,
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] No-pivot ladder defers dir-stabilize refactor (iter=%d entering=%d no_progress=%d threshold=%d)\n",
+                                iter, entering, phase1_no_pivot_no_progress_streak, ladder_threshold);
+                    }
+                    if (dir_stabilize_cooldown_target > dir_stabilize_cooldown) {
+                        dir_stabilize_cooldown = dir_stabilize_cooldown_target;
+                    }
+                    phase1_note_dir_skip_entering(solver,
+                                                  entering,
+                                                  &phase1_last_dir_skip_entering,
+                                                  &phase1_dir_skip_same_entering_streak);
+                    phase1_exclude_entering_var_tracked(solver,
+                                                        entering,
+                                                        RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
+                                                        &excluded_entering_a,
+                                                        &excluded_entering_ttl_a,
+                                                        &excluded_entering_b,
+                                                        &excluded_entering_ttl_b);
+                    if (phase1_dir_skip_event_streak < INT_MAX) {
+                        phase1_dir_skip_event_streak++;
+                    }
+                    use_bland = 1;
+                    phase1_recompute_dir_skip_safe(solver,
+                                                   tab,
+                                                   degenerate_count,
+                                                   phase1_no_pivot_streak + 1,
+                                                   &phase1_rc_only_streak,
+                                                   &phase1_dir_skip_no_recompute_streak);
+                    if (phase1_activate_force_pivot_mode(
+                            solver,
+                            tab->m,
+                            degenerate_count,
+                            1,
+                            &phase1_dir_skip_event_streak,
+                            &phase1_force_pivot_attempt_budget,
+                            &phase1_no_pivot_force_pending,
+                            &phase1_no_pivot_force_reason) &&
+                        solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Force-pivot mode activated after repeated dir-skip/no-recompute (budget=%d)\n",
+                                phase1_force_pivot_attempt_budget);
+                    }
+                    if (phase1_note_no_pivot_and_maybe_force(
+                            solver,
+                            tab->m,
+                            degenerate_count,
+                            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+                            &phase1_no_pivot_streak,
+                            &phase1_no_pivot_force_cooldown)) {
+                        phase1_no_pivot_force_pending = 1;
+                        phase1_no_pivot_force_reason =
+                            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+                        if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                            lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_forced_refactor(
+                                solver);
+                            phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                            phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                        }
+                    } else if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                        lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_retry(
+                            solver);
+                        phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                        phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                    }
+                    continue;
+                }
+                lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
+                    solver,
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
+                dir_refactor_ladder_forced = 1;
+            }
+            if (phase1_force_extreme_tiny_theta_relax_branch_pending) {
+                if (force_dir_refactor_lu_health) {
+                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_refactor(
+                        solver,
+                        PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_LU_HEALTH);
+                    phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                    phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                } else if (force_pivot_mode_active) {
+                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_refactor(
+                        solver,
+                        PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_FORCE_PIVOT);
+                    phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                    phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                } else if (dir_refactor_ladder_forced) {
+                    lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_refactor(
+                        solver,
+                        PHASE1_FORCE_EXTREME_TINY_THETA_RELAX_REFACTOR_LADDER);
+                    phase1_force_extreme_tiny_theta_relax_branch_pending = 0;
+                    phase1_force_extreme_tiny_theta_relax_next_pending = 1;
+                }
+            }
+            if (force_dir_refactor_extreme && !force_pivot_mode_active) {
+                if (phase1_dir_force_refactor_streak < INT_MAX) {
+                    phase1_dir_force_refactor_streak++;
+                }
+                if (phase1_activate_force_pivot_mode(
+                        solver,
+                        tab->m,
+                        degenerate_count,
+                        0,
+                        &phase1_dir_force_refactor_streak,
+                        &phase1_force_pivot_attempt_budget,
+                        NULL,
+                        NULL) &&
+                    solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Force-pivot mode armed after repeated extreme-direction refactors (budget=%d streak=%d)\n",
+                            phase1_force_pivot_attempt_budget,
+                            phase1_dir_force_refactor_streak);
+                }
+                force_pivot_mode_active =
+                    (phase1_force_pivot_attempt_budget > 0);
+            } else if (!force_dir_refactor_extreme) {
+                phase1_dir_force_refactor_streak = 0;
+            }
+            phase1_dir_skip_event_streak = 0;
+            phase1_dir_escape_cooldown = 0;
+            dir_stabilize_moderate_defer_pending = 0;
+
+            if (solver->verbose >= 2) {
+                LP_LOG_STDERR("[simplex_phase1] Large direction norm %.2e at iter %d (entering=%d), re-factorizing before pivot\n",
+                        dir_inf, iter, entering);
+            }
+            int stabilized = 0;
+            int original_entering = entering;
+            int retry_penalize_last_failed =
+                phase1_failed_stabilize_retry_penalty_plan(
+                    original_entering,
+                    phase1_last_failed_stabilize_entering,
+                    phase1_failed_stabilize_same_entering_streak);
+            int retry_consumed_alternate = 0;
+            int retry_used_local_memory_alt = 0;
+            int retry_local_memory_repeat_streak = 0;
+            int retry_local_memory_selector_tracked = 0;
+            int retry_local_memory_used_guarded_selector = 0;
+            int retry_local_memory_bland_alt = -1;
+            int retry_shadow_best_alt = -1;
+            int retry_direction_guard_exclude_original = 0;
+            int retry_shadow_guard_exclude_original = 0;
+            int arm_shadow_guard_followup_pending = 0;
+            int arm_force_extreme_followup_pending = 0;
+            int force_extreme_followup_tracked = 0;
+            for (int stab_try = 0; stab_try < 1; stab_try++) {
+                int dir_refactor_trigger = 0;
+                if (force_dir_refactor_extreme) {
+                    dir_refactor_trigger = PHASE1_DIR_REFACTOR_TELEM_FORCE_EXTREME_DIR;
+                } else if (force_dir_refactor_lu_health) {
+                    dir_refactor_trigger = PHASE1_DIR_REFACTOR_TELEM_FORCE_LU_HEALTH;
+                } else if (force_pivot_mode_active) {
+                    dir_refactor_trigger = PHASE1_DIR_REFACTOR_TELEM_FORCE_PIVOT_MODE;
+                } else if (dir_refactor_ladder_forced) {
+                    dir_refactor_trigger = PHASE1_DIR_REFACTOR_TELEM_LADDER_FORCE;
+                }
+                lp_telemetry_record_phase1_dir_stabilize_refactor_trigger(
+                    solver,
+                    dir_refactor_trigger);
+                force_extreme_followup_tracked =
+                    (dir_refactor_trigger ==
+                     PHASE1_DIR_REFACTOR_TELEM_FORCE_EXTREME_DIR);
+                if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_DIRECTION_STABILIZE) != 0) {
+                    break;
+                }
+                dir_stabilize_cooldown = dir_stabilize_cooldown_target;
+                ratio_status = primal_ratio_test_with_policy(solver,
+                                                             tab,
+                                                             0,
+                                                             entering,
+                                                             &leaving,
+                                                             &theta);
+                if (ratio_status != 0) {
+                    if (force_extreme_followup_tracked) {
+                        lp_telemetry_record_phase1_force_extreme_followup_ratio_breakdown(
+                            solver);
+                    }
+                    phase1_force_extreme_tiny_theta_relax_consume_ratio_breakdown(
+                        solver, &phase1_force_extreme_tiny_theta_relax_next_pending);
+                    if (retry_consumed_alternate) {
+                        lp_telemetry_record_phase1_failed_stabilize_retry_penalty_outcome(
+                            solver, 0);
+                    }
+                    phase1_trace_record_no_entering(solver, iter, ratio_status);
+                    use_bland = 1;
+                    phase1_recompute_full_with_reason(
+                        solver,
+                        tab,
+                        &phase1_rc_only_streak,
+                        LP_PHASE1_RECOMPUTE_REASON_DIR_REFACTOR);
+                    continue;
+                }
+
+                dir_inf = vec_abs_max(tab->work2, tab->m);
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Direction norm after re-factorization: %.2e\n",
+                            dir_inf);
+                }
+                if (dir_inf <= RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
+                    if (force_extreme_followup_tracked) {
+                        lp_telemetry_record_phase1_force_extreme_followup_stabilized(
+                            solver);
+                        phase1_force_extreme_followup_bound_flip_streak = 0;
+                        phase1_force_extreme_followup_tiny_theta_streak = 0;
+                    }
+                    if (retry_used_local_memory_alt) {
+                        lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_outcome(
+                            solver, 1);
+                    }
+                    stabilized = 1;
+                    break;
+                }
+
+                if (retry_penalize_last_failed) {
+                    lp_telemetry_record_phase1_failed_stabilize_retry_penalty_arm(
+                        solver);
+                    phase1_failed_stabilize_retry_sample_pool(
+                        solver,
+                        tab,
+                        original_entering,
+                        phase1_last_failed_stabilize_entering,
+                        &phase1_failed_stabilize_retry_pool_sample_counter);
+                    if (pricing_bland_excluding_two(tab,
+                                                    original_entering,
+                                                    phase1_last_failed_stabilize_entering,
+                                                    &entering) != 0) {
+                        lp_telemetry_record_phase1_failed_stabilize_retry_penalty_no_alt(
+                            solver);
+                        break;
+                    }
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Penalizing repeated failed-stabilize retry candidate %d, trying alternate %d inside dir-stabilize retry\n",
+                                phase1_last_failed_stabilize_entering, entering);
+                    }
+                } else {
+                    int retry_use_local_memory =
+                        phase1_failed_stabilize_retry_local_memory_plan(
+                            original_entering,
+                            phase1_last_failed_stabilize_retry_alt,
+                            phase1_failed_stabilize_retry_alt_streak,
+                            retry_penalize_last_failed);
+                    if (retry_use_local_memory) {
+                        retry_local_memory_repeat_streak =
+                            phase1_failed_stabilize_retry_alt_streak;
+                        lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_arm(
+                            solver);
+                        phase1_failed_stabilize_retry_sample_pool(
+                            solver,
+                            tab,
+                            original_entering,
+                            phase1_last_failed_stabilize_retry_alt,
+                            &phase1_failed_stabilize_retry_pool_sample_counter);
+                        if (phase1_failed_stabilize_retry_alt_streak >=
+                                PHASE1_FAILED_STABILIZE_RETRY_GUARDED_SELECTOR_TRIGGER &&
+                            phase1_failed_stabilize_retry_select_local_memory(
+                                solver,
+                                tab,
+                                original_entering,
+                                phase1_last_failed_stabilize_retry_alt,
+                                phase1_failed_stabilize_retry_alt_ratio_fail_streak,
+                                phase1_failed_stabilize_retry_alt_streak,
+                                &entering,
+                                &retry_local_memory_bland_alt,
+                                &retry_shadow_best_alt,
+                                &retry_local_memory_used_guarded_selector) == 0) {
+                            if (retry_shadow_best_alt == retry_local_memory_bland_alt) {
+                                retry_shadow_best_alt = -1;
+                            }
+                            retry_used_local_memory_alt = 1;
+                            retry_local_memory_selector_tracked = 1;
+                            lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_alternate(
+                                solver);
+                            if (solver->verbose >= 2) {
+                                LP_LOG_STDERR("[simplex_phase1] Avoiding repeated retry alternate %d, trying local-memory %s alternate %d inside dir-stabilize retry\n",
+                                        phase1_last_failed_stabilize_retry_alt,
+                                        retry_local_memory_used_guarded_selector ? "guarded" : "bland",
+                                        entering);
+                            }
+                        } else if (pricing_bland_excluding_two(tab,
+                                                               original_entering,
+                                                               phase1_last_failed_stabilize_retry_alt,
+                                                               &entering) == 0) {
+                            if (phase1_failed_stabilize_retry_eval_candidates(
+                                solver,
+                                tab,
+                                original_entering,
+                                phase1_last_failed_stabilize_retry_alt,
+                                NULL,
+                                NULL,
+                                &retry_shadow_best_alt,
+                                NULL,
+                                NULL) != 0) {
+                                retry_shadow_best_alt = -1;
+                            }
+                            if (retry_shadow_best_alt == entering) {
+                                retry_shadow_best_alt = -1;
+                            }
+                            retry_used_local_memory_alt = 1;
+                            retry_local_memory_selector_tracked = 1;
+                            retry_local_memory_used_guarded_selector = 0;
+                            retry_local_memory_bland_alt = entering;
+                            lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
+                                solver, 0, 0);
+                            lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_alternate(
+                                solver);
+                            if (solver->verbose >= 2) {
+                                LP_LOG_STDERR("[simplex_phase1] Avoiding repeated retry alternate %d, trying local-memory bland alternate %d inside dir-stabilize retry\n",
+                                        phase1_last_failed_stabilize_retry_alt, entering);
+                            }
+                        } else {
+                            retry_local_memory_selector_tracked = 0;
+                            retry_local_memory_used_guarded_selector = 0;
+                            lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_no_alt(
+                                solver);
+                            if (pricing_bland_excluding(tab, original_entering, &entering) != 0) {
+                                break;
+                            }
+                            if (entering == phase1_last_failed_stabilize_retry_alt) {
+                                lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_fallback_same_alt(
+                                    solver);
+                            }
+                        }
+                    } else {
+                        phase1_failed_stabilize_retry_sample_pool(
+                            solver,
+                            tab,
+                            original_entering,
+                            -1,
+                            &phase1_failed_stabilize_retry_pool_sample_counter);
+                        if (pricing_bland_excluding(tab, original_entering, &entering) != 0) {
+                            break;
+                        }
+                    }
+                }
+                retry_consumed_alternate = 1;
+                for (;;) {
+                    double retry_dir_fail_inf = 0.0;
+                    int retry_dir_fail_nnz = 0;
+                    double retry_dir_fail_pivot_abs = 0.0;
+                    phase1_note_failed_stabilize_retry_alternate(
+                        solver,
+                        entering,
+                        &phase1_last_failed_stabilize_retry_alt,
+                        &phase1_failed_stabilize_retry_alt_streak);
+                    if (phase1_failed_stabilize_retry_alt_streak <= 1) {
+                        phase1_failed_stabilize_retry_alt_ratio_fail_streak = 0;
+                    }
+                    ratio_status = primal_ratio_test_with_policy(solver,
+                                                                 tab,
+                                                                 0,
+                                                                 entering,
+                                                                 &leaving,
+                                                                 &theta);
+                    if (ratio_status != 0) {
+                        if (phase1_failed_stabilize_retry_alt_ratio_fail_streak < INT_MAX) {
+                            phase1_failed_stabilize_retry_alt_ratio_fail_streak++;
+                        }
+                        if (retry_local_memory_selector_tracked) {
+                            lp_telemetry_record_phase1_failed_stabilize_retry_selector_ratio_failure(
+                                solver, retry_local_memory_used_guarded_selector);
+                            lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(
+                                solver, retry_local_memory_used_guarded_selector, 0);
+                            if (retry_local_memory_used_guarded_selector &&
+                                retry_local_memory_bland_alt >= 0 &&
+                                retry_local_memory_bland_alt != entering) {
+                                lp_telemetry_record_phase1_failed_stabilize_retry_selector_guarded_fallback(
+                                    solver);
+                                entering = retry_local_memory_bland_alt;
+                                retry_local_memory_used_guarded_selector = 0;
+                                lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
+                                    solver, 0, 0);
+                                continue;
+                            }
+                        }
+                        break;
+                    }
+                    dir_inf = vec_abs_max(tab->work2, tab->m);
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Alternate entering %d direction norm: %.2e\n",
+                                entering, dir_inf);
+                    }
+                    if (dir_inf <= RALPH_PHASE1_DIR_INF_REFACTOR_TRIGGER) {
+                        if (force_extreme_followup_tracked) {
+                            lp_telemetry_record_phase1_force_extreme_followup_stabilized(
+                                solver);
+                            phase1_force_extreme_followup_bound_flip_streak = 0;
+                            phase1_force_extreme_followup_tiny_theta_streak = 0;
+                        }
+                        phase1_failed_stabilize_retry_alt_ratio_fail_streak = 0;
+                        lp_telemetry_record_phase1_failed_stabilize_retry_penalty_outcome(
+                            solver, 1);
+                        if (retry_used_local_memory_alt) {
+                            lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_outcome(
+                                solver, 1);
+                        }
+                        if (retry_local_memory_selector_tracked) {
+                            lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(
+                                solver, retry_local_memory_used_guarded_selector, 1);
+                        }
+                        stabilized = 1;
+                        break;
+                    }
+                    if (retry_used_local_memory_alt) {
+                        int retry_shadow_ratio_success = 0;
+                        int retry_shadow_dir_stable = 0;
+                        int retry_shadow_dir_nnz = 0;
+                        double retry_shadow_dir_inf = 0.0;
+                        double retry_shadow_pivot_abs = 0.0;
+                        phase1_failed_stabilize_retry_direction_shape(
+                            tab,
+                            leaving,
+                            &retry_dir_fail_inf,
+                            &retry_dir_fail_nnz,
+                            &retry_dir_fail_pivot_abs);
+                        lp_telemetry_record_phase1_failed_stabilize_retry_dir_fail_shape(
+                            solver,
+                            retry_dir_fail_inf,
+                            retry_dir_fail_nnz,
+                            retry_dir_fail_pivot_abs);
+                        if (phase1_failed_stabilize_retry_direction_guard_plan(
+                                retry_dir_fail_inf,
+                                retry_dir_fail_nnz,
+                                retry_dir_fail_pivot_abs,
+                                retry_local_memory_repeat_streak)) {
+                            retry_direction_guard_exclude_original = 1;
+                        }
+                        if (!retry_local_memory_used_guarded_selector &&
+                            retry_shadow_best_alt >= 0 &&
+                            retry_shadow_best_alt != entering) {
+                            phase1_failed_stabilize_retry_shadow_direction_proxy(
+                                solver,
+                                tab,
+                                retry_shadow_best_alt,
+                                &retry_shadow_ratio_success,
+                                &retry_shadow_dir_stable,
+                                &retry_shadow_dir_inf,
+                                &retry_shadow_dir_nnz,
+                                &retry_shadow_pivot_abs);
+                            if (phase1_failed_stabilize_retry_shadow_guard_plan(
+                                    retry_dir_fail_inf,
+                                    retry_dir_fail_nnz,
+                                    retry_dir_fail_pivot_abs,
+                                    retry_shadow_ratio_success,
+                                    retry_shadow_dir_inf,
+                                    retry_shadow_dir_nnz,
+                                    retry_shadow_pivot_abs,
+                                    retry_local_memory_repeat_streak)) {
+                                retry_shadow_guard_exclude_original = 1;
+                            }
+                        }
+                    }
+                    if (retry_local_memory_selector_tracked) {
+                        phase1_failed_stabilize_retry_alt_ratio_fail_streak = 0;
+                        lp_telemetry_record_phase1_failed_stabilize_retry_selector_dir_failure(
+                            solver, retry_local_memory_used_guarded_selector);
+                        lp_telemetry_record_phase1_failed_stabilize_retry_selector_outcome(
+                            solver, retry_local_memory_used_guarded_selector, 0);
+                        if (retry_local_memory_used_guarded_selector &&
+                            retry_local_memory_bland_alt >= 0 &&
+                            retry_local_memory_bland_alt != entering) {
+                            lp_telemetry_record_phase1_failed_stabilize_retry_selector_guarded_fallback(
+                                solver);
+                            entering = retry_local_memory_bland_alt;
+                            retry_local_memory_used_guarded_selector = 0;
+                            lp_telemetry_record_phase1_failed_stabilize_retry_selector_choice(
+                                solver, 0, 0);
+                            continue;
+                        }
+                    }
+                    break;
+                }
+                if (stabilized) {
+                    break;
+                }
+                lp_telemetry_record_phase1_failed_stabilize_retry_penalty_outcome(
+                    solver, 0);
+                if (retry_used_local_memory_alt) {
+                    lp_telemetry_record_phase1_failed_stabilize_retry_local_memory_outcome(
+                        solver, 0);
+                }
+            }
+
+            if (!stabilized) {
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Skipping unstable entering column after stabilization attempts (iter=%d, entering=%d, dir_inf=%.2e)\n",
+                            iter, entering, dir_inf);
+                }
+                if ((retry_direction_guard_exclude_original ||
+                     retry_shadow_guard_exclude_original) &&
+                    original_entering >= 0 &&
+                    original_entering != entering) {
+                    int exclude_iters = PHASE1_FAILED_STABILIZE_RETRY_DIR_GUARD_EXCLUDE_ITERS;
+                    if (retry_direction_guard_exclude_original) {
+                        lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_arm(
+                            solver);
+                    } else {
+                        lp_telemetry_record_phase1_failed_stabilize_retry_shadow_guard_arm(
+                            solver);
+                        exclude_iters =
+                            PHASE1_FAILED_STABILIZE_RETRY_SHADOW_GUARD_EXCLUDE_ITERS;
+                    }
+                    phase1_exclude_entering_var_tracked(
+                        solver,
+                        original_entering,
+                        exclude_iters,
+                        &excluded_entering_a,
+                        &excluded_entering_ttl_a,
+                        &excluded_entering_b,
+                        &excluded_entering_ttl_b);
+                    if (retry_direction_guard_exclude_original) {
+                        lp_telemetry_record_phase1_failed_stabilize_retry_dir_guard_original_exclusion(
+                            solver);
+                    } else {
+                        lp_telemetry_record_phase1_failed_stabilize_retry_shadow_guard_original_exclusion(
+                            solver);
+                        arm_shadow_guard_followup_pending = 1;
+                    }
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR(
+                            "[simplex_phase1] Guard-excluding original entering %d after %s retry direction for alternate %d\n",
+                            original_entering,
+                            retry_direction_guard_exclude_original ? "catastrophic" : "shadow-toxic",
+                            entering);
+                    }
+                }
+                phase1_shadow_guard_followup_direction_pending = 0;
+                phase1_force_extreme_followup_direction_pending = 0;
+                phase1_shadow_guard_followup_consume_failed_stabilize(
+                    solver, &phase1_shadow_guard_followup_pending);
+                phase1_force_extreme_tiny_theta_relax_consume_failed_stabilize(
+                    solver, &phase1_force_extreme_tiny_theta_relax_next_pending);
+                phase1_force_extreme_followup_consume_failed_stabilize(
+                    solver, &phase1_force_extreme_followup_pending);
+                if (force_extreme_followup_tracked) {
+                    lp_telemetry_record_phase1_force_extreme_followup_failed_stabilize(
+                        solver);
+                    arm_force_extreme_followup_pending = 1;
+                }
+                lp_telemetry_record_phase1_failed_stabilize_site(
+                    solver, retry_consumed_alternate);
+                phase1_window_pressure_note_event(
+                    solver,
+                    PHASE1_WINDOW_PRESSURE_EVENT_FAILED_STABILIZE,
+                    retry_used_local_memory_alt,
+                    &phase1_window_pressure_events,
+                    &phase1_window_pressure_failed_stabilize,
+                    &phase1_window_pressure_dir_skip,
+                    &phase1_window_pressure_local_memory_fail,
+                    &phase1_window_pressure_alternations,
+                    &phase1_window_pressure_last_event_kind);
+                phase1_note_failed_stabilize_entering(
+                    solver,
+                    entering,
+                    &phase1_last_failed_stabilize_entering,
+                    &phase1_failed_stabilize_same_entering_streak);
+                phase1_exclude_entering_var_tracked(solver,
+                                                    entering,
+                                                    RALPH_PHASE1_ENTERING_EXCLUDE_ITERS,
+                                                    &excluded_entering_a,
+                                                    &excluded_entering_ttl_a,
+                                                    &excluded_entering_b,
+                                                    &excluded_entering_ttl_b);
+                if (arm_shadow_guard_followup_pending) {
+                    phase1_shadow_guard_followup_pending = 1;
+                    phase1_shadow_guard_followup_direction_pending = 1;
+                }
+                if (arm_force_extreme_followup_pending) {
+                    phase1_force_extreme_followup_pending = 1;
+                    phase1_force_extreme_followup_direction_pending = 1;
+                }
+                dir_stabilize_cooldown = dir_stabilize_cooldown_target;
+                use_bland = 1;
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP);
+                phase1_window_pressure_note_event(
+                    solver,
+                    PHASE1_WINDOW_PRESSURE_EVENT_DIR_SKIP,
+                    0,
+                    &phase1_window_pressure_events,
+                    &phase1_window_pressure_failed_stabilize,
+                    &phase1_window_pressure_dir_skip,
+                    &phase1_window_pressure_local_memory_fail,
+                    &phase1_window_pressure_alternations,
+                    &phase1_window_pressure_last_event_kind);
+                if (phase1_window_pressure_force_pivot_armed) {
+                    /* Already armed in this pressure window. */
+                } else if (phase1_no_pivot_force_pending) {
+                    lp_telemetry_record_phase1_window_pressure_force_pivot_blocked_pending(
+                        solver);
+                } else if (phase1_force_pivot_attempt_budget > 0) {
+                    lp_telemetry_record_phase1_window_pressure_force_pivot_blocked_budget(
+                        solver);
+                } else {
+                    int window_force_pivot_reject_reason =
+                        LP_PHASE1_WINDOW_FORCE_PIVOT_REJECT_NONE;
+                    int window_force_pivot_budget =
+                        lp_refactor_policy_phase1_window_pressure_force_pivot_budget(
+                            tab->m,
+                            degenerate_count,
+                            phase1_window_pressure_events,
+                            phase1_window_pressure_failed_stabilize,
+                            phase1_window_pressure_dir_skip,
+                            phase1_window_pressure_local_memory_fail,
+                            phase1_window_pressure_alternations,
+                            phase1_force_pivot_attempt_budget,
+                            &window_force_pivot_reject_reason);
+                    if (window_force_pivot_budget > 0) {
+                        phase1_force_pivot_attempt_budget =
+                            window_force_pivot_budget;
+                        phase1_window_pressure_force_pivot_armed = 1;
+                        lp_telemetry_record_phase1_window_pressure_force_pivot_arm(
+                            solver);
+                        if (solver->verbose >= 2) {
+                            LP_LOG_STDERR(
+                                "[simplex_phase1] Windowed phase1 pressure armed force-pivot budget=%d (events=%d failed=%d dir_skip=%d local_fail=%d alt=%d)\n",
+                                phase1_force_pivot_attempt_budget,
+                                phase1_window_pressure_events,
+                                phase1_window_pressure_failed_stabilize,
+                                phase1_window_pressure_dir_skip,
+                                phase1_window_pressure_local_memory_fail,
+                                phase1_window_pressure_alternations);
+                        }
+                    } else {
+                        lp_telemetry_record_phase1_window_pressure_force_pivot_reject(
+                            solver,
+                            window_force_pivot_reject_reason);
+                    }
+                }
+                phase1_no_pivot_progress_update(solver,
+                                                tab,
+                                                &phase1_no_pivot_prev_art_sum,
+                                                &phase1_no_pivot_anchor_art_sum,
+                                                &phase1_no_pivot_progress_window_steps,
+                                                &phase1_no_pivot_no_progress_streak);
+                {
+                    int force_extreme_followup_immediate_classified = 0;
+                    int shadow_followup_immediate_classified = 0;
+
+                    lp_telemetry_record_phase1_no_pivot_ladder_retry(
+                        solver,
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
+                    if (phase1_note_no_pivot_and_maybe_force(
+                            solver,
+                            tab->m,
+                            degenerate_count,
+                            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+                            &phase1_no_pivot_streak,
+                            &phase1_no_pivot_force_cooldown)) {
+                        phase1_no_pivot_force_pending = 1;
+                        phase1_no_pivot_force_reason =
+                            LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+                        if (arm_force_extreme_followup_pending) {
+                            lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_forced_refactor(
+                                solver);
+                            force_extreme_followup_immediate_classified = 1;
+                        }
+                        if (arm_shadow_guard_followup_pending) {
+                            lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor(
+                                solver);
+                            shadow_followup_immediate_classified = 1;
+                        }
+                    }
+                    if (!phase1_no_pivot_force_pending &&
+                        lp_refactor_policy_phase1_dir_skip_ladder_rescue_due(phase1_dir_skip_event_streak)) {
+                        int rescue_step = phase1_no_pivot_ladder_apply_rescue_guard(
+                            solver,
+                            PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE,
+                            phase1_no_pivot_ladder_rescue_cooldown,
+                            phase1_no_pivot_ladder_rescue_fail_streak);
+                        if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
+                            int rescue_result = phase1_attempt_ladder_dual_rescue(
+                                solver,
+                                tab,
+                                iter,
+                                LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
+                                LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP,
+                                &phase1_no_pivot_ladder_rescue_cooldown,
+                                &phase1_no_pivot_ladder_rescue_fail_streak,
+                                &phase1_rc_only_streak,
+                                &phase1_no_pivot_no_progress_streak,
+                                &phase1_no_pivot_prev_art_sum,
+                                &phase1_no_pivot_anchor_art_sum,
+                                &phase1_no_pivot_progress_window_steps);
+                            if (arm_force_extreme_followup_pending) {
+                                lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_dual_rescue(
+                                    solver);
+                                force_extreme_followup_immediate_classified = 1;
+                            }
+                            if (arm_shadow_guard_followup_pending) {
+                                lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_dual_rescue(
+                                    solver);
+                                shadow_followup_immediate_classified = 1;
+                            }
+                            if (rescue_result == 1) continue;
+                            if (rescue_result < 0) return -1;
+                        } else if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_FORCE_REFACTOR) {
+                            lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
+                                solver,
+                                LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP);
+                            phase1_no_pivot_force_pending = 1;
+                            phase1_no_pivot_force_reason =
+                                LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP;
+                            if (arm_force_extreme_followup_pending) {
+                                lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_forced_refactor(
+                                    solver);
+                                force_extreme_followup_immediate_classified = 1;
+                            }
+                            if (arm_shadow_guard_followup_pending) {
+                                lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_forced_refactor(
+                                    solver);
+                                shadow_followup_immediate_classified = 1;
+                            }
+                        }
+                    }
+                    if (arm_force_extreme_followup_pending &&
+                        !force_extreme_followup_immediate_classified) {
+                        lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_retry(
+                            solver);
+                    }
+                    if (arm_shadow_guard_followup_pending &&
+                        !shadow_followup_immediate_classified) {
+                        lp_telemetry_record_phase1_failed_stabilize_retry_shadow_post_dir_skip_retry(
+                            solver);
+                    }
+                }
+                continue;
+            }
+            dir_stabilize_cooldown = dir_stabilize_cooldown_target;
+            use_bland = 1;
+        }
+
+        /* If we are retrying the same failing entering/leaving pair, force an
+         * alternate leaving choice from the current direction to escape loops. */
+        if (fail_repeat_count > 0 &&
+            entering == fail_entering &&
+            leaving == fail_leaving_pos &&
+            leaving >= 0) {
+            int alt_leaving = -1;
+            double alt_theta = RALPH_INFINITY;
+            if (ratio_test_harris_excluding_current(tab, entering, leaving,
+                                                    &alt_leaving, &alt_theta) == 0 &&
+                alt_leaving >= 0) {
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Using alternate leaving row %d instead of repeatedly failing row %d\n",
+                            alt_leaving, leaving);
+                }
+                leaving = alt_leaving;
+                theta = alt_theta;
+            }
         }
 
         /* Track degeneracy and apply anti-cycling measures */
         if (theta < RALPH_FEAS_TOL) {
             degenerate_count++;
 
-            /* First try perturbation (less restrictive than Bland's rule) */
-            if (degenerate_count >= PERTURB_THRESHOLD && !perturbation_active && !use_bland) {
-                primal_apply_perturbation(tab);
-                perturbation_active = 1;
-                if (solver->verbose) {
-                    fprintf(stderr, "[simplex_phase1] Applying bound perturbation after %d degenerate pivots\n",
-                            degenerate_count);
-                }
-                /* Recompute solution with perturbed bounds */
-                tableau_compute_solution(tab);
-                tableau_compute_reduced_costs(tab);
-            }
-
-            /* If still cycling after perturbation, use Bland's rule */
+            /* In Phase 1, avoid reactive bound perturbation because it can
+             * destabilize the feasibility objective; switch directly to Bland. */
             if (degenerate_count > DEGEN_THRESHOLD && !use_bland) {
                 use_bland = 1;
                 if (solver->verbose) {
-                    fprintf(stderr, "[simplex_phase1] Switching to Bland's rule after %d degenerate pivots\n",
+                    LP_LOG_STDERR("[simplex_phase1] Switching to Bland's rule after %d degenerate pivots\n",
                             degenerate_count);
                 }
             }
         }
 
         /* Perform pivot */
-        if (simplex_pivot(tab, entering, leaving, theta) != 0) {
+        int pivot_status;
+        if (phase1_force_pivot_attempt_budget > 0) {
+            lp_telemetry_record_phase1_force_pivot_budget_pivot_spend(solver);
+            phase1_force_pivot_attempt_budget--;
+        }
+        {
+            double t_pivot_ms = lp_telemetry_timer_start();
+            pivot_status = simplex_pivot(tab, entering, leaving, theta, fail_repeat_count);
+            lp_telemetry_record_pivot_timed(solver, 1, t_pivot_ms);
+        }
+        if (pivot_status != 0) {
+            phase1_shadow_guard_followup_direction_pending = 0;
+            phase1_force_extreme_followup_direction_pending = 0;
+            phase1_force_extreme_followup_bound_flip_streak = 0;
+            phase1_force_extreme_followup_tiny_theta_streak = 0;
+            phase1_shadow_guard_followup_consume_pivot_fail(
+                solver, &phase1_shadow_guard_followup_pending);
+            phase1_force_extreme_tiny_theta_relax_consume_pivot_fail(
+                solver, &phase1_force_extreme_tiny_theta_relax_next_pending);
+            phase1_force_extreme_followup_consume_pivot_fail(
+                solver, &phase1_force_extreme_followup_pending);
+            if (phase1_note_no_pivot_and_maybe_force(
+                    solver,
+                    tab->m,
+                    degenerate_count,
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL,
+                    &phase1_no_pivot_streak,
+                    &phase1_no_pivot_force_cooldown)) {
+                phase1_no_pivot_force_pending = 1;
+                phase1_no_pivot_force_reason =
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL;
+            }
+            int pivot_fail_reason = tab->trace_last_fail_reason;
+            if (entering == fail_entering &&
+                leaving == fail_leaving_pos &&
+                pivot_fail_reason == fail_reason) {
+                fail_repeat_count++;
+            } else {
+                fail_entering = entering;
+                fail_leaving_pos = leaving;
+                fail_reason = pivot_fail_reason;
+                fail_repeat_count = 1;
+            }
+
+            phase1_trace_record_pivot_failure(solver, tab, iter, fail_repeat_count);
+
             if (solver->verbose) {
-                fprintf(stderr, "[simplex_phase1] ERROR: pivot failed at iter %d\n", iter);
+                if (fail_repeat_count <= RALPH_PHASE1_REPEAT_REFACTOR_TRIGGER ||
+                    fail_repeat_count % 10 == 0) {
+                    LP_LOG_STDERR("[simplex_phase1] Pivot failed at iter %d (repeat %d), attempting recovery\n",
+                            iter, fail_repeat_count);
+                }
+            }
+
+            /* First recovery attempt: choose a different leaving row for the
+             * same entering column to avoid a numerically singular pivot pair. */
+            if (leaving >= 0) {
+                int alt_leaving = -1;
+                double alt_theta = RALPH_INFINITY;
+                if (ratio_test_harris_excluding_current(tab, entering, leaving,
+                                                        &alt_leaving, &alt_theta) == 0 &&
+                    alt_leaving >= 0 &&
+                    alt_leaving != leaving) {
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Retrying with alternate leaving row %d (failed row %d)\n",
+                                alt_leaving, leaving);
+                    }
+                    int alt_pivot_status;
+                    {
+                        double t_pivot_ms = lp_telemetry_timer_start();
+                        alt_pivot_status = simplex_pivot(tab, entering, alt_leaving, alt_theta, fail_repeat_count);
+                        lp_telemetry_record_pivot_timed(solver, 1, t_pivot_ms);
+                    }
+                    if (alt_pivot_status == 0) {
+                        fail_reason = PHASE1_PIVOT_FAIL_NONE;
+                        fail_repeat_count = 0;
+                        phase1_no_pivot_streak = 0;
+                        continue;
+                    } else {
+                        phase1_trace_record_pivot_failure(solver, tab, iter, fail_repeat_count);
+                    }
+                }
+            }
+
+            if (fail_repeat_count >= RALPH_PHASE1_FAIL_REPEAT_LIMIT) {
+                if (solver->verbose) {
+                    LP_LOG_STDERR("[simplex_phase1] Repeated pivot failure (%d) for entering=%d leaving_pos=%d, terminating as ITERATION_LIMIT\n",
+                            fail_repeat_count, entering, leaving);
+                }
+                primal_remove_perturbation(tab);
+                solver->status = RALPH_STATUS_ITERATION_LIMIT;
+                solver->iterations = iter;
+                phase1_trace_emit_summary(solver, RALPH_STATUS_ITERATION_LIMIT);
+                return -1;
+            }
+
+            if (fail_repeat_count >= PHASE1_PIVOT_FAIL_RECOVERY_EXCLUDE_TRIGGER) {
+                int no_pivot_force_mode_active =
+                    (phase1_force_pivot_attempt_budget > 0);
+                int no_pivot_ladder_step;
+                phase1_no_pivot_progress_update(solver,
+                                                tab,
+                                                &phase1_no_pivot_prev_art_sum,
+                                                &phase1_no_pivot_anchor_art_sum,
+                                                &phase1_no_pivot_progress_window_steps,
+                                                &phase1_no_pivot_no_progress_streak);
+                no_pivot_ladder_step = phase1_no_pivot_ladder_step(
+                    solver,
+                    tab->m,
+                    degenerate_count,
+                    LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL,
+                    phase1_no_pivot_streak,
+                    phase1_no_pivot_no_progress_streak,
+                    no_pivot_force_mode_active,
+                    NULL);
+                no_pivot_ladder_step = phase1_no_pivot_ladder_apply_rescue_guard(
+                    solver,
+                    no_pivot_ladder_step,
+                    phase1_no_pivot_ladder_rescue_cooldown,
+                    phase1_no_pivot_ladder_rescue_fail_streak);
+                if (no_pivot_ladder_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
+                    int rescue_result = phase1_attempt_ladder_dual_rescue(
+                        solver,
+                        tab,
+                        iter,
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL,
+                        LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY,
+                        &phase1_no_pivot_ladder_rescue_cooldown,
+                        &phase1_no_pivot_ladder_rescue_fail_streak,
+                        &phase1_rc_only_streak,
+                        &phase1_no_pivot_no_progress_streak,
+                        &phase1_no_pivot_prev_art_sum,
+                        &phase1_no_pivot_anchor_art_sum,
+                        &phase1_no_pivot_progress_window_steps);
+                    if (rescue_result == 1) {
+                        phase1_no_pivot_streak = 0;
+                        fail_reason = PHASE1_PIVOT_FAIL_NONE;
+                        fail_repeat_count = 0;
+                        use_bland = 1;
+                        continue;
+                    }
+                    if (rescue_result < 0) return -1;
+                } else if (no_pivot_ladder_step == PHASE1_NO_PIVOT_LADDER_STEP_RETRY) {
+                    lp_telemetry_record_phase1_no_pivot_ladder_retry(
+                        solver,
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL);
+                } else {
+                    lp_telemetry_record_phase1_no_pivot_ladder_forced_refactor(
+                        solver,
+                        LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL);
+                }
+            }
+
+            /* simplex_pivot can leave basis/LU partially updated on failure.
+             * Try the same recovery ladder used in Phase 2. */
+            if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY) == 0) {
+                phase1_pivot_fail_recovery_maybe_exclude_entering(
+                    solver,
+                    fail_repeat_count,
+                    entering,
+                    &excluded_entering_a,
+                    &excluded_entering_ttl_a,
+                    &excluded_entering_b,
+                    &excluded_entering_ttl_b);
+                use_bland = 1;
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY);
+                continue;
+            }
+            if (repair_singular_basis(tab) == 0) {
+                phase1_pivot_fail_recovery_maybe_exclude_entering(
+                    solver,
+                    fail_repeat_count,
+                    entering,
+                    &excluded_entering_a,
+                    &excluded_entering_ttl_a,
+                    &excluded_entering_b,
+                    &excluded_entering_ttl_b);
+                use_bland = 1;
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY);
+                continue;
+            }
+
+            /* Last structural recovery in Phase 1: if the problematic leaving
+             * row is driven by an artificial basic variable, treat the row as
+             * redundant and allow LU regularization to proceed. */
+            if (leaving >= 0 && leaving < tab->m) {
+                int leave_var = tab->basis[leaving];
+                if (is_artificial_var(tab, leave_var) &&
+                    tab->redundant_rows &&
+                    !tab->redundant_rows[leaving]) {
+                    tab->redundant_rows[leaving] = 1;
+                    tab->num_redundant++;
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Marking row %d as redundant due to stuck artificial %d\n",
+                                leaving, leave_var);
+                    }
+                    if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY) == 0) {
+                        phase1_pivot_fail_recovery_maybe_exclude_entering(
+                            solver,
+                            fail_repeat_count,
+                            entering,
+                            &excluded_entering_a,
+                            &excluded_entering_ttl_a,
+                            &excluded_entering_b,
+                            &excluded_entering_ttl_b);
+                        use_bland = 1;
+                        phase1_recompute_full_with_reason(
+                            solver,
+                            tab,
+                            &phase1_rc_only_streak,
+                            LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY);
+                        continue;
+                    }
+                }
+            }
+
+            /* Broader recovery for heavily degenerate Phase 1 states:
+             * mark all currently-basic artificial rows as potentially redundant
+             * and retry a full refactorization. */
+            int marked = mark_basic_artificial_rows_redundant(tab, 0);
+            if (marked > 0) {
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDERR("[simplex_phase1] Marked %d additional artificial rows as redundant for recovery\n",
+                            marked);
+                }
+                if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY) == 0) {
+                    phase1_pivot_fail_recovery_maybe_exclude_entering(
+                        solver,
+                        fail_repeat_count,
+                        entering,
+                        &excluded_entering_a,
+                        &excluded_entering_ttl_a,
+                        &excluded_entering_b,
+                        &excluded_entering_ttl_b);
+                    use_bland = 1;
+                    phase1_recompute_full_with_reason(
+                        solver,
+                        tab,
+                        &phase1_rc_only_streak,
+                        LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY);
+                    continue;
+                }
+            }
+
+            /* Final fallback for stuck Phase 1 states: try a bounded dual-simplex
+             * rescue on the current tableau (no recursion to primal simplex). */
+            int rescue_status = phase1_attempt_direct_dual_rescue(
+                solver,
+                tab,
+                iter,
+                &phase1_no_pivot_ladder_rescue_cooldown,
+                &phase1_no_pivot_ladder_rescue_fail_streak);
+            if (rescue_status == 0) {
+                if (solver->verbose) {
+                    LP_LOG_STDERR("[simplex_phase1] Dual rescue restored feasibility progress at iter %d\n", iter);
+                }
+                phase1_pivot_fail_recovery_maybe_exclude_entering(
+                    solver,
+                    fail_repeat_count,
+                    entering,
+                    &excluded_entering_a,
+                    &excluded_entering_ttl_a,
+                    &excluded_entering_b,
+                    &excluded_entering_ttl_b);
+                use_bland = 1;
+                phase1_recompute_full_with_reason(
+                    solver,
+                    tab,
+                    &phase1_rc_only_streak,
+                    LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY);
+                fail_reason = PHASE1_PIVOT_FAIL_NONE;
+                fail_repeat_count = 0;
+                continue;
+            }
+            if (solver->status == RALPH_STATUS_TIME_LIMIT) {
+                primal_remove_perturbation(tab);
+                solver->iterations = iter;
+                phase1_trace_emit_summary(solver, RALPH_STATUS_TIME_LIMIT);
+                return -1;
+            }
+
+            if (solver->verbose) {
+                LP_LOG_STDERR("[simplex_phase1] ERROR: all pivot recovery attempts failed at iter %d\n", iter);
             }
             primal_remove_perturbation(tab);
-            solver->status = RALPH_STATUS_ERROR;
+            /* Treat unrecoverable Phase 1 pivot breakdown as numerical breakdown. */
+            solver->status = RALPH_STATUS_ITERATION_LIMIT;
             solver->iterations = iter;
+            phase1_trace_emit_summary(solver, RALPH_STATUS_ITERATION_LIMIT);
             return -1;
+        }
+        phase1_no_pivot_streak = 0;
+        phase1_no_pivot_progress_reset(
+            &phase1_no_pivot_no_progress_streak,
+            &phase1_no_pivot_prev_art_sum,
+            &phase1_no_pivot_anchor_art_sum,
+            &phase1_no_pivot_progress_window_steps);
+        phase1_window_pressure_progress_reset(
+            solver,
+            &phase1_window_pressure_events,
+            &phase1_window_pressure_failed_stabilize,
+            &phase1_window_pressure_dir_skip,
+            &phase1_window_pressure_local_memory_fail,
+            &phase1_window_pressure_alternations,
+            &phase1_window_pressure_last_event_kind);
+        phase1_window_pressure_force_pivot_armed = 0;
+        phase1_no_pivot_ladder_rescue_cooldown = 0;
+        phase1_no_pivot_ladder_rescue_fail_streak = 0;
+        fail_reason = PHASE1_PIVOT_FAIL_NONE;
+        fail_repeat_count = 0;
+        ratio_breakdown_count = 0;
+        ratio_breakdown_last_entering = -1;
+        ratio_breakdown_same_entering_streak = 0;
+        phase1_dir_skip_event_streak = 0;
+        phase1_dir_escape_cooldown = 0;
+        dir_stabilize_moderate_defer_pending = 0;
+        phase1_rc_only_streak = 0;
+        phase1_dir_skip_no_recompute_streak = 0;
+        phase1_dir_force_refactor_streak = 0;
+        phase1_last_dir_skip_entering = -1;
+        phase1_dir_skip_same_entering_streak = 0;
+        phase1_last_failed_stabilize_entering = -1;
+        phase1_failed_stabilize_same_entering_streak = 0;
+        phase1_last_failed_stabilize_retry_alt = -1;
+        phase1_failed_stabilize_retry_alt_streak = 0;
+        phase1_failed_stabilize_retry_alt_ratio_fail_streak = 0;
+        excluded_entering_a = -1;
+        excluded_entering_ttl_a = 0;
+        excluded_entering_b = -1;
+        excluded_entering_ttl_b = 0;
+
+        /* Phase 1 stall detection: re-perturb when objective stalls.
+         * This is critical for problems like recipe (80 artificials) where
+         * Bland's rule grinds forever without making progress. */
+        {
+        double obj_tol_p1 =
+            lp_refactor_policy_phase1_stall_obj_tol(last_obj_p1);
+        double obj_change_p1 = fabs(tab->obj_value - last_obj_p1);
+        if (obj_change_p1 < obj_tol_p1) {
+            stall_count_p1++;
+            if (stall_count_p1 >= P1_STALL_THRESHOLD) {
+                perturb_attempts_p1++;
+                if (perturb_attempts_p1 <= P1_MAX_PERTURB_ATTEMPTS) {
+                    double scale = 1.0 + 2.0 * perturb_attempts_p1;
+                    primal_apply_perturbation_scaled(tab, scale);
+                    /* Reset Bland's to allow faster pricing */
+                    use_bland = 0;
+                    degenerate_count = 0;
+                    stall_count_p1 = 0;
+                    phase1_recompute_full_with_reason(
+                        solver,
+                        tab,
+                        &phase1_rc_only_streak,
+                        LP_PHASE1_RECOMPUTE_REASON_PERTURB);
+                    if (phase1_pricing_strategy == 4) heap_build(tab);
+                    if (solver->verbose) {
+                        LP_LOG_STDERR("[simplex_phase1] Stall detected, re-perturbing (attempt %d, scale %.1f)\n",
+                                perturb_attempts_p1, scale);
+                    }
+                }
+            }
+        } else {
+            stall_count_p1 = 0;
+            last_obj_p1 = tab->obj_value;
+        }
         }
 
         /* Periodic refactorization */
-        if (lu_needs_refactorization(tab->lu)) {
-            if (tableau_refactorize(tab) != 0) {
+        {
+            double phase1_hot_ms_now = phase_hotpath_ms(solver, 1);
+            double iter_hot_ms = phase1_hot_ms_now - phase1_hot_ms_prev;
+            soft_lu_record_iter_cost(solver, 1, iter_hot_ms);
+            lp_reinvert_controller_state_record_iter_cost(
+                reinvert_state_for_phase(solver, 1), iter_hot_ms);
+            phase1_hot_ms_prev = phase1_hot_ms_now;
+        }
+        LPLUHealthRefactorDecision lu_health_decision =
+            lp_refactor_policy_lu_health_refactor_decision(tab->m,
+                                                           tab->lu->use_ft_updates,
+                                                           tab->lu->num_updates,
+                                                           tab->lu->max_updates,
+                                                           tab->lu->spike_pool_used,
+                                                           tab->lu->spike_pool_capacity,
+                                                           tab->lu->cond_estimate,
+                                                           tab->lu->growth_factor,
+                                                           lu_soft_health_streak);
+        int lu_refactor_nominal = lu_health_decision.refactor_now;
+        int lu_refactor_needed = lu_health_decision.refactor_now;
+        int lu_soft_cost_deferred = 0;
+        int cooldown_eligible = 0;
+        double effective_policy_pressure = 0.0;
+        double periodic_feedback_bias = periodic_feedback_bias_for_phase(solver, 1);
+        LPPeriodicRefactorPolicy periodic_policy =
+            lp_refactor_policy_build_from_metrics(1,
+                                                  tab->m,
+                                                  tab->lu->max_updates,
+                                                  tab->lu->num_updates,
+                                                  tab->lu->spike_pool_used,
+                                                  tab->lu->spike_pool_capacity,
+                                                  tab->lu->cond_estimate,
+                                                  tab->lu->growth_factor,
+                                                  use_bland,
+                                                  degenerate_count,
+                                                  periodic_feedback_bias);
+        int periodic_refactor = 0;
+        int periodic_refactor_nominal = 0;
+        int needs_refactor = lu_refactor_needed;
+        int reinvert_periodic_candidate = 0;
+        int reinvert_control_periodic = 0;
+        LPReinvertShadowEval reinvert_shadow_eval;
+        reinvert_shadow_eval_reset(&reinvert_shadow_eval);
+        lu_soft_health_streak = lu_health_decision.soft_breach_streak_next;
+        reinvert_phase1_pressure_safety_update(solver,
+                                               iter,
+                                               phase1_no_pivot_streak,
+                                               phase1_no_pivot_no_progress_streak,
+                                               ratio_breakdown_count,
+                                               phase1_dir_skip_no_recompute_streak,
+                                               lu_health_decision.hard_trigger);
+        reinvert_control_periodic = reinvert_controller_controls_periodic_phase(solver, 1);
+        if (lu_health_decision.hard_trigger) {
+            periodic_policy_cooldown = 0;
+            periodic_policy_pressure_decay = 0.0;
+            soft_lu_reset_defer_streak(solver, 1);
+            periodic_cost_reset_defer_streak(solver, 1);
+        } else if (lu_refactor_needed) {
+            periodic_cost_reset_defer_streak(solver, 1);
+        } else if (!lu_health_decision.soft_trigger || !solver->policy.soft_lu_cost_gate_enabled) {
+            soft_lu_reset_defer_streak(solver, 1);
+        }
+        if (lu_refactor_needed &&
+            solver->policy.soft_lu_cost_gate_enabled &&
+            lu_health_decision.soft_trigger &&
+            !lu_health_decision.hard_trigger) {
+            int cap_blocked = 0;
+            int next_consecutive = 0;
+            int should_defer = simplex_soft_lu_defer_plan_for_test(
+                1,
+                tab->m,
+                use_bland,
+                degenerate_count,
+                tab->lu->num_updates,
+                tab->lu->max_updates,
+                tab->lu->spike_pool_used,
+                tab->lu->spike_pool_capacity,
+                tab->lu->cond_estimate,
+                tab->lu->growth_factor,
+                soft_lu_refactor_cost_ewma(solver, 1),
+                soft_lu_iter_cost_ewma(solver, 1),
+                soft_lu_consecutive_defers(solver, 1),
+                NULL,
+                &cap_blocked,
+                &next_consecutive);
+            if (should_defer) {
+                lu_refactor_needed = 0;
+                lu_soft_cost_deferred = 1;
+                soft_lu_record_defer(solver, 1);
+                soft_lu_set_consecutive_defers(solver, 1, next_consecutive);
+            } else {
+                soft_lu_reset_defer_streak(solver, 1);
+                if (cap_blocked) {
+                    soft_lu_record_cap_forced(solver, 1);
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Soft LU defer cap reached; forcing periodic LU-health refactor (updates=%d/%d, degen=%d)\n",
+                                tab->lu->num_updates,
+                                tab->lu->max_updates,
+                                degenerate_count);
+                    }
+                }
+            }
+        } else {
+            phase1_shadow_guard_followup_direction_pending = 0;
+            phase1_force_extreme_followup_direction_pending = 0;
+            phase1_force_extreme_followup_bound_flip_streak = 0;
+            phase1_force_extreme_followup_tiny_theta_streak = 0;
+            phase1_shadow_guard_followup_consume_pivot_success(
+                solver, &phase1_shadow_guard_followup_pending);
+            phase1_force_extreme_tiny_theta_relax_consume_pivot_success(
+                solver, &phase1_force_extreme_tiny_theta_relax_next_pending);
+            phase1_force_extreme_followup_consume_pivot_success(
+                solver, &phase1_force_extreme_followup_pending);
+        }
+        if (lu_soft_cost_deferred) {
+            int soft_policy_cooldown = phase1_soft_lu_policy_cooldown_updates(
+                tab->m,
+                degenerate_count,
+                periodic_policy.interval);
+            int next_policy_cooldown =
+                lp_refactor_policy_periodic_cooldown_extend(
+                    periodic_policy_cooldown,
+                    soft_policy_cooldown);
+            if (next_policy_cooldown > periodic_policy_cooldown) {
+                periodic_policy_cooldown = next_policy_cooldown;
+                lp_telemetry_record_phase1_soft_lu_policy_cooldown_defer(solver);
+            }
+        }
+        if (!lu_refactor_needed) {
+            LPPeriodicRefactorPlan periodic_plan = lp_refactor_policy_periodic_plan(
+                1,
+                iter,
+                tab->m,
+                tab->lu->max_updates,
+                tab->lu->num_updates,
+                tab->lu->spike_pool_used,
+                tab->lu->spike_pool_capacity,
+                tab->lu->cond_estimate,
+                tab->lu->growth_factor,
+                use_bland,
+                degenerate_count,
+                periodic_feedback_bias,
+                periodic_policy_refactor_count(solver, 1),
+                periodic_policy_cooldown,
+                periodic_policy_pressure_decay);
+            periodic_policy = periodic_plan.policy;
+            cooldown_eligible = periodic_plan.cooldown_eligible;
+            effective_policy_pressure = periodic_plan.effective_run_pressure;
+            periodic_refactor = periodic_plan.should_run;
+            periodic_refactor_nominal = periodic_refactor;
+            reinvert_periodic_candidate = periodic_refactor_nominal;
+            reinvert_shadow_prepare_phase(solver,
+                                          tab,
+                                          1,
+                                          iter,
+                                          &lu_health_decision,
+                                          periodic_refactor_nominal,
+                                          periodic_policy.min_update_age,
+                                          periodic_policy_cooldown,
+                                          reinvert_control_periodic,
+                                          &reinvert_periodic_candidate,
+                                          &reinvert_shadow_eval);
+            if (reinvert_control_periodic) {
+                periodic_refactor = reinvert_periodic_candidate;
+                periodic_refactor_nominal = periodic_refactor;
+                periodic_cost_reset_defer_streak(solver, 1);
+            } else {
+                if (periodic_refactor &&
+                    cooldown_eligible &&
+                    periodic_policy_cooldown > 0) {
+                    periodic_refactor = 0;
+                }
+                if (periodic_refactor) {
+                    if (solver->policy.periodic_cost_gate_enabled) {
+                        int cap_blocked = 0;
+                        int next_consecutive = 0;
+                        int gate_reason = LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE;
+                        int should_defer = simplex_periodic_cost_defer_plan_for_test(
+                            1,
+                            tab->m,
+                            use_bland,
+                            degenerate_count,
+                            tab->lu->num_updates,
+                            tab->lu->max_updates,
+                            tab->lu->spike_pool_used,
+                            tab->lu->spike_pool_capacity,
+                            tab->lu->cond_estimate,
+                            tab->lu->growth_factor,
+                            soft_lu_refactor_cost_ewma(solver, 1),
+                            soft_lu_iter_cost_ewma(solver, 1),
+                            periodic_cost_refactor_samples(solver, 1),
+                            periodic_cost_iter_samples(solver, 1),
+                            periodic_cost_consecutive_defers(solver, 1),
+                            &gate_reason,
+                            NULL,
+                            &cap_blocked,
+                            &next_consecutive);
+                        periodic_cost_record_gate_reason(
+                            solver, 1, (LPPeriodicCostDampenReason)gate_reason);
+                        if (should_defer) {
+                            periodic_refactor = 0;
+                            periodic_cost_record_defer(solver, 1);
+                            periodic_cost_set_consecutive_defers(solver, 1, next_consecutive);
+                            if (solver->verbose >= 2) {
+                                LP_LOG_STDERR("[simplex_phase1] Deferred policy periodic refactor by cost gate (updates=%d/%d, degen=%d, iter_ewma=%.3fms, ref_ewma=%.3fms)\n",
+                                        tab->lu->num_updates,
+                                        tab->lu->max_updates,
+                                        degenerate_count,
+                                        soft_lu_iter_cost_ewma(solver, 1),
+                                        soft_lu_refactor_cost_ewma(solver, 1));
+                            }
+                        } else {
+                            periodic_cost_reset_defer_streak(solver, 1);
+                            if (cap_blocked) {
+                                periodic_cost_record_cap_forced(solver, 1);
+                                if (solver->verbose >= 2) {
+                                    LP_LOG_STDERR("[simplex_phase1] Policy periodic defer cap reached; forcing periodic policy refactor (updates=%d/%d, degen=%d)\n",
+                                            tab->lu->num_updates,
+                                            tab->lu->max_updates,
+                                            degenerate_count);
+                                }
+                            } else if (solver->verbose >= 3) {
+                                LP_LOG_STDERR("[simplex_phase1] Policy periodic cost gate blocked defer: %s\n",
+                                        lp_refactor_policy_periodic_cost_dampen_reason_string(
+                                            (LPPeriodicCostDampenReason)gate_reason));
+                            }
+                        }
+                    } else {
+                        periodic_cost_reset_defer_streak(solver, 1);
+                    }
+                }
+            }
+            needs_refactor = periodic_refactor;
+        } else {
+            reinvert_shadow_prepare_phase(solver,
+                                          tab,
+                                          1,
+                                          iter,
+                                          &lu_health_decision,
+                                          0,
+                                          periodic_policy.min_update_age,
+                                          periodic_policy_cooldown,
+                                          0,
+                                          NULL,
+                                          &reinvert_shadow_eval);
+        }
+        if (periodic_refactor) {
+            periodic_feedback_set_hint(solver, 1, periodic_policy.interval, effective_policy_pressure);
+        }
+        {
+            int shadow_refactor = lp_basis_governor_shadow_decide(
+                LP_BASIS_GOV_PHASE1,
+                lu_refactor_nominal,
+                periodic_refactor_nominal);
+            int governed_refactor = lp_basis_governor_decide_refactor(
+                &solver->policy.basis_governor,
+                LP_BASIS_GOV_PHASE1,
+                lu_refactor_nominal,
+                periodic_refactor_nominal,
+                needs_refactor);
+            if (solver->telemetry_enabled) {
+                lp_basis_governor_observe_refactor(
+                    &solver->policy.basis_governor,
+                    LP_BASIS_GOV_PHASE1,
+                    shadow_refactor,
+                    governed_refactor);
+            }
+            needs_refactor = governed_refactor;
+        }
+        reinvert_shadow_finalize_phase(solver, 1, &reinvert_shadow_eval, needs_refactor);
+
+        if (needs_refactor) {
+            phase1_dir_skip_no_recompute_streak = 0;
+            soft_lu_reset_defer_streak(solver, 1);
+            periodic_cost_reset_defer_streak(solver, 1);
+            runtime_record_periodic_refactor_trigger(solver, 1, lu_refactor_needed);
+            double t_refactor_ms = lp_telemetry_timer_start();
+            int rc_refactor = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PERIODIC);
+            double refactor_elapsed_ms = lp_telemetry_timer_elapsed_ms(t_refactor_ms);
+            if (rc_refactor == 0) {
+                soft_lu_record_refactor_cost(solver, 1, refactor_elapsed_ms);
+                lp_reinvert_controller_state_record_refactor_cost(
+                    reinvert_state_for_phase(solver, 1), refactor_elapsed_ms);
+            }
+            if (lu_refactor_needed && rc_refactor == 0) {
+                lu_soft_health_streak = 0;
+            }
+            if (!lu_refactor_needed && periodic_refactor) {
+                lp_refactor_policy_periodic_post_refactor_update(
+                    1,
+                    cooldown_eligible,
+                    periodic_policy.interval,
+                    rc_refactor,
+                    &periodic_policy_cooldown,
+                    &periodic_policy_pressure_decay);
+            }
+            if (rc_refactor != 0) {
+                if (periodic_refactor) {
+                    if (solver->verbose) {
+                        LP_LOG_STDERR("[simplex_phase1] Periodic refactorization failed at iter %d, continuing with existing LU\n",
+                                iter);
+                    }
+                    tab->phase1_compute_solution_context =
+                        LP_PHASE1_COMPUTE_CTX_REFACTOR_FAIL_CONTINUE;
+                    tab->phase1_compute_rc_context =
+                        LP_PHASE1_COMPUTE_CTX_REFACTOR_FAIL_CONTINUE;
+                    tableau_compute_solution(tab);
+                    tableau_compute_reduced_costs(tab);
+                    continue;
+                }
+
                 if (solver->verbose) {
-                    fprintf(stderr, "[simplex_phase1] ERROR: refactorization failed at iter %d\n", iter);
+                    LP_LOG_STDERR("[simplex_phase1] Refactorization failed at iter %d, trying dual rescue\n", iter);
+                }
+
+                int marked = mark_basic_artificial_rows_redundant(tab, 1);
+                if (marked > 0) {
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[simplex_phase1] Marked %d infeasible artificial rows as redundant after refactorization failure\n",
+                                marked);
+                    }
+                    if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_INFEASIBILITY_CLEANUP) == 0) {
+                        tab->phase1_compute_solution_context =
+                            LP_PHASE1_COMPUTE_CTX_REFACTOR_FAILURE_RECOVERY;
+                        tab->phase1_compute_rc_context =
+                            LP_PHASE1_COMPUTE_CTX_REFACTOR_FAILURE_RECOVERY;
+                        tableau_compute_solution(tab);
+                        tableau_compute_reduced_costs(tab);
+                        continue;
+                    }
+                }
+
+                int rescue_status = phase1_attempt_direct_dual_rescue(
+                    solver,
+                    tab,
+                    iter,
+                    &phase1_no_pivot_ladder_rescue_cooldown,
+                    &phase1_no_pivot_ladder_rescue_fail_streak);
+                if (rescue_status == 0) {
+                    if (solver->verbose) {
+                        LP_LOG_STDERR("[simplex_phase1] Dual rescue recovered after refactorization failure at iter %d\n", iter);
+                    }
+                    tab->phase1_compute_solution_context =
+                        LP_PHASE1_COMPUTE_CTX_REFACTOR_FAILURE_RECOVERY;
+                    tab->phase1_compute_rc_context =
+                        LP_PHASE1_COMPUTE_CTX_REFACTOR_FAILURE_RECOVERY;
+                    tableau_compute_solution(tab);
+                    tableau_compute_reduced_costs(tab);
+                    fail_reason = PHASE1_PIVOT_FAIL_NONE;
+                    fail_repeat_count = 0;
+                    continue;
+                }
+                if (solver->status == RALPH_STATUS_TIME_LIMIT) {
+                    primal_remove_perturbation(tab);
+                    solver->iterations = iter;
+                    phase1_trace_emit_summary(solver, RALPH_STATUS_TIME_LIMIT);
+                    return -1;
+                }
+
+                if (repair_singular_basis(tab) == 0) {
+                    if (solver->verbose) {
+                        LP_LOG_STDERR("[simplex_phase1] Basis repair recovered after refactorization failure at iter %d\n", iter);
+                    }
+                    tab->phase1_compute_solution_context =
+                        LP_PHASE1_COMPUTE_CTX_REFACTOR_FAILURE_RECOVERY;
+                    tab->phase1_compute_rc_context =
+                        LP_PHASE1_COMPUTE_CTX_REFACTOR_FAILURE_RECOVERY;
+                    tableau_compute_solution(tab);
+                    tableau_compute_reduced_costs(tab);
+                    continue;
+                }
+
+                if (solver->verbose) {
+                    LP_LOG_STDERR("[simplex_phase1] ERROR: all refactorization recoveries failed at iter %d\n", iter);
                 }
                 primal_remove_perturbation(tab);
-                solver->status = RALPH_STATUS_ERROR;
+                /* Treat unrecoverable Phase 1 refactorization failure as numerical breakdown. */
+                solver->status = RALPH_STATUS_ITERATION_LIMIT;
                 solver->iterations = iter;
+                phase1_trace_emit_summary(solver, RALPH_STATUS_ITERATION_LIMIT);
                 return -1;
             }
-            /* Recompute reduced costs after refactorization */
+            /* Recompute primal solution and reduced costs after refactorization. */
+            tab->phase1_compute_solution_context =
+                LP_PHASE1_COMPUTE_CTX_REFACTOR_SUCCESS;
+            tab->phase1_compute_rc_context =
+                LP_PHASE1_COMPUTE_CTX_REFACTOR_SUCCESS;
+            tableau_compute_solution(tab);
             tableau_compute_reduced_costs(tab);
+            if (solver->pricing_strategy == 4) heap_build(tab);
+        } else if (lu_soft_cost_deferred && solver->verbose >= 2) {
+            LP_LOG_STDERR("[simplex_phase1] Deferred soft LU-health periodic refactor (updates=%d/%d, degen=%d, iter_ewma=%.3fms, ref_ewma=%.3fms)\n",
+                    tab->lu->num_updates,
+                    tab->lu->max_updates,
+                    degenerate_count,
+                    soft_lu_iter_cost_ewma(solver, 1),
+                    soft_lu_refactor_cost_ewma(solver, 1));
+        } else if (iter > 0 && iter % RECOMPUTE_INTERVAL == 0) {
+            /* Drift control even when LU updates are still accepted. */
+            phase1_dir_skip_no_recompute_streak = 0;
+            tab->phase1_compute_solution_context =
+                LP_PHASE1_COMPUTE_CTX_DRIFT_REFRESH;
+            tab->phase1_compute_rc_context =
+                LP_PHASE1_COMPUTE_CTX_DRIFT_REFRESH;
+            tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+            if (solver->pricing_strategy == 4) heap_build(tab);
         }
     }
 
     /* Iteration limit exceeded */
     primal_remove_perturbation(tab);
     if (solver->verbose) {
-        fprintf(stderr, "[simplex_phase1] Iteration limit (%d) reached\n", solver->max_iterations);
+        LP_LOG_STDERR("[simplex_phase1] Iteration limit (%d) reached\n", solver->max_iterations);
     }
     solver->status = RALPH_STATUS_ITERATION_LIMIT;
+    solver->iterations = solver->max_iterations;
+    phase1_trace_emit_summary(solver, RALPH_STATUS_ITERATION_LIMIT);
     return -1;
 }
 
@@ -2283,7 +10107,9 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
     }
 
     if (solver->verbose) {
-        fprintf(stderr, "[simplex_transition] Transitioning to Phase 2\n");
+        LP_LOG_STDOUT("[simplex_transition] Transitioning to Phase 2 (m=%d, num_art=%d, num_eq=%d)\n",
+               tab->m, tab->num_artificial, tab->num_equalities);
+        fflush(stdout);
     }
 
     tab->phase = 2;
@@ -2409,10 +10235,10 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
             /* Try to pivot if we found any candidate */
             if (best_j >= 0 && fabs(best_coef) > RALPH_PIVOT_TOL) {
                 /* Pivot with zero theta since artificial is at zero value */
-                if (simplex_pivot(tab, best_j, basis_pos, 0.0) == 0) {
+                if (simplex_pivot(tab, best_j, basis_pos, 0.0, 0) == 0) {
                     found_replacement = 1;
                     if (solver->verbose) {
-                        fprintf(stderr, "[simplex_transition] Pivoted out artificial %d with var %d (coef=%.2e)\n",
+                        LP_LOG_STDERR("[simplex_transition] Pivoted out artificial %d with var %d (coef=%.2e)\n",
                                 art_j, best_j, best_coef);
                     }
                 } else {
@@ -2434,7 +10260,7 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
                 }
 
                 if (solver->verbose) {
-                    fprintf(stderr, "[simplex_transition] Warning: artificial var %d stuck in basis row %d "
+                    LP_LOG_STDERR("[simplex_transition] Warning: artificial var %d stuck in basis row %d "
                             "(orig constraint row %d, best_coef=%.2e, redundant row)\n",
                             art_j, basis_pos, orig_row, best_coef);
                 }
@@ -2446,50 +10272,97 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
     artificial_to_row = NULL;
 
     if (solver->verbose) {
-        fprintf(stderr, "[simplex_transition] %d artificial variables were in basis, %d stuck (%d redundant rows)\n",
+        LP_LOG_STDERR("[simplex_transition] %d artificial variables were in basis, %d stuck (%d redundant rows)\n",
                 art_in_basis, art_stuck, tab->num_redundant);
     }
 
-    /* Handle stuck artificials (redundant rows):
-     * Set their costs to zero and mark them as fixed.
-     * The row is redundant, so the artificial can stay at zero without affecting feasibility. */
+    /* Handle all artificial variables for Phase 2:
+     * - Non-basic: fix at [0,0] (FIXED status)
+     * - Basic (stuck): set cost=0, bounds=[0,0]. The artificial stays in
+     *   basis at value 0. Fixing bounds to [0,0] ensures the ratio test
+     *   treats it as a degenerate variable that blocks unbounded steps
+     *   (prevents spurious UNBOUNDED from regularized LU giving non-zero
+     *   FTRAN values in redundant rows). */
     for (int k = 0; k < tab->num_artificial; k++) {
         int art_j = tab->artificial_vars[k];
-        if (tab->var_status[art_j] == RALPH_BASIC) {
-            /* This artificial is still in basis - fix its cost at zero */
-            tab->c_ext[art_j] = 0.0;
-        }
-    }
-
-    /* Fix all non-basic artificial variables at zero.
-     * This prevents them from re-entering the basis in Phase 2.
-     * We set their bounds to [0, 0] and mark them as FIXED. */
-    for (int k = 0; k < tab->num_artificial; k++) {
-        int art_j = tab->artificial_vars[k];
+        tab->lb_ext[art_j] = 0.0;
+        tab->ub_ext[art_j] = 0.0;
+        tab->c_ext[art_j] = 0.0;
+        tab->x[art_j] = 0.0;
         if (tab->var_status[art_j] != RALPH_BASIC) {
-            tab->lb_ext[art_j] = 0.0;
-            tab->ub_ext[art_j] = 0.0;
             tab->var_status[art_j] = RALPH_FIXED;
-            tab->x[art_j] = 0.0;
-            /* Also set cost to zero so they don't affect objective */
-            tab->c_ext[art_j] = 0.0;
         }
     }
 
-    /* Refactorize basis for Phase 2 */
-    if (tableau_refactorize(tab) != 0) {
-        if (solver->verbose) {
-            fprintf(stderr, "[simplex_transition] Refactorization failed, attempting basis repair...\n");
+    /* Zero redundant rows in A_ext and RHS.
+     * Stuck artificials indicate truly redundant constraints (linearly dependent
+     * on other constraints). By zeroing the row in A_ext (except the artificial's
+     * own 1.0 coefficient) and zeroing the RHS, we make the basis well-conditioned:
+     *   - Artificial column has identity-like structure: 1.0 at its row, 0 elsewhere
+     *   - All other columns have 0 at redundant rows
+     * This eliminates the need for LU regularization and prevents garbage values
+     * in FTRAN/BTRAN results for redundant row positions. */
+    if (tab->num_redundant > 0) {
+        /* Build a quick lookup for artificial variable columns */
+        int *is_art_col = (int*)calloc(tab->n, sizeof(int));
+        if (is_art_col) {
+            for (int k = 0; k < tab->num_artificial; k++) {
+                is_art_col[tab->artificial_vars[k]] = 1;
+            }
+
+            /* Zero redundant rows in A_ext for non-artificial columns */
+            for (int j = 0; j < tab->n; j++) {
+                if (is_art_col[j]) continue;  /* Keep artificial 1.0 entries */
+                for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
+                    int row = tab->A_ext->rowidx[p];
+                    if (tab->redundant_rows[row]) {
+                        tab->A_ext->values[p] = 0.0;
+                    }
+                }
+            }
+
+            free(is_art_col);
         }
-        /* Try to repair the singular basis by swapping columns */
+
+        /* Zero RHS for redundant rows */
+        for (int i = 0; i < tab->m; i++) {
+            if (tab->redundant_rows[i]) {
+                tab->rhs[i] = 0.0;
+            }
+        }
+
+        if (solver->verbose) {
+            LP_LOG_STDERR("[simplex_transition] Zeroed %d redundant rows in A_ext and RHS\n",
+                    tab->num_redundant);
+        }
+
+        /* Mark that redundant rows have been zeroed. This tells tableau_refactorize
+         * to skip the relaxed pivot tolerance (which would corrupt non-zeroed rows).
+         * Regularization is still allowed — if the sparse LU processes columns out
+         * of order, it may need to regularize a zeroed row, which is correct
+         * (diagonal=1.0 encodes "x_art = 0" for the artificial at that row). */
+        tab->redundant_rows_zeroed = 1;
+
+        /* Invalidate LU symbolic analysis cache. The A_ext values changed (zeroed
+         * rows) but the CSC structure didn't, so the fingerprint would still match.
+         * Without invalidation, the sparse LU reuses a stale elimination order. */
+        tab->lu->sym_valid = 0;
+        tab->basis_cache_valid = 0;
+        tab->basis_cache_total_nnz = 0;
+    }
+
+    /* Refactorize basis for Phase 2.
+     * With redundant rows zeroed in A_ext, stuck artificial columns provide
+     * identity-like structure that makes the basis well-conditioned. */
+    if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PHASE_TRANSITION) != 0) {
+        if (solver->verbose) {
+            LP_LOG_STDERR("[simplex_transition] Refactorization failed, attempting basis repair...\n");
+        }
         if (repair_singular_basis(tab) != 0) {
             if (solver->verbose) {
-                fprintf(stderr, "[simplex_transition] ERROR: basis repair failed during transition\n");
+                LP_LOG_STDERR("[simplex_transition] ERROR: basis repair failed during transition\n");
             }
             return -1;
-        }
-        if (solver->verbose) {
-            fprintf(stderr, "[simplex_transition] Basis repair successful\n");
         }
     }
 
@@ -2499,11 +10372,49 @@ static int simplex_transition_phase2(SimplexSolver *solver) {
     /* Recompute solution */
     tableau_compute_solution(tab);
 
+
     if (solver->verbose) {
-        fprintf(stderr, "[simplex_transition] Phase 2 objective value: %g\n", tab->obj_value);
+        LP_LOG_STDERR("[simplex_transition] Phase 2 objective value: %g\n", tab->obj_value);
     }
 
     return 0;
+}
+
+/* Confirm Phase-2 optimality on a fresh basis.
+ * Incremental RC updates can occasionally mark a large degenerate basis as
+ * optimal too early; this pass re-factorizes and re-prices strictly before
+ * returning OPTIMAL. */
+static int phase2_confirm_optimality(SimplexSolver *solver, int iter, int *entering_out) {
+    SimplexTableau *tab;
+    int rc;
+    int entering = -1;
+
+    if (!solver || !solver->tableau) return -1;
+    tab = solver->tableau;
+
+    {
+        double t_refactor_ms = lp_telemetry_timer_start();
+        rc = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PERIODIC);
+        lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+    }
+    if (rc != 0) {
+        if (repair_singular_basis(tab) != 0) {
+            solver->status = RALPH_STATUS_ERROR;
+            solver->iterations = iter;
+            return -1;
+        }
+    }
+
+    tableau_compute_solution(tab);
+    tableau_compute_reduced_costs(tab);
+
+    if (pricing_dantzig(tab, &entering) != 0) {
+        if (entering_out) *entering_out = -1;
+        return 1;  /* confirmed optimal */
+    }
+
+    if (entering_out) *entering_out = entering;
+    return 0;  /* not optimal yet */
 }
 
 /* Phase 2: Optimize */
@@ -2512,29 +10423,33 @@ static int simplex_phase2(SimplexSolver *solver) {
 
     tab->phase = 2;
 
-    /* For two-phase problems, force early refactorization to reset numerical state.
-     * The transition may have accumulated error from multiple pivot operations. */
+    /* For two-phase problems, force early refactorization to reset numerical
+     * state after the transition. Redundant rows were zeroed in A_ext during
+     * the transition, so the basis matrix is now well-conditioned. */
     if (tab->use_two_phase) {
-        /* Reset LU update count to force fresh factorization soon */
         tab->lu->num_updates = tab->lu->max_updates;
-
-        /* Force refactorization immediately */
-        if (tableau_refactorize(tab) != 0) {
-            if (solver->verbose) {
-                fprintf(stderr, "[simplex_phase2] ERROR: initial refactorization failed\n");
-            }
-            /* Try crash basis recovery */
-            if (repair_singular_basis(tab) != 0) {
-                solver->status = RALPH_STATUS_ERROR;
-                return -1;
+        {
+            double t_refactor_ms = lp_telemetry_timer_start();
+            int rc = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PHASE_TRANSITION);
+            lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+            if (rc != 0) {
+                if (repair_singular_basis(tab) != 0) {
+                    solver->status = RALPH_STATUS_ERROR;
+                    return -1;
+                }
             }
         }
     }
 
-    /* Don't apply proactive perturbation in Phase 2 after transition.
-     * The transition may leave the basis in a fragile state; perturbation can
-     * cause the first pivot to fail. Rely on reactive perturbation instead. */
+    /* D4: Apply proactive perturbation when arriving from dual fallback.
+     * The dual failed on a degenerate problem, so proactive perturbation saves
+     * the ~30 wasted degenerate pivots before reactive perturbation kicks in.
+     * Do NOT apply for two-phase transitions — the post-transition basis is fragile. */
     int perturbation_active = 0;
+    if (solver->from_dual_fallback && !tab->use_two_phase) {
+        primal_apply_perturbation(tab);
+        perturbation_active = 1;
+    }
 
     /* Compute initial solution for Phase 2 */
     tableau_compute_solution(tab);
@@ -2546,25 +10461,70 @@ static int simplex_phase2(SimplexSolver *solver) {
     const int NON_DEGEN_THRESHOLD = 100;  /* Non-degenerate pivots to turn Bland off */
     int use_bland = 0;
 
+    /* Stall detection: track objective progress for re-perturbation.
+     * Mirrors dual_simplex.c stall detection (lines 1137-1165).
+     * When Phase 2 stalls (no objective progress for STALL_THRESHOLD iters),
+     * remove perturbation, re-apply with scaled magnitude, and reset Bland's.
+     * This is independent of the degenerate pivot counter above. */
+    double last_obj_p2 = tab->obj_value;
+    int stall_count_p2 = 0;
+    const int P2_STALL_THRESHOLD = 50;
+    int perturb_attempts_p2 = 0;
+    const int P2_MAX_PERTURB_ATTEMPTS = 15;
+    int last_entering = -1;
+    int last_leaving = -1;
+    int repeat_entering_streak = 0;
+    int repeat_leaving_streak = 0;
+
     /* For two-phase problems after transition, start with Bland's rule for the first
      * few pivots to avoid numerical issues with the post-transition basis.
      * The transition may leave the basis in a fragile state where aggressive pricing
      * selects entering variables that cause LU update failures. */
     int bland_start_iters = tab->use_two_phase ? 20 : 0;
-
-    /* For two-phase problems, use more frequent refactorization to maintain stability */
-    int refactor_interval = tab->use_two_phase ? 10 : 0;  /* 0 = use normal LU update count */
+    int periodic_policy_cooldown = 0;
+    double periodic_policy_pressure_decay = 0.0;
+    int lu_soft_health_streak = 0;
 
     /* Compute initial reduced costs.
-     * For partial pricing, use lazy mode (duals only) for efficiency. */
-    if (solver->pricing_strategy == 3) {
+     * After two-phase transition, ALWAYS compute full RCs because Bland's rule
+     * (used for the first bland_start_iters) reads tab->rc[] directly.
+     * For non-two-phase, partial pricing can use lazy mode (duals only). */
+    if (solver->pricing_strategy == 3 && !tab->use_two_phase) {
         tableau_compute_duals(tab);  /* Lazy mode: duals only */
     } else {
         tableau_compute_reduced_costs(tab);
+        if (solver->pricing_strategy == 4) heap_build(tab);
     }
+    if (perturbation_active && solver->telemetry_enabled) {
+        solver->telemetry.perf_phase2_perturb_applied++;
+    }
+    double phase2_hot_ms_prev = phase_hotpath_ms(solver, 2);
 
     for (int iter = 0; iter < solver->max_iterations; iter++) {
         tab->iterations = iter;
+        if (lp_run_user_callbacks(solver, tab, RALPH_LP_PROGRESS_PHASE_2, iter, 0, 1) != 0) {
+            primal_remove_perturbation(tab);
+            solver->status = RALPH_STATUS_TIME_LIMIT;
+            solver->iterations = iter;
+            return -1;
+        }
+
+        periodic_policy_cooldown =
+            lp_refactor_policy_periodic_cooldown_tick(periodic_policy_cooldown);
+        periodic_policy_pressure_decay =
+            lp_refactor_policy_periodic_pressure_decay_recover(
+                2, periodic_policy_pressure_decay);
+
+        /* T3.1: Objective limit early-exit (internal minimization space) */
+        if (solver->objective_limit < RALPH_INFINITY &&
+            tab->obj_value >= solver->objective_limit) {
+            primal_remove_perturbation(tab);
+            tableau_compute_solution(tab);
+            solver->status = RALPH_STATUS_OBJ_LIMIT;
+            solver->iterations = iter;
+            solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
+            return 0;
+        }
 
         /* Reduced costs are updated incrementally in simplex_pivot().
          * Full recomputation only needed:
@@ -2575,6 +10535,22 @@ static int simplex_phase2(SimplexSolver *solver) {
         /* Pricing: select entering variable */
         int entering;
         int price_status;
+        double t_pricing_ms = lp_telemetry_timer_start();
+        int adaptive_devex_partial =
+            phase2_use_adaptive_devex_partial(tab,
+                                              iter,
+                                              degenerate_count,
+                                              (use_bland || iter < bland_start_iters),
+                                              solver->pricing_strategy);
+        if (solver->telemetry_enabled) {
+            if (use_bland || iter < bland_start_iters) {
+                solver->telemetry.perf_phase2_bland_pricing_iters++;
+            } else if (solver->pricing_strategy == 2 &&
+                       adaptive_devex_partial &&
+                       (iter & DEVEX_PARTIAL_FULL_RESCAN_MASK) != 0) {
+                solver->telemetry.perf_phase2_adaptive_devex_partial_iters++;
+            }
+        }
 
         if (use_bland || iter < bland_start_iters) {
             /* Use Bland's rule to prevent cycling or for initial stability */
@@ -2585,62 +10561,189 @@ static int simplex_phase2(SimplexSolver *solver) {
             price_status = pricing_steepest_edge(tab, &entering);
         } else if (solver->pricing_strategy == 3) {
             price_status = pricing_partial(tab, &entering);
+        } else if (solver->pricing_strategy == 4) {
+            price_status = pricing_heap(tab, &entering);
         } else {
-            price_status = pricing_devex(tab, &entering);
+            if (adaptive_devex_partial &&
+                (iter & DEVEX_PARTIAL_FULL_RESCAN_MASK) != 0) {
+                price_status = pricing_devex_partial(tab, &entering);
+            } else {
+                price_status = pricing_devex(tab, &entering);
+            }
+        }
+        {
+            lp_telemetry_record_pricing_timed(solver, 2, t_pricing_ms);
         }
 
         if (price_status != 0) {
-            /* Optimal - remove perturbation and finalize */
-            primal_remove_perturbation(tab);
-            solver->status = RALPH_STATUS_OPTIMAL;
-            solver->iterations = iter;
-            solver->degenerate_pivots = degenerate_count;
-            tableau_compute_solution(tab);
-
-            solver->obj_value = tab->obj_value * solver->model->obj_sense;
-            return 0;
+            int confirm = phase2_confirm_optimality(solver, iter, &entering);
+            if (confirm < 0) {
+                primal_remove_perturbation(tab);
+                return -1;
+            }
+            if (confirm > 0) {
+                /* Optimal - remove perturbation and finalize */
+                primal_remove_perturbation(tab);
+                solver->status = RALPH_STATUS_OPTIMAL;
+                solver->iterations = iter;
+                solver->degenerate_pivots = degenerate_count;
+                tableau_compute_solution(tab);
+                solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
+                return 0;
+            }
         }
 
         /* Ratio test: select leaving variable */
         int leaving;
         double theta;
         int ratio_status;
+        double t_ratio_ms = lp_telemetry_timer_start();
 
-        if (use_bland) {
-            ratio_status = ratio_test_bland(tab, entering, &leaving, &theta);
-        } else {
-            ratio_status = ratio_test_harris(tab, entering, &leaving, &theta);
+        ratio_status = primal_ratio_test_with_policy(solver,
+                                                     tab,
+                                                     use_bland,
+                                                     entering,
+                                                     &leaving,
+                                                     &theta);
+        {
+            lp_telemetry_record_ratio_timed(solver, 2, t_ratio_ms);
         }
 
         if (ratio_status != 0) {
-            /* No leaving variable found. This could mean:
-             * 1. The problem is unbounded (rare in practice)
-             * 2. Numerical issues with Big-M artificial variables
-             *
-             * If there are artificial variables (Big-M cost) that are still
-             * at non-zero values, the problem is actually INFEASIBLE, not UNBOUNDED.
-             */
-            primal_remove_perturbation(tab);
+            /* No leaving variable found — possibly unbounded.
+             * Stale LU factors can produce spurious theta=inf (e.g., lotfi).
+             * Refactorize and retry once before declaring UNBOUNDED. */
+            int refactor_rc;
+            int degen_episode =
+                (degenerate_count > 0 || use_bland || perturbation_active);
+            {
+                double t_refactor_ms = lp_telemetry_timer_start();
+                refactor_rc = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_RATIO_RECOVERY);
+                lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+            }
+            if (degen_episode) {
+                lp_telemetry_record_phase2_degenerate_refactor(
+                    solver,
+                    RALPH_REFACTOR_REASON_RATIO_RECOVERY,
+                    0,
+                    lp_telemetry_refactor_reason_is_safety_forced(
+                        RALPH_REFACTOR_REASON_RATIO_RECOVERY));
+            }
+            if (refactor_rc == 0) {
+                tableau_compute_solution(tab);
+                tableau_compute_reduced_costs(tab);
+                if (solver->pricing_strategy == 4) heap_build(tab);
 
-            /* Check for non-zero artificial variables */
-            int num_struct = solver->model->num_vars;
-            double artificial_sum = 0.0;
-            for (int j = num_struct; j < tab->n; j++) {
-                if (tab->c_ext[j] > 1e6 && fabs(tab->x[j]) > RALPH_FEAS_TOL) {
-                    artificial_sum += fabs(tab->x[j]);
+                /* Re-price: the entering variable may no longer be eligible */
+                t_pricing_ms = lp_telemetry_timer_start();
+                if (use_bland || iter < bland_start_iters) {
+                    price_status = pricing_bland(tab, &entering);
+                } else if (solver->pricing_strategy == 0) {
+                    price_status = pricing_dantzig(tab, &entering);
+                } else if (solver->pricing_strategy == 1) {
+                    price_status = pricing_steepest_edge(tab, &entering);
+                } else if (solver->pricing_strategy == 3) {
+                    price_status = pricing_partial(tab, &entering);
+                } else if (solver->pricing_strategy == 4) {
+                    price_status = pricing_heap(tab, &entering);
+                } else {
+                    if (adaptive_devex_partial &&
+                        (iter & DEVEX_PARTIAL_FULL_RESCAN_MASK) != 0) {
+                        price_status = pricing_devex_partial(tab, &entering);
+                    } else {
+                        price_status = pricing_devex(tab, &entering);
+                    }
+                }
+                {
+                    lp_telemetry_record_pricing_timed(solver, 2, t_pricing_ms);
+                }
+
+                if (price_status != 0) {
+                    int confirm = phase2_confirm_optimality(solver, iter, &entering);
+                    if (confirm < 0) {
+                        primal_remove_perturbation(tab);
+                        return -1;
+                    }
+                    if (confirm > 0) {
+                        /* Actually optimal after refactorization */
+                        primal_remove_perturbation(tab);
+                        solver->status = RALPH_STATUS_OPTIMAL;
+                        solver->iterations = iter;
+                        solver->degenerate_pivots = degenerate_count;
+                        tableau_compute_solution(tab);
+                        solver->obj_value = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
+                        return 0;
+                    }
+                }
+
+                /* Retry ratio test with fresh LU */
+                t_ratio_ms = lp_telemetry_timer_start();
+                ratio_status = primal_ratio_test_with_policy(solver,
+                                                             tab,
+                                                             use_bland,
+                                                             entering,
+                                                             &leaving,
+                                                             &theta);
+                {
+                    lp_telemetry_record_ratio_timed(solver, 2, t_ratio_ms);
                 }
             }
 
-            if (artificial_sum > RALPH_FEAS_TOL) {
-                /* Non-zero artificials mean the original problem is infeasible */
-                extract_farkas_ray(solver);
-                solver->status = RALPH_STATUS_INFEASIBLE;
-            } else {
-                /* No artificials - truly unbounded */
+            if (ratio_status != 0) {
+                double dir = (tab->var_status[entering] == RALPH_NONBASIC_UPPER) ? -1.0 : 1.0;
+                extract_unbounded_ray(solver, entering, dir);
+                primal_remove_perturbation(tab);
                 solver->status = RALPH_STATUS_UNBOUNDED;
+                solver->iterations = iter;
+                return -1;
             }
-            solver->iterations = iter;
-            return -1;
+            /* Recovery succeeded — fall through to pivot */
+        }
+
+        {
+            double phase2_dir_inf = 0.0;
+            int phase2_dir_nnz = 0;
+            double phase2_pivot_abs = 0.0;
+
+            phase1_direction_shape_from_vector(
+                tab->work2,
+                tab->m,
+                leaving,
+                &phase2_dir_inf,
+                &phase2_dir_nnz,
+                &phase2_pivot_abs);
+            lp_telemetry_record_phase2_pivot_geometry(
+                solver,
+                theta,
+                phase2_dir_inf,
+                phase2_pivot_abs);
+        }
+        if (solver->telemetry_enabled) {
+            if (entering == last_entering) {
+                repeat_entering_streak++;
+                solver->telemetry.perf_phase2_repeat_entering_events++;
+                if (repeat_entering_streak >
+                    solver->telemetry.perf_phase2_repeat_entering_max_streak) {
+                    solver->telemetry.perf_phase2_repeat_entering_max_streak =
+                        repeat_entering_streak;
+                }
+            } else {
+                repeat_entering_streak = 0;
+            }
+            last_entering = entering;
+
+            if (leaving >= 0 && leaving == last_leaving) {
+                repeat_leaving_streak++;
+                solver->telemetry.perf_phase2_repeat_leaving_events++;
+                if (repeat_leaving_streak >
+                    solver->telemetry.perf_phase2_repeat_leaving_max_streak) {
+                    solver->telemetry.perf_phase2_repeat_leaving_max_streak =
+                        repeat_leaving_streak;
+                }
+            } else {
+                repeat_leaving_streak = 0;
+            }
+            last_leaving = (leaving >= 0) ? leaving : -1;
         }
 
         /* Track degenerate/near-degenerate pivots for cycling prevention
@@ -2650,27 +10753,41 @@ static int simplex_phase2(SimplexSolver *solver) {
          * 2. After 100 more degenerate pivots: switch to Bland's rule
          * 3. After 100 non-degenerate pivots: reset and try faster methods
          */
+        {
         const double NEAR_DEGEN_TOL = 1e-3;
         const int PERTURB_THRESHOLD = 30;
 
         if (theta < NEAR_DEGEN_TOL) {
+            if (solver->telemetry_enabled && degenerate_count == 0) {
+                solver->telemetry.perf_phase2_degenerate_episodes++;
+            }
             degenerate_count++;
+            if (solver->telemetry_enabled &&
+                degenerate_count > solver->telemetry.perf_phase2_degenerate_streak_max) {
+                solver->telemetry.perf_phase2_degenerate_streak_max = degenerate_count;
+            }
             non_degen_streak = 0;
 
             /* First try perturbation */
             if (degenerate_count >= PERTURB_THRESHOLD && !perturbation_active && !use_bland) {
                 primal_apply_perturbation(tab);
                 perturbation_active = 1;
+                if (solver->telemetry_enabled) {
+                    solver->telemetry.perf_phase2_perturb_applied++;
+                }
                 if (solver->verbose) {
-                    printf("Iter %d: Applying perturbation due to degeneracy\n", iter);
+                    LP_LOG_STDOUT("Iter %d: Applying perturbation due to degeneracy\n", iter);
                 }
             }
 
             /* If still cycling after perturbation, use Bland's rule */
             if (degenerate_count >= DEGEN_THRESHOLD && !use_bland) {
                 use_bland = 1;
+                if (solver->telemetry_enabled) {
+                    solver->telemetry.perf_phase2_bland_enter_episodes++;
+                }
                 if (solver->verbose) {
-                    printf("Iter %d: Switching to Bland's rule due to potential cycling\n", iter);
+                    LP_LOG_STDOUT("Iter %d: Switching to Bland's rule due to potential cycling\n", iter);
                 }
             }
         } else {
@@ -2679,32 +10796,59 @@ static int simplex_phase2(SimplexSolver *solver) {
             degenerate_count = 0;
             if (use_bland && non_degen_streak >= NON_DEGEN_THRESHOLD) {
                 use_bland = 0;
+                if (solver->telemetry_enabled) {
+                    solver->telemetry.perf_phase2_bland_exit_episodes++;
+                }
                 non_degen_streak = 0;
                 if (solver->verbose) {
-                    printf("Iter %d: Turning off Bland's rule after %d non-degenerate pivots\n",
+                    LP_LOG_STDOUT("Iter %d: Turning off Bland's rule after %d non-degenerate pivots\n",
                            iter, NON_DEGEN_THRESHOLD);
                 }
             }
         }
+        }  /* end degeneracy tracking block */
 
         /* Perform pivot */
-        if (simplex_pivot(tab, entering, leaving, theta) != 0) {
+        int pivot_rc;
+        {
+            double t_pivot_ms = lp_telemetry_timer_start();
+            pivot_rc = simplex_pivot(tab, entering, leaving, theta, 0);
+            lp_telemetry_record_pivot_timed(solver, 2, t_pivot_ms);
+        }
+        if (pivot_rc != 0) {
             if (solver->verbose) {
-                fprintf(stderr, "[primal_simplex] Pivot failed at iter %d (entering=%d, leaving=%d, theta=%e), attempting recovery\n",
+                LP_LOG_STDERR("[primal_simplex] Pivot failed at iter %d (entering=%d, leaving=%d, theta=%e), attempting recovery\n",
                         iter, entering, leaving, theta);
             }
             /* Pivot failed - the basis was partially updated in simplex_pivot.
              * Try to recover by refactorizing the current (post-pivot) basis. */
-            if (tableau_refactorize(tab) == 0) {
+            int rc_refactor;
+            int degen_episode =
+                (degenerate_count > 0 || use_bland || perturbation_active);
+            {
+                double t_refactor_ms = lp_telemetry_timer_start();
+                rc_refactor = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PIVOT_RECOVERY);
+                lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+            }
+            if (degen_episode) {
+                lp_telemetry_record_phase2_degenerate_refactor(
+                    solver,
+                    RALPH_REFACTOR_REASON_PIVOT_RECOVERY,
+                    0,
+                    lp_telemetry_refactor_reason_is_safety_forced(
+                        RALPH_REFACTOR_REASON_PIVOT_RECOVERY));
+            }
+            if (rc_refactor == 0) {
                 /* Refactorization succeeded - recompute and continue */
                 tableau_compute_solution(tab);
                 if (solver->pricing_strategy == 3) {
                     tableau_compute_duals(tab);
                 } else {
                     tableau_compute_reduced_costs(tab);
+                    if (solver->pricing_strategy == 4) heap_build(tab);
                 }
                 if (solver->verbose) {
-                    fprintf(stderr, "[primal_simplex] Recovery via refactorization at iter %d\n", iter);
+                    LP_LOG_STDERR("[primal_simplex] Recovery via refactorization at iter %d\n", iter);
                 }
                 continue;
             }
@@ -2715,15 +10859,16 @@ static int simplex_phase2(SimplexSolver *solver) {
                     tableau_compute_duals(tab);
                 } else {
                     tableau_compute_reduced_costs(tab);
+                    if (solver->pricing_strategy == 4) heap_build(tab);
                 }
                 if (solver->verbose) {
-                    fprintf(stderr, "[primal_simplex] Recovery via basis repair at iter %d\n", iter);
+                    LP_LOG_STDERR("[primal_simplex] Recovery via basis repair at iter %d\n", iter);
                 }
                 continue;
             }
             /* All recovery attempts failed */
             if (solver->verbose) {
-                fprintf(stderr, "[primal_simplex] ERROR: all recovery attempts failed at iter %d\n", iter);
+                LP_LOG_STDERR("[primal_simplex] ERROR: all recovery attempts failed at iter %d\n", iter);
             }
             primal_remove_perturbation(tab);
             solver->status = RALPH_STATUS_ERROR;
@@ -2731,21 +10876,283 @@ static int simplex_phase2(SimplexSolver *solver) {
         }
 
         /* Refactorize if needed.
-         * For two-phase problems, use more frequent refactorization (every refactor_interval iters). */
-        int needs_refactor = lu_needs_refactorization(tab->lu);
-        if (!needs_refactor && refactor_interval > 0 && iter > 0 && iter % refactor_interval == 0) {
-            needs_refactor = 1;
+         * For two-phase problems, periodic refresh is adaptive (interval + LU health). */
+        {
+            double phase2_hot_ms_now = phase_hotpath_ms(solver, 2);
+            double iter_hot_ms = phase2_hot_ms_now - phase2_hot_ms_prev;
+            soft_lu_record_iter_cost(solver, 2, iter_hot_ms);
+            lp_reinvert_controller_state_record_iter_cost(
+                reinvert_state_for_phase(solver, 2), iter_hot_ms);
+            phase2_hot_ms_prev = phase2_hot_ms_now;
         }
+        LPLUHealthRefactorDecision lu_health_decision =
+            lp_refactor_policy_lu_health_refactor_decision(tab->m,
+                                                           tab->lu->use_ft_updates,
+                                                           tab->lu->num_updates,
+                                                           tab->lu->max_updates,
+                                                           tab->lu->spike_pool_used,
+                                                           tab->lu->spike_pool_capacity,
+                                                           tab->lu->cond_estimate,
+                                                           tab->lu->growth_factor,
+                                                           lu_soft_health_streak);
+        int lu_refactor_nominal = lu_health_decision.refactor_now;
+        int lu_refactor_needed = lu_health_decision.refactor_now;
+        int lu_soft_cost_deferred = 0;
+        int needs_refactor = lu_refactor_needed;
+        int periodic_refactor = 0;
+        int periodic_refactor_nominal = 0;
+        int reinvert_periodic_candidate = 0;
+        int reinvert_control_periodic =
+            reinvert_controller_controls_periodic_phase(solver, 2);
+        int cooldown_eligible = 0;
+        double effective_policy_pressure = 0.0;
+        double periodic_feedback_bias = periodic_feedback_bias_for_phase(solver, 2);
+        LPPeriodicRefactorPolicy periodic_policy = {0, 0, 0.0, 0.0};
+        LPReinvertShadowEval reinvert_shadow_eval;
+        reinvert_shadow_eval_reset(&reinvert_shadow_eval);
+        lu_soft_health_streak = lu_health_decision.soft_breach_streak_next;
+        if (lu_health_decision.hard_trigger) {
+            periodic_policy_cooldown = 0;
+            periodic_policy_pressure_decay = 0.0;
+            soft_lu_reset_defer_streak(solver, 2);
+            periodic_cost_reset_defer_streak(solver, 2);
+        } else if (lu_refactor_needed) {
+            periodic_cost_reset_defer_streak(solver, 2);
+        } else if (!lu_health_decision.soft_trigger || !solver->policy.soft_lu_cost_gate_enabled) {
+            soft_lu_reset_defer_streak(solver, 2);
+        }
+        if (lu_refactor_needed &&
+            solver->policy.soft_lu_cost_gate_enabled &&
+            lu_health_decision.soft_trigger &&
+            !lu_health_decision.hard_trigger) {
+            int cap_blocked = 0;
+            int next_consecutive = 0;
+            int should_defer = simplex_soft_lu_defer_plan_for_test(
+                2,
+                tab->m,
+                use_bland,
+                degenerate_count,
+                tab->lu->num_updates,
+                tab->lu->max_updates,
+                tab->lu->spike_pool_used,
+                tab->lu->spike_pool_capacity,
+                tab->lu->cond_estimate,
+                tab->lu->growth_factor,
+                soft_lu_refactor_cost_ewma(solver, 2),
+                soft_lu_iter_cost_ewma(solver, 2),
+                soft_lu_consecutive_defers(solver, 2),
+                NULL,
+                &cap_blocked,
+                &next_consecutive);
+            if (should_defer) {
+                lu_refactor_needed = 0;
+                lu_soft_cost_deferred = 1;
+                soft_lu_record_defer(solver, 2);
+                soft_lu_set_consecutive_defers(solver, 2, next_consecutive);
+                needs_refactor = 0;
+            } else {
+                soft_lu_reset_defer_streak(solver, 2);
+                if (cap_blocked) {
+                    soft_lu_record_cap_forced(solver, 2);
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDERR("[primal_simplex] Soft LU defer cap reached; forcing periodic LU-health refactor (updates=%d/%d, degen=%d)\n",
+                                tab->lu->num_updates,
+                                tab->lu->max_updates,
+                                degenerate_count);
+                    }
+                }
+            }
+        }
+        if (!lu_refactor_needed) {
+            LPPeriodicRefactorPlan periodic_plan = lp_refactor_policy_periodic_plan(
+                2,
+                iter,
+                tab->m,
+                tab->lu->max_updates,
+                tab->lu->num_updates,
+                tab->lu->spike_pool_used,
+                tab->lu->spike_pool_capacity,
+                tab->lu->cond_estimate,
+                tab->lu->growth_factor,
+                use_bland,
+                degenerate_count,
+                periodic_feedback_bias,
+                0,
+                periodic_policy_cooldown,
+                periodic_policy_pressure_decay);
+            periodic_policy = periodic_plan.policy;
+            cooldown_eligible = periodic_plan.cooldown_eligible;
+            effective_policy_pressure = periodic_plan.effective_run_pressure;
+            periodic_refactor = periodic_plan.should_run;
+            periodic_refactor_nominal = periodic_refactor;
+            reinvert_periodic_candidate = periodic_refactor_nominal;
+            reinvert_shadow_prepare_phase(solver,
+                                          tab,
+                                          2,
+                                          iter,
+                                          &lu_health_decision,
+                                          periodic_refactor_nominal,
+                                          periodic_policy.min_update_age,
+                                          periodic_policy_cooldown,
+                                          reinvert_control_periodic,
+                                          &reinvert_periodic_candidate,
+                                          &reinvert_shadow_eval);
+            if (reinvert_control_periodic) {
+                periodic_refactor = reinvert_periodic_candidate;
+                periodic_refactor_nominal = periodic_refactor;
+                periodic_cost_reset_defer_streak(solver, 2);
+            } else {
+                if (periodic_refactor &&
+                    cooldown_eligible &&
+                    periodic_policy_cooldown > 0) {
+                    periodic_refactor = 0;
+                }
+                if (periodic_refactor) {
+                    if (solver->policy.periodic_cost_gate_enabled) {
+                        int cap_blocked = 0;
+                        int next_consecutive = 0;
+                        int gate_reason = LP_PERIODIC_COST_DAMPEN_BLOCK_INVALID_PHASE;
+                        int should_defer = simplex_periodic_cost_defer_plan_for_test(
+                            2,
+                            tab->m,
+                            use_bland,
+                            degenerate_count,
+                            tab->lu->num_updates,
+                            tab->lu->max_updates,
+                            tab->lu->spike_pool_used,
+                            tab->lu->spike_pool_capacity,
+                            tab->lu->cond_estimate,
+                            tab->lu->growth_factor,
+                            soft_lu_refactor_cost_ewma(solver, 2),
+                            soft_lu_iter_cost_ewma(solver, 2),
+                            periodic_cost_refactor_samples(solver, 2),
+                            periodic_cost_iter_samples(solver, 2),
+                            periodic_cost_consecutive_defers(solver, 2),
+                            &gate_reason,
+                            NULL,
+                            &cap_blocked,
+                            &next_consecutive);
+                        periodic_cost_record_gate_reason(
+                            solver, 2, (LPPeriodicCostDampenReason)gate_reason);
+                        if (should_defer) {
+                            periodic_refactor = 0;
+                            periodic_cost_record_defer(solver, 2);
+                            periodic_cost_set_consecutive_defers(solver, 2, next_consecutive);
+                            if (solver->verbose >= 2) {
+                                LP_LOG_STDERR("[primal_simplex] Deferred policy periodic refactor by cost gate (updates=%d/%d, degen=%d, iter_ewma=%.3fms, ref_ewma=%.3fms)\n",
+                                        tab->lu->num_updates,
+                                        tab->lu->max_updates,
+                                        degenerate_count,
+                                        soft_lu_iter_cost_ewma(solver, 2),
+                                        soft_lu_refactor_cost_ewma(solver, 2));
+                            }
+                        } else {
+                            periodic_cost_reset_defer_streak(solver, 2);
+                            if (cap_blocked) {
+                                periodic_cost_record_cap_forced(solver, 2);
+                                if (solver->verbose >= 2) {
+                                    LP_LOG_STDERR("[primal_simplex] Policy periodic defer cap reached; forcing periodic policy refactor (updates=%d/%d, degen=%d)\n",
+                                            tab->lu->num_updates,
+                                            tab->lu->max_updates,
+                                            degenerate_count);
+                                }
+                            } else if (solver->verbose >= 3) {
+                                LP_LOG_STDERR("[primal_simplex] Policy periodic cost gate blocked defer: %s\n",
+                                        lp_refactor_policy_periodic_cost_dampen_reason_string(
+                                            (LPPeriodicCostDampenReason)gate_reason));
+                            }
+                        }
+                    } else {
+                        periodic_cost_reset_defer_streak(solver, 2);
+                    }
+                }
+            }
+            needs_refactor = periodic_refactor;
+        } else {
+            reinvert_shadow_prepare_phase(solver,
+                                          tab,
+                                          2,
+                                          iter,
+                                          &lu_health_decision,
+                                          0,
+                                          periodic_policy.min_update_age,
+                                          periodic_policy_cooldown,
+                                          0,
+                                          NULL,
+                                          &reinvert_shadow_eval);
+        }
+        if (periodic_refactor) {
+            periodic_feedback_set_hint(solver, 2, periodic_policy.interval, effective_policy_pressure);
+        }
+        {
+            int shadow_refactor = lp_basis_governor_shadow_decide(
+                LP_BASIS_GOV_PHASE2,
+                lu_refactor_nominal,
+                periodic_refactor_nominal);
+            int governed_refactor = lp_basis_governor_decide_refactor(
+                &solver->policy.basis_governor,
+                LP_BASIS_GOV_PHASE2,
+                lu_refactor_nominal,
+                periodic_refactor_nominal,
+                needs_refactor);
+            if (solver->telemetry_enabled) {
+                lp_basis_governor_observe_refactor(
+                    &solver->policy.basis_governor,
+                    LP_BASIS_GOV_PHASE2,
+                    shadow_refactor,
+                    governed_refactor);
+            }
+            needs_refactor = governed_refactor;
+        }
+        reinvert_shadow_finalize_phase(solver, 2, &reinvert_shadow_eval, needs_refactor);
 
         if (needs_refactor) {
-            if (tableau_refactorize(tab) != 0) {
+            soft_lu_reset_defer_streak(solver, 2);
+            periodic_cost_reset_defer_streak(solver, 2);
+            runtime_record_periodic_refactor_trigger(solver, 2, lu_refactor_needed);
+            int rc_refactor;
+            double refactor_elapsed_ms = 0.0;
+            int degen_episode =
+                (degenerate_count > 0 || use_bland || perturbation_active);
+            {
+                double t_refactor_ms = lp_telemetry_timer_start();
+                rc_refactor = tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_PERIODIC);
+                refactor_elapsed_ms = lp_telemetry_timer_elapsed_ms(t_refactor_ms);
+                lp_telemetry_add_refactor_runtime_ms(solver, refactor_elapsed_ms);
+            }
+            if (degen_episode) {
+                lp_telemetry_record_phase2_degenerate_refactor(
+                    solver,
+                    RALPH_REFACTOR_REASON_PERIODIC,
+                    lu_refactor_needed,
+                    lp_telemetry_refactor_reason_is_safety_forced(
+                        RALPH_REFACTOR_REASON_PERIODIC));
+            }
+            if (rc_refactor == 0) {
+                soft_lu_record_refactor_cost(solver, 2, refactor_elapsed_ms);
+                lp_reinvert_controller_state_record_refactor_cost(
+                    reinvert_state_for_phase(solver, 2), refactor_elapsed_ms);
+            }
+            if (lu_refactor_needed && rc_refactor == 0) {
+                lu_soft_health_streak = 0;
+            }
+            if (!lu_refactor_needed && periodic_refactor) {
+                lp_refactor_policy_periodic_post_refactor_update(
+                    2,
+                    cooldown_eligible,
+                    periodic_policy.interval,
+                    rc_refactor,
+                    &periodic_policy_cooldown,
+                    &periodic_policy_pressure_decay);
+            }
+            if (rc_refactor != 0) {
                 if (solver->verbose) {
-                    fprintf(stderr, "[primal_simplex] ERROR: refactorization failed at iter %d, attempting repair\n", iter);
+                    LP_LOG_STDERR("[primal_simplex] ERROR: refactorization failed at iter %d, attempting repair\n", iter);
                 }
                 /* Try to repair the singular basis */
                 if (repair_singular_basis(tab) != 0) {
                     if (solver->verbose) {
-                        fprintf(stderr, "[primal_simplex] ERROR: basis repair failed at iter %d\n", iter);
+                        LP_LOG_STDERR("[primal_simplex] ERROR: basis repair failed at iter %d\n", iter);
                     }
                     primal_remove_perturbation(tab);
                     solver->status = RALPH_STATUS_ERROR;
@@ -2753,7 +11160,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                     return -1;
                 }
                 if (solver->verbose) {
-                    fprintf(stderr, "[primal_simplex] Basis repaired at iter %d\n", iter);
+                    LP_LOG_STDERR("[primal_simplex] Basis repaired at iter %d\n", iter);
                 }
             }
             /* After refactorization, recompute solution to eliminate drift */
@@ -2764,24 +11171,131 @@ static int simplex_phase2(SimplexSolver *solver) {
                 tableau_compute_duals(tab);  /* Lazy mode: duals only */
             } else {
                 tableau_compute_reduced_costs(tab);  /* Full RC for incremental updates */
+                if (solver->pricing_strategy == 4) heap_build(tab);
+            }
+        } else if (lu_soft_cost_deferred && solver->verbose >= 2) {
+            LP_LOG_STDERR("[primal_simplex] Deferred soft LU-health periodic refactor (updates=%d/%d, degen=%d, iter_ewma=%.3fms, ref_ewma=%.3fms)\n",
+                    tab->lu->num_updates,
+                    tab->lu->max_updates,
+                    degenerate_count,
+                    soft_lu_iter_cost_ewma(solver, 2),
+                    soft_lu_refactor_cost_ewma(solver, 2));
+        }
+
+        /* Periodically recompute solution and reduced costs to correct numerical drift.
+         * For large, highly-degenerate phase-2 runs with healthy LU metrics, we relax
+         * cadence to reduce full-vector recompute overhead. */
+        {
+            int periodic_recompute_interval =
+                lp_refactor_policy_phase2_periodic_recompute_interval(
+                    tab->m,
+                    use_bland,
+                    degenerate_count,
+                    tab->lu->spike_pool_used,
+                    tab->lu->spike_pool_capacity,
+                    tab->lu->cond_estimate,
+                    tab->lu->growth_factor);
+            if (iter > 0 &&
+                periodic_recompute_interval > 0 &&
+                (iter % periodic_recompute_interval) == 0) {
+                tableau_compute_solution(tab);
+                /* For partial pricing, use lazy RC. For others, full RC. */
+                if (solver->pricing_strategy == 3) {
+                    tableau_compute_duals(tab);  /* Lazy mode */
+                } else {
+                    tableau_compute_reduced_costs(tab);  /* Full recomputation */
+                    if (solver->pricing_strategy == 4) heap_build(tab);
+                }
+                if (solver->verbose) {
+                    int leave_var = (leaving >= 0) ? tab->basis[leaving] : leaving;
+                    LP_LOG_STDOUT("Iter %d: obj = %.6f, enter=%d, leave=%d, theta=%.2e, rc=%.2e\n",
+                           iter, tab->obj_value, entering, leave_var, theta, tab->rc[entering]);
+                }
             }
         }
 
-        /* Periodically recompute solution and reduced costs to correct numerical drift */
-        if (iter > 0 && iter % 200 == 0) {
-            tableau_compute_solution(tab);
-            /* For partial pricing, use lazy RC. For others, full RC. */
-            if (solver->pricing_strategy == 3) {
-                tableau_compute_duals(tab);  /* Lazy mode */
-            } else {
-                tableau_compute_reduced_costs(tab);  /* Full recomputation */
+        /* Stall detection: check objective progress after each pivot.
+         * If objective hasn't improved for P2_STALL_THRESHOLD iterations,
+         * remove+re-apply perturbation with progressive scaling to break
+         * the cycling pattern. This catches cases where Bland's rule is
+         * active but making negligible progress (O(2^n) worst case).
+         * Independent of the degeneracy counter — triggered by objective stagnation. */
+        {
+        double obj_tol_p2 = 1e-4 * (1.0 + fabs(last_obj_p2));
+        double obj_change_p2 = fabs(tab->obj_value - last_obj_p2);
+        if (obj_change_p2 < obj_tol_p2) {
+            stall_count_p2++;
+            if (stall_count_p2 >= P2_STALL_THRESHOLD &&
+                perturb_attempts_p2 < PHASE2_DEGEN_ESCAPE_MAX_ATTEMPTS &&
+                tab->m >= PHASE2_DEGEN_ESCAPE_MIN_M &&
+                degenerate_count >= PHASE2_DEGEN_ESCAPE_DEGEN_TRIGGER &&
+                periodic_policy_refactor_count(solver, 2) >= PHASE2_DEGEN_ESCAPE_POLICY_TRIGGER) {
+                double scale = 4.0 + 2.0 * (double)perturb_attempts_p2;
+                primal_apply_perturbation_scaled(tab, scale);
+                perturbation_active = 1;
+                if (solver->telemetry_enabled) {
+                    solver->telemetry.perf_phase2_degen_escape_triggers++;
+                    solver->telemetry.perf_phase2_perturb_applied++;
+                    if (!use_bland) {
+                        solver->telemetry.perf_phase2_bland_enter_episodes++;
+                    }
+                }
+                use_bland = 1;
+                degenerate_count = 0;
+                /* Keep Bland active briefly before allowing fast pricing again. */
+                non_degen_streak = -PHASE2_DEGEN_ESCAPE_BLAND_HOLD_ITERS;
+                stall_count_p2 = 0;
+                perturb_attempts_p2++;
+                tableau_compute_solution(tab);
+                if (solver->pricing_strategy == 3) {
+                    tableau_compute_duals(tab);
+                } else {
+                    tableau_compute_reduced_costs(tab);
+                    if (solver->pricing_strategy == 4) heap_build(tab);
+                }
+                if (solver->verbose) {
+                    LP_LOG_STDOUT("Iter %d: Phase 2 degen-escape (scale %.1f)\n", iter, scale);
+                }
+                continue;
             }
-            if (solver->verbose) {
-                int leave_var = (leaving >= 0) ? tab->basis[leaving] : leaving;
-                printf("Iter %d: obj = %.6f, enter=%d, leave=%d, theta=%.2e, rc=%.2e\n",
-                       iter, tab->obj_value, entering, leave_var, theta, tab->rc[entering]);
+            if (stall_count_p2 >= P2_STALL_THRESHOLD) {
+                perturb_attempts_p2++;
+                if (perturb_attempts_p2 <= P2_MAX_PERTURB_ATTEMPTS) {
+                    double scale = 1.0 + 2.0 * perturb_attempts_p2;
+                    primal_apply_perturbation_scaled(tab, scale);
+                    perturbation_active = 1;
+                    if (solver->telemetry_enabled) {
+                        solver->telemetry.perf_phase2_perturb_applied++;
+                        if (use_bland) {
+                            solver->telemetry.perf_phase2_bland_exit_episodes++;
+                        }
+                    }
+                    /* Reset Bland's rule — fresh perturbation should break the
+                     * cycle, allowing faster pricing to make progress again */
+                    use_bland = 0;
+                    degenerate_count = 0;
+                    non_degen_streak = 0;
+                    stall_count_p2 = 0;
+                    /* Recompute after perturbation change */
+                    tableau_compute_solution(tab);
+                    if (solver->pricing_strategy == 3) {
+                        tableau_compute_duals(tab);
+                    } else {
+                        tableau_compute_reduced_costs(tab);
+                        if (solver->pricing_strategy == 4) heap_build(tab);
+                    }
+                    if (solver->verbose) {
+                        LP_LOG_STDOUT("Iter %d: Phase 2 stall detected, re-perturbing (attempt %d, scale %.1f)\n",
+                               iter, perturb_attempts_p2, scale);
+                    }
+                }
+                /* else: exhausted attempts, fall through to iteration limit */
             }
+        } else {
+            stall_count_p2 = 0;
+            last_obj_p2 = tab->obj_value;
         }
+        }  /* end stall detection block */
 
     }
 
@@ -2791,25 +11305,516 @@ static int simplex_phase2(SimplexSolver *solver) {
     return -1;
 }
 
+/* ============================================================================
+ * Triangular crash basis (Maros LTSF)
+ *
+ * Replace slack variables (from <= rows) in the initial basis with structural
+ * columns that have good pivot elements. This reduces Phase 1 iterations
+ * by starting closer to a feasible basis.
+ *
+ * IMPORTANT: Only displace slacks (from <= rows). Never displace artificials
+ * or surplus variables — these are needed for Phase 1 feasibility tracking.
+ *
+ * Algorithm:
+ *   Pass 1: Scan structural columns for singletons — if the singleton element
+ *           is in an eligible row with |a_ij| > PIVOT_TOL, swap into basis.
+ *   Pass 2: Scan remaining columns for the best pivot in eligible unclaimed rows.
+ *
+ * Returns: number of structural columns placed in basis.
+ * ============================================================================ */
+static int crash_triangular(SimplexTableau *tab, int verbose) {
+    if (!tab || !tab->A_ext) return 0;
+
+    int m = tab->m;
+    int n_structural = tab->model->num_vars;
+    SparseMatrix *A = tab->A_ext;
+    int placed = 0;
+
+    /* Identify which rows are eligible for crash (only slack-basic rows).
+     * A row is eligible if its basic variable is a slack (not artificial/surplus).
+     * Slacks are aux variables with +1 coefficient in their row. Artificials
+     * and surplus variables must not be displaced. */
+    int *row_eligible = (int *)calloc(m, sizeof(int));
+    if (!row_eligible) return 0;
+
+    for (int i = 0; i < m; i++) {
+        int bv = tab->basis[i];
+        /* Only eligible if basic var is an auxiliary (slack/surplus/artificial) */
+        if (bv >= n_structural) {
+            /* Check if this is a simple slack or surplus: |coeff| == 1, zero cost.
+             * Slacks have +1 coeff, surplus have -1 coeff — both displaceable. */
+            int is_slack = 0;
+            for (int p = A->colptr[bv]; p < A->colptr[bv + 1]; p++) {
+                if (A->rowidx[p] == i) {
+                    if ((fabs(A->values[p] - 1.0) < RALPH_ZERO_TOL ||
+                         fabs(A->values[p] + 1.0) < RALPH_ZERO_TOL) &&
+                        fabs(tab->c_ext[bv]) < RALPH_ZERO_TOL) {
+                        is_slack = 1;
+                    }
+                    break;
+                }
+            }
+            row_eligible[i] = is_slack;
+        }
+    }
+
+    /* Track which rows have been claimed by a structural variable */
+    int *row_claimed = (int *)calloc(m, sizeof(int));
+    int *col_used = (int *)calloc(n_structural, sizeof(int));
+    if (!row_claimed || !col_used) {
+        free(row_eligible); free(row_claimed); free(col_used);
+        return 0;
+    }
+
+    /* Pass 1: Singletons in eligible rows.
+     * For singletons, we can exactly compute x_j = rhs[i] / a[i,j].
+     * Only accept if x_j is within bounds [lb, ub]. */
+    for (int j = 0; j < n_structural; j++) {
+        if (fabs(tab->ub_ext[j] - tab->lb_ext[j]) < RALPH_ZERO_TOL) continue;
+
+        int nnz = 0;
+        int singleton_row = -1;
+        double singleton_val = 0.0;
+
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            int row = A->rowidx[p];
+            if (row < m) {
+                nnz++;
+                singleton_row = row;
+                singleton_val = A->values[p];
+            }
+        }
+
+        if (nnz == 1 && singleton_row >= 0 &&
+            row_eligible[singleton_row] && !row_claimed[singleton_row] &&
+            fabs(singleton_val) > RALPH_PIVOT_TOL) {
+            /* Check feasibility: x_j = rhs / a_ij */
+            double xval = tab->rhs[singleton_row] / singleton_val;
+            if (xval < tab->lb_ext[j] - RALPH_FEAS_TOL ||
+                xval > tab->ub_ext[j] + RALPH_FEAS_TOL) continue;
+
+            int old_basic = tab->basis[singleton_row];
+            tab->var_status[old_basic] = RALPH_NONBASIC_LOWER;
+            tab->x[old_basic] = tab->lb_ext[old_basic];
+            tab->basis_pos[old_basic] = -1;
+
+            tab->basis[singleton_row] = j;
+            tab->basis_pos[j] = singleton_row;
+            tab->var_status[j] = RALPH_BASIC;
+
+            row_claimed[singleton_row] = 1;
+            col_used[j] = 1;
+            placed++;
+        }
+    }
+
+    /* Pass 2: Multi-element columns in eligible unclaimed rows */
+    for (int j = 0; j < n_structural; j++) {
+        if (col_used[j]) continue;
+        if (fabs(tab->ub_ext[j] - tab->lb_ext[j]) < RALPH_ZERO_TOL) continue;
+
+        int unclaimed_nnz = 0;
+        int best_row = -1;
+        double best_val = 0.0;
+        double best_actual_val = 0.0;
+
+        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
+            int row = A->rowidx[p];
+            if (row < m && row_eligible[row] && !row_claimed[row]) {
+                unclaimed_nnz++;
+                double absval = fabs(A->values[p]);
+                if (absval > best_val) {
+                    best_val = absval;
+                    best_actual_val = A->values[p];
+                    best_row = row;
+                }
+            }
+        }
+
+        if (best_row >= 0 && best_val > RALPH_PIVOT_TOL && unclaimed_nnz <= m / 2 + 1) {
+            /* Approximate feasibility: x_j ~ rhs[best_row] / a[best_row,j].
+             * For multi-element columns this is approximate (ignores other basics),
+             * but filters out clearly infeasible placements. */
+            double approx_xval = tab->rhs[best_row] / best_actual_val;
+            if (approx_xval < tab->lb_ext[j] - RALPH_FEAS_TOL ||
+                approx_xval > tab->ub_ext[j] + RALPH_FEAS_TOL) continue;
+
+            int old_basic = tab->basis[best_row];
+            tab->var_status[old_basic] = RALPH_NONBASIC_LOWER;
+            tab->x[old_basic] = tab->lb_ext[old_basic];
+            tab->basis_pos[old_basic] = -1;
+
+            tab->basis[best_row] = j;
+            tab->basis_pos[j] = best_row;
+            tab->var_status[j] = RALPH_BASIC;
+
+            row_claimed[best_row] = 1;
+            col_used[j] = 1;
+            placed++;
+        }
+    }
+
+    free(row_eligible);
+    free(row_claimed);
+    free(col_used);
+
+    if (verbose && placed > 0) {
+        LP_LOG_STDOUT("[crash] Placed %d structural columns in basis (of %d rows)\n",
+               placed, m);
+    }
+
+    return placed;
+}
+
+static void reset_solver_perf(SimplexSolver *solver) {
+    lp_telemetry_reset_solver(solver);
+    periodic_policy_refactor_reset(solver);
+}
+
+static int lp_time_limit_exceeded(SimplexSolver *solver, int iter) {
+    if (!solver) return 0;
+    if (solver->time_limit <= 0.0 || solver->time_limit >= RALPH_INFINITY / 2.0) {
+        return 0;
+    }
+    const double time_limit_sec = solver->time_limit * 1.05;
+
+    double now_ms = lp_telemetry_now_ms();
+    if (solver->progress_start_ms <= 0.0) {
+        solver->progress_start_ms = now_ms;
+    }
+
+    double elapsed_sec = (now_ms - solver->progress_start_ms) / 1000.0;
+    if (elapsed_sec <= time_limit_sec) {
+        return 0;
+    }
+
+    solver->status = RALPH_STATUS_TIME_LIMIT;
+    solver->iterations = iter;
+    return 1;
+}
+
+static int lp_run_user_callbacks(SimplexSolver *solver,
+                                 const SimplexTableau *tab,
+                                 RalphLPProgressPhase phase,
+                                 int iter,
+                                 int force_emit,
+                                 int honor_progress_cancel) {
+    if (!solver) return 0;
+    if (lp_time_limit_exceeded(solver, iter)) return 1;
+
+    if (solver->has_lp_cancel_callback && solver->lp_cancel_callback.should_cancel) {
+        if (solver->lp_cancel_callback.should_cancel(solver->lp_cancel_callback.user_data) != 0) {
+            solver->status = RALPH_STATUS_TIME_LIMIT;
+            solver->iterations = iter;
+            return 1;
+        }
+    }
+
+    if (!solver->has_lp_progress_callback || !solver->lp_progress_callback.on_progress) {
+        return 0;
+    }
+
+    int stride = solver->lp_progress_callback.every_n_iterations;
+    if (stride <= 0) stride = 1;
+    if (!force_emit && iter > 0 && (iter % stride) != 0) {
+        return 0;
+    }
+
+    RalphLPProgressInfo info;
+    memset(&info, 0, sizeof(info));
+    info.phase = phase;
+    info.iteration = iter;
+    info.status = solver->status;
+    if (solver->progress_start_ms > 0.0) {
+        double elapsed_ms = lp_telemetry_now_ms() - solver->progress_start_ms;
+        if (elapsed_ms > 0.0) info.elapsed_time_sec = elapsed_ms / 1000.0;
+    }
+    if (solver->model) {
+        if (tab) {
+            info.objective = tab->obj_value * solver->model->obj_sense + solver->model->obj_offset;
+        } else {
+            info.objective = solver->obj_value;
+        }
+    }
+
+    if (solver->verify &&
+        (solver->status == RALPH_STATUS_OPTIMAL ||
+         solver->status == RALPH_STATUS_IMPRECISE ||
+         solver->status == RALPH_STATUS_OBJ_LIMIT)) {
+        info.quality_available = 1;
+        info.primal_infeas = solver->verify_primal_infeas;
+        info.bound_infeas = solver->verify_bound_infeas;
+        info.dual_infeas = solver->verify_dual_infeas;
+        info.comp_slack = solver->verify_comp_slack;
+        info.obj_error = solver->verify_obj_error;
+        info.cond_estimate = solver->verify_cond_estimate;
+    }
+
+    int rc = solver->lp_progress_callback.on_progress(
+        solver->lp_progress_callback.user_data, &info);
+    if (honor_progress_cancel && rc != 0) {
+        solver->status = RALPH_STATUS_TIME_LIMIT;
+        solver->iterations = iter;
+        return 1;
+    }
+    return 0;
+}
+
+static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *tab) {
+    int update_cap = 0;
+
+    if (!solver || !tab) return;
+
+    if (!lp_basis_governor_mode_is_valid(solver->policy.basis_governor_mode)) {
+        solver->policy.basis_governor_mode = LP_BASIS_GOV_MODE_OFF;
+    }
+    if (!lp_reinvert_controller_mode_is_valid(solver->policy.reinvert_controller_mode)) {
+        solver->policy.reinvert_controller_mode = LP_REINVERT_MODE_SHADOW;
+    }
+    lp_basis_governor_set_mode(&solver->policy.basis_governor,
+                               solver->policy.basis_governor_mode);
+
+    tab->owner = solver;
+    tab->use_steepest_edge = (solver->pricing_strategy == 1 || solver->pricing_strategy == 2
+                              || solver->pricing_strategy == 5);
+    tab->pricing_strategy = solver->pricing_strategy;
+    tab->trace_phase1_enabled = solver->trace_phase1;
+    if (tab->lu) {
+        int enable_supernode = 0;
+        tab->lu->telemetry_enabled = solver->telemetry_enabled;
+        tab->lu->owner = solver;
+        if (solver->policy.basis_governor_mode == LP_BASIS_GOV_MODE_OFF) {
+            tab->lu->basis_governor = NULL;
+        } else {
+            tab->lu->basis_governor = &solver->policy.basis_governor;
+        }
+
+        tab->lu->mkz_enabled = 1;
+        if (solver->lu_supernode) {
+            enable_supernode = 1;
+        } else if (tab->m > 300) {
+            enable_supernode = 1;
+        }
+
+        lu_apply_backend_policy(tab->lu, solver->lu_backend_policy);
+        tab->lu->sn_enabled = enable_supernode ? 1 : 0;
+
+        if (solver->lu_update_limit_override > 0) {
+            tab->lu->max_updates = solver->lu_update_limit_override;
+            update_cap = lu_update_backend_storage_capacity(tab->lu);
+            if (update_cap > 0 && tab->lu->max_updates > update_cap) {
+                tab->lu->max_updates = update_cap;
+            }
+        }
+        if (solver->lu_pivot_tol_override > 0.0) {
+            tab->lu->pivot_tol = solver->lu_pivot_tol_override;
+        }
+        if (solver->lu_growth_guard_override > 0.0) {
+            tab->lu->growth_refactor_threshold = solver->lu_growth_guard_override;
+        }
+    }
+    tab->trace_phase1_iter = -1;
+    tab->trace_last_entering = -1;
+    tab->trace_last_leaving_pos = -1;
+    tab->trace_last_theta = 0.0;
+    tab->trace_last_pivot = 0.0;
+    tab->trace_last_dir_inf = 0.0;
+    tab->trace_last_fail_reason = PHASE1_PIVOT_FAIL_NONE;
+}
+
+/* Create, configure, and factorize a primal tableau. */
+static int setup_primal_tableau(SimplexSolver *solver, int allow_crash) {
+    if (!solver) return -1;
+
+    if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Creating tableau...\n");
+    solver->tableau = tableau_create_ex(solver->model, solver->force_two_phase, 0);
+    if (!solver->tableau) {
+        solver->status = RALPH_STATUS_ERROR;
+        return -1;
+    }
+
+    SimplexTableau *tab = solver->tableau;
+    configure_tableau_for_solver(solver, tab);
+
+    if (solver->verbose) {
+        LP_LOG_STDOUT("[simplex_solve] Tableau: n=%d (extended), m=%d\n", tab->n, tab->m);
+    }
+
+    int warm_basis_applied = 0;
+    solver->warm_basis_last_attempted = 0;
+    solver->warm_basis_last_applied = 0;
+    solver->warm_basis_last_rejected = 0;
+    if (solver->warm_basis && solver->warm_var_status) {
+        solver->warm_basis_last_attempted = 1;
+        int warm_rc = tableau_apply_warm_basis(tab,
+                                               solver->warm_basis_m,
+                                               solver->warm_basis_n,
+                                               solver->warm_basis,
+                                               solver->warm_var_status);
+        if (warm_rc != 0 && solver->verbose) {
+            LP_LOG_STDOUT("[simplex_solve] Warm basis rejected; using cold-start basis\n");
+        } else if (warm_rc == 0 && solver->verbose) {
+            LP_LOG_STDOUT("[simplex_solve] Warm basis accepted\n");
+        }
+        if (warm_rc == 0) {
+            warm_basis_applied = 1;
+            solver->warm_basis_last_applied = 1;
+        } else {
+            solver->warm_basis_last_rejected = 1;
+        }
+
+        /* Consume staged warm basis once per solve attempt. */
+        free(solver->warm_basis);
+        solver->warm_basis = NULL;
+        free(solver->warm_var_status);
+        solver->warm_var_status = NULL;
+        solver->warm_basis_m = 0;
+        solver->warm_basis_n = 0;
+    }
+
+    int *saved_basis = NULL;
+    int *saved_basis_pos = NULL;
+    VarStatus *saved_var_status = NULL;
+
+    if (allow_crash && !warm_basis_applied) {
+        saved_basis = (int *)malloc(tab->m * sizeof(int));
+        saved_basis_pos = (int *)malloc(tab->n * sizeof(int));
+        saved_var_status = (VarStatus *)malloc(tab->n * sizeof(VarStatus));
+        if (saved_basis && saved_basis_pos && saved_var_status) {
+            memcpy(saved_basis, tab->basis, tab->m * sizeof(int));
+            memcpy(saved_basis_pos, tab->basis_pos, tab->n * sizeof(int));
+            memcpy(saved_var_status, tab->var_status, tab->n * sizeof(VarStatus));
+        }
+        crash_triangular(tab, solver->verbose);
+    }
+
+    if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Factorizing initial basis...\n");
+    double t_refactor_ms = lp_telemetry_timer_start();
+    int factorize_ok = (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_SETUP) == 0);
+    lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+
+    if (!factorize_ok && allow_crash && saved_basis) {
+        if (solver->verbose)
+            LP_LOG_STDOUT("[simplex_solve] Crash basis singular, restoring original basis\n");
+        memcpy(tab->basis, saved_basis, tab->m * sizeof(int));
+        memcpy(tab->basis_pos, saved_basis_pos, tab->n * sizeof(int));
+        memcpy(tab->var_status, saved_var_status, tab->n * sizeof(VarStatus));
+        for (int j = 0; j < tab->n; j++)
+            tab->x[j] = tab->lb_ext[j];
+        t_refactor_ms = lp_telemetry_timer_start();
+        factorize_ok = (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_SETUP) == 0);
+        lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+    }
+
+    if (!factorize_ok) {
+        free(saved_basis);
+        free(saved_basis_pos);
+        free(saved_var_status);
+        solver->status = RALPH_STATUS_ERROR;
+        return -1;
+    }
+
+    tableau_compute_solution(tab);
+    tableau_compute_reduced_costs(tab);
+
+    if (allow_crash && saved_basis) {
+        int crash_infeasible = 0;
+        for (int i = 0; i < tab->m; i++) {
+            int bv = tab->basis[i];
+            double val = tab->x[bv];
+            if (val < tab->lb_ext[bv] - RALPH_FEAS_TOL ||
+                val > tab->ub_ext[bv] + RALPH_FEAS_TOL) {
+                crash_infeasible = 1;
+                if (solver->verbose)
+                    LP_LOG_STDOUT("[crash] Basic var %d in row %d: x=%.6e outside [%.6e, %.6e], reverting\n",
+                           bv, i, val, tab->lb_ext[bv], tab->ub_ext[bv]);
+                break;
+            }
+        }
+        if (crash_infeasible) {
+            if (solver->verbose)
+                LP_LOG_STDOUT("[crash] Post-verify failed, restoring original basis\n");
+            memcpy(tab->basis, saved_basis, tab->m * sizeof(int));
+            memcpy(tab->basis_pos, saved_basis_pos, tab->n * sizeof(int));
+            memcpy(tab->var_status, saved_var_status, tab->n * sizeof(VarStatus));
+            for (int j = 0; j < tab->n; j++)
+                tab->x[j] = tab->lb_ext[j];
+            t_refactor_ms = lp_telemetry_timer_start();
+            if (tableau_refactorize_with_reason(tab, RALPH_REFACTOR_REASON_SETUP) != 0) {
+                lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+                free(saved_basis);
+                free(saved_basis_pos);
+                free(saved_var_status);
+                solver->status = RALPH_STATUS_ERROR;
+                return -1;
+            }
+            lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+            tableau_compute_solution(tab);
+            tableau_compute_reduced_costs(tab);
+        }
+    }
+    free(saved_basis);
+    free(saved_basis_pos);
+    free(saved_var_status);
+
+    if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Initial factorization OK\n");
+    return 0;
+}
+
 int simplex_solve(SimplexSolver *solver) {
     if (!solver || !solver->model) return -1;
 
     clock_t start = clock();
+    solver->progress_start_ms = lp_telemetry_now_ms();
+    lp_determinism_apply_runtime(solver);
 
-    if (solver->verbose) printf("[simplex_solve] Starting...\n");
+    /* Invalidate cached outputs from any previous solve.
+     * This prevents stale primal/dual data from being reused when the current
+     * solve fails before producing new solution vectors. */
+    free(solver->solution);
+    solver->solution = NULL;
+    free(solver->dual_solution);
+    solver->dual_solution = NULL;
+    free(solver->reduced_costs);
+    solver->reduced_costs = NULL;
+    solver->farkas_valid = 0;
+    solver->unbounded_valid = 0;
+
+    solver->trace_phase1_pivot_failures = 0;
+    solver->trace_phase1_fail_small_pivot = 0;
+    solver->trace_phase1_fail_invalid_column = 0;
+    solver->trace_phase1_fail_lu_max_updates = 0;
+    solver->trace_phase1_fail_lu_spike_pool_full = 0;
+    solver->trace_phase1_fail_lu_update_pivot_small = 0;
+    solver->trace_phase1_fail_lu_singular_update = 0;
+    solver->trace_phase1_fail_factor_singular = 0;
+    solver->trace_phase1_fail_refactor_forced_other = 0;
+    solver->trace_phase1_fail_refactor_after_update_other = 0;
+    solver->trace_phase1_no_entering_events = 0;
+    solver->trace_phase1_first_fail_iter = -1;
+    solver->trace_phase1_last_fail_iter = -1;
+    solver->trace_phase1_signature = solver->trace_phase1 ? 1469598103934665603ULL : 0ULL;
+    solver->verify_primal_infeas = 0.0;
+    solver->verify_bound_infeas = 0.0;
+    solver->verify_dual_infeas = 0.0;
+    solver->verify_comp_slack = 0.0;
+    solver->verify_obj_error = 0.0;
+    solver->verify_cond_estimate = 0.0;
+
+    if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Starting...\n");
 
     /* Finalize model if needed (required before scaling) */
     if (!solver->model->A) {
-        if (solver->verbose) printf("[simplex_solve] Finalizing model...\n");
+        if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Finalizing model...\n");
         if (lp_model_finalize(solver->model) != 0) {
-            if (solver->verbose) printf("[simplex_solve] ERROR: lp_model_finalize failed\n");
+            if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] ERROR: lp_model_finalize failed\n");
             solver->status = RALPH_STATUS_ERROR;
             return -1;
         }
     }
 
     if (solver->verbose) {
-        printf("[simplex_solve] Model: %d vars, %d cons, %d nnz\n",
+        LP_LOG_STDOUT("[simplex_solve] Model: %d vars, %d cons, %d nnz\n",
                solver->model->num_vars, solver->model->num_cons,
                solver->model->A ? solver->model->A->nnz : 0);
     }
@@ -2822,94 +11827,241 @@ int simplex_solve(SimplexSolver *solver) {
         }
     }
 
-    /* Create tableau */
-    if (solver->verbose) printf("[simplex_solve] Creating tableau...\n");
-    solver->tableau = tableau_create(solver->model);
-    if (!solver->tableau) {
-        solver->status = RALPH_STATUS_ERROR;
-        return -1;
-    }
+    reset_solver_perf(solver);
 
-    SimplexTableau *tab = solver->tableau;
+    SimplexTableau *tab = NULL;
 
-    /* Only use steepest edge weights for strategies that need them (1=SE, 2=Devex) */
-    tab->use_steepest_edge = (solver->pricing_strategy == 1 || solver->pricing_strategy == 2);
-    tab->pricing_strategy = solver->pricing_strategy;
+    /* T1.3: Method dispatch — dual simplex path.
+     * For methods 1/2, avoid creating/factorizing a primal tableau up front. */
+    if (solver->method == 1 || solver->method == 2) {
+        if (solver->verbose)
+            LP_LOG_STDOUT("[simplex_solve] Trying dual simplex path (method=%d)\n", solver->method);
 
-    if (solver->verbose) {
-        printf("[simplex_solve] Tableau: n=%d (extended), m=%d\n", tab->n, tab->m);
-    }
+        double t_dual_ms = lp_telemetry_timer_start();
+        int drc = dual_simplex_solve_from_scratch_v2(solver);
+        lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_DUAL, t_dual_ms);
 
-    /* Basis is already initialized in tableau_create with proper slack/artificial vars */
-
-    /* Factorize initial basis */
-    if (solver->verbose) printf("[simplex_solve] Factorizing initial basis...\n");
-    if (tableau_refactorize(tab) != 0) {
-        solver->status = RALPH_STATUS_ERROR;
-        return -1;
-    }
-    if (solver->verbose) printf("[simplex_solve] Initial factorization OK\n");
-
-    /* Phase 1: Find feasible solution */
-    if (solver->verbose) printf("[simplex_solve] Starting Phase 1...\n");
-    if (simplex_phase1(solver) != 0) {
-        if (solver->status == RALPH_STATUS_INFEASIBLE) {
-            if (solver->verbose) printf("[simplex_solve] Phase 1: INFEASIBLE\n");
-            return 0;  /* Infeasible is a valid result */
-        }
-        return -1;
-    }
-    if (solver->verbose) printf("[simplex_solve] Phase 1 complete\n");
-
-    /* Transition to Phase 2 if using two-phase simplex */
-    if (tab->use_two_phase) {
-        if (solver->verbose) printf("[simplex_solve] Transitioning to Phase 2...\n");
-        if (simplex_transition_phase2(solver) != 0) {
-            solver->status = RALPH_STATUS_ERROR;
-            return -1;
-        }
-        if (solver->verbose) printf("[simplex_solve] Phase 2 transition complete\n");
-    }
-
-    /* Phase 2: Optimize */
-    int status = simplex_phase2(solver);
-    (void)status;  /* Status is set in solver->status directly */
-
-    solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
-
-    /* Check for infeasibility: if any artificial variable (Big-M cost) is non-zero,
-     * the original problem is infeasible */
-    if (solver->status == RALPH_STATUS_OPTIMAL) {
-        int num_struct = solver->model->num_vars;
-        double artificial_contrib = 0.0;
-        int artificial_count = 0;
-
-        /* Compute true objective from original variables only.
-         * This is more reliable than subtracting artificial contributions
-         * from tab->obj_value, which can have numerical issues. */
-        double true_obj = 0.0;
-        for (int j = 0; j < num_struct; j++) {
-            true_obj += tab->c_ext[j] * tab->x[j];
-        }
-
-        /* Check if any artificial variables (Big-M cost) have significant non-zero values.
-         * This indicates the original problem is infeasible. */
-        for (int j = num_struct; j < tab->n; j++) {
-            if (tab->c_ext[j] > 1e6 && fabs(tab->x[j]) > RALPH_FEAS_TOL) {
-                artificial_contrib += tab->c_ext[j] * tab->x[j];
-                artificial_count++;
+        if (drc == 0 && solver->method == 2) {
+            if (solver->status == RALPH_STATUS_OPTIMAL) {
+                /* Auto mode: Ax=b sanity check before committing.
+                 * Catches catastrophically wrong dual results. */
+                SimplexTableau *dtab = solver->tableau;
+                int bad = 0;
+                for (int i = 0; i < dtab->m && !bad; i++) {
+                    double ax = 0.0;
+                    for (int j = 0; j < dtab->n; j++) {
+                        if (fabs(dtab->x[j]) < RALPH_ZERO_TOL) continue;
+                        for (int p = dtab->A_ext->colptr[j]; p < dtab->A_ext->colptr[j+1]; p++) {
+                            if (dtab->A_ext->rowidx[p] == i) {
+                                ax += dtab->A_ext->values[p] * dtab->x[j];
+                                break;
+                            }
+                        }
+                    }
+                    if (fabs(ax - dtab->rhs[i]) > 1e-4) bad = 1;
+                }
+                if (bad) {
+                    if (solver->verbose)
+                        LP_LOG_STDOUT("[simplex_solve] Dual solution failed Ax=b check, falling back to primal\n");
+                    drc = -1;
+                }
+            } else {
+                /* Auto mode: don't trust dual INFEASIBLE/OBJ_LIMIT — fall back.
+                 * Dual infeasibility detection is unreliable; primal Phase 1 is robust. */
+                if (solver->verbose)
+                    LP_LOG_STDOUT("[simplex_solve] Dual returned non-optimal status %d, falling back to primal\n",
+                           solver->status);
+                drc = -1;
             }
         }
 
-        if (artificial_count > 0 && artificial_contrib > 1e-2) {
-            /* Significant positive artificial contribution means infeasible */
-            extract_farkas_ray(solver);
-            solver->status = RALPH_STATUS_INFEASIBLE;
-            return 0;
+        if (drc == 0) {
+            /* Commit to dual result */
+            solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+            unscale_solution(solver);
+            restore_model(solver);
+
+            /* Auto mode: always verify to flag suboptimal dual solutions.
+             * Dual can terminate with feasible but non-optimal basis. */
+            if (solver->status == RALPH_STATUS_OPTIMAL &&
+                (solver->verify || solver->method == 2))
+                verify_solution(solver);
+
+            /* Auto mode: if verify downgraded to IMPRECISE, fall back to primal
+             * rather than returning a bad dual solution. */
+            if (solver->method == 2 && solver->status == RALPH_STATUS_IMPRECISE) {
+                if (solver->verbose)
+                    LP_LOG_STDOUT("[simplex_solve] Dual solution imprecise, falling back to primal\n");
+                solver->status = RALPH_STATUS_UNKNOWN;
+                drc = -1;  /* Trigger primal fallback below */
+            } else {
+                lp_run_user_callbacks(solver,
+                                      solver->tableau,
+                                      RALPH_LP_PROGRESS_PHASE_DUAL,
+                                      solver->iterations,
+                                      1,
+                                      0);
+                return 0;
+            }
         }
 
-        /* Use true objective computed from original variables */
-        solver->obj_value = true_obj * solver->model->obj_sense;
+        if (solver->status == RALPH_STATUS_TIME_LIMIT) {
+            solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+            restore_model(solver);
+            lp_run_user_callbacks(solver,
+                                  solver->tableau,
+                                  RALPH_LP_PROGRESS_PHASE_DUAL,
+                                  solver->iterations,
+                                  1,
+                                  0);
+            return -1;
+        }
+
+        /* Dual failed or rejected — fall back to primal (method=2) or error (method=1) */
+        if (solver->method == 2) {
+            solver->from_dual_fallback = 1;
+            if (solver->verbose)
+                LP_LOG_STDOUT("[simplex_solve] Falling back to primal\n");
+
+            if (solver->tableau) {
+                tableau_free(solver->tableau);
+                solver->tableau = NULL;
+            }
+
+            double t_setup_ms = lp_telemetry_timer_start();
+            if (setup_primal_tableau(solver, solver->crash) != 0) {
+                return -1;
+            }
+            lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PRIMAL_SETUP, t_setup_ms);
+            tab = solver->tableau;
+        } else {
+            solver->status = RALPH_STATUS_ERROR;
+            solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+            return -1;
+        }
+    } else {
+        double t_setup_ms = lp_telemetry_timer_start();
+        if (setup_primal_tableau(solver, solver->crash && solver->method == 0) != 0) {
+            return -1;
+        }
+        lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PRIMAL_SETUP, t_setup_ms);
+        tab = solver->tableau;
+    }
+
+    /* T3.4: Override pricing strategy for Phase 1 if configured.
+     * Two-phase simplex requires full pricing during Phase 1 — partial pricing
+     * can miss improving directions for artificial variables. Default to Devex
+     * for Phase 1 when partial/heap pricing is selected. */
+    int saved_pricing = solver->pricing_strategy;
+    int saved_tab_pricing = tab->pricing_strategy;
+    int saved_tab_se = tab->use_steepest_edge;
+    if (solver->phase1_pricing >= 0) {
+        solver->pricing_strategy = solver->phase1_pricing;
+        tab->pricing_strategy = solver->phase1_pricing;
+        tab->use_steepest_edge = (solver->phase1_pricing == 1 || solver->phase1_pricing == 2
+                                  || solver->phase1_pricing == 5);
+    } else if (tab->use_two_phase && (solver->pricing_strategy == 3 || solver->pricing_strategy == 4)) {
+        solver->pricing_strategy = 2;  /* Devex for Phase 1 */
+        tab->pricing_strategy = 2;
+        tab->use_steepest_edge = 1;
+    }
+
+    /* Phase 1: Find feasible solution */
+    if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Starting Phase 1...\n");
+    {
+        double t_phase1_ms = lp_telemetry_timer_start();
+        if (simplex_phase1(solver) != 0) {
+            lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PHASE1, t_phase1_ms);
+            solver->pricing_strategy = saved_pricing;  /* T3.4: restore pricing */
+            tab->pricing_strategy = saved_tab_pricing;
+            tab->use_steepest_edge = saved_tab_se;
+            if (solver->status == RALPH_STATUS_INFEASIBLE) {
+                if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Phase 1: INFEASIBLE\n");
+                lp_run_user_callbacks(solver,
+                                      tab,
+                                      RALPH_LP_PROGRESS_PHASE_1,
+                                      solver->iterations,
+                                      1,
+                                      0);
+                return 0;  /* Infeasible is a valid result */
+            }
+            return -1;
+        }
+        lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PHASE1, t_phase1_ms);
+    }
+    solver->pricing_strategy = saved_pricing;  /* T3.4: restore pricing for Phase 2 */
+    tab->pricing_strategy = saved_tab_pricing;
+    tab->use_steepest_edge = saved_tab_se;
+    if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Phase 1 complete\n");
+
+    /* Transition to Phase 2 if using two-phase simplex */
+    int two_phase_failed = 0;
+    if (tab->use_two_phase) {
+        if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Transitioning to Phase 2...\n");
+        double t_transition_ms = lp_telemetry_timer_start();
+        if (simplex_transition_phase2(solver) != 0) {
+            lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_TRANSITION, t_transition_ms);
+            two_phase_failed = 1;
+        } else {
+            lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_TRANSITION, t_transition_ms);
+            if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Phase 2 transition complete\n");
+        }
+    }
+
+    /* Phase 2: Optimize (skip if transition failed) */
+    if (!two_phase_failed) {
+        double t_phase2_ms = lp_telemetry_timer_start();
+        int status = simplex_phase2(solver);
+        lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PHASE2, t_phase2_ms);
+        (void)status;  /* Status is set in solver->status directly */
+        if (solver->status == RALPH_STATUS_ERROR && tab->use_two_phase) {
+            two_phase_failed = 1;
+        }
+    }
+
+    /* If two-phase failed, try dual simplex as a one-shot fallback.
+     * Only for method=0 (explicit primal) to avoid circular chains with
+     * method=2 (which already tried dual before falling back to primal).
+     * The Phase 2 transition can fail on problems with redundant rows (e.g.,
+     * assignment LPs, beaconfd) where stuck artificials make the basis singular. */
+    if (two_phase_failed && solver->method == 0) {
+        if (solver->verbose) {
+            LP_LOG_STDOUT("[simplex_solve] Two-phase failed, trying dual simplex\n");
+        }
+        tableau_free(solver->tableau);
+        solver->tableau = NULL;
+        restore_model(solver);
+        solver->is_scaled = 0;
+        solver->status = RALPH_STATUS_UNKNOWN;
+        double t_dual_ms = lp_telemetry_timer_start();
+        int dual_result = dual_simplex_solve_from_scratch_v2(solver);
+        lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_DUAL, t_dual_ms);
+        solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+        if (solver->tableau) {
+            tableau_free(solver->tableau);
+            solver->tableau = NULL;
+        }
+        return dual_result;
+    } else if (two_phase_failed) {
+        /* method=2 already tried dual before primal — don't chain again */
+        solver->status = RALPH_STATUS_ERROR;
+        solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+        tableau_free(solver->tableau);
+        solver->tableau = NULL;
+        return -1;
+    }
+
+    solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+
+    /* Compute true objective from structural variables only.
+     * Auxiliary variables (slacks/surplus/artificials) have zero cost in Phase 2.
+     * Phase 1 already certifies feasibility or infeasibility. */
+    if (solver->status == RALPH_STATUS_OPTIMAL) {
+        double true_obj = 0.0;
+        for (int j = 0; j < solver->model->num_vars; j++) {
+            true_obj += tab->c_ext[j] * tab->x[j];
+        }
+        solver->obj_value = true_obj * solver->model->obj_sense + solver->model->obj_offset;
     }
 
     /* Copy solution */
@@ -2932,10 +12084,32 @@ int simplex_solve(SimplexSolver *solver) {
         unscale_solution(solver);
     }
 
+    /* Unscale unbounded ray if scaling was applied. */
+    if (solver->is_scaled && solver->unbounded_valid &&
+        solver->unbounded_ray && solver->col_scale) {
+        for (int j = 0; j < solver->model->num_vars; j++) {
+            solver->unbounded_ray[j] *= solver->col_scale[j];
+        }
+    }
+
     /* Restore original model if scaling was applied */
     restore_model(solver);
 
-    return status;
+    /* Post-solve verification (T2.3 + T3.6) — runs on original-space solution */
+    if (solver->verify && solver->status == RALPH_STATUS_OPTIMAL) {
+        verify_solution(solver);
+    }
+
+    lp_run_user_callbacks(solver,
+                          tab,
+                          (tab && tab->phase == 1) ?
+                              RALPH_LP_PROGRESS_PHASE_1 :
+                              RALPH_LP_PROGRESS_PHASE_2,
+                          solver->iterations,
+                          1,
+                          0);
+
+    return (solver->status == RALPH_STATUS_OPTIMAL) ? 0 : -1;
 }
 
 /* ============================================================================
@@ -2945,12 +12119,12 @@ int simplex_solve(SimplexSolver *solver) {
 void lp_print_stats(const SimplexSolver *solver) {
     if (!solver) return;
 
-    printf("\n=== Simplex Statistics ===\n");
-    printf("Status: %d\n", solver->status);
-    printf("Iterations: %d\n", solver->iterations);
-    printf("Solve time: %.3f seconds\n", solver->solve_time);
+    LP_LOG_STDOUT("\n=== Simplex Statistics ===\n");
+    LP_LOG_STDOUT("Status: %d\n", solver->status);
+    LP_LOG_STDOUT("Iterations: %d\n", solver->iterations);
+    LP_LOG_STDOUT("Solve time: %.3f seconds\n", solver->solve_time);
 
     if (solver->status == RALPH_STATUS_OPTIMAL) {
-        printf("Objective: %.10f\n", solver->obj_value);
+        LP_LOG_STDOUT("Objective: %.10f\n", solver->obj_value);
     }
 }

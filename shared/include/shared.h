@@ -34,6 +34,7 @@
 #include "sh_backoff.h"
 #include "sh_retry.h"
 #include "sh_cors.h"
+#include "sh_perf.h"
 #include "sh_query.h"
 #include "sh_json.h"
 
