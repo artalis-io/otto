@@ -646,6 +646,38 @@ static void sn_dgemm_update_scattered_rows_cols_width1_cols5p(int panel_rows, in
 }
 
 /*
+ * Bucket width-1 cols5+ compact updates by active-row count so later kernel
+ * work can target the true dominant tail shape.
+ */
+static void sn_record_size1_update_cols5p_row_bucket(SNSupernodeWork *stats,
+                                                     int active_row_count,
+                                                     double elapsed_ms,
+                                                     int sample_phase_timing) {
+    if (!stats) return;
+    if (active_row_count <= 8) {
+        stats->size1_update_cols5p_rows1_8_calls++;
+        if (sample_phase_timing) {
+            stats->size1_update_cols5p_rows1_8_ms += elapsed_ms;
+        }
+    } else if (active_row_count <= 32) {
+        stats->size1_update_cols5p_rows9_32_calls++;
+        if (sample_phase_timing) {
+            stats->size1_update_cols5p_rows9_32_ms += elapsed_ms;
+        }
+    } else if (active_row_count <= 128) {
+        stats->size1_update_cols5p_rows33_128_calls++;
+        if (sample_phase_timing) {
+            stats->size1_update_cols5p_rows33_128_ms += elapsed_ms;
+        }
+    } else {
+        stats->size1_update_cols5p_rows129p_calls++;
+        if (sample_phase_timing) {
+            stats->size1_update_cols5p_rows129p_ms += elapsed_ms;
+        }
+    }
+}
+
+/*
  * TRSM: Solve L * X = B in-place (B overwritten with X).
  *
  * L is block_size x block_size unit lower triangular (row-major, ldl stride).
@@ -1348,6 +1380,9 @@ int sn_factorize(double *A_struct, int m, int k,
                         } else {
                             stats->size1_update_cols5p_calls++;
                             stats->size1_update_cols5p_ms += compact_update_ms;
+                            sn_record_size1_update_cols5p_row_bucket(
+                                stats, active_row_count, compact_update_ms,
+                                sample_phase_timing);
                         }
                     }
                     if (active_col_count == 1) {
@@ -1373,6 +1408,8 @@ int sn_factorize(double *A_struct, int m, int k,
                         stats->size1_update_cols4_calls++;
                     } else {
                         stats->size1_update_cols5p_calls++;
+                        sn_record_size1_update_cols5p_row_bucket(
+                            stats, active_row_count, 0.0, sample_phase_timing);
                     }
                 }
             }

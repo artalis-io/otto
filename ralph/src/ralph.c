@@ -3380,6 +3380,14 @@ int ralph_core_get_last_lu_telemetry(const RalphModel *model, RalphLUTelemetry *
     RALPH_LU_TELEM_COPY(perf_sn_size1_update_cols4_ms);
     RALPH_LU_TELEM_COPY(perf_sn_size1_update_cols5p_calls);
     RALPH_LU_TELEM_COPY(perf_sn_size1_update_cols5p_ms);
+    RALPH_LU_TELEM_COPY(perf_sn_size1_update_cols5p_rows1_8_calls);
+    RALPH_LU_TELEM_COPY(perf_sn_size1_update_cols5p_rows1_8_ms);
+    RALPH_LU_TELEM_COPY(perf_sn_size1_update_cols5p_rows9_32_calls);
+    RALPH_LU_TELEM_COPY(perf_sn_size1_update_cols5p_rows9_32_ms);
+    RALPH_LU_TELEM_COPY(perf_sn_size1_update_cols5p_rows33_128_calls);
+    RALPH_LU_TELEM_COPY(perf_sn_size1_update_cols5p_rows33_128_ms);
+    RALPH_LU_TELEM_COPY(perf_sn_size1_update_cols5p_rows129p_calls);
+    RALPH_LU_TELEM_COPY(perf_sn_size1_update_cols5p_rows129p_ms);
     RALPH_LU_TELEM_COPY(perf_sn_panel_swap_scatter_ms);
     RALPH_LU_TELEM_COPY(perf_sn_panel_eliminate_ms);
     RALPH_LU_TELEM_COPY(perf_sn_u_emit_ms);

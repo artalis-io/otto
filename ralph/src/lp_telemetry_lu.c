@@ -186,6 +186,14 @@ void lp_telemetry_reset_lu(LUFactorization *lu) {
     lu->telemetry.perf_sn_size1_update_cols4_ms = 0.0;
     lu->telemetry.perf_sn_size1_update_cols5p_calls = 0;
     lu->telemetry.perf_sn_size1_update_cols5p_ms = 0.0;
+    lu->telemetry.perf_sn_size1_update_cols5p_rows1_8_calls = 0;
+    lu->telemetry.perf_sn_size1_update_cols5p_rows1_8_ms = 0.0;
+    lu->telemetry.perf_sn_size1_update_cols5p_rows9_32_calls = 0;
+    lu->telemetry.perf_sn_size1_update_cols5p_rows9_32_ms = 0.0;
+    lu->telemetry.perf_sn_size1_update_cols5p_rows33_128_calls = 0;
+    lu->telemetry.perf_sn_size1_update_cols5p_rows33_128_ms = 0.0;
+    lu->telemetry.perf_sn_size1_update_cols5p_rows129p_calls = 0;
+    lu->telemetry.perf_sn_size1_update_cols5p_rows129p_ms = 0.0;
     lu->telemetry.perf_sn_u_emit_ms = 0.0;
     lu->telemetry.perf_sn_active_set_ms = 0.0;
     lu->telemetry.perf_sn_pack_blocks_ms = 0.0;
@@ -432,6 +440,14 @@ void lp_telemetry_snapshot_lu(const LUFactorization *lu,
     COPY_LU_TELEM_FIELD(perf_sn_size1_update_cols4_ms);
     COPY_LU_TELEM_FIELD(perf_sn_size1_update_cols5p_calls);
     COPY_LU_TELEM_FIELD(perf_sn_size1_update_cols5p_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_size1_update_cols5p_rows1_8_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_size1_update_cols5p_rows1_8_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_size1_update_cols5p_rows9_32_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_size1_update_cols5p_rows9_32_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_size1_update_cols5p_rows33_128_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_size1_update_cols5p_rows33_128_ms);
+    COPY_LU_TELEM_FIELD(perf_sn_size1_update_cols5p_rows129p_calls);
+    COPY_LU_TELEM_FIELD(perf_sn_size1_update_cols5p_rows129p_ms);
     COPY_LU_TELEM_FIELD(perf_sn_u_emit_ms);
     COPY_LU_TELEM_FIELD(perf_sn_active_set_ms);
     COPY_LU_TELEM_FIELD(perf_sn_pack_blocks_ms);
@@ -584,6 +600,14 @@ void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
                                         double size1_update_cols4_ms,
                                         uint64_t size1_update_cols5p_calls,
                                         double size1_update_cols5p_ms,
+                                        uint64_t size1_update_cols5p_rows1_8_calls,
+                                        double size1_update_cols5p_rows1_8_ms,
+                                        uint64_t size1_update_cols5p_rows9_32_calls,
+                                        double size1_update_cols5p_rows9_32_ms,
+                                        uint64_t size1_update_cols5p_rows33_128_calls,
+                                        double size1_update_cols5p_rows33_128_ms,
+                                        uint64_t size1_update_cols5p_rows129p_calls,
+                                        double size1_update_cols5p_rows129p_ms,
                                         double u_emit_ms,
                                         double active_set_ms,
                                         double pack_blocks_ms,
@@ -686,6 +710,22 @@ void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
     lu->telemetry.perf_sn_size1_update_cols5p_calls +=
         size1_update_cols5p_calls;
     lu->telemetry.perf_sn_size1_update_cols5p_ms += size1_update_cols5p_ms;
+    lu->telemetry.perf_sn_size1_update_cols5p_rows1_8_calls +=
+        size1_update_cols5p_rows1_8_calls;
+    lu->telemetry.perf_sn_size1_update_cols5p_rows1_8_ms +=
+        size1_update_cols5p_rows1_8_ms;
+    lu->telemetry.perf_sn_size1_update_cols5p_rows9_32_calls +=
+        size1_update_cols5p_rows9_32_calls;
+    lu->telemetry.perf_sn_size1_update_cols5p_rows9_32_ms +=
+        size1_update_cols5p_rows9_32_ms;
+    lu->telemetry.perf_sn_size1_update_cols5p_rows33_128_calls +=
+        size1_update_cols5p_rows33_128_calls;
+    lu->telemetry.perf_sn_size1_update_cols5p_rows33_128_ms +=
+        size1_update_cols5p_rows33_128_ms;
+    lu->telemetry.perf_sn_size1_update_cols5p_rows129p_calls +=
+        size1_update_cols5p_rows129p_calls;
+    lu->telemetry.perf_sn_size1_update_cols5p_rows129p_ms +=
+        size1_update_cols5p_rows129p_ms;
     lu->telemetry.perf_sn_u_emit_ms += u_emit_ms;
     lu->telemetry.perf_sn_active_set_ms += active_set_ms;
     lu->telemetry.perf_sn_pack_blocks_ms += pack_blocks_ms;

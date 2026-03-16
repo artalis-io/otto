@@ -1045,6 +1045,14 @@ typedef struct {
     double perf_sn_size1_update_cols4_ms;
     uint64_t perf_sn_size1_update_cols5p_calls;
     double perf_sn_size1_update_cols5p_ms;
+    uint64_t perf_sn_size1_update_cols5p_rows1_8_calls;
+    double perf_sn_size1_update_cols5p_rows1_8_ms;
+    uint64_t perf_sn_size1_update_cols5p_rows9_32_calls;
+    double perf_sn_size1_update_cols5p_rows9_32_ms;
+    uint64_t perf_sn_size1_update_cols5p_rows33_128_calls;
+    double perf_sn_size1_update_cols5p_rows33_128_ms;
+    uint64_t perf_sn_size1_update_cols5p_rows129p_calls;
+    double perf_sn_size1_update_cols5p_rows129p_ms;
     double perf_sn_u_emit_ms;
     double perf_sn_active_set_ms;
     double perf_sn_pack_blocks_ms;

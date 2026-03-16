@@ -1231,6 +1231,35 @@ Status:
     - the next large-basis kernel work should stay inside the generic width-1
       compact-update path rather than reopening broader supernode or
       solver-side work
+- `W1.2` seventeenth slice implemented
+  - split width-1 `cols5+` compact-update telemetry by active-row bucket:
+    - `rows1_8`
+    - `rows9_32`
+    - `rows33_128`
+    - `rows129p`
+  - validation:
+    - `make -C ralph test-lp-telemetry-lu`
+    - `make -C ralph build-ralph-benchmark`
+    - `make -C ralph test-netlib-gate-small`
+  - measured effect:
+    - direct `pilot.mps`
+      - `sn_size1_update_cols5p_ms = 2.982`
+      - `rows33_128_ms = 1.239`
+      - `rows129p_ms = 1.067`
+    - direct `pilot87.mps`
+      - `sn_size1_update_cols5p_ms = 8.018`
+      - `rows129p_ms = 4.587`
+      - `rows33_128_ms = 2.911`
+    - direct `d2q06c.mps`
+      - `sn_size1_update_cols5p_ms = 0.347`
+      - `rows1_8_ms = 0.185`
+      - `rows9_32_ms = 0.154`
+  - result:
+    - `pilot87` is dominated by large-row `cols5+` updates
+    - `pilot` is split between medium and large-row buckets
+    - `d2q06c` is mostly small-row and is not the same shape as the pilot family
+    - the next arithmetic optimization should target width-1 `cols5+`
+      updates with `active_row_count >= 33`, not the small-row buckets
 - rejected during `W1.2`
   - stale or approximate `col_max` shortcuts and other behavior-adjacent
     Markowitz optimizations were tried and rolled back

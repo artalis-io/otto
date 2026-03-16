@@ -104,6 +104,14 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     lu.telemetry.perf_sn_size1_update_cols4_ms = 0.38;
     lu.telemetry.perf_sn_size1_update_cols5p_calls = 22;
     lu.telemetry.perf_sn_size1_update_cols5p_ms = 0.39;
+    lu.telemetry.perf_sn_size1_update_cols5p_rows1_8_calls = 23;
+    lu.telemetry.perf_sn_size1_update_cols5p_rows1_8_ms = 0.391;
+    lu.telemetry.perf_sn_size1_update_cols5p_rows9_32_calls = 24;
+    lu.telemetry.perf_sn_size1_update_cols5p_rows9_32_ms = 0.392;
+    lu.telemetry.perf_sn_size1_update_cols5p_rows33_128_calls = 25;
+    lu.telemetry.perf_sn_size1_update_cols5p_rows33_128_ms = 0.393;
+    lu.telemetry.perf_sn_size1_update_cols5p_rows129p_calls = 26;
+    lu.telemetry.perf_sn_size1_update_cols5p_rows129p_ms = 0.394;
     lu.telemetry.perf_sn_panel_swap_scatter_ms = 0.3;
     lu.telemetry.perf_sn_panel_eliminate_ms = 0.4;
     lu.telemetry.perf_sn_u_emit_ms = 1.1;
@@ -229,6 +237,22 @@ static void test_lu_reset_prepare_and_snapshot(void) {
                   "lu_reset: supernode size1 cols5p calls");
     ASSERT_DBL_EQ(lu.telemetry.perf_sn_size1_update_cols5p_ms, 0.0,
                   "lu_reset: supernode size1 cols5p ms");
+    ASSERT_U64_EQ(lu.telemetry.perf_sn_size1_update_cols5p_rows1_8_calls, 0,
+                  "lu_reset: supernode size1 cols5p rows1_8 calls");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_size1_update_cols5p_rows1_8_ms, 0.0,
+                  "lu_reset: supernode size1 cols5p rows1_8 ms");
+    ASSERT_U64_EQ(lu.telemetry.perf_sn_size1_update_cols5p_rows9_32_calls, 0,
+                  "lu_reset: supernode size1 cols5p rows9_32 calls");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_size1_update_cols5p_rows9_32_ms, 0.0,
+                  "lu_reset: supernode size1 cols5p rows9_32 ms");
+    ASSERT_U64_EQ(lu.telemetry.perf_sn_size1_update_cols5p_rows33_128_calls, 0,
+                  "lu_reset: supernode size1 cols5p rows33_128 calls");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_size1_update_cols5p_rows33_128_ms, 0.0,
+                  "lu_reset: supernode size1 cols5p rows33_128 ms");
+    ASSERT_U64_EQ(lu.telemetry.perf_sn_size1_update_cols5p_rows129p_calls, 0,
+                  "lu_reset: supernode size1 cols5p rows129p calls");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_size1_update_cols5p_rows129p_ms, 0.0,
+                  "lu_reset: supernode size1 cols5p rows129p ms");
     ASSERT_DBL_EQ(lu.telemetry.perf_sn_panel_swap_scatter_ms, 0.0,
                   "lu_reset: supernode panel swap/scatter total");
     ASSERT_DBL_EQ(lu.telemetry.perf_sn_panel_eliminate_ms, 0.0,
@@ -297,6 +321,8 @@ static void test_lu_reset_prepare_and_snapshot(void) {
                                        33.2, 33.3, 33.4,
                                        34, 34.1, 35, 35.1, 36, 36.1,
                                        37, 37.1, 38, 38.1, 39, 39.1,
+                                       40, 40.21, 41, 40.31,
+                                       42, 40.41, 43, 40.51,
                                        40.1, 40.2, 40.3, 40.4, 40.5,
                                        41, 42, 43, 44, 45, 46, 47, 48,
                                        49, 50, 51, 52, 53,
@@ -422,6 +448,22 @@ static void test_lu_reset_prepare_and_snapshot(void) {
                       "lu_snapshot: supernode size1 cols5p calls");
         ASSERT_DBL_EQ(snap.perf_sn_size1_update_cols5p_ms, 39.1,
                       "lu_snapshot: supernode size1 cols5p ms");
+        ASSERT_U64_EQ(snap.perf_sn_size1_update_cols5p_rows1_8_calls, 40,
+                      "lu_snapshot: supernode size1 cols5p rows1_8 calls");
+        ASSERT_DBL_EQ(snap.perf_sn_size1_update_cols5p_rows1_8_ms, 40.21,
+                      "lu_snapshot: supernode size1 cols5p rows1_8 ms");
+        ASSERT_U64_EQ(snap.perf_sn_size1_update_cols5p_rows9_32_calls, 41,
+                      "lu_snapshot: supernode size1 cols5p rows9_32 calls");
+        ASSERT_DBL_EQ(snap.perf_sn_size1_update_cols5p_rows9_32_ms, 40.31,
+                      "lu_snapshot: supernode size1 cols5p rows9_32 ms");
+        ASSERT_U64_EQ(snap.perf_sn_size1_update_cols5p_rows33_128_calls, 42,
+                      "lu_snapshot: supernode size1 cols5p rows33_128 calls");
+        ASSERT_DBL_EQ(snap.perf_sn_size1_update_cols5p_rows33_128_ms, 40.41,
+                      "lu_snapshot: supernode size1 cols5p rows33_128 ms");
+        ASSERT_U64_EQ(snap.perf_sn_size1_update_cols5p_rows129p_calls, 43,
+                      "lu_snapshot: supernode size1 cols5p rows129p calls");
+        ASSERT_DBL_EQ(snap.perf_sn_size1_update_cols5p_rows129p_ms, 40.51,
+                      "lu_snapshot: supernode size1 cols5p rows129p ms");
         ASSERT_DBL_EQ(snap.perf_sn_panel_swap_scatter_ms, 20.16,
                       "lu_snapshot: supernode panel swap/scatter total");
         ASSERT_DBL_EQ(snap.perf_sn_panel_eliminate_ms, 20.17,

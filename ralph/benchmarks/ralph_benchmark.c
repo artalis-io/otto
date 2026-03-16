@@ -853,6 +853,14 @@ typedef struct {
     double lu_sn_size1_update_cols4_ms;
     uint64_t lu_sn_size1_update_cols5p_calls;
     double lu_sn_size1_update_cols5p_ms;
+    uint64_t lu_sn_size1_update_cols5p_rows1_8_calls;
+    double lu_sn_size1_update_cols5p_rows1_8_ms;
+    uint64_t lu_sn_size1_update_cols5p_rows9_32_calls;
+    double lu_sn_size1_update_cols5p_rows9_32_ms;
+    uint64_t lu_sn_size1_update_cols5p_rows33_128_calls;
+    double lu_sn_size1_update_cols5p_rows33_128_ms;
+    uint64_t lu_sn_size1_update_cols5p_rows129p_calls;
+    double lu_sn_size1_update_cols5p_rows129p_ms;
     double lu_sn_u_emit_ms;
     double lu_sn_active_set_ms;
     double lu_sn_pack_blocks_ms;
@@ -2380,6 +2388,22 @@ static SolveResult solve_with_ralph(const char *problem_path, double time_limit_
                     lu_tel.perf_sn_size1_update_cols5p_calls;
                 result.lu_sn_size1_update_cols5p_ms =
                     lu_tel.perf_sn_size1_update_cols5p_ms;
+                result.lu_sn_size1_update_cols5p_rows1_8_calls =
+                    lu_tel.perf_sn_size1_update_cols5p_rows1_8_calls;
+                result.lu_sn_size1_update_cols5p_rows1_8_ms =
+                    lu_tel.perf_sn_size1_update_cols5p_rows1_8_ms;
+                result.lu_sn_size1_update_cols5p_rows9_32_calls =
+                    lu_tel.perf_sn_size1_update_cols5p_rows9_32_calls;
+                result.lu_sn_size1_update_cols5p_rows9_32_ms =
+                    lu_tel.perf_sn_size1_update_cols5p_rows9_32_ms;
+                result.lu_sn_size1_update_cols5p_rows33_128_calls =
+                    lu_tel.perf_sn_size1_update_cols5p_rows33_128_calls;
+                result.lu_sn_size1_update_cols5p_rows33_128_ms =
+                    lu_tel.perf_sn_size1_update_cols5p_rows33_128_ms;
+                result.lu_sn_size1_update_cols5p_rows129p_calls =
+                    lu_tel.perf_sn_size1_update_cols5p_rows129p_calls;
+                result.lu_sn_size1_update_cols5p_rows129p_ms =
+                    lu_tel.perf_sn_size1_update_cols5p_rows129p_ms;
                 result.lu_sn_u_emit_ms =
                     lu_tel.perf_sn_u_emit_ms;
                 result.lu_sn_active_set_ms =
@@ -4579,6 +4603,22 @@ static void print_json_result(const char *problem_name, const char *source,
             ralph->lu_sn_size1_update_cols5p_calls);
     fprintf(out, "    \"sn_size1_update_cols5p_ms\": %.6f,\n",
             ralph->lu_sn_size1_update_cols5p_ms);
+    fprintf(out, "    \"sn_size1_update_cols5p_rows1_8_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_size1_update_cols5p_rows1_8_calls);
+    fprintf(out, "    \"sn_size1_update_cols5p_rows1_8_ms\": %.6f,\n",
+            ralph->lu_sn_size1_update_cols5p_rows1_8_ms);
+    fprintf(out, "    \"sn_size1_update_cols5p_rows9_32_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_size1_update_cols5p_rows9_32_calls);
+    fprintf(out, "    \"sn_size1_update_cols5p_rows9_32_ms\": %.6f,\n",
+            ralph->lu_sn_size1_update_cols5p_rows9_32_ms);
+    fprintf(out, "    \"sn_size1_update_cols5p_rows33_128_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_size1_update_cols5p_rows33_128_calls);
+    fprintf(out, "    \"sn_size1_update_cols5p_rows33_128_ms\": %.6f,\n",
+            ralph->lu_sn_size1_update_cols5p_rows33_128_ms);
+    fprintf(out, "    \"sn_size1_update_cols5p_rows129p_calls\": %" PRIu64 ",\n",
+            ralph->lu_sn_size1_update_cols5p_rows129p_calls);
+    fprintf(out, "    \"sn_size1_update_cols5p_rows129p_ms\": %.6f,\n",
+            ralph->lu_sn_size1_update_cols5p_rows129p_ms);
     fprintf(out, "    \"sn_panel_swap_scatter_ms\": %.6f,\n",
             ralph->lu_sn_panel_swap_scatter_ms);
     fprintf(out, "    \"sn_panel_eliminate_ms\": %.6f,\n",
