@@ -23,6 +23,10 @@
 
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Alignment for allocations (8 bytes for double/pointer) */
 #define SH_ARENA_ALIGN 8
 
@@ -73,5 +77,9 @@ size_t sh_arena_remaining(const SHArena *arena);
  * Get current used bytes in arena.
  */
 size_t sh_arena_used(const SHArena *arena);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SH_ARENA_H */

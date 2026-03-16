@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Velo — Routing Engine | OTTO</title>
+    <meta name="description" content="Velo is a pure-C routing engine with zero dependencies. Dijkstra, A*, bidirectional, ALT landmarks. Car, truck, bike, foot profiles. CSR graph format, PBF direct parsing. WASM-compilable.">
+
+    <!-- SEO -->
+    <link rel="canonical" href="https://ottofleet.io/modules/velo.html">
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#0a0a0a">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="Velo — Routing Engine | OTTO">
+    <meta property="og:description" content="Zero-dependency routing engine. 6 algorithms, 4 vehicle profiles, CSR graph format, ALT landmarks. Written in C, compiles to WASM.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://ottofleet.io/modules/velo.html">
+    <meta property="og:site_name" content="OTTO">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%230a0a0a'/%3E%3Ctext x='50' y='68' font-family='ui-monospace,monospace' font-size='60' font-weight='700' fill='%233b82f6' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
+
+    <!-- Shared Styles -->
+    <link rel="stylesheet" href="../style.css">
+
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Velo",
+        "alternateName": "OTTO Velo Routing Engine",
+        "description": "Routing engine with 6 algorithms, 4 vehicle profiles, CSR graph format, ALT landmarks. Zero external dependencies, compiles to WebAssembly.",
+        "url": "https://ottofleet.io/modules/velo.html",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Cross-platform (WASM, Linux, macOS)",
+        "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+        "author": {
+            "@type": "Person",
+            "name": "Mark Farkas"
+        }
+    }
+    </script>
+
+    <style>
+        :root { --bg: #0a0a0a; --bg-secondary: #141414; --bg-tertiary: #1a1a1a; --text: #e5e5e5; --text-muted: #9ca3af; --accent: #3b82f6; --accent-dim: #1e40af; --border: #2a2a2a; --success: #22c55e; --warning: #eab308; --error: #ef4444; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+        body { font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'Segoe UI Mono', Menlo, Monaco, Consolas, monospace; background: var(--bg); color: var(--text); line-height: 1.6; font-size: 15px; }
+        a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+        .container { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
+        header { padding: 48px 0 32px; border-bottom: 1px solid var(--border); }
+        .header-top { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px; }
+        .logo { font-size: 32px; font-weight: 700; letter-spacing: 4px; color: var(--text); animation: logo-electric 4s infinite; text-shadow: 0 0 10px rgba(255,255,255,0.1); }
+        .logo span { color: var(--accent); }
+        @keyframes logo-electric {
+            0%, 100% { text-shadow: 0 0 10px rgba(255,255,255,0.15), 0 0 20px rgba(255,255,255,0.05); transform: translate(0,0); filter: brightness(1); }
+            5% { text-shadow: -1px 0 rgba(255,100,100,0.5), 1px 0 rgba(100,180,255,0.5), 0 0 10px rgba(255,255,255,0.2); transform: translate(0.5px,0); }
+            10% { text-shadow: 0 0 10px rgba(255,255,255,0.15); transform: translate(0,0); }
+            30% { text-shadow: -2px 0 rgba(255,60,60,0.6), 2px 0 rgba(60,180,255,0.6), 0 0 20px rgba(255,255,255,0.3); transform: translate(1px,0) skewX(0.5deg); filter: brightness(1.15); }
+            31% { text-shadow: 2px 0 rgba(255,60,60,0.5), -2px 0 rgba(60,180,255,0.5), 0 0 15px rgba(255,255,255,0.2); transform: translate(-0.5px,0.3px) skewX(-0.3deg); }
+            33% { text-shadow: 0 0 10px rgba(255,255,255,0.15); transform: translate(0,0); filter: brightness(1); }
+            55% { text-shadow: 0.5px 0 rgba(255,150,150,0.3), -0.5px 0 rgba(150,200,255,0.3), 0 0 10px rgba(255,255,255,0.15); }
+            60% { text-shadow: 0 0 10px rgba(255,255,255,0.15), 0 0 20px rgba(255,255,255,0.05); }
+            75% { text-shadow: -1.5px 0 rgba(255,80,80,0.5), 1.5px 0 rgba(80,180,255,0.5), 0 0 15px rgba(255,255,255,0.25); transform: translate(0.6px,-0.2px); filter: brightness(1.1); }
+            77% { text-shadow: 0 0 10px rgba(255,255,255,0.15); transform: translate(0,0); filter: brightness(1); }
+            92% { filter: brightness(0.95); } 93% { filter: brightness(1.08); } 94% { filter: brightness(1); }
+        }
+        .tagline { margin-top: 8px; color: var(--text-muted); font-size: 14px; }
+        .header-nav { display: flex; gap: 8px; flex-wrap: wrap; }
+        .nav-group { display: flex; gap: 8px; flex-wrap: wrap; }
+        .nav-separator { color: var(--border); font-weight: 300; align-self: center; }
+        .header-nav a { padding: 6px 12px; font-size: 13px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 4px; text-decoration: none; }
+        .header-nav a:hover { color: var(--text); border-color: var(--accent-dim); text-decoration: none; }
+        .hero { padding: 48px 0; border-bottom: 1px solid var(--border); }
+        .hero h1 { font-size: 20px; font-weight: 600; margin-bottom: 16px; }
+        .hero p { color: var(--text-muted); max-width: 700px; }
+        .badges { margin-top: 24px; display: flex; flex-wrap: wrap; gap: 12px; }
+        .badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; font-size: 13px; color: var(--text-muted); }
+        .badge.green { border-color: var(--success); color: var(--success); }
+        .badge.blue { border-color: var(--accent); color: var(--accent); }
+        .badge.yellow { border-color: var(--warning); color: var(--warning); }
+        .section { padding: 48px 0; border-bottom: 1px solid var(--border); }
+        .section-title { font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 2px; color: var(--text-muted); margin-bottom: 24px; }
+        .section h2 { font-size: 18px; font-weight: 600; margin-bottom: 16px; }
+        .section h3 { font-size: 15px; font-weight: 600; margin-bottom: 12px; margin-top: 32px; }
+        .section h3:first-child { margin-top: 0; }
+        .section p { color: var(--text-muted); margin-bottom: 16px; max-width: 800px; }
+        .section p strong { color: var(--text); }
+        .section ul { color: var(--text-muted); margin-bottom: 16px; padding-left: 24px; }
+        .section ul li { margin-bottom: 6px; }
+        .section ul li strong { color: var(--text); }
+        .code-block { background: linear-gradient(135deg, #0a0a0a 0%, #141414 100%); border: 1px solid #2a2a2a; border-radius: 6px; padding: 20px; overflow-x: auto; position: relative; overflow: hidden; margin-bottom: 16px; }
+        .code-block::after { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: repeating-linear-gradient(0deg, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 1px, transparent 1px, transparent 2px); pointer-events: none; }
+        .code-block pre { margin: 0; font-size: 13px; font-family: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace; position: relative; z-index: 1; animation: crt-flicker-gray 5s infinite; }
+        .code-block .comment { color: #707070; text-shadow: 0 0 5px rgba(150,150,150,0.2); }
+        .code-block .command { color: #50c878; text-shadow: 0 0 5px rgba(80,200,120,0.4), 0 0 10px rgba(80,200,120,0.2); }
+        .code-block .keyword { color: #60a5fa; text-shadow: 0 0 5px rgba(96,165,250,0.3); }
+        .code-block .type { color: #a78bfa; text-shadow: 0 0 5px rgba(167,139,250,0.3); }
+        .code-block .string { color: #fbbf24; text-shadow: 0 0 5px rgba(251,191,36,0.3); }
+        .code-block .number { color: #34d399; text-shadow: 0 0 5px rgba(52,211,153,0.3); }
+        .code-block .func { color: #f0abfc; text-shadow: 0 0 5px rgba(240,171,252,0.3); }
+        @keyframes crt-flicker-gray { 0%, 100% { opacity: 1; } 94% { opacity: 1; } 95% { opacity: 0.97; } 96% { opacity: 1; } }
+        .ascii-art { background: linear-gradient(135deg, #1a1a1a 0%, #222 100%); border: 1px solid #333; border-radius: 6px; padding: 24px; overflow-x: auto; font-size: 13px; line-height: 1.3; position: relative; overflow: hidden; margin-bottom: 16px; }
+        .ascii-art::after { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: repeating-linear-gradient(0deg, rgba(255,255,255,0.03) 0px, rgba(255,255,255,0.03) 1px, transparent 1px, transparent 2px); pointer-events: none; }
+        .ascii-art pre { margin: 0; font-family: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace; color: #a0a0a0; text-shadow: 0 0 5px rgba(200,200,200,0.3), 0 0 10px rgba(200,200,200,0.1); position: relative; z-index: 1; animation: crt-flicker-gray 5s infinite; letter-spacing: 0; word-spacing: 0; font-variant-ligatures: none; font-feature-settings: "calt" 0; line-height: 1; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 24px; }
+        th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+        th { color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; white-space: nowrap; }
+        td { color: var(--text-muted); } td:first-child { color: var(--text); font-weight: 500; }
+        .y { color: var(--success); font-weight: 600; }
+        .n { color: #555; }
+        .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 16px; }
+        .feature-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 20px; }
+        .feature-card:hover { border-color: var(--accent-dim); }
+        .feature-card-title { font-weight: 600; font-size: 14px; margin-bottom: 8px; }
+        .feature-card-desc { color: var(--text-muted); font-size: 13px; line-height: 1.5; }
+        .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .stat { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 16px; text-align: center; }
+        .stat-value { font-size: 24px; font-weight: 700; color: var(--text); }
+        .stat-value.green { color: var(--success); } .stat-value.blue { color: var(--accent); } .stat-value.yellow { color: var(--warning); }
+        .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+        .callout { background: var(--bg-secondary); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; padding: 16px 20px; margin-bottom: 24px; }
+        .callout p { margin-bottom: 0; } .callout.honest { border-left-color: var(--warning); }
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+        footer { padding: 32px 0; color: var(--text-muted); font-size: 13px; }
+        .footer-links { display: flex; gap: 24px; margin-bottom: 16px; }
+        .skip-link { position: absolute; top: -40px; left: 0; background: var(--accent); color: white; padding: 8px 16px; z-index: 100; text-decoration: none; }
+        .skip-link:focus { top: 0; }
+        @media (max-width: 600px) { .logo { font-size: 24px; } .hero h1 { font-size: 18px; } .ascii-art { font-size: 10px; padding: 16px; } .footer-links { flex-direction: column; gap: 8px; } .header-top { flex-direction: column; } .header-nav { margin-top: 16px; } .two-col { grid-template-columns: 1fr; } .stat-row { grid-template-columns: repeat(2, 1fr); } }
+    </style>
+</head>
+<body>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+    <div class="container">
+        <header>
+            <div class="header-top">
+                <div>
+                    <a href="../index.html" style="text-decoration:none"><div class="logo"><span>O</span>TTO</div></a>
+                    <div class="tagline">Velo &mdash; Routing Engine</div>
+                </div>
+                <nav class="header-nav">
+                    <div class="nav-group">
+                        <a href="../index.html">Home</a>
+                        <a href="../api.html">API</a>
+                    </div>
+                    <span class="nav-separator">|</span>
+                    <div class="nav-group">
+                        <a href="#why">Why</a>
+                        <a href="#algorithms">Algorithms</a>
+                        <a href="#profiles">Profiles</a>
+                        <a href="#api">API</a>
+                        <a href="#quickstart">Quick Start</a>
+                    </div>
+                </nav>
+            </div>
+        </header>
+
+        <main id="main-content">
+
+        <section class="hero">
+            <h1>Route calculation in pure C, from PBF to path</h1>
+            <p>
+                Velo is an OpenStreetMap routing engine written in C11 with zero external dependencies.
+                Six algorithms from Dijkstra to ALT landmarks, four vehicle profiles (car, truck, bike, foot),
+                CSR graph format for cache-friendly queries, and direct PBF parsing with no intermediate
+                database. Country-scale routing in 36&ndash;86ms. Compiles to WASM for browser demos.
+            </p>
+            <div class="badges">
+                <span class="badge green">52 tests</span>
+                <span class="badge blue">6 algorithms</span>
+                <span class="badge yellow">Zero deps</span>
+                <span class="badge">C11</span>
+                <span class="badge">WASM</span>
+                <span class="badge">~7K LoC</span>
+                <span class="badge">AGPLv3 + Trucking Exception</span>
+            </div>
+        </section>
+
+        <!-- Why -->
+        <section class="section" id="why">
+            <div class="section-title">Why</div>
+            <h2>A routing engine you can embed anywhere</h2>
+
+            <p>
+                OSRM and Valhalla are excellent routing engines, but they're large C++ projects with dozens
+                of dependencies, heavy preprocessing pipelines, and multi-GB memory footprints even for
+                small regions. Want to run routing in the browser? On a truck's onboard computer?
+                In a WASM sandbox? You need something smaller.
+            </p>
+
+            <p>
+                Velo trades some features for radical simplicity: <strong>one PBF file in, routes out</strong>.
+                No PostgreSQL, no preprocessing database, no protobuf compiler. Load a PBF (or a pre-built
+                .vlg binary index for 100&times; faster loading), build a CSR graph, and start routing.
+                The same code runs native, embedded, or in the browser via WASM.
+            </p>
+
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-card-title">Six algorithms, one API</div>
+                    <div class="feature-card-desc">
+                        Dijkstra, bidirectional Dijkstra, A*, bidirectional A*, ALT with landmarks,
+                        and bucket-heap Dijkstra. Pick the algorithm that matches your latency budget.
+                        ALT with 32 landmarks routes Hungary in 36&ndash;86ms.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Four vehicle profiles</div>
+                    <div class="feature-card-desc">
+                        Car, truck, bike, and foot. Each profile filters edges by access restrictions
+                        extracted from OSM tags. Truck profile avoids hgv=no roads. Bike avoids motorways.
+                        Per-edge bitmask filtering &mdash; zero overhead at query time.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">CSR graph format</div>
+                    <div class="feature-card-desc">
+                        Compressed Sparse Row: nodes are contiguous, edges are contiguous, one pointer
+                        dereference to scan neighbors. 16 bytes/node, 12 bytes/edge. Cache-line friendly.
+                        Hungary (2.7M nodes) fits in ~110MB with landmarks.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Binary index (.vlg)</div>
+                    <div class="feature-card-desc">
+                        Pre-built binary graph format loads 100&times; faster than PBF parsing.
+                        ~100ms vs ~8 seconds for Hungary. Memory-mapped on POSIX for instant loading.
+                        Build once, serve forever. One file, one binary.
+                    </div>
+                </div>
+            </div>
+
+            <div class="callout">
+                <p>
+                    <strong>Fleet deployment.</strong> A Velo binary + country .vlg index on an onboard
+                    computer gives trucks offline routing with full truck profile. Same binary compiles
+                    to WASM for the dispatch dashboard. FuelWise uses Velo for station reachability
+                    calculations along the route.
+                </p>
+            </div>
+        </section>
+
+        <!-- Algorithms -->
+        <section class="section" id="algorithms">
+            <div class="section-title">Algorithms</div>
+            <h2>From brute-force to landmark-guided search</h2>
+
+            <div class="ascii-art">
+<pre>
+  vl_route(graph, from, to, options)
+       │
+       ▼
+  ┌──────────────┐
+  │ Grid Index   │  O(1) nearest node lookup
+  │ 1000x1000    │  (lat/lon → node_id)
+  └──────┬───────┘
+         │
+         ├─── VL_ALGORITHM_DIJKSTRA ─────────▶ Explores 100%
+         ├─── VL_ALGORITHM_DIJKSTRA_BIDIR ──▶ Explores ~50%
+         ├─── VL_ALGORITHM_ASTAR ────────────▶ Explores 30-50%
+         ├─── VL_ALGORITHM_ASTAR_BIDIR ─────▶ Explores ~25%   (default)
+         ├─── VL_ALGORITHM_ALT ──────────────▶ Explores 5-15%  (with landmarks)
+         └─── VL_ALGORITHM_BUCKET_HEAP ─────▶ O(1) amortized ops
+</pre>
+            </div>
+
+            <div class="stat-row">
+                <div class="stat">
+                    <div class="stat-value blue">6</div>
+                    <div class="stat-label">Algorithms</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">36ms</div>
+                    <div class="stat-label">ALT (Hungary)</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value">2.7M</div>
+                    <div class="stat-label">Nodes (Hungary)</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">100ms</div>
+                    <div class="stat-label">.vlg Load Time</div>
+                </div>
+            </div>
+
+            <h3>Query time comparison (Hungary, 2.7M nodes)</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Algorithm</th>
+                        <th>Query Time</th>
+                        <th>Nodes Explored</th>
+                        <th>Speedup vs Dijkstra</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Dijkstra</td>
+                        <td>500&ndash;1000ms</td>
+                        <td>100%</td>
+                        <td>1&times;</td>
+                    </tr>
+                    <tr>
+                        <td>Bidirectional Dijkstra</td>
+                        <td>250&ndash;500ms</td>
+                        <td>~50%</td>
+                        <td style="color: var(--success)">~2&times;</td>
+                    </tr>
+                    <tr>
+                        <td>A*</td>
+                        <td>200&ndash;400ms</td>
+                        <td>30&ndash;50%</td>
+                        <td style="color: var(--success)">2&ndash;3&times;</td>
+                    </tr>
+                    <tr>
+                        <td>Bidirectional A*</td>
+                        <td>130&ndash;285ms</td>
+                        <td>~25%</td>
+                        <td style="color: var(--success)">3&ndash;4&times;</td>
+                    </tr>
+                    <tr>
+                        <td>ALT (32 landmarks)</td>
+                        <td style="color: var(--success)">36&ndash;86ms</td>
+                        <td>5&ndash;15%</td>
+                        <td style="color: var(--success)">10&ndash;15&times;</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>ALT landmarks</h3>
+            <p>
+                A* with Landmarks and Triangle Inequality. At startup, Velo computes shortest-path
+                distances from every node to/from 16&ndash;32 landmark nodes. At query time, these
+                precomputed distances provide a tighter lower bound than Haversine, dramatically
+                pruning the search space.
+            </p>
+
+            <ul>
+                <li><strong>Dual-mode</strong> &mdash; separate distance and time landmarks for <code>shortest</code> and <code>fastest</code> queries</li>
+                <li><strong>5&ndash;15&times; speedup</strong> over bidirectional A* on country-scale routes</li>
+                <li><strong>Preprocessing</strong> &mdash; 4&ndash;8 seconds for 32 landmarks on Hungary</li>
+                <li><strong>Memory</strong> &mdash; ~2.6GB for 32 landmarks, 2.7M nodes (compressed)</li>
+            </ul>
+        </section>
+
+        <!-- Profiles -->
+        <section class="section" id="profiles">
+            <div class="section-title">Vehicle Profiles</div>
+            <h2>Car, truck, bike, foot &mdash; per-edge access control</h2>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Profile</th>
+                        <th>Avoids</th>
+                        <th>Use Case</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>VL_PROFILE_CAR</td>
+                        <td>Pedestrian-only paths</td>
+                        <td>Personal vehicles, default</td>
+                    </tr>
+                    <tr>
+                        <td>VL_PROFILE_TRUCK</td>
+                        <td>hgv=no roads, residential, service</td>
+                        <td>Commercial logistics</td>
+                    </tr>
+                    <tr>
+                        <td>VL_PROFILE_BIKE</td>
+                        <td>Motorways, trunk roads</td>
+                        <td>Cycling routes</td>
+                    </tr>
+                    <tr>
+                        <td>VL_PROFILE_FOOT</td>
+                        <td>Motorways, trunk, primary</td>
+                        <td>Walking navigation</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <p>
+                Profiles are implemented as bitmask flags on each edge, extracted from OSM access tags
+                during PBF parsing. Filtering adds zero overhead at query time &mdash; it's a single
+                bitwise AND per edge relaxation.
+            </p>
+
+            <h3>Optimization modes</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Mode</th>
+                        <th>Optimizes</th>
+                        <th>Edge Weight</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>VL_WEIGHT_DURATION (fastest)</td>
+                        <td>Minimize travel time</td>
+                        <td>Deciseconds (max ~1.8h/edge)</td>
+                    </tr>
+                    <tr>
+                        <td>VL_WEIGHT_DISTANCE (shortest)</td>
+                        <td>Minimize distance</td>
+                        <td>Millimeters (max ~4295km/edge)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- API -->
+        <section class="section" id="api">
+            <div class="section-title">API</div>
+            <h2>REST, C library, or WASM &mdash; same code</h2>
+
+            <h3>REST API (port 8082)</h3>
+
+            <div class="code-block">
+<pre><span class="comment"># Route between two points (fastest car route)</span>
+<span class="command">curl "http://localhost:8082/api/v1/route?from=47.497,19.040&amp;to=46.253,20.148"</span>
+
+<span class="comment"># Truck profile, shortest distance, with geometry</span>
+<span class="command">curl "http://localhost:8082/api/v1/route?\</span>
+<span class="command">  from=47.497,19.040&amp;to=46.253,20.148&amp;\</span>
+<span class="command">  profile=truck&amp;mode=shortest&amp;geometry=true"</span>
+
+<span class="comment"># Response:</span>
+<span class="comment"># {</span>
+<span class="comment">#   "status": "ok",</span>
+<span class="comment">#   "route": {</span>
+<span class="comment">#     "distance": 187432.5,</span>
+<span class="comment">#     "duration": 7234.2,</span>
+<span class="comment">#     "profile": "truck",</span>
+<span class="comment">#     "mode": "shortest",</span>
+<span class="comment">#     "geometry": "encoded_polyline..."</span>
+<span class="comment">#   },</span>
+<span class="comment">#   "meta": { "nodes_explored": 12543, "search_time_ms": 34.5 }</span>
+<span class="comment"># }</span></pre>
+            </div>
+
+            <h3>C API</h3>
+
+            <div class="code-block">
+<pre><span class="comment">// Load graph from binary index (100ms)</span>
+<span class="type">VLGraph</span> *g = <span class="func">vl_load_binary</span>(<span class="string">"hungary.vlg"</span>);
+
+<span class="comment">// Build ALT landmarks (4-8 seconds, once at startup)</span>
+<span class="type">VLLandmarks</span> *lm = <span class="func">vl_landmarks_create</span>(g, <span class="number">32</span>);
+
+<span class="comment">// Route: Budapest → Szeged, truck, fastest</span>
+<span class="type">VLRouteOptions</span> opts = {
+    .algorithm = <span class="type">VL_ALGORITHM_ALT</span>,
+    .profile   = <span class="type">VL_PROFILE_TRUCK</span>,
+    .weight    = <span class="type">VL_WEIGHT_DURATION</span>,
+    .landmarks = lm
+};
+
+<span class="type">VLRoute</span> route;
+<span class="type">VLStatus</span> status = <span class="func">vl_route</span>(g, from, to, &amp;opts, &amp;route);
+
+<span class="keyword">if</span> (status == <span class="type">VL_STATUS_OK</span>) {
+    <span class="func">printf</span>(<span class="string">"%.0fm in %.0fs\n"</span>, route.distance, route.duration);
+}
+<span class="func">vl_route_free</span>(&amp;route);
+<span class="func">vl_landmarks_free</span>(lm);
+<span class="func">vl_graph_free</span>(g);</pre>
+            </div>
+
+            <h3>Graph data structures</h3>
+
+            <div class="two-col">
+                <div>
+                    <h3>Node (16 bytes)</h3>
+                    <div class="code-block">
+<pre><span class="keyword">struct</span> <span class="type">VLNode</span> {
+    <span class="type">VLCoordFixed</span> coord;  <span class="comment">// lat/lon * 1e7</span>
+    <span class="type">uint32_t</span> edge_start;  <span class="comment">// edge array idx</span>
+    <span class="type">uint32_t</span> edge_count;  <span class="comment">// outgoing edges</span>
+    <span class="type">int64_t</span> osm_id;
+};</pre>
+                    </div>
+                </div>
+                <div>
+                    <h3>Edge (12 bytes)</h3>
+                    <div class="code-block">
+<pre><span class="keyword">struct</span> <span class="type">VLEdge</span> {
+    <span class="type">uint32_t</span> target;    <span class="comment">// target node</span>
+    <span class="type">uint32_t</span> distance;  <span class="comment">// millimeters</span>
+    <span class="type">uint16_t</span> duration;  <span class="comment">// deciseconds</span>
+    <span class="type">uint16_t</span> flags;     <span class="comment">// road + access</span>
+};</pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Architecture -->
+        <section class="section" id="architecture">
+            <div class="section-title">Under the Hood</div>
+            <h2>CSR, grid index, degree-2 contraction</h2>
+
+            <h3>Graph optimizations</h3>
+            <ul>
+                <li><strong>Degree-2 contraction</strong> &mdash; eliminates chain nodes (only 2 edges), reduces graph 40&ndash;60%</li>
+                <li><strong>Grid spatial index</strong> &mdash; 1000&times;1000 cells for O(1) average nearest-node lookup</li>
+                <li><strong>Reverse graph</strong> &mdash; pre-built reverse edge index for O(degree) backward search</li>
+                <li><strong>Hilbert ordering</strong> &mdash; cache-friendly geographic node ordering</li>
+                <li><strong>Fixed-point coordinates</strong> &mdash; 32-bit integers (lat &times; 10<sup>7</sup>) instead of 64-bit doubles</li>
+            </ul>
+
+            <h3>Memory budget (country &rarr; continental)</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Component</th>
+                        <th>Hungary (2.7M)</th>
+                        <th>US (~175M)</th>
+                        <th>EU (~350M)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Nodes</td>
+                        <td>43MB</td>
+                        <td>4.2GB</td>
+                        <td>8.4GB</td>
+                    </tr>
+                    <tr>
+                        <td>Edges</td>
+                        <td>36MB</td>
+                        <td>4.0GB</td>
+                        <td>8.0GB</td>
+                    </tr>
+                    <tr>
+                        <td>Landmarks (32)</td>
+                        <td>2.6GB</td>
+                        <td>8.4GB</td>
+                        <td>16.8GB</td>
+                    </tr>
+                    <tr>
+                        <td>Total</td>
+                        <td>~3GB</td>
+                        <td style="color: var(--warning)">~20GB</td>
+                        <td style="color: var(--warning)">~37GB</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="callout honest">
+                <p>
+                    <strong>Honest assessment.</strong> Velo is not OSRM. It doesn't have Contraction
+                    Hierarchies (sub-millisecond queries), turn restrictions, or traffic-aware routing.
+                    For country-scale truck routing, 36&ndash;86ms with ALT is sufficient. For consumer
+                    navigation competing with Google Maps, you'd want CH preprocessing (planned Phase 2)
+                    or a commercial engine behind the Velo API.
+                </p>
+            </div>
+
+            <div class="stat-row">
+                <div class="stat">
+                    <div class="stat-value">~7K</div>
+                    <div class="stat-label">Lines of C</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">52</div>
+                    <div class="stat-label">Tests</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value blue">4</div>
+                    <div class="stat-label">Profiles</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">0</div>
+                    <div class="stat-label">Ext Dependencies</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Quick Start -->
+        <section class="section" id="quickstart">
+            <div class="section-title">Quick Start</div>
+            <h2>Three ways to try Velo</h2>
+
+            <h3>1. Browser (zero install)</h3>
+            <p>
+                The <a href="../api.html#velo">API documentation page</a> includes a live WASM demo
+                with embedded Monaco data. Calculate routes between Monaco locations in the browser.
+            </p>
+
+            <h3>2. Build from source</h3>
+            <div class="code-block">
+<pre><span class="comment"># Clone and build</span>
+<span class="command">git clone https://github.com/ottofleet/otto.git</span>
+<span class="command">cd otto && make velo</span>
+
+<span class="comment"># Run all 52 tests</span>
+<span class="command">make test-velo</span></pre>
+            </div>
+
+            <h3>3. Route server</h3>
+            <div class="code-block">
+<pre><span class="comment"># Build and start server</span>
+<span class="command">make velo-api</span>
+<span class="command">./velo/api/velo-route-server data/hungary-latest.osm.pbf</span>
+
+<span class="comment"># Or use pre-built index (100x faster loading)</span>
+<span class="command">./velo/api/velo-route-server --load-index data/hungary.vlg</span>
+
+<span class="comment"># Calculate a route</span>
+<span class="command">curl "http://localhost:8082/api/v1/route?\</span>
+<span class="command">  from=47.497,19.040&amp;to=46.253,20.148&amp;profile=truck"</span></pre>
+            </div>
+        </section>
+
+        <!-- FAQ -->
+        <section class="section" id="faq">
+            <div class="section-title">FAQ</div>
+            <h2>Common questions</h2>
+
+            <h3>Why not use OSRM or Valhalla?</h3>
+            <p>
+                Both are excellent but large: OSRM is ~100K LoC of C++ with Boost, Lua, and TBB.
+                Velo is ~7K lines of C with zero dependencies. It compiles to WASM, runs on an
+                onboard computer, and loads a country graph in 100ms from a .vlg file. The tradeoff:
+                OSRM has CH (sub-ms queries), turn-by-turn navigation, and traffic. Velo has ALT
+                (36&ndash;86ms), four profiles, and radical simplicity.
+            </p>
+
+            <h3>How does FuelWise use Velo?</h3>
+            <p>
+                FuelWise calculates fuel-optimal refueling stops along a route. It uses Velo to
+                compute distances between fuel stations along the path, then Ralph (LP solver) to
+                optimize which stations to stop at and how much fuel to load. Velo provides the
+                distance inputs; Ralph provides the optimization.
+            </p>
+
+            <h3>Can Velo handle continental-scale routing?</h3>
+            <p>
+                Not yet at consumer latency. The US graph (~175M nodes) needs ~20GB RAM with landmarks.
+                The EU graph (~350M nodes) needs ~37GB. A 64-core server with 128GB RAM can serve
+                continental routes in &lt;2 seconds. For sub-millisecond queries, Contraction Hierarchies
+                are planned for Phase 2.
+            </p>
+
+            <h3>What about truck-specific restrictions?</h3>
+            <p>
+                Velo's truck profile currently avoids hgv=no roads. The roadmap includes height, weight,
+                length, and axle-count constraints from OSM tags, plus hazmat routing. These are stored
+                as sparse restrictions (affecting ~1&ndash;5% of edges) to avoid memory bloat.
+            </p>
+
+            <h3>What license?</h3>
+            <p>
+                AGPLv3 with a Trucking Exception. Same terms as all OTTO modules.
+            </p>
+        </section>
+
+        </main>
+
+        <footer>
+            <nav class="footer-links" aria-label="Footer navigation">
+                <a href="../index.html">Home</a>
+                <a href="../api.html">API Docs</a>
+                <a href="https://github.com/ottofleet/otto/blob/main/docs/roadmaps/velo.md">Roadmap</a>
+                <a href="https://github.com/ottofleet/otto/blob/main/LICENSE">License</a>
+                <a href="https://github.com/ottofleet/otto">GitHub</a>
+            </nav>
+            <div>&copy; 2026 Mark Farkas. Built by <a href="https://artalis.io">Artalis</a>.</div>
+        </footer>
+    </div>
+</body>
+</html>

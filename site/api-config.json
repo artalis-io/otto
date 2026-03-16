@@ -124,6 +124,28 @@
           "ralph-api-v1-health-try-btn": "fetchRalphHealth"
         }
       }
+    },
+    {
+      "id": "surge",
+      "name": "Surge VRP Solver",
+      "icon": "📦",
+      "port": 8085,
+      "description": "Rich Vehicle Routing Problem solver using ALNS metaheuristics. Supports VRPTW, PDPTW, DARP with time windows, capacity, compartments, and precedence constraints.",
+      "header_file": "surge/include/sg_api.h",
+      "wasm": {
+        "enabled": true,
+        "script": "wasm/surge-api-demo.js",
+        "wrapper": "js/surge-api-demo.js",
+        "factory_name": "SurgeAPIDemo",
+        "class_name": "SurgeDemo",
+        "handlers_file": "js/handlers/surge.js",
+        "init_function": "initSurgeDemo",
+        "error_function": "handleSurgeError",
+        "buttons": {
+          "surge-api-v1-solve-try-btn": "solveSurgeProblem",
+          "surge-api-v1-health-try-btn": "fetchSurgeHealth"
+        }
+      }
     }
   ],
 

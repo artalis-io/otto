@@ -17,6 +17,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ============================================================================
  * Status Codes
  * ============================================================================ */
@@ -154,5 +158,9 @@ void sh_hashmap_i64u32_iter_init(SHHashmapI64U32Iter *iter, const SHHashmapI64U3
  */
 int sh_hashmap_i64_iter_next(SHHashmapI64Iter *iter, int64_t *key, size_t *value);
 int sh_hashmap_i64u32_iter_next(SHHashmapI64U32Iter *iter, int64_t *key, uint32_t *value);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SH_HASHMAP_H */

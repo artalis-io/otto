@@ -38,6 +38,10 @@
 #include "sh_query.h"
 #include "sh_json.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Library version */
 #define SHARED_VERSION_MAJOR 1
 #define SHARED_VERSION_MINOR 0
@@ -93,5 +97,9 @@ static inline int sh_safe_mul_size(size_t a, size_t b, size_t *result)
 
 /* Version string */
 const char *sh_version(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SHARED_H */

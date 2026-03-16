@@ -28,6 +28,10 @@
 #include "lc_index.h"
 #include "lc_serialize.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ============================================================================
  * Version
  * ============================================================================ */
@@ -50,5 +54,9 @@ uint32_t lc_entity_count(const LCEntityStore *store);
 
 /* Get entity by index */
 const LCEntity *lc_get_entity(const LCEntityStore *store, uint32_t index);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* LOCUS_H */

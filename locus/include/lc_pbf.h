@@ -11,6 +11,10 @@
 #include "lc_types.h"
 #include <stdio.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ============================================================================
  * PBF Context
  * ============================================================================ */
@@ -91,5 +95,9 @@ LCFeatureClass lc_classify_poi_tags(const char *amenity, const char *shop,
 
 /* Check if highway type should have a name indexed */
 int lc_highway_is_named(const char *highway);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* LC_PBF_H */

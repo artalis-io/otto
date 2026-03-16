@@ -234,8 +234,13 @@ static uint32_t string_pool_add(StringPool *pool, const char *str) {
     len++;  /* Include null terminator */
 
     if (pool->size + len > pool->capacity) {
-        pool->capacity *= 2;
-        pool->data = realloc(pool->data, pool->capacity);
+        if (pool->capacity > SIZE_MAX / 2) return 0;  /* Overflow guard */
+        size_t new_capacity = pool->capacity * 2;
+        if (new_capacity < pool->size + len) new_capacity = pool->size + len;
+        char *new_data = realloc(pool->data, new_capacity);
+        if (!new_data) return 0;  /* OOM: return empty string offset */
+        pool->data = new_data;
+        pool->capacity = new_capacity;
     }
 
     uint32_t offset = (uint32_t)pool->size;
@@ -303,6 +308,7 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
     uint32_t *name_offsets = malloc(ctx->num_ways * sizeof(uint32_t));
     if (!name_offsets && ctx->num_ways > 0) {
         string_pool_free(&strings);
+        fclose(f);
         return CT_ERROR_OUT_OF_MEMORY;
     }
     for (size_t i = 0; i < ctx->num_ways; i++) {
@@ -316,6 +322,7 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
         if (!label_name_offsets) {
             free(name_offsets);
             string_pool_free(&strings);
+            fclose(f);
             return CT_ERROR_OUT_OF_MEMORY;
         }
         for (size_t i = 0; i < ctx->num_labeled_points; i++) {
@@ -331,6 +338,7 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
             free(name_offsets);
             free(label_name_offsets);
             string_pool_free(&strings);
+            fclose(f);
             return CT_ERROR_OUT_OF_MEMORY;
         }
         for (size_t i = 0; i < ctx->num_multipolygons; i++) {
@@ -347,6 +355,7 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
             free(label_name_offsets);
             free(mp_name_offsets);
             string_pool_free(&strings);
+            fclose(f);
             return CT_ERROR_OUT_OF_MEMORY;
         }
         for (size_t i = 0; i < ctx->num_boundaries; i++) {
@@ -390,7 +399,8 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
         .max_lat = ctx->bbox.max_lat,
         .max_lon = ctx->bbox.max_lon
     };
-    fwrite(&header, sizeof(header), 1, f);
+    int write_ok = 1;
+    write_ok = write_ok && (fwrite(&header, sizeof(header), 1, f) == 1);
 
     /* Calculate cumulative offsets */
     size_t offset = header_size;
@@ -429,7 +439,7 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
         .boundary_rtree_leaf_indices_offset = boundary_rtree_leaf_offset,
         ._padding = 0
     };
-    fwrite(&offsets, sizeof(offsets), 1, f);
+    write_ok = write_ok && (fwrite(&offsets, sizeof(offsets), 1, f) == 1);
 
     /* Write ways */
     size_t coord_offset = 0;
@@ -448,7 +458,7 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
             .area_sqm = way->area_sqm,
             .length_m = way->length_m
         };
-        fwrite(&bway, sizeof(bway), 1, f);
+        write_ok = write_ok && (fwrite(&bway, sizeof(bway), 1, f) == 1);
         coord_offset += way->num_coords;
     }
 
@@ -460,21 +470,21 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
                 .lat_e7 = (int32_t)(way->coords[j].lat * 1e7),
                 .lon_e7 = (int32_t)(way->coords[j].lon * 1e7)
             };
-            fwrite(&coord, sizeof(coord), 1, f);
+            write_ok = write_ok && (fwrite(&coord, sizeof(coord), 1, f) == 1);
         }
     }
 
     /* Write string pool */
-    fwrite(strings.data, strings.size, 1, f);
+    write_ok = write_ok && (fwrite(strings.data, strings.size, 1, f) == 1);
 
     /* Write R-Tree nodes */
     if (ctx->rtree && ctx->rtree->nodes) {
-        fwrite(ctx->rtree->nodes, sizeof(CTPackedNode), ctx->rtree->num_nodes, f);
+        write_ok = write_ok && (fwrite(ctx->rtree->nodes, sizeof(CTPackedNode), ctx->rtree->num_nodes, f) == ctx->rtree->num_nodes);
     }
 
     /* Write R-Tree leaf indices */
     if (ctx->rtree && ctx->rtree->leaf_indices) {
-        fwrite(ctx->rtree->leaf_indices, sizeof(uint32_t), ctx->rtree->num_entries, f);
+        write_ok = write_ok && (fwrite(ctx->rtree->leaf_indices, sizeof(uint32_t), ctx->rtree->num_entries, f) == ctx->rtree->num_entries);
     }
 
     /* Write labeled points */
@@ -491,7 +501,7 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
             .priority = (uint8_t)lp->priority,
             ._padding = 0
         };
-        fwrite(&blp, sizeof(blp), 1, f);
+        write_ok = write_ok && (fwrite(&blp, sizeof(blp), 1, f) == 1);
     }
 
     /* Write multipolygons */
@@ -511,7 +521,7 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
             .max_lon = (float)mp->bbox.max_lon,
             ._padding = 0
         };
-        fwrite(&bmp, sizeof(bmp), 1, f);
+        write_ok = write_ok && (fwrite(&bmp, sizeof(bmp), 1, f) == 1);
         ring_offset += mp->num_rings;
     }
 
@@ -527,7 +537,7 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
                 .is_outer = (uint8_t)ring->is_outer,
                 ._padding = {0, 0, 0}
             };
-            fwrite(&bring, sizeof(bring), 1, f);
+            write_ok = write_ok && (fwrite(&bring, sizeof(bring), 1, f) == 1);
             mp_coord_offset += ring->num_coords;
         }
     }
@@ -542,19 +552,19 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
                     .lat_e7 = (int32_t)(ring->coords[j].lat * 1e7),
                     .lon_e7 = (int32_t)(ring->coords[j].lon * 1e7)
                 };
-                fwrite(&coord, sizeof(coord), 1, f);
+                write_ok = write_ok && (fwrite(&coord, sizeof(coord), 1, f) == 1);
             }
         }
     }
 
     /* Write Multipolygon R-Tree nodes */
     if (ctx->mp_rtree && ctx->mp_rtree->nodes) {
-        fwrite(ctx->mp_rtree->nodes, sizeof(CTPackedNode), ctx->mp_rtree->num_nodes, f);
+        write_ok = write_ok && (fwrite(ctx->mp_rtree->nodes, sizeof(CTPackedNode), ctx->mp_rtree->num_nodes, f) == ctx->mp_rtree->num_nodes);
     }
 
     /* Write Multipolygon R-Tree leaf indices */
     if (ctx->mp_rtree && ctx->mp_rtree->leaf_indices) {
-        fwrite(ctx->mp_rtree->leaf_indices, sizeof(uint32_t), ctx->mp_rtree->num_entries, f);
+        write_ok = write_ok && (fwrite(ctx->mp_rtree->leaf_indices, sizeof(uint32_t), ctx->mp_rtree->num_entries, f) == ctx->mp_rtree->num_entries);
     }
 
     /* Write boundaries */
@@ -571,7 +581,7 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
             ._padding = {0, 0},
             .length_m = b->length_m
         };
-        fwrite(&bb, sizeof(bb), 1, f);
+        write_ok = write_ok && (fwrite(&bb, sizeof(bb), 1, f) == 1);
         boundary_coord_offset += b->num_coords;
     }
 
@@ -583,18 +593,18 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
                 .lat_e7 = (int32_t)(b->coords[j].lat * 1e7),
                 .lon_e7 = (int32_t)(b->coords[j].lon * 1e7)
             };
-            fwrite(&coord, sizeof(coord), 1, f);
+            write_ok = write_ok && (fwrite(&coord, sizeof(coord), 1, f) == 1);
         }
     }
 
     /* Write Boundary R-Tree nodes */
     if (ctx->boundary_rtree && ctx->boundary_rtree->nodes) {
-        fwrite(ctx->boundary_rtree->nodes, sizeof(CTPackedNode), ctx->boundary_rtree->num_nodes, f);
+        write_ok = write_ok && (fwrite(ctx->boundary_rtree->nodes, sizeof(CTPackedNode), ctx->boundary_rtree->num_nodes, f) == ctx->boundary_rtree->num_nodes);
     }
 
     /* Write Boundary R-Tree leaf indices */
     if (ctx->boundary_rtree && ctx->boundary_rtree->leaf_indices) {
-        fwrite(ctx->boundary_rtree->leaf_indices, sizeof(uint32_t), ctx->boundary_rtree->num_entries, f);
+        write_ok = write_ok && (fwrite(ctx->boundary_rtree->leaf_indices, sizeof(uint32_t), ctx->boundary_rtree->num_entries, f) == ctx->boundary_rtree->num_entries);
     }
 
     free(name_offsets);
@@ -604,7 +614,7 @@ CTStatus ct_index_save(const CTPBFContext *ctx, const char *path) {
     string_pool_free(&strings);
     fclose(f);
 
-    return CT_OK;
+    return write_ok ? CT_OK : CT_ERROR_FILE_WRITE;
 }
 
 /* ============================================================================
@@ -623,7 +633,9 @@ CTPBFContext *ct_index_mmap(const char *path) {
         return NULL;
     }
 
-    void *map = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    size_t file_size = (size_t)st.st_size;
+
+    void *map = mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
 
     if (map == MAP_FAILED) return NULL;
@@ -631,7 +643,7 @@ CTPBFContext *ct_index_mmap(const char *path) {
     /* Validate header */
     const CTBinaryHeader *header = (const CTBinaryHeader *)map;
     if (header->magic != CT_BINARY_MAGIC) {
-        munmap(map, st.st_size);
+        munmap(map, file_size);
         return NULL;
     }
 
@@ -639,31 +651,56 @@ CTPBFContext *ct_index_mmap(const char *path) {
     if (header->version != CT_BINARY_VERSION && header->version != 4 && header->version != 3) {
         fprintf(stderr, "Error: Unsupported index version %u (expected %d, 4, or 3)\n",
                 header->version, CT_BINARY_VERSION);
-        munmap(map, st.st_size);
+        munmap(map, file_size);
         return NULL;
     }
 
     const CTSectionOffsets *offsets = (const CTSectionOffsets *)((char *)map + sizeof(CTBinaryHeader));
 
-    /* Validate file size - must contain all sections */
-    size_t min_size = offsets->coords_offset + header->total_coords * sizeof(CTBinaryCoord);
-    if ((size_t)st.st_size < min_size) {
-        fprintf(stderr, "Error: Index file truncated (size %ld, need %zu)\n",
-                (long)st.st_size, min_size);
-        munmap(map, st.st_size);
-        return NULL;
+    /* Validate all section offsets fit within file */
+
+#define VALIDATE_SECTION(off, count, elem_size) do { \
+    if ((count) > 0) { \
+        if ((size_t)(count) > SIZE_MAX / (elem_size)) { munmap(map, file_size); return NULL; } \
+        size_t section_end = (off) + (size_t)(count) * (elem_size); \
+        if (section_end < (off) || section_end > file_size) { \
+            fprintf(stderr, "Error: Index file truncated\n"); \
+            munmap(map, file_size); return NULL; \
+        } \
+    } \
+} while(0)
+
+    VALIDATE_SECTION(offsets->ways_offset, header->num_ways, sizeof(CTBinaryWay));
+    VALIDATE_SECTION(offsets->coords_offset, header->total_coords, sizeof(CTBinaryCoord));
+    VALIDATE_SECTION(offsets->string_pool_offset, header->string_pool_size, 1);
+    VALIDATE_SECTION(offsets->rtree_nodes_offset, header->rtree_num_nodes, sizeof(CTPackedNode));
+    VALIDATE_SECTION(offsets->rtree_leaf_indices_offset, header->rtree_num_entries, sizeof(uint32_t));
+    VALIDATE_SECTION(offsets->labeled_points_offset, header->num_labeled_points, sizeof(CTBinaryLabeledPoint));
+    if (header->version >= 4) {
+        VALIDATE_SECTION(offsets->multipolygons_offset, header->num_multipolygons, sizeof(CTBinaryMultipolygon));
+        VALIDATE_SECTION(offsets->mp_rings_offset, header->total_mp_rings, sizeof(CTBinaryRing));
+        VALIDATE_SECTION(offsets->mp_coords_offset, header->total_mp_coords, sizeof(CTBinaryCoord));
+        VALIDATE_SECTION(offsets->mp_rtree_nodes_offset, header->mp_rtree_num_nodes, sizeof(CTPackedNode));
+        VALIDATE_SECTION(offsets->mp_rtree_leaf_indices_offset, header->mp_rtree_num_entries, sizeof(uint32_t));
     }
+    if (header->version >= 5) {
+        VALIDATE_SECTION(offsets->boundaries_offset, header->num_boundaries, sizeof(CTBinaryBoundary));
+        VALIDATE_SECTION(offsets->boundary_coords_offset, header->total_boundary_coords, sizeof(CTBinaryCoord));
+        VALIDATE_SECTION(offsets->boundary_rtree_nodes_offset, header->boundary_rtree_num_nodes, sizeof(CTPackedNode));
+        VALIDATE_SECTION(offsets->boundary_rtree_leaf_indices_offset, header->boundary_rtree_num_entries, sizeof(uint32_t));
+    }
+#undef VALIDATE_SECTION
 
     /* Create context */
     CTPBFContext *ctx = calloc(1, sizeof(CTPBFContext));
     if (!ctx) {
-        munmap(map, st.st_size);
+        munmap(map, file_size);
         return NULL;
     }
 
     /* Store mmap info for cleanup */
     ctx->mmap_base = map;
-    ctx->mmap_size = st.st_size;
+    ctx->mmap_size = file_size;
 
     /* Set stats for reporting (from header) */
     ctx->features_kept = header->num_ways;
@@ -681,17 +718,22 @@ CTPBFContext *ct_index_mmap(const char *path) {
     const CTBinaryCoord *binary_coords = (const CTBinaryCoord *)((char *)map + offsets->coords_offset);
     const char *string_pool = (const char *)map + offsets->string_pool_offset;
 
-    /* Reconstruct ways array */
+    /* Reconstruct ways array (overflow already validated by VALIDATE_SECTION) */
     ctx->num_ways = header->num_ways;
     ctx->ways_capacity = header->num_ways;
-    ctx->ways = malloc(header->num_ways * sizeof(CTOSMWay));
+    ctx->ways = header->num_ways > 0 ? calloc(header->num_ways, sizeof(CTOSMWay)) : NULL;
+    if (!ctx->ways && header->num_ways > 0) {
+        free(ctx);
+        munmap(map, file_size);
+        return NULL;
+    }
 
     /* Allocate all coordinates in one block for cache efficiency */
-    CTCoord *all_coords = malloc(header->total_coords * sizeof(CTCoord));
-    if (!all_coords) {
+    CTCoord *all_coords = header->total_coords > 0 ? calloc(header->total_coords, sizeof(CTCoord)) : NULL;
+    if (!all_coords && header->total_coords > 0) {
         free(ctx->ways);
         free(ctx);
-        munmap(map, st.st_size);
+        munmap(map, file_size);
         return NULL;
     }
     size_t coord_idx = 0;
@@ -709,7 +751,8 @@ CTPBFContext *ct_index_mmap(const char *path) {
         way->area_sqm = bway->area_sqm;
         way->length_m = bway->length_m;
 
-        /* Name from string pool */
+        /* Name from string pool (strdup may return NULL on OOM; consumers
+         * filter on way->name != NULL so missing labels degrade gracefully) */
         if (bway->name_offset > 0 && bway->name_offset < header->string_pool_size) {
             way->name = strdup(string_pool + bway->name_offset);
         } else {
@@ -751,7 +794,7 @@ CTPBFContext *ct_index_mmap(const char *path) {
 
         ctx->num_labeled_points = header->num_labeled_points;
         ctx->labeled_points_capacity = header->num_labeled_points;
-        ctx->labeled_points = malloc(header->num_labeled_points * sizeof(CTLabeledPoint));
+        ctx->labeled_points = calloc(header->num_labeled_points, sizeof(CTLabeledPoint));
 
         if (!ctx->labeled_points) {
             /* Cleanup on allocation failure */
@@ -762,7 +805,7 @@ CTPBFContext *ct_index_mmap(const char *path) {
             free(all_coords);
             free(ctx->rtree);
             free(ctx);
-            munmap(map, st.st_size);
+            munmap(map, file_size);
             return NULL;
         }
 
@@ -778,7 +821,7 @@ CTPBFContext *ct_index_mmap(const char *path) {
             lp->min_zoom = blp->min_zoom;
             lp->priority = blp->priority;
 
-            /* Name from string pool */
+            /* Name from string pool (NULL on OOM degrades gracefully) */
             if (blp->name_offset > 0 && blp->name_offset < header->string_pool_size) {
                 lp->name = strdup(string_pool + blp->name_offset);
             } else {
@@ -798,14 +841,14 @@ CTPBFContext *ct_index_mmap(const char *path) {
 
         ctx->num_multipolygons = header->num_multipolygons;
         ctx->multipolygons_capacity = header->num_multipolygons;
-        ctx->multipolygons = malloc(header->num_multipolygons * sizeof(CTAssembledMultipolygon));
+        ctx->multipolygons = calloc(header->num_multipolygons, sizeof(CTAssembledMultipolygon));
 
         if (!ctx->multipolygons) {
             /* Continue without multipolygons rather than fail completely */
             ctx->num_multipolygons = 0;
         } else {
             /* Allocate all multipolygon coordinates in one block */
-            CTCoord *all_mp_coords = malloc(header->total_mp_coords * sizeof(CTCoord));
+            CTCoord *all_mp_coords = calloc(header->total_mp_coords, sizeof(CTCoord));
             if (!all_mp_coords) {
                 free(ctx->multipolygons);
                 ctx->multipolygons = NULL;
@@ -815,7 +858,7 @@ CTPBFContext *ct_index_mmap(const char *path) {
                 ctx->mmap_mp_coords = all_mp_coords;
 
                 /* Allocate all rings in one block */
-                CTMultipolygonRing *all_rings = malloc(header->total_mp_rings * sizeof(CTMultipolygonRing));
+                CTMultipolygonRing *all_rings = calloc(header->total_mp_rings, sizeof(CTMultipolygonRing));
                 if (!all_rings) {
                     free(all_mp_coords);
                     free(ctx->multipolygons);
@@ -841,7 +884,7 @@ CTPBFContext *ct_index_mmap(const char *path) {
                         mp->bbox.max_lat = bmp->max_lat;
                         mp->bbox.max_lon = bmp->max_lon;
 
-                        /* Name from string pool */
+                        /* Name from string pool (NULL on OOM degrades gracefully) */
                         if (bmp->name_offset > 0 && bmp->name_offset < header->string_pool_size) {
                             mp->name = strdup(string_pool + bmp->name_offset);
                         } else {
@@ -900,11 +943,11 @@ CTPBFContext *ct_index_mmap(const char *path) {
 
         ctx->num_boundaries = header->num_boundaries;
         ctx->boundaries_capacity = header->num_boundaries;
-        ctx->boundaries = malloc(header->num_boundaries * sizeof(CTAssembledBoundary));
+        ctx->boundaries = calloc(header->num_boundaries, sizeof(CTAssembledBoundary));
 
         if (ctx->boundaries) {
             /* Allocate all boundary coordinates in one block */
-            CTCoord *all_boundary_coords = malloc(header->total_boundary_coords * sizeof(CTCoord));
+            CTCoord *all_boundary_coords = calloc(header->total_boundary_coords, sizeof(CTCoord));
             if (!all_boundary_coords) {
                 free(ctx->boundaries);
                 ctx->boundaries = NULL;
@@ -923,7 +966,7 @@ CTPBFContext *ct_index_mmap(const char *path) {
                     b->admin_level = bb->admin_level;
                     b->length_m = bb->length_m;
 
-                    /* Name from string pool */
+                    /* Name from string pool (NULL on OOM degrades gracefully) */
                     if (bb->name_offset > 0 && bb->name_offset < header->string_pool_size) {
                         b->name = strdup(string_pool + bb->name_offset);
                     } else {

@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <math.h>
 
 #ifndef _WIN32
 #include <sys/mman.h>
@@ -1060,7 +1061,10 @@ static CTStatus parse_dense_nodes(CTPBFContext *ctx, const uint8_t *data, size_t
 
     if (ctx->nodes.count + count > ctx->nodes.capacity) {
         size_t new_cap = ctx->nodes.capacity ? ctx->nodes.capacity * 2 : 100000;
-        while (new_cap < ctx->nodes.count + count) new_cap *= 2;
+        while (new_cap < ctx->nodes.count + count) {
+            if (new_cap > SIZE_MAX / 2) { goto error; }
+            new_cap *= 2;
+        }
 
         /* Realloc one at a time to avoid dangling pointer on partial failure */
         int64_t *new_ids = realloc(ctx->nodes.ids, new_cap * sizeof(int64_t));
@@ -1311,6 +1315,19 @@ static CTStatus parse_way(CTPBFContext *ctx, const uint8_t *data, size_t len,
     way->flags = flags;
     way->name = NULL;
 
+    /* Extract "name" tag for road/area labels */
+    for (int i = 0; i < num_tags; i++) {
+        const char *key = sh_string_table_get(st, keys[i]);
+        if (strcmp(key, "name") == 0) {
+            const char *val = sh_string_table_get(st, vals[i]);
+            if (val && val[0]) {
+                way->name = strdup(val);
+                if (!way->name) break;  /* OOM - leave name as NULL */
+            }
+            break;
+        }
+    }
+
     /* Register in way_map for relation member lookup */
     way_map_insert(ctx, id, way_idx);
 
@@ -1559,7 +1576,8 @@ static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t le
             for (int i = 0; i < num_tags; i++) {
                 const char *key = sh_string_table_get(st, keys[i]);
                 if (strcmp(key, "name") == 0) {
-                    rel->name = strdup(sh_string_table_get(st, vals[i]));
+                    const char *val = sh_string_table_get(st, vals[i]);
+                    if (val && val[0]) rel->name = strdup(val);
                     break;
                 }
             }
@@ -1649,7 +1667,8 @@ static CTStatus parse_relation(CTPBFContext *ctx, const uint8_t *data, size_t le
     for (int i = 0; i < num_tags; i++) {
         const char *key = sh_string_table_get(st, keys[i]);
         if (strcmp(key, "name") == 0) {
-            rel->name = strdup(sh_string_table_get(st, vals[i]));
+            const char *val = sh_string_table_get(st, vals[i]);
+            if (val && val[0]) rel->name = strdup(val);
             break;
         }
     }
@@ -2059,13 +2078,88 @@ static CTStatus add_way_as_feature(const CTOSMWay *way, CTFeature **features,
 }
 
 /*
- * Helper to add a multipolygon as a feature with multiple rings.
+ * Estimate area in square meters from lat/lon coordinates (Shoelace formula).
+ */
+static float estimate_ring_area_sqm(const CTCoord *coords, int count)
+{
+    if (count < 3) return 0.0f;
+
+    double centroid_lat = 0;
+    for (int i = 0; i < count; i++) {
+        centroid_lat += coords[i].lat;
+    }
+    centroid_lat /= count;
+
+    double lat_scale = 111320.0;
+    double lon_scale = 111320.0 * cos(centroid_lat * 3.14159265358979 / 180.0);
+
+    double area = 0.0;
+    for (int i = 0; i < count; i++) {
+        int j = (i + 1) % count;
+        double x1 = coords[i].lon * lon_scale;
+        double y1 = coords[i].lat * lat_scale;
+        double x2 = coords[j].lon * lon_scale;
+        double y2 = coords[j].lat * lat_scale;
+        area += x1 * y2 - x2 * y1;
+    }
+    return (float)fabs(area / 2.0);
+}
+
+/*
+ * Helper to add a multipolygon as feature(s).
+ *
+ * Landuse/natural: each outer ring becomes a separate simple polygon.
+ * Inner rings (holes) are omitted — smaller landuse features render on top.
+ *
+ * Water: all rings kept together with even-odd fill (islands stay unfilled).
  */
 static CTStatus add_multipolygon_as_feature(const CTAssembledMultipolygon *mp,
                                             CTFeature **features,
                                             size_t *count, size_t *capacity)
 {
     if (mp->num_rings == 0) return CT_OK;
+
+    /* Landuse/natural: emit each outer ring as a separate simple polygon */
+    if (mp->feature_class == CT_OSM_LANDUSE || mp->feature_class == CT_OSM_NATURAL) {
+        for (int r = 0; r < mp->num_rings; r++) {
+            const CTMultipolygonRing *ring = &mp->rings[r];
+            if (!ring->is_outer || ring->num_coords == 0) continue;
+
+            /* Expand array if needed */
+            if (*count >= *capacity) {
+                *capacity *= 2;
+                CTFeature *new_features = realloc(*features, *capacity * sizeof(CTFeature));
+                if (!new_features) return CT_ERROR_OUT_OF_MEMORY;
+                *features = new_features;
+            }
+
+            CTFeature *f = &(*features)[*count];
+            memset(f, 0, sizeof(CTFeature));
+
+            f->type = CT_GEOM_POLYGON;
+            f->layer = layer_from_osm_class(mp->feature_class);
+            f->feature_type = mp->feature_type;
+            f->area_sqm = estimate_ring_area_sqm(ring->coords, ring->num_coords);
+            f->length_m = 0;
+
+            f->points = malloc(ring->num_coords * sizeof(CTTilePoint));
+            if (!f->points) continue;  /* Skip this ring but continue */
+
+            f->num_points = ring->num_coords;
+            f->num_rings = 1;
+            f->ring_ends = NULL;  /* Simple polygon */
+
+            for (int j = 0; j < ring->num_coords; j++) {
+                f->points[j].x = (int32_t)(ring->coords[j].lon * 1e7);
+                f->points[j].y = (int32_t)(ring->coords[j].lat * 1e7);
+            }
+
+            (*count)++;
+        }
+        return CT_OK;
+    }
+
+    /* Water and other classes: keep multi-ring behavior (even-odd fill) */
 
     /* Expand array if needed */
     if (*count >= *capacity) {
@@ -2462,7 +2556,7 @@ CTStatus ct_pbf_get_tile_features_lod(const CTPBFContext *ctx, CTTileCoord coord
  * Labeled Points API
  * ============================================================================ */
 
-CTStatus ct_pbf_get_tile_labels(const CTPBFContext *ctx, CTTileCoord coord,
+CTStatus ct_pbf_get_bbox_labels(const CTPBFContext *ctx, CTBBox bbox, int zoom,
                                 const CTLabeledPoint ***points, size_t *count)
 {
     if (!ctx || !points || !count) {
@@ -2478,16 +2572,6 @@ CTStatus ct_pbf_get_tile_labels(const CTPBFContext *ctx, CTTileCoord coord,
         return CT_OK;
     }
 
-    /* Get tile bounding box with buffer for labels near edges */
-    CTBBox bbox = ct_tile_bounds(coord);
-
-    /* Add small buffer (~500m at equator) for labels near tile edges */
-    double buffer = 0.005;  /* ~500m at equator */
-    bbox.min_lat -= buffer;
-    bbox.max_lat += buffer;
-    bbox.min_lon -= buffer;
-    bbox.max_lon += buffer;
-
     /* Allocate result array (worst case: all points) */
     const CTLabeledPoint **result = malloc(ctx->num_labeled_points * sizeof(CTLabeledPoint *));
     if (!result) {
@@ -2501,7 +2585,7 @@ CTStatus ct_pbf_get_tile_labels(const CTPBFContext *ctx, CTTileCoord coord,
         const CTLabeledPoint *pt = &ctx->labeled_points[i];
 
         /* Filter by zoom level */
-        if (coord.z < pt->min_zoom) {
+        if (zoom < pt->min_zoom) {
             continue;
         }
 
@@ -2531,7 +2615,158 @@ CTStatus ct_pbf_get_tile_labels(const CTPBFContext *ctx, CTTileCoord coord,
     return CT_OK;
 }
 
+CTStatus ct_pbf_get_tile_labels(const CTPBFContext *ctx, CTTileCoord coord,
+                                const CTLabeledPoint ***points, size_t *count)
+{
+    if (!ctx || !points || !count) {
+        if (points) *points = NULL;
+        if (count) *count = 0;
+        return CT_ERROR_INVALID_ARGUMENT;
+    }
+
+    /* Compute tile bbox with 25% buffer */
+    CTBBox bbox = ct_tile_bounds(coord);
+    double buf_lon = (bbox.max_lon - bbox.min_lon) * 0.25;
+    double buf_lat = (bbox.max_lat - bbox.min_lat) * 0.25;
+    bbox.min_lat -= buf_lat;
+    bbox.max_lat += buf_lat;
+    bbox.min_lon -= buf_lon;
+    bbox.max_lon += buf_lon;
+
+    return ct_pbf_get_bbox_labels(ctx, bbox, coord.z, points, count);
+}
+
 size_t ct_pbf_get_label_count(const CTPBFContext *ctx)
 {
     return ctx ? ctx->num_labeled_points : 0;
+}
+
+/* ============================================================================
+ * Named Ways (for road/area labels)
+ * ============================================================================ */
+
+CTStatus ct_pbf_get_bbox_named_ways(const CTPBFContext *ctx, CTBBox bbox,
+                                     const CTOSMWay ***ways, size_t *count)
+{
+    if (!ctx || !ways || !count) {
+        if (ways) *ways = NULL;
+        if (count) *count = 0;
+        return CT_ERROR_INVALID_ARGUMENT;
+    }
+
+    *ways = NULL;
+    *count = 0;
+
+    if (ctx->num_ways == 0) {
+        return CT_OK;
+    }
+
+    /* Allocate result array */
+    size_t capacity = 256;
+    const CTOSMWay **result = malloc(capacity * sizeof(CTOSMWay *));
+    if (!result) {
+        return CT_ERROR_OUT_OF_MEMORY;
+    }
+
+    size_t result_count = 0;
+
+    if (ctx->rtree) {
+        /* R-tree query for candidate ways.
+         * Cap candidates to avoid huge allocations (5.6M ways = 22MB).
+         * A single tile rarely intersects more than a few thousand ways. */
+        #define NAMED_WAY_MAX_CANDIDATES  4096
+        #define NAMED_WAY_MAX_RESULTS      200
+
+        uint32_t *candidates = malloc(NAMED_WAY_MAX_CANDIDATES * sizeof(uint32_t));
+        if (!candidates) {
+            free(result);
+            return CT_ERROR_OUT_OF_MEMORY;
+        }
+
+        size_t num_candidates = ct_rtree_query(ctx->rtree, bbox, candidates,
+                                                NAMED_WAY_MAX_CANDIDATES);
+
+        for (size_t i = 0; i < num_candidates && result_count < NAMED_WAY_MAX_RESULTS; i++) {
+            uint32_t way_idx = candidates[i];
+            if (way_idx >= ctx->num_ways) continue;
+
+            const CTOSMWay *way = &ctx->ways[way_idx];
+
+            /* Only named highway ways */
+            if (!way->name || way->name[0] == '\0') continue;
+            if (way->feature_class != CT_OSM_HIGHWAY) continue;
+
+            /* Grow if needed */
+            if (result_count >= capacity) {
+                capacity *= 2;
+                const CTOSMWay **grown = realloc(result, capacity * sizeof(CTOSMWay *));
+                if (!grown) { free(candidates); free(result); return CT_ERROR_OUT_OF_MEMORY; }
+                result = grown;
+            }
+
+            result[result_count++] = way;
+        }
+
+        free(candidates);
+    } else {
+        /* Fallback: linear scan */
+        for (size_t i = 0; i < ctx->num_ways; i++) {
+            const CTOSMWay *way = &ctx->ways[i];
+
+            if (!way->name || way->name[0] == '\0') continue;
+            if (way->feature_class != CT_OSM_HIGHWAY) continue;
+
+            /* Quick bbox check */
+            int intersects = 0;
+            for (int j = 0; j < way->num_coords; j++) {
+                if (way->coords[j].lat >= bbox.min_lat &&
+                    way->coords[j].lat <= bbox.max_lat &&
+                    way->coords[j].lon >= bbox.min_lon &&
+                    way->coords[j].lon <= bbox.max_lon) {
+                    intersects = 1;
+                    break;
+                }
+            }
+            if (!intersects) continue;
+
+            if (result_count >= capacity) {
+                capacity *= 2;
+                const CTOSMWay **grown = realloc(result, capacity * sizeof(CTOSMWay *));
+                if (!grown) { free(result); return CT_ERROR_OUT_OF_MEMORY; }
+                result = grown;
+            }
+
+            result[result_count++] = way;
+        }
+    }
+
+    if (result_count == 0) {
+        free(result);
+    } else {
+        *ways = result;
+    }
+    *count = result_count;
+
+    return CT_OK;
+}
+
+CTStatus ct_pbf_get_tile_named_ways(const CTPBFContext *ctx, CTTileCoord coord,
+                                     const CTOSMWay ***ways, size_t *count)
+{
+    if (!ctx || !ways || !count) {
+        if (ways) *ways = NULL;
+        if (count) *count = 0;
+        return CT_ERROR_INVALID_ARGUMENT;
+    }
+
+    /* Compute tile bbox with 25% buffer */
+    CTBBox bbox = ct_tile_bounds(coord);
+    double buf_lon = (bbox.max_lon - bbox.min_lon) * 0.25;
+    double buf_lat = (bbox.max_lat - bbox.min_lat) * 0.25;
+    bbox.min_lat -= buf_lat;
+    bbox.max_lat += buf_lat;
+    bbox.min_lon -= buf_lon;
+    bbox.max_lon += buf_lon;
+
+    return ct_pbf_get_bbox_named_ways(ctx, bbox, ways, count);
 }

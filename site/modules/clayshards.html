@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClayShards — Render-Agnostic UI | OTTO</title>
+    <meta name="description" content="ClayShards is an immediate-mode UI component library built on Clay layout. 8 widgets, 4 renderer backends (WebGL, TUI, Software, custom), slippy map component, zero external dependencies.">
+
+    <!-- SEO -->
+    <link rel="canonical" href="https://ottofleet.io/modules/clayshards.html">
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#0a0a0a">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="ClayShards — Render-Agnostic UI | OTTO">
+    <meta property="og:description" content="Immediate-mode UI components on Clay layout. WebGL, TUI, software renderers. Slippy map with overlays. WASM-compilable, zero deps.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://ottofleet.io/modules/clayshards.html">
+    <meta property="og:site_name" content="OTTO">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%230a0a0a'/%3E%3Ctext x='50' y='68' font-family='ui-monospace,monospace' font-size='60' font-weight='700' fill='%233b82f6' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
+
+    <!-- Shared Styles -->
+    <link rel="stylesheet" href="../style.css">
+
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "ClayShards",
+        "alternateName": "OTTO ClayShards UI Library",
+        "description": "Immediate-mode UI component library built on Clay layout engine. 8 widgets, 4 renderer backends, slippy map component. Compiles to WebAssembly.",
+        "url": "https://ottofleet.io/modules/clayshards.html",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Cross-platform (WASM, Linux, macOS, Windows)",
+        "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+        "author": {
+            "@type": "Person",
+            "name": "Mark Farkas"
+        }
+    }
+    </script>
+
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --bg-secondary: #141414;
+            --bg-tertiary: #1a1a1a;
+            --text: #e0e0e0;
+            --text-secondary: #888;
+            --accent: #3b82f6;
+            --accent-glow: rgba(59, 130, 246, 0.15);
+            --border: #2a2a2a;
+            --green: #22c55e;
+            --amber: #f59e0b;
+            --red: #ef4444;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace; line-height: 1.7; }
+        .container { max-width: 900px; margin: 0 auto; padding: 0 2rem; }
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        /* Navigation */
+        .back-nav { padding: 1.5rem 0; border-bottom: 1px solid var(--border); }
+        .back-nav a { font-size: 0.85rem; color: var(--text-secondary); }
+        .back-nav a:hover { color: var(--accent); }
+
+        /* Hero */
+        .hero { padding: 4rem 0 3rem; text-align: center; }
+        .hero h1 { font-size: 2.5rem; font-weight: 700; margin-bottom: 1rem; letter-spacing: -0.02em; }
+        .hero h1 .accent { color: var(--accent); }
+        .hero .subtitle { font-size: 1.1rem; color: var(--text-secondary); max-width: 600px; margin: 0 auto 2rem; }
+        .badge-row { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; }
+        .badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; border: 1px solid var(--border); color: var(--text-secondary); }
+        .badge.green { border-color: var(--green); color: var(--green); }
+        .badge.blue { border-color: var(--accent); color: var(--accent); }
+        .badge.amber { border-color: var(--amber); color: var(--amber); }
+
+        /* Sections */
+        section { padding: 3rem 0; border-top: 1px solid var(--border); }
+        section h2 { font-size: 1.5rem; font-weight: 700; margin-bottom: 1.5rem; }
+        section h3 { font-size: 1.1rem; font-weight: 600; margin: 2rem 0 1rem; color: var(--text); }
+        p { margin-bottom: 1rem; color: var(--text-secondary); }
+
+        /* Feature grid */
+        .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem; margin: 1.5rem 0; }
+        .feature-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; }
+        .feature-card h4 { font-size: 0.95rem; margin-bottom: 0.5rem; color: var(--text); }
+        .feature-card p { font-size: 0.85rem; margin: 0; }
+
+        /* ASCII art */
+        .ascii-art { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1.5rem 0; overflow-x: auto; position: relative; }
+        .ascii-art pre { font-size: 0.75rem; line-height: 1.5; color: var(--green); margin: 0; }
+        .ascii-art::after { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,0,0.015) 2px, rgba(0,255,0,0.015) 4px); pointer-events: none; border-radius: 8px; }
+
+        /* Code blocks */
+        .code-block { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1.5rem 0; overflow-x: auto; position: relative; }
+        .code-block pre { font-size: 0.8rem; line-height: 1.6; color: var(--text); margin: 0; }
+        .code-block .label { position: absolute; top: 0.5rem; right: 0.75rem; font-size: 0.65rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.1em; }
+        .code-block::after { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,0,0.008) 2px, rgba(0,255,0,0.008) 4px); pointer-events: none; border-radius: 8px; }
+
+        /* Tables */
+        table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; font-size: 0.85rem; }
+        th { text-align: left; padding: 0.75rem; border-bottom: 2px solid var(--border); color: var(--text); font-weight: 600; }
+        td { padding: 0.75rem; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
+        tr:hover td { color: var(--text); }
+
+        /* Stats row */
+        .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+        .stat { text-align: center; padding: 1.25rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; }
+        .stat .number { font-size: 1.5rem; font-weight: 700; color: var(--accent); display: block; }
+        .stat .label { font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem; display: block; }
+
+        /* Callout */
+        .callout { background: var(--accent-glow); border: 1px solid var(--accent); border-radius: 8px; padding: 1.25rem 1.5rem; margin: 1.5rem 0; }
+        .callout.honest { background: rgba(245, 158, 11, 0.08); border-color: var(--amber); }
+        .callout p { margin: 0; font-size: 0.9rem; }
+        .callout strong { color: var(--text); }
+
+        /* Two column */
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: 1.5rem 0; }
+
+        /* Footer */
+        .footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align: center; }
+        .footer p { font-size: 0.85rem; color: var(--text-secondary); }
+
+        /* Logo animation */
+        .logo-text { font-weight: 700; letter-spacing: 0.05em; position: relative; display: inline-block; }
+        .logo-text::before { content: 'OTTO'; position: absolute; left: -1px; text-shadow: 2px 0 #ff0000; clip: rect(24px, 550px, 90px, 0); animation: logo-glitch-1 4s infinite linear alternate-reverse; }
+        .logo-text::after { content: 'OTTO'; position: absolute; left: 1px; text-shadow: -2px 0 #0000ff; clip: rect(85px, 550px, 140px, 0); animation: logo-glitch-2 4s infinite linear alternate-reverse; }
+        @keyframes logo-glitch-1 { 0%,100% { clip: rect(42px,9999px,44px,0); } 5% { clip: rect(12px,9999px,59px,0); } 10% { clip: rect(48px,9999px,29px,0); } 15% { clip: rect(42px,9999px,73px,0); } 20% { clip: rect(63px,9999px,27px,0); } 25% { clip: rect(34px,9999px,55px,0); } 30% { clip: rect(86px,9999px,73px,0); } 35% { clip: rect(20px,9999px,59px,0); } 40% { clip: rect(26px,9999px,87px,0); } 45% { clip: rect(32px,9999px,95px,0); } 50% { clip: rect(54px,9999px,31px,0); } 55% { clip: rect(28px,9999px,45px,0); } 60% { clip: rect(76px,9999px,82px,0); } 65% { clip: rect(32px,9999px,52px,0); } 70% { clip: rect(14px,9999px,37px,0); } 75% { clip: rect(55px,9999px,63px,0); } 80% { clip: rect(42px,9999px,81px,0); } 85% { clip: rect(17px,9999px,26px,0); } 90% { clip: rect(72px,9999px,96px,0); } 95% { clip: rect(28px,9999px,49px,0); } }
+        @keyframes logo-glitch-2 { 0%,100% { clip: rect(65px,9999px,99px,0); } 5% { clip: rect(52px,9999px,75px,0); } 10% { clip: rect(71px,9999px,42px,0); } 15% { clip: rect(42px,9999px,88px,0); } 20% { clip: rect(25px,9999px,67px,0); } 25% { clip: rect(75px,9999px,51px,0); } 30% { clip: rect(47px,9999px,69px,0); } 35% { clip: rect(82px,9999px,33px,0); } 40% { clip: rect(38px,9999px,92px,0); } 45% { clip: rect(67px,9999px,55px,0); } 50% { clip: rect(23px,9999px,79px,0); } 55% { clip: rect(57px,9999px,41px,0); } 60% { clip: rect(81px,9999px,62px,0); } 65% { clip: rect(36px,9999px,85px,0); } 70% { clip: rect(68px,9999px,48px,0); } 75% { clip: rect(22px,9999px,76px,0); } 80% { clip: rect(59px,9999px,38px,0); } 85% { clip: rect(43px,9999px,97px,0); } 90% { clip: rect(31px,9999px,56px,0); } 95% { clip: rect(73px,9999px,43px,0); } }
+
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 1.75rem; }
+            .two-col { grid-template-columns: 1fr; }
+            .container { padding: 0 1rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <nav class="back-nav">
+            <a href="../">&larr; Back to <span class="logo-text">OTTO</span></a>
+        </nav>
+
+        <!-- Hero -->
+        <header class="hero">
+            <h1>ClayShards <span class="accent">Render-Agnostic UI</span></h1>
+            <p class="subtitle">Immediate-mode UI components on Clay layout. 8 widgets, 4 renderer backends, slippy map with overlays. Same C code renders to WebGL, terminal, or CPU framebuffer.</p>
+            <div class="badge-row">
+                <span class="badge green">270+ tests</span>
+                <span class="badge blue">~19K LoC</span>
+                <span class="badge amber">4 renderers</span>
+                <span class="badge">WASM-ready</span>
+                <span class="badge">Zero deps</span>
+            </div>
+        </header>
+
+        <!-- Why ClayShards -->
+        <section>
+            <h2>Why ClayShards</h2>
+            <p>Most UI libraries are married to a single rendering backend. ClayShards separates interaction from rendering: components are pure C functions that produce Clay layout commands. Plug in any renderer&mdash;GPU, terminal, framebuffer, or your own. The same application code runs everywhere.</p>
+
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h4>Immediate Mode + State</h4>
+                    <p>Components are function calls returning event structs. No object trees, no virtual DOM. Persistent widget state (focus, cursor, scroll) lives in a fixed-size hash table&mdash;no allocation during frames.</p>
+                </div>
+                <div class="feature-card">
+                    <h4>4 Renderer Backends</h4>
+                    <p>WebGL (GPU, MSDF text), TUI (ANSI terminal), Software (CPU framebuffer), TUI-WebGL (terminal grid + CRT effects). Write once, render anywhere.</p>
+                </div>
+                <div class="feature-card">
+                    <h4>Slippy Map Widget</h4>
+                    <p>Pan, zoom, polyline overlays, draggable markers, smooth zoom animation. Connects to Carta/Velo/Locus via abstract provider interface. Up to 16 independent maps.</p>
+                </div>
+                <div class="feature-card">
+                    <h4>Keyboard-First Design</h4>
+                    <p>Full tab navigation, focus management, text selection, clipboard integration. Focusable registry with 64-element capacity. Accessibility built in, not bolted on.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Architecture -->
+        <section>
+            <h2>Architecture</h2>
+
+            <div class="ascii-art"><pre>
+  ┌─────────────────────────────────────────────────┐
+  │  Application Code                               │
+  │  if (cs_button(id, "Save", NULL).clicked)       │
+  │      save_document();                           │
+  ├─────────────────────────────────────────────────┤
+  │  ClayShards Layer            (C, ~10K lines)    │
+  │  • Focus / hover / click state machine          │
+  │  • Widget state store (256-slot hash table)     │
+  │  • Hit testing with z-index layers              │
+  │  • Tab navigation (64 focusables/frame)         │
+  │  • Map: pan, zoom, overlays, drag markers       │
+  ├─────────────────────────────────────────────────┤
+  │  Clay Layout Engine          (vendor/clay/)     │
+  │  • Declarative CLAY() macro blocks              │
+  │  • Flexbox-like layout solving                  │
+  │  • Render command array generation              │
+  ├──────────┬──────────┬───────────┬───────────────┤
+  │  WebGL   │   TUI    │ Software  │  TUI-WebGL    │
+  │  GPU     │  ANSI    │   CPU     │  CRT FX       │
+  │  MSDF    │ box-draw │ sh_render │ scanlines     │
+  └──────────┴──────────┴───────────┴───────────────┘</pre></div>
+
+            <h3>Frame Lifecycle</h3>
+            <div class="code-block"><span class="label">Flow</span><pre>
+1. cs_frame_begin()          ← Reset per-frame state (hover, click)
+2. Clay_BeginLayout()        ← Start layout pass
+3.   cs_button(...)          ← Components add Clay elements + check input
+     cs_input(...)
+     cs_map_begin(...)
+     cs_map_end()
+4. Clay_EndLayout()          ← Solve layout, emit render commands
+5. cs_frame_end(dt)          ← Update timers, consume pending input
+6. renderer.render(commands) ← Backend draws to screen</pre></div>
+
+            <p>ClayShards never calls drawing functions. It produces <code>Clay_RenderCommandArray</code> and lets the renderer translate to pixels, cells, or whatever the backend needs. This is the key insight: interaction logic and rendering are completely separate concerns.</p>
+        </section>
+
+        <!-- Components -->
+        <section>
+            <h2>Components</h2>
+
+            <table>
+                <thead><tr><th>Widget</th><th>Function</th><th>Returns</th><th>Features</th></tr></thead>
+                <tbody>
+                    <tr><td>Button</td><td><code>cs_button()</code></td><td><code>CsButtonResult</code></td><td>5 variants (primary, secondary, danger, ghost, default). Hover + click.</td></tr>
+                    <tr><td>Text Input</td><td><code>cs_input()</code></td><td><code>CsInputResult</code></td><td>Cursor, selection, placeholder, clipboard. Focus binding.</td></tr>
+                    <tr><td>Checkbox</td><td><code>cs_checkbox()</code></td><td><code>CsCheckboxResult</code></td><td>Boolean toggle with label.</td></tr>
+                    <tr><td>Toggle</td><td><code>cs_toggle()</code></td><td><code>CsToggleResult</code></td><td>Sliding knob, on/off with label placement.</td></tr>
+                    <tr><td>Slider</td><td><code>cs_slider()</code></td><td><code>CsSliderResult</code></td><td>Numeric range, keyboard + drag, value display.</td></tr>
+                    <tr><td>Dropdown</td><td><code>cs_dropdown()</code></td><td><code>CsDropdownResult</code></td><td>Selection list, keyboard nav, z-index layering.</td></tr>
+                    <tr><td>Scroll</td><td><code>CS_SCROLL()</code></td><td><code>CsScrollInfo</code></td><td>Macro-based container. Wheel, drag, momentum.</td></tr>
+                    <tr><td>Map</td><td><code>cs_map()</code></td><td><code>CsMapResult</code></td><td>Slippy map, polylines, markers, smooth zoom.</td></tr>
+                </tbody>
+            </table>
+
+            <h3>Usage Pattern</h3>
+            <div class="two-col">
+                <div class="code-block"><span class="label">Button</span><pre>
+/* Immediate mode: call = render + check */
+CsButtonResult r = cs_button(
+    CS_ID("save"), "Save", NULL
+);
+
+if (r.clicked) {
+    save_document();
+}
+
+if (r.hovered) {
+    show_tooltip("Ctrl+S");
+}</pre></div>
+                <div class="code-block"><span class="label">Input</span><pre>
+/* You own the buffer */
+static char name[128] = "";
+static int name_len = 0;
+
+CsInputResult r = cs_input(
+    CS_ID("name"),
+    name, &name_len, sizeof(name),
+    NULL  /* default style */
+);
+
+if (r.submitted) {
+    process_name(name);
+}</pre></div>
+            </div>
+
+            <h3>Map Component</h3>
+            <div class="code-block"><span class="label">C</span><pre>
+/* Map with overlays */
+static double lat = 47.5, lon = 19.0;
+static int zoom = 12;
+
+CsMapResult r = cs_map_begin(
+    CS_ID("fleet-map"), &lat, &lon, &zoom,
+    800, 600, NULL
+);
+
+/* Add route polyline */
+CsPolylineStyle route_style = { .color = CS_COLOR_BLUE_500, .width = 3.0 };
+cs_polyline(CS_ID("route"), route_points, route_count, &route_style);
+
+/* Add draggable markers */
+CsMarkerStyle marker_style = { .color = CS_COLOR_RED_500, .radius = 8, .draggable = true };
+cs_marker(CS_ID("depot"), depot_lat, depot_lon, &marker_style);
+
+cs_map_end();
+
+if (r.panned)  printf("Map moved to (%.4f, %.4f)\n", lat, lon);
+if (r.clicked) printf("Clicked at (%.4f, %.4f)\n", r.click_lat, r.click_lon);</pre></div>
+        </section>
+
+        <!-- Renderers -->
+        <section>
+            <h2>Renderer Backends</h2>
+
+            <div class="stat-row">
+                <div class="stat">
+                    <span class="number">WebGL</span>
+                    <span class="label">GPU + MSDF text</span>
+                </div>
+                <div class="stat">
+                    <span class="number">TUI</span>
+                    <span class="label">Terminal ANSI</span>
+                </div>
+                <div class="stat">
+                    <span class="number">Software</span>
+                    <span class="label">CPU framebuffer</span>
+                </div>
+                <div class="stat">
+                    <span class="number">TUI-WebGL</span>
+                    <span class="label">CRT effects</span>
+                </div>
+            </div>
+
+            <h3>WebGL Renderer</h3>
+            <p>GPU-accelerated rendering with MSDF (Multi-channel Signed Distance Field) text for crisp fonts at any size. Tile cache for map rendering. Handles keyboard routing, clipboard, and cursor rendering in JavaScript.</p>
+
+            <h3>TUI Renderer</h3>
+            <p>Character-cell rendering via ANSI escape sequences. Auto-detects color mode (16, 256, true color). Box-drawing styles: ASCII, light, heavy, double, rounded. Differential output&mdash;only changed cells are written. 16-byte cell format bridges to TUI-WebGL.</p>
+
+            <h3>Software Renderer</h3>
+            <p>CPU-based framebuffer rendering using shared library primitives (<code>sh_render</code>, <code>sh_font</code>). Platform backends for macOS (Cocoa/done), X11, Win32, Wayland (planned). Headless mode for testing.</p>
+
+            <h3>TUI-WebGL Renderer</h3>
+            <p>Renders the TUI character grid via WebGL with retro CRT post-processing. Scanlines, screen curvature, vignette, chromatic aberration, phosphor glow. Five presets from <em>subtle</em> to <em>arcade</em> plus amber and green phosphor modes.</p>
+
+            <table>
+                <thead><tr><th>CRT Preset</th><th>Scanlines</th><th>Vignette</th><th>Chromatic Aberration</th></tr></thead>
+                <tbody>
+                    <tr><td>off</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td></tr>
+                    <tr><td>subtle</td><td>0.1</td><td>0.1</td><td>0.0005</td></tr>
+                    <tr><td>retro</td><td>0.3</td><td>0.2</td><td>0.001</td></tr>
+                    <tr><td>arcade</td><td>0.5</td><td>0.3</td><td>0.002</td></tr>
+                    <tr><td>amber / green</td><td>0.3</td><td>0.2</td><td>0.001 + phosphor color</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- Internals -->
+        <section>
+            <h2>Internals</h2>
+
+            <h3>Widget State Store</h3>
+            <p>256-slot hash table with FNV-1a hashing and linear probing. Each slot stores cursor position, selection, scroll offset, blink timer, and open/closed state. No allocation during frames&mdash;slots are allocated once and reused. Lazy initialization on first access.</p>
+
+            <h3>Focus System</h3>
+            <p>Single <code>focused_id</code> per thread. Components register as focusable during layout; tab order follows registration order. <code>cs_focus_next()</code> / <code>cs_focus_prev()</code> cycle with wraparound. Text inputs bind their buffer to <code>active_text</code> when focused, enabling keyboard handlers to insert characters.</p>
+
+            <h3>Hit Testing</h3>
+            <p>Components register hit targets with bounding box and z-index. <code>cs_hit_test(x, y)</code> returns the topmost target. Z-index layers: <code>CS_Z_BASE</code> (0), <code>CS_Z_DROPDOWN</code> (100)&mdash;dropdowns render above buttons without DOM tricks.</p>
+
+            <h3>Thread Safety</h3>
+            <p>All state uses thread-local storage (<code>_Thread_local</code> / <code>__thread</code>). Each thread gets independent focus, widget state, and input routing. Caveat: Clay&rsquo;s layout engine uses global state, so all UI work must happen on one thread.</p>
+
+            <div class="callout honest">
+                <p><strong>Honest assessment.</strong> ClayShards covers the OTTO fleet dashboard use case well: maps, forms, data tables. It is not a general-purpose UI framework&mdash;no tree views, no rich text editor, no accessibility labels (beyond tab navigation). The widget set is intentionally small and focused. If you need complex UI, use React. If you need the same code in WASM, native, and terminal&mdash;ClayShards.</p>
+            </div>
+        </section>
+
+        <!-- Structure -->
+        <section>
+            <h2>Module Structure</h2>
+
+            <div class="code-block"><span class="label">Layout</span><pre>
+clayshards/
+├── clay-shards/                    # Core library (C, ~10K lines)
+│   ├── include/
+│   │   ├── cs_common.h             # Focus, input, colors, allocators
+│   │   ├── cs_button.h             # Button component
+│   │   ├── cs_input.h              # Text input component
+│   │   ├── cs_checkbox.h           # Checkbox component
+│   │   ├── cs_toggle.h             # Toggle switch
+│   │   ├── cs_slider.h             # Slider component
+│   │   ├── cs_dropdown.h           # Dropdown/select
+│   │   ├── cs_scroll.h             # Scroll container
+│   │   ├── cs_map.h                # Slippy map + overlays
+│   │   └── cs_map_provider.h       # Route/search provider interface
+│   ├── src/                        # Implementations
+│   └── tests/test_clay_shards.c    # ~120 tests
+│
+├── clay-shards-webgl/              # WebGL renderer (JS, ~2.7K lines)
+│   ├── renderer.js                 # ClayRenderer class
+│   ├── shaders.js                  # GLSL sources
+│   ├── font.js                     # MSDF font loading
+│   ├── map-tiles.js                # Tile cache + renderer
+│   ├── map-overlays.js             # Polyline/marker rendering
+│   └── keyboard.js                 # Input routing to WASM
+│
+├── clay-shards-tui/                # TUI renderer (C, ~1.5K lines)
+│   ├── include/cs_tui.h            # Terminal renderer API
+│   ├── src/cs_tui.c                # ANSI rendering
+│   └── tests/test_tui.c            # ~50 tests
+│
+├── clay-shards-soft/               # Software renderer (C, ~1K lines)
+│   ├── include/cs_soft.h           # CPU framebuffer API
+│   ├── src/cs_soft.c               # Rendering + platform backends
+│   └── tests/test_soft.c           # ~100 tests
+│
+└── clay-shards-tui-webgl/          # TUI-WebGL renderer (JS, ~2.2K lines)
+    ├── tui-renderer.js             # Character grid rendering
+    ├── crt-effects.js              # Post-processing pipeline
+    ├── font-atlas.js               # Procedural font atlas
+    └── shaders.js                  # CRT GLSL shaders</pre></div>
+        </section>
+
+        <!-- Quick Start -->
+        <section>
+            <h2>Quick Start</h2>
+
+            <div class="code-block"><span class="label">Build</span><pre>
+# Build core library + tests
+cd clayshards/clay-shards && make
+
+# Run tests
+cd clayshards/clay-shards && make test       # ~120 core tests
+cd clayshards/clay-shards-tui && make test   # ~50 TUI tests
+cd clayshards/clay-shards-soft && make test  # ~100 software tests
+
+# WASM build (requires Emscripten)
+cd clayshards/clay-shards && make wasm
+
+# TUI demo in browser (WebGL + CRT)
+cd clayshards/clay-shards-tui-webgl && make tui-demo-serve
+# Opens :8000 with CRT-rendered terminal UI</pre></div>
+
+            <div class="code-block"><span class="label">Minimal App</span><pre>
+#include "cs_common.h"
+#include "cs_button.h"
+#include "cs_input.h"
+
+void frame(float dt) {
+    cs_frame_begin();
+    Clay_BeginLayout();
+
+    /* Your UI */
+    CLAY(CLAY_LAYOUT({ .direction = CLAY_TOP_TO_BOTTOM })) {
+        static char buf[64] = "";
+        static int len = 0;
+        cs_input(CS_ID("search"), buf, &len, sizeof(buf), NULL);
+
+        if (cs_button(CS_ID("go"), "Search", NULL).clicked) {
+            do_search(buf);
+        }
+    }
+
+    Clay_EndLayout();
+    cs_frame_end(dt);
+
+    /* Pass Clay_RenderCommandArray to your renderer */
+}</pre></div>
+        </section>
+
+        <!-- FAQ -->
+        <section>
+            <h2>Developer FAQ</h2>
+
+            <h3>Why immediate mode instead of retained?</h3>
+            <p>Immediate mode eliminates synchronization: there&rsquo;s no widget tree to keep in sync with your data model. Components are function calls&mdash;if the data says &ldquo;show 5 rows,&rdquo; you call the component 5 times. No add/remove/update API, no lifecycle callbacks, no stale state. The persistent state store handles the few things that do persist (cursor position, scroll offset).</p>
+
+            <h3>How does ClayShards relate to Clay?</h3>
+            <p>Clay (vendor/clay/) is a layout engine: you describe elements with <code>CLAY()</code> macros and it solves flexbox-like layout. ClayShards adds interaction: focus management, keyboard routing, hit testing, widget state, and the component library. Clay handles &ldquo;where things go.&rdquo; ClayShards handles &ldquo;what happens when you click them.&rdquo;</p>
+
+            <h3>Can I write a custom renderer?</h3>
+            <p>Yes. After <code>Clay_EndLayout()</code>, iterate <code>Clay_RenderCommandArray</code>. Each command has a type (rectangle, text, scissor, image) with position, size, color, corner radius. Translate to your backend&rsquo;s drawing primitives. The four included renderers are reference implementations.</p>
+
+            <h3>How does the map work in WASM?</h3>
+            <p>The map component (<code>cs_map.h</code>) handles interaction in C (pan, zoom, marker drag). It exposes overlay data via accessor functions that the JavaScript renderer reads. The WebGL renderer fetches OSM tiles, renders them with overlays on a canvas. The provider interface abstracts tile sources&mdash;connect to Carta API, external tile servers, or embedded WASM data.</p>
+
+            <h3>What about CRT effects?</h3>
+            <p>The TUI-WebGL renderer runs a post-processing pipeline on the character grid: scanlines, barrel distortion, vignette, chromatic aberration. Five presets (off/subtle/retro/arcade) plus amber and green phosphor modes. It&rsquo;s a cosmetic layer&mdash;the underlying TUI renderer is the same ANSI-output code that runs in a real terminal.</p>
+
+            <h3>Is there a React-like alternative?</h3>
+            <p>No. ClayShards is intentionally low-level and immediate-mode. For the OTTO platform, this is a feature: the same C code compiles to native desktop, WASM browser, and embedded targets without a JavaScript runtime. If you need component lifecycle and virtual DOM, use React&mdash;and call OTTO&rsquo;s APIs from JavaScript instead.</p>
+        </section>
+
+        <footer class="footer">
+            <p>Part of the <a href="../"><span class="logo-text">OTTO</span></a> trucking logistics platform</p>
+        </footer>
+    </div>
+</body>
+</html>

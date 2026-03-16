@@ -21,11 +21,12 @@ static const char *api_prefixes[] = {
     [SH_API_VELO]     = "VELO",
     [SH_API_LOCUS]    = "LOCUS",
     [SH_API_FUELWISE] = "FUELWISE",
-    [SH_API_RALPH]    = "RALPH"
+    [SH_API_RALPH]    = "RALPH",
+    [SH_API_SURGE]    = "SURGE"
 };
 
 const char *sh_args_prefix(ShApiType api_type) {
-    if (api_type < 0 || api_type > SH_API_RALPH) {
+    if (api_type < 0 || api_type > SH_API_SURGE) {
         return "SH";
     }
     return api_prefixes[api_type];
@@ -95,6 +96,21 @@ int sh_parse_int(const char *str, int default_val, int min_val, int max_val) {
     if (val > (long)max_val) return default_val;
 
     return (int)val;
+}
+
+long sh_parse_long(const char *str, long default_val, long min_val, long max_val) {
+    if (!str || !*str) return default_val;
+
+    char *end;
+    long val = strtol(str, &end, 10);
+
+    /* Parse failure: no digits consumed or trailing garbage */
+    if (end == str || *end != '\0') return default_val;
+
+    /* Bounds check */
+    if (val < min_val || val > max_val) return default_val;
+
+    return val;
 }
 
 double sh_parse_double(const char *str, double default_val, double min_val, double max_val) {

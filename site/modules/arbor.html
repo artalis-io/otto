@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arbor — ALNS Metaheuristic Framework | OTTO</title>
+    <meta name="description" content="Arbor is an Adaptive Large Neighborhood Search framework written in C with zero dependencies. Segment-based adaptive weights, 4 acceptance criteria, pluggable operators, deterministic seeding. Powers Surge VRP solver.">
+
+    <!-- SEO -->
+    <link rel="canonical" href="https://ottofleet.io/modules/arbor.html">
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#0a0a0a">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="Arbor — ALNS Metaheuristic Framework | OTTO">
+    <meta property="og:description" content="Zero-dependency ALNS metaheuristic framework. Segment-based adaptive weights, pluggable destroy/repair operators, simulated annealing, deterministic seeding. Written in C, compiles to WASM.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://ottofleet.io/modules/arbor.html">
+    <meta property="og:site_name" content="OTTO">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%230a0a0a'/%3E%3Ctext x='50' y='68' font-family='ui-monospace,monospace' font-size='60' font-weight='700' fill='%233b82f6' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
+
+    <!-- Shared Styles -->
+    <link rel="stylesheet" href="../style.css">
+
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Arbor",
+        "alternateName": "OTTO Arbor ALNS Framework",
+        "description": "Adaptive Large Neighborhood Search metaheuristic framework. Segment-based adaptive weights, pluggable operators, 4 acceptance criteria. Zero external dependencies, compiles to WebAssembly.",
+        "url": "https://ottofleet.io/modules/arbor.html",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Cross-platform (WASM, Linux, macOS)",
+        "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+        "author": {
+            "@type": "Person",
+            "name": "Mark Farkas"
+        }
+    }
+    </script>
+
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --bg-secondary: #141414;
+            --bg-tertiary: #1a1a1a;
+            --text: #e5e5e5;
+            --text-muted: #9ca3af;
+            --accent: #3b82f6;
+            --accent-dim: #1e40af;
+            --border: #2a2a2a;
+            --success: #22c55e;
+            --warning: #eab308;
+            --error: #ef4444;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+
+        body {
+            font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'Segoe UI Mono', Menlo, Monaco, Consolas, monospace;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            font-size: 15px;
+        }
+
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        .container { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
+
+        header { padding: 48px 0 32px; border-bottom: 1px solid var(--border); }
+        .header-top { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px; }
+        .logo { font-size: 32px; font-weight: 700; letter-spacing: 4px; color: var(--text); animation: logo-electric 4s infinite; text-shadow: 0 0 10px rgba(255,255,255,0.1); }
+        .logo span { color: var(--accent); }
+
+        @keyframes logo-electric {
+            0%, 100% { text-shadow: 0 0 10px rgba(255,255,255,0.15), 0 0 20px rgba(255,255,255,0.05); transform: translate(0,0); filter: brightness(1); }
+            5% { text-shadow: -1px 0 rgba(255,100,100,0.5), 1px 0 rgba(100,180,255,0.5), 0 0 10px rgba(255,255,255,0.2); transform: translate(0.5px,0); }
+            10% { text-shadow: 0 0 10px rgba(255,255,255,0.15); transform: translate(0,0); }
+            30% { text-shadow: -2px 0 rgba(255,60,60,0.6), 2px 0 rgba(60,180,255,0.6), 0 0 20px rgba(255,255,255,0.3); transform: translate(1px,0) skewX(0.5deg); filter: brightness(1.15); }
+            31% { text-shadow: 2px 0 rgba(255,60,60,0.5), -2px 0 rgba(60,180,255,0.5), 0 0 15px rgba(255,255,255,0.2); transform: translate(-0.5px,0.3px) skewX(-0.3deg); }
+            33% { text-shadow: 0 0 10px rgba(255,255,255,0.15); transform: translate(0,0); filter: brightness(1); }
+            55% { text-shadow: 0.5px 0 rgba(255,150,150,0.3), -0.5px 0 rgba(150,200,255,0.3), 0 0 10px rgba(255,255,255,0.15); }
+            60% { text-shadow: 0 0 10px rgba(255,255,255,0.15), 0 0 20px rgba(255,255,255,0.05); }
+            75% { text-shadow: -1.5px 0 rgba(255,80,80,0.5), 1.5px 0 rgba(80,180,255,0.5), 0 0 15px rgba(255,255,255,0.25); transform: translate(0.6px,-0.2px); filter: brightness(1.1); }
+            77% { text-shadow: 0 0 10px rgba(255,255,255,0.15); transform: translate(0,0); filter: brightness(1); }
+            92% { filter: brightness(0.95); } 93% { filter: brightness(1.08); } 94% { filter: brightness(1); }
+        }
+
+        .tagline { margin-top: 8px; color: var(--text-muted); font-size: 14px; }
+        .header-nav { display: flex; gap: 8px; flex-wrap: wrap; }
+        .nav-group { display: flex; gap: 8px; flex-wrap: wrap; }
+        .nav-separator { color: var(--border); font-weight: 300; align-self: center; }
+        .header-nav a { padding: 6px 12px; font-size: 13px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 4px; text-decoration: none; }
+        .header-nav a:hover { color: var(--text); border-color: var(--accent-dim); text-decoration: none; }
+
+        .hero { padding: 48px 0; border-bottom: 1px solid var(--border); }
+        .hero h1 { font-size: 20px; font-weight: 600; margin-bottom: 16px; }
+        .hero p { color: var(--text-muted); max-width: 700px; }
+        .badges { margin-top: 24px; display: flex; flex-wrap: wrap; gap: 12px; }
+        .badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 4px; font-size: 13px; color: var(--text-muted); }
+        .badge.green { border-color: var(--success); color: var(--success); }
+        .badge.blue { border-color: var(--accent); color: var(--accent); }
+        .badge.yellow { border-color: var(--warning); color: var(--warning); }
+
+        .section { padding: 48px 0; border-bottom: 1px solid var(--border); }
+        .section-title { font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 2px; color: var(--text-muted); margin-bottom: 24px; }
+        .section h2 { font-size: 18px; font-weight: 600; margin-bottom: 16px; }
+        .section h3 { font-size: 15px; font-weight: 600; margin-bottom: 12px; margin-top: 32px; }
+        .section h3:first-child { margin-top: 0; }
+        .section p { color: var(--text-muted); margin-bottom: 16px; max-width: 800px; }
+        .section p strong { color: var(--text); }
+        .section ul { color: var(--text-muted); margin-bottom: 16px; padding-left: 24px; }
+        .section ul li { margin-bottom: 6px; }
+        .section ul li strong { color: var(--text); }
+
+        .code-block { background: linear-gradient(135deg, #0a0a0a 0%, #141414 100%); border: 1px solid #2a2a2a; border-radius: 6px; padding: 20px; overflow-x: auto; position: relative; overflow: hidden; margin-bottom: 16px; }
+        .code-block::after { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: repeating-linear-gradient(0deg, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 1px, transparent 1px, transparent 2px); pointer-events: none; }
+        .code-block pre { margin: 0; font-size: 13px; font-family: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace; position: relative; z-index: 1; animation: crt-flicker-gray 5s infinite; }
+        .code-block .comment { color: #707070; text-shadow: 0 0 5px rgba(150,150,150,0.2); }
+        .code-block .command { color: #50c878; text-shadow: 0 0 5px rgba(80,200,120,0.4), 0 0 10px rgba(80,200,120,0.2); }
+        .code-block .keyword { color: #60a5fa; text-shadow: 0 0 5px rgba(96,165,250,0.3); }
+        .code-block .type { color: #a78bfa; text-shadow: 0 0 5px rgba(167,139,250,0.3); }
+        .code-block .string { color: #fbbf24; text-shadow: 0 0 5px rgba(251,191,36,0.3); }
+        .code-block .number { color: #34d399; text-shadow: 0 0 5px rgba(52,211,153,0.3); }
+        .code-block .func { color: #f0abfc; text-shadow: 0 0 5px rgba(240,171,252,0.3); }
+        @keyframes crt-flicker-gray { 0%, 100% { opacity: 1; } 94% { opacity: 1; } 95% { opacity: 0.97; } 96% { opacity: 1; } }
+
+        .ascii-art { background: linear-gradient(135deg, #1a1a1a 0%, #222 100%); border: 1px solid #333; border-radius: 6px; padding: 24px; overflow-x: auto; font-size: 13px; line-height: 1.3; position: relative; overflow: hidden; margin-bottom: 16px; }
+        .ascii-art::after { content: ''; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: repeating-linear-gradient(0deg, rgba(255,255,255,0.03) 0px, rgba(255,255,255,0.03) 1px, transparent 1px, transparent 2px); pointer-events: none; }
+        .ascii-art pre { margin: 0; font-family: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace; color: #a0a0a0; text-shadow: 0 0 5px rgba(200,200,200,0.3), 0 0 10px rgba(200,200,200,0.1); position: relative; z-index: 1; animation: crt-flicker-gray 5s infinite; letter-spacing: 0; word-spacing: 0; font-variant-ligatures: none; font-feature-settings: "calt" 0; line-height: 1; }
+
+        table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 24px; }
+        th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+        th { color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; white-space: nowrap; }
+        td { color: var(--text-muted); }
+        td:first-child { color: var(--text); font-weight: 500; }
+        .y { color: var(--success); font-weight: 600; }
+        .p { color: var(--warning); }
+        .n { color: #555; }
+        .table-scroll { overflow-x: auto; margin-bottom: 24px; }
+        .table-scroll table { min-width: 700px; margin-bottom: 0; }
+
+        .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 16px; }
+        .feature-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 20px; }
+        .feature-card:hover { border-color: var(--accent-dim); }
+        .feature-card-title { font-weight: 600; font-size: 14px; margin-bottom: 8px; }
+        .feature-card-desc { color: var(--text-muted); font-size: 13px; line-height: 1.5; }
+
+        .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .stat { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 16px; text-align: center; }
+        .stat-value { font-size: 24px; font-weight: 700; color: var(--text); }
+        .stat-value.green { color: var(--success); }
+        .stat-value.blue { color: var(--accent); }
+        .stat-value.yellow { color: var(--warning); }
+        .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+
+        .callout { background: var(--bg-secondary); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; padding: 16px 20px; margin-bottom: 24px; }
+        .callout p { margin-bottom: 0; }
+        .callout.honest { border-left-color: var(--warning); }
+
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+
+        footer { padding: 32px 0; color: var(--text-muted); font-size: 13px; }
+        .footer-links { display: flex; gap: 24px; margin-bottom: 16px; }
+
+        .skip-link { position: absolute; top: -40px; left: 0; background: var(--accent); color: white; padding: 8px 16px; z-index: 100; text-decoration: none; }
+        .skip-link:focus { top: 0; }
+
+        @media (max-width: 600px) {
+            .logo { font-size: 24px; }
+            .hero h1 { font-size: 18px; }
+            .ascii-art { font-size: 10px; padding: 16px; }
+            .footer-links { flex-direction: column; gap: 8px; }
+            .header-top { flex-direction: column; }
+            .header-nav { margin-top: 16px; }
+            .two-col { grid-template-columns: 1fr; }
+            .stat-row { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+    <div class="container">
+        <header>
+            <div class="header-top">
+                <div>
+                    <a href="../index.html" style="text-decoration:none"><div class="logo"><span>O</span>TTO</div></a>
+                    <div class="tagline">Arbor &mdash; ALNS Metaheuristic Framework</div>
+                </div>
+                <nav class="header-nav">
+                    <div class="nav-group">
+                        <a href="../index.html">Home</a>
+                        <a href="../api.html">API</a>
+                    </div>
+                    <span class="nav-separator">|</span>
+                    <div class="nav-group">
+                        <a href="#why">Why</a>
+                        <a href="#framework">Framework</a>
+                        <a href="#operators">Operators</a>
+                        <a href="#api">API</a>
+                        <a href="#quickstart">Quick Start</a>
+                    </div>
+                </nav>
+            </div>
+        </header>
+
+        <main id="main-content">
+
+        <!-- ============================================================ -->
+        <!-- Hero -->
+        <!-- ============================================================ -->
+        <section class="hero">
+            <h1>Self-tuning metaheuristic search for hard optimization</h1>
+            <p>
+                Arbor is an Adaptive Large Neighborhood Search (ALNS) framework written in C11 with
+                zero external dependencies. Register destroy and repair operators, choose an acceptance
+                criterion (SA, RRT, Great Deluge, or strict improving), and Arbor handles adaptive weight
+                learning, roulette selection, temperature calibration, and restart logic. The operators
+                that find good solutions get used more. Automatically.
+            </p>
+            <div class="badges">
+                <span class="badge green">66 tests</span>
+                <span class="badge blue">4 acceptance criteria</span>
+                <span class="badge yellow">Zero deps</span>
+                <span class="badge">C11</span>
+                <span class="badge">WASM</span>
+                <span class="badge">~1.4K LoC</span>
+                <span class="badge">AGPLv3 + Trucking Exception</span>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Why -->
+        <!-- ============================================================ -->
+        <section class="section" id="why">
+            <div class="section-title">Why</div>
+            <h2>The search engine behind Surge</h2>
+
+            <p>
+                Hard combinatorial optimization (VRP, scheduling, packing) doesn't yield to exact solvers
+                at real-world scale. You need metaheuristics &mdash; and the quality of your metaheuristic
+                framework determines the quality of your solutions. Most ALNS implementations are
+                bespoke, tightly coupled to a single problem, and impossible to test independently.
+            </p>
+
+            <p>
+                Arbor separates the <strong>search strategy</strong> (operator selection, acceptance,
+                adaptation) from the <strong>problem domain</strong> (VRP, scheduling, etc.). Surge
+                registers 18 operators. Arbor manages which ones run, how often, and when to accept
+                worse solutions. This separation means Arbor is tested independently (66 tests) and
+                Surge operators are tested independently (340 tests).
+            </p>
+
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-card-title">Adaptive weight learning</div>
+                    <div class="feature-card-desc">
+                        Segment-based weight adaptation. Operators that find better solutions get higher
+                        roulette weights. Configurable reaction factor controls learning speed: 10% new
+                        information, 90% history. Operators self-tune during search.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Four acceptance criteria</div>
+                    <div class="feature-card-desc">
+                        Simulated Annealing (probabilistic), Record-to-Record Travel (threshold),
+                        Great Deluge (water level decay), or strict improving-only. Switch at runtime.
+                        SA auto-calibration from problem cost.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Pluggable operators</div>
+                    <div class="feature-card-desc">
+                        Register any number of destroy/repair function pointers with named weights.
+                        Arbor provides helper removal strategies: random, worst-cost, and Shaw
+                        relatedness-based. Problem-specific operators plug in cleanly.
+                    </div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-card-title">Deterministic reproducibility</div>
+                    <div class="feature-card-desc">
+                        Seeded Xoshiro256** RNG. Same seed, same operator selections, same acceptance
+                        decisions, same solution. Critical for benchmarking, debugging, and regression
+                        testing. Set once with <code>ar_alns_set_seed()</code>.
+                    </div>
+                </div>
+            </div>
+
+            <div class="callout">
+                <p>
+                    <strong>Real-world usage.</strong> Surge registers 12 destroy and 6 repair operators
+                    into Arbor. On Li &amp; Lim PDPTW benchmarks, Arbor's adaptive weights learn which
+                    operators work for each instance &mdash; string removal dominates on clustered problems,
+                    Shaw removal on random distributions. No manual tuning needed.
+                </p>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Framework -->
+        <!-- ============================================================ -->
+        <section class="section" id="framework">
+            <div class="section-title">Framework</div>
+            <h2>How ALNS works</h2>
+
+            <div class="ascii-art">
+<pre>
+  ar_alns_solve(ctx, initial_solution, best_out)
+         │
+         ▼
+  ┌──────────────────────────────────────────────────────────┐
+  │                    ALNS Main Loop                        │
+  │                                                          │
+  │  ┌────────────┐    ┌────────────┐    ┌────────────────┐  │
+  │  │  Roulette   │───▶│  Destroy   │───▶│    Repair      │  │
+  │  │  Selection  │    │  Operator  │    │    Operator    │  │
+  │  │  (weighted) │    │  (remove q │    │    (reinsert)  │  │
+  │  └────────────┘    │   elements)│    └───────┬────────┘  │
+  │                    └────────────┘            │           │
+  │                                              ▼           │
+  │  ┌────────────┐    ┌────────────┐    ┌────────────────┐  │
+  │  │  Weight     │◀───│  Segment   │◀───│   Accept /     │  │
+  │  │  Update     │    │  Boundary  │    │   Reject       │  │
+  │  │  (adaptive) │    │  (every N) │    │   (SA/RRT/GD)  │  │
+  │  └────────────┘    └────────────┘    └────────────────┘  │
+  │                                                          │
+  │  Stop: max_iters │ time_limit │ stagnation │ target_cost │
+  └──────────────────────────────────────────────────────────┘
+         │
+         ▼
+  ARALNSStats { iterations, improvements, best_cost, ... }
+</pre>
+            </div>
+
+            <div class="stat-row">
+                <div class="stat">
+                    <div class="stat-value blue">4</div>
+                    <div class="stat-label">Acceptance Criteria</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">3</div>
+                    <div class="stat-label">Removal Helpers</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value">16</div>
+                    <div class="stat-label">API Functions</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">66</div>
+                    <div class="stat-label">Tests</div>
+                </div>
+            </div>
+
+            <h3>Acceptance criteria</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Criterion</th>
+                        <th>Accepts Worse?</th>
+                        <th>Behavior</th>
+                        <th>Best For</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Simulated Annealing</td>
+                        <td class="y">Yes (probabilistic)</td>
+                        <td>P = exp(-&Delta;/T), T cools each iteration</td>
+                        <td>General-purpose exploration</td>
+                    </tr>
+                    <tr>
+                        <td>Record-to-Record Travel</td>
+                        <td class="p">Within threshold</td>
+                        <td>Accept if cost &le; best + threshold</td>
+                        <td>Greedy intensification</td>
+                    </tr>
+                    <tr>
+                        <td>Great Deluge</td>
+                        <td class="p">Above water level</td>
+                        <td>Accept if cost &le; water level (decays)</td>
+                        <td>Gradual convergence</td>
+                    </tr>
+                    <tr>
+                        <td>Improving Only</td>
+                        <td class="n">Never</td>
+                        <td>Only strictly better solutions</td>
+                        <td>Pure exploitation / polish</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Adaptive weight learning</h3>
+            <p>
+                Every <code>segment_size</code> iterations (default 100), Arbor updates operator weights
+                based on their performance during that segment:
+            </p>
+
+            <div class="code-block">
+<pre><span class="comment">// Reward for each operator usage during segment</span>
+<span class="keyword">if</span> (new_global_best)   reward = <span class="number">8.0</span>;   <span class="comment">// Best solution found</span>
+<span class="keyword">else if</span> (improved)     reward = <span class="number">4.0</span>;   <span class="comment">// Improving accepted</span>
+<span class="keyword">else if</span> (accepted)     reward = <span class="number">2.0</span>;   <span class="comment">// Non-improving accepted</span>
+<span class="keyword">else</span>                   reward = <span class="number">0.5</span>;   <span class="comment">// Rejected</span>
+
+<span class="comment">// Weight update at segment boundary</span>
+avg_reward = segment_score / segment_uses;
+new_weight = (<span class="number">1</span> - reaction) * old_weight + reaction * avg_reward;
+<span class="comment">// reaction = 0.1: 10% new data, 90% history</span></pre>
+            </div>
+
+            <p>
+                This means operators that consistently find improvements get selected more often.
+                Operators that waste CPU get downweighted. The <code>reaction_factor</code> (default 0.1)
+                controls learning speed &mdash; low values keep weights stable, high values react quickly
+                to recent performance.
+            </p>
+
+            <h3>SA temperature calibration</h3>
+            <p>
+                <code>ar_alns_calibrate_sa()</code> auto-tunes the initial temperature and cooling rate
+                from the problem cost and iteration budget:
+            </p>
+            <ul>
+                <li><strong>T<sub>0</sub></strong> = 0.05 &times; |cost| / ln(2) &mdash; a 5%-worse solution is accepted with ~50% probability initially</li>
+                <li><strong>Cooling rate</strong> = exp(-6.9 / max_iterations) &mdash; temperature drops to 0.1% of T<sub>0</sub> by the end</li>
+                <li>Example: cost=1000, 1000 iters &rarr; T<sub>0</sub> &asymp; 72, cooling &asymp; 0.993, final T &asymp; 0.07</li>
+            </ul>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Operators -->
+        <!-- ============================================================ -->
+        <section class="section" id="operators">
+            <div class="section-title">Operators</div>
+            <h2>Built-in removal strategies + pluggable anything</h2>
+
+            <h3>Standard removal helpers</h3>
+            <p>
+                Arbor provides three parameterized removal strategies in <code>ar_operators.h</code>.
+                These are building blocks &mdash; your domain operators call them with problem-specific
+                callbacks for element access, cost, and relatedness.
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Strategy</th>
+                        <th>Selection</th>
+                        <th>Complexity</th>
+                        <th>Character</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>ar_remove_random</td>
+                        <td>Uniform random from solution</td>
+                        <td>O(q)</td>
+                        <td>Pure diversification</td>
+                    </tr>
+                    <tr>
+                        <td>ar_remove_worst</td>
+                        <td>Highest-cost elements, rank-based randomness</td>
+                        <td>O(n log n)</td>
+                        <td>Targeted improvement</td>
+                    </tr>
+                    <tr>
+                        <td>ar_remove_related</td>
+                        <td>Seed + expand by relatedness (Shaw)</td>
+                        <td>O(n &times; q)</td>
+                        <td>Structural neighborhood</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Surge's 18 operators (real-world example)</h3>
+
+            <div class="two-col">
+                <div>
+                    <h3>12 Destroy operators</h3>
+                    <ul>
+                        <li><strong>random</strong> &mdash; uniform selection</li>
+                        <li><strong>worst</strong> &mdash; highest reduced cost</li>
+                        <li><strong>shaw</strong> &mdash; distance relatedness</li>
+                        <li><strong>paired-shaw</strong> &mdash; PD pair relatedness</li>
+                        <li><strong>string</strong> &mdash; contiguous stop sequences</li>
+                        <li><strong>route-removal</strong> &mdash; entire routes</li>
+                        <li><strong>route-cluster</strong> &mdash; geographic clustering</li>
+                        <li><strong>time-cluster</strong> &mdash; temporal clustering</li>
+                        <li><strong>time-window-removal</strong> &mdash; TW clustering</li>
+                        <li><strong>criticality-worst</strong> &mdash; cost criticality</li>
+                        <li><strong>vehicle-target</strong> &mdash; target empty runs</li>
+                        <li><strong>vehicle-empty</strong> &mdash; empty vehicle removal</li>
+                    </ul>
+                </div>
+                <div>
+                    <h3>6 Repair operators</h3>
+                    <ul>
+                        <li><strong>greedy-insert</strong> &mdash; best insertion cost</li>
+                        <li><strong>regret-2</strong> &mdash; 2-opt regret heuristic</li>
+                        <li><strong>regret-3</strong> &mdash; 3-opt regret (primary)</li>
+                        <li><strong>regret-4</strong> &mdash; 4-opt regret heuristic</li>
+                        <li><strong>noise-regret</strong> &mdash; regret + noise for diversity</li>
+                        <li><strong>pair-sync</strong> &mdash; PD synchronization</li>
+                    </ul>
+                    <p style="margin-top: 16px; font-size: 13px;">
+                        Each operator starts with weight 1.0. After 100 iterations, Arbor has already
+                        learned which operators work for the current instance.
+                    </p>
+                </div>
+            </div>
+
+            <h3>Adaptive destruction size</h3>
+            <p>
+                When enabled, the number of elements removed (<strong>q</strong>) adapts to search progress.
+                During improvement phases, q stays small (exploitation). During stagnation, q grows up to
+                3&times; the initial maximum (exploration). Resets to initial when improvements resume.
+            </p>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- API -->
+        <!-- ============================================================ -->
+        <section class="section" id="api">
+            <div class="section-title">API</div>
+            <h2>Register, solve, read stats &mdash; three steps</h2>
+
+            <div class="code-block">
+<pre><span class="keyword">#include</span> <span class="string">"ar_alns.h"</span>
+
+<span class="comment">// 1. Configure</span>
+<span class="type">ARALNSParams</span> params;
+<span class="func">ar_alns_params_default</span>(&amp;params);
+params.max_iterations = <span class="number">5000</span>;
+params.accept_type = <span class="type">AR_ACCEPT_SA</span>;
+<span class="func">ar_alns_calibrate_sa</span>(&amp;params, initial_cost, <span class="number">5000</span>);
+
+<span class="comment">// Solution callbacks: copy, free, cost, size, validate, is_better</span>
+<span class="type">ARSolutionOps</span> ops = {
+    .copy = my_copy, .free = my_free,
+    .cost = my_cost, .size = my_size,
+    .is_better = my_compare
+};
+
+<span class="comment">// 2. Create context and register operators</span>
+<span class="type">ARALNSContext</span> *ctx = <span class="func">ar_alns_create</span>(&amp;params, &amp;ops, solver_data);
+<span class="func">ar_alns_set_seed</span>(ctx, <span class="number">42</span>);
+
+<span class="func">ar_alns_add_destroy</span>(ctx, <span class="string">"random"</span>,    destroy_random,  NULL, <span class="number">1.0</span>);
+<span class="func">ar_alns_add_destroy</span>(ctx, <span class="string">"worst"</span>,     destroy_worst,   NULL, <span class="number">1.0</span>);
+<span class="func">ar_alns_add_destroy</span>(ctx, <span class="string">"shaw"</span>,      destroy_shaw,    NULL, <span class="number">1.0</span>);
+<span class="func">ar_alns_add_repair</span>(ctx,  <span class="string">"regret-3"</span>,  repair_regret3,  NULL, <span class="number">1.0</span>);
+<span class="func">ar_alns_add_repair</span>(ctx,  <span class="string">"greedy"</span>,    repair_greedy,   NULL, <span class="number">1.0</span>);
+
+<span class="comment">// 3. Solve</span>
+<span class="type">void</span> *best = NULL;
+<span class="func">ar_alns_solve</span>(ctx, initial_solution, &amp;best);
+
+<span class="comment">// 4. Read results</span>
+<span class="type">ARALNSStats</span> stats;
+<span class="func">ar_alns_get_stats</span>(ctx, &amp;stats);
+<span class="comment">// stats.best_cost, stats.iterations, stats.improvements</span>
+
+<span class="comment">// Per-operator performance</span>
+<span class="keyword">for</span> (<span class="type">int</span> i = <span class="number">0</span>; i &lt; <span class="func">ar_alns_destroy_count</span>(ctx); i++) {
+    <span class="type">ARALNSOperatorStats</span> os;
+    <span class="func">ar_alns_get_destroy_stats</span>(ctx, i, &amp;os);
+    <span class="comment">// os.name, os.weight, os.selected, os.improvements</span>
+}
+
+<span class="func">ar_alns_free</span>(ctx);</pre>
+            </div>
+
+            <h3>Solution interface</h3>
+            <p>
+                Arbor is problem-agnostic. You provide six callbacks that define your problem:
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Callback</th>
+                        <th>Signature</th>
+                        <th>Purpose</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>copy</td>
+                        <td><code>void *(*)(const void *)</code></td>
+                        <td>Deep copy a solution</td>
+                    </tr>
+                    <tr>
+                        <td>free</td>
+                        <td><code>void (*)(void *)</code></td>
+                        <td>Free a solution</td>
+                    </tr>
+                    <tr>
+                        <td>cost</td>
+                        <td><code>double (*)(const void *)</code></td>
+                        <td>Evaluate solution cost</td>
+                    </tr>
+                    <tr>
+                        <td>size</td>
+                        <td><code>int (*)(const void *)</code></td>
+                        <td>Number of elements (for q calculation)</td>
+                    </tr>
+                    <tr>
+                        <td>validate</td>
+                        <td><code>int (*)(const void *)</code></td>
+                        <td>Check feasibility (optional)</td>
+                    </tr>
+                    <tr>
+                        <td>is_better</td>
+                        <td><code>int (*)(const void *, const void *)</code></td>
+                        <td>Compare two solutions</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Progress callback</h3>
+
+            <div class="code-block">
+<pre><span class="comment">// Called at each segment boundary (~100 iterations)</span>
+<span class="type">int</span> <span class="func">on_progress</span>(<span class="keyword">const</span> <span class="type">ARALNSStats</span> *stats, <span class="type">void</span> *user_data) {
+    <span class="func">printf</span>(<span class="string">"iter=%lld cost=%.1f improved=%lld\n"</span>,
+           stats-&gt;iterations, stats-&gt;best_cost, stats-&gt;improvements);
+    <span class="keyword">return</span> should_cancel ? <span class="number">1</span> : <span class="number">0</span>;  <span class="comment">// return 1 to stop</span>
+}
+
+<span class="func">ar_alns_set_progress_callback</span>(ctx, on_progress, my_data);</pre>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Architecture -->
+        <!-- ============================================================ -->
+        <section class="section" id="architecture">
+            <div class="section-title">Under the Hood</div>
+            <h2>Design decisions</h2>
+
+            <h3>Restart mechanism</h3>
+            <p>
+                When stagnation exceeds <code>restart_threshold</code>, Arbor resets to the best known
+                solution and reheats the SA temperature to <code>initial_temp &times; restart_temp_ratio</code>.
+                This escapes local optima without losing the global best. Statistics track restart count.
+            </p>
+
+            <h3>Memory model</h3>
+            <p>
+                Operator arrays grow dynamically (default capacity 8, doubles as needed). The best
+                solution is cached in context. One <code>SHRng</code> (Xoshiro256**) instance per context.
+                No global state &mdash; multiple ALNS contexts run concurrently without interference.
+            </p>
+
+            <h3>Stop conditions</h3>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Reason</th>
+                        <th>Configuration</th>
+                        <th>Use Case</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>AR_STOP_MAX_ITERATIONS</td>
+                        <td><code>max_iterations</code></td>
+                        <td>Fixed compute budget</td>
+                    </tr>
+                    <tr>
+                        <td>AR_STOP_TIME_LIMIT</td>
+                        <td><code>max_time_seconds</code></td>
+                        <td>Wall-clock deadline</td>
+                    </tr>
+                    <tr>
+                        <td>AR_STOP_STAGNATION</td>
+                        <td><code>max_stagnation_iterations</code></td>
+                        <td>No progress detection</td>
+                    </tr>
+                    <tr>
+                        <td>AR_STOP_TARGET_COST</td>
+                        <td><code>target_cost</code></td>
+                        <td>Known optimum (benchmarking)</td>
+                    </tr>
+                    <tr>
+                        <td>AR_STOP_CANCELLED</td>
+                        <td>Progress callback returns 1</td>
+                        <td>User cancellation</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Codebase</h3>
+
+            <div class="stat-row">
+                <div class="stat">
+                    <div class="stat-value">~1.4K</div>
+                    <div class="stat-label">Lines of C</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">66</div>
+                    <div class="stat-label">Tests</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value blue">16</div>
+                    <div class="stat-label">API Functions</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-value green">0</div>
+                    <div class="stat-label">Ext Dependencies</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- Quick Start -->
+        <!-- ============================================================ -->
+        <section class="section" id="quickstart">
+            <div class="section-title">Quick Start</div>
+            <h2>Get started in minutes</h2>
+
+            <h3>1. Build from source</h3>
+            <div class="code-block">
+<pre><span class="comment"># Clone and build</span>
+<span class="command">git clone https://github.com/ottofleet/otto.git</span>
+<span class="command">cd otto && make arbor</span>
+
+<span class="comment"># Run tests</span>
+<span class="command">make test-arbor</span></pre>
+            </div>
+
+            <h3>2. Minimal example</h3>
+            <div class="code-block">
+<pre><span class="comment">// Define your solution type</span>
+<span class="keyword">typedef struct</span> { <span class="type">int</span> *assignment; <span class="type">int</span> n; <span class="type">double</span> cost; } <span class="type">MySolution</span>;
+
+<span class="comment">// Implement 6 callbacks: copy, free, cost, size, validate, is_better</span>
+<span class="comment">// Write at least 1 destroy + 1 repair operator</span>
+
+<span class="comment">// Create, register, solve</span>
+<span class="type">ARALNSParams</span> p;
+<span class="func">ar_alns_params_default</span>(&amp;p);
+p.max_iterations = <span class="number">1000</span>;
+
+<span class="type">ARALNSContext</span> *ctx = <span class="func">ar_alns_create</span>(&amp;p, &amp;ops, NULL);
+<span class="func">ar_alns_add_destroy</span>(ctx, <span class="string">"random"</span>, my_destroy, NULL, <span class="number">1.0</span>);
+<span class="func">ar_alns_add_repair</span>(ctx, <span class="string">"greedy"</span>, my_repair, NULL, <span class="number">1.0</span>);
+
+<span class="type">void</span> *best = NULL;
+<span class="func">ar_alns_solve</span>(ctx, initial, &amp;best);
+<span class="func">ar_alns_free</span>(ctx);</pre>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- FAQ -->
+        <!-- ============================================================ -->
+        <section class="section" id="faq">
+            <div class="section-title">FAQ</div>
+            <h2>Common questions</h2>
+
+            <h3>Why separate Arbor from Surge?</h3>
+            <p>
+                Testability and reuse. Arbor's 66 tests validate the ALNS framework independently
+                of any problem domain. If we build a scheduling module tomorrow, it registers its own
+                operators and gets adaptive weight learning, SA acceptance, restarts, and per-operator
+                statistics for free. Surge focuses purely on VRP domain logic.
+            </p>
+
+            <h3>Which acceptance criterion should I use?</h3>
+            <p>
+                Start with <strong>Simulated Annealing</strong> and use <code>ar_alns_calibrate_sa()</code>
+                to auto-tune. SA is the most versatile criterion &mdash; it explores aggressively early
+                (high temperature) and converges late (low temperature). Use RRT for quick diversification
+                with a known quality threshold. Use Great Deluge for slow, steady convergence. Use
+                improving-only for final polishing after SA has explored.
+            </p>
+
+            <h3>How many operators should I register?</h3>
+            <p>
+                More is better, up to a point. Surge uses 18 operators. The adaptive weights handle
+                operator selection &mdash; poor operators get weight &asymp;0.01 and rarely fire.
+                Minimum: 1 destroy + 1 repair. For competitive results on VRP: 6&ndash;12 destroy
+                + 3&ndash;6 repair operators covering random, worst, related, and structural removal.
+            </p>
+
+            <h3>What about genetic algorithms or tabu search?</h3>
+            <p>
+                ALNS is the state-of-the-art metaheuristic for vehicle routing and scheduling problems.
+                Ropke &amp; Pisinger (2006) showed it consistently outperforms tabu search and GA on VRPTW.
+                Surge also implements SREX crossover (population-based) alongside Arbor's ALNS &mdash;
+                the two approaches complement each other.
+            </p>
+
+            <h3>What license?</h3>
+            <p>
+                AGPLv3 with a Trucking Exception. Same terms as all OTTO modules.
+            </p>
+        </section>
+
+        </main>
+
+        <footer>
+            <nav class="footer-links" aria-label="Footer navigation">
+                <a href="../index.html">Home</a>
+                <a href="../api.html">API Docs</a>
+                <a href="https://github.com/ottofleet/otto/blob/main/docs/roadmaps/arbor.md">Roadmap</a>
+                <a href="https://github.com/ottofleet/otto/blob/main/LICENSE">License</a>
+                <a href="https://github.com/ottofleet/otto">GitHub</a>
+            </nav>
+            <div>&copy; 2026 Mark Farkas. Built by <a href="https://artalis.io">Artalis</a>.</div>
+        </footer>
+    </div>
+</body>
+</html>

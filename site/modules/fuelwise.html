@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FuelWise — Refueling Optimizer | OTTO</title>
+    <meta name="description" content="FuelWise is a pure C refueling optimization engine for long-haul trucking. LP/MILP solvers find minimum-cost fuel purchasing strategies with weight-dependent consumption, tank constraints, and safety margins.">
+
+    <!-- SEO -->
+    <link rel="canonical" href="https://ottofleet.io/modules/fuelwise.html">
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#0a0a0a">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="FuelWise — Refueling Optimizer | OTTO">
+    <meta property="og:description" content="LP/MILP-powered fuel stop optimization. Weight-dependent consumption, multi-station planning, 5-15% cost savings. Compiles to WASM.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://ottofleet.io/modules/fuelwise.html">
+    <meta property="og:site_name" content="OTTO">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%230a0a0a'/%3E%3Ctext x='50' y='68' font-family='ui-monospace,monospace' font-size='60' font-weight='700' fill='%233b82f6' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
+
+    <!-- Shared Styles -->
+    <link rel="stylesheet" href="../style.css">
+
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "FuelWise",
+        "alternateName": "OTTO FuelWise Refueling Optimizer",
+        "description": "LP/MILP-powered refueling optimization for long-haul trucking. Weight-dependent consumption models, multi-station planning, Benders decomposition. Compiles to WebAssembly.",
+        "url": "https://ottofleet.io/modules/fuelwise.html",
+        "applicationCategory": "BusinessApplication",
+        "operatingSystem": "Cross-platform (WASM, Linux, macOS)",
+        "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+        "author": {
+            "@type": "Person",
+            "name": "Mark Farkas"
+        }
+    }
+    </script>
+
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --bg-secondary: #141414;
+            --bg-tertiary: #1a1a1a;
+            --text: #e0e0e0;
+            --text-secondary: #888;
+            --accent: #3b82f6;
+            --accent-glow: rgba(59, 130, 246, 0.15);
+            --border: #2a2a2a;
+            --green: #22c55e;
+            --amber: #f59e0b;
+            --red: #ef4444;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace; line-height: 1.7; }
+        .container { max-width: 900px; margin: 0 auto; padding: 0 2rem; }
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        /* Navigation */
+        .back-nav { padding: 1.5rem 0; border-bottom: 1px solid var(--border); }
+        .back-nav a { font-size: 0.85rem; color: var(--text-secondary); }
+        .back-nav a:hover { color: var(--accent); }
+
+        /* Hero */
+        .hero { padding: 4rem 0 3rem; text-align: center; }
+        .hero h1 { font-size: 2.5rem; font-weight: 700; margin-bottom: 1rem; letter-spacing: -0.02em; }
+        .hero h1 .accent { color: var(--accent); }
+        .hero .subtitle { font-size: 1.1rem; color: var(--text-secondary); max-width: 600px; margin: 0 auto 2rem; }
+        .badge-row { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; }
+        .badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; border: 1px solid var(--border); color: var(--text-secondary); }
+        .badge.green { border-color: var(--green); color: var(--green); }
+        .badge.blue { border-color: var(--accent); color: var(--accent); }
+        .badge.amber { border-color: var(--amber); color: var(--amber); }
+
+        /* Sections */
+        section { padding: 3rem 0; border-top: 1px solid var(--border); }
+        section h2 { font-size: 1.5rem; font-weight: 700; margin-bottom: 1.5rem; }
+        section h3 { font-size: 1.1rem; font-weight: 600; margin: 2rem 0 1rem; color: var(--text); }
+        p { margin-bottom: 1rem; color: var(--text-secondary); }
+
+        /* Feature grid */
+        .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem; margin: 1.5rem 0; }
+        .feature-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; }
+        .feature-card h4 { font-size: 0.95rem; margin-bottom: 0.5rem; color: var(--text); }
+        .feature-card p { font-size: 0.85rem; margin: 0; }
+
+        /* ASCII art */
+        .ascii-art { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1.5rem 0; overflow-x: auto; position: relative; }
+        .ascii-art pre { font-size: 0.75rem; line-height: 1.5; color: var(--green); margin: 0; }
+        .ascii-art::after { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,0,0.015) 2px, rgba(0,255,0,0.015) 4px); pointer-events: none; border-radius: 8px; }
+
+        /* Code blocks */
+        .code-block { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1.5rem 0; overflow-x: auto; position: relative; }
+        .code-block pre { font-size: 0.8rem; line-height: 1.6; color: var(--text); margin: 0; }
+        .code-block .label { position: absolute; top: 0.5rem; right: 0.75rem; font-size: 0.65rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.1em; }
+        .code-block::after { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,0,0.008) 2px, rgba(0,255,0,0.008) 4px); pointer-events: none; border-radius: 8px; }
+
+        /* Tables */
+        table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; font-size: 0.85rem; }
+        th { text-align: left; padding: 0.75rem; border-bottom: 2px solid var(--border); color: var(--text); font-weight: 600; }
+        td { padding: 0.75rem; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
+        tr:hover td { color: var(--text); }
+
+        /* Stats row */
+        .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+        .stat { text-align: center; padding: 1.25rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; }
+        .stat .number { font-size: 1.5rem; font-weight: 700; color: var(--accent); display: block; }
+        .stat .label { font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem; display: block; }
+
+        /* Callout */
+        .callout { background: var(--accent-glow); border: 1px solid var(--accent); border-radius: 8px; padding: 1.25rem 1.5rem; margin: 1.5rem 0; }
+        .callout.honest { background: rgba(245, 158, 11, 0.08); border-color: var(--amber); }
+        .callout p { margin: 0; font-size: 0.9rem; }
+        .callout strong { color: var(--text); }
+
+        /* Two column */
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: 1.5rem 0; }
+
+        /* Footer */
+        .footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align: center; }
+        .footer p { font-size: 0.85rem; color: var(--text-secondary); }
+
+        /* Logo animation */
+        .logo-text { font-weight: 700; letter-spacing: 0.05em; position: relative; display: inline-block; }
+        .logo-text::before { content: 'OTTO'; position: absolute; left: -1px; text-shadow: 2px 0 #ff0000; clip: rect(24px, 550px, 90px, 0); animation: logo-glitch-1 4s infinite linear alternate-reverse; }
+        .logo-text::after { content: 'OTTO'; position: absolute; left: 1px; text-shadow: -2px 0 #0000ff; clip: rect(85px, 550px, 140px, 0); animation: logo-glitch-2 4s infinite linear alternate-reverse; }
+        @keyframes logo-glitch-1 { 0%,100% { clip: rect(42px,9999px,44px,0); } 5% { clip: rect(12px,9999px,59px,0); } 10% { clip: rect(48px,9999px,29px,0); } 15% { clip: rect(42px,9999px,73px,0); } 20% { clip: rect(63px,9999px,27px,0); } 25% { clip: rect(34px,9999px,55px,0); } 30% { clip: rect(86px,9999px,73px,0); } 35% { clip: rect(20px,9999px,59px,0); } 40% { clip: rect(26px,9999px,87px,0); } 45% { clip: rect(32px,9999px,95px,0); } 50% { clip: rect(54px,9999px,31px,0); } 55% { clip: rect(28px,9999px,45px,0); } 60% { clip: rect(76px,9999px,82px,0); } 65% { clip: rect(32px,9999px,52px,0); } 70% { clip: rect(14px,9999px,37px,0); } 75% { clip: rect(55px,9999px,63px,0); } 80% { clip: rect(42px,9999px,81px,0); } 85% { clip: rect(17px,9999px,26px,0); } 90% { clip: rect(72px,9999px,96px,0); } 95% { clip: rect(28px,9999px,49px,0); } }
+        @keyframes logo-glitch-2 { 0%,100% { clip: rect(65px,9999px,99px,0); } 5% { clip: rect(52px,9999px,75px,0); } 10% { clip: rect(71px,9999px,42px,0); } 15% { clip: rect(42px,9999px,88px,0); } 20% { clip: rect(25px,9999px,67px,0); } 25% { clip: rect(75px,9999px,51px,0); } 30% { clip: rect(47px,9999px,69px,0); } 35% { clip: rect(82px,9999px,33px,0); } 40% { clip: rect(38px,9999px,92px,0); } 45% { clip: rect(67px,9999px,55px,0); } 50% { clip: rect(23px,9999px,79px,0); } 55% { clip: rect(57px,9999px,41px,0); } 60% { clip: rect(81px,9999px,62px,0); } 65% { clip: rect(36px,9999px,85px,0); } 70% { clip: rect(68px,9999px,48px,0); } 75% { clip: rect(22px,9999px,76px,0); } 80% { clip: rect(59px,9999px,38px,0); } 85% { clip: rect(43px,9999px,97px,0); } 90% { clip: rect(31px,9999px,56px,0); } 95% { clip: rect(73px,9999px,43px,0); } }
+
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 1.75rem; }
+            .two-col { grid-template-columns: 1fr; }
+            .container { padding: 0 1rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <nav class="back-nav">
+            <a href="../">&larr; Back to <span class="logo-text">OTTO</span></a>
+        </nav>
+
+        <!-- Hero -->
+        <header class="hero">
+            <h1>FuelWise <span class="accent">Refueling Optimizer</span></h1>
+            <p class="subtitle">LP/MILP-powered fuel stop optimization for long-haul trucking. Weight-dependent consumption models, multi-station planning, 5&ndash;15% cost savings. Powered by Ralph.</p>
+            <div class="badge-row">
+                <span class="badge green">157 tests</span>
+                <span class="badge blue">~3K LoC</span>
+                <span class="badge amber">5&ndash;15% savings</span>
+                <span class="badge">WASM-ready</span>
+                <span class="badge">Zero deps</span>
+            </div>
+        </header>
+
+        <!-- Why FuelWise -->
+        <section>
+            <h2>Why FuelWise</h2>
+            <p>Fuel is 30&ndash;40% of a trucking company&rsquo;s operating cost. Most drivers refuel at the nearest station or fill up everywhere. FuelWise formulates fuel purchasing as a mathematical optimization problem and solves it exactly&mdash;finding the minimum-cost strategy that respects tank capacity, safety margins, and weight-dependent consumption.</p>
+
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h4>Mathematical Precision</h4>
+                    <p>LP/MILP formulation with proven optimality. Not heuristics, not rules of thumb&mdash;provably optimal fuel purchasing via Ralph&rsquo;s simplex and branch-and-bound solvers.</p>
+                </div>
+                <div class="feature-card">
+                    <h4>Weight-Aware Consumption</h4>
+                    <p>Trucks consume 24 L/100km empty, 36+ L/100km loaded. Built-in curves for EU standard (40t), US Class 8 (36t), and light trucks. Integrates cargo pickup/delivery events along the route.</p>
+                </div>
+                <div class="feature-card">
+                    <h4>Three Solver Tiers</h4>
+                    <p>LP relaxation for fast answers (&lt;1ms). Full MILP for discrete stop decisions with minimum purchase constraints. Benders decomposition for 50+ station problems.</p>
+                </div>
+                <div class="feature-card">
+                    <h4>Runs Anywhere</h4>
+                    <p>Pure C with no external dependencies. Compiles to WASM for browser demos. Embeds in fleet management systems, ELDs, or runs as a REST API.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Optimization -->
+        <section>
+            <h2>Optimization Model</h2>
+            <p>FuelWise formulates the optimal refueling problem as a linear program. The MILP variant adds binary stop decisions and minimum purchase constraints.</p>
+
+            <div class="ascii-art"><pre>
+  Route: A ──────────────────────────────────────────── B
+              │         │              │         │
+              S1        S2             S3        S4
+              $1.45/L   $1.52/L        $1.38/L   $1.49/L
+
+  Tank:  ████████░░░░░░░  →  ████░░░░░░░░░░░  →  ████████████░░░
+         Start: 80L           Low: skip S2          Fill cheap S3
+
+  LP Variables:
+    x[i] = liters purchased at station i     (≥ 0)
+    y[i] = fuel level at station i           (≤ capacity)
+
+  Objective:  min Σ x[i] · price[i]
+
+  Constraints:
+    y[i] = y[i-1] + x[i-1] - consumed[i-1→i]    (fuel balance)
+    y[i] ≥ min_fuel                                (safety margin)
+    y[i] + x[i] ≤ tank_capacity                   (no overflow)
+    y[end] ≥ min_end_fuel                          (reach dest)</pre></div>
+
+            <div class="stat-row">
+                <div class="stat">
+                    <span class="number">&lt;1ms</span>
+                    <span class="label">LP Solve (25 stations)</span>
+                </div>
+                <div class="stat">
+                    <span class="number">~50ms</span>
+                    <span class="label">MILP Solve (25 stations)</span>
+                </div>
+                <div class="stat">
+                    <span class="number">5&ndash;15%</span>
+                    <span class="label">Typical Savings</span>
+                </div>
+                <div class="stat">
+                    <span class="number">3</span>
+                    <span class="label">Solver Tiers</span>
+                </div>
+            </div>
+
+            <h3>Solver Comparison</h3>
+            <table>
+                <thead><tr><th>Solver</th><th>10 stations</th><th>25 stations</th><th>50 stations</th><th>Trade-off</th></tr></thead>
+                <tbody>
+                    <tr><td><code>fw_solve_refuel_lp()</code></td><td>1 ms</td><td>1 ms</td><td>1 ms</td><td>Fast; may split purchases fractionally</td></tr>
+                    <tr><td><code>fw_solve_refuel_milp()</code></td><td>5 ms</td><td>50 ms</td><td>5 s</td><td>Exact discrete decisions; exponential worst case</td></tr>
+                    <tr><td><code>fw_solve_refuel_benders()</code></td><td>10 ms</td><td>30 ms</td><td>300 ms</td><td>Scales to 100+; decomposes into master + sub</td></tr>
+                </tbody>
+            </table>
+
+            <h3>MILP Extensions</h3>
+            <p>The MILP variant adds binary variables <code>z[i] &isin; {0,1}</code> for stop decisions. Enables minimum purchase constraints (no 5L fill-ups), fixed stop costs (time penalty), and true all-or-nothing station selection. Ralph&rsquo;s branch-and-bound with LP relaxation bounds solves these efficiently.</p>
+
+            <h3>Weight-Dependent Consumption</h3>
+            <p>Empty trucks burn ~24 L/100km. Fully loaded (40t GVW), they burn ~36 L/100km. FuelWise integrates consumption over the route using weight profiles that track cargo pickup/delivery events.</p>
+
+            <div class="two-col">
+                <div>
+                    <table>
+                        <thead><tr><th>Curve</th><th>GVW</th><th>Range</th></tr></thead>
+                        <tbody>
+                            <tr><td>EU Standard</td><td>40t</td><td>24&ndash;36.5 L/100km</td></tr>
+                            <tr><td>US Class 8</td><td>36t</td><td>28&ndash;42 L/100km</td></tr>
+                            <tr><td>Light Truck</td><td>12t</td><td>12&ndash;20 L/100km</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="code-block"><span class="label">C</span><pre>
+/* Weight-dependent consumption */
+FWConsumptionCurve *curve =
+    fw_curve_eu_standard();
+
+FWWeightProfile *wp =
+    fw_weight_profile_create(15000);
+fw_weight_profile_add_event(
+    wp, 100000, 10000);  /* +10t at 100km */
+fw_weight_profile_add_event(
+    wp, 300000, -5000);  /* -5t at 300km */
+
+double fuel = fw_calc_fuel_for_segment(
+    curve, wp, 0, 500000); /* 0→500km */</pre></div>
+            </div>
+        </section>
+
+        <!-- Pipeline -->
+        <section>
+            <h2>Pipeline</h2>
+            <p>FuelWise runs a three-stage pipeline: filter stations near the route, snap them to the polyline with distances, then solve the optimization problem.</p>
+
+            <div class="ascii-art"><pre>
+  Input:                              Output:
+  ┌─────────────┐                     ┌─────────────────────┐
+  │ Route (lat/lon polyline)          │ Optimal stops:      │
+  │ Fuel stations (price, location)   │   S3: buy 120L      │
+  │ Tank capacity, current fuel       │   S7: buy 85L       │
+  │ Consumption rate or curve         │ Total cost: $142.50  │
+  │ Weight profile (optional)         │ Savings: 12.3%       │
+  └──────────────┬────────────────    └─────────────────────┘
+                 │
+     ┌───────────┼───────────┐
+     ▼           ▼           ▼
+  ┌──────┐  ┌────────┐  ┌────────┐
+  │Filter│  │  Snap  │  │ Solve  │
+  │      │→ │to Route│→ │LP/MILP │
+  │16km  │  │project │  │ Ralph  │
+  └──────┘  └────────┘  └────────┘
+
+  fw_filter_stations_two_step()  →  fw_solve_refuel_lp()
+                                    fw_solve_refuel_milp()
+                                    fw_solve_refuel_benders()</pre></div>
+
+            <h3>Station Filtering</h3>
+            <p>For each candidate station, compute perpendicular distance to the route polyline. Stations within 16km (configurable) are projected onto the route with their distance-along-route recorded. Two-step filtering adds deduplication for overlapping station clusters.</p>
+
+            <h3>Ralph Integration</h3>
+            <p>FuelWise builds Ralph models directly: continuous variables for purchase amounts, binary variables for stop decisions, constraints for fuel balance and tank limits. Ralph returns primal values (purchases), dual values (shadow prices for business analysis), and Farkas rays (for Benders feasibility cuts).</p>
+
+            <div class="callout">
+                <p><strong>Separation of concerns.</strong> FuelWise formulates the optimization problem. Ralph solves it. Neither knows the other&rsquo;s internals. This lets Ralph improve (better cuts, faster branching) and FuelWise benefit automatically.</p>
+            </div>
+        </section>
+
+        <!-- API -->
+        <section>
+            <h2>API</h2>
+
+            <div class="code-block"><span class="label">C</span><pre>
+#include "fuelwise.h"
+
+/* High-level: filter + snap + solve in one call */
+FWOptimizeRequest req = {
+    .route          = polyline,
+    .stations       = all_stations,
+    .num_stations   = 200,
+    .tank_capacity  = 300.0,      /* liters */
+    .current_fuel   = 80.0,       /* liters */
+    .consumption    = 28.5,       /* L/100km (or use curve) */
+    .min_fuel       = 10.0,       /* safety margin */
+    .max_detour_m   = 16000,      /* 16km filter radius */
+    .solver         = FW_SOLVER_LP
+};
+
+FWOptimizeResponse resp;
+FWStatus status = fw_optimize(&req, &resp);
+
+if (status == FW_STATUS_OPTIMAL) {
+    printf("Total cost: $%.2f\n", resp.solution.total_cost);
+    printf("Stops: %d\n", resp.solution.num_stops);
+    for (int i = 0; i &lt; resp.solution.num_stops; i++) {
+        printf("  Station %d: buy %.1f L @ $%.3f/L\n",
+               resp.solution.stops[i].station_id,
+               resp.solution.stops[i].liters,
+               resp.solution.stops[i].price);
+    }
+}
+fw_free_response(&resp);</pre></div>
+
+            <h3>REST API</h3>
+            <table>
+                <thead><tr><th>Endpoint</th><th>Description</th></tr></thead>
+                <tbody>
+                    <tr><td><code>POST /api/v1/optimize</code></td><td>Full pipeline: filter + solve with JSON input</td></tr>
+                    <tr><td><code>GET /api/v1/health</code></td><td>Health check</td></tr>
+                    <tr><td><code>GET /api/v1/stats</code></td><td>Solver stats, queue depth, rate limit info</td></tr>
+                </tbody>
+            </table>
+
+            <h3>Serialization</h3>
+            <div class="code-block"><span class="label">C</span><pre>
+/* Solution to JSON */
+char *json = fw_solution_to_json(&resp.solution);
+printf("%s\n", json);
+fw_free_json(json);
+
+/* Full response (includes filtered stations) */
+char *full = fw_response_to_json(&resp);
+fw_free_json(full);
+
+/* Status as string */
+const char *s = fw_status_string(status);  /* "OPTIMAL" */</pre></div>
+        </section>
+
+        <!-- Architecture -->
+        <section>
+            <h2>Architecture</h2>
+
+            <h3>Unit System</h3>
+            <p>SI internally (meters, liters, L/100km). Imperial conversion at API boundaries. Metric and imperial inputs produce mathematically equivalent results&mdash;verified by round-trip tests.</p>
+
+            <h3>Benchmark Infrastructure</h3>
+            <p>Problem generator creates randomized scenarios with Gamma-distributed station gaps. Independent constraint validator checks feasibility without using solver internals. 123 validator tests across 5 scenario types ensure correctness.</p>
+
+            <table>
+                <thead><tr><th>Scenario</th><th>Route</th><th>Stations</th><th>Tank</th><th>Weight Events</th></tr></thead>
+                <tbody>
+                    <tr><td>Short Urban</td><td>200 km</td><td>~20</td><td>100 L</td><td>2</td></tr>
+                    <tr><td>Highway</td><td>800 km</td><td>~25</td><td>300 L</td><td>4</td></tr>
+                    <tr><td>Long Haul</td><td>2,000 km</td><td>~50</td><td>500 L</td><td>8</td></tr>
+                    <tr><td>Tight Margins</td><td>500 km</td><td>~8</td><td>200 L</td><td>2</td></tr>
+                    <tr><td>Weight Heavy</td><td>600 km</td><td>~15</td><td>400 L</td><td>6</td></tr>
+                </tbody>
+            </table>
+
+            <div class="callout honest">
+                <p><strong>Honest assessment.</strong> FuelWise solves the &ldquo;where to buy fuel&rdquo; problem optimally. It does not yet handle fuel card network filtering, volume discounts (non-convex pricing), DEF co-purchasing, or Hours-of-Service co-optimization. These are roadmap items. The core LP/MILP formulation is production-ready; the real-world constraint coverage is still growing.</p>
+            </div>
+
+            <div class="code-block"><span class="label">Structure</span><pre>
+fuelwise/
+├── include/
+│   ├── fuelwise.h          # Unified public API
+│   ├── fw_types.h          # Data types (291 lines)
+│   ├── fw_api.h            # Transport-agnostic handler
+│   ├── fw_refuel.h         # LP/MILP/Benders solvers
+│   ├── fw_route.h          # Station filtering
+│   ├── fw_consumption.h    # Weight-dependent models
+│   └── fw_geo.h            # Geospatial utilities
+├── src/
+│   ├── fw_refuel.c         # Solver formulation (994 lines)
+│   ├── fw_api.c            # REST handler (804 lines)
+│   ├── fw_route.c          # Station snapping (463 lines)
+│   ├── fw_consumption.c    # Consumption curves (338 lines)
+│   ├── fuelwise.c          # Pipeline glue (359 lines)
+│   └── fw_geo.c            # Haversine utils (22 lines)
+├── api/src/main.c          # Mongoose HTTP wrapper
+├── wasm/                   # WASM wrapper
+├── bench/                  # Benchmark infrastructure
+└── tests/test_fuelwise.c   # 157 tests</pre></div>
+        </section>
+
+        <!-- Quick Start -->
+        <section>
+            <h2>Quick Start</h2>
+
+            <div class="code-block"><span class="label">Build</span><pre>
+# Build library + tests
+make fuelwise
+
+# Run tests
+make test-fuelwise      # 157 tests (34 unit + 123 validator)
+
+# Build API server
+make fuelwise-api
+
+# Start server
+./fuelwise/api/fuelwise-server
+
+# WASM build (requires Emscripten)
+make fuelwise-wasm</pre></div>
+
+            <div class="code-block"><span class="label">Query</span><pre>
+# Optimize refueling (POST JSON)
+curl -X POST http://localhost:8080/api/v1/optimize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "route": [[47.5,19.0],[47.4,18.5],[47.3,18.0]],
+    "stations": [
+      {"id":1,"lat":47.45,"lon":18.7,"price":1.45},
+      {"id":2,"lat":47.38,"lon":18.3,"price":1.38}
+    ],
+    "tank_capacity": 300,
+    "current_fuel": 80,
+    "consumption": 28.5
+  }'
+
+# Health check
+curl http://localhost:8080/api/v1/health</pre></div>
+        </section>
+
+        <!-- FAQ -->
+        <section>
+            <h2>Developer FAQ</h2>
+
+            <h3>Why LP instead of a greedy algorithm?</h3>
+            <p>Greedy (&ldquo;always fill at cheapest visible station&rdquo;) can&rsquo;t see far enough ahead. It may fill up at $1.40/L when a $1.30/L station is 50km further. LP considers all stations simultaneously and finds the provably optimal strategy. For 25 stations, LP solves in under 1ms&mdash;there&rsquo;s no reason to approximate.</p>
+
+            <h3>When should I use MILP vs LP?</h3>
+            <p>LP allows fractional purchases (&ldquo;buy 23.7L at station 3&rdquo;). Use it for fast planning and routing decisions. MILP adds binary stop decisions: if you stop, buy at least a minimum amount. Use it when stop costs matter (time penalty for pulling off highway) or when minimum purchase rules apply. For &gt;50 stations, use Benders decomposition.</p>
+
+            <h3>How does the weight profile work?</h3>
+            <p>Create a <code>FWWeightProfile</code> with initial weight, then add events: <code>fw_weight_profile_add_event(wp, distance_m, delta_kg)</code>. Positive delta = cargo pickup, negative = delivery. FuelWise integrates <code>consumption(weight(d))</code> over each segment using piecewise-linear integration from the shared library. Built-in curves map GVW to L/100km.</p>
+
+            <h3>What happens if no feasible solution exists?</h3>
+            <p><code>fw_validate_problem()</code> checks feasibility before solving: tank can reach the first station, overall fuel is sufficient, etc. If the solver returns <code>FW_STATUS_INFEASIBLE</code>, the problem has no valid refueling plan&mdash;stations are too far apart, tank is too small, or fuel isn&rsquo;t enough. The error message indicates which constraint failed.</p>
+
+            <h3>Can I use custom consumption models?</h3>
+            <p>Yes. <code>fw_consumption_curve_create()</code> builds a custom piecewise-linear curve: add (weight, L/100km) points with <code>fw_consumption_curve_add_point()</code>. The solver interpolates between points. Or use the built-in curves: <code>fw_curve_eu_standard()</code>, <code>fw_curve_us_class8()</code>, <code>fw_curve_light_truck()</code>.</p>
+
+            <h3>How is this different from Google/Waze fuel suggestions?</h3>
+            <p>Consumer apps suggest the cheapest nearby station. FuelWise optimizes across the entire route: &ldquo;buy 50L cheap now, coast past 3 expensive stations, fill up at the discount station 200km ahead.&rdquo; It considers cumulative fuel state, weight changes, and tank capacity. This multi-station lookahead is the difference between a suggestion and an optimization.</p>
+        </section>
+
+        <footer class="footer">
+            <p>Part of the <a href="../"><span class="logo-text">OTTO</span></a> trucking logistics platform</p>
+        </footer>
+    </div>
+</body>
+</html>

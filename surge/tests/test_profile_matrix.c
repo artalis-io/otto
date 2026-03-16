@@ -1,0 +1,528 @@
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "surge.h"
+#include "sg_internal.h"
+#include "../src/sg_profile_matrix.h"
+
+static int tests_run = 0;
+static int tests_passed = 0;
+
+#define RUN_TEST(fn) do { \
+    tests_run++; \
+    printf("  %-55s", #fn); \
+    fn(); \
+    tests_passed++; \
+    printf("OK\n"); \
+} while (0)
+
+/* ---- Helpers ---- */
+
+static void add_depot_with_location(SGContext *ctx, uint32_t *id_out,
+                                    double x, double y) {
+    uint32_t id = sg_add_depot(ctx);
+    assert(id != UINT32_MAX);
+    assert(sg_depot_set_location(ctx, id, x, y) == SG_STATUS_OK);
+    *id_out = id;
+}
+
+static void add_vehicle_with_depot(SGContext *ctx, uint32_t depot_id,
+                                   int32_t shift_early, int32_t shift_late,
+                                   double capacity) {
+    uint32_t vid = sg_add_vehicle(ctx);
+    assert(vid != UINT32_MAX);
+    assert(sg_vehicle_set_depots(ctx, vid, depot_id, depot_id) == SG_STATUS_OK);
+    assert(sg_vehicle_set_shift_time_window(ctx, vid, shift_early, shift_late) == SG_STATUS_OK);
+    double cap = capacity;
+    assert(sg_vehicle_set_capacity(ctx, vid, &cap, 1) == SG_STATUS_OK);
+}
+
+static void add_delivery_request(SGContext *ctx, double x, double y,
+                                 int32_t tw_early, int32_t tw_late,
+                                 int32_t svc, double demand) {
+    uint32_t rid = sg_add_delivery_request(ctx, x, y, tw_early, tw_late, svc, demand);
+    assert(rid != UINT32_MAX);
+}
+
+/* ---- Tests ---- */
+
+static void test_scale_from_count_boundaries(void) {
+    /* Lower boundaries */
+    assert(sg_scale_from_count(1)   == SG_SCALE_SMALL);
+    assert(sg_scale_from_count(50)  == SG_SCALE_SMALL);
+    assert(sg_scale_from_count(100) == SG_SCALE_SMALL);
+
+    /* MEDIUM: 101–200 */
+    assert(sg_scale_from_count(101) == SG_SCALE_MEDIUM);
+    assert(sg_scale_from_count(150) == SG_SCALE_MEDIUM);
+    assert(sg_scale_from_count(200) == SG_SCALE_MEDIUM);
+
+    /* LARGE: 201–400 */
+    assert(sg_scale_from_count(201) == SG_SCALE_LARGE);
+    assert(sg_scale_from_count(300) == SG_SCALE_LARGE);
+    assert(sg_scale_from_count(400) == SG_SCALE_LARGE);
+
+    /* XLARGE: 401–800 */
+    assert(sg_scale_from_count(401) == SG_SCALE_XLARGE);
+    assert(sg_scale_from_count(600) == SG_SCALE_XLARGE);
+    assert(sg_scale_from_count(800) == SG_SCALE_XLARGE);
+
+    /* MASSIVE: 801+ */
+    assert(sg_scale_from_count(801)  == SG_SCALE_MASSIVE);
+    assert(sg_scale_from_count(5000) == SG_SCALE_MASSIVE);
+}
+
+static void test_scale_from_count_zero(void) {
+    /* Edge case: 0 requests → SMALL */
+    assert(sg_scale_from_count(0) == SG_SCALE_SMALL);
+}
+
+static void test_matrix_cell_validity(void) {
+    int p, s;
+    for (p = 0; p < SG_PROFILE_COUNT; p++) {
+        for (s = 0; s < SG_SCALE_COUNT; s++) {
+            const SGProfileCell *cell = &k_profile_matrix[p][s];
+            assert(cell->max_iterations > 0);
+            assert(cell->max_time_seconds > 0);
+            /* Tune params should have explicit values for key fields */
+            assert(cell->tune.sa_accept_pct != SG_TUNE_SENTINEL_D);
+            assert(cell->tune.p1_final_temp_ratio != SG_TUNE_SENTINEL_D);
+            assert(cell->tune.p2_final_temp_ratio != SG_TUNE_SENTINEL_D);
+            assert(cell->tune.phase1_fraction != SG_TUNE_SENTINEL_D);
+            assert(cell->tune.neighbor_k != SG_TUNE_SENTINEL_I);
+        }
+    }
+}
+
+static void test_matrix_small_matches_old_profiles(void) {
+    /* SMALL column should match the old sg_config_set_profile values */
+    const SGProfileCell *rt = &k_profile_matrix[SG_PROFILE_REALTIME][SG_SCALE_SMALL];
+    assert(rt->max_iterations == 500);
+    assert(rt->max_time_seconds == 1);
+
+    const SGProfileCell *fast = &k_profile_matrix[SG_PROFILE_FAST][SG_SCALE_SMALL];
+    assert(fast->max_iterations == 2500);
+    assert(fast->max_time_seconds == 5);
+
+    const SGProfileCell *near = &k_profile_matrix[SG_PROFILE_NEAR_OPTIMAL][SG_SCALE_SMALL];
+    assert(near->max_iterations == 10000);
+    assert(near->max_time_seconds == 15);
+
+    const SGProfileCell *best = &k_profile_matrix[SG_PROFILE_BEST][SG_SCALE_SMALL];
+    assert(best->max_iterations == 50000);
+    assert(best->max_time_seconds == 60);
+}
+
+static void test_profile_matrix_apply(void) {
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    assert(sg_profile_matrix_apply(ctx, SG_PROFILE_FAST, SG_SCALE_LARGE) == SG_STATUS_OK);
+    assert(ctx->config.max_iterations == 2500);
+    assert(ctx->config.max_time_seconds == 30);
+    assert(ctx->tune_params != NULL);
+    /* LARGE column uses S22-tuned params (sa_accept_pct=0.010, not BASE_TUNE 0.074) */
+    assert(ctx->tune_params->sa_accept_pct == 0.010);
+    assert(ctx->tune_params->neighbor_k == 20);
+
+    sg_free(ctx);
+}
+
+static void test_profile_matrix_apply_medium(void) {
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    assert(sg_profile_matrix_apply(ctx, SG_PROFILE_FAST, SG_SCALE_MEDIUM) == SG_STATUS_OK);
+    assert(ctx->config.max_iterations == 2500);
+    assert(ctx->config.max_time_seconds == 10);
+    assert(ctx->tune_params != NULL);
+    /* MEDIUM column uses S22-tuned params (sa_accept_pct=0.200, not BASE_TUNE 0.074) */
+    assert(ctx->tune_params->sa_accept_pct == 0.200);
+    assert(ctx->tune_params->neighbor_k == 20);
+    /* Verify key MEDIUM_TUNE differences from LARGE_TUNE */
+    assert(ctx->tune_params->reward_best == 50.00);
+    assert(ctx->tune_params->pen_decrease == 0.95);
+
+    sg_free(ctx);
+}
+
+static void test_profile_matrix_apply_invalid(void) {
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    assert(sg_profile_matrix_apply(ctx, SG_PROFILE_COUNT, SG_SCALE_SMALL) == SG_STATUS_INVALID_ARG);
+    assert(sg_profile_matrix_apply(ctx, SG_PROFILE_FAST, SG_SCALE_COUNT) == SG_STATUS_INVALID_ARG);
+    assert(sg_profile_matrix_apply(NULL, SG_PROFILE_FAST, SG_SCALE_SMALL) == SG_STATUS_INVALID_ARG);
+
+    sg_free(ctx);
+}
+
+static void test_set_profile_defers(void) {
+    /* sg_config_set_profile should not immediately apply config */
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    assert(ctx != NULL);
+
+    sg_config_default(&cfg);
+    cfg.max_iterations = 999;
+    cfg.max_time_seconds = 77;
+    sg_set_config(ctx, &cfg);
+
+    assert(sg_config_set_profile(ctx, SG_PROFILE_FAST) == SG_STATUS_OK);
+    assert(ctx->active_profile == SG_PROFILE_FAST);
+    assert(ctx->active_scale == SG_SCALE_COUNT);  /* auto-detect */
+    assert(ctx->profile_applied == 0);
+
+    /* Config should still have old values (deferred) */
+    assert(ctx->config.max_iterations == 999);
+    assert(ctx->config.max_time_seconds == 77);
+
+    sg_free(ctx);
+}
+
+static void test_set_profile_scale(void) {
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    assert(sg_config_set_profile_scale(ctx, SG_PROFILE_BEST, SG_SCALE_XLARGE) == SG_STATUS_OK);
+    assert(ctx->active_profile == SG_PROFILE_BEST);
+    assert(ctx->active_scale == SG_SCALE_XLARGE);
+    assert(ctx->profile_applied == 0);
+
+    sg_free(ctx);
+}
+
+static void test_set_profile_scale_invalid(void) {
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    assert(sg_config_set_profile_scale(ctx, SG_PROFILE_COUNT, SG_SCALE_SMALL) == SG_STATUS_INVALID_ARG);
+    assert(sg_config_set_profile_scale(ctx, SG_PROFILE_FAST, SG_SCALE_COUNT) == SG_STATUS_INVALID_ARG);
+
+    sg_free(ctx);
+}
+
+static void test_profile_auto_scale_solve(void) {
+    /* Set FAST profile, add ~8 requests (SMALL), solve → should get FAST×SMALL */
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    uint32_t depot;
+    int i;
+
+    assert(ctx != NULL);
+    sg_config_default(&cfg);
+    cfg.seed = 42;
+    cfg.deterministic = true;
+    cfg.require_bound_requests_at_solve = true;
+    sg_set_config(ctx, &cfg);
+
+    sg_config_set_profile(ctx, SG_PROFILE_FAST);
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 500.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 500.0);
+
+    for (i = 0; i < 8; i++) {
+        add_delivery_request(ctx, (double)(i * 3 + 1), (double)(i * 2),
+                             0, 86400, 120, -10.0);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+
+    /* After solve, config should match FAST×SMALL */
+    assert(ctx->config.max_iterations == 2500);
+    assert(ctx->config.max_time_seconds == 5);
+    assert(ctx->profile_applied == 1);
+
+    sg_free(ctx);
+}
+
+static void test_profile_explicit_scale_solve(void) {
+    /* Set FAST + LARGE explicitly, add only 8 requests → still FAST×LARGE */
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    uint32_t depot;
+    int i;
+
+    assert(ctx != NULL);
+    sg_config_default(&cfg);
+    cfg.seed = 42;
+    cfg.deterministic = true;
+    cfg.require_bound_requests_at_solve = true;
+    sg_set_config(ctx, &cfg);
+
+    sg_config_set_profile_scale(ctx, SG_PROFILE_FAST, SG_SCALE_LARGE);
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 500.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 500.0);
+
+    for (i = 0; i < 8; i++) {
+        add_delivery_request(ctx, (double)(i * 3 + 1), (double)(i * 2),
+                             0, 86400, 120, -10.0);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+
+    /* Explicit scale overrides auto-detect */
+    assert(ctx->config.max_iterations == 2500);
+    assert(ctx->config.max_time_seconds == 30);
+    assert(ctx->profile_applied == 1);
+
+    sg_free(ctx);
+}
+
+static void test_no_profile_manual_config(void) {
+    /* Without setting profile, manual config/tune should be unchanged after solve */
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    uint32_t depot;
+    int i;
+
+    assert(ctx != NULL);
+    sg_config_default(&cfg);
+    cfg.max_iterations = 77;
+    cfg.max_time_seconds = 3;
+    cfg.seed = 42;
+    cfg.deterministic = true;
+    cfg.require_bound_requests_at_solve = true;
+    sg_set_config(ctx, &cfg);
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 500.0);
+
+    for (i = 0; i < 4; i++) {
+        add_delivery_request(ctx, (double)(i * 3 + 1), (double)(i * 2),
+                             0, 86400, 120, -10.0);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+
+    /* Config unchanged — matrix not consulted */
+    assert(ctx->config.max_iterations == 77);
+    assert(ctx->config.max_time_seconds == 3);
+    assert(ctx->profile_applied == 0);
+
+    sg_free(ctx);
+}
+
+static void test_profile_backward_compat(void) {
+    /* FAST + 80 requests → FAST×SMALL: same as old hardcoded behavior */
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    sg_config_set_profile(ctx, SG_PROFILE_FAST);
+
+    /* Simulate: the matrix should give same values after resolution */
+    SGScale scale = sg_scale_from_count(80);
+    assert(scale == SG_SCALE_SMALL);
+
+    /* Apply manually to check values */
+    sg_profile_matrix_apply(ctx, SG_PROFILE_FAST, scale);
+    assert(ctx->config.max_iterations == 2500);
+    assert(ctx->config.max_time_seconds == 5);
+    assert(ctx->tune_params != NULL);
+    assert(ctx->tune_params->sa_accept_pct == 0.074);
+    assert(ctx->tune_params->p1_final_temp_ratio == 0.08);
+    assert(ctx->tune_params->p2_final_temp_ratio == 0.0001);
+
+    sg_free(ctx);
+}
+
+static void test_solve_twice_profile_applied_once(void) {
+    /* Profile should be applied only on first solve (profile_applied flag) */
+    SGContext *ctx = sg_create();
+    SGConfig cfg;
+    uint32_t depot;
+    int i;
+
+    assert(ctx != NULL);
+    sg_config_default(&cfg);
+    cfg.seed = 42;
+    cfg.deterministic = true;
+    cfg.require_bound_requests_at_solve = true;
+    sg_set_config(ctx, &cfg);
+
+    sg_config_set_profile(ctx, SG_PROFILE_REALTIME);
+
+    add_depot_with_location(ctx, &depot, 0.0, 0.0);
+    add_vehicle_with_depot(ctx, depot, 0, 86400, 500.0);
+
+    for (i = 0; i < 4; i++) {
+        add_delivery_request(ctx, (double)(i * 3 + 1), (double)(i * 2),
+                             0, 86400, 120, -10.0);
+    }
+
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(ctx->profile_applied == 1);
+    assert(ctx->config.max_iterations == 500);
+    assert(ctx->config.max_time_seconds == 1);
+
+    /* Manually change iterations — second solve should keep them */
+    ctx->config.max_iterations = 100;
+    assert(sg_solve(ctx) == SG_STATUS_OK);
+    assert(ctx->config.max_iterations == 100);  /* Not overwritten */
+
+    sg_free(ctx);
+}
+
+static void test_all_profiles_resolve(void) {
+    /* Loop over all 4 profiles with 100 requests, verify each resolves */
+    int p;
+    for (p = 0; p < SG_PROFILE_COUNT; p++) {
+        SGContext *ctx = sg_create();
+        SGConfig cfg;
+        uint32_t depot;
+        int i;
+
+        assert(ctx != NULL);
+        sg_config_default(&cfg);
+        cfg.seed = 42;
+        cfg.deterministic = true;
+        cfg.require_bound_requests_at_solve = true;
+        sg_set_config(ctx, &cfg);
+
+        sg_config_set_profile(ctx, (SGProfile)p);
+
+        add_depot_with_location(ctx, &depot, 0.0, 0.0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 5000.0);
+        add_vehicle_with_depot(ctx, depot, 0, 86400, 5000.0);
+
+        for (i = 0; i < 8; i++) {
+            add_delivery_request(ctx, (double)(i * 3 + 1), (double)(i * 2),
+                                 0, 86400, 120, -10.0);
+        }
+
+        assert(sg_solve(ctx) == SG_STATUS_OK);
+        assert(ctx->profile_applied == 1);
+        assert(ctx->config.max_iterations > 0);
+        assert(ctx->config.max_time_seconds > 0);
+
+        sg_free(ctx);
+    }
+}
+
+static void test_increasing_time_with_scale(void) {
+    /* For each profile, time budget should be non-decreasing across scales */
+    int p;
+    for (p = 0; p < SG_PROFILE_COUNT; p++) {
+        int prev_time = 0;
+        int s;
+        for (s = 0; s < SG_SCALE_COUNT; s++) {
+            const SGProfileCell *cell = &k_profile_matrix[p][s];
+            assert(cell->max_time_seconds >= prev_time);
+            prev_time = cell->max_time_seconds;
+        }
+    }
+}
+
+/* ---- S27e: XLARGE_TUNE Tests ---- */
+
+static void test_xlarge_tune_applied(void) {
+    /* XLARGE column should use XLARGE_TUNE (sa_accept_pct=0.005, neighbor_k=25,
+       phase1_fraction=0.35, gen_reheat_ratio=2.50) — distinct from LARGE_TUNE. */
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    assert(sg_profile_matrix_apply(ctx, SG_PROFILE_FAST, SG_SCALE_XLARGE) == SG_STATUS_OK);
+    assert(ctx->tune_params != NULL);
+
+    /* XLARGE_TUNE distinguishers vs LARGE_TUNE */
+    assert(ctx->tune_params->sa_accept_pct == 0.005);      /* LARGE=0.010 */
+    assert(ctx->tune_params->neighbor_k == 25);             /* LARGE=20 */
+    assert(ctx->tune_params->phase1_fraction == 0.35);      /* LARGE=0.40 */
+    assert(ctx->tune_params->gen_reheat_ratio == 2.50);     /* LARGE=2.00 */
+
+    /* Iteration/time budgets for FAST×XLARGE */
+    assert(ctx->config.max_iterations == 1500);
+    assert(ctx->config.max_time_seconds == 60);
+
+    sg_free(ctx);
+}
+
+static void test_xlarge_tune_near_optimal(void) {
+    /* NEAR_OPTIMAL × XLARGE should have S27e raised iteration cap (20K) */
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    assert(sg_profile_matrix_apply(ctx, SG_PROFILE_NEAR_OPTIMAL, SG_SCALE_XLARGE) == SG_STATUS_OK);
+    assert(ctx->config.max_iterations == 20000);   /* S27e: was 15K */
+    assert(ctx->config.max_time_seconds == 300);
+    assert(ctx->tune_params->sa_accept_pct == 0.005);  /* XLARGE_TUNE */
+
+    sg_free(ctx);
+}
+
+static void test_xlarge_tune_best(void) {
+    /* BEST × XLARGE should have S27e raised iteration cap (50K) */
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    assert(sg_profile_matrix_apply(ctx, SG_PROFILE_BEST, SG_SCALE_XLARGE) == SG_STATUS_OK);
+    assert(ctx->config.max_iterations == 50000);   /* S27e: was 30K */
+    assert(ctx->config.max_time_seconds == 1200);
+    assert(ctx->tune_params->neighbor_k == 25);    /* XLARGE_TUNE */
+
+    sg_free(ctx);
+}
+
+static void test_xlarge_tune_rt_variant(void) {
+    /* REALTIME × XLARGE should use RT_XLARGE_TUNE (phase1.5 only 200 iters) */
+    SGContext *ctx = sg_create();
+    assert(ctx != NULL);
+
+    assert(sg_profile_matrix_apply(ctx, SG_PROFILE_REALTIME, SG_SCALE_XLARGE) == SG_STATUS_OK);
+    assert(ctx->tune_params->phase15_iters == 200);     /* RT variant */
+    assert(ctx->tune_params->sa_accept_pct == 0.005);   /* Still XLARGE_TUNE base */
+    assert(ctx->tune_params->neighbor_k == 25);
+    assert(ctx->config.max_iterations == 250);
+
+    sg_free(ctx);
+}
+
+static void test_large_vs_xlarge_tune_differ(void) {
+    /* LARGE_TUNE and XLARGE_TUNE must differ on key parameters */
+    const SGProfileCell *large = &k_profile_matrix[SG_PROFILE_FAST][SG_SCALE_LARGE];
+    const SGProfileCell *xlarge = &k_profile_matrix[SG_PROFILE_FAST][SG_SCALE_XLARGE];
+
+    /* XLARGE has colder SA, broader neighborhood, less Phase 1, higher reheat */
+    assert(xlarge->tune.sa_accept_pct < large->tune.sa_accept_pct);
+    assert(xlarge->tune.neighbor_k > large->tune.neighbor_k);
+    assert(xlarge->tune.phase1_fraction < large->tune.phase1_fraction);
+    assert(xlarge->tune.gen_reheat_ratio > large->tune.gen_reheat_ratio);
+}
+
+/* ---- Main ---- */
+
+int main(void) {
+    printf("test_profile_matrix\n");
+
+    RUN_TEST(test_scale_from_count_boundaries);
+    RUN_TEST(test_scale_from_count_zero);
+    RUN_TEST(test_matrix_cell_validity);
+    RUN_TEST(test_matrix_small_matches_old_profiles);
+    RUN_TEST(test_profile_matrix_apply);
+    RUN_TEST(test_profile_matrix_apply_medium);
+    RUN_TEST(test_profile_matrix_apply_invalid);
+    RUN_TEST(test_set_profile_defers);
+    RUN_TEST(test_set_profile_scale);
+    RUN_TEST(test_set_profile_scale_invalid);
+    RUN_TEST(test_profile_auto_scale_solve);
+    RUN_TEST(test_profile_explicit_scale_solve);
+    RUN_TEST(test_no_profile_manual_config);
+    RUN_TEST(test_profile_backward_compat);
+    RUN_TEST(test_solve_twice_profile_applied_once);
+    RUN_TEST(test_all_profiles_resolve);
+    RUN_TEST(test_increasing_time_with_scale);
+
+    /* S27e: XLARGE_TUNE */
+    RUN_TEST(test_xlarge_tune_applied);
+    RUN_TEST(test_xlarge_tune_near_optimal);
+    RUN_TEST(test_xlarge_tune_best);
+    RUN_TEST(test_xlarge_tune_rt_variant);
+    RUN_TEST(test_large_vs_xlarge_tune_differ);
+
+    printf("\n%d/%d tests passed\n", tests_passed, tests_run);
+    return tests_passed == tests_run ? 0 : 1;
+}

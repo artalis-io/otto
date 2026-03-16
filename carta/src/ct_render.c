@@ -8,6 +8,7 @@
 #include "ct_lod.h"
 #include "ct_simplify.h"
 #include "ct_label.h"
+#include "ct_metatile.h"
 #include "ct_boundary.h"
 #include "sh_font.h"
 #include "sh_render.h"
@@ -84,6 +85,11 @@ CTRenderContext *ct_render_create(int width, int height)
     ctx->edge_buffer = malloc(ctx->edge_buffer_capacity * sizeof(CTEdge));
     ctx->active_buffer = malloc(ctx->edge_buffer_capacity * sizeof(CTEdge));
 
+    if (!ctx->scale_buffer || !ctx->edge_buffer || !ctx->active_buffer) {
+        ct_render_free(ctx);
+        return NULL;
+    }
+
     ct_default_style(&ctx->style);
     ct_render_options_default(&ctx->options);
     return ctx;
@@ -101,6 +107,7 @@ void ct_render_free(CTRenderContext *ctx)
 
 void ct_render_clear(CTRenderContext *ctx)
 {
+    if (!ctx) return;
     CTColor bg = ctx->style.background_color;
     /* Use SIMD-optimized clear from shared library.
      * CTColor now uses same format as sh_render (0xAABBGGRR). */
@@ -109,11 +116,13 @@ void ct_render_clear(CTRenderContext *ctx)
 
 void ct_render_set_style(CTRenderContext *ctx, const CTStyle *style)
 {
+    if (!ctx || !style) return;
     ctx->style = *style;
 }
 
 void ct_render_set_options(CTRenderContext *ctx, const CTRenderOptions *opts)
 {
+    if (!ctx || !opts) return;
     ctx->options = *opts;
 }
 
@@ -193,7 +202,7 @@ void ct_render_options_quality(CTRenderOptions *opts)
 
 uint8_t *ct_render_pixels(CTRenderContext *ctx)
 {
-    return ctx->pixels;
+    return ctx ? ctx->pixels : NULL;
 }
 
 /* ============================================================================
@@ -673,10 +682,12 @@ void ct_render_polygon(CTRenderContext *ctx,
             }
         }
 
-        /* Fill between pairs of edges using fast span fill */
+        /* Fill between pairs of edges using fast span fill.
+         * Use floor() to match the rounding in ct_clip_polygon() — using
+         * round-to-nearest here caused 0-1px mismatches at tile boundaries. */
         for (int i = 0; i + 1 < num_active; i += 2) {
-            int x_start = (int)(active[i].x + 0.5);
-            int x_end = (int)(active[i + 1].x + 0.5);
+            int x_start = (int)floor(active[i].x);
+            int x_end = (int)floor(active[i + 1].x);
             fill_span(ctx, y, x_start, x_end, color);
         }
 
@@ -845,10 +856,11 @@ void ct_render_multipolygon(CTRenderContext *ctx,
             }
         }
 
-        /* Fill between pairs of edges (even-odd rule) using fast span fill */
+        /* Fill between pairs of edges (even-odd rule) using fast span fill.
+         * Use floor() to match the rounding in ct_clip_polygon(). */
         for (int i = 0; i + 1 < num_active; i += 2) {
-            int x_start = (int)(active[i].x + 0.5);
-            int x_end = (int)(active[i + 1].x + 0.5);
+            int x_start = (int)floor(active[i].x);
+            int x_end = (int)floor(active[i + 1].x);
             fill_span(ctx, y, x_start, x_end, color);
         }
 
@@ -954,8 +966,10 @@ static CTTilePoint *get_scale_buffer(CTRenderContext *ctx, size_t needed)
         if (new_buf) {
             ctx->scale_buffer = new_buf;
             ctx->scale_buffer_capacity = new_capacity;
+        } else {
+            /* Realloc failed and existing buffer is too small */
+            return NULL;
         }
-        /* If realloc fails, continue with existing buffer if large enough */
     }
     return ctx->scale_buffer;
 }
@@ -1279,8 +1293,99 @@ static int feature_is_visible(const CTFeature *f, float scale)
     return 1;
 }
 
-void ct_render_from_pbf(CTRenderContext *ctx, const CTPBFContext *pbf,
-                        CTTileCoord coord)
+/*
+ * Shared label rendering: metatile path or per-tile fallback.
+ *
+ * When mt_cache is non-NULL and zoom >= 8, labels are computed across the
+ * 2x2 metatile group with a shared collision grid, cached, and the sub-tile
+ * portion is extracted.  Otherwise, labels are placed per-tile (original path).
+ */
+static void render_tile_labels(CTRenderContext *ctx, const CTPBFContext *pbf,
+                                CTTileCoord coord, CTMetatileLabelCache *mt_cache)
+{
+    int labels_min_zoom = ctx->options.labels_min_zoom;
+    if (labels_min_zoom == 0) labels_min_zoom = 8;
+
+    if (!ctx->options.render_labels || coord.z < labels_min_zoom)
+        return;
+
+    const SHFont *font = sh_font_get_default();
+    if (!font) return;
+
+    float halo_width = ctx->options.render_label_halos ? 1.5f : 0.0f;
+
+    /* ---- Metatile path ---- */
+    if (mt_cache && coord.z >= 8) {
+        CTMetatileCoord mt = ct_metatile_coord(coord);
+        int sx, sy;
+        ct_metatile_subtile(coord, &sx, &sy);
+
+        /* Try cache first */
+        const CTMetatileLabelResult *result = ct_metatile_cache_get(mt_cache, mt);
+        if (!result) {
+            /* Cache miss: compute and store */
+            CTMetatileLabelResult *computed =
+                ct_metatile_compute_labels(pbf, mt, ctx->width);
+            if (computed) {
+                ct_metatile_cache_put(mt_cache, mt, computed);
+                result = ct_metatile_cache_get(mt_cache, mt);
+            }
+        }
+
+        if (result) {
+            CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
+            if (placer) {
+                CTRoadLabelPlacement *road_labels = NULL;
+                size_t road_count = 0;
+                ct_metatile_extract_subtile(result, sx, sy, placer,
+                                             &road_labels, &road_count);
+
+                ct_render_labels(ctx, placer, font,
+                                 CT_RGB(51, 51, 51),
+                                 CT_RGB(255, 255, 255),
+                                 halo_width);
+
+                ct_render_road_labels(ctx, road_labels, road_count, font,
+                                      CT_RGB(51, 51, 51),
+                                      CT_RGB(255, 255, 255),
+                                      halo_width);
+                ct_label_road_placements_free(road_labels, road_count);
+                ct_label_placer_free(placer);
+            }
+            ct_metatile_cache_release(mt_cache, result);
+            return;
+        }
+    }
+
+    /* ---- Per-tile fallback ---- */
+    float base_size = ct_label_base_font_size(coord.z, ctx->width);
+    CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
+    if (placer) {
+        ct_label_place_points(placer, pbf, coord, font, base_size);
+        ct_label_place_areas(placer, pbf, coord, font, base_size);
+
+        CTRoadLabelPlacement *road_labels = NULL;
+        size_t road_count = 0;
+        ct_label_place_roads(placer, pbf, coord, font, ctx->width,
+                             &road_labels, &road_count);
+
+        ct_render_labels(ctx, placer, font,
+                         CT_RGB(51, 51, 51),
+                         CT_RGB(255, 255, 255),
+                         halo_width);
+
+        ct_render_road_labels(ctx, road_labels, road_count, font,
+                              CT_RGB(51, 51, 51),
+                              CT_RGB(255, 255, 255),
+                              halo_width);
+        ct_label_road_placements_free(road_labels, road_count);
+        ct_label_placer_free(placer);
+    }
+}
+
+void ct_render_from_pbf_mt(CTRenderContext *ctx, const CTPBFContext *pbf,
+                            CTTileCoord coord,
+                            CTMetatileLabelCache *mt_cache)
 {
     /* Get features for this tile */
     CTBBox bbox = ct_tile_bounds(coord);
@@ -1307,25 +1412,8 @@ void ct_render_from_pbf(CTRenderContext *ctx, const CTPBFContext *pbf,
     /* Render features */
     ct_render_tile(ctx, &tile);
 
-    /* Render labels on top (if enabled) */
-    int labels_min_zoom = ctx->options.labels_min_zoom;
-    if (labels_min_zoom == 0) labels_min_zoom = 8;  /* Default */
-
-    if (ctx->options.render_labels && coord.z >= labels_min_zoom) {
-        const SHFont *font = sh_font_get_default();
-        if (font) {
-            CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
-            if (placer) {
-                ct_label_place_points(placer, pbf, coord, font, 16.0f);
-                float halo_width = ctx->options.render_label_halos ? 1.5f : 0.0f;
-                ct_render_labels(ctx, placer, font,
-                                CT_RGB(51, 51, 51),
-                                CT_RGB(255, 255, 255),
-                                halo_width);
-                ct_label_placer_free(placer);
-            }
-        }
-    }
+    /* Render labels on top */
+    render_tile_labels(ctx, pbf, coord, mt_cache);
 
     /* Cleanup - ct_tile_free handles freeing the points arrays
      * since ct_tile_add_feature took ownership via shallow copy */
@@ -1333,8 +1421,15 @@ void ct_render_from_pbf(CTRenderContext *ctx, const CTPBFContext *pbf,
     ct_tile_free(&tile);
 }
 
-void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
-                            CTTileCoord coord, const CTLODConfig *lod)
+void ct_render_from_pbf(CTRenderContext *ctx, const CTPBFContext *pbf,
+                        CTTileCoord coord)
+{
+    ct_render_from_pbf_mt(ctx, pbf, coord, NULL);
+}
+
+void ct_render_from_pbf_lod_mt(CTRenderContext *ctx, const CTPBFContext *pbf,
+                                CTTileCoord coord, const CTLODConfig *lod,
+                                CTMetatileLabelCache *mt_cache)
 {
     /* Get features for this tile with LOD filtering */
     CTFeature *features;
@@ -1350,7 +1445,15 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
 
     float scale = (float)ctx->width / CT_MVT_EXTENT;
 
-    /* Clipping buffer: allow 64 pixels overshoot to avoid edge artifacts */
+    /* Clipping buffer: how far beyond tile extent to clip polygons.
+     * Pushes clip edges outside the visible tile area, preventing artificial
+     * straight edges from being visible at tile boundaries. The scanline
+     * rasterizer already clamps to [0, width] x [0, height].
+     *
+     * 64 = 4px overshoot at 256px tiles, 8px at 512px. Enough to hide clip
+     * edges. Previously reduced to 16 due to "precision errors" that were
+     * actually int32 overflow in Sutherland-Hodgman (now fixed with int64_t
+     * in ct_tile.c). */
     int clip_buffer = 64;
 
     for (size_t i = 0; i < count; i++) {
@@ -1518,25 +1621,56 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
                                   b->admin_level, coord.z,
                                   &color, &width, &dash, &gap);
 
-                /* Allocate tile points for this boundary */
+                /* Convert lat/lon to fixed-point and batch transform (LUT, no trig) */
                 CTTilePoint *pts = malloc(b->num_coords * sizeof(CTTilePoint));
                 if (!pts) continue;
 
-                /* Transform lat/lon to tile pixel coordinates */
                 for (int j = 0; j < b->num_coords; j++) {
-                    int px, py;
-                    ct_latlon_to_tile_pixel(b->coords[j].lat, b->coords[j].lon,
-                                           coord, ctx->width, &px, &py);
-                    pts[j].x = px;
-                    pts[j].y = py;
+                    pts[j].x = (int32_t)(b->coords[j].lon * 1e7);
+                    pts[j].y = (int32_t)(b->coords[j].lat * 1e7);
                 }
+                ct_batch_transform_points(coord, ctx->width, pts, b->num_coords);
 
-                /* Render the boundary - dashed or solid based on options */
-                if (ctx->options.render_boundary_dashes && dash > 0.0f) {
-                    ct_render_polyline_dashed(ctx, pts, b->num_coords,
-                                              color, width, dash, gap);
-                } else {
-                    ct_render_polyline(ctx, pts, b->num_coords, color, width);
+                /* Render only segments near the tile (skip distant parts of
+                 * country-scale boundaries that span tens of thousands of points).
+                 * margin = 2x tile size to avoid clipping visible segments. */
+                int margin = ctx->width * 2;
+                int lo = -margin, hi_x = ctx->width + margin, hi_y = ctx->height + margin;
+                int run_start = -1;
+
+                for (int j = 0; j < b->num_coords; j++) {
+                    int near = (pts[j].x >= lo && pts[j].x <= hi_x &&
+                                pts[j].y >= lo && pts[j].y <= hi_y);
+                    if (near) {
+                        /* Include previous point for continuity */
+                        if (run_start < 0)
+                            run_start = (j > 0) ? j - 1 : 0;
+                    } else if (run_start >= 0) {
+                        /* End of visible run — include this point for last segment */
+                        int run_end = j + 1;
+                        int run_len = run_end - run_start;
+                        if (run_len >= 2) {
+                            if (ctx->options.render_boundary_dashes && dash > 0.0f) {
+                                ct_render_polyline_dashed(ctx, pts + run_start, run_len,
+                                                          color, width, dash, gap);
+                            } else {
+                                ct_render_polyline(ctx, pts + run_start, run_len, color, width);
+                            }
+                        }
+                        run_start = -1;
+                    }
+                }
+                /* Flush final run */
+                if (run_start >= 0) {
+                    int run_len = b->num_coords - run_start;
+                    if (run_len >= 2) {
+                        if (ctx->options.render_boundary_dashes && dash > 0.0f) {
+                            ct_render_polyline_dashed(ctx, pts + run_start, run_len,
+                                                      color, width, dash, gap);
+                        } else {
+                            ct_render_polyline(ctx, pts + run_start, run_len, color, width);
+                        }
+                    }
                 }
 
                 free(pts);
@@ -1545,33 +1679,18 @@ void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
         }
     }
 
-    /* Render labels on top (if enabled) */
-    int lod_labels_min_zoom = ctx->options.labels_min_zoom;
-    if (lod_labels_min_zoom == 0) lod_labels_min_zoom = 8;  /* Default */
-
-    if (ctx->options.render_labels && coord.z >= lod_labels_min_zoom) {
-        const SHFont *font = sh_font_get_default();
-        if (font) {
-            CTLabelPlacer *placer = ct_label_placer_create(ctx->width, ctx->height);
-            if (placer) {
-                /* Place point labels (cities, towns, etc.) */
-                ct_label_place_points(placer, pbf, coord, font, 16.0f);
-
-                /* Render with halo for readability (if enabled) */
-                float halo_width = ctx->options.render_label_halos ? 1.5f : 0.0f;
-                ct_render_labels(ctx, placer, font,
-                                CT_RGB(51, 51, 51),      /* Dark gray text */
-                                CT_RGB(255, 255, 255),   /* White halo */
-                                halo_width);
-
-                ct_label_placer_free(placer);
-            }
-        }
-    }
+    /* Render labels on top */
+    render_tile_labels(ctx, pbf, coord, mt_cache);
 
     /* Cleanup */
     free(features);
     ct_tile_free(&tile);
+}
+
+void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
+                            CTTileCoord coord, const CTLODConfig *lod)
+{
+    ct_render_from_pbf_lod_mt(ctx, pbf, coord, lod, NULL);
 }
 
 /* ============================================================================
@@ -1721,12 +1840,198 @@ int ct_render_labels(CTRenderContext *ctx,
 
     for (size_t i = 0; i < placer->num_placements; i++) {
         const CTLabelPlacement *p = &placer->placements[i];
-        if (!p->point || !p->point->name) continue;
+        const char *label_name = p->name ? p->name : (p->point ? p->point->name : NULL);
+        if (!label_name) continue;
 
         /* Render text with halo at the placement position */
-        ct_render_text_halo(ctx, p->point->name, p->x, p->y,
+        ct_render_text_halo(ctx, label_name, p->x, p->y,
                             font, p->font_size,
                             fill_color, halo_color, halo_width);
+        rendered++;
+    }
+
+    return rendered;
+}
+
+/* ============================================================================
+ * Rotated Glyph Rendering (for road labels)
+ * ============================================================================ */
+
+/*
+ * Render a single glyph at position (cx, cy) rotated by angle.
+ * Uses inverse rotation to sample the MSDF atlas.
+ */
+/* Render a single glyph rotated around its center position.
+ * (cx, cy) is the glyph center in pixel coords, angle in radians.
+ * For each pixel in the rotated AABB, inverse-rotate to glyph-local
+ * [0,1] coords and sample the MSDF. */
+static void ct_render_glyph_rotated(CTRenderContext *ctx,
+                                     const SHGlyph *glyph,
+                                     float cx, float cy, float angle,
+                                     const SHFont *font, float font_size,
+                                     CTColor color, float threshold)
+{
+    if (!ctx || !ctx->pixels || !glyph || !font) return;
+
+    /* Glyph dimensions in pixels */
+    float gw = (glyph->plane.right - glyph->plane.left) * font_size;
+    float gh = (glyph->plane.top - glyph->plane.bottom) * font_size;
+    if (gw <= 0.0f || gh <= 0.0f) return;
+
+    /* Half-extents of the glyph box */
+    float hw = gw * 0.5f;
+    float hh = gh * 0.5f;
+
+    /* Glyph center offset from the advance center:
+     * advance center is at (advance/2, ascent - (ascent - top*fs))
+     * but we need the visual center of the glyph box */
+    float ascent = sh_font_ascent(font, font_size);
+    float offset_x = (glyph->plane.left + glyph->plane.right) * 0.5f * font_size
+                    - glyph->advance * font_size * 0.5f;
+    float offset_y = ascent - (glyph->plane.top + glyph->plane.bottom) * 0.5f * font_size
+                    - ascent * 0.5f;
+
+    /* Rotated glyph center */
+    float cos_a = cosf(angle);
+    float sin_a = sinf(angle);
+    float gcx = cx + offset_x * cos_a - offset_y * sin_a;
+    float gcy = cy + offset_x * sin_a + offset_y * cos_a;
+
+    /* Compute rotated AABB: rotate the 4 corners, find min/max */
+    float corners_x[4], corners_y[4];
+    float dx[2] = { -hw, hw };
+    float dy[2] = { -hh, hh };
+    for (int i = 0; i < 4; i++) {
+        float lx = dx[i & 1];
+        float ly = dy[i >> 1];
+        corners_x[i] = gcx + lx * cos_a - ly * sin_a;
+        corners_y[i] = gcy + lx * sin_a + ly * cos_a;
+    }
+
+    float min_x = corners_x[0], max_x = corners_x[0];
+    float min_y = corners_y[0], max_y = corners_y[0];
+    for (int i = 1; i < 4; i++) {
+        if (corners_x[i] < min_x) min_x = corners_x[i];
+        if (corners_x[i] > max_x) max_x = corners_x[i];
+        if (corners_y[i] < min_y) min_y = corners_y[i];
+        if (corners_y[i] > max_y) max_y = corners_y[i];
+    }
+
+    /* Clamp to tile bounds */
+    int px0 = (int)floorf(min_x);
+    int py0 = (int)floorf(min_y);
+    int px1 = (int)ceilf(max_x);
+    int py1 = (int)ceilf(max_y);
+    if (px0 < 0) px0 = 0;
+    if (py0 < 0) py0 = 0;
+    if (px1 >= ctx->width) px1 = ctx->width - 1;
+    if (py1 >= ctx->height) py1 = ctx->height - 1;
+
+    uint8_t cr = CT_COLOR_R(color);
+    uint8_t cg = CT_COLOR_G(color);
+    uint8_t cb = CT_COLOR_B(color);
+    uint8_t ca = CT_COLOR_A(color);
+
+    /* For each pixel in AABB, inverse-rotate to glyph-local coords */
+    for (int py = py0; py <= py1; py++) {
+        float rel_y = (float)py - gcy;
+        /* Pre-compute partial inverse rotation for this row */
+        float inv_x_base = rel_y * sin_a;  /* -(-sin_a) * rel_y */
+        float inv_y_base = rel_y * cos_a;
+        for (int px = px0; px <= px1; px++) {
+            float rel_x = (float)px - gcx;
+            /* Inverse rotate: [cos_a, sin_a; -sin_a, cos_a] */
+            float lx = rel_x * cos_a + inv_x_base;
+            float ly = -rel_x * sin_a + inv_y_base;
+
+            /* Map to [0,1] within glyph bounds */
+            float u = (lx + hw) / gw;
+            float v = (ly + hh) / gh;
+
+            /* Skip if outside glyph */
+            if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f) continue;
+
+            float coverage = sh_font_msdf_coverage_threshold(
+                font, glyph, u, v, font_size, threshold);
+            if (coverage <= 0.0f) continue;
+
+            uint8_t alpha = (uint8_t)(ca * coverage);
+            if (alpha == 0) continue;
+
+            CTColor c = CT_RGBA(cr, cg, cb, alpha);
+            ct_render_blend_pixel(ctx, px, py, c);
+        }
+    }
+}
+
+void ct_render_text_path(CTRenderContext *ctx, const char *text,
+                         const CTPathGlyph *path_glyphs, int num_glyphs,
+                         const SHFont *font, float font_size,
+                         CTColor fill, CTColor halo, float halo_width)
+{
+    if (!ctx || !text || !path_glyphs || !font || num_glyphs <= 0) return;
+
+    float halo_threshold = 0.5f - (halo_width * 0.08f);
+    if (halo_threshold < 0.1f) halo_threshold = 0.1f;
+
+    const char *p = text;
+    int gi = 0;
+
+    /* First pass: halo */
+    if (halo_width > 0.0f && CT_COLOR_A(halo) > 0) {
+        p = text;
+        gi = 0;
+        while (*p && gi < num_glyphs) {
+            uint32_t codepoint;
+            int len = sh_utf8_decode(p, &codepoint);
+            if (len == 0 || codepoint == 0) break;
+            p += len;
+
+            const SHGlyph *glyph = sh_font_get_glyph(font, codepoint);
+            if (!glyph) continue;
+
+            ct_render_glyph_rotated(ctx, glyph,
+                                     path_glyphs[gi].x, path_glyphs[gi].y,
+                                     path_glyphs[gi].angle,
+                                     font, font_size, halo, halo_threshold);
+            gi++;
+        }
+    }
+
+    /* Second pass: fill */
+    p = text;
+    gi = 0;
+    while (*p && gi < num_glyphs) {
+        uint32_t codepoint;
+        int len = sh_utf8_decode(p, &codepoint);
+        if (len == 0 || codepoint == 0) break;
+        p += len;
+
+        const SHGlyph *glyph = sh_font_get_glyph(font, codepoint);
+        if (!glyph) continue;
+
+        ct_render_glyph_rotated(ctx, glyph,
+                                 path_glyphs[gi].x, path_glyphs[gi].y,
+                                 path_glyphs[gi].angle,
+                                 font, font_size, fill, 0.5f);
+        gi++;
+    }
+}
+
+int ct_render_road_labels(CTRenderContext *ctx,
+                          const CTRoadLabelPlacement *placements, size_t count,
+                          const SHFont *font,
+                          CTColor fill, CTColor halo, float halo_width)
+{
+    if (!ctx || !placements || !font || count == 0) return 0;
+
+    int rendered = 0;
+    for (size_t i = 0; i < count; i++) {
+        const CTRoadLabelPlacement *rp = &placements[i];
+        if (!rp->name || !rp->glyphs || rp->num_glyphs <= 0) continue;
+
+        ct_render_text_path(ctx, rp->name, rp->glyphs, rp->num_glyphs,
+                            font, rp->font_size, fill, halo, halo_width);
         rendered++;
     }
 

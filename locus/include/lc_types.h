@@ -12,6 +12,10 @@
 #include <stddef.h>
 #include "sh_geo.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ============================================================================
  * Status Codes
  * ============================================================================ */
@@ -212,5 +216,9 @@ void lc_entity_init(LCEntity *entity);
 
 /* Free entity strings (not the entity struct itself) */
 void lc_entity_free(LCEntity *entity);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* LC_TYPES_H */

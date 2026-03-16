@@ -1,0 +1,17 @@
+{
+  "nx_raw": 1,
+  "source": {"filename": "XLSX01.xlsx", "format": "xlsx"},
+  "tables": [{
+    "name": "Sheet1",
+    "index": 0,
+    "headers": ["Park neve", "Cím", "Lat", "Lng", "Routes at a time", "Outbound from", "Inbound by"],
+    "header_row": 0,
+    "rows": [
+      {"row": 1, "cells": ["CTPark Budapest West", "2051 Biatorbágy, Tormásrét u.", "~47.4713", "~18.8188", "6", "0.25", "0.70833"]},
+      {"row": 2, "cells": ["IGPark Miskolc", "Mechatronikai Ipari Park, Miskolc", "~48.1090", "~20.7780", "6", "0.25", "0.70833"]},
+      {"row": 3, "cells": ["IGPark Debrecen", "NW ipari zóna, Debrecen", "~47.5300", "~21.6200", "6", "0.25", "0.70833"]}
+    ],
+    "row_count": 3,
+    "col_count": 7
+  }]
+}
