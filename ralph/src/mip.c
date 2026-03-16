@@ -1461,14 +1461,41 @@ static int process_node(MIPSolver *solver, BBNode *node) {
         }
     }
 
-    /* Select branching variable */
-    int branch_var;
+    /* Select branching variable. Some selector paths can fail to return a
+     * candidate even when the current LP solution is still fractional. Fall
+     * back to the plain most-infeasible scan before pruning the node. */
+    int branch_var = -1;
     if (select_branch_variable(solver, lp_sol, &branch_var) != 0) {
-        /* No fractional integer variable - should be integer feasible */
-        if (solver->verbose) {
-            LP_LOG_STDOUT("  [process_node] No fractional var found - declaring integer feasible\n");
+        int fallback = mip_select_most_infeasible(solver, lp_sol);
+        if (fallback < 0 && solver->lp_solver && solver->working_model) {
+            if (mip_lp_cold_start_primal(solver->lp_solver, 2) == 0 &&
+                solver->lp_solver->status == RALPH_STATUS_OPTIMAL &&
+                solver->lp_solver->tableau &&
+                mip_lp_apply_structural_bounds(solver->lp_solver->tableau,
+                                               solver->working_model->num_vars,
+                                               node->lb, node->ub) == 0 &&
+                mip_lp_recompute(solver->lp_solver->tableau) == 0) {
+                lp_sol = solver->lp_solver->solution;
+                fallback = mip_select_most_infeasible(solver, lp_sol);
+            }
         }
-        return 0;
+        if (fallback >= 0) {
+            branch_var = fallback;
+            if (solver->verbose >= 2) {
+                LP_LOG_STDOUT("  [process_node] Branch selector missed fractional var; fallback=%d\n",
+                              branch_var);
+            }
+        } else {
+            if (check_integer_feasibility(solver, lp_sol)) {
+                if (solver->verbose) {
+                    LP_LOG_STDOUT("  [process_node] No fractional var found - declaring integer feasible\n");
+                }
+                update_incumbent(solver, lp_sol, lp_obj);
+            } else if (solver->verbose) {
+                LP_LOG_STDOUT("  [process_node] No branch var after fallback; pruning unresolved fractional node\n");
+            }
+            return 0;
+        }
     }
 
     /* Strong branching inside select_branch_variable may have corrupted
