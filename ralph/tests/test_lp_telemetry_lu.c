@@ -89,6 +89,21 @@ static void test_lu_reset_prepare_and_snapshot(void) {
     lu.telemetry.perf_sn_size1_update_scan_ms = 0.29;
     lu.telemetry.perf_sn_size1_update_apply_calls = 16;
     lu.telemetry.perf_sn_size1_update_apply_ms = 0.30;
+    lu.telemetry.perf_sn_size1_update_row_gather_ms = 0.31;
+    lu.telemetry.perf_sn_size1_update_col_indirection_ms = 0.32;
+    lu.telemetry.perf_sn_size1_update_outer_product_ms = 0.33;
+    lu.telemetry.perf_sn_size1_update_full_calls = 17;
+    lu.telemetry.perf_sn_size1_update_full_ms = 0.34;
+    lu.telemetry.perf_sn_size1_update_cols1_calls = 18;
+    lu.telemetry.perf_sn_size1_update_cols1_ms = 0.35;
+    lu.telemetry.perf_sn_size1_update_cols2_calls = 19;
+    lu.telemetry.perf_sn_size1_update_cols2_ms = 0.36;
+    lu.telemetry.perf_sn_size1_update_cols3_calls = 20;
+    lu.telemetry.perf_sn_size1_update_cols3_ms = 0.37;
+    lu.telemetry.perf_sn_size1_update_cols4_calls = 21;
+    lu.telemetry.perf_sn_size1_update_cols4_ms = 0.38;
+    lu.telemetry.perf_sn_size1_update_cols5p_calls = 22;
+    lu.telemetry.perf_sn_size1_update_cols5p_ms = 0.39;
     lu.telemetry.perf_sn_panel_swap_scatter_ms = 0.3;
     lu.telemetry.perf_sn_panel_eliminate_ms = 0.4;
     lu.telemetry.perf_sn_u_emit_ms = 1.1;
@@ -184,6 +199,36 @@ static void test_lu_reset_prepare_and_snapshot(void) {
                   "lu_reset: supernode size1 update-apply calls");
     ASSERT_DBL_EQ(lu.telemetry.perf_sn_size1_update_apply_ms, 0.0,
                   "lu_reset: supernode size1 update-apply ms");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_size1_update_row_gather_ms, 0.0,
+                  "lu_reset: supernode size1 row gather ms");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_size1_update_col_indirection_ms, 0.0,
+                  "lu_reset: supernode size1 col indirection ms");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_size1_update_outer_product_ms, 0.0,
+                  "lu_reset: supernode size1 outer product ms");
+    ASSERT_U64_EQ(lu.telemetry.perf_sn_size1_update_full_calls, 0,
+                  "lu_reset: supernode size1 full calls");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_size1_update_full_ms, 0.0,
+                  "lu_reset: supernode size1 full ms");
+    ASSERT_U64_EQ(lu.telemetry.perf_sn_size1_update_cols1_calls, 0,
+                  "lu_reset: supernode size1 cols1 calls");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_size1_update_cols1_ms, 0.0,
+                  "lu_reset: supernode size1 cols1 ms");
+    ASSERT_U64_EQ(lu.telemetry.perf_sn_size1_update_cols2_calls, 0,
+                  "lu_reset: supernode size1 cols2 calls");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_size1_update_cols2_ms, 0.0,
+                  "lu_reset: supernode size1 cols2 ms");
+    ASSERT_U64_EQ(lu.telemetry.perf_sn_size1_update_cols3_calls, 0,
+                  "lu_reset: supernode size1 cols3 calls");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_size1_update_cols3_ms, 0.0,
+                  "lu_reset: supernode size1 cols3 ms");
+    ASSERT_U64_EQ(lu.telemetry.perf_sn_size1_update_cols4_calls, 0,
+                  "lu_reset: supernode size1 cols4 calls");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_size1_update_cols4_ms, 0.0,
+                  "lu_reset: supernode size1 cols4 ms");
+    ASSERT_U64_EQ(lu.telemetry.perf_sn_size1_update_cols5p_calls, 0,
+                  "lu_reset: supernode size1 cols5p calls");
+    ASSERT_DBL_EQ(lu.telemetry.perf_sn_size1_update_cols5p_ms, 0.0,
+                  "lu_reset: supernode size1 cols5p ms");
     ASSERT_DBL_EQ(lu.telemetry.perf_sn_panel_swap_scatter_ms, 0.0,
                   "lu_reset: supernode panel swap/scatter total");
     ASSERT_DBL_EQ(lu.telemetry.perf_sn_panel_eliminate_ms, 0.0,
@@ -249,14 +294,17 @@ static void test_lu_reset_prepare_and_snapshot(void) {
                                        21, 22, 23, 23.5, 24, 24.5, 25, 25.5,
                                        26, 26.5, 27, 27.5, 28, 29, 29.5, 30, 30.5,
                                        31, 31.1, 32, 32.1, 33, 33.1,
-                                       34.1, 34.2, 34.3, 34.4, 34.5,
-                                       35, 36, 37, 38, 39, 40, 41, 42,
-                                       43, 44, 45, 46, 47,
-                                       48, 49, 49.5,
-                                       50, 51, 51.5,
-                                       52, 53, 53.5,
+                                       33.2, 33.3, 33.4,
+                                       34, 34.1, 35, 35.1, 36, 36.1,
+                                       37, 37.1, 38, 38.1, 39, 39.1,
+                                       40.1, 40.2, 40.3, 40.4, 40.5,
+                                       41, 42, 43, 44, 45, 46, 47, 48,
+                                       49, 50, 51, 52, 53,
                                        54, 55, 55.5,
-                                       56, 57, 57.5);
+                                       56, 57, 57.5,
+                                       58, 59, 59.5,
+                                       60, 61, 61.5,
+                                       62, 63, 63.5);
 
     {
         LUTelemetrySnapshot snap;
@@ -344,19 +392,49 @@ static void test_lu_reset_prepare_and_snapshot(void) {
                       "lu_snapshot: supernode size1 update-apply calls");
         ASSERT_DBL_EQ(snap.perf_sn_size1_update_apply_ms, 33.1,
                       "lu_snapshot: supernode size1 update-apply ms");
+        ASSERT_DBL_EQ(snap.perf_sn_size1_update_row_gather_ms, 33.2,
+                      "lu_snapshot: supernode size1 row gather ms");
+        ASSERT_DBL_EQ(snap.perf_sn_size1_update_col_indirection_ms, 33.3,
+                      "lu_snapshot: supernode size1 col indirection ms");
+        ASSERT_DBL_EQ(snap.perf_sn_size1_update_outer_product_ms, 33.4,
+                      "lu_snapshot: supernode size1 outer product ms");
+        ASSERT_U64_EQ(snap.perf_sn_size1_update_full_calls, 34,
+                      "lu_snapshot: supernode size1 full calls");
+        ASSERT_DBL_EQ(snap.perf_sn_size1_update_full_ms, 34.1,
+                      "lu_snapshot: supernode size1 full ms");
+        ASSERT_U64_EQ(snap.perf_sn_size1_update_cols1_calls, 35,
+                      "lu_snapshot: supernode size1 cols1 calls");
+        ASSERT_DBL_EQ(snap.perf_sn_size1_update_cols1_ms, 35.1,
+                      "lu_snapshot: supernode size1 cols1 ms");
+        ASSERT_U64_EQ(snap.perf_sn_size1_update_cols2_calls, 36,
+                      "lu_snapshot: supernode size1 cols2 calls");
+        ASSERT_DBL_EQ(snap.perf_sn_size1_update_cols2_ms, 36.1,
+                      "lu_snapshot: supernode size1 cols2 ms");
+        ASSERT_U64_EQ(snap.perf_sn_size1_update_cols3_calls, 37,
+                      "lu_snapshot: supernode size1 cols3 calls");
+        ASSERT_DBL_EQ(snap.perf_sn_size1_update_cols3_ms, 37.1,
+                      "lu_snapshot: supernode size1 cols3 ms");
+        ASSERT_U64_EQ(snap.perf_sn_size1_update_cols4_calls, 38,
+                      "lu_snapshot: supernode size1 cols4 calls");
+        ASSERT_DBL_EQ(snap.perf_sn_size1_update_cols4_ms, 38.1,
+                      "lu_snapshot: supernode size1 cols4 ms");
+        ASSERT_U64_EQ(snap.perf_sn_size1_update_cols5p_calls, 39,
+                      "lu_snapshot: supernode size1 cols5p calls");
+        ASSERT_DBL_EQ(snap.perf_sn_size1_update_cols5p_ms, 39.1,
+                      "lu_snapshot: supernode size1 cols5p ms");
         ASSERT_DBL_EQ(snap.perf_sn_panel_swap_scatter_ms, 20.16,
                       "lu_snapshot: supernode panel swap/scatter total");
         ASSERT_DBL_EQ(snap.perf_sn_panel_eliminate_ms, 20.17,
                       "lu_snapshot: supernode panel eliminate total");
-        ASSERT_DBL_EQ(snap.perf_sn_u_emit_ms, 34.1,
+        ASSERT_DBL_EQ(snap.perf_sn_u_emit_ms, 40.1,
                       "lu_snapshot: supernode U emit total");
-        ASSERT_DBL_EQ(snap.perf_sn_active_set_ms, 34.2,
+        ASSERT_DBL_EQ(snap.perf_sn_active_set_ms, 40.2,
                       "lu_snapshot: supernode active-set total");
-        ASSERT_DBL_EQ(snap.perf_sn_pack_blocks_ms, 34.3,
+        ASSERT_DBL_EQ(snap.perf_sn_pack_blocks_ms, 40.3,
                       "lu_snapshot: supernode pack total");
-        ASSERT_DBL_EQ(snap.perf_sn_full_update_ms, 34.4,
+        ASSERT_DBL_EQ(snap.perf_sn_full_update_ms, 40.4,
                       "lu_snapshot: supernode full update total");
-        ASSERT_DBL_EQ(snap.perf_sn_compact_update_ms, 34.5,
+        ASSERT_DBL_EQ(snap.perf_sn_compact_update_ms, 40.5,
                       "lu_snapshot: supernode compact update total");
         ASSERT_U64_EQ(snap.mkz_primary_scan_entries, 11,
                       "lu_snapshot: mkz primary scan entries");
@@ -378,61 +456,61 @@ static void test_lu_reset_prepare_and_snapshot(void) {
                       "lu_snapshot: mkz affected columns max");
         ASSERT_U64_EQ(snap.mkz_col_max_scan_entries, 20,
                       "lu_snapshot: mkz col_max scan entries");
-        ASSERT_U64_EQ(snap.perf_sn_active_row_scan_entries, 35,
+        ASSERT_U64_EQ(snap.perf_sn_active_row_scan_entries, 41,
                       "lu_snapshot: supernode active row scans");
-        ASSERT_U64_EQ(snap.perf_sn_active_col_scan_entries, 36,
+        ASSERT_U64_EQ(snap.perf_sn_active_col_scan_entries, 42,
                       "lu_snapshot: supernode active col scans");
-        ASSERT_U64_EQ(snap.perf_sn_trailing_rows_total, 37,
+        ASSERT_U64_EQ(snap.perf_sn_trailing_rows_total, 43,
                       "lu_snapshot: supernode trailing rows");
-        ASSERT_U64_EQ(snap.perf_sn_trailing_cols_total, 38,
+        ASSERT_U64_EQ(snap.perf_sn_trailing_cols_total, 44,
                       "lu_snapshot: supernode trailing cols");
-        ASSERT_U64_EQ(snap.perf_sn_active_rows_total, 39,
+        ASSERT_U64_EQ(snap.perf_sn_active_rows_total, 45,
                       "lu_snapshot: supernode active rows");
-        ASSERT_U64_EQ(snap.perf_sn_active_cols_total, 40,
+        ASSERT_U64_EQ(snap.perf_sn_active_cols_total, 46,
                       "lu_snapshot: supernode active cols");
-        ASSERT_U64_EQ(snap.perf_sn_pack_l_entries_total, 41,
+        ASSERT_U64_EQ(snap.perf_sn_pack_l_entries_total, 47,
                       "lu_snapshot: supernode L pack entries");
-        ASSERT_U64_EQ(snap.perf_sn_pack_u_entries_total, 42,
+        ASSERT_U64_EQ(snap.perf_sn_pack_u_entries_total, 48,
                       "lu_snapshot: supernode U pack entries");
-        ASSERT_U64_EQ(snap.perf_sn_dense_triplets_total, 43,
+        ASSERT_U64_EQ(snap.perf_sn_dense_triplets_total, 49,
                       "lu_snapshot: supernode dense triplets");
-        ASSERT_U64_EQ(snap.perf_sn_compact_triplets_total, 44,
+        ASSERT_U64_EQ(snap.perf_sn_compact_triplets_total, 50,
                       "lu_snapshot: supernode compact triplets");
-        ASSERT_U64_EQ(snap.perf_sn_full_update_calls, 45,
+        ASSERT_U64_EQ(snap.perf_sn_full_update_calls, 51,
                       "lu_snapshot: supernode full update calls");
-        ASSERT_U64_EQ(snap.perf_sn_compact_update_calls, 46,
+        ASSERT_U64_EQ(snap.perf_sn_compact_update_calls, 52,
                       "lu_snapshot: supernode compact update calls");
-        ASSERT_U64_EQ(snap.perf_sn_skipped_update_calls, 47,
+        ASSERT_U64_EQ(snap.perf_sn_skipped_update_calls, 53,
                       "lu_snapshot: supernode skipped update calls");
-        ASSERT_U64_EQ(snap.perf_sn_compact_cols1_calls, 48,
+        ASSERT_U64_EQ(snap.perf_sn_compact_cols1_calls, 54,
                       "lu_snapshot: compact cols1 calls");
-        ASSERT_U64_EQ(snap.perf_sn_compact_cols1_rows_total, 49,
+        ASSERT_U64_EQ(snap.perf_sn_compact_cols1_rows_total, 55,
                       "lu_snapshot: compact cols1 rows");
-        ASSERT_DBL_EQ(snap.perf_sn_compact_cols1_ms, 49.5,
+        ASSERT_DBL_EQ(snap.perf_sn_compact_cols1_ms, 55.5,
                       "lu_snapshot: compact cols1 ms");
-        ASSERT_U64_EQ(snap.perf_sn_compact_cols2_calls, 50,
+        ASSERT_U64_EQ(snap.perf_sn_compact_cols2_calls, 56,
                       "lu_snapshot: compact cols2 calls");
-        ASSERT_U64_EQ(snap.perf_sn_compact_cols2_rows_total, 51,
+        ASSERT_U64_EQ(snap.perf_sn_compact_cols2_rows_total, 57,
                       "lu_snapshot: compact cols2 rows");
-        ASSERT_DBL_EQ(snap.perf_sn_compact_cols2_ms, 51.5,
+        ASSERT_DBL_EQ(snap.perf_sn_compact_cols2_ms, 57.5,
                       "lu_snapshot: compact cols2 ms");
-        ASSERT_U64_EQ(snap.perf_sn_compact_cols3_calls, 52,
+        ASSERT_U64_EQ(snap.perf_sn_compact_cols3_calls, 58,
                       "lu_snapshot: compact cols3 calls");
-        ASSERT_U64_EQ(snap.perf_sn_compact_cols3_rows_total, 53,
+        ASSERT_U64_EQ(snap.perf_sn_compact_cols3_rows_total, 59,
                       "lu_snapshot: compact cols3 rows");
-        ASSERT_DBL_EQ(snap.perf_sn_compact_cols3_ms, 53.5,
+        ASSERT_DBL_EQ(snap.perf_sn_compact_cols3_ms, 59.5,
                       "lu_snapshot: compact cols3 ms");
-        ASSERT_U64_EQ(snap.perf_sn_compact_cols4_calls, 54,
+        ASSERT_U64_EQ(snap.perf_sn_compact_cols4_calls, 60,
                       "lu_snapshot: compact cols4 calls");
-        ASSERT_U64_EQ(snap.perf_sn_compact_cols4_rows_total, 55,
+        ASSERT_U64_EQ(snap.perf_sn_compact_cols4_rows_total, 61,
                       "lu_snapshot: compact cols4 rows");
-        ASSERT_DBL_EQ(snap.perf_sn_compact_cols4_ms, 55.5,
+        ASSERT_DBL_EQ(snap.perf_sn_compact_cols4_ms, 61.5,
                       "lu_snapshot: compact cols4 ms");
-        ASSERT_U64_EQ(snap.perf_sn_compact_cols5p_calls, 56,
+        ASSERT_U64_EQ(snap.perf_sn_compact_cols5p_calls, 62,
                       "lu_snapshot: compact cols5p calls");
-        ASSERT_U64_EQ(snap.perf_sn_compact_cols5p_rows_total, 57,
+        ASSERT_U64_EQ(snap.perf_sn_compact_cols5p_rows_total, 63,
                       "lu_snapshot: compact cols5p rows");
-        ASSERT_DBL_EQ(snap.perf_sn_compact_cols5p_ms, 57.5,
+        ASSERT_DBL_EQ(snap.perf_sn_compact_cols5p_ms, 63.5,
                       "lu_snapshot: compact cols5p ms");
     }
 }

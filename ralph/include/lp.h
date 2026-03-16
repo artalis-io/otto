@@ -377,6 +377,21 @@ typedef struct {
     double perf_sn_size1_update_scan_ms;
     uint64_t perf_sn_size1_update_apply_calls;
     double perf_sn_size1_update_apply_ms;
+    double perf_sn_size1_update_row_gather_ms;
+    double perf_sn_size1_update_col_indirection_ms;
+    double perf_sn_size1_update_outer_product_ms;
+    uint64_t perf_sn_size1_update_full_calls;
+    double perf_sn_size1_update_full_ms;
+    uint64_t perf_sn_size1_update_cols1_calls;
+    double perf_sn_size1_update_cols1_ms;
+    uint64_t perf_sn_size1_update_cols2_calls;
+    double perf_sn_size1_update_cols2_ms;
+    uint64_t perf_sn_size1_update_cols3_calls;
+    double perf_sn_size1_update_cols3_ms;
+    uint64_t perf_sn_size1_update_cols4_calls;
+    double perf_sn_size1_update_cols4_ms;
+    uint64_t perf_sn_size1_update_cols5p_calls;
+    double perf_sn_size1_update_cols5p_ms;
     double perf_sn_u_emit_ms;
     double perf_sn_active_set_ms;
     double perf_sn_pack_blocks_ms;
@@ -2050,6 +2065,21 @@ typedef struct {
     double perf_sn_size1_update_scan_ms;
     uint64_t perf_sn_size1_update_apply_calls;
     double perf_sn_size1_update_apply_ms;
+    double perf_sn_size1_update_row_gather_ms;
+    double perf_sn_size1_update_col_indirection_ms;
+    double perf_sn_size1_update_outer_product_ms;
+    uint64_t perf_sn_size1_update_full_calls;
+    double perf_sn_size1_update_full_ms;
+    uint64_t perf_sn_size1_update_cols1_calls;
+    double perf_sn_size1_update_cols1_ms;
+    uint64_t perf_sn_size1_update_cols2_calls;
+    double perf_sn_size1_update_cols2_ms;
+    uint64_t perf_sn_size1_update_cols3_calls;
+    double perf_sn_size1_update_cols3_ms;
+    uint64_t perf_sn_size1_update_cols4_calls;
+    double perf_sn_size1_update_cols4_ms;
+    uint64_t perf_sn_size1_update_cols5p_calls;
+    double perf_sn_size1_update_cols5p_ms;
     double perf_sn_u_emit_ms;
     double perf_sn_active_set_ms;
     double perf_sn_pack_blocks_ms;
@@ -2744,6 +2774,21 @@ void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
                                         double size1_update_scan_ms,
                                         uint64_t size1_update_apply_calls,
                                         double size1_update_apply_ms,
+                                        double size1_update_row_gather_ms,
+                                        double size1_update_col_indirection_ms,
+                                        double size1_update_outer_product_ms,
+                                        uint64_t size1_update_full_calls,
+                                        double size1_update_full_ms,
+                                        uint64_t size1_update_cols1_calls,
+                                        double size1_update_cols1_ms,
+                                        uint64_t size1_update_cols2_calls,
+                                        double size1_update_cols2_ms,
+                                        uint64_t size1_update_cols3_calls,
+                                        double size1_update_cols3_ms,
+                                        uint64_t size1_update_cols4_calls,
+                                        double size1_update_cols4_ms,
+                                        uint64_t size1_update_cols5p_calls,
+                                        double size1_update_cols5p_ms,
                                         double u_emit_ms,
                                         double active_set_ms,
                                         double pack_blocks_ms,

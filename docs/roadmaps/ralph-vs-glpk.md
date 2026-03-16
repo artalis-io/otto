@@ -1185,6 +1185,52 @@ Status:
     - the next exact supernode target should move to the remaining generic
       width-1 trailing/update scaffolding rather than another broad panel or
       dedicated-width rewrite
+- `W1.2` sixteenth slice implemented
+  - added exact width-1 compact-update telemetry buckets by active trailing
+    column count:
+    - `full`
+    - `cols1`
+    - `cols2`
+    - `cols3`
+    - `cols4`
+    - `cols5+`
+  - that telemetry showed the remaining width-1 apply hotspot is decisively
+    `cols5+`, not `full` and not `cols1..4`
+  - added a dedicated exact compact-update kernel for:
+    - `sn_size == 1`
+    - compact update lane
+    - `active_col_count >= 5`
+  - kept the existing row and column traversal order; no pivot-policy or
+    control-plane changes
+  - validation:
+    - `make -C ralph test-lu-supernode`
+    - `make -C ralph test-lp-telemetry-lu`
+    - `make -C ralph build-ralph-benchmark`
+    - `make -C ralph test-netlib-gate-small`
+    - `make -C ralph test-netlib-gate`
+  - measured effect:
+    - direct `pilot.mps`
+      - `sn_size1_update_cols5p_ms: 8.072 -> 2.908`
+      - `sn_size1_update_apply_ms: 8.890 -> 3.526`
+      - `ralph.time_ms: 27305.228 -> 21328.430`
+    - direct `pilot87.mps`
+      - `sn_size1_update_cols5p_ms: 35.343 -> 7.991`
+      - `sn_size1_update_apply_ms: 36.483 -> 8.376`
+      - `ralph.time_ms: 63762.438 -> 21739.188`
+    - direct `d2q06c.mps`
+      - `ralph.time_ms: 25031.815 -> 23267.184`
+  - full-gate result:
+    - baseline-clean
+    - `84` files
+    - `22` timeouts
+    - `0` status/objective/invalid mismatches
+    - `0` dense fallback files
+  - result:
+    - the remaining width-1 compact-update work is now much more concentrated
+    - `cols5+` is the only width-1 apply bucket worth further tuning
+    - the next large-basis kernel work should stay inside the generic width-1
+      compact-update path rather than reopening broader supernode or
+      solver-side work
 - rejected during `W1.2`
   - stale or approximate `col_max` shortcuts and other behavior-adjacent
     Markowitz optimizations were tried and rolled back
