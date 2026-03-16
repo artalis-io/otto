@@ -105,6 +105,8 @@ export class TileCache {
 
     /**
      * Fetch tile using resilient fetch client (handles 429 with retry).
+     * Browser HTTP cache handles ETag revalidation automatically via
+     * the server's ETag + Cache-Control headers.
      */
     async _fetchWithResilientClient(tileData, url) {
         try {

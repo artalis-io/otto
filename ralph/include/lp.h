@@ -21,6 +21,10 @@
 #define RALPH_PREFETCH(addr, rw, locality) ((void)0)
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Tolerances */
 #define RALPH_FEAS_TOL 1e-6
 #define RALPH_OPT_TOL 1e-6
@@ -2846,5 +2850,9 @@ void lp_telemetry_lu_add_supernode_work(LUFactorization *lu,
                                         uint64_t compact_cols5p_calls,
                                         uint64_t compact_cols5p_rows_total,
                                         double compact_cols5p_ms);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* RALPH_LP_H */

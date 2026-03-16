@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Locus — Geocoding Engine | OTTO</title>
+    <meta name="description" content="Locus is a pure C geocoding engine with prefix trie autocomplete, trigram fuzzy search, spatial grid reverse geocoding, and zero-copy mmap binary index. Compiles to WASM.">
+
+    <!-- SEO -->
+    <link rel="canonical" href="https://ottofleet.io/modules/locus.html">
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#0a0a0a">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="Locus — Geocoding Engine | OTTO">
+    <meta property="og:description" content="Pure C geocoding: prefix trie autocomplete, trigram fuzzy search, reverse geocoding via spatial grid. Zero-copy mmap index, sub-20µs queries, WASM-compilable.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://ottofleet.io/modules/locus.html">
+    <meta property="og:site_name" content="OTTO">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='12' fill='%230a0a0a'/%3E%3Ctext x='50' y='68' font-family='ui-monospace,monospace' font-size='60' font-weight='700' fill='%233b82f6' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
+
+    <!-- Shared Styles -->
+    <link rel="stylesheet" href="../style.css">
+
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Locus",
+        "alternateName": "OTTO Locus Geocoding Engine",
+        "description": "Pure C geocoding engine with prefix trie, trigram fuzzy search, spatial grid reverse geocoding, and zero-copy mmap binary index format. Compiles to WebAssembly.",
+        "url": "https://ottofleet.io/modules/locus.html",
+        "applicationCategory": "BusinessApplication",
+        "operatingSystem": "Cross-platform (WASM, Linux, macOS)",
+        "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+        "author": {
+            "@type": "Person",
+            "name": "Mark Farkas"
+        }
+    }
+    </script>
+
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --bg-secondary: #141414;
+            --bg-tertiary: #1a1a1a;
+            --text: #e0e0e0;
+            --text-secondary: #888;
+            --accent: #3b82f6;
+            --accent-glow: rgba(59, 130, 246, 0.15);
+            --border: #2a2a2a;
+            --green: #22c55e;
+            --amber: #f59e0b;
+            --red: #ef4444;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace; line-height: 1.7; }
+        .container { max-width: 900px; margin: 0 auto; padding: 0 2rem; }
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        /* Navigation */
+        .back-nav { padding: 1.5rem 0; border-bottom: 1px solid var(--border); }
+        .back-nav a { font-size: 0.85rem; color: var(--text-secondary); }
+        .back-nav a:hover { color: var(--accent); }
+
+        /* Hero */
+        .hero { padding: 4rem 0 3rem; text-align: center; }
+        .hero h1 { font-size: 2.5rem; font-weight: 700; margin-bottom: 1rem; letter-spacing: -0.02em; }
+        .hero h1 .accent { color: var(--accent); }
+        .hero .subtitle { font-size: 1.1rem; color: var(--text-secondary); max-width: 600px; margin: 0 auto 2rem; }
+        .badge-row { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; }
+        .badge { display: inline-block; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; border: 1px solid var(--border); color: var(--text-secondary); }
+        .badge.green { border-color: var(--green); color: var(--green); }
+        .badge.blue { border-color: var(--accent); color: var(--accent); }
+        .badge.amber { border-color: var(--amber); color: var(--amber); }
+
+        /* Sections */
+        section { padding: 3rem 0; border-top: 1px solid var(--border); }
+        section h2 { font-size: 1.5rem; font-weight: 700; margin-bottom: 1.5rem; }
+        section h3 { font-size: 1.1rem; font-weight: 600; margin: 2rem 0 1rem; color: var(--text); }
+        p { margin-bottom: 1rem; color: var(--text-secondary); }
+
+        /* Feature grid */
+        .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.5rem; margin: 1.5rem 0; }
+        .feature-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; }
+        .feature-card h4 { font-size: 0.95rem; margin-bottom: 0.5rem; color: var(--text); }
+        .feature-card p { font-size: 0.85rem; margin: 0; }
+
+        /* ASCII art */
+        .ascii-art { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1.5rem 0; overflow-x: auto; position: relative; }
+        .ascii-art pre { font-size: 0.75rem; line-height: 1.5; color: var(--green); margin: 0; }
+        .ascii-art::after { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,0,0.015) 2px, rgba(0,255,0,0.015) 4px); pointer-events: none; border-radius: 8px; }
+
+        /* Code blocks */
+        .code-block { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1.5rem 0; overflow-x: auto; position: relative; }
+        .code-block pre { font-size: 0.8rem; line-height: 1.6; color: var(--text); margin: 0; }
+        .code-block .label { position: absolute; top: 0.5rem; right: 0.75rem; font-size: 0.65rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.1em; }
+        .code-block::after { content: ''; position: absolute; inset: 0; background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,0,0.008) 2px, rgba(0,255,0,0.008) 4px); pointer-events: none; border-radius: 8px; }
+
+        /* Tables */
+        table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; font-size: 0.85rem; }
+        th { text-align: left; padding: 0.75rem; border-bottom: 2px solid var(--border); color: var(--text); font-weight: 600; }
+        td { padding: 0.75rem; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
+        tr:hover td { color: var(--text); }
+
+        /* Stats row */
+        .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+        .stat { text-align: center; padding: 1.25rem; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; }
+        .stat .number { font-size: 1.5rem; font-weight: 700; color: var(--accent); display: block; }
+        .stat .label { font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem; display: block; }
+
+        /* Callout */
+        .callout { background: var(--accent-glow); border: 1px solid var(--accent); border-radius: 8px; padding: 1.25rem 1.5rem; margin: 1.5rem 0; }
+        .callout.honest { background: rgba(245, 158, 11, 0.08); border-color: var(--amber); }
+        .callout p { margin: 0; font-size: 0.9rem; }
+        .callout strong { color: var(--text); }
+
+        /* Two column */
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: 1.5rem 0; }
+
+        /* Footer */
+        .footer { padding: 3rem 0; border-top: 1px solid var(--border); text-align: center; }
+        .footer p { font-size: 0.85rem; color: var(--text-secondary); }
+
+        /* Logo animation */
+        .logo-text { font-weight: 700; letter-spacing: 0.05em; position: relative; display: inline-block; }
+        .logo-text::before { content: 'OTTO'; position: absolute; left: -1px; text-shadow: 2px 0 #ff0000; clip: rect(24px, 550px, 90px, 0); animation: logo-glitch-1 4s infinite linear alternate-reverse; }
+        .logo-text::after { content: 'OTTO'; position: absolute; left: 1px; text-shadow: -2px 0 #0000ff; clip: rect(85px, 550px, 140px, 0); animation: logo-glitch-2 4s infinite linear alternate-reverse; }
+        @keyframes logo-glitch-1 { 0%,100% { clip: rect(42px,9999px,44px,0); } 5% { clip: rect(12px,9999px,59px,0); } 10% { clip: rect(48px,9999px,29px,0); } 15% { clip: rect(42px,9999px,73px,0); } 20% { clip: rect(63px,9999px,27px,0); } 25% { clip: rect(34px,9999px,55px,0); } 30% { clip: rect(86px,9999px,73px,0); } 35% { clip: rect(20px,9999px,59px,0); } 40% { clip: rect(26px,9999px,87px,0); } 45% { clip: rect(32px,9999px,95px,0); } 50% { clip: rect(54px,9999px,31px,0); } 55% { clip: rect(28px,9999px,45px,0); } 60% { clip: rect(76px,9999px,82px,0); } 65% { clip: rect(32px,9999px,52px,0); } 70% { clip: rect(14px,9999px,37px,0); } 75% { clip: rect(55px,9999px,63px,0); } 80% { clip: rect(42px,9999px,81px,0); } 85% { clip: rect(17px,9999px,26px,0); } 90% { clip: rect(72px,9999px,96px,0); } 95% { clip: rect(28px,9999px,49px,0); } }
+        @keyframes logo-glitch-2 { 0%,100% { clip: rect(65px,9999px,99px,0); } 5% { clip: rect(52px,9999px,75px,0); } 10% { clip: rect(71px,9999px,42px,0); } 15% { clip: rect(42px,9999px,88px,0); } 20% { clip: rect(25px,9999px,67px,0); } 25% { clip: rect(75px,9999px,51px,0); } 30% { clip: rect(47px,9999px,69px,0); } 35% { clip: rect(82px,9999px,33px,0); } 40% { clip: rect(38px,9999px,92px,0); } 45% { clip: rect(67px,9999px,55px,0); } 50% { clip: rect(23px,9999px,79px,0); } 55% { clip: rect(57px,9999px,41px,0); } 60% { clip: rect(81px,9999px,62px,0); } 65% { clip: rect(36px,9999px,85px,0); } 70% { clip: rect(68px,9999px,48px,0); } 75% { clip: rect(22px,9999px,76px,0); } 80% { clip: rect(59px,9999px,38px,0); } 85% { clip: rect(43px,9999px,97px,0); } 90% { clip: rect(31px,9999px,56px,0); } 95% { clip: rect(73px,9999px,43px,0); } }
+
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 1.75rem; }
+            .two-col { grid-template-columns: 1fr; }
+            .container { padding: 0 1rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <nav class="back-nav">
+            <a href="../">&larr; Back to <span class="logo-text">OTTO</span></a>
+        </nav>
+
+        <!-- Hero -->
+        <header class="hero">
+            <h1>Locus <span class="accent">Geocoding Engine</span></h1>
+            <p class="subtitle">Pure C geocoding. Prefix trie autocomplete, trigram fuzzy search, spatial grid reverse geocoding. Zero-copy mmap index. Compiles to WASM.</p>
+            <div class="badge-row">
+                <span class="badge green">68 tests</span>
+                <span class="badge blue">~6.5K LoC</span>
+                <span class="badge amber">&lt;20&micro;s queries</span>
+                <span class="badge">WASM-ready</span>
+                <span class="badge">Zero deps</span>
+            </div>
+        </header>
+
+        <!-- Why Locus -->
+        <section>
+            <h2>Why Locus</h2>
+            <p>Most geocoding requires cloud APIs, internet connectivity, and per-request pricing. Locus runs entirely on your device&mdash;in the browser, on an edge server, or embedded in a truck&rsquo;s ELD. The entire binary index loads via mmap with zero deserialization.</p>
+
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h4>Three Search Algorithms</h4>
+                    <p>Prefix trie for instant autocomplete, trigram index for typo-tolerant fuzzy search, spatial grid for reverse geocoding. Each optimized for its task.</p>
+                </div>
+                <div class="feature-card">
+                    <h4>Zero-Copy Index</h4>
+                    <p>Binary v4 format (<code>.lcx</code>) loads via mmap&mdash;no deserialization, no parsing, no memory allocation. Shared between processes.</p>
+                </div>
+                <div class="feature-card">
+                    <h4>Full UTF-8 Pipeline</h4>
+                    <p>Diacritic removal, case folding, abbreviation expansion, address parsing. Handles Latin, Cyrillic, Greek, CJK. European and US address formats.</p>
+                </div>
+                <div class="feature-card">
+                    <h4>Edge-Native</h4>
+                    <p>Compiles to WASM for browser deployment. No cloud, no API keys, no per-request costs. Sub-20&micro;s latency means real-time typeahead.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Search Architecture -->
+        <section>
+            <h2>Search Architecture</h2>
+            <p>Locus uses three complementary data structures, each specialized for a different query type. The search engine tries exact match first, falls back to prefix, then fuzzy.</p>
+
+            <div class="ascii-art"><pre>
+  Query: "montec"                    Reverse: (43.73, 7.42)
+     │                                   │
+     ▼                                   ▼
+  ┌─────────────────┐            ┌───────────────────┐
+  │  lc_normalize()  │            │    Spatial Grid    │
+  │  montec → montec │            │  0.01° cells (~1km)│
+  └────────┬─────────┘            └─────────┬─────────┘
+           │                                │
+     ┌─────┴─────┐                    Grid Lookup
+     ▼           ▼                    O(1) per cell
+  ┌──────┐  ┌────────┐                     │
+  │ Trie │  │ Prefix │                     ▼
+  │Exact │  │ Match  │           ┌──────────────────┐
+  └──┬───┘  └───┬────┘           │  K-NN + Distance  │
+     │          │                │  Point-to-segment  │
+  No match   "Monte Carlo"      └──────────────────┘
+     │       "Monte Carlo Bay"         │
+     ▼          │                      ▼
+  ┌──────────┐  │               Street, Place, POI
+  │ Trigrams  │ │               with admin hierarchy
+  │  Fuzzy   │  │
+  │ Jaccard  │  │
+  └────┬─────┘  │
+       ▼        ▼
+    Ranked by similarity + importance</pre></div>
+
+            <div class="stat-row">
+                <div class="stat">
+                    <span class="number">&lt;11&micro;s</span>
+                    <span class="label">Exact Search</span>
+                </div>
+                <div class="stat">
+                    <span class="number">&lt;19&micro;s</span>
+                    <span class="label">Autocomplete</span>
+                </div>
+                <div class="stat">
+                    <span class="number">&lt;25&micro;s</span>
+                    <span class="label">Reverse Geocode</span>
+                </div>
+                <div class="stat">
+                    <span class="number">16</span>
+                    <span class="label">Feature Classes</span>
+                </div>
+            </div>
+
+            <h3>Prefix Trie</h3>
+            <p>37-slot alphabet (a&ndash;z, 0&ndash;9, space). Lazy child allocation. Entity ID lists only at matching nodes. Drives real-time autocomplete with O(m) lookup where m is query length.</p>
+
+            <h3>Trigram Index</h3>
+            <p>Decomposes names into 3-character n-grams. Ranks candidates by Jaccard similarity: <code>|intersection| / |union|</code>. Configurable threshold (default 0.3). Falls back here when exact and prefix fail&mdash;handles typos, partial names, reordered words.</p>
+
+            <h3>Spatial Grid</h3>
+            <p>Uniform grid at 0.01&deg; resolution (~1km cells). O(1) point lookup, radius search for K-NN. Haversine-based point-to-segment distance for accurate street matching. Returns structured results: place, street, address, POI, admin hierarchy.</p>
+
+            <h3>Text Normalization</h3>
+            <table>
+                <thead><tr><th>Stage</th><th>Example</th><th>Purpose</th></tr></thead>
+                <tbody>
+                    <tr><td>Case folding</td><td>&ldquo;Budapest&rdquo; &rarr; &ldquo;budapest&rdquo;</td><td>UTF-8 aware lowercase</td></tr>
+                    <tr><td>Diacritic removal</td><td>&ldquo;&Ouml;sterreich&rdquo; &rarr; &ldquo;osterreich&rdquo;</td><td>Latin-1 + Extended-A maps</td></tr>
+                    <tr><td>Abbreviation expansion</td><td>&ldquo;St&rdquo; &rarr; &ldquo;Street&rdquo;</td><td>Common address abbreviations</td></tr>
+                    <tr><td>Whitespace collapse</td><td>&ldquo;Foo&nbsp;&nbsp;&nbsp;Bar&rdquo; &rarr; &ldquo;Foo Bar&rdquo;</td><td>Unicode space normalization</td></tr>
+                    <tr><td>Punctuation removal</td><td>&ldquo;St.&rdquo; &rarr; &ldquo;St&rdquo;</td><td>Clean for index matching</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- Index Format -->
+        <section>
+            <h2>Binary Index Format</h2>
+            <p>The <code>.lcx</code> binary format (v4) is designed for zero-copy access via mmap. No deserialization, no memory allocation&mdash;the OS pages in data on demand.</p>
+
+            <div class="two-col">
+                <div class="code-block"><span class="label">Format</span><pre>
+Magic:   0x4C4F4355 ("LOCU")
+Version: 4
+
+Header (96 bytes):
+  entity_count      uint32
+  string_pool_size  uint32
+  trie_node_count   uint32
+  ngram_count       uint32
+  grid_cell_count   uint32
+  geometry_count    uint32
+  bounds            SHBBox
+  cell_size         double
+
+Sections:
+  1. Entity records    (72B each)
+  2. Alt name indices
+  3. String pool       (interned)
+  4. Trie nodes        (160B each)
+  5. Entity ID lists
+  6. Grid cells + entries
+  7. N-gram entries
+  8. Geometry offsets + points</pre></div>
+                <div class="code-block"><span class="label">Loading</span><pre>
+/* Zero-copy mmap load */
+LCIndex *idx = lc_index_mmap("region.lcx");
+
+/* Or from memory (WASM) */
+LCIndex *idx = lc_index_load_memory(
+    data, len
+);
+
+/* Check format version */
+if (lc_binary_version("region.lcx") < 4)
+    rebuild_index();
+
+/* Index stats */
+uint32_t n = lc_index_entity_count(idx);
+size_t mem = lc_index_memory_usage(idx);
+SHBBox bounds = lc_index_bounds(idx);
+
+/* Cleanup */
+lc_index_free(idx);</pre></div>
+            </div>
+
+            <table>
+                <thead><tr><th>Feature Class</th><th>Examples</th><th>Importance</th></tr></thead>
+                <tbody>
+                    <tr><td><code>LC_CLASS_COUNTRY</code></td><td>Monaco, Hungary</td><td>Highest</td></tr>
+                    <tr><td><code>LC_CLASS_CITY</code></td><td>Budapest, Vienna</td><td>High</td></tr>
+                    <tr><td><code>LC_CLASS_STREET</code></td><td>Avenue de Monte-Carlo</td><td>Medium</td></tr>
+                    <tr><td><code>LC_CLASS_POI</code></td><td>Casino de Monte-Carlo</td><td>Medium</td></tr>
+                    <tr><td><code>LC_CLASS_ADDRESS</code></td><td>12 Rue Grimaldi</td><td>Low</td></tr>
+                    <tr><td><code>LC_CLASS_WATER</code></td><td>Port Hercule</td><td>Low</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- API -->
+        <section>
+            <h2>API</h2>
+
+            <h3>Forward Search</h3>
+            <div class="code-block"><span class="label">C</span><pre>
+#include "lc_index.h"
+
+/* Build index from PBF */
+LCIndex *idx = lc_index_create();
+lc_index_build_from_pbf(idx, "monaco.osm.pbf", NULL);
+
+/* Search with options */
+LCSearchOptions opts = lc_search_options_default();
+opts.limit = 10;
+opts.lang  = "en";           /* prefer English names */
+
+LCSearchResult result;
+lc_search(idx, "monte carlo", &opts, &result);
+
+for (int i = 0; i < result.count; i++) {
+    const LCEntity *e = lc_search_get_entity(idx, &result.matches[i]);
+    printf("%s (%.4f, %.4f) score=%.2f\n",
+           e->name, e->centroid.lat, e->centroid.lon,
+           result.matches[i].score);
+}
+lc_search_result_free(&result);</pre></div>
+
+            <h3>Autocomplete</h3>
+            <div class="code-block"><span class="label">C</span><pre>
+/* Real-time typeahead */
+LCSearchResult result;
+lc_autocomplete(idx, "bud", 5, &result);
+
+/* Returns: Budapest, Budaörs, Budakeszi, ... */
+for (int i = 0; i < result.count; i++) {
+    const LCEntity *e = lc_search_get_entity(idx, &result.matches[i]);
+    printf("  %s (%s)\n", e->name, lc_class_string(e->fclass));
+}
+lc_search_result_free(&result);</pre></div>
+
+            <h3>Reverse Geocoding</h3>
+            <div class="code-block"><span class="label">C</span><pre>
+/* Coordinate to address */
+LCReverseOptions opts = lc_reverse_options_default();
+opts.radius_m = 100;         /* search radius */
+
+LCReverseResult rev;
+SHCoord coord = { .lat = 43.7384, .lon = 7.4246 };
+lc_reverse(idx, coord, &opts, &rev);
+
+/* Format as address string */
+char buf[256];
+lc_format_address(&rev, buf, sizeof(buf));
+printf("%s\n", buf);  /* "Avenue de Monte-Carlo, Monte Carlo, Monaco" */
+
+lc_reverse_result_free(&rev);</pre></div>
+
+            <h3>REST API</h3>
+            <table>
+                <thead><tr><th>Endpoint</th><th>Description</th></tr></thead>
+                <tbody>
+                    <tr><td><code>GET /api/v1/search?q=monte+carlo</code></td><td>Forward geocoding with fuzzy fallback</td></tr>
+                    <tr><td><code>GET /api/v1/autocomplete?q=bud&amp;limit=5</code></td><td>Prefix-based typeahead</td></tr>
+                    <tr><td><code>GET /api/v1/reverse?lat=43.73&amp;lon=7.42</code></td><td>Coordinate to structured address</td></tr>
+                    <tr><td><code>GET /api/v1/health</code></td><td>Health check</td></tr>
+                    <tr><td><code>GET /api/v1/stats</code></td><td>Entity count, memory, bounds, queue stats</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- Architecture -->
+        <section>
+            <h2>Architecture</h2>
+
+            <h3>Address Parsing</h3>
+            <p>Locus parses structured address queries in both European (&ldquo;Kossuth utca 12&rdquo;) and US (&ldquo;123 Main Street&rdquo;) formats. House number detection handles variants: ranges (&ldquo;12-14&rdquo;), letters (&ldquo;3B&rdquo;), and compound forms (&ldquo;123/A&rdquo;).</p>
+
+            <h3>Language Support</h3>
+            <table>
+                <thead><tr><th>Script</th><th>Coverage</th><th>Features</th></tr></thead>
+                <tbody>
+                    <tr><td>Latin (ASCII)</td><td>Native trie alphabet</td><td>37 slots: a-z, 0-9, space</td></tr>
+                    <tr><td>Latin-1 Supplement</td><td>64-entry diacritic map</td><td>&Agrave;, &Eacute;, &Ouml;, &uuml;, &ntilde;, &ccedil;</td></tr>
+                    <tr><td>Latin Extended-A</td><td>128-entry map</td><td>&#x100;, &#x10B;, &#x116;, &#x11E;, &#x12A;</td></tr>
+                    <tr><td>Cyrillic</td><td>UTF-8 aware</td><td>Full case folding</td></tr>
+                    <tr><td>Greek</td><td>UTF-8 aware</td><td>Full case folding</td></tr>
+                </tbody>
+            </table>
+
+            <h3>Performance Profile</h3>
+            <table>
+                <thead><tr><th>Operation</th><th>Monaco (2.7K entities)</th><th>Hungary (1.1M entities)</th></tr></thead>
+                <tbody>
+                    <tr><td>Exact search</td><td>5&ndash;11 &micro;s</td><td>2 &micro;s</td></tr>
+                    <tr><td>Autocomplete</td><td>5&ndash;19 &micro;s</td><td>&mdash;</td></tr>
+                    <tr><td>Reverse geocode</td><td>23&ndash;24 &micro;s</td><td>24.8 &micro;s</td></tr>
+                    <tr><td>Fuzzy search</td><td>&mdash;</td><td>34.8 ms *</td></tr>
+                    <tr><td>Index load (binary)</td><td>&lt;100 ms</td><td>43.4 s *</td></tr>
+                    <tr><td>PBF parse</td><td>&mdash;</td><td>53.7 s *</td></tr>
+                </tbody>
+            </table>
+
+            <div class="callout honest">
+                <p><strong>Honest assessment.</strong> Fuzzy search and binary load at scale need optimization (roadmap items: O(n&sup2;) hit tracking, string deduplication, mmap for large indexes). Forward search and reverse geocoding already meet production targets. Memory usage (1.9GB for Hungary) needs reduction via interned string pools.</p>
+            </div>
+
+            <h3>Server Architecture</h3>
+            <p>Transport-agnostic handler pattern. Core logic in <code>lc_api.c</code>, thin wrappers for HTTP (Mongoose) and WASM. Rate limiting, work queue, CORS, structured stats&mdash;all via shared infrastructure.</p>
+
+            <div class="code-block"><span class="label">Architecture</span><pre>
+locus/
+├── include/
+│   ├── locus.h            # Top-level unified API
+│   ├── lc_api.h           # Transport-agnostic handler
+│   ├── lc_index.h         # Search/autocomplete/reverse
+│   ├── lc_trie.h          # Prefix trie
+│   ├── lc_ngram.h         # Trigram fuzzy search
+│   ├── lc_spatial.h       # Spatial grid
+│   ├── lc_normalize.h     # UTF-8 text pipeline
+│   ├── lc_query.h         # Address parsing
+│   ├── lc_types.h         # Entity, feature classes
+│   ├── lc_serialize.h     # Save/load/mmap
+│   └── lc_mmap.h          # Zero-copy access (v4)
+├── src/
+│   ├── lc_api.c           # REST handler (622 lines)
+│   ├── lc_index.c         # Unified index (933 lines)
+│   ├── lc_serialize.c     # Binary format (1,740 lines)
+│   ├── lc_pbf.c           # OSM PBF parser (1,108 lines)
+│   ├── lc_normalize.c     # Text normalization (603 lines)
+│   ├── lc_ngram.c         # Fuzzy search (416 lines)
+│   ├── lc_spatial.c       # Grid index (357 lines)
+│   ├── lc_trie.c          # Prefix trie (234 lines)
+│   ├── lc_types.c         # Entity/address (327 lines)
+│   └── lc_query.c         # Address parsing (169 lines)
+├── api/src/main.c         # Mongoose HTTP wrapper
+├── wasm/                  # WASM wrapper
+└── tests/test_locus.c     # 68 tests</pre></div>
+        </section>
+
+        <!-- Quick Start -->
+        <section>
+            <h2>Quick Start</h2>
+
+            <div class="code-block"><span class="label">Build</span><pre>
+# Build library + tests
+make locus
+
+# Run tests
+make test-locus         # 68 tests
+
+# Build API server
+make locus-api
+
+# Start server
+./locus/api/locus-geocoder data/monaco-latest.osm.pbf
+# Or with pre-built index:
+./locus/api/locus-geocoder data/monaco.lcx
+
+# Build binary index for fast loading
+./locus/api/locus-geocoder --build-only -S data/monaco.lcx data/monaco-latest.osm.pbf
+
+# WASM build (requires Emscripten)
+make locus-wasm</pre></div>
+
+            <div class="code-block"><span class="label">Query</span><pre>
+# Forward search
+curl "http://localhost:8083/api/v1/search?q=monte+carlo"
+
+# Autocomplete
+curl "http://localhost:8083/api/v1/autocomplete?q=bud&limit=5"
+
+# Reverse geocode
+curl "http://localhost:8083/api/v1/reverse?lat=43.7384&lon=7.4246"
+
+# Health check
+curl "http://localhost:8083/api/v1/health"</pre></div>
+        </section>
+
+        <!-- FAQ -->
+        <section>
+            <h2>Developer FAQ</h2>
+
+            <h3>How does search ranking work?</h3>
+            <p>Exact trie matches rank highest, then prefix matches (sorted by feature class importance: country &gt; city &gt; street &gt; POI), then trigram fuzzy matches (by Jaccard similarity score). The <code>lang</code> option prefers localized names when available (e.g., <code>name:en</code>).</p>
+
+            <h3>What&rsquo;s the binary index format?</h3>
+            <p>Version 4 <code>.lcx</code> files with magic <code>0x4C4F4355</code>. Designed for mmap&mdash;all sections are offset-addressable with no pointer fixups needed. Entities are 72-byte fixed records, strings live in an interned pool. Use <code>lc_index_mmap()</code> for zero-copy access or <code>lc_index_load_memory()</code> for WASM.</p>
+
+            <h3>How does reverse geocoding find the nearest street?</h3>
+            <p>The spatial grid does O(1) cell lookup, then iterates entities in the cell. For streets, it computes Haversine-based point-to-segment distance using <code>lc_point_to_linestring_distance()</code>, not just centroid distance. This gives accurate results even for long, curved streets.</p>
+
+            <h3>What about non-Latin scripts?</h3>
+            <p>The normalization pipeline handles UTF-8 properly&mdash;multi-byte decode, case folding for Latin/Cyrillic/Greek, diacritic removal for Latin-1 and Extended-A ranges. CJK characters pass through as-is (the trie maps them to the space slot, but trigram search handles them natively). Extending to full Unicode case folding is a roadmap item.</p>
+
+            <h3>Can I use it without OSM data?</h3>
+            <p>Yes. Build an <code>LCEntityStore</code> manually with <code>lc_entity_store_add()</code>, then <code>lc_index_build()</code> from the store. The PBF parser is one data source&mdash;the index builder accepts any entity store. Useful for proprietary address databases.</p>
+
+            <h3>Why three separate data structures instead of one?</h3>
+            <p>Each query type has fundamentally different access patterns. A trie is optimal for prefix completion (O(m) where m is query length). A trigram index excels at fuzzy matching (set intersection). A spatial grid is optimal for geographic proximity (O(1) cell access). One data structure can&rsquo;t do all three well. The total memory overhead is modest&mdash;most space is in the entity records and string pool shared by all three.</p>
+        </section>
+
+        <footer class="footer">
+            <p>Part of the <a href="../"><span class="logo-text">OTTO</span></a> trucking logistics platform</p>
+        </footer>
+    </div>
+</body>
+</html>

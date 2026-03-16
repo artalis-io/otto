@@ -398,6 +398,89 @@ test.describe('WASM API Demos', () => {
     });
   });
 
+  test.describe('Surge (VRP Solver)', () => {
+    test.beforeEach(async ({ page }) => {
+      await page.goto(API_HTML_PATH);
+      await page.waitForFunction(() =>
+        typeof surgeDemo !== 'undefined' && surgeDemo.isReady(),
+        { timeout: WASM_INIT_TIMEOUT }
+      );
+    });
+
+    test('health endpoint returns healthy status', async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const resp = await surgeDemo.fetch('/api/v1/health');
+        return { status: resp.status, body: await resp.json() };
+      });
+
+      expect(result.status).toBe(200);
+      expect(result.body.status).toBe('healthy');
+      expect(result.body.service).toBe('surge');
+      expect(result.body.version).toMatch(/^\d+\.\d+\.\d+/);
+    });
+
+    test('stats endpoint returns service info', async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const resp = await surgeDemo.fetch('/api/v1/stats');
+        return { status: resp.status, body: await resp.json() };
+      });
+
+      expect(result.status).toBe(200);
+      expect(result.body.service).toBe('surge');
+      expect(result.body.status).toBe('OK');
+    });
+
+    test('solve endpoint returns valid solution with routes', async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const problem = {
+          vehicles: [
+            {id: 0, depot_start: 0, depot_end: 0, capacity: [20], shift: [0, 1000]}
+          ],
+          depots: [
+            {id: 0, x: 40.0, y: 50.0, tw: [0, 1000]}
+          ],
+          tasks: [
+            {id: 0, x: 45.0, y: 55.0, tw: [0, 500], service: 10, demand: [5]},
+            {id: 1, x: 42.0, y: 58.0, tw: [0, 500], service: 10, demand: [3]},
+            {id: 2, x: 38.0, y: 52.0, tw: [100, 800], service: 10, demand: [4]}
+          ],
+          requests: [
+            {id: 0, delivery_task: 0},
+            {id: 1, delivery_task: 1},
+            {id: 2, delivery_task: 2}
+          ],
+          config: {max_iterations: 1000}
+        };
+        const resp = await surgeDemo.fetch('/api/v1/solve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(problem)
+        });
+        return { status: resp.status, body: await resp.json() };
+      });
+
+      expect(result.status).toBe(200);
+      expect(result.body.status).toBe('OK');
+      expect(result.body.stats).toBeDefined();
+      expect(result.body.stats.vehicles_used).toBeGreaterThan(0);
+      expect(result.body.stats.total_distance).toBeGreaterThan(0);
+    });
+
+    test('solve with invalid input returns 400', async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const resp = await surgeDemo.fetch('/api/v1/solve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: 'not valid json'
+        });
+        return { status: resp.status, body: await resp.json() };
+      });
+
+      expect(result.status).toBe(400);
+      expect(result.body.error).toBeDefined();
+    });
+  });
+
   test.describe('Ralph (LP/MIP Solver)', () => {
     test.beforeEach(async ({ page }) => {
       await page.goto(API_HTML_PATH);

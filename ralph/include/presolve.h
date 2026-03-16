@@ -47,6 +47,10 @@ typedef struct {
     double factor;             /* Multiplication factor (for substitution) */
 } PostsolveOp;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Presolve result */
 typedef struct {
     LPModel *reduced_model;     /* Presolved model */
@@ -276,5 +280,9 @@ void compute_row_bounds(const double *row, int n,
 
 /* Utility */
 void presolve_compute_implied_bounds(PresolveContext *ctx);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* RALPH_PRESOLVE_H */

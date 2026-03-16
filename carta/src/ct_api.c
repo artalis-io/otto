@@ -23,6 +23,7 @@ struct CTAPIContext {
     int owns_pbf;               /* 1 if we should free pbf on destroy */
     CTLODConfig lod_config;     /* LOD filtering config */
     CTRenderOptions render_opts; /* Render quality options */
+    CTMetatileLabelCache *mt_cache; /* Metatile label cache (NULL = per-tile labels) */
     int min_zoom;
     int max_zoom;
     int tile_size;
@@ -36,6 +37,7 @@ void ct_api_config_init(CTAPIConfig *config) {
     config->tile_size = 512;
     config->enable_lod = 1;
     config->name = "Carta Tile Server";
+    config->metatile_cache_size = CT_METATILE_CACHE_DEFAULT;
 }
 
 CTAPIContext *ct_api_create(const uint8_t *pbf_data, size_t pbf_len,
@@ -82,6 +84,7 @@ CTAPIContext *ct_api_create_from_pbf(CTPBFContext *pbf_ctx,
         ctx->name[sizeof(ctx->name) - 1] = '\0';
     } else {
         strncpy(ctx->name, "Carta Tile Server", sizeof(ctx->name) - 1);
+        ctx->name[sizeof(ctx->name) - 1] = '\0';
     }
 
     /* Initialize LOD config */
@@ -93,12 +96,18 @@ CTAPIContext *ct_api_create_from_pbf(CTPBFContext *pbf_ctx,
     /* Initialize render options */
     ct_render_options_default(&ctx->render_opts);
 
+    /* Initialize metatile label cache */
+    if (config->metatile_cache_size > 0) {
+        ctx->mt_cache = ct_metatile_cache_create(config->metatile_cache_size);
+    }
+
     return ctx;
 }
 
 void ct_api_free(CTAPIContext *ctx) {
     if (!ctx) return;
 
+    ct_metatile_cache_free(ctx->mt_cache);
     ct_lod_free(&ctx->lod_config);
 
     if (ctx->owns_pbf && ctx->pbf) {
@@ -129,6 +138,10 @@ void ct_api_disable_lod(CTAPIContext *ctx) {
     ct_lod_init(&ctx->lod_config);  /* Reset to empty = no filtering */
 }
 
+CTMetatileLabelCache *ct_api_get_metatile_cache(CTAPIContext *ctx) {
+    return ctx ? ctx->mt_cache : NULL;
+}
+
 /* ============================================================================
  * Tile Generation
  * ============================================================================ */
@@ -154,7 +167,8 @@ uint8_t *ct_api_generate_png(CTAPIContext *ctx,
     /* Render tile */
     CTTileCoord coord = {z, x, y};
     ct_render_clear(render);
-    ct_render_from_pbf_lod(render, ctx->pbf, coord, &ctx->lod_config);
+    ct_render_from_pbf_lod_mt(render, ctx->pbf, coord, &ctx->lod_config,
+                               ctx->mt_cache);
 
     /* Encode to PNG */
     size_t capacity = ct_png_max_size(ctx->tile_size, ctx->tile_size);
@@ -263,6 +277,10 @@ char *ct_api_generate_tilejson(CTAPIContext *ctx,
         bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat,
         center_lon, center_lat);
 
+    if (len < 0 || len >= 2048) {
+        free(buffer);
+        return NULL;
+    }
     *out_len = (size_t)len;
     return buffer;
 }
@@ -282,6 +300,10 @@ char *ct_api_generate_health(CTAPIContext *ctx, size_t *out_len) {
         "}\n",
         ct_version());
 
+    if (len < 0 || len >= 256) {
+        free(buffer);
+        return NULL;
+    }
     *out_len = (size_t)len;
     return buffer;
 
@@ -319,6 +341,10 @@ char *ct_api_generate_stats(CTAPIContext *ctx, size_t *out_len) {
         bbox.min_lon, bbox.min_lat, bbox.max_lon, bbox.max_lat,
         ctx->min_zoom, ctx->max_zoom, ctx->tile_size);
 
+    if (len < 0 || len >= 1024) {
+        free(buffer);
+        return NULL;
+    }
     *out_len = (size_t)len;
     return buffer;
 }
@@ -373,7 +399,8 @@ char *ct_api_generate_ascii(CTAPIContext *ctx,
     /* Render tile */
     CTTileCoord coord = {z, x, y};
     ct_render_clear(render);
-    ct_render_from_pbf_lod(render, ctx->pbf, coord, &ctx->lod_config);
+    ct_render_from_pbf_lod_mt(render, ctx->pbf, coord, &ctx->lod_config,
+                               ctx->mt_cache);
 
     /* Get pixels */
     const uint8_t *pixels = ct_render_pixels(render);

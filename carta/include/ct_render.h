@@ -9,6 +9,7 @@
 
 #include "ct_types.h"
 #include "ct_label.h"
+#include "ct_metatile.h"
 #include "sh_font.h"
 
 #ifdef __cplusplus
@@ -79,6 +80,36 @@ struct CTLODConfig;
  */
 void ct_render_from_pbf_lod(CTRenderContext *ctx, const CTPBFContext *pbf,
                             CTTileCoord coord, const struct CTLODConfig *lod);
+
+/*
+ * Render tile from PBF context with metatile label caching.
+ *
+ * Uses the metatile cache for cross-tile consistent label placement.
+ * When mt_cache is NULL, falls back to per-tile label placement.
+ *
+ * @param ctx       Render context
+ * @param pbf       PBF context with parsed data
+ * @param coord     Tile coordinates
+ * @param mt_cache  Metatile label cache (NULL = per-tile labels)
+ */
+void ct_render_from_pbf_mt(CTRenderContext *ctx, const CTPBFContext *pbf,
+                            CTTileCoord coord,
+                            CTMetatileLabelCache *mt_cache);
+
+/*
+ * Render tile from PBF with LOD filtering and metatile label caching.
+ *
+ * This is the recommended function for tile generation with metatile labels.
+ *
+ * @param ctx       Render context
+ * @param pbf       PBF context with parsed data
+ * @param coord     Tile coordinates
+ * @param lod       LOD configuration (NULL = no filtering)
+ * @param mt_cache  Metatile label cache (NULL = per-tile labels)
+ */
+void ct_render_from_pbf_lod_mt(CTRenderContext *ctx, const CTPBFContext *pbf,
+                                CTTileCoord coord, const struct CTLODConfig *lod,
+                                CTMetatileLabelCache *mt_cache);
 
 /* ============================================================================
  * Primitive Drawing
@@ -391,6 +422,45 @@ int ct_render_labels(CTRenderContext *ctx,
                      const SHFont *font,
                      CTColor fill_color, CTColor halo_color,
                      float halo_width);
+
+/* ============================================================================
+ * Path Text Rendering
+ * ============================================================================ */
+
+/*
+ * Render text along a path (per-glyph rotation).
+ *
+ * @param ctx         Render context
+ * @param text        UTF-8 text to render
+ * @param glyphs      Per-glyph placement (position + angle)
+ * @param num_glyphs  Number of glyphs
+ * @param font        MSDF font
+ * @param font_size   Font size in pixels
+ * @param fill        Text fill color
+ * @param halo        Halo color
+ * @param halo_width  Halo width in pixels
+ */
+void ct_render_text_path(CTRenderContext *ctx, const char *text,
+                         const CTPathGlyph *glyphs, int num_glyphs,
+                         const SHFont *font, float font_size,
+                         CTColor fill, CTColor halo, float halo_width);
+
+/*
+ * Render road labels from placements.
+ *
+ * @param ctx         Render context
+ * @param placements  Road label placements
+ * @param count       Number of placements
+ * @param font        MSDF font
+ * @param fill        Text fill color
+ * @param halo        Halo color
+ * @param halo_width  Halo width in pixels
+ * @return            Number of labels rendered
+ */
+int ct_render_road_labels(CTRenderContext *ctx,
+                          const CTRoadLabelPlacement *placements, size_t count,
+                          const SHFont *font,
+                          CTColor fill, CTColor halo, float halo_width);
 
 /* ============================================================================
  * Pixel Access

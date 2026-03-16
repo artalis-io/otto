@@ -43,6 +43,7 @@
 #include "sh_trace.h"       /* For trace ID propagation */
 #include "sh_metrics.h"     /* For metrics collection */
 #include "sh_json.h"        /* For JSON building */
+#include "sh_hash.h"        /* For sh_fnv1a_64 (ETag hashing) */
 
 /* ============================================================================
  * Configuration
@@ -80,6 +81,7 @@ typedef struct {
     LODPreset lod_preset;       /* LOD filtering preset */
     RenderPreset render_preset; /* Render quality preset */
     int render_workers;         /* Number of render worker threads (0 = auto) */
+    size_t metatile_cache_size; /* Metatile label cache entries (0 = disabled) */
 } TileServerConfig;
 
 /* Default configuration */
@@ -252,7 +254,8 @@ static void process_png_render(RenderWorkItem *item)
                 memcpy(item->response_data, cached_data, cached_size);
                 item->response_size = cached_size;
                 item->status_code = 200;
-                strncpy(item->content_type, "image/png", sizeof(item->content_type));
+                strncpy(item->content_type, "image/png", sizeof(item->content_type) - 1);
+                item->content_type[sizeof(item->content_type) - 1] = '\0';
             }
             pthread_mutex_unlock(&s_cache_mutex);
             if (item->response_data) return;
@@ -269,13 +272,15 @@ static void process_png_render(RenderWorkItem *item)
         item->response_data = NULL;
         item->status_code = 500;
         strncpy(item->error_msg, "Tile generation failed",
-                sizeof(item->error_msg));
+                sizeof(item->error_msg) - 1);
+        item->error_msg[sizeof(item->error_msg) - 1] = '\0';
         return;
     }
 
     item->response_size = size;
     item->status_code = 200;
-    strncpy(item->content_type, "image/png", sizeof(item->content_type));
+    strncpy(item->content_type, "image/png", sizeof(item->content_type) - 1);
+    item->content_type[sizeof(item->content_type) - 1] = '\0';
 
     /* Cache the result */
     if (s_png_cache) {
@@ -303,7 +308,8 @@ static void process_mvt_render(RenderWorkItem *item)
                 item->response_size = cached_size;
                 item->status_code = 200;
                 strncpy(item->content_type, "application/vnd.mapbox-vector-tile",
-                        sizeof(item->content_type));
+                        sizeof(item->content_type) - 1);
+                item->content_type[sizeof(item->content_type) - 1] = '\0';
             }
             pthread_mutex_unlock(&s_cache_mutex);
             if (item->response_data) return;
@@ -318,14 +324,16 @@ static void process_mvt_render(RenderWorkItem *item)
     if (!item->response_data) {
         item->status_code = 500;
         strncpy(item->error_msg, "Tile generation failed",
-                sizeof(item->error_msg));
+                sizeof(item->error_msg) - 1);
+        item->error_msg[sizeof(item->error_msg) - 1] = '\0';
         return;
     }
 
     item->response_size = size;
     item->status_code = 200;
     strncpy(item->content_type, "application/vnd.mapbox-vector-tile",
-            sizeof(item->content_type));
+            sizeof(item->content_type) - 1);
+    item->content_type[sizeof(item->content_type) - 1] = '\0';
 
     /* Cache the result */
     if (s_mvt_cache) {
@@ -364,14 +372,16 @@ static void process_ascii_render(RenderWorkItem *item)
         item->response_data = NULL;
         item->status_code = 500;
         strncpy(item->error_msg, "ASCII tile generation failed",
-                sizeof(item->error_msg));
+                sizeof(item->error_msg) - 1);
+        item->error_msg[sizeof(item->error_msg) - 1] = '\0';
         return;
     }
 
     item->response_size = size;
     item->status_code = 200;
     strncpy(item->content_type, "text/plain; charset=utf-8",
-            sizeof(item->content_type));
+            sizeof(item->content_type) - 1);
+    item->content_type[sizeof(item->content_type) - 1] = '\0';
 }
 
 /* Render worker callback function (called by ShWorkerPool) */
@@ -390,7 +400,8 @@ static void render_worker_callback(ShWorkItem *queue_item, void *ctx)
         sh_completion_is_cancelled(&item->completion)) {
         item->status_code = 504;  /* Gateway Timeout */
         strncpy(item->error_msg, "Request timeout",
-                sizeof(item->error_msg));
+                sizeof(item->error_msg) - 1);
+        item->error_msg[sizeof(item->error_msg) - 1] = '\0';
         render_work_item_complete(item);
         sh_workqueue_item_free(queue_item);
         return;
@@ -556,9 +567,11 @@ static void init_carta_defaults(TileServerConfig *cfg) {
     cfg->max_zoom = 18;
     cfg->tile_size = 512;
     strncpy(cfg->name, "Carta Tile Server", sizeof(cfg->name) - 1);
+    cfg->name[sizeof(cfg->name) - 1] = '\0';
     cfg->lod_preset = LOD_DEFAULT;
     cfg->render_preset = RENDER_PRESET_DEFAULT;
     cfg->render_workers = 0;  /* Auto-detect */
+    cfg->metatile_cache_size = CT_METATILE_CACHE_DEFAULT;
 }
 
 /* Load Carta-specific environment variables */
@@ -595,6 +608,9 @@ static void load_carta_env(TileServerConfig *cfg) {
     }
     if ((val = getenv("CARTA_RENDER_WORKERS"))) {
         cfg->render_workers = sh_parse_int(val, cfg->render_workers, 0, 256);
+    }
+    if ((val = getenv("CARTA_METATILE_CACHE"))) {
+        cfg->metatile_cache_size = (size_t)sh_parse_int(val, (int)cfg->metatile_cache_size, 0, 100000);
     }
 
     /* CORS configuration */
@@ -649,21 +665,50 @@ static void send_error_cors(struct mg_connection *c, struct mg_http_message *hm,
     sh_mg_reply_error(c, status, &s_cors, get_origin_from_request(hm), message);
 }
 
-/* send_tile_cors sends binary data so uses sh_cors_headers directly */
+/* send_tile_cors sends binary data with ETag support.
+ * If hm is non-NULL, checks If-None-Match for conditional 304. */
 static void send_tile_cors(struct mg_connection *c, struct mg_http_message *hm,
                            const char *content_type, const uint8_t *data, size_t size) {
     char cors_headers[512];
     sh_cors_headers(&s_cors, get_origin_from_request(hm), cors_headers, sizeof(cors_headers));
+
+    /* Compute ETag from tile bytes */
+    char etag[20];
+    if (data && size > 0) {
+        uint64_t hash = sh_fnv1a_64(data, size);
+        snprintf(etag, sizeof(etag), "\"%016llx\"", (unsigned long long)hash);
+    } else {
+        etag[0] = '\0';
+    }
+
+    /* Check If-None-Match for conditional request */
+    if (hm && etag[0]) {
+        struct mg_str *inm = mg_http_get_header(hm, "If-None-Match");
+        if (inm && inm->len > 0 && inm->len == strlen(etag) &&
+            memcmp(inm->buf, etag, inm->len) == 0) {
+            mg_printf(c,
+                "HTTP/1.1 304 Not Modified\r\n"
+                "ETag: %s\r\n"
+                "%s"
+                "Cache-Control: public, max-age=86400\r\n"
+                "Connection: close\r\n"
+                "\r\n",
+                etag, cors_headers);
+            return;
+        }
+    }
 
     mg_printf(c,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: %s\r\n"
         "Content-Length: %lu\r\n"
         "%s"
+        "%s%s%s"
         "Cache-Control: public, max-age=86400\r\n"
         "Connection: close\r\n"
         "\r\n",
-        content_type, (unsigned long)size, cors_headers);
+        content_type, (unsigned long)size, cors_headers,
+        etag[0] ? "ETag: " : "", etag[0] ? etag : "", etag[0] ? "\r\n" : "");
     mg_send(c, data, size);
 }
 
@@ -955,7 +1000,8 @@ static int submit_render_work(struct mg_connection *c, RenderWorkItem *item)
 }
 
 /* GET /tiles/{z}/{x}/{y}.mvt */
-static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
+static void handle_mvt_tile(struct mg_connection *c, struct mg_http_message *hm,
+                            int z, int x, int y) {
     if (!s_pbf_ctx) {
         send_error(c, 503, "PBF not loaded");
         return;
@@ -984,7 +1030,7 @@ static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
             if (copy) {
                 memcpy(copy, cached_data, cached_size);
                 pthread_mutex_unlock(&s_cache_mutex);
-                send_tile(c, "application/vnd.mapbox-vector-tile", copy, cached_size);
+                send_tile_cors(c, hm, "application/vnd.mapbox-vector-tile", copy, cached_size);
                 free(copy);
                 return;
             }
@@ -1019,7 +1065,7 @@ static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
     if (size == 0) {
         free(buffer);
         static const uint8_t empty_mvt[] = {0x1a, 0x00};
-        send_tile(c, "application/vnd.mapbox-vector-tile", empty_mvt, 0);
+        send_tile_cors(c, hm, "application/vnd.mapbox-vector-tile", empty_mvt, 0);
         return;
     }
 
@@ -1029,7 +1075,7 @@ static void handle_mvt_tile(struct mg_connection *c, int z, int x, int y) {
         pthread_mutex_unlock(&s_cache_mutex);
     }
 
-    send_tile(c, "application/vnd.mapbox-vector-tile", buffer, size);
+    send_tile_cors(c, hm, "application/vnd.mapbox-vector-tile", buffer, size);
     free(buffer);
 }
 
@@ -1114,7 +1160,8 @@ static void handle_ascii_tile(struct mg_connection *c, struct mg_http_message *h
     }
 
     ct_render_clear(render_ctx);
-    ct_render_from_pbf(render_ctx, s_pbf_ctx, coord);
+    ct_render_from_pbf_mt(render_ctx, s_pbf_ctx, coord,
+                           ct_api_get_metatile_cache(s_api_ctx));
 
     const uint8_t *pixels = ct_render_pixels(render_ctx);
 
@@ -1173,7 +1220,8 @@ static CTRenderContext *get_thread_render_ctx(int tile_size) {
 }
 
 /* GET /tiles/{z}/{x}/{y}.png */
-static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
+static void handle_png_tile(struct mg_connection *c, struct mg_http_message *hm,
+                            int z, int x, int y) {
     if (!s_pbf_ctx) {
         send_error(c, 503, "PBF not loaded");
         return;
@@ -1201,7 +1249,7 @@ static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
             if (copy) {
                 memcpy(copy, cached_data, cached_size);
                 pthread_mutex_unlock(&s_cache_mutex);
-                send_tile(c, "image/png", copy, cached_size);
+                send_tile_cors(c, hm, "image/png", copy, cached_size);
                 free(copy);
                 return;
             }
@@ -1230,10 +1278,12 @@ static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
     ct_render_set_options(render, &s_render_opts);
 
     ct_render_clear(render);
+    CTMetatileLabelCache *mt_cache = ct_api_get_metatile_cache(s_api_ctx);
     if (s_config.lod_preset != LOD_NONE) {
-        ct_render_from_pbf_lod(render, s_pbf_ctx, coord, &s_lod_config);
+        ct_render_from_pbf_lod_mt(render, s_pbf_ctx, coord, &s_lod_config,
+                                   mt_cache);
     } else {
-        ct_render_from_pbf(render, s_pbf_ctx, coord);
+        ct_render_from_pbf_mt(render, s_pbf_ctx, coord, mt_cache);
     }
 
     size_t capacity = ct_png_max_size(s_config.tile_size, s_config.tile_size);
@@ -1263,7 +1313,7 @@ static void handle_png_tile(struct mg_connection *c, int z, int x, int y) {
         pthread_mutex_unlock(&s_cache_mutex);
     }
 
-    send_tile(c, "image/png", buffer, size);
+    send_tile_cors(c, hm, "image/png", buffer, size);
     free(buffer);
 }
 
@@ -1369,13 +1419,13 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
             char ext[8];
             if (parse_tile_uri(hm->uri, &z, &x, &y, ext) == 0) {
                 if (strcmp(ext, "mvt") == 0 || strcmp(ext, "pbf") == 0) {
-                    handle_mvt_tile(c, z, x, y);
+                    handle_mvt_tile(c, hm, z, x, y);
                     sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
                                              "endpoint:mvt", NULL);
                     sh_metrics_counter_inc("http_requests_total", 1,
                                            "status:200", "endpoint:mvt", NULL);
                 } else if (strcmp(ext, "png") == 0) {
-                    handle_png_tile(c, z, x, y);
+                    handle_png_tile(c, hm, z, x, y);
                     sh_metrics_timer_observe(req_timer, "http_request_duration_ms",
                                              "endpoint:png", NULL);
                     sh_metrics_counter_inc("http_requests_total", 1,
@@ -1625,6 +1675,7 @@ int main(int argc, char *argv[]) {
         api_config.tile_size = s_config.tile_size;
         api_config.enable_lod = (s_config.lod_preset != LOD_NONE);
         api_config.name = s_config.name;
+        api_config.metatile_cache_size = s_config.metatile_cache_size;
 
         s_api_ctx = ct_api_create_from_pbf(s_pbf_ctx, &api_config);
         if (!s_api_ctx) {
@@ -1642,6 +1693,13 @@ int main(int argc, char *argv[]) {
 
         /* Apply render options */
         ct_api_set_render_opts(s_api_ctx, &s_render_opts);
+
+        if (ct_api_get_metatile_cache(s_api_ctx)) {
+            printf("Metatile labels: %zu-entry cache\n",
+                   s_config.metatile_cache_size);
+        } else {
+            printf("Metatile labels: disabled\n");
+        }
     }
 
     /* Initialize tile caches (256MB each by default) */

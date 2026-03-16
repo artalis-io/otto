@@ -8,6 +8,10 @@
 #include "lp.h"
 #include "detect.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Default MIP parameters */
 #define RALPH_DEFAULT_NODE_LIMIT 1000000
 #define RALPH_DEFAULT_MIP_GAP 0.0001    /* 0.01% relative gap */
@@ -724,5 +728,9 @@ int ralph_lagrangian_solve_scp_ex(
     double *solution,
     double *lower_bound
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* RALPH_MIP_H */

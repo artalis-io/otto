@@ -56,6 +56,8 @@ CORE_SRCS = src/carta.c \
             src/ct_boundary.c \
             src/ct_collision.c \
             src/ct_label.c \
+            src/ct_polylabel.c \
+            src/ct_metatile.c \
             src/ct_api.c
 
 # miniz is now linked via shared library
@@ -69,8 +71,9 @@ ALL_OBJS = $(CORE_OBJS) $(MINIZ_OBJS)
 # Library
 LIB = libcarta.a
 
-# Test binary
+# Test binaries
 TEST_BIN = test_carta
+TEST_METATILE_BIN = test_metatile
 
 # CLI tool
 CLI_BIN = carta_cli
@@ -119,9 +122,14 @@ $(COMPARE_BIN): tools/carta_compare.c $(LIB) $(SHARED_DIR)/libshared.a
 
 compare: $(COMPARE_BIN)
 
+# Metatile test binary
+$(TEST_METATILE_BIN): tests/test_metatile.c $(LIB) $(SHARED_DIR)/libshared.a
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lcarta -L$(SHARED_DIR) -lshared $(LDFLAGS) -o $@
+
 # Run tests
-test: $(TEST_BIN)
+test: $(TEST_BIN) $(TEST_METATILE_BIN)
 	./$(TEST_BIN)
+	./$(TEST_METATILE_BIN)
 
 # Benchmarks
 $(BENCH_BIN): benchmarks/bench_carta.c $(LIB) $(SHARED_DIR)/libshared.a
@@ -167,7 +175,7 @@ $(FUZZ_BIN): $(FUZZ_SRCS) fuzz-lib
 # Clean
 clean:
 	rm -f $(CORE_OBJS) $(LIB) libcarta_fuzz.a
-	rm -f $(TEST_BIN) $(CLI_BIN) $(COMPARE_BIN) $(BENCH_BIN) $(FUZZ_BIN)
+	rm -f $(TEST_BIN) $(TEST_METATILE_BIN) $(CLI_BIN) $(COMPARE_BIN) $(BENCH_BIN) $(FUZZ_BIN)
 	rm -f $(WASM_OUT) carta.wasm
 
 # Dependencies
@@ -185,8 +193,11 @@ src/ct_ascii.o: include/ct_types.h include/ct_ascii.h
 src/ct_multipolygon.o: include/ct_types.h include/ct_multipolygon.h include/ct_rtree.h
 src/ct_boundary.o: include/ct_types.h include/ct_boundary.h include/ct_rtree.h
 src/ct_collision.o: include/ct_types.h include/ct_collision.h
-src/ct_label.o: include/ct_types.h include/ct_label.h include/ct_collision.h include/ct_pbf.h
-src/ct_api.o: include/carta.h include/ct_api.h include/ct_lod.h
+src/ct_label.o: include/ct_types.h include/ct_label.h include/ct_collision.h include/ct_pbf.h include/ct_polylabel.h
+src/ct_polylabel.o: include/ct_types.h include/ct_polylabel.h
+src/ct_metatile.o: include/ct_types.h include/ct_metatile.h include/ct_label.h include/ct_pbf.h include/ct_collision.h
+src/ct_api.o: include/carta.h include/ct_api.h include/ct_lod.h include/ct_metatile.h
+src/ct_render.o: include/ct_types.h include/ct_render.h include/ct_lod.h include/ct_simplify.h include/ct_metatile.h
 
 # Help
 help:

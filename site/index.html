@@ -1790,6 +1790,106 @@
             top: 0;
         }
 
+        /* Algorithm Visualization - shared styles */
+        .algo-viz-crt {
+            background: linear-gradient(135deg, #1a1a1a 0%, #222 100%);
+            border: 1px solid #333;
+            border-radius: 6px;
+            padding: 20px 20px 12px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .algo-viz-crt::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.12) 0px,
+                rgba(0, 0, 0, 0.12) 1px,
+                transparent 1px,
+                transparent 3px
+            );
+            pointer-events: none;
+            z-index: 2;
+            animation: crt-scanline-roll-gray 8s linear infinite;
+        }
+
+        .algo-viz-crt::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(255, 255, 255, 0.04) 0px,
+                rgba(255, 255, 255, 0.04) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+        }
+
+        .algo-viz-canvas {
+            display: block;
+            width: 100%;
+            max-width: 720px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 1;
+        }
+
+        .algo-viz-label {
+            font-family: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, monospace;
+            font-size: 11px;
+            color: #555;
+            text-align: center;
+            margin-top: 8px;
+            position: relative;
+            z-index: 3;
+        }
+
+        .algo-viz-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 32px;
+            align-items: start;
+        }
+
+        .algo-viz-info p {
+            font-size: 14px;
+            color: var(--text-muted);
+            line-height: 1.7;
+            margin-bottom: 16px;
+        }
+
+        .algo-viz-info .highlight {
+            color: var(--text);
+            font-weight: 500;
+        }
+
+        .algo-viz-features {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 8px;
+        }
+
+        .algo-viz-feature {
+            font-size: 12px;
+            color: var(--text-muted);
+            padding: 8px 12px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+        }
+
+        @media (max-width: 768px) {
+            .algo-viz-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
         /* Responsive */
         @media (max-width: 600px) {
             .logo { font-size: 24px; }
@@ -1821,6 +1921,7 @@
                     </div>
                     <span class="nav-separator">|</span>
                     <div class="nav-group">
+                        <a href="#algorithms">Algorithms</a>
                         <a href="#developers">Developers</a>
                         <a href="api.html">API</a>
                         <a href="https://github.com/ottofleet/otto">GitHub</a>
@@ -1963,7 +2064,8 @@
                             <li>Velo &ndash; Routing engine</li>
                             <li>Carta &ndash; Tile generator</li>
                             <li>Locus &ndash; Geocoding</li>
-                            <li>FuelWise, Surge, HoSE, Tempo, Arbor, Sigma, Pulse, Fuse</li>
+                            <li>Nexus &ndash; Document ingestion pipeline</li>
+                            <li>FuelWise, Arbor, Surge, HoSE, Tempo, Sigma, Pulse, Fuse</li>
                         </ul>
                     </div>
                     <div class="license-column">
@@ -1974,7 +2076,7 @@
                         </p>
                         <ul class="license-list">
                             <li>SaaS vendors offering OTTO as a service</li>
-                            <li>Nexus &ndash; TMS/ELD/LoadBoard connectors</li>
+                            <li>Nexus Gateway &ndash; TMS/ELD/LoadBoard connectors</li>
                             <li>Managed hosting &ndash; Fully operated platform</li>
                             <li>Priority support &ndash; SLAs and dedicated help</li>
                         </ul>
@@ -2397,6 +2499,225 @@
         </section>
 
         <!-- ============================================================ -->
+        <!-- UNDER THE HOOD -->
+        <!-- ============================================================ -->
+        <section id="algorithms" class="persona-section">
+            <div class="persona-section-header">
+                <div class="persona-section-icon">&#x2699;</div>
+                <div>
+                    <div class="persona-section-title">Under the Hood</div>
+                    <div class="persona-section-subtitle">The algorithms that power every OTTO decision</div>
+                </div>
+            </div>
+
+            <!-- Ralph: Linear & Integer Optimization -->
+            <div class="subsection">
+                <h3 class="subsection-title">Linear &amp; Integer Optimization</h3>
+                <div class="algo-viz-grid">
+                    <div class="algo-viz-crt">
+                        <canvas id="ralph-viz" class="algo-viz-canvas"></canvas>
+                        <div class="algo-viz-label">Ralph: Revised Simplex &rarr; Branch &amp; Bound</div>
+                    </div>
+                    <div class="algo-viz-info">
+                        <p>
+                            <span class="highlight">Every fleet decision is an optimization problem.</span>
+                            Which fuel stops minimize cost? Which routes satisfy time windows? How do you assign
+                            100 shipments to 30 trucks?
+                        </p>
+                        <p>
+                            Ralph solves these with the <strong>Revised Simplex</strong> method&mdash;walking
+                            the vertices of a high-dimensional polytope to find the optimum. For integer
+                            decisions (which truck, which stop), <strong>Branch &amp; Bound</strong> builds
+                            a search tree on top, pruning impossible branches and converging on the optimal
+                            integer solution.
+                        </p>
+                        <p>
+                            <strong>FuelWise</strong> uses Ralph to solve minimum-cost refueling LPs.
+                            <strong>Sigma</strong> formulates fleet plan selection as SCP/SPP and solves
+                            via Ralph&rsquo;s MIP engine. <strong>HoSE</strong> builds a time-indexed
+                            scheduling model verified through Ralph&rsquo;s LP solver.
+                        </p>
+                        <p>
+                            No external solver dependencies. The same engine runs server-side and in-browser
+                            via WebAssembly&mdash;under 100ms for 1,000 variables.
+                        </p>
+                        <div class="algo-viz-features">
+                            <div class="algo-viz-feature">Revised Simplex</div>
+                            <div class="algo-viz-feature">LU Factorization</div>
+                            <div class="algo-viz-feature">Branch &amp; Bound</div>
+                            <div class="algo-viz-feature">Gomory Cuts</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Arbor: Metaheuristic Search -->
+            <div class="subsection">
+                <h3 class="subsection-title">Metaheuristic Search</h3>
+                <div class="algo-viz-grid">
+                    <div class="algo-viz-crt">
+                        <canvas id="arbor-viz" class="algo-viz-canvas"></canvas>
+                        <div class="algo-viz-label">Arbor: ALNS Destroy/Repair &rarr; Beam Search</div>
+                    </div>
+                    <div class="algo-viz-info">
+                        <p>
+                            <span class="highlight">Some problems are too large for exact solvers.</span>
+                            Scheduling 1,000 deliveries across 50 trucks with time windows, capacity limits,
+                            and driver constraints? The search space is astronomical.
+                        </p>
+                        <p>
+                            Arbor&rsquo;s <strong>Adaptive Large Neighborhood Search</strong> starts with a
+                            feasible solution and iteratively <em>destroys</em> parts of it (removing requests),
+                            then <em>repairs</em> (reinserting optimally). Operators that find improvements get
+                            higher selection weights&mdash;the algorithm learns which strategies work.
+                        </p>
+                        <p>
+                            For structured search, <strong>Beam Search</strong> explores a tree of partial
+                            solutions, keeping only the most promising &lsquo;beams&rsquo; at each level.
+                            Combined with lower-bound pruning, it finds near-optimal solutions in bounded time.
+                        </p>
+                        <p>
+                            <a href="modules/surge.html" style="text-decoration:none"><strong>Surge</strong></a> uses Arbor&rsquo;s ALNS to solve rich VRP/PDPTW problems with 25+ constraint types.
+                            Population-based search with infeasible-space exploration beats BKS average distance
+                            on Solomon benchmarks.
+                        </p>
+                        <div class="algo-viz-features">
+                            <div class="algo-viz-feature">ALNS Framework</div>
+                            <div class="algo-viz-feature">Adaptive Weights</div>
+                            <div class="algo-viz-feature">Beam Search</div>
+                            <div class="algo-viz-feature">Simulated Annealing</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Velo: Graph Routing -->
+            <div class="subsection">
+                <h3 class="subsection-title">Graph Routing</h3>
+                <div class="algo-viz-grid">
+                    <div class="algo-viz-crt">
+                        <canvas id="velo-viz" class="algo-viz-canvas"></canvas>
+                        <div class="algo-viz-label">Velo: Bidirectional A* &rarr; ALT Landmarks</div>
+                    </div>
+                    <div class="algo-viz-info">
+                        <p>
+                            <span class="highlight">Routing is graph search at scale.</span>
+                            A country-scale OSM graph has millions of nodes and edges. Naive Dijkstra
+                            explores them all. Smarter algorithms explore far fewer.
+                        </p>
+                        <p>
+                            <strong>Bidirectional A*</strong> searches from both ends simultaneously.
+                            The forward frontier expands from origin, the backward from destination,
+                            guided by a Haversine heuristic. When they meet, the shortest path is found
+                            having explored a fraction of the graph.
+                        </p>
+                        <p>
+                            <strong>ALT</strong> (A* with Landmarks and Triangle inequality) precomputes
+                            distances to strategic landmark nodes. The triangle inequality
+                            <em>d(s,t) &ge; |d(s,L) &minus; d(t,L)|</em> gives a much tighter lower bound
+                            than Haversine alone, pruning 5&ndash;10x more of the search space.
+                        </p>
+                        <p>
+                            Velo builds a CSR graph from OSM PBF files, supports truck/car/bike/foot
+                            profiles, and serves routes under 100ms at country scale.
+                        </p>
+                        <div class="algo-viz-features">
+                            <div class="algo-viz-feature">Bidirectional A*</div>
+                            <div class="algo-viz-feature">ALT Landmarks</div>
+                            <div class="algo-viz-feature">CSR Graph</div>
+                            <div class="algo-viz-feature">Truck Profiles</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Carta: Tile Rendering Pipeline -->
+            <div class="subsection">
+                <h3 class="subsection-title">Tile Rendering Pipeline</h3>
+                <div class="algo-viz-grid">
+                    <div class="algo-viz-crt">
+                        <canvas id="carta-viz" class="algo-viz-canvas"></canvas>
+                        <div class="algo-viz-label">Carta: Clip &rarr; Simplify &rarr; Rasterize</div>
+                    </div>
+                    <div class="algo-viz-info">
+                        <p>
+                            <span class="highlight">Every map tile is a geometry pipeline.</span>
+                            A single 512&times;512 tile at zoom 14 may intersect hundreds of roads,
+                            buildings, and land-use polygons. Each must be clipped to the tile boundary,
+                            simplified for the zoom level, and rasterized&mdash;in under 75ms.
+                        </p>
+                        <p>
+                            <strong>Sutherland&ndash;Hodgman</strong> clips polygons against the tile
+                            rectangle edge by edge. Vertices outside are discarded, new intersection
+                            points are inserted. The result is a clean polygon that fits exactly within
+                            the tile.
+                        </p>
+                        <p>
+                            <strong>Douglas&ndash;Peucker</strong> then simplifies the geometry.
+                            Points that deviate less than a pixel from the line between their neighbors
+                            are removed. At low zoom levels this eliminates 90%+ of vertices, keeping
+                            tiles fast without visible quality loss.
+                        </p>
+                        <p>
+                            Carta outputs both PNG raster tiles and Mapbox Vector Tiles (MVT) from
+                            the same pipeline. R-tree spatial indexing ensures only relevant features
+                            are processed per tile.
+                        </p>
+                        <div class="algo-viz-features">
+                            <div class="algo-viz-feature">Sutherland&ndash;Hodgman</div>
+                            <div class="algo-viz-feature">Douglas&ndash;Peucker</div>
+                            <div class="algo-viz-feature">MVT + PNG</div>
+                            <div class="algo-viz-feature">R-tree Index</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Locus: Geocoding Search -->
+            <div class="subsection">
+                <h3 class="subsection-title">Geocoding Search</h3>
+                <div class="algo-viz-grid">
+                    <div class="algo-viz-crt">
+                        <canvas id="locus-viz" class="algo-viz-canvas"></canvas>
+                        <div class="algo-viz-label">Locus: Trie Traversal &rarr; Trigram Fuzzy Match</div>
+                    </div>
+                    <div class="algo-viz-info">
+                        <p>
+                            <span class="highlight">Turn text into coordinates in microseconds.</span>
+                            Type &ldquo;Buda&rdquo; and get &ldquo;Budapest&rdquo; before your finger
+                            leaves the key. Misspell it as &ldquo;Budepest&rdquo; and still get the
+                            right result.
+                        </p>
+                        <p>
+                            <strong>Prefix trie</strong> traversal handles exact prefix matching.
+                            Each keystroke walks one level deeper in the tree, instantly narrowing
+                            candidates from millions to hundreds. Autocomplete results appear in
+                            under 20&mu;s.
+                        </p>
+                        <p>
+                            <strong>Trigram fuzzy search</strong> handles typos and misspellings.
+                            Every place name is decomposed into overlapping 3-character sequences.
+                            A query like &ldquo;Budepest&rdquo; shares enough trigrams with
+                            &ldquo;Budapest&rdquo; to rank it first, even with the transposition.
+                        </p>
+                        <p>
+                            <strong>Reverse geocoding</strong> uses a spatial grid to find the
+                            nearest named place to any coordinate. The grid partitions the map
+                            into cells&mdash;only the local cell and its neighbors are searched.
+                        </p>
+                        <div class="algo-viz-features">
+                            <div class="algo-viz-feature">Prefix Trie</div>
+                            <div class="algo-viz-feature">Trigram Index</div>
+                            <div class="algo-viz-feature">Spatial Grid</div>
+                            <div class="algo-viz-feature">&lt;20&mu;s Queries</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- ============================================================ -->
         <!-- DEVELOPERS -->
         <!-- ============================================================ -->
         <section id="developers" class="persona-section">
@@ -2599,63 +2920,96 @@ cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span
             <div class="subsection">
                 <h3 class="subsection-title">Core Engines</h3>
                 <div class="grid">
-                    <div class="card">
+                    <a href="modules/ralph.html" class="card" style="text-decoration:none;display:block">
                         <div class="card-header">
                             <span class="card-name">Ralph</span>
                             <span class="card-lang">C</span>
                         </div>
-                        <div class="card-desc">LP/MIP solver engine. Revised Simplex with LU factorization, Branch &amp; Bound, Gomory cuts.</div>
-                        <div class="card-meta">600+ tests &middot; 55K loc &middot; &lt;100ms for 1000 vars</div>
-                    </div>
-                    <div class="card">
+                        <div class="card-desc">LP/MIP solver. Primal + dual simplex, branch-and-bound, network simplex, Benders decomposition, JVC assignment. Presolve, telemetry, 55/84 NETLIB solved.</div>
+                        <div class="card-meta">762+ tests &middot; 63K loc &middot; 6 solver engines</div>
+                        <div class="card-roadmap">View product page: solver engines, benchmarks, architecture &rarr;</div>
+                    </a>
+                    <a href="modules/velo.html" class="card" style="text-decoration:none;display:block">
                         <div class="card-header">
                             <span class="card-name">Velo</span>
                             <span class="card-lang">C</span>
                         </div>
-                        <div class="card-desc">OSM routing engine. Dijkstra, A*, bidirectional search, landmark preprocessing.</div>
-                        <div class="card-meta">51 tests &middot; 11K loc &middot; &lt;100ms country-scale</div>
-                        <div class="card-roadmap">Roadmap: Turn restrictions, dimensional constraints (height/weight/width), commercial data formats (PTV DDS)</div>
-                    </div>
-                    <div class="card">
+                        <div class="card-desc">OSM routing engine. Dijkstra, A*, bidirectional search, ALT landmark preprocessing. 4 vehicle profiles, CSR graph format.</div>
+                        <div class="card-meta">52 tests &middot; 7K loc &middot; 6 algorithms</div>
+                        <div class="card-roadmap">View product page: algorithms, vehicle profiles, architecture &rarr;</div>
+                    </a>
+                    <a href="modules/carta.html" class="card" style="text-decoration:none;display:block">
                         <div class="card-header">
                             <span class="card-name">Carta</span>
                             <span class="card-lang">C</span>
                         </div>
-                        <div class="card-desc">Map tile generator. Vector tiles (MVT) and raster tiles (PNG) from OSM PBF.</div>
-                        <div class="card-meta">110 tests &middot; 19K loc &middot; ~75ms per 512x512 tile</div>
-                    </div>
-                    <div class="card">
+                        <div class="card-desc">Map tile server. PNG raster, MVT vector, and ASCII tiles from OSM PBF. Pure C software renderer with labels, metatile caching, R-tree spatial index.</div>
+                        <div class="card-meta">164 tests &middot; 18K loc &middot; ~75ms per 512&times;512 tile</div>
+                        <div class="card-roadmap">View product page: rendering pipeline, output formats, architecture &rarr;</div>
+                    </a>
+                    <a href="modules/locus.html" class="card" style="text-decoration:none;display:block">
                         <div class="card-header">
                             <span class="card-name">Locus</span>
                             <span class="card-lang">C</span>
                         </div>
-                        <div class="card-desc">OSM geocoding engine. Forward search, autocomplete, reverse lookup with trie + trigram index.</div>
-                        <div class="card-meta">52 tests &middot; 11K loc &middot; &lt;20&mu;s per query</div>
-                    </div>
-                    <div class="card">
+                        <div class="card-desc">OSM geocoding engine. Prefix trie autocomplete, trigram fuzzy search, spatial grid reverse geocoding. Zero-copy mmap binary index.</div>
+                        <div class="card-meta">68 tests &middot; 6.5K loc &middot; &lt;20&micro;s queries</div>
+                        <div class="card-roadmap">View product page: search architecture, index format, API &rarr;</div>
+                    </a>
+                    <a href="modules/fuelwise.html" class="card" style="text-decoration:none;display:block">
                         <div class="card-header">
                             <span class="card-name">FuelWise</span>
                             <span class="card-lang">C</span>
                         </div>
-                        <div class="card-desc">Refueling optimization. LP formulation for minimum-cost fuel stops along a route.</div>
-                        <div class="card-meta">33 tests &middot; 7K loc &middot; Uses Ralph solver</div>
-                    </div>
-                    <div class="card">
+                        <div class="card-desc">LP/MILP refueling optimization. Weight-dependent consumption, multi-station planning, Benders decomposition. Powered by Ralph.</div>
+                        <div class="card-meta">157 tests &middot; 3K loc &middot; 5&ndash;15% fuel savings</div>
+                        <div class="card-roadmap">View product page: optimization model, solver tiers, consumption curves &rarr;</div>
+                    </a>
+                    <a href="modules/shared.html" class="card" style="text-decoration:none;display:block">
                         <div class="card-header">
                             <span class="card-name">Shared</span>
                             <span class="card-lang">C</span>
                         </div>
-                        <div class="card-desc">Geo utilities, protobuf, rate limiting, work queues, circuit breakers, backoff.</div>
-                        <div class="card-meta">206 tests &middot; 44K loc &middot; Common infrastructure</div>
-                    </div>
-                    <div class="card">
+                        <div class="card-desc">Infrastructure library. Geo, arena allocators, JSON/protobuf parsers, rate limiting, circuit breakers, worker pools, font rendering. Foundation for every OTTO module.</div>
+                        <div class="card-meta">319 tests &middot; 24K loc &middot; 40+ modules</div>
+                        <div class="card-roadmap">View product page: module catalog, API examples, architecture &rarr;</div>
+                    </a>
+                    <a href="modules/nexus.html" class="card" style="text-decoration:none;display:block">
+                        <div class="card-header">
+                            <span class="card-name">Nexus</span>
+                            <span class="card-lang">C</span>
+                        </div>
+                        <div class="card-desc">Document ingestion pipeline. XLSX, PDF, CSV extraction with schema-driven transforms, validation, and change detection. Fuzz-tested, WASM-compilable.</div>
+                        <div class="card-meta">192 tests &middot; 9.4K loc &middot; 6-stage pipeline</div>
+                        <div class="card-roadmap">View product page: pipeline architecture, schema system, quick start &rarr;</div>
+                    </a>
+                    <a href="modules/clayshards.html" class="card" style="text-decoration:none;display:block">
                         <div class="card-header">
                             <span class="card-name">ClayShards</span>
                             <span class="card-lang">C + JS</span>
                         </div>
-                        <div class="card-desc">Immediate-mode UI components. WebGL renderer, TUI terminal renderer, MSDF fonts, map widgets.</div>
-                        <div class="card-meta">101 tests &middot; 12K loc &middot; ~140KB WASM</div>
-                    </div>
+                        <div class="card-desc">Render-agnostic immediate-mode UI on Clay layout. 8 widgets, 4 renderers (WebGL, TUI, Software, CRT), slippy map with overlays.</div>
+                        <div class="card-meta">270+ tests &middot; 19K loc &middot; 4 renderer backends</div>
+                        <div class="card-roadmap">View product page: architecture, components, renderers &rarr;</div>
+                    </a>
+                    <a href="modules/arbor.html" class="card" style="text-decoration:none;display:block">
+                        <div class="card-header">
+                            <span class="card-name">Arbor</span>
+                            <span class="card-lang">C</span>
+                        </div>
+                        <div class="card-desc">ALNS metaheuristic framework. Adaptive destroy/repair operators, roulette selection, 4 acceptance criteria, SA auto-calibration, restart mechanism.</div>
+                        <div class="card-meta">66 tests &middot; 1.4K loc &middot; Powers Surge with 18 operators</div>
+                        <div class="card-roadmap">View product page: framework architecture, operator catalog, API &rarr;</div>
+                    </a>
+                    <a href="modules/surge.html" class="card" style="text-decoration:none;display:block">
+                        <div class="card-header">
+                            <span class="card-name">Surge</span>
+                            <span class="card-lang">C</span>
+                        </div>
+                        <div class="card-desc">Rich VRP/PDPTW solver. 25+ constraint types, BKS-competitive quality, ALNS via Arbor. Runs in browser via WASM.</div>
+                        <div class="card-meta">340 tests &middot; 40K loc &middot; ALNS metaheuristic</div>
+                        <div class="card-roadmap">View product page: benchmarks, competitive analysis, quick start &rarr;</div>
+                    </a>
                 </div>
             </div>
 
@@ -2689,35 +3043,11 @@ cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span
                     </div>
                     <div class="card planned">
                         <div class="card-header">
-                            <span class="card-name">Nexus</span>
-                            <span class="card-lang">C</span>
-                            <span class="badge-planned">planned</span>
-                        </div>
-                        <div class="card-desc"><strong>N</strong>ormalized <strong>Ex</strong>ternal <strong>U</strong>nified <strong>S</strong>napshots. TMS/ELD/LoadBoard integration gateway.</div>
-                    </div>
-                    <div class="card planned">
-                        <div class="card-header">
                             <span class="card-name">Tempo</span>
                             <span class="card-lang">C</span>
                             <span class="badge-planned">planned</span>
                         </div>
                         <div class="card-desc"><strong>T</strong>ime-window and <strong>E</strong>vent <strong>M</strong>anagement <strong>P</strong>olicy <strong>O</strong>rchestrator. Time windows, facility hours, blackout periods.</div>
-                    </div>
-                    <div class="card planned">
-                        <div class="card-header">
-                            <span class="card-name">Arbor</span>
-                            <span class="card-lang">C</span>
-                            <span class="badge-planned">planned</span>
-                        </div>
-                        <div class="card-desc"><strong>A</strong>lgorithmic <strong>R</strong>ecursive <strong>B</strong>ranching and <strong>O</strong>ptimization <strong>R</strong>untime. State-space search, beam search, pruning.</div>
-                    </div>
-                    <div class="card planned">
-                        <div class="card-header">
-                            <span class="card-name">Surge</span>
-                            <span class="card-lang">C</span>
-                            <span class="badge-planned">planned</span>
-                        </div>
-                        <div class="card-desc"><strong>S</strong>cheduler for <strong>U</strong>rban <strong>R</strong>outing and <strong>G</strong>eneral <strong>E</strong>xpress. Rich VRP/PDPTW solver with multi-dimensional capacity, disjunct time windows, commodity conflicts, and vehicle qualifications.</div>
                     </div>
                     <div class="card planned">
                         <div class="card-header">
@@ -2775,47 +3105,49 @@ cs_input(CS_ID(<span class="string">"search"</span>), text, &amp;len, max, <span
                 <h3 class="subsection-title">Architecture</h3>
                 <div class="ascii-art">
 <pre>
-┌─────────────────────────────────────────────┐
-│                                             │
-│     UI: React + ClayShards + WASM + APIs    │
-│                                             │
-└──────────────────────┬──────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────┐
-│                                             │
-│ Fleet: HoSE + Tempo + Arbor + Surge + Sigma + Pulse │  ◄── planned
-│ State: Fuse (signal fusion + state estim.)  │  ◄── planned
-│       Network: Atlas + Quota                │  ◄── planned
-│                                             │
-└──────────────────────┬──────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────┐
-│                                             │
-│   Domain: FuelWise + Velo + Carta + Locus   │
-│                                             │
-└──────────────────────┬──────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────┐
-│                                             │
-│             Core: Ralph + Shared            │
-│                                             │
-└──────────────────────┬──────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────┐
-│                                             │
-│       Vendor: miniz + mongoose + Clay       │
-│                                             │
-└─────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│                                                   │
+│      UI: React + ClayShards + WASM + APIs         │
+│                                                   │
+└─────────────────────────┬─────────────────────────┘
+                          ▼
+┌───────────────────────────────────────────────────┐
+│                                                   │
+│  Fleet: Arbor + Surge                             │
+│         HoSE + Tempo + Sigma + Pulse              │  ◄── planned
+│  State: Fuse (signal fusion + state estimation)   │  ◄── planned
+│  Network: Atlas + Quota                           │  ◄── planned
+│                                                   │
+└─────────────────────────┬─────────────────────────┘
+                          ▼
+┌───────────────────────────────────────────────────┐
+│                                                   │
+│  Domain: FuelWise + Velo + Carta + Locus + Nexus  │
+│                                                   │
+└─────────────────────────┬─────────────────────────┘
+                          ▼
+┌───────────────────────────────────────────────────┐
+│                                                   │
+│              Core: Ralph + Shared                 │
+│                                                   │
+└─────────────────────────┬─────────────────────────┘
+                          ▼
+┌───────────────────────────────────────────────────┐
+│                                                   │
+│        Vendor: miniz + mongoose + Clay            │
+│                                                   │
+└───────────────────────────────────────────────────┘
 
 Dependencies:
   FuelWise ──► Ralph (LP solver)
   FuelWise ──► Velo (routing)
+  Nexus ──► Shared (arena, JSON, XML, CSV, SHA-256)
   Velo, Carta, Locus ──► Shared (geo, protobuf)
   Shared ──► miniz (compression)
   ClayShards ──► Clay (layout)
   APIs ──► mongoose (HTTP)
 </pre>
-                </div>
+            </div>
             </div>
 
             <!-- Why C -->
@@ -3118,6 +3450,2279 @@ Dependencies:
         for (var i = 0; i < links.length; i++) {
             links[i].href = 'mailto:' + e;
         }
+    })();
+    </script>
+
+    <!-- Ralph Simplex + Branch & Bound Visualization -->
+    <script>
+    (function() {
+        var canvas = document.getElementById('ralph-viz');
+        if (!canvas) return;
+        var ctx = canvas.getContext('2d');
+        var dpr = window.devicePixelRatio || 1;
+        var W = 720, H = 400;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        canvas.style.width = '100%';
+        canvas.style.maxWidth = W + 'px';
+        canvas.style.height = 'auto';
+        canvas.style.aspectRatio = W + '/' + H;
+        ctx.scale(dpr, dpr);
+
+        var ACCENT = '#3b82f6';
+        var GREEN = '#22c55e';
+        var RED = '#ef4444';
+        var YELLOW = '#eab308';
+        var GRAY = '#a0a0a0';
+        var DIM = '#555';
+        var BRIGHT = '#e5e5e5';
+        var FONT = '11px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_SM = '10px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_LG = '13px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_XL = '15px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+
+        var CYCLE = 20000; /* ms total loop */
+
+        /* Feasible region in world coords */
+        var poly = [
+            {x: 0, y: 0},
+            {x: 4.5, y: 0},
+            {x: 3.8, y: 1.75},
+            {x: 2, y: 3.2},
+            {x: 0, y: 3.8}
+        ];
+        /* Simplex walk order & objective values */
+        var walk = [0, 1, 2, 3]; /* vertex indices */
+        var zvals = [0, 18.0, 20.3, 21.6];
+
+        /* B&B tree nodes: {x,y,label,bound,status,parent,branchLabel} */
+        var nodes = [
+            {x: 0.5, y: 0.08, label: 'LP', bound: 21.6, status: 'frac'},
+            {x: 0.25, y: 0.35, label: 'x\u2082\u22641', bound: 19.8, status: 'frac', parent: 0, branchLabel: 'x\u2082 \u2264 1'},
+            {x: 0.75, y: 0.35, label: 'x\u2082\u22652', bound: 18.5, status: 'int', parent: 0, branchLabel: 'x\u2082 \u2265 2'},
+            {x: 0.12, y: 0.62, label: 'x\u2081\u22643', bound: 17.0, status: 'int', parent: 1, branchLabel: 'x\u2081 \u2264 3'},
+            {x: 0.38, y: 0.62, label: 'x\u2081\u22654', bound: 19.0, status: 'int', parent: 1, branchLabel: 'x\u2081 \u2265 4'}
+        ];
+        /* Best integer node index */
+        var bestNode = 4;
+
+        /* World-to-canvas mapping for simplex region */
+        var ox = 60, oy = 40, pw = 260, ph = 260;
+        function wx(v) { return ox + (v / 5) * pw; }
+        function wy(v) { return oy + ph - (v / 4.2) * ph; }
+
+        /* Easing */
+        function ease(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t; }
+
+        /* Lerp between two points */
+        function lerp(a, b, t) { return {x: a.x+(b.x-a.x)*t, y: a.y+(b.y-a.y)*t}; }
+
+        /* Draw dashed line */
+        function dashed(x1,y1,x2,y2,col,alpha) {
+            ctx.save();
+            ctx.globalAlpha = alpha || 1;
+            ctx.strokeStyle = col;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([4,4]);
+            ctx.beginPath();
+            ctx.moveTo(x1,y1);
+            ctx.lineTo(x2,y2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.restore();
+        }
+
+        /* Draw filled circle */
+        function dot(cx,cy,r,col) {
+            ctx.beginPath();
+            ctx.arc(cx,cy,r,0,Math.PI*2);
+            ctx.fillStyle = col;
+            ctx.fill();
+        }
+
+        /* Draw text */
+        function txt(str,x,y,col,font,align) {
+            ctx.font = font || FONT;
+            ctx.fillStyle = col || GRAY;
+            ctx.textAlign = align || 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(str,x,y);
+        }
+
+        /* ─── SIMPLEX PHASE ─── */
+        function drawSimplex(t) {
+            /* t: 0→1 over simplex phase */
+            var fadeIn = Math.min(t / 0.08, 1);
+
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            /* Axes */
+            ctx.strokeStyle = DIM;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(ox, oy);
+            ctx.lineTo(ox, oy + ph + 10);
+            ctx.lineTo(ox + pw + 10, oy + ph + 10);
+            ctx.stroke();
+
+            /* Axis labels */
+            txt('x\u2081', ox + pw + 16, oy + ph + 10, DIM, FONT_SM);
+            txt('x\u2082', ox - 4, oy - 10, DIM, FONT_SM, 'center');
+
+            /* Grid lines */
+            ctx.globalAlpha = fadeIn * 0.3;
+            for (var i = 1; i <= 4; i++) {
+                var gx = wx(i * 1.25);
+                ctx.beginPath(); ctx.moveTo(gx, oy); ctx.lineTo(gx, oy+ph+10); ctx.stroke();
+            }
+            for (var j = 1; j <= 3; j++) {
+                var gy = wy(j * 1.4);
+                ctx.beginPath(); ctx.moveTo(ox, gy); ctx.lineTo(ox+pw+10, gy); ctx.stroke();
+            }
+            ctx.globalAlpha = fadeIn;
+
+            /* Feasible region fill */
+            var regionAlpha = Math.min((t - 0.05) / 0.1, 1);
+            if (regionAlpha > 0) {
+                ctx.globalAlpha = fadeIn * regionAlpha * 0.12;
+                ctx.fillStyle = ACCENT;
+                ctx.beginPath();
+                ctx.moveTo(wx(poly[0].x), wy(poly[0].y));
+                for (var k = 1; k < poly.length; k++) {
+                    ctx.lineTo(wx(poly[k].x), wy(poly[k].y));
+                }
+                ctx.closePath();
+                ctx.fill();
+            }
+
+            /* Feasible region border */
+            ctx.globalAlpha = fadeIn * Math.min((t - 0.05) / 0.1, 1);
+            ctx.strokeStyle = ACCENT;
+            ctx.lineWidth = 1.5;
+            ctx.globalAlpha = Math.max(ctx.globalAlpha, 0) * 0.5;
+            ctx.beginPath();
+            ctx.moveTo(wx(poly[0].x), wy(poly[0].y));
+            for (var m = 1; m < poly.length; m++) {
+                ctx.lineTo(wx(poly[m].x), wy(poly[m].y));
+            }
+            ctx.closePath();
+            ctx.stroke();
+
+            ctx.globalAlpha = fadeIn;
+
+            /* Constraint labels */
+            if (t > 0.12) {
+                var clAlpha = Math.min((t - 0.12) / 0.08, 1) * 0.5;
+                ctx.globalAlpha = clAlpha;
+                txt('c\u2081', wx(4.7), wy(-0.3), DIM, FONT_SM);
+                txt('c\u2082', wx(4.3), wy(1.2), DIM, FONT_SM);
+                txt('c\u2083', wx(3.2), wy(2.7), DIM, FONT_SM);
+                txt('c\u2084', wx(0.8), wy(3.8), DIM, FONT_SM);
+            }
+
+            ctx.globalAlpha = fadeIn;
+
+            /* Vertices (dim) */
+            if (t > 0.1) {
+                for (var vi = 0; vi < poly.length; vi++) {
+                    dot(wx(poly[vi].x), wy(poly[vi].y), 3, DIM);
+                }
+            }
+
+            /* Simplex walk animation */
+            var walkStart = 0.2;
+            var walkEnd = 0.85;
+            var walkT = Math.max(0, Math.min((t - walkStart) / (walkEnd - walkStart), 1));
+            var stepCount = walk.length - 1;
+            var currentStep = Math.min(Math.floor(walkT * stepCount), stepCount - 1);
+            var stepProgress = (walkT * stepCount) - currentStep;
+            if (walkT >= 1) { currentStep = stepCount - 1; stepProgress = 1; }
+
+            /* Draw walked path segments */
+            if (walkT > 0) {
+                ctx.strokeStyle = ACCENT;
+                ctx.lineWidth = 2;
+                ctx.shadowColor = ACCENT;
+                ctx.shadowBlur = 6;
+                for (var si = 0; si < currentStep; si++) {
+                    var from = poly[walk[si]];
+                    var to = poly[walk[si+1]];
+                    ctx.beginPath();
+                    ctx.moveTo(wx(from.x), wy(from.y));
+                    ctx.lineTo(wx(to.x), wy(to.y));
+                    ctx.stroke();
+                }
+                /* Current segment (partial) */
+                if (currentStep < stepCount) {
+                    var cfrom = poly[walk[currentStep]];
+                    var cto = poly[walk[currentStep+1]];
+                    var ep = ease(stepProgress);
+                    ctx.beginPath();
+                    ctx.moveTo(wx(cfrom.x), wy(cfrom.y));
+                    ctx.lineTo(
+                        wx(cfrom.x + (cto.x - cfrom.x) * ep),
+                        wy(cfrom.y + (cto.y - cfrom.y) * ep)
+                    );
+                    ctx.stroke();
+                }
+                ctx.shadowBlur = 0;
+
+                /* Highlight visited vertices */
+                for (var hi = 0; hi <= currentStep; hi++) {
+                    dot(wx(poly[walk[hi]].x), wy(poly[walk[hi]].y), 4, ACCENT);
+                }
+
+                /* Current position dot */
+                if (currentStep < stepCount) {
+                    var cp = poly[walk[currentStep]];
+                    var np = poly[walk[currentStep+1]];
+                    var ep2 = ease(stepProgress);
+                    var cx2 = wx(cp.x + (np.x - cp.x) * ep2);
+                    var cy2 = wy(cp.y + (np.y - cp.y) * ep2);
+                    dot(cx2, cy2, 6, ACCENT);
+                    /* Glow */
+                    ctx.beginPath();
+                    ctx.arc(cx2, cy2, 10, 0, Math.PI*2);
+                    ctx.fillStyle = ACCENT;
+                    ctx.globalAlpha = 0.15;
+                    ctx.fill();
+                    ctx.globalAlpha = fadeIn;
+                } else {
+                    /* At optimal - pulse green */
+                    var optV = poly[walk[stepCount]];
+                    var pulse = 0.5 + 0.5 * Math.sin(t * 20);
+                    dot(wx(optV.x), wy(optV.y), 5 + pulse * 2, GREEN);
+                    ctx.beginPath();
+                    ctx.arc(wx(optV.x), wy(optV.y), 12, 0, Math.PI*2);
+                    ctx.fillStyle = GREEN;
+                    ctx.globalAlpha = 0.1 + 0.05 * pulse;
+                    ctx.fill();
+                    ctx.globalAlpha = fadeIn;
+                }
+            }
+
+            /* Objective function line (sweeping) */
+            if (walkT > 0 && walkT < 1) {
+                var zNow = zvals[currentStep] + (zvals[Math.min(currentStep+1, stepCount)] - zvals[currentStep]) * ease(stepProgress);
+                /* Draw iso-profit line perpendicular to gradient (5,4) direction */
+                var intercept = zNow / 5;
+                dashed(wx(intercept), wy(0), wx(0), wy(intercept * 5/4.2), YELLOW, 0.25);
+            }
+
+            /* Status text on right side */
+            var rx = 370, ry = 60;
+            txt('REVISED SIMPLEX', rx, ry, DIM, FONT_LG);
+            ctx.strokeStyle = DIM;
+            ctx.lineWidth = 0.5;
+            ctx.beginPath(); ctx.moveTo(rx, ry+10); ctx.lineTo(rx+180, ry+10); ctx.stroke();
+
+            if (walkT > 0) {
+                var dispStep = walkT >= 1 ? stepCount : currentStep + 1;
+                var dispZ = walkT >= 1 ? zvals[stepCount] : zvals[currentStep] + (zvals[Math.min(currentStep+1, stepCount)] - zvals[currentStep]) * ease(stepProgress);
+
+                txt('Iteration ' + dispStep + ' / ' + stepCount, rx, ry + 34, GRAY, FONT);
+                txt('z = ' + dispZ.toFixed(1), rx, ry + 56, BRIGHT, FONT_LG);
+
+                /* Progress bar */
+                var barW = 160, barH = 4;
+                var barX = rx, barY = ry + 74;
+                ctx.fillStyle = '#2a2a2a';
+                ctx.fillRect(barX, barY, barW, barH);
+                ctx.fillStyle = ACCENT;
+                ctx.fillRect(barX, barY, barW * (dispStep / stepCount), barH);
+            }
+
+            if (walkT >= 1) {
+                var fracAlpha = Math.min((t - (walkStart + (walkEnd-walkStart))) / 0.08, 1);
+                ctx.globalAlpha = fracAlpha;
+                txt('LP Optimal: z* = ' + zvals[stepCount].toFixed(1), rx, ry + 104, GREEN, FONT);
+                txt('x\u2082 = 1.75  (fractional)', rx, ry + 124, YELLOW, FONT);
+                txt('Integer solution needed...', rx, ry + 154, DIM, FONT_SM);
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── BRANCH & BOUND PHASE ─── */
+        function drawBB(t) {
+            /* t: 0→1 over B&B phase */
+            var treeX = 60, treeY = 30, treeW = W - 120, treeH = H - 60;
+
+            ctx.save();
+
+            /* Title */
+            txt('BRANCH & BOUND', W/2, 22, DIM, FONT_LG, 'center');
+
+            /* How many nodes visible */
+            var nodeTimings = [0, 0.15, 0.15, 0.42, 0.42];
+            var nodeRevealed = [0, 0.25, 0.30, 0.55, 0.60];
+
+            /* Draw edges first */
+            for (var i = 1; i < nodes.length; i++) {
+                if (t < nodeTimings[i]) continue;
+                var edgeT = Math.min((t - nodeTimings[i]) / 0.1, 1);
+                var parent = nodes[nodes[i].parent];
+                var child = nodes[i];
+                var px = treeX + parent.x * treeW;
+                var py = treeY + parent.y * treeH;
+                var cx = treeX + child.x * treeW;
+                var cy = treeY + child.y * treeH;
+
+                var mx = px + (cx - px) * edgeT;
+                var my = py + (cy - py) * edgeT;
+
+                ctx.strokeStyle = DIM;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(px, py + 16);
+                ctx.lineTo(mx, my - (my > py + 16 ? 16 : 0));
+                ctx.stroke();
+
+                /* Branch label */
+                if (edgeT > 0.5) {
+                    var lx = (px + cx) / 2;
+                    var ly = (py + cy) / 2 - 8;
+                    ctx.globalAlpha = (edgeT - 0.5) * 2;
+                    txt(child.branchLabel, lx, ly, DIM, FONT_SM, 'center');
+                    ctx.globalAlpha = 1;
+                }
+            }
+
+            /* Draw nodes */
+            for (var ni = 0; ni < nodes.length; ni++) {
+                if (t < nodeRevealed[ni]) continue;
+                var nodeT = Math.min((t - nodeRevealed[ni]) / 0.08, 1);
+                var n = nodes[ni];
+                var nx = treeX + n.x * treeW;
+                var ny = treeY + n.y * treeH;
+
+                var boxW = 90, boxH = 32;
+                var scale = ease(nodeT);
+
+                ctx.save();
+                ctx.translate(nx, ny);
+                ctx.scale(scale, scale);
+
+                /* Node box */
+                var isBest = ni === bestNode && t > 0.75;
+                var borderCol = isBest ? GREEN : (n.status === 'frac' ? ACCENT : '#555');
+                ctx.fillStyle = '#1a1a1a';
+                ctx.strokeStyle = borderCol;
+                ctx.lineWidth = isBest ? 2 : 1;
+                ctx.beginPath();
+                ctx.roundRect(-boxW/2, -boxH/2, boxW, boxH, 4);
+                ctx.fill();
+                ctx.stroke();
+
+                /* Glow for best node */
+                if (isBest) {
+                    var glowT = (t - 0.75) / 0.25;
+                    ctx.shadowColor = GREEN;
+                    ctx.shadowBlur = 8 + 4 * Math.sin(glowT * 12);
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+                }
+
+                /* Node text */
+                txt('z = ' + n.bound.toFixed(1), 0, -4, isBest ? GREEN : BRIGHT, FONT, 'center');
+
+                /* Status indicator */
+                if (n.status === 'int') {
+                    var statusCol = isBest ? GREEN : GRAY;
+                    txt(isBest ? 'optimal' : 'integer', 0, 10, statusCol, FONT_SM, 'center');
+                } else {
+                    txt('fractional', 0, 10, YELLOW, FONT_SM, 'center');
+                }
+
+                ctx.restore();
+            }
+
+            /* Pruning marks */
+            if (t > 0.68) {
+                var pruneAlpha = Math.min((t - 0.68) / 0.08, 1);
+                ctx.globalAlpha = pruneAlpha;
+                /* Node 3 is pruned (z=17.0 < 18.5 incumbent from node 2) */
+                var pn = nodes[3];
+                var pnx = treeX + pn.x * treeW;
+                var pny = treeY + pn.y * treeH;
+                ctx.strokeStyle = RED;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(pnx - 52, pny - 20);
+                ctx.lineTo(pnx + 52, pny + 20);
+                ctx.moveTo(pnx + 52, pny - 20);
+                ctx.lineTo(pnx - 52, pny + 20);
+                ctx.stroke();
+                txt('pruned', pnx, pny + 28, RED, FONT_SM, 'center');
+                ctx.globalAlpha = 1;
+            }
+
+            /* Result text */
+            if (t > 0.8) {
+                var resAlpha = Math.min((t - 0.8) / 0.1, 1);
+                ctx.globalAlpha = resAlpha;
+                var resultY = treeY + 0.85 * treeH;
+                txt('MIP Optimal: z* = ' + nodes[bestNode].bound.toFixed(1), W/2, resultY, GREEN, FONT_XL, 'center');
+                txt('Integer solution found in 4 LP solves', W/2, resultY + 22, DIM, FONT, 'center');
+                ctx.globalAlpha = 1;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── MAIN LOOP ─── */
+        var running = false;
+        var startTime = 0;
+
+        function animate(ts) {
+            if (!running) return;
+            if (!startTime) startTime = ts;
+            var elapsed = (ts - startTime) % CYCLE;
+            var t = elapsed / CYCLE;
+
+            ctx.clearRect(0, 0, W, H);
+
+            if (t < 0.48) {
+                /* Simplex phase: 0 - 48% */
+                drawSimplex(t / 0.48);
+            } else if (t < 0.52) {
+                /* Crossfade transition */
+                var fadeT = (t - 0.48) / 0.04;
+                ctx.globalAlpha = 1 - fadeT;
+                drawSimplex(1);
+                ctx.globalAlpha = fadeT;
+                drawBB(0);
+                ctx.globalAlpha = 1;
+            } else if (t < 0.95) {
+                /* B&B phase: 52% - 95% */
+                drawBB((t - 0.52) / 0.43);
+            } else {
+                /* Hold result, fade out */
+                var fadeOut = 1 - (t - 0.95) / 0.05;
+                ctx.globalAlpha = fadeOut;
+                drawBB(1);
+                ctx.globalAlpha = 1;
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        /* Only animate when visible */
+        var observer = new IntersectionObserver(function(entries) {
+            entries.forEach(function(entry) {
+                if (entry.isIntersecting && !running) {
+                    running = true;
+                    startTime = 0;
+                    requestAnimationFrame(animate);
+                } else if (!entry.isIntersecting) {
+                    running = false;
+                }
+            });
+        }, {threshold: 0.1});
+
+        observer.observe(canvas);
+    })();
+    </script>
+
+    <!-- Arbor ALNS + Beam Search Visualization -->
+    <script>
+    (function() {
+        var canvas = document.getElementById('arbor-viz');
+        if (!canvas) return;
+        var ctx = canvas.getContext('2d');
+        var dpr = window.devicePixelRatio || 1;
+        var W = 720, H = 400;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        canvas.style.width = '100%';
+        canvas.style.maxWidth = W + 'px';
+        canvas.style.height = 'auto';
+        canvas.style.aspectRatio = W + '/' + H;
+        ctx.scale(dpr, dpr);
+
+        var ACCENT = '#3b82f6';
+        var GREEN = '#22c55e';
+        var RED = '#ef4444';
+        var YELLOW = '#eab308';
+        var ORANGE = '#f97316';
+        var PURPLE = '#a855f7';
+        var GRAY = '#a0a0a0';
+        var DIM = '#555';
+        var BRIGHT = '#e5e5e5';
+        var FONT = '11px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_SM = '10px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_LG = '13px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_XL = '15px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+
+        var CYCLE = 24000;
+
+        function ease(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t; }
+
+        function dot(cx,cy,r,col) {
+            ctx.beginPath();
+            ctx.arc(cx,cy,r,0,Math.PI*2);
+            ctx.fillStyle = col;
+            ctx.fill();
+        }
+
+        function txt(str,x,y,col,font,align) {
+            ctx.font = font || FONT;
+            ctx.fillStyle = col || GRAY;
+            ctx.textAlign = align || 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(str,x,y);
+        }
+
+        /* ─── ROUTE DATA ─── */
+        /* Depot + 12 customer nodes arranged in a rough cluster */
+        var depot = {x: 360, y: 200};
+        var customers = [
+            {x: 140, y: 80},  {x: 200, y: 140}, {x: 120, y: 200},
+            {x: 180, y: 280}, {x: 260, y: 100}, {x: 300, y: 300},
+            {x: 440, y: 80},  {x: 520, y: 150}, {x: 580, y: 90},
+            {x: 480, y: 280}, {x: 560, y: 240}, {x: 600, y: 310}
+        ];
+
+        /* Route colors for 3 vehicles */
+        var routeColors = [ACCENT, GREEN, ORANGE];
+
+        /* Initial (suboptimal) routes: vehicle assignments */
+        var initRoutes = [
+            [0, 4, 6, 8, 2],       /* blue: scattered */
+            [1, 7, 10, 3],          /* green: scattered */
+            [5, 9, 11]              /* orange: ok cluster */
+        ];
+
+        /* Improved routes after ALNS iterations */
+        var midRoutes = [
+            [0, 1, 2, 3],          /* blue: left cluster */
+            [4, 6, 8, 7],          /* green: top-right */
+            [5, 9, 10, 11]         /* orange: bottom-right */
+        ];
+
+        /* Final optimized routes */
+        var finalRoutes = [
+            [0, 1, 2, 3],
+            [4, 6, 8, 7],
+            [5, 9, 10, 11]
+        ];
+
+        /* Cost values over ALNS iterations */
+        var costHistory = [
+            2480, 2350, 2280, 2180, 2120, 2050, 1980, 1940,
+            1920, 1905, 1895, 1880, 1870, 1862, 1858, 1855
+        ];
+
+        /* Operator weights (evolving) */
+        var operators = [
+            {name: 'remove_worst', weights: [0.25, 0.35, 0.40, 0.38]},
+            {name: 'remove_related', weights: [0.25, 0.30, 0.35, 0.40]},
+            {name: 'remove_random', weights: [0.25, 0.20, 0.15, 0.12]},
+            {name: 'remove_segment', weights: [0.25, 0.15, 0.10, 0.10]}
+        ];
+
+        /* Draw a route as depot → customers → depot */
+        function drawRoute(route, color, alpha, lineWidth) {
+            if (route.length === 0) return;
+            ctx.save();
+            ctx.globalAlpha = alpha || 1;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = lineWidth || 1.5;
+            ctx.beginPath();
+            ctx.moveTo(depot.x, depot.y);
+            for (var i = 0; i < route.length; i++) {
+                ctx.lineTo(customers[route[i]].x, customers[route[i]].y);
+            }
+            ctx.lineTo(depot.x, depot.y);
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        /* Draw all customers and depot */
+        function drawNodes(highlightSet, destroyedSet) {
+            /* Depot */
+            ctx.fillStyle = BRIGHT;
+            ctx.fillRect(depot.x - 5, depot.y - 5, 10, 10);
+            ctx.strokeStyle = BRIGHT;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(depot.x - 5, depot.y - 5, 10, 10);
+
+            /* Customers */
+            for (var i = 0; i < customers.length; i++) {
+                var c = customers[i];
+                if (destroyedSet && destroyedSet.indexOf(i) >= 0) {
+                    /* Destroyed node - hollow red */
+                    ctx.beginPath();
+                    ctx.arc(c.x, c.y, 5, 0, Math.PI*2);
+                    ctx.strokeStyle = RED;
+                    ctx.lineWidth = 1.5;
+                    ctx.stroke();
+                    /* X mark */
+                    ctx.beginPath();
+                    ctx.moveTo(c.x-3, c.y-3); ctx.lineTo(c.x+3, c.y+3);
+                    ctx.moveTo(c.x+3, c.y-3); ctx.lineTo(c.x-3, c.y+3);
+                    ctx.stroke();
+                } else if (highlightSet && highlightSet.indexOf(i) >= 0) {
+                    /* Highlighted (being reinserted) */
+                    dot(c.x, c.y, 5, GREEN);
+                    ctx.beginPath();
+                    ctx.arc(c.x, c.y, 9, 0, Math.PI*2);
+                    ctx.strokeStyle = GREEN;
+                    ctx.lineWidth = 1;
+                    ctx.globalAlpha = 0.4;
+                    ctx.stroke();
+                    ctx.globalAlpha = 1;
+                } else {
+                    dot(c.x, c.y, 4, GRAY);
+                }
+            }
+        }
+
+        /* Draw cost chart */
+        function drawCostChart(x, y, w, h, progress) {
+            var visibleCount = Math.max(2, Math.ceil(progress * costHistory.length));
+            var maxC = costHistory[0], minC = costHistory[costHistory.length-1];
+            var range = maxC - minC + 200;
+
+            /* Axes */
+            ctx.strokeStyle = DIM;
+            ctx.lineWidth = 0.5;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.lineTo(x, y + h);
+            ctx.lineTo(x + w, y + h);
+            ctx.stroke();
+
+            /* Cost line */
+            ctx.strokeStyle = ACCENT;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            for (var i = 0; i < visibleCount; i++) {
+                var px = x + (i / (costHistory.length - 1)) * w;
+                var py = y + h - ((costHistory[i] - minC + 100) / range) * h;
+                if (i === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            }
+            ctx.stroke();
+
+            /* Current cost dot */
+            var lastIdx = visibleCount - 1;
+            var lx = x + (lastIdx / (costHistory.length - 1)) * w;
+            var ly = y + h - ((costHistory[lastIdx] - minC + 100) / range) * h;
+            dot(lx, ly, 3, ACCENT);
+
+            /* Labels */
+            txt('cost', x - 4, y - 8, DIM, FONT_SM, 'center');
+            txt('iteration', x + w / 2, y + h + 14, DIM, FONT_SM, 'center');
+            txt(costHistory[lastIdx].toString(), lx + 8, ly - 8, BRIGHT, FONT_SM);
+        }
+
+        /* Draw operator weight bars */
+        function drawWeights(x, y, progress) {
+            var phase = Math.min(Math.floor(progress * 4), 3);
+            txt('OPERATOR WEIGHTS', x, y, DIM, FONT_SM);
+            for (var i = 0; i < operators.length; i++) {
+                var oy = y + 18 + i * 22;
+                var w = operators[i].weights[phase];
+                /* Name */
+                txt(operators[i].name, x, oy, GRAY, FONT_SM);
+                /* Bar background */
+                ctx.fillStyle = '#2a2a2a';
+                ctx.fillRect(x + 110, oy - 4, 80, 8);
+                /* Bar fill */
+                var barCol = w >= 0.35 ? GREEN : (w >= 0.2 ? ACCENT : DIM);
+                ctx.fillStyle = barCol;
+                ctx.fillRect(x + 110, oy - 4, 80 * w / 0.5, 8);
+                /* Value */
+                txt((w * 100).toFixed(0) + '%', x + 196, oy, DIM, FONT_SM);
+            }
+        }
+
+        /* ─── ALNS PHASE ─── */
+        function drawALNS(t) {
+            var fadeIn = Math.min(t / 0.05, 1);
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            /* Title */
+            txt('ADAPTIVE LARGE NEIGHBORHOOD SEARCH', 30, 22, DIM, FONT_LG);
+            ctx.strokeStyle = DIM; ctx.lineWidth = 0.5;
+            ctx.beginPath(); ctx.moveTo(30, 32); ctx.lineTo(340, 32); ctx.stroke();
+
+            /* Determine which ALNS iteration we're showing */
+            var iterPhase = Math.min(t / 0.9, 1);
+            var totalIters = 8;
+            var currentIter = Math.min(Math.floor(iterPhase * totalIters), totalIters - 1);
+            var iterFrac = (iterPhase * totalIters) - currentIter;
+
+            /* Which route set to show */
+            var routes;
+            if (currentIter < 2) routes = initRoutes;
+            else if (currentIter < 5) routes = midRoutes;
+            else routes = finalRoutes;
+
+            /* Destroy phase (first half of each iteration) */
+            var destroying = iterFrac < 0.4;
+            var repairing = iterFrac >= 0.4 && iterFrac < 0.7;
+            var destroyedNodes = [];
+            var repairNodes = [];
+
+            if (destroying || repairing) {
+                /* Pick 2-3 nodes to destroy based on iteration */
+                var seed = currentIter * 3;
+                destroyedNodes = [
+                    customers.length > 0 ? (seed) % customers.length : 0,
+                    customers.length > 0 ? (seed + 3) % customers.length : 1,
+                    customers.length > 0 ? (seed + 7) % customers.length : 2
+                ];
+            }
+            if (repairing) {
+                repairNodes = destroyedNodes;
+                destroyedNodes = [];
+            }
+
+            /* Draw routes */
+            for (var r = 0; r < routes.length; r++) {
+                var routeAlpha = 0.6;
+                drawRoute(routes[r], routeColors[r], routeAlpha, 1.5);
+            }
+
+            /* Draw nodes */
+            drawNodes(repairNodes, destroyedNodes);
+
+            /* Status text */
+            var statusX = 30, statusY = 52;
+            txt('Iteration ' + (currentIter + 1) + ' / ' + totalIters, statusX, statusY, GRAY, FONT);
+
+            if (destroying) {
+                txt('DESTROY', statusX + 140, statusY, RED, FONT);
+                txt('removing worst requests...', statusX, statusY + 18, DIM, FONT_SM);
+            } else if (repairing) {
+                txt('REPAIR', statusX + 140, statusY, GREEN, FONT);
+                txt('reinserting at best positions...', statusX, statusY + 18, DIM, FONT_SM);
+            } else {
+                var accepted = iterFrac > 0.85;
+                if (accepted) {
+                    txt('ACCEPT', statusX + 140, statusY, GREEN, FONT);
+                    txt('solution improved \u2192 accepted', statusX, statusY + 18, DIM, FONT_SM);
+                } else {
+                    txt('EVALUATE', statusX + 140, statusY, YELLOW, FONT);
+                    txt('SA: T=' + (800 - currentIter * 90).toFixed(0) + ', \u0394cost=' + (-30 - currentIter * 8).toFixed(0), statusX, statusY + 18, DIM, FONT_SM);
+                }
+            }
+
+            /* Depot label */
+            txt('depot', depot.x + 10, depot.y - 10, DIM, FONT_SM);
+
+            /* Cost chart - bottom right area */
+            drawCostChart(490, 20, 190, 90, iterPhase);
+
+            /* Operator weights - bottom right */
+            drawWeights(470, 150, iterPhase);
+
+            /* Temperature curve label */
+            if (t > 0.3) {
+                var tempAlpha = Math.min((t - 0.3) / 0.1, 1);
+                ctx.globalAlpha = tempAlpha * fadeIn;
+                txt('SA Temperature', 490, 270, DIM, FONT_SM);
+                /* Small temp bar */
+                var temp = 1.0 - iterPhase * 0.8;
+                ctx.fillStyle = '#2a2a2a';
+                ctx.fillRect(490, 282, 190, 6);
+                var tempGrad = ctx.createLinearGradient(490, 0, 680, 0);
+                tempGrad.addColorStop(0, RED);
+                tempGrad.addColorStop(1, ACCENT);
+                ctx.fillStyle = tempGrad;
+                ctx.fillRect(490, 282, 190 * temp, 6);
+                txt(temp > 0.5 ? 'exploring' : 'exploiting', 490, 298, temp > 0.5 ? ORANGE : ACCENT, FONT_SM);
+                ctx.globalAlpha = fadeIn;
+            }
+
+            /* Result at end */
+            if (t > 0.92) {
+                var resAlpha = Math.min((t - 0.92) / 0.06, 1);
+                ctx.globalAlpha = resAlpha;
+                txt('Cost: ' + costHistory[costHistory.length-1] + '  (-25.2%)', 30, H - 20, GREEN, FONT_LG);
+                txt('16 iterations \u00b7 3 vehicles \u00b7 12 stops', 30, H - 4, DIM, FONT_SM);
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── BEAM SEARCH PHASE ─── */
+        function drawBeam(t) {
+            var fadeIn = Math.min(t / 0.05, 1);
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            /* Title */
+            txt('BEAM SEARCH (width=3)', W/2, 22, DIM, FONT_LG, 'center');
+
+            /* Tree structure: 5 levels, each with expanding then pruned nodes */
+            var levels = 5;
+            var beamWidth = 3;
+            /* Nodes per level before pruning */
+            var nodesPerLevel = [1, 3, 6, 6, 5];
+            /* Which survive (indices into that level) */
+            var survivors = [
+                [0],
+                [0, 1, 2],
+                [0, 2, 4],
+                [1, 3, 5],
+                [0, 2, 4]
+            ];
+            /* Lower bounds for each surviving node */
+            var bounds = [
+                [0],
+                [42, 38, 45],
+                [35, 31, 40],
+                [28, 25, 33],
+                [22, 19, 26]
+            ];
+
+            var levelH = (H - 80) / levels;
+            var treeTop = 42;
+
+            /* How far through the tree we are */
+            var buildT = Math.min(t / 0.85, 1);
+            var levelsShown = Math.min(Math.floor(buildT * (levels + 1)), levels);
+            var levelFrac = (buildT * (levels + 1)) - levelsShown;
+
+            for (var lv = 0; lv < levelsShown; lv++) {
+                var ly = treeTop + lv * levelH + levelH * 0.5;
+                var totalNodes = nodesPerLevel[lv];
+                var surv = survivors[lv];
+                var levelBounds = bounds[lv];
+                var nodeW = W / (totalNodes + 1);
+
+                for (var ni = 0; ni < totalNodes; ni++) {
+                    var nx = nodeW * (ni + 1);
+                    var isSurvivor = surv.indexOf(ni) >= 0;
+                    var survIdx = surv.indexOf(ni);
+
+                    /* Draw edge from parent */
+                    if (lv > 0) {
+                        var parentSurv = survivors[lv-1];
+                        var parentLevel = nodesPerLevel[lv-1];
+                        /* Each parent spawns ~2 children */
+                        var parentIdx = Math.min(Math.floor(ni / 2), parentSurv.length - 1);
+                        var parentNi = parentSurv[parentIdx];
+                        var parentNodeW = W / (parentLevel + 1);
+                        var px = parentNodeW * (parentNi + 1);
+                        var py = treeTop + (lv-1) * levelH + levelH * 0.5;
+
+                        ctx.strokeStyle = isSurvivor ? DIM : '#2a2a2a';
+                        ctx.lineWidth = isSurvivor ? 1 : 0.5;
+                        ctx.beginPath();
+                        ctx.moveTo(px, py + 14);
+                        ctx.lineTo(nx, ly - 14);
+                        ctx.stroke();
+                    }
+
+                    /* Node circle/box */
+                    if (isSurvivor) {
+                        var isLeaf = lv === levelsShown - 1;
+                        var isBest = lv === levels - 1 && survIdx === 1;
+                        var col = isBest ? GREEN : ACCENT;
+                        ctx.fillStyle = '#1a1a1a';
+                        ctx.strokeStyle = col;
+                        ctx.lineWidth = isBest ? 2 : 1;
+                        ctx.beginPath();
+                        ctx.roundRect(nx - 28, ly - 12, 56, 24, 4);
+                        ctx.fill();
+                        ctx.stroke();
+
+                        if (isBest) {
+                            ctx.shadowColor = GREEN;
+                            ctx.shadowBlur = 8;
+                            ctx.stroke();
+                            ctx.shadowBlur = 0;
+                        }
+
+                        txt('lb=' + levelBounds[survIdx], nx, ly, isBest ? GREEN : BRIGHT, FONT_SM, 'center');
+                    } else {
+                        /* Pruned node */
+                        ctx.fillStyle = '#1a1a1a';
+                        ctx.strokeStyle = '#333';
+                        ctx.lineWidth = 0.5;
+                        ctx.beginPath();
+                        ctx.roundRect(nx - 20, ly - 10, 40, 20, 3);
+                        ctx.fill();
+                        ctx.stroke();
+
+                        /* X through it */
+                        ctx.strokeStyle = RED;
+                        ctx.lineWidth = 1;
+                        ctx.globalAlpha = 0.5 * fadeIn;
+                        ctx.beginPath();
+                        ctx.moveTo(nx-12, ly-6); ctx.lineTo(nx+12, ly+6);
+                        ctx.moveTo(nx+12, ly-6); ctx.lineTo(nx-12, ly+6);
+                        ctx.stroke();
+                        ctx.globalAlpha = fadeIn;
+                    }
+                }
+
+                /* Level label */
+                txt('d=' + lv, 16, ly, DIM, FONT_SM);
+            }
+
+            /* Current level animation (partial) */
+            if (levelsShown < levels && levelFrac > 0.3) {
+                var animLv = levelsShown;
+                var animLy = treeTop + animLv * levelH + levelH * 0.5;
+                var expandAlpha = Math.min((levelFrac - 0.3) / 0.4, 1);
+                ctx.globalAlpha = expandAlpha * fadeIn;
+                txt('expanding...', W/2, animLy, YELLOW, FONT_SM, 'center');
+                ctx.globalAlpha = fadeIn;
+            }
+
+            /* Beam width indicator */
+            txt('beam width = ' + beamWidth, W - 120, H - 40, ACCENT, FONT);
+
+            /* Result */
+            if (t > 0.88) {
+                var resAlpha = Math.min((t - 0.88) / 0.08, 1);
+                ctx.globalAlpha = resAlpha;
+                txt('Best: lb = 19  (depth 4)', W/2, H - 16, GREEN, FONT_LG, 'center');
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── MAIN LOOP ─── */
+        var running = false;
+        var startTime = 0;
+
+        function animate(ts) {
+            if (!running) return;
+            if (!startTime) startTime = ts;
+            var elapsed = (ts - startTime) % CYCLE;
+            var t = elapsed / CYCLE;
+
+            ctx.clearRect(0, 0, W, H);
+
+            if (t < 0.48) {
+                /* ALNS phase */
+                drawALNS(t / 0.48);
+            } else if (t < 0.52) {
+                /* Crossfade */
+                var fadeT = (t - 0.48) / 0.04;
+                ctx.globalAlpha = 1 - fadeT;
+                drawALNS(1);
+                ctx.globalAlpha = fadeT;
+                drawBeam(0);
+                ctx.globalAlpha = 1;
+            } else if (t < 0.95) {
+                /* Beam search phase */
+                drawBeam((t - 0.52) / 0.43);
+            } else {
+                /* Hold + fade */
+                var fadeOut = 1 - (t - 0.95) / 0.05;
+                ctx.globalAlpha = fadeOut;
+                drawBeam(1);
+                ctx.globalAlpha = 1;
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        var observer = new IntersectionObserver(function(entries) {
+            entries.forEach(function(entry) {
+                if (entry.isIntersecting && !running) {
+                    running = true;
+                    startTime = 0;
+                    requestAnimationFrame(animate);
+                } else if (!entry.isIntersecting) {
+                    running = false;
+                }
+            });
+        }, {threshold: 0.1});
+
+        observer.observe(canvas);
+    })();
+    </script>
+
+    <!-- Velo Bidirectional A* + ALT Visualization -->
+    <script>
+    (function() {
+        var canvas = document.getElementById('velo-viz');
+        if (!canvas) return;
+        var ctx = canvas.getContext('2d');
+        var dpr = window.devicePixelRatio || 1;
+        var W = 720, H = 400;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        canvas.style.width = '100%';
+        canvas.style.maxWidth = W + 'px';
+        canvas.style.height = 'auto';
+        canvas.style.aspectRatio = W + '/' + H;
+        ctx.scale(dpr, dpr);
+
+        var ACCENT = '#3b82f6';
+        var GREEN = '#22c55e';
+        var RED = '#ef4444';
+        var YELLOW = '#eab308';
+        var ORANGE = '#f97316';
+        var PURPLE = '#a855f7';
+        var CYAN = '#06b6d4';
+        var GRAY = '#a0a0a0';
+        var DIM = '#555';
+        var BRIGHT = '#e5e5e5';
+        var FONT = '11px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_SM = '10px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_LG = '13px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_XL = '15px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+
+        var CYCLE = 22000;
+
+        function ease(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t; }
+
+        function dot(cx,cy,r,col) {
+            ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2);
+            ctx.fillStyle = col; ctx.fill();
+        }
+
+        function ring(cx,cy,r,col,lw) {
+            ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2);
+            ctx.strokeStyle = col; ctx.lineWidth = lw || 1; ctx.stroke();
+        }
+
+        function txt(str,x,y,col,font,align) {
+            ctx.font = font || FONT;
+            ctx.fillStyle = col || GRAY;
+            ctx.textAlign = align || 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(str,x,y);
+        }
+
+        /* ─── GRAPH DATA ─── */
+        /* 6×9 grid with jitter → road-network-like graph */
+        var COLS = 9, ROWS = 6;
+        var gNodes = [];
+        /* Deterministic jitter via simple hash */
+        function jitter(r,c,axis) {
+            var v = Math.sin(r*17.3 + c*13.7 + axis*7.1) * 14;
+            return v;
+        }
+        var graphL = 40, graphR = 660, graphT = 55, graphB = 355;
+        for (var r = 0; r < ROWS; r++) {
+            for (var c = 0; c < COLS; c++) {
+                gNodes.push({
+                    x: graphL + c * ((graphR-graphL)/(COLS-1)) + jitter(r,c,0),
+                    y: graphT + r * ((graphB-graphT)/(ROWS-1)) + jitter(r,c,1),
+                    id: r * COLS + c
+                });
+            }
+        }
+
+        /* Edges: horizontal + vertical neighbors, some diagonals, some removed */
+        var gEdges = [];
+        function addEdge(a,b) { gEdges.push([a,b]); }
+        for (var r = 0; r < ROWS; r++) {
+            for (var c = 0; c < COLS; c++) {
+                var id = r * COLS + c;
+                /* right */
+                if (c < COLS-1) {
+                    var skip = Math.sin(r*11+c*23) > 0.7;
+                    if (!skip) addEdge(id, id+1);
+                }
+                /* down */
+                if (r < ROWS-1) {
+                    var skip2 = Math.sin(r*23+c*11) > 0.75;
+                    if (!skip2) addEdge(id, id+COLS);
+                }
+                /* diagonal */
+                if (c < COLS-1 && r < ROWS-1 && Math.sin(r*7+c*19) > 0.4) {
+                    addEdge(id, id+COLS+1);
+                }
+            }
+        }
+
+        /* Source: left-middle, Target: right-middle */
+        var SRC = 2 * COLS + 0;  /* row 2, col 0 */
+        var TGT = 3 * COLS + 8;  /* row 3, col 8 */
+
+        /* BFS-like distances from source and target for animation ordering */
+        function bfsOrder(start) {
+            var visited = {}; visited[start] = 0;
+            var queue = [start]; var order = [start];
+            while (queue.length > 0) {
+                var cur = queue.shift();
+                var d = visited[cur];
+                for (var e = 0; e < gEdges.length; e++) {
+                    var nb = -1;
+                    if (gEdges[e][0] === cur) nb = gEdges[e][1];
+                    else if (gEdges[e][1] === cur) nb = gEdges[e][0];
+                    if (nb >= 0 && visited[nb] === undefined) {
+                        visited[nb] = d + 1;
+                        queue.push(nb);
+                        order.push(nb);
+                    }
+                }
+            }
+            return {order: order, dist: visited};
+        }
+
+        var fwdBFS = bfsOrder(SRC);
+        var bwdBFS = bfsOrder(TGT);
+
+        /* Approximate shortest path (greedy toward target) */
+        function greedyPath(src, tgt) {
+            var path = [src]; var visited = {}; visited[src] = true;
+            var cur = src;
+            for (var step = 0; step < 20 && cur !== tgt; step++) {
+                var bestNb = -1, bestDist = Infinity;
+                for (var e = 0; e < gEdges.length; e++) {
+                    var nb = -1;
+                    if (gEdges[e][0] === cur) nb = gEdges[e][1];
+                    else if (gEdges[e][1] === cur) nb = gEdges[e][0];
+                    if (nb >= 0 && !visited[nb]) {
+                        var dx = gNodes[nb].x - gNodes[tgt].x;
+                        var dy = gNodes[nb].y - gNodes[tgt].y;
+                        var d = dx*dx + dy*dy;
+                        if (d < bestDist) { bestDist = d; bestNb = nb; }
+                    }
+                }
+                if (bestNb < 0) break;
+                visited[bestNb] = true;
+                path.push(bestNb);
+                cur = bestNb;
+            }
+            return path;
+        }
+
+        var shortPath = greedyPath(SRC, TGT);
+
+        /* Landmarks for ALT phase: 3 corners */
+        var landmarks = [
+            {node: 0, label: 'L\u2081'},                      /* top-left */
+            {node: (ROWS-1)*COLS + COLS-1, label: 'L\u2082'},  /* bottom-right */
+            {node: COLS-1, label: 'L\u2083'}                   /* top-right */
+        ];
+
+        /* ─── DRAWING HELPERS ─── */
+        function drawGraph(alpha) {
+            ctx.save();
+            ctx.globalAlpha = alpha;
+            /* Edges */
+            ctx.strokeStyle = '#2a2a2a';
+            ctx.lineWidth = 1;
+            for (var e = 0; e < gEdges.length; e++) {
+                var a = gNodes[gEdges[e][0]], b = gNodes[gEdges[e][1]];
+                ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+            }
+            /* Nodes */
+            for (var i = 0; i < gNodes.length; i++) {
+                dot(gNodes[i].x, gNodes[i].y, 2.5, '#444');
+            }
+            ctx.restore();
+        }
+
+        function drawSourceTarget() {
+            /* Source */
+            dot(gNodes[SRC].x, gNodes[SRC].y, 6, GREEN);
+            ring(gNodes[SRC].x, gNodes[SRC].y, 10, GREEN, 1);
+            txt('S', gNodes[SRC].x - 18, gNodes[SRC].y, GREEN, FONT, 'center');
+            /* Target */
+            dot(gNodes[TGT].x, gNodes[TGT].y, 6, RED);
+            ring(gNodes[TGT].x, gNodes[TGT].y, 10, RED, 1);
+            txt('T', gNodes[TGT].x + 18, gNodes[TGT].y, RED, FONT, 'center');
+        }
+
+        function drawPath(path, col, alpha, lineWidth) {
+            if (path.length < 2) return;
+            ctx.save();
+            ctx.globalAlpha = alpha || 1;
+            ctx.strokeStyle = col;
+            ctx.lineWidth = lineWidth || 2.5;
+            ctx.shadowColor = col;
+            ctx.shadowBlur = 6;
+            ctx.beginPath();
+            ctx.moveTo(gNodes[path[0]].x, gNodes[path[0]].y);
+            for (var i = 1; i < path.length; i++) {
+                ctx.lineTo(gNodes[path[i]].x, gNodes[path[i]].y);
+            }
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            ctx.restore();
+        }
+
+        /* ─── BIDIRECTIONAL A* PHASE ─── */
+        function drawBidir(t) {
+            var fadeIn = Math.min(t / 0.05, 1);
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            /* Title */
+            txt('BIDIRECTIONAL A*', W/2, 18, DIM, FONT_LG, 'center');
+
+            drawGraph(0.7);
+
+            /* Expand forward and backward frontiers */
+            var expandEnd = 0.75;
+            var expandT = Math.min(t / expandEnd, 1);
+
+            /* Forward explored nodes (sorted by distance from source) */
+            var fwdCount = Math.floor(expandT * fwdBFS.order.length * 0.55);
+            var fwdExplored = {};
+            for (var fi = 0; fi < fwdCount; fi++) {
+                var fn = fwdBFS.order[fi];
+                fwdExplored[fn] = true;
+                var a = ease(Math.min((expandT - fi/(fwdBFS.order.length*0.55)) * 6, 1));
+                ctx.globalAlpha = fadeIn * a * 0.35;
+                dot(gNodes[fn].x, gNodes[fn].y, 8, ACCENT);
+                ctx.globalAlpha = fadeIn;
+                dot(gNodes[fn].x, gNodes[fn].y, 3.5, ACCENT);
+            }
+
+            /* Backward explored nodes */
+            var bwdCount = Math.floor(expandT * bwdBFS.order.length * 0.55);
+            var bwdExplored = {};
+            for (var bi = 0; bi < bwdCount; bi++) {
+                var bn = bwdBFS.order[bi];
+                bwdExplored[bn] = true;
+                var ab = ease(Math.min((expandT - bi/(bwdBFS.order.length*0.55)) * 6, 1));
+                ctx.globalAlpha = fadeIn * ab * 0.35;
+                dot(gNodes[bn].x, gNodes[bn].y, 8, ORANGE);
+                ctx.globalAlpha = fadeIn;
+                dot(gNodes[bn].x, gNodes[bn].y, 3.5, ORANGE);
+            }
+
+            /* Meeting point flash */
+            var meetT = t - expandEnd;
+            if (meetT > 0) {
+                /* Find meeting nodes (explored by both) */
+                for (var mi = 0; mi < gNodes.length; mi++) {
+                    if (fwdExplored[mi] && bwdExplored[mi]) {
+                        var pulse = 0.5 + 0.5 * Math.sin(meetT * 30);
+                        ctx.globalAlpha = fadeIn * (0.3 + 0.2 * pulse);
+                        dot(gNodes[mi].x, gNodes[mi].y, 10, BRIGHT);
+                        ctx.globalAlpha = fadeIn;
+                    }
+                }
+            }
+
+            /* Show path once frontiers have met */
+            if (t > expandEnd + 0.05) {
+                var pathAlpha = Math.min((t - expandEnd - 0.05) / 0.1, 1);
+                drawPath(shortPath, BRIGHT, pathAlpha, 2.5);
+            }
+
+            drawSourceTarget();
+
+            /* Stats panel */
+            var sx = 30, sy = H - 55;
+            var fwdN = fwdCount, bwdN = bwdCount, totalN = gNodes.length;
+            txt('Forward:  ' + fwdN + ' nodes', sx, sy, ACCENT, FONT);
+            txt('Backward: ' + bwdN + ' nodes', sx, sy + 16, ORANGE, FONT);
+            var explored = fwdN + bwdN;
+            txt('Total explored: ' + explored + ' / ' + totalN + '  (' + Math.round(explored/totalN*100) + '%)', sx, sy + 36, GRAY, FONT);
+
+            if (t > expandEnd + 0.1) {
+                var ra = Math.min((t - expandEnd - 0.1) / 0.08, 1);
+                ctx.globalAlpha = ra * fadeIn;
+                txt('Path found: ' + shortPath.length + ' hops', W - 200, sy + 36, GREEN, FONT);
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── ALT LANDMARKS PHASE ─── */
+        function drawALT(t) {
+            var fadeIn = Math.min(t / 0.05, 1);
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            /* Title */
+            txt('ALT: A* + LANDMARKS + TRIANGLE INEQUALITY', W/2, 18, DIM, FONT_LG, 'center');
+
+            drawGraph(0.7);
+
+            /* Draw landmarks as diamonds */
+            for (var li = 0; li < landmarks.length; li++) {
+                var lm = landmarks[li];
+                var ln = gNodes[lm.node];
+                var lAlpha = Math.min(t / 0.15, 1);
+                ctx.save();
+                ctx.globalAlpha = fadeIn * lAlpha;
+                ctx.translate(ln.x, ln.y);
+                /* Diamond shape */
+                ctx.fillStyle = YELLOW;
+                ctx.beginPath();
+                ctx.moveTo(0, -8); ctx.lineTo(7, 0);
+                ctx.lineTo(0, 8); ctx.lineTo(-7, 0);
+                ctx.closePath();
+                ctx.fill();
+                ctx.strokeStyle = YELLOW;
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                /* Glow */
+                ctx.globalAlpha = fadeIn * lAlpha * 0.15;
+                ctx.beginPath();
+                ctx.arc(0, 0, 16, 0, Math.PI*2);
+                ctx.fill();
+                ctx.restore();
+                /* Label */
+                ctx.globalAlpha = fadeIn * lAlpha;
+                txt(lm.label, ln.x, ln.y - 16, YELLOW, FONT_SM, 'center');
+            }
+
+            ctx.globalAlpha = fadeIn;
+
+            /* Triangle inequality visualization (lines from S and T to landmark) */
+            if (t > 0.1 && t < 0.4) {
+                var triAlpha = Math.min((t - 0.1) / 0.1, 1) * Math.min((0.4 - t) / 0.1, 1);
+                ctx.save();
+                ctx.globalAlpha = fadeIn * triAlpha * 0.3;
+                ctx.setLineDash([4,4]);
+                var lmNode = gNodes[landmarks[0].node];
+                ctx.strokeStyle = YELLOW;
+                ctx.lineWidth = 1;
+                /* S → L */
+                ctx.beginPath();
+                ctx.moveTo(gNodes[SRC].x, gNodes[SRC].y);
+                ctx.lineTo(lmNode.x, lmNode.y);
+                ctx.stroke();
+                /* T → L */
+                ctx.beginPath();
+                ctx.moveTo(gNodes[TGT].x, gNodes[TGT].y);
+                ctx.lineTo(lmNode.x, lmNode.y);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.restore();
+
+                /* Triangle inequality text */
+                ctx.globalAlpha = fadeIn * triAlpha;
+                txt('d(S,T) \u2265 |d(S,L) \u2212 d(T,L)|', W/2, H - 20, YELLOW, FONT, 'center');
+                txt('tighter lower bound \u2192 less exploration', W/2, H - 4, DIM, FONT_SM, 'center');
+                ctx.globalAlpha = fadeIn;
+            }
+
+            /* ALT search: much tighter expansion (only ~25% of nodes) */
+            var searchStart = 0.2;
+            var searchEnd = 0.72;
+            if (t > searchStart) {
+                var searchT = Math.min((t - searchStart) / (searchEnd - searchStart), 1);
+
+                /* Only explore nodes near the path corridor */
+                var pathSet = {};
+                for (var pi = 0; pi < shortPath.length; pi++) pathSet[shortPath[pi]] = true;
+
+                /* Explore nodes near the path + small neighborhood */
+                var altExplored = [];
+                for (var ni = 0; ni < gNodes.length; ni++) {
+                    /* Distance to nearest path node */
+                    var minDist = Infinity;
+                    for (var pj = 0; pj < shortPath.length; pj++) {
+                        var pn = gNodes[shortPath[pj]];
+                        var dx = gNodes[ni].x - pn.x;
+                        var dy = gNodes[ni].y - pn.y;
+                        var d = Math.sqrt(dx*dx + dy*dy);
+                        if (d < minDist) minDist = d;
+                    }
+                    if (minDist < 80) altExplored.push({node: ni, dist: minDist});
+                }
+                altExplored.sort(function(a,b) { return a.dist - b.dist; });
+
+                var altCount = Math.floor(searchT * altExplored.length);
+                for (var ai = 0; ai < altCount; ai++) {
+                    var an = altExplored[ai].node;
+                    var aa = ease(Math.min((searchT - ai/altExplored.length) * 4, 1));
+                    ctx.globalAlpha = fadeIn * aa * 0.3;
+                    dot(gNodes[an].x, gNodes[an].y, 7, PURPLE);
+                    ctx.globalAlpha = fadeIn;
+                    dot(gNodes[an].x, gNodes[an].y, 3, PURPLE);
+                }
+
+                /* Path highlight */
+                if (t > searchEnd) {
+                    var pathA = Math.min((t - searchEnd) / 0.08, 1);
+                    drawPath(shortPath, BRIGHT, pathA, 2.5);
+                }
+
+                /* Stats */
+                ctx.globalAlpha = fadeIn;
+                var altN = altCount;
+                txt('ALT explored: ' + altN + ' / ' + gNodes.length + '  (' + Math.round(altN/gNodes.length*100) + '%)', 30, H - 55, PURPLE, FONT);
+            }
+
+            drawSourceTarget();
+
+            /* Comparison stats at bottom */
+            if (t > searchEnd + 0.05) {
+                var cmpA = Math.min((t - searchEnd - 0.05) / 0.1, 1);
+                ctx.globalAlpha = cmpA * fadeIn;
+
+                /* A* bar */
+                var barX = 30, barY = H - 36;
+                txt('Bidir A*:', barX, barY, ACCENT, FONT_SM);
+                ctx.fillStyle = '#2a2a2a'; ctx.fillRect(barX+68, barY-4, 160, 8);
+                ctx.fillStyle = ACCENT; ctx.fillRect(barX+68, barY-4, 160 * 0.55, 8);
+                txt('55%', barX+235, barY, ACCENT, FONT_SM);
+
+                /* ALT bar */
+                txt('ALT:', barX, barY + 18, PURPLE, FONT_SM);
+                ctx.fillStyle = '#2a2a2a'; ctx.fillRect(barX+68, barY+14, 160, 8);
+                ctx.fillStyle = PURPLE; ctx.fillRect(barX+68, barY+14, 160 * 0.20, 8);
+                txt('20%', barX+235, barY + 18, PURPLE, FONT_SM);
+
+                txt('5\u201310x fewer nodes explored', W - 220, H - 16, GREEN, FONT);
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── MAIN LOOP ─── */
+        var running = false;
+        var startTime = 0;
+
+        function animate(ts) {
+            if (!running) return;
+            if (!startTime) startTime = ts;
+            var elapsed = (ts - startTime) % CYCLE;
+            var t = elapsed / CYCLE;
+
+            ctx.clearRect(0, 0, W, H);
+
+            if (t < 0.46) {
+                drawBidir(t / 0.46);
+            } else if (t < 0.50) {
+                var fadeT = (t - 0.46) / 0.04;
+                ctx.globalAlpha = 1 - fadeT;
+                drawBidir(1);
+                ctx.globalAlpha = fadeT;
+                drawALT(0);
+                ctx.globalAlpha = 1;
+            } else if (t < 0.95) {
+                drawALT((t - 0.50) / 0.45);
+            } else {
+                var fadeOut = 1 - (t - 0.95) / 0.05;
+                ctx.globalAlpha = fadeOut;
+                drawALT(1);
+                ctx.globalAlpha = 1;
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        var observer = new IntersectionObserver(function(entries) {
+            entries.forEach(function(entry) {
+                if (entry.isIntersecting && !running) {
+                    running = true;
+                    startTime = 0;
+                    requestAnimationFrame(animate);
+                } else if (!entry.isIntersecting) {
+                    running = false;
+                }
+            });
+        }, {threshold: 0.1});
+
+        observer.observe(canvas);
+    })();
+    </script>
+
+    <!-- Carta Tile Rendering Pipeline Visualization -->
+    <script>
+    (function() {
+        var canvas = document.getElementById('carta-viz');
+        if (!canvas) return;
+        var ctx = canvas.getContext('2d');
+        var dpr = window.devicePixelRatio || 1;
+        var W = 720, H = 400;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        canvas.style.width = '100%';
+        canvas.style.maxWidth = W + 'px';
+        canvas.style.height = 'auto';
+        canvas.style.aspectRatio = W + '/' + H;
+        ctx.scale(dpr, dpr);
+
+        var ACCENT = '#3b82f6';
+        var GREEN = '#22c55e';
+        var RED = '#ef4444';
+        var YELLOW = '#eab308';
+        var ORANGE = '#f97316';
+        var CYAN = '#06b6d4';
+        var GRAY = '#a0a0a0';
+        var DIM = '#555';
+        var BRIGHT = '#e5e5e5';
+        var FONT = '11px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_SM = '10px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_LG = '13px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+
+        var CYCLE = 20000;
+        function ease(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t; }
+
+        function txt(str,x,y,col,font,align) {
+            ctx.font = font || FONT;
+            ctx.fillStyle = col || GRAY;
+            ctx.textAlign = align || 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(str,x,y);
+        }
+
+        function dot(cx,cy,r,col) {
+            ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2);
+            ctx.fillStyle = col; ctx.fill();
+        }
+
+        /* ─── POLYGON DATA ─── */
+        /* An irregular polygon that extends beyond a tile boundary */
+        var tileL = 120, tileT = 60, tileR = 380, tileB = 320;
+        var tileW = tileR - tileL, tileH = tileB - tileT;
+
+        /* Original polygon (some vertices outside tile) */
+        var origPoly = [
+            {x: 90, y: 100}, {x: 200, y: 40}, {x: 340, y: 55},
+            {x: 410, y: 120}, {x: 420, y: 240}, {x: 380, y: 340},
+            {x: 280, y: 360}, {x: 160, y: 330}, {x: 100, y: 260},
+            {x: 70, y: 180}
+        ];
+
+        /* Sutherland-Hodgman clip */
+        function clipPoly(poly, edgeX, edgeY, edgeNx, edgeNy) {
+            var out = [];
+            for (var i = 0; i < poly.length; i++) {
+                var cur = poly[i];
+                var nxt = poly[(i+1) % poly.length];
+                var curInside = (cur.x - edgeX) * edgeNx + (cur.y - edgeY) * edgeNy >= 0;
+                var nxtInside = (nxt.x - edgeX) * edgeNx + (nxt.y - edgeY) * edgeNy >= 0;
+                if (curInside) out.push(cur);
+                if (curInside !== nxtInside) {
+                    var dx = nxt.x - cur.x, dy = nxt.y - cur.y;
+                    var den = dx * edgeNx + dy * edgeNy;
+                    if (Math.abs(den) > 0.001) {
+                        var t = ((edgeX - cur.x) * edgeNx + (edgeY - cur.y) * edgeNy) / den;
+                        out.push({x: cur.x + dx*t, y: cur.y + dy*t});
+                    }
+                }
+            }
+            return out;
+        }
+
+        function clipToTile(poly) {
+            var p = poly.slice();
+            p = clipPoly(p, tileL, tileT, 1, 0);   /* left */
+            p = clipPoly(p, tileR, tileT, -1, 0);   /* right */
+            p = clipPoly(p, tileL, tileT, 0, 1);    /* top */
+            p = clipPoly(p, tileL, tileB, 0, -1);   /* bottom */
+            return p;
+        }
+
+        var clippedPoly = clipToTile(origPoly);
+
+        /* Douglas-Peucker simplification */
+        function dpSimplify(pts, epsilon) {
+            if (pts.length <= 2) return pts;
+            var maxDist = 0, maxIdx = 0;
+            var a = pts[0], b = pts[pts.length-1];
+            var dx = b.x - a.x, dy = b.y - a.y;
+            var len = Math.sqrt(dx*dx + dy*dy);
+            for (var i = 1; i < pts.length - 1; i++) {
+                var d;
+                if (len < 0.001) {
+                    var ex = pts[i].x - a.x, ey = pts[i].y - a.y;
+                    d = Math.sqrt(ex*ex + ey*ey);
+                } else {
+                    d = Math.abs((pts[i].x - a.x)*dy - (pts[i].y - a.y)*dx) / len;
+                }
+                if (d > maxDist) { maxDist = d; maxIdx = i; }
+            }
+            if (maxDist > epsilon) {
+                var left = dpSimplify(pts.slice(0, maxIdx+1), epsilon);
+                var right = dpSimplify(pts.slice(maxIdx), epsilon);
+                return left.slice(0, -1).concat(right);
+            }
+            return [a, b];
+        }
+
+        var simplifiedPoly = dpSimplify(clippedPoly, 20);
+
+        /* Road segments crossing the tile */
+        var roads = [
+            [{x: 80, y: 150}, {x: 160, y: 140}, {x: 240, y: 160}, {x: 320, y: 130}, {x: 400, y: 145}, {x: 440, y: 140}],
+            [{x: 200, y: 30}, {x: 210, y: 100}, {x: 220, y: 200}, {x: 200, y: 280}, {x: 190, y: 360}],
+            [{x: 100, y: 280}, {x: 180, y: 250}, {x: 260, y: 230}, {x: 340, y: 250}, {x: 420, y: 270}]
+        ];
+
+        function drawPoly(poly, fillCol, strokeCol, alpha) {
+            if (poly.length < 3) return;
+            ctx.save();
+            ctx.globalAlpha = alpha || 1;
+            ctx.beginPath();
+            ctx.moveTo(poly[0].x, poly[0].y);
+            for (var i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+            ctx.closePath();
+            if (fillCol) { ctx.fillStyle = fillCol; ctx.fill(); }
+            if (strokeCol) { ctx.strokeStyle = strokeCol; ctx.lineWidth = 1.5; ctx.stroke(); }
+            ctx.restore();
+        }
+
+        function drawPolyVerts(poly, col, alpha) {
+            ctx.save();
+            ctx.globalAlpha = alpha || 1;
+            for (var i = 0; i < poly.length; i++) dot(poly[i].x, poly[i].y, 3, col);
+            ctx.restore();
+        }
+
+        function drawTileBorder(alpha) {
+            ctx.save();
+            ctx.globalAlpha = alpha || 1;
+            ctx.strokeStyle = ACCENT;
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6,4]);
+            ctx.strokeRect(tileL, tileT, tileW, tileH);
+            ctx.setLineDash([]);
+            ctx.restore();
+        }
+
+        function drawRoads(alpha) {
+            ctx.save();
+            ctx.globalAlpha = alpha || 1;
+            for (var ri = 0; ri < roads.length; ri++) {
+                ctx.strokeStyle = '#444';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(roads[ri][0].x, roads[ri][0].y);
+                for (var rj = 1; rj < roads[ri].length; rj++)
+                    ctx.lineTo(roads[ri][rj].x, roads[ri][rj].y);
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+
+        /* ─── CLIP PHASE ─── */
+        function drawClip(t) {
+            var fadeIn = Math.min(t / 0.05, 1);
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            txt('SUTHERLAND\u2013HODGMAN CLIPPING', W/2, 18, DIM, FONT_LG, 'center');
+
+            /* Tile border */
+            drawTileBorder(0.6);
+            txt('tile boundary', tileR + 8, tileT + 10, ACCENT, FONT_SM);
+
+            /* Roads (background) */
+            drawRoads(0.2);
+
+            /* Original polygon (dim, outside tile) */
+            var origAlpha = Math.max(0, 1 - t * 2) * 0.3;
+            if (origAlpha > 0) {
+                drawPoly(origPoly, 'rgba(255,255,255,0.05)', DIM, origAlpha);
+                drawPolyVerts(origPoly, DIM, origAlpha);
+            }
+
+            /* Clip animation: show edges being clipped one at a time */
+            var clipStart = 0.1, clipEnd = 0.65;
+            var clipT = Math.max(0, Math.min((t - clipStart) / (clipEnd - clipStart), 1));
+            var edges = 4; /* left, right, top, bottom */
+            var currentEdge = Math.min(Math.floor(clipT * edges), edges - 1);
+            var edgeFrac = (clipT * edges) - currentEdge;
+            if (clipT >= 1) { currentEdge = edges - 1; edgeFrac = 1; }
+
+            /* Progressive clipping */
+            var partialPoly = origPoly.slice();
+            var edgeNames = ['left', 'right', 'top', 'bottom'];
+            var edgeColors = [RED, ORANGE, YELLOW, GREEN];
+            for (var ei = 0; ei <= currentEdge; ei++) {
+                if (ei === 0) partialPoly = clipPoly(partialPoly, tileL, tileT, 1, 0);
+                else if (ei === 1) partialPoly = clipPoly(partialPoly, tileR, tileT, -1, 0);
+                else if (ei === 2) partialPoly = clipPoly(partialPoly, tileL, tileT, 0, 1);
+                else partialPoly = clipPoly(partialPoly, tileL, tileB, 0, -1);
+            }
+
+            /* Draw current clipped state */
+            var polyAlpha = 0.15 + 0.1 * clipT;
+            drawPoly(partialPoly, 'rgba(59,130,246,'+polyAlpha+')', ACCENT, 0.7);
+            drawPolyVerts(partialPoly, BRIGHT, 0.8);
+
+            /* Highlight current edge being clipped */
+            if (clipT < 1) {
+                ctx.save();
+                ctx.strokeStyle = edgeColors[currentEdge];
+                ctx.lineWidth = 2;
+                ctx.globalAlpha = 0.6 + 0.4 * Math.sin(edgeFrac * Math.PI * 4);
+                ctx.beginPath();
+                if (currentEdge === 0) { ctx.moveTo(tileL, tileT); ctx.lineTo(tileL, tileB); }
+                else if (currentEdge === 1) { ctx.moveTo(tileR, tileT); ctx.lineTo(tileR, tileB); }
+                else if (currentEdge === 2) { ctx.moveTo(tileL, tileT); ctx.lineTo(tileR, tileT); }
+                else { ctx.moveTo(tileL, tileB); ctx.lineTo(tileR, tileB); }
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            /* Status text */
+            var sx = 440, sy = 70;
+            txt('Clip edges:', sx, sy, GRAY, FONT);
+            for (var ci = 0; ci < edges; ci++) {
+                var done = ci < currentEdge || (ci === currentEdge && edgeFrac > 0.9) || clipT >= 1;
+                var active = ci === currentEdge && clipT < 1;
+                var col = done ? GREEN : (active ? edgeColors[ci] : DIM);
+                var prefix = done ? '\u2713 ' : (active ? '\u25b6 ' : '  ');
+                txt(prefix + edgeNames[ci], sx + 10, sy + 20 + ci * 18, col, FONT);
+            }
+
+            txt('vertices: ' + origPoly.length + ' \u2192 ' + partialPoly.length, sx, sy + 100, BRIGHT, FONT);
+
+            /* Final result */
+            if (t > 0.75) {
+                var ra = Math.min((t - 0.75) / 0.1, 1);
+                ctx.globalAlpha = ra * fadeIn;
+                txt('Clipped to tile boundary', sx, sy + 130, GREEN, FONT);
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── SIMPLIFY PHASE ─── */
+        function drawSimplify(t) {
+            var fadeIn = Math.min(t / 0.05, 1);
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            txt('DOUGLAS\u2013PEUCKER SIMPLIFICATION', W/2, 18, DIM, FONT_LG, 'center');
+
+            drawTileBorder(0.4);
+            drawRoads(0.2);
+
+            /* Show clipped polygon */
+            drawPoly(clippedPoly, 'rgba(59,130,246,0.1)', null, 0.5);
+
+            /* Animate simplification: progressively remove vertices */
+            var simpStart = 0.08, simpEnd = 0.6;
+            var simpT = Math.max(0, Math.min((t - simpStart) / (simpEnd - simpStart), 1));
+
+            /* Interpolate between full and simplified polygon */
+            /* Show epsilon threshold growing */
+            var maxEps = 20;
+            var currentEps = simpT * maxEps;
+
+            var currentSimp = dpSimplify(clippedPoly, currentEps);
+
+            /* Draw simplified polygon */
+            drawPoly(currentSimp, 'rgba(34,197,94,0.15)', GREEN, 0.8);
+
+            /* Draw all original vertices, highlight removed ones */
+            var simpSet = {};
+            for (var si = 0; si < currentSimp.length; si++) {
+                for (var oj = 0; oj < clippedPoly.length; oj++) {
+                    if (Math.abs(currentSimp[si].x - clippedPoly[oj].x) < 0.5 &&
+                        Math.abs(currentSimp[si].y - clippedPoly[oj].y) < 0.5) {
+                        simpSet[oj] = true;
+                    }
+                }
+            }
+
+            for (var vi = 0; vi < clippedPoly.length; vi++) {
+                if (simpSet[vi]) {
+                    dot(clippedPoly[vi].x, clippedPoly[vi].y, 4, GREEN);
+                } else {
+                    /* Removed vertex */
+                    ctx.save();
+                    ctx.globalAlpha = 0.4 * fadeIn;
+                    dot(clippedPoly[vi].x, clippedPoly[vi].y, 3, RED);
+                    /* Small X */
+                    ctx.strokeStyle = RED;
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(clippedPoly[vi].x-4, clippedPoly[vi].y-4);
+                    ctx.lineTo(clippedPoly[vi].x+4, clippedPoly[vi].y+4);
+                    ctx.moveTo(clippedPoly[vi].x+4, clippedPoly[vi].y-4);
+                    ctx.lineTo(clippedPoly[vi].x-4, clippedPoly[vi].y+4);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            }
+
+            /* Epsilon threshold visualization */
+            var sx = 440, sy = 70;
+            txt('Simplification', sx, sy, GRAY, FONT_LG);
+
+            /* Epsilon bar */
+            txt('\u03b5 = ' + currentEps.toFixed(1) + 'px', sx, sy + 26, BRIGHT, FONT);
+            ctx.fillStyle = '#2a2a2a';
+            ctx.fillRect(sx, sy + 38, 180, 6);
+            ctx.fillStyle = YELLOW;
+            ctx.fillRect(sx, sy + 38, 180 * simpT, 6);
+
+            txt('vertices: ' + clippedPoly.length + ' \u2192 ' + currentSimp.length, sx, sy + 62, BRIGHT, FONT);
+            var reduction = Math.round((1 - currentSimp.length / clippedPoly.length) * 100);
+            txt(reduction + '% reduction', sx, sy + 82, GREEN, FONT);
+
+            /* Rasterize preview at the end */
+            if (t > 0.7) {
+                var ra = Math.min((t - 0.7) / 0.15, 1);
+                ctx.globalAlpha = ra * fadeIn;
+
+                /* Draw a small "pixel grid" overlay in bottom right as raster preview */
+                var prevX = 470, prevY = 180, prevS = 150, gridN = 16;
+                var cellS = prevS / gridN;
+                ctx.strokeStyle = '#2a2a2a';
+                ctx.lineWidth = 0.5;
+                ctx.strokeRect(prevX, prevY, prevS, prevS);
+
+                /* Fill cells that are inside the simplified polygon */
+                for (var gy = 0; gy < gridN; gy++) {
+                    for (var gx = 0; gx < gridN; gx++) {
+                        var cx = prevX + (gx + 0.5) * cellS;
+                        var cy = prevY + (gy + 0.5) * cellS;
+                        /* Map preview coords to tile coords */
+                        var tx = tileL + (cx - prevX) / prevS * tileW;
+                        var ty = tileT + (cy - prevY) / prevS * tileH;
+                        /* Point-in-polygon test */
+                        var inside = false;
+                        for (var pi = 0, pj = currentSimp.length-1; pi < currentSimp.length; pj = pi++) {
+                            if ((currentSimp[pi].y > ty) !== (currentSimp[pj].y > ty) &&
+                                tx < (currentSimp[pj].x - currentSimp[pi].x) * (ty - currentSimp[pi].y) /
+                                (currentSimp[pj].y - currentSimp[pi].y) + currentSimp[pi].x) {
+                                inside = !inside;
+                            }
+                        }
+                        if (inside) {
+                            ctx.fillStyle = 'rgba(59,130,246,0.3)';
+                            ctx.fillRect(prevX + gx*cellS, prevY + gy*cellS, cellS-0.5, cellS-0.5);
+                        }
+                    }
+                }
+                /* Grid lines */
+                ctx.strokeStyle = '#333';
+                ctx.lineWidth = 0.3;
+                for (var gl = 0; gl <= gridN; gl++) {
+                    ctx.beginPath();
+                    ctx.moveTo(prevX + gl*cellS, prevY);
+                    ctx.lineTo(prevX + gl*cellS, prevY + prevS);
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.moveTo(prevX, prevY + gl*cellS);
+                    ctx.lineTo(prevX + prevS, prevY + gl*cellS);
+                    ctx.stroke();
+                }
+                txt('512\u00d7512 raster', prevX + prevS/2, prevY + prevS + 14, DIM, FONT_SM, 'center');
+                txt('~75ms per tile', prevX + prevS/2, prevY + prevS + 28, GREEN, FONT_SM, 'center');
+
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── MAIN LOOP ─── */
+        var running = false, startTime = 0;
+
+        function animate(ts) {
+            if (!running) return;
+            if (!startTime) startTime = ts;
+            var elapsed = (ts - startTime) % CYCLE;
+            var t = elapsed / CYCLE;
+
+            ctx.clearRect(0, 0, W, H);
+
+            if (t < 0.46) {
+                drawClip(t / 0.46);
+            } else if (t < 0.50) {
+                var fadeT = (t - 0.46) / 0.04;
+                ctx.globalAlpha = 1 - fadeT;
+                drawClip(1);
+                ctx.globalAlpha = fadeT;
+                drawSimplify(0);
+                ctx.globalAlpha = 1;
+            } else if (t < 0.95) {
+                drawSimplify((t - 0.50) / 0.45);
+            } else {
+                ctx.globalAlpha = 1 - (t - 0.95) / 0.05;
+                drawSimplify(1);
+                ctx.globalAlpha = 1;
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        var observer = new IntersectionObserver(function(entries) {
+            entries.forEach(function(entry) {
+                if (entry.isIntersecting && !running) {
+                    running = true; startTime = 0;
+                    requestAnimationFrame(animate);
+                } else if (!entry.isIntersecting) { running = false; }
+            });
+        }, {threshold: 0.1});
+
+        observer.observe(canvas);
+    })();
+    </script>
+
+    <!-- Locus Trie + Trigram Visualization -->
+    <script>
+    (function() {
+        var canvas = document.getElementById('locus-viz');
+        if (!canvas) return;
+        var ctx = canvas.getContext('2d');
+        var dpr = window.devicePixelRatio || 1;
+        var W = 720, H = 400;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        canvas.style.width = '100%';
+        canvas.style.maxWidth = W + 'px';
+        canvas.style.height = 'auto';
+        canvas.style.aspectRatio = W + '/' + H;
+        ctx.scale(dpr, dpr);
+
+        var ACCENT = '#3b82f6';
+        var GREEN = '#22c55e';
+        var RED = '#ef4444';
+        var YELLOW = '#eab308';
+        var ORANGE = '#f97316';
+        var PURPLE = '#a855f7';
+        var CYAN = '#06b6d4';
+        var GRAY = '#a0a0a0';
+        var DIM = '#555';
+        var BRIGHT = '#e5e5e5';
+        var FONT = '11px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_SM = '10px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_LG = '13px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+        var FONT_XL = '15px ui-monospace,"SF Mono",Menlo,Monaco,Consolas,monospace';
+
+        var CYCLE = 22000;
+        function ease(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t; }
+
+        function txt(str,x,y,col,font,align) {
+            ctx.font = font || FONT;
+            ctx.fillStyle = col || GRAY;
+            ctx.textAlign = align || 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(str,x,y);
+        }
+
+        function dot(cx,cy,r,col) {
+            ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2);
+            ctx.fillStyle = col; ctx.fill();
+        }
+
+        /* ─── TRIE DATA ─── */
+        /* Simulated trie for "Budapest" with branches */
+        var query = 'Budapest';
+        var trieNodes = [
+            /* depth 0 */ {ch: '', x: 60, y: 50, children: [1,2,3]},
+            /* depth 1 */ {ch: 'B', x: 60, y: 100, children: [4,5]},
+            /* depth 1 */ {ch: 'P', x: 160, y: 100, children: [10]},
+            /* depth 1 */ {ch: 'M', x: 260, y: 100, children: [11]},
+            /* depth 2 */ {ch: 'u', x: 40, y: 150, children: [6]},
+            /* depth 2 */ {ch: 'r', x: 110, y: 150, children: [12]},
+            /* depth 3 */ {ch: 'd', x: 30, y: 200, children: [7,8]},
+            /* depth 4 */ {ch: 'a', x: 20, y: 250, children: [9]},
+            /* depth 4 */ {ch: 'e', x: 80, y: 250, children: []},  /* dead end */
+            /* depth 5 */ {ch: 'p', x: 20, y: 300, children: []},  /* → Budapest */
+            /* branch */  {ch: 'r', x: 160, y: 150, children: []}, /* Prague */
+            /* branch */  {ch: 'u', x: 260, y: 150, children: []}, /* Munich */
+            /* branch */  {ch: 'a', x: 110, y: 200, children: []}  /* Bratislava */
+        ];
+
+        /* Path through trie for "Budapest": root → B → u → d → a → p */
+        var triePath = [0, 1, 4, 6, 7, 9];
+        /* Autocomplete results at each depth */
+        var autoResults = [
+            [],
+            ['Budapest', 'Bucharest', 'Brussels', 'Bratislava'],
+            ['Budapest', 'Bucharest', 'Buenos Aires'],
+            ['Budapest', 'Budweis'],
+            ['Budapest', 'Budaörs'],
+            ['Budapest']
+        ];
+
+        /* ─── TRIGRAM DATA ─── */
+        var misspelled = 'Budepest';
+        var correct = 'Budapest';
+        /* Trigrams of the misspelled query */
+        var queryTrigrams = [];
+        for (var i = 0; i <= misspelled.length - 3; i++)
+            queryTrigrams.push(misspelled.substring(i, i+3).toLowerCase());
+        /* Trigrams of correct answer */
+        var correctTrigrams = [];
+        for (var j = 0; j <= correct.length - 3; j++)
+            correctTrigrams.push(correct.substring(j, j+3).toLowerCase());
+        /* Matching trigrams */
+        var matchingTrigrams = [];
+        for (var qi = 0; qi < queryTrigrams.length; qi++) {
+            for (var ci = 0; ci < correctTrigrams.length; ci++) {
+                if (queryTrigrams[qi] === correctTrigrams[ci]) {
+                    matchingTrigrams.push(queryTrigrams[qi]);
+                    break;
+                }
+            }
+        }
+
+        /* Other candidates with their match counts */
+        var candidates = [
+            {name: 'Budapest',  score: 5, trigrams: correctTrigrams},
+            {name: 'Bucharest', score: 2, trigrams: ['buc','uch','cha','har','are','res','est']},
+            {name: 'Budweis',   score: 2, trigrams: ['bud','udw','dwe','wei','eis']},
+            {name: 'Budaörs',  score: 2, trigrams: ['bud','uda','dab','aör','örs']}
+        ];
+
+        /* ─── TRIE PHASE ─── */
+        function drawTrie(t) {
+            var fadeIn = Math.min(t / 0.05, 1);
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            txt('PREFIX TRIE TRAVERSAL', W/2, 18, DIM, FONT_LG, 'center');
+
+            /* Query being typed */
+            var typeT = Math.min(t / 0.7, 1);
+            var charsTyped = Math.min(Math.floor(typeT * (triePath.length + 1)), triePath.length);
+
+            /* Draw search box */
+            var sbx = 400, sby = 50, sbw = 280, sbh = 30;
+            ctx.strokeStyle = ACCENT;
+            ctx.lineWidth = 1;
+            ctx.strokeRect(sbx, sby, sbw, sbh);
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(sbx+1, sby+1, sbw-2, sbh-2);
+
+            var typedStr = query.substring(0, charsTyped);
+            txt(typedStr, sbx + 10, sby + sbh/2, BRIGHT, FONT_LG);
+            /* Blinking cursor */
+            if (Math.sin(t * 20) > 0) {
+                ctx.font = FONT_LG;
+                var tw = ctx.measureText(typedStr).width;
+                ctx.fillStyle = ACCENT;
+                ctx.fillRect(sbx + 10 + tw + 2, sby + 6, 1.5, sbh - 12);
+            }
+
+            /* Draw trie edges */
+            for (var ni = 0; ni < trieNodes.length; ni++) {
+                var node = trieNodes[ni];
+                for (var ci2 = 0; ci2 < node.children.length; ci2++) {
+                    var child = trieNodes[node.children[ci2]];
+                    ctx.strokeStyle = '#2a2a2a';
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(node.x, node.y + 12);
+                    ctx.lineTo(child.x, child.y - 12);
+                    ctx.stroke();
+                }
+            }
+
+            /* Draw trie nodes */
+            for (var ti = 0; ti < trieNodes.length; ti++) {
+                var tn = trieNodes[ti];
+                var isOnPath = triePath.indexOf(ti) >= 0;
+                var pathIdx = triePath.indexOf(ti);
+                var isActive = isOnPath && pathIdx < charsTyped;
+                var isCurrent = isOnPath && pathIdx === charsTyped - 1;
+
+                /* Node circle */
+                var nodeCol = isCurrent ? GREEN : (isActive ? ACCENT : '#333');
+                var borderCol = isCurrent ? GREEN : (isActive ? ACCENT : DIM);
+
+                ctx.fillStyle = '#1a1a1a';
+                ctx.strokeStyle = borderCol;
+                ctx.lineWidth = isCurrent ? 2 : 1;
+                ctx.beginPath();
+                ctx.arc(tn.x, tn.y, 14, 0, Math.PI*2);
+                ctx.fill();
+                ctx.stroke();
+
+                if (isCurrent) {
+                    ctx.save();
+                    ctx.shadowColor = GREEN;
+                    ctx.shadowBlur = 8;
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+                    ctx.restore();
+                }
+
+                /* Character label */
+                var chCol = isActive ? BRIGHT : GRAY;
+                txt(tn.ch || '\u25cb', tn.x, tn.y, chCol, FONT, 'center');
+
+                /* Highlight active path edges */
+                if (isActive && pathIdx > 0) {
+                    var parentIdx = triePath[pathIdx - 1];
+                    var parent = trieNodes[parentIdx];
+                    ctx.strokeStyle = ACCENT;
+                    ctx.lineWidth = 2;
+                    ctx.shadowColor = ACCENT;
+                    ctx.shadowBlur = 4;
+                    ctx.beginPath();
+                    ctx.moveTo(parent.x, parent.y + 12);
+                    ctx.lineTo(tn.x, tn.y - 12);
+                    ctx.stroke();
+                    ctx.shadowBlur = 0;
+                }
+            }
+
+            /* Autocomplete results */
+            if (charsTyped > 0 && charsTyped <= autoResults.length) {
+                var results = autoResults[Math.min(charsTyped, autoResults.length - 1)];
+                var ry = 100;
+                txt('Results (' + results.length + '):', sbx, ry, GRAY, FONT);
+                for (var ri = 0; ri < Math.min(results.length, 4); ri++) {
+                    var isMatch = results[ri] === 'Budapest';
+                    txt(results[ri], sbx + 10, ry + 18 + ri * 18,
+                        isMatch && charsTyped >= 5 ? GREEN : GRAY, FONT);
+                }
+                txt('<20\u00b5s', sbx + 180, ry, GREEN, FONT_SM);
+            }
+
+            /* Depth indicator */
+            txt('depth: ' + charsTyped + ' / ' + query.length, 30, H - 20, DIM, FONT);
+
+            /* Final result */
+            if (t > 0.85) {
+                var ra = Math.min((t - 0.85) / 0.1, 1);
+                ctx.globalAlpha = ra * fadeIn;
+                txt('\u2713 Budapest', sbx + 10, 220, GREEN, FONT_LG);
+                txt('47.497\u00b0N, 19.040\u00b0E', sbx + 10, 240, GRAY, FONT);
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── TRIGRAM PHASE ─── */
+        function drawTrigram(t) {
+            var fadeIn = Math.min(t / 0.05, 1);
+            ctx.save();
+            ctx.globalAlpha = fadeIn;
+
+            txt('TRIGRAM FUZZY SEARCH', W/2, 18, DIM, FONT_LG, 'center');
+
+            /* Show misspelled query */
+            var qx = 60, qy = 60;
+            txt('Query:', qx, qy, GRAY, FONT);
+            txt('"' + misspelled + '"', qx + 58, qy, ORANGE, FONT_LG);
+            txt('(misspelled)', qx + 180, qy, DIM, FONT_SM);
+
+            /* Show query trigrams appearing */
+            var triStart = 0.05, triEnd = 0.35;
+            var triT = Math.max(0, Math.min((t - triStart) / (triEnd - triStart), 1));
+            var visibleTri = Math.ceil(triT * queryTrigrams.length);
+
+            var tx2 = 60, ty2 = 95;
+            txt('Trigrams:', tx2, ty2, GRAY, FONT);
+            for (var qi2 = 0; qi2 < visibleTri; qi2++) {
+                var isMatch2 = matchingTrigrams.indexOf(queryTrigrams[qi2]) >= 0;
+                var bx = tx2 + qi2 * 56, by = ty2 + 22;
+                ctx.fillStyle = isMatch2 ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.05)';
+                ctx.strokeStyle = isMatch2 ? GREEN : '#444';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.roundRect(bx, by - 10, 48, 22, 3);
+                ctx.fill();
+                ctx.stroke();
+                txt(queryTrigrams[qi2], bx + 24, by + 1, isMatch2 ? GREEN : GRAY, FONT, 'center');
+            }
+
+            /* Candidate ranking */
+            var rankStart = 0.3, rankEnd = 0.8;
+            var rankT = Math.max(0, Math.min((t - rankStart) / (rankEnd - rankStart), 1));
+            if (rankT > 0) {
+                var rx2 = 60, ry2 = 170;
+                txt('Candidate ranking:', rx2, ry2, GRAY, FONT);
+
+                var visibleCands = Math.ceil(rankT * candidates.length);
+                /* Sort by score desc */
+                var sorted = candidates.slice().sort(function(a,b) { return b.score - a.score; });
+
+                for (var ci3 = 0; ci3 < visibleCands; ci3++) {
+                    var cand = sorted[ci3];
+                    var cy2 = ry2 + 28 + ci3 * 40;
+                    var isTop = ci3 === 0;
+
+                    /* Name */
+                    txt(cand.name, rx2 + 10, cy2, isTop ? GREEN : GRAY, isTop ? FONT_LG : FONT);
+
+                    /* Score bar */
+                    var maxScore = sorted[0].score;
+                    var barW2 = 120 * (cand.score / maxScore);
+                    ctx.fillStyle = '#2a2a2a';
+                    ctx.fillRect(rx2 + 130, cy2 - 5, 120, 10);
+                    ctx.fillStyle = isTop ? GREEN : DIM;
+                    ctx.fillRect(rx2 + 130, cy2 - 5, barW2, 10);
+                    txt(cand.score + '/' + queryTrigrams.length + ' match', rx2 + 260, cy2, isTop ? GREEN : DIM, FONT_SM);
+
+                    /* Show matching trigrams for top result */
+                    if (isTop && rankT > 0.5) {
+                        var mtAlpha = Math.min((rankT - 0.5) * 4, 1);
+                        ctx.globalAlpha = mtAlpha * fadeIn;
+                        for (var mi2 = 0; mi2 < cand.trigrams.length; mi2++) {
+                            var isM = matchingTrigrams.indexOf(cand.trigrams[mi2]) >= 0;
+                            var mbx = rx2 + 10 + mi2 * 50, mby = cy2 + 16;
+                            ctx.fillStyle = isM ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.03)';
+                            ctx.strokeStyle = isM ? GREEN : '#333';
+                            ctx.lineWidth = 0.5;
+                            ctx.beginPath();
+                            ctx.roundRect(mbx, mby - 8, 44, 18, 2);
+                            ctx.fill();
+                            ctx.stroke();
+                            txt(cand.trigrams[mi2], mbx + 22, mby + 1, isM ? GREEN : '#444', FONT_SM, 'center');
+                        }
+                        ctx.globalAlpha = fadeIn;
+                    }
+                }
+            }
+
+            /* Result */
+            if (t > 0.85) {
+                var ra2 = Math.min((t - 0.85) / 0.1, 1);
+                ctx.globalAlpha = ra2 * fadeIn;
+                txt('"Budepest" \u2192 Budapest', W/2, H - 30, GREEN, FONT_LG, 'center');
+                txt('fuzzy match despite transposition error', W/2, H - 12, DIM, FONT_SM, 'center');
+                ctx.globalAlpha = fadeIn;
+            }
+
+            ctx.restore();
+        }
+
+        /* ─── MAIN LOOP ─── */
+        var running = false, startTime = 0;
+
+        function animate(ts) {
+            if (!running) return;
+            if (!startTime) startTime = ts;
+            var elapsed = (ts - startTime) % CYCLE;
+            var t = elapsed / CYCLE;
+
+            ctx.clearRect(0, 0, W, H);
+
+            if (t < 0.46) {
+                drawTrie(t / 0.46);
+            } else if (t < 0.50) {
+                var fadeT = (t - 0.46) / 0.04;
+                ctx.globalAlpha = 1 - fadeT;
+                drawTrie(1);
+                ctx.globalAlpha = fadeT;
+                drawTrigram(0);
+                ctx.globalAlpha = 1;
+            } else if (t < 0.95) {
+                drawTrigram((t - 0.50) / 0.45);
+            } else {
+                ctx.globalAlpha = 1 - (t - 0.95) / 0.05;
+                drawTrigram(1);
+                ctx.globalAlpha = 1;
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        var observer = new IntersectionObserver(function(entries) {
+            entries.forEach(function(entry) {
+                if (entry.isIntersecting && !running) {
+                    running = true; startTime = 0;
+                    requestAnimationFrame(animate);
+                } else if (!entry.isIntersecting) { running = false; }
+            });
+        }, {threshold: 0.1});
+
+        observer.observe(canvas);
     })();
     </script>
 </body>

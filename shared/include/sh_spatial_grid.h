@@ -18,6 +18,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ============================================================================
  * Status Codes
  * ============================================================================ */
@@ -197,5 +201,9 @@ int sh_grid_cell_index(const SHGridConfig *config, SHCoord coord);
  * Returns 0 on success, -1 if out of bounds.
  */
 int sh_grid_cell_rowcol(const SHGridConfig *config, SHCoord coord, int *row, int *col);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SH_SPATIAL_GRID_H */
