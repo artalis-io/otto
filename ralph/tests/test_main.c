@@ -1048,6 +1048,15 @@ void test_param_typed_metadata_api(void) {
     ASSERT_NEAR(meta.max_value, 3.0, TOLERANCE,
                 "Typed param: node_select max=3");
 
+    ASSERT(ralph_core_get_param_meta(RALPH_PARAM_ROOT_CUT_MASK, &meta) == 0,
+           "Typed param: get metadata for root_cut_mask");
+    ASSERT(strcmp(meta.name, "root_cut_mask") == 0,
+           "Typed param: root_cut_mask canonical name");
+    ASSERT(meta.scope == RALPH_PARAM_SCOPE_MIP,
+           "Typed param: root_cut_mask scope");
+    ASSERT_NEAR(meta.default_value, (double)MIP_ROOT_CUT_ALL_MASK, TOLERANCE,
+                "Typed param: root_cut_mask default value");
+
     ASSERT(ralph_core_get_param_meta((RalphParamId)-1, &meta) == -1,
            "Typed param: invalid id rejected by metadata get");
     ASSERT(ralph_core_get_param_meta(RALPH_PARAM_METHOD, NULL) == -1,
@@ -1092,6 +1101,20 @@ void test_param_typed_metadata_api(void) {
            "Typed param: get double by string");
     ASSERT_NEAR(d_val, 0.02, TOLERANCE,
                 "Typed param: string getter returns typed-set value");
+
+    ASSERT(ralph_core_set_mip_int_param_id(model, RALPH_PARAM_ROOT_CUT_MASK,
+                                           MIP_ROOT_CUT_GOMORY_MASK) == 0,
+           "Typed param: set root_cut_mask by id");
+    ASSERT(ralph_test_get_int_param(model, "root_cut_mask", &i_val) == 0 &&
+           i_val == MIP_ROOT_CUT_GOMORY_MASK,
+           "Typed param: get root_cut_mask by string");
+    ASSERT(ralph_test_set_int_param(model, "root_cut_mask",
+                                    MIP_ROOT_CUT_GOMORY_MASK |
+                                    MIP_ROOT_CUT_COVER_MASK) == 0,
+           "Typed param: set root_cut_mask by string");
+    ASSERT(ralph_core_get_mip_int_param_id(model, RALPH_PARAM_ROOT_CUT_MASK, &i_val) == 0 &&
+           i_val == (MIP_ROOT_CUT_GOMORY_MASK | MIP_ROOT_CUT_COVER_MASK),
+           "Typed param: get root_cut_mask by id");
 
     ASSERT(ralph_core_set_lp_int_param_id(model, RALPH_PARAM_MAX_NODES, 32) == -1,
            "Typed param: LP strict rejects MIP-only int");

@@ -36,6 +36,17 @@ typedef enum {
     RALPH_MIP_START_REPAIR_MODE_PROJECT_AND_ROUND = 2
 } RalphMIPStartRepairPolicy;
 
+/* Root cut-family mask bits for the `root_cut_mask` MIP int parameter. */
+#define RALPH_MIP_ROOT_CUT_MASK_GOMORY (1 << 0)
+#define RALPH_MIP_ROOT_CUT_MASK_MIR    (1 << 1)
+#define RALPH_MIP_ROOT_CUT_MASK_COVER  (1 << 2)
+#define RALPH_MIP_ROOT_CUT_MASK_SCP    (1 << 3)
+#define RALPH_MIP_ROOT_CUT_MASK_ALL \
+    (RALPH_MIP_ROOT_CUT_MASK_GOMORY | \
+     RALPH_MIP_ROOT_CUT_MASK_MIR | \
+     RALPH_MIP_ROOT_CUT_MASK_COVER | \
+     RALPH_MIP_ROOT_CUT_MASK_SCP)
+
 /* Cut representation for MIP callbacks and lazy cuts. */
 typedef struct {
     const int *indices;

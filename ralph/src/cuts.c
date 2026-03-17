@@ -280,6 +280,22 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
 
         if (fabs(a_ij) < RALPH_ZERO_TOL) continue;
 
+        /* GMI back-substitution is only validated for unfixed auxiliary
+         * slacks in the normalized <= form. Presolve can create fixed
+         * zero auxiliaries and normalized surplus rows (aux_coef < 0);
+         * those patterns have produced invalid cuts on FuelWise MILPs. */
+        if (j >= num_orig) {
+            int aux_idx = j - num_orig;
+            if (aux_idx >= 0 && aux_idx < tab->num_aux && tab->aux_row && tab->aux_coef) {
+                if (tab->var_status[j] == RALPH_FIXED || tab->aux_coef[aux_idx] < 0.0) {
+                    free(row);
+                    free(cut_coefs);
+                    cut_free(cut);
+                    return NULL;
+                }
+            }
+        }
+
         double alpha_j = 0.0;
         double coef_for_formula = a_ij;
 
@@ -535,7 +551,7 @@ int generate_gomory_cuts(MIPSolver *solver, CutPool *pool) {
  * ============================================================================ */
 
 /* c-MIR local constants */
-#define CMIR_MAX_AGGR     3      /* Max rows to aggregate */
+#define CMIR_MAX_AGGR     0      /* Aggregated MIR rows are currently unsafe */
 #define CMIR_FRAC_TOL     0.01   /* Min fractionality for MIR RHS */
 #define CMIR_COEF_MAX     1e6    /* Reject cuts with coefficients beyond this */
 #define CMIR_PIVOT_MIN    0.001  /* Min coefficient for aggregation pivot */
@@ -612,6 +628,7 @@ static int cmir_extract_source_row(
                     tab->aux_row && tab->aux_coef) {
                     int con_row = tab->aux_row[aux_idx];
                     double aux_c = tab->aux_coef[aux_idx];
+
                     double rsign = tab->row_sign[con_row];
                     double con_rhs = model->b[con_row] * rsign;
 
@@ -708,14 +725,15 @@ static int cmir_extract_source_row(
     double *con_row = (double*)calloc(num_orig, sizeof(double));
     if (!con_row) return 0;
     sparse_get_row(model->A, pivot_row, con_row);
+    double rsign = tab->row_sign[pivot_row];
 
     /* Gaussian eliminate: scale and add to cancel kappa */
-    double scale = -row_coefs[kappa] / pivot_val;
+    double scale = -row_coefs[kappa] / (pivot_val * rsign);
 
     /* Check for coefficient explosion before committing */
     for (int j = 0; j < num_orig; j++) {
         if (fabs(con_row[j]) > RALPH_ZERO_TOL) {
-            double new_val = row_coefs[j] + scale * con_row[j];
+            double new_val = row_coefs[j] + scale * con_row[j] * rsign;
             if (fabs(new_val) > 1e8) {
                 free(con_row);
                 return 0;
@@ -724,11 +742,11 @@ static int cmir_extract_source_row(
     }
 
     for (int j = 0; j < num_orig; j++) {
-        row_coefs[j] += scale * con_row[j];
+        row_coefs[j] += scale * con_row[j] * rsign;
         if (fabs(row_coefs[j]) < RALPH_ZERO_TOL)
             row_coefs[j] = 0.0;
     }
-    *row_rhs += scale * model->b[pivot_row];
+    *row_rhs += scale * model->b[pivot_row] * rsign;
 
     used_rows[pivot_row] = 1;
     free(con_row);
@@ -918,6 +936,7 @@ static double cmir_eval(const CMIRWork *work, double delta)
 static double cmir_separate(CMIRWork *work, double *best_delta)
 {
     int num_orig = work->num_orig;
+    int has_fractional_integer = 0;
 
     /* Initialize complement set C */
     for (int j = 0; j < num_orig; j++) {
@@ -965,6 +984,7 @@ static double cmir_separate(CMIRWork *work, double *best_delta)
         }
         double frac = x_sub - floor(x_sub);
         if (frac < RALPH_INT_TOL || frac > 1.0 - RALPH_INT_TOL) continue;
+        has_fractional_integer = 1;
 
         double base_d = fabs(work->a_sub[j]);
         if (work->in_C[j]) base_d = fabs(-work->a_sub[j]);  /* After complementation */
@@ -982,7 +1002,14 @@ static double cmir_separate(CMIRWork *work, double *best_delta)
         }
     }
 
-    /* Also try delta = 1.0 as a baseline */
+    /* c-MIR needs at least one fractional integer support variable.
+     * Without that, both baseline-delta evaluation and complement flipping
+     * can manufacture invalid cuts from rows that only have continuous
+     * support in the substituted space. */
+    if (!has_fractional_integer) {
+        return best_viol;
+    }
+
     {
         double viol = cmir_eval(work, 1.0);
         if (viol > best_viol) {

@@ -44,6 +44,15 @@ extern "C" {
 #define MIP_CUT_MAX_DYNAMISM   1e6    /* Max coefficient ratio max|a|/min|a| */
 #define MIP_CUT_PARALLEL_TOL   0.999  /* Cosine similarity threshold for parallel cuts */
 
+/* Root cut-family mask bits */
+#define MIP_ROOT_CUT_GOMORY_MASK (1 << 0)
+#define MIP_ROOT_CUT_MIR_MASK    (1 << 1)
+#define MIP_ROOT_CUT_COVER_MASK  (1 << 2)
+#define MIP_ROOT_CUT_SCP_MASK    (1 << 3)
+#define MIP_ROOT_CUT_ALL_MASK \
+    (MIP_ROOT_CUT_GOMORY_MASK | MIP_ROOT_CUT_MIR_MASK | \
+     MIP_ROOT_CUT_COVER_MASK | MIP_ROOT_CUT_SCP_MASK)
+
 /* Reduced-cost fixing parameters */
 #define MIP_RC_FIX_MIN_GAP     1e-4   /* Don't fix when gap is numerically tiny */
 
@@ -233,6 +242,7 @@ typedef struct {
     VarSelectStrategy var_select;
     int max_cuts_per_round;
     int max_cut_rounds;
+    int root_cut_mask;
     int verbose;
     int telemetry;          /* 1 = collect LP/LU telemetry in node relaxations */
     int dual_bound_flip;    /* -1=default(on), 0=off, 1=on */

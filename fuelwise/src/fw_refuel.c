@@ -931,10 +931,14 @@ int fw_solve_refuel_milp(
     int fw_verbose = (getenv("FW_VERBOSE") != NULL);
     int fw_debug = (getenv("FW_DEBUG") != NULL);
     ralph_mip_set_int_param(model, "verbose", fw_debug ? 2 : (fw_verbose ? 1 : 0));
-    /* Ralph's generic root cut loop is still not correctness-clean on
-     * FuelWise stop-cost/min-purchase MILPs (e.g. milp200 seed 456).
-     * Keep it disabled here until the underlying cut families are fixed. */
-    ralph_mip_set_int_param(model, "max_cut_rounds", 0);
+    /* FuelWise keeps the generic root cut loop, but excludes the SCP-only
+     * family. Gomory/MIR/cover are guarded conservatively to avoid the
+     * presolve-induced invalid cuts seen on stop-cost/min-purchase MILPs. */
+    ralph_mip_set_int_param(model, "max_cut_rounds", 3);
+    ralph_mip_set_int_param(model, "root_cut_mask",
+                            RALPH_MIP_ROOT_CUT_MASK_GOMORY |
+                            RALPH_MIP_ROOT_CUT_MASK_MIR |
+                            RALPH_MIP_ROOT_CUT_MASK_COVER);
     if (fw_presolve) {
         ralph_mip_set_int_param(model, "presolve", 1);
         ralph_mip_set_int_param(model, "presolve_mask", (int)fw_presolve_mask);

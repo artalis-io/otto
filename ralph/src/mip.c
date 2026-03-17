@@ -296,6 +296,7 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     solver->var_select = VAR_SELECT_RELIABILITY;  /* Bootstraps pseudocosts via strong branching */
     solver->max_cuts_per_round = 50;
     solver->max_cut_rounds = 5;  /* Enable cuts with conservative limit */
+    solver->root_cut_mask = MIP_ROOT_CUT_ALL_MASK;
     solver->verbose = 0;
     solver->telemetry = 1;
     solver->dual_bound_flip = -1;    /* use default */
@@ -2046,6 +2047,7 @@ static int solve_root_node(MIPSolver *solver) {
     double root_cut_start_ms = mip_now_ms();
 
     while (cut_rounds < solver->max_cut_rounds && total_cuts_applied < max_cuts_total) {
+        int root_cut_mask = solver->root_cut_mask;
         int cuts_added = 0;
         solver->root_cut_rounds++;
 
@@ -2053,16 +2055,22 @@ static int solve_root_node(MIPSolver *solver) {
         cut_pool_age(solver->cut_pool);
 
         /* Generate Gomory cuts (from integer basic variable rows) */
-        cuts_added += generate_gomory_cuts(solver, solver->cut_pool);
+        if (root_cut_mask & MIP_ROOT_CUT_GOMORY_MASK) {
+            cuts_added += generate_gomory_cuts(solver, solver->cut_pool);
+        }
 
         /* Generate MIR cuts (from continuous basic variable rows) */
-        cuts_added += generate_mir_cuts(solver, solver->cut_pool);
+        if (root_cut_mask & MIP_ROOT_CUT_MIR_MASK) {
+            cuts_added += generate_mir_cuts(solver, solver->cut_pool);
+        }
 
         /* Generate cover cuts (from knapsack constraints) */
-        cuts_added += generate_cover_cuts(solver, solver->cut_pool);
+        if (root_cut_mask & MIP_ROOT_CUT_COVER_MASK) {
+            cuts_added += generate_cover_cuts(solver, solver->cut_pool);
+        }
 
         /* Generate SCP-specific cuts (clique, odd-hole, lifted cover) */
-        if (solver->use_scp_solver) {
+        if (solver->use_scp_solver && (root_cut_mask & MIP_ROOT_CUT_SCP_MASK)) {
             int scp_cuts = generate_scp_cuts(solver, solver->cut_pool);
             cuts_added += scp_cuts;
             solver->scp_cuts_generated += scp_cuts;

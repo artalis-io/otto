@@ -47,6 +47,7 @@ struct RalphModel {
     double mip_gap;
     int max_nodes;
     int max_cut_rounds;
+    int root_cut_mask;
     int method;  /* 0=primal simplex, 1=dual simplex, 2=dual-first fallback */
     int lp_algorithm;      /* Requested LP algorithm (extends method with barrier value). */
     int barrier_crossover; /* Requested barrier crossover mode (API-level capability gate). */
@@ -1085,6 +1086,7 @@ RalphModel* ralph_core_create(void) {
     model->mip_gap = RALPH_DEFAULT_MIP_GAP;
     model->max_nodes = RALPH_DEFAULT_NODE_LIMIT;
     model->max_cut_rounds = 0;  /* Disabled by default */
+    model->root_cut_mask = MIP_ROOT_CUT_ALL_MASK;
     model->method = 0;  /* Default: primal simplex */
     model->lp_algorithm = (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
     model->barrier_crossover = (int)RALPH_LP_CROSSOVER_AUTO;
@@ -1991,6 +1993,7 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         model->mip_solver->verbose = model->verbose;
         model->mip_solver->telemetry = model->telemetry ? 1 : 0;
         model->mip_solver->max_cut_rounds = model->max_cut_rounds;
+        model->mip_solver->root_cut_mask = model->root_cut_mask;
         model->mip_solver->dual_bound_flip = model->dual_bound_flip;
         model->mip_solver->dual_steepest_edge = model->dual_steepest_edge;
         model->mip_solver->lu_supernode = model->lu_supernode;
@@ -5449,6 +5452,17 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .aliases = {"CutRounds"},
             .alias_count = 1
         },
+        [RALPH_PARAM_ROOT_CUT_MASK] = {
+            .id = RALPH_PARAM_ROOT_CUT_MASK,
+            .name = "root_cut_mask",
+            .scope = RALPH_PARAM_SCOPE_MIP,
+            .value_type = RALPH_PARAM_VALUE_INT,
+            .default_value = (double)MIP_ROOT_CUT_ALL_MASK,
+            .has_min = 1,
+            .min_value = 0.0,
+            .has_max = 1,
+            .max_value = (double)MIP_ROOT_CUT_ALL_MASK
+        },
         [RALPH_PARAM_METHOD] = {
             .id = RALPH_PARAM_METHOD,
             .name = "method",
@@ -6242,6 +6256,19 @@ int ralph_core_set_int_param_id(RalphModel *model, RalphParamId param, int value
         case RALPH_PARAM_MAX_CUT_ROUNDS:
             model->max_cut_rounds = value;
             break;
+        case RALPH_PARAM_ROOT_CUT_MASK:
+            if (value < 0 || value > MIP_ROOT_CUT_ALL_MASK) {
+                RALPH_FAIL_API(model,
+                               RALPH_ERROR_DOMAIN_PARAMETER,
+                               RALPH_ERROR_CODE_PARAMETER_VALUE_INVALID,
+                               RALPH_STATUS_UNKNOWN,
+                               RALPH_ERROR_API_PARAMETER,
+                               param,
+                               value,
+                               "root_cut_mask value is out of range");
+            }
+            model->root_cut_mask = value;
+            break;
         case RALPH_PARAM_METHOD:
             if (value < (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX ||
                 value > (int)RALPH_LP_ALGORITHM_AUTO) {
@@ -6652,6 +6679,9 @@ int ralph_core_get_int_param_id(const RalphModel *model, RalphParamId param, int
             break;
         case RALPH_PARAM_MAX_CUT_ROUNDS:
             *value = model->max_cut_rounds;
+            break;
+        case RALPH_PARAM_ROOT_CUT_MASK:
+            *value = model->root_cut_mask;
             break;
         case RALPH_PARAM_METHOD:
             *value = model->method;
