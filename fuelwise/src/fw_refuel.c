@@ -931,7 +931,10 @@ int fw_solve_refuel_milp(
     int fw_verbose = (getenv("FW_VERBOSE") != NULL);
     int fw_debug = (getenv("FW_DEBUG") != NULL);
     ralph_mip_set_int_param(model, "verbose", fw_debug ? 2 : (fw_verbose ? 1 : 0));
-    ralph_mip_set_int_param(model, "max_cut_rounds", 3);
+    /* Ralph's generic root cut loop is still not correctness-clean on
+     * FuelWise stop-cost/min-purchase MILPs (e.g. milp200 seed 456).
+     * Keep it disabled here until the underlying cut families are fixed. */
+    ralph_mip_set_int_param(model, "max_cut_rounds", 0);
     if (fw_presolve) {
         ralph_mip_set_int_param(model, "presolve", 1);
         ralph_mip_set_int_param(model, "presolve_mask", (int)fw_presolve_mask);
