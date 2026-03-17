@@ -519,6 +519,7 @@ BBNode* bb_node_pool_copy(BBNodePool *pool, const BBNode *src, int num_vars) {
 
 /* Forward declarations for priority-aware variants */
 static int select_most_infeasible_with_priority(MIPSolver *solver, const double *solution, int max_prio);
+static int select_pseudo_cost_with_priority(MIPSolver *solver, const double *solution, int max_prio);
 
 /*
  * Most infeasible variable selection.
@@ -716,7 +717,10 @@ strong_fail:
  * downshifts probe cost to avoid spending most wall time on probing. */
 static int reliability_strong_probe_limit(const MIPSolver *solver) {
     if (!solver) return MIP_RELIABILITY_MAX_STRONG;
-    if (solver->has_incumbent) return MIP_RELIABILITY_MAX_STRONG;
+    if (solver->has_incumbent) {
+        if (solver->nodes_explored >= MIP_RELIABILITY_POST_INCUMBENT_PROBE_NODES) return 0;
+        return MIP_RELIABILITY_POST_INCUMBENT_MAX_STRONG;
+    }
     if (solver->nodes_explored >= MIP_RELIABILITY_NO_INCUMBENT_DISABLE_AFTER) return 0;
     if (solver->nodes_explored >= MIP_RELIABILITY_NO_INCUMBENT_TAPER_AFTER) return 1;
     return MIP_RELIABILITY_MAX_STRONG;
@@ -724,11 +728,33 @@ static int reliability_strong_probe_limit(const MIPSolver *solver) {
 
 static int reliability_probe_pivot_budget(const MIPSolver *solver) {
     if (!solver) return MIP_RELIABILITY_PIVOT_BUDGET;
-    if (solver->has_incumbent) return MIP_RELIABILITY_PIVOT_BUDGET;
+    if (solver->has_incumbent) return MIP_RELIABILITY_POST_INCUMBENT_PIVOT_BUDGET;
     if (solver->nodes_explored >= MIP_RELIABILITY_NO_INCUMBENT_TAPER_AFTER) {
         return MIP_RELIABILITY_NO_INCUMBENT_PIVOT_BUDGET;
     }
     return MIP_RELIABILITY_PIVOT_BUDGET;
+}
+
+static void reliability_shortlist_insert(int *vars, double *vals, double *fracs,
+                                         double *scores, int *count,
+                                         int var, double val, double frac, double score) {
+    int limit = MIP_RELIABILITY_CANDIDATE_LIMIT;
+    if (!vars || !vals || !fracs || !scores || !count || limit <= 0) return;
+    if (*count >= limit && score <= scores[limit - 1]) return;
+
+    int pos = (*count < limit) ? (*count)++ : limit - 1;
+    while (pos > 0 && score > scores[pos - 1]) {
+        vars[pos] = vars[pos - 1];
+        vals[pos] = vals[pos - 1];
+        fracs[pos] = fracs[pos - 1];
+        scores[pos] = scores[pos - 1];
+        pos--;
+    }
+
+    vars[pos] = var;
+    vals[pos] = val;
+    fracs[pos] = frac;
+    scores[pos] = score;
 }
 
 /*
@@ -746,6 +772,11 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
     int strong_limit = reliability_strong_probe_limit(solver);
     int strong_pivot_budget = reliability_probe_pivot_budget(solver);
     int strong_failed = 0;  /* Stop strong branching if LP state corrupted */
+    int strong_vars[MIP_RELIABILITY_CANDIDATE_LIMIT];
+    double strong_vals[MIP_RELIABILITY_CANDIDATE_LIMIT];
+    double strong_fracs[MIP_RELIABILITY_CANDIDATE_LIMIT];
+    double strong_scores[MIP_RELIABILITY_CANDIDATE_LIMIT];
+    int strong_candidates = 0;
 
     const int * restrict int_vars = solver->integer_vars;
     const int * restrict prios = solver->branch_priorities;
@@ -753,6 +784,11 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
     const LPModel *wm = solver->working_model;
     const double *lb = wm ? wm->lb : NULL;
     const double *ub = wm ? wm->ub : NULL;
+
+    if (strong_limit <= 0) {
+        if (use_priorities) return select_pseudo_cost_with_priority(solver, solution, max_prio);
+        return select_pseudo_cost(solver, solution);
+    }
 
     for (int k = 0; k < num_int; k++) {
         if (solver->lp_solver && solver->lp_solver->solution) {
@@ -778,43 +814,56 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
                           (solver->pseudo_count_down[j] < MIP_RELIABILITY_THRESHOLD ||
                            solver->pseudo_count_up[j] < MIP_RELIABILITY_THRESHOLD);
 
-        if (need_strong && strong_limit > 0 &&
-            strong_count < strong_limit &&
-            solver->lp_solver && solver->lp_solver->tableau) {
-            double down_obj, up_obj;
-            int sb_result = strong_branch(solver, j, val, &down_obj, &up_obj,
-                                          strong_pivot_budget);
+        down_est = frac * solver->pseudo_cost_down[j];
+        up_est = (1.0 - frac) * solver->pseudo_cost_up[j];
 
-            /* Re-read solution pointer: strong_branch() may recover LP state. */
-            if (solver->lp_solver) {
-                solution = solver->lp_solver->solution;
-            }
-            if (!solution) break;  /* LP state lost, recovery handled below */
-
-            if (sb_result == 0) {
-                /* Update pseudo-costs */
-                double parent_obj = solver->lp_solver->obj_value;
-                if (down_obj < RALPH_INFINITY/2) {
-                    update_pseudo_costs(solver, j, val, parent_obj, down_obj, BRANCH_DOWN);
-                }
-                if (up_obj < RALPH_INFINITY/2) {
-                    update_pseudo_costs(solver, j, val, parent_obj, up_obj, BRANCH_UP);
-                }
-                strong_count++;
-            } else {
-                /* Strong branching failed (tableau replaced) - stop probing */
-                strong_failed = 1;
-            }
-
-            down_est = frac * solver->pseudo_cost_down[j];
-            up_est = (1.0 - frac) * solver->pseudo_cost_up[j];
-        } else {
-            down_est = frac * solver->pseudo_cost_down[j];
-            up_est = (1.0 - frac) * solver->pseudo_cost_up[j];
+        if (need_strong && solver->lp_solver && solver->lp_solver->tableau) {
+            double score = fmax(down_est, RALPH_ZERO_TOL) * fmax(up_est, RALPH_ZERO_TOL);
+            reliability_shortlist_insert(strong_vars, strong_vals, strong_fracs,
+                                         strong_scores, &strong_candidates,
+                                         j, val, frac, score);
         }
 
         double score = fmax(down_est, RALPH_ZERO_TOL) * fmax(up_est, RALPH_ZERO_TOL);
 
+        if (score > best_score) {
+            best_score = score;
+            best_var = j;
+        }
+    }
+
+    for (int c = 0; c < strong_candidates && strong_count < strong_limit; c++) {
+        int j = strong_vars[c];
+        double val = strong_vals[c];
+        double frac = strong_fracs[c];
+        double down_obj, up_obj;
+
+        int sb_result = strong_branch(solver, j, val, &down_obj, &up_obj,
+                                      strong_pivot_budget);
+
+        /* Re-read solution pointer: strong_branch() may recover LP state. */
+        if (solver->lp_solver) {
+            solution = solver->lp_solver->solution;
+        }
+        if (!solution) break;  /* LP state lost, recovery handled below */
+
+        if (sb_result == 0) {
+            double parent_obj = solver->lp_solver->obj_value;
+            if (down_obj < RALPH_INFINITY / 2) {
+                update_pseudo_costs(solver, j, val, parent_obj, down_obj, BRANCH_DOWN);
+            }
+            if (up_obj < RALPH_INFINITY / 2) {
+                update_pseudo_costs(solver, j, val, parent_obj, up_obj, BRANCH_UP);
+            }
+            strong_count++;
+        } else {
+            strong_failed = 1;
+            break;
+        }
+
+        double down_est = frac * solver->pseudo_cost_down[j];
+        double up_est = (1.0 - frac) * solver->pseudo_cost_up[j];
+        double score = fmax(down_est, RALPH_ZERO_TOL) * fmax(up_est, RALPH_ZERO_TOL);
         if (score > best_score) {
             best_score = score;
             best_var = j;

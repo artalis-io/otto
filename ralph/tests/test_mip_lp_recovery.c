@@ -383,6 +383,8 @@ static void test_reliability_no_incumbent_probe_throttle(void) {
     ASSERT(branch_var >= 0, "Reliability selector returns a branch variable");
     ASSERT(mip->strong_branch_probes > probes_before,
            "Reliability probing active in early no-incumbent search");
+    ASSERT(mip->strong_branch_probes - probes_before <= MIP_RELIABILITY_MAX_STRONG,
+           "Early no-incumbent probing respects per-node probe cap");
 
     /* Deep no-incumbent search: strong probing should be throttled off. */
     ASSERT(mip_recover_root_relaxation(mip) == 0, "Throttle LP recovery before deep-search check succeeds");
@@ -398,19 +400,35 @@ static void test_reliability_no_incumbent_probe_throttle(void) {
     ASSERT(mip->strong_branch_probes == probes_before,
            "Deep no-incumbent reliability skips strong probes");
 
-    /* Once incumbent exists, probing should be re-enabled immediately. */
-    ASSERT(mip_recover_root_relaxation(mip) == 0, "Throttle LP recovery before incumbent check succeeds");
+    /* Early post-incumbent search keeps only a small bootstrap probe budget. */
+    ASSERT(mip_recover_root_relaxation(mip) == 0, "Throttle LP recovery before post-incumbent bootstrap succeeds");
     reset_reliability_counts(mip);
     force_fractional_integer_solution(mip, 0.5);
     mip->has_incumbent = 1;
-    mip->nodes_explored = MIP_RELIABILITY_NO_INCUMBENT_DISABLE_AFTER + 8;
+    mip->nodes_explored = 0;
     probes_before = mip->strong_branch_probes;
     branch_var = -1;
     ASSERT(select_branch_variable(mip, mip->lp_solver->solution, &branch_var) == 0,
-           "Reliability selector succeeds after incumbent");
-    ASSERT(branch_var >= 0, "Post-incumbent selector returns branch variable");
+           "Reliability selector succeeds in early post-incumbent search");
+    ASSERT(branch_var >= 0, "Early post-incumbent selector returns branch variable");
     ASSERT(mip->strong_branch_probes > probes_before,
-           "Post-incumbent reliability re-enables strong probes");
+           "Early post-incumbent reliability still allows bootstrap probing");
+    ASSERT(mip->strong_branch_probes - probes_before <= MIP_RELIABILITY_POST_INCUMBENT_MAX_STRONG,
+           "Early post-incumbent probing uses reduced probe cap");
+
+    /* Once enough nodes are explored with an incumbent, stop strong probing. */
+    ASSERT(mip_recover_root_relaxation(mip) == 0, "Throttle LP recovery before late post-incumbent check succeeds");
+    reset_reliability_counts(mip);
+    force_fractional_integer_solution(mip, 0.5);
+    mip->has_incumbent = 1;
+    mip->nodes_explored = MIP_RELIABILITY_POST_INCUMBENT_PROBE_NODES + 8;
+    probes_before = mip->strong_branch_probes;
+    branch_var = -1;
+    ASSERT(select_branch_variable(mip, mip->lp_solver->solution, &branch_var) == 0,
+           "Reliability selector succeeds in late post-incumbent search");
+    ASSERT(branch_var >= 0, "Late post-incumbent selector returns branch variable");
+    ASSERT(mip->strong_branch_probes == probes_before,
+           "Late post-incumbent reliability skips strong probes");
 
     mip_free(mip);
     ralph_test_free(model);
