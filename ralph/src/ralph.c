@@ -3461,6 +3461,15 @@ int ralph_core_get_last_mip_telemetry(const RalphModel *model, RalphMIPTelemetry
     telemetry->lap_nodes_solved = mip->lap_nodes_solved;
     telemetry->simplex_nodes_solved = mip->simplex_nodes_solved;
     telemetry->node_lp_cold_starts = mip->node_lp_cold_starts;
+    telemetry->probe_child_snapshots_saved = mip->probe_child_snapshots_saved;
+    telemetry->probe_child_warm_applied = mip->probe_child_warm_applied;
+    telemetry->cold_start_no_saved_basis = mip->cold_start_no_saved_basis;
+    telemetry->cold_start_saved_basis_fallback = mip->cold_start_saved_basis_fallback;
+    telemetry->cold_start_probe_restore_failure = mip->cold_start_probe_restore_failure;
+    telemetry->cold_start_live_restore_failure = mip->cold_start_live_restore_failure;
+    telemetry->cold_start_warm_reopt_failure = mip->cold_start_warm_reopt_failure;
+    telemetry->cold_start_stage_retry = mip->cold_start_stage_retry;
+    telemetry->cold_start_branch_recovery = mip->cold_start_branch_recovery;
 
     telemetry->node_basis_warm_attempts = mip->node_basis_warm_attempts;
     telemetry->node_basis_warm_applied = mip->node_basis_warm_applied;

@@ -71,7 +71,17 @@ int fw_bench_run(
     double total_mip_strong_branch_time = 0.0;
     double total_mip_strong_branch_probes = 0.0;
     double total_mip_cold_starts = 0.0;
+    double total_mip_probe_child_snapshots_saved = 0.0;
+    double total_mip_probe_child_warm_applied = 0.0;
+    double total_mip_node_basis_staged = 0.0;
     double total_mip_warm_rejects = 0.0;
+    double total_mip_cold_start_no_saved_basis = 0.0;
+    double total_mip_cold_start_saved_basis_fallback = 0.0;
+    double total_mip_cold_start_probe_restore_failure = 0.0;
+    double total_mip_cold_start_live_restore_failure = 0.0;
+    double total_mip_cold_start_warm_reopt_failure = 0.0;
+    double total_mip_cold_start_stage_retry = 0.0;
+    double total_mip_cold_start_branch_recovery = 0.0;
     double total_mip_root_cuts_applied = 0.0;
     double total_mip_non_root_cuts_generated = 0.0;
     double total_mip_non_root_cuts_applied = 0.0;
@@ -157,7 +167,17 @@ int fw_bench_run(
             total_mip_strong_branch_time += solution.mip.strong_branch_time_ms;
             total_mip_strong_branch_probes += solution.mip.strong_branch_probes;
             total_mip_cold_starts += solution.mip.node_lp_cold_starts;
+            total_mip_probe_child_snapshots_saved += solution.mip.probe_child_snapshots_saved;
+            total_mip_probe_child_warm_applied += solution.mip.probe_child_warm_applied;
+            total_mip_node_basis_staged += solution.mip.node_basis_staged;
             total_mip_warm_rejects += solution.mip.node_basis_warm_rejected;
+            total_mip_cold_start_no_saved_basis += solution.mip.cold_start_no_saved_basis;
+            total_mip_cold_start_saved_basis_fallback += solution.mip.cold_start_saved_basis_fallback;
+            total_mip_cold_start_probe_restore_failure += solution.mip.cold_start_probe_restore_failure;
+            total_mip_cold_start_live_restore_failure += solution.mip.cold_start_live_restore_failure;
+            total_mip_cold_start_warm_reopt_failure += solution.mip.cold_start_warm_reopt_failure;
+            total_mip_cold_start_stage_retry += solution.mip.cold_start_stage_retry;
+            total_mip_cold_start_branch_recovery += solution.mip.cold_start_branch_recovery;
             total_mip_root_cuts_applied += solution.mip.root_cuts_applied;
             total_mip_non_root_cuts_generated += solution.mip.non_root_cuts_generated;
             total_mip_non_root_cuts_applied += solution.mip.non_root_cuts_applied;
@@ -281,7 +301,17 @@ int fw_bench_run(
         results->mip_strong_branch_time_ms_avg = total_mip_strong_branch_time / denom;
         results->mip_strong_branch_probes_avg = total_mip_strong_branch_probes / denom;
         results->mip_cold_starts_avg = total_mip_cold_starts / denom;
+        results->mip_probe_child_snapshots_saved_avg = total_mip_probe_child_snapshots_saved / denom;
+        results->mip_probe_child_warm_applied_avg = total_mip_probe_child_warm_applied / denom;
+        results->mip_node_basis_staged_avg = total_mip_node_basis_staged / denom;
         results->mip_warm_rejects_avg = total_mip_warm_rejects / denom;
+        results->mip_cold_start_no_saved_basis_avg = total_mip_cold_start_no_saved_basis / denom;
+        results->mip_cold_start_saved_basis_fallback_avg = total_mip_cold_start_saved_basis_fallback / denom;
+        results->mip_cold_start_probe_restore_failure_avg = total_mip_cold_start_probe_restore_failure / denom;
+        results->mip_cold_start_live_restore_failure_avg = total_mip_cold_start_live_restore_failure / denom;
+        results->mip_cold_start_warm_reopt_failure_avg = total_mip_cold_start_warm_reopt_failure / denom;
+        results->mip_cold_start_stage_retry_avg = total_mip_cold_start_stage_retry / denom;
+        results->mip_cold_start_branch_recovery_avg = total_mip_cold_start_branch_recovery / denom;
         results->mip_root_cuts_applied_avg = total_mip_root_cuts_applied / denom;
         results->mip_non_root_cuts_generated_avg = total_mip_non_root_cuts_generated / denom;
         results->mip_non_root_cuts_applied_avg = total_mip_non_root_cuts_applied / denom;
@@ -360,7 +390,17 @@ void fw_bench_print_results(
             printf("    \"strong_branch_time_ms_avg\": %.2f,\n", results->mip_strong_branch_time_ms_avg);
             printf("    \"strong_branch_probes_avg\": %.2f,\n", results->mip_strong_branch_probes_avg);
             printf("    \"cold_starts_avg\": %.2f,\n", results->mip_cold_starts_avg);
+            printf("    \"probe_child_snapshots_saved_avg\": %.2f,\n", results->mip_probe_child_snapshots_saved_avg);
+            printf("    \"probe_child_warm_applied_avg\": %.2f,\n", results->mip_probe_child_warm_applied_avg);
+            printf("    \"node_basis_staged_avg\": %.2f,\n", results->mip_node_basis_staged_avg);
             printf("    \"warm_rejects_avg\": %.2f,\n", results->mip_warm_rejects_avg);
+            printf("    \"cold_start_no_saved_basis_avg\": %.2f,\n", results->mip_cold_start_no_saved_basis_avg);
+            printf("    \"cold_start_saved_basis_fallback_avg\": %.2f,\n", results->mip_cold_start_saved_basis_fallback_avg);
+            printf("    \"cold_start_probe_restore_failure_avg\": %.2f,\n", results->mip_cold_start_probe_restore_failure_avg);
+            printf("    \"cold_start_live_restore_failure_avg\": %.2f,\n", results->mip_cold_start_live_restore_failure_avg);
+            printf("    \"cold_start_warm_reopt_failure_avg\": %.2f,\n", results->mip_cold_start_warm_reopt_failure_avg);
+            printf("    \"cold_start_stage_retry_avg\": %.2f,\n", results->mip_cold_start_stage_retry_avg);
+            printf("    \"cold_start_branch_recovery_avg\": %.2f,\n", results->mip_cold_start_branch_recovery_avg);
             printf("    \"root_cuts_applied_avg\": %.2f,\n", results->mip_root_cuts_applied_avg);
             printf("    \"non_root_cuts_generated_avg\": %.2f,\n", results->mip_non_root_cuts_generated_avg);
             printf("    \"non_root_cuts_applied_avg\": %.2f,\n", results->mip_non_root_cuts_applied_avg);
@@ -428,9 +468,20 @@ void fw_bench_print_results(
             printf("  Strong branching: %.2f probes avg, %.2f ms avg\n",
                    results->mip_strong_branch_probes_avg,
                    results->mip_strong_branch_time_ms_avg);
+            printf("  Probe snapshots saved / reused warm: %.2f / %.2f avg\n",
+                   results->mip_probe_child_snapshots_saved_avg,
+                   results->mip_probe_child_warm_applied_avg);
             printf("  Warm rejects / cold starts: %.2f / %.2f avg\n",
                    results->mip_warm_rejects_avg,
                    results->mip_cold_starts_avg);
+            printf("  Cold starts (no-basis/saved-basis/probe/live/warm-reopt/stage-retry/branch-recovery): %.2f / %.2f / %.2f / %.2f / %.2f / %.2f / %.2f avg\n",
+                   results->mip_cold_start_no_saved_basis_avg,
+                   results->mip_cold_start_saved_basis_fallback_avg,
+                   results->mip_cold_start_probe_restore_failure_avg,
+                   results->mip_cold_start_live_restore_failure_avg,
+                   results->mip_cold_start_warm_reopt_failure_avg,
+                   results->mip_cold_start_stage_retry_avg,
+                   results->mip_cold_start_branch_recovery_avg);
             printf("  Root cuts / non-root cuts applied: %.2f / %.2f avg\n",
                    results->mip_root_cuts_applied_avg,
                    results->mip_non_root_cuts_applied_avg);

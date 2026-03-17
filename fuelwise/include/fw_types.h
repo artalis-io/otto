@@ -205,6 +205,15 @@ typedef struct {
     int lap_nodes_solved;
     int simplex_nodes_solved;
     int node_lp_cold_starts;
+    int probe_child_snapshots_saved;
+    int probe_child_warm_applied;
+    int cold_start_no_saved_basis;
+    int cold_start_saved_basis_fallback;
+    int cold_start_probe_restore_failure;
+    int cold_start_live_restore_failure;
+    int cold_start_warm_reopt_failure;
+    int cold_start_stage_retry;
+    int cold_start_branch_recovery;
 
     int node_basis_warm_attempts;
     int node_basis_warm_applied;

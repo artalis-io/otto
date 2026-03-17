@@ -23,6 +23,39 @@ static double mip_branch_now_ms(void) {
     return ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0;
 }
 
+static int save_lp_basis_state_to_node(const SimplexSolver *lp, BBNode *node, int basis_source) {
+    const SimplexTableau *tab;
+
+    if (!lp || !lp->tableau || !node) return -1;
+    tab = lp->tableau;
+
+    if (!node->basis || node->basis_size != tab->m) {
+        free(node->basis);
+        node->basis = (int*)calloc((size_t)tab->m, sizeof(int));
+        node->basis_size = node->basis ? tab->m : 0;
+    }
+    if (!node->var_status || node->var_status_size != tab->n) {
+        free(node->var_status);
+        node->var_status = (VarStatus*)calloc((size_t)tab->n, sizeof(VarStatus));
+        node->var_status_size = node->var_status ? tab->n : 0;
+    }
+    if (!node->basis || !node->var_status) {
+        free(node->basis);
+        free(node->var_status);
+        node->basis = NULL;
+        node->var_status = NULL;
+        node->basis_size = 0;
+        node->var_status_size = 0;
+        node->basis_source = NODE_BASIS_SOURCE_NONE;
+        return -1;
+    }
+
+    memcpy(node->basis, tab->basis, (size_t)tab->m * sizeof(int));
+    memcpy(node->var_status, tab->var_status, (size_t)tab->n * sizeof(VarStatus));
+    node->basis_source = basis_source;
+    return 0;
+}
+
 /* ============================================================================
  * Node Priority Queue
  * ============================================================================ */
@@ -280,6 +313,7 @@ BBNode* bb_node_create(int num_vars) {
     node->branch_var = -1;
     node->lp_bound = -RALPH_INFINITY;
     node->estimate = -RALPH_INFINITY;
+    node->basis_source = NODE_BASIS_SOURCE_NONE;
 
     return node;
 }
@@ -291,6 +325,7 @@ void bb_node_free(BBNode *node) {
     free(node->ub);
     free(node->basis);
     free(node->var_status);
+    node->basis_source = NODE_BASIS_SOURCE_NONE;
     free(node);
 }
 
@@ -328,6 +363,7 @@ BBNode* bb_node_copy(const BBNode *src, int num_vars) {
             memcpy(dst->var_status, src->var_status, src->var_status_size * sizeof(VarStatus));
             dst->basis_size = src->basis_size;
             dst->var_status_size = src->var_status_size;
+            dst->basis_source = src->basis_source;
         }
     }
 
@@ -397,6 +433,7 @@ BBNodePool* bb_node_pool_create(int capacity, int num_vars) {
         pool->nodes[i].id = -1;  /* Mark as unused */
         pool->nodes[i].basis = NULL;
         pool->nodes[i].var_status = NULL;
+        pool->nodes[i].basis_source = NODE_BASIS_SOURCE_NONE;
         pool->free_list[i] = capacity - 1 - i;  /* Stack: top = 0 */
     }
     pool->free_count = capacity;
@@ -444,6 +481,7 @@ BBNode* bb_node_pool_get(BBNodePool *pool) {
     node->lp_status = 0;
     node->lp_iterations = 0;
     node->estimate = -RALPH_INFINITY;
+    node->basis_source = NODE_BASIS_SOURCE_NONE;
     /* basis/var_status may have data from previous use - leave for caller */
 
     /* Track high-water mark */
@@ -479,6 +517,7 @@ void bb_node_pool_return(BBNodePool *pool, BBNode *node) {
     node->var_status = NULL;
     node->basis_size = 0;
     node->var_status_size = 0;
+    node->basis_source = NODE_BASIS_SOURCE_NONE;
 
     /* Push to free list */
     pool->free_list[pool->free_count++] = (int)offset;
@@ -513,6 +552,7 @@ BBNode* bb_node_pool_copy(BBNodePool *pool, const BBNode *src, int num_vars) {
             memcpy(dst->var_status, src->var_status, src->var_status_size * sizeof(VarStatus));
             dst->basis_size = src->basis_size;
             dst->var_status_size = src->var_status_size;
+            dst->basis_source = src->basis_source;
         }
     }
 
@@ -613,7 +653,8 @@ static int select_pseudo_cost(MIPSolver *solver, const double *solution) {
  * Uses the MIP/LP adapter so probing/recovery flows through one LP-state API.
  */
 int strong_branch(MIPSolver *solver, int var, double val,
-                  double *down_obj, double *up_obj, int max_iter) {
+                 double *down_obj, double *up_obj, int max_iter,
+                 BBNode *down_node, BBNode *up_node) {
     int recovered = 0;
 
     *down_obj = RALPH_INFINITY;
@@ -661,6 +702,9 @@ int strong_branch(MIPSolver *solver, int var, double val,
         goto strong_fail;
     }
     *down_obj = (lp->status == RALPH_STATUS_OPTIMAL) ? lp->obj_value : RALPH_INFINITY;
+    if (down_node && save_lp_basis_state_to_node(lp, down_node, NODE_BASIS_SOURCE_STRONG_PROBE) == 0) {
+        solver->probe_child_snapshots_saved++;
+    }
 
     if (mip_lp_restore_warm_basis(lp, m, n, save_basis, save_var_status) != 0 ||
         !lp->tableau || !lp->solution || lp->tableau != tab) {
@@ -677,6 +721,9 @@ int strong_branch(MIPSolver *solver, int var, double val,
         goto strong_fail;
     }
     *up_obj = (lp->status == RALPH_STATUS_OPTIMAL) ? lp->obj_value : RALPH_INFINITY;
+    if (up_node && save_lp_basis_state_to_node(lp, up_node, NODE_BASIS_SOURCE_STRONG_PROBE) == 0) {
+        solver->probe_child_snapshots_saved++;
+    }
 
     /* Restore original bounds and basis */
     probe_lb[var] = orig_lb;
@@ -848,7 +895,7 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
         double down_obj, up_obj;
 
         int sb_result = strong_branch(solver, j, val, &down_obj, &up_obj,
-                                      strong_pivot_budget);
+                                      strong_pivot_budget, NULL, NULL);
 
         /* Re-read solution pointer: strong_branch() may recover LP state. */
         if (solver->lp_solver) {

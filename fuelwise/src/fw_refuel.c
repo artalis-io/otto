@@ -46,6 +46,15 @@ static void fw_capture_mip_telemetry(FWRefuelSolution *solution, const RalphMIPM
     solution->mip.lap_nodes_solved = tel.lap_nodes_solved;
     solution->mip.simplex_nodes_solved = tel.simplex_nodes_solved;
     solution->mip.node_lp_cold_starts = tel.node_lp_cold_starts;
+    solution->mip.probe_child_snapshots_saved = tel.probe_child_snapshots_saved;
+    solution->mip.probe_child_warm_applied = tel.probe_child_warm_applied;
+    solution->mip.cold_start_no_saved_basis = tel.cold_start_no_saved_basis;
+    solution->mip.cold_start_saved_basis_fallback = tel.cold_start_saved_basis_fallback;
+    solution->mip.cold_start_probe_restore_failure = tel.cold_start_probe_restore_failure;
+    solution->mip.cold_start_live_restore_failure = tel.cold_start_live_restore_failure;
+    solution->mip.cold_start_warm_reopt_failure = tel.cold_start_warm_reopt_failure;
+    solution->mip.cold_start_stage_retry = tel.cold_start_stage_retry;
+    solution->mip.cold_start_branch_recovery = tel.cold_start_branch_recovery;
 
     solution->mip.node_basis_warm_attempts = tel.node_basis_warm_attempts;
     solution->mip.node_basis_warm_applied = tel.node_basis_warm_applied;

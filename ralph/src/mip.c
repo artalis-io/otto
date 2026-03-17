@@ -34,6 +34,70 @@ static int mip_node_pruned_by_bound(const MIPSolver *solver, const LPModel *mode
     return lp_obj <= solver->best_obj + RALPH_OPT_TOL;
 }
 
+typedef enum {
+    NODE_COLD_START_REASON_NONE = 0,
+    NODE_COLD_START_REASON_NO_SAVED_BASIS,
+    NODE_COLD_START_REASON_SAVED_BASIS_FALLBACK,
+    NODE_COLD_START_REASON_PROBE_RESTORE_FAILURE,
+    NODE_COLD_START_REASON_LIVE_RESTORE_FAILURE,
+    NODE_COLD_START_REASON_WARM_REOPT_FAILURE,
+    NODE_COLD_START_REASON_STAGE_RETRY,
+    NODE_COLD_START_REASON_BRANCH_RECOVERY
+} NodeColdStartReason;
+
+static void record_node_cold_start(MIPSolver *solver, NodeColdStartReason reason) {
+    if (!solver) return;
+
+    solver->node_lp_cold_starts++;
+    switch (reason) {
+        case NODE_COLD_START_REASON_NO_SAVED_BASIS:
+            solver->cold_start_no_saved_basis++;
+            break;
+        case NODE_COLD_START_REASON_SAVED_BASIS_FALLBACK:
+            solver->cold_start_saved_basis_fallback++;
+            break;
+        case NODE_COLD_START_REASON_PROBE_RESTORE_FAILURE:
+            solver->cold_start_probe_restore_failure++;
+            break;
+        case NODE_COLD_START_REASON_LIVE_RESTORE_FAILURE:
+            solver->cold_start_live_restore_failure++;
+            break;
+        case NODE_COLD_START_REASON_WARM_REOPT_FAILURE:
+            solver->cold_start_warm_reopt_failure++;
+            break;
+        case NODE_COLD_START_REASON_STAGE_RETRY:
+            solver->cold_start_stage_retry++;
+            break;
+        case NODE_COLD_START_REASON_BRANCH_RECOVERY:
+            solver->cold_start_branch_recovery++;
+            break;
+        case NODE_COLD_START_REASON_NONE:
+        default:
+            break;
+    }
+}
+
+static int mip_final_probe_handoff_enabled(const MIPSolver *solver) {
+    if (!solver) return 0;
+    if (solver->var_select != VAR_SELECT_STRONG_BRANCH &&
+        solver->var_select != VAR_SELECT_RELIABILITY) {
+        return 0;
+    }
+    if (solver->has_incumbent) {
+        return solver->nodes_explored < MIP_PROBE_HANDOFF_POST_INCUMBENT_PROBE_NODES;
+    }
+    return solver->nodes_explored < MIP_PROBE_HANDOFF_NO_INCUMBENT_PROBE_NODES;
+}
+
+static int mip_final_probe_pivot_budget(const MIPSolver *solver) {
+    if (!solver) return MIP_PROBE_HANDOFF_PIVOT_BUDGET;
+    if (solver->has_incumbent) return MIP_PROBE_HANDOFF_POST_INCUMBENT_PIVOT_BUDGET;
+    if (solver->nodes_explored >= MIP_PROBE_HANDOFF_NO_INCUMBENT_TAPER_AFTER) {
+        return MIP_PROBE_HANDOFF_TAPERED_PIVOT_BUDGET;
+    }
+    return MIP_PROBE_HANDOFF_PIVOT_BUDGET;
+}
+
 /* Apply P5/P6 feature flags and iteration budget from MIP solver to LP sub-solver.
  * MIP LP solves should NEVER run for 1M+ iterations — if v2 cycles for >2000
  * iterations on a node LP, something is wrong and cold-start fallback handles it. */
@@ -1117,6 +1181,7 @@ static void clear_node_basis(BBNode *node) {
     node->var_status = NULL;
     node->basis_size = 0;
     node->var_status_size = 0;
+    node->basis_source = NODE_BASIS_SOURCE_NONE;
 }
 
 static int node_basis_snapshot_sane(const BBNode *node) {
@@ -1150,7 +1215,7 @@ static int node_basis_snapshot_sane(const BBNode *node) {
 }
 
 /* Save current basis from tableau to node */
-static void save_basis_to_node(SimplexSolver *lp, BBNode *node, int num_vars) {
+static void save_basis_to_node(SimplexSolver *lp, BBNode *node, int num_vars, int basis_source) {
     (void)num_vars;  /* Not needed, we get sizes from tableau */
     if (!lp || !lp->tableau || !node) return;
 
@@ -1173,6 +1238,9 @@ static void save_basis_to_node(SimplexSolver *lp, BBNode *node, int num_vars) {
     if (node->basis && node->var_status) {
         memcpy(node->basis, tab->basis, m * sizeof(int));
         memcpy(node->var_status, tab->var_status, n * sizeof(VarStatus));
+        node->basis_source = basis_source;
+    } else {
+        node->basis_source = NODE_BASIS_SOURCE_NONE;
     }
 }
 
@@ -1191,11 +1259,11 @@ static int stage_node_basis_for_cold_start(MIPSolver *solver, SimplexSolver *lp,
 }
 
 static int restore_node_basis_live(MIPSolver *solver, SimplexSolver *lp,
-                                   BBNode *node) {
+                                   BBNode *node, int allow_artificials) {
     if (!solver || !lp || !lp->tableau || !node_has_saved_basis(node)) return -1;
 
     SimplexTableau *tab = lp->tableau;
-    if (tab->num_artificial != 0) return -1;
+    if (!allow_artificials && tab->num_artificial != 0) return -1;
     if (node->basis_size != tab->m || node->var_status_size != tab->n) return -1;
 
     solver->node_basis_warm_attempts++;
@@ -1304,13 +1372,17 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     SimplexSolver *lp = solver->lp_solver;
     SimplexTableau *tab = lp->tableau;
     int has_saved_basis = node_has_saved_basis(node);
+    int basis_source = has_saved_basis ? node->basis_source : NODE_BASIS_SOURCE_NONE;
     int can_warm_reuse = 0;
     int stage_allowed = (solver->node_basis_stage_cooldown <= 0);
+    int probe_warm_success = 0;
+    NodeColdStartReason cold_start_reason = NODE_COLD_START_REASON_NONE;
     if (has_saved_basis && !node_basis_snapshot_sane(node)) {
         clear_node_basis(node);
         solver->node_basis_warm_rejected++;
         solver->warm_reject_invalid_snapshot++;
         has_saved_basis = 0;
+        basis_source = NODE_BASIS_SOURCE_NONE;
     }
 
     /* Update model bounds from node */
@@ -1331,16 +1403,23 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
 
     /* Warm reuse is only allowed when this node carries a saved LP basis.
      * This removes the old ad-hoc "reuse whatever tableau is lying around" path. */
-    if (has_saved_basis && tab && tab->num_artificial == 0) {
+    if (has_saved_basis && tab &&
+        (basis_source == NODE_BASIS_SOURCE_STRONG_PROBE || tab->num_artificial == 0)) {
         int direct_reuse = (node->id == solver->last_solved_node_id) ||
-                           (node->parent_id == solver->last_solved_node_id);
+                           (basis_source != NODE_BASIS_SOURCE_STRONG_PROBE &&
+                            node->parent_id == solver->last_solved_node_id);
         if (direct_reuse) {
             solver->node_basis_warm_applied++;
             can_warm_reuse = 1;
             tab = lp->tableau;
-        } else if (restore_node_basis_live(solver, lp, node) == 0) {
+        } else if (restore_node_basis_live(solver, lp, node,
+                                           basis_source == NODE_BASIS_SOURCE_STRONG_PROBE) == 0) {
             can_warm_reuse = 1;
             tab = lp->tableau;
+        } else if (basis_source == NODE_BASIS_SOURCE_STRONG_PROBE) {
+            cold_start_reason = NODE_COLD_START_REASON_PROBE_RESTORE_FAILURE;
+        } else {
+            cold_start_reason = NODE_COLD_START_REASON_LIVE_RESTORE_FAILURE;
         }
     }
 
@@ -1355,6 +1434,9 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
             }
             if (rc == 0 && lp->status == RALPH_STATUS_OPTIMAL) {
                 if (mip_solution_within_node_bounds(model, lp->solution, node->lb, node->ub)) {
+                    if (basis_source == NODE_BASIS_SOURCE_STRONG_PROBE) {
+                        probe_warm_success = 1;
+                    }
                     goto node_lp_done;
                 }
                 if (solver->verbose >= 2) {
@@ -1364,8 +1446,14 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
             /* v2 detected infeasible or hit objective limit — valid result */
             if (lp->status == RALPH_STATUS_INFEASIBLE ||
                 lp->status == RALPH_STATUS_OBJ_LIMIT) {
+                if (basis_source == NODE_BASIS_SOURCE_STRONG_PROBE) {
+                    probe_warm_success = 1;
+                }
                 goto node_lp_done;
             }
+        }
+        if (cold_start_reason == NODE_COLD_START_REASON_NONE) {
+            cold_start_reason = NODE_COLD_START_REASON_WARM_REOPT_FAILURE;
         }
         if (solver->verbose >= 2) {
             LP_LOG_STDOUT("  [solve_node_lp] warm path failed, cold starting\n");
@@ -1378,7 +1466,12 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     if (has_saved_basis && stage_allowed) {
         (void)stage_node_basis_for_cold_start(solver, lp, node);
     }
-    solver->node_lp_cold_starts++;
+    if (cold_start_reason == NODE_COLD_START_REASON_NONE) {
+        cold_start_reason = has_saved_basis ?
+            NODE_COLD_START_REASON_SAVED_BASIS_FALLBACK :
+            NODE_COLD_START_REASON_NO_SAVED_BASIS;
+    }
+    record_node_cold_start(solver, cold_start_reason);
     (void)mip_lp_cold_start_primal(lp, 2);
     if (lp->warm_basis_last_rejected) {
         /* Cooldown gate: avoid repeatedly feeding staged warm bases when they
@@ -1389,6 +1482,9 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
         if (solver->node_basis_stage_cooldown < 64)
             solver->node_basis_stage_cooldown = 64;
     } else if (lp->warm_basis_last_applied) {
+        if (basis_source == NODE_BASIS_SOURCE_STRONG_PROBE) {
+            solver->probe_child_warm_applied++;
+        }
         solver->node_basis_stage_cooldown = 0;
     }
     if (lp->status == RALPH_STATUS_OPTIMAL &&
@@ -1403,7 +1499,7 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
         if (solver->node_basis_stage_cooldown < 64) {
             solver->node_basis_stage_cooldown = 64;
         }
-        solver->node_lp_cold_starts++;
+        record_node_cold_start(solver, NODE_COLD_START_REASON_STAGE_RETRY);
         (void)mip_lp_cold_start_primal(lp, 2);
     }
     if (solver->verbose >= 2) {
@@ -1412,6 +1508,9 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     }
 
 node_lp_done:
+    if (probe_warm_success) {
+        solver->probe_child_warm_applied++;
+    }
     node->lp_status = lp->status;
     node->lp_bound = lp->obj_value;
     node->lp_iterations = lp->iterations;
@@ -1491,7 +1590,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
 
     /* Snapshot before heuristics and probing so descendants inherit a clean
      * basis from the node relaxation that was actually solved. */
-    save_basis_to_node(solver->lp_solver, node, model->num_vars);
+    save_basis_to_node(solver->lp_solver, node, model->num_vars, NODE_BASIS_SOURCE_RELAXATION);
     /* Try rounding heuristic */
     double *rounded_sol = (double*)calloc(model->num_vars, sizeof(double));
     if (rounded_sol) {
@@ -1561,7 +1660,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
         int fallback = mip_select_most_infeasible(solver, lp_sol_snapshot ? lp_sol_snapshot : lp_sol);
         if (fallback < 0 && solver->lp_solver && solver->working_model) {
             double recover_start_ms = mip_now_ms();
-            solver->node_lp_cold_starts++;
+            record_node_cold_start(solver, NODE_COLD_START_REASON_BRANCH_RECOVERY);
             if (mip_lp_cold_start_primal(solver->lp_solver, 2) == 0 &&
                 solver->lp_solver->status == RALPH_STATUS_OPTIMAL &&
                 solver->lp_solver->tableau &&
@@ -1626,7 +1725,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
              * fractional-variable detection before pruning the node. */
             if (solver->lp_solver && solver->working_model) {
                 double recover_start_ms = mip_now_ms();
-                solver->node_lp_cold_starts++;
+                record_node_cold_start(solver, NODE_COLD_START_REASON_BRANCH_RECOVERY);
                 if (mip_lp_cold_start_primal(solver->lp_solver, 2) == 0 &&
                     solver->lp_solver->status == RALPH_STATUS_OPTIMAL &&
                     solver->lp_solver->tableau &&
@@ -1671,6 +1770,23 @@ static int process_node(MIPSolver *solver, BBNode *node) {
         }
         free(lp_sol_snapshot);
         return 0;
+    }
+
+    if (mip_final_probe_handoff_enabled(solver) && solver->lp_solver && solver->lp_solver->tableau) {
+        double down_obj = RALPH_INFINITY;
+        double up_obj = RALPH_INFINITY;
+        BBNode *probe_down_node = NULL;
+        BBNode *probe_up_node = NULL;
+
+        if (child_down && child_down->branch_dir == BRANCH_DOWN) probe_down_node = child_down;
+        if (child_up && child_up->branch_dir == BRANCH_DOWN) probe_down_node = child_up;
+        if (child_down && child_down->branch_dir == BRANCH_UP) probe_up_node = child_down;
+        if (child_up && child_up->branch_dir == BRANCH_UP) probe_up_node = child_up;
+
+        (void)strong_branch(solver, branch_var, branch_val,
+                            &down_obj, &up_obj,
+                            mip_final_probe_pivot_budget(solver),
+                            probe_down_node, probe_up_node);
     }
 
     /* Add children to queue */
@@ -1977,7 +2093,7 @@ static int solve_root_node(MIPSolver *solver) {
     /* Save current LP solution to root node for warm starting children */
     root->lp_bound = solver->lp_solver->obj_value;
     root->lp_status = RALPH_STATUS_OPTIMAL;
-    save_basis_to_node(solver->lp_solver, root, model->num_vars);
+    save_basis_to_node(solver->lp_solver, root, model->num_vars, NODE_BASIS_SOURCE_RELAXATION);
     solver->last_solved_node_id = root->id;
 
     /* Initialize best bound */

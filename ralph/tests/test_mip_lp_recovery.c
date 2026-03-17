@@ -191,10 +191,26 @@ static void test_strong_branch_probe_contract(void) {
     memcpy(lb_before, tab->lb_ext, (size_t)num_struct * sizeof(double));
     memcpy(ub_before, tab->ub_ext, (size_t)num_struct * sizeof(double));
 
+    BBNode *probe_down_node = bb_node_create(num_struct);
+    BBNode *probe_up_node = bb_node_create(num_struct);
+    ASSERT(probe_down_node && probe_up_node, "Allocated child nodes for probe snapshot capture");
+    if (!probe_down_node || !probe_up_node) {
+        bb_node_free(probe_down_node);
+        bb_node_free(probe_up_node);
+        free(basis_before);
+        free(status_before);
+        free(lb_before);
+        free(ub_before);
+        mip_free(mip);
+        ralph_test_free(model);
+        return;
+    }
+
     double down_obj = RALPH_INFINITY;
     double up_obj = RALPH_INFINITY;
     ASSERT(strong_branch(mip, probe_var, probe_val, &down_obj, &up_obj,
-                         MIP_RELIABILITY_PIVOT_BUDGET) == 0,
+                         MIP_RELIABILITY_PIVOT_BUDGET,
+                         probe_down_node, probe_up_node) == 0,
            "Strong-branch probe succeeds");
     ASSERT(mip->lp_solver && mip->lp_solver->tableau && mip->lp_solver->solution,
            "Strong-branch leaves LP state usable");
@@ -211,9 +227,17 @@ static void test_strong_branch_probe_contract(void) {
            "Bounds restored after probing (ub)");
     ASSERT(mip->strong_branch_probes > 0, "Probe telemetry increments");
     ASSERT(mip->strong_branch_failures == 0, "Probe succeeded without failure");
+    ASSERT(mip->probe_child_snapshots_saved >= 1, "Probe snapshot telemetry increments");
+    ASSERT((probe_down_node->basis_source == NODE_BASIS_SOURCE_STRONG_PROBE &&
+            probe_down_node->basis != NULL) ||
+           (probe_up_node->basis_source == NODE_BASIS_SOURCE_STRONG_PROBE &&
+            probe_up_node->basis != NULL),
+           "Strong branch captures reusable child basis state");
     ASSERT(down_obj < RALPH_INFINITY / 2 || up_obj < RALPH_INFINITY / 2,
            "At least one probe branch returned finite LP bound");
 
+    bb_node_free(probe_down_node);
+    bb_node_free(probe_up_node);
     free(basis_before);
     free(status_before);
     free(lb_before);

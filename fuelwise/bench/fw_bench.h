@@ -169,7 +169,17 @@ typedef struct {
     double mip_strong_branch_time_ms_avg;
     double mip_strong_branch_probes_avg;
     double mip_cold_starts_avg;
+    double mip_probe_child_snapshots_saved_avg;
+    double mip_probe_child_warm_applied_avg;
+    double mip_node_basis_staged_avg;
     double mip_warm_rejects_avg;
+    double mip_cold_start_no_saved_basis_avg;
+    double mip_cold_start_saved_basis_fallback_avg;
+    double mip_cold_start_probe_restore_failure_avg;
+    double mip_cold_start_live_restore_failure_avg;
+    double mip_cold_start_warm_reopt_failure_avg;
+    double mip_cold_start_stage_retry_avg;
+    double mip_cold_start_branch_recovery_avg;
     double mip_root_cuts_applied_avg;
     double mip_non_root_cuts_generated_avg;
     double mip_non_root_cuts_applied_avg;

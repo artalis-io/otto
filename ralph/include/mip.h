@@ -28,6 +28,12 @@ extern "C" {
 #define MIP_RELIABILITY_POST_INCUMBENT_PROBE_NODES 64   /* Probe only during early post-incumbent bootstrap */
 #define MIP_RELIABILITY_POST_INCUMBENT_MAX_STRONG 1     /* Keep post-incumbent probing cheap */
 #define MIP_RELIABILITY_POST_INCUMBENT_PIVOT_BUDGET 32  /* Keep post-incumbent probes short */
+#define MIP_PROBE_HANDOFF_NO_INCUMBENT_PROBE_NODES 128  /* Only keep child probe states during early tree bootstrap */
+#define MIP_PROBE_HANDOFF_NO_INCUMBENT_TAPER_AFTER 64   /* Shrink handoff probe budget after early nodes */
+#define MIP_PROBE_HANDOFF_PIVOT_BUDGET 16               /* Child-state handoff only needs a short dual polish */
+#define MIP_PROBE_HANDOFF_TAPERED_PIVOT_BUDGET 8        /* Tighter cap once the tree is established */
+#define MIP_PROBE_HANDOFF_POST_INCUMBENT_PROBE_NODES 32 /* Very limited handoff after an incumbent exists */
+#define MIP_PROBE_HANDOFF_POST_INCUMBENT_PIVOT_BUDGET 8 /* Keep post-incumbent handoff probes minimal */
 #define MIP_RELIABILITY_CANDIDATE_LIMIT 8               /* Only probe the top pseudo-cost candidates */
 #define MIP_NON_ROOT_CUT_MAX_DEPTH 4                    /* Only separate early/shallow nodes */
 #define MIP_NON_ROOT_CUT_MAX_NODES 128                  /* Stop non-root separation after early tree bootstrap */
@@ -70,6 +76,13 @@ typedef enum {
     BRANCH_DOWN = 0,
     BRANCH_UP = 1
 } BranchDir;
+
+/* Saved-basis provenance for node hot starts. */
+typedef enum {
+    NODE_BASIS_SOURCE_NONE = 0,
+    NODE_BASIS_SOURCE_RELAXATION = 1,
+    NODE_BASIS_SOURCE_STRONG_PROBE = 2
+} NodeBasisSource;
 
 /* Cut types */
 typedef enum {
@@ -127,6 +140,7 @@ typedef struct BBNode {
     VarStatus *var_status;
     int basis_size;         /* Size of basis array (m = num constraints) */
     int var_status_size;    /* Size of var_status array (n = extended vars) */
+    int basis_source;       /* NodeBasisSource */
 
 } BBNode;
 
@@ -248,6 +262,15 @@ typedef struct {
     int node_basis_staged;        /* Cold starts that staged node basis via LP warm API */
     int node_basis_stage_cooldown; /* Nodes to skip staged warm-basis after repeated rejection */
     int node_lp_cold_starts;      /* Cold-start node LP solves/re-solves */
+    int probe_child_snapshots_saved;     /* Child probe bases captured after final kept probe */
+    int probe_child_warm_applied;        /* Probe-sourced child bases accepted by warm dual reopt */
+    int cold_start_no_saved_basis;       /* Cold starts with no saved node basis */
+    int cold_start_saved_basis_fallback; /* Saved basis existed, but node still cold-started */
+    int cold_start_probe_restore_failure;/* Probe-sourced live restore failed */
+    int cold_start_live_restore_failure; /* Generic live restore failed */
+    int cold_start_warm_reopt_failure;   /* Warm dual reopt fell back to cold start */
+    int cold_start_stage_retry;          /* Extra cold start after staged-warm rejection */
+    int cold_start_branch_recovery;      /* Cold start used to recover stale branch-selector LP state */
     int warm_reject_invalid_snapshot;      /* Saved basis snapshot failed sanity checks */
     int warm_reject_restore_failure;       /* Live restore rejected by LP warm-basis API */
     int warm_reject_stage_failure;         /* Staged warm basis rejected before cold-start solve */
@@ -327,7 +350,8 @@ void compute_branch_children(MIPSolver *solver, BBNode *parent, int branch_var,
 
 /* Strong branching */
 int strong_branch(MIPSolver *solver, int var, double val,
-                  double *down_obj, double *up_obj, int max_iter);
+                  double *down_obj, double *up_obj, int max_iter,
+                  BBNode *down_node, BBNode *up_node);
 
 /* Pseudo-cost branching */
 void update_pseudo_costs(MIPSolver *solver, int var, double val,
