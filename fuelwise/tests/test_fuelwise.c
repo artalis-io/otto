@@ -1031,6 +1031,7 @@ void test_mip_hint_components(void)
     int num_configs = 7;
 
     double baseline_cost = -1.0;
+    int baseline_index = -1;
 
     for (int c = 0; c < num_configs; c++) {
         fw_set_mip_hint_flags(configs[c].flags);
@@ -1051,17 +1052,16 @@ void test_mip_hint_components(void)
 
             if (baseline_cost < 0) {
                 baseline_cost = solution.total_cost;
+                baseline_index = c;
             } else {
-                /* All configs should produce the same optimal cost */
                 double diff = solution.total_cost - baseline_cost;
                 if (diff < 0) diff = -diff;
-                if (diff > 0.02) {
-                    printf("    WARNING: cost differs from baseline by $%.2f\n", diff);
-                }
+                ASSERT(diff <= 0.02, "MIP hint config preserves baseline objective");
             }
         } else {
             printf("  %-25s  FAILED (ret=%d, status=%d)\n",
                    configs[c].name, ret, solution.status);
+            ASSERT(0, "MIP hint config solved optimally");
         }
 
         fw_free_solution(&solution);
@@ -1070,8 +1070,8 @@ void test_mip_hint_components(void)
     /* Reset to default */
     fw_set_mip_hint_flags(0);
 
-    ASSERT(baseline_cost > 0, "All-hints config found optimal solution");
-    printf("  All configurations produce consistent results\n");
+    ASSERT(baseline_cost > 0 && baseline_index == 0,
+           "All-hints config found baseline optimal solution");
 }
 
 /* ============================================================================

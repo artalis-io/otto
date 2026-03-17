@@ -146,7 +146,9 @@ typedef struct {
 
     /* GLPK comparison (only populated when glpk_compare enabled) */
     int glpk_enabled;
+    int glpk_num_attempted;
     int glpk_num_solved;
+    int glpk_num_failed;
     int glpk_num_match;             /* Objectives match within tolerance */
     double glpk_solve_time_avg;
     double glpk_solve_time_min;

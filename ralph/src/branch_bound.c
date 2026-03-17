@@ -1160,9 +1160,21 @@ void compute_branch_children(MIPSolver *solver, BBNode *parent, int branch_var,
  * ============================================================================ */
 
 int check_integer_feasibility(MIPSolver *solver, const double *solution) {
+    const LPModel *model;
+
+    if (!solver || !solution) return 0;
+    model = solver->working_model ? solver->working_model : solver->original_model;
+
     for (int k = 0; k < solver->num_integers; k++) {
         int j = solver->integer_vars[k];
         double val = solution[j];
+        if (!isfinite(val)) {
+            return 0;
+        }
+        if (model &&
+            (val < model->lb[j] - RALPH_FEAS_TOL || val > model->ub[j] + RALPH_FEAS_TOL)) {
+            return 0;  /* Violates variable bounds */
+        }
         double frac = val - floor(val);
 
         if (frac > RALPH_INT_TOL && frac < 1.0 - RALPH_INT_TOL) {

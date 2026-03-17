@@ -7,6 +7,8 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <math.h>
 #include "ralph_test_mod_api.h"
 #include "lp.h"
 #include "mip.h"
@@ -15,6 +17,253 @@
 SimplexSolver* simplex_create(LPModel *model);
 int simplex_solve(SimplexSolver *solver);
 void simplex_free(SimplexSolver *solver);
+
+typedef struct {
+    int num_vars;
+    int num_cons;
+    int num_integers;
+    double *obj;
+    double *lb;
+    double *ub;
+    char *vtype;
+    int *con_row;
+    int *con_col;
+    double *con_val;
+    int nnz;
+    int nnz_alloc;
+    double *rhs;
+    char *sense_con;
+} RegressionMIPProblem;
+
+static unsigned int reg_seed = 42;
+
+static void reg_seed_random(unsigned int seed)
+{
+    reg_seed = seed;
+}
+
+static double reg_rand_double(double min, double max)
+{
+    reg_seed = reg_seed * 1103515245 + 12345;
+    return min + ((double)(reg_seed % 100000) / 100000.0) * (max - min);
+}
+
+static int reg_rand_int(int min, int max)
+{
+    reg_seed = reg_seed * 1103515245 + 12345;
+    return min + (reg_seed % (unsigned int)(max - min + 1));
+}
+
+static RegressionMIPProblem *reg_mip_create(int num_vars, int num_cons, int est_nnz)
+{
+    RegressionMIPProblem *prob =
+        (RegressionMIPProblem*)calloc(1, sizeof(RegressionMIPProblem));
+    if (!prob) return NULL;
+
+    prob->num_vars = num_vars;
+    prob->num_cons = num_cons;
+    prob->obj = (double*)calloc((size_t)num_vars, sizeof(double));
+    prob->lb = (double*)calloc((size_t)num_vars, sizeof(double));
+    prob->ub = (double*)calloc((size_t)num_vars, sizeof(double));
+    prob->vtype = (char*)calloc((size_t)num_vars, sizeof(char));
+    prob->rhs = (double*)calloc((size_t)num_cons, sizeof(double));
+    prob->sense_con = (char*)calloc((size_t)num_cons, sizeof(char));
+    prob->nnz_alloc = est_nnz;
+    prob->con_row = (int*)malloc((size_t)est_nnz * sizeof(int));
+    prob->con_col = (int*)malloc((size_t)est_nnz * sizeof(int));
+    prob->con_val = (double*)malloc((size_t)est_nnz * sizeof(double));
+
+    if (!prob->obj || !prob->lb || !prob->ub || !prob->vtype ||
+        !prob->rhs || !prob->sense_con || !prob->con_row ||
+        !prob->con_col || !prob->con_val) {
+        free(prob->obj);
+        free(prob->lb);
+        free(prob->ub);
+        free(prob->vtype);
+        free(prob->rhs);
+        free(prob->sense_con);
+        free(prob->con_row);
+        free(prob->con_col);
+        free(prob->con_val);
+        free(prob);
+        return NULL;
+    }
+
+    for (int j = 0; j < num_vars; j++) {
+        prob->lb[j] = 0.0;
+        prob->ub[j] = RALPH_INFINITY;
+        prob->vtype[j] = 'C';
+    }
+    for (int i = 0; i < num_cons; i++) {
+        prob->sense_con[i] = 'L';
+    }
+
+    return prob;
+}
+
+static void reg_mip_add_coef(RegressionMIPProblem *prob, int row, int col, double val)
+{
+    if (prob->nnz >= prob->nnz_alloc) {
+        prob->nnz_alloc *= 2;
+        prob->con_row = (int*)realloc(prob->con_row,
+                                      (size_t)prob->nnz_alloc * sizeof(int));
+        prob->con_col = (int*)realloc(prob->con_col,
+                                      (size_t)prob->nnz_alloc * sizeof(int));
+        prob->con_val = (double*)realloc(prob->con_val,
+                                         (size_t)prob->nnz_alloc * sizeof(double));
+    }
+    prob->con_row[prob->nnz] = row;
+    prob->con_col[prob->nnz] = col;
+    prob->con_val[prob->nnz] = val;
+    prob->nnz++;
+}
+
+static void reg_mip_free(RegressionMIPProblem *prob)
+{
+    if (!prob) return;
+    free(prob->obj);
+    free(prob->lb);
+    free(prob->ub);
+    free(prob->vtype);
+    free(prob->rhs);
+    free(prob->sense_con);
+    free(prob->con_row);
+    free(prob->con_col);
+    free(prob->con_val);
+    free(prob);
+}
+
+static int validate_integer_solution_against_model(RalphModel *m, const RegressionMIPProblem *prob,
+                                                   double *out_obj)
+{
+    double *x = NULL;
+    double obj = 0.0;
+
+    if (!m || !prob) return 0;
+
+    x = (double*)calloc((size_t)prob->num_vars, sizeof(double));
+    if (!x) return 0;
+    if (ralph_test_get_solution(m, x) != 0) {
+        free(x);
+        return 0;
+    }
+
+    for (int j = 0; j < prob->num_vars; j++) {
+        double v = x[j];
+        if (v < -1e-9 || v > 1.0 + 1e-9) {
+            printf("FAIL: solution violates binary bounds at x[%d]=%.10f\n", j, v);
+            free(x);
+            return 0;
+        }
+        if (fabs(v - round(v)) > 1e-9) {
+            printf("FAIL: solution violates integrality at x[%d]=%.10f\n", j, v);
+            free(x);
+            return 0;
+        }
+        obj += prob->obj[j] * v;
+    }
+
+    for (int i = 0; i < prob->num_cons; i++) {
+        double lhs = 0.0;
+        for (int p = 0; p < prob->nnz; p++) {
+            if (prob->con_row[p] != i) continue;
+            lhs += prob->con_val[p] * x[prob->con_col[p]];
+        }
+        if (fabs(lhs - prob->rhs[i]) > 1e-9) {
+            printf("FAIL: equality row %d violated: lhs=%.10f rhs=%.10f\n",
+                   i, lhs, prob->rhs[i]);
+            free(x);
+            return 0;
+        }
+    }
+
+    if (out_obj) *out_obj = obj;
+    free(x);
+    return 1;
+}
+
+static RegressionMIPProblem *generate_set_partitioning_regression(
+    int num_elements, int num_subsets, double density, unsigned int seed)
+{
+    RegressionMIPProblem *prob;
+
+    reg_seed_random(seed);
+    prob = reg_mip_create(num_subsets, num_elements,
+                          (int)(num_elements * num_subsets * density * 1.5));
+    if (!prob) return NULL;
+
+    prob->num_integers = num_subsets;
+    for (int j = 0; j < num_subsets; j++) {
+        prob->obj[j] = reg_rand_double(1.0, 10.0);
+        prob->lb[j] = 0.0;
+        prob->ub[j] = 1.0;
+        prob->vtype[j] = 'B';
+    }
+
+    for (int i = 0; i < num_elements; i++) {
+        int covers = 0;
+        for (int j = 0; j < num_subsets; j++) {
+            if (reg_rand_double(0, 1) < density) {
+                reg_mip_add_coef(prob, i, j, 1.0);
+                covers++;
+            }
+        }
+        while (covers < 2) {
+            int j = reg_rand_int(0, num_subsets - 1);
+            reg_mip_add_coef(prob, i, j, 1.0);
+            covers++;
+        }
+        prob->rhs[i] = 1.0;
+        prob->sense_con[i] = 'E';
+    }
+
+    return prob;
+}
+
+static RalphModel *build_regression_model(const RegressionMIPProblem *prob)
+{
+    RalphModel *m = ralph_test_create();
+    if (!m) return NULL;
+
+    ralph_test_set_obj_sense(m, RALPH_MINIMIZE);
+    for (int j = 0; j < prob->num_vars; j++) {
+        RalphVarType type = RALPH_CONTINUOUS;
+        if (prob->vtype[j] == 'B') type = RALPH_BINARY;
+        else if (prob->vtype[j] == 'I') type = RALPH_INTEGER;
+        ralph_test_add_var(m, prob->lb[j], prob->ub[j], prob->obj[j], type);
+    }
+
+    for (int i = 0; i < prob->num_cons; i++) {
+        int count = 0;
+        for (int k = 0; k < prob->nnz; k++) {
+            if (prob->con_row[k] == i) count++;
+        }
+        if (count > 0) {
+            int *ind = (int*)malloc((size_t)count * sizeof(int));
+            double *val = (double*)malloc((size_t)count * sizeof(double));
+            int pos = 0;
+            for (int k = 0; k < prob->nnz; k++) {
+                if (prob->con_row[k] == i) {
+                    ind[pos] = prob->con_col[k];
+                    val[pos] = prob->con_val[k];
+                    pos++;
+                }
+            }
+            ralph_test_add_constraint(m, count, ind, val,
+                                      prob->sense_con[i] == 'E'
+                                          ? RALPH_EQUAL
+                                          : (prob->sense_con[i] == 'G'
+                                                 ? RALPH_GREATER_EQUAL
+                                                 : RALPH_LESS_EQUAL),
+                                      prob->rhs[i]);
+            free(ind);
+            free(val);
+        }
+    }
+
+    ralph_test_set_int_param(m, "verbose", 0);
+    return m;
+}
 
 /*
  * Simple test problem:
@@ -187,11 +436,101 @@ int test_ralph_wrapper(void) {
     return 0;
 }
 
+static int test_set_partitioning_small_glpk_regression(void)
+{
+    RegressionMIPProblem *prob =
+        generate_set_partitioning_regression(10, 30, 0.35, 42);
+    RalphModel *m;
+    double obj;
+    int failed = 0;
+
+    printf("\n=== test_set_partitioning_small_glpk_regression ===\n");
+    if (!prob) {
+        printf("FAIL: could not generate regression problem\n");
+        return 1;
+    }
+
+    m = build_regression_model(prob);
+    if (!m) {
+        printf("FAIL: could not build Ralph model\n");
+        reg_mip_free(prob);
+        return 1;
+    }
+
+    (void)ralph_test_optimize(m);
+    if (ralph_test_get_status(m) != RALPH_STATUS_OPTIMAL) {
+        printf("FAIL: expected OPTIMAL, got status=%d\n", ralph_test_get_status(m));
+        failed = 1;
+    } else {
+        double manual_obj = 0.0;
+        obj = ralph_test_get_objval(m);
+        if (!validate_integer_solution_against_model(m, prob, &manual_obj)) {
+            failed = 1;
+        }
+        if (fabs(obj - manual_obj) > 1e-6) {
+            printf("FAIL: API objective %.10f does not match returned solution %.10f\n",
+                   obj, manual_obj);
+            failed = 1;
+        }
+        if (!isfinite(ralph_test_get_best_bound(m))) {
+            printf("FAIL: best bound must be finite\n");
+            failed = 1;
+        }
+        printf("Objective: %.4f (GLPK benchmark reference ~12.40)\n", obj);
+        if (fabs(obj - 12.40) > 0.05) {
+            printf("FAIL: objective deviates from GLPK reference\n");
+            failed = 1;
+        } else {
+            printf("PASS\n");
+        }
+    }
+
+    ralph_test_free(m);
+    reg_mip_free(prob);
+    return failed;
+}
+
+static int test_set_partitioning_medium_glpk_regression(void)
+{
+    RegressionMIPProblem *prob =
+        generate_set_partitioning_regression(20, 60, 0.30, 123);
+    RalphModel *m;
+    int failed = 0;
+
+    printf("\n=== test_set_partitioning_medium_glpk_regression ===\n");
+    if (!prob) {
+        printf("FAIL: could not generate regression problem\n");
+        return 1;
+    }
+
+    m = build_regression_model(prob);
+    if (!m) {
+        printf("FAIL: could not build Ralph model\n");
+        reg_mip_free(prob);
+        return 1;
+    }
+
+    (void)ralph_test_optimize(m);
+    if (ralph_test_get_status(m) != RALPH_STATUS_INFEASIBLE) {
+        printf("FAIL: expected INFEASIBLE like GLPK benchmark, got status=%d obj=%.4f\n",
+               ralph_test_get_status(m), ralph_test_get_objval(m));
+        failed = 1;
+    } else {
+        printf("PASS\n");
+    }
+
+    ralph_test_free(m);
+    reg_mip_free(prob);
+    return failed;
+}
+
 int main(void) {
     int failures = 0;
 
     failures += test_basic_mip();
     failures += test_ralph_wrapper();
+    failures += test_set_partitioning_small_glpk_regression();
+    failures += test_set_partitioning_medium_glpk_regression();
 
     printf("\n=== Summary ===\n");
     if (failures == 0) {

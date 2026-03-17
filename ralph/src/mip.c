@@ -327,6 +327,34 @@ int mip_set_start_ex(MIPSolver *solver, const double *x, const int *mask,
 
 static void update_incumbent(MIPSolver *solver, const double *solution, double obj) {
     LPModel *model = solver->original_model;
+    double accepted_obj = 0.0;
+    (void)obj;
+
+    if (!solver || !model || !solution) return;
+
+    /* Reject non-finite, out-of-bounds, or non-integral incumbent candidates. */
+    for (int j = 0; j < model->num_vars; j++) {
+        double v = solution[j];
+        if (!isfinite(v)) {
+            return;
+        }
+        if (v < model->lb[j] - RALPH_FEAS_TOL || v > model->ub[j] + RALPH_FEAS_TOL) {
+            if (solver->verbose >= 2) {
+                LP_LOG_STDOUT("  [update_incumbent] Rejected out-of-bounds solution (var %d = %.12g)\n",
+                              j, v);
+            }
+            return;
+        }
+        if (solver->is_integer && solver->is_integer[j] &&
+            fabs(v - round(v)) > RALPH_INT_TOL) {
+            if (solver->verbose >= 2) {
+                LP_LOG_STDOUT("  [update_incumbent] Rejected non-integral solution (var %d = %.12g)\n",
+                              j, v);
+            }
+            return;
+        }
+        accepted_obj += model->c[j] * v;
+    }
 
     /* First verify constraint feasibility (Ax sense b) */
     if (model->A && model->num_cons > 0) {
@@ -362,22 +390,22 @@ static void update_incumbent(MIPSolver *solver, const double *solution, double o
 
     int is_better = 0;
     if (model->obj_sense == 1) {  /* Minimize */
-        is_better = (obj < solver->best_obj - RALPH_OPT_TOL);
+        is_better = (accepted_obj < solver->best_obj - RALPH_OPT_TOL);
     } else {  /* Maximize */
-        is_better = (obj > solver->best_obj + RALPH_OPT_TOL);
+        is_better = (accepted_obj > solver->best_obj + RALPH_OPT_TOL);
     }
 
     if (is_better) {
-        solver->best_obj = obj;
+        solver->best_obj = accepted_obj;
         memcpy(solver->best_solution, solution, model->num_vars * sizeof(double));
         solver->has_incumbent = 1;
         node_queue_set_incumbent_found(solver->node_queue);
 
         /* Update cutoff for pruning */
-        solver->cutoff = obj;
+        solver->cutoff = accepted_obj;
 
         if (solver->verbose) {
-            LP_LOG_STDOUT("*** New incumbent: %.6f\n", obj);
+            LP_LOG_STDOUT("*** New incumbent: %.6f\n", accepted_obj);
         }
     }
 }
@@ -518,6 +546,36 @@ static int mip_solution_within_node_bounds(const LPModel *model,
         if (x[j] < lb[j] - RALPH_FEAS_TOL) return 0;
         if (x[j] > ub[j] + RALPH_FEAS_TOL) return 0;
     }
+    return 1;
+}
+
+static int mip_solution_satisfies_rows(const LPModel *model, const double *x) {
+    if (!model || !x) return 0;
+    if (!model->A || model->num_cons <= 0) return 1;
+
+    double *ax = (double*)calloc((size_t)model->num_cons, sizeof(double));
+    if (!ax) return 0;
+    sparse_matvec(model->A, x, ax);
+
+    for (int i = 0; i < model->num_cons; i++) {
+        double lhs = ax[i];
+        double rhs = model->b[i];
+        char sense = model->sense[i];
+        int violated = 0;
+        if (sense == 'L' && lhs > rhs + RALPH_FEAS_TOL) {
+            violated = 1;
+        } else if (sense == 'G' && lhs < rhs - RALPH_FEAS_TOL) {
+            violated = 1;
+        } else if (sense == 'E' && fabs(lhs - rhs) > RALPH_FEAS_TOL) {
+            violated = 1;
+        }
+        if (violated) {
+            free(ax);
+            return 0;
+        }
+    }
+
+    free(ax);
     return 1;
 }
 
@@ -1272,6 +1330,19 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     } else if (lp->warm_basis_last_applied) {
         solver->node_basis_stage_cooldown = 0;
     }
+    if (lp->status == RALPH_STATUS_OPTIMAL &&
+        (!mip_solution_within_node_bounds(model, lp->solution, node->lb, node->ub) ||
+         !mip_solution_satisfies_rows(model, lp->solution))) {
+        if (solver->verbose >= 2) {
+            LP_LOG_STDOUT("  [solve_node_lp] rejecting staged warm-basis node solve; rerunning cold\n");
+        }
+        clear_node_basis(node);
+        solver->node_basis_warm_rejected++;
+        if (solver->node_basis_stage_cooldown < 64) {
+            solver->node_basis_stage_cooldown = 64;
+        }
+        (void)mip_lp_cold_start_primal(lp, 2);
+    }
     if (solver->verbose >= 2) {
         LP_LOG_STDOUT("  [solve_node_lp] cold: status=%d iters=%d obj=%.4f\n",
                lp->status, lp->iterations, lp->obj_value);
@@ -1461,12 +1532,17 @@ static int process_node(MIPSolver *solver, BBNode *node) {
         }
     }
 
+    double *lp_sol_snapshot = (double*)malloc((size_t)model->num_vars * sizeof(double));
+    if (lp_sol_snapshot) {
+        memcpy(lp_sol_snapshot, lp_sol, (size_t)model->num_vars * sizeof(double));
+    }
+
     /* Select branching variable. Some selector paths can fail to return a
      * candidate even when the current LP solution is still fractional. Fall
      * back to the plain most-infeasible scan before pruning the node. */
     int branch_var = -1;
     if (select_branch_variable(solver, lp_sol, &branch_var) != 0) {
-        int fallback = mip_select_most_infeasible(solver, lp_sol);
+        int fallback = mip_select_most_infeasible(solver, lp_sol_snapshot ? lp_sol_snapshot : lp_sol);
         if (fallback < 0 && solver->lp_solver && solver->working_model) {
             if (mip_lp_cold_start_primal(solver->lp_solver, 2) == 0 &&
                 solver->lp_solver->status == RALPH_STATUS_OPTIMAL &&
@@ -1481,19 +1557,21 @@ static int process_node(MIPSolver *solver, BBNode *node) {
         }
         if (fallback >= 0) {
             branch_var = fallback;
+            lp_sol = lp_sol_snapshot ? lp_sol_snapshot : lp_sol;
             if (solver->verbose >= 2) {
                 LP_LOG_STDOUT("  [process_node] Branch selector missed fractional var; fallback=%d\n",
                               branch_var);
             }
         } else {
-            if (check_integer_feasibility(solver, lp_sol)) {
+            if (check_integer_feasibility(solver, lp_sol_snapshot ? lp_sol_snapshot : lp_sol)) {
                 if (solver->verbose) {
                     LP_LOG_STDOUT("  [process_node] No fractional var found - declaring integer feasible\n");
                 }
-                update_incumbent(solver, lp_sol, lp_obj);
+                update_incumbent(solver, lp_sol_snapshot ? lp_sol_snapshot : lp_sol, lp_obj);
             } else if (solver->verbose) {
                 LP_LOG_STDOUT("  [process_node] No branch var after fallback; pruning unresolved fractional node\n");
             }
+            free(lp_sol_snapshot);
             return 0;
         }
     }
@@ -1507,7 +1585,10 @@ static int process_node(MIPSolver *solver, BBNode *node) {
             (void)mip_lp_recover_state(solver->lp_solver);
             lp_sol = solver->lp_solver->solution;
         }
-        if (!lp_sol) return -1;  /* Unrecoverable — prune node */
+        if (!lp_sol) {
+            free(lp_sol_snapshot);
+            return -1;  /* Unrecoverable — prune node */
+        }
     }
 
     /* Guard against stale branch choice after reliability/strong probing. */
@@ -1515,7 +1596,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     double branch_frac = branch_val - floor(branch_val);
     if (branch_frac < 0.0) branch_frac += 1.0;
     if (branch_frac <= RALPH_INT_TOL || branch_frac >= 1.0 - RALPH_INT_TOL) {
-        int fallback = mip_select_most_infeasible(solver, lp_sol);
+        int fallback = mip_select_most_infeasible(solver, lp_sol_snapshot ? lp_sol_snapshot : lp_sol);
         if (fallback < 0) {
             /* Strong/reliability probing can leave the LP state stale even
              * when recovery paths report success. Rebuild once and retry
@@ -1537,15 +1618,20 @@ static int process_node(MIPSolver *solver, BBNode *node) {
             if (solver->verbose >= 2) {
                 LP_LOG_STDOUT("  [process_node] No fractional var after probing; pruning node\n");
             }
+            free(lp_sol_snapshot);
             return 0;
         }
         branch_var = fallback;
-        branch_val = lp_sol[branch_var];
+        branch_val = (lp_sol_snapshot ? lp_sol_snapshot : lp_sol)[branch_var];
     }
 
     if (solver->verbose) {
         LP_LOG_STDOUT("  [process_node] Branching on var %d (val=%.4f)\n",
                       branch_var, branch_val);
+    }
+
+    if (solver->lp_solver && solver->lp_solver->solution) {
+        solver->lp_solver->solution[branch_var] = branch_val;
     }
 
     /* Create child nodes */
@@ -1555,6 +1641,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
         if (solver->verbose >= 2) {
             LP_LOG_STDOUT("  [process_node] Branch produced no tightening; pruning node\n");
         }
+        free(lp_sol_snapshot);
         return 0;
     }
 
@@ -1573,6 +1660,8 @@ static int process_node(MIPSolver *solver, BBNode *node) {
             LP_LOG_STDOUT("  [process_node] Added child_up (id=%d)\n", child_up->id);
         }
     }
+
+    free(lp_sol_snapshot);
 
     return 0;
 }
@@ -2048,6 +2137,12 @@ int mip_solve(MIPSolver *solver) {
         } else if (node_queue_is_empty(solver->node_queue)) {
             solver->status = RALPH_STATUS_INFEASIBLE;
         }
+    }
+
+    /* If the open-node set is exhausted, the incumbent is fully certified. */
+    if (solver->has_incumbent && node_queue_is_empty(solver->node_queue) &&
+        solver->status == RALPH_STATUS_OPTIMAL) {
+        solver->best_bound = solver->best_obj;
     }
 
     solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;

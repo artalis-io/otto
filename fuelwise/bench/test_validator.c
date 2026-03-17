@@ -293,6 +293,43 @@ void test_min_purchase_milp(void)
 }
 
 /* ============================================================================
+ * Regression: MILP benchmark seeds must validate
+ * ============================================================================ */
+static void test_milp15_seed_validates(uint64_t seed)
+{
+    FWBenchConfig cfg = fw_bench_config_milp_15();
+    cfg.seed = seed;
+    FWBenchInstance instance;
+    FWRefuelSolution solution;
+    FWValidationResult result;
+    int rc;
+    int feasible;
+
+    printf("\n=== Test: MILP15 Seed %llu Validates ===\n",
+           (unsigned long long)seed);
+
+    rc = fw_bench_generate(&cfg, &instance);
+    ASSERT(rc == 0, "Benchmark instance generated");
+    if (rc != 0) return;
+
+    memset(&solution, 0, sizeof(solution));
+    rc = fw_solve_refuel_milp(&instance.problem, &solution);
+    ASSERT(rc == 0 && solution.status == FW_STATUS_OPTIMAL,
+           "MILP solver finds optimal for regression seed");
+
+    feasible = fw_validate_solution(&instance.problem, &solution,
+                                    instance.curve, instance.weight_profile,
+                                    &result);
+    ASSERT(feasible == 1, "Regression MILP seed validates independently");
+    if (!feasible) {
+        printf("  Validation error: %s\n", result.error_msg);
+    }
+
+    fw_free_solution(&solution);
+    fw_bench_free_instance(&instance);
+}
+
+/* ============================================================================
  * Test: Minimum fuel level maintained throughout route
  * ============================================================================ */
 void test_minimum_fuel_maintained(void)
@@ -1925,6 +1962,8 @@ int main(void)
 
     /* Constraint enforcement tests */
     test_min_purchase_milp();
+    test_milp15_seed_validates(12347);
+    test_milp15_seed_validates(12348);
     test_minimum_fuel_maintained();
 
     /* Economic optimality tests */

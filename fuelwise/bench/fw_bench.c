@@ -165,9 +165,11 @@ int fw_bench_run(
             }
         }
 
-        /* GLPK comparison (if enabled and Ralph solved successfully) */
-        if (glpk_compare && feasible) {
+        /* GLPK comparison (if enabled and Ralph produced an optimal incumbent),
+         * even if the independent validator rejects Ralph's solution. */
+        if (glpk_compare && rc == 0 && solution.status == FW_STATUS_OPTIMAL) {
             FWGlpkResult glpk_result;
+            results->glpk_num_attempted++;
             if (fw_glpk_solve(&instance.problem, &glpk_result) == 0 &&
                 glpk_result.solved) {
                 results->glpk_num_solved++;
@@ -211,6 +213,8 @@ int fw_bench_run(
                     total_gap_pct += gap_pct;
                     results->glpk_gap_count++;
                 }
+            } else {
+                results->glpk_num_failed++;
             }
         }
 
@@ -285,7 +289,9 @@ void fw_bench_print_results(
         if (results->glpk_enabled) {
             printf(",\n");
             printf("  \"glpk\": {\n");
+            printf("    \"attempted\": %d,\n", results->glpk_num_attempted);
             printf("    \"solved\": %d,\n", results->glpk_num_solved);
+            printf("    \"failed\": %d,\n", results->glpk_num_failed);
             printf("    \"objective_match\": %d,\n", results->glpk_num_match);
             printf("    \"solve_time_ms\": {\n");
             printf("      \"avg\": %.2f,\n", results->glpk_solve_time_avg);
@@ -348,8 +354,11 @@ void fw_bench_print_results(
         /* GLPK comparison section */
         if (results->glpk_enabled) {
             printf("GLPK Comparison:\n");
-            printf("  GLPK solved: %d/%d\n",
-                   results->glpk_num_solved, results->num_feasible);
+            printf("  GLPK attempted: %d\n", results->glpk_num_attempted);
+            printf("  GLPK solved: %d\n", results->glpk_num_solved);
+            if (results->glpk_num_failed > 0) {
+                printf("  GLPK failed: %d\n", results->glpk_num_failed);
+            }
             printf("  GLPK time: %.2f ms avg (%.2f - %.2f ms)\n",
                    results->glpk_solve_time_avg,
                    results->glpk_solve_time_min,

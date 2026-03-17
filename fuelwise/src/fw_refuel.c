@@ -459,6 +459,10 @@ static void fw_setup_mip_hints(RalphMIPModel *model,
                                 FWReachCutContext *cut_ctx)
 {
     int flags = fw_mip_hint_flags;
+    int allow_branch_heuristics = (problem->min_purchase <= 0.01 &&
+                                   problem->stop_cost <= 0.01);
+    int allow_dominated_elimination = (problem->min_purchase <= 0.01 &&
+                                       problem->stop_cost <= 0.01);
     int num_vars = ralph_lp_get_num_vars(model);
 
     /* Compute median price for direction threshold */
@@ -492,7 +496,8 @@ static void fw_setup_mip_hints(RalphMIPModel *model,
     free(prices);
 
     /* Set priorities and directions for z variables */
-    if (!(flags & FW_HINT_NO_PRIORITIES) || !(flags & FW_HINT_NO_DIRECTIONS)) {
+    if (allow_branch_heuristics &&
+        (!(flags & FW_HINT_NO_PRIORITIES) || !(flags & FW_HINT_NO_DIRECTIONS))) {
         for (int i = 0; i < k; i++) {
             double price = problem->stations[i].price;
 
@@ -569,7 +574,7 @@ static void fw_setup_mip_hints(RalphMIPModel *model,
          *   - Neighbors can reach each other with a full tank
          *   - Removing i doesn't leave any interval with zero eligible stations
          */
-        if (!(flags & FW_HINT_NO_DOMINATED_ELIM)) {
+        if (allow_dominated_elimination && !(flags & FW_HINT_NO_DOMINATED_ELIM)) {
             for (int i = 1; i < k - 1; i++) {
                 if (is_mandatory[i]) continue;
 
@@ -618,7 +623,9 @@ static void fw_setup_mip_hints(RalphMIPModel *model,
      * produces the same objective value.
      * ================================================================ */
 
-    if (!(flags & FW_HINT_NO_SYMMETRY_BREAK)) {
+    if (!(flags & FW_HINT_NO_SYMMETRY_BREAK) &&
+        problem->min_purchase <= 0.01 &&
+        problem->stop_cost <= 0.01) {
         for (int i = 0; i < k - 1; i++) {
             /* Skip pairs where either station is already fixed */
             if (is_mandatory && (is_mandatory[i] || is_mandatory[i + 1])) continue;
