@@ -568,6 +568,52 @@ static int test_raw_lp_glpk_regression(const char *name,
     return failed;
 }
 
+static int test_raw_lp_glpk_regression_with_gomory(const char *name,
+                                                   const char *path,
+                                                   double expected_obj)
+{
+    RalphModel *m = ralph_test_create();
+    int failed = 0;
+
+    printf("\n=== %s ===\n", name);
+    if (!m) {
+        printf("FAIL: could not create Ralph model\n");
+        return 1;
+    }
+    if (ralph_test_read_lp(m, path) != 0) {
+        printf("FAIL: could not read LP fixture %s\n", path);
+        ralph_test_free(m);
+        return 1;
+    }
+
+    ralph_test_set_int_param(m, "verbose", 0);
+    ralph_test_set_int_param(m, "max_cut_rounds", 3);
+    ralph_test_set_int_param(m, "root_cut_mask", MIP_ROOT_CUT_GOMORY_MASK);
+    (void)ralph_test_optimize(m);
+    if (ralph_test_get_status(m) != RALPH_STATUS_OPTIMAL) {
+        printf("FAIL: expected OPTIMAL, got status=%d\n", ralph_test_get_status(m));
+        failed = 1;
+    } else {
+        double obj = ralph_test_get_objval(m);
+        int nodes = ralph_test_get_node_count(m);
+        printf("Objective with Gomory root cuts: %.6f (GLPK reference %.6f), nodes=%d\n",
+               obj, expected_obj, nodes);
+        if (fabs(obj - expected_obj) > 1e-4) {
+            printf("FAIL: objective deviates from GLPK reference with Gomory enabled\n");
+            failed = 1;
+        } else {
+            printf("PASS\n");
+        }
+        if (!isfinite(ralph_test_get_best_bound(m))) {
+            printf("FAIL: best bound must be finite\n");
+            failed = 1;
+        }
+    }
+
+    ralph_test_free(m);
+    return failed;
+}
+
 int main(void) {
     int failures = 0;
 
@@ -584,6 +630,18 @@ int main(void) {
     failures += test_raw_lp_glpk_regression("test_fuelwise_milp100_12347_raw_lp",
                                             "tests/data/fuelwise_milp100_12347.lp",
                                             1473.224345);
+    failures += test_raw_lp_glpk_regression_with_gomory(
+        "test_fuelwise_milp15_12348_raw_lp_gomory",
+        "tests/data/fuelwise_milp15_12348.lp",
+        111.0805589);
+    failures += test_raw_lp_glpk_regression_with_gomory(
+        "test_fuelwise_milp15_12349_raw_lp_gomory",
+        "tests/data/fuelwise_milp15_12349.lp",
+        115.2437986);
+    failures += test_raw_lp_glpk_regression_with_gomory(
+        "test_fuelwise_milp100_12347_raw_lp_gomory",
+        "tests/data/fuelwise_milp100_12347.lp",
+        1473.224345);
 
     printf("\n=== Summary ===\n");
     if (failures == 0) {

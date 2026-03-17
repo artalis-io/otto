@@ -280,14 +280,29 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
 
         if (fabs(a_ij) < RALPH_ZERO_TOL) continue;
 
-        /* GMI back-substitution is only validated for unfixed auxiliary
-         * slacks in the normalized <= form. Presolve can create fixed
-         * zero auxiliaries and normalized surplus rows (aux_coef < 0);
-         * those patterns have produced invalid cuts on FuelWise MILPs. */
+        /* GMI back-substitution is only validated for auxiliary rows in the
+         * normalized <= form. Presolve and Phase 2 cleanup can also leave
+         * auxiliary columns fixed at zero. Those variables are bound-fixed,
+         * not row-defined, so they should contribute nothing to the cut
+         * instead of forcing row substitution through their source row. */
         if (j >= num_orig) {
             int aux_idx = j - num_orig;
             if (aux_idx >= 0 && aux_idx < tab->num_aux && tab->aux_row && tab->aux_coef) {
-                if (tab->var_status[j] == RALPH_FIXED || tab->aux_coef[aux_idx] < 0.0) {
+                if (tab->var_status[j] == RALPH_FIXED) {
+                    if (fabs(tab->lb_ext[j]) <= RALPH_ZERO_TOL &&
+                        fabs(tab->ub_ext[j]) <= RALPH_ZERO_TOL &&
+                        fabs(tab->x[j]) <= RALPH_ZERO_TOL) {
+                        if (verbose) {
+                            printf("[GMI-row]   Skipping fixed-zero auxiliary var %d\n", j);
+                        }
+                        continue;
+                    }
+                    free(row);
+                    free(cut_coefs);
+                    cut_free(cut);
+                    return NULL;
+                }
+                if (tab->aux_coef[aux_idx] < 0.0) {
                     free(row);
                     free(cut_coefs);
                     cut_free(cut);
