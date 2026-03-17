@@ -57,19 +57,21 @@ static inline int mip_lp_refactor_and_recompute(SimplexTableau *tab) {
     return mip_lp_recompute(tab);
 }
 
-/* Cold-start solve via primal simplex. */
+/* Cold-start solve via the configured MIP LP method.
+ * For MIP this is normally method=2: dual-first with primal fallback. */
 static inline int mip_lp_cold_start_primal(SimplexSolver *lp, int restore_method) {
     if (!lp) return -1;
 
     int save_method = lp->method;
+    int target_method = (restore_method >= 0) ? restore_method : save_method;
     if (lp->tableau) {
         tableau_free(lp->tableau);
         lp->tableau = NULL;
     }
 
-    lp->method = 0;
+    lp->method = target_method;
     simplex_solve(lp);
-    lp->method = (restore_method >= 0) ? restore_method : save_method;
+    lp->method = target_method;
 
     return (lp->status == RALPH_STATUS_OPTIMAL ||
             lp->status == RALPH_STATUS_INFEASIBLE ||
