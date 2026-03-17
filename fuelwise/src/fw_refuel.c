@@ -39,6 +39,8 @@ static void fw_capture_mip_telemetry(FWRefuelSolution *solution, const RalphMIPM
     solution->mip.solve_time_ms = tel.solve_time * 1000.0;
     solution->mip.root_lp_time_ms = tel.root_lp_time_ms;
     solution->mip.node_lp_time_ms = tel.node_lp_time_ms;
+    solution->mip.node_lp_warm_time_ms = tel.node_lp_warm_time_ms;
+    solution->mip.node_lp_cold_time_ms = tel.node_lp_cold_time_ms;
     solution->mip.strong_branch_time_ms = tel.strong_branch_time_ms;
     solution->mip.root_cut_time_ms = tel.root_cut_time_ms;
     solution->mip.non_root_cut_time_ms = tel.non_root_cut_time_ms;
@@ -48,6 +50,13 @@ static void fw_capture_mip_telemetry(FWRefuelSolution *solution, const RalphMIPM
     solution->mip.node_lp_cold_starts = tel.node_lp_cold_starts;
     solution->mip.probe_child_snapshots_saved = tel.probe_child_snapshots_saved;
     solution->mip.probe_child_warm_applied = tel.probe_child_warm_applied;
+    solution->mip.relaxation_basis_warm_applied = tel.relaxation_basis_warm_applied;
+    solution->mip.saved_basis_live_restore_attempted = tel.saved_basis_live_restore_attempted;
+    solution->mip.saved_basis_warm_reopt_succeeded = tel.saved_basis_warm_reopt_succeeded;
+    solution->mip.saved_basis_fallback_no_tableau = tel.saved_basis_fallback_no_tableau;
+    solution->mip.saved_basis_fallback_artificial_skip = tel.saved_basis_fallback_artificial_skip;
+    solution->mip.saved_basis_fallback_size_mismatch = tel.saved_basis_fallback_size_mismatch;
+    solution->mip.saved_basis_fallback_live_restore_not_attempted = tel.saved_basis_fallback_live_restore_not_attempted;
     solution->mip.cold_start_no_saved_basis = tel.cold_start_no_saved_basis;
     solution->mip.cold_start_saved_basis_fallback = tel.cold_start_saved_basis_fallback;
     solution->mip.cold_start_probe_restore_failure = tel.cold_start_probe_restore_failure;

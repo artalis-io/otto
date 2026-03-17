@@ -45,6 +45,14 @@ typedef enum {
     NODE_COLD_START_REASON_BRANCH_RECOVERY
 } NodeColdStartReason;
 
+typedef enum {
+    SAVED_BASIS_FALLBACK_DETAIL_NONE = 0,
+    SAVED_BASIS_FALLBACK_DETAIL_NO_TABLEAU,
+    SAVED_BASIS_FALLBACK_DETAIL_ARTIFICIAL_SKIP,
+    SAVED_BASIS_FALLBACK_DETAIL_SIZE_MISMATCH,
+    SAVED_BASIS_FALLBACK_DETAIL_LIVE_RESTORE_NOT_ATTEMPTED
+} SavedBasisFallbackDetail;
+
 static void record_node_cold_start(MIPSolver *solver, NodeColdStartReason reason) {
     if (!solver) return;
 
@@ -74,6 +82,39 @@ static void record_node_cold_start(MIPSolver *solver, NodeColdStartReason reason
         case NODE_COLD_START_REASON_NONE:
         default:
             break;
+    }
+}
+
+static void record_saved_basis_fallback_detail(MIPSolver *solver,
+                                               SavedBasisFallbackDetail detail) {
+    if (!solver) return;
+
+    switch (detail) {
+        case SAVED_BASIS_FALLBACK_DETAIL_NO_TABLEAU:
+            solver->saved_basis_fallback_no_tableau++;
+            break;
+        case SAVED_BASIS_FALLBACK_DETAIL_ARTIFICIAL_SKIP:
+            solver->saved_basis_fallback_artificial_skip++;
+            break;
+        case SAVED_BASIS_FALLBACK_DETAIL_SIZE_MISMATCH:
+            solver->saved_basis_fallback_size_mismatch++;
+            break;
+        case SAVED_BASIS_FALLBACK_DETAIL_LIVE_RESTORE_NOT_ATTEMPTED:
+            solver->saved_basis_fallback_live_restore_not_attempted++;
+            break;
+        case SAVED_BASIS_FALLBACK_DETAIL_NONE:
+        default:
+            break;
+    }
+}
+
+static void record_basis_reuse_applied(MIPSolver *solver, int basis_source) {
+    if (!solver) return;
+
+    if (basis_source == NODE_BASIS_SOURCE_STRONG_PROBE) {
+        solver->probe_child_warm_applied++;
+    } else if (basis_source == NODE_BASIS_SOURCE_RELAXATION) {
+        solver->relaxation_basis_warm_applied++;
     }
 }
 
@@ -1336,6 +1377,9 @@ static int solve_node_lp_as_lap(MIPSolver *solver, BBNode *node) {
 
 static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     double node_lp_start_ms = mip_now_ms();
+    double cold_phase_start_ms = 0.0;
+    int warm_phase_started = 0;
+    int cold_phase_started = 0;
 
     /* Try LAP solver first if available */
     if (solver->use_lap_solver) {
@@ -1375,8 +1419,10 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     int basis_source = has_saved_basis ? node->basis_source : NODE_BASIS_SOURCE_NONE;
     int can_warm_reuse = 0;
     int stage_allowed = (solver->node_basis_stage_cooldown <= 0);
-    int probe_warm_success = 0;
+    int staged_basis_reuse_applied = 0;
+    int saved_basis_warm_reopt_success = 0;
     NodeColdStartReason cold_start_reason = NODE_COLD_START_REASON_NONE;
+    SavedBasisFallbackDetail saved_basis_fallback_detail = SAVED_BASIS_FALLBACK_DETAIL_NONE;
     if (has_saved_basis && !node_basis_snapshot_sane(node)) {
         clear_node_basis(node);
         solver->node_basis_warm_rejected++;
@@ -1403,23 +1449,38 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
 
     /* Warm reuse is only allowed when this node carries a saved LP basis.
      * This removes the old ad-hoc "reuse whatever tableau is lying around" path. */
-    if (has_saved_basis && tab &&
-        (basis_source == NODE_BASIS_SOURCE_STRONG_PROBE || tab->num_artificial == 0)) {
-        int direct_reuse = (node->id == solver->last_solved_node_id) ||
-                           (basis_source != NODE_BASIS_SOURCE_STRONG_PROBE &&
-                            node->parent_id == solver->last_solved_node_id);
-        if (direct_reuse) {
-            solver->node_basis_warm_applied++;
-            can_warm_reuse = 1;
-            tab = lp->tableau;
-        } else if (restore_node_basis_live(solver, lp, node,
-                                           basis_source == NODE_BASIS_SOURCE_STRONG_PROBE) == 0) {
-            can_warm_reuse = 1;
-            tab = lp->tableau;
-        } else if (basis_source == NODE_BASIS_SOURCE_STRONG_PROBE) {
-            cold_start_reason = NODE_COLD_START_REASON_PROBE_RESTORE_FAILURE;
+    if (has_saved_basis) {
+        int size_matches_live_tableau = tab &&
+            node->basis_size == tab->m &&
+            node->var_status_size == tab->n;
+        int allow_probe_artificials = (basis_source == NODE_BASIS_SOURCE_STRONG_PROBE);
+        if (!tab) {
+            saved_basis_fallback_detail = SAVED_BASIS_FALLBACK_DETAIL_NO_TABLEAU;
+        } else if (!size_matches_live_tableau) {
+            saved_basis_fallback_detail = SAVED_BASIS_FALLBACK_DETAIL_SIZE_MISMATCH;
+        } else if (!allow_probe_artificials && tab->num_artificial != 0) {
+            saved_basis_fallback_detail = SAVED_BASIS_FALLBACK_DETAIL_ARTIFICIAL_SKIP;
         } else {
-            cold_start_reason = NODE_COLD_START_REASON_LIVE_RESTORE_FAILURE;
+            warm_phase_started = 1;
+            int direct_reuse = (node->id == solver->last_solved_node_id) ||
+                               (basis_source != NODE_BASIS_SOURCE_STRONG_PROBE &&
+                                node->parent_id == solver->last_solved_node_id);
+            if (direct_reuse) {
+                solver->node_basis_warm_applied++;
+                can_warm_reuse = 1;
+                tab = lp->tableau;
+            } else {
+                solver->saved_basis_live_restore_attempted++;
+                if (restore_node_basis_live(solver, lp, node,
+                                            basis_source == NODE_BASIS_SOURCE_STRONG_PROBE) == 0) {
+                    can_warm_reuse = 1;
+                    tab = lp->tableau;
+                } else if (basis_source == NODE_BASIS_SOURCE_STRONG_PROBE) {
+                    cold_start_reason = NODE_COLD_START_REASON_PROBE_RESTORE_FAILURE;
+                } else {
+                    cold_start_reason = NODE_COLD_START_REASON_LIVE_RESTORE_FAILURE;
+                }
+            }
         }
     }
 
@@ -1434,9 +1495,7 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
             }
             if (rc == 0 && lp->status == RALPH_STATUS_OPTIMAL) {
                 if (mip_solution_within_node_bounds(model, lp->solution, node->lb, node->ub)) {
-                    if (basis_source == NODE_BASIS_SOURCE_STRONG_PROBE) {
-                        probe_warm_success = 1;
-                    }
+                    saved_basis_warm_reopt_success = 1;
                     goto node_lp_done;
                 }
                 if (solver->verbose >= 2) {
@@ -1446,9 +1505,7 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
             /* v2 detected infeasible or hit objective limit — valid result */
             if (lp->status == RALPH_STATUS_INFEASIBLE ||
                 lp->status == RALPH_STATUS_OBJ_LIMIT) {
-                if (basis_source == NODE_BASIS_SOURCE_STRONG_PROBE) {
-                    probe_warm_success = 1;
-                }
+                saved_basis_warm_reopt_success = 1;
                 goto node_lp_done;
             }
         }
@@ -1463,13 +1520,21 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     }
 
     /* Cold start: stage node basis (if any), rebuild tableau, solve with primal. */
+    cold_phase_start_ms = mip_now_ms();
+    cold_phase_started = 1;
     if (has_saved_basis && stage_allowed) {
         (void)stage_node_basis_for_cold_start(solver, lp, node);
     }
     if (cold_start_reason == NODE_COLD_START_REASON_NONE) {
-        cold_start_reason = has_saved_basis ?
-            NODE_COLD_START_REASON_SAVED_BASIS_FALLBACK :
-            NODE_COLD_START_REASON_NO_SAVED_BASIS;
+        if (has_saved_basis) {
+            cold_start_reason = NODE_COLD_START_REASON_SAVED_BASIS_FALLBACK;
+            if (saved_basis_fallback_detail == SAVED_BASIS_FALLBACK_DETAIL_NONE) {
+                saved_basis_fallback_detail = SAVED_BASIS_FALLBACK_DETAIL_LIVE_RESTORE_NOT_ATTEMPTED;
+            }
+            record_saved_basis_fallback_detail(solver, saved_basis_fallback_detail);
+        } else {
+            cold_start_reason = NODE_COLD_START_REASON_NO_SAVED_BASIS;
+        }
     }
     record_node_cold_start(solver, cold_start_reason);
     (void)mip_lp_cold_start_primal(lp, 2);
@@ -1482,9 +1547,7 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
         if (solver->node_basis_stage_cooldown < 64)
             solver->node_basis_stage_cooldown = 64;
     } else if (lp->warm_basis_last_applied) {
-        if (basis_source == NODE_BASIS_SOURCE_STRONG_PROBE) {
-            solver->probe_child_warm_applied++;
-        }
+        staged_basis_reuse_applied = 1;
         solver->node_basis_stage_cooldown = 0;
     }
     if (lp->status == RALPH_STATUS_OPTIMAL &&
@@ -1499,6 +1562,7 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
         if (solver->node_basis_stage_cooldown < 64) {
             solver->node_basis_stage_cooldown = 64;
         }
+        staged_basis_reuse_applied = 0;
         record_node_cold_start(solver, NODE_COLD_START_REASON_STAGE_RETRY);
         (void)mip_lp_cold_start_primal(lp, 2);
     }
@@ -1508,8 +1572,11 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     }
 
 node_lp_done:
-    if (probe_warm_success) {
-        solver->probe_child_warm_applied++;
+    if (saved_basis_warm_reopt_success) {
+        solver->saved_basis_warm_reopt_succeeded++;
+        record_basis_reuse_applied(solver, basis_source);
+    } else if (staged_basis_reuse_applied) {
+        record_basis_reuse_applied(solver, basis_source);
     }
     node->lp_status = lp->status;
     node->lp_bound = lp->obj_value;
@@ -1521,7 +1588,24 @@ node_lp_done:
         LP_LOG_STDOUT("  solve_node_lp: status=%d, obj=%.4f\n", lp->status, lp->obj_value);
     }
 
-    solver->node_lp_time_ms += mip_now_ms() - node_lp_start_ms;
+    double node_lp_total_ms = mip_now_ms() - node_lp_start_ms;
+    double node_lp_warm_ms = 0.0;
+    double node_lp_cold_ms = 0.0;
+
+    if (cold_phase_started) {
+        if (warm_phase_started) {
+            node_lp_warm_ms = cold_phase_start_ms - node_lp_start_ms;
+            node_lp_cold_ms = node_lp_total_ms - node_lp_warm_ms;
+        } else {
+            node_lp_cold_ms = node_lp_total_ms;
+        }
+    } else if (warm_phase_started) {
+        node_lp_warm_ms = node_lp_total_ms;
+    }
+
+    solver->node_lp_time_ms += node_lp_total_ms;
+    solver->node_lp_warm_time_ms += node_lp_warm_ms;
+    solver->node_lp_cold_time_ms += node_lp_cold_ms;
     return (lp->status == RALPH_STATUS_OPTIMAL) ? 0 : -1;
 }
 
@@ -1671,7 +1755,11 @@ static int process_node(MIPSolver *solver, BBNode *node) {
                 lp_sol = solver->lp_solver->solution;
                 fallback = mip_select_most_infeasible(solver, lp_sol);
             }
-            solver->node_lp_time_ms += mip_now_ms() - recover_start_ms;
+            {
+                double recover_ms = mip_now_ms() - recover_start_ms;
+                solver->node_lp_time_ms += recover_ms;
+                solver->node_lp_cold_time_ms += recover_ms;
+            }
         }
         if (fallback >= 0) {
             branch_var = fallback;
@@ -1736,7 +1824,11 @@ static int process_node(MIPSolver *solver, BBNode *node) {
                     lp_sol = solver->lp_solver->solution;
                     fallback = mip_select_most_infeasible(solver, lp_sol);
                 }
-                solver->node_lp_time_ms += mip_now_ms() - recover_start_ms;
+                {
+                    double recover_ms = mip_now_ms() - recover_start_ms;
+                    solver->node_lp_time_ms += recover_ms;
+                    solver->node_lp_cold_time_ms += recover_ms;
+                }
             }
         }
         if (fallback < 0) {

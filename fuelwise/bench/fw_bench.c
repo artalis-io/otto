@@ -68,11 +68,20 @@ int fw_bench_run(
     double total_mip_nodes = 0.0;
     double total_mip_root_lp_time = 0.0;
     double total_mip_node_lp_time = 0.0;
+    double total_mip_node_lp_warm_time = 0.0;
+    double total_mip_node_lp_cold_time = 0.0;
     double total_mip_strong_branch_time = 0.0;
     double total_mip_strong_branch_probes = 0.0;
     double total_mip_cold_starts = 0.0;
     double total_mip_probe_child_snapshots_saved = 0.0;
     double total_mip_probe_child_warm_applied = 0.0;
+    double total_mip_relaxation_basis_warm_applied = 0.0;
+    double total_mip_saved_basis_live_restore_attempted = 0.0;
+    double total_mip_saved_basis_warm_reopt_succeeded = 0.0;
+    double total_mip_saved_basis_fallback_no_tableau = 0.0;
+    double total_mip_saved_basis_fallback_artificial_skip = 0.0;
+    double total_mip_saved_basis_fallback_size_mismatch = 0.0;
+    double total_mip_saved_basis_fallback_live_restore_not_attempted = 0.0;
     double total_mip_node_basis_staged = 0.0;
     double total_mip_warm_rejects = 0.0;
     double total_mip_cold_start_no_saved_basis = 0.0;
@@ -164,11 +173,21 @@ int fw_bench_run(
             total_mip_nodes += solution.mip.nodes_explored;
             total_mip_root_lp_time += solution.mip.root_lp_time_ms;
             total_mip_node_lp_time += solution.mip.node_lp_time_ms;
+            total_mip_node_lp_warm_time += solution.mip.node_lp_warm_time_ms;
+            total_mip_node_lp_cold_time += solution.mip.node_lp_cold_time_ms;
             total_mip_strong_branch_time += solution.mip.strong_branch_time_ms;
             total_mip_strong_branch_probes += solution.mip.strong_branch_probes;
             total_mip_cold_starts += solution.mip.node_lp_cold_starts;
             total_mip_probe_child_snapshots_saved += solution.mip.probe_child_snapshots_saved;
             total_mip_probe_child_warm_applied += solution.mip.probe_child_warm_applied;
+            total_mip_relaxation_basis_warm_applied += solution.mip.relaxation_basis_warm_applied;
+            total_mip_saved_basis_live_restore_attempted += solution.mip.saved_basis_live_restore_attempted;
+            total_mip_saved_basis_warm_reopt_succeeded += solution.mip.saved_basis_warm_reopt_succeeded;
+            total_mip_saved_basis_fallback_no_tableau += solution.mip.saved_basis_fallback_no_tableau;
+            total_mip_saved_basis_fallback_artificial_skip += solution.mip.saved_basis_fallback_artificial_skip;
+            total_mip_saved_basis_fallback_size_mismatch += solution.mip.saved_basis_fallback_size_mismatch;
+            total_mip_saved_basis_fallback_live_restore_not_attempted +=
+                solution.mip.saved_basis_fallback_live_restore_not_attempted;
             total_mip_node_basis_staged += solution.mip.node_basis_staged;
             total_mip_warm_rejects += solution.mip.node_basis_warm_rejected;
             total_mip_cold_start_no_saved_basis += solution.mip.cold_start_no_saved_basis;
@@ -298,11 +317,26 @@ int fw_bench_run(
         results->mip_nodes_avg = total_mip_nodes / denom;
         results->mip_root_lp_time_ms_avg = total_mip_root_lp_time / denom;
         results->mip_node_lp_time_ms_avg = total_mip_node_lp_time / denom;
+        results->mip_node_lp_warm_time_ms_avg = total_mip_node_lp_warm_time / denom;
+        results->mip_node_lp_cold_time_ms_avg = total_mip_node_lp_cold_time / denom;
         results->mip_strong_branch_time_ms_avg = total_mip_strong_branch_time / denom;
         results->mip_strong_branch_probes_avg = total_mip_strong_branch_probes / denom;
         results->mip_cold_starts_avg = total_mip_cold_starts / denom;
         results->mip_probe_child_snapshots_saved_avg = total_mip_probe_child_snapshots_saved / denom;
         results->mip_probe_child_warm_applied_avg = total_mip_probe_child_warm_applied / denom;
+        results->mip_relaxation_basis_warm_applied_avg = total_mip_relaxation_basis_warm_applied / denom;
+        results->mip_saved_basis_live_restore_attempted_avg =
+            total_mip_saved_basis_live_restore_attempted / denom;
+        results->mip_saved_basis_warm_reopt_succeeded_avg =
+            total_mip_saved_basis_warm_reopt_succeeded / denom;
+        results->mip_saved_basis_fallback_no_tableau_avg =
+            total_mip_saved_basis_fallback_no_tableau / denom;
+        results->mip_saved_basis_fallback_artificial_skip_avg =
+            total_mip_saved_basis_fallback_artificial_skip / denom;
+        results->mip_saved_basis_fallback_size_mismatch_avg =
+            total_mip_saved_basis_fallback_size_mismatch / denom;
+        results->mip_saved_basis_fallback_live_restore_not_attempted_avg =
+            total_mip_saved_basis_fallback_live_restore_not_attempted / denom;
         results->mip_node_basis_staged_avg = total_mip_node_basis_staged / denom;
         results->mip_warm_rejects_avg = total_mip_warm_rejects / denom;
         results->mip_cold_start_no_saved_basis_avg = total_mip_cold_start_no_saved_basis / denom;
@@ -387,11 +421,20 @@ void fw_bench_print_results(
             printf("    \"nodes_avg\": %.2f,\n", results->mip_nodes_avg);
             printf("    \"root_lp_time_ms_avg\": %.2f,\n", results->mip_root_lp_time_ms_avg);
             printf("    \"node_lp_time_ms_avg\": %.2f,\n", results->mip_node_lp_time_ms_avg);
+            printf("    \"node_lp_warm_time_ms_avg\": %.2f,\n", results->mip_node_lp_warm_time_ms_avg);
+            printf("    \"node_lp_cold_time_ms_avg\": %.2f,\n", results->mip_node_lp_cold_time_ms_avg);
             printf("    \"strong_branch_time_ms_avg\": %.2f,\n", results->mip_strong_branch_time_ms_avg);
             printf("    \"strong_branch_probes_avg\": %.2f,\n", results->mip_strong_branch_probes_avg);
             printf("    \"cold_starts_avg\": %.2f,\n", results->mip_cold_starts_avg);
             printf("    \"probe_child_snapshots_saved_avg\": %.2f,\n", results->mip_probe_child_snapshots_saved_avg);
             printf("    \"probe_child_warm_applied_avg\": %.2f,\n", results->mip_probe_child_warm_applied_avg);
+            printf("    \"relaxation_basis_warm_applied_avg\": %.2f,\n", results->mip_relaxation_basis_warm_applied_avg);
+            printf("    \"saved_basis_live_restore_attempted_avg\": %.2f,\n", results->mip_saved_basis_live_restore_attempted_avg);
+            printf("    \"saved_basis_warm_reopt_succeeded_avg\": %.2f,\n", results->mip_saved_basis_warm_reopt_succeeded_avg);
+            printf("    \"saved_basis_fallback_no_tableau_avg\": %.2f,\n", results->mip_saved_basis_fallback_no_tableau_avg);
+            printf("    \"saved_basis_fallback_artificial_skip_avg\": %.2f,\n", results->mip_saved_basis_fallback_artificial_skip_avg);
+            printf("    \"saved_basis_fallback_size_mismatch_avg\": %.2f,\n", results->mip_saved_basis_fallback_size_mismatch_avg);
+            printf("    \"saved_basis_fallback_live_restore_not_attempted_avg\": %.2f,\n", results->mip_saved_basis_fallback_live_restore_not_attempted_avg);
             printf("    \"node_basis_staged_avg\": %.2f,\n", results->mip_node_basis_staged_avg);
             printf("    \"warm_rejects_avg\": %.2f,\n", results->mip_warm_rejects_avg);
             printf("    \"cold_start_no_saved_basis_avg\": %.2f,\n", results->mip_cold_start_no_saved_basis_avg);
@@ -464,16 +507,28 @@ void fw_bench_print_results(
             printf("MIP Telemetry:\n");
             printf("  Nodes: %.1f avg\n", results->mip_nodes_avg);
             printf("  Root LP time: %.2f ms avg\n", results->mip_root_lp_time_ms_avg);
-            printf("  Node LP time: %.2f ms avg\n", results->mip_node_lp_time_ms_avg);
+            printf("  Node LP time: %.2f ms avg (warm %.2f, cold %.2f)\n",
+                   results->mip_node_lp_time_ms_avg,
+                   results->mip_node_lp_warm_time_ms_avg,
+                   results->mip_node_lp_cold_time_ms_avg);
             printf("  Strong branching: %.2f probes avg, %.2f ms avg\n",
                    results->mip_strong_branch_probes_avg,
                    results->mip_strong_branch_time_ms_avg);
-            printf("  Probe snapshots saved / reused warm: %.2f / %.2f avg\n",
+            printf("  Probe snapshots saved / reuse applied (probe, relaxation): %.2f / %.2f / %.2f avg\n",
                    results->mip_probe_child_snapshots_saved_avg,
-                   results->mip_probe_child_warm_applied_avg);
+                   results->mip_probe_child_warm_applied_avg,
+                   results->mip_relaxation_basis_warm_applied_avg);
+            printf("  Saved-basis live restore attempts / warm reopt success: %.2f / %.2f avg\n",
+                   results->mip_saved_basis_live_restore_attempted_avg,
+                   results->mip_saved_basis_warm_reopt_succeeded_avg);
             printf("  Warm rejects / cold starts: %.2f / %.2f avg\n",
                    results->mip_warm_rejects_avg,
                    results->mip_cold_starts_avg);
+            printf("  Saved-basis fallback detail (no-tableau/artificials/size-mismatch/no-live-restore): %.2f / %.2f / %.2f / %.2f avg\n",
+                   results->mip_saved_basis_fallback_no_tableau_avg,
+                   results->mip_saved_basis_fallback_artificial_skip_avg,
+                   results->mip_saved_basis_fallback_size_mismatch_avg,
+                   results->mip_saved_basis_fallback_live_restore_not_attempted_avg);
             printf("  Cold starts (no-basis/saved-basis/probe/live/warm-reopt/stage-retry/branch-recovery): %.2f / %.2f / %.2f / %.2f / %.2f / %.2f / %.2f avg\n",
                    results->mip_cold_start_no_saved_basis_avg,
                    results->mip_cold_start_saved_basis_fallback_avg,

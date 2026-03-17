@@ -3454,6 +3454,8 @@ int ralph_core_get_last_mip_telemetry(const RalphModel *model, RalphMIPTelemetry
     telemetry->solve_time = mip->solve_time;
     telemetry->root_lp_time_ms = mip->root_lp_time_ms;
     telemetry->node_lp_time_ms = mip->node_lp_time_ms;
+    telemetry->node_lp_warm_time_ms = mip->node_lp_warm_time_ms;
+    telemetry->node_lp_cold_time_ms = mip->node_lp_cold_time_ms;
     telemetry->strong_branch_time_ms = mip->strong_branch_time_ms;
     telemetry->root_cut_time_ms = mip->root_cut_time_ms;
     telemetry->non_root_cut_time_ms = mip->non_root_cut_time_ms;
@@ -3463,6 +3465,14 @@ int ralph_core_get_last_mip_telemetry(const RalphModel *model, RalphMIPTelemetry
     telemetry->node_lp_cold_starts = mip->node_lp_cold_starts;
     telemetry->probe_child_snapshots_saved = mip->probe_child_snapshots_saved;
     telemetry->probe_child_warm_applied = mip->probe_child_warm_applied;
+    telemetry->relaxation_basis_warm_applied = mip->relaxation_basis_warm_applied;
+    telemetry->saved_basis_live_restore_attempted = mip->saved_basis_live_restore_attempted;
+    telemetry->saved_basis_warm_reopt_succeeded = mip->saved_basis_warm_reopt_succeeded;
+    telemetry->saved_basis_fallback_no_tableau = mip->saved_basis_fallback_no_tableau;
+    telemetry->saved_basis_fallback_artificial_skip = mip->saved_basis_fallback_artificial_skip;
+    telemetry->saved_basis_fallback_size_mismatch = mip->saved_basis_fallback_size_mismatch;
+    telemetry->saved_basis_fallback_live_restore_not_attempted =
+        mip->saved_basis_fallback_live_restore_not_attempted;
     telemetry->cold_start_no_saved_basis = mip->cold_start_no_saved_basis;
     telemetry->cold_start_saved_basis_fallback = mip->cold_start_saved_basis_fallback;
     telemetry->cold_start_probe_restore_failure = mip->cold_start_probe_restore_failure;

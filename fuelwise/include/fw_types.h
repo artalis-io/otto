@@ -198,6 +198,8 @@ typedef struct {
     double solve_time_ms;
     double root_lp_time_ms;
     double node_lp_time_ms;
+    double node_lp_warm_time_ms;
+    double node_lp_cold_time_ms;
     double strong_branch_time_ms;
     double root_cut_time_ms;
     double non_root_cut_time_ms;
@@ -207,6 +209,13 @@ typedef struct {
     int node_lp_cold_starts;
     int probe_child_snapshots_saved;
     int probe_child_warm_applied;
+    int relaxation_basis_warm_applied;
+    int saved_basis_live_restore_attempted;
+    int saved_basis_warm_reopt_succeeded;
+    int saved_basis_fallback_no_tableau;
+    int saved_basis_fallback_artificial_skip;
+    int saved_basis_fallback_size_mismatch;
+    int saved_basis_fallback_live_restore_not_attempted;
     int cold_start_no_saved_basis;
     int cold_start_saved_basis_fallback;
     int cold_start_probe_restore_failure;

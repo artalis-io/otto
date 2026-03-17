@@ -6008,7 +6008,9 @@ void test_public_telemetry_snapshot_api(void) {
     ASSERT(mip_tel.nodes_explored == 0,
            "Unsolved model MIP telemetry is zeroed");
     ASSERT(mip_tel.probe_child_snapshots_saved == 0 &&
-           mip_tel.cold_start_no_saved_basis == 0,
+           mip_tel.cold_start_no_saved_basis == 0 &&
+           mip_tel.node_lp_warm_time_ms == 0.0 &&
+           mip_tel.saved_basis_warm_reopt_succeeded == 0,
            "Unsolved model advanced MIP telemetry is zeroed");
     ralph_test_free(unsolved);
 
@@ -6068,8 +6070,10 @@ void test_public_telemetry_snapshot_api(void) {
     ASSERT(mip_tel.nodes_explored >= 0 && mip_tel.root_lp_time_ms >= 0.0,
            "MIP telemetry=0 reports search counters");
     ASSERT(mip_tel.probe_child_snapshots_saved >= 0 &&
-           mip_tel.cold_start_saved_basis_fallback >= 0,
-           "MIP telemetry=0 reports probe/cold-start counters");
+           mip_tel.cold_start_saved_basis_fallback >= 0 &&
+           mip_tel.saved_basis_fallback_no_tableau >= 0 &&
+           mip_tel.node_lp_cold_time_ms >= 0.0,
+           "MIP telemetry=0 reports probe/cold-start split counters");
     ralph_test_free(mip_off);
 
     RalphModel *mip_on = ralph_test_create();
@@ -6091,10 +6095,14 @@ void test_public_telemetry_snapshot_api(void) {
            "MIP telemetry=1 records node LU factorization");
     ASSERT(mip_tel.nodes_explored >= 0 &&
            mip_tel.node_lp_time_ms >= 0.0 &&
+           mip_tel.node_lp_warm_time_ms >= 0.0 &&
+           mip_tel.node_lp_cold_time_ms >= 0.0 &&
            mip_tel.strong_branch_time_ms >= 0.0 &&
            mip_tel.probe_child_snapshots_saved >= 0 &&
+           mip_tel.relaxation_basis_warm_applied >= 0 &&
+           mip_tel.saved_basis_live_restore_attempted >= 0 &&
            mip_tel.cold_start_branch_recovery >= 0,
-           "MIP telemetry=1 reports timing and probe-reuse counters");
+           "MIP telemetry=1 reports timing and saved-basis split counters");
     ralph_test_free(mip_on);
 }
 

@@ -246,6 +246,8 @@ typedef struct {
     double solve_time;
     double root_lp_time_ms;
     double node_lp_time_ms;
+    double node_lp_warm_time_ms;
+    double node_lp_cold_time_ms;
     double strong_branch_time_ms;
     double root_cut_time_ms;
     double non_root_cut_time_ms;
@@ -263,7 +265,14 @@ typedef struct {
     int node_basis_stage_cooldown; /* Nodes to skip staged warm-basis after repeated rejection */
     int node_lp_cold_starts;      /* Cold-start node LP solves/re-solves */
     int probe_child_snapshots_saved;     /* Child probe bases captured after final kept probe */
-    int probe_child_warm_applied;        /* Probe-sourced child bases accepted by warm dual reopt */
+    int probe_child_warm_applied;        /* Probe-sourced bases accepted by node LP reuse */
+    int relaxation_basis_warm_applied;   /* Relaxation-sourced bases accepted by node LP reuse */
+    int saved_basis_live_restore_attempted;      /* Saved-basis nodes that attempted live restore */
+    int saved_basis_warm_reopt_succeeded;        /* Saved-basis nodes that finished on warm dual reopt */
+    int saved_basis_fallback_no_tableau;         /* Saved-basis fallbacks with no live tableau */
+    int saved_basis_fallback_artificial_skip;    /* Saved-basis fallbacks skipped due to artificial rows */
+    int saved_basis_fallback_size_mismatch;      /* Saved-basis fallbacks skipped due to snapshot/tableau size mismatch */
+    int saved_basis_fallback_live_restore_not_attempted; /* Residual saved-basis fallbacks that never attempted live restore */
     int cold_start_no_saved_basis;       /* Cold starts with no saved node basis */
     int cold_start_saved_basis_fallback; /* Saved basis existed, but node still cold-started */
     int cold_start_probe_restore_failure;/* Probe-sourced live restore failed */

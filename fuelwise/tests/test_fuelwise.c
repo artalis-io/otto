@@ -324,6 +324,12 @@ void test_milp_min_purchase(void)
            "MILP telemetry exposes probe snapshot counter");
     ASSERT(solution.mip.cold_start_no_saved_basis >= 0,
            "MILP telemetry exposes cold-start reason counters");
+    ASSERT(solution.mip.node_lp_warm_time_ms >= 0.0 &&
+           solution.mip.node_lp_cold_time_ms >= 0.0,
+           "MILP telemetry exposes warm/cold node LP timing");
+    ASSERT(solution.mip.relaxation_basis_warm_applied >= 0 &&
+           solution.mip.saved_basis_live_restore_attempted >= 0,
+           "MILP telemetry exposes saved-basis split counters");
 
     if (solution.status == FW_STATUS_OPTIMAL) {
         printf("  Total cost: $%.2f\n", solution.total_cost);
