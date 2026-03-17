@@ -118,6 +118,11 @@ static void record_basis_reuse_applied(MIPSolver *solver, int basis_source) {
     }
 }
 
+static int basis_source_allows_artificial_reuse(int basis_source) {
+    return basis_source == NODE_BASIS_SOURCE_STRONG_PROBE ||
+           basis_source == NODE_BASIS_SOURCE_RELAXATION;
+}
+
 static int mip_final_probe_handoff_enabled(const MIPSolver *solver) {
     if (!solver) return 0;
     if (solver->var_select != VAR_SELECT_STRONG_BRANCH &&
@@ -1453,12 +1458,12 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
         int size_matches_live_tableau = tab &&
             node->basis_size == tab->m &&
             node->var_status_size == tab->n;
-        int allow_probe_artificials = (basis_source == NODE_BASIS_SOURCE_STRONG_PROBE);
+        int allow_saved_basis_artificials = basis_source_allows_artificial_reuse(basis_source);
         if (!tab) {
             saved_basis_fallback_detail = SAVED_BASIS_FALLBACK_DETAIL_NO_TABLEAU;
         } else if (!size_matches_live_tableau) {
             saved_basis_fallback_detail = SAVED_BASIS_FALLBACK_DETAIL_SIZE_MISMATCH;
-        } else if (!allow_probe_artificials && tab->num_artificial != 0) {
+        } else if (!allow_saved_basis_artificials && tab->num_artificial != 0) {
             saved_basis_fallback_detail = SAVED_BASIS_FALLBACK_DETAIL_ARTIFICIAL_SKIP;
         } else {
             warm_phase_started = 1;
@@ -1472,7 +1477,7 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
             } else {
                 solver->saved_basis_live_restore_attempted++;
                 if (restore_node_basis_live(solver, lp, node,
-                                            basis_source == NODE_BASIS_SOURCE_STRONG_PROBE) == 0) {
+                                            allow_saved_basis_artificials) == 0) {
                     can_warm_reuse = 1;
                     tab = lp->tableau;
                 } else if (basis_source == NODE_BASIS_SOURCE_STRONG_PROBE) {

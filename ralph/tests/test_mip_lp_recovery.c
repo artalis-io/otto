@@ -80,6 +80,33 @@ static RalphModel* build_root_recovery_model(void) {
     return model;
 }
 
+static RalphModel* build_artificial_branch_model(void) {
+    RalphModel *model = ralph_test_create();
+    if (!model) return NULL;
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+
+    /* min x + y
+     * s.t. x + y >= 3.5
+     *      x, y integer >= 0
+     * Root LP is fractional and keeps artificial-row metadata in the tableau,
+     * which exercises relaxation-basis child hot starts. */
+    int x = ralph_test_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_INTEGER);
+    int y = ralph_test_add_var(model, 0.0, RALPH_INFINITY, 1.0, RALPH_INTEGER);
+    if (x != 0 || y != 1) {
+        ralph_test_free(model);
+        return NULL;
+    }
+    {
+        int idx[] = {x, y};
+        double val[] = {1.0, 1.0};
+        if (ralph_test_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 3.5) != 0) {
+            ralph_test_free(model);
+            return NULL;
+        }
+    }
+    return model;
+}
+
 static int force_fixed_branch_var_cb(void *user_data,
                                      const double *x_relaxation,
                                      int num_vars,
@@ -506,11 +533,38 @@ static void test_root_lp_recovery_contract(void) {
     ralph_test_free(model);
 }
 
+static void test_relaxation_basis_reuse_with_artificials(void) {
+    RalphModel *model = build_artificial_branch_model();
+    ASSERT(model != NULL, "Artificial-row branch model created");
+    if (!model) return;
+
+    ASSERT(ralph_test_set_mip_int_param(model, "var_select", VAR_SELECT_MAX_INFEAS) == 0,
+           "Artificial-row test switches to non-probing branch selection");
+    ASSERT(ralph_test_optimize_mip(model) == 0, "Artificial-row branch-and-bound solve completes");
+    ASSERT(ralph_test_get_status(model) == RALPH_STATUS_OPTIMAL,
+           "Artificial-row branch model solves to an optimal integer solution");
+
+    RalphMIPTelemetry tel;
+    memset(&tel, 0, sizeof(tel));
+    ASSERT(ralph_core_get_last_mip_telemetry(model, &tel) == 0,
+           "Artificial-row test captures MIP telemetry");
+    ASSERT(tel.nodes_explored > 0, "Artificial-row model explores branch-and-bound nodes");
+    ASSERT(tel.probe_child_warm_applied == 0,
+           "Artificial-row test avoids probe-snapshot reuse path");
+    ASSERT(tel.relaxation_basis_warm_applied > 0,
+           "Relaxation basis reuse stays enabled with artificial rows");
+    ASSERT(tel.saved_basis_fallback_artificial_skip == 0,
+           "Artificial rows no longer force relaxation-basis fallback");
+
+    ralph_test_free(model);
+}
+
 int main(void) {
     test_strong_branch_probe_contract();
     test_branch_selector_skips_fixed_integer_vars();
     test_reliability_no_incumbent_probe_throttle();
     test_root_lp_recovery_contract();
+    test_relaxation_basis_reuse_with_artificials();
 
     printf("MIP LP recovery tests: %d/%d passed\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
