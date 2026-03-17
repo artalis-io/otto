@@ -188,6 +188,52 @@ typedef struct {
 } FWRefuelProblem;
 
 /* ============================================================================
+ * MIP Search Telemetry
+ *
+ * Populated for MILP solves. LP-only solves leave this zeroed.
+ * ============================================================================ */
+
+typedef struct {
+    int nodes_explored;
+    double solve_time_ms;
+    double root_lp_time_ms;
+    double node_lp_time_ms;
+    double strong_branch_time_ms;
+    double root_cut_time_ms;
+    double non_root_cut_time_ms;
+
+    int lap_nodes_solved;
+    int simplex_nodes_solved;
+    int node_lp_cold_starts;
+
+    int node_basis_warm_attempts;
+    int node_basis_warm_applied;
+    int node_basis_warm_rejected;
+    int node_basis_staged;
+    int warm_reject_invalid_snapshot;
+    int warm_reject_restore_failure;
+    int warm_reject_stage_failure;
+    int warm_reject_stage_solve_rejected;
+    int warm_reject_stage_solution_invalid;
+
+    int strong_branch_probes;
+    int strong_branch_failures;
+    int strong_branch_recoveries;
+
+    int root_cut_rounds;
+    int root_cuts_generated;
+    int root_cuts_applied;
+    int non_root_cut_rounds;
+    int non_root_cuts_generated;
+    int non_root_cuts_applied;
+
+    int fathom_lp_infeasible;
+    int fathom_bound;
+    int fathom_integral;
+    int fathom_no_branch_var;
+} FWMIPTelemetry;
+
+/* ============================================================================
  * Refueling Solution
  *
  * Result of solving a refueling optimization problem.
@@ -201,6 +247,7 @@ typedef struct {
     int *stop_flags;        /* 1 if stopping at station, 0 otherwise (for MILP) */
     double remaining_fuel;  /* Fuel remaining at destination (liters) */
     double gross_cost;      /* Fuel cost only (before remaining fuel credit) */
+    FWMIPTelemetry mip;     /* MILP search telemetry (zero for LP/Benders or on error) */
 } FWRefuelSolution;
 
 /* ============================================================================

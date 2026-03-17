@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include "fw_refuel.h"
+#include "ralph_core.h"
 #include "ralph_lp.h"
 #include "ralph_mip.h"
 
@@ -22,6 +23,56 @@
  * Distance is in meters, consumption is L/100km, fuel is in liters.
  * Formula: fuel (L) = distance (m) / 100000.0 * consumption (L/100km)
  * ============================================================================ */
+
+static void fw_capture_mip_telemetry(FWRefuelSolution *solution, const RalphMIPModel *model)
+{
+    RalphMIPTelemetry tel;
+
+    if (!solution) return;
+
+    memset(&tel, 0, sizeof(tel));
+    if (ralph_core_get_last_mip_telemetry((const RalphModel *)model, &tel) != 0) {
+        return;
+    }
+
+    solution->mip.nodes_explored = tel.nodes_explored;
+    solution->mip.solve_time_ms = tel.solve_time * 1000.0;
+    solution->mip.root_lp_time_ms = tel.root_lp_time_ms;
+    solution->mip.node_lp_time_ms = tel.node_lp_time_ms;
+    solution->mip.strong_branch_time_ms = tel.strong_branch_time_ms;
+    solution->mip.root_cut_time_ms = tel.root_cut_time_ms;
+    solution->mip.non_root_cut_time_ms = tel.non_root_cut_time_ms;
+
+    solution->mip.lap_nodes_solved = tel.lap_nodes_solved;
+    solution->mip.simplex_nodes_solved = tel.simplex_nodes_solved;
+    solution->mip.node_lp_cold_starts = tel.node_lp_cold_starts;
+
+    solution->mip.node_basis_warm_attempts = tel.node_basis_warm_attempts;
+    solution->mip.node_basis_warm_applied = tel.node_basis_warm_applied;
+    solution->mip.node_basis_warm_rejected = tel.node_basis_warm_rejected;
+    solution->mip.node_basis_staged = tel.node_basis_staged;
+    solution->mip.warm_reject_invalid_snapshot = tel.warm_reject_invalid_snapshot;
+    solution->mip.warm_reject_restore_failure = tel.warm_reject_restore_failure;
+    solution->mip.warm_reject_stage_failure = tel.warm_reject_stage_failure;
+    solution->mip.warm_reject_stage_solve_rejected = tel.warm_reject_stage_solve_rejected;
+    solution->mip.warm_reject_stage_solution_invalid = tel.warm_reject_stage_solution_invalid;
+
+    solution->mip.strong_branch_probes = tel.strong_branch_probes;
+    solution->mip.strong_branch_failures = tel.strong_branch_failures;
+    solution->mip.strong_branch_recoveries = tel.strong_branch_recoveries;
+
+    solution->mip.root_cut_rounds = tel.root_cut_rounds;
+    solution->mip.root_cuts_generated = tel.root_cuts_generated;
+    solution->mip.root_cuts_applied = tel.root_cuts_applied;
+    solution->mip.non_root_cut_rounds = tel.non_root_cut_rounds;
+    solution->mip.non_root_cuts_generated = tel.non_root_cuts_generated;
+    solution->mip.non_root_cuts_applied = tel.non_root_cuts_applied;
+
+    solution->mip.fathom_lp_infeasible = tel.fathom_lp_infeasible;
+    solution->mip.fathom_bound = tel.fathom_bound;
+    solution->mip.fathom_integral = tel.fathom_integral;
+    solution->mip.fathom_no_branch_var = tel.fathom_no_branch_var;
+}
 
 double fw_calc_fuel_consumed(
     const FWRefuelProblem *problem,
@@ -869,6 +920,7 @@ int fw_solve_refuel_milp(
     }
     int ret = ralph_mip_optimize(model);
     RalphLPStatus status = ralph_mip_get_status(model);
+    fw_capture_mip_telemetry(solution, model);
     if (fw_verbose) {
         printf("  [fw] k=%d vars=%d nodes=%d status=%d\n",
                k, num_vars, ralph_mip_get_node_count(model), (int)status);

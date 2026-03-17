@@ -29,6 +29,9 @@ extern "C" {
 #define MIP_RELIABILITY_POST_INCUMBENT_MAX_STRONG 1     /* Keep post-incumbent probing cheap */
 #define MIP_RELIABILITY_POST_INCUMBENT_PIVOT_BUDGET 32  /* Keep post-incumbent probes short */
 #define MIP_RELIABILITY_CANDIDATE_LIMIT 8               /* Only probe the top pseudo-cost candidates */
+#define MIP_NON_ROOT_CUT_MAX_DEPTH 4                    /* Only separate early/shallow nodes */
+#define MIP_NON_ROOT_CUT_MAX_NODES 128                  /* Stop non-root separation after early tree bootstrap */
+#define MIP_NON_ROOT_CUT_MAX_APPLY 8                    /* Keep each non-root cut pass small */
 
 /* Cut quality filter parameters */
 #define MIP_CUT_MIN_VIOLATION  1e-4   /* Minimum violation to apply a cut */
@@ -227,6 +230,11 @@ typedef struct {
     double root_bound;
     int root_iterations;
     double solve_time;
+    double root_lp_time_ms;
+    double node_lp_time_ms;
+    double strong_branch_time_ms;
+    double root_cut_time_ms;
+    double non_root_cut_time_ms;
 
     /* LAP-based solving (for assignment MIPs) */
     int use_lap_solver;          /* 1 if LAP structure detected and enabled */
@@ -239,12 +247,28 @@ typedef struct {
     int node_basis_warm_rejected; /* Live node-basis restores rejected/fallback */
     int node_basis_staged;        /* Cold starts that staged node basis via LP warm API */
     int node_basis_stage_cooldown; /* Nodes to skip staged warm-basis after repeated rejection */
+    int node_lp_cold_starts;      /* Cold-start node LP solves/re-solves */
+    int warm_reject_invalid_snapshot;      /* Saved basis snapshot failed sanity checks */
+    int warm_reject_restore_failure;       /* Live restore rejected by LP warm-basis API */
+    int warm_reject_stage_failure;         /* Staged warm basis rejected before cold-start solve */
+    int warm_reject_stage_solve_rejected;  /* Staged warm basis rejected during cold-start solve */
+    int warm_reject_stage_solution_invalid;/* Staged warm solve produced invalid node solution */
     int strong_branch_probes;      /* Strong-branch probe calls */
     int strong_branch_failures;    /* Strong-branch probe calls that failed */
     int strong_branch_recoveries;  /* Failed probes that recovered LP state */
     int cut_recovery_attempts;     /* Root cut-loop LP recovery attempts */
     int cut_recovery_success;      /* Root cut-loop recoveries that succeeded */
     int cut_recovery_failures;     /* Root cut-loop recoveries that failed */
+    int root_cut_rounds;           /* Root cut rounds attempted */
+    int root_cuts_generated;       /* Root cuts generated */
+    int root_cuts_applied;         /* Root cuts applied */
+    int non_root_cut_rounds;       /* Non-root cut passes attempted */
+    int non_root_cuts_generated;   /* Non-root cuts generated (user + built-in) */
+    int non_root_cuts_applied;     /* Non-root cuts applied */
+    int fathom_lp_infeasible;      /* Nodes pruned after non-optimal LP relaxation */
+    int fathom_bound;              /* Nodes pruned by incumbent bound */
+    int fathom_integral;           /* Nodes closed by integer-feasible LP solution */
+    int fathom_no_branch_var;      /* Fractional nodes pruned after branch-var selection failed */
 
     /* Reduced-cost fixing + RINS statistics */
     int rc_fixings;              /* Total variables fixed by reduced-cost fixing */

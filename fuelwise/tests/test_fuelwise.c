@@ -318,6 +318,8 @@ void test_milp_min_purchase(void)
 
     ASSERT(ret == 0, "MILP solver returned success");
     ASSERT(solution.status == FW_STATUS_OPTIMAL, "Solution is optimal");
+    ASSERT(solution.mip.nodes_explored >= 0, "MILP telemetry exposes node count");
+    ASSERT(solution.mip.root_lp_time_ms >= 0.0, "MILP telemetry exposes root LP time");
 
     if (solution.status == FW_STATUS_OPTIMAL) {
         printf("  Total cost: $%.2f\n", solution.total_cost);

@@ -3440,6 +3440,56 @@ int ralph_core_get_last_lu_telemetry(const RalphModel *model, RalphLUTelemetry *
     return 0;
 }
 
+int ralph_core_get_last_mip_telemetry(const RalphModel *model, RalphMIPTelemetry *telemetry) {
+    const MIPSolver *mip;
+
+    if (!model || !telemetry) return -1;
+
+    memset(telemetry, 0, sizeof(*telemetry));
+    mip = model->mip_solver;
+    if (!mip) return 0;
+
+    telemetry->status = mip->status;
+    telemetry->nodes_explored = mip->nodes_explored;
+    telemetry->solve_time = mip->solve_time;
+    telemetry->root_lp_time_ms = mip->root_lp_time_ms;
+    telemetry->node_lp_time_ms = mip->node_lp_time_ms;
+    telemetry->strong_branch_time_ms = mip->strong_branch_time_ms;
+    telemetry->root_cut_time_ms = mip->root_cut_time_ms;
+    telemetry->non_root_cut_time_ms = mip->non_root_cut_time_ms;
+
+    telemetry->lap_nodes_solved = mip->lap_nodes_solved;
+    telemetry->simplex_nodes_solved = mip->simplex_nodes_solved;
+    telemetry->node_lp_cold_starts = mip->node_lp_cold_starts;
+
+    telemetry->node_basis_warm_attempts = mip->node_basis_warm_attempts;
+    telemetry->node_basis_warm_applied = mip->node_basis_warm_applied;
+    telemetry->node_basis_warm_rejected = mip->node_basis_warm_rejected;
+    telemetry->node_basis_staged = mip->node_basis_staged;
+    telemetry->warm_reject_invalid_snapshot = mip->warm_reject_invalid_snapshot;
+    telemetry->warm_reject_restore_failure = mip->warm_reject_restore_failure;
+    telemetry->warm_reject_stage_failure = mip->warm_reject_stage_failure;
+    telemetry->warm_reject_stage_solve_rejected = mip->warm_reject_stage_solve_rejected;
+    telemetry->warm_reject_stage_solution_invalid = mip->warm_reject_stage_solution_invalid;
+
+    telemetry->strong_branch_probes = mip->strong_branch_probes;
+    telemetry->strong_branch_failures = mip->strong_branch_failures;
+    telemetry->strong_branch_recoveries = mip->strong_branch_recoveries;
+
+    telemetry->root_cut_rounds = mip->root_cut_rounds;
+    telemetry->root_cuts_generated = mip->root_cuts_generated;
+    telemetry->root_cuts_applied = mip->root_cuts_applied;
+    telemetry->non_root_cut_rounds = mip->non_root_cut_rounds;
+    telemetry->non_root_cuts_generated = mip->non_root_cuts_generated;
+    telemetry->non_root_cuts_applied = mip->non_root_cuts_applied;
+
+    telemetry->fathom_lp_infeasible = mip->fathom_lp_infeasible;
+    telemetry->fathom_bound = mip->fathom_bound;
+    telemetry->fathom_integral = mip->fathom_integral;
+    telemetry->fathom_no_branch_var = mip->fathom_no_branch_var;
+    return 0;
+}
+
 int ralph_core_get_solution_quality(const RalphModel *model, RalphSolutionQuality *quality) {
     if (!model || !quality) return -1;
 

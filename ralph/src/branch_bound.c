@@ -17,6 +17,12 @@
 #include "mip.h"
 #include "mip_lp_adapter.h"
 
+static double mip_branch_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0;
+}
+
 /* ============================================================================
  * Node Priority Queue
  * ============================================================================ */
@@ -623,6 +629,7 @@ int strong_branch(MIPSolver *solver, int var, double val,
     if (var < 0 || var >= num_struct || num_struct <= 0) return -1;
     if (!tab->lb_ext || !tab->ub_ext || !tab->basis || !tab->var_status) return -1;
     solver->strong_branch_probes++;
+    double probe_start_ms = mip_branch_now_ms();
 
     int m = tab->m;
     int n = tab->n;
@@ -685,6 +692,7 @@ int strong_branch(MIPSolver *solver, int var, double val,
     free(save_var_status);
     free(probe_lb);
     free(probe_ub);
+    solver->strong_branch_time_ms += mip_branch_now_ms() - probe_start_ms;
     return 0;
 
 strong_fail:
@@ -709,6 +717,7 @@ strong_fail:
     free(save_var_status);
     free(probe_lb);
     free(probe_ub);
+    solver->strong_branch_time_ms += mip_branch_now_ms() - probe_start_ms;
     return -1;
 }
 

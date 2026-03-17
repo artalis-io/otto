@@ -1659,11 +1659,102 @@ static int cuts_are_parallel(const Cut *a, const Cut *b) {
  * Cut Application
  * ============================================================================ */
 
+static int build_model_row_view(const LPModel *model,
+                                int **row_start_out,
+                                int **row_idx_out,
+                                double **row_val_out) {
+    int *row_start = NULL;
+    int *row_pos = NULL;
+    int *row_idx = NULL;
+    double *row_val = NULL;
+    SparseMatrix *A;
+
+    if (!model || !row_start_out || !row_idx_out || !row_val_out) return -1;
+    *row_start_out = NULL;
+    *row_idx_out = NULL;
+    *row_val_out = NULL;
+
+    A = model->A;
+    if (!A || model->num_cons <= 0 || A->nnz <= 0) return 0;
+
+    row_start = (int *)calloc((size_t)model->num_cons + 1, sizeof(int));
+    row_pos = (int *)calloc((size_t)model->num_cons, sizeof(int));
+    row_idx = (int *)calloc((size_t)A->nnz, sizeof(int));
+    row_val = (double *)calloc((size_t)A->nnz, sizeof(double));
+    if (!row_start || !row_pos || !row_idx || !row_val) {
+        free(row_start);
+        free(row_pos);
+        free(row_idx);
+        free(row_val);
+        return -1;
+    }
+
+    for (int p = 0; p < A->nnz; p++) {
+        int row = A->rowidx[p];
+        if (row >= 0 && row < model->num_cons) row_start[row + 1]++;
+    }
+    for (int i = 1; i <= model->num_cons; i++) {
+        row_start[i] += row_start[i - 1];
+    }
+
+    for (int col = 0; col < A->ncols; col++) {
+        for (int p = A->colptr[col]; p < A->colptr[col + 1]; p++) {
+            int row = A->rowidx[p];
+            if (row < 0 || row >= model->num_cons) continue;
+            int pos = row_start[row] + row_pos[row]++;
+            row_idx[pos] = col;
+            row_val[pos] = A->values[p];
+        }
+    }
+
+    free(row_pos);
+    *row_start_out = row_start;
+    *row_idx_out = row_idx;
+    *row_val_out = row_val;
+    return 0;
+}
+
+static int model_has_duplicate_cut(const LPModel *model,
+                                   const int *row_start,
+                                   const int *row_idx,
+                                   const double *row_val,
+                                   const Cut *cut) {
+    if (!model || !cut || !row_start || !row_idx || !row_val) return 0;
+
+    for (int row = 0; row < model->num_cons; row++) {
+        int start = row_start[row];
+        int end = row_start[row + 1];
+        if (end - start != cut->nnz) continue;
+        if (model->sense[row] != cut->sense) continue;
+        if (fabs(model->b[row] - cut->rhs) > RALPH_ZERO_TOL * (1.0 + fabs(cut->rhs))) continue;
+
+        int same = 1;
+        for (int k = 0; k < cut->nnz; k++) {
+            if (row_idx[start + k] != cut->indices[k]) {
+                same = 0;
+                break;
+            }
+            if (fabs(row_val[start + k] - cut->values[k]) >
+                RALPH_ZERO_TOL * (1.0 + fabs(cut->values[k]))) {
+                same = 0;
+                break;
+            }
+        }
+        if (same) return 1;
+    }
+
+    return 0;
+}
+
 /* Add cuts to the LP relaxation */
 int apply_cuts(MIPSolver *solver, CutPool *pool, int max_cuts) {
     if (!pool || pool->count == 0) return 0;
 
     LPModel *model = solver->working_model;
+    int *row_start = NULL;
+    int *row_idx = NULL;
+    double *row_val = NULL;
+    (void)build_model_row_view(model, &row_start, &row_idx, &row_val);
 
     /* Sort cuts by violation (descending) */
     for (int i = 0; i < pool->count - 1; i++) {
@@ -1690,6 +1781,9 @@ int apply_cuts(MIPSolver *solver, CutPool *pool, int max_cuts) {
         /* Skip if poor coefficient quality */
         if (!cut_quality_ok(cut)) continue;
 
+        /* Skip if this row already exists in the working model */
+        if (model_has_duplicate_cut(model, row_start, row_idx, row_val, cut)) continue;
+
         /* Skip if parallel to an already-applied cut */
         if (applied) {
             int is_parallel = 0;
@@ -1712,6 +1806,9 @@ int apply_cuts(MIPSolver *solver, CutPool *pool, int max_cuts) {
     }
 
     free(applied);
+    free(row_start);
+    free(row_idx);
+    free(row_val);
 
     /* Rebuild the LP if cuts were added */
     if (cuts_applied > 0) {

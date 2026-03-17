@@ -5974,11 +5974,14 @@ void test_public_telemetry_snapshot_api(void) {
 
     RalphLPSolverTelemetry lp_tel;
     RalphLUTelemetry lu_tel;
+    RalphMIPTelemetry mip_tel;
 
     ASSERT(ralph_core_get_last_lp_telemetry(NULL, &lp_tel) == -1,
            "LP telemetry getter rejects NULL model");
     ASSERT(ralph_core_get_last_lu_telemetry(NULL, &lu_tel) == -1,
            "LU telemetry getter rejects NULL model");
+    ASSERT(ralph_core_get_last_mip_telemetry(NULL, &mip_tel) == -1,
+           "MIP telemetry getter rejects NULL model");
 
     RalphModel *arg_model = ralph_test_create();
     build_telemetry_lp_case(arg_model);
@@ -5986,6 +5989,8 @@ void test_public_telemetry_snapshot_api(void) {
            "LP telemetry getter rejects NULL output");
     ASSERT(ralph_core_get_last_lu_telemetry(arg_model, NULL) == -1,
            "LU telemetry getter rejects NULL output");
+    ASSERT(ralph_core_get_last_mip_telemetry(arg_model, NULL) == -1,
+           "MIP telemetry getter rejects NULL output");
     ralph_test_free(arg_model);
 
     RalphModel *unsolved = ralph_test_create();
@@ -5994,10 +5999,14 @@ void test_public_telemetry_snapshot_api(void) {
            "Unsolved model returns LP telemetry snapshot");
     ASSERT(ralph_core_get_last_lu_telemetry(unsolved, &lu_tel) == 0,
            "Unsolved model returns LU telemetry snapshot");
+    ASSERT(ralph_core_get_last_mip_telemetry(unsolved, &mip_tel) == 0,
+           "Unsolved model returns MIP telemetry snapshot");
     ASSERT(lp_tel.perf_refactor_count == 0,
            "Unsolved model LP telemetry is zeroed");
     ASSERT(lu_tel.perf_factorize_calls == 0,
            "Unsolved model LU telemetry is zeroed");
+    ASSERT(mip_tel.nodes_explored == 0,
+           "Unsolved model MIP telemetry is zeroed");
     ralph_test_free(unsolved);
 
     RalphModel *lp_off = ralph_test_create();
@@ -6047,10 +6056,14 @@ void test_public_telemetry_snapshot_api(void) {
            "MIP telemetry=0 LP snapshot retrieved");
     ASSERT(ralph_core_get_last_lu_telemetry(mip_off, &lu_tel) == 0,
            "MIP telemetry=0 LU snapshot retrieved");
+    ASSERT(ralph_core_get_last_mip_telemetry(mip_off, &mip_tel) == 0,
+           "MIP telemetry=0 MIP snapshot retrieved");
     ASSERT(lp_tel.perf_refactor_count == 0,
            "MIP telemetry=0 keeps node LP refactor count at zero");
     ASSERT(lu_tel.perf_factorize_calls == 0,
            "MIP telemetry=0 keeps node LU factorize count at zero");
+    ASSERT(mip_tel.nodes_explored >= 0 && mip_tel.root_lp_time_ms >= 0.0,
+           "MIP telemetry=0 reports search counters");
     ralph_test_free(mip_off);
 
     RalphModel *mip_on = ralph_test_create();
@@ -6066,8 +6079,14 @@ void test_public_telemetry_snapshot_api(void) {
            "MIP telemetry=1 LP snapshot retrieved");
     ASSERT(ralph_core_get_last_lu_telemetry(mip_on, &lu_tel) == 0,
            "MIP telemetry=1 LU snapshot retrieved");
+    ASSERT(ralph_core_get_last_mip_telemetry(mip_on, &mip_tel) == 0,
+           "MIP telemetry=1 MIP snapshot retrieved");
     ASSERT(lu_tel.perf_factorize_calls >= 1,
            "MIP telemetry=1 records node LU factorization");
+    ASSERT(mip_tel.nodes_explored >= 0 &&
+           mip_tel.node_lp_time_ms >= 0.0 &&
+           mip_tel.strong_branch_time_ms >= 0.0,
+           "MIP telemetry=1 reports timing counters");
     ralph_test_free(mip_on);
 }
 

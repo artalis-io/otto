@@ -65,6 +65,20 @@ int fw_bench_run(
     double total_validate_time = 0;
     double total_cost = 0;
     double total_stops = 0;
+    double total_mip_nodes = 0.0;
+    double total_mip_root_lp_time = 0.0;
+    double total_mip_node_lp_time = 0.0;
+    double total_mip_strong_branch_time = 0.0;
+    double total_mip_strong_branch_probes = 0.0;
+    double total_mip_cold_starts = 0.0;
+    double total_mip_warm_rejects = 0.0;
+    double total_mip_root_cuts_applied = 0.0;
+    double total_mip_non_root_cuts_generated = 0.0;
+    double total_mip_non_root_cuts_applied = 0.0;
+    double total_mip_fathom_lp_infeasible = 0.0;
+    double total_mip_fathom_bound = 0.0;
+    double total_mip_fathom_integral = 0.0;
+    double total_mip_fathom_no_branch_var = 0.0;
 
     /* Create mutable config for seed iteration */
     FWBenchConfig cfg = *config;
@@ -133,6 +147,24 @@ int fw_bench_run(
         }
         if (solve_time > results->solve_time_max) {
             results->solve_time_max = solve_time;
+        }
+
+        if (effective_solver == FW_SOLVER_MILP) {
+            results->mip_samples++;
+            total_mip_nodes += solution.mip.nodes_explored;
+            total_mip_root_lp_time += solution.mip.root_lp_time_ms;
+            total_mip_node_lp_time += solution.mip.node_lp_time_ms;
+            total_mip_strong_branch_time += solution.mip.strong_branch_time_ms;
+            total_mip_strong_branch_probes += solution.mip.strong_branch_probes;
+            total_mip_cold_starts += solution.mip.node_lp_cold_starts;
+            total_mip_warm_rejects += solution.mip.node_basis_warm_rejected;
+            total_mip_root_cuts_applied += solution.mip.root_cuts_applied;
+            total_mip_non_root_cuts_generated += solution.mip.non_root_cuts_generated;
+            total_mip_non_root_cuts_applied += solution.mip.non_root_cuts_applied;
+            total_mip_fathom_lp_infeasible += solution.mip.fathom_lp_infeasible;
+            total_mip_fathom_bound += solution.mip.fathom_bound;
+            total_mip_fathom_integral += solution.mip.fathom_integral;
+            total_mip_fathom_no_branch_var += solution.mip.fathom_no_branch_var;
         }
 
         /* Validate */
@@ -241,6 +273,23 @@ int fw_bench_run(
     if (results->glpk_gap_count > 0) {
         results->glpk_gap_avg_pct = total_gap_pct / results->glpk_gap_count;
     }
+    if (results->mip_samples > 0) {
+        double denom = (double)results->mip_samples;
+        results->mip_nodes_avg = total_mip_nodes / denom;
+        results->mip_root_lp_time_ms_avg = total_mip_root_lp_time / denom;
+        results->mip_node_lp_time_ms_avg = total_mip_node_lp_time / denom;
+        results->mip_strong_branch_time_ms_avg = total_mip_strong_branch_time / denom;
+        results->mip_strong_branch_probes_avg = total_mip_strong_branch_probes / denom;
+        results->mip_cold_starts_avg = total_mip_cold_starts / denom;
+        results->mip_warm_rejects_avg = total_mip_warm_rejects / denom;
+        results->mip_root_cuts_applied_avg = total_mip_root_cuts_applied / denom;
+        results->mip_non_root_cuts_generated_avg = total_mip_non_root_cuts_generated / denom;
+        results->mip_non_root_cuts_applied_avg = total_mip_non_root_cuts_applied / denom;
+        results->mip_fathom_lp_infeasible_avg = total_mip_fathom_lp_infeasible / denom;
+        results->mip_fathom_bound_avg = total_mip_fathom_bound / denom;
+        results->mip_fathom_integral_avg = total_mip_fathom_integral / denom;
+        results->mip_fathom_no_branch_var_avg = total_mip_fathom_no_branch_var / denom;
+    }
 
     return 0;
 }
@@ -299,6 +348,26 @@ void fw_bench_print_results(
             printf("      \"max\": %.2f\n", results->glpk_solve_time_max);
             printf("    },\n");
             printf("    \"speedup\": %.1f\n", results->glpk_speedup_avg);
+            printf("  }");
+        }
+        if (results->mip_samples > 0) {
+            printf(",\n");
+            printf("  \"mip\": {\n");
+            printf("    \"samples\": %d,\n", results->mip_samples);
+            printf("    \"nodes_avg\": %.2f,\n", results->mip_nodes_avg);
+            printf("    \"root_lp_time_ms_avg\": %.2f,\n", results->mip_root_lp_time_ms_avg);
+            printf("    \"node_lp_time_ms_avg\": %.2f,\n", results->mip_node_lp_time_ms_avg);
+            printf("    \"strong_branch_time_ms_avg\": %.2f,\n", results->mip_strong_branch_time_ms_avg);
+            printf("    \"strong_branch_probes_avg\": %.2f,\n", results->mip_strong_branch_probes_avg);
+            printf("    \"cold_starts_avg\": %.2f,\n", results->mip_cold_starts_avg);
+            printf("    \"warm_rejects_avg\": %.2f,\n", results->mip_warm_rejects_avg);
+            printf("    \"root_cuts_applied_avg\": %.2f,\n", results->mip_root_cuts_applied_avg);
+            printf("    \"non_root_cuts_generated_avg\": %.2f,\n", results->mip_non_root_cuts_generated_avg);
+            printf("    \"non_root_cuts_applied_avg\": %.2f,\n", results->mip_non_root_cuts_applied_avg);
+            printf("    \"fathom_lp_infeasible_avg\": %.2f,\n", results->mip_fathom_lp_infeasible_avg);
+            printf("    \"fathom_bound_avg\": %.2f,\n", results->mip_fathom_bound_avg);
+            printf("    \"fathom_integral_avg\": %.2f,\n", results->mip_fathom_integral_avg);
+            printf("    \"fathom_no_branch_var_avg\": %.2f\n", results->mip_fathom_no_branch_var_avg);
             printf("  }\n");
         } else {
             printf("\n");
@@ -350,6 +419,28 @@ void fw_bench_print_results(
                results->cost_avg, results->cost_min, results->cost_max);
         printf("  Stops: %.1f avg\n", results->stops_avg);
         printf("\n");
+
+        if (results->mip_samples > 0) {
+            printf("MIP Telemetry:\n");
+            printf("  Nodes: %.1f avg\n", results->mip_nodes_avg);
+            printf("  Root LP time: %.2f ms avg\n", results->mip_root_lp_time_ms_avg);
+            printf("  Node LP time: %.2f ms avg\n", results->mip_node_lp_time_ms_avg);
+            printf("  Strong branching: %.2f probes avg, %.2f ms avg\n",
+                   results->mip_strong_branch_probes_avg,
+                   results->mip_strong_branch_time_ms_avg);
+            printf("  Warm rejects / cold starts: %.2f / %.2f avg\n",
+                   results->mip_warm_rejects_avg,
+                   results->mip_cold_starts_avg);
+            printf("  Root cuts / non-root cuts applied: %.2f / %.2f avg\n",
+                   results->mip_root_cuts_applied_avg,
+                   results->mip_non_root_cuts_applied_avg);
+            printf("  Fathom (lp/bound/integer/no-branch): %.2f / %.2f / %.2f / %.2f avg\n",
+                   results->mip_fathom_lp_infeasible_avg,
+                   results->mip_fathom_bound_avg,
+                   results->mip_fathom_integral_avg,
+                   results->mip_fathom_no_branch_var_avg);
+            printf("\n");
+        }
 
         /* GLPK comparison section */
         if (results->glpk_enabled) {

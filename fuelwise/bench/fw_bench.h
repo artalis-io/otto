@@ -160,6 +160,23 @@ typedef struct {
     double glpk_gap_avg_pct;        /* Average gap */
     double glpk_gap_max_pct;        /* Worst case (largest gap) */
     int glpk_gap_count;             /* Number of instances with valid gap */
+
+    /* MIP telemetry averages (MILP/Benders runs that populate solution.mip) */
+    int mip_samples;
+    double mip_nodes_avg;
+    double mip_root_lp_time_ms_avg;
+    double mip_node_lp_time_ms_avg;
+    double mip_strong_branch_time_ms_avg;
+    double mip_strong_branch_probes_avg;
+    double mip_cold_starts_avg;
+    double mip_warm_rejects_avg;
+    double mip_root_cuts_applied_avg;
+    double mip_non_root_cuts_generated_avg;
+    double mip_non_root_cuts_applied_avg;
+    double mip_fathom_lp_infeasible_avg;
+    double mip_fathom_bound_avg;
+    double mip_fathom_integral_avg;
+    double mip_fathom_no_branch_var_avg;
 } FWBenchResults;
 
 /* ============================================================================
