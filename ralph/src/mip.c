@@ -17,6 +17,8 @@
 #include "mip_lp_adapter.h"
 #include "lp_log.h"
 
+#define MIP_INCUMBENT_BOUND_SNAP_TOL 1e-4
+
 /* Apply P5/P6 feature flags and iteration budget from MIP solver to LP sub-solver.
  * MIP LP solves should NEVER run for 1M+ iterations — if v2 cycles for >2000
  * iterations on a node LP, something is wrong and cold-start fallback handles it. */
@@ -325,25 +327,84 @@ int mip_set_start_ex(MIPSolver *solver, const double *x, const int *mask,
  * Update Incumbent
  * ============================================================================ */
 
+static int mip_solution_satisfies_rows_tol(const LPModel *model,
+                                           const double *x,
+                                           double tol) {
+    if (!model || !x) return 0;
+    if (!model->A || model->num_cons <= 0) return 1;
+
+    double *ax = (double*)calloc((size_t)model->num_cons, sizeof(double));
+    if (!ax) return 0;
+    sparse_matvec(model->A, x, ax);
+
+    for (int i = 0; i < model->num_cons; i++) {
+        double lhs = ax[i];
+        double rhs = model->b[i];
+        char sense = model->sense[i];
+        int violated = 0;
+        if (sense == 'L' && lhs > rhs + tol) {
+            violated = 1;
+        } else if (sense == 'G' && lhs < rhs - tol) {
+            violated = 1;
+        } else if (sense == 'E' && fabs(lhs - rhs) > tol) {
+            violated = 1;
+        }
+        if (violated) {
+            free(ax);
+            return 0;
+        }
+    }
+
+    free(ax);
+    return 1;
+}
+
 static void update_incumbent(MIPSolver *solver, const double *solution, double obj) {
     LPModel *model = solver->original_model;
+    double *candidate = NULL;
     double accepted_obj = 0.0;
+    int snapped = 0;
     (void)obj;
 
     if (!solver || !model || !solution) return;
+    candidate = (double*)malloc((size_t)model->num_vars * sizeof(double));
+    if (!candidate) return;
+    memcpy(candidate, solution, (size_t)model->num_vars * sizeof(double));
 
-    /* Reject non-finite, out-of-bounds, or non-integral incumbent candidates. */
+    /* Reject non-finite values. Clamp tiny bound drift and near-integral
+     * values so branch-and-bound can accept numerically valid incumbents. */
     for (int j = 0; j < model->num_vars; j++) {
-        double v = solution[j];
+        double v = candidate[j];
         if (!isfinite(v)) {
+            free(candidate);
             return;
         }
-        if (v < model->lb[j] - RALPH_FEAS_TOL || v > model->ub[j] + RALPH_FEAS_TOL) {
-            if (solver->verbose >= 2) {
-                LP_LOG_STDOUT("  [update_incumbent] Rejected out-of-bounds solution (var %d = %.12g)\n",
-                              j, v);
+        if (isfinite(model->lb[j]) && v < model->lb[j]) {
+            if (model->lb[j] - v <= MIP_INCUMBENT_BOUND_SNAP_TOL) {
+                candidate[j] = model->lb[j];
+                v = candidate[j];
+                snapped = 1;
+            } else {
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDOUT("  [update_incumbent] Rejected out-of-bounds solution (var %d = %.12g)\n",
+                                  j, v);
+                }
+                free(candidate);
+                return;
             }
-            return;
+        } else if (isfinite(model->ub[j]) && v > model->ub[j]) {
+            if (v - model->ub[j] <= MIP_INCUMBENT_BOUND_SNAP_TOL) {
+                candidate[j] = model->ub[j];
+                v = candidate[j];
+                snapped = 1;
+            } else {
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDOUT("  [update_incumbent] Rejected out-of-bounds solution (var %d = %.12g)\n",
+                                  j, v);
+                }
+                free(candidate);
+                return;
+            }
         }
         if (solver->is_integer && solver->is_integer[j] &&
             fabs(v - round(v)) > RALPH_INT_TOL) {
@@ -351,41 +412,22 @@ static void update_incumbent(MIPSolver *solver, const double *solution, double o
                 LP_LOG_STDOUT("  [update_incumbent] Rejected non-integral solution (var %d = %.12g)\n",
                               j, v);
             }
+            free(candidate);
             return;
+        } else if (solver->is_integer && solver->is_integer[j]) {
+            candidate[j] = round(v);
+            v = candidate[j];
         }
-        accepted_obj += model->c[j] * v;
+        accepted_obj += model->c[j] * candidate[j];
     }
 
-    /* First verify constraint feasibility (Ax sense b) */
-    if (model->A && model->num_cons > 0) {
-        double *ax = (double*)calloc(model->num_cons, sizeof(double));
-        if (ax) {
-            sparse_matvec(model->A, solution, ax);
-
-            for (int i = 0; i < model->num_cons; i++) {
-                double lhs = ax[i];
-                double rhs = model->b[i];
-                char sense = model->sense[i];
-
-                int violated = 0;
-                if (sense == 'L' && lhs > rhs + RALPH_FEAS_TOL) {
-                    violated = 1;
-                } else if (sense == 'G' && lhs < rhs - RALPH_FEAS_TOL) {
-                    violated = 1;
-                } else if (sense == 'E' && fabs(lhs - rhs) > RALPH_FEAS_TOL) {
-                    violated = 1;
-                }
-
-                if (violated) {
-                    free(ax);
-                    if (solver->verbose >= 2) {
-                        LP_LOG_STDOUT("  [update_incumbent] Rejected infeasible solution (constraint %d violated)\n", i);
-                    }
-                    return;  /* Reject infeasible solution */
-                }
-            }
-            free(ax);
+    if (!mip_solution_satisfies_rows_tol(model, candidate,
+                                         fmax(RALPH_FEAS_TOL, MIP_INCUMBENT_BOUND_SNAP_TOL))) {
+        if (solver->verbose >= 2) {
+            LP_LOG_STDOUT("  [update_incumbent] Rejected infeasible solution after bound snap\n");
         }
+        free(candidate);
+        return;
     }
 
     int is_better = 0;
@@ -394,20 +436,31 @@ static void update_incumbent(MIPSolver *solver, const double *solution, double o
     } else {  /* Maximize */
         is_better = (accepted_obj > solver->best_obj + RALPH_OPT_TOL);
     }
+    if (solver->verbose >= 2) {
+        LP_LOG_STDOUT("  [update_incumbent] Candidate obj=%.10f best=%.10f better=%s\n",
+                      accepted_obj,
+                      solver->best_obj,
+                      is_better ? "yes" : "no");
+    }
 
     if (is_better) {
         solver->best_obj = accepted_obj;
-        memcpy(solver->best_solution, solution, model->num_vars * sizeof(double));
+        memcpy(solver->best_solution, candidate, (size_t)model->num_vars * sizeof(double));
         solver->has_incumbent = 1;
         node_queue_set_incumbent_found(solver->node_queue);
 
         /* Update cutoff for pruning */
         solver->cutoff = accepted_obj;
 
+        if (solver->verbose >= 2 && snapped) {
+            LP_LOG_STDOUT("  [update_incumbent] Accepted after bound snap (tol=%.1e)\n",
+                          MIP_INCUMBENT_BOUND_SNAP_TOL);
+        }
         if (solver->verbose) {
             LP_LOG_STDOUT("*** New incumbent: %.6f\n", accepted_obj);
         }
     }
+    free(candidate);
 }
 
 /* Validate and, if feasible, accept a user-provided MIP start as incumbent.
@@ -550,33 +603,7 @@ static int mip_solution_within_node_bounds(const LPModel *model,
 }
 
 static int mip_solution_satisfies_rows(const LPModel *model, const double *x) {
-    if (!model || !x) return 0;
-    if (!model->A || model->num_cons <= 0) return 1;
-
-    double *ax = (double*)calloc((size_t)model->num_cons, sizeof(double));
-    if (!ax) return 0;
-    sparse_matvec(model->A, x, ax);
-
-    for (int i = 0; i < model->num_cons; i++) {
-        double lhs = ax[i];
-        double rhs = model->b[i];
-        char sense = model->sense[i];
-        int violated = 0;
-        if (sense == 'L' && lhs > rhs + RALPH_FEAS_TOL) {
-            violated = 1;
-        } else if (sense == 'G' && lhs < rhs - RALPH_FEAS_TOL) {
-            violated = 1;
-        } else if (sense == 'E' && fabs(lhs - rhs) > RALPH_FEAS_TOL) {
-            violated = 1;
-        }
-        if (violated) {
-            free(ax);
-            return 0;
-        }
-    }
-
-    free(ax);
-    return 1;
+    return mip_solution_satisfies_rows_tol(model, x, RALPH_FEAS_TOL);
 }
 
 /* ============================================================================
