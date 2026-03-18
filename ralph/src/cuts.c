@@ -600,13 +600,23 @@ typedef struct {
 static int cmir_extract_source_row(
     SimplexTableau *tab, int basic_pos, const int *is_integer,
     double *row_coefs, double *row_rhs,
-    int aggr_depth, int *used_rows, const double *x_val)
+    int aggr_depth, int *used_rows, const double *x_val,
+    int base_row_limit)
 {
     int m = tab->m;
     int n = tab->n;
     int num_orig = tab->model->num_vars;
     LPModel *model = tab->model;
     int basic_var = tab->basis[basic_pos];
+    int aux_idx;
+
+    if (basic_var >= num_orig) {
+        aux_idx = basic_var - num_orig;
+        if (aux_idx >= 0 && aux_idx < tab->num_aux &&
+            tab->aux_row && tab->aux_row[aux_idx] >= base_row_limit) {
+            return 0;
+        }
+    }
 
     if (aggr_depth == 0) {
         /* Base case: compute tableau row e_i' * B^{-1} * A */
@@ -638,11 +648,16 @@ static int cmir_extract_source_row(
                 row_coefs[j] += a_ij;
             } else {
                 /* Slack variable: substitute using constraint mapping */
-                int aux_idx = j - num_orig;
+                aux_idx = j - num_orig;
                 if (aux_idx >= 0 && aux_idx < tab->num_aux &&
                     tab->aux_row && tab->aux_coef) {
                     int con_row = tab->aux_row[aux_idx];
                     double aux_c = tab->aux_coef[aux_idx];
+
+                    if (con_row >= base_row_limit) {
+                        free(pi);
+                        return 0;
+                    }
 
                     double rsign = tab->row_sign[con_row];
                     double con_rhs = model->b[con_row] * rsign;
@@ -724,6 +739,7 @@ static int cmir_extract_source_row(
     for (int p = model->A->colptr[kappa]; p < model->A->colptr[kappa + 1]; p++) {
         int row = model->A->rowidx[p];
         if (used_rows[row]) continue;
+        if (row >= base_row_limit) continue;
         double val = model->A->values[p];
         if (fabs(val) < CMIR_PIVOT_MIN) continue;
 
@@ -1368,7 +1384,8 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
             /* Extract base row */
             if (!cmir_extract_source_row(tab, k, solver->is_integer,
                                          work.a, &work.b, 0, used_rows,
-                                         work.x_val)) {
+                                         work.x_val,
+                                         solver->base_relaxation_num_cons)) {
                 break;  /* Base extraction failed, skip this row */
             }
 
@@ -1377,7 +1394,8 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
             for (int d = 0; d < depth; d++) {
                 if (!cmir_extract_source_row(tab, k, solver->is_integer,
                                              work.a, &work.b, 1, used_rows,
-                                             work.x_val)) {
+                                             work.x_val,
+                                             solver->base_relaxation_num_cons)) {
                     aggr_ok = 0;
                     break;
                 }

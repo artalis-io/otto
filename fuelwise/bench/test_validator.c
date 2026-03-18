@@ -20,6 +20,14 @@
 static int tests_run = 0;
 static int tests_passed = 0;
 
+typedef struct {
+    int solved;
+    double objective;
+    double solve_time_ms;
+} FWGlpkResult;
+
+int fw_glpk_solve(const FWRefuelProblem *problem, FWGlpkResult *result);
+
 #define ASSERT(cond, msg) do { \
     tests_run++; \
     if (cond) { \
@@ -323,6 +331,48 @@ static void test_milp15_seed_validates(uint64_t seed)
     ASSERT(feasible == 1, "Regression MILP seed validates independently");
     if (!feasible) {
         printf("  Validation error: %s\n", result.error_msg);
+    }
+
+    fw_free_solution(&solution);
+    fw_bench_free_instance(&instance);
+}
+
+static void test_milp_seed_matches_glpk(const char *label,
+                                        FWBenchConfig cfg,
+                                        uint64_t seed)
+{
+    FWBenchInstance instance;
+    FWRefuelSolution solution;
+    FWGlpkResult glpk;
+    int rc;
+
+    cfg.seed = seed;
+    memset(&instance, 0, sizeof(instance));
+    memset(&solution, 0, sizeof(solution));
+    memset(&glpk, 0, sizeof(glpk));
+
+    printf("\n=== Test: %s Matches GLPK ===\n", label);
+
+    rc = fw_bench_generate(&cfg, &instance);
+    ASSERT(rc == 0, "Benchmark instance generated");
+    if (rc != 0) return;
+
+    rc = fw_glpk_solve(&instance.problem, &glpk);
+    ASSERT(rc == 0 && glpk.solved, "GLPK solves regression instance");
+    if (rc != 0 || !glpk.solved) {
+        fw_bench_free_instance(&instance);
+        return;
+    }
+
+    rc = fw_solve_refuel_milp(&instance.problem, &solution);
+    ASSERT(rc == 0 && solution.status == FW_STATUS_OPTIMAL,
+           "FuelWise MILP solves regression instance");
+    if (rc == 0 && solution.status == FW_STATUS_OPTIMAL) {
+        double gap = fabs(solution.total_cost - glpk.objective);
+        printf("  Ralph objective: %.6f\n", solution.total_cost);
+        printf("  GLPK objective:  %.6f\n", glpk.objective);
+        printf("  Absolute gap:    %.6f\n", gap);
+        ASSERT(gap <= 1e-4, "Objective matches GLPK regression reference");
     }
 
     fw_free_solution(&solution);
@@ -1964,6 +2014,8 @@ int main(void)
     test_min_purchase_milp();
     test_milp15_seed_validates(12347);
     test_milp15_seed_validates(12348);
+    test_milp_seed_matches_glpk("MILP30 seed 42", fw_bench_config_milp_30(), 42);
+    test_milp_seed_matches_glpk("MILP200 seed 42", fw_bench_config_milp_200(), 42);
     test_minimum_fuel_maintained();
 
     /* Economic optimality tests */

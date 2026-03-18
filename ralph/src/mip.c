@@ -205,6 +205,7 @@ int mip_recover_root_relaxation(MIPSolver *solver) {
         return -1;
     }
 
+    solver->base_relaxation_num_cons = solver->working_model->num_cons;
     solver->cut_recovery_success++;
     return 0;
 }
@@ -321,6 +322,7 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
         mip_free(solver);
         return NULL;
     }
+    solver->base_relaxation_num_cons = solver->working_model->num_cons;
 
     solver->status = RALPH_STATUS_UNKNOWN;
     solver->last_solved_node_id = -1;

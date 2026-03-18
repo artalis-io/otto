@@ -213,6 +213,7 @@ typedef struct {
     CutPool *cut_pool;
     int cuts_generated;
     int cuts_applied;
+    int base_relaxation_num_cons; /* Presolved row count before generated cuts are added */
 
     /* Pseudo-costs for branching */
     double *pseudo_cost_down;

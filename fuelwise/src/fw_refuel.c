@@ -932,12 +932,13 @@ int fw_solve_refuel_milp(
     int fw_debug = (getenv("FW_DEBUG") != NULL);
     ralph_mip_set_int_param(model, "verbose", fw_debug ? 2 : (fw_verbose ? 1 : 0));
     /* FuelWise keeps the generic root cut loop, but excludes the SCP-only
-     * family. Mixed Gomory+MIR remains unsafe on the singleton-row presolved
-     * stop-cost/min-purchase MILPs, so keep MIR disabled here until the
-     * separator interaction is fixed in Ralph. */
+     * family. Ralph now rejects c-MIR source rows that depend on generated
+     * cut constraints, which keeps the singleton-row presolved stop-cost /
+     * min-purchase MILPs objective-clean under mixed Gomory+MIR separation. */
     ralph_mip_set_int_param(model, "max_cut_rounds", 3);
     ralph_mip_set_int_param(model, "root_cut_mask",
                             RALPH_MIP_ROOT_CUT_MASK_GOMORY |
+                            RALPH_MIP_ROOT_CUT_MASK_MIR |
                             RALPH_MIP_ROOT_CUT_MASK_COVER);
     if (fw_presolve) {
         ralph_mip_set_int_param(model, "presolve", 1);
