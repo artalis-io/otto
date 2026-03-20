@@ -17,6 +17,10 @@
 #include "mip_lp_adapter.h"
 #include "lp_log.h"
 
+static double mip_cpu_time_now(void) {
+    return (double)clock() / CLOCKS_PER_SEC;
+}
+
 /* Apply P5/P6 feature flags and iteration budget from MIP solver to LP sub-solver.
  * MIP LP solves should NEVER run for 1M+ iterations — if v2 cycles for >2000
  * iterations on a node LP, something is wrong and cold-start fallback handles it. */
@@ -201,12 +205,21 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     solver->node_basis_warm_rejected = 0;
     solver->node_basis_staged = 0;
     solver->node_basis_stage_cooldown = 0;
+    solver->node_basis_direct_reuse = 0;
+    solver->node_basis_no_snapshot = 0;
+    solver->node_basis_snapshot_invalid = 0;
+    solver->node_basis_live_restore_failures = 0;
     solver->strong_branch_probes = 0;
     solver->strong_branch_failures = 0;
     solver->strong_branch_recoveries = 0;
     solver->cut_recovery_attempts = 0;
     solver->cut_recovery_success = 0;
     solver->cut_recovery_failures = 0;
+    solver->node_lp_warm_dual_fallbacks = 0;
+    solver->node_lp_warm_bound_fallbacks = 0;
+    solver->node_lp_state_restore_attempts = 0;
+    solver->node_lp_state_restore_success = 0;
+    solver->node_lp_state_restore_failures = 0;
 
     /* Try to detect LAP structure for specialized solving */
     solver->use_lap_solver = 0;
@@ -328,35 +341,75 @@ int mip_set_start_ex(MIPSolver *solver, const double *x, const int *mask,
 static void update_incumbent(MIPSolver *solver, const double *solution, double obj) {
     LPModel *model = solver->original_model;
 
+    /* Reject candidates that violate original variable bounds or integrality.
+     * Constraint feasibility alone is not sufficient for MIP incumbents. */
+    for (int j = 0; j < model->num_vars; j++) {
+        double v = solution[j];
+        if (!isfinite(v)) {
+            if (solver->verbose >= 2) {
+                LP_LOG_STDOUT("  [update_incumbent] Rejected non-finite solution value at var %d\n", j);
+            }
+            return;
+        }
+        if (v < model->lb[j] - RALPH_FEAS_TOL || v > model->ub[j] + RALPH_FEAS_TOL) {
+            if (solver->verbose >= 2) {
+                LP_LOG_STDOUT("  [update_incumbent] Rejected bound-violating solution at var %d (%.10g not in [%.10g, %.10g])\n",
+                              j, v, model->lb[j], model->ub[j]);
+            }
+            return;
+        }
+        if (solver->is_integer && solver->is_integer[j] &&
+            fabs(v - round(v)) > RALPH_INT_TOL) {
+            if (solver->verbose >= 2) {
+                LP_LOG_STDOUT("  [update_incumbent] Rejected non-integral solution at var %d (%.10g)\n",
+                              j, v);
+            }
+            return;
+        }
+    }
+
     /* First verify constraint feasibility (Ax sense b) */
     if (model->A && model->num_cons > 0) {
         double *ax = (double*)calloc(model->num_cons, sizeof(double));
-        if (ax) {
-            sparse_matvec(model->A, solution, ax);
-
-            for (int i = 0; i < model->num_cons; i++) {
-                double lhs = ax[i];
-                double rhs = model->b[i];
-                char sense = model->sense[i];
-
-                int violated = 0;
-                if (sense == 'L' && lhs > rhs + RALPH_FEAS_TOL) {
-                    violated = 1;
-                } else if (sense == 'G' && lhs < rhs - RALPH_FEAS_TOL) {
-                    violated = 1;
-                } else if (sense == 'E' && fabs(lhs - rhs) > RALPH_FEAS_TOL) {
-                    violated = 1;
-                }
-
-                if (violated) {
-                    free(ax);
-                    if (solver->verbose >= 2) {
-                        LP_LOG_STDOUT("  [update_incumbent] Rejected infeasible solution (constraint %d violated)\n", i);
-                    }
-                    return;  /* Reject infeasible solution */
-                }
+        if (!ax) {
+            if (solver->verbose >= 2) {
+                LP_LOG_STDOUT("  [update_incumbent] Rejected candidate due to validation allocation failure\n");
             }
-            free(ax);
+            return;
+        }
+
+        sparse_matvec(model->A, solution, ax);
+
+        for (int i = 0; i < model->num_cons; i++) {
+            double lhs = ax[i];
+            double rhs = model->b[i];
+            char sense = model->sense[i];
+
+            int violated = 0;
+            if (sense == 'L' && lhs > rhs + RALPH_FEAS_TOL) {
+                violated = 1;
+            } else if (sense == 'G' && lhs < rhs - RALPH_FEAS_TOL) {
+                violated = 1;
+            } else if (sense == 'E' && fabs(lhs - rhs) > RALPH_FEAS_TOL) {
+                violated = 1;
+            }
+
+            if (violated) {
+                free(ax);
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDOUT("  [update_incumbent] Rejected infeasible solution (constraint %d violated)\n", i);
+                }
+                return;  /* Reject infeasible solution */
+            }
+        }
+        free(ax);
+    }
+
+    /* Recompute objective from the validated original-space solution. */
+    obj = model->obj_offset;
+    if (model->c) {
+        for (int j = 0; j < model->num_vars; j++) {
+            obj += model->c[j] * solution[j];
         }
     }
 
@@ -789,6 +842,7 @@ static int rins_heuristic(MIPSolver *solver) {
     int num_vars = model->num_vars;
     double *lp_sol = lp->solution;
     double *inc_sol = solver->best_solution;
+    double t_rins_start = mip_cpu_time_now();
 
     solver->rins_calls++;
 
@@ -996,6 +1050,7 @@ rins_cleanup:
 
     free(orig_lb);
     free(orig_ub);
+    solver->time_rins += mip_cpu_time_now() - t_rins_start;
 
     return found_incumbent ? 0 : -1;
 }
@@ -1081,7 +1136,6 @@ static int stage_node_basis_for_cold_start(MIPSolver *solver, SimplexSolver *lp,
     if (!solver || !lp || !node_has_saved_basis(node)) return -1;
     if (mip_lp_stage_warm_basis(lp, node->basis_size, node->var_status_size,
                                 node->basis, node->var_status) != 0) {
-        clear_node_basis(node);
         solver->node_basis_warm_rejected++;
         return -1;
     }
@@ -1091,23 +1145,80 @@ static int stage_node_basis_for_cold_start(MIPSolver *solver, SimplexSolver *lp,
 
 static int restore_node_basis_live(MIPSolver *solver, SimplexSolver *lp,
                                    BBNode *node) {
-    if (!solver || !lp || !lp->tableau || !node_has_saved_basis(node)) return -1;
+    if (!solver || !lp || !lp->tableau || !solver->working_model ||
+        !node_has_saved_basis(node)) return -1;
 
     SimplexTableau *tab = lp->tableau;
-    if (tab->num_artificial != 0) return -1;
     if (node->basis_size != tab->m || node->var_status_size != tab->n) return -1;
 
     solver->node_basis_warm_attempts++;
+
+    if (mip_lp_apply_structural_bounds(tab, solver->working_model->num_vars,
+                                       node->lb, node->ub) != 0) {
+        solver->node_basis_live_restore_failures++;
+        return -1;
+    }
 
     if (mip_lp_restore_warm_basis(lp, node->basis_size, node->var_status_size,
                                   node->basis, node->var_status) != 0) {
         clear_node_basis(node);
         solver->node_basis_warm_rejected++;
+        solver->node_basis_live_restore_failures++;
         return -1;
     }
 
     solver->node_basis_warm_applied++;
     return 0;
+}
+
+static int restore_node_lp_state(MIPSolver *solver, BBNode *node) {
+    if (!solver || !solver->lp_solver || !solver->working_model || !node) {
+        return -1;
+    }
+
+    solver->node_lp_state_restore_attempts++;
+
+    if (node_has_saved_basis(node) &&
+        restore_node_basis_live(solver, solver->lp_solver, node) == 0 &&
+        solver->lp_solver->solution &&
+        mip_solution_within_node_bounds(solver->working_model,
+                                        solver->lp_solver->solution,
+                                        node->lb, node->ub)) {
+        solver->lp_solver->status = (node->lp_status != 0) ?
+                                    node->lp_status : RALPH_STATUS_OPTIMAL;
+        solver->lp_solver->obj_value = node->lp_bound;
+        solver->lp_solver->iterations = node->lp_iterations;
+        solver->last_solved_node_id = node->id;
+        solver->node_lp_state_restore_success++;
+        return 0;
+    }
+
+    /* Equality-heavy models can carry artificial columns through Phase 2.
+     * If live basis restore is unavailable after probing, re-solve this node
+     * once from its own bounds and immediately re-snapshot that state so the
+     * next child still inherits a reusable parent tableau/solution pair. */
+    LPModel *model = solver->working_model;
+    for (int j = 0; j < model->num_vars; j++) {
+        model->lb[j] = node->lb[j];
+        model->ub[j] = node->ub[j];
+    }
+    if (mip_lp_cold_start_primal(solver->lp_solver, 2) == 0 &&
+        solver->lp_solver->status == RALPH_STATUS_OPTIMAL &&
+        solver->lp_solver->solution &&
+        mip_solution_within_node_bounds(model, solver->lp_solver->solution,
+                                        node->lb, node->ub)) {
+        node->lp_status = solver->lp_solver->status;
+        node->lp_bound = solver->lp_solver->obj_value;
+        node->lp_iterations = solver->lp_solver->iterations;
+        save_basis_to_node(solver->lp_solver, node, model->num_vars);
+        solver->last_solved_node_id = node->id;
+        solver->node_lp_state_restore_success++;
+        return 0;
+    }
+
+    solver->last_solved_node_id = -1;
+    solver->node_lp_state_restore_failures++;
+    return -1;
 }
 
 /* ============================================================================
@@ -1165,6 +1276,7 @@ static int solve_node_lp_as_lap(MIPSolver *solver, BBNode *node) {
 }
 
 static int solve_node_lp(MIPSolver *solver, BBNode *node) {
+    double t_node_start = mip_cpu_time_now();
     /* Try LAP solver first if available */
     if (solver->use_lap_solver) {
         int lap_result = solve_node_lp_as_lap(solver, node);
@@ -1190,10 +1302,15 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     int has_saved_basis = node_has_saved_basis(node);
     int can_warm_reuse = 0;
     int stage_allowed = (solver->node_basis_stage_cooldown <= 0);
+    int used_direct_reuse = 0;
     if (has_saved_basis && !node_basis_snapshot_sane(node)) {
         clear_node_basis(node);
         solver->node_basis_warm_rejected++;
+        solver->node_basis_snapshot_invalid++;
         has_saved_basis = 0;
+    }
+    if (!has_saved_basis) {
+        solver->node_basis_no_snapshot++;
     }
 
     /* Update model bounds from node */
@@ -1214,12 +1331,14 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
 
     /* Warm reuse is only allowed when this node carries a saved LP basis.
      * This removes the old ad-hoc "reuse whatever tableau is lying around" path. */
-    if (has_saved_basis && tab && tab->num_artificial == 0) {
+    if (has_saved_basis && tab) {
         int direct_reuse = (node->id == solver->last_solved_node_id) ||
                            (node->parent_id == solver->last_solved_node_id);
         if (direct_reuse) {
             solver->node_basis_warm_applied++;
+            solver->node_basis_direct_reuse++;
             can_warm_reuse = 1;
+            used_direct_reuse = 1;
             tab = lp->tableau;
         } else if (restore_node_basis_live(solver, lp, node) == 0) {
             can_warm_reuse = 1;
@@ -1228,7 +1347,9 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     }
 
     if (can_warm_reuse) {
-        if (mip_lp_apply_structural_bounds(tab, model->num_vars, node->lb, node->ub) == 0 &&
+        double t_warm_start = mip_cpu_time_now();
+        if (((!used_direct_reuse) ||
+             mip_lp_apply_structural_bounds(tab, model->num_vars, node->lb, node->ub) == 0) &&
             mip_lp_recompute(tab) == 0) {
             int rc = -1;
             (void)mip_lp_dual_reopt(lp, 500, &rc);
@@ -1238,8 +1359,11 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
             }
             if (rc == 0 && lp->status == RALPH_STATUS_OPTIMAL) {
                 if (mip_solution_within_node_bounds(model, lp->solution, node->lb, node->ub)) {
+                    solver->node_lp_warm_solves++;
+                    solver->time_node_lp_warm += mip_cpu_time_now() - t_warm_start;
                     goto node_lp_done;
                 }
+                solver->node_lp_warm_bound_fallbacks++;
                 if (solver->verbose >= 2) {
                     LP_LOG_STDOUT("  [solve_node_lp] warm solution violates node bounds; forcing cold start\n");
                 }
@@ -1247,8 +1371,11 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
             /* v2 detected infeasible or hit objective limit — valid result */
             if (lp->status == RALPH_STATUS_INFEASIBLE ||
                 lp->status == RALPH_STATUS_OBJ_LIMIT) {
+                solver->node_lp_warm_solves++;
+                solver->time_node_lp_warm += mip_cpu_time_now() - t_warm_start;
                 goto node_lp_done;
             }
+            solver->node_lp_warm_dual_fallbacks++;
         }
         if (solver->verbose >= 2) {
             LP_LOG_STDOUT("  [solve_node_lp] warm path failed, cold starting\n");
@@ -1258,14 +1385,14 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     }
 
     /* Cold start: stage node basis (if any), rebuild tableau, solve with primal. */
+    double t_cold_start = mip_cpu_time_now();
     if (has_saved_basis && stage_allowed) {
         (void)stage_node_basis_for_cold_start(solver, lp, node);
     }
     (void)mip_lp_cold_start_primal(lp, 2);
     if (lp->warm_basis_last_rejected) {
-        /* Cooldown gate: avoid repeatedly feeding staged warm bases when they
-         * are rejected on this topology/branch neighborhood. */
-        clear_node_basis(node);
+        /* Keep the node snapshot for future live dual reuse even if primal
+         * tableau setup rejected the staged warm basis. */
         solver->node_basis_warm_rejected++;
         if (solver->node_basis_stage_cooldown < 64)
             solver->node_basis_stage_cooldown = 64;
@@ -1276,8 +1403,34 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
         LP_LOG_STDOUT("  [solve_node_lp] cold: status=%d iters=%d obj=%.4f\n",
                lp->status, lp->iterations, lp->obj_value);
     }
+    if (lp->status == RALPH_STATUS_OPTIMAL && lp->solution &&
+        !mip_solution_within_node_bounds(model, lp->solution, node->lb, node->ub)) {
+        if (solver->verbose >= 2) {
+            LP_LOG_STDOUT("  [solve_node_lp] cold solution violates node bounds; retrying without staged basis\n");
+        }
+        if (lp->warm_basis_last_applied) {
+            solver->node_basis_warm_rejected++;
+            if (solver->node_basis_stage_cooldown < 64)
+                solver->node_basis_stage_cooldown = 64;
+        }
+        (void)mip_lp_cold_start_primal(lp, 2);
+        if (solver->verbose >= 2) {
+            LP_LOG_STDOUT("  [solve_node_lp] cold retry: status=%d iters=%d obj=%.4f\n",
+                   lp->status, lp->iterations, lp->obj_value);
+        }
+        if (lp->status == RALPH_STATUS_OPTIMAL && lp->solution &&
+            !mip_solution_within_node_bounds(model, lp->solution, node->lb, node->ub)) {
+            if (solver->verbose >= 2) {
+                LP_LOG_STDOUT("  [solve_node_lp] retry still violates node bounds; marking node solve invalid\n");
+            }
+            lp->status = RALPH_STATUS_ERROR;
+        }
+    }
+    solver->node_lp_cold_solves++;
+    solver->time_node_lp_cold += mip_cpu_time_now() - t_cold_start;
 
 node_lp_done:
+    solver->time_node_lp_total += mip_cpu_time_now() - t_node_start;
     node->lp_status = lp->status;
     node->lp_bound = lp->obj_value;
     node->lp_iterations = lp->iterations;
@@ -1461,6 +1614,10 @@ static int process_node(MIPSolver *solver, BBNode *node) {
         }
     }
 
+    /* Branching heuristics can probe and mutate the live LP state.
+     * Clear the direct-reuse marker until we restore a clean node state. */
+    solver->last_solved_node_id = -1;
+
     /* Select branching variable. Some selector paths can fail to return a
      * candidate even when the current LP solution is still fractional. Fall
      * back to the plain most-infeasible scan before pruning the node. */
@@ -1468,7 +1625,10 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     if (select_branch_variable(solver, lp_sol, &branch_var) != 0) {
         int fallback = mip_select_most_infeasible(solver, lp_sol);
         if (fallback < 0 && solver->lp_solver && solver->working_model) {
-            if (mip_lp_cold_start_primal(solver->lp_solver, 2) == 0 &&
+            if (restore_node_lp_state(solver, node) == 0) {
+                lp_sol = solver->lp_solver->solution;
+                fallback = mip_select_most_infeasible(solver, lp_sol);
+            } else if (mip_lp_cold_start_primal(solver->lp_solver, 2) == 0 &&
                 solver->lp_solver->status == RALPH_STATUS_OPTIMAL &&
                 solver->lp_solver->tableau &&
                 mip_lp_apply_structural_bounds(solver->lp_solver->tableau,
@@ -1504,10 +1664,30 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     if (!lp_sol) {
         /* LP solution lost — recover through adapter-managed LP lifecycle. */
         if (solver->lp_solver) {
-            (void)mip_lp_recover_state(solver->lp_solver);
+            if (restore_node_lp_state(solver, node) != 0) {
+                (void)mip_lp_recover_state(solver->lp_solver);
+            }
             lp_sol = solver->lp_solver->solution;
         }
         if (!lp_sol) return -1;  /* Unrecoverable — prune node */
+    }
+    if (!mip_solution_within_node_bounds(model, lp_sol, node->lb, node->ub)) {
+        if (solver->lp_solver &&
+            restore_node_lp_state(solver, node) == 0) {
+            lp_sol = solver->lp_solver->solution;
+            lp_obj = solver->lp_solver->obj_value;
+        } else if (solver->lp_solver &&
+            mip_lp_cold_start_primal(solver->lp_solver, 2) == 0 &&
+            solver->lp_solver->status == RALPH_STATUS_OPTIMAL) {
+            lp_sol = solver->lp_solver->solution;
+            lp_obj = solver->lp_solver->obj_value;
+        }
+        if (!lp_sol || !mip_solution_within_node_bounds(model, lp_sol, node->lb, node->ub)) {
+            if (solver->verbose >= 2) {
+                LP_LOG_STDOUT("  [process_node] LP state remains outside node bounds after recovery; pruning node\n");
+            }
+            return 0;
+        }
     }
 
     /* Guard against stale branch choice after reliability/strong probing. */
@@ -1521,7 +1701,10 @@ static int process_node(MIPSolver *solver, BBNode *node) {
              * when recovery paths report success. Rebuild once and retry
              * fractional-variable detection before pruning the node. */
             if (solver->lp_solver && solver->working_model) {
-                if (mip_lp_cold_start_primal(solver->lp_solver, 2) == 0 &&
+                if (restore_node_lp_state(solver, node) == 0) {
+                    lp_sol = solver->lp_solver->solution;
+                    fallback = mip_select_most_infeasible(solver, lp_sol);
+                } else if (mip_lp_cold_start_primal(solver->lp_solver, 2) == 0 &&
                     solver->lp_solver->status == RALPH_STATUS_OPTIMAL &&
                     solver->lp_solver->tableau &&
                     mip_lp_apply_structural_bounds(solver->lp_solver->tableau,
@@ -1548,9 +1731,16 @@ static int process_node(MIPSolver *solver, BBNode *node) {
                       branch_var, branch_val);
     }
 
+    /* Leave the live LP in the solved parent-node state so immediate children
+     * can inherit and reoptimize from the actual parent basis. */
+    (void)restore_node_lp_state(solver, node);
+    if (solver->lp_solver && solver->lp_solver->solution) {
+        lp_sol = solver->lp_solver->solution;
+    }
+
     /* Create child nodes */
     BBNode *child_down, *child_up;
-    compute_branch_children(solver, node, branch_var, &child_down, &child_up);
+    compute_branch_children(solver, node, branch_var, lp_sol, &child_down, &child_up);
     if (!child_down && !child_up) {
         if (solver->verbose >= 2) {
             LP_LOG_STDOUT("  [process_node] Branch produced no tightening; pruning node\n");
@@ -1713,25 +1903,41 @@ static int solve_root_node(MIPSolver *solver) {
 
     while (cut_rounds < solver->max_cut_rounds && total_cuts_applied < max_cuts_total) {
         int cuts_added = 0;
+        int gomory_added = 0;
+        int mir_added = 0;
+        int cover_added = 0;
+        int scp_cuts = 0;
+        double t_sep_start;
+
+        solver->root_cut_rounds++;
 
         /* Age existing cuts before generating new ones */
         cut_pool_age(solver->cut_pool);
 
+        t_sep_start = mip_cpu_time_now();
         /* Generate Gomory cuts (from integer basic variable rows) */
-        cuts_added += generate_gomory_cuts(solver, solver->cut_pool);
+        gomory_added = generate_gomory_cuts(solver, solver->cut_pool);
+        cuts_added += gomory_added;
+        solver->root_gomory_cuts_generated += gomory_added;
 
         /* Generate MIR cuts (from continuous basic variable rows) */
-        cuts_added += generate_mir_cuts(solver, solver->cut_pool);
+        mir_added = generate_mir_cuts(solver, solver->cut_pool);
+        cuts_added += mir_added;
+        solver->root_mir_cuts_generated += mir_added;
 
         /* Generate cover cuts (from knapsack constraints) */
-        cuts_added += generate_cover_cuts(solver, solver->cut_pool);
+        cover_added = generate_cover_cuts(solver, solver->cut_pool);
+        cuts_added += cover_added;
+        solver->root_cover_cuts_generated += cover_added;
 
         /* Generate SCP-specific cuts (clique, odd-hole, lifted cover) */
         if (solver->use_scp_solver) {
-            int scp_cuts = generate_scp_cuts(solver, solver->cut_pool);
+            scp_cuts = generate_scp_cuts(solver, solver->cut_pool);
             cuts_added += scp_cuts;
+            solver->root_scp_cuts_generated += scp_cuts;
             solver->scp_cuts_generated += scp_cuts;
         }
+        solver->time_root_cut_separation += mip_cpu_time_now() - t_sep_start;
 
         if (cuts_added == 0) {
             /* No new cuts - clean up old ones and try one more time */
@@ -1753,7 +1959,10 @@ static int solve_root_node(MIPSolver *solver) {
         }
 
         /* Apply cuts to the LP relaxation */
+        {
+            double t_apply_start = mip_cpu_time_now();
         int cuts_applied = apply_cuts(solver, solver->cut_pool, solver->max_cuts_per_round);
+            solver->time_root_cut_apply += mip_cpu_time_now() - t_apply_start;
         total_cuts_applied += cuts_applied;
 
         if (cuts_applied > 0) {
@@ -1774,7 +1983,12 @@ static int solve_root_node(MIPSolver *solver) {
             }
 
             /* Re-solve LP with cuts */
+            solver->root_lp_resolves++;
+            {
+                double t_resolve_start = mip_cpu_time_now();
             simplex_solve(solver->lp_solver);
+                solver->time_root_lp_resolve += mip_cpu_time_now() - t_resolve_start;
+            }
 
             if (solver->verbose) {
                 LP_LOG_STDOUT("  LP after cuts: status=%d, obj=%.6f\n",
@@ -1840,6 +2054,7 @@ static int solve_root_node(MIPSolver *solver) {
                     LP_LOG_STDOUT("Cut cleanup: removed %d old cuts\n", before - solver->cut_pool->count);
                 }
             }
+        }
         }
 
         cut_rounds++;
@@ -2060,7 +2275,14 @@ int mip_solve(MIPSolver *solver) {
  * ============================================================================ */
 
 void mip_print_stats(const MIPSolver *solver) {
+    double solve_time;
+    double strong_avg_ms = 0.0;
+
     if (!solver) return;
+    solve_time = (solver->solve_time > 0.0) ? solver->solve_time : 1.0;
+    if (solver->strong_branch_probes > 0) {
+        strong_avg_ms = 1000.0 * solver->time_strong_branch / solver->strong_branch_probes;
+    }
 
     LP_LOG_STDOUT("\n=== MIP Statistics ===\n");
     LP_LOG_STDOUT("Status: %d\n", solver->status);
@@ -2072,6 +2294,33 @@ void mip_print_stats(const MIPSolver *solver) {
     LP_LOG_STDOUT("Strong probes: %d (failures=%d, recovered=%d)\n",
            solver->strong_branch_probes, solver->strong_branch_failures,
            solver->strong_branch_recoveries);
+    LP_LOG_STDOUT("Warm basis: direct=%d restore_attempts=%d applied=%d rejected=%d no_snapshot=%d invalid=%d restore_fail=%d\n",
+           solver->node_basis_direct_reuse, solver->node_basis_warm_attempts,
+           solver->node_basis_warm_applied, solver->node_basis_warm_rejected,
+           solver->node_basis_no_snapshot, solver->node_basis_snapshot_invalid,
+           solver->node_basis_live_restore_failures);
+    LP_LOG_STDOUT("Node LP solves: simplex=%d warm=%d cold=%d lap=%d\n",
+           solver->simplex_nodes_solved, solver->node_lp_warm_solves,
+           solver->node_lp_cold_solves, solver->lap_nodes_solved);
+    LP_LOG_STDOUT("Node LP time: total=%.3fs (warm=%.3fs, cold=%.3fs)\n",
+           solver->time_node_lp_total, solver->time_node_lp_warm,
+           solver->time_node_lp_cold);
+    LP_LOG_STDOUT("Warm fallbacks: dual=%d bounds=%d state_restore=%d/%d (fail=%d)\n",
+           solver->node_lp_warm_dual_fallbacks, solver->node_lp_warm_bound_fallbacks,
+           solver->node_lp_state_restore_success, solver->node_lp_state_restore_attempts,
+           solver->node_lp_state_restore_failures);
+    LP_LOG_STDOUT("Strong-branch time: %.3fs (avg %.3f ms/probe, %.1f%% of solve)\n",
+           solver->time_strong_branch, strong_avg_ms,
+           100.0 * solver->time_strong_branch / solve_time);
+    LP_LOG_STDOUT("Root cuts: rounds=%d gomory=%d mir=%d cover=%d scp=%d\n",
+           solver->root_cut_rounds, solver->root_gomory_cuts_generated,
+           solver->root_mir_cuts_generated, solver->root_cover_cuts_generated,
+           solver->root_scp_cuts_generated);
+    LP_LOG_STDOUT("Root cut time: sep=%.3fs apply=%.3fs lp_resolve=%.3fs (resolves=%d)\n",
+           solver->time_root_cut_separation, solver->time_root_cut_apply,
+           solver->time_root_lp_resolve, solver->root_lp_resolves);
+    LP_LOG_STDOUT("RINS time: %.3fs (%.1f%% of solve)\n",
+           solver->time_rins, 100.0 * solver->time_rins / solve_time);
     LP_LOG_STDOUT("Cut-loop recovery: attempts=%d success=%d failures=%d\n",
            solver->cut_recovery_attempts, solver->cut_recovery_success,
            solver->cut_recovery_failures);

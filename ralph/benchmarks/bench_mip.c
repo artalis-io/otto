@@ -33,6 +33,11 @@
  * Random number generator (deterministic for reproducibility)
  * ============================================================================ */
 
+/* Internal benchmark hook */
+typedef struct MIPSolver MIPSolver;
+MIPSolver* ralph_get_mip_solver(const RalphModel *model);
+void mip_print_stats(const MIPSolver *solver);
+
 static unsigned int g_seed = 42;
 
 static void seed_random(unsigned int seed) {
@@ -521,6 +526,8 @@ typedef struct {
 
 static SolveResult solve_with_ralph(MIPProblem *prob, double time_limit, int use_specialized) {
     SolveResult result = {0};
+    const char *stats_env = getenv("RALPH_MIP_STATS");
+    int emit_stats = (stats_env && stats_env[0] != '\0' && stats_env[0] != '0');
 
     RalphModel *model = ralph_test_create();
     if (!model) {
@@ -596,6 +603,17 @@ static SolveResult solve_with_ralph(MIPProblem *prob, double time_limit, int use
         result.status = 1;
     } else {
         result.status = 2;
+    }
+
+    if (emit_stats) {
+        MIPSolver *mip = ralph_get_mip_solver(model);
+        printf("\n[telemetry] %s (%s)\n",
+               prob->name, use_specialized ? "Ralph+Spec" : "Ralph");
+        if (mip) {
+            mip_print_stats(mip);
+        } else {
+            printf("No internal MIP solver available\n");
+        }
     }
 
     ralph_test_free(model);

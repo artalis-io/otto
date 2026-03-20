@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include "ralph_test_mod_api.h"
 #include "lp.h"
 #include "mip.h"
@@ -15,6 +16,19 @@
 SimplexSolver* simplex_create(LPModel *model);
 int simplex_solve(SimplexSolver *solver);
 void simplex_free(SimplexSolver *solver);
+MIPSolver* ralph_get_mip_solver(const RalphModel *model);
+
+static unsigned int g_sp_seed;
+
+static double sp_rand_double(double min, double max) {
+    g_sp_seed = g_sp_seed * 1103515245u + 12345u;
+    return min + ((double)(g_sp_seed % 100000u) / 100000.0) * (max - min);
+}
+
+static int sp_rand_int(int min, int max) {
+    g_sp_seed = g_sp_seed * 1103515245u + 12345u;
+    return min + (int)(g_sp_seed % (unsigned int)(max - min + 1));
+}
 
 /*
  * Simple test problem:
@@ -187,11 +201,261 @@ int test_ralph_wrapper(void) {
     return 0;
 }
 
+/*
+ * Focused regression for the quick benchmark mismatch:
+ * SetPartitioning(10 elements, 30 subsets, density 0.35, seed 42)
+ * should solve to the exact-cover optimum 12.40383.
+ */
+int test_set_partitioning_benchmark_objective_regression(void) {
+    printf("\n=== test_set_partitioning_benchmark_objective_regression ===\n");
+
+    const int num_elements = 10;
+    const int num_subsets = 30;
+    const double density = 0.35;
+    const double expected_obj = 12.40383;
+    int failed = 0;
+
+    RalphModel *model = NULL;
+    double *costs = NULL;
+    int *covers = NULL;
+    int *indices = NULL;
+    double *values = NULL;
+    double *x = NULL;
+
+    g_sp_seed = 42;
+    model = ralph_test_create();
+    if (!model) {
+        printf("FAIL: Could not create benchmark regression model\n");
+        return 1;
+    }
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+
+    costs = (double*)malloc((size_t)num_subsets * sizeof(double));
+    covers = (int*)calloc((size_t)num_elements * (size_t)num_subsets, sizeof(int));
+    indices = (int*)malloc((size_t)num_subsets * sizeof(int));
+    values = (double*)malloc((size_t)num_subsets * sizeof(double));
+    x = (double*)calloc((size_t)num_subsets, sizeof(double));
+    if (!costs || !covers || !indices || !values || !x) {
+        printf("FAIL: Could not allocate benchmark regression buffers\n");
+        failed = 1;
+        goto cleanup;
+    }
+
+    for (int j = 0; j < num_subsets; j++) {
+        costs[j] = sp_rand_double(1.0, 10.0);
+        ralph_test_add_var(model, 0.0, 1.0, costs[j], RALPH_BINARY);
+        values[j] = 1.0;
+    }
+
+    for (int i = 0; i < num_elements; i++) {
+        int nnz = 0;
+        for (int j = 0; j < num_subsets; j++) {
+            if (sp_rand_double(0.0, 1.0) < density) {
+                indices[nnz] = j;
+                covers[i * num_subsets + j] += 1;
+                nnz++;
+            }
+        }
+        while (nnz < 2) {
+            int j = sp_rand_int(0, num_subsets - 1);
+            indices[nnz] = j;
+            covers[i * num_subsets + j] += 1;
+            nnz++;
+        }
+        ralph_test_add_constraint(model, nnz, indices, values, RALPH_EQUAL, 1.0);
+    }
+
+    ralph_test_set_int_param(model, "verbose", 0);
+    ralph_test_set_int_param(model, "presolve", 1);
+    ralph_test_set_dbl_param(model, "time_limit", 60.0);
+    ralph_test_set_int_param(model, "max_nodes", 100000);
+    ralph_test_optimize(model);
+
+    if (ralph_test_get_status(model) != RALPH_STATUS_OPTIMAL) {
+        printf("FAIL: Expected OPTIMAL, got status=%d\n", (int)ralph_test_get_status(model));
+        failed = 1;
+        goto cleanup;
+    }
+
+    if (fabs(ralph_test_get_objval(model) - expected_obj) > 1e-5) {
+        printf("FAIL: Expected objective %.5f, got %.10f\n",
+               expected_obj, ralph_test_get_objval(model));
+        failed = 1;
+        goto cleanup;
+    }
+
+    if (ralph_test_get_solution(model, x) != 0) {
+        printf("FAIL: Could not retrieve benchmark regression solution\n");
+        failed = 1;
+        goto cleanup;
+    }
+
+    for (int j = 0; j < num_subsets; j++) {
+        if (x[j] < -1e-9 || x[j] > 1.0 + 1e-9) {
+            printf("FAIL: Solution violates binary bounds at var %d (%.10f)\n", j, x[j]);
+            failed = 1;
+            goto cleanup;
+        }
+        if (fabs(x[j] - round(x[j])) > 1e-9) {
+            printf("FAIL: Solution violates integrality at var %d (%.10f)\n", j, x[j]);
+            failed = 1;
+            goto cleanup;
+        }
+    }
+
+    for (int i = 0; i < num_elements; i++) {
+        double sum = 0.0;
+        for (int j = 0; j < num_subsets; j++) {
+            sum += (double)covers[i * num_subsets + j] * x[j];
+        }
+        if (fabs(sum - 1.0) > 1e-9) {
+            printf("FAIL: Element %d is not exactly covered once (sum=%.10f)\n", i, sum);
+            failed = 1;
+            goto cleanup;
+        }
+    }
+
+    printf("PASS: objective %.5f with valid exact-cover binary solution\n",
+           ralph_test_get_objval(model));
+
+cleanup:
+    free(costs);
+    free(covers);
+    free(indices);
+    free(values);
+    free(x);
+    ralph_test_free(model);
+    return failed;
+}
+
+/*
+ * Reliability/strong-branch regression for equality-heavy set partitioning.
+ * After failed probes, the solver should recover a reusable node LP state
+ * and reach at least some warm node solves on this benchmark family.
+ */
+int test_set_partitioning_reliability_recovery_regression(void) {
+    printf("\n=== test_set_partitioning_reliability_recovery_regression ===\n");
+
+    const int num_elements = 10;
+    const int num_subsets = 30;
+    const double density = 0.35;
+    int failed = 0;
+
+    RalphModel *model = NULL;
+    int *covers = NULL;
+    int *indices = NULL;
+    double *values = NULL;
+
+    g_sp_seed = 42;
+    model = ralph_test_create();
+    if (!model) {
+        printf("FAIL: Could not create reliability recovery model\n");
+        return 1;
+    }
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+
+    covers = (int*)calloc((size_t)num_elements * (size_t)num_subsets, sizeof(int));
+    indices = (int*)malloc((size_t)num_subsets * sizeof(int));
+    values = (double*)malloc((size_t)num_subsets * sizeof(double));
+    if (!covers || !indices || !values) {
+        printf("FAIL: Could not allocate reliability recovery buffers\n");
+        failed = 1;
+        goto cleanup;
+    }
+
+    for (int j = 0; j < num_subsets; j++) {
+        ralph_test_add_var(model, 0.0, 1.0, sp_rand_double(1.0, 10.0), RALPH_BINARY);
+        values[j] = 1.0;
+    }
+
+    for (int i = 0; i < num_elements; i++) {
+        int nnz = 0;
+        for (int j = 0; j < num_subsets; j++) {
+            if (sp_rand_double(0.0, 1.0) < density) {
+                indices[nnz] = j;
+                covers[i * num_subsets + j] += 1;
+                nnz++;
+            }
+        }
+        while (nnz < 2) {
+            int j = sp_rand_int(0, num_subsets - 1);
+            indices[nnz] = j;
+            covers[i * num_subsets + j] += 1;
+            nnz++;
+        }
+        ralph_test_add_constraint(model, nnz, indices, values, RALPH_EQUAL, 1.0);
+    }
+
+    ralph_test_set_int_param(model, "verbose", 0);
+    ralph_test_set_int_param(model, "presolve", 1);
+    ralph_test_set_int_param(model, "var_select", 3);  /* reliability */
+    ralph_test_set_dbl_param(model, "time_limit", 60.0);
+    ralph_test_set_int_param(model, "max_nodes", 100000);
+    ralph_test_optimize(model);
+
+    if (ralph_test_get_status(model) != RALPH_STATUS_OPTIMAL) {
+        printf("FAIL: Expected OPTIMAL, got status=%d\n", (int)ralph_test_get_status(model));
+        failed = 1;
+        goto cleanup;
+    }
+
+    MIPSolver *mip = ralph_get_mip_solver(model);
+    if (!mip) {
+        printf("FAIL: Reliability recovery MIP solver unavailable\n");
+        failed = 1;
+        goto cleanup;
+    }
+
+    if (mip->strong_branch_failures <= 0) {
+        printf("FAIL: Expected at least one failed strong-branch probe, got %d\n",
+               mip->strong_branch_failures);
+        failed = 1;
+        goto cleanup;
+    }
+    if (mip->strong_branch_recoveries != mip->strong_branch_failures) {
+        printf("FAIL: Expected all failed probes recovered (%d/%d)\n",
+               mip->strong_branch_recoveries, mip->strong_branch_failures);
+        failed = 1;
+        goto cleanup;
+    }
+    if (mip->node_lp_state_restore_success <= 0) {
+        printf("FAIL: Expected reusable post-probe node-state restores, got %d\n",
+               mip->node_lp_state_restore_success);
+        failed = 1;
+        goto cleanup;
+    }
+    if (mip->node_lp_state_restore_failures != 0) {
+        printf("FAIL: Expected zero post-probe restore failures, got %d\n",
+               mip->node_lp_state_restore_failures);
+        failed = 1;
+        goto cleanup;
+    }
+    if (mip->node_lp_warm_solves <= 0) {
+        printf("FAIL: Expected warm node LP solves after recovery, got %d\n",
+               mip->node_lp_warm_solves);
+        failed = 1;
+        goto cleanup;
+    }
+
+    printf("PASS: recoveries=%d state_restores=%d warm_solves=%d\n",
+           mip->strong_branch_recoveries, mip->node_lp_state_restore_success,
+           mip->node_lp_warm_solves);
+
+cleanup:
+    free(covers);
+    free(indices);
+    free(values);
+    ralph_test_free(model);
+    return failed;
+}
+
 int main(void) {
     int failures = 0;
 
     failures += test_basic_mip();
     failures += test_ralph_wrapper();
+    failures += test_set_partitioning_benchmark_objective_regression();
+    failures += test_set_partitioning_reliability_recovery_regression();
 
     printf("\n=== Summary ===\n");
     if (failures == 0) {
