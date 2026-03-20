@@ -2308,6 +2308,13 @@ void test_mip_incumbent_feasibility_regression(void) {
                 }
             }
             ASSERT(feasible, "Returned incumbent must satisfy all constraints");
+
+            for (int j = 0; j < num_subsets; j++) {
+                ASSERT(x[j] >= -1e-9 && x[j] <= 1.0 + 1e-9,
+                       "Returned incumbent must satisfy binary bounds");
+                ASSERT(fabs(x[j] - round(x[j])) <= 1e-9,
+                       "Returned incumbent must remain integral");
+            }
         } else if (status == RALPH_STATUS_NODE_LIMIT || status == RALPH_STATUS_TIME_LIMIT) {
             ASSERT(1, "Node/time limit reached without incumbent is acceptable");
         }

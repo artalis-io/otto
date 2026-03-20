@@ -229,12 +229,16 @@ typedef struct {
     MIPLAPSignature *lap_sig;    /* LAP signature for LP relaxations */
     int lap_nodes_solved;        /* Number of nodes solved with LAP */
     int simplex_nodes_solved;    /* Number of nodes solved with simplex */
-    int last_solved_node_id;     /* ID of last node whose LP was solved (for child detection) */
+    int last_solved_node_id;     /* Node id currently represented by live LP state (-1 if unknown) */
     int node_basis_warm_attempts; /* Live node-basis warm restore attempts */
     int node_basis_warm_applied;  /* Live node-basis warm restores applied */
     int node_basis_warm_rejected; /* Live node-basis restores rejected/fallback */
     int node_basis_staged;        /* Cold starts that staged node basis via LP warm API */
     int node_basis_stage_cooldown; /* Nodes to skip staged warm-basis after repeated rejection */
+    int node_basis_direct_reuse;   /* Child/node solves that reused live LP state directly */
+    int node_basis_no_snapshot;    /* Node LP solves with no saved basis snapshot */
+    int node_basis_snapshot_invalid; /* Saved basis snapshots rejected as inconsistent */
+    int node_basis_live_restore_failures; /* Live warm-basis restores that failed */
     int strong_branch_probes;      /* Strong-branch probe calls */
     int strong_branch_failures;    /* Strong-branch probe calls that failed */
     int strong_branch_recoveries;  /* Failed probes that recovered LP state */
@@ -246,6 +250,29 @@ typedef struct {
     int rc_fixings;              /* Total variables fixed by reduced-cost fixing */
     int rins_calls;              /* Number of RINS heuristic invocations */
     int rins_found;              /* Number of incumbents found by RINS */
+
+    /* MIP phase telemetry */
+    int root_cut_rounds;         /* Root cut-loop rounds entered */
+    int root_lp_resolves;        /* Root LP re-solves after cut application */
+    int node_lp_warm_solves;     /* Node LP solves completed via warm reopt */
+    int node_lp_cold_solves;     /* Node LP solves completed via cold start */
+    int root_gomory_cuts_generated; /* Root Gomory cuts generated */
+    int root_mir_cuts_generated;    /* Root MIR cuts generated */
+    int root_cover_cuts_generated;  /* Root cover cuts generated */
+    int root_scp_cuts_generated;    /* Root SCP-specific cuts generated */
+    int node_lp_warm_dual_fallbacks; /* Warm node solves that fell back after dual reopt */
+    int node_lp_warm_bound_fallbacks; /* Warm node solves that fell back after bound check */
+    int node_lp_state_restore_attempts; /* Attempts to restore a clean node LP state after probing */
+    int node_lp_state_restore_success;  /* Successful node LP state restores after probing */
+    int node_lp_state_restore_failures; /* Failed node LP state restores after probing */
+    double time_node_lp_total;      /* Total simplex node LP time */
+    double time_node_lp_warm;       /* Warm node LP reopt time */
+    double time_node_lp_cold;       /* Cold node LP solve time */
+    double time_strong_branch;      /* Strong-branch probe time */
+    double time_root_cut_separation;/* Root cut generation time */
+    double time_root_cut_apply;     /* Root cut application time */
+    double time_root_lp_resolve;    /* Root LP re-solve time after cuts */
+    double time_rins;               /* RINS heuristic time */
 
     /* SCP-specific optimizations (for set covering/partitioning MIPs) */
     int use_scp_solver;          /* 1 if SCP structure detected and enabled */
@@ -295,6 +322,7 @@ BBNode* bb_node_pool_copy(BBNodePool *pool, const BBNode *src, int num_vars);
 /* Branching */
 int select_branch_variable(MIPSolver *solver, const double *solution, int *branch_var);
 void compute_branch_children(MIPSolver *solver, BBNode *parent, int branch_var,
+                            const double *solution,
                             BBNode **child_down, BBNode **child_up);
 
 /* Strong branching */

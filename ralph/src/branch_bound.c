@@ -17,6 +17,10 @@
 #include "mip.h"
 #include "mip_lp_adapter.h"
 
+static double mip_cpu_time_now(void) {
+    return (double)clock() / CLOCKS_PER_SEC;
+}
+
 /* ============================================================================
  * Node Priority Queue
  * ============================================================================ */
@@ -608,6 +612,7 @@ static int select_pseudo_cost(MIPSolver *solver, const double *solution) {
 int strong_branch(MIPSolver *solver, int var, double val,
                   double *down_obj, double *up_obj, int max_iter) {
     int recovered = 0;
+    double t_start = mip_cpu_time_now();
 
     *down_obj = RALPH_INFINITY;
     *up_obj = RALPH_INFINITY;
@@ -684,6 +689,7 @@ int strong_branch(MIPSolver *solver, int var, double val,
     free(save_var_status);
     free(probe_lb);
     free(probe_ub);
+    solver->time_strong_branch += mip_cpu_time_now() - t_start;
     return 0;
 
 strong_fail:
@@ -708,6 +714,7 @@ strong_fail:
     free(save_var_status);
     free(probe_lb);
     free(probe_ub);
+    solver->time_strong_branch += mip_cpu_time_now() - t_start;
     return -1;
 }
 
@@ -1088,9 +1095,10 @@ double estimate_branch_obj(MIPSolver *solver, int var, double val, BranchDir dir
  * ============================================================================ */
 
 void compute_branch_children(MIPSolver *solver, BBNode *parent, int branch_var,
+                            const double *solution,
                             BBNode **child_down, BBNode **child_up) {
     int num_vars = solver->original_model->num_vars;
-    if (!solver->lp_solver || !solver->lp_solver->solution) {
+    if (!solution) {
         *child_down = NULL;
         *child_up = NULL;
         return;
@@ -1102,7 +1110,7 @@ void compute_branch_children(MIPSolver *solver, BBNode *parent, int branch_var,
         return;
     }
 
-    double val = solver->lp_solver->solution[branch_var];
+    double val = solution[branch_var];
     double down_ub = floor(val);
     double up_lb = ceil(val);
 
@@ -1160,9 +1168,20 @@ void compute_branch_children(MIPSolver *solver, BBNode *parent, int branch_var,
  * ============================================================================ */
 
 int check_integer_feasibility(MIPSolver *solver, const double *solution) {
+    const LPModel *bounds_model;
+
+    if (!solver || !solution) return 0;
+    bounds_model = solver->working_model ? solver->working_model : solver->original_model;
+    if (!bounds_model) return 0;
+
     for (int k = 0; k < solver->num_integers; k++) {
         int j = solver->integer_vars[k];
         double val = solution[j];
+        if (!isfinite(val)) return 0;
+        if (val < bounds_model->lb[j] - RALPH_FEAS_TOL ||
+            val > bounds_model->ub[j] + RALPH_FEAS_TOL) {
+            return 0;  /* Violates current node/original bounds */
+        }
         double frac = val - floor(val);
 
         if (frac > RALPH_INT_TOL && frac < 1.0 - RALPH_INT_TOL) {
