@@ -824,6 +824,167 @@ cleanup:
     return failed;
 }
 
+int test_augmented_prepared_one_phase_to_two_phase_regression(void) {
+    printf("\n=== test_augmented_prepared_one_phase_to_two_phase_regression ===\n");
+
+    int failed = 0;
+    LPModel *base_model = lp_model_create();
+    LPModel *aug_model = lp_model_create();
+    SimplexSolver *base_solver = NULL;
+    SimplexSolver *aug_solver = NULL;
+    int *warm_basis = NULL;
+    VarStatus *warm_status = NULL;
+
+    if (!base_model || !aug_model) {
+        printf("FAIL: Could not create one-phase augmentation regression models\n");
+        failed = 1;
+        goto cleanup;
+    }
+
+    base_model->obj_sense = 1;
+    aug_model->obj_sense = 1;
+    for (int i = 0; i < 2; i++) {
+        double cost = (i == 0) ? 1.0 : 2.0;
+        lp_model_add_var(base_model, 0.0, RALPH_INFINITY, cost, 'C');
+        lp_model_add_var(aug_model, 0.0, RALPH_INFINITY, cost, 'C');
+    }
+
+    {
+        int ind[] = {0, 1};
+        double val[] = {1.0, 1.0};
+        lp_model_add_constraint(base_model, 2, ind, val, 'L', 1.0);
+        lp_model_add_constraint(aug_model, 2, ind, val, 'L', 1.0);
+    }
+    {
+        int ind[] = {0};
+        double val[] = {1.0};
+        lp_model_add_constraint(aug_model, 1, ind, val, 'G', 0.4);
+    }
+
+    if (lp_model_finalize(base_model) != 0 || lp_model_finalize(aug_model) != 0) {
+        printf("FAIL: Could not finalize one-phase augmentation regression models\n");
+        failed = 1;
+        goto cleanup;
+    }
+
+    base_solver = simplex_create(base_model);
+    aug_solver = simplex_create(aug_model);
+    if (!base_solver || !aug_solver) {
+        printf("FAIL: Could not create one-phase augmentation regression solvers\n");
+        failed = 1;
+        goto cleanup;
+    }
+
+    base_solver->verbose = 0;
+    base_solver->method = 0;
+    aug_solver->verbose = 0;
+    aug_solver->method = 0;
+
+    if (simplex_solve(base_solver) != 0 || base_solver->status != RALPH_STATUS_OPTIMAL) {
+        printf("FAIL: Base one-phase regression solve failed, status=%d\n",
+               base_solver ? base_solver->status : -1);
+        failed = 1;
+        goto cleanup;
+    }
+    if (simplex_solve(aug_solver) != 0 || aug_solver->status != RALPH_STATUS_OPTIMAL) {
+        printf("FAIL: Augmented cold one-phase regression solve failed, status=%d\n",
+               aug_solver ? aug_solver->status : -1);
+        failed = 1;
+        goto cleanup;
+    }
+
+    if (simplex_prepare_primal_tableau(base_solver, 0) != 0) {
+        printf("FAIL: Could not prepare one-phase base tableau for augmentation regression\n");
+        failed = 1;
+        goto cleanup;
+    }
+    if (!base_solver->tableau || base_solver->tableau->use_two_phase) {
+        printf("FAIL: Expected one-phase base tableau before augmentation\n");
+        failed = 1;
+        goto cleanup;
+    }
+
+    warm_basis = (int*)malloc((size_t)(base_solver->tableau->m + 1) * sizeof(int));
+    warm_status = (VarStatus*)malloc((size_t)(base_solver->tableau->n + 2) * sizeof(VarStatus));
+    if (!warm_basis || !warm_status) {
+        printf("FAIL: Could not allocate one-phase augmentation warm basis buffers\n");
+        failed = 1;
+        goto cleanup;
+    }
+
+    memcpy(warm_basis, base_solver->tableau->basis,
+           (size_t)base_solver->tableau->m * sizeof(int));
+    memcpy(warm_status, base_solver->tableau->var_status,
+           (size_t)base_solver->tableau->n * sizeof(VarStatus));
+    warm_basis[base_solver->tableau->m] = base_solver->tableau->n + 1;
+    warm_status[base_solver->tableau->n] = RALPH_NONBASIC_LOWER;
+    warm_status[base_solver->tableau->n + 1] = RALPH_BASIC;
+
+    {
+        int idx[] = {0};
+        double val[] = {1.0};
+        LPAugmentRow row = {
+            .nnz = 1,
+            .indices = idx,
+            .values = val,
+            .sense = 'G',
+            .rhs = 0.4
+        };
+
+        if (simplex_prepare_augmented_primal_tableau(base_solver,
+                                                     &row,
+                                                     1,
+                                                     base_solver->tableau->m + 1,
+                                                     base_solver->tableau->n + 2,
+                                                     warm_basis,
+                                                     warm_status) != 0) {
+            printf("FAIL: Could not prepare augmented one-phase-to-two-phase tableau\n");
+            failed = 1;
+            goto cleanup;
+        }
+    }
+
+    if (simplex_resolve_prepared_primal_tableau(base_solver) != 0 ||
+        base_solver->status != RALPH_STATUS_OPTIMAL) {
+        printf("FAIL: Augmented one-phase prepared solve failed, status=%d\n",
+               base_solver ? base_solver->status : -1);
+        failed = 1;
+        goto cleanup;
+    }
+
+    if (fabs(base_solver->obj_value - aug_solver->obj_value) > 1e-8) {
+        printf("FAIL: One-phase augmented prepared objective %.10f != cold objective %.10f\n",
+               base_solver->obj_value, aug_solver->obj_value);
+        failed = 1;
+        goto cleanup;
+    }
+    if (!base_solver->solution || !aug_solver->solution) {
+        printf("FAIL: Missing solutions after one-phase augmentation regression\n");
+        failed = 1;
+        goto cleanup;
+    }
+    for (int j = 0; j < aug_model->num_vars; j++) {
+        if (fabs(base_solver->solution[j] - aug_solver->solution[j]) > 1e-8) {
+            printf("FAIL: One-phase augmented solution mismatch at var %d (%.10f vs %.10f)\n",
+                   j, base_solver->solution[j], aug_solver->solution[j]);
+            failed = 1;
+            goto cleanup;
+        }
+    }
+
+    printf("PASS: one-phase augmentation matched cold objective %.10f\n",
+           base_solver->obj_value);
+
+cleanup:
+    free(warm_basis);
+    free(warm_status);
+    simplex_free(aug_solver);
+    simplex_free(base_solver);
+    lp_model_free(aug_model);
+    lp_model_free(base_model);
+    return failed;
+}
+
 int main(void) {
     int failures = 0;
 
@@ -834,6 +995,7 @@ int main(void) {
     failures += test_spp_root_cuts_disabled_by_default_regression();
     failures += test_prepared_two_phase_primal_pipeline_regression();
     failures += test_augmented_prepared_two_phase_pipeline_regression();
+    failures += test_augmented_prepared_one_phase_to_two_phase_regression();
 
     printf("\n=== Summary ===\n");
     if (failures == 0) {

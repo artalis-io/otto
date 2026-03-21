@@ -250,7 +250,6 @@ static int mip_try_incremental_root_lp_resolve(MIPSolver *solver,
     int warm_m = 0;
     int warm_n = 0;
     int all_slack_rows = 0;
-    int parent_two_phase = (lp->tableau && lp->tableau->use_two_phase) ? 1 : 0;
     LPAugmentRow *augment_rows = NULL;
     int saved_method = lp->method;
     int resolved = 0;
@@ -312,7 +311,7 @@ static int mip_try_incremental_root_lp_resolve(MIPSolver *solver,
         }
     }
 
-    if (!resolved && !all_slack_rows && parent_two_phase) {
+    if (!resolved && !all_slack_rows) {
         mip_clear_solver_outputs(lp);
         augment_rows = (LPAugmentRow *)calloc((size_t)num_cuts, sizeof(LPAugmentRow));
         if (augment_rows) {
@@ -352,7 +351,15 @@ static int mip_try_incremental_root_lp_resolve(MIPSolver *solver,
     free(warm_var_status);
 
     if (resolved) {
-        return 0;
+        /* apply_cuts() converts the working model back to editable row form and
+         * clears model->A. The live tableau remains valid, but later cut rounds
+         * still inspect working_model->A for slack substitution and row scans.
+         * Rebuild the model CSC now so future separators see the appended cuts. */
+        if (lp->model && !lp->model->A && lp_model_finalize(lp->model) != 0) {
+            resolved = 0;
+        } else {
+            return 0;
+        }
     }
 
     lp->method = saved_method;
