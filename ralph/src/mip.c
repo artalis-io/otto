@@ -16,6 +16,7 @@
 #include "mip.h"
 #include "mip_lp_adapter.h"
 #include "lp_log.h"
+#include "spp.h"
 
 static double mip_cpu_time_now(void) {
     return (double)clock() / CLOCKS_PER_SEC;
@@ -250,6 +251,7 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
 
     /* Detect SCP structure for specialized cuts, heuristics, and Lagrangian */
     solver->use_scp_solver = 0;
+    solver->spp_ctx = NULL;
     solver->scp_cuts_generated = 0;
     solver->lagrangian_bound = -RALPH_INFINITY;
 
@@ -261,6 +263,25 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
         }
         /* Initialize pseudo-costs using SCP cost/coverage ratio */
         init_pseudo_costs_scp(solver);
+    }
+
+    /* SPP plugins stay inside generic MIP, so exact-cover context discovery
+     * is enabled independently of the broader "special solver" switch. */
+    {
+        SPPContext *spp_ctx = (SPPContext *)calloc(1, sizeof(SPPContext));
+        if (spp_ctx) {
+            spp_context_init(spp_ctx);
+            if (spp_context_build(model, spp_ctx) == 0) {
+                solver->spp_ctx = spp_ctx;
+                if (solver->verbose) {
+                    LP_LOG_STDOUT("SPP context detected: %d rows, %d sets, %d conflicts\n",
+                                  spp_ctx->num_rows, spp_ctx->num_sets, spp_ctx->num_conflict_edges);
+                }
+            } else {
+                spp_context_free(spp_ctx);
+                free(spp_ctx);
+            }
+        }
     }
 
     return solver;
@@ -290,6 +311,10 @@ void mip_free(MIPSolver *solver) {
     if (solver->lap_sig) {
         detect_lap_mip_free(solver->lap_sig);
         free(solver->lap_sig);
+    }
+    if (solver->spp_ctx) {
+        spp_context_free(solver->spp_ctx);
+        free(solver->spp_ctx);
     }
 
     free(solver);
@@ -563,6 +588,120 @@ static int mip_select_most_infeasible(const MIPSolver *solver, const double *sol
         }
     }
     return best_var;
+}
+
+static int mip_try_spp_root_heuristic(MIPSolver *solver) {
+    double *spp_solution;
+    double spp_obj = 0.0;
+    SPPHeuristicStats stats;
+
+    if (!solver || !solver->spp_ctx || !solver->original_model) return 0;
+
+    spp_solution = (double *)calloc((size_t)solver->original_model->num_vars, sizeof(double));
+    if (!spp_solution) return 0;
+
+    memset(&stats, 0, sizeof(stats));
+    stats.node_limit = 20000;
+    if (spp_heuristic_run(solver->spp_ctx,
+                          solver->lp_solver ? solver->lp_solver->solution : NULL,
+                          spp_solution,
+                          &spp_obj,
+                          &stats) == 0) {
+        int had_incumbent = solver->has_incumbent;
+        double prev = solver->best_obj;
+        update_incumbent(solver, spp_solution, spp_obj);
+        if (solver->verbose) {
+            LP_LOG_STDOUT("SPP heuristic: obj=%.6f nodes=%d forced_sel=%d forced_excl=%d updates=%d\n",
+                   spp_obj, stats.nodes_visited, stats.forced_selections,
+                   stats.forced_exclusions, stats.incumbent_updates);
+        }
+        free(spp_solution);
+        if (!had_incumbent && solver->has_incumbent) return 1;
+        if (solver->original_model->obj_sense == 1) {
+            return solver->best_obj < prev - RALPH_OPT_TOL;
+        }
+        return solver->best_obj > prev + RALPH_OPT_TOL;
+    }
+
+    if (solver->verbose) {
+        LP_LOG_STDOUT("SPP heuristic: no exact-cover incumbent found (nodes=%d failures=%d)\n",
+               stats.nodes_visited, stats.branch_failures);
+    }
+    free(spp_solution);
+    return 0;
+}
+
+typedef struct {
+    CutPool *pool;
+    int max_cuts;
+    int cuts_added;
+} MIPSPPCutSink;
+
+static int mip_emit_spp_cut(void *user, const SPPCut *src) {
+    MIPSPPCutSink *sink = (MIPSPPCutSink *)user;
+    Cut *cut;
+    int before;
+
+    if (!sink || !sink->pool || !src || src->nnz <= 0) return -1;
+    if (sink->max_cuts > 0 && sink->cuts_added >= sink->max_cuts) return -1;
+
+    cut = cut_create(src->nnz);
+    if (!cut) return -1;
+
+    cut->sense = src->sense;
+    cut->rhs = src->rhs;
+    cut->violation = src->violation;
+    switch (src->kind) {
+        case SPP_CUT_CLIQUE:
+        default:
+            cut->type = CUT_CLIQUE;
+            break;
+    }
+
+    for (int i = 0; i < src->nnz; i++) {
+        cut->indices[cut->nnz] = src->indices[i];
+        cut->values[cut->nnz] = src->values[i];
+        cut->nnz++;
+    }
+
+    before = sink->pool->count;
+    if (cut_pool_add(sink->pool, cut) != 0) {
+        cut_free(cut);
+        return -1;
+    }
+    if (sink->pool->count > before) {
+        sink->cuts_added++;
+        return 1;
+    }
+    return 0;
+}
+
+static int mip_generate_spp_cuts(MIPSolver *solver, CutPool *pool) {
+    MIPSPPCutSink sink_ctx;
+    SPPCutSink sink;
+    SPPCutStats stats;
+    int cuts_added;
+
+    if (!solver || !pool || !solver->spp_ctx) return 0;
+    if (!solver->lp_solver || !solver->lp_solver->solution) return 0;
+
+    memset(&sink_ctx, 0, sizeof(sink_ctx));
+    sink_ctx.pool = pool;
+    sink_ctx.max_cuts = solver->max_cuts_per_round;
+
+    sink.emit = mip_emit_spp_cut;
+    sink.user = &sink_ctx;
+
+    memset(&stats, 0, sizeof(stats));
+    cuts_added = spp_separate(solver->spp_ctx, solver->lp_solver->solution, &sink, &stats);
+
+    if (solver->verbose >= 2) {
+        LP_LOG_STDOUT("SPP cuts: clique_candidates=%d emitted=%d duplicates=%d unviolated=%d\n",
+                      stats.clique_candidates, stats.clique_emitted,
+                      stats.duplicate_cliques, stats.unviolated_cliques);
+    }
+
+    return cuts_added;
 }
 
 /* Verify that the current LP solution is consistent with the node bounds.
@@ -1906,8 +2045,22 @@ static int solve_root_node(MIPSolver *solver) {
         }
     }
 
+    if (solver->spp_ctx) {
+        if (solver->verbose) {
+            LP_LOG_STDOUT("Running SPP heuristic...\n");
+        }
+        if (mip_try_spp_root_heuristic(solver)) {
+            double gap = fabs(solver->best_obj - solver->root_bound);
+            if (gap < solver->abs_mip_gap) {
+                solver->status = RALPH_STATUS_OPTIMAL;
+                bb_node_pool_return(solver->node_pool, root);
+                return 0;
+            }
+        }
+    }
+
     /* Try SCP-specific heuristics if SCP structure detected */
-    if (solver->use_scp_solver) {
+    if (solver->use_scp_solver && !solver->spp_ctx) {
         double *scp_solution = (double *)calloc(model->num_vars, sizeof(double));
         if (scp_solution) {
             if (solver->verbose) {
@@ -1981,7 +2134,12 @@ static int solve_root_node(MIPSolver *solver) {
         solver->root_cover_cuts_generated += cover_added;
 
         /* Generate SCP-specific cuts (clique, odd-hole, lifted cover) */
-        if (solver->use_scp_solver) {
+        if (solver->spp_ctx) {
+            scp_cuts = mip_generate_spp_cuts(solver, solver->cut_pool);
+            cuts_added += scp_cuts;
+            solver->root_scp_cuts_generated += scp_cuts;
+            solver->scp_cuts_generated += scp_cuts;
+        } else if (solver->use_scp_solver) {
             scp_cuts = generate_scp_cuts(solver, solver->cut_pool);
             cuts_added += scp_cuts;
             solver->root_scp_cuts_generated += scp_cuts;
