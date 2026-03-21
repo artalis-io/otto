@@ -11622,6 +11622,344 @@ static void configure_tableau_for_solver(SimplexSolver *solver, SimplexTableau *
     tab->trace_last_fail_reason = PHASE1_PIVOT_FAIL_NONE;
 }
 
+static int tableau_build_csr_from_current_matrix(SimplexTableau *tab) {
+    if (!tab || !tab->A_ext) return -1;
+
+    SAFE_FREE(tab->csr_rowptr);
+    SAFE_FREE(tab->csr_colidx);
+    SAFE_FREE(tab->csr_values);
+    SAFE_FREE(tab->csr_alpha);
+
+    int csr_m = tab->m;
+    int csr_n = tab->n;
+    int csr_nnz = tab->A_ext->colptr[csr_n];
+    tab->csr_rowptr = (int*)calloc((size_t)csr_m + 1, sizeof(int));
+    tab->csr_colidx = (int*)malloc((size_t)csr_nnz * sizeof(int));
+    tab->csr_values = (double*)malloc((size_t)csr_nnz * sizeof(double));
+    tab->csr_alpha = (double*)calloc((size_t)csr_n, sizeof(double));
+    if (!tab->csr_rowptr || !tab->csr_colidx || !tab->csr_values || !tab->csr_alpha) {
+        return -1;
+    }
+
+    for (int j = 0; j < csr_n; j++) {
+        for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
+            tab->csr_rowptr[tab->A_ext->rowidx[p] + 1]++;
+        }
+    }
+    for (int i = 0; i < csr_m; i++) {
+        tab->csr_rowptr[i + 1] += tab->csr_rowptr[i];
+    }
+
+    int *pos = (int*)tab->csr_alpha;
+    memset(pos, 0, (size_t)csr_m * sizeof(int));
+    for (int j = 0; j < csr_n; j++) {
+        for (int p = tab->A_ext->colptr[j]; p < tab->A_ext->colptr[j + 1]; p++) {
+            int row = tab->A_ext->rowidx[p];
+            int dest = tab->csr_rowptr[row] + pos[row];
+            tab->csr_colidx[dest] = j;
+            tab->csr_values[dest] = tab->A_ext->values[p];
+            pos[row]++;
+        }
+    }
+    memset(tab->csr_alpha, 0, (size_t)csr_n * sizeof(double));
+
+    double density = 0.0;
+    if (csr_m > 0 && csr_n > 0) {
+        density = (double)csr_nnz / ((double)csr_m * (double)csr_n);
+    }
+    tab->csr_use_scatter = (density < 0.02);
+    return 0;
+}
+
+static int lp_augment_row_normalize(const LPAugmentRow *row,
+                                    char *sense_out,
+                                    double *sign_out,
+                                    double *rhs_out) {
+    if (!row || !sense_out || !sign_out || !rhs_out) return -1;
+
+    char sense = row->sense;
+    if (sense != 'L' && sense != 'G' && sense != 'E') return -1;
+
+    double sign = 1.0;
+    if (row->rhs < 0.0) {
+        sign = -1.0;
+        if (sense == 'L') sense = 'G';
+        else if (sense == 'G') sense = 'L';
+    }
+
+    *sense_out = sense;
+    *sign_out = sign;
+    *rhs_out = fabs(row->rhs);
+    return 0;
+}
+
+static SimplexTableau *tableau_clone_with_augmented_rows(SimplexSolver *solver,
+                                                         const LPAugmentRow *rows,
+                                                         int num_rows,
+                                                         int warm_m,
+                                                         int warm_n,
+                                                         const int *warm_basis,
+                                                         const VarStatus *warm_var_status) {
+    if (!solver || !solver->tableau || !solver->tableau->A_ext ||
+        !rows || num_rows <= 0 || !warm_basis || !warm_var_status) {
+        return NULL;
+    }
+
+    SimplexTableau *src = solver->tableau;
+    LPModel *model = solver->model ? solver->model : src->model;
+    if (!model) return NULL;
+
+    int extra_aux = 0;
+    int extra_art = 0;
+    int extra_eq = 0;
+    int extra_nnz = 0;
+    for (int i = 0; i < num_rows; i++) {
+        char norm_sense = 'L';
+        double row_sign = 1.0;
+        double rhs = 0.0;
+        if (lp_augment_row_normalize(&rows[i], &norm_sense, &row_sign, &rhs) != 0) {
+            return NULL;
+        }
+        (void)row_sign;
+        (void)rhs;
+        if (rows[i].nnz < 0) return NULL;
+        extra_nnz += rows[i].nnz;
+        if (norm_sense == 'L') {
+            extra_aux += 1;
+        } else if (norm_sense == 'G') {
+            extra_aux += 2;
+            extra_art += 1;
+        } else {
+            extra_aux += 1;
+            extra_art += 1;
+            extra_eq += 1;
+        }
+    }
+
+    SimplexTableau *dst = (SimplexTableau*)calloc(1, sizeof(SimplexTableau));
+    if (!dst) return NULL;
+
+    dst->model = model;
+    dst->m = src->m + num_rows;
+    dst->n = src->n + extra_aux;
+    dst->num_aux = src->num_aux + extra_aux;
+    dst->num_equalities = src->num_equalities + extra_eq;
+    dst->use_two_phase = (src->use_two_phase || extra_art > 0) ? 1 : 0;
+
+    if (tableau_alloc_arrays(dst, dst->num_aux, src->num_artificial + extra_art) != 0) {
+        tableau_free(dst);
+        return NULL;
+    }
+
+    memcpy(dst->lb_ext, src->lb_ext, (size_t)src->n * sizeof(double));
+    memcpy(dst->ub_ext, src->ub_ext, (size_t)src->n * sizeof(double));
+    memcpy(dst->c_original, src->c_original, (size_t)src->n * sizeof(double));
+    memcpy(dst->rhs, src->rhs, (size_t)src->m * sizeof(double));
+    memcpy(dst->row_sign, src->row_sign, (size_t)src->m * sizeof(double));
+    memcpy(dst->aux_row, src->aux_row, (size_t)src->num_aux * sizeof(int));
+    memcpy(dst->aux_coef, src->aux_coef, (size_t)src->num_aux * sizeof(double));
+    memcpy(dst->artificial_vars, src->artificial_vars,
+           (size_t)src->num_artificial * sizeof(int));
+    memcpy(dst->redundant_rows, src->redundant_rows, (size_t)src->m * sizeof(int));
+    dst->num_redundant = src->num_redundant;
+    dst->redundant_rows_zeroed = src->redundant_rows_zeroed;
+    dst->perturb_scale = src->perturb_scale;
+    dst->positive_edge_mode = src->positive_edge_mode;
+    dst->partial_price_pos = src->partial_price_pos;
+    dst->phase = 1;
+    dst->solution_last_residual_iter = -1;
+    dst->solution_last_residual_factorize_calls = -1;
+    dst->solution_last_residual_num_updates = -1;
+
+    SparseTriplets *trips = triplets_create(dst->m, dst->n,
+                                            src->A_ext->nnz + extra_nnz + extra_aux);
+    if (!trips) {
+        tableau_free(dst);
+        return NULL;
+    }
+
+    for (int j = 0; j < src->n; j++) {
+        for (int p = src->A_ext->colptr[j]; p < src->A_ext->colptr[j + 1]; p++) {
+            if (triplets_add(trips, src->A_ext->rowidx[p], j, src->A_ext->values[p]) != 0) {
+                triplets_free(trips);
+                tableau_free(dst);
+                return NULL;
+            }
+        }
+    }
+
+    int next_aux = src->n;
+    int next_aux_map = src->num_aux;
+    int next_art = src->num_artificial;
+    for (int i = 0; i < num_rows; i++) {
+        char norm_sense = 'L';
+        double row_sign = 1.0;
+        double rhs = 0.0;
+        int row_idx = src->m + i;
+        if (lp_augment_row_normalize(&rows[i], &norm_sense, &row_sign, &rhs) != 0) {
+            triplets_free(trips);
+            tableau_free(dst);
+            return NULL;
+        }
+
+        dst->rhs[row_idx] = rhs;
+        dst->row_sign[row_idx] = row_sign;
+
+        for (int k = 0; k < rows[i].nnz; k++) {
+            int col = rows[i].indices[k];
+            if (col < 0 || col >= model->num_vars) {
+                triplets_free(trips);
+                tableau_free(dst);
+                return NULL;
+            }
+            double value = rows[i].values[k] * row_sign;
+            if (fabs(value) <= RALPH_ZERO_TOL) continue;
+            if (triplets_add(trips, row_idx, col, value) != 0) {
+                triplets_free(trips);
+                tableau_free(dst);
+                return NULL;
+            }
+        }
+
+        if (norm_sense == 'L') {
+            if (triplets_add(trips, row_idx, next_aux, 1.0) != 0) {
+                triplets_free(trips);
+                tableau_free(dst);
+                return NULL;
+            }
+            dst->lb_ext[next_aux] = 0.0;
+            dst->ub_ext[next_aux] = RALPH_INFINITY;
+            dst->c_original[next_aux] = 0.0;
+            dst->aux_row[next_aux_map] = row_idx;
+            dst->aux_coef[next_aux_map] = 1.0;
+            next_aux_map++;
+            next_aux++;
+        } else if (norm_sense == 'G') {
+            int surplus_idx = next_aux++;
+            int artificial_idx = next_aux++;
+            if (triplets_add(trips, row_idx, surplus_idx, -1.0) != 0 ||
+                triplets_add(trips, row_idx, artificial_idx, 1.0) != 0) {
+                triplets_free(trips);
+                tableau_free(dst);
+                return NULL;
+            }
+            dst->lb_ext[surplus_idx] = 0.0;
+            dst->ub_ext[surplus_idx] = RALPH_INFINITY;
+            dst->c_original[surplus_idx] = 0.0;
+            dst->aux_row[next_aux_map] = row_idx;
+            dst->aux_coef[next_aux_map] = -1.0;
+            next_aux_map++;
+
+            dst->lb_ext[artificial_idx] = 0.0;
+            dst->ub_ext[artificial_idx] = RALPH_INFINITY;
+            dst->c_original[artificial_idx] = 0.0;
+            dst->aux_row[next_aux_map] = row_idx;
+            dst->aux_coef[next_aux_map] = 1.0;
+            next_aux_map++;
+            dst->artificial_vars[next_art++] = artificial_idx;
+        } else {
+            int artificial_idx = next_aux++;
+            if (triplets_add(trips, row_idx, artificial_idx, 1.0) != 0) {
+                triplets_free(trips);
+                tableau_free(dst);
+                return NULL;
+            }
+            dst->lb_ext[artificial_idx] = 0.0;
+            dst->ub_ext[artificial_idx] = RALPH_INFINITY;
+            dst->c_original[artificial_idx] = 0.0;
+            dst->aux_row[next_aux_map] = row_idx;
+            dst->aux_coef[next_aux_map] = 1.0;
+            next_aux_map++;
+            dst->artificial_vars[next_art++] = artificial_idx;
+        }
+    }
+    dst->num_artificial = next_art;
+
+    dst->A_ext = triplets_to_csc(trips);
+    triplets_free(trips);
+    if (!dst->A_ext) {
+        tableau_free(dst);
+        return NULL;
+    }
+
+    if (tableau_build_csr_from_current_matrix(dst) != 0) {
+        tableau_free(dst);
+        return NULL;
+    }
+
+    vec_set_zero(dst->c_ext, dst->n);
+    for (int k = 0; k < dst->num_artificial; k++) {
+        int art_j = dst->artificial_vars[k];
+        if (art_j >= 0 && art_j < dst->n &&
+            dst->ub_ext[art_j] > dst->lb_ext[art_j] + RALPH_ZERO_TOL) {
+            dst->c_ext[art_j] = 1.0;
+        }
+    }
+
+    tableau_init_weights(dst);
+
+    dst->lu = lu_create(dst->m);
+    if (!dst->lu) {
+        tableau_free(dst);
+        return NULL;
+    }
+
+    configure_tableau_for_solver(solver, dst);
+
+    solver->warm_basis_last_attempted = 1;
+    solver->warm_basis_last_applied = 0;
+    solver->warm_basis_last_rejected = 0;
+    if (tableau_apply_warm_basis(dst, warm_m, warm_n, warm_basis, warm_var_status) != 0) {
+        solver->warm_basis_last_rejected = 1;
+        tableau_free(dst);
+        return NULL;
+    }
+    solver->warm_basis_last_applied = 1;
+
+    {
+        double t_refactor_ms = lp_telemetry_timer_start();
+        int factorize_ok = (tableau_refactorize_with_reason(dst, RALPH_REFACTOR_REASON_SETUP) == 0);
+        lp_telemetry_add_refactor_runtime_timed(solver, t_refactor_ms);
+        if (!factorize_ok) {
+            tableau_free(dst);
+            return NULL;
+        }
+    }
+
+    tableau_compute_solution(dst);
+    tableau_compute_reduced_costs(dst);
+    return dst;
+}
+
+int simplex_prepare_augmented_primal_tableau(SimplexSolver *solver,
+                                             const LPAugmentRow *rows,
+                                             int num_rows,
+                                             int warm_m,
+                                             int warm_n,
+                                             const int *warm_basis,
+                                             const VarStatus *warm_var_status) {
+    if (!solver || !solver->tableau || !rows || num_rows <= 0 ||
+        !warm_basis || !warm_var_status) {
+        return -1;
+    }
+
+    SimplexTableau *old_tab = solver->tableau;
+    SimplexTableau *new_tab = tableau_clone_with_augmented_rows(solver,
+                                                                rows,
+                                                                num_rows,
+                                                                warm_m,
+                                                                warm_n,
+                                                                warm_basis,
+                                                                warm_var_status);
+    if (!new_tab) {
+        return -1;
+    }
+
+    solver->tableau = new_tab;
+    tableau_free(old_tab);
+    return 0;
+}
+
 /* Create, configure, and factorize a primal tableau. */
 static int setup_primal_tableau(SimplexSolver *solver, int allow_crash) {
     if (!solver) return -1;
@@ -11761,16 +12099,14 @@ static int setup_primal_tableau(SimplexSolver *solver, int allow_crash) {
     return 0;
 }
 
-int simplex_solve(SimplexSolver *solver) {
-    if (!solver || !solver->model) return -1;
+int simplex_prepare_primal_tableau(SimplexSolver *solver, int allow_crash) {
+    if (!solver) return -1;
+    return setup_primal_tableau(solver, allow_crash);
+}
 
-    clock_t start = clock();
-    solver->progress_start_ms = lp_telemetry_now_ms();
-    lp_determinism_apply_runtime(solver);
+static void simplex_invalidate_cached_outputs(SimplexSolver *solver) {
+    if (!solver) return;
 
-    /* Invalidate cached outputs from any previous solve.
-     * This prevents stale primal/dual data from being reused when the current
-     * solve fails before producing new solution vectors. */
     free(solver->solution);
     solver->solution = NULL;
     free(solver->dual_solution);
@@ -11779,6 +12115,10 @@ int simplex_solve(SimplexSolver *solver) {
     solver->reduced_costs = NULL;
     solver->farkas_valid = 0;
     solver->unbounded_valid = 0;
+}
+
+static void simplex_reset_run_state(SimplexSolver *solver) {
+    if (!solver) return;
 
     solver->trace_phase1_pivot_failures = 0;
     solver->trace_phase1_fail_small_pivot = 0;
@@ -11800,6 +12140,203 @@ int simplex_solve(SimplexSolver *solver) {
     solver->verify_comp_slack = 0.0;
     solver->verify_obj_error = 0.0;
     solver->verify_cond_estimate = 0.0;
+}
+
+static int simplex_finish_prepared_primal_solve(SimplexSolver *solver, clock_t start) {
+    if (!solver || !solver->tableau) return -1;
+
+    SimplexTableau *tab = solver->tableau;
+
+    /* T3.4: Override pricing strategy for Phase 1 if configured.
+     * Two-phase simplex requires full pricing during Phase 1 — partial pricing
+     * can miss improving directions for artificial variables. Default to Devex
+     * for Phase 1 when partial/heap pricing is selected. */
+    int saved_pricing = solver->pricing_strategy;
+    int saved_tab_pricing = tab->pricing_strategy;
+    int saved_tab_se = tab->use_steepest_edge;
+    if (solver->phase1_pricing >= 0) {
+        solver->pricing_strategy = solver->phase1_pricing;
+        tab->pricing_strategy = solver->phase1_pricing;
+        tab->use_steepest_edge = (solver->phase1_pricing == 1 || solver->phase1_pricing == 2
+                                  || solver->phase1_pricing == 5);
+    } else if (tab->use_two_phase && (solver->pricing_strategy == 3 || solver->pricing_strategy == 4)) {
+        solver->pricing_strategy = 2;  /* Devex for Phase 1 */
+        tab->pricing_strategy = 2;
+        tab->use_steepest_edge = 1;
+    }
+
+    /* Phase 1: Find feasible solution */
+    if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Starting Phase 1...\n");
+    {
+        double t_phase1_ms = lp_telemetry_timer_start();
+        if (simplex_phase1(solver) != 0) {
+            lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PHASE1, t_phase1_ms);
+            solver->pricing_strategy = saved_pricing;
+            tab->pricing_strategy = saved_tab_pricing;
+            tab->use_steepest_edge = saved_tab_se;
+            if (solver->status == RALPH_STATUS_INFEASIBLE) {
+                if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Phase 1: INFEASIBLE\n");
+                lp_run_user_callbacks(solver,
+                                      tab,
+                                      RALPH_LP_PROGRESS_PHASE_1,
+                                      solver->iterations,
+                                      1,
+                                      0);
+                return 0;
+            }
+            return -1;
+        }
+        lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PHASE1, t_phase1_ms);
+    }
+    solver->pricing_strategy = saved_pricing;
+    tab->pricing_strategy = saved_tab_pricing;
+    tab->use_steepest_edge = saved_tab_se;
+    if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Phase 1 complete\n");
+
+    /* Transition to Phase 2 if using two-phase simplex */
+    int two_phase_failed = 0;
+    if (tab->use_two_phase) {
+        if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Transitioning to Phase 2...\n");
+        double t_transition_ms = lp_telemetry_timer_start();
+        if (simplex_transition_phase2(solver) != 0) {
+            lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_TRANSITION, t_transition_ms);
+            two_phase_failed = 1;
+        } else {
+            lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_TRANSITION, t_transition_ms);
+            if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Phase 2 transition complete\n");
+        }
+    }
+
+    /* Phase 2: Optimize (skip if transition failed) */
+    if (!two_phase_failed) {
+        double t_phase2_ms = lp_telemetry_timer_start();
+        int status = simplex_phase2(solver);
+        lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PHASE2, t_phase2_ms);
+        (void)status;
+        if (solver->status == RALPH_STATUS_ERROR && tab->use_two_phase) {
+            two_phase_failed = 1;
+        }
+    }
+
+    /* If two-phase failed, try dual simplex as a one-shot fallback.
+     * Only for method=0 (explicit primal) to avoid circular chains with
+     * method=2 (which already tried dual before falling back to primal). */
+    if (two_phase_failed && solver->method == 0) {
+        if (solver->verbose) {
+            LP_LOG_STDOUT("[simplex_solve] Two-phase failed, trying dual simplex\n");
+        }
+        tableau_free(solver->tableau);
+        solver->tableau = NULL;
+        restore_model(solver);
+        solver->is_scaled = 0;
+        solver->status = RALPH_STATUS_UNKNOWN;
+        double t_dual_ms = lp_telemetry_timer_start();
+        int dual_result = dual_simplex_solve_from_scratch_v2(solver);
+        lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_DUAL, t_dual_ms);
+        solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+        if (solver->tableau) {
+            tableau_free(solver->tableau);
+            solver->tableau = NULL;
+        }
+        return dual_result;
+    } else if (two_phase_failed) {
+        solver->status = RALPH_STATUS_ERROR;
+        solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+        tableau_free(solver->tableau);
+        solver->tableau = NULL;
+        return -1;
+    }
+
+    solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
+
+    /* Compute true objective from structural variables only.
+     * Auxiliary variables (slacks/surplus/artificials) have zero cost in Phase 2.
+     * Phase 1 already certifies feasibility or infeasibility. */
+    if (solver->status == RALPH_STATUS_OPTIMAL) {
+        double true_obj = 0.0;
+        for (int j = 0; j < solver->model->num_vars; j++) {
+            true_obj += tab->c_ext[j] * tab->x[j];
+        }
+        solver->obj_value = true_obj * solver->model->obj_sense + solver->model->obj_offset;
+    }
+
+    /* Copy solution */
+    if (solver->status == RALPH_STATUS_OPTIMAL) {
+        solver->solution = (double*)calloc(solver->model->num_vars, sizeof(double));
+        solver->dual_solution = (double*)calloc(solver->model->num_cons, sizeof(double));
+        solver->reduced_costs = (double*)calloc(solver->model->num_vars, sizeof(double));
+
+        if (solver->solution && solver->dual_solution && solver->reduced_costs) {
+            for (int j = 0; j < solver->model->num_vars; j++) {
+                solver->solution[j] = tab->x[j];
+                solver->reduced_costs[j] = tab->rc[j] * solver->model->obj_sense;
+            }
+            for (int i = 0; i < solver->model->num_cons; i++) {
+                solver->dual_solution[i] = tab->y[i] * solver->model->obj_sense;
+            }
+        }
+
+        /* Unscale solution if scaling was applied */
+        unscale_solution(solver);
+    }
+
+    /* Unscale unbounded ray if scaling was applied. */
+    if (solver->is_scaled && solver->unbounded_valid &&
+        solver->unbounded_ray && solver->col_scale) {
+        for (int j = 0; j < solver->model->num_vars; j++) {
+            solver->unbounded_ray[j] *= solver->col_scale[j];
+        }
+    }
+
+    /* Restore original model if scaling was applied */
+    restore_model(solver);
+
+    /* Post-solve verification (T2.3 + T3.6) — runs on original-space solution */
+    if (solver->verify && solver->status == RALPH_STATUS_OPTIMAL) {
+        verify_solution(solver);
+    }
+
+    lp_run_user_callbacks(solver,
+                          tab,
+                          (tab && tab->phase == 1) ?
+                              RALPH_LP_PROGRESS_PHASE_1 :
+                              RALPH_LP_PROGRESS_PHASE_2,
+                          solver->iterations,
+                          1,
+                          0);
+
+    return (solver->status == RALPH_STATUS_OPTIMAL) ? 0 : -1;
+}
+
+int simplex_resolve_prepared_primal_tableau(SimplexSolver *solver) {
+    if (!solver || !solver->tableau) return -1;
+
+    clock_t start = clock();
+    solver->progress_start_ms = lp_telemetry_now_ms();
+    lp_determinism_apply_runtime(solver);
+    simplex_invalidate_cached_outputs(solver);
+    simplex_reset_run_state(solver);
+    reset_solver_perf(solver);
+
+    if (solver->verbose) {
+        LP_LOG_STDOUT("[simplex_solve] Resolving prepared primal tableau...\n");
+    }
+
+    return simplex_finish_prepared_primal_solve(solver, start);
+}
+
+int simplex_solve(SimplexSolver *solver) {
+    if (!solver || !solver->model) return -1;
+
+    clock_t start = clock();
+    solver->progress_start_ms = lp_telemetry_now_ms();
+    lp_determinism_apply_runtime(solver);
+
+    /* Invalidate cached outputs from any previous solve.
+     * This prevents stale primal/dual data from being reused when the current
+     * solve fails before producing new solution vectors. */
+    simplex_invalidate_cached_outputs(solver);
+    simplex_reset_run_state(solver);
 
     if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Starting...\n");
 
@@ -11828,8 +12365,6 @@ int simplex_solve(SimplexSolver *solver) {
     }
 
     reset_solver_perf(solver);
-
-    SimplexTableau *tab = NULL;
 
     /* T1.3: Method dispatch — dual simplex path.
      * For methods 1/2, avoid creating/factorizing a primal tableau up front. */
@@ -11933,7 +12468,6 @@ int simplex_solve(SimplexSolver *solver) {
                 return -1;
             }
             lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PRIMAL_SETUP, t_setup_ms);
-            tab = solver->tableau;
         } else {
             solver->status = RALPH_STATUS_ERROR;
             solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
@@ -11945,171 +12479,8 @@ int simplex_solve(SimplexSolver *solver) {
             return -1;
         }
         lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PRIMAL_SETUP, t_setup_ms);
-        tab = solver->tableau;
     }
-
-    /* T3.4: Override pricing strategy for Phase 1 if configured.
-     * Two-phase simplex requires full pricing during Phase 1 — partial pricing
-     * can miss improving directions for artificial variables. Default to Devex
-     * for Phase 1 when partial/heap pricing is selected. */
-    int saved_pricing = solver->pricing_strategy;
-    int saved_tab_pricing = tab->pricing_strategy;
-    int saved_tab_se = tab->use_steepest_edge;
-    if (solver->phase1_pricing >= 0) {
-        solver->pricing_strategy = solver->phase1_pricing;
-        tab->pricing_strategy = solver->phase1_pricing;
-        tab->use_steepest_edge = (solver->phase1_pricing == 1 || solver->phase1_pricing == 2
-                                  || solver->phase1_pricing == 5);
-    } else if (tab->use_two_phase && (solver->pricing_strategy == 3 || solver->pricing_strategy == 4)) {
-        solver->pricing_strategy = 2;  /* Devex for Phase 1 */
-        tab->pricing_strategy = 2;
-        tab->use_steepest_edge = 1;
-    }
-
-    /* Phase 1: Find feasible solution */
-    if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Starting Phase 1...\n");
-    {
-        double t_phase1_ms = lp_telemetry_timer_start();
-        if (simplex_phase1(solver) != 0) {
-            lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PHASE1, t_phase1_ms);
-            solver->pricing_strategy = saved_pricing;  /* T3.4: restore pricing */
-            tab->pricing_strategy = saved_tab_pricing;
-            tab->use_steepest_edge = saved_tab_se;
-            if (solver->status == RALPH_STATUS_INFEASIBLE) {
-                if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Phase 1: INFEASIBLE\n");
-                lp_run_user_callbacks(solver,
-                                      tab,
-                                      RALPH_LP_PROGRESS_PHASE_1,
-                                      solver->iterations,
-                                      1,
-                                      0);
-                return 0;  /* Infeasible is a valid result */
-            }
-            return -1;
-        }
-        lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PHASE1, t_phase1_ms);
-    }
-    solver->pricing_strategy = saved_pricing;  /* T3.4: restore pricing for Phase 2 */
-    tab->pricing_strategy = saved_tab_pricing;
-    tab->use_steepest_edge = saved_tab_se;
-    if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Phase 1 complete\n");
-
-    /* Transition to Phase 2 if using two-phase simplex */
-    int two_phase_failed = 0;
-    if (tab->use_two_phase) {
-        if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Transitioning to Phase 2...\n");
-        double t_transition_ms = lp_telemetry_timer_start();
-        if (simplex_transition_phase2(solver) != 0) {
-            lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_TRANSITION, t_transition_ms);
-            two_phase_failed = 1;
-        } else {
-            lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_TRANSITION, t_transition_ms);
-            if (solver->verbose) LP_LOG_STDOUT("[simplex_solve] Phase 2 transition complete\n");
-        }
-    }
-
-    /* Phase 2: Optimize (skip if transition failed) */
-    if (!two_phase_failed) {
-        double t_phase2_ms = lp_telemetry_timer_start();
-        int status = simplex_phase2(solver);
-        lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_PHASE2, t_phase2_ms);
-        (void)status;  /* Status is set in solver->status directly */
-        if (solver->status == RALPH_STATUS_ERROR && tab->use_two_phase) {
-            two_phase_failed = 1;
-        }
-    }
-
-    /* If two-phase failed, try dual simplex as a one-shot fallback.
-     * Only for method=0 (explicit primal) to avoid circular chains with
-     * method=2 (which already tried dual before falling back to primal).
-     * The Phase 2 transition can fail on problems with redundant rows (e.g.,
-     * assignment LPs, beaconfd) where stuck artificials make the basis singular. */
-    if (two_phase_failed && solver->method == 0) {
-        if (solver->verbose) {
-            LP_LOG_STDOUT("[simplex_solve] Two-phase failed, trying dual simplex\n");
-        }
-        tableau_free(solver->tableau);
-        solver->tableau = NULL;
-        restore_model(solver);
-        solver->is_scaled = 0;
-        solver->status = RALPH_STATUS_UNKNOWN;
-        double t_dual_ms = lp_telemetry_timer_start();
-        int dual_result = dual_simplex_solve_from_scratch_v2(solver);
-        lp_telemetry_add_solver_stage_timed(solver, LP_SOLVER_STAGE_DUAL, t_dual_ms);
-        solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
-        if (solver->tableau) {
-            tableau_free(solver->tableau);
-            solver->tableau = NULL;
-        }
-        return dual_result;
-    } else if (two_phase_failed) {
-        /* method=2 already tried dual before primal — don't chain again */
-        solver->status = RALPH_STATUS_ERROR;
-        solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
-        tableau_free(solver->tableau);
-        solver->tableau = NULL;
-        return -1;
-    }
-
-    solver->solve_time = (double)(clock() - start) / CLOCKS_PER_SEC;
-
-    /* Compute true objective from structural variables only.
-     * Auxiliary variables (slacks/surplus/artificials) have zero cost in Phase 2.
-     * Phase 1 already certifies feasibility or infeasibility. */
-    if (solver->status == RALPH_STATUS_OPTIMAL) {
-        double true_obj = 0.0;
-        for (int j = 0; j < solver->model->num_vars; j++) {
-            true_obj += tab->c_ext[j] * tab->x[j];
-        }
-        solver->obj_value = true_obj * solver->model->obj_sense + solver->model->obj_offset;
-    }
-
-    /* Copy solution */
-    if (solver->status == RALPH_STATUS_OPTIMAL) {
-        solver->solution = (double*)calloc(solver->model->num_vars, sizeof(double));
-        solver->dual_solution = (double*)calloc(solver->model->num_cons, sizeof(double));
-        solver->reduced_costs = (double*)calloc(solver->model->num_vars, sizeof(double));
-
-        if (solver->solution && solver->dual_solution && solver->reduced_costs) {
-            for (int j = 0; j < solver->model->num_vars; j++) {
-                solver->solution[j] = tab->x[j];
-                solver->reduced_costs[j] = tab->rc[j] * solver->model->obj_sense;
-            }
-            for (int i = 0; i < solver->model->num_cons; i++) {
-                solver->dual_solution[i] = tab->y[i] * solver->model->obj_sense;
-            }
-        }
-
-        /* Unscale solution if scaling was applied */
-        unscale_solution(solver);
-    }
-
-    /* Unscale unbounded ray if scaling was applied. */
-    if (solver->is_scaled && solver->unbounded_valid &&
-        solver->unbounded_ray && solver->col_scale) {
-        for (int j = 0; j < solver->model->num_vars; j++) {
-            solver->unbounded_ray[j] *= solver->col_scale[j];
-        }
-    }
-
-    /* Restore original model if scaling was applied */
-    restore_model(solver);
-
-    /* Post-solve verification (T2.3 + T3.6) — runs on original-space solution */
-    if (solver->verify && solver->status == RALPH_STATUS_OPTIMAL) {
-        verify_solution(solver);
-    }
-
-    lp_run_user_callbacks(solver,
-                          tab,
-                          (tab && tab->phase == 1) ?
-                              RALPH_LP_PROGRESS_PHASE_1 :
-                              RALPH_LP_PROGRESS_PHASE_2,
-                          solver->iterations,
-                          1,
-                          0);
-
-    return (solver->status == RALPH_STATUS_OPTIMAL) ? 0 : -1;
+    return simplex_finish_prepared_primal_solve(solver, start);
 }
 
 /* ============================================================================

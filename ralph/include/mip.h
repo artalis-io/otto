@@ -19,6 +19,8 @@ extern "C" {
 #define RALPH_DEFAULT_MIP_GAP 0.0001    /* 0.01% relative gap */
 #define RALPH_DEFAULT_ABS_MIP_GAP 1e-6  /* 1e-6 absolute gap */
 #define RALPH_DEFAULT_CUTOFF RALPH_INFINITY
+#define RALPH_DEFAULT_MAX_CUT_ROUNDS 5
+#define RALPH_ENABLE_SPP_ROOT_CUTS_DEFAULT 0
 
 /* Reliability branching parameters */
 #define MIP_RELIABILITY_THRESHOLD   8    /* Strong-branch until this many observations */
@@ -39,6 +41,12 @@ extern "C" {
 #define MIP_CUT_MIN_VIOLATION  1e-4   /* Minimum violation to apply a cut */
 #define MIP_CUT_MAX_DYNAMISM   1e6    /* Max coefficient ratio max|a|/min|a| */
 #define MIP_CUT_PARALLEL_TOL   0.999  /* Cosine similarity threshold for parallel cuts */
+#define MIP_GENERIC_ROOT_CUT_MIN_IMPROVEMENT_PER_CUT 0.05 /* Stop later generic cut rounds if root bound barely moves */
+#define MIP_GENERIC_ROOT_CUT_MIN_TOTAL_IMPROVEMENT 0.10   /* Absolute floor for retaining additional generic rounds */
+#define SPP_ROOT_CUT_MAX_ROUNDS 1     /* Conservative root-only separation for exact-cover models */
+#define SPP_ROOT_CUT_MAX_PER_ROUND 4  /* Avoid over-cutting SPP roots */
+#define SPP_ROOT_CUT_MIN_IMPROVEMENT_PER_CUT 0.25 /* Minimum root-bound gain required per retained SPP cut */
+#define SPP_ROOT_CUT_MIN_TOTAL_IMPROVEMENT 0.5    /* Absolute root-bound gain floor before retaining SPP cuts */
 
 /* Reduced-cost fixing parameters */
 #define MIP_RC_FIX_MIN_GAP     1e-4   /* Don't fix when gap is numerically tiny */
@@ -264,12 +272,29 @@ typedef struct {
     /* MIP phase telemetry */
     int root_cut_rounds;         /* Root cut-loop rounds entered */
     int root_lp_resolves;        /* Root LP re-solves after cut application */
+    int root_lp_incremental_attempts; /* Root LP cut re-solves that attempted warm incremental reuse */
+    int root_lp_incremental_dual;     /* Root LP cut re-solves completed via warm dual reopt */
+    int root_lp_incremental_primal;   /* Root LP cut re-solves completed via warm primal resolve */
+    int root_lp_incremental_fallbacks;/* Root LP cut re-solves that fell back to cold rebuild */
     int node_lp_warm_solves;     /* Node LP solves completed via warm reopt */
     int node_lp_cold_solves;     /* Node LP solves completed via cold start */
     int root_gomory_cuts_generated; /* Root Gomory cuts generated */
     int root_mir_cuts_generated;    /* Root MIR cuts generated */
     int root_cover_cuts_generated;  /* Root cover cuts generated */
     int root_scp_cuts_generated;    /* Root SCP-specific cuts generated */
+    int root_cut_skip_disabled;      /* Root cuts skipped because cut rounds were explicitly disabled */
+    int root_cut_skip_spp_disabled;  /* Root exact-cover cuts skipped because the experimental path is disabled */
+    int root_cut_skip_integral_lp;   /* Root cuts skipped because root LP was already integral */
+    int root_cut_skip_gap_closed_diving; /* Root cuts skipped because diving closed the root gap */
+    int root_cut_skip_gap_closed_spp;    /* Root cuts skipped because SPP heuristic closed the root gap */
+    int root_cut_skip_gap_closed_scp;    /* Root cuts skipped because SCP heuristic closed the root gap */
+    int root_cut_skip_generic_low_efficacy; /* Later generic root cut rounds skipped after weak bound improvement */
+    int root_cut_skip_spp_incumbent;     /* Root cuts skipped because SPP heuristic already supplied an incumbent */
+    int root_cut_skip_spp_low_efficacy;  /* SPP root cuts discarded after weak root-bound improvement */
+    int spp_prop_calls;                /* Exact-cover propagation passes */
+    int spp_prop_fixings;              /* Bound tightenings from exact-cover propagation */
+    int spp_prop_prunes;               /* Nodes pruned by exact-cover propagation */
+    int spp_branch_uses;               /* Branch selections handled by the SPP row picker */
     int node_lp_warm_dual_fallbacks; /* Warm node solves that fell back after dual reopt */
     int node_lp_warm_bound_fallbacks; /* Warm node solves that fell back after bound check */
     int node_lp_warm_dual_skips;       /* Warm node solves skipped due to repeated artificial-node iter limits */
@@ -291,6 +316,7 @@ typedef struct {
 
     /* SCP-specific optimizations (for set covering/partitioning MIPs) */
     int use_scp_solver;          /* 1 if SCP structure detected and enabled */
+    int enable_spp_root_cuts;    /* Experimental exact-cover root cuts toggle */
     SPPContext *spp_ctx;         /* Exact-cover context for partitioning heuristics/cuts */
     int scp_cuts_generated;      /* Number of SCP-specific cuts generated */
     double lagrangian_bound;     /* Best Lagrangian dual bound (if computed) */
@@ -430,7 +456,7 @@ void cut_pool_clear(CutPool *pool);
 int generate_gomory_cuts(MIPSolver *solver, CutPool *pool);
 int generate_mir_cuts(MIPSolver *solver, CutPool *pool);
 int generate_cover_cuts(MIPSolver *solver, CutPool *pool);
-int apply_cuts(MIPSolver *solver, CutPool *pool, int max_cuts);
+int apply_cuts(MIPSolver *solver, CutPool *pool, int max_cuts, Cut ***applied_out);
 
 /* SCP-specific cutting planes (Phase 3) */
 

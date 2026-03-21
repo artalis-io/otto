@@ -87,6 +87,7 @@ SOURCES = $(SRC_DIR)/sparse.c \
           $(SRC_DIR)/optim/lagrangian.c \
           $(SRC_DIR)/optim/lagrangian_scp.c \
           $(SRC_DIR)/optim/spp_context.c \
+          $(SRC_DIR)/optim/spp_branch.c \
           $(SRC_DIR)/optim/spp_cuts.c \
           $(SRC_DIR)/optim/spp_heuristic.c
 
@@ -156,6 +157,8 @@ SPP_CUTS_TEST_SOURCES = $(TEST_DIR)/test_spp_cuts.c
 SPP_CUTS_TEST_EXEC = test_spp_cuts
 SPP_HEURISTIC_TEST_SOURCES = $(TEST_DIR)/test_spp_heuristic.c
 SPP_HEURISTIC_TEST_EXEC = test_spp_heuristic
+SPP_BRANCH_TEST_SOURCES = $(TEST_DIR)/test_spp_branch.c
+SPP_BRANCH_TEST_EXEC = test_spp_branch
 BENDERS_MASTER_START_TEST_SOURCES = $(TEST_DIR)/test_benders_master_start.c
 BENDERS_MASTER_START_TEST_EXEC = test_benders_master_start
 WARMSTART_SERDE_TEST_SOURCES = $(TEST_DIR)/test_warmstart_serde.c
@@ -533,6 +536,14 @@ $(SPP_HEURISTIC_TEST_EXEC): $(SPP_HEURISTIC_TEST_SOURCES) $(LIB_NAME) $(SHARED_L
 # Run standalone SPP heuristic tests
 test-spp-heuristic: $(SPP_HEURISTIC_TEST_EXEC)
 	./$(SPP_HEURISTIC_TEST_EXEC)
+
+# Build standalone SPP branching/propagation tests
+$(SPP_BRANCH_TEST_EXEC): $(SPP_BRANCH_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)
+	$(CC) $(CFLAGS) $(INCLUDES) $< -L. -lralph -L../shared -lshared $(LDFLAGS) -o $@
+
+# Run standalone SPP branching/propagation tests
+test-spp-branch: $(SPP_BRANCH_TEST_EXEC)
+	./$(SPP_BRANCH_TEST_EXEC)
 
 # Build Benders initial master-start tests
 $(BENDERS_MASTER_START_TEST_EXEC): $(BENDERS_MASTER_START_TEST_SOURCES) $(LIB_NAME) $(SHARED_LIB)

@@ -123,6 +123,32 @@ int spp_heuristic_run(const SPPContext *ctx,
                       double *obj_out,
                       SPPHeuristicStats *stats);
 
+/* Propagate exact-cover implications through bound arrays.
+ *
+ * Contract:
+ * - bounds are updated in place
+ * - returns 0 on a consistent fixpoint, -1 if the node is infeasible
+ * - fixings_out counts bound tightenings applied during propagation
+ */
+int spp_propagate_bounds(const SPPContext *ctx,
+                         double *lb,
+                         double *ub,
+                         int *fixings_out);
+
+/* Choose a branch set from the current exact-cover node state.
+ *
+ * Contract:
+ * - uses the remaining per-row candidate counts from bounds, not static degree
+ * - returns a branchable set from the tightest unresolved row
+ * - row_out is optional and may be NULL
+ */
+int spp_select_branch_set(const SPPContext *ctx,
+                          const double *lb,
+                          const double *ub,
+                          const double *lp_x,
+                          int *row_out,
+                          int *set_out);
+
 /* Separate violated SPP-specific cuts from an LP relaxation vector.
  *
  * Contract:

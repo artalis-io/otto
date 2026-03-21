@@ -1181,6 +1181,14 @@ typedef struct {
 } LPSolverTelemetryState;
 
 typedef struct {
+    int nnz;
+    const int *indices;
+    const double *values;
+    char sense;
+    double rhs;
+} LPAugmentRow;
+
+typedef struct {
     double bias;
     int last_reason;
     int last_interval;
@@ -2245,6 +2253,15 @@ SimplexSolver* simplex_create(LPModel *model);
 void simplex_free(SimplexSolver *solver);
 int simplex_set_warm_basis(SimplexSolver *solver, int m, int n,
                            const int *basis, const VarStatus *var_status);
+int simplex_prepare_primal_tableau(SimplexSolver *solver, int allow_crash);
+int simplex_prepare_augmented_primal_tableau(SimplexSolver *solver,
+                                             const LPAugmentRow *rows,
+                                             int num_rows,
+                                             int warm_m,
+                                             int warm_n,
+                                             const int *warm_basis,
+                                             const VarStatus *warm_var_status);
+int simplex_resolve_prepared_primal_tableau(SimplexSolver *solver);
 int simplex_solve(SimplexSolver *solver);
 
 /* Dual simplex */
