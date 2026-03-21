@@ -2435,6 +2435,7 @@ static int solve_root_node(MIPSolver *solver) {
     int max_cuts_this_round = solver->max_cuts_per_round;
     int skip_spp_root_cuts =
         solver->spp_ctx && (!solver->enable_spp_root_cuts || solver->has_incumbent);
+    int disable_generic_mir = 0;
     int disable_spp_root_cuts = 0;
 
     if (solver->max_cut_rounds <= 0) {
@@ -2486,12 +2487,20 @@ static int solve_root_node(MIPSolver *solver) {
             solver->root_gomory_cuts_generated += gomory_added;
 
             /* Generate MIR cuts (from continuous basic variable rows) */
-            mir_added = generate_mir_cuts(solver, solver->cut_pool);
+            if (!disable_generic_mir) {
+                double t_mir_start = mip_cpu_time_now();
+                mir_added = generate_mir_cuts(solver, solver->cut_pool);
+                solver->time_root_mir += mip_cpu_time_now() - t_mir_start;
+            }
             cuts_added += mir_added;
             solver->root_mir_cuts_generated += mir_added;
 
             /* Generate cover cuts (from knapsack constraints) */
-            cover_added = generate_cover_cuts(solver, solver->cut_pool);
+            {
+                double t_cover_start = mip_cpu_time_now();
+                cover_added = generate_cover_cuts(solver, solver->cut_pool);
+                solver->time_root_cover += mip_cpu_time_now() - t_cover_start;
+            }
             cuts_added += cover_added;
             solver->root_cover_cuts_generated += cover_added;
 
@@ -2501,6 +2510,11 @@ static int solve_root_node(MIPSolver *solver) {
             cuts_added += scp_cuts;
             solver->root_scp_cuts_generated += scp_cuts;
             solver->scp_cuts_generated += scp_cuts;
+            }
+
+            if (cut_rounds == 0 && mir_added == 0 && !disable_generic_mir) {
+                disable_generic_mir = 1;
+                solver->root_cut_skip_mir_zero_yield++;
             }
         }
         solver->time_root_cut_separation += mip_cpu_time_now() - t_sep_start;
@@ -2911,12 +2925,17 @@ int mip_solve(MIPSolver *solver) {
 void mip_print_stats(const MIPSolver *solver) {
     double solve_time;
     double strong_avg_ms = 0.0;
+    double gomory_other_time = 0.0;
 
     if (!solver) return;
     solve_time = (solver->solve_time > 0.0) ? solver->solve_time : 1.0;
     if (solver->strong_branch_probes > 0) {
         strong_avg_ms = 1000.0 * solver->time_strong_branch / solver->strong_branch_probes;
     }
+    gomory_other_time = solver->time_root_gomory_build
+                      - solver->time_root_gomory_row_solve
+                      - solver->time_root_gomory_substitute;
+    if (gomory_other_time < 0.0) gomory_other_time = 0.0;
 
     LP_LOG_STDOUT("\n=== MIP Statistics ===\n");
     LP_LOG_STDOUT("Status: %d\n", solver->status);
@@ -2956,14 +2975,34 @@ void mip_print_stats(const MIPSolver *solver) {
            solver->root_cut_rounds, solver->root_gomory_cuts_generated,
            solver->root_mir_cuts_generated, solver->root_cover_cuts_generated,
            solver->root_scp_cuts_generated);
+    LP_LOG_STDOUT("Gomory rows: scanned=%d fractional=%d ranked=%d built=%d dup=%d reject(empty=%d sign=%d viol=%d)\n",
+           solver->root_gomory_rows_scanned, solver->root_gomory_rows_fractional,
+           solver->root_gomory_rows_ranked, solver->root_gomory_rows_built,
+           solver->root_gomory_pool_duplicates, solver->root_gomory_reject_empty,
+           solver->root_gomory_reject_sign, solver->root_gomory_reject_violation);
+    LP_LOG_STDOUT("Gomory time: rank=%.3fms build=%.3fms row_solve=%.3fms substitute=%.3fms pool=%.3fms other=%.3fms\n",
+           1000.0 * solver->time_root_gomory_rank,
+           1000.0 * solver->time_root_gomory_build,
+           1000.0 * solver->time_root_gomory_row_solve,
+           1000.0 * solver->time_root_gomory_substitute,
+           1000.0 * solver->time_root_gomory_pool,
+           1000.0 * gomory_other_time);
+    LP_LOG_STDOUT("MIR rows: scanned=%d candidate=%d ranked=%d time=%.3fms\n",
+           solver->root_mir_rows_scanned, solver->root_mir_rows_candidate,
+           solver->root_mir_rows_ranked,
+           1000.0 * solver->time_root_mir);
+    LP_LOG_STDOUT("Cover rows: scanned=%d knapsack=%d time=%.3fms\n",
+           solver->root_cover_rows_scanned, solver->root_cover_knapsack_rows,
+           1000.0 * solver->time_root_cover);
     LP_LOG_STDOUT("Root LP reuse: attempts=%d dual=%d primal=%d cold_fallbacks=%d\n",
            solver->root_lp_incremental_attempts, solver->root_lp_incremental_dual,
            solver->root_lp_incremental_primal, solver->root_lp_incremental_fallbacks);
-    LP_LOG_STDOUT("Root cut skips: disabled=%d spp_disabled=%d integral=%d diving_gap=%d spp_gap=%d scp_gap=%d generic_low_eff=%d spp_inc=%d spp_low_eff=%d\n",
+    LP_LOG_STDOUT("Root cut skips: disabled=%d spp_disabled=%d integral=%d diving_gap=%d spp_gap=%d scp_gap=%d generic_low_eff=%d mir_zero=%d spp_inc=%d spp_low_eff=%d\n",
            solver->root_cut_skip_disabled, solver->root_cut_skip_spp_disabled,
            solver->root_cut_skip_integral_lp,
            solver->root_cut_skip_gap_closed_diving, solver->root_cut_skip_gap_closed_spp,
            solver->root_cut_skip_gap_closed_scp, solver->root_cut_skip_generic_low_efficacy,
+           solver->root_cut_skip_mir_zero_yield,
            solver->root_cut_skip_spp_incumbent,
            solver->root_cut_skip_spp_low_efficacy);
     LP_LOG_STDOUT("SPP plugins: prop_calls=%d fixings=%d prunes=%d branch_uses=%d root_cuts=%s\n",
