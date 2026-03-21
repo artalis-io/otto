@@ -190,6 +190,7 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
      * Falls back to malloc when pool is exhausted */
     solver->node_pool = bb_node_pool_create(pool_capacity, model->num_vars);
     /* Note: pool is optional - NULL pool falls back to individual allocs */
+    solver->current_node_depth = -1;
 
     /* Create cut pool */
     solver->cut_pool = cut_pool_create(1024);
@@ -1621,6 +1622,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     /* Select branching variable. Some selector paths can fail to return a
      * candidate even when the current LP solution is still fractional. Fall
      * back to the plain most-infeasible scan before pruning the node. */
+    solver->current_node_depth = node->depth;
     int branch_var = -1;
     if (select_branch_variable(solver, lp_sol, &branch_var) != 0) {
         int fallback = mip_select_most_infeasible(solver, lp_sol);
@@ -1741,6 +1743,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     /* Create child nodes */
     BBNode *child_down, *child_up;
     compute_branch_children(solver, node, branch_var, lp_sol, &child_down, &child_up);
+    solver->current_node_depth = -1;
     if (!child_down && !child_up) {
         if (solver->verbose >= 2) {
             LP_LOG_STDOUT("  [process_node] Branch produced no tightening; pruning node\n");

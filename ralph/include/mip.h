@@ -25,6 +25,11 @@ extern "C" {
 #define MIP_RELIABILITY_NO_INCUMBENT_TAPER_AFTER 1024   /* Explored nodes before pre-incumbent taper */
 #define MIP_RELIABILITY_NO_INCUMBENT_DISABLE_AFTER 4096 /* Explored nodes before pre-incumbent strong-branch off */
 #define MIP_RELIABILITY_NO_INCUMBENT_PIVOT_BUDGET 48    /* Reduced pivot budget in tapered pre-incumbent mode */
+#define MIP_RELIABILITY_ARTIFICIAL_THRESHOLD 2          /* Strong-branch less before trusting pseudo-costs on artificial-column LPs */
+#define MIP_RELIABILITY_ARTIFICIAL_MAX_DEPTH 1          /* Disable strong branching below this depth when artificials remain */
+#define MIP_RELIABILITY_ARTIFICIAL_ROOT_MAX_STRONG 1    /* Root strong probes on artificial-column LPs */
+#define MIP_RELIABILITY_ARTIFICIAL_SHALLOW_MAX_STRONG 1 /* Depth-1 strong probes on artificial-column LPs */
+#define MIP_RELIABILITY_ARTIFICIAL_PIVOT_BUDGET 32      /* Reduced pivot budget on artificial-column LPs */
 
 /* Cut quality filter parameters */
 #define MIP_CUT_MIN_VIOLATION  1e-4   /* Minimum violation to apply a cut */
@@ -178,6 +183,7 @@ typedef struct {
     int node_count;
     int nodes_explored;
     int max_depth;
+    int current_node_depth;   /* Depth of node currently selecting a branch variable */
 
     /* Cut pool */
     CutPool *cut_pool;

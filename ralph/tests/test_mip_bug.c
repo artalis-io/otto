@@ -436,6 +436,16 @@ int test_set_partitioning_reliability_recovery_regression(void) {
         failed = 1;
         goto cleanup;
     }
+    {
+        int max_allowed_probes = MIP_RELIABILITY_ARTIFICIAL_ROOT_MAX_STRONG +
+                                 2 * MIP_RELIABILITY_ARTIFICIAL_SHALLOW_MAX_STRONG;
+        if (mip->strong_branch_probes > max_allowed_probes) {
+            printf("FAIL: Expected artificial-column probing cap <= %d, got %d\n",
+                   max_allowed_probes, mip->strong_branch_probes);
+            failed = 1;
+            goto cleanup;
+        }
+    }
 
     printf("PASS: recoveries=%d state_restores=%d warm_solves=%d\n",
            mip->strong_branch_recoveries, mip->node_lp_state_restore_success,
