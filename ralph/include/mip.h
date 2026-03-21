@@ -8,6 +8,8 @@
 #include "lp.h"
 #include "detect.h"
 
+typedef struct SPPContext SPPContext;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -289,6 +291,7 @@ typedef struct {
 
     /* SCP-specific optimizations (for set covering/partitioning MIPs) */
     int use_scp_solver;          /* 1 if SCP structure detected and enabled */
+    SPPContext *spp_ctx;         /* Exact-cover context for partitioning heuristics/cuts */
     int scp_cuts_generated;      /* Number of SCP-specific cuts generated */
     double lagrangian_bound;     /* Best Lagrangian dual bound (if computed) */
 
