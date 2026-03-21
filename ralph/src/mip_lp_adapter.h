@@ -3,6 +3,14 @@
 
 #include "mip.h"
 
+typedef enum {
+    MIP_LP_DUAL_FAIL_NONE = 0,
+    MIP_LP_DUAL_FAIL_ERROR = 1,
+    MIP_LP_DUAL_FAIL_ITERATION_LIMIT = 2,
+    MIP_LP_DUAL_FAIL_TIME_LIMIT = 3,
+    MIP_LP_DUAL_FAIL_OTHER = 4
+} MIPLPDualFailReason;
+
 /* Stage a warm basis on an LP solver for one-shot cold-start application. */
 static inline int mip_lp_stage_warm_basis(SimplexSolver *lp, int m, int n,
                                           const int *basis, const VarStatus *var_status) {
@@ -47,6 +55,27 @@ static inline int mip_lp_dual_reopt(SimplexSolver *lp, int iter_budget, int *rc_
     lp->max_iterations = save_max_iter;
     if (rc_out) *rc_out = rc;
     return rc;
+}
+
+static inline MIPLPDualFailReason mip_lp_dual_fail_reason(const SimplexSolver *lp) {
+    if (!lp) return MIP_LP_DUAL_FAIL_OTHER;
+    switch (lp->status) {
+        case RALPH_STATUS_ERROR:
+            return MIP_LP_DUAL_FAIL_ERROR;
+        case RALPH_STATUS_ITERATION_LIMIT:
+            return MIP_LP_DUAL_FAIL_ITERATION_LIMIT;
+        case RALPH_STATUS_TIME_LIMIT:
+            return MIP_LP_DUAL_FAIL_TIME_LIMIT;
+        default:
+            return MIP_LP_DUAL_FAIL_OTHER;
+    }
+}
+
+static inline int mip_lp_needs_dual_repair(const SimplexSolver *lp) {
+    return lp && lp->tableau &&
+           (lp->tableau->phase == 1 ||
+            lp->tableau->num_artificial > 0 ||
+            lp->tableau->use_two_phase);
 }
 
 /* Refactorize the current basis and recompute solution/reduced costs. */

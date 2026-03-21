@@ -218,6 +218,11 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     solver->cut_recovery_failures = 0;
     solver->node_lp_warm_dual_fallbacks = 0;
     solver->node_lp_warm_bound_fallbacks = 0;
+    solver->node_lp_warm_dual_skips = 0;
+    solver->node_lp_warm_dual_fail_error = 0;
+    solver->node_lp_warm_dual_fail_iter_limit = 0;
+    solver->node_lp_warm_dual_fail_time_limit = 0;
+    solver->node_lp_warm_dual_fail_other = 0;
     solver->node_lp_state_restore_attempts = 0;
     solver->node_lp_state_restore_success = 0;
     solver->node_lp_state_restore_failures = 0;
@@ -573,6 +578,38 @@ static int mip_solution_within_node_bounds(const LPModel *model,
         if (x[j] > ub[j] + RALPH_FEAS_TOL) return 0;
     }
     return 1;
+}
+
+static void mip_record_warm_dual_fail_reason(MIPSolver *solver,
+                                             MIPLPDualFailReason reason) {
+    if (!solver) return;
+    switch (reason) {
+        case MIP_LP_DUAL_FAIL_ERROR:
+            solver->node_lp_warm_dual_fail_error++;
+            break;
+        case MIP_LP_DUAL_FAIL_ITERATION_LIMIT:
+            solver->node_lp_warm_dual_fail_iter_limit++;
+            break;
+        case MIP_LP_DUAL_FAIL_TIME_LIMIT:
+            solver->node_lp_warm_dual_fail_time_limit++;
+            break;
+        case MIP_LP_DUAL_FAIL_NONE:
+            break;
+        case MIP_LP_DUAL_FAIL_OTHER:
+        default:
+            solver->node_lp_warm_dual_fail_other++;
+            break;
+    }
+}
+
+static int mip_should_skip_warm_dual(const MIPSolver *solver,
+                                     const BBNode *node,
+                                     const SimplexSolver *lp) {
+    if (!solver || !node || !lp) return 0;
+    if (!mip_lp_needs_dual_repair(lp)) return 0;
+    if (node->depth <= MIP_WARM_DUAL_ARTIFICIAL_MAX_DEPTH) return 0;
+    return solver->node_lp_warm_dual_fail_iter_limit >=
+           MIP_WARM_DUAL_ITER_LIMIT_SKIP_AFTER;
 }
 
 /* ============================================================================
@@ -1347,6 +1384,11 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
         }
     }
 
+    if (can_warm_reuse && mip_should_skip_warm_dual(solver, node, lp)) {
+        solver->node_lp_warm_dual_skips++;
+        can_warm_reuse = 0;
+    }
+
     if (can_warm_reuse) {
         double t_warm_start = mip_cpu_time_now();
         if (((!used_direct_reuse) ||
@@ -1375,6 +1417,11 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
                 solver->node_lp_warm_solves++;
                 solver->time_node_lp_warm += mip_cpu_time_now() - t_warm_start;
                 goto node_lp_done;
+            }
+            if (rc != 0 &&
+                lp->status != RALPH_STATUS_INFEASIBLE &&
+                lp->status != RALPH_STATUS_OBJ_LIMIT) {
+                mip_record_warm_dual_fail_reason(solver, mip_lp_dual_fail_reason(lp));
             }
             solver->node_lp_warm_dual_fallbacks++;
         }
@@ -2312,6 +2359,12 @@ void mip_print_stats(const MIPSolver *solver) {
            solver->node_lp_warm_dual_fallbacks, solver->node_lp_warm_bound_fallbacks,
            solver->node_lp_state_restore_success, solver->node_lp_state_restore_attempts,
            solver->node_lp_state_restore_failures);
+    LP_LOG_STDOUT("Warm dual skips=%d reasons(error=%d iter=%d time=%d other=%d)\n",
+           solver->node_lp_warm_dual_skips,
+           solver->node_lp_warm_dual_fail_error,
+           solver->node_lp_warm_dual_fail_iter_limit,
+           solver->node_lp_warm_dual_fail_time_limit,
+           solver->node_lp_warm_dual_fail_other);
     LP_LOG_STDOUT("Strong-branch time: %.3fs (avg %.3f ms/probe, %.1f%% of solve)\n",
            solver->time_strong_branch, strong_avg_ms,
            100.0 * solver->time_strong_branch / solve_time);
