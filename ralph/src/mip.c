@@ -22,6 +22,15 @@ static double mip_cpu_time_now(void) {
     return (double)clock() / CLOCKS_PER_SEC;
 }
 
+static int mip_env_flag_enabled(const char *name) {
+    const char *value;
+
+    if (!name || !*name) return 0;
+    value = getenv(name);
+    if (!value || !*value) return 0;
+    return strcmp(value, "0") != 0;
+}
+
 /* Apply P5/P6 feature flags and iteration budget from MIP solver to LP sub-solver.
  * MIP LP solves should NEVER run for 1M+ iterations — if v2 cycles for >2000
  * iterations on a node LP, something is wrong and cold-start fallback handles it. */
@@ -85,6 +94,275 @@ int mip_recover_root_relaxation(MIPSolver *solver) {
 
     solver->cut_recovery_success++;
     return 0;
+}
+
+static void mip_clear_solver_outputs(SimplexSolver *lp) {
+    if (!lp) return;
+    free(lp->solution);
+    lp->solution = NULL;
+    free(lp->dual_solution);
+    lp->dual_solution = NULL;
+    free(lp->reduced_costs);
+    lp->reduced_costs = NULL;
+    lp->farkas_valid = 0;
+    lp->unbounded_valid = 0;
+}
+
+static char mip_cut_normalized_sense(char sense, double rhs,
+                                     double *sign_out, double *rhs_out) {
+    double sign = 1.0;
+    char normalized = sense;
+
+    if (rhs < 0.0) {
+        sign = -1.0;
+        if (sense == 'L') normalized = 'G';
+        else if (sense == 'G') normalized = 'L';
+        else normalized = 'E';
+    }
+
+    if (sign_out) *sign_out = sign;
+    if (rhs_out) *rhs_out = fabs(rhs);
+    return normalized;
+}
+
+static int mip_build_root_cut_warm_basis(const SimplexSolver *lp,
+                                         const Cut *const *applied_cuts,
+                                         int num_cuts,
+                                         int **basis_out,
+                                         VarStatus **var_status_out,
+                                         int *m_out,
+                                         int *n_out,
+                                         int *all_slack_rows_out) {
+    if (basis_out) *basis_out = NULL;
+    if (var_status_out) *var_status_out = NULL;
+    if (m_out) *m_out = 0;
+    if (n_out) *n_out = 0;
+    if (all_slack_rows_out) *all_slack_rows_out = 0;
+    if (!lp || !lp->tableau || !lp->tableau->basis || !lp->tableau->var_status ||
+        !applied_cuts || num_cuts <= 0 || !basis_out || !var_status_out ||
+        !m_out || !n_out || !all_slack_rows_out) {
+        return -1;
+    }
+
+    const SimplexTableau *tab = lp->tableau;
+    const double *x = lp->solution ? lp->solution : tab->x;
+    if (!x) return -1;
+
+    int old_m = tab->m;
+    int old_n = tab->n;
+    int extra_aux = 0;
+    int all_slack_rows = 1;
+
+    for (int i = 0; i < num_cuts; i++) {
+        const Cut *cut = applied_cuts[i];
+        if (!cut) return -1;
+
+        char norm_sense = mip_cut_normalized_sense(cut->sense, cut->rhs, NULL, NULL);
+        if (norm_sense == 'L') {
+            extra_aux += 1;
+        } else if (norm_sense == 'G') {
+            extra_aux += 2;
+            all_slack_rows = 0;
+        } else if (norm_sense == 'E') {
+            extra_aux += 1;
+            all_slack_rows = 0;
+        } else {
+            return -1;
+        }
+    }
+
+    int new_m = old_m + num_cuts;
+    int new_n = old_n + extra_aux;
+    int *basis = (int *)calloc((size_t)new_m, sizeof(int));
+    VarStatus *var_status = (VarStatus *)calloc((size_t)new_n, sizeof(VarStatus));
+    if (!basis || !var_status) {
+        free(basis);
+        free(var_status);
+        return -1;
+    }
+
+    memcpy(basis, tab->basis, (size_t)old_m * sizeof(int));
+    memcpy(var_status, tab->var_status, (size_t)old_n * sizeof(VarStatus));
+    for (int j = old_n; j < new_n; j++) {
+        var_status[j] = RALPH_NONBASIC_LOWER;
+    }
+
+    int next_aux = old_n;
+    for (int i = 0; i < num_cuts; i++) {
+        const Cut *cut = applied_cuts[i];
+        double row_sign = 1.0;
+        double rhs = 0.0;
+        char norm_sense = mip_cut_normalized_sense(cut->sense, cut->rhs, &row_sign, &rhs);
+        double activity = 0.0;
+
+        for (int k = 0; k < cut->nnz; k++) {
+            int col = cut->indices[k];
+            if (col < 0 || col >= lp->model->num_vars) {
+                free(basis);
+                free(var_status);
+                return -1;
+            }
+            activity += cut->values[k] * x[col];
+        }
+        activity *= row_sign;
+
+        if (norm_sense == 'L') {
+            basis[old_m + i] = next_aux;
+            var_status[next_aux] = RALPH_BASIC;
+            next_aux += 1;
+        } else if (norm_sense == 'G') {
+            int surplus_idx = next_aux;
+            int artificial_idx = next_aux + 1;
+            if (activity >= rhs - RALPH_FEAS_TOL) {
+                basis[old_m + i] = surplus_idx;
+                var_status[surplus_idx] = RALPH_BASIC;
+            } else {
+                basis[old_m + i] = artificial_idx;
+                var_status[artificial_idx] = RALPH_BASIC;
+            }
+            next_aux += 2;
+        } else {
+            basis[old_m + i] = next_aux;
+            var_status[next_aux] = RALPH_BASIC;
+            next_aux += 1;
+        }
+    }
+
+    *basis_out = basis;
+    *var_status_out = var_status;
+    *m_out = new_m;
+    *n_out = new_n;
+    *all_slack_rows_out = all_slack_rows;
+    return 0;
+}
+
+static int mip_try_incremental_root_lp_resolve(MIPSolver *solver,
+                                               Cut *const *applied_cuts,
+                                               int num_cuts) {
+    if (!solver || !solver->lp_solver || !solver->lp_solver->tableau ||
+        !solver->working_model || !applied_cuts || num_cuts <= 0) {
+        return -1;
+    }
+
+    SimplexSolver *lp = solver->lp_solver;
+    int *warm_basis = NULL;
+    VarStatus *warm_var_status = NULL;
+    int warm_m = 0;
+    int warm_n = 0;
+    int all_slack_rows = 0;
+    int parent_two_phase = (lp->tableau && lp->tableau->use_two_phase) ? 1 : 0;
+    LPAugmentRow *augment_rows = NULL;
+    int saved_method = lp->method;
+    int resolved = 0;
+
+    solver->root_lp_incremental_attempts++;
+
+    if (mip_build_root_cut_warm_basis(lp, (const Cut *const *)applied_cuts, num_cuts,
+                                      &warm_basis, &warm_var_status,
+                                      &warm_m, &warm_n, &all_slack_rows) != 0) {
+        solver->root_lp_incremental_fallbacks++;
+        return -1;
+    }
+
+    if (all_slack_rows &&
+        simplex_set_warm_basis(lp, warm_m, warm_n, warm_basis, warm_var_status) == 0) {
+        mip_clear_solver_outputs(lp);
+        if (lp->tableau) {
+            tableau_free(lp->tableau);
+            lp->tableau = NULL;
+        }
+
+        if (simplex_prepare_primal_tableau(lp, 0) == 0) {
+            int dual_rc = -1;
+            solver->root_lp_resolves++;
+            {
+                double t_resolve_start = mip_cpu_time_now();
+                (void)mip_lp_dual_reopt(lp, 0, &dual_rc);
+                solver->time_root_lp_resolve += mip_cpu_time_now() - t_resolve_start;
+            }
+            if (dual_rc == 0 &&
+                (lp->status == RALPH_STATUS_OPTIMAL ||
+                 lp->status == RALPH_STATUS_INFEASIBLE ||
+                 lp->status == RALPH_STATUS_OBJ_LIMIT)) {
+                solver->root_lp_incremental_dual++;
+                resolved = 1;
+            }
+        }
+    }
+
+    if (!resolved && all_slack_rows &&
+        simplex_set_warm_basis(lp, warm_m, warm_n, warm_basis, warm_var_status) == 0) {
+        if (lp->tableau) {
+            tableau_free(lp->tableau);
+            lp->tableau = NULL;
+        }
+        lp->method = 0;
+        solver->root_lp_resolves++;
+        {
+            double t_resolve_start = mip_cpu_time_now();
+            simplex_solve(lp);
+            solver->time_root_lp_resolve += mip_cpu_time_now() - t_resolve_start;
+        }
+        lp->method = saved_method;
+        if (lp->status == RALPH_STATUS_OPTIMAL ||
+            lp->status == RALPH_STATUS_INFEASIBLE ||
+            lp->status == RALPH_STATUS_OBJ_LIMIT) {
+            solver->root_lp_incremental_primal++;
+            resolved = 1;
+        }
+    }
+
+    if (!resolved && !all_slack_rows && parent_two_phase) {
+        mip_clear_solver_outputs(lp);
+        augment_rows = (LPAugmentRow *)calloc((size_t)num_cuts, sizeof(LPAugmentRow));
+        if (augment_rows) {
+            for (int i = 0; i < num_cuts; i++) {
+                augment_rows[i].nnz = applied_cuts[i]->nnz;
+                augment_rows[i].indices = applied_cuts[i]->indices;
+                augment_rows[i].values = applied_cuts[i]->values;
+                augment_rows[i].sense = applied_cuts[i]->sense;
+                augment_rows[i].rhs = applied_cuts[i]->rhs;
+            }
+        }
+        if (augment_rows &&
+            simplex_prepare_augmented_primal_tableau(lp,
+                                                    augment_rows,
+                                                    num_cuts,
+                                                    warm_m,
+                                                    warm_n,
+                                                    warm_basis,
+                                                    warm_var_status) == 0) {
+            solver->root_lp_resolves++;
+            {
+                double t_resolve_start = mip_cpu_time_now();
+                (void)simplex_resolve_prepared_primal_tableau(lp);
+                solver->time_root_lp_resolve += mip_cpu_time_now() - t_resolve_start;
+            }
+            if (lp->status == RALPH_STATUS_OPTIMAL ||
+                lp->status == RALPH_STATUS_INFEASIBLE ||
+                lp->status == RALPH_STATUS_OBJ_LIMIT) {
+                solver->root_lp_incremental_primal++;
+                resolved = 1;
+            }
+        }
+    }
+
+    free(augment_rows);
+    free(warm_basis);
+    free(warm_var_status);
+
+    if (resolved) {
+        return 0;
+    }
+
+    lp->method = saved_method;
+    if (lp->tableau) {
+        tableau_free(lp->tableau);
+        lp->tableau = NULL;
+    }
+    mip_clear_solver_outputs(lp);
+    solver->root_lp_incremental_fallbacks++;
+    return -1;
 }
 
 /* ============================================================================
@@ -173,7 +451,7 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     solver->node_select = NODE_SELECT_HYBRID;
     solver->var_select = VAR_SELECT_RELIABILITY;  /* Bootstraps pseudocosts via strong branching */
     solver->max_cuts_per_round = 50;
-    solver->max_cut_rounds = 5;  /* Enable cuts with conservative limit */
+    solver->max_cut_rounds = RALPH_DEFAULT_MAX_CUT_ROUNDS;
     solver->verbose = 0;
     solver->telemetry = 1;
     solver->dual_bound_flip = -1;    /* use default */
@@ -217,6 +495,10 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     solver->cut_recovery_attempts = 0;
     solver->cut_recovery_success = 0;
     solver->cut_recovery_failures = 0;
+    solver->root_lp_incremental_attempts = 0;
+    solver->root_lp_incremental_dual = 0;
+    solver->root_lp_incremental_primal = 0;
+    solver->root_lp_incremental_fallbacks = 0;
     solver->node_lp_warm_dual_fallbacks = 0;
     solver->node_lp_warm_bound_fallbacks = 0;
     solver->node_lp_warm_dual_skips = 0;
@@ -227,6 +509,12 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     solver->node_lp_state_restore_attempts = 0;
     solver->node_lp_state_restore_success = 0;
     solver->node_lp_state_restore_failures = 0;
+    solver->root_cut_skip_generic_low_efficacy = 0;
+    solver->root_cut_skip_spp_disabled = 0;
+    solver->spp_prop_calls = 0;
+    solver->spp_prop_fixings = 0;
+    solver->spp_prop_prunes = 0;
+    solver->spp_branch_uses = 0;
 
     /* Try to detect LAP structure for specialized solving */
     solver->use_lap_solver = 0;
@@ -251,9 +539,13 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
 
     /* Detect SCP structure for specialized cuts, heuristics, and Lagrangian */
     solver->use_scp_solver = 0;
+    solver->enable_spp_root_cuts = RALPH_ENABLE_SPP_ROOT_CUTS_DEFAULT;
     solver->spp_ctx = NULL;
     solver->scp_cuts_generated = 0;
     solver->lagrangian_bound = -RALPH_INFINITY;
+    if (mip_env_flag_enabled("RALPH_ENABLE_SPP_ROOT_CUTS")) {
+        solver->enable_spp_root_cuts = 1;
+    }
 
     if (detect_special && is_scp_model(model)) {
         solver->use_scp_solver = 1;
@@ -631,6 +923,25 @@ static int mip_try_spp_root_heuristic(MIPSolver *solver) {
     return 0;
 }
 
+static int mip_spp_propagate_node(MIPSolver *solver, BBNode *node) {
+    int fixings = 0;
+
+    if (!solver || !node || !solver->spp_ctx) return 0;
+
+    solver->spp_prop_calls++;
+    if (spp_propagate_bounds(solver->spp_ctx, node->lb, node->ub, &fixings) != 0) {
+        solver->spp_prop_prunes++;
+        return -1;
+    }
+
+    solver->spp_prop_fixings += fixings;
+    if (solver->verbose >= 2 && fixings > 0) {
+        LP_LOG_STDOUT("SPP propagation: node=%d depth=%d fixings=%d\n",
+                      node->id, node->depth, fixings);
+    }
+    return 0;
+}
+
 typedef struct {
     CutPool *pool;
     int max_cuts;
@@ -676,7 +987,7 @@ static int mip_emit_spp_cut(void *user, const SPPCut *src) {
     return 0;
 }
 
-static int mip_generate_spp_cuts(MIPSolver *solver, CutPool *pool) {
+static int mip_generate_spp_cuts(MIPSolver *solver, CutPool *pool, int max_cuts) {
     MIPSPPCutSink sink_ctx;
     SPPCutSink sink;
     SPPCutStats stats;
@@ -687,7 +998,7 @@ static int mip_generate_spp_cuts(MIPSolver *solver, CutPool *pool) {
 
     memset(&sink_ctx, 0, sizeof(sink_ctx));
     sink_ctx.pool = pool;
-    sink_ctx.max_cuts = solver->max_cuts_per_round;
+    sink_ctx.max_cuts = max_cuts;
 
     sink.emit = mip_emit_spp_cut;
     sink.user = &sink_ctx;
@@ -1641,6 +1952,13 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     /* Capture parent LP bound for pseudocost update */
     double parent_lp_bound = node->lp_bound;
 
+    if (mip_spp_propagate_node(solver, node) != 0) {
+        if (solver->verbose) {
+            LP_LOG_STDOUT("  [process_node] Pruned: SPP propagation infeasible\n");
+        }
+        return 0;
+    }
+
     /* Solve LP relaxation */
     if (solve_node_lp(solver, node) != 0) {
         /* LP infeasible or error - prune node */
@@ -1978,6 +2296,12 @@ static int solve_root_node(MIPSolver *solver) {
         root->ub[j] = model->ub[j];
     }
 
+    if (mip_spp_propagate_node(solver, root) != 0) {
+        solver->status = RALPH_STATUS_INFEASIBLE;
+        bb_node_pool_return(solver->node_pool, root);
+        return 0;
+    }
+
     /* Solve initial LP relaxation - use LAP solver if detected */
     int root_lp_solved = 0;
 
@@ -2022,6 +2346,7 @@ static int solve_root_node(MIPSolver *solver) {
     /* Check if LP solution is integer feasible */
     if (check_integer_feasibility(solver, solver->lp_solver->solution)) {
         update_incumbent(solver, solver->lp_solver->solution, solver->lp_solver->obj_value);
+        solver->root_cut_skip_integral_lp++;
         solver->status = RALPH_STATUS_OPTIMAL;
         bb_node_pool_return(solver->node_pool, root);
         return 0;
@@ -2039,6 +2364,7 @@ static int solve_root_node(MIPSolver *solver) {
         /* Check if diving found optimal (gap closed) */
         double gap = fabs(solver->best_obj - solver->root_bound);
         if (gap < solver->abs_mip_gap) {
+            solver->root_cut_skip_gap_closed_diving++;
             solver->status = RALPH_STATUS_OPTIMAL;
             bb_node_pool_return(solver->node_pool, root);
             return 0;
@@ -2052,6 +2378,7 @@ static int solve_root_node(MIPSolver *solver) {
         if (mip_try_spp_root_heuristic(solver)) {
             double gap = fabs(solver->best_obj - solver->root_bound);
             if (gap < solver->abs_mip_gap) {
+                solver->root_cut_skip_gap_closed_spp++;
                 solver->status = RALPH_STATUS_OPTIMAL;
                 bb_node_pool_return(solver->node_pool, root);
                 return 0;
@@ -2089,6 +2416,7 @@ static int solve_root_node(MIPSolver *solver) {
             if (solver->has_incumbent) {
                 double gap = fabs(solver->best_obj - solver->root_bound);
                 if (gap < solver->abs_mip_gap) {
+                    solver->root_cut_skip_gap_closed_scp++;
                     solver->status = RALPH_STATUS_OPTIMAL;
                     bb_node_pool_return(solver->node_pool, root);
                     return 0;
@@ -2103,8 +2431,33 @@ static int solve_root_node(MIPSolver *solver) {
     int no_improvement_rounds = 0;
     int total_cuts_applied = 0;
     int max_cuts_total = 200;  /* Safety limit on total cuts */
+    int root_cut_round_limit = solver->max_cut_rounds;
+    int max_cuts_this_round = solver->max_cuts_per_round;
+    int skip_spp_root_cuts =
+        solver->spp_ctx && (!solver->enable_spp_root_cuts || solver->has_incumbent);
+    int disable_spp_root_cuts = 0;
 
-    while (cut_rounds < solver->max_cut_rounds && total_cuts_applied < max_cuts_total) {
+    if (solver->max_cut_rounds <= 0) {
+        solver->root_cut_skip_disabled++;
+    }
+    if (solver->spp_ctx && !solver->enable_spp_root_cuts) {
+        solver->root_cut_skip_spp_disabled++;
+    } else if (skip_spp_root_cuts) {
+        solver->root_cut_skip_spp_incumbent++;
+    }
+    if (solver->spp_ctx) {
+        if (root_cut_round_limit > SPP_ROOT_CUT_MAX_ROUNDS) {
+            root_cut_round_limit = SPP_ROOT_CUT_MAX_ROUNDS;
+        }
+        if (max_cuts_this_round > SPP_ROOT_CUT_MAX_PER_ROUND) {
+            max_cuts_this_round = SPP_ROOT_CUT_MAX_PER_ROUND;
+        }
+    }
+
+    while (!skip_spp_root_cuts &&
+           !disable_spp_root_cuts &&
+           cut_rounds < root_cut_round_limit &&
+           total_cuts_applied < max_cuts_total) {
         int cuts_added = 0;
         int gomory_added = 0;
         int mir_added = 0;
@@ -2118,32 +2471,37 @@ static int solve_root_node(MIPSolver *solver) {
         cut_pool_age(solver->cut_pool);
 
         t_sep_start = mip_cpu_time_now();
-        /* Generate Gomory cuts (from integer basic variable rows) */
-        gomory_added = generate_gomory_cuts(solver, solver->cut_pool);
-        cuts_added += gomory_added;
-        solver->root_gomory_cuts_generated += gomory_added;
-
-        /* Generate MIR cuts (from continuous basic variable rows) */
-        mir_added = generate_mir_cuts(solver, solver->cut_pool);
-        cuts_added += mir_added;
-        solver->root_mir_cuts_generated += mir_added;
-
-        /* Generate cover cuts (from knapsack constraints) */
-        cover_added = generate_cover_cuts(solver, solver->cut_pool);
-        cuts_added += cover_added;
-        solver->root_cover_cuts_generated += cover_added;
-
-        /* Generate SCP-specific cuts (clique, odd-hole, lifted cover) */
         if (solver->spp_ctx) {
-            scp_cuts = mip_generate_spp_cuts(solver, solver->cut_pool);
+            /* Exact-cover roots use the standalone SPP separator only.
+             * Generic Gomory/MIR rounds were dominating time on these models
+             * without helping the benchmarked partitioning cases. */
+            scp_cuts = mip_generate_spp_cuts(solver, solver->cut_pool, max_cuts_this_round);
             cuts_added += scp_cuts;
             solver->root_scp_cuts_generated += scp_cuts;
             solver->scp_cuts_generated += scp_cuts;
-        } else if (solver->use_scp_solver) {
+        } else {
+            /* Generate Gomory cuts (from integer basic variable rows) */
+            gomory_added = generate_gomory_cuts(solver, solver->cut_pool);
+            cuts_added += gomory_added;
+            solver->root_gomory_cuts_generated += gomory_added;
+
+            /* Generate MIR cuts (from continuous basic variable rows) */
+            mir_added = generate_mir_cuts(solver, solver->cut_pool);
+            cuts_added += mir_added;
+            solver->root_mir_cuts_generated += mir_added;
+
+            /* Generate cover cuts (from knapsack constraints) */
+            cover_added = generate_cover_cuts(solver, solver->cut_pool);
+            cuts_added += cover_added;
+            solver->root_cover_cuts_generated += cover_added;
+
+            /* Generate SCP-specific cuts (clique, odd-hole, lifted cover) */
+            if (solver->use_scp_solver) {
             scp_cuts = generate_scp_cuts(solver, solver->cut_pool);
             cuts_added += scp_cuts;
             solver->root_scp_cuts_generated += scp_cuts;
             solver->scp_cuts_generated += scp_cuts;
+            }
         }
         solver->time_root_cut_separation += mip_cpu_time_now() - t_sep_start;
 
@@ -2169,7 +2527,8 @@ static int solve_root_node(MIPSolver *solver) {
         /* Apply cuts to the LP relaxation */
         {
             double t_apply_start = mip_cpu_time_now();
-        int cuts_applied = apply_cuts(solver, solver->cut_pool, solver->max_cuts_per_round);
+        Cut **applied_cuts = NULL;
+        int cuts_applied = apply_cuts(solver, solver->cut_pool, max_cuts_this_round, &applied_cuts);
             solver->time_root_cut_apply += mip_cpu_time_now() - t_apply_start;
         total_cuts_applied += cuts_applied;
 
@@ -2179,23 +2538,24 @@ static int solve_root_node(MIPSolver *solver) {
                        cut_rounds + 1, cuts_applied, total_cuts_applied);
             }
 
-            /* Rebuild simplex solver with new constraints */
-            if (mip_create_lp_solver_for_working_model(solver) != 0) {
-                bb_node_pool_return(solver->node_pool, root);
-                return -1;
-            }
-
             if (solver->verbose) {
                 LP_LOG_STDOUT("  Re-solving LP with %d constraints...\n",
                        solver->working_model->num_cons);
             }
 
-            /* Re-solve LP with cuts */
-            solver->root_lp_resolves++;
-            {
-                double t_resolve_start = mip_cpu_time_now();
-            simplex_solve(solver->lp_solver);
-                solver->time_root_lp_resolve += mip_cpu_time_now() - t_resolve_start;
+            if (mip_try_incremental_root_lp_resolve(solver, applied_cuts, cuts_applied) != 0) {
+                if (mip_create_lp_solver_for_working_model(solver) != 0) {
+                    free(applied_cuts);
+                    bb_node_pool_return(solver->node_pool, root);
+                    return -1;
+                }
+
+                solver->root_lp_resolves++;
+                {
+                    double t_resolve_start = mip_cpu_time_now();
+                    simplex_solve(solver->lp_solver);
+                    solver->time_root_lp_resolve += mip_cpu_time_now() - t_resolve_start;
+                }
             }
 
             if (solver->verbose) {
@@ -2211,11 +2571,13 @@ static int solve_root_node(MIPSolver *solver) {
                            solver->lp_solver->status);
                 }
                 if (mip_recover_root_relaxation(solver) != 0) {
+                    free(applied_cuts);
                     bb_node_pool_return(solver->node_pool, root);
                     return -1;
                 }
                 root->lp_bound = solver->lp_solver->obj_value;
                 solver->cuts_applied = 0;
+                free(applied_cuts);
                 break;
             }
 
@@ -2232,6 +2594,32 @@ static int solve_root_node(MIPSolver *solver) {
             /* Check if bound improved significantly */
             double improvement = (solver->original_model->obj_sense == 1) ?
                                  (new_bound - prev_bound) : (prev_bound - new_bound);
+            if (solver->spp_ctx) {
+                double min_improvement = SPP_ROOT_CUT_MIN_IMPROVEMENT_PER_CUT *
+                                         (double)(cuts_applied > 0 ? cuts_applied : 1);
+                if (min_improvement < SPP_ROOT_CUT_MIN_TOTAL_IMPROVEMENT) {
+                    min_improvement = SPP_ROOT_CUT_MIN_TOTAL_IMPROVEMENT;
+                }
+                if (improvement < min_improvement) {
+                    if (solver->verbose) {
+                        LP_LOG_STDOUT("SPP root cuts low efficacy: improvement=%.6f < %.6f, discarding cuts\n",
+                               improvement, min_improvement);
+                    }
+                    solver->root_cut_skip_spp_low_efficacy++;
+                    disable_spp_root_cuts = 1;
+                    cut_pool_clear(solver->cut_pool);
+                    if (mip_recover_root_relaxation(solver) != 0) {
+                        free(applied_cuts);
+                        bb_node_pool_return(solver->node_pool, root);
+                        return -1;
+                    }
+                    root->lp_bound = solver->lp_solver->obj_value;
+                    prev_bound = root->lp_bound;
+                    solver->cuts_applied = 0;
+                    free(applied_cuts);
+                    break;
+                }
+            }
             if (improvement > RALPH_OPT_TOL) {
                 no_improvement_rounds = 0;
                 prev_bound = new_bound;
@@ -2250,8 +2638,45 @@ static int solve_root_node(MIPSolver *solver) {
                 update_incumbent(solver, solver->lp_solver->solution, solver->lp_solver->obj_value);
                 solver->status = RALPH_STATUS_OPTIMAL;
                 cut_pool_clear(solver->cut_pool);
+                free(applied_cuts);
                 bb_node_pool_return(solver->node_pool, root);
                 return 0;
+            }
+
+            if (!solver->spp_ctx && cut_rounds > 0) {
+                double min_improvement = MIP_GENERIC_ROOT_CUT_MIN_IMPROVEMENT_PER_CUT *
+                                         (double)(cuts_applied > 0 ? cuts_applied : 1);
+                if (min_improvement < MIP_GENERIC_ROOT_CUT_MIN_TOTAL_IMPROVEMENT) {
+                    min_improvement = MIP_GENERIC_ROOT_CUT_MIN_TOTAL_IMPROVEMENT;
+                }
+                if (improvement < min_improvement) {
+                    if (solver->verbose) {
+                        LP_LOG_STDOUT("Generic root cuts low efficacy: improvement=%.6f < %.6f, stopping further rounds\n",
+                               improvement, min_improvement);
+                    }
+                    solver->root_cut_skip_generic_low_efficacy++;
+                    free(applied_cuts);
+                    break;
+                }
+            }
+
+            if (solver->spp_ctx) {
+                if (solver->verbose) {
+                    LP_LOG_STDOUT("SPP root cuts did not resolve root; discarding before tree search\n");
+                }
+                solver->root_cut_skip_spp_low_efficacy++;
+                disable_spp_root_cuts = 1;
+                cut_pool_clear(solver->cut_pool);
+                if (mip_recover_root_relaxation(solver) != 0) {
+                    free(applied_cuts);
+                    bb_node_pool_return(solver->node_pool, root);
+                    return -1;
+                }
+                root->lp_bound = solver->lp_solver->obj_value;
+                prev_bound = root->lp_bound;
+                solver->cuts_applied = 0;
+                free(applied_cuts);
+                break;
             }
 
             /* Periodic cleanup of old cuts */
@@ -2262,6 +2687,7 @@ static int solve_root_node(MIPSolver *solver) {
                     LP_LOG_STDOUT("Cut cleanup: removed %d old cuts\n", before - solver->cut_pool->count);
                 }
             }
+            free(applied_cuts);
         }
         }
 
@@ -2530,6 +2956,20 @@ void mip_print_stats(const MIPSolver *solver) {
            solver->root_cut_rounds, solver->root_gomory_cuts_generated,
            solver->root_mir_cuts_generated, solver->root_cover_cuts_generated,
            solver->root_scp_cuts_generated);
+    LP_LOG_STDOUT("Root LP reuse: attempts=%d dual=%d primal=%d cold_fallbacks=%d\n",
+           solver->root_lp_incremental_attempts, solver->root_lp_incremental_dual,
+           solver->root_lp_incremental_primal, solver->root_lp_incremental_fallbacks);
+    LP_LOG_STDOUT("Root cut skips: disabled=%d spp_disabled=%d integral=%d diving_gap=%d spp_gap=%d scp_gap=%d generic_low_eff=%d spp_inc=%d spp_low_eff=%d\n",
+           solver->root_cut_skip_disabled, solver->root_cut_skip_spp_disabled,
+           solver->root_cut_skip_integral_lp,
+           solver->root_cut_skip_gap_closed_diving, solver->root_cut_skip_gap_closed_spp,
+           solver->root_cut_skip_gap_closed_scp, solver->root_cut_skip_generic_low_efficacy,
+           solver->root_cut_skip_spp_incumbent,
+           solver->root_cut_skip_spp_low_efficacy);
+    LP_LOG_STDOUT("SPP plugins: prop_calls=%d fixings=%d prunes=%d branch_uses=%d root_cuts=%s\n",
+           solver->spp_prop_calls, solver->spp_prop_fixings,
+           solver->spp_prop_prunes, solver->spp_branch_uses,
+           solver->enable_spp_root_cuts ? "on" : "off");
     LP_LOG_STDOUT("Root cut time: sep=%.3fs apply=%.3fs lp_resolve=%.3fs (resolves=%d)\n",
            solver->time_root_cut_separation, solver->time_root_cut_apply,
            solver->time_root_lp_resolve, solver->root_lp_resolves);

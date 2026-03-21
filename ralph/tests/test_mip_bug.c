@@ -15,6 +15,8 @@
 /* Forward declaration */
 SimplexSolver* simplex_create(LPModel *model);
 int simplex_solve(SimplexSolver *solver);
+int simplex_prepare_primal_tableau(SimplexSolver *solver, int allow_crash);
+int simplex_resolve_prepared_primal_tableau(SimplexSolver *solver);
 void simplex_free(SimplexSolver *solver);
 MIPSolver* ralph_get_mip_solver(const RalphModel *model);
 
@@ -329,12 +331,12 @@ cleanup:
 }
 
 /*
- * Reliability/strong-branch regression for equality-heavy set partitioning.
- * After failed probes, the solver should recover a reusable node LP state
- * and reach at least some warm node solves on this benchmark family.
+ * Regression for the exact-cover propagation + row-branching path.
+ * The SPP plugins should handle this benchmark family directly, while still
+ * preserving warm node LP reuse underneath the generic MIP controller.
  */
-int test_set_partitioning_reliability_recovery_regression(void) {
-    printf("\n=== test_set_partitioning_reliability_recovery_regression ===\n");
+int test_set_partitioning_spp_branching_regression(void) {
+    printf("\n=== test_set_partitioning_spp_branching_regression ===\n");
 
     const int num_elements = 10;
     const int num_subsets = 30;
@@ -349,7 +351,7 @@ int test_set_partitioning_reliability_recovery_regression(void) {
     g_sp_seed = 42;
     model = ralph_test_create();
     if (!model) {
-        printf("FAIL: Could not create reliability recovery model\n");
+        printf("FAIL: Could not create SPP branching regression model\n");
         return 1;
     }
     ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
@@ -358,7 +360,7 @@ int test_set_partitioning_reliability_recovery_regression(void) {
     indices = (int*)malloc((size_t)num_subsets * sizeof(int));
     values = (double*)malloc((size_t)num_subsets * sizeof(double));
     if (!covers || !indices || !values) {
-        printf("FAIL: Could not allocate reliability recovery buffers\n");
+        printf("FAIL: Could not allocate SPP branching regression buffers\n");
         failed = 1;
         goto cleanup;
     }
@@ -401,55 +403,33 @@ int test_set_partitioning_reliability_recovery_regression(void) {
 
     MIPSolver *mip = ralph_get_mip_solver(model);
     if (!mip) {
-        printf("FAIL: Reliability recovery MIP solver unavailable\n");
+        printf("FAIL: SPP branching MIP solver unavailable\n");
         failed = 1;
         goto cleanup;
     }
 
-    if (mip->strong_branch_failures <= 0) {
-        printf("FAIL: Expected at least one failed strong-branch probe, got %d\n",
-               mip->strong_branch_failures);
+    if (mip->spp_prop_calls <= 0) {
+        printf("FAIL: Expected SPP propagation to run, got %d calls\n",
+               mip->spp_prop_calls);
         failed = 1;
         goto cleanup;
     }
-    if (mip->strong_branch_recoveries != mip->strong_branch_failures) {
-        printf("FAIL: Expected all failed probes recovered (%d/%d)\n",
-               mip->strong_branch_recoveries, mip->strong_branch_failures);
-        failed = 1;
-        goto cleanup;
-    }
-    if (mip->node_lp_state_restore_success <= 0) {
-        printf("FAIL: Expected reusable post-probe node-state restores, got %d\n",
-               mip->node_lp_state_restore_success);
-        failed = 1;
-        goto cleanup;
-    }
-    if (mip->node_lp_state_restore_failures != 0) {
-        printf("FAIL: Expected zero post-probe restore failures, got %d\n",
-               mip->node_lp_state_restore_failures);
+    if (mip->spp_branch_uses <= 0) {
+        printf("FAIL: Expected SPP row branching to be used, got %d\n",
+               mip->spp_branch_uses);
         failed = 1;
         goto cleanup;
     }
     if (mip->node_lp_warm_solves <= 0) {
-        printf("FAIL: Expected warm node LP solves after recovery, got %d\n",
+        printf("FAIL: Expected warm node LP solves under SPP branching, got %d\n",
                mip->node_lp_warm_solves);
         failed = 1;
         goto cleanup;
     }
-    {
-        int max_allowed_probes = MIP_RELIABILITY_ARTIFICIAL_ROOT_MAX_STRONG +
-                                 2 * MIP_RELIABILITY_ARTIFICIAL_SHALLOW_MAX_STRONG;
-        if (mip->strong_branch_probes > max_allowed_probes) {
-            printf("FAIL: Expected artificial-column probing cap <= %d, got %d\n",
-                   max_allowed_probes, mip->strong_branch_probes);
-            failed = 1;
-            goto cleanup;
-        }
-    }
 
-    printf("PASS: recoveries=%d state_restores=%d warm_solves=%d\n",
-           mip->strong_branch_recoveries, mip->node_lp_state_restore_success,
-           mip->node_lp_warm_solves);
+    printf("PASS: prop_calls=%d fixings=%d branch_uses=%d warm_solves=%d\n",
+           mip->spp_prop_calls, mip->spp_prop_fixings,
+           mip->spp_branch_uses, mip->node_lp_warm_solves);
 
 cleanup:
     free(covers);
@@ -459,13 +439,401 @@ cleanup:
     return failed;
 }
 
+int test_spp_root_cuts_disabled_by_default_regression(void) {
+    printf("\n=== test_spp_root_cuts_disabled_by_default_regression ===\n");
+
+    const int num_elements = 20;
+    const int num_subsets = 60;
+    const double density = 0.30;
+    int failed = 0;
+
+    RalphModel *model = NULL;
+    int *covers = NULL;
+    int *indices = NULL;
+    double *costs = NULL;
+    double *values = NULL;
+
+    g_sp_seed = 123;
+    model = ralph_test_create();
+    if (!model) {
+        printf("FAIL: Could not create SPP root-cut policy regression model\n");
+        return 1;
+    }
+    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+
+    costs = (double *)malloc((size_t)num_subsets * sizeof(double));
+    covers = (int *)calloc((size_t)num_elements * (size_t)num_subsets, sizeof(int));
+    indices = (int *)malloc((size_t)num_subsets * sizeof(int));
+    values = (double *)malloc((size_t)num_subsets * sizeof(double));
+    if (!costs || !covers || !indices || !values) {
+        printf("FAIL: Could not allocate SPP root-cut policy regression buffers\n");
+        failed = 1;
+        goto cleanup;
+    }
+
+    for (int j = 0; j < num_subsets; j++) {
+        costs[j] = sp_rand_double(1.0, 10.0);
+        values[j] = 1.0;
+        ralph_test_add_var(model, 0.0, 1.0, costs[j], RALPH_BINARY);
+    }
+
+    for (int i = 0; i < num_elements; i++) {
+        int nnz = 0;
+        for (int j = 0; j < num_subsets; j++) {
+            if (sp_rand_double(0.0, 1.0) < density) {
+                indices[nnz] = j;
+                covers[i * num_subsets + j] += 1;
+                nnz++;
+            }
+        }
+        while (nnz < 2) {
+            int j = sp_rand_int(0, num_subsets - 1);
+            indices[nnz] = j;
+            covers[i * num_subsets + j] += 1;
+            nnz++;
+        }
+        ralph_test_add_constraint(model, nnz, indices, values, RALPH_EQUAL, 1.0);
+    }
+
+    ralph_test_set_int_param(model, "verbose", 0);
+    ralph_test_set_int_param(model, "presolve", 1);
+    ralph_test_set_int_param(model, "var_select", 3);  /* reliability */
+    ralph_test_set_dbl_param(model, "time_limit", 60.0);
+    ralph_test_set_int_param(model, "max_nodes", 100000);
+    ralph_test_optimize(model);
+
+    MIPSolver *mip = ralph_get_mip_solver(model);
+    if (!mip) {
+        printf("FAIL: SPP root-cut policy MIP solver unavailable\n");
+        failed = 1;
+        goto cleanup;
+    }
+    if (mip->max_cut_rounds != RALPH_DEFAULT_MAX_CUT_ROUNDS) {
+        printf("FAIL: Expected default cut rounds=%d, got %d\n",
+               RALPH_DEFAULT_MAX_CUT_ROUNDS, mip->max_cut_rounds);
+        failed = 1;
+        goto cleanup;
+    }
+    if (mip->root_cut_skip_disabled != 0) {
+        printf("FAIL: Expected root cuts not disabled by default, skip_disabled=%d\n",
+               mip->root_cut_skip_disabled);
+        failed = 1;
+        goto cleanup;
+    }
+    if (mip->root_cut_skip_spp_disabled <= 0) {
+        printf("FAIL: Expected SPP root cuts disabled by default, skip_spp_disabled=%d\n",
+               mip->root_cut_skip_spp_disabled);
+        failed = 1;
+        goto cleanup;
+    }
+    if (mip->root_cut_rounds != 0) {
+        printf("FAIL: Expected zero SPP root cut rounds by default, got %d\n",
+               mip->root_cut_rounds);
+        failed = 1;
+        goto cleanup;
+    }
+
+    printf("PASS: max_cut_rounds=%d root_cut_rounds=%d skip_spp_disabled=%d\n",
+           mip->max_cut_rounds, mip->root_cut_rounds, mip->root_cut_skip_spp_disabled);
+
+cleanup:
+    free(covers);
+    free(indices);
+    free(costs);
+    free(values);
+    ralph_test_free(model);
+    return failed;
+}
+
+int test_prepared_two_phase_primal_pipeline_regression(void) {
+    printf("\n=== test_prepared_two_phase_primal_pipeline_regression ===\n");
+
+    int failed = 0;
+    LPModel *model = lp_model_create();
+    SimplexSolver *cold = NULL;
+    SimplexSolver *prepared = NULL;
+
+    if (!model) {
+        printf("FAIL: Could not create prepared-two-phase regression model\n");
+        return 1;
+    }
+
+    model->obj_sense = 1;
+    lp_model_add_var(model, 0.0, RALPH_INFINITY, 1.0, 'C');
+    lp_model_add_var(model, 0.0, RALPH_INFINITY, 2.0, 'C');
+
+    {
+        int eq_ind[] = {0, 1};
+        double eq_val[] = {1.0, 1.0};
+        lp_model_add_constraint(model, 2, eq_ind, eq_val, 'E', 1.0);
+    }
+    {
+        int g_ind[] = {0};
+        double g_val[] = {1.0};
+        lp_model_add_constraint(model, 1, g_ind, g_val, 'G', 0.2);
+    }
+    {
+        int g_ind[] = {1};
+        double g_val[] = {1.0};
+        lp_model_add_constraint(model, 1, g_ind, g_val, 'G', 0.3);
+    }
+
+    if (lp_model_finalize(model) != 0) {
+        printf("FAIL: Could not finalize prepared-two-phase regression model\n");
+        failed = 1;
+        goto cleanup;
+    }
+
+    cold = simplex_create(model);
+    prepared = simplex_create(model);
+    if (!cold || !prepared) {
+        printf("FAIL: Could not create regression simplex solvers\n");
+        failed = 1;
+        goto cleanup;
+    }
+
+    cold->verbose = 0;
+    cold->method = 0;
+    prepared->verbose = 0;
+    prepared->method = 0;
+
+    if (simplex_solve(cold) != 0 || cold->status != RALPH_STATUS_OPTIMAL) {
+        printf("FAIL: Cold simplex solve failed, status=%d\n", cold ? cold->status : -1);
+        failed = 1;
+        goto cleanup;
+    }
+
+    if (simplex_prepare_primal_tableau(prepared, 0) != 0) {
+        printf("FAIL: Could not prepare primal tableau for regression\n");
+        failed = 1;
+        goto cleanup;
+    }
+    if (!prepared->tableau || !prepared->tableau->use_two_phase) {
+        printf("FAIL: Expected prepared regression tableau to use two-phase\n");
+        failed = 1;
+        goto cleanup;
+    }
+    if (simplex_resolve_prepared_primal_tableau(prepared) != 0 ||
+        prepared->status != RALPH_STATUS_OPTIMAL) {
+        printf("FAIL: Prepared-tableau primal pipeline failed, status=%d\n",
+               prepared ? prepared->status : -1);
+        failed = 1;
+        goto cleanup;
+    }
+
+    if (fabs(prepared->obj_value - cold->obj_value) > 1e-8) {
+        printf("FAIL: Prepared objective %.10f != cold objective %.10f\n",
+               prepared->obj_value, cold->obj_value);
+        failed = 1;
+        goto cleanup;
+    }
+    if (!prepared->solution || !cold->solution) {
+        printf("FAIL: Missing solution vectors after prepared-two-phase regression\n");
+        failed = 1;
+        goto cleanup;
+    }
+    for (int j = 0; j < model->num_vars; j++) {
+        if (fabs(prepared->solution[j] - cold->solution[j]) > 1e-8) {
+            printf("FAIL: Prepared solution mismatch at var %d (%.10f vs %.10f)\n",
+                   j, prepared->solution[j], cold->solution[j]);
+            failed = 1;
+            goto cleanup;
+        }
+    }
+
+    printf("PASS: prepared two-phase pipeline matched cold solve objective %.10f\n",
+           prepared->obj_value);
+
+cleanup:
+    simplex_free(prepared);
+    simplex_free(cold);
+    lp_model_free(model);
+    return failed;
+}
+
+int test_augmented_prepared_two_phase_pipeline_regression(void) {
+    printf("\n=== test_augmented_prepared_two_phase_pipeline_regression ===\n");
+
+    int failed = 0;
+    LPModel *base_model = lp_model_create();
+    LPModel *aug_model = lp_model_create();
+    SimplexSolver *base_solver = NULL;
+    SimplexSolver *aug_solver = NULL;
+    int *warm_basis = NULL;
+    VarStatus *warm_status = NULL;
+
+    if (!base_model || !aug_model) {
+        printf("FAIL: Could not create augmented prepared-two-phase regression models\n");
+        failed = 1;
+        goto cleanup;
+    }
+
+    base_model->obj_sense = 1;
+    aug_model->obj_sense = 1;
+    for (int i = 0; i < 2; i++) {
+        double cost = (i == 0) ? 1.0 : 2.0;
+        lp_model_add_var(base_model, 0.0, RALPH_INFINITY, cost, 'C');
+        lp_model_add_var(aug_model, 0.0, RALPH_INFINITY, cost, 'C');
+    }
+
+    {
+        int eq_ind[] = {0, 1};
+        double eq_val[] = {1.0, 1.0};
+        lp_model_add_constraint(base_model, 2, eq_ind, eq_val, 'E', 1.0);
+        lp_model_add_constraint(aug_model, 2, eq_ind, eq_val, 'E', 1.0);
+    }
+    {
+        int g_ind[] = {0};
+        double g_val[] = {1.0};
+        lp_model_add_constraint(base_model, 1, g_ind, g_val, 'G', 0.2);
+        lp_model_add_constraint(aug_model, 1, g_ind, g_val, 'G', 0.2);
+    }
+    {
+        int g_ind[] = {1};
+        double g_val[] = {1.0};
+        lp_model_add_constraint(base_model, 1, g_ind, g_val, 'G', 0.3);
+        lp_model_add_constraint(aug_model, 1, g_ind, g_val, 'G', 0.3);
+    }
+    {
+        int g_ind[] = {1};
+        double g_val[] = {1.0};
+        lp_model_add_constraint(aug_model, 1, g_ind, g_val, 'G', 0.4);
+    }
+
+    if (lp_model_finalize(base_model) != 0 || lp_model_finalize(aug_model) != 0) {
+        printf("FAIL: Could not finalize augmented regression models\n");
+        failed = 1;
+        goto cleanup;
+    }
+
+    base_solver = simplex_create(base_model);
+    aug_solver = simplex_create(aug_model);
+    if (!base_solver || !aug_solver) {
+        printf("FAIL: Could not create augmented regression solvers\n");
+        failed = 1;
+        goto cleanup;
+    }
+
+    base_solver->verbose = 0;
+    base_solver->method = 0;
+    aug_solver->verbose = 0;
+    aug_solver->method = 0;
+
+    if (simplex_solve(base_solver) != 0 || base_solver->status != RALPH_STATUS_OPTIMAL) {
+        printf("FAIL: Base regression solve failed, status=%d\n",
+               base_solver ? base_solver->status : -1);
+        failed = 1;
+        goto cleanup;
+    }
+    if (simplex_solve(aug_solver) != 0 || aug_solver->status != RALPH_STATUS_OPTIMAL) {
+        printf("FAIL: Augmented cold solve failed, status=%d\n",
+               aug_solver ? aug_solver->status : -1);
+        failed = 1;
+        goto cleanup;
+    }
+
+    if (simplex_prepare_primal_tableau(base_solver, 0) != 0) {
+        printf("FAIL: Could not prepare base tableau for augmentation regression\n");
+        failed = 1;
+        goto cleanup;
+    }
+    if (!base_solver->tableau || !base_solver->tableau->use_two_phase) {
+        printf("FAIL: Expected base tableau to use two-phase before augmentation\n");
+        failed = 1;
+        goto cleanup;
+    }
+
+    warm_basis = (int*)malloc((size_t)(base_solver->tableau->m + 1) * sizeof(int));
+    warm_status = (VarStatus*)malloc((size_t)(base_solver->tableau->n + 2) * sizeof(VarStatus));
+    if (!warm_basis || !warm_status) {
+        printf("FAIL: Could not allocate augmented warm basis buffers\n");
+        failed = 1;
+        goto cleanup;
+    }
+
+    memcpy(warm_basis, base_solver->tableau->basis,
+           (size_t)base_solver->tableau->m * sizeof(int));
+    memcpy(warm_status, base_solver->tableau->var_status,
+           (size_t)base_solver->tableau->n * sizeof(VarStatus));
+    warm_basis[base_solver->tableau->m] = base_solver->tableau->n + 1;
+    warm_status[base_solver->tableau->n] = RALPH_NONBASIC_LOWER;
+    warm_status[base_solver->tableau->n + 1] = RALPH_BASIC;
+
+    {
+        int idx[] = {1};
+        double val[] = {1.0};
+        LPAugmentRow row = {
+            .nnz = 1,
+            .indices = idx,
+            .values = val,
+            .sense = 'G',
+            .rhs = 0.4
+        };
+
+        if (simplex_prepare_augmented_primal_tableau(base_solver,
+                                                     &row,
+                                                     1,
+                                                     base_solver->tableau->m + 1,
+                                                     base_solver->tableau->n + 2,
+                                                     warm_basis,
+                                                     warm_status) != 0) {
+            printf("FAIL: Could not prepare augmented two-phase tableau\n");
+            failed = 1;
+            goto cleanup;
+        }
+    }
+
+    if (simplex_resolve_prepared_primal_tableau(base_solver) != 0 ||
+        base_solver->status != RALPH_STATUS_OPTIMAL) {
+        printf("FAIL: Augmented prepared-tableau solve failed, status=%d\n",
+               base_solver ? base_solver->status : -1);
+        failed = 1;
+        goto cleanup;
+    }
+
+    if (fabs(base_solver->obj_value - aug_solver->obj_value) > 1e-8) {
+        printf("FAIL: Augmented prepared objective %.10f != cold objective %.10f\n",
+               base_solver->obj_value, aug_solver->obj_value);
+        failed = 1;
+        goto cleanup;
+    }
+    if (!base_solver->solution || !aug_solver->solution) {
+        printf("FAIL: Missing solutions after augmented prepared regression\n");
+        failed = 1;
+        goto cleanup;
+    }
+    for (int j = 0; j < aug_model->num_vars; j++) {
+        if (fabs(base_solver->solution[j] - aug_solver->solution[j]) > 1e-8) {
+            printf("FAIL: Augmented prepared solution mismatch at var %d (%.10f vs %.10f)\n",
+                   j, base_solver->solution[j], aug_solver->solution[j]);
+            failed = 1;
+            goto cleanup;
+        }
+    }
+
+    printf("PASS: augmented prepared two-phase pipeline matched cold objective %.10f\n",
+           base_solver->obj_value);
+
+cleanup:
+    free(warm_basis);
+    free(warm_status);
+    simplex_free(aug_solver);
+    simplex_free(base_solver);
+    lp_model_free(aug_model);
+    lp_model_free(base_model);
+    return failed;
+}
+
 int main(void) {
     int failures = 0;
 
     failures += test_basic_mip();
     failures += test_ralph_wrapper();
     failures += test_set_partitioning_benchmark_objective_regression();
-    failures += test_set_partitioning_reliability_recovery_regression();
+    failures += test_set_partitioning_spp_branching_regression();
+    failures += test_spp_root_cuts_disabled_by_default_regression();
+    failures += test_prepared_two_phase_primal_pipeline_regression();
+    failures += test_augmented_prepared_two_phase_pipeline_regression();
 
     printf("\n=== Summary ===\n");
     if (failures == 0) {

@@ -1660,7 +1660,8 @@ static int cuts_are_parallel(const Cut *a, const Cut *b) {
  * ============================================================================ */
 
 /* Add cuts to the LP relaxation */
-int apply_cuts(MIPSolver *solver, CutPool *pool, int max_cuts) {
+int apply_cuts(MIPSolver *solver, CutPool *pool, int max_cuts, Cut ***applied_out) {
+    if (applied_out) *applied_out = NULL;
     if (!pool || pool->count == 0) return 0;
 
     LPModel *model = solver->working_model;
@@ -1709,6 +1710,14 @@ int apply_cuts(MIPSolver *solver, CutPool *pool, int max_cuts) {
             applied[cuts_applied] = cut;
         }
         cuts_applied++;
+    }
+
+    if (applied_out && cuts_applied > 0) {
+        Cut **exact = (Cut **)calloc((size_t)cuts_applied, sizeof(Cut *));
+        if (exact) {
+            memcpy(exact, applied, (size_t)cuts_applied * sizeof(Cut *));
+            *applied_out = exact;
+        }
     }
 
     free(applied);

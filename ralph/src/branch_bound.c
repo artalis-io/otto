@@ -16,6 +16,7 @@
 #include <limits.h>
 #include "mip.h"
 #include "mip_lp_adapter.h"
+#include "spp.h"
 
 static double mip_cpu_time_now(void) {
     return (double)clock() / CLOCKS_PER_SEC;
@@ -1047,6 +1048,11 @@ int select_branch_variable(MIPSolver *solver, const double *solution, int *branc
         /* If user returns -1 or invalid variable, fall through to default */
     }
 
+    if (solver->spp_ctx && select_sos1_branch_spp(solver, solution, branch_var) == 0) {
+        solver->spp_branch_uses++;
+        return 0;
+    }
+
     /* Find max priority among fractional variables */
     int max_prio = find_max_priority(solver, solution);
 
@@ -1174,6 +1180,17 @@ void compute_branch_children(MIPSolver *solver, BBNode *parent, int branch_var,
         (*child_down)->branch_dir = BRANCH_DOWN;
         (*child_down)->ub[branch_var] = down_ub;
         (*child_down)->estimate = estimate_branch_obj(solver, branch_var, val, BRANCH_DOWN);
+        if (solver->spp_ctx) {
+            int fixings = 0;
+            solver->spp_prop_calls++;
+            if (spp_propagate_bounds(solver->spp_ctx, (*child_down)->lb, (*child_down)->ub, &fixings) != 0) {
+                solver->spp_prop_prunes++;
+                bb_node_pool_return(solver->node_pool, *child_down);
+                *child_down = NULL;
+            } else {
+                solver->spp_prop_fixings += fixings;
+            }
+        }
     }
 
     /* Create up child (x >= ceil(val)) using pool if available */
@@ -1186,6 +1203,17 @@ void compute_branch_children(MIPSolver *solver, BBNode *parent, int branch_var,
         (*child_up)->branch_dir = BRANCH_UP;
         (*child_up)->lb[branch_var] = up_lb;
         (*child_up)->estimate = estimate_branch_obj(solver, branch_var, val, BRANCH_UP);
+        if (solver->spp_ctx) {
+            int fixings = 0;
+            solver->spp_prop_calls++;
+            if (spp_propagate_bounds(solver->spp_ctx, (*child_up)->lb, (*child_up)->ub, &fixings) != 0) {
+                solver->spp_prop_prunes++;
+                bb_node_pool_return(solver->node_pool, *child_up);
+                *child_up = NULL;
+            } else {
+                solver->spp_prop_fixings += fixings;
+            }
+        }
     }
 
     /* Apply preferred branch direction by swapping if needed.
@@ -1989,109 +2017,20 @@ int select_scp_branch(MIPSolver *solver, const double *solution,
  * This partitions the covering sets and branches on the median.
  */
 int select_sos1_branch_spp(MIPSolver *solver, const double *solution, int *set) {
-    if (!solver || !solution || !set) return -1;
+    LPModel *model;
 
-    LPModel *model = solver->original_model;
-    if (!is_scp_model(model)) return -1;
+    if (!solver || !solution || !set || !solver->spp_ctx) return -1;
 
-    /* Check if this is set partitioning (all = constraints) */
-    int m = model->num_cons;
-    for (int i = 0; i < m; i++) {
-        if (model->sense[i] != 'E') return -1;
-    }
-
-    int n = model->num_vars;
-    SparseMatrix *A = model->A;
+    model = solver->working_model ? solver->working_model : solver->original_model;
+    if (!model || !model->lb || !model->ub) return -1;
 
     *set = -1;
-    double max_frac = 0.0;
-    int best_elem = -1;
-
-    /* Find element with most fractional coverage */
-    for (int i = 0; i < m; i++) {
-        double coverage = compute_element_coverage(model, i, solution);
-        double frac = fabs(coverage - 1.0);  /* Should be exactly 1 for SPP */
-
-        if (frac > max_frac + RALPH_ZERO_TOL && frac > RALPH_INT_TOL) {
-            max_frac = frac;
-            best_elem = i;
-        }
-    }
-
-    if (best_elem < 0) return -1;
-
-    /* Collect covering sets for this element */
-    int *covering_sets = (int *)calloc(n, sizeof(int));
-    double *lp_values = (double *)calloc(n, sizeof(double));
-    if (!covering_sets || !lp_values) {
-        free(covering_sets);
-        free(lp_values);
-        return -1;
-    }
-
-    int num_covering = 0;
-    for (int j = 0; j < n; j++) {
-        for (int p = A->colptr[j]; p < A->colptr[j + 1]; p++) {
-            if (A->rowidx[p] == best_elem && fabs(A->values[p] - 1.0) < RALPH_ZERO_TOL) {
-                covering_sets[num_covering] = j;
-                lp_values[num_covering] = solution[j];
-                num_covering++;
-                break;
-            }
-        }
-    }
-
-    if (num_covering < 2) {
-        free(covering_sets);
-        free(lp_values);
-        return -1;
-    }
-
-    /* Sort covering sets by LP value (descending) */
-    for (int i = 0; i < num_covering - 1; i++) {
-        for (int j = i + 1; j < num_covering; j++) {
-            if (lp_values[j] > lp_values[i]) {
-                double tmp_val = lp_values[i];
-                lp_values[i] = lp_values[j];
-                lp_values[j] = tmp_val;
-                int tmp_set = covering_sets[i];
-                covering_sets[i] = covering_sets[j];
-                covering_sets[j] = tmp_set;
-            }
-        }
-    }
-
-    /* Find the set at the partition boundary (where cumulative LP ~ 0.5) */
-    double cumsum = 0.0;
-    int partition_idx = 0;
-    for (int i = 0; i < num_covering; i++) {
-        cumsum += lp_values[i];
-        if (cumsum >= 0.5) {
-            partition_idx = i;
-            break;
-        }
-    }
-
-    /* Branch on the set at the partition point */
-    *set = covering_sets[partition_idx];
-
-    /* Verify it's fractional */
-    double frac = solution[*set] - floor(solution[*set]);
-    if (frac < RALPH_INT_TOL || frac > 1.0 - RALPH_INT_TOL) {
-        /* Not fractional - find next fractional one */
-        for (int i = 0; i < num_covering; i++) {
-            frac = solution[covering_sets[i]] - floor(solution[covering_sets[i]]);
-            if (frac > RALPH_INT_TOL && frac < 1.0 - RALPH_INT_TOL) {
-                *set = covering_sets[i];
-                break;
-            }
-        }
-    }
-
-    free(covering_sets);
-    free(lp_values);
-
-    return (*set >= 0) ? 0 : -1;
+    return spp_select_branch_set(solver->spp_ctx,
+                                 model->lb,
+                                 model->ub,
+                                 solution,
+                                 NULL,
+                                 set);
 }
 
 /* ============================================================================

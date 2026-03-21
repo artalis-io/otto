@@ -1084,7 +1084,7 @@ RalphModel* ralph_core_create(void) {
     model->telemetry = 1;
     model->mip_gap = RALPH_DEFAULT_MIP_GAP;
     model->max_nodes = RALPH_DEFAULT_NODE_LIMIT;
-    model->max_cut_rounds = 0;  /* Disabled by default */
+    model->max_cut_rounds = -1;  /* Inherit MIP solver default unless explicitly set */
     model->method = 0;  /* Default: primal simplex */
     model->lp_algorithm = (int)RALPH_LP_ALGORITHM_PRIMAL_SIMPLEX;
     model->barrier_crossover = (int)RALPH_LP_CROSSOVER_AUTO;
@@ -1990,7 +1990,9 @@ static int ralph_optimize_with_mode(RalphModel *model, RalphSolveMode mode) {
         model->mip_solver->mip_gap = model->mip_gap;
         model->mip_solver->verbose = model->verbose;
         model->mip_solver->telemetry = model->telemetry ? 1 : 0;
-        model->mip_solver->max_cut_rounds = model->max_cut_rounds;
+        if (model->max_cut_rounds >= 0) {
+            model->mip_solver->max_cut_rounds = model->max_cut_rounds;
+        }
         model->mip_solver->dual_bound_flip = model->dual_bound_flip;
         model->mip_solver->dual_steepest_edge = model->dual_steepest_edge;
         model->mip_solver->lu_supernode = model->lu_supernode;
@@ -5332,7 +5334,7 @@ static const RalphParamSpec* ralph_param_specs(void) {
             .name = "presolve",
             .scope = RALPH_PARAM_SCOPE_SHARED,
             .value_type = RALPH_PARAM_VALUE_INT,
-            .default_value = 0.0,
+            .default_value = -1.0,
             .has_min = 1,
             .min_value = 0.0,
             .has_max = 1,
