@@ -721,21 +721,61 @@ strong_fail:
 /* Adaptive reliability probing for deep no-incumbent trees.
  * Early search keeps full probing quality; late no-incumbent search
  * downshifts probe cost to avoid spending most wall time on probing. */
+static int reliability_lp_has_artificials(const MIPSolver *solver) {
+    return solver && solver->lp_solver && solver->lp_solver->tableau &&
+           solver->lp_solver->tableau->num_artificial > 0;
+}
+
+static int reliability_pseudo_threshold(const MIPSolver *solver) {
+    if (!reliability_lp_has_artificials(solver)) return MIP_RELIABILITY_THRESHOLD;
+    return MIP_RELIABILITY_ARTIFICIAL_THRESHOLD;
+}
+
 static int reliability_strong_probe_limit(const MIPSolver *solver) {
+    int limit;
     if (!solver) return MIP_RELIABILITY_MAX_STRONG;
-    if (solver->has_incumbent) return MIP_RELIABILITY_MAX_STRONG;
-    if (solver->nodes_explored >= MIP_RELIABILITY_NO_INCUMBENT_DISABLE_AFTER) return 0;
-    if (solver->nodes_explored >= MIP_RELIABILITY_NO_INCUMBENT_TAPER_AFTER) return 1;
-    return MIP_RELIABILITY_MAX_STRONG;
+    if (solver->has_incumbent) {
+        limit = MIP_RELIABILITY_MAX_STRONG;
+    } else if (solver->nodes_explored >= MIP_RELIABILITY_NO_INCUMBENT_DISABLE_AFTER) {
+        limit = 0;
+    } else if (solver->nodes_explored >= MIP_RELIABILITY_NO_INCUMBENT_TAPER_AFTER) {
+        limit = 1;
+    } else {
+        limit = MIP_RELIABILITY_MAX_STRONG;
+    }
+
+    if (reliability_lp_has_artificials(solver)) {
+        if (solver->current_node_depth > MIP_RELIABILITY_ARTIFICIAL_MAX_DEPTH) {
+            return 0;
+        }
+        if (solver->current_node_depth <= 0) {
+            if (limit > MIP_RELIABILITY_ARTIFICIAL_ROOT_MAX_STRONG) {
+                limit = MIP_RELIABILITY_ARTIFICIAL_ROOT_MAX_STRONG;
+            }
+        } else {
+            if (limit > MIP_RELIABILITY_ARTIFICIAL_SHALLOW_MAX_STRONG) {
+                limit = MIP_RELIABILITY_ARTIFICIAL_SHALLOW_MAX_STRONG;
+            }
+        }
+    }
+    return limit;
 }
 
 static int reliability_probe_pivot_budget(const MIPSolver *solver) {
+    int budget;
     if (!solver) return MIP_RELIABILITY_PIVOT_BUDGET;
-    if (solver->has_incumbent) return MIP_RELIABILITY_PIVOT_BUDGET;
-    if (solver->nodes_explored >= MIP_RELIABILITY_NO_INCUMBENT_TAPER_AFTER) {
-        return MIP_RELIABILITY_NO_INCUMBENT_PIVOT_BUDGET;
+    if (solver->has_incumbent) {
+        budget = MIP_RELIABILITY_PIVOT_BUDGET;
+    } else if (solver->nodes_explored >= MIP_RELIABILITY_NO_INCUMBENT_TAPER_AFTER) {
+        budget = MIP_RELIABILITY_NO_INCUMBENT_PIVOT_BUDGET;
+    } else {
+        budget = MIP_RELIABILITY_PIVOT_BUDGET;
     }
-    return MIP_RELIABILITY_PIVOT_BUDGET;
+    if (reliability_lp_has_artificials(solver) &&
+        budget > MIP_RELIABILITY_ARTIFICIAL_PIVOT_BUDGET) {
+        budget = MIP_RELIABILITY_ARTIFICIAL_PIVOT_BUDGET;
+    }
+    return budget;
 }
 
 /*
@@ -752,6 +792,7 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
     int strong_count = 0;
     int strong_limit = reliability_strong_probe_limit(solver);
     int strong_pivot_budget = reliability_probe_pivot_budget(solver);
+    int strong_threshold = reliability_pseudo_threshold(solver);
     int strong_failed = 0;  /* Stop strong branching if LP state corrupted */
 
     const int * restrict int_vars = solver->integer_vars;
@@ -782,8 +823,8 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
 
         /* Check if we need strong branching */
         int need_strong = !strong_failed &&
-                          (solver->pseudo_count_down[j] < MIP_RELIABILITY_THRESHOLD ||
-                           solver->pseudo_count_up[j] < MIP_RELIABILITY_THRESHOLD);
+                          (solver->pseudo_count_down[j] < strong_threshold ||
+                           solver->pseudo_count_up[j] < strong_threshold);
 
         if (need_strong && strong_limit > 0 &&
             strong_count < strong_limit &&
