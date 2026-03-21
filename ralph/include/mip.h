@@ -41,6 +41,12 @@ extern "C" {
 #define MIP_CUT_MIN_VIOLATION  1e-4   /* Minimum violation to apply a cut */
 #define MIP_CUT_MAX_DYNAMISM   1e6    /* Max coefficient ratio max|a|/min|a| */
 #define MIP_CUT_PARALLEL_TOL   0.999  /* Cosine similarity threshold for parallel cuts */
+#define MIP_GOMORY_PREFILTER_MIN_ROWS 8
+#define MIP_GOMORY_PREFILTER_MAX_ROWS 24
+#define MIP_GOMORY_PREFILTER_MULT 3
+#define MIP_MIR_PREFILTER_MIN_ROWS 8
+#define MIP_MIR_PREFILTER_MAX_ROWS 24
+#define MIP_MIR_PREFILTER_MULT 3
 #define MIP_GENERIC_ROOT_CUT_MIN_IMPROVEMENT_PER_CUT 0.05 /* Stop later generic cut rounds if root bound barely moves */
 #define MIP_GENERIC_ROOT_CUT_MIN_TOTAL_IMPROVEMENT 0.10   /* Absolute floor for retaining additional generic rounds */
 #define SPP_ROOT_CUT_MAX_ROUNDS 1     /* Conservative root-only separation for exact-cover models */
@@ -279,6 +285,19 @@ typedef struct {
     int node_lp_warm_solves;     /* Node LP solves completed via warm reopt */
     int node_lp_cold_solves;     /* Node LP solves completed via cold start */
     int root_gomory_cuts_generated; /* Root Gomory cuts generated */
+    int root_gomory_rows_scanned;    /* Gomory root rows inspected */
+    int root_gomory_rows_fractional; /* Integer basic rows that were fractional */
+    int root_gomory_rows_ranked;     /* Rows kept after Gomory prefilter ranking */
+    int root_gomory_rows_built;      /* Candidate rows expanded into GMI attempts */
+    int root_gomory_pool_duplicates; /* GMI cuts absorbed as duplicates/replacements */
+    int root_gomory_reject_empty;    /* GMI rows rejected for empty support */
+    int root_gomory_reject_sign;     /* GMI rows rejected for impossible sign pattern */
+    int root_gomory_reject_violation;/* GMI rows rejected for insufficient violation */
+    int root_mir_rows_scanned;       /* MIR root rows inspected */
+    int root_mir_rows_candidate;     /* MIR candidate rows after filtering */
+    int root_mir_rows_ranked;        /* MIR rows kept after prefilter ranking */
+    int root_cover_rows_scanned;     /* Cover-cut root constraints inspected */
+    int root_cover_knapsack_rows;    /* Cover-cut rows recognized as knapsack */
     int root_mir_cuts_generated;    /* Root MIR cuts generated */
     int root_cover_cuts_generated;  /* Root cover cuts generated */
     int root_scp_cuts_generated;    /* Root SCP-specific cuts generated */
@@ -289,6 +308,7 @@ typedef struct {
     int root_cut_skip_gap_closed_spp;    /* Root cuts skipped because SPP heuristic closed the root gap */
     int root_cut_skip_gap_closed_scp;    /* Root cuts skipped because SCP heuristic closed the root gap */
     int root_cut_skip_generic_low_efficacy; /* Later generic root cut rounds skipped after weak bound improvement */
+    int root_cut_skip_mir_zero_yield;    /* Later generic MIR rounds skipped after a zero-yield first round */
     int root_cut_skip_spp_incumbent;     /* Root cuts skipped because SPP heuristic already supplied an incumbent */
     int root_cut_skip_spp_low_efficacy;  /* SPP root cuts discarded after weak root-bound improvement */
     int spp_prop_calls;                /* Exact-cover propagation passes */
@@ -310,6 +330,13 @@ typedef struct {
     double time_node_lp_cold;       /* Cold node LP solve time */
     double time_strong_branch;      /* Strong-branch probe time */
     double time_root_cut_separation;/* Root cut generation time */
+    double time_root_gomory_rank;   /* Gomory candidate ranking time */
+    double time_root_gomory_build;  /* Gomory row-to-cut build time */
+    double time_root_gomory_row_solve; /* Gomory tableau row solve time */
+    double time_root_gomory_substitute; /* Gomory coefficient/substitution time */
+    double time_root_gomory_pool;   /* Gomory cut pool insertion/duplicate time */
+    double time_root_mir;           /* MIR generation time */
+    double time_root_cover;         /* Cover-cut generation time */
     double time_root_cut_apply;     /* Root cut application time */
     double time_root_lp_resolve;    /* Root LP re-solve time after cuts */
     double time_rins;               /* RINS heuristic time */

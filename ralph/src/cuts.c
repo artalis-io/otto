@@ -12,8 +12,20 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <time.h>
 #include "mip.h"
 #include "detect.h"
+
+static double cut_cpu_time_now(void) {
+    return (double)clock() / CLOCKS_PER_SEC;
+}
+
+typedef enum {
+    GMI_REJECT_NONE = 0,
+    GMI_REJECT_EMPTY = 1,
+    GMI_REJECT_SIGN = 2,
+    GMI_REJECT_VIOLATION = 3
+} GMICutRejectReason;
 
 /* ============================================================================
  * Cut Pool Management
@@ -214,13 +226,18 @@ int cut_pool_add(CutPool *pool, Cut *cut) {
  *       f_j = fractional part of a_ij
  *       alpha_j = f_j if f_j <= f_0, else (1 - f_j) * f_0 / (1 - f_0)
  */
-static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
-                                      const int *is_integer) {
+static Cut* generate_gmi_cut_from_row(MIPSolver *solver,
+                                      SimplexTableau *tab,
+                                      int basic_pos,
+                                      const int *is_integer,
+                                      GMICutRejectReason *reject_reason_out) {
     int m = tab->m;
     int n = tab->n;
     int num_orig = tab->model->num_vars;
     int basic_var = tab->basis[basic_pos];
     int verbose = 0;  /* Set to 1 to enable debug output */
+
+    if (reject_reason_out) *reject_reason_out = GMI_REJECT_NONE;
 
     /* Get fractional part of basic variable */
     double b_i = tab->x[basic_var];
@@ -240,7 +257,13 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
     if (!row) return NULL;
 
     row[basic_pos] = 1.0;
-    lu_solve_transpose(tab->lu, row, row);
+    {
+        double t_row_solve = cut_cpu_time_now();
+        lu_solve_transpose(tab->lu, row, row);
+        if (solver) {
+            solver->time_root_gomory_row_solve += cut_cpu_time_now() - t_row_solve;
+        }
+    }
 
     /* Create cut - allocate space for all original variables */
     Cut *cut = cut_create(num_orig);
@@ -262,6 +285,8 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
     cut->rhs = f_0;
 
     /* Compute cut coefficients for each non-basic variable */
+    {
+        double t_substitute = cut_cpu_time_now();
     for (int j = 0; j < n; j++) {
         if (tab->var_status[j] == RALPH_BASIC) continue;
 
@@ -402,6 +427,10 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
             }
         }
     }
+        if (solver) {
+            solver->time_root_gomory_substitute += cut_cpu_time_now() - t_substitute;
+        }
+    }
 
     free(row);
 
@@ -430,6 +459,7 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
     /* Skip cuts with no variable coefficients */
     if (cut->nnz == 0) {
         if (verbose) printf("[GMI-row] Rejected: no variable coefficients\n");
+        if (reject_reason_out) *reject_reason_out = GMI_REJECT_EMPTY;
         cut_free(cut);
         return NULL;
     }
@@ -446,6 +476,7 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
     }
     if (!has_positive_coef && cut->rhs > RALPH_ZERO_TOL) {
         if (verbose) printf("[GMI-row] Rejected: all negative coefs with positive RHS\n");
+        if (reject_reason_out) *reject_reason_out = GMI_REJECT_SIGN;
         cut_free(cut);
         return NULL;
     }
@@ -453,6 +484,7 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
     /* Only return if cut is violated */
     if (cut->violation < RALPH_FEAS_TOL) {
         if (verbose) printf("[GMI-row] Rejected: not violated (violation < %.9f)\n", RALPH_FEAS_TOL);
+        if (reject_reason_out) *reject_reason_out = GMI_REJECT_VIOLATION;
         cut_free(cut);
         return NULL;
     }
@@ -463,8 +495,32 @@ static Cut* generate_gmi_cut_from_row(SimplexTableau *tab, int basic_pos,
 
 int generate_gomory_cuts(MIPSolver *solver, CutPool *pool) {
     SimplexTableau *tab = solver->lp_solver->tableau;
-
+    int candidate_cap = solver->max_cuts_per_round * MIP_GOMORY_PREFILTER_MULT;
+    int candidate_count = 0;
+    int *candidate_rows = NULL;
+    double *candidate_scores = NULL;
     int cuts_added = 0;
+
+    if (candidate_cap < MIP_GOMORY_PREFILTER_MIN_ROWS) {
+        candidate_cap = MIP_GOMORY_PREFILTER_MIN_ROWS;
+    }
+    if (candidate_cap > MIP_GOMORY_PREFILTER_MAX_ROWS) {
+        candidate_cap = MIP_GOMORY_PREFILTER_MAX_ROWS;
+    }
+    if (candidate_cap > tab->m) {
+        candidate_cap = tab->m;
+    }
+    if (candidate_cap > 0) {
+        candidate_rows = (int *)calloc((size_t)candidate_cap, sizeof(int));
+        candidate_scores = (double *)calloc((size_t)candidate_cap, sizeof(double));
+    }
+    if (candidate_cap > 0 && (!candidate_rows || !candidate_scores)) {
+        free(candidate_rows);
+        free(candidate_scores);
+        candidate_rows = NULL;
+        candidate_scores = NULL;
+        candidate_cap = 0;
+    }
 
     if (solver->verbose >= 2) {
         printf("[GMI] Scanning %d basic positions for cuts\n", tab->m);
@@ -472,8 +528,11 @@ int generate_gomory_cuts(MIPSolver *solver, CutPool *pool) {
                solver->original_model->num_vars, (void*)solver->is_integer);
     }
 
+    {
+        double t_rank = cut_cpu_time_now();
     for (int k = 0; k < tab->m; k++) {
         int j = tab->basis[k];
+        solver->root_gomory_rows_scanned++;
 
         if (solver->verbose >= 2) {
             printf("[GMI] Basic pos %d: var %d, val %.4f", k, j, tab->x[j]);
@@ -496,10 +555,60 @@ int generate_gomory_cuts(MIPSolver *solver, CutPool *pool) {
             if (solver->verbose >= 2) printf(" -> skip (integer: frac=%.6f)\n", frac);
             continue;
         }
+        solver->root_gomory_rows_fractional++;
 
-        if (solver->verbose >= 2) printf(" -> fractional! Generating cut...\n");
+        double frac_score = frac;
+        if (frac_score > 0.5) frac_score = 1.0 - frac_score;
 
-        Cut *cut = generate_gmi_cut_from_row(tab, k, solver->is_integer);
+        if (solver->verbose >= 2) {
+            printf(" -> fractional! score=%.6f\n", frac_score);
+        }
+
+        if (candidate_cap <= 0) {
+            continue;
+        }
+
+        int insert_pos = candidate_count;
+        while (insert_pos > 0 && candidate_scores[insert_pos - 1] < frac_score) {
+            if (insert_pos < candidate_cap) {
+                candidate_scores[insert_pos] = candidate_scores[insert_pos - 1];
+                candidate_rows[insert_pos] = candidate_rows[insert_pos - 1];
+            }
+            insert_pos--;
+        }
+
+        if (insert_pos >= candidate_cap) {
+            continue;
+        }
+
+        candidate_scores[insert_pos] = frac_score;
+        candidate_rows[insert_pos] = k;
+        if (candidate_count < candidate_cap) {
+            candidate_count++;
+        }
+    }
+        solver->time_root_gomory_rank += cut_cpu_time_now() - t_rank;
+    }
+    solver->root_gomory_rows_ranked += candidate_count;
+
+    if (solver->verbose >= 2) {
+        printf("[GMI] Ranked %d candidate rows (cap=%d)\n", candidate_count, candidate_cap);
+    }
+
+    for (int idx = 0; idx < candidate_count; idx++) {
+        int k = candidate_rows[idx];
+        int j = tab->basis[k];
+        GMICutRejectReason reject_reason = GMI_REJECT_NONE;
+
+        if (solver->verbose >= 2) {
+            printf("[GMI] Candidate %d/%d: basic pos %d var %d score %.6f -> generating cut...\n",
+                   idx + 1, candidate_count, k, j, candidate_scores[idx]);
+        }
+
+        solver->root_gomory_rows_built++;
+        double t_build = cut_cpu_time_now();
+        Cut *cut = generate_gmi_cut_from_row(solver, tab, k, solver->is_integer, &reject_reason);
+        solver->time_root_gomory_build += cut_cpu_time_now() - t_build;
         if (cut) {
             if (solver->verbose >= 2) {
                 printf("[GMI] Cut generated: ");
@@ -508,15 +617,32 @@ int generate_gomory_cuts(MIPSolver *solver, CutPool *pool) {
                 }
                 printf(">= %.4f (violation=%.4f)\n", cut->rhs, cut->violation);
             }
-            cut_pool_add(pool, cut);
+            {
+                int pool_count_before = pool->count;
+                double t_pool = cut_cpu_time_now();
+                cut_pool_add(pool, cut);
+                solver->time_root_gomory_pool += cut_cpu_time_now() - t_pool;
+                if (pool->count == pool_count_before) {
+                    solver->root_gomory_pool_duplicates++;
+                }
+            }
             cuts_added++;
 
             if (cuts_added >= solver->max_cuts_per_round) break;
         } else {
+            if (reject_reason == GMI_REJECT_EMPTY) {
+                solver->root_gomory_reject_empty++;
+            } else if (reject_reason == GMI_REJECT_SIGN) {
+                solver->root_gomory_reject_sign++;
+            } else if (reject_reason == GMI_REJECT_VIOLATION) {
+                solver->root_gomory_reject_violation++;
+            }
             if (solver->verbose >= 2) printf("[GMI] Cut was NULL (filtered out)\n");
         }
     }
 
+    free(candidate_rows);
+    free(candidate_scores);
     return cuts_added;
 }
 
@@ -1271,6 +1397,10 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
     int num_orig = tab->model->num_vars;
     int m = tab->m;
     int cuts_added = 0;
+    int candidate_cap = solver->max_cuts_per_round * MIP_MIR_PREFILTER_MULT;
+    int candidate_count = 0;
+    int candidate_rows[MIP_MIR_PREFILTER_MAX_ROWS];
+    double candidate_scores[MIP_MIR_PREFILTER_MAX_ROWS];
 
     /* Allocate CMIRWork arrays once */
     CMIRWork work;
@@ -1300,11 +1430,23 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
         work.ub[j] = tab->ub_ext[j];
     }
 
-    /* Scan tableau rows */
+    if (candidate_cap < MIP_MIR_PREFILTER_MIN_ROWS) {
+        candidate_cap = MIP_MIR_PREFILTER_MIN_ROWS;
+    }
+    if (candidate_cap > MIP_MIR_PREFILTER_MAX_ROWS) {
+        candidate_cap = MIP_MIR_PREFILTER_MAX_ROWS;
+    }
+    if (candidate_cap > m) {
+        candidate_cap = m;
+    }
+
+    /* Rank MIR candidate rows by fractionality */
     for (int k = 0; k < m; k++) {
         int basic_var = tab->basis[k];
         double val = tab->x[basic_var];
         double frac = val - floor(val);
+
+        solver->root_mir_rows_scanned++;
 
         /* Skip rows with nearly-integer RHS */
         if (frac < 0.05 || frac > 0.95) continue;
@@ -1313,6 +1455,37 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
         if (basic_var < num_orig && solver->is_integer[basic_var]) {
             continue;
         }
+        solver->root_mir_rows_candidate++;
+
+        if (candidate_cap <= 0) {
+            continue;
+        }
+
+        double frac_score = frac;
+        if (frac_score > 0.5) frac_score = 1.0 - frac_score;
+
+        int insert_pos = candidate_count;
+        while (insert_pos > 0 && candidate_scores[insert_pos - 1] < frac_score) {
+            if (insert_pos < candidate_cap) {
+                candidate_scores[insert_pos] = candidate_scores[insert_pos - 1];
+                candidate_rows[insert_pos] = candidate_rows[insert_pos - 1];
+            }
+            insert_pos--;
+        }
+        if (insert_pos >= candidate_cap) {
+            continue;
+        }
+
+        candidate_scores[insert_pos] = frac_score;
+        candidate_rows[insert_pos] = k;
+        if (candidate_count < candidate_cap) {
+            candidate_count++;
+        }
+    }
+    solver->root_mir_rows_ranked += candidate_count;
+
+    for (int idx = 0; idx < candidate_count; idx++) {
+        int k = candidate_rows[idx];
 
         /* Try increasing aggregation depth */
         int found_cut = 0;
@@ -1561,10 +1734,13 @@ int generate_cover_cuts(MIPSolver *solver, CutPool *pool) {
     for (int i = 0; i < m; i++) {
         int num_vars_in_row = 0;
 
+        solver->root_cover_rows_scanned++;
+
         if (!is_knapsack_constraint(model, i, solver->is_integer,
                                     coefs, vars, &num_vars_in_row)) {
             continue;
         }
+        solver->root_cover_knapsack_rows++;
 
         double rhs = model->b[i];
 
