@@ -236,7 +236,6 @@ static Cut* generate_gmi_cut_from_row(MIPSolver *solver,
     int num_orig = tab->model->num_vars;
     int basic_var = tab->basis[basic_pos];
     int verbose = 0;  /* Set to 1 to enable debug output */
-
     if (reject_reason_out) *reject_reason_out = GMI_REJECT_NONE;
 
     /* Get fractional part of basic variable */
@@ -599,7 +598,6 @@ int generate_gomory_cuts(MIPSolver *solver, CutPool *pool) {
         int k = candidate_rows[idx];
         int j = tab->basis[k];
         GMICutRejectReason reject_reason = GMI_REJECT_NONE;
-
         if (solver->verbose >= 2) {
             printf("[GMI] Candidate %d/%d: basic pos %d var %d score %.6f -> generating cut...\n",
                    idx + 1, candidate_count, k, j, candidate_scores[idx]);
