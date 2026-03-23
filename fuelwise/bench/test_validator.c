@@ -578,6 +578,139 @@ void test_raw_milp100_seed125_shifted_presolve_mir_regression(void)
 }
 
 /* ============================================================================
+ * Test: Remaining raw MILP benchmark regressions stay exact
+ * ============================================================================ */
+void test_remaining_raw_benchmark_regressions(void)
+{
+    printf("\n=== Test: Remaining Raw Benchmark Regressions ===\n");
+
+    struct {
+        const char *label;
+        FWBenchConfig cfg;
+    } cases[2];
+
+    cases[0].label = "MILP30 seed=126";
+    cases[0].cfg = fw_bench_config_milp_30();
+    cases[0].cfg.seed = 126;
+
+    cases[1].label = "MILP75 seed=127";
+    cases[1].cfg = fw_bench_config_milp_75();
+    cases[1].cfg.seed = 127;
+
+    int previous_hint_flags = fw_get_mip_hint_flags();
+
+    for (int idx = 0; idx < 2; idx++) {
+        FWBenchInstance instance;
+        FWGlpkResult glpk;
+        FWRefuelSolution raw;
+        FWValidationResult raw_v;
+
+        memset(&instance, 0, sizeof(instance));
+        memset(&glpk, 0, sizeof(glpk));
+        memset(&raw, 0, sizeof(raw));
+        memset(&raw_v, 0, sizeof(raw_v));
+
+        ASSERT(fw_bench_generate(&cases[idx].cfg, &instance) == 0,
+               "Generated raw benchmark regression instance");
+        ASSERT(fw_glpk_solve(&instance.problem, &glpk) == 0 && glpk.solved,
+               "GLPK solves raw benchmark regression instance");
+
+        fw_set_mip_hint_flags(FW_HINT_NONE);
+        fw_set_presolve(1, 0x100F);
+
+        int raw_rc = fw_solve_refuel_milp(&instance.problem, &raw);
+        int raw_feasible = (raw_rc == 0 && raw.status == FW_STATUS_OPTIMAL) ?
+            fw_validate_solution(&instance.problem, &raw,
+                                 instance.curve, instance.weight_profile, &raw_v) : 0;
+
+        printf("  %s GLPK objective:      %.6f\n", cases[idx].label, glpk.objective);
+        printf("  %s Ralph status:        %d\n", cases[idx].label, raw.status);
+        printf("  %s Ralph objective:     %.6f\n", cases[idx].label, raw.total_cost);
+
+        ASSERT(raw_rc == 0 && raw.status == FW_STATUS_OPTIMAL,
+               "Ralph raw MILP solves regression benchmark instance");
+        ASSERT(raw_feasible, "Ralph raw MILP regression solution validates");
+        ASSERT(fabs(raw.total_cost - glpk.objective) <= 0.01,
+               "Raw benchmark regression matches GLPK objective");
+
+        fw_free_solution(&raw);
+        fw_bench_free_instance(&instance);
+    }
+
+    fw_set_mip_hint_flags(previous_hint_flags);
+    fw_set_presolve(1, 0x100F);
+}
+
+/* ============================================================================
+ * Test: Branch directions must not change certified MILP optimum
+ * ============================================================================ */
+void test_branch_direction_only_regressions(void)
+{
+    printf("\n=== Test: Branch Direction Only Regressions ===\n");
+
+    struct {
+        const char *label;
+        FWBenchConfig cfg;
+    } cases[2];
+
+    cases[0].label = "MILP30 seed=42";
+    cases[0].cfg = fw_bench_config_milp_30();
+    cases[0].cfg.seed = 42;
+
+    cases[1].label = "MILP30 seed=46";
+    cases[1].cfg = fw_bench_config_milp_30();
+    cases[1].cfg.seed = 46;
+
+    int directions_only =
+        FW_HINT_NO_PRIORITIES |
+        FW_HINT_NO_REACH_CUTS |
+        FW_HINT_NO_MANDATORY_FIX |
+        FW_HINT_NO_DOMINATED_ELIM |
+        FW_HINT_NO_SYMMETRY_BREAK;
+    int previous_hint_flags = fw_get_mip_hint_flags();
+
+    for (int idx = 0; idx < 2; idx++) {
+        FWBenchInstance instance;
+        FWGlpkResult glpk;
+        FWRefuelSolution sol;
+        FWValidationResult vresult;
+
+        memset(&instance, 0, sizeof(instance));
+        memset(&glpk, 0, sizeof(glpk));
+        memset(&sol, 0, sizeof(sol));
+        memset(&vresult, 0, sizeof(vresult));
+
+        ASSERT(fw_bench_generate(&cases[idx].cfg, &instance) == 0,
+               "Generated direction-only regression instance");
+        ASSERT(fw_glpk_solve(&instance.problem, &glpk) == 0 && glpk.solved,
+               "GLPK solves direction-only regression instance");
+
+        fw_set_mip_hint_flags(directions_only);
+        fw_set_presolve(1, 0x100F);
+
+        int rc = fw_solve_refuel_milp(&instance.problem, &sol);
+        int feasible = (rc == 0 && sol.status == FW_STATUS_OPTIMAL) ?
+            fw_validate_solution(&instance.problem, &sol,
+                                 instance.curve, instance.weight_profile, &vresult) : 0;
+
+        printf("  %s: GLPK %.6f Ralph %.6f\n",
+               cases[idx].label, glpk.objective, sol.total_cost);
+
+        ASSERT(rc == 0 && sol.status == FW_STATUS_OPTIMAL,
+               "Ralph solves direction-only regression instance");
+        ASSERT(feasible, "Ralph direction-only regression solution validates");
+        ASSERT(fabs(sol.total_cost - glpk.objective) <= 0.01,
+               "Branch directions preserve GLPK-matching objective");
+
+        fw_free_solution(&sol);
+        fw_bench_free_instance(&instance);
+    }
+
+    fw_set_mip_hint_flags(previous_hint_flags);
+    fw_set_presolve(1, 0x100F);
+}
+
+/* ============================================================================
  * Test: Minimum fuel level maintained throughout route
  * ============================================================================ */
 void test_minimum_fuel_maintained(void)
@@ -2214,6 +2347,8 @@ int main(void)
     test_raw_milp100_seed43_cut_presolve_characterization();
     test_raw_milp100_seed45_benchmark_characterization();
     test_raw_milp100_seed125_shifted_presolve_mir_regression();
+    test_remaining_raw_benchmark_regressions();
+    test_branch_direction_only_regressions();
     test_minimum_fuel_maintained();
 
     /* Economic optimality tests */

@@ -1,6 +1,7 @@
 #ifndef RALPH_MIP_LP_ADAPTER_H
 #define RALPH_MIP_LP_ADAPTER_H
 
+#include <math.h>
 #include "mip.h"
 
 typedef enum {
@@ -21,6 +22,53 @@ static inline int mip_lp_stage_warm_basis(SimplexSolver *lp, int m, int n,
 /* Apply a warm basis to an existing tableau and restore a consistent LP state. */
 static inline int mip_lp_restore_warm_basis(SimplexSolver *lp, int m, int n,
                                             const int *basis, const VarStatus *var_status);
+
+/* Refresh solver-visible primal/dual/objective arrays from the live tableau. */
+static inline int mip_lp_sync_solver_outputs(SimplexSolver *lp) {
+    if (!lp || !lp->tableau || !lp->model) return -1;
+
+    SimplexTableau *tab = lp->tableau;
+    int n_orig = lp->model->num_vars;
+    int m_cons = lp->model->num_cons;
+
+    if (!lp->solution) {
+        lp->solution = (double*)calloc((size_t)n_orig, sizeof(double));
+        if (!lp->solution) return -1;
+    }
+    if (!lp->dual_solution) {
+        lp->dual_solution = (double*)calloc((size_t)m_cons, sizeof(double));
+        if (!lp->dual_solution) return -1;
+    }
+    if (!lp->reduced_costs) {
+        lp->reduced_costs = (double*)calloc((size_t)n_orig, sizeof(double));
+        if (!lp->reduced_costs) return -1;
+    }
+
+    lp->obj_value = tab->obj_value * lp->model->obj_sense + lp->model->obj_offset;
+
+    for (int j = 0; j < n_orig; j++) {
+        double x = tab->x ? tab->x[j] : 0.0;
+        double rc = tab->rc ? tab->rc[j] : 0.0;
+        if (lp->is_scaled && lp->col_scale) {
+            x *= lp->col_scale[j];
+            if (fabs(lp->col_scale[j]) > RALPH_ZERO_TOL) {
+                rc /= lp->col_scale[j];
+            }
+        }
+        lp->solution[j] = x;
+        lp->reduced_costs[j] = rc * lp->model->obj_sense;
+    }
+
+    for (int i = 0; i < m_cons; i++) {
+        double y = tab->y ? tab->y[i] : 0.0;
+        if (lp->is_scaled && lp->row_scale) {
+            y *= lp->row_scale[i];
+        }
+        lp->dual_solution[i] = y * lp->model->obj_sense;
+    }
+
+    return 0;
+}
 
 /* Update structural (original-variable) bounds in the active tableau. */
 static inline int mip_lp_apply_structural_bounds(SimplexTableau *tab, int num_struct_vars,
@@ -117,7 +165,8 @@ static inline int mip_lp_restore_warm_basis(SimplexSolver *lp, int m, int n,
                                             const int *basis, const VarStatus *var_status) {
     if (!lp || !lp->tableau || !basis || !var_status) return -1;
     if (tableau_apply_warm_basis(lp->tableau, m, n, basis, var_status) != 0) return -1;
-    return mip_lp_refactor_and_recompute(lp->tableau);
+    if (mip_lp_refactor_and_recompute(lp->tableau) != 0) return -1;
+    return mip_lp_sync_solver_outputs(lp);
 }
 
 #endif /* RALPH_MIP_LP_ADAPTER_H */

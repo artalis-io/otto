@@ -795,6 +795,8 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
     int strong_pivot_budget = reliability_probe_pivot_budget(solver);
     int strong_threshold = reliability_pseudo_threshold(solver);
     int strong_failed = 0;  /* Stop strong branching if LP state corrupted */
+    const double *base_solution = solution;
+    double parent_obj = (solver && solver->lp_solver) ? solver->lp_solver->obj_value : 0.0;
 
     const int * restrict int_vars = solver->integer_vars;
     const int * restrict prios = solver->branch_priorities;
@@ -804,10 +806,7 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
     const double *ub = wm ? wm->ub : NULL;
 
     for (int k = 0; k < num_int; k++) {
-        if (solver->lp_solver && solver->lp_solver->solution) {
-            solution = solver->lp_solver->solution;
-        }
-        if (!solution) break;
+        if (!base_solution) break;
 
         int j = int_vars[k];
         if (lb && ub && ub[j] - lb[j] <= RALPH_INT_TOL) continue;
@@ -815,7 +814,7 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
         /* Priority filter: skip if not at max priority */
         if (use_priorities && prios && prios[j] < max_prio) continue;
 
-        double val = solution[j];
+        double val = base_solution[j];
         double frac = val - floor(val);
 
         if (frac < RALPH_INT_TOL || frac > 1.0 - RALPH_INT_TOL) continue;
@@ -834,15 +833,8 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
             int sb_result = strong_branch(solver, j, val, &down_obj, &up_obj,
                                           strong_pivot_budget);
 
-            /* Re-read solution pointer: strong_branch() may recover LP state. */
-            if (solver->lp_solver) {
-                solution = solver->lp_solver->solution;
-            }
-            if (!solution) break;  /* LP state lost, recovery handled below */
-
             if (sb_result == 0) {
                 /* Update pseudo-costs */
-                double parent_obj = solver->lp_solver->obj_value;
                 if (down_obj < RALPH_INFINITY/2) {
                     update_pseudo_costs(solver, j, val, parent_obj, down_obj, BRANCH_DOWN);
                 }
@@ -875,15 +867,13 @@ static int select_reliability_branch_impl(MIPSolver *solver, const double *solut
     if (strong_failed && solver->lp_solver) {
         if (!solver->lp_solver->solution || !solver->lp_solver->tableau)
             (void)mip_lp_recover_state(solver->lp_solver);
-        /* Refresh solution pointer after recovery */
-        solution = solver->lp_solver->solution;
     }
 
-    if (best_var < 0 && solution) {
+    if (best_var < 0 && base_solution) {
         if (use_priorities) {
-            best_var = select_most_infeasible_with_priority(solver, solution, max_prio);
+            best_var = select_most_infeasible_with_priority(solver, base_solution, max_prio);
         } else {
-            best_var = select_most_infeasible(solver, solution);
+            best_var = select_most_infeasible(solver, base_solution);
         }
     }
 
