@@ -58,11 +58,48 @@ static double cut_compute_lp_violation(const Cut *cut, const SimplexTableau *tab
     return fabs(lhs - cut->rhs);
 }
 
+static int cut_uses_shifted_continuous(const LPModel *model,
+                                       const int *is_integer,
+                                       const double *coefs,
+                                       int num_orig)
+{
+    if (!model || !model->var_shifted) return 0;
+
+    for (int j = 0; j < num_orig; j++) {
+        if (fabs(coefs[j]) < RALPH_ZERO_TOL) continue;
+        if (j >= model->var_shifted_capacity || !model->var_shifted[j]) continue;
+        if (is_integer && is_integer[j]) continue;
+        return 1;
+    }
+
+    return 0;
+}
+
+static int model_has_shifted_continuous(const LPModel *model,
+                                        const int *is_integer,
+                                        int num_orig)
+{
+    if (!model || !model->var_shifted) return 0;
+
+    int limit = num_orig;
+    if (limit > model->var_shifted_capacity) {
+        limit = model->var_shifted_capacity;
+    }
+    for (int j = 0; j < limit; j++) {
+        if (!model->var_shifted[j]) continue;
+        if (is_integer && is_integer[j]) continue;
+        return 1;
+    }
+
+    return 0;
+}
+
 typedef enum {
     GMI_REJECT_NONE = 0,
     GMI_REJECT_EMPTY = 1,
     GMI_REJECT_SIGN = 2,
-    GMI_REJECT_VIOLATION = 3
+    GMI_REJECT_VIOLATION = 3,
+    GMI_REJECT_SHIFTED = 4
 } GMICutRejectReason;
 
 /* ============================================================================
@@ -320,6 +357,7 @@ static Cut* generate_gmi_cut_from_row(MIPSolver *solver,
     cut->type = CUT_GOMORY;
     cut->sense = 'G';  /* >= cut */
     cut->rhs = f_0;
+    int uses_shifted_support = 0;
 
     /* Compute cut coefficients for each non-basic variable */
     {
@@ -396,6 +434,12 @@ static Cut* generate_gmi_cut_from_row(MIPSolver *solver,
 
             if (j < num_orig) {
                 /* Original variable: accumulate coefficient directly */
+                if (tab->model->var_shifted &&
+                    j < tab->model->var_shifted_capacity &&
+                    tab->model->var_shifted[j] &&
+                    (!is_integer || !is_integer[j])) {
+                    uses_shifted_support = 1;
+                }
                 if (verbose) {
                     printf("[GMI-row]   Adding to cut: x%d with coef %.6f\n", j, final_coef);
                 }
@@ -447,6 +491,12 @@ static Cut* generate_gmi_cut_from_row(MIPSolver *solver,
                             }
                         }
                         if (fabs(a_rk) > RALPH_ZERO_TOL) {
+                            if (model->var_shifted &&
+                                k < model->var_shifted_capacity &&
+                                model->var_shifted[k] &&
+                                (!is_integer || !is_integer[k])) {
+                                uses_shifted_support = 1;
+                            }
                             /* Add -alpha * aux_coef * a_rk to coefficient of x_k */
                             double contrib = -final_coef * aux_c * a_rk;
                             cut_coefs[k] += contrib;
@@ -470,6 +520,26 @@ static Cut* generate_gmi_cut_from_row(MIPSolver *solver,
     }
 
     free(row);
+
+    if (uses_shifted_support) {
+        if (verbose) {
+            printf("[GMI-row] Rejected: shifted continuous support in source row\n");
+        }
+        if (reject_reason_out) *reject_reason_out = GMI_REJECT_SHIFTED;
+        free(cut_coefs);
+        cut_free(cut);
+        return NULL;
+    }
+
+    if (cut_uses_shifted_continuous(tab->model, is_integer, cut_coefs, num_orig)) {
+        if (verbose) {
+            printf("[GMI-row] Rejected: shifted continuous variable in cut support\n");
+        }
+        if (reject_reason_out) *reject_reason_out = GMI_REJECT_SHIFTED;
+        free(cut_coefs);
+        cut_free(cut);
+        return NULL;
+    }
 
     /* Convert dense coefficient array to sparse cut */
     for (int k = 0; k < num_orig; k++) {
@@ -537,6 +607,10 @@ int generate_gomory_cuts(MIPSolver *solver, CutPool *pool) {
     int *candidate_rows = NULL;
     double *candidate_scores = NULL;
     int cuts_added = 0;
+
+    if (model_has_shifted_continuous(tab->model, solver->is_integer, tab->model->num_vars)) {
+        return 0;
+    }
 
     if (candidate_cap < MIP_GOMORY_PREFILTER_MIN_ROWS) {
         candidate_cap = MIP_GOMORY_PREFILTER_MIN_ROWS;
@@ -697,7 +771,7 @@ int generate_gomory_cuts(MIPSolver *solver, CutPool *pool) {
  * ============================================================================ */
 
 /* c-MIR local constants */
-#define CMIR_MAX_AGGR     3      /* Max rows to aggregate */
+#define CMIR_MAX_AGGR     3      /* Hard cap; runtime default matches this unless gated */
 #define CMIR_FRAC_TOL     0.01   /* Min fractionality for MIR RHS */
 #define CMIR_COEF_MAX     1e6    /* Reject cuts with coefficients beyond this */
 #define CMIR_PIVOT_MIN    0.001  /* Min coefficient for aggregation pivot */
@@ -1465,6 +1539,15 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
     int num_orig = tab->model->num_vars;
     int m = tab->m;
     LPModel *row_model = tab->model;
+
+    /* c-MIR remains available for targeted debugging, but it is currently
+     * disabled by default because multiple presolved MILP regressions still
+     * isolate to this family. Set RALPH_ENABLE_MIR_ROOT_CUTS=1 to opt back in
+     * while debugging specific instances. */
+    if (!cut_env_flag_enabled("RALPH_ENABLE_MIR_ROOT_CUTS")) {
+        return 0;
+    }
+
     int cuts_added = 0;
     int candidate_cap = solver->max_cuts_per_round * MIP_MIR_PREFILTER_MULT;
     int candidate_count = 0;
@@ -1473,6 +1556,9 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
     int max_aggr = cut_env_int_or_default("RALPH_CMIR_MAX_AGGR", CMIR_MAX_AGGR);
     if (max_aggr < 0) max_aggr = 0;
     if (max_aggr > CMIR_MAX_AGGR) max_aggr = CMIR_MAX_AGGR;
+    if (model_has_shifted_continuous(row_model, solver->is_integer, num_orig)) {
+        return 0;
+    }
 
     /* Allocate CMIRWork arrays once */
     CMIRWork work;
@@ -1595,6 +1681,7 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
                 }
             }
             if (!aggr_ok) continue;
+            if (used_shifted_pivot) continue;
 
             /* Bound substitution */
             cmir_bound_substitute(&work);

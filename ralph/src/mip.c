@@ -2172,13 +2172,23 @@ static int process_node(MIPSolver *solver, BBNode *node) {
      * Clear the direct-reuse marker until we restore a clean node state. */
     solver->last_solved_node_id = -1;
 
+    /* Reliability/strong branching can mutate the live LP tableau while we
+     * are still deciding which fractional variable to branch on. Preserve the
+     * solved parent-node LP solution so branch choice and child bounds stay
+     * tied to the actual parent relaxation, not a probe child state. */
+    double *branch_ref_sol = (double*)calloc((size_t)model->num_vars, sizeof(double));
+    if (branch_ref_sol) {
+        memcpy(branch_ref_sol, lp_sol, (size_t)model->num_vars * sizeof(double));
+    }
+    const double *branch_eval_sol = branch_ref_sol ? branch_ref_sol : lp_sol;
+
     /* Select branching variable. Some selector paths can fail to return a
      * candidate even when the current LP solution is still fractional. Fall
      * back to the plain most-infeasible scan before pruning the node. */
     solver->current_node_depth = node->depth;
     int branch_var = -1;
-    if (select_branch_variable(solver, lp_sol, &branch_var) != 0) {
-        int fallback = mip_select_most_infeasible(solver, lp_sol);
+    if (select_branch_variable(solver, branch_eval_sol, &branch_var) != 0) {
+        int fallback = mip_select_most_infeasible(solver, branch_eval_sol);
         if (fallback < 0 && solver->lp_solver && solver->working_model) {
             if (restore_node_lp_state(solver, node) == 0) {
                 lp_sol = solver->lp_solver->solution;
@@ -2209,6 +2219,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
             } else if (solver->verbose) {
                 LP_LOG_STDOUT("  [process_node] No branch var after fallback; pruning unresolved fractional node\n");
             }
+            free(branch_ref_sol);
             return 0;
         }
     }
@@ -2224,7 +2235,10 @@ static int process_node(MIPSolver *solver, BBNode *node) {
             }
             lp_sol = solver->lp_solver->solution;
         }
-        if (!lp_sol) return -1;  /* Unrecoverable — prune node */
+        if (!lp_sol) {
+            free(branch_ref_sol);
+            return -1;  /* Unrecoverable — prune node */
+        }
     }
     if (!mip_solution_within_node_bounds(model, lp_sol, node->lb, node->ub)) {
         if (solver->lp_solver &&
@@ -2241,16 +2255,17 @@ static int process_node(MIPSolver *solver, BBNode *node) {
             if (solver->verbose >= 2) {
                 LP_LOG_STDOUT("  [process_node] LP state remains outside node bounds after recovery; pruning node\n");
             }
+            free(branch_ref_sol);
             return 0;
         }
     }
 
     /* Guard against stale branch choice after reliability/strong probing. */
-    double branch_val = lp_sol[branch_var];
+    double branch_val = branch_eval_sol[branch_var];
     double branch_frac = branch_val - floor(branch_val);
     if (branch_frac < 0.0) branch_frac += 1.0;
     if (branch_frac <= RALPH_INT_TOL || branch_frac >= 1.0 - RALPH_INT_TOL) {
-        int fallback = mip_select_most_infeasible(solver, lp_sol);
+        int fallback = mip_select_most_infeasible(solver, branch_eval_sol);
         if (fallback < 0) {
             /* Strong/reliability probing can leave the LP state stale even
              * when recovery paths report success. Rebuild once and retry
@@ -2275,10 +2290,11 @@ static int process_node(MIPSolver *solver, BBNode *node) {
             if (solver->verbose >= 2) {
                 LP_LOG_STDOUT("  [process_node] No fractional var after probing; pruning node\n");
             }
+            free(branch_ref_sol);
             return 0;
         }
         branch_var = fallback;
-        branch_val = lp_sol[branch_var];
+        branch_val = branch_eval_sol[branch_var];
     }
 
     if (solver->verbose) {
@@ -2295,12 +2311,15 @@ static int process_node(MIPSolver *solver, BBNode *node) {
 
     /* Create child nodes */
     BBNode *child_down, *child_up;
-    compute_branch_children(solver, node, branch_var, lp_sol, &child_down, &child_up);
+    compute_branch_children(solver, node, branch_var,
+                            branch_ref_sol ? branch_ref_sol : lp_sol,
+                            &child_down, &child_up);
     solver->current_node_depth = -1;
     if (!child_down && !child_up) {
         if (solver->verbose >= 2) {
             LP_LOG_STDOUT("  [process_node] Branch produced no tightening; pruning node\n");
         }
+        free(branch_ref_sol);
         return 0;
     }
 
@@ -2320,6 +2339,7 @@ static int process_node(MIPSolver *solver, BBNode *node) {
         }
     }
 
+    free(branch_ref_sol);
     return 0;
 }
 
