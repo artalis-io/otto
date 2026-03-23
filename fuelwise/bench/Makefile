@@ -29,8 +29,9 @@ TARGET = fuelwise-bench
 # Validator test binary
 TEST_VALIDATOR = test_validator
 TEST_VALIDATOR_OBJS = test_validator.o fw_bench.o fw_gen.o fw_validate.o fw_glpk.o
+RALPH_DIR = ../../ralph
 
-.PHONY: all clean test quick validator-test
+.PHONY: all clean test quick validator-test regression-test
 
 all: $(TARGET)
 
@@ -72,6 +73,12 @@ quick: $(TARGET)
 validator-test: $(TEST_VALIDATOR)
 	./$(TEST_VALIDATOR)
 
+# Run the full regression harness: FuelWise validator + Ralph LP/MIP suites
+regression-test: $(TEST_VALIDATOR)
+	./$(TEST_VALIDATOR)
+	$(MAKE) -C $(RALPH_DIR) test-lp-suite
+	$(MAKE) -C $(RALPH_DIR) test-mip-suite
+
 clean:
 	rm -f $(OBJS) $(TEST_VALIDATOR_OBJS) $(TARGET) $(TEST_VALIDATOR)
 
@@ -82,4 +89,5 @@ help:
 	@echo "  all     - Build benchmark binary"
 	@echo "  test    - Run benchmark (10 runs, all scenarios)"
 	@echo "  quick   - Quick test (5 runs, highway)"
+	@echo "  regression-test - Run FuelWise validator plus Ralph LP/MIP suites"
 	@echo "  clean   - Remove build artifacts"
