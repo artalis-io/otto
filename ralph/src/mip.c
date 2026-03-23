@@ -123,6 +123,89 @@ static void mip_clear_solver_outputs(SimplexSolver *lp) {
     lp->unbounded_valid = 0;
 }
 
+static double mip_compute_callback_cut_violation(const RalphCut *cut,
+                                                 const double *x_relaxation,
+                                                 int num_vars) {
+    double lhs = 0.0;
+
+    if (!cut || !x_relaxation || cut->num_vars <= 0) return 0.0;
+
+    for (int i = 0; i < cut->num_vars; i++) {
+        int col = cut->indices[i];
+        if (col < 0 || col >= num_vars) return -1.0;
+        lhs += cut->coeffs[i] * x_relaxation[col];
+    }
+
+    if (cut->sense == RALPH_LESS_EQUAL) return lhs - cut->rhs;
+    if (cut->sense == RALPH_GREATER_EQUAL) return cut->rhs - lhs;
+    return fabs(lhs - cut->rhs);
+}
+
+static int mip_generate_user_cuts(MIPSolver *solver,
+                                  CutPool *pool,
+                                  const double *x_relaxation,
+                                  int num_vars,
+                                  int max_cuts) {
+    RalphCut user_cuts[32];
+    int callback_limit;
+    int callback_cuts;
+    int cuts_added = 0;
+
+    if (!solver || !pool || !x_relaxation || num_vars <= 0 ||
+        !solver->has_cut_callback || !solver->cut_callback.generate_cuts ||
+        max_cuts <= 0) {
+        return 0;
+    }
+
+    callback_limit = max_cuts;
+    if (callback_limit > (int)(sizeof(user_cuts) / sizeof(user_cuts[0]))) {
+        callback_limit = (int)(sizeof(user_cuts) / sizeof(user_cuts[0]));
+    }
+    memset(user_cuts, 0, sizeof(user_cuts));
+
+    callback_cuts = solver->cut_callback.generate_cuts(
+        solver->cut_callback.user_data,
+        x_relaxation,
+        num_vars,
+        user_cuts,
+        callback_limit
+    );
+    if (callback_cuts <= 0) return 0;
+
+    for (int i = 0; i < callback_cuts; i++) {
+        RalphCut *uc = &user_cuts[i];
+        Cut *cut;
+        double violation;
+        int pool_before;
+
+        if (!uc->indices || !uc->coeffs || uc->num_vars <= 0) continue;
+
+        violation = mip_compute_callback_cut_violation(uc, x_relaxation, num_vars);
+        if (!(violation >= MIP_CUT_MIN_VIOLATION)) continue;
+
+        cut = cut_create(uc->num_vars);
+        if (!cut) continue;
+
+        for (int j = 0; j < uc->num_vars; j++) {
+            cut->indices[j] = uc->indices[j];
+            cut->values[j] = uc->coeffs[j];
+        }
+        cut->nnz = uc->num_vars;
+        cut->sense = (char)uc->sense;
+        cut->rhs = uc->rhs;
+        cut->type = CUT_GOMORY;
+        cut->violation = violation;
+        cut->age = 0;
+
+        pool_before = pool->count;
+        if (cut_pool_add(pool, cut) == 0 && pool->count > pool_before) {
+            cuts_added++;
+        }
+    }
+
+    return cuts_added;
+}
+
 static char mip_cut_normalized_sense(char sense, double rhs,
                                      double *sign_out, double *rhs_out) {
     double sign = 1.0;
@@ -2024,49 +2107,6 @@ static int process_node(MIPSolver *solver, BBNode *node) {
     double lp_obj = solver->lp_solver->obj_value;
     double *lp_sol = solver->lp_solver->solution;
 
-    /* Invoke user-provided cut callback if available */
-    if (solver->has_cut_callback && solver->cut_callback.generate_cuts) {
-        RalphCut user_cuts[32];  /* Max cuts from callback per node */
-        memset(user_cuts, 0, sizeof(user_cuts));
-
-        int num_cuts = solver->cut_callback.generate_cuts(
-            solver->cut_callback.user_data,
-            lp_sol,
-            model->num_vars,
-            user_cuts,
-            32
-        );
-
-        if (num_cuts > 0) {
-            for (int i = 0; i < num_cuts && i < 32; i++) {
-                RalphCut *uc = &user_cuts[i];
-                if (!uc->indices || !uc->coeffs || uc->num_vars <= 0) continue;
-
-                /* Convert RalphCut to internal Cut and add to pool */
-                Cut *cut = cut_create(uc->num_vars);
-                if (cut) {
-                    for (int j = 0; j < uc->num_vars; j++) {
-                        cut->indices[j] = uc->indices[j];
-                        cut->values[j] = uc->coeffs[j];
-                    }
-                    cut->nnz = uc->num_vars;
-                    cut->sense = (char)uc->sense;
-                    cut->rhs = uc->rhs;
-                    cut->type = CUT_GOMORY;  /* Generic cut type */
-                    cut->violation = 0.0;
-                    cut->age = 0;
-
-                    cut_pool_add(solver->cut_pool, cut);
-                    solver->cuts_generated++;
-                }
-            }
-
-            if (solver->verbose) {
-                LP_LOG_STDOUT("  [cut_callback] Added %d user cuts at node %d\n", num_cuts, node->id);
-            }
-        }
-    }
-
     /* Check if node can be pruned by bound */
     if (solver->has_incumbent) {
         if (model->obj_sense == 1) {  /* Minimize */
@@ -2550,6 +2590,15 @@ static int solve_root_node(MIPSolver *solver) {
             solver->root_scp_cuts_generated += scp_cuts;
             solver->scp_cuts_generated += scp_cuts;
         } else {
+            if (solver->has_cut_callback && solver->cut_callback.generate_cuts) {
+                int user_cuts = mip_generate_user_cuts(solver,
+                                                       solver->cut_pool,
+                                                       solver->lp_solver->solution,
+                                                       solver->original_model->num_vars,
+                                                       max_cuts_this_round);
+                cuts_added += user_cuts;
+            }
+
             /* Generate Gomory cuts (from integer basic variable rows) */
             if (solver->enable_root_gomory_cuts && cut_rounds < solver->root_gomory_max_rounds) {
                 gomory_added = generate_gomory_cuts(solver, solver->cut_pool);
