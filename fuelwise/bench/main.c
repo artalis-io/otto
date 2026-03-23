@@ -52,6 +52,7 @@ static void print_usage(const char *prog)
     printf("  --milp           Use MILP solver (default: LP)\n");
     printf("  --benders        Use Benders decomposition solver\n");
     printf("  --glpk           Compare against GLPK (requires glpsol)\n");
+    printf("  --compare-raw    Disable FuelWise MILP hints so Ralph solves the raw model\n");
     printf("  --presolve       Enable Ralph presolve for MILP\n");
     printf("  --presolve-mask N  Presolve technique bitmask (hex, default 0xFFFF=all)\n");
     printf("  --json           Output as JSON\n");
@@ -66,6 +67,7 @@ typedef struct {
     uint64_t seed;
     FWSolverType solver_type;
     int glpk_compare;
+    int compare_raw;
     int presolve;       /* 1=explicitly enable, -1=explicitly disable, 0=default */
     unsigned int presolve_mask;
     int as_json;
@@ -80,8 +82,9 @@ static int parse_args(int argc, char **argv, BenchOptions *opts)
     opts->seed = 0;
     opts->solver_type = FW_SOLVER_LP;
     opts->glpk_compare = 0;
+    opts->compare_raw = 0;
     opts->presolve = 0;
-    opts->presolve_mask = 0x110F;  /* Lightweight: matches fw_refuel.c default */
+    opts->presolve_mask = 0x100F;  /* Lightweight: matches fw_refuel.c default */
     opts->as_json = 0;
     opts->verbose = 0;
     opts->run_all = 0;
@@ -102,6 +105,8 @@ static int parse_args(int argc, char **argv, BenchOptions *opts)
             opts->solver_type = FW_SOLVER_BENDERS;
         } else if (strcmp(argv[i], "--glpk") == 0) {
             opts->glpk_compare = 1;
+        } else if (strcmp(argv[i], "--compare-raw") == 0) {
+            opts->compare_raw = 1;
         } else if (strcmp(argv[i], "--presolve") == 0) {
             opts->presolve = 1;
         } else if (strcmp(argv[i], "--no-presolve") == 0) {
@@ -174,6 +179,7 @@ static int run_scenario(
 {
     FWBenchConfig cfg = get_config(scenario, opts->seed);
     cfg.glpk_compare = opts->glpk_compare;
+    cfg.compare_raw = opts->compare_raw;
     FWBenchResults results;
 
     if (opts->verbose && !opts->as_json) {

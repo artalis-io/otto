@@ -78,6 +78,7 @@ typedef struct {
 
     /* GLPK comparison mode (bench-only) */
     int glpk_compare;               /* 1 to enable GLPK comparison */
+    int compare_raw;                /* 1 to disable FuelWise MIP hints for Ralph */
 } FWBenchConfig;
 
 /* ============================================================================

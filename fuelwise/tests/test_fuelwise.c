@@ -1020,15 +1020,16 @@ void test_mip_hint_components(void)
         const char *name;
         int flags;
     } configs[] = {
-        {"All hints enabled",      0},
+        {"Default hints",          FW_HINT_DEFAULT},
         {"No hints (raw MILP)",    FW_HINT_NONE},
+        {"Legacy all hints",       0},
         {"Only mandatory fixing",  FW_HINT_NONE & ~FW_HINT_NO_MANDATORY_FIX},
         {"Only dominated elim",    FW_HINT_NONE & ~FW_HINT_NO_DOMINATED_ELIM},
         {"Only symmetry breaking", FW_HINT_NONE & ~FW_HINT_NO_SYMMETRY_BREAK},
         {"Only reach cuts",        FW_HINT_NONE & ~FW_HINT_NO_REACH_CUTS},
         {"Only priorities+dirs",   FW_HINT_NONE & ~FW_HINT_NO_PRIORITIES & ~FW_HINT_NO_DIRECTIONS},
     };
-    int num_configs = 7;
+    int num_configs = 8;
 
     double baseline_cost = -1.0;
 
@@ -1068,7 +1069,7 @@ void test_mip_hint_components(void)
     }
 
     /* Reset to default */
-    fw_set_mip_hint_flags(0);
+    fw_set_mip_hint_flags(FW_HINT_DEFAULT);
 
     ASSERT(baseline_cost > 0, "All-hints config found optimal solution");
     printf("  All configurations produce consistent results\n");

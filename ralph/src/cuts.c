@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <math.h>
 #include <time.h>
 #include "mip.h"
@@ -18,6 +19,43 @@
 
 static double cut_cpu_time_now(void) {
     return (double)clock() / CLOCKS_PER_SEC;
+}
+
+static int cut_env_int_or_default(const char *name, int default_value)
+{
+    const char *value = getenv(name);
+    if (!value || !*value) return default_value;
+    char *endptr = NULL;
+    long parsed = strtol(value, &endptr, 10);
+    if (!endptr || *endptr != '\0') return default_value;
+    return (int)parsed;
+}
+
+static int cut_env_flag_enabled(const char *name)
+{
+    const char *value = getenv(name);
+    return (value && *value && strcmp(value, "0") != 0) ? 1 : 0;
+}
+
+static void cut_trace_log(const char *fmt, ...)
+{
+    va_list ap;
+    if (!cut_env_flag_enabled("RALPH_CMIR_TRACE")) return;
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+}
+
+static double cut_compute_lp_violation(const Cut *cut, const SimplexTableau *tab)
+{
+    double lhs = 0.0;
+    if (!cut || !tab || !tab->x) return 0.0;
+    for (int i = 0; i < cut->nnz; i++) {
+        lhs += cut->values[i] * tab->x[cut->indices[i]];
+    }
+    if (cut->sense == 'L') return lhs - cut->rhs;
+    if (cut->sense == 'G') return cut->rhs - lhs;
+    return fabs(lhs - cut->rhs);
 }
 
 typedef enum {
@@ -693,13 +731,24 @@ typedef struct {
 static int cmir_extract_source_row(
     SimplexTableau *tab, int basic_pos, const int *is_integer,
     double *row_coefs, double *row_rhs,
-    int aggr_depth, int *used_rows, const double *x_val)
+    int aggr_depth, int *used_rows, const double *x_val,
+    int *used_shifted_pivot_out)
 {
     int m = tab->m;
     int n = tab->n;
     int num_orig = tab->model->num_vars;
     LPModel *model = tab->model;
     int basic_var = tab->basis[basic_pos];
+
+    if (used_shifted_pivot_out) {
+        *used_shifted_pivot_out = 0;
+    }
+
+    if (basic_pos < 0 || basic_pos >= model->num_cons) return 0;
+    if (model->con_origin &&
+        (basic_pos >= model->con_origin_capacity || model->con_origin[basic_pos] < 0)) {
+        return 0;
+    }
 
     if (aggr_depth == 0) {
         /* Base case: compute tableau row e_i' * B^{-1} * A */
@@ -792,7 +841,6 @@ static int cmir_extract_source_row(
     for (int j = 0; j < num_orig; j++) {
         if (fabs(row_coefs[j]) < CMIR_PIVOT_MIN) continue;
         if (is_integer && is_integer[j]) continue;
-
         double dist_lb = (tab->lb_ext[j] > -RALPH_INFINITY + 1.0) ?
                           x_val[j] - tab->lb_ext[j] : RALPH_INFINITY;
         double dist_ub = (tab->ub_ext[j] < RALPH_INFINITY - 1.0) ?
@@ -808,13 +856,22 @@ static int cmir_extract_source_row(
     }
 
     if (kappa < 0) return 0;
-
+    if (used_shifted_pivot_out &&
+        model->var_shifted &&
+        kappa < model->var_shifted_capacity &&
+        model->var_shifted[kappa]) {
+        *used_shifted_pivot_out = 1;
+    }
     /* Find an original constraint row containing kappa that isn't used yet */
     int pivot_row = -1;
     double pivot_val = 0.0;
 
     for (int p = model->A->colptr[kappa]; p < model->A->colptr[kappa + 1]; p++) {
         int row = model->A->rowidx[p];
+        if (model->con_origin &&
+            (row >= model->con_origin_capacity || model->con_origin[row] < 0)) {
+            continue;
+        }
         if (used_rows[row]) continue;
         double val = model->A->values[p];
         if (fabs(val) < CMIR_PIVOT_MIN) continue;
@@ -827,6 +884,18 @@ static int cmir_extract_source_row(
     }
 
     if (pivot_row < 0) return 0;
+
+    cut_trace_log("[CMIR] basic_pos=%d basic_var=%d kappa=%d shifted=%d pivot_row=%d origin=%d sense=%c pivot_val=%.6f scale=%.6f rhs=%.6f\n",
+                  basic_pos,
+                  basic_var,
+                  kappa,
+                  (model->var_shifted && kappa < model->var_shifted_capacity) ? model->var_shifted[kappa] : 0,
+                  pivot_row,
+                  (model->con_origin && pivot_row < model->con_origin_capacity) ? model->con_origin[pivot_row] : pivot_row,
+                  (pivot_row >= 0 && pivot_row < model->num_cons) ? model->sense[pivot_row] : '?',
+                  pivot_val,
+                  -row_coefs[kappa] / pivot_val,
+                  *row_rhs);
 
     /* Extract the constraint row into a temp array */
     double *con_row = (double*)calloc(num_orig, sizeof(double));
@@ -1042,6 +1111,7 @@ static double cmir_eval(const CMIRWork *work, double delta)
 static double cmir_separate(CMIRWork *work, double *best_delta)
 {
     int num_orig = work->num_orig;
+    int disable_flip = cut_env_flag_enabled("RALPH_CMIR_DISABLE_COMPLEMENT_FLIPS");
 
     /* Initialize complement set C */
     for (int j = 0; j < num_orig; j++) {
@@ -1121,7 +1191,7 @@ static double cmir_separate(CMIRWork *work, double *best_delta)
     double *flip_score = (double*)calloc(num_orig, sizeof(double));
     int nflip = 0;
 
-    if (flip_order && flip_score) {
+    if (!disable_flip && flip_order && flip_score) {
         for (int j = 0; j < num_orig; j++) {
             if (!work->is_int || !work->is_int[j]) continue;
             if (fabs(work->a_sub[j]) < RALPH_ZERO_TOL) continue;
@@ -1394,11 +1464,15 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
     SimplexTableau *tab = solver->lp_solver->tableau;
     int num_orig = tab->model->num_vars;
     int m = tab->m;
+    LPModel *row_model = tab->model;
     int cuts_added = 0;
     int candidate_cap = solver->max_cuts_per_round * MIP_MIR_PREFILTER_MULT;
     int candidate_count = 0;
     int candidate_rows[MIP_MIR_PREFILTER_MAX_ROWS];
     double candidate_scores[MIP_MIR_PREFILTER_MAX_ROWS];
+    int max_aggr = cut_env_int_or_default("RALPH_CMIR_MAX_AGGR", CMIR_MAX_AGGR);
+    if (max_aggr < 0) max_aggr = 0;
+    if (max_aggr > CMIR_MAX_AGGR) max_aggr = CMIR_MAX_AGGR;
 
     /* Allocate CMIRWork arrays once */
     CMIRWork work;
@@ -1440,6 +1514,10 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
 
     /* Rank MIR candidate rows by fractionality */
     for (int k = 0; k < m; k++) {
+        if (row_model->con_origin &&
+            (k >= row_model->con_origin_capacity || row_model->con_origin[k] < 0)) {
+            continue;
+        }
         int basic_var = tab->basis[k];
         double val = tab->x[basic_var];
         double frac = val - floor(val);
@@ -1487,7 +1565,7 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
 
         /* Try increasing aggregation depth */
         int found_cut = 0;
-        for (int depth = 0; depth <= CMIR_MAX_AGGR && !found_cut; depth++) {
+        for (int depth = 0; depth <= max_aggr && !found_cut; depth++) {
 
             /* Reset source row */
             memset(work.a, 0, num_orig * sizeof(double));
@@ -1497,18 +1575,23 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
             /* Extract base row */
             if (!cmir_extract_source_row(tab, k, solver->is_integer,
                                          work.a, &work.b, 0, used_rows,
-                                         work.x_val)) {
+                                         work.x_val, NULL)) {
                 break;  /* Base extraction failed, skip this row */
             }
 
             /* Apply aggregation steps */
             int aggr_ok = 1;
+            int used_shifted_pivot = 0;
             for (int d = 0; d < depth; d++) {
+                int step_used_shifted_pivot = 0;
                 if (!cmir_extract_source_row(tab, k, solver->is_integer,
                                              work.a, &work.b, 1, used_rows,
-                                             work.x_val)) {
+                                             work.x_val, &step_used_shifted_pivot)) {
                     aggr_ok = 0;
                     break;
+                }
+                if (step_used_shifted_pivot) {
+                    used_shifted_pivot = 1;
                 }
             }
             if (!aggr_ok) continue;
@@ -1523,6 +1606,39 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
             if (best_viol > RALPH_FEAS_TOL) {
                 Cut *cut = cmir_build_cut(&work, best_delta, tab);
                 if (cut) {
+                    if (used_shifted_pivot) {
+                        int integer_terms = 0;
+                        int continuous_terms = 0;
+                        int all_positive = 1;
+                        for (int c = 0; c < cut->nnz; c++) {
+                            int var = cut->indices[c];
+                            double coef = cut->values[c];
+                            if (coef <= RALPH_ZERO_TOL) {
+                                all_positive = 0;
+                            }
+                            if (var >= 0 && var < num_orig &&
+                                solver->is_integer && solver->is_integer[var]) {
+                                integer_terms++;
+                            } else {
+                                continuous_terms++;
+                            }
+                        }
+                        if (all_positive && integer_terms == 1 && continuous_terms > 0) {
+                            cut_free(cut);
+                            cut = NULL;
+                        }
+                    }
+                }
+                if (cut) {
+                    double built_viol = cut_compute_lp_violation(cut, tab);
+                    cut_trace_log("[CMIR-CUT] basic_pos=%d depth=%d viol=%.6f delta=%.6f nnz=%d rhs=%.6f\n",
+                                  k, depth, best_viol, best_delta, cut->nnz, cut->rhs);
+                    cut_trace_log("[CMIR-CUT-CHECK] basic_pos=%d depth=%d built_viol=%.6f gap=%.6f\n",
+                                  k, depth, built_viol, built_viol - best_viol);
+                    for (int c = 0; c < cut->nnz; c++) {
+                        cut_trace_log("[CMIR-CUT-TERM] basic_pos=%d depth=%d idx=%d coef=%.6f\n",
+                                      k, depth, cut->indices[c], cut->values[c]);
+                    }
                     cut_pool_add(pool, cut);
                     cuts_added++;
                     found_cut = 1;
@@ -1877,9 +1993,15 @@ int apply_cuts(MIPSolver *solver, CutPool *pool, int max_cuts, Cut ***applied_ou
             if (is_parallel) continue;
         }
 
-        /* Add cut as new constraint */
-        lp_model_add_constraint(model, cut->nnz, cut->indices, cut->values,
-                               cut->sense, cut->rhs);
+        /* Add cut as new constraint and mark it as generated, not structural. */
+        int row = lp_model_add_constraint(model, cut->nnz, cut->indices, cut->values,
+                                          cut->sense, cut->rhs);
+        if (row < 0) {
+            continue;
+        }
+        if (model->con_origin && row < model->con_origin_capacity) {
+            model->con_origin[row] = -1;
+        }
         if (applied) {
             applied[cuts_applied] = cut;
         }

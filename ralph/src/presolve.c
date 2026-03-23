@@ -1408,6 +1408,9 @@ int presolve_shift_bounds(PresolveContext *ctx, PresolveResult *result) {
         /* Shift bounds */
         model->ub[j] -= lb;
         model->lb[j] = 0.0;
+        if (model->var_shifted && j < model->var_shifted_capacity) {
+            model->var_shifted[j] = 1;
+        }
         count++;
     }
 
@@ -2297,12 +2300,14 @@ static LPModel* build_reduced_model(PresolveContext *ctx,
     reduced->c = (double *)calloc((size_t)n_new, sizeof(double));
     reduced->lb = (double *)malloc((size_t)n_new * sizeof(double));
     reduced->ub = (double *)malloc((size_t)n_new * sizeof(double));
+    reduced->var_shifted = (unsigned char *)calloc((size_t)n_new, sizeof(unsigned char));
     reduced->var_type = (char *)malloc((size_t)n_new * sizeof(char));
     reduced->b = (double *)malloc((size_t)m_new * sizeof(double));
     reduced->sense = (char *)malloc((size_t)m_new * sizeof(char));
+    reduced->con_origin = (int *)malloc((size_t)m_new * sizeof(int));
 
-    if (!reduced->c || !reduced->lb || !reduced->ub ||
-        !reduced->var_type || !reduced->b || !reduced->sense) {
+    if (!reduced->c || !reduced->lb || !reduced->ub || !reduced->var_shifted ||
+        !reduced->var_type || !reduced->b || !reduced->sense || !reduced->con_origin) {
         free(col_map_inv);
         free(row_map_inv);
         lp_model_free(reduced);
@@ -2318,6 +2323,8 @@ static LPModel* build_reduced_model(PresolveContext *ctx,
             reduced->c[new_col] = orig->c[j];
             reduced->lb[new_col] = orig->lb[j];
             reduced->ub[new_col] = orig->ub[j];
+            reduced->var_shifted[new_col] =
+                (orig->var_shifted && j < orig->var_shifted_capacity) ? orig->var_shifted[j] : 0;
             reduced->var_type[new_col] = orig->var_type[j];
             if (orig->var_type[j] == 'I' || orig->var_type[j] == 'B') {
                 reduced->num_integers++;
@@ -2326,6 +2333,7 @@ static LPModel* build_reduced_model(PresolveContext *ctx,
             new_col++;
         }
     }
+    reduced->var_shifted_capacity = n_new;
 
     /* Copy constraint data */
     new_row = 0;
@@ -2333,9 +2341,11 @@ static LPModel* build_reduced_model(PresolveContext *ctx,
         if (!ctx->row_deleted[i]) {
             reduced->b[new_row] = orig->b[i];
             reduced->sense[new_row] = orig->sense[i];
+            reduced->con_origin[new_row] = (orig->con_origin) ? orig->con_origin[i] : i;
             new_row++;
         }
     }
+    reduced->con_origin_capacity = m_new;
 
     /* Build new sparse matrix: count non-zeros per column first */
     int *new_colptr = (int *)calloc((size_t)(n_new + 1), sizeof(int));

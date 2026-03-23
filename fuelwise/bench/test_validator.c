@@ -10,15 +10,25 @@
 
 #include "fw_bench.h"
 #include "fuelwise.h"
+#include "ralph_mip.h"
 #include "sh_units.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <unistd.h>
 
 static int tests_run = 0;
 static int tests_passed = 0;
+
+typedef struct {
+    int solved;
+    double objective;
+    double solve_time_ms;
+} FWGlpkResult;
+
+int fw_glpk_solve(const FWRefuelProblem *problem, FWGlpkResult *result);
 
 #define ASSERT(cond, msg) do { \
     tests_run++; \
@@ -29,6 +39,45 @@ static int tests_passed = 0;
         printf("  FAIL: %s\n", msg); \
     } \
 } while(0)
+
+static int solve_exported_lp_with_ralph_params(
+    const char *lp_path,
+    int presolve,
+    unsigned int presolve_mask,
+    int max_cut_rounds,
+    double *objective_out)
+{
+    RalphMIPModel *model = ralph_mip_create();
+    int rc = -1;
+
+    if (!model) {
+        return -1;
+    }
+    if (ralph_lp_read_lp(model, lp_path) != 0) {
+        ralph_mip_free(model);
+        return -1;
+    }
+
+    ralph_mip_set_int_param(model, "verbose", 0);
+    ralph_mip_set_int_param(model, "presolve", presolve);
+    if (presolve) {
+        ralph_mip_set_int_param(model, "presolve_mask", (int)presolve_mask);
+    }
+    ralph_mip_set_int_param(model, "max_cut_rounds", max_cut_rounds);
+
+    rc = ralph_mip_optimize(model);
+    if (rc == 0 && ralph_mip_get_status(model) == RALPH_LP_STATUS_OPTIMAL) {
+        if (objective_out) {
+            *objective_out = ralph_mip_get_objval(model);
+        }
+        rc = 0;
+    } else {
+        rc = -1;
+    }
+
+    ralph_mip_free(model);
+    return rc;
+}
 
 /* ============================================================================
  * Test: Valid solution passes validation
@@ -290,6 +339,242 @@ void test_min_purchase_milp(void)
     ASSERT(min_purchase_ok, "All purchases >= min_purchase or zero");
 
     fw_free_solution(&solution);
+}
+
+/* ============================================================================
+ * Test: Dominated elimination regression stays characterized or fixed
+ * ============================================================================ */
+void test_dominated_elimination_regression(void)
+{
+    printf("\n=== Test: Dominated Elimination Regression ===\n");
+
+    FWBenchConfig cfg = fw_bench_config_milp_75();
+    cfg.seed = 44;  /* Deterministic benchmark seed with known regression */
+
+    FWBenchInstance instance;
+    memset(&instance, 0, sizeof(instance));
+    ASSERT(fw_bench_generate(&cfg, &instance) == 0, "Generated regression instance");
+
+    FWRefuelSolution legacy;
+    FWRefuelSolution deflt;
+    FWRefuelSolution raw;
+    FWValidationResult legacy_v;
+    FWValidationResult deflt_v;
+    FWValidationResult raw_v;
+    memset(&legacy, 0, sizeof(legacy));
+    memset(&deflt, 0, sizeof(deflt));
+    memset(&raw, 0, sizeof(raw));
+    memset(&legacy_v, 0, sizeof(legacy_v));
+    memset(&deflt_v, 0, sizeof(deflt_v));
+    memset(&raw_v, 0, sizeof(raw_v));
+
+    fw_set_mip_hint_flags(0);
+    int legacy_rc = fw_solve_refuel_milp(&instance.problem, &legacy);
+    int legacy_feasible = (legacy_rc == 0 && legacy.status == FW_STATUS_OPTIMAL) ?
+        fw_validate_solution(&instance.problem, &legacy, instance.curve, instance.weight_profile, &legacy_v) : 0;
+
+    fw_set_mip_hint_flags(FW_HINT_DEFAULT);
+    int deflt_rc = fw_solve_refuel_milp(&instance.problem, &deflt);
+    int deflt_feasible = (deflt_rc == 0 && deflt.status == FW_STATUS_OPTIMAL) ?
+        fw_validate_solution(&instance.problem, &deflt, instance.curve, instance.weight_profile, &deflt_v) : 0;
+
+    fw_set_mip_hint_flags(FW_HINT_NONE);
+    int raw_rc = fw_solve_refuel_milp(&instance.problem, &raw);
+    int raw_feasible = (raw_rc == 0 && raw.status == FW_STATUS_OPTIMAL) ?
+        fw_validate_solution(&instance.problem, &raw, instance.curve, instance.weight_profile, &raw_v) : 0;
+
+    printf("  Legacy all-hints cost: %.6f\n", legacy.total_cost);
+    printf("  Default-hints cost:    %.6f\n", deflt.total_cost);
+    printf("  Raw MILP cost:         %.6f\n", raw.total_cost);
+
+    ASSERT(legacy_feasible, "Legacy all-hints solve is feasible");
+    ASSERT(deflt_feasible, "Default-hints solve is feasible");
+    ASSERT(raw_feasible, "Raw solve is feasible");
+
+    ASSERT(fabs(deflt.total_cost - raw.total_cost) <= 0.01,
+           "Default hints match raw MILP objective");
+    if (legacy.total_cost > raw.total_cost + 0.01) {
+        ASSERT(1, "Legacy dominated elimination still reproduces the objective regression");
+    } else {
+        ASSERT(fabs(legacy.total_cost - raw.total_cost) <= 0.01,
+               "Legacy dominated elimination path now matches the raw MILP objective");
+    }
+
+    fw_set_mip_hint_flags(FW_HINT_DEFAULT);
+    fw_free_solution(&legacy);
+    fw_free_solution(&deflt);
+    fw_free_solution(&raw);
+    fw_bench_free_instance(&instance);
+}
+
+/* ============================================================================
+ * Test: Raw MILP100 seed=43 mismatch isolates to presolve + root cut rounds
+ * ============================================================================ */
+void test_raw_milp100_seed43_cut_presolve_characterization(void)
+{
+    printf("\n=== Test: Raw MILP100 Seed 43 Cut/Presolve Characterization ===\n");
+
+    FWBenchConfig cfg = fw_bench_config_milp_100();
+    cfg.seed = 43;
+
+    FWBenchInstance instance;
+    memset(&instance, 0, sizeof(instance));
+    ASSERT(fw_bench_generate(&cfg, &instance) == 0, "Generated raw MILP100 seed=43 instance");
+
+    char base_path[] = "/tmp/fw_validator_raw_mip100_XXXXXX";
+    int fd = mkstemp(base_path);
+    ASSERT(fd >= 0, "Created temp path for raw LP export");
+    if (fd >= 0) {
+        close(fd);
+        unlink(base_path);
+    }
+
+    char lp_path[96];
+    snprintf(lp_path, sizeof(lp_path), "%s.lp", base_path);
+    ASSERT(fw_export_milp_lp(&instance.problem, lp_path) == 0, "Exported raw MILP LP");
+
+    FWGlpkResult glpk;
+    memset(&glpk, 0, sizeof(glpk));
+    ASSERT(fw_glpk_solve(&instance.problem, &glpk) == 0 && glpk.solved,
+           "GLPK solves exported raw MILP");
+    ASSERT(fabs(glpk.objective - 1667.740585) <= 1e-6,
+           "GLPK objective for seed=43 stays at 1667.740585");
+
+    double baseline_obj = 0.0;
+    double one_cut_obj = 0.0;
+    double no_presolve_obj = 0.0;
+
+    ASSERT(solve_exported_lp_with_ralph_params(lp_path, 1, 0x110F, 3, &baseline_obj) == 0,
+           "Ralph solves exported LP with presolve + 3 cut rounds");
+    ASSERT(solve_exported_lp_with_ralph_params(lp_path, 1, 0x110F, 1, &one_cut_obj) == 0,
+           "Ralph solves exported LP with presolve + 1 cut round");
+    ASSERT(solve_exported_lp_with_ralph_params(lp_path, 0, 0x110F, 3, &no_presolve_obj) == 0,
+           "Ralph solves exported LP with no presolve + 3 cut rounds");
+
+    printf("  GLPK objective:              %.6f\n", glpk.objective);
+    printf("  Ralph presolve=1 cuts=3:     %.6f\n", baseline_obj);
+    printf("  Ralph presolve=1 cuts=1:     %.6f\n", one_cut_obj);
+    printf("  Ralph presolve=0 cuts=3:     %.6f\n", no_presolve_obj);
+
+    ASSERT(fabs(one_cut_obj - glpk.objective) <= 0.01,
+           "One-cut Ralph path matches GLPK objective");
+    ASSERT(fabs(no_presolve_obj - glpk.objective) <= 0.01,
+           "No-presolve Ralph path matches GLPK objective");
+
+    if (fabs(baseline_obj - glpk.objective) <= 0.01) {
+        ASSERT(1, "Baseline presolve+3-cut path now matches GLPK; characterization trigger is fixed");
+    } else {
+        ASSERT(baseline_obj > glpk.objective + 0.01,
+               "Baseline presolve+3-cut path is still worse than GLPK");
+    }
+
+    unlink(lp_path);
+    fw_bench_free_instance(&instance);
+}
+
+/* ============================================================================
+ * Test: Raw MILP100 seed=45 benchmark mismatch remains isolated or fixed
+ * ============================================================================ */
+void test_raw_milp100_seed45_benchmark_characterization(void)
+{
+    printf("\n=== Test: Raw MILP100 Seed 45 Benchmark Characterization ===\n");
+
+    FWBenchConfig cfg = fw_bench_config_milp_100();
+    cfg.seed = 45;
+
+    FWBenchInstance instance;
+    memset(&instance, 0, sizeof(instance));
+    ASSERT(fw_bench_generate(&cfg, &instance) == 0,
+           "Generated raw MILP100 seed=45 benchmark instance");
+
+    FWGlpkResult glpk;
+    memset(&glpk, 0, sizeof(glpk));
+    ASSERT(fw_glpk_solve(&instance.problem, &glpk) == 0 && glpk.solved,
+           "GLPK solves raw MILP100 seed=45 benchmark instance");
+
+    FWRefuelSolution raw;
+    FWValidationResult raw_v;
+    memset(&raw, 0, sizeof(raw));
+    memset(&raw_v, 0, sizeof(raw_v));
+
+    int previous_hint_flags = fw_get_mip_hint_flags();
+    fw_set_mip_hint_flags(FW_HINT_NONE);
+    fw_set_presolve(1, 0x100F);
+
+    int raw_rc = fw_solve_refuel_milp(&instance.problem, &raw);
+    int raw_feasible = (raw_rc == 0 && raw.status == FW_STATUS_OPTIMAL) ?
+        fw_validate_solution(&instance.problem, &raw,
+                             instance.curve, instance.weight_profile, &raw_v) : 0;
+
+    printf("  GLPK objective:         %.6f\n", glpk.objective);
+    printf("  Ralph raw status:       %d\n", raw.status);
+    printf("  Ralph raw objective:    %.6f\n", raw.total_cost);
+
+    ASSERT(raw_rc == 0 && raw.status == FW_STATUS_OPTIMAL,
+           "Ralph raw MILP solves seed=45 benchmark instance");
+    ASSERT(raw_feasible, "Ralph raw MILP seed=45 solution validates");
+
+    if (fabs(raw.total_cost - glpk.objective) <= 0.01) {
+        ASSERT(1, "Raw seed=45 benchmark path now matches GLPK objective");
+    } else {
+        ASSERT(raw.total_cost > glpk.objective + 0.01,
+               "Raw seed=45 benchmark path is still worse than GLPK objective");
+    }
+
+    fw_set_mip_hint_flags(previous_hint_flags);
+    fw_set_presolve(1, 0x100F);
+    fw_free_solution(&raw);
+    fw_bench_free_instance(&instance);
+}
+
+/* ============================================================================
+ * Test: Raw MILP100 seed=125 shifted-presolve MIR characterization
+ * ============================================================================ */
+void test_raw_milp100_seed125_shifted_presolve_mir_regression(void)
+{
+    printf("\n=== Test: Raw MILP100 Seed 125 Shifted-Presolve MIR Regression ===\n");
+
+    FWBenchConfig cfg = fw_bench_config_milp_100();
+    cfg.seed = 125;
+
+    FWBenchInstance instance;
+    memset(&instance, 0, sizeof(instance));
+    ASSERT(fw_bench_generate(&cfg, &instance) == 0,
+           "Generated raw MILP100 seed=125 benchmark instance");
+
+    FWGlpkResult glpk;
+    memset(&glpk, 0, sizeof(glpk));
+    ASSERT(fw_glpk_solve(&instance.problem, &glpk) == 0 && glpk.solved,
+           "GLPK solves raw MILP100 seed=125 benchmark instance");
+
+    FWRefuelSolution raw;
+    FWValidationResult raw_v;
+    memset(&raw, 0, sizeof(raw));
+    memset(&raw_v, 0, sizeof(raw_v));
+
+    int previous_hint_flags = fw_get_mip_hint_flags();
+    fw_set_mip_hint_flags(FW_HINT_NONE);
+    fw_set_presolve(1, 0x100F);
+
+    int raw_rc = fw_solve_refuel_milp(&instance.problem, &raw);
+    int raw_feasible = (raw_rc == 0 && raw.status == FW_STATUS_OPTIMAL) ?
+        fw_validate_solution(&instance.problem, &raw,
+                             instance.curve, instance.weight_profile, &raw_v) : 0;
+
+    printf("  GLPK objective:         %.6f\n", glpk.objective);
+    printf("  Ralph raw status:       %d\n", raw.status);
+    printf("  Ralph raw objective:    %.6f\n", raw.total_cost);
+
+    ASSERT(raw_rc == 0 && raw.status == FW_STATUS_OPTIMAL,
+           "Ralph raw MILP solves seed=125 benchmark instance");
+    ASSERT(raw_feasible, "Ralph raw MILP seed=125 solution validates");
+    ASSERT(fabs(raw.total_cost - glpk.objective) <= 0.01,
+           "Raw seed=125 benchmark path matches GLPK objective");
+
+    fw_set_mip_hint_flags(previous_hint_flags);
+    fw_set_presolve(1, 0x100F);
+    fw_free_solution(&raw);
+    fw_bench_free_instance(&instance);
 }
 
 /* ============================================================================
@@ -1925,6 +2210,10 @@ int main(void)
 
     /* Constraint enforcement tests */
     test_min_purchase_milp();
+    test_dominated_elimination_regression();
+    test_raw_milp100_seed43_cut_presolve_characterization();
+    test_raw_milp100_seed45_benchmark_characterization();
+    test_raw_milp100_seed125_shifted_presolve_mir_regression();
     test_minimum_fuel_maintained();
 
     /* Economic optimality tests */

@@ -300,9 +300,9 @@ int fw_solve_refuel_lp(
 
 /* Global hint flags. Default 0 = all enabled.
  * Set before solving, NOT thread-safe if modified concurrently. */
-static int fw_mip_hint_flags = 0;
+static int fw_mip_hint_flags = FW_HINT_DEFAULT;
 static int fw_presolve = 1;
-static unsigned int fw_presolve_mask = 0x110F;  /* Lightweight: fixed+empty+singleton_rows+bound_tight+shift */
+static unsigned int fw_presolve_mask = 0x100F;  /* Lightweight: fixed+empty+empty_cols+singleton_rows+shift */
 
 void fw_set_mip_hint_flags(int flags) { fw_mip_hint_flags = flags; }
 int fw_get_mip_hint_flags(void) { return fw_mip_hint_flags; }
@@ -856,8 +856,8 @@ int fw_solve_refuel_milp(
     int fw_debug = (getenv("FW_DEBUG") != NULL);
     ralph_mip_set_int_param(model, "verbose", fw_debug ? 2 : (fw_verbose ? 1 : 0));
     ralph_mip_set_int_param(model, "max_cut_rounds", 3);
+    ralph_mip_set_int_param(model, "presolve", fw_presolve ? 1 : 0);
     if (fw_presolve) {
-        ralph_mip_set_int_param(model, "presolve", 1);
         ralph_mip_set_int_param(model, "presolve_mask", (int)fw_presolve_mask);
     }
     int ret = ralph_mip_optimize(model);
