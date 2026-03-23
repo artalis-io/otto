@@ -191,10 +191,14 @@ typedef struct {
     /* Constraints: Ax (sense) b */
     double *b;              /* RHS values */
     char *sense;            /* 'L', 'E', 'G' */
+    int *con_origin;        /* >=0 original structural row id, -1 generated cut row */
+    int con_origin_capacity;/* Allocated size of con_origin array */
 
     /* Variable bounds: lb <= x <= ub */
     double *lb;             /* Lower bounds */
     double *ub;             /* Upper bounds */
+    unsigned char *var_shifted; /* 1 if presolve shifted x := x - lb on this variable */
+    int var_shifted_capacity; /* Allocated size of var_shifted array */
 
     /* Variable types */
     char *var_type;         /* 'C', 'I', 'B' */

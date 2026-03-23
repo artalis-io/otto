@@ -130,7 +130,7 @@ int fw_get_benders_threshold(void);
  * MIP Hint Flags
  *
  * Control which domain-specific MIP enhancements are active.
- * Default (0) enables all hints. Set flags to disable specific hints.
+ * Set flags to disable specific hints.
  * Useful for benchmarking the impact of individual optimizations.
  * NOT thread-safe if modified concurrently with solving.
  * ============================================================================ */
@@ -142,7 +142,15 @@ int fw_get_benders_threshold(void);
 #define FW_HINT_NO_DOMINATED_ELIM (1 << 4)  /* Disable dominated station elimination */
 #define FW_HINT_NO_SYMMETRY_BREAK (1 << 5)  /* Disable symmetry-breaking constraints */
 
-/* Disable all hints (raw MILP, no domain intelligence) */
+/*
+ * Default runtime hint set.
+ *
+ * Dominated-station elimination is disabled by default because it can remove
+ * stations that are still needed for the true optimum on generated benchmarks.
+ */
+#define FW_HINT_DEFAULT           (FW_HINT_NO_DOMINATED_ELIM)
+
+/* Disable all FuelWise hints (raw MILP, no domain intelligence) */
 #define FW_HINT_NONE              (0x3F)
 
 void fw_set_mip_hint_flags(int flags);

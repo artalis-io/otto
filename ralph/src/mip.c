@@ -31,6 +31,21 @@ static int mip_env_flag_enabled(const char *name) {
     return strcmp(value, "0") != 0;
 }
 
+static int mip_env_int_or_default(const char *name, int default_value) {
+    const char *value;
+    char *end = NULL;
+    long parsed;
+
+    if (!name || !*name) return default_value;
+    value = getenv(name);
+    if (!value || !*value) return default_value;
+    parsed = strtol(value, &end, 10);
+    if (end == value || (end && *end != '\0')) return default_value;
+    if (parsed < 0) return 0;
+    if (parsed > 1000000L) return 1000000;
+    return (int)parsed;
+}
+
 /* Apply P5/P6 feature flags and iteration budget from MIP solver to LP sub-solver.
  * MIP LP solves should NEVER run for 1M+ iterations — if v2 cycles for >2000
  * iterations on a node LP, something is wrong and cold-start fallback handles it. */
@@ -547,12 +562,36 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     /* Detect SCP structure for specialized cuts, heuristics, and Lagrangian */
     solver->use_scp_solver = 0;
     solver->enable_spp_root_cuts = RALPH_ENABLE_SPP_ROOT_CUTS_DEFAULT;
+    solver->enable_root_gomory_cuts = 1;
+    solver->enable_root_mir_cuts = 1;
+    solver->enable_root_cover_cuts = 1;
+    solver->root_gomory_max_rounds = 1000000;
+    solver->root_mir_max_rounds = 1000000;
+    solver->root_cover_max_rounds = 1000000;
     solver->spp_ctx = NULL;
     solver->scp_cuts_generated = 0;
     solver->lagrangian_bound = -RALPH_INFINITY;
     if (mip_env_flag_enabled("RALPH_ENABLE_SPP_ROOT_CUTS")) {
         solver->enable_spp_root_cuts = 1;
     }
+    if (mip_env_flag_enabled("RALPH_DISABLE_GOMORY_ROOT_CUTS")) {
+        solver->enable_root_gomory_cuts = 0;
+    }
+    if (mip_env_flag_enabled("RALPH_DISABLE_MIR_ROOT_CUTS")) {
+        solver->enable_root_mir_cuts = 0;
+    }
+    if (mip_env_flag_enabled("RALPH_DISABLE_COVER_ROOT_CUTS")) {
+        solver->enable_root_cover_cuts = 0;
+    }
+    solver->root_gomory_max_rounds = mip_env_int_or_default("RALPH_ROOT_GOMORY_MAX_ROUNDS",
+                                                             solver->enable_root_gomory_cuts ? 1000000 : 0);
+    solver->root_mir_max_rounds = mip_env_int_or_default("RALPH_ROOT_MIR_MAX_ROUNDS",
+                                                         solver->enable_root_mir_cuts ? 1000000 : 0);
+    solver->root_cover_max_rounds = mip_env_int_or_default("RALPH_ROOT_COVER_MAX_ROUNDS",
+                                                           solver->enable_root_cover_cuts ? 1000000 : 0);
+    if (solver->root_gomory_max_rounds <= 0) solver->enable_root_gomory_cuts = 0;
+    if (solver->root_mir_max_rounds <= 0) solver->enable_root_mir_cuts = 0;
+    if (solver->root_cover_max_rounds <= 0) solver->enable_root_cover_cuts = 0;
 
     if (detect_special && is_scp_model(model)) {
         solver->use_scp_solver = 1;
@@ -1270,6 +1309,9 @@ static int diving_heuristic(MIPSolver *solver) {
 
 static int rc_fix_node(MIPSolver *solver, BBNode *node) {
     if (!solver->has_incumbent || !solver->lp_solver || !solver->lp_solver->tableau) {
+        return 0;
+    }
+    if (mip_env_flag_enabled("RALPH_DISABLE_RC_FIX")) {
         return 0;
     }
 
@@ -2442,7 +2484,7 @@ static int solve_root_node(MIPSolver *solver) {
     int max_cuts_this_round = solver->max_cuts_per_round;
     int skip_spp_root_cuts =
         solver->spp_ctx && (!solver->enable_spp_root_cuts || solver->has_incumbent);
-    int disable_generic_mir = 0;
+    int disable_generic_mir = solver->enable_root_mir_cuts ? 0 : 1;
     int disable_spp_root_cuts = 0;
 
     if (solver->max_cut_rounds <= 0) {
@@ -2489,12 +2531,14 @@ static int solve_root_node(MIPSolver *solver) {
             solver->scp_cuts_generated += scp_cuts;
         } else {
             /* Generate Gomory cuts (from integer basic variable rows) */
-            gomory_added = generate_gomory_cuts(solver, solver->cut_pool);
-            cuts_added += gomory_added;
-            solver->root_gomory_cuts_generated += gomory_added;
+            if (solver->enable_root_gomory_cuts && cut_rounds < solver->root_gomory_max_rounds) {
+                gomory_added = generate_gomory_cuts(solver, solver->cut_pool);
+                cuts_added += gomory_added;
+                solver->root_gomory_cuts_generated += gomory_added;
+            }
 
             /* Generate MIR cuts (from continuous basic variable rows) */
-            if (!disable_generic_mir) {
+            if (!disable_generic_mir && cut_rounds < solver->root_mir_max_rounds) {
                 double t_mir_start = mip_cpu_time_now();
                 mir_added = generate_mir_cuts(solver, solver->cut_pool);
                 solver->time_root_mir += mip_cpu_time_now() - t_mir_start;
@@ -2503,7 +2547,7 @@ static int solve_root_node(MIPSolver *solver) {
             solver->root_mir_cuts_generated += mir_added;
 
             /* Generate cover cuts (from knapsack constraints) */
-            {
+            if (solver->enable_root_cover_cuts && cut_rounds < solver->root_cover_max_rounds) {
                 double t_cover_start = mip_cpu_time_now();
                 cover_added = generate_cover_cuts(solver, solver->cut_pool);
                 solver->time_root_cover += mip_cpu_time_now() - t_cover_start;
@@ -2982,6 +3026,15 @@ void mip_print_stats(const MIPSolver *solver) {
            solver->root_cut_rounds, solver->root_gomory_cuts_generated,
            solver->root_mir_cuts_generated, solver->root_cover_cuts_generated,
            solver->root_scp_cuts_generated);
+    LP_LOG_STDOUT("Root cut families: gomory=%s mir=%s cover=%s spp_root=%s\n",
+           solver->enable_root_gomory_cuts ? "on" : "off",
+           solver->enable_root_mir_cuts ? "on" : "off",
+           solver->enable_root_cover_cuts ? "on" : "off",
+           solver->enable_spp_root_cuts ? "on" : "off");
+    LP_LOG_STDOUT("Root cut round caps: gomory=%d mir=%d cover=%d\n",
+           solver->root_gomory_max_rounds,
+           solver->root_mir_max_rounds,
+           solver->root_cover_max_rounds);
     LP_LOG_STDOUT("Gomory rows: scanned=%d fractional=%d ranked=%d built=%d dup=%d reject(empty=%d sign=%d viol=%d)\n",
            solver->root_gomory_rows_scanned, solver->root_gomory_rows_fractional,
            solver->root_gomory_rows_ranked, solver->root_gomory_rows_built,

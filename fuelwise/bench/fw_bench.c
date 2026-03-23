@@ -87,6 +87,8 @@ int fw_bench_run(
         /* Solve */
         FWRefuelSolution solution;
         memset(&solution, 0, sizeof(solution));
+        int restore_hint_flags = 0;
+        int previous_hint_flags = 0;
 
         double t0 = get_time_ms();
 
@@ -96,6 +98,12 @@ int fw_bench_run(
         /* Force MILP/Benders if min_purchase requires binary decisions */
         if (effective_solver == FW_SOLVER_LP && instance.problem.min_purchase > 0.01) {
             effective_solver = FW_SOLVER_MILP;
+        }
+
+        if (effective_solver == FW_SOLVER_MILP && config->compare_raw) {
+            previous_hint_flags = fw_get_mip_hint_flags();
+            fw_set_mip_hint_flags(FW_HINT_NONE);
+            restore_hint_flags = 1;
         }
 
         int rc;
@@ -110,6 +118,10 @@ int fw_bench_run(
             default:
                 rc = fw_solve_refuel_lp(&instance.problem, &solution);
                 break;
+        }
+
+        if (restore_hint_flags) {
+            fw_set_mip_hint_flags(previous_hint_flags);
         }
 
         double solve_time = get_time_ms() - t0;

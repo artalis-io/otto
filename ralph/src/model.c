@@ -92,8 +92,10 @@ void lp_model_free(LPModel *model) {
     SAFE_FREE(model->c);
     SAFE_FREE(model->b);
     SAFE_FREE(model->sense);
+    SAFE_FREE(model->con_origin);
     SAFE_FREE(model->lb);
     SAFE_FREE(model->ub);
+    SAFE_FREE(model->var_shifted);
     SAFE_FREE(model->var_type);
 
     if (model->var_names) {
@@ -147,6 +149,12 @@ int lp_model_add_var(LPModel *model, double lb, double ub, double obj, char type
     if (!new_ub) return -1;
     model->ub = new_ub;
 
+    unsigned char *new_var_shifted =
+        (unsigned char*)realloc(model->var_shifted, new_capacity * sizeof(unsigned char));
+    if (!new_var_shifted) return -1;
+    model->var_shifted = new_var_shifted;
+    model->var_shifted_capacity = new_capacity;
+
     char *new_type = (char*)realloc(model->var_type, new_capacity * sizeof(char));
     if (!new_type) return -1;
     model->var_type = new_type;
@@ -154,6 +162,7 @@ int lp_model_add_var(LPModel *model, double lb, double ub, double obj, char type
     model->c[idx] = obj;
     model->lb[idx] = lb;
     model->ub[idx] = ub;
+    model->var_shifted[idx] = 0;
     model->var_type[idx] = type;
 
     if (type == 'I' || type == 'B') {
@@ -337,8 +346,14 @@ int lp_model_add_constraint(LPModel *model, int nnz, const int *indices,
     if (!new_sense) return -1;
     model->sense = new_sense;
 
+    int *new_con_origin = (int*)realloc(model->con_origin, new_capacity * sizeof(int));
+    if (!new_con_origin) return -1;
+    model->con_origin = new_con_origin;
+    model->con_origin_capacity = new_capacity;
+
     model->b[idx] = rhs;
     model->sense[idx] = sense;
+    model->con_origin[idx] = idx;
 
     model->num_cons++;
     bs->con_count++;
@@ -517,6 +532,10 @@ int lp_model_delete_constraint(LPModel *model, int constraint) {
     if (tail > 0) {
         memmove(&model->b[constraint], &model->b[constraint + 1], (size_t)tail * sizeof(double));
         memmove(&model->sense[constraint], &model->sense[constraint + 1], (size_t)tail * sizeof(char));
+        if (model->con_origin) {
+            memmove(&model->con_origin[constraint], &model->con_origin[constraint + 1],
+                    (size_t)tail * sizeof(int));
+        }
     }
 
     if (model->con_names && constraint < model->con_names_capacity) {
@@ -578,6 +597,10 @@ int lp_model_delete_var(LPModel *model, int var) {
         memmove(&model->c[var], &model->c[var + 1], (size_t)tail * sizeof(double));
         memmove(&model->lb[var], &model->lb[var + 1], (size_t)tail * sizeof(double));
         memmove(&model->ub[var], &model->ub[var + 1], (size_t)tail * sizeof(double));
+        if (model->var_shifted) {
+            memmove(&model->var_shifted[var], &model->var_shifted[var + 1],
+                    (size_t)tail * sizeof(unsigned char));
+        }
         memmove(&model->var_type[var], &model->var_type[var + 1], (size_t)tail * sizeof(char));
     }
 
@@ -678,24 +701,36 @@ LPModel* lp_model_copy(const LPModel *src) {
         dst->c = (double*)calloc(src->num_vars, sizeof(double));
         dst->lb = (double*)calloc(src->num_vars, sizeof(double));
         dst->ub = (double*)calloc(src->num_vars, sizeof(double));
+        dst->var_shifted = (unsigned char*)calloc(src->num_vars, sizeof(unsigned char));
         dst->var_type = (char*)calloc(src->num_vars, sizeof(char));
 
-        if (!dst->c || !dst->lb || !dst->ub || !dst->var_type) goto error;
+        if (!dst->c || !dst->lb || !dst->ub || !dst->var_shifted || !dst->var_type) goto error;
 
         memcpy(dst->c, src->c, src->num_vars * sizeof(double));
         memcpy(dst->lb, src->lb, src->num_vars * sizeof(double));
         memcpy(dst->ub, src->ub, src->num_vars * sizeof(double));
+        if (src->var_shifted) {
+            memcpy(dst->var_shifted, src->var_shifted, src->num_vars * sizeof(unsigned char));
+        }
+        dst->var_shifted_capacity = src->num_vars;
         memcpy(dst->var_type, src->var_type, src->num_vars * sizeof(char));
     }
 
     if (src->num_cons > 0) {
         dst->b = (double*)calloc(src->num_cons, sizeof(double));
         dst->sense = (char*)calloc(src->num_cons, sizeof(char));
+        dst->con_origin = (int*)calloc(src->num_cons, sizeof(int));
 
-        if (!dst->b || !dst->sense) goto error;
+        if (!dst->b || !dst->sense || !dst->con_origin) goto error;
 
         memcpy(dst->b, src->b, src->num_cons * sizeof(double));
         memcpy(dst->sense, src->sense, src->num_cons * sizeof(char));
+        if (src->con_origin) {
+            memcpy(dst->con_origin, src->con_origin, src->num_cons * sizeof(int));
+        } else {
+            for (int i = 0; i < src->num_cons; i++) dst->con_origin[i] = i;
+        }
+        dst->con_origin_capacity = src->num_cons;
     }
 
     /* Copy names if present */

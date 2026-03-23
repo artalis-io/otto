@@ -344,6 +344,12 @@ typedef struct {
     /* SCP-specific optimizations (for set covering/partitioning MIPs) */
     int use_scp_solver;          /* 1 if SCP structure detected and enabled */
     int enable_spp_root_cuts;    /* Experimental exact-cover root cuts toggle */
+    int enable_root_gomory_cuts; /* Root generic Gomory family toggle (env-gated) */
+    int enable_root_mir_cuts;    /* Root generic MIR family toggle (env-gated) */
+    int enable_root_cover_cuts;  /* Root generic cover family toggle (env-gated) */
+    int root_gomory_max_rounds;  /* Max root rounds where Gomory is active (env-gated, 0=off) */
+    int root_mir_max_rounds;     /* Max root rounds where MIR is active (env-gated, 0=off) */
+    int root_cover_max_rounds;   /* Max root rounds where cover is active (env-gated, 0=off) */
     SPPContext *spp_ctx;         /* Exact-cover context for partitioning heuristics/cuts */
     int scp_cuts_generated;      /* Number of SCP-specific cuts generated */
     double lagrangian_bound;     /* Best Lagrangian dual bound (if computed) */
