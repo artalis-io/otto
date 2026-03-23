@@ -5,8 +5,11 @@ Comprehensive testing framework for FuelWise solver correctness, including probl
 ## Quick Start
 
 ```bash
-# Build and run validator tests (123 tests)
+# Build and run validator tests
 make validator-test
+
+# Run the full regression harness
+make regression-test
 
 # Run benchmark scenarios
 make test           # All scenarios, 10 runs each
@@ -33,6 +36,15 @@ make quick          # Highway only, 5 runs
 | **Stop Costs** | 3 | Stop cost in total, MILP consolidation |
 | **Advanced** | 4 | Determinism, numerical edge cases, weight-dependent solving, API round-trip |
 
+### Full Regression Harness (`make regression-test`)
+
+Runs:
+- `fuelwise/bench/test_validator`
+- `ralph` complete LP regression suite
+- `ralph` complete MIP regression suite
+
+This is the full cross-project regression gate for FuelWise MILP correctness work.
+
 ### Benchmark Scenarios
 
 | Scenario | Route | Tank | Description |
@@ -46,7 +58,7 @@ make quick          # Highway only, 5 runs
 ## Architecture
 
 ```
-test_validator.c   # Validator tests (41 tests)
+test_validator.c   # FuelWise validator and regression tests
 fw_bench.c         # Benchmark driver, statistics
 fw_gen.c           # Problem generation, preset configs
 fw_validate.c      # Independent solution validator
@@ -161,4 +173,9 @@ make -C fuelwise test  # Runs both unit tests AND validator tests
 To run only validator tests:
 ```bash
 make -C fuelwise/bench validator-test
+```
+
+To run the full regression harness:
+```bash
+make -C fuelwise/bench regression-test
 ```

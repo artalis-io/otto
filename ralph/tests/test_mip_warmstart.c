@@ -105,6 +105,12 @@ int main(void) {
     ASSERT(basis_ws != NULL, "Basis warm-start model created");
     if (!basis_ws) return 1;
 
+    /* This telemetry check is about node LP warm reuse, not root cutting.
+     * Disable root cuts so the tiny model is forced through branch-and-bound
+     * instead of being closed directly at the root relaxation. */
+    ASSERT(ralph_test_set_int_param(basis_ws, "max_cut_rounds", 0) == 0,
+           "Basis warm-start telemetry case disables root cuts");
+
     ASSERT(ralph_test_optimize(basis_ws) == 0, "Basis warm-start optimize succeeds");
     ASSERT(ralph_test_get_status(basis_ws) == RALPH_STATUS_OPTIMAL, "Basis warm-start status OPTIMAL");
     ASSERT_NEAR(ralph_test_get_objval(basis_ws), 1.0, 1e-9, "Basis warm-start objective is 1.0");
@@ -113,6 +119,7 @@ int main(void) {
     ASSERT(mip != NULL, "MIP solver available for warm-basis telemetry");
     if (mip) {
         ASSERT(mip->simplex_nodes_solved > 0, "Branch-and-bound solved simplex node LPs");
+        ASSERT(mip->node_lp_warm_solves > 0, "Branch-and-bound recorded warm node LP re-solves");
         ASSERT((mip->node_basis_warm_applied > 0) || (mip->node_basis_staged > 0),
                "Node LP solves used LP warm-basis API");
     }
