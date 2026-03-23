@@ -442,6 +442,22 @@ static int fw_reach_cut_generate(
 }
 
 /*
+ * Reach cuts help the tight-tank benchmark family, but once the station set gets
+ * much larger they mostly add root-LP overhead without shrinking the tree.
+ * Until Ralph has true node cut application, keep them on for the smaller
+ * reach-constrained cases and skip them for the larger scalability/stress ones.
+ */
+static int fw_should_enable_reach_cuts(const FWRefuelProblem *problem,
+                                       int k,
+                                       const FWReachCutContext *ctx)
+{
+    (void)problem;
+
+    if (!ctx || ctx->num_intervals <= 0) return 0;
+    return k <= 80;
+}
+
+/*
  * Configure MIP hints on a RalphLPModel: priorities, directions, cut callback,
  * presolve (mandatory station fixing, dominated station elimination),
  * and symmetry-breaking constraints.
@@ -524,7 +540,8 @@ static void fw_setup_mip_hints(RalphMIPModel *model,
 
     fw_compute_reach_intervals(cut_ctx, problem, k);
 
-    if (!(flags & FW_HINT_NO_REACH_CUTS) && cut_ctx->num_intervals > 0) {
+    if (!(flags & FW_HINT_NO_REACH_CUTS) &&
+        fw_should_enable_reach_cuts(problem, k, cut_ctx)) {
         RalphMIPCutCallback cb;
         cb.generate_cuts = fw_reach_cut_generate;
         cb.user_data = cut_ctx;

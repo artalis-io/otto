@@ -3153,29 +3153,30 @@ void test_cut_callback(void) {
     cut_callback_count = 0;
     cut_callback_cuts_added = 0;
 
-    /* Simple MIP: min x + y
-     * s.t. x + y >= 1
+    /* Simple MIP with fractional root LP: max x + y
+     * s.t. 2x + 2y <= 3
      *      x, y binary
      */
     RalphModel *model = ralph_test_create();
     ASSERT(model != NULL, "Model created");
 
-    ralph_test_set_obj_sense(model, RALPH_MINIMIZE);
+    ralph_test_set_obj_sense(model, RALPH_MAXIMIZE);
 
     ralph_test_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);  /* x */
     ralph_test_add_var(model, 0.0, 1.0, 1.0, RALPH_BINARY);  /* y */
 
     int idx[] = {0, 1};
-    double val[] = {1.0, 1.0};
-    ralph_test_add_constraint(model, 2, idx, val, RALPH_GREATER_EQUAL, 1.0);
+    double val[] = {2.0, 2.0};
+    ralph_test_add_constraint(model, 2, idx, val, RALPH_LESS_EQUAL, 3.0);
 
     /* Set up cut callback */
-    double threshold = 0.0;  /* Add cut if x[0] > 0 */
+    double threshold = -1.0;  /* Add cut on the first fractional root LP callback */
     RalphCutCallback callback = {
         .generate_cuts = test_cut_callback_fn,
         .user_data = &threshold
     };
     ralph_test_set_cut_callback(model, &callback);
+    ralph_test_set_int_param(model, "max_cut_rounds", 3);
 
     /* Solve */
     ralph_test_optimize(model);
