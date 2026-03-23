@@ -96,6 +96,7 @@ void lp_model_free(LPModel *model) {
     SAFE_FREE(model->lb);
     SAFE_FREE(model->ub);
     SAFE_FREE(model->var_shifted);
+    SAFE_FREE(model->var_shift);
     SAFE_FREE(model->var_type);
 
     if (model->var_names) {
@@ -155,6 +156,12 @@ int lp_model_add_var(LPModel *model, double lb, double ub, double obj, char type
     model->var_shifted = new_var_shifted;
     model->var_shifted_capacity = new_capacity;
 
+    double *new_var_shift =
+        (double*)realloc(model->var_shift, new_capacity * sizeof(double));
+    if (!new_var_shift) return -1;
+    model->var_shift = new_var_shift;
+    model->var_shift_capacity = new_capacity;
+
     char *new_type = (char*)realloc(model->var_type, new_capacity * sizeof(char));
     if (!new_type) return -1;
     model->var_type = new_type;
@@ -163,6 +170,7 @@ int lp_model_add_var(LPModel *model, double lb, double ub, double obj, char type
     model->lb[idx] = lb;
     model->ub[idx] = ub;
     model->var_shifted[idx] = 0;
+    model->var_shift[idx] = 0.0;
     model->var_type[idx] = type;
 
     if (type == 'I' || type == 'B') {
@@ -601,6 +609,10 @@ int lp_model_delete_var(LPModel *model, int var) {
             memmove(&model->var_shifted[var], &model->var_shifted[var + 1],
                     (size_t)tail * sizeof(unsigned char));
         }
+        if (model->var_shift) {
+            memmove(&model->var_shift[var], &model->var_shift[var + 1],
+                    (size_t)tail * sizeof(double));
+        }
         memmove(&model->var_type[var], &model->var_type[var + 1], (size_t)tail * sizeof(char));
     }
 
@@ -702,9 +714,11 @@ LPModel* lp_model_copy(const LPModel *src) {
         dst->lb = (double*)calloc(src->num_vars, sizeof(double));
         dst->ub = (double*)calloc(src->num_vars, sizeof(double));
         dst->var_shifted = (unsigned char*)calloc(src->num_vars, sizeof(unsigned char));
+        dst->var_shift = (double*)calloc(src->num_vars, sizeof(double));
         dst->var_type = (char*)calloc(src->num_vars, sizeof(char));
 
-        if (!dst->c || !dst->lb || !dst->ub || !dst->var_shifted || !dst->var_type) goto error;
+        if (!dst->c || !dst->lb || !dst->ub || !dst->var_shifted || !dst->var_shift ||
+            !dst->var_type) goto error;
 
         memcpy(dst->c, src->c, src->num_vars * sizeof(double));
         memcpy(dst->lb, src->lb, src->num_vars * sizeof(double));
@@ -713,6 +727,10 @@ LPModel* lp_model_copy(const LPModel *src) {
             memcpy(dst->var_shifted, src->var_shifted, src->num_vars * sizeof(unsigned char));
         }
         dst->var_shifted_capacity = src->num_vars;
+        if (src->var_shift) {
+            memcpy(dst->var_shift, src->var_shift, src->num_vars * sizeof(double));
+        }
+        dst->var_shift_capacity = src->num_vars;
         memcpy(dst->var_type, src->var_type, src->num_vars * sizeof(char));
     }
 

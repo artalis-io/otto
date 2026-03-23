@@ -199,6 +199,8 @@ typedef struct {
     double *ub;             /* Upper bounds */
     unsigned char *var_shifted; /* 1 if presolve shifted x := x - lb on this variable */
     int var_shifted_capacity; /* Allocated size of var_shifted array */
+    double *var_shift;      /* Original lower-bound shift applied by presolve */
+    int var_shift_capacity; /* Allocated size of var_shift array */
 
     /* Variable types */
     char *var_type;         /* 'C', 'I', 'B' */

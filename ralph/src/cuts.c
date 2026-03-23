@@ -94,6 +94,36 @@ static int model_has_shifted_continuous(const LPModel *model,
     return 0;
 }
 
+static double model_var_shift_amount(const LPModel *model, int j)
+{
+    if (!model || !model->var_shift || j < 0 || j >= model->var_shift_capacity) {
+        return 0.0;
+    }
+    return model->var_shift[j];
+}
+
+static double cmir_row_rhs_in_original_space(const LPModel *model,
+                                             const double *row_coefs,
+                                             double shifted_rhs,
+                                             int num_orig,
+                                             int basic_var)
+{
+    double rhs = shifted_rhs;
+
+    if (!model || !row_coefs || num_orig <= 0) return rhs;
+
+    if (basic_var >= 0 && basic_var < num_orig) {
+        rhs += model_var_shift_amount(model, basic_var);
+    }
+
+    for (int j = 0; j < num_orig; j++) {
+        if (fabs(row_coefs[j]) < RALPH_ZERO_TOL) continue;
+        rhs += row_coefs[j] * model_var_shift_amount(model, j);
+    }
+
+    return rhs;
+}
+
 typedef enum {
     GMI_REJECT_NONE = 0,
     GMI_REJECT_EMPTY = 1,
@@ -806,6 +836,7 @@ static int cmir_extract_source_row(
     SimplexTableau *tab, int basic_pos, const int *is_integer,
     double *row_coefs, double *row_rhs,
     int aggr_depth, int *used_rows, const double *x_val,
+    const double *lb_val, const double *ub_val,
     int *used_shifted_pivot_out)
 {
     int m = tab->m;
@@ -890,6 +921,7 @@ static int cmir_extract_source_row(
          * Adding it to LHS causes degenerate complement decisions after
          * presolve tightens its bounds. */
         *row_rhs = tab->x[basic_var] + (*row_rhs);
+        *row_rhs = cmir_row_rhs_in_original_space(model, row_coefs, *row_rhs, num_orig, basic_var);
 
         free(pi);
 
@@ -915,10 +947,10 @@ static int cmir_extract_source_row(
     for (int j = 0; j < num_orig; j++) {
         if (fabs(row_coefs[j]) < CMIR_PIVOT_MIN) continue;
         if (is_integer && is_integer[j]) continue;
-        double dist_lb = (tab->lb_ext[j] > -RALPH_INFINITY + 1.0) ?
-                          x_val[j] - tab->lb_ext[j] : RALPH_INFINITY;
-        double dist_ub = (tab->ub_ext[j] < RALPH_INFINITY - 1.0) ?
-                          tab->ub_ext[j] - x_val[j] : RALPH_INFINITY;
+        double dist_lb = (lb_val && lb_val[j] > -RALPH_INFINITY + 1.0) ?
+                          x_val[j] - lb_val[j] : RALPH_INFINITY;
+        double dist_ub = (ub_val && ub_val[j] < RALPH_INFINITY - 1.0) ?
+                          ub_val[j] - x_val[j] : RALPH_INFINITY;
 
         if (dist_lb < CMIR_PIVOT_MIN && dist_ub < CMIR_PIVOT_MIN) continue;
 
@@ -995,7 +1027,11 @@ static int cmir_extract_source_row(
         if (fabs(row_coefs[j]) < RALPH_ZERO_TOL)
             row_coefs[j] = 0.0;
     }
-    *row_rhs += scale * model->b[pivot_row];
+    {
+        double pivot_rhs = model->b[pivot_row];
+        pivot_rhs = cmir_row_rhs_in_original_space(model, con_row, pivot_rhs, num_orig, -1);
+        *row_rhs += scale * pivot_rhs;
+    }
 
     used_rows[pivot_row] = 1;
     free(con_row);
@@ -1540,10 +1576,9 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
     int m = tab->m;
     LPModel *row_model = tab->model;
 
-    /* c-MIR remains available for targeted debugging, but it is currently
-     * disabled by default because multiple presolved MILP regressions still
-     * isolate to this family. Set RALPH_ENABLE_MIR_ROOT_CUTS=1 to opt back in
-     * while debugging specific instances. */
+    /* c-MIR is kept opt-in for now. The shifted-presolve correctness path is
+     * repaired below, but MIR is still expensive on the current benchmark
+     * families, so targeted runs should enable it explicitly. */
     if (!cut_env_flag_enabled("RALPH_ENABLE_MIR_ROOT_CUTS")) {
         return 0;
     }
@@ -1556,10 +1591,6 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
     int max_aggr = cut_env_int_or_default("RALPH_CMIR_MAX_AGGR", CMIR_MAX_AGGR);
     if (max_aggr < 0) max_aggr = 0;
     if (max_aggr > CMIR_MAX_AGGR) max_aggr = CMIR_MAX_AGGR;
-    if (model_has_shifted_continuous(row_model, solver->is_integer, num_orig)) {
-        return 0;
-    }
-
     /* Allocate CMIRWork arrays once */
     CMIRWork work;
     memset(&work, 0, sizeof(work));
@@ -1583,9 +1614,10 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
 
     /* Snapshot LP solution and bounds for original variables */
     for (int j = 0; j < num_orig; j++) {
-        work.x_val[j] = tab->x[j];
-        work.lb[j] = tab->lb_ext[j];
-        work.ub[j] = tab->ub_ext[j];
+        double shift = model_var_shift_amount(row_model, j);
+        work.x_val[j] = tab->x[j] + shift;
+        work.lb[j] = tab->lb_ext[j] + shift;
+        work.ub[j] = tab->ub_ext[j] + shift;
     }
 
     if (candidate_cap < MIP_MIR_PREFILTER_MIN_ROWS) {
@@ -1661,7 +1693,7 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
             /* Extract base row */
             if (!cmir_extract_source_row(tab, k, solver->is_integer,
                                          work.a, &work.b, 0, used_rows,
-                                         work.x_val, NULL)) {
+                                         work.x_val, work.lb, work.ub, NULL)) {
                 break;  /* Base extraction failed, skip this row */
             }
 
@@ -1672,7 +1704,8 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
                 int step_used_shifted_pivot = 0;
                 if (!cmir_extract_source_row(tab, k, solver->is_integer,
                                              work.a, &work.b, 1, used_rows,
-                                             work.x_val, &step_used_shifted_pivot)) {
+                                             work.x_val, work.lb, work.ub,
+                                             &step_used_shifted_pivot)) {
                     aggr_ok = 0;
                     break;
                 }
@@ -1681,7 +1714,6 @@ int generate_mir_cuts(MIPSolver *solver, CutPool *pool)
                 }
             }
             if (!aggr_ok) continue;
-            if (used_shifted_pivot) continue;
 
             /* Bound substitution */
             cmir_bound_substitute(&work);

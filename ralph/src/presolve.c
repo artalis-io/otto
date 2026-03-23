@@ -1411,6 +1411,9 @@ int presolve_shift_bounds(PresolveContext *ctx, PresolveResult *result) {
         if (model->var_shifted && j < model->var_shifted_capacity) {
             model->var_shifted[j] = 1;
         }
+        if (model->var_shift && j < model->var_shift_capacity) {
+            model->var_shift[j] += lb;
+        }
         count++;
     }
 
@@ -2301,12 +2304,14 @@ static LPModel* build_reduced_model(PresolveContext *ctx,
     reduced->lb = (double *)malloc((size_t)n_new * sizeof(double));
     reduced->ub = (double *)malloc((size_t)n_new * sizeof(double));
     reduced->var_shifted = (unsigned char *)calloc((size_t)n_new, sizeof(unsigned char));
+    reduced->var_shift = (double *)calloc((size_t)n_new, sizeof(double));
     reduced->var_type = (char *)malloc((size_t)n_new * sizeof(char));
     reduced->b = (double *)malloc((size_t)m_new * sizeof(double));
     reduced->sense = (char *)malloc((size_t)m_new * sizeof(char));
     reduced->con_origin = (int *)malloc((size_t)m_new * sizeof(int));
 
     if (!reduced->c || !reduced->lb || !reduced->ub || !reduced->var_shifted ||
+        !reduced->var_shift ||
         !reduced->var_type || !reduced->b || !reduced->sense || !reduced->con_origin) {
         free(col_map_inv);
         free(row_map_inv);
@@ -2325,6 +2330,8 @@ static LPModel* build_reduced_model(PresolveContext *ctx,
             reduced->ub[new_col] = orig->ub[j];
             reduced->var_shifted[new_col] =
                 (orig->var_shifted && j < orig->var_shifted_capacity) ? orig->var_shifted[j] : 0;
+            reduced->var_shift[new_col] =
+                (orig->var_shift && j < orig->var_shift_capacity) ? orig->var_shift[j] : 0.0;
             reduced->var_type[new_col] = orig->var_type[j];
             if (orig->var_type[j] == 'I' || orig->var_type[j] == 'B') {
                 reduced->num_integers++;
@@ -2334,6 +2341,7 @@ static LPModel* build_reduced_model(PresolveContext *ctx,
         }
     }
     reduced->var_shifted_capacity = n_new;
+    reduced->var_shift_capacity = n_new;
 
     /* Copy constraint data */
     new_row = 0;
