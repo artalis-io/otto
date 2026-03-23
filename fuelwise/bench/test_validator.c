@@ -578,6 +578,66 @@ void test_raw_milp100_seed125_shifted_presolve_mir_regression(void)
 }
 
 /* ============================================================================
+ * Test: Raw MILP100 seed=125 stays exact with MIR opt-in on shifted presolve
+ * ============================================================================ */
+void test_raw_milp100_seed125_shifted_presolve_mir_optin(void)
+{
+    printf("\n=== Test: Raw MILP100 Seed 125 Shifted-Presolve MIR Opt-In ===\n");
+
+    FWBenchConfig cfg = fw_bench_config_milp_100();
+    cfg.seed = 125;
+
+    FWBenchInstance instance;
+    memset(&instance, 0, sizeof(instance));
+    ASSERT(fw_bench_generate(&cfg, &instance) == 0,
+           "Generated raw MILP100 seed=125 MIR opt-in instance");
+
+    FWGlpkResult glpk;
+    memset(&glpk, 0, sizeof(glpk));
+    ASSERT(fw_glpk_solve(&instance.problem, &glpk) == 0 && glpk.solved,
+           "GLPK solves raw MILP100 seed=125 MIR opt-in instance");
+
+    FWRefuelSolution raw;
+    FWValidationResult raw_v;
+    memset(&raw, 0, sizeof(raw));
+    memset(&raw_v, 0, sizeof(raw_v));
+
+    int previous_hint_flags = fw_get_mip_hint_flags();
+    const char *prev_mir_env = getenv("RALPH_ENABLE_MIR_ROOT_CUTS");
+    char *saved_mir_env = prev_mir_env ? strdup(prev_mir_env) : NULL;
+
+    fw_set_mip_hint_flags(FW_HINT_NONE);
+    fw_set_presolve(1, 0x100F);
+    setenv("RALPH_ENABLE_MIR_ROOT_CUTS", "1", 1);
+
+    int raw_rc = fw_solve_refuel_milp(&instance.problem, &raw);
+    int raw_feasible = (raw_rc == 0 && raw.status == FW_STATUS_OPTIMAL) ?
+        fw_validate_solution(&instance.problem, &raw,
+                             instance.curve, instance.weight_profile, &raw_v) : 0;
+
+    printf("  GLPK objective:         %.6f\n", glpk.objective);
+    printf("  Ralph MIR-on status:    %d\n", raw.status);
+    printf("  Ralph MIR-on objective: %.6f\n", raw.total_cost);
+
+    ASSERT(raw_rc == 0 && raw.status == FW_STATUS_OPTIMAL,
+           "Ralph raw MILP solves seed=125 with MIR opt-in");
+    ASSERT(raw_feasible, "Ralph raw MILP seed=125 MIR opt-in solution validates");
+    ASSERT(fabs(raw.total_cost - glpk.objective) <= 0.01,
+           "Raw seed=125 MIR opt-in path matches GLPK objective");
+
+    if (saved_mir_env) {
+        setenv("RALPH_ENABLE_MIR_ROOT_CUTS", saved_mir_env, 1);
+    } else {
+        unsetenv("RALPH_ENABLE_MIR_ROOT_CUTS");
+    }
+    free(saved_mir_env);
+    fw_set_mip_hint_flags(previous_hint_flags);
+    fw_set_presolve(1, 0x100F);
+    fw_free_solution(&raw);
+    fw_bench_free_instance(&instance);
+}
+
+/* ============================================================================
  * Test: Remaining raw MILP benchmark regressions stay exact
  * ============================================================================ */
 void test_remaining_raw_benchmark_regressions(void)
@@ -2347,6 +2407,7 @@ int main(void)
     test_raw_milp100_seed43_cut_presolve_characterization();
     test_raw_milp100_seed45_benchmark_characterization();
     test_raw_milp100_seed125_shifted_presolve_mir_regression();
+    test_raw_milp100_seed125_shifted_presolve_mir_optin();
     test_remaining_raw_benchmark_regressions();
     test_branch_direction_only_regressions();
     test_minimum_fuel_maintained();
