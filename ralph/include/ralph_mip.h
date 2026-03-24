@@ -147,6 +147,7 @@ int ralph_mip_get_solution(const RalphMIPModel *model, double *x);
 double ralph_mip_get_best_bound(const RalphMIPModel *model);
 double ralph_mip_get_gap(const RalphMIPModel *model);
 int ralph_mip_get_node_count(const RalphMIPModel *model);
+void ralph_mip_print_stats(const RalphMIPModel *model);
 
 /* Branching controls */
 int ralph_mip_set_branch_priorities(RalphMIPModel *model, const int *priorities);
