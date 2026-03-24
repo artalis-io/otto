@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -269,8 +270,13 @@ static int glpk_oop_parse_iterations_line(const char *line, int *iters_out) {
     memcpy(buf, start, len);
     buf[len] = '\0';
 
-    iters = atoi(buf);
-    if (iters < 0) return 0;
+    {
+        char *end;
+        long val = strtol(buf, &end, 10);
+        if (end == buf || *end != '\0') return 0;
+        if (val < 0 || val > INT_MAX) return 0;
+        iters = (int)val;
+    }
     *iters_out = iters;
     return 1;
 }
@@ -299,8 +305,13 @@ static int glpk_oop_parse_progress_iteration(const char *line, int *iters_out) {
     memcpy(buf, start, len);
     buf[len] = '\0';
 
-    iters = atoi(buf);
-    if (iters < 0) return 0;
+    {
+        char *end;
+        long val = strtol(buf, &end, 10);
+        if (end == buf || *end != '\0') return 0;
+        if (val < 0 || val > INT_MAX) return 0;
+        iters = (int)val;
+    }
     *iters_out = iters;
     return 1;
 }
@@ -476,7 +487,10 @@ static int glpk_oop_parse_write_file(const char *write_file,
         }
 
         if (tok[0][0] == 'i' && ntok >= 5) {
-            int idx = atoi(tok[1]);
+            char *endp;
+            long lval = strtol(tok[1], &endp, 10);
+            if (endp == tok[1] || lval < 0 || lval > INT_MAX) continue;
+            int idx = (int)lval;
             double dual = 0.0;
             if (idx >= 1 && idx <= num_rows && y) {
                 if (glpk_oop_parse_double(tok[4], &dual) == 0) {
@@ -487,7 +501,10 @@ static int glpk_oop_parse_write_file(const char *write_file,
         }
 
         if (tok[0][0] == 'j' && ntok >= 5) {
-            int idx = atoi(tok[1]);
+            char *endp;
+            long lval = strtol(tok[1], &endp, 10);
+            if (endp == tok[1] || lval < 0 || lval > INT_MAX) continue;
+            int idx = (int)lval;
             double prim = 0.0;
             double dual = 0.0;
             if (idx >= 1 && idx <= num_cols) {

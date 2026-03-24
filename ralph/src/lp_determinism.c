@@ -9,6 +9,13 @@
 
 #ifdef _OPENMP
 #include <omp.h>
+/*
+ * Process-wide default for OMP thread count (-1 = use OMP default).
+ *
+ * THREAD SAFETY: Plain int, but only written by lp_determinism_set_threads()
+ * which should be called at startup before any solving. Per-solve control is
+ * available via solver->lp_threads (see lp_determinism_effective_threads()).
+ */
 static int lp_default_omp_threads = -1;
 #endif
 

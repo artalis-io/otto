@@ -1,5 +1,5 @@
-#ifndef LP_GLPK_STRICT_H
-#define LP_GLPK_STRICT_H
+#ifndef RALPH_LP_GLPK_STRICT_H
+#define RALPH_LP_GLPK_STRICT_H
 
 /* Centralized strict-mode gates.
  *
@@ -24,4 +24,4 @@ int lp_glpk_strict_allow_bfcp_adaptive_reasons(int glpk_strict_mode);
 int lp_glpk_strict_allow_lu_update_adaptive_thresholds(int glpk_strict_mode);
 int lp_glpk_strict_allow_lu_sparse_skip_heuristics(int glpk_strict_mode);
 
-#endif /* LP_GLPK_STRICT_H */
+#endif /* RALPH_LP_GLPK_STRICT_H */

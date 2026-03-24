@@ -1,5 +1,5 @@
-#ifndef LP_REINVERT_CONTROLLER_H
-#define LP_REINVERT_CONTROLLER_H
+#ifndef RALPH_LP_REINVERT_CONTROLLER_H
+#define RALPH_LP_REINVERT_CONTROLLER_H
 
 typedef enum {
     LP_REINVERT_MODE_OFF = 0,
@@ -91,4 +91,4 @@ int lp_reinvert_controller_mode_is_valid(int mode);
 
 const char *lp_reinvert_controller_reason_string(LPReinvertReason reason);
 
-#endif
+#endif /* RALPH_LP_REINVERT_CONTROLLER_H */

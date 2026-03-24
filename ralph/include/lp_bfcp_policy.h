@@ -1,5 +1,5 @@
-#ifndef LP_BFCP_POLICY_H
-#define LP_BFCP_POLICY_H
+#ifndef RALPH_LP_BFCP_POLICY_H
+#define RALPH_LP_BFCP_POLICY_H
 
 #include "lp_policy_glpk_compat.h"
 
@@ -75,4 +75,4 @@ int lp_bfcp_policy_refactor_hard_trigger(const LPBFCPRefactorSignals *sig);
 int lp_bfcp_policy_refactor_reason(const LPBFCPRefactorSignals *sig);
 const char *lp_bfcp_policy_refactor_reason_string(int reason);
 
-#endif /* LP_BFCP_POLICY_H */
+#endif /* RALPH_LP_BFCP_POLICY_H */

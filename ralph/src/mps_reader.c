@@ -1005,6 +1005,13 @@ int ralph_core_read_mps(RalphLPModel *model, const char *filename) {
         /* Add each constraint */
         double *row_coefs = (double*)calloc(parser->num_cols, sizeof(double));
         int *row_indices = (int*)calloc(parser->num_cols, sizeof(int));
+        if (!row_coefs || !row_indices) {
+            free(row_coefs);
+            free(row_indices);
+            sparse_free(A);
+            mps_parser_free(parser);
+            return -1;
+        }
 
         for (int i = 0; i < parser->num_rows; i++) {
             if (i == parser->obj_row) continue;  /* Skip objective row */
