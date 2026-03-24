@@ -35,7 +35,8 @@ extern "C" {
 #define MIP_RELIABILITY_ARTIFICIAL_SHALLOW_MAX_STRONG 1 /* Depth-1 strong probes on artificial-column LPs */
 #define MIP_RELIABILITY_ARTIFICIAL_PIVOT_BUDGET 32      /* Reduced pivot budget on artificial-column LPs */
 #define MIP_WARM_DUAL_ARTIFICIAL_MAX_DEPTH 1            /* After early iter-limit evidence, skip warm dual below this depth */
-#define MIP_WARM_DUAL_ITER_LIMIT_SKIP_AFTER 3           /* Warm dual iter-limit failures before skipping deeper artificial nodes */
+#define MIP_WARM_DUAL_ITER_LIMIT_SKIP_AFTER 3           /* Consecutive warm dual iter-limit failures before backing off on deeper artificial nodes */
+#define MIP_WARM_DUAL_SKIP_BUDGET 4                     /* Number of deep artificial nodes to skip before retrying warm dual */
 
 /* Cut quality filter parameters */
 #define MIP_CUT_MIN_VIOLATION  1e-4   /* Minimum violation to apply a cut */
@@ -323,6 +324,7 @@ typedef struct {
     int node_lp_warm_dual_fail_iter_limit; /* Warm dual reopt first failed with ITERATION_LIMIT */
     int node_lp_warm_dual_fail_time_limit; /* Warm dual reopt first failed with TIME_LIMIT */
     int node_lp_warm_dual_fail_other;      /* Warm dual reopt first failed with another status */
+    int node_lp_warm_dual_iter_limit_streak_peak; /* Peak consecutive warm-dual iter-limit streak */
     int node_lp_state_restore_attempts; /* Attempts to restore a clean node LP state after probing */
     int node_lp_state_restore_success;  /* Successful node LP state restores after probing */
     int node_lp_state_restore_failures; /* Failed node LP state restores after probing */
@@ -341,6 +343,10 @@ typedef struct {
     double time_root_cut_apply;     /* Root cut application time */
     double time_root_lp_resolve;    /* Root LP re-solve time after cuts */
     double time_rins;               /* RINS heuristic time */
+
+    /* Adaptive warm-dual backoff state */
+    int node_lp_warm_dual_iter_limit_streak; /* Current consecutive warm-dual iter-limit streak */
+    int node_lp_warm_dual_skip_budget;       /* Remaining nodes to skip before retrying warm dual */
 
     /* SCP-specific optimizations (for set covering/partitioning MIPs) */
     int use_scp_solver;          /* 1 if SCP structure detected and enabled */
