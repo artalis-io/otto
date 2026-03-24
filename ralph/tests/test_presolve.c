@@ -1321,6 +1321,74 @@ static void test_probing_bound_tightening(void) {
 }
 
 /* ============================================================================
+ * Test 23: Binary packing conflict extraction via presolve
+ *
+ * x + y + z <= 1 with x fixed to 1 implies y = z = 0.
+ * This should be derived directly from presolve bound tightening on a binary row.
+ * ============================================================================ */
+static void test_binary_packing_conflict_fixing(void) {
+    printf("\n=== Test: Binary packing conflict fixing ===\n");
+
+    double obj[] = {0.0, 0.0, 0.0};
+    double lb[] = {1.0, 0.0, 0.0};
+    double ub[] = {1.0, 1.0, 1.0};
+    char var_types[] = {'B', 'B', 'B'};
+    int row_starts[] = {0, 3};
+    int col_idx[] = {0, 1, 2};
+    double vals[] = {1.0, 1.0, 1.0};
+    char sense[] = {'L'};
+    double rhs[] = {1.0};
+
+    LPModel *m = build_model(3, 1, obj, 1, lb, ub, var_types,
+                             row_starts, col_idx, vals, sense, rhs);
+    ASSERT(m != NULL, "Packing model created");
+
+    PresolveResult *res = presolve_with_mask(m, PRESOLVE_BOUND_TIGHTENING);
+    ASSERT(res != NULL, "Packing presolve succeeded");
+    if (res && res->reduced_model) {
+        ASSERT_NEAR(res->reduced_model->lb[0], 1.0, TOLERANCE, "x stays fixed to 1");
+        ASSERT_NEAR(res->reduced_model->ub[1], 0.0, TOLERANCE, "y fixed to 0 by packing conflict");
+        ASSERT_NEAR(res->reduced_model->ub[2], 0.0, TOLERANCE, "z fixed to 0 by packing conflict");
+    }
+
+    presolve_free(res);
+    lp_model_free(m);
+}
+
+/* ============================================================================
+ * Test 24: Binary covering extraction via presolve
+ *
+ * x + y + z >= 1 with x = y = 0 implies z = 1.
+ * ============================================================================ */
+static void test_binary_covering_fixing(void) {
+    printf("\n=== Test: Binary covering fixing ===\n");
+
+    double obj[] = {0.0, 0.0, 0.0};
+    double lb[] = {0.0, 0.0, 0.0};
+    double ub[] = {0.0, 0.0, 1.0};
+    char var_types[] = {'B', 'B', 'B'};
+    int row_starts[] = {0, 3};
+    int col_idx[] = {0, 1, 2};
+    double vals[] = {1.0, 1.0, 1.0};
+    char sense[] = {'G'};
+    double rhs[] = {1.0};
+
+    LPModel *m = build_model(3, 1, obj, 1, lb, ub, var_types,
+                             row_starts, col_idx, vals, sense, rhs);
+    ASSERT(m != NULL, "Covering model created");
+
+    PresolveResult *res = presolve_with_mask(m, PRESOLVE_BOUND_TIGHTENING);
+    ASSERT(res != NULL, "Covering presolve succeeded");
+    if (res && res->reduced_model) {
+        ASSERT_NEAR(res->reduced_model->lb[2], 1.0, TOLERANCE, "z fixed to 1 by covering row");
+        ASSERT_NEAR(res->reduced_model->ub[2], 1.0, TOLERANCE, "z upper bound remains 1");
+    }
+
+    presolve_free(res);
+    lp_model_free(m);
+}
+
+/* ============================================================================
  * compute_row_bounds() unit tests
  * ============================================================================ */
 
@@ -1465,6 +1533,8 @@ int main(void) {
     test_combined_presolve();
     test_probing_infeasibility();
     test_probing_bound_tightening();
+    test_binary_packing_conflict_fixing();
+    test_binary_covering_fixing();
     test_compute_row_bounds();
 
     printf("\n══════════════════════════════════════════════════════════\n");

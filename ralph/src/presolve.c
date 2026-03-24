@@ -947,6 +947,106 @@ int presolve_forcing_constraints(PresolveContext *ctx) {
     return count;
 }
 
+static int presolve_var_is_binary(const LPModel *model, int j) {
+    if (!model || j < 0 || j >= model->num_vars) return 0;
+    if (model->var_type[j] == 'B') return 1;
+    if (model->var_type[j] == 'I' &&
+        model->lb[j] >= -RALPH_FEAS_TOL &&
+        model->ub[j] <= 1.0 + RALPH_FEAS_TOL) {
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * Cheap binary-row propagation for packing/covering/equality rows.
+ *
+ * Handles only rows with:
+ * - active variables all binary
+ * - non-negative coefficients
+ *
+ * Safe implications:
+ * - For <= rows: if fixed_ones + a_j > rhs, then x_j = 0
+ * - For >= rows: if even setting all other free binaries to 1 is insufficient,
+ *                then x_j = 1
+ * - For = rows: apply both rules
+ */
+static int presolve_binary_row_propagation(PresolveContext *ctx, int row_idx,
+                                           const double *row) {
+    LPModel *model = ctx ? ctx->working : NULL;
+    double rhs;
+    double fixed_one_sum = 0.0;
+    double free_sum = 0.0;
+    int active_terms = 0;
+    int free_terms = 0;
+    int count = 0;
+
+    if (!ctx || !model || !row) return 0;
+    rhs = model->b[row_idx];
+
+    for (int j = 0; j < model->num_vars; j++) {
+        double aij;
+        if (ctx->col_deleted[j]) continue;
+        aij = row[j];
+        if (fabs(aij) <= RALPH_ZERO_TOL) continue;
+        if (aij < -RALPH_ZERO_TOL || !presolve_var_is_binary(model, j)) {
+            return 0;
+        }
+        active_terms++;
+        if (model->lb[j] > 0.5) {
+            fixed_one_sum += aij;
+        } else if (model->ub[j] < 0.5) {
+            continue;
+        } else {
+            free_sum += aij;
+            free_terms++;
+        }
+    }
+
+    if (active_terms == 0) return 0;
+
+    if ((model->sense[row_idx] == 'L' || model->sense[row_idx] == 'E') &&
+        fixed_one_sum > rhs + RALPH_FEAS_TOL) {
+        return -1;
+    }
+    if ((model->sense[row_idx] == 'G' || model->sense[row_idx] == 'E') &&
+        fixed_one_sum + free_sum < rhs - RALPH_FEAS_TOL) {
+        return -1;
+    }
+
+    if (free_terms == 0) return 0;
+
+    for (int j = 0; j < model->num_vars; j++) {
+        double aij;
+        if (ctx->col_deleted[j]) continue;
+        aij = row[j];
+        if (fabs(aij) <= RALPH_ZERO_TOL) continue;
+        if (model->lb[j] > 0.5 || model->ub[j] < 0.5) continue;
+
+        if (model->sense[row_idx] == 'L' || model->sense[row_idx] == 'E') {
+            if (fixed_one_sum + aij > rhs + RALPH_FEAS_TOL &&
+                model->ub[j] > 0.0 + RALPH_FEAS_TOL) {
+                model->ub[j] = 0.0;
+                count++;
+            }
+        }
+
+        if (model->sense[row_idx] == 'G' || model->sense[row_idx] == 'E') {
+            if (fixed_one_sum + (free_sum - aij) < rhs - RALPH_FEAS_TOL &&
+                model->lb[j] < 1.0 - RALPH_FEAS_TOL) {
+                model->lb[j] = 1.0;
+                count++;
+            }
+        }
+
+        if (model->lb[j] > model->ub[j] + RALPH_FEAS_TOL) {
+            return -1;
+        }
+    }
+
+    return count;
+}
+
 /* Tighten variable bounds using constraint information */
 int presolve_bound_tightening(PresolveContext *ctx) {
     LPModel *model = ctx->working;
@@ -964,6 +1064,15 @@ int presolve_bound_tightening(PresolveContext *ctx) {
 
         /* Extract row once (O(nnz) instead of O(n²) element accesses) */
         sparse_get_row(model->A, i, row);
+
+        {
+            int n = presolve_binary_row_propagation(ctx, i, row);
+            if (n < 0) {
+                free(row);
+                return -1;
+            }
+            count += n;
+        }
 
         /* First pass: compute total row activity bounds */
         RowBounds rb;
