@@ -3448,3 +3448,521 @@ H0 → H1 → H2 → H3 (each phase is independently deployable)
   HTTP accept), Ralph's work queue handles concurrency. Single event-loop thread
   with worker pool is the right architecture for a solver service.
 - **No caching** — Every solve request has different input. No benefit to caching.
+
+## Architectural Consolidation Roadmap (Mar 2026)
+
+Goal: transform Ralph from a functional-but-accumulated solver (grade D+) into a
+well-layered, maintainable design comparable to HiGHS/GLPK quality. Every phase is
+gated by `make test` + `make test-netlib-gate` — no regressions allowed.
+
+### Baseline Metrics (2026-03-24, /ralph-arch-audit)
+
+| Metric | Value | Target |
+|--------|-------|--------|
+| Direct LU field accesses from simplex | 142 | 0 |
+| Phase 1 vs Phase 2 constant asymmetry | 31:1 | < 3:1 |
+| Crisis/recovery references in simplex.c | 875 | < 100 |
+| simplex.c line count | 12,505 | < 5,000 |
+| Compile-time behavioral constants | ~192 | < 50 (rest promoted to runtime) |
+| Runtime parameter setters | 60 | ~100 |
+| Explicit solver state enum | none | SimplexPhase enum |
+| LU error return codes | -1 (9 modes) | typed enum |
+
+### Design Principles
+
+These are non-negotiable across all phases:
+
+1. **No regressions.** Every phase passes `make test` AND `make test-netlib-gate` before
+   merge. If a refactor changes numerical behavior, the change is documented and the
+   gate updated — never silently accepted.
+
+2. **Behavioral equivalence first.** Each extraction/refactor produces identical output
+   for identical input. Behavioral improvements come in separate, measured commits.
+
+3. **One concern per module.** Pricing is not crisis recovery. LU health monitoring is
+   not refactoring policy. Phase 1 crisis logic is not Phase 2 iteration logic.
+
+4. **Narrow interfaces.** Modules communicate through function calls, not struct field
+   access. If you need a value from LU, call a getter. If you need to configure LU,
+   call a setter. Never `tab->lu->field`.
+
+5. **Runtime over compile-time.** Behavioral constants that could reasonably vary between
+   problem classes become `ralph_lp_set_*_param()` parameters. True invariants
+   (mathematical constants, array size formulas) stay as `#define`.
+
+---
+
+### Phase R0: Type System & State Machine (No Algorithmic Change)
+
+**Risk:** None — adds types and accessors without changing any logic.
+**Effort:** 2-3 days.
+**Files changed:** `lp.h`, `lu.c`, `simplex.c`, `dual_simplex.c`.
+
+#### R0.1: Explicit Solver Phase Enum
+
+Add to `lp.h`:
+```c
+typedef enum {
+    SIMPLEX_PHASE_INIT = 0,
+    SIMPLEX_PHASE_1,
+    SIMPLEX_PHASE_TRANSITION,
+    SIMPLEX_PHASE_2,
+    SIMPLEX_PHASE_OPTIMAL,
+    SIMPLEX_PHASE_INFEASIBLE,
+    SIMPLEX_PHASE_UNBOUNDED,
+    SIMPLEX_PHASE_ERROR
+} SimplexPhase;
+```
+
+Add `SimplexPhase current_phase` to `SimplexSolver`. Set it at each transition point
+in `simplex.c`. Callbacks and telemetry can now query phase without inspecting the
+call stack.
+
+#### R0.2: Typed LU Error Returns
+
+Change `lu_update()`, `lu_factorize()`, `lu_factorize_sparse()`, `lu_factorize_dense()`
+return type from `int` to `LUFailureReason` (enum already exists in `lp.h:116-125`).
+
+Return `LU_FAIL_NONE` (0) on success instead of 0. Callers already check `!= 0`, so
+this is source-compatible. Eliminates the need to inspect `lu->last_failure_reason`
+as a side channel.
+
+#### R0.3: LU Getter/Setter API
+
+Add to `lu.c` / declare in `lp.h`:
+
+```c
+/* Health queries (replace direct field reads) */
+int    lu_get_num_updates(const LUFactorization *lu);
+int    lu_get_max_updates(const LUFactorization *lu);
+double lu_get_growth_factor(const LUFactorization *lu);
+double lu_get_cond_estimate(const LUFactorization *lu);
+double lu_get_growth_refactor_threshold(const LUFactorization *lu);
+int    lu_get_spike_pool_used(const LUFactorization *lu);
+int    lu_get_spike_pool_capacity(const LUFactorization *lu);
+int    lu_get_use_ft_updates(const LUFactorization *lu);
+LUFailureReason lu_get_last_failure_reason(const LUFactorization *lu);
+int    lu_get_last_refactor_trigger_reason(const LUFactorization *lu);
+
+/* Configuration (replace direct field writes) */
+void lu_configure_regularization(LUFactorization *lu, int allow,
+                                 int max_reg, const int *redundant_rows,
+                                 int num_redundant);
+void lu_set_pivot_tol(LUFactorization *lu, double tol);
+void lu_set_max_updates(LUFactorization *lu, int max);
+void lu_set_growth_refactor_threshold(LUFactorization *lu, double threshold);
+void lu_set_backend_policy(LUFactorization *lu, int policy);
+void lu_set_telemetry_enabled(LUFactorization *lu, int enabled);
+void lu_set_owner(LUFactorization *lu, void *owner);
+void lu_invalidate_symbolic_cache(LUFactorization *lu);
+void lu_force_refactorization(LUFactorization *lu);
+```
+
+Then mechanically replace all 142 direct accesses in `simplex.c` and 22 in
+`dual_simplex.c` with these calls. Each replacement is a trivial 1:1 substitution.
+
+**Validation:**
+- `make test` PASS
+- `make test-netlib-gate` PASS (byte-identical output expected)
+- `/ralph-arch-audit` metric: direct LU accesses = 0
+
+---
+
+### Phase R1: File Extraction (Behavioral Equivalence)
+
+**Risk:** Low — moves code between files without changing logic.
+**Effort:** 1-2 weeks.
+**Files created:** `simplex_pricing.c`, `simplex_ratio.c`, `simplex_perturb.c`,
+`simplex_tableau.c`, `simplex_pricing.h`, `simplex_ratio.h`, `simplex_perturb.h`,
+`simplex_tableau.h`.
+
+#### R1.1: Extract Pricing Strategies
+
+Move from `simplex.c` to `simplex_pricing.c` (~1,100 lines, 12 functions):
+- `pricing_dantzig()` — Dantzig rule
+- `pricing_bland()` — Bland's anti-cycling
+- `pricing_steepest_edge()` — exact steepest edge
+- `pricing_devex()` — Devex approximate weights
+- `pricing_devex_partial()` — Devex + candidate list
+- `pricing_partial()` — partial pricing with round-robin
+- `pricing_heap()` — max-heap by |rc|
+- 5 heap utility functions (`heap_push`, `heap_pop`, `heap_siftdown`, etc.)
+- `pricing_dispatch()` — new: single switch that replaces the duplicated switch
+  in Phase 1 (line ~7624) and Phase 2 (line ~10560)
+
+Create `simplex_pricing.h` with:
+```c
+typedef int (*PricingFn)(SimplexTableau *tab, int *entering);
+int pricing_dispatch(SimplexTableau *tab, int strategy, int *entering);
+void pricing_init_weights(SimplexTableau *tab, int strategy);
+void pricing_update_weights(SimplexTableau *tab, int strategy, int entering, int leaving);
+```
+
+**Key invariant:** The duplicated pricing switch in Phase 1 and Phase 2 becomes a
+single `pricing_dispatch()` call. Both phases call the same function.
+
+#### R1.2: Extract Ratio Test
+
+Move to `simplex_ratio.c` (~500 lines, 4 functions):
+- `primal_ratio_test_bland()` — Bland's ratio test
+- `primal_ratio_test_standard()` — standard ratio test
+- `primal_ratio_test_harris()` — Harris two-pass ratio test
+- `primal_ratio_test_with_policy()` — dispatch with bound-flip
+
+Create `simplex_ratio.h`:
+```c
+int ratio_test_dispatch(SimplexTableau *tab, int mode, const double *direction,
+                        int *leaving, double *theta);
+```
+
+#### R1.3: Extract Perturbation
+
+Move to `simplex_perturb.c` (~150 lines, 3 functions):
+- `tableau_apply_perturbation()`
+- `tableau_apply_scaled_perturbation()`
+- `tableau_remove_perturbation()`
+
+#### R1.4: Extract Tableau Management
+
+Move to `simplex_tableau.c` (~1,500 lines, 15 functions):
+- `tableau_create()`, `tableau_free()`
+- `tableau_refactorize()`, `tableau_compute_solution()`,
+  `tableau_compute_reduced_costs()`, `tableau_compute_duals()`
+- `tableau_apply_warm_basis()`, `ensure_basis_workspace()`
+- `build_basis_matrix()`, `basis_col_cache` management
+
+**After R1:** simplex.c shrinks from 12,505 → ~9,200 lines (~26% reduction).
+The remaining code is the Phase 1 loop, Phase 2 loop, pivot function, and entry
+points.
+
+**Validation:**
+- `make test` PASS
+- `make test-netlib-gate` PASS (byte-identical output expected)
+- `/ralph-arch-audit` metric: simplex.c < 10,000 lines
+
+---
+
+### Phase R2: Parameter Promotion (Runtime Configurability)
+
+**Risk:** Low — adds new parameter paths without removing compile-time defaults.
+**Effort:** 1 week.
+**Files changed:** `ralph_lp.h`, `ralph_core.h`, `ralph.c`, `simplex.c`,
+`lp_refactor_policy.c`.
+
+#### R2.1: Classify Constants
+
+Of the ~192 compile-time behavioral constants, classify into three tiers:
+
+**Tier 1 — Promote to runtime (highest impact, ~25 constants):**
+
+| Current #define | New parameter name | Type | Default |
+|---|---|---|---|
+| `PHASE1_PERIODIC_REFACTOR_MIN_INTERVAL` | `refactor_interval_min` | INT | 24 |
+| `PHASE1_PERIODIC_REFACTOR_MAX_INTERVAL` | `refactor_interval_max` | INT | 96 |
+| `PHASE2_DEGEN_ESCAPE_MIN_M` | `degen_escape_min_m` | INT | 1200 |
+| `PHASE2_DEGEN_ESCAPE_DEGEN_TRIGGER` | `degen_escape_trigger` | INT | 120 |
+| `PHASE1_AUTO_DANTZIG_MIN_M` | `phase1_auto_dantzig_min_m` | INT | 700 |
+| `PHASE1_NO_PIVOT_PROGRESS_WINDOW` | `no_pivot_progress_window` | INT | 6 |
+| `PHASE1_NO_PIVOT_LADDER_RESCUE_COOLDOWN_ITERS` | `ladder_rescue_cooldown` | INT | 16 |
+| `SOFT_LU_COST_EWMA_ALPHA` | `lu_cost_ewma_alpha` | DOUBLE | 0.20 |
+| `SOFT_LU_MAX_CONSEC_DEFER_PHASE1` | `lu_max_consec_defer` | INT | 6 |
+| `PERIODIC_REFACTOR_PRESSURE_TRIGGER` | `refactor_pressure_trigger` | DOUBLE | 0.40 |
+| `LU_HEALTH_SOFT_SPIKE_WARN_PCT` | `lu_spike_warn_pct` | INT | 85 |
+| `LU_SOFT_COST_GATE_RATIO_TRIGGER` | `lu_cost_gate_ratio` | DOUBLE | 8.0 |
+
+**Tier 2 — Keep as compile-time but document (~50 constants):**
+Advanced tuning constants that only solver developers would touch. Group into a
+`simplex_tuning.h` header with documentation.
+
+**Tier 3 — True invariants (~20 constants):**
+Mathematical constants, array size formulas, enum values. Keep as `#define` in their
+current locations.
+
+**Tier 4 — Collapse (~100 constants):**
+Crisis-specific constants that will be consolidated in Phase R3 (see below). These
+become dead code after R3.
+
+#### R2.2: Implement Parameter Registration
+
+Add ~25 new parameters to `ralph_core.h` parameter registry. Each parameter:
+- Has a default matching the current `#define` value (behavioral equivalence)
+- Has a documented range with min/max validation
+- Is threaded from `RalphModel` → `SimplexSolver` at solve time
+
+#### R2.3: Thread Parameters Through Policy Functions
+
+Change `lp_refactor_policy_*` functions to accept a `LPRefactorPolicyConfig` struct
+instead of reading compile-time constants. The struct is populated from runtime
+parameters at solve start. Policy functions become pure transformations of
+(config, signals) → decisions.
+
+```c
+typedef struct {
+    int phase1_refactor_min_interval;
+    int phase1_refactor_max_interval;
+    int phase2_refactor_min_interval;
+    int phase2_refactor_max_interval;
+    double pressure_trigger;
+    int periodic_min_update_age;
+    /* ... ~25 fields total ... */
+} LPRefactorPolicyConfig;
+
+void lp_refactor_policy_config_defaults(LPRefactorPolicyConfig *cfg);
+```
+
+**Validation:**
+- `make test` PASS
+- `make test-netlib-gate` PASS (identical defaults → identical output)
+- `/ralph-arch-audit` metric: compile:runtime ratio < 5:1
+
+---
+
+### Phase R3: Crisis Machinery Consolidation
+
+**Risk:** Medium — changes algorithmic behavior, requires careful NETLIB validation.
+**Effort:** 2-3 weeks.
+**Files changed:** `simplex.c`, new `simplex_recovery.c`.
+
+This is the hardest phase. Ralph's Phase 1 has accumulated 15+ distinct crisis
+recovery mechanisms, each added to fix a specific failing NETLIB problem. Production
+solvers use 3-4 general mechanisms.
+
+#### R3.1: Audit Crisis Mechanisms
+
+First, catalog every recovery mechanism in the Phase 1 loop and identify which
+NETLIB problems it was added for. Use git blame + commit messages.
+
+Expected mechanisms (45 crisis functions, ~80 state variables):
+
+| Mechanism | Functions | State Variables | Standard? |
+|---|---|---|---|
+| Bland's anti-cycling | 1 | `use_bland` | YES |
+| Bound perturbation | 3 | `perturb_attempts_p1` | YES |
+| Basis refactorization | via policy | ~10 | YES |
+| Pricing strategy switch | 1 | `phase1_pricing` | YES |
+| Direction stabilization | 5+ | `dir_stabilize_*` (4+ vars) | NO |
+| No-pivot ladder rescue | 5+ | `phase1_no_pivot_ladder_*` (6+ vars) | NO |
+| Failed-stabilize retry | 8+ | `failed_stabilize_*` (10+ vars) | NO |
+| Shadow guard | 4+ | `shadow_guard_*` (8+ vars) | NO |
+| Window pressure tracking | 3+ | `window_*` (5+ vars) | NO |
+| Force pivot mode | 5+ | `force_pivot_*` (6+ vars) | NO |
+| Direction escape | 4+ | `dir_escape_*` (6+ vars) | NO |
+| Stagnation detection | 3+ | `stagnation_*` (6+ vars) | NO |
+| Ratio breakdown retry | 2+ | `ratio_breakdown_*` (3+ vars) | NO |
+| Extreme relax/rescue | 5+ | `extreme_relax_*` (5+ vars) | NO |
+| RC-only skip | 2+ | `rc_only_*` (3+ vars) | NO |
+
+The first 4 are standard (every production solver has them). The remaining 11 are
+Ralph-specific crisis patches.
+
+#### R3.2: Design Unified Recovery Framework
+
+Replace 11 non-standard mechanisms with a general `SimplexRecovery` module:
+
+```c
+typedef struct {
+    /* Standard mechanisms (always available) */
+    int bland_active;
+    int perturb_active;
+    int refactor_pending;
+    int pricing_override;
+
+    /* General escalation state (replaces 11 specific mechanisms) */
+    int stall_counter;              /* Iterations without objective progress */
+    int stall_threshold;            /* Escalation trigger (runtime param) */
+    SimplexRecoveryLevel level;     /* Current escalation level */
+    int level_iters;                /* Iterations at current level */
+    int level_max_iters;            /* Max before next escalation */
+} SimplexRecoveryState;
+
+typedef enum {
+    RECOVERY_NORMAL = 0,        /* No intervention */
+    RECOVERY_BLAND,             /* Switch to Bland's rule */
+    RECOVERY_PERTURB,           /* Apply bound perturbation */
+    RECOVERY_REFACTOR,          /* Force refactorization */
+    RECOVERY_PRICING_SWITCH,    /* Try different pricing strategy */
+    RECOVERY_DECLARE_STALL      /* Give up on phase (rare) */
+} SimplexRecoveryLevel;
+```
+
+**Key design:** A single escalation ladder replaces 11 separate state machines. When
+the solver stalls (no objective progress for `stall_threshold` iterations), it
+escalates through standard mechanisms in order: Bland → perturb → refactor →
+pricing switch → declare stall.
+
+This is exactly how GLPK and HiGHS handle degeneracy — a sequence of progressively
+stronger interventions, not 15 parallel crisis detectors.
+
+#### R3.3: Implement and Validate
+
+1. Extract current Phase 1 crisis code into `simplex_recovery_legacy.c` (preserve for reference)
+2. Implement `simplex_recovery.c` with the unified escalation model
+3. Wire into Phase 1 loop: replace 80+ local crisis variables with one `SimplexRecoveryState`
+4. Run NETLIB gate — expect some problems to behave differently
+5. Tune escalation thresholds until gate passes
+6. Wire into Phase 2 loop (same `SimplexRecoveryState`, same logic)
+7. Delete `simplex_recovery_legacy.c`
+
+**Validation:**
+- `make test` PASS
+- `make test-netlib-gate` PASS (may require threshold tuning)
+- `/ralph-arch-audit` metrics: crisis references < 100, PHASE1 asymmetry < 3:1
+
+---
+
+### Phase R4: Phase Unification
+
+**Risk:** Medium — restructures main iteration loops.
+**Effort:** 1-2 weeks.
+**Depends on:** R1 (extraction), R3 (unified recovery).
+
+#### R4.1: Shared Iteration Function
+
+After R1 and R3, the Phase 1 and Phase 2 loops should look structurally identical:
+1. Price (select entering variable)
+2. Compute direction (FTRAN)
+3. Ratio test (select leaving variable)
+4. Pivot (update basis)
+5. Recovery check (escalate if stalled)
+6. Telemetry
+7. Termination check
+
+Extract this into `simplex_iterate()`:
+
+```c
+typedef struct {
+    SimplexPhase phase;
+    int (*termination_check)(const SimplexSolver *solver, const SimplexTableau *tab);
+    double (*objective_value)(const SimplexTableau *tab);
+} SimplexIterateConfig;
+
+int simplex_iterate(SimplexSolver *solver, const SimplexIterateConfig *cfg);
+```
+
+Phase 1 calls `simplex_iterate()` with `phase=PHASE_1`, `objective_value` = sum of
+artificials. Phase 2 calls it with `phase=PHASE_2`, `objective_value` = original obj.
+
+#### R4.2: Eliminate Phase-Specific Constants
+
+With a unified iteration loop and unified recovery, most `PHASE1_*` constants
+become `RECOVERY_*` constants shared between phases. The ~308 `PHASE1_` defines
+collapse to ~20 shared defines + ~10 phase-specific ones (mainly Phase 1 termination
+criteria: "all artificials zero").
+
+**After R4:** `simplex.c` contains `simplex_solve()`, `simplex_phase1()`,
+`simplex_phase2()`, `simplex_iterate()`, and `simplex_pivot()`. Each is < 200 lines.
+Total simplex.c: ~2,000-3,000 lines.
+
+**Validation:**
+- `make test` PASS
+- `make test-netlib-gate` PASS
+- `/ralph-arch-audit` metrics: simplex.c < 5,000, PHASE1 asymmetry < 3:1
+
+---
+
+### Phase R5: Final Cleanup
+
+**Risk:** Low.
+**Effort:** 1 week.
+
+#### R5.1: Remove Dead Constants
+
+After R3/R4, ~100 crisis-specific `#define` constants are dead code. Remove them.
+Compile with `-Wunused-macros` to catch stragglers.
+
+#### R5.2: Document Interfaces
+
+Add interface documentation to each new header:
+- `simplex_pricing.h` — pricing strategy contract
+- `simplex_ratio.h` — ratio test contract
+- `simplex_recovery.h` — recovery escalation contract
+- `simplex_tableau.h` — tableau management contract
+
+#### R5.3: Struct Sub-Structuring
+
+Split `SimplexTableau` (~60 fields) into named sub-structs:
+```c
+typedef struct {
+    SimplexPricingState pricing;    /* SE/Devex/heap weights */
+    SimplexBasisState basis;        /* basis[], nonbasis[], var_status[] */
+    SimplexSolutionState solution;  /* x[], y[], rc[] */
+    SimplexRecoveryState recovery;  /* Unified recovery state */
+    /* ... core fields ... */
+} SimplexTableau;
+```
+
+#### R5.4: Final Audit
+
+Run `/ralph-arch-audit` and verify all targets met:
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Direct LU field accesses | 142 | 0 |
+| Phase 1:Phase 2 asymmetry | 31:1 | < 3:1 |
+| Crisis/recovery references | 875 | < 100 |
+| simplex.c lines | 12,505 | < 5,000 |
+| Compile-time constants | ~192 | < 50 |
+| Runtime parameters | 60 | ~85 |
+| Solver state enum | none | SimplexPhase |
+| LU error returns | -1 | LUFailureReason |
+
+**Validation:**
+- `make test` PASS
+- `make test-netlib-gate` PASS
+- All benchmark suites: no regression
+
+---
+
+### Execution Order & Dependencies
+
+```
+R0 (types/accessors)         ← No dependencies, start immediately
+  ├── R0.1 SimplexPhase enum
+  ├── R0.2 Typed LU returns
+  └── R0.3 LU getters/setters
+        │
+R1 (file extraction)         ← Depends on R0.3 (getters in extracted code)
+  ├── R1.1 Pricing
+  ├── R1.2 Ratio test
+  ├── R1.3 Perturbation
+  └── R1.4 Tableau
+        │
+R2 (parameter promotion)     ← Independent of R1, can parallelize
+  ├── R2.1 Classify constants
+  ├── R2.2 Register parameters
+  └── R2.3 Policy config struct
+        │
+R3 (crisis consolidation)    ← Depends on R1.1 (shared pricing dispatch) + R2
+  ├── R3.1 Audit mechanisms
+  ├── R3.2 Design recovery framework
+  └── R3.3 Implement + validate
+        │
+R4 (phase unification)       ← Depends on R1 + R3
+  ├── R4.1 Shared iterate()
+  └── R4.2 Eliminate phase constants
+        │
+R5 (cleanup)                 ← Depends on all above
+  ├── R5.1 Dead code removal
+  ├── R5.2 Documentation
+  ├── R5.3 Struct refactoring
+  └── R5.4 Final audit
+```
+
+**Parallelism:** R0 and R2.1 (classify constants) can start immediately. R1 and R2.2
+can proceed in parallel after R0. R3 is the critical path — it requires R1 and R2.
+
+### Risk Mitigation
+
+**Biggest risk:** R3 (crisis consolidation) changes algorithmic behavior. Mitigation:
+1. Keep `simplex_recovery_legacy.c` as reference until gate passes
+2. Track per-problem behavior: for each NETLIB instance, record (status, iterations,
+   objective) before and after. Accept iteration count changes if status and objective
+   match.
+3. If a specific problem regresses, identify which crisis mechanism saved it, and add
+   that behavior to the unified escalation ladder — but as a general rule, not a
+   problem-specific patch.
+
+**Second biggest risk:** R4 (phase unification) could introduce subtle bugs in Phase 1
+termination. Mitigation: the unified `simplex_iterate()` takes a `termination_check`
+callback, so Phase 1's "all artificials zero" check remains separate from Phase 2's
+"optimal reduced costs" check. Only the iteration body is shared.
