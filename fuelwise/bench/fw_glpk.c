@@ -36,6 +36,20 @@ static double get_time_ms(void)
     return ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0;
 }
 
+static const char *fw_glpsol_path(void)
+{
+    const char *env_path = getenv("FW_GLPSOL_PATH");
+    if (env_path && env_path[0] != '\0') {
+        return env_path;
+    }
+
+    if (access("/opt/homebrew/bin/glpsol", X_OK) == 0) {
+        return "/opt/homebrew/bin/glpsol";
+    }
+
+    return "glpsol";
+}
+
 /*
  * Solve a FuelWise MILP problem using GLPK (glpsol).
  *
@@ -72,8 +86,8 @@ int fw_glpk_solve(const FWRefuelProblem *problem, FWGlpkResult *result)
     /* Build glpsol command */
     char cmd[512];
     snprintf(cmd, sizeof(cmd),
-             "/opt/homebrew/bin/glpsol --lp %s -o %s 2>&1",
-             lp_path, sol_path);
+             "'%s' --lp '%s' -o '%s' 2>&1",
+             fw_glpsol_path(), lp_path, sol_path);
 
     /* Time the GLPK solve */
     double t0 = get_time_ms();
