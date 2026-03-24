@@ -974,9 +974,9 @@ static int select_row_pivot(SparseLUWork *work, int col, int *pivot_row) {
     return 0;
 }
 
-int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
-    if (!lu || !B) return -1;
-    if (B->nrows != B->ncols || B->nrows != lu->m) return -1;
+LUFailureReason lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
+    if (!lu || !B) return LU_FAIL_BAD_INPUT;
+    if (B->nrows != B->ncols || B->nrows != lu->m) return LU_FAIL_BAD_INPUT;
 
     int m = lu->m;
 
@@ -995,7 +995,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
     if (!col_order) {
         /* Fallback to natural order */
         col_order = (int*)calloc(m, sizeof(int));
-        if (!col_order) return -1;
+        if (!col_order) return LU_FAIL_FACTOR_ALLOC;
         for (int j = 0; j < m; j++) col_order[j] = j;
     }
 
@@ -1003,7 +1003,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
     SparseLUWork *work = sparse_work_create(m, B->nnz);
     if (!work) {
         free(col_order);
-        return -1;
+        return LU_FAIL_FACTOR_ALLOC;
     }
 
     /* Copy matrix into working storage (both column and row lists) */
@@ -1015,7 +1015,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
                 add_to_row(work, i, j, val) < 0) {
                 sparse_work_free(work);
                 free(col_order);
-                return -1;
+                return LU_FAIL_FACTOR_ALLOC;
             }
         }
     }
@@ -1036,7 +1036,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
         free(U_i); free(U_j); free(U_v);
         sparse_work_free(work);
         free(col_order);
-        return -1;
+        return LU_FAIL_FACTOR_ALLOC;
     }
 
     /* Main elimination loop */
@@ -1092,7 +1092,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
                                 free(L_i); free(L_j); free(L_v);
                                 sparse_work_free(work);
                                 free(col_order);
-                                return -1;
+                                return LU_FAIL_FACTOR_ALLOC;
                             }
                             U_i = tmp_i; U_j = tmp_j; U_v = tmp_v;
                             U_cap = new_cap;
@@ -1116,7 +1116,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
                             free(U_i); free(U_j); free(U_v);
                             sparse_work_free(work);
                             free(col_order);
-                            return -1;
+                            return LU_FAIL_FACTOR_ALLOC;
                         }
                         L_i = tmp_i; L_j = tmp_j; L_v = tmp_v;
                         L_cap = new_cap;
@@ -1147,7 +1147,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
                     free(U_i); free(U_j); free(U_v);
                     sparse_work_free(work);
                     free(col_order);
-                    return -1;  /* Singular */
+                    return LU_FAIL_FACTOR_SINGULAR;  /* Singular */
                 }
             }
         } else {
@@ -1157,7 +1157,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
                 free(U_i); free(U_j); free(U_v);
                 sparse_work_free(work);
                 free(col_order);
-                return -1;  /* Singular */
+                return LU_FAIL_FACTOR_SINGULAR;  /* Singular */
             }
         }
 
@@ -1190,7 +1190,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
                     free(L_i); free(L_j); free(L_v);
                     sparse_work_free(work);
                     free(col_order);
-                    return -1;
+                    return LU_FAIL_FACTOR_ALLOC;
                 }
                 U_i = tmp_i; U_j = tmp_j; U_v = tmp_v;
                 U_cap = new_cap;
@@ -1216,7 +1216,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
                 free(U_i); free(U_j); free(U_v);
                 sparse_work_free(work);
                 free(col_order);
-                return -1;
+                return LU_FAIL_FACTOR_ALLOC;
             }
             L_i = tmp_i; L_j = tmp_j; L_v = tmp_v;
             L_cap = new_cap;
@@ -1246,7 +1246,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
                     free(U_i); free(U_j); free(U_v);
                     sparse_work_free(work);
                     free(col_order);
-                    return -1;
+                    return LU_FAIL_FACTOR_ALLOC;
                 }
                 L_i = tmp_i; L_j = tmp_j; L_v = tmp_v;
                 L_cap = new_cap;
@@ -1299,7 +1299,7 @@ int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B) {
         free(L_i); free(L_j); free(L_v);
         free(U_i); free(U_j); free(U_v);
         sparse_work_free(work);
-        return -1;
+        return LU_FAIL_FACTOR_ALLOC;
     }
 
     /* Convert L to CSC (L is stored with step as column index) */

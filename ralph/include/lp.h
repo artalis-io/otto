@@ -2230,13 +2230,13 @@ const char* lp_model_get_name(const LPModel *model);
 /* LU factorization functions */
 LUFactorization* lu_create(int m);
 void lu_free(LUFactorization *lu);
-int lu_factorize(LUFactorization *lu, const SparseMatrix *B);
+LUFailureReason lu_factorize(LUFactorization *lu, const SparseMatrix *B);
 void lu_apply_backend_policy(LUFactorization *lu, int backend_policy);
-int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B);  /* Sparse with Markowitz */
-int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B);   /* Dense fallback */
+LUFailureReason lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B);  /* Sparse with Markowitz */
+LUFailureReason lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B);   /* Dense fallback */
 void lu_solve(const LUFactorization *lu, double *rhs, double *solution);
 void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution);
-int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col);
+LUFailureReason lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col);
 int lu_needs_refactorization(LUFactorization *lu);
 int lu_refactor_hard_trigger(const LUFactorization *lu);
 const char* lu_failure_reason_string(int reason);
