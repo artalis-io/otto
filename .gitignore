@@ -144,5 +144,6 @@ surge/benchmarks/results/
 surge/surge_tune*.jsonl
 docs/roadmaps/roadmap_ralph_hose.md
 fuelwise/bench/fw_probe.c
+fuelwise/bench/fuelwise-bench-gate
 nexus/schemas/gls-hu-automata-pdf-v2.json
 nexus/schemas/gls-hu-pudo-pdf-v2.json
