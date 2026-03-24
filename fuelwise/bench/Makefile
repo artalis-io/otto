@@ -25,13 +25,16 @@ OBJS = $(SRCS:.c=.o)
 
 # Target binary
 TARGET = fuelwise-bench
+GATE_TARGET = fuelwise-bench-gate
 
 # Validator test binary
 TEST_VALIDATOR = test_validator
 TEST_VALIDATOR_OBJS = test_validator.o fw_bench.o fw_gen.o fw_validate.o fw_glpk.o
+GATE_OBJS = bench_gate.o fw_bench.o fw_gen.o fw_validate.o fw_glpk.o
 RALPH_DIR = ../../ralph
 
 .PHONY: all clean test quick validator-test regression-test
+.PHONY: benchmark-gate benchmark-gate-raw
 
 all: $(TARGET)
 
@@ -40,6 +43,9 @@ $(TARGET): $(OBJS) ../libfuelwise.a ../../shared/libshared.a ../../ralph/libralp
 
 $(TEST_VALIDATOR): $(TEST_VALIDATOR_OBJS) ../libfuelwise.a ../../shared/libshared.a ../../ralph/libralph.a
 	$(CC) $(CFLAGS) $(TEST_VALIDATOR_OBJS) $(LDFLAGS) -o $@
+
+$(GATE_TARGET): $(GATE_OBJS) ../libfuelwise.a ../../shared/libshared.a ../../ralph/libralph.a
+	$(CC) $(CFLAGS) $(GATE_OBJS) $(LDFLAGS) -o $@
 
 %.o: %.c fw_bench.h
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
@@ -79,8 +85,14 @@ regression-test: $(TEST_VALIDATOR)
 	$(MAKE) -C $(RALPH_DIR) test-lp-suite
 	$(MAKE) -C $(RALPH_DIR) test-mip-suite
 
+benchmark-gate: $(GATE_TARGET)
+	./$(GATE_TARGET)
+
+benchmark-gate-raw: $(GATE_TARGET)
+	./$(GATE_TARGET) --compare-raw
+
 clean:
-	rm -f $(OBJS) $(TEST_VALIDATOR_OBJS) $(TARGET) $(TEST_VALIDATOR)
+	rm -f $(OBJS) $(TEST_VALIDATOR_OBJS) $(GATE_OBJS) $(TARGET) $(TEST_VALIDATOR) $(GATE_TARGET)
 
 help:
 	@echo "FuelWise Benchmark"
@@ -90,4 +102,6 @@ help:
 	@echo "  test    - Run benchmark (10 runs, all scenarios)"
 	@echo "  quick   - Quick test (5 runs, highway)"
 	@echo "  regression-test - Run FuelWise validator plus Ralph LP/MIP suites"
+	@echo "  benchmark-gate - Run the MILP Ralph-vs-GLPK benchmark gate"
+	@echo "  benchmark-gate-raw - Run the raw MILP benchmark gate"
 	@echo "  clean   - Remove build artifacts"

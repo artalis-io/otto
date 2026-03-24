@@ -11,6 +11,9 @@ make validator-test
 # Run the full regression harness
 make regression-test
 
+# Run the Ralph-vs-GLPK MILP benchmark gate
+make benchmark-gate
+
 # Run benchmark scenarios
 make test           # All scenarios, 10 runs each
 make quick          # Highway only, 5 runs
@@ -44,6 +47,23 @@ Runs:
 - `ralph` complete MIP regression suite
 
 This is the full cross-project regression gate for FuelWise MILP correctness work.
+
+### Benchmark Gate (`make benchmark-gate`)
+
+Runs the fixed MILP matrix:
+- scenarios: `milp30`, `milp50`, `milp75`, `milp100`, `milp200`
+- seeds: `42`, `123`
+- solver mode: Ralph MILP vs GLPK
+
+The gate:
+- saves JSON artifacts under `/tmp/fuelwise-benchmark-gate` by default
+- fails on solve, validation, or objective-parity regressions
+- warns on large Ralph-vs-GLPK slowdown ratios
+
+Raw apples-to-apples mode is also available:
+```bash
+make benchmark-gate-raw
+```
 
 ### Benchmark Scenarios
 

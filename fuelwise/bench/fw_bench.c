@@ -34,6 +34,52 @@ static double get_time_ms(void)
     return ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0;
 }
 
+int fw_bench_get_config(const char *scenario, uint64_t seed, FWBenchConfig *out)
+{
+    FWBenchConfig cfg;
+
+    if (!scenario || !out) return -1;
+
+    if (strcmp(scenario, "urban") == 0) {
+        cfg = fw_bench_config_short_urban();
+    } else if (strcmp(scenario, "highway") == 0) {
+        cfg = fw_bench_config_highway();
+    } else if (strcmp(scenario, "long") == 0) {
+        cfg = fw_bench_config_long_haul();
+    } else if (strcmp(scenario, "tight") == 0) {
+        cfg = fw_bench_config_tight_margins();
+    } else if (strcmp(scenario, "us") == 0) {
+        cfg = fw_bench_config_us_interstate();
+    } else if (strcmp(scenario, "benders30") == 0) {
+        cfg = fw_bench_config_benders_30();
+    } else if (strcmp(scenario, "benders50") == 0) {
+        cfg = fw_bench_config_benders_50();
+    } else if (strcmp(scenario, "benders100") == 0) {
+        cfg = fw_bench_config_benders_100();
+    } else if (strcmp(scenario, "milp15") == 0) {
+        cfg = fw_bench_config_milp_15();
+    } else if (strcmp(scenario, "milp30") == 0) {
+        cfg = fw_bench_config_milp_30();
+    } else if (strcmp(scenario, "milp50") == 0) {
+        cfg = fw_bench_config_milp_50();
+    } else if (strcmp(scenario, "milp75") == 0) {
+        cfg = fw_bench_config_milp_75();
+    } else if (strcmp(scenario, "milp100") == 0) {
+        cfg = fw_bench_config_milp_100();
+    } else if (strcmp(scenario, "milp200") == 0) {
+        cfg = fw_bench_config_milp_200();
+    } else {
+        return -1;
+    }
+
+    if (seed != 0) {
+        cfg.seed = seed;
+    }
+
+    *out = cfg;
+    return 0;
+}
+
 /* ============================================================================
  * Benchmark Driver
  * ============================================================================ */
@@ -257,6 +303,60 @@ int fw_bench_run(
  * Output Formatting
  * ============================================================================ */
 
+void fw_bench_write_json(
+    FILE *out,
+    const FWBenchConfig *config,
+    const FWBenchResults *results,
+    const char *scenario)
+{
+    if (!out || !config || !results) return;
+
+    fprintf(out, "{\n");
+    fprintf(out, "  \"scenario\": \"%s\",\n", scenario ? scenario : "custom");
+    fprintf(out, "  \"seed\": %llu,\n", (unsigned long long)config->seed);
+    fprintf(out, "  \"route_length_km\": %.1f,\n", config->route_length_m / 1000.0);
+    fprintf(out, "  \"num_runs\": %d,\n", results->num_runs);
+    fprintf(out, "  \"solver\": {\n");
+    fprintf(out, "    \"solved\": %d,\n", results->num_solved);
+    fprintf(out, "    \"feasible\": %d,\n", results->num_feasible);
+    fprintf(out, "    \"infeasible\": %d,\n", results->num_infeasible);
+    fprintf(out, "    \"errors\": %d,\n", results->num_errors);
+    fprintf(out, "    \"solve_time_ms\": {\n");
+    fprintf(out, "      \"avg\": %.2f,\n", results->solve_time_avg);
+    fprintf(out, "      \"min\": %.2f,\n", results->solve_time_min);
+    fprintf(out, "      \"max\": %.2f\n", results->solve_time_max);
+    fprintf(out, "    }\n");
+    fprintf(out, "  },\n");
+    fprintf(out, "  \"validation\": {\n");
+    fprintf(out, "    \"feasible\": %d,\n", results->num_feasible);
+    fprintf(out, "    \"validate_time_ms\": %.2f\n", results->validate_time_avg);
+    fprintf(out, "  },\n");
+    fprintf(out, "  \"solution\": {\n");
+    fprintf(out, "    \"cost\": {\n");
+    fprintf(out, "      \"avg\": %.2f,\n", results->cost_avg);
+    fprintf(out, "      \"min\": %.2f,\n", results->cost_min);
+    fprintf(out, "      \"max\": %.2f\n", results->cost_max);
+    fprintf(out, "    },\n");
+    fprintf(out, "    \"stops_avg\": %.1f\n", results->stops_avg);
+    fprintf(out, "  }");
+    if (results->glpk_enabled) {
+        fprintf(out, ",\n");
+        fprintf(out, "  \"glpk\": {\n");
+        fprintf(out, "    \"solved\": %d,\n", results->glpk_num_solved);
+        fprintf(out, "    \"objective_match\": %d,\n", results->glpk_num_match);
+        fprintf(out, "    \"solve_time_ms\": {\n");
+        fprintf(out, "      \"avg\": %.2f,\n", results->glpk_solve_time_avg);
+        fprintf(out, "      \"min\": %.2f,\n", results->glpk_solve_time_min);
+        fprintf(out, "      \"max\": %.2f\n", results->glpk_solve_time_max);
+        fprintf(out, "    },\n");
+        fprintf(out, "    \"speedup\": %.1f\n", results->glpk_speedup_avg);
+        fprintf(out, "  }\n");
+    } else {
+        fprintf(out, "\n");
+    }
+    fprintf(out, "}\n");
+}
+
 void fw_bench_print_results(
     const FWBenchConfig *config,
     const FWBenchResults *results,
@@ -266,50 +366,7 @@ void fw_bench_print_results(
     if (!results) return;
 
     if (as_json) {
-        printf("{\n");
-        printf("  \"scenario\": \"%s\",\n", scenario ? scenario : "custom");
-        printf("  \"seed\": %llu,\n", (unsigned long long)config->seed);
-        printf("  \"route_length_km\": %.1f,\n", config->route_length_m / 1000.0);
-        printf("  \"num_runs\": %d,\n", results->num_runs);
-        printf("  \"solver\": {\n");
-        printf("    \"solved\": %d,\n", results->num_solved);
-        printf("    \"feasible\": %d,\n", results->num_feasible);
-        printf("    \"infeasible\": %d,\n", results->num_infeasible);
-        printf("    \"errors\": %d,\n", results->num_errors);
-        printf("    \"solve_time_ms\": {\n");
-        printf("      \"avg\": %.2f,\n", results->solve_time_avg);
-        printf("      \"min\": %.2f,\n", results->solve_time_min);
-        printf("      \"max\": %.2f\n", results->solve_time_max);
-        printf("    }\n");
-        printf("  },\n");
-        printf("  \"validation\": {\n");
-        printf("    \"feasible\": %d,\n", results->num_feasible);
-        printf("    \"validate_time_ms\": %.2f\n", results->validate_time_avg);
-        printf("  },\n");
-        printf("  \"solution\": {\n");
-        printf("    \"cost\": {\n");
-        printf("      \"avg\": %.2f,\n", results->cost_avg);
-        printf("      \"min\": %.2f,\n", results->cost_min);
-        printf("      \"max\": %.2f\n", results->cost_max);
-        printf("    },\n");
-        printf("    \"stops_avg\": %.1f\n", results->stops_avg);
-        printf("  }");
-        if (results->glpk_enabled) {
-            printf(",\n");
-            printf("  \"glpk\": {\n");
-            printf("    \"solved\": %d,\n", results->glpk_num_solved);
-            printf("    \"objective_match\": %d,\n", results->glpk_num_match);
-            printf("    \"solve_time_ms\": {\n");
-            printf("      \"avg\": %.2f,\n", results->glpk_solve_time_avg);
-            printf("      \"min\": %.2f,\n", results->glpk_solve_time_min);
-            printf("      \"max\": %.2f\n", results->glpk_solve_time_max);
-            printf("    },\n");
-            printf("    \"speedup\": %.1f\n", results->glpk_speedup_avg);
-            printf("  }\n");
-        } else {
-            printf("\n");
-        }
-        printf("}\n");
+        fw_bench_write_json(stdout, config, results, scenario);
     } else {
         /* Determine units for display */
         int imperial = (config->units == SH_UNITS_IMPERIAL);

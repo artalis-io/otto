@@ -133,41 +133,9 @@ static FWBenchConfig get_config(const char *scenario, uint64_t seed)
 {
     FWBenchConfig cfg;
 
-    if (strcmp(scenario, "urban") == 0) {
-        cfg = fw_bench_config_short_urban();
-    } else if (strcmp(scenario, "highway") == 0) {
-        cfg = fw_bench_config_highway();
-    } else if (strcmp(scenario, "long") == 0) {
-        cfg = fw_bench_config_long_haul();
-    } else if (strcmp(scenario, "tight") == 0) {
-        cfg = fw_bench_config_tight_margins();
-    } else if (strcmp(scenario, "us") == 0) {
-        cfg = fw_bench_config_us_interstate();
-    } else if (strcmp(scenario, "benders30") == 0) {
-        cfg = fw_bench_config_benders_30();
-    } else if (strcmp(scenario, "benders50") == 0) {
-        cfg = fw_bench_config_benders_50();
-    } else if (strcmp(scenario, "benders100") == 0) {
-        cfg = fw_bench_config_benders_100();
-    } else if (strcmp(scenario, "milp15") == 0) {
-        cfg = fw_bench_config_milp_15();
-    } else if (strcmp(scenario, "milp30") == 0) {
-        cfg = fw_bench_config_milp_30();
-    } else if (strcmp(scenario, "milp50") == 0) {
-        cfg = fw_bench_config_milp_50();
-    } else if (strcmp(scenario, "milp75") == 0) {
-        cfg = fw_bench_config_milp_75();
-    } else if (strcmp(scenario, "milp100") == 0) {
-        cfg = fw_bench_config_milp_100();
-    } else if (strcmp(scenario, "milp200") == 0) {
-        cfg = fw_bench_config_milp_200();
-    } else {
+    if (fw_bench_get_config(scenario, seed, &cfg) != 0) {
         fprintf(stderr, "Unknown scenario: %s\n", scenario);
         cfg = fw_bench_config_highway();
-    }
-
-    if (seed != 0) {
-        cfg.seed = seed;
     }
 
     return cfg;
