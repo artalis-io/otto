@@ -14,6 +14,7 @@
 #include "fw_consumption.h"
 #include "sh_dist.h"
 #include "sh_units.h"
+#include <stdio.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -219,6 +220,9 @@ FWBenchConfig fw_bench_config_milp_75(void);      /* ~75 stations, tight tank (r
 FWBenchConfig fw_bench_config_milp_100(void);     /* ~100 stations, scalability */
 FWBenchConfig fw_bench_config_milp_200(void);     /* ~200 stations, stress test */
 
+/* Resolve a named scenario into a benchmark configuration. */
+int fw_bench_get_config(const char *scenario, uint64_t seed, FWBenchConfig *out);
+
 /* ============================================================================
  * Validation API
  * ============================================================================ */
@@ -284,6 +288,14 @@ void fw_bench_print_results(
     const FWBenchResults *results,
     const char *scenario,
     int as_json
+);
+
+/* Write benchmark results as JSON to an arbitrary stream. */
+void fw_bench_write_json(
+    FILE *out,
+    const FWBenchConfig *config,
+    const FWBenchResults *results,
+    const char *scenario
 );
 
 #ifdef __cplusplus
