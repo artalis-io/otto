@@ -1314,6 +1314,18 @@ typedef struct {
     LPPhase1StagnationPolicyState phase1_stagnation;
 } LPSolverPolicyState;
 
+/* Explicit solver phase tracking (R0.1) */
+typedef enum {
+    SIMPLEX_PHASE_INIT = 0,
+    SIMPLEX_PHASE_1,
+    SIMPLEX_PHASE_TRANSITION,
+    SIMPLEX_PHASE_2,
+    SIMPLEX_PHASE_OPTIMAL,
+    SIMPLEX_PHASE_INFEASIBLE,
+    SIMPLEX_PHASE_UNBOUNDED,
+    SIMPLEX_PHASE_ERROR
+} SimplexPhase;
+
 /* Simplex solver */
 typedef struct SimplexSolver {
     LPModel *model;
@@ -1430,6 +1442,9 @@ typedef struct SimplexSolver {
 
     /* D4: Flag set when primal runs after dual fallback (known degenerate) */
     int from_dual_fallback;     /* 1 = arrived from failed dual simplex */
+
+    /* R0.1: Explicit solver phase tracking */
+    SimplexPhase current_phase; /* Current solver phase (updated at each transition) */
 
 } SimplexSolver;
 

@@ -2407,6 +2407,7 @@ void dual_v2_clear_perturbation(SimplexTableau *tab) {
 
 int dual_simplex_solve_v2(SimplexSolver *solver) {
     if (!solver || !solver->tableau) return -1;
+    solver->current_phase = SIMPLEX_PHASE_1;
     if (!lp_basis_governor_mode_is_valid(solver->policy.basis_governor_mode)) {
         solver->policy.basis_governor_mode = LP_BASIS_GOV_MODE_OFF;
     }
