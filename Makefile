@@ -27,6 +27,7 @@
 .PHONY: tui-demo-tty tui-demo-wasm tui-demo-serve tui-wasm test-tui
 .PHONY: run-fuelwise-api run-carta-api run-velo-api run-ralph-api
 .PHONY: benchmark ci api-docs api-docs-check test-api-docs test-api-docs-install download-monaco
+.PHONY: test-fuelwise-regression
 
 # =============================================================================
 # Default Targets
@@ -235,6 +236,9 @@ test-ralph:
 
 test-fuelwise: fuelwise
 	$(MAKE) -C fuelwise test
+
+test-fuelwise-regression: fuelwise
+	$(MAKE) -C fuelwise test-regression
 
 test-shared: shared
 	$(MAKE) -C shared test
@@ -479,7 +483,8 @@ help:
 	@echo "  test             - Run all library tests"
 	@echo "  test-arbor       - Run Arbor tests"
 	@echo "  test-ralph       - Run Ralph tests (73)"
-	@echo "  test-fuelwise    - Run FuelWise tests (33)"
+	@echo "  test-fuelwise    - Run FuelWise tests with full regression harness"
+	@echo "  test-fuelwise-regression - Run FuelWise full regression harness explicitly"
 	@echo "  test-shared      - Run Shared tests (41)"
 	@echo "  test-velo        - Run Velo tests (47)"
 	@echo "  test-carta       - Run Carta tests (33)"
