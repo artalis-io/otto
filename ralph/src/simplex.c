@@ -7205,6 +7205,7 @@ static void primal_remove_perturbation(SimplexTableau *tab) {
  * Returns 0 if feasible (all artificials driven to zero), -1 if infeasible.
  */
 static int simplex_phase1(SimplexSolver *solver) {
+    solver->current_phase = SIMPLEX_PHASE_1;
     SimplexTableau *tab = solver->tableau;
 
     if (!tab->use_two_phase) {
@@ -7300,6 +7301,7 @@ static int simplex_phase1(SimplexSolver *solver) {
 
             if (entering < 0) {
                 extract_farkas_ray(solver);
+                solver->current_phase = SIMPLEX_PHASE_INFEASIBLE;
                 solver->status = RALPH_STATUS_INFEASIBLE;
                 return -1;
             }
@@ -7710,6 +7712,7 @@ static int simplex_phase1(SimplexSolver *solver) {
                                 art_sum, iter);
                     }
                     extract_farkas_ray(solver);
+                    solver->current_phase = SIMPLEX_PHASE_INFEASIBLE;
                     solver->status = RALPH_STATUS_INFEASIBLE;
                     solver->iterations = iter;
                     phase1_trace_emit_summary(solver, RALPH_STATUS_INFEASIBLE);
@@ -10104,6 +10107,7 @@ static int simplex_phase1(SimplexSolver *solver) {
  * - Recompute reduced costs with new objective
  */
 static int simplex_transition_phase2(SimplexSolver *solver) {
+    solver->current_phase = SIMPLEX_PHASE_TRANSITION;
     SimplexTableau *tab = solver->tableau;
 
     if (!tab->use_two_phase) {
@@ -10423,6 +10427,7 @@ static int phase2_confirm_optimality(SimplexSolver *solver, int iter, int *enter
 
 /* Phase 2: Optimize */
 static int simplex_phase2(SimplexSolver *solver) {
+    solver->current_phase = SIMPLEX_PHASE_2;
     SimplexTableau *tab = solver->tableau;
 
     tab->phase = 2;
@@ -10588,6 +10593,7 @@ static int simplex_phase2(SimplexSolver *solver) {
             if (confirm > 0) {
                 /* Optimal - remove perturbation and finalize */
                 primal_remove_perturbation(tab);
+                solver->current_phase = SIMPLEX_PHASE_OPTIMAL;
                 solver->status = RALPH_STATUS_OPTIMAL;
                 solver->iterations = iter;
                 solver->degenerate_pivots = degenerate_count;
@@ -10671,6 +10677,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                     if (confirm > 0) {
                         /* Actually optimal after refactorization */
                         primal_remove_perturbation(tab);
+                        solver->current_phase = SIMPLEX_PHASE_OPTIMAL;
                         solver->status = RALPH_STATUS_OPTIMAL;
                         solver->iterations = iter;
                         solver->degenerate_pivots = degenerate_count;
@@ -10697,6 +10704,7 @@ static int simplex_phase2(SimplexSolver *solver) {
                 double dir = (tab->var_status[entering] == RALPH_NONBASIC_UPPER) ? -1.0 : 1.0;
                 extract_unbounded_ray(solver, entering, dir);
                 primal_remove_perturbation(tab);
+                solver->current_phase = SIMPLEX_PHASE_UNBOUNDED;
                 solver->status = RALPH_STATUS_UNBOUNDED;
                 solver->iterations = iter;
                 return -1;
@@ -12332,6 +12340,7 @@ int simplex_resolve_prepared_primal_tableau(SimplexSolver *solver) {
 int simplex_solve(SimplexSolver *solver) {
     if (!solver || !solver->model) return -1;
 
+    solver->current_phase = SIMPLEX_PHASE_INIT;
     clock_t start = clock();
     solver->progress_start_ms = lp_telemetry_now_ms();
     lp_determinism_apply_runtime(solver);
