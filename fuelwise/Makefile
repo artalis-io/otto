@@ -103,11 +103,13 @@ debug: LDFLAGS += $(DEBUG_LDFLAGS)
 debug: clean all
 
 # Run tests
-test: $(TEST_EXEC)
+test: test-regression
+
+test-regression: $(TEST_EXEC)
 	./$(TEST_EXEC)
 	@echo ""
-	@echo "Running benchmark validator tests..."
-	$(MAKE) -C bench validator-test
+	@echo "Running full benchmark regression harness..."
+	$(MAKE) -C bench regression-test
 
 # Clean
 clean:
@@ -130,7 +132,7 @@ uninstall:
 	rm -rf /usr/local/include/fuelwise
 	rm -f /usr/local/lib/$(LIB_NAME)
 
-.PHONY: all lib clean clean-all debug test wasm install uninstall ralph shared help
+.PHONY: all lib clean clean-all debug test test-regression wasm install uninstall ralph shared help
 
 # Build WASM (delegates to wasm/ subdirectory)
 wasm:
@@ -143,7 +145,8 @@ help:
 	@echo "Targets:"
 	@echo "  all      - Build library and tests (default)"
 	@echo "  lib      - Build static library (libfuelwise.a)"
-	@echo "  test     - Build and run tests"
+	@echo "  test     - Build and run FuelWise plus full regression harness"
+	@echo "  test-regression - Run FuelWise tests plus validator + Ralph LP/MIP suites"
 	@echo "  wasm     - Build WebAssembly (requires Emscripten)"
 	@echo "  debug    - Build with debug symbols"
 	@echo "  clean    - Remove build artifacts"
