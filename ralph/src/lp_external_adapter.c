@@ -12,6 +12,18 @@ typedef struct {
     LPExternalAdapterEntry entries[LP_EXTERNAL_PROVIDER_GLOP + 1];
 } LPExternalAdapterRegistry;
 
+/*
+ * Process-wide external solver adapter registry (singleton).
+ *
+ * THREAD SAFETY: All access is serialized through g_lp_external_registry_mutex
+ * (recursive, initialized via pthread_once). The registry is inherently global
+ * because external solver backends (GLPK, CPLEX, etc.) are registered once per
+ * process and shared across all models/threads.
+ *
+ * Moving to per-instance config would require every RalphModel to carry its own
+ * adapter table, which adds overhead for no benefit — the set of available
+ * external solvers doesn't change between models.
+ */
 static LPExternalAdapterRegistry g_lp_external_registry = {0};
 static pthread_mutex_t g_lp_external_registry_mutex;
 static pthread_once_t g_lp_external_registry_mutex_once = PTHREAD_ONCE_INIT;

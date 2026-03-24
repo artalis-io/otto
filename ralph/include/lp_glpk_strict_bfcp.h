@@ -1,5 +1,5 @@
-#ifndef LP_GLPK_STRICT_BFCP_H
-#define LP_GLPK_STRICT_BFCP_H
+#ifndef RALPH_LP_GLPK_STRICT_BFCP_H
+#define RALPH_LP_GLPK_STRICT_BFCP_H
 
 #include "lp_policy_glpk_compat.h"
 
@@ -30,4 +30,4 @@ void lp_glpk_strict_bfcp_plan_init(LPGLPKStrictBFCPPlan *plan);
 int lp_glpk_strict_bfcp_build_plan(const LPGLPKStrictBFCPRequest *req,
                                    LPGLPKStrictBFCPPlan *plan);
 
-#endif /* LP_GLPK_STRICT_BFCP_H */
+#endif /* RALPH_LP_GLPK_STRICT_BFCP_H */

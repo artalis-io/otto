@@ -3288,3 +3288,163 @@ Phase E gates and artifacts:
 Notes:
 - `make -C ralph test` currently aborts in `test_ralph` on pre-existing Farkas/unbounded certificate checks in
   this branch state; netlib regression gates remain green with no new mismatches and no new timeouts.
+
+## HTTP Server Hardening Plan (Mar 2026)
+
+Goal: bring `ralph/api/src/main.c` up to parity with Carta/Velo/Locus server hardening
+patterns using existing shared infrastructure. Ralph is CPU-intensive (LP/MIP solve),
+making work queue + worker pool especially important.
+
+Reference implementation: `carta/api/src/main.c` (~1,937 lines).
+
+### Context
+
+The current Ralph HTTP server is a minimal ~207-line Mongoose wrapper. It handles requests
+synchronously on the event-loop thread — a single long-running MIP solve blocks all other
+clients. No rate limiting, no backpressure, no observability.
+
+The transport-agnostic split is already clean (`ralph_api.c` handles all logic,
+`main.c` is pure HTTP framing), so hardening only touches `main.c`.
+
+### Phase H0: Rate Limiting + Socket Timeout (Highest Priority)
+
+**Files changed:** `ralph/api/src/main.c`, `ralph/api/Makefile`
+
+1. Add includes: `sh_ratelimit.h`, `sh_httpserver.h`, `sh_cors.h`
+2. Add statics:
+   - `static ShRateLimiter *s_rate_limiter = NULL;`
+   - `static ShCorsConfig s_cors;`
+3. Init rate limiter in `main()`:
+   - Default 10 RPS / burst 50 (LP/MIP are expensive)
+   - Configurable via `RALPH_RATE_LIMIT_RPS`, `RALPH_RATE_LIMIT_BURST`
+4. Add `MG_EV_ACCEPT` handler calling `sh_mg_set_write_timeout(c, 5000)`
+5. Check rate limit at top of `MG_EV_HTTP_MSG` handler
+   - Return 429 on failure
+   - Health endpoint bypasses rate limit
+6. Replace manual CORS with `sh_cors.h` (`sh_cors_init`, `sh_cors_preflight_headers`)
+   - Configurable via `RALPH_CORS_ORIGINS`
+7. Add Makefile dependency on shared headers
+
+**Validation:**
+- `make ralph-api` builds clean
+- `make test-ralph-api` passes (existing integration tests)
+- Manual test: hammer with >10 RPS, verify 429 responses
+
+### Phase H1: Work Queue + Worker Pool
+
+**Files changed:** `ralph/api/src/main.c`
+
+1. Add includes: `sh_workqueue.h`, `sh_completion.h`, `sh_worker_pool.h`
+2. Define `RalphSolveWorkItem`:
+   ```c
+   typedef struct {
+       RalphAPIRequest req;       /* Copied request */
+       RalphAPIResponse resp;     /* Filled by worker */
+       ShCompletion completion;   /* Signaling */
+       int result;                /* ralph_api_handle return */
+   } RalphSolveWorkItem;
+   ```
+3. Add statics:
+   - `static ShWorkQueue *s_work_queue = NULL;`
+   - `static ShWorkerPool *s_worker_pool = NULL;`
+4. Init in `main()`:
+   - Work queue: depth 64, timeout 30s (matches max solve timeout)
+   - Worker pool: 2 workers default (LP/MIP solves are single-threaded,
+     limited concurrency is appropriate)
+   - Configurable via `RALPH_WORK_QUEUE_DEPTH`, `RALPH_WORKERS`
+5. Worker callback:
+   - Check `sh_completion_is_cancelled()` before solving
+   - Call `ralph_api_handle()` on the copied request
+   - Call `sh_completion_signal()` when done
+6. HTTP handler for `/api/v1/solve`:
+   - Copy request into work item (body must be duplicated — Mongoose reuses buffer)
+   - `sh_workqueue_try_push()` — return 503 if queue full
+   - `sh_completion_wait()` with timeout — return 504 if timed out,
+     call `sh_completion_cancel()` so worker skips processing
+   - Send response from work item
+7. Health and formats endpoints stay on event-loop thread (no queuing)
+8. Shutdown sequence: `sh_worker_pool_stop()` → `join()` → `free()`
+
+**Validation:**
+- Build clean
+- `make test-ralph-api` passes
+- Manual: concurrent solve requests are handled in parallel
+- Manual: queue-full returns 503, timeout returns 504
+
+### Phase H2: Stats Endpoint + Observability
+
+**Files changed:** `ralph/api/src/main.c`
+
+1. Add includes: `sh_log.h`, `sh_trace.h`, `sh_metrics.h`
+2. Add `/api/v1/stats` endpoint (bypasses work queue):
+   ```json
+   {
+     "service": "ralph-solver-server",
+     "version": "1.0.0",
+     "work_queue": {
+       "enabled": true,
+       "depth": 2,
+       "capacity": 64,
+       "pushed": 150,
+       "popped": 148,
+       "dropped": 1,
+       "expired": 1
+     },
+     "rate_limit": {
+       "enabled": true,
+       "rps": 10.0,
+       "burst": 50,
+       "allowed": 500,
+       "denied": 12
+     },
+     "solver": {
+       "solves_total": 148,
+       "solves_lp": 120,
+       "solves_mip": 28,
+       "avg_solve_ms": 45.2
+     }
+   }
+   ```
+3. Init structured logging: `sh_log_init()` with service "ralph"
+   - Replace all `printf`/`fprintf` with `SH_LOG_INFO`/`SH_LOG_WARN`/`SH_LOG_ERROR`
+4. Trace ID propagation:
+   - `sh_trace_from_headers()` at request entry
+   - `sh_trace_clear()` at request exit
+   - Include trace ID in response headers
+5. Metrics:
+   - `sh_metrics_init()` with service "ralph"
+   - Record `http_request_duration_ms` per endpoint
+   - Record `http_requests_total` counter with status label
+   - Record `ralph_solve_duration_ms` histogram
+   - Add `/metrics` endpoint (Prometheus format, bypasses work queue)
+6. Shutdown: `sh_metrics_shutdown()`, `sh_log_shutdown()`
+
+**Validation:**
+- `curl /api/v1/stats` returns valid JSON
+- `curl /metrics` returns Prometheus text
+- Logs are structured JSON when `SH_LOG_FORMAT=json`
+- Trace IDs propagate through request/response
+
+### Phase H3: Request Body Size Limit
+
+**Files changed:** `ralph/api/src/main.c`
+
+1. Add max body size check early in `ev_handler`:
+   - Reject requests >1MB with 413 Payload Too Large
+   - Protects against memory exhaustion before parsing
+2. Already covered by ralph_api.c size limits (100/50 vars/constraints),
+   but body size check catches the DoS vector at the HTTP layer
+
+### Execution Order
+
+H0 → H1 → H2 → H3 (each phase is independently deployable)
+
+### What NOT to Do
+
+- **No adaptive capacity** — Ralph solves are highly variable in duration
+  (0.1ms for tiny LP vs 30s for MIP timeout), so response-time-based auto-tuning
+  would be unstable. Fixed rate limits are appropriate.
+- **No HTTP worker threads** — Unlike Carta (tile rendering benefits from parallel
+  HTTP accept), Ralph's work queue handles concurrency. Single event-loop thread
+  with worker pool is the right architecture for a solver service.
+- **No caching** — Every solve request has different input. No benefit to caching.

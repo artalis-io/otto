@@ -1,5 +1,5 @@
-#ifndef LP_POLICY_GLPK_COMPAT_H
-#define LP_POLICY_GLPK_COMPAT_H
+#ifndef RALPH_LP_POLICY_GLPK_COMPAT_H
+#define RALPH_LP_POLICY_GLPK_COMPAT_H
 
 /* GLPK-like policy profile selector. */
 typedef enum {
@@ -165,4 +165,4 @@ int lp_policy_glpk_bfcp_supports_current_runtime(const LPGLPKCompatConfig *cfg,
                                                  const char **unsupported_param_out);
 const char* lp_policy_glpk_basis_name(int smcp_basis);
 
-#endif /* LP_POLICY_GLPK_COMPAT_H */
+#endif /* RALPH_LP_POLICY_GLPK_COMPAT_H */

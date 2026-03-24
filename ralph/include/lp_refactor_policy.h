@@ -1,5 +1,5 @@
-#ifndef LP_REFACTOR_POLICY_H
-#define LP_REFACTOR_POLICY_H
+#ifndef RALPH_LP_REFACTOR_POLICY_H
+#define RALPH_LP_REFACTOR_POLICY_H
 
 typedef struct {
     int interval;
@@ -418,4 +418,4 @@ LPPeriodicCostDampenReason lp_refactor_policy_periodic_cost_dampen_decision(
 const char* lp_refactor_policy_periodic_cost_dampen_reason_string(
     LPPeriodicCostDampenReason reason);
 
-#endif
+#endif /* RALPH_LP_REFACTOR_POLICY_H */
