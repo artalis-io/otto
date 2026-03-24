@@ -856,6 +856,7 @@ int fw_solve_refuel_milp(
     int x_start = 0;
     int z_start = 2 * k;
     double est_price = problem->remaining_fuel_value;
+    int fw_stats = 0;
 
     /* Build the raw MILP model */
     RalphMIPModel *model = fw_build_milp_model(problem);
@@ -871,6 +872,7 @@ int fw_solve_refuel_milp(
     /* Solve */
     int fw_verbose = (getenv("FW_VERBOSE") != NULL);
     int fw_debug = (getenv("FW_DEBUG") != NULL);
+    fw_stats = (getenv("FW_MIP_STATS") != NULL || getenv("RALPH_MIP_STATS") != NULL);
     ralph_mip_set_int_param(model, "verbose", fw_debug ? 2 : (fw_verbose ? 1 : 0));
     ralph_mip_set_int_param(model, "max_cut_rounds", 3);
     ralph_mip_set_int_param(model, "presolve", fw_presolve ? 1 : 0);
@@ -882,6 +884,12 @@ int fw_solve_refuel_milp(
     if (fw_verbose) {
         printf("  [fw] k=%d vars=%d nodes=%d status=%d\n",
                k, num_vars, ralph_mip_get_node_count(model), (int)status);
+    }
+    if (fw_stats) {
+        fprintf(stderr, "\n=== FuelWise MILP Profile ===\n");
+        fprintf(stderr, "Stations: %d\n", k);
+        fprintf(stderr, "Variables: %d\n", num_vars);
+        ralph_mip_print_stats(model);
     }
 
     fw_free_cut_context(&cut_ctx);

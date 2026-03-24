@@ -9,6 +9,10 @@
 
 #include "ralph_core.h"
 #include "ralph_mip.h"
+#include "mip.h"
+
+/* Internal helper exposed by ralph.c for diagnostics. */
+MIPSolver* ralph_get_mip_solver(const RalphModel *model);
 
 RalphMIPModel* ralph_mip_create(void) {
     return (RalphMIPModel *)ralph_core_create();
@@ -52,6 +56,10 @@ double ralph_mip_get_gap(const RalphMIPModel *model) {
 
 int ralph_mip_get_node_count(const RalphMIPModel *model) {
     return ralph_core_get_node_count((const RalphModel *)model);
+}
+
+void ralph_mip_print_stats(const RalphMIPModel *model) {
+    mip_print_stats(ralph_get_mip_solver((const RalphModel *)model));
 }
 
 int ralph_mip_set_branch_priorities(RalphMIPModel *model, const int *priorities) {

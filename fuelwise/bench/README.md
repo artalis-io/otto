@@ -14,6 +14,9 @@ make regression-test
 # Run the Ralph-vs-GLPK MILP benchmark gate
 make benchmark-gate
 
+# Profile the current worst MILP case with Ralph MIP telemetry
+make benchmark-profile
+
 # Run benchmark scenarios
 make test           # All scenarios, 10 runs each
 make quick          # Highway only, 5 runs
@@ -63,6 +66,26 @@ The gate:
 Raw apples-to-apples mode is also available:
 ```bash
 make benchmark-gate-raw
+```
+
+### Focused Performance Profile (`make benchmark-profile`)
+
+Runs a single focused MILP benchmark case and writes two artifacts:
+- aggregate benchmark JSON for the configured case
+- Ralph MIP phase telemetry for one deterministic run of that same case
+
+Defaults:
+- scenario: `milp75`
+- seed: `123`
+- aggregate runs: `5`
+- telemetry runs: `1`
+
+Artifacts are written under `/tmp/fuelwise-benchmark-profile` by default.
+
+Useful overrides:
+```bash
+make benchmark-profile PROFILE_SCENARIO=milp100 PROFILE_SEED=42
+make benchmark-profile-raw PROFILE_SCENARIO=milp75 PROFILE_SEED=123
 ```
 
 ### Benchmark Scenarios

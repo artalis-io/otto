@@ -35,7 +35,7 @@ extern "C" {
 #define MIP_RELIABILITY_ARTIFICIAL_SHALLOW_MAX_STRONG 1 /* Depth-1 strong probes on artificial-column LPs */
 #define MIP_RELIABILITY_ARTIFICIAL_PIVOT_BUDGET 32      /* Reduced pivot budget on artificial-column LPs */
 #define MIP_WARM_DUAL_ARTIFICIAL_MAX_DEPTH 1            /* After early iter-limit evidence, skip warm dual below this depth */
-#define MIP_WARM_DUAL_ITER_LIMIT_SKIP_AFTER 1           /* Warm dual iter-limit failures before skipping deeper artificial nodes */
+#define MIP_WARM_DUAL_ITER_LIMIT_SKIP_AFTER 3           /* Warm dual iter-limit failures before skipping deeper artificial nodes */
 
 /* Cut quality filter parameters */
 #define MIP_CUT_MIN_VIOLATION  1e-4   /* Minimum violation to apply a cut */
@@ -283,6 +283,7 @@ typedef struct {
     int root_lp_incremental_primal;   /* Root LP cut re-solves completed via warm primal resolve */
     int root_lp_incremental_fallbacks;/* Root LP cut re-solves that fell back to cold rebuild */
     int node_lp_warm_solves;     /* Node LP solves completed via warm reopt */
+    int node_lp_warm_primal_solves; /* Warm node solves recovered via prepared primal reopt */
     int node_lp_cold_solves;     /* Node LP solves completed via cold start */
     int root_gomory_cuts_generated; /* Root Gomory cuts generated */
     int root_gomory_rows_scanned;    /* Gomory root rows inspected */

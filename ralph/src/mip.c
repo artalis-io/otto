@@ -604,6 +604,7 @@ MIPSolver* mip_create(LPModel *model, int detect_special, int pool_capacity) {
     solver->root_lp_incremental_dual = 0;
     solver->root_lp_incremental_primal = 0;
     solver->root_lp_incremental_fallbacks = 0;
+    solver->node_lp_warm_primal_solves = 0;
     solver->node_lp_warm_dual_fallbacks = 0;
     solver->node_lp_warm_bound_fallbacks = 0;
     solver->node_lp_warm_dual_skips = 0;
@@ -1923,6 +1924,7 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
     int can_warm_reuse = 0;
     int stage_allowed = (solver->node_basis_stage_cooldown <= 0);
     int used_direct_reuse = 0;
+    int skip_warm_dual = 0;
     if (has_saved_basis && !node_basis_snapshot_sane(node)) {
         clear_node_basis(node);
         solver->node_basis_warm_rejected++;
@@ -1968,7 +1970,7 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
 
     if (can_warm_reuse && mip_should_skip_warm_dual(solver, node, lp)) {
         solver->node_lp_warm_dual_skips++;
-        can_warm_reuse = 0;
+        skip_warm_dual = 1;
     }
 
     if (can_warm_reuse) {
@@ -1976,36 +1978,65 @@ static int solve_node_lp(MIPSolver *solver, BBNode *node) {
         if (((!used_direct_reuse) ||
              mip_lp_apply_structural_bounds(tab, model->num_vars, node->lb, node->ub) == 0) &&
             mip_lp_recompute(tab) == 0) {
-            int rc = -1;
-            (void)mip_lp_dual_reopt(lp, 500, &rc);
-            if (solver->verbose >= 2) {
-                LP_LOG_STDOUT("  [solve_node_lp] warm v2: rc=%d status=%d iters=%d obj=%.4f\n",
-                              rc, lp->status, lp->iterations, lp->obj_value);
-            }
-            if (rc == 0 && lp->status == RALPH_STATUS_OPTIMAL) {
-                if (mip_solution_within_node_bounds(model, lp->solution, node->lb, node->ub)) {
+            if (!skip_warm_dual) {
+                int rc = -1;
+                (void)mip_lp_dual_reopt(lp, 500, &rc);
+                if (solver->verbose >= 2) {
+                    LP_LOG_STDOUT("  [solve_node_lp] warm v2: rc=%d status=%d iters=%d obj=%.4f\n",
+                                  rc, lp->status, lp->iterations, lp->obj_value);
+                }
+                if (rc == 0 && lp->status == RALPH_STATUS_OPTIMAL) {
+                    if (mip_solution_within_node_bounds(model, lp->solution, node->lb, node->ub)) {
+                        solver->node_lp_warm_solves++;
+                        solver->time_node_lp_warm += mip_cpu_time_now() - t_warm_start;
+                        goto node_lp_done;
+                    }
+                    solver->node_lp_warm_bound_fallbacks++;
+                    if (solver->verbose >= 2) {
+                        LP_LOG_STDOUT("  [solve_node_lp] warm solution violates node bounds; forcing cold start\n");
+                    }
+                }
+                /* v2 detected infeasible or hit objective limit — valid result */
+                if (lp->status == RALPH_STATUS_INFEASIBLE ||
+                    lp->status == RALPH_STATUS_OBJ_LIMIT) {
                     solver->node_lp_warm_solves++;
                     solver->time_node_lp_warm += mip_cpu_time_now() - t_warm_start;
                     goto node_lp_done;
                 }
-                solver->node_lp_warm_bound_fallbacks++;
+                if (rc != 0 &&
+                    lp->status != RALPH_STATUS_INFEASIBLE &&
+                    lp->status != RALPH_STATUS_OBJ_LIMIT) {
+                    mip_record_warm_dual_fail_reason(solver, mip_lp_dual_fail_reason(lp));
+                }
+                solver->node_lp_warm_dual_fallbacks++;
+            }
+
+            /* If warm dual is intentionally skipped, or fails on an equality-heavy
+             * tableau, try prepared-tableau primal reoptimization before a full
+             * cold rebuild. This keeps the restored basis/tableau in play for the
+             * deep nodes where FuelWise currently spends most of its time. */
+            if (skip_warm_dual || mip_lp_needs_dual_repair(lp)) {
+                int primal_rc = mip_lp_primal_reopt(lp);
                 if (solver->verbose >= 2) {
-                    LP_LOG_STDOUT("  [solve_node_lp] warm solution violates node bounds; forcing cold start\n");
+                    LP_LOG_STDOUT("  [solve_node_lp] warm primal: rc=%d status=%d iters=%d obj=%.4f\n",
+                                  primal_rc, lp->status, lp->iterations, lp->obj_value);
+                }
+                if (lp->status == RALPH_STATUS_OPTIMAL) {
+                    if (mip_solution_within_node_bounds(model, lp->solution, node->lb, node->ub)) {
+                        solver->node_lp_warm_solves++;
+                        solver->node_lp_warm_primal_solves++;
+                        solver->time_node_lp_warm += mip_cpu_time_now() - t_warm_start;
+                        goto node_lp_done;
+                    }
+                    solver->node_lp_warm_bound_fallbacks++;
+                } else if (lp->status == RALPH_STATUS_INFEASIBLE ||
+                           lp->status == RALPH_STATUS_OBJ_LIMIT) {
+                    solver->node_lp_warm_solves++;
+                    solver->node_lp_warm_primal_solves++;
+                    solver->time_node_lp_warm += mip_cpu_time_now() - t_warm_start;
+                    goto node_lp_done;
                 }
             }
-            /* v2 detected infeasible or hit objective limit — valid result */
-            if (lp->status == RALPH_STATUS_INFEASIBLE ||
-                lp->status == RALPH_STATUS_OBJ_LIMIT) {
-                solver->node_lp_warm_solves++;
-                solver->time_node_lp_warm += mip_cpu_time_now() - t_warm_start;
-                goto node_lp_done;
-            }
-            if (rc != 0 &&
-                lp->status != RALPH_STATUS_INFEASIBLE &&
-                lp->status != RALPH_STATUS_OBJ_LIMIT) {
-                mip_record_warm_dual_fail_reason(solver, mip_lp_dual_fail_reason(lp));
-            }
-            solver->node_lp_warm_dual_fallbacks++;
         }
         if (solver->verbose >= 2) {
             LP_LOG_STDOUT("  [solve_node_lp] warm path failed, cold starting\n");
@@ -3075,6 +3106,8 @@ void mip_print_stats(const MIPSolver *solver) {
     LP_LOG_STDOUT("Node LP solves: simplex=%d warm=%d cold=%d lap=%d\n",
            solver->simplex_nodes_solved, solver->node_lp_warm_solves,
            solver->node_lp_cold_solves, solver->lap_nodes_solved);
+    LP_LOG_STDOUT("Warm node solve breakdown: primal=%d\n",
+           solver->node_lp_warm_primal_solves);
     LP_LOG_STDOUT("Node LP time: total=%.3fs (warm=%.3fs, cold=%.3fs)\n",
            solver->time_node_lp_total, solver->time_node_lp_warm,
            solver->time_node_lp_cold);

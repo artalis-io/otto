@@ -26,6 +26,11 @@ OBJS = $(SRCS:.c=.o)
 # Target binary
 TARGET = fuelwise-bench
 GATE_TARGET = fuelwise-bench-gate
+PROFILE_ARTIFACT_DIR ?= /tmp/fuelwise-benchmark-profile
+PROFILE_SCENARIO ?= milp75
+PROFILE_SEED ?= 123
+PROFILE_RUNS ?= 5
+PROFILE_STATS_RUNS ?= 1
 
 # Validator test binary
 TEST_VALIDATOR = test_validator
@@ -35,6 +40,7 @@ RALPH_DIR = ../../ralph
 
 .PHONY: all clean test quick validator-test regression-test
 .PHONY: benchmark-gate benchmark-gate-raw
+.PHONY: benchmark-profile benchmark-profile-raw
 
 all: $(TARGET)
 
@@ -91,6 +97,20 @@ benchmark-gate: $(GATE_TARGET)
 benchmark-gate-raw: $(GATE_TARGET)
 	./$(GATE_TARGET) --compare-raw
 
+benchmark-profile: $(TARGET)
+	mkdir -p $(PROFILE_ARTIFACT_DIR)
+	./$(TARGET) --scenario $(PROFILE_SCENARIO) --runs $(PROFILE_RUNS) --seed $(PROFILE_SEED) --milp --glpk --presolve --json > $(PROFILE_ARTIFACT_DIR)/$(PROFILE_SCENARIO)_seed$(PROFILE_SEED)_runs$(PROFILE_RUNS).json
+	FW_MIP_STATS=1 ./$(TARGET) --scenario $(PROFILE_SCENARIO) --runs $(PROFILE_STATS_RUNS) --seed $(PROFILE_SEED) --milp --glpk --presolve > $(PROFILE_ARTIFACT_DIR)/$(PROFILE_SCENARIO)_seed$(PROFILE_SEED)_stats.txt 2>&1
+	@echo "Wrote benchmark JSON to $(PROFILE_ARTIFACT_DIR)/$(PROFILE_SCENARIO)_seed$(PROFILE_SEED)_runs$(PROFILE_RUNS).json"
+	@echo "Wrote Ralph MIP stats to $(PROFILE_ARTIFACT_DIR)/$(PROFILE_SCENARIO)_seed$(PROFILE_SEED)_stats.txt"
+
+benchmark-profile-raw: $(TARGET)
+	mkdir -p $(PROFILE_ARTIFACT_DIR)
+	./$(TARGET) --scenario $(PROFILE_SCENARIO) --runs $(PROFILE_RUNS) --seed $(PROFILE_SEED) --milp --glpk --presolve --compare-raw --json > $(PROFILE_ARTIFACT_DIR)/$(PROFILE_SCENARIO)_seed$(PROFILE_SEED)_runs$(PROFILE_RUNS)_raw.json
+	FW_MIP_STATS=1 ./$(TARGET) --scenario $(PROFILE_SCENARIO) --runs $(PROFILE_STATS_RUNS) --seed $(PROFILE_SEED) --milp --glpk --presolve --compare-raw > $(PROFILE_ARTIFACT_DIR)/$(PROFILE_SCENARIO)_seed$(PROFILE_SEED)_stats_raw.txt 2>&1
+	@echo "Wrote benchmark JSON to $(PROFILE_ARTIFACT_DIR)/$(PROFILE_SCENARIO)_seed$(PROFILE_SEED)_runs$(PROFILE_RUNS)_raw.json"
+	@echo "Wrote Ralph MIP stats to $(PROFILE_ARTIFACT_DIR)/$(PROFILE_SCENARIO)_seed$(PROFILE_SEED)_stats_raw.txt"
+
 clean:
 	rm -f $(OBJS) $(TEST_VALIDATOR_OBJS) $(GATE_OBJS) $(TARGET) $(TEST_VALIDATOR) $(GATE_TARGET)
 
@@ -104,4 +124,6 @@ help:
 	@echo "  regression-test - Run FuelWise validator plus Ralph LP/MIP suites"
 	@echo "  benchmark-gate - Run the MILP Ralph-vs-GLPK benchmark gate"
 	@echo "  benchmark-gate-raw - Run the raw MILP benchmark gate"
+	@echo "  benchmark-profile - Profile one MILP case with Ralph MIP stats"
+	@echo "  benchmark-profile-raw - Raw-model variant of benchmark-profile"
 	@echo "  clean   - Remove build artifacts"

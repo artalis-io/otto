@@ -105,6 +105,17 @@ static inline int mip_lp_dual_reopt(SimplexSolver *lp, int iter_budget, int *rc_
     return rc;
 }
 
+/* Reoptimize an already-prepared tableau via primal simplex without rebuilding it. */
+static inline int mip_lp_primal_reopt(SimplexSolver *lp) {
+    if (!lp || !lp->tableau) return -1;
+
+    int save_method = lp->method;
+    lp->method = 0;
+    int rc = simplex_resolve_prepared_primal_tableau(lp);
+    lp->method = save_method;
+    return rc;
+}
+
 static inline MIPLPDualFailReason mip_lp_dual_fail_reason(const SimplexSolver *lp) {
     if (!lp) return MIP_LP_DUAL_FAIL_OTHER;
     switch (lp->status) {
