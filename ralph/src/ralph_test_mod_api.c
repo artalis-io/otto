@@ -319,11 +319,11 @@ int ralph_test_read_mip_start_file(RalphModel *model, const char *filename) {
 }
 
 void ralph_test_set_cut_callback(RalphModel *model, const RalphCutCallback *callback) {
-    ralph_mip_set_cut_callback((RalphMIPModel *)model, (const RalphMIPCutCallback *)callback);
+    ralph_core_set_cut_callback(model, callback);
 }
 
 void ralph_test_set_branch_callback(RalphModel *model, const RalphBranchCallback *callback) {
-    ralph_mip_set_branch_callback((RalphMIPModel *)model, (const RalphMIPBranchCallback *)callback);
+    ralph_core_set_branch_callback(model, callback);
 }
 
 int ralph_test_solve_benders(RalphModel *model,

@@ -13,6 +13,60 @@
 
 /* Internal helper exposed by ralph.c for diagnostics. */
 MIPSolver* ralph_get_mip_solver(const RalphModel *model);
+void ralph_core_set_cut_callback_owned(RalphModel *model,
+                                       const RalphCutCallback *callback,
+                                       void *owned_ctx,
+                                       void (*free_owned_ctx)(void *));
+
+typedef struct {
+    RalphMIPCutCallback callback;
+} RalphMIPCutCallbackBridge;
+
+static void ralph_mip_free_cut_callback_bridge(void *ctx) {
+    free(ctx);
+}
+
+static int ralph_mip_cut_callback_bridge_generate(
+    void *user_data,
+    const double *x_relaxation,
+    int num_vars,
+    RalphCut *cuts,
+    int max_cuts) {
+    RalphMIPCutCallbackBridge *bridge = (RalphMIPCutCallbackBridge *)user_data;
+    RalphMIPCut *public_cuts = NULL;
+    int generated;
+
+    if (!bridge || !bridge->callback.generate_cuts) return 0;
+    if (max_cuts < 0) return -1;
+
+    if (max_cuts > 0) {
+        public_cuts = (RalphMIPCut *)calloc((size_t)max_cuts, sizeof(RalphMIPCut));
+        if (!public_cuts) return -1;
+    }
+
+    generated = bridge->callback.generate_cuts(
+        bridge->callback.user_data,
+        x_relaxation,
+        num_vars,
+        public_cuts,
+        max_cuts
+    );
+    if (generated < 0 || generated > max_cuts) {
+        free(public_cuts);
+        return -1;
+    }
+
+    for (int i = 0; i < generated; i++) {
+        cuts[i].indices = public_cuts[i].indices;
+        cuts[i].coeffs = public_cuts[i].coeffs;
+        cuts[i].num_vars = public_cuts[i].num_vars;
+        cuts[i].sense = (RalphSense)public_cuts[i].sense;
+        cuts[i].rhs = public_cuts[i].rhs;
+    }
+
+    free(public_cuts);
+    return generated;
+}
 
 RalphMIPModel* ralph_mip_create(void) {
     return (RalphMIPModel *)ralph_core_create();
@@ -89,7 +143,29 @@ int ralph_mip_set_branch_directions(RalphMIPModel *model,
 }
 
 void ralph_mip_set_cut_callback(RalphMIPModel *model, const RalphMIPCutCallback *callback) {
-    ralph_core_set_cut_callback((RalphModel *)model, (const RalphCutCallback *)callback);
+    RalphCutCallback internal = {0};
+    RalphMIPCutCallbackBridge *bridge = NULL;
+
+    if (!model) return;
+
+    if (!callback || !callback->generate_cuts) {
+        ralph_core_set_cut_callback_owned((RalphModel *)model, NULL, NULL, NULL);
+        return;
+    }
+
+    bridge = (RalphMIPCutCallbackBridge *)malloc(sizeof(RalphMIPCutCallbackBridge));
+    if (!bridge) {
+        ralph_core_set_cut_callback_owned((RalphModel *)model, NULL, NULL, NULL);
+        return;
+    }
+    bridge->callback = *callback;
+
+    internal.generate_cuts = ralph_mip_cut_callback_bridge_generate;
+    internal.user_data = bridge;
+    ralph_core_set_cut_callback_owned((RalphModel *)model,
+                                      &internal,
+                                      bridge,
+                                      ralph_mip_free_cut_callback_bridge);
 }
 
 void ralph_mip_set_branch_callback(RalphMIPModel *model, const RalphMIPBranchCallback *callback) {

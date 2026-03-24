@@ -439,9 +439,11 @@ static void extract_farkas_ray_dual(SimplexSolver *solver) {
     tab->owner = solver;
     int m = tab->m;
 
-    /* Allocate if needed */
-    if (!solver->farkas_ray) {
-        solver->farkas_ray = (double*)calloc(m, sizeof(double));
+    /* Grow the reusable certificate buffer when the tableau dimension changes. */
+    if (!solver->farkas_ray || solver->farkas_ray_capacity < m) {
+        free(solver->farkas_ray);
+        solver->farkas_ray = (double*)calloc((size_t)m, sizeof(double));
+        solver->farkas_ray_capacity = solver->farkas_ray ? m : 0;
     }
     if (!solver->farkas_ray) {
         solver->farkas_valid = 0;
