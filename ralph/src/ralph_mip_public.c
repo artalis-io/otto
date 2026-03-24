@@ -6,6 +6,7 @@
  */
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "ralph_core.h"
 #include "ralph_mip.h"
@@ -230,7 +231,16 @@ int ralph_mip_solve_benders(RalphMIPModel *model,
     RalphBendersResult *legacy_result_ptr = NULL;
     int rc;
 
-    if (!model || !config) return -1;
+    memset(&legacy_result, 0, sizeof(legacy_result));
+    legacy_result.status = RALPH_STATUS_ERROR;
+
+    if (!model || !config) {
+        if (result) {
+            memset(result, 0, sizeof(*result));
+            result->status = (RalphLPStatus)RALPH_STATUS_ERROR;
+        }
+        return -1;
+    }
 
     legacy_cfg.master_var_indices = config->master_var_indices;
     legacy_cfg.num_master_vars = config->num_master_vars;
@@ -253,7 +263,7 @@ int ralph_mip_solve_benders(RalphMIPModel *model,
     }
 
     rc = ralph_core_solve_benders((RalphModel *)model, &legacy_cfg, x, legacy_result_ptr);
-    if (rc != 0 || !result) return rc;
+    if (!result) return rc;
 
     result->status = (RalphLPStatus)legacy_result.status;
     result->objective = legacy_result.objective;
@@ -270,5 +280,5 @@ int ralph_mip_solve_benders(RalphMIPModel *model,
     result->subproblem_warm_starts = legacy_result.subproblem_warm_starts;
     result->subproblem_cold_starts = legacy_result.subproblem_cold_starts;
     result->solve_time = legacy_result.solve_time;
-    return 0;
+    return rc;
 }
