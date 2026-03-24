@@ -123,6 +123,8 @@ struct RalphModel {
     /* Cut callback (stored until MIP solver is created) */
     RalphCutCallback cut_callback;
     int has_cut_callback;
+    void *owned_cut_callback_ctx;
+    void (*free_owned_cut_callback_ctx)(void *);
 
     /* Branch callback (stored until MIP solver is created) */
     RalphBranchCallback branch_callback;
@@ -163,6 +165,15 @@ struct RalphBasis {
 typedef struct {
     RalphLPExternalAdapter adapter;
 } RalphLPExternalAdapterBridgeEntry;
+
+static void ralph_clear_owned_cut_callback(RalphModel *model) {
+    if (!model) return;
+    if (model->free_owned_cut_callback_ctx && model->owned_cut_callback_ctx) {
+        model->free_owned_cut_callback_ctx(model->owned_cut_callback_ctx);
+    }
+    model->owned_cut_callback_ctx = NULL;
+    model->free_owned_cut_callback_ctx = NULL;
+}
 
 static int ralph_lp_external_provider_valid_public(RalphLPExternalProvider provider) {
     return provider >= RALPH_LP_EXTERNAL_PROVIDER_GLPK &&
@@ -1135,6 +1146,7 @@ void ralph_core_free(RalphModel *model) {
     lp_model_free(model->lp_model);
     simplex_free(model->lp_solver);
     mip_free(model->mip_solver);
+    ralph_clear_owned_cut_callback(model);
     free(model->solution);
     free(model->dual_solution);
     free(model->reduced_costs);
@@ -5192,16 +5204,38 @@ int ralph_core_read_mip_start_file(RalphModel *model, const char *filename) {
  * Cut Callback
  * ============================================================================ */
 
-void ralph_core_set_cut_callback(RalphModel *model, const RalphCutCallback *callback) {
+void ralph_core_set_cut_callback_owned(RalphModel *model,
+                                       const RalphCutCallback *callback,
+                                       void *owned_ctx,
+                                       void (*free_owned_ctx)(void *)) {
     if (!model) return;
+
+    ralph_clear_owned_cut_callback(model);
 
     if (callback) {
         model->cut_callback = *callback;
         model->has_cut_callback = 1;
+        model->owned_cut_callback_ctx = owned_ctx;
+        model->free_owned_cut_callback_ctx = free_owned_ctx;
     } else {
         memset(&model->cut_callback, 0, sizeof(RalphCutCallback));
         model->has_cut_callback = 0;
+        if (free_owned_ctx && owned_ctx) free_owned_ctx(owned_ctx);
     }
+
+    if (model->mip_solver) {
+        if (model->has_cut_callback) {
+            model->mip_solver->cut_callback = model->cut_callback;
+            model->mip_solver->has_cut_callback = 1;
+        } else {
+            memset(&model->mip_solver->cut_callback, 0, sizeof(RalphCutCallback));
+            model->mip_solver->has_cut_callback = 0;
+        }
+    }
+}
+
+void ralph_core_set_cut_callback(RalphModel *model, const RalphCutCallback *callback) {
+    ralph_core_set_cut_callback_owned(model, callback, NULL, NULL);
 }
 
 /* ============================================================================

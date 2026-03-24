@@ -1398,8 +1398,10 @@ typedef struct SimplexSolver {
 
     /* Farkas ray (certificate of infeasibility) */
     double *farkas_ray;     /* Size num_cons, valid when status == INFEASIBLE */
+    int farkas_ray_capacity;
     int farkas_valid;       /* 1 if farkas_ray contains valid certificate */
     double *unbounded_ray;  /* Size num_vars, valid when status == UNBOUNDED */
+    int unbounded_ray_capacity;
     int unbounded_valid;    /* 1 if unbounded_ray contains a valid direction */
 
     /* Dual simplex enhancements */

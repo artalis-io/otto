@@ -6866,9 +6866,11 @@ static void extract_farkas_ray(SimplexSolver *solver) {
     SimplexTableau *tab = solver->tableau;
     int m = tab->m;
 
-    /* Allocate if needed */
-    if (!solver->farkas_ray) {
-        solver->farkas_ray = (double*)calloc(m, sizeof(double));
+    /* Grow the reusable certificate buffer when the tableau dimension changes. */
+    if (!solver->farkas_ray || solver->farkas_ray_capacity < m) {
+        free(solver->farkas_ray);
+        solver->farkas_ray = (double*)calloc((size_t)m, sizeof(double));
+        solver->farkas_ray_capacity = solver->farkas_ray ? m : 0;
     }
     if (!solver->farkas_ray) {
         solver->farkas_valid = 0;
@@ -6957,8 +6959,10 @@ static void extract_unbounded_ray(SimplexSolver *solver, int entering, double di
         return;
     }
 
-    if (!solver->unbounded_ray) {
+    if (!solver->unbounded_ray || solver->unbounded_ray_capacity < n_orig) {
+        free(solver->unbounded_ray);
         solver->unbounded_ray = (double*)calloc((size_t)n_orig, sizeof(double));
+        solver->unbounded_ray_capacity = solver->unbounded_ray ? n_orig : 0;
     }
     if (!solver->unbounded_ray) {
         solver->unbounded_valid = 0;

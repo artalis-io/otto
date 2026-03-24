@@ -12,6 +12,7 @@
 
 static int tests_run = 0;
 static int tests_passed = 0;
+static int public_cut_cb_calls = 0;
 
 #define ASSERT_TRUE(cond, msg) do { \
     tests_run++; \
@@ -37,11 +38,13 @@ static int test_cut_cb_generate(
     int num_vars,
     RalphMIPCut *cuts,
     int max_cuts) {
-    (void)user_data;
+    int *threshold_signaled = (int *)user_data;
     (void)x_relaxation;
     (void)num_vars;
     (void)cuts;
     (void)max_cuts;
+    public_cut_cb_calls++;
+    if (threshold_signaled) *threshold_signaled = 1;
     return 0;
 }
 
@@ -154,9 +157,52 @@ static void test_mip_modular_header_and_wrappers(void) {
     ralph_mip_free(model);
 }
 
+static void test_mip_public_cut_callback_invocation(void) {
+    RalphMIPModel *model = ralph_mip_create();
+    RalphMIPCutCallback cut_cb;
+    double x[2] = {0.0, 0.0};
+    int callback_seen = 0;
+
+    ASSERT_TRUE(model != NULL, "mip modular: callback model created");
+    if (!model) return;
+
+    ASSERT_TRUE(ralph_mip_set_int_param(model, "presolve", 0) == 0,
+                "mip modular: callback presolve off");
+    ASSERT_TRUE(ralph_mip_set_int_param(model, "max_cut_rounds", 1) == 0,
+                "mip modular: callback cut rounds set");
+    ASSERT_TRUE(ralph_lp_set_obj_sense(model, RALPH_LP_OBJ_MAXIMIZE) == 0,
+                "mip modular: callback objective sense");
+    ASSERT_TRUE(ralph_lp_add_var(model, 0.0, 1.0, 1.0, RALPH_LP_VAR_BINARY) == 0,
+                "mip modular: callback add x");
+    ASSERT_TRUE(ralph_lp_add_var(model, 0.0, 1.0, 1.0, RALPH_LP_VAR_BINARY) == 1,
+                "mip modular: callback add y");
+    {
+        int idx[] = {0, 1};
+        double val[] = {2.0, 2.0};
+        ASSERT_TRUE(ralph_lp_add_constraint(model, 2, idx, val, RALPH_LP_SENSE_LESS_EQUAL, 3.0) == 0,
+                    "mip modular: callback add fractional row");
+    }
+
+    public_cut_cb_calls = 0;
+    cut_cb.generate_cuts = test_cut_cb_generate;
+    cut_cb.user_data = &callback_seen;
+    ralph_mip_set_cut_callback(model, &cut_cb);
+
+    ASSERT_TRUE(ralph_mip_optimize(model) == 0, "mip modular: callback optimize");
+    ASSERT_TRUE(ralph_mip_get_status(model) == RALPH_LP_STATUS_OPTIMAL,
+                "mip modular: callback status optimal");
+    ASSERT_TRUE(ralph_mip_get_solution(model, x) == 0, "mip modular: callback solution");
+    ASSERT_NEAR(ralph_mip_get_objval(model), 1.0, 1e-9, "mip modular: callback objective");
+    ASSERT_TRUE(callback_seen == 1, "mip modular: callback user data observed");
+    ASSERT_TRUE(public_cut_cb_calls > 0, "mip modular: callback invoked");
+
+    ralph_mip_free(model);
+}
+
 int main(void) {
     printf("Running modular MIP API split tests...\n");
     test_mip_modular_header_and_wrappers();
+    test_mip_public_cut_callback_invocation();
     printf("MIP modular tests: %d/%d passed\n", tests_passed, tests_run);
     return (tests_passed == tests_run) ? 0 : 1;
 }
