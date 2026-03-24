@@ -33,6 +33,12 @@ static double get_time_sec(void) {
     return (double)clock() / CLOCKS_PER_SEC;
 }
 
+static void benders_init_error_result(RalphBendersResult *result) {
+    if (!result) return;
+    memset(result, 0, sizeof(*result));
+    result->status = RALPH_STATUS_ERROR;
+}
+
 /* Sense-aware certificate scalar in original subproblem row space.
  * For >= rows, multiply RHS by -1 to map to <= orientation. */
 static double benders_farkas_rhs_dot(const LPModel *sub, const double *ray) {
@@ -283,6 +289,14 @@ int benders_partition(BendersContext *ctx) {
             ctx->constraint_class[i] = 1; /* Subproblem only */
             ctx->num_sub_cons++;
         }
+    }
+
+    if (ctx->num_master_cons == 0) {
+        if (ctx->config.verbose) {
+            fprintf(stderr,
+                    "Benders: decomposition requires at least one pure-master constraint\n");
+        }
+        return -1;
     }
 
     /* Build linking constraint details */
@@ -1483,7 +1497,12 @@ int benders_solve(
     double *x,
     RalphBendersResult *result)
 {
-    if (!lp_model || !config) return -1;
+    if (!lp_model || !config) {
+        benders_init_error_result(result);
+        return -1;
+    }
+
+    benders_init_error_result(result);
 
     /* Create Benders context */
     BendersContext *ctx = benders_create(lp_model, config);
