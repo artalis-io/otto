@@ -4000,7 +4000,7 @@ int tableau_compute_solution(SimplexTableau *tab) {
         int lu_factorize_calls = -1;
         int lu_num_updates = -1;
         if (tab->lu) {
-            lu_factorize_calls = tab->lu->telemetry.perf_factorize_calls;
+            lu_factorize_calls = (int)lu_get_factorize_calls(tab->lu);
             lu_num_updates = lu_get_num_updates(tab->lu);
             if (tab->solution_last_residual_iter == tab->iterations &&
                 tab->solution_last_residual_factorize_calls == lu_factorize_calls &&

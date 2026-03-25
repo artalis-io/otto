@@ -2792,6 +2792,10 @@ int lu_get_sym_valid(const LUFactorization *lu) {
     return lu ? lu->sym_valid : 0;
 }
 
+uint64_t lu_get_factorize_calls(const LUFactorization *lu) {
+    return lu ? lu->telemetry.perf_factorize_calls : 0;
+}
+
 void lu_set_pivot_tol(LUFactorization *lu, double tol) {
     if (lu) lu->pivot_tol = tol;
 }
