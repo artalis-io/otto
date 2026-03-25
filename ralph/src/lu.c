@@ -2721,3 +2721,127 @@ void lu_print(const LUFactorization *lu) {
     }
     printf("...]\n");
 }
+
+/* ============================================================================
+ * LU Getter/Setter API (R0.3)
+ * Provides encapsulated access to LU state, replacing direct field access
+ * from simplex.c and dual_simplex.c.
+ * ============================================================================ */
+
+int lu_get_num_updates(const LUFactorization *lu) {
+    return lu ? lu->num_updates : 0;
+}
+
+int lu_get_max_updates(const LUFactorization *lu) {
+    return lu ? lu->max_updates : 0;
+}
+
+double lu_get_growth_factor(const LUFactorization *lu) {
+    return lu ? lu->growth_factor : 0.0;
+}
+
+double lu_get_cond_estimate(const LUFactorization *lu) {
+    return lu ? lu->cond_estimate : 1.0;
+}
+
+double lu_get_growth_refactor_threshold(const LUFactorization *lu) {
+    return lu ? lu->growth_refactor_threshold : 0.0;
+}
+
+int lu_get_spike_pool_used(const LUFactorization *lu) {
+    return lu ? lu->spike_pool_used : 0;
+}
+
+int lu_get_spike_pool_capacity(const LUFactorization *lu) {
+    return lu ? lu->spike_pool_capacity : 0;
+}
+
+int lu_get_use_ft_updates(const LUFactorization *lu) {
+    return lu ? lu->use_ft_updates : 0;
+}
+
+int lu_get_ft_num_updates(const LUFactorization *lu) {
+    return lu ? lu->ft_num_updates : 0;
+}
+
+LUFailureReason lu_get_last_failure_reason(const LUFactorization *lu) {
+    return lu ? (LUFailureReason)lu->last_failure_reason : LU_FAIL_NONE;
+}
+
+int lu_get_last_refactor_trigger_reason(const LUFactorization *lu) {
+    return lu ? lu->last_refactor_trigger_reason : 0;
+}
+
+double lu_get_pivot_tol(const LUFactorization *lu) {
+    return lu ? lu->pivot_tol : RALPH_PIVOT_TOL;
+}
+
+int lu_get_backend_policy(const LUFactorization *lu) {
+    return lu ? lu->backend_policy : 0;
+}
+
+int lu_get_num_regularized(const LUFactorization *lu) {
+    return lu ? lu->num_regularized : 0;
+}
+
+int lu_get_telemetry_enabled(const LUFactorization *lu) {
+    return lu ? lu->telemetry_enabled : 0;
+}
+
+int lu_get_sym_valid(const LUFactorization *lu) {
+    return lu ? lu->sym_valid : 0;
+}
+
+void lu_set_pivot_tol(LUFactorization *lu, double tol) {
+    if (lu) lu->pivot_tol = tol;
+}
+
+void lu_set_max_updates(LUFactorization *lu, int max) {
+    if (lu) lu->max_updates = max;
+}
+
+void lu_set_growth_refactor_threshold(LUFactorization *lu, double threshold) {
+    if (lu) lu->growth_refactor_threshold = threshold;
+}
+
+void lu_set_backend_policy(LUFactorization *lu, int policy) {
+    if (lu) lu->backend_policy = policy;
+}
+
+void lu_set_telemetry_enabled(LUFactorization *lu, int enabled) {
+    if (lu) lu->telemetry_enabled = enabled;
+}
+
+void lu_set_owner(LUFactorization *lu, void *owner) {
+    if (lu) lu->owner = (struct SimplexSolver *)owner;
+}
+
+void lu_set_basis_governor(LUFactorization *lu, void *governor) {
+    if (lu) lu->basis_governor = (LPBasisGovernorState *)governor;
+}
+
+void lu_set_mkz_enabled(LUFactorization *lu, int enabled) {
+    if (lu) lu->mkz_enabled = enabled;
+}
+
+void lu_set_sn_enabled(LUFactorization *lu, int enabled) {
+    if (lu) lu->sn_enabled = enabled;
+}
+
+void lu_invalidate_symbolic_cache(LUFactorization *lu) {
+    if (lu) lu->sym_valid = 0;
+}
+
+void lu_force_refactorization(LUFactorization *lu) {
+    if (lu) lu->num_updates = lu->max_updates;
+}
+
+void lu_configure_regularization(LUFactorization *lu, int allow, int max_reg,
+                                  const int *redundant_rows, int num_redundant) {
+    if (!lu) return;
+    lu->allow_regularization = allow;
+    lu->max_regularizations = max_reg;
+    lu->redundant_rows = redundant_rows;
+    lu->num_redundant = num_redundant;
+    lu->num_regularized = 0;
+}
