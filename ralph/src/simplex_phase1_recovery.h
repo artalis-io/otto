@@ -162,4 +162,33 @@ void p1_recovery_init(P1RecoveryState *rs,
                       const SimplexSolver *solver,
                       const SimplexTableau *tab);
 
+/* ── Progress operations ─────────────────────────────────────────── */
+
+/* Reset the 4 progress-window fields (no_progress_streak, prev/anchor art_sum,
+ * window_steps).  Does NOT reset no_pivot_streak or other progress state. */
+void p1_progress_reset(P1ProgressState *ps);
+
+/* Update progress tracking based on current artificial variable sum. */
+void p1_progress_update(SimplexSolver *solver,
+                        const SimplexTableau *tab,
+                        P1ProgressState *ps);
+
+/* Note a no-pivot event, increment streak, and decide whether to force.
+ * Returns 1 if a forced refactor should be triggered. */
+int p1_progress_note_no_pivot(SimplexSolver *solver,
+                              int m,
+                              int degenerate_count,
+                              LPPhase1NoPivotForceReason reason,
+                              P1ProgressState *ps);
+
+/* Record a window-pressure event (failed stabilize or dir skip). */
+void p1_window_pressure_note(SimplexSolver *solver,
+                             int event_kind,
+                             int local_memory_fail,
+                             P1ProgressState *ps);
+
+/* Reset window-pressure counters after a successful pivot. */
+void p1_window_pressure_reset(SimplexSolver *solver,
+                              P1ProgressState *ps);
+
 #endif /* SIMPLEX_PHASE1_RECOVERY_H */
