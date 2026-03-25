@@ -22,4 +22,12 @@ int tableau_compute_duals(SimplexTableau *tab);
 /* Lazy single reduced cost computation */
 double tableau_get_rc(SimplexTableau *tab, int j);
 
+/* Phase 1 helpers needed by simplex_phase1_recovery.c */
+double phase1_artificial_abs_sum(const SimplexTableau *tab);
+void phase1_recompute_full_with_reason(SimplexSolver *solver,
+                                       SimplexTableau *tab,
+                                       int *rc_only_streak,
+                                       LPPhase1RecomputeReason reason);
+void phase1_trace_emit_summary(SimplexSolver *solver, RalphStatus phase1_status);
+
 #endif /* SIMPLEX_INTERNAL_H */
