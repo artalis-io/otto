@@ -1314,6 +1314,18 @@ typedef struct {
     LPPhase1StagnationPolicyState phase1_stagnation;
 } LPSolverPolicyState;
 
+/* Explicit solver phase tracking (R0.1) */
+typedef enum {
+    SIMPLEX_PHASE_INIT = 0,
+    SIMPLEX_PHASE_1,
+    SIMPLEX_PHASE_TRANSITION,
+    SIMPLEX_PHASE_2,
+    SIMPLEX_PHASE_OPTIMAL,
+    SIMPLEX_PHASE_INFEASIBLE,
+    SIMPLEX_PHASE_UNBOUNDED,
+    SIMPLEX_PHASE_ERROR
+} SimplexPhase;
+
 /* Simplex solver */
 typedef struct SimplexSolver {
     LPModel *model;
@@ -1430,6 +1442,9 @@ typedef struct SimplexSolver {
 
     /* D4: Flag set when primal runs after dual fallback (known degenerate) */
     int from_dual_fallback;     /* 1 = arrived from failed dual simplex */
+
+    /* R0.1: Explicit solver phase tracking */
+    SimplexPhase current_phase; /* Current solver phase (updated at each transition) */
 
 } SimplexSolver;
 
@@ -2215,17 +2230,49 @@ const char* lp_model_get_name(const LPModel *model);
 /* LU factorization functions */
 LUFactorization* lu_create(int m);
 void lu_free(LUFactorization *lu);
-int lu_factorize(LUFactorization *lu, const SparseMatrix *B);
+LUFailureReason lu_factorize(LUFactorization *lu, const SparseMatrix *B);
 void lu_apply_backend_policy(LUFactorization *lu, int backend_policy);
-int lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B);  /* Sparse with Markowitz */
-int lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B);   /* Dense fallback */
+LUFailureReason lu_factorize_sparse(LUFactorization *lu, const SparseMatrix *B);  /* Sparse with Markowitz */
+LUFailureReason lu_factorize_dense(LUFactorization *lu, const SparseMatrix *B);   /* Dense fallback */
 void lu_solve(const LUFactorization *lu, double *rhs, double *solution);
 void lu_solve_transpose(const LUFactorization *lu, double *rhs, double *solution);
-int lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col);
+LUFailureReason lu_update(LUFactorization *lu, int leaving_pos, const double *entering_col);
 int lu_needs_refactorization(LUFactorization *lu);
 int lu_refactor_hard_trigger(const LUFactorization *lu);
 const char* lu_failure_reason_string(int reason);
 const char* lu_refactor_trigger_reason_string(int reason);
+
+/* LU getter/setter API (R0.3) — encapsulated access to LU state */
+int lu_get_num_updates(const LUFactorization *lu);
+int lu_get_max_updates(const LUFactorization *lu);
+double lu_get_growth_factor(const LUFactorization *lu);
+double lu_get_cond_estimate(const LUFactorization *lu);
+double lu_get_growth_refactor_threshold(const LUFactorization *lu);
+int lu_get_spike_pool_used(const LUFactorization *lu);
+int lu_get_spike_pool_capacity(const LUFactorization *lu);
+int lu_get_use_ft_updates(const LUFactorization *lu);
+int lu_get_ft_num_updates(const LUFactorization *lu);
+LUFailureReason lu_get_last_failure_reason(const LUFactorization *lu);
+int lu_get_last_refactor_trigger_reason(const LUFactorization *lu);
+double lu_get_pivot_tol(const LUFactorization *lu);
+int lu_get_backend_policy(const LUFactorization *lu);
+int lu_get_num_regularized(const LUFactorization *lu);
+int lu_get_telemetry_enabled(const LUFactorization *lu);
+int lu_get_sym_valid(const LUFactorization *lu);
+uint64_t lu_get_factorize_calls(const LUFactorization *lu);
+void lu_set_pivot_tol(LUFactorization *lu, double tol);
+void lu_set_max_updates(LUFactorization *lu, int max);
+void lu_set_growth_refactor_threshold(LUFactorization *lu, double threshold);
+void lu_set_backend_policy(LUFactorization *lu, int policy);
+void lu_set_telemetry_enabled(LUFactorization *lu, int enabled);
+void lu_set_owner(LUFactorization *lu, void *owner);
+void lu_set_basis_governor(LUFactorization *lu, void *governor);
+void lu_set_mkz_enabled(LUFactorization *lu, int enabled);
+void lu_set_sn_enabled(LUFactorization *lu, int enabled);
+void lu_invalidate_symbolic_cache(LUFactorization *lu);
+void lu_force_refactorization(LUFactorization *lu);
+void lu_configure_regularization(LUFactorization *lu, int allow, int max_reg,
+                                  const int *redundant_rows, int num_redundant);
 
 /* Sparse LU solves - exploit sparsity in RHS */
 void lu_solve_sparse(const LUFactorization *lu,
