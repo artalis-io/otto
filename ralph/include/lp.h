@@ -2242,6 +2242,37 @@ int lu_refactor_hard_trigger(const LUFactorization *lu);
 const char* lu_failure_reason_string(int reason);
 const char* lu_refactor_trigger_reason_string(int reason);
 
+/* LU getter/setter API (R0.3) — encapsulated access to LU state */
+int lu_get_num_updates(const LUFactorization *lu);
+int lu_get_max_updates(const LUFactorization *lu);
+double lu_get_growth_factor(const LUFactorization *lu);
+double lu_get_cond_estimate(const LUFactorization *lu);
+double lu_get_growth_refactor_threshold(const LUFactorization *lu);
+int lu_get_spike_pool_used(const LUFactorization *lu);
+int lu_get_spike_pool_capacity(const LUFactorization *lu);
+int lu_get_use_ft_updates(const LUFactorization *lu);
+int lu_get_ft_num_updates(const LUFactorization *lu);
+LUFailureReason lu_get_last_failure_reason(const LUFactorization *lu);
+int lu_get_last_refactor_trigger_reason(const LUFactorization *lu);
+double lu_get_pivot_tol(const LUFactorization *lu);
+int lu_get_backend_policy(const LUFactorization *lu);
+int lu_get_num_regularized(const LUFactorization *lu);
+int lu_get_telemetry_enabled(const LUFactorization *lu);
+int lu_get_sym_valid(const LUFactorization *lu);
+void lu_set_pivot_tol(LUFactorization *lu, double tol);
+void lu_set_max_updates(LUFactorization *lu, int max);
+void lu_set_growth_refactor_threshold(LUFactorization *lu, double threshold);
+void lu_set_backend_policy(LUFactorization *lu, int policy);
+void lu_set_telemetry_enabled(LUFactorization *lu, int enabled);
+void lu_set_owner(LUFactorization *lu, void *owner);
+void lu_set_basis_governor(LUFactorization *lu, void *governor);
+void lu_set_mkz_enabled(LUFactorization *lu, int enabled);
+void lu_set_sn_enabled(LUFactorization *lu, int enabled);
+void lu_invalidate_symbolic_cache(LUFactorization *lu);
+void lu_force_refactorization(LUFactorization *lu);
+void lu_configure_regularization(LUFactorization *lu, int allow, int max_reg,
+                                  const int *redundant_rows, int num_redundant);
+
 /* Sparse LU solves - exploit sparsity in RHS */
 void lu_solve_sparse(const LUFactorization *lu,
                      int nnz_rhs, const int *rhs_idx, const double *rhs_val,
