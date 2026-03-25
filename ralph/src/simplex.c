@@ -1341,58 +1341,6 @@ static int phase1_no_pivot_ladder_apply_rescue_guard(
         solver, rescue_cooldown_iters, rescue_fail_streak, 1);
 }
 
-static int phase1_attempt_ladder_dual_rescue(
-    SimplexSolver *solver,
-    SimplexTableau *tab,
-    int iter,
-    LPPhase1NoPivotForceReason reason,
-    LPPhase1RecomputeReason recompute_reason,
-    int *rescue_cooldown_io,
-    int *rescue_fail_streak_io,
-    int *phase1_rc_only_streak_io,
-    int *no_pivot_no_progress_streak_io,
-    double *no_pivot_prev_art_sum_io,
-    double *no_pivot_anchor_art_sum_io,
-    int *no_pivot_progress_window_steps_io) {
-    if (solver &&
-        !lp_glpk_strict_allow_phase1_dual_rescue(solver->glpk_strict_mode)) {
-        return 0;
-    }
-    int rescue_status = dual_simplex_phase1_rescue(
-        solver, tab->m * RALPH_PHASE1_DUAL_RESCUE_MULT);
-    if (rescue_cooldown_io) {
-        *rescue_cooldown_io = PHASE1_NO_PIVOT_LADDER_RESCUE_COOLDOWN_ITERS;
-    }
-    if (rescue_status == 0) {
-        if (rescue_fail_streak_io) *rescue_fail_streak_io = 0;
-        lp_telemetry_record_phase1_no_pivot_ladder_dual_rescue(
-            solver, reason, 1);
-        phase1_recompute_full_with_reason(
-            solver,
-            tab,
-            phase1_rc_only_streak_io,
-            recompute_reason);
-        /* Inline progress reset (commit 3 will convert to p1_progress_reset) */
-        if (no_pivot_no_progress_streak_io) *no_pivot_no_progress_streak_io = 0;
-        if (no_pivot_prev_art_sum_io) *no_pivot_prev_art_sum_io = RALPH_INFINITY;
-        if (no_pivot_anchor_art_sum_io) *no_pivot_anchor_art_sum_io = RALPH_INFINITY;
-        if (no_pivot_progress_window_steps_io) *no_pivot_progress_window_steps_io = 0;
-        return 1;
-    }
-    if (solver->status == RALPH_STATUS_TIME_LIMIT) {
-        primal_remove_perturbation(tab);
-        solver->iterations = iter;
-        phase1_trace_emit_summary(solver, RALPH_STATUS_TIME_LIMIT);
-        return -1;
-    }
-    if (rescue_fail_streak_io && *rescue_fail_streak_io < INT_MAX) {
-        (*rescue_fail_streak_io)++;
-    }
-    lp_telemetry_record_phase1_no_pivot_ladder_dual_rescue(
-        solver, reason, 0);
-    return 0;
-}
-
 static int phase1_direct_dual_rescue_guard_plan(SimplexSolver *solver,
                                                 int rescue_cooldown_iters,
                                                 int rescue_fail_streak) {
@@ -1436,56 +1384,6 @@ static int phase1_attempt_direct_dual_rescue(
     }
     lp_telemetry_record_phase1_direct_dual_rescue(solver, 0);
     return 0;
-}
-
-static int phase1_activate_force_pivot_mode(
-    SimplexSolver *solver,
-    int m,
-    int degenerate_count,
-    int queue_force_pending,
-    int *dir_skip_event_streak_io,
-    int *force_pivot_attempt_budget_io,
-    int *force_pending_io,
-    LPPhase1NoPivotForceReason *force_reason_io) {
-    int streak = 0;
-    int budget = 0;
-    int pending = 0;
-    int reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
-    int activated;
-
-    if (solver &&
-        !lp_glpk_strict_allow_phase1_force_pivot_mode(
-            solver->glpk_strict_mode)) {
-        return 0;
-    }
-
-    if (dir_skip_event_streak_io) {
-        streak = *dir_skip_event_streak_io;
-    }
-    if (force_pivot_attempt_budget_io) {
-        budget = *force_pivot_attempt_budget_io;
-    }
-    activated = lp_refactor_policy_phase1_activate_force_pivot_mode(
-        m,
-        degenerate_count,
-        streak,
-        budget,
-        queue_force_pending,
-        &streak,
-        &budget,
-        &pending,
-        &reason);
-    if (force_pivot_attempt_budget_io) {
-        *force_pivot_attempt_budget_io = budget;
-    }
-    if (dir_skip_event_streak_io) {
-        *dir_skip_event_streak_io = streak;
-    }
-    if (activated && force_pending_io && force_reason_io) {
-        *force_pending_io = pending;
-        *force_reason_io = (LPPhase1NoPivotForceReason)reason;
-    }
-    return activated;
 }
 
 static int phase1_dir_stabilize_escape_gate_plan(int m,
@@ -1779,17 +1677,20 @@ int simplex_phase1_force_pivot_mode_plan_for_test(int m,
     int pending = 0;
     LPPhase1NoPivotForceReason force_reason =
         LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
-    int activated = phase1_activate_force_pivot_mode(
+    P1ProgressState tmp_ps;
+    memset(&tmp_ps, 0, sizeof(tmp_ps));
+    tmp_ps.force_pivot_attempt_budget = budget;
+    int activated = p1_progress_activate_force_pivot(
         NULL,
         m,
         degenerate_count,
         queue_force_pending,
         &streak,
-        &budget,
+        &tmp_ps,
         &pending,
         &force_reason);
     if (next_streak_out) *next_streak_out = streak;
-    if (next_budget_out) *next_budget_out = budget;
+    if (next_budget_out) *next_budget_out = tmp_ps.force_pivot_attempt_budget;
     if (next_pending_out) *next_pending_out = pending;
     return activated;
 }
@@ -6275,19 +6176,14 @@ static int simplex_phase1(SimplexSolver *solver) {
                     continue;
                 }
                 if (no_pivot_ladder_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
-                    int rescue_result = phase1_attempt_ladder_dual_rescue(
+                    int rescue_result = p1_progress_attempt_ladder_rescue(
                         solver,
                         tab,
                         iter,
                         LP_PHASE1_NO_PIVOT_FORCE_REASON_RATIO_BREAKDOWN,
                         LP_PHASE1_RECOMPUTE_REASON_RATIO_BREAKDOWN,
-                        &rs.progress.no_pivot_ladder_rescue_cooldown,
-                        &rs.progress.no_pivot_ladder_rescue_fail_streak,
-                        &rs.numerical.rc_only_streak,
-                        &rs.progress.no_pivot_no_progress_streak,
-                        &rs.progress.no_pivot_prev_art_sum,
-                        &rs.progress.no_pivot_anchor_art_sum,
-                        &rs.progress.no_pivot_progress_window_steps);
+                        &rs.progress,
+                        &rs.numerical.rc_only_streak);
                     if (rescue_result == 1) {
                         if (solver->verbose >= 2) {
                             LP_LOG_STDERR("[simplex_phase1] No-pivot ladder dual rescue succeeded at iter %d (streak=%d no_progress=%d threshold=%d)\n",
@@ -6706,13 +6602,13 @@ static int simplex_phase1(SimplexSolver *solver) {
                                                rs.progress.no_pivot_streak + 1,
                                                &rs.numerical.rc_only_streak,
                                                &rs.numerical.dir_skip_no_recompute_streak);
-                if (phase1_activate_force_pivot_mode(
+                if (p1_progress_activate_force_pivot(
                         solver,
                         tab->m,
                         rs.cycling.degenerate_count,
                         1,
                         &rs.numerical.dir_skip_event_streak,
-                        &rs.progress.force_pivot_attempt_budget,
+                        &rs.progress,
                         &rs.progress.no_pivot_force_pending,
                         &rs.progress.no_pivot_force_reason) &&
                     solver->verbose >= 2) {
@@ -6751,19 +6647,14 @@ static int simplex_phase1(SimplexSolver *solver) {
                         rs.progress.no_pivot_ladder_rescue_cooldown,
                         rs.progress.no_pivot_ladder_rescue_fail_streak);
                     if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
-                        int rescue_result = phase1_attempt_ladder_dual_rescue(
+                        int rescue_result = p1_progress_attempt_ladder_rescue(
                             solver,
                             tab,
                             iter,
                             LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
                             LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP,
-                            &rs.progress.no_pivot_ladder_rescue_cooldown,
-                            &rs.progress.no_pivot_ladder_rescue_fail_streak,
-                            &rs.numerical.rc_only_streak,
-                            &rs.progress.no_pivot_no_progress_streak,
-                            &rs.progress.no_pivot_prev_art_sum,
-                            &rs.progress.no_pivot_anchor_art_sum,
-                            &rs.progress.no_pivot_progress_window_steps);
+                            &rs.progress,
+                            &rs.numerical.rc_only_streak);
                         if (rs.numerical.force_extreme_tiny_theta_relax_branch_pending) {
                             lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue(
                                 solver);
@@ -6830,13 +6721,13 @@ static int simplex_phase1(SimplexSolver *solver) {
                                                rs.progress.no_pivot_streak + 1,
                                                &rs.numerical.rc_only_streak,
                                                &rs.numerical.dir_skip_no_recompute_streak);
-                if (phase1_activate_force_pivot_mode(
+                if (p1_progress_activate_force_pivot(
                         solver,
                         tab->m,
                         rs.cycling.degenerate_count,
                         1,
                         &rs.numerical.dir_skip_event_streak,
-                        &rs.progress.force_pivot_attempt_budget,
+                        &rs.progress,
                         &rs.progress.no_pivot_force_pending,
                         &rs.progress.no_pivot_force_reason) &&
                     solver->verbose >= 2) {
@@ -6875,19 +6766,14 @@ static int simplex_phase1(SimplexSolver *solver) {
                         rs.progress.no_pivot_ladder_rescue_cooldown,
                         rs.progress.no_pivot_ladder_rescue_fail_streak);
                     if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
-                        int rescue_result = phase1_attempt_ladder_dual_rescue(
+                        int rescue_result = p1_progress_attempt_ladder_rescue(
                             solver,
                             tab,
                             iter,
                             LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
                             LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP,
-                            &rs.progress.no_pivot_ladder_rescue_cooldown,
-                            &rs.progress.no_pivot_ladder_rescue_fail_streak,
-                            &rs.numerical.rc_only_streak,
-                            &rs.progress.no_pivot_no_progress_streak,
-                            &rs.progress.no_pivot_prev_art_sum,
-                            &rs.progress.no_pivot_anchor_art_sum,
-                            &rs.progress.no_pivot_progress_window_steps);
+                            &rs.progress,
+                            &rs.numerical.rc_only_streak);
                         if (rs.numerical.force_extreme_tiny_theta_relax_branch_pending) {
                             lp_telemetry_record_phase1_force_extreme_tiny_theta_relax_post_dir_skip_dual_rescue(
                                 solver);
@@ -6941,19 +6827,14 @@ static int simplex_phase1(SimplexSolver *solver) {
                     rs.progress.no_pivot_ladder_rescue_cooldown,
                     rs.progress.no_pivot_ladder_rescue_fail_streak);
                 if (ladder_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
-                    int rescue_result = phase1_attempt_ladder_dual_rescue(
+                    int rescue_result = p1_progress_attempt_ladder_rescue(
                         solver,
                         tab,
                         iter,
                         LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
                         LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP,
-                        &rs.progress.no_pivot_ladder_rescue_cooldown,
-                        &rs.progress.no_pivot_ladder_rescue_fail_streak,
-                        &rs.numerical.rc_only_streak,
-                        &rs.progress.no_pivot_no_progress_streak,
-                        &rs.progress.no_pivot_prev_art_sum,
-                        &rs.progress.no_pivot_anchor_art_sum,
-                        &rs.progress.no_pivot_progress_window_steps);
+                        &rs.progress,
+                        &rs.numerical.rc_only_streak);
                     if (rescue_result == 1) continue;
                     if (rescue_result < 0) return -1;
                 }
@@ -6989,13 +6870,13 @@ static int simplex_phase1(SimplexSolver *solver) {
                                                    rs.progress.no_pivot_streak + 1,
                                                    &rs.numerical.rc_only_streak,
                                                    &rs.numerical.dir_skip_no_recompute_streak);
-                    if (phase1_activate_force_pivot_mode(
+                    if (p1_progress_activate_force_pivot(
                             solver,
                             tab->m,
                             rs.cycling.degenerate_count,
                             1,
                             &rs.numerical.dir_skip_event_streak,
-                            &rs.progress.force_pivot_attempt_budget,
+                            &rs.progress,
                             &rs.progress.no_pivot_force_pending,
                             &rs.progress.no_pivot_force_reason) &&
                         solver->verbose >= 2) {
@@ -7055,13 +6936,13 @@ static int simplex_phase1(SimplexSolver *solver) {
                 if (rs.numerical.dir_force_refactor_streak < INT_MAX) {
                     rs.numerical.dir_force_refactor_streak++;
                 }
-                if (phase1_activate_force_pivot_mode(
+                if (p1_progress_activate_force_pivot(
                         solver,
                         tab->m,
                         rs.cycling.degenerate_count,
                         0,
                         &rs.numerical.dir_force_refactor_streak,
-                        &rs.progress.force_pivot_attempt_budget,
+                        &rs.progress,
                         NULL,
                         NULL) &&
                     solver->verbose >= 2) {
@@ -7613,19 +7494,14 @@ static int simplex_phase1(SimplexSolver *solver) {
                             rs.progress.no_pivot_ladder_rescue_cooldown,
                             rs.progress.no_pivot_ladder_rescue_fail_streak);
                         if (rescue_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
-                            int rescue_result = phase1_attempt_ladder_dual_rescue(
+                            int rescue_result = p1_progress_attempt_ladder_rescue(
                                 solver,
                                 tab,
                                 iter,
                                 LP_PHASE1_NO_PIVOT_FORCE_REASON_DIR_SKIP,
                                 LP_PHASE1_RECOMPUTE_REASON_DIR_SKIP,
-                                &rs.progress.no_pivot_ladder_rescue_cooldown,
-                                &rs.progress.no_pivot_ladder_rescue_fail_streak,
-                                &rs.numerical.rc_only_streak,
-                                &rs.progress.no_pivot_no_progress_streak,
-                                &rs.progress.no_pivot_prev_art_sum,
-                                &rs.progress.no_pivot_anchor_art_sum,
-                                &rs.progress.no_pivot_progress_window_steps);
+                                &rs.progress,
+                                &rs.numerical.rc_only_streak);
                             if (arm_force_extreme_followup_pending) {
                                 lp_telemetry_record_phase1_force_extreme_followup_post_dir_skip_dual_rescue(
                                     solver);
@@ -7825,19 +7701,14 @@ static int simplex_phase1(SimplexSolver *solver) {
                     rs.progress.no_pivot_ladder_rescue_cooldown,
                     rs.progress.no_pivot_ladder_rescue_fail_streak);
                 if (no_pivot_ladder_step == PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE) {
-                    int rescue_result = phase1_attempt_ladder_dual_rescue(
+                    int rescue_result = p1_progress_attempt_ladder_rescue(
                         solver,
                         tab,
                         iter,
                         LP_PHASE1_NO_PIVOT_FORCE_REASON_PIVOT_FAIL,
                         LP_PHASE1_RECOMPUTE_REASON_PIVOT_FAIL_RECOVERY,
-                        &rs.progress.no_pivot_ladder_rescue_cooldown,
-                        &rs.progress.no_pivot_ladder_rescue_fail_streak,
-                        &rs.numerical.rc_only_streak,
-                        &rs.progress.no_pivot_no_progress_streak,
-                        &rs.progress.no_pivot_prev_art_sum,
-                        &rs.progress.no_pivot_anchor_art_sum,
-                        &rs.progress.no_pivot_progress_window_steps);
+                        &rs.progress,
+                        &rs.numerical.rc_only_streak);
                     if (rescue_result == 1) {
                         rs.progress.no_pivot_streak = 0;
                         rs.basis.fail_reason = PHASE1_PIVOT_FAIL_NONE;

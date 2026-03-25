@@ -191,4 +191,30 @@ void p1_window_pressure_note(SimplexSolver *solver,
 void p1_window_pressure_reset(SimplexSolver *solver,
                               P1ProgressState *ps);
 
+/* ── Cross-category helpers ──────────────────────────────────────── */
+
+/* Attempt dual rescue via the no-pivot ladder.  Returns 1 on success,
+ * 0 on failure (retry), -1 on time limit (caller must return). */
+int p1_progress_attempt_ladder_rescue(
+    SimplexSolver *solver,
+    SimplexTableau *tab,
+    int iter,
+    LPPhase1NoPivotForceReason reason,
+    LPPhase1RecomputeReason recomp_reason,
+    P1ProgressState *ps,
+    int *rc_only_streak_io);
+
+/* Activate force-pivot mode if the streak/budget thresholds are met.
+ * Returns 1 if activated.  When force_pending_out / force_reason_out
+ * are non-NULL and activation occurs, outputs are written. */
+int p1_progress_activate_force_pivot(
+    SimplexSolver *solver,
+    int m,
+    int degenerate_count,
+    int queue_force_pending,
+    int *streak_io,
+    P1ProgressState *ps,
+    int *force_pending_out,
+    LPPhase1NoPivotForceReason *force_reason_out);
+
 #endif /* SIMPLEX_PHASE1_RECOVERY_H */
