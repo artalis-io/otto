@@ -11,12 +11,14 @@
 #include "simplex_internal.h"
 #include "lp_refactor_policy.h"
 #include "lp_glpk_strict.h"
+#include "simplex_perturb.h"
 #include "lp_log.h"
 
 /* Progress window constants (moved from simplex.c) */
 #define PHASE1_NO_PIVOT_PROGRESS_WINDOW 6
 #define PHASE1_NO_PIVOT_PROGRESS_REL_IMPROVE_MIN 1e-4
 #define PHASE1_NO_PIVOT_PROGRESS_ABS_IMPROVE_MIN 1e-8
+#define PHASE1_NO_PIVOT_LADDER_RESCUE_COOLDOWN_ITERS 16
 
 void p1_recovery_init(P1RecoveryState *rs,
                       const SimplexSolver *solver,
@@ -285,4 +287,96 @@ void p1_window_pressure_reset(SimplexSolver *solver,
     ps->window_pressure_local_memory_fail = 0;
     ps->window_pressure_alternations = 0;
     ps->window_pressure_last_event_kind = PHASE1_WINDOW_PRESSURE_EVENT_NONE;
+}
+
+/* ========================================================================
+ * Cross-category helpers (extracted from simplex.c)
+ * ======================================================================== */
+
+int p1_progress_attempt_ladder_rescue(
+    SimplexSolver *solver,
+    SimplexTableau *tab,
+    int iter,
+    LPPhase1NoPivotForceReason reason,
+    LPPhase1RecomputeReason recomp_reason,
+    P1ProgressState *ps,
+    int *rc_only_streak_io) {
+    if (solver &&
+        !lp_glpk_strict_allow_phase1_dual_rescue(solver->glpk_strict_mode)) {
+        return 0;
+    }
+    int rescue_status = dual_simplex_phase1_rescue(
+        solver, tab->m * RALPH_PHASE1_DUAL_RESCUE_MULT);
+    ps->no_pivot_ladder_rescue_cooldown =
+        PHASE1_NO_PIVOT_LADDER_RESCUE_COOLDOWN_ITERS;
+    if (rescue_status == 0) {
+        ps->no_pivot_ladder_rescue_fail_streak = 0;
+        lp_telemetry_record_phase1_no_pivot_ladder_dual_rescue(
+            solver, reason, 1);
+        phase1_recompute_full_with_reason(
+            solver,
+            tab,
+            rc_only_streak_io,
+            recomp_reason);
+        p1_progress_reset(ps);
+        return 1;
+    }
+    if (solver->status == RALPH_STATUS_TIME_LIMIT) {
+        primal_remove_perturbation(tab);
+        solver->iterations = iter;
+        phase1_trace_emit_summary(solver, RALPH_STATUS_TIME_LIMIT);
+        return -1;
+    }
+    if (ps->no_pivot_ladder_rescue_fail_streak < INT_MAX) {
+        (ps->no_pivot_ladder_rescue_fail_streak)++;
+    }
+    lp_telemetry_record_phase1_no_pivot_ladder_dual_rescue(
+        solver, reason, 0);
+    return 0;
+}
+
+int p1_progress_activate_force_pivot(
+    SimplexSolver *solver,
+    int m,
+    int degenerate_count,
+    int queue_force_pending,
+    int *streak_io,
+    P1ProgressState *ps,
+    int *force_pending_out,
+    LPPhase1NoPivotForceReason *force_reason_out) {
+    int streak = 0;
+    int budget = 0;
+    int pending = 0;
+    int reason = LP_PHASE1_NO_PIVOT_FORCE_REASON_UNKNOWN;
+    int activated;
+
+    if (solver &&
+        !lp_glpk_strict_allow_phase1_force_pivot_mode(
+            solver->glpk_strict_mode)) {
+        return 0;
+    }
+
+    if (streak_io) {
+        streak = *streak_io;
+    }
+    budget = ps->force_pivot_attempt_budget;
+    activated = lp_refactor_policy_phase1_activate_force_pivot_mode(
+        m,
+        degenerate_count,
+        streak,
+        budget,
+        queue_force_pending,
+        &streak,
+        &budget,
+        &pending,
+        &reason);
+    ps->force_pivot_attempt_budget = budget;
+    if (streak_io) {
+        *streak_io = streak;
+    }
+    if (activated && force_pending_out && force_reason_out) {
+        *force_pending_out = pending;
+        *force_reason_out = (LPPhase1NoPivotForceReason)reason;
+    }
+    return activated;
 }
