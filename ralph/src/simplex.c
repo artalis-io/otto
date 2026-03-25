@@ -36,11 +36,6 @@ static int lp_run_user_callbacks(SimplexSolver *solver,
                                  int force_emit,
                                  int honor_progress_cancel);
 static int lp_time_limit_exceeded(SimplexSolver *solver, int iter);
-static void phase1_trace_emit_summary(SimplexSolver *solver, RalphStatus phase1_status);
-static void phase1_recompute_full_with_reason(SimplexSolver *solver,
-                                              SimplexTableau *tab,
-                                              int *rc_only_streak,
-                                              LPPhase1RecomputeReason reason);
 
 /* PHASE1_WINDOW_PRESSURE_EVENT_* now in simplex_phase1_recovery.h */
 static int phase1_failed_stabilize_retry_penalty_plan(int entering,
@@ -1298,7 +1293,7 @@ static int phase1_dual_rescue_guard_step(SimplexSolver *solver,
     return PHASE1_NO_PIVOT_LADDER_STEP_DUAL_RESCUE;
 }
 
-static double phase1_artificial_abs_sum(const SimplexTableau *tab) {
+double phase1_artificial_abs_sum(const SimplexTableau *tab) {
     double art_sum = 0.0;
     if (!tab || tab->num_artificial <= 0 || !tab->artificial_vars || !tab->x) {
         return 0.0;
@@ -2155,7 +2150,7 @@ static void phase1_trace_record_pivot_failure(SimplexSolver *solver,
             tab->trace_last_dir_inf);
 }
 
-static void phase1_trace_emit_summary(SimplexSolver *solver, RalphStatus phase1_status) {
+void phase1_trace_emit_summary(SimplexSolver *solver, RalphStatus phase1_status) {
     if (!solver || !solver->trace_phase1) return;
 
     LP_LOG_STDERR("[phase1_trace] summary status=%s piv_fail=%d small_pivot=%d invalid_col=%d lu_max_updates=%d lu_spike_pool_full=%d lu_update_pivot_small=%d lu_singular_update=%d factor_singular=%d refactor_forced_other=%d refactor_after_update_other=%d no_entering=%d first_iter=%d last_iter=%d sig=0x%016llx\n",
@@ -4713,10 +4708,10 @@ static void phase1_pivot_fail_recovery_maybe_exclude_entering(
     lp_telemetry_record_phase1_pivot_fail_recovery_exclusion(solver);
 }
 
-static void phase1_recompute_full_with_reason(SimplexSolver *solver,
-                                              SimplexTableau *tab,
-                                              int *rc_only_streak,
-                                              LPPhase1RecomputeReason reason) {
+void phase1_recompute_full_with_reason(SimplexSolver *solver,
+                                       SimplexTableau *tab,
+                                       int *rc_only_streak,
+                                       LPPhase1RecomputeReason reason) {
     /* Full recompute is required after basis/LU/perturbation state changes. */
     tab->phase1_compute_solution_context = LP_PHASE1_COMPUTE_CTX_RECOMPUTE_FULL;
     tab->phase1_compute_rc_context = LP_PHASE1_COMPUTE_CTX_RECOMPUTE_FULL;
