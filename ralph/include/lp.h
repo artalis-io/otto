@@ -2259,6 +2259,7 @@ int lu_get_backend_policy(const LUFactorization *lu);
 int lu_get_num_regularized(const LUFactorization *lu);
 int lu_get_telemetry_enabled(const LUFactorization *lu);
 int lu_get_sym_valid(const LUFactorization *lu);
+uint64_t lu_get_factorize_calls(const LUFactorization *lu);
 void lu_set_pivot_tol(LUFactorization *lu, double tol);
 void lu_set_max_updates(LUFactorization *lu, int max);
 void lu_set_growth_refactor_threshold(LUFactorization *lu, double threshold);
