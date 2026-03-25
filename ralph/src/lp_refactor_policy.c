@@ -178,6 +178,30 @@
 #define PERIODIC_COST_DAMPEN_MIN_ITER_SAMPLES 8
 #define PERIODIC_COST_DAMPEN_MIN_REFACTOR_SAMPLES 1
 
+void lp_refactor_policy_config_defaults(LPRefactorPolicyConfig *cfg) {
+    if (!cfg) return;
+    cfg->phase1_refactor_min_interval     = PHASE1_PERIODIC_REFACTOR_MIN_INTERVAL;   /* 24 */
+    cfg->phase1_refactor_max_interval     = PHASE1_PERIODIC_REFACTOR_MAX_INTERVAL;   /* 96 */
+    cfg->phase2_refactor_min_interval     = PHASE2_PERIODIC_REFACTOR_MIN_INTERVAL;   /* 10 */
+    cfg->phase2_refactor_max_interval     = PHASE2_PERIODIC_REFACTOR_MAX_INTERVAL;   /* 80 */
+    cfg->refactor_pressure_trigger        = PERIODIC_REFACTOR_PRESSURE_TRIGGER;      /* 0.40 */
+    cfg->periodic_min_update_age          = PERIODIC_REFACTOR_MIN_UPDATE_AGE;        /* 8  */
+    cfg->degen_escape_min_m               = 1200;  /* PHASE2_DEGEN_ESCAPE_MIN_M (simplex.c) */
+    cfg->degen_escape_trigger             = 120;   /* PHASE2_DEGEN_ESCAPE_DEGEN_TRIGGER (simplex.c) */
+    cfg->phase1_auto_dantzig_min_m        = 700;   /* PHASE1_AUTO_DANTZIG_MIN_M (simplex.c) */
+    cfg->lu_cost_ewma_alpha               = 0.20;  /* SOFT_LU_COST_EWMA_ALPHA (simplex.c) */
+    cfg->lu_max_consec_defer_phase1       = 6;     /* SOFT_LU_MAX_CONSEC_DEFER_PHASE1 (simplex.c) */
+    cfg->lu_max_consec_defer_phase2       = 4;     /* SOFT_LU_MAX_CONSEC_DEFER_PHASE2 (simplex.c) */
+    cfg->lu_cost_gate_ratio               = LU_SOFT_COST_GATE_RATIO_TRIGGER;        /* 8.0 */
+    cfg->lu_spike_warn_pct                = LU_HEALTH_SOFT_SPIKE_WARN_PCT;           /* 85 */
+    cfg->no_pivot_progress_window         = 6;     /* PHASE1_NO_PIVOT_PROGRESS_WINDOW (simplex.c) */
+    cfg->phase1_stall_threshold_default   = PHASE1_STALL_THRESHOLD_DEFAULT;          /* 50 */
+    cfg->phase2_degen_escape_policy_trigger = 200;  /* PHASE2_DEGEN_ESCAPE_POLICY_TRIGGER (simplex.c) */
+    cfg->feedback_decay                   = PERIODIC_FEEDBACK_DECAY;                 /* 0.85 */
+    cfg->feedback_relax_step              = PERIODIC_FEEDBACK_RELAX_STEP;            /* 0.06 */
+    cfg->feedback_tighten_step            = PERIODIC_FEEDBACK_TIGHTEN_STEP;          /* 0.08 */
+}
+
 static double clamp_unit_interval(double x) {
     if (!(x > 0.0)) return 0.0;
     if (x > 1.0) return 1.0;
